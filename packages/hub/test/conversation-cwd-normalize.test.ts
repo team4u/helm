@@ -1,16 +1,16 @@
 /**
- * 会话 create/update cwd 按目标节点平台统一收口（integration）：
- * - 相对路径（含盘符相对）在服务层拒绝：不落 SDK、不落镜像；
- * - local（process.platform）：词法归一（点段消解）后持久化；
- * - 远端节点：只用 NodeRegistry 注册上报的可信平台——真实 WS 注册
- *   platform 'win32' 节点后，/mnt/<盘符>、/<盘符> 视图确定性转换为规范
- *   Windows 路径；不可映射 POSIX 根（/home）显式拒绝且不落库；
- * - update（PATCH cwd）：同一收口（按本 patch 生效后的目标节点平台）；
- * - resume 语义：不显式改 cwd 时不改写既有 cwd。
+ * conversation create/update cwd by target node platform unify consolidate (integration):
+ * - relative path (contains symbol each other for) in service layer reject: do not SDK, do not mirror;
+ * - local(process.platform): term method archive one (point segment consume solve) after persist;
+ * - remote node: only use NodeRegistry register on report can message platform - - real WS register
+ *   platform 'win32' node after,/mnt/<symbol>,/<symbol> view determinism convert is specification
+ *   Windows path; cannot mapping POSIX (/home) explicit reject and do not written to the database;
+ * - update(PATCH cwd): the same consolidate (by this patch takes effect after target node platform);
+ * - resume semantics: do not explicit change cwd when do not change write since has cwd.
  *
- * 真实 createHelm 组合（真 pi-durable SQLite + faux provider + 真实
- * /ws/node 网关）；远端节点用原始 WS + birpc 手动 register（可控 platform
- * 上报，无 daemon 干扰），绝不 mock 注册表。
+ * real createHelm combine (true pi-durable SQLite + faux provider + real
+ * /ws/node gateway); remote node use original WS + birpc manually register(can control platform
+ * on report, without daemon interference), never mock register table.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -46,7 +46,7 @@ async function makeEnv(options: { hubPlatform?: string } = { hubPlatform: 'linux
   }
 }
 
-/** 原始 WS 节点注册（可控 platform 上报；一连接一注册，测试结束关闭）。 */
+/** original WS node register (can control platform on report; one connect one register, test end close). */
 async function registerFakeNode(
   hubUrl: string,
   nodeId: string,
@@ -72,7 +72,7 @@ async function registerFakeNode(
           try {
             cb(JSON.parse(typeof raw === 'string' ? raw : Buffer.from(raw as ArrayBuffer).toString('utf8')) as never)
           } catch {
-            /* 非 JSON 忽略 */
+            /* non- JSON ignore */
           }
         })
       },
@@ -82,18 +82,18 @@ async function registerFakeNode(
     },
   )
   const outcome = await rpc.register({ nodeId, token, hostname: 'fake', platform })
-  assert.ok(outcome.ok, `fake node 注册失败：${JSON.stringify(outcome)}`)
+  assert.ok(outcome.ok, `fake node register failed:${JSON.stringify(outcome)}`)
   return () => {
     try {
       rpc.$close()
     } catch {
-      /* 已关 */
+      /* already closure */
     }
     ws.close()
   }
 }
 
-test('create：相对路径（含盘符相对）拒绝且不产生任何会话', { timeout: 60_000 }, async () => {
+test('create: relative path (contains symbol each other for) reject and produces no conversation', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const before = env.app.kernel.listConversations().length
@@ -101,46 +101,46 @@ test('create：相对路径（含盘符相对）拒绝且不产生任何会话',
       await assert.rejects(
         env.app.kernel.createConversation({ cwd: bad }),
         (e: unknown) => e instanceof HelmError && e.code === 'validation_error',
-        `相对形态 '${bad}' 必须在服务层拒绝`,
+        `each other for form '${bad}' must in service layer reject`,
       )
     }
-    assert.equal(env.app.kernel.listConversations().length, before, '拒绝路径不落库')
+    assert.equal(env.app.kernel.listConversations().length, before, 'reject path do not written to the database')
   } finally {
     await env.close()
   }
 })
 
-test('create：local 平台词法归一（点段消解）后持久化到镜像', { timeout: 60_000 }, async () => {
+test('create:local platform term method archive one (point segment consume solve) after persist to mirror', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const summary = await env.app.kernel.createConversation({ cwd: '/tmp/helm/a/./b/../c' })
-    assert.equal(summary.cwd, '/tmp/helm/a/c', '注入 POSIX Hub 平台后 cwd 跨宿主归一')
+    assert.equal(summary.cwd, '/tmp/helm/a/c', 'inject POSIX Hub platform after cwd across host archive one')
     assert.equal(env.app.kernel.getConversation(summary.id).cwd, '/tmp/helm/a/c')
   } finally {
     await env.close()
   }
 })
 
-test('create：远端 win32 节点（NodeRegistry 可信平台）——WSL/GitBash 视图确定性转换', { timeout: 60_000 }, async () => {
+test('create: remote win32 node (NodeRegistry can message platform) - -WSL/GitBash view determinism convert', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   let closeNode: (() => void) | undefined
   try {
     const issued = await env.app.kernel.nodes.issueNodeToken('win-build')
     closeNode = await registerFakeNode(env.hubUrl, 'win-build', issued.token, 'win32')
     const conn: NodeConnection | undefined = env.app.kernel.envFabric.registry.get('win-build')
-    assert.equal(conn?.platform, 'win32', '注册表携带可信平台上报')
+    assert.equal(conn?.platform, 'win32', 'register table carry can message platform on report')
 
     const summary = await env.app.kernel.createConversation({ nodeId: 'win-build', cwd: '/mnt/c/work/helm' })
-    assert.equal(summary.cwd, 'C:\\work\\helm', 'WSL 挂载视图按注册平台转换为规范 Windows 路径')
+    assert.equal(summary.cwd, 'C:\\work\\helm', 'WSL mount view by register platform convert is specification Windows path')
     const drive = await env.app.kernel.createConversation({ nodeId: 'win-build', cwd: '/e/git/repo' })
-    assert.equal(drive.cwd, 'E:\\git\\repo', 'Git Bash 盘符根视图确定性转换')
+    assert.equal(drive.cwd, 'E:\\git\\repo', 'Git Bash symbol view determinism convert')
   } finally {
     closeNode?.()
     await env.close()
   }
 })
 
-test('create：远端 win32 节点上的坏 POSIX cwd 显式拒绝且不落库', { timeout: 60_000 }, async () => {
+test('create: remote win32 node on broken POSIX cwd explicit reject and do not written to the database', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   let closeNode: (() => void) | undefined
   try {
@@ -151,31 +151,31 @@ test('create：远端 win32 节点上的坏 POSIX cwd 显式拒绝且不落库',
       await assert.rejects(
         env.app.kernel.createConversation({ nodeId: 'win-build', cwd: bad }),
         (e: unknown) => e instanceof HelmError && e.code === 'unmappable_posix_root',
-        `'${bad}' 在 win32 目标上无盘符对应，必须显式失败`,
+        `'${bad}' in win32 target on without symbol for should, must explicit failed`,
       )
     }
-    assert.equal(env.app.kernel.listConversations().length, before, '坏 POSIX cwd 不落库')
+    assert.equal(env.app.kernel.listConversations().length, before, 'broken POSIX cwd do not written to the database')
   } finally {
     closeNode?.()
     await env.close()
   }
 })
 
-test('create：远端节点未上报平台（未知）——透传不改写（绝不猜平台）', { timeout: 60_000 }, async () => {
+test('create: remote node not on report platform (unknown) - - pass-through do not change write (never guess platform)', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   let closeNode: (() => void) | undefined
   try {
     const issued = await env.app.kernel.nodes.issueNodeToken('silent-node')
     closeNode = await registerFakeNode(env.hubUrl, 'silent-node', issued.token, '')
     const summary = await env.app.kernel.createConversation({ nodeId: 'silent-node', cwd: '/home/user/project' })
-    assert.equal(summary.cwd, '/home/user/project', '平台未知：POSIX 路径原样保持')
+    assert.equal(summary.cwd, '/home/user/project', 'platform unknown:POSIX path original keep')
   } finally {
     closeNode?.()
     await env.close()
   }
 })
 
-test('update：patch.cwd 按目标节点平台收口（同一链）', { timeout: 60_000 }, async () => {
+test('update:patch.cwd by target node platform consolidate (the same chain)', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   let closeNode: (() => void) | undefined
   try {
@@ -185,7 +185,7 @@ test('update：patch.cwd 按目标节点平台收口（同一链）', { timeout:
     assert.equal(conv.cwd, 'C:\\first')
 
     const updated = await env.app.kernel.updateConversation(conv.id, { cwd: '/c/second/third/../x' })
-    assert.equal(updated.cwd, 'C:\\second\\x', '显式 cwd 变更按目标平台规范化后持久化')
+    assert.equal(updated.cwd, 'C:\\second\\x', 'explicit cwd change by target platform specification after persist')
 
     await assert.rejects(
       env.app.kernel.updateConversation(conv.id, { cwd: '/home/nope' }),
@@ -201,7 +201,7 @@ test('update：patch.cwd 按目标节点平台收口（同一链）', { timeout:
   }
 })
 
-test('update：仅改 nodeId 时按新目标平台收口既有 cwd', { timeout: 60_000 }, async () => {
+test('update: only change nodeId when by new target platform consolidate since has cwd', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   let closeNode: (() => void) | undefined
   try {
@@ -212,19 +212,19 @@ test('update：仅改 nodeId 时按新目标平台收口既有 cwd', { timeout: 
 
     const updated = await env.app.kernel.updateConversation(conv.id, { nodeId: 'win-build' })
     assert.equal(updated.nodeId, 'win-build')
-    assert.equal(updated.cwd, 'C:\\keep-me', 'nodeId 迁移不得留下目标 Windows 不可用的 POSIX cwd')
+    assert.equal(updated.cwd, 'C:\\keep-me', 'nodeId migration must not under target Windows unavailable POSIX cwd')
   } finally {
     closeNode?.()
     await env.close()
   }
 })
 
-test('update：仅改标题时保持既有 cwd', { timeout: 60_000 }, async () => {
+test('update: only change title when keep since has cwd', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const conv = await env.app.kernel.createConversation({ cwd: '/tmp/helm/keep-me' })
-    const updated = await env.app.kernel.updateConversation(conv.id, { title: '改名' })
-    assert.equal(updated.cwd, '/tmp/helm/keep-me', '不显式改 cwd 时既有 cwd 原样保持')
+    const updated = await env.app.kernel.updateConversation(conv.id, { title: 'change name' })
+    assert.equal(updated.cwd, '/tmp/helm/keep-me', 'do not explicit change cwd when since has cwd original keep')
   } finally {
     await env.close()
   }

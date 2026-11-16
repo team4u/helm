@@ -1,30 +1,30 @@
 /**
- * 后端插件 TS 转译加载器专项测试（backend-ts-loader + external-loader TS 入口）。
+ * backend plugin TS transpile load dedicated items test (backend-ts-loader + external-loader TS entry).
  *
- * 组合纪律：真实 createHelm（真 SQLite + 真 PluginHost + 真外部插件源文件目录）+
- * faux provider；不 mock app、不 fake host。fixture 全部落在临时开发 dataDir
- * （tmpdir 下独立前缀，绝不触碰旧系统数据目录）。
+ * combine discipline: real createHelm(true SQLite + true PluginHost + true external plugin source file directory)+
+ * faux provider; do not mock app, do not fake host.fixture all in temporary development dataDir
+ * (tmpdir under independent prefix, never trigger touch old system data directory).
  *
- * 覆盖（要求真验证项）：
- * - 约定入口 index.ts 与 plugin.json main 指向 .ts / .tsx 的发现与转译加载；
- * - 相对本地 TS 依赖闭包（.js 说明符 -> .ts 文件、无扩展名、index.ts）；
- * - Node 内置模块 import 与第三方 npm 依赖（插件目录 node_modules 真包）；
- * - @helm/protocol 与宿主同一构造器（插件内拿到的 HelmError 就是测试进程
- *   直接 import 的那个构造器，无第二份模块）；
- * - import.meta.url 资源路径指向插件真实源文件（不因缓存路径漂移）；
- * - 插件内相对 .json 导入（宿主补注 type=json）；
- * - 同一依赖经 .js 映射与显式 .ts 两条说明符导入是同一模块实例（alias identity）；
- * - 语法错误显式 plugin_load_failed（含文件与行列号诊断）；
- * - 同一插件入口多次引用仅初始化一次（模块 identity）；
- * - 越根契约（每个场景独立 dataDir + 真实可达的根外文件 + 执行哨兵）：
- *   main 穿越、入口 symlink、依赖 symlink 均拒绝；根外代码不转译；
- * - TS 根释放：全部根释放后进程钩子反注册（后续根外/根内 .ts 不再被本加载器转译）。
+ * override (want seek true verify items):
+ * - convention entry index.ts and plugin.json main points to .ts / .tsx discover and transpile load;
+ * - each other for local TS dependency closed package (.js note symbol -> .ts file, without extension,index.ts);
+ * - Node inside placement module import and third way npm dependency (plugin directory node_modules true package);
+ * - @helm/protocol and host the same construct (plugin inside gets HelmError is exactly test process
+ *   directly import that construct, without second module);
+ * - import.meta.url asset path points to plugin real source file (do not because cache path drift);
+ * - plugin inside each other for .json import (host patch note type=json);
+ * - the same dependency via .js mapping and explicit .ts two note symbol import is the same module instance (alias identity);
+ * - language method error explicit plugin_load_failed(contains file and row column number diagnose);
+ * - the same plugin entry many time reference only initialize once (module identity);
+ * - exceeds contract (each scenario independent dataDir + real can reach outside file + execute sentinel):
+ *   main through exceeds, entry symlink, dependency symlink all reject; outside code do not transpile;
+ * - TS release: all release after process hook reverse register (after continue outside/inside .ts no longer by this load transpile).
  *
- * 注：app.close() 吞错——内置 workflow stop 链存在已知基座缺陷（受控停止窗口
- * 内 host.listConversations 守卫拒绝导致 plugin_dispose_failed），不掩盖本文件
- * 断言；基座修复后可恢复裸 await。
+ * note:app.close() swallow wrong - - inside placement workflow stop chain store in known base seat defect (subject to control stop window
+ * inside host.listConversations guard reject leads to plugin_dispose_failed), do not mask this file
+ * assertion; base seat fix after can restore bare await.
  *
- * runner: tsx --test；每项显式 timeout: 60_000 防死锁；命令加总超时。
+ * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock; command add total timeout.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -40,40 +40,40 @@ import { loadExternalPlugins } from '../../kernel/src/plugins/external-loader.js
 import { registerPluginTsRoot } from '../../kernel/src/plugins/backend-ts-loader.js'
 import { createHubTestApp } from './helpers/hub-test-env.js'
 
-/** 测试进程全局侧表（插件模块级初始化计数 / 越根执行哨兵）的类型安全访问。 */
+/** test process global side table (plugin module level initialize counter / exceeds execute sentinel) type security access. */
 function globalFlag(name: string): unknown {
   return (globalThis as Record<string, unknown>)[name]
 }
 
 async function createApp(dataDir: string) {
-  // 注：watchdogIntervalMs 选项已随内核定时巡检移交 builtin:superagent 移除；
-  // 组合层 createHelm 默认启用 superagent=false，无定时任务需要关闭。
+  // note:watchdogIntervalMs option already follow kernel set when inspection hand off builtin:superagent remove;
+  // combine layer createHelm by default enable superagent=false, without cron job need to close.
   return (await createHubTestApp({ dataDir, cwd: dataDir })).app
 }
 
-/** 本加载器源码路径（纯 node 子进程直接加载：仅用可擦除语法，原生 strip-types 可读）。 */
+/** this load source code path (pure node child process directly load: only use can erase language method, original generate strip-types can read). */
 const loaderSrc = fileURLToPath(new URL('../../kernel/src/plugins/backend-ts-loader.ts', import.meta.url))
 
 // ---------------------------------------------------------------------------
-// fixture 写入工具
+// fixture write tool
 // ---------------------------------------------------------------------------
 
 /**
- * TS 后端插件 fixture：入口 index.ts + 本地 TS 依赖闭包 + Node 内置 + npm 依赖 +
- * @helm 构造器同一性 + import.meta.url 资源定位 + 相对 .json + 模块级初始化计数。
+ * TS backend plugin fixture: entry index.ts + local TS dependency closed package + Node inside placement + npm dependency +
+ * @helm construct the same + import.meta.url asset locate + each other for .json + module level initialize counter.
  */
 function writeTsPlugin(pluginsDir: string, dir = 'ts-demo'): { dirPath: string; counterName: string } {
-  // 模块级初始化计数器按插件目录隔离（多个 fixture 互不干扰，但同目录重复加载可检测）
+  // module level initialize counter by plugin directory isolated (multiple fixture mutual do not interference, but same directory duplicate load can detect)
   const counterName = `__init_${dir.replace(/[^A-Za-z0-9_]/g, '_')}`
   const dirPath = join(pluginsDir, dir)
   mkdirSync(join(dirPath, 'lib'), { recursive: true })
   mkdirSync(join(dirPath, 'assets'), { recursive: true })
-  // 插件本地 npm 依赖（真包形态：type:module + ESM 入口）
+  // plugin local npm dependency (true package form:type:module + ESM entry)
   mkdirSync(join(dirPath, 'node_modules', 'demo-dep'), { recursive: true })
   writeFileSync(join(dirPath, 'node_modules', 'demo-dep', 'package.json'), JSON.stringify({ name: 'demo-dep', version: '1.0.0', type: 'module', main: 'index.js' }))
   writeFileSync(join(dirPath, 'node_modules', 'demo-dep', 'index.js'), 'export const depName = "demo-dep-ok"\n')
 
-  // 入口：约定 index.ts
+  // entry: convention index.ts
   writeFileSync(
     join(dirPath, 'index.ts'),
     `import { readFileSync } from 'node:fs'
@@ -93,7 +93,7 @@ const metaUrl = import.meta.url
 async function definePlugin(ctx: any) {
   ctx.action({
     id: 'probe',
-    description: '转译加载全链路探针',
+    description: 'transpile load all link probe needle',
     inputSchema: { type: 'object', additionalProperties: false },
     outputSchema: {
       type: 'object',
@@ -118,7 +118,7 @@ async function definePlugin(ctx: any) {
       return {
         builtinOk: createHash('sha256').update('x').digest('hex').length === 64,
         npmDep: depName,
-        // 宿主同一性：插件拿到的构造器与宿主注册的实例共享同一构造器/原型链
+        // host the same: plugin gets construct and host register instance sharing the same construct/prototype chain
         hostClassSame: Object.getPrototypeOf(HostHelmErrorPrototypeMarker) === HelmError.prototype,
 
         metaUrl,
@@ -133,36 +133,36 @@ async function definePlugin(ctx: any) {
   })
 }
 
-// 宿主同一构造器标记占位（由 fixture 写入逻辑替换为真实比较）
+// host the same construct mark record occupy (by fixture write logic replace is real compare)
 var HostHelmErrorPrototypeMarker: object
 
 
-export default { id: '${dir}', name: 'TS 演示插件', version: '1.0.0', definePlugin }
+export default { id: '${dir}', name: 'TS demo plugin', version: '1.0.0', definePlugin }
 `,
   )
-  // .js 说明符 -> .ts 文件（TS 习惯映射）
+  // .js note symbol -> .ts file (TS habit mapping)
   writeFileSync(join(dirPath, 'lib', 'math.ts'), 'export function addTen(n: number): number {\n  return n + 10\n}\n')
-  // 无扩展名说明符
+  // without extension note symbol
   writeFileSync(join(dirPath, 'lib', 'greet.ts'), 'export const greet = (who: string): string => `hi-${who}`\n')
-  // 目录 index：./lib/shapes/index.js -> shapes/index.ts
+  // directory index:./lib/shapes/index.js -> shapes/index.ts
   mkdirSync(join(dirPath, 'lib', 'shapes'), { recursive: true })
   writeFileSync(join(dirPath, 'lib', 'shapes', 'index.ts'), 'export const shape = (): string => "circle"\n')
-  // 动态 import 的 TS 依赖
+  // motion state import  TS dependency
   writeFileSync(join(dirPath, 'lib', 'lazy.ts'), 'export const lazyValue = "lazy-ok"\n')
-  // 相对 .json（宿主补注 import attribute）
+  // each other for .json(host patch note import attribute)
   writeFileSync(join(dirPath, 'config.json'), JSON.stringify({ tag: 'json-ok' }))
-  // import.meta.url 相对定位的资源
+  // import.meta.url each other for locate asset
   writeFileSync(join(dirPath, 'assets', 'banner.txt'), 'helm-ts-plugin-asset\n')
 
-  // 宿主构造器同一性：在插件目录写一个 marker 模块（插件内经 @helm/* 宿主解析
-  // 得到的同一实例），入口 handler 比较它与其 import 的 HelmError 构造器——
-  // 若存在第二份模块副本，则两者原型链不同。
+  // host construct the same: in plugin directory write a marker module (plugin inside via @helm/* host parse
+  // obtain to the same instance), entry handler compare it and its import  HelmError construct - -
+  // if store in second module copy, then two prototype chain different.
   const markerPath = join(dirPath, 'lib', 'host-marker.ts')
   writeFileSync(
     markerPath,
     "import { HelmError } from '@helm/protocol'\nexport const marker = new HelmError('marker', 'marker')\nexport const ctor = HelmError\n",
   )
-  // 重写入口里的占位比较：改为显式 import marker，比较同一模块图下的构造器同一性
+  // heavy write opening in occupy compare: change is explicit import marker, compare the same module diagram under construct the same
   const entryPathFile = join(dirPath, 'index.ts')
   const entry = readFileSync(entryPathFile, 'utf8')
   const patched = entry
@@ -178,7 +178,7 @@ export default { id: '${dir}', name: 'TS 演示插件', version: '1.0.0', define
   return { dirPath, counterName }
 }
 
-/** plugin.json main 指向 .tsx 的 fixture（纯逻辑 tsx：不含 React JSX，只验证扩展名轨道）。 */
+/** plugin.json main points to .tsx  fixture(pure logic tsx: excludes React JSX, only verify extension track path). */
 function writeTsxManifestPlugin(pluginsDir: string): string {
   const dirPath = join(pluginsDir, 'tsx-manifest')
   mkdirSync(dirPath, { recursive: true })
@@ -189,53 +189,53 @@ function writeTsxManifestPlugin(pluginsDir: string): string {
     `async function definePlugin(ctx: any) {
   ctx.action({
     id: 'ping',
-    description: 'tsx 入口探针',
+    description: 'tsx entry probe needle',
     inputSchema: { type: 'object', additionalProperties: false },
     outputSchema: { type: 'object', required: ['pong'], additionalProperties: false, properties: { pong: { type: 'boolean' } } },
     handler: () => ({ pong: true }),
   })
 }
-export default { id: 'tsx-manifest', name: 'TSX 清单插件', definePlugin }
+export default { id: 'tsx-manifest', name: 'TSX manifest plugin', definePlugin }
 `,
   )
   return dirPath
 }
 
 // ---------------------------------------------------------------------------
-// 全链路：真实 createHelm + fixture + 启停
+// all link: real createHelm + fixture + start stop
 // ---------------------------------------------------------------------------
 
-test('约定入口 index.ts 的外部插件：TS 依赖闭包 / Node 内置 / npm 依赖 / @helm 同一构造器 / json / import.meta.url 资源定位全链路可用', { timeout: 60_000 }, async () => {
+test('convention entry index.ts external plugin:TS dependency closed package / Node inside placement / npm dependency / @helm the same construct / json / import.meta.url asset locate all link available', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-ts-'))
   try {
     const { counterName } = writeTsPlugin(join(dataDir, 'plugins'))
     const app = await createApp(dataDir)
     try {
       const summary = app.kernel.plugins.list().find((p) => p.id === 'ts-demo')
-      assert.ok(summary, 'TS 外部插件应被自动注册')
-      assert.equal(summary.enabled, false, '默认停用')
+      assert.ok(summary, 'TS external plugin should by automatically register')
+      assert.equal(summary.enabled, false, 'by default deactivate')
       await app.kernel.plugins.enable('ts-demo')
 
       const r = (await app.kernel.plugins.invokeAction('ts-demo', 'probe', {})) as Record<string, unknown>
-      assert.equal(r.builtinOk, true, 'node:crypto / node:fs 内置模块可用')
-      assert.equal(r.npmDep, 'demo-dep-ok', '插件目录 node_modules 的第三方 npm 依赖可用')
-      assert.equal(r.hostClassSame, true, '@helm/protocol 与宿主同一构造器（原型链一致，无第二份模块）')
-      assert.equal(r.lazyValue, 'lazy-ok', '运行期动态 import 的 TS 依赖可用')
-      assert.equal(r.addTen, 42, '相对 .js 说明符映射到 .ts 文件')
-      assert.equal(r.greet, 'hi-helm', '无扩展名相对说明符解析')
-      assert.equal(r.shape, 'circle', '目录 index.ts 解析')
-      assert.equal(r.jsonTag, 'json-ok', '插件内相对 .json 导入可用（宿主补注 import attribute）')
+      assert.equal(r.builtinOk, true, 'node:crypto / node:fs inside placement module available')
+      assert.equal(r.npmDep, 'demo-dep-ok', 'plugin directory node_modules third way npm dependency available')
+      assert.equal(r.hostClassSame, true, '@helm/protocol and host the same construct (prototype chain consistent, without second module)')
+      assert.equal(r.lazyValue, 'lazy-ok', 'run phase motion state import  TS dependency available')
+      assert.equal(r.addTen, 42, 'each other for .js note symbol mapping to .ts file')
+      assert.equal(r.greet, 'hi-helm', 'without extension each other for note symbol parse')
+      assert.equal(r.shape, 'circle', 'directory index.ts parse')
+      assert.equal(r.jsonTag, 'json-ok', 'plugin inside each other for .json import available (host patch note import attribute)')
 
-      // import.meta.url 指向插件真实源文件（file URL、无查询串污染、资源可读）
+      // import.meta.url points to plugin real source file (file URL, without query string pollute, asset can read)
       const metaUrl = r.metaUrl as string
-      assert.ok(metaUrl.startsWith('file://'), `import.meta.url 应为 file URL：${metaUrl}`)
-      assert.ok(!metaUrl.includes('?'), `import.meta.url 不应带查询串：${metaUrl}`)
+      assert.ok(metaUrl.startsWith('file://'), `import.meta.url should be file URL:${metaUrl}`)
+      assert.ok(!metaUrl.includes('?'), `import.meta.url must not carries query string:${metaUrl}`)
       const metaPath = fileURLToPath(metaUrl)
-      assert.ok(metaPath.endsWith(join('ts-demo', 'index.ts')), `应指向插件入口源文件：${metaPath}`)
-      assert.equal(r.assetSha as string, '83877507', '经 import.meta.url 定位的插件资产读取正确')
+      assert.ok(metaPath.endsWith(join('ts-demo', 'index.ts')), `should points to plugin entry source file:${metaPath}`)
+      assert.equal(r.assetSha as string, '83877507', 'via import.meta.url locate plugin asset read correct')
 
-      // 模块 identity：同进程同 URL 只初始化一次（入口已由 createHelm 加载一次）
-      assert.equal(globalFlag(counterName), 1, '插件入口模块仅初始化一次')
+      // module identity: same process same URL only initialize once (entry already by createHelm load once)
+      assert.equal(globalFlag(counterName), 1, 'plugin entry module only initialize once')
     } finally {
       await app.close().catch(() => {})
     }
@@ -244,7 +244,7 @@ test('约定入口 index.ts 的外部插件：TS 依赖闭包 / Node 内置 / np
   }
 })
 
-test('plugin.json main 指向 .tsx 的入口被正确转译加载（纯逻辑 tsx）', { timeout: 60_000 }, async () => {
+test('plugin.json main points to .tsx entry by correct transpile load (pure logic tsx)', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-ts-'))
   try {
     writeTsxManifestPlugin(join(dataDir, 'plugins'))
@@ -261,12 +261,12 @@ test('plugin.json main 指向 .tsx 的入口被正确转译加载（纯逻辑 ts
   }
 })
 
-test('alias identity：同一依赖经 .js 映射与显式 .ts 两条说明符导入是同一模块实例（含 symlink 依赖）', { timeout: 60_000 }, async () => {
+test('alias identity: the same dependency via .js mapping and explicit .ts two note symbol import is the same module instance (contains symlink dependency)', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-alias-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'alias')
     mkdirSync(join(dirPath, 'lib'), { recursive: true })
-    // 真实依赖 + 指向它的根内 symlink：三条路径（.js 映射 / 显式 .ts / symlink）
+    // real dependency + points to it inside symlink: three path (.js mapping / explicit .ts / symlink)
     writeFileSync(
       join(dirPath, 'lib', 'shared.ts'),
       `declare global { var __aliasInit: number | undefined }
@@ -285,7 +285,7 @@ export default {
   definePlugin(ctx: any) {
     ctx.action({
       id: 'tags',
-      description: 'alias identity 探针',
+      description: 'alias identity probe needle',
       inputSchema: { type: 'object', additionalProperties: false },
       outputSchema: { type: 'object', required: ['viaJs', 'viaTs', 'viaSymlink'], additionalProperties: false, properties: { viaJs: { type: 'string' }, viaTs: { type: 'string' }, viaSymlink: { type: 'string' } } },
       handler: () => ({ viaJs, viaTs, viaSymlink }),
@@ -297,8 +297,8 @@ export default {
     const app = await createApp(dataDir)
     try {
       await app.kernel.plugins.enable('alias')
-      // 三条说明符指向同一模块实例：模块级初始化计数只 +1
-      assert.equal(globalFlag('__aliasInit'), 1, '.js 映射 / 显式 .ts / symlink 三条说明符是同一模块实例')
+      // three note symbol points to the same module instance: module level initialize counter only +1
+      assert.equal(globalFlag('__aliasInit'), 1, '.js mapping / explicit .ts / symlink three note symbol is the same module instance')
       const r = (await app.kernel.plugins.invokeAction('alias', 'tags', {})) as Record<string, string>
       assert.equal(r.viaJs, 'shared')
       assert.equal(r.viaTs, 'shared')
@@ -311,7 +311,7 @@ export default {
   }
 })
 
-test('TS 入口语法错误降级登记为 failed（含文件与行列号诊断），绝不静默', { timeout: 60_000 }, async () => {
+test('TS entry language method error fall back register is failed(contains file and row column number diagnose), never static default', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-ts-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'broken-ts')
@@ -320,10 +320,10 @@ test('TS 入口语法错误降级登记为 failed（含文件与行列号诊断�
     const app = await createApp(dataDir)
     try {
       const failed = app.kernel.plugins.list().find((p) => p.error !== undefined)
-      assert.ok(failed, '语法错误插件应登记为 failed 条目')
+      assert.ok(failed, 'language method error plugin should register is failed item')
       assert.equal(failed.error!.code, 'plugin_load_failed')
-      assert.ok(failed.error!.message.includes('broken-ts/index.ts'), `诊断应含源文件路径：${failed.error!.message}`)
-      assert.ok(/:\d+:\d+/.test(failed.error!.message), `诊断应含行列号：${failed.error!.message}`)
+      assert.ok(failed.error!.message.includes('broken-ts/index.ts'), `diagnose should contains source file path:${failed.error!.message}`)
+      assert.ok(/:\d+:\d+/.test(failed.error!.message), `diagnose should contains row column number:${failed.error!.message}`)
     } finally {
       await app.close().catch(() => {})
     }
@@ -332,7 +332,7 @@ test('TS 入口语法错误降级登记为 failed（含文件与行列号诊断�
   }
 })
 
-test('TS 依赖闭包中的语法错误同样降级登记为 failed', { timeout: 60_000 }, async () => {
+test('TS dependency closed package in language method error same fall back register is failed', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-ts-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'broken-dep')
@@ -354,10 +354,10 @@ test('TS 依赖闭包中的语法错误同样降级登记为 failed', { timeout:
 })
 
 // ---------------------------------------------------------------------------
-// 越根契约：每个场景独立 dataDir + 真实可达的根外文件 + 执行哨兵
+// exceeds contract: each scenario independent dataDir + real can reach outside file + execute sentinel
 // ---------------------------------------------------------------------------
 
-/** 建一个真实可达的根外目录与 evil 源文件（导入执行会翻动哨兵），返回路径。 */
+/** create a real can reach outside directory and evil source file (import execute will translate motion sentinel), return path. */
 function makeOutsideEvil(sentinel: string): string {
   const outside = mkdtempSync(join(tmpdir(), 'helm-ext-out-'))
   const evil = join(outside, 'evil.ts')
@@ -365,14 +365,14 @@ function makeOutsideEvil(sentinel: string): string {
   return evil
 }
 
-test('越根契约 1：plugin.json main 路径穿越到根外真实文件，降级登记 failed，evil 绝不执行', { timeout: 60_000 }, async () => {
+test('exceeds contract 1:plugin.json main path through exceeds to outside real file, fall back register failed,evil never execute', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-esc1-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'traversal')
     mkdirSync(dirPath, { recursive: true })
-    // 根外真实文件放在 dataDir 根（插件目录外、mkdtemp 可写区内）：
-    // 不写到 tmpdir 上两级——非 root 环境（CI runner）对该层无写权限。
-    // main '../../evil.ts' 相对插件目录解析到 dataDir/evil.ts，越出插件根。
+    // outside real file put in dataDir (plugin directory outside,mkdtemp can write zone inside):
+    // do not write to tmpdir on two level - - non- root environment (CI runner) for the layer without write permission.
+    // main '../../evil.ts' each other for plugin directory parse to dataDir/evil.ts, exceeds out plugin.
     const reachable = join(dataDir, 'evil.ts')
     writeFileSync(reachable, `globalThis.__escMainSentinel = (globalThis.__escMainSentinel ?? 0) + 1\nexport default { id: 'evil', definePlugin() {} }\n`)
     writeFileSync(dirPath + '/plugin.json', JSON.stringify({ main: '../../evil.ts' }))
@@ -384,46 +384,46 @@ test('越根契约 1：plugin.json main 路径穿越到根外真实文件，降�
     } finally {
       await app.close().catch(() => {})
     }
-    assert.equal(globalFlag('__escMainSentinel'), undefined, 'main 穿越被拒：evil 源码绝不能被导入执行')
+    assert.equal(globalFlag('__escMainSentinel'), undefined, 'main through exceeds by refuse:evil source code never can by import execute')
     rmSync(reachable, { force: true })
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }
 })
 
-test('越根契约 2：约定入口 symlink 指向根外真实 .ts，realpath 越界显式拒绝，evil 绝不执行', { timeout: 60_000 }, async () => {
+test('exceeds contract 2: convention entry symlink points to outside real .ts,realpath out of bounds explicit reject,evil never execute', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-esc2-'))
   const evil = makeOutsideEvil('__escEntrySentinel')
   try {
     const dirPath = join(dataDir, 'plugins', 'entry-symlink')
     mkdirSync(dirPath, { recursive: true })
-    // 词法在目录内、realpath 在目录外（symlink 逃逸），目标真实存在
+    // term method in directory inside,realpath in directory outside (symlink escape), target real store in
     symlinkSync(evil, join(dirPath, 'index.ts'))
     const app = await createApp(dataDir)
     try {
       const failed = app.kernel.plugins.list().find((p) => p.error !== undefined)
-      assert.ok(failed, `应为 HelmError 登记，实际：无 failed 条目`)
+      assert.ok(failed, `should be HelmError register, actual: without failed item`)
       assert.ok(
         failed.error!.code === 'plugin_manifest_invalid' || failed.error!.code === 'plugin_load_failed',
-        `入口 symlink 越根应显式拒绝，实际 code：${failed.error!.code}`,
+        `entry symlink exceeds should explicit reject, actual code:${failed.error!.code}`,
       )
     } finally {
       await app.close().catch(() => {})
     }
-    assert.equal(globalFlag('__escEntrySentinel'), undefined, '入口 symlink 越根被拒：evil 绝不能被导入执行')
+    assert.equal(globalFlag('__escEntrySentinel'), undefined, 'entry symlink exceeds by refuse:evil never can by import execute')
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
     rmSync(evil, { force: true })
   }
 })
 
-test('越根契约 3：插件根内依赖 symlink 指向根外真实 .ts，转译范围拒绝，evil 绝不执行', { timeout: 60_000 }, async () => {
+test('exceeds contract 3: plugin inside dependency symlink points to outside real .ts, transpile scope reject,evil never execute', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-esc3-'))
   const evil = makeOutsideEvil('__escDepSentinel')
   try {
     const dirPath = join(dataDir, 'plugins', 'dep-symlink')
     mkdirSync(join(dirPath, 'lib'), { recursive: true })
-    // 合法入口 + 根内词法依赖，但依赖是 symlink 指向根外真实 evil.ts
+    // legal entry + inside term method dependency, but dependency is symlink points to outside real evil.ts
     symlinkSync(evil, join(dirPath, 'lib', 'helper.ts'))
     writeFileSync(
       join(dirPath, 'index.ts'),
@@ -434,12 +434,12 @@ export default { id: 'dep-symlink', tag: x, definePlugin() {} }
     const app = await createApp(dataDir)
     try {
       const failed = app.kernel.plugins.list().find((p) => p.error !== undefined)
-      assert.ok(failed, `应为 HelmError 登记，实际：无 failed 条目`)
-      assert.equal(failed.error!.code, 'plugin_load_failed', '根外 symlink 依赖不得被转译，显式失败')
+      assert.ok(failed, `should be HelmError register, actual: without failed item`)
+      assert.equal(failed.error!.code, 'plugin_load_failed', 'outside symlink dependency must not by transpile, explicit failed')
     } finally {
       await app.close().catch(() => {})
     }
-    assert.equal(globalFlag('__escDepSentinel'), undefined, '依赖 symlink 越根被拒：evil 绝不能被导入执行')
+    assert.equal(globalFlag('__escDepSentinel'), undefined, 'dependency symlink exceeds by refuse:evil never can by import execute')
     rmSync(evil, { force: true })
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
@@ -447,12 +447,12 @@ export default { id: 'dep-symlink', tag: x, definePlugin() {} }
   }
 })
 
-test('越根契约 4：fallback 说明符（.js 家族）映射到根外真实 .ts，拒绝转译，evil 绝不执行；显式 .ts 说明符走 Node 原生（非本加载器转译范围）', { timeout: 60_000 }, async () => {
+test('exceeds contract 4:fallback note symbol (.js family) mapping to outside real .ts, reject transpile,evil never execute; explicit .ts note symbol away Node original generate (non- this load transpile scope)', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-esc4-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'dotdot')
     mkdirSync(dirPath, { recursive: true })
-    // ../../evil.js（.js 家族 fallback）从 plugins/dotdot/ 出发映射到 dataDir/evil.ts（真实存在、根外）
+    // ../../evil.js(.js family fallback) from plugins/dotdot/ starting from mapping to dataDir/evil.ts(real store in, outside)
     writeFileSync(
       join(dataDir, 'evil.ts'),
       "globalThis.__escDotdotSentinel = (globalThis.__escDotdotSentinel ?? 0) + 1\nexport const x = 'evil'\n",
@@ -466,24 +466,24 @@ export default { id: 'dotdot', tag: x, definePlugin() {} }
     const app = await createApp(dataDir)
     try {
       const failed = app.kernel.plugins.list().find((p) => p.error !== undefined)
-      assert.ok(failed, `应为 HelmError 登记，实际：无 failed 条目`)
-      // fallback 把 .js 映射到根外 .ts：拒绝转译，显式 plugin_load_failed
+      assert.ok(failed, `should be HelmError register, actual: without failed item`)
+      // fallback  .js mapping to outside .ts: reject transpile, explicit plugin_load_failed
       assert.equal(failed.error!.code, 'plugin_load_failed')
-      assert.ok(failed.error!.message.includes('拒绝转译'), `诊断应说明拒绝原因：${failed.error!.message}`)
+      assert.ok(failed.error!.message.includes('reject transpile'), `diagnose should note reject reason:${failed.error!.message}`)
     } finally {
       await app.close().catch(() => {})
     }
-    assert.equal(globalFlag('__escDotdotSentinel'), undefined, 'fallback 越根映射绝不能触发根外源码执行')
+    assert.equal(globalFlag('__escDotdotSentinel'), undefined, 'fallback exceeds mapping never can trigger outside source code execute')
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }
 })
 
 // ---------------------------------------------------------------------------
-// 模块 identity 与根生命周期
+// module identity and lifecycle
 // ---------------------------------------------------------------------------
 
-test('模块 identity：同插件入口静态 + 动态 import 多处引用仅初始化一次', { timeout: 60_000 }, async () => {
+test('module identity: same plugin entry static + motion state import many where reference only initialize once', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-ts-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'identity')
@@ -504,7 +504,7 @@ export default {
   definePlugin(ctx: any) {
     ctx.action({
       id: 'tags',
-      description: 'identity 探针',
+      description: 'identity probe needle',
       inputSchema: { type: 'object', additionalProperties: false },
       outputSchema: { type: 'object', required: ['a', 'b'], additionalProperties: false, properties: { a: { type: 'string' }, b: { type: 'string' } } },
       handler: () => ({ a, b: lazy.tag }),
@@ -516,7 +516,7 @@ export default {
     const app = await createApp(dataDir)
     try {
       await app.kernel.plugins.enable('identity')
-      assert.equal(globalFlag('__identityInit'), 1, '静态与动态 import 指向同一模块实例')
+      assert.equal(globalFlag('__identityInit'), 1, 'static and motion state import points to the same module instance')
       const r = (await app.kernel.plugins.invokeAction('identity', 'tags', {})) as { a: string; b: string }
       assert.equal(r.a, 'shared')
       assert.equal(r.b, 'shared')
@@ -528,12 +528,12 @@ export default {
   }
 })
 
-test('TS 根释放与 fallback 映射（纯 node 子进程，生产运行时保真）：注册期映射可用、释放后消失、fallback 越根拒绝', { timeout: 60_000 }, async () => {
+test('TS release and fallback mapping (pure node child process, produce runtime fidelity): register phase mapping available, release after disappear,fallback exceeds reject', { timeout: 60_000 }, async () => {
   const dirPath = mkdtempSync(join(tmpdir(), 'helm-ext-rootrel-'))
   const outside = mkdtempSync(join(tmpdir(), 'helm-ext-rootout-'))
   try {
-    // fixture：根内 mapped.ts（.js 映射目标）、无扩展名目标、symlink 别名；
-    // 根外 evil.ts（fallback 越根目标，真实可达）
+    // fixture: inside mapped.ts(.js mapping target), without extension target,symlink alias;
+    // outside evil.ts(fallback exceeds target, real can reach)
     writeFileSync(join(dirPath, 'mapped.ts'), 'export const v = 42\n')
     writeFileSync(join(dirPath, 'greet.ts'), 'export const g = 7\n')
     symlinkSync(join(dirPath, 'mapped.ts'), join(dirPath, 'alias.ts'))
@@ -542,19 +542,19 @@ test('TS 根释放与 fallback 映射（纯 node 子进程，生产运行时保�
       join(dirPath, 'entry.ts'),
       "import { v } from './mapped.js'\nimport { g } from './greet'\nimport { v as viaAlias } from './alias.js'\nexport const w = v + g\nexport const a = viaAlias\n",
     )
-    // escape.ts 内的 fallback 越根说明符：从插件根出发指向根外 outside/evil.ts
-    // （真实可达；用 relative 计算正确的 ../ 深度，不手拼）
-    // escape.ts 内的 fallback 越根说明符：从插件根出发指向根外 outside/evil.ts
-    // （真实可达；用 relative 计算正确的 ../ 深度，末段换成 .js 以构造 fallback 形态）
+    // escape.ts inside fallback exceeds note symbol: from plugin starting from points to outside outside/evil.ts
+    // (real can reach; use relative compute correct ../ deep, do not manually piece together)
+    // escape.ts inside fallback exceeds note symbol: from plugin starting from points to outside outside/evil.ts
+    // (real can reach; use relative compute correct ../ deep, end segment swap into .js with construct fallback form)
     const escapeSpec = relative(dirPath, join(outside, 'evil.ts')).split(sep).join('/').replace(/evil\.ts$/, 'evil.js')
     writeFileSync(
       join(dirPath, 'escape.ts'),
       `import { e } from '${escapeSpec}'\nexport const t = e\n`,
     )
-    // 子进程（纯 node，不经 tsx：唯一真实走本加载器 fallback 的运行时）：
-    // 1) 注册期 .js 映射 / 无扩展名 / symlink 别名全部加载且单次初始化；
-    // 2) fallback 越根（../evil.js -> 根外 evil.ts）拒绝且哨兵不翻；
-    // 3) 全部根释放后 .js 映射消失（ERR_MODULE_NOT_FOUND）。
+    // child process (pure node, do not via tsx: unique real away this load fallback runtime):
+    // 1) register phase .js mapping / without extension / symlink alias all load and single time initialize;
+    // 2) fallback exceeds (../evil.js -> outside evil.ts) reject and sentinel do not translate;
+    // 3) all release after .js mapping disappear (ERR_MODULE_NOT_FOUND).
     const providerUrl = import.meta.resolve('@helm/plugin-build')
 const childSrc = `
 const { registerPluginTsRoot } = await import(${JSON.stringify(pathToFileURL(loaderSrc).href)});
@@ -586,16 +586,16 @@ console.log('CHILD_OK');
       result = execFileSync(process.execPath, [childPath], { encoding: 'utf8', timeout: 30_000 })
     } catch (e) {
       const out = ((e as { stdout?: string }).stdout ?? '') + '\n' + ((e as { stderr?: string }).stderr ?? '')
-      assert.fail(`纯 node 子进程失败：${out.slice(0, 800)}`)
+      assert.fail(`pure node child process failed:${out.slice(0, 800)}`)
     }
-    assert.ok(result.includes('CHILD_OK'), `纯 node 子进程应全契约通过，输出：${result}`)
+    assert.ok(result.includes('CHILD_OK'), `pure node child process should all contract via, output:${result}`)
   } finally {
     rmSync(dirPath, { recursive: true, force: true })
     rmSync(outside, { recursive: true, force: true })
   }
 })
 
-test('registerPluginTsRoot 引用计数：重复注册合并，计数归零后可再次注册', { timeout: 60_000 }, async () => {
+test('registerPluginTsRoot reference counter: duplicate register merge, counter reset to zero after can again register', { timeout: 60_000 }, async () => {
   const dirPath = mkdtempSync(join(tmpdir(), 'helm-ext-root-'))
   try {
     writeFileSync(join(dirPath, 'still.ts'), 'export const v = 1\n')
@@ -603,11 +603,11 @@ test('registerPluginTsRoot 引用计数：重复注册合并，计数归零后�
     const release1 = registerPluginTsRoot(dirPath, { transform })
     const release2 = registerPluginTsRoot(dirPath, { transform })
     release1()
-    // 计数未归零：目录仍在转译范围（.js -> .ts 映射仍可用）
+    // counter not reset to zero: directory still in transpile scope (.js -> .ts mapping still available)
     const m = (await import(`file://${join(dirPath, 'still.js')}`)) as { v: number }
-    assert.equal(m.v, 1, '计数未归零前转译范围仍生效')
+    assert.equal(m.v, 1, 'counter not reset to zero before transpile scope still takes effect')
     release2()
-    // 归零后可再次注册（钩子重新懒注册），周期可重复
+    // reset to zero after can again register (hook re- lazy register), cycle can duplicate
     const release3 = registerPluginTsRoot(dirPath, { transform })
     release3()
   } finally {
@@ -615,7 +615,7 @@ test('registerPluginTsRoot 引用计数：重复注册合并，计数归零后�
   }
 })
 
-test('TS 插件停用后可再启用；停用不卸载模块（identity 稳定，不重复初始化）', { timeout: 60_000 }, async () => {
+test('TS plugin deactivate after can again enable; deactivate do not unload module (identity stable, does not repeat initialize)', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-ts-'))
   try {
     const { counterName } = writeTsPlugin(join(dataDir, 'plugins'), 'ts-cycle')
@@ -626,7 +626,7 @@ test('TS 插件停用后可再启用；停用不卸载模块（identity 稳定�
       await app.kernel.plugins.enable('ts-cycle')
       const r = (await app.kernel.plugins.invokeAction('ts-cycle', 'probe', {})) as { builtinOk: boolean }
       assert.equal(r.builtinOk, true)
-      assert.equal(globalFlag(counterName), 1, '启停循环不重复执行模块初始化')
+      assert.equal(globalFlag(counterName), 1, 'start stop loop does not repeat execute module initialize')
     } finally {
       await app.close().catch(() => {})
     }
@@ -635,34 +635,34 @@ test('TS 插件停用后可再启用；停用不卸载模块（identity 稳定�
   }
 })
 
-test('id 冲突失败后 TS 根释放：同目录换 id 重写后可重新加载成功', { timeout: 60_000 }, async () => {
+test('id conflict failed after TS release: same directory swap id heavy write after can re- load succeeded', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-rel-'))
   try {
-    // 先经 createHelm 注册一个 id=dup 的插件（first 目录被消费）
+    // first via createHelm register a id=dup plugin (first directory by consume)
     const first = join(dataDir, 'plugins', 'first')
     mkdirSync(first, { recursive: true })
     writeFileSync(join(first, 'index.ts'), `export default { id: 'dup', definePlugin() {} }\n`)
     const app = await createApp(dataDir)
     try {
-      // 再放入同 id 的第二个目录：冲突降级登记为 failed 条目（不再上抛阻断），
-      // 根被释放；后续同目录可修复重载。
+      // again put same id second directory: conflict fall back register is failed item (no longer on throw block assert),
+      // by release; after continue same directory can fix reload.
       const second = join(dataDir, 'plugins', 'second')
       mkdirSync(second, { recursive: true })
       writeFileSync(join(second, 'index.ts'), `export default { id: 'dup', definePlugin() {} }\n`)
       const registered0 = await loadExternalPlugins(dataDir, app.kernel.plugins)
-      assert.ok(!registered0.includes('dup'), '冲突目录不得注册成功')
+      assert.ok(!registered0.includes('dup'), 'conflict directory must not register succeeded')
       const conflicted = app.kernel.plugins.list().find((p) => p.id !== 'dup' && p.error !== undefined)
-      assert.ok(conflicted, 'id 冲突应降级登记为 failed 条目')
+      assert.ok(conflicted, 'id conflict should fall back register is failed item')
       assert.equal(conflicted.error!.code, 'plugin_already_registered')
-      // first 已被 createHelm 消费：移除其入口标记（降级为数据目录），后续直调
-      // 只扫描 second，验证冲突释放后同目录可修复重载
+      // first already by createHelm consume: remove its entry mark record (fall back is data directory), after continue direct tune
+      // only scan second, verify conflict release after same directory can fix reload
       rmSync(join(first, 'index.ts'))
-      // 改 id 后同目录重新加载成功（根被正确释放/重注册，转译范围不受污染）
+      // change id after same directory re- load succeeded (by correct release/heavy register, transpile scope do not subject to pollute)
       writeFileSync(join(second, 'index.ts'), `export default { id: 'second-fixed', definePlugin(ctx: any) {
         ctx.action({ id: 'ok', description: 'ok', inputSchema: { type: 'object', additionalProperties: false }, outputSchema: { type: 'object', required: ['ok'], additionalProperties: false, properties: { ok: { type: 'boolean' } } }, handler: () => ({ ok: true }) })
       } }\n`)
       const registered = await loadExternalPlugins(dataDir, app.kernel.plugins)
-      assert.ok(registered.includes('second-fixed'), `改 id 后应注册成功：${JSON.stringify(registered)}`)
+      assert.ok(registered.includes('second-fixed'), `change id after should register succeeded:${JSON.stringify(registered)}`)
       await app.kernel.plugins.enable('second-fixed')
       const r = (await app.kernel.plugins.invokeAction('second-fixed', 'ok', {})) as { ok: boolean }
       assert.equal(r.ok, true)
@@ -674,10 +674,10 @@ test('id 冲突失败后 TS 根释放：同目录换 id 重写后可重新加载
   }
 })
 
-test('loadExternalPlugins 直调 TS 插件：默认停用注册且动作可用', { timeout: 60_000 }, async () => {
+test('loadExternalPlugins direct tune TS plugin: by default deactivate register and action available', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-ts-'))
   try {
-    // 空目录起（createHelm 无外部插件）；再放入 TS 插件直调扫描
+    // empty directory start (createHelm without external plugin); again put TS plugin direct tune scan
     const app = await createApp(dataDir)
     try {
       const extra = join(dataDir, 'plugins', 'ts-extra')
@@ -689,7 +689,7 @@ test('loadExternalPlugins 直调 TS 插件：默认停用注册且动作可用',
   definePlugin(ctx: any) {
     ctx.action({
       id: 'ok',
-      description: 'ok 探针',
+      description: 'ok probe needle',
       inputSchema: { type: 'object', additionalProperties: false },
       outputSchema: { type: 'object', required: ['ok'], additionalProperties: false, properties: { ok: { type: 'boolean' } } },
       handler: () => ({ ok: true }),
@@ -699,7 +699,7 @@ test('loadExternalPlugins 直调 TS 插件：默认停用注册且动作可用',
 `,
       )
       const registered = await loadExternalPlugins(dataDir, app.kernel.plugins)
-      assert.ok(registered.includes('ts-extra'), `直调扫描应注册新放入的 ts-extra：${JSON.stringify(registered)}`)
+      assert.ok(registered.includes('ts-extra'), `direct tune scan should register new put ts-extra:${JSON.stringify(registered)}`)
       const summary = app.kernel.plugins.list().find((p) => p.id === 'ts-extra')
       assert.ok(summary)
       assert.equal(summary.enabled, false)
@@ -711,7 +711,7 @@ test('loadExternalPlugins 直调 TS 插件：默认停用注册且动作可用',
   }
 })
 
-test('转译不产出任何磁盘中间产物', { timeout: 60_000 }, async () => {
+test('transpile do not produce out any disk middle artifact', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-ts-'))
   try {
     const { dirPath } = writeTsPlugin(join(dataDir, 'plugins'), 'ts-clean')
@@ -722,7 +722,7 @@ test('转译不产出任何磁盘中间产物', { timeout: 60_000 }, async () =>
       await app.kernel.plugins.invokeAction('ts-clean', 'probe', {})
       const after = new Set(readdirSync(dirPath))
       const added = [...after].filter((f) => !before.has(f))
-      assert.deepEqual(added, [], `插件目录不应出现任何转译产物/缓存：新增 ${JSON.stringify(added)}`)
+      assert.deepEqual(added, [], `plugin directory must not appear any transpile artifact/cache: new increase ${JSON.stringify(added)}`)
     } finally {
       await app.close().catch(() => {})
     }

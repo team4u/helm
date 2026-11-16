@@ -1,19 +1,19 @@
 /**
- * Hub 产品层的 Web 静态目录解析策略。
+ * Hub produce product layer Web static directory parse policy.
  *
- * Why 独立模块：内核 createHubHandler/startHub 只接受显式 webDistDir（缺省纯
- * API，不硬编码 Web 包位置）；「默认目录在哪」是 hub 产品策略，随 hub 入口
- * 自身位置而定，集中在此可测试。
+ * Why independent module: kernel createHubHandler/startHub only accept explicit webDistDir(default pure
+ * API, do not hard encode Web package location); by default directory in which is hub produce product policy, follow hub entry
+ * itself location while set, concentrate in this can test.
  *
- * 布局约定（src 与 dist 下同构，均上溯两级到 payload/仓库的包并列层）：
- * - 仓库开发：packages/hub/{src,dist}/main.ts → packages/web/dist；
- * - npm payload：<payload>/hub/dist/main.js → <payload>/web/dist（web 与 hub 同级）。
- * 目录内必须有 index.html 才视为有效（未构建不伪装静态站点）。
+ * layout convention (src and dist under same construct, all on trace two level to payload/repository package and column layer):
+ * - repository development:packages/hub/{src,dist}/main.ts → packages/web/dist;
+ * - npm payload:<payload>/hub/dist/main.js → <payload>/web/dist(web and hub same level).
+ * directory inside must has index.html only then treated as valid (unbuilt does not pretend to be static site).
  */
 import { statSync } from 'node:fs';
 import { join } from 'node:path';
 
-/** 探测 <entryDir>/../../web/dist；存在 index.html 时返回该目录，否则 undefined（纯 API 形态）。 */
+/** probe <entryDir>/../../web/dist; store in index.html when return the directory, otherwise undefined(pure API form). */
 export function resolveHubWebDistDir(entryDir: string): string | undefined {
   const distDir = join(entryDir, '..', '..', 'web', 'dist');
   try {
@@ -25,7 +25,7 @@ export function resolveHubWebDistDir(entryDir: string): string | undefined {
   }
 }
 
-/** 解析 HELM_WEB_DIST_DIR：显式目录优先；'false'/'0'/'' 显式禁用；未设置走 resolveHubWebDistDir。 */
+/** parse HELM_WEB_DIST_DIR: explicit directory takes precedence;'false'/'0'/'' explicit disable; not settings away resolveHubWebDistDir. */
 export function resolveWebDistOption(
   env: string | undefined,
   entryDir: string,

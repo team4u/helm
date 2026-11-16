@@ -1,9 +1,9 @@
 /**
- * @helm/env-io：kernel 与 @helm/node 共享的执行实现包。
+ * @helm/env-io:kernel and @helm/node sharing execute implement package.
  *
- * protocol 只保留可串行化 RPC 形状（NodePathUsage 等）；真实文件系统 /
- * 进程表访问、环境变量大小写原语与宿主机 Shell 探测归属本包，由两端
- * （Hub 本机与远端节点 daemon）依赖同一实现，绝不各复制一套语义。
+ * protocol only keep can serial RPC shape (NodePathUsage etc.); real file system /
+ * process table access, environment variable large small write original language and host machine Shell probe ownership this package, by two end
+ * (Hub local machine and remote node daemon) dependency the same implement, never each duplicate one set semantics.
  */
 export * from './path-usage.js'
 export * from './node-path-usage-io.js'

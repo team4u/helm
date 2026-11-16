@@ -1,8 +1,8 @@
 /**
- * 节点端口转发 HTTP 路由测试：handleApi 直接驱动（无真实 daemon——
- * 转发服务的真实字节链路见 node-forward.test.ts）。
- * 覆盖：POST 校验（缺字段/坏端口/坏 host/未知字段）、创建成功、
- * GET 清单/详情（404）、DELETE 停止（幂等 404）、events NDJSON。
+ * node port forwarding HTTP routing test:handleApi directly drive (without real daemon- -
+ * forwarding service real byte link see node-forward.test.ts).
+ * override:POST validate (missing field/broken port/broken host/unknown field), create succeeded,
+ * GET manifest/detail situation (404),DELETE stop (idempotent 404),events NDJSON.
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -15,7 +15,7 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 function makeKernel(over: {
   sessions: Map<string, NodeForwardSession>
   events: ((event: NodeForwardEvent) => void)[]
-  /** 租约记录（可选注入：acquire/release 计数与最后释放回调）。 */
+  /** lease record (optional inject:acquire/release counter and finally release call back). */
   lease?: { acquisitions: number; releases: number; onLastRelease?: () => void }
 }): KernelRuntimeLike {
   return {
@@ -53,7 +53,7 @@ function makeKernel(over: {
             over.lease!.acquisitions += 1
             return () => {
               over.lease!.releases += 1
-              // 简化模拟：首 holder 释放即视为最后持有者（单 holder 测试）。
+              // simplify simulated: first holder release i.e. treated as finally holder (single holder test).
               over.lease!.onLastRelease?.()
             }
           },
@@ -70,7 +70,7 @@ const post = async (kernel: KernelRuntimeLike, path: string, body?: unknown): Pr
     }), kernel)
     return { status: response.status, json: await response.json().catch(() => undefined) }
   } catch (error) {
-    // ValidationError（HelmError 子类）直接抛出（生产由 hub.ts 统一映射 400）。
+    // ValidationError(HelmError sub- class) directly throw (produce by hub.ts unify mapping 400).
     if (error instanceof Error && 'status' in error) {
       return { status: (error as { status: number }).status, json: undefined }
     }
@@ -78,12 +78,12 @@ const post = async (kernel: KernelRuntimeLike, path: string, body?: unknown): Pr
   }
 }
 
-test('POST /api/nodes/:id/forward：校验与创建', { timeout: 60_000 }, async () => {
+test('POST /api/nodes/:id/forward: validate and create', { timeout: 60_000 }, async () => {
   const kernel = makeKernel({ sessions: new Map(), events: [] })
-  // 合法创建。
+  // legal create.
   const ok = await post(kernel, '/api/nodes/node-a/forward', { listenHost: '127.0.0.1', listenPort: 18080, targetHost: 'db.internal', targetPort: 5432 })
   assert.equal(ok.status, 201)
-  // 缺字段。
+  // missing field.
   for (const bad of [
     {},
     { listenHost: '127.0.0.1', listenPort: 18080 },
@@ -96,11 +96,11 @@ test('POST /api/nodes/:id/forward：校验与创建', { timeout: 60_000 }, async
   ]) {
     const kernel2 = makeKernel({ sessions: new Map(), events: [] })
     const result = await post(kernel2, '/api/nodes/node-b/forward', bad)
-    assert.equal(result.status, 400, `应 400 拒绝 ${JSON.stringify(bad)}`)
+    assert.equal(result.status, 400, `should 400 reject ${JSON.stringify(bad)}`)
   }
 })
 
-test('GET 清单/详情与 DELETE 停止（含 404）', { timeout: 60_000 }, async () => {
+test('GET manifest/detail situation and DELETE stop (contains 404)', { timeout: 60_000 }, async () => {
   const kernel = makeKernel({ sessions: new Map(), events: [] })
   const created = await post(kernel, '/api/nodes/node-a/forward', { listenHost: '127.0.0.1', listenPort: 18080, targetPort: 8080 })
   assert.equal(created.status, 201)
@@ -116,14 +116,14 @@ test('GET 清单/详情与 DELETE 停止（含 404）', { timeout: 60_000 }, asy
   assert.equal(gone.status, 404)
   const delAgain = await handleApi(new Request('http://hub/api/nodes/forward/fwd-11111111-2222-3333-4444-555555555555', { method: 'DELETE' }), kernel)
   assert.equal(delAgain.status, 404)
-  // 非法 forwardId 形式：ValidationError 直抛（hub.ts 映射 400）。
+  // illegal forwardId form:ValidationError direct throw (hub.ts mapping 400).
   await assert.rejects(
     handleApi(new Request('http://hub/api/nodes/forward/not-a-uuid'), kernel),
     (error: unknown) => error instanceof Error && (error as { status?: number }).status === 400,
   )
 })
 
-test('GET events：NDJSON 首帧 started，断开关闭流', { timeout: 60_000 }, async () => {
+test('GET events:NDJSON first frame started, disconnect close stream', { timeout: 60_000 }, async () => {
   const kernel = makeKernel({ sessions: new Map(), events: [] })
   const created = await post(kernel, '/api/nodes/node-a/forward', { listenHost: '127.0.0.1', listenPort: 18080, targetPort: 8080 })
   assert.equal(created.status, 201)
@@ -134,7 +134,7 @@ test('GET events：NDJSON 首帧 started，断开关闭流', { timeout: 60_000 }
   }), kernel)
   assert.equal(eventsResponse.status, 200)
   assert.equal(eventsResponse.headers.get('content-type'), 'application/x-ndjson; charset=utf-8')
-  // 流式读取首帧（流保持开启——监控生命周期由客户端控制；读完首帧即取消）。
+  // streaming read first frame (stream keep open start - - monitor lifecycle by client control; read completely first frame i.e. cancel).
   assert.ok(eventsResponse.body !== null)
   const reader = eventsResponse.body.getReader()
   const { value } = await reader.read()
@@ -142,18 +142,18 @@ test('GET events：NDJSON 首帧 started，断开关闭流', { timeout: 60_000 }
   assert.equal(first.type, 'started')
   controller.abort()
   await reader.cancel().catch(() => undefined)
-  // 未知 forwardId 的 events：404。
+  // unknown forwardId  events:404.
   const kernel2 = makeKernel({ sessions: new Map(), events: [] })
   const missing = await handleApi(new Request('http://hub/api/nodes/forward/fwd-99999999-2222-3333-4444-555555555555/events'), kernel2)
   assert.equal(missing.status, 404)
 })
 
-test('GET events：stop 终态 stopped 帧后流正常结束（监控不悬挂）', { timeout: 60_000 }, async () => {
+test('GET events:stop terminal state stopped frame after stream normal end (monitor do not pending)', { timeout: 60_000 }, async () => {
   const over = { sessions: new Map<string, NodeForwardSession>(), events: [] as ((event: NodeForwardEvent) => void)[] }
   const kernel = makeKernel(over)
   const created = await post(kernel, '/api/nodes/node-a/forward', { listenHost: '127.0.0.1', listenPort: 18080, targetPort: 8080 })
   assert.equal(created.status, 201)
-  // 订阅终止通知（模拟 runtime 的 onNodeForwardStopped 接线）。
+  // subscribe terminate notify (simulated runtime  onNodeForwardStopped connect line).
   const stopWaiters = new Set<() => void>()
   ;(kernel as { onNodeForwardStopped?: unknown }).onNodeForwardStopped = (_id: string, listener: () => void) => {
     stopWaiters.add(listener)
@@ -170,8 +170,8 @@ test('GET events：stop 终态 stopped 帧后流正常结束（监控不悬挂�
   const readFirst = await reader.read()
   const first = JSON.parse(new TextDecoder().decode(readFirst.value).trim()) as { type?: string }
   assert.equal(first.type, 'started')
-  // 模拟 stop：先经事件通道发终态 stopped 帧（makeKernel 登记的 listener），
-  // 再触发终止通知——流应正常 close（done=true），不悬挂。
+  // simulated stop: first via event channel terminal state stopped frame (makeKernel register listener),
+  // again trigger terminate notify - - stream should normal close(done=true), do not pending.
   for (const listener of [...over.events]) listener({ type: 'stopped' })
   for (const waiter of [...stopWaiters]) waiter()
   const drained = await new Promise<boolean>((resolve) => {
@@ -183,17 +183,17 @@ test('GET events：stop 终态 stopped 帧后流正常结束（监控不悬挂�
     })().catch(() => resolve(false))
     setTimeout(() => resolve(false), 5_000)
   })
-  assert.equal(drained, true, '终止通知后事件流应正常结束（done）')
+  assert.equal(drained, true, 'terminate notify after event stream should normal end (done)')
 })
 
-test('GET events：事件流即持有者——建立 acquire、断开/取消 release（不泄漏租约）', { timeout: 60_000 }, async () => {
+test('GET events: event stream i.e. holder - - establish acquire, disconnect/cancel release(without leaking lease)', { timeout: 60_000 }, async () => {
   const lease = { acquisitions: 0, releases: 0, onLastRelease: undefined as (() => void) | undefined }
   const over = { sessions: new Map<string, NodeForwardSession>(), events: [] as ((event: NodeForwardEvent) => void)[], lease }
   const kernel = makeKernel(over)
   const created = await post(kernel, '/api/nodes/node-a/forward', { listenHost: '127.0.0.1', listenPort: 18080, targetPort: 8080 })
   assert.equal(created.status, 201)
 
-  // 1) abort 断开：acquire 一次、release 一次。
+  // 1) abort disconnect:acquire once,release once.
   const controller = new AbortController()
   const response = await handleApi(new Request('http://hub/api/nodes/forward/fwd-11111111-2222-3333-4444-555555555555/events', {
     headers: { accept: 'application/x-ndjson' },
@@ -202,15 +202,15 @@ test('GET events：事件流即持有者——建立 acquire、断开/取消 rel
   assert.equal(response.status, 200)
   assert.ok(response.body !== null)
   const reader = response.body.getReader()
-  await reader.read() // started 首帧
+  await reader.read() // started first frame
   await delay(30)
-  assert.equal(lease.acquisitions, 1, '事件流建立即 acquire 租约')
-  assert.equal(lease.releases, 0, '持有期间未释放')
+  assert.equal(lease.acquisitions, 1, 'event stream establish i.e. acquire lease')
+  assert.equal(lease.releases, 0, 'hold has during not release')
   controller.abort()
   await delay(30)
-  assert.equal(lease.releases, 1, '断开后释放租约（最后一持有者触发停止回调链）')
+  assert.equal(lease.releases, 1, 'after disconnect release lease (finally one holder trigger stop call back chain)')
 
-  // 2) cancel（body.cancel）断开：同样释放。
+  // 2) cancel(body.cancel) disconnect: same release.
   const lease2 = { acquisitions: 0, releases: 0, onLastRelease: undefined as (() => void) | undefined }
   const over2 = { sessions: new Map<string, NodeForwardSession>(), events: [] as ((event: NodeForwardEvent) => void)[], lease: lease2 }
   const kernel2 = makeKernel(over2)
@@ -227,5 +227,5 @@ test('GET events：事件流即持有者——建立 acquire、断开/取消 rel
   await reader2.cancel()
   await delay(30)
   assert.equal(lease2.acquisitions, 1)
-  assert.equal(lease2.releases, 1, '客户端主动 cancel 同样释放租约')
+  assert.equal(lease2.releases, 1, 'client actively cancel same release lease')
 })

@@ -1,24 +1,24 @@
 /**
- * 原生 subagent：默认 agent_spawn 执行行（内核零 Git/worktree 语义）。
+ * original generate subagent: by default agent_spawn execute row (kernel zero Git/worktree semantics).
  *
- * - 在 pi-durable 创建原生子会话，onCreated 回调上报 convId；
- * - resume：严格校验 ref（纯数字 convId 或既有 agentId 映射），绝不静默新建假续接；
- *   缺省严格沿用原子会话镜像的 profileId/cwd/model（不重算、不偷偷回默认
- *   Profile）；显式 agentType/cwd/model 变更经同一 updateConversation 路径应用
- *   （真实 SDK configure + 镜像持久化 + 模型继承链，不重建身份字段），
- *   effort 显式时经 updateConversation 同步覆盖与 SDK 配置；onResolved/Gate 用
- *   配置落定后的实际 cwd（与 SDK 一致）；
- * - schema：AJV 全量校验（复用 plugins/schema，$async 显式拒绝），回合内
- *   register_structured_output 工具自愈（per-child 扩展注入，见
- *   structured-output.ts），工具拒绝错误参数同回合重试，最终未走工具可再文本
- *   追问一次，仍失败显式 schema_validation_failed（不吞错、不假数据）；
- * - profile：经 resolveProfile 端口读取真实 Profile（model/runtime），无效
- *   profile 显式报错；herdr runtime 未被插件接管时 unsupported_runtime；
- * - gate：真实 shell 执行（runGate，cwd 用子会话实际 cwd），失败即 spawn 失败；
- * - isolation 等执行环境要求：内核不解释（零业务分支）。带非空 isolation 的
- *   请求到达原生执行行时，说明没有插件经 agent_spawn continuation 兑现（如
- *   builtin:workflow 停用时的 worktree 隔离），显式 unsupported_runtime，
- *   绝不静默忽略。
+ * - in pi-durable create original generate sub-conversation,onCreated call back on report convId;
+ * - resume: strictly validate ref(pure number convId or since has agentId mapping), never static default creates new false resume;
+ *   default strictly along use atomic conversation mirror profileId/cwd/model(do not heavy compute, do not stealthily stealthily back by default
+ *   Profile); explicit agentType/cwd/model change via the same updateConversation path should use
+ *   (real SDK configure + mirror persist + model inherit chain, do not rebuild identity field),
+ *   effort explicit when via updateConversation sync override and SDK config;onResolved/Gate use
+ *   config set after actual cwd(and SDK consistent);
+ * - schema:AJV all amount validate (re- use plugins/schema,$async explicit reject), turn inside
+ *   register_structured_output tool self-heal (per-child extend inject, see
+ *   structured-output.ts), tool reject error parameter same turn retry, eventually not away tool can again text
+ *   append question once, still failed explicit schema_validation_failed(do not swallow wrong, do not false data);
+ * - profile: via resolveProfile port read real Profile(model/runtime), invalid
+ *   profile explicit errors;herdr runtime not by plugin take over when unsupported_runtime;
+ * - gate: real shell execute (runGate,cwd use sub-conversation actual cwd), failed i.e. spawn failed;
+ * - isolation etc. execute environment want seek: kernel do not explain (zero business branch). carries non-empty isolation 
+ *   request reach original generate execute row when, note no plugin via agent_spawn continuation honor (such as
+ *   builtin:workflow deactivate when worktree isolated), explicit unsupported_runtime,
+ *   never static default ignore.
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
@@ -49,64 +49,64 @@ import {
 
 const bg = BACKGROUND_CONTEXT
 
-/** 默认 spawn profile：assistant（真实存在的常驻 profile；不新造角色枚举）。 */
+/** by default spawn profile:assistant(real store in common resident profile; do not new build role enumeration). */
 const DEFAULT_SPAWN_PROFILE = 'assistant'
 
-/** thinkingLevel 合法枚举（pi-ai ModelThinkingLevel；effort 映射到此，拒绝任意字符串）。 */
+/** thinkingLevel legal enumeration (pi-ai ModelThinkingLevel;effort mapping to this, reject any string). */
 export const THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
 
 export interface ResolvedProfile {
   model?: string
   thinkingLevel?: string
   cwd?: string
-  /** Profile 默认绑定的计算节点（缺省 'local'）。 */
+  /** Profile by default bind set compute node (default 'local'). */
   nodeId?: string
-  /** 外部运行时声明（如 herdr）：原生执行行不支持，显式报错。 */
+  /** external runtime declaration (such as herdr): original generate execute row unsupported, explicit errors. */
   runtime?: { kind: string; agent: string; args?: string[] }
 }
 
 /**
- * 原生 spawn 依赖端口（宿主注入；runtime.ts 组合具体实现）。
- * resolveProfile 返回 undefined 表示 profile 不存在（显式报错，不静默当 default）。
+ * original generate spawn dependency port (host inject;runtime.ts combine specific implement).
+ * resolveProfile return undefined means profile missing (explicit errors, not silently when default).
  */
 export interface NativeSpawnDeps extends HelmToolDeps {
   harness: Harness
-  /** conversationId -> 最近 assistant 文本（由 tracker 维护）。 */
+  /** conversationId -> most near assistant text (by tracker maintain). */
   getLastAssistantText(conversationId: number): string | undefined
-  /** 全局默认模型 'provider/model'（未配置时抛 HelmError）。 */
+  /** global by default model 'provider/model'(not config when throw HelmError). */
   resolveModel(): { provider: string; modelId: string }
   /**
-   * 当前 Models 集合（思考档位能力收敛用；宿主注入 ModelRegistry.models）。
-   * 缺省不收敛（能力未知不破坏契约）。
+   * when before Models set (think Profile capability converge use; host inject ModelRegistry.models).
+   * default do not converge (capability unknown do not break contract).
    */
   modelsForClamp?(): Models | undefined
   /**
-   * 模型禁用预检（ModelRegistry.assertModelEnabled 注入）：解析出最终
-   * resolvedModel 后、真实创建子会话前必须调用（409 model_disabled），
-   * 绝不让原生 spawn 绕过禁用约束。
+   * model disable preflight (ModelRegistry.assertModelEnabled inject): parse out eventually
+   * resolvedModel after, real create sub-conversation before must invoke (409 model_disabled),
+   * never let original generate spawn bypass disable constraint.
    */
   assertModelEnabled?(provider: string, modelId: string): void
-  /** 全局默认思考档位；未配置则使用 SDK off。 */
+  /** global by default think Profile; not config then use SDK off. */
   resolveThinkingLevel?(): string | undefined
-  /** agentId -> child convId（resume 映射，进程内稳定）。 */
+  /** agentId -> child convId(resume mapping, process inside stable). */
   agentSessions: Map<string, number>
   /**
-   * 本 Harness 共享的结构化输出结果槽（conversationId -> session）：完整装配
-   * 的宿主（RuntimeAgentSpawn / buildSpawnHost）持有并注入，替代原模块级全局
-   * WeakMap<Harness, Map>；并发 spawn 的隔离靠 conversationId 键（同名扩展被
-   * registry 原地替换后，旧扩展闭包仍经此共享 map 动态命中自己的结果槽）。
-   * 直调 runNativeSpawn 的最小装配（无 schema 场景）可缺省；请求携带 schema
-   * 而未注入时显式报错（装配缺陷不静默丢结果）。
+   * this Harness sharing structure output result slot (conversationId -> session): complete install match
+   * host (RuntimeAgentSpawn / buildSpawnHost) hold has and inject, alternative original module level global
+   * WeakMap<Harness, Map>; concurrency spawn isolated rely conversationId key (same name extend by
+   * registry original ground replace after, old extend closed package still via this sharing map motion state hit itself result slot).
+   * direct tune runNativeSpawn most small install match (without schema scenario) can default; request carry schema
+   * while not inject when explicit errors (install match defect not silently lose result).
    */
   structuredOutputSessions?: Map<number, StructuredOutputSession>
   /**
-   * 记录子会话与父会话关系并校验 profile 合法性；无效 profileId 必须抛
-   * HelmError('not_found')。childCwd 为子会话将使用的实际 cwd（gate 也用它）。
-   * modelMirror 为本子会话最终生效的模型（'provider/model'，写入镜像；空串 = 未配置）。
-   * tags 为子会话标签（宿主决定；原生 spawn 不打业务角色标签）。
-   * thinkingLevel 为实际 SDK 使用的档位（已按目标模型能力收敛），防止登记时
-   * 重新读取继承源产生分歧。thinkingLevelOverride 为收敛后的显式覆盖
-   *（request.effort 未提供时 undefined，镜像继承链语义）。
+   * record sub-conversation and parent conversation closure system and validate profile legal; invalid profileId must throw
+   * HelmError('not_found').childCwd is sub-conversation use actual cwd(gate also use it).
+   * modelMirror is this sub-conversation eventually takes effect model ('provider/model', write mirror; empty string = not config).
+   * tags is sub-conversation tag (host decide; original generate spawn do not hit business role tag).
+   * thinkingLevel is actual SDK use Profile (already by target model capability converge), guard against register when
+   * re- read inherit source produce ambiguity.thinkingLevelOverride is converge after explicit override
+   *(request.effort not provide when undefined, mirror inherit chain semantics).
    */
   registerChildConversation(
     childId: number,
@@ -120,52 +120,52 @@ export interface NativeSpawnDeps extends HelmToolDeps {
     thinkingLevelOverride?: string,
   ): Promise<void>
   /**
-   * resume 续接时把子会话的 parentToolCallId 更新为本次父会话工具调用 ID
-   * （可选；宿主同步镜像并广播 conversation.upsert）。缺省不追踪。
+   * resume resume when sub-conversation parentToolCallId update is this time parent conversation tool invoke ID
+   * (optional; host sync mirror and broadcast conversation.upsert). default do not append trace.
    */
   bindChildToolCall?(childId: number, parentToolCallId: string): void
   /**
-   * 守卫式中止子会话回合（自动化取消的通用入口；零业务角色特判）：signal
-   * 桥与启动期取消经此中止子会话——宿主实现现读归属事实并走内核
-   * abortConversationGuarded 原子复核（human-owned 一律拒绝，看门狗红线；
-   * 事实过期同样确定性拒绝）。未接线（无内核运行时的装配/部分测试）时回退
-   * SDK conversation.abort，保持原始取消能力。
+   * guard style abort sub-conversation turn (automatically cancel through use entry; zero business role special judge):signal
+   * bridge and startup phase cancel via this abort sub-conversation - - host implement now read ownership fact and away kernel
+   * abortConversationGuarded atomic re-check (human-owned one rule reject, watchdog hard rule;
+   * fact expired same determinism reject). not connect line (without kernel runtime install match/part test) when fall back
+   * SDK conversation.abort, keep original cancel capability.
    */
   abortChildConversationGuarded?(childId: number): Promise<void>
-  /** 按 profileId 读取真实 Profile（model/thinkingLevel/cwd/runtime）；不存在返回 undefined。 */
+  /** by profileId read real Profile(model/thinkingLevel/cwd/runtime); missing return undefined. */
   resolveProfile(profileId: string): Promise<ResolvedProfile | undefined>
-  /** 会话显式模型覆盖（modelOverride）；无覆盖返回 undefined。 */
+  /** conversation explicit model override (modelOverride); without override return undefined. */
   getModelOverride(childId: number): string | undefined
   /**
-   * 校验子会话归属：resume 时确认 childId 的 parentConversationId 与请求一致。
-   * 返回该会话记录的父 ID；会话不存在返回 undefined。
+   * validate sub-conversation ownership:resume when confirm childId  parentConversationId and request consistent.
+   * return the conversation record parent ID; conversation missing return undefined.
    */
   getParentOfConversation(childId: number): number | undefined
   /**
-   * 读取 Helm 会话镜像（profileId / cwd / model 等真实配置）。
-   * resume 沿用原子会话配置的唯一事实来源；新建路径用它取父会话 cwd
-   * 回退（request>Profile>parent>Hub 链）。不存在返回 undefined。
+   * read Helm conversation mirror (profileId / cwd / model etc. real config).
+   * resume along use atomic conversation config unique fact source; creates new path use it take parent conversation cwd
+   * fall back (request>Profile>parent>Hub chain). missing return undefined.
    */
   getConversation(childId: number): ConversationSummary | undefined
   /**
-   * 更新子会话配置（真实 SDK configure + 镜像持久化 + 模型继承链重算，
-   * 复用宿主 updateConversation：不重建镜像、不覆盖 createdAt/title/tags）。
-   * resume 显式 agentType/cwd/model/effort 变更经此路径应用。
+   * update sub-conversation config (real SDK configure + mirror persist + model inherit chain heavy compute,
+   * re- use host updateConversation: do not rebuild mirror, does not override createdAt/title/tags).
+   * resume explicit agentType/cwd/model/effort change via this path should use.
    */
   updateConversation(childId: number, patch: ConversationPatch): Promise<ConversationSummary>
   /**
-   * 将 per-child 扩展安装进 SDK registry（spawn 构造的 StructuredOutput 工具
-   * 需真实注册后才能被会话按名选中；同名重装为原地替换）。
+   *  per-child extend install enter SDK registry(spawn construct StructuredOutput tool
+   * must real register after only then can by conversation by name choose in; same name heavy install is original ground replace).
    */
   installChildExtension(extension: Extension): void
   /**
-   * 附件清单块构造端口（宿主已在 spawnAgent 完成存在性与授权校验）。
-   * 返回 [Attached Files] 文本块；无附件 spawn 时不注入。
+   * attachment manifest chunk construct port (host already in spawnAgent complete store in and authorization validate).
+   * return [Attached Files] text chunk; without attachment spawn when do not inject.
    */
   resolveAttachmentsForPrompt?(): Promise<string>
-  /** 节点可用性预检（离线拒绝）。新建路径靶点链统一由 spawn-target.ts 提供。 */
+  /** node availability preflight (offline reject). creates new path target chain unify by spawn-target.ts provide. */
   assertNodeAvailable?: (nodeId: string) => void
-  /** 可选：fork 派生时解析父会话干净分叉锚点条目 ID（缺省走 resolveCleanForkAnchor）。 */
+  /** optional:fork derive when parse parent conversation clean fork anchor item ID(default away resolveCleanForkAnchor). */
   resolveForkAnchor?(parentId: number): Promise<number>
 }
 
@@ -176,20 +176,20 @@ export interface SpawnOutcome {
 }
 
 /**
- * 子会话在途派生互斥（进程内，按 Harness 隔离）：唯一权威锁注册表。
+ * sub-conversation in-flight derive mutual exclusion (process inside, by Harness isolated): unique right threat lock register table.
  *
- * 两个入口共用本注册表，避免各自为锁时互不可见：
- * - runNativeSpawn（原生执行行，含测试直调与 around-hook 包裹后的 next 续入）；
- * - RuntimeAgentSpawn.spawnAgent 的 resume 预检（宿主管道入口，钩子链前早期拒绝）。
+ * two entry shared use this register table, avoid each is lock when mutual invisible:
+ * - runNativeSpawn(original generate execute row, contains test direct tune and around-hook package wrap after next continue);
+ * - RuntimeAgentSpawn.spawnAgent  resume preflight (host pipeline entry, hook chain before early reject).
  *
- * 占用时机（空窗红线）：
- * - resume：入口同步段（第一个 await 之前）即 claim；
- * - 新建：createConversation 返回后与 agentSessions 登记同一同步段即 claim，
- *  覆盖「子会话已存在但 onResolved 尚未回传」的空窗（该窗口内会话状态尚非
- *  working、宿主 activeSpawnExecutions 尚无坐标，仅者此处可见）。
+ * occupy when machine (empty window hard rule):
+ * - resume: entry sync segment (a await before) i.e. claim;
+ * - creates new:createConversation return after and agentSessions register the same sync segment i.e. claim,
+ *  override sub-conversation already exists but onResolved not yet back pass empty window (the window inside conversation state still non-
+ *  working, host activeSpawnExecutions still without coordinates, only this where visible).
  *
- * 只承诺本进程内互斥（跨进程/跨重启由持久状态与守卫端口负责）；外部运行时
- * （如 herdr 窗格）的 resume 互斥由其自身受管登记表负责，不经本表。
+ * only promise this process inside mutual exclusion (across process/across restarts by durable state and guard port negative duty); external runtime
+ * (such as herdr pane) resume mutual exclusion by its itself managed register table negative duty, do not via this table.
  */
 const conversationInTurn = new WeakMap<Harness, Set<number>>()
 
@@ -202,36 +202,36 @@ function inTurnSet(harness: Harness): Set<number> {
   return set
 }
 
-/** 声明占用子会话（同步，无 await）：已被占用时抛 409 subagent_in_use。 */
+/** declaration occupy sub-conversation (sync, without await): already by occupy when throw 409 subagent_in_use. */
 export function claimSpawnConversation(harness: Harness, childId: number): void {
   const set = inTurnSet(harness)
   if (set.has(childId)) {
-    throw new HelmError('subagent_in_use', `子会话 ${childId} 仍在执行，不能并发续接`, 409, { conversationId: childId })
+    throw new HelmError('subagent_in_use', `sub-conversation ${childId} still in execute, cannot concurrency resume`, 409, { conversationId: childId })
   }
   set.add(childId)
 }
 
-/** 释放占用（finally 路径；幂等）。 */
+/** release occupy (finally path; idempotent). */
 export function releaseSpawnConversation(harness: Harness, childId: number): void {
   inTurnSet(harness).delete(childId)
 }
 
-/** 只读探询（宿主管道入口的早期拒绝用；不占用）。 */
+/** only read probe inquire (host pipeline entry early reject use; does not occupy). */
 export function isSpawnConversationInTurn(harness: Harness, childId: number): boolean {
   return conversationInTurn.get(harness)?.has(childId) ?? false
 }
 
 export async function runNativeSpawn(deps: NativeSpawnDeps, request: AgentSpawnRequest): Promise<unknown> {
-  // envelope 边界（同步段）：meta 必须是 JSON-safe 命名空间对象（钩子链
-  // transform 后的最终请求在此复查；业务值由命名空间所有方插件校验）。
+  // envelope boundary (sync segment):meta must be JSON-safe naming empty between object (hook chain
+  // transform after eventually request in this re- inspect; business value by naming empty between all way plugin validate).
   sanitizeAgentNamespacedMeta(request.meta, { agentId: request.agentId ?? 'subagent', field: 'spawn request meta' })
   assertSpawnRequestShape(request)
   const childId = request.resume === undefined ? undefined : resolveResumeRef(deps, request.resume, request.parentConversationId)
   if (childId !== undefined) {
-    // 状态预检是与 claim 互补的第二道防线（覆盖未经本表的历史在途状态）。
+    // state preflight is and claim mutual patch second path guard against line (override not via this table history in-flight state).
     const status = deps.getConversation(childId)?.status
     if (status === 'working' || status === 'blocked') {
-      throw new HelmError('subagent_in_use', `子会话 ${childId} 仍在执行，不能并发续接`, 409, { conversationId: childId })
+      throw new HelmError('subagent_in_use', `sub-conversation ${childId} still in execute, cannot concurrency resume`, 409, { conversationId: childId })
     }
     claimSpawnConversation(deps.harness, childId)
   }
@@ -244,19 +244,19 @@ export async function runNativeSpawn(deps: NativeSpawnDeps, request: AgentSpawnR
   }
 }
 
-/** 新建派生的子会话 ID 回传通道（创建后同步 claim，外层 finally 统一释放）。 */
+/** creates new derive sub-conversation ID back pass channel (after creation sync claim, outside layer finally unify release). */
 interface NativeSpawnExecution {
   childId?: number
 }
 
-/** resume 解析结果：childId（resume 时必有）+ 原子会话镜像。 */
+/** resume parse result:childId(resume when must has)+ atomic conversation mirror. */
 interface SpawnResumeContext {
   childId: number | undefined
   isResume: boolean
   existing: ConversationSummary | undefined
 }
 
-/** spawn 靶点解析结果：目标节点 + 子会话实际 cwd（gate 与 onResolved 同源）。 */
+/** spawn target parse result: target node + sub-conversation actual cwd(gate and onResolved same source). */
 interface SpawnTarget {
   nodeId: string
   childCwd: string
@@ -267,20 +267,20 @@ async function runNativeSpawnTurn(
   request: AgentSpawnRequest,
   execution: NativeSpawnExecution,
 ): Promise<unknown> {
-  // ---- resume 解析：纯数字 convId 或 agentId 映射；绝不猜测续接（'12abc' 拒绝）。----
-  // resume 配置基线：原子会话镜像（profileId/cwd/model）是唯一事实来源。
-  // 缺省沿用；显式 agentType/cwd/model 变更经同一 updateConversation 路径应用
-  // （真实 SDK configure + 镜像持久化，不重建身份字段）。
+  // ---- resume parse: pure number convId or agentId mapping; never guess resume ('12abc' reject).----
+  // resume config baseline: atomic conversation mirror (profileId/cwd/model) is unique fact source.
+  // default along use; explicit agentType/cwd/model change via the same updateConversation path should use
+  // (real SDK configure + mirror persist, do not rebuild identity field).
   const resume = resolveSpawnResume(deps, request)
   const parentSummary = deps.getConversation(request.parentConversationId)
   if (request.fork === true && parentSummary === undefined) {
-    throw new HelmError('not_found', `父会话 ${request.parentConversationId} 不存在，无法执行 fork 派生`, 404, {
+    throw new HelmError('not_found', `parent conversation ${request.parentConversationId} missing, cannot execute fork derive`, 404, {
       parentConversationId: request.parentConversationId,
     })
   }
 
-  // profile 解析：resume 缺省用原子会话 Profile（不偷偷回默认 assistant）；
-  // fork 缺省继承父会话 Profile；普通新建路径沿用 agentType || 默认。
+  // profile parse:resume default use atomic conversation Profile(do not stealthily stealthily back by default assistant);
+  // fork default inherit parent conversation Profile; ordinary creates new path along use agentType || by default.
   const forkResolution = resume.isResume
     ? { profileId: request.agentType ?? resume.existing!.profileId, forkSameProfile: false }
     : resolveForkMode(request.agentType, request.fork, parentSummary?.profileId, DEFAULT_SPAWN_PROFILE)
@@ -292,9 +292,9 @@ async function runNativeSpawnTurn(
     summary = await applyResumeConfiguration(deps, request, resume.childId!, resume.existing!, profileId)
   }
 
-  // 新建路径靶点：与 ctx.host.resolveSpawnTarget 同一权威链（spawn-target.ts），
-  // 绝不各自维护；resume 严格沿用原子会话镜像（nodeId/cwd 不重算），显式 cwd
-  // 变更已在上方 updateConversation 收口。
+  // creates new path target: and ctx.host.resolveSpawnTarget the same right threat chain (spawn-target.ts),
+  // never each maintain;resume strictly along use atomic conversation mirror (nodeId/cwd do not heavy compute), explicit cwd
+  // change already in on way updateConversation consolidate.
   const target = resolveSpawnTargetForRequest(
     deps,
     request,
@@ -304,15 +304,15 @@ async function runNativeSpawnTurn(
     parentSummary,
     forkSameProfile,
   )
-  // gate 与子会话同 cwd（resume 用更新后的实际 cwd，不依赖 main cwd）。
+  // gate and sub-conversation same cwd(resume use update after actual cwd, independent of main cwd).
   const gateCwd = target.childCwd
 
   const structured = prepareStructuredSession(request)
   if (structured !== undefined && deps.structuredOutputSessions === undefined) {
-    // 装配缺陷显式报错：结果槽无处登记，绝不静默丢结构化结果。
+    // install match defect explicit errors: result slot without where register, never static default lose structure result.
     throw new HelmError(
       'invalid_state',
-      '请求携带 schema 但宿主未注入 structuredOutputSessions（装配缺陷）：结构化输出结果槽无处登记',
+      'request carry schema but host not inject structuredOutputSessions(install match defect): structure output result slot without where register',
       500,
     )
   }
@@ -335,57 +335,57 @@ async function runNativeSpawnTurn(
 
   const conversation = await deps.harness.conversation(childId as never, bg)
   if (!conversation) {
-    throw new HelmError('not_found', `子会话不存在：${childId}`, 404)
+    throw new HelmError('not_found', `sub-conversation missing:${childId}`, 404)
   }
 
-  // resume 续接时补挂结构化输出扩展（原会话创建时可能没有；同样需真实注册）。
+  // resume resume when patch hang structure output extend (original conversation create when may no; same must real register).
   if (resume.isResume && structured) {
     const extension = buildStructuredOutputExtension(deps.structuredOutputSessions!)
     deps.installChildExtension(extension)
     await conversation.configure({ extensions: { add: [extension] } }, bg)
   }
 
-  // 同名扩展由 Registry 按名字解析；结果槽必须按会话隔离，不能被并发派生的闭包覆盖。
+  // same name extend by Registry by name parse; result slot must by conversation isolated, cannot by concurrency derive closed package override.
   return await runChildTurn(deps, request, conversation, childId as number, structured, gateCwd)
 }
 
-/** 请求形状硬校验（同步段；全部显式拒绝，绝不静默改默认）。 */
+/** request shape hard validate (sync segment; all explicit reject, never static default change by default). */
 function assertSpawnRequestShape(request: AgentSpawnRequest): void {
   assertSpawnForkFields(request)
   if (request.isolation !== undefined && request.isolation !== null && request.isolation !== '') {
-    // 内核零业务分支：非空 isolation 到达原生执行行 = 没有插件经 agent_spawn
-    // continuation 兑现（如 builtin:workflow 停用时的 worktree 隔离）。
+    // kernel zero business branch: non-empty isolation reach original generate execute row = no plugin via agent_spawn
+    // continuation honor (such as builtin:workflow deactivate when worktree isolated).
     throw new HelmError(
       'unsupported_runtime',
-      `isolation='${request.isolation}' 暂不支持：原生 subagent 执行行不实现执行环境隔离（该能力由对应插件经 agent_spawn 钩子接管；当前未注册或未启用）`,
+      `isolation='${request.isolation}' temporary unsupported: original generate subagent execute row do not implement execute environment isolated (the capability by for should plugin via agent_spawn hook take over; when before not registered or not enabled)`,
       400,
     )
   }
   if (request.signal?.aborted) {
-    throw new HelmError('aborted', 'spawn 请求在创建前已取消（signal 已 abort）', 409)
+    throw new HelmError('aborted', 'spawn request in before creation cancelled (signal already abort)', 409)
   }
   const agentType = request.agentType ?? ''
-  // 通用命名空间前缀判定：任何 '<namespace>:<kind>' 形式的外部运行时
-  //（如 herdr:agy、docker:devbox）都须经 agent_spawn 钩子接管；无插件接管时
-  // 内核零插件枚举硬编码，不点名任何插件，一律显式 unsupported_runtime。
+  // through use naming empty between prefix decide: any '<namespace>:<kind>' form external runtime
+  //(such as herdr:agy,docker:devbox) all must via agent_spawn hook take over; without plugin take over when
+  // kernel zero plugin enumeration hard encode, do not point name any plugin, one rule explicit unsupported_runtime.
   if (agentType.includes(':')) {
     throw new HelmError(
       'unsupported_runtime',
-      `agentType '${agentType}' 是外部运行时标识（namespace:kind 形式），需要对应插件经 agent_spawn 钩子接管（当前未注册该运行时）`,
+      `agentType '${agentType}' is external runtime identifier (namespace:kind form), need to for should plugin via agent_spawn hook take over (when before not registered the runtime)`,
       400,
     )
   }
   if (request.effort !== undefined && !THINKING_LEVELS.has(request.effort)) {
     throw new HelmError(
       'validation_error',
-      `effort '${request.effort}' 非法；合法值：${[...THINKING_LEVELS].join(' | ')}`,
+      `effort '${request.effort}' illegal; legal value:${[...THINKING_LEVELS].join(' | ')}`,
       400,
     )
   }
   if (request.gateTimeoutMs !== undefined) assertGateTimeoutMs(request.gateTimeoutMs)
 }
 
-/** resume 严格解析：ref 不存在/父归属不符/镜像缺失均显式拒绝，绝不静默新建续接。 */
+/** resume strictly parse:ref missing/parent ownership do not symbol/mirror missing all explicit reject, never static default creates new resume. */
 function resolveSpawnResume(deps: NativeSpawnDeps, request: AgentSpawnRequest): SpawnResumeContext {
   const resumeRef = request.resume
   if (resumeRef === undefined) return { childId: undefined, isResume: false, existing: undefined }
@@ -393,8 +393,8 @@ function resolveSpawnResume(deps: NativeSpawnDeps, request: AgentSpawnRequest): 
   if (childId === undefined) {
     throw new HelmError(
       'not_found',
-      `resume ref '${resumeRef}' 不存在或不属于父会话 ${request.parentConversationId}：` +
-        `既非既有 agentId 会话映射，也非有效子会话 ID；绝不静默新建续接会话`,
+      `resume ref '${resumeRef}' missing or do not belongs to parent conversation ${request.parentConversationId}:` +
+        `since non- since has agentId conversation mapping, also non- valid sub-conversation ID; never static default creates new resume conversation`,
       404,
     )
   }
@@ -402,7 +402,7 @@ function resolveSpawnResume(deps: NativeSpawnDeps, request: AgentSpawnRequest): 
   if (existing === undefined) {
     throw new HelmError(
       'not_found',
-      `resume 会话 ${childId} 无镜像记录（宿主状态不一致）；拒绝盲目续接`,
+      `resume conversation ${childId} without mirror record (host state inconsistent); reject blind item resume`,
       404,
       { conversationId: childId },
     )
@@ -410,30 +410,30 @@ function resolveSpawnResume(deps: NativeSpawnDeps, request: AgentSpawnRequest): 
   return { childId, isResume: true, existing }
 }
 
-/** profile 解析：不存在显式 404；声明外部运行时而无插件接管显式 400（不默默降级原生）。 */
+/** profile parse: missing explicit 404; declaration external runtime while without plugin take over explicit 400(do not default default fall back original generate). */
 async function resolveProfileForSpawn(deps: NativeSpawnDeps, profileId: string): Promise<ResolvedProfile> {
   const profile = await deps.resolveProfile(profileId)
   if (profile === undefined) {
     throw new HelmError(
       'not_found',
-      `agentType '${profileId}' 不是已注册的 Profile（profiles/${profileId} 不存在）`,
+      `agentType '${profileId}' is not registered Profile(profiles/${profileId} missing)`,
       404,
     )
   }
   if (profile.runtime) {
-    // Profile 显式声明外部运行时（如 herdr）而未有其插件接管 -> 不默默降级原生。
+    // Profile explicit declaration external runtime (such as herdr) while not has its plugin take over -> do not default default fall back original generate.
     throw new HelmError(
       'unsupported_runtime',
-      `Profile '${profileId}' 声明 runtime.kind='${profile.runtime.kind}'（agent '${profile.runtime.agent}'），` +
-        `需要对应插件接管；原生 subagent 执行行不支持该运行时`,
+      `Profile '${profileId}' declaration runtime.kind='${profile.runtime.kind}'(agent '${profile.runtime.agent}'),` +
+        `need to for should plugin take over; original generate subagent execute row unsupported the runtime`,
       400,
     )
   }
   return profile
 }
 
-/** resume 配置应用：显式 agentType/cwd/model/effort 变更经 updateConversation 同步
- * SDK 与镜像；配置落定后对生效模型做禁用预检（409 model_disabled）。 */
+/** resume config should use: explicit agentType/cwd/model/effort change via updateConversation sync
+ * SDK and mirror; config set after for takes effect model do disable preflight (409 model_disabled). */
 async function applyResumeConfiguration(
   deps: NativeSpawnDeps,
   request: AgentSpawnRequest,
@@ -443,14 +443,14 @@ async function applyResumeConfiguration(
 ): Promise<ConversationSummary> {
   let summary: ConversationSummary | undefined = existing
   const patch: ConversationPatch = {}
-  // 显式 agentType 与原子会话 Profile 不同才是变更（相同则不产生无意义写）。
+  // explicit agentType and atomic conversation Profile different only then is change (identical then produces no without intent meaning write).
   if (request.agentType !== undefined && request.agentType !== existing.profileId) {
     patch.profileId = profileId
   }
-  // 显式 cwd 才改写；缺省严格沿用原子会话 cwd（绝不重算到 Profile/Hub 目录）。
+  // explicit cwd only then change write; default strictly along use atomic conversation cwd(never heavy compute to Profile/Hub directory).
   if (request.cwd !== undefined && request.cwd !== existing.cwd) patch.cwd = request.cwd
-  // 显式 model 才改写（'provider/model' 覆盖；清覆盖由 '' 显式表达，走同一
-  // updateConversation 语义：重算继承链 + 真实 SDK configure + 镜像持久化）。
+  // explicit model only then change write ('provider/model' override; clean override by '' explicit express, away the same
+  // updateConversation semantics: heavy compute inherit chain + real SDK configure + mirror persist).
   if (request.model !== undefined && request.model !== deps.getModelOverride(childId)) {
     patch.model = request.model
   }
@@ -458,10 +458,10 @@ async function applyResumeConfiguration(
   if (Object.keys(patch).length > 0) {
     summary = await deps.updateConversation(childId, patch)
   }
-  // resume 禁用预检：配置落定后、提交输入前对生效模型收口。显式 model 变更
-  // 已在 updateConversation 内检查；这里覆盖其余路径——子会话绑定/继承的
-  // 模型后来被用户禁用时拒绝 resume（409 model_disabled），绝不绕过禁用策略。
-  // 空模型沿用既有未配置语义（submit 阶段 no_model），不在此伪造错误。
+  // resume disable preflight: config set after, commit input before for takes effect model consolidate. explicit model change
+  // already in updateConversation inside check; this in override the rest path - - sub-conversation bind set/inherit
+  // model after come by user disable when reject resume(409 model_disabled), never bypass disable policy.
+  // empty model along use since has not config semantics (submit phase no_model), do not in this fabricate error.
   if (summary!.model !== '') {
     const modelRef = parseModelRef(summary!.model)
     deps.assertModelEnabled?.(modelRef.provider, modelRef.modelId)
@@ -469,10 +469,10 @@ async function applyResumeConfiguration(
   return summary!
 }
 
-/** 靶点解析：resume 严格沿用镜像；新建走 request > profile > 父会话权威链
- * （进入 SDK createConversation / 镜像登记 / gate / onResolved 前按目标节点
- * 平台统一收口：win32 目标上不可映射的 POSIX cwd 显式拒绝，绝不落库；
- * 远端平台无可信信息时透传，不改写）。 */
+/** target parse:resume strictly along use mirror; creates new away request > profile > parent conversation right threat chain
+ * (enter SDK createConversation / mirror register / gate / onResolved before by target node
+ * platform unify consolidate:win32 target on cannot mapping POSIX cwd explicit reject, never written to the database;
+ * remote platform without can message information when pass-through, do not change write). */
 function resolveSpawnTargetForRequest(
   deps: NativeSpawnDeps,
   request: AgentSpawnRequest,
@@ -510,15 +510,15 @@ function resolveSpawnTargetForRequest(
   return { nodeId, childCwd }
 }
 
-/** 结构化输出任务槽初始化（无 schema 即纯文本 spawn）。 */
+/** structure output task slot initialize (without schema i.e. pure text spawn). */
 function prepareStructuredSession(request: AgentSpawnRequest): StructuredOutputSession | undefined {
   if (!request.schema) return undefined
   assertSchemaNotAsync(request.schema)
   return { schema: request.schema, accepted: undefined }
 }
 
-/** 新建子会话：模型解析链 -> 禁用预检 -> 扩展安装 -> 创建/分叉 -> 空窗 claim ->
- * 镜像登记 -> onResolved 回传实际元数据。 */
+/** creates new sub-conversation: model parse chain -> disable preflight -> extend install -> create/fork -> empty window claim ->
+ * mirror register -> onResolved back pass actual metadata. */
 async function createChildConversation(
   deps: NativeSpawnDeps,
   request: AgentSpawnRequest,
@@ -539,8 +539,8 @@ async function createChildConversation(
     defaultThinkingLevel: deps.resolveThinkingLevel,
     modelsForClamp: deps.modelsForClamp?.(),
   })
-  // 禁用模型在创建前显式拒绝（409 model_disabled）：全部解析路径
-  // 统一在此收口，绝不静默落到禁用模型。
+  // disable model in before creation explicit reject (409 model_disabled): all parse path
+  // unify in this consolidate, never static default to disable model.
   deps.assertModelEnabled?.(resolvedModel.provider, resolvedModel.modelId)
   const extension = structured ? buildStructuredOutputExtension(deps.structuredOutputSessions!) : undefined
   const extensionsChange = extension
@@ -556,15 +556,15 @@ async function createChildConversation(
       : request.fork === true
         ? { thinkingLevel: null }
         : {}),
-    // extensions 需传扩展对象：SDK 存名（names()）但快照解析发生在 install 之后；
-    // fork 且无 schema 时显式剥除 helm-structured-output，防止误继承父会话扩展。
+    // extensions must pass extend object:SDK store name (names()) but snapshot parse occur in install after;
+    // fork and without schema when explicit strip except helm-structured-output, guard against mistakenly inherit parent conversation extend.
     ...(extensionsChange !== undefined ? { extensions: extensionsChange } : {}),
   }
   let conv
   if (request.fork === true) {
     const parentConv = await deps.harness.conversation(request.parentConversationId as never, bg)
     if (!parentConv) {
-      throw new HelmError('not_found', `父会话不存在：${request.parentConversationId}`, 404, {
+      throw new HelmError('not_found', `parent conversation missing:${request.parentConversationId}`, 404, {
         parentConversationId: request.parentConversationId,
       })
     }
@@ -586,12 +586,12 @@ async function createChildConversation(
   }
   const childId = conv.id as number
   if (request.agentId) deps.agentSessions.set(request.agentId, childId)
-  // 空窗闭合（见 conversationInTurn 注释）：子会话已存在但 onResolved 尚未
-  // 回传、镜像状态尚非 working 的窗口内，仅此同步占用可见——与 agentSessions
-  // 登记同一同步段 claim，任何并发 resume（宿主管道或直调）立即被拒。
+  // empty window closed together (see conversationInTurn note release): sub-conversation already exists but onResolved not yet
+  // back pass, mirror state still non- working window inside, only this sync occupy visible - - and agentSessions
+  // register the same sync segment claim, any concurrency resume(host pipeline or direct tune) immediately by refuse.
   claimSpawnConversation(deps.harness, childId)
   execution.childId = childId
-  // 原生 spawn 不打业务角色标签（tags 由宿主策略决定，内核零角色硬编码）。
+  // original generate spawn do not hit business role tag (tags by host policy decide, kernel zero role hard encode).
   await deps.registerChildConversation(
     childId,
     request.parentConversationId,
@@ -603,7 +603,7 @@ async function createChildConversation(
     target.nodeId,
     thinkingLevelOverride,
   )
-  // onResolved 在配置全部落定（创建 + 镜像登记）后回传实际元数据。
+  // onResolved in config all set (create + mirror register) after back pass actual metadata.
   request.onResolved?.({
     nodeId: target.nodeId,
     conversationId: childId,
@@ -612,9 +612,9 @@ async function createChildConversation(
   return childId
 }
 
-/** resume 续接：显式 model/cwd/effort 变更已由 updateConversation 同步 SDK 与镜像。
- * parentToolCallId 同步更新（本次工具调用的运行期关联立即指向该子会话）；
- * onResolved 回传更新后的实际 cwd（与 SDK 一致）。 */
+/** resume resume: explicit model/cwd/effort change already by updateConversation sync SDK and mirror.
+ * parentToolCallId sync update (this time tool invoke run phase related immediately points to the sub-conversation);
+ * onResolved back pass update after actual cwd(and SDK consistent). */
 function notifyResumeResolved(
   deps: NativeSpawnDeps,
   request: AgentSpawnRequest,
@@ -631,14 +631,14 @@ function notifyResumeResolved(
   })
 }
 
-/** 提交并守卫子会话回合。
+/** commit and guard sub-conversation turn.
  *
- * ---- signal 桥：运行中 abort -> 守卫中止子会话；listener 在 finally 摘除。----
- * 经宿主守卫入口（内核串行域内原子复核归属+水位；human-owned 拒绝），
- * 不再直接 conversation.abort——自动取消无条件杀子会话会越过看门狗红线
- *（ownership 已翻转为 human 的续接子会话受保护）。守卫拒绝时：子会话
- * 受保护继续独立运行，父侧等待立即以 aborted 终结（本 spawn 不再持有
- * 父任务），绝不强杀受保护子会话。
+ * ---- signal bridge: run in abort -> guard abort sub-conversation;listener in finally excerpt except.----
+ * via host guard entry (kernel serial domain inside atomic re-check ownership+watermark;human-owned reject),
+ * no longer directly conversation.abort- - automatically cancel without condition kill sub-conversation will exceeds watchdog hard rule
+ *(ownership already translate rotate is human resume sub-conversation subject to protect). guard reject when: sub-conversation
+ * subject to protect continue independent run, parent side wait for immediately with aborted final (this spawn no longer hold has
+ * parent task), never strong kill subject to protect sub-conversation.
  */
 async function runChildTurn(
   deps: NativeSpawnDeps,
@@ -657,25 +657,25 @@ async function runChildTurn(
     return Promise.resolve(conversation.abort(bg)).then(() => undefined)
   }
   let abortError: HelmError | undefined
-  /** 守卫拒绝时的父侧释放（race 败者已吸收，迟到结果不外溢）。 */
+  /** guard reject when parent side release (race failed already absorb, late to result do not outside overflow). */
   let releaseParentOnGuardRefusal: ((error: HelmError) => void) | undefined
   const onAbort = () => {
-    abortError = new HelmError('aborted', '子代理执行被取消（request.signal abort）', 499, {
+    abortError = new HelmError('aborted', 'subagent execute by cancel (request.signal abort)', 499, {
       conversationId: childId,
     })
     void abortChildTurn().then(
       () => {
-        // 子会话已中止：其回合结算后 driveTurn 自然返回（abortError 兜底）。
+        // sub-conversation already abort: its turn compute after driveTurn self however return (abortError fall back).
       },
       (guardError: unknown) => {
         const message = guardError instanceof Error ? guardError.message : String(guardError)
         abortError = new HelmError(
           'aborted',
-          `子代理执行已取消；子会话 ${String(childId)} 受守卫保护未中止（${message}）`,
+          `subagent execute cancelled; sub-conversation ${String(childId)} subject to guard protect not abort (${message})`,
           499,
           { conversationId: childId },
         )
-        process.stderr.write(`[helm] 子会话 ${String(childId)} 取消被拒/失败: ${message}\n`)
+        process.stderr.write(`[helm] sub-conversation ${String(childId)} cancel by refuse/failed: ${message}\n`)
         releaseParentOnGuardRefusal?.(abortError)
       },
     )
@@ -688,15 +688,15 @@ async function runChildTurn(
     if (request.signal?.aborted) {
       await abortChildTurn().catch((error: unknown) => {
         process.stderr.write(
-          `[helm] 子会话 ${String(childId)} 启动期取消被拒/失败: ${
+          `[helm] sub-conversation ${String(childId)} startup phase cancel by refuse/failed: ${
             error instanceof Error ? error.message : String(error)
           }\n`,
         )
       })
-      throw new HelmError('aborted', '子代理启动期间已取消', 499, { conversationId: childId })
+      throw new HelmError('aborted', 'subagent startup phase between cancelled', 499, { conversationId: childId })
     }
     const turn = driveTurn(deps, request, conversation, childId, structured, gateCwd)
-    // 守卫拒绝先行后，迟到的子回合结果/异常不再外溢（race 已由拒绝终结）。
+    // guard reject first row after, late to sub- turn result/exception no longer outside overflow (race already by reject final).
     void turn.catch(() => {})
     return await Promise.race([turn, guardRefusal])
   } catch (error) {
@@ -708,7 +708,7 @@ async function runChildTurn(
   }
 }
 
-/** 一个回合的提交、等待与终态检查（schema 分支先检查 settled 再取文本）。 */
+/** a turn commit, wait for and terminal state check (schema branch first check settled again take text). */
 async function driveTurn(
   deps: NativeSpawnDeps,
   request: AgentSpawnRequest,
@@ -717,7 +717,7 @@ async function driveTurn(
   structured: StructuredOutputSession | undefined,
   gateCwd: string,
 ): Promise<unknown> {
-  // 附件：宿主已校验授权；拼在任务正文之后、交接契约之前。
+  // attachment: host already validate authorization; piece together in task body text after, handover contract before.
   const attachmentBlock =
     request.attachments !== undefined && request.attachments.length > 0 && deps.resolveAttachmentsForPrompt
       ? `\n\n${await deps.resolveAttachmentsForPrompt()}\n`
@@ -727,7 +727,7 @@ async function driveTurn(
     ? `${basePrompt}
 
 <structured_output_contract>
-完成回答后，调用 register_structured_output 工具提交最终结构化结果（output 参数必须满足给定 JSON Schema）。
+complete answer after, invoke register_structured_output tool commit eventually structure result (output parameter must satisfy to set JSON Schema).
 Schema: ${JSON.stringify(structured.schema)}
 </structured_output_contract>`
     : basePrompt
@@ -744,7 +744,7 @@ Schema: ${JSON.stringify(structured.schema)}
       await settleGate(deps, request, gateCwd, childId)
       return structured.accepted
     }
-    // 未走工具：一次文本自愈追问（模型可能直接输出 JSON 文本）。
+    // not away tool: once text self-heal append question (model may directly output JSON text).
     const text = deps.getLastAssistantText(childId) ?? ''
     const parsed = parseSchemaCandidate(text, structured.schema)
     if (parsed.ok) {
@@ -755,8 +755,8 @@ Schema: ${JSON.stringify(structured.schema)}
       {
         type: 'input',
         content:
-          `你上一条回答未通过 register_structured_output 工具提交结果。请立即调用 ` +
-          `register_structured_output 工具，output 参数为满足 Schema 的合法 JSON。` +
+          `you on a answer not via register_structured_output tool commit result. please immediately invoke ` +
+          `register_structured_output tool,output parameter is satisfy Schema legal JSON.` +
           `
 Schema: ${JSON.stringify(structured.schema)}`,
         whenBusy: 'followUp',
@@ -777,7 +777,7 @@ Schema: ${JSON.stringify(structured.schema)}`,
     }
     throw new HelmError(
       'schema_validation_failed',
-      `子代理（会话 ${childId}）两次输出均未通过 Schema 校验；最后输出开头：${(retry.raw || lastText).slice(0, 200)}`,
+      `subagent (conversation ${childId}) two time output all not via Schema validate; finally output open head:${(retry.raw || lastText).slice(0, 200)}`,
       502,
       { conversationId: childId, lastText: lastText.slice(0, 1000) },
     )
@@ -786,19 +786,19 @@ Schema: ${JSON.stringify(structured.schema)}`,
   await settleGate(deps, request, gateCwd, childId)
   const text = deps.getLastAssistantText(childId)
   if (text === undefined || text === '') {
-    throw new HelmError('subagent_failed', `子代理（会话 ${childId}）完成但无文本输出`, 502, {
+    throw new HelmError('subagent_failed', `subagent (conversation ${childId}) complete but without text output`, 502, {
       conversationId: childId,
     })
   }
   return text
 }
 
-/** 未完成回合（失败/中止等）显式报错；绝不返回旧 assistant 文本冒充结果。 */
+/** not complete turn (failed/abort etc.) explicit errors; never return old assistant text smoke fill result. */
 function assertNotUnanswered(settled: { status: string; reason?: string }, childId: number): void {
   if (settled.status !== 'unanswered') return
   throw new HelmError(
     'subagent_failed',
-    `子代理（会话 ${childId}）回合未完成：${settled.reason}`,
+    `subagent (conversation ${childId}) turn not complete:${settled.reason}`,
     502,
     { conversationId: childId, reason: settled.reason },
   )
@@ -811,18 +811,18 @@ async function settleGate(
   childId: number,
 ): Promise<void> {
   if (!request.gate) return
-  // cwd 用子会话实际工作目录，不依赖请求缺省 main cwd；gate 是验收命令，
-  // 输出直接进错误诊断（不挂会话，避免误注入会话级 stash 环境）。
-  // conversationId 使 runGate 解析子会话绑定节点（远端 gate 在远端执行）；
-  // gateTimeoutMs 缺省 120_000（runGate 内），超时杀整个进程组并如实回传。
+  // cwd use sub-conversation actual work directory, independent of request default main cwd;gate is verify command,
+  // output directly enter error diagnose (do not hang conversation, avoid mistakenly inject conversation level stash environment).
+  // conversationId make runGate parse sub-conversation bind set node (remote gate in remote execute);
+  // gateTimeoutMs default 120_000(runGate inside), timeout kill the whole process group and such as back pass.
   const gate = await runGate(deps, request.gate, {
     cwd,
     conversationId: childId,
     signal: request.signal,
     ...(request.gateTimeoutMs !== undefined ? { timeoutMs: request.gateTimeoutMs } : {}),
   })
-  // 执行环境内恰好一次执行后回传完整结果（exitCode/timedOut 供宿主引擎
-  // 判定失败与重试策略；宿主引擎据此免二次执行）。
+  // execute environment inside exactly once execute after back pass complete result (exitCode/timedOut supply host engine
+  // decide failed and retry policy; host engine based on this exempt second execute).
   request.onGateResult?.({
     ok: gate.ok,
     output: gate.output,
@@ -830,10 +830,10 @@ async function settleGate(
     timedOut: gate.timedOut,
   })
   if (!gate.ok) {
-    const label = gate.timedOut ? '执行超时，已被强制终止' : `exitCode=${gate.exitCode}`
+    const label = gate.timedOut ? 'execute timeout, already by force terminate' : `exitCode=${gate.exitCode}`
     throw new HelmError(
       'gate_failed',
-      `验收命令失败（${label}）：${request.gate}\n${gate.output.slice(-2000)}`,
+      `verify command failed (${label}):${request.gate}\n${gate.output.slice(-2000)}`,
       502,
       {
         exitCode: gate.exitCode,
@@ -844,12 +844,12 @@ async function settleGate(
   }
 }
 
-/** gateTimeoutMs 边界：正整数且 ≤ MAX_TIMEOUT_MS（与 bash/runGate 超时同界）；非法显式拒绝（不静默改默认）。 */
+/** gateTimeoutMs boundary: positive integer and ≤ MAX_TIMEOUT_MS(and bash/runGate timeout same boundary); illegal explicit reject (not silently change by default). */
 function assertGateTimeoutMs(value: number): void {
   if (!Number.isInteger(value) || value <= 0 || value > MAX_TIMEOUT_MS) {
     throw new HelmError(
       'validation_error',
-      `gateTimeoutMs 必须是 (0, ${MAX_TIMEOUT_MS}] 的整数，收到 ${value}`,
+      `gateTimeoutMs must be (0, ${MAX_TIMEOUT_MS}] integer, receives ${value}`,
       400,
       { gateTimeoutMs: value },
     )
@@ -857,9 +857,9 @@ function assertGateTimeoutMs(value: number): void {
 }
 
 /**
- * resume ref 严格解析：仅接受纯十进制整数 convId（agentId 映射先翻译成 convId 再走同一校验）。
- * 会话必须真实存在且父归属正确；任何失败返回 undefined（调用方显式报错，
- * 绝不 Number.parseInt('12abc') 宽容续接到错误会话，绝不静默新建假续接）。
+ * resume ref strictly parse: only accept pure ten enter system integer convId(agentId mapping first translate into convId again away the same validate).
+ * conversation must real store in and parent ownership correct; any failed return undefined(caller explicit errors,
+ * never Number.parseInt('12abc') wide contain resume to error conversation, never static default creates new false resume).
  */
 function resolveResumeRef(deps: NativeSpawnDeps, ref: string, parentId: number): number | undefined {
   const mapped = deps.agentSessions.get(ref)

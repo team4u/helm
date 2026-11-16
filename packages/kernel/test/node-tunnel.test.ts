@@ -1,15 +1,15 @@
 /**
- * 节点透传隧道（Hub/协议侧）单测：
- * - registry.openTunnel：节点离线 409 / 未实现 nodeTunnelOpen 501 / pending
- *   tunnelId 一次性消费（重复 accept 拒绝）/ signal abort 清理 pending /
- *   目标 host 透传（含 host 校验）；
- * - 节点断连（evict）时 pending 隧道被拒绝（409 node_offline），不悬挂；
- * - acceptTunnel 身份不匹配（nodeId/token/未知 tunnelId）拒绝；
- * - fabric.nodeFetch 端口：非 http(s) 拒绝、任意 host 放行到建连阶段；
- *   local 直通 globalThis.fetch；fabric.openTunnel local 直连；
- * - attachNodeTunnelGateway：首帧非 JSON / 非 hello 回 error 帧后关闭；
- *   合法 hello 但 tunnelId 未知时直接拒绝（registry 拒绝路径）。
- * 真实 daemon 的端到端字节透传见 env-fabric.test.ts（任意 TCP 测试）。
+ * node pass-through tunnel (Hub/protocol side) single test:
+ * - registry.openTunnel: node offline 409 / not implemented nodeTunnelOpen 501 / pending
+ *   tunnelId once consume (duplicate accept reject)/ signal abort clean up pending /
+ *   target host pass-through (contains host validate);
+ * - node assert connect (evict) when pending tunnel by reject (409 node_offline), do not pending;
+ * - acceptTunnel identity does not match (nodeId/token/unknown tunnelId) reject;
+ * - fabric.nodeFetch port: non- http(s) reject, any host let through to create connect phase;
+ *   local direct through globalThis.fetch;fabric.openTunnel local direct connect;
+ * - attachNodeTunnelGateway: first frame non- JSON / non- hello back error frame after close;
+ *   legal hello but tunnelId unknown when directly reject (registry reject path).
+ * real daemon end-to-end byte pass-through see env-fabric.test.ts(any TCP test).
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -35,7 +35,7 @@ class FakeSocket extends EventEmitter {
 type TunnelOpenFn = (input: { tunnelId: string; host?: string; port: number }) =>
   Promise<{ ok: true; value: null } | { ok: false; error: { code: string; message: string } }>
 
-/** 注册假节点（鉴权恒过 / token 形如 `<nodeId>:secret`），可带 nodeTunnelOpen。 */
+/** register false node (authentication constant / token shape such as `<nodeId>:secret`), can carries nodeTunnelOpen. */
 async function registerFakeNode(registry: NodeRegistry, nodeId: string, nodeTunnelOpen?: TunnelOpenFn): Promise<FakeSocket> {
   const socket = new FakeSocket()
   const rpc: Record<string, unknown> = {
@@ -53,7 +53,7 @@ async function registerFakeNode(registry: NodeRegistry, nodeId: string, nodeTunn
 
 const tunnelOk: TunnelOpenFn = () => Promise.resolve({ ok: true, value: null })
 
-test('openTunnel：离线节点 409、未实现 nodeTunnelOpen 501', { timeout: 60_000 }, async () => {
+test('openTunnel: offline node 409, not implemented nodeTunnelOpen 501', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   try {
     await assert.rejects(
@@ -71,7 +71,7 @@ test('openTunnel：离线节点 409、未实现 nodeTunnelOpen 501', { timeout: 
   }
 })
 
-test('openTunnel + acceptTunnel：一次性消费与身份校验', { timeout: 60_000 }, async () => {
+test('openTunnel + acceptTunnel: once consume and identity validate', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: (id, token) => token === `${id}:secret` })
   try {
     let tunnelId = ''
@@ -84,22 +84,22 @@ test('openTunnel + acceptTunnel：一次性消费与身份校验', { timeout: 60
     const pending = registry.openTunnel('node-b', { port: 9000, host: 'db.internal' })
     await delay(20)
     assert.equal(tunnelId.length > 0, true)
-    assert.equal(openedHost, 'db.internal', '目标 host 原样透传到节点（节点负责解析）')
+    assert.equal(openedHost, 'db.internal', 'target host original pass-through to node (node negative duty parse)')
     assert.deepEqual(registry.debugTunnelCounts(), { pending: 1, active: 0 })
-    // token 错误 → 拒绝，pending 保留。
+    // token error → reject,pending keep.
     assert.equal(await registry.acceptTunnel('node-b', 'node-b:wrong', tunnelId), false)
-    // nodeId 不匹配 → 拒绝。
+    // nodeId does not match → reject.
     assert.equal(await registry.acceptTunnel('other', 'other:secret', tunnelId), false)
-    // 正确消费 → acceptTunnel true + grantTunnel 交棒 Duplex，登记转 active。
+    // correct consume → acceptTunnel true + grantTunnel hand over fine Duplex, register rotate active.
     assert.equal(await registry.acceptTunnel('node-b', 'node-b:secret', tunnelId), true)
     const granted = new PassThrough()
     registry.grantTunnel(tunnelId, granted)
     const duplex = await pending
     assert.equal(duplex, granted)
     assert.deepEqual(registry.debugTunnelCounts(), { pending: 0, active: 1 })
-    // 同一 tunnelId 二次消费 → 拒绝。
+    // the same tunnelId second consume → reject.
     assert.equal(await registry.acceptTunnel("node-b", "node-b:secret", tunnelId), false)
-    // duplex 关闭后登记摘除。
+    // duplex close after register excerpt except.
     duplex.destroy()
     await delay(20)
     assert.deepEqual(registry.debugTunnelCounts(), { pending: 0, active: 0 })
@@ -109,14 +109,14 @@ test('openTunnel + acceptTunnel：一次性消费与身份校验', { timeout: 60
   }
 })
 
-test('节点断连清理 pending 隧道（409 拒绝，不悬挂）', { timeout: 60_000 }, async () => {
+test('node assert connect clean up pending tunnel (409 reject, do not pending)', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   try {
     const socket = await registerFakeNode(registry, 'node-c', tunnelOk)
     const pending = registry.openTunnel('node-c', { port: 9100 })
     await delay(20)
     assert.deepEqual(registry.debugTunnelCounts(), { pending: 1, active: 0 })
-    socket.close() // 触发 evict：pending 必须被拒绝。
+    socket.close() // trigger evict:pending must by reject.
     await assert.rejects(
       pending,
       (error: unknown) => error instanceof HelmError && error.code === 'node_offline' && error.status === 409,
@@ -127,7 +127,7 @@ test('节点断连清理 pending 隧道（409 拒绝，不悬挂）', { timeout:
   }
 })
 
-test('openTunnel：signal abort 清理 pending（499 aborted）', { timeout: 60_000 }, async () => {
+test('openTunnel:signal abort clean up pending(499 aborted)', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   try {
     const socket = await registerFakeNode(registry, 'node-d', tunnelOk)
@@ -147,11 +147,11 @@ test('openTunnel：signal abort 清理 pending（499 aborted）', { timeout: 60_
   }
 })
 
-test('openTunnel：节点升级排空拒新映射 node_draining(503)，与 aborted(499)/timeout(504) 区分', { timeout: 60_000 }, async () => {
+test('openTunnel: node upgrade arrange empty refuse new mapping node_draining(503), and aborted(499)/timeout(504) zone', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   try {
-    // 节点 RPC 显式返回 node_draining（升级排空拒新）：映射为稳定的
-    // HelmError node_draining 503，不得归并为 aborted 或 connect_failed。
+    // node RPC explicit return node_draining(upgrade arrange empty refuse new): mapping is stable
+    // HelmError node_draining 503, must not archive and is aborted or connect_failed.
     const socket = await registerFakeNode(registry, 'node-drain', async () => ({
       ok: false,
       error: { code: 'node_draining', message: 'daemon is draining (upgrade in progress), rejecting new tunnels' },
@@ -166,7 +166,7 @@ test('openTunnel：节点升级排空拒新映射 node_draining(503)，与 abort
     )
     socket.close()
 
-    // 对照：节点侧 aborted（真实取消/终止）仍为 499 aborted，不被排空码污染。
+    // compare: node side aborted(real cancel/terminate) still is 499 aborted, do not by arrange empty code pollute.
     const socket2 = await registerFakeNode(registry, 'node-abort', async () => ({
       ok: false,
       error: { code: 'aborted', message: 'tunnel aborted' },
@@ -177,7 +177,7 @@ test('openTunnel：节点升级排空拒新映射 node_draining(503)，与 abort
     )
     socket2.close()
 
-    // 对照：timeout 仍为 504 node_tunnel_timeout。
+    // compare:timeout still is 504 node_tunnel_timeout.
     const socket3 = await registerFakeNode(registry, 'node-slow', async () => ({
       ok: false,
       error: { code: 'timeout', message: 'tunnel open timed out' },
@@ -193,7 +193,7 @@ test('openTunnel：节点升级排空拒新映射 node_draining(503)，与 abort
   }
 })
 
-test('nodeFetch 端口：非 http(s) 拒绝、任意 host 放行；openTunnel 目标校验；local 直通', { timeout: 60_000 }, async () => {
+test('nodeFetch port: non- http(s) reject, any host let through;openTunnel target validate;local direct through', { timeout: 60_000 }, async () => {
   let fabric: EnvFabric | undefined
   try {
     fabric = createEnvFabric({ authenticate: () => true })
@@ -202,7 +202,7 @@ test('nodeFetch 端口：非 http(s) 拒绝、任意 host 放行；openTunnel �
       fetchRemote('ftp://127.0.0.1:8080/x'),
       (error: unknown) => error instanceof HelmError && error.code === 'node_tunnel_connect_failed',
     )
-    // 任意 host（非 loopback）放行到建连阶段：节点离线时 409（不再拒绝非 loopback）。
+    // any host(non- loopback) let through to create connect phase: node offline when 409(no longer reject non- loopback).
     await assert.rejects(
       fetchRemote('http://example.com:8080/x'),
       (error: unknown) => error instanceof HelmError && error.code === 'node_offline',
@@ -211,7 +211,7 @@ test('nodeFetch 端口：非 http(s) 拒绝、任意 host 放行；openTunnel �
       fetchRemote('http://127.0.0.1:8080/x'),
       (error: unknown) => error instanceof HelmError && error.code === 'node_offline',
     )
-    // 默认端口（80/443）放行到建连阶段（适配层按协议补默认端口，不再要求显式）。
+    // by default port (80/443) let through to create connect phase (adapt layer by protocol patch by default port, no longer want seek explicit).
     await assert.rejects(
       fetchRemote('http://127.0.0.1/x'),
       (error: unknown) => error instanceof HelmError && error.code === 'node_offline',
@@ -220,7 +220,7 @@ test('nodeFetch 端口：非 http(s) 拒绝、任意 host 放行；openTunnel �
       fetchRemote('https://example.com/x'),
       (error: unknown) => error instanceof HelmError && error.code === 'node_offline',
     )
-    // openTunnel 目标校验：非法 port / 非法 host 显式 400 validation_error。
+    // openTunnel target validate: illegal port / illegal host explicit 400 validation_error.
     await assert.rejects(
       fabric.openTunnel('node-e', { port: 0 }),
       (error: unknown) => error instanceof HelmError && error.code === 'validation_error' && error.status === 400,
@@ -241,7 +241,7 @@ test('nodeFetch 端口：非 http(s) 拒绝、任意 host 放行；openTunnel �
       fabric.openTunnel('node-e', { host: 'a'.repeat(256), port: 80 }),
       (error: unknown) => error instanceof HelmError && error.code === 'validation_error',
     )
-    // local openTunnel：进程内直连（echo 服务真实回显）。
+    // local openTunnel: process inside direct connect (echo service real back visible).
     const echo = net.createServer((socket) => {
       socket.on('data', (chunk) => socket.write(chunk))
     })
@@ -260,14 +260,14 @@ test('nodeFetch 端口：非 http(s) 拒绝、任意 host 放行；openTunnel �
           if (text.includes('ping-local')) { clearTimeout(timer); resolve(text) }
         })
       })
-      assert.ok(echoed.includes('ping-local'), 'local openTunnel 字节往返')
+      assert.ok(echoed.includes('ping-local'), 'local openTunnel byte to return')
       duplex.destroy()
-      // local openTunnel：端口拒绝显式失败（不静默伪造）。
+      // local openTunnel: port reject explicit failed (not silently fabricate).
       await assert.rejects(
         fabric.openTunnel('local', { port: 1 }),
         (error: unknown) => error instanceof HelmError && error.code === 'node_tunnel_connect_failed',
       )
-      // local openTunnel：abort 显式 499。
+      // local openTunnel:abort explicit 499.
       const controller = new AbortController()
       controller.abort()
       await assert.rejects(
@@ -283,7 +283,7 @@ test('nodeFetch 端口：非 http(s) 拒绝、任意 host 放行；openTunnel �
   }
 })
 
-test('tunnel 网关：首帧非 JSON / 非 hello 回 error 帧；未知 tunnelId 直接拒绝', { timeout: 60_000 }, async () => {
+test('tunnel gateway: first frame non- JSON / non- hello back error frame; unknown tunnelId directly reject', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   const server = http.createServer((_req, res) => { res.writeHead(404); res.end() })
   const gateway = attachNodeTunnelGateway(server, { registry })
@@ -293,7 +293,7 @@ test('tunnel 网关：首帧非 JSON / 非 hello 回 error 帧；未知 tunnelId
     assert.ok(address !== null && typeof address === 'object')
     const url = `ws://127.0.0.1:${address.port}/ws/node-tunnel`
 
-    // 非 JSON 与非 hello：error 帧 + 关闭。
+    // non- JSON and non- hello:error frame + close.
     for (const frame of ['not-json', JSON.stringify({ type: 'other' })]) {
       const ws = new WebSocket(url)
       const frames: string[] = []
@@ -307,8 +307,8 @@ test('tunnel 网关：首帧非 JSON / 非 hello 回 error 帧；未知 tunnelId
       assert.equal(parsed.code, 'invalid')
     }
 
-    // 合法 hello 但 tunnelId 未知：认证/匹配失败 → 直接 error 帧 + 关闭
-    //（ok 帧绝不早于认证；此路径不进入数据期）。
+    // legal hello but tunnelId unknown: recognize verify/match failed → directly error frame + close
+    //(ok frame never early at recognize verify; this path does not enter data phase).
     const ws = new WebSocket(url)
     const frames: string[] = []
     await new Promise<void>((resolve) => {
@@ -327,7 +327,7 @@ test('tunnel 网关：首帧非 JSON / 非 hello 回 error 帧；未知 tunnelId
   }
 })
 
-test('tunnel 网关：从不发 hello 的连接在首帧超时后关闭（close 4001，不堆积）', { timeout: 60_000 }, async () => {
+test('tunnel gateway: never hello connect in first frame timeout after close (close 4001, do not heap accumulate)', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   const server = http.createServer((_req, res) => { res.writeHead(404); res.end() })
   const gateway = attachNodeTunnelGateway(server, { registry, helloTimeoutMs: 150 })
@@ -337,7 +337,7 @@ test('tunnel 网关：从不发 hello 的连接在首帧超时后关闭（close 
     assert.ok(address !== null && typeof address === 'object')
     const url = `ws://127.0.0.1:${address.port}/ws/node-tunnel`
 
-    // 连接后一言不发：必须在首帧超时后关闭（对照 /ws/node 的 4001 语义）。
+    // after connect one say do not: must in first frame timeout after close (compare /ws/node  4001 semantics).
     const ws = new WebSocket(url)
     let closeCode = -1
     const closedAt = new Promise<void>((resolve) => {
@@ -348,8 +348,8 @@ test('tunnel 网关：从不发 hello 的连接在首帧超时后关闭（close 
     const startedAt = Date.now()
     await closedAt
     const elapsed = Date.now() - startedAt
-    assert.equal(closeCode, 4001, `静默连接应被超时关闭（close code ${closeCode}）`)
-    assert.ok(elapsed >= 140 && elapsed < 5_000, `超时应在时限附近触发（实际 ${elapsed}ms）`)
+    assert.equal(closeCode, 4001, `static default connect should by timeout close (close code ${closeCode})`)
+    assert.ok(elapsed >= 140 && elapsed < 5_000, `timeout should in when limit attach near trigger (actual ${elapsed}ms)`)
   } finally {
     await gateway.close()
     await new Promise<void>((resolve) => server.close(() => resolve()))

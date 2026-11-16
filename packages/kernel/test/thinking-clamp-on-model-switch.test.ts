@@ -1,20 +1,20 @@
 /**
- * 切换模型后思考等级按目标模型能力自动收敛（真实 SQLite + pi-durable + faux 请求）。
+ * switch model after think etc. level by target model capability automatically converge (real SQLite + pi-durable + faux request).
  *
- * 参考 pi coding agent 的 setModel → setThinkingLevel 语义：目标模型能力未知时透传
- * （不虚构能力），能力已知且当前档位不被支持时按 SDK 可用档位序列就近收敛。
+ * see pi coding agent  setModel → setThinkingLevel semantics: target model capability unknown when pass-through
+ * (do not virtual construct capability), capability known and when before Profile do not by support when by SDK available Profile sequence then near converge.
  *
- * 覆盖：
- * - 真实 reasoning 模型 A（thinkingLevelMap 声明支持 max）→ 模型 B（仅支持到 high）：
- *   显式覆盖 max 的会话切到 B 后 summary.thinkingLevel / thinkingLevelOverride /
- *   SDK agent.thinkingLevel 三者均为 high；
- * - 显式 max 覆盖 + Profile 模型 A→B 的 align：override/effective/SDK 均 high，
- *   且 align 持久化收敛结果——后续仅改标题不再变档、切回 A 仍 high；
- * - 生效档位（继承链，无覆盖）同样收敛：全局/Profile 配置 max 落到 B 时为 high；
- * - 空串（未配置）不得被误收敛为 'off'：保持继承链语义；
- * - faux 测试模型（reasoning:false、无 thinkingLevelMap、能力未知）契约不破坏：
- *   任意继承档位原样透传（与 runtime-thinking-config.test.ts 基线一致）；
- * - spawn 新建子代理按目标模型能力收敛 effort；resume 显式 effort 同样收敛。
+ * override:
+ * - real reasoning model A(thinkingLevelMap declaration support max)→ model B(only support to high):
+ *   explicit override max conversation cut to B after summary.thinkingLevel / thinkingLevelOverride /
+ *   SDK agent.thinkingLevel three all is high;
+ * - explicit max override + Profile model A→B  align:override/effective/SDK all high,
+ *   and align persist converge result - - after continue only change title no longer change Profile, cut back A still high;
+ * - takes effect Profile (inherit chain, without override) same converge: global/Profile config max to B when is high;
+ * - empty string (not config) must not by mistakenly converge is 'off': keep inherit chain semantics;
+ * - faux test model (reasoning:false, without thinkingLevelMap, capability unknown) contract do not break:
+ *   any inherit Profile original pass-through (and runtime-thinking-config.test.ts baseline consistent);
+ * - spawn creates new subagent by target model capability converge effort;resume explicit effort same converge.
  */
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -41,8 +41,8 @@ after(() => {
 })
 
 /**
- * 带 reasoning 能力元数据的 faux 网关：createFauxCore 提供流实现，
- * 模型定义后再补 thinkingLevelMap（faux 模型定义本身不暴露该字段）。
+ * carries reasoning capability metadata faux gateway:createFauxCore provide stream implement,
+ * model define after again patch thinkingLevelMap(faux model define itself do not expose the field).
  */
 function reasoningFauxProvider(options: {
   provider: string
@@ -73,10 +73,10 @@ function reasoningFauxProvider(options: {
 
 interface Fixture {
   kernel: KernelRuntime
-  /** 能力已知网关 A（faux-cap/model-a 支持 max；faux-cap/model-b 仅到 high）。 */
+  /** capability known gateway A(faux-cap/model-a support max;faux-cap/model-b only to high). */
   capA: ReturnType<typeof reasoningFauxProvider>
   capB: ReturnType<typeof reasoningFauxProvider>
-  /** 能力未知网关（faux 默认：reasoning:false 无 map，透传契约基线）。 */
+  /** capability unknown gateway (faux by default:reasoning:false without map, pass-through contract baseline). */
   legacyFaux: ReturnType<typeof reasoningFauxProvider>
   dir: string
 }
@@ -89,7 +89,7 @@ async function open(dir: string): Promise<Fixture> {
       {
         id: 'model-a',
         reasoning: true,
-        // A 显式声明支持到 max（xhigh/max 必须显式 map 才可用）。
+        // A explicit declaration support to max(xhigh/max must explicit map only then available).
         thinkingLevelMap: { off: null, minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
       },
     ],
@@ -100,12 +100,12 @@ async function open(dir: string): Promise<Fixture> {
       {
         id: 'model-b',
         reasoning: true,
-        // B 仅支持到 high：xhigh/max 为 null。
+        // B only support to high:xhigh/max is null.
         thinkingLevelMap: { off: null, minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: null, max: null },
       },
     ],
   })
-  // 能力未知基线：faux 默认形态（reasoning:false、无 thinkingLevelMap）。
+  // capability unknown baseline:faux by default form (reasoning:false, without thinkingLevelMap).
   const legacyFaux = reasoningFauxProvider({
     provider: 'faux-legacy',
     models: [{ id: 'legacy-1', reasoning: false }],
@@ -138,102 +138,102 @@ async function assertThinking(kernel: KernelRuntime, id: number, effective: stri
   const summary = kernel.getConversation(id) as ThinkingSummary
   assert.equal(summary.thinkingLevel, effective)
   assert.equal(summary.thinkingLevelOverride, override)
-  assert.equal((await sdkAgent(kernel, id)).thinkingLevel, effective || 'off', '真实 SDK 必须与镜像一致')
+  assert.equal((await sdkAgent(kernel, id)).thinkingLevel, effective || 'off', 'real SDK must and mirror consistent')
 }
 
-it('A(max) 切 B(仅 high)：summary、override、SDK agent 均收敛为 high', { timeout: 60_000 }, async (t) => {
+it('A(max) cut B(only high):summary,override,SDK agent all converge is high', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
   await kernel.setDefaultModel('faux-cap-a/model-a')
   const conv = await kernel.createConversation()
   await kernel.updateConversation(conv.id, { thinkingLevel: 'max' })
   await assertThinking(kernel, conv.id, 'max', 'max')
 
-  // 切到模型 B：max 不被支持 → 收敛到 high（按 SDK 可用档位序列就近收敛）。
+  // cut to model B:max do not by support → converge to high(by SDK available Profile sequence then near converge).
   await kernel.updateConversation(conv.id, { model: 'faux-cap-b/model-b' })
   await assertThinking(kernel, conv.id, 'high', 'high')
 
-  // 切回 A：收敛后的 high 仍是 A 支持的档位，保持不变（pi setThinkingLevel 语义：持久化收敛值）。
+  // cut back A: converge after high still is A support Profile, keep do not change (pi setThinkingLevel semantics: persist converge value).
   await kernel.updateConversation(conv.id, { model: 'faux-cap-a/model-a' })
   await assertThinking(kernel, conv.id, 'high', 'high')
 })
 
-it('继承链（无覆盖）同样收敛：全局 max 落到 B 为 high，回到 A 恢复 max', { timeout: 60_000 }, async (t) => {
+it('inherit chain (without override) same converge: global max to B is high, back to A restore max', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
   await kernel.setDefaultModel('faux-cap-b/model-b', 'max')
   const conv = await kernel.createConversation()
   await assertThinking(kernel, conv.id, 'high', undefined)
 
-  // 会话切到 A：继承的全局 max 重新可用。
+  // conversation cut to A: inherit global max re- available.
   await kernel.updateConversation(conv.id, { model: 'faux-cap-a/model-a' })
   await assertThinking(kernel, conv.id, 'max', undefined)
 })
 
-it('Profile 档位随 Profile 模型对齐；会话换 Profile 重算并收敛', { timeout: 60_000 }, async (t) => {
+it('Profile Profile follow Profile model align; conversation swap Profile heavy compute and converge', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
   await kernel.setDefaultModel('faux-cap-a/model-a')
   await kernel.services.profiles.save({
-    id: 'expert', name: '专家', model: 'faux-cap-a/model-a', thinkingLevel: 'max',
+    id: 'expert', name: 'dedicated household', model: 'faux-cap-a/model-a', thinkingLevel: 'max',
   })
   const conv = await kernel.createConversation({ profileId: 'expert' })
   await assertThinking(kernel, conv.id, 'max', undefined)
 
-  // Profile 模型改到 B：档位 max 随继承链收敛为 high。
-  await kernel.services.profiles.save({ id: 'expert', name: '专家', model: 'faux-cap-b/model-b', thinkingLevel: 'max' })
+  // Profile model change to B: Profile max follow inherit chain converge is high.
+  await kernel.services.profiles.save({ id: 'expert', name: 'dedicated household', model: 'faux-cap-b/model-b', thinkingLevel: 'max' })
   await kernel.alignProfileConversations('expert')
   await assertThinking(kernel, conv.id, 'high', undefined)
 
-  // 会话真实切换到另一个 Profile（模型同为 A、档位 high）：生效档随新继承链重算。
-  await kernel.services.profiles.save({ id: 'reviewer', name: '评审', model: 'faux-cap-a/model-a', thinkingLevel: 'high' })
+  // conversation real switch to another Profile(model same is A, Profile high): takes effect Profile follow new inherit chain heavy compute.
+  await kernel.services.profiles.save({ id: 'reviewer', name: 'review review', model: 'faux-cap-a/model-a', thinkingLevel: 'high' })
   await kernel.updateConversation(conv.id, { profileId: 'reviewer' })
   await assertThinking(kernel, conv.id, 'high', undefined)
 })
 
-it('显式 max 覆盖 + Profile 模型 A→B align：override/effective/SDK 均 high 且持久化', { timeout: 60_000 }, async (t) => {
+it('explicit max override + Profile model A→B align:override/effective/SDK all high and persist', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
   await kernel.setDefaultModel('faux-cap-a/model-a')
   await kernel.services.profiles.save({
-    id: 'expert', name: '专家', model: 'faux-cap-a/model-a', thinkingLevel: 'medium',
+    id: 'expert', name: 'dedicated household', model: 'faux-cap-a/model-a', thinkingLevel: 'medium',
   })
   const conv = await kernel.createConversation({ profileId: 'expert' })
-  // 显式覆盖 max：A 支持时三层均为 max。
+  // explicit override max:A support when three layer all is max.
   await kernel.updateConversation(conv.id, { thinkingLevel: 'max' })
   await assertThinking(kernel, conv.id, 'max', 'max')
 
-  // Profile 模型改到 B（仅支持到 high）后 align：显式覆盖同样收敛并持久化为 high。
-  await kernel.services.profiles.save({ id: 'expert', name: '专家', model: 'faux-cap-b/model-b', thinkingLevel: 'medium' })
+  // Profile model change to B(only support to high) after align: explicit override same converge and persist is high.
+  await kernel.services.profiles.save({ id: 'expert', name: 'dedicated household', model: 'faux-cap-b/model-b', thinkingLevel: 'medium' })
   await kernel.alignProfileConversations('expert')
   await assertThinking(kernel, conv.id, 'high', 'high')
 
-  // 后续仅改标题（不动模型/档位）：档位不被任何链路重算或漂移。
-  await kernel.updateConversation(conv.id, { title: '改个标题' })
+  // after continue only change title (do not motion model/Profile): Profile do not by any link heavy compute or drift.
+  await kernel.updateConversation(conv.id, { title: 'change title' })
   await assertThinking(kernel, conv.id, 'high', 'high')
 
-  // 切回模型 A：收敛持久化的 high 是 A 支持的档位，保持不变。
+  // cut back model A: converge persist high is A support Profile, keep do not change.
   await kernel.updateConversation(conv.id, { model: 'faux-cap-a/model-a' })
   await assertThinking(kernel, conv.id, 'high', 'high')
 })
 
-it('空串（未配置）不被误收敛为 off；off 语义保持', { timeout: 60_000 }, async (t) => {
+it('empty string (not config) do not by mistakenly converge is off;off semantics keep', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
   await kernel.setDefaultModel('faux-cap-b/model-b')
-  // 全局未配置思考档位：创建会话后为空串，SDK off。
+  // global not config think Profile: create conversation after is empty string,SDK off.
   const conv = await kernel.createConversation()
   await assertThinking(kernel, conv.id, '', undefined)
 
-  // 显式 off 覆盖：B 的 map.off 为 null（off 不在支持列表），但 SDK off 语义
-  // 不得被 clamp 抬升到最小可用档（minimal）。
+  // explicit off override:B  map.off is null(off do not in support list), but SDK off semantics
+  // must not by clamp lift rise to most small available Profile (minimal).
   await kernel.updateConversation(conv.id, { thinkingLevel: 'off' })
   await assertThinking(kernel, conv.id, 'off', 'off')
 
-  // 清除覆盖回到空串继承。
+  // clear override back to empty string inherit.
   await kernel.updateConversation(conv.id, { thinkingLevel: '' })
   await assertThinking(kernel, conv.id, '', undefined)
 })
 
-it('能力未知（faux 默认形态）透传不破坏既有契约', { timeout: 60_000 }, async (t) => {
+it('capability unknown (faux by default form) pass-through do not break since has contract', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
-  // legacy-1 不声明任何能力（reasoning:false、无 map）：max 原样透传，
-  // 与 runtime-thinking-config.test.ts 的 faux 基线一致。
+  // legacy-1 do not declaration any capability (reasoning:false, without map):max original pass-through,
+  // and runtime-thinking-config.test.ts  faux baseline consistent.
   await kernel.setDefaultModel('faux-legacy/legacy-1', 'max')
   const conv = await kernel.createConversation()
   await assertThinking(kernel, conv.id, 'max', undefined)
@@ -241,38 +241,38 @@ it('能力未知（faux 默认形态）透传不破坏既有契约', { timeout: 
   await assertThinking(kernel, conv.id, 'xhigh', 'xhigh')
 })
 
-it('spawn 新建按目标模型能力收敛 effort；resume 显式 effort 同样收敛', { timeout: 60_000 }, async (t) => {
+it('spawn creates new by target model capability converge effort;resume explicit effort same converge', { timeout: 60_000 }, async (t) => {
   const { kernel, capA, capB } = await fixture(t)
   await kernel.setDefaultModel('faux-cap-a/model-a', 'low')
-  capA.core.setResponses([fauxAssistantMessage('A 完成')])
-  capB.core.setResponses([fauxAssistantMessage('B 完成')])
+  capA.core.setResponses([fauxAssistantMessage('A complete')])
+  capB.core.setResponses([fauxAssistantMessage('B complete')])
   let childA = 0
   let childB = 0
   await kernel.spawnAgent({
     parentConversationId: 1,
-    prompt: '任务 A',
+    prompt: 'task A',
     model: 'faux-cap-a/model-a',
     effort: 'max',
     onResolved: (info) => { childA = info.conversationId ?? 0 },
   })
   await assertThinking(kernel, childA, 'max', 'max')
 
-  // 目标模型 B 仅支持到 high：显式 effort max 收敛为 high。
+  // target model B only support to high: explicit effort max converge is high.
   await kernel.spawnAgent({
     parentConversationId: 1,
-    prompt: '任务 B',
+    prompt: 'task B',
     model: 'faux-cap-b/model-b',
     effort: 'max',
     onResolved: (info) => { childB = info.conversationId ?? 0 },
   })
   await assertThinking(kernel, childB, 'high', 'high')
 
-  // resume：换模型到 A 后不带 effort：镜像已收敛的 high 保持（A 也支持 high），
-  // 不回退也不抬升。
-  capA.core.setResponses([fauxAssistantMessage('A 续接')])
+  // resume: swap model to A after do not carries effort: mirror already converge high keep (A also support high),
+  // does not fall back also do not lift rise.
+  capA.core.setResponses([fauxAssistantMessage('A resume')])
   await kernel.spawnAgent({
     parentConversationId: 1,
-    prompt: '续接 A',
+    prompt: 'resume A',
     resume: String(childB),
     model: 'faux-cap-a/model-a',
   })

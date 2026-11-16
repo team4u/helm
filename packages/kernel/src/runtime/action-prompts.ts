@@ -1,28 +1,28 @@
 /**
- * 动作目录提示（宿主管理段 prompt.actions）。
+ * action directory hint (host manage segment prompt.actions).
  *
- * 职责：把当前会话真正可达（run_action 未被剥离 + scope 命中 + 非 exposeAsTool
- * 直投）的插件动作渲染成 <available_actions> 紧凑目录，并投射进 system sections。
- * 纯函数模块：可达性判定（工具交集 / scope）由 hook-bridge 负责，这里只做
- * 渲染与段落管理。完整 Schema 不常驻提示词——目录只带必填/可选与顶层类型，
- * 嵌套与复杂结构显式引导经 run_action describe 按需查询。
+ * responsibility: when before conversation truly can reach (run_action not by strip + scope hit + non- exposeAsTool
+ * direct throw) plugin action render into <available_actions> compact directory, and throw shoot enter system sections.
+ * pure function module: can reach decide (tool hand over collection / scope) by hook-bridge negative duty, this in only do
+ * render and segment manage. complete Schema do not common resident prompt - - directory only carries required/optional and top-level type,
+ * embed set and complex structure explicit quote lead via run_action describe on demand query.
  */
 import type { ActionManifest, JsonSchema } from '@helm/protocol'
 import { escapeXml } from './runtime-helpers.js'
 
-/** 宿主管理段 ID（set-or-clear；无目录时必须移除旧段，不留幻影文本）。 */
+/** host manage segment ID(set-or-clear; without directory when must remove old segment, do not phantom text). */
 export const ACTIONS_PROMPT_SECTION_ID = 'prompt.actions'
 
-/** 目录条目：manifest + 预解析的等效 CLI 命令（undefined = 不展示 CLI）。 */
+/** directory item:manifest + pre- parse etc. effect CLI command (undefined = do not render CLI). */
 export interface ActionDirectoryEntry {
   readonly manifest: ActionManifest
   readonly cliCommand?: string
 }
 
 /**
- * 等效 CLI 命令（真实存在的挂载路径）：cli.command 覆写优先，缺省
- * [剥离 builtin: 的 pluginId, actionId]；cli.hidden 不展示（不宣传不存在的
- * 顶层命令）。
+ * etc. effect CLI command (real store in mount path):cli.command override takes precedence, default
+ * [strip builtin:  pluginId, actionId];cli.hidden do not render (do not declare pass missing
+ * top-level command).
  */
 export function actionCliCommand(manifest: ActionManifest): string | undefined {
   if (manifest.cli?.hidden === true) return undefined
@@ -30,12 +30,12 @@ export function actionCliCommand(manifest: ActionManifest): string | undefined {
   return `helm ${command.join(' ')}`
 }
 
-/** 多行/多空白描述压成单行（目录每动作一行描述）。 */
+/** many row/many whitespace description press into single row (directory each action one row description). */
 function oneLine(text: string): string {
   return text.replaceAll(/\s+/g, ' ').trim()
 }
 
-/** 属性级类型签名的复杂度判定。 */
+/** property level type signature complex decide. */
 type PropComplexity = 'plain' | 'nested-object' | 'complex'
 
 function propSignature(prop: unknown): { signature: string; complexity: PropComplexity } {
@@ -44,7 +44,7 @@ function propSignature(prop: unknown): { signature: string; complexity: PropComp
   }
   const spec = prop as Record<string, unknown>
   if (spec['$ref'] !== undefined || spec['oneOf'] !== undefined || spec['anyOf'] !== undefined || spec['allOf'] !== undefined || spec['not'] !== undefined) {
-    return { signature: '复杂', complexity: 'complex' }
+    return { signature: 'complex', complexity: 'complex' }
   }
   const type = spec['type']
   if (type === 'array') {
@@ -58,7 +58,7 @@ function propSignature(prop: unknown): { signature: string; complexity: PropComp
   }
   if (type === 'object') {
     const hasProperties = spec['properties'] !== undefined
-    return { signature: hasProperties ? 'object（嵌套）' : 'object', complexity: hasProperties ? 'nested-object' : 'plain' }
+    return { signature: hasProperties ? 'object(embed set)' : 'object', complexity: hasProperties ? 'nested-object' : 'plain' }
   }
   if (typeof type === 'string') return { signature: type, complexity: 'plain' }
   if (typeof type === 'boolean') return { signature: 'unknown', complexity: 'plain' }
@@ -66,47 +66,47 @@ function propSignature(prop: unknown): { signature: string; complexity: PropComp
 }
 
 /**
- * 顶层 inputSchema 的紧凑参数签名：
- * - 普通对象 schema：全量列出属性（name: type（必填|可选）），无静默截断；
- * - 嵌套对象 / 数组元素为对象 / 组合器：标注为按需 describe 查询，不展开；
- * - 非普通对象 schema（组合器 / $ref / 非对象类型）：整体标注 describe 查询。
+ * top-level inputSchema compact parameter signature:
+ * - ordinary object schema: all amount column out property (name: type(required|optional)), without static default truncate;
+ * - embed set object / array element is object / combine: mark note is on demand describe query, do not expand;
+ * - non- ordinary object schema(combine / $ref / non- object type): whole mark note describe query.
  */
 export function compactActionSignature(schema: JsonSchema): string {
-  if (schema === null || typeof schema !== 'object') return 'Schema 非法，run_action describe 查询'
+  if (schema === null || typeof schema !== 'object') return 'Schema illegal,run_action describe query'
   const combinators = ['$ref', 'oneOf', 'anyOf', 'allOf']
-  if (combinators.some((key) => schema[key] !== undefined)) return 'Schema 复杂，run_action describe 查询'
+  if (combinators.some((key) => schema[key] !== undefined)) return 'Schema complex,run_action describe query'
   if (schema['type'] !== undefined && schema['type'] !== 'object') {
-    return `顶层类型 ${String(schema['type'])}，run_action describe 查询`
+    return `top-level type ${String(schema['type'])},run_action describe query`
   }
   const required = Array.isArray(schema['required']) ? new Set(schema['required'].map((name) => String(name))) : new Set<string>()
   const properties = schema['properties']
   if (properties === undefined || properties === null || typeof properties !== 'object' || Array.isArray(properties)) {
     return schema['additionalProperties'] === false && required.size === 0
-      ? '（无参数）'
-      : '对象结构未展开，run_action describe 查询'
+      ? '(without parameter)'
+      : 'object structure not expand,run_action describe query'
   }
   const parts: string[] = []
   for (const [name, prop] of Object.entries(properties)) {
     const { signature, complexity } = propSignature(prop)
-    const optional = required.has(name) ? '必填' : '可选'
-    const hint = complexity === 'plain' ? '' : '（describe 查询）'
-    parts.push(`${name}: ${signature}${hint}（${optional}）`)
+    const optional = required.has(name) ? 'required' : 'optional'
+    const hint = complexity === 'plain' ? '' : '(describe query)'
+    parts.push(`${name}: ${signature}${hint}(${optional})`)
   }
   if (parts.length === 0) {
     return schema['additionalProperties'] === false && required.size === 0
-      ? '（无参数）'
-      : '对象结构未展开，run_action describe 查询'
+      ? '(without parameter)'
+      : 'object structure not expand,run_action describe query'
   }
-  return parts.join('、')
+  return parts.join(',')
 }
 
-/** 渲染 <available_actions> 目录段；无条目返回 undefined（调用方清除旧段）。 */
+/** render <available_actions> directory segment; without item return undefined(caller clear old segment). */
 export function renderAvailableActionsSection(entries: readonly ActionDirectoryEntry[]): string | undefined {
   if (entries.length === 0) return undefined
   const header = [
     '<available_actions>',
-    '以下动作在当前会话经 run_action({ actionId: "pluginId.actionId", input }) 调用；直接暴露的动作已在模型工具列表展示。',
-    '参数为紧凑签名（必填/可选与顶层类型），嵌套与复杂结构不展开：先 run_action({ actionId, describe: true }) 获取该动作完整 input/outputSchema（仅描述，不执行动作）；也可经 bash 执行 helm actions list --json 查看。CLI 为等效人工通道（本会话无 bash 时仍可经 run_action 调用）。',
+    'or fewer action in when before conversation via run_action({ actionId: "pluginId.actionId", input }) invoke; directly expose action already in model tool list render.',
+    'parameter is compact signature (required/optional and top-level type), embed set and complex structure do not expand: first run_action({ actionId, describe: true }) get the action complete input/outputSchema(only description, do not execute action); also can via bash execute helm actions list --json view.CLI is etc. effect human channel (this conversation without bash when still can via run_action invoke).',
   ]
   const groups = new Map<string, ActionDirectoryEntry[]>()
   for (const entry of entries) {
@@ -120,14 +120,14 @@ export function renderAvailableActionsSection(entries: readonly ActionDirectoryE
     for (const { manifest, cliCommand } of pluginEntries) {
       const qualified = `${manifest.pluginId}.${manifest.id}`
       body.push(`- ${escapeXml(qualified)}: ${escapeXml(oneLine(manifest.description))}`)
-      body.push(`  参数: ${escapeXml(compactActionSignature(manifest.inputSchema))}`)
+      body.push(`  parameter: ${escapeXml(compactActionSignature(manifest.inputSchema))}`)
       if (cliCommand !== undefined) body.push(`  CLI: ${escapeXml(cliCommand)}`)
       if (manifest.promptGuidelines !== undefined && manifest.promptGuidelines.length > 0) {
-        body.push(`  指引（${escapeXml(qualified)}）:`)
+        body.push(`  refer quote (${escapeXml(qualified)}):`)
         for (const item of manifest.promptGuidelines) body.push(`  - ${escapeXml(item)}`)
       }
       if (manifest.promptSnippet !== undefined) {
-        body.push(`  说明（${escapeXml(qualified)}）:`)
+        body.push(`  note (${escapeXml(qualified)}):`)
         for (const line of manifest.promptSnippet.split('\n')) body.push(`  ${escapeXml(line)}`)
       }
     }
@@ -136,9 +136,9 @@ export function renderAvailableActionsSection(entries: readonly ActionDirectoryE
 }
 
 /**
- * 投射宿主管理段 prompt.actions：text 非空覆盖 / 为空移除；其余段（含插件
- * 自定义段）原样保留，未变化时返回原引用。停用、scope 不匹配、run_action
- * 剥离或无可用动作时调用方传 undefined 即完成旧段清除。
+ * throw shoot host manage segment prompt.actions:text non-empty override / is empty remove; the rest segment (contains plugin
+ * self define segment) original keep, not change when return original reference. deactivate,scope does not match,run_action
+ * strip or without available action when caller pass undefined i.e. complete old segment clear.
  */
 export function projectActionPromptSection(
   sections: ReadonlyArray<{ id: string; text: string }>,

@@ -6,7 +6,7 @@ import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/conte
 import { createEnvFabric } from '../src/env/fabric.js'
 import { NodeRegistry, type HubConnectionLocal } from '../src/env/registry.js'
 
-// 仅隔离注册表状态机；实际 WS/birpc 链路由 env-fabric 与 env-app 两组覆盖。
+// only isolated register table state machine; actual WS/birpc link by env-fabric and env-app two group override.
 class RegistrySocket extends EventEmitter {
   OPEN = 1
   CLOSED = 3
@@ -14,7 +14,7 @@ class RegistrySocket extends EventEmitter {
   close() { this.readyState = 3; this.emit('close') }
 }
 
-test('本机 Scoped env 不会再次继承宿主或逐调用伪造的 HELM_TOKEN', { timeout: 60_000 }, async () => {
+test('local machine Scoped env will not again inherit host or one by one invoke fabricate HELM_TOKEN', { timeout: 60_000 }, async () => {
   const previous = process.env.HELM_TOKEN
   process.env.HELM_TOKEN = 'host-private-credential'
   const fabric = createEnvFabric({ envOptions: () => ({ HELM_CONVERSATION_ID: '8' }) })
@@ -33,13 +33,13 @@ test('本机 Scoped env 不会再次继承宿主或逐调用伪造的 HELM_TOKEN
   }
 })
 
-test('无 composer 的本机 Scoped env 剥除宿主全部受管 HELM_* 变量（fail-closed）', { timeout: 60_000 }, async () => {
+test('without composer local machine Scoped env strip except host all managed HELM_* variable (fail-closed)', { timeout: 60_000 }, async () => {
   const saved: Record<string, string | undefined> = {}
-  // 先暂存并清空宿主既有的全部 HELM_* 变量：本测试在 Helm 托管宿主环境运行
-  // 时，宿主 bash 等受管工具天然注入 HELM_NODE_INSTANCE_ID /
-  // HELM_NODE_CONTROL_ENDPOINT 等节点控制变量——内核 composeExecutionEnv 只
-  // 剥除自身受管八元组，节点控制变量属节点守护语义、合法透传，会让下方
-  // /^helm_/i 探针把宿主残留误判为内核剥除失败。测试语义只针对下方注入。
+  // first staged and empty host since has all HELM_* variable: this test in Helm hosting host environment run
+  // when, host bash etc. managed tool day however inject HELM_NODE_INSTANCE_ID /
+  // HELM_NODE_CONTROL_ENDPOINT etc. node control variable - - kernel composeExecutionEnv only
+  // strip except itself managed eight meta group, node control variable belong node guard semantics, legal pass-through, will let under way
+  // /^helm_/i probe needle host leftover mistakenly judge is kernel strip except failed. test semantics only for under way inject.
   for (const key of Object.keys(process.env)) {
     if (/^helm_/i.test(key)) {
       saved[key] = process.env[key]
@@ -63,7 +63,7 @@ test('无 composer 的本机 Scoped env 剥除宿主全部受管 HELM_* 变量�
   }
   const fabric = createEnvFabric({})
   try {
-    // 无 envOptions（无会话作用域）：宿主继承不得携带任何受管 HELM_* 值。
+    // without envOptions(without conversation effect domain): host inherit must not carry any managed HELM_* value.
     const env = fabric.envForTarget({ nodeId: 'local', cwd: process.cwd() })
     let text = ''
     const result = await env.exec(
@@ -72,7 +72,7 @@ test('无 composer 的本机 Scoped env 剥除宿主全部受管 HELM_* 变量�
       BACKGROUND_CONTEXT,
     )
     assert.equal(result.ok, true)
-    assert.deepEqual(JSON.parse(text), [], '宿主受管 HELM_* 变量（含大小写变体）必须全部剥除')
+    assert.deepEqual(JSON.parse(text), [], 'host managed HELM_* variable (contains large small write change body) must all strip except')
   } finally {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key]
@@ -82,7 +82,7 @@ test('无 composer 的本机 Scoped env 剥除宿主全部受管 HELM_* 变量�
   }
 })
 
-test('composer 提供的受管变量仍生效（绑定键不被宿主剥除误伤）', { timeout: 60_000 }, async () => {
+test('composer provide managed variable still takes effect (bind set key do not by host strip except mistakenly damage)', { timeout: 60_000 }, async () => {
   const fabric = createEnvFabric({
     envOptions: ({ conversationId, cwd }) => ({
       HELM_CONVERSATION_ID: String(conversationId ?? 0),
@@ -105,7 +105,7 @@ test('composer 提供的受管变量仍生效（绑定键不被宿主剥除误�
   }
 })
 
-test('新连接顶替旧连接后事件路由绑定新发布代', { timeout: 60_000 }, async () => {
+test('new connect top replace old after connect event routing bind set new publish proxy', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   const sockets = [new RegistrySocket(), new RegistrySocket()]
   const bindings: HubConnectionLocal[] = []
@@ -126,7 +126,7 @@ test('新连接顶替旧连接后事件路由绑定新发布代', { timeout: 60_
   } finally { await registry.close() }
 })
 
-test('已取消的离线等待与已关闭注册表不会挂住调用方', { timeout: 60_000 }, async () => {
+test('cancelled offline wait for and already close register table will not hang caller', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => false })
   const cancel = new AbortController()
   cancel.abort()

@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import type { ConversationSummary, HelmEventFrame } from '@helm/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
 
-// 保留真实 tracker 发布回调，确定性模拟删除后才到达的异步摘要。
+// keep real tracker publish call back, determinism simulated after deletion only then reach async summary.
 function summaryCallback(kernel: KernelRuntime): (summary: ConversationSummary) => void {
   const internals = kernel as unknown as {
     tracker: { events: { onSummaryChanged(summary: ConversationSummary): void } }
@@ -14,11 +14,11 @@ function summaryCallback(kernel: KernelRuntime): (summary: ConversationSummary) 
   return internals.tracker.events.onSummaryChanged
 }
 
-test('删除后迟到的 tracker 摘要不发布 upsert 复活会话', { timeout: 60_000 }, async () => {
+test('after deletion late to tracker summary do not publish upsert re- conversation', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-ownership-events-'))
   const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, autoResume: false })
   try {
-    const conversation = await kernel.createConversation({ title: '待删除的后台会话' })
+    const conversation = await kernel.createConversation({ title: 'await delete background conversation' })
     kernel.markConversationOwnership(conversation.id, 'helm')
     const staleSummary = kernel.getConversation(conversation.id)
     const callback = summaryCallback(kernel)
@@ -29,7 +29,7 @@ test('删除后迟到的 tracker 摘要不发布 upsert 复活会话', { timeout
       assert.ok(frames.some((frame) => frame.event.type === 'conversation.deleted'))
       frames.length = 0
       callback(staleSummary)
-      assert.equal(frames.length, 0, '已删除会话的迟到摘要不能产生任何新事件')
+      assert.equal(frames.length, 0, 'deleted conversation late to summary cannot produce any new event')
       assert.ok(!kernel.listConversations().some((entry) => entry.id === conversation.id))
     } finally {
       unsubscribe()
@@ -40,11 +40,11 @@ test('删除后迟到的 tracker 摘要不发布 upsert 复活会话', { timeout
   }
 })
 
-test('归属文档读取失败不能伪造 human 摘要事件', { timeout: 60_000 }, async () => {
+test('ownership document failed to read cannot fabricate human summary event', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-ownership-error-'))
   const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, autoResume: false })
   try {
-    const conversation = await kernel.createConversation({ title: '归属异常' })
+    const conversation = await kernel.createConversation({ title: 'ownership exception' })
     const frames: HelmEventFrame[] = []
     const unsubscribe = kernel.events.subscribe((frame) => frames.push(frame))
     try {

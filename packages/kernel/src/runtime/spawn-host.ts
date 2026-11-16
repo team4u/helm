@@ -1,10 +1,10 @@
 /**
- * 原生 spawn 宿主端口（SpawnHost）。
+ * original generate spawn host port (SpawnHost).
  *
- * 从 runtime.ts 拆出：spawnAgentObserved 此前向 runNativeSpawn 传 60+ 行
- * 内联对象字面量（十几个闭包回调），坏味道审查要求提炼为显式命名接口。
- * SpawnHost = NativeSpawnDeps 的宿主侧实现契约；类型上直接继承
- * NativeSpawnDeps（单一事实来源），文档在此逐端口说明宿主语义。
+ * from runtime.ts split out:spawnAgentObserved this before to runNativeSpawn pass 60+ row
+ * inline object literal (ten a few closed package call back), broken flavor path review want seek mention refine is explicit naming interface.
+ * SpawnHost = NativeSpawnDeps host side implement contract; type on directly inherit
+ * NativeSpawnDeps(single one fact source), document in this one by one port note host semantics.
  */
 import type { Harness } from '@earendil-works/pi-durable'
 import type { Models } from '@earendil-works/pi-ai'
@@ -17,21 +17,21 @@ import type { NativeSpawnDeps, ResolvedProfile } from './spawn.js'
 import type { StructuredOutputSession } from './structured-output.js'
 
 /**
- * 宿主注入 runNativeSpawn 的完整依赖集（镜像登记、Profile 解析、会话配置
- * 更新、扩展安装、附件块构造与节点可用性校验）。
+ * host inject runNativeSpawn complete dependency collection (mirror register,Profile parse, conversation config
+ * update, extend install, attachment chunk construct and node availability validate).
  *
- * 各端口的 Why 注释见 spawn.ts 的 NativeSpawnDeps 声明（单一事实来源）；
- * 本接口只是给它一个可在 runtime.ts 与测试中按名引用的显式名字。
+ * each port Why note release see spawn.ts  NativeSpawnDeps declaration (single one fact source);
+ * this interface only is to it a can in runtime.ts and test in by name reference explicit name.
  */
 export type SpawnHost = NativeSpawnDeps
 
-/** 已授权附件（存在性 + 父链归属校验完成；prompt 拼装用）。 */
+/** already authorization attachment (store in + parent chain ownership validate complete;prompt piece together install use). */
 export interface ResolvedAttachmentRef {
   ref: ConversationAttachmentRef
   absPath: string
 }
 
-/** 构造 SpawnHost 的宿主能力面（KernelRuntime 实现注入）。 */
+/** construct SpawnHost host capability side (KernelRuntime implement inject). */
 export interface SpawnHostSource {
   readonly toolDeps: HelmToolDeps
   readonly harness: Harness
@@ -40,31 +40,31 @@ export interface SpawnHostSource {
   }
   readonly defaultModel: string | undefined
   readonly defaultThinkingLevel: string | undefined
-  /** 当前 Models 集合（思考档位能力收敛用；缺省不收敛）。 */
+  /** when before Models set (think Profile capability converge use; default do not converge). */
   readonly models?: () => Models
-  /** 模型禁用预检（ModelRegistry.assertModelEnabled；创建子会话前拒绝禁用模型）。 */
+  /** model disable preflight (ModelRegistry.assertModelEnabled; create sub-conversation before reject disable model). */
   assertModelEnabled?(provider: string, modelId: string): void
   readonly agentSessions: Map<string, number>
-  /** 本 Harness 共享的结构化输出结果槽（宿主持有；并发 spawn 隔离靠 conversationId 键）。 */
+  /** this Harness sharing structure output result slot (host hold has; concurrency spawn isolated rely conversationId key). */
   readonly structuredOutputSessions: Map<number, StructuredOutputSession>
   readonly resolvedAttachments: ResolvedAttachmentRef[] | undefined
   isNodeOnline(nodeId: string): boolean
-  /** [Attached Files] 清单块（无正文前缀；spawn 任务提示词用）。 */
+  /** [Attached Files] manifest chunk (without body text prefix;spawn task prompt use). */
   buildAttachmentBlock(resolved: ResolvedAttachmentRef[]): string
-  /** 读真实 Profile（不存在返回 undefined；损坏由宿主显式报错）。 */
+  /** read real Profile(missing return undefined; corrupt by host explicit errors). */
   readProfileForSpawn(profileId: string): Promise<Profile | undefined>
-  /** 会话镜像读取（不存在返回 undefined）。 */
+  /** conversation mirror read (missing return undefined). */
   getConvMeta(childId: number): { modelOverride?: string; parentConversationId?: number } | undefined
-  /** tracker 权威摘要（不存在返回 undefined）。 */
+  /** tracker right threat summary (missing return undefined). */
   getConversationSummary(childId: number): ConversationSummary | undefined
-  /** 复用宿主 updateConversation（SDK configure + 镜像 + 继承链）。 */
+  /** re- use host updateConversation(SDK configure + mirror + inherit chain). */
   updateConversation(childId: number, patch: ConversationPatch): Promise<ConversationSummary>
-  /** per-child SDK 扩展安装（同名重装为原地替换）。 */
+  /** per-child SDK extend install (same name heavy install is original ground replace). */
   installExtension(extension: NativeSpawnDeps['installChildExtension'] extends (e: infer E) => void ? E : never): void
   /**
-   * 子会话登记（镜像 upsert + helm 归属 + observe + 创建即广播）。
-   * parentToolCallId 由 buildSpawnHost 从最终请求透传（显式参数，避免
-   * 闭包里隐式捕获 transform 后的请求）。
+   * sub-conversation register (mirror upsert + helm ownership + observe + create i.e. broadcast).
+   * parentToolCallId by buildSpawnHost from eventually request pass-through (explicit parameter, avoid
+   * closed package in implicit catch transform after request).
    */
   registerChildConversation(
     childId: number,
@@ -76,31 +76,31 @@ export interface SpawnHostSource {
     thinkingLevel: string | undefined,
     nodeId: string | undefined,
     parentToolCallId: string | undefined,
-    /** 收敛后的显式思考档位覆盖（request.effort 未提供时 undefined）。 */
+    /** converge after explicit think Profile override (request.effort not provide when undefined). */
     thinkingLevelOverride: string | undefined,
   ): Promise<void>
-  /** resume 续接时更新子会话 parentToolCallId（镜像 + 广播）。 */
+  /** resume resume when update sub-conversation parentToolCallId(mirror + broadcast). */
   bindChildToolCall(childId: number, parentToolCallId: string): void
   /**
-   * 守卫式中止子会话（signal 桥/启动期取消的红线入口）：实现现读归属事实
-   * 并经内核 abortConversationGuarded 原子复核（human-owned 一律拒绝）。
-   * 缺省不接线时 spawn 回退 SDK conversation.abort（原始取消能力）。
+   * guard style abort sub-conversation (signal bridge/startup phase cancel hard rule entry): implement now read ownership fact
+   * and via kernel abortConversationGuarded atomic re-check (human-owned one rule reject).
+   * default do not connect line when spawn fall back SDK conversation.abort(original cancel capability).
    */
   abortChildConversationGuarded?(childId: number): Promise<void>
   /**
-   * 可选：fork 派生时解析父会话干净分叉锚点条目 ID（宿主在入钩子链前可预锁定，
-   * 绝不因并发推进或后续工作树分配前窗口漂移；缺席时回退 resolveCleanForkAnchor）。
+   * optional:fork derive when parse parent conversation clean fork anchor item ID(host in hook chain before can pre- lock,
+   * never because concurrency push enter or after continue worktree allocate before window drift; missing seat when fall back resolveCleanForkAnchor).
    */
   resolveForkAnchor?(parentId: number): Promise<number>
 }
 
 export interface SpawnHostOptions {
   readonly source: SpawnHostSource
-  /** agent_spawn transform 后的最终请求。 */
+  /** agent_spawn transform after eventually request. */
   readonly finalRequest: AgentSpawnRequest
 }
 
-/** Profile -> ResolvedProfile 字段裁剪（只保留 spawn 关心的键）。 */
+/** Profile -> ResolvedProfile field trim (only keep spawn closure center key). */
 export function toResolvedProfile(profile: Profile): ResolvedProfile {
   return {
     ...(profile.model ? { model: profile.model } : {}),
@@ -111,7 +111,7 @@ export function toResolvedProfile(profile: Profile): ResolvedProfile {
   }
 }
 
-/** 由宿主能力面构造 runNativeSpawn 依赖集（原 60+ 行内联字面量的显式替代）。 */
+/** by host capability side construct runNativeSpawn dependency collection (original 60+ row inline literal explicit alternative). */
 export function buildSpawnHost(options: SpawnHostOptions): SpawnHost {
   const { source, finalRequest } = options
   return {
@@ -130,7 +130,7 @@ export function buildSpawnHost(options: SpawnHostOptions): SpawnHost {
     structuredOutputSessions: source.structuredOutputSessions,
     assertNodeAvailable: (nodeId) => {
       if (!source.isNodeOnline(nodeId)) {
-        throw new HelmError('node_offline', `目标节点 ${nodeId} 离线，不能启动子代理`, 409, { nodeId })
+        throw new HelmError('node_offline', `target node ${nodeId} offline, cannot start subagent`, 409, { nodeId })
       }
     },
     resolveAttachmentsForPrompt:
@@ -156,8 +156,8 @@ export function buildSpawnHost(options: SpawnHostOptions): SpawnHost {
     },
     getModelOverride: (childId) => source.getConvMeta(childId)?.modelOverride,
     getParentOfConversation: (childId) => source.getConvMeta(childId)?.parentConversationId,
-    // resume 配置基线端口：镜像读取与真实更新（SDK configure + 持久化 +
-    // 模型继承链，复用宿主 updateConversation，不重建身份字段）。
+    // resume config baseline port: mirror read and real update (SDK configure + persist +
+    // model inherit chain, re- use host updateConversation, do not rebuild identity field).
     getConversation: (childId) => source.getConversationSummary(childId),
     updateConversation: (childId, patch) => source.updateConversation(childId, patch),
     installChildExtension: (extension) => source.installExtension(extension),

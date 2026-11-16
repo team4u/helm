@@ -1,26 +1,26 @@
 /**
- * 子代理嵌套深度契约：builtin:workflow 受管子代理默认可嵌套 2 层。
+ * subagent embed set deep contract:builtin:workflow managed subagent by default can embed set 2 layer.
  *
- * 事实来源（跨重启持久）：插件私有 doc `subagent-conversations` 登记经
- * agent_spawn 管道成功派生（onResolved 回传 conversationId）的子会话，
- * 条目含 depth / parentConversationId / maxSubagentDepth（子树上限快照）；
- * fork 会话与 SuperAgent worker（经 createConversation 创建，不经 spawn
- * 管道）不进表，不受嵌套限制影响。登记事实缺失或损坏时显式拒绝。
+ * fact source (across restarts durable): plugin private doc `subagent-conversations` register via
+ * agent_spawn pipeline succeeded derive (onResolved back pass conversationId) sub-conversation,
+ * item contains depth / parentConversationId / maxSubagentDepth(sub- tree cap snapshot);
+ * fork conversation and SuperAgent worker(via createConversation create, do not via spawn
+ * pipeline) does not enter table, do not subject to embed set restrict affect. register fact missing or corrupt when explicit reject.
  *
- * 三道防线：
- * 1. before_turn：达到子树上限的叶子回合剥离 subagent / SubagentWorkflow
- *    （一层子代理默认保留派工工具，可继续派二层）；
- * 2. 工具/动作入口：subagent 工具、SubagentWorkflow 工具、run 动作在创建
- *    任何 run 记录前拒绝（HelmError subagent_depth_exceeded，携带事实）；
- * 3. agent_spawn 最高优先级兜底（priority 300，先于 isolation 200 的
- *    worktree 分配）：直接调 kernel.spawnAgent 也被拒并登记新事实。
+ * three path guard against line:
+ * 1. before_turn: reach sub- tree cap leaf turn strip subagent / SubagentWorkflow
+ *    (one layer subagent by default keep dispatch work tool, can continue dispatch two layer);
+ * 2. tool/action entry:subagent tool,SubagentWorkflow tool,run action in create
+ *    any run record before reject (HelmError subagent_depth_exceeded, carry fact);
+ * 3. agent_spawn most high priority fall back (priority 300, first at isolation 200 
+ *    worktree allocate): directly tune kernel.spawnAgent also by refuse and register new fact.
  *
- * 显式扩展：AgentSpawnRequest.maxSubagentDepth（subagent 工具入参同名字段）
- * 授予子树深度上限（1..5），受管子代理不得提高继承上限；宿主插件配置
- * 提供全局缺省值的读写入口。
+ * explicit extend:AgentSpawnRequest.maxSubagentDepth(subagent tool reference same name segment)
+ * grant sub- tree deep cap (1..5), managed subagent must not mention high inherit cap; host plugin config
+ * provide global default value read write opening.
  *
- * 诚实性纪律：全部真实执行（faux 模型、真子会话、真 doc 持久化、真
- * 重启恢复），不 mock 引擎、不伪造拒绝结果。
+ * honest discipline: all real execute (faux model, true sub-conversation, true doc persist, true
+ * restart restore), do not mock engine, do not fabricate reject result.
  */
 
 import {
@@ -49,7 +49,7 @@ after(() => {
   rmSync(rootDir, { recursive: true, force: true })
 })
 
-/** 读插件私有登记表持久值（flush 后从 state.sqlite 直读，验证跨重启事实）。 */
+/** read plugin private register table durable value (flush after from state.sqlite direct read, verify across restarts fact). */
 function readRegistryRaw(dataDir: string): Record<string, unknown> {
   const db = new DatabaseSync(join(dataDir, 'state.sqlite'), { readOnly: true })
   try {
@@ -63,7 +63,7 @@ function readRegistryRaw(dataDir: string): Record<string, unknown> {
   }
 }
 
-/** 直写插件私有 doc（app 已关闭时使用；验证损坏记录显式拒绝）。 */
+/** direct write plugin private doc(app already on shutdown use; verify corrupt record explicit reject). */
 function writePluginDocRaw(dataDir: string, name: string, value: unknown): void {
   const db = new DatabaseSync(join(dataDir, 'state.sqlite'))
   try {
@@ -76,16 +76,16 @@ function writePluginDocRaw(dataDir: string, name: string, value: unknown): void 
   }
 }
 
-/** 登记表条目断言辅助：归一化读取 depth / parentConversationId / maxSubagentDepth。 */
+/** register table item assertion auxiliary: archive one read depth / parentConversationId / maxSubagentDepth. */
 function registryEntry(dataDir: string, conversationId: number): Record<string, unknown> {
   const raw = readRegistryRaw(dataDir)[String(conversationId)]
-  assert.ok(raw !== undefined && typeof raw === 'object', `会话 ${conversationId} 应登记入 subagent-conversations 表`)
+  assert.ok(raw !== undefined && typeof raw === 'object', `conversation ${conversationId} should register subagent-conversations table`)
   return raw as Record<string, unknown>
 }
 
 /**
- * 派生一条真实子会话链（与生产路径同构：onResolved 参与登记表记账）：
- * parents 依次为链上父会话，返回全部新会话 id。
+ * derive a real sub-conversation chain (and produce path same construct:onResolved reference and register table record account):
+ * parents in order is chain on parent conversation, return all new conversation id.
  */
 async function spawnChain(
   app: Awaited<ReturnType<typeof createHelm>>,
@@ -95,15 +95,15 @@ async function spawnChain(
   const created: number[] = []
   for (const parent of parents) {
     let childId: number | undefined
-    faux.setResponses([fauxAssistantMessage(`子代理 ${parent} 的回答`)])
+    faux.setResponses([fauxAssistantMessage(`subagent ${parent} answer`)])
     await app.kernel.spawnAgent({
       parentConversationId: parent,
-      prompt: `从 ${parent} 派生`,
+      prompt: `from ${parent} derive`,
       onResolved: (info) => {
         if (info.conversationId !== undefined) childId = info.conversationId
       },
     })
-    assert.ok(childId !== undefined, `应从 ${parent} 派生子会话并回传 conversationId`)
+    assert.ok(childId !== undefined, `should from ${parent} derive sub-conversation and back pass conversationId`)
     created.push(childId)
   }
   return created
@@ -112,39 +112,39 @@ async function spawnChain(
 
 
 // ---------------------------------------------------------------------------
-// 1. 顶层派生一层：事实登记 + 一层子代理保留派工工具
+// 1. top-level derive one layer: fact register + one layer subagent keep dispatch work tool
 // ---------------------------------------------------------------------------
 
-describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000 }, () => {
-  test('顶层会话派生一层：登记 depth=1/父链/子树上限=2；一层子代理回合保留 subagent/SubagentWorkflow', { timeout: 60_000 }, async () => {
+describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000 }, () => {
+  test('top-level conversation derive one layer: register depth=1/parent chain/sub- tree cap=2; one layer subagent turn keep subagent/SubagentWorkflow', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth1')
     const { models, faux } = makeFauxModels()
     const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
     try {
-      // 顶层：派生一个子代理（真实原生 spawn，真子会话；显式同步等待结果）。
+      // top-level: derive a subagent (real original generate spawn, true sub-conversation; explicit sync wait for result).
       faux.setResponses([
-        fauxAssistantMessage([fauxToolCall('subagent', { prompt: '子任务', background: false })], { stopReason: 'toolUse' }),
-        fauxAssistantMessage('子代理的回答'),
-        fauxAssistantMessage('主回合完成'),
+        fauxAssistantMessage([fauxToolCall('subagent', { prompt: 'sub- task', background: false })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('subagent answer'),
+        fauxAssistantMessage('main turn complete'),
       ])
-      await app.kernel.submitInput(1, '派生子代理')
+      await app.kernel.submitInput(1, 'derive subagent')
       await app.kernel.waitForIdle(1)
 
       const child = app.kernel.listConversations().find((c) => c.parentConversationId === 1)
-      assert.ok(child, '顶层派生应创建真子会话')
+      assert.ok(child, 'top-level derive should create true sub-conversation')
 
-      // 登记表：私有 doc 持久化深度事实（跨重启可读）。
+      // register table: private doc persist deep fact (across restarts can read).
       await app.kernel.documentStore.flush()
       const entry = registryEntry(dir, child.id)
-      assert.equal(entry['depth'], 1, '顶层直接派生的一层子代理 depth=1')
+      assert.equal(entry['depth'], 1, 'top-level directly derive one layer subagent depth=1')
       assert.equal(entry['parentConversationId'], 1)
-      assert.equal(entry['maxSubagentDepth'], 2, '缺省子树上限为默认值 2')
+      assert.equal(entry['maxSubagentDepth'], 2, 'default sub- tree cap is default value 2')
 
-      // 一层子代理回合 before_turn：派工工具保留（默认可继续派二层）。
+      // one layer subagent turn before_turn: dispatch work tool keep (by default can continue dispatch two layer).
       let childTools: string[] | undefined
       await app.kernel.plugins.register({
         id: 'test:depth-observer',
-        name: '深度观察者',
+        name: 'deep observer',
         definePlugin(ctx) {
           ctx.hook.onBeforeTurn((turn) => {
             const payload = turn as unknown as { conversation: { id: number }; tools: Array<{ name: string }> }
@@ -154,62 +154,62 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
           })
         },
       })
-      faux.setResponses([fauxAssistantMessage('一层子代理直接回答')])
-      await app.kernel.submitInput(child.id, '子代理被提问')
+      faux.setResponses([fauxAssistantMessage('one layer subagent directly answer')])
+      await app.kernel.submitInput(child.id, 'subagent by mention question')
       await app.kernel.waitForIdle(child.id)
-      assert.ok(childTools, '应观察到子代理回合的工具清单')
+      assert.ok(childTools, 'should observe to subagent turn tool manifest')
       assert.ok(
         childTools!.includes('subagent') && childTools!.includes('SubagentWorkflow'),
-        `一层子代理回合应保留派工工具（实际：${childTools!.join(',')}）`,
+        `one layer subagent turn should keep dispatch work tool (actual:${childTools!.join(',')})`,
       )
-      assert.ok(childTools!.includes('bash'), '非派工工具不受影响（bash 仍在）')
+      assert.ok(childTools!.includes('bash'), 'non- dispatch work tool do not subject to affect (bash still in)')
     } finally {
       await app.close()
     }
   })
 
   // -------------------------------------------------------------------------
-  // 2. 一层子代理经真实工具链继续派二层：登记 depth=2；二层回合剥离派工工具
+  // 2. one layer subagent via real tool chain continue dispatch two layer: register depth=2; two layer turn strip dispatch work tool
   // -------------------------------------------------------------------------
 
-  test('一层子代理经 subagent 工具继续派二层：登记 depth=2/父链；二层子代理回合剥离派工工具', { timeout: 60_000 }, async () => {
+  test('one layer subagent via subagent tool continue dispatch two layer: register depth=2/parent chain; two layer subagent turn strip dispatch work tool', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth2')
     const { models, faux } = makeFauxModels()
     const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
     try {
-      // 模型消费顺序（同步 spawn 逐层 await，顺序确定）：
-      // 顶层 toolUse(subagent) → 一层子代理 toolUse(subagent) → 二层子代理文本
-      // → 一层续答 → 顶层续答。
+      // model consume order (sync spawn one by one layer await, order determine):
+      // top-level toolUse(subagent) → one layer subagent toolUse(subagent) → two layer subagent text
+      // → one layer continue answer → top-level continue answer.
       faux.setResponses([
-        fauxAssistantMessage([fauxToolCall('subagent', { prompt: '一层任务', background: false })], { stopReason: 'toolUse' }),
-        fauxAssistantMessage([fauxToolCall('subagent', { prompt: '二层任务', background: false })], { stopReason: 'toolUse' }),
-        fauxAssistantMessage('二层子代理的回答'),
-        fauxAssistantMessage('一层子代理完成'),
-        fauxAssistantMessage('主回合完成'),
+        fauxAssistantMessage([fauxToolCall('subagent', { prompt: 'one layer task', background: false })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage([fauxToolCall('subagent', { prompt: 'two layer task', background: false })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('two layer subagent answer'),
+        fauxAssistantMessage('one layer subagent complete'),
+        fauxAssistantMessage('main turn complete'),
       ])
-      await app.kernel.submitInput(1, '派生一层，让它继续派二层')
+      await app.kernel.submitInput(1, 'derive one layer, let it continue dispatch two layer')
       await app.kernel.waitForIdle(1)
 
       const child1 = app.kernel.listConversations().find((c) => c.parentConversationId === 1)
-      assert.ok(child1, '应派生一层子会话')
+      assert.ok(child1, 'should derive one layer sub-conversation')
       await app.kernel.waitForIdle(child1.id)
       const child2 = app.kernel.listConversations().find((c) => c.parentConversationId === child1.id)
-      assert.ok(child2, '一层子代理应经工具链派生二层子会话')
+      assert.ok(child2, 'one layer subagent should via tool chain derive two layer sub-conversation')
 
       await app.kernel.documentStore.flush()
       const e1 = registryEntry(dir, child1.id)
       assert.equal(e1['depth'], 1)
       assert.equal(e1['parentConversationId'], 1)
       const e2 = registryEntry(dir, child2.id)
-      assert.equal(e2['depth'], 2, '二层子代理 depth=2')
+      assert.equal(e2['depth'], 2, 'two layer subagent depth=2')
       assert.equal(e2['parentConversationId'], child1.id)
-      assert.equal(e2['maxSubagentDepth'], 2, '子树上限继承父会话生效上限')
+      assert.equal(e2['maxSubagentDepth'], 2, 'sub- tree cap inherit parent conversation takes effect cap')
 
-      // 二层子代理回合 before_turn：派工工具被剥离（达到上限即叶子）。
+      // two layer subagent turn before_turn: dispatch work tool by strip (reach cap i.e. leaf).
       let leafTools: string[] | undefined
       await app.kernel.plugins.register({
         id: 'test:depth-observer',
-        name: '深度观察者',
+        name: 'deep observer',
         definePlugin(ctx) {
           ctx.hook.onBeforeTurn((turn) => {
             const payload = turn as unknown as { conversation: { id: number }; tools: Array<{ name: string }> }
@@ -219,25 +219,25 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
           })
         },
       })
-      faux.setResponses([fauxAssistantMessage('二层叶子只能直接回答')])
-      await app.kernel.submitInput(child2.id, '叶子被提问')
+      faux.setResponses([fauxAssistantMessage('two layer leaf only can directly answer')])
+      await app.kernel.submitInput(child2.id, 'leaf by mention question')
       await app.kernel.waitForIdle(child2.id)
-      assert.ok(leafTools, '应观察到二层子代理回合的工具清单')
+      assert.ok(leafTools, 'should observe to two layer subagent turn tool manifest')
       assert.ok(
         !leafTools!.includes('subagent') && !leafTools!.includes('SubagentWorkflow'),
-        `二层子代理回合应剥离派工工具（实际：${leafTools!.join(',')}）`,
+        `two layer subagent turn should strip dispatch work tool (actual:${leafTools!.join(',')})`,
       )
-      assert.ok(leafTools!.includes('bash'), '非派工工具不受影响（bash 仍在）')
+      assert.ok(leafTools!.includes('bash'), 'non- dispatch work tool do not subject to affect (bash still in)')
     } finally {
       await app.close()
     }
   })
 
   // -------------------------------------------------------------------------
-  // 3. 二层拒绝：spawnAgent 兜底 + run 动作入口，均不产生副作用
+  // 3. two layer reject:spawnAgent fall back + run action entry, all produces no side effect
   // -------------------------------------------------------------------------
 
-  test('二层子代理拒绝再派生：spawnAgent 403 subagent_depth_exceeded（含事实）；run 动作定向二层被拒且无 run 记录；一层对照组放行', { timeout: 60_000 }, async () => {
+  test('two layer subagent reject again derive:spawnAgent 403 subagent_depth_exceeded(contains fact);run action set to two layer by refuse and without run record; one layer compare group let through', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth3')
     const { models, faux } = makeFauxModels()
     const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
@@ -245,27 +245,27 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
       const child1 = (await spawnChain(app, faux, [1]))[0]!
       const child2 = (await spawnChain(app, faux, [child1]))[0]!
 
-      // 直调（含 isolation:worktree —— 必须在 worktree 分配前拒绝，不产生
-      // 任何 git 副作用或租约记录）。
+      // direct tune (contains isolation:worktree - - must in worktree allocate before reject, produces no
+      // any git side effect or lease record).
       await assert.rejects(
         () =>
           app.kernel.spawnAgent({
             parentConversationId: child2,
-            prompt: '试图派三层',
+            prompt: 'attempt dispatch three layer',
             isolation: 'worktree',
           }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError, `应为 HelmError（实际 ${String(err)}）`)
+          assert.ok(err instanceof HelmError, `should be HelmError(actual ${String(err)})`)
           assert.equal(err.code, 'subagent_depth_exceeded')
           assert.equal(err.status, 403)
           const details = err.details as { depth?: number; maxSubagentDepth?: number } | undefined
-          assert.equal(details?.depth, 2, '错误详情应携带 depth=2 事实')
+          assert.equal(details?.depth, 2, 'error detail situation should carry depth=2 fact')
           assert.equal(details?.maxSubagentDepth, 2)
           return true
         },
       )
 
-      // run 动作（HTTP/CLI 同链路）定向二层会话：拒绝。
+      // run action (HTTP/CLI same link) set to two layer conversation: reject.
       await assert.rejects(
         () =>
           app.kernel.plugins.invokeAction('builtin:workflow', 'run', {
@@ -275,13 +275,13 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
         (err: unknown) => err instanceof HelmError && err.code === 'subagent_depth_exceeded',
       )
 
-      // 无新 run 记录产生。
+      // without new run record produce.
       const runs = (await app.kernel.plugins.invokeAction('builtin:workflow', 'runs', {})) as {
         runs: Array<{ id: string }>
       }
-      assert.equal(runs.runs.length, 0, '拒绝路径不得产生任何 run 记录')
+      assert.equal(runs.runs.length, 0, 'reject path must not produce any run record')
 
-      // 一层对照组：直调 spawnAgent 放行（一层默认可继续派二层）。
+      // one layer compare group: direct tune spawnAgent let through (one layer by default can continue dispatch two layer).
       const anotherChild2 = (await spawnChain(app, faux, [child1]))[0]!
       assert.ok(anotherChild2 > 0)
       await app.kernel.documentStore.flush()
@@ -292,32 +292,32 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
   })
 
   // -------------------------------------------------------------------------
-  // 4. 一层子代理可运行工作流（run 动作放行），其引擎节点派生按 depth 记账
+  // 4. one layer subagent can run workflow (run action let through), its engine node derive by depth record account
   // -------------------------------------------------------------------------
 
-  test('一层子代理可运行 SubagentWorkflow：run 动作放行，节点派生的子会话登记 depth=2', { timeout: 60_000 }, async () => {
+  test('one layer subagent can run SubagentWorkflow:run action let through, node derive sub-conversation register depth=2', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth4')
     const { models, faux } = makeFauxModels()
     const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
     try {
       const child1 = (await spawnChain(app, faux, [1]))[0]!
-      faux.setResponses([fauxAssistantMessage('引擎节点子代理回答')])
+      faux.setResponses([fauxAssistantMessage('engine node subagent answer')])
       const run = (await app.kernel.plugins.invokeAction('builtin:workflow', 'run', {
         script:
-          'export const meta = { name: "nested-one", description: "d" }\nconst t = await agent("节点任务")\nreturn t',
+          'export const meta = { name: "nested-one", description: "d" }\nconst t = await agent("node task")\nreturn t',
         conversationId: child1,
         wait: true,
       })) as { run: { status: string; result: unknown; nodes?: Array<{ conversationId?: number }> } }
       assert.equal(run.run.status, 'completed', JSON.stringify(run.run))
       const nodeConv = run.run.nodes?.find((n) => n.conversationId !== undefined)?.conversationId
-      assert.ok(nodeConv, '引擎节点应真实派生子会话')
+      assert.ok(nodeConv, 'engine node should real derive sub-conversation')
       await app.kernel.documentStore.flush()
       const entry = registryEntry(dir, nodeConv)
-      assert.equal(entry['depth'], 2, '一层会话 run 的引擎节点派生登记 depth=2')
+      assert.equal(entry['depth'], 2, 'one layer conversation run engine node derive register depth=2')
       assert.equal(entry['parentConversationId'], child1)
-      // 二层节点是叶子：直调 spawnAgent 被拒。
+      // two layer node is leaf: direct tune spawnAgent by refuse.
       await assert.rejects(
-        () => app.kernel.spawnAgent({ parentConversationId: nodeConv, prompt: '三层尝试' }),
+        () => app.kernel.spawnAgent({ parentConversationId: nodeConv, prompt: 'three layer attempt' }),
         (err: unknown) => err instanceof HelmError && err.code === 'subagent_depth_exceeded',
       )
     } finally {
@@ -326,25 +326,25 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
   })
 
   // -------------------------------------------------------------------------
-  // 5. 后台拒绝契约：受管子代理（helm-owned）显式 background:true 被显式拒绝
+  // 5. background reject contract: managed subagent (helm-owned) explicit background:true by explicit reject
   // -------------------------------------------------------------------------
 
-  test('受管子代理显式 background:true：显式拒绝（防早结算），不派生、不建 run；同步缺省仍可用', { timeout: 60_000 }, async () => {
+  test('managed subagent explicit background:true: explicit reject (guard against early compute), do not derive, do not create run; sync default still available', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth5')
     const { models, faux } = makeFauxModels()
     const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
     try {
       const child1 = (await spawnChain(app, faux, [1]))[0]!
-      // 一层子代理是 helm-owned 自动化会话：显式 background:true 必须显式报错，
-      // 不得静默改写为同步，也不得派生子会话/创建 run（防自动化调用方早结算）。
+      // one layer subagent is helm-owned automatically conversation: explicit background:true must explicit errors,
+      // must not static default change write is sync, also must not derive sub-conversation/create run(guard against automatically caller early compute).
       faux.setResponses([
         fauxAssistantMessage(
-          [fauxToolCall('subagent', { prompt: '被拒的后台任务', background: true })],
+          [fauxToolCall('subagent', { prompt: 'by refuse background task', background: true })],
           { stopReason: 'toolUse' },
         ),
-        fauxAssistantMessage('一层续答'),
+        fauxAssistantMessage('one layer continue answer'),
       ])
-      await app.kernel.submitInput(child1, '派一个后台子代理')
+      await app.kernel.submitInput(child1, 'dispatch a background subagent')
       await app.kernel.waitForIdle(child1)
 
       const detail = await app.kernel.getConversationDetail(child1, { limit: 30 })
@@ -354,38 +354,38 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
         .find((t) => t.includes('"subagent"')) ?? ''
       assert.ok(
         toolText.includes('subagent_failed') && toolText.includes('background'),
-        `拒绝信息应显式指出 background 不被允许：${toolText.slice(0, 300)}`,
+        `reject information should explicit refer out background do not by allows:${toolText.slice(0, 300)}`,
       )
       const { runs } = (await app.kernel.plugins.invokeAction('builtin:workflow', 'runs', {
         conversationId: child1,
       })) as { runs: Array<{ id: string; kind?: string }> }
-      assert.equal(runs.length, 0, '被拒调用不得创建任何 run 记录')
+      assert.equal(runs.length, 0, 'by refuse invoke must not create any run record')
       assert.equal(
         app.kernel.listConversations().filter((c) => c.parentConversationId === child1).length,
         0,
-        '被拒调用不得派生子会话',
+        'by refuse invoke must not derive sub-conversation',
       )
 
-      // 同一受管会话缺省（省略 background）仍走同步路径：直接等待结果。
+      // the same managed conversation default (omit background) still away sync path: directly wait for result.
       faux.setResponses([
         fauxAssistantMessage(
-          [fauxToolCall('subagent', { prompt: '同步二层任务' })],
+          [fauxToolCall('subagent', { prompt: 'sync two layer task' })],
           { stopReason: 'toolUse' },
         ),
-        fauxAssistantMessage('同步二层回答'),
-        fauxAssistantMessage('一层同步续答'),
+        fauxAssistantMessage('sync two layer answer'),
+        fauxAssistantMessage('one layer sync continue answer'),
       ])
-      await app.kernel.submitInput(child1, '再派一个同步子代理')
+      await app.kernel.submitInput(child1, 'again dispatch a sync subagent')
       await app.kernel.waitForIdle(child1)
       const child2 = app.kernel.listConversations().find((c) => c.parentConversationId === child1)
-      assert.ok(child2, '缺省同步调用应正常派生二层子会话')
+      assert.ok(child2, 'default sync invoke should normal derive two layer sub-conversation')
       await app.kernel.documentStore.flush()
       const entry = registryEntry(dir, child2.id)
-      assert.equal(entry['depth'], 2, '同步派生的二层子代理同样登记 depth=2')
+      assert.equal(entry['depth'], 2, 'sync derive two layer subagent same register depth=2')
 
-      // 二层子代理是叶子：直调 spawnAgent 被拒。
+      // two layer subagent is leaf: direct tune spawnAgent by refuse.
       await assert.rejects(
-        () => app.kernel.spawnAgent({ parentConversationId: child2.id, prompt: '三层尝试' }),
+        () => app.kernel.spawnAgent({ parentConversationId: child2.id, prompt: 'three layer attempt' }),
         (err: unknown) => err instanceof HelmError && err.code === 'subagent_depth_exceeded',
       )
     } finally {
@@ -394,31 +394,31 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
   })
 
   // -------------------------------------------------------------------------
-  // 6. fork 会话不被误伤
+  // 6. fork conversation do not by mistakenly damage
   // -------------------------------------------------------------------------
 
-  test('fork 会话（有 parentConversationId）不被误伤：工具完整、spawn 与 run 动作可用', { timeout: 60_000 }, async () => {
+  test('fork conversation (has parentConversationId) do not by mistakenly damage: tool complete,spawn and run action available', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth6')
     const { models, faux } = makeFauxModels()
     const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
     try {
-      // 顶层完成一个回合（提供可分叉条目）。
-      faux.setResponses([fauxAssistantMessage('顶层回答')])
+      // top-level complete a turn (provide can fork item).
+      faux.setResponses([fauxAssistantMessage('top-level answer')])
       await app.kernel.submitInput(1, '你好')
       await app.kernel.waitForIdle(1)
       const detail = await app.kernel.getConversationDetail(1, { limit: 10 })
       const numericEntry = detail.entries.find((e) => Number.isInteger(Number(e.id)) && Number(e.id) > 0)
-      assert.ok(numericEntry, '应有可分叉条目（数字 entryId）')
+      assert.ok(numericEntry, 'should has can fork item (number entryId)')
       const entryId = Number(numericEntry!.id)
 
       const forked = await app.kernel.forkConversation(1, { entryId })
-      assert.equal(forked.parentConversationId, 1, 'fork 会话同样有父链')
+      assert.equal(forked.parentConversationId, 1, 'fork conversation same has parent chain')
 
-      // fork 不在登记表内：spawnAgent 放行、run 动作放行（wait 终态）。
-      faux.setResponses([fauxAssistantMessage('fork 子代理回答')])
+      // fork do not in register table inside:spawnAgent let through,run action let through (wait terminal state).
+      faux.setResponses([fauxAssistantMessage('fork subagent answer')])
       const spawned = await app.kernel.spawnAgent({
         parentConversationId: forked.id,
-        prompt: 'fork 会话正常派生',
+        prompt: 'fork conversation normal derive',
       })
       assert.ok(spawned !== undefined)
       const run = (await app.kernel.plugins.invokeAction('builtin:workflow', 'run', {
@@ -434,27 +434,27 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
   })
 
   // -------------------------------------------------------------------------
-  // 7. SuperAgent worker 不被误伤（有 parentConversationId，但不经 spawn 管道）
+  // 7. SuperAgent worker do not by mistakenly damage (has parentConversationId, but do not via spawn pipeline)
   // -------------------------------------------------------------------------
 
-  test('SuperAgent worker 不被误伤：dispatch_worker 创建的会话可正常派生子代理', { timeout: 60_000 }, async () => {
+  test('SuperAgent worker do not by mistakenly damage:dispatch_worker create conversation can normal derive subagent', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth7')
     const { models, faux } = makeFauxModels()
     const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
     try {
       await app.kernel.plugins.enable('builtin:superagent')
       const dispatched = (await app.kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', {
-        prompt: 'worker 任务',
+        prompt: 'worker task',
         profileId: 'assistant',
       })) as { workerConversationId: number }
       const worker = app.kernel.getConversation(dispatched.workerConversationId)
-      assert.equal(worker.parentConversationId !== undefined, true, 'worker 有父链')
+      assert.equal(worker.parentConversationId !== undefined, true, 'worker has parent chain')
 
-      // worker 不在登记表：spawnAgent 放行。
-      faux.setResponses([fauxAssistantMessage('worker 派生子代理回答'), fauxAssistantMessage('worker 回合完成')])
+      // worker do not in register table:spawnAgent let through.
+      faux.setResponses([fauxAssistantMessage('worker derive subagent answer'), fauxAssistantMessage('worker turn complete')])
       const spawned = await app.kernel.spawnAgent({
         parentConversationId: worker.id,
-        prompt: 'worker 正常派生',
+        prompt: 'worker normal derive',
       })
       assert.ok(spawned !== undefined)
     } finally {
@@ -463,10 +463,10 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
   })
 
   // -------------------------------------------------------------------------
-  // 8. 重启恢复：depth/父链事实跨重启持久，二层依旧被拒、一层仍可派
+  // 8. restart restore:depth/parent chain fact across restarts durable, two layer still by refuse, one layer still can dispatch
   // -------------------------------------------------------------------------
 
-  test('重启恢复：深度事实跨重启持久，二层依旧被拒、一层仍可派新二层', { timeout: 60_000 }, async () => {
+  test('restart restore: deep fact across restarts durable, two layer still by refuse, one layer still can dispatch new two layer', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth8')
     {
       const { models, faux } = makeFauxModels()
@@ -478,27 +478,27 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
         await app.close()
       }
     }
-    // 重启：同一 dataDir，登记表事实生效。
+    // restart: the same dataDir, register table fact takes effect.
     {
       const { models, faux } = makeFauxModels()
       const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
       try {
         const child1 = app.kernel.listConversations().find((c) => c.parentConversationId === 1)
-        assert.ok(child1, '重启后一层子会话镜像应恢复')
+        assert.ok(child1, 'after restart one layer sub-conversation mirror should restore')
         const child2 = app.kernel
           .listConversations()
           .find((c) => c.parentConversationId === child1.id)
-        assert.ok(child2, '重启后二层子会话镜像应恢复')
+        assert.ok(child2, 'after restart two layer sub-conversation mirror should restore')
 
         await assert.rejects(
           () =>
             app.kernel.spawnAgent({
               parentConversationId: child2.id,
-              prompt: '重启后派三层',
+              prompt: 'after restart dispatch three layer',
             }),
           (err: unknown) => err instanceof HelmError && err.code === 'subagent_depth_exceeded',
         )
-        // 一层对照组依旧放行（重启后仍可派新二层）。
+        // one layer compare group still let through (after restart still can dispatch new two layer).
         const newChild2 = (await spawnChain(app, faux, [child1.id]))[0]!
         assert.ok(newChild2 > 0)
         await app.kernel.documentStore.flush()
@@ -510,10 +510,10 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
   })
 
   // -------------------------------------------------------------------------
-  // 9. 无兼容读取：缺 depth/上限字段的损坏条目必须显式报错
+  // 9. without compatibility read: missing depth/cap field corrupt item must explicit errors
   // -------------------------------------------------------------------------
 
-  test('登记事实缺失时显式失败，不猜测深度与权限', { timeout: 60_000 }, async () => {
+  test('register fact missing when explicit failed, do not guess deep and permission', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth9')
     let legacyChildId = 0
     {
@@ -527,11 +527,11 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
         await app.close()
       }
     }
-    // 模拟旧记录：剥掉新事实字段（旧契约仅 agentType/runId/createdAt）。
+    // simulated old record: strip new fact field (old contract only agentType/runId/createdAt).
     {
       const registry = readRegistryRaw(dir)
       const legacy = registry[String(legacyChildId)] as Record<string, unknown>
-      assert.ok(legacy, '旧会话应有登记条目')
+      assert.ok(legacy, 'old conversation should has register item')
       writePluginDocRaw(dir, 'builtin:workflow:subagent-conversations', {
         [String(legacyChildId)]: {
           ...(typeof legacy['agentType'] === 'string' ? { agentType: legacy['agentType'] } : {}),
@@ -547,38 +547,38 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
   })
 
   // -------------------------------------------------------------------------
-  // 10. 显式扩展请求字段：maxSubagentDepth=3 允许三层；无效值显式拒绝
+  // 10. explicit extend request field:maxSubagentDepth=3 allows three layer; invalid value explicit reject
   // -------------------------------------------------------------------------
 
-  test('显式深度授予：maxSubagentDepth=3 时三层可用、三层为叶子；新登记继承授予上限', { timeout: 60_000 }, async () => {
+  test('explicit deep grant:maxSubagentDepth=3 when three layer available, three layer is leaf; new register inherit grant cap', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth10')
     const { models, faux } = makeFauxModels()
     const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
     try {
-      faux.setResponses([fauxAssistantMessage('一层回答')])
+      faux.setResponses([fauxAssistantMessage('one layer answer')])
       let grantedChild = 0
       await app.kernel.spawnAgent({
         parentConversationId: 1,
-        prompt: '授予三层的子树',
+        prompt: 'grant three layer sub- tree',
         meta: withWorkflowSpawnMeta(undefined, { maxSubagentDepth: 3 }),
         onResolved: (info) => {
           if (info.conversationId !== undefined) grantedChild = info.conversationId
         },
       })
-      assert.ok(grantedChild > 0, '应派生子会话并回传 conversationId')
+      assert.ok(grantedChild > 0, 'should derive sub-conversation and back pass conversationId')
       const child1 = grantedChild
       await app.kernel.documentStore.flush()
-      assert.equal(registryEntry(dir, child1)['maxSubagentDepth'], 3, '登记表应快照显式授予的上限')
+      assert.equal(registryEntry(dir, child1)['maxSubagentDepth'], 3, 'register table should snapshot explicit grant cap')
       assert.equal(registryEntry(dir, child1)['depth'], 1)
 
-      // 三层链全部可用（1 → 2 → 3），三层为叶子。
+      // three layer chain all available (1 → 2 → 3), three layer is leaf.
       const child2 = (await spawnChain(app, faux, [child1]))[0]!
       const child3 = (await spawnChain(app, faux, [child2]))[0]!
       await app.kernel.documentStore.flush()
-      assert.equal(registryEntry(dir, child2)['maxSubagentDepth'], 3, '子代理继承子树授予上限')
+      assert.equal(registryEntry(dir, child2)['maxSubagentDepth'], 3, 'subagent inherit sub- tree grant cap')
       assert.equal(registryEntry(dir, child3)['depth'], 3)
       await assert.rejects(
-        () => app.kernel.spawnAgent({ parentConversationId: child3, prompt: '四层尝试' }),
+        () => app.kernel.spawnAgent({ parentConversationId: child3, prompt: 'four layer attempt' }),
         (err: unknown) => {
           assert.ok(err instanceof HelmError)
           assert.equal(err.code, 'subagent_depth_exceeded')
@@ -589,48 +589,48 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
         },
       )
 
-      // 无效值显式拒绝（不静默钳制）：越界 / 非整数。
+      // invalid value explicit reject (not silently clamp): out of bounds / non- integer.
       for (const invalid of [0, 6, 2.5]) {
         await assert.rejects(
           () =>
             app.kernel.spawnAgent({
               parentConversationId: 1,
-              prompt: '无效授予',
+              prompt: 'invalid grant',
               meta: withWorkflowSpawnMeta(undefined, { maxSubagentDepth: invalid as number }),
             }),
           (err: unknown) => {
-            assert.ok(err instanceof HelmError, `maxSubagentDepth=${invalid} 应为 HelmError`)
+            assert.ok(err instanceof HelmError, `maxSubagentDepth=${invalid} should be HelmError`)
             assert.equal(err.code, 'validation_error')
             return true
           },
         )
       }
-      // 子代理不能自行提高继承的上限，也不能设置低于目标层级的上限。
+      // subagent cannot self row mention high inherit cap, also cannot settings low at target tier cap.
       for (const ceiling of [4, 1]) {
         await assert.rejects(
           () =>
             app.kernel.spawnAgent({
               parentConversationId: child1,
-              prompt: '越界授权',
+              prompt: 'out of bounds authorization',
               meta: withWorkflowSpawnMeta(undefined, { maxSubagentDepth: ceiling }),
             }),
           (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
         )
       }
-      // 拒绝路径不登记任何新事实。
+      // reject path do not register any new fact.
       await app.kernel.documentStore.flush()
       const registry = readRegistryRaw(dir)
-      assert.equal(Object.keys(registry).length, 3, '仅应登记三层链的 3 个条目')
+      assert.equal(Object.keys(registry).length, 3, 'only should register three layer chain 3 item')
     } finally {
       await app.close()
     }
   })
 
   // -------------------------------------------------------------------------
-  // 11. 全局配置通过宿主统一入口写入，并在重启后影响新任务树。
+  // 11. global config via host unify entry write, and in after restart affect new task tree.
   // -------------------------------------------------------------------------
 
-  test('插件配置 maxSubagentDepth 可读写、跨重启持久，非法数值显式拒绝派生', { timeout: 60_000 }, async () => {
+  test('plugin config maxSubagentDepth can read write, across restarts durable, illegal count value explicit reject derive', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth11')
     {
       const { models, faux } = makeFauxModels()
@@ -640,15 +640,15 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
         for (const invalid of [0, 99, 2.5, Number.NaN]) {
           await assert.rejects(
             () => app.kernel.plugins.setConfig('builtin:workflow', { maxSubagentDepth: invalid }),
-            /maxSubagentDepth|字段 maxSubagentDepth/,
-            `配置值 ${String(invalid)} 应在持久化边界被拒绝`,
+            /maxSubagentDepth|field maxSubagentDepth/,
+            `config value ${String(invalid)} should in persist boundary by reject`,
           )
         }
-        assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 2, '非法配置不得污染有效配置')
+        assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 2, 'illegal config must not pollute valid config')
         await app.kernel.plugins.setConfig('builtin:workflow', { maxSubagentDepth: 1 })
         const child = (await spawnChain(app, faux, [1]))[0]!
         await assert.rejects(
-          () => app.kernel.spawnAgent({ parentConversationId: child, prompt: '超出全局一层' }),
+          () => app.kernel.spawnAgent({ parentConversationId: child, prompt: 'exceeds global one layer' }),
           (err: unknown) => err instanceof HelmError && err.code === 'subagent_depth_exceeded',
         )
       } finally {
@@ -661,7 +661,7 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
       assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 1)
       const child = (await spawnChain(app, faux, [1]))[0]!
       await assert.rejects(
-        () => app.kernel.spawnAgent({ parentConversationId: child, prompt: '重启后仍超限' }),
+        () => app.kernel.spawnAgent({ parentConversationId: child, prompt: 'after restart still over limit' }),
         (err: unknown) => err instanceof HelmError && err.code === 'subagent_depth_exceeded',
       )
       await app.kernel.plugins.setConfig('builtin:workflow', { maxSubagentDepth: null })

@@ -1,20 +1,20 @@
 /**
- * 目标节点平台感知的 cwd/path 规范化测试（kernel 执行链）。
+ * target node platform aware cwd/path specification test (kernel execute chain).
  *
- * 覆盖（对齐任务验收面）：
- * 1. 平台选择：local 恒 process.platform；远端仅取 NodeRegistry 注册登记
- *    平台（EnvFabric.nodePlatformOf 最小只读端口，真实 WS 注册链验证）；
- *    离线 / 未上报平台 → 平台未知，绝不猜、绝不 fallback Hub 宿主。
- * 2. win32 目标视图转换：/mnt/<盘符>（WSL 挂载）与 /<盘符>（Git Bash）
- *    转规范 Windows 路径；/home 等裸 POSIX 根显式 invalid_path（保留原始
- *    路径，绝不猜测）。
- * 3. read 与 bash 一致：同一会话靶点下文件工具与 runShell 用同一平台来源
- *    与同一 protocol 原语规范化（收到相同基准派生的路径）。
- * 4. 远端 POSIX 节点绝不被误判成 Windows：/mnt/d 在 POSIX 目标上是真实
- *    路径，原样透传（仅词法归一）。
- * 5. POST /api/env/exec 靶点解析（NodeManager.resolveExecTarget）：win32
- *    目标规范化、裸 POSIX 根 validation_error（含原始 cwd）、离线 409、
- *    平台未知原样透传。
+ * override (align task verify side):
+ * 1. platform choose:local constant process.platform; remote only take NodeRegistry register register
+ *    platform (EnvFabric.nodePlatformOf most small only read port, real WS register chain verify);
+ *    offline / not on report platform → platform unknown, never guess, never fallback Hub host.
+ * 2. win32 target view convert:/mnt/<symbol>(WSL mount) and /<symbol>(Git Bash)
+ *    rotate specification Windows path;/home etc. bare POSIX explicit invalid_path(keep original
+ *    path, never guess).
+ * 3. read and bash consistent: the same conversation target under file tool and runShell use the same platform source
+ *    and the same protocol original language specification (receives identical base allow derive path).
+ * 4. remote POSIX node never by mistakenly judge into Windows:/mnt/d in POSIX target on is real
+ *    path, original pass-through (only term method archive one).
+ * 5. POST /api/env/exec target parse (NodeManager.resolveExecTarget):win32
+ *    target specification, bare POSIX  validation_error(contains original cwd), offline 409,
+ *    platform unknown original pass-through.
  */
 
 import { before, after, describe, it } from 'node:test'
@@ -56,10 +56,10 @@ after(async () => {
 })
 
 // ---------------------------------------------------------------------------
-// 受控替身
+// subject to control replace body
 // ---------------------------------------------------------------------------
 
-/** runShell 用受控 shell env：只实现 exec，记录真实收到的 cwd。 */
+/** runShell use subject to control shell env: only implement exec, record real receives cwd. */
 function makeRecordingShellEnv(): {
   env: {
     id: string
@@ -84,7 +84,7 @@ function makeRecordingShellEnv(): {
   }
 }
 
-/** read/write/edit 用受控文件 env（含互斥队列所需最小面）。 */
+/** read/write/edit use subject to control file env(contains mutual exclusion queue which must most small side). */
 function makeRecordingFileEnv(files: Map<string, string>): {
   env: Record<string, unknown>
   calls: Array<{ method: string; path: string }>
@@ -135,7 +135,7 @@ function makeRecordingFileEnv(files: Map<string, string>): {
   }
 }
 
-/** 平台可控的 EnvFabric 替身：nodePlatformOf / isOnline / env* 按参数返回。 */
+/** platform can control EnvFabric replace body:nodePlatformOf / isOnline / env* by parameter return. */
 function makePlatformFabric(options: {
   platform?: string
   hubPlatform?: string
@@ -156,10 +156,10 @@ function makePlatformFabric(options: {
     debugBaseCount: () => 0,
     debugBases: () => [],
     ipcCall: () => {
-      throw new Error('测试不使用')
+      throw new Error('test does not use')
     },
     ipcSubscribe: () => {
-      throw new Error('测试不使用')
+      throw new Error('test does not use')
     },
     dispose: () => Promise.resolve(),
   } as never
@@ -199,31 +199,31 @@ function makeApi(cwd: string, conversationId = 1) {
     commit: async (change: () => unknown) => change(),
     memo: async () => undefined,
     createTask: async () => {
-      throw new Error('测试不使用')
+      throw new Error('test does not use')
     },
     getTask: async () => undefined,
     waitForTask: async () => {
-      throw new Error('测试不使用')
+      throw new Error('test does not use')
     },
     conversation: async () => undefined,
     executeTool: async () => {
-      throw new Error('测试不使用')
+      throw new Error('test does not use')
     },
   } as never
 }
 
 // ---------------------------------------------------------------------------
-// 1. 平台选择原语
+// 1. platform choose original language
 // ---------------------------------------------------------------------------
-describe('targetPlatformForNode：平台选择（local 宿主 / 远端注册值 / 未知不猜）', { timeout: 60_000 }, () => {
-  it('local 恒 process.platform（无需任何端口）', { timeout: 60_000 }, () => {
+describe('targetPlatformForNode: platform choose (local host / remote register value / unknown do not guess)', { timeout: 60_000 }, () => {
+  it('local constant process.platform(no need to any port)', { timeout: 60_000 }, () => {
     const info = targetPlatformForNode(undefined, 'local')
-    assert.ok(info.known, 'local 平台恒已知')
+    assert.ok(info.known, 'local platform constant known')
     assert.equal(info.platform, process.platform === 'win32' ? 'win32' : 'posix')
     assert.equal(info.reported, process.platform)
   })
 
-  it('local：可注入 Hub 平台事实；缺省仍回退宿主平台', { timeout: 60_000 }, () => {
+  it('local: can inject Hub platform fact; default still fall back host platform', { timeout: 60_000 }, () => {
     const injected = targetPlatformForNode({ hubPlatform: () => 'linux' }, 'local')
     assert.equal(injected.known, true)
     if (injected.known) {
@@ -235,7 +235,7 @@ describe('targetPlatformForNode：平台选择（local 宿主 / 远端注册值 
     if (fallback.known) assert.equal(fallback.reported, process.platform)
   })
 
-  it('远端：仅取注册登记平台；win32 → win32，linux/darwin → posix', { timeout: 60_000 }, () => {
+  it('remote: only take register register platform;win32 → win32,linux/darwin → posix', { timeout: 60_000 }, () => {
     const win = targetPlatformForNode({ nodePlatformOf: () => 'win32' }, 'n1')
     assert.ok(win.known && win.platform === 'win32')
     const linux = targetPlatformForNode({ nodePlatformOf: () => 'linux' }, 'n1')
@@ -244,26 +244,26 @@ describe('targetPlatformForNode：平台选择（local 宿主 / 远端注册值 
     assert.ok(darwin.known && darwin.platform === 'posix')
   })
 
-  it('远端平台未知（未上报 / 离线 / 端口缺位）：显式 unknown，绝不 fallback local', { timeout: 60_000 }, () => {
-    // 在 win32 宿主模拟上也不得把 Hub 平台套给远端：用注入 reported 验证。
+  it('remote platform unknown (not on report / offline / port missing): explicit unknown, never fallback local', { timeout: 60_000 }, () => {
+    // in win32 host simulated on also must not Hub platform set to remote: use inject reported verify.
     for (const source of [undefined, { nodePlatformOf: () => undefined }, { nodePlatformOf: () => '' }, {}]) {
       const info = targetPlatformForNode(source as never, 'n1')
-      assert.ok(!info.known, `平台未知必须显式 unknown：${JSON.stringify(source)}`)
-      assert.match(info.reason, /不猜测平台/)
+      assert.ok(!info.known, `platform unknown must explicit unknown:${JSON.stringify(source)}`)
+      assert.match(info.reason, /do not guess platform/)
     }
   })
 
-  it('normalizePathForTarget：平台未知时路径原样返回（不猜平台）', { timeout: 60_000 }, () => {
-    const n = normalizePathForTarget('/mnt/d/proj', { known: false, reason: '未知' })
+  it('normalizePathForTarget: platform unknown when path original return (do not guess platform)', { timeout: 60_000 }, () => {
+    const n = normalizePathForTarget('/mnt/d/proj', { known: false, reason: 'unknown' })
     assert.ok(n.ok && n.path === '/mnt/d/proj')
   })
 })
 
 // ---------------------------------------------------------------------------
-// 2. runShell：bash / runGate / execEnv 全量收敛点的 cwd 规范化
+// 2. runShell:bash / runGate / execEnv all amount converge point cwd specification
 // ---------------------------------------------------------------------------
-describe('runShell：目标平台感知 cwd 规范化', { timeout: 60_000 }, () => {
-  it('远端 win32 节点：/mnt/d/proj（WSL 挂载视图）→ exec 收到 D:\\proj', { timeout: 60_000 }, async () => {
+describe('runShell: target platform aware cwd specification', { timeout: 60_000 }, () => {
+  it('remote win32 node:/mnt/d/proj(WSL mount view)→ exec receives D:\\proj', { timeout: 60_000 }, async () => {
     const shell = makeRecordingShellEnv()
     const deps = await makeDeps(
       join(rootDir, 'rs1'),
@@ -274,11 +274,11 @@ describe('runShell：目标平台感知 cwd 规范化', { timeout: 60_000 }, () 
     assert.deepEqual(
       shell.execCalls.map((c) => c.cwd),
       ['D:\\proj'],
-      'SDK NodeExecutionEnv / Remote 执行只接收已规范化路径',
+      'SDK NodeExecutionEnv / Remote execute only receive already specification path',
     )
   })
 
-  it('远端 win32 节点：/d/proj（Git Bash 盘符根视图）→ D:\\proj', { timeout: 60_000 }, async () => {
+  it('remote win32 node:/d/proj(Git Bash symbol view)→ D:\\proj', { timeout: 60_000 }, async () => {
     const shell = makeRecordingShellEnv()
     const deps = await makeDeps(
       join(rootDir, 'rs2'),
@@ -289,7 +289,7 @@ describe('runShell：目标平台感知 cwd 规范化', { timeout: 60_000 }, () 
     assert.deepEqual(shell.execCalls.map((c) => c.cwd), ['D:\\proj'])
   })
 
-  it('win32 目标裸 POSIX 根（/home/x）：显式 invalid_path 并保留原始路径，绝不执行', { timeout: 60_000 }, async () => {
+  it('win32 target bare POSIX (/home/x): explicit invalid_path and keep original path, never execute', { timeout: 60_000 }, async () => {
     const shell = makeRecordingShellEnv()
     const deps = await makeDeps(
       join(rootDir, 'rs3'),
@@ -298,11 +298,11 @@ describe('runShell：目标平台感知 cwd 规范化', { timeout: 60_000 }, () 
     const result = await runShell(deps, 'pwd', { nodeId: 'win-node', cwd: '/home/user/x' })
     assert.equal(result.ok, false)
     assert.match(result.output, /invalid_path/)
-    assert.match(result.output, /\/home\/user\/x/, '失败信息必须保留原始路径')
-    assert.equal(shell.execCalls.length, 0, '路径不可映射绝不发起执行')
+    assert.match(result.output, /\/home\/user\/x/, 'failed information must keep original path')
+    assert.equal(shell.execCalls.length, 0, 'path cannot mapping never start execute')
   })
 
-  it('远端 POSIX 节点：/mnt/d/proj 是真实路径，绝不被误判成 Windows 做转换', { timeout: 60_000 }, async () => {
+  it('remote POSIX node:/mnt/d/proj is real path, never by mistakenly judge into Windows do convert', { timeout: 60_000 }, async () => {
     const shell = makeRecordingShellEnv()
     const deps = await makeDeps(
       join(rootDir, 'rs4'),
@@ -313,7 +313,7 @@ describe('runShell：目标平台感知 cwd 规范化', { timeout: 60_000 }, () 
     assert.deepEqual(shell.execCalls.map((c) => c.cwd), ['/mnt/d/proj'])
   })
 
-  it('远端平台未知（在线但未上报）：cwd 原样透传（不猜、不 fallback Hub 宿主）', { timeout: 60_000 }, async () => {
+  it('remote platform unknown (online but not on report):cwd original pass-through (do not guess, do not fallback Hub host)', { timeout: 60_000 }, async () => {
     const shell = makeRecordingShellEnv()
     const deps = await makeDeps(
       join(rootDir, 'rs5'),
@@ -324,7 +324,7 @@ describe('runShell：目标平台感知 cwd 规范化', { timeout: 60_000 }, () 
     assert.deepEqual(shell.execCalls.map((c) => c.cwd), ['/mnt/d/proj'])
   })
 
-  it('远端节点离线：node_offline 显式失败（不猜平台、不回退本机执行）', { timeout: 60_000 }, async () => {
+  it('remote node offline:node_offline explicit failed (do not guess platform, does not fall back local machine execute)', { timeout: 60_000 }, async () => {
     const shell = makeRecordingShellEnv()
     const deps = await makeDeps(
       join(rootDir, 'rs6'),
@@ -336,7 +336,7 @@ describe('runShell：目标平台感知 cwd 规范化', { timeout: 60_000 }, () 
     assert.equal(shell.execCalls.length, 0)
   })
 
-  it('local（POSIX Hub）：cwd 原样（词法归一）到达 exec', { timeout: 60_000 }, async () => {
+  it('local(POSIX Hub):cwd original (term method archive one) reach exec', { timeout: 60_000 }, async () => {
     const shell = makeRecordingShellEnv()
     const deps = await makeDeps(
       join(rootDir, 'rs7'),
@@ -350,10 +350,10 @@ describe('runShell：目标平台感知 cwd 规范化', { timeout: 60_000 }, () 
 })
 
 // ---------------------------------------------------------------------------
-// 3. read / write / edit：与 bash 同一平台来源与同一原语
+// 3. read / write / edit: and bash the same platform source and the same original language
 // ---------------------------------------------------------------------------
-describe('read/write/edit：win32 靶点 POSIX 视图规范化（与 bash 一致）', { timeout: 60_000 }, () => {
-  it('read：会话 cwd /mnt/d/proj 下相对与绝对路径均转规范 Windows 路径到达远端 env', { timeout: 60_000 }, async () => {
+describe('read/write/edit:win32 target POSIX view specification (and bash consistent)', { timeout: 60_000 }, () => {
+  it('read: conversation cwd /mnt/d/proj under each other for and absolute path all rotate specification Windows path reach remote env', { timeout: 60_000 }, async () => {
     const files = new Map<string, string>([
       ['D:\\proj\\note.md', '# win'],
       ['D:\\other\\abs.md', '# abs'],
@@ -368,24 +368,24 @@ describe('read/write/edit：win32 靶点 POSIX 视图规范化（与 bash 一致
     const rel = await tool.execute({ path: 'note.md' }, makeApi('/mnt/d/proj'), BACKGROUND_CONTEXT)
     assert.equal(!!rel.isError, false)
     assert.ok(recorder.calls.some((c) => c.method === 'readTextFile' && c.path === 'D:\\proj\\note.md'))
-    // 绝对 POSIX 视图路径（跨盘）：同样确定性转换。
+    // absolute POSIX view path (across): same determinism convert.
     const abs = await tool.execute({ path: '/mnt/d/other/abs.md' }, makeApi('/mnt/d/proj'), BACKGROUND_CONTEXT)
     assert.equal(!!abs.isError, false)
     assert.ok(recorder.calls.some((c) => c.method === 'readTextFile' && c.path === 'D:\\other\\abs.md'))
   })
 
-  it('read 与 bash 一致：同一会话 cwd 派生同一基准（D:\\proj）', { timeout: 60_000 }, async () => {
+  it('read and bash consistent: the same conversation cwd derive the same base allow (D:\\proj)', { timeout: 60_000 }, async () => {
     const files = new Map<string, string>([['D:\\proj\\note.md', '# win']])
     const recorder = makeRecordingFileEnv(files)
     const shell = makeRecordingShellEnv()
-    // 同一靶点 env：bash 走 exec，文件工具走 canonicalPath/readTextFile 等。
+    // the same target env:bash away exec, file tool away canonicalPath/readTextFile etc..
     const combinedEnv = { ...recorder.env, exec: shell.env.exec }
     const fabric = makePlatformFabric({ platform: 'win32', env: combinedEnv })
     const deps = await makeDeps(join(rootDir, 'rw2'), fabric, () => 'win-node')
-    // bash（runShell）与 read 在同一 cwd '/mnt/d/proj' 下执行。
+    // bash(runShell) and read in the same cwd '/mnt/d/proj' under execute.
     const bashResult = await runShell(deps, 'pwd', { nodeId: 'win-node', cwd: '/mnt/d/proj', conversationId: 1 })
     assert.equal(bashResult.ok, true)
-    assert.deepEqual(shell.execCalls.map((c) => c.cwd), ['D:\\proj'], 'bash exec 收到规范化 cwd')
+    assert.deepEqual(shell.execCalls.map((c) => c.cwd), ['D:\\proj'], 'bash exec receives specification cwd')
     const read = await createReadTool(deps).execute(
       { path: 'note.md' },
       makeApi('/mnt/d/proj'),
@@ -396,11 +396,11 @@ describe('read/write/edit：win32 靶点 POSIX 视图规范化（与 bash 一致
     const readPath = recorder.calls.find((c) => c.method === 'readTextFile')!.path
     assert.ok(
       readPath.startsWith(`${bashBase}\\`),
-      `read 必须解析到 bash 同一规范化基准下：bash=${bashBase} read=${readPath}`,
+      `read must parse to bash the same specification base allow under:bash=${bashBase} read=${readPath}`,
     )
   })
 
-  it('write/edit：新文件与唯一替换均落规范 Windows 路径', { timeout: 60_000 }, async () => {
+  it('write/edit: new file and unique replace all specification Windows path', { timeout: 60_000 }, async () => {
     const files = new Map<string, string>([['D:\\proj\\config.ts', 'timeout = 1000']])
     const recorder = makeRecordingFileEnv(files)
     const deps = await makeDeps(
@@ -425,14 +425,14 @@ describe('read/write/edit：win32 靶点 POSIX 视图规范化（与 bash 一致
     assert.equal(files.get('D:\\proj\\config.ts'), 'timeout = 2000')
   })
 
-  it('win32 靶点 /home 拒绝：read/write/edit 一致 invalid_path（保留原始路径，零远端调用）', { timeout: 60_000 }, async () => {
+  it('win32 target /home reject:read/write/edit consistent invalid_path(keep original path, zero remote invoke)', { timeout: 60_000 }, async () => {
     const recorder = makeRecordingFileEnv(new Map())
     const deps = await makeDeps(
       join(rootDir, 'rw4'),
       makePlatformFabric({ platform: 'win32', env: recorder.env }),
       () => 'win-node',
     )
-    // 会话 cwd 本身不可映射：拒绝。
+    // conversation cwd itself cannot mapping: reject.
     const readBadCwd = await createReadTool(deps).execute(
       { path: 'file.txt' },
       makeApi('/home/user/proj'),
@@ -441,7 +441,7 @@ describe('read/write/edit：win32 靶点 POSIX 视图规范化（与 bash 一致
     assert.equal(readBadCwd.isError, true)
     assert.match((readBadCwd.output as Array<{ text: string }>)[0]!.text, /invalid_path/)
     assert.match((readBadCwd.output as Array<{ text: string }>)[0]!.text, /\/home\/user\/proj/)
-    // 合法 cwd 下绝对裸 POSIX 根同样拒绝。
+    // legal cwd under absolute bare POSIX same reject.
     const readAbs = await createReadTool(deps).execute(
       { path: '/home/user/secret.txt' },
       makeApi('/mnt/d/proj'),
@@ -464,10 +464,10 @@ describe('read/write/edit：win32 靶点 POSIX 视图规范化（与 bash 一致
     )
     assert.equal(editAbs.isError, true)
     assert.match((editAbs.output as Array<{ text: string }>)[0]!.text, /invalid_path/)
-    assert.equal(recorder.calls.length, before, '不可映射路径绝不触达远端 env')
+    assert.equal(recorder.calls.length, before, 'cannot mapping path never trigger reach remote env')
   })
 
-  it('远端 POSIX 节点：POSIX 语义原样（read 与既有解析一致，绝不做反向转换）', { timeout: 60_000 }, async () => {
+  it('remote POSIX node:POSIX semantics original (read and since has parse consistent, never do reverse convert)', { timeout: 60_000 }, async () => {
     const files = new Map<string, string>([['/mnt/d/proj/note.md', '# posix']])
     const recorder = makeRecordingFileEnv(files)
     const deps = await makeDeps(
@@ -484,7 +484,7 @@ describe('read/write/edit：win32 靶点 POSIX 视图规范化（与 bash 一致
     assert.ok(recorder.calls.some((c) => c.method === 'readTextFile' && c.path === '/mnt/d/proj/note.md'))
   })
 
-  it('远端平台未知：沿用按形状解析的既有语义（win32 形状路径原样到达）', { timeout: 60_000 }, async () => {
+  it('remote platform unknown: along use by shape parse since has semantics (win32 shape path original reach)', { timeout: 60_000 }, async () => {
     const files = new Map<string, string>([['C:\\workspace\\note.md', '# shape']])
     const recorder = makeRecordingFileEnv(files)
     const deps = await makeDeps(
@@ -503,10 +503,10 @@ describe('read/write/edit：win32 靶点 POSIX 视图规范化（与 bash 一致
 })
 
 // ---------------------------------------------------------------------------
-// 4. resolveTargetPath：win32 平台分支词法语义
+// 4. resolveTargetPath:win32 platform branch term method semantics
 // ---------------------------------------------------------------------------
-describe('resolveTargetPath：platform=win32 分支', { timeout: 60_000 }, () => {
-  it('POSIX 视图 base 与相对 raw：先转换后按 win32 规则解析', { timeout: 60_000 }, () => {
+describe('resolveTargetPath:platform=win32 branch', { timeout: 60_000 }, () => {
+  it('POSIX view base and each other for raw: first convert after by win32 rule parse', { timeout: 60_000 }, () => {
     const r = resolveTargetPath('src\\main.ts', '/mnt/d/proj', 'win32')
     assert.ok(r.ok)
     assert.equal(r.abs, 'D:\\proj\\src\\main.ts')
@@ -515,35 +515,35 @@ describe('resolveTargetPath：platform=win32 分支', { timeout: 60_000 }, () =>
     assert.equal(dotdot.abs, 'D:\\secret.txt')
   })
 
-  it('绝对 POSIX 视图 raw：/mnt/c 与 /e 视图确定性转换', { timeout: 60_000 }, () => {
+  it('absolute POSIX view raw:/mnt/c and /e view determinism convert', { timeout: 60_000 }, () => {
     const a = resolveTargetPath('/mnt/c/x/y.txt', 'D:\\proj', 'win32')
     assert.ok(a.ok && a.abs === 'C:\\x\\y.txt')
     const b = resolveTargetPath('/e/z.txt', 'D:\\proj', 'win32')
     assert.ok(b.ok && b.abs === 'E:\\z.txt')
   })
 
-  it('裸 POSIX 根拒绝（保留原始路径）；盘符相对拒绝不变', { timeout: 60_000 }, () => {
+  it('bare POSIX reject (keep original path); symbol each other for reject do not change', { timeout: 60_000 }, () => {
     const home = resolveTargetPath('/home/u/f.txt', 'D:\\proj', 'win32')
     assert.ok(!home.ok)
     assert.match(home.reason, /\/home\/u\/f\.txt/)
     const mntBad = resolveTargetPath('/mnt/cd/rom', 'D:\\proj', 'win32')
-    assert.ok(!mntBad.ok, '/mnt/<非单字母> 不是盘符视图')
+    assert.ok(!mntBad.ok, '/mnt/<non- single character parent> is not symbol view')
     const driveRel = resolveTargetPath('C:relative\\f.txt', 'D:\\proj', 'win32')
     assert.ok(!driveRel.ok)
   })
 
-  it('platform 缺省（远端平台未知）：按形状选规则的既有语义不变', { timeout: 60_000 }, () => {
+  it('platform default (remote platform unknown): by shape choose rule since has semantics do not change', { timeout: 60_000 }, () => {
     const r = resolveTargetPath('note.md', 'C:\\workspace')
     assert.ok(r.ok && r.abs === 'C:\\workspace\\note.md')
     const p = resolveTargetPath('note.md', '/mnt/d/proj')
-    assert.ok(p.ok && p.abs === '/mnt/d/proj/note.md', '平台未知时 POSIX 视图不转换')
+    assert.ok(p.ok && p.abs === '/mnt/d/proj/note.md', 'platform unknown when POSIX view do not convert')
   })
 })
 
 // ---------------------------------------------------------------------------
-// 5. NodeManager.resolveExecTarget：POST /api/env/exec 靶点解析
+// 5. NodeManager.resolveExecTarget:POST /api/env/exec target parse
 // ---------------------------------------------------------------------------
-describe('resolveExecTarget：平台感知 cwd 规范化（HTTP exec 靶点）', { timeout: 60_000 }, () => {
+describe('resolveExecTarget: platform aware cwd specification (HTTP exec target)', { timeout: 60_000 }, () => {
   function makeManager(fabric: EnvFabric, convOf: () => { cwd: string; nodeId?: string } = () => ({ cwd: '/conv/cwd' })): NodeManager {
     return new NodeManager({
       dataDir: join(rootDir, 'nm'),
@@ -557,13 +557,13 @@ describe('resolveExecTarget：平台感知 cwd 规范化（HTTP exec 靶点）',
     })
   }
 
-  it('远端 win32 节点：/mnt/d/proj → D:\\proj（返回值即规范化 cwd）', { timeout: 60_000 }, () => {
+  it('remote win32 node:/mnt/d/proj → D:\\proj(return value i.e. specification cwd)', { timeout: 60_000 }, () => {
     const manager = makeManager(makePlatformFabric({ platform: 'win32' }))
     const t = manager.resolveExecTarget({ nodeId: 'win-node', cwd: '/mnt/d/proj' })
     assert.deepEqual(t, { nodeId: 'win-node', cwd: 'D:\\proj' })
   })
 
-  it('win32 节点裸 POSIX 根：validation_error（含 invalid_path 与原始 cwd）', { timeout: 60_000 }, () => {
+  it('win32 node bare POSIX :validation_error(contains invalid_path and original cwd)', { timeout: 60_000 }, () => {
     const manager = makeManager(makePlatformFabric({ platform: 'win32' }))
     assert.throws(
       () => manager.resolveExecTarget({ nodeId: 'win-node', cwd: '/home/user/x' }),
@@ -571,16 +571,16 @@ describe('resolveExecTarget：平台感知 cwd 规范化（HTTP exec 靶点）',
         assert.ok(error instanceof HelmError)
         assert.equal(error.code, 'validation_error')
         assert.equal(error.status, 400)
-        assert.match(error.message, /\/home\/user\/x/, '错误信息保留原始路径')
+        assert.match(error.message, /\/home\/user\/x/, 'error information keep original path')
         const details = error.details as { cwd?: string; pathCode?: string }
-        assert.equal(details.cwd, '/home/user/x', 'details 保留原始 cwd')
+        assert.equal(details.cwd, '/home/user/x', 'details keep original cwd')
         assert.equal(details.pathCode, 'invalid_path')
         return true
       },
     )
   })
 
-  it('会话绑定继承：会话 cwd 同样按目标平台规范化', { timeout: 60_000 }, () => {
+  it('conversation bind set inherit: conversation cwd same by target platform specification', { timeout: 60_000 }, () => {
     const manager = makeManager(makePlatformFabric({ platform: 'win32' }), () => ({
       cwd: '/mnt/c/conv',
       nodeId: 'win-node',
@@ -589,7 +589,7 @@ describe('resolveExecTarget：平台感知 cwd 规范化（HTTP exec 靶点）',
     assert.deepEqual(t, { nodeId: 'win-node', cwd: 'C:\\conv' })
   })
 
-  it('远端离线：node_offline 409（平台未知不猜，不回退本机）', { timeout: 60_000 }, () => {
+  it('remote offline:node_offline 409(platform unknown do not guess, does not fall back local machine)', { timeout: 60_000 }, () => {
     const manager = makeManager(makePlatformFabric({ platform: undefined, online: false }))
     assert.throws(
       () => manager.resolveExecTarget({ nodeId: 'off-node', cwd: '/mnt/d/proj' }),
@@ -602,19 +602,19 @@ describe('resolveExecTarget：平台感知 cwd 规范化（HTTP exec 靶点）',
     )
   })
 
-  it('远端平台未知（在线未上报）：cwd 原样透传（不猜、不转换、不报错）', { timeout: 60_000 }, () => {
+  it('remote platform unknown (online not on report):cwd original pass-through (do not guess, do not convert, do not errors)', { timeout: 60_000 }, () => {
     const manager = makeManager(makePlatformFabric({ platform: undefined }))
     const t = manager.resolveExecTarget({ nodeId: 'mystery-node', cwd: '/mnt/d/proj' })
     assert.deepEqual(t, { nodeId: 'mystery-node', cwd: '/mnt/d/proj' })
   })
 
-  it('远端 POSIX 节点：/mnt/d 原样（Linux/macOS 与远端 POSIX 语义不变）', { timeout: 60_000 }, () => {
+  it('remote POSIX node:/mnt/d original (Linux/macOS and remote POSIX semantics do not change)', { timeout: 60_000 }, () => {
     const manager = makeManager(makePlatformFabric({ platform: 'linux' }))
     const t = manager.resolveExecTarget({ nodeId: 'posix-node', cwd: '/mnt/d/proj' })
     assert.deepEqual(t, { nodeId: 'posix-node', cwd: '/mnt/d/proj' })
   })
 
-  it('local：缺省 cwd 原样（注入 POSIX Hub 词法归一）', { timeout: 60_000 }, () => {
+  it('local: default cwd original (inject POSIX Hub term method archive one)', { timeout: 60_000 }, () => {
     const manager = makeManager(makePlatformFabric({ hubPlatform: 'linux' }))
     const t = manager.resolveExecTarget({})
     assert.deepEqual(t, { nodeId: 'local', cwd: '/hub/cwd' })
@@ -622,9 +622,9 @@ describe('resolveExecTarget：平台感知 cwd 规范化（HTTP exec 靶点）',
 })
 
 // ---------------------------------------------------------------------------
-// 6. EnvFabric.nodePlatformOf：真实注册链（WS 网关 + NodeRegistry）
+// 6. EnvFabric.nodePlatformOf: real register chain (WS gateway + NodeRegistry)
 // ---------------------------------------------------------------------------
-describe('EnvFabric.nodePlatformOf：注册登记平台的最小只读端口（真实 WS 注册链）', { timeout: 60_000 }, () => {
+describe('EnvFabric.nodePlatformOf: register register platform most small only read port (real WS register chain)', { timeout: 60_000 }, () => {
   async function startHub(): Promise<{
     fabric: EnvFabric
     baseUrl: string
@@ -655,7 +655,7 @@ describe('EnvFabric.nodePlatformOf：注册登记平台的最小只读端口（�
     }
   }
 
-  /** 原始 WS 客户端手动 register（可控 platform 上报；返回 ws 供断开）。 */
+  /** original WS client manually register(can control platform on report; return ws supply disconnect). */
   async function registerFakeNode(
     baseUrl: string,
     input: NodeRegisterInput,
@@ -677,7 +677,7 @@ describe('EnvFabric.nodePlatformOf：注册登记平台的最小只读端口（�
             try {
               cb(JSON.parse(text) as never)
             } catch {
-              /* 非 JSON 忽略 */
+              /* non- JSON ignore */
             }
           })
         },
@@ -687,11 +687,11 @@ describe('EnvFabric.nodePlatformOf：注册登记平台的最小只读端口（�
       },
     )
     const outcome = await rpc.register(input)
-    assert.equal(outcome.ok, true, `注册应成功：${JSON.stringify(outcome)}`)
+    assert.equal(outcome.ok, true, `register should succeeded:${JSON.stringify(outcome)}`)
     return ws
   }
 
-  it('win32 / linux 注册平台如实暴露；断开即 undefined；local 恒宿主平台', { timeout: 60_000 }, async () => {
+  it('win32 / linux register platform such as expose; disconnect i.e. undefined;local constant host platform', { timeout: 60_000 }, async () => {
     const TOKEN = 'fake:secret'
     const hub = await startHub()
     try {
@@ -711,23 +711,23 @@ describe('EnvFabric.nodePlatformOf：注册登记平台的最小只读端口（�
         assert.equal(hub.fabric.nodePlatformOf('fake-win'), 'win32')
         assert.equal(hub.fabric.nodePlatformOf('fake-posix'), 'linux')
         assert.equal(hub.fabric.nodePlatformOf('local'), process.platform)
-        // 未注册节点：undefined（不猜）。
+        // not registered node:undefined(do not guess).
         assert.equal(hub.fabric.nodePlatformOf('never-registered'), undefined)
-        // 平台选择原语消费同一端口：win32 → win32，linux → posix。
+        // platform choose original language consume the same port:win32 → win32,linux → posix.
         const win = targetPlatformForNode(hub.fabric, 'fake-win')
         assert.ok(win.known && win.platform === 'win32')
         const posix = targetPlatformForNode(hub.fabric, 'fake-posix')
-        assert.ok(posix.known && posix.platform === 'posix', '远端 POSIX 节点绝不误判成 Windows')
+        assert.ok(posix.known && posix.platform === 'posix', 'remote POSIX node never mistakenly judge into Windows')
       } finally {
         winWs.close()
         posixWs.close()
       }
-      // 断开后（等待注册表 evict）：平台不可知 → unknown，绝不残留旧值。等待网关处理断开。
+      // after disconnect (wait for register table evict): platform cannot know → unknown, never leftover old value. wait for gateway handle disconnect.
       await new Promise((resolve) => setTimeout(resolve, 200))
       assert.equal(hub.fabric.isOnline('fake-win'), false)
       assert.equal(hub.fabric.nodePlatformOf('fake-win'), undefined)
       const gone = targetPlatformForNode(hub.fabric, 'fake-win')
-      assert.ok(!gone.known, '断开后平台未知，不猜')
+      assert.ok(!gone.known, 'after disconnect platform unknown, do not guess')
     } finally {
       await hub.close()
     }

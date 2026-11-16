@@ -1,8 +1,8 @@
 /**
- * ProfileService：管理 `profiles/<id>/`（profile.json + SYSTEM.md）。
- * Profile 形状以 @helm/protocol 为准（id 必填，name/model/runtime/tags 可选）；
- * model 为空串或缺省表示「未配置」，由 runtime 显式报错，服务层不伪造默认模型。
- * MEMORY.md 长期记忆由 builtin:memory 插件自治管理，不进本服务。
+ * ProfileService: manage `profiles/<id>/`(profile.json + SYSTEM.md).
+ * Profile shape with @helm/protocol is allow (id required,name/model/runtime/tags optional);
+ * model is empty string or default means not config, by runtime explicit errors, service layer do not fabricate by default model.
+ * MEMORY.md long phase memory by builtin:memory plugin self govern manage, does not enter this service.
  */
 import { lstat, mkdir, readdir, readFile, realpath, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -26,32 +26,32 @@ import {
 import { withFileLock } from './file-lock.js'
 
 export const DEFAULT_PROFILE_ID = 'assistant'
-export const DEFAULT_PROFILE_NAME = '个人助理'
+export const DEFAULT_PROFILE_NAME = 'person assist'
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/
-/** 思考档位合法枚举（与 pi-ai ModelThinkingLevel 同源；schema 无运行时依赖，此处独立声明）。 */
+/** think Profile legal enumeration (and pi-ai ModelThinkingLevel same source;schema without runtime dependency, this where independent declaration). */
 const THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
 
 /**
- * Layer 0 常驻系统提示（三层渐进式披露的最顶层）：只声明身份与受管 helm
- * CLI 环境直觉；命令表、生成式 UI 组件字典等工作细节下沉 Layer 1/2
- *（skills/helm-cli），详细手册不常驻（目录描述仍有少量成本）。
- * update_memory 使用指引由 builtin:memory 插件按 Profile 开关动态注入。
+ * Layer 0 common resident system hint (three layer gradually enter style disclose most top-level): only declaration identity and managed helm
+ * CLI environment direct feel; command table, generate style UI component dictionary etc. work detail push down Layer 1/2
+ *(skills/helm-cli), detailed manual do not common resident (directory description still has few amount cost).
+ * update_memory use refer quote by builtin:memory plugin by Profile switch motion state inject.
  */
 export const SYSTEM_DEFAULT = [
   '# System Prompt',
   '',
-  '你是运行在 Helm 微内核上的个人助理。',
+  'you is run in Helm microkernel on person assist.',
   '',
-  '1. 受管 bash 已提供 `helm` CLI 与会话身份 `HELM_CONVERSATION_ID`，可用 `--current` 与 `--json` 调用。',
-  '2. 当前可用技能含 helm-cli 时，操作 Helm 或回答宿主能力问题前，先 `load_skill({ skillId: "helm-cli" })` 并按需读取 references，通过命令帮助与实际状态核实能力；该技能不在当前可用目录中时跳过此步。',
-  '3. 普通回复用 Markdown；交互式卡片、可复用微应用等扩展输出形态以当回合可用技能目录为准：技能描述声明提供此类能力时，先 load_skill 加载其指引再输出，目录中不存在时用普通 Markdown，不引用不存在的手册。生成文件供用户在 Web 查看时，用 write(..., artifact: true)、register_artifact({ path }) 或 helm artifacts put <path> --current 登记产物，并在回复中用 [文件名](artifact:<id>) 或 ![图片](artifact:<id>) 直接渲染。外部命令生成文件时使用目标节点上的绝对输出路径，确认预期文件存在并登记成功后再交付或清理源工作树。',
+  '1. managed bash already provide `helm` CLI and conversation identity `HELM_CONVERSATION_ID`, available `--current` and `--json` invoke.',
+  '2. when before available skill contains helm-cli when, operation Helm or answer host capability issue before, first `load_skill({ skillId: "helm-cli" })` and on demand read references, via command help and actual state verify capability; the skill do not in when before available directory in when skip this step.',
+  '3. ordinary back re- use Markdown; interaction style card, can re- use micro app etc. extend output form with when turn available skill directory is allow: skill description declaration provide this class capability when, first load_skill load its refer quote again output, directory in missing when use ordinary Markdown, do not reference missing manual. generate file supply user in Web view when, use write(..., artifact: true),register_artifact({ path }) or helm artifacts put <path> --current register artifact, and in back re- in use [filename](artifact:<id>) or ![diagram piece](artifact:<id>) directly render. external command generate file when use target node on absolute output path, confirm pre- phase file store in and register after success again deliver or clean up source worktree.',
   '',
 ].join('\n')
 
-/** 校验 profile id：小写字母数字与连字符，防目录注入与路径穿越。 */
+/** validate profile id: small write character parent number and hyphen, guard against directory inject and path through exceeds. */
 export function assertProfileId(id: string): void {
   if (!NAME_PATTERN.test(id)) {
-    throw new Error(`非法 profile id: ${id}（仅允许 a-z 0-9 与连字符）`)
+    throw new Error(`illegal profile id: ${id}(only allows a-z 0-9 and hyphen)`)
   }
 }
 
@@ -67,91 +67,91 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** Unicode 码点长度（代理对计 1，与展示宽度直觉一致；契约统一口径）。 */
+/** Unicode code point length (proxy for count 1, and render width direct feel consistent; contract unify opening path). */
 export function codePointLength(text: string): number {
   let count = 0
   for (const _ of text) count += 1
   return count
 }
 
-/** 单条引导词边界校验：label 规范化为 trim 形态，prompt 保留原文；
- * 未知字段拒绝（引导词是用户可编辑数据，静默丢字段会造成 UI 保存后丢内容）。 */
+/** single quote lead term boundary validate:label specification is trim form,prompt keep original text;
+ * unknown field reject (quote lead term is user can edit data, static default lose field will build into UI save after lose content). */
 export function validateProfileStarter(item: unknown, at: string): ProfileStarterPrompt {
-  if (!isPlainObject(item)) throw new Error(`${at} 必须是 { label, prompt } 对象`)
+  if (!isPlainObject(item)) throw new Error(`${at} must be { label, prompt } object`)
   const label = item['label']
   const prompt = item['prompt']
   if (Object.keys(item).some((key) => key !== 'label' && key !== 'prompt')) {
-    throw new Error(`${at} 仅接受 label 与 prompt 字段`)
+    throw new Error(`${at} only accept label and prompt field`)
   }
-  if (typeof label !== 'string') throw new Error(`${at}.label 必须是字符串`)
+  if (typeof label !== 'string') throw new Error(`${at}.label must be string`)
   const normalizedLabel = label.trim()
-  if (codePointLength(normalizedLabel) === 0) throw new Error(`${at}.label 去除首尾空白后不能为空`)
+  if (codePointLength(normalizedLabel) === 0) throw new Error(`${at}.label cannot be empty after trimming`)
   if (codePointLength(normalizedLabel) > PROFILE_STARTER_LABEL_MAX_LENGTH) {
-    throw new Error(`${at}.label 最多 ${PROFILE_STARTER_LABEL_MAX_LENGTH} 个 Unicode 码点`)
+    throw new Error(`${at}.label at most ${PROFILE_STARTER_LABEL_MAX_LENGTH}  Unicode code point`)
   }
-  if (typeof prompt !== 'string') throw new Error(`${at}.prompt 必须是字符串`)
-  if (prompt.trim() === '') throw new Error(`${at}.prompt 不能是纯空白`)
+  if (typeof prompt !== 'string') throw new Error(`${at}.prompt must be string`)
+  if (prompt.trim() === '') throw new Error(`${at}.prompt cannot be pure whitespace`)
   if (codePointLength(prompt) > PROFILE_STARTER_PROMPT_MAX_LENGTH) {
-    throw new Error(`${at}.prompt 最多 ${PROFILE_STARTER_PROMPT_MAX_LENGTH} 个 Unicode 码点（保留原文，不截断）`)
+    throw new Error(`${at}.prompt at most ${PROFILE_STARTER_PROMPT_MAX_LENGTH}  Unicode code point (keep original text, do not truncate)`)
   }
   return { label: normalizedLabel, prompt }
 }
 
-/** Profile 输入边界校验（新增/更新共用）；返回规范化后的可持久化形态。 */
+/** Profile input boundary validate (new increase/update shared use); return specification after can persist form. */
 export function validateProfileInput(input: unknown): Profile {
-  if (!isPlainObject(input)) throw new Error('profile 必须是对象')
+  if (!isPlainObject(input)) throw new Error('profile must be object')
   const id = input['id']
   if (typeof id !== 'string' || !NAME_PATTERN.test(id)) {
-    throw new Error(`非法 profile id: ${String(id)}（仅允许 a-z 0-9 与连字符）`)
+    throw new Error(`illegal profile id: ${String(id)}(only allows a-z 0-9 and hyphen)`)
   }
   const profile: Profile = { id }
   const name = input['name']
   if (name !== undefined) {
     if (typeof name !== 'string' || name.trim() === '') {
-      throw new Error(`profile '${id}' name 不能为空`)
+      throw new Error(`profile '${id}' name cannot be empty`)
     }
     profile.name = name
   }
   const model = input['model']
   if (model !== undefined) {
-    if (typeof model !== 'string') throw new Error(`profile '${id}' model 必须是字符串`)
+    if (typeof model !== 'string') throw new Error(`profile '${id}' model must be string`)
     profile.model = model
   }
   const thinkingLevel = input['thinkingLevel']
   if (thinkingLevel !== undefined) {
     if (typeof thinkingLevel !== 'string' || !THINKING_LEVELS.has(thinkingLevel)) {
-      throw new Error(`profile '${id}' thinkingLevel 非法（合法值：${[...THINKING_LEVELS].join(' | ')}）`)
+      throw new Error(`profile '${id}' thinkingLevel illegal (legal value:${[...THINKING_LEVELS].join(' | ')})`)
     }
     profile.thinkingLevel = thinkingLevel
   }
   const nodeId = input['nodeId']
   if (nodeId !== undefined) {
     if (typeof nodeId !== 'string' || nodeId === '') {
-      throw new Error(`profile '${id}' nodeId 若存在必须是非空字符串（计算节点 ID）`)
+      throw new Error(`profile '${id}' nodeId if store in must be non-empty string (compute node ID)`)
     }
     profile.nodeId = nodeId
   }
   const cwd = input['cwd']
   if (cwd !== undefined) {
     if (typeof cwd !== 'string' || cwd === '') {
-      throw new Error(`profile '${id}' cwd 若存在必须是非空字符串（目标平台绝对路径）`)
+      throw new Error(`profile '${id}' cwd if store in must be non-empty string (target platform absolute path)`)
     }
     profile.cwd = cwd
   }
   const tags = input['tags']
   if (tags !== undefined) {
     if (!Array.isArray(tags) || tags.some((t) => typeof t !== 'string')) {
-      throw new Error(`profile '${id}' tags 必须是字符串数组`)
+      throw new Error(`profile '${id}' tags must be string array`)
     }
     profile.tags = [...tags] as string[]
   }
-  // 技能白名单：元素必须是合法 skill id；重复项规范化去重后持久化（保留 []，
-  // 空数组表示禁用全部技能）。允许保存尚未安装的 id——技能目录是运行时
-  // 状态（可后装），配置阶段不强求存在；运行时按 isSkillAvailable 统一判定。
+  // skill blank name single: element must be legal skill id; duplicate items specification dedupe after persist (keep [],
+  // empty array means disable all skill). allows save not yet install id- - skill directory is runtime
+  // state (can after install), config phase do not strong seek store in; runtime by isSkillAvailable unify decide.
   const skills = input['skills']
   if (skills !== undefined) {
     if (!Array.isArray(skills) || skills.some((s) => typeof s !== 'string')) {
-      throw new Error(`profile '${id}' skills 必须是字符串数组（skill id 白名单；缺省全部可用，空数组禁用全部）`)
+      throw new Error(`profile '${id}' skills must be string array (skill id blank name single; default all available, empty array disable all)`)
     }
     const deduped: string[] = []
     for (const skillId of skills) {
@@ -160,85 +160,85 @@ export function validateProfileInput(input: unknown): Profile {
     }
     profile.skills = deduped
   }
-  // 空白会话引导词：最多六项；label trim 后非空且 ≤24 码点（规范化为 trim
-  // 形态持久化），prompt 非纯空白且保留原文（≤4000 码点，不截断）。
-  // 空数组 [] 显式保留（表示「清空自定义，回宿主默认提示」），缺省不写字段。
+  // whitespace conversation quote lead term: at most six items;label trim after non-empty and ≤24 code point (specification is trim
+  // form persist),prompt non- pure whitespace and keep original text (≤4000 code point, do not truncate).
+  // empty array [] explicit keep (means empty self define, back host by default hint), default do not write field.
   const starters = input['starters']
   if (starters !== undefined) {
     if (!Array.isArray(starters)) {
-      throw new Error(`profile '${id}' starters 必须是 { label, prompt } 对象数组`)
+      throw new Error(`profile '${id}' starters must be { label, prompt } object array`)
     }
     if (starters.length > PROFILE_STARTERS_MAX_ITEMS) {
-      throw new Error(`profile '${id}' starters 最多 ${PROFILE_STARTERS_MAX_ITEMS} 项`)
+      throw new Error(`profile '${id}' starters at most ${PROFILE_STARTERS_MAX_ITEMS} items`)
     }
     profile.starters = starters.map((item, index) => validateProfileStarter(item, `profile '${id}' starters[${index}]`))
   }
   const managedByPlugin = input['managedByPlugin']
   if (managedByPlugin !== undefined) {
     if (typeof managedByPlugin !== 'string' || managedByPlugin.trim() === '') {
-      throw new Error(`profile '${id}' managedByPlugin 若存在必须是非空字符串（托管插件 ID）`)
+      throw new Error(`profile '${id}' managedByPlugin if store in must be non-empty string (hosting plugin ID)`)
     }
     profile.managedByPlugin = managedByPlugin
   }
   const humanSelectable = input['humanSelectable']
   if (humanSelectable !== undefined) {
     if (typeof humanSelectable !== 'boolean') {
-      throw new Error(`profile '${id}' humanSelectable 若存在必须是布尔值（常驻单例角色置 false，缺省 true）`)
+      throw new Error(`profile '${id}' humanSelectable if store in must be boolean value (common resident single example role placement false, default true)`)
     }
     profile.humanSelectable = humanSelectable
   }
   const runtime = input['runtime']
   if (runtime !== undefined) {
-    if (!isPlainObject(runtime)) throw new Error(`profile '${id}' runtime 必须是对象`)
+    if (!isPlainObject(runtime)) throw new Error(`profile '${id}' runtime must be object`)
     const runtimeKeys = new Set(['kind', 'agent', 'args', 'nodeId', 'workspace', 'env'])
     for (const key of Object.keys(runtime)) {
-      if (!runtimeKeys.has(key)) throw new Error(`profile '${id}' runtime 含未知字段 '${key}'，拒绝忽略执行靶点`)
+      if (!runtimeKeys.has(key)) throw new Error(`profile '${id}' runtime contains unknown field '${key}', reject ignore execute target`)
     }
     const kind = runtime['kind']
     const agent = runtime['agent']
-    // 内核零插件枚举硬编码：kind 只校验外部运行时标识格式（命名空间小写
-    // 标识符，如 'herdr' / 'docker'），具体运行时是否被插件接管由
-    // agent_spawn 钩子管道决定，内核不点名任何插件。
+    // kernel zero plugin enumeration hard encode:kind only validate external runtime identifier format (naming empty between small write
+    // identifier symbol, such as 'herdr' / 'docker'), specific runtime is otherwise by plugin take over by
+    // agent_spawn hook pipeline decide, kernel do not point name any plugin.
     if (typeof kind !== 'string' || !/^[a-z][a-z0-9_-]{0,31}$/.test(kind)) {
-      throw new Error(`profile '${id}' runtime.kind 需为外部运行时标识符（小写字母开头，可含 a-z 0-9 _ -，长度 1..32）`)
+      throw new Error(`profile '${id}' runtime.kind must be external runtime identifier symbol (small write character parent open head, can contains a-z 0-9 _ -, length 1..32)`)
     }
     if (typeof agent !== 'string' || agent === '') {
-      throw new Error(`profile '${id}' runtime.agent 不能为空`)
+      throw new Error(`profile '${id}' runtime.agent cannot be empty`)
     }
     const args = runtime['args']
     if (args !== undefined && (!Array.isArray(args) || args.some((a) => typeof a !== 'string'))) {
-      throw new Error(`profile '${id}' runtime.args 必须是字符串数组`)
+      throw new Error(`profile '${id}' runtime.args must be string array`)
     }
     const nodeId = runtime['nodeId']
     if (nodeId !== undefined && (typeof nodeId !== 'string' || nodeId === '')) {
-      throw new Error(`profile '${id}' runtime.nodeId 若存在必须是非空字符串（目标计算节点标识）`)
+      throw new Error(`profile '${id}' runtime.nodeId if store in must be non-empty string (target compute node identifier)`)
     }
     const workspace = runtime['workspace']
     if (workspace !== undefined) {
       if (typeof workspace !== 'string' || workspace === '') {
-        throw new Error(`profile '${id}' runtime.workspace 若存在必须是非空字符串（绝对路径）`)
+        throw new Error(`profile '${id}' runtime.workspace if store in must be non-empty string (absolute path)`)
       }
-      // 跨平台绝对路径（与 runtime/tools.ts isAbsoluteTargetPath 同语义）：
-      // POSIX `/`、Windows 盘符 `C:\\` / `C:/`、UNC `\\\\server\\share`。
+      // across platform absolute path (and runtime/tools.ts isAbsoluteTargetPath same semantics):
+      // POSIX `/`,Windows symbol `C:\\` / `C:/`,UNC `\\\\server\\share`.
       if (!(
         workspace.startsWith('/') ||
         /^[a-zA-Z]:[\\/]/.test(workspace) ||
         /^\\\\[^\\]+\\[^\\]+/.test(workspace)
       )) {
-        throw new Error(`profile '${id}' runtime.workspace 必须是跨平台绝对路径（POSIX /、Windows 盘符或 UNC），当前为 '${workspace}'`)
+        throw new Error(`profile '${id}' runtime.workspace must be across platform absolute path (POSIX /,Windows symbol or UNC), when before is '${workspace}'`)
       }
     }
     const env = runtime['env']
     if (env !== undefined) {
       if (!isPlainObject(env) || Object.keys(env).length === 0) {
-        throw new Error(`profile '${id}' runtime.env 若存在必须是非空对象`)
+        throw new Error(`profile '${id}' runtime.env if store in must be non-empty object`)
       }
       for (const [name, value] of Object.entries(env)) {
         if (!isValidEnvName(name)) {
-          throw new Error(`profile '${id}' runtime.env 的键 '${name}' 必须是合法环境变量名`)
+          throw new Error(`profile '${id}' runtime.env key '${name}' must be legal environment variable name`)
         }
         if (typeof value !== 'string') {
-          throw new Error(`profile '${id}' runtime.env['${name}'] 必须是字符串（如需机密请用 credentials/secret stash，不入 profile）`)
+          throw new Error(`profile '${id}' runtime.env['${name}'] must be string (such as must secret please use credentials/secret stash, do not profile)`)
         }
       }
     }
@@ -254,14 +254,14 @@ export function validateProfileInput(input: unknown): Profile {
   return profile
 }
 
-/** 文件资产按当前契约校验，不推测旧格式或忽略未知执行字段。 */
+/** file asset by when before contract validate, do not push test old format or ignore unknown execute field. */
 function normalizeProfile(value: unknown, id: string): Profile {
-  if (!isPlainObject(value)) throw new Error(`profile.json 结构非法: ${id}`)
+  if (!isPlainObject(value)) throw new Error(`profile.json structure illegal: ${id}`)
   return validateProfileInput({ ...value, id })
 }
 
-/** 删除前绑定复核依赖：HTTP 层注入会话面查询，服务层兑底关闭
- * 「路由快速路径检查 → 并发创建/PATCH 绑定 → 删除落盘」交错窗口。 */
+/** before deletion bind set re-check dependency:HTTP layer inject conversation side query, service layer honor bottom close
+ * routing fast path check → concurrency create/PATCH bind set → delete hand over wrong window. */
 export interface ProfileDeleteDeps {
   isProfileInUse(profileId: string): boolean | Promise<boolean>
 }
@@ -269,7 +269,7 @@ export interface ProfileDeleteDeps {
 export class ProfileService {
   constructor(private readonly dataDir: string) {}
 
-  /** 首次启动自举默认 assistant profile（已存在则原样返回，不覆盖用户改动）。 */
+  /** first time start self raise by default assistant profile(already exists then original return, does not override user change). */
   async ensureDefault(): Promise<Profile> {
     const existing = await this.get(DEFAULT_PROFILE_ID)
     if (existing !== undefined) return existing
@@ -309,12 +309,12 @@ export class ProfileService {
     return normalizeProfile(value, id)
   }
 
-  /** 新建或整体保存 profile（若携带 system 则原子同步至 SYSTEM.md，不写入 profile.json）。 */
+  /** creates new or whole save profile(if carry system then atomic sync until SYSTEM.md, do not write profile.json). */
   async save(input: unknown): Promise<Profile> {
-    if (!isPlainObject(input)) throw new Error('profile 必须是对象')
+    if (!isPlainObject(input)) throw new Error('profile must be object')
     const rawSystem = input['system']
     if (rawSystem !== undefined && typeof rawSystem !== 'string') {
-      throw new Error('profile system 必须是字符串')
+      throw new Error('profile system must be string')
     }
     const profile = validateProfileInput(input)
     const dir = profileDir(this.dataDir, profile.id)
@@ -329,19 +329,19 @@ export class ProfileService {
   }
 
   /**
-   * 删除 profile；默认 assistant 受保护不可删除。
-   * deps.isProfileInUse（可选）：删除落盘前最后一刻复核无会话绑定，有则
-   * 409 profile_in_use——路由层快速路径检查与删除之间隔多个 await，并发
-   * 创建/PATCH 绑定可在窗口内穿过；不注入时仅保留默认 profile 保护
-   * （调用方自行保证无绑定）。
+   * delete profile; by default assistant subject to protect cannot delete.
+   * deps.isProfileInUse(optional): delete before finally one moment re-check without conversation bind set, has then
+   * 409 profile_in_use- - routing layer fast path check and delete between isolate multiple await, concurrency
+   * create/PATCH bind set can in window inside through; do not inject when only keep by default profile protect
+   * (caller self row guarantee without bind set).
    */
   async delete(id: string, deps?: ProfileDeleteDeps): Promise<void> {
     assertProfileId(id)
     if (id === DEFAULT_PROFILE_ID) {
-      throw new Error(`默认 profile '${DEFAULT_PROFILE_ID}' 不可删除`)
+      throw new Error(`by default profile '${DEFAULT_PROFILE_ID}' cannot delete`)
     }
     if (deps !== undefined && (await deps.isProfileInUse(id))) {
-      throw new HelmError('profile_in_use', `profile ${id} 仍被会话绑定，先解绑再删除`, 409, {
+      throw new HelmError('profile_in_use', `profile ${id} still by conversation bind set, first solve bind again delete`, 409, {
         profileId: id,
       })
     }
@@ -355,7 +355,7 @@ export class ProfileService {
 
   async updateSystem(id: string, text: string): Promise<string> {
     assertProfileId(id)
-    if (typeof text !== 'string') throw new Error('system 文本必须是字符串')
+    if (typeof text !== 'string') throw new Error('system text must be string')
     const path = join(profileDir(this.dataDir, id), 'SYSTEM.md')
     return withFileLock(path, async () => {
       await atomicWriteFile(path, text)
@@ -370,7 +370,7 @@ export class ProfileService {
 
 const SKILL_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/
 
-/** 真实路径包含判定：child === parent 或位于 parent 之下（均需已 realpath）。 */
+/** real path contains decide:child === parent or at parent of under (all must already realpath). */
 function isWithin(child: string, parent: string): boolean {
   if (child === parent) return true
   return child.startsWith(parent + sep)
@@ -378,11 +378,11 @@ function isWithin(child: string, parent: string): boolean {
 
 export function assertSkillId(id: string): void {
   if (!SKILL_NAME_PATTERN.test(id)) {
-    throw new Error(`非法 skill id: ${id}`)
+    throw new Error(`illegal skill id: ${id}`)
   }
 }
 
-/** 内置插件自举的技能包资产：SKILL.md + references 子文件内容。 */
+/** built-in plugin self raise skill package asset:SKILL.md + references sub- file content. */
 export interface BuiltinSkillAsset {
   id: string
   skillMd: string
@@ -390,28 +390,28 @@ export interface BuiltinSkillAsset {
 }
 
 /**
- * 校验技能包内相对路径：禁止绝对路径、`..` 段、反斜杠、控制字符与空段。
- * 允许 `SKILL.md` 与 `references/...` 形式的嵌套相对路径。
+ * validate skill package inside relative path: forbidden absolute path,`..` segment, backslash, control character and empty segment.
+ * allows `SKILL.md` and `references/...` form embed set relative path.
  */
 export function assertSafeRelativePath(input: string): string {
-  if (input.includes('\\')) throw new Error(`非法路径（反斜杠）: ${input}`)
-  if (input.includes('\0')) throw new Error('非法路径（含 NUL）')
-  if (input === '' || input === '.') throw new Error('路径不能为空')
-  if (input.startsWith('/')) throw new Error(`禁止绝对路径: ${input}`)
+  if (input.includes('\\')) throw new Error(`illegal path (backslash): ${input}`)
+  if (input.includes('\0')) throw new Error('illegal path (contains NUL)')
+  if (input === '' || input === '.') throw new Error('path cannot be empty')
+  if (input.startsWith('/')) throw new Error(`forbidden absolute path: ${input}`)
   for (const seg of input.split('/')) {
-    if (seg === '' || seg === '.') throw new Error(`非法路径段: ${input}`)
-    if (seg === '..') throw new Error(`禁止路径穿越: ${input}`)
-    if (/[\s\/?#]/.test(seg)) throw new Error(`非法路径段: ${input}`)
+    if (seg === '' || seg === '.') throw new Error(`illegal path segment: ${input}`)
+    if (seg === '..') throw new Error(`forbidden path through exceeds: ${input}`)
+    if (/[\s\/?#]/.test(seg)) throw new Error(`illegal path segment: ${input}`)
   }
   return input
 }
 
-/** 递归收集技能包内常规文件相对路径。跳过：以 `.` 开头的隐藏文件/目录
- * （.git/.gitignore 等）、依赖与构建产物目录（node_modules/__pycache__/dist，
- * 工程型技能包直接扫会把整个依赖树塞爆目录）与符号链接（杜绝越界入口）；
- * 仅收集能通过 assertSafeRelativePath 校验的路径——目录与 load_skill 共用
- * 同一合法口径，保证列出的每个 reference 都真实可读（含空格/?/# 等字符
- * 的路径直接不列，防言行不一）。 */
+/** recursion collect skill package inside common rule file relative path. skip: with `.` open head hide file/directory
+ * (.git/.gitignore etc.), dependency and build artifact directory (node_modules/__pycache__/dist,
+ * project type skill package directly scan will the whole dependency tree stuff explode directory) and symlink (eliminate out of bounds entry);
+ * only collect can via assertSafeRelativePath validate path - - directory and load_skill shared use
+ * the same legal opening path, guarantee column out each reference all real can read (contains space/?/# etc. character
+ * path directly do not column, guard against say row do not one). */
 async function collectFiles(root: string, rel = ''): Promise<string[]> {
   const dir = rel === '' ? root : join(root, rel)
   let entries
@@ -432,7 +432,7 @@ async function collectFiles(root: string, rel = ''): Promise<string[]> {
       try {
         out.push(assertSafeRelativePath(relPath))
       } catch {
-        // 非法相对路径（空格/特殊字符）无法经 load_skill 读取，不进目录。
+        // illegal relative path (space/special character) cannot via load_skill read, does not enter directory.
       }
     }
   }
@@ -440,18 +440,18 @@ async function collectFiles(root: string, rel = ''): Promise<string[]> {
 }
 
 /**
- * 机器级共享技能根（pi 生态技能库，`~/.agents/skills`）：SkillService 将其
- * 作为外部来源只读扫描与加载，不通过本服务的 writeFile/ensureSkill 写入。
- * 这不是文件系统权限或命令工具沙箱；bash/read/write/edit 仍按操作系统权限访问。
- * 与 HELM_DATA_DIR 独立；由生产内核组装时注入，SkillService 自身缺省不含。
+ * machine level sharing skill (pi generate state skill store,`~/.agents/skills`):SkillService its
+ * as external source only read scan and load, do not via this service writeFile/ensureSkill write.
+ * this is not file system permission or command tool sandbox;bash/read/write/edit still by OS permission access.
+ * and HELM_DATA_DIR independent; by produce kernel group install when inject,SkillService itself default excludes.
  */
 export function defaultExternalSkillRoots(): string[] {
   return [join(homedir(), '.agents', 'skills')]
 }
 
-/** external 根单条目错误的跳过判定：形状/校验类错误（普通 Error，无 Node
- * 错误码）与 ENOENT（SKILL.md/目录缺失）跳过该条目；真实 IO 错误
- * （EACCES/EIO 等 code 非 ENOENT）如实上抛，不静默降级。 */
+/** external single item error skip decide: shape/validate class error (ordinary Error, without Node
+ * error code) and ENOENT(SKILL.md/directory missing) skip the item; real IO error
+ * (EACCES/EIO etc. code non- ENOENT) such as on throw, not silently fall back. */
 function isSkippableExternalEntryError(err: unknown): boolean {
   if (err instanceof FileNotFoundError) return true
   const code = (err as { code?: unknown }).code
@@ -460,27 +460,27 @@ function isSkippableExternalEntryError(err: unknown): boolean {
 }
 
 export class SkillService {
-  /** ensureSkill 自举登记的受管技能 id（进程内；常规写入口统一 403 拒绝）。 */
+  /** ensureSkill self raise register managed skill id(process inside; common rule write opening unify 403 reject). */
   private readonly managedSkillIds = new Set<string>()
 
   private readonly dataDir: string
 
-  /** 仅供 SkillService 扫描与 load_skill 读取的外部来源（排在 dataDir 之后）。 */
+  /** only supply SkillService scan and load_skill read external source (arrange in dataDir after). */
   private readonly externalRoots: readonly string[]
 
-  /** 缺省不含外部根：本服务是「给定目录的纯确定性扫描」，机器级共享根由
-   * 生产内核组装时经 defaultExternalSkillRoots() 注入（测试天然隔离）。 */
+  /** default excludes external: this service is to set directory pure determinism scan, machine level sharing by
+   * produce kernel group install when via defaultExternalSkillRoots() inject (test day however isolated). */
   constructor(dataDir: string, options?: { externalRoots?: readonly string[] }) {
     this.dataDir = dataDir
     this.externalRoots = options?.externalRoots ?? []
   }
 
-  /** 全部技能摘要（dataDir 根 + 外部共享根合并，供 load_skill 目录注入）。
-   * dataDir 根语义不变：非法 id 跳过、坏 frontmatter 如实抛错。外部根整体
-   * ENOENT 视为空；单条目坏数据（第三方内容，helm 不拥有其质量）跳过不
-   * 拖垮整个目录——与 dataDir 的严格抛错语义刻意不同。按 id 去重：
-   * dataDir 条目绝对优先（受管技能永不被外部同名遮蔽；用户往 dataDir 放
-   * 同名技能即形成「本地覆盖」），其后按根声明顺序取首个。按 id 稳定排序。 */
+  /** all skill summary (dataDir  + external sharing merge, supply load_skill directory inject).
+   * dataDir semantics do not change: illegal id skip, broken frontmatter such as throws. external whole
+   * ENOENT treated as empty; single item broken data (third way content,helm do not own its quality) skip do not
+   * drag collapse the whole directory - - and dataDir strictly throws semantics moment intent different. by id dedupe:
+   * dataDir item absolute takes precedence (managed skill forever do not by external same name obscure; user to dataDir put
+   * same name skill i.e. shape into local override), its after by declaration order take first. by id stable sort. */
   async list(): Promise<SkillSummary[]> {
     const byId = new Map<string, SkillSummary>()
     const dataRoot = join(this.dataDir, 'skills')
@@ -492,7 +492,7 @@ export class SkillService {
       else throw err
     }
     if (dataEntries.length > 0) {
-      // readdir 成功即根存在；realpath 归一（macOS /var 等软链前缀）供包含校验。
+      // readdir succeeded i.e. store in;realpath archive one (macOS /var etc. symlink prefix) supply contains validate.
       const dataRootReal = await realpath(dataRoot)
       for (const entry of dataEntries) {
         try {
@@ -509,14 +509,14 @@ export class SkillService {
       try {
         extEntries = await readdir(extRoot)
       } catch (err) {
-        // 共享根不存在视为空（未安装 pi 技能库），不报错。
+        // sharing missing treated as empty (not installed pi skill store), do not errors.
         if ((err as { code?: string }).code === 'ENOENT') continue
         throw err
       }
       if (extEntries.length === 0) continue
       const extRootReal = await realpath(extRoot)
       for (const entry of extEntries) {
-        if (byId.has(entry)) continue // dataDir（或先序外部根）条目优先
+        if (byId.has(entry)) continue // dataDir(or first order external) item takes precedence
         try {
           assertSkillId(entry)
           const summary = await this.summarizeInRoot(extRootReal, entry, 'agents')
@@ -532,13 +532,13 @@ export class SkillService {
     return skills
   }
 
-  /** 安全读取技能包文件：缺省 SKILL.md；严格拦截绝对路径/`..`/软链越界。
-   * 解析顺序 dataDir → 各外部共享根：技能目录在某根不存在则试下一根，
-   * 全部根都无此技能维持 FileNotFoundError（HTTP 404 口径不变）；安全校验
-   * 拒绝（软链/越界/非常规文件）在命中根立即上抛，绝不跨根回退。每根的
-   * 校验强度与 dataDir 策略完全一致——三层防御：① 技能目录自身软链直接
-   * 拒绝；② realpath 双层包含校验（skillDir 真实路径必须在所属 skills 根
-   * 内）；③ 逐段拒绝符号链接并确认目标真实路径仍在 skillDir 内。
+  /** security read skill package file: default SKILL.md; strictly intercept absolute path/`..`/symlink out of bounds.
+   * parse order dataDir → each external sharing: skill directory in a certain missing then try under one,
+   * all all without this skill dimension hold FileNotFoundError(HTTP 404 opening path do not change); security validate
+   * reject (symlink/out of bounds/very rule file) in hit immediately on throw, never across fall back. each
+   * validate strong and dataDir policy fully consistent - - three layer guard against defend:① skill directory itself symlink directly
+   * reject;② realpath two-layer contains validate (skillDir real path must in which belong skills 
+   * inside);③ one by one segment reject symlink and confirm target real path still in skillDir inside.
    */
   async readFile(skillId: string, path = 'SKILL.md'): Promise<string> {
     assertSkillId(skillId)
@@ -550,27 +550,27 @@ export class SkillService {
     throw new FileNotFoundError(join(this.dataDir, 'skills', skillId))
   }
 
-  /** 单根内解析读取：返回文件内容；技能目录在该根不存在时返回 undefined
-   * （继续下一根）；技能存在但目标文件缺失抛 FileNotFoundError（该根条目
-   * 已生效，不跨根回退）。 */
+  /** single inside parse read: return file content; skill directory in the missing when return undefined
+   * (continue under one); skill store in but target file missing throw FileNotFoundError(the item
+   * already takes effect, do not across fall back). */
   private async readFileInRoot(skillsRoot: string, skillId: string, rel: string): Promise<string | undefined> {
     const root = join(skillsRoot, skillId)
-    // 技能目录本身是软链即拒绝（即使解析后仍在 skills 根内，也不放宽）。
+    // skill directory itself is symlink i.e. reject (even if parse after still in skills inside, also do not put wide).
     const rootStat = await lstat(root).catch((err: unknown) => {
       if ((err as { code?: string }).code === 'ENOENT') return undefined
       throw err
     })
     if (rootStat === undefined) return undefined
     if (rootStat.isSymbolicLink()) {
-      throw new Error(`技能目录是符号链接，拒绝读取: ${skillId}`)
+      throw new Error(`skill directory is symlink, reject read: ${skillId}`)
     }
-    // 双层 realpath 包含校验：skillDir 真实路径必须在 skills 根内（防根内中转越界）。
+    // two-layer realpath contains validate:skillDir real path must in skills inside (guard against inside in rotate out of bounds).
     const rootReal = await realpath(root)
     if (!isWithin(rootReal, skillsRoot)) {
-      throw new Error(`技能目录越界（软链指向 skills 根之外）: ${skillId}`)
+      throw new Error(`skill directory out of bounds (symlink points to skills of outside): ${skillId}`)
     }
     const target = join(root, rel)
-    // 逐段 lstat：路径上任何符号链接都拒绝（软链可能指向技能目录之外）。
+    // one by one segment lstat: path on any symlink all reject (symlink may points to skill directory of outside).
     let current = root
     for (const seg of rel.split('/')) {
       current = join(current, seg)
@@ -581,22 +581,22 @@ export class SkillService {
         throw err
       })
       if (s.isSymbolicLink()) {
-        throw new Error(`拒绝读取符号链接（防越界）: ${rel}`)
+        throw new Error(`reject read symlink (guard against out of bounds): ${rel}`)
       }
     }
     const finalStat = await lstat(target)
-    if (!finalStat.isFile()) throw new Error(`不是常规文件: ${rel}`)
-    // 目标真实路径必须仍在 skillDir 内（对抗读取中途目录被替换为软链）。
+    if (!finalStat.isFile()) throw new Error(`is not common rule file: ${rel}`)
+    // target real path must still in skillDir inside (resist read in route directory by replace is symlink).
     const targetReal = await realpath(target)
     if (!isWithin(targetReal, rootReal)) {
-      throw new Error(`目标越出技能目录（realpath 不在 skillDir 内）: ${rel}`)
+      throw new Error(`target exceeds out skill directory (realpath do not in skillDir inside): ${rel}`)
     }
     return readTextFile(target)
   }
 
-  /** 可读根解析（realpath 归一）：dataDir skills 根在前，其后依次外部共享
-   * 根；根 ENOENT 跳过（dataDir 根缺失不再全局抛错，最终由 readFile 统一
-   * FileNotFoundError）；悬空软链等其他 realpath 错误如实上抛。 */
+  /** can read parse (realpath archive one):dataDir skills in before, its after in order external sharing
+   * ; ENOENT skip (dataDir missing no longer global throws, eventually by readFile unify
+   * FileNotFoundError); dangling symlink etc. other realpath error such as on throw. */
   private async resolveReadableRoots(): Promise<string[]> {
     const roots: string[] = []
     for (const raw of [join(this.dataDir, 'skills'), ...this.externalRoots]) {
@@ -609,11 +609,11 @@ export class SkillService {
     return roots
   }
 
-  /** 创建/覆写技能文件（程序化写入入口，同样做安全校验）。
-   * 受管技能（ensureSkill 自举登记的内置系统资产）在服务边界统一拒绝。
-   * 本服务只写 dataDir 根：对外部共享根同名技能调 writeFile 会写入 dataDir
-   * 副本从而遮蔽外部条目，形成「本地覆盖」。这不是文件系统写权限边界；
-   * bash/write/edit 等通用工具仍可按 OS 权限直接写任意路径。 */
+  /** create/override skill file (program write entry, same do security validate).
+   * managed skill (ensureSkill self raise register inside placement system asset) in service boundary unify reject.
+   * this service only write dataDir : for external sharing same name skill tune writeFile will write dataDir
+   * copy from while obscure external item, shape into local override. this is not file system write permission boundary;
+   * bash/write/edit etc. through use tool still can by OS permission directly write any path. */
   async writeFile(skillId: string, path: string, content: string): Promise<void> {
     assertSkillId(skillId)
     this.assertSkillMutable(skillId)
@@ -622,39 +622,39 @@ export class SkillService {
     const root = join(skillsRoot, skillId)
     const rootReal = await realpath(root).catch(() => undefined)
     if (rootReal !== undefined && !isWithin(rootReal, skillsRoot)) {
-      throw new Error(`技能目录越界（软链指向 skills 根之外）: ${skillId}`)
+      throw new Error(`skill directory out of bounds (symlink points to skills of outside): ${skillId}`)
     }
     const target = join(root, rel)
     const existing = await lstat(target).catch(() => undefined)
     if (existing !== undefined && existing.isSymbolicLink()) {
-      throw new Error(`拒绝覆盖符号链接: ${rel}`)
+      throw new Error(`reject override symlink: ${rel}`)
     }
     await atomicWriteFile(target, content)
   }
 
   /**
-   * 内置插件受管技能自举：skills/<id>/SKILL.md 与 references/* 是受管系统
-   * 资产，每次启动以源码声明的版本为准逐文件覆盖回写（磁盘上的旧文件与
-   * 手工修改一律回到源码版本），缺失文件补齐；不删除技能目录中的其他
-   * 文件。内容一致的文件跳过写入（按字节内容比较、不按 mtime，避免原子
-   * rename 触发 AssetWatcher 热加载抖动）。
+   * built-in plugin managed skill self raise:skills/<id>/SKILL.md and references/* is managed system
+   * asset, each time start with source code declaration version is allow one by one file override back write (disk on old file and
+   * manually work modify one rule back to source code version), missing file patch complete; do not delete skill directory in other
+   * file. content consistent file skip write (by byte content compare, do not by mtime, avoid atomic
+   * rename trigger AssetWatcher hot load jitter).
    *
-   * 安全边界不变：reference 路径先整体校验（非法资产不产生任何部分文件）；
-   * 写入前逐层确认 skills/<id>、references 与嵌套 reference 目录均非符号
-   * 链接，skills 根与 readFile 同经 realpath 解析（根软链可接受）；已有
-   * 目标必须是常规文件（软链/目录冒充即拒绝）；ENOENT 之外的错误如实
-   * 上抛。登记进 managedSkillIds 后，常规写入口统一 403 拒绝。
+   * security boundary do not change:reference path first whole validate (illegal asset produces no part file);
+   * before write one by one layer confirm skills/<id>,references and embed set reference directory all non- symbol
+   * link,skills and readFile same via realpath parse (symlink can accept); already has
+   * target must be common rule file (symlink/directory smoke fill i.e. reject);ENOENT of outside error such as
+   * on throw. register enter managedSkillIds after, common rule write opening unify 403 reject.
    */
   async ensureSkill(asset: BuiltinSkillAsset): Promise<void> {
     assertSkillId(asset.id)
-    // 边界先行：任何非法 reference 都在任何目录创建/文件写入之前整体拒绝。
+    // boundary first row: any illegal reference all in any directory create/file write before whole reject.
     const references = Object.entries(asset.references).map(([name, content]) => ({
       rel: assertSafeRelativePath(`references/${name}`),
       content,
     }))
     const skillsRoot = join(this.dataDir, 'skills')
-    // skills 根不存在时补建（首次自举）；悬空软链 realpath 得 ENOENT 而
-    // mkdir 撞 EEXIST，如实上抛，不静默绕过。
+    // skills missing when patch create (first time self raise); dangling symlink realpath obtain ENOENT while
+    // mkdir collide EEXIST, such as on throw, not silently bypass.
     let rootReal: string
     try {
       rootReal = await realpath(skillsRoot)
@@ -664,8 +664,8 @@ export class SkillService {
       rootReal = await realpath(skillsRoot)
     }
     const dir = join(rootReal, asset.id)
-    // 建目录前逐层确认 skills/<id>、references 与嵌套目录不含软链（防向
-    // skills 根之外写入）；段缺失即待创建，其下不可能再有内容。
+    // create directory before one by one layer confirm skills/<id>,references and embed set directory excludes symlink (guard against to
+    // skills of outside write); segment missing i.e. await create, its under cannot can again has content.
     await assertRealDirs(rootReal, join(dir, 'references'))
     for (const { rel } of references) {
       await assertRealDirs(rootReal, dirname(join(dir, rel)))
@@ -681,31 +681,31 @@ export class SkillService {
     this.managedSkillIds.add(asset.id)
   }
 
-  /** 受管技能统一只读防护（403 managed_skill_readonly）：内容唯一权威是
-   * 插件启动时的源码版本。进程内登记——每次启动 ensureSkill 重建，不落
-   * 库（用户自建技能不经 ensureSkill，不受影响）。 */
+  /** managed skill unify only read protect (403 managed_skill_readonly): content unique right threat is
+   * plugin at startup source code version. process inside register - - each time start ensureSkill rebuild, do not
+   * store (user self create skill do not via ensureSkill, do not subject to affect). */
   private assertSkillMutable(skillId: string): void {
     if (this.managedSkillIds.has(skillId)) {
       throw new HelmError(
         'managed_skill_readonly',
-        `技能 '${skillId}' 是内置插件受管系统资产，禁止经常规接口写入或删除（插件启动时自动以源码版本覆盖同步）`,
+        `skill '${skillId}' is built-in plugin managed system asset, forbidden frequently rule interface write or delete (plugin at startup automatically with source code version override sync)`,
         403,
         { skillId },
       )
     }
   }
 
-  /** 技能资产目录坐标（宿主端口用，如插件自举补齐文件）：始终指向
-   * dataDir/skills/<id>，不解析到外部来源。调用方可能通过 atomicWriteFile
-   * 自动补齐受管资产；避免插件启动副作用改写共享来源。此处不是通用命令
-   * 的路径权限边界；宿主不 mkdir，缺省路径由调用方按需创建。 */
+  /** skill asset directory coordinates (host port use, such as plugin self raise patch complete file): always points to
+   * dataDir/skills/<id>, do not parse to external source. caller may via atomicWriteFile
+   * automatically patch complete managed asset; avoid plugin start side effect change write sharing source. this where is not through use command
+   * path permission boundary; host do not mkdir, default path by caller on demand create. */
   async directory(id: string): Promise<string> {
     try {
       assertSkillId(id)
     } catch (err) {
       throw new HelmError(
         'validation_error',
-        `Skill id 非法：${err instanceof Error ? err.message : String(err)}`,
+        `Skill id illegal:${err instanceof Error ? err.message : String(err)}`,
         400,
         { skillId: id },
       )
@@ -713,7 +713,7 @@ export class SkillService {
     return join(this.dataDir, 'skills', id)
   }
 
-  /** 解析 skills 根的真实路径（不存在时抛错，绝不宽放）。 */
+  /** parse skills real path (missing when throws, never wide put). */
   private async requireSkillsRoot(): Promise<string> {
     const skillsRoot = join(this.dataDir, 'skills')
     try {
@@ -726,11 +726,11 @@ export class SkillService {
     }
   }
 
-  /** 单根摘要：技能目录缺失返回 undefined（目录跳过该条目）；SKILL.md 缺失
-   * （FileNotFoundError）同样返回 undefined；frontmatter 坏数据如实上抛
-   * （由调用方决定 dataDir 严格抛错或外部根跳过策略）。外部根强制剥离
-   * managedByPlugin——共享根只可能是普通共享技能，绝不允许第三方文件
-   * 伪装成宿主受管插件技能。 */
+  /** single summary: skill directory missing return undefined(directory skip the item);SKILL.md missing
+   * (FileNotFoundError) same return undefined;frontmatter broken data such as on throw
+   * (by caller decide dataDir strictly throws or external skip policy). external force strip
+   * managedByPlugin- - sharing only may is ordinary sharing skill, never allows third way file
+   * disguise into host managed plugin skill. */
   private async summarizeInRoot(skillsRoot: string, id: string, source?: 'agents'): Promise<SkillSummary | undefined> {
     const skillMd = await this.readFileInRoot(skillsRoot, id, 'SKILL.md').catch((err: unknown) => {
       if (err instanceof FileNotFoundError) return undefined
@@ -751,9 +751,9 @@ export class SkillService {
 }
 
 /**
- * 逐层确认 ancestor 之下至 dir 的每个已存在段均为真实目录（非符号链接）；
- * 段缺失即其后不可能存在，视为待创建并停止。防止 skills/<id> 或
- * references（含嵌套子目录）为软链时把自举资产写到 skills 根之外。
+ * one by one layer confirm ancestor of under until dir each already exists segment all is real directory (non- symlink);
+ * segment missing i.e. its after cannot can store in, treated as await create and stop. guard against skills/<id> or
+ * references(contains embed set subdirectory) is symlink when self raise asset write to skills of outside.
  */
 async function assertRealDirs(ancestor: string, dir: string): Promise<void> {
   let current = ancestor
@@ -766,17 +766,17 @@ async function assertRealDirs(ancestor: string, dir: string): Promise<void> {
     })
     if (st === undefined) return
     if (st.isSymbolicLink()) {
-      throw new Error(`拒绝经符号链接目录写入: ${current}`)
+      throw new Error(`reject via symlink directory write: ${current}`)
     }
     if (!st.isDirectory()) {
-      throw new Error(`路径段不是目录，拒绝自举: ${current}`)
+      throw new Error(`path segment is not directory, reject self raise: ${current}`)
     }
   }
 }
 
-/** 受管覆盖写：目标缺失即原子写入；已存在必须是常规文件（软链/目录均
- * 拒绝），内容与声明一致时跳过写入（避免原子 rename 抖动 watcher），
- * 不一致则原子覆盖为源码版本；其他 IO 错误如实上抛。 */
+/** managed override write: target missing i.e. atomic write; already exists must be common rule file (symlink/directory all
+ * reject), content and declaration consistent when skip write (avoid atomic rename jitter watcher),
+ * inconsistent then atomic override is source code version; other IO error such as on throw. */
 async function writeManagedFile(path: string, content: string): Promise<void> {
   const existing = await lstat(path).catch((err: unknown) => {
     if ((err as { code?: string }).code === 'ENOENT') return undefined
@@ -787,7 +787,7 @@ async function writeManagedFile(path: string, content: string): Promise<void> {
     return
   }
   if (!existing.isFile()) {
-    throw new Error(`目标已存在且不是常规文件，拒绝写入: ${path}`)
+    throw new Error(`target already exists and is not common rule file, reject write: ${path}`)
   }
   const current = await readFile(path, 'utf8').catch((err: unknown) => {
     if ((err as { code?: string }).code === 'ENOENT') return undefined
@@ -797,8 +797,8 @@ async function writeManagedFile(path: string, content: string): Promise<void> {
   await atomicWriteFile(path, content)
 }
 
-/** 剥离 YAML 单行标量首尾对称的单/双引号（双引号还原 \" 与 \\ 转义，
- * 单引号还原 '' 转义；不对称引号原样保留，不伪造解析）。 */
+/** strip YAML single row mark amount first tail for call single/double quotes (double quotes restore \" and \\ escaping,
+ * single quotes restore '' escaping; do not for call quotes original keep, do not fabricate parse). */
 function stripQuotedScalar(value: string): string {
   if (value.length < 2) return value
   const first = value[0]
@@ -809,13 +809,13 @@ function stripQuotedScalar(value: string): string {
   return inner.replace(/''/g, "'")
 }
 
-/** 解析 SKILL.md 顶部 YAML frontmatter 的 name/description/managedByPlugin（缺失时回退 id/空）。
- * 仅接受当前字段名 managedByPlugin（无历史别名兼容）；键存在但值为空属非法形状，
- * 显式报错而非伪造无主数据（诚实失败，不静默降级）。
- * 值语法覆盖 pi 生态共享技能库（~/.agents/skills）真实数据的最小集：单行
- * 标量（剥首尾对称引号）与块标量——折叠型 > / >-（连续缩进行 trim 后以
- * 空格拼接，适合长描述单行化）与保留型 | / |-（去公共缩进后以换行拼接）；
- * 其余高级 YAML 语法（锚点/列表/嵌套等）不支持。 */
+/** parse SKILL.md top part YAML frontmatter  name/description/managedByPlugin(missing when fall back id/empty).
+ * only accept when before field name managedByPlugin(without history alias compatibility); key store in but value is empty belong illegal shape,
+ * explicit errors while non- fabricate without main data (honest failed, not silently fall back).
+ * value language method override pi generate state sharing skill store (~/.agents/skills) real data most small collection: single row
+ * mark amount (strip first tail for call quotes) and chunk mark amount - - collapse type > / >-(connect continue shrink enter row trim after with
+ * space concatenate, fit long description single row) and keep type | / |-(remove public shrink enter after with newline concatenate);
+ * the rest high level YAML language method (anchor/list/embed set etc.) unsupported. */
 export function parseSkillFrontmatter(text: string): {
   name: string
   description: string
@@ -832,7 +832,7 @@ export function parseSkillFrontmatter(text: string): {
     if (m === null || m[1] === undefined) continue
     const key = m[1]
     const inline = (m[2] ?? '').trim()
-    // 块标量：> / >- / | / |- 后续连续缩进行（浅于首个非空行缩进即块结束）为值体。
+    // chunk mark amount:> / >- / | / |- after continue connect continue shrink enter row (shallow at first non-empty row shrink enter i.e. chunk end) is value body.
     if (inline === '>' || inline === '>-' || inline === '|' || inline === '|-') {
       const block: string[] = []
       let indent = -1
@@ -859,7 +859,7 @@ export function parseSkillFrontmatter(text: string): {
   }
   const managedRaw = fields.get('managedByPlugin')
   if (managedRaw !== undefined && managedRaw === '') {
-    throw new Error(`SKILL.md frontmatter managedByPlugin 值为空（键存在则必须是非空插件 ID）`)
+    throw new Error(`SKILL.md frontmatter managedByPlugin value is empty (key store in then must be non-empty plugin ID)`)
   }
   return {
     name: fields.get('name') ?? '',

@@ -1,23 +1,23 @@
 /**
- * 插件并发缺陷修复专项回归（fix/concurrency-plugins）。
+ * plugin concurrency defect fix dedicated items regression (fix/concurrency-plugins).
  *
- * 覆盖（与修复一一对应）：
- * 1. disable 门禁 TOCTOU：collectPluginInUse 异步窗口内进入的在途任务必须被
- *    二次门禁 409 拦截（不与 teardown 并发拆注册表）；plugin_in_use 拒绝后
- *    状态保持 enabled+idle 可继续服务。
- * 2. 启动屏障读写门：屏障期并发 register(enable) 的服务不被漏启动；并发
- *    disable 不复活（stop 后于 start）；stop() 等屏障完成后再停止（不空跑）。
- * 3. HookPipeline 遍历隔离：run 遍历期间并发 add + 触发排序不重排正被遍历
- *    数组（不跳过、不重复执行）。
- * 4. nodeFetch 包装失败不泄漏计数（body 锁定异常路径）。
- * 5. setConfig 读-合-写串行：并发 patch 不丢更新。
- * 6. register 提交点后置：provider 挂载完成前列表不暴露能力（清单与
- *    可执行性不撕裂）。
- * 7. 包管理回滚诚实性：update 恢复性 reload 失败不再谎报 rolledBack；
- *    install store.save 失败且回滚注销 409 时绝不 rm 活实例目录；
- *    install 注册失败遇并发同名已注册实例时保留目录。
+ * override (and fix one one for should):
+ * 1. disable gate TOCTOU:collectPluginInUse async window inside enter in-flight task must by
+ *    second gate 409 intercept (do not and teardown concurrency split register table);plugin_in_use reject after
+ *    state keep enabled+idle can continue service.
+ * 2. start screen fault read write gate: screen fault phase concurrency register(enable) service do not by leak start; concurrency
+ *    disable does not resurrect (stop after at start);stop() etc. screen fault after completion again stop (do not empty run).
+ * 3. HookPipeline iterate isolated:run iterate during concurrency add + trigger sort do not heavy arrange correct by iterate
+ *    array (do not skip, does not repeat execute).
+ * 4. nodeFetch wrap failed without leaking counter (body lock exception path).
+ * 5. setConfig read-together-write serial: concurrency patch do not lose update.
+ * 6. register commit point after placement:provider mount complete before list do not expose capability (manifest and
+ *    can execute do not tear).
+ * 7. package manage rollback honest:update restore reload failed no longer lie report rolledBack;
+ *    install store.save failed and rollback deregister 409 when never rm instance directory;
+ *    install register failed encounter concurrency same name registered instance when keep directory.
  *
- * runner: tsx --test；每项显式 timeout: 60_000 防死锁。
+ * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -38,7 +38,7 @@ import { createPluginBuildProvider } from '@helm/plugin-build'
 import { MemoryDocStore, assertRejectsCode, deferred } from './helpers.js'
 
 // ---------------------------------------------------------------------------
-// 基建
+// base create
 // ---------------------------------------------------------------------------
 
 function makeHost(overrides: { deferServices?: boolean; backend?: PluginHostBackend; providers?: PluginProviderPort } = {}) {
@@ -47,7 +47,7 @@ function makeHost(overrides: { deferServices?: boolean; backend?: PluginHostBack
     dataDir,
     host: {
       ...createPluginHostBackendFixture(),
-      // 插件生命周期事件收集（fixture 底座对 emitEvent 显式 unsupported）
+      // plugin lifecycle event collect (fixture bottom seat for emitEvent explicit unsupported)
       emitEvent: () => {},
       ...(overrides.backend ? overrides.backend : {}),
     },
@@ -69,10 +69,10 @@ function makeHost(overrides: { deferServices?: boolean; backend?: PluginHostBack
 }
 
 // ---------------------------------------------------------------------------
-// 1. disable 门禁 TOCTOU
+// 1. disable gate TOCTOU
 // ---------------------------------------------------------------------------
 
-test('disable 门禁 TOCTOU：inUse 收集窗口内进入的在途任务被二次门禁 409 拦截', { timeout: 60_000 }, async () => {
+test('disable gate TOCTOU:inUse collect window inside enter in-flight task by second gate 409 intercept', { timeout: 60_000 }, async () => {
   const { host, close } = makeHost()
   try {
     let releaseInUse!: () => void
@@ -85,8 +85,8 @@ test('disable 门禁 TOCTOU：inUse 收集窗口内进入的在途任务被二�
           id: 'svc',
           start() {},
           stop() {},
-          // inUse 异步挂起一次（制造 collectPluginInUse 的 await 窗口）；
-          // 释放后后续调用立即返回空，避免测试尾部的再次停用被门挂死
+          // inUse async suspended once (fabricate collectPluginInUse  await window);
+          // release after after continue invoke immediately return empty, avoid test tail part again deactivate by gate hang die
           inUse: () => {
             if (!inUsePending) return []
             return new Promise<void>((resolve) => {
@@ -96,7 +96,7 @@ test('disable 门禁 TOCTOU：inUse 收集窗口内进入的在途任务被二�
         })
         ctx.action({
           id: 'hang',
-          description: '挂起动作',
+          description: 'suspended action',
           inputSchema: { type: 'object', additionalProperties: false },
           outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false },
           handler: () => actionGate.promise.then(() => ({ ok: true })),
@@ -104,24 +104,24 @@ test('disable 门禁 TOCTOU：inUse 收集窗口内进入的在途任务被二�
       },
     }, { enabled: true })
 
-    // 先启动 disable（挂起在 inUse 收集），再在窗口内放入一个在途 action
+    // first start disable(suspended in inUse collect), again in window inside put a in-flight action
     const disabling = host.disable('p:toctou')
-    // 让 disable 先推进到 inUse await：微任务排空
+    // let disable first push enter to inUse await: micro task arrange empty
     await new Promise<void>((resolve) => setImmediate(resolve))
-    // 窗口内进入的 action：tracker 计数在案（handler 挂起不返回）
+    // window inside enter action:tracker counter in proposal (handler suspended do not return)
     const invoking = host.invokeAction('p:toctou', 'hang', {})
     await new Promise<void>((resolve) => setImmediate(resolve))
-    assert.equal(host.activeTaskCount('p:toctou') >= 1, true, '窗口内 action 应计入在途任务')
+    assert.equal(host.activeTaskCount('p:toctou') >= 1, true, 'window inside action should count in-flight task')
 
-    // 释放 inUse（返回空占用）：二次门禁必须抓住窗口内进入的 action → 409
+    // release inUse(return empty occupy): second gate must grab window inside enter action → 409
     releaseInUse()
     await assertRejectsCode(() => disabling, 'plugin_has_live_tasks', 409)
-    // 状态未被破坏：仍启用且 idle，action 正常收敛
+    // state not by break: still enable and idle,action normal converge
     const summary = host.get('p:toctou')
     assert.equal(summary?.enabled, true)
     actionGate.resolve()
     await invoking
-    // 收敛后停用成功
+    // converge after deactivate succeeded
     await host.disable('p:toctou')
     assert.equal(host.get('p:toctou')?.enabled, false)
   } finally {
@@ -129,7 +129,7 @@ test('disable 门禁 TOCTOU：inUse 收集窗口内进入的在途任务被二�
   }
 })
 
-test('disable 门禁 plugin_in_use 拒绝后状态保持 enabled+idle，后续调用不受影响', { timeout: 60_000 }, async () => {
+test('disable gate plugin_in_use reject after state keep enabled+idle, after continue invoke do not subject to affect', { timeout: 60_000 }, async () => {
   const { host, close } = makeHost()
   try {
     await host.register({
@@ -139,11 +139,11 @@ test('disable 门禁 plugin_in_use 拒绝后状态保持 enabled+idle，后续�
           id: 'svc',
           start() {},
           stop() {},
-          inUse: () => [{ kind: 'job', id: 'j1', label: '占用中' }],
+          inUse: () => [{ kind: 'job', id: 'j1', label: 'occupy in' }],
         })
         ctx.action({
           id: 'ping',
-          description: '探针',
+          description: 'probe needle',
           inputSchema: { type: 'object', additionalProperties: false },
           outputSchema: { type: 'object', properties: { pong: { type: 'boolean' } }, required: ['pong'], additionalProperties: false },
           handler: () => ({ pong: true }),
@@ -153,7 +153,7 @@ test('disable 门禁 plugin_in_use 拒绝后状态保持 enabled+idle，后续�
 
     await assertRejectsCode(() => host.disable('p:inuse'), 'plugin_in_use', 409)
     assert.equal(host.get('p:inuse')?.enabled, true)
-    // 门禁拒绝不是终态：插件继续可用
+    // gate reject is not terminal state: plugin continue available
     const out = await host.invokeAction('p:inuse', 'ping', {})
     assert.deepEqual(out, { pong: true })
     await host.disable('p:inuse', { force: true })
@@ -164,10 +164,10 @@ test('disable 门禁 plugin_in_use 拒绝后状态保持 enabled+idle，后续�
 })
 
 // ---------------------------------------------------------------------------
-// 2. 启动屏障读写门
+// 2. start screen fault read write gate
 // ---------------------------------------------------------------------------
 
-test('屏障期并发 register(enabled)：服务不被漏启动（读门等待屏障完成）', { timeout: 60_000 }, async () => {
+test('screen fault phase concurrency register(enabled): service do not by leak start (read gate wait for screen fault complete)', { timeout: 60_000 }, async () => {
   const { host, close } = makeHost({ deferServices: true })
   try {
     const events: string[] = []
@@ -186,7 +186,7 @@ test('屏障期并发 register(enabled)：服务不被漏启动（读门等待�
 
     const starting = host.start()
     await new Promise<void>((resolve) => setImmediate(resolve))
-    // 屏障进行中（A 的 prepare 挂起）：并发注册并启用 B
+    // screen fault in progress (A  prepare suspended): concurrency register and enable B
     const registeringB = host.register({
       id: 'p:b',
       definePlugin: (ctx) => {
@@ -201,8 +201,8 @@ test('屏障期并发 register(enabled)：服务不被漏启动（读门等待�
     prepareGate.resolve()
     await starting
     await registeringB
-    // B 的服务必须已启动（旧缺陷：activateServices 见 servicesStarted=false 跳过
-    // 且 B 不在屏障快照 → 永不启动）
+    // B service must already start (old defect:activateServices see servicesStarted=false skip
+    // and B do not in screen fault snapshot → forever do not start)
     assert.deepEqual(events, ['a-start', 'b-start'])
     assert.equal(host.get('p:b')?.enabled, true)
   } finally {
@@ -210,7 +210,7 @@ test('屏障期并发 register(enabled)：服务不被漏启动（读门等待�
   }
 })
 
-test('屏障期并发 disable：不复活（stop 后于屏障 start 执行）', { timeout: 60_000 }, async () => {
+test('screen fault phase concurrency disable: does not resurrect (stop after at screen fault start execute)', { timeout: 60_000 }, async () => {
   const { host, close } = makeHost({ deferServices: true })
   try {
     const events: string[] = []
@@ -233,8 +233,8 @@ test('屏障期并发 disable：不复活（stop 后于屏障 start 执行）', 
     prepareGate.resolve()
     await starting
     await disabling
-    // 旧缺陷：disable 在屏障 prepare 期先完成（svc.started=false 跳过 stop），
-    // 屏障随后 start 已停插件服务 → events 只有 ['start'] 且复活
+    // old defect:disable in screen fault prepare phase first complete (svc.started=false skip stop),
+    // screen fault then start already stop plugin service → events only ['start'] and re-
     assert.deepEqual(events, ['start', 'stop'])
     assert.equal(host.get('p:revive')?.enabled, false)
   } finally {
@@ -242,7 +242,7 @@ test('屏障期并发 disable：不复活（stop 后于屏障 start 执行）', 
   }
 })
 
-test('屏障期 stop()：等待屏障完成后再停止（不空跑返回）', { timeout: 60_000 }, async () => {
+test('screen fault phase stop(): wait for screen fault after completion again stop (do not empty run return)', { timeout: 60_000 }, async () => {
   const { host, close } = makeHost({ deferServices: true })
   try {
     const events: string[] = []
@@ -262,11 +262,11 @@ test('屏障期 stop()：等待屏障完成后再停止（不空跑返回）', {
     const starting = host.start()
     await new Promise<void>((resolve) => setImmediate(resolve))
     const stopping = host.stop()
-    // stop 尚未返回（等待屏障）；释放屏障后 stop 真正停止
+    // stop not yet return (wait for screen fault); release screen fault after stop truly stop
     prepareGate.resolve()
     await starting
     await stopping
-    // 旧缺陷：stop 见 servicesStarted=false 直接 return，屏障随后拉起服务
+    // old defect:stop see servicesStarted=false directly return, screen fault then pull start service
     assert.deepEqual(events, ['start', 'stop'])
   } finally {
     await close()
@@ -274,10 +274,10 @@ test('屏障期 stop()：等待屏障完成后再停止（不空跑返回）', {
 })
 
 // ---------------------------------------------------------------------------
-// 3. HookPipeline 遍历隔离（遍历中原地 sort）
+// 3. HookPipeline iterate isolated (iterate in original ground sort)
 // ---------------------------------------------------------------------------
 
-test('HookPipeline：run 遍历期间并发 add+排序不重排正被遍历数组（不跳过不重复）', { timeout: 60_000 }, async () => {
+test('HookPipeline:run iterate during concurrency add+sort do not heavy arrange correct by iterate array (do not skip does not repeat)', { timeout: 60_000 }, async () => {
   const pipeline = new HookPipeline('input')
   const calls: string[] = []
   const payload = {
@@ -287,7 +287,7 @@ test('HookPipeline：run 遍历期间并发 add+排序不重排正被遍历数�
 
   pipeline.add('p:a', async () => {
     calls.push('a')
-    // 遍历中并发注册高优先级钩子并触发排序路径（另一路 runHook 的 entries()）
+    // iterate in concurrency register high priority hook and trigger sort path (another route runHook  entries())
     pipeline.add('p:c', () => { calls.push('c') }, 10)
     pipeline.entries()
     return { action: 'continue' as const }
@@ -298,25 +298,25 @@ test('HookPipeline：run 遍历期间并发 add+排序不重排正被遍历数�
   })
 
   await pipeline.run(payload)
-  // 旧缺陷：entries() 返回活数组，原地 sort 使本轮 a 重复执行 / 顺序错乱
+  // old defect:entries() return array, original ground sort make this round a repeat execution / order wrong chaotic
   assert.deepEqual(calls, ['a', 'b'])
 
-  // 下一轮：高优先级 c 先执行
+  // under one round: high priority c first execute
   await pipeline.run(payload)
   assert.deepEqual(calls, ['a', 'b', 'c', 'a', 'b'])
 })
 
 // ---------------------------------------------------------------------------
-// 4. nodeFetch 包装失败不泄漏计数
+// 4. nodeFetch wrap failed without leaking counter
 // ---------------------------------------------------------------------------
 
-test('nodeFetch：响应 body 包装失败（已锁定流）结束计数不悬挂泄漏', { timeout: 60_000 }, async () => {
+test('nodeFetch: response body wrap failed (already lock stream) end counter do not pending leak leak', { timeout: 60_000 }, async () => {
   const source = new ReadableStream<Uint8Array>({
     start(controller) { controller.enqueue(new Uint8Array(4)) },
   })
   const raw = (async () => {
     const response = new Response(source, { status: 200 })
-    // 预锁 response.body：包装层 getReader() 必抛（确定性触发包装失败路径）
+    // pre- lock response.body: wrap layer getReader() must throw (determinism trigger wrap failed path)
     void response.body!.getReader()
     return response
   }) as typeof fetch
@@ -333,7 +333,7 @@ test('nodeFetch：响应 body 包装失败（已锁定流）结束计数不悬�
   }, { enabled: true })
   try {
     await assert.rejects(api.nodeFetch('remote-1')('http://example.test'))
-    // 旧缺陷：包装异常路径不 end 计数 → 停用永久 409 悬挂
+    // old defect: wrap exception path do not end counter → deactivate forever long 409 pending
     await host.disable('p:fetch-wrap-fail')
   } finally {
     await close()
@@ -341,10 +341,10 @@ test('nodeFetch：响应 body 包装失败（已锁定流）结束计数不悬�
 })
 
 // ---------------------------------------------------------------------------
-// 5. setConfig 读-合-写串行
+// 5. setConfig read-together-write serial
 // ---------------------------------------------------------------------------
 
-test('setConfig：并发 patch 串行读合写，后写不覆盖前写', { timeout: 60_000 }, async () => {
+test('setConfig: concurrency patch serial read together write, after write does not override before write', { timeout: 60_000 }, async () => {
   const captured: Record<string, unknown> = {}
   const firstWriteGate = deferred<void>()
   let backendCalls = 0
@@ -353,7 +353,7 @@ test('setConfig：并发 patch 串行读合写，后写不覆盖前写', { timeo
     emitEvent: () => {},
     setPluginConfig: async (_id, value) => {
       backendCalls += 1
-      // 首次写挂起：制造读-合-写交叠窗口（旧缺陷下两次并发读合写交叠）
+      // first time write suspended: fabricate read-together-write hand over stack window (old defect under two time concurrency read together write hand over stack)
       if (backendCalls === 1) await firstWriteGate.promise
       Object.assign(captured, value)
     },
@@ -371,7 +371,7 @@ test('setConfig：并发 patch 串行读合写，后写不覆盖前写', { timeo
     await new Promise<void>((resolve) => setImmediate(resolve))
     firstWriteGate.resolve()
     await Promise.all([w1, w2])
-    // 旧缺陷：w2 读到 w1 落盘前的快照 {}，整值写覆盖丢 a
+    // old defect:w2 read to w1 before snapshot {}, whole value write override lose a
     assert.deepEqual(captured, { a: 1, b: 2 })
   } finally {
     await close()
@@ -379,10 +379,10 @@ test('setConfig：并发 patch 串行读合写，后写不覆盖前写', { timeo
 })
 
 // ---------------------------------------------------------------------------
-// 6. register 提交点后置（清单与可执行性不撕裂）
+// 6. register commit point after placement (manifest and can execute do not tear)
 // ---------------------------------------------------------------------------
 
-test('register：provider 挂载完成前列表不暴露能力（enabled 与 idle 同步提交）', { timeout: 60_000 }, async () => {
+test('register:provider mount complete before list do not expose capability (enabled and idle sync commit)', { timeout: 60_000 }, async () => {
   const mountGate = deferred<void>()
   const port: PluginProviderPort = {
     register: async () => {
@@ -400,12 +400,12 @@ test('register：provider 挂载完成前列表不暴露能力（enabled 与 idl
           name: 'Late Provider',
           auth: { apiKey: { name: 'k', resolve: async () => undefined } },
           getModels: () => [],
-          stream: () => { throw new Error('不执行') },
-          streamSimple: () => { throw new Error('不执行') },
+          stream: () => { throw new Error('do not execute') },
+          streamSimple: () => { throw new Error('do not execute') },
         } as unknown as Provider)
         ctx.action({
           id: 'ping',
-          description: '探针',
+          description: 'probe needle',
           inputSchema: { type: 'object', additionalProperties: false },
           outputSchema: { type: 'object', properties: { pong: { type: 'boolean' } }, required: ['pong'], additionalProperties: false },
           handler: () => ({ pong: true }),
@@ -413,7 +413,7 @@ test('register：provider 挂载完成前列表不暴露能力（enabled 与 idl
       },
     }, { enabled: true })
     await new Promise<void>((resolve) => setImmediate(resolve))
-    // 挂载未完成：清单不得暴露（旧缺陷：enabled 先置 → 清单有而执行 409）
+    // mount not complete: manifest must not expose (old defect:enabled first placement → manifest has while execute 409)
     assert.deepEqual(host.listActions().filter((a) => a.pluginId === 'p:late-mount'), [])
     assert.equal(host.get('p:late-mount')?.enabled, false)
     mountGate.resolve()
@@ -427,7 +427,7 @@ test('register：provider 挂载完成前列表不暴露能力（enabled 与 idl
 })
 
 // ---------------------------------------------------------------------------
-// 7. 包管理回滚诚实性
+// 7. package manage rollback honest
 // ---------------------------------------------------------------------------
 
 const PLUGIN_SRC = (id: string, version: string) => `export default {
@@ -436,7 +436,7 @@ const PLUGIN_SRC = (id: string, version: string) => `export default {
   definePlugin(ctx) {
     ctx.action({
       id: 'ping',
-      description: '探针',
+      description: 'probe needle',
       inputSchema: { type: 'object', additionalProperties: false },
       outputSchema: { type: 'object', properties: { pong: { type: 'boolean' } }, required: ['pong'], additionalProperties: false },
       handler: () => ({ pong: true }),
@@ -461,16 +461,16 @@ interface MiniPkgEnv {
 }
 
 /**
- * 最小包管理环境：真实 local 拷贝 + doctor + 目录事务；host 端口与 store
- * 注入故障（按需覆写）。失败注入由调用方在创建后直接改写 hostStub 方法。
+ * most small package manage environment: real local copy + doctor + directory transaction;host port and store
+ * inject fault (on demand override). failed inject by caller in after creation directly change write hostStub method.
  */
-/** 真实 store（config.json 持久化）+ 可注入的 save 失败开关。 */
+/** real store(config.json persist)+ can inject save failed switch. */
 class FaultInjectingStore extends PluginPackageManagerStore {
   failNextSave = false
   override async save(
     record: Omit<PluginPackageRecord, 'id'> & { id?: string },
   ): Promise<PluginPackageRecord> {
-    if (this.failNextSave) throw new Error('模拟磁盘写失败')
+    if (this.failNextSave) throw new Error('simulated disk write failed')
     return super.save(record)
   }
 }
@@ -498,7 +498,7 @@ function makePkgEnv(
     },
     assertManagedPluginUpdateSafe() {},
     async updateManagedPlugin(pluginId: string) {
-      if (!registered.has(pluginId)) throw new HelmError('unknown_plugin', `未注册的插件：${pluginId}`, 404, { pluginId })
+      if (!registered.has(pluginId)) throw new HelmError('unknown_plugin', `not registered plugin:${pluginId}`, 404, { pluginId })
       return { summary: summaryOf(summaries, pluginId) }
     },
     async removeManagedPlugin(pluginId: string) {
@@ -538,13 +538,13 @@ function summaryOf(summaries: Map<string, { id: string; enabled: boolean }>, id:
   }
 }
 
-test('update 回滚诚实性：恢复性 reload 失败不再谎报「已回滚旧版本继续可用」', { timeout: 60_000 }, async () => {
+test('update rollback honest: restore reload failed no longer lie report already rollback old version continue available', { timeout: 60_000 }, async () => {
   let updateCalls = 0
   const env = makePkgEnv((hostStub) => {
     hostStub.updateManagedPlugin = async (pluginId: string) => {
       updateCalls += 1
-      // 两次 reload 全失败：首次切换失败 + 恢复性 reload 也失败（实例已注销）
-      throw new HelmError('plugin_reload_failed_simulated', `模拟 reload 失败 #${updateCalls}`, 500, { pluginId })
+      // two time reload all failed: first time switch failed + restore reload also failed (instance deregistered)
+      throw new HelmError('plugin_reload_failed_simulated', `simulated reload failed #${updateCalls}`, 500, { pluginId })
     }
   })
   try {
@@ -555,10 +555,10 @@ test('update 回滚诚实性：恢复性 reload 失败不再谎报「已回滚�
 
     const err = (await assertRejectsCode(() => env.manager.update('honest-rollback'), 'plugin_package_update_failed', 500)) as HelmError
     const details = err.details as { rolledBack?: boolean; rollbackError?: { message: string } }
-    assert.equal(details.rolledBack, false, '恢复性 reload 失败必须如实 rolledBack:false')
-    assert.match(err.message, /旧目录已恢复，但旧实例重载失败/, '错误信息必须说明目录已恢复但实例未恢复')
-    assert.equal(updateCalls, 2, '回滚路径必须真实尝试恢复性 reload')
-    // 目录确实已恢复到旧版本（rename 链完成）
+    assert.equal(details.rolledBack, false, 'restore reload failed must such as rolledBack:false')
+    assert.match(err.message, /old directory already restore, but old instance reload failed/, 'error information must note directory already restore but instance not restore')
+    assert.equal(updateCalls, 2, 'rollback path must real attempt restore reload')
+    // directory indeed already restore to old version (rename chain complete)
     const manifest = JSON.parse(readFileSync(join(env.dataDir, 'plugins', 'honest-rollback', 'plugin.json'), 'utf8')) as { version: string }
     assert.equal(manifest.version, '1.0.0')
   } finally {
@@ -566,13 +566,13 @@ test('update 回滚诚实性：恢复性 reload 失败不再谎报「已回滚�
   }
 })
 
-test('update 回滚成功路径：恢复性 reload 成功时仍如实 rolledBack:true', { timeout: 60_000 }, async () => {
+test('update rollback succeeded path: restore reload on success still such as rolledBack:true', { timeout: 60_000 }, async () => {
   const env = makePkgEnv((hostStub) => {
     const original = hostStub.updateManagedPlugin
     let calls = 0
     hostStub.updateManagedPlugin = async (pluginId: string, dir: string, options: { keepEnabled: boolean }) => {
       calls += 1
-      if (calls === 1) throw new HelmError('plugin_reload_failed_simulated', '首次 reload 失败', 500, { pluginId })
+      if (calls === 1) throw new HelmError('plugin_reload_failed_simulated', 'first time reload failed', 500, { pluginId })
       return original(pluginId, dir, options)
     }
   })
@@ -583,17 +583,17 @@ test('update 回滚成功路径：恢复性 reload 成功时仍如实 rolledBack
     writeFileSync(join(userSrc, 'index.mjs'), PLUGIN_SRC('ok-rollback', '2.0.0'))
     const err = (await assertRejectsCode(() => env.manager.update('ok-rollback'), 'plugin_package_update_failed', 500)) as HelmError
     assert.equal((err.details as { rolledBack?: boolean }).rolledBack, true)
-    assert.match(err.message, /已回滚到更新前目录与实例/)
+    assert.match(err.message, /already rollback to update before directory and instance/)
   } finally {
     env.close()
   }
 })
 
-test('install 记录持久化失败且回滚注销失败：目录与实例保留、rolledBack:false（全链）', { timeout: 60_000 }, async () => {
+test('install record persist failed and rollback deregister failed: directory and instance keep,rolledBack:false(all chain)', { timeout: 60_000 }, async () => {
   const env = makePkgEnv((hostStub) => {
     hostStub.removeManagedPlugin = async () => {
-      // 模拟在途任务导致注销被 409 拒绝：实例仍注册运行
-      throw new HelmError('plugin_has_live_tasks', '模拟在途任务拒绝卸载', 409, { pluginId: 'keep-dir' })
+      // simulated in-flight task leads to deregister by 409 reject: instance still register run
+      throw new HelmError('plugin_has_live_tasks', 'simulated in-flight task reject unload', 409, { pluginId: 'keep-dir' })
     }
   })
   try {
@@ -601,26 +601,26 @@ test('install 记录持久化失败且回滚注销失败：目录与实例保留
     env.store.failNextSave = true
     const err = (await assertRejectsCode(() => env.manager.install(userSrc, { enable: true }), 'plugin_package_install_failed', 500)) as HelmError
     const details = err.details as { rolledBack?: boolean; rollbackError?: { message: string } }
-    assert.equal(details.rolledBack, false, '回滚注销失败必须如实 rolledBack:false')
-    assert.match(err.message, /目录与实例已保留/, '错误信息必须说明保留现状待人工处理')
+    assert.equal(details.rolledBack, false, 'rollback deregister failed must such as rolledBack:false')
+    assert.match(err.message, /directory and instance already keep/, 'error information must note keep now state await human handle')
     const target = join(env.dataDir, 'plugins', 'keep-dir')
-    assert.ok(existsSync(join(target, 'index.mjs')), '不得 rm 仍注册实例的源目录（旧缺陷：目录被掏空）')
+    assert.ok(existsSync(join(target, 'index.mjs')), 'must not rm still register instance source directory (old defect: directory by hollow out)')
     assert.ok(env.manager !== undefined)
-    assert.ok(!env.store.getRecord('keep-dir'), '安装记录未持久化')
+    assert.ok(!env.store.getRecord('keep-dir'), 'install record not persisted')
   } finally {
     env.close()
   }
 })
 
-test('install 注册失败遇并发同名已注册实例：目录保留给该实例，rolledBack:false', { timeout: 60_000 }, async () => {
+test('install register failed encounter concurrency same name registered instance: directory keep to the instance,rolledBack:false', { timeout: 60_000 }, async () => {
   const env = makePkgEnv((hostStub) => {
     let registerAttempted = false
     hostStub.registerManagedPlugin = async (dir: string) => {
       const manifest = JSON.parse(readFileSync(join(dir, 'plugin.json'), 'utf8')) as { id: string }
-      // 模拟并发 rescan 已从同目录抢先注册：register 收 409。此后 listSummaries
-      // 报告该实例（时序上与真实竞态一致：register 尝试前清单里没有它）
+      // simulated concurrency rescan already from same directory grab first register:register  409. this after listSummaries
+      // report the instance (when order on and real race consistent:register attempt before manifest in no it)
       registerAttempted = true
-      throw new HelmError('plugin_already_registered', `插件已注册：${manifest.id}`, 409, { pluginId: manifest.id })
+      throw new HelmError('plugin_already_registered', `plugin registered:${manifest.id}`, 409, { pluginId: manifest.id })
     }
     const original = hostStub.listSummaries.bind(hostStub)
     hostStub.listSummaries = () => {
@@ -635,36 +635,36 @@ test('install 注册失败遇并发同名已注册实例：目录保留给该实
     const err = (await assertRejectsCode(() => env.manager.install(userSrc), 'plugin_package_install_failed', 500)) as HelmError
     const details = err.details as { rolledBack?: boolean }
     assert.equal(details.rolledBack, false)
-    assert.match(err.message, /同名插件已注册/)
+    assert.match(err.message, /same name plugin registered/)
     const target = join(env.dataDir, 'plugins', 'raced-plugin')
-    assert.ok(existsSync(join(target, 'index.mjs')), '目录必须保留给并发注册的活实例（旧缺陷：rm 掏空源目录）')
+    assert.ok(existsSync(join(target, 'index.mjs')), 'directory must keep to concurrency register instance (old defect:rm hollow out source directory)')
   } finally {
     env.close()
   }
 })
 
-test('install 注册失败且无同名实例：仍删目录回滚（既有语义不回退）', { timeout: 60_000 }, async () => {
+test('install register failed and without same name instance: still delete directory rollback (since has semantics does not fall back)', { timeout: 60_000 }, async () => {
   const env = makePkgEnv((hostStub) => {
     hostStub.registerManagedPlugin = async (dir: string) => {
       const manifest = JSON.parse(readFileSync(join(dir, 'plugin.json'), 'utf8')) as { id: string }
-      throw new HelmError('plugin_register_failed_simulated', `模拟注册失败：${manifest.id}`, 500)
+      throw new HelmError('plugin_register_failed_simulated', `simulated register failed:${manifest.id}`, 500)
     }
   })
   try {
     const userSrc = writeLocalPlugin(env.cwd, 'plain-fail', '1.0.0')
     const err = (await assertRejectsCode(() => env.manager.install(userSrc), 'plugin_package_install_failed', 500)) as HelmError
     assert.equal((err.details as { rolledBack?: boolean }).rolledBack, true)
-    assert.ok(!existsSync(join(env.dataDir, 'plugins', 'plain-fail')), '无并发实例时按原语义删目录回滚')
+    assert.ok(!existsSync(join(env.dataDir, 'plugins', 'plain-fail')), 'without concurrency instance when by original semantics delete directory rollback')
   } finally {
     env.close()
   }
 })
 
 // ---------------------------------------------------------------------------
-// 10. start() 单飞失败不残留（identity-guarded 清缓存：失败后可重试）
+// 10. start() single fly failed leaves no residue (identity-guarded clean cache: failed after can retry)
 // ---------------------------------------------------------------------------
 
-test('start() 单飞失败不残留陈旧拒绝：失败清缓存后重试可成功', { timeout: 60_000 }, async () => {
+test('start() single fly failed leaves no residue stale reject: failed clean cache after retry can succeeded', { timeout: 60_000 }, async () => {
   const { host, close } = makeHost({ deferServices: true })
   try {
     const events: string[] = []
@@ -677,7 +677,7 @@ test('start() 单飞失败不残留陈旧拒绝：失败清缓存后重试可成
           start: () => {
             if (failNextStart) {
               failNextStart = false
-              throw new Error('首次启动失败')
+              throw new Error('first time failed to start')
             }
             events.push('start')
           },
@@ -686,8 +686,8 @@ test('start() 单飞失败不残留陈旧拒绝：失败清缓存后重试可成
       },
     }, { enabled: true })
 
-    await assert.rejects(host.start(), /首次启动失败/)
-    // 失败后重试：不得收到缓存的陈旧拒绝（identity-guarded 清缓存允许重试）
+    await assert.rejects(host.start(), /first time failed to start/)
+    // failed after retry: must not receives cache stale reject (identity-guarded clean cache allows retry)
     await host.start()
     assert.deepEqual(events, ['start'])
     await host.stop()
@@ -698,10 +698,10 @@ test('start() 单飞失败不残留陈旧拒绝：失败清缓存后重试可成
 })
 
 // ---------------------------------------------------------------------------
-// 11. 拆毁期插件从清单即时消失（getActiveEnabledPluginIds 收紧为 enabled+idle）
+// 11. split destroy phase plugin from manifest i.e. when disappear (getActiveEnabledPluginIds tight is enabled+idle)
 // ---------------------------------------------------------------------------
 
-test('拆毁期插件从动作清单即时消失：teardown 窗口内 enabled 仍 true 也不再暴露', { timeout: 60_000 }, async () => {
+test('split destroy phase plugin from action manifest i.e. when disappear:teardown window inside enabled still true also no longer expose', { timeout: 60_000 }, async () => {
   const { host, close } = makeHost()
   try {
     const stopGate = deferred<void>()
@@ -711,12 +711,12 @@ test('拆毁期插件从动作清单即时消失：teardown 窗口内 enabled �
         ctx.service({
           id: 'svc',
           start() {},
-          // stop 挂起：制造 teardown 拆毁窗口（enabled 仍 true、phase=deactivating）
+          // stop suspended: fabricate teardown split destroy window (enabled still true,phase=deactivating)
           stop: () => stopGate.promise,
         })
         ctx.action({
           id: 'ping',
-          description: '探针',
+          description: 'probe needle',
           inputSchema: { type: 'object', additionalProperties: false },
           outputSchema: { type: 'object', properties: { pong: { type: 'boolean' } }, required: ['pong'], additionalProperties: false },
           handler: () => ({ pong: true }),
@@ -727,10 +727,10 @@ test('拆毁期插件从动作清单即时消失：teardown 窗口内 enabled �
     assert.equal(host.listActions().filter((a) => a.pluginId === 'p:tearing-down').length, 1)
     const disabling = host.disable('p:tearing-down', { force: true })
     await new Promise<void>((resolve) => setImmediate(resolve))
-    // 拆毁窗口：enabled 尚未落 false（禁用仍在 stop 中），但清单必须已消失，
-    // 不再向已停服务派发新请求
-    assert.equal(host.get('p:tearing-down')?.enabled, true, '窗口内 enabled 仍 true（拆毁期语义）')
-    assert.deepEqual(host.listActions().filter((a) => a.pluginId === 'p:tearing-down'), [], '拆毁期清单必须即时消失')
+    // split destroy window:enabled not yet false(disable still in stop in), but manifest must already disappear,
+    // no longer to already stop service dispatch new request
+    assert.equal(host.get('p:tearing-down')?.enabled, true, 'window inside enabled still true(split destroy phase semantics)')
+    assert.deepEqual(host.listActions().filter((a) => a.pluginId === 'p:tearing-down'), [], 'split destroy phase manifest must i.e. when disappear')
     stopGate.resolve()
     await disabling
     assert.equal(host.get('p:tearing-down')?.enabled, false)

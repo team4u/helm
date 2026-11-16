@@ -1,7 +1,7 @@
 /**
- * CLI 测试共享夹具与运行辅助（`packages/cli/test/helpers/cli-harness.ts`）。
- * 统一复用 `@helm/test-kit` 的 Mock Hub、临时目录自动清理与 DTO 工厂，
- * 消除各 CLI 测试文件中重复的 `startHub / makeEnv / run / tempDir` 样板代码。
+ * CLI test sharing fixture and run auxiliary (`packages/cli/test/helpers/cli-harness.ts`).
+ * unify re- use `@helm/test-kit`  Mock Hub, temp directory automatically clean up and DTO work vendor,
+ * eliminate each CLI test file in duplicate `startHub / makeEnv / run / tempDir` board code.
  */
 
 import { runCli } from '../../src/index.js'
@@ -38,14 +38,14 @@ export type {
   StartMockHubOptions,
 } from '@helm/test-kit/http'
 
-/** `runCliCaptured` 返回的标准输出、标准错误与退出码快照。 */
+/** `runCliCaptured` return standard output, standard error and exit code snapshot. */
 export interface CliCapturedResult {
   out: string
   err: string
   code: number
 }
 
-/** `runCliCaptured` 可选注入项（stdin / cwd / fetch / onStdout）。 */
+/** `runCliCaptured` optional inject items (stdin / cwd / fetch / onStdout). */
 export interface RunCliCapturedOptions {
   stdin?: StdinSource
   cwd?: string
@@ -54,8 +54,8 @@ export interface RunCliCapturedOptions {
 }
 
 /**
- * 构造隔离的 CLI 测试环境变量（默认注入测试用 `HELM_HUB_URL`、`HELM_DATA_DIR`、`HELM_TOKEN`）。
- * 若 `extra` 中显式将某键设为 `undefined`，则从返回对象中删除该键。
+ * construct isolated CLI test environment variable (by default inject test use `HELM_HUB_URL`,`HELM_DATA_DIR`,`HELM_TOKEN`).
+ * if `extra` in explicit a certain key set is `undefined`, then from return object in delete the key.
  */
 export function makeCliEnv(
   hubUrl: string,
@@ -75,7 +75,7 @@ export function makeCliEnv(
 }
 
 /**
- * 捕获式执行 `runCli`，返回 `{ out, err, code }`，避免测试触碰全局 stdio。
+ * catch style execute `runCli`, return `{ out, err, code }`, avoid test trigger touch global stdio.
  */
 export async function runCliCaptured(
   argv: readonly string[],
@@ -101,7 +101,7 @@ export async function runCliCaptured(
 }
 
 /**
- * 解析 CLI `--json` 模式下 stderr 输出的错误信封 `error` 对象。
+ * parse CLI `--json` pattern under stderr output error message seal `error` object.
  */
 export function parseCliError<TDetails = Record<string, unknown>>(result: {
   err: string

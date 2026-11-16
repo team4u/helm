@@ -1,6 +1,6 @@
 /**
- * 计算节点管理域（Hub 侧）：nodes list / issue / remove / upgrade。
- * 纯管理面 API，与 `helm-node`（受控机器守护进程）职责分离。
+ * compute node manage domain (Hub side):nodes list / issue / remove / upgrade.
+ * pure manage side API, and `helm-node`(subject to control machine daemon) responsibility separate.
  */
 import { CliError } from '../errors.js'
 import type {
@@ -16,7 +16,7 @@ import type { CommandContext, CommandSpec } from './shared.js'
 import { assertNoExtraPositionals, parseNoFlags, printResult, requirePositional } from './shared.js'
 import { printText } from '../output.js'
 
-/** nodes list 人类模式固定列（原始字段可能更多，仅展示关键六列）。 */
+/** nodes list person class pattern fixed column (original field may more many, only render key six column). */
 const NODE_COLUMNS: ReadonlyArray<{ key: keyof NodeInfo; label: string }> = [
   { key: 'id', label: 'id' },
   { key: 'kind', label: 'kind' },
@@ -40,48 +40,48 @@ function printNodesTable(io: Io, nodes: NodeInfo[]): void {
   }
 }
 
-/** issue 签发结果人类模式：token 明文仅此一次，突出展示。 */
+/** issue sign result person class pattern:token plaintext only this once, sudden out render. */
 function printIssuedToken(io: Io, issued: NodeIssuedToken): void {
   printText(io, [
-    `节点 ${issued.nodeId} 接入令牌（仅此一次展示，服务端只存摘要）：`,
+    `node ${issued.nodeId} access token (only this once render, server side only store summary):`,
     '',
     `  ${issued.token}`,
     '',
-    '受控机器执行：helm-node connect <hubUrl> --token <token>',
+    'subject to control machine execute:helm-node connect <hubUrl> --token <token>',
   ].join('\n'))
 }
 
-/** 升级检查人类输出：当前/最新版本、是否有更新、被隔离版本。 */
+/** upgrade check person class output: when before/most new version, is otherwise has update, by isolated version. */
 function printUpgradeCheck(io: Io, nodeId: string, check: NodeUpgradeCheckResult): void {
   const lines = [
-    `节点 ${nodeId}：当前 ${check.currentVersion}，最新 ${check.latestVersion}`,
-    check.updateAvailable ? '有可用更新' : '已是最新',
+    `node ${nodeId}: when before ${check.currentVersion}, most new ${check.latestVersion}`,
+    check.updateAvailable ? 'has available update' : 'already is most new',
   ]
   if (check.blocked !== undefined) {
-    lines.push(`被隔离版本 ${check.blocked.version}（${check.blocked.reason}，${check.blocked.at}）`)
+    lines.push(`by isolated version ${check.blocked.version}(${check.blocked.reason},${check.blocked.at})`)
   }
   printText(io, lines.join('\n'))
 }
 
 /**
- * 升级结果人类输出。诚实性纪律：ok=false 由命令层抛 CliError（退出 1），
- * 此函数不再触及；unconfirmed 时 Hub 502 会以错误退出。
+ * upgrade result person class output. honest discipline:ok=false by command layer throw CliError(exit 1),
+ * this function no longer trigger and;unconfirmed when Hub 502 will with error exit.
  */
 function printUpgradeResult(io: Io, nodeId: string, result: NodeUpgradeResult): void {
   if (!result.upgraded) {
-    printText(io, `节点 ${nodeId} 无需升级（当前 ${result.previousVersion}，目标 ${result.targetVersion}）`)
+    printText(io, `node ${nodeId} no need to upgrade (when before ${result.previousVersion}, target ${result.targetVersion})`)
     return
   }
   printText(io, [
-    `节点 ${nodeId} 已升级：${result.previousVersion} -> ${result.targetVersion}`,
-    ...(result.pid !== undefined ? [`新守护进程 pid ${result.pid}`] : []),
+    `node ${nodeId} already upgrade:${result.previousVersion} -> ${result.targetVersion}`,
+    ...(result.pid !== undefined ? [`new daemon pid ${result.pid}`] : []),
   ].join('\n'))
 }
 
-/** 校验升级检查响应形状（诚实性：非法响应显式报错，不猜测）。 */
+/** validate upgrade check response shape (honest: illegal response explicit errors, do not guess). */
 function requireUpgradeCheckResult(nodeId: string, value: unknown): NodeUpgradeCheckResult {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new CliError('Hub 升级检查响应需为对象', 'invalid_response')
+    throw new CliError('Hub upgrade check response must be an object', 'invalid_response')
   }
   const v = value as Record<string, unknown>
   if (
@@ -89,7 +89,7 @@ function requireUpgradeCheckResult(nodeId: string, value: unknown): NodeUpgradeC
     typeof v['latestVersion'] !== 'string' ||
     typeof v['updateAvailable'] !== 'boolean'
   ) {
-    throw new CliError('Hub 升级检查响应缺字段（currentVersion/latestVersion/updateAvailable）', 'invalid_response')
+    throw new CliError('Hub upgrade check response missing field (currentVersion/latestVersion/updateAvailable)', 'invalid_response')
   }
   const blocked = v['blocked']
   if (
@@ -99,15 +99,15 @@ function requireUpgradeCheckResult(nodeId: string, value: unknown): NodeUpgradeC
       typeof (blocked as Record<string, unknown>)['reason'] !== 'string' ||
       typeof (blocked as Record<string, unknown>)['at'] !== 'string')
   ) {
-    throw new CliError(`节点 ${nodeId} 升级检查 blocked 字段非法`, 'invalid_response')
+    throw new CliError(`node ${nodeId} upgrade check blocked field illegal`, 'invalid_response')
   }
   return value as NodeUpgradeCheckResult
 }
 
-/** 校验升级结果响应形状。 */
+/** validate upgrade result response shape. */
 function requireUpgradeResult(value: unknown): NodeUpgradeResult {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new CliError('Hub 升级响应需为对象', 'invalid_response')
+    throw new CliError('Hub upgrade response must be an object', 'invalid_response')
   }
   const v = value as Record<string, unknown>
   if (
@@ -116,76 +116,76 @@ function requireUpgradeResult(value: unknown): NodeUpgradeResult {
     typeof v['targetVersion'] !== 'string' ||
     typeof v['upgraded'] !== 'boolean'
   ) {
-    throw new CliError('Hub 升级响应缺字段（ok/previousVersion/targetVersion/upgraded）', 'invalid_response')
+    throw new CliError('Hub upgrade response missing field (ok/previousVersion/targetVersion/upgraded)', 'invalid_response')
   }
   if (v['pid'] !== undefined && (typeof v['pid'] !== 'number' || !Number.isInteger(v['pid']) || (v['pid'] as number) <= 0)) {
-    throw new CliError('Hub 升级响应 pid 非法', 'invalid_response')
+    throw new CliError('Hub upgrade response pid illegal', 'invalid_response')
   }
   return value as NodeUpgradeResult
 }
 
-/** nodes upgrade flag 表。 */
+/** nodes upgrade flag table. */
 const UPGRADE_FLAGS: readonly FlagSpec[] = [
-  { name: 'check', type: 'boolean', help: '仅检查可用更新（与 --version/--force 互斥）' },
-  { name: 'version', type: 'string', help: '目标版本（严格 SemVer，可带 v 前缀；缺省升级到 latest）' },
-  { name: 'registry', type: 'string', help: 'npm Registry URL（http/https）' },
-  { name: 'force', type: 'boolean', help: '强制升级（忽略金丝雀隔离；与 --check 互斥）' },
-  { name: 'current', type: 'boolean', help: '读 HELM_NODE_ID 作为目标节点' },
+  { name: 'check', type: 'boolean', help: 'only check available update (and --version/--force mutual exclusion)' },
+  { name: 'version', type: 'string', help: 'target version (strictly SemVer, can carries v prefix; default upgrade to latest)' },
+  { name: 'registry', type: 'string', help: 'npm Registry URL(http/https)' },
+  { name: 'force', type: 'boolean', help: 'force upgrade (ignore canary isolated; and --check mutual exclusion)' },
+  { name: 'current', type: 'boolean', help: 'read HELM_NODE_ID as target node' },
 ]
 
-/** 解析节点目标：显式位置 nodeId 或 --current（读 HELM_NODE_ID）；互斥。 */
+/** parse node target: explicit location nodeId or --current(read HELM_NODE_ID); mutual exclusion. */
 function resolveNodeTarget(flags: Map<string, unknown>, positionalId: string | undefined, env: NodeJS.ProcessEnv): string {
   const current = flags.get('current') === true
   if (positionalId !== undefined && current) {
-    throw new CliError('nodeId 与 --current 互斥（二选一）', 'invalid_flag_value')
+    throw new CliError('nodeId and --current mutual exclusion (two choose one)', 'invalid_flag_value')
   }
   if (positionalId !== undefined) {
-    if (positionalId.trim() === '') throw new CliError('nodeId 需为非空节点 ID', 'invalid_id')
+    if (positionalId.trim() === '') throw new CliError('nodeId must be non-empty node ID', 'invalid_id')
     return positionalId
   }
   if (current) {
     const raw = env['HELM_NODE_ID']
     if (!raw || !raw.trim()) {
-      throw new CliError('--current 需要 env HELM_NODE_ID（当前未设置）', 'current_node_missing')
+      throw new CliError('--current need to env HELM_NODE_ID(when before not settings)', 'current_node_missing')
     }
     return raw.trim()
   }
-  throw new CliError('缺少节点目标：提供显式 <nodeId> 或 --current（读 HELM_NODE_ID）', 'missing_node_target')
+  throw new CliError('missing node target: provide explicit <nodeId> or --current(read HELM_NODE_ID)', 'missing_node_target')
 }
 
-/** nodes forward 的 host:port 端点解析：[host:]port；host 缺省 127.0.0.1（仅目标端可缺省）。 */
+/** nodes forward  host:port end point parse:[host:]port;host default 127.0.0.1(only target end can default). */
 function parseEndpoint(raw: string, what: string, allowBarePort: boolean): { host?: string; port: number } {
   const trimmed = raw.trim()
-  if (trimmed === '') throw new CliError(`${what} 需为 host:port 形式（如 127.0.0.1:8080）`, 'invalid_flag_value')
-  // IPv6 文本形式：[::1]:port 或裸 ::1（含多个冒号时仅接受括号形式）。
+  if (trimmed === '') throw new CliError(`${what} must be host:port form (such as 127.0.0.1:8080)`, 'invalid_flag_value')
+  // IPv6 text form:[::1]:port or bare ::1(contains multiple smoke number when only accept parentheses form).
   const bracket = trimmed.match(/^\[(.+)\]:(\d+)$/)
   if (bracket) {
     const port = Number(bracket[2])
-    if (port < 1 || port > 65535) throw new CliError(`${what} 端口需为 1..65535`, 'invalid_flag_value')
+    if (port < 1 || port > 65535) throw new CliError(`${what} port must be 1..65535`, 'invalid_flag_value')
     return { host: bracket[1]!, port }
   }
   const lastColon = trimmed.lastIndexOf(':')
   if (lastColon === -1) {
-    if (!allowBarePort) throw new CliError(`${what} 需为 host:port 形式（如 127.0.0.1:8080）`, 'invalid_flag_value')
-    if (!/^\d+$/.test(trimmed)) throw new CliError(`${what} 需为端口数字或 host:port`, 'invalid_flag_value')
+    if (!allowBarePort) throw new CliError(`${what} must be host:port form (such as 127.0.0.1:8080)`, 'invalid_flag_value')
+    if (!/^\d+$/.test(trimmed)) throw new CliError(`${what} must be port number or host:port`, 'invalid_flag_value')
     const port = Number(trimmed)
-    if (port < 1 || port > 65535) throw new CliError(`${what} 端口需为 1..65535`, 'invalid_flag_value')
+    if (port < 1 || port > 65535) throw new CliError(`${what} port must be 1..65535`, 'invalid_flag_value')
     return { port }
   }
   const host = trimmed.slice(0, lastColon)
   const portText = trimmed.slice(lastColon + 1)
   if (host === '' || portText === '' || !/^\d+$/.test(portText)) {
-    throw new CliError(`${what} 需为 host:port 形式（如 127.0.0.1:8080；IPv6 用 [::1]:8080）`, 'invalid_flag_value')
+    throw new CliError(`${what} must be host:port form (such as 127.0.0.1:8080;IPv6 use [::1]:8080)`, 'invalid_flag_value')
   }
   const port = Number(portText)
-  if (port < 1 || port > 65535) throw new CliError(`${what} 端口需为 1..65535`, 'invalid_flag_value')
+  if (port < 1 || port > 65535) throw new CliError(`${what} port must be 1..65535`, 'invalid_flag_value')
   return { host, port }
 }
 
-/** 校验 Hub 返回的转发会话形状（诚实性：非法响应显式报错）。 */
+/** validate Hub return forwarding conversation shape (honest: illegal response explicit errors). */
 function requireNodeForwardSession(value: unknown, what: string): NodeForwardSession {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new CliError(`${what} 需为对象`, 'invalid_response')
+    throw new CliError(`${what} must be an object`, 'invalid_response')
   }
   const v = value as Record<string, unknown>
   if (
@@ -198,12 +198,12 @@ function requireNodeForwardSession(value: unknown, what: string): NodeForwardSes
     typeof v['activeConnections'] !== 'number' ||
     typeof v['totalConnections'] !== 'number'
   ) {
-    throw new CliError(`${what} 缺字段或字段非法（forwardId/nodeId/listen*/target*/activeConnections/totalConnections）`, 'invalid_response')
+    throw new CliError(`${what} missing field or field illegal (forwardId/nodeId/listen*/target*/activeConnections/totalConnections)`, 'invalid_response')
   }
   return value as NodeForwardSession
 }
 
-/** nodes forwards 人类模式固定列。 */
+/** nodes forwards person class pattern fixed column. */
 const FORWARD_COLUMNS: ReadonlyArray<{ key: keyof NodeForwardSession; label: string }> = [
   { key: 'forwardId', label: 'forwardId' },
   { key: 'nodeId', label: 'node' },
@@ -233,11 +233,11 @@ function printForwardsTable(io: Io, forwards: NodeForwardSession[]): void {
 
 function printForwardDetail(io: Io, forward: NodeForwardSession): void {
   const lines = [
-    `转发 ${forward.forwardId}`,
-    `监听 ${forward.listenHost}:${forward.listenPort} -> 节点 ${forward.nodeId} ${forward.targetHost}:${forward.targetPort}`,
-    `活动连接 ${forward.activeConnections}（累计 ${forward.totalConnections}）`,
+    `forwarding ${forward.forwardId}`,
+    `listen ${forward.listenHost}:${forward.listenPort} -> node ${forward.nodeId} ${forward.targetHost}:${forward.targetPort}`,
+    `activity connect ${forward.activeConnections}(cumulative ${forward.totalConnections})`,
   ]
-  if (forward.lastError !== undefined) lines.push(`最近错误 ${forward.lastError}`)
+  if (forward.lastError !== undefined) lines.push(`most near error ${forward.lastError}`)
   printText(io, lines.join('\n'))
 }
 
@@ -246,12 +246,12 @@ export function nodesCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['nodes', 'list'],
-    description: '列出计算节点、在线状态与版本（GET /api/nodes）',
+    description: 'column out compute node, online state and version (GET /api/nodes)',
     async run(ctx: CommandContext) {
       parseNoFlags(ctx)
       const hub = await ctx.hub()
       const nodes = await hub.get<NodeInfo[]>('/api/nodes')
-      if (!Array.isArray(nodes)) throw new CliError('Hub 节点列表必须是数组', 'invalid_response')
+      if (!Array.isArray(nodes)) throw new CliError('Hub node list must be array', 'invalid_response')
       if (ctx.json) {
         printResult(ctx, nodes)
         return
@@ -262,7 +262,7 @@ export function nodesCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['nodes', 'issue'],
-    description: '签发节点接入令牌（POST /api/nodes/issue；明文 token 仅返回一次）',
+    description: 'sign node access token (POST /api/nodes/issue; plaintext token only return once)',
     positional: '<nodeId>',
     async run(ctx: CommandContext) {
       const parsed = parseFlags([], ctx.args)
@@ -271,7 +271,7 @@ export function nodesCommands(): CommandSpec[] {
       const hub = await ctx.hub()
       const issued = await hub.post<NodeIssuedToken>('/api/nodes/issue', { nodeId })
       if (!issued || typeof issued !== 'object' || issued.nodeId !== nodeId || typeof issued.token !== 'string' || !issued.token.startsWith(`${nodeId}:`)) {
-        throw new CliError('Hub 签发响应缺少有效的节点令牌', 'invalid_response')
+        throw new CliError('Hub sign response missing valid node token', 'invalid_response')
       }
       if (ctx.json) {
         printResult(ctx, issued)
@@ -283,7 +283,7 @@ export function nodesCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['nodes', 'remove'],
-    description: '移除受控节点并立即断开连接（DELETE /api/nodes/:id）',
+    description: 'remove subject to control node and immediately disconnect connect (DELETE /api/nodes/:id)',
     positional: '<nodeId>',
     async run(ctx: CommandContext) {
       const parsed = parseFlags([], ctx.args)
@@ -296,7 +296,7 @@ export function nodesCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['nodes', 'upgrade'],
-    description: '检查或执行节点升级（GET/POST /api/nodes/:id/upgrade）',
+    description: 'check or execute node upgrade (GET/POST /api/nodes/:id/upgrade)',
     flags: [...UPGRADE_FLAGS],
     positional: '[<nodeId>]',
     async run(ctx: CommandContext) {
@@ -307,12 +307,12 @@ export function nodesCommands(): CommandSpec[] {
       const version = flagValue<string>(parsed.flags, 'version')
       const registry = flagValue<string>(parsed.flags, 'registry')
       const force = parsed.flags.get('force') === true
-      // 互斥：--check 是只读检查，不能与升级执行参数组合。
+      // mutual exclusion:--check is only read check, cannot and upgrade execute parameter combine.
       if (check && version !== undefined) {
-        throw new CliError('--check 与 --version 互斥（检查不指定目标版本）', 'invalid_flag_value')
+        throw new CliError('--check and --version mutual exclusion (check do not designate target version)', 'invalid_flag_value')
       }
       if (check && force) {
-        throw new CliError('--check 与 --force 互斥（检查不执行升级）', 'invalid_flag_value')
+        throw new CliError('--check and --force mutual exclusion (check do not execute upgrade)', 'invalid_flag_value')
       }
       const registryUrl = registry !== undefined ? registry : undefined
       const hub = await ctx.hub()
@@ -326,22 +326,22 @@ export function nodesCommands(): CommandSpec[] {
       }
       const body: Record<string, unknown> = {}
       if (version !== undefined) {
-        if (version.trim() === '') throw new CliError('--version 需为非空版本（留空表示升级到 latest）', 'invalid_flag_value')
+        if (version.trim() === '') throw new CliError('--version must be non-empty version (empty means upgrade to latest)', 'invalid_flag_value')
         body['targetVersion'] = version
       }
       if (registryUrl !== undefined) body['registryUrl'] = registryUrl
       if (force) body['force'] = true
-      // 升级含排空在途命令与守护进程替换，禁用客户端默认 30s 超时。
+      // upgrade contains arrange empty in-flight command and daemon replace, disable client by default 30s timeout.
       const result = await hub.request<NodeUpgradeResult>('POST', `/api/nodes/${encodeURIComponent(nodeId)}/upgrade`, {
         ...(Object.keys(body).length > 0 ? { body } : {}),
         timeoutMs: 0,
       })
       const upgraded = requireUpgradeResult(result)
       if (!upgraded.ok) {
-        // 诚实性纪律：HTTP 200 但 ok:false（节点拒绝且如实返回）是失败——
-        // 以错误退出 1，绝不打印未完成结果还返 code 0。
+        // honest discipline:HTTP 200 but ok:false(node reject and such as return) is failed - -
+        // with error exit 1, never print not complete result also return code 0.
         throw new CliError(
-          `节点 ${nodeId} 升级未完成（${upgraded.previousVersion} -> ${upgraded.targetVersion}）`,
+          `node ${nodeId} upgrade not complete (${upgraded.previousVersion} -> ${upgraded.targetVersion})`,
           'node_upgrade_failed',
         )
       }
@@ -352,33 +352,33 @@ export function nodesCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['nodes', 'forward'],
-    description: '前台本地 TCP 端口转发（POST /api/nodes/:id/forward；Ctrl-C 退出并关闭）',
+    description: 'foreground local TCP port forwarding (POST /api/nodes/:id/forward;Ctrl-C exit and close)',
     flags: [
-      { name: 'current', type: 'boolean', help: '读 HELM_NODE_ID 作为目标节点' },
+      { name: 'current', type: 'boolean', help: 'read HELM_NODE_ID as target node' },
     ],
     positional: '[<nodeId>] <listenHost:listenPort> [<targetHost>:]<targetPort>',
     async run(ctx: CommandContext) {
       const FORWARD_FLAGS: readonly FlagSpec[] = [
-        { name: 'current', type: 'boolean', help: '读 HELM_NODE_ID 作为目标节点' },
+        { name: 'current', type: 'boolean', help: 'read HELM_NODE_ID as target node' },
       ]
       const parsed = parseFlags(FORWARD_FLAGS, ctx.args)
-      // 位置参数形态：[<nodeId>] <listenHost:listenPort> [<targetHost>:]<targetPort>。
-      // nodeId 可选：首参含 ':' 即为 listen 地址（nodeId 从 --current 解析）。
+      // location parameter form:[<nodeId>] <listenHost:listenPort> [<targetHost>:]<targetPort>.
+      // nodeId optional: first reference contains ':' i.e. is listen address (nodeId from --current parse).
       let nodeId: string
       let listenIndex = 0
       const first = parsed.positionals[0]
       if (first !== undefined && !first.includes(':')) {
         const current = parsed.flags.get('current') === true
-        if (current) throw new CliError('nodeId 与 --current 互斥（二选一）', 'invalid_flag_value')
-        if (first.trim() === '') throw new CliError('nodeId 需为非空节点 ID', 'invalid_id')
+        if (current) throw new CliError('nodeId and --current mutual exclusion (two choose one)', 'invalid_flag_value')
+        if (first.trim() === '') throw new CliError('nodeId must be non-empty node ID', 'invalid_id')
         nodeId = first
         listenIndex = 1
       } else {
         const current = parsed.flags.get('current') === true
-        if (!current) throw new CliError('缺少节点目标：提供显式 <nodeId> 或 --current（读 HELM_NODE_ID）', 'missing_node_target')
+        if (!current) throw new CliError('missing node target: provide explicit <nodeId> or --current(read HELM_NODE_ID)', 'missing_node_target')
         const raw = ctx.env['HELM_NODE_ID']
         if (!raw || !raw.trim()) {
-          throw new CliError('--current 需要 env HELM_NODE_ID（当前未设置）', 'current_node_missing')
+          throw new CliError('--current need to env HELM_NODE_ID(when before not settings)', 'current_node_missing')
         }
         nodeId = raw.trim()
       }
@@ -386,11 +386,11 @@ export function nodesCommands(): CommandSpec[] {
       const targetRaw = requirePositional(parsed.positionals, listenIndex + 1, '[targetHost:]targetPort')
       assertNoExtraPositionals(parsed.positionals, listenIndex + 2)
       const listen = parseEndpoint(listenRaw, '<listenHost:listenPort>', false)
-      if (listen.host === undefined) throw new CliError('监听地址必须显式携带 host（如 127.0.0.1:8080）', 'invalid_flag_value')
+      if (listen.host === undefined) throw new CliError('listen address must explicit carry host(such as 127.0.0.1:8080)', 'invalid_flag_value')
       const target = parseEndpoint(targetRaw, '<[targetHost:]targetPort>', true)
       const hub = await ctx.hub()
-      // 创建转发（监听器只在本次命令期间存在；未及时绑定事件流时 Hub 侧
-      // 前台租约自动停止）。
+      // create forwarding (listener only in this time command during store in; not and when bind set event stream when Hub side
+      // foreground lease automatically stop).
       const created = await hub.post<NodeForwardSession>(
         `/api/nodes/${encodeURIComponent(nodeId)}/forward`,
         {
@@ -400,10 +400,10 @@ export function nodesCommands(): CommandSpec[] {
           ...(target.host === undefined ? {} : { targetHost: target.host }),
         },
       )
-      const forward = requireNodeForwardSession(created, 'Hub 转发创建响应')
+      const forward = requireNodeForwardSession(created, 'Hub forwarding create response')
       const forwardId = forward.forwardId
 
-      // 显式停止：只容忍已不存在（404）；其他错误如实上抛（不伪报清理成功）。
+      // explicit stop: only contain tolerate already missing (404); other error such as on throw (do not fake report clean up succeeded).
       const stopForward = async (): Promise<void> => {
         await hub
           .delete(`/api/nodes/forward/${encodeURIComponent(forwardId)}`)
@@ -413,8 +413,8 @@ export function nodesCommands(): CommandSpec[] {
           })
       }
 
-      // 前台信号：标记取消并中断事件流（命令 Promise 自然走 finally 清理后
-      // 正常退出，不在信号回调里 process.exit——库内退出留给 runCli 调用方）。
+      // foreground signal: mark record cancel and interrupt event stream (command Promise self however away finally clean up after
+      // normal exit, do not in signal call back in process.exit- - store inside exit to runCli caller).
       const stopController = new AbortController()
       let stopping = false
       let cleanupError: unknown
@@ -429,13 +429,13 @@ export function nodesCommands(): CommandSpec[] {
       let hubStopped = false
       if (!ctx.json) {
         printText(ctx.io, [
-          `转发已建立：${forward.listenHost}:${forward.listenPort} -> ${nodeId} ${target.host ?? '127.0.0.1'}:${target.port}`,
-          'Ctrl-C 退出并关闭转发。',
+          `forwarding already establish:${forward.listenHost}:${forward.listenPort} -> ${nodeId} ${target.host ?? '127.0.0.1'}:${target.port}`,
+          'Ctrl-C exit and close forwarding.',
         ].join('\n'))
       }
       try {
-        // NDJSON 事件流（即前台租约持有者）：前台阻塞；断开（Hub 停止/网络断
-        // /信号）时结束。无论 --json 与否都识别终态。signal 需透传给流请求。
+        // NDJSON event stream (i.e. foreground lease holder): foreground block; disconnect (Hub stop/network assert
+        // /signal) when end. regardless of --json and otherwise all identify terminal state.signal must pass-through to stream request.
         await hub.streamNdjson(
           'GET',
           `/api/nodes/forward/${encodeURIComponent(forwardId)}/events`,
@@ -445,20 +445,20 @@ export function nodesCommands(): CommandSpec[] {
               const event = value as { type?: string; count?: number; message?: string }
               if (event?.type === 'connection') {
                 if (ctx.json) ctx.io.out(`${JSON.stringify(value)}\n`)
-                else printText(ctx.io, `连接建立（活动 ${event.count ?? 0}）`)
+                else printText(ctx.io, `connect establish (activity ${event.count ?? 0})`)
               } else if (event?.type === 'error') {
                 if (ctx.json) ctx.io.out(`${JSON.stringify(value)}\n`)
-                else printText(ctx.io, `转发错误：${event.message ?? '未知'}`)
+                else printText(ctx.io, `forwarding error:${event.message ?? 'unknown'}`)
               } else if (event?.type === 'stopped') {
                 hubStopped = true
                 if (ctx.json) ctx.io.out(`${JSON.stringify(value)}\n`)
-                else printText(ctx.io, 'Hub 侧转发已停止')
+                else printText(ctx.io, 'Hub side forwarding already stop')
               }
             },
           },
         )
       } catch (error) {
-        // 信号中断的流读取不是意外失败（走 finally 清理后正常退出）。
+        // signal interrupt stream read is not unexpected failed (away finally clean up after normal exit).
         if (!(stopping && error instanceof CliError && error.code === 'aborted')) throw error
       } finally {
         process.removeListener('SIGINT', onSignal)
@@ -466,31 +466,31 @@ export function nodesCommands(): CommandSpec[] {
         try {
           await stopForward()
         } catch (error) {
-          // 清理失败不得伪报成功：记录后在正常路径外显式报错。
+          // clean up failed must not fake report succeeded: record after in happy path outside explicit errors.
           cleanupError = error
         }
       }
       if (cleanupError !== undefined) {
         throw new CliError(
-          `转发已结束但停止清理失败：${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+          `forwarding already end but stop clean up failed:${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
           'forward_cleanup_failed',
         )
       }
       if (stopping || hubStopped) return
-      // 事件流意外结束且未收到终态（网络断/Hub 崩溃）：如实退出非零。
-      throw new CliError('转发事件流已结束（Hub 侧转发可能已停止）', 'forward_stream_ended')
+      // event stream unexpected end and not received terminal state (network assert/Hub crash): such as exit non-zero.
+      throw new CliError('forwarding event stream already end (Hub side forwarding may already stop)', 'forward_stream_ended')
     },
   })
 
   cmds.push({
     path: ['nodes', 'forwards'],
-    description: '列出活动端口转发（GET /api/nodes/forward）',
+    description: 'column out activity port forwarding (GET /api/nodes/forward)',
     async run(ctx: CommandContext) {
       parseNoFlags(ctx)
       const hub = await ctx.hub()
       const forwards = await hub.get<NodeForwardSession[]>('/api/nodes/forward')
-      if (!Array.isArray(forwards)) throw new CliError('Hub 转发列表必须是数组', 'invalid_response')
-      const checked = forwards.map((f) => requireNodeForwardSession(f, 'Hub 转发列表项'))
+      if (!Array.isArray(forwards)) throw new CliError('Hub forwarding list must be array', 'invalid_response')
+      const checked = forwards.map((f) => requireNodeForwardSession(f, 'Hub forwarding list items'))
       if (ctx.json) {
         printResult(ctx, checked)
         return
@@ -501,18 +501,18 @@ export function nodesCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['nodes', 'forward-inspect'],
-    description: '查看转发详情（GET /api/nodes/forward/:forwardId）',
+    description: 'view forwarding detail situation (GET /api/nodes/forward/:forwardId)',
     positional: '<forwardId>',
     async run(ctx: CommandContext) {
       const parsed = parseFlags([], ctx.args)
       const forwardId = requirePositional(parsed.positionals, 0, 'forwardId')
       assertNoExtraPositionals(parsed.positionals, 1)
       if (!/^fwd-[0-9a-f-]{36}$/.test(forwardId)) {
-        throw new CliError('forwardId 需为 fwd-<uuid> 形式', 'invalid_id')
+        throw new CliError('forwardId must be fwd-<uuid> form', 'invalid_id')
       }
       const hub = await ctx.hub()
       const detail = await hub.get<NodeForwardSession>(`/api/nodes/forward/${encodeURIComponent(forwardId)}`)
-      const checked = requireNodeForwardSession(detail, 'Hub 转发详情')
+      const checked = requireNodeForwardSession(detail, 'Hub forwarding detail situation')
       if (ctx.json) {
         printResult(ctx, checked)
         return
@@ -523,14 +523,14 @@ export function nodesCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['nodes', 'forward-stop'],
-    description: '停止端口转发（DELETE /api/nodes/forward/:forwardId）',
+    description: 'stop port forwarding (DELETE /api/nodes/forward/:forwardId)',
     positional: '<forwardId>',
     async run(ctx: CommandContext) {
       const parsed = parseFlags([], ctx.args)
       const forwardId = requirePositional(parsed.positionals, 0, 'forwardId')
       assertNoExtraPositionals(parsed.positionals, 1)
       if (!/^fwd-[0-9a-f-]{36}$/.test(forwardId)) {
-        throw new CliError('forwardId 需为 fwd-<uuid> 形式', 'invalid_id')
+        throw new CliError('forwardId must be fwd-<uuid> form', 'invalid_id')
       }
       const hub = await ctx.hub()
       printResult(ctx, await hub.delete<{ ok: boolean }>(`/api/nodes/forward/${encodeURIComponent(forwardId)}`))

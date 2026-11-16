@@ -1,4 +1,4 @@
-/** 桌面壳测试共享工具：临时端口、mini-hub 外部启动、轮询断言。 */
+/** desktop shell test sharing tool: temporary port,mini-hub external start, polling assertion. */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer as netCreateServer, type Server } from 'node:net';
 import { createServer as httpCreateServer } from 'node:http';
@@ -13,13 +13,13 @@ export async function pickFreePort(): Promise<number> {
     server.listen(0, '127.0.0.1', () => {
       const address = server.address();
       const port = typeof address === 'object' && address !== null ? address.port : 0;
-      server.close(() => (port > 0 ? resolve(port) : reject(new Error('无法分配临时端口'))));
+      server.close(() => (port > 0 ? resolve(port) : reject(new Error('cannot allocate temporary port'))));
     });
     server.once('error', reject);
   });
 }
 
-/** 外部启动 mini-hub（attach 模式 / 端口占用场景）。 */
+/** external start mini-hub(attach pattern / port occupy scenario). */
 export async function startMiniHubExternal(
   port: number,
   extraEnv: NodeJS.ProcessEnv = {},
@@ -28,7 +28,7 @@ export async function startMiniHubExternal(
     env: { PATH: process.env['PATH'], HELM_PORT: String(port), ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  await waitFor('mini-hub 外部就绪', async () => {
+  await waitFor('mini-hub external ready', async () => {
     try {
       const response = await fetch(`http://127.0.0.1:${port}/api/auth/status`, { signal: AbortSignal.timeout(500) });
       return response.ok;
@@ -41,7 +41,7 @@ export async function startMiniHubExternal(
     stop: async () => {
       if (child.exitCode !== null) return;
       child.kill('SIGTERM');
-      await waitFor('mini-hub 外部退出', async () => child.exitCode !== null, 5_000);
+      await waitFor('mini-hub external exit', async () => child.exitCode !== null, 5_000);
       if (child.exitCode === null) child.kill('SIGKILL');
     },
   };
@@ -53,11 +53,11 @@ export async function waitFor(what: string, check: () => Promise<boolean> | bool
     if (await check()) return true;
     await sleep(100);
   }
-  process.stderr.write(`[desktop-test] 等待超时: ${what}\n`);
+  process.stderr.write(`[desktop-test] wait timed out: ${what}\n`);
   return false;
 }
 
-/** 非 Hub 身份的占位 HTTP 服务（端口冲突场景）。 */
+/** non- Hub identity occupy HTTP service (port conflict scenario). */
 export async function startPlainServer(port: number): Promise<Server> {
   const server = httpCreateServer((_req, res) => {
     res.writeHead(200, { 'content-type': 'text/plain' });

@@ -1,55 +1,55 @@
 /**
- * plugin-manifest.ts：外部插件清单解析层（plugin.json 与 package.json helm 字段）。
+ * plugin-manifest.ts: external plugin manifest parse layer (plugin.json and package.json helm field).
  *
- * 职责（自 external-loader 拆出，规则逐字不变）：
- * - plugin.json：必须是可解析的 JSON 对象；可选字段 `clientRoot`（前端源根
- *   目录）、`clientDependencies`（前端受控 npm 说明符数组）、`dependencies`
- *   （插件间依赖 ID 数组）；非法值显式拒绝，绝不静默忽略；
- * - package.json `helm` 字段（{ main?, clientRoot?, clientDependencies?,
- *   dependencies? }）：helm.main / 顶层 main 为 npm 标准入口（相对路径；
- *   .js 后缀重写同名 TS 源由入口解析层处理）；顶层 dependencies 保持 npm
- *   语义（运行时依赖），绝不误读为插件间依赖；
- * - 无 helm 字段时回落 package.json main（npm 标准入口）；
- * - 说明符/依赖 ID 的形状校验与去重（非法项显式 plugin_manifest_invalid）；
- * - manifest 元数据读取（id/name/description/version，供故障占位登记展示；
- *   manifest 不存在或损坏时返回空对象）。
+ * responsibility (self external-loader split out, rule one by one character do not change):
+ * - plugin.json: must be can parse JSON object; optional field `clientRoot`(frontend source
+ *   directory),`clientDependencies`(frontend subject to control npm note symbol array),`dependencies`
+ *   (plugin between dependency ID array); illegal value explicit reject, never static default ignore;
+ * - package.json `helm` field ({ main?, clientRoot?, clientDependencies?,
+ *   dependencies? }):helm.main / top-level main is npm standard entry (relative path;
+ *   .js suffix heavy write same name TS source by entry parse layer handle); top-level dependencies keep npm
+ *   semantics (runtime dependency), never mistakenly read is plugin between dependency;
+ * - without helm field when back package.json main(npm standard entry);
+ * - note symbol/dependency ID shape validate and dedupe (illegal items explicit plugin_manifest_invalid);
+ * - manifest metadata read (id/name/description/version, supply fault occupy register render;
+ *   manifest missing or corrupt when return empty object).
  *
- * IO 错误纪律：仅 ENOENT / ENOTDIR 表示「文件不存在」；EACCES 等其他 IO
- * 错误显式抛错（plugin_scan_failed / plugin_manifest_invalid），绝不静默吞错。
+ * IO error discipline: only ENOENT / ENOTDIR means file missing;EACCES etc. other IO
+ * error explicit throws (plugin_scan_failed / plugin_manifest_invalid), never static default swallow wrong.
  */
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { HelmError } from '@helm/protocol';
 
 /**
- * npm 标准入口发现（additive，不牺牲现有 plugin.json/约定入口格式）：
- * package.json 的 `helm` 字段（{ main?, clientRoot?, clientDependencies?, dependencies? }）：
- * - helm.main / package.json.main 指定后端入口（相对路径，越根校验同
- *   plugin.json main；.js 后缀自动重写同名 .ts 源）；
- * - helm.clientRoot 供包作者声明前端源根目录，由 readHelmClientRoot 透出，
- *   normalizeDefinition 缺省仍为插件目录本身；
- * - helm.clientDependencies / plugin.json clientDependencies 声明前端受控 npm
- *   依赖说明符（裸包名/子路径），归一映射到插件自身目录作为解析根；
- * - helm.dependencies / plugin.json dependencies 声明插件间依赖（仅插件 ID）；
- *   package.json 顶层 dependencies 保持 npm 语义（运行时依赖），绝不误读；
- * - 优先级：plugin.json（main / 约定入口）> package.json helm.main >
- *   package.json main > 约定入口探测；无任何命中则为纯数据目录。
+ * npm standard entry discover (additive, do not sacrifice existing plugin.json/convention entry format):
+ * package.json  `helm` field ({ main?, clientRoot?, clientDependencies?, dependencies? }):
+ * - helm.main / package.json.main designate backend entry (relative path, exceeds validate same
+ *   plugin.json main;.js suffix automatically heavy write same name .ts source);
+ * - helm.clientRoot supply package act declaration frontend source directory, by readHelmClientRoot through out,
+ *   normalizeDefinition default still is plugin directory itself;
+ * - helm.clientDependencies / plugin.json clientDependencies declaration frontend subject to control npm
+ *   dependency note symbol (bare package name/sub- path), archive one mapping to plugin itself directory as parse;
+ * - helm.dependencies / plugin.json dependencies declaration plugin between dependency (only plugin ID);
+ *   package.json top-level dependencies keep npm semantics (runtime dependency), never mistakenly read;
+ * - priority:plugin.json(main / convention entry)> package.json helm.main >
+ *   package.json main > convention entry probe; without any hit then is pure data directory.
  */
 export interface HelmManifest {
-  /** package.json helm.clientRoot 声明（原始相对路径；未声明时缺省）。 */
+  /** package.json helm.clientRoot declaration (original relative path; not declaration when default). */
   clientRoot?: string;
-  /** 前端受控 npm 依赖说明符（裸包名或子路径；已验证去重）。 */
+  /** frontend subject to control npm dependency note symbol (bare package name or sub- path; already verify dedupe). */
   clientDependencies?: string[];
-  /** 插件间依赖 ID 列表（已验证去重）。 */
+  /** plugin between dependency ID list (already verify dedupe). */
   dependencies?: string[];
 }
 
-/** 插件 ID 字符集（与宿主插件 id 同集：字母数字 : _ -）。 */
+/** plugin ID character collection (and host plugin id same collection: character parent number : _ -). */
 export const MANIFEST_PLUGIN_ID_PATTERN = /^[A-Za-z0-9:_-]+$/;
 
 /**
- * 受控前端 npm 说明符合法性：非空、非路径形态（不以 . 或 / 开头）、无反斜杠、
- * 无 .. 段、无空白；允许 @scope/name 与子路径（子路径需逐项声明，不做前缀通配）。
+ * subject to control frontend npm note conforms to method: non-empty, non- path form (do not with . or / open head), without backslash,
+ * without .. segment, without whitespace; allows @scope/name and sub- path (sub- path must one by one items declaration, does not prefix through match).
  */
 function isValidClientDependencySpec(spec: string): boolean {
   if (spec.length === 0 || spec.length > 214) return false;
@@ -59,13 +59,13 @@ function isValidClientDependencySpec(spec: string): boolean {
   return /^(@[A-Za-z0-9][A-Za-z0-9._-]*\/)?[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9._~-]+)*$/.test(spec);
 }
 
-/** 校验并去重清单声明的前端 npm 说明符（非法项显式 plugin_manifest_invalid）。 */
+/** validate and dedupe manifest declaration frontend npm note symbol (illegal items explicit plugin_manifest_invalid). */
 function normalizeClientDependencySpecs(dirPath: string, source: string, values: unknown): string[] | undefined {
   if (values === undefined) return undefined;
   if (!Array.isArray(values) || values.some((v) => typeof v !== 'string' || !isValidClientDependencySpec(v))) {
     throw new HelmError(
       'plugin_manifest_invalid',
-      `外部插件 ${dirPath} 的 ${source} 必须是受控 npm 说明符字符串数组（裸包名或子路径，禁止相对/绝对路径与 .. 段）`,
+      `external plugin ${dirPath}  ${source} must be subject to control npm note symbol string array (bare package name or sub- path, forbidden each other for/absolute path and .. segment)`,
       400,
       { dirPath, source, values: Array.isArray(values) ? values.map((v) => String(v)) : String(values) },
     );
@@ -80,13 +80,13 @@ function normalizeClientDependencySpecs(dirPath: string, source: string, values:
   return out.length > 0 ? out : undefined;
 }
 
-/** 校验并去重清单声明的插件间依赖 ID（非法项显式 plugin_manifest_invalid）。 */
+/** validate and dedupe manifest declaration plugin between dependency ID(illegal items explicit plugin_manifest_invalid). */
 function normalizeManifestDependencies(dirPath: string, source: string, values: unknown): string[] | undefined {
   if (values === undefined) return undefined;
   if (!Array.isArray(values) || values.some((v) => typeof v !== 'string' || !MANIFEST_PLUGIN_ID_PATTERN.test(v))) {
     throw new HelmError(
       'plugin_manifest_invalid',
-      `外部插件 ${dirPath} 的 ${source} 必须是插件 ID 字符串数组（仅允许字母数字 : _ -；npm 依赖请声明在 package.json dependencies）`,
+      `external plugin ${dirPath}  ${source} must be plugin ID string array (only allows character parent number : _ -;npm dependency please declaration in package.json dependencies)`,
       400,
       { dirPath, source, values: Array.isArray(values) ? values.map((v) => String(v)) : String(values) },
     );
@@ -101,14 +101,14 @@ function normalizeManifestDependencies(dirPath: string, source: string, values: 
   return out.length > 0 ? out : undefined;
 }
 
-/** 对外读取 plugin.json clientRoot 或 package.json helm.clientRoot（normalizeDefinition 增强用；plugin.json 优先）。 */
+/** for outside read plugin.json clientRoot or package.json helm.clientRoot(normalizeDefinition increase strong use;plugin.json takes precedence). */
 export function readHelmClientRoot(dirPath: string): string | undefined {
   const manifestClientRoot = readManifestClientRoot(dirPath);
   if (manifestClientRoot !== undefined) return manifestClientRoot;
   return readHelmField(dirPath)?.clientRoot;
 }
 
-/** 对外读取清单声明的前端受控 npm 说明符（plugin.json 与 package.json helm 合并去重；供受管安装补装）。 */
+/** for outside read manifest declaration frontend subject to control npm note symbol (plugin.json and package.json helm merge dedupe; supply managed install patch install). */
 export function readHelmClientDependencies(dirPath: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -125,8 +125,8 @@ export function readHelmClientDependencies(dirPath: string): string[] {
 }
 
 /**
- * 从 plugin.json 读取可选元数据（id/name/description/version），供故障占位
- * 登记展示；manifest 不存在或损坏时返回空对象。
+ * from plugin.json read optional metadata (id/name/description/version), supply fault occupy
+ * register render;manifest missing or corrupt when return empty object.
  */
 export function readManifestMeta(dirPath: string): Record<string, unknown> {
   try {
@@ -136,7 +136,7 @@ export function readManifestMeta(dirPath: string): Record<string, unknown> {
   }
 }
 
-/** 读取 plugin.json（不存在返回 undefined；IO 错误显式抛错，不静默当无清单）。 */
+/** read plugin.json(missing return undefined;IO error explicit throws, not silently when without manifest). */
 function readManifestIfPresent(dirPath: string): Record<string, unknown> | undefined {
   const manifestPath = join(dirPath, 'plugin.json');
   let exists = true;
@@ -147,7 +147,7 @@ function readManifestIfPresent(dirPath: string): Record<string, unknown> | undef
     if (code === 'ENOENT' || code === 'ENOTDIR') return undefined;
     throw new HelmError(
       'plugin_scan_failed',
-      `外部插件目录不可读: ${manifestPath}（${err instanceof Error ? err.message : String(err)}）`,
+      `external plugin directory cannot read: ${manifestPath}(${err instanceof Error ? err.message : String(err)})`,
       500,
       { manifestPath, code },
     );
@@ -156,7 +156,7 @@ function readManifestIfPresent(dirPath: string): Record<string, unknown> | undef
   return readManifest(manifestPath);
 }
 
-/** 读取 plugin.json 的可选扩展字段（clientDependencies / dependencies；无 plugin.json 返回 undefined）。 */
+/** read plugin.json optional extend field (clientDependencies / dependencies; without plugin.json return undefined). */
 export function readManifestOptional(dirPath: string): HelmManifest | undefined {
   const manifest = readManifestIfPresent(dirPath);
   if (manifest === undefined) return undefined;
@@ -168,7 +168,7 @@ export function readManifestOptional(dirPath: string): HelmManifest | undefined 
   };
 }
 
-/** 读取 plugin.json 的 clientRoot 字段（无 plugin.json 返回 undefined；存在但非字符串显式报错）。 */
+/** read plugin.json  clientRoot field (without plugin.json return undefined; store in but non- string explicit errors). */
 function readManifestClientRoot(dirPath: string): string | undefined {
   const manifest = readManifestIfPresent(dirPath);
   if (manifest === undefined) return undefined;
@@ -177,7 +177,7 @@ function readManifestClientRoot(dirPath: string): string | undefined {
   if (typeof clientRoot !== 'string' || clientRoot.length === 0) {
     throw new HelmError(
       'plugin_manifest_invalid',
-      `外部插件 ${dirPath} 的 plugin.json clientRoot 必须是非空字符串`,
+      `external plugin ${dirPath}  plugin.json clientRoot must be non-empty string`,
       500,
       { dirPath, clientRoot: String(clientRoot) },
     );
@@ -185,7 +185,7 @@ function readManifestClientRoot(dirPath: string): string | undefined {
   return clientRoot;
 }
 
-/** 读取 package.json 的 helm 字段（对象形状校验；无 package.json 返回 null）。 */
+/** read package.json  helm field (object shape validate; without package.json return null). */
 export function readHelmField(
   dirPath: string,
 ): { main?: string; clientRoot?: string; clientDependencies?: string[]; dependencies?: string[] } | null {
@@ -198,7 +198,7 @@ export function readHelmField(
     if (code === 'ENOENT' || code === 'ENOTDIR') return null;
     throw new HelmError(
       'plugin_scan_failed',
-      `外部插件 package.json 不可读: ${pkgPath}（${err instanceof Error ? err.message : String(err)}）`,
+      `external plugin package.json cannot read: ${pkgPath}(${err instanceof Error ? err.message : String(err)})`,
       500,
       { dirPath, code },
     );
@@ -209,7 +209,7 @@ export function readHelmField(
   } catch (err) {
     throw new HelmError(
       'plugin_manifest_invalid',
-      `外部插件 package.json 不是合法 JSON: ${pkgPath}（${err instanceof Error ? err.message : String(err)}）`,
+      `external plugin package.json is not legal JSON: ${pkgPath}(${err instanceof Error ? err.message : String(err)})`,
       500,
       { dirPath },
     );
@@ -217,7 +217,7 @@ export function readHelmField(
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
   const helm = (parsed as Record<string, unknown>)['helm'];
   if (helm === undefined) {
-    // 无 helm 字段：回落 package.json main（npm 标准入口）
+    // without helm field: back package.json main(npm standard entry)
     const main = (parsed as Record<string, unknown>)['main'];
     if (typeof main === 'string' && main.length > 0) return { main };
     return null;
@@ -225,7 +225,7 @@ export function readHelmField(
   if (typeof helm !== 'object' || helm === null || Array.isArray(helm)) {
     throw new HelmError(
       'plugin_manifest_invalid',
-      `外部插件 ${dirPath} 的 package.json helm 字段必须是对象`,
+      `external plugin ${dirPath}  package.json helm field must be object`,
       500,
       { dirPath },
     );
@@ -237,7 +237,7 @@ export function readHelmField(
     if (typeof main !== 'string' || main.length === 0) {
       throw new HelmError(
         'plugin_manifest_invalid',
-        `外部插件 ${dirPath} 的 package.json helm.main 必须是非空字符串`,
+        `external plugin ${dirPath}  package.json helm.main must be non-empty string`,
         500,
         { dirPath },
       );
@@ -249,7 +249,7 @@ export function readHelmField(
     if (typeof clientRoot !== 'string' || clientRoot.length === 0) {
       throw new HelmError(
         'plugin_manifest_invalid',
-        `外部插件 ${dirPath} 的 package.json helm.clientRoot 必须是非空字符串`,
+        `external plugin ${dirPath}  package.json helm.clientRoot must be non-empty string`,
         500,
         { dirPath },
       );
@@ -279,7 +279,7 @@ export function readHelmField(
   return result;
 }
 
-/** 读取并解析 plugin.json；损坏 / 非对象一律显式 plugin_manifest_invalid。 */
+/** read and parse plugin.json; corrupt / non- object one rule explicit plugin_manifest_invalid. */
 export function readManifest(manifestPath: string): Record<string, unknown> {
   let raw: string;
   try {
@@ -287,7 +287,7 @@ export function readManifest(manifestPath: string): Record<string, unknown> {
   } catch (err) {
     throw new HelmError(
       'plugin_manifest_invalid',
-      `外部插件清单读取失败: ${manifestPath}（${err instanceof Error ? err.message : String(err)}）`,
+      `external plugin manifest failed to read: ${manifestPath}(${err instanceof Error ? err.message : String(err)})`,
       500,
       { manifestPath },
     );
@@ -298,7 +298,7 @@ export function readManifest(manifestPath: string): Record<string, unknown> {
   } catch (err) {
     throw new HelmError(
       'plugin_manifest_invalid',
-      `外部插件清单不是合法 JSON: ${manifestPath}（${err instanceof Error ? err.message : String(err)}）`,
+      `external plugin manifest is not legal JSON: ${manifestPath}(${err instanceof Error ? err.message : String(err)})`,
       500,
       { manifestPath },
     );
@@ -306,7 +306,7 @@ export function readManifest(manifestPath: string): Record<string, unknown> {
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     throw new HelmError(
       'plugin_manifest_invalid',
-      `外部插件清单必须是 JSON 对象: ${manifestPath}`,
+      `external plugin manifest must be JSON object: ${manifestPath}`,
       500,
       { manifestPath },
     );

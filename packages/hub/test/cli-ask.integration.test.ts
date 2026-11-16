@@ -1,4 +1,4 @@
-/** 单次问答的真实 CLI → HTTP → SDK 回合契约，模型使用官方 faux provider。 */
+/** single time question answer real CLI → HTTP → SDK turn contract, model use official faux provider. */
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -39,41 +39,41 @@ async function fixture() {
   }
 }
 
-test('helm ask 真实回合：回答与持久条目同源，管道内容写入本次输入', { timeout: 60_000 }, async () => {
+test('helm ask real turn: answer and durable item same source, pipeline content write this time input', { timeout: 60_000 }, async () => {
   const f = await fixture()
   try {
-    f.faux.setResponses([fauxAssistantMessage('真实问答结果')])
-    const result = await f.ask(['分析以下内容'], '日志片段')
+    f.faux.setResponses([fauxAssistantMessage('real question answer result')])
+    const result = await f.ask(['analyze or fewer content'], 'log fragment')
     assert.equal(result.code, 0, result.err)
     const value = JSON.parse(result.out)
-    assert.equal(value.answer, '真实问答结果')
+    assert.equal(value.answer, 'real question answer result')
     assert.equal(value.deleted, false)
     const detail = await f.app.kernel.getConversationDetail(value.conversationId)
-    assert.ok(detail.entries.some((entry) => entry.id === value.entryId), '回答条目来自本次真实会话')
-    assert.match(JSON.stringify(detail.entries), /分析以下内容\\n\\n日志片段/)
+    assert.ok(detail.entries.some((entry) => entry.id === value.entryId), 'answer item from this time real conversation')
+    assert.match(JSON.stringify(detail.entries), /analyze or fewer content\\n\\nlog fragment/)
   } finally { await f.close() }
 })
 
-test('helm ask --delete-on-success 真实删除本次会话并保留其他会话', { timeout: 60_000 }, async () => {
+test('helm ask --delete-on-success real delete this time conversation and keep other conversation', { timeout: 60_000 }, async () => {
   const f = await fixture()
   try {
     const before = f.app.kernel.listConversations().map((conversation) => conversation.id)
-    f.faux.setResponses([fauxAssistantMessage('可清理的结果')])
-    const result = await f.ask(['提问', '--delete-on-success'])
+    f.faux.setResponses([fauxAssistantMessage('can clean up result')])
+    const result = await f.ask(['mention question', '--delete-on-success'])
     assert.equal(result.code, 0, result.err)
     const value = JSON.parse(result.out)
-    assert.equal(value.answer, '可清理的结果')
+    assert.equal(value.answer, 'can clean up result')
     assert.equal(value.deleted, true)
     assert.ok(!f.app.kernel.listConversations().some((conversation) => conversation.id === value.conversationId))
     assert.deepEqual(f.app.kernel.listConversations().map((conversation) => conversation.id), before)
   } finally { await f.close() }
 })
 
-test('helm ask 真实模型失败：退出非零并保留可排查的会话', { timeout: 60_000 }, async () => {
+test('helm ask real model failed: exit non-zero and keep can troubleshoot conversation', { timeout: 60_000 }, async () => {
   const f = await fixture()
   try {
-    f.faux.setResponses([fauxAssistantMessage('失败', { errorMessage: 'ask integration failure', stopReason: 'error' })])
-    const result = await f.ask(['提问', '--delete-on-success'])
+    f.faux.setResponses([fauxAssistantMessage('failed', { errorMessage: 'ask integration failure', stopReason: 'error' })])
+    const result = await f.ask(['mention question', '--delete-on-success'])
     assert.notEqual(result.code, 0)
     assert.equal(result.out, '')
     const error = JSON.parse(result.err).error

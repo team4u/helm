@@ -1,4 +1,4 @@
-/** 模型网关与服务端凭据域：providers list/set、credentials list/set/delete。 */
+/** model gateway and server side credentials domain:providers list/set,credentials list/set/delete. */
 import type { CredentialSummary, ProviderConfig } from '@helm/protocol'
 import { CliError } from '../errors.js'
 import { flagValue, parseFlags } from '../args.js'
@@ -10,7 +10,7 @@ export function providersCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['providers', 'list'],
-    description: '列出模型网关（GET /api/providers）',
+    description: 'column out model gateway (GET /api/providers)',
     async run(ctx: CommandContext) {
       parseNoFlags(ctx)
       const hub = await ctx.hub()
@@ -20,12 +20,12 @@ export function providersCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['providers', 'set'],
-    description: '整体替换模型网关列表（PUT /api/providers；完整数组，严禁含密钥）',
+    description: 'whole replace model gateway list (PUT /api/providers; complete array, strictly forbidden contains secret key)',
     flags: [{ name: 'input', type: 'json', required: true, help: 'ProviderConfig[] JSON' }],
     async run(ctx: CommandContext) {
       const parsed = parseFlags([{ name: 'input', type: 'json', required: true }], ctx.args)
       const input = requireJsonInput(parsed.flags)
-      if (!Array.isArray(input)) throw new CliError('--input 需为完整 JSON 数组（ProviderConfig[]）', 'invalid_flag_value')
+      if (!Array.isArray(input)) throw new CliError('--input must be complete JSON array (ProviderConfig[])', 'invalid_flag_value')
       const hub = await ctx.hub()
       printResult(ctx, await hub.put<ProviderConfig[]>('/api/providers', input))
     },
@@ -33,7 +33,7 @@ export function providersCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['credentials', 'list'],
-    description: '列出服务端凭据（GET /api/credentials；仅 keys 与 configured）',
+    description: 'column out server side credentials (GET /api/credentials; only keys and configured)',
     async run(ctx: CommandContext) {
       parseNoFlags(ctx)
       const hub = await ctx.hub()
@@ -43,7 +43,7 @@ export function providersCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['credentials', 'set'],
-    description: '写入服务端凭据（PUT /api/credentials/:id；明文不回读）',
+    description: 'write server side credentials (PUT /api/credentials/:id; plaintext do not back read)',
     flags: [{ name: 'value', type: 'string', required: true }],
     positional: '<id>',
     async run(ctx: CommandContext) {
@@ -56,7 +56,7 @@ export function providersCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['credentials', 'delete'],
-    description: '删除服务端凭据（DELETE /api/credentials/:id）',
+    description: 'delete server side credentials (DELETE /api/credentials/:id)',
     positional: '<id>',
     async run(ctx: CommandContext) {
       const parsed = parseFlags([], ctx.args)

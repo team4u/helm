@@ -1,28 +1,28 @@
 /**
- * 资产热重载协调器：监听静态资产变更，抖动合并后串行触发模型与配置热重载。
+ * asset hot reload coordinate tune: listen static asset change, jitter merge after serial trigger model and config hot reload.
  *
- * 职责：
- * 1. 仅监听静态资产路径（providers.json / credentials.json / config.json /
- *    profiles/** / skills/**），排除 state.sqlite、artifacts、workflows 与临时文件；
- * 2. config.json 变更刷新插件配置镜像（pluginConfig.load），失败显式通知；
- * 3. providers.json / credentials.json 变更经 200ms 防抖后串行 reloadModels；
- * 4. 外部注入 Models（options.externalModels）时空操作，保持调用方所有权；
- * 5. 关停顺序保障：先 stop 停止新事件与防抖定时器，再 waitForInflight 等待在途 reload。
+ * responsibility:
+ * 1. only listen static asset path (providers.json / credentials.json / config.json /
+ *    profiles/** / skills/**), exclude state.sqlite,artifacts,workflows and temp file;
+ * 2. config.json change refresh plugin config mirror (pluginConfig.load), failed explicit notify;
+ * 3. providers.json / credentials.json change via 200ms guard against jitter after serial reloadModels;
+ * 4. external inject Models(options.externalModels) when empty operation, keep caller ownership;
+ * 5. closure stop order keep fault: first stop stop new event and guard against jitter timer, again waitForInflight wait for in-flight reload.
  */
 
 import { AssetWatcher } from '../services/index.js'
 
 export interface AssetReloaderOptions {
   readonly dataDir: string
-  /** 外部传入 Models（测试或外部拥有）时为 true；此时不替换模型，scheduleReloadModels 视为空操作。 */
+  /** external pass Models(test or external own) when is true; now do not replace model,scheduleReloadModels treated as empty operation. */
   readonly externalModels?: boolean
-  /** 触发模型重载（如调用 modelsRegistry.reloadModels()）。 */
+  /** trigger model reload (such as invoke modelsRegistry.reloadModels()). */
   readonly reloadModels: () => Promise<void>
-  /** 触发插件配置镜像刷新（如调用 pluginConfig.load()）。 */
+  /** trigger plugin config mirror refresh (such as invoke pluginConfig.load()). */
   readonly reloadPluginConfig: () => Promise<void>
-  /** 错误通知发布接口（如发布到 events 'notification'）。 */
+  /** error notify publish interface (such as publish to events 'notification'). */
   readonly notifyError: (title: string, error: unknown) => void
-  /** 自定义 watcher 工厂（主要用于测试注入 mock watcher）。 */
+  /** self define watcher work vendor (mainly used to test inject mock watcher). */
   readonly createWatcher?: (
     dir: string,
     onChange: (paths: string[]) => void,
@@ -32,9 +32,9 @@ export interface AssetReloaderOptions {
 
 export class AssetReloader {
   private watcher: { start(): void; close(): void } | undefined
-  /** reloadModels 串行链 + 抖动合并（providers/credentials 热重载共用）。 */
+  /** reloadModels serial chain + jitter merge (providers/credentials hot reload shared use). */
   private reloadChain: Promise<void> = Promise.resolve()
-  /** reloadPluginConfig 在途链。 */
+  /** reloadPluginConfig in-flight chain. */
   private reloadConfigChain: Promise<void> = Promise.resolve()
   private reloadTimer: NodeJS.Timeout | undefined
   private closed = false
@@ -42,11 +42,11 @@ export class AssetReloader {
   constructor(private readonly options: AssetReloaderOptions) {}
 
   /**
-   * 启动资产监听。
-   * 仅监听静态资产路径（providers.json / credentials.json / config.json /
-   * profiles/** / skills/**）。排除 state.sqlite、artifacts、workflows、
-   * plugins 数据目录与一切临时文件——它们非「配置输入」，监听只增噪音。
-   * models 注入时（外部/测试 Models）模型集合归调用方，绝不重建替换。
+   * start asset listen.
+   * only listen static asset path (providers.json / credentials.json / config.json /
+   * profiles/** / skills/**). exclude state.sqlite,artifacts,workflows,
+   * plugins data directory and everything temp file - - they non- config input, listen only increase noise sound.
+   * models inject when (external/test Models) model set archive caller, never rebuild replace.
    */
   start(): void {
     if (this.closed || this.watcher) return
@@ -58,15 +58,15 @@ export class AssetReloader {
       (changed) => this.onAssetsChanged(changed),
       {
         onError: (err) => {
-          // watcher 故障显式通知，不静默吞（热重载降级但主流程不受影响）。
-          this.options.notifyError('资产热重载监听失败', err)
+          // watcher fault explicit notify, not silently swallow (hot reload fall back but main stream process do not subject to affect).
+          this.options.notifyError('asset hot reload listen failed', err)
         },
       },
     )
     this.watcher.start()
   }
 
-  /** 资产变更路径分流。 */
+  /** asset change path stream. */
   onAssetsChanged(changedPaths: string[]): void {
     if (this.closed) return
     let providersTouched = false
@@ -82,14 +82,14 @@ export class AssetReloader {
       else continue
       void second
     }
-    // profiles/skills 每回合 before_turn 都 fresh 读取，无需缓存失效。
+    // profiles/skills each turn before_turn all fresh read, no need to cache expires.
     void profilesOrSkills
     if (configTouched) {
-      // 插件配置镜像刷新（读取失败显式通知，不吞）。
+      // plugin config mirror refresh (failed to read explicit notify, do not swallow).
       this.reloadConfigChain = this.reloadConfigChain
         .then(() => (this.closed ? Promise.resolve() : this.options.reloadPluginConfig()))
         .catch((error) => {
-          this.options.notifyError('插件配置热重载失败', error)
+          this.options.notifyError('plugin config hot reload failed', error)
         })
     }
     if (providersTouched || credentialsTouched) {
@@ -97,7 +97,7 @@ export class AssetReloader {
     }
   }
 
-  /** 抖动合并 + 串行 reloadModels（外部注入 Models 时空操作）。 */
+  /** jitter merge + serial reloadModels(external inject Models when empty operation). */
   scheduleReloadModels(): void {
     if (this.closed || this.options.externalModels) return
     if (this.reloadTimer !== undefined) clearTimeout(this.reloadTimer)
@@ -107,13 +107,13 @@ export class AssetReloader {
       this.reloadChain = this.reloadChain
         .then(() => (this.closed ? Promise.resolve() : this.options.reloadModels()))
         .catch((error) => {
-          this.options.notifyError('模型配置热重载失败', error)
+          this.options.notifyError('model config hot reload failed', error)
         })
     }, 200)
   }
 
   /**
-   * 关停第一阶段：停止监听并清除待触发防抖定时器，不再产生新副作用。
+   * closure stop one phase: stop listen and clear await trigger guard against jitter timer, no longer produce new side effect.
    */
   stop(): void {
     this.closed = true
@@ -126,13 +126,13 @@ export class AssetReloader {
   }
 
   /**
-   * 关停第二阶段：等待在途 reloadModels 与 reloadPluginConfig 链收敛。
+   * closure stop second phase: wait for in-flight reloadModels and reloadPluginConfig chain converge.
    */
   async waitForInflight(): Promise<void> {
     await Promise.all([this.reloadChain, this.reloadConfigChain])
   }
 
-  /** 完整关闭：先 stop 阻止新事件，再等待在途收敛。 */
+  /** complete close: first stop block stop new event, again wait for in-flight converge. */
   async close(): Promise<void> {
     this.stop()
     await this.waitForInflight()

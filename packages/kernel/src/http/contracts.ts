@@ -1,8 +1,8 @@
 /**
- * HTTP 层依赖的内核运行时契约（结构化类型）。
+ * HTTP layer dependency kernel runtime contract (structure type).
  *
- * 各服务由并行代理实现且已就位（services/*）；本文件约束 HTTP 消费的形状。
- * KernelRuntime 实例传入时结构化兼容即可（ structural typing ）。
+ * each service by parallel proxy implement and already then (services/*); this file constraint HTTP consume shape.
+ * KernelRuntime instance pass when structure compatibility i.e. can ( structural typing ).
  */
 import type {
   ActionManifest,
@@ -70,7 +70,7 @@ export type {
   RealSkillService,
 }
 
-// 重新导出真实服务类型供 HTTP 消费方使用
+// re- export real service type supply HTTP consumer use
 export type AuthService = RealAuthService
 export type ArtifactService = RealArtifactService
 export type CredentialService = RealCredentialService
@@ -83,19 +83,19 @@ export type SkillService = RealSkillService
 // ---------------------------------------------------------------------------
 
 /**
- * 全局事件枢纽（kernel.events）。HTTP 层只消费 response()：由 runtime
- * 提供 Web Standard SSE Response（流式、帧内自行脱敏），客户端断开
- * （request.signal abort）由实现负责清理。HTTP 层不做缓存/转换/兜底。
+ * global event hub (kernel.events).HTTP layer only consume response(): by runtime
+ * provide Web Standard SSE Response(streaming, frame inside self row redaction), client disconnect
+ * (request.signal abort) by implement negative duty clean up.HTTP layer does not cache/convert/fall back.
  */
 export interface EventHub {
-  /** SSE 响应：立即返回 Response（流式），客户端断开自动清理。 */
+  /** SSE response: immediately return Response(streaming), client disconnect automatically clean up. */
   response(request: Request): Response
 }
 
 export interface PluginRouteInfo {
   pluginId: string
   method: 'GET' | 'POST' | 'PUT' | 'DELETE'
-  /** 完整挂载路径（如 '/api/plugins/<id>/webhook/:t'）；声明时强制专属前缀。 */
+  /** complete mount path (such as '/api/plugins/<id>/webhook/:t'); declaration when force dedicated belong prefix. */
   path: string
   public?: boolean
   handler(req: Request): Response | Promise<Response>
@@ -112,34 +112,34 @@ export interface PluginHost {
     input: unknown,
     context?: { conversationId?: number },
   ): Promise<unknown> | unknown
-  /** raw 配置（可能含 secret 明文）；HTTP 输出前必须按 schema 脱敏。 */
+  /** raw config (may contains secret plaintext);HTTP output before must by schema redaction. */
   getConfig(id: string): Record<string, unknown> | Promise<Record<string, unknown>>
-  /** 声明式配置 schema（含 secret 标记，供 HTTP 脱敏）。 */
+  /** declaration style config schema(contains secret mark record, supply HTTP redaction). */
   getConfigSchema(id: string): Record<string, PluginConfigFieldSchema> | Promise<Record<string, PluginConfigFieldSchema>>
-  /** 可选：配置字段来源映射（configured | default | unset）。 */
+  /** optional: config field source mapping (configured | default | unset). */
   getConfigSources?(id: string): Record<string, PluginConfigFieldSource> | Promise<Record<string, PluginConfigFieldSource>>
   setConfig(id: string, values: Record<string, unknown>): Promise<void> | void
-  /** 动态路由清单（实际挂载命名空间 /api/plugins/<encodedId>/routes/...）。 */
+  /** motion state routing manifest (actual mount naming empty between /api/plugins/<encodedId>/routes/...). */
   listRoutes(): PluginRouteInfo[]
   /**
-   * 单插件摘要现读：插件路由派发前的启用状态复查（listRoutes 快照可能
-   * 与停用完成交错；未提供时跳过复查）。注意摘要不含 lifecycle phase，
-   * teardown 期间（enabled 仍真）的拦截需要 PluginHost 公开 phase 感知
-   * 门禁（跨组）。
+   * single plugin summary now read: plugin routing dispatch before enable state re- inspect (listRoutes snapshot may
+   * and deactivate complete hand over wrong; not provide when skip re- inspect). note summary excludes lifecycle phase,
+   * teardown during (enabled still true) intercept need to PluginHost public phase aware
+   * gate (across group).
    */
   get?(pluginId: string): PluginSummary | undefined
   /**
-   * 在途任务跟踪包装（与 action/tool 执行同源的 PluginTaskTracker）：
-   * route handler 执行期间计入 liveTasks，使 disable 的停用闸门
-   * assertNoLiveTasks 对在途 route 请求可见（409 plugin_has_live_tasks
-   * 而非半执行拆毁）。未提供时不包装。
+   * in-flight task trace wrap (and action/tool execute same source PluginTaskTracker):
+   * route handler execute during count liveTasks, make disable deactivate gate
+   * assertNoLiveTasks for in-flight route request visible (409 plugin_has_live_tasks
+   * while non- half execute split destroy). not provide when do not wrap.
    */
   withTask?<T>(pluginId: string, label: string, fn: () => Promise<T>): Promise<T>
-  /** 读取插件公共文档；私有/停用/不存在一律 404（鉴权不能绕过可见性）。 */
+  /** read plugin public document; private/deactivate/missing one rule 404(authentication cannot bypass visible). */
   getPublicDoc(pluginId: string, name: string): Promise<PublicPluginDoc> | PublicPluginDoc
   /**
-   * 读取插件公共会话文档（GET /api/plugins/:id/docs/:name?conversationId=N
-   * 与专用 SSE 首帧共用）；停用/私有/未声明/会话不存在一律 404。
+   * read plugin public conversation document (GET /api/plugins/:id/docs/:name?conversationId=N
+   * and dedicated use SSE first frame shared use); deactivate/private/not declaration/conversation missing one rule 404.
    */
   getPublicSessionDoc(
     pluginId: string,
@@ -147,8 +147,8 @@ export interface PluginHost {
     conversationId: number,
   ): Promise<PublicPluginSessionDoc> | PublicPluginSessionDoc
   /**
-   * 获取已启用插件 client.tsx 编译产物（GET /api/plugins/:id/client.mjs?module=...）。
-   * 停用/未注册/未声明 clientRoot/越根/编译失败显式抛错（HelmError 语义）。
+   * get enabled plugin client.tsx compile artifact (GET /api/plugins/:id/client.mjs?module=...).
+   * deactivate/not registered/not declaration clientRoot/exceeds/failed to compile explicit throws (HelmError semantics).
    */
   getClientModule(
     pluginId: string,
@@ -156,36 +156,36 @@ export interface PluginHost {
     options?: { chunk?: string; hash?: string },
   ): Promise<{ code: string; contentHash: string; gzipped?: Uint8Array; exports?: string[] }>
   /**
-   * 外部插件源码静态自检（POST /api/plugins/doctor，body { path? , dir?, id? } 择一）：
-   * 真实代际导入 + 临时宿主真实注册 + client 真实编译；结果以报告返回
-   * （插件缺陷在 checks 内，不 reject）。id 模式解析该插件源目录；
-   * path/dir 为目录绝对路径（dir 为 path 的兼容别名，等价）。目标不存在/无法
-   * 解析时 404 reject（不是插件缺陷，是请求目标错误）。
+   * external plugin source code static self inspect (POST /api/plugins/doctor,body { path? , dir?, id? } choose one):
+   * real proxy boundary import + temporary host real register + client real compile; result with report return
+   * (plugin defect in checks inside, do not reject).id pattern parse the plugin source directory;
+   * path/dir is directory absolute path (dir is path compatibility alias, etc. price). target missing/cannot
+   * parse when 404 reject(is not plugin defect, is request target error).
    */
   doctorExternalPlugin?(target: { dir?: string; id?: string }): Promise<PluginDoctorReport>
   /**
-   * 外部插件受控热重载（POST /api/plugins/:id/reload）：预检失败旧实例保持不动；
-   * 在途任务 409 拒绝；内置插件 403；启用状态保持。
+   * external plugin subject to control hot reload (POST /api/plugins/:id/reload): preflight failed old instance keep do not motion;
+   * in-flight task 409 reject; built-in plugin 403; enable state keep.
    */
   reloadExternalPlugin?(pluginId: string): Promise<PluginReloadResult>
-  /** 增量重扫描（POST /api/plugins/rescan）：只注册新外部插件，默认 disabled。 */
+  /** incremental heavy scan (POST /api/plugins/rescan): only register new external plugin, by default disabled. */
   rescanExternalPlugins?(): Promise<PluginRescanResult>
   /**
-   * 受管插件包安装（POST /api/plugins/install，body { source, enable? }）：
-   * npm/git/local 统一 staging 拷贝 + doctor 全链 + 原子进入受管目录；
-   * npm 安装永不运行 lifecycle scripts；失败清理 staging 不留半产物。
-   * 未接线时 HTTP 501。
+   * managed plugin package install (POST /api/plugins/install,body { source, enable? }):
+   * npm/git/local unify staging copy + doctor all chain + atomic enter managed directory;
+   * npm install forever do not run lifecycle scripts; failed clean up staging do not half artifact.
+   * not connect line when HTTP 501.
    */
   installPluginPackage?(source: string, options?: { enable?: boolean }): Promise<PluginInstallResult>
-  /** 受管插件包更新（POST /api/plugins/:id/update）：重取 source + doctor + 原子替换 + reload 语义。 */
+  /** managed plugin package update (POST /api/plugins/:id/update): heavy take source + doctor + atomic replace + reload semantics. */
   updatePluginPackage?(pluginId: string): Promise<PluginUpdateResult>
-  /** 受管插件包移除（POST /api/plugins/:id/remove）：保护 builtin/在途任务/providers；local 只删受管副本。 */
+  /** managed plugin package remove (POST /api/plugins/:id/remove): protect builtin/in-flight task/providers;local only delete managed copy. */
   removePluginPackage?(pluginId: string): Promise<PluginRemoveResult>
 }
 
 export type { SearchHit }
 
-/** 会话文档事件端口（kernel 侧 SessionDocEventHub 的结构化形状）。 */
+/** conversation document event port (kernel side SessionDocEventHub structure shape). */
 export interface SessionDocEventPort {
   readonly seq: number
   subscribe(
@@ -195,20 +195,20 @@ export interface SessionDocEventPort {
   response(
     request: Request,
     options: {
-      /** 同步快照 provider：订阅建立后调用（避免先快照后订阅的丢帧窗口），
-       * 出错同步抛（HTTP 层转结构化错误）；内部再做 public/会话存在性校验。 */
+      /** sync snapshot provider: subscribe establish after invoke (avoid first snapshot after subscribe lose frame window),
+       * fails sync throw (HTTP layer rotate structure error); internal again do public/conversation store in validate. */
       snapshot: () => { seq: number; doc: PublicPluginSessionDoc }
       target: { pluginId: string; name: string; conversationId: number }
     },
   ): Response
 }
 
-/** HTTP 消费的 KernelRuntime 形状（真实 KernelRuntime 结构化兼容于它）。 */
+/** HTTP consume KernelRuntime shape (real KernelRuntime structure compatibility at it). */
 export interface KernelRuntimeLike {
   readonly dataDir: string
   readonly auth: AuthService
   readonly events: EventHub
-  /** 会话文档专用事件流端口（未提供时专用 SSE 501）。 */
+  /** conversation document dedicated use event stream port (not provide when dedicated use SSE 501). */
   readonly sessionDocEvents?: SessionDocEventPort
   readonly profiles: ProfileService
   readonly skills: SkillService
@@ -217,37 +217,37 @@ export interface KernelRuntimeLike {
   readonly artifacts: ArtifactService
   readonly plugins: PluginHost
   /**
-   * 机密脱敏钩子（真实 kernel 的 SecretStash）。出站 JSON 的字符串值与
-   * 服务端错误日志都先经它擦除已登记秘密，绝不外发明文或还原 marker。
+   * secret redaction hook (real kernel  SecretStash). out station JSON string value and
+   * server side error log all first via it erase already register secret, never outside plaintext or restore marker.
    */
   readonly stash?: {
     redact(text: string): string
     createStreamingRedactor?(): { push(text: string): string; flush(): string }
   }
   /**
-   * 模型热重载端口：providers/credentials 变更后 await，使后续
-   * listModels 反映新配置（仅持久化 JSON 而不重载等于热配置无效）。
-   * 可选：runtime 未提供时 HTTP 层不阻塞写路径。
+   * model hot reload port:providers/credentials change after await, make after continue
+   * listModels reverse reflect new config (only persist JSON while do not reload equals hot config invalid).
+   * optional:runtime not provide when HTTP layer non-blocking write path.
    */
   reloadModels?(): Promise<void>
 
   /**
-   * 实际 Hub URL 热更新端口：startHub(port:0) 监听后回调，使 shell 内
-   * CLI/工具端点指向真实地址。未提供时 HTTP 层不阻塞。
+   * actual Hub URL hot update port:startHub(port:0) listen after call back, make shell inside
+   * CLI/tool end point points to real address. not provide when HTTP layer non-blocking.
    */
   setHubUrl?(url: string): void
 
   listConversations(
     filter?: ConversationListFilter,
   ): Promise<ConversationSummary[]> | ConversationSummary[]
-  /** GET /api/conversations/:id 消费：摘要 + 分页时间线。 */
+  /** GET /api/conversations/:id consume: summary + page timeline. */
   getConversationDetail(
     id: number,
     opts?: { limit?: number; cursor?: string },
   ): Promise<ConversationDetail> | ConversationDetail
-  /** GET /api/conversations/:id/entries/:entryId 消费：单条未截断但已脱敏
-   * （签名剥离）的条目；rewind 覆盖旧条目与详情可见性一致地 404。
-   * 可选：runtime 未提供时 HTTP 501（与 withdrawQueuedInput 同风格）。 */
+  /** GET /api/conversations/:id/entries/:entryId consume: single not truncate but already redaction
+   * (signature strip) item;rewind override old item and detail situation visible consistent ground 404.
+   * optional:runtime not provide when HTTP 501(and withdrawQueuedInput same style). */
   getConversationEntry?(
     id: number,
     entryId: number,
@@ -260,34 +260,34 @@ export interface KernelRuntimeLike {
     text: string,
     opts?: {
       origin?: 'human' | 'agent' | 'trigger'
-      /** 会话正忙策略；省略时内核默认 steer。 */
+      /** conversation correct busy policy; omit when kernel by default steer. */
       whenBusy?: 'steer' | 'followUp' | 'reject'
       meta?: Record<string, unknown>
       attachments?: string[]
-      /** 从指定历史条目起原地覆盖重发（截断该条及后续上下文后写入新输入）。 */
+      /** from designate history item start original ground override heavy (truncate the and after continue context after write new input). */
       replaceFromEntryId?: number
     },
   ): Promise<{ submissionId: string }> | { submissionId: string }
-  /** 撤回排队中的输入（POST /api/conversations/:id/withdraw）。 */
+  /** withdraw back queue up in input (POST /api/conversations/:id/withdraw). */
   withdrawQueuedInput?(
     id: number,
     opts: { submissionId: number },
   ): Promise<ConversationWithdrawResponse> | ConversationWithdrawResponse
-  /** ?wait=1：等待单次提交终态并返回本次输入结果；失败/中止抛明确 HelmError。 */
+  /** ?wait=1: wait for single time commit terminal state and return this time input result; failed/abort throw explicit HelmError. */
   waitForInput(
     id: number,
     submissionId: string,
     signal?: AbortSignal,
   ): Promise<ConversationInputResult> | ConversationInputResult
   abortConversation(id: number): Promise<void> | void
-  /** 重置会话上下文（新上下文以 handoff 文本开始）；返回更新后的摘要。 */
+  /** reset conversation context (new context with handoff text start); return update after summary. */
   resetConversation(id: number, opts?: { handoff?: string }): Promise<ConversationSummary> | ConversationSummary
-  /** 手动压缩会话上下文；返回压缩任务 ID 与更新后的摘要。 */
+  /** manually compress conversation context; return compress task ID and update after summary. */
   compactConversation(
     id: number,
     opts?: { instructions?: string },
   ): Promise<ConversationCompactResponse> | ConversationCompactResponse
-  /** 从指定条目分叉新会话（继承 profile/cwd/model，父链指向源会话）。 */
+  /** from designate item fork new conversation (inherit profile/cwd/model, parent chain points to source conversation). */
   forkConversation(
     id: number,
     opts: { entryId: number; title?: string },
@@ -299,22 +299,22 @@ export interface KernelRuntimeLike {
 
   search(query: string): Promise<SearchHit[]> | SearchHit[]
   listModels(): Promise<ModelCatalog> | ModelCatalog
-  /** 设置模型禁用集（PUT /api/models/filter）；未实现时 HTTP 501。 */
+  /** settings model disable collection (PUT /api/models/filter); not implemented when HTTP 501. */
   setDisabledModels?(provider: string | undefined, disabledModels: string[]): Promise<ModelCatalog>
   /**
-   * 模型禁用预检（ModelRegistry.assertModelEnabled）：HTTP 保存 profile.model /
-   * 全局默认模型等入口在落盘前调用，禁用模型拒绝（409 model_disabled）。
-   * 可选端口：runtime 未提供时 HTTP 层不阻塞。
+   * model disable preflight (ModelRegistry.assertModelEnabled):HTTP save profile.model /
+   * global by default model etc. entry in before invoke, disable model reject (409 model_disabled).
+   * optional port:runtime not provide when HTTP layer non-blocking.
    */
   assertModelEnabled?(provider: string, modelId: string): void
-  /** 设置全局默认模型与思考档位（config.json）；空串清除。未实现时 HTTP 501。 */
+  /** settings global by default model and think Profile (config.json); empty string clear. not implemented when HTTP 501. */
   setDefaultModel?(model?: string, thinkingLevel?: string): Promise<void>
-  /** Profile 保存后同步绑定会话的模型与思考档位。 */
+  /** Profile save after sync bind set conversation model and think Profile. */
   alignProfileConversations?(profileId: string): Promise<void>
   listModelProviders(): Promise<ModelProviderSummary[]> | ModelProviderSummary[]
   /**
-   * 动态模型目录刷新（POST /api/models/refresh）：目标动态供应商 allowNetwork
-   * 拉取最新目录并持久化 models-store.json。可选端口：runtime 未提供时 501。
+   * motion state model directory refresh (POST /api/models/refresh): target motion state provider allowNetwork
+   * pull most new directory and persist models-store.json. optional port:runtime not provide when 501.
    */
   refreshModels?(options?: {
     providers?: string[]
@@ -323,54 +323,54 @@ export interface KernelRuntimeLike {
   }): Promise<ModelProvidersRefreshResult>
 
   // ---------------------------------------------------------------------------
-  // 跨平台节点管理（EnvFabric / nodes / env exec）
+  // across platform node manage (EnvFabric / nodes / env exec)
   // ---------------------------------------------------------------------------
 
-  /** 节点底座（node-server 接 WS 网关用）；未提供时 /ws/node 不挂接。 */
+  /** node bottom seat (node-server connect WS gateway use); not provide when /ws/node do not hang connect. */
   readonly envFabric?: EnvFabric
-  /** 列出 local + 已登记 BYOM 节点与实时在线状态（GET /api/nodes）。 */
+  /** column out local + already register BYOM node and real-time online state (GET /api/nodes). */
   listNodes(): Promise<NodeInfo[]> | NodeInfo[]
-  /** 签发节点接入令牌（明文 token 仅本次响应返回；服务端只存 sha256）。 */
+  /** sign node access token (plaintext token only this time response return; server side only store sha256). */
   issueNodeToken(nodeId: string): Promise<NodeIssuedToken> | NodeIssuedToken
-  /** 移除节点：从签发表删除并立即掐断在途连接（DELETE /api/nodes/:id）。 */
+  /** remove node: from sign table delete and immediately pinch assert in-flight connect (DELETE /api/nodes/:id). */
   removeNode(nodeId: string): Promise<void> | void
-  /** 检查节点可用更新（GET /api/nodes/:id/upgrade/check）。 */
+  /** check node available update (GET /api/nodes/:id/upgrade/check). */
   checkNodeUpgrade?(nodeId: string, input?: NodeUpgradeCheckInput): Promise<NodeUpgradeCheckResult> | NodeUpgradeCheckResult
-  /** 触发节点升级并等待 commit 确认（POST /api/nodes/:id/upgrade）。 */
+  /** trigger node upgrade and wait for commit confirm (POST /api/nodes/:id/upgrade). */
   upgradeNode?(nodeId: string, input?: NodeUpgradeInput): Promise<NodeUpgradeResult> | NodeUpgradeResult
   /**
-   * 启动前台端口转发（POST /api/nodes/:id/forward）：Hub 侧按需监听
-   * listenHost:listenPort，每个入站连接经任意 TCP 隧道到达目标节点
-   * targetHost:targetPort；监听器仅在命令生命周期内存在（监控流断开 /
-   * stop / 宿主 close 即销毁）。
+   * start foreground port forwarding (POST /api/nodes/:id/forward):Hub side on demand listen
+   * listenHost:listenPort, each station connect via any TCP tunnel reach target node
+   * targetHost:targetPort; listener only in command lifecycle memory in (monitor stream disconnect /
+   * stop / host close i.e. destroy).
    */
   startNodeForward?(
     nodeId: string,
     input: { listenHost: string; listenPort: number; targetHost?: string; targetPort: number },
   ): Promise<NodeForwardSession> | NodeForwardSession
-  /** 停止端口转发（DELETE /api/nodes/forward/:forwardId）；幂等语义由 404 表达。 */
+  /** stop port forwarding (DELETE /api/nodes/forward/:forwardId); idempotent semantics by 404 express. */
   stopNodeForward?(forwardId: string): Promise<void> | void
-  /** 转发会话现读（GET /api/nodes/forward/:forwardId）。 */
+  /** forwarding conversation now read (GET /api/nodes/forward/:forwardId). */
   getNodeForward?(forwardId: string): NodeForwardSession | undefined
-  /** 活动转发清单（GET /api/nodes/forward）。 */
+  /** activity forwarding manifest (GET /api/nodes/forward). */
   listNodeForwards?(): NodeForwardSession[]
-  /** 转发事件订阅（GET /api/nodes/forward/:forwardId/events，NDJSON）；stop 终态 stopped 帧后正常关闭流（监控不悬挂）。 */
+  /** forwarding event subscribe (GET /api/nodes/forward/:forwardId/events,NDJSON);stop terminal state stopped frame after normal close stream (monitor do not pending). */
   onNodeForwardEvent?(
     forwardId: string,
     listener: (event: NodeForwardEvent) => void,
   ): () => void
-  /** 转发终止通知（终态 stopped 帧之后调用；已停止时立即回调）。 */
+  /** forwarding terminate notify (terminal state stopped frame after invoke; already stop when immediately call back). */
   onNodeForwardStopped?(forwardId: string, listener: () => void): () => void
   /**
-   * 绑定前台租约持有者（events 事件流建立时）：清除创建租约；返回释放
-   * 函数（流断开/cancel 时调用）——最后一个持有者释放即停止转发。
-   * 只读 list/get 不走此端口（不是持有者）。
+   * bind set foreground lease holder (events event stream establish when): clear create lease; return release
+   * function (stream disconnect/cancel when invoke) - - finally a holder release i.e. stop forwarding.
+   * only read list/get do not away this port (is not holder).
    */
   acquireNodeForwardLease?(forwardId: string): () => void
   /**
-   * 跨节点命令执行（POST /api/env/exec）：靶点解析为显式 nodeId/cwd >
-   * 会话绑定 > local；远端离线 409 node_offline；onChunk 逐块回放
-   * （NDJSON 流式模式）；signal 传播取消。
+   * across node command execute (POST /api/env/exec): target parse is explicit nodeId/cwd >
+   * conversation bind set > local; remote offline 409 node_offline;onChunk one by one chunk back put
+   * (NDJSON streaming pattern);signal pass broadcast cancel.
    */
   execEnv(
     req: EnvExecRequest,
@@ -379,17 +379,17 @@ export interface KernelRuntimeLike {
   ): Promise<EnvExecResponse> | EnvExecResponse
 }
 
-/** startHub 选项与返回。 */
+/** startHub option and return. */
 export interface StartHubOptions {
   kernel: KernelRuntimeLike
-  /** 默认 3202（HELM_PORT 约定；测试请用 0）。 */
+  /** by default 3202(HELM_PORT convention; test please use 0). */
   port?: number
-  /** 默认 127.0.0.1。 */
+  /** by default 127.0.0.1. */
   hostname?: string
   /**
-   * 生产静态托管目录（packages/web/dist）：false 禁用；缺省探测默认位置
-   * （存在 index.html 才启用）；字符串为显式目录（失效时启动显式报错）。
-   * 透传给 createHubHandler 的同名选项。
+   * produce static hosting directory (packages/web/dist):false disable; default probe by default location
+   * (store in index.html only then enable); string is explicit directory (expires when start explicit errors).
+   * pass-through to createHubHandler same name option.
    */
   webDistDir?: string | false
 }
@@ -399,5 +399,5 @@ export interface HubHandle {
   close(): Promise<void>
 }
 
-// 导出供测试构造完整 Profile
+// export supply test construct complete Profile
 export type { Profile, ProviderConfig, SkillSummary, ArtifactKind, ArtifactMetadata, AskSpec, ConversationSummary, ConversationDetail, ConversationEntry, ConversationInputResult, PluginSummary, PluginStatus, PluginDiagnosticError, PluginInUseItem, PluginConfigFieldSource, PluginConfigResponse, ActionManifest, PublicPluginDoc, NodeInfo, NodeIssuedToken, NodeUpgradeCheckInput, NodeUpgradeCheckResult, NodeUpgradeInput, NodeUpgradeResult, EnvExecRequest, EnvExecResponse, ModelCatalogEntry, ModelCatalog, ConversationCompactResponse, ConversationWithdrawResponse, PluginDoctorReport, PluginReloadResult, PluginRescanResult, PluginInstallResult, PluginUpdateResult, PluginRemoveResult }

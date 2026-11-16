@@ -1,14 +1,14 @@
 /**
- * doc-registry.ts: 管理插件公共/会话文档（PluginDoc / PluginSessionDoc）。
+ * doc-registry.ts: manage plugin public/conversation document (PluginDoc / PluginSessionDoc).
  *
- * 职责：
- * - 维护插件公共/私有 doc 与会话级 sessionDoc 的注册状态与句柄；
- * - 隔离不同插件的文档读写（全局键 pluginId:name，会话键 (pluginId, name, conversationId) 三元组）；
- * - 封装全局 PluginDocStore 与会话专用 PluginSessionDocStore，并与公共文档
- *   更新事件（全局 SSE / 会话专用订阅流）打通。
+ * responsibility:
+ * - maintain plugin public/private doc and conversation level sessionDoc register state and handle;
+ * - isolated different plugin document read write (global key pluginId:name, conversation key (pluginId, name, conversationId) three meta group);
+ * - wrap global PluginDocStore and conversation dedicated use PluginSessionDocStore, and and public document
+ *   update event (global SSE / conversation dedicated use subscribe stream) hit through.
  *
- * 命名空间约定：doc 与 sessionDoc 共享文档命名空间（同一插件内禁止同名），
- * 否则 GET /api/plugins/:id/docs/:name 会出现路由歧义。
+ * naming empty between convention:doc and sessionDoc sharing document naming empty between (the same plugin inside forbidden same name),
+ * otherwise GET /api/plugins/:id/docs/:name will appear routing ambiguity.
  */
 import {
   HelmError,
@@ -23,65 +23,65 @@ import { assertValidId, isPlainObject, jsonClone } from './shared.js';
 export interface PluginDocStore {
   get<T>(key: string, initial: T): T;
   set<T>(key: string, value: T): void;
-  /** 删除某插件在该存储中的全部全局文档（`${pluginId}:` 前缀键）；卸载关联清理用。 */
+  /** delete a certain plugin in the store in all global document (`${pluginId}:` prefix key); unload related clean up use. */
   deletePlugin(pluginId: string): void;
-  /** 等待全部排队写真正落盘（同步镜像 ≠ 持久化完成；失败显式 reject）。 */
+  /** wait for all queue up write truly (sync mirror ≠ persist complete; failed explicit reject). */
   flush(): Promise<void>;
 }
 
 /**
- * 插件会话文档持久层（(pluginId, name, conversationId) 三元组键）。
- * get 返回原始 JSON 字符串（未写过为 undefined）；put/delete 为同步镜像
- * 排队写；flush 等待真实落盘，失败显式 reject。未提供该端口时 sessionDoc
- * 声明显式 501（禁内存降级——会话文档承诺跨重启存活，内存实现等于伪造持久化）。
+ * plugin conversation document durable layer ((pluginId, name, conversationId) three meta group key).
+ * get return original JSON string (not write is undefined);put/delete is sync mirror
+ * queue up write;flush wait for real, failed explicit reject. not provide the port when sessionDoc
+ * declaration explicit 501(forbid memory fall back - - conversation document promise across restarts store, memory implement equals fabricate persist).
  */
 export interface PluginSessionDocStore {
   get(pluginId: string, name: string, conversationId: number): string | undefined;
   put(pluginId: string, name: string, conversationId: number, valueJson: string): void;
   delete(pluginId: string, name: string, conversationId: number): void;
-  /** 删除某插件的全部会话文档（按 pluginId 整体清理）；卸载关联清理用。 */
+  /** delete a certain plugin all conversation document (by pluginId whole clean up); unload related clean up use. */
   deletePlugin(pluginId: string): void;
   listConversationIds(pluginId: string, name: string): number[];
   flush(): Promise<void>;
 }
 
-/** doc 注册项：句柄 + 可见性 + 归一化初值（公共快照未写过时也能读）。 */
+/** doc register items: handle + visible + archive one initial value (public snapshot not write when also can read). */
 export interface DocRegistration {
   handle: PluginDocHandle<unknown>;
   isPublic: boolean;
   initial: unknown;
 }
 
-/** sessionDoc 注册项：句柄 + 可见性 + 归一化初值（未写过读取与 delete 事件的回落值）。 */
+/** sessionDoc register items: handle + visible + archive one initial value (not write read and delete event back value). */
 export interface SessionDocRegistration {
   handle: PluginSessionDocHandle<unknown>;
   isPublic: boolean;
   initial: unknown;
 }
 
-/** 会话文档相关宿主端口（由 PluginHost 构造时注入）。 */
+/** conversation document related host port (by PluginHost construct when inject). */
 export interface PluginDocRegistryOptions {
-  /** 会话文档专用持久层；缺失时 sessionDoc 声明显式 501（禁内存降级）。 */
+  /** conversation document dedicated use durable layer; missing when sessionDoc declaration explicit 501(forbid memory fall back). */
   sessionStore?: PluginSessionDocStore;
   /**
-   * 会话存在性校验（宿主 getConversation 适配）：每次三元组操作前调用，
-   * 拒绝向已删除会话回写孤儿数据；抛错原样上抛（如 conversation_not_found）。
+   * conversation store in validate (host getConversation adapt): each time three meta group operation before invoke,
+   * reject to deleted conversation back write orphan child data; throws original on throw (such as conversation_not_found).
    */
   assertConversationExists?: (conversationId: number) => void;
-  /** 公共 sessionDoc 变更事件（delete 时 value 为初值且带 deleted: true）。 */
+  /** public sessionDoc change event (delete when value is initial value and carries deleted: true). */
   emitSessionDocUpdated?: (doc: PublicPluginSessionDoc) => void;
   /**
-   * 单文档 JSON 序列化字节上限（initial / set / update 统一口径）：缺省
-   * PLUGIN_DOC_MAX_JSON_BYTES（2 MiB）。仅供测试注入更小值；不改变拒绝语义。
+   * single document JSON serialization byte cap (initial / set / update unify opening path): default
+   * PLUGIN_DOC_MAX_JSON_BYTES(2 MiB). only supply test inject more small value; does not change reject semantics.
    */
   maxDocJsonBytes?: number;
 }
 
 /**
- * 插件文档（doc / sessionDoc）单值 JSON 序列化字节上限：2 MiB。
- * 防线存在的原因：文档值会进入同步镜像、持久层排队写与公共事件载荷，
- * 无上限的超大值会无声拖垮 SQLite 写队列与 SSE 首帧。超限一律在写入镜像与
- * 发布事件之前拒绝（413 plugin_doc_too_large），旧值保持不变。
+ * plugin document (doc / sessionDoc) single value JSON serialization byte cap:2 MiB.
+ * guard against line store in reason: document value will enter sync mirror, durable layer queue up write and public event payload,
+ * without cap over large value will without sound drag collapse SQLite write queue and SSE first frame. over limit one rule in write mirror and
+ * publish event before reject (413 plugin_doc_too_large), old value keep do not change.
  */
 export const PLUGIN_DOC_MAX_JSON_BYTES = 2 * 1024 * 1024;
 
@@ -96,10 +96,10 @@ export class PluginDocRegistry {
   ) {}
 
   /**
-   * 文档值体积防线：JSON 序列化结果超过上限时在写入镜像/持久层/发布事件之前
-   * 显式拒绝（413 plugin_doc_too_large，details 携带 pluginId/name/kind/bytes/
-   * maxBytes），旧值保持不变。入参应已经过 jsonClone（循环引用/undefined/
-   * 非纯对象等不可序列化值在那一步已显式失败，此处不再重复校验）。
+   * document value body accumulate guard against line:JSON serialization result exceeds cap when in write mirror/durable layer/publish event before
+   * explicit reject (413 plugin_doc_too_large,details carry pluginId/name/kind/bytes/
+   * maxBytes), old value keep do not change. reference should already jsonClone(loop reference/undefined/
+   * non- pure object etc. cannot serialization value in that one step already explicit failed, this where no longer duplicate validate).
    */
   private assertWithinLimit(
     pluginId: string,
@@ -110,11 +110,11 @@ export class PluginDocRegistry {
   ): void {
     const maxBytes = this.options.maxDocJsonBytes ?? PLUGIN_DOC_MAX_JSON_BYTES;
     const json = JSON.stringify(value);
-    // jsonClone 已拒绝 undefined/函数/循环引用；此处防御性兑底，绝不静默写空。
+    // jsonClone already reject undefined/function/loop reference; this where guard against defend honor bottom, never static default write empty.
     if (json === undefined) {
       throw new HelmError(
         'invalid_doc_value',
-        `插件 ${pluginId} ${kind} ${name} 的值不可 JSON 序列化（顶层为 undefined 或函数）`,
+        `plugin ${pluginId} ${kind} ${name} value cannot JSON serialization (top-level is undefined or function)`,
         400,
         { pluginId, name, kind, ...(extraDetails ?? {}) },
       );
@@ -123,7 +123,7 @@ export class PluginDocRegistry {
     if (bytes > maxBytes) {
       throw new HelmError(
         'plugin_doc_too_large',
-        `插件 ${pluginId} ${kind} ${name} 的 JSON 序列化结果 ${bytes} 字节，超过上限 ${maxBytes} 字节（拒绝写入，旧值保持不变）`,
+        `plugin ${pluginId} ${kind} ${name}  JSON serialization result ${bytes} byte, exceeds cap ${maxBytes} byte (reject write, old value keep do not change)`,
         413,
         { pluginId, name, kind, bytes, maxBytes, ...(extraDetails ?? {}) },
       );
@@ -147,13 +147,13 @@ export class PluginDocRegistry {
     }
 
     if (docs.has(name)) {
-      throw new HelmError('duplicate_doc', `插件 ${pluginId} 重复声明 doc ${name}`, 409);
+      throw new HelmError('duplicate_doc', `plugin ${pluginId} duplicate declaration doc ${name}`, 409);
     }
-    // doc 与 sessionDoc 共享命名空间：同名会造成文档路由歧义。
+    // doc and sessionDoc sharing naming empty between: same name will build into document routing ambiguity.
     if (this.sessionDocs.get(pluginId)?.has(name)) {
       throw new HelmError(
         'duplicate_doc',
-        `插件 ${pluginId} 重复声明文档名 ${name}（doc 与 sessionDoc 共享命名空间，禁止同名）`,
+        `plugin ${pluginId} duplicate declaration document name ${name}(doc and sessionDoc sharing naming empty between, forbidden same name)`,
         409,
       );
     }
@@ -172,7 +172,7 @@ export class PluginDocRegistry {
       set: (next) => {
         assertUsable();
         const safe = jsonClone(next);
-        // 体积防线先于镜像写入与事件发布：拒绝时旧值保持不变。
+        // body accumulate guard against line first at mirror write and event publish: reject when old value keep do not change.
         this.assertWithinLimit(pluginId, 'doc', name, safe);
         store.set(key, safe);
         if (isPublic) this.emitDocUpdated(pluginId, name, safe);
@@ -208,39 +208,39 @@ export class PluginDocRegistry {
   ): PluginSessionDocHandle<TState> {
     assertValidId('sessionDoc', name);
     this.assertDocOpts(pluginId, 'sessionDoc', name, opts);
-    // 持久层端口缺失时显式 501（禁内存降级：会话文档承诺跨重启存活）。
+    // durable layer port missing when explicit 501(forbid memory fall back: conversation document promise across restarts store).
     const sessionStore = this.options.sessionStore;
     if (!sessionStore) {
       throw new HelmError(
         'session_doc_store_unavailable',
-        `插件 ${pluginId} 声明 sessionDoc ${name}，但未提供会话文档持久层（sessionStore 缺失），拒绝内存降级`,
+        `plugin ${pluginId} declaration sessionDoc ${name}, but not provide conversation document durable layer (sessionStore missing), reject memory fall back`,
         501,
         { pluginId, name },
       );
     }
-    // 会话存在性校验端口缺失时显式 501：绝不能跳过校验假装会话存在（防孤儿回写失效）。
+    // conversation store in validate port missing when explicit 501: never can skip validate pretend conversation store in (guard against orphan child back write expires).
     if (!this.options.assertConversationExists) {
       throw new HelmError(
         'session_doc_port_unavailable',
-        `插件 ${pluginId} 声明 sessionDoc ${name}，但未提供会话存在性校验端口（assertConversationExists 缺失），拒绝假装验证会话存在`,
+        `plugin ${pluginId} declaration sessionDoc ${name}, but not provide conversation store in validate port (assertConversationExists missing), reject pretend verify conversation store in`,
         501,
         { pluginId, name },
       );
     }
-    // public 文档必须提供事件端口：缺失时显式拒绝，绝不静默丢公共更新事件。
+    // public document must provide event port: missing when explicit reject, never static default lose public update event.
     if (opts?.public === true && !this.options.emitSessionDocUpdated) {
       throw new HelmError(
         'session_doc_port_unavailable',
-        `插件 ${pluginId} 声明 public sessionDoc ${name}，但未提供公共会话文档事件端口（emitSessionDocUpdated 缺失），拒绝静默丢弃更新`,
+        `plugin ${pluginId} declaration public sessionDoc ${name}, but not provide public conversation document event port (emitSessionDocUpdated missing), reject static default discard update`,
         501,
         { pluginId, name },
       );
     }
-    // 文档名与 doc 共享命名空间：同名会让 GET /api/plugins/:id/docs/:name 路由歧义。
+    // document name and doc sharing naming empty between: same name will let GET /api/plugins/:id/docs/:name routing ambiguity.
     if (this.pluginDocs.get(pluginId)?.has(name) || this.sessionDocs.get(pluginId)?.has(name)) {
       throw new HelmError(
         'duplicate_doc',
-        `插件 ${pluginId} 重复声明文档名 ${name}（doc 与 sessionDoc 共享命名空间，禁止同名）`,
+        `plugin ${pluginId} duplicate declaration document name ${name}(doc and sessionDoc sharing naming empty between, forbidden same name)`,
         409,
       );
     }
@@ -271,10 +271,10 @@ export class PluginDocRegistry {
   }
 
   /**
-   * 构造 sessionDoc 句柄：每次操作均经 assertUsable 生命周期守卫（宿主闭包
-   * 已封装 epoch 与受控停止窗口）；三元组操作额外校验正安全整数会话 ID 与
-   * 会话存在性（删除后异步回调重建孤儿数据被拒绝）；值一律 JSON 深拷贝；
-   * public 文档发布专用事件（delete 事件 value 恒为初值且带 deleted: true）。
+   * construct sessionDoc handle: each time operation all via assertUsable lifecycle guard (host closed package
+   * already wrap epoch and subject to control stop window); three meta group operation extra validate correct security integer conversation ID and
+   * conversation store in (after deletion async call back rebuild orphan child data by reject); value one rule JSON deep copy;
+   * public document publish dedicated use event (delete event value constant is initial value and carries deleted: true).
    */
   private createSessionDocHandle<TState>(
     pluginId: string,
@@ -284,16 +284,16 @@ export class PluginDocRegistry {
     assertUsable: () => void,
   ): PluginSessionDocHandle<TState> {
     const store = this.options.sessionStore!;
-    // 注册边界已显式校验必给端口非空（见 registerSessionDoc），此处仅类型收窄。
+    // register boundary already explicit validate must to port non-empty (see registerSessionDoc), this where only type narrow.
     const assertConversationExists = this.options.assertConversationExists!;
     const emitSessionDocUpdated = this.options.emitSessionDocUpdated;
     const emit = (conversationId: number, value: unknown, deleted?: boolean): void => {
       if (!isPublic) return;
       if (!emitSessionDocUpdated) {
-        // 防御性显式拒绝（注册边界已保证 public 必有事件端口），绝不静默丢更新。
+        // guard against defend explicit reject (register boundary already guarantee public must has event port), never static default lose update.
         throw new HelmError(
           'session_doc_port_unavailable',
-          `插件 ${pluginId} public sessionDoc ${name} 缺少事件发布端口，拒绝静默丢弃更新`,
+          `plugin ${pluginId} public sessionDoc ${name} missing event publish port, reject static default discard update`,
           501,
           { pluginId, name, conversationId },
         );
@@ -306,7 +306,7 @@ export class PluginDocRegistry {
         ...(deleted === true ? { deleted: true } : {}),
       });
     };
-    // 未写过时回退归一化初值；持久层为 JSON 字符串语义，解析结果天然是深拷贝。
+    // not write when fall back archive one initial value; durable layer is JSON string semantics, parse result day however is deep copy.
     const readRaw = (conversationId: number): TState => {
       const raw = store.get(pluginId, name, conversationId);
       return raw === undefined ? jsonClone(initial) : (JSON.parse(raw) as TState);
@@ -324,7 +324,7 @@ export class PluginDocRegistry {
       set: (conversationId, next) => {
         assertTupleUsable(conversationId);
         const safe = jsonClone(next);
-        // 体积防线先于持久层 put 与事件发布：拒绝时旧值保持不变。
+        // body accumulate guard against line first at durable layer put and event publish: reject when old value keep do not change.
         this.assertWithinLimit(pluginId, 'sessionDoc', name, safe, { conversationId });
         store.put(pluginId, name, conversationId, JSON.stringify(safe));
         emit(conversationId, safe);
@@ -339,7 +339,7 @@ export class PluginDocRegistry {
       delete: (conversationId) => {
         assertTupleUsable(conversationId);
         store.delete(pluginId, name, conversationId);
-        // 未写过的文档删除同样发布 deleted（消费方据此回到初始态），值恒为初始值。
+        // not write document delete same publish deleted(consumer based on this back to initial state), value constant is initial value.
         emit(conversationId, jsonClone(initial), true);
       },
       listConversationIds: () => {
@@ -353,19 +353,19 @@ export class PluginDocRegistry {
     };
   }
 
-  /** 会话 ID 边界校验：正安全整数（非法值一律 400 invalid_conversation_id）。 */
+  /** conversation ID boundary validate: correct security integer (illegal value one rule 400 invalid_conversation_id). */
   private assertSessionDocId(conversationId: number): void {
     if (!Number.isSafeInteger(conversationId) || conversationId <= 0) {
       throw new HelmError(
         'invalid_conversation_id',
-        `会话文档的 conversationId 必须是正安全整数，收到：${String(conversationId)}`,
+        `conversation document conversationId must be correct security integer, receives:${String(conversationId)}`,
         400,
         { conversationId: String(conversationId) },
       );
     }
   }
 
-  /** doc/sessionDoc 选项校验：仅允许 { public?: boolean }。 */
+  /** doc/sessionDoc option validate: only allows { public?: boolean }. */
   private assertDocOpts(
     pluginId: string,
     kind: 'doc' | 'sessionDoc',
@@ -373,34 +373,34 @@ export class PluginDocRegistry {
     opts: PluginDocOptions | undefined,
   ): void {
     if (opts !== undefined && (!isPlainObject(opts) || Object.keys(opts).some((k) => k !== 'public'))) {
-      throw new HelmError('invalid_doc_spec', `插件 ${pluginId} ${kind} ${name} 的选项仅允许 { public?: boolean }`, 400);
+      throw new HelmError('invalid_doc_spec', `plugin ${pluginId} ${kind} ${name} option only allows { public?: boolean }`, 400);
     }
     if (opts?.public !== undefined && typeof opts.public !== 'boolean') {
-      throw new HelmError('invalid_doc_spec', `插件 ${pluginId} ${kind} ${name} 的 public 选项必须是布尔值`, 400);
+      throw new HelmError('invalid_doc_spec', `plugin ${pluginId} ${kind} ${name}  public option must be boolean value`, 400);
     }
   }
 
   /**
-   * 读取插件公共 doc 快照。私有 doc、未声明 doc、插件停用/不存在一律统一 404
-   * （外部无从探测私有 doc 是否存在）；未写过时返回归一化初值。
-   * 名称命中 public sessionDoc 时明确提示需 conversationId（路由歧义提示，
-   * 不泄漏私有存在性——私有 sessionDoc 与未声明名称同样 404）。
+   * read plugin public doc snapshot. private doc, not declaration doc, plugin deactivate/missing one rule unify 404
+   * (external without from probe private doc is otherwise store in); not write when return archive one initial value.
+   * name hit public sessionDoc when explicit hint must conversationId(routing ambiguity hint,
+   * without leaking private store in - - private sessionDoc and not declaration name same 404).
    */
   getPublicDoc(pluginId: string, name: string, isPluginActive: boolean): PublicPluginDoc {
     if (!isPluginActive) {
-      throw new HelmError('plugin_doc_not_found', `插件 ${pluginId} 无公共文档 ${name}`, 404, { pluginId, name });
+      throw new HelmError('plugin_doc_not_found', `plugin ${pluginId} without public document ${name}`, 404, { pluginId, name });
     }
     const reg = this.pluginDocs.get(pluginId)?.get(name);
     if (!reg || !reg.isPublic) {
       if (this.sessionDocs.get(pluginId)?.get(name)?.isPublic === true) {
         throw new HelmError(
           'session_doc_requires_conversation',
-          `插件 ${pluginId} 的文档 ${name} 是会话文档，读取需携带 conversationId 查询参数`,
+          `plugin ${pluginId} document ${name} is conversation document, read must carry conversationId query parameter`,
           400,
           { pluginId, name },
         );
       }
-      throw new HelmError('plugin_doc_not_found', `插件 ${pluginId} 无公共文档 ${name}`, 404, { pluginId, name });
+      throw new HelmError('plugin_doc_not_found', `plugin ${pluginId} without public document ${name}`, 404, { pluginId, name });
     }
     return {
       pluginId,
@@ -410,11 +410,11 @@ export class PluginDocRegistry {
   }
 
   /**
-   * 读取插件公共 sessionDoc 快照（GET /api/plugins/:id/docs/:name?conversationId=N
-   * 与专用 SSE 首帧共用）。私有/未声明/插件停用一律 404 plugin_doc_not_found
-   * （不泄漏存在性差异）；会话不存在由宿主端口如实抛错并原样上抛；持久层端口
-   * 缺失显式 501，绝不回退全局 doc 键。名称命中 public 全局 doc 时明确提示
-   * 不接 conversationId。
+   * read plugin public sessionDoc snapshot (GET /api/plugins/:id/docs/:name?conversationId=N
+   * and dedicated use SSE first frame shared use). private/not declaration/plugin deactivate one rule 404 plugin_doc_not_found
+   * (without leaking store in difference); conversation missing by host port such as throws and original on throw; durable layer port
+   * missing explicit 501, never fall back global doc key. name hit public global doc when explicit hint
+   * do not connect conversationId.
    */
   getPublicSessionDoc(
     pluginId: string,
@@ -424,7 +424,7 @@ export class PluginDocRegistry {
   ): PublicPluginSessionDoc {
     this.assertSessionDocId(conversationId);
     if (!isPluginActive) {
-      throw new HelmError('plugin_doc_not_found', `插件 ${pluginId} 无公共会话文档 ${name}`, 404, {
+      throw new HelmError('plugin_doc_not_found', `plugin ${pluginId} without public conversation document ${name}`, 404, {
         pluginId,
         name,
         conversationId,
@@ -435,12 +435,12 @@ export class PluginDocRegistry {
       if (this.pluginDocs.get(pluginId)?.get(name)?.isPublic === true) {
         throw new HelmError(
           'global_doc_unexpected_conversation',
-          `插件 ${pluginId} 的文档 ${name} 是全局文档，不接 conversationId`,
+          `plugin ${pluginId} document ${name} is global document, do not connect conversationId`,
           400,
           { pluginId, name, conversationId },
         );
       }
-      throw new HelmError('plugin_doc_not_found', `插件 ${pluginId} 无公共会话文档 ${name}`, 404, {
+      throw new HelmError('plugin_doc_not_found', `plugin ${pluginId} without public conversation document ${name}`, 404, {
         pluginId,
         name,
         conversationId,
@@ -450,7 +450,7 @@ export class PluginDocRegistry {
     if (!sessionStore) {
       throw new HelmError(
         'session_doc_store_unavailable',
-        `插件 ${pluginId} 的会话文档 ${name} 无持久层端口（sessionStore 缺失）`,
+        `plugin ${pluginId} conversation document ${name} without durable layer port (sessionStore missing)`,
         501,
         { pluginId, name, conversationId },
       );
@@ -459,12 +459,12 @@ export class PluginDocRegistry {
     if (!assertConversationExists) {
       throw new HelmError(
         'session_doc_port_unavailable',
-        `插件 ${pluginId} 的会话文档 ${name} 缺少会话存在性校验端口，拒绝假装验证会话存在`,
+        `plugin ${pluginId} conversation document ${name} missing conversation store in validate port, reject pretend verify conversation store in`,
         501,
         { pluginId, name, conversationId },
       );
     }
-    // 会话存在性：不存在/已删除由宿主端口如实抛错并原样上抛（原样 not_found）。
+    // conversation store in: missing/deleted by host port such as throws and original on throw (original not_found).
     assertConversationExists(conversationId);
     const raw = sessionStore.get(pluginId, name, conversationId);
     return {
@@ -476,8 +476,8 @@ export class PluginDocRegistry {
   }
 
   /**
-   * 全部已启用插件公共文档快照（SSE HelmSnapshot.pluginDocs 首帧直投用）：
-   * 只含全局公共 doc（会话文档不进全局首帧）。
+   * all enabled plugin public document snapshot (SSE HelmSnapshot.pluginDocs first frame direct throw use):
+   * only contains global public doc(conversation document does not enter global first frame).
    */
   listPublicDocs(activePluginIds: Iterable<string>): PublicPluginDoc[] {
     const out: PublicPluginDoc[] = [];
@@ -496,38 +496,38 @@ export class PluginDocRegistry {
     return out;
   }
 
-  /** 检查某插件是否声明了名为 name 的 public doc。 */
+  /** check a certain plugin is otherwise declaration name is name  public doc. */
   hasPublicDoc(pluginId: string, name: string): boolean {
     return this.pluginDocs.get(pluginId)?.get(name)?.isPublic === true;
   }
 
-  /** 检查某插件是否声明了名为 name 的 public sessionDoc。 */
+  /** check a certain plugin is otherwise declaration name is name  public sessionDoc. */
   hasPublicSessionDoc(pluginId: string, name: string): boolean {
     return this.sessionDocs.get(pluginId)?.get(name)?.isPublic === true;
   }
 
-  /** 清空某插件在本周期注册的所有 doc / sessionDoc 句柄（不影响底层的持久数据）。 */
+  /** empty a certain plugin in this cycle register all doc / sessionDoc handle (does not affect underlying durable data). */
   clear(pluginId: string): void {
     this.pluginDocs.get(pluginId)?.clear();
     this.sessionDocs.get(pluginId)?.clear();
   }
 
-  /** 卸载插件时移除两个文档注册表的条目。 */
+  /** unload plugin when remove two document register table item. */
   removePlugin(pluginId: string): void {
     this.pluginDocs.delete(pluginId);
     this.sessionDocs.delete(pluginId);
   }
 
   /**
-   * 卸载关联清理：删除该插件持久化的全部文档数据（全局 doc + 全部会话文档）。
-   * 在插件实例注销之后调用（不再经过句柄守卫）；与 removePlugin 不同，本方法
-   * 真正清除底层持久数据，重新安装同 ID 插件不会读回旧数据。sessionStore 未
-   * 接线时该插件不可能存在会话文档数据，跳过即无数据可删（非降级）。
+   * unload related clean up: delete the plugin persist all document data (global doc + all conversation document).
+   * in plugin instance deregister after invoke (no longer through handle guard); and removePlugin different, this method
+   * truly clear underlying durable data, re- install same ID plugin will not read back old data.sessionStore not
+   * connect line when the plugin cannot can store in conversation document data, skip i.e. without data can delete (non- fall back).
    *
-   * 两个 deletePlugin 均入队后等待各存储 flush：任一底层 DELETE 落盘失败时
-   * 显式 reject（调用方据此阻断删目录/删记录，保留安装记录以便重试），绝不
-   * 在未落盘前虚称清理成功。生产接线中两个端口共用同一 HelmStore（同一
-   * 持久化尾链），两次 flush 幂等、不产生额外等待或双重报错。
+   * two deletePlugin all queue after wait for each store flush: any one underlying DELETE on failure
+   * explicit reject(caller based on this block assert delete directory/delete record, keep install record with convenient retry), never
+   * in not before virtual call clean up succeeded. produce connect line in two port shared use the same HelmStore(the same
+   * persist tail chain), two time flush idempotent, produces no extra wait for or double heavy errors.
    */
   async purgePlugin(pluginId: string): Promise<void> {
     const sessionStore = this.options.sessionStore;

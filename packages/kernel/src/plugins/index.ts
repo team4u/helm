@@ -1,6 +1,6 @@
 /**
- * 插件模块公共出口：PluginHost、Hook 管道、Schema 校验与任务跟踪。
- * 契约类型统一从 @helm/protocol 再导出，保证消费方单一依赖入口。
+ * plugin module public exports:PluginHost,Hook pipeline,Schema validate and task trace.
+ * contract type unify from @helm/protocol again export, guarantee consumer single one dependency entry.
  */
 export * from './plugin-host.js';
 export { reloadExternalPlugin, type ExternalPluginHost, type ReloadablePluginHost } from './external-loader.js';

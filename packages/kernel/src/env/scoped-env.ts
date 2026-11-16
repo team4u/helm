@@ -1,23 +1,23 @@
 /**
- * 会话作用域执行环境：同一 (nodeId, cwd) 下多个会话并发时，每条命令的
- * env 按 conversationId 现场合成（fresh），绝不缓存「上一个会话」的快照
- * （否则受管 token / SecretStash 机密会跨会话泄漏）。
+ * conversation effect domain execute environment: the same (nodeId, cwd) under multiple conversation concurrency when, each command
+ * env by conversationId live together into (fresh), never cache on a conversation snapshot
+ * (otherwise managed token / SecretStash secret will across conversation leak leak).
  *
- * 绑定语义（fail-closed）：
- * - composer 返回的键是**绑定身份**（HELM_CONVERSATION_ID / HELM_HUB_URL /
- *   HELM_TOKEN / HELM_SECRET_* 等）：逐调用 options.env 同名键不可覆盖
- *   （防伪造作用域），其余键由逐调用 env 正常补充；
- * - 无 conversationId（envFor 两参路径）：不注入任何机密——没有可信
- *   作用域就不注入（fail-closed），而非借用别的会话；
- * - 远端传输共享（同 nodeId 一个连接池 + execId 路由的输出扇出），
- *   每条命令的 env 在 exec 时隔离合成。
+ * bind set semantics (fail-closed):
+ * - composer return key is**bind set identity**(HELM_CONVERSATION_ID / HELM_HUB_URL /
+ *   HELM_TOKEN / HELM_SECRET_* etc.): one by one invoke options.env same name key cannot override
+ *   (guard against fabricate effect domain), the rest key by one by one invoke env normal patch fill;
+ * - without conversationId(envFor two reference path): do not inject any secret - - no can message
+ *   effect domain then do not inject (fail-closed), while non- borrow use other conversation;
+ * - remote transfer sharing (same nodeId a connection pool + execId routing output fan out),
+ *   each command env in exec when isolated together into.
  *
- * local 合成（本文件是唯一权威，tools.ts 不再有第二套规则）：
- * - 继承宿主 process.env（真实 PATH/HOME 工具链），但受管 HELM_* 变量
- *   （含大小写变体）按 fail-closed 剥除；
- * - cliBinDir（helm CLI 包装目录）以 path.delimiter 前置注入 PATH；
- * - 逐调用 env 与 composer 绑定键最后合成；composer 未提供 HELM_TOKEN
- *   时一切来源（宿主继承/逐调用注入）的同名变体一并剥除。
+ * local together into (this file is unique right threat,tools.ts no longer has second set rule):
+ * - inherit host process.env(real PATH/HOME tool chain), but managed HELM_* variable
+ *   (contains large small write change body) by fail-closed strip except;
+ * - cliBinDir(helm CLI wrap directory) with path.delimiter pre- inject PATH;
+ * - one by one invoke env and composer bind set key finally together into;composer not provide HELM_TOKEN
+ *   when everything source (host inherit/one by one invoke inject) same name change body one and strip except.
  */
 
 import type { ExecutionEnv, Result, ShellExecOptions, ShellExecResult } from '@earendil-works/pi-durable/env'
@@ -26,7 +26,7 @@ import type { Context } from '@earendil-works/chord/context'
 import { prependEnvPath, setEnvEntry } from '@helm/env-io'
 import type { EnvOptionsComposer } from './fabric.js'
 
-/** 执行靶点：会话 + 节点 + 工作目录（Profile×节点组合后的物理落点）。 */
+/** execute target: conversation + node + work directory (Profile×node combine after thing point). */
 export interface EnvTarget {
   conversationId?: number
   nodeId: string
@@ -34,20 +34,20 @@ export interface EnvTarget {
 }
 
 export interface ScopedExecutionEnv extends ExecutionEnv {
-  /** 本靶点（cwd 可变视角；底座实例随靶点隔离）。 */
+  /** this target (cwd can change perspective; bottom seat instance follow target isolated). */
   readonly target: { conversationId?: number; nodeId: string; cwd: string }
 }
 
 export interface ScopedExecutionEnvOptions {
-  /** helm CLI 包装目录（local exec 前置注入 PATH）。 */
+  /** helm CLI wrap directory (local exec pre- inject PATH). */
   cliBinDir?: () => string | undefined
 }
 
-/** 受管变量名集（大小写不敏感剥除；Windows env 名语义下 helm_token / Helm_Token
- *  等同名变体一并剥除，受管值最后固定覆写——策略由 composer 提供权威值）。
- *  HELM_EXECUTION_SCOPE 是执行上下文作用域锚点（helm-<sha256 前 24 hex>，
- *  见 tools.ts 的 executionScopeHash）：非机密、仅供工具显式采用的稳定资源
- *  命名提示（非 OS 沙箱），与其他绑定身份变量同等受管。 */
+/** managed variable name collection (large small write do not sensitive strip except;Windows env name semantics under helm_token / Helm_Token
+ *  etc. same name change body one and strip except, managed value finally fixed override - - policy by composer provide right threat value).
+ *  HELM_EXECUTION_SCOPE is execute context effect domain anchor (helm-<sha256 before 24 hex>,
+ *  see tools.ts  executionScopeHash): non- secret, only supply tool explicit adopt stable asset
+ *  naming hint (non- OS sandbox), and other bind set identity variable same etc. managed. */
 export const MANAGED_EXEC_ENV_VARS = [
   'HELM_ENV',
   'HELM_HUB_URL',
@@ -61,7 +61,7 @@ export const MANAGED_EXEC_ENV_VARS = [
 
 const MANAGED_ENV_NAMES = new Set<string>(MANAGED_EXEC_ENV_VARS)
 
-/** Scoped 环境与本机直接执行共用的合成机制；调用方仅提供受管策略产物。 */
+/** Scoped environment and local machine directly execute shared use together into mechanism; caller only provide managed policy artifact. */
 export function composeExecutionEnv(
   nodeId: string,
   composed: Record<string, string>,
@@ -128,18 +128,18 @@ export function createScopedExecutionEnv(
     )
   }
 
-  // 委托其余全部操作；FS 操作无身份 env 需求。
+  // delegate the rest all operation;FS operation without identity env requirement.
   const scoped: ScopedExecutionEnv = {
     target,
     get id() {
       return base.id
     },
     get cwd(): string {
-      // 靶点视角：相对路径/exec 默认 cwd 都以 target.cwd 为准。
+      // target perspective: relative path/exec by default cwd all with target.cwd is allow.
       return target.cwd
     },
     set cwd(value: string) {
-      // 仅改本靶点视角：底座实例已按靶点隔离（不影响其他会话）。
+      // only change this target perspective: bottom seat instance already by target isolated (does not affect other conversation).
       target.cwd = value
       base.cwd = value
     },

@@ -11,8 +11,8 @@ import type { HandledToolCallEntry } from '../src/runtime/hook-bridge.js'
 import type { HelmToolDeps } from '../src/runtime/tool-deps.js'
 import type { DerivedToolSpec } from '../src/plugins/index.js'
 
-describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_000 }, () => {
-  it('wrapToolExecute：命中 handled 缓存时直接返回接管结果并删除缓存，不执行原工具', { timeout: 60_000 }, async () => {
+describe('RuntimeToolRegistry and wrapToolExecute unit test', { timeout: 60_000 }, () => {
+  it('wrapToolExecute: hit handled cache when directly return take over result and delete cache, do not execute original tool', { timeout: 60_000 }, async () => {
     const handledToolCalls = new Map<string, HandledToolCallEntry>()
     handledToolCalls.set('call-1', {
       conversationId: 42,
@@ -29,15 +29,15 @@ describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_0
       output: Array<{ type: 'text'; text: string }>
       isError: boolean
     }
-    assert.equal(underlyingExecuted, false, '原工具执行器不应被调用')
+    assert.equal(underlyingExecuted, false, 'original tool execute must not by invoke')
     assert.deepEqual(res, {
       output: [{ type: 'text', text: 'intercepted-result' }],
       isError: false,
     })
-    assert.equal(handledToolCalls.has('call-1'), false, '消费后应从 handled 缓存中删除')
+    assert.equal(handledToolCalls.has('call-1'), false, 'consume after should from handled cache in delete')
   })
 
-  it('wrapToolExecute：未命中 handled 时透传调用原工具执行器', { timeout: 60_000 }, async () => {
+  it('wrapToolExecute: missed handled when pass-through invoke original tool execute', { timeout: 60_000 }, async () => {
     const handledToolCalls = new Map<string, HandledToolCallEntry>()
     let calledWith: unknown = undefined
     const wrapped = wrapToolExecute(handledToolCalls, async (args) => {
@@ -52,7 +52,7 @@ describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_0
     assert.deepEqual(res.output, [{ type: 'text', text: 'normal-output' }])
   })
 
-  it('installKernelTools：注册 helm-core 扩展（6 个基础工具），均包 wrapToolExecute', { timeout: 60_000 }, async () => {
+  it('installKernelTools: register helm-core extend (6 basis tool), all package wrapToolExecute', { timeout: 60_000 }, async () => {
     const installed: Extension[] = []
     const fakeRegistry = {
       install(ext: Extension) {
@@ -79,7 +79,7 @@ describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_0
     const demoManifest: ActionManifest = {
       pluginId: 'demo',
       id: 'test',
-      description: '测试动作',
+      description: 'test action',
       inputSchema: { type: 'object', properties: { nested: { type: 'object', properties: { deep: { type: 'string' } } } }, required: ['nested'] },
       outputSchema: { type: 'object' },
       scope: { tags: ['alpha'] },
@@ -136,7 +136,7 @@ describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_0
       ['bash', 'edit', 'read', 'read_artifact', 'register_artifact', 'run_action', 'write'].sort(),
     )
 
-    // 验证 run_action 元工具行为
+    // verify run_action meta tool behavior
     const runActionTool = coreExt.tools!.find((t) => t.name === 'run_action') as unknown as {
       execute: (args: Record<string, unknown>, api: { conversationId: number }, ctx: { abortSignal?: AbortSignal }) => Promise<{
         output: Array<{ type: 'text'; text: string }>
@@ -145,19 +145,19 @@ describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_0
     }
     assert.ok(runActionTool)
 
-    // 非法动作 ID
+    // illegal action ID
     const badIdRes = await runActionTool.execute({ actionId: 'no-dot' }, { conversationId: 1 }, {})
     assert.equal(badIdRes.isError, true)
-    assert.ok(badIdRes.output[0]!.text.includes('非法动作 ID'))
+    assert.ok(badIdRes.output[0]!.text.includes('illegal action ID'))
 
-    // 正常调用并脱敏
+    // normal invoke and redaction
     const okRes = await runActionTool.execute({ actionId: 'demo.test', input: { foo: 'bar' } }, { conversationId: 1 }, {})
     assert.equal(okRes.isError, undefined)
     assert.deepEqual(invokedAction, { pluginId: 'demo', actionId: 'test', input: { foo: 'bar' } })
     assert.ok(okRes.output[0]!.text.includes('[REDACTED]'))
     assert.ok(!okRes.output[0]!.text.includes('secret'))
 
-    // 命中 handled tool call 时拦截
+    // hit handled tool call when intercept
     handledToolCalls.set('call-intercepted', {
       conversationId: 1,
       result: { output: [{ type: 'text', text: 'handled-by-hook' }], isError: false },
@@ -169,38 +169,38 @@ describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_0
     )) as { output: Array<{ text: string }> }
     assert.equal(interceptedRes.output[0]!.text, 'handled-by-hook')
 
-    // describe 模式：返回完整 manifest（含嵌套 Schema），绝不执行 handler
+    // describe pattern: return complete manifest(contains embed set Schema), never execute handler
     invokedAction = undefined
     const descRes = await runActionTool.execute({ actionId: 'demo.test', describe: true }, { conversationId: 1 }, {})
     assert.equal(descRes.isError, undefined)
-    assert.equal(invokedAction, undefined, 'describe 模式不得触发 invokeAction')
+    assert.equal(invokedAction, undefined, 'describe pattern must not trigger invokeAction')
     const parsed = JSON.parse(descRes.output[0]!.text) as ActionManifest
     assert.equal(parsed.pluginId, 'demo')
     assert.equal(parsed.id, 'test')
-    assert.deepEqual(parsed.inputSchema, demoManifest.inputSchema, '嵌套 Schema 必须完整可读')
+    assert.deepEqual(parsed.inputSchema, demoManifest.inputSchema, 'embed set Schema must complete can read')
     assert.deepEqual(parsed.outputSchema, demoManifest.outputSchema)
 
-    // describe：未知动作（未声明/未启用）显式拒绝
+    // describe: unknown action (not declaration/not enabled) explicit reject
     const unknownRes = await runActionTool.execute({ actionId: 'demo.missing', describe: true }, { conversationId: 1 }, {})
     assert.equal(unknownRes.isError, true)
-    assert.ok(unknownRes.output[0]!.text.includes('未声明动作'))
+    assert.ok(unknownRes.output[0]!.text.includes('not declaration action'))
 
-    // describe：scope 外会话拒绝，不泄露 Schema
+    // describe:scope outside conversation reject, do not leak Schema
     conversationTags = ['beta']
     const scopedOut = await runActionTool.execute({ actionId: 'demo.test', describe: true }, { conversationId: 1 }, {})
     assert.equal(scopedOut.isError, true)
     assert.ok(scopedOut.output[0]!.text.includes('scope'))
-    assert.ok(!scopedOut.output[0]!.text.includes('deep'), 'scope 外不得泄露 Schema 内容')
+    assert.ok(!scopedOut.output[0]!.text.includes('deep'), 'scope outside must not leak Schema content')
     conversationTags = ['alpha']
 
-    // describe：插件停用（listActions 不再返回）同样拒绝
+    // describe: plugin deactivate (listActions no longer return) same reject
     listedActions = []
     const disabledRes = await runActionTool.execute({ actionId: 'demo.test', describe: true }, { conversationId: 1 }, {})
     assert.equal(disabledRes.isError, true)
-    assert.ok(disabledRes.output[0]!.text.includes('未声明动作'))
+    assert.ok(disabledRes.output[0]!.text.includes('not declaration action'))
   })
 
-  it('installPluginTools 与 refreshPluginTools：热装与刷新插件 DerivedToolSpec', { timeout: 60_000 }, async () => {
+  it('installPluginTools and refreshPluginTools: hot install and refresh plugin DerivedToolSpec', { timeout: 60_000 }, async () => {
     const installed: Extension[] = []
     const fakeRegistry = {
       install(ext: Extension) {
@@ -227,7 +227,7 @@ describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_0
     let currentTools: DerivedToolSpec[] = [
       {
         name: 'custom_search',
-        description: '搜索工具',
+        description: 'search tool',
         inputSchema: { type: 'object', properties: { q: { type: 'string' } } },
         sourcePluginId: 'test-plugin',
         sourceKind: 'tool',
@@ -278,7 +278,7 @@ describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_0
     assert.equal(installed[0]!.tools?.length, 1)
     assert.equal(installed[0]!.tools?.[0]?.name, 'custom_search')
 
-    // 执行插件工具并检验脱敏与上下文
+    // execute plugin tool and inspect verify redaction and context
     const tool = installed[0]!.tools?.[0] as unknown as {
       execute: (args: unknown, api: unknown, ctx: unknown) => Promise<{
         output: Array<{ type: 'text'; text: string }>
@@ -297,7 +297,7 @@ describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_0
     assert.ok(res.output[0]!.text.includes('***'))
     assert.ok(!res.output[0]!.text.includes('token-123'))
 
-    // 更新列表后 refreshPluginTools
+    // update list after refreshPluginTools
     currentTools = []
     registryModule.refreshPluginTools()
     assert.equal(installed.length, 2)
@@ -305,7 +305,7 @@ describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_0
     assert.equal(installed[1]!.tools?.length, 0)
   })
 
-  it('wrapToolExecute：底层返回后若 abortSignal 已中止则统一抛出中止异常（保留 Error reason；handled 短路例外）', { timeout: 60_000 }, async () => {
+  it('wrapToolExecute: underlying return after if abortSignal already abort then unify throw abort exception (keep Error reason;handled short route exception)', { timeout: 60_000 }, async () => {
     const handledToolCalls = new Map<string, HandledToolCallEntry>()
     const ac1 = new AbortController()
     const wrappedNormal = wrapToolExecute(handledToolCalls, async () => {
@@ -328,7 +328,7 @@ describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_0
       (error: unknown) => error === customReason,
     )
 
-    // handledToolCalls 短路分支命中时不执行原工具也不因 abortSignal 抛错
+    // handledToolCalls short route branch hit when do not execute original tool also do not because abortSignal throws
     const acHandled = new AbortController()
     acHandled.abort(new Error('late abort'))
     handledToolCalls.set('call-handled-abort', {
@@ -343,7 +343,7 @@ describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_0
     assert.equal(handledRes.output[0]!.text, 'pre-handled')
   })
 
-  it('installKernelTools：仅只读工具 read 与 read_artifact 声明 replay: "safe"，其余保持缺省非 safe', { timeout: 60_000 }, () => {
+  it('installKernelTools: only only read tool read and read_artifact declaration replay: "safe", the rest keep default non- safe', { timeout: 60_000 }, () => {
     const installed: Extension[] = []
     const fakeToolDeps: HelmToolDeps = {
       dataDir: '/tmp/test',
@@ -394,7 +394,7 @@ describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_0
     assert.equal(byName.get('read')?.replay, 'safe')
     assert.equal(byName.get('read_artifact')?.replay, 'safe')
     for (const unsafeName of ['bash', 'write', 'edit', 'register_artifact', 'run_action']) {
-      assert.notEqual(byName.get(unsafeName)?.replay, 'safe', `${unsafeName} 不得声明 replay: safe`)
+      assert.notEqual(byName.get(unsafeName)?.replay, 'safe', `${unsafeName} must not declaration replay: safe`)
     }
   })
 })

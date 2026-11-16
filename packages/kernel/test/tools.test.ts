@@ -1,9 +1,9 @@
 /**
- * 内核本机工具真实行为测试（bash / read / read_artifact）。
+ * kernel local machine tool real behavior test (bash / read / read_artifact).
  *
- * 诚实性原则：全部走真实 child_process、真实 ArtifactService（InMemory 仓库 +
- * 真实文件落盘）、真实 SDK defineTool execute；faux provider 仅替代模型决策
- * （何时发起工具调用），绝不用同步假 fixture 掩盖服务的 Promise 签名。
+ * honest principle: all away real child_process, real ArtifactService(InMemory repository +
+ * real file), real SDK defineTool execute;faux provider only alternative model decide policy
+ * (what when start tool invoke), never use sync false fixture mask service Promise signature.
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
@@ -49,7 +49,7 @@ async function openRuntime(dir: string) {
   return Object.assign(runtime, { __faux: faux })
 }
 
-/** 真实服务依赖：真实 ArtifactService（Promise 签名）+ 真实 SecretStash。 */
+/** real service dependency: real ArtifactService(Promise signature)+ real SecretStash. */
 async function makeRealDeps(dir: string, stash = new SecretStash()): Promise<HelmToolDeps> {
   await ensureDataDir(dir)
   const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository(), stash)
@@ -73,8 +73,8 @@ after(async () => {
   await cleanupDir(rootDir)
 })
 
-describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
-  it('成功与失败如实返回 exitCode；stdout/stderr 按到达序拼接', { timeout: 60_000 }, async () => {
+describe('runShell real process behavior', { timeout: 60_000 }, () => {
+  it('succeeded and failed such as return exitCode;stdout/stderr by reach order concatenate', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rs1'))
     const ok = await runShell(deps, 'echo out; echo err >&2; echo tail')
     assert.equal(ok.ok, true)
@@ -88,12 +88,12 @@ describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
     assert.ok(fail.output.includes('oops'))
   })
 
-  it('运行中 abort 杀进程组：sentinel 文件永不出现，不等待 120s 超时', { timeout: 60_000 }, async () => {
+  it('run in abort kill process group:sentinel file forever do not appear, without waiting 120s timeout', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rs2'))
     const sentinel = join(rootDir, 'rs2', 'sentinel.txt')
     const controller = new AbortController()
     const started = Date.now()
-    // 命令 sleep 后写 sentinel；abort 生效则永远写不出。
+    // command sleep after write sentinel;abort takes effect then forever write do not out.
     const p = runShell(deps, `sleep 30 && touch ${sentinel}`, {
       timeoutMs: 120_000,
       signal: controller.signal,
@@ -102,13 +102,13 @@ describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
     const result = await p
     const elapsed = Date.now() - started
     assert.equal(result.ok, false)
-    assert.ok(elapsed < 10_000, `abort 应秒杀而非等满超时（耗时 ${elapsed}ms）`)
-    // 等待足够久后确认 sentinel 未被写入（进程组确已终止）。
+    assert.ok(elapsed < 10_000, `abort should second kill while non- etc. full timeout (time cost ${elapsed}ms)`)
+    // wait for enough long after confirm sentinel not by write (process group indeed already terminate).
     await new Promise((r) => setTimeout(r, 700))
-    assert.ok(!existsSyncSafe(sentinel), 'abort 后 shell 不应存活写入 sentinel')
+    assert.ok(!existsSyncSafe(sentinel), 'abort after shell must not store write sentinel')
   })
 
-  it('预先 aborted 的 signal 绝不 spawn 命令', { timeout: 60_000 }, async () => {
+  it('pre- first aborted  signal never spawn command', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rs3'))
     const sentinel = join(rootDir, 'rs3', 'pre.txt')
     const controller = new AbortController()
@@ -117,21 +117,21 @@ describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
     assert.equal(result.ok, false)
     assert.ok(result.output.includes('aborted'))
     await new Promise((r) => setTimeout(r, 300))
-    assert.ok(!existsSyncSafe(sentinel), '预 aborted 不得 spawn 任何命令')
+    assert.ok(!existsSyncSafe(sentinel), 'pre- aborted must not spawn any command')
   })
 
-  it('timeoutMs 校验：非正数 / 非整数 / Infinity / 超上限均显式拒绝', { timeout: 60_000 }, async () => {
+  it('timeoutMs validate: non- correct count / non- integer / Infinity / over cap all explicit reject', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rs4'))
     for (const bad of [0, -5, 1.5, Number.POSITIVE_INFINITY, Number.NaN, 601_000]) {
       await assert.rejects(
         () => runShell(deps, 'true', { timeoutMs: bad }),
         /invalid_timeout/,
-        `timeoutMs=${bad} 应显式拒绝`,
+        `timeoutMs=${bad} should explicit reject`,
       )
     }
   })
 
-  it('超时杀组并显式标注 timeout', { timeout: 60_000 }, async () => {
+  it('timeout kill group and explicit mark note timeout', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rs5'))
     const started = Date.now()
     const result = await runShell(deps, 'sleep 30', { timeoutMs: 500 })
@@ -140,73 +140,73 @@ describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
     assert.ok(Date.now() - started < 10_000)
   })
 
-  it('env 注入：stash 值注入子进程且从输出中脱敏消失', { timeout: 60_000 }, async () => {
+  it('env inject:stash value inject child process and from output in redaction disappear', { timeout: 60_000 }, async () => {
     const stash = new SecretStash()
     const secretValue = 'sk-super-secret-abcdef123456'
     stash.put(1, 'MY_TOKEN', secretValue)
     const deps = await makeRealDeps(join(rootDir, 'rs6'), stash)
-    // 子进程可见 secret（诚实边界：可信代码固有权限），但输出必须脱敏。
+    // child process visible secret(honest boundary: can message code solid has permission), but output must redaction.
     const result = await runShell(deps, 'echo "token=$MY_TOKEN"', { conversationId: 1 })
     assert.equal(result.ok, true)
-    assert.ok(!result.output.includes(secretValue), 'secret 明文绝不能出现在输出')
-    assert.ok(result.output.includes('[REDACTED:stash:'), '应替换为占位符')
+    assert.ok(!result.output.includes(secretValue), 'secret plaintext never can appear in output')
+    assert.ok(result.output.includes('[REDACTED:stash:'), 'should replace is placeholder')
   })
 
-  it('跨 chunk 撕裂的 secret 在全文聚合后仍被完整脱敏', { timeout: 60_000 }, async () => {
+  it('across chunk tear secret in all text aggregate after still by complete redaction', { timeout: 60_000 }, async () => {
     const stash = new SecretStash()
     const secretValue = 'sk-cross-chunk-secret-ZZZZ9999'
     stash.put(1, 'KEY', secretValue)
     const deps = await makeRealDeps(join(rootDir, 'rs7'), stash)
-    // 用 dd 按 1 字节分块输出，强制 secret 跨多个 stdout chunk 撕裂。
+    // use dd by 1 byte chunked output, force secret across multiple stdout chunk tear.
     const result = await runShell(deps, `printf '%s' "$KEY" | dd bs=1 2>/dev/null`, {
       conversationId: 1,
     })
     assert.equal(result.ok, true)
-    assert.ok(!result.output.includes(secretValue), '跨 chunk 撕裂的 secret 也不得泄漏')
+    assert.ok(!result.output.includes(secretValue), 'across chunk tear secret also must not leak leak')
     assert.ok(result.output.includes('[REDACTED:stash:'))
   })
 
-  it('多字节 UTF-8 字符跨 chunk 不撕裂（无替换符）', { timeout: 60_000 }, async () => {
+  it('multibyte UTF-8 character across chunk do not tear (without replace symbol)', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rs8'))
-    // 中文字符 3 字节；dd bs=1 强制逐字节 chunk，StringDecoder 语义下应完整还原。
+    // Chinese character 3 byte;dd bs=1 force one by one byte chunk,StringDecoder semantics under should complete restore.
     const result = await runShell(
       deps,
-      `printf '%s' '你好世界汉字保真测试' | dd bs=1 2>/dev/null`,
+      `printf '%s' '你好世界Han characters fidelity test' | dd bs=1 2>/dev/null`,
     )
     assert.equal(result.ok, true)
-    assert.equal(result.output, '你好世界汉字保真测试')
-    assert.ok(!result.output.includes('\uFFFD'), '不得出现 UTF-8 替换符')
+    assert.equal(result.output, '你好世界Han characters fidelity test')
+    assert.ok(!result.output.includes('\uFFFD'), 'must not appear UTF-8 replace symbol')
   })
 
-  it('输出超 maxOutputBytes 显式 output_limit_exceeded，绝不截断当成功', { timeout: 60_000 }, async () => {
+  it('output over maxOutputBytes explicit output_limit_exceeded, never truncate when succeeded', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rs9'))
     const result = await runShell(deps, `head -c 200000 /dev/zero | tr '\\0' 'A'`, {
       maxOutputBytes: 100_000,
     })
     assert.equal(result.ok, false)
     assert.ok(result.output.includes('output_limit_exceeded'))
-    assert.ok(!result.output.includes('AAAA'), '超限后不得回显截断内容冒充结果')
+    assert.ok(!result.output.includes('AAAA'), 'over limit after must not back visible truncate content smoke fill result')
   })
 
-  it('流式模式（onOutputChunk）：聚合预算收敛为 STREAM_AGGREGATE_LIMIT_BYTES，逐块仍全部推送，超限显式 output_limit_exceeded', { timeout: 60_000 }, async () => {
+  it('streaming pattern (onOutputChunk): aggregate pre- compute converge is STREAM_AGGREGATE_LIMIT_BYTES, one by one chunk still all push, over limit explicit output_limit_exceeded', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rs-stream'))
     const chunks: Array<{ stream: 'stdout' | 'stderr'; text: string }> = []
-    // 显式给出远大于流式预算的 maxOutputBytes：流式模式下也必须被
-    // STREAM_AGGREGATE_LIMIT_BYTES 覆盖（旧 64MiB 全文复制是内存泄漏）。
+    // explicit to out far greater than streaming pre- compute maxOutputBytes: streaming pattern under also must by
+    // STREAM_AGGREGATE_LIMIT_BYTES override (old 64MiB all text duplicate is memory leak leak).
     const result = await runShell(deps, `head -c 600000 /dev/zero | tr '\\0' 'B'`, {
       maxOutputBytes: 64 * 1024 * 1024,
       onOutputChunk: (chunk) => chunks.push(chunk),
     })
-    assert.equal(result.ok, false, '超过流式聚合预算必须显式失败')
-    assert.ok(result.output.includes('output_limit_exceeded'), '必须显式 output_limit_exceeded')
-    assert.ok(result.output.includes('262144'), `错误信息需携带真实预算（${result.output.slice(0, 120)}）`)
-    assert.ok(!result.output.includes('BBBB'), '终态诊断不得回显超限内容')
-    // 流式客户端已收到全部逐块输出（600000 字节 B），Hub 侧仅放弃终态聚合。
+    assert.equal(result.ok, false, 'exceeds streaming aggregate pre- compute must explicit failed')
+    assert.ok(result.output.includes('output_limit_exceeded'), 'must explicit output_limit_exceeded')
+    assert.ok(result.output.includes('262144'), `error information must carry real pre- compute (${result.output.slice(0, 120)})`)
+    assert.ok(!result.output.includes('BBBB'), 'terminal state diagnose must not back visible over limit content')
+    // streaming client already receives all one by one chunk output (600000 byte B),Hub side only abandon terminal state aggregate.
     const streamedBytes = chunks
       .filter((c) => c.stream === 'stdout')
       .reduce((sum, c) => sum + Buffer.byteLength(c.text, 'utf8'), 0)
-    assert.equal(streamedBytes, 600000, '逐块推送不因聚合超限而中断')
-    // 未超流式预算的命令：聚合结果正常返回（流式预算不误伤小输出）。
+    assert.equal(streamedBytes, 600000, 'one by one chunk push do not because aggregate over limit while interrupt')
+    // not over streaming pre- compute command: aggregate result normal return (streaming pre- compute do not mistakenly damage small output).
     const okResult = await runShell(deps, `printf 'small-stream'`, {
       maxOutputBytes: 64 * 1024 * 1024,
       onOutputChunk: () => undefined,
@@ -215,7 +215,7 @@ describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
     assert.equal(okResult.output, 'small-stream')
   })
 
-  it('buildToolEnv：宿主六变量固定覆盖 stash 同名注入；HELM_DATA_DIR 来自 deps', { timeout: 60_000 }, () => {
+  it('buildToolEnv: host six variable fixed override stash same name inject;HELM_DATA_DIR from deps', { timeout: 60_000 }, () => {
     const stash = new SecretStash()
     stash.put(7, 'HELM_CWD', '/evil')
     stash.put(7, 'HELM_DATA_DIR', '/evil-data')
@@ -233,13 +233,13 @@ describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
     assert.equal(env['HELM_CONVERSATION_ID'], '7')
     assert.equal(env['HELM_CWD'], '/work')
     assert.equal(env['HELM_DATA_DIR'], '/d')
-    // 无 provider：继承的 HELM_TOKEN 必须被剥除（不泄漏宿主 token）
+    // without provider: inherit HELM_TOKEN must by strip except (without leaking host token)
     assert.equal(env['HELM_TOKEN'], undefined)
   })
 
-  it('buildToolEnv：无 provider 时剥除继承 HELM_TOKEN；有 provider 时受管 token 优先于 stash 同名值', { timeout: 60_000 }, () => {
+  it('buildToolEnv: without provider when strip except inherit HELM_TOKEN; has provider when managed token takes precedence at stash same name value', { timeout: 60_000 }, () => {
     const stash = new SecretStash()
-    // 其他会话 stash 里的同名 HELM_TOKEN 不可冒充受管 token
+    // other conversation stash in same name HELM_TOKEN cannot smoke fill managed token
     stash.put(8, 'HELM_TOKEN', 'stash-spoofed-token')
     const base: HelmToolDeps = {
       dataDir: '/d',
@@ -249,16 +249,16 @@ describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
       redact: (t) => t,
       artifacts: null as never,
     }
-    // 有 provider：受管 token 固定注入，stash 同名注入被覆盖
+    // has provider: managed token fixed inject,stash same name inject by override
     const withProvider = buildToolEnv({ ...base, processToken: () => 'managed-tok-1' }, '/work', 8)
     assert.equal(withProvider['HELM_TOKEN'], 'managed-tok-1')
-    // 无 provider：剥除（不因 stash 存在同名值而透传其他会话秘密）
+    // without provider: strip except (do not because stash store in same name value while pass-through other conversation secret)
     const noProvider = buildToolEnv(base, '/work', 8)
     assert.equal(noProvider['HELM_TOKEN'], undefined)
   })
 
-  it('runShell：子进程持受管 HELM_TOKEN 且输出脱敏内外 token；无 provider 时子进程无 HELM_TOKEN', { timeout: 60_000 }, async () => {
-    // 有 provider：子进程可见受管 token（诚实边界：可信代码固有权限），但输出脱敏
+  it('runShell: child process hold managed HELM_TOKEN and output redaction inside outside token; without provider when child process without HELM_TOKEN', { timeout: 60_000 }, async () => {
+    // has provider: child process visible managed token(honest boundary: can message code solid has permission), but output redaction
     const auth = new AuthService(join(rootDir, 'rs10'))
     const managed = auth.createProcessToken()
     const releaseRedaction = (() => {
@@ -272,10 +272,10 @@ describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
     }
     const echo = await runShell(depsWithToken, 'printf %s "$HELM_TOKEN" | dd bs=1 2>/dev/null', { conversationId: 1 })
     assert.equal(echo.ok, true)
-    assert.ok(!echo.output.includes(managed.token), '受管 token 明文不得出现在输出')
-    assert.ok(echo.output.includes('[REDACTED]'), '应替换为 REDACTED 标记')
+    assert.ok(!echo.output.includes(managed.token), 'managed token plaintext must not appear in output')
+    assert.ok(echo.output.includes('[REDACTED]'), 'should replace is REDACTED mark record')
 
-    // 同时含继承宿主 token 与受管 token 的输出：两个都不得泄漏
+    // also contains inherit host token and managed token output: two all must not leak leak
     const hostEnv = process.env['HELM_TOKEN']
     const both = await runShell(
       depsWithToken,
@@ -283,24 +283,24 @@ describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
       { conversationId: 1 },
     )
     assert.equal(both.ok, true)
-    assert.ok(!both.output.includes(managed.token), '受管 token 不得泄漏')
-    assert.ok(!hostEnv || !both.output.includes(hostEnv), '继承宿主 token 不得泄漏')
+    assert.ok(!both.output.includes(managed.token), 'managed token must not leak leak')
+    assert.ok(!hostEnv || !both.output.includes(hostEnv), 'inherit host token must not leak leak')
 
-    // 无 provider：子进程环境里没有 HELM_TOKEN（继承值被剥除）
+    // without provider: child process environment in no HELM_TOKEN(inherit value by strip except)
     const depsPlain = await makeRealDeps(join(rootDir, 'rs12'))
     const absent = await runShell(depsPlain, 'echo "${HELM_TOKEN:-UNSET}"', { conversationId: 1 })
     assert.equal(absent.ok, true)
-    assert.ok(absent.output.includes('UNSET'), '无 provider 时子进程不得继承 HELM_TOKEN')
+    assert.ok(absent.output.includes('UNSET'), 'without provider when child process must not inherit HELM_TOKEN')
 
-    // dispose 后受管 token 失效（进程内生命周期）
+    // dispose after managed token expires (process inside lifecycle)
     managed.dispose()
     assert.equal(await new AuthService(join(rootDir, 'rs10')).verifyToken(managed.token), false)
     releaseRedaction.release()
   })
 })
 
-describe('runGate 门禁真实执行', { timeout: 60_000 }, () => {
-  it('透出底层结果：exitCode/timedOut 如实（成功 0、失败非 0）', { timeout: 60_000 }, async () => {
+describe('runGate gate real execute', { timeout: 60_000 }, () => {
+  it('through out underlying result:exitCode/timedOut such as (succeeded 0, failed non- 0)', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rg1'))
     const ok = await runGate(deps, 'echo gate-ok')
     assert.equal(ok.ok, true)
@@ -314,34 +314,34 @@ describe('runGate 门禁真实执行', { timeout: 60_000 }, () => {
     assert.ok(fail.output.includes('gate-err'))
   })
 
-  it('timeoutMs 可配：短超时杀进程组并返回 timedOut=true / exitCode=null', { timeout: 60_000 }, async () => {
+  it('timeoutMs can match: short timeout kill process group and return timedOut=true / exitCode=null', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rg2'))
     const started = Date.now()
     const result = await runGate(deps, 'sleep 30', { timeoutMs: 500 })
     assert.equal(result.ok, false)
     assert.equal(result.timedOut, true)
     assert.equal(result.exitCode, null)
-    assert.ok(Date.now() - started < 10_000, '超时应杀组而非等满 30s')
+    assert.ok(Date.now() - started < 10_000, 'timeout should kill group while non- etc. full 30s')
     assert.ok(result.output.includes('timeout'))
   })
 
-  it('timeoutMs 非法值经 runShell 显式拒绝（不静默改默认）', { timeout: 60_000 }, async () => {
+  it('timeoutMs illegal value via runShell explicit reject (not silently change by default)', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rg3'))
     for (const bad of [0, -5, 1.5, Number.NaN, 601_000]) {
       await assert.rejects(
         () => runGate(deps, 'true', { timeoutMs: bad }),
         /invalid_timeout/,
-        `timeoutMs=${bad} 应显式拒绝`,
+        `timeoutMs=${bad} should explicit reject`,
       )
     }
   })
 })
 
-describe('read 工具真实文件行为', { timeout: 60_000 }, () => {
-  it('读取 cwd 内文件成功；内容经 spill 返回', { timeout: 60_000 }, async () => {
+describe('read tool real file behavior', { timeout: 60_000 }, () => {
+  it('read cwd inside file succeeded; content via spill return', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'rd1')
     const deps = await makeRealDeps(dir)
-    writeFileSync(join(dir, 'note.md'), '# 标题\n正文')
+    writeFileSync(join(dir, 'note.md'), '# title\nbody text')
     const tool = createReadTool(deps)
     const result = await tool.execute(
       { path: 'note.md' },
@@ -350,15 +350,15 @@ describe('read 工具真实文件行为', { timeout: 60_000 }, () => {
     )
     assert.equal(!!result.isError, false)
     const structured = result.structuredOutput as { content: string }
-    assert.ok(structured.content.includes('# 标题'))
-    // details 是持久化 UI 通道：只携带事实元数据，不双写 content。
+    assert.ok(structured.content.includes('# title'))
+    // details is persist UI channel: only carry fact metadata, do not double write content.
     const details = result.details as { path?: string; nodeId?: string; content?: string }
     assert.equal(typeof details.path, 'string')
     assert.equal(details.nodeId, 'local')
     assert.equal('content' in details, false)
   })
 
-  it('../ 跨目录与 cwd 外绝对路径读取成功（与 bash 同权）', { timeout: 60_000 }, async () => {
+  it('../ across directory and cwd outside absolute path read succeeded (and bash same right)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'rd2')
     mkdirSync(join(dir, 'inner'), { recursive: true })
     const deps = await makeRealDeps(join(dir, 'inner'))
@@ -366,15 +366,15 @@ describe('read 工具真实文件行为', { timeout: 60_000 }, () => {
     const tool = createReadTool(deps)
     for (const p of ['../secret.txt', join(dir, 'secret.txt'), '/etc/hostname']) {
       const result = await tool.execute({ path: p }, makeApi(join(dir, 'inner')), BACKGROUND_CONTEXT)
-      assert.equal(!!result.isError, false, `路径 ${p} 应允许读取`)
+      assert.equal(!!result.isError, false, `path ${p} should allows read`)
     }
     const structured = (
       await tool.execute({ path: '../secret.txt' }, makeApi(join(dir, 'inner')), BACKGROUND_CONTEXT)
     ).structuredOutput as { content: string }
-    assert.ok(structured.content.includes('outside'), '应读到 cwd 外文件内容')
+    assert.ok(structured.content.includes('outside'), 'should read to cwd outside file content')
   })
 
-  it('软链跟随读取（指向 cwd 外目标也允许）', { timeout: 60_000 }, async () => {
+  it('symlink with follow read (points to cwd outside target also allows)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'rd3')
     const outer = join(rootDir, 'rd3-outer')
     mkdirSync(outer, { recursive: true })
@@ -388,12 +388,12 @@ describe('read 工具真实文件行为', { timeout: 60_000 }, () => {
       makeApi(join(dir, 'inner')),
       BACKGROUND_CONTEXT,
     )
-    assert.equal(!!result.isError, false, '软链应跟随读取（与 bash 同权）')
+    assert.equal(!!result.isError, false, 'symlink should with follow read (and bash same right)')
     const structured = result.structuredOutput as { content: string }
     assert.ok(structured.content.includes('via-symlink'))
   })
 
-  it('目录拒绝；超大文件显式 file_too_large 并给出替代指引', { timeout: 60_000 }, async () => {
+  it('directory reject; over large file explicit file_too_large and to out alternative refer quote', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'rd4')
     const deps = await makeRealDeps(dir)
     const tool = createReadTool(deps)
@@ -405,10 +405,10 @@ describe('read 工具真实文件行为', { timeout: 60_000 }, () => {
     assert.equal(bigResult.isError, true)
     const text = (bigResult.output as Array<{ type: string; text: string }>)[0]!.text
     assert.ok(text.includes('file_too_large'))
-    assert.ok(text.includes('read_artifact'), '错误信息应指引分页替代路径')
+    assert.ok(text.includes('read_artifact'), 'error information should refer quote page alternative path')
   })
 
-  it('读取错误脱敏（secret 不进错误文本）', { timeout: 60_000 }, async () => {
+  it('read error redaction (secret does not enter error text)', { timeout: 60_000 }, async () => {
     const stash = new SecretStash()
     const secretValue = 'sk-read-error-secret-777'
     stash.put(1, 'TOK', secretValue)
@@ -421,17 +421,17 @@ describe('read 工具真实文件行为', { timeout: 60_000 }, () => {
       BACKGROUND_CONTEXT,
     )
     assert.equal(result.isError, true)
-    assert.ok(!JSON.stringify(result).includes(secretValue), '错误文本同样必须脱敏')
+    assert.ok(!JSON.stringify(result).includes(secretValue), 'error text same must redaction')
   })
 })
 
-describe('read_artifact 真实 ArtifactService 行为', { timeout: 60_000 }, () => {
-  it('读取成功：真实 spill 产物分页前进至读完', { timeout: 60_000 }, async () => {
+describe('read_artifact real ArtifactService behavior', { timeout: 60_000 }, () => {
+  it('read succeeded: real spill artifact page before enter until read completely', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'ra1')
     const deps = await makeRealDeps(dir)
-    const fullText = '中文'.repeat(8000) // 48000 字节 > 32KiB 触发真实 spill
+    const fullText = 'Chinese'.repeat(8000) // 48000 byte > 32KiB trigger real spill
     const { artifact } = await deps.artifacts.spill(1, 'call-1', fullText)
-    assert.ok(artifact, '文本 >32KiB 应产生 spill 产物')
+    assert.ok(artifact, 'text >32KiB should produce spill artifact')
     const tool = createReadArtifactTool(deps, (conv, owner) => conv === owner)
     let offset = 0
     let chunks = ''
@@ -446,21 +446,21 @@ describe('read_artifact 真实 ArtifactService 行为', { timeout: 60_000 }, () 
       const structured = result.structuredOutput as { chunk: string; nextOffset?: number }
       chunks += structured.chunk
       if (structured.nextOffset === undefined) break
-      assert.ok(structured.nextOffset > offset, `nextOffset 必须严格前进（${offset} -> ${structured.nextOffset}）`)
+      assert.ok(structured.nextOffset > offset, `nextOffset must strictly before enter (${offset} -> ${structured.nextOffset})`)
       offset = structured.nextOffset
-      assert.ok(++guard < 100, '分页循环必须终止')
+      assert.ok(++guard < 100, 'page loop must terminate')
     }
-    assert.equal(chunks, fullText, '分页拼接应还原全文（UTF-8 边界无损）')
+    assert.equal(chunks, fullText, 'page concatenate should restore all text (UTF-8 boundary without loss)')
   })
 
-  it('任意 offset 从不产生替换符；limit=1 遇多字节字符仍保证前进', { timeout: 60_000 }, async () => {
+  it('any offset never produce replace symbol;limit=1 encounter multibyte character still guarantee before enter', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'ra2')
     const deps = await makeRealDeps(dir)
     const { artifact } = await deps.artifacts.spill(1, 'call-2', '漢字テスト'.repeat(3000))
     const tool = createReadArtifactTool(deps, (conv, owner) => conv === owner)
     const fullText = '漢字テスト'.repeat(3000)
     const buffer = Buffer.from(fullText, 'utf8')
-    // 遍历每个字节 offset：chunk 不得含替换符；limit=1 也必须能读完。
+    // iterate each byte offset:chunk must not contains replace symbol;limit=1 also must can read completely.
     for (let offset = 0; offset < buffer.length; offset += 997) {
       const result = await tool.execute(
         { id: artifact!.id, offset, limit: 1 },
@@ -468,14 +468,14 @@ describe('read_artifact 真实 ArtifactService 行为', { timeout: 60_000 }, () 
         BACKGROUND_CONTEXT,
       )
       const structured = result.structuredOutput as { chunk: string; nextOffset?: number }
-      assert.ok(!structured.chunk.includes('\uFFFD'), `offset=${offset} 不得撕裂出替换符`)
+      assert.ok(!structured.chunk.includes('\uFFFD'), `offset=${offset} must not tear out replace symbol`)
       assert.ok(
         structured.nextOffset === undefined || structured.nextOffset > offset,
-        `offset=${offset} limit=1 也必须前进`,
+        `offset=${offset} limit=1 also must before enter`,
       )
     }
-    // ① limit=1 从字符中间 offset=1 开始连续读取 15 步，跳过残缺首字符后逐字还原
-    const midCharOffset = 1 // 「漢」的第 2 字节
+    // ① limit=1 from character middle offset=1 start connect continue read 15 step, skip leftover missing first token symbol after one by one character restore
+    const midCharOffset = 1 // Han 2 byte
     let headOffset = midCharOffset
     let headTotal = ''
     for (let step = 0; step < 15; step += 1) {
@@ -485,17 +485,17 @@ describe('read_artifact 真实 ArtifactService 行为', { timeout: 60_000 }, () 
         BACKGROUND_CONTEXT,
       )
       const structured = result.structuredOutput as { chunk: string; nextOffset?: number }
-      assert.ok(!structured.chunk.includes('\uFFFD'), `head step=${step} 不得撕裂出替换符`)
+      assert.ok(!structured.chunk.includes('\uFFFD'), `head step=${step} must not tear out replace symbol`)
       assert.ok(
         structured.nextOffset !== undefined && structured.nextOffset > headOffset,
-        `head step=${step} nextOffset 必须严格递增（${headOffset} -> ${structured.nextOffset}）`,
+        `head step=${step} nextOffset must strictly pass increase (${headOffset} -> ${structured.nextOffset})`,
       )
       headTotal += structured.chunk
       headOffset = structured.nextOffset
     }
-    assert.equal(headTotal, fullText.slice(1, 16), '从字符中间起读应跳过残缺首字符逐字还原前 15 字符')
+    assert.equal(headTotal, fullText.slice(1, 16), 'from character middle start read should skip leftover missing first token symbol one by one character restore before 15 character')
 
-    // ② 从末尾附近字节（落在多字节字符中间）起用 limit=1 读至结尾，精确还原尾部文本并终止
+    // ② from tail attach near byte (in multibyte character middle) start use limit=1 read until tail, precise restore tail part text and terminate
     let tailOffset = buffer.length - 17
     let tailTotal = ''
     let tailGuard = 0
@@ -506,23 +506,23 @@ describe('read_artifact 真实 ArtifactService 行为', { timeout: 60_000 }, () 
         BACKGROUND_CONTEXT,
       )
       const structured = result.structuredOutput as { chunk: string; nextOffset?: number }
-      assert.ok(!structured.chunk.includes('\uFFFD'), `tail offset=${tailOffset} 不得撕裂出替换符`)
+      assert.ok(!structured.chunk.includes('\uFFFD'), `tail offset=${tailOffset} must not tear out replace symbol`)
       tailTotal += structured.chunk
       if (structured.nextOffset === undefined) break
-      assert.ok(structured.nextOffset > tailOffset, `tail nextOffset 必须严格前进（${tailOffset} -> ${structured.nextOffset}）`)
+      assert.ok(structured.nextOffset > tailOffset, `tail nextOffset must strictly before enter (${tailOffset} -> ${structured.nextOffset})`)
       tailOffset = structured.nextOffset
-      assert.ok(++tailGuard < 20, '尾部逐字分页必须正常终止')
+      assert.ok(++tailGuard < 20, 'tail part one by one character page must normal terminate')
     }
-    assert.equal(tailTotal, fullText.slice(-5), '从末尾多字节字符中间起读应跳过残缺首字符并精确还原尾部')
+    assert.equal(tailTotal, fullText.slice(-5), 'from tail multibyte character middle start read should skip leftover missing first token symbol and precise restore tail part')
   })
 
-  it('越界会话拒绝（授权仅当前会话/父链）', { timeout: 60_000 }, async () => {
+  it('out of bounds conversation reject (authorization only when before conversation/parent chain)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'ra3')
     const deps = await makeRealDeps(dir)
     const { artifact } = await deps.artifacts.spill(2, 'call-3', 'owner-2-content-'.repeat(3000))
     const tool = createReadArtifactTool(
       deps,
-      (conv, owner) => conv === owner, // 模拟 runtime 的会话/父链授权
+      (conv, owner) => conv === owner, // simulated runtime conversation/parent chain authorization
     )
     const denied = await tool.execute({ id: artifact!.id }, makeApi(dir, 1), BACKGROUND_CONTEXT)
     assert.equal(denied.isError, true)
@@ -530,7 +530,7 @@ describe('read_artifact 真实 ArtifactService 行为', { timeout: 60_000 }, () 
     assert.equal(!!allowed.isError, false)
   })
 
-  it('存储读取失败不伪装成 artifact_not_found（诚实性：真实错误如实透出）', { timeout: 60_000 }, async () => {
+  it('store failed to read does not pretend to be into artifact_not_found(honest: real error such as through out)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'ra3b')
     await ensureDataDir(dir)
     const real = new ArtifactService(dir, new InMemoryArtifactRepository(), new SecretStash())
@@ -554,12 +554,12 @@ describe('read_artifact 真实 ArtifactService 行为', { timeout: 60_000 }, () 
     const result = await tool.execute({ id: 'any-id' }, makeApi(dir, 1), BACKGROUND_CONTEXT)
     assert.equal(result.isError, true)
     const text = (result.output as Array<{ text: string }>)[0]!.text
-    assert.ok(text.includes('artifact_read_failed'), `应如实报存储读取失败：${text}`)
-    assert.ok(text.includes('disk I/O error'), `真实错误文本必须透出：${text}`)
-    assert.ok(!text.includes('artifact_not_found'), `存储失败不得伪装成不存在：${text}`)
+    assert.ok(text.includes('artifact_read_failed'), `should such as report store failed to read:${text}`)
+    assert.ok(text.includes('disk I/O error'), `real error text must through out:${text}`)
+    assert.ok(!text.includes('artifact_not_found'), `store failed must not disguise into missing:${text}`)
   })
 
-  it('不存在产物 artifact_not_found；offset 超范围显式拒绝；nextOffset 不输出 undefined 字段', { timeout: 60_000 }, async () => {
+  it('missing artifact artifact_not_found;offset over scope explicit reject;nextOffset do not output undefined field', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'ra4')
     const deps = await makeRealDeps(dir)
     const tool = createReadArtifactTool(deps, () => true)
@@ -576,7 +576,7 @@ describe('read_artifact 真实 ArtifactService 行为', { timeout: 60_000 }, () 
     )
     assert.equal(oob.isError, true)
     assert.ok(((oob.output as Array<{ text: string }>)[0]!.text).includes('offset_out_of_range'))
-    // 分页至最后一页后 structuredOutput 无 nextOffset 字段（JSON-safe，非 undefined 值）
+    // page until finally one page after structuredOutput without nextOffset field (JSON-safe, non- undefined value)
     let lastOffset = 0
     let last: { structuredOutput?: Record<string, unknown> } = {}
     for (let guard = 0; guard < 100; guard++) {
@@ -591,13 +591,13 @@ describe('read_artifact 真实 ArtifactService 行为', { timeout: 60_000 }, () 
       lastOffset = next
     }
     const structured = last.structuredOutput as Record<string, unknown>
-    assert.ok(!('nextOffset' in structured), '读完时不得出现 undefined 的 nextOffset 字段')
+    assert.ok(!('nextOffset' in structured), 'read completely when must not appear undefined  nextOffset field')
     assert.equal(JSON.stringify(structured).includes('undefined'), false)
   })
 })
 
-describe('bash 工具（SDK execute 直调，真实服务依赖）', { timeout: 60_000 }, () => {
-  it('成功执行并返回 structuredOutput（经真实 spill）', { timeout: 60_000 }, async () => {
+describe('bash tool (SDK execute direct tune, real service dependency)', { timeout: 60_000 }, () => {
+  it('succeeded execute and return structuredOutput(via real spill)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'bt1')
     const deps = await makeRealDeps(dir)
     const tool = createBashTool(deps)
@@ -610,7 +610,7 @@ describe('bash 工具（SDK execute 直调，真实服务依赖）', { timeout: 
     const structured = result.structuredOutput as { ok: boolean; output: string }
     assert.equal(structured.ok, true)
     assert.ok(structured.output.includes('hello-tools'))
-    // details 持久化 UI 通道：保留执行事实，不再携带 output 文本。
+    // details persist UI channel: keep execute fact, no longer carry output text.
     const details = result.details as Record<string, unknown>
     assert.equal(details['ok'], true)
     assert.equal(details['exitCode'], 0)
@@ -618,7 +618,7 @@ describe('bash 工具（SDK execute 直调，真实服务依赖）', { timeout: 
     assert.equal('output' in details, false)
   })
 
-  it('失败命令 isError 如实；timeoutMs 非法值显式拒绝', { timeout: 60_000 }, async () => {
+  it('failed command isError such as;timeoutMs illegal value explicit reject', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'bt2')
     const deps = await makeRealDeps(dir)
     const tool = createBashTool(deps)
@@ -636,13 +636,13 @@ describe('bash 工具（SDK execute 直调，真实服务依赖）', { timeout: 
     assert.equal(bad.isError, true)
     assert.ok(
       ((bad.output as Array<{ text: string }>)[0]!.text).includes('invalid_timeout'),
-      '非法 timeout 不得被静默改默认',
+      'illegal timeout must not by static default change by default',
     )
   })
 })
 
-describe('SDK 真实链路（faux 模型驱动工具调用）', { timeout: 60_000 }, () => {
-  it('bash 工具经 harness 真实执行 + spill 产物登记 + read_artifact 分页读回', { timeout: 60_000 }, async () => {
+describe('SDK real link (faux model drive tool invoke)', { timeout: 60_000 }, () => {
+  it('bash tool via harness real execute + spill artifact register + read_artifact page read back', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'sdk1')
     const kernel = (await openRuntime(dir)) as never as ReturnType<typeof openRuntime> & {
       __faux: FauxHandle
@@ -660,15 +660,15 @@ describe('SDK 真实链路（faux 模型驱动工具调用）', { timeout: 60_00
         fauxAssistantMessage([fauxToolCall('bash', { command: bigCommand })], {
           stopReason: 'toolUse',
         }),
-        fauxAssistantMessage('完成'),
+        fauxAssistantMessage('complete'),
       ])
-      await kernel.submitInput(1, '生成大输出')
+      await kernel.submitInput(1, 'generate large output')
       await kernel.waitForIdle(1)
-      assert.equal(await kernel.getLastAssistantText(1), '完成')
+      assert.equal(await kernel.getLastAssistantText(1), 'complete')
       const artifacts = await kernel.services.artifacts.list(1)
       const spill = artifacts.find((a) => a.name.startsWith('tool-spill-'))
-      assert.ok(spill, '应有 spill 产物')
-      // 真实 read_artifact 链路读回（授权链允许会话 1）
+      assert.ok(spill, 'should has spill artifact')
+      // real read_artifact link read back (authorization chain allows conversation 1)
       const content = await kernel.services.artifacts.readContent(spill!.id)
       assert.ok(content.includes('BBBBB'))
     } finally {
@@ -676,7 +676,7 @@ describe('SDK 真实链路（faux 模型驱动工具调用）', { timeout: 60_00
     }
   })
 
-  it('edit 差异经真实 harness 落库为 toolResult 消息 details（Web 差异展示的持久化通道）', { timeout: 60_000 }, async () => {
+  it('edit difference via real harness written to the database is toolResult message details(Web difference render persist channel)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'sdk3')
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'code.ts'), 'alpha\nbeta\n')
@@ -693,9 +693,9 @@ describe('SDK 真实链路（faux 模型驱动工具调用）', { timeout: 60_00
           [fauxToolCall('edit', { path: 'code.ts', oldText: 'beta', newText: 'BETA' })],
           { stopReason: 'toolUse' },
         ),
-        fauxAssistantMessage('完成'),
+        fauxAssistantMessage('complete'),
       ])
-      await kernel.submitInput(1, '改文件')
+      await kernel.submitInput(1, 'change file')
       await kernel.waitForIdle(1)
       assert.equal(readFileSync(join(dir, 'code.ts'), 'utf8'), 'alpha\nBETA\n')
       const detail = await kernel.getConversationDetail(1)
@@ -703,19 +703,19 @@ describe('SDK 真实链路（faux 模型驱动工具调用）', { timeout: 60_00
         .filter((e: { kind: string; model?: unknown[] }) => e.kind === 'pi.tool-result')
         .flatMap((e: { kind: string; model?: unknown[] }) => ((e.model ?? []) as Array<Record<string, unknown>>))
       const editMessage = messages.find((m: Record<string, unknown>) => m['toolName'] === 'edit')
-      assert.ok(editMessage, '应有 edit 的 toolResult 消息')
-      // SDK 契约：structuredOutput 不写入会话条目（只给嵌套调用方）——持久化
-      // UI 通道是 details，Web 差异展示读它（回归：曾全部读不到导致无法展示差异）。
+      assert.ok(editMessage, 'should has edit  toolResult message')
+      // SDK contract:structuredOutput do not write conversation item (only to embed set caller) - - persist
+      // UI channel is details,Web difference render read it (regression: once all read fewer than leads to cannot render difference).
       assert.equal('structuredOutput' in editMessage!, false)
       const validate = new Ajv({ allErrors: true, strict: false }).compile<EditToolResult>(EDIT_TOOL_RESULT_SCHEMA)
-      assert.ok(validate(editMessage!['details']), `details 应符合 EDIT_TOOL_RESULT_SCHEMA：${JSON.stringify(validate.errors)}`)
+      assert.ok(validate(editMessage!['details']), `details should conforms to EDIT_TOOL_RESULT_SCHEMA:${JSON.stringify(validate.errors)}`)
       assert.equal((editMessage!['details'] as EditToolResult).diff.addedLines, 1)
     } finally {
       await kernel.close()
     }
   })
 
-  it('运行中 abortConversation 杀掉 bash 工具 shell（不等 120s）', { timeout: 60_000 }, async () => {
+  it('run in abortConversation kill bash tool shell(do not etc. 120s)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'sdk2')
     const kernel = (await openRuntime(dir)) as never as ReturnType<typeof openRuntime> & {
       __faux: FauxHandle
@@ -733,12 +733,12 @@ describe('SDK 真实链路（faux 模型驱动工具调用）', { timeout: 60_00
         ),
       ])
       const started = Date.now()
-      void kernel.submitInput(1, '跑长命令').catch(() => {})
+      void kernel.submitInput(1, 'run long command').catch(() => {})
       await new Promise((r) => setTimeout(r, 400))
       await kernel.abortConversation(1)
       await kernel.waitForIdle(1).catch(() => {})
       const elapsed = Date.now() - started
-      assert.ok(elapsed < 30_000, `abort 应中断工具而非等满超时（${elapsed}ms）`)
+      assert.ok(elapsed < 30_000, `abort should interrupt tool while non- etc. full timeout (${elapsed}ms)`)
       const conv = kernel.getConversation(1)
       assert.ok(['idle', 'error'].includes(conv.status))
     } finally {
@@ -747,8 +747,8 @@ describe('SDK 真实链路（faux 模型驱动工具调用）', { timeout: 60_00
   })
 })
 
-describe('关停中止态：spill 防护与 replay 标记', { timeout: 60_000 }, () => {
-  it('createBashTool 在运行中被 abort 时抛出中止异常且不写入 spill 产物', { timeout: 60_000 }, async () => {
+describe('closure stop abort state:spill protect and replay mark record', { timeout: 60_000 }, () => {
+  it('createBashTool in run in by abort when throw abort exception and do not write spill artifact', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'abort-bash')
     const baseDeps = await makeRealDeps(dir)
     let spillCalled = 0
@@ -775,13 +775,13 @@ describe('关停中止态：spill 防护与 replay 标记', { timeout: 60_000 },
           ),
         (err: unknown) => err instanceof Error && err.message === 'kernel closing',
       )
-      assert.equal(spillCalled, 0, 'abort 后不得写入无意义 spill 文件')
+      assert.equal(spillCalled, 0, 'abort after must not write without intent meaning spill file')
     } finally {
       clearTimeout(timer)
     }
   })
 
-  it('createReadTool 在读取过程中或已中止时抛出中止异常且不调用 spill；只读工具显式声明 replay: safe', { timeout: 60_000 }, async () => {
+  it('createReadTool in read during or already abort when throw abort exception and do not invoke spill; only read tool explicit declaration replay: safe', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'abort-read')
     const baseDeps = await makeRealDeps(dir)
     writeFileSync(join(dir, 'sample.txt'), 'hello abort world\n', 'utf8')
@@ -820,11 +820,11 @@ describe('关停中止态：spill 防护与 replay 标记', { timeout: 60_000 },
         ),
       (err: unknown) => err === abortReason,
     )
-    assert.equal(spillCalled, 0, 'read 在 abort 态不得写入 spill 文件')
+    assert.equal(spillCalled, 0, 'read in abort state must not write spill file')
   })
 })
 
-/** 最小真实 ToolExecutionApi：conversationId / callId / agent(cwd) 均按 SDK 契约提供。 */
+/** most small real ToolExecutionApi:conversationId / callId / agent(cwd) all by SDK contract provide. */
 function makeApi(cwd: string, conversationId = 1) {
   return {
     taskId: 'test-task',
@@ -843,15 +843,15 @@ function makeApi(cwd: string, conversationId = 1) {
     commit: async (change: () => unknown) => change(),
     memo: async () => undefined,
     createTask: async () => {
-      throw new Error('测试不使用')
+      throw new Error('test does not use')
     },
     getTask: async () => undefined,
     waitForTask: async () => {
-      throw new Error('测试不使用')
+      throw new Error('test does not use')
     },
     conversation: async () => undefined,
     executeTool: async () => {
-      throw new Error('测试不使用')
+      throw new Error('test does not use')
     },
   } as never
 }

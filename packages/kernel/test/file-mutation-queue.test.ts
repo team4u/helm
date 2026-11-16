@@ -1,21 +1,21 @@
 /**
- * 文件互斥队列测试（env/file-mutation-queue + EnvFabric.withFileMutationQueue
- * + 内核 write/edit 工具共享队列）。
+ * file mutual exclusion queue test (env/file-mutation-queue + EnvFabric.withFileMutationQueue
+ * + kernel write/edit tool sharing queue).
  *
- * 覆盖：
- * 1. 同文件并发读-改-写不丢更新（内核 edit 工具 × N 并发追加替换；远端受控
- *    env 的 read-modify-write 与内置工具竞争）；
- * 2. 不同文件互不等待（并行执行，无串行化开销）；
- * 3. realpath 软链别名同 key（symlink 指向同一文件的两个路径互斥）；
- * 4. 新文件 canonical 父目录拼接（创建新文件的 write 与后续变更同 key）；
- * 5. 异常后队列自愈（fn 抛错后下一任务立即可入队）；
- * 6. signal 取消：在队列中等待时取消立即失败并释放队列位置；
- * 7. 跨节点同形路径不同 key（local 与远端 env 同一路径字符串互不阻塞）；
- * 8. local 直连入口（localWithFileMutationQueue）与 NodeExecutionEnv 底座
- *    （'node:local' 前缀）互斥。
+ * override:
+ * 1. same file concurrency read-change-write do not lose update (kernel edit tool × N concurrency append replace; remote subject to control
+ *    env  read-modify-write and inside placement tool competition);
+ * 2. different file mutual without waiting (parallel execute, without serial overhead);
+ * 3. realpath symlink alias same key(symlink points to the same file two path mutual exclusion);
+ * 4. new file canonical parent directory concatenate (create new file write and after continue change same key);
+ * 5. exception after queue self-heal (fn throws after under one task immediately can queue);
+ * 6. signal cancel: in queue in while waiting cancel immediately failed and release queue location;
+ * 7. across node same shape path different key(local and remote env the same path string mutual non-blocking);
+ * 8. local direct connect entry (localWithFileMutationQueue) and NodeExecutionEnv bottom seat
+ *    ('node:local' prefix) mutual exclusion.
  *
- * 诚实边界（不测/不承诺）：bash 与外部进程并发写不受本队列约束；跨 Hub 进程
- * 无分布式锁（单节点单 Hub 部署模型）。
+ * honest boundary (do not test/does not promise):bash and external process concurrency write do not subject to this queue constraint; across Hub process
+ * without distributed style lock (single node single Hub deploy model).
  */
 
 import { test, describe, before, after } from 'node:test'
@@ -55,15 +55,15 @@ after(async () => {
 })
 
 // ---------------------------------------------------------------------------
-// 测试基座
+// test base seat
 // ---------------------------------------------------------------------------
 
-/** 真实 local 底座 + EnvFabric（无远端节点注册：local 路径即可测全部语义）。 */
+/** real local bottom seat + EnvFabric(without remote node register:local path i.e. can test all semantics). */
 function makeFabric(): EnvFabric {
   return createEnvFabric({})
 }
 
-/** 受控远端 env：真实内存文件表，读改写有可观测延迟窗口。 */
+/** subject to control remote env: real memory file table, read change write has can observability latency window. */
 function makeRecordingEnv(files: Map<string, string>, delays: Map<string, number> = new Map()): {
   env: {
     id: string
@@ -75,7 +75,7 @@ function makeRecordingEnv(files: Map<string, string>, delays: Map<string, number
     createDir(path: string, options: { recursive?: boolean }, context: Context): Promise<{ ok: true; value: void } | { ok: false; error: { code: string; message: string } }>
   }
 } {
-  const canonical = (p: string): string => p // 受控：恒等映射即可（无软链）
+  const canonical = (p: string): string => p // subject to control: constant etc. mapping i.e. can (without symlink)
   const knownDirs = new Set<string>(['/workspace'])
   return {
     env: {
@@ -84,7 +84,7 @@ function makeRecordingEnv(files: Map<string, string>, delays: Map<string, number
         return { ok: true, value: path }
       },
       async joinPath(parts) {
-        // posix 词法拼接 + 归一（与 NodeExecutionEnv.joinPath 语义一致）
+        // posix term method concatenate + archive one (and NodeExecutionEnv.joinPath semantics consistent)
         const joined = parts.join('/')
         const segs: string[] = []
         for (const seg of joined.split('/')) {
@@ -130,16 +130,16 @@ function makeStubFabric(env: ReturnType<typeof makeRecordingEnv>['env']): EnvFab
     debugBaseCount: () => 0,
     debugBases: () => [],
     ipcCall: () => {
-      throw new Error('测试不使用 ipcCall')
+      throw new Error('test does not use ipcCall')
     },
     ipcSubscribe: () => {
-      throw new Error('测试不使用 ipcSubscribe')
+      throw new Error('test does not use ipcSubscribe')
     },
     dispose: () => Promise.resolve(),
   } as never
 }
 
-/** 与 createEnvFabric 同构的受控 fabric：withFileMutationQueue 复用同一队列模块。 */
+/** and createEnvFabric same construct subject to control fabric:withFileMutationQueue re- use the same queue module. */
 function makeRecordingFabric(env: ReturnType<typeof makeRecordingEnv>['env']): EnvFabric {
   return {
     ...makeStubFabric(env),
@@ -182,25 +182,25 @@ function makeApi(cwd: string, conversationId = 1) {
     commit: async (change: () => unknown) => change(),
     memo: async () => undefined,
     createTask: async () => {
-      throw new Error('测试不使用')
+      throw new Error('test does not use')
     },
     getTask: () => undefined,
     waitForTask: async () => {
-      throw new Error('测试不使用')
+      throw new Error('test does not use')
     },
     conversation: async () => undefined,
     executeTool: async () => {
-      throw new Error('测试不使用')
+      throw new Error('test does not use')
     },
   } as never
 }
 
 // ---------------------------------------------------------------------------
-// 1. 核心语义：同文件串行 / 异常自愈 / 取消 / 不同文件并行
+// 1. core semantics: same file serial / exception self-heal / cancel / different file parallel
 // ---------------------------------------------------------------------------
 
-describe('envWithFileMutationQueue 核心语义', { timeout: 60_000 }, () => {
-  test('同文件读-改-写串行不丢更新（8 并发各 +1）', { timeout: 60_000 }, async () => {
+describe('envWithFileMutationQueue core semantics', { timeout: 60_000 }, () => {
+  test('same file read-change-write serial do not lose update (8 concurrency each +1)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'serial')
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'counter.txt')
@@ -213,7 +213,7 @@ describe('envWithFileMutationQueue 核心语义', { timeout: 60_000 }, () => {
         file,
         async () => {
           const cur = readFileSync(file, 'utf8')
-          // 制造真实竞态窗口：读到旧值后让出事件循环再写回。
+          // fabricate real race window: read to old value after let out event loop again write back.
           await delay(5)
           writeFileSync(file, String(Number(cur) + 1))
         },
@@ -221,11 +221,11 @@ describe('envWithFileMutationQueue 核心语义', { timeout: 60_000 }, () => {
       )
 
     await Promise.all(Array.from({ length: 8 }, bump))
-    assert.equal(readFileSync(file, 'utf8'), '8', '8 个并发读-改-写必须全部生效')
-    assert.equal(fileMutationQueueSize(), 0, '结算后队列清空')
+    assert.equal(readFileSync(file, 'utf8'), '8', '8 concurrency read-change-write must all takes effect')
+    assert.equal(fileMutationQueueSize(), 0, 'compute after queue empty')
   })
 
-  test('不同文件互不等待（并行执行）', { timeout: 60_000 }, async () => {
+  test('different file mutual without waiting (parallel execute)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'parallel')
     mkdirSync(dir, { recursive: true })
     const env = new NodeExecutionEnv({ cwd: dir })
@@ -244,10 +244,10 @@ describe('envWithFileMutationQueue 核心语义', { timeout: 60_000 }, () => {
       ),
     )
     const elapsed = Date.now() - start
-    assert.ok(elapsed < 300, `三个不同文件应并行（耗时 ${elapsed}ms < 300ms）`)
+    assert.ok(elapsed < 300, `three different file should parallel (time cost ${elapsed}ms < 300ms)`)
   })
 
-  test('fn 抛错后队列自愈：下一任务立即可入队', { timeout: 60_000 }, async () => {
+  test('fn throws after queue self-heal: under one task immediately can queue', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'selfheal')
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'heal.txt')
@@ -274,14 +274,14 @@ describe('envWithFileMutationQueue 核心语义', { timeout: 60_000 }, () => {
     assert.equal(fileMutationQueueSize(), 0)
   })
 
-  test('三任务取消链：A 持锁不放；B 排队后 abort 立即拒绝；C 不得在 A 释放前执行', { timeout: 60_000 }, async () => {
+  test('three task cancel chain:A hold lock do not put;B queue up after abort immediately reject;C must not in A release before execute', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'abort-chain')
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'chain.txt')
     writeFileSync(file, '0')
     const env = new NodeExecutionEnv({ cwd: dir })
 
-    // A：拿锁后不释放（门控 holdA）。
+    // A: take lock after do not release (gate control holdA).
     let releaseA!: () => void
     const holdA = new Promise<void>((resolve) => { releaseA = resolve })
     let aRan = false
@@ -295,10 +295,10 @@ describe('envWithFileMutationQueue 核心语义', { timeout: 60_000 }, () => {
       },
       BACKGROUND_CONTEXT,
     )
-    await delay(30) // A 已拿锁（aRan 翻转即证）
-    assert.ok(aRan, 'A 应已持有锁')
+    await delay(30) // A already take lock (aRan translate rotate i.e. verify)
+    assert.ok(aRan, 'A should already hold has lock')
 
-    // B：排队等待中 abort —— 必须立即拒绝（不等 A，300ms 预算内）。
+    // B: queue up wait for in abort - - must immediately reject (do not etc. A,300ms pre- compute inside).
     const controllerB = new AbortController()
     let bRan = false
     const taskB = envWithFileMutationQueue(
@@ -310,7 +310,7 @@ describe('envWithFileMutationQueue 核心语义', { timeout: 60_000 }, () => {
       },
       withAbortSignal(controllerB.signal, BACKGROUND_CONTEXT),
     )
-    await delay(30) // B 已入队等待
+    await delay(30) // B already queue wait for
     const abortAt = Date.now()
     controllerB.abort()
     await assert.rejects(taskB, (err: unknown) => {
@@ -318,10 +318,10 @@ describe('envWithFileMutationQueue 核心语义', { timeout: 60_000 }, () => {
       return true
     })
     const rejectElapsed = Date.now() - abortAt
-    assert.ok(rejectElapsed < 300, `B 必须在 A 释放前立即拒绝（实际 ${rejectElapsed}ms）`)
-    assert.equal(bRan, false, 'B 的 fn 不得执行')
+    assert.ok(rejectElapsed < 300, `B must in A release before immediately reject (actual ${rejectElapsed}ms)`)
+    assert.equal(bRan, false, 'B  fn must not execute')
 
-    // C：B 被取消后入队——A 释放前不得执行（被取消的 B 不得腾出假锁）。
+    // C:B by cancel after queue - -A release before must not execute (by cancel B must not soar out false lock).
     let cRan = false
     const taskC = envWithFileMutationQueue(
       env,
@@ -333,18 +333,18 @@ describe('envWithFileMutationQueue 核心语义', { timeout: 60_000 }, () => {
       BACKGROUND_CONTEXT,
     )
     await delay(80)
-    assert.equal(cRan, false, 'A 未释放，C 不得执行（取消链不得误删头部锁）')
+    assert.equal(cRan, false, 'A not release,C must not execute (cancel chain must not mistakenly delete header lock)')
 
-    // A 释放：C 立即接管，链恢复正常。
+    // A release:C immediately take over, chain restore normal.
     releaseA()
     assert.equal(await taskA, 'A')
     assert.equal(await taskC, 'C')
     assert.ok(cRan)
     await delay(10)
-    assert.equal(fileMutationQueueSize(), 0, '链全部结算后队列清空')
+    assert.equal(fileMutationQueueSize(), 0, 'chain all compute after queue empty')
   })
 
-  test('执行窗口内取消：signal 语义交由 fn（fn 返回后链正常释放）', { timeout: 60_000 }, async () => {
+  test('execute window inside cancel:signal semantics hand over by fn(fn return after chain normal release)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'abort-running')
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'running.txt')
@@ -365,9 +365,9 @@ describe('envWithFileMutationQueue 核心语义', { timeout: 60_000 }, () => {
       },
       withAbortSignal(controller.signal, BACKGROUND_CONTEXT),
     )
-    assert.equal(result, 'done-anyway', '已持锁的 fn 正常结算（窗口内取消不强制中断）')
+    assert.equal(result, 'done-anyway', 'already hold lock fn normal compute (window inside cancel do not force interrupt)')
     assert.ok(fnObservedAbort)
-    // 链释放后下一任务立即可入队。
+    // chain release after under one task immediately can queue.
     const next = await envWithFileMutationQueue(env, file, async () => 'next', BACKGROUND_CONTEXT)
     assert.equal(next, 'next')
     assert.equal(fileMutationQueueSize(), 0)
@@ -375,11 +375,11 @@ describe('envWithFileMutationQueue 核心语义', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// 2. canonical key：软链别名 / 新文件
+// 2. canonical key: symlink alias / new file
 // ---------------------------------------------------------------------------
 
-describe('canonical 路径 key', { timeout: 60_000 }, () => {
-  test('realpath 软链别名同 key：两个写法指向同一文件互斥', { timeout: 60_000 }, async () => {
+describe('canonical path key', { timeout: 60_000 }, () => {
+  test('realpath symlink alias same key: two write method points to the same file mutual exclusion', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'symlink')
     mkdirSync(dir, { recursive: true })
     const real = join(dir, 'real.txt')
@@ -388,7 +388,7 @@ describe('canonical 路径 key', { timeout: 60_000 }, () => {
     try {
       symlinkSync(real, alias)
     } catch {
-      // 无符号链接权限的环境跳过（不伪造通过）。
+      // without symlink permission environment skip (do not fabricate via).
       return
     }
     const env = new NodeExecutionEnv({ cwd: dir })
@@ -417,17 +417,17 @@ describe('canonical 路径 key', { timeout: 60_000 }, () => {
       BACKGROUND_CONTEXT,
     )
     await Promise.all([bumpAlias, bumpReal])
-    // 串行执行时两个 +1 都生效（value 最终读到 2）。
-    assert.equal(readFileSync(real, 'utf8'), '2', '软链别名与真实路径必须共享一把锁')
+    // serial execute when two +1 all takes effect (value eventually read to 2).
+    assert.equal(readFileSync(real, 'utf8'), '2', 'symlink alias and real path must sharing one lock')
   })
 
-  test('新文件 canonical 父目录拼接：创建与后续变更同 key', { timeout: 60_000 }, async () => {
+  test('new file canonical parent directory concatenate: create and after continue change same key', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'newfile')
     mkdirSync(join(dir, 'sub'), { recursive: true })
     const file = join(dir, 'sub', 'fresh.txt')
     const env = new NodeExecutionEnv({ cwd: dir })
 
-    // 先以「不存在的文件」入队（not_found 分支走父目录 canonical 拼接）。
+    // first with missing file queue (not_found branch away parent directory canonical concatenate).
     const create = envWithFileMutationQueue(
       env,
       file,
@@ -438,8 +438,8 @@ describe('canonical 路径 key', { timeout: 60_000 }, () => {
       BACKGROUND_CONTEXT,
     )
     assert.equal(await create, 'created')
-    // 文件已存在后再入队：canonical 直接命中，两代 key 一致由下一断言验证
-    //（若 key 不一致，并发场景会撕裂；此处串行验证功能正确性）。
+    // file already exists after again queue:canonical directly hit, two proxy key consistent by under one assertion verify
+    //(if key inconsistent, concurrency scenario will tear; this where serial verify feature can correct).
     const mutate = await envWithFileMutationQueue(
       env,
       file,
@@ -453,21 +453,21 @@ describe('canonical 路径 key', { timeout: 60_000 }, () => {
     assert.equal(readFileSync(file, 'utf8'), 'v2')
   })
 
-  test('ENOTDIR（某段是文件）两入口同 key：env 入口上溯不抛错，与 local 入口互斥', { timeout: 60_000 }, async () => {
+  test('ENOTDIR(a certain segment is file) two entry same key:env entry on trace do not throws, and local entry mutual exclusion', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'enotdir')
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'plain.txt')
     writeFileSync(file, 'x')
-    // 路径中某一段是文件而非目录：realpath 报 ENOTDIR（pi-durable 映射
-    // not_directory；修复前 env 入口直接抛错，local 入口上溯——两入口分叉）。
+    // path in a certain one segment is file while non- directory:realpath report ENOTDIR(pi-durable mapping
+    // not_directory; fix before env entry directly throws,local entry on trace - - two entry fork).
     const target = join(file, 'child')
     const env = new NodeExecutionEnv({ cwd: dir })
 
-    // env 入口不再抛 not_directory：正常上溯到已存在文件拼 key 并执行。
+    // env entry no longer throw not_directory: normal on trace to already exists file piece together key and execute.
     const viaEnv = await envWithFileMutationQueue(env, target, async () => 'env-ok', BACKGROUND_CONTEXT)
     assert.equal(viaEnv, 'env-ok')
 
-    // 两入口同 key：env 入口持锁不放时 local 入口必须排队（而非各锁各的）。
+    // two entry same key:env entry hold lock do not put when local entry must queue up (while non- each lock each).
     let releaseHolder!: () => void
     const held = new Promise<void>((resolve) => { releaseHolder = resolve })
     let holderRan = false
@@ -488,7 +488,7 @@ describe('canonical 路径 key', { timeout: 60_000 }, () => {
       return 'local'
     })
     await delay(80)
-    assert.equal(localRan, false, 'env 入口持锁期间 local 入口不得执行（同 key 互斥）')
+    assert.equal(localRan, false, 'env entry hold lock during local entry must not execute (same key mutual exclusion)')
     releaseHolder()
     assert.equal(await envHold, 'held')
     assert.equal(await localTask, 'local')
@@ -497,18 +497,18 @@ describe('canonical 路径 key', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// 3. 跨节点 / 双入口 key 空间
+// 3. across node / double entry key empty between
 // ---------------------------------------------------------------------------
 
-describe('跨节点与双入口 key 空间', { timeout: 60_000 }, () => {
-  test('local 与远端 env 同形路径不同 key：互不阻塞', { timeout: 60_000 }, async () => {
+describe('across node and double entry key empty between', { timeout: 60_000 }, () => {
+  test('local and remote env same shape path different key: mutual non-blocking', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'crossnode')
     mkdirSync(dir, { recursive: true })
     const path = '/workspace/shared.txt'
     const remote = makeRecordingEnv(new Map([[path, '0']])).env
     const localEnv = new NodeExecutionEnv({ cwd: dir })
-    // local 底座 absolutePath 会把 '/workspace/shared.txt' 视为绝对路径——
-    // 在 Linux 上真实存在与否不影响 key 计算（不存在则走父目录拼接）。
+    // local bottom seat absolutePath will '/workspace/shared.txt' treated as absolute path - -
+    // in Linux on real store in and otherwise does not affect key compute (missing then away parent directory concatenate).
 
     const start = Date.now()
     await Promise.all([
@@ -530,17 +530,17 @@ describe('跨节点与双入口 key 空间', { timeout: 60_000 }, () => {
       ),
     ])
     const elapsed = Date.now() - start
-    assert.ok(elapsed < 280, `local 与远端互不阻塞（耗时 ${elapsed}ms）`)
+    assert.ok(elapsed < 280, `local and remote mutual non-blocking (time cost ${elapsed}ms)`)
   })
 
-  test('localWithFileMutationQueue 与 NodeExecutionEnv 底座互斥（同 key 前缀）', { timeout: 60_000 }, async () => {
+  test('localWithFileMutationQueue and NodeExecutionEnv bottom seat mutual exclusion (same key prefix)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'dualentry')
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'dual.txt')
     writeFileSync(file, '0')
     const env = new NodeExecutionEnv({ cwd: dir })
 
-    // 混合入口并发：local 直连与 env 底座交替 +1，全部生效。
+    // mixed entry concurrency:local direct connect and env bottom seat hand over replace +1, all takes effect.
     const bumpLocal = () =>
       localWithFileMutationQueue(file, async () => {
         const cur = readFileSync(file, 'utf8')
@@ -559,16 +559,16 @@ describe('跨节点与双入口 key 空间', { timeout: 60_000 }, () => {
         BACKGROUND_CONTEXT,
       )
     await Promise.all([bumpLocal(), bumpEnv(), bumpLocal(), bumpEnv(), bumpLocal(), bumpEnv()])
-    assert.equal(readFileSync(file, 'utf8'), '6', 'local 直连入口与 env 底座入口必须互斥')
+    assert.equal(readFileSync(file, 'utf8'), '6', 'local direct connect entry and env bottom seat entry must mutual exclusion')
   })
 })
 
 // ---------------------------------------------------------------------------
-// 4. 内核工具接入：write/edit 与插件队列共享
+// 4. kernel tool access:write/edit and plugin queue sharing
 // ---------------------------------------------------------------------------
 
-describe('内核 write/edit 与队列', { timeout: 60_000 }, () => {
-  test('内置 edit 工具并发替换不丢更新（同一 local 文件 6 并发）', { timeout: 60_000 }, async () => {
+describe('kernel write/edit and queue', { timeout: 60_000 }, () => {
+  test('inside placement edit tool concurrency replace do not lose update (the same local file 6 concurrency)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'edit-race')
     mkdirSync(dir, { recursive: true })
     const deps = await makeDeps(dir)
@@ -585,27 +585,27 @@ describe('内核 write/edit 与队列', { timeout: 60_000 }, () => {
     }
     const final = readFileSync(file, 'utf8')
     for (const word of ['a', 'b', 'c', 'd', 'e', 'f']) {
-      assert.ok(final.includes(`${word}!`), `${word} 的替换必须生效：${JSON.stringify(final)}`)
+      assert.ok(final.includes(`${word}!`), `${word} replace must takes effect:${JSON.stringify(final)}`)
     }
   })
 
-  test('远端受控 env：内置 edit 与插件式 envWithFileMutationQueue 读-改-写竞争同一文件不丢更新', { timeout: 60_000 }, async () => {
+  test('remote subject to control env: inside placement edit and plugin style envWithFileMutationQueue read-change-write competition the same file do not lose update', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'remote-race')
     mkdirSync(dir, { recursive: true })
     const target = '/workspace/journal.md'
     const files = new Map<string, string>([[target, 'S0\nEND']])
-    // 远端读改写有延迟窗口：无队列时必然撕裂。
+    // remote read change write has latency window: without queue when must however tear.
     const recorder = makeRecordingEnv(files, new Map([[target, 40]]))
     const deps = await makeDeps(join(dir, 'deps'), {
       envFabric: makeRecordingFabric(recorder.env),
       nodeIdOf: () => 'test-node',
     })
-    // edit 的读在队列内（工具整体入锁），与插件式入口共享队列后读-算-写完整串行。
+    // edit read in queue inside (tool whole lock), and plugin style entry sharing queue after read-compute-write complete serial.
     const editTool = createEditTool(deps)
 
-    // 两入口的变更互不干扰（顺序无关）：plugin 追加 P<k> 行；内置 edit 把
-    // 哨兵 S0 换成 S1。队列失效时（两任务交错）plugin 的读旧值写回会覆盖
-    // 对方写入——终态丢行；共享队列下终态必含全部 5 个 P 行与 S1。
+    // two entry change mutual do not interference (order without closure):plugin append P<k> row; inside placement edit 
+    // sentinel S0 swap into S1. queue expires when (two task hand over wrong)plugin read old value write back will override
+    // for way write - - terminal state lose row; sharing queue under terminal state must contains all 5  P row and S1.
     const pluginAppend = (k: number) =>
       envWithFileMutationQueue(
         recorder.env as never,
@@ -617,7 +617,7 @@ describe('内核 write/edit 与队列', { timeout: 60_000 }, () => {
         },
         BACKGROUND_CONTEXT,
       )
-    // 不可重入：绝不在外层再包一层同文件队列（会死锁）。
+    // cannot heavy: never in outside layer again package one layer same file queue (will deadlock).
     const builtinEdit = async () => {
       const r = await editTool.execute(
         { path: target, oldText: 'S0\nEND', newText: 'S1\nEND' },
@@ -629,13 +629,13 @@ describe('内核 write/edit 与队列', { timeout: 60_000 }, () => {
 
     await Promise.all([pluginAppend(1), pluginAppend(2), pluginAppend(3), builtinEdit(), pluginAppend(4), pluginAppend(5)])
     const final = files.get(target)!
-    assert.ok(final.includes('S1\nEND'), `内置 edit 必须生效：${JSON.stringify(final)}`)
+    assert.ok(final.includes('S1\nEND'), `inside placement edit must takes effect:${JSON.stringify(final)}`)
     for (let k = 1; k <= 5; k += 1) {
-      assert.ok(final.includes(`P${k}\n`), `P${k} 追加必须生效（共享队列不丢更新）：${JSON.stringify(final)}`)
+      assert.ok(final.includes(`P${k}\n`), `P${k} append must takes effect (sharing queue do not lose update):${JSON.stringify(final)}`)
     }
   })
 
-  test('EnvFabric.withFileMutationQueue：local 节点与内置 write 互斥', { timeout: 60_000 }, async () => {
+  test('EnvFabric.withFileMutationQueue:local node and inside placement write mutual exclusion', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'fabric-local')
     mkdirSync(dir, { recursive: true })
     const fabric = makeFabric()
@@ -644,7 +644,7 @@ describe('内核 write/edit 与队列', { timeout: 60_000 }, () => {
     writeFileSync(file, 'v0')
     const writeTool = createWriteTool(deps)
 
-    // 插件式 API：持锁窗口内读改写。
+    // plugin style API: hold lock window inside read change write.
     const pluginBump = fabric.withFileMutationQueue(
       { nodeId: 'local', cwd: dir, path: file },
       async () => {
@@ -661,26 +661,26 @@ describe('内核 write/edit 与队列', { timeout: 60_000 }, () => {
     ).then((r) => {
       assert.equal(!!r.isError, false, JSON.stringify(r.output))
     })
-    // 内置 write 是整体覆盖：两者串行后最终态为其中之一，但绝不出现
-    //「write 在 plugin 读与写之间插入」导致的 plugin 写回覆盖（v0+p 丢失
-    // v1）——若互斥失效且 plugin 后写，结果为 v0+p；正确串行的两种终态
-    // 都合法，关键是断言队列生效（无部分写入撕裂）。
+    // inside placement write is whole override: two serial after eventually state is among them of one, but never appear
+    //write in plugin read and write between insert leads to plugin write back override (v0+p lose
+    // v1) - - if mutual exclusion expires and plugin after write, result is v0+p; correct serial two kinds of terminal state
+    // all legal, key is assertion queue takes effect (without part write tear).
     await Promise.all([pluginBump, builtinWrite])
     const final = readFileSync(file, 'utf8')
-    assert.ok(final === 'v1' || final === 'v0+p' || final === 'v1+p', `终态合法：${final}`)
+    assert.ok(final === 'v1' || final === 'v0+p' || final === 'v1+p', `terminal state legal:${final}`)
   })
 })
 
 // ---------------------------------------------------------------------------
-// 5. 错误语义与重入诊断
+// 5. error semantics and heavy diagnose
 // ---------------------------------------------------------------------------
 
-describe('错误语义与嵌套重入', { timeout: 60_000 }, () => {
-  test('canonical 错误分类：permission_denied 等如实上抛（不吞成 not-found 拼接）', { timeout: 60_000 }, async () => {
-    // root 容器内 chmod 0o000 无法制造真实 EACCES（root 绕过 DAC），故用
-    // 受控 env 在协议层验证同一分类逻辑：canonicalPath 返回非 not_found
-    // 错误时必须原样上抛。local 层的 fs code 分类（仅 ENOENT/ENOTDIR 视为
-    // 缺失，EACCES/EIO 上抛）与其同构（localCanonical）。
+describe('error semantics and embed set heavy', { timeout: 60_000 }, () => {
+  test('canonical error classify:permission_denied etc. such as on throw (do not swallow into not-found concatenate)', { timeout: 60_000 }, async () => {
+    // root container inside chmod 0o000 cannot fabricate real EACCES(root bypass DAC), reason use
+    // subject to control env in protocol layer verify the same classify logic:canonicalPath return non- not_found
+    // error when must original on throw.local layer fs code classify (only ENOENT/ENOTDIR treated as
+    // missing,EACCES/EIO on throw) and its same construct (localCanonical).
     const files = new Map<string, string>()
     const env = {
       id: 'remote:perm-node',
@@ -693,20 +693,20 @@ describe('错误语义与嵌套重入', { timeout: 60_000 }, () => {
     await assert.rejects(
       envWithFileMutationQueue(env, '/workspace/protected.txt', async () => 'never', BACKGROUND_CONTEXT),
       (err: unknown) => {
-        assert.equal((err as { code?: string }).code, 'permission_denied', '原始错误必须如实上抛')
+        assert.equal((err as { code?: string }).code, 'permission_denied', 'original error must such as on throw')
         return true
       },
     )
   })
 
-  test('localCanonical 根终止：空链上溯到根后停止（不无限递归）', { timeout: 60_000 }, async () => {
-    // 整条链不存在的深路径：逐级上溯到 '/'（真实存在）终止拼接。
+  test('localCanonical terminate: empty chain on trace to after stop (do not unbounded recursion)', { timeout: 60_000 }, async () => {
+    // whole chain missing deep path: one by one level on trace to '/'(real store in) terminate concatenate.
     const deep = '/definitely-not-exist-a/b/c/d/e/f.txt'
     const result = await localWithFileMutationQueue(deep, async () => 'ok')
-    assert.equal(result, 'ok', '全缺失链必须正常上溯到根并终止')
+    assert.equal(result, 'ok', 'all missing chain must normal on trace to and terminate')
   })
 
-  test('嵌套同 key：持锁 fn 内再次入队立即显式报错（不挂死）', { timeout: 60_000 }, async () => {
+  test('embed set same key: hold lock fn inside again queue immediately explicit errors (do not hang die)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'reentrant')
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'same.txt')
@@ -718,7 +718,7 @@ describe('错误语义与嵌套重入', { timeout: 60_000 }, () => {
         env,
         file,
         async () => {
-          // 同一异步链内嵌套同文件入队：必须立即报错而非排队挂死。
+          // the same async chain inside embed set same file queue: must immediately errors while non- queue up hang die.
           return envWithFileMutationQueue(env, file, async () => 'inner', BACKGROUND_CONTEXT)
         },
         BACKGROUND_CONTEXT,
@@ -728,13 +728,13 @@ describe('错误语义与嵌套重入', { timeout: 60_000 }, () => {
         return true
       },
     )
-    // 链自愈：报错释放后下一任务正常。
+    // chain self-heal: errors release after under one task normal.
     const next = await envWithFileMutationQueue(env, file, async () => 'next', BACKGROUND_CONTEXT)
     assert.equal(next, 'next')
     assert.equal(fileMutationQueueSize(), 0)
   })
 
-  test('持锁 fn 内直接底层写合法（不重入队列）；同链对不同文件入队合法', { timeout: 60_000 }, async () => {
+  test('hold lock fn inside directly underlying write legal (do not heavy queue); same chain for different file queue legal', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'inner-direct')
     mkdirSync(dir, { recursive: true })
     const fileA = join(dir, 'a.txt')
@@ -747,9 +747,9 @@ describe('错误语义与嵌套重入', { timeout: 60_000 }, () => {
       env,
       fileA,
       async () => {
-        // 直接底层写同一文件（不再次入队）：合法路径。
+        // directly underlying write the same file (no longer time queue): legal path.
         writeFileSync(fileA, 'a1')
-        // 同异步链对另一文件入队：不同 key，合法。
+        // same async chain for another file queue: different key, legal.
         await envWithFileMutationQueue(env, fileB, async () => {
           writeFileSync(fileB, 'b1')
           return 'b-done'
@@ -764,7 +764,7 @@ describe('错误语义与嵌套重入', { timeout: 60_000 }, () => {
     assert.equal(fileMutationQueueSize(), 0)
   })
 
-  test('不同异步链的「嵌套」（外层持锁者不等待即返回，内层排队）：不死锁但如实排队', { timeout: 60_000 }, async () => {
+  test('different async chain embed set (outside layer hold lock without waiting i.e. return, inside layer queue up): do not deadlock but such as queue up', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'cross-chain')
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'cc.txt')
@@ -779,8 +779,8 @@ describe('错误语义与嵌套重入', { timeout: 60_000 }, () => {
     }, BACKGROUND_CONTEXT)
     await delay(30)
 
-    // 独立异步链（非 outer 的 fn 内发起）对同一文件入队：ALS 检测不到
-    // 「嵌套」——按普通排队语义等待 outer 释放（不死锁也不误报）。
+    // independent async chain (non- outer  fn inside start) for the same file queue:ALS detect fewer than
+    // embed set - - by ordinary queue up semantics wait for outer release (do not deadlock also do not mistakenly report).
     const inner = envWithFileMutationQueue(env, file, async () => 'inner', BACKGROUND_CONTEXT)
     await delay(60)
     releaseOuter()
@@ -788,7 +788,7 @@ describe('错误语义与嵌套重入', { timeout: 60_000 }, () => {
     assert.equal(await inner, 'inner')
   })
 
-  test('锁路径不可读取时保留原始 IO 错误，不伪报等待超时或删除锁', { timeout: 60_000 }, async () => {
+  test('lock path cannot read when keep original IO error, do not fake report wait timed out or delete lock', { timeout: 60_000 }, async () => {
     const dir = await mkdtemp(join(tmpdir(), 'helm-file-lock-error-'))
     const target = join(dir, 'config.json')
     const lock = `${target}.lock`

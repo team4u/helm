@@ -1,12 +1,12 @@
 /**
- * 每插件在途任务计数：action / tool 执行、钩子返回的挂起 agent_spawn、自定义 task。
+ * each plugin in-flight task counter:action / tool execute, hook return suspended agent_spawn, self define task.
  *
- * 用途：disable / unregister 遇任一在途任务时拒绝（409 plugin_has_live_tasks），
- * 防止停用产生悬空状态（执行中的 handler 引用已释放的注册表）。
+ * purpose:disable / unregister encounter any one in-flight task when reject (409 plugin_has_live_tasks),
+ * guard against deactivate produce dangling state (execute in handler reference already release register table).
  */
 
 export class PluginTaskTracker {
-  /** pluginId -> (label -> 并发计数)。 */
+  /** pluginId -> (label -> concurrency counter). */
   private counts = new Map<string, Map<string, number>>();
 
   begin(pluginId: string, label: string): void {
@@ -37,7 +37,7 @@ export class PluginTaskTracker {
     return [...(this.counts.get(pluginId)?.keys() ?? [])];
   }
 
-  /** 包装一个异步任务为受跟踪任务。 */
+  /** wrap a async task is subject to trace task. */
   async withTask<T>(pluginId: string, label: string, fn: () => Promise<T>): Promise<T> {
     this.begin(pluginId, label);
     try {

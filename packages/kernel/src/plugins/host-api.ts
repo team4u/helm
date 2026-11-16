@@ -1,6 +1,6 @@
 /**
- * host-api: 构造插件视角的 ctx.host 门面。
- * 全部方法显式转发到后端端口，并按功能分组封装：
+ * host-api: construct plugin perspective ctx.host gate side.
+ * all method explicit forwarding to backend port, and by feature can group wrap:
  * profiles / skills / nodeIpc / secrets / plugins / env / conversations / agents / asks / events / triggers / actions / artifacts / models
  */
 import {
@@ -50,26 +50,26 @@ export interface HostApiDependencies {
 }
 
 /**
- * nodeFetch 弃置 Response 的确定性资源归属（无 GC 安全网）：
+ * nodeFetch abandon placement Response determinism asset ownership (without GC security network):
  *
- * 插件拿到包装 Response 后给体资源的唯一收敛路径：
- * - 消费：读制 body 至 EOF（流自然 close）→ 计数结束；
- * - 取消：response.body.cancel() / reader.cancel()（含 Response 构造后弃置前
- *   的显式 cancel）→ 计数结束；
- * - 传输失败：底层流 error → 包装流 error → 计数结束；
- * - 宿主 close/dispose：底层隧道拆毁使 body 流以错误终结 → 计数结束，
- *   绝不悬挂；
- * - 弃置（既不消费也不 cancel）：计数保持——插件因此 409
- *   plugin_has_live_tasks 不可停用/重载，这是弃置未关闭资源的真实代价，
- *   绝不用 FinalizationRegistry 之类非确定性 GC 兜底把泄漏掩饰成可用。
- * 头部到达不结束计数（SSE 长流全程在途），停用/重载硬阻断不可 force，
- * 也不以 disable 自动 abort 绕过 409。
+ * plugin gets wrap Response after to body asset unique converge path:
+ * - consume: read system body until EOF(stream self however close)→ counter end;
+ * - cancel:response.body.cancel() / reader.cancel()(contains Response construct after abandon placement before
+ *   explicit cancel)→ counter end;
+ * - transfer failed: underlying stream error → wrap stream error → counter end;
+ * - host close/dispose: underlying tunnel split destroy make body stream with error final → counter end,
+ *   never pending;
+ * - abandon placement (since do not consume also do not cancel): counter keep - - plugin therefore 409
+ *   plugin_has_live_tasks cannot deactivate/reload, this is abandon placement not close asset real proxy price,
+ *   never use FinalizationRegistry of class non- determinism GC fall back leak leak mask decorate into available.
+ * header reach do not end counter (SSE long stream all process in-flight), deactivate/reload hard block assert cannot force,
+ * also do not with disable automatically abort bypass 409.
  */
 
 /**
- * setConfig 读-合-写串行链（per-plugin）：backend.setPluginConfig 是整值
- * 写入（无原子 read-modify-write 端口），并发 patch 需在本包装层串行化，
- * 否则后写覆盖前写丢更新。
+ * setConfig read-together-write serial chain (per-plugin):backend.setPluginConfig is whole value
+ * write (without atomic read-modify-write port), concurrency patch must in this wrap layer serial,
+ * otherwise after write override before write lose update.
  */
 const pluginConfigWriteChains = new Map<string, Promise<unknown>>();
 
@@ -88,9 +88,9 @@ function enqueuePluginConfigWrite(pluginId: string, op: () => Promise<void>): Pr
 }
 
 /**
- * executionEnv 受控代理：每个方法调用时重新校验周期（停用/re-enable 后旧
- * env 代理立即失效），异步操作入任务跟踪；绝不裸返回 backend 原始 env 实例。
- * 代理保留 SDK ExecutionEnv 完整形状（方法级包装，含可选方法）。
+ * executionEnv subject to control proxy: each method invoke when re- validate cycle (deactivate/re-enable after old
+ * env proxy immediately expires), async operation task trace; never bare return backend original env instance.
+ * proxy keep SDK ExecutionEnv complete shape (method level wrap, contains optional method).
  */
 export function createControlledExecutionEnv(
   state: PluginState,
@@ -120,10 +120,10 @@ export function createControlledExecutionEnv(
 }
 
 /**
- * 构造插件视角的 ctx.host：全部方法显式转发到后端端口。
- * 生命周期资源（manageConversation / onEvent / registerAskSeqResolver）
- * 经 acquire 包装：epoch 守卫 + 幂等释放 + 停用统一解除；
- * onEvent 的每次事件回调计入在途任务保护（事件类型进任务标签）。
+ * construct plugin perspective ctx.host: all method explicit forwarding to backend port.
+ * lifecycle asset (manageConversation / onEvent / registerAskSeqResolver)
+ * via acquire wrap:epoch guard + idempotent release + deactivate unify solve except;
+ * onEvent each time event call back count in-flight task protect (event type enter task tag).
  */
 export function wrapHostApi(
   state: PluginState,
@@ -134,11 +134,11 @@ export function wrapHostApi(
   const backend = deps.backend;
 
   /**
-   * 每次调用的周期守卫；what 入诊断。
-   * 受控停止窗口例外：本周期、宿主正在 await 本插件服务 stop 链期间，仅
-   * STOP_WINDOW_HOST_CALLS（读取/取消/跨节点清理/最终事件）放行——含
-   * dispose 已置 disposed 的拆毁路径（assertNotDisposed 一并越过）；其余
-   * 调用（一切新工作入口）照拒，窗口不因 deactivating 全开。
+   * each time invoke cycle guard;what diagnose.
+   * subject to control stop window exception: this cycle, host is now await this plugin service stop chain during, only
+   * STOP_WINDOW_HOST_CALLS(read/cancel/across node clean up/eventually event) let through - - contains
+   * dispose already placement disposed split destroy path (assertNotDisposed one and exceeds); the rest
+   * invoke (everything new work entry) per refuse, window do not because deactivating all open.
    */
   const guard = (what: string): void => {
     if (
@@ -152,7 +152,7 @@ export function wrapHostApi(
     deps.assertContextUsable(state, epoch, what);
   };
 
-  /** 异步操作统一：先守卫再入任务（停用预检可见，不留盲区）。 */
+  /** async operation unify: first guard again task (deactivate preflight visible, do not blind spot). */
   const tracked = <T>(what: string, op: () => Promise<T>): Promise<T> => {
     guard(what);
     return deps.tracker.withTask(pluginId, what, op);
@@ -171,16 +171,16 @@ export function wrapHostApi(
     };
 
   /**
-   * 构造 ctx.host.plugins（宿主插件治理端口）：读面与 PluginHost 清单同源；
-   * 写面沿用现有生命周期、任务跟踪和包管理端口。自指 update/remove/disable
-   * 在进入目标插件队列前拒绝；doctor/install/update/remove 结果统一脱敏。
+   * construct ctx.host.plugins(host plugin governance port): read side and PluginHost manifest same source;
+   * write side along use existing lifecycle, task trace and package manage port. self refer update/remove/disable
+   * in enter target plugin queue before reject;doctor/install/update/remove result unify redaction.
    */
   const assertPluginsPort = (what: string): BackendPluginsLifecyclePort => {
     guard(`host.plugins.${what}`);
     if (backend.plugins === undefined) {
       throw new HelmError(
         'not_supported',
-        `当前宿主未接线插件治理端口（host.plugins.${what} 不可用）`,
+        `when before host not connect line plugin governance port (host.plugins.${what} unavailable)`,
         501,
         { what },
       );
@@ -192,7 +192,7 @@ export function wrapHostApi(
     if (targetPluginId !== pluginId) return;
     throw new HelmError(
       'plugin_self_lifecycle_forbidden',
-      `插件 ${pluginId} 不得在自身运行任务中${op === 'update' ? '更新' : op === 'remove' ? '卸载' : '停用'}自身（会触发宿主生命周期队列自等待），请改由人工 HTTP/CLI 或其他插件执行`,
+      `plugin ${pluginId} must not in itself run task in${op === 'update' ? 'update' : op === 'remove' ? 'unload' : 'deactivate'}itself (will trigger host lifecycle queue self wait for), please change by human HTTP/CLI or other plugin execute`,
       409,
       { pluginId, op },
     );
@@ -268,21 +268,21 @@ export function wrapHostApi(
       ensureSkill: (asset) => tracked('host.skills.ensureSkill', () => backend.skills.ensureSkill(asset, pluginId)),
     },
 
-    // 3. nodeIpc（nodePlatform 为内核可选能力：NodeRegistry 可信平台上报，
-    // 缺席时插件侧远端平台未知，不猜不改写）。
+    // 3. nodeIpc(nodePlatform is kernel optional capability:NodeRegistry can message platform on report,
+    // missing seat when plugin side remote platform unknown, do not guess do not change write).
     nodeIpc: backend.nodeIpc === undefined
       ? {
           isOnline: () => {
             guard('host.nodeIpc.isOnline');
-            throw new HelmError('node_ipc_unavailable', '宿主未提供节点 IPC 通道（EnvFabric 未接线）', 501);
+            throw new HelmError('node_ipc_unavailable', 'host not provide node IPC channel (EnvFabric not connect line)', 501);
           },
           call: () => {
             guard('host.nodeIpc.call');
-            throw new HelmError('node_ipc_unavailable', '宿主未提供节点 IPC 通道（EnvFabric 未接线）', 501);
+            throw new HelmError('node_ipc_unavailable', 'host not provide node IPC channel (EnvFabric not connect line)', 501);
           },
           subscribe: () => {
             guard('host.nodeIpc.subscribe');
-            throw new HelmError('node_ipc_unavailable', '宿主未提供节点 IPC 通道（EnvFabric 未接线）', 501);
+            throw new HelmError('node_ipc_unavailable', 'host not provide node IPC channel (EnvFabric not connect line)', 501);
           },
         }
       : {
@@ -347,18 +347,18 @@ export function wrapHostApi(
           },
         },
 
-    // 3.6 openTunnel：任意 TCP 透传隧道 —— 生命周期跟踪与 Duplex 存活期对齐：
-    // begin 在建连前（停用预检可见在途建立）；成功后计数保持到 Duplex
-    // close/error/destroy（恰好一次 end）——插件持有活动隧道期间 disable
-    // 会被 409 plugin_has_live_tasks 拒绝；建立失败/已 destroyed 立即 end，
-    // 绝不泄漏计数。停用/宿主 dispose 时 duplex 本身由 registry/节点的
-    // 换代清理链销毁，这里只保证计数不悬挂。
+    // 3.6 openTunnel: any TCP pass-through tunnel - - lifecycle trace and Duplex store phase align:
+    // begin in create connect before (deactivate preflight visible in-flight establish); after success counter keep to Duplex
+    // close/error/destroy(exactly once end) - - plugin hold has activity tunnel during disable
+    // will by 409 plugin_has_live_tasks reject; establish failed/already destroyed immediately end,
+    // never leak leak counter. deactivate/host dispose when duplex itself by registry/node
+    // swap proxy clean up chain destroy, this in only guarantee counter do not pending.
     openTunnel: backend.openTunnel === undefined
       ? ((nodeId: string): Promise<never> => {
           guard(`host.openTunnel:${nodeId}`);
           throw new HelmError(
             'node_tunnel_not_supported',
-            `当前宿主未接线节点隧道端口（host.openTunnel(${nodeId}) 不可用）`,
+            `when before host not connect line node tunnel port (host.openTunnel(${nodeId}) unavailable)`,
             501,
             { nodeId },
           );
@@ -366,8 +366,8 @@ export function wrapHostApi(
       : (async (nodeId: string, target: { host?: string; port: number }, signal?: AbortSignal) => {
           guard(`host.openTunnel:${nodeId}`);
           const what = `host.openTunnel:${nodeId}`;
-          // begin 先于建连：不能用 withTask 包住建立 Promise（那会在 resolve 后
-          // 立即 end，Duplex 存活期计数归零，停用门禁形同虚设）。
+          // begin first at create connect: cannot use withTask package establish Promise(that will in resolve after
+          // immediately end,Duplex store phase counter reset to zero, deactivate gate shape same virtual set).
           deps.tracker.begin(pluginId, what);
           let ended = false;
           const end = (): void => {
@@ -401,17 +401,17 @@ export function wrapHostApi(
           }
         }) as HelmHostOpenTunnelPort,
 
-    // 3.5 nodeFetch：受控 fetch——每次调用守卫 + 在途任务跟踪覆盖到 body
-    // EOF/cancel/error（头部到达不结束任务）；宿主 close 的确定性归属经
-    // hostReleases 的 owned cleanup（仅 dispose/close 触发；disable 因在途
-    // 任务 409 不可 force，绝不借 disable abort）。取消信号按标准 fetch
-    // 语义合成（init.signal 覆盖 Request.signal、显式 null 清除继承）。
+    // 3.5 nodeFetch: subject to control fetch- - each time invoke guard + in-flight task trace override to body
+    // EOF/cancel/error(header reach do not end task); host close determinism ownership via
+    // hostReleases  owned cleanup(only dispose/close trigger;disable because in-flight
+    // task 409 cannot force, never borrow disable abort). cancel signal by standard fetch
+    // semantics together into (init.signal override Request.signal, explicit null clear inherit).
     nodeFetch: backend.nodeFetch === undefined
       ? ((nodeId: string): typeof fetch => {
           guard(`host.nodeFetch:${nodeId}`);
           throw new HelmError(
             'node_tunnel_not_supported',
-            `当前宿主未接线节点 fetch 端口（host.nodeFetch(${nodeId}) 不可用）`,
+            `when before host not connect line node fetch port (host.nodeFetch(${nodeId}) unavailable)`,
             501,
             { nodeId },
           );
@@ -439,18 +439,18 @@ export function wrapHostApi(
               hostClose.abort(
                 new HelmError(
                   'plugin_host_disposed',
-                  '宿主已销毁：nodeFetch 在途请求确定性取消（owned cleanup）',
+                  'host already destroy:nodeFetch in-flight request determinism cancel (owned cleanup)',
                   503,
                 ),
               );
-              // 弃置 body 的兜底结算：直接结束任务计数并尽力取消底层 reader。
+              // abandon placement body fall back compute: directly end task counter and exhaust force cancel underlying reader.
               if (reader !== undefined) reader.cancel(hostClose.signal.reason).catch(() => {});
               end();
             };
-            // 第一个 await 前登记（宿主 dispose 排空 hostReleases 时触发）。
+            // a await before register (host dispose arrange empty hostReleases when trigger).
             state.hostReleases.add(release);
-            // 标准 fetch 覆盖语义：init.signal 覆盖 Request.signal；显式 null
-            // 清除继承信号（被覆盖的旧 Request 信号 abort 不得取消本次调用）。
+            // standard fetch override semantics:init.signal override Request.signal; explicit null
+            // clear inherit signal (by override old Request signal abort must not cancel this time invoke).
             const callerSignal: AbortSignal | null | undefined =
               init?.signal !== undefined
                 ? init.signal
@@ -495,7 +495,7 @@ export function wrapHostApi(
                 });
                 return wrapped;
               } catch (error) {
-                // 包装失败（body 已锁定等）：尽力取消底层流并结束计数，绝不悬挂泄漏
+                // wrap failed (body already lock etc.): exhaust force cancel underlying stream and end counter, never pending leak leak
                 response.body.cancel().catch(() => {});
                 end();
                 throw error;
@@ -587,15 +587,15 @@ export function wrapHostApi(
         Promise.resolve(backend.submitInput(id, text, opts)),
       );
     },
-    // 7.5 guarded 变更端口（自动化红线内核执行层）：未接线时显式 501，
-    // 绝不静默回退普通 submitInput/abortConversation（那会绕过内核原子复核）。
+    // 7.5 guarded change port (automatically hard rule kernel execute layer): not connect line when explicit 501,
+    // never static default fall back ordinary submitInput/abortConversation(that will bypass kernel atomic re-check).
     submitInputGuarded: (id, text, opts, mutationGuard) => {
       guard('host.submitInputGuarded');
       const port = backend.submitInputGuarded;
       if (port === undefined) {
         throw new HelmError(
           'not_supported',
-          '当前宿主未接线自动化 guarded 提交端口（host.submitInputGuarded）',
+          'when before host not connect line automatically guarded commit port (host.submitInputGuarded)',
           501,
           { conversationId: id },
         );
@@ -626,7 +626,7 @@ export function wrapHostApi(
       if (port === undefined) {
         throw new HelmError(
           'not_supported',
-          '当前宿主未接线自动化 guarded 中止端口（host.abortConversationGuarded）',
+          'when before host not connect line automatically guarded abort port (host.abortConversationGuarded)',
           501,
           { conversationId: id },
         );

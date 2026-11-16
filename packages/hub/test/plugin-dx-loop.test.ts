@@ -1,20 +1,20 @@
 /**
- * 外部插件生态 DX 闭环测试：generation loader（代际加载）+ doctor（静态自检）
- * + reload（受控热重载）+ rescan（增量重扫描）。
+ * external plugin generate state DX closed ring test:generation loader(proxy boundary load)+ doctor(static self inspect)
+ * + reload(subject to control hot reload)+ rescan(incremental heavy scan).
  *
- * 组合纪律：真实 createHelm（真 SQLite + 真 PluginHost + 真外部插件源文件目录）+
- * faux provider；不 mock app、不 fake host。fixture 全部落在临时开发 dataDir。
+ * combine discipline: real createHelm(true SQLite + true PluginHost + true external plugin source file directory)+
+ * faux provider; do not mock app, do not fake host.fixture all in temporary development dataDir.
  *
- * 覆盖（要求真验证项）：
- * - 代际加载：?helmgen 入口重新初始化模块（模块级计数器递增）；相对依赖闭包
- *   传播代际标记（本地依赖同样重新初始化）；@helm/* 裸说明符跨代共享同一实例；
- * - doctor：健康插件 ok=true 且附真实注册 summary；损坏 manifest / 语法错误 /
- *   注册边界违约 / 悬空 client export 分别落在对应检查项；
- * - reload：预检失败旧实例保持可用（动作仍可调）；健康代码重载成功且启用状态
- *   保持；内置插件 403；在途任务 409；
- * - rescan：新目录注册且默认停用；已注册插件不被打扰（动作照常）。
+ * override (want seek true verify items):
+ * - proxy boundary load:?helmgen entry re- initialize module (module level counter pass increase); each other for dependency closed package
+ *   pass broadcast proxy boundary mark record (local dependency same re- initialize);@helm/* bare note symbol across proxy sharing the same instance;
+ * - doctor: health plugin ok=true and attach real register summary; corrupt manifest / language method error /
+ *   register boundary violate about / dangling client export respectively in for should check items;
+ * - reload: preflight failed old instance keep available (action still can tune); health code reload succeeded and enable state
+ *   keep; built-in plugin 403; in-flight task 409;
+ * - rescan: new directory register and by default deactivate; registered plugin do not by hit disturb (action per common).
  *
- * runner: tsx --test；每项显式 timeout: 60_000 防死锁；命令加总超时。
+ * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock; command add total timeout.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -34,12 +34,12 @@ async function createApp(dataDir: string) {
 }
 
 // ---------------------------------------------------------------------------
-// fixture 写入
+// fixture write
 // ---------------------------------------------------------------------------
 
 /**
- * 最小健康 TS 插件：index.ts + 一个 idempotent 探针动作 + 模块级初始化计数器。
- * counterName 用于断言「同代只初始化一次 / 新代重新初始化」。
+ * most small health TS plugin:index.ts + a idempotent probe needle action + module level initialize counter.
+ * counterName used to assertion same proxy only initialize once / new proxy re- initialize.
  */
 function writeMinimalPlugin(
   pluginsDir: string,
@@ -60,7 +60,7 @@ globalThis.${counterName} = (globalThis.${counterName} ?? 0) + 1
 function definePlugin(ctx: any) {
   ctx.action({
     id: 'probe',
-    description: '探针',
+    description: 'probe needle',
     inputSchema: { type: 'object', additionalProperties: false },
     outputSchema: {
       type: 'object',
@@ -73,10 +73,10 @@ function definePlugin(ctx: any) {
   })
 }
 
-export default { id: '${dir}', name: 'DX 插件 ${dir}', version: '0.1.0', definePlugin }
+export default { id: '${dir}', name: 'DX plugin ${dir}', version: '0.1.0', definePlugin }
 `,
   )
-  // 本地 TS 依赖（.js 说明符映射）+ 自身模块级计数（验证代际传播到依赖闭包）
+  // local TS dependency (.js note symbol mapping)+ itself module level counter (verify proxy boundary pass broadcast to dependency closed package)
   writeFileSync(
     join(dirPath, 'lib', 'shared.ts'),
     `import { HelmError } from '@helm/protocol'
@@ -88,7 +88,7 @@ export const sharedDep = (): string => 'shared:' + (HelmError ? 'helm-ok' : 'hel
   return { dirPath, counterName }
 }
 
-/** 带前端组件声明的插件（doctor client 检查消费）。 */
+/** carries frontend component declaration plugin (doctor client check consume). */
 function writeClientPlugin(
   pluginsDir: string,
   dir: string,
@@ -102,15 +102,15 @@ function writeClientPlugin(
     `function definePlugin(ctx: any) {
   ctx.ui.workbenchPanel({
     id: 'panel',
-    label: '面板',
+    label: 'panel',
     client: { module: 'client.tsx', export: ${JSON.stringify(exportName)} },
   })
 }
 export default { id: '${dir}', definePlugin }
 `,
   )
-  // 修正：clientRoot 是 PluginDefinition 字段（模块导出），在导入后由
-  // normalizeDefinition 解析为绝对路径——通过重写尾行注入相对 clientRoot。
+  // fix correct:clientRoot is PluginDefinition field (module export), in import after by
+  // normalizeDefinition parse is absolute path - - via heavy write tail row inject each other for clientRoot.
   const entryFile = join(dirPath, 'index.ts')
   writeFileSync(
     entryFile,
@@ -134,13 +134,13 @@ export function ${exportName}(): React.JSX.Element {
 }
 
 // ---------------------------------------------------------------------------
-// 代际加载（generation loader）
-// 注：代际传播断言在纯 node 子进程运行（--experimental-strip-types）。
-// 开发期 tsx 加载器会重写 URL 与缓存模块解析（tsx-commonjs-virtual-query），
-// 其行为不代表生产语义；外部插件加载器同款验证方式见 external-plugin-ts.test.ts。
+// proxy boundary load (generation loader)
+// note: proxy boundary pass broadcast assertion in pure node child process run (--experimental-strip-types).
+// development phase tsx load will heavy write URL and cache module parse (tsx-commonjs-virtual-query),
+// its behavior does not mean produce semantics; external plugin load same style verify way see external-plugin-ts.test.ts.
 // ---------------------------------------------------------------------------
 
-test('代际加载：?helmgen 入口重新初始化模块图，相对依赖闭包传播（纯 node 子进程）', { timeout: 60_000 }, async () => {
+test('proxy boundary load:?helmgen entry re- initialize module diagram, each other for dependency closed package pass broadcast (pure node child process)', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-gen-'))
   const loaderSrc = fileURLToPath(new URL('../../kernel/src/plugins/backend-ts-loader.ts', import.meta.url))
   try {
@@ -181,9 +181,9 @@ console.log('CHILD_OK')
       })
     } catch (e) {
       const errOut = ((e as { stdout?: string }).stdout ?? '') + '\n' + ((e as { stderr?: string }).stderr ?? '')
-      assert.fail(`纯 node 子进程失败：${out}${errOut.slice(0, 800)}`)
+      assert.fail(`pure node child process failed:${out}${errOut.slice(0, 800)}`)
     }
-    assert.ok(out.includes('CHILD_OK'), `子进程应全契约通过，输出：${out}`)
+    assert.ok(out.includes('CHILD_OK'), `child process should all contract via, output:${out}`)
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }
@@ -193,26 +193,26 @@ console.log('CHILD_OK')
 // doctor
 // ---------------------------------------------------------------------------
 
-test('doctor：健康插件 ok=true 且附真实注册 summary', { timeout: 60_000 }, async () => {
+test('doctor: health plugin ok=true and attach real register summary', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-doc-'))
   try {
     const { dirPath } = writeMinimalPlugin(join(dataDir, 'plugins'), 'dx-healthy')
     const report = await doctorPluginDir(dirPath, { buildProvider: createPluginBuildProvider() })
-    assert.equal(report.ok, true, `健康插件应通过：${JSON.stringify(report.checks)}`)
+    assert.equal(report.ok, true, `health plugin should via:${JSON.stringify(report.checks)}`)
     assert.equal(report.pluginId, 'dx-healthy')
     assert.deepEqual(
       report.checks.map((c) => c.id),
       ['manifest', 'backend', 'register', 'client'],
     )
-    assert.ok(report.summary, '附真实注册 summary')
+    assert.ok(report.summary, 'attach real register summary')
     assert.equal(report.summary!.id, 'dx-healthy')
-    assert.equal(report.summary!.enabled, false, 'doctor 注册默认停用（无副作用）')
+    assert.equal(report.summary!.enabled, false, 'doctor register by default deactivate (no side effects)')
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }
 })
 
-test('doctor：损坏 manifest 落在 manifest 检查项', { timeout: 60_000 }, async () => {
+test('doctor: corrupt manifest in manifest check items', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-doc-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'dx-bad-manifest')
@@ -221,9 +221,9 @@ test('doctor：损坏 manifest 落在 manifest 检查项', { timeout: 60_000 }, 
     const report = await doctorPluginDir(dirPath, { buildProvider: createPluginBuildProvider() })
     assert.equal(report.ok, false)
     const manifest = report.checks.find((c) => c.id === 'manifest')
-    assert.ok(manifest?.error, 'manifest 检查失败')
+    assert.ok(manifest?.error, 'manifest check failed')
     assert.equal(manifest!.error!.code, 'plugin_manifest_invalid')
-    // 后继依赖检查不执行（避免误导性的连环失败）
+    // after continue dependency check do not execute (avoid mistakenly lead connect ring failed)
     assert.deepEqual(
       report.checks.map((c) => c.id),
       ['manifest'],
@@ -233,7 +233,7 @@ test('doctor：损坏 manifest 落在 manifest 检查项', { timeout: 60_000 }, 
   }
 })
 
-test('doctor：TS 语法错误落在 backend 检查项（含文件定位）', { timeout: 60_000 }, async () => {
+test('doctor:TS language method error in backend check items (contains file locate)', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-doc-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'dx-syntax')
@@ -244,13 +244,13 @@ test('doctor：TS 语法错误落在 backend 检查项（含文件定位）', { 
     const backend = report.checks.find((c) => c.id === 'backend')
     assert.ok(backend?.error)
     assert.equal(backend!.error!.code, 'plugin_load_failed')
-    assert.ok(backend!.error!.message.includes('index.ts'), '诊断含文件定位')
+    assert.ok(backend!.error!.message.includes('index.ts'), 'diagnose contains file locate')
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }
 })
 
-test('doctor：注册边界违约（重复动作 id）落在 register 检查项', { timeout: 60_000 }, async () => {
+test('doctor: register boundary violate about (duplicate action id) in register check items', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-doc-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'dx-dup-action')
@@ -281,14 +281,14 @@ export default { id: 'dx-dup-action', definePlugin }
   }
 })
 
-test('doctor：悬空 client export 落在 client 检查项（真实编译产物导出校验）', { timeout: 60_000 }, async () => {
+test('doctor: dangling client export in client check items (real compile artifact export validate)', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-doc-'))
   try {
-    // 声明的 export 名在模块中不存在（写成了别的名字）
+    // declaration export name in module in missing (write into other name)
     const dirPath = writeClientPlugin(join(dataDir, 'plugins'), 'dx-dangling', {
       exportName: 'NotThePanelYouWant',
     })
-    // 声明引用正确的名字（与实际导出不一致 -> 悬空）
+    // declaration reference correct name (and actual export inconsistent -> dangling)
     const entry = readFileSync(join(dirPath, 'index.ts'), 'utf8')
     writeFileSync(
       join(dirPath, 'index.ts'),
@@ -297,7 +297,7 @@ test('doctor：悬空 client export 落在 client 检查项（真实编译产物
     const report = await doctorPluginDir(dirPath, { buildProvider: createPluginBuildProvider() })
     assert.equal(report.ok, false)
     const client = report.checks.find((c) => c.id === 'client')
-    assert.ok(client?.error, `client 检查应失败：${JSON.stringify(report.checks)}`)
+    assert.ok(client?.error, `client check should failed:${JSON.stringify(report.checks)}`)
     assert.equal(client!.error!.code, 'invalid_client_export')
     assert.ok(client!.error!.message.includes('SamplePanel'))
   } finally {
@@ -305,7 +305,7 @@ test('doctor：悬空 client export 落在 client 检查项（真实编译产物
   }
 })
 
-test('doctor：健康前端组件通过 client 检查', { timeout: 60_000 }, async () => {
+test('doctor: health frontend component via client check', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-doc-'))
   try {
     const dirPath = writeClientPlugin(join(dataDir, 'plugins'), 'dx-client-ok')
@@ -319,10 +319,10 @@ test('doctor：健康前端组件通过 client 检查', { timeout: 60_000 }, asy
 })
 
 // ---------------------------------------------------------------------------
-// rescan（增量重扫描）
+// rescan(incremental heavy scan)
 // ---------------------------------------------------------------------------
 
-test('rescan：新目录注册且默认停用；已注册插件不受打扰', { timeout: 60_000 }, async () => {
+test('rescan: new directory register and by default deactivate; registered plugin do not subject to hit disturb', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-rescan-'))
   let app: Awaited<ReturnType<typeof createApp>> | undefined
   try {
@@ -334,25 +334,25 @@ test('rescan：新目录注册且默认停用；已注册插件不受打扰', { 
     }
     assert.equal(before.value, 'v1')
 
-    // 放入新插件目录后 rescan：只注册新插件，默认停用
+    // put new plugin directory after rescan: only register new plugin, by default deactivate
     writeMinimalPlugin(join(dataDir, 'plugins'), 'dx-second')
     const result = await app.kernel.plugins.rescanExternalPlugins()
     assert.deepEqual(result.registered, ['dx-second'])
     const second = result.plugins.find((p) => p.id === 'dx-second')
     assert.ok(second)
-    assert.equal(second.enabled, false, 'rescan 注册的新插件默认停用')
+    assert.equal(second.enabled, false, 'rescan register new plugin by default deactivate')
 
-    // 已注册插件不受打扰（仍是启用态，动作照常）
+    // registered plugin do not subject to hit disturb (still is enable state, action per common)
     const after = (await app.kernel.plugins.invokeAction('dx-first', 'probe', {})) as {
       value: string
     }
     assert.equal(after.value, 'v1')
     assert.equal(app.kernel.plugins.list().find((p) => p.id === 'dx-first')?.enabled, true)
 
-    // 再次 rescan：无新插件
+    // again rescan: without new plugin
     const again = await app.kernel.plugins.rescanExternalPlugins()
     assert.deepEqual(again.registered, [])
-    assert.ok(again.skipped >= 2, `已注册与数据目录计入 skipped：${again.skipped}`)
+    assert.ok(again.skipped >= 2, `registered and data directory count skipped:${again.skipped}`)
   } finally {
     await app?.close().catch(() => {})
     rmSync(dataDir, { recursive: true, force: true })
@@ -360,10 +360,10 @@ test('rescan：新目录注册且默认停用；已注册插件不受打扰', { 
 })
 
 // ---------------------------------------------------------------------------
-// reload（受控热重载）
+// reload(subject to control hot reload)
 // ---------------------------------------------------------------------------
 
-test('reload：健康代码重载成功且启用状态保持；新代码生效', { timeout: 60_000 }, async () => {
+test('reload: health code reload succeeded and enable state keep; new code takes effect', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-reload-'))
   let app: Awaited<ReturnType<typeof createApp>> | undefined
   try {
@@ -376,7 +376,7 @@ test('reload：健康代码重载成功且启用状态保持；新代码生效',
     assert.equal(v1.value, 'v1')
     const initsAfterFirstEnable = (globalThis as Record<string, unknown>)[counterName] as number
 
-    // 修改代码（动作返回值变化）
+    // modify code (action return value change)
     writeFileSync(
       join(dirPath, 'index.ts'),
       readFileSync(join(dirPath, 'index.ts'), 'utf8').replace('v1', 'v2'),
@@ -386,16 +386,16 @@ test('reload：健康代码重载成功且启用状态保持；新代码生效',
     assert.equal(result.pluginId, 'dx-live')
     assert.equal(result.wasEnabled, true)
     assert.ok(result.generation >= 2)
-    assert.equal(result.summary.enabled, true, '重载后保持启用')
+    assert.equal(result.summary.enabled, true, 'reload after keep enable')
 
     const v2 = (await app.kernel.plugins.invokeAction('dx-live', 'probe', {})) as {
       value: string
     }
-    assert.equal(v2.value, 'v2', '重载后新代码生效')
+    assert.equal(v2.value, 'v2', 'reload after new code takes effect')
     const initsAfterReload = (globalThis as Record<string, unknown>)[counterName] as number
     assert.ok(
       initsAfterReload > initsAfterFirstEnable,
-      '重载使用新代际模块图（模块重新初始化）',
+      'reload use new proxy boundary module diagram (module re- initialize)',
     )
   } finally {
     await app?.close().catch(() => {})
@@ -403,7 +403,7 @@ test('reload：健康代码重载成功且启用状态保持；新代码生效',
   }
 })
 
-test('reload：坏代码预检失败，旧实例保持可用（动作照常、状态不变）', { timeout: 60_000 }, async () => {
+test('reload: broken code preflight failed, old instance keep available (action per common, state do not change)', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-reload-'))
   let app: Awaited<ReturnType<typeof createApp>> | undefined
   try {
@@ -411,7 +411,7 @@ test('reload：坏代码预检失败，旧实例保持可用（动作照常、�
     app = await createApp(dataDir)
     await app.kernel.plugins.enable('dx-keep')
 
-    // 写坏代码（语法错误）
+    // write broken code (language method error)
     writeFileSync(join(dirPath, 'index.ts'), 'export default { id: "dx-keep", definePlugin(( {}\n')
 
     await assert.rejects(
@@ -421,24 +421,24 @@ test('reload：坏代码预检失败，旧实例保持可用（动作照常、�
         assert.equal(err.code, 'plugin_reload_preflight_failed')
         assert.equal(err.status, 422)
         const details = err.details as { report?: { ok?: boolean } }
-        assert.equal(details?.report?.ok, false, '错误附完整 doctor 报告')
+        assert.equal(details?.report?.ok, false, 'error attach complete doctor report')
         return true
       },
     )
 
-    // 旧实例保持可用：仍是启用态，动作照常返回旧值
+    // old instance keep available: still is enable state, action per common return old value
     assert.equal(app.kernel.plugins.list().find((p) => p.id === 'dx-keep')?.enabled, true)
     const probe = (await app.kernel.plugins.invokeAction('dx-keep', 'probe', {})) as {
       value: string
     }
-    assert.equal(probe.value, 'v1', '旧实例代码继续服务')
+    assert.equal(probe.value, 'v1', 'old instance code continue service')
   } finally {
     await app?.close().catch(() => {})
     rmSync(dataDir, { recursive: true, force: true })
   }
 })
 
-test('reload：内置插件 403 拒绝', { timeout: 60_000 }, async () => {
+test('reload: built-in plugin 403 reject', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-reload-'))
   let app: Awaited<ReturnType<typeof createApp>> | undefined
   try {
@@ -454,7 +454,7 @@ test('reload：内置插件 403 拒绝', { timeout: 60_000 }, async () => {
   }
 })
 
-test('reload：未注册插件 404', { timeout: 60_000 }, async () => {
+test('reload: not registered plugin 404', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-reload-'))
   let app: Awaited<ReturnType<typeof createApp>> | undefined
   try {
@@ -469,7 +469,7 @@ test('reload：未注册插件 404', { timeout: 60_000 }, async () => {
   }
 })
 
-test('reload：在途任务 409 拒绝（在途工具执行期间）', { timeout: 60_000 }, async () => {
+test('reload: in-flight task 409 reject (in-flight tool execute during)', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-reload-'))
   let app: Awaited<ReturnType<typeof createApp>> | undefined
   try {
@@ -477,7 +477,7 @@ test('reload：在途任务 409 拒绝（在途工具执行期间）', { timeout
     app = await createApp(dataDir)
     await app.kernel.plugins.enable('dx-busy')
 
-    // 构造在途任务：withTask 包裹期间触发 reload
+    // construct in-flight task:withTask package wrap during trigger reload
     const gate = new Promise<void>((resolve) => {
       setTimeout(resolve, 150)
     })
@@ -492,7 +492,7 @@ test('reload：在途任务 409 拒绝（在途工具执行期间）', { timeout
       },
     )
     await task
-    // 在途任务结束后 reload 可成功
+    // in-flight task after end reload can succeeded
     const result = await app.kernel.plugins.reloadExternalPlugin('dx-busy')
     assert.equal(result.pluginId, 'dx-busy')
   } finally {
@@ -501,13 +501,13 @@ test('reload：在途任务 409 拒绝（在途工具执行期间）', { timeout
   }
 })
 
-test('reload：停用状态插件重载后保持停用', { timeout: 60_000 }, async () => {
+test('reload: deactivate state plugin reload after keep deactivate', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-reload-'))
   let app: Awaited<ReturnType<typeof createApp>> | undefined
   try {
     const { dirPath } = writeMinimalPlugin(join(dataDir, 'plugins'), 'dx-off')
     app = await createApp(dataDir)
-    // 默认停用（不 enable）
+    // by default deactivate (do not enable)
     assert.equal(app.kernel.plugins.list().find((p) => p.id === 'dx-off')?.enabled, false)
     writeFileSync(
       join(dirPath, 'index.ts'),
@@ -515,7 +515,7 @@ test('reload：停用状态插件重载后保持停用', { timeout: 60_000 }, as
     )
     const result = await app.kernel.plugins.reloadExternalPlugin('dx-off')
     assert.equal(result.wasEnabled, false)
-    assert.equal(result.summary.enabled, false, '重载后保持停用')
+    assert.equal(result.summary.enabled, false, 'reload after keep deactivate')
   } finally {
     await app?.close().catch(() => {})
     rmSync(dataDir, { recursive: true, force: true })
@@ -523,10 +523,10 @@ test('reload：停用状态插件重载后保持停用', { timeout: 60_000 }, as
 })
 
 // ---------------------------------------------------------------------------
-// doctor by id / reload 切换失败回滚
+// doctor by id / reload switch failed rollback
 // ---------------------------------------------------------------------------
 
-test('doctor by id：已注册插件按 id 解析源目录；未注册 id 404', { timeout: 60_000 }, async () => {
+test('doctor by id: registered plugin by id parse source directory; not registered id 404', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-docid-'))
   let app: Awaited<ReturnType<typeof createApp>> | undefined
   try {
@@ -537,14 +537,14 @@ test('doctor by id：已注册插件按 id 解析源目录；未注册 id 404', 
     const report = await app.kernel.plugins.doctorExternalPlugin({ id: 'dx-docid' })
     assert.equal(report.ok, true, JSON.stringify(report.checks))
     assert.equal(report.requestedId, 'dx-docid')
-    assert.ok(report.dir.endsWith('dx-docid'), `按 id 解析到源目录：${report.dir}`)
+    assert.ok(report.dir.endsWith('dx-docid'), `by id parse to source directory:${report.dir}`)
     assert.equal(report.pluginId, 'dx-docid')
 
     await assert.rejects(
       app.kernel.plugins.doctorExternalPlugin({ id: 'dx-not-registered' }),
       (err: unknown) => err instanceof HostHelmError && err.code === 'plugin_source_missing',
     )
-    // id 与 dir 互斥
+    // id and dir mutual exclusion
     await assert.rejects(
       app.kernel.plugins.doctorExternalPlugin({ id: 'dx-docid', dir: '/abs' }),
       (err: unknown) => err instanceof HostHelmError && err.code === 'validation_error',
@@ -555,11 +555,11 @@ test('doctor by id：已注册插件按 id 解析源目录；未注册 id 404', 
   }
 })
 
-test('reload：新代码切换失败时回滚到旧实例（旧定义继续可用）', { timeout: 60_000 }, async () => {
+test('reload: new code switch on failure rollback to old instance (old define continue available)', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-rollback-'))
   let app: Awaited<ReturnType<typeof createApp>> | undefined
   try {
-    // 插件 A（待重载）与插件 B（占用 slash 触发词 dxdupe）
+    // plugin A(await reload) and plugin B(occupy slash trigger term dxdupe)
     const dirA = join(dataDir, 'plugins', 'dx-a')
     writeMinimalPlugin(join(dataDir, 'plugins'), 'dx-a')
     writeSlashPlugin(join(dataDir, 'plugins'), 'dx-b', 'dxdupe')
@@ -567,44 +567,44 @@ test('reload：新代码切换失败时回滚到旧实例（旧定义继续可�
     await app.kernel.plugins.enable('dx-a')
     await app.kernel.plugins.enable('dx-b')
 
-    // 旧实例可用
+    // old instance available
     const v1 = (await app.kernel.plugins.invokeAction('dx-a', 'probe', {})) as { value: string }
     assert.equal(v1.value, 'v1')
 
-    // 新代码：doctor 可过（沙箱内无 B），但启用注册与 B 的 slash 冲突 -> 切换失败。
-    // 保留原 handler 行为，追加冲突的 command 声明。
+    // new code:doctor can (sandbox inside without B), but enable register and B  slash conflict -> switch failed.
+    // keep original handler behavior, append conflict command declaration.
     const original = readFileSync(join(dirA, 'index.ts'), 'utf8')
-    // 重命名原 definePlugin 为 baseDefine，再声明带冲突 slash 的新 definePlugin。
+    // heavy naming original definePlugin is baseDefine, again declaration carries conflict slash new definePlugin.
     const injected = original
       .replace('function definePlugin(ctx: any) {', 'function baseDefine(ctx: any) {')
       .replace(
-        `export default { id: 'dx-a', name: 'DX 插件 dx-a', version: '0.1.0', definePlugin }`,
+        `export default { id: 'dx-a', name: 'DX plugin dx-a', version: '0.1.0', definePlugin }`,
         `function definePlugin(ctx: any) {
   baseDefine(ctx)
-  ctx.ui.command({ id: 'dupe-cmd', label: '冲突命令', slash: 'dxdupe', actionId: 'probe' })
+  ctx.ui.command({ id: 'dupe-cmd', label: 'conflict command', slash: 'dxdupe', actionId: 'probe' })
 }
-export default { id: 'dx-a', name: 'DX 插件 dx-a', version: '0.1.0', definePlugin }`,
+export default { id: 'dx-a', name: 'DX plugin dx-a', version: '0.1.0', definePlugin }`,
       )
-    assert.notEqual(injected, original, '注入应生效（模板匹配失败时显式暴露）')
+    assert.notEqual(injected, original, 'inject should take effect (template match on failure explicit expose)')
     writeFileSync(join(dirA, 'index.ts'), injected)
 
     await assert.rejects(
       app.kernel.plugins.reloadExternalPlugin('dx-a'),
       (err: unknown) => {
-        assert.ok(err instanceof HostHelmError, `应抛 HelmError：${String(err)}`)
+        assert.ok(err instanceof HostHelmError, `should throw HelmError:${String(err)}`)
         assert.equal(err.code, 'plugin_reload_failed')
         const details = err.details as { rolledBack?: boolean }
-        assert.equal(details?.rolledBack, true, '切换失败后应回滚到旧实例')
+        assert.equal(details?.rolledBack, true, 'switch failed after should rollback to old instance')
         return true
       },
     )
 
-    // 回滚后：插件仍在清单且启用，旧代码继续服务
-    assert.equal(app.kernel.plugins.list().find((p) => p.id === 'dx-a')?.enabled, true, '回滚后保持启用')
+    // rollback after: plugin still in manifest and enable, old code continue service
+    assert.equal(app.kernel.plugins.list().find((p) => p.id === 'dx-a')?.enabled, true, 'rollback after keep enable')
     const probe = (await app.kernel.plugins.invokeAction('dx-a', 'probe', {})) as { value: string }
-    assert.equal(probe.value, 'v1', '回滚后旧实例代码继续服务')
+    assert.equal(probe.value, 'v1', 'rollback after old instance code continue service')
 
-    // 恢复无冲突代码后 reload 成功
+    // restore without conflict code after reload succeeded
     writeFileSync(join(dirA, 'index.ts'), original)
     const result = await app.kernel.plugins.reloadExternalPlugin('dx-a')
     assert.equal(result.summary.enabled, true)
@@ -614,7 +614,7 @@ export default { id: 'dx-a', name: 'DX 插件 dx-a', version: '0.1.0', definePlu
   }
 })
 
-/** 带 commandPalette slash 声明的插件（用于跨插件唯一性冲突）。 */
+/** carries commandPalette slash declaration plugin (used to across plugin uniqueness conflict). */
 function writeSlashPlugin(pluginsDir: string, dir: string, slash: string): string {
   const dirPath = join(pluginsDir, dir)
   mkdirSync(dirPath, { recursive: true })
@@ -623,7 +623,7 @@ function writeSlashPlugin(pluginsDir: string, dir: string, slash: string): strin
     `function definePlugin(ctx: any) {
   ctx.action({
     id: 'noop',
-    description: '空动作',
+    description: 'empty action',
     inputSchema: { type: 'object', additionalProperties: false },
     outputSchema: { type: 'object', required: ['ok'], additionalProperties: false, properties: { ok: { type: 'boolean' } } },
     idempotent: true,
@@ -631,7 +631,7 @@ function writeSlashPlugin(pluginsDir: string, dir: string, slash: string): strin
   })
   ctx.ui.command({
     id: 'cmd',
-    label: '命令',
+    label: 'command',
     slash: ${JSON.stringify(slash)},
     actionId: 'noop',
   })

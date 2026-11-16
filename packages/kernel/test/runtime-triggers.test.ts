@@ -1,10 +1,10 @@
 /**
- * RuntimeTriggerDispatcher 缺省目标解析契约：
- * - resolveDefaultTriggerTarget 与 submitInput 之间的 TOCTOU 窗口（目标被删）：
- *   缺省路径 not_found 时重解析一次再投递（完成路由决策，非同目标投递重试）；
- * - 显式目标失效仍显式 not_found 上抛（不得被重路由掩盖）；
- * - 无候选时按需新建并合并并发创建（defaultTriggerTargetCreation 单飞）。
- * runner: tsx --test；每项显式 timeout: 60_000 防死锁。
+ * RuntimeTriggerDispatcher default target parse contract:
+ * - resolveDefaultTriggerTarget and submitInput between TOCTOU window (target by delete):
+ *   default path not_found when heavy parse once again delivery (complete routing decide policy, non- same target delivery retry);
+ * - explicit target expires still explicit not_found on throw (must not by heavy routing mask);
+ * - without choose when on demand creates new and merge concurrency create (defaultTriggerTargetCreation single fly).
+ * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -42,15 +42,15 @@ const envelope = (over: Partial<ExternalTriggerEnvelope> = {}): ExternalTriggerE
   ...over,
 })
 
-test('缺省目标 TOCTOU：resolve 与 submit 之间目标被删 → not_found 重解析一次后投递新目标', { timeout: 60_000 }, async () => {
-  // 解析时 #5 存在（human-owned assistant、无父链）；submitInput 时已被删除。
+test('default target TOCTOU:resolve and submit between target by delete → not_found heavy parse once after delivery new target', { timeout: 60_000 }, async () => {
+  // parse when #5 store in (human-owned assistant, without parent chain);submitInput when already by delete.
   let convs: ConvMeta[] = [{ id: 5, profileId: 'assistant', updatedAt: 1 }]
   const submitted: number[] = []
   let created = 0
   const dispatcher = makeDispatcher({
     listConvs: () => convs,
     getConversation: (id) => {
-      if (id !== 9) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+      if (id !== 9) throw new HelmError('not_found', `conversation missing:${id}`, 404)
       return { id: 9 }
     },
     createConversation: async () => {
@@ -60,18 +60,18 @@ test('缺省目标 TOCTOU：resolve 与 submit 之间目标被删 → not_found 
     },
     submitInput: async (id) => {
       if (id === 5) {
-        convs = [] // #5 在 resolve 之后、submit 之前被删除
-        throw new HelmError('not_found', '会话不存在：5', 404)
+        convs = [] // #5 in resolve after,submit before by delete
+        throw new HelmError('not_found', 'conversation missing:5', 404)
       }
       submitted.push(id)
     },
   })
   await dispatcher.dispatchTrigger(envelope())
-  assert.deepEqual(submitted, [9], '重解析后投递到新目标（该次触发载荷不丢失）')
+  assert.deepEqual(submitted, [9], 'heavy parse after delivery to new target (the time trigger payload without losing)')
   assert.equal(created, 1)
 })
 
-test('缺省目标重解析后仍失败：如实上抛 not_found（不无限重试）', { timeout: 60_000 }, async () => {
+test('default target heavy parse after still failed: such as on throw not_found(do not unbounded retry)', { timeout: 60_000 }, async () => {
   let convs: ConvMeta[] = []
   const dispatcher = makeDispatcher({
     listConvs: () => convs,
@@ -81,8 +81,8 @@ test('缺省目标重解析后仍失败：如实上抛 not_found（不无限重�
       return { id: 9 }
     },
     submitInput: async () => {
-      convs = [] // 重解析命中的新目标在 submit 前又被删除（极端窗口）
-      throw new HelmError('not_found', '会话不存在：9', 404)
+      convs = [] // heavy parse hit new target in submit before again by delete (extreme window)
+      throw new HelmError('not_found', 'conversation missing:9', 404)
     },
   })
   await assert.rejects(dispatcher.dispatchTrigger(envelope()), (err: unknown) => {
@@ -91,27 +91,27 @@ test('缺省目标重解析后仍失败：如实上抛 not_found（不无限重�
   })
 })
 
-test('显式目标在 submit 时失效：not_found 如实上抛，不被缺省重路由掩盖', { timeout: 60_000 }, async () => {
+test('explicit target in submit when expires:not_found such as on throw, do not by default heavy routing mask', { timeout: 60_000 }, async () => {
   const submitted: number[] = []
   const dispatcher = makeDispatcher({
     listConvs: () => [{ id: 5, profileId: 'assistant', updatedAt: 1 }],
-    getConversation: () => ({ id: 5 }), // 预校验（hook 前）通过
+    getConversation: () => ({ id: 5 }), // pre- validate (hook before) via
     createConversation: async () => {
-      throw new HelmError('unsupported', '显式目标路径不得新建会话', 501)
+      throw new HelmError('unsupported', 'explicit target path must not creates new conversation', 501)
     },
     submitInput: async (id) => {
       submitted.push(id)
-      throw new HelmError('not_found', `会话不存在：${id}`, 404)
+      throw new HelmError('not_found', `conversation missing:${id}`, 404)
     },
   })
   await assert.rejects(
     dispatcher.dispatchTrigger(envelope({ targetConversationId: 5 })),
     (err: unknown) => err instanceof HelmError && err.code === 'not_found',
   )
-  assert.deepEqual(submitted, [5], '只尝试显式目标一次')
+  assert.deepEqual(submitted, [5], 'only attempt explicit target once')
 })
 
-test('缺省目标无候选：并发触发合并一次按需创建（单飞）', { timeout: 60_000 }, async () => {
+test('default target without choose: concurrency trigger merge once on demand create (single fly)', { timeout: 60_000 }, async () => {
   let convs: ConvMeta[] = []
   let creations = 0
   let release!: () => void
@@ -132,7 +132,7 @@ test('缺省目标无候选：并发触发合并一次按需创建（单飞）',
   const a = dispatcher.dispatchTrigger(envelope({ id: 'a' }))
   const b = dispatcher.dispatchTrigger(envelope({ id: 'b' }))
   await new Promise<void>((resolve) => setImmediate(resolve))
-  assert.equal(creations, 1, '并发缺省触发只发起一次按需创建')
+  assert.equal(creations, 1, 'concurrency default trigger only start once on demand create')
   release()
   await Promise.all([a, b])
   assert.equal(creations, 1)

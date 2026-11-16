@@ -1,31 +1,31 @@
 /**
- * ConversationTracker 输入追踪唯一性与结算准确性回归。
+ * ConversationTracker input append trace uniqueness and compute accurate regression.
  *
- * 缺陷背景（本文件锁定修复）：
- * - 旧实现 rebuildFromEntries 对窗口内每条历史 helm.input 都创建 req: 记录，
- *   且每次快照扫描历史复活；run 结算（takeConsumed）只清数字键，req: 历史
- *   键常驻；abort 的 takeAllInputs 遍历整个 map，旧历史输入污染 aborted
- *   payload 的 origin 与输入清单。
- * - 旧测试用 `assert.notEqual(reqKey, -2147483648)` 这类字符串与数字必然
- *   不等的弱断言，测不出真实缺陷。
+ * defect background (this file lock fix):
+ * - old implement rebuildFromEntries for window inside each history helm.input all create req: record,
+ *   and each time snapshot scan history re-;run compute (takeConsumed) only clean number key,req: history
+ *   key common resident;abort  takeAllInputs iterate the whole map, old history input pollute aborted
+ *   payload  origin and input manifest.
+ * - old test use `assert.notEqual(reqKey, -2147483648)` this kind of string and number must however
+ *   do not etc. weak assertion, test do not out real defect.
  *
- * 现契约：
- * 1. trackedInputs 以持久 input.id（requestId）为唯一键：正常 register/bind
- *    与 entry/inbox 观察重建合并为一条记录，绝不重复；submissionId 仅存于
- *    submissionIndex 关联索引（SDK run.inputs/failure.inputs 的映射面）；
- * 2. entry 重建仅认当前 run 区间（run.first 及之后）与当前 inbox，已结算
- *    run 的历史 helm.input 不复活：多轮 complete 后 abort 只含当前 run 输入；
- * 3. 同 conversation 重复 requestId（SDK 去重语义）重建正确且不重复；
- * 4. 重启恢复活跃 run：observe 经 live.run.inputs 权威映射 + submission
- *    精确查询补齐 origin/meta/attachments 与关联索引；
- *    关联时序窗口锁定：bindSubmission（submit 回包续延）必先行于生成任务
- *    request 阶段的 pi.live.generation 写入 commit，即时完成/失败回合仍恰
- *    一次含输入且结算后无残索引（SDK 时序保证，详见用例注释）；
- * 5. stopObserving 后在途异步 adoptInitial 不向 maps 复活条目；
- * 6. settledRuns 容量淘汰（64）与 deleteConversation 全量清理保持不变。
+ * now contract:
+ * 1. trackedInputs with durable input.id(requestId) is unique key: normal register/bind
+ *    and entry/inbox observe rebuild merge is a record, never duplicate;submissionId only store at
+ *    submissionIndex related index (SDK run.inputs/failure.inputs mapping side);
+ * 2. entry rebuild only recognize when before run zone between (run.first and after) and when before inbox, already compute
+ *    run history helm.input does not resurrect: many round complete after abort only contains when before run input;
+ * 3. same conversation duplicate requestId(SDK dedupe semantics) rebuild correct and does not repeat;
+ * 4. restart restore leap run:observe via live.run.inputs right threat mapping + submission
+ *    precise query patch complete origin/meta/attachments and related index;
+ *    related when order window lock:bindSubmission(submit back package continue extend) must first row at generate task
+ *    request phase pi.live.generation write commit, i.e. when complete/failed turn still exactly
+ *    once contains input and compute after without leftover index (SDK when order guarantee, detail see case note release);
+ * 5. stopObserving after in-flight async adoptInitial do not to maps re- item;
+ * 6. settledRuns capacity eliminate (64) and deleteConversation all amount clean up keep do not change.
  *
- * 经真实 KernelRuntime（faux provider + 真实 SQLite）驱动，内部状态经类型
- * 转换读取（测试与实现同包，仅测试内窥视）。
+ * via real KernelRuntime(faux provider + real SQLite) drive, internal state via type
+ * convert read (test and implement same package, only test inside peek).
  */
 
 import { strict as assert } from 'node:assert'
@@ -43,7 +43,7 @@ import { cleanupDir, deferred, makeFauxModels, makeTempDir, sleep, waitFor } fro
 
 type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
 
-/** 单会话聚合镜像的可观测子集（与 ConversationMirror 字段同名）。 */
+/** single conversation aggregate mirror can observability sub- collection (and ConversationMirror field same name). */
 interface MirrorLike {
   trackedInputs: Map<string, ConversationInput>
   submissionIndex: Map<number, string>
@@ -91,7 +91,7 @@ async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: FauxH
   return Object.assign(runtime, { __faux: faux })
 }
 
-/** 注册收集 turn_settled 的插件，返回载荷数组（每会话独立数组）。 */
+/** register collect turn_settled plugin, return payload array (each conversation independent array). */
 function collectSettled(kernel: KernelRuntime): TurnSettledPayload[] {
   const settled: TurnSettledPayload[] = []
   void kernel.plugins.register({
@@ -105,19 +105,19 @@ function collectSettled(kernel: KernelRuntime): TurnSettledPayload[] {
   return settled
 }
 
-describe('输入唯一性与历史不复活', { timeout: 60_000 }, () => {
-  it('多轮 complete 后 abort：aborted payload 只含当前 run 输入，不含历史 trigger 输入', timeout, async () => {
+describe('input uniqueness and history does not resurrect', { timeout: 60_000 }, () => {
+  it('many round complete after abort:aborted payload only contains when before run input, excludes history trigger input', timeout, async () => {
     const kernel = await openRuntime(join(root, 'abort-current-only'))
     try {
       const settled = collectSettled(kernel)
-      // 两轮完整回合：第一轮 trigger 来源，第二轮 human 来源。
+      // two round complete turn: one round trigger source, second round human source.
       kernel.__faux.setResponses([
-        fauxAssistantMessage('第一轮回答'),
-        fauxAssistantMessage('第二轮回答'),
+        fauxAssistantMessage('one round answer'),
+        fauxAssistantMessage('second round answer'),
       ])
-      await kernel.submitInput(1, '第一轮任务', { origin: 'trigger' })
+      await kernel.submitInput(1, 'one round task', { origin: 'trigger' })
       await kernel.waitForIdle(1)
-      await kernel.submitInput(1, '第二轮任务', { origin: 'human' })
+      await kernel.submitInput(1, 'second round task', { origin: 'human' })
       await kernel.waitForIdle(1)
       assert.equal(settled.length, 2)
       assert.equal(settled[0]!.outcome, 'completed')
@@ -125,11 +125,11 @@ describe('输入唯一性与历史不复活', { timeout: 60_000 }, () => {
       assert.equal(settled[0]!.inputs[0]!.origin, 'trigger')
       assert.equal(settled[1]!.inputs.length, 1)
       assert.equal(settled[1]!.inputs[0]!.origin, 'human')
-      // 已结算两轮后 trackedInputs 不残留历史 req: 记录。
+      // already compute two round after trackedInputs leaves no residue history req: record.
       const mapAfter = trackerOf(kernel).mirrors.get(1)?.trackedInputs
-      assert.equal(mapAfter?.size ?? 0, 0, '已结算输入的历史记录不残留')
+      assert.equal(mapAfter?.size ?? 0, 0, 'already compute input history record leaves no residue')
 
-      // 第三轮在途 abort：只含当前输入，绝不污染旧轮 origin。
+      // third round in-flight abort: only contains when before input, never pollute old round origin.
       const started = deferred()
       const gate = deferred()
       kernel.__faux.setResponses([
@@ -141,7 +141,7 @@ describe('输入唯一性与历史不复活', { timeout: 60_000 }, () => {
         },
       ])
       try {
-        void kernel.submitInput(1, '会被中止的当前问题', { origin: 'human' }).catch(() => {})
+        void kernel.submitInput(1, 'will by abort when before issue', { origin: 'human' }).catch(() => {})
         await started.promise
         await waitFor(() => kernel.getConversation(1).status === 'working')
         assert.equal(kernel.getConversation(1).status, 'working')
@@ -153,10 +153,10 @@ describe('输入唯一性与历史不复活', { timeout: 60_000 }, () => {
         assert.equal(
           aborted.inputs.length,
           1,
-          `aborted 只含当前 run 输入，实际：${JSON.stringify(aborted.inputs.map((i) => [i.id, i.origin]))}`,
+          `aborted only contains when before run input, actual:${JSON.stringify(aborted.inputs.map((i) => [i.id, i.origin]))}`,
         )
-        assert.equal(aborted.inputs[0]!.text, '会被中止的当前问题')
-        assert.equal(aborted.inputs[0]!.origin, 'human', '当前输入 origin 不被历史 trigger 污染')
+        assert.equal(aborted.inputs[0]!.text, 'will by abort when before issue')
+        assert.equal(aborted.inputs[0]!.origin, 'human', 'when before input origin do not by history trigger pollute')
       } finally {
         gate.resolve()
       }
@@ -165,30 +165,30 @@ describe('输入唯一性与历史不复活', { timeout: 60_000 }, () => {
     }
   })
 
-  it('历史 helm.input 不再每次扫描复活：完成若干轮后 trackedInputs 归零', timeout, async () => {
+  it('history helm.input no longer each time scan re-: complete if dry round after trackedInputs reset to zero', timeout, async () => {
     const kernel = await openRuntime(join(root, 'no-resurrect'))
     try {
       kernel.__faux.setResponses([
-        fauxAssistantMessage('答一'),
-        fauxAssistantMessage('答二'),
-        fauxAssistantMessage('答三'),
+        fauxAssistantMessage('answer one'),
+        fauxAssistantMessage('answer two'),
+        fauxAssistantMessage('answer three'),
       ])
-      for (const text of ['问题一', '问题二', '问题三']) {
+      for (const text of ['issue one', 'issue two', 'issue three']) {
         await kernel.submitInput(1, text)
         await kernel.waitForIdle(1)
       }
       const tracker = trackerOf(kernel)
       const map = tracker.mirrors.get(1)?.trackedInputs
-      assert.equal(map?.size ?? 0, 0, '三轮 complete 后无历史 req: 记录残留（不复活）')
-      // 稍等观察者快照推进后再验一次（旧缺陷在每次窗口扫描时复活历史）。
+      assert.equal(map?.size ?? 0, 0, 'three round complete after without history req: record leftover (does not resurrect)')
+      // slightly etc. observer snapshot push enter after again verify once (old defect in each time window scan when re- history).
       await sleep(30)
-      assert.equal(tracker.mirrors.get(1)?.trackedInputs.size ?? 0, 0, '后续快照不复活历史输入')
+      assert.equal(tracker.mirrors.get(1)?.trackedInputs.size ?? 0, 0, 'after continue snapshot does not resurrect history input')
     } finally {
       await kernel.close()
     }
   })
 
-  it('busy 中 followUp 排队：全部输入恰一次结算，无重复无丢失', timeout, async () => {
+  it('busy in followUp queue up: all input exactly once compute, without duplicate without lose', timeout, async () => {
     const kernel = await openRuntime(join(root, 'followup-unique'))
     const releaseFirst = deferred()
     try {
@@ -200,25 +200,25 @@ describe('输入唯一性与历史不复活', { timeout: 60_000 }, () => {
           await releaseFirst.promise
           return fauxAssistantMessage([fauxToolCall('bash', { command: 'true' })], { stopReason: 'toolUse' })
         },
-        fauxAssistantMessage('工具轮回答'),
-        fauxAssistantMessage('排队输入回答'),
+        fauxAssistantMessage('tool round answer'),
+        fauxAssistantMessage('queue up input answer'),
       ])
-      await kernel.submitInput(1, '首条输入', { origin: 'human' })
+      await kernel.submitInput(1, 'first input', { origin: 'human' })
       await firstInFlight.promise
-      // busy 中 followUp 排队：SDK 在后续 run 消费（中间 continue 轮无输入）。
-      await kernel.submitInput(1, '排队的第二条', { origin: 'agent', whenBusy: 'followUp' })
+      // busy in followUp queue up:SDK in after continue run consume (middle continue round without input).
+      await kernel.submitInput(1, 'queue up second', { origin: 'agent', whenBusy: 'followUp' })
       releaseFirst.resolve()
       await kernel.waitForIdle(1)
       assert.ok(settled.length >= 1)
-      // 全部结算载荷汇总：两条输入各恰一次，无重复。
+      // all compute payload aggregate: two input each exactly once, without duplicate.
       const allInputs = settled.flatMap((s) => s.inputs)
       const texts = allInputs.map((i) => i.text)
       const byText = new Map<string, number>()
       for (const text of texts) byText.set(text, (byText.get(text) ?? 0) + 1)
-      assert.equal(byText.get('首条输入'), 1, `首条恰一次：${JSON.stringify([...byText])}`)
-      assert.equal(byText.get('排队的第二条'), 1, `排队输入恰一次：${JSON.stringify([...byText])}`)
-      // 无历史伪造输入（只含真实提交的两条）。
-      assert.equal(allInputs.length, 2, `总输入数恰为提交数：${JSON.stringify(texts)}`)
+      assert.equal(byText.get('first input'), 1, `first exactly once:${JSON.stringify([...byText])}`)
+      assert.equal(byText.get('queue up second'), 1, `queue up input exactly once:${JSON.stringify([...byText])}`)
+      // without history fabricate input (only contains real commit two).
+      assert.equal(allInputs.length, 2, `total input count exactly is commit count:${JSON.stringify(texts)}`)
     } finally {
       releaseFirst.resolve()
       await kernel.close()
@@ -226,36 +226,36 @@ describe('输入唯一性与历史不复活', { timeout: 60_000 }, () => {
   })
 })
 
-describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
-  it('同一 requestId 二次提交（SDK 按 conversation 去重）：重建正确且 trackedInputs 不重复', timeout, async () => {
+describe('requestId duplicate commit and restart restore', { timeout: 60_000 }, () => {
+  it('the same requestId second commit (SDK by conversation dedupe): rebuild correct and trackedInputs does not repeat', timeout, async () => {
     const kernel = await openRuntime(join(root, 'dup-request-id'))
     try {
-      // 两条 requestId 仅大小写差异（旧 32-bit 哈希对 'Aa'/'BB' 同值碰撞的构造对）。
-      kernel.__faux.setResponses([fauxAssistantMessage('回答')])
-      await kernel.submitInput(1, '第一条')
+      // two requestId only large small write difference (old 32-bit hash for 'Aa'/'BB' same value collision construct for).
+      kernel.__faux.setResponses([fauxAssistantMessage('answer')])
+      await kernel.submitInput(1, 'a')
       await kernel.waitForIdle(1)
-      kernel.__faux.setResponses([fauxAssistantMessage('回答二')])
-      await kernel.submitInput(1, '第二条')
+      kernel.__faux.setResponses([fauxAssistantMessage('answer two')])
+      await kernel.submitInput(1, 'second')
       await kernel.waitForIdle(1)
       const tracker = trackerOf(kernel)
-      // 结算后历史不残留（上一组已验证）；此处验证运行期间键域：
-      // 提交第二条（run 进行中）时 map 中该输入唯一且以 requestId 为键。
+      // compute after history leaves no residue (on one group already verify); this where verify run during key domain:
+      // commit second (run in progress) when map in the input unique and with requestId is key.
       const map = tracker.mirrors.get(1)?.trackedInputs
       const keys = [...(map?.keys() ?? [])]
       for (const key of keys) {
-        assert.equal(typeof key, 'string', `追踪键必须是 requestId 字符串：${String(key)}`)
+        assert.equal(typeof key, 'string', `append trace key must be requestId string:${String(key)}`)
       }
-      // 每个在册 input.id 唯一。
+      // each in manual input.id unique.
       const ids = [...(map?.values() ?? [])].map((t) => t.id)
-      assert.equal(new Set(ids).size, ids.length, 'input.id 无重复记录')
+      assert.equal(new Set(ids).size, ids.length, 'input.id without duplicate record')
     } finally {
       await kernel.close()
     }
   })
 
-  it('重启恢复活跃 run：origin/meta 经权威映射补齐且结算不丢', timeout, async () => {
-    // 直驱真实 Harness + ConversationTracker（不经 KernelRuntime：runtime.close
-    // 会显式 abort 在途会话，无法构造“重启时 run 仍在途”的场景）。
+  it('restart restore leap run:origin/meta via right threat mapping patch complete and compute do not lose', timeout, async () => {
+    // direct drive real Harness + ConversationTracker(do not via KernelRuntime:runtime.close
+    // will explicit abort in-flight conversation, cannot construct"restart when run still in-flight"scenario).
     const dir = join(root, 'restart-active-run')
     const mkHarness = async () => {
       const database = await openHelmDatabase(dir)
@@ -284,7 +284,7 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
         },
       })
 
-    // 第一段：提交带 meta 的 agent 输入，生成请求进入在途后直接关 storage（模拟崩溃）。
+    // one segment: commit carries meta  agent input, generate request enter in-flight after directly closure storage(simulated crash).
     let convId = 0
     {
       const { harness, store, database, faux } = await mkHarness()
@@ -297,7 +297,7 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
       convId = id
       store.upsertConv({
         id,
-        title: '会话',
+        title: 'conversation',
         profileId: 'assistant',
         nodeId: 'local',
         tags: [],
@@ -317,30 +317,30 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
       faux.setResponses([
         async () => {
           entered.resolve()
-          // 保持在途足够长（数据库关闭后不会立刻完成）以便崩溃前活跃 run 仍在途。
+          // keep in-flight enough long (database close after will not immediately complete) with convenient crash before leap run still in-flight.
           await sleep(150)
-          return fauxAssistantMessage('重启后回答')
+          return fauxAssistantMessage('after restart answer')
         },
       ])
       await conv.submit(
         {
           type: 'input',
-          content: '重启前的在途问题',
+          content: 'restart before in-flight issue',
           entry: {
             kind: 'helm.input',
-            data: { id: 'restart-1', text: '重启前的在途问题', origin: 'agent', createdAt: 5, meta: { from: 'test', seq: 7 } },
+            data: { id: 'restart-1', text: 'restart before in-flight issue', origin: 'agent', createdAt: 5, meta: { from: 'test', seq: 7 } },
           },
           requestId: 'restart-1',
         },
         BACKGROUND_CONTEXT,
       )
       await entered.promise
-      // 模拟崩溃：不经 harness.close（其会 abort 在途 run），直接断 storage
-      //（SQLite 崩溃安全，已 commit 的 pi.live.run 状态落盘）。
+      // simulated crash: do not via harness.close(its will abort in-flight run), directly assert storage
+      //(SQLite crash security, already commit  pi.live.run state).
       await database.close()
     }
 
-    // 第二段：重开（模拟重启）。活跃 run 未完成，observe 需经权威映射补齐输入。
+    // second segment: heavy open (simulated restart). leap run not complete,observe must via right threat mapping patch complete input.
     {
       const { harness, store, database, faux } = await mkHarness()
       harness.resume()
@@ -351,21 +351,21 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
         const tracker = trackerOfHarness(harness, store)
         await tracker.observe(id)
         const map = (tracker as unknown as TrackerInternals).mirrors.get(id)?.trackedInputs
-        assert.ok(map !== undefined && map.size >= 1, '重启恢复活跃 run 后输入在册')
+        assert.ok(map !== undefined && map.size >= 1, 'restart restore leap run after input in manual')
         const tracked = [...map.values()][0]!
-        assert.equal(tracked.text, '重启前的在途问题')
-        assert.equal(tracked.origin, 'agent', '重启后 origin 权威补齐')
-        assert.deepEqual(tracked.meta, { from: 'test', seq: 7 }, '重启后 meta 权威补齐')
-        // 重启恢复后关联索引已登记（markConsumed 可命中，结算不丢输入）。
+        assert.equal(tracked.text, 'restart before in-flight issue')
+        assert.equal(tracked.origin, 'agent', 'after restart origin right threat patch complete')
+        assert.deepEqual(tracked.meta, { from: 'test', seq: 7 }, 'after restart meta right threat patch complete')
+        // restart restore after related index already register (markConsumed can hit, compute do not lose input).
         const index = (tracker as unknown as TrackerInternals).mirrors.get(id)?.submissionIndex
-        assert.ok(index !== undefined && index.size >= 1, '重启后 submissionId->requestId 索引在册')
-        // 第二段重设响应工厂（run 重启后续跑）。
-        faux.setResponses([fauxAssistantMessage('恢复后的回答')])
+        assert.ok(index !== undefined && index.size >= 1, 'after restart submissionId->requestId index in manual')
+        // second segment heavy set response work vendor (run after restart continue run).
+        faux.setResponses([fauxAssistantMessage('restore after answer')])
         await conv.waitForIdle(BACKGROUND_CONTEXT).catch(() => {})
         await tracker.waitTurnSettled(id)
         await waitFor(() => settled.some((s) => s.conversation.id === id))
         const settledPayload = settled.find((s) => s.conversation.id === id)
-        assert.ok(settledPayload !== undefined, '重启后 run 结算到达')
+        assert.ok(settledPayload !== undefined, 'after restart run compute reach')
         assert.equal(settledPayload.inputs.length, 1)
         assert.equal(settledPayload.inputs[0]!.origin, 'agent')
         assert.deepEqual(settledPayload.inputs[0]!.meta, { from: 'test', seq: 7 })
@@ -377,15 +377,15 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
     }
   })
 
-  it('idle 提交即时完成/失败：bind 晚于 run 启动快照仍恰一次含输入且无残索引（SDK 时序窗口锁定）', timeout, async () => {
-    // 窗口事实（真实 pi-durable 1.5.0 实测）：run 启动 commit 的观察 advance
-    // 在 submit 回包前同步触发（markConsumed 因索引未登记而跳过）；
-    // bindSubmission 在 submit 续延微任务中先行于调度器 drain 的后续 commit，
-    // 而生成任务 request 阶段必先单独 commit `pi.live.generation={attempt}`
-    //（generation.js：模型调用与 failNoModel 之前），该 advance 时 run 仍在
-    //——重扫 run.inputs 后 markConsumed 命中。失败结算另在结算快照重标
-    // failure.inputs。若未来 SDK 时序变更打破该保证（任务 commit 先于
-    // submit 续延），本用例即红：即时完成回合将丢失输入归属。
+  it('idle commit i.e. when complete/failed:bind later than run start snapshot still exactly once contains input and without leftover index (SDK when order window lock)', timeout, async () => {
+    // window fact (real pi-durable 1.5.0 measured):run start commit observe advance
+    // in submit back package before sync trigger (markConsumed because index not register while skip);
+    // bindSubmission in submit continue extend micro task in first row at scheduler drain after continue commit,
+    // while generate task request phase must first separate commit `pi.live.generation={attempt}`
+    //(generation.js: model invoke and failNoModel before), the advance when run still in
+    //- - heavy scan run.inputs after markConsumed hit. failed compute another in compute snapshot heavy mark
+    // failure.inputs. if not come SDK when order change hit break the guarantee (task commit first at
+    // submit continue extend), this case i.e. red: i.e. when complete turn lose input ownership.
     const dir = join(root, 'instant-settle-window')
     const mkHarness = async () => {
       const database = await openHelmDatabase(dir)
@@ -415,7 +415,7 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
         const id = conv.id as number
         store.upsertConv({
           id,
-          title: '会话',
+          title: 'conversation',
           profileId: 'assistant',
           nodeId: 'local',
           tags: [],
@@ -445,14 +445,14 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
         await tracker.observe(id)
         const input: ConversationInput = {
           id: `instant-${caseDir}`,
-          text: '瞬时回合问题',
+          text: 'instantaneous turn issue',
           origin: 'human',
           createdAt: 1,
         }
         faux.setResponses([response])
         tracker.registerInput(id, input)
-        // 与 ConversationInputPipeline.submitFreshInput 同序：bind 在 submit
-        // 回包续延中登记索引（给窗口以最恶劣的即时结算机会）。
+        // and ConversationInputPipeline.submitFreshInput same order:bind in submit
+        // back package continue extend in register index (to window with most poor i.e. when compute chance).
         const submitted = conv.submit(
           {
             type: 'input',
@@ -468,20 +468,20 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
         await tracker.waitTurnSettled(id)
 
         const outcomes = settled.filter((s) => s.conversation.id === id)
-        assert.equal(outcomes.length, 1, `${caseDir}：回合恰好结算一次`)
+        assert.equal(outcomes.length, 1, `${caseDir}: turn exactly compute once`)
         const payload = outcomes[0]!
-        assert.ok(payload !== undefined, `${caseDir}：结算到达`)
+        assert.ok(payload !== undefined, `${caseDir}: compute reach`)
         assert.equal(payload.outcome, expectedOutcome)
         assert.deepEqual(
           payload.inputs.map((i) => i.id),
           [input.id],
-          `${caseDir}：即时${expectedOutcome}回合恰含本输入（无丢失无重复）`,
+          `${caseDir}: i.e. when${expectedOutcome}turn exactly contains this input (without lose without duplicate)`,
         )
-        // 结算后无残索引/残登记（晚 bind 不得在 takeConsumed 后留脏项）。
+        // compute after without leftover index/leftover register (late bind must not in takeConsumed after dirty items).
         const internals = tracker as unknown as TrackerInternals
-        assert.equal(internals.mirrors.get(id)?.trackedInputs.size ?? 0, 0, `${caseDir}：追踪记录已清`)
-        assert.equal(internals.mirrors.get(id)?.submissionIndex.size ?? 0, 0, `${caseDir}：关联索引已清`)
-        assert.equal(internals.mirrors.get(id)?.consumedInputs === undefined, true, `${caseDir}：消费集已清`)
+        assert.equal(internals.mirrors.get(id)?.trackedInputs.size ?? 0, 0, `${caseDir}: append trace record already clean`)
+        assert.equal(internals.mirrors.get(id)?.submissionIndex.size ?? 0, 0, `${caseDir}: related index already clean`)
+        assert.equal(internals.mirrors.get(id)?.consumedInputs === undefined, true, `${caseDir}: consume collection already clean`)
       } finally {
         await harness.close(BACKGROUND_CONTEXT)
         await store.close()
@@ -489,14 +489,14 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
       }
     }
 
-    // 即时完整回答（无流式 partial）：run 启动与结束 commit 间仅隔生成任务
-    // request 阶段的 generation 写入 commit —— 正是窗口最恶劣形态。
-    await runCase('ok', fauxAssistantMessage('瞬时回答'), 'completed')
-    // 即时失败（failNoModel 之外的模型错误路径：结算快照重标 failure.inputs）。
+    // i.e. when complete answer (without streaming partial):run start and end commit between only isolate generate task
+    // request phase generation write commit - - correct is window most poor form.
+    await runCase('ok', fauxAssistantMessage('instantaneous answer'), 'completed')
+    // i.e. when failed (failNoModel of outside model error path: compute snapshot heavy mark failure.inputs).
     await runCase('fail', fauxAssistantMessage('x', { errorMessage: 'boom', stopReason: 'error' }), 'failed')
   })
 
-  it('stopObserving 后在途异步 adoptInitial 不向 maps 复活条目', timeout, async () => {
+  it('stopObserving after in-flight async adoptInitial do not to maps re- item', timeout, async () => {
     const kernel = await openRuntime(join(root, 'stop-no-ghost'))
     const gate = deferred()
     try {
@@ -509,18 +509,18 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
           return fauxAssistantMessage('unused')
         },
       ])
-      void kernel.submitInput(1, '停观前的在途问题').catch(() => {})
+      void kernel.submitInput(1, 'stop observe before in-flight issue').catch(() => {})
       await started.promise
       await waitFor(() => kernel.getConversation(1).status === 'working')
       assert.equal(kernel.getConversation(1).status, 'working')
-      // 删除会话（内部 stopObserving）：令牌删除，在途回读作废。
+      // delete conversation (internal stopObserving): token delete, in-flight back read act abandon.
       const conv = await kernel.createConversation({})
       await kernel.deleteConversation(conv.id)
       const tracker = trackerOf(kernel)
       assert.equal(tracker.mirrors.has(conv.id), false)
       assert.equal(tracker.mirrors.get(conv.id)?.runFirstEntry === undefined, true)
       assert.equal(tracker.mirrors.has(conv.id), false)
-      // 中止不应替换仍在观察的 root 会话令牌。
+      // abort must not replace still in observe root conversation token.
       const genBefore = tracker.mirrors.get(1)?.observeGeneration
       await kernel.abortConversation(1)
       await kernel.waitForIdle(1).catch(() => {})
@@ -532,8 +532,8 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
   })
 })
 
-describe('settledRuns 容量淘汰与 stopObserving 清理', { timeout: 60_000 }, () => {
-  it('停观后迟到的结算失败不复活计数、错误或观察令牌', timeout, async () => {
+describe('settledRuns capacity eliminate and stopObserving clean up', { timeout: 60_000 }, () => {
+  it('stop observe after late to compute failed does not resurrect counter, error or observe token', timeout, async () => {
     const kernel = await openRuntime(join(root, 'late-settlement'))
     try {
       const conv = await kernel.createConversation({})
@@ -565,7 +565,7 @@ describe('settledRuns 容量淘汰与 stopObserving 清理', { timeout: 60_000 }
     }
   })
 
-  it('单会话 settledRunOrder 超过 64 个 runKey 时淘汰最旧键（settledRuns 同步收缩）', timeout, async () => {
+  it('single conversation settledRunOrder exceeds 64  runKey when eliminate most old key (settledRuns sync shrink)', timeout, async () => {
     const kernel = await openRuntime(join(root, 'cap-1'))
     try {
       const tracker = trackerOf(kernel)
@@ -578,14 +578,14 @@ describe('settledRuns 容量淘汰与 stopObserving 清理', { timeout: 60_000 }
       }
       const order = tracker.mirrors.get(conv.id)?.settledRunOrder
       assert.ok(order !== undefined)
-      assert.equal(order.length, 64, '容量上限 64')
-      assert.equal(order[0], `${conv.id}:7`, '最旧键（taskId=1..6）被淘汰')
-      assert.equal(order[order.length - 1], `${conv.id}:70`, '最新键保留')
+      assert.equal(order.length, 64, 'capacity cap 64')
+      assert.equal(order[0], `${conv.id}:7`, 'most old key (taskId=1..6) by eliminate')
+      assert.equal(order[order.length - 1], `${conv.id}:70`, 'most new key keep')
       for (let taskId = 1; taskId <= 6; taskId += 1) {
         assert.equal(
           tracker.settledRuns.has(`${conv.id}:${taskId}`),
           false,
-          `被淘汰键 ${taskId} 不在 settledRuns`,
+          `by eliminate key ${taskId} do not in settledRuns`,
         )
       }
       assert.equal(tracker.settledRuns.has(`${conv.id}:7`), true)
@@ -595,18 +595,18 @@ describe('settledRuns 容量淘汰与 stopObserving 清理', { timeout: 60_000 }
     }
   })
 
-  it('deleteConversation（stopObserving）彻底清理该会话全部内存镜像', timeout, async () => {
+  it('deleteConversation(stopObserving) completely clean up the conversation all memory mirror', timeout, async () => {
     const kernel = await openRuntime(join(root, 'stop-1'))
     try {
       const tracker = trackerOf(kernel)
       const conv = await kernel.createConversation({})
-      kernel.__faux.setResponses([fauxAssistantMessage('回答文本')])
-      await kernel.submitInput(conv.id, '问题')
+      kernel.__faux.setResponses([fauxAssistantMessage('answer text')])
+      await kernel.submitInput(conv.id, 'issue')
       await kernel.waitForIdle(conv.id)
-      assert.ok(tracker.settledRuns.size >= 1, '回合结算后 settledRuns 应有条目')
+      assert.ok(tracker.settledRuns.size >= 1, 'turn compute after settledRuns should has item')
       assert.ok(tracker.mirrors.get(conv.id)?.lastSettledRun !== undefined)
       await kernel.deleteConversation(conv.id)
-      assert.equal(tracker.settledRuns.size, 0, '该会话 settledRuns 前缀键全部清理')
+      assert.equal(tracker.settledRuns.size, 0, 'the conversation settledRuns prefix key all clean up')
       assert.equal(tracker.mirrors.has(conv.id), false)
       assert.equal(tracker.mirrors.has(conv.id), false)
       assert.equal(tracker.mirrors.has(conv.id), false)
@@ -620,7 +620,7 @@ describe('settledRuns 容量淘汰与 stopObserving 清理', { timeout: 60_000 }
     }
   })
 
-  it('反复建删 50 个会话后 tracker 内部各 Map 不残留任何键', timeout, async () => {
+  it('reverse re- create delete 50 conversation after tracker internal each Map leaves no residue any key', timeout, async () => {
     const kernel = await openRuntime(join(root, 'stop-50'))
     try {
       const tracker = trackerOf(kernel)
@@ -633,12 +633,12 @@ describe('settledRuns 容量淘汰与 stopObserving 清理', { timeout: 60_000 }
         await kernel.deleteConversation(conv.id)
       }
       assert.equal(tracker.settledRuns.size, 0)
-      // 全部按会话 Map 已聚合为 mirrors：仅剩仍在观察的根会话 1，无任何残留键。
+      // all by conversation Map already aggregate is mirrors: only remain still in observe conversation 1, without any leftover key.
       assert.equal(tracker.mirrors.size, 1)
       assert.deepEqual(
         [...tracker.mirrors.keys()],
         [1],
-        '仅根会话 1 仍在观察，其余 50 个已删会话镜像全部回收',
+        'only conversation 1 still in observe, the rest 50 already delete conversation mirror all reclaim',
       )
     } finally {
       await kernel.close()

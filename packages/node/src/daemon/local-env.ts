@@ -1,29 +1,29 @@
 /**
- * 零外部依赖的本机执行环境：仅用 Node.js 内置模块实现
- * `NodeEnvRpcFunctions` 所需的文件系统与 shell 能力（本地文件读写、
- * 行扫描、命令执行），语义与 `@earendil-works/pi-durable` 的
- * `NodeExecutionEnv` 1.5.0 对齐。与上游的手工同步点由契约测试钉住
- * （test/node-local-env-contract.test.ts：shell 探测结果、128+信号编号
- * 退出码、超时文案、溢写文件完整性、流式解码与行扫描口径）。
+ * zero external dependency local machine execute environment: only use Node.js inside placement module implement
+ * `NodeEnvRpcFunctions` which must file system and shell capability (local file read write,
+ * row scan, command execute), semantics and `@earendil-works/pi-durable` 
+ * `NodeExecutionEnv` 1.5.0 align. and upstream manually work sync point by contract test pin
+ * (test/node-local-env-contract.test.ts:shell probe result,128+signal edit number
+ * exit code, timeout text proposal, overflow write file complete, streaming decode and row scan opening path).
  *
- * 与 SDK 版本的差异（刻意为之）：
- * - 取消信号直接用原生 `AbortSignal`（不引入 chord 的 Context）；
- * - 不实现 `watch` / `listFiles`（NodeEnvRpcFunctions 不包含文件监听
- *   与递归列举接口；envListFiles 如实返回 not_supported）。
+ * and SDK version difference (moment intent is of):
+ * - cancel signal directly use original generate `AbortSignal`(does not introduce chord  Context);
+ * - do not implement `watch` / `listFiles`(NodeEnvRpcFunctions does not include file listen
+ *   and recursion column raise interface;envListFiles such as return not_supported).
  *
- * 所有文件系统与进程错误如实映射为 FileError / ExecutionError
- * （code 对齐 @helm/protocol 的 RpcFileErrorCode / RpcExecutionErrorCode），
- * 绝不静默降级或伪造结果。
+ * all file system and process error such as mapping is FileError / ExecutionError
+ * (code align @helm/protocol  RpcFileErrorCode / RpcExecutionErrorCode),
+ * never static default fall back or fabricate result.
  *
- * 实现按职责拆分为 local-env/ 子模块，本文件是组合根（LocalExecutionEnv
- * 编排各原语）与公共 API 门面：
- * - local-env/errors.ts：Result 信封、FileError / ExecutionError 与错误映射；
- * - local-env/decode.ts：StreamDecoder / LineScanner（对齐 pi-durable
- *   decode.ts / line-scan.ts）；
- * - local-env/readers.ts：TextLine / Binary / Dir 三类 Reader 与 FileInfo；
- * - local-env/shell.ts：shell 定位（含 WSL legacy）、进程树终止、exec
- *   选项类型与环境组装（对齐 pi coding-agent shell.ts）；
- * - local-env/target-path.ts：resolveTargetPath 统一目标路径解析原语。
+ * implement by responsibility split is local-env/ sub- module, this file is composition root (LocalExecutionEnv
+ * orchestration each original language) and public API gate side:
+ * - local-env/errors.ts:Result message seal,FileError / ExecutionError and error mapping;
+ * - local-env/decode.ts:StreamDecoder / LineScanner(align pi-durable
+ *   decode.ts / line-scan.ts);
+ * - local-env/readers.ts:TextLine / Binary / Dir three class Reader and FileInfo;
+ * - local-env/shell.ts:shell locate (contains WSL legacy), process tree terminate,exec
+ *   option type and environment group install (align pi coding-agent shell.ts);
+ * - local-env/target-path.ts:resolveTargetPath unify target path parse original language.
  */
 
 import { spawn } from 'node:child_process';
@@ -75,7 +75,7 @@ import {
 } from './local-env/shell.js';
 import { joinTargetPath, parentTargetPath, resolveTargetPath } from './local-env/target-path.js';
 
-// 公共 API 门面：保持与拆分前完全一致的导出面（消费方统一从本文件导入）。
+// public API gate side: keep and split before fully consistent export side (consumer unify from this file import).
 export type { Result, FileErrorCode, ExecutionErrorCode } from './local-env/errors.js';
 export { FileError, ExecutionError, ok, err } from './local-env/errors.js';
 export type { LineScan } from './local-env/decode.js';
@@ -108,16 +108,16 @@ export interface LocalExecutionEnvOptions {
   shellPath?: string;
   shellEnv?: NodeJS.ProcessEnv;
   /**
-   * 目标平台标识（缺省 process.platform）：win32 目标启用 protocol
-   * normalizeTargetPath 的 POSIX 视图确定性转换；测试注入用，生产不传。
+   * target platform identifier (default process.platform):win32 target enable protocol
+   * normalizeTargetPath  POSIX view determinism convert; test inject use, produce do not pass.
    */
   platform?: string;
-  /** 测试注入口：覆写 Shell 探测 I/O（生产不传）。 */
+  /** test inject opening: override Shell probe I/O(produce do not pass). */
   shellProbeIo?: ShellProbeIo;
 }
 
 export class LocalExecutionEnv {
-  /** 所有本机环境看到相同的文件。 */
+  /** all local machine environment see to identical file. */
   readonly id = 'node:local';
   cwd: string;
   #shellPath?: string;
@@ -134,7 +134,7 @@ export class LocalExecutionEnv {
     this.#shellProbeIo = options.shellProbeIo;
   }
 
-  /** file API 与 exec 共用的目标路径解析原语（见 resolveTargetPath）。 */
+  /** file API and exec shared use target path parse original language (see resolveTargetPath). */
   #resolvePath(path: string): Result<string> {
     return resolveTargetPath(this.cwd, path, this.#platform);
   }
@@ -156,9 +156,9 @@ export class LocalExecutionEnv {
     const timeoutMsResult = resolveTimeoutMs(options?.timeout);
     if (!timeoutMsResult.ok) return timeoutMsResult;
     const timeoutMs = timeoutMsResult.value;
-    // win32 目标：options.cwd 与会话 cwd 统一经 resolveTargetPath 解析
-    // （/mnt/<盘符>/… 等 POSIX 视图确定性转换，无盘符根显式失败）；
-    // posix 目标使用 node:path.posix 语义，避免 Windows 宿主污染目标路径。
+    // win32 target:options.cwd and conversation cwd unify via resolveTargetPath parse
+    // (/mnt/<symbol>/... etc. POSIX view determinism convert, without symbol explicit failed);
+    // posix target use node:path.posix semantics, avoid Windows host pollute target path.
     let cwd: string;
     let originalCwd: string | undefined;
     if (options?.cwd !== undefined) {
@@ -174,7 +174,7 @@ export class LocalExecutionEnv {
       }
       cwd = resolution.value;
     } else if (this.#platform === 'win32') {
-      // 会话 cwd 本身可能是 POSIX 视图：经同一原语规范化后再 spawn。
+      // conversation cwd itself may is POSIX view: via the same original language specification after again spawn.
       originalCwd = this.cwd;
       const resolution = this.#resolvePath(this.cwd);
       if (!resolution.ok) {
@@ -189,7 +189,7 @@ export class LocalExecutionEnv {
     } else {
       cwd = this.cwd;
     }
-    // 字符串命令经 shell 执行；参数数组直接执行程序，不经 shell 解析。
+    // string command via shell execute; parameter array directly execute program, do not via shell parse.
     let program: string;
     let args: string[];
     let stdinCommand: string | undefined;
@@ -210,9 +210,9 @@ export class LocalExecutionEnv {
       await access(cwd, constants.F_OK);
     } catch (error) {
       const cause = toError(error);
-      // win32 目标上解析可能改写了路径：诊断同时保留原始 cwd（options.cwd
-      // 或 POSIX 视图的会话 cwd）与解析后 cwd；posix 目标消息保持原样
-      // （非 Windows 行为不变）。
+      // win32 target on parse may change write path: diagnose also keep original cwd(options.cwd
+      // or POSIX view conversation cwd) and parse after cwd;posix target message keep original
+      // (non- Windows behavior do not change).
       const origin =
         originalCwd !== undefined && this.#platform === 'win32' && originalCwd !== cwd
           ? ` (resolved from ${originalCwd})`
@@ -243,10 +243,10 @@ export class LocalExecutionEnv {
         callbackError = new ExecutionError('callback_error', cause.message, cause);
         onAbort();
       };
-      // 每个流一个解码器：跨 chunk 劈开的字符在同一流内得以存活。
+      // each stream a decode: across chunk split character in the same stream inside obtain with store.
       const stdoutDecoder = new StreamDecoder();
       const stderrDecoder = new StreamDecoder();
-      // exec 结算后不再有输出到达调用方（例如孙进程持有 stdio）。
+      // exec compute after no longer has output reach caller (e.g. descendant process hold has stdio).
       const emit = (text: string, stream: 'stdout' | 'stderr') => {
         if (settled || text === '' || options?.onOutput === undefined || callbackError !== undefined) return;
         try {
@@ -255,7 +255,7 @@ export class LocalExecutionEnv {
           failCallback(error);
         }
       };
-      // spill 启动前的输出：计入阈值并保留为 spill 前缀。
+      // spill start before output: count threshold and keep is spill prefix.
       let seenBytes = 0;
       let seenNewlines = 0;
       const settle = (result: Result<ShellExecResult>) => {
@@ -405,8 +405,8 @@ export class LocalExecutionEnv {
             settle(err(spillError));
             return;
           }
-          // 被信号杀死（如 OOM killer）的进程无退出码：映射为惯例的
-          // 128 + 信号编号，调用方不会误判为成功退出。
+          // by signal kill die (such as OOM killer) process without exit code: mapping is convention
+          // 128 + signal edit number, caller will not mistakenly judge is succeeded exit.
           const exitCode =
             code ?? (exitSignal !== null ? 128 + ((osConstants.signals as Record<string, number>)[exitSignal] ?? 0) : 1);
           settle(ok({ exitCode, ...(spillPath === undefined ? {} : { spillPath }) }));
@@ -498,12 +498,12 @@ export class LocalExecutionEnv {
     try {
       let flags = constants.O_RDONLY;
       if (process.platform === 'win32') {
-        // Windows 无 O_NOFOLLOW：打开前检查最终组件（非竞态安全）。
+        // Windows without O_NOFOLLOW: open before check eventually component (non- race security).
         if (noFollow && (await lstat(resolved)).isSymbolicLink()) {
           return err(symlinkRefused(resolved));
         }
       } else {
-        // 非阻塞：打开 FIFO 不必等待写入者。
+        // non- block: open FIFO no need to wait for write.
         flags |= constants.O_NONBLOCK;
         if (noFollow) flags |= constants.O_NOFOLLOW;
       }
@@ -525,7 +525,7 @@ export class LocalExecutionEnv {
       return ok(new LocalBinaryReader(file, resolved));
     } catch (error) {
       await file?.close().catch(() => undefined);
-      // O_NOFOLLOW 把最终组件符号链接报为 ELOOP（部分 BSD 为 EMLINK）。
+      // O_NOFOLLOW eventually component symlink report is ELOOP(part BSD is EMLINK).
       if (noFollow && isNodeError(error) && (error.code === 'ELOOP' || error.code === 'EMLINK')) {
         return err(symlinkRefused(resolved, toError(error)));
       }
@@ -599,7 +599,7 @@ export class LocalExecutionEnv {
     let file: FileHandle | undefined;
     try {
       file = await openFile(resolved, 'r+');
-      // POSIX 拒绝对目录以写方式打开；Windows 能打开，须显式检查。
+      // POSIX reject for directory with write way open;Windows can open, must explicit check.
       if ((await file.stat()).isDirectory()) {
         return err(new FileError('is_directory', 'Is a directory', resolved));
       }
@@ -766,7 +766,7 @@ export class LocalExecutionEnv {
     }
   }
 
-  /** 杀掉本环境仍在运行的全部命令（属主停机用，绝非单请求用）。 */
+  /** kill this environment still in run all command (belong main stop machine use, absolute non- single request use). */
   async cleanup(): Promise<void> {
     for (const pid of this.#activeChildPids) killProcessTree(pid);
     this.#activeChildPids.clear();

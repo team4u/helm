@@ -1,36 +1,36 @@
 /**
- * PluginClientCompiler：client.tsx 轨道的宿主侧编译器（@helm/plugin-build，内核外实现）。
+ * PluginClientCompiler:client.tsx track path host side compiler (@helm/plugin-build, kernel outside implement).
  *
- * 本模块是 PluginBuildProvider.compileClientModule 的实现体，由产品组合根（hub）
- * 注入内核 PluginHost；内核自身不依赖 esbuild（契约见 @helm/protocol plugin-build.ts）。
+ * this module is PluginBuildProvider.compileClientModule implement body, by produce product composition root (hub)
+ * inject kernel PluginHost; kernel itself independent of esbuild(contract see @helm/protocol plugin-build.ts).
  *
- * 职责（只做机制）：
- * - 把插件 clientRoot 内的相对 .ts/.tsx 入口编译为浏览器 ESM（esbuild bundle + metafile）；
- * - 依赖闭包与 hash 以 esbuild metafile 实际输入为准（export-from / 动态 import /
- *   .js / .json / .css 全部如实纳入；绝不靠源码正则猜测 import），缓存复查逐依赖
- *   sha256 比对，源未变直接复用磁盘产物，绝不重复编译；
- * - 宿主共享依赖（react / react-dom / lucide-react / @helm/plugin-client）经 esbuild
- *   虚拟模块 shim 处理：shim 体内 `module.exports = globalThis.__helm_shared_*`，
- *   named / namespace / default / as-别名 / export-from 全部由 esbuild 生成合法
- *   ESM 绑定（对比正则改写 import 会产出 `const {useState as s}` 这类非法 JS），
- *   运行时与宿主共享同一实例，绝不打包第二份 React；
- * - CSS（v3 起）：交给 esbuild 原生 CSS bundling（虚拟 outfile + write:false，不落
- *   真实产物文件），本地 @import 按依赖顺序原生合并；合并结果以具名导出
- *   `__helmClientCss`（@helm/protocol PLUGIN_CLIENT_CSS_EXPORT）附在 JS 产物尾部，
- *   产物本身不注入 DOM——加载器在 import 成功且缓存仍有效后才注入样式；无 CSS
- *   时不产出该导出（加载器按空处理）；
- *   - CSS 资源 URL 只允许 data: 与 http(s)/协议相对的显式绝对地址（不依赖插件
- *     路径基址）；本地相对 / 根相对 / 片段 URL 显式编译错误并建议内联 data:；
- *   - 远程 @import 显式拒绝（不受本地依赖校验与缓存管控）；本地 @import 进
- *     依赖 hash；判定一律使用 esbuild resolver 的 kind（import-rule / url-token），
- *     绝不用源码正则猜测语法（注释里的 @import/url() 不是 import）；
- * - containment：入口与每个被加载的本地文件 realpath 都必须位于 clientRoot realpath
- *   之内（符号链接逃逸逐文件拦截）；非共享裸依赖（npm 包）显式拒绝——当前不支持
- *     npm 安装，绝不把 node_modules 或根外文件悄悄打进 bundle；
- * - 产物落盘：randomUUID 临时文件 + rename 原子改名；同 (pluginId, module, root)
- *   并发编译合并同一 in-flight Promise，失败清除可重试。
+ * responsibility (only do mechanism):
+ * - plugin clientRoot inside each other for .ts/.tsx entry compile is browser ESM(esbuild bundle + metafile);
+ * - dependency closed package and hash with esbuild metafile actual input is allow (export-from / motion state import /
+ *   .js / .json / .css all such as accept; never rely source code regex guess import), cache re- inspect one by one dependency
+ *   sha256 than for, source not change directly re- use disk artifact, never duplicate compile;
+ * - host sharing dependency (react / react-dom / lucide-react / @helm/plugin-client) via esbuild
+ *   virtual module shim handle:shim body inside `module.exports = globalThis.__helm_shared_*`,
+ *   named / namespace / default / as-alias / export-from all by esbuild generate legal
+ *   ESM bind set (compare regex change write import will produce out `const {useState as s}` this kind of illegal JS),
+ *   runtime and host sharing the same instance, never bundle second React;
+ * - CSS(v3 start): hand over to esbuild original generate CSS bundling(virtual outfile + write:false, do not
+ *   real artifact file), local @import by dependency order original generate merge; merge result with tool name export
+ *   `__helmClientCss`(@helm/protocol PLUGIN_CLIENT_CSS_EXPORT) attach in JS artifact tail part,
+ *   artifact itself do not inject DOM- - load in import succeeded and cache still valid after only then inject style; without CSS
+ *   when do not produce out the export (load by empty handle);
+ *   - CSS asset URL only allows data: and http(s)/protocol each other for explicit absolute address (independent of plugin
+ *     path base address); local each other for / each other for / fragment URL explicit compile error and create protocol inline data:;
+ *   - far process @import explicit reject (do not subject to local dependency validate and cache manage control); local @import enter
+ *     dependency hash; decide one rule use esbuild resolver  kind(import-rule / url-token),
+ *     never use source code regex guess language method (note release in @import/url() is not import);
+ * - containment: entry and each by load local file realpath all must at clientRoot realpath
+ *   of inside (symlink escape one by one file intercept); non- sharing bare dependency (npm package) explicit reject - - when before unsupported
+ *     npm install, never node_modules or outside file silently hit enter bundle;
+ * - artifact:randomUUID temp file + rename atomic change name; same (pluginId, module, root)
+ *   concurrency compile merge the same in-flight Promise, failed clear can retry.
  *
- * 失败显式抛 HelmError（含 esbuild 诊断），绝不静默降级或返回空产物。
+ * failed explicit throw HelmError(contains esbuild diagnose), never static default fall back or return empty artifact.
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, realpathSync, statSync, readFileSync, writeFileSync, renameSync, existsSync, rmSync } from 'node:fs';
@@ -52,10 +52,10 @@ import {
 } from './client-chunk-graph.js';
 
 /**
- * 宿主与插件共享的浏览器端运行时依赖：编译期拦截为虚拟 shim 模块（绝不解析
- * node_modules），运行时经 globalThis.__helm_shared_* 命名空间取宿主同一实例。
- * 具体渲染技术（如图表库）不入此清单——插件自有 npm 依赖走受控解析 bundle
- *（见 allowedNpmSpecifiers / containmentPlugin 的 npm 分支）。
+ * host and plugin sharing browser end runtime dependency: compile time intercept is virtual shim module (never parse
+ * node_modules), runtime via globalThis.__helm_shared_* naming empty between take host the same instance.
+ * specific render technique (such as diagram table store) do not this manifest - - plugin self has npm dependency away subject to control parse bundle
+ *(see allowedNpmSpecifiers / containmentPlugin  npm branch).
  */
 export const CLIENT_SHARED_EXTERNALS = [
   'react',
@@ -66,7 +66,7 @@ export const CLIENT_SHARED_EXTERNALS = [
   '@helm/plugin-client',
 ] as const;
 
-/** 共享说明符 -> 宿主全局命名空间名（宿主页面/测试进程挂载；缺一即运行时显式报错）。 */
+/** sharing note symbol -> host global naming empty between name (host page/test process mount; missing one i.e. runtime explicit errors). */
 export const CLIENT_SHARED_GLOBALS: Readonly<Record<string, string>> = Object.freeze({
   react: '__helm_shared_react',
   'react-dom': '__helm_shared_react_dom',
@@ -76,23 +76,23 @@ export const CLIENT_SHARED_GLOBALS: Readonly<Record<string, string>> = Object.fr
   '@helm/plugin-client': '__helm_shared_plugin_client',
 });
 
-/** 依赖清单（deps.json）结构版本；v2 为 CSS-as-JS 旧格式，v3 起原生 CSS bundling，v4 起含受控 npm 依赖，v5 起启用 esbuild minify 与预压缩，v6 起支持代码分割与异步 chunk 桥，v7 起共享 chunk 注册改用 esbuild 命名空间桥（key 含 pluginId/moduleRef），v8 起记录受控 npm 依赖声明集。 */
+/** dependency manifest (deps.json) structure version;v2 is CSS-as-JS old format,v3 start original generate CSS bundling,v4 start contains subject to control npm dependency,v5 start enable esbuild minify and pre- compress,v6 start support code split and async chunk bridge,v7 start sharing chunk register change use esbuild naming empty between bridge (key contains pluginId/moduleRef),v8 start record subject to control npm dependency declaration collection. */
 const DEPS_LIST_VERSION = 8;
 
-/** 编译产物（@helm/protocol PluginClientBundle 的本地别名，供测试与工具直接引用）。 */
+/** compile artifact (@helm/protocol PluginClientBundle local alias, supply test and tool directly reference). */
 export type ClientCompileResult = PluginClientBundle;
 
 // ---------------------------------------------------------------------------
-// 并发合并：同 key 在途编译共享同一 Promise；失败即清除可重试
+// concurrency merge: same key in-flight compile sharing the same Promise; failed i.e. clear can retry
 // ---------------------------------------------------------------------------
 
 const inflight = new Map<string, Promise<ClientCompileResult>>();
 
 interface MemoryCompiledEntry {
   result: ClientCompileResult;
-  /** 本地依赖 mtime 快照（相对 clientRoot 的绝对路径）。 */
+  /** local dependency mtime snapshot (each other for clientRoot absolute path). */
   localMtimes: Map<string, number>;
-  /** 受控 npm 依赖 stat 指纹（path -> { mtimeMs, size }）：任一变化才做逐文件 sha256 复核。 */
+  /** subject to control npm dependency stat refer grain (path -> { mtimeMs, size }): any one change only then do one by one file sha256 re-check. */
   npmStats?: Map<string, { mtimeMs: number; size: number }>;
   root: string;
 }
@@ -104,7 +104,7 @@ export function clearClientCompilerMemoryCache(): void {
 }
 
 /**
- * 根据 (stagingDir, baseName, contentHash, chunkName) 读取单个 chunk 内容与 gzip 字节。
+ * based on (stagingDir, baseName, contentHash, chunkName) read single chunk content and gzip byte.
  */
 export function readCachedChunk(
   stagingDir: string,
@@ -132,11 +132,11 @@ export function readCachedChunk(
 }
 
 /**
- * 编译插件客户端模块（并发安全：同 key 在途编译合并；缓存命中时零编译）。
- * @param pluginId 插件 ID（缓存目录隔离单位）
- * @param clientRoot 插件声明并已校验的绝对源根目录
- * @param moduleRef 相对入口（assertModuleRefShape 已通过）
- * @param cacheDir 宿主 dataDir（产物与依赖清单落盘 <cacheDir>/cache/plugin-staging/<pluginId>/）
+ * compile plugin client module (concurrency-safe: same key in-flight compile merge; cache hit when zero compile).
+ * @param pluginId plugin ID(cache directory isolated unit)
+ * @param clientRoot plugin declaration and already validate absolute source directory
+ * @param moduleRef each other for entry (assertModuleRefShape already via)
+ * @param cacheDir host dataDir(artifact and dependency manifest <cacheDir>/cache/plugin-staging/<pluginId>/)
  */
 export async function compilePluginClientModule(
   pluginId: string,
@@ -147,7 +147,7 @@ export async function compilePluginClientModule(
 ): Promise<ClientCompileResult> {
   assertModuleRefShape(pluginId, moduleRef);
   const npmKey = npmRootsKey(options?.npmRoots ?? []);
-  const key = `${pluginId}\0${moduleRef}\0${realPathOrThrow(clientRoot, `插件 ${pluginId} 的 clientRoot 不可访问：${clientRoot}`)}\0${npmKey}`;
+  const key = `${pluginId}\0${moduleRef}\0${realPathOrThrow(clientRoot, `plugin ${pluginId}  clientRoot cannot access:${clientRoot}`)}\0${npmKey}`;
   const pending = inflight.get(key);
   if (pending) return pending;
   const run = compileUncached(pluginId, clientRoot, moduleRef, cacheDir, options?.npmRoots ?? []).finally(() => {
@@ -157,29 +157,29 @@ export async function compilePluginClientModule(
   return run;
 }
 
-/** 依赖清单（deps.json）结构：跨重启可复查的缓存凭据。 */
+/** dependency manifest (deps.json) structure: across restarts can re- inspect cache credentials. */
 interface DepsListFile {
   version: typeof DEPS_LIST_VERSION
   module: string
-  /** clientRoot realpath（根变更/移动后旧缓存直接失效，不误用）。 */
+  /** clientRoot realpath(change/move after old cache directly expires, do not mistakenly use). */
   root: string
   contentHash: string
-  /** 全部本地依赖：相对 root 的路径 + 内容 sha256（含入口自身）。 */
+  /** all local dependency: each other for root path + content sha256(contains entry itself). */
   dependencies: Array<{ path: string; sha256: string }>
-  /** 受控 npm 依赖：解析根标识 + 绝对路径 + 内容 sha256（v4 新增）。 */
+  /** subject to control npm dependency: parse identifier + absolute path + content sha256(v4 new increase). */
   npmDependencies?: Array<{ root: string; path: string; sha256: string }>
-  /** 受控 npm 依赖声明（解析根 + 精确说明符），用于防止声明撤销后回放旧 bundle。 */
+  /** subject to control npm dependency declaration (parse + precise note symbol), used to guard against declaration undo after back put old bundle. */
   npmSpecifiers?: string[]
-  /** 入口具名导出（旧清单缺省时缓存命中方拿不到 exports，需 exports 的调用方应重新编译或容错）。 */
+  /** entry tool name export (old manifest default when cache hit way take fewer than exports, must exports caller should re- compile or fault tolerance). */
   exports?: string[]
-  /** 异步 chunk 文件名清单（v6 新增）。 */
+  /** async chunk filename manifest (v6 new increase). */
   chunks?: string[]
 }
 
 /**
- * 受控 npm 依赖声明：specifiers 为允许的精确裸说明符（含子路径需逐项声明），
- * packageRoot 是提供这些包的解析根（通常为内置插件宿主包根，node_modules 内）。
- * 解析产物按文件 realpath containment 校验后随本地依赖一并进 deps hash 与缓存复查。
+ * subject to control npm dependency declaration:specifiers is allows precise bare note symbol (contains sub- path must one by one items declaration),
+ * packageRoot is provide these package parse (usually is built-in plugin host package,node_modules inside).
+ * parse artifact by file realpath containment validate after follow local dependency one and enter deps hash and cache re- inspect.
  */
 export type ClientNpmRoot = PluginClientNpmRoot;
 
@@ -203,13 +203,13 @@ async function compileUncached(
 ): Promise<ClientCompileResult> {
   const rootReal = realPathOrThrow(
     clientRoot,
-    `插件 ${pluginId} 的 clientRoot 不存在或不可访问：${clientRoot}`,
+    `plugin ${pluginId}  clientRoot missing or cannot access:${clientRoot}`,
   );
   const entryReal = assertEntryInsideRoot(pluginId, rootReal, moduleRef);
 
-  // 1. 进程内内存缓存快路径：本地依赖按 mtime 判定；受控 npm 依赖按 (mtime, size)
-  //    指纹判定，任一变化才退回逐文件 sha256 复核（磁盘清单复查），npm 内容更新后
-  //    绝不永久返回旧 bundle。
+  // 1. process inside memory cache fast path: local dependency by mtime decide; subject to control npm dependency by (mtime, size)
+  //    refer grain decide, any one change only then retreat back one by one file sha256 re-check (disk manifest re- inspect),npm content update after
+  //    never forever long return old bundle.
   const npmKey = npmRootsKey(npmRoots);
   const memKey = `${pluginId}\0${moduleRef}\0${rootReal}\0${npmKey}`;
   const memEntry = memoryCompiledCache.get(memKey);
@@ -251,14 +251,14 @@ async function compileUncached(
   const baseName = safeFileName(moduleRef);
   const depsListPath = join(stagingDir, `${baseName}.deps.json`);
 
-  // 缓存复查：清单合法且每个依赖 sha256 与磁盘一致时复用产物，零编译
+  // cache re- inspect: manifest legal and each dependency sha256 and disk consistent when re- use artifact, zero compile
   const cached = readCachedResult(stagingDir, depsListPath, rootReal, moduleRef, pluginId, npmRoots);
   if (cached) {
     recordMemoryCache(memKey, rootReal, depsListPath, cached);
     return cached;
   }
 
-  // Pass 1：开启 splitting: true 的内存构建
+  // Pass 1: open start splitting: true memory build
   let pass1Result: Awaited<ReturnType<typeof build>>;
   try {
     pass1Result = await build({
@@ -284,7 +284,7 @@ async function compileUncached(
   } catch (err) {
     if (err instanceof HelmError) throw err;
     const message = err instanceof Error ? err.message : String(err);
-    throw new HelmError('client_compile_failed', `插件 ${pluginId} 编译 ${moduleRef} 失败：${message}`, 422, {
+    throw new HelmError('client_compile_failed', `plugin ${pluginId} compile ${moduleRef} failed:${message}`, 422, {
       pluginId,
       module: moduleRef,
     });
@@ -293,14 +293,14 @@ async function compileUncached(
   const pass1Metafile = pass1Result.metafile;
   const pass1OutputFiles = pass1Result.outputFiles;
   if (!pass1Metafile || !pass1OutputFiles) {
-    throw new HelmError('client_compile_failed', `插件 ${pluginId} Pass 1 内存构建未产出 metafile 或 outputFiles`, 500);
+    throw new HelmError('client_compile_failed', `plugin ${pluginId} Pass 1 memory build not produce out metafile or outputFiles`, 500);
   }
 
-  // 校验保留导出
+  // validate keep export
   if (Object.values(pass1Metafile.outputs).some((file) => file.exports?.includes(PLUGIN_CLIENT_CSS_EXPORT))) {
     throw new HelmError(
       'client_compile_failed',
-      `插件 ${pluginId} 模块 ${moduleRef} 占用了编译器保留导出名 "${PLUGIN_CLIENT_CSS_EXPORT}"，请改名该导出`,
+      `plugin ${pluginId} module ${moduleRef} occupy compiler keep export name "${PLUGIN_CLIENT_CSS_EXPORT}", please change name the export`,
       422,
       { pluginId, module: moduleRef, reservedExport: PLUGIN_CLIENT_CSS_EXPORT },
     );
@@ -326,7 +326,7 @@ async function compileUncached(
 
   const css = cssFiles.join('\n');
 
-  // 寻找 entryBaseName
+  // seek entryBaseName
   const relEntry = relative(rootReal, entryReal);
   let entryBaseName = '';
   for (const [b, meta] of metaByBase) {
@@ -341,7 +341,7 @@ async function compileUncached(
     } else {
       throw new HelmError(
         'client_compile_failed',
-        `插件 ${pluginId} 编译 ${moduleRef} 无法唯一定位入口 JS 产物`,
+        `plugin ${pluginId} compile ${moduleRef} cannot unique locate entry JS artifact`,
         500,
         { pluginId, module: moduleRef },
       );
@@ -351,14 +351,14 @@ async function compileUncached(
   const dependencies = collectLocalDependencies(pass1Metafile, rootReal);
   const npmDeps = collectNpmDependencies(pass1Metafile, rootReal, npmRoots);
 
-  // 入口静态闭包与可达动态导入目标：纯函数图规划（见 client-chunk-graph.ts）
+  // entry static closed package and can reach motion state import target: pure function diagram rule plan (see client-chunk-graph.ts)
   const baseClosure = collectStaticImportClosure(metaByBase, entryBaseName);
   const dynamicTargets = collectDynamicImportTargets(metaByBase, baseClosure);
 
   const jsMeta = metaByBase.get(entryBaseName);
   const entryExports = [...(jsMeta?.exports ?? []), ...(css.length > 0 ? [PLUGIN_CLIENT_CSS_EXPORT] : [])];
 
-  // 快路径（无代码分割的普通插件）
+  // fast path (without code split ordinary plugin)
   if (dynamicTargets.size === 0) {
     let mainOutput = '';
     try {
@@ -398,7 +398,7 @@ async function compileUncached(
     } catch (err) {
       if (err instanceof HelmError) throw err;
       const message = err instanceof Error ? err.message : String(err);
-      throw new HelmError('client_compile_failed', `插件 ${pluginId} 编译 ${moduleRef} 收敛失败：${message}`, 422, {
+      throw new HelmError('client_compile_failed', `plugin ${pluginId} compile ${moduleRef} converge failed:${message}`, 422, {
         pluginId,
         module: moduleRef,
       });
@@ -425,26 +425,26 @@ async function compileUncached(
     return finalResult;
   }
 
-  // 分包路径（dynamicTargets.size > 0）：集合划分 / 引用计数 / 共享 chunk 传递闭包 /
-  // 前置依赖拓扑排序为纯函数图规划（见 client-chunk-graph.ts，可独立单测）
+  // package path (dynamicTargets.size > 0): set divide / reference counter / sharing chunk pass closed package /
+  // pre- dependency topology sort is pure function diagram rule plan (see client-chunk-graph.ts, can independent single test)
   const { sharedAsyncChunks, chunkDeps } = computeAsyncChunkPlan(metaByBase, baseClosure, dynamicTargets);
 
   const allUnits = new Set<string>([...sharedAsyncChunks, ...dynamicTargets]);
   const list = buildDepsList(rootReal, moduleRef, dependencies, npmDeps, npmRoots, entryExports, Array.from(allUnits));
 
-  // 步骤 B（v7）：命名空间桥接注册 __helm_chunk_share。
-  // 对每个需注册的虚拟 chunk 生成 `import * as ns from <chunk>` 的桥接包装模块，
-  // 经 esbuild 生成「活 getter 命名空间对象」后整体写入 __helm_chunk_share：
-  // - 导出清单来自 Pass 1 metafile（生成器真实元数据），含 default / 再导出 /
-  //   字符串命名导出等全部形态，不再用正则猜测生成代码；
-  // - `import * as ns` 引用全部导出，Tree-shaking 无法丢弃任何绑定。
-  // key 按 pluginId \0 moduleRef \0 contentHash \0 chunk 隔离：两个插件同源同
-  // hash 时互不干扰，停用一个不会删掉另一个的共享表。
+  // step B(v7): naming empty between bridge register __helm_chunk_share.
+  // for each must register virtual chunk generate `import * as ns from <chunk>` bridge wrap module,
+  // via esbuild generate getter naming empty between object after whole write __helm_chunk_share:
+  // - export manifest from Pass 1 metafile(generate real metadata), contains default / again export /
+  //   string naming export etc. all form, no longer use regex guess generate code;
+  // - `import * as ns` reference all export,Tree-shaking cannot discard any bind set.
+  // key by pluginId \0 moduleRef \0 contentHash \0 chunk isolated: two plugin same source same
+  // hash when mutual do not interference, deactivate a will not delete another sharing table.
   const chunkShareKeyExpr = (file: string): string =>
     JSON.stringify(`${pluginId}\0${moduleRef}\0${list.contentHash}\0${file}`);
   const filesToRegister = new Set<string>([...baseClosure, ...sharedAsyncChunks]);
   filesToRegister.delete(entryBaseName);
-  const chunkNsBridges = new Map<string, string>(); // file -> 桥接包装模块的虚拟文件名
+  const chunkNsBridges = new Map<string, string>(); // file -> bridge wrap module virtual filename
   for (const F of filesToRegister) {
     if (!virtualFiles.has(F)) continue;
     const bridgeName = `__helm_ns__:${F}`;
@@ -456,19 +456,19 @@ async function compileUncached(
     );
   }
 
-  // 步骤 D：Pass 2 收敛构建（主包 + 共享 chunk 命名空间桥 + 异步单元）
-  // 主包额外前置 baseClosure 各文件的注册导入（ESM 按序评估：先依赖、再注册、后入口），
-  // 主模块求值时 baseClosure 共享表即已填充——异步 chunk 的 proxy 无需等待额外网络请求。
-  // 同一 vfs 模块在主包内只内联一份（注册桥与入口依赖指向同一实例，不产生体积重复）。
+  // step D:Pass 2 converge build (main package + sharing chunk naming empty between bridge + async unit)
+  // main package extra pre- baseClosure each file register import (ESM by order evaluate: first dependency, again register, after entry),
+  // main module seek value when baseClosure sharing table i.e. already fill - - async chunk  proxy no need to wait for extra network request.
+  // the same vfs module in main package inside only inline a (register bridge and entry dependency points to the same instance, produces no body accumulate duplicate).
   const baseRegisterFiles = [...baseClosure].filter((f) => f !== entryBaseName && virtualFiles.has(f));
   async function bundleUnit(unitName: string, isMain: boolean): Promise<string> {
-    // 主包/异步单元直接编译自身；共享 chunk 经命名空间桥包装编译（防 tree-shaking +
-    // 写入 __helm_chunk_share）。桥内 import * as ns 引用全部导出，esbuild 会把
-    // Pass 1 虚拟 chunk 原样内联并生成活 getter 命名空间对象。
+    // main package/async unit directly compile itself; sharing chunk via naming empty between bridge wrap compile (guard against tree-shaking +
+    // write __helm_chunk_share). bridge inside import * as ns reference all export,esbuild will
+    // Pass 1 virtual chunk original inline and generate getter naming empty between object.
     const isNsBridge = !isMain && sharedAsyncChunks.has(unitName);
     let unitCode = virtualFiles.get(isNsBridge ? chunkNsBridges.get(unitName)! : unitName);
     if (unitCode === undefined) {
-      throw new HelmError('client_compile_failed', `找不到虚拟文件 ${unitName}`, 500);
+      throw new HelmError('client_compile_failed', `find fewer than virtual file ${unitName}`, 500);
     }
     if (isMain && baseRegisterFiles.length > 0) {
       const regImports = baseRegisterFiles
@@ -502,12 +502,12 @@ async function compileUncached(
                 return { path: '__HELM_DYN_IMPORT__:' + target, external: true };
               }
               if (args.kind === 'import-statement') {
-                // 命名空间桥：`__helm_chunk__:<file>` 指向被桥接的 Pass 1 虚拟 chunk
-                // 本体（注意前缀判定必须在 basename 之前，basename 会剥掉前缀）
+                // naming empty between bridge:`__helm_chunk__:<file>` points to by bridge Pass 1 virtual chunk
+                // this body (note prefix decide must in basename before,basename will strip prefix)
                 if (args.path.startsWith('__helm_chunk__:')) {
                   return { path: basename(args.path.slice('__helm_chunk__:'.length)), namespace: 'vfs' };
                 }
-                // 主包前置注册导入：`__helm_ns__:<file>` 解析到对应注册桥模块
+                // main package pre- register import:`__helm_ns__:<file>` parse to for should register bridge module
                 if (args.path.startsWith('__helm_ns__:')) {
                   return { path: args.path, namespace: 'vfs' };
                 }
@@ -568,7 +568,7 @@ async function compileUncached(
   } catch (err) {
     if (err instanceof HelmError) throw err;
     const message = err instanceof Error ? err.message : String(err);
-    throw new HelmError('client_compile_failed', `插件 ${pluginId} 主包收敛编译失败：${message}`, 422, {
+    throw new HelmError('client_compile_failed', `plugin ${pluginId} main package converge failed to compile:${message}`, 422, {
       pluginId,
       module: moduleRef,
     });
@@ -589,13 +589,13 @@ async function compileUncached(
   } catch (err) {
     if (err instanceof HelmError) throw err;
     const message = err instanceof Error ? err.message : String(err);
-    throw new HelmError('client_compile_failed', `插件 ${pluginId} 分包收敛编译失败：${message}`, 422, {
+    throw new HelmError('client_compile_failed', `plugin ${pluginId} package converge failed to compile:${message}`, 422, {
       pluginId,
       module: moduleRef,
     });
   }
 
-  // 步骤 E：原子落盘与内存缓存
+  // step E: atomic and memory cache
   mkdirSync(stagingDir, { recursive: true });
   atomicWrite(join(stagingDir, `${baseName}.${list.contentHash}.mjs`), mainJs);
   let gzipped: Uint8Array | undefined;
@@ -642,16 +642,16 @@ function recordMemoryCache(
         /* ignore */
       }
     }
-    // 受控 npm 依赖：记录 stat 指纹（mtime + size），内容更新后快路径能可靠失效。
-    // stat 指纹与磁盘清单逐文件 sha256 复核共同构成两层防线：指纹变化直接失效；
-    // 指纹未变但清单 sha256 不一致（极端场景）也由磁盘复查兑底。
+    // subject to control npm dependency: record stat refer grain (mtime + size), content update after fast path can can rely expires.
+    // stat refer grain and disk manifest one by one file sha256 re-check jointly construct into two layer guard against line: refer grain change directly expires;
+    // refer grain not change but manifest sha256 inconsistent (extreme scenario) also by disk re- inspect honor bottom.
     const npmStats = new Map<string, { mtimeMs: number; size: number }>();
     for (const dep of list.npmDependencies ?? []) {
       try {
         const st = statSync(dep.path);
         npmStats.set(dep.path, { mtimeMs: st.mtimeMs, size: st.size });
       } catch {
-        /* 文件消失：不记录指纹，磁盘清单复查阶段会失效重编译 */
+        /* file disappear: do not record refer grain, disk manifest re- inspect phase will expires heavy compile */
       }
     }
     memoryCompiledCache.set(memKey, {
@@ -666,10 +666,10 @@ function recordMemoryCache(
 }
 
 // ---------------------------------------------------------------------------
-// CSS：序列化为具名导出附在 JS 产物尾部（产物不注入 DOM，加载器负责注入）
+// CSS: serialization is tool name export attach in JS artifact tail part (artifact do not inject DOM, load negative duty inject)
 // ---------------------------------------------------------------------------
 
-/** 元数据绑定必须避让产物中的局部变量，而非只避让其公开导出名。 */
+/** metadata bind set must avoid let artifact in local variable, while non- only avoid let its public export name. */
 function appendCssExport(js: string, css: string): string {
   if (css.length === 0) return js;
   let binding = '__helmCssText';
@@ -678,15 +678,15 @@ function appendCssExport(js: string, css: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// 共享依赖虚拟 shim：合法 ESM/CJS 绑定，运行时从宿主全局命名空间取同一实例
+// sharing dependency virtual shim: legal ESM/CJS bind set, runtime from host global naming empty between take the same instance
 // ---------------------------------------------------------------------------
 
 /**
- * esbuild 插件：把共享依赖说明符解析到 'helm-shared' 虚拟命名空间；shim 模块体
- * 只有 `module.exports = globalThis.__helm_shared_*`。esbuild 的 CJS-interop 层
- * （__toESM/__copyProps 活getter）为 named（含 as 别名）/ namespace / default /
- * export * from 全部生成合法绑定——这是「不用源码正则重写 import」的关键：
- * 正则改写会产生 `const { useState as s } = ...`（非法 JS）且漏 default+named 混合等形态。
+ * esbuild plugin: sharing dependency note symbol parse to 'helm-shared' virtual naming empty between;shim module body
+ * only `module.exports = globalThis.__helm_shared_*`.esbuild  CJS-interop layer
+ * (__toESM/__copyProps getter) is named(contains as alias)/ namespace / default /
+ * export * from all generate legal bind set - - this is do not use source code regex heavy write importkey:
+ * regex change write will produce `const { useState as s } = ...`(illegal JS) and leak default+named mixed etc. form.
  */
 function sharedShimPlugin(): EsbuildPlugin {
   return {
@@ -702,7 +702,7 @@ function sharedShimPlugin(): EsbuildPlugin {
       b.onLoad({ filter: /.*/, namespace: 'helm-shared' }, (args) => {
         const globalName = CLIENT_SHARED_GLOBALS[args.path];
         if (globalName === undefined) {
-          return { errors: [{ text: `未知共享依赖说明符：${args.path}` }] };
+          return { errors: [{ text: `unknown sharing dependency note symbol:${args.path}` }] };
         }
         return {
           contents: `module.exports = (globalThis.${globalName});`,
@@ -713,19 +713,19 @@ function sharedShimPlugin(): EsbuildPlugin {
   };
 }
 
-/** 精确匹配说明符字面量（不吞 react-dom / 子路径；共享子路径不在清单内会被显式拒绝）。 */
+/** precise match note symbol literal (do not swallow react-dom / sub- path; sharing sub- path do not in manifest inside will by explicit reject). */
 function exactLiteralFilter(spec: string): RegExp {
   return new RegExp(`^${spec.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`);
 }
 
 // ---------------------------------------------------------------------------
-// containment：本地文件逐个 realpath 校验；裸依赖显式拒绝
+// containment: local file one by one realpath validate; bare dependency explicit reject
 // ---------------------------------------------------------------------------
 
 /**
- * 受控 npm 说明符解析：命中声明的 specifiers 时把模块解析到对应 packageRoot 的
- * node_modules 内（不依赖 cwd，不受进程 chdir 影响）；返回 null 表示未声明。
- * 子路径说明符（如 'pkg/lib/x.js'）要求逐项显式声明，不做前缀通配。
+ * subject to control npm note symbol parse: hit declaration specifiers when module parse to for should packageRoot 
+ * node_modules inside (independent of cwd, do not subject to process chdir affect); return null means not declaration.
+ * sub- path note symbol (such as 'pkg/lib/x.js') want seek one by one items explicit declaration, does not prefix through match.
  */
 function resolveNpmSpecifier(
   spec: string,
@@ -735,8 +735,8 @@ function resolveNpmSpecifier(
     if (!root.specifiers.includes(spec)) continue;
     const nmReal = realpathOrNull(join(root.packageRoot, 'node_modules'));
     if (nmReal === null) continue;
-    // packageRoot/node_modules 内的包可能是 pnpm 符号链接（指向 workspace store）：
-    // 授权与解析都以包目录 realpath 为界（splitNpmSpecifier 剥离子路径）。
+    // packageRoot/node_modules inside package may is pnpm symlink (points to workspace store):
+    // authorization and parse all with package directory realpath is boundary (splitNpmSpecifier strip sub- path).
     const { pkg, sub } = splitNpmSpecifier(spec);
     const pkgReal = realpathOrNull(join(nmReal, pkg));
     if (pkgReal === null) continue;
@@ -748,11 +748,11 @@ function resolveNpmSpecifier(
 }
 
 /**
- * 解析 npm 包目录的 ESM 入口（package.json exports[condition] / module / main）。
- * 只读字段并校验目标存在；任何字段非法都返回 null（交回上层按未声明依赖拒绝），
- * 绝不让 esbuild 对自定义路径做目录猜测。
+ * parse npm package directory ESM entry (package.json exports[condition] / module / main).
+ * only read field and validate target store in; any field illegal all return null(hand over back on layer by not declaration dependency reject),
+ * never let esbuild for self define path do directory guess.
  */
-/** spec 拆为「包名 + 子路径」：@scope/name 与 name 两种形态，其余为子路径段。 */
+/** spec split is package name + sub- path:@scope/name and name two kinds of form, the rest is sub- path segment. */
 function splitNpmSpecifier(spec: string): { pkg: string; sub: string } {
   const parts = spec.split('/');
   if (spec.startsWith('@')) {
@@ -762,9 +762,9 @@ function splitNpmSpecifier(spec: string): { pkg: string; sub: string } {
 }
 
 /**
- * 解析 npm 包（或其子路径）入口：package.json exports 子路径映射（import/default）→
- * module/main（仅根）；无 exports 时子路径按包内相对路径直取。任何字段非法都返回
- * null（按未声明依赖拒绝），绝不让 esbuild 对自定义路径做目录猜测。
+ * parse npm package (or its sub- path) entry:package.json exports sub- path mapping (import/default)→
+ * module/main(only); without exports when sub- path by package inside relative path direct take. any field illegal all return
+ * null(by not declaration dependency reject), never let esbuild for self define path do directory guess.
  */
 function resolveNpmPackageEntry(pkgDir: string, spec: string): string | null {
   const pkgJsonPath = join(pkgDir, 'package.json');
@@ -781,7 +781,7 @@ function resolveNpmPackageEntry(pkgDir: string, spec: string): string | null {
   if (exp !== null && typeof exp === 'object' && !Array.isArray(exp)) {
     const entry = (exp as Record<string, unknown>)[exportKey];
     if (entry !== null && typeof entry === 'object' && !Array.isArray(entry)) {
-      // 条件值可能是字符串（"import": "./x.mjs"）或嵌套对象（{ import: { default } }）。
+      // condition value may is string ("import": "./x.mjs") or embed set object ({ import: { default } }).
       const readCond = (value: unknown): string | null => {
         if (typeof value === 'string') return value;
         if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
@@ -814,23 +814,23 @@ function resolveNpmPackageEntry(pkgDir: string, spec: string): string | null {
 }
 
 /**
- * esbuild 插件：
- * - 裸说明符：共享依赖由 sharedShimPlugin（先注册）处理；受控 npm 说明符（调用方
- *   显式声明 specifiers + packageRoot）解析进 bundle 并逐文件 containment；其余
- *   裸说明符显式编译错误（绝不静默解析任意 node_modules）；CSS url()/@import 引用
- *   交由 cssPolicyPlugin 处理；
- * - 本地文件 onLoad 阶段 realpath containment：越出 clientRoot realpath（含符号链接
- *   逃逸和 CSS @import 越根）即拒绝——旧实现只检查入口，依赖文件可把根外代码带进 bundle。
+ * esbuild plugin:
+ * - bare note symbol: sharing dependency by sharedShimPlugin(first register) handle; subject to control npm note symbol (caller
+ *   explicit declaration specifiers + packageRoot) parse enter bundle and one by one file containment; the rest
+ *   bare note symbol explicit compile error (never static default parse any node_modules);CSS url()/@import reference
+ *   hand over by cssPolicyPlugin handle;
+ * - local file onLoad phase realpath containment: exceeds out clientRoot realpath(contains symlink
+ *   escape and CSS @import exceeds) i.e. reject - - old implement only check entry, dependency file can outside code carries enter bundle.
  */
 function containmentPlugin(
   pluginId: string,
   rootReal: string,
   npmRoots: ReadonlyArray<ClientNpmRoot> = [],
 ): EsbuildPlugin {
-  // npm 闭包授权表：经受控解析（声明说明符，或已授权包内文件的传递裸说明符）
-  // 解析出的「包目录 realpath」集合。授权以包目录为单位——相对导入与包内
-  // node_modules 传递解析天然落在授权目录内；解析即授权，符号链接布局
-  //（pnpm .pnpm store）不影响边界判定。
+  // npm closed package authorization table: via subject to control parse (declaration note symbol, or already authorization package inside file pass bare note symbol)
+  // parse out package directory realpathset. authorization with package directory is unit - - each other for import and package inside
+  // node_modules pass parse day however in authorization directory inside; parse i.e. authorization, symlink layout
+  //(pnpm .pnpm store) does not affect boundary decide.
   const authorizedNpmDirs = new Set<string>();
   const authorizeNpmPackageDir = (pkgDir: string): string | null => {
     const real = realpathOrNull(pkgDir);
@@ -847,49 +847,49 @@ function containmentPlugin(
   return {
     name: 'helm-containment',
     setup(b) {
-      // 相对导入：无需单独授权——包目录授权模型下相对目标天然位于已授权目录内
-      //（如 mermaid.core.mjs -> ./chunks/*.mjs）；交回 esbuild 默认解析。
+      // each other for import: no need to separate authorization - - package directory authorization model under each other for target day however at already authorization directory inside
+      //(such as mermaid.core.mjs -> ./chunks/*.mjs); hand over back esbuild by default parse.
       b.onResolve({ filter: /^[^./]/ }, (args) => {
-        // 盘符 / UNC 绝对路径不是裸说明符：filter 只排除 `.` 与 `/` 开头，
-        // `D:\...`、`\\server\share\...` 会落进来（Windows 上入口与本地依赖
-        // 全为此形态）。交回 esbuild 默认解析。
+        // symbol / UNC absolute path is not bare note symbol:filter only exclude `.` and `/` open head,
+        // `D:\...`,`\\server\share\...` will enter come (Windows on entry and local dependency
+        // all is this form). hand over back esbuild by default parse.
         if (isAbsoluteTargetPath(args.path)) return null;
-        // CSS 语法引用（url() 资源 / @import）不是 npm 说明符：交由 cssPolicyPlugin
-        // 按资源策略处理（data:/https: 放行，本地相对显式拒绝），绝不误报裸依赖
+        // CSS language method reference (url() asset / @import) is not npm note symbol: hand over by cssPolicyPlugin
+        // by asset policy handle (data:/https: let through, local each other for explicit reject), never mistakenly report bare dependency
         if (args.kind === 'url-token' || args.kind === 'import-rule') return null;
-        // 共享说明符由 sharedShimPlugin（先注册）处理
+        // sharing note symbol by sharedShimPlugin(first register) handle
         if ((CLIENT_SHARED_EXTERNALS as readonly string[]).includes(args.path)) return null;
-        // 受控 npm 说明符：解析进声明的 packageRoot 并授权所在包目录（解析即授权）。
+        // subject to control npm note symbol: parse enter declaration packageRoot and authorization which in package directory (parse i.e. authorization).
         const npm = resolveNpmSpecifier(args.path, npmRoots);
         if (npm !== null) {
           authorizeNpmPackageDir(npm.pkgDir);
           return { path: npm.path };
         }
-        // 已声明但解析失败（未安装/入口缺失）：与未声明严格区分，绝不误导排查方向。
+        // already declaration but failed to parse (not installed/entry missing): and not declaration strictly zone, never mistakenly lead troubleshoot direction.
         const declaredRoot = npmRoots.find((r) => r.specifiers.includes(args.path));
         if (declaredRoot !== undefined) {
           return {
             errors: [{
               text:
-                `插件 ${pluginId} 声明的前端依赖 "${args.path}" 在 ${join(declaredRoot.packageRoot, 'node_modules')} 内不可解析` +
-                '（依赖未安装或包入口缺失）；请在插件目录安装该依赖后重试（受管安装由 install/update 自动补装）',
+                `plugin ${pluginId} declaration frontend dependency "${args.path}" in ${join(declaredRoot.packageRoot, 'node_modules')} inside cannot parse` +
+                '(dependency not installed or package entry missing); please in plugin directory install the dependency after retry (managed install by install/update automatically patch install)',
             }],
           };
         }
-        // 传递依赖：导入方位于已授权包目录内时，交回 esbuild 原生解析；
-        // onLoad 会按实际文件路径做授权与 containment 校验。
+        // pass dependency: import way at already authorization package directory inside when, hand over back esbuild original generate parse;
+        // onLoad will by actual file path do authorization and containment validate.
         if (args.importer !== '') {
           const importerReal = realpathOrNull(args.importer);
           if (importerReal !== null && isNpmAuthorized(importerReal)) {
             return null;
           }
         }
-        const importer = args.importer || '入口';
+        const importer = args.importer || 'entry';
         return {
           errors: [{
             text:
-              `插件 ${pluginId} 编译拒绝裸依赖 "${args.path}"（被 ${importer} 引入）：` +
-              `未声明为受控 npm 依赖；clientRoot 内只允许相对导入、共享依赖（${CLIENT_SHARED_EXTERNALS.join(', ')}）与声明的 npm 说明符`,
+              `plugin ${pluginId} compile reject bare dependency "${args.path}"(by ${importer} introduce):` +
+              `not declaration is subject to control npm dependency;clientRoot inside only allows each other for import, sharing dependency (${CLIENT_SHARED_EXTERNALS.join(', ')}) and declaration npm note symbol`,
           }],
         };
       });
@@ -900,7 +900,7 @@ function containmentPlugin(
         if (candidate === null || isInside(rootReal, candidate) || isNpmAuthorized(candidate)) return null;
         return {
           errors: [{
-            text: `插件 ${pluginId} 编译拒绝越界的相对导入（可能为 ../ 越根或未声明的 npm 文件）：${candidate}`,
+            text: `plugin ${pluginId} compile reject out of bounds each other for import (may is ../ exceeds or not declaration npm file):${candidate}`,
           }],
         };
       });
@@ -912,8 +912,8 @@ function containmentPlugin(
         const inClientRoot = isInside(rootReal, real);
         const inNpmRoot = isNpmAuthorized(real);
         if (!inClientRoot && !inNpmRoot) {
-          // clientRoot 的相对越根导入已在 onResolve 阶段拒绝；来自已授权 npm
-          // 包的传递依赖由本回调按 node_modules 包目录逐步纳入授权。
+          // clientRoot each other for exceeds import already in onResolve phase reject; from already authorization npm
+          // package pass dependency by this call back by node_modules package directory one by one step accept authorization.
           if (real.includes(sep + 'node_modules' + sep)) {
             const pkgDir = findPackageDirOf(real);
             if (pkgDir !== null) {
@@ -923,7 +923,7 @@ function containmentPlugin(
           }
           return {
             errors: [{
-              text: `插件 ${pluginId} 编译拒绝越界的文件（可能为 ../ 越根、符号链接逃逸或未声明的 npm 解析）：${real}`,
+              text: `plugin ${pluginId} compile reject out of bounds file (may is ../ exceeds, symlink escape or not declaration npm parse):${real}`,
             }],
           };
         }
@@ -934,12 +934,12 @@ function containmentPlugin(
 }
 
 // ---------------------------------------------------------------------------
-// CSS 资源策略：esbuild resolver kind 判定（绝不用源码正则猜语法）
+// CSS asset policy:esbuild resolver kind decide (never use source code regex guess language method)
 // ---------------------------------------------------------------------------
 
 /**
- * 允许的 CSS 资源 URL：不依赖插件路径基址的显式绝对地址（data: 内联与
- * http(s)/协议相对外链）。空串（url() 无参）原样保留（合法 CSS，由浏览器处理）。
+ * allows CSS asset URL: independent of plugin path base address explicit absolute address (data: inline and
+ * http(s)/protocol each other for outside chain). empty string (url() without reference) original keep (legal CSS, by browser handle).
  */
 function isAllowedCssAssetUrl(rawUrl: string): boolean {
   const url = rawUrl.trim();
@@ -950,7 +950,7 @@ function isAllowedCssAssetUrl(rawUrl: string): boolean {
   return false;
 }
 
-/** 文件所属包目录：向上查找最近的 package.json 所在目录（npm 布局内必达）。 */
+/** file which belong package directory: to on find most near package.json which in directory (npm layout inside must reach). */
 function findPackageDirOf(fileReal: string): string {
   let dir = dirname(fileReal);
   for (;;) {
@@ -962,8 +962,8 @@ function findPackageDirOf(fileReal: string): string {
 }
 
 /**
- * 从受控包闭包内的导入文件解析传递裸说明符：向上查找最近 node_modules 的包目录，
- * 读 package.json 入口（与直接声明同一入口语义）。找不到返回 null（按未声明拒绝）。
+ * from subject to control package closed package inside import file parse pass bare note symbol: to on find most near node_modules package directory,
+ * read package.json entry (and directly declaration the same entry semantics). find fewer than return null(by not declaration reject).
  */
 function resolveTransitiveNpmSpecifier(spec: string, importerReal: string): string | null {
   const { pkg, sub } = splitNpmSpecifier(spec);
@@ -981,12 +981,12 @@ function resolveTransitiveNpmSpecifier(spec: string, importerReal: string): stri
 }
 
 /**
- * esbuild 插件：按 resolver kind 管 CSS 语法引用——
- * - url-token（url() 资源）：data: / http(s) / 协议相对放行（交回默认解析，esbuild
- *   原样保留）；本地相对 / 根相对 / 片段等其余形态显式拒绝并建议内联 data:；
- * - import-rule（CSS @import）：本地相对由默认解析器解析（经 onLoad containment
- *   校验 realpath 越根，本地 @import 进依赖闭包与 hash）；远程（http(s)/协议相对）
- *   显式拒绝——外链样式不受本地依赖校验与缓存管控。
+ * esbuild plugin: by resolver kind manage CSS language method reference - -
+ * - url-token(url() asset):data: / http(s) / protocol each other for let through (hand over back by default parse,esbuild
+ *   original keep); local each other for / each other for / fragment etc. the rest form explicit reject and create protocol inline data:;
+ * - import-rule(CSS @import): local each other for by by default parse parse (via onLoad containment
+ *   validate realpath exceeds, local @import enter dependency closed package and hash); far process (http(s)/protocol each other for)
+ *   explicit reject - - outside chain style do not subject to local dependency validate and cache manage control.
  */
 function cssPolicyPlugin(pluginId: string): EsbuildPlugin {
   return {
@@ -994,13 +994,13 @@ function cssPolicyPlugin(pluginId: string): EsbuildPlugin {
     setup(b) {
       b.onResolve({ filter: /.*/ }, (args) => {
         if (args.kind === 'url-token') {
-          if (isAllowedCssAssetUrl(args.path)) return null; // 交回默认解析（esbuild 原样保留）
+          if (isAllowedCssAssetUrl(args.path)) return null; // hand over back by default parse (esbuild original keep)
           return {
             errors: [{
               text:
-                `插件 ${pluginId} 的样式 ${args.importer} 引用资源 "${args.path}" 被拒绝：` +
-                '本地相对/根相对/片段 URL 会相对宿主页面错误基址解析（插件无静态资源端点）；' +
-                '请改用内联 data: URL 或显式 https:// 绝对地址',
+                `plugin ${pluginId} style ${args.importer} reference asset "${args.path}" by reject:` +
+                'local each other for/each other for/fragment URL will each other for host page error base address parse (plugin without static assets end point);' +
+                'use... instead inline data: URL or explicit https:// absolute address',
             }],
           };
         }
@@ -1009,12 +1009,12 @@ function cssPolicyPlugin(pluginId: string): EsbuildPlugin {
             return {
               errors: [{
                 text:
-                  `插件 ${pluginId} 的样式 ${args.importer} 远程 @import "${args.path}" 被拒绝：` +
-                  '远程样式不受本地依赖校验与缓存管控；请将样式复制进 clientRoot 后相对引用',
+                  `plugin ${pluginId} style ${args.importer} far process @import "${args.path}" by reject:` +
+                  'far process style do not subject to local dependency validate and cache manage control; please style duplicate enter clientRoot after each other for reference',
               }],
             };
           }
-          return null; // 本地 @import：默认解析 + onLoad containment（越根拒绝）
+          return null; // local @import: by default parse + onLoad containment(exceeds reject)
         }
         return null;
       });
@@ -1023,10 +1023,10 @@ function cssPolicyPlugin(pluginId: string): EsbuildPlugin {
 }
 
 // ---------------------------------------------------------------------------
-// 缓存复查与依赖清单
+// cache re- inspect and dependency manifest
 // ---------------------------------------------------------------------------
 
-/** 读取缓存产物：清单合法 + 每依赖 sha256 与磁盘一致才复用；否则 undefined（重编译）。 */
+/** read cache artifact: manifest legal + each dependency sha256 and disk consistent only then re- use; otherwise undefined(heavy compile). */
 function readCachedResult(
   stagingDir: string,
   depsListPath: string,
@@ -1040,7 +1040,7 @@ function readCachedResult(
   try {
     list = JSON.parse(readFileSync(depsListPath, 'utf8')) as DepsListFile;
   } catch {
-    return undefined; // 清单损坏：视为未缓存，重新编译
+    return undefined; // manifest corrupt: treated as not cache, re- compile
   }
   if (
     list.version !== DEPS_LIST_VERSION ||
@@ -1058,12 +1058,12 @@ function readCachedResult(
     try {
       source = readFileSync(abs, 'utf8');
     } catch {
-      return undefined; // 依赖被删除：失效重编译
+      return undefined; // dependency by delete: expires heavy compile
     }
     if (sha256(source) !== dep.sha256) return undefined;
   }
   for (const dep of list.npmDependencies ?? []) {
-    // npm 依赖文件的真实路径与内容变化：失效重编译；根标识仅用于诊断/哈希，不作为本地路径访问。
+    // npm dependency file real path and content change: expires heavy compile; identifier only used to diagnose/hash, do not as local path access.
     let source: string;
     try {
       source = readFileSync(dep.path, 'utf8');
@@ -1083,13 +1083,13 @@ function readCachedResult(
       try {
         gzipped = readFileSync(gzPath);
       } catch {
-        /* 读取预压缩文件失败则留空，由调用方按需生成 */
+        /* read pre- compress file failed then empty, by caller on demand generate */
       }
     }
     const chunks: Record<string, { code: string; gzipped?: Uint8Array }> = {};
     if (Array.isArray(list.chunks) && list.chunks.length > 0) {
-      // 主模块缓存命中不预读全部 chunk：逐 chunk 惰性读盘（getter 首次访问才落内存），
-      // 普通主模块请求零额外磁盘读；chunk 缺失同样惰性判定（缺失时机退回 undefined）。
+      // main module cache hit do not pre- read all chunk: one by one chunk lazy read (getter first time access only then memory),
+      // ordinary main module request zero extra disk read;chunk missing same lazy decide (missing when machine retreat back undefined).
       for (const chunkName of list.chunks) {
         let cached: { code: string; gzipped?: Uint8Array } | undefined | null = null;
         Object.defineProperty(chunks, chunkName, {
@@ -1107,7 +1107,7 @@ function readCachedResult(
   }
 }
 
-/** 从 metafile inputs 收集 rootReal 内的全部本地依赖（含入口；排序保证确定性）。 */
+/** from metafile inputs collect rootReal inside all local dependency (contains entry; sort guarantee determinism). */
 function collectLocalDependencies(
   metafile: { inputs: Record<string, unknown> } | undefined,
   rootReal: string,
@@ -1115,7 +1115,7 @@ function collectLocalDependencies(
   if (!metafile) return [];
   const out = new Set<string>();
   for (const inputKey of Object.keys(metafile.inputs)) {
-    // metafile key 相对 absWorkingDir（或绝对路径）；虚拟命名空间输入不含 '/' 路径形态
+    // metafile key each other for absWorkingDir(or absolute path); virtual naming empty between input excludes '/' path form
     const abs = isAbsolute(inputKey) ? inputKey : join(rootReal, inputKey);
     const real = realpathOrNull(abs);
     if (real !== null && isInside(rootReal, real)) out.add(real);
@@ -1124,9 +1124,9 @@ function collectLocalDependencies(
 }
 
 /**
- * 从 metafile inputs 收集受控 npm 依赖文件（clientRoot 之外的输入）。
- * 编译已成功意味着全部越根输入都经解析期授权（裸说明符均受控解析），
- * 因此此处只需按「clientRoot 之外」归组；文件集变化随 hash 反映到缓存凭据。
+ * from metafile inputs collect subject to control npm dependency file (clientRoot of outside input).
+ * compile already succeeded means all exceeds input all via parse phase authorization (bare note symbol all subject to control parse),
+ * therefore this where only needs to byclientRoot of outside archive group; file collection change follow hash reverse reflect to cache credentials.
  */
 function collectNpmDependencies(
   metafile: { inputs: Record<string, unknown> } | undefined,
@@ -1143,8 +1143,8 @@ function collectNpmDependencies(
   return files.size === 0 ? [] : [{ root: 'authorized-npm-closure', files: [...files].sort() }];
 }
 
-/** 组装依赖清单：逐依赖 sha256（内容寻址，跨重启稳定；不依赖 mtime）。
- * npm 依赖按（解析根 realpath, 绝对路径）参与 hash——路径或内容任一变化即失效。 */
+/** group install dependency manifest: one by one dependency sha256(content seek address, across restarts stable; independent of mtime).
+ * npm dependency by (parse realpath, absolute path) reference and hash- - path or content any one change i.e. expires. */
 function buildDepsList(
   rootReal: string,
   moduleRef: string,
@@ -1192,7 +1192,7 @@ function buildDepsList(
 }
 
 // ---------------------------------------------------------------------------
-// 落盘与路径工具
+// and path tool
 // ---------------------------------------------------------------------------
 
 const RETRYABLE_RENAME_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
@@ -1217,7 +1217,7 @@ function renameWithRetry(tmp: string, targetPath: string): void {
   }
 }
 
-/** 临时文件（randomUUID）+ rename 原子落盘；失败清理临时文件（可重试）。 */
+/** temp file (randomUUID)+ rename atomic; failed clean up temp file (can retry). */
 function atomicWriteRaw(targetPath: string, content: string | Buffer | Uint8Array): void {
   mkdirSync(dirname(targetPath), { recursive: true });
   const tmp = `${targetPath}.tmp-${randomUUID()}`;
@@ -1232,7 +1232,7 @@ function atomicWriteRaw(targetPath: string, content: string | Buffer | Uint8Arra
     try {
       rmSync(tmp, { force: true });
     } catch {
-      /* 清理失败不掩盖原始错误 */
+      /* clean up failed do not mask original error */
     }
     throw err;
   }
@@ -1260,7 +1260,7 @@ function realPathOrThrow(p: string, message: string): string {
   }
 }
 
-/** 入口文件 containment：不存在 / 非文件 / realpath 越根（符号链接逃逸）显式拒绝。 */
+/** entry file containment: missing / non- file / realpath exceeds (symlink escape) explicit reject. */
 function assertEntryInsideRoot(pluginId: string, rootReal: string, moduleRef: string): string {
   const absPath = join(rootReal, moduleRef);
   let real: string;
@@ -1269,7 +1269,7 @@ function assertEntryInsideRoot(pluginId: string, rootReal: string, moduleRef: st
     if (!st.isFile()) throw new Error('not file');
     real = realpathSync(absPath);
   } catch {
-    throw new HelmError('client_root_invalid', `插件 ${pluginId} 的 client 模块不存在：${moduleRef}`, 400, {
+    throw new HelmError('client_root_invalid', `plugin ${pluginId}  client module missing:${moduleRef}`, 400, {
       pluginId,
       module: moduleRef,
     });
@@ -1277,7 +1277,7 @@ function assertEntryInsideRoot(pluginId: string, rootReal: string, moduleRef: st
   if (!isInside(rootReal, real)) {
     throw new HelmError(
       'client_module_out_of_root',
-      `插件 ${pluginId} 的 client 模块越出 clientRoot（可能为符号链接逃逸）：${moduleRef}`,
+      `plugin ${pluginId}  client module exceeds out clientRoot(may is symlink escape):${moduleRef}`,
       400,
       { pluginId, module: moduleRef },
     );
@@ -1293,20 +1293,20 @@ function realpathOrNull(p: string): string | null {
   }
 }
 
-/** 目标真实路径是否位于根真实路径内（同根或根之子目录；符号链接已被 realpath 消解）。 */
+/** target real path is otherwise at real path inside (same or of subdirectory; symlink already by realpath consume solve). */
 function isInside(rootReal: string, target: string): boolean {
   const rel = relative(rootReal, target);
   return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
 }
 
-/** 插件 ID 到安全目录名（: 等字符映射为 _，hash 后缀保证不同 ID 不碰撞）；staging 落盘命名契约，node-chunk-bridge 同口径推导。 */
+/** plugin ID to security directory name (: etc. character mapping is _,hash suffix guarantee different ID do not collision);staging naming contract,node-chunk-bridge same opening path push lead. */
 export function safeDirName(pluginId: string): string {
   const safe = pluginId.replace(/[^A-Za-z0-9_-]/g, '_');
   const suffix = createHash('sha1').update(pluginId).digest('hex').slice(0, 6);
   return `${safe}-${suffix}`;
 }
 
-/** moduleRef 到安全文件名（/ 与特殊字符映射，hash 后缀保证唯一）；staging 落盘命名契约，node-chunk-bridge 同口径推导。 */
+/** moduleRef to security filename (/ and special character mapping,hash suffix guarantee unique);staging naming contract,node-chunk-bridge same opening path push lead. */
 export function safeFileName(moduleRef: string): string {
   const safe = moduleRef.replace(/[^A-Za-z0-9._-]+/g, '_');
   const suffix = createHash('sha1').update(moduleRef).digest('hex').slice(0, 6);

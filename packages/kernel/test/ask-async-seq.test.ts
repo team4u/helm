@@ -1,27 +1,27 @@
 /**
- * AskService 异步 seq resolver 契约测试：真实 AskService + 真实 SQLite。
+ * AskService async seq resolver contract test: real AskService + real SQLite.
  *
- * 背景（herdr Ask CAS）：同步缓存 resolver 会在远端 poll 间隙把已过期 Ask 的
- * 目标 seq 报成旧水位，导致 answerAsk 用过期视图做 CAS。resolver 需要发起
- * 真实异步 IO（agent.get）拿终端当前水位，因此内核通用机制升级为
- * MaybePromise<number | undefined>，并在 await 返回后、写入任何终态副作用
- * （supersede/answer/stash）之前重读持久行，校验等待期间未被并发结算。
+ * background (herdr Ask CAS): sync cache resolver will in remote poll between gap expired Ask 
+ * target seq report into old watermark, leads to answerAsk use expired view do CAS.resolver need to start
+ * real async IO(agent.get) take terminal when before watermark, therefore kernel through use mechanism upgrade is
+ * MaybePromise<number | undefined>, and in await return after, write any terminal state side effect
+ * (supersede/answer/stash) before heavy read durable row, validate wait for during not by concurrency compute.
  *
- * 契约：
- * - resolver 可同步或异步；首个返回合法非负 safe integer 的结果即权威 seq；
- * - 非法 seq（NaN/负数/小数/超出 safe integer/非数值类型）显式失败，
- *   不截断、不默认 0、不静默跳过；resolver 抛错（含异步 reject）如实上抛，
- *   ask 保持 pending、stash 无写入；
- * - async 返回新水位 -> superseded（不是 answered），secret 不入 stash；
- * - async 返回同水位 -> answered 一次（一条 ask.resolved 事件）；
- * - resolver 挂起期间并发 cancel / 并发 answer：等待方返回后重读行，
- *   已结算 -> 409 ask_already_settled，不覆盖旧结果、不重复事件、不写 stash；
- *   行被删除 -> 404；
- * - 持久 CAS spec 等待期间改变（expectedStateSeq 推进）：按新权威条件拒绝
- *   旧客户端数据（409 ask_state_conflict），不覆写；
- * - 前一个 resolver 异步返回 undefined 后继续尝试下一个 resolver；
- * - 同步 resolver 与无 CAS ask 的原行为保持（不引入多余异步间隙——答案
- *   校验在重读行之后依然基于最新持久 spec）。
+ * contract:
+ * - resolver can sync or async; first return legal non- negative safe integer result i.e. right threat seq;
+ * - illegal seq(NaN/negative number/decimal/exceeds safe integer/non- count value type) explicit failed,
+ *   do not truncate, do not by default 0, not silently skip;resolver throws (contains async reject) such as on throw,
+ *   ask keep pending,stash without write;
+ * - async return new watermark -> superseded(is not answered),secret do not stash;
+ * - async return same watermark -> answered once (a ask.resolved event);
+ * - resolver suspended during concurrency cancel / concurrency answer: wait for way return after heavy read row,
+ *   already compute -> 409 ask_already_settled, does not override old result, does not repeat event, do not write stash;
+ *   row by delete -> 404;
+ * - durable CAS spec wait for during change (expectedStateSeq push enter): by new right threat condition reject
+ *   old client data (409 ask_state_conflict), do not override;
+ * - before a resolver async return undefined after continue attempt under a resolver;
+ * - sync resolver and without CAS ask original behavior keep (does not introduce redundant async between gap - - answer proposal
+ *   validate in heavy read row after still based on most new durable spec).
  */
 
 import { HelmError } from '@helm/protocol'
@@ -77,7 +77,7 @@ async function openService(): Promise<TestContext> {
   }
 }
 
-/** 带 isSettled 观察器的 deferred 包装（复用 helpers.deferred）。 */
+/** carries isSettled observe deferred wrap (re- use helpers.deferred). */
 function deferred<T>() {
   let settled = false
   const inner = kitDeferred<T>()
@@ -97,10 +97,10 @@ function deferred<T>() {
   }
 }
 
-/** secret 字段 spec：用于断言 stash 无泄漏。 */
+/** secret field spec: used to assertion stash without leak leak. */
 const secretSpec: { conversationId: number; title: string; expectedStateSeq: number; id?: string; fields: Array<{ name: string; label: string; type: 'text'; secret: boolean; required: boolean }> } = {
   conversationId: 1,
-  title: '终端确认',
+  title: 'terminal confirm',
   expectedStateSeq: 10,
   fields: [{ name: 'TOKEN', label: 'Token', type: 'text', secret: true, required: true }],
 }
@@ -109,14 +109,14 @@ async function createPending(service: AskService, spec: typeof secretSpec): Prom
   void service.createAsk(spec).catch(() => {})
   await new Promise((r) => setTimeout(r, 20))
   const ask = service.listAsks('pending').find((a) => a.id === spec.id)
-  assert.ok(ask !== undefined, 'ask 必须已持久为 pending')
+  assert.ok(ask !== undefined, 'ask must already durable is pending')
   return ask.id
 }
 
 // ---------------------------------------------------------------------------
 
-describe('异步 seq resolver：水位判定与诚实失败', { timeout: 60_000 }, () => {
-  it('async 新水位 -> superseded 而非 answered，secret 不入 stash', { timeout: 60_000 }, async () => {
+describe('async seq resolver: watermark decide and honest failed', { timeout: 60_000 }, () => {
+  it('async new watermark -> superseded while non- answered,secret do not stash', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const id = await createPending(ctx.service, { ...secretSpec, id: 'async-new-seq' })
@@ -130,7 +130,7 @@ describe('异步 seq resolver：水位判定与诚实失败', { timeout: 60_000 
       gate.resolve()
       const result = await answering
       assert.equal(result.status, 'superseded')
-      // superseded 绝不写答案、secret 不入 stash、事件恰一条 resolved。
+      // superseded never write answer proposal,secret do not stash, event exactly a resolved.
       const row = ctx.store.getAsk(id)!
       assert.equal(row.status, 'superseded')
       assert.equal(row.resultJson, undefined)
@@ -143,7 +143,7 @@ describe('异步 seq resolver：水位判定与诚实失败', { timeout: 60_000 
     }
   })
 
-  it('async 同水位 -> answered 恰一次（单事件、持久结果含 marker）', { timeout: 60_000 }, async () => {
+  it('async same watermark -> answered exactly once (single event, durable result contains marker)', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const id = await createPending(ctx.service, { ...secretSpec, id: 'async-same-seq' })
@@ -166,14 +166,14 @@ describe('异步 seq resolver：水位判定与诚实失败', { timeout: 60_000 
     }
   })
 
-  it('resolver 挂起期间并发 cancel：等待方 409 ask_already_settled，不覆盖、不写 stash', { timeout: 60_000 }, async () => {
+  it('resolver suspended during concurrency cancel: wait for way 409 ask_already_settled, does not override, do not write stash', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const id = await createPending(ctx.service, { ...secretSpec, id: 'cancel-race' })
       const gate = deferred<void>()
       ctx.service.registerSeqResolver(() => gate.promise.then(() => 10))
       const answering = ctx.service.answerAsk(id, { TOKEN: 'plain-secret' })
-      // 等待期间另一路径完成销单（真实场景：终端事件触发 cancel）。
+      // wait for during another path complete deregister single (real scenario: terminal event trigger cancel).
       const cancelled = await ctx.service.cancelAsk(id, 'cancelled')
       assert.equal(cancelled.status, 'cancelled')
       gate.resolve()
@@ -181,7 +181,7 @@ describe('异步 seq resolver：水位判定与诚实失败', { timeout: 60_000 
         () => answering,
         (err: unknown) => err instanceof HelmError && err.code === 'ask_already_settled',
       )
-      // 旧结果不被覆盖：仍为 cancelled、无答案、stash 无 secret、事件无重复。
+      // old result do not by override: still is cancelled, without answer proposal,stash without secret, event without duplicate.
       const row = ctx.store.getAsk(id)!
       assert.equal(row.status, 'cancelled')
       assert.equal(row.resultJson, undefined)
@@ -192,7 +192,7 @@ describe('异步 seq resolver：水位判定与诚实失败', { timeout: 60_000 
     }
   })
 
-  it('两个并发 answer：先结算者胜，后到者 409（deferred 对齐，无 sleep）', { timeout: 60_000 }, async () => {
+  it('two concurrency answer: first compute victory, after to 409(deferred align, without sleep)', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const id = await createPending(ctx.service, { ...secretSpec, id: 'answer-race' })
@@ -205,7 +205,7 @@ describe('异步 seq resolver：水位判定与诚实失败', { timeout: 60_000 
       })
       const first = ctx.service.answerAsk(id, { TOKEN: 'first-answer' })
       const second = ctx.service.answerAsk(id, { TOKEN: 'second-answer' })
-      // 第一个 answer 穿过 resolver 后放行第二个：两者都经历完整 CAS 流程。
+      // a answer through resolver after let through second: two all via history complete CAS stream process.
       firstGate.resolve()
       const firstResult = await first
       assert.equal(firstResult.status, 'answered')
@@ -215,7 +215,7 @@ describe('异步 seq resolver：水位判定与诚实失败', { timeout: 60_000 
         () => second,
         (err: unknown) => err instanceof HelmError && err.code === 'ask_already_settled',
       )
-      // 先到者结果保持：第二份答案既不覆盖持久结果也不改写 stash。
+      // first to result keep: second answer proposal since does not override durable result also do not change write stash.
       assert.equal(ctx.stash.envFor(1).TOKEN, 'first-answer')
       const row = ctx.store.getAsk(id)!
       assert.equal(row.status, 'answered')
@@ -226,7 +226,7 @@ describe('异步 seq resolver：水位判定与诚实失败', { timeout: 60_000 
     }
   })
 
-  it('等待期间持久 CAS spec 改变（expectedStateSeq 推进）：按新权威条件拒绝旧数据', { timeout: 60_000 }, async () => {
+  it('wait for during durable CAS spec change (expectedStateSeq push enter): by new right threat condition reject old data', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       for (const nextSeq of [20, undefined]) {
@@ -257,16 +257,16 @@ describe('异步 seq resolver：水位判定与诚实失败', { timeout: 60_000 
     }
   })
 
-  it('resolver 失败（同步抛错与异步 reject）：如实上抛、ask 保持 pending、无 stash 写入', { timeout: 60_000 }, async () => {
+  it('resolver failed (sync throws and async reject): such as on throw,ask keep pending, without stash write', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const id = await createPending(ctx.service, { ...secretSpec, id: 'resolver-sync-fail' })
       const releaseSync = ctx.service.registerSeqResolver(() => {
-        throw new Error('resolver 同步故障')
+        throw new Error('resolver sync fault')
       })
       await assert.rejects(
         () => ctx.service.answerAsk(id, { TOKEN: 'v' }),
-        (err: unknown) => err instanceof Error && err.message === 'resolver 同步故障',
+        (err: unknown) => err instanceof Error && err.message === 'resolver sync fault',
       )
       assert.equal(ctx.store.getAsk(id)!.status, 'pending')
       assert.equal(ctx.stash.envFor(1).TOKEN, undefined)
@@ -274,7 +274,7 @@ describe('异步 seq resolver：水位判定与诚实失败', { timeout: 60_000 
 
       const id2 = await createPending(ctx.service, { ...secretSpec, id: 'resolver-async-fail' })
       ctx.service.registerSeqResolver(async () => {
-        throw new HelmError('ask_state_unavailable', '远端 agent.get 失败', 502)
+        throw new HelmError('ask_state_unavailable', 'remote agent.get failed', 502)
       })
       await assert.rejects(
         () => ctx.service.answerAsk(id2, { TOKEN: 'v' }),
@@ -282,14 +282,14 @@ describe('异步 seq resolver：水位判定与诚实失败', { timeout: 60_000 
       )
       assert.equal(ctx.store.getAsk(id2)!.status, 'pending')
       assert.equal(ctx.stash.envFor(1).TOKEN, undefined)
-      // 两条 ask 都未产生终态事件。
+      // two ask all not produce terminal state event.
       assert.equal(ctx.events.filter((e) => e.type === 'ask.resolved').length, 0)
     } finally {
       await ctx.close()
     }
   })
 
-  it('非法 seq（NaN/负/小数/unsafe/坏类型）显式失败：不截断、不默认 0、不静默跳过', { timeout: 60_000 }, async () => {
+  it('illegal seq(NaN/negative/decimal/unsafe/broken type) explicit failed: do not truncate, do not by default 0, not silently skip', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const bads: Array<{ label: string; value: unknown }> = [
@@ -297,10 +297,10 @@ describe('异步 seq resolver：水位判定与诚实失败', { timeout: 60_000 
         { label: 'Infinity', value: Number.POSITIVE_INFINITY },
         { label: 'BigInt', value: 10n },
         { label: 'Symbol', value: Symbol('invalid-seq') },
-        { label: '负数', value: -1 },
-        { label: '小数', value: 10.5 },
-        { label: '超出 safe integer', value: Number.MAX_SAFE_INTEGER + 1 },
-        { label: '字符串', value: '10' },
+        { label: 'negative number', value: -1 },
+        { label: 'decimal', value: 10.5 },
+        { label: 'exceeds safe integer', value: Number.MAX_SAFE_INTEGER + 1 },
+        { label: 'string', value: '10' },
         { label: 'null', value: null },
       ]
       for (const bad of bads) {
@@ -308,19 +308,19 @@ describe('异步 seq resolver：水位判定与诚实失败', { timeout: 60_000 
         await createPending(ctx.service, { ...secretSpec, id })
         const release = ctx.service.registerSeqResolver(() => bad.value as never)
         const error = await ctx.service.answerAsk(id, { TOKEN: 'v' }).then(
-          () => assert.fail(`非法 seq ${bad.label} 必须显式失败`),
+          () => assert.fail(`illegal seq ${bad.label} must explicit failed`),
           (error: unknown) => error,
         )
         assert.ok(error instanceof HelmError)
         assert.equal(error.code, 'ask_seq_resolver_invalid')
         const response = errorToResponse(undefined, (text) => text, error)
         assert.equal(response.status, 500)
-        assert.equal((await response.json()).error.code, 'ask_seq_resolver_invalid', '非法值不能破坏 HTTP 错误信封')
-        assert.equal(ctx.store.getAsk(id)!.status, 'pending', `${bad.label} 后保持 pending`)
+        assert.equal((await response.json()).error.code, 'ask_seq_resolver_invalid', 'illegal value cannot break HTTP error message seal')
+        assert.equal(ctx.store.getAsk(id)!.status, 'pending', `${bad.label} after keep pending`)
         assert.equal(ctx.stash.envFor(1).TOKEN, undefined)
         release()
       }
-      // 全部保持 pending、无终态事件。
+      // all keep pending, without terminal state event.
       assert.equal(ctx.service.listAsks('pending').length, bads.length)
       assert.equal(ctx.events.filter((e) => e.type === 'ask.resolved').length, 0)
     } finally {
@@ -328,7 +328,7 @@ describe('异步 seq resolver：水位判定与诚实失败', { timeout: 60_000 
     }
   })
 
-  it('前一个 resolver 异步 undefined 后继续寻找下一个 resolver', { timeout: 60_000 }, async () => {
+  it('before a resolver async undefined after continue seek under a resolver', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const id = await createPending(ctx.service, { ...secretSpec, id: 'chain-resolvers' })
@@ -347,7 +347,7 @@ describe('异步 seq resolver：水位判定与诚实失败', { timeout: 60_000 
       const answering = ctx.service.answerAsk(id, { TOKEN: 'plain-secret' })
       gate.resolve()
       const result = await answering
-      assert.ok(secondCalled, '第一个 resolver 异步 undefined 后必须继续尝试第二个')
+      assert.ok(secondCalled, 'a resolver async undefined after must continue attempt second')
       assert.equal(result.status, 'answered')
       assert.equal(ctx.stash.envFor(1).TOKEN, 'plain-secret')
     } finally {
@@ -355,14 +355,14 @@ describe('异步 seq resolver：水位判定与诚实失败', { timeout: 60_000 
     }
   })
 
-  it('行在等待期间被删除：404；同步 resolver 行为保持原样', { timeout: 60_000 }, async () => {
+  it('row in wait for during by delete:404; sync resolver behavior keep original', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const id = await createPending(ctx.service, { ...secretSpec, id: 'row-deleted' })
       const gate = deferred<void>()
       const releaseGate = ctx.service.registerSeqResolver(() => gate.promise.then(() => 10))
       const answering = ctx.service.answerAsk(id, { TOKEN: 'v' })
-      // 直接从镜像与持久层删除行（模拟极端清理路径）。
+      // directly from mirror and durable layer delete row (simulated extreme clean up path).
       const raw = ctx.store as unknown as { asks: Map<string, unknown> }
       raw.asks.delete(id)
       gate.resolve()
@@ -373,7 +373,7 @@ describe('异步 seq resolver：水位判定与诚实失败', { timeout: 60_000 
       assert.equal(ctx.events.filter((e) => e.type === 'ask.resolved').length, 0)
       releaseGate()
 
-      // 同步 resolver：原语义不变（同水位 answered、推进 superseded）。
+      // sync resolver: original semantics do not change (same watermark answered, push enter superseded).
       const id2 = await createPending(ctx.service, { ...secretSpec, id: 'sync-resolver-kept' })
       const releaseKept = ctx.service.registerSeqResolver(() => 10)
       const ok = await ctx.service.answerAsk(id2, { TOKEN: 'sync-v' })

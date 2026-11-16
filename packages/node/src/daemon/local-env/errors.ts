@@ -1,13 +1,13 @@
 /**
- * Result 信封与错误映射（local-env 子模块）：
+ * Result message seal and error mapping (local-env sub- module):
  *
- * 所有文件系统与进程错误如实映射为 FileError / ExecutionError
- * （code 对齐 @helm/protocol 的 RpcFileErrorCode / RpcExecutionErrorCode），
- * 绝不静默降级或伪造结果。
+ * all file system and process error such as mapping is FileError / ExecutionError
+ * (code align @helm/protocol  RpcFileErrorCode / RpcExecutionErrorCode),
+ * never static default fall back or fabricate result.
  */
 
 // ---------------------------------------------------------------------------
-// Result / 错误类型（code 对齐 @helm/protocol 的 Rpc*ErrorCode）
+// Result / error type (code align @helm/protocol  Rpc*ErrorCode)
 // ---------------------------------------------------------------------------
 
 export type Result<T> = { ok: true; value: T } | { ok: false; error: FileError | ExecutionError };
@@ -42,7 +42,7 @@ export class FileError extends Error {
 
 export class ExecutionError extends Error {
   readonly code: ExecutionErrorCode;
-  /** 超时/中止时超阈值的完整输出溢写文件路径。 */
+  /** timeout/abort when over threshold complete output overflow write file path. */
   spillPath?: string;
   constructor(code: ExecutionErrorCode, message: string, cause?: Error) {
     super(message, cause === undefined ? undefined : { cause });

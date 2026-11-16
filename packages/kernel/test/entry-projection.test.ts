@@ -1,11 +1,11 @@
 /**
- * entry-projection 单元测试（纯函数，无 IO）：
- * - pi.system 过滤；签名剥离（嵌套/数组/共享引用不改写输入）；
- * - 安全纯文本 tool-result 截断：头尾保留、消息级 truncated/totalChars/
- *   totalLines 标记、[Artifact] id= 尾标保留、details 原样透传不豁免截断；
- * - 豁免：可解析 JSON 信封（subagent/SubagentWorkflow 结构化结果）、
- *   阈值以下、非纯文本内容；
- * - pageVisibleEntries：pi.system 在分页循环内视为不可见，limit = 可见条数。
+ * entry-projection unit test (pure function, without IO):
+ * - pi.system filter; signature strip (embed set/array/sharing reference do not change write input);
+ * - security pure text tool-result truncate: head tail keep, message level truncated/totalChars/
+ *   totalLines mark record,[Artifact] id= tail mark keep,details original pass-through do not exemption truncate;
+ * - exemption: can parse JSON message seal (subagent/SubagentWorkflow structure result),
+ *   threshold or fewer, non- pure text content;
+ * - pageVisibleEntries:pi.system in page loop inside treated as invisible,limit = visible count.
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -36,14 +36,14 @@ function toolResultEntry(text: string, extra: Record<string, unknown> = {}): Con
   }
 }
 
-test('pi.system 过滤；其余 kind 原样透出', { timeout: 60_000 }, () => {
+test('pi.system filter; the rest kind original through out', { timeout: 60_000 }, () => {
   const system: ConversationEntry = { id: '1', kind: 'pi.system', data: { pos: 1 } }
   assert.equal(projectDetailEntry(system), undefined)
   const input: ConversationEntry = { id: '2', kind: 'helm.input', data: { id: 'i', text: 'hi' } }
   assert.deepEqual(projectDetailEntry(input), input)
 })
 
-test('签名剥离：thinkingSignature/textSignature/thoughtSignature 深度移除，其余保留', { timeout: 60_000 }, () => {
+test('signature strip:thinkingSignature/textSignature/thoughtSignature deep remove, the rest keep', { timeout: 60_000 }, () => {
   const entry: ConversationEntry = {
     id: '3',
     kind: 'pi.assistant',
@@ -66,20 +66,20 @@ test('签名剥离：thinkingSignature/textSignature/thoughtSignature 深度移�
   assert.equal('thinkingSignature' in content[0]!, false)
   assert.equal('textSignature' in content[1]!, false)
   assert.equal('thoughtSignature' in content[2]!, false)
-  // data 是插件/helm 业务 JSON，可能合法携带同名字段：签名剥离仅限 model 载荷
+  // data is plugin/helm business JSON, may legal carry same name segment: signature strip only limit model payload
   assert.deepEqual((projected!.data as any).nested.deep[0], { textSignature: 'sig-4', keep: 1 })
-  // 输入不被改写（SSE/数据库共享同一记录）
+  // input do not by change write (SSE/database sharing the same record)
   assert.deepEqual(entry, frozen)
-  // 原消息其余字段保留
+  // original message the rest field keep
   assert.equal((content[2] as { name?: string }).name, 'bash')
 })
 
-test('stripEntrySignatures 无签名时零拷贝返回原对象', { timeout: 60_000 }, () => {
+test('stripEntrySignatures without signature when zero copy return original object', { timeout: 60_000 }, () => {
   const entry: ConversationEntry = { id: '1', kind: 'pi.assistant', model: [{ role: 'assistant' }] }
   assert.equal(stripEntrySignatures(entry), entry)
 })
 
-test('纯文本超限截断：头尾保留 + 消息级标记 + 尾部内容保留', { timeout: 60_000 }, () => {
+test('pure text over limit truncate: head tail keep + message level mark record + tail part content keep', { timeout: 60_000 }, () => {
   const head = 'H'.repeat(TOOL_RESULT_HEAD_CHARS)
   const mid = 'M'.repeat(3000)
   const tail = 'T'.repeat(200)
@@ -91,54 +91,54 @@ test('纯文本超限截断：头尾保留 + 消息级标记 + 尾部内容保�
   assert.equal(msg['totalChars'], text.length)
   assert.equal(msg['totalLines'], text.split('\n').length)
   const out = ((msg['content'] as Array<{ type: string; text: string }>)[0]!.text)
-  assert.ok(out.startsWith(head), '头部保留')
-  assert.ok(out.endsWith(tail), '尾部保留')
-  assert.ok(out.includes('helm 截断'), '省略标记自描述')
-  assert.ok(out.length < text.length, '投影后更短')
-  // 阈值以下不截断
+  assert.ok(out.startsWith(head), 'header keep')
+  assert.ok(out.endsWith(tail), 'tail part keep')
+  assert.ok(out.includes('helm truncate'), 'omit mark record self description')
+  assert.ok(out.length < text.length, 'throw shadow after more short')
+  // threshold or fewer do not truncate
   const small = projectDetailEntry(toolResultEntry('x'.repeat(TOOL_RESULT_TRUNCATE_THRESHOLD_CHARS)))
   assert.equal((small!.model![0] as Record<string, unknown>)['truncated'], undefined)
 })
 
-test('spill 预览文本（含 [Artifact] id= 全文入口）豁免：绝不叠加二次截断', { timeout: 60_000 }, () => {
+test('spill preview text (contains [Artifact] id= all text entry) exemption: never stack add second truncate', { timeout: 60_000 }, () => {
   const spillText =
-    `${'S'.repeat(4200)}\n\n…[输出超长，已截断。完整结果 50000 字节已写入产物]…\n\n` +
-    `--- 尾部摘要 ---\n${'E'.repeat(200)}\n\n` +
-    `[Artifact] id=0e4f0c8a-1111 name=tool-spill-x.txt path=a/b（调用工具 read_artifact 获取全文）`
+    `${'S'.repeat(4200)}\n\n...[output over long, already truncate. complete result 50000 byte already write artifact]...\n\n` +
+    `--- tail part summary ---\n${'E'.repeat(200)}\n\n` +
+    `[Artifact] id=0e4f0c8a-1111 name=tool-spill-x.txt path=a/b(invoke tool read_artifact get all text)`
   const projected = projectDetailEntry(toolResultEntry(spillText))!
   const msg = projected.model![0] as Record<string, unknown>
-  assert.equal(msg['truncated'], undefined, 'spill 语义归 artifacts 层，本层不再标记')
-  assert.equal(((msg['content'] as Array<{ text: string }>)[0]!.text), spillText, '原文原样透出')
+  assert.equal(msg['truncated'], undefined, 'spill semantics archive artifacts layer, this layer no longer mark record')
+  assert.equal(((msg['content'] as Array<{ text: string }>)[0]!.text), spillText, 'original text original through out')
 })
 
-test('details 存在仍截断纯文本 content（details 原样透传）', { timeout: 60_000 }, () => {
+test('details store in still truncate pure text content(details original pass-through)', { timeout: 60_000 }, () => {
   const text = `${'H'.repeat(TOOL_RESULT_HEAD_CHARS)}${'M'.repeat(2000)}${'T'.repeat(TOOL_RESULT_TAIL_CHARS)}`
   const entry = toolResultEntry(text, { details: { ui: 'meta', thinkingSignature: 'business-value' }, durationMs: 12 })
   const projected = projectDetailEntry(entry)!
   const msg = projected.model![0] as Record<string, unknown>
   assert.equal(msg['truncated'], true)
-  // details 是插件结构化 JSON：即使携带签名同名键也原样保留（剥离仅限 assistant content 块）
+  // details is plugin structure JSON: even if carry signature same name key also original keep (strip only limit assistant content chunk)
   assert.deepEqual(msg['details'], { ui: 'meta', thinkingSignature: 'business-value' })
   assert.equal(msg['durationMs'], 12)
 })
 
-test('可解析 JSON 信封豁免（subagent/SubagentWorkflow 结构化结果）', { timeout: 60_000 }, () => {
+test('can parse JSON message seal exemption (subagent/SubagentWorkflow structure result)', { timeout: 60_000 }, () => {
   const json = JSON.stringify({ ok: true, runId: 'r1', result: 'x'.repeat(4000) })
   const projected = projectDetailEntry(toolResultEntry(json))!
   const msg = projected.model![0] as Record<string, unknown>
   assert.equal(msg['truncated'], undefined)
   assert.equal(((msg['content'] as Array<{ text: string }>)[0]!.text), json)
-  // JSON + 尾部 [subagent ...] footer 行：同样豁免（footer 剥离后主体可解析）
-  const withFooter = `${json}\n[subagent 完成：后台句柄 runId=r1 已登记]`
+  // JSON + tail part [subagent ...] footer row: same exemption (footer strip after body can parse)
+  const withFooter = `${json}\n[subagent complete: background handle runId=r1 already register]`
   const footerProjected = projectDetailEntry(toolResultEntry(withFooter))!
   assert.equal((footerProjected.model![0] as Record<string, unknown>)['truncated'], undefined)
-  // 非 JSON 大文本仍截断
-  const plain = `${json}\n后续普通文本输出${'z'.repeat(4000)}`
+  // non- JSON large text still truncate
+  const plain = `${json}\nafter continue ordinary text output${'z'.repeat(4000)}`
   const truncated = projectDetailEntry(toolResultEntry(plain))!
   assert.equal((truncated.model![0] as Record<string, unknown>)['truncated'], true)
 })
 
-test('字符串 content 与非纯文本 content：前者截断、后者原样', { timeout: 60_000 }, () => {
+test('string content and non- pure text content: before truncate, after original', { timeout: 60_000 }, () => {
   const entry: ConversationEntry = {
     id: '6',
     kind: 'pi.tool-result',
@@ -165,8 +165,8 @@ test('字符串 content 与非纯文本 content：前者截断、后者原样', 
   assert.equal(projectDetailEntry(binary), binary)
 })
 
-test('pageVisibleEntries：pi.system 在循环内不可见，limit = 可见条数', { timeout: 60_000 }, async () => {
-  // 降序原始条目：9=pi.system, 8=可见, 7=pi.system, 6=可见, 5=可见, 4=pi.system, 3=可见
+test('pageVisibleEntries:pi.system in loop inside invisible,limit = visible count', { timeout: 60_000 }, async () => {
+  // drop order original item:9=pi.system, 8=visible, 7=pi.system, 6=visible, 5=visible, 4=pi.system, 3=visible
   const items = [
     { id: 9, kind: 'pi.system' },
     { id: 8, kind: 'pi.assistant' },
@@ -209,7 +209,7 @@ test('pageVisibleEntries：pi.system 在循环内不可见，limit = 可见条�
   assert.deepEqual(
     collected.map((e) => e.id),
     [8, 6, 5],
-    '收集 3 条可见条目（跳过 pi.system，继续取更旧页）',
+    'collect 3 visible item (skip pi.system, continue take more old page)',
   )
-  assert.notEqual(nextCursor, undefined, '仍有更旧条目时返回游标')
+  assert.notEqual(nextCursor, undefined, 'still has more old item when return cursor')
 })

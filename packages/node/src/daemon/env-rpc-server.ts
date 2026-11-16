@@ -1,22 +1,22 @@
 /**
- * 节点侧远端执行环境 RPC 服务端（组装主干）：完整实现 `NodeEnvRpcFunctions`。
+ * node side remote execute environment RPC server side (group install main dry): complete implement `NodeEnvRpcFunctions`.
  *
- * 文件/shell 能力由内置零外部依赖的 `LocalExecutionEnv`（Node.js 原生
- * fs/promises + child_process，见 ./local-env.ts）承载：每个 cwd 一个
- * env 实例（无跨 cwd 污染）；reader 以 readerId 句柄桥接，dispose 关闭
- * 全部 reader；envExec 以独立 AbortController 取消，envAbortExec(execId)
- * 立即终止命令进程树，流式输出经 onExecOutput 分帧回传 Hub；连接断开时
- * dispose：关 reader、杀本连接发起的命令并等待在途 promise settle；每个
- * 连接（generation）一个独立 server 实例，旧代命令/readers 绝不跨代复用。
+ * file/shell capability by inside placement zero external dependency `LocalExecutionEnv`(Node.js original generate
+ * fs/promises + child_process, see ./local-env.ts) bear load: each cwd a
+ * env instance (without across cwd pollute);reader with readerId handle bridge,dispose close
+ * all reader;envExec with independent AbortController cancel,envAbortExec(execId)
+ * immediately terminate command process tree, streaming output via onExecOutput frame back pass Hub; connect on disconnect
+ * dispose: closure reader, kill this connect start command and wait for in-flight promise settle; each
+ * connect (generation) a independent server instance, old proxy command/readers never across proxy re- use.
  *
- * Herdr IPC 桥（ipcCall/ipcSubscribe）与节点侧 TCP 隧道（nodeTunnelOpen，
- * 与 daemon 注入的 openTunnelStream 双工流双向 pipe，本层零凭据）分别在
- * ./env-rpc-ipc.ts 与 ./env-rpc-tunnel.ts，经 isDisposed()/isDraining()
- * 状态查询协作；admit/draining 守卫与 dispose 统一排空顺序留在此处。
+ * Herdr IPC bridge (ipcCall/ipcSubscribe) and node side TCP tunnel (nodeTunnelOpen,
+ * and daemon inject openTunnelStream double work stream double to pipe, this layer zero credentials) respectively in
+ * ./env-rpc-ipc.ts and ./env-rpc-tunnel.ts, via isDisposed()/isDraining()
+ * state query collaboration;admit/draining guard and dispose unify arrange empty order in this where.
  *
- * 错误码语义（升级排空 vs 取消）：draining 拒新请求（envExec / ipcCall /
- * ipcSubscribe / nodeTunnelOpen / envCleanup）一律返回稳定码 node_draining；
- * 用户/宿主取消、连接代终结、dispose 强制结算仍为 aborted——绝不互混。
+ * error code semantics (upgrade arrange empty vs cancel):draining refuse new request (envExec / ipcCall /
+ * ipcSubscribe / nodeTunnelOpen / envCleanup) one rule return stable code node_draining;
+ * user/host cancel, connect proxy final,dispose force compute still is aborted- - never mutual mix.
  */
 
 import type { Duplex } from 'node:stream';
@@ -47,50 +47,50 @@ export { MAX_IPC_FRAME_BYTES, resolveHerdrIpcEndpoint } from './env-rpc-ipc.js';
 export type { IpcEndpointContext } from './env-rpc-ipc.js';
 
 export interface NodeEnvRpcServerOptions {
-  /** 相对路径的基准目录（daemon 数据目录）。 */
+  /** relative path base allow directory (daemon data directory). */
   defaultCwd: string;
-  /** shell 输出流式回调（转发回 Hub 的 onEnvExecOutput）。 */
+  /** shell output streaming call back (forwarding back Hub  onEnvExecOutput). */
   onExecOutput?: (event: EnvExecOutputEvent) => void;
   /**
-   * 注入每个 shell 子进程的环境（daemon 构建）：如 HELM_HUB_URL。
-   * 机密与短期令牌由 Hub 侧 envOptions 合成后经 envExec.env 逐调用传入
-   * （节点不持久化任何机密）。
+   * inject each shell child process environment (daemon build): such as HELM_HUB_URL.
+   * secret and short phase token by Hub side envOptions together into after via envExec.env one by one invoke pass
+   * (node do not persist any secret).
    */
   shellEnv?: Record<string, string | undefined>;
-  /** 命令输出单次回传的最大字符数（流式分块上限，防单帧过大；≥1）。 */
+  /** command output single time back pass most large character count (streaming chunked cap, guard against single frame large;≥1). */
   maxOutputChunkChars?: number;
-  /** IPC 订阅事件回调（转发回 Hub 的 onIpcEvent）。 */
+  /** IPC subscribe event call back (forwarding back Hub  onIpcEvent). */
   onIpcEvent?: (event: NodeIpcEvent) => void;
-  /** IPC 订阅关闭/出错回调（转发回 Hub 的 onIpcClosed）。 */
+  /** IPC subscribe close/fails call back (forwarding back Hub  onIpcClosed). */
   onIpcClosed?: (event: NodeIpcClosedEvent) => void;
   /**
-   * 可选 IPC 等待预算；未配置时由调用方的 timeoutMs、取消信号和连接代控制。
-   * Herdr 长任务等待不能被守护进程偷偷施加一个额外的固定死线。
+   * optional IPC wait for pre- compute; not config when by caller timeoutMs, cancel signal and connect proxy control.
+   * Herdr long task wait for cannot by daemon stealthily stealthily apply add a extra fixed die line.
    */
   ipcCallIdleTimeoutMs?: number;
-  /** 可选 IPC 单帧（单行）字节上限（默认 MAX_IPC_FRAME_BYTES = 32 MiB）。 */
+  /** optional IPC single frame (single row) byte cap (by default MAX_IPC_FRAME_BYTES = 32 MiB). */
   maxIpcFrameBytes?: number;
   /**
-   * 进程占用扫描注入（仅测试或受控宿主注入；生产不伪造）：
-   * - procRoot：/proc 根替代（缺省 '/proc'）；
-   * - platform：平台事实替代（缺省 process.platform；非 linux 显式
-   *   not_supported，绝不伪造跨平台结果）。
+   * process occupy scan inject (only test or subject to control host inject; produce do not fabricate):
+   * - procRoot:/proc alternative (default '/proc');
+   * - platform: platform fact alternative (default process.platform; non- linux explicit
+   *   not_supported, never fabricate across platform result).
    */
   pathUsage?: {
     procRoot?: string;
     platform?: () => string;
   };
   /**
-   * 取消/超时后等待底层 stdio 管道排空的硬超时（毫秒，默认 500）：
-   * 当命令派生的 detached 孙进程继承了 stdout/stderr fd 并持续写入时，
-   * SDK exec 可能因等待流关闭而永久挂起；超过该宽限期即强制结算，
-   * 保证 envExec / dispose 绝不被孤儿孙进程拽住。
+   * cancel/timeout after wait for underlying stdio pipeline arrange empty hard timeout (milli second, by default 500):
+   * when command derive detached descendant process inherit stdout/stderr fd and continuous write when,
+   * SDK exec may because wait for stream close while forever long suspended; exceeds the wide limit phase i.e. force compute,
+   * guarantee envExec / dispose never by orphan child descendant process drag.
    */
   abortDrainGraceMs?: number;
   /**
-   * 打开隧道双工流（daemon 层注入：连接 Hub 的 /ws/node-tunnel 并完成握手）。
-   * signal 用于取消在途建连（nodeTunnelAbort / dispose）：实现应尽快
-   * reject 并销毁底层资源；env-rpc-tunnel 只消费双工流，零凭据。
+   * open tunnel double work stream (daemon layer inject: connect Hub  /ws/node-tunnel and complete grasp manually).
+   * signal used to cancel in-flight create connect (nodeTunnelAbort / dispose): implement should as soon as possible
+   * reject and destroy underlying asset;env-rpc-tunnel only consume double work stream, zero credentials.
    */
   openTunnelStream?: (tunnelId: string, signal?: AbortSignal) => Promise<Duplex>;
 }
@@ -100,11 +100,11 @@ const readerNotFound = <T>(readerId: string): RpcResult<T> => ({
   error: { code: 'not_found', message: `Unknown reader: ${readerId}` },
 });
 
-/** 二进制传输上限（64 MiB）：read/write/base64 往返的单次载荷上限，超限显式报错。 */
+/** two enter system transfer cap (64 MiB):read/write/base64 to return single time payload cap, over limit explicit errors. */
 const MAX_BINARY_TRANSFER_BYTES = 64 * 1024 * 1024;
 
-/** base64 边界校验：标准字母表 + 填充，禁止 Node 宽松解析静默吞非法字符；
- * 解码前校验编码后长度上限（解码后 ≤ 64 MiB），超限显式报错。 */
+/** base64 boundary validate: standard character parent table + fill, forbidden Node loosely parse static default swallow illegal character;
+ * decode before validate encode after length cap (decode after ≤ 64 MiB), over limit explicit errors. */
 const decodeBase64 = (content: string, what: string): Uint8Array => {
   if (typeof content !== 'string') {
     throw Object.assign(new Error(`${what} must be a base64 string`), { code: 'invalid' });
@@ -113,7 +113,7 @@ const decodeBase64 = (content: string, what: string): Uint8Array => {
   if (content.length > encodedLimit) {
     throw Object.assign(new Error(`${what} exceeds the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`), { code: 'invalid' });
   }
-  // 无嵌套重复组，避免大载荷触发正则回溯栈溢出。
+  // without embed set duplicate group, avoid large payload trigger regex backtrack stack overflow.
   if (content.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(content)) {
     throw Object.assign(new Error(`${what} is not valid base64 (standard alphabet)`), { code: 'invalid' });
   }
@@ -129,14 +129,14 @@ const decodeBase64 = (content: string, what: string): Uint8Array => {
 };
 
 /**
- * 输出分块的下一个切点：按 codepoint 边界截断 UTF-16 文本，绝不把代理对
- * 劈成两半（跨帧各自 JSON 编码会产生替代字符 U+FFFD，破坏下游拼接）。
- * 即使配置上限为 1，也允许一个完整代理对占 2 个码元，确保每轮前进。
+ * output chunked under a cut point: by codepoint boundary truncate UTF-16 text, never proxy for
+ * split into two half (across frame each JSON encode will produce alternative character U+FFFD, break downstream concatenate).
+ * even if config cap is 1, also allows a complete proxy for occupy 2 code meta, ensure each round before enter.
  */
 const safeChunkEnd = (text: string, offset: number, limit: number): number => {
   const desired = Math.min(offset + Math.max(limit, 1), text.length);
   if (desired >= text.length) return text.length;
-  // 高代理落在切点上（低代理在 desired 处被劈开）：回退一码元。
+  // high proxy in cut point on (low proxy in desired where by split): fall back one code meta.
   const code = text.charCodeAt(desired - 1);
   if (code >= 0xd800 && code <= 0xdbff) {
     const backed = desired - 1;
@@ -145,52 +145,52 @@ const safeChunkEnd = (text: string, offset: number, limit: number): number => {
   return desired;
 };
 
-/** NodeEnvRpcFunctions + dispose/内省 + IPC 端点解析（daemon 接线用）。 */
+/** NodeEnvRpcFunctions + dispose/inside omit + IPC end point parse (daemon connect line use). */
 export interface NodeEnvRpcServer extends NodeEnvRpcFunctions {
   /**
-   * 打开到目标 host:port（host 缺省 127.0.0.1，由本节点解析连接）的 TCP
-   * 隧道，与 openTunnelStream 双工流双向 pipe。严格校验入参（仅
-   * tunnelId/host/port/timeoutMs）；draining 时返回 node_draining、disposed
-   * 时返回 aborted；本机连接失败/握手失败返回结构化错误（绝不伪造成功）。
+   * open to target host:port(host default 127.0.0.1, by this node parse connect) TCP
+   * tunnel, and openTunnelStream double work stream double to pipe. strictly validate reference (only
+   * tunnelId/host/port/timeoutMs);draining when return node_draining,disposed
+   * when return aborted; local machine failed to connect/grasp manually failed return structure error (never fabricate succeeded).
    */
   nodeTunnelOpen(input: NodeTunnelOpenInput): Promise<RpcResult<null>>;
-  /** 取消在途隧道（握手中或已建立）：销毁该隧道的 TCP/WS 并立即返回。 */
+  /** cancel in-flight tunnel (grasp manually in or already establish): destroy the tunnel TCP/WS and immediately return. */
   nodeTunnelAbort(tunnelId: string): Promise<void>;
-  /** 关闭全部 reader、杀死在途命令、销毁全部 IPC socket（连接断开或停机时调用）。幂等。 */  dispose(): Promise<void>;
+  /** close all reader, kill die in-flight command, destroy all IPC socket(connect disconnect or stop machine when invoke). idempotent. */  dispose(): Promise<void>;
   /**
-   * 排空开关：true 期间新 envExec / ipcCall / ipcSubscribe 受理即拒（升级
-   * 排空/已提交让位/候选待激活），不影响已在途命令；false 恢复受理。幂等。
+   * arrange empty switch:true during new envExec / ipcCall / ipcSubscribe subject to i.e. refuse (upgrade
+   * arrange empty/committed let/choose await activate), does not affect already in-flight command;false restore subject to. idempotent.
    */
   setDraining(value: boolean): void;
-  /** 在途 envExec 数量（排空内省；含已受理未 spawn 的调用）。 */
+  /** in-flight envExec amount (arrange empty inside omit; contains already subject to not spawn invoke). */
   getActiveExecCount(): number;
-  /** 打开的 reader 数量（内省/测试）。 */
+  /** open reader amount (inside omit/test). */
   getOpenReaderCount(): number;
-  /** 在途 ipcCall 数量（排空内省；含无 callId 的在途调用，受理即计数）。 */
+  /** in-flight ipcCall amount (arrange empty inside omit; contains without callId in-flight invoke, subject to i.e. counter). */
   getActiveIpcCallCount(): number;
-  /** 活跃 ipcSubscribe 数量（内省/测试；长驻订阅不计入排空等待）。 */
+  /** leap ipcSubscribe amount (inside omit/test; long resident subscribe do not count arrange empty wait for). */
   getActiveIpcSubscriptionCount(): number;
-  /** 在途隧道数量（排空内省；含 TCP 已发起未完成握手的隧道）。 */
+  /** in-flight tunnel amount (arrange empty inside omit; contains TCP already start not complete grasp manually tunnel). */
   getActiveTunnelCount(): number;
 }
 
-/** void 返回的 RPC（abort/cleanup/unsubscribe）：不做 RpcResult 边界包装；
- * envCleanup 因按 cwd 杀全部同 cwd 会话在途命令的破坏性语义，在函数内
- * 自带 disposed/draining 显式拒绝（抛错经 birpc 错误信封如实回拒）。 */
+/** void return RPC(abort/cleanup/unsubscribe): does not RpcResult boundary wrap;
+ * envCleanup because by cwd kill all same cwd conversation in-flight command break semantics, in function inside
+ * self carries disposed/draining explicit reject (throws via birpc error message seal such as back refuse). */
 const VOID_RPC_METHODS = new Set(['envAbortExec', 'envCleanup', 'ipcAbortCall', 'ipcUnsubscribe', 'nodeTunnelAbort']);
 
 /**
- * guard 受理策略（与 VOID_RPC_METHODS 同层的数据声明，缺省策略为不拒新、不追踪）：
- * - envExec：受理即登记——draining/disposed/对象校验与 execWaiters 计数
- *   全部在 guard 入口同步完成，升级排空轮询看到的计数包含「已受理未
- *   spawn」的调用，且已受理的调用不会因之后的 setDraining 被拒；
- * - nodeTunnelOpen：draining 拒新隧道；隧道生命周期（双端销毁）由
- *   tunnelWaiters 追踪，dispose 排空时等待其 settle，不再另行计数；
- * - ipcCall：一次性 call 计入排空口径（ipcWaiters），升级等待其收敛，
- *   不被旧宿主退出硬切断；
- * - ipcSubscribe：订阅是长驻语义，排空不等待它收敛（等待它等于禁止
- *   升级期间订阅存在），但 draining 时拒新——旧宿主 dispose 前统一优雅
- *   关闭既有订阅并经 onIpcClosed 通知 Hub，Hub 侧可自行重订。
+ * guard subject to policy (and VOID_RPC_METHODS same layer data declaration, default policy is do not refuse new, do not append trace):
+ * - envExec: subject to i.e. register - -draining/disposed/object validate and execWaiters counter
+ *   all in guard entry sync complete, upgrade arrange empty polling see to counter contains already subject to not
+ *   spawninvoke, and already subject to invoke will not because after setDraining by refuse;
+ * - nodeTunnelOpen:draining refuse new tunnel; tunnel lifecycle (double end destroy) by
+ *   tunnelWaiters append trace,dispose arrange empty when wait for its settle, no longer another row counter;
+ * - ipcCall: once call count arrange empty opening path (ipcWaiters), upgrade wait for its converge,
+ *   do not by old host exit hard cut assert;
+ * - ipcSubscribe: subscribe is long resident semantics, arrange empty without waiting it converge (wait for it equals forbidden
+ *   upgrade during subscribe store in), but draining when refuse new - - old host dispose before unify graceful
+ *   close since has subscribe and via onIpcClosed notify Hub,Hub side can self row heavy subscribe.
  */
 const ADMIT_POLICIES: Record<string, { drainingWhat?: string; tracked?: 'exec' | 'ipc' }> = {
   envExec: { drainingWhat: 'commands', tracked: 'exec' },
@@ -276,7 +276,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     isDraining: () => draining,
   });
 
-  /** Result 适配：void → null（JSON 序列化友好）；失败保结构。 */
+  /** Result adapt:void → null(JSON serialization friend well); failed keep structure. */
   const unwrap = async <T, R = T extends void ? null : T>(
     promise: Promise<{ ok: true; value: T } | { ok: false; error: unknown }>,
   ): Promise<RpcResult<R>> => {
@@ -285,14 +285,14 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
   };
 
   /**
-   * 组装 envExec 子进程环境（宿主 token 隔离）：
-   * - 基底：节点宿主 process.env 的非机密部分（PATH/HOME 等本机工具链）；
-   * - 剥除宿主 HELM_TOKEN（节点自身凭据绝不进远端会话；SDK 默认
-   *   inheritEnv:true 会把 process.env 重新合并回来，故必须显式传
-   *   inheritEnv:false 并自带合并结果）；
-   * - 节点 daemon shellEnv（HELM_HUB_URL/HELM_DATA_DIR）覆盖基底；
-   * - 调用方 input.env（Hub 受管注入，可含合法 HELM_TOKEN）最后覆盖。
-   * input.inheritEnv:false 语义：只用 shellEnv + input.env，不带宿主基底。
+   * group install envExec child process environment (host token isolated):
+   * - base bottom: node host process.env non- secret part (PATH/HOME etc. local machine tool chain);
+   * - strip except host HELM_TOKEN(node itself credentials never enter remote conversation;SDK by default
+   *   inheritEnv:true will process.env re- merge back come, reason must explicit pass
+   *   inheritEnv:false and self carries merge result);
+   * - node daemon shellEnv(HELM_HUB_URL/HELM_DATA_DIR) override base bottom;
+   * - caller input.env(Hub managed inject, can contains legal HELM_TOKEN) finally override.
+   * input.inheritEnv:false semantics: only use shellEnv + input.env, do not carries host base bottom.
    */
   const buildExecEnv = (
     input: { env?: Record<string, string>; inheritEnv?: boolean },
@@ -300,8 +300,8 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     const merged: Record<string, string> = {};
     if (input.inheritEnv !== false) {
       for (const [key, value] of Object.entries(process.env)) {
-        // 受管身份变量剥除（HELM_TOKEN / HELM_EXECUTION_SCOPE）：daemon 宿主
-        // 自身的值绝不静默进入子命令；合法值只由调用方 input.env 按次注入。
+        // managed identity variable strip except (HELM_TOKEN / HELM_EXECUTION_SCOPE):daemon host
+        // itself value never static default enter sub- command; legal value only by caller input.env by time inject.
         if (value === undefined || isManagedHelmEnvKey(key)) continue;
         setEnvEntry(merged, key, value);
       }
@@ -315,7 +315,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     return { env: merged, inheritEnv: false as const };
   };
 
-  /** 在途 envExec 的 settle promise（dispose 排空用；按调用追踪，幂等键不可靠）。 */
+  /** in-flight envExec  settle promise(dispose arrange empty use; by invoke append trace, idempotent key cannot rely). */
   const execWaiters = new Set<Promise<unknown>>();
   const trackExec = <T>(promise: Promise<T>): Promise<T> => {
     execWaiters.add(promise);
@@ -328,14 +328,14 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     if (typeof execId !== 'string' || execId.length === 0 || execId.length > 128) {
       return invalidInput(`Invalid execId: ${JSON.stringify(execId)}`);
     }
-    // 重复 execId：在途条目会被覆盖并失去 cancel 句柄——显式拒绝。
+    // duplicate execId: in-flight item will by override and lose remove cancel handle - - explicit reject.
     if (running.has(execId)) {
       return invalidInput(`Duplicate execId in flight: ${JSON.stringify(execId)}`);
     }
     const executionEnv = envFor(cwd);
     const controller = new AbortController();
     running.set(execId, { controller });
-    // env 将输出回调异常转为 callback_error，并负责杀进程树及等待退出。
+    // env output call back exception rotate is callback_error, and negative duty kill process tree and wait for exit.
     const emit = (text: string, stream: 'stdout' | 'stderr', skipped?: EnvExecOutputEvent['skipped']): void => {
       if (!onExecOutput) return;
       for (let offset = 0; offset < text.length;) {
@@ -345,9 +345,9 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       }
     };
     /**
-     * 取消/超时后的 stdio 排空硬超时：SDK exec 在子进程退出后仍可能被
-     * detached 孙进程拽住的 stdout/stderr 管道挂住（idle grace 会因持续
-     * 写入不断重置）。宽限期内底层未 settle 即强制结算，绝不永久挂死。
+     * cancel/timeout after stdio arrange empty hard timeout:SDK exec in child process exit after still may by
+     * detached descendant process drag stdout/stderr pipeline hang (idle grace will because continuous
+     * write do not assert reset). wide limit phase inside underlying not settle i.e. force compute, never forever long hang die.
      */
     let forced: { ok: false; error: { code: 'aborted' | 'timeout'; message: string } } | undefined;
     let execSettled = false;
@@ -359,7 +359,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       forced = { ok: false, error: { code, message } };
       settleForce?.();
     };
-    // 取消（envAbortExec / dispose）：先给底层一个排空窗口，逾期强制 aborted。
+    // cancel (envAbortExec / dispose): first to underlying a arrange empty window, past due phase force aborted.
     controller.signal.addEventListener('abort', () => {
       if (execSettled) return;
       const timer = setTimeout(
@@ -368,8 +368,8 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       );
       drainTimers.add(timer);
     }, { once: true });
-    // 底层自身 timeout 杀树后同样可能被孙进程管道挂住：timeout+宽限期到点
-    // 先 cancel 再强制 timeout 结算（不再额外叠加宽限）。
+    // underlying itself timeout kill tree after same may by descendant process pipeline hang:timeout+wide limit phase to point
+    // first cancel again force timeout compute (no longer extra stack add wide limit).
     if (timeout !== undefined && Number.isFinite(timeout) && timeout > 0) {
       const timer = setTimeout(() => {
         if (execSettled) return;
@@ -425,7 +425,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
         if (info.value.size > MAX_BINARY_TRANSFER_BYTES) {
           return invalidInput(`readBinaryFile result exceeds the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`);
         }
-        // 用同一文件句柄有界读取；检查后文件增长也不会触发无界分配。
+        // use the same file handle has boundary read; check after file increase long also will not trigger without boundary allocate.
         const result = await reader.read(0, MAX_BINARY_TRANSFER_BYTES + 1);
         if (!result.ok) return rpcFail(result.error);
         if (result.value.byteLength > MAX_BINARY_TRANSFER_BYTES) {
@@ -444,7 +444,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       } catch (error) {
         return rpcFail(error);
       }
-      // 解码后：真实字节数复验（含 utf8 路径与 base64 解码结果）。
+      // decode after: real byte count re- verify (contains utf8 path and base64 decode result).
       const size = typeof bytes === 'string' ? Buffer.byteLength(bytes, 'utf8') : bytes.byteLength;
       if (size > MAX_BINARY_TRANSFER_BYTES) {
         return invalidInput(
@@ -481,8 +481,8 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       return unwrap(envFor(cwd).listDir(target));
     },
     async envListFiles() {
-      // LocalExecutionEnv 未实现可选 listFiles：如实返回 not_supported，
-      // 调用方（pi-durable 宿主）自行回退遍历。
+      // LocalExecutionEnv not implemented optional listFiles: such as return not_supported,
+      // caller (pi-durable host) self row fall back iterate.
       return { ok: false, error: { code: 'not_supported', message: 'listFiles is not available on this environment' } };
     },
     async envCanonicalPath({ path: target, cwd }) {
@@ -493,13 +493,13 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     },
 
     /**
-     * 节点本机进程占用快照（删除前诊断；只读面，升级排空不拒绝——与文件
-     * 只读操作同口径）。进程内直接扫描（零 helper spawn、不用目标 cwd 启动
-     * 任何子进程）；只读 cwd/fd/comm 定位信息，绝不读 cmdline/environ。
-     * 入参严格校验（仅 path 字段）；非 Linux 平台显式 not_supported；持久
-     * 权限拒读（EACCES/EPERM，跨 uid 或 non-dumpable 如 systemd --user）
-     * 计为结构性盲区（unobservable 计数 + 诊断，不影响完整性）；非权限
-     * 类读取错误使 complete=false（绝不假装完整/干净）。
+     * node local machine process occupy snapshot (before deletion diagnose; only read side, upgrade arrange empty do not reject - - and file
+     * only read operation same opening path). process inside directly scan (zero helper spawn, do not use target cwd start
+     * any child process); only read cwd/fd/comm locate information, never read cmdline/environ.
+     * reference strictly validate (only path field); non- Linux platform explicit not_supported; durable
+     * permission refuse read (EACCES/EPERM, across uid or non-dumpable such as systemd --user)
+     * count is structure blind spot (unobservable counter + diagnose, does not affect complete); non- permission
+     * class read error make complete=false(never pretend complete/clean).
      */
     async envPathUsage(raw: unknown): Promise<RpcResult<NodePathUsage>> {
       if (!isRecord(raw) || Array.isArray(raw)) {
@@ -514,7 +514,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
         return invalidInput('envPathUsage path must be a non-empty string without NUL, at most 4096 chars');
       }
       const procRoot = options.pathUsage?.procRoot ?? '/proc';
-      // 与 Hub 侧共用 @helm/env-io 同一 node fs 适配，绝不各复制一套语义。
+      // and Hub side shared use @helm/env-io the same node fs adapt, never each duplicate one set semantics.
       const io = createNodePathUsageIo();
       const result = await scanPathUsage(target, {
         io,
@@ -577,7 +577,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     async envBinaryReaderRead({ readerId, offset, length }) {
       const reader = getReader<BinaryReader>(readerId, 'binary');
       if (reader === undefined) return readerNotFound(readerId);
-      // 传输上限：请求的读取长度超 64 MiB 显式拒绝（分页读取由调用方分批进行）。
+      // transfer cap: request read length over 64 MiB explicit reject (page read by caller batch enter row).
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 0 || length > MAX_BINARY_TRANSFER_BYTES) {
         return invalidInput(
           `length must be a safe integer no greater than ${MAX_BINARY_TRANSFER_BYTES}`,
@@ -629,11 +629,11 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     },
 
     /**
-     * 按 cwd 粒度清理：杀同 cwd 下**全部**在途命令进程树（envs 被同节点多
-     * 会话共享，cwd 不是会话隔离键），会误杀同 cwd 其他会话的在途命令；
-     * Hub 侧 remote-env 刻意不调用本方法（连接级 dispose 兜底）。
-     * draining/disposed 时拒绝：排空期清杀破坏「排空不强杀」事务语义
-     * （birpc 错误信封如实回拒，不静默）。
+     * by cwd granularity clean up: kill same cwd under**all**in-flight command process tree (envs by same node many
+     * conversation sharing,cwd is not conversation isolated key), will mistakenly kill same cwd other conversation in-flight command;
+     * Hub side remote-env moment intent do not invoke this method (connect level dispose fall back).
+     * draining/disposed when reject: arrange empty phase clean kill break arrange empty do not strong kill transaction semantics
+     * (birpc error message seal such as back refuse, not silently).
      */
     async envCleanup(cwd?: string): Promise<void> {
       if (disposed) {
@@ -658,22 +658,22 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     ipcSubscribe: ipc.ipcSubscribe,
     ipcUnsubscribe: ipc.ipcUnsubscribe,
   };
-  // 隧道 RPC 附着（protocol NodeEnvRpcFunctions 已含 optional 两方法）。
+  // tunnel RPC attach (protocol NodeEnvRpcFunctions already contains optional two method).
   const rpcFunctions: NodeEnvRpcFunctions = Object.assign(rpc, {
     nodeTunnelOpen: (input: NodeTunnelOpenInput): Promise<RpcResult<null>> => tunnels.nodeTunnelOpen(input),
     nodeTunnelAbort: tunnels.nodeTunnelAbort,
   });
 
   /**
-   * 边界统一包装：所有 RpcResult 返回的 RPC——disposed / 同步异常 /
-   * null 输入解构错误——一律转为结构化 RpcResult 错误信封，绝不向
-   * birpc 调用方抛裸异常。void 返回的 abort/cleanup 不改签名。
+   * boundary unify wrap: all RpcResult return RPC- -disposed / sync exception /
+   * null input solve construct error - - one rule rotate is structure RpcResult error message seal, never to
+   * birpc caller throw bare exception.void return abort/cleanup do not change signature.
    *
-   * 方法差异只经 admit 参数化：
-   * - drainingWhat：参与升级排空拒新的方法及其拒新文案主题；未配置的
-   *   方法不拒新（文件只读面与排空无关），并在延迟执行段复核 disposed
-   *   （受理与执行间被 dispose 时以 aborted 拒绝，不再触碰 original）；
-   * - tracker：受理即计入排空内省（trackExec / trackIpc）。
+   * method difference only via admit parameter:
+   * - drainingWhat: reference and upgrade arrange empty refuse new method and its refuse new text proposal theme; not config
+   *   method do not refuse new (file only read side and arrange empty without closure), and in latency execute segment re-check disposed
+   *   (subject to and execute between by dispose when with aborted reject, no longer trigger touch original);
+   * - tracker: subject to i.e. count arrange empty inside omit (trackExec / trackIpc).
    */
   const guardRpcMethod = (
     original: (...args: unknown[]) => Promise<RpcResult<unknown>>,
@@ -725,7 +725,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     disposed = true;
     disposal = (async () => {
       for (const exec of running.values()) exec.controller.abort(new Error('connection closed'));
-      // 隧道/IPC：销毁全部 TCP、双工流与 socket 并清空在途登记（幂等）。
+      // tunnel/IPC: destroy all TCP, double work stream and socket and empty in-flight register (idempotent).
       tunnels.destroyAllTunnels();
       ipc.destroySockets();
       await Promise.allSettled([...pendingOperations, ...execWaiters, ...tunnels.getTunnelWaiters()]);
@@ -746,7 +746,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     setDraining: (value: boolean): void => {
       draining = value === true;
     },
-    // 排空内省按「已受理」计数（execWaiters/ipcWaiters 在受理同步段登记）。
+    // arrange empty inside omit by already subject to counter (execWaiters/ipcWaiters in subject to sync segment register).
     getActiveExecCount: () => execWaiters.size,
     getOpenReaderCount: () => readers.size,
     getActiveIpcCallCount: () => ipc.getActiveCallCount(),

@@ -1,7 +1,7 @@
 /**
- * config.json 配置服务：按真实文件路径共享的进程内串行化读写，
- * 防止多个模块（含各自 new 出的实例）并发覆盖彼此的键，或同进程读写撞上 rename。
- * 机密内容（密码哈希之外的 secret 明文）不得写入本文件，由 credentials.json 承载。
+ * config.json config service: by real file path sharing process inside serial read write,
+ * guard against multiple module (contains each new out instance) concurrency override each other key, or same process read write collide on rename.
+ * secret content (password hash of outside secret plaintext) must not write this file, by credentials.json bear load.
  */
 import { realpath } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -15,14 +15,14 @@ type Json = Record<string, unknown>
 type InvalidationListener = (canonicalPath: string) => void
 
 /**
- * 按归一化真实路径共享的写入代数与失效监听：
- * 每次 updateBy 写盘成功或 invalidateCache 时递增，供 AuthService 等上层缓存
- * 以零系统调用判定快照有效性，并在锁内原子配对防并发脏回填。
+ * by archive one real path sharing write proxy count and expires listen:
+ * each time updateBy write succeeded or invalidateCache when pass increase, supply AuthService etc. on layer cache
+ * with zero system invoke decide snapshot valid, and in lock inside atomic match for guard against concurrency dirty back fill.
  */
 const configGenerations = new Map<string, number>()
 const invalidationListeners = new Set<InvalidationListener>()
 
-/** 注册配置失效监听（模块级注册，供 AuthService 清理快照，避免 per-instance 泄漏）。 */
+/** register config expires listen (module level register, supply AuthService clean up snapshot, avoid per-instance leak leak). */
 export function onConfigInvalidated(listener: InvalidationListener): () => void {
   invalidationListeners.add(listener)
   return () => {
@@ -37,7 +37,7 @@ function bumpGeneration(canonicalPath: string): number {
     try {
       listener(canonicalPath)
     } catch {
-      /* 缓存失效通知不阻断主写路径 */
+      /* cache expires notify do not block assert main write path */
     }
   }
   return next
@@ -46,7 +46,7 @@ function bumpGeneration(canonicalPath: string): number {
 export class ConfigService {
   private readonly dataDir: string
   private readonly path: string
-  /** 首次成功解析后的规范路径缓存，避免热路径每次调 realpath 在 Windows 上开目录句柄。 */
+  /** first time succeeded parse after canonical path cache, avoid hot path each time tune realpath in Windows on open directory handle. */
   private canonicalPathCache: string | undefined
 
   constructor(dataDir: string) {
@@ -54,7 +54,7 @@ export class ConfigService {
     this.path = join(dataDir, 'config.json')
   }
 
-  /** 获取当前 dataDir 对应 config.json 的真实路径；目录尚不存在返回 undefined。 */
+  /** get when before dataDir for should config.json real path; directory still missing return undefined. */
   async getCanonicalPath(): Promise<string | undefined> {
     if (this.canonicalPathCache !== undefined) return this.canonicalPathCache
     const realDir = await realpath(this.dataDir).catch(() => undefined)
@@ -63,7 +63,7 @@ export class ConfigService {
     return this.canonicalPathCache
   }
 
-  /** 纯内存读取指定规范路径的最新已知代数（零系统调用）。 */
+  /** in-memory read designate canonical path most new known proxy count (zero system invoke). */
   getGenerationSync(canonicalPath: string): number {
     return configGenerations.get(canonicalPath) ?? 0
   }
@@ -72,20 +72,20 @@ export class ConfigService {
     const value = await readJsonFileOptional(this.path)
     if (value === undefined) return {}
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-      throw new Error(`config.json 结构非法（应为对象）: ${this.path}`)
+      throw new Error(`config.json structure illegal (should be object): ${this.path}`)
     }
     return value as Json
   }
 
   /**
-   * 读取当前配置（无文件返回空对象；损坏 JSON 显式抛错，不静默重置）。
-   * 纳入与 updateBy 同一把进程内文件锁，防止同进程内读句柄撞上写入 rename。
+   * read when before config (without file return empty object; corrupt JSON explicit throws, not silently reset).
+   * accept and updateBy the same process inside file lock, guard against same process inside read handle collide on write rename.
    */
   get(): Promise<Json> {
     return withFileLock(this.path, () => this.readUnlocked())
   }
 
-  /** 锁内原子配对读取配置与写入代数（供上层快照缓存防并发脏回填）。 */
+  /** lock inside atomic match for read config and write proxy count (supply on layer snapshot cache guard against concurrency dirty back fill). */
   getWithGeneration(): Promise<{
     config: Json
     generation: number
@@ -100,7 +100,7 @@ export class ConfigService {
     })
   }
 
-  /** 外部手动改写/删除 config.json 后失效上层派生缓存（进同一文件锁保证与读取原子排序）。 */
+  /** external manually change write/delete config.json after expires on layer derive cache (enter the same file lock guarantee and read atomic sort). */
   invalidateCache(): Promise<void> {
     return withFileLock(this.path, async () => {
       const prev = this.canonicalPathCache
@@ -112,12 +112,12 @@ export class ConfigService {
   }
 
   /**
-   * 串行化原子更新：对象 patch 在最新内容基础上浅合并，保留其他键；
-   * 传入函数则等价 updateBy（锁内读改写回调）。
-   * 锁以 config.json 真实路径为 key，跨实例共享；update 全过程（读→改→写）
-   * 都在锁内，杜绝并发读到同一旧配置后互相覆盖。
-   * 对象与函数分流是必须的：函数被当对象展开无可枚举属性，会静默丢弃
-   * 全部回调改动（诚实性纪律——显式拒绝而不是静默丢写）。
+   * serial atomic update: object patch in most new content basis on shallow merge, keep other key;
+   * pass function then etc. price updateBy(lock inside read change write call back).
+   * lock with config.json real path is key, across instance sharing;update all process (read→change→write)
+   * all in lock inside, eliminate concurrency read to the same old config after mutual each other override.
+   * object and function stream is must: function by when object expand without can enumeration property, will static default discard
+   * all call back change (honest discipline - - explicit reject while is not static default lose write).
    */
   update(patch: Json | ((current: Json) => Json)): Promise<Json> {
     return typeof patch === 'function'
@@ -126,9 +126,9 @@ export class ConfigService {
   }
 
   /**
-   * 回调形态读改写：mutate 在锁内基于最新磁盘状态同步执行，读写同锁无间隙。
-   * 跨实例并发写不再可能被调用方锁外的旧快照覆盖——调用方永远看不到
-   * 陈旧 current。mutate 必须同步：返回值直接落盘，异步副作用不在保证范围。
+   * call back form read change write:mutate in lock inside based on most new disk state sync execute, read write same lock without between gap.
+   * across instance concurrency write no longer may by caller lock outside old snapshot override - - caller forever see fewer than
+   * stale current.mutate must sync: return value directly, async side effect do not in guarantee scope.
    */
   updateBy(mutate: (current: Json) => Json): Promise<Json> {
     return withFileLock(this.path, async () => {

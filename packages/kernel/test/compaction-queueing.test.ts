@@ -1,17 +1,17 @@
 /**
- * 手动上下文精简期间的输入排队、空跳过兑齐、失败保队、中止清理与原地重发守护集成测试。
+ * manually context streamline during input queue up, empty skip honor complete, failed keep queue, abort clean up and original ground heavy guard integration test.
  *
- * 覆盖（真实 KernelRuntime + SQLite + fauxProvider 门闩控时）：
- * 1. 手动精简期间 submitInput（steer / followUp）进入 pi.inbox 排队（live.queuedInputs 可见）；
- *    whenBusy='reject' 报 409 conversation_busy；精简落盘摘要后 pi.compaction 先于
- *    helm.input 落库，且助手基于精简后的摘要上下文回答；
- * 2. 手动精简期间 withdrawQueuedInput 干净撤回排队输入；
- * 3. 手动精简期间 abortConversation 中止精简任务、撤回排队输入且不误报「当前上下文无需精简」；
- * 4. 空跳过手动精简（短上下文 < 20000 tokens 与 beforeCompact decline 门闩双覆盖）：
- *    发出「当前上下文无需精简」info 通知；期间排队输入通过 continue 自动接续并获助手回答；
- * 5. 手动精简失败且存在排队输入：发出「上下文精简失败」error 通知，不运行未精简上下文的
- *    排队输入，且 queuedInputs 保持完整；
- * 6. 手动精简期间 replaceFromEntryId 原地覆盖重发：中止精简任务并成功重写提交，不报 409。
+ * override (real KernelRuntime + SQLite + fauxProvider latch control when):
+ * 1. manually streamline during submitInput(steer / followUp) enter pi.inbox queue up (live.queuedInputs visible);
+ *    whenBusy='reject' report 409 conversation_busy; streamline summary after pi.compaction first at
+ *    helm.input written to the database, and assist manually based on streamline after summary context answer;
+ * 2. manually streamline during withdrawQueuedInput clean withdraw back queue up input;
+ * 3. manually streamline during abortConversation abort streamline task, withdraw back queue up input and do not mistakenly report when before context no need to streamline;
+ * 4. empty skip manually streamline (short context < 20000 tokens and beforeCompact decline latch double override):
+ *    out when before context no need to streamlineinfo notify; during queue up input via continue automatically connect continue and obtain assist manually answer;
+ * 5. manually streamline failed and store in queue up input: out context streamline failederror notify, do not run not streamline context
+ *    queue up input, and queuedInputs keep complete;
+ * 6. manually streamline during replaceFromEntryId original ground override heavy: abort streamline task and succeeded heavy write commit, do not report 409.
  */
 import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
@@ -104,22 +104,22 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
     return { kernel, faux, dir }
   }
 
-  /** 构造超过 keepRecentTokens(20000) 的大上下文（3 轮对话），使手动压缩产生真实摘要。 */
+  /** construct exceeds keepRecentTokens(20000) large context (3 round dialog), make manually compress produce real summary. */
   async function seedLargeContext(kernel: KernelRuntime, faux: FauxHandle): Promise<void> {
     const bigInput = '大规模上下文历史素材。'.repeat(5_000)
     faux.setResponses([
-      fauxAssistantMessage('大历史答一'),
-      fauxAssistantMessage('大历史答二'),
-      fauxAssistantMessage('大历史答三'),
+      fauxAssistantMessage('large history answer one'),
+      fauxAssistantMessage('large history answer two'),
+      fauxAssistantMessage('large history answer three'),
     ])
-    for (const marker of ['第一轮独特标记', '第二轮独特标记', '第三轮独特标记']) {
+    for (const marker of ['one round unique mark record', 'second round unique mark record', 'third round unique mark record']) {
       await kernel.submitInput(1, `${marker}：${bigInput}`)
       await kernel.waitForIdle(1)
     }
     await waitFor(() => (kernel.getConversation(1).contextUsage?.tokens ?? 0) > 30_000, 20_000)
   }
 
-  it('手动精简期间 steer/followUp 入队、reject 报 409；摘要落盘后 pi.compaction 先于 helm.input 且助手运行于精简后上下文', { timeout: 60_000 }, async () => {
+  it('manually streamline during steer/followUp queue,reject report 409; summary after pi.compaction first at helm.input and assist manually run at streamline after context', { timeout: 60_000 }, async () => {
     const { kernel, faux } = await openRuntime('queue-and-flush')
     let releaseSummary = () => {}
     try {
@@ -134,11 +134,11 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         async () => {
           summaryEntered()
           await summaryGate
-          return fauxAssistantMessage('这是精简后的历史摘要内容')
+          return fauxAssistantMessage('this is streamline after history summary content')
         },
         async (ctx) => {
           seenAssistantPrompts.push(ctx.messages.map((m) => extractText(m.content)))
-          return fauxAssistantMessage('基于精简摘要的回答')
+          return fauxAssistantMessage('based on streamline summary answer')
         },
       ])
 
@@ -146,15 +146,15 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       await enteredPromise
       await waitFor(() => kernel.getConversation(1).contextUsage?.compacting === true, 15_000)
 
-      // whenBusy='reject' 在精简期间必须明确 409 拒绝，不得静默入队或启动新 run。
+      // whenBusy='reject' in streamline during must explicit 409 reject, must not static default queue or start new run.
       await assert.rejects(
-        () => kernel.submitInput(1, '精简期间被拒绝的输入', { whenBusy: 'reject' }),
+        () => kernel.submitInput(1, 'streamline during by reject input', { whenBusy: 'reject' }),
         (err: unknown) => err instanceof HelmError && err.code === 'conversation_busy' && err.status === 409,
       )
 
-      // 精简期间提交 followUp 与 steer，必须进入 pi.inbox 排队并反映在 live.queuedInputs。
-      const subFu = await kernel.submitInput(1, '精简后补充问题 followUp', { whenBusy: 'followUp' })
-      const subSt = await kernel.submitInput(1, '精简后插话指令 steer', { whenBusy: 'steer' })
+      // streamline during commit followUp and steer, must enter pi.inbox queue up and reverse reflect in live.queuedInputs.
+      const subFu = await kernel.submitInput(1, 'streamline after patch fill issue followUp', { whenBusy: 'followUp' })
+      const subSt = await kernel.submitInput(1, 'streamline after insert speech instruction steer', { whenBusy: 'steer' })
       assert.ok(Number(subFu.submissionId) > 0)
       assert.ok(Number(subSt.submissionId) > 0)
 
@@ -163,22 +163,22 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       assert.deepEqual(
         queued.map((q) => ({ text: q.text, mode: q.mode })),
         [
-          { text: '精简后插话指令 steer', mode: 'steer' },
-          { text: '精简后补充问题 followUp', mode: 'followUp' },
+          { text: 'streamline after insert speech instruction steer', mode: 'steer' },
+          { text: 'streamline after patch fill issue followUp', mode: 'followUp' },
         ],
       )
 
-      // 精简未完成前，两条排队输入均不得提前落库或触发模型请求。
+      // streamline not complete before, two queue up input all must not mention before written to the database or trigger model request.
       const midDetail = await kernel.getConversationDetail(1, { limit: 100 })
       assert.equal(midDetail.entries.some((e) => e.kind === 'pi.compaction'), false)
       assert.equal(
         midDetail.entries.some(
-          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === '精简后补充问题 followUp',
+          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'streamline after patch fill issue followUp',
         ),
         false,
       )
 
-      // 释放摘要门闩：摘要落盘并接续排队输入启动助手回合。
+      // release summary latch: summary and connect continue queue up input start assist manually turn.
       releaseSummary()
       await kernel.waitForIdle(1)
       await waitFor(() => {
@@ -189,31 +189,31 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       const finalDetail = await kernel.getConversationDetail(1, { limit: 100 })
       const compactionIdx = finalDetail.entries.findIndex((e) => e.kind === 'pi.compaction')
       const steerIdx = finalDetail.entries.findIndex(
-        (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === '精简后插话指令 steer',
+        (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'streamline after insert speech instruction steer',
       )
       const followUpIdx = finalDetail.entries.findIndex(
-        (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === '精简后补充问题 followUp',
+        (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'streamline after patch fill issue followUp',
       )
-      assert.ok(compactionIdx >= 0, 'pi.compaction 条目必须落库')
-      assert.ok(steerIdx > compactionIdx, 'pi.compaction 必须先于排队的 steer helm.input 落库')
-      assert.ok(followUpIdx > compactionIdx, 'pi.compaction 必须先于排队的 followUp helm.input 落库')
+      assert.ok(compactionIdx >= 0, 'pi.compaction item must written to the database')
+      assert.ok(steerIdx > compactionIdx, 'pi.compaction must first at queue up steer helm.input written to the database')
+      assert.ok(followUpIdx > compactionIdx, 'pi.compaction must first at queue up followUp helm.input written to the database')
       assert.ok(
         finalDetail.entries.some(
-          (e) => e.kind === 'pi.assistant' && extractText(e.model?.[0] && (e.model[0] as { content?: unknown }).content).includes('基于精简摘要的回答'),
+          (e) => e.kind === 'pi.assistant' && extractText(e.model?.[0] && (e.model[0] as { content?: unknown }).content).includes('based on streamline summary answer'),
         ),
-        '助手必须针对精简期间排队的输入完成回复',
+        'assist manually must for streamline during queue up input complete back re-',
       )
-      assert.equal(seenAssistantPrompts.length, 1, '助手只应运行一次（合并消费排队输入）')
+      assert.equal(seenAssistantPrompts.length, 1, 'assist manually only should run once (merge consume queue up input)')
       const joinedPrompt = seenAssistantPrompts[0]!.join('\n')
-      assert.ok(joinedPrompt.includes('这是精简后的历史摘要内容'), '助手请求必须携带精简摘要')
-      assert.equal(joinedPrompt.includes('第一轮独特标记'), false, '已被精简压缩的早期历史不得再注入助手上下文')
+      assert.ok(joinedPrompt.includes('this is streamline after history summary content'), 'assist manually request must carry streamline summary')
+      assert.equal(joinedPrompt.includes('one round unique mark record'), false, 'already by streamline compress early history must not again inject assist manually context')
     } finally {
       releaseSummary()
       await kernel.close()
     }
   })
 
-  it('手动精简期间 withdrawQueuedInput 干净撤回排队输入', { timeout: 60_000 }, async () => {
+  it('manually streamline during withdrawQueuedInput clean withdraw back queue up input', { timeout: 60_000 }, async () => {
     const { kernel, faux } = await openRuntime('withdraw-during-compact')
     let releaseSummary = () => {}
     try {
@@ -226,14 +226,14 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         async () => {
           summaryEntered()
           await summaryGate
-          return fauxAssistantMessage('精简摘要')
+          return fauxAssistantMessage('streamline summary')
         },
       ])
 
       await kernel.compactConversation(1)
       await enteredPromise
 
-      const { submissionId } = await kernel.submitInput(1, '精简期间待撤回输入', { whenBusy: 'followUp' })
+      const { submissionId } = await kernel.submitInput(1, 'streamline during await withdraw back input', { whenBusy: 'followUp' })
       await waitFor(() => (findLive(kernel, 1)?.queuedInputs?.length ?? 0) === 1, 10_000)
 
       const withdrawn = await kernel.withdrawQueuedInput(1, { submissionId: Number(submissionId) })
@@ -249,22 +249,22 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       await waitFor(() => kernel.getConversation(1).contextUsage?.compacting === undefined, 15_000)
 
       const detail = await kernel.getConversationDetail(1, { limit: 100 })
-      assert.ok(detail.entries.some((e) => e.kind === 'pi.compaction'), '压缩应正常完成')
+      assert.ok(detail.entries.some((e) => e.kind === 'pi.compaction'), 'compress should normal complete')
       assert.equal(
         detail.entries.some(
-          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === '精简期间待撤回输入',
+          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'streamline during await withdraw back input',
         ),
         false,
-        '已撤回输入不得落库执行',
+        'already withdraw back input must not written to the database execute',
       )
-      assert.equal(faux.state.callCount, 4, '不应多出助手回答的模型调用（3 轮造历史 + 1 次摘要）')
+      assert.equal(faux.state.callCount, 4, 'must not many out assist manually answer model invoke (3 round build history + 1 time summary)')
     } finally {
       releaseSummary()
       await kernel.close()
     }
   })
 
-  it('手动精简期间 abortConversation 中止精简、撤回排队输入且不误发「当前上下文无需精简」', { timeout: 60_000 }, async () => {
+  it('manually streamline during abortConversation abort streamline, withdraw back queue up input and do not mistakenly when before context no need to streamline', { timeout: 60_000 }, async () => {
     const { kernel, faux } = await openRuntime('abort-during-compact')
     let releaseSummary = () => {}
     const recorder = recordNotifications(kernel, 1)
@@ -278,13 +278,13 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         async (_ctx, opts) => {
           summaryEntered()
           await waitForGateOrAbort(summaryGate, opts?.signal)
-          return fauxAssistantMessage('不应该完成')
+          return fauxAssistantMessage('must not the complete')
         },
       ])
 
       await kernel.compactConversation(1)
       await enteredPromise
-      await kernel.submitInput(1, '中止时一并撤回的输入', { whenBusy: 'steer' })
+      await kernel.submitInput(1, 'abort when one and withdraw back input', { whenBusy: 'steer' })
       await waitFor(() => (findLive(kernel, 1)?.queuedInputs?.length ?? 0) === 1, 10_000)
 
       await kernel.abortConversation(1)
@@ -296,20 +296,20 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       await new Promise((r) => setTimeout(r, 80))
 
       assert.equal(
-        recorder.notices.some((n) => n.title === '当前上下文无需精简'),
+        recorder.notices.some((n) => n.title === 'when before context no need to streamline'),
         false,
-        '被中止的精简绝不得误发「当前上下文无需精简」',
+        'by abort streamline never obtain mistakenly when before context no need to streamline',
       )
       assert.equal(
-        recorder.notices.some((n) => n.title === '上下文精简失败'),
+        recorder.notices.some((n) => n.title === 'context streamline failed'),
         false,
-        '主动中止不应产生失败通知',
+        'actively abort must not produce failed notify',
       )
       const detail = await kernel.getConversationDetail(1, { limit: 100 })
       assert.equal(detail.entries.some((e) => e.kind === 'pi.compaction'), false)
       assert.equal(
         detail.entries.some(
-          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === '中止时一并撤回的输入',
+          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'abort when one and withdraw back input',
         ),
         false,
       )
@@ -319,8 +319,8 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         }
       }).tracker
       const mirror = tracker.mirrors.get(1)
-      assert.equal(mirror?.trackedInputs.size ?? 0, 0, 'abort 后非 run 排队追踪记录必须清空')
-      assert.equal(mirror?.submissionIndex.size ?? 0, 0, 'abort 后排队 submissionIndex 必须清空')
+      assert.equal(mirror?.trackedInputs.size ?? 0, 0, 'abort after non- run queue up append trace record must empty')
+      assert.equal(mirror?.submissionIndex.size ?? 0, 0, 'abort after queue up submissionIndex must empty')
     } finally {
       recorder.stop()
       releaseSummary()
@@ -328,30 +328,30 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
     }
   })
 
-  it('空跳过手动精简（< 20000 tokens）发出「当前上下文无需精简」通知；门闩期间排队输入通过 continue 自动回复', { timeout: 60_000 }, async () => {
-    // 4a. 真实短上下文（< 20000 tokens）：selectCut === undefined 跳过，发 info 通知
+  it('empty skip manually streamline (< 20000 tokens) out when before context no need to streamline notify; latch during queue up input via continue automatically back re-', { timeout: 60_000 }, async () => {
+    // 4a. real short context (< 20000 tokens):selectCut === undefined skip, info notify
     {
       const { kernel, faux } = await openRuntime('empty-skip-short')
       const recorder = recordNotifications(kernel, 1)
       try {
-        faux.setResponses([fauxAssistantMessage('短对话回答')])
-        await kernel.submitInput(1, '短问题')
+        faux.setResponses([fauxAssistantMessage('short dialog answer')])
+        await kernel.submitInput(1, 'short issue')
         await kernel.waitForIdle(1)
 
         await kernel.compactConversation(1)
-        await waitFor(() => recorder.notices.some((n) => n.title === '当前上下文无需精简'), 10_000)
-        const notice = recorder.notices.find((n) => n.title === '当前上下文无需精简')!
+        await waitFor(() => recorder.notices.some((n) => n.title === 'when before context no need to streamline'), 10_000)
+        const notice = recorder.notices.find((n) => n.title === 'when before context no need to streamline')!
         assert.equal(notice.level, 'info')
         assert.equal(notice.conversationId, 1)
-        assert.match(notice.body ?? '', /未生成新的摘要/)
+        assert.match(notice.body ?? '', /not generate new summary/)
       } finally {
         recorder.stop()
         await kernel.close()
       }
     }
 
-    // 4b. 门闩控时（beforeCompact decline -> 与 selectCut===undefined 同走 complete() 无摘要分支）：
-    //     精简进行中排队输入 -> 空跳过结束后自动 continue 并获助手回答。
+    // 4b. latch control when (beforeCompact decline -> and selectCut===undefined same away complete() without summary branch):
+    //     streamline in progress queue up input -> empty skip after end automatically continue and obtain assist manually answer.
     {
       const { kernel, faux } = await openRuntime('empty-skip-with-queued')
       const recorder = recordNotifications(kernel, 1)
@@ -377,17 +377,17 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
 
         await seedLargeContext(kernel, faux)
 
-        faux.setResponses([fauxAssistantMessage('空跳过后自动继续的回答')])
+        faux.setResponses([fauxAssistantMessage('empty skip after automatically continue answer')])
         await kernel.compactConversation(1)
         await enteredPromise
         await waitFor(() => kernel.getConversation(1).contextUsage?.compacting === true, 10_000)
 
-        await kernel.submitInput(1, '空跳过精简期间排队的提问', { whenBusy: 'followUp' })
+        await kernel.submitInput(1, 'empty skip streamline during queue up mention question', { whenBusy: 'followUp' })
         await waitFor(() => (findLive(kernel, 1)?.queuedInputs?.length ?? 0) === 1, 10_000)
 
         releaseHook()
 
-        await waitFor(() => recorder.notices.some((n) => n.title === '当前上下文无需精简'), 15_000)
+        await waitFor(() => recorder.notices.some((n) => n.title === 'when before context no need to streamline'), 15_000)
         await kernel.waitForIdle(1)
         await waitFor(() => {
           const live = findLive(kernel, 1)
@@ -395,18 +395,18 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         }, 15_000)
 
         const detail = await kernel.getConversationDetail(1, { limit: 100 })
-        assert.equal(detail.entries.some((e) => e.kind === 'pi.compaction'), false, '空跳过不应写入 pi.compaction')
+        assert.equal(detail.entries.some((e) => e.kind === 'pi.compaction'), false, 'empty skip must not write pi.compaction')
         assert.ok(
           detail.entries.some(
-            (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === '空跳过精简期间排队的提问',
+            (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'empty skip streamline during queue up mention question',
           ),
-          '排队输入应通过 continue 落库执行',
+          'queue up input should via continue written to the database execute',
         )
         assert.ok(
           detail.entries.some(
-            (e) => e.kind === 'pi.assistant' && extractText(e.model?.[0] && (e.model[0] as { content?: unknown }).content).includes('空跳过后自动继续的回答'),
+            (e) => e.kind === 'pi.assistant' && extractText(e.model?.[0] && (e.model[0] as { content?: unknown }).content).includes('empty skip after automatically continue answer'),
           ),
-          '助手必须完成对排队输入的回复',
+          'assist manually must complete for queue up input back re-',
         )
       } finally {
         recorder.stop()
@@ -416,7 +416,7 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
     }
   })
 
-  it('手动精简失败且存在排队输入：发「上下文精简失败」error 通知、不运行排队输入且保留 queuedInputs', { timeout: 60_000 }, async () => {
+  it('manually streamline failed and store in queue up input: context streamline failederror notify, do not run queue up input and keep queuedInputs', { timeout: 60_000 }, async () => {
     const { kernel, faux } = await openRuntime('failed-compact-keeps-queue')
     let releaseSummary = () => {}
     const recorder = recordNotifications(kernel, 1)
@@ -430,44 +430,44 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         async () => {
           summaryEntered()
           await summaryGate
-          return fauxAssistantMessage('摘要失败', { stopReason: 'error', errorMessage: 'mock compact error' })
+          return fauxAssistantMessage('summary failed', { stopReason: 'error', errorMessage: 'mock compact error' })
         },
-        fauxAssistantMessage('不该被执行到的回答'),
+        fauxAssistantMessage('do not the by execute to answer'),
       ])
 
       await kernel.compactConversation(1)
       await enteredPromise
 
-      await kernel.submitInput(1, '失败后应保留在队列的输入', { whenBusy: 'followUp' })
+      await kernel.submitInput(1, 'failed after should keep in queue input', { whenBusy: 'followUp' })
       await waitFor(() => (findLive(kernel, 1)?.queuedInputs?.length ?? 0) === 1, 10_000)
 
       releaseSummary()
-      await waitFor(() => recorder.notices.some((n) => n.title === '上下文精简失败'), 15_000)
+      await waitFor(() => recorder.notices.some((n) => n.title === 'context streamline failed'), 15_000)
       await waitFor(() => kernel.getConversation(1).contextUsage?.compacting === undefined, 15_000)
       await new Promise((r) => setTimeout(r, 80))
 
-      const failNotice = recorder.notices.find((n) => n.title === '上下文精简失败')!
+      const failNotice = recorder.notices.find((n) => n.title === 'context streamline failed')!
       assert.equal(failNotice.level, 'error')
       assert.match(failNotice.body ?? '', /mock compact error/)
       assert.equal(
-        recorder.notices.some((n) => n.title === '当前上下文无需精简'),
+        recorder.notices.some((n) => n.title === 'when before context no need to streamline'),
         false,
-        '精简失败不得发出无需精简通知',
+        'streamline failed must not out no need to streamline notify',
       )
 
       const live = findLive(kernel, 1)
-      assert.equal(live?.queuedInputs?.length, 1, '排队输入必须完好保留在 queuedInputs 中')
-      assert.equal(live?.queuedInputs?.[0]?.text, '失败后应保留在队列的输入')
+      assert.equal(live?.queuedInputs?.length, 1, 'queue up input must completely well keep in queuedInputs in')
+      assert.equal(live?.queuedInputs?.[0]?.text, 'failed after should keep in queue input')
 
       const detail = await kernel.getConversationDetail(1, { limit: 100 })
       assert.equal(
         detail.entries.some(
-          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === '失败后应保留在队列的输入',
+          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'failed after should keep in queue input',
         ),
         false,
-        '失败后不得在未精简上下文上擅自运行排队输入',
+        'failed after must not in not streamline context on without permission run queue up input',
       )
-      assert.equal(faux.state.callCount, 4, '不得多出助手调用（3 轮造历史 + 1 次失败摘要）')
+      assert.equal(faux.state.callCount, 4, 'must not many out assist manually invoke (3 round build history + 1 time failed summary)')
     } finally {
       recorder.stop()
       releaseSummary()
@@ -475,7 +475,7 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
     }
   })
 
-  it('手动精简期间 replaceFromEntryId 原地覆盖重发：中止精简任务并成功重写提交（不报 409）', { timeout: 60_000 }, async () => {
+  it('manually streamline during replaceFromEntryId original ground override heavy: abort streamline task and succeeded heavy write commit (do not report 409)', { timeout: 60_000 }, async () => {
     const { kernel, faux } = await openRuntime('rewind-during-compact')
     let releaseSummary = () => {}
     const recorder = recordNotifications(kernel, 1)
@@ -484,7 +484,7 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
 
       const preDetail = await kernel.getConversationDetail(1, { limit: 50 })
       const lastHumanEntry = [...preDetail.entries].reverse().find((e) => e.kind === 'helm.input')
-      assert.ok(lastHumanEntry, '必须存在可原地编辑的 helm.input 条目')
+      assert.ok(lastHumanEntry, 'must store in can original ground edit helm.input item')
       const targetEntryId = Number(lastHumanEntry!.id)
 
       let summaryEntered!: () => void
@@ -494,38 +494,38 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         async (_ctx, opts) => {
           summaryEntered()
           await waitForGateOrAbort(summaryGate, opts?.signal)
-          return fauxAssistantMessage('不应该完成')
+          return fauxAssistantMessage('must not the complete')
         },
-        fauxAssistantMessage('原地覆盖重发后的新回答'),
+        fauxAssistantMessage('original ground override heavy after new answer'),
       ])
 
       await kernel.compactConversation(1)
       await enteredPromise
       await waitFor(() => kernel.getConversation(1).contextUsage?.compacting === true, 15_000)
 
-      await kernel.submitInput(1, '精简期间原地覆盖的新问题', { replaceFromEntryId: targetEntryId })
+      await kernel.submitInput(1, 'streamline during original ground override new issue', { replaceFromEntryId: targetEntryId })
       await kernel.waitForIdle(1)
       await new Promise((r) => setTimeout(r, 80))
 
       const finalDetail = await kernel.getConversationDetail(1, { limit: 50 })
-      assert.ok(finalDetail.entries.some((e) => e.kind === 'helm.rewind'), '必须写入 helm.rewind 截断标记')
+      assert.ok(finalDetail.entries.some((e) => e.kind === 'helm.rewind'), 'must write helm.rewind truncate mark record')
       assert.ok(
         finalDetail.entries.some(
-          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === '精简期间原地覆盖的新问题',
+          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'streamline during original ground override new issue',
         ),
-        '必须落库覆盖后的新输入',
+        'must written to the database override after new input',
       )
       assert.ok(
         finalDetail.entries.some(
-          (e) => e.kind === 'pi.assistant' && extractText(e.model?.[0] && (e.model[0] as { content?: unknown }).content).includes('原地覆盖重发后的新回答'),
+          (e) => e.kind === 'pi.assistant' && extractText(e.model?.[0] && (e.model[0] as { content?: unknown }).content).includes('original ground override heavy after new answer'),
         ),
-        '必须获得重发后的新回答',
+        'must obtain heavy after new answer',
       )
       assert.equal(finalDetail.entries.some((e) => e.kind === 'pi.compaction'), false)
       assert.equal(
-        recorder.notices.some((n) => n.title === '当前上下文无需精简'),
+        recorder.notices.some((n) => n.title === 'when before context no need to streamline'),
         false,
-        '被 rewind 中止的精简不得误报无需精简',
+        'by rewind abort streamline must not mistakenly report no need to streamline',
       )
     } finally {
       recorder.stop()

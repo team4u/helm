@@ -1,12 +1,12 @@
 /**
- * HTTPS 隧道 fixture（两阶段子进程脚本）：
- * - phase=ca：生成测试 CA 与服务证书，输出 JSON { caCert, key, cert } 路径；
- * - phase=request（env HELM_TUNNEL_TLS_KEY/CERT/CA）：以 NODE_EXTRA_CA_CERTS
- *   注入的信任链（进程启动时生效）运行真实 HTTPS 隧道请求，输出
- *   { ok, status, body }。
+ * HTTPS tunnel fixture(two phase child process script):
+ * - phase=ca: generate test CA and service certificate, output JSON { caCert, key, cert } path;
+ * - phase=request(env HELM_TUNNEL_TLS_KEY/CERT/CA): with NODE_EXTRA_CA_CERTS
+ *   inject trust chain (process at startup takes effect) run real HTTPS tunnel request, output
+ *   { ok, status, body }.
  *
- * Node 仅在进程启动时读取 NODE_EXTRA_CA_CERTS，因此两阶段各起一个进程；
- * 客户端证书校验走 Node 默认信任链 + 注入的 CA，绝不伪造跳过校验。
+ * Node only in process at startup read NODE_EXTRA_CA_CERTS, therefore two phase each start a process;
+ * client certificate validate away Node by default trust chain + inject CA, never fabricate skip validate.
  */
 import http from 'node:http'
 import https from 'node:https'
@@ -77,7 +77,7 @@ async function runRequest(): Promise<void> {
     log: () => undefined,
   })
   try {
-    if (!(await daemon.waitUntilRegistered(10_000))) throw new Error('daemon 未注册')
+    if (!(await daemon.waitUntilRegistered(10_000))) throw new Error('daemon not registered')
     const response = await fabric.nodeFetch('tls-node')(`https://127.0.0.1:${port}/v1/x?k=v`)
     const body = await response.text()
     process.stdout.write(JSON.stringify({ ok: response.status === 200 && body === 'https-echo:GET:/v1/x?k=v', status: response.status, body }))
@@ -94,7 +94,7 @@ async function runRequest(): Promise<void> {
 
 function requireEnv(name: string): string {
   const value = process.env[name]
-  if (value === undefined || value === '') throw new Error(`缺少环境变量 ${name}`)
+  if (value === undefined || value === '') throw new Error(`missing environment variable ${name}`)
   return value
 }
 

@@ -1,14 +1,14 @@
 /**
- * 跨平台宿主机 Bash Shell 探测（纯编排器，I/O 经 ShellProbeIo 注入）。
+ * across platform host machine Bash Shell probe (pure orchestration,I/O via ShellProbeIo inject).
  *
- * 解决 Windows 宿主机在安装 WSL 后被 `C:\Windows\System32\bash.exe` 截胡的问题：
- * 1. 按常见安装位置依次探测 Git Bash（含 ProgramW6432 / ProgramFiles /
- *    ProgramFiles(x86) / LOCALAPPDATA / Scoop），再用 `where.exe git.exe`
- *    反推非标盘符或自定义目录中的 Git Bash；
- * 2. 扫描 `where.exe bash.exe` 全部行，跳过 System32 / Sysnative /
- *    WindowsApps 等 WSL 启动器——绝不让 Windows 宿主机隐式掉入 WSL；
- * 3. 若用户显式传入 `customShellPath`，仍尊重显式配置（含 legacy WSL `-s`
- *    stdin 传输模式）。
+ * resolve Windows host machine in install WSL after by `C:\Windows\System32\bash.exe` truncate recklessly issue:
+ * 1. by common install location in order probe Git Bash(contains ProgramW6432 / ProgramFiles /
+ *    ProgramFiles(x86) / LOCALAPPDATA / Scoop), again use `where.exe git.exe`
+ *    reverse push non- mark symbol or self define directory in Git Bash;
+ * 2. scan `where.exe bash.exe` all row, skip System32 / Sysnative /
+ *    WindowsApps etc. WSL start - - never let Windows host machine implicit WSL;
+ * 3. if user explicit pass `customShellPath`, still respect explicit config (contains legacy WSL `-s`
+ *    stdin transfer pattern).
  */
 import { win32 } from 'node:path'
 import { getEnvEntry } from './process-env.js'
@@ -34,7 +34,7 @@ export interface ShellProbeIo {
 
 const SHELL_PROBE_TIMEOUT_MS = 5000
 
-/** 判定是否为 Windows 旧版 WSL 启动器（System32/Sysnative 下的 bash.exe，需经 stdin 传命令）。 */
+/** decide is otherwise is Windows old edition WSL start (System32/Sysnative under bash.exe, must via stdin pass command). */
 export function isLegacyWslBashPath(
   path: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
@@ -47,11 +47,11 @@ export function isLegacyWslBashPath(
       (directory) => normalized === win32.join(systemRoot, directory, 'bash.exe').toLowerCase(),
     )
   }
-  // Windows 目录未知时仅按惯例启动器路径回退。
+  // Windows directory unknown when only by convention start path fall back.
   return /^[a-z]:\\windows\\(?:system32|sysnative)\\bash\.exe$/.test(normalized)
 }
 
-/** 判定是否为 WSL 启动器或 Microsoft Store WSL 别名（禁止宿主机隐式选中）。 */
+/** decide is otherwise is WSL start or Microsoft Store WSL alias (forbidden host machine implicit choose in). */
 export function isWslBashLauncherPath(
   path: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
@@ -69,7 +69,7 @@ export function isWslBashLauncherPath(
   return normalized.endsWith('\\microsoft\\windowsapps\\bash.exe')
 }
 
-/** 构造 bash 启动参数配置：legacy WSL bash.exe 走 `-s` + stdin，其余走 `-c` + argv。 */
+/** construct bash start parameter config:legacy WSL bash.exe away `-s` + stdin, the rest away `-c` + argv. */
 export function getBashShellConfig(
   shell: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
@@ -86,7 +86,7 @@ function pushUniqueWin32Path(list: string[], seen: Set<string>, candidate: strin
   list.push(candidate)
 }
 
-/** 从 `git.exe` 路径反推同一次安装的 Git Bash 候选路径（支持标准安装、mingw64 与 Scoop）。 */
+/** from `git.exe` path reverse push the same time install Git Bash choose path (support standard install,mingw64 and Scoop). */
 export function gitBashCandidatesFromGitExe(gitExePath: string): string[] {
   const normalized = win32.normalize(gitExePath)
   const dir1 = win32.dirname(normalized)
@@ -140,7 +140,7 @@ async function resolveWindowsWhereCommand(io: ShellProbeIo): Promise<string> {
   return 'where'
 }
 
-/** 经注入的 ShellProbeIo 解析宿主机可用 bash 配置（绝不静默降级进 WSL）。 */
+/** via inject ShellProbeIo parse host machine available bash config (never static default fall back enter WSL). */
 export async function resolveShellConfigWithIo(
   customShellPath: string | undefined,
   io: ShellProbeIo,

@@ -1,8 +1,8 @@
 /**
- * Linux AppImage 退出兜底（纯逻辑）：注入假 procfs / 信号 / 虚拟时钟，绝不触碰宿主进程。
- * 覆盖：TERM→KILL 升级与共享预算、僵尸跳过、comm 含空格括号的 stat 解析、多线程
- * children 去重、自己/父进程排除、PID 复用与 reparent 不补刀且不白等预算、读取失败不盲杀、
- * ESRCH 视作退出、非 AppImage / 未打包（含继承宿主 APPIMAGE）/ Windows / macOS 不安装不读 proc。
+ * Linux AppImage exit fall back (pure logic): inject false procfs / signal / virtual clock, never trigger touch host process.
+ * override:TERM→KILL upgrade and sharing pre- compute, zombie skip,comm contains space parentheses stat parse, many thread
+ * children dedupe, itself/parent process exclude,PID re- use and reparent do not patch blade and do not blank etc. pre- compute, failed to read do not blind kill,
+ * ESRCH view act exit, non- AppImage / not bundle (contains inherit host APPIMAGE)/ Windows / macOS do not install do not read proc.
  */
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
@@ -42,7 +42,7 @@ interface HarnessOptions {
   procs?: Record<number, FakeProc>;
 }
 
-/** 构造 /proc/<pid>/stat 形态文本：comm 可含空格/括号，starttime 落在 ')' 后第 20 位。 */
+/** construct /proc/<pid>/stat form text:comm can contains space/parentheses,starttime in ')' after 20 . */
 function statLine(pid: number, proc: FakeProc): string {
   const comm = proc.comm ?? 'hub-runner';
   const fields = [
@@ -96,7 +96,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
   return { deps, kills, now: () => now };
 }
 
-test('TERM 后即退出的子进程：只发 TERM，零等待', { timeout: 60_000 }, () => {
+test('TERM after i.e. exit child process: only TERM, zero wait for', { timeout: 60_000 }, () => {
   const procs: Record<number, FakeProc> = { 200: {} };
   const h = makeHarness({ procs, tasks: { [String(SELF)]: '200' } });
   procs[200]!.onTerm = () => { delete procs[200]; };
@@ -108,7 +108,7 @@ test('TERM 后即退出的子进程：只发 TERM，零等待', { timeout: 60_00
   assert.equal(h.now(), 0);
 });
 
-test('TERM 不理睬的子进程 3s 后升级 KILL，总预算 3.5s 封顶且多子进程共享（不随数量翻倍）', { timeout: 60_000 }, () => {
+test('TERM do not heed child process 3s after upgrade KILL, total pre- compute 3.5s seal top and many child process sharing (do not follow amount translate multiple)', { timeout: 60_000 }, () => {
   const procs: Record<number, FakeProc> = { 200: {}, 201: {}, 202: {} };
   const h = makeHarness({ procs, tasks: { [String(SELF)]: '200 201 202' } });
   const summary = sweepOwnedExitChildren(h.deps);
@@ -121,7 +121,7 @@ test('TERM 不理睬的子进程 3s 后升级 KILL，总预算 3.5s 封顶且多
   assert.ok(h.kills.slice(0, firstKill).every((k) => k.signal === 'SIGTERM'));
 });
 
-test('僵尸子进程不发信号也不等待', { timeout: 60_000 }, () => {
+test('zombie child process do not signal also without waiting', { timeout: 60_000 }, () => {
   const h = makeHarness({ procs: { 200: { state: 'Z' } }, tasks: { [String(SELF)]: '200' } });
   const summary = sweepOwnedExitChildren(h.deps);
   assert.equal(summary.captured, 0);
@@ -129,7 +129,7 @@ test('僵尸子进程不发信号也不等待', { timeout: 60_000 }, () => {
   assert.equal(h.now(), 0);
 });
 
-test('stat comm 含空格与括号仍正确解析（含尾部括号）', { timeout: 60_000 }, () => {
+test('stat comm contains space and parentheses still correct parse (contains tail part parentheses)', { timeout: 60_000 }, () => {
   const procs: Record<number, FakeProc> = { 200: { comm: 'he(lm chi)ld' }, 201: { comm: 'chi)' } };
   const h = makeHarness({ procs, tasks: { [String(SELF)]: '200 201' } });
   for (const pid of [200, 201]) procs[pid]!.onTerm = () => { delete procs[pid]; };
@@ -138,7 +138,7 @@ test('stat comm 含空格与括号仍正确解析（含尾部括号）', { timeo
   assert.deepEqual(h.kills.map((k) => k.pid).sort(), [200, 201]);
 });
 
-test('多线程 children 重复报告同一子进程时去重，只发一次信号', { timeout: 60_000 }, () => {
+test('many thread children duplicate report the same child process when dedupe, only once signal', { timeout: 60_000 }, () => {
   const procs: Record<number, FakeProc> = { 200: {}, 201: {} };
   const h = makeHarness({ procs, tasks: { '100': '200 201', '101': '200', '102': '200 201' } });
   for (const pid of [200, 201]) procs[pid]!.onTerm = () => { delete procs[pid]; };
@@ -148,7 +148,7 @@ test('多线程 children 重复报告同一子进程时去重，只发一次信�
   assert.equal(h.kills.filter((k) => k.pid === 200).length, 1);
 });
 
-test('枚举结果排除自己与父进程', { timeout: 60_000 }, () => {
+test('enumeration result exclude itself and parent process', { timeout: 60_000 }, () => {
   const procs: Record<number, FakeProc> = { 200: {} };
   const h = makeHarness({ procs, tasks: { [String(SELF)]: `${PARENT} ${SELF} 200` } });
   procs[200]!.onTerm = () => { delete procs[200]; };
@@ -157,34 +157,34 @@ test('枚举结果排除自己与父进程', { timeout: 60_000 }, () => {
   assert.deepEqual(h.kills.map((k) => k.pid), [200]);
 });
 
-test('TERM 后 PID 被复用（starttime 变化）不再补刀 KILL', { timeout: 60_000 }, () => {
+test('TERM after PID by re- use (starttime change) no longer patch blade KILL', { timeout: 60_000 }, () => {
   const procs: Record<number, FakeProc> = { 200: { starttime: 42 } };
   const h = makeHarness({ procs, tasks: { [String(SELF)]: '200' } });
-  procs[200]!.onTerm = () => { procs[200]!.starttime = 999; }; // 退出后同 PID 被新进程占用
+  procs[200]!.onTerm = () => { procs[200]!.starttime = 999; }; // exit after same PID by new process occupy
   const summary = sweepOwnedExitChildren(h.deps);
   assert.deepEqual(h.kills, [{ pid: 200, signal: 'SIGTERM' }]);
   assert.equal(summary.signaledKill, 0);
-  assert.equal(h.now(), 0, 'starttime 已变应立即视作了结，不白等满 TERM 宽限');
+  assert.equal(h.now(), 0, 'starttime already change should immediately view act, do not blank etc. full TERM wide limit');
 });
 
-test('TERM 后 reparent（ppid 变化）不补刀 KILL，立即视作了结', { timeout: 60_000 }, () => {
+test('TERM after reparent(ppid change) do not patch blade KILL, immediately view act', { timeout: 60_000 }, () => {
   const procs: Record<number, FakeProc> = { 200: {} };
   const h = makeHarness({ procs, tasks: { [String(SELF)]: '200' } });
   procs[200]!.onTerm = () => { procs[200]!.ppid = 1; };
   const summary = sweepOwnedExitChildren(h.deps);
   assert.deepEqual(h.kills.map((k) => k.signal), ['SIGTERM']);
   assert.equal(summary.signaledKill, 0);
-  assert.equal(h.now(), 0, 'ppid 已变应立即视作了结，不白等满 TERM 宽限');
+  assert.equal(h.now(), 0, 'ppid already change should immediately view act, do not blank etc. full TERM wide limit');
 });
 
-test('捕获时已非直接子进程（ppid≠self）不处理', { timeout: 60_000 }, () => {
+test('catch when already non- directly child process (ppid≠self) do not handle', { timeout: 60_000 }, () => {
   const h = makeHarness({ procs: { 200: { ppid: 1 } }, tasks: { [String(SELF)]: '200' } });
   const summary = sweepOwnedExitChildren(h.deps);
   assert.equal(summary.captured, 0);
   assert.deepEqual(h.kills, []);
 });
 
-test('killSync 抛 ESRCH 视作已退出，不阻塞不补刀', { timeout: 60_000 }, () => {
+test('killSync throw ESRCH view act already exit, non-blocking do not patch blade', { timeout: 60_000 }, () => {
   const procs: Record<number, FakeProc> = { 200: {} };
   const h = makeHarness({ procs, tasks: { [String(SELF)]: '200' } });
   let attempts = 0;
@@ -195,7 +195,7 @@ test('killSync 抛 ESRCH 视作已退出，不阻塞不补刀', { timeout: 60_00
   assert.equal(h.now(), 0);
 });
 
-test('子孙清单目录整体读取失败：放弃且绝不发信号', { timeout: 60_000 }, () => {
+test('descendant manifest directory whole failed to read: abandon and never signal', { timeout: 60_000 }, () => {
   const h = makeHarness({ tasksThrows: true, procs: { 200: {} } });
   const summary = sweepOwnedExitChildren(h.deps);
   assert.equal(summary.captured, 0);
@@ -203,7 +203,7 @@ test('子孙清单目录整体读取失败：放弃且绝不发信号', { timeou
   assert.equal(h.now(), 0);
 });
 
-test('子进程 stat 读取失败：跳过该目标，绝不盲杀', { timeout: 60_000 }, () => {
+test('child process stat failed to read: skip the target, never blind kill', { timeout: 60_000 }, () => {
   const procs: Record<number, FakeProc> = { 200: { statThrows: true }, 201: {} };
   const h = makeHarness({ procs, tasks: { [String(SELF)]: '200 201' } });
   procs[201]!.onTerm = () => { delete procs[201]; };
@@ -212,14 +212,14 @@ test('子进程 stat 读取失败：跳过该目标，绝不盲杀', { timeout: 
   assert.equal(summary.captured, 1);
 });
 
-test('无子进程时零信号零等待（常规退出的常态路径）', { timeout: 60_000 }, () => {
+test('without child process when zero signal zero wait for (common rule exit common state path)', { timeout: 60_000 }, () => {
   const h = makeHarness({ tasks: { [String(SELF)]: '' } });
   const summary = sweepOwnedExitChildren(h.deps);
   assert.deepEqual(summary, { captured: 0, signaledTerm: 0, signaledKill: 0 });
   assert.equal(h.now(), 0);
 });
 
-test('linuxAppImageExitSweepNeeded：仅 Linux + 打包态 + 非空 APPIMAGE', { timeout: 60_000 }, () => {
+test('linuxAppImageExitSweepNeeded: only Linux + bundle state + non-empty APPIMAGE', { timeout: 60_000 }, () => {
   assert.equal(linuxAppImageExitSweepNeeded({ platform: 'linux', isPackaged: true, env: { APPIMAGE: '/x/Helm.AppImage' } }), true);
   assert.equal(linuxAppImageExitSweepNeeded({ platform: 'linux', isPackaged: true, env: { APPIMAGE: '' } }), false);
   assert.equal(linuxAppImageExitSweepNeeded({ platform: 'linux', isPackaged: true, env: {} }), false);
@@ -228,11 +228,11 @@ test('linuxAppImageExitSweepNeeded：仅 Linux + 打包态 + 非空 APPIMAGE', {
   assert.equal(linuxAppImageExitSweepNeeded({ platform: 'darwin', isPackaged: true, env: { APPIMAGE: '/x/Helm.AppImage' } }), false);
 });
 
-test('非 AppImage / 未打包 / Windows / macOS：不安装兜底、不读 /proc、不加监听', { timeout: 60_000 }, () => {
+test('non- AppImage / not bundle / Windows / macOS: do not install fall back, do not read /proc, do not add listen', { timeout: 60_000 }, () => {
   const cases: Array<[NodeJS.Platform, boolean, Record<string, string | undefined>]> = [
     ['linux', true, {}],
     ['linux', true, { APPIMAGE: '' }],
-    ['linux', false, { APPIMAGE: '/x/VSCode.AppImage' }], // 开发态继承宿主 AppImage 环境
+    ['linux', false, { APPIMAGE: '/x/VSCode.AppImage' }], // development state inherit host AppImage environment
     ['win32', true, { APPIMAGE: '/x/Helm.AppImage' }],
     ['darwin', true, { APPIMAGE: '/x/Helm.AppImage' }],
   ];
@@ -246,13 +246,13 @@ test('非 AppImage / 未打包 / Windows / macOS：不安装兜底、不读 /pro
       readdirSync: () => { fsTouched = true; return []; },
       readFileSync: () => { fsTouched = true; return ''; },
     });
-    assert.equal(installed, false, `${platform} isPackaged=${isPackaged} ${JSON.stringify(env)} 不应安装`);
-    assert.equal(fsTouched, false, '条件不满足时不得读 /proc');
-    assert.equal(process.listeners('exit').length, before.length, '不得注册 exit 监听');
+    assert.equal(installed, false, `${platform} isPackaged=${isPackaged} ${JSON.stringify(env)} must not install`);
+    assert.equal(fsTouched, false, 'condition do not satisfy when must not read /proc');
+    assert.equal(process.listeners('exit').length, before.length, 'must not register exit listen');
   }
 });
 
-test('AppImage Linux：安装 exit 监听，退出回调执行同步兜底', { timeout: 60_000 }, () => {
+test('AppImage Linux: install exit listen, exit call back execute sync fall back', { timeout: 60_000 }, () => {
   const before = process.listeners('exit');
   const procs: Record<number, FakeProc> = { 200: {} };
   const h = makeHarness({ procs, tasks: { [String(SELF)]: '200' } });
@@ -260,7 +260,7 @@ test('AppImage Linux：安装 exit 监听，退出回调执行同步兜底', { t
   const installed = installLinuxExitChildSweep({ ...h.deps });
   const added = process.listeners('exit').find((listener) => !before.includes(listener));
   assert.equal(installed, true);
-  assert.ok(added !== undefined, '应新增 exit 监听');
+  assert.ok(added !== undefined, 'should new increase exit listen');
   try {
     (added as (code?: number) => void)();
     assert.deepEqual(h.kills, [{ pid: 200, signal: 'SIGTERM' }]);

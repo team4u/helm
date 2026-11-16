@@ -1,13 +1,13 @@
 /**
- * 微内核 host 公共机制专项测试（core commit 范围）：
- * - epoch 守卫：wrapHostApi 子端口（profiles/skills/secrets/nodeIpc/executionEnv 代理）
- *   在停用/重启用周期后旧句柄失效（409），新周期句柄可用；
- * - nodeIpc.subscribe 竞态：释放先于订阅建立完成时晚到订阅立即收割（不泄漏），
- *   建立错误留在返回 Promise（不 void 吞）；
- * - onUpdate：partial 转发到受控 output（脱敏），结算后迟到 partial 静默丢弃；
- * - prompt 投射：promptSnippet/promptGuidelines 仅激活工具进 sections，剥离后
- *   不留幻影段；promptGuidelines 数组逐项展开。
- * runner: tsx --test；每项显式 timeout: 60_000 防死锁。
+ * microkernel host public mechanism dedicated items test (core commit scope):
+ * - epoch guard:wrapHostApi sub- port (profiles/skills/secrets/nodeIpc/executionEnv proxy)
+ *   in deactivate/restart use cycle after old handle expires (409), new cycle handle available;
+ * - nodeIpc.subscribe race: release first at subscribe establish complete when late to subscribe immediately cut (without leaking),
+ *   establish error in return Promise(do not void swallow);
+ * - onUpdate:partial forwarding to subject to control output(redaction), compute after late to partial static default discard;
+ * - prompt throw shoot:promptSnippet/promptGuidelines only activate tool enter sections, strip after
+ *   do not phantom segment;promptGuidelines array one by one items expand.
+ * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -29,7 +29,7 @@ import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js
 import { KernelRuntime } from '../src/runtime/index.js'
 
 // ---------------------------------------------------------------------------
-// 基建
+// base create
 // ---------------------------------------------------------------------------
 
 function makeConversation(id: number) {
@@ -41,7 +41,7 @@ interface NodeIpcCalls {
   stopCalls: number
 }
 
-/** openTunnel 桩：受控延迟后交付受控 Duplex；记录调用与销毁供断言。 */
+/** openTunnel stub: subject to control latency after deliver subject to control Duplex; record invoke and destroy supply assertion. */
 interface OpenTunnelStub {
   calls: Array<{ nodeId: string; target: { host?: string; port: number }; signal: AbortSignal | undefined }>
   delayMs: number
@@ -51,9 +51,9 @@ interface OpenTunnelStub {
 
 function makeBackend(over: {
   nodeIpcCalls?: NodeIpcCalls
-  /** subscribe 建立前的延迟（默认 10ms，模拟慢建立）。 */
+  /** subscribe establish before latency (by default 10ms, simulated slow establish). */
   subscribeDelayMs?: number
-  /** openTunnel 桩（提供即接线 ctx.host.openTunnel）。 */
+  /** openTunnel stub (provide i.e. connect line ctx.host.openTunnel). */
   openTunnel?: OpenTunnelStub
   nodeFetch?: (nodeId: string) => typeof fetch
 }): PluginHostBackend {
@@ -73,7 +73,7 @@ function makeBackend(over: {
       readFile: async () => '',
       directory: async (id) => {
         if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) {
-          throw new HelmError('validation_error', `Skill id 非法：${id}`, 400, { skillId: id })
+          throw new HelmError('validation_error', `Skill id illegal:${id}`, 400, { skillId: id })
         }
         return `/data/skills/${id}`
       },
@@ -94,11 +94,11 @@ function makeBackend(over: {
         new Promise<() => void>((resolve) => {
           calls.subscribeStarted.push({ nodeId, signal: signal! })
           setTimeout(() => {
-            // 模拟订阅建立成功：返回 stop 函数。
+            // simulated subscribe establish succeeded: return stop function.
             resolve(() => {
               calls.stopCalls += 1
             })
-            // 建立后推一行事件，验证通道活着。
+            // establish after push one row event, verify channel.
             onLine(`event:${nodeId}`)
           }, over.subscribeDelayMs ?? 10)
         }),
@@ -109,7 +109,7 @@ function makeBackend(over: {
     forkConversation: async (id, opts) => ({
       ...makeConversation(id + 100),
       parentConversationId: id,
-      title: opts.title ?? `conv-${id} (分叉)`,
+      title: opts.title ?? `conv-${id} (fork)`,
     }),
     listConversations: () => [makeConversation(1)],
     getConversation: (id) => makeConversation(id),
@@ -145,7 +145,7 @@ function makeBackend(over: {
             stub.calls.push({ nodeId, target, signal })
             return new Promise<PassThrough>((resolve, reject) => {
               const timer = setTimeout(() => {
-                // 预置失败队列：FIFO 消费（一次 push 对下一次建连生效）。
+                // pre- placement failed queue:FIFO consume (once push for under once create connect takes effect).
                 const failure = stub.failures.shift()
                 if (failure !== undefined) { reject(failure); return }
                 const duplex = new PassThrough()
@@ -156,7 +156,7 @@ function makeBackend(over: {
                 'abort',
                 () => {
                   clearTimeout(timer)
-                  reject(new HelmError('aborted', '隧道建立已取消', 499))
+                  reject(new HelmError('aborted', 'tunnel establish cancelled', 499))
                 },
                 { once: true },
               )
@@ -169,10 +169,10 @@ function makeBackend(over: {
 
 let dataDir: string
 
-test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
+test('host public mechanism dedicated items', { timeout: 60_000 }, async (t) => {
   dataDir = useTempDir(t, 'helm-host-core-')
 
-  await t.test('epoch 守卫：停用后旧句柄 host 调用一律 409 plugin_context_expired', async () => {
+  await t.test('epoch guard: deactivate after old handle host invoke one rule 409 plugin_context_expired', async () => {
     const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({}), docs: new MemoryDocStore() })
     let captured: Parameters<NonNullable<Parameters<typeof host.register>[0]['definePlugin']>>[0]['host'] | undefined
     const def: PluginDefinition = {
@@ -183,10 +183,10 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
     }
     await host.register(def, { enabled: true })
     assert.ok(captured)
-    // 启用周期内可用。
+    // enable cycle inside available.
     assert.equal(await captured!.profiles.get('assistant') !== undefined, true)
     await host.disable('p:epoch')
-    // guard 同步抛出：统一归一为 rejection 后断言（逐个 await，类型对齐）。
+    // guard sync throw: unify archive one is rejection after assertion (one by one await, type align).
     const expired: Array<() => unknown> = [
       () => captured!.profiles.list(),
       () => captured!.skills.list(),
@@ -202,27 +202,27 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
     ]
     for (const call of expired) {
       await assert.rejects(async () => call(), (err: unknown) => {
-        assert.ok(err instanceof HelmError, `期望 HelmError，实际：${String(err)}`)
+        assert.ok(err instanceof HelmError, `expectation HelmError, actual:${String(err)}`)
         assert.equal(err.code, 'plugin_context_expired')
         return true
       })
     }
-    // 重启用后：definePlugin 重新执行，captured 已指向新周期句柄（可用），
-    // 旧句柄不复存在——上面循环已验证旧句柄全郴 409。这里仅验证新句柄恢复可用。
+    // restart use after:definePlugin re- execute,captured already points to new cycle handle (available),
+    // old handle do not re- store in - - on side loop already verify old handle all Chen 409. this in only verify new handle restore available.
     await host.enable('p:epoch')
     await assert.doesNotReject(captured!.profiles.get('assistant'))
     await host.unregister('p:epoch').catch(() => {})
   })
 
-  await t.test('withFileLock：队列内获得锁调用 fn 前再验周期（停用后旧闭包不落写）', { timeout: 60_000 }, async () => {
-    // 场景：锁竞争 + 宿主强制 dispose（liveTasks 预检仅拦 disable，dispose
-    // 直接拆除周期）：排队的旧周期 fn 获得锁时周期已失效，必须 409 拒绝落写。
+  await t.test('withFileLock: queue inside obtain lock invoke fn before again verify cycle (deactivate after old closed package do not write)', { timeout: 60_000 }, async () => {
+    // scenario: lock competition + host force dispose(liveTasks preflight only intercept disable,dispose
+    // directly split except cycle): queue up old cycle fn obtain lock when cycle already expires, must 409 reject write.
     let releaseFirst: (() => void) | undefined
     const gate = new Promise<void>((resolve) => { releaseFirst = resolve })
     const backend = makeBackend({})
     backend.withFileLock = async <T,>(path: string, fn: () => Promise<T>) => {
       if (path === '/tmp/hold') {
-        await gate // 首个持锁者不释放，后续排队等待
+        await gate // first hold lock do not release, after continue queue up wait for
         return fn()
       }
       return fn()
@@ -245,8 +245,8 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
     }
     await host.register(def, { enabled: true })
     await new Promise((r) => setTimeout(r, 30))
-    assert.ok(second, '第二个锁请求应已入队')
-    // 强制拆除周期（不停用预检）；随后释放持锁者 -> 排队 fn 进入时已失效。
+    assert.ok(second, 'second lock request should already queue')
+    // force split except cycle (do not deactivate preflight); then release hold lock -> queue up fn enter when already expires.
     void host.dispose()
     await new Promise((r) => setTimeout(r, 5))
     releaseFirst!()
@@ -256,20 +256,20 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
     )
   })
 
-  await t.test('nodeIpc.subscribe 竞态：释放先于建立完成时晚到订阅立即收割', { timeout: 60_000 }, async () => {
+  await t.test('nodeIpc.subscribe race: release first at establish complete when late to subscribe immediately cut', { timeout: 60_000 }, async () => {
     const calls: NodeIpcCalls = { subscribeStarted: [], stopCalls: 0 }
     const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({ nodeIpcCalls: calls, subscribeDelayMs: 30 }), docs: new MemoryDocStore() })
     let release: (() => void) | undefined
     const def: PluginDefinition = {
       id: 'p:ipc',
       definePlugin(ctx) {
-        // 注册后立刻订阅并在停用时释放（acquire 包装）。
+        // register after immediately subscribe and in deactivate when release (acquire wrap).
         void ctx.host.nodeIpc.subscribe('remote-1', { line: '{"method":"subscribe"}' }, () => {}, () => {})
           .then((stop) => { release = stop })
           .catch(() => {})
       },
     }
-    // 手动获取 release：直接走 service.start 路径太重，用注册期订阅。
+    // manually get release: directly away service.start path too heavy, use register phase subscribe.
     const defSubscribe: PluginDefinition = {
       id: 'p:ipc2',
       definePlugin(ctx) {
@@ -284,17 +284,17 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
       },
     }
     await host.register(defSubscribe, { enabled: true })
-    assert.ok(release, 'service.start 完成后应有退订句柄')
-    // 停用：acquire 释放（abort + stop 收割）。
+    assert.ok(release, 'service.start after completion should has unsubscribe handle')
+    // deactivate:acquire release (abort + stop cut).
     await host.disable('p:ipc2')
-    // 等晚到建立链结算。
+    // etc. late to establish chain compute.
     await new Promise((r) => setTimeout(r, 80))
-    assert.equal(calls.stopCalls >= 1, true, '停用应触发后端 stop（直接或晚到收割）')
+    assert.equal(calls.stopCalls >= 1, true, 'deactivate should trigger backend stop(directly or late to cut)')
     await host.unregister('p:ipc2').catch(() => {})
     void def
   })
 
-  await t.test('openTunnel 生命周期跟踪：活动 Duplex 期间停用被拒，关闭后可停用；失败不泄漏计数', { timeout: 60_000 }, async () => {
+  await t.test('openTunnel lifecycle trace: activity Duplex during deactivate by refuse, close after can deactivate; failed without leaking counter', { timeout: 60_000 }, async () => {
     const stub: OpenTunnelStub = { calls: [], delayMs: 20, duplexes: [], failures: [] }
     const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({ openTunnel: stub }), docs: new MemoryDocStore() })
     let hostApi: Parameters<NonNullable<Parameters<typeof host.register>[0]['definePlugin']>>[0]['host'] | undefined
@@ -307,28 +307,28 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
     await host.register(def, { enabled: true })
     assert.ok(hostApi)
 
-    // 1) 建立在途：begin 先于建连，停用预检可见。
+    // 1) establish in-flight:begin first at create connect, deactivate preflight visible.
     const opening = hostApi!.openTunnel('remote-1', { host: 'db.internal', port: 5432 })
-    assert.equal(stub.calls.length, 1, '后端 openTunnel 已受理')
+    assert.equal(stub.calls.length, 1, 'backend openTunnel already subject to')
     await assert.rejects(
       host.disable('p:tunnel'),
       (err: unknown) => err instanceof HelmError && err.code === 'plugin_has_live_tasks' && err.status === 409,
     )
     const duplex = await opening
-    // 2) 建立成功后 Duplex 存活：计数保持（withTask 立即 end 的回归点）。
+    // 2) establish after success Duplex store: counter keep (withTask immediately end regression point).
     await assert.rejects(
       host.disable('p:tunnel'),
       (err: unknown) => err instanceof HelmError && err.code === 'plugin_has_live_tasks',
-      '活动 Duplex 期间停用必须 409（计数不因建立完成而归零）',
+      'activity Duplex during deactivate must 409(counter do not because establish complete while reset to zero)',
     )
-    // 3) Duplex 关闭：end 恰好一次，停用恢复可用。
+    // 3) Duplex close:end exactly once, deactivate restore available.
     duplex.destroy()
     await new Promise((r) => setTimeout(r, 30))
     await host.disable('p:tunnel')
 
-    // 4) 失败路径（独立周期，避免 enable 换 epoch 影响句柄）：
-    // 建立失败立即 end，不泄漏计数——失败后 disable 不再 409。
-    stub.failures.push(new HelmError('node_tunnel_connect_failed', '建立失败', 502))
+    // 4) failed path (independent cycle, avoid enable swap epoch affect handle):
+    // establish failed immediately end, without leaking counter - - failed after disable no longer 409.
+    stub.failures.push(new HelmError('node_tunnel_connect_failed', 'establish failed', 502))
     let hostApi2: typeof hostApi | undefined
     const defFail: PluginDefinition = {
       id: 'p:tunnel2',
@@ -347,7 +347,7 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
     void host.dispose()
   })
 
-  await t.test('nodeFetch：慢消费者保留背压，取消后释放任务，后端同步抛错不泄漏计数', { timeout: 60_000 }, async () => {
+  await t.test('nodeFetch: slow consumer keep back press, cancel after release task, backend sync throws without leaking counter', { timeout: 60_000 }, async () => {
     let pulls = 0
     let cancelled = false
     const raw = (() => Promise.resolve(new Response(new ReadableStream<Uint8Array>({
@@ -365,13 +365,13 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
     try {
       const response = await api.nodeFetch('remote-1')('http://example.test')
       await new Promise<void>((resolve) => setImmediate(resolve))
-      assert.ok(pulls <= 1, `未消费时不可持续读取响应（实际 pull ${pulls} 次）`)
+      assert.ok(pulls <= 1, `unconsumed when cannot continuous read response (actual pull ${pulls} time)`)
       await assert.rejects(host.disable('p:fetch-flow'), { code: 'plugin_has_live_tasks' })
       await response.body!.cancel()
       assert.equal(cancelled, true)
       await host.disable('p:fetch-flow')
 
-      const failure = new Error('同步 fetch 失败')
+      const failure = new Error('sync fetch failed')
       backend.nodeFetch = () => (() => { throw failure }) as typeof fetch
       await host.register({ id: 'p:fetch-throw', definePlugin(ctx) { api = ctx.host } }, { enabled: true })
       await assert.rejects(api.nodeFetch('remote-1')('http://example.test'), failure)
@@ -381,14 +381,14 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
     }
   })
 
-  await t.test('nodeFetch：弃置 Response（不消费不 cancel）确定性占用——disable 持续 409，显式 cancel 后释放（无 GC 兜底）', { timeout: 60_000 }, async () => {
-    // FinalizationRegistry 安全网已按契约移除：资源归属完全确定——插件拿到
-    // Response 后必须消费或 cancel；弃置即在途任务持续可见（disable/reload
-    // 硬阻断不可 force），绝不依赖 GC 时机把泄漏掩饰成可停用。
+  await t.test('nodeFetch: abandon placement Response(do not consume do not cancel) determinism occupy - -disable continuous 409, explicit cancel after release (without GC fall back)', { timeout: 60_000 }, async () => {
+    // FinalizationRegistry security network already by contract remove: asset ownership fully determine - - plugin gets
+    // Response after must consume or cancel; abandon placement i.e. in-flight task continuous visible (disable/reload
+    // hard block assert cannot force), never dependency GC when machine leak leak mask decorate into can deactivate.
     const raw = (() => Promise.resolve(new Response(new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new Uint8Array(32))
-        // 永不 close：模拟 SSE 长流（头部早已到达不结束任务）。
+        // forever do not close: simulated SSE long stream (header early already reach do not end task).
       },
       cancel() {},
     }, { highWaterMark: 0 })))) as typeof fetch
@@ -398,15 +398,15 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
     await host.register({ id: 'p:fetch-abandon', definePlugin(ctx) { api = ctx.host } }, { enabled: true })
     try {
       const response = await api.nodeFetch('remote-1')('http://example.test')
-      assert.equal(response.status, 200, '头部到达即返回（不等待 body）')
-      // 弃置：只查过 status，既不消费也不 cancel。
+      assert.equal(response.status, 200, 'header reach i.e. return (without waiting body)')
+      // abandon placement: only inspect status, since do not consume also do not cancel.
       void response
       await new Promise<void>((resolve) => setImmediate(resolve))
       await assert.rejects(host.disable('p:fetch-abandon'), { code: 'plugin_has_live_tasks' })
       await new Promise<void>((resolve) => setImmediate(resolve))
-      // 跨多个事件循环轮次仍 409（确定性占用，非 GC 兜底的短暂窗口）。
+      // across multiple event loop round still 409(determinism occupy, non- GC fall back short temporary window).
       await assert.rejects(host.disable('p:fetch-abandon'), { code: 'plugin_has_live_tasks' })
-      // 唯一收敛路径：显式 cancel（drain 到 EOF 同理，另有测试覆盖）。
+      // unique converge path: explicit cancel(drain to EOF same, another has test override).
       await response.body!.cancel()
       await host.disable('p:fetch-abandon')
     } finally {
@@ -414,21 +414,21 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
     }
   })
 
-  await t.test('nodeFetch 宿主 close 确定性归属：local 永不结束 body 与 headers 前请求在 dispose 后真实取消并释放', { timeout: 60_000 }, async () => {
-    // local 路径 backend 返回 globalThis.fetch：EnvFabric.close 拆远端隧道
-    // 管不到它，确定性取消必须来自每调用的 owned cleanup（宿主 dispose 触发
-    // 合成 AbortController），且正常 disable 不 abort（409 硬阻断不可 force）。
+  await t.test('nodeFetch host close determinism ownership:local forever do not end body and headers before request in dispose after real cancel and release', { timeout: 60_000 }, async () => {
+    // local path backend return globalThis.fetch:EnvFabric.close split remote tunnel
+    // manage fewer than it, determinism cancel must from each invoke owned cleanup(host dispose trigger
+    // together into AbortController), and normal disable do not abort(409 hard block assert cannot force).
     let socketClosed = 0
     let headersSent = 0
     const server = http.createServer((req, res) => {
       headersSent += 1
       if (req.url === '/pending') {
-        // 永不发送响应头（headers 前挂起）。
+        // forever do not send response head (headers before suspended).
         return
       }
       res.writeHead(200, { 'content-type': 'text/event-stream' })
       res.write('data: a\n\n')
-      // 永不结束的 SSE 长流。
+      // forever do not end SSE long stream.
       const timer = setInterval(() => res.write('data: x\n\n'), 50)
       res.on('close', () => { clearInterval(timer); socketClosed += 1 })
     })
@@ -439,48 +439,48 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
     let api!: HelmHostApi
     await host.register({ id: 'p:fetch-dispose', definePlugin(ctx) { api = ctx.host } }, { enabled: true })
     try {
-      // --- local 永不结束 body：弃置（不消费不 cancel），dispose 后连接真实关闭 ---
+      // --- local forever do not end body: abandon placement (do not consume do not cancel),dispose after connect real close ---
       const response = await api.nodeFetch('local')(`${base}/stream`)
       assert.equal(response.status, 200)
       await new Promise<void>((resolve) => setImmediate(resolve))
-      // 正常 disable：确定性占用 409（不可 force），且不得借 disable abort
-      //（dispose 之外唯一能跑 release 的路径），流仍可读。
+      // normal disable: determinism occupy 409(cannot force), and must not borrow disable abort
+      //(dispose of outside unique can run release path), stream still can read.
       await assert.rejects(host.disable('p:fetch-dispose'), { code: 'plugin_has_live_tasks' })
       const reader0 = response.body!.getReader()
       const chunk = await reader0.read()
-      assert.ok(!chunk.done, 'disable 的 409 拒绝不得中止在途流（不借 disable abort）')
+      assert.ok(!chunk.done, 'disable  409 reject must not abort in-flight stream (do not borrow disable abort)')
 
       await host.dispose()
-      // dispose 触发 owned cleanup：底层请求真实取消（服务端连接关闭）。
+      // dispose trigger owned cleanup: underlying request real cancel (server side connect close).
       for (let i = 0; i < 100 && socketClosed === 0; i += 1) await delay(20)
-      assert.ok(socketClosed >= 1, `宿主 dispose 后 local 在途请求必须真实取消（服务端连接关闭；实际 ${socketClosed}）`)
+      assert.ok(socketClosed >= 1, `host dispose after local in-flight request must real cancel (server side connect close; actual ${socketClosed})`)
 
-      // --- headers 前挂起的请求：dispose 后 fetch promise 以取消错误拒绝 ---
+      // --- headers before suspended request:dispose after fetch promise with cancel error reject ---
       const host2 = new PluginHost({ dataDir, host: makeBackend({ nodeFetch: () => globalThis.fetch as typeof fetch }), docs: new MemoryDocStore() })
       let api2!: HelmHostApi
       await host2.register({ id: 'p:fetch-pending', definePlugin(ctx) { api2 = ctx.host } }, { enabled: true })
       const pending = api2.nodeFetch('local')(`${base}/pending`)
-      await delay(50) // 请求已发出、响应头未到。
+      await delay(50) // request already out, response head not to.
       const disposed = host2.dispose()
       await assert.rejects(() => pending, (error: unknown) => {
-        // owned cleanup 以宿主销毁原因 abort；undici 原样以 signal.reason 拒绝
-        //（确定性归属可观察）。也兼容实现层以 AbortError 形态上抛。
+        // owned cleanup with host destroy reason abort;undici original with signal.reason reject
+        //(determinism ownership can observe). also compatibility implement layer with AbortError form on throw.
         if (error instanceof HelmError && error.code === 'plugin_host_disposed') return true
         const name = error instanceof Error ? error.name : String(error)
         return name === 'AbortError' || /abort/i.test(String((error as { message?: string }).message ?? name))
       })
       await disposed
-      assert.ok(headersSent >= 2, '两个请求均真实到达服务端')
+      assert.ok(headersSent >= 2, 'two request all real reach server side')
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()))
     }
   })
 
-  await t.test('nodeFetch 取消信号覆盖语义：init.signal 覆盖 Request.signal、显式 null 清除继承、宿主 close 仍可取消', { timeout: 60_000 }, async () => {
-    // 标准 fetch 语义（AbortSignal.any 合成，不并入被覆盖的旧信号）：
+  await t.test('nodeFetch cancel signal override semantics:init.signal override Request.signal, explicit null clear inherit, host close still can cancel', { timeout: 60_000 }, async () => {
+    // standard fetch semantics (AbortSignal.any together into, do not and by override old signal):
     let socketClosed = 0
     const server = http.createServer((req, res) => {
-      if (req.url === '/pending') return // 永不发响应头。
+      if (req.url === '/pending') return // forever do not response head.
       res.writeHead(200, { 'content-type': 'text/event-stream' })
       res.write('data: a\n\n')
       const timer = setInterval(() => res.write('data: x\n\n'), 50)
@@ -494,19 +494,19 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
     let api!: HelmHostApi
     await host.register({ id: 'p:fetch-signal', definePlugin(ctx) { api = ctx.host } }, { enabled: true })
     try {
-      // 1) Request 原信号已 abort，但 init 覆盖信号未 abort：请求必须正常进行
-      //（旧实现把两个信号都并入合成，会被已 abort 的旧信号错误取消）。
+      // 1) Request original signal already abort, but init override signal not abort: request must normal enter row
+      //(old implement two signal all and together into, will by already abort old signal error cancel).
       const stale = new AbortController()
       stale.abort()
       const fresh = new AbortController()
       const overridden = await api.nodeFetch('local')(new Request(`${base}/stream`, { signal: stale.signal }), { signal: fresh.signal })
-      assert.equal(overridden.status, 200, 'init.signal 覆盖：已 abort 的旧 Request 信号不得取消请求')
+      assert.equal(overridden.status, 200, 'init.signal override: already abort old Request signal must not cancel request')
       const r1 = overridden.body!.getReader()
       const chunk1 = await r1.read()
-      assert.ok(!chunk1.done && chunk1.value !== undefined, '覆盖信号未 abort 时流正常可读')
+      assert.ok(!chunk1.done && chunk1.value !== undefined, 'override signal not abort when stream normal can read')
       await r1.cancel()
 
-      // 2) init 覆盖信号 abort：真实取消（headers 前挂起请求以 AbortError 拒绝）。
+      // 2) init override signal abort: real cancel (headers before suspended request with AbortError reject).
       const caller = new AbortController()
       const pending = api.nodeFetch('local')(`${base}/pending`, { signal: caller.signal })
       await delay(50)
@@ -516,23 +516,23 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
         return name === 'AbortError' || /abort/i.test(String((error as { message?: string }).message ?? name))
       })
 
-      // 3) init.signal = null 清除已 abort 的 Request 继承信号：请求正常；
-      // 弃置 body 后宿主 dispose 仍能确定性取消（连接真实关闭）。
+      // 3) init.signal = null clear already abort  Request inherit signal: request normal;
+      // abandon placement body after host dispose still can determinism cancel (connect real close).
       const aborted = new AbortController()
       aborted.abort()
       const cleared = await api.nodeFetch('local')(new Request(`${base}/stream`, { signal: aborted.signal }), { signal: null })
-      assert.equal(cleared.status, 200, '显式 null 清除继承：已 abort 的 Request 信号不得取消请求')
-      void cleared // 弃置（不消费不 cancel）。
+      assert.equal(cleared.status, 200, 'explicit null clear inherit: already abort  Request signal must not cancel request')
+      void cleared // abandon placement (do not consume do not cancel).
       await new Promise<void>((resolve) => setImmediate(resolve))
       await host.dispose()
       for (let i = 0; i < 100 && socketClosed === 0; i += 1) await delay(20)
-      assert.ok(socketClosed >= 1, `null 清除继承后宿主 dispose 仍必须真实取消在途请求（实际关闭 ${socketClosed}）`)
+      assert.ok(socketClosed >= 1, `null clear inherit after host dispose still must real cancel in-flight request (actual close ${socketClosed})`)
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()))
     }
   })
 
-  await t.test('openTunnel：宿主 dispose 销毁活动及建立后迟到的 Duplex', { timeout: 60_000 }, async () => {
+  await t.test('openTunnel: host dispose destroy activity and establish after late to Duplex', { timeout: 60_000 }, async () => {
     for (const delayMs of [0, 20]) {
       const stub: OpenTunnelStub = { calls: [], delayMs, duplexes: [], failures: [] }
       const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({ openTunnel: stub }), docs: new MemoryDocStore() })
@@ -553,9 +553,9 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
     }
   })
 
-  await t.test('onUpdate：partial 全串转发 output；结算后迟到 partial 静默丢弃', async () => {
-    // 直接验证 tool-registry 的 onUpdate 包装语义（经 pluginToolResult 之外的通道）。
-    // 这里以最小受控 fake 验证：settled 前转发、settled 后丢弃。
+  await t.test('onUpdate:partial all string forwarding output; compute after late to partial static default discard', async () => {
+    // directly verify tool-registry  onUpdate wrap semantics (via pluginToolResult of outside channel).
+    // this in with most small subject to control fake verify:settled before forwarding,settled after discard.
     const chunks: string[] = []
     let settled = false
     const output = (chunk: string): void => {
@@ -575,35 +575,35 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
     onUpdate({ output: [{ type: 'text', text: 'part-2' }] })
     assert.deepEqual(chunks, ['part-1 ', 'part-2'])
     settled = true
-    onUpdate({ output: 'late' }) // 不抛不推
+    onUpdate({ output: 'late' }) // do not throw do not push
     assert.deepEqual(chunks, ['part-1 ', 'part-2'])
   })
 
-  await t.test('prompt 投射：仅激活工具进 sections，剥离不留幻影；guidelines 数组展开', () => {
+  await t.test('prompt throw shoot: only activate tool enter sections, strip do not phantom;guidelines array expand', () => {
     const base = [
       { id: 'profile.system', text: 'SYS' },
-      { id: 'prompt.tools.update_memory', text: '旧指引（应被覆盖）' },
-      { id: 'prompt.tools.ghost_tool', text: '幻影段（工具已剥离，应被清除）' },
+      { id: 'prompt.tools.update_memory', text: 'old refer quote (should by override)' },
+      { id: 'prompt.tools.ghost_tool', text: 'phantom segment (tool already strip, should by clear)' },
     ]
     const projected = projectToolPromptSections(base, [
-      { name: 'update_memory', promptSnippet: '用 update_memory 保存记忆。' },
-      { name: 'load_skill', promptGuidelines: ['先读 SKILL.md', 'references 按需读'] },
+      { name: 'update_memory', promptSnippet: 'use update_memory save memory.' },
+      { name: 'load_skill', promptGuidelines: ['first read SKILL.md', 'references on demand read'] },
     ])
     const ids = projected.map((s) => s.id)
-    assert.ok(!ids.includes('prompt.tools.ghost_tool'), '幻影段必须被清除')
+    assert.ok(!ids.includes('prompt.tools.ghost_tool'), 'phantom segment must by clear')
     const snippet = projected.find((s) => s.id === 'prompt.tools.update_memory')
-    assert.equal(snippet?.text, '用 update_memory 保存记忆。')
+    assert.equal(snippet?.text, 'use update_memory save memory.')
     const guidelines = projected.find((s) => s.id === 'prompt.tools.guidelines')
     assert.ok(guidelines)
-    assert.ok(guidelines!.text.includes('- load_skill: 先读 SKILL.md'))
-    assert.ok(guidelines!.text.includes('- load_skill: references 按需读'))
-    // 空投射：清除全部 prompt.tools.*（含 guidelines）。
+    assert.ok(guidelines!.text.includes('- load_skill: first read SKILL.md'))
+    assert.ok(guidelines!.text.includes('- load_skill: references on demand read'))
+    // empty throw shoot: clear all prompt.tools.*(contains guidelines).
     const cleared = projectToolPromptSections(projected, [])
     assert.ok(!cleared.some((s) => s.id.startsWith('prompt.tools.')))
   })
 
-  await t.test('ctx.host.forkConversation：真实 Runtime 转发参数、边界报错、liveTasks 与停用阻断', { timeout: 60_000 }, async (sub) => {
-    // 1. liveTasks + epoch 守卫：在途 forkConversation 期间停用返回 409 plugin_has_live_tasks；完成后停用旧句柄 409 plugin_context_expired。
+  await t.test('ctx.host.forkConversation: real Runtime forwarding parameter, boundary errors,liveTasks and deactivate block assert', { timeout: 60_000 }, async (sub) => {
+    // 1. liveTasks + epoch guard: in-flight forkConversation during deactivate return 409 plugin_has_live_tasks; after completion deactivate old handle 409 plugin_context_expired.
     let resolveFork!: (summary: ReturnType<typeof makeConversation>) => void
     const forkGate = new Promise<ReturnType<typeof makeConversation>>((resolve) => {
       resolveFork = resolve
@@ -637,10 +637,10 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
       (err: unknown) => err instanceof HelmError && err.status === 409 && err.code === 'plugin_context_expired',
     )
 
-    // 2. 真实 KernelRuntime 端到端接线：400/404 校验、正常分叉继承与停用失效。
+    // 2. real KernelRuntime end-to-end connect line:400/404 validate, normal fork inherit and deactivate expires.
     const rtDir = useTempDir(sub, 'helm-host-fork-rt-')
     const { models, faux } = makeFauxModels()
-    faux.setResponses([fauxAssistantMessage('已记录暗号 ALPHA-99')])
+    faux.setResponses([fauxAssistantMessage('already record dark number ALPHA-99')])
     const runtime = await KernelRuntime.open({
       buildProvider: createPluginBuildProvider(),
       dataDir: rtDir,
@@ -660,16 +660,16 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
 
       await runtime.services.profiles.save({
         id: 'reviewer',
-        name: '审查者',
+        name: 'review',
         model: 'faux/faux-1',
         cwd: rtDir,
       })
       const parent = await runtime.createConversation({
         profileId: 'reviewer',
         cwd: rtDir,
-        title: '母会话',
+        title: 'parent conversation',
       })
-      await runtime.submitInput(parent.id, '请记住暗号 ALPHA-99')
+      await runtime.submitInput(parent.id, 'please record dark number ALPHA-99')
       await runtime.waitForIdle(parent.id)
       const detail = await runtime.getConversationDetail(parent.id)
       const lastEntry = detail.entries.at(-1)
@@ -694,10 +694,10 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
 
       const forked = await realHost!.forkConversation(parent.id, {
         entryId: lastEntryId,
-        title: '自定义分叉标题',
+        title: 'self define fork title',
       })
       assert.equal(forked.parentConversationId, parent.id)
-      assert.equal(forked.title, '自定义分叉标题')
+      assert.equal(forked.title, 'self define fork title')
       assert.equal(forked.profileId, 'reviewer')
       assert.equal(forked.cwd, rtDir)
       assert.equal(forked.model, 'faux/faux-1')

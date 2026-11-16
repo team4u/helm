@@ -1,29 +1,29 @@
 /**
- * PluginHostBackend 测试夹具底座（新契约：isClosing 归一为零参函数、
- * profiles/skills/secrets/getConversationDetail 等端口必选）。
+ * PluginHostBackend test fixture bottom seat (new contract:isClosing archive one is zero reference function,
+ * profiles/skills/secrets/getConversationDetail etc. port must choose).
  *
- * 约定：
- * - 缺省只提供两类「合理缺省」：isClosing 恒 false、redact 恒等返回；
- * - 其余未用宿主操作一律显式 throw unsupported（501），绝不以成功空响应遮错；
- * - 需要 profile/skills 真文件行为时用 profile-file-host 覆写对应端口；
- * - 类 fixture 继承 PluginHostBackendFixtureBase（构造器需 super()）；
- *   对象字面量 fixture 用 createPluginHostBackendFixture() 字段 spread 后覆写
- *   （返回对象全部为自有可枚举属性，spread 不丢方法）。
- * - 方法签名一律 Parameters/ReturnType 派生自 PluginHostBackend 本体，
- *   子类覆写（含更具体返回类型）天然兼容，不引入 never 收窄。
+ * convention:
+ * - default only provide two class together default:isClosing constant false,redact constant etc. return;
+ * - the rest not use host operation one rule explicit throw unsupported(501), never with succeeded empty response cover wrong;
+ * - need to profile/skills true file behavior when use profile-file-host override for should port;
+ * - class fixture inherit PluginHostBackendFixtureBase(construct must super());
+ *   object literal fixture use createPluginHostBackendFixture() field spread after override
+ *   (return object all is self has can enumeration property,spread do not lose method).
+ * - method signature one rule Parameters/ReturnType derive self PluginHostBackend this body,
+ *   sub- class override (contains more specific return type) day however compatibility, does not introduce never narrow.
  */
 import { HelmError } from '@helm/protocol'
 import type { PluginHostBackend } from '../../src/plugins/index.js'
 
 function unsupported(what: string): never {
-  throw new HelmError('unsupported', `测试夹具未实现宿主能力：${what}（需在具体 fixture 覆写）`, 501)
+  throw new HelmError('unsupported', `test fixture not implemented host capability:${what}(must in specific fixture override)`, 501)
 }
 
 type Port<K extends keyof PluginHostBackend> = PluginHostBackend[K]
 
 /**
- * 类 fixture 基类：默认实现全部走原型方法（子类覆写不被遮蔽）。
- * 未覆写即被真实调用的操作会显式抛 unsupported，测试如实失败。
+ * class fixture base class: by default implement all away prototype method (sub- class override do not by obscure).
+ * not override i.e. by real invoke operation will explicit throw unsupported, test such as failed.
  */
 export class PluginHostBackendFixtureBase implements PluginHostBackend {
   isClosing(): boolean {
@@ -214,7 +214,7 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
 
   execEnv(...args: Parameters<Port<'execEnv'>>): ReturnType<Port<'execEnv'>> {
     void args
-    throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501)
+    throw new HelmError('unsupported', 'this fixture do not execute node command', 501)
   }
 
   withFileMutationQueue<T>(
@@ -222,7 +222,7 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
     _fn: () => Promise<T>,
     _opts?: { signal?: AbortSignal },
   ): Promise<T> {
-    throw new HelmError('unsupported', '本 fixture 不承载文件互斥队列', 501)
+    throw new HelmError('unsupported', 'this fixture do not bear load file mutual exclusion queue', 501)
   }
 
   resolveSpawnTarget(
@@ -280,8 +280,8 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
 }
 
 /**
- * 对象字面量 fixture 的默认后端：与 PluginHostBackendFixtureBase 同一默认语义，
- * 全部成员为自有可枚举属性（可直接 spread 组合后覆写）。
+ * object literal fixture by default backend: and PluginHostBackendFixtureBase the same by default semantics,
+ * all member is self has can enumeration property (can directly spread combine after override).
  */
 export function createPluginHostBackendFixture(): PluginHostBackend {
   const d = new PluginHostBackendFixtureBase()

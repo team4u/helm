@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { createServer, type Socket } from 'node:net'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 
-/** 单工具调用 faux 消息（stopReason: toolUse）。 */
+/** single tool invoke faux message (stopReason: toolUse). */
 function fauxToolCallMessage(name: string, input: Record<string, unknown>): ReturnType<typeof fauxAssistantMessage> {
   return fauxAssistantMessage([fauxToolCall(name, input as Record<string, never>)], { stopReason: 'toolUse' })
 }
@@ -20,9 +20,9 @@ import type { HerdrNodeChannel } from '../../plugins/src/herdr/contracts.js'
 import { createHubTestApp, waitFor } from './helpers/hub-test-env.js'
 
 /**
- * EnvFabric → HerdrNodeChannel 适配器（旧公共导出 createHerdrNodeChannel 已
- * 随零参插件化移除；插件现经 ctx.host.nodeIpc 宿主端口注入。本测试直用
- * EnvFabric 同一 IPC 端口构造通道，与生产同链路验证 transport 复用节点 IPC）。
+ * EnvFabric → HerdrNodeChannel adapt (old public export createHerdrNodeChannel already
+ * follow zero reference plugin remove; plugin now via ctx.host.nodeIpc host port inject. this test direct use
+ * EnvFabric the same IPC port construct channel, and produce same link verify transport re- use node IPC).
  */
 function herdrNodeChannelOf(fabric: EnvFabric): HerdrNodeChannel {
   return {
@@ -35,7 +35,7 @@ function herdrNodeChannelOf(fabric: EnvFabric): HerdrNodeChannel {
   }
 }
 
-// 真实组合层 + 真实 WS 节点；模型由 SDK 官方 faux provider 驱动确定性工具回合。
+// real combine layer + real WS node; model by SDK official faux provider drive determinism tool turn.
 async function openEnvironment() {
   const root = await mkdtemp(join(tmpdir(), 'helm-node-app-'))
   const hubDir = join(root, 'hub')
@@ -85,9 +85,9 @@ async function openEnvironment() {
       async close() {
         try { await daemon?.close() } finally {
           try { await hub.close() } finally {
-            // app.close 吞错：内置 workflow stop 链存在已知基座缺陷
-            //（受控停止窗口内 host.listConversations 守卫拒绝），不掩盖
-            // 测试断言；基座修复后可恢复裸 await。
+            // app.close swallow wrong: inside placement workflow stop chain store in known base seat defect
+            //(subject to control stop window inside host.listConversations guard reject), do not mask
+            // test assertion; base seat fix after can restore bare await.
             try { await app.close().catch(() => {}) } finally { auth.dispose(); await rm(root, { recursive: true, force: true }) }
           }
         }
@@ -107,7 +107,7 @@ async function eventually(check: () => Promise<boolean> | boolean, description: 
   await waitFor(check, { timeoutMs: 5_000, intervalMs: 20, message: description })
 }
 
-test('跨节点后台原生子代理：真实 WS 节点分配 worktree、执行 gate、CLI 清理原节点工作树', { timeout: 60_000 }, async () => {
+test('across node background original generate subagent: real WS node allocate worktree, execute gate,CLI clean up original node worktree', { timeout: 60_000 }, async () => {
   const env = await openEnvironment()
   try {
     const setup = await env.cli(['env', 'exec', '--node', 'integration-node', '--cwd', env.remoteCwd, '--json', '--',
@@ -115,68 +115,68 @@ test('跨节点后台原生子代理：真实 WS 节点分配 worktree、执行 
     assert.equal(setup.code, 0, setup.err)
     assert.equal(JSON.parse(setup.out).ok, true, setup.out)
     const parent = await env.app.kernel.createConversation({ nodeId: 'integration-node', cwd: env.remoteCwd })
-    // 后台子代理经模型工具链（subagent background:true）——与真实生产路径
-    // 一致（引擎 startBackgroundAgent 由 builtin:workflow 插件内部接线）。
+    // background subagent via model tool chain (subagent background:true) - - and real produce path
+    // consistent (engine startBackgroundAgent by builtin:workflow plugin internal connect line).
     //
-    // faux 响应是全共享 FIFO 队列；本次链路共有 4 个模型消费点，且除首个
-    // （父回合 toolCall）外其余三个（父工具结果回合 / 后台子代理回合 /
-    // 结算汇报触发的父回合）的到达次序在真实并发下不确定——不得假设
-    // 「父先子后」。为消除次序歧义，toolCall 之后一律供给同一良性文本答案：
-    // 任何消费次序下子代理回合都能得到合法回答（run 不会因响应耗尽假 failed，
-    // 也不会把真实错误 catch 成完成）。
-    // 旧写法先 set 4 个答案再整体覆盖成 [toolCall, parentAnswer]（2 个），
-    // 并发下子代理回合可能拿到空队列（No more faux responses）→ run 真实
-    // failed；单文件侥幸通过只是时序运气。
+    // faux response is all sharing FIFO queue; this time link shared has 4 model consume point, and except first
+    // (parent turn toolCall) outside the rest three (parent tool result turn / background subagent turn /
+    // compute gather report trigger parent turn) reach time order in real concurrency under uncertain - - must not assume
+    // parent first sub- after. is eliminate time order ambiguity,toolCall after one rule supply to the same good text answer proposal:
+    // any consume time order under subagent turn all can obtain to legal answer (run will not because response exhausted false failed,
+    // also will not real error catch into complete).
+    // old write method first set 4 answer proposal again whole override into [toolCall, parentAnswer](2 ),
+    // concurrency under subagent turn may gets empty queue (No more faux responses)→ run real
+    // failed; single file luck via only is when order transport air.
     env.faux.setResponses([
       fauxToolCallMessage('subagent', {
-        prompt: '执行远端验收',
+        prompt: 'execute remote verify',
         background: true,
         isolation: 'worktree',
         gate: 'test "$HELM_NODE_TEST_ORIGIN" = remote-executor && printf "$HELM_NODE_TEST_ORIGIN" > remote-proof.txt',
       }),
-      ...Array.from({ length: 4 }, () => fauxAssistantMessage('远端任务结果')),
+      ...Array.from({ length: 4 }, () => fauxAssistantMessage('remote task result')),
     ])
-    await env.app.kernel.submitInput(parent.id, '派后台隔离子代理')
+    await env.app.kernel.submitInput(parent.id, 'dispatch background isolated subagent')
     await env.app.kernel.waitForIdle(parent.id)
-    // 从工具输出提取 runId 与 execution（子会话即执行环境）。
+    // from tool output extract runId and execution(sub-conversation i.e. execute environment).
     const detail = await env.app.kernel.getConversationDetail(parent.id, { limit: 50 })
     const toolText = JSON.stringify(detail)
     const runIdMatch = /runId\\?":\\?"(wf_[0-9a-f]+)/.exec(toolText)
-    assert.ok(runIdMatch, `subagent 工具输出应含 runId：${toolText.slice(0, 400)}`)
+    assert.ok(runIdMatch, `subagent tool output should contains runId:${toolText.slice(0, 400)}`)
     const runId = runIdMatch[1]!
     const child = env.app.kernel.listConversations().find((c) => c.parentConversationId === parent.id)
-    assert.ok(child, '后台子会话应已派生')
+    assert.ok(child, 'background sub-conversation should already derive')
     assert.equal(child.nodeId, 'integration-node')
     const inspect = await env.app.kernel.plugins.invokeAction('builtin:workflow', 'inspect', { runId }) as { run: { status: string; error?: string; nodes?: Array<{ id: string; status: string; error?: string }> } }
     for (let i = 0; i < 300 && inspect.run.status === 'running'; i++) {
       await new Promise((resolve) => setTimeout(resolve, 20))
       inspect.run = ((await env.app.kernel.plugins.invokeAction('builtin:workflow', 'inspect', { runId })) as typeof inspect).run
     }
-    // 失败时携带完整诊断（run.error + 节点 error）：不再裸 status 对比，
-    // 并发回归时可直指真实根因。
+    // on failure carry complete diagnose (run.error + node error): no longer bare status compare,
+    // concurrency regression when can direct refer real because.
     assert.equal(
       inspect.run.status,
       'completed',
-      `后台子代理 run 应 completed（实际 ${inspect.run.status}）：run.error=${JSON.stringify(inspect.run.error)} nodes=${JSON.stringify(inspect.run.nodes?.map((n) => ({ id: n.id, status: n.status, error: n.error })))}`,
+      `background subagent run should completed(actual ${inspect.run.status}):run.error=${JSON.stringify(inspect.run.error)} nodes=${JSON.stringify(inspect.run.nodes?.map((n) => ({ id: n.id, status: n.status, error: n.error })))}`,
     )
-    // 子会话绑定的受管隔离树：新契约下 WorktreeAllocator 属于 builtin:workflow
-    //（KernelRuntime 无 worktrees 端口）；受管 id 从工具输出的 worktreeId 句柄
-    // 提取，路径 = execution.effectiveCwd / 子会话 cwd。
+    // sub-conversation bind set managed isolated tree: new contract under WorktreeAllocator belongs to builtin:workflow
+    //(KernelRuntime without worktrees port); managed id from tool output worktreeId handle
+    // extract, path = execution.effectiveCwd / sub-conversation cwd.
     const toolEntry = JSON.stringify(
       (await env.app.kernel.getConversationDetail(parent.id, { limit: 50 })).entries
         .filter((e) => e.kind === 'pi.tool-result')
         .map((e) => e.model),
     )
     const wtIdMatch = /worktreeId=\\+"([^"\\\n]+)/.exec(toolEntry)
-    assert.ok(wtIdMatch, `工具输出应含受管 worktreeId 句柄：${toolEntry.slice(0, 400)}`)
+    assert.ok(wtIdMatch, `tool output should contains managed worktreeId handle:${toolEntry.slice(0, 400)}`)
     const wtId = wtIdMatch[1]!
-    assert.ok(wtId.startsWith('integration-node:'), `受管 id 应为 nodeId:path 形态（远端节点）：${wtId}`)
+    assert.ok(wtId.startsWith('integration-node:'), `managed id should be nodeId:path form (remote node):${wtId}`)
     const wtPath = wtId.slice('integration-node:'.length)
-    assert.equal(child.cwd, wtPath, '子会话 cwd 应为远端隔离树')
-    assert.equal(await readFile(join(wtPath, 'remote-proof.txt'), 'utf8'), 'remote-executor', 'gate 必须读取节点专属环境，不能落回 Hub 执行')
-    // 清理经 builtin:workflow 动作映射的动态 CLI 命令（helm worktrees cleanup）。
+    assert.equal(child.cwd, wtPath, 'sub-conversation cwd should be remote isolated tree')
+    assert.equal(await readFile(join(wtPath, 'remote-proof.txt'), 'utf8'), 'remote-executor', 'gate must read node dedicated belong environment, cannot back Hub execute')
+    // clean up via builtin:workflow action mapping motion state CLI command (helm worktrees cleanup).
     const preserved = await env.cli(['worktrees', 'cleanup', '--worktree-id', wtId, '--json'])
-    assert.notEqual(preserved.code, 0, '远端未提交产物默认保留')
+    assert.notEqual(preserved.code, 0, 'remote uncommitted artifact by default keep')
     assert.equal(JSON.parse(preserved.err).error.code, 'worktree_dirty')
     const cleanup = await env.cli(['worktrees', 'cleanup', '--worktree-id', wtId, '--force', '--json'])
     assert.equal(cleanup.code, 0, cleanup.err)
@@ -186,7 +186,7 @@ test('跨节点后台原生子代理：真实 WS 节点分配 worktree、执行 
   } finally { await env.close() }
 })
 
-test('跨节点执行的非法输入在 HTTP 边界返回明确的 400', { timeout: 60_000 }, async () => {
+test('across node execute invalid input in HTTP boundary return explicit 400', { timeout: 60_000 }, async () => {
   const env = await openEnvironment()
   try {
     for (const body of [
@@ -202,11 +202,11 @@ test('跨节点执行的非法输入在 HTTP 边界返回明确的 400', { timeo
   } finally { await env.close() }
 })
 
-test('本机受管 Shell 的 helm 包装入口能访问真实 Hub', { timeout: 60_000 }, async () => {
+test('local machine managed Shell  helm wrap entry can access real Hub', { timeout: 60_000 }, async () => {
   const env = await openEnvironment()
   try {
     const wrapper = await readFile(join(env.hubDir, 'bin', 'helm'), 'utf8')
-    assert.match(wrapper, /packages[\\/]cli[\\/]src[\\/]index\.ts/, '源码内核生成的受管入口必须使用源码 CLI，即使旧 dist 仍存在')
+    assert.match(wrapper, /packages[\\/]cli[\\/]src[\\/]index\.ts/, 'source code kernel generate managed entry must use source code CLI, even if old dist still store in')
     const response = await env.request('/api/env/exec', { nodeId: 'local', cwd: env.hubDir, conversationId: 1, command: 'helm status --json' })
     assert.equal(response.status, 200)
     const result = await response.json() as { ok: boolean; output: string }
@@ -215,7 +215,7 @@ test('本机受管 Shell 的 helm 包装入口能访问真实 Hub', { timeout: 6
   } finally { await env.close() }
 })
 
-test('节点贯通：Herdr 停用时 CLI、真实模型工具与 gate 均在会话绑定节点执行', { timeout: 60_000 }, async () => {
+test('node throughout through:Herdr deactivate when CLI, real model tool and gate all in conversation bind set node execute', { timeout: 60_000 }, async () => {
   const env = await openEnvironment()
   try {
     assert.equal(env.app.kernel.plugins.list().find((p) => p.id === 'builtin:herdr')?.enabled, false)
@@ -223,16 +223,16 @@ test('节点贯通：Herdr 停用时 CLI、真实模型工具与 gate 均在会�
     assert.equal(listed.code, 0, listed.err)
     assert.ok(JSON.parse(listed.out).some((n: { id: string; online: boolean }) => n.id === 'integration-node' && n.online))
     const snapshot = env.app.kernel.events.currentSnapshot()
-    assert.ok(snapshot.nodes?.some((node) => node.id === 'integration-node' && node.online), 'SSE 快照应与节点管理 API 一致')
+    assert.ok(snapshot.nodes?.some((node) => node.id === 'integration-node' && node.online), 'SSE snapshot should and node manage API consistent')
     assert.equal(JSON.stringify(snapshot).includes(env.token), false)
     const nodeFrames: unknown[] = []
     const releaseEvents = env.app.kernel.events.subscribe((frame) => {
       if (frame.event.type === 'node.changed') nodeFrames.push(frame)
     })
     await env.daemon.close()
-    await eventually(() => nodeFrames.length > 0, '节点断线必须发布 node.changed')
+    await eventually(() => nodeFrames.length > 0, 'node disconnection must publish node.changed')
     await env.connect()
-    await eventually(() => nodeFrames.length >= 2, '重新注册必须发布 node.changed')
+    await eventually(() => nodeFrames.length >= 2, 're- register must publish node.changed')
     releaseEvents()
     assert.equal(JSON.stringify(nodeFrames).includes(env.token), false)
     const conversation = await env.app.kernel.createConversation({ nodeId: 'integration-node', cwd: env.remoteCwd })
@@ -244,9 +244,9 @@ test('节点贯通：Herdr 停用时 CLI、真实模型工具与 gate 均在会�
       fauxAssistantMessage([fauxToolCall('bash', {
         command: 'helm status --json',
       })], { stopReason: 'toolUse' }),
-      fauxAssistantMessage('节点工具回合完成'),
+      fauxAssistantMessage('node tool turn complete'),
     ])
-    await env.app.kernel.submitInput(conversation.id, '执行文件编辑并查询 Hub 状态')
+    await env.app.kernel.submitInput(conversation.id, 'execute file edit and query Hub state')
     await env.app.kernel.waitForIdle(conversation.id)
     assert.equal(await readFile(join(env.remoteCwd, 'proof.txt'), 'utf8'), 'second')
     const detail = await env.app.kernel.getConversationDetail(conversation.id)
@@ -254,7 +254,7 @@ test('节点贯通：Herdr 停用时 CLI、真实模型工具与 gate 均在会�
     assert.equal(serialized.includes(env.token), false)
     assert.match(serialized, /second/)
     const toolResults = JSON.stringify(detail.entries.filter((entry) => entry.kind === 'pi.tool-result'))
-    assert.doesNotMatch(toolResults, /command not found|not recognized|未配置 Token|hub_unreachable/)
+    assert.doesNotMatch(toolResults, /command not found|not recognized|not config Token|hub_unreachable/)
     assert.doesNotMatch(toolResults, /"isError":true/)
     assert.match(toolResults, /authenticated/)
     const gate = await env.app.kernel.runGate('test "$HELM_NODE_TEST_ORIGIN" = remote-executor', {
@@ -272,21 +272,21 @@ test('节点贯通：Herdr 停用时 CLI、真实模型工具与 gate 均在会�
     await env.app.kernel.profiles.save({ id: 'node-expert', nodeId: 'integration-node', cwd: env.remoteCwd })
     const profileConversation = await env.app.kernel.createConversation({ profileId: 'node-expert' })
     assert.equal(profileConversation.nodeId, 'integration-node')
-    assert.equal(profileConversation.cwd, env.remoteCwd, '普通会话与原生专家都使用 Profile 的节点和目录')
-    env.faux.setResponses([fauxAssistantMessage('节点专家完成')])
+    assert.equal(profileConversation.cwd, env.remoteCwd, 'ordinary conversation and original generate dedicated household all use Profile node and directory')
+    env.faux.setResponses([fauxAssistantMessage('node dedicated household complete')])
     let childId: number | undefined
     await env.app.kernel.spawnAgent({
-      parentConversationId: 1, agentType: 'node-expert', prompt: '执行节点专家任务',
+      parentConversationId: 1, agentType: 'node-expert', prompt: 'execute node dedicated household task',
       gate: 'test "$HELM_NODE_TEST_ORIGIN" = remote-executor && printf gate >> native-gate',
       onResolved: (info) => { childId = info.conversationId },
     })
     assert.ok(childId)
     assert.equal(env.app.kernel.getConversation(childId).nodeId, 'integration-node')
-    assert.equal(await readFile(join(env.remoteCwd, 'native-gate'), 'utf8'), 'gate', '原生子代理门禁在目标节点恰好执行一次')
+    assert.equal(await readFile(join(env.remoteCwd, 'native-gate'), 'utf8'), 'gate', 'original generate subagent gate in target node exactly execute once')
   } finally { await env.close() }
 })
 
-test('真实 HTTP 流在命令结束前交付输出，取消响应关闭远端执行', { timeout: 60_000 }, async () => {
+test('real HTTP stream in command end before deliver output, cancel response close remote execute', { timeout: 60_000 }, async () => {
   const env = await openEnvironment()
   try {
     const response = await env.request('/api/env/exec', {
@@ -302,7 +302,7 @@ test('真实 HTTP 流在命令结束前交付输出，取消响应关闭远端�
   } finally { await env.close() }
 })
 
-test('节点流输出：跨块秘密脱敏、会话隔离与真实 NDJSON 终态', { timeout: 60_000 }, async () => {
+test('node stream output: across chunk secret redaction, conversation isolated and real NDJSON terminal state', { timeout: 60_000 }, async () => {
   const env = await openEnvironment()
   try {
     const conversation = await env.app.kernel.createConversation({ nodeId: 'integration-node', cwd: env.remoteCwd })
@@ -336,7 +336,7 @@ test('节点流输出：跨块秘密脱敏、会话隔离与真实 NDJSON 终态
   } finally { await env.close() }
 })
 
-test('节点断线与撤销：在途命令结果未知、重连不重放、离线不执行本机', { timeout: 60_000 }, async () => {
+test('node disconnection and undo: in-flight command result unknown, reconnect do not replay, offline do not execute local machine', { timeout: 60_000 }, async () => {
   const env = await openEnvironment()
   try {
     const countPath = join(env.remoteCwd, 'executions.txt')
@@ -345,17 +345,17 @@ test('节点断线与撤销：在途命令结果未知、重连不重放、离�
       command: [process.execPath, '-e',
         'require("node:fs").appendFileSync("executions.txt", "once\\n"); setInterval(() => {}, 1000)'],
     })
-    await eventually(async () => readFile(countPath, 'utf8').then((text) => text === 'once\n', () => false), '远端命令应真实开始')
+    await eventually(async () => readFile(countPath, 'utf8').then((text) => text === 'once\n', () => false), 'remote command should real start')
     await env.daemon.close()
     const result = await pending
     const body = await result.json() as { ok?: boolean; output?: string; error?: { code: string; message: string } }
     assert.equal(body.ok === true, false)
-    assert.match(JSON.stringify(body), /unknown|未知/)
+    assert.match(JSON.stringify(body), /unknown|unknown/)
     await env.connect()
-    assert.equal(await readFile(countPath, 'utf8'), 'once\n', '新连接不能重放副作用命令')
+    assert.equal(await readFile(countPath, 'utf8'), 'once\n', 'new connect cannot replay side effect command')
     const removed = await env.cli(['nodes', 'remove', 'integration-node', '--json'])
     assert.equal(removed.code, 0, removed.err)
-    await eventually(() => !env.daemon.isConnected(), '删除节点必须关闭其现有 WS')
+    await eventually(() => !env.daemon.isConnected(), 'delete node must close its existing WS')
     const offline = await env.request('/api/env/exec', {
       nodeId: 'integration-node', cwd: env.hubDir,
       command: [process.execPath, '-e', 'require("node:fs").writeFileSync("must-not-run", "bad")'],
@@ -366,7 +366,7 @@ test('节点断线与撤销：在途命令结果未知、重连不重放、离�
   } finally { await env.close() }
 })
 
-test('跨节点取消：HTTP 中止传播到节点并停止孙进程写入', { timeout: 60_000 }, async () => {
+test('across node cancel:HTTP abort pass broadcast to node and stop descendant process write', { timeout: 60_000 }, async () => {
   const env = await openEnvironment()
   try {
     const controller = new AbortController()
@@ -376,21 +376,21 @@ test('跨节点取消：HTTP 中止传播到节点并停止孙进程写入', { t
       nodeId: 'integration-node', cwd: env.remoteCwd,
       command: [process.execPath, '-e', program],
     }, controller.signal)
-    // 先消费 rejection，避免取消后测试读取文件期间出现未处理拒绝。
+    // first consume rejection, avoid cancel after test read file during appear not handle reject.
     const completed = pending.then(() => 'completed', (error: unknown) => error)
     const heartbeatPath = join(env.remoteCwd, 'child-heartbeat')
-    await eventually(async () => readFile(heartbeatPath, 'utf8').then((text) => text.length >= 3, () => false), '孙进程必须实际运行后再取消')
+    await eventually(async () => readFile(heartbeatPath, 'utf8').then((text) => text.length >= 3, () => false), 'descendant process must actual run after again cancel')
     controller.abort()
     const outcome = await completed
     assert.ok(outcome instanceof Error && outcome.name === 'AbortError')
     await new Promise((resolve) => setTimeout(resolve, 200))
     const before = await readFile(heartbeatPath, 'utf8')
     await new Promise((resolve) => setTimeout(resolve, 200))
-    assert.equal(await readFile(heartbeatPath, 'utf8'), before, '取消必须停止进程树，不能只拒绝 Hub Promise')
+    assert.equal(await readFile(heartbeatPath, 'utf8'), before, 'cancel must stop process tree, cannot only reject Hub Promise')
   } finally { await env.close() }
 })
 
-test('Herdr 传输复用真实节点 IPC，订阅 ACK 只消费一次', { timeout: 60_000 }, async () => {
+test('Herdr transfer re- use real node IPC, subscribe ACK only consume once', { timeout: 60_000 }, async () => {
   const env = await openEnvironment()
   const sockets = new Set<Socket>()
   const socketPath = join(env.nodeDir, 'herdr.sock')
@@ -417,23 +417,23 @@ test('Herdr 传输复用真实节点 IPC，订阅 ACK 只消费一次', { timeou
   let release: (() => void) | undefined
   try {
     await new Promise<void>((resolve, reject) => { ipc.once('error', reject); ipc.listen(socketPath, resolve) })
-    // EnvFabric 与 HerdrNodeChannel 结构同构（ipcCall/ipcSubscribe/envFor/isOnline/
-    // getNodeHubUrl 均为 signal 签名）：真实节点 IPC 生产路径直连，无适配层。
+    // EnvFabric and HerdrNodeChannel structure same construct (ipcCall/ipcSubscribe/envFor/isOnline/
+    // getNodeHubUrl all is signal signature): real node IPC produce path direct connect, without adapt layer.
     const transport = createHerdrTransport({ nodeChannel: env.app.kernel.envFabric })
     assert.deepEqual(await transport.call({ nodeId: 'integration-node', socketPath }, 'session.snapshot', {}), { source: 'remote-node-ipc' })
     const events: unknown[] = []
     const errors: unknown[] = []
     release = await transport.subscribe({ nodeId: 'integration-node', socketPath }, (event) => events.push(event), (error) => errors.push(error))
-    await eventually(() => events.length === 1, '节点已消费 ACK 后，Herdr 仍应接收首个真实事件')
+    await eventually(() => events.length === 1, 'node already consume ACK after,Herdr still should receive first real event')
     assert.deepEqual(events, [{ type: 'pane.created', paneId: 'remote-pane' }])
     assert.deepEqual(errors, [])
     assert.deepEqual(calls, ['session.snapshot', 'events.subscribe'])
     for (const socket of sockets) socket.end()
-    await eventually(() => errors.length === 1, '节点 IPC 实际断开必须传达到 Herdr 订阅者')
-    assert.match(String(errors[0]), /subscription|disconnect|关闭|断开/)
+    await eventually(() => errors.length === 1, 'node IPC actual disconnect must pass reach Herdr subscribe')
+    assert.match(String(errors[0]), /subscription|disconnect|close|disconnect/)
     release()
     release = undefined
-    await eventually(() => sockets.size === 0, '取消订阅必须真正关闭节点 IPC socket')
+    await eventually(() => sockets.size === 0, 'cancel subscribe must truly close node IPC socket')
   } finally {
     release?.()
     for (const socket of sockets) socket.destroy()

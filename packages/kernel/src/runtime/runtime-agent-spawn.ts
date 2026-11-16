@@ -1,13 +1,13 @@
 /**
- * RuntimeAgentSpawn：子代理派生、验收 Gate 与执行事实维护（从 KernelRuntime 拆出）。
+ * RuntimeAgentSpawn: subagent derive, verify Gate and execute fact maintain (from KernelRuntime split out).
  *
- * 职责：
- * - spawnAgent 运行管道（schema 预编译校验 -> resume 独占检查 -> around 钩子 -> gate 校验 -> schema 验证）；
- * - 原生 subagent 执行环境装配与子会话初始状态广播（0ms 对齐 parentConversationId/parentToolCallId）；
- * - runGate 验收命令在目标节点执行（远端会话远端跑）；
- * - buildSpawnEnv 受管子进程环境构造；
- * - resolveSpawnTarget 通用 spawn 靶点解析（spawn-target.ts 同一权威链）；
- * - 维护 activeSpawnExecutions 活跃执行态与 agentSessions 别名映射。
+ * responsibility:
+ * - spawnAgent run pipeline (schema pre- compile validate -> resume exclusive check -> around hook -> gate validate -> schema verify);
+ * - original generate subagent execute environment install match and sub-conversation initial state broadcast (0ms align parentConversationId/parentToolCallId);
+ * - runGate verify command in target node execute (remote conversation remote run);
+ * - buildSpawnEnv managed child process environment construct;
+ * - resolveSpawnTarget through use spawn target parse (spawn-target.ts the same right threat chain);
+ * - maintain activeSpawnExecutions leap execute state and agentSessions alias mapping.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -50,26 +50,26 @@ import { buildManagedEnv, runGate } from './tools.js'
 import { isValidEnvName, type SecretStash } from '../services/index.js'
 
 /**
- * secretNames 边界校验（spawn 请求与 buildSpawnEnv 共用）：字符串数组、每项
- * 非空且为合法环境变量名、无重复；undefined（未授予）合法。非法形状显式拒绝。
+ * secretNames boundary validate (spawn request and buildSpawnEnv shared use): string array, each items
+ * non-empty and is legal environment variable name, without duplicate;undefined(not grant) legal. illegal shape explicit reject.
  */
 export function validateSecretNames(secretNames: string[] | undefined): string[] {
   if (secretNames === undefined) return []
   if (!Array.isArray(secretNames)) {
-    throw new HelmError('validation_error', `secretNames 需为字符串数组（收到 ${typeof secretNames}）`, 400)
+    throw new HelmError('validation_error', `secretNames must be a string array (receives ${typeof secretNames})`, 400)
   }
   const seen = new Set<string>()
   for (const name of secretNames) {
     if (typeof name !== 'string' || name === '' || !isValidEnvName(name)) {
       throw new HelmError(
         'validation_error',
-        `secretNames 含非法机密名 '${String(name)}'（需非空合法环境变量名）`,
+        `secretNames contains illegal secret name '${String(name)}'(must non-empty legal environment variable name)`,
         400,
         { name },
       )
     }
     if (seen.has(name)) {
-      throw new HelmError('validation_error', `secretNames 重复：${name}`, 400, { name })
+      throw new HelmError('validation_error', `secretNames duplicate:${name}`, 400, { name })
     }
     seen.add(name)
   }
@@ -93,24 +93,24 @@ export interface RuntimeAgentSpawnDeps {
 }
 
 export class RuntimeAgentSpawn {
-  /** 当前在途的 spawnAgent 执行事实：token -> AgentExecutionInfo。 */
+  /** when before in-flight spawnAgent execute fact:token -> AgentExecutionInfo. */
   readonly activeSpawnExecutions = new Map<string, AgentExecutionInfo>()
 
-  /** 原生 spawn session 映射：sessionId -> childConversationId。 */
+  /** original generate spawn session mapping:sessionId -> childConversationId. */
   readonly agentSessions = new Map<string, number>()
-  /** 本 Harness 共享的结构化输出结果槽（conversationId -> session）：并发 spawn
-   * 的同名扩展被 registry 原地替换后，旧扩展闭包仍经此共享 map 按 conversationId
-   * 动态命中自己的结果槽（与原模块级 WeakMap<Harness, Map> 同语义，改为显式注入）。 */
+  /** this Harness sharing structure output result slot (conversationId -> session): concurrency spawn
+   * same name extend by registry original ground replace after, old extend closed package still via this sharing map by conversationId
+   * motion state hit itself result slot (and original module level WeakMap<Harness, Map> same semantics, change is explicit inject). */
   readonly structuredOutputSessions = new Map<number, StructuredOutputSession>()
 
   constructor(private readonly deps: RuntimeAgentSpawnDeps) {}
 
   /**
-   * 受管子进程 spawn 环境变量构造：
-   * 绝不携带宿主 process.env（远端环境由目标机器自理，PATH/HOME 等不得外泄）。
-   * 缺省不携带任何父会话 stash 机密（外部窗格最小授权）；仅显式 secretNames
-   * 逐名注入：名字需在父会话 stash 内现存（含未过期/未结算），缺失显式 404，
-   * 绝不静默降级为空注入。
+   * managed child process spawn environment variable construct:
+   * never carry host process.env(remote environment by target machine self,PATH/HOME etc. must not outside leak).
+   * default does not carry any parent conversation stash secret (external pane most small authorization); only explicit secretNames
+   * one by one name inject: name must in parent conversation stash inside now store (contains not expired/not compute), missing explicit 404,
+   * never static default fall back is empty inject.
    */
   buildSpawnEnv(
     conversationId: number,
@@ -121,26 +121,26 @@ export class RuntimeAgentSpawn {
     if (!Number.isInteger(conversationId) || conversationId <= 0) {
       throw new HelmError(
         'validation_error',
-        `buildSpawnEnv 需要正整数 conversationId（收到 ${String(conversationId)}）`,
+        `buildSpawnEnv need to positive integer conversationId(receives ${String(conversationId)})`,
         400,
         { conversationId },
       )
     }
     if (typeof cwd !== 'string' || cwd === '') {
-      throw new HelmError('validation_error', `buildSpawnEnv 需要非空 cwd（收到 ${String(cwd)}）`, 400, {
+      throw new HelmError('validation_error', `buildSpawnEnv need to non-empty cwd(receives ${String(cwd)})`, 400, {
         cwd,
       })
     }
     const names = validateSecretNames(options?.secretNames)
-    // 单次选择读取后基于实际返回键判缺失（同步边界，同次只采样 clock 一次）：
-    // 先 has 后 envFor 的两段读会在 TTL 边界跨界——has 过、envFor 省略，返回
-    // 假成功空注入。
+    // single time choose read after based on actual return key judge missing (sync boundary, same time only sampling clock once):
+    // first has after envFor two segment read will in TTL boundary across boundary - -has ,envFor omit, return
+    // false succeeded empty inject.
     const stashEnv = this.deps.stashService.envFor(conversationId, names)
     const missing = names.filter((name) => !Object.hasOwn(stashEnv, name))
     if (missing.length > 0) {
       throw new HelmError(
         'secret_not_found',
-        `会话 ${conversationId} 的 stash 内不存在（或已停止注入）机密：${missing.join(', ')}；请确认机密名与生命周期（TTL/回合作用域）`,
+        `conversation ${conversationId}  stash inside missing (or already stop inject) secret:${missing.join(', ')}; please confirm secret name and lifecycle (TTL/turn effect domain)`,
         404,
         { conversationId, missing },
       )
@@ -150,16 +150,16 @@ export class RuntimeAgentSpawn {
   }
 
   /**
-   * 子代理派生：agent_spawn around 管道（continuation）-> 默认原生 subagent。
-   * 内核零 Git/worktree 语义：隔离等执行环境要求由插件层经 next(finalReq)
-   * 兑现；内核只保留通用保证（meta envelope 校验 / schema 校验 / gate 回报
-   * 对账 / 结果验证；命名空间业务值由所有方插件校验）。
+   * subagent derive:agent_spawn around pipeline (continuation)-> by default original generate subagent.
+   * kernel zero Git/worktree semantics: isolated etc. execute environment want seek by plugin layer via next(finalReq)
+   * honor; kernel only keep through use guarantee (meta envelope validate / schema validate / gate back report
+   * for account / result verify; naming empty between business value by all way plugin validate).
    */
   async spawnAgent(request: AgentSpawnRequest): Promise<unknown> {
     if (request.schema !== undefined) assertSchemaCompilable(request.schema)
     validateSecretNames(request.secretNames)
-    // envelope 边界（同步段，先于钩子链与一切 await）：meta 必须是 JSON-safe
-    // 命名空间对象；业务值不在内核校验（所有方插件边界负责）。
+    // envelope boundary (sync segment, first at hook chain and everything await):meta must be JSON-safe
+    // naming empty between object; business value do not in kernel validate (all way plugin boundary negative duty).
     sanitizeAgentNamespacedMeta(request.meta, {
       agentId: request.agentId ?? 'subagent',
       field: 'spawn request meta',
@@ -170,15 +170,15 @@ export class RuntimeAgentSpawn {
       const resumeId = /^\d+$/.test(request.resume) ? Number(request.resume) : this.agentSessions.get(request.resume)
       const child = resumeId !== undefined ? this.deps.store.getConv(resumeId) : undefined
       if (resumeId !== undefined && child !== undefined && child.parentConversationId === request.parentConversationId) {
-        // 早期互斥拒绝（钩子链前）：共享在途注册表（与 runNativeSpawn 同源；
-        // 覆盖直调入口与「子会话已建但 onResolved 未回传」空窗）+ 本映射的
-        // 预置坐标（覆盖钩子链窗口内宿主侧并发 resume）。权威占用在原生执行
-        // 行同步 claim；本映射仅是执行事实镜像与早期检查面。
+        // early mutual exclusion reject (hook chain before): sharing in-flight register table (and runNativeSpawn same source;
+        // override direct tune entry and sub-conversation already create but onResolved not back pass empty window)+ this mapping
+        // pre- placement coordinates (override hook chain window inside host side concurrency resume). right threat occupy in original generate execute
+        // row sync claim; this mapping only is execute fact mirror and early check side.
         if (
           isSpawnConversationInTurn(this.deps.harness, resumeId) ||
           [...this.activeSpawnExecutions.values()].some((info) => info.conversationId === resumeId)
         ) {
-          throw new HelmError('subagent_in_use', `子会话 ${resumeId} 仍有在途执行，不能并发续接`, 409)
+          throw new HelmError('subagent_in_use', `sub-conversation ${resumeId} still has in-flight execute, cannot concurrency resume`, 409)
         }
         this.activeSpawnExecutions.set(token, { conversationId: resumeId, nodeId: child.nodeId ?? 'local', effectiveCwd: child.cwd })
       }
@@ -203,18 +203,18 @@ export class RuntimeAgentSpawn {
     try {
       const result = await this.spawnAgentObserved(observed, preResolvedForkAnchor)
       if (request.schema !== undefined) {
-        // 跨插件边界终校验：原生行内部的自息/工具校验不因接管（handled）或
-        // 钩子改写而存在，最终产物必须在此重新过一遍 Schema（不可删）。
+        // across plugin boundary final validate: original generate row internal self breath/tool validate do not because take over (handled) or
+        // hook change write while store in, eventually artifact must in this re- once Schema(cannot delete).
         const validation = validateJsonSchema(result, request.schema)
         if (!validation.ok) {
-          throw new HelmError('schema_validation_failed', `子代理最终结果未满足 Schema：${validation.errors.join('; ')}`, 502)
+          throw new HelmError('schema_validation_failed', `subagent eventually result not satisfy Schema:${validation.errors.join('; ')}`, 502)
         }
       }
       if (request.gate !== undefined && execution?.executionId !== undefined && gate === undefined) {
         throw agentGateResultMissingError({ agentId: request.agentId ?? 'subagent', executionId: execution.executionId, command: request.gate })
       }
       if (gate !== undefined && !gate.ok) {
-        throw new HelmError('gate_failed', `子代理验收命令失败：${gate.output}`, 502)
+        throw new HelmError('gate_failed', `subagent verify command failed:${gate.output}`, 502)
       }
       return result
     } finally {
@@ -222,14 +222,14 @@ export class RuntimeAgentSpawn {
     }
   }
 
-  /** fork 请求前置校验与锚点锁定（入口预检与钩子 transform 终检共用）。 */
+  /** fork request pre- validate and anchor lock (entry preflight and hook transform final inspect shared use). */
   private async preflightForkRequest(request: AgentSpawnRequest): Promise<number | undefined> {
     assertSpawnForkFields(request)
     if (request.fork !== true) return undefined
     if ((request.agentType ?? '').includes(':')) {
       throw new HelmError(
         'unsupported_runtime',
-        `fork 仅支持原生 Profile 子会话，不支持外部运行时 '${request.agentType}'`,
+        `fork only support original generate Profile sub-conversation, unsupported external runtime '${request.agentType}'`,
         400,
         { agentType: request.agentType },
       )
@@ -238,7 +238,7 @@ export class RuntimeAgentSpawn {
     if (parentMeta === undefined) {
       throw new HelmError(
         'not_found',
-        `父会话 ${request.parentConversationId} 不存在，无法执行 fork 派生`,
+        `parent conversation ${request.parentConversationId} missing, cannot execute fork derive`,
         404,
         { parentConversationId: request.parentConversationId },
       )
@@ -248,7 +248,7 @@ export class RuntimeAgentSpawn {
     if (profile === undefined) {
       throw new HelmError(
         'not_found',
-        `agentType '${effectiveProfileId}' 不是已注册的 Profile（profiles/${effectiveProfileId} 不存在）`,
+        `agentType '${effectiveProfileId}' is not registered Profile(profiles/${effectiveProfileId} missing)`,
         404,
         { agentType: effectiveProfileId },
       )
@@ -256,7 +256,7 @@ export class RuntimeAgentSpawn {
     if (profile.runtime !== undefined) {
       throw new HelmError(
         'unsupported_runtime',
-        `Profile '${effectiveProfileId}' 声明外部运行时 runtime.kind='${profile.runtime.kind}'（agent '${profile.runtime.agent}'），fork 仅支持原生 Profile 子会话`,
+        `Profile '${effectiveProfileId}' declaration external runtime runtime.kind='${profile.runtime.kind}'(agent '${profile.runtime.agent}'),fork only support original generate Profile sub-conversation`,
         400,
         { agentType: effectiveProfileId, runtimeKind: profile.runtime.kind },
       )
@@ -265,17 +265,17 @@ export class RuntimeAgentSpawn {
   }
 
   async spawnAgentObserved(request: AgentSpawnRequest, preResolvedForkAnchor?: number): Promise<unknown> {
-    // 附件门禁在进入 hook 链之前：agent_spawn 钩子与原生执行行均受统一授权
-    // 保护（产物存在 + 父会话链归属）；插件 next 改写后再校验一次。
+    // attachment gate in enter hook chain before:agent_spawn hook and original generate execute row all subject to unify authorization
+    // protect (artifact store in + parent conversation chain ownership); plugin next change write after again validate once.
     if (request.attachments !== undefined && request.attachments.length > 0) {
       await this.deps.conversations.resolveAuthorizedAttachments(request.parentConversationId, request.attachments)
     }
-    // around（continuation）管道：插件可包裹完整生命周期（在 next 前分配资源、
-    // next 后收敛）；handled 仍可完全接管；无插件时直接默认原生执行。
+    // around(continuation) pipeline: plugin can package wrap complete lifecycle (in next before allocate asset,
+    // next after converge);handled still can fully take over; without plugin when directly by default original generate execute.
     return this.deps.hookBridge.runHookAround('agent_spawn', request, async (finalRequest) => {
-      // envelope 边界（around 最终请求）：钩子链 transform/continuation 改写
-      // 后的 meta 与 fork 关键参数在进入原生执行之前统一复验，防止钩子
-      // 翻开 fork / 替换目标或绕过前置校验。
+      // envelope boundary (around eventually request): hook chain transform/continuation change write
+      // after meta and fork key parameter in enter original generate execute before unify re- verify, guard against hook
+      // translate open fork / replace target or bypass pre- validate.
       sanitizeAgentNamespacedMeta(finalRequest.meta, {
         agentId: finalRequest.agentId ?? request.agentId ?? 'subagent',
         field: 'spawn request meta',
@@ -305,13 +305,13 @@ export class RuntimeAgentSpawn {
           ? await this.deps.conversations.resolveAuthorizedAttachments(finalRequest.parentConversationId, finalRequest.attachments)
           : undefined
 
-      // 原生执行行诚实边界：原生子会话工具环境按子会话自身 stash 计算，无法
-      // 承接父会话机密授予——非空 secretNames 到达此处（无外部运行时钩子接管）
-      // 显式拒绝，绝不静默忽略假装子代理已取得机密；空数组等同未授予。
+      // original generate execute row honest boundary: original generate sub-conversation tool environment by sub-conversation itself stash compute, cannot
+      // bear connect parent conversation secret grant - - non-empty secretNames reach this where (without external runtime hook take over)
+      // explicit reject, never static default ignore pretend subagent already acquire secret; empty array etc. same not grant.
       if (finalRequest.secretNames !== undefined && finalRequest.secretNames.length > 0) {
         throw new HelmError(
           'unsupported_secret_grant',
-          `原生执行行不支持 secretNames 机密授予（${finalRequest.secretNames.join(', ')}）：原生子会话不继承父会话 stash；机密注入仅外部运行时（如 builtin:herdr 窗格）支持，请改用外部运行时 agentType 或去掉授予`,
+          `original generate execute row unsupported secretNames secret grant (${finalRequest.secretNames.join(', ')}): original generate sub-conversation do not inherit parent conversation stash; secret inject only external runtime (such as builtin:herdr pane) support, use... instead external runtime agentType or remove grant`,
           400,
           { secretNames: [...finalRequest.secretNames] },
         )
@@ -355,7 +355,7 @@ export class RuntimeAgentSpawn {
               const now = Date.now()
               this.deps.store.upsertConv({
                 id: childId,
-                title: `子代理 ${childId}`,
+                title: `subagent ${childId}`,
                 profileId,
                 tags,
                 parentConversationId: parentId,
@@ -364,8 +364,8 @@ export class RuntimeAgentSpawn {
                 cwd: childCwd,
                 model: modelMirror,
                 thinkingLevel: thinkingLevel ?? '',
-                // 收敛后的显式覆盖（原生执行行已按目标模型能力 clamp，或同角色 fork 继承）；
-                // 未显式指定时保持继承链语义（不存 override）。
+                // converge after explicit override (original generate execute row already by target model capability clamp, or same role fork inherit);
+                // not explicit designate when keep inherit chain semantics (do not store override).
                 ...(thinkingLevelOverride !== undefined ? { thinkingLevelOverride } : {}),
                 ...(inheritedModelOverride !== undefined && inheritedModelOverride !== ''
                   ? { modelOverride: inheritedModelOverride }
@@ -395,16 +395,16 @@ export class RuntimeAgentSpawn {
                 this.deps.events.publish('conversation.upsert', this.deps.conversations.withOwnership(this.deps.tracker.summaryOf(childId)))
               }
             },
-            // signal 桥守卫中止：现读归属与权威水位作守卫事实，经内核
-            // abortConversationGuarded 原子复核（human-owned 一律拒绝——看门狗
-            // 红线；事实过期/目标消失同样确定性拒绝，绝不回退普通中止）。
+            // signal bridge guard abort: now read ownership and right threat watermark act guard fact, via kernel
+            // abortConversationGuarded atomic re-check (human-owned one rule reject - - watchdog
+            // hard rule; fact expired/target disappear same determinism reject, never fall back ordinary abort).
             abortChildConversationGuarded: async (childId) => {
               const summary = this.deps.conversations.summaryWithOwnership(childId)
               const ownedBy = summary.ownedBy ?? 'human'
               if (ownedBy === 'human') {
                 throw new HelmError(
                   'ownership_conflict',
-                  `子会话 ${childId} 当前归属 human，拒绝自动中止（看门狗红线）`,
+                  `sub-conversation ${childId} when before ownership human, reject automatically abort (watchdog hard rule)`,
                   409,
                   { conversationId: childId, currentOwnership: ownedBy },
                 )
@@ -422,7 +422,7 @@ export class RuntimeAgentSpawn {
   }
 
   /**
-   * gate 门禁（独立 spawn 与 Workflow adapter 共用，只执行一次）。
+   * gate gate (independent spawn and Workflow adapter shared use, only execute once).
    */
   runGate(
     command: string,
@@ -443,8 +443,8 @@ export class RuntimeAgentSpawn {
   }
 
   /**
-   * 通用 spawn 靶点解析（ctx.host.resolveSpawnTarget 后端；与原生执行行
-   * 同一权威链，见 runtime/spawn-target.ts）。
+   * through use spawn target parse (ctx.host.resolveSpawnTarget backend; and original generate execute row
+   * the same right threat chain, see runtime/spawn-target.ts).
    */
   async resolveSpawnTarget(input: {
     parentConversationId: number
@@ -454,19 +454,19 @@ export class RuntimeAgentSpawn {
   }): Promise<{ nodeId: string; sourceCwd: string; parentCwd: string | undefined }> {
     const parent = this.deps.store.getConv(input.parentConversationId)
     if (parent === undefined) {
-      throw new HelmError('not_found', `父会话 ${input.parentConversationId} 不存在，无法解析 spawn 靶点`, 404, {
+      throw new HelmError('not_found', `parent conversation ${input.parentConversationId} missing, cannot parse spawn target`, 404, {
         parentConversationId: input.parentConversationId,
       })
     }
     const { profileId, forkSameProfile } = resolveForkMode(input.profileId, input.fork, parent.profileId)
     const profile = await this.deps.conversations.readProfile(profileId)
     if (profile === undefined) {
-      throw new HelmError('not_found', `agentType '${profileId}' 不是已注册的 Profile（profiles/${profileId} 不存在）`, 404)
+      throw new HelmError('not_found', `agentType '${profileId}' is not registered Profile(profiles/${profileId} missing)`, 404)
     }
-    // 源 cwd 按目标节点平台统一收口（同角色 fork 为 request > parent > profile > Hub 缺省，
-    // 其余为 request > profile > parent > Hub 缺省）：worktree 源目录解析拿到的
-    // 是规范化后的路径；win32 目标上不可映射的 POSIX cwd 显式拒绝；远端
-    // 平台无可信信息时透传。parentCwd 是父会话镜像事实，原样返回。
+    // source cwd by target node platform unify consolidate (same role fork is request > parent > profile > Hub default,
+    // the rest is request > profile > parent > Hub default):worktree source directory parse gets
+    // is specification after path;win32 target on cannot mapping POSIX cwd explicit reject; remote
+    // platform without can message information when pass-through.parentCwd is parent conversation mirror fact, original return.
     const { nodeId, sourceCwd } = resolveSpawnTargetChain({
       profileNodeId: profile.nodeId,
       parentNodeId: parent.nodeId,
@@ -485,17 +485,17 @@ export class RuntimeAgentSpawn {
     return { nodeId, sourceCwd, parentCwd: parent.cwd }
   }
 
-  /** 当前进程内仍在执行的 spawn 执行事实（ctx.host.listActiveSpawnExecutions 后端）。 */
+  /** when before process inside still in execute spawn execute fact (ctx.host.listActiveSpawnExecutions backend). */
   listActiveSpawnExecutions(): AgentExecutionInfo[] {
     return [...this.activeSpawnExecutions.values()].map((info) => ({ ...info }))
   }
 
   /**
-   * 目标节点进程占用快照（ctx.host.inspectNodePathUsage 后端）：
-   * 经 EnvFabric 在目标节点真实扫描（local 进程内 / 远端 RPC），失败
-   * （离线/不支持/权限/扫描不完整）由 fabric 显式抛 HelmError，本层绝不
-   * 吞错、绝不回退本机；快照语义（非互斥、complete=false 必须 fail-closed）
-   * 见 protocol/plugin.ts 端口注释。
+   * target node process occupy snapshot (ctx.host.inspectNodePathUsage backend):
+   * via EnvFabric in target node real scan (local process inside / remote RPC), failed
+   * (offline/unsupported/permission/scan do not complete) by fabric explicit throw HelmError, this layer never
+   * swallow wrong, never fall back local machine; snapshot semantics (non- mutual exclusion,complete=false must fail-closed)
+   * see protocol/plugin.ts port note release.
    */
   async inspectNodePathUsage(input: {
     nodeId: string
@@ -503,10 +503,10 @@ export class RuntimeAgentSpawn {
     signal?: AbortSignal
   }): Promise<import('@helm/protocol').NodePathUsage> {
     if (typeof input.nodeId !== 'string' || input.nodeId === '') {
-      throw new HelmError('validation_error', `inspectNodePathUsage 需要非空 nodeId（收到 ${String(input.nodeId)}）`, 400)
+      throw new HelmError('validation_error', `inspectNodePathUsage need to non-empty nodeId(receives ${String(input.nodeId)})`, 400)
     }
     if (typeof input.path !== 'string' || input.path === '' || input.path.includes('\u0000')) {
-      throw new HelmError('validation_error', 'inspectNodePathUsage 需要非空且不含 NUL 的 path', 400)
+      throw new HelmError('validation_error', 'inspectNodePathUsage need to non-empty and excludes NUL  path', 400)
     }
     return this.deps.envFabric.inspectPathUsage(input.nodeId, input.path, input.signal)
   }

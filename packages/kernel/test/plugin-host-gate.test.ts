@@ -1,7 +1,7 @@
 /**
- * PluginHostGate 读写屏障与 plugin-host-deps 依赖拓扑单元测试。
+ * PluginHostGate read write screen fault and plugin-host-deps dependency topology unit test.
  *
- * runner: tsx --test；每条测试显式 timeout: 60_000 防死锁。
+ * runner: tsx --test; each test explicit timeout: 60_000 guard against deadlock.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -43,10 +43,10 @@ function makeState(
 }
 
 // ---------------------------------------------------------------------------
-// PluginHostGate：per-plugin 队列 + 写者优先读写屏障
+// PluginHostGate:per-plugin queue + write takes precedence read write screen fault
 // ---------------------------------------------------------------------------
 
-test('enqueue 同插件严格串行、跨插件可并发读', { timeout: 60_000 }, async () => {
+test('enqueue same plugin strictly serial, across plugin can concurrency read', { timeout: 60_000 }, async () => {
   const gate = new PluginHostGate();
   const events: string[] = [];
   const a1Gate = deferred<void>();
@@ -71,8 +71,8 @@ test('enqueue 同插件严格串行、跨插件可并发读', { timeout: 60_000 
   });
 
   await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.equal(gate.readerCount, 2, '跨插件读门并发持有');
-  assert.deepEqual(events, ['a1:start', 'b1:start'], '同插件 a2 必须等待 a1');
+  assert.equal(gate.readerCount, 2, 'across plugin read gate concurrency hold has');
+  assert.deepEqual(events, ['a1:start', 'b1:start'], 'same plugin a2 must wait for a1');
 
   b1Gate.resolve();
   assert.equal(await b1, 'b1');
@@ -82,10 +82,10 @@ test('enqueue 同插件严格串行、跨插件可并发读', { timeout: 60_000 
 
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(gate.readerCount, 0);
-  assert.equal(gate.queuedPluginCount, 0, '完成后自动清理队列索引');
+  assert.equal(gate.queuedPluginCount, 0, 'after completion automatically clean up queue index');
 });
 
-test('写者优先防饿死：等待写门期间新读者必须让位于写者（含多写者排队）', { timeout: 60_000 }, async () => {
+test('write takes precedence guard against hungry die: wait for write gate during new read must let at write (contains many write queue up)', { timeout: 60_000 }, async () => {
   const gate = new PluginHostGate();
   const order: string[] = [];
   const r1Hold = deferred<void>();
@@ -105,7 +105,7 @@ test('写者优先防饿死：等待写门期间新读者必须让位于写者�
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(gate.waitingWriterCount, 1);
 
-  // w1 等待期间入队的读者 r2 必须被写者优先门挡住；同时第二个写者 w2 也入队
+  // w1 wait for during queue read r2 must by write takes precedence gate block; also second write w2 also queue
   const r2Promise = gate.enqueue('p:r2', async () => {
     order.push('r2:acquired');
   });
@@ -114,21 +114,21 @@ test('写者优先防饿死：等待写门期间新读者必须让位于写者�
   });
 
   await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.deepEqual(order, ['r1:acquired'], 'r1 未释放前，w1/w2/r2 均等待');
+  assert.deepEqual(order, ['r1:acquired'], 'r1 not release before,w1/w2/r2 all wait for');
 
-  // 释放 r1，唤醒全部等待者：w1 优先获锁
+  // release r1, wake all wait for:w1 takes precedence obtain lock
   gate.releaseGateRead();
   await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.deepEqual(order, ['r1:acquired', 'w1:acquired'], 'w1 必须先于 r2 获得锁');
+  assert.deepEqual(order, ['r1:acquired', 'w1:acquired'], 'w1 must first at r2 obtain lock');
 
-  // 释放 w1：仍有 w2 在排队，r2 继续让位于 w2
+  // release w1: still has w2 in queue up,r2 continue let at w2
   w1Hold.resolve();
   await w1Promise;
   await Promise.all([w2Promise, r2Promise]);
   assert.deepEqual(
     order,
     ['r1:acquired', 'w1:acquired', 'w1:releasing', 'w2:acquired', 'r2:acquired'],
-    '多写者排队期间写者始终优先于后续读者，防止写者饿死',
+    'many write queue up during write always takes precedence at after continue read, guard against write hungry die',
   );
   assert.equal(gate.readerCount, 0);
   assert.equal(gate.isWriterActive, false);
@@ -137,7 +137,7 @@ test('写者优先防饿死：等待写门期间新读者必须让位于写者�
   void r1Hold;
 });
 
-test('异常释放不死锁：enqueue 与 withWriteLock 抛错后门锁干净归还', { timeout: 60_000 }, async () => {
+test('exception release do not deadlock:enqueue and withWriteLock throws after gate lock clean return', { timeout: 60_000 }, async () => {
   const gate = new PluginHostGate();
 
   await assert.rejects(
@@ -146,7 +146,7 @@ test('异常释放不死锁：enqueue 与 withWriteLock 抛错后门锁干净归
     }),
     /reader-boom/,
   );
-  assert.equal(gate.readerCount, 0, '读任务失败后读计数必须归零');
+  assert.equal(gate.readerCount, 0, 'read task failed after read counter must reset to zero');
 
   await assert.rejects(
     gate.withWriteLock(async () => {
@@ -155,9 +155,9 @@ test('异常释放不死锁：enqueue 与 withWriteLock 抛错后门锁干净归
     }),
     /writer-boom/,
   );
-  assert.equal(gate.isWriterActive, false, '写任务失败后写标志必须复位');
+  assert.equal(gate.isWriterActive, false, 'write task failed after write flag must re-');
 
-  // 异常之后队列与读写门均可正常续用
+  // exception after queue and read write gate all can normal continue use
   const value = await gate.enqueue('p:err', async () => 'recovered');
   assert.equal(value, 'recovered');
   const writeVal = await gate.withWriteLock(async () => 42);
@@ -167,7 +167,7 @@ test('异常释放不死锁：enqueue 与 withWriteLock 抛错后门锁干净归
   assert.throws(() => gate.releaseGateWrite(), /without active writer/);
 });
 
-test('drain 等待全部排队任务收敛并清空队列索引', { timeout: 60_000 }, async () => {
+test('drain wait for all queue up task converge and empty queue index', { timeout: 60_000 }, async () => {
   const gate = new PluginHostGate();
   const hold = deferred<void>();
   let settledCount = 0;
@@ -196,10 +196,10 @@ test('drain 等待全部排队任务收敛并清空队列索引', { timeout: 60_
 });
 
 // ---------------------------------------------------------------------------
-// plugin-host-deps：依赖环路、满足性、依赖者保护、拓扑序
+// plugin-host-deps: dependency ring route, satisfy, dependency protect, topology order
 // ---------------------------------------------------------------------------
 
-test('assertNoDependencyCycle：无环通过、多跳成环显式拒绝', { timeout: 60_000 }, () => {
+test('assertNoDependencyCycle: without ring via, many jump into ring explicit reject', { timeout: 60_000 }, () => {
   const plugins = new Map<string, PluginState>([
     ['a', makeState('a', { dependencies: ['b'] })],
     ['b', makeState('b', { dependencies: ['c'] })],
@@ -220,7 +220,7 @@ test('assertNoDependencyCycle：无环通过、多跳成环显式拒绝', { time
   );
 });
 
-test('assertDependenciesSatisfied：区分缺失、未启用与过渡态', { timeout: 60_000 }, () => {
+test('assertDependenciesSatisfied: zone missing, not enabled and transition state', { timeout: 60_000 }, () => {
   const plugins = new Map<string, PluginState>([
     ['ok', makeState('ok', { enabled: true, phase: 'idle' })],
     ['off', makeState('off', { enabled: false, phase: 'idle' })],
@@ -245,7 +245,7 @@ test('assertDependenciesSatisfied：区分缺失、未启用与过渡态', { tim
   }
 });
 
-test('collectDependents / assertNoEnabledDependents / markDependentsBroken 传递依赖行为', { timeout: 60_000 }, () => {
+test('collectDependents / assertNoEnabledDependents / markDependentsBroken pass dependency behavior', { timeout: 60_000 }, () => {
   const base = makeState('base', { enabled: true, phase: 'idle' });
   const mid = makeState('mid', { dependencies: ['base'], enabled: true, phase: 'idle' });
   const top = makeState('top', { dependencies: ['mid'], enabled: true, phase: 'idle' });
@@ -264,7 +264,7 @@ test('collectDependents / assertNoEnabledDependents / markDependentsBroken 传�
   assert.deepEqual(
     dependents.map((s) => s.definition.id),
     ['mid', 'starting', 'top'],
-    '按 BFS 收集已启用与 defining 期依赖者，忽略已停用者',
+    'by BFS collect enabled and defining phase dependency, ignore deactivated',
   );
 
   assert.throws(
@@ -274,14 +274,14 @@ test('collectDependents / assertNoEnabledDependents / markDependentsBroken 传�
 
   const changedIds: string[] = [];
   markDependentsBroken(plugins, 'base', (dep) => changedIds.push(dep.definition.id));
-  assert.deepEqual(changedIds, ['mid', 'top'], '仅标记并广播已启用依赖者');
+  assert.deepEqual(changedIds, ['mid', 'top'], 'only mark record and broadcast enabled dependency');
   assert.equal(mid.lastError?.code, 'plugin_dependency_not_enabled');
   assert.equal(top.lastError?.code, 'plugin_dependency_not_enabled');
   assert.equal(starting.lastError, undefined);
   assert.equal(disabled.lastError, undefined);
 });
 
-test('enabledStatesInDependencyOrder：过滤未启用插件并保持拓扑序与同层注册序', { timeout: 60_000 }, () => {
+test('enabledStatesInDependencyOrder: filter not enabled plugin and keep topology order and same layer register order', { timeout: 60_000 }, () => {
   const plugins = new Map<string, PluginState>([
     ['top', makeState('top', { dependencies: ['mid'], enabled: true })],
     ['peer-1', makeState('peer-1', { enabled: true })],

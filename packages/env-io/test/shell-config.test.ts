@@ -44,8 +44,8 @@ function makeFakeIo(opts: FakeIoOptions): { io: ShellProbeIo; probeCalls: Array<
   return { io, probeCalls }
 }
 
-describe('shell-config：Windows 宿主机 Git Bash 探测与 WSL 启动器过滤', { timeout: 60_000 }, () => {
-  it('命中 %ProgramW6432% / %LOCALAPPDATA%（Winget/用户级）/ %USERPROFILE%\\scoop / %SCOOP%', { timeout: 60_000 }, async () => {
+describe('shell-config:Windows host machine Git Bash probe and WSL start filter', { timeout: 60_000 }, () => {
+  it('hit %ProgramW6432% / %LOCALAPPDATA%(Winget/user level)/ %USERPROFILE%\\scoop / %SCOOP%', { timeout: 60_000 }, async () => {
     {
       const target = 'D:\\Programs\\Git\\bin\\bash.exe'
       const { io } = makeFakeIo({
@@ -78,7 +78,7 @@ describe('shell-config：Windows 宿主机 Git Bash 探测与 WSL 启动器过�
     }
   })
 
-  it('默认目录缺失时经 where.exe git.exe 反推 D:\\Git、mingw64 与 Scoop shim', { timeout: 60_000 }, async () => {
+  it('by default directory missing when via where.exe git.exe reverse push D:\\Git,mingw64 and Scoop shim', { timeout: 60_000 }, async () => {
     // 1) D:\Git\cmd\git.exe -> D:\Git\bin\bash.exe
     {
       const bash = 'D:\\Git\\bin\\bash.exe'
@@ -119,7 +119,7 @@ describe('shell-config：Windows 宿主机 Git Bash 探测与 WSL 启动器过�
     }
   })
 
-  it('where.exe bash.exe 跳过 System32 与 WindowsApps WSL 启动器并命中后续 MSYS2 bash.exe', { timeout: 60_000 }, async () => {
+  it('where.exe bash.exe skip System32 and WindowsApps WSL start and hit after continue MSYS2 bash.exe', { timeout: 60_000 }, async () => {
     const msysBash = 'C:\\msys64\\usr\\bin\\bash.exe'
     const { io } = makeFakeIo({
       existingPaths: [
@@ -144,7 +144,7 @@ describe('shell-config：Windows 宿主机 Git Bash 探测与 WSL 启动器过�
     assert.deepEqual(res, { ok: true, value: { shell: msysBash, args: ['-c'], commandTransport: 'argv' } })
   })
 
-  it('仅存在 WSL 启动器而无任何原生 Windows Bash 时显式失败，绝不静默返回 WSL', { timeout: 60_000 }, async () => {
+  it('only store in WSL start while without any original generate Windows Bash when explicit failed, never static default return WSL', { timeout: 60_000 }, async () => {
     const { io } = makeFakeIo({
       existingPaths: [
         'C:\\Windows\\System32\\bash.exe',
@@ -172,7 +172,7 @@ describe('shell-config：Windows 宿主机 Git Bash 探测与 WSL 启动器过�
     }
   })
 
-  it('显式传入 customShellPath=System32\\bash.exe 时仍尊重显式配置并返回 stdin 模式；缺失则报错', { timeout: 60_000 }, async () => {
+  it('explicit pass customShellPath=System32\\bash.exe when still respect explicit config and return stdin pattern; missing then errors', { timeout: 60_000 }, async () => {
     const wsl = 'C:\\Windows\\System32\\bash.exe'
     assert.equal(isLegacyWslBashPath(wsl, { SystemRoot: 'C:\\Windows' }), true)
     assert.equal(isWslBashLauncherPath('D:\\Custom\\Microsoft\\WindowsApps\\bash.exe', {}), true)
@@ -184,7 +184,7 @@ describe('shell-config：Windows 宿主机 Git Bash 探测与 WSL 启动器过�
     assert.deepEqual(missing, { ok: false, message: 'Custom shell path not found: D:\\missing\\bash.exe' })
   })
 
-  it('linux 宿主探测保持 /bin/bash -> which bash -> sh 语义', { timeout: 60_000 }, async () => {
+  it('linux host probe keep /bin/bash -> which bash -> sh semantics', { timeout: 60_000 }, async () => {
     {
       const { io } = makeFakeIo({ platform: 'linux', existingPaths: ['/bin/bash'] })
       assert.deepEqual(await resolveShellConfigWithIo(undefined, io), {

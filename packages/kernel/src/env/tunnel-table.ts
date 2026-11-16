@@ -1,31 +1,31 @@
 /**
- * tunnel-table.ts：节点透传隧道的登记表（自 env/registry.ts 拆出）。
+ * tunnel-table.ts: node pass-through tunnel register table (self env/registry.ts split out).
  *
- * 职责：在途隧道（pending，openTunnel 发起后等待独立网关首帧认证）与已建立
- * 隧道（active，Duplex 生命周期与登记项同步销毁）两张表的存储与终结；
- * 节点换代（evict/替换）与 registry.close 经 finalize 批量终结（pending 拒绝、
- * active 摘除并销毁 duplex）。等待/认证/epoch 复查流程仍归 NodeRegistry
- * （openTunnel / acceptTunnel / grantTunnel），本表只管登记与销毁。
- * 行为与拆分前 NodeRegistry 内联实现逐字一致。
+ * responsibility: in-flight tunnel (pending,openTunnel start after wait for independent gateway first frame recognize verify) and already establish
+ * tunnel (active,Duplex lifecycle and register items sync destroy) two spread table store and final;
+ * node swap proxy (evict/replace) and registry.close via finalize batch amount final (pending reject,
+ * active excerpt except and destroy duplex). wait for/recognize verify/epoch re- inspect stream process still archive NodeRegistry
+ * (openTunnel / acceptTunnel / grantTunnel), this table only manage register and destroy.
+ * behavior and split before NodeRegistry inline implement one by one character consistent.
  */
 import type { Duplex } from 'node:stream'
 import { HelmError } from '@helm/protocol'
 
-/** 在途隧道登记（openTunnel 建立后等待独立网关首帧认证）。 */
+/** in-flight tunnel register (openTunnel establish after wait for independent gateway first frame recognize verify). */
 export interface PendingTunnel {
   tunnelId: string
   nodeId: string
-  /** 发起时的撤销 epoch；节点换代（evict/替换）后 pending 立即失效。 */
+  /** start when undo epoch; node swap proxy (evict/replace) after pending immediately expires. */
   epoch: number
   timeoutMs: number
   timer: NodeJS.Timeout
-  /** 认证通过后由网关交棒 Duplex（grant 填入流并结算 pending）。 */
+  /** recognize verify via after by gateway hand over fine Duplex(grant fill stream and compute pending). */
   grant: (duplex: Duplex) => void
   reject: (error: HelmError) => void
   settled: boolean
 }
 
-/** 已建立隧道：Duplex 由登记表持有并在节点换代/关停时主动销毁。 */
+/** already establish tunnel:Duplex by register table hold has and in node swap proxy/closure stop when actively destroy. */
 export interface ActiveTunnel {
   tunnelId: string
   nodeId: string
@@ -33,8 +33,8 @@ export interface ActiveTunnel {
 }
 
 /**
- * 节点侧隧道 RPC 显式失败结果的错误归一：result.error.code → HelmError 的
- * code/status（timeout 504 / aborted 499 / node_draining 503 / 其余 502）。
+ * node side tunnel RPC explicit failed result error archive one:result.error.code → HelmError 
+ * code/status(timeout 504 / aborted 499 / node_draining 503 / the rest 502).
  */
 export function tunnelRpcFailureOf(errorCode: string): { code: string; status: number } {
   switch (errorCode) {
@@ -49,7 +49,7 @@ export function tunnelRpcFailureOf(errorCode: string): { code: string; status: n
   }
 }
 
-/** 终结批次的错误工厂（pending 与 active 的措辞/字段不同，由调用方给定）。 */
+/** final batch error work vendor (pending and active wording/field different, by caller to set). */
 export interface TunnelFinalizeErrors {
   pending: (nodeId: string, tunnelId: string) => HelmError
   active: (nodeId: string, tunnelId: string) => HelmError
@@ -67,12 +67,12 @@ export class TunnelTable {
     return this.#pending.get(tunnelId)
   }
 
-  /** 摘除在途登记（pending 定格失败路径；无条件删除，同拆分前语义）。 */
+  /** excerpt except in-flight register (pending set format failed path; without condition delete, same split before semantics). */
   dropPending(tunnelId: string): void {
     this.#pending.delete(tunnelId)
   }
 
-  /** 结算成功路径：摘 pending、登记 active，并在 duplex 关闭时摘除登记。 */
+  /** compute succeeded path: excerpt pending, register active, and in duplex on shutdown excerpt except register. */
   activate(tunnelId: string, nodeId: string, duplex: Duplex): void {
     this.#pending.delete(tunnelId)
     this.#active.set(tunnelId, { tunnelId, nodeId, duplex })
@@ -83,15 +83,15 @@ export class TunnelTable {
     })
   }
 
-  /** 网关交棒 Duplex：认证已过（acceptTunnel true 后调用）；pending 已定格失败则销毁交来的流（不泄漏）。 */
+  /** gateway hand over fine Duplex: recognize verify already (acceptTunnel true after invoke);pending already set format failed then destroy hand over come stream (without leaking). */
   grant(tunnelId: string, duplex: Duplex): void {
     this.#pending.get(tunnelId)?.grant(duplex)
   }
 
   /**
-   * 批量终结：先拒绝全部命中的 pending，再销毁全部命中的 active duplex。
-   * active 的 duplex.destroy(error) 避免把断开伪装成正常 EOF（消费方在
-   * error/close 中感知断开并以 node_tunnel_closed 收尾）。
+   * batch amount final: first reject all hit pending, again destroy all hit active duplex.
+   * active  duplex.destroy(error) avoid disconnect disguise into normal EOF(consumer in
+   * error/close in aware disconnect and with node_tunnel_closed wrap-up).
    */
   finalize(match: (nodeId: string) => boolean, errors: TunnelFinalizeErrors): void {
     for (const [tunnelId, pending] of [...this.#pending]) {
@@ -106,7 +106,7 @@ export class TunnelTable {
     }
   }
 
-  /** 测试内省：在途/已建立隧道计数。 */
+  /** test inside omit: in-flight/already establish tunnel counter. */
   counts(): { pending: number; active: number } {
     return { pending: this.#pending.size, active: this.#active.size }
   }

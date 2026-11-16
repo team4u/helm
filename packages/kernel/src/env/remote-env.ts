@@ -1,19 +1,19 @@
 /**
- * 远端执行环境：把 pi-durable `ExecutionEnv`（FileSystem + Shell）的每个
- * 操作翻译为对节点侧 `NodeEnvRpcFunctions` 的调用。
+ * remote execute environment: pi-durable `ExecutionEnv`(FileSystem + Shell) each
+ * operation translate is for node side `NodeEnvRpcFunctions` invoke.
  *
- * 关键语义（诚实性纪律）：
- * - reader 以 readerId 句柄桥接；close 幂等且不因连接失效挂起；
- * - `exec` 把 onOutput 分块经 ExecOutputHub 回放（节点流式推送，按 execId 路由），
- *   实例级输出 sink 按需注册/注销：首个带 onOutput 的 exec 前注册到
- *   resolver，最后一个在途 exec 结束（或 cleanup）后注销——短生命周期
- *   实例（envFor 路径）用后即弃也无注册表残留；
- * - 取消传播：context abort 时立即 rpc.envAbortExec(execId) 让节点杀死该
- *   命令的整棵子进程树，不等命令自然结束；
- * - 远端节点离线且 resolver 支持等待时，阻塞等待重连（可取消）；
- *   **绝不回落到 local**——远端 (nodeId, cwd) 的路径只在目标节点上有意义；
- * - 连接丢失（exec 已开始后断开）：命令结果未知。以 `unknown` 错误显式
- *   报告（不自动重试），绝不静默重放不安全的 shell（外部副作用不可重放）。
+ * key semantics (honest discipline):
+ * - reader with readerId handle bridge;close idempotent and do not because connect expires suspended;
+ * - `exec`  onOutput chunked via ExecOutputHub back put (node streaming push, by execId routing),
+ *   instance level output sink on demand register/deregister: first carries onOutput  exec before register to
+ *   resolver, finally a in-flight exec end (or cleanup) after deregister - - short lifecycle
+ *   instance (envFor path) use after i.e. abandon also without register table leftover;
+ * - cancel pass broadcast:context abort when immediately rpc.envAbortExec(execId) let node kill die the
+ *   command the whole child process tree, do not etc. command self however end;
+ * - remote node offline and resolver support while waiting, block wait for reconnect (can cancel);
+ *   **never back to local**- - remote (nodeId, cwd) path only in target node on has intent meaning;
+ * - connect lose (exec already after start disconnect): command result unknown. with `unknown` error explicit
+ *   report (do not automatically retry), never static default replay do not security shell(external side effect cannot replay).
  */
 
 import type { Context } from '@earendil-works/chord/context'
@@ -38,16 +38,16 @@ import type { EnvExecOutputEvent, NodeEnvRpcFunctions, RpcEnvError, RpcResult } 
 import { HelmError } from '@helm/protocol'
 import { ExecOutputHub } from './exec-output.js'
 
-/** 按 nodeId 解析节点 env RPC（由 fabric 的连接注册表接线）。 */
+/** by nodeId parse node env RPC(by fabric connect register table connect line). */
 export interface NodeRpcResolver {
   getNodeEnvRpc(nodeId: string): NodeEnvRpcFunctions | undefined
   /**
-   * 远端离线韧性：节点离线时等待重连（尊重 context 取消）；不可等待
-   * （未提供）时调用方立即失败。取消时返回 undefined。
+   * remote offline resilience: node offline when wait for reconnect (respect context cancel); cannot wait for
+   * (not provide) when caller immediately failed. cancel when return undefined.
    */
   waitForNodeOnline?(nodeId: string, context: Context): Promise<NodeEnvRpcFunctions | undefined>
-  /** 实例级输出 sink 注册（按 exec 生命周期自管理；无则该实例输出
-   *  不路由——仅当无流式需求的内部构造使用）。 */
+  /** instance level output sink register (by exec lifecycle self manage; without then the instance output
+   *  do not routing - - only when without streaming requirement internal construct use). */
   addOutputSink?(nodeId: string, sink: (event: EnvExecOutputEvent) => void): void
   removeOutputSink?(nodeId: string, sink: (event: EnvExecOutputEvent) => void): void
 }
@@ -56,26 +56,26 @@ export interface RemoteExecutionEnvOptions {
   nodeId: string
   cwd: string
   /**
-   * 文件操作解析 RPC 连接的等待上限（毫秒），缺省 30s：文件操作可能运行在
-   * withFileMutationQueue 持锁窗口内，无限等重连会冻结该文件全部排队者
-   *（其他会话/插件）直至持锁者 turn 被中止；超时抛出 node_offline 释放锁。
-   * exec 不受限（长命令等待重连由调用方 context 取消语义管理）。
+   * file operation parse RPC connect wait for cap (milli second), default 30s: file operation may run in
+   * withFileMutationQueue hold lock window inside, unbounded etc. reconnect will freeze the file all queue up
+   *(other conversation/plugin) direct until hold lock turn by abort; timeout throw node_offline release lock.
+   * exec do not subject to limit (long command wait for reconnect by caller context cancel semantics manage).
    */
   rpcWaitTimeoutMs?: number
 }
 
-/** #call 文件操作解析 RPC 的缺省等待上限。 */
+/** #call file operation parse RPC default wait for cap. */
 const DEFAULT_RPC_WAIT_TIMEOUT_MS = 30_000
 
 const fileError = (error: RpcEnvError, path?: string): FileError =>
   new FileError(error.code as FileError['code'], error.message, path)
 
-// 节点升级排空拒新（envExec 返回 node_draining）：pi-durable 的
-// ExecutionError/FileError 联合（外部包）无法承载节点态码，沿用既有
-// 运行时透传策略（与 connect_failed 同）：code 原样保留在错误对象上，
-// message 携带完整诊断——上层（如 tools.ts 的 shell 标签）可据此把
-// 「节点正在升级排空」与 aborted（取消）/unknown（断连结果未知）区分，
-// 绝不归并为 aborted，也不触发无声重试/等待重连。
+// node upgrade arrange empty refuse new (envExec return node_draining):pi-durable 
+// ExecutionError/FileError join together (external package) cannot bear load node state code, along use since has
+// runtime pass-through policy (and connect_failed same):code original keep in error object on,
+// message carry complete diagnose - - on layer (such as tools.ts  shell tag) can based on this
+// node is now upgrade arrange empty and aborted(cancel)/unknown(assert connect result unknown) zone,
+// never archive and is aborted, also does not trigger without sound retry/wait for reconnect.
 
 const execErrorFromRpc = (error: RpcEnvError): ExecutionError => {
   const e = new ExecutionError(error.code as ExecutionError['code'], error.message)
@@ -89,7 +89,7 @@ const unwrapFile = <T>(result: RpcResult<T>, path?: string): Result<T, FileError
 const voidOk: Result<void, FileError> = { ok: true, value: undefined }
 
 const lostMessage = (nodeId: string, error: unknown): string =>
-  `节点 ${nodeId} 连接中断，操作结果未知（不自动重试）：${error instanceof Error ? error.message : String(error)}`
+  `node ${nodeId} connect interrupt, operation result unknown (do not automatically retry):${error instanceof Error ? error.message : String(error)}`
 
 let execSeq = 0
 
@@ -112,8 +112,8 @@ export class RemoteExecutionEnv implements ExecutionEnv {
     this.#rpcWaitTimeoutMs = options.rpcWaitTimeoutMs ?? DEFAULT_RPC_WAIT_TIMEOUT_MS
   }
 
-  /** sink 注册/注销按在途 exec 计数：首个带 onOutput 的 exec 注册，最后一个
-   *  结束后注销——实例（含 envFor 短生命周期对象）不残留注册表强引用。 */
+  /** sink register/deregister by in-flight exec counter: first carries onOutput  exec register, finally a
+   *  after end deregister - - instance (contains envFor short lifecycle object) leaves no residue register table strong reference. */
   #acquireSink(): void {
     this.#liveExecsWithOutput += 1
     if (!this.#sinkRegistered && this.#resolver.addOutputSink !== undefined) {
@@ -130,7 +130,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
     }
   }
 
-  /** 节点侧流式回调入口（fabric 登记到注册表按节点路由）。 */
+  /** node side streaming call back entry (fabric register to register table by node routing). */
   get onEnvExecOutput(): (event: EnvExecOutputEvent) => void {
     return this.#outputHub.onEnvExecOutput
   }
@@ -139,7 +139,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
     return this.#outputHub
   }
 
-  /** 取得在线节点的 RPC；离线且可等待时先等待（等待期间 context 取消 → undefined）。 */
+  /** acquire online node RPC; offline and can while waiting first wait for (wait for during context cancel → undefined). */
   async #rpc(context: Context): Promise<NodeEnvRpcFunctions> {
     const rpc = this.#resolver.getNodeEnvRpc(this.#nodeIdValue)
     if (rpc !== undefined) return rpc
@@ -147,38 +147,38 @@ export class RemoteExecutionEnv implements ExecutionEnv {
     if (wait !== undefined) {
       const restored = await wait(this.#nodeIdValue, context)
       if (restored !== undefined) return restored
-      throw new Error(`等待节点 ${this.#nodeIdValue} 上线已被取消`)
+      throw new Error(`wait for node ${this.#nodeIdValue} enable already by cancel`)
     }
-    throw new Error(`节点 ${this.#nodeIdValue} 离线`)
+    throw new Error(`node ${this.#nodeIdValue} offline`)
   }
 
   /**
-   * reader 跨代安全：句柄绑定创建时的 RPC 代。节点重连后新代可能复用同一
-   * readerId 序号（如 r1 指向另一个文件）——绝不能把旧句柄发给新代误读
-   * 别的文件。每次 read/info/next/close 都校验「原代 rpc 仍是当前代」，
-   * 失效即报 unknown/invalid（不重放、不跨代复用）。
+   * reader across proxy security: handle bind set create when RPC proxy. node reconnect after new proxy may re- use the same
+   * readerId ordinal (such as r1 points to another file) - - never can old handle to new proxy mistakenly read
+   * other file. each time read/info/next/close all validate original proxy rpc still is when before proxy,
+   * expires i.e. report unknown/invalid(do not replay, do not across proxy re- use).
    */
   #staleReaderError(path: string): FileError {
     return new FileError(
       'unknown',
-      `节点 ${this.#nodeIdValue} 连接已替换，reader 句柄所属代已终结（不跨代复用）：${path}`,
+      `node ${this.#nodeIdValue} connect already replace,reader handle which belong proxy already final (do not across proxy re- use):${path}`,
       path,
     )
   }
 
-  /** 原代 rpc 是否仍是当前代（false = 已被顶替/断开，句柄全部失效）。 */
+  /** original proxy rpc is otherwise still is when before proxy (false = already by top replace/disconnect, handle all expires). */
   #isCurrentRpc(rpc: NodeEnvRpcFunctions): boolean {
     return this.#resolver.getNodeEnvRpc(this.#nodeIdValue) === rpc
   }
 
   /**
-   * 文件操作入口的 RPC 解析（#call 专用）：等待重连有界（rpcWaitTimeoutMs）。
-   * 无界等待在持锁窗口内会把文件队列冻结到持锁者 turn 被中止；超时抛出
-   * node_offline（锁随异常释放），节点重连后调用方可显式重试。
+   * file operation entry RPC parse (#call dedicated use): wait for reconnect has boundary (rpcWaitTimeoutMs).
+   * without boundary wait for in hold lock window inside will file queue freeze to hold lock turn by abort; timeout throw
+   * node_offline(lock follow exception release), node reconnect after caller can explicit retry.
    */
   async #rpcBounded(context: Context): Promise<NodeEnvRpcFunctions> {
     const rpcPromise = this.#rpc(context)
-    // 超时先至时 rpcPromise 仍可能在等：observe 防未处理 rejection。
+    // timeout first until when rpcPromise still may in etc.:observe guard against not handle rejection.
     rpcPromise.catch(() => undefined)
     let timer: NodeJS.Timeout | undefined
     try {
@@ -188,7 +188,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
           timer = setTimeout(() => {
             reject(new HelmError(
               'node_offline',
-              `节点 ${this.#nodeIdValue} 离线，等待重连超过 ${this.#rpcWaitTimeoutMs}ms（文件操作不无限等待）`,
+              `node ${this.#nodeIdValue} offline, wait for reconnect exceeds ${this.#rpcWaitTimeoutMs}ms(file operation do not unbounded wait for)`,
               409,
               { nodeId: this.#nodeIdValue },
             ))
@@ -201,7 +201,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
     }
   }
 
-  /** RPC 调用包装：节点失联（连接断开抛错）归一为「结果未知」。 */
+  /** RPC invoke wrap: node lose join (connect disconnect throws) archive one is result unknown. */
   async #call<T>(
     fn: (rpc: NodeEnvRpcFunctions) => Promise<RpcResult<T>>,
     context: Context,
@@ -253,7 +253,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
       ok: true,
       value: {
         readLine: async () => {
-          // 跨代校验：旧句柄不发给新代（新代同名 readerId 是另一个文件）。
+          // across proxy validate: old handle do not to new proxy (new proxy same name readerId is another file).
           if (!this.#isCurrentRpc(rpc)) return { ok: false, error: this.#staleReaderError(path) }
           let read: Awaited<ReturnType<typeof rpc.envTextReaderRead>>
           try {
@@ -269,7 +269,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
           try {
             if (this.#isCurrentRpc(rpc)) await rpc.envTextReaderClose({ readerId })
           } catch {
-            // 连接已失效：节点侧 reader 生命周期与连接绑定，断开时统一回收。
+            // connect already expires: node side reader lifecycle and connect bind set, on disconnect unify reclaim.
           }
         },
       },
@@ -297,7 +297,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
       if (context.abortSignal?.aborted) throw error
       throw new Error(lostMessage(this.#nodeIdValue, error))
     }
-    // 跨代校验：每次调用前确认原代 rpc 仍是当前代（旧句柄不发给新代）。
+    // across proxy validate: each time invoke before confirm original proxy rpc still is when before proxy (old handle do not to new proxy).
     const guard = (): FileError | undefined =>
       this.#isCurrentRpc(rpc) ? undefined : this.#staleReaderError(path)
     const call = <T>(fn: (r: string) => Promise<RpcResult<T>>): Promise<Result<T, FileError>> => {
@@ -323,7 +323,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
           try {
             if (this.#isCurrentRpc(rpc)) await rpc.envBinaryReaderClose({ readerId })
           } catch {
-            // 同上：连接失效时由节点侧连接级回收兜底。
+            // same on: connect expires when by node side connect level reclaim fall back.
           }
         },
       },
@@ -360,7 +360,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
   }
 
   async flushFile(path: string, context: Context): Promise<Result<void, FileError>> {
-    // 真实转发节点侧 envFlushFile：远端 fsync 语义由节点执行（不伪成功）。
+    // real forwarding node side envFlushFile: remote fsync semantics by node execute (do not fake succeeded).
     const result = await this.#call((rpc) => rpc.envFlushFile({ path, cwd: this.cwd }), context, path)
     return result.ok ? voidOk : result
   }
@@ -407,7 +407,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
       ok: true,
       value: {
         next: (maxEntries: number) => {
-          // 跨代校验：旧句柄不发给新代（新代同名 readerId 是另一个目录页游标）。
+          // across proxy validate: old handle do not to new proxy (new proxy same name readerId is another directory page cursor).
           if (!this.#isCurrentRpc(rpc)) {
             return Promise.resolve({ ok: false, error: this.#staleReaderError(path) })
           }
@@ -422,7 +422,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
           try {
             if (this.#isCurrentRpc(rpc)) await rpc.envDirReaderClose({ readerId })
           } catch {
-            // 连接失效：节点侧连接级回收兜底。
+            // connect expires: node side connect level reclaim fall back.
           }
         },
       },
@@ -434,8 +434,8 @@ export class RemoteExecutionEnv implements ExecutionEnv {
     _onChange: (change: FileChange) => void,
     _context: Context,
   ): Promise<Result<FileWatcher, FileError>> {
-    // 远端 watch 超出协议范围：显式报错（not_supported），绝不返回
-    // 假 watcher（那会让宿主以为已建立监听而永远收不到事件）。
+    // remote watch exceeds protocol scope: explicit errors (not_supported), never return
+    // false watcher(that will let host with is already establish listen while forever fewer than event).
     return { ok: false, error: new FileError('not_supported', 'Remote env watch is not supported over RPC') }
   }
 
@@ -485,11 +485,11 @@ export class RemoteExecutionEnv implements ExecutionEnv {
   }
 
   async cleanup(_context: Context): Promise<void> {
-    // 实例清理只注销自身 sink（自管理生命周期）；绝不发送按 cwd 的
-    // envCleanup——节点侧 envCleanup 会杀同 cwd 下**其他会话**的在途
-    // 命令（cwd 不是会话隔离键）。在途命令的终止由调用方 context abort
-    // （envAbortExec 按 execId 精确杀）或连接断开的节点侧连接级 dispose
-    // 兜底。
+    // instance clean up only deregister itself sink(self manage lifecycle); never send by cwd 
+    // envCleanup- - node side envCleanup will kill same cwd under**other conversation**in-flight
+    // command (cwd is not conversation isolated key). in-flight command terminate by caller context abort
+    // (envAbortExec by execId precise kill) or connect disconnect node side connect level dispose
+    // fall back.
     this.#liveExecsWithOutput = 0
     if (this.#sinkRegistered) {
       this.#resolver.removeOutputSink?.(this.#nodeIdValue, this.onEnvExecOutput)
@@ -515,8 +515,8 @@ export class RemoteExecutionEnv implements ExecutionEnv {
         ok: false,
         error:
           context.abortSignal?.aborted
-            ? new ExecutionError('aborted', '等待节点上线时取消')
-            : new ExecutionError('unknown', `节点 ${this.#nodeIdValue} 离线`),
+            ? new ExecutionError('aborted', 'wait for node enable when cancel')
+            : new ExecutionError('unknown', `node ${this.#nodeIdValue} offline`),
       }
     }
     const execId = `exec-${++execSeq}-${Math.random().toString(36).slice(2, 8)}`
@@ -539,7 +539,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
       const result = await rpc.envExec({
         execId,
         command,
-        // 逐调用 cwd 优先（pi-durable Shell 语义）；缺省用 env 自身 cwd。
+        // one by one invoke cwd takes precedence (pi-durable Shell semantics); default use env itself cwd.
         cwd: options?.cwd ?? this.cwd,
         ...(options?.env === undefined ? {} : { env: options.env }),
         ...(options?.inheritEnv === undefined ? {} : { inheritEnv: options.inheritEnv }),
@@ -561,9 +561,9 @@ export class RemoteExecutionEnv implements ExecutionEnv {
       }
       return { ok: false, error: execErrorFromRpc(result.error) }
     } catch (error) {
-      // 取消引发的连接异常归一为 aborted；否则是连接丢失——命令已在节点
-      // 启动，结果未知：显式报错且绝不自动重试（不安全的 shell 重放会
-      // 对外部世界重复副作用）。
+      // cancel quote connect exception archive one is aborted; otherwise is connect lose - - command already in node
+      // start, result unknown: explicit errors and never automatically retry (do not security shell replay will
+      // for external world duplicate side effect).
       if (context.abortSignal?.aborted) {
         return { ok: false, error: new ExecutionError('aborted', 'Command aborted') }
       }
@@ -575,7 +575,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
     }
   }
 
-  /** 取消指定的运行中命令（透传节点侧 envAbortExec）。 */
+  /** cancel designate run in command (pass-through node side envAbortExec). */
   async abortExec(execId: string, context: Context): Promise<void> {
     await (await this.#rpc(context)).envAbortExec(execId)
   }

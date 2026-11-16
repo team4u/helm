@@ -1,22 +1,22 @@
 /**
- * shell 执行引擎（runShell / runGate / bash 工具）。
+ * shell execute engine (runShell / runGate / bash tool).
  *
- * - shell 执行委托 SDK `NodeExecutionEnv.exec`（`@earendil-works/pi-durable/env/node`）：
- *   预先 aborted 的 Context 绝不 spawn；abort/timeout 杀整个进程组并可靠等待子进程
- *   退出（listener/timer 全清理，不泄露进程）；stdout/stderr 各自 `StreamDecoder` 增量
- *   解码，多字节字符跨 chunk 不撕裂；`onOutput` 按到达顺序拼接（非先 stdout 后 stderr）。
- * - 跨节点执行（EnvFabric）：按 (nodeId, cwd, conversationId) 靶点在目标节点执行；
- *   nodeId !== 'local' 时经 deps.envFabric（离线显式 node_offline，断线显式 unknown；
- *   EnvFabric 缺失时仅允许 local 短生命周期直建，远端显式 env_fabric_missing，
- *   见 guards.ts），绝不静默回退 local 误读写 Hub 本机磁盘。
- * - 目标节点平台感知的 cwd/path 规范化（唯一实现 runtime/target-platform.ts，
- *   复用 @helm/protocol normalizeTargetPath/targetPlatformOf 原语，业务入口
- *   不得各自另写规则）：SDK NodeExecutionEnv / Remote 执行只接收已规范化路径
- *   （bash / runGate / POST /api/env/exec 与 WorktreeAllocator execGit 均经
- *   runShell 收敛）。
- * - runShell 对宿主继承 HELM_TOKEN 做兜底脱敏：即使调用方未把宿主 token 登记进
- *   deps.redact，返回的一切聚合文本也对捕获到的宿主 token 做精确替换脱敏。
- * - 输出超过 maxOutputBytes 显式失败 `output_limit_exceeded`（绝不截断当成功）。
+ * - shell execute delegate SDK `NodeExecutionEnv.exec`(`@earendil-works/pi-durable/env/node`):
+ *   pre- first aborted  Context never spawn;abort/timeout kill the whole process group and can rely wait for child process
+ *   exit (listener/timer all clean up, do not leak process);stdout/stderr each `StreamDecoder` incremental
+ *   decode, multibyte character across chunk do not tear;`onOutput` by reach order concatenate (non- first stdout after stderr).
+ * - across node execute (EnvFabric): by (nodeId, cwd, conversationId) target in target node execute;
+ *   nodeId !== 'local' when via deps.envFabric(offline explicit node_offline, disconnection explicit unknown;
+ *   EnvFabric missing when only allows local short lifecycle direct create, remote explicit env_fabric_missing,
+ *   see guards.ts), never static default fall back local mistakenly read write Hub local machine disk.
+ * - target node platform aware cwd/path specification (unique implement runtime/target-platform.ts,
+ *   re- use @helm/protocol normalizeTargetPath/targetPlatformOf original language, business entry
+ *   must not each another write rule):SDK NodeExecutionEnv / Remote execute only receive already specification path
+ *   (bash / runGate / POST /api/env/exec and WorktreeAllocator execGit all via
+ *   runShell converge).
+ * - runShell for host inherit HELM_TOKEN do fall back redaction: even if caller not host token register enter
+ *   deps.redact, return everything aggregate text also for catch to host token do precise replace redaction.
+ * - output exceeds maxOutputBytes explicit failed `output_limit_exceeded`(never truncate when succeeded).
  */
 import { BACKGROUND_CONTEXT, withAbortSignal, type Context } from '@earendil-works/chord/context'
 import type { JsonValue } from '@earendil-works/chord/json'
@@ -31,13 +31,13 @@ import { remoteShellGuardText, shellEnvFabricMissingText } from './guards.js'
 import { buildToolEnv } from './managed-env.js'
 
 const DEFAULT_TIMEOUT_MS = 120_000
-/** timeoutMs 上限：与默认值同量级，防超大值变相无限等待。 */
+/** timeoutMs cap: and default value same amount level, guard against over large value change each other unbounded wait for. */
 export const MAX_TIMEOUT_MS = 600_000
-/** bash 输出聚合上限（UTF-8 字节）：超过显式失败，绝不静默截断当成功。 */
+/** bash output aggregate cap (UTF-8 byte): exceeds explicit failed, never static default truncate when succeeded. */
 export const MAX_OUTPUT_BYTES = 1024 * 1024
-/** 流式模式（onOutputChunk）聚合预算：逐块推送不受影响（逐块输出是流式
- *  客户端的交付物），Hub 侧仅留终态诊断聚合；超限同样显式
- *  output_limit_exceeded（旧 64MiB 全文复制是内存泄漏，见审计）。 */
+/** streaming pattern (onOutputChunk) aggregate pre- compute: one by one chunk push do not subject to affect (one by one chunk output is streaming
+ *  client deliver thing),Hub side only terminal state diagnose aggregate; over limit same explicit
+ *  output_limit_exceeded(old 64MiB all text duplicate is memory leak leak, see audit). */
 export const STREAM_AGGREGATE_LIMIT_BYTES = 256 * 1024
 
 export interface ShellRunResult {
@@ -46,30 +46,30 @@ export interface ShellRunResult {
   output: string
   timedOut: boolean
   signal: string | null
-  /** 实际执行节点（显式/会话绑定解析结果；供 bash 结构化输出回显，不入协议响应）。 */
+  /** actual execute node (explicit/conversation bind set parse result; supply bash structure output back visible, do not protocol response). */
   nodeId?: string
-  /** 实际启动工作目录（normalizePathForTarget 规范化后；win32 视图已转换）。 */
+  /** actual start work directory (normalizePathForTarget specification after;win32 view already convert). */
   cwd?: string
 }
 
-/** timeoutMs 校验：正有限整数且 ≤ 上限；非法显式抛错（不静默改默认）。 */
+/** timeoutMs validate: correct finite integer and ≤ cap; illegal explicit throws (not silently change by default). */
 function assertTimeoutMs(timeoutMs: number): void {
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMEOUT_MS) {
     throw new Error(
-      `invalid_timeout: timeoutMs 必须是 (0, ${MAX_TIMEOUT_MS}] 的整数，收到 ${timeoutMs}`,
+      `invalid_timeout: timeoutMs must be (0, ${MAX_TIMEOUT_MS}] integer, receives ${timeoutMs}`,
     )
   }
 }
 
-/** 外部 AbortSignal 挂到 SDK Context（预 aborted 时 exec 直接拒绝 spawn）。 */
+/** external AbortSignal hang to SDK Context(pre- aborted when exec directly reject spawn). */
 function contextWithSignal(signal: AbortSignal | undefined): Context {
   return signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(signal, BACKGROUND_CONTEXT)
 }
 
 /**
- * 真实 shell 执行（runGate 与 bash 工具共用）。委托 SDK NodeExecutionEnv：
- * 进程组 spawn、超时/abort 杀组、逐流增量 UTF-8 解码、到达顺序聚合。
- * 永不伪造成功；超限显式 output_limit_exceeded。
+ * real shell execute (runGate and bash tool shared use). delegate SDK NodeExecutionEnv:
+ * process group spawn, timeout/abort kill group, one by one stream incremental UTF-8 decode, reach order aggregate.
+ * forever do not fabricate succeeded; over limit explicit output_limit_exceeded.
  */
 export async function runShell(
   deps: HelmToolDeps,
@@ -77,19 +77,19 @@ export async function runShell(
   options: {
     cwd?: string
     conversationId?: number
-    /** 目标计算节点（缺省经会话绑定解析，再缺省 'local'）。 */
+    /** target compute node (default via conversation bind set parse, again default 'local'). */
     nodeId?: string
     timeoutMs?: number
     signal?: AbortSignal
     maxOutputBytes?: number
     /**
-     * 逐块流式回调（stdout/stderr 按到达序；聚合上限仍生效）：
-     * POST /api/env/exec 的 NDJSON 流式模式用，不影响聚合脱敏语义。
+     * one by one chunk streaming call back (stdout/stderr by reach order; aggregate cap still takes effect):
+     * POST /api/env/exec  NDJSON streaming pattern use, does not affect aggregate redaction semantics.
      */
     onOutputChunk?: (chunk: { stream: 'stdout' | 'stderr'; text: string }) => void
     /**
-     * 调用方注入环境（如 herdr 插件的 Profile.runtime.env + 管理环境）：
-     * 覆盖 process.env 同名项，但受管变量（HELM_* 与受管 token）仍固定覆盖。
+     * caller inject environment (such as herdr plugin Profile.runtime.env + manage environment):
+     * override process.env same name items, but managed variable (HELM_* and managed token) still fixed override.
      */
     env?: Record<string, string>
   } = {},
@@ -98,22 +98,22 @@ export async function runShell(
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   assertTimeoutMs(timeoutMs)
   const maxOutputBytes = options.maxOutputBytes ?? MAX_OUTPUT_BYTES
-  // 节点解析：显式 nodeId > 会话绑定（nodeIdOf） > 'local'。
+  // node parse: explicit nodeId > conversation bind set (nodeIdOf) > 'local'.
   const explicitNodeId = options.nodeId ?? (options.conversationId !== undefined ? deps.nodeIdOf?.(options.conversationId) : undefined)
   const nodeId = explicitNodeId ?? 'local'
-  // 宿主继承 HELM_TOKEN 兜底脱敏：runShell 是公共 API，调用方（如测试）
-  // 可能未把它登记进 deps.redact——自行捕获并对一切返回文本精确替换
-  //（与生产 Runtime 的 addRedaction 同效；不打印 secret 本身）。
+  // host inherit HELM_TOKEN fall back redaction:runShell is public API, caller (such as test)
+  // may not it register enter deps.redact- - self row catch and for everything return text precise replace
+  //(and produce Runtime  addRedaction same effect; do not print secret itself).
   const hostToken = process.env['HELM_TOKEN']
   const redactAll = (text: string): string => {
     const base = deps.redact(text)
     return hostToken !== undefined && hostToken !== '' ? base.split(hostToken).join('[REDACTED]') : base
   }
-  // 目标平台感知的 cwd 规范化（唯一入口 normalizePathForTarget，复用
-  // protocol 原语）：local 用 Hub 宿主平台，远端仅用 EnvFabric 注册登记
-  // 平台（未知则原样透传，不猜、不 fallback local）；win32 目标上 WSL /
-  // Git Bash 的 POSIX 视图转换为规范 Windows 路径，无法映射的裸 POSIX 根
-  // 显式 invalid_path（保留原始路径）。
+  // target platform aware cwd specification (unique entry normalizePathForTarget, re- use
+  // protocol original language):local use Hub host platform, remote only use EnvFabric register register
+  // platform (unknown then original pass-through, do not guess, do not fallback local);win32 target on WSL /
+  // Git Bash  POSIX view convert is specification Windows path, cannot mapping bare POSIX 
+  // explicit invalid_path(keep original path).
   const platformInfo = targetPlatformForNode(deps.envFabric, nodeId)
   const cwdNorm = normalizePathForTarget(requestedCwd, platformInfo)
   if (!cwdNorm.ok) {
@@ -126,20 +126,20 @@ export async function runShell(
     }
   }
   const cwd = cwdNorm.path
-  // 执行事实回显（bash 结构化输出用）：解析出的真实节点与规范化启动目录；
-  // 仅存在于内部 ShellRunResult，不进 HTTP EnvExecResponse 协议。
+  // execute fact back visible (bash structure output use): parse out real node and specification start directory;
+  // only store in at internal ShellRunResult, does not enter HTTP EnvExecResponse protocol.
   const withTarget = (r: ShellRunResult): ShellRunResult => ({ ...r, nodeId, cwd })
-  // 远端节点：经 EnvFabric 的 RemoteExecutionEnv 执行（绝不回退 local）；
-  // 配置缺失（envFabric 未注入）与节点离线分别显式失败，绝不 fallthrough local。
+  // remote node: via EnvFabric  RemoteExecutionEnv execute (never fall back local);
+  // config missing (envFabric not inject) and node offline respectively explicit failed, never fallthrough local.
   if (nodeId !== 'local') {
     const guardOutput = remoteShellGuardText(deps.envFabric, nodeId)
     if (guardOutput !== undefined) {
       return withTarget({ ok: false, exitCode: null, output: guardOutput, timedOut: false, signal: null })
     }
   }
-  // 远端节点：必须经 EnvFabric（无 fabric 时显式失败，绝不回退 local）；
-  // local 生产同样优先经 fabric 的 ScopedExecutionEnv（统一 env 合成权威；
-  // 测试未注入 fabric 时 local 允许短生命周期直建——仅此兜底，不涉远端）。
+  // remote node: must via EnvFabric(without fabric when explicit failed, never fall back local);
+  // local produce same takes precedence via fabric  ScopedExecutionEnv(unify env together into right threat;
+  // test not inject fabric when local allows short lifecycle direct create - - only this fall back, do not involve remote).
   let shell: ExecutionEnv
   let shellEnv: Record<string, string> | undefined = options.env
   let shellInheritEnv: boolean | undefined
@@ -149,18 +149,18 @@ export async function runShell(
       cwd,
       ...(options.conversationId === undefined ? {} : { conversationId: options.conversationId }),
     })
-    // 逐调用注入 env（如 herdr 插件的 Profile.runtime.env）：受管绑定键
-    // 仍由 ScopedExecutionEnv 的 composer 固定覆盖（见 scoped-env.ts）；
-    // inheritEnv 保持缺省：local 由 Scoped 合成完整 env（拷贝宿主 PATH/HOME
-    // 基底、剥除受管 HELM_*、受管覆盖）后对 base 显式 inheritEnv:false
-    //（SDK 不得把已剥除的宿主 HELM_* 重新带回）；远端缺省 inheritEnv 让
-    // 节点守护进程合并节点宿主基底（节点真实 PATH/HOME 工具链）并剥除节点
-    // 宿主 HELM_TOKEN，受管合成最后覆盖；绝不合成默认 PATH 覆盖节点工具链。
+    // one by one invoke inject env(such as herdr plugin Profile.runtime.env): managed bind set key
+    // still by ScopedExecutionEnv  composer fixed override (see scoped-env.ts);
+    // inheritEnv keep default:local by Scoped together into complete env(copy host PATH/HOME
+    // base bottom, strip except managed HELM_*, managed override) after for base explicit inheritEnv:false
+    //(SDK must not already strip except host HELM_* re- carries back); remote default inheritEnv let
+    // node daemon merge node host base bottom (node real PATH/HOME tool chain) and strip except node
+    // host HELM_TOKEN, managed together into finally override; never together into by default PATH override node tool chain.
   } else if (nodeId === 'local') {
     shell = createLocalExecutionEnv({ cwd })
-    // 无 fabric 兜底（测试用）：仍走既有受管合成策略（宿主基底 + 受管
-    // 固定覆盖 + cliBinDir PATH 前置），自带完整 env 并显式 inheritEnv:false
-    // （SDK 二次继承会把已剥除的宿主 HELM_TOKEN 重新带回）。
+    // without fabric fall back (test use): still away since has managed together into policy (host base bottom + managed
+    // fixed override + cliBinDir PATH pre-), self carries complete env and explicit inheritEnv:false
+    // (SDK second inherit will already strip except host HELM_TOKEN re- carries back).
     shellEnv = buildToolEnv(deps, cwd, options.conversationId, options.env, nodeId)
     shellInheritEnv = false
   } else {
@@ -172,11 +172,11 @@ export async function runShell(
       signal: null,
     })
   }
-  // 到达顺序聚合（stdout/stderr 混排按真实到达序，非先 stdout 后 stderr）。
-  // 秘密脱敏在聚合全文上做：跨 chunk 撕裂的秘密在完整拼接后必然完整匹配。
-  // 流式模式（onOutputChunk 活跃）聚合预算更小：超限显式失败
-  // output_limit_exceeded（绝不截断当成功）——流式客户端已收到全部逐块
-  // 输出，终态 output 仅作诊断，超限即放弃聚合并如实报错。
+  // reach order aggregate (stdout/stderr mix arrange by real reach order, non- first stdout after stderr).
+  // secret redaction in aggregate all text on do: across chunk tear secret in complete concatenate after must however complete match.
+  // streaming pattern (onOutputChunk leap) aggregate pre- compute more small: over limit explicit failed
+  // output_limit_exceeded(never truncate when succeeded) - - streaming client already receives all one by one chunk
+  // output, terminal state output only act diagnose, over limit i.e. abandon aggregate and such as errors.
   const aggregateLimit = options.onOutputChunk !== undefined ? STREAM_AGGREGATE_LIMIT_BYTES : maxOutputBytes
   let combined = ''
   let outputBytes = 0
@@ -189,13 +189,13 @@ export async function runShell(
       ...(shellInheritEnv === undefined ? {} : { inheritEnv: shellInheritEnv }),
       timeout: timeoutMs / 1000,
       onOutput: (text, _ctx, info) => {
-        // 流式逐块回调不受聚合超限影响（逐块输出是流式客户端的交付物；
-        // 超限只放弃 Hub 侧终态诊断聚合，绝不中断推送）。
+        // streaming one by one chunk call back do not subject to aggregate over limit affect (one by one chunk output is streaming client deliver thing;
+        // over limit only abandon Hub side terminal state diagnose aggregate, never interrupt push).
         if (options.onOutputChunk !== undefined) {
           try {
             options.onOutputChunk({ stream: info.stream, text })
           } catch {
-            // 流式回调故障不影响聚合。
+            // streaming call back fault does not affect aggregate.
           }
         }
         if (exceeded) return
@@ -211,7 +211,7 @@ export async function runShell(
     contextWithSignal(options.signal),
   )
   if (!result.ok) {
-    // 远端断线：命令已启动、结果未知——error.code 为 unknown，绝不重试。
+    // remote disconnection: command already start, result unknown - -error.code is unknown, never retry.
     if (result.error.code === 'unknown') {
       return withTarget({
         ok: false,
@@ -226,14 +226,14 @@ export async function runShell(
     const limit = options.onOutputChunk !== undefined ? aggregateLimit : maxOutputBytes
     const streamNote =
       options.onOutputChunk !== undefined
-        ? '（流式模式：逐块输出已全部推送，此处仅终态诊断聚合超限）'
+        ? '(streaming pattern: one by one chunk output already all push, this where only terminal state diagnose aggregate over limit)'
         : ''
     return withTarget({
       ok: false,
       exitCode: null,
       output: redactAll(
-        `output_limit_exceeded: 输出超过 ${limit} 字节聚合上限，已放弃聚合。${streamNote}` +
-          '请重定向到文件后用 read 分页读取，或收窄命令输出。',
+        `output_limit_exceeded: output exceeds ${limit} byte aggregate cap, already abandon aggregate.${streamNote}` +
+          'please heavy set to to file after use read page read, or narrow command output.',
       ),
       timedOut: false,
       signal: null,
@@ -264,12 +264,12 @@ export async function runShell(
 }
 
 /**
- * gate 门禁命令执行（独立 subagent 与 Workflow adapter 共用，保证只执行一次）。
- * env 使本机 Gate 与实际 Herdr 任务环境一致（插件传 Profile.runtime.env 与
- * 管理环境组成的 spawnEnv，同一 CI/工具 PATH）；受管变量仍固定覆盖。
- * timeoutMs 可选（缺省 120_000）：单次门禁超时；超时由 runShell 终止整个
- * 进程组（SIGTERM -> SIGKILL）并如实透出底层结果（timedOut=true、exitCode=null）。
- * 失败永不返回成功；输出脱敏。
+ * gate gate command execute (independent subagent and Workflow adapter shared use, guarantee only execute once).
+ * env make local machine Gate and actual Herdr task environment consistent (plugin pass Profile.runtime.env and
+ * manage environment group into spawnEnv, the same CI/tool PATH); managed variable still fixed override.
+ * timeoutMs optional (default 120_000): single time gate timeout; timeout by runShell terminate the whole
+ * process group (SIGTERM -> SIGKILL) and such as through out underlying result (timedOut=true,exitCode=null).
+ * failed forever do not return succeeded; output redaction.
  */
 export async function runGate(
   deps: HelmToolDeps,
@@ -278,7 +278,7 @@ export async function runGate(
     cwd?: string
     conversationId?: number
     nodeId?: string
-    /** 单次门禁超时毫秒数（缺省 120_000；(0, 600_000] 整数由 runShell 校验）。 */
+    /** single time gate timeout milli second count (default 120_000;(0, 600_000] integer by runShell validate). */
     timeoutMs?: number
     signal?: AbortSignal
     env?: Record<string, string>
@@ -292,22 +292,22 @@ export async function runGate(
 }
 
 const bashParameters = obj({
-  command: str({ description: '要执行的 shell 命令' }),
+  command: str({ description: 'want execute shell command' }),
   timeoutMs: opt(
     int({
       minimum: 1,
       maximum: MAX_TIMEOUT_MS,
-      description: `可选超时毫秒数（默认 ${DEFAULT_TIMEOUT_MS}，上限 ${MAX_TIMEOUT_MS}）`,
+      description: `optional timeout milli second count (by default ${DEFAULT_TIMEOUT_MS}, cap ${MAX_TIMEOUT_MS})`,
     }),
   ),
 })
 
-/** bash 工具（SDK defineTool；输出超阈值经 services spill）。 */
+/** bash tool (SDK defineTool; output over threshold via services spill). */
 export function createBashTool(deps: HelmToolDeps): ToolRegistration<typeof bashParameters> {
   return defineTool({
     name: 'bash',
     description:
-      '在会话绑定节点的 shell 中执行命令（local 为 Hub 本机；远端节点在目标节点执行）。工作目录为会话 cwd；超时默认 120 秒；输出超 32KiB 自动 spill 为产物并返回预览（用 read_artifact 读取全文）；输出超 1MiB 显式失败。',
+      'in conversation bind set node shell in execute command (local is Hub local machine; remote node in target node execute). work directory is conversation cwd; timeout by default 120 second; output over 32KiB automatically spill is artifact and return preview (use read_artifact read all text); output over 1MiB explicit failed.',
     parameters: bashParameters,
     structuredOutputSchema: {
       type: 'object',
@@ -316,8 +316,8 @@ export function createBashTool(deps: HelmToolDeps): ToolRegistration<typeof bash
         exitCode: { type: ['number', 'null'] },
         output: { type: 'string' },
         timedOut: { type: 'boolean' },
-        nodeId: { type: 'string', description: '实际执行节点（会话绑定解析结果）' },
-        cwd: { type: 'string', description: '实际启动工作目录（目标平台规范化后，非原始入参）' },
+        nodeId: { type: 'string', description: 'actual execute node (conversation bind set parse result)' },
+        cwd: { type: 'string', description: 'actual start work directory (target platform specification after, non- original reference)' },
       },
       required: ['ok', 'output'],
     },
@@ -333,22 +333,22 @@ export function createBashTool(deps: HelmToolDeps): ToolRegistration<typeof bash
           signal: context.abortSignal,
         })
       } catch (error) {
-        // invalid_timeout 等参数级错误：显式失败，绝不静默改默认（已中止则上抛）。
+        // invalid_timeout etc. parameter level error: explicit failed, never static default change by default (already abort then on throw).
         throwIfToolAborted(context.abortSignal)
         return {
           output: [{ type: 'text', text: deps.redact(String(error)) }],
           isError: true,
         }
       }
-      // 关停/取消窗口禁止在磁盘写入无意义的 spill 产物文件。
+      // closure stop/cancel window forbidden in disk write without intent meaning spill artifact file.
       throwIfToolAborted(context.abortSignal)
       const spill = await deps.artifacts.spill(
         api.conversationId as number,
         api.callId,
         result.output,
       )
-      // 结构化回显实际执行事实（nodeId + 规范化启动 cwd）；文本 stdout 原样
-      // 不动，绝不从外部成功文本猜测文件位置。
+      // structure back visible actual execute fact (nodeId + specification start cwd); text stdout original
+      // do not motion, never from external succeeded text guess file location.
       const structured = redactJsonValue(
         {
           ok: result.ok,
@@ -360,8 +360,8 @@ export function createBashTool(deps: HelmToolDeps): ToolRegistration<typeof bash
         },
         (t) => deps.redact(t),
       )
-      // details 是持久化 UI 通道（structuredOutput 不落库）；不再携带 output——
-      // 文本通道已有同一内容，避免每条 bash 结果双写 spill 预算内的全文。
+      // details is persist UI channel (structuredOutput do not written to the database); no longer carry output- -
+      // text channel already has the same content, avoid each bash result double write spill pre- compute inside all text.
       const { output: _uiDropped, ...uiFacts } = structured as Record<string, JsonValue>
       return {
         output: [{ type: 'text', text: spill.text }],

@@ -1,23 +1,23 @@
 /**
- * 节点升级（Hub 侧 orchestrator + registry 等待器）端到端测试：
- * 真实 NodeRegistry + /ws/node 网关 + 可编程节点 fixture（可控 nodeUpgrade /
- * nodeCheckUpgrade 行为与 register/heartbeat 时序），外加完整 Hub HTTP 层
- * （KernelRuntime + startHub）覆盖 GET /api/nodes/:id/upgrade/check 与
- * POST /api/nodes/:id/upgrade。
+ * node upgrade (Hub side orchestrator + registry wait for) end-to-end test:
+ * real NodeRegistry + /ws/node gateway + can edit process node fixture(can control nodeUpgrade /
+ * nodeCheckUpgrade behavior and register/heartbeat when order), outside add complete Hub HTTP layer
+ * (KernelRuntime + startHub) override GET /api/nodes/:id/upgrade/check and
+ * POST /api/nodes/:id/upgrade.
  *
- * 正确性核心（每项真实行为验证，不做源码 regex 冒充）：
- * 1. 旧 nodeUpgrade RPC 因候选注册顶替旧 socket 而传输中断时，升级结果
- *    只能由候选连接的匹配 commit 心跳确认——绝不因「新连接存在」或
- *    catch 假成功；
- * 2. 仅 register（无 commit）不成功；错误 attemptId / 错误版本 / 伪造
- *    连接的 commit 拒绝；匹配 commit（attemptId + version +
- *    previousVersion + pid 正整数）成功；
- * 3. 无等待器的合法 commit（本机 CLI 升级路径）仍 ACK true；
- * 4. local 400 / 未知 404 / 离线 409 / 不支持 501 / 结构化失败 400/502 /
- *    超时未确认 502；
- * 5. HTTP body 边界校验：未知字段 / 非 http(s) registryUrl / 非布尔 force /
- *    attemptId 不可由用户提供；
- * 6. 自动升级默认关闭；HELM_AUTO_UPGRADE_NODES=1 且严格 SemVer 落后时触发。
+ * correct core (each items real behavior verify, does not source code regex smoke fill):
+ * 1. old nodeUpgrade RPC because choose register top replace old socket while transfer interrupt when, upgrade result
+ *    only can by choose connect match commit heartbeat confirm - - never because new connect store in or
+ *    catch false succeeded;
+ * 2. only register(without commit) do not succeeded; error attemptId / error version / fabricate
+ *    connect commit reject; match commit(attemptId + version +
+ *    previousVersion + pid positive integer) succeeded;
+ * 3. without wait for legal commit(local machine CLI upgrade path) still ACK true;
+ * 4. local 400 / unknown 404 / offline 409 / unsupported 501 / structure failed 400/502 /
+ *    timeout not confirm 502;
+ * 5. HTTP body boundary validate: unknown field / non- http(s) registryUrl / non- boolean force /
+ *    attemptId cannot by user provide;
+ * 6. automatically upgrade by default close;HELM_AUTO_UPGRADE_NODES=1 and strictly SemVer after when trigger.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -46,22 +46,22 @@ import { startHub } from '../src/http/index.js'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 
-/** 异步 mkdtemp 别名（用例内 dir 创建）。 */
+/** async mkdtemp alias (case inside dir create). */
 const mkdtemp = (prefix: string): Promise<string> => mkdtempAsync(prefix)
 
 void mkdtemp
 
 let rootDir: string
 
-test('setup: 创建临时根目录', { timeout: 60_000 }, () => {
+test('setup: create temporary directory', { timeout: 60_000 }, () => {
   rootDir = mkdtempSync(join(tmpdir(), 'helm-node-upgrade-'))
 })
 
 // ---------------------------------------------------------------------------
-// 版本语义单元
+// version semantics unit
 // ---------------------------------------------------------------------------
 
-test('normalizeExplicitVersion：trim + 单 v 前缀；非法显式拒绝', { timeout: 60_000 }, () => {
+test('normalizeExplicitVersion:trim + single v prefix; illegal explicit reject', { timeout: 60_000 }, () => {
   assert.equal(normalizeExplicitVersion('1.2.3'), '1.2.3')
   assert.equal(normalizeExplicitVersion(' v1.2.3 '), '1.2.3')
   assert.equal(normalizeExplicitVersion('V2.0.0-rc.1+build.5'), '2.0.0-rc.1+build.5')
@@ -71,7 +71,7 @@ test('normalizeExplicitVersion：trim + 单 v 前缀；非法显式拒绝', { ti
   assert.throws(() => normalizeExplicitVersion('1.2.3.4'), /SemVer/)
 })
 
-test('compareStrictSemVer：主/次/修订/预发布排序', { timeout: 60_000 }, () => {
+test('compareStrictSemVer: main/time/fix subscribe/pre- publish sort', { timeout: 60_000 }, () => {
   assert.equal(compareStrictSemVer('1.2.3', '1.2.3'), 0)
   assert.equal(compareStrictSemVer('0.9.9', '1.0.0'), -1)
   assert.equal(compareStrictSemVer('1.10.0', '1.9.0'), 1)
@@ -81,16 +81,16 @@ test('compareStrictSemVer：主/次/修订/预发布排序', { timeout: 60_000 }
   assert.equal(compareStrictSemVer('1.0.0-alpha', '1.0.0-beta'), -1)
 })
 
-test('hubVersion：读 kernel package.json（严格 SemVer）', { timeout: 60_000 }, () => {
+test('hubVersion: read kernel package.json(strictly SemVer)', { timeout: 60_000 }, () => {
   const v = hubVersion()
-  assert.match(v, /^\d+\.\d+\.\d+/, `hub 版本需为严格 SemVer：${v}`)
+  assert.match(v, /^\d+\.\d+\.\d+/, `hub version must be strictly SemVer:${v}`)
 })
 
 // ---------------------------------------------------------------------------
-// 纯 registry 层：beginUpgrade / commit 对账
+// pure registry layer:beginUpgrade / commit for account
 // ---------------------------------------------------------------------------
 
-/** 极简 EventEmitter socket 替身（node-health.test.ts 同款模式）。 */
+/** extreme simple EventEmitter socket replace body (node-health.test.ts same style pattern). */
 class EventEmitterShim {
   readonly #listeners = new Map<string, Set<() => void>>()
   on(event: string, listener: () => void): void {
@@ -146,7 +146,7 @@ async function registerRaw(
   return { socket, outcome }
 }
 
-test('registry.register：非法 version / upgradeAttemptId（空串）显式拒绝', { timeout: 60_000 }, async () => {
+test('registry.register: illegal version / upgradeAttemptId(empty string) explicit reject', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   try {
     const badVersion = await registerRaw(registry, 'n1', { version: '' })
@@ -160,7 +160,7 @@ test('registry.register：非法 version / upgradeAttemptId（空串）显式拒
   }
 })
 
-test('registry：仅 register（候选无 commit）不 resolve 等待器；匹配 commit 成功', { timeout: 60_000 }, async () => {
+test('registry: only register(choose without commit) do not resolve wait for; match commit succeeded', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   try {
     const { socket } = await registerRaw(registry, 'n1', { version: '1.0.0' })
@@ -179,14 +179,14 @@ test('registry：仅 register（候选无 commit）不 resolve 等待器；匹�
         settled = true
       },
     )
-    // 候选注册（顶替旧 socket）：绝不能让等待器成功。
+    // choose register (top replace old socket): never can let wait for succeeded.
     const candidate = await registerRaw(registry, 'n1', { version: '1.1.0', upgradeAttemptId: 'a1' })
     assert.equal(candidate.outcome.accepted, true)
     await delay(150)
-    assert.equal(settled, false, '仅候选注册（无 commit）不得 resolve 升级等待器')
+    assert.equal(settled, false, 'only choose register (without commit) must not resolve upgrade wait for')
     assert.equal(registry.hasUpgradeWaiter('n1'), true)
 
-    // 候选心跳 commit（完全匹配）→ 成功。
+    // choose heartbeat commit(fully match)→ succeeded.
     const ack = registry.noteHeartbeat('n1', candidate.socket as unknown as WsLike, {
       upgradeCommit: { attemptId: 'a1', version: '1.1.0', previousVersion: '1.0.0', pid: 4242 },
     })
@@ -200,7 +200,7 @@ test('registry：仅 register（候选无 commit）不 resolve 等待器；匹�
   }
 })
 
-test('registry：错误 attemptId / 错误版本 / previousVersion 不一致 / pid 非法拒绝（不假成功）', { timeout: 60_000 }, async () => {
+test('registry: error attemptId / error version / previousVersion inconsistent / pid illegal reject (do not false succeeded)', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   try {
     const { socket } = await registerRaw(registry, 'n1', { version: '1.1.0', upgradeAttemptId: 'a1' })
@@ -220,32 +220,32 @@ test('registry：错误 attemptId / 错误版本 / previousVersion 不一致 / p
 
     const conn = registry.get('n1')
     assert.notEqual(conn, undefined)
-    // attemptId 错误。
+    // attemptId error.
     registry.noteHeartbeat('n1', conn!.socket, {
       upgradeCommit: { attemptId: 'other', version: '1.1.0', previousVersion: '1.0.0', pid: 1 },
     })
-    // 版本不匹配（连接注册版本 1.1.0，commit 声称 9.9.9）。
+    // version does not match (connect register version 1.1.0,commit sound call 9.9.9).
     registry.noteHeartbeat('n1', conn!.socket, {
       upgradeCommit: { attemptId: 'a1', version: '9.9.9', previousVersion: '1.0.0', pid: 1 },
     })
-    // previousVersion 与等待器不一致（不倒灌别的 attempt）。
+    // previousVersion and wait for inconsistent (do not upside down pour other attempt).
     registry.noteHeartbeat('n1', conn!.socket, {
       upgradeCommit: { attemptId: 'a1', version: '1.1.0', previousVersion: '0.0.1', pid: 1 },
     })
-    // pid 非正整数。
+    // pid non- positive integer.
     registry.noteHeartbeat('n1', conn!.socket, {
       upgradeCommit: { attemptId: 'a1', version: '1.1.0', previousVersion: '1.0.0', pid: -3 },
     })
     await delay(100)
-    assert.equal(failed, false, '全部非法 commit 不得终结等待器')
+    assert.equal(failed, false, 'all illegal commit must not final wait for')
     assert.equal(registry.hasUpgradeWaiter('n1'), true)
 
-    // 另一节点的连接伪造 commit（非当前连接）直接拒绝。
+    // another node connect fabricate commit(non- when before connect) directly reject.
     const { socket: stranger } = await registerRaw(registry, 'n2', { version: '1.1.0', upgradeAttemptId: 'a1' })
     const ackStranger = registry.noteHeartbeat('n1', stranger as unknown as WsLike, {
       upgradeCommit: { attemptId: 'a1', version: '1.1.0', previousVersion: '1.0.0', pid: 1 },
     })
-    assert.equal(ackStranger, false, '非当前连接的心跳直接拒绝')
+    assert.equal(ackStranger, false, 'non- when before connect heartbeat directly reject')
     assert.equal(registry.hasUpgradeWaiter('n1'), true)
 
     handle.cancel()
@@ -257,42 +257,42 @@ test('registry：错误 attemptId / 错误版本 / previousVersion 不一致 / p
   }
 })
 
-test('registry：携带 commit 的心跳 ACK 真实接受结果；普通心跳恒 true', { timeout: 60_000 }, async () => {
+test('registry: carry commit heartbeat ACK real accept result; ordinary heartbeat constant true', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   try {
-    // 无等待器：合法 commit（本机 CLI 路径）ACK true。
+    // without wait for: legal commit(local machine CLI path)ACK true.
     const { socket: solo } = await registerRaw(registry, 'n-cli', { version: '2.0.0', upgradeAttemptId: 'cli-1' })
     const ackCli = registry.noteHeartbeat('n-cli', solo as unknown as WsLike, {
       upgradeCommit: { attemptId: 'cli-1', version: '2.0.0', previousVersion: '1.9.0', pid: 11 },
     })
-    assert.equal(ackCli, true, '无等待器的合法 commit（本机 CLI 升级）应 ACK true')
+    assert.equal(ackCli, true, 'without wait for legal commit(local machine CLI upgrade) should ACK true')
 
-    // 有等待器：不匹配的 commit ACK false（节点不得误以为 Hub 已确认）。
+    // has wait for: does not match commit ACK false(node must not mistakenly with is Hub already confirm).
     const { socket } = await registerRaw(registry, 'n1', { version: '1.1.0', upgradeAttemptId: 'a1' })
     registry.beginUpgrade('n1', { attemptId: 'a1', targetVersion: '1.1.0', previousVersion: '1.0.0', timeoutMs: 5_000 })
     const badAttempt = registry.noteHeartbeat('n1', socket as unknown as WsLike, {
       upgradeCommit: { attemptId: 'wrong', version: '1.1.0', previousVersion: '1.0.0', pid: 1 },
     })
-    assert.equal(badAttempt, false, '错误 attemptId 的 commit 必须 Nack（ACK false）')
+    assert.equal(badAttempt, false, 'error attemptId  commit must Nack(ACK false)')
     const badVersion = registry.noteHeartbeat('n1', socket as unknown as WsLike, {
       upgradeCommit: { attemptId: 'a1', version: '9.9.9', previousVersion: '1.0.0', pid: 1 },
     })
-    assert.equal(badVersion, false, '错误版本的 commit 必须 ACK false')
+    assert.equal(badVersion, false, 'error version commit must ACK false')
     const badPrevious = registry.noteHeartbeat('n1', socket as unknown as WsLike, {
       upgradeCommit: { attemptId: 'a1', version: '1.1.0', previousVersion: '0.0.1', pid: 1 },
     })
-    assert.equal(badPrevious, false, '错误 previousVersion 的 commit 必须 ACK false')
+    assert.equal(badPrevious, false, 'error previousVersion  commit must ACK false')
     const malformed = registry.noteHeartbeat('n1', socket as unknown as WsLike, {
       upgradeCommit: { attemptId: 'a1' } as never,
     })
-    assert.equal(malformed, false, '缺字段的畸形 commit 必须 ACK false')
-    assert.equal(registry.hasUpgradeWaiter('n1'), true, '全部被拒 commit 不影响等待器')
+    assert.equal(malformed, false, 'missing field distortion shape commit must ACK false')
+    assert.equal(registry.hasUpgradeWaiter('n1'), true, 'all by refuse commit does not affect wait for')
 
-    // 普通心跳（无 commit）恒 true。
+    // ordinary heartbeat (without commit) constant true.
     const plain = registry.noteHeartbeat('n1', socket as unknown as WsLike, {})
     assert.equal(plain, true)
 
-    // 匹配 commit ACK true 并 resolve。
+    // match commit ACK true and resolve.
     const matched = registry.noteHeartbeat('n1', socket as unknown as WsLike, {
       upgradeCommit: { attemptId: 'a1', version: '1.1.0', previousVersion: '1.0.0', pid: 22 },
     })
@@ -303,7 +303,7 @@ test('registry：携带 commit 的心跳 ACK 真实接受结果；普通心跳�
   }
 })
 
-test('registry：同节点并发 beginUpgrade 拒绝；原 socket 断开不清理等待器', { timeout: 60_000 }, async () => {
+test('registry: same node concurrency beginUpgrade reject; original socket disconnect do not clean up wait for', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   try {
     const { socket } = await registerRaw(registry, 'n1', { version: '1.0.0' })
@@ -312,16 +312,16 @@ test('registry：同节点并发 beginUpgrade 拒绝；原 socket 断开不清�
       () => registry.beginUpgrade('n1', { attemptId: 'a2', targetVersion: '1.2.0', previousVersion: '1.0.0', timeoutMs: 1_000 }),
       HelmUpgradeBusyError,
     )
-    // 旧 socket 断开（升级过程必然伴随）：等待器继续等候选 commit。
+    // old socket disconnect (upgrade process must however along with): wait for continue etc. choose commit.
     socket.close()
     await delay(100)
-    assert.equal(registry.hasUpgradeWaiter('n1'), true, '原 socket 断开不得终结升级等待器')
+    assert.equal(registry.hasUpgradeWaiter('n1'), true, 'original socket disconnect must not final upgrade wait for')
   } finally {
     await registry.close()
   }
 })
 
-test('registry：断开原 RPC 但候选 commit 后正常成功；超时显式失败', { timeout: 60_000 }, async () => {
+test('registry: disconnect original RPC but choose commit after normal succeeded; timeout explicit failed', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   try {
     const { socket } = await registerRaw(registry, 'n1', { version: '1.0.0' })
@@ -331,7 +331,7 @@ test('registry：断开原 RPC 但候选 commit 后正常成功；超时显式�
       previousVersion: '1.0.0',
       timeoutMs: 5_000,
     })
-    socket.close() // 模拟旧 RPC 传输关闭
+    socket.close() // simulated old RPC transfer close
     const candidate = await registerRaw(registry, 'n1', { version: '1.1.0', upgradeAttemptId: 'a1' })
     registry.noteHeartbeat('n1', candidate.socket as unknown as WsLike, {
       upgradeCommit: { attemptId: 'a1', version: '1.1.0', previousVersion: '1.0.0', pid: 7 },
@@ -344,7 +344,7 @@ test('registry：断开原 RPC 但候选 commit 后正常成功；超时显式�
     await registry.close()
   }
 
-  // 超时路径。
+  // timeout path.
   const registry2 = new NodeRegistry({ authenticate: () => true })
   try {
     await registerRaw(registry2, 'n1', { version: '1.0.0' })
@@ -362,31 +362,31 @@ test('registry：断开原 RPC 但候选 commit 后正常成功；超时显式�
 })
 
 // ---------------------------------------------------------------------------
-// 完整 Hub（KernelRuntime + startHub）+ 可编程节点 fixture
+// complete Hub(KernelRuntime + startHub)+ can edit process node fixture
 // ---------------------------------------------------------------------------
 
 /**
- * 可编程 WS 节点 fixture：真实连 /ws/node，实现 register / heartbeat /
- * nodeCheckUpgrade / nodeUpgrade（行为可逐用例编程）。升级剧本：
- * nodeUpgrade 返回后断开旧连接，再以候选身份（新 version + attemptId）
- * 重连并按计划发（或不发）commit 心跳。
+ * can edit process WS node fixture: real connect /ws/node, implement register / heartbeat /
+ * nodeCheckUpgrade / nodeUpgrade(behavior can one by one case edit process). upgrade dramatic this:
+ * nodeUpgrade return after disconnect old connect, again with choose identity (new version + attemptId)
+ * reconnect and by plan (or do not)commit heartbeat.
  */
 interface FixturePlan {
-  /** nodeUpgrade RPC 的结构化返回。 */
+  /** nodeUpgrade RPC structure return. */
   rpcResult: RpcResult<NodeUpgradeResult>
-  /** RPC 永不返回（模拟旧版节点僵死；整体仍必须有界）。 */
+  /** RPC forever do not return (simulated old edition node stiff die; whole still must has boundary). */
   hang?: boolean
-  /** RPC 返回后断开旧连接，以候选身份重连（version=plan.candidateVersion）。 */
+  /** RPC return after disconnect old connect, with choose identity reconnect (version=plan.candidateVersion). */
   reconnect?: { candidateVersion: string }
-  /** 候选注册后发 commit（false = 不发；缺省发完全匹配的 commit）。 */
+  /** choose register after commit(false = do not; default fully match commit). */
   commit?: false | { attemptId: string; version: string; previousVersion: string; pid: number }
-  /** 候选注册到发 commit 的延迟毫秒（模拟「传输断开先到，commit 后到」）。 */
+  /** choose register to commit latency milli second (simulated transfer disconnect first to,commit after to). */
   commitDelayMs?: number
   /**
-   * RPC 应答永不返回：reconnect 计划正常执行后（候选顶替旧 socket）
-   * nodeUpgrade 返回永不 resolve 的 Promise，模拟「在途 RPC 被关闭」。
-   * 覆盖真实链路：registry #evict → 旧 rpc $close → birpc reject 在途
-   * 调用 → ws-gateway onGeneralError 吞 reject → Hub 侧 resolve undefined。
+   * RPC reply forever do not return:reconnect plan normal execute after (choose top replace old socket)
+   * nodeUpgrade return forever do not resolve  Promise, simulated in-flight RPC by close.
+   * override real link:registry #evict → old rpc $close → birpc reject in-flight
+   * invoke → ws-gateway onGeneralError swallow reject → Hub side resolve undefined.
    */
   deferReplyUntilReplaced?: boolean
 }
@@ -439,34 +439,34 @@ async function connectFixtureNode(
       upgradeCalls.push(input)
       const plan = state.plan
       if (plan === undefined) {
-        return { ok: false, error: { code: 'unknown', message: 'fixture 未设置升级剧本' } }
+        return { ok: false, error: { code: 'unknown', message: 'fixture not settings upgrade dramatic this' } }
       }
       if (plan.hang === true) {
-        // 永不返回（也不重连）：验证 Hub 整体超时仍有界。
+        // forever do not return (also do not reconnect): verify Hub whole timeout still has boundary.
         return new Promise<RpcResult<NodeUpgradeResult>>(() => undefined)
       }
       if (plan.reconnect !== undefined) {
-        // 模拟真实升级：先应答 RPC（旧连接仍活），随后异步断开重连为候选。
+        // simulated real upgrade: first reply RPC(old connect still), then async disconnect reconnect is choose.
         const reconnectVersion = plan.reconnect.candidateVersion
         const attemptId = input.attemptId ?? ''
         setTimeout(() => {
           try {
             ws.close()
           } catch {
-            /* 已关 */
+            /* already closure */
           }
           void connectCandidate(wsUrl, nodeId, nodeToken, reconnectVersion, attemptId, state, plan)
         }, 30).unref()
       }
       if (plan.deferReplyUntilReplaced === true) {
-        // 在途 RPC 被顶替：候选注册后旧 socket 的 birpc 被 $close，本侧
-        // birpc 的应答发送将随 socket 断开而失败——永不 resolve，交由 Hub
-        // 侧真实链路（evict → $close → onGeneralError 吞 reject）处理。
+        // in-flight RPC by top replace: choose register after old socket  birpc by $close, this side
+        // birpc reply send follow socket disconnect while failed - - forever do not resolve, hand over by Hub
+        // side real link (evict → $close → onGeneralError swallow reject) handle.
         return new Promise<RpcResult<NodeUpgradeResult>>(() => undefined)
       }
       return plan.rpcResult
     },
-    // 其余 env RPC 本测试不触及。
+    // the rest env RPC this test do not trigger and.
   } as unknown as NodeEnvRpcFunctions & {
     register(input: NodeRegisterInput): Promise<NodeRegisterResult>
     heartbeat(id: string, input?: NodeHeartbeatInput): Promise<boolean>
@@ -488,7 +488,7 @@ async function connectFixtureNode(
         try {
           cb(JSON.parse(text) as never)
         } catch {
-          /* 非 JSON 帧忽略 */
+          /* non- JSON frame ignore */
         }
       })
     },
@@ -497,7 +497,7 @@ async function connectFixtureNode(
     timeout: 10_000,
   })
 
-  // 初始注册（当前版本）。
+  // initial register (when before version).
   const registered = await rpc.register({
     nodeId,
     token: nodeToken,
@@ -505,7 +505,7 @@ async function connectFixtureNode(
     platform: process.platform,
     version,
   })
-  if (!registered.ok) throw new Error(`fixture 注册失败：${registered.reason ?? 'unknown'}`)
+  if (!registered.ok) throw new Error(`fixture register failed:${registered.reason ?? 'unknown'}`)
 
   return {
     nodeId,
@@ -534,18 +534,18 @@ async function connectFixtureNode(
       try {
         rpc.$close()
       } catch {
-        /* 已关 */
+        /* already closure */
       }
       try {
         ws.close()
       } catch {
-        /* 已关 */
+        /* already closure */
       }
     },
   }
 }
 
-/** 候选连接：新 socket 注册新版本 + attemptId，按计划发 commit。 */
+/** choose connect: new socket register new version + attemptId, by plan commit. */
 async function connectCandidate(
   wsUrl: string,
   nodeId: string,
@@ -588,7 +588,7 @@ async function connectCandidate(
           try {
             cb(JSON.parse(text) as never)
           } catch {
-            /* 忽略 */
+            /* ignore */
           }
         })
       },
@@ -608,8 +608,8 @@ async function connectCandidate(
     })
     .catch(() => undefined)
   if (outcome === undefined || !outcome.ok) return
-  // 候选 commit：缺省发完全匹配；false 不发（测试「仅注册不 commit」）；
-  // commitDelayMs 推迟发送（模拟传输断开先到、commit 后到）。
+  // choose commit: default fully match;false do not (test only register do not commit);
+  // commitDelayMs push late send (simulated transfer disconnect first to,commit after to).
   const commit = plan.commit
   if (commit === false) return
   const sendCommit = async (): Promise<void> => {
@@ -635,13 +635,13 @@ async function connectCandidate(
   await sendCommit()
 }
 
-/** 升级剧本内的旧版本记录（commit previousVersion 需与等待器一致）。 */
+/** upgrade dramatic this inside old version record (commit previousVersion must and wait for consistent). */
 const previousVersionByAttempt = new Map<string, string>()
 function previousVersionFor(nodeId: string, attemptId: string): string {
   return previousVersionByAttempt.get(`${nodeId}:${attemptId}`) ?? '1.0.0'
 }
 
-/** 打开完整 Hub（含 /ws/node 网关与鉴权）。 */
+/** open complete Hub(contains /ws/node gateway and authentication). */
 async function openHubApp(dir: string): Promise<{
   kernel: KernelRuntime
   hub: Awaited<ReturnType<typeof startHub>>
@@ -678,7 +678,7 @@ async function openHubApp(dir: string): Promise<{
   }
 }
 
-/** 签发节点身份并连接 fixture 节点。 */
+/** sign node identity and connect fixture node. */
 async function provisionNode(
   hubUrl: string,
   token: string,
@@ -690,7 +690,7 @@ async function provisionNode(
     headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
     body: JSON.stringify({ nodeId }),
   })
-  assert.equal(issue.status, 201, '签发节点令牌失败')
+  assert.equal(issue.status, 201, 'sign node token failed')
   const { token: nodeToken } = (await issue.json()) as { token: string }
   const wsUrl = hubUrl.replace(/^http/, 'ws')
   return connectFixtureNode(wsUrl, nodeId, nodeToken, version)
@@ -701,10 +701,10 @@ function authHeaders(token: string): Record<string, string> {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP / RPC 集成：upgrade 编排（成功、假成功防线、错误映射）
+// HTTP / RPC collection into:upgrade orchestration (succeeded, false succeeded guard against line, error mapping)
 // ---------------------------------------------------------------------------
 
-test('upgrade：仅候选注册（无 commit）不成功——显式未确认错误', { timeout: 60_000 }, async () => {
+test('upgrade: only choose register (without commit) do not succeeded - - explicit not confirm error', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'no-commit-'))
   const app = await openHubApp(dir)
   try {
@@ -713,14 +713,14 @@ test('upgrade：仅候选注册（无 commit）不成功——显式未确认错
     node.setPlan({
       rpcResult: { ok: true, value: { ok: true, previousVersion: '1.0.0', targetVersion: '1.1.0', upgraded: true } },
       reconnect: { candidateVersion: '1.1.0' },
-      commit: false, // 候选注册但永不 commit
+      commit: false, // choose register but forever do not commit
     })
     const res = await fetch(`${app.hub.url}/api/nodes/up-no-commit/upgrade`, {
       method: 'POST',
       headers: authHeaders(app.token),
       body: JSON.stringify({ targetVersion: '1.1.0' }),
     })
-    assert.equal(res.status, 502, '仅注册无 commit 必须显式失败（不假成功）')
+    assert.equal(res.status, 502, 'only register without commit must explicit failed (do not false succeeded)')
     const body = (await res.json()) as { error: { code: string } }
     assert.equal(body.error.code, 'node_upgrade_unconfirmed')
     node.close()
@@ -729,7 +729,7 @@ test('upgrade：仅候选注册（无 commit）不成功——显式未确认错
   }
 })
 
-test('upgrade：匹配 commit（断开原 RPC 后）正常成功且结果确认', { timeout: 60_000 }, async () => {
+test('upgrade: match commit(disconnect original RPC after) normal succeeded and result confirm', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'commit-ok-'))
   const app = await openHubApp(dir)
   try {
@@ -737,7 +737,7 @@ test('upgrade：匹配 commit（断开原 RPC 后）正常成功且结果确认'
     node.setPlan({
       rpcResult: { ok: true, value: { ok: true, previousVersion: '1.0.0', targetVersion: '1.1.0', upgraded: true } },
       reconnect: { candidateVersion: '1.1.0' },
-      // 缺省 commit：attemptId/version 由候选真实注册值推导，previousVersion 1.0.0。
+      // default commit:attemptId/version by choose real register value push lead,previousVersion 1.0.0.
     })
     const res = await fetch(`${app.hub.url}/api/nodes/up-ok/upgrade`, {
       method: 'POST',
@@ -748,10 +748,10 @@ test('upgrade：匹配 commit（断开原 RPC 后）正常成功且结果确认'
     const body = (await res.json()) as NodeUpgradeResult
     assert.equal(body.ok, true)
     assert.equal(body.upgraded, true)
-    assert.equal(body.targetVersion, '1.1.0', 'v 前缀规范化为精确版本')
+    assert.equal(body.targetVersion, '1.1.0', 'v prefix specification is precise version')
     assert.equal(body.previousVersion, '1.0.0')
     assert.equal(typeof body.pid, 'number')
-    // RPC 入参携带规范化 targetVersion 与服务端生成的 attemptId。
+    // RPC reference carry specification targetVersion and server side generate attemptId.
     assert.equal(node.upgradeCalls.length, 1)
     assert.equal(node.upgradeCalls[0]!.targetVersion, '1.1.0')
     assert.match(node.upgradeCalls[0]!.attemptId ?? '', /^[0-9a-f]{32}$/)
@@ -761,7 +761,7 @@ test('upgrade：匹配 commit（断开原 RPC 后）正常成功且结果确认'
   }
 })
 
-test('upgrade：节点结构化拒绝 → 400/501/502 且不假成功', { timeout: 60_000 }, async () => {
+test('upgrade: node structure reject → 400/501/502 and do not false succeeded', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'reject-'))
   const app = await openHubApp(dir)
   try {
@@ -772,7 +772,7 @@ test('upgrade：节点结构化拒绝 → 400/501/502 且不假成功', { timeou
       { code: 'unknown', status: 502 },
     ] as const
     for (const failure of failures) {
-      node.setPlan({ rpcResult: { ok: false, error: { code: failure.code, message: '目标版本不可用' } } })
+      node.setPlan({ rpcResult: { ok: false, error: { code: failure.code, message: 'target version unavailable' } } })
       const res = await fetch(`${app.hub.url}/api/nodes/up-reject/upgrade`, {
         method: 'POST',
         headers: authHeaders(app.token),
@@ -786,7 +786,7 @@ test('upgrade：节点结构化拒绝 → 400/501/502 且不假成功', { timeou
   }
 })
 
-test('upgrade：明确无操作（ok/upgraded:false）合法返回，不等待 commit', { timeout: 60_000 }, async () => {
+test('upgrade: explicit without operation (ok/upgraded:false) legal return, without waiting commit', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'noop-'))
   const app = await openHubApp(dir)
   try {
@@ -808,30 +808,30 @@ test('upgrade：明确无操作（ok/upgraded:false）合法返回，不等待 c
     const failed = await fetch(`${app.hub.url}/api/nodes/up-noop/upgrade`, {
       method: 'POST', headers: authHeaders(app.token), body: JSON.stringify({ targetVersion: '1.1.0' }),
     })
-    assert.equal(failed.status, 502, 'ok:false 不能伪装成成功的无操作')
+    assert.equal(failed.status, 502, 'ok:false cannot disguise into succeeded without operation')
     node.close()
   } finally {
     await app.close().catch(() => undefined)
   }
 })
 
-test('upgrade 错误映射：local 400 / 未知 404 / offline 409 / 不支持 501', { timeout: 60_000 }, async () => {
+test('upgrade error mapping:local 400 / unknown 404 / offline 409 / unsupported 501', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'errors-'))
   const app = await openHubApp(dir)
   try {
-    // local。
+    // local.
     const local = await fetch(`${app.hub.url}/api/nodes/local/upgrade`, {
       method: 'POST',
       headers: authHeaders(app.token),
       body: '{}',
     })
     assert.equal(local.status, 400)
-    // 未知节点（未签发）。
+    // unknown node (not sign).
     const unknown = await fetch(`${app.hub.url}/api/nodes/ghost/upgrade/check`, {
       headers: authHeaders(app.token),
     })
     assert.equal(unknown.status, 404)
-    // 已签发但离线。
+    // already sign but offline.
     const issue = await fetch(`${app.hub.url}/api/nodes/issue`, {
       method: 'POST',
       headers: authHeaders(app.token),
@@ -851,7 +851,7 @@ test('upgrade 错误映射：local 400 / 未知 404 / offline 409 / 不支持 50
   }
 })
 
-test('upgrade check：透传节点结果（含 blocked）；body/query 边界校验', { timeout: 60_000 }, async () => {
+test('upgrade check: pass-through node result (contains blocked);body/query boundary validate', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'check-'))
   const app = await openHubApp(dir)
   try {
@@ -866,19 +866,19 @@ test('upgrade check：透传节点结果（含 blocked）；body/query 边界校
     assert.equal(body.updateAvailable, true)
     node.close()
 
-    // 非法 registryUrl（非 http(s)）。
+    // illegal registryUrl(non- http(s)).
     const badUrl = await fetch(`${app.hub.url}/api/nodes/up-check/upgrade/check?registryUrl=ftp://x`, {
       headers: authHeaders(app.token),
     })
     assert.equal(badUrl.status, 400)
 
-    // POST body 未知字段拒绝。
+    // POST body unknown field reject.
     const unknownField = await fetch(`${app.hub.url}/api/nodes/up-check/upgrade`, {
       method: 'POST',
       headers: authHeaders(app.token),
       body: JSON.stringify({ attemptId: 'user-controlled' }),
     })
-    assert.equal(unknownField.status, 400, 'attemptId 不可由用户控制')
+    assert.equal(unknownField.status, 400, 'attemptId cannot by user control')
     const badForce = await fetch(`${app.hub.url}/api/nodes/up-check/upgrade`, {
       method: 'POST',
       headers: authHeaders(app.token),
@@ -901,23 +901,23 @@ test('upgrade check：透传节点结果（含 blocked）；body/query 边界校
       const nullField = await fetch(`${app.hub.url}/api/nodes/up-check/upgrade`, {
         method: 'POST', headers: authHeaders(app.token), body: JSON.stringify({ [field]: null }),
       })
-      assert.equal(nullField.status, 400, `${field}:null 必须拒绝，不能静默当成缺省`)
+      assert.equal(nullField.status, 400, `${field}:null must reject, cannot static default when into default`)
     }
   } finally {
     await app.close().catch(() => undefined)
   }
 })
 
-test('upgrade：离线节点在途调用后断连——不假成功（结果未确认 502）', { timeout: 60_000 }, async () => {
+test('upgrade: offline node in-flight invoke after assert connect - - do not false succeeded (result not confirm 502)', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'rpc-drop-'))
   const app = await openHubApp(dir)
   try {
     const node = await provisionNode(app.hub.url, app.token, 'up-drop', '1.0.0')
     node.setPlan({
-      // RPC 成功但节点直接消失（不重连、不 commit）。
+      // RPC succeeded but node directly disappear (do not reconnect, do not commit).
       rpcResult: { ok: true, value: { ok: true, previousVersion: '1.0.0', targetVersion: '1.1.0', upgraded: true } },
     })
-    // RPC 返回后立即断开（不产生候选）。
+    // RPC return after immediately disconnect (produces no choose).
     const resPromise = fetch(`${app.hub.url}/api/nodes/up-drop/upgrade`, {
       method: 'POST',
       headers: authHeaders(app.token),
@@ -926,7 +926,7 @@ test('upgrade：离线节点在途调用后断连——不假成功（结果未�
     await delay(50)
     node.close()
     const res = await resPromise
-    assert.equal(res.status, 502, '无候选 commit 不得成功')
+    assert.equal(res.status, 502, 'without choose commit must not succeeded')
     const body = (await res.json()) as { error: { code: string } }
     assert.equal(body.error.code, 'node_upgrade_unconfirmed')
   } finally {
@@ -935,24 +935,24 @@ test('upgrade：离线节点在途调用后断连——不假成功（结果未�
 })
 
 // ---------------------------------------------------------------------------
-// 自动升级（HELM_AUTO_UPGRADE_NODES）
+// automatically upgrade (HELM_AUTO_UPGRADE_NODES)
 // ---------------------------------------------------------------------------
 
-test('自动升级默认关闭：落后节点上线不触发 nodeUpgrade', { timeout: 60_000 }, async () => {
+test('automatically upgrade by default close: after node enable does not trigger nodeUpgrade', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'auto-off-'))
   const app = await openHubApp(dir)
   try {
-    // 0.0.1 必然严格落后 Hub（kernel 0.1.0+）。
+    // 0.0.1 must however strictly after Hub(kernel 0.1.0+).
     const node = await provisionNode(app.hub.url, app.token, 'auto-off-node', '0.0.1')
     await delay(600)
-    assert.equal(node.upgradeCalls.length, 0, '默认关闭时绝不自动调用 nodeUpgrade')
+    assert.equal(node.upgradeCalls.length, 0, 'by default on shutdown never automatically invoke nodeUpgrade')
     node.close()
   } finally {
     await app.close().catch(() => undefined)
   }
 })
 
-test('HELM_AUTO_UPGRADE_NODES=1：严格落后节点上线异步升级到 Hub 版本', { timeout: 60_000 }, async () => {
+test('HELM_AUTO_UPGRADE_NODES=1: strictly after node enable async upgrade to Hub version', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'auto-on-'))
   process.env['HELM_AUTO_UPGRADE_NODES'] = '1'
   let app: Awaited<ReturnType<typeof openHubApp>> | undefined
@@ -963,12 +963,12 @@ test('HELM_AUTO_UPGRADE_NODES=1：严格落后节点上线异步升级到 Hub �
       rpcResult: { ok: true, value: { ok: true, previousVersion: '0.0.1', targetVersion: hubVersion(), upgraded: true } },
       reconnect: { candidateVersion: hubVersion() },
     })
-    // 等待 onNodeChanged 异步路径触发 upgradeNode（不阻塞注册）。
+    // wait for onNodeChanged async path trigger upgradeNode(non-blocking register).
     for (let i = 0; i < 50 && node.upgradeCalls.length === 0; i++) {
       await delay(100)
     }
-    assert.equal(node.upgradeCalls.length, 1, '开启后落后节点上线应触发一次自动升级')
-    assert.equal(node.upgradeCalls[0]!.targetVersion, hubVersion(), '自动升级目标为 Hub 版本')
+    assert.equal(node.upgradeCalls.length, 1, 'open start after after node enable should trigger once automatically upgrade')
+    assert.equal(node.upgradeCalls[0]!.targetVersion, hubVersion(), 'automatically upgrade target is Hub version')
     node.close()
   } finally {
     delete process.env['HELM_AUTO_UPGRADE_NODES']
@@ -976,7 +976,7 @@ test('HELM_AUTO_UPGRADE_NODES=1：严格落后节点上线异步升级到 Hub �
   }
 })
 
-test('自动升级去重：同节点失败后不再无限重试（升级调用恰一次）', { timeout: 60_000 }, async () => {
+test('automatically upgrade dedupe: same node failed after no longer unbounded retry (upgrade invoke exactly once)', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'auto-dedupe-'))
   process.env['HELM_AUTO_UPGRADE_NODES'] = '1'
   let app: Awaited<ReturnType<typeof openHubApp>> | undefined
@@ -984,15 +984,15 @@ test('自动升级去重：同节点失败后不再无限重试（升级调用�
     app = await openHubApp(dir)
     const node = await provisionNode(app.hub.url, app.token, 'auto-dedupe-node', '0.0.1')
     node.setPlan({
-      rpcResult: { ok: false, error: { code: 'unknown', message: '注入失败' } },
+      rpcResult: { ok: false, error: { code: 'unknown', message: 'inject failed' } },
     })
     for (let i = 0; i < 30 && node.upgradeCalls.length === 0; i++) {
       await delay(100)
     }
     assert.equal(node.upgradeCalls.length, 1)
-    // 再等一段时间：不重试（去重）。
+    // again etc. one segment time: do not retry (dedupe).
     await delay(1_200)
-    assert.equal(node.upgradeCalls.length, 1, '同节点自动升级只尝试一轮')
+    assert.equal(node.upgradeCalls.length, 1, 'same node automatically upgrade only attempt one round')
     node.close()
   } finally {
     delete process.env['HELM_AUTO_UPGRADE_NODES']
@@ -1000,14 +1000,14 @@ test('自动升级去重：同节点失败后不再无限重试（升级调用�
   }
 })
 
-test('upgrade：候选注册后延迟 50ms 才 commit——传输断开先到时仍等待成功', { timeout: 60_000 }, async () => {
+test('upgrade: choose register after latency 50ms only then commit- - transfer disconnect first to when still wait for succeeded', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'late-commit-'))
   const app = await openHubApp(dir)
   try {
     const node = await provisionNode(app.hub.url, app.token, 'up-late', '1.0.0')
-    // 升级流程：RPC 应答 → 旧 socket 断开（rpcError 必先到达 Hub）→
-    // 候选重连注册 → 50ms 后才发 commit。Hub 必须继续等 commit 而不是
-    // 把断开当成终态失败（回归：重 race 已 settle rpcPromise 的必达 bug）。
+    // upgrade stream process:RPC reply → old socket disconnect (rpcError must first reach Hub)→
+    // choose reconnect register → 50ms after only then commit.Hub must continue etc. commit while is not
+    // disconnect when into terminal state failed (regression: heavy race already settle rpcPromise must reach bug).
     node.setPlan({
       rpcResult: { ok: true, value: { ok: true, previousVersion: '1.0.0', targetVersion: '1.1.0', upgraded: true } },
       reconnect: { candidateVersion: '1.1.0' },
@@ -1018,7 +1018,7 @@ test('upgrade：候选注册后延迟 50ms 才 commit——传输断开先到时
       headers: authHeaders(app.token),
       body: JSON.stringify({ targetVersion: '1.1.0' }),
     })
-    assert.equal(res.status, 200, '断开先到、commit 后到：最终必须成功')
+    assert.equal(res.status, 200, 'disconnect first to,commit after to: eventually must succeeded')
     const body = (await res.json()) as NodeUpgradeResult
     assert.equal(body.ok, true)
     assert.equal(body.upgraded, true)
@@ -1029,16 +1029,16 @@ test('upgrade：候选注册后延迟 50ms 才 commit——传输断开先到时
   }
 })
 
-test('upgrade：在途 RPC 被候选顶替关闭（应答被吞成 undefined）——继续等真实 commit 成功', { timeout: 60_000 }, async () => {
+test('upgrade: in-flight RPC by choose top replace close (reply by swallow into undefined) - - continue etc. real commit succeeded', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'inflight-close-'))
   const app = await openHubApp(dir)
   try {
     const node = await provisionNode(app.hub.url, app.token, 'up-inflight', '1.0.0')
-    // 真实链路复现：reconnect 计划照常执行（旧 socket 关闭 + 候选注册），
-    // 但旧连接上的 nodeUpgrade 应答永不 resolve——旧 socket 被 $close 后
-    // birpc 在途调用被 reject，ws-gateway.onGeneralError 吞成 resolve(undefined)。
-    // 修复前：race 拿 {kind:'rpc',value:undefined} → invalid shape 502 提前失败；
-    // 修复后：识别为传输中断，继续等候选 commit（commitDelayMs 50ms）。
+    // real link re- now:reconnect plan per common execute (old socket close + choose register),
+    // but old connect on nodeUpgrade reply forever do not resolve- - old socket by $close after
+    // birpc in-flight invoke by reject,ws-gateway.onGeneralError swallow into resolve(undefined).
+    // fix before:race take {kind:'rpc',value:undefined} → invalid shape 502 mention before failed;
+    // fix after: identify is transfer interrupt, continue etc. choose commit(commitDelayMs 50ms).
     node.setPlan({
       rpcResult: { ok: true, value: { ok: true, previousVersion: '1.0.0', targetVersion: '1.1.0', upgraded: true } },
       reconnect: { candidateVersion: '1.1.0' },
@@ -1050,28 +1050,28 @@ test('upgrade：在途 RPC 被候选顶替关闭（应答被吞成 undefined）�
       headers: authHeaders(app.token),
       body: JSON.stringify({ targetVersion: '1.1.0' }),
     })
-    assert.equal(res.status, 200, '在途 RPC 被顶替关闭后必须继续等 commit，不得提前 502')
+    assert.equal(res.status, 200, 'in-flight RPC by top replace close after must continue etc. commit, must not mention before 502')
     const body = (await res.json()) as NodeUpgradeResult
     assert.equal(body.ok, true)
     assert.equal(body.upgraded, true)
-    assert.equal(body.targetVersion, '1.1.0', 'target 来自真实 commit 心跳')
-    assert.equal(body.previousVersion, '1.0.0', 'previous 来自真实 commit 心跳')
+    assert.equal(body.targetVersion, '1.1.0', 'target from real commit heartbeat')
+    assert.equal(body.previousVersion, '1.0.0', 'previous from real commit heartbeat')
     assert.equal(typeof body.pid, 'number')
-    assert.ok(Number.isInteger(body.pid) && body.pid! > 0, 'pid 必须是真实 commit 携带的正整数')
+    assert.ok(Number.isInteger(body.pid) && body.pid! > 0, 'pid must be real commit carry positive integer')
     node.close()
   } finally {
     await app.close().catch(() => undefined)
   }
 })
 
-test('upgrade：RPC 永不返回且无候选——短超时内有界失败（不挂 30min）', { timeout: 60_000 }, async () => {
+test('upgrade:RPC forever do not return and without choose - - short timeout inside has boundary failed (do not hang 30min)', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'hang-'))
   const app = await openHubApp(dir) // nodeUpgradeTimeoutMs = 2_500
   try {
     const node = await provisionNode(app.hub.url, app.token, 'up-hang', '1.0.0')
     node.setPlan({
       rpcResult: { ok: true, value: { ok: true, previousVersion: '1.0.0', targetVersion: '1.1.0', upgraded: true } },
-      hang: true, // 永不返回，永不重连
+      hang: true, // forever do not return, forever do not reconnect
     })
     const startedAt = Date.now()
     const res = await fetch(`${app.hub.url}/api/nodes/up-hang/upgrade`, {
@@ -1080,11 +1080,11 @@ test('upgrade：RPC 永不返回且无候选——短超时内有界失败（不
       body: JSON.stringify({ targetVersion: '1.1.0' }),
     })
     const elapsed = Date.now() - startedAt
-    assert.equal(res.status, 502, 'RPC 僵死时必须显式失败')
+    assert.equal(res.status, 502, 'RPC stiff die when must explicit failed')
     const body = (await res.json()) as { error: { code: string } }
     assert.equal(body.error.code, 'node_upgrade_unconfirmed')
-    assert.ok(elapsed < 30_000, `升级等待必须有界（实际 ${elapsed}ms，绝不挂 birpc 30min）`)
-    // 等待器已清理：同节点可再次发起（不永久 busy）。
+    assert.ok(elapsed < 30_000, `upgrade wait for must has boundary (actual ${elapsed}ms, never hang birpc 30min)`)
+    // wait for already clean up: same node can again start (do not forever long busy).
     assert.equal(app.kernel['envFabric'].registry.hasUpgradeWaiter('up-hang'), false)
     node.close()
   } finally {
@@ -1092,12 +1092,12 @@ test('upgrade：RPC 永不返回且无候选——短超时内有界失败（不
   }
 })
 
-test('upgrade：非法 RpcResult/非法结果体后等待器清理——同节点可再次升级（不永久 busy）', { timeout: 60_000 }, async () => {
+test('upgrade: illegal RpcResult/illegal result body after wait for clean up - - same node can again upgrade (do not forever long busy)', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'busy-'))
   const app = await openHubApp(dir)
   try {
     const node = await provisionNode(app.hub.url, app.token, 'up-busy', '1.0.0')
-    // 第一次：结果体非法（缺 targetVersion 字段）。
+    // first time: result body illegal (missing targetVersion field).
     node.setPlan({
       rpcResult: { ok: true, value: { ok: true, previousVersion: '1.0.0', upgraded: true } as unknown as NodeUpgradeResult },
     })
@@ -1106,10 +1106,10 @@ test('upgrade：非法 RpcResult/非法结果体后等待器清理——同节�
       headers: authHeaders(app.token),
       body: JSON.stringify({ targetVersion: '1.1.0' }),
     })
-    assert.equal(first.status, 502, '非法结果体必须显式失败')
-    assert.equal(app.kernel['envFabric'].registry.hasUpgradeWaiter('up-busy'), false, '失败后等待器必须清理')
-    // 第二次：结构化拒绝后同样可再次发起。
-    node.setPlan({ rpcResult: { ok: false, error: { code: 'not_supported', message: '注入拒绝' } } })
+    assert.equal(first.status, 502, 'illegal result body must explicit failed')
+    assert.equal(app.kernel['envFabric'].registry.hasUpgradeWaiter('up-busy'), false, 'failed after wait for must clean up')
+    // second time: structure reject after same can again start.
+    node.setPlan({ rpcResult: { ok: false, error: { code: 'not_supported', message: 'inject reject' } } })
     const second = await fetch(`${app.hub.url}/api/nodes/up-busy/upgrade`, {
       method: 'POST',
       headers: authHeaders(app.token),
@@ -1117,20 +1117,20 @@ test('upgrade：非法 RpcResult/非法结果体后等待器清理——同节�
     })
     assert.equal(second.status, 501)
     assert.equal(app.kernel['envFabric'].registry.hasUpgradeWaiter('up-busy'), false)
-    assert.equal(node.upgradeCalls.length, 2, '两次调用都应到达节点（无 busy 阻塞）')
+    assert.equal(node.upgradeCalls.length, 2, 'two time invoke all should reach node (without busy block)')
     node.close()
   } finally {
     await app.close().catch(() => undefined)
   }
 })
 
-test('upgrade：节点未上报 version 时先 check 取真实 currentVersion 作 previous（绝不 unknown）', { timeout: 60_000 }, async () => {
+test('upgrade: node not on report version when first check take real currentVersion act previous(never unknown)', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'prev-'))
   const app = await openHubApp(dir)
   try {
-    // fixture 注册时不携带 version：Hub 必须经 check 拿 currentVersion=1.0.0。
+    // fixture register when does not carry version:Hub must via check take currentVersion=1.0.0.
     const node = await provisionNode(app.hub.url, app.token, 'up-prev', '1.0.0')
-    // 直接验证：升级成功路径的 previousVersion 来自 conn.version（1.0.0）。
+    // directly verify: upgrade succeeded path previousVersion from conn.version(1.0.0).
     node.setPlan({
       rpcResult: { ok: true, value: { ok: true, previousVersion: '1.0.0', targetVersion: '1.1.0', upgraded: true } },
       reconnect: { candidateVersion: '1.1.0' },
@@ -1142,13 +1142,13 @@ test('upgrade：节点未上报 version 时先 check 取真实 currentVersion �
     })
     assert.equal(res.status, 200)
     const body = (await res.json()) as NodeUpgradeResult
-    assert.equal(body.previousVersion, '1.0.0', 'previousVersion 必须是真实版本，绝不 unknown')
+    assert.equal(body.previousVersion, '1.0.0', 'previousVersion must be real version, never unknown')
     node.close()
   } finally {
     await app.close().catch(() => undefined)
   }
 })
 
-test('teardown: 清理临时根目录', { timeout: 60_000 }, () => {
+test('teardown: clean up temporary directory', { timeout: 60_000 }, () => {
   rmSync(rootDir, { recursive: true, force: true })
 })

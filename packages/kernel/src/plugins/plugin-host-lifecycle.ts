@@ -1,5 +1,5 @@
 /**
- * 插件注册、注销、启用与停用生命周期事务流程。
+ * plugin register, deregister, enable and deactivate lifecycle transaction stream process.
  */
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -92,7 +92,7 @@ export async function runRegisterTransaction(
 ): Promise<void> {
   const pluginId = definition.id;
   if (ctx.plugins.has(pluginId)) {
-    throw new HelmError('plugin_already_registered', `插件已注册：${pluginId}`, 409, { pluginId });
+    throw new HelmError('plugin_already_registered', `plugin registered:${pluginId}`, 409, { pluginId });
   }
   const dependencies = normalizeDependencies(definition);
   assertNoDependencyCycle(ctx.plugins, pluginId, dependencies);
@@ -128,7 +128,7 @@ export async function runRegisterTransaction(
 
   if (wantsEnabled) {
     try {
-      // 提交点终检先于挂载，随后同步置 enabled+idle 避免清单先露出能力
+      // commit point final inspect first at mount, then sync placement enabled+idle avoid manifest first expose out capability
       assertEnableCommitChecks(state, ctx);
       await registerProviders(state, ctx.providers);
       await activatePluginServices(state, ctx.servicesStarted);
@@ -185,7 +185,7 @@ export async function runEnableTransaction(
   if (state.loadFailed === true) {
     throw new HelmError(
       'plugin_load_failed',
-      `插件 ${pluginId} 加载失败（${state.lastError?.message ?? '未知错误'}），请修复插件源码后使用 reload 或重启 Hub`,
+      `plugin ${pluginId} failed to load (${state.lastError?.message ?? 'unknown error'}), please fix plugin source code after use reload or restart Hub`,
       409,
       { pluginId, error: state.lastError },
     );
@@ -204,7 +204,7 @@ export async function runEnableTransaction(
     await activatePluginServices(state, ctx.servicesStarted);
     await persistEnabled(ctx.configStore, state, true);
     persistedEnabled = true;
-    // 与 enabled=true 同处同一同步段，关闭并发停用依赖的 TOCTOU 窗口
+    // and enabled=true same where the same sync segment, close concurrency deactivate dependency TOCTOU window
     assertEnableCommitChecks(state, ctx);
     commitEnabled(state);
     state.lastError = undefined;
@@ -232,13 +232,13 @@ export async function runDisableTransaction(
     if (usages.length > 0) {
       throw new HelmError(
         'plugin_in_use',
-        `插件 ${pluginId} 存在 ${usages.length} 处关联资源占用，停用后相关功能将不可用（确认后可传 force 强制停用）`,
+        `plugin ${pluginId} store in ${usages.length} where related asset occupy, deactivate after related feature can unavailable (confirm after can pass force force deactivate)`,
         409,
         { pluginId, usages },
       );
     }
   }
-  // inUse 含异步 IO；返回后二次门禁并同步置 deactivating，消除与新任务的 TOCTOU
+  // inUse contains async IO; return after second gate and sync placement deactivating, eliminate and new task TOCTOU
   assertPluginIdle(pluginId, state, ctx);
   state.phase = 'deactivating';
   let stopError: { err: unknown } | undefined;

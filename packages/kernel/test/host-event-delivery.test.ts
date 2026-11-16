@@ -1,22 +1,22 @@
 /**
- * 宿主事件单一投递边界回归（真实 KernelRuntime + faux provider）。
+ * host event single one delivery boundary regression (real KernelRuntime + faux provider).
  *
- * 修复缺陷：EventHub 内部宿主投递器（publish 恰一次）引入前，公开
- * emitHostEvent 广播路径在 events.publish 之后再自行 dispatchInternalEvent，
- * 与构造器期的 SSE 帧订阅转投叠加导致插件/host 主动 emit 的核心会话事件
- * 被内部监听器执行两遍（且两次载荷形状不一致：信封 vs 原始载荷）。
+ * fix defect:EventHub internal host delivery (publish exactly once) introduce before, public
+ * emitHostEvent broadcast path in events.publish after again self row dispatchInternalEvent,
+ * and construct phase SSE frame subscribe rotate throw stack add leads to plugin/host actively emit core conversation event
+ * by internal listener execute two iterate (and two time payload shape inconsistent: message seal vs original payload).
  *
- * 现契约：
- * 1. 公开广播 emitHostEvent('conversation.entry' 等核心类型)：内部监听器
- *    恰一次、收到已验证+脱敏的 HelmEvent 信封；返回的 Promise 在全部已注册
- *    异步内部监听器完成后才 settle（emitEvent 可 await 契约）；SSE 恰一帧。
- * 2. 内核自动生成事件（真实提交 -> tracker 发布 conversation.entry）：内部
- *    监听器与 SSE 帧逐条一一对应，恰一次无重复。
- * 3. broadcast:false：不进 SSE（seq 不推进）、内部监听器恰一次。
- * 4. 内核自动事件路径发布点不被内部监听器阻塞（fire-and-forget；监听器错误
- *    由投递器内部隔离，不产生 unhandledRejection）。
+ * now contract:
+ * 1. public broadcast emitHostEvent('conversation.entry' etc. core type): internal listener
+ *    exactly once, receives already verify+redaction HelmEvent message seal; return Promise in all registered
+ *    async internal listener after completion only then settle(emitEvent can await contract);SSE exactly one frame.
+ * 2. kernel automatically generate event (real commit -> tracker publish conversation.entry): internal
+ *    listener and SSE frame one by one one one for should, exactly once without duplicate.
+ * 3. broadcast:false: does not enter SSE(seq do not push enter), internal listener exactly once.
+ * 4. kernel automatically event path publish point do not by internal listener block (fire-and-forget; listener error
+ *    by delivery internal isolated, produces no unhandledRejection).
  *
- * runner: tsx --test；每项显式 timeout 防死锁。
+ * runner: tsx --test; each items explicit timeout guard against deadlock.
  */
 import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
@@ -51,7 +51,7 @@ async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: FauxH
   return Object.assign(runtime, { __faux: faux })
 }
 
-/** 经插件注册内部监听器（真实 ctx.host.onEvent 路径，含 host-api 生命周期包装）。 */
+/** via plugin register internal listener (real ctx.host.onEvent path, contains host-api lifecycle wrap). */
 async function registerEntryListener(
   kernel: KernelRuntime,
   onCall: (entryId: string) => MaybePromise<void>,
@@ -61,15 +61,15 @@ async function registerEntryListener(
     definePlugin(ctx) {
       ctx.host.onEvent('conversation.entry', (raw) => {
         const entry = (raw as { entry?: { id?: string } }).entry
-        if (entry?.id === undefined) throw new Error('内部监听器必须收到 HelmEvent 信封（entry 字段缺失）')
+        if (entry?.id === undefined) throw new Error('internal listener must receives HelmEvent message seal (entry field missing)')
         return onCall(entry.id)
       })
     },
   })
 }
 
-describe('宿主事件单一投递边界', { timeout: 60_000 }, () => {
-  it('公开广播 emitHostEvent(conversation.entry)：内部恰一次、信封形状、Promise 等待异步监听器完成；SSE 恰一帧', { timeout: 60_000 }, async () => {
+describe('host event single one delivery boundary', { timeout: 60_000 }, () => {
+  it('public broadcast emitHostEvent(conversation.entry): internal exactly once, message seal shape,Promise wait for async listener complete;SSE exactly one frame', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 'public-emit-once'))
     try {
       const gate = deferred()
@@ -90,37 +90,37 @@ describe('宿主事件单一投递边界', { timeout: 60_000 }, () => {
         conversationId: 1,
         entry: { id: 'manual-e1', kind: 'helm.note', createdAt: 1, data: { n: 1 } },
       })
-      assert.ok(emit instanceof Promise, 'emitEvent 广播路径返回可 await 的投递 Promise')
+      assert.ok(emit instanceof Promise, 'emitEvent broadcast path return can await delivery Promise')
       void Promise.resolve(emit).then(() => settled.resolve(), () => settled.resolve())
 
-      // 监听器已进入但未完成：emit Promise 不得提前 settle（可 await 契约）。
+      // listener already enter but not complete:emit Promise must not mention before settle(can await contract).
       await new Promise((r) => setImmediate(r))
       await new Promise((r) => setImmediate(r))
-      assert.equal(entered, 1, '内部监听器恰调用一次')
+      assert.equal(entered, 1, 'internal listener exactly invoke once')
       assert.equal(completed, 0)
       let settledEarly = false
       void settled.promise.then(() => {
         settledEarly = true
       })
       await new Promise((r) => setImmediate(r))
-      assert.equal(settledEarly, false, '异步监听器完成前 emit Promise 不得 settle')
+      assert.equal(settledEarly, false, 'async listener complete before emit Promise must not settle')
 
       gate.resolve()
       await emit
-      assert.equal(completed, 1, 'gate 释放后监听器完成')
-      assert.equal(entered, 1, '全程恰调用一次（无双重投递）')
-      // SSE 广播恰一帧且为同一 entry。
+      assert.equal(completed, 1, 'gate release after listener complete')
+      assert.equal(entered, 1, 'all process exactly invoke once (without double heavy delivery)')
+      // SSE broadcast exactly one frame and is the same entry.
       const matched = frames.filter((f) => {
         const event = f.event as { conversationId?: number; entry?: { id?: string } }
         return event.conversationId === 1 && event.entry?.id === 'manual-e1'
       })
-      assert.equal(matched.length, 1, 'SSE 恰一帧')
+      assert.equal(matched.length, 1, 'SSE exactly one frame')
     } finally {
       await kernel.close()
     }
   })
 
-  it('plugin.changed 特殊发布路径也等待异步内部监听器', { timeout: 60_000 }, async () => {
+  it('plugin.changed special publish path also wait for async internal listener', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 'plugin-event-await'))
     const gate = deferred()
     const entered = deferred()
@@ -152,7 +152,7 @@ describe('宿主事件单一投递边界', { timeout: 60_000 }, () => {
     }
   })
 
-  it('EventHub.close 解除宿主投递器，不保留运行时回调', { timeout: 60_000 }, () => {
+  it('EventHub.close solve except host delivery, do not keep runtime call back', { timeout: 60_000 }, () => {
     const events = new EventHub({
       initialSeq: 0,
       snapshot: () => ({ seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [], pluginDocs: [] }),
@@ -167,7 +167,7 @@ describe('宿主事件单一投递边界', { timeout: 60_000 }, () => {
     assert.equal(delivered, 1)
   })
 
-  it('内核自动生成事件（真实提交）：内部监听器与 SSE 帧逐条一一对应，恰一次', { timeout: 60_000 }, async () => {
+  it('kernel automatically generate event (real commit): internal listener and SSE frame one by one one one for should, exactly once', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 'auto-events-once'))
     try {
       const internalIds: string[] = []
@@ -181,27 +181,27 @@ describe('宿主事件单一投递边界', { timeout: 60_000 }, () => {
         if (entry?.id !== undefined) sseIds.push(entry.id)
       })
 
-      kernel.__faux.setResponses([fauxAssistantMessage('回答一'), fauxAssistantMessage('回答二')])
-      await kernel.submitInput(1, '第一问')
+      kernel.__faux.setResponses([fauxAssistantMessage('answer one'), fauxAssistantMessage('answer two')])
+      await kernel.submitInput(1, 'one question')
       await kernel.waitForIdle(1)
-      await kernel.submitInput(1, '第二问')
+      await kernel.submitInput(1, 'second question')
       await kernel.waitForIdle(1)
-      // 观察者路径为 fire-and-forget：等内部投递收敛（waitFor 轮询真实到达）。
+      // observer path is fire-and-forget: etc. internal delivery converge (waitFor polling real reach).
       await new Promise((resolve) => setTimeout(resolve, 200))
 
-      assert.ok(internalIds.length >= 2, '自动 conversation.entry 已投递内部监听器')
+      assert.ok(internalIds.length >= 2, 'automatically conversation.entry already delivery internal listener')
       assert.deepEqual(
         [...internalIds].sort(),
         [...sseIds].sort(),
-        '内部监听器收到的 entry 与 SSE 帧逐条一致（恰一次，无双重投递）',
+        'internal listener receives entry and SSE frame one by one consistent (exactly once, without double heavy delivery)',
       )
-      assert.equal(new Set(internalIds).size, internalIds.length, '同一 entry 不重复投递')
+      assert.equal(new Set(internalIds).size, internalIds.length, 'the same entry does not repeat delivery')
     } finally {
       await kernel.close()
     }
   })
 
-  it('broadcast:false：不进 SSE（seq 不推进），内部监听器恰一次', { timeout: 60_000 }, async () => {
+  it('broadcast:false: does not enter SSE(seq do not push enter), internal listener exactly once', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 'private-emit-once'))
     try {
       const received: unknown[] = []
@@ -237,18 +237,18 @@ describe('宿主事件单一投递边界', { timeout: 60_000 }, () => {
       const emit = kernel.emitHostEvent('conversation.upsert', summary, { broadcast: false })
       await emit
 
-      assert.equal(received.length, 1, '内部监听器恰一次')
-      // broadcast:false 保持既有语义：不经 buildEvent，载荷原样直达内部监听器。
+      assert.equal(received.length, 1, 'internal listener exactly once')
+      // broadcast:false keep since has semantics: do not via buildEvent, payload original direct reach internal listener.
       assert.equal((received[0] as { id?: number }).id, 1)
-      assert.equal(kernel.events.seq, seqBefore, 'broadcast:false 不推进 SSE seq')
+      assert.equal(kernel.events.seq, seqBefore, 'broadcast:false do not push enter SSE seq')
       const upsertFrames = frames.filter((f) => f.event.type === 'conversation.upsert')
-      assert.equal(upsertFrames.length, 0, 'broadcast:false 不广播')
+      assert.equal(upsertFrames.length, 0, 'broadcast:false do not broadcast')
     } finally {
       await kernel.close()
     }
   })
 
-  it('自动事件路径不被监听器阻塞：慢监听器不影响发布方推进，监听器错误不产生 unhandledRejection', { timeout: 60_000 }, async () => {
+  it('automatically event path do not by listener block: slow listener does not affect publish way push enter, listener error produces no unhandledRejection', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 'auto-nonblocking'))
     try {
       const unhandled: unknown[] = []
@@ -258,7 +258,7 @@ describe('宿主事件单一投递边界', { timeout: 60_000 }, () => {
       process.on('unhandledRejection', onUnhandled)
       const gate = deferred()
       let slowEntered = 0
-      // 同类型注册两个监听器：慢监听器（gate 挂起）+ 抛错监听器，验证互不阻断。
+      // same type register two listener: slow listener (gate suspended)+ throws listener, verify mutual do not block assert.
       await kernel.plugins.register({
         id: 'test:slow-listener',
         definePlugin(ctx) {
@@ -272,25 +272,25 @@ describe('宿主事件单一投递边界', { timeout: 60_000 }, () => {
         },
       })
 
-      kernel.__faux.setResponses([fauxAssistantMessage('回答')])
-      // submitInput 全链路（含 tracker 观察者发布 conversation.entry）在慢监听器
-      // 挂起期间照常完成——自动事件发布点不 await 内部投递。
-      const submitted = kernel.submitInput(1, '慢监听器下的问题')
+      kernel.__faux.setResponses([fauxAssistantMessage('answer')])
+      // submitInput all link (contains tracker observer publish conversation.entry) in slow listener
+      // suspended during per common complete - - automatically event publish point do not await internal delivery.
+      const submitted = kernel.submitInput(1, 'slow listener under issue')
       const deadline = Date.now() + 5_000
       while (slowEntered < 1 && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 10))
       }
-      assert.ok(slowEntered >= 1, '慢监听器已被投递（进入挂起）')
+      assert.ok(slowEntered >= 1, 'slow listener already by delivery (enter suspended)')
       const idle = kernel.waitForIdle(1)
       await Promise.race([
         idle.then(() => 'idle'),
         new Promise((r) => setTimeout(() => r('timeout'), 5_000)),
-      ]).then((v) => assert.notEqual(v, 'timeout', '慢监听器不得阻塞回合推进'))
+      ]).then((v) => assert.notEqual(v, 'timeout', 'slow listener must not block turn push enter'))
       await submitted
 
       gate.resolve()
       await new Promise((r) => setTimeout(r, 50))
-      assert.equal(unhandled.length, 0, '监听器错误由投递器隔离，无 unhandledRejection')
+      assert.equal(unhandled.length, 0, 'listener error by delivery isolated, without unhandledRejection')
       process.off('unhandledRejection', onUnhandled)
     } finally {
       await kernel.close()

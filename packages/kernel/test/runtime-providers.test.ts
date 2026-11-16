@@ -11,7 +11,7 @@ import { CredentialService } from '../src/services/credentials.js'
 import { ProviderService } from '../src/services/providers.js'
 import { HelmError } from '@helm/protocol'
 
-test('外部注入模型集在目录与热重载中保持调用方所有权', { timeout: 60_000 }, async () => {
+test('external inject model collection in directory and hot reload in keep caller ownership', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-external-providers-'))
   const models = createModels()
   models.setProvider(fauxProvider({ models: [{ id: 'fixture-external' }] }).provider)
@@ -29,7 +29,7 @@ test('外部注入模型集在目录与热重载中保持调用方所有权', { 
   }
 })
 
-test('全量供应商启动加载、增删密钥热更新与读取失败不静默降级', { timeout: 60_000 }, async () => {
+test('all amount provider start load, increase delete secret key hot update and failed to read not silently fall back', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-provider-registry-'))
   const previousEnv = process.env['DEEPSEEK_API_KEY']
   delete process.env['DEEPSEEK_API_KEY']
@@ -42,22 +42,22 @@ test('全量供应商启动加载、增删密钥热更新与读取失败不静�
     const entries = () => kernel!.listModels().then((catalog) => catalog.models.filter((entry) => entry.provider === 'deepseek'))
     const initial = await entries()
     assert.ok(initial.length > 0)
-    assert.ok(initial.every((entry) => entry.available), '非 OpenAI/Anthropic 的凭据也必须在启动时加载')
+    assert.ok(initial.every((entry) => entry.available), 'non- OpenAI/Anthropic credentials also must in at startup load')
 
     await credentials.delete('deepseek')
     await kernel.reloadModels()
-    assert.ok((await entries()).every((entry) => !entry.available), '删除密钥不能继续复用旧缓存')
+    assert.ok((await entries()).every((entry) => !entry.available), 'delete secret key cannot continue re- use old cache')
 
     await credentials.set('deepseek', 'fixture-deepseek-reloaded')
     await kernel.reloadModels()
-    assert.ok((await entries()).every((entry) => entry.available), '新增内置供应商密钥无需 providers.json 条目')
+    assert.ok((await entries()).every((entry) => entry.available), 'new increase inside placement provider secret key no need to providers.json item')
 
     const path = join(dataDir, 'credentials.json')
     const validStore = await readFile(path, 'utf8')
     try {
       await writeFile(path, '{invalid-json')
-      await assert.rejects(() => kernel!.reloadModels(), /JSON|解析|非法/)
-      assert.ok((await entries()).every((entry) => entry.available), '读取失败不应发布半成品或把模型静默标记为不可用')
+      await assert.rejects(() => kernel!.reloadModels(), /JSON|parse|illegal/)
+      assert.ok((await entries()).every((entry) => entry.available), 'failed to read must not publish half into product or model static default mark recorded as unavailable')
     } finally { await writeFile(path, validStore) }
   } finally {
     await kernel?.close()
@@ -67,7 +67,7 @@ test('全量供应商启动加载、增删密钥热更新与读取失败不静�
   }
 })
 
-test('运行时供应商注册：目录/归属/冲突拒绝/幂等注销/事件发布', { timeout: 60_000 }, async () => {
+test('runtime provider register: directory/ownership/conflict reject/idempotent deregister/event publish', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-runtime-register-'))
   let kernel: KernelRuntime | undefined
   try {
@@ -81,16 +81,16 @@ test('运行时供应商注册：目录/归属/冲突拒绝/幂等注销/事件�
     const faux = fauxProvider({ provider: 'plugin-fx', models: [{ id: 'fx-model' }] })
     const unregister = await kernel.registerRuntimeProvider(faux.provider, 'builtin:demo')
 
-    // 目录与归属立即可见。
+    // directory and ownership immediately visible.
     assert.deepEqual(
       (await kernel.listModels()).models.filter((entry) => entry.provider === 'plugin-fx').map((entry) => entry.modelId),
       ['fx-model'],
     )
     const summary = kernel.listModelProviders().find((provider) => provider.id === 'plugin-fx')
     assert.equal(summary?.pluginId, 'builtin:demo')
-    assert.ok(events.some((event) => event.type === 'models.changed'), '注册后发布 models.changed')
+    assert.ok(events.some((event) => event.type === 'models.changed'), 'register after publish models.changed')
 
-    // 冲突拒绝：其他 owner / 内置 / providers.json 同 id（含未启用）均 409，不覆盖。
+    // conflict reject: other owner / inside placement / providers.json same id(contains not enabled) all 409, does not override.
     const other = fauxProvider({ provider: 'plugin-fx', models: [{ id: 'other' }] })
     await assert.rejects(
       () => kernel!.registerRuntimeProvider(other.provider, 'builtin:other'),
@@ -108,29 +108,29 @@ test('运行时供应商注册：目录/归属/冲突拒绝/幂等注销/事件�
       () => kernel!.registerRuntimeProvider(fauxProvider({ provider: 'gw-x', models: [{ id: 'x' }] }).provider),
       (err: unknown) => err instanceof HelmError && err.code === 'runtime_provider_conflict' && err.status === 409,
     )
-    // 冲突拒绝后目录未被覆盖。
+    // conflict reject after directory not by override.
     assert.deepEqual(
       (await kernel.listModels()).models.filter((entry) => entry.provider === 'plugin-fx').map((entry) => entry.modelId),
       ['fx-model'],
     )
 
-    // providers.json 热重载保留运行时供应商。
+    // providers.json hot reload keep runtime provider.
     await kernel.reloadModels()
     assert.ok(kernel.listModelProviders().some((provider) => provider.id === 'plugin-fx'))
 
-    // 幂等注销：二次调用空操作；目录移除且事件再次发布。
+    // idempotent deregister: second invoke empty operation; directory remove and event again publish.
     events.length = 0
     await unregister()
     await unregister()
     assert.equal(kernel.listModelProviders().find((provider) => provider.id === 'plugin-fx'), undefined)
-    assert.ok(events.some((event) => event.type === 'models.changed'), '注销后发布 models.changed')
+    assert.ok(events.some((event) => event.type === 'models.changed'), 'deregister after publish models.changed')
   } finally {
     await kernel?.close()
     await rm(dataDir, { recursive: true, force: true })
   }
 })
 
-test('运行时供应商在途流计数与 teardown 预检（busy 409 / settled 后放行）', { timeout: 60_000 }, async () => {
+test('runtime provider in-flight stream counter and teardown preflight (busy 409 / settled after let through)', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-runtime-busy-'))
   let kernel: KernelRuntime | undefined
   try {
@@ -145,7 +145,7 @@ test('运行时供应商在途流计数与 teardown 预检（busy 409 / settled 
     const response = new Promise<ReturnType<typeof fauxAssistantMessage>>((resolve) => { answer = resolve })
     faux.setResponses([async () => { entered(); return response }])
     await kernel.updateConversation(1, { model: 'plugin-busy/busy-model' })
-    await kernel.submitInput(1, '测试在途模型请求')
+    await kernel.submitInput(1, 'test in-flight model request')
     await started
     try {
       assert.throws(() => kernel!.assertRuntimeProvidersIdle('builtin:busy'), { code: 'plugin_has_live_tasks' })
@@ -156,7 +156,7 @@ test('运行时供应商在途流计数与 teardown 预检（busy 409 / settled 
       await kernel.waitForIdle(1)
     }
     kernel.assertRuntimeProvidersIdle('builtin:busy')
-    // 上一次因忙而失败的释放句柄仍可重试；旧句柄不能删除同名的新注册。
+    // on once because busy while failed release handle still can retry; old handle cannot delete same name new register.
     await unregister()
     const replacement = fauxProvider({ provider: 'plugin-busy', models: [{ id: 'replacement' }] })
     const unregisterReplacement = await kernel.registerRuntimeProvider(replacement.provider, 'builtin:busy')
@@ -169,7 +169,7 @@ test('运行时供应商在途流计数与 teardown 预检（busy 409 / settled 
   }
 })
 
-test('插件停用进入服务 stop 后拒绝新模型刷新，避免预检后的卸载竞态', { timeout: 60_000 }, async () => {
+test('plugin deactivate enter service stop after reject new model refresh, avoid preflight after unload race', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-runtime-provider-stop-'))
   const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, autoResume: false })
   let stopEntered!: () => void
@@ -185,9 +185,9 @@ test('插件停用进入服务 stop 后拒绝新模型刷新，避免预检后�
         ctx.service({ id: 'fixture', start() {}, async stop() { stopEntered(); await stopGate } })
       },
     })
-    // runtime 自建 host 为 deferServices 模式：显式 start 后服务才真正启动
-    //（生产路径 kernel.start 在插件全部注册后统一调用），随后 disable 才会
-    // 进入服务 stop（stop 与 start 配对）。
+    // runtime self create host is deferServices pattern: explicit start after service only then truly start
+    //(produce path kernel.start in plugin all register after unify invoke), then disable only then will
+    // enter service stop(stop and start match for).
     await kernel.start()
     disabling = kernel.plugins.disable('test:provider-stop')
     await stopping
@@ -203,7 +203,7 @@ test('插件停用进入服务 stop 后拒绝新模型刷新，避免预检后�
   }
 })
 
-test('refreshModels：目标过滤透传、errors 脱敏、models.changed 事件与目录快照', { timeout: 60_000 }, async () => {
+test('refreshModels: target filter pass-through,errors redaction,models.changed event and directory snapshot', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-runtime-refresh-'))
   let kernel: KernelRuntime | undefined
   try {
@@ -214,7 +214,7 @@ test('refreshModels：目标过滤透传、errors 脱敏、models.changed 事件
       if (event.type === 'models.changed') events.push(event.payload as Record<string, unknown>)
     })
 
-    // 全量刷新：radius 未配置凭据 -> 跳过（不报错）；事件 providers: []。
+    // all amount refresh:radius not config credentials -> skip (do not errors); event providers: [].
     const full = await kernel.refreshModels()
     assert.equal(full.aborted, false)
     assert.deepEqual(full.providers, [])
@@ -222,14 +222,14 @@ test('refreshModels：目标过滤透传、errors 脱敏、models.changed 事件
     assert.ok(full.providerCatalog.some((provider) => provider.id === 'radius'))
     assert.deepEqual(events.at(-1), { providers: [] })
 
-    // 指定 providers：透传 + 事件携带目标清单；未知或静态供应商显式拒绝。
+    // designate providers: pass-through + event carry target manifest; unknown or static provider explicit reject.
     const scoped = await kernel.refreshModels({ providers: ['radius'] })
     assert.deepEqual(scoped.providers, ['radius'])
     assert.deepEqual(events.at(-1), { providers: ['radius'] })
     await assert.rejects(kernel.refreshModels({ providers: ['fixture-missing-provider'] }), { code: 'model_provider_not_found' })
     await assert.rejects(kernel.refreshModels({ providers: ['openai'] }), { code: 'model_provider_static' })
 
-    // 运行时供应商 refreshModels 错误显式进入 errors（message 原样保留诊断）。
+    // runtime provider refreshModels error explicit enter errors(message original keep diagnose).
     const failing: Provider = {
       ...fauxProvider({ provider: 'plugin-fail', models: [{ id: 'fail-model' }] }).provider,
       refreshModels: async () => {
@@ -246,7 +246,7 @@ test('refreshModels：目标过滤透传、errors 脱敏、models.changed 事件
   }
 })
 
-test('models-store.json 损坏时 reloadModels 显式失败，不静默降级空目录', { timeout: 60_000 }, async () => {
+test('models-store.json corrupt when reloadModels explicit failed, not silently fall back empty directory', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-runtime-corrupt-store-'))
   let kernel: KernelRuntime | undefined
   try {
@@ -257,7 +257,7 @@ test('models-store.json 损坏时 reloadModels 显式失败，不静默降级空
       () => kernel!.reloadModels(),
       (err: unknown) => err instanceof HelmError && err.code === 'models_store_corrupted',
     )
-    // 启动路径同样显式失败（open 内离线恢复读损坏文件）。
+    // start path same explicit failed (open inside offline restore read corrupt file).
     await kernel.close()
     kernel = undefined
     await assert.rejects(
@@ -270,7 +270,7 @@ test('models-store.json 损坏时 reloadModels 显式失败，不静默降级空
   }
 })
 
-test('供应商注销重建失败时保留注册和归属，修复缓存后可重试', { timeout: 60_000 }, async () => {
+test('provider deregister rebuild on failure keep register and ownership, fix cache after can retry', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-runtime-unregister-retry-'))
   const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, autoResume: false })
   try {
@@ -288,7 +288,7 @@ test('供应商注销重建失败时保留注册和归属，修复缓存后可�
   }
 })
 
-test('外部注入模型集：运行时注册与刷新显式 unsupported，不静默成功', { timeout: 60_000 }, async () => {
+test('external inject model collection: runtime register and refresh explicit unsupported, not silently succeeded', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-external-unsupported-'))
   const models = createModels()
   models.setProvider(fauxProvider({ models: [{ id: 'fixture-external' }] }).provider)

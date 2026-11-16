@@ -1,24 +1,24 @@
 /**
- * 外部插件源码静态自检（doctor）：真实加载 + 真实注册断言，不做第二套近似校验。
+ * external plugin source code static self inspect (doctor): real load + real register assertion, does not second set approximate validate.
  *
- * 检查链（按执行顺序，后继检查依赖前驱成功）：
- * 1. manifest/入口解析（resolvePluginEntry：plugin.json 合法性、main 越根、入口存在）；
- * 2. backend 代际导入（importPluginDefinition：TS 转译、模块初始化、default 导出形状）；
- * 3. register 真实注册（临时 PluginHost + 内存 doc store：definePlugin 全部声明边界
- *    校验——action/tool/ui/doc/service/provider 的形状、重复、scope 等与真实宿主同一
- *    代码路径，不维护第二套近似校验器）；注册经 ctx.ui 代理顺带收集 client 模块引用；
- * 4. client 编译（对收集到的全部 client.tsx 模块引用用真实编译器编译）。
+ * check chain (by execute order, after continue check dependency before drive succeeded):
+ * 1. manifest/entry parse (resolvePluginEntry:plugin.json legal,main exceeds, entry store in);
+ * 2. backend proxy boundary import (importPluginDefinition:TS transpile, module initialize,default export shape);
+ * 3. register real register (temporary PluginHost + memory doc store:definePlugin all declaration boundary
+ *    validate - -action/tool/ui/doc/service/provider shape, duplicate,scope etc. and real host the same
+ *    code path, do not maintain second set approximate validate); register via ctx.ui proxy smooth carries collect client module reference;
+ * 4. client compile (for collect to all client.tsx module reference use real compiler compile).
  *
- * 诚实性纪律：任何一步失败都产生结构化 PluginDoctorCheck（code/message/details），
- * 绝不静默降级为「大致可用」；成功报告附真实注册得到的 PluginSummary。
+ * honest discipline: any one step failed all produce structure PluginDoctorCheck(code/message/details),
+ * never static default fall back is roughly available; succeeded report attach real register obtain to PluginSummary.
  *
- * 隔离与副作用：
- * - doctor 使用独立代际号导入插件模块（?helmgen=N）：新代数模块图独立初始化，
- *   不影响当前已注册实例正在使用的旧代数模块；裸说明符依赖仍与宿主同实例；
- * - 注册在临时 PluginHost 上进行（临时 dataDir、内存 doc store、doctor 专用后端：
- *   ctx.host.* 调用一律 501 显式拒绝）——definePlugin 顶层依赖宿主调用的插件在
- *   doctor 处如实失败（报告给作者），不是 doctor 的缺陷；
- * - 临时 host 注册即 dispose（enabled: false，服务不启动，无副作用可泄漏）。
+ * isolated and side effect:
+ * - doctor use independent proxy boundary number import plugin module (?helmgen=N): new proxy count module diagram independent initialize,
+ *   does not affect when before registered instance is now use old proxy count module; bare note symbol dependency still and host same instance;
+ * - register in temporary PluginHost on enter row (temporary dataDir, memory doc store,doctor dedicated use backend:
+ *   ctx.host.* invoke one rule 501 explicit reject) - -definePlugin top-level dependency host invoke plugin in
+ *   doctor where such as failed (report to act), is not doctor defect;
+ * - temporary host register i.e. dispose(enabled: false, service do not start, no side effects can leak leak).
  */
 import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -40,7 +40,7 @@ import {
   resolvePluginEntry,
 } from './external-loader.js';
 
-/** doctor 真实注册所需的临时 doc store（内存镜像，不触碰宿主持久层）。 */
+/** doctor real register which must temporary doc store(memory mirror, do not trigger touch host durable layer). */
 class DoctorDocStore {
   private values = new Map<string, unknown>();
   get<T>(key: string, initial: T): T {
@@ -59,15 +59,15 @@ class DoctorDocStore {
 }
 
 /**
- * doctor 后端：ctx.host.* 的全部真实宿主调用一律 501 显式拒绝（不静默返回伪造
- * 数据）。仅提供 PluginHost 构造/注册链必需的安全只读底座：isClosing 恒 false、
- * 文本脱敏恒等。definePlugin 顶层依赖宿主调用的插件在 doctor 处如实失败。
+ * doctor backend:ctx.host.* all real host invoke one rule 501 explicit reject (not silently return fabricate
+ * data). only provide PluginHost construct/register chain must must security only read bottom seat:isClosing constant false,
+ * text redaction constant etc..definePlugin top-level dependency host invoke plugin in doctor where such as failed.
  */
 function doctorBackend(): PluginHostBackend {
   const unavailable = (what: string): never => {
     throw new HelmError(
       'unsupported',
-      `doctor 静态自检不提供宿主运行时能力：${what}（插件不应在 definePlugin 顶层依赖宿主调用）`,
+      `doctor static self inspect do not provide host runtime capability:${what}(plugin must not in definePlugin top-level dependency host invoke)`,
       501,
     );
   };
@@ -112,8 +112,8 @@ function doctorBackend(): PluginHostBackend {
     cancelAsk: () => unavailable('host.cancelAsk'),
     registerAskSeqResolver: () => unavailable('host.registerAskSeqResolver'),
     onEvent: () => unavailable('host.onEvent'),
-    // 事件发布在注册完成链上必然发生（plugin.changed）：doctor 无 SSE 消费方，
-    // 静默丢弃是安全 no-op（不是能力缺失的静默降级：事件本身无返回值可伪造）。
+    // event publish in register complete chain on must however occur (plugin.changed):doctor without SSE consumer,
+    // static default discard is security no-op(is not capability missing static default fall back: event itself without return value can fabricate).
     emitEvent: () => {},
     manageConversation: () => unavailable('host.manageConversation'),
     execEnv: () => unavailable('host.execEnv'),
@@ -123,7 +123,7 @@ function doctorBackend(): PluginHostBackend {
   };
 }
 
-/** HelmError -> 可串行化诊断形状。 */
+/** HelmError -> can serial diagnose shape. */
 function toErrorInfo(err: unknown): { code: string; message: string; details?: unknown } {
   if (err instanceof HelmError) {
     return {
@@ -139,14 +139,14 @@ function toErrorInfo(err: unknown): { code: string; message: string; details?: u
 }
 
 /**
- * 对外部插件目录执行静态自检（真实加载 + 真实注册 + 真实 client 编译）。
- * dir 由调用方校验为存在的目录；返回报告对象（插件自身缺陷以 checks 呈现），
- * 只有 doctor 基座故障（临时目录创建失败等）才 reject。
+ * for external plugin directory execute static self inspect (real load + real register + real client compile).
+ * dir by caller validate is store in directory; return report object (plugin itself defect with checks present),
+ * only doctor base seat fault (temp directory failed to create etc.) only then reject.
  *
- * options.buildProvider 由调用方（PluginHost.doctorExternalPlugin / reload 预检
- * / 受管包安装器）透传：与生产同一构建端口。缺失时 TS 转译与 client 编译
- * 相关检查如实失败（unsupported_backend_ts_build / unsupported_client_build），
- * 不静默跳过。
+ * options.buildProvider by caller (PluginHost.doctorExternalPlugin / reload preflight
+ * / managed package install) pass-through: and produce the same build port. missing when TS transpile and client compile
+ * related check such as failed (unsupported_backend_ts_build / unsupported_client_build),
+ * not silently skip.
  */
 export async function doctorPluginDir(
   dir: string,
@@ -160,8 +160,8 @@ export async function doctorPluginDir(
       });
     }
   } catch {
-    // 入口检查负责把不存在/不可读目录转换为结构化 doctor 报告；
-    // 无法注册 TS 根时继续执行，后端检查会如实暴露真实导入错误。
+    // entry check negative duty missing/cannot read directory convert is structure doctor report;
+    // cannot register TS when continue execute, backend check will such as expose real import error.
   }
   try {
     return await doctorPluginDirInternal(dir, options);
@@ -188,12 +188,12 @@ async function doctorPluginDirInternal(
     })();
 
   let entryPath: string | undefined;
-  const entryOk = await push('manifest', '清单与入口解析', async () => {
+  const entryOk = await push('manifest', 'manifest and entry parse', async () => {
     entryPath = await resolvePluginEntry(dir);
     if (entryPath === undefined) {
       throw new HelmError(
         'plugin_entry_missing',
-        `目录 ${dir} 不含插件入口标记（无 plugin.json 且无约定入口文件）`,
+        `directory ${dir} excludes plugin entry mark record (without plugin.json and without convention entry file)`,
         404,
         { dir },
       );
@@ -203,7 +203,7 @@ async function doctorPluginDirInternal(
   let definition: PluginDefinition | undefined;
   if (!entryOk) return report(dir, undefined, checks, undefined);
 
-  const backendOk = await push('backend', '后端模块代际导入', async () => {
+  const backendOk = await push('backend', 'backend module proxy boundary import', async () => {
     const generation = nextPluginGeneration(dir);
     definition = normalizeDefinition(await importPluginDefinition(dir, entryPath!, { generation }), dir);
   });
@@ -212,10 +212,10 @@ async function doctorPluginDirInternal(
   const clientRefs: Array<{ module: string; export: string }> = [];
   const screenIds: string[] = [];
   let summary: PluginSummary | undefined;
-  // 真实注册 + client 编译共用一个 scratch 目录（临时 dataDir 与编译缓存），
-  // doctor 结束后统一清理；不使用宿主生产目录，避免写竞争。
+  // real register + client compile shared use a scratch directory (temporary dataDir and compile cache),
+  // doctor after end unify clean up; does not use host produce directory, avoid write competition.
   const registerOk = await withDoctorScratch(async (scratch) =>
-    push('register', '真实注册断言', async () => {
+    push('register', 'real register assertion', async () => {
       let host: PluginHost | undefined;
       try {
         host = new PluginHost({
@@ -230,7 +230,7 @@ async function doctorPluginDirInternal(
         if (!found) {
           throw new HelmError(
             'invalid_plugin_definition',
-            `注册后未在宿主清单中发现插件 ${definition!.id}（doctor 内部状态不一致）`,
+            `register after not in host manifest in discover plugin ${definition!.id}(doctor internal state inconsistent)`,
             500,
             { dir, pluginId: definition!.id },
           );
@@ -244,20 +244,20 @@ async function doctorPluginDirInternal(
   if (!registerOk) return report(dir, definition.id, checks, undefined);
 
   const clientOk = await withDoctorScratch(async (scratch) =>
-    push('client', '前端模块真实编译与导出校验', async () => {
-      // 无 client 引用的插件无需构建端口（检查空过）；有引用但端口未注入时
-      // 如实失败（与生产注册边界同一拒绝语义），绝不静默跳过或伪造产物。
+    push('client', 'frontend module real compile and export validate', async () => {
+      // without client reference plugin no need to build port (check empty); has reference but port not inject when
+      // such as failed (and produce register boundary the same reject semantics), never static default skip or fabricate artifact.
       if (clientRefs.length > 0 && options.buildProvider === undefined) {
         throw new HelmError(
           'unsupported_client_build',
-          '插件声明 client 引用但宿主未注入插件构建端口（buildProvider）：无法执行 client 模块编译检查',
+          'plugin declaration client reference but host not inject plugin build port (buildProvider): cannot execute client module compile check',
           501,
           { dir },
         );
       }
       if (options.buildProvider === undefined) return;
-      // 与生产 getClientModule 同一受控 npm 映射：清单 clientDependencies 归一
-      // 进 definition.npmDependencies 后在此生效（doctor/运行链同一编译口径）。
+      // and produce getClientModule the same subject to control npm mapping: manifest clientDependencies archive one
+      // enter definition.npmDependencies after in this takes effect (doctor/run chain the same compile opening path).
       const npmRoots = clientNpmRootsOf(definition!.npmDependencies);
       const seen = new Set<string>();
       for (const ref of clientRefs) {
@@ -271,12 +271,12 @@ async function doctorPluginDirInternal(
           cacheDir: scratch,
           npmRoots,
         });
-        // 悬空 export 校验：编译产物的真实具名导出必须包含声明引用的名字，
-        // 否则 UI 声明会在运行期渲染空白（悬空引用）。如实报告，不静默。
+        // dangling export validate: compile artifact real tool name export must contains declaration reference name,
+        // otherwise UI declaration will in run phase render whitespace (dangling reference). such as report, not silently.
         if (!compiled.exports.includes(ref.export)) {
           throw new HelmError(
             'invalid_client_export',
-            `插件 ${definition!.id} 的 client 引用 ${ref.module}#${ref.export} 悬空：模块具名导出为 [${compiled.exports.join(', ') || '无'}]`,
+            `plugin ${definition!.id}  client reference ${ref.module}#${ref.export} dangling: module tool name export is [${compiled.exports.join(', ') || 'without'}]`,
             422,
             { pluginId: definition!.id, module: ref.module, export: ref.export, exports: compiled.exports },
           );
@@ -307,10 +307,10 @@ function report(
 }
 
 /**
- * 包装 definePlugin：在真实 ctx.ui.* 注册方法执行之外，顺带收集 client.tsx 模块
- * 引用（供 client 编译检查）与 ctx.ui.screen 声明的视图 id（供 PluginDoctorReport.
- * screens）。代理只读不改写——注册边界校验仍由真实 PluginHost 的原始方法执行，
- * 这里零近似、零第二套校验：只捕获通过真实 ui.screen 调用的声明，不做静态扫描。
+ * wrap definePlugin: in real ctx.ui.* register method execute of outside, smooth carries collect client.tsx module
+ * reference (supply client compile check) and ctx.ui.screen declaration view id(supply PluginDoctorReport.
+ * screens). proxy only read do not change write - - register boundary validate still by real PluginHost original method execute,
+ * this in zero approximate, zero second set validate: only catch via real ui.screen invoke declaration, does not static scan.
  */
 function withClientCapture(
   definition: PluginDefinition,
@@ -339,8 +339,8 @@ function withClientCapture(
                 export: (client as { export: string }).export,
               });
             }
-            // 只记录通过真实 ui.screen 调用且最终注册成功（原始方法未抛错）的视图 id；
-            // spec.id 形状校验由原始 registerUi 执行，这里仅事后记录，不预判。
+            // only record via real ui.screen invoke and eventually register succeeded (original method not throws) view id;
+            // spec.id shape validate by original registerUi execute, this in only matter after record, do not pre- judge.
             if (prop === 'screen' && spec !== undefined && typeof (spec as { id?: unknown }).id === 'string') {
               screenIds.push((spec as { id: string }).id);
             }
@@ -354,9 +354,9 @@ function withClientCapture(
 }
 
 /**
- * doctor 全链专用临时目录：真实注册的临时 dataDir 与 client 编译缓存共用一个
- * scratch 目录，doctor 返回前统一清理（不使用宿主缓存目录：避免与生产缓存
- * 目录的写竞争；缓存 hash 语义一致，不影响生产编译正确性）。
+ * doctor all chain dedicated use temp directory: real register temporary dataDir and client compile cache shared use a
+ * scratch directory,doctor return before unify clean up (does not use host cache directory: avoid and produce cache
+ * directory write competition; cache hash semantics consistent, does not affect produce compile correct).
  */
 async function withDoctorScratch<T>(fn: (scratch: string) => Promise<T>): Promise<T> {
   const scratch = mkdtempSync(join(tmpdir(), 'helm-doctor-'));

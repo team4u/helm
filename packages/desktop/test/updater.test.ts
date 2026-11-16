@@ -1,8 +1,8 @@
 /**
- * npm payload 更新器：假 registry / sha512 完整性 / stage-activate-reject 生命周期 /
- * pending与previous状态 / 失败回滚 / 损坏 manifest（含 registry meta 不一致）/ 安装器注入 /
- * fail-closed 并发锁 / 不可变 uuid release / containment / Windows 路径形态拒绝 /
- * SemVer 回退不误报 / 状态文件契约 全覆盖。
+ * npm payload update: false registry / sha512 complete / stage-activate-reject lifecycle /
+ * pendingandpreviousstate / failed rollback / corrupt manifest(contains registry meta inconsistent)/ install inject /
+ * fail-closed concurrency lock / cannot change uuid release / containment / Windows path form reject /
+ * SemVer fall back do not mistakenly report / state file contract all override.
  */
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
@@ -65,7 +65,7 @@ async function rejectsWith(
   } catch (error) {
     caught = error;
   }
-  assert.ok(caught instanceof DesktopError, `期望 DesktopError（${code}），实际: ${String(caught)}`);
+  assert.ok(caught instanceof DesktopError, `expectation DesktopError(${code}), actual: ${String(caught)}`);
   assert.equal(caught.code, code);
   check?.(caught);
   return caught;
@@ -79,9 +79,9 @@ function writeJson(file: string, value: unknown): void {
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-// ---- 安装主链路：stage → pending → activate → current / previous ----
+// ---- install main link:stage → pending → activate → current / previous ----
 
-test('安装主链路：stage 只写 pending；activate 写 current（首次无 previous）；重复 stage 幂等', { timeout: 60_000 }, async () => {
+test('install main link:stage only write pending;activate write current(first time without previous); duplicate stage idempotent', { timeout: 60_000 }, async () => {
   await withContext(async (ctx) => {
     ctx.registry.publish('1.0.0', buildFixtureTarball({ version: '1.0.0' }));
     const installer = new FakeNpmInstaller();
@@ -100,13 +100,13 @@ test('安装主链路：stage 只写 pending；activate 写 current（首次无 
     assert.deepEqual(info.entryArgs, []);
     assert.ok(info.releaseDir !== undefined && existsSync(info.releaseDir));
     assert.ok(info.entryPath !== undefined && existsSync(info.entryPath));
-    assert.ok(info.entryPath!.endsWith(path.join('hub', 'dist', 'main.js')), '入口必须是 manifest.entries.hub 而非 start.mjs');
-    assert.ok(existsSync(path.join(info.releaseDir!, 'node_modules', FIXTURE_DEP)), '依赖须安装在晋升后的 release 目录内');
+    assert.ok(info.entryPath!.endsWith(path.join('hub', 'dist', 'main.js')), 'entry must be manifest.entries.hub while non- start.mjs');
+    assert.ok(existsSync(path.join(info.releaseDir!, 'node_modules', FIXTURE_DEP)), 'dependency must install in promote rise after release directory inside');
     assert.equal(installer.calls.length, 1);
-    // release 目录是不可变 uuid 目录：releases/<name>/<version>/<uuid>
+    // release directory is cannot change uuid directory:releases/<name>/<version>/<uuid>
     assert.match(info.releaseDir!.split(path.sep).join('/'), new RegExp(`releases/${FIXTURE_PACKAGE}/1\\.0\\.0/[0-9a-f]{16}$`));
 
-    // stage 只写 pending，不写 current。
+    // stage only write pending, do not write current.
     assert.ok(existsSync(path.join(payloadRoot, 'pending.json')));
     assert.ok(!existsSync(path.join(payloadRoot, 'current.json')));
     const pending = updater.resolvePending();
@@ -114,7 +114,7 @@ test('安装主链路：stage 只写 pending；activate 写 current（首次无 
       { name: pending?.name, version: pending?.version, releaseDir: pending?.releaseDir, entryPath: pending?.entryPath },
       { name: info.name, version: info.version, releaseDir: info.releaseDir, entryPath: info.entryPath },
     );
-    assert.equal(updater.resolveCurrent(), null, 'stage 后 current 仍为空');
+    assert.equal(updater.resolveCurrent(), null, 'stage after current still is empty');
     assert.equal(updater.resolvePrevious(), null);
 
     await updater.activate(info);
@@ -124,38 +124,38 @@ test('安装主链路：stage 只写 pending；activate 写 current（首次无 
       { name: info.name, version: info.version, entryPath: info.entryPath },
     );
     assert.ok(existsSync(path.join(payloadRoot, 'current.json')));
-    assert.equal(updater.resolvePending(), null, 'activate 后同一 pending 清除');
-    assert.equal(updater.resolvePrevious(), null, '首次激活无 previous');
+    assert.equal(updater.resolvePending(), null, 'activate after the same pending clear');
+    assert.equal(updater.resolvePrevious(), null, 'first time activate without previous');
 
-    // check 幂等：up_to_date。
+    // check idempotent:up_to_date.
     const again = await updater.check();
     assert.equal(again.updateAvailable, false);
     assert.equal(again.reason, 'up_to_date');
 
-    // 同版本重复 stage：命中 current 快路径，不重复下载/安装，不毁 current。
+    // same version duplicate stage: hit current fast path, does not repeat download/install, do not destroy current.
     const restage = await updater.stage({ name: FIXTURE_PACKAGE, version: '1.0.0' });
     assert.equal(restage.version, '1.0.0');
     assert.equal(installer.calls.length, 1);
-    assert.equal(restage.releaseDir, current!.releaseDir, 'current 快路径复用既有 release 目录');
-    assert.ok(updater.resolvePending() !== null, '重复 stage 重新登记 pending 供决议');
+    assert.equal(restage.releaseDir, current!.releaseDir, 'current fast path re- use since has release directory');
+    assert.ok(updater.resolvePending() !== null, 'duplicate stage re- register pending supply decide protocol');
     await updater.activate(restage);
-    assert.equal(updater.resolvePrevious(), null, '同 releaseDir 再次激活不产生 previous');
+    assert.equal(updater.resolvePrevious(), null, 'same releaseDir again activate produces no previous');
     assert.equal(updater.resolveCurrent()!.version, '1.0.0');
   });
 });
 
-// ---- sha512 完整性 ----
+// ---- sha512 complete ----
 
-test('sha512 完整性：篡改 tarball → tarball_integrity_mismatch，不落 release、不写 current/pending、记入 blocked', { timeout: 60_000 }, async () => {
+test('sha512 complete: tamper tarball → tarball_integrity_mismatch, do not release, do not write current/pending, record blocked', { timeout: 60_000 }, async () => {
   await withContext(async (ctx) => {
     const tarball = buildFixtureTarball({ version: '1.0.0' });
     ctx.registry.publish('1.0.0', tarball, { integrity: sha512Integrity(Buffer.from('tampered')) });
     const updater = makeUpdater(ctx);
 
     await rejectsWith(updater.stage({ name: FIXTURE_PACKAGE, version: 'latest' }), 'tarball_integrity_mismatch');
-    assert.ok(!existsSync(path.join(ctx.dataDir, 'payload', 'releases')), '不得产出 release 目录');
-    assert.ok(!existsSync(path.join(ctx.dataDir, 'payload', 'current.json')), '不得写 current.json');
-    assert.ok(!existsSync(path.join(ctx.dataDir, 'payload', 'pending.json')), '不得写 pending.json');
+    assert.ok(!existsSync(path.join(ctx.dataDir, 'payload', 'releases')), 'must not produce out release directory');
+    assert.ok(!existsSync(path.join(ctx.dataDir, 'payload', 'current.json')), 'must not write current.json');
+    assert.ok(!existsSync(path.join(ctx.dataDir, 'payload', 'pending.json')), 'must not write pending.json');
     const status = await updater.check();
     assert.equal(status.updateAvailable, false);
     assert.equal(status.reason, 'latest_blocked');
@@ -163,9 +163,9 @@ test('sha512 完整性：篡改 tarball → tarball_integrity_mismatch，不落 
   });
 });
 
-// ---- 失败回滚：当前版本不被破坏 ----
+// ---- failed rollback: when before version do not by break ----
 
-test('失败回滚：新版本 stage 验收失败 → current/入口保持旧版本，blocked 记录，staging 清空', { timeout: 60_000 }, async () => {
+test('failed rollback: new version stage verify failed → current/entry keep old version,blocked record,staging empty', { timeout: 60_000 }, async () => {
   await withContext(async (ctx) => {
     ctx.registry.publish('1.0.0', buildFixtureTarball({ version: '1.0.0' }));
     const updater = makeUpdater(ctx);
@@ -180,42 +180,42 @@ test('失败回滚：新版本 stage 验收失败 → current/入口保持旧版
 
     const error = await rejectsWith(updater.stage({ name: FIXTURE_PACKAGE, version: 'latest' }), 'payload_check_failed', (e) => {
       const tail = (e.details as { stderrTail?: string[] }).stderrTail?.join('\n') ?? '';
-      assert.ok(tail.includes('checksum 不一致'), `诊断须含 fixture stderr 尾部，实际: ${tail}`);
+      assert.ok(tail.includes('checksum inconsistent'), `diagnose must contains fixture stderr tail part, actual: ${tail}`);
     });
-    assert.equal((error.details as { releaseDir?: string }).releaseDir?.includes('staging'), true, '失败发生在 staging 区');
+    assert.equal((error.details as { releaseDir?: string }).releaseDir?.includes('staging'), true, 'failed occur in staging zone');
 
     const current = updater.resolveCurrent();
-    assert.equal(current?.version, '1.0.0', 'current 必须仍是 1.0.0');
-    assert.ok(existsSync(current!.entryPath!), '旧入口文件必须完好');
-    assert.equal(current!.releaseDir, goodRelease, '旧 release 目录不被移动/删除');
+    assert.equal(current?.version, '1.0.0', 'current must still is 1.0.0');
+    assert.ok(existsSync(current!.entryPath!), 'old entry file must completely well');
+    assert.equal(current!.releaseDir, goodRelease, 'old release directory do not by move/delete');
     const versionDir = path.join(ctx.dataDir, 'payload', 'releases', FIXTURE_PACKAGE, '2.0.0');
-    assert.ok(!existsSync(versionDir), '失败版本不得晋升');
+    assert.ok(!existsSync(versionDir), 'failed version must not promote rise');
     const staging = path.join(ctx.dataDir, 'payload', 'staging');
-    assert.ok(!existsSync(staging) || readdirSync(staging).length === 0, 'staging 必须清理');
-    assert.equal(updater.resolvePending(), null, '失败后无 pending');
+    assert.ok(!existsSync(staging) || readdirSync(staging).length === 0, 'staging must clean up');
+    assert.equal(updater.resolvePending(), null, 'failed after without pending');
 
     const blockedStatus = await updater.check();
     assert.equal(blockedStatus.updateAvailable, false);
     assert.equal(blockedStatus.reason, 'latest_blocked');
 
-    // 后续健康版本仍可安装；激活后 previous 保存 1.0.0 baseline；旧 blocked 记录保留。
+    // after continue health version still can install; activate after previous save 1.0.0 baseline; old blocked record keep.
     ctx.registry.publish('2.0.1', buildFixtureTarball({ version: '2.0.1' }));
     const repaired = await updater.stage({ name: FIXTURE_PACKAGE, version: 'latest' });
     assert.equal(repaired.version, '2.0.1');
     await updater.activate(repaired);
     assert.equal(updater.resolveCurrent()?.version, '2.0.1');
     const previous = updater.resolvePrevious();
-    assert.equal(previous?.version, '1.0.0', 'activate 须保存旧 baseline');
+    assert.equal(previous?.version, '1.0.0', 'activate must save old baseline');
     assert.equal(previous?.releaseDir, goodRelease);
     const blocked = readJson(path.join(ctx.dataDir, 'payload', 'blocked.json')) as { entries: Record<string, unknown> };
-    assert.ok(`${FIXTURE_PACKAGE}@2.0.0` in blocked.entries, '2.0.0 的 blocked 记录保留');
-    assert.ok(!(`${FIXTURE_PACKAGE}@2.0.1` in blocked.entries), '安装成功须解除该版本 blocked');
+    assert.ok(`${FIXTURE_PACKAGE}@2.0.0` in blocked.entries, '2.0.0  blocked record keep');
+    assert.ok(!(`${FIXTURE_PACKAGE}@2.0.1` in blocked.entries), 'install succeeded must solve except the version blocked');
   });
 });
 
-// ---- 损坏 manifest（含 registry meta 与 manifest name/version 不一致） ----
+// ---- corrupt manifest(contains registry meta and manifest name/version inconsistent) ----
 
-test('损坏 manifest：非法 JSON / formatVersion / kernel 缺失 / kernel 指向 launcher / manifest 与 registry meta 的 name/version 不一致 全部显式拒绝', { timeout: 60_000 }, async () => {
+test('corrupt manifest: illegal JSON / formatVersion / kernel missing / kernel points to launcher / manifest and registry meta  name/version inconsistent all explicit reject', { timeout: 60_000 }, async () => {
   await withContext(async (ctx) => {
     const cases: Array<{ version: string; corrupt: NonNullable<Parameters<typeof buildFixtureTarball>[0]['corrupt']>; expectCode: string }> = [
       { version: '1.1.0', corrupt: 'manifest-json', expectCode: 'payload_manifest_invalid' },
@@ -236,20 +236,20 @@ test('损坏 manifest：非法 JSON / formatVersion / kernel 缺失 / kernel 指
       if (item.corrupt === 'manifest-name' || item.corrupt === 'manifest-version') {
         const problems = (error.details as { problems?: string[] }).problems ?? [];
         assert.ok(
-          problems.some((p) => p.includes('registry 元数据不一致')),
-          `meta 一致性问题须显式列出，实际: ${problems.join('; ')}`,
+          problems.some((p) => p.includes('registry metadata inconsistent')),
+          `meta consistency issue must explicit column out, actual: ${problems.join('; ')}`,
         );
       }
     }
-    // meta 不一致属制品缺陷：重装同版本必须被阻断且指向原始错误码。
+    // meta inconsistent belong system product defect: heavy install same version must by block assert and points to original error code.
     const mismatchCase = await rejectsWith(updater.stage({ name: FIXTURE_PACKAGE, version: '1.5.0' }), 'updater_version_blocked');
     assert.equal((mismatchCase.details as { blocked?: { code?: string } }).blocked?.code, 'payload_manifest_invalid');
   });
 });
 
-// ---- 依赖与安装器注入 ----
+// ---- dependency and install inject ----
 
-test('依赖缺失且无安装器 → payload_deps_missing（不记 blocked）；注入安装器后成功', { timeout: 60_000 }, async () => {
+test('dependency missing and without install → payload_deps_missing(do not record blocked); inject install after succeeded', { timeout: 60_000 }, async () => {
   await withContext(async (ctx) => {
     ctx.registry.publish('1.0.0', buildFixtureTarball({ version: '1.0.0' }));
     const noInstaller = new NpmPayloadUpdater({
@@ -259,12 +259,12 @@ test('依赖缺失且无安装器 → payload_deps_missing（不记 blocked）�
     });
     await rejectsWith(noInstaller.stage({ name: FIXTURE_PACKAGE, version: 'latest' }), 'payload_deps_missing', (e) => {
       const tail = (e.details as { stderrTail?: string[] }).stderrTail?.join('\n') ?? '';
-      assert.ok(tail.includes(FIXTURE_DEP), `诊断须列出缺失依赖，实际: ${tail}`);
+      assert.ok(tail.includes(FIXTURE_DEP), `diagnose must column out missing dependency, actual: ${tail}`);
     });
     assert.ok(!existsSync(path.join(ctx.dataDir, 'payload', 'current.json')));
     assert.ok(!existsSync(path.join(ctx.dataDir, 'payload', 'pending.json')));
     const status = await noInstaller.check();
-    assert.equal(status.updateAvailable, true, '依赖缺失属环境配置，不应阻断版本');
+    assert.equal(status.updateAvailable, true, 'dependency missing belong environment config, must not block assert version');
 
     const withInstaller = makeUpdater(ctx);
     const info = await withInstaller.stage({ name: FIXTURE_PACKAGE, version: 'latest' });
@@ -272,18 +272,18 @@ test('依赖缺失且无安装器 → payload_deps_missing（不记 blocked）�
   });
 });
 
-test('vendored payload（tarball 自带 node_modules）→ 不调用安装器直接通过', { timeout: 60_000 }, async () => {
+test('vendored payload(tarball self carries node_modules)→ do not invoke install directly via', { timeout: 60_000 }, async () => {
   await withContext(async (ctx) => {
     ctx.registry.publish('1.0.0', buildFixtureTarball({ version: '1.0.0', vendoredDeps: [FIXTURE_DEP] }));
     const installer = new FakeNpmInstaller();
     const updater = makeUpdater(ctx, { npmInstaller: installer });
     const info = await updater.stage({ name: FIXTURE_PACKAGE, version: 'latest' });
     assert.equal(info.version, '1.0.0');
-    assert.equal(installer.calls.length, 0, 'vendored 场景不得调用安装器');
+    assert.equal(installer.calls.length, 0, 'vendored scenario must not invoke install');
   });
 });
 
-test('注入的安装器失败 → npm_install_failed 原样上抛，current/pending 不落盘', { timeout: 60_000 }, async () => {
+test('inject install failed → npm_install_failed original on throw,current/pending do not', { timeout: 60_000 }, async () => {
   await withContext(async (ctx) => {
     ctx.registry.publish('1.0.0', buildFixtureTarball({ version: '1.0.0' }));
     const failing: NpmInstaller = {
@@ -299,9 +299,9 @@ test('注入的安装器失败 → npm_install_failed 原样上抛，current/pen
   });
 });
 
-// ---- stage / activate / reject 生命周期 ----
+// ---- stage / activate / reject lifecycle ----
 
-test('reject：记 blocked、保持 current、清除同一 pending、不修改任何 release 目录', { timeout: 60_000 }, async () => {
+test('reject: record blocked, keep current, clear the same pending, do not modify any release directory', { timeout: 60_000 }, async () => {
   await withContext(async (ctx) => {
     ctx.registry.publish('1.0.0', buildFixtureTarball({ version: '1.0.0' }));
     ctx.registry.publish('2.0.0', buildFixtureTarball({ version: '2.0.0' }));
@@ -312,33 +312,33 @@ test('reject：记 blocked、保持 current、清除同一 pending、不修改�
     await updater.activate(baseline);
 
     const staged = await updater.stage({ name: FIXTURE_PACKAGE, version: '2.0.0' });
-    assert.equal(updater.resolveCurrent()?.version, '1.0.0', 'stage 新版本不动 current');
+    assert.equal(updater.resolveCurrent()?.version, '1.0.0', 'stage new version do not motion current');
 
-    await updater.reject(staged, new DesktopError('payload_check_failed', '启动健康检查失败', { stderrTail: ['ECONNREFUSED 127.0.0.1:3202'] }));
-    assert.equal(updater.resolvePending(), null, 'reject 后 pending 清除');
-    assert.equal(updater.resolveCurrent()?.version, '1.0.0', 'reject 保持 current');
-    assert.ok(existsSync(staged.releaseDir!), 'reject 不删除被拒版本的 release 目录');
-    assert.ok(existsSync(baseline.releaseDir!), 'reject 不动 baseline release 目录');
+    await updater.reject(staged, new DesktopError('payload_check_failed', 'start health check failed', { stderrTail: ['ECONNREFUSED 127.0.0.1:3202'] }));
+    assert.equal(updater.resolvePending(), null, 'reject after pending clear');
+    assert.equal(updater.resolveCurrent()?.version, '1.0.0', 'reject keep current');
+    assert.ok(existsSync(staged.releaseDir!), 'reject do not delete by refuse version release directory');
+    assert.ok(existsSync(baseline.releaseDir!), 'reject do not motion baseline release directory');
     const blocked = readJson(path.join(payloadRoot, 'blocked.json')) as { entries: Record<string, { code: string; stderrTail?: string[] }> };
     assert.equal(blocked.entries[`${FIXTURE_PACKAGE}@2.0.0`]?.code, 'payload_check_failed');
     assert.deepEqual(blocked.entries[`${FIXTURE_PACKAGE}@2.0.0`]?.stderrTail, ['ECONNREFUSED 127.0.0.1:3202']);
 
-    // 非 DesktopError 也如实记录（code 统一 payload_rejected）。
+    // non- DesktopError also such as record (code unify payload_rejected).
     ctx.registry.publish('2.1.0', buildFixtureTarball({ version: '2.1.0' }));
     const staged2 = await updater.stage({ name: FIXTURE_PACKAGE, version: '2.1.0' });
-    await updater.reject(staged2, new Error('窗口启动即崩溃'));
+    await updater.reject(staged2, new Error('window start i.e. crash'));
     const blocked2 = readJson(path.join(payloadRoot, 'blocked.json')) as { entries: Record<string, { code: string }> };
     assert.equal(blocked2.entries[`${FIXTURE_PACKAGE}@2.1.0`]?.code, 'payload_rejected');
 
-    // 被拒版本再次 stage 必须被阻断。
+    // by refuse version again stage must by block assert.
     await rejectsWith(updater.stage({ name: FIXTURE_PACKAGE, version: '2.0.0' }), 'updater_version_blocked');
-    // reject 入参非法显式拒绝。
+    // reject reference illegal explicit reject.
     await rejectsWith(updater.reject({ name: 'other', version: '1.0.0' }, new Error('x')), 'payload_reject_invalid');
     await rejectsWith(updater.reject({ name: FIXTURE_PACKAGE, version: 'not-semver' }, new Error('x')), 'payload_reject_invalid');
   });
 });
 
-test('activate：入参被篡改（逃逸/跨包/入口不一致）→ payload_activate_invalid，current 不变', { timeout: 60_000 }, async () => {
+test('activate: reference by tamper (escape/across package/entry inconsistent)→ payload_activate_invalid,current do not change', { timeout: 60_000 }, async () => {
   await withContext(async (ctx) => {
     ctx.registry.publish('1.0.0', buildFixtureTarball({ version: '1.0.0' }));
     const updater = makeUpdater(ctx);
@@ -353,19 +353,19 @@ test('activate：入参被篡改（逃逸/跨包/入口不一致）→ payload_a
     const wrongEntry: PayloadInfo = { ...info, entryPath: path.join(info.releaseDir!, 'start.mjs') };
     await rejectsWith(updater.activate(wrongEntry), 'payload_activate_invalid', (e) => {
       const problems = (e.details as { problems?: string[] }).problems ?? [];
-      assert.ok(problems.some((p) => p.includes('entries.hub 不一致')), `入口不一致须显式列出，实际: ${problems.join('; ')}`);
+      assert.ok(problems.some((p) => p.includes('entries.hub inconsistent')), `entry inconsistent must explicit column out, actual: ${problems.join('; ')}`);
     });
-    assert.equal(updater.resolveCurrent(), null, '激活失败不写 current');
-    assert.ok(updater.resolvePending() !== null, '激活失败保留 pending 待正确决议');
+    assert.equal(updater.resolveCurrent(), null, 'activate failed do not write current');
+    assert.ok(updater.resolvePending() !== null, 'activate failed keep pending await correct decide protocol');
 
     await updater.activate(info);
     assert.equal(updater.resolveCurrent()?.version, '1.0.0');
   });
 });
 
-// ---- 原子晋升失败：旧 current 与版本目录保持 ----
+// ---- atomic promote rise failed: old current and version directory keep ----
 
-test('原子晋升失败：版本目录被占位文件阻挡 → payload_promote_failed，current/既有版本目录保持', { timeout: 60_000 }, async () => {
+test('atomic promote rise failed: version directory by occupy file block → payload_promote_failed,current/since has version directory keep', { timeout: 60_000 }, async () => {
   await withContext(async (ctx) => {
     ctx.registry.publish('1.0.0', buildFixtureTarball({ version: '1.0.0' }));
     const updater = makeUpdater(ctx);
@@ -373,25 +373,25 @@ test('原子晋升失败：版本目录被占位文件阻挡 → payload_promote
     await updater.activate(baseline);
 
     ctx.registry.publish('2.0.0', buildFixtureTarball({ version: '2.0.0' }));
-    // 用占位文件阻挡 2.0.0 版本目录创建（mkdirSync EEXIST）。
+    // use occupy file block 2.0.0 version directory create (mkdirSync EEXIST).
     const versionDir = path.join(ctx.dataDir, 'payload', 'releases', FIXTURE_PACKAGE, '2.0.0');
     mkdirSync(path.dirname(versionDir), { recursive: true });
     writeFileSync(versionDir, 'blocked-by-placeholder');
 
     await rejectsWith(updater.stage({ name: FIXTURE_PACKAGE, version: '2.0.0' }), 'payload_promote_failed');
     const current = updater.resolveCurrent();
-    assert.equal(current?.version, '1.0.0', 'current 保持旧版本');
-    assert.ok(existsSync(current!.entryPath!), '旧入口完好');
-    assert.ok(existsSync(baseline.releaseDir!), '旧 release 目录不被破坏');
-    assert.equal(updater.resolvePending(), null, '晋升失败无 pending');
+    assert.equal(current?.version, '1.0.0', 'current keep old version');
+    assert.ok(existsSync(current!.entryPath!), 'old entry completely well');
+    assert.ok(existsSync(baseline.releaseDir!), 'old release directory do not by break');
+    assert.equal(updater.resolvePending(), null, 'promote rise failed without pending');
     const staging = path.join(ctx.dataDir, 'payload', 'staging');
-    assert.ok(!existsSync(staging) || readdirSync(staging).length === 0, 'staging 必须清理');
+    assert.ok(!existsSync(staging) || readdirSync(staging).length === 0, 'staging must clean up');
   });
 });
 
-// ---- 并发锁（fail-closed：绝不接管） ----
+// ---- concurrency lock (fail-closed: never take over) ----
 
-test('并发锁：同进程并发 stage 串行化，快路径收敛为单次下载/安装', { timeout: 60_000 }, async () => {
+test('concurrency lock: same process concurrency stage serial, fast path converge is single time download/install', { timeout: 60_000 }, async () => {
   await withContext(async (ctx) => {
     ctx.registry.publish('1.0.0', buildFixtureTarball({ version: '1.0.0' }));
     const installer = new FakeNpmInstaller();
@@ -401,18 +401,18 @@ test('并发锁：同进程并发 stage 串行化，快路径收敛为单次下�
       updater.stage({ name: FIXTURE_PACKAGE, version: 'latest' }),
     ]);
     assert.equal(a.releaseDir, b.releaseDir);
-    assert.equal(installer.calls.length, 1, '第二个并发请求必须命中快路径而非重复安装');
+    assert.equal(installer.calls.length, 1, 'second concurrency request must hit fast path while non- duplicate install');
   });
 });
 
-test('锁 fail-closed：活锁（真实存活进程持锁）有界等待后显式诊断，绝不偷锁', { timeout: 60_000 }, async () => {
+test('lock fail-closed: lock (real store process hold lock) has boundary wait for after explicit diagnose, never stealthily lock', { timeout: 60_000 }, async () => {
   await withContext(async (ctx) => {
     ctx.registry.publish('1.0.0', buildFixtureTarball({ version: '1.0.0' }));
     const payloadRoot = path.join(ctx.dataDir, 'payload');
     mkdirSync(payloadRoot, { recursive: true });
     const lockPath = path.join(payloadRoot, '.lock');
 
-    // 真实存活进程持有锁 8 秒（等待其真实落盘后再发起安装，避免测试竞态）。
+    // real store process hold has lock 8 second (wait for its real after again start install, avoid test race).
     const holder = spawn(process.execPath, [
       '-e',
       `require('fs').writeFileSync(${JSON.stringify(lockPath)}, JSON.stringify({ pid: process.pid, at: Date.now() })); setTimeout(() => {}, 8000);`,
@@ -420,28 +420,28 @@ test('锁 fail-closed：活锁（真实存活进程持锁）有界等待后显�
     try {
       const holderReady = Date.now() + 5_000;
       while (!existsSync(lockPath)) {
-        if (Date.now() > holderReady) throw new Error('活锁持有者未能落盘锁文件');
+        if (Date.now() > holderReady) throw new Error('lock holder not can lock file');
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
       const updater = makeUpdater(ctx, { lockTimeoutMs: 500 });
       const error = await rejectsWith(updater.stage({ name: FIXTURE_PACKAGE, version: 'latest' }), 'updater_lock_timeout', (e) => {
-        assert.match(e.message, /fail-closed 不自动接管/);
-        assert.match(e.message, /手动删除/);
+        assert.match(e.message, /fail-closed do not automatically take over/);
+        assert.match(e.message, /manually delete/);
       });
-      assert.equal((error.details as { holder?: { pid?: number } }).holder?.pid, holder.pid, '诊断须含真实持有者 pid');
-      assert.ok(existsSync(lockPath), '绝不删除他人持有的锁');
+      assert.equal((error.details as { holder?: { pid?: number } }).holder?.pid, holder.pid, 'diagnose must contains real holder pid');
+      assert.ok(existsSync(lockPath), 'never delete other person hold has lock');
     } finally {
       holder.kill('SIGKILL');
       await new Promise((resolve) => holder.once('close', resolve));
     }
 
-    // 持有者退出但未清理（崩溃遗留）:同样不接管,人工移除后恢复。
+    // holder exit but not clean up (crash legacy):same do not take over,human remove after restore.
     writeFileSync(lockPath, JSON.stringify({ pid: holder.pid, at: Date.now() }));
     const deadLockUpdater = makeUpdater(ctx, { lockTimeoutMs: 300 });
     await rejectsWith(deadLockUpdater.stage({ name: FIXTURE_PACKAGE, version: 'latest' }), 'updater_lock_timeout', (e) => {
       assert.match(e.message, /fail-closed/);
     });
-    assert.ok(existsSync(lockPath), '死 pid 崩溃遗留锁也不自动删除');
+    assert.ok(existsSync(lockPath), 'die pid crash legacy lock also do not automatically delete');
 
     rmSync(lockPath, { force: true });
     const info = await deadLockUpdater.stage({ name: FIXTURE_PACKAGE, version: 'latest' });
@@ -449,7 +449,7 @@ test('锁 fail-closed：活锁（真实存活进程持锁）有界等待后显�
   });
 });
 
-test('锁 fail-closed：内容非法的锁文件同样只诊断不删除', { timeout: 60_000 }, async () => {
+test('lock fail-closed: content illegal lock file same only diagnose do not delete', { timeout: 60_000 }, async () => {
   await withContext(async (ctx) => {
     ctx.registry.publish('1.0.0', buildFixtureTarball({ version: '1.0.0' }));
     const payloadRoot = path.join(ctx.dataDir, 'payload');
@@ -458,7 +458,7 @@ test('锁 fail-closed：内容非法的锁文件同样只诊断不删除', { tim
     writeFileSync(lockPath, 'not-json-at-all');
     const updater = makeUpdater(ctx, { lockTimeoutMs: 300 });
     await rejectsWith(updater.stage({ name: FIXTURE_PACKAGE, version: 'latest' }), 'updater_lock_timeout');
-    assert.equal(readFileSync(lockPath, 'utf8'), 'not-json-at-all', '非法内容锁文件保持原样待人工处置');
+    assert.equal(readFileSync(lockPath, 'utf8'), 'not-json-at-all', 'illegal content lock file keep original await human where placement');
     rmSync(lockPath, { force: true });
     const info = await updater.stage({ name: FIXTURE_PACKAGE, version: 'latest' });
     assert.equal(info.version, '1.0.0');
@@ -467,7 +467,7 @@ test('锁 fail-closed：内容非法的锁文件同样只诊断不删除', { tim
 
 // ---- tar containment ----
 
-test('tar containment：绝对路径 / .. 穿越 / 非 package 前缀条目全部显式拒绝', { timeout: 60_000 }, async () => {
+test('tar containment: absolute path / .. through exceeds / non- package prefix item all explicit reject', { timeout: 60_000 }, async () => {
   await withContext(async (ctx) => {
     const attacks: Array<{ version: string; entry: TarEntry; code: string }> = [
       { version: '1.1.0', entry: { name: 'package/../../escape.txt', content: 'x' }, code: 'tar_entry_escape' },
@@ -487,16 +487,16 @@ test('tar containment：绝对路径 / .. 穿越 / 非 package 前缀条目全�
     for (const attack of attacks) {
       await rejectsWith(updater.stage({ name: FIXTURE_PACKAGE, version: attack.version }), attack.code);
     }
-    // 攻击条目绝无可能写到 dataDir 之外（同批合法条目仅在 staging 内，且已清理）。
+    // attack item absolute without may write to dataDir of outside (same batch legal item only in staging inside, and already clean up).
     assert.ok(!existsSync(path.join(ctx.dataDir, 'escape.txt')));
     assert.ok(!existsSync(path.join(ctx.dataDir, '..', 'outside.txt')));
     assert.ok(!existsSync('/abs'));
   });
 });
 
-// ---- registry 元数据边界 ----
+// ---- registry metadata boundary ----
 
-test('registry 元数据：sha1 integrity / 非 SemVer 版本 / 未知版本 / 元数据超时 显式拒绝', { timeout: 60_000 }, async () => {
+test('registry metadata:sha1 integrity / non- SemVer version / unknown version / metadata timeout explicit reject', { timeout: 60_000 }, async () => {
   await withContext(async (ctx) => {
     const tarball = buildFixtureTarball({ version: '1.0.0' });
     ctx.registry.publish('1.0.0', tarball, { integrity: 'sha1-abcdef' });
@@ -505,7 +505,7 @@ test('registry 元数据：sha1 integrity / 非 SemVer 版本 / 未知版本 / �
       assert.ok(((e.details as { problems?: string[] }).problems ?? []).some((p) => p.includes('sha512')));
     });
     await rejectsWith(updater.stage({ name: FIXTURE_PACKAGE, version: '9.9.9' }), 'registry_metadata_invalid');
-    // 非 SemVer 版本号（缺 patch 段）显式拒绝。
+    // non- SemVer version number (missing patch segment) explicit reject.
     ctx.registry.publish('1.0', buildFixtureTarball({ version: '1.0' }));
     await rejectsWith(updater.check(), 'registry_metadata_invalid', (e) => {
       assert.ok(((e.details as { problems?: string[] }).problems ?? []).some((p) => p.includes('SemVer')));
@@ -518,31 +518,31 @@ test('registry 元数据：sha1 integrity / 非 SemVer 版本 / 未知版本 / �
   });
 });
 
-// ---- check 更新判定（SemVer：latest 回退不误报；锁定版本按用户意图） ----
+// ---- check update decide (SemVer:latest fall back do not mistakenly report; lock version by user intent) ----
 
-test('check 更新判定：跟踪 latest 时 registry 回退不误报 up_to_date 之外的状态；prerelease 优先级正确', { timeout: 60_000 }, async () => {
+test('check update decide: trace latest when registry fall back do not mistakenly report up_to_date of outside state;prerelease priority correct', { timeout: 60_000 }, async () => {
   await withContext(async (ctx) => {
     ctx.registry.publish('1.0.0', buildFixtureTarball({ version: '1.0.0' }));
     const updater = makeUpdater(ctx);
     const info = await updater.stage({ name: FIXTURE_PACKAGE, version: 'latest' });
     await updater.activate(info);
 
-    // latest 回退到更低版本：不是更新。
+    // latest fall back to more low version: is not update.
     ctx.registry.publish('0.9.0', buildFixtureTarball({ version: '0.9.0' }));
     let status = await updater.check();
     assert.equal(status.updateAvailable, false);
     assert.equal(status.reason, 'up_to_date');
     assert.equal(status.latest?.version, '0.9.0');
 
-    // 同版本：不是更新。
+    // same version: is not update.
     ctx.registry.publish('1.0.0', buildFixtureTarball({ version: '1.0.0' }));
     status = await updater.check();
     assert.equal(status.updateAvailable, false);
 
-    // 更高版本 prerelease < 同号 release：1.1.0 大于 1.1.0-rc.1。
+    // more high version prerelease < same number release:1.1.0 greater than 1.1.0-rc.1.
     ctx.registry.publish('1.1.0-rc.1', buildFixtureTarball({ version: '1.1.0-rc.1' }));
     status = await updater.check();
-    assert.equal(status.updateAvailable, true, 'prerelease 高于 current 视为更新');
+    assert.equal(status.updateAvailable, true, 'prerelease high at current treated as update');
     const rcInfo = await updater.stage({ name: FIXTURE_PACKAGE, version: '1.1.0-rc.1' });
     await updater.activate(rcInfo);
     ctx.registry.publish('1.1.0-rc.2', buildFixtureTarball({ version: '1.1.0-rc.2' }));
@@ -555,11 +555,11 @@ test('check 更新判定：跟踪 latest 时 registry 回退不误报 up_to_date
     await updater.activate(release);
     ctx.registry.publish('1.1.0-beta.9', buildFixtureTarball({ version: '1.1.0-beta.9' }));
     status = await updater.check();
-    assert.equal(status.updateAvailable, false, 'beta < release 不误报');
+    assert.equal(status.updateAvailable, false, 'beta < release do not mistakenly report');
   });
 });
 
-test('check 更新判定：显式锁定版本（pinnedVersion）允许按用户意图降级换装', { timeout: 60_000 }, async () => {
+test('check update decide: explicit lock version (pinnedVersion) allows by user intent fall back swap install', { timeout: 60_000 }, async () => {
   await withContext(async (ctx) => {
     ctx.registry.publish('2.0.0', buildFixtureTarball({ version: '2.0.0' }));
     const updater = makeUpdater(ctx);
@@ -567,7 +567,7 @@ test('check 更新判定：显式锁定版本（pinnedVersion）允许按用户�
     await updater.activate(info);
     assert.equal(updater.resolveCurrent()?.version, '2.0.0');
 
-    // registry latest 移回低版本后，锁定到更低版本：用户明确意图，判为可更新。
+    // registry latest move back low version after, lock to more low version: user explicit intent, judge is can update.
     ctx.registry.publish('1.0.0', buildFixtureTarball({ version: '1.0.0' }));
     const pinned = makeUpdater(ctx, { pinnedVersion: '1.0.0' });
     const status = await pinned.check();
@@ -582,9 +582,9 @@ test('check 更新判定：显式锁定版本（pinnedVersion）允许按用户�
   });
 });
 
-// ---- 状态文件契约（严格复验：manifest 一致 + Windows 路径形态拒绝） ----
+// ---- state file contract (strictly re- verify:manifest consistent + Windows path form reject) ----
 
-test('resolveCurrent：current.json 损坏 / 制品缺失 / manifest 或路径不一致 显式报错，不静默当空态', { timeout: 60_000 }, async () => {
+test('resolveCurrent:current.json corrupt / system product missing / manifest or path inconsistent explicit errors, not silently when empty state', { timeout: 60_000 }, async () => {
   await withContext(async (ctx) => {
     ctx.registry.publish('1.0.0', buildFixtureTarball({ version: '1.0.0' }));
     const updater = makeUpdater(ctx);
@@ -599,11 +599,11 @@ test('resolveCurrent：current.json 损坏 / 制品缺失 / manifest 或路径�
     await rejectsWith(updater.check(), 'updater_state_corrupt');
     writeFileSync(currentFile, original);
 
-    // 入口被外部删除 → current_payload_invalid（而非返回 null）。
+    // entry by external delete → current_payload_invalid(while non- return null).
     const current = updater.resolveCurrent();
     rmSync(current!.entryPath!);
     await rejectsWith(Promise.resolve().then(() => updater.resolveCurrent()), 'current_payload_invalid');
-    // 恢复入口，继续路径形态攻击。
+    // restore entry, continue path form attack.
     mkdirSync(path.dirname(current!.entryPath!), { recursive: true });
     writeFileSync(current!.entryPath!, '// restored\n');
 
@@ -613,22 +613,22 @@ test('resolveCurrent：current.json 损坏 / 制品缺失 / manifest 或路径�
       writeJson(currentFile, { ...base, releaseDir: evil });
       await rejectsWith(Promise.resolve().then(() => updater.resolveCurrent()), 'current_payload_invalid', (e) => {
         const problems = (e.details as { problems?: string[] }).problems ?? [];
-        assert.ok(problems.length > 0, `Windows 形态路径必须被拒: ${evil}`);
+        assert.ok(problems.length > 0, `Windows form path must by refuse: ${evil}`);
       });
     }
 
-    // entryPath 逃逸 releaseDir。
+    // entryPath escape releaseDir.
     writeJson(currentFile, { ...base, entryPath: path.join(payloadRoot, 'current.json') });
     await rejectsWith(Promise.resolve().then(() => updater.resolveCurrent()), 'current_payload_invalid');
 
-    // 状态 version 与 release manifest version 不一致。
+    // state version and release manifest version inconsistent.
     writeJson(currentFile, { ...base, version: '9.9.9' });
     await rejectsWith(Promise.resolve().then(() => updater.resolveCurrent()), 'current_payload_invalid', (e) => {
       const problems = (e.details as { problems?: string[] }).problems ?? [];
-      assert.ok(problems.some((p) => p.includes('manifest version')), `manifest version 不一致须显式列出，实际: ${problems.join('; ')}`);
+      assert.ok(problems.some((p) => p.includes('manifest version')), `manifest version inconsistent must explicit column out, actual: ${problems.join('; ')}`);
     });
 
-    // release 目录内 manifest 篡改（version 改动）同样在复验时暴露。
+    // release directory inside manifest tamper (version change) same in re- verify when expose.
     writeJson(currentFile, base);
     const manifestFile = path.join(base['releaseDir'] as string, 'manifest.json');
     const manifest = readJson(manifestFile);
@@ -639,7 +639,7 @@ test('resolveCurrent：current.json 损坏 / 制品缺失 / manifest 或路径�
   });
 });
 
-test('resolvePending / resolvePrevious：缺失 → null；损坏 → updater_state_corrupt；activate 前后语义正确', { timeout: 60_000 }, async () => {
+test('resolvePending / resolvePrevious: missing → null; corrupt → updater_state_corrupt;activate before after semantics correct', { timeout: 60_000 }, async () => {
   await withContext(async (ctx) => {
     ctx.registry.publish('1.0.0', buildFixtureTarball({ version: '1.0.0' }));
     ctx.registry.publish('2.0.0', buildFixtureTarball({ version: '2.0.0' }));
@@ -671,7 +671,7 @@ test('resolvePending / resolvePrevious：缺失 → null；损坏 → updater_st
   });
 });
 
-test('目标包名不一致 / 版本说明符非法 → 显式拒绝', { timeout: 60_000 }, async () => {
+test('target package name inconsistent / version note symbol illegal → explicit reject', { timeout: 60_000 }, async () => {
   await withContext(async (ctx) => {
     const updater = makeUpdater(ctx);
     await rejectsWith(updater.stage({ name: 'other-package', version: '1.0.0' }), 'updater_target_mismatch');
@@ -680,9 +680,9 @@ test('目标包名不一致 / 版本说明符非法 → 显式拒绝', { timeout
   });
 });
 
-// ---- 工厂（未配置） ----
+// ---- work vendor (not config) ----
 
-test('createPayloadUpdater：未配置包名 → 诚实 unconfigured 全套', { timeout: 60_000 }, async () => {
+test('createPayloadUpdater: not config package name → honest unconfigured all set', { timeout: 60_000 }, async () => {
   const updater = createPayloadUpdater(resolveDesktopConfig(BASE_ENV));
   assert.equal(updater.id, 'unconfigured');
   const status = await updater.check();
@@ -696,12 +696,12 @@ test('createPayloadUpdater：未配置包名 → 诚实 unconfigured 全套', { 
   await rejectsWith(updater.reject({ name: 'any', version: '1.0.0' }, new Error('x')), 'updater_not_configured');
 });
 
-// ---- HostNpmInstaller：npm-cli.js 解析 / --ignore-scripts / 超时等待 close ----
+// ---- HostNpmInstaller:npm-cli.js parse / --ignore-scripts / timeout wait for close ----
 
-test('HostNpmInstaller：默认命令经 node 直跑 execPath 旁 npm-cli.js，附 --ignore-scripts', { timeout: 60_000 }, async () => {
+test('HostNpmInstaller: by default command via node direct run execPath beside npm-cli.js, attach --ignore-scripts', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'helm-desktop-npm-'));
   try {
-    // 伪造 Node 安装布局：<dir>/node（真实 node 符号链接）+ node_modules/npm/bin/npm-cli.js。
+    // fabricate Node install layout:<dir>/node(real node symlink)+ node_modules/npm/bin/npm-cli.js.
     const executable = path.join(dir, path.basename(process.execPath));
     symlinkSync(process.execPath, executable);
     const npmCli = path.join(dir, 'node_modules', 'npm', 'bin', 'npm-cli.js');
@@ -716,8 +716,8 @@ test('HostNpmInstaller：默认命令经 node 直跑 execPath 旁 npm-cli.js，�
       'npm_install_failed',
       (e) => {
         const argv = (e.details as { argv?: string[] }).argv ?? [];
-        assert.ok(argv.includes('--ignore-scripts'), `必须携带 --ignore-scripts，实际: ${argv.join(' ')}`);
-        assert.ok(argv[0] === executable && argv[1] === npmCli, '必须经 node 直接执行 npm-cli.js');
+        assert.ok(argv.includes('--ignore-scripts'), `must carry --ignore-scripts, actual: ${argv.join(' ')}`);
+        assert.ok(argv[0] === executable && argv[1] === npmCli, 'must via node directly execute npm-cli.js');
       },
     );
     assert.match(error.message, /exit 7/);
@@ -726,24 +726,24 @@ test('HostNpmInstaller：默认命令经 node 直跑 execPath 旁 npm-cli.js，�
   }
 });
 
-test('HostNpmInstaller：execPath 旁无 npm 布局 → npm_installer_unavailable 显式报错（附指引）', { timeout: 60_000 }, async () => {
+test('HostNpmInstaller:execPath beside without npm layout → npm_installer_unavailable explicit errors (attach refer quote)', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'helm-desktop-npm-'));
   try {
     symlinkSync(process.execPath, path.join(dir, 'node'));
     const installer = new HostNpmInstaller({ execPath: path.join(dir, 'node') });
-    assert.match(installer.id, /npm-cli\.js 未找到/);
+    assert.match(installer.id, /npm-cli\.js not found/);
     const payloadRoot = path.join(dir, 'payload-root');
     mkdirSync(payloadRoot, { recursive: true });
     await rejectsWith(installer.install(payloadRoot), 'npm_installer_unavailable', (e) => {
       assert.match(e.message, /npm-cli\.js/);
-      assert.match(e.message, /显式注入|宿主 Node/);
+      assert.match(e.message, /explicit inject|host Node/);
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('HostNpmInstaller：超时 SIGKILL 后等待 close 才结束（不提前释放安装锁）', { timeout: 60_000 }, async () => {
+test('HostNpmInstaller: timeout SIGKILL after wait for close only then end (do not mention before release install lock)', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'helm-desktop-npm-'));
   try {
     const payloadRoot = path.join(dir, 'payload-root');
@@ -755,16 +755,16 @@ test('HostNpmInstaller：超时 SIGKILL 后等待 close 才结束（不提前释
     });
     const startedAt = Date.now();
     await rejectsWith(installer.install(payloadRoot), 'npm_install_failed', (e) => {
-      assert.match(e.message, /超时/);
+      assert.match(e.message, /timeout/);
     });
     const elapsed = Date.now() - startedAt;
-    assert.ok(elapsed >= 400, `超时判定不得早于 timeoutMs，实际 ${elapsed}ms`);
+    assert.ok(elapsed >= 400, `timeout decide must not early at timeoutMs, actual ${elapsed}ms`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('HostNpmInstaller：显式 command 原样使用，失败附 stderr 尾部诊断', { timeout: 60_000 }, async () => {
+test('HostNpmInstaller: explicit command original use, failed attach stderr tail part diagnose', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'helm-desktop-npm-'));
   try {
     const payloadRoot = path.join(dir, 'payload-root');
@@ -774,9 +774,9 @@ test('HostNpmInstaller：显式 command 原样使用，失败附 stderr 尾部�
     });
     await rejectsWith(installer.install(payloadRoot), 'npm_install_failed', (e) => {
       const tail = (e.details as { stderrTail?: string[] }).stderrTail ?? [];
-      assert.ok(tail.includes('boom-line'), `stderr 尾部须随错误附出，实际: ${tail.join('\\n')}`);
+      assert.ok(tail.includes('boom-line'), `stderr tail part must follow error attach out, actual: ${tail.join('\\n')}`);
     });
-    // 显式注入的自定义命令成功时正常 resolve。
+    // explicit inject self define command on success normal resolve.
     const ok = new HostNpmInstaller({ command: [process.execPath, '-e', 'process.exit(0);'] });
     await ok.install(payloadRoot);
   } finally {

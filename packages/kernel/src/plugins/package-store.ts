@@ -1,17 +1,17 @@
 /**
- * 受管插件包安装记录持久层（config.json `pluginPackages` 键）。
+ * managed plugin package install record durable layer (config.json `pluginPackages` key).
  *
- * - 结构：`pluginPackages: Record<pluginId, PluginPackageRecord>`（按 pluginId
- *   键控，重复 install 同一插件覆盖更新，与契约「同一插件重复 install 复用
- *   原 ID 更新记录」一致——ID 沿用既有记录的 id）；
- * - 读写全部经 ConfigService 锁内读改写（与 pluginEnabled/plugins 同一模式，
- *   跨实例串行，绝不锁外旧快照覆盖）；
- * - 结构损坏（非对象 / 记录形状非法 / source 非法）显式 config_corrupt 拒绝，
- *   绝不静默丢弃或用 {} 重建（诚实性纪律）；
- * - getPluginPackagesSync 同步镜像仅供 PluginHost.list()/get() 映射
- *   PluginSummary.managed 使用：写入路径同步维持镜像，镜像与磁盘一致；
- *   独立构造（无 load）时镜像为空——插件清单的 managed 只反映本进程内
- *   完成的安装，重启后由 runtime 启动链 load() 恢复。
+ * - structure:`pluginPackages: Record<pluginId, PluginPackageRecord>`(by pluginId
+ *   key control, duplicate install the same plugin override update, and contract the same plugin duplicate install re- use
+ *   original ID update record consistent - -ID along use since has record id);
+ * - read write all via ConfigService lock inside read change write (and pluginEnabled/plugins the same pattern,
+ *   across instance serial, never lock outside old snapshot override);
+ * - structure corrupt (non- object / record shape illegal / source illegal) explicit config_corrupt reject,
+ *   never static default discard or use {} rebuild (honest discipline);
+ * - getPluginPackagesSync sync mirror only supply PluginHost.list()/get() mapping
+ *   PluginSummary.managed use: write path sync dimension hold mirror, mirror and disk consistent;
+ *   independent construct (without load) when mirror is empty - - plugin manifest managed only reverse reflect this process inside
+ *   complete install, after restart by runtime start chain load() restore.
  */
 import { HelmError, type PluginPackageRecord, type PluginPackageSource } from '@helm/protocol';
 import type { ConfigService } from '../services/config.js';
@@ -20,16 +20,16 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-/** source 形状校验（判别联合最小边界）：kind 合法且对应字段为非空字符串。 */
+/** source shape validate (judge other join together most small boundary):kind legal and for should field is non-empty string. */
 function assertSourceShape(pluginId: string, v: unknown): PluginPackageSource {
-  if (!isPlainObject(v)) throw corruptSource(pluginId, '应为对象');
+  if (!isPlainObject(v)) throw corruptSource(pluginId, 'should be object');
   const kind = v['kind'];
   if (kind === 'npm') {
-    if (typeof v['spec'] !== 'string' || v['spec'].length === 0) throw corruptSource(pluginId, 'npm source 缺少 spec');
+    if (typeof v['spec'] !== 'string' || v['spec'].length === 0) throw corruptSource(pluginId, 'npm source missing spec');
     return { kind: 'npm', raw: String(v['raw'] ?? `npm:${v['spec']}`), spec: v['spec'] };
   }
   if (kind === 'git') {
-    if (typeof v['repo'] !== 'string' || v['repo'].length === 0) throw corruptSource(pluginId, 'git source 缺少 repo');
+    if (typeof v['repo'] !== 'string' || v['repo'].length === 0) throw corruptSource(pluginId, 'git source missing repo');
     return {
       kind: 'git',
       raw: String(v['raw'] ?? v['repo']),
@@ -39,39 +39,39 @@ function assertSourceShape(pluginId: string, v: unknown): PluginPackageSource {
     };
   }
   if (kind === 'local') {
-    if (typeof v['path'] !== 'string' || v['path'].length === 0) throw corruptSource(pluginId, 'local source 缺少 path');
+    if (typeof v['path'] !== 'string' || v['path'].length === 0) throw corruptSource(pluginId, 'local source missing path');
     return { kind: 'local', raw: String(v['raw'] ?? v['path']), path: v['path'] };
   }
-  throw corruptSource(pluginId, `未知 kind: ${String(kind)}`);
+  throw corruptSource(pluginId, `unknown kind: ${String(kind)}`);
 }
 
 function corruptSource(pluginId: string, detail: string): HelmError {
   return new HelmError(
     'config_corrupt',
-    `config.json pluginPackages.${pluginId}.source 结构非法（${detail}），拒绝读写`,
+    `config.json pluginPackages.${pluginId}.source structure illegal (${detail}), reject read write`,
     500,
   );
 }
 
 function corrupt(detail: string): HelmError {
-  return new HelmError('config_corrupt', `config.json pluginPackages 字段结构非法（${detail}）`, 500);
+  return new HelmError('config_corrupt', `config.json pluginPackages field structure illegal (${detail})`, 500);
 }
 
-/** 单条记录形状校验（宁可拒绝不可虚构）。 */
+/** single record shape validate (rather can reject cannot virtual construct). */
 function parseRecord(pluginId: string, v: unknown): PluginPackageRecord {
-  if (!isPlainObject(v)) throw corrupt(`${pluginId} 应为 PluginPackageRecord 对象`);
+  if (!isPlainObject(v)) throw corrupt(`${pluginId} should be PluginPackageRecord object`);
   const requiredStrings = ['id', 'installPath'] as const;
   for (const key of requiredStrings) {
     if (typeof v[key] !== 'string' || (v[key] as string).length === 0) {
-      throw corrupt(`${pluginId}.${key} 需为非空字符串`);
+      throw corrupt(`${pluginId}.${key} must be a non-empty string`);
     }
   }
-  if (typeof v['version'] !== 'string') throw corrupt(`${pluginId}.version 需为字符串`);
+  if (typeof v['version'] !== 'string') throw corrupt(`${pluginId}.version must be a string`);
   if (typeof v['installedAt'] !== 'number' || !Number.isFinite(v['installedAt'])) {
-    throw corrupt(`${pluginId}.installedAt 需为数字`);
+    throw corrupt(`${pluginId}.installedAt must be a number`);
   }
   if (typeof v['updatedAt'] !== 'number' || !Number.isFinite(v['updatedAt'])) {
-    throw corrupt(`${pluginId}.updatedAt 需为数字`);
+    throw corrupt(`${pluginId}.updatedAt must be a number`);
   }
   const source = assertSourceShape(pluginId, v['source']);
   return {
@@ -87,19 +87,19 @@ function parseRecord(pluginId: string, v: unknown): PluginPackageRecord {
 
 export class PluginPackageManagerStore {
   private readonly config: ConfigService;
-  /** 同步镜像（写入路径维持；读取穿透磁盘锁由 ConfigService 保证）。 */
+  /** sync mirror (write path dimension hold; read penetrate disk lock by ConfigService guarantee). */
   private mirror = new Map<string, PluginPackageRecord>();
 
   constructor(config: ConfigService) {
     this.config = config;
   }
 
-  /** 启动预热：读 config.json 建立镜像；损坏显式上抛。 */
+  /** start warm up: read config.json establish mirror; corrupt explicit on throw. */
   async load(): Promise<void> {
     const cfg = await this.config.get();
     const packages = cfg['pluginPackages'];
     if (packages === undefined) return;
-    if (!isPlainObject(packages)) throw corrupt(`应为 pluginId → 记录 对象，实际：${typeof packages}`);
+    if (!isPlainObject(packages)) throw corrupt(`should be pluginId → record object, actual:${typeof packages}`);
     const next = new Map<string, PluginPackageRecord>();
     for (const [pluginId, value] of Object.entries(packages)) {
       next.set(pluginId, parseRecord(pluginId, value));
@@ -107,7 +107,7 @@ export class PluginPackageManagerStore {
     this.mirror = next;
   }
 
-  /** 同步镜像读取（PluginSummary.managed 映射用）。 */
+  /** sync mirror read (PluginSummary.managed mapping use). */
   getRecord(pluginId: string): PluginPackageRecord | undefined {
     return this.mirror.get(pluginId);
   }
@@ -117,18 +117,18 @@ export class PluginPackageManagerStore {
   }
 
   /**
-   * 写入/覆盖一条记录：锁内读改写，只更新本插件键；重复 install 沿用既有
-   * 记录 id（幂等稳定标识）。成功后同步镜像。
+   * write/override a record: lock inside read change write, only update this plugin key; duplicate install along use since has
+   * record id(idempotent stable identifier). after success sync mirror.
    */
   async save(record: Omit<PluginPackageRecord, 'id'> & { id?: string }): Promise<PluginPackageRecord> {
     let stored!: PluginPackageRecord;
     await this.config.updateBy((current) => {
       const existing = current['pluginPackages'];
       if (existing !== undefined && !isPlainObject(existing)) {
-        throw corrupt(`应为 pluginId → 记录 对象，实际：${typeof existing}`);
+        throw corrupt(`should be pluginId → record object, actual:${typeof existing}`);
       }
       const map = isPlainObject(existing) ? existing : {};
-      // 校验既有全部记录（写入前对结构损坏如实拒绝，不用部分旧值重建）
+      // validate since has all record (before write for structure corrupt such as reject, do not use part old value rebuild)
       for (const [pid, v] of Object.entries(map)) parseRecord(pid, v);
       const prevId = isPlainObject(map[record.pluginId])
         ? (map[record.pluginId] as Record<string, unknown>)['id']
@@ -141,24 +141,24 @@ export class PluginPackageManagerStore {
     return stored;
   }
 
-  /** 删除记录；成功后同步镜像。目标不存在时 404（调用方决定语义）。 */
+  /** delete record; after success sync mirror. target missing when 404(caller decide semantics). */
   async delete(pluginId: string): Promise<PluginPackageRecord> {
     let removed: PluginPackageRecord | undefined;
     await this.config.updateBy((current) => {
       const existing = current['pluginPackages'];
       if (existing !== undefined && !isPlainObject(existing)) {
-        throw corrupt(`应为 pluginId → 记录 对象，实际：${typeof existing}`);
+        throw corrupt(`should be pluginId → record object, actual:${typeof existing}`);
       }
       const map = isPlainObject(existing) ? existing : {};
       const target = map[pluginId];
-      if (!isPlainObject(target)) return current; // 无变化；由 removed 判定 404
+      if (!isPlainObject(target)) return current; // without change; by removed decide 404
       removed = parseRecord(pluginId, target);
       const next = { ...map };
       delete next[pluginId];
       return { ...current, pluginPackages: next };
     });
     if (removed === undefined) {
-      throw new HelmError('unknown_plugin_package', `插件 ${pluginId} 没有受管安装记录`, 404, { pluginId });
+      throw new HelmError('unknown_plugin_package', `plugin ${pluginId} no managed install record`, 404, { pluginId });
     }
     this.mirror.delete(pluginId);
     return removed;

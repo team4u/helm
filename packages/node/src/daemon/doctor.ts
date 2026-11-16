@@ -1,19 +1,19 @@
 /**
- * 零副作用只读自检（helm-node doctor）。
+ * zero side effect only read self inspect (helm-node doctor).
  *
- * 四项检查全部只读（零磁盘写入、零破坏性操作）：
- * 1. identity：`<dataDir>/node.json` 存在、结构合法（readNodeIdentity）且
- *    非 win32 平台权限位为 0600；文件缺失/损坏/权限过宽均报 error 并给修复
- *    提示，绝不输出 token；
- * 2. privilege：当前账户为 root 或具备免密 sudo 时显式 warn（Agent bash 将
- *    拥有整机最高权限，生产/边缘环境建议受限账户），否则 ok；
- * 3. hub：向 hubUrl 发起一次真实 /ws/node?nodeId=<id> WebSocket 握手，测量
- *    RTT 后立即关闭连接。只探测到握手层，**绝不发送 register**：Hub 注册表
- *    按 nodeId 单连接，同 nodeId register 会顶替（evict）在线守护连接并
- *    误杀其在途命令——诊断必须是纯只读的；令牌有效性不由本检查判定，
- *    以守护进程自身的注册/心跳结果为准；
- * 4. herdr_ipc：解析本机 Herdr IPC 端点并 net.connect（1s 超时）探测可达性；
- *    socket 不存在/未运行仅标 info（可选能力，不阻断基础节点执行）。
+ * four items check all only read (zero disk write, zero break operation):
+ * 1. identity:`<dataDir>/node.json` store in, structure legal (readNodeIdentity) and
+ *    non- win32 platform permission is 0600; file missing/corrupt/permission wide all report error and to fix
+ *    hint, never output token;
+ * 2. privilege: when before account household is root or tool prepare exempt sudo when explicit warn(Agent bash 
+ *    own whole machine most high permission, produce/edge environment create protocol subject to limit account household), otherwise ok;
+ * 3. hub: to hubUrl start once real /ws/node?nodeId=<id> WebSocket grasp manually, measure
+ *    RTT after immediately close connect. only probe to grasp manually layer,**never send register**:Hub register table
+ *    by nodeId single connect, same nodeId register will top replace (evict) online guard connect and
+ *    mistakenly kill its in-flight command - - diagnose must be pure only read; token valid do not by this check decide,
+ *    with daemon itself register/heartbeat result is allow;
+ * 4. herdr_ipc: parse local machine Herdr IPC end point and net.connect(1s timeout) probe can reach;
+ *    socket missing/not run only mark info(optional capability, do not block assert basis node execute).
  */
 
 import net from 'node:net';
@@ -46,18 +46,18 @@ export interface NodeDoctorOptions {
   dataDir?: string;
   hubUrl?: string;
   env?: NodeJS.ProcessEnv;
-  /** 测试可注入权限探测（缺省检查 process.getuid?.() === 0 或 `sudo -n true`）。 */
+  /** test can inject permission probe (default check process.getuid?.() === 0 or `sudo -n true`). */
   checkPrivilege?: () => Promise<{ isRoot: boolean; passwordlessSudo: boolean }>;
-  /** Hub 连通性探测超时（毫秒，默认 5000）。 */
+  /** Hub connect through probe timeout (milli second, by default 5000). */
   connectTimeoutMs?: number;
 }
 
-/** 免密 sudo 探测超时。 */
+/** exempt sudo probe timeout. */
 const SUDO_PROBE_TIMEOUT_MS = 1_500;
-/** Herdr IPC 探测超时。 */
+/** Herdr IPC probe timeout. */
 const HERDR_IPC_PROBE_TIMEOUT_MS = 1_000;
 
-/** 运行 `sudo -n true`（绝不交互等待密码）；超时/失败均按不具备免密 sudo 处理。 */
+/** run `sudo -n true`(never interaction wait for password); timeout/failed all by do not tool prepare exempt sudo handle. */
 async function probePasswordlessSudo(env: NodeJS.ProcessEnv): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
     let settled = false;
@@ -82,7 +82,7 @@ async function probePasswordlessSudo(env: NodeJS.ProcessEnv): Promise<boolean> {
       try {
         child.kill('SIGKILL');
       } catch {
-        // 已退出。
+        // already exit.
       }
       finish(false);
     }, SUDO_PROBE_TIMEOUT_MS);
@@ -91,7 +91,7 @@ async function probePasswordlessSudo(env: NodeJS.ProcessEnv): Promise<boolean> {
   });
 }
 
-/** identity 检查：存在性 + 结构合法性（复用 readNodeIdentity）+ 非 win32 权限位 0600。 */
+/** identity check: store in + structure legal (re- use readNodeIdentity)+ non- win32 permission 0600. */
 async function checkIdentity(dataDir: string): Promise<NodeDoctorCheck & { identity: Awaited<ReturnType<typeof readNodeIdentity>> }> {
   const file = path.join(dataDir, 'node.json');
   let identity: Awaited<ReturnType<typeof readNodeIdentity>> = null;
@@ -101,7 +101,7 @@ async function checkIdentity(dataDir: string): Promise<NodeDoctorCheck & { ident
     return {
       id: 'identity',
       status: 'error',
-      message: `节点身份文件无法读取（${error instanceof Error ? error.message : String(error)}）；请人工确认后删除 ${file} 并重新 helm-node connect <hubUrl> --token <token> 绑定`,
+      message: `node identity file cannot read (${error instanceof Error ? error.message : String(error)}); please human confirm after delete ${file} and re- helm-node connect <hubUrl> --token <token> bind set`,
       identity,
     };
   }
@@ -109,7 +109,7 @@ async function checkIdentity(dataDir: string): Promise<NodeDoctorCheck & { ident
     return {
       id: 'identity',
       status: 'error',
-      message: `未找到节点身份文件 ${file}；请先 helm-node connect <hubUrl> --token <token> 绑定 JOIN 令牌`,
+      message: `not found node identity file ${file}; please first helm-node connect <hubUrl> --token <token> bind set JOIN token`,
       identity,
     };
   }
@@ -121,7 +121,7 @@ async function checkIdentity(dataDir: string): Promise<NodeDoctorCheck & { ident
       return {
         id: 'identity',
         status: 'error',
-        message: `无法读取身份文件权限（${file}）：${error instanceof Error ? error.message : String(error)}`,
+        message: `cannot read identity file permission (${file}):${error instanceof Error ? error.message : String(error)}`,
         identity,
       };
     }
@@ -129,7 +129,7 @@ async function checkIdentity(dataDir: string): Promise<NodeDoctorCheck & { ident
       return {
         id: 'identity',
         status: 'error',
-        message: `节点身份文件权限为 ${mode.toString(8).padStart(3, '0')}，要求 0600（含机密 token 不得对其他用户可读）；请执行 chmod 600 ${file} 修复`,
+        message: `node identity file permission is ${mode.toString(8).padStart(3, '0')}, want seek 0600(contains secret token must not for other user can read); please execute chmod 600 ${file} fix`,
         details: { nodeId: identity.nodeId, mode: mode.toString(8).padStart(3, '0') },
         identity,
       };
@@ -137,7 +137,7 @@ async function checkIdentity(dataDir: string): Promise<NodeDoctorCheck & { ident
     return {
       id: 'identity',
       status: 'ok',
-      message: `节点身份有效（nodeId=${identity.nodeId}，权限 0600）`,
+      message: `node identity valid (nodeId=${identity.nodeId}, permission 0600)`,
       details: { nodeId: identity.nodeId, mode: '0600' },
       identity,
     };
@@ -145,13 +145,13 @@ async function checkIdentity(dataDir: string): Promise<NodeDoctorCheck & { ident
   return {
     id: 'identity',
     status: 'ok',
-    message: `节点身份有效（nodeId=${identity.nodeId}）`,
+    message: `node identity valid (nodeId=${identity.nodeId})`,
     details: { nodeId: identity.nodeId },
     identity,
   };
 }
 
-/** privilege 检查：root / 免密 sudo 即 warn（诚实告知 Agent bash 权限边界）。 */
+/** privilege check:root / exempt sudo i.e. warn(honest notify Agent bash permission boundary). */
 async function checkPrivilege(
   env: NodeJS.ProcessEnv,
   injected?: () => Promise<{ isRoot: boolean; passwordlessSudo: boolean }>,
@@ -169,20 +169,20 @@ async function checkPrivilege(
       id: 'privilege',
       status: 'warn',
       message:
-        '当前账户具备 root 或免密 sudo 权限，Agent 执行 bash 工具将拥有整机最高权限；生产/边缘环境建议使用受限账户运行',
+        'when before account household tool prepare root or exempt sudo permission,Agent execute bash tool own whole machine most high permission; produce/edge environment create protocol use subject to limit account household run',
       details: { isRoot: probe.isRoot, passwordlessSudo: probe.passwordlessSudo },
     };
   }
-  return { id: 'privilege', status: 'ok', message: '当前账户不具备 root 或免密 sudo 权限（受限权限运行）' };
+  return { id: 'privilege', status: 'ok', message: 'when before account household do not tool prepare root or exempt sudo permission (subject to limit permission run)' };
 }
 
-/** hub 检查：真实 /ws/node 握手（零寄存、零顶替），测量 RTT 后立即关闭。 */
+/** hub check: real /ws/node grasp manually (zero parasitic store, zero top replace), measure RTT after immediately close. */
 async function checkHub(hubUrl: string, nodeId: string, connectTimeoutMs: number): Promise<NodeDoctorCheck> {
   let parsed: URL;
   try {
     parsed = new URL(hubUrl);
   } catch {
-    return { id: 'hub', status: 'error', message: `Hub 地址无法解析：${hubUrl}` };
+    return { id: 'hub', status: 'error', message: `Hub address cannot parse:${hubUrl}` };
   }
   const wsUrl = `${parsed.protocol === 'https:' ? 'wss' : 'ws'}://${parsed.host}${parsed.pathname.replace(/\/+$/, '')}/ws/node?nodeId=${encodeURIComponent(nodeId)}`;
   return await new Promise<NodeDoctorCheck>((resolve) => {
@@ -196,12 +196,12 @@ async function checkHub(hubUrl: string, nodeId: string, connectTimeoutMs: number
       try {
         socket.terminate();
       } catch {
-        // 已关闭。
+        // already close.
       }
       resolve(check);
     };
     const timer = setTimeout(
-      () => finish({ id: 'hub', status: 'error', message: `Hub 连通性探测超时（${connectTimeoutMs}ms）：${hubUrl}` }),
+      () => finish({ id: 'hub', status: 'error', message: `Hub connect through probe timeout (${connectTimeoutMs}ms):${hubUrl}` }),
       connectTimeoutMs,
     );
     socket.once('open', () => {
@@ -209,8 +209,8 @@ async function checkHub(hubUrl: string, nodeId: string, connectTimeoutMs: number
       finish({
         id: 'hub',
         status: 'ok',
-        // 如实声明探测边界：只读握手不校验令牌（register 会顶替在线守护连接）。
-        message: `Hub 连通正常（${hubUrl}，握手往返 ${rttMs}ms；只读探测未发送 register，不校验令牌）`,
+        // such as declaration probe boundary: only read grasp manually do not validate token (register will top replace online guard connect).
+        message: `Hub connect through normal (${hubUrl}, grasp manually to return ${rttMs}ms; only read probe not sent register, do not validate token)`,
         details: { hubUrl, rttMs },
       });
     });
@@ -218,27 +218,27 @@ async function checkHub(hubUrl: string, nodeId: string, connectTimeoutMs: number
       try {
         res.resume();
       } catch {
-        // 忽略。
+        // ignore.
       }
-      finish({ id: 'hub', status: 'error', message: `Hub 拒绝 WebSocket 握手（HTTP ${res.statusCode}）：${hubUrl}`, details: { hubUrl } });
+      finish({ id: 'hub', status: 'error', message: `Hub reject WebSocket grasp manually (HTTP ${res.statusCode}):${hubUrl}`, details: { hubUrl } });
     });
     socket.once('error', (error) => {
       finish({
         id: 'hub',
         status: 'error',
-        message: `Hub 连接失败（${error instanceof Error ? error.message : String(error)}）：${hubUrl}`,
+        message: `Hub failed to connect (${error instanceof Error ? error.message : String(error)}):${hubUrl}`,
         details: { hubUrl },
       });
     });
     socket.once('close', () => {
       if (!settled) {
-        finish({ id: 'hub', status: 'error', message: `Hub 连接在握手完成前关闭：${hubUrl}`, details: { hubUrl } });
+        finish({ id: 'hub', status: 'error', message: `Hub connect in grasp manually complete before close:${hubUrl}`, details: { hubUrl } });
       }
     });
   });
 }
 
-/** herdr_ipc 检查：解析端点并探测可达（socket 缺失仅 info，可选能力）。 */
+/** herdr_ipc check: parse end point and probe can reach (socket missing only info, optional capability). */
 async function checkHerdrIpc(env: NodeJS.ProcessEnv): Promise<NodeDoctorCheck> {
   let endpoint: string;
   try {
@@ -247,7 +247,7 @@ async function checkHerdrIpc(env: NodeJS.ProcessEnv): Promise<NodeDoctorCheck> {
     return {
       id: 'herdr_ipc',
       status: 'info',
-      message: `无法解析 Herdr IPC 端点：${error instanceof Error ? error.message : String(error)}`,
+      message: `cannot parse Herdr IPC end point:${error instanceof Error ? error.message : String(error)}`,
     };
   }
   return await new Promise<NodeDoctorCheck>((resolve) => {
@@ -261,22 +261,22 @@ async function checkHerdrIpc(env: NodeJS.ProcessEnv): Promise<NodeDoctorCheck> {
       resolve(check);
     };
     const timer = setTimeout(
-      () => finish({ id: 'herdr_ipc', status: 'info', message: '未检测到运行中的 Herdr IPC（可选能力，不影响基础节点执行）', details: { endpoint } }),
+      () => finish({ id: 'herdr_ipc', status: 'info', message: 'not detect to run in Herdr IPC(optional capability, does not affect basis node execute)', details: { endpoint } }),
       HERDR_IPC_PROBE_TIMEOUT_MS,
     );
     socket.once('connect', () => {
-      finish({ id: 'herdr_ipc', status: 'ok', message: `Herdr IPC 可达（${endpoint}）`, details: { endpoint } });
+      finish({ id: 'herdr_ipc', status: 'ok', message: `Herdr IPC can reach (${endpoint})`, details: { endpoint } });
     });
     socket.once('error', () => {
-      finish({ id: 'herdr_ipc', status: 'info', message: '未检测到运行中的 Herdr IPC（可选能力，不影响基础节点执行）', details: { endpoint } });
+      finish({ id: 'herdr_ipc', status: 'info', message: 'not detect to run in Herdr IPC(optional capability, does not affect basis node execute)', details: { endpoint } });
     });
   });
 }
 
 /**
- * 执行只读自检并返回报告：ok 当且仅当没有任何 check.status === 'error'
- * （warn 与 info 不置 false）。hubUrl 解析优先级：显式参数 > env.HELM_HUB_URL
- * > identity.hubUrl。
+ * execute only read self inspect and return report:ok when and only when no any check.status === 'error'
+ * (warn and info do not placement false).hubUrl parse priority: explicit parameter > env.HELM_HUB_URL
+ * > identity.hubUrl.
  */
 export async function runNodeDoctor(options: NodeDoctorOptions = {}): Promise<NodeDoctorReport> {
   const env = options.env ?? process.env;
@@ -285,7 +285,7 @@ export async function runNodeDoctor(options: NodeDoctorOptions = {}): Promise<No
   const checks: NodeDoctorCheck[] = [];
 
   const identityCheck = await checkIdentity(dataDir);
-  // 内部 identity 快照（含 token）仅用于后续检查，绝不进入对外报告。
+  // internal identity snapshot (contains token) only used to after continue check, never enter for outside report.
   const { identity: _identity, ...identityPublic } = identityCheck;
   void _identity;
   checks.push(identityPublic);
@@ -302,8 +302,8 @@ export async function runNodeDoctor(options: NodeDoctorOptions = {}): Promise<No
       status: 'error',
       message:
         identity === null
-          ? '身份无效，无法进行 Hub 连通性探测'
-          : '未配置 Hub 地址（--hub、环境变量 HELM_HUB_URL 或既绑定身份的 hubUrl）',
+          ? 'identity invalid, cannot enter row Hub connect through probe'
+          : 'not config Hub address (--hub, environment variable HELM_HUB_URL or since bind set identity hubUrl)',
     });
   } else {
     checks.push(await checkHub(hubUrl, identity.nodeId, connectTimeoutMs));

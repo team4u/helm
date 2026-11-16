@@ -1,7 +1,7 @@
 /**
- * 一次性问答域：helm ask = 内部创建会话 + 提交输入 + 等待回答。
- * 只复用现有端点（POST /api/conversations + POST .../input?wait=1），不新增 HTTP 面。
- * stdout 默认只输出回答文本（脚本管道友好）；错误保留会话并在错误信封给出可查会话 ID。
+ * once question answer domain:helm ask = internal create conversation + commit input + wait for answer.
+ * only re- use existing end point (POST /api/conversations + POST .../input?wait=1), no new HTTP side.
+ * stdout by default only output answer text (script pipeline friend well); error keep conversation and in error message seal to out can inspect conversation ID.
  */
 import type { ConversationInputResult, ConversationSummary } from '@helm/protocol'
 import { CliError } from '../errors.js'
@@ -10,16 +10,16 @@ import type { CommandContext, CommandSpec } from './shared.js'
 import { assertNoExtraPositionals, coerceTags, printPlainText, printResult } from './shared.js'
 
 const askFlags: FlagSpec[] = [
-  { name: 'profile', type: 'string', help: '使用的 Profile ID' },
-  { name: 'title', type: 'string', help: '会话标题（缺省由服务端命名；便于追溯）' },
-  { name: 'cwd', type: 'string', help: '会话工作目录（绝对路径）' },
-  { name: 'model', type: 'string', help: '显式覆盖模型 provider/model' },
-  { name: 'tags', type: 'string', help: '会话标签（JSON 数组或逗号分隔）' },
-  { name: 'timeout', type: 'number', help: '等待回答的超时毫秒数（缺省无限等待）' },
-  { name: 'delete-on-success', type: 'boolean', help: '成功取得回答后删除会话；任何失败保留诊断会话' },
+  { name: 'profile', type: 'string', help: 'use Profile ID' },
+  { name: 'title', type: 'string', help: 'conversation title (default by server side naming; convenient at append trace)' },
+  { name: 'cwd', type: 'string', help: 'conversation work directory (absolute path)' },
+  { name: 'model', type: 'string', help: 'explicit override model provider/model' },
+  { name: 'tags', type: 'string', help: 'conversation tag (JSON array or comma isolate)' },
+  { name: 'timeout', type: 'number', help: 'wait for answer timeout milli second count (default unbounded wait for)' },
+  { name: 'delete-on-success', type: 'boolean', help: 'succeeded acquire answer after delete conversation; any failed keep diagnose conversation' },
 ]
 
-/** 组合 prompt：位置参数与管道 stdin 以空行拼接，空白片段不参与。 */
+/** combine prompt: location parameter and pipeline stdin with empty row concatenate, whitespace fragment does not participate. */
 function combinePrompt(positional: string | undefined, stdinText: string | undefined): string {
   const parts: string[] = []
   if (positional !== undefined && positional.trim() !== '') parts.push(positional)
@@ -28,11 +28,11 @@ function combinePrompt(positional: string | undefined, stdinText: string | undef
 }
 
 /**
- * 失败后追加会话去向提示并携带 conversationId（会话已创建即保留，绝不静默清理）。
- * 保留原 code/exitCode，details 合并 conversationId 供脚本消费。
+ * failed after append conversation remove to hint and carry conversationId(conversation already create i.e. keep, never static default clean up).
+ * keep original code/exitCode,details merge conversationId supply script consume.
  */
 function rethrowWithConversation(err: unknown, conversationId: number, lead: string): never {
-  const hint = `${lead}（会话 #${conversationId} 已保留：helm conversations get ${conversationId} 排查 / helm conversations delete ${conversationId} 清理）`
+  const hint = `${lead}(conversation #${conversationId} already keep:helm conversations get ${conversationId} troubleshoot / helm conversations delete ${conversationId} clean up)`
   if (err instanceof CliError) {
     const base = err.details !== null && typeof err.details === 'object' && !Array.isArray(err.details)
       ? { ...(err.details as Record<string, unknown>) }
@@ -46,26 +46,26 @@ function rethrowWithConversation(err: unknown, conversationId: number, lead: str
 }
 
 /**
- * 边界强校验 wait 响应：text 是协议权威回答（kernel 先 stash.redact 再返回），
- * CLI 不再从 entry.model 重拼。任何畸形结构显式 invalid_response（details 带会话 ID）。
+ * boundary strong validate wait response:text is protocol right threat answer (kernel first stash.redact again return),
+ * CLI no longer from entry.model heavy piece together. any distortion shape structure explicit invalid_response(details carries conversation ID).
  */
 function validateWaitResult(raw: unknown, conversationId: number): ConversationInputResult {
   const invalid = (reason: string): CliError =>
-    new CliError(`Hub 等待回答响应非法：${reason}`, 'invalid_response', 1, { conversationId })
+    new CliError(`Hub wait for answer response illegal:${reason}`, 'invalid_response', 1, { conversationId })
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw invalid(`需为 JSON 对象，实得 ${raw === null ? 'null' : Array.isArray(raw) ? 'array' : typeof raw}`)
+    throw invalid(`must be JSON object, got ${raw === null ? 'null' : Array.isArray(raw) ? 'array' : typeof raw}`)
   }
   const r = raw as Record<string, unknown>
   if (typeof r.conversationId !== 'number' || r.conversationId !== conversationId) {
-    throw invalid(`conversationId 应为 ${conversationId}，实得 ${JSON.stringify(r.conversationId)}`)
+    throw invalid(`conversationId should be ${conversationId}, got ${JSON.stringify(r.conversationId)}`)
   }
-  if (typeof r.submissionId !== 'string' || r.submissionId === '') throw invalid('submissionId 需为非空字符串')
-  if (typeof r.text !== 'string') throw invalid(`text 需为字符串（允许空串），实得 ${typeof r.text}`)
+  if (typeof r.submissionId !== 'string' || r.submissionId === '') throw invalid('submissionId must be a non-empty string')
+  if (typeof r.text !== 'string') throw invalid(`text must be a string (allows empty string), got ${typeof r.text}`)
   const entry = r.entry
-  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) throw invalid('entry 需为 JSON 对象')
+  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) throw invalid('entry must be JSON object')
   const e = entry as Record<string, unknown>
-  if (typeof e.id !== 'string' || e.id === '') throw invalid('entry.id 需为非空字符串')
-  if (typeof e.kind !== 'string' || e.kind === '') throw invalid('entry.kind 需为非空字符串')
+  if (typeof e.id !== 'string' || e.id === '') throw invalid('entry.id must be a non-empty string')
+  if (typeof e.kind !== 'string' || e.kind === '') throw invalid('entry.kind must be a non-empty string')
   return raw as ConversationInputResult
 }
 
@@ -73,7 +73,7 @@ export function askCommands(): CommandSpec[] {
   return [
     {
       path: ['ask'],
-      description: '一次性问答：内部创建会话、提交输入并等待回答（stdin 管道内容并入 prompt）',
+      description: 'once question answer: internal create conversation, commit input and wait for answer (stdin pipeline content and prompt)',
       flags: askFlags,
       positional: '[text]',
       async run(ctx: CommandContext) {
@@ -81,16 +81,16 @@ export function askCommands(): CommandSpec[] {
         assertNoExtraPositionals(parsed.positionals, 1)
         const timeoutMs = flagValue<number>(parsed.flags, 'timeout')
         if (timeoutMs !== undefined && (!Number.isInteger(timeoutMs) || timeoutMs <= 0)) {
-          throw new CliError(`--timeout 需为正整数毫秒，实得 "${timeoutMs}"`, 'invalid_flag_value')
+          throw new CliError(`--timeout must be a positive integer milli second, got "${timeoutMs}"`, 'invalid_flag_value')
         }
-        // prompt = 位置参数 + 管道 stdin（非 TTY 才读取；二者至少其一，空白不算）
+        // prompt = location parameter + pipeline stdin(non- TTY only then read; two at least its one, whitespace do not compute)
         const stdinText = ctx.io.stdin.isTTY ? undefined : await ctx.io.stdin.readAll()
         const prompt = combinePrompt(parsed.positionals[0], stdinText)
         if (prompt === '') {
-          throw new CliError('缺少提问内容：提供 <text> 位置参数，或经 stdin 管道输入', 'empty_input')
+          throw new CliError('missing mention question content: provide <text> location parameter, or via stdin pipeline input', 'empty_input')
         }
 
-        // 1) 创建会话（失败时尚无会话，原样上抛）
+        // 1) create conversation (on failure still without conversation, original on throw)
         const createBody: Record<string, unknown> = {}
         for (const [flag, key] of [
           ['title', 'title'],
@@ -109,11 +109,11 @@ export function askCommands(): CommandSpec[] {
           created === null || typeof created !== 'object' ||
           typeof created.id !== 'number' || !Number.isSafeInteger(created.id) || created.id <= 0
         ) {
-          throw new CliError('Hub 创建会话响应缺正安全整数 id', 'invalid_response')
+          throw new CliError('Hub create conversation response missing correct security integer id', 'invalid_response')
         }
         const conversationId = created.id
 
-        // 2) 提交并等待回答（whenBusy:reject——全新会话不应有在途回合，忙即显式失败）
+        // 2) commit and wait for answer (whenBusy:reject- - all new conversation must not has in-flight turn, busy i.e. explicit failed)
         let result: ConversationInputResult
         try {
           const raw = await hub.request<unknown>(
@@ -126,14 +126,14 @@ export function askCommands(): CommandSpec[] {
           rethrowWithConversation(err, conversationId, '')
         }
 
-        // 3) 可选：仅在 wait 响应校验通过后删除会话；删除失败保留会话并显式报错
+        // 3) optional: only in wait response validate via after delete conversation; failed to delete keep conversation and explicit errors
         let deleted = false
         if (parsed.flags.get('delete-on-success') === true) {
           try {
             await hub.delete(`/api/conversations/${conversationId}`)
             deleted = true
           } catch (err) {
-            rethrowWithConversation(err, conversationId, '回答已取得，但会话删除失败')
+            rethrowWithConversation(err, conversationId, 'answer already acquire, but conversation failed to delete')
           }
         }
 
@@ -148,7 +148,7 @@ export function askCommands(): CommandSpec[] {
           })
           return
         }
-        // 人类模式：stdout 只输出回答文本（空回答输出空，不伪造内容）
+        // person class pattern:stdout only output answer text (empty answer output empty, do not fabricate content)
         if (answer !== '') printPlainText(ctx, answer)
       },
     },

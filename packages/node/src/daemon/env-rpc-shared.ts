@@ -1,13 +1,13 @@
 /**
- * env-rpc 系列模块共享的纯错误信封与校验助手：主服务端
- * （env-rpc-server）、Herdr IPC 桥（env-rpc-ipc）与 TCP 隧道处理器
- * （env-rpc-tunnel）单点共用，错误码/消息语义零复制。
+ * env-rpc system column module sharing pure error message seal and validate assist manually: main server side
+ * (env-rpc-server),Herdr IPC bridge (env-rpc-ipc) and TCP tunnel handle
+ * (env-rpc-tunnel) single point shared use, error code/message semantics zero duplicate.
  */
 import type { RpcEnvError, RpcResult } from '@helm/protocol';
 
 export type RpcErrorCode = RpcEnvError['code'];
 
-/** 升级排空拒新错误信封：稳定码 node_draining + 人类可读诊断。 */
+/** upgrade arrange empty refuse new error message seal: stable code node_draining + person class can read diagnose. */
 export const drainingRejection = (what: string): RpcEnvError => ({
   code: 'node_draining',
   message: `daemon is draining (upgrade in progress), rejecting new ${what}`,

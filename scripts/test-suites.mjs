@@ -1,38 +1,30 @@
 #!/usr/bin/env node
 /**
- * Test tier entry point: unit / integration / all suites, invoked by package.json scripts.
+ * test layer entry:unit / integration / all three Profile set piece, supply package.json script invoke.
  *
- * Why it exists: `pnpm test` runs everything in one go, while local iteration needs a
- * faster pure-unit tier; tests in kernel / node heavily spawn real subprocesses, open
- * SQLite, create Git worktrees, and run WebSocket plus the @helm/node daemon — not pure
- * units. To avoid misclassification, this script only does a [conservative package-level
- * split]:
+ * is what store in:`pnpm test` is one shuttle all amount, local iterate need to one Profile more fast pure unit feedback;
+ * while kernel / node package test large amount start real child process, open SQLite, create Git worktree, run WebSocket
+ * and @helm/node daemon, is not pure unit. is avoid mistakenly classify, this script only do [keep guard package level cut]:
  *
- *   unit        = protocol + env-io + cli + web + plugin-client (env-io is in-process pure
- *                 scan orchestrator injection tests; web covers happy-dom/React interaction
- *                 and SDK self-tests — none start real services);
- *   integration = plugin-build + kernel + plugins + hub + node + payload + desktop (real
- *                 esbuild builds/subprocesses, SQLite/Git/daemon, payload assembly, and the
- *                 desktop-shell Hub subprocess supervision);
- *   all         = unit ∪ integration = every test file, equivalent to the old `pnpm test`.
+ *   unit        = protocol + env-io + cli + web + plugin-client(env-io is process inside pure scan
+ *                 orchestration inject test;web contains happy-dom/React interaction and SDK self test, all do not start real service);
+ *   integration = plugin-build + kernel + plugins + hub + node + payload + desktop(contains real
+ *                 esbuild compile/child process,SQLite/Git/daemon,payload group install and desktop shell Hub child process supervise);
+ *   all         = unit ∪ integration = all test file, etc. price at old `pnpm test`.
  *
- * Implementation: Node fs enumerates *.test.ts(x) under <root>/packages/<pkg>/test/, and the
- * test-sharding.mjs static analysis splits strictly pure in-memory tests into K parallel
- * `--test-isolation=none` shards; the rest keep process isolation and are handed to
- * scripts/run-tests.mjs for concurrent scheduling in LPT (longest-processing-time-first) order.
+ * implement:Node fs by <root>/packages/<pkg>/test/ directory enumeration *.test.ts(x), combine test-sharding.mjs
+ * static analyze strictly in-memory test split to K  `--test-isolation=none` shard parallel execute, the rest test keep
+ * process isolated and via LPT(long time cost takes precedence) order hand over to scripts/run-tests.mjs concurrency scheduling.
  *
- * Invariants (defensive assertions; any failure exits 2 rather than silently running the
- * wrong set):
- *   - all's file count must equal unit + integration file counts (no overlap, no gap);
- *   - the unit ∪ integration relative-path set must exactly match the actual *.test.ts(x)
- *     file set across every package's test directory (so new packages/files cannot be
- *     silently missed here).
+ * invariant (guard against defend assertion, failed i.e. script exit 2, never static default run wrong collection):
+ *   - all file count must equals unit and integration file count of and (do not heavy do not leak);
+ *   - unit ∪ integration relative path set must and all warehouse all package test directory under *.test.ts(x)
+ *     actual file collection fully consistent (guard against new increase package/file after this in silently leak).
  *
- * Note: do not raise the total timeout via the HELM_TEST_SUITE_TIMEOUT_MS env var —
- * packages/kernel/test/env-registry-races.test.ts asserts every host HELM_* variable is
- * stripped, and injecting it would make that test fail spuriously.
+ * note: do not want use HELM_TEST_SUITE_TIMEOUT_MS environment variable tune large total timeout - -packages/kernel/test/
+ * env-registry-races.test.ts assertion host HELM_* variable by all strip except, inject the variable will let it mistakenly report failed.
  *
- * Usage: node scripts/test-suites.mjs <unit|integration|all> [extra args passed through to the node test runner]
+ * use method:node scripts/test-suites.mjs <unit|integration|all> [pass-through to node test runner extra parameter]
  */
 import { readdirSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -45,8 +37,7 @@ import { partitionFilesForSharding, shouldDisableSharding } from './lib/test-sha
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const packagesDir = path.join(repoRoot, 'packages');
 
-// Suite -> package names. Split principles live in the header comment; tier changes must be
-// mirrored in AGENTS.md's test tiering conventions.
+// set piece → package name. cut principle see file head note release; adjust Profile when must sync update AGENTS.md test layer convention.
 const SUITES = {
   unit: ['protocol', 'env-io', 'test-kit', 'cli', 'web', 'plugin-client'],
   integration: ['plugin-build', 'kernel', 'plugins', 'hub', 'node', 'payload', 'desktop'],
@@ -62,7 +53,7 @@ function testFilesOf(pkg) {
   try {
     entries = readdirSync(dir, { withFileTypes: true });
   } catch (err) {
-    console.error(`[test-suites] cannot read ${dir}: ${err.message} (package missing or not installed?)`);
+    console.error(`[test-suites] cannot read ${dir}: ${err.message}(package missing or not installed?)`);
     process.exit(2);
   }
   return entries
@@ -73,7 +64,7 @@ function testFilesOf(pkg) {
 
 const suiteName = process.argv[2];
 if (!SUITES[suiteName] && suiteName !== 'all') {
-  console.error(`[test-suites] usage: node scripts/test-suites.mjs <unit|integration|all> [extra args...]`);
+  console.error(`[test-suites] use method: node scripts/test-suites.mjs <unit|integration|all> [extra args...]`);
   process.exit(2);
 }
 const rawExtraArgs = process.argv.slice(3);
@@ -87,26 +78,25 @@ if (suiteName === 'all') {
 }
 
 if (files.length === 0) {
-  console.error(`[test-suites] suite ${suiteName} enumerated 0 test files; refusing to run (directory layout change suspected)`);
+  console.error(`[test-suites] set piece ${suiteName} enumeration to 0 test file, reject execute (suspected directory structure change)`);
   process.exit(2);
 }
 
-// Invariant 1: all = unit + integration (no overlap, no gap).
+// invariant 1:all = unit + integration(do not heavy do not leak).
 if (suiteName === 'all') {
   const unitCount = SUITES.unit.reduce((n, p) => n + testFilesOf(p).length, 0);
   const integrationCount = SUITES.integration.reduce((n, p) => n + testFilesOf(p).length, 0);
   const uniqueCount = new Set(files).size;
   if (files.length !== unitCount + integrationCount || uniqueCount !== files.length) {
     console.error(
-      `[test-suites] all(${files.length}) != unit(${unitCount}) + integration(${integrationCount}) or duplicate files exist; the split invariant is broken`,
+      `[test-suites] all(${files.length}) ≠ unit(${unitCount}) + integration(${integrationCount}) or store in duplicate file, cut invariant by break`,
     );
     process.exit(2);
   }
 }
 
-// Invariant 2: the unit ∪ integration relative-path set == the actual file set across all
-// repo test directories. Scan every package under packages/ with a test subdirectory (not
-// just the known ones) to catch future additions.
+// invariant 2:unit ∪ integration relative path set == all warehouse test directory actual file collection.
+// directly scan packages under all contains test subdirectory package (do not scoped limit at known five package), catch not come new increase package.
 {
   const managed = new Set(ALL_PACKAGES.flatMap(testFilesOf));
   const actual = new Set();
@@ -120,23 +110,22 @@ if (suiteName === 'all') {
         }
       }
     } catch {
-      // Skip packages without a test directory.
+      // without test directory package skip.
     }
   }
   const missing = [...actual].filter((f) => !managed.has(f));
   if (missing.length > 0) {
-    console.error(`[test-suites] found test files not covered by any suite (update the SUITES tiers): ${missing.join(', ')}`);
+    console.error(`[test-suites] discover not accept any set piece test file (please update SUITES Profile): ${missing.join(', ')}`);
     process.exit(2);
   }
 }
 
 const label = suiteName === 'all' ? 'all(unit+integration)' : suiteName;
 const breakdown = ALL_PACKAGES.map((p) => `${p}=${testFilesOf(p).length}`).join(' ');
-console.error(`[test-suites] suite ${label}: ${files.length} file(s) (${breakdown})`);
+console.error(`[test-suites] set piece ${label}: ${files.length} file (${breakdown})`);
 
-// Deterministic LPT (longest first) ordering: extremely slow tests first (20M), then known
-// slow tests (10M), then descending file size, with lexicographic path order as the final
-// tiebreaker — eliminating multicore tail idle time.
+// determinism LPT(long time cost takes precedence) sort: extreme slow test most takes precedence (20M), second known slow test (10M),
+// again by file byte large small drop order, same right by path dictionary order fall back, eliminate many core concurrency tail part empty etc..
 const ULTRA_SLOW_TEST_PREFIXES = [
   'payload',
   'node-path-usage-rpc',
@@ -243,10 +232,8 @@ if (!shardingDisabled) {
     repoRoot,
     files,
     cpus,
-    // Merge pure in-memory tests into single-process shards (measured: unit's 43 files in
-    // just 1.3s; integration's 38 files including a 5s timer in 6.9s), and start them
-    // alongside the isolated pool at 1 + (cpus - 1) concurrency: no phase barrier, no
-    // dual-pool oversubscription contention, no cold-start tax from a hundred coordinators.
+    // merge in-memory test is single process shard (measured unit 43 file only 1.3s,integration 38 file contains 5s timer shared 6.9s),
+    // and isolated process pool by 1 + (cpus - 1) concurrency start run: zero phase fence, zero double pool over contend grab, zero hundred remaining coordinate tune cold start tax.
     filesPerShard: Math.max(8, files.length),
     weightFn: lptWeight,
   });
@@ -255,8 +242,8 @@ if (!shardingDisabled) {
     const pureShardCount = shards.length;
     const isoConc = Math.max(1, cpus - pureShardCount);
     console.error(
-      `[test-suites] schedule: pure=${pureFiles.length} (${pureShardCount} shards, --test-isolation=none) || ` +
-        `isolated=${isolatedFiles.length} (--test-concurrency=${isoConc}, total cap ${cpus})`,
+      `[test-suites] scheduling: pure=${pureFiles.length}(${pureShardCount} shard,--test-isolation=none)‖ ` +
+        `isolated=${isolatedFiles.length}(--test-concurrency=${isoConc}, total cap ${cpus})`,
     );
     shards.forEach((shard, idx) => {
       plans.push({
@@ -287,10 +274,8 @@ if (!shardingDisabled) {
   });
 }
 
-// Reuse run-tests.mjs: cross-platform tsx spawn, per-test/total timeouts, and process-tree
-// cleanup all live there — never re-implemented. A single permit-capped (cpus) worker pool
-// schedules pure-shards, heavy single files, and concurrent batches together, avoiding
-// dual-pool oversubscription, phase barriers, and tail serialization.
+// re- use run-tests.mjs: across platform tsx spawn, single test/total timeout and process tree clean up all in that edge, never duplicate implement.
+// based on permit can cap cpus single work pool unify scheduling pure-shards, heavy type single file and concurrency batch, avoid double pool over contend grab, phase fence and tail part chained.
 const runTestsPath = path.join(repoRoot, 'scripts', 'run-tests.mjs');
 const suiteStartMs = Date.now();
 /** @type {Set<import('node:child_process').ChildProcess>} */
@@ -309,8 +294,7 @@ for (const signal of ['SIGHUP', 'SIGINT', 'SIGQUIT', 'SIGTERM']) {
 }
 
 /**
- * Schedule queued test plans under the concurrency permit cap, keeping active test
- * processes <= maxPermits at any moment.
+ * by concurrency permit can cap scheduling queue in test plan, guarantee any moment leap test process count ≤ maxPermits.
  * @param {Array<{ label: string, args: string[], permits: number }>} queue
  * @param {number} maxPermits
  * @returns {Promise<number[]>}
@@ -338,7 +322,7 @@ function runPlanPool(queue, maxPermits) {
         activeChildren.add(child);
         child.on('error', (err) => {
           activeChildren.delete(child);
-          console.error(`[test-suites] failed to start ${item.plan.label}: ${err.message}`);
+          console.error(`[test-suites] start ${item.plan.label} failed: ${err.message}`);
           done(1);
         });
         child.on('exit', (code, signal) => {
@@ -385,5 +369,5 @@ if (receivedSignal) {
   const firstFailure = exitCodes.find((c) => c !== 0);
   if (firstFailure !== undefined) finalCode = firstFailure;
 }
-console.error(`[test-suites] suite ${label} finished in ${elapsed}s, exit code ${finalCode}`);
+console.error(`[test-suites] set piece ${label} ${elapsed}s end, exit code ${finalCode}`);
 process.exitCode = finalCode;

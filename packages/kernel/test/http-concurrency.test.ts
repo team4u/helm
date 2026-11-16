@@ -1,13 +1,13 @@
 /**
- * HTTP 层并发缺陷回归（fix/concurrency-http）：
- * - 插件动态路由派发门禁：handler 执行计入 liveTasks（disable 闸门可见，
- *   409 plugin_has_live_tasks 而非半执行）；停用后派发被拒（404/409）；
- * - NDJSON 转发监控流：入口 aborted 预检（已断开不建流、不取租约）、
- *   abort/cancel 后 finish 幂等（迟到的监听器回调不重复释放）；
- * - Profile 删除 TOCTOU：服务层 delete 落盘前绑定复核（路由快速路径与
- *   删除之间的交错窗口闭合）；
- * - 产物上传 TOCTOU：writeUploaded 落盘前会话存在性复核（入口校验与写盘
- *   之间的交错窗口闭合，不留 artifacts/<已删会话>/ 孤儿目录）。
+ * HTTP layer concurrency defect regression (fix/concurrency-http):
+ * - plugin motion state routing dispatch gate:handler execute count liveTasks(disable gate visible,
+ *   409 plugin_has_live_tasks while non- half execute); deactivate after dispatch by refuse (404/409);
+ * - NDJSON forwarding monitor stream: entry aborted preflight (disconnected do not create stream, do not take lease),
+ *   abort/cancel after finish idempotent (late to listener call back does not repeat release);
+ * - Profile delete TOCTOU: service layer delete before bind set re-check (routing fast path and
+ *   delete between hand over wrong window closed together);
+ * - artifact upload TOCTOU:writeUploaded before conversation store in re-check (entry validate and write
+ *   between hand over wrong window closed together, do not artifacts/<already delete conversation>/ orphan child directory).
  */
 import assert from 'node:assert/strict'
 import { test, before, after } from 'node:test'
@@ -37,10 +37,10 @@ after(async () => {
 })
 
 // ---------------------------------------------------------------------------
-// 1. 插件动态路由派发门禁
+// 1. plugin motion state routing dispatch gate
 // ---------------------------------------------------------------------------
 
-test('插件路由 handler 执行计入 liveTasks：在途时 disable 409 plugin_has_live_tasks', { timeout: 60_000 }, async () => {
+test('plugin routing handler execute count liveTasks: in-flight when disable 409 plugin_has_live_tasks', { timeout: 60_000 }, async () => {
   let releaseHandler: (() => void) | undefined
   await host.register(
     {
@@ -65,18 +65,18 @@ test('插件路由 handler 执行计入 liveTasks：在途时 disable 409 plugin
     kernel,
   )
   await delay(30)
-  // 在途 route 请求对停用闸门可见（此前完全失明）。
-  assert.equal(host.activeTaskCount('builtin:probe-route'), 1, 'handler 执行期间计入 liveTasks')
+  // in-flight route request for deactivate gate visible (this before fully lose).
+  assert.equal(host.activeTaskCount('builtin:probe-route'), 1, 'handler execute during count liveTasks')
   await assert.rejects(
     host.disable('builtin:probe-route'),
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_has_live_tasks' && err.status === 409,
-    '停用闸门应看见在途 route 请求并 409，而非半执行拆毁',
+    'deactivate gate should see see in-flight route request and 409, while non- half execute split destroy',
   )
   releaseHandler!()
   const response = await pending
   assert.equal(response.status, 200)
-  assert.equal(host.activeTaskCount('builtin:probe-route'), 0, 'handler 完成后计数归零')
-  // 停用成功后：路由清单已空，派发 404（不派发到已拆毁插件）。
+  assert.equal(host.activeTaskCount('builtin:probe-route'), 0, 'handler after completion counter reset to zero')
+  // deactivate after success: routing manifest already empty, dispatch 404(do not dispatch to already split destroy plugin).
   await host.disable('builtin:probe-route')
   const rejected = await handleApi(
     new Request('http://hub/api/plugins/builtin:probe-route/routes/slow'),
@@ -87,9 +87,9 @@ test('插件路由 handler 执行计入 liveTasks：在途时 disable 409 plugin
   assert.equal(body.error?.code, 'route_not_found')
 })
 
-test('派发前摘要复查：listRoutes 快照含已停用插件时按 get 摘要 409 拒绝', { timeout: 60_000 }, async () => {
-  // 构造 listRoutes 快照与插件现状交错的宿主：清单仍返回路由（enabled 快照
-  // 陈旧），摘要现读为已停用——派发必须 409 plugin_disabled，不进入 handler。
+test('dispatch before summary re- inspect:listRoutes snapshot contains deactivated plugin when by get summary 409 reject', { timeout: 60_000 }, async () => {
+  // construct listRoutes snapshot and plugin now state hand over wrong host: manifest still return routing (enabled snapshot
+  // stale), summary now read is deactivated - - dispatch must 409 plugin_disabled, does not enter handler.
   let handlerCalled = false
   const summary: PluginSummary = {
     id: 'stale-plugin',
@@ -120,12 +120,12 @@ test('派发前摘要复查：listRoutes 快照含已停用插件时按 get 摘�
   await assert.rejects(
     handleApi(new Request('http://hub/api/plugins/stale-plugin/routes/thing'), kernel),
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_disabled' && err.status === 409,
-    '已停用插件的路由派发应 409 拒绝',
+    'deactivated plugin routing dispatch should 409 reject',
   )
-  assert.equal(handlerCalled, false, 'handler 不得执行（半执行）')
+  assert.equal(handlerCalled, false, 'handler must not execute (half execute)')
 })
 
-test('轻量测试宿主未提供 get/withTask 时派发行为不变（可选端口）', { timeout: 60_000 }, async () => {
+test('light amount test host not provide get/withTask when dispatch behavior do not change (optional port)', { timeout: 60_000 }, async () => {
   const kernel = {
     plugins: {
       listRoutes: () => [
@@ -144,7 +144,7 @@ test('轻量测试宿主未提供 get/withTask 时派发行为不变（可选端
 })
 
 // ---------------------------------------------------------------------------
-// 2. NDJSON 转发监控流：aborted 预检与 finish 幂等
+// 2. NDJSON forwarding monitor stream:aborted preflight and finish idempotent
 // ---------------------------------------------------------------------------
 
 interface ForwardFixture {
@@ -189,10 +189,10 @@ function forwardKernel(over: ForwardFixture): KernelRuntimeLike {
 
 const FORWARD_EVENTS_PATH = '/api/nodes/forward/fwd-11111111-2222-3333-4444-555555555555/events'
 
-test('监控流入口 aborted 预检：客户端已在鉴权期间断开则不建流、不取租约', { timeout: 60_000 }, async () => {
+test('monitor stream entry aborted preflight: client already in authentication during disconnect then do not create stream, do not take lease', { timeout: 60_000 }, async () => {
   const over: ForwardFixture = { sessions: new Map(), events: [], lease: { acquisitions: 0, releases: 0 } }
   const kernel = forwardKernel(over)
-  // 模拟 hub 鉴权 await 期间 res close 已 abort signal（AbortSignal.abort 即已终态）。
+  // simulated hub authentication await during res close already abort signal(AbortSignal.abort i.e. already terminal state).
   const response = await handleApi(
     new Request(`http://hub${FORWARD_EVENTS_PATH}`, { signal: AbortSignal.abort() }),
     kernel,
@@ -200,11 +200,11 @@ test('监控流入口 aborted 预检：客户端已在鉴权期间断开则不�
   assert.equal(response.status, 409)
   const body = (await response.json()) as { error?: { code?: string } }
   assert.equal(body.error?.code, 'client_disconnected')
-  assert.equal(over.lease.acquisitions, 0, '不建立流即不取租约（对已 aborted 的 signal 注册监听永不触发）')
+  assert.equal(over.lease.acquisitions, 0, 'do not establish stream i.e. do not take lease (for already aborted  signal register listen forever does not trigger)')
   assert.equal(over.lease.releases, 0)
 })
 
-test('监控流 abort 断开释放租约一次；迟到的监听器回调不重复释放', { timeout: 60_000 }, async () => {
+test('monitor stream abort disconnect release lease once; late to listener call back does not repeat release', { timeout: 60_000 }, async () => {
   const over: ForwardFixture = { sessions: new Map(), events: [], lease: { acquisitions: 0, releases: 0 } }
   const kernel = forwardKernel(over)
   const controller = new AbortController()
@@ -222,15 +222,15 @@ test('监控流 abort 断开释放租约一次；迟到的监听器回调不重�
   assert.equal(over.lease.releases, 0)
   controller.abort()
   await delay(20)
-  assert.equal(over.lease.releases, 1, '断开即释放（最后持有者离开即停止）')
-  // 模拟迟到的事件投递（真实宿主已退订；此处验证 finished 守卫幂等）：
-  // 不崩溃、不二次释放、不复活流。
+  assert.equal(over.lease.releases, 1, 'disconnect i.e. release (finally holder leave i.e. stop)')
+  // simulated late to event delivery (real host already unsubscribe; this where verify finished guard idempotent):
+  // do not crash, do not second release, does not resurrect stream.
   over.events[0]!({ type: 'stopped' })
   await delay(20)
-  assert.equal(over.lease.releases, 1, 'finish 幂等：迟到回调不得重复释放')
+  assert.equal(over.lease.releases, 1, 'finish idempotent: late to call back must not duplicate release')
 })
 
-test('监控流客户端主动 cancel 同样释放租约（finish 幂等）', { timeout: 60_000 }, async () => {
+test('monitor stream client actively cancel same release lease (finish idempotent)', { timeout: 60_000 }, async () => {
   const over: ForwardFixture = { sessions: new Map(), events: [], lease: { acquisitions: 0, releases: 0 } }
   const kernel = forwardKernel(over)
   const controller = new AbortController()
@@ -244,25 +244,25 @@ test('监控流客户端主动 cancel 同样释放租约（finish 幂等）', { 
   await reader.cancel()
   await delay(20)
   assert.equal(over.lease.acquisitions, 1)
-  assert.equal(over.lease.releases, 1, 'cancel 路径同样释放租约')
+  assert.equal(over.lease.releases, 1, 'cancel path same release lease')
 })
 
 // ---------------------------------------------------------------------------
-// 3. Profile 删除 TOCTOU：服务层落盘前绑定复核
+// 3. Profile delete TOCTOU: service layer before bind set re-check
 // ---------------------------------------------------------------------------
 
-test('ProfileService.delete 服务层复核：isProfileInUse 为真时 409 且目录不删', { timeout: 60_000 }, async () => {
+test('ProfileService.delete service layer re-check:isProfileInUse is true when 409 and directory do not delete', { timeout: 60_000 }, async () => {
   const dir = await makeTempDir('helm-profile-del-')
   try {
     const profiles = new ProfileService(dir)
-    await profiles.save({ id: 'bound-profile', name: '绑定中' })
+    await profiles.save({ id: 'bound-profile', name: 'bind set in' })
     await writeFile(join(dir, 'profiles', 'bound-profile', 'SYSTEM.md'), '# sys')
     await assert.rejects(
       profiles.delete('bound-profile', { isProfileInUse: async () => true }),
       (err: unknown) => err instanceof HelmError && err.code === 'profile_in_use' && err.status === 409,
     )
-    assert.notEqual(await profiles.get('bound-profile'), undefined, '拒绝删除时 profile 完整保留')
-    // 复核为假：正常删除。
+    assert.notEqual(await profiles.get('bound-profile'), undefined, 'reject delete when profile complete keep')
+    // re-check is false: normal delete.
     await profiles.delete('bound-profile', { isProfileInUse: async () => false })
     assert.equal(await profiles.get('bound-profile'), undefined)
   } finally {
@@ -270,14 +270,14 @@ test('ProfileService.delete 服务层复核：isProfileInUse 为真时 409 且�
   }
 })
 
-test('DELETE /api/profiles/:id TOCTOU：快速路径通过后并发绑定在服务层复核处被拒', { timeout: 60_000 }, async () => {
+test('DELETE /api/profiles/:id TOCTOU: fast path via after concurrency bind set in service layer re-check where by refuse', { timeout: 60_000 }, async () => {
   const dir = await makeTempDir('helm-profile-tou-')
   try {
     const profiles = new ProfileService(dir)
-    await profiles.save({ id: 'race-profile', name: '竞态' })
+    await profiles.save({ id: 'race-profile', name: 'race' })
     const bound = { ...summaryOf(7), profileId: 'race-profile' }
-    // 第一次 listConversations（路由快速路径）返回空；第二次（服务层落盘前
-    // 复核）返回绑定会话——模拟「检查通过 → 并发 POST 绑定 → 删除落盘」。
+    // first time listConversations(routing fast path) return empty; second time (service layer before
+    // re-check) return bind set conversation - - simulated check via → concurrency POST bind set → delete.
     let listCalls = 0
     const kernel = {
       dataDir: dir,
@@ -291,20 +291,20 @@ test('DELETE /api/profiles/:id TOCTOU：快速路径通过后并发绑定在服�
     await assert.rejects(
       handleApi(new Request('http://hub/api/profiles/race-profile', { method: 'DELETE' }), kernel),
       (err: unknown) => err instanceof HelmError && err.code === 'profile_in_use' && err.status === 409,
-      '服务层复核应拦截窗口内穿过的绑定',
+      'service layer re-check should intercept window inside through bind set',
     )
-    assert.equal(listCalls, 2, '快速路径与服务层复核各查一次')
-    assert.notEqual(await profiles.get('race-profile'), undefined, 'profile 未被删除')
+    assert.equal(listCalls, 2, 'fast path and service layer re-check each inspect once')
+    assert.notEqual(await profiles.get('race-profile'), undefined, 'profile not by delete')
   } finally {
     await cleanupDir(dir)
   }
 })
 
 // ---------------------------------------------------------------------------
-// 4. 产物上传 TOCTOU：writeUploaded 落盘前会话存在性复核
+// 4. artifact upload TOCTOU:writeUploaded before conversation store in re-check
 // ---------------------------------------------------------------------------
 
-test('writeUploaded 服务层复核：会话不存在时 404 且不留孤儿目录', { timeout: 60_000 }, async () => {
+test('writeUploaded service layer re-check: conversation missing when 404 and do not orphan child directory', { timeout: 60_000 }, async () => {
   const dir = await makeTempDir('helm-artifact-del-')
   try {
     const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository())
@@ -319,9 +319,9 @@ test('writeUploaded 服务层复核：会话不存在时 404 且不留孤儿目�
     await assert.rejects(
       () => stat(join(dir, 'artifacts', '99')),
       (err: unknown) => (err as NodeJS.ErrnoException).code === 'ENOENT',
-      '已删会话的产物目录不得被重建（孤儿）',
+      'already delete conversation artifact directory must not by rebuild (orphan child)',
     )
-    // 复核为真：正常落盘。
+    // re-check is true: normal.
     const meta = await artifacts.writeUploaded(
       99,
       { name: 'ok.bin', bytes: new Uint8Array([4, 5]) },
@@ -334,12 +334,12 @@ test('writeUploaded 服务层复核：会话不存在时 404 且不留孤儿目�
   }
 })
 
-test('POST /api/conversations/:id/artifacts TOCTOU：入口校验通过后会话被删，写盘前复核 404', { timeout: 60_000 }, async () => {
+test('POST /api/conversations/:id/artifacts TOCTOU: entry validate via after conversation by delete, write before re-check 404', { timeout: 60_000 }, async () => {
   const dir = await makeTempDir('helm-artifact-tou-')
   try {
     const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository())
-    // 第一次 getConversationDetail（入口快速路径）成功；第二次（服务层落盘前
-    // 复核）not_found——模拟「校验通过 → DELETE 完成 → 上传落盘」交错。
+    // first time getConversationDetail(entry fast path) succeeded; second time (service layer before
+    // re-check)not_found- - simulated validate via → DELETE complete → upload hand over wrong.
     let detailCalls = 0
     const kernel = {
       dataDir: dir,
@@ -348,10 +348,10 @@ test('POST /api/conversations/:id/artifacts TOCTOU：入口校验通过后会话
       getConversationDetail: async (id: number) => {
         detailCalls += 1
         if (detailCalls === 1) return { ...summaryOf(id), entries: [] }
-        throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+        throw new HelmError('not_found', `conversation missing: ${id}`, 404)
       },
       getConversationEntry: async (id: number, entryId: number) => {
-        throw new HelmError('not_found', `条目 ${entryId} 在会话 ${id} 中不存在`, 404)
+        throw new HelmError('not_found', `item ${entryId} in conversation ${id} in missing`, 404)
       },
     } as unknown as KernelRuntimeLike
     await assert.rejects(
@@ -364,13 +364,13 @@ test('POST /api/conversations/:id/artifacts TOCTOU：入口校验通过后会话
         kernel,
       ),
       (err: unknown) => err instanceof HelmError && err.code === 'not_found' && err.status === 404,
-      '写盘前复核应拦截已删会话的上传',
+      'write before re-check should intercept already delete conversation upload',
     )
-    assert.equal(detailCalls, 2, '入口校验与服务层复核各查一次')
+    assert.equal(detailCalls, 2, 'entry validate and service layer re-check each inspect once')
     await assert.rejects(
       () => stat(join(dir, 'artifacts', '5')),
       (err: unknown) => (err as NodeJS.ErrnoException).code === 'ENOENT',
-      '不留 artifacts/<已删会话>/ 孤儿目录',
+      'do not artifacts/<already delete conversation>/ orphan child directory',
     )
   } finally {
     await cleanupDir(dir)

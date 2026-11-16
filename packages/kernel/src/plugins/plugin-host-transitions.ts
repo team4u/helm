@@ -1,5 +1,5 @@
 /**
- * 插件状态迁移辅助：注册清理、故障隔离/回滚、占位登记、UI 声明校验与托管摘要组装。
+ * plugin state migration auxiliary: register clean up, fault isolated/rollback, occupy register,UI declaration validate and hosting summary group install.
  */
 import { join } from 'node:path';
 import {
@@ -49,7 +49,7 @@ export function requirePlugin(
   pluginId: string,
 ): PluginState {
   const state = plugins.get(pluginId);
-  if (!state) throw new HelmError('unknown_plugin', `未注册的插件：${pluginId}`, 404, { pluginId });
+  if (!state) throw new HelmError('unknown_plugin', `not registered plugin:${pluginId}`, 404, { pluginId });
   return state;
 }
 
@@ -86,7 +86,7 @@ export async function teardownPluginState(
 }
 
 /**
- * 外部插件隔离回滚：清理已登记能力与挂载资源，保留 failed 占位不向上抛错。
+ * external plugin isolated rollback: clean up already register capability and mount asset, keep failed occupy do not to on throws.
  */
 export async function rollbackIsolatedPlugin(
   state: PluginState,
@@ -97,7 +97,7 @@ export async function rollbackIsolatedPlugin(
   try {
     await teardownPluginState(state, { stopServices: stage === 'enable' }, ctx);
   } catch {
-    // 清理失败不掩盖原始诊断
+    // clean up failed do not mask original diagnose
   }
   clearPluginRegistrations(state, ctx);
   state.enabled = false;
@@ -169,8 +169,8 @@ export async function rollbackEnablePlugin(
 }
 
 /**
- * 外部插件故障占位登记（scan / load 阶段失败，无有效 definition）：
- * 在 plugins 中登记（或更新）loadFailed 占位条目，绝不覆盖同名真实插件。
+ * external plugin fault occupy register (scan / load phase failed, without valid definition):
+ * in plugins in register (or update)loadFailed occupy item, never override same name real plugin.
  */
 export function registerFailedPlaceholder(
   spec: {
@@ -186,7 +186,7 @@ export function registerFailedPlaceholder(
   if (existing !== undefined && !existing.loadFailed) {
     throw new HelmError(
       'plugin_already_registered',
-      `插件 ${spec.id} 已注册（与故障占位冲突），拒绝覆盖`,
+      `plugin ${spec.id} registered (and fault occupy conflict), reject override`,
       409,
       { pluginId: spec.id },
     );

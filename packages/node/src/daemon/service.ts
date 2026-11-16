@@ -1,13 +1,13 @@
 /**
- * 跨平台开机自启服务：macOS launchd / Linux systemd --user / Windows schtasks。
+ * across platform open machine self start service:macOS launchd / Linux systemd --user / Windows schtasks.
  *
- * 只做四件事：渲染服务描述（renderServiceSpec）、写数据目录留档副本、
- * 复制到平台生效位置、调用平台注册命令。每一步失败都显式返回
- * ok:false + message（含失败步骤与原因），绝不静默吞错或伪装成功；
- * 系统命令失败时保留已写入的配置，交由用户重试或 uninstall 清理。
+ * only do four piece matter: render service description (renderServiceSpec), write data directory Profile copy,
+ * duplicate to platform takes effect location, invoke platform register command. each one step failed all explicit return
+ * ok:false + message(contains failed step and reason), never static default swallow wrong or disguise succeeded;
+ * system command on failure keep already write config, hand over by user retry or uninstall clean up.
  *
- * 命令执行经 ServiceExec 注入（默认为带超时的异步 spawn，不阻塞事件循环、
- * 不无限期卡死）；单测注入内存执行器做无副作用验证，绝不真实安装。
+ * command execute via ServiceExec inject (by default is carries timeout async spawn, non-blocking event loop,
+ * do not unbounded phase card die); single test inject memory execute do no side effects verify, never real install.
  */
 
 import { spawn } from 'node:child_process';
@@ -16,45 +16,45 @@ import path from 'node:path';
 import os from 'node:os';
 
 export interface ServiceSpecOptions {
-  /** 覆盖 process.platform（单测渲染三平台模板用）。 */
+  /** override process.platform(single test render three platform template use). */
   platform?: NodeJS.Platform;
-  /** node 可执行文件路径（缺省 process.execPath）。 */
+  /** node can execute file path (default process.execPath). */
   nodePath?: string;
-  /** helm-node CLI 入口（编译产物 cli.js 或 tsx 源入口）。 */
+  /** helm-node CLI entry (compile artifact cli.js or tsx source entry). */
   cliEntryPath: string;
   dataDir: string;
   hubUrl?: string;
   /**
-   * 服务文件根目录（缺省 os.homedir()）：launchd plist / systemd unit / Windows
-   * 任务 XML 的生效位置均落在此根下。单测注入临时目录，确保零宿主副作用。
+   * service file directory (default os.homedir()):launchd plist / systemd unit / Windows
+   * task XML takes effect location all in this under. single test inject temp directory, ensure zero host side effect.
    */
   serviceHome?: string;
 }
 
 export interface ServiceSpec {
   platform: NodeJS.Platform;
-  /** 服务单元留档副本落点（数据目录内）。 */
+  /** service unit Profile copy point (data directory inside). */
   configPath: string;
-  /** 平台生效路径（launchd plist / systemd unit / Windows 任务 XML）。 */
+  /** platform takes effect path (launchd plist / systemd unit / Windows task XML). */
   targetPath: string;
-  /** 服务单元内容（plist XML / unit / 任务 XML）。 */
+  /** service unit content (plist XML / unit / task XML). */
   content: string;
-  /** 平台注册命令（argv）。 */
+  /** platform register command (argv). */
   installCmd: string[];
-  /** 平台卸载命令（argv）。 */
+  /** platform unload command (argv). */
   uninstallCmd: string[];
-  /** 供状态探测的命令（argv）。 */
+  /** supply state probe command (argv). */
   statusCmd: string[];
 }
 
 export interface ServiceExec {
-  /** 执行命令；返回 { code, stdout, stderr, timedOut }（spawn 语义；error 映射 code:null + stderr）。 */
+  /** execute command; return { code, stdout, stderr, timedOut }(spawn semantics;error mapping code:null + stderr). */
   run(command: string, args: readonly string[]): Promise<{ code: number | null; stdout: string; stderr: string; timedOut?: boolean }>;
 }
 
 export const SERVICE_EXEC_TIMEOUT_MS = 30_000;
 
-/** 默认 ServiceExec：异步 spawn + 总超时；spawn error（ENOENT 等）如实返回 code:null。 */
+/** by default ServiceExec: async spawn + total timeout;spawn error(ENOENT etc.) such as return code:null. */
 export const defaultServiceExec: ServiceExec = {
   async run(command, args) {
     return await new Promise((resolve) => {
@@ -62,7 +62,7 @@ export const defaultServiceExec: ServiceExec = {
       try {
         child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
       } catch (error) {
-        resolve({ code: null, stdout: '', stderr: `spawn ${command} 失败: ${error instanceof Error ? error.message : String(error)}`, timedOut: false });
+        resolve({ code: null, stdout: '', stderr: `spawn ${command} failed: ${error instanceof Error ? error.message : String(error)}`, timedOut: false });
         return;
       }
       let stdout = '';
@@ -92,10 +92,10 @@ export const defaultServiceExec: ServiceExec = {
         });
       };
       child.on('error', (error) => {
-        finish(null, `无法执行 ${command}: ${error.message}`);
+        finish(null, `cannot execute ${command}: ${error.message}`);
       });
       child.on('close', (code) => {
-        finish(killed ? null : code, killed ? `命令超时（>${SERVICE_EXEC_TIMEOUT_MS}ms）被终止: ${command}` : undefined);
+        finish(killed ? null : code, killed ? `command timeout (>${SERVICE_EXEC_TIMEOUT_MS}ms) by terminate: ${command}` : undefined);
       });
     });
   },
@@ -120,9 +120,9 @@ function escapeXml(unsafe: string): string {
   });
 }
 
-/** systemd 不经 Shell；分别转义参数引号、specifier（%）与环境展开（$）。 */
+/** systemd do not via Shell; respectively escaping parameter quotes,specifier(%) and environment expand ($). */
 function quoteSystemdArg(arg: string): string {
-  if (/[\x00-\x1f\x7f]/.test(arg)) throw new Error('服务参数不得包含控制字符');
+  if (/[\x00-\x1f\x7f]/.test(arg)) throw new Error('service parameter must not contains control character');
   const literal = arg.replaceAll('%', '%%').replaceAll('$', () => '$$');
   return /^[A-Za-z0-9@:,.+/_=-]+$/.test(literal) && literal !== ''
     ? literal
@@ -130,7 +130,7 @@ function quoteSystemdArg(arg: string): string {
 }
 
 function quoteWindowsArg(arg: string): string {
-  if (/[\x00-\x1f\x7f]/.test(arg)) throw new Error('服务参数不得包含控制字符');
+  if (/[\x00-\x1f\x7f]/.test(arg)) throw new Error('service parameter must not contains control character');
   return `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, '$1$1')}"`;
 }
 
@@ -138,12 +138,12 @@ const DARWIN_LABEL = 'ai.helm.node';
 const LINUX_UNIT = 'helm-node.service';
 const WIN_TASK = 'HelmNode';
 
-/** CLI 启动参数（不含 node 与入口本身）：start --data-dir <dir> [--hub <url>]。 */
+/** CLI start parameter (excludes node and entry itself):start --data-dir <dir> [--hub <url>]. */
 function cliArgs(dataDir: string, hubUrl?: string): string[] {
   return ['start', '--data-dir', dataDir, ...(hubUrl !== undefined && hubUrl !== '' ? ['--hub', hubUrl] : [])];
 }
 
-/** 渲染平台服务描述：不落盘、不执行命令，纯函数便于三平台单测。 */
+/** render platform service description: do not, do not execute command, pure function convenient at three platform single test. */
 export function renderServiceSpec(options: ServiceSpecOptions): ServiceSpec {
   const platform = options.platform ?? process.platform;
   const nodePath = options.nodePath ?? process.execPath;
@@ -235,15 +235,15 @@ WantedBy=default.target
     };
   }
 
-  throw new Error(`不支持的平台 ${JSON.stringify(platform)}：helm-node service 仅支持 darwin / linux / win32`);
+  throw new Error(`unsupported platform ${JSON.stringify(platform)}:helm-node service only support darwin / linux / win32`);
 }
 
 export interface ServiceOperationOptions {
   platform?: NodeJS.Platform;
   nodePath?: string;
-  /** 注入命令执行器（单测无副作用验证）。 */
+  /** inject command execute (single test no side effects verify). */
   execCommand?: ServiceExec;
-  /** 服务文件根目录（缺省 os.homedir()）；单测必须注入临时目录。 */
+  /** service file directory (default os.homedir()); single test must inject temp directory. */
   serviceHome?: string;
 }
 
@@ -257,22 +257,22 @@ export interface ServiceOperationResult {
   message: string;
 }
 
-/** describeFailure：命令失败的可读诊断（stderr > timeout > error 文本）。 */
+/** describeFailure: command failed can read diagnose (stderr > timeout > error text). */
 function describeFailure(command: readonly string[], result: { code: number | null; stdout: string; stderr: string; timedOut?: boolean }): string {
   const argvText = command.join(' ');
   const output = result.stderr.trim() !== '' ? result.stderr.trim() : result.stdout.trim();
-  if (result.timedOut === true) return `${argvText} 超时未返回`;
-  if (result.code === null) return `${argvText} 无法执行：${output !== '' ? output : '未知错误'}`;
-  return `${argvText} 退出码 ${result.code}${output !== '' ? `：${output}` : ''}`;
+  if (result.timedOut === true) return `${argvText} timeout not return`;
+  if (result.code === null) return `${argvText} cannot execute:${output !== '' ? output : 'unknown error'}`;
+  return `${argvText} exit code ${result.code}${output !== '' ? `:${output}` : ''}`;
 }
 
-/** 校验注册命令结果：非零退出、无法执行或超时都视为失败，如实诊断。 */
+/** validate register command result: non-zero exit, cannot execute or timeout all treated as failed, such as diagnose. */
 function assertCommandOk(command: readonly string[], result: { code: number | null; stdout: string; stderr: string; timedOut?: boolean }, step: string): void {
   if (result.code === 0 && result.timedOut !== true) return;
-  throw new Error(`${step}失败：${describeFailure(command, result)}`);
+  throw new Error(`${step}failed:${describeFailure(command, result)}`);
 }
 
-/** 安装服务：渲染 → 写留档副本 → 复制到平台生效路径 → daemon-reload（linux）→ 平台注册。任一步失败显式报错。 */
+/** install service: render → write Profile copy → duplicate to platform takes effect path → daemon-reload(linux)→ platform register. any one step failed explicit errors. */
 export async function installNodeService(
   cliEntryPath: string,
   dataDir: string,
@@ -297,12 +297,12 @@ export async function installNodeService(
   try {
     await fsp.mkdir(path.dirname(desc.configPath), { recursive: true });
   } catch (error) {
-    throw new Error(`创建服务配置目录失败（${path.dirname(desc.configPath)}）：${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`create service config directory failed (${path.dirname(desc.configPath)}):${error instanceof Error ? error.message : String(error)}`);
   }
   try {
     await fsp.writeFile(desc.configPath, desc.content, 'utf8');
   } catch (error) {
-    throw new Error(`写入服务配置失败（${desc.configPath}）：${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`write service config failed (${desc.configPath}):${error instanceof Error ? error.message : String(error)}`);
   }
 
   try {
@@ -310,7 +310,7 @@ export async function installNodeService(
     await fsp.writeFile(desc.targetPath, desc.content, 'utf8');
   } catch (error) {
     throw new Error(
-      `写入平台服务文件失败（${desc.targetPath}）：${error instanceof Error ? error.message : String(error)}；留档副本已保存于 ${desc.configPath}`,
+      `write platform service file failed (${desc.targetPath}):${error instanceof Error ? error.message : String(error)}; Profile copy already save at ${desc.configPath}`,
     );
   }
 
@@ -321,13 +321,13 @@ export async function installNodeService(
   }
 
   const installResult = await exec.run(desc.installCmd[0]!, desc.installCmd.slice(1));
-  assertCommandOk(desc.installCmd, installResult, '系统注册 ');
-  return { ok: true, ...base, installed: true, message: `服务已安装（${desc.platform}）` };
+  assertCommandOk(desc.installCmd, installResult, 'system register ');
+  return { ok: true, ...base, installed: true, message: `service installed (${desc.platform})` };
 }
 
 /**
- * 卸载服务：平台注销 → 删除平台文件与留档副本。
- * 注销命令失败（含无法执行/超时）：显式报错且**不删除任何配置**，返回 installed 保持现状。
+ * unload service: platform deregister → delete platform file and Profile copy.
+ * deregister command failed (contains cannot execute/timeout): explicit errors and**do not delete any config**, return installed keep now state.
  */
 export async function uninstallNodeService(
   cliEntryPath: string,
@@ -352,7 +352,7 @@ export async function uninstallNodeService(
   const uninstallResult = await exec.run(desc.uninstallCmd[0]!, desc.uninstallCmd.slice(1));
   if (uninstallResult.code !== 0 || uninstallResult.timedOut === true) {
     throw new Error(
-      `平台注销失败：${describeFailure(desc.uninstallCmd, uninstallResult)}；已保留配置（${desc.configPath}），可重试 uninstall`,
+      `platform deregister failed:${describeFailure(desc.uninstallCmd, uninstallResult)}; already keep config (${desc.configPath}), can retry uninstall`,
     );
   }
 
@@ -360,39 +360,39 @@ export async function uninstallNodeService(
     try {
       await fsp.rm(file, { force: true });
     } catch (error) {
-      throw new Error(`注销后清理配置文件失败（${file}）：${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`deregister after clean up config file failed (${file}):${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  return { ok: true, ...base, installed: false, message: `服务已卸载（${desc.platform}）` };
+  return { ok: true, ...base, installed: false, message: `service uninstalled (${desc.platform})` };
 }
 
 export type ServiceRunningState = 'running' | 'stopped' | 'unknown';
 
 export interface NodeServiceStatus {
-  /** null 表示平台查询失败，无法确认是否已注册。 */
+  /** null means platform query failed, cannot confirm is otherwise registered. */
   installed: boolean | null;
   running: ServiceRunningState;
   platform: NodeJS.Platform;
   configPath: string;
   targetPath: string;
-  /** 平台状态命令输出（诊断用）。 */
+  /** platform state command output (diagnose use). */
   detail?: string;
 }
 
-/** 解析平台状态命令输出 → running/stopped/unknown。 */
+/** parse platform state command output → running/stopped/unknown. */
 function parseRunningState(platform: NodeJS.Platform, result: { code: number | null; stdout: string; stderr: string; timedOut?: boolean }): ServiceRunningState {
   if (result.timedOut === true) return 'unknown';
   const text = `${result.stdout}\n${result.stderr}`.trim();
   if (platform === 'linux') {
-    // systemctl is-active：active → running；inactive / failed → stopped；其他（unknown 等）→ unknown
+    // systemctl is-active:active → running;inactive / failed → stopped; other (unknown etc.)→ unknown
     const state = result.stdout.trim();
     if (result.code === 0 && state === 'active') return 'running';
     if (state === 'inactive' || state === 'failed' || state === 'dead') return 'stopped';
     return 'unknown';
   }
   if (platform === 'darwin') {
-    // launchctl list <label>：表格行 "PID\tStatus\tLabel"；PID 为 "-" 表示未运行；
-    // "Could not find" 表示服务未加载（未运行），其余非零退出视为查询失败。
+    // launchctl list <label>: table row "PID\tStatus\tLabel";PID is "-" means not run;
+    // "Could not find" means service not load (not run), the rest non-zero exit treated as query failed.
     if (/could not find|no such process/i.test(text)) return 'stopped';
     if (result.code !== 0) return 'unknown';
     if (/"PID"\s*=\s*\d+|pid\s*=\s*\d+|state\s*=\s*running/.test(text)) return 'running';
@@ -408,16 +408,16 @@ function parseRunningState(platform: NodeJS.Platform, result: { code: number | n
     return 'unknown';
   }
   if (platform === 'win32') {
-    // schtasks /Query：中文系统输出 "正在运行"/"就绪"，英文 "Running"/"Ready"。
+    // schtasks /Query: Chinese system output "is now run"/"ready", English "Running"/"Ready".
     if (result.code !== 0) return 'unknown';
-    if (/正在运行|Running/i.test(text) && !/Ready|就绪/i.test(text)) return 'running';
-    if (/Ready|就绪/i.test(text)) return 'stopped';
+    if (/is now run|Running/i.test(text) && !/Ready|ready/i.test(text)) return 'running';
+    if (/Ready|ready/i.test(text)) return 'stopped';
     return 'unknown';
   }
   return 'unknown';
 }
 
-/** 查询服务状态：installed 以平台生效文件为准（留档副本不算安装），查询命令失败时 running=unknown + 显式 detail。 */
+/** query service state:installed with platform takes effect file is allow (Profile copy do not compute install), query command on failure running=unknown + explicit detail. */
 export async function getNodeServiceStatus(
   cliEntryPath: string,
   dataDir: string,
@@ -438,23 +438,23 @@ export async function getNodeServiceStatus(
     .then(() => true)
     .catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-      throw new Error(`探测平台服务文件失败（${desc.targetPath}）：${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`probe platform service file failed (${desc.targetPath}):${error instanceof Error ? error.message : String(error)}`);
     });
 
   const result = await exec.run(desc.statusCmd[0]!, desc.statusCmd.slice(1));
   const detail = `${result.stdout}${result.stderr}`.trim();
   const running = parseRunningState(desc.platform, result);
-  const missing = /could not find|not found|no such process|cannot find|找不到|不存在/i.test(detail);
+  const missing = /could not find|not found|no such process|cannot find|find fewer than|missing/i.test(detail);
   const installed: boolean | null = desc.platform === 'linux'
     ? targetExists
     : result.code === 0 ? true : missing ? false : null;
   const diagnostics: string[] = [];
   if (result.code === null || result.timedOut === true || (result.code !== 0 && running === 'unknown')) {
-    diagnostics.push(`状态查询命令失败：${describeFailure(desc.statusCmd, result)}`);
+    diagnostics.push(`state query command failed:${describeFailure(desc.statusCmd, result)}`);
   }
   if (!targetExists && result.code === 0) {
-    // 平台报告任务存在但生效文件缺失（如人工按同名单元注册过）：如实标注，不宣称 installed。
-    diagnostics.push(`平台报告服务存在，但生效文件缺失（${desc.targetPath}）`);
+    // platform report task store in but takes effect file missing (such as human by same name unit register): such as mark note, do not declare call installed.
+    diagnostics.push(`platform report service store in, but takes effect file missing (${desc.targetPath})`);
   }
 
   return {

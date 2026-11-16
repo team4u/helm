@@ -1,10 +1,10 @@
 /**
- * 资产领域路由：GET /api/artifacts/:id/content（原始字节直传）、
- * GET /api/skills、GET /api/skills/:id，以及会话产物上传
- * POST /api/conversations/:id/artifacts（由 conversation-routes 委派）。
+ * asset domain routing:GET /api/artifacts/:id/content(original byte direct pass),
+ * GET /api/skills,GET /api/skills/:id, and conversation artifact upload
+ * POST /api/conversations/:id/artifacts(by conversation-routes entrust dispatch).
  *
- * 产物内容读取带三重防线：元数据形状门禁（仓库不是可信边界）+
- * 三层 realpath 防符号链接越界 + ENOENT 如实 404。
+ * artifact content read carries three heavy guard against line: metadata shape gate (repository is not can message boundary)+
+ * three layer realpath guard against symlink out of bounds + ENOENT such as 404.
  */
 import { HelmError, isArtifactKind } from '@helm/protocol'
 import type { ArtifactMetadata } from '@helm/protocol'
@@ -44,16 +44,16 @@ export async function handleArtifactsDomain(
     const fallbackName = metadata.name.replace(/[^\x20-\x7e]|["\\]/g, '_')
     const encodedName = encodeURIComponent(metadata.name).replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
     headers['content-disposition'] = `${disposition}; filename="${fallbackName}"; filename*=UTF-8''${encodedName}`
-    // 原始字节直传（二进制不转字符串，不做 JSON 脱敏缓冲）。
+    // original byte direct pass (two enter system do not rotate string, does not JSON redaction buffer).
     return new Response(buffer as unknown as BodyInit, { headers })
   }
-  return errorResponse(redactor, 404, 'not_found', '路由不存在')
+  return errorResponse(redactor, 404, 'not_found', 'routing missing')
 }
 
 /**
- * 产物元数据形状门禁：path 必须形如 artifacts/<positiveConvId>/<file>，
- * conversationId 为正整数，且 kind 必须是 'upload' | 'registered' | 'spill'。
- * 仓库（内存 Map/sqlite）不是可信边界，手改 DB 的伪造 meta 不得让 HTTP 层读任意文件。
+ * artifact metadata shape gate:path must shape such as artifacts/<positiveConvId>/<file>,
+ * conversationId is positive integer, and kind must be 'upload' | 'registered' | 'spill'.
+ * repository (memory Map/sqlite) is not can message boundary, manually change DB fabricate meta must not let HTTP layer read any file.
  */
 function assertArtifactMetadataShape(metadata: ArtifactMetadata): void {
   if (
@@ -62,7 +62,7 @@ function assertArtifactMetadataShape(metadata: ArtifactMetadata): void {
     !isArtifactKind(metadata.kind) ||
     typeof metadata.path !== 'string'
   ) {
-    throw new HelmError('artifact_metadata_illegal', `产物元数据非法: ${metadata.id}`, 500)
+    throw new HelmError('artifact_metadata_illegal', `artifact metadata illegal: ${metadata.id}`, 500)
   }
   const parts = metadata.path.split('/')
   if (
@@ -72,69 +72,69 @@ function assertArtifactMetadataShape(metadata: ArtifactMetadata): void {
     parts[2] === undefined || parts[2].length === 0 ||
     parts[2] === '.' || parts[2] === '..'
   ) {
-    throw new HelmError('artifact_metadata_illegal', `产物登记路径非法: ${metadata.path}`, 500)
+    throw new HelmError('artifact_metadata_illegal', `artifact register path illegal: ${metadata.path}`, 500)
   }
 }
 
 /**
- * 按登记元数据读取产物原始字节（realpath 防符号链接越界）。
- * - metadata.path 经 assertArtifactMetadataShape 已限定为
- *   artifacts/<convId>/<file>；
- * - 三层 realpath（artifacts 根 / 会话目录 / 目标文件）后必须满足：
- *   会话目录仍在真实 artifacts 根内（防 artifacts/<convId> 本身是逃逸
- *   软链），目标文件仍在会话目录内（防文件名段是逃逸软链）；
- * - ENOENT 如实 404；其他读失败（EACCES 等）原样上抛交顶层定性，
- *   绝不统一伪称 missing。
+ * by register metadata read artifact original byte (realpath guard against symlink out of bounds).
+ * - metadata.path via assertArtifactMetadataShape already limit set is
+ *   artifacts/<convId>/<file>;
+ * - three layer realpath(artifacts  / conversation directory / target file) after must satisfy:
+ *   conversation directory still in real artifacts inside (guard against artifacts/<convId> itself is escape
+ *   symlink), target file still in conversation directory inside (guard against filename segment is escape symlink);
+ * - ENOENT such as 404; other read failed (EACCES etc.) original on throw hand over top-level set,
+ *   never unify fake call missing.
  */
 async function readArtifactBytes(kernel: KernelRuntimeLike, metadata: ArtifactMetadata): Promise<Uint8Array> {
   const artifactsRootReal = await nodeFsRealpath(joinPath(kernel.dataDir, 'artifacts'))
   const convRootReal = await nodeFsRealpath(joinPath(artifactsRootReal, String(metadata.conversationId)))
-  // 会话目录本身不得是逃出 artifacts 根的符号链接。
+  // conversation directory itself must not is escape out artifacts symlink.
   if (!convRootReal.startsWith(artifactsRootReal + PATH_SEP)) {
-    throw new HelmError('artifact_path_illegal', '产物会话目录越出 artifacts 根，拒绝读取', 500)
+    throw new HelmError('artifact_path_illegal', 'artifact conversation directory exceeds out artifacts , reject read', 500)
   }
   const target = joinPath(convRootReal, metadata.path.split('/')[2]!)
   const targetReal = await nodeFsRealpath(target)
   if (targetReal !== convRootReal && !targetReal.startsWith(convRootReal + PATH_SEP)) {
-    throw new HelmError('artifact_path_illegal', '产物登记路径越界', 500)
+    throw new HelmError('artifact_path_illegal', 'artifact register path out of bounds', 500)
   }
   try {
     const buffer = await nodeFsReadFile(targetReal)
     return new Uint8Array(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength))
   } catch (error) {
     if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new HelmError('artifact_file_missing', `产物文件缺失: ${metadata.id}`, 404)
+      throw new HelmError('artifact_file_missing', `artifact file missing: ${metadata.id}`, 404)
     }
     throw error
   }
 }
 
 // ---------------------------------------------------------------------------
-// 会话产物上传（POST /api/conversations/:id/artifacts，挂载点在会话领域）
+// conversation artifact upload (POST /api/conversations/:id/artifacts, mount point in conversation domain)
 // ---------------------------------------------------------------------------
 
-/** 严格 base64（标准/URL-safe 均拒残缺 shape；空串允许 = 0 字节）。 */
+/** strictly base64(standard/URL-safe all refuse leftover missing shape; empty string allows = 0 byte). */
 function decodeBase64Strict(value: string): Uint8Array {
   if (value === '') return new Uint8Array(0)
   const normalized = value.replaceAll('-', '+').replaceAll('_', '/')
   if (!/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) {
-    throw new ValidationError('contentBase64 不是合法 base64')
+    throw new ValidationError('contentBase64 is not legal base64')
   }
   const buffer = Buffer.from(normalized, 'base64')
-  // 回读长度一致才可信（Buffer 宽容忽略尾部残缺字符，不能用）。
+  // back read length consistent only then can message (Buffer wide contain ignore tail part leftover missing character, cannot use).
   const recheck = buffer.toString('base64').replaceAll('=', '')
   if (recheck !== normalized.replaceAll('=', '')) {
-    throw new ValidationError('contentBase64 不是合法 base64')
+    throw new ValidationError('contentBase64 is not legal base64')
   }
   return new Uint8Array(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength))
 }
 
 /**
- * POST /api/conversations/:id/artifacts：跨平台产物上传。
- * - application/json：{ name, contentBase64, mimeType? }（Web 前端/base64 场景）；
- * - 其他（application/octet-stream 等二进制流）：文件名经
- *   x-artifact-filename 头（含 % 时严格解码）或 ?name= 查询参数；
- * 体积上限统一 MAX_ARTIFACT_BYTES（15 MiB）；成功 201 返回产物元数据。
+ * POST /api/conversations/:id/artifacts: across platform artifact upload.
+ * - application/json:{ name, contentBase64, mimeType? }(Web frontend/base64 scenario);
+ * - other (application/octet-stream etc. two enter system stream): filename via
+ *   x-artifact-filename head (contains % when strictly decode) or ?name= query parameter;
+ * body accumulate cap unify MAX_ARTIFACT_BYTES(15 MiB); succeeded 201 return artifact metadata.
  */
 export async function postConversationArtifact(
   ctx: RouteContext,
@@ -142,21 +142,21 @@ export async function postConversationArtifact(
   id: number,
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
-  // 会话存在性校验（不存在自动 404，不留孤儿产物）。
+  // conversation store in validate (missing automatically 404, do not orphan child artifact).
   await kernel.getConversationDetail(id, { limit: 1 })
   const contentType = (ctx.request.headers.get('content-type') ?? '').toLowerCase()
   let name: string
   let bytes: Uint8Array
   let mimeType: string | undefined
   if (contentType.includes('application/json')) {
-    // base64 膨胀系数 ~1.37 + 16KiB 余量；超限映射为 413 artifact_too_large。
+    // base64 expansion system count ~1.37 + 16KiB remaining amount; over limit mapping is 413 artifact_too_large.
     const jsonMaxBytes = Math.ceil(MAX_ARTIFACT_BYTES * 1.37) + 16 * 1024
     let body: Record<string, unknown>
     try {
       body = await readJsonBody(ctx.request, jsonMaxBytes)
     } catch (error) {
       if (error instanceof HelmError && error.code === 'body_too_large') {
-        throw new HelmError('artifact_too_large', `请求体超过 ${jsonMaxBytes} 字节上限`, 413, {
+        throw new HelmError('artifact_too_large', `request body exceeds ${jsonMaxBytes} byte cap`, 413, {
           maxBytes: jsonMaxBytes,
         })
       }
@@ -164,21 +164,21 @@ export async function postConversationArtifact(
     }
     const rawName = body.name
     if (typeof rawName !== 'string' || rawName.length === 0) {
-      throw new ValidationError('name 需为非空字符串')
+      throw new ValidationError('name must be a non-empty string')
     }
     name = rawName
     const rawContent = body.contentBase64
     if (typeof rawContent !== 'string') {
-      throw new ValidationError('contentBase64 需为字符串')
+      throw new ValidationError('contentBase64 must be a string')
     }
     bytes = decodeBase64Strict(rawContent)
     const rawMime = body.mimeType
     if (rawMime !== undefined && typeof rawMime !== 'string') {
-      throw new ValidationError('mimeType 需为字符串')
+      throw new ValidationError('mimeType must be a string')
     }
     mimeType = rawMime
     const unknown = Object.keys(body).filter((k) => !['name', 'contentBase64', 'mimeType'].includes(k))
-    if (unknown.length > 0) throw new ValidationError(`不支持的字段: ${unknown.join(', ')}`)
+    if (unknown.length > 0) throw new ValidationError(`unsupported field: ${unknown.join(', ')}`)
   } else {
     const headerName = ctx.request.headers.get('x-artifact-filename')
     const rawName =
@@ -188,7 +188,7 @@ export async function postConversationArtifact(
           : headerName
         : ctx.url.searchParams.get('name')
     if (rawName === null || rawName.trim() === '') {
-      throw new ValidationError('缺少文件名（请提供 x-artifact-filename 请求头或 ?name= 查询参数）')
+      throw new ValidationError('missing filename (please provide x-artifact-filename request head or ?name= query parameter)')
     }
     name = rawName
     const headerMime = ctx.request.headers.get('x-artifact-mime-type')
@@ -201,9 +201,9 @@ export async function postConversationArtifact(
           })()
     bytes = await readBinaryBodyWithLimit(ctx.request, MAX_ARTIFACT_BYTES)
   }
-  // 服务层兑底：writeUploaded 落盘前复核会话存在（入口快速路径检查与写盘
-  // 之间隔整个上传体读取，最长可达 15 MiB 时长）；非 not_found 错误如实
-  // 上抛，不伪称会话缺失。
+  // service layer honor bottom:writeUploaded before re-check conversation store in (entry fast path check and write
+  // between isolate the whole upload body read, most long can reach 15 MiB when long); non- not_found error such as
+  // on throw, do not fake call conversation missing.
   const metadata = await kernel.artifacts.writeUploaded(id, {
     name,
     bytes,
@@ -241,12 +241,12 @@ export async function handleSkillsDomain(
   if (third === undefined && method === 'GET') {
     const path = ctx.url.searchParams.get('path') ?? undefined
     if (path !== undefined && !isSafeRelativePath(path)) {
-      throw new HelmError('path_traversal', `技能文件路径越界: ${skillId}/${path}`, 400)
+      throw new HelmError('path_traversal', `skill file path out of bounds: ${skillId}/${path}`, 400)
     }
     const text = await kernel.skills.readFile(skillId, path)
     return jsonOk(redactor, { text })
   }
-  return errorResponse(redactor, 404, 'not_found', '路由不存在')
+  return errorResponse(redactor, 404, 'not_found', 'routing missing')
 }
 
 function isSafeRelativePath(path: string): boolean {

@@ -1,27 +1,27 @@
 /**
- * 纯内存 SecretStash：秘密只存在进程内存，绝不落盘、绝不进模型上下文。
- * 模型与持久层只看到 `[REDACTED:stash:<uuid>]` 占位符。
+ * in-memory SecretStash: secret only store in process memory, never, never enter model context.
+ * model and durable layer only see to `[REDACTED:stash:<uuid>]` placeholder.
  *
- * 生命周期（停止注入 != 停止脱敏）：
- * - put 可选 SecretLifetime：ttlMs 到期或 scope 'turn' 的回合结算后，秘密从
- *   active env bucket（envFor/has）移除，但 byUuid 永久保留旧值用于全部输出
- *   脱敏（含跨 chunk 流式）；同名覆盖的旧值同样继续脱敏；只有 clear(conversationId)
- *   （会话删除/全清）才回收；
- * - TTL 惰性判定：put 时算 expiresAt，读路径（envFor/has/stats）对表 clock，
- *   不设额外定时器；clock 可注入（测试用 fake clock）；
- * - turn 作用域按「出生结算序」精确归属：put 记录当时已完成的回合结算数，
- *   settleTurn 先推进计数再清除出生序小于新计数的秘密——run 存续期登记的
- *   属本回合，结算后登记的（异步审批落地/late hook）属下一回合，绝不误扫；
- * idle 不清扫（无定时器）；
- * - 诚实边界：TTL/回合结束无法从已启动的子进程撤回已注入的环境变量，
- *   只保证后续 spawn 不再注入。
+ * lifecycle (stop inject != stop redaction):
+ * - put optional SecretLifetime:ttlMs expires or scope 'turn' turn compute after, secret from
+ *   active env bucket(envFor/has) remove, but byUuid forever long keep old value used to all output
+ *   redaction (contains across chunk streaming); same name override old value same continue redaction; only clear(conversationId)
+ *   (conversation delete/all clean) only then reclaim;
+ * - TTL lazy decide:put when compute expiresAt, read path (envFor/has/stats) for table clock,
+ *   do not set extra timer;clock can inject (test use fake clock);
+ * - turn effect domain by out generate compute order precise ownership:put record when when completed turn compute count,
+ *   settleTurn first push enter counter again clear out generate order less than new counter secret - -run store continue phase register
+ *   belong this turn, compute after register (async approval persisted/late hook) belong under one turn, never mistakenly scan;
+ * idle do not clean scan (without timer);
+ * - honest boundary:TTL/turn end cannot from already start child process withdraw back already inject environment variable,
+ *   only guarantee after continue spawn no longer inject.
  *
- * addRedaction 登记全局逐值脱敏（如内核受管 HELM_TOKEN）：非环境变量、
- * 不计入 stats、不随 clear(conversationId) 清除；多个登记可叠放同一值，
- * 全部解除后才停止脱敏；clear() 全清时一并移除。
+ * addRedaction register global one by one value redaction (such as kernel managed HELM_TOKEN): non- environment variable,
+ * do not count stats, do not follow clear(conversationId) clear; multiple register can stack put the same value,
+ * all solve except after only then stop redaction;clear() all clean when one and remove.
  *
- * 诚实边界（如实声明）：stash 无法防御同进程内的 shell 命令与插件代码
- * 读取环境变量或进程内存——那是可信代码的固有权限，本模块不承诺零泄漏。
+ * honest boundary (such as declaration):stash cannot guard against defend same process inside shell command and plugin code
+ * read environment variable or process memory - - that is can message code solid has permission, this module does not promise zero leak leak.
  */
 import { randomUUID } from 'node:crypto'
 import { HelmError, type SecretLifetime } from '@helm/protocol'
@@ -29,7 +29,7 @@ import { HelmError, type SecretLifetime } from '@helm/protocol'
 export const REDACTED_PREFIX = '[REDACTED:stash:'
 export const REDACTED_MARKER = '[REDACTED]'
 
-/** TTL 上限：24 小时（安全上限，防手滑配置成永不过期量级）。 */
+/** TTL cap:24 small when (security cap, guard against manually slide config into forever however phase amount level). */
 export const MAX_SECRET_TTL_MS = 24 * 60 * 60 * 1000
 
 export interface StashedSecret {
@@ -38,33 +38,33 @@ export interface StashedSecret {
   readonly placeholder: string
   readonly value: string
   readonly name: string
-  /** TTL 到期时刻（epoch ms；put 时按注入 clock 算出，读路径惰性判定）。 */
+  /** TTL expires moment (epoch ms;put when by inject clock compute out, read path lazy decide). */
   readonly expiresAt?: number
-  /** scope 'turn' 的出生结算序（当时已完成的回合结算数；undefined = 会话级）。 */
+  /** scope 'turn' out generate compute order (when when completed turn compute count;undefined = conversation level). */
   readonly bornSettlement?: number
 }
 
-/** 合法环境变量名：字母或下划线开头，仅字母数字下划线，非空且不太长。 */
+/** legal environment variable name: character parent or underscore open head, only character parent number underscore, non-empty and do not too long. */
 export function isValidEnvName(name: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(name)
 }
 
 /**
- * SecretLifetime 边界校验（AskDoc spec 与 stash.put 共用）：
- * 平面对象、仅允许 ttlMs/scope 两个键（拼写错漏必须显式拒绝而非静默无 TTL）、
- * ttlMs 为有限正 safe integer 且不超上限、scope 仅两种枚举。
+ * SecretLifetime boundary validate (AskDoc spec and stash.put shared use):
+ * flat side object, only allows ttlMs/scope two key (piece together write wrong leak must explicit reject while non- static default without TTL),
+ * ttlMs is finite correct safe integer and do not over cap,scope only two kinds of enumeration.
  */
 export function validateSecretLifetime(lifetime: SecretLifetime, context: string): SecretLifetime {
   if (
     lifetime === null || typeof lifetime !== 'object' || Array.isArray(lifetime) ||
     (Object.getPrototypeOf(lifetime) !== Object.prototype && Object.getPrototypeOf(lifetime) !== null)
   ) {
-    throw new HelmError('validation_error', `${context} 需为对象（收到 ${typeof lifetime}）`, 400)
+    throw new HelmError('validation_error', `${context} must be an object (receives ${typeof lifetime})`, 400)
   }
   const keys = Object.keys(lifetime)
   for (const key of keys) {
     if (key !== 'ttlMs' && key !== 'scope') {
-      throw new HelmError('validation_error', `${context} 含未知键 '${key}'（仅允许 ttlMs / scope）`, 400, { key })
+      throw new HelmError('validation_error', `${context} contains unknown key '${key}'(only allows ttlMs / scope)`, 400, { key })
     }
   }
   const ttlMs = (lifetime as { ttlMs?: unknown }).ttlMs
@@ -77,7 +77,7 @@ export function validateSecretLifetime(lifetime: SecretLifetime, context: string
     ) {
       throw new HelmError(
         'validation_error',
-        `${context}.ttlMs 需为不超 ${MAX_SECRET_TTL_MS} 的正 safe integer（收到 ${String(ttlMs)}）`,
+        `${context}.ttlMs must be do not over ${MAX_SECRET_TTL_MS} correct safe integer(receives ${String(ttlMs)})`,
         400,
         { ttlMs },
       )
@@ -87,7 +87,7 @@ export function validateSecretLifetime(lifetime: SecretLifetime, context: string
   if (scope !== undefined && scope !== 'conversation' && scope !== 'turn') {
     throw new HelmError(
       'validation_error',
-      `${context}.scope 仅允许 'conversation' | 'turn'（收到 ${String(scope)}）`,
+      `${context}.scope only allows 'conversation' | 'turn'(receives ${String(scope)})`,
       400,
       { scope },
     )
@@ -95,7 +95,7 @@ export function validateSecretLifetime(lifetime: SecretLifetime, context: string
   return { ...(ttlMs !== undefined ? { ttlMs } : {}), ...(scope !== undefined ? { scope } : {}) } as SecretLifetime
 }
 
-/** 占位符 ↔ 文本互转工具（ArtifactService spill 脱敏复用）。 */
+/** placeholder ↔ text mutual rotate tool (ArtifactService spill redaction re- use). */
 export function makePlaceholder(uuid: string): string {
   return `${REDACTED_PREFIX}${uuid}]`
 }
@@ -107,13 +107,13 @@ export function parsePlaceholder(text: string): string | null {
 }
 
 export class SecretStash {
-  /** key: conversationId → envName → secret。按会话隔离，防跨会话串用。 */
+  /** key: conversationId → envName → secret. by conversation isolated, guard against across conversation string use. */
   private readonly byConversation = new Map<number, Map<string, StashedSecret>>()
-  /** key: uuid → secret（redact 快速索引；含已停止注入的旧值，脱敏永不停止）。 */
+  /** key: uuid → secret(redact fast index; contains already stop inject old value, redaction forever do not stop). */
   private readonly byUuid = new Map<string, StashedSecret>()
-  /** 会话 → 已完成的回合结算数（turn 作用域出生序基准）。 */
+  /** conversation → completed turn compute count (turn effect domain out generate order base allow). */
   private readonly turnSettlements = new Map<number, number>()
-  /** 全局逐值脱敏登记：value → 引用计数（多登记叠放，全解除才停止）。 */
+  /** global one by one value redaction register:value → reference counter (many register stack put, all solve except only then stop). */
   private readonly globalRedactions = new Map<string, number>()
   private redactionEpoch = 0
   private readonly now: () => number
@@ -123,15 +123,15 @@ export class SecretStash {
   }
 
   /**
-   * 存入秘密，返回 `[REDACTED:stash:<uuid>]` 占位符。
-   * 同一 (conversationId, name) 重复 put 会覆盖环境变量，旧值仍保留用于脱敏。
-   * lifetime 可选：ttlMs 到期 / scope 'turn' 回合结算后仅停止注入，脱敏继续。
+   * store secret, return `[REDACTED:stash:<uuid>]` placeholder.
+   * the same (conversationId, name) duplicate put will override environment variable, old value still keep used to redaction.
+   * lifetime optional:ttlMs expires / scope 'turn' turn compute after only stop inject, redaction continue.
    */
   put(conversationId: number, name: string, value: string, lifetime?: SecretLifetime): string {
     if (!isValidEnvName(name)) {
-      throw new Error(`秘密名称必须是合法环境变量名: ${name}`)
+      throw new Error(`secret name must be legal environment variable name: ${name}`)
     }
-    const normalized = lifetime !== undefined ? validateSecretLifetime(lifetime, `秘密 '${name}' 的 lifetime`) : undefined
+    const normalized = lifetime !== undefined ? validateSecretLifetime(lifetime, `secret '${name}'  lifetime`) : undefined
     let bucket = this.byConversation.get(conversationId)
     if (bucket === undefined) {
       bucket = new Map()
@@ -152,16 +152,16 @@ export class SecretStash {
     return secret.placeholder
   }
 
-  /** TTL 惰性失效：到期即从 active bucket 移除（byUuid 保留旧值用于脱敏）。 */
+  /** TTL lazy expires: expires i.e. from active bucket remove (byUuid keep old value used to redaction). */
   private isExpired(secret: StashedSecret): boolean {
     return secret.expiresAt !== undefined && this.now() >= secret.expiresAt
   }
 
   /**
-   * 汇出该会话的全部活跃秘密为环境变量（注入子进程用）；每次调用只采样一次
-   * clock，全部条目按同一时刻判定（TTL 边界内不会同批跨界）。TTL 到期的在此
-   * 惰性回收。可选 names 只取指定名（显式授予外部运行时用；缺席的名字静默
-   * 跳过，存在性判定由调用方基于实际返回键负责）。
+   * gather out the conversation all leap secret is environment variable (inject child process use); each time invoke only sampling once
+   * clock, all item by the same moment decide (TTL boundary inside will not same batch across boundary).TTL expires in this
+   * lazy reclaim. optional names only take designate name (explicit grant external runtime use; missing seat name static default
+   * skip, store in decide by caller based on actual return key negative duty).
    */
   envFor(conversationId: number, names?: readonly string[]): Record<string, string> {
     const now = this.now()
@@ -174,16 +174,16 @@ export class SecretStash {
         continue
       }
       if (names !== undefined && !names.includes(name)) continue
-      // 环境变量名可合法地为 __proto__；定义自有字段，避免触发 Object 原型 setter。
+      // environment variable name can legal ground is __proto__; define self has field, avoid trigger Object prototype setter.
       Object.defineProperty(env, name, { value: secret.value, enumerable: true, writable: true, configurable: true })
     }
     return env
   }
 
   /**
-   * 回合结算钩子（completed | failed | aborted 统一）：先推进结算计数，再回收
-   * 出生序早于新计数的 turn 作用域秘密（byUuid 保留旧值用于脱敏）。结算后新
-   * 登记的 turn 秘密出生序 = 新计数，属下一回合，不受本次清除影响。
+   * turn compute hook (completed | failed | aborted unify): first push enter compute counter, again reclaim
+   * out generate order early at new counter turn effect domain secret (byUuid keep old value used to redaction). compute after new
+   * register turn secret out generate order = new counter, belong under one turn, do not subject to this time clear affect.
    */
   settleTurn(conversationId: number): void {
     const next = (this.turnSettlements.get(conversationId) ?? 0) + 1
@@ -196,12 +196,12 @@ export class SecretStash {
   }
 
   /**
-   * 登记全局逐值脱敏：redact() 将该值替换为 `[REDACTED]`（任意会话上下文均
-   * 生效）。非环境变量、不进 envFor/stats；同一值可重复登记，返回的解除
-   * 函数引用计数归零后才停止脱敏。
+   * register global one by one value redaction:redact() the value replace is `[REDACTED]`(any conversation context all
+   * takes effect). non- environment variable, does not enter envFor/stats; the same value can duplicate register, return solve except
+   * function reference counter reset to zero after only then stop redaction.
    */
   addRedaction(value: string): () => void {
-    if (typeof value !== 'string' || value === '') throw new Error('addRedaction 需要非空字符串')
+    if (typeof value !== 'string' || value === '') throw new Error('addRedaction need to non-empty string')
     this.globalRedactions.set(value, (this.globalRedactions.get(value) ?? 0) + 1)
     const epoch = this.redactionEpoch
     let removed = false
@@ -214,7 +214,7 @@ export class SecretStash {
     }
   }
 
-  /** 是否存在该活跃秘密（按会话隔离判定；TTL 到期惰性回收后为 false）。 */
+  /** is otherwise store in the leap secret (by conversation isolated decide;TTL expires lazy reclaim after is false). */
   has(conversationId: number, name: string): boolean {
     const bucket = this.byConversation.get(conversationId)
     const secret = bucket?.get(name)
@@ -226,10 +226,10 @@ export class SecretStash {
     return true
   }
 
-  /** 将已登记的秘密替换为占位符；已有占位符始终保持脱敏。 */
+  /** already register secret replace is placeholder; already has placeholder always keep redaction. */
   redact(text: string, conversationId?: number): string {
     const values = new Map<string, string>()
-    // 全局逐值脱敏优先于 stash 占位符：受管 token 等宿主秘密不可被任何会话回显
+    // global one by one value redaction takes precedence at stash placeholder: managed token etc. host secret cannot by any conversation back visible
     for (const value of this.globalRedactions.keys()) {
       values.set(value, REDACTED_MARKER)
     }
@@ -246,7 +246,7 @@ export class SecretStash {
     return text.replace(pattern, (value) => values.get(value) ?? value)
   }
 
-  /** 增量脱敏：只保留仍可能组成秘密的后缀，不按固定长度切开完整匹配。 */
+  /** incremental redaction: only keep still may group into secret suffix, do not by fixed length cut open complete match. */
   createStreamingRedactor(): { push(text: string): string; flush(): string } {
     let pending = ''
     const prefixes = new Map<string, number[]>()
@@ -301,7 +301,7 @@ export class SecretStash {
     }
   }
 
-  /** 清空指定会话的全部秘密（含脱敏旧值）；省略 conversationId 则清空整个 stash（含全局脱敏登记）。 */
+  /** empty designate conversation all secret (contains redaction old value); omit conversationId then empty the whole stash(contains global redaction register). */
   clear(conversationId?: number): void {
     if (conversationId === undefined) {
       this.byConversation.clear()
@@ -318,7 +318,7 @@ export class SecretStash {
     this.turnSettlements.delete(conversationId)
   }
 
-  /** 调试统计：会话数与活跃秘密总数（单次 clock 采样判定；绝不输出值本身）。 */
+  /** tune try count: conversation count and leap secret total count (single time clock sampling decide; never output value itself). */
   stats(): { conversations: number; secrets: number } {
     const now = this.now()
     let secrets = 0

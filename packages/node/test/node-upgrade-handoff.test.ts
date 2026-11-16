@@ -1,20 +1,20 @@
 /**
- * helm-node 升级交接 CLI/IPC 测试（stdio activate/activated 协议验收）。
+ * helm-node upgrade handover CLI/IPC test (stdio activate/activated protocol verify).
  *
- * 全部真实多进程：真实候选子进程（Node child_process stdio IPC 协议
- * fixture）+ 真实 Hub fixture（http.Server + WebSocketServer + birpc）。
- * 不 mock 被测模块；不编造安装成功（stageExtractor 只构造可运行候选入口，
- * 由真实 spawn 拉起验证 IPC 协议，不伪造 npm 安装）。
+ * all real many process: real choose child process (Node child_process stdio IPC protocol
+ * fixture)+ real Hub fixture(http.Server + WebSocketServer + birpc).
+ * do not mock by test module; do not edit build install succeeded (stageExtractor only construct can run choose entry,
+ * by real spawn pull start verify IPC protocol, do not fabricate npm install).
  *
- * 覆盖：
- * 1. prepareNodeReplacement：真实 IPC ready/activate/activated 全链路，
- *    commit 后 pid 留档指向候选、activate 上下文校验；
- * 2. ACK 丢失不回滚：activate 发出后确认超时抛 UpgradeCommitUnconfirmedError，
- *    绝不杀候选、绝不恢复旧 pid；
- * 3. 候选启动失败（starting / 即退）保留旧 pid；
- * 4. abort（未发 activate）杀候选并 CAS 还原旧 pid；
- * 5. CLI upgrade 命令：--check 离线查询、无 daemon 显式报错、flag 互斥；
- * 6. 升级在途 stop 拒绝且控制通道仍可用。
+ * override:
+ * 1. prepareNodeReplacement: real IPC ready/activate/activated all link,
+ *    commit after pid Profile points to choose,activate context validate;
+ * 2. ACK lose do not rollback:activate out after confirm timeout throw UpgradeCommitUnconfirmedError,
+ *    never kill choose, never restore old pid;
+ * 3. choose failed to start (starting / i.e. retreat) keep old pid;
+ * 4. abort(not activate) kill choose and CAS restore old pid;
+ * 5. CLI upgrade command:--check offline query, without daemon explicit errors,flag mutual exclusion;
+ * 6. upgrade in-flight stop reject and control channel still available.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -48,8 +48,8 @@ async function runCli(argv: string[], io: Partial<NodeCliIo> = {}): Promise<Capt
   let out = '';
   let err = '';
   const code = await runNodeCli(argv, {
-    // 剥除宿主受管 HELM_* 变量：宿主控制身份（INSTANCE_ID/CONTROL_ENDPOINT）
-    // 存在时前台 start 不再成为 launcher，Hub/数据目录/凭据同理不得劫持。
+    // strip except host managed HELM_* variable: host control identity (INSTANCE_ID/CONTROL_ENDPOINT)
+    // store in when foreground start no longer into is launcher,Hub/data directory/credentials same must not hijack.
     env: sanitizedHostEnv(),
     out: (t) => (out += t),
     err: (t) => (err += t),
@@ -68,10 +68,10 @@ const realIsAlive = (pid: number): boolean => {
 };
 
 const waitFor = (condition: () => boolean | Promise<boolean>, timeoutMs: number, what: string): Promise<void> =>
-  kitWaitFor(condition, { timeoutMs, intervalMs: 100, message: `等待超时：${what}` });
+  kitWaitFor(condition, { timeoutMs, intervalMs: 100, message: `wait timed out:${what}` });
 
 // ---------------------------------------------------------------------------
-// Hub fixture（复用 node-cli-review 同款真实 WS + birpc）
+// Hub fixture(re- use node-cli-review same style real WS + birpc)
 // ---------------------------------------------------------------------------
 
 interface HubFixture {
@@ -112,7 +112,7 @@ async function startHubFixture(options: { expectedToken: string }): Promise<HubF
           return true;
         },
         onEnvExecOutput(_event: EnvExecOutputEvent): void {
-          // 本文件不测 env 转发。
+          // this file do not test env forwarding.
         },
       };
       const rpc = createBirpc(local, {
@@ -126,7 +126,7 @@ async function startHubFixture(options: { expectedToken: string }): Promise<HubF
               const parsed: unknown = JSON.parse(text);
               if (parsed !== null && typeof parsed === 'object') callback(parsed);
             } catch {
-              // 非 JSON 帧。
+              // non- JSON frame.
             }
           });
         },
@@ -150,19 +150,19 @@ async function startHubFixture(options: { expectedToken: string }): Promise<HubF
 }
 
 // ---------------------------------------------------------------------------
-// 候选 fixture：真实子进程实现 stdio IPC 协议（ready / activate / activated）
+// choose fixture: real child process implement stdio IPC protocol (ready / activate / activated)
 // ---------------------------------------------------------------------------
 
 /**
- * 候选协议子进程脚本：注册到真实 Hub（触发 ready=registered），等待
- * activate；收到合法 activate 回 activated 并脱离父 IPC 存活。
- * 行为由 env HELM_FIXTURE_MODE 控制：
- *  - 'candidate'（缺省）：正常协议实现；
- *  - 'no-ack'：收到 activate 但不回 activated（模拟已送达但回执丢失）；
- *  - 'vanish'：真实 registered 后断开父 IPC 但保持存活（模拟 activate 发出
- *    前通道已亡——写入必失败，父侧必须按确定未送达安全回滚）；
- *  - 'starting'：上报 starting 不注册（Hub 不可达也一样）；
- *  - 'exit'：上报 starting 后立即退出。
+ * choose protocol child process script: register to real Hub(trigger ready=registered), wait for
+ * activate; receives legal activate back activated and detach parent IPC store.
+ * behavior by env HELM_FIXTURE_MODE control:
+ *  - 'candidate'(default): normal protocol implement;
+ *  - 'no-ack': receives activate but do not back activated(simulated already send reach but back hold lose);
+ *  - 'vanish': real registered after disconnect parent IPC but keep store (simulated activate out
+ *    before channel already die - - write must failed, parent side must by determine not send reach security rollback);
+ *  - 'starting': on report starting do not register (Hub cannot reach also the same);
+ *  - 'exit': on report starting after immediately exit.
  */
 const CANDIDATE_SCRIPT = `
 const http = require('node:http');
@@ -172,8 +172,8 @@ const instanceId = process.env.HELM_NODE_INSTANCE_ID;
 const hubUrl = process.env.HELM_HUB_URL_FIXTURE;
 const attempt = process.env.HELM_NODE_UPGRADE_ATTEMPT;
 
-// 直接向 Hub 的 /ws/node 发起 WS 注册（不走完整 daemon，fixture 只验证协议层）。
-// birpc v2 紧凑格式：请求 {t:'q',m:method,a:[args],i:id}，响应 {t:'s',i:id,r:result}。
+// directly to Hub  /ws/node start WS register (do not away complete daemon,fixture only verify protocol layer).
+// birpc v2 compact format: request {t:'q',m:method,a:[args],i:id}, response {t:'s',i:id,r:result}.
 const ws = new WebSocket(hubUrl.replace(/^http/, 'ws') + '/ws/node');
 ws.on('open', () => {
   ws.send(JSON.stringify({ t: 'q', m: 'register', a: [{ nodeId: process.env.HELM_FIXTURE_NODE_ID ?? 'fixture-node', token: process.env.HELM_FIXTURE_TOKEN ?? 'fix:s', hostname: 'fix', platform: process.platform, ...(attempt ? { upgradeAttemptId: attempt } : {}) }], i: 'r1' }));
@@ -194,13 +194,13 @@ ws.on('error', () => {
   else { try { process.send({ type: 'helm-node.ready', pid: process.pid, instanceId, state: 'starting' }); } catch {} }
 });
 if (mode === 'starting' || mode === 'exit') {
-  // 直接上报 starting：不建立真实注册。
+  // directly on report starting: do not establish real register.
   setTimeout(() => {
     try { process.send({ type: 'helm-node.ready', pid: process.pid, instanceId, state: 'starting' }); } catch {}
     if (mode === 'exit') { process.exit(0); }
   }, 30);
   if (mode === 'starting') {
-    // 保持存活等待（父侧应按 starting 拒绝并 kill）。
+    // keep store wait for (parent side should by starting reject and kill).
   }
 }
 process.on('message', (message) => {
@@ -209,14 +209,14 @@ process.on('message', (message) => {
     try { process.send({ type: 'helm-node.activate-rejected', attemptId: message.attemptId, reason: 'context mismatch' }); } catch {}
     return;
   }
-  if (mode === 'no-ack' || mode === 'vanish') return; // 不应答：no-ack 模拟回执丢失；vanish 模拟通道已亡
+  if (mode === 'no-ack' || mode === 'vanish') return; // must not answer:no-ack simulated back hold lose;vanish simulated channel already die
   try { process.send({ type: 'helm-node.activated', attemptId: message.attemptId }); } catch {}
   try { if (process.connected) process.disconnect(); } catch {}
 });
-// 父断开：未激活即退出（协议约定）。
+// parent disconnect: inactive i.e. exit (protocol convention).
 process.on('disconnect', () => {
-  if (mode === 'no-ack') { /* ACK 丢失场景父可能已断开：继续存活验证不回滚 */ }
-  else if (mode === 'vanish') { /* 自断开保持存活：验证父侧安全回滚杀候选 */ }
+  if (mode === 'no-ack') { /* ACK lose scenario parent may disconnected: continue store verify do not rollback */ }
+  else if (mode === 'vanish') { /* self disconnect keep store: verify parent side security rollback kill choose */ }
   else process.exit(0);
 });
 `;
@@ -226,20 +226,20 @@ interface CandidateHandle {
   scriptPath: string;
 }
 
-/** 写候选 fixture 脚本并以指定模式启动（不经过 prepareNodeReplacement）。 */
+/** write choose fixture script and with designate pattern start (without going through prepareNodeReplacement). */
 async function writeCandidateScript(dir: string): Promise<string> {
   const scriptPath = path.join(dir, 'candidate-fixture.cjs');
   await fs.writeFile(scriptPath, CANDIDATE_SCRIPT, 'utf8');
   return scriptPath;
 }
 
-/** 构造 StagedNodeRelease：入口为候选 fixture 脚本（node 可直接运行）。 */
+/** construct StagedNodeRelease: entry is choose fixture script (node can directly run). */
 function fixtureRelease(scriptPath: string, cliBinDir: string): StagedNodeRelease {
   return { version: '9.9.9', releaseDir: path.dirname(scriptPath), entryPath: scriptPath, cliBinDir };
 }
 
 // ---------------------------------------------------------------------------
-// prepareNodeReplacement 直测（真实子进程 + 内存 pid 留档）
+// prepareNodeReplacement direct test (real child process + memory pid Profile)
 // ---------------------------------------------------------------------------
 
 function memoryPidStore(): {
@@ -293,9 +293,9 @@ async function prepareWithFixture(options: {
         writePidRecord: store.writePidRecord,
         removePidFile: store.removePidFile,
         env: {
-          // 基底剥除宿主受管 HELM_* 变量（候选拥有独立控制身份；产品侧
-          // prepareNodeReplacement 亦会剥除，这里保证测试注入基底同样干净），
-          // 测试 fixture 变量在其后显式覆盖。
+          // base bottom strip except host managed HELM_* variable (choose own independent control identity; produce product side
+          // prepareNodeReplacement also will strip except, this in guarantee test inject base bottom same clean),
+          // test fixture variable in its after explicit override.
           ...sanitizedHostEnv(),
           HELM_FIXTURE_MODE: options.mode,
           HELM_HUB_URL_FIXTURE: options.hubUrl,
@@ -314,7 +314,7 @@ async function prepareWithFixture(options: {
   }
 }
 
-test('prepareNodeReplacement：真实 IPC ready→activate→activated，commit 写新 pid', { timeout: 60_000 }, async (t) => {
+test('prepareNodeReplacement: real IPC ready→activate→activated,commit write new pid', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-ok-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -326,54 +326,54 @@ test('prepareNodeReplacement：真实 IPC ready→activate→activated，commit 
 
   const oldRecord: HandoffPidRecord = { pid: process.pid, instanceId: 'a'.repeat(32), endpoint: '/tmp/old.sock' };
   const { replacement, store, error } = await prepareWithFixture({ dir, hubUrl: hub.url, mode: 'candidate', oldRecord });
-  assert.ok(replacement !== undefined, `准备替换失败：${error?.message}`);
+  assert.ok(replacement !== undefined, `prepare replace failed:${error?.message}`);
   t.after(async () => {
     if (replacement !== undefined) await replacement.abort().catch(() => undefined);
   });
   assert.ok(replacement.pid > 0);
-  assert.ok(realIsAlive(replacement.pid), '候选必须真实存活');
+  assert.ok(realIsAlive(replacement.pid), 'choose must real store');
 
-  // commit 前 pid 留档仍是旧记录（提交点才写新记录）
+  // commit before pid Profile still is old record (commit point only then write new record)
   assert.equal(store.get()?.pid, process.pid);
 
   await replacement.commit();
 
-  // commit 后留档指向候选
+  // commit after Profile points to choose
   const after = store.get();
   assert.equal(after?.pid, replacement.pid);
   assert.notEqual(after?.instanceId, oldRecord.instanceId);
-  // 候选仍存活（commit 不杀候选）
-  assert.ok(realIsAlive(replacement.pid), 'commit 后候选必须存活接管');
+  // choose still store (commit do not kill choose)
+  assert.ok(realIsAlive(replacement.pid), 'commit after choose must store take over');
 
-  // 清理：杀候选
+  // clean up: kill choose
   process.kill(replacement.pid, 'SIGKILL');
-  await waitFor(() => !realIsAlive(replacement.pid), 5_000, '候选退出');
+  await waitFor(() => !realIsAlive(replacement.pid), 5_000, 'choose exit');
 });
 
-test('prepareNodeReplacement：候选上报 starting 拒绝，旧 pid 保留', { timeout: 60_000 }, async (t) => {
+test('prepareNodeReplacement: choose on report starting reject, old pid keep', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-starting-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
-  // 不可达 Hub：候选注册失败真实上报 starting（父侧必须拒绝带病提交）。
+  // cannot reach Hub: choose register failed real on report starting(parent side must reject carries illness commit).
   const oldRecord: HandoffPidRecord = { pid: 424242, instanceId: 'b'.repeat(32), endpoint: '/tmp/old2.sock' };
   const { replacement, error } = await prepareWithFixture({ dir, hubUrl: 'http://127.0.0.1:1', mode: 'starting', oldRecord });
-  assert.equal(replacement, undefined, 'starting 候选不允许就绪');
+  assert.equal(replacement, undefined, 'starting choose disallows ready');
   assert.match(error?.message ?? '', /starting|registered/);
 });
 
-test('prepareNodeReplacement：候选即退显式报错', { timeout: 60_000 }, async (t) => {
+test('prepareNodeReplacement: choose i.e. retreat explicit errors', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-exit-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
-  // 不可达 Hub：候选上报 starting 后即退（父侧按退出显式报错）。
+  // cannot reach Hub: choose on report starting after i.e. retreat (parent side by exit explicit errors).
   const { replacement, error } = await prepareWithFixture({ dir, hubUrl: 'http://127.0.0.1:1', mode: 'exit' });
   assert.equal(replacement, undefined);
   assert.ok(error !== undefined);
 });
 
-test('prepareNodeReplacement：activate ACK 丢失抛 UpgradeCommitUnconfirmedError 且不回滚不杀候选', { timeout: 60_000 }, async (t) => {
+test('prepareNodeReplacement:activate ACK lose throw UpgradeCommitUnconfirmedError and do not rollback do not kill choose', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-noack-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -391,34 +391,34 @@ test('prepareNodeReplacement：activate ACK 丢失抛 UpgradeCommitUnconfirmedEr
     oldRecord,
     activateAckTimeoutMs: 400,
   });
-  assert.ok(replacement !== undefined, `准备失败：${error?.message}`);
+  assert.ok(replacement !== undefined, `prepare failed:${error?.message}`);
 
   await assert.rejects(
     () => replacement!.commit(),
     (caught: unknown) => {
-      // 引擎包裹层可能包装 message，但根因链必须是 UpgradeCommitUnconfirmedError
+      // engine package wrap layer may wrap message, but because chain must be UpgradeCommitUnconfirmedError
       let current: unknown = caught;
       for (let depth = 0; depth < 8 && current !== undefined && current !== null; depth += 1) {
         if (current instanceof UpgradeCommitUnconfirmedError) return true;
         current = (current as { cause?: unknown }).cause;
       }
-      assert.match(caught instanceof Error ? caught.message : String(caught), /不回滚|未确认|Unconfirmed/i);
+      assert.match(caught instanceof Error ? caught.message : String(caught), /do not rollback|not confirm|Unconfirmed/i);
       return false;
     },
   );
 
-  // 不回滚：pid 留档仍指向候选（绝不恢复旧 pid）
-  assert.equal(store.get()?.pid, replacement!.pid, 'ACK 丢失后不得回滚 pid 留档');
-  // 不杀候选：候选继续存活（幂等重试语义）
-  assert.ok(realIsAlive(replacement!.pid), 'ACK 丢失绝不杀候选');
-  // abort 也必须被拒绝（activate 已发出）
-  await assert.rejects(() => replacement!.abort(), /拒绝 abort|已发出/);
+  // do not rollback:pid Profile still points to choose (never restore old pid)
+  assert.equal(store.get()?.pid, replacement!.pid, 'ACK lose after must not rollback pid Profile');
+  // do not kill choose: choose continue store (idempotent retry semantics)
+  assert.ok(realIsAlive(replacement!.pid), 'ACK lose never kill choose');
+  // abort also must by reject (activate already out)
+  await assert.rejects(() => replacement!.abort(), /reject abort|already out/);
 
   process.kill(replacement!.pid, 'SIGKILL');
-  await waitFor(() => !realIsAlive(replacement!.pid), 5_000, '候选退出');
+  await waitFor(() => !realIsAlive(replacement!.pid), 5_000, 'choose exit');
 });
 
-test('prepareNodeReplacement：候选 ready 后自断 IPC——activate 确定未送达，安全回滚不留 10 分钟空窗', { timeout: 60_000 }, async (t) => {
+test('prepareNodeReplacement: choose ready after self assert IPC- -activate determine not send reach, security rollback do not 10 minute empty window', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-vanish-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -436,31 +436,31 @@ test('prepareNodeReplacement：候选 ready 后自断 IPC——activate 确定�
     oldRecord,
     activateAckTimeoutMs: 1_500,
   });
-  assert.ok(replacement !== undefined, `准备失败：${error?.message}`);
-  assert.ok(realIsAlive(replacement.pid), '断开 IPC 前候选存活');
-  // 等父侧处理完 disconnect 事件（ready 阶段断开→dead）：消除 commit 与
-  // 自断开定时器之间的竞争，锁定「activate 从未送达」确定性场景。
+  assert.ok(replacement !== undefined, `prepare failed:${error?.message}`);
+  assert.ok(realIsAlive(replacement.pid), 'disconnect IPC before choose store');
+  // etc. parent side handle completely disconnect event (ready phase disconnect→dead): eliminate commit and
+  // self disconnect timer between competition, lockactivate from not send reach determinism scenario.
   await new Promise((resolve) => setTimeout(resolve, 200));
 
-  // commit：确定未送达（写入失败或通道已亡）→ 普通错误（非未确认），
-  // 引擎据此走安全回滚；旧实现误按「未确认」保持 gate + 让位，节点空窗 10 分钟。
+  // commit: determine not send reach (failed to write or channel already die)→ ordinary error (non- not confirm),
+  // engine based on this away security rollback; old implement mistakenly by not confirm keep gate + let, node empty window 10 minute.
   await assert.rejects(
     () => replacement!.commit(),
     (caught: unknown) => {
-      assert.equal(caught instanceof UpgradeCommitUnconfirmedError, false, '确定未送达不得按未确认处理');
-      assert.match(caught instanceof Error ? caught.message : String(caught), /未发出|安全回滚|不在可提交状态/);
+      assert.equal(caught instanceof UpgradeCommitUnconfirmedError, false, 'determine not send reach must not by not confirm handle');
+      assert.match(caught instanceof Error ? caught.message : String(caught), /not out|security rollback|do not in can commit state/);
       return true;
     },
   );
 
-  // abort 允许（activate 从未送达）：杀候选 + instanceId CAS 还原旧 pid 留档
+  // abort allows (activate from not send reach): kill choose + instanceId CAS restore old pid Profile
   await replacement.abort();
-  await waitFor(() => !realIsAlive(replacement.pid), 5_000, '安全回滚必须杀候选');
-  assert.equal(store.get()?.pid, process.pid, 'pid 留档应还原为旧进程');
+  await waitFor(() => !realIsAlive(replacement.pid), 5_000, 'security rollback must kill choose');
+  assert.equal(store.get()?.pid, process.pid, 'pid Profile should restore is old process');
   assert.equal(store.get()?.instanceId, 'e'.repeat(32));
 });
 
-test('prepareNodeReplacement：未发 activate 时 abort 杀候选且不触碰留档', { timeout: 60_000 }, async (t) => {
+test('prepareNodeReplacement: not activate when abort kill choose and do not trigger touch Profile', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-abort-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -472,35 +472,35 @@ test('prepareNodeReplacement：未发 activate 时 abort 杀候选且不触碰�
 
   const oldRecord: HandoffPidRecord = { pid: process.pid, instanceId: 'd'.repeat(32), endpoint: '/tmp/old4.sock' };
   const { replacement, store, error } = await prepareWithFixture({ dir, hubUrl: hub.url, mode: 'candidate', oldRecord });
-  assert.ok(replacement !== undefined, `准备失败：${error?.message}`);
-  assert.ok(realIsAlive(replacement.pid), 'abort 前候选存活');
+  assert.ok(replacement !== undefined, `prepare failed:${error?.message}`);
+  assert.ok(realIsAlive(replacement.pid), 'abort before choose store');
 
   await replacement.abort();
 
-  await waitFor(() => !realIsAlive(replacement.pid), 5_000, 'abort 必须杀自有候选');
-  // abort 未发 activate（pidWritten=false）：不触碰留档，旧记录保持不变。
-  assert.equal(store.get()?.pid, process.pid, 'abort 不得改写旧留档');
+  await waitFor(() => !realIsAlive(replacement.pid), 5_000, 'abort must kill self has choose');
+  // abort not activate(pidWritten=false): do not trigger touch Profile, old record keep do not change.
+  assert.equal(store.get()?.pid, process.pid, 'abort must not change write old Profile');
   assert.equal(store.get()?.instanceId, 'd'.repeat(32));
 });
 
 // ---------------------------------------------------------------------------
-// CLI upgrade 命令
+// CLI upgrade command
 // ---------------------------------------------------------------------------
 
-test('upgrade --check：不启动 daemon 直接查询（注入 fetch fixture）', { timeout: 60_000 }, async (t) => {
+test('upgrade --check: do not start daemon directly query (inject fetch fixture)', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-check-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
-  // checkNodeUpgrade 走 fetchFn 默认 fetch：注入坏 registry 地址显式失败
+  // checkNodeUpgrade away fetchFn by default fetch: inject broken registry address explicit failed
   const r = await runCli(['upgrade', '--check', '--data-dir', dir, '--registry', 'http://127.0.0.1:1', '--json']);
   assert.equal(r.code, 1);
-  assert.match(JSON.parse(r.err).error.message, /查询|失败/);
-  // 无 daemon 进程被拉起：无 pid 文件产生
-  assert.equal(await fs.stat(path.join(dir, 'node.pid')).then(() => true, () => false), false, '--check 不得启动 daemon');
+  assert.match(JSON.parse(r.err).error.message, /query|failed/);
+  // without daemon process by pull start: without pid file produce
+  assert.equal(await fs.stat(path.join(dir, 'node.pid')).then(() => true, () => false), false, '--check must not start daemon');
 });
 
-test('upgrade 无受管 daemon：显式要求先 start，不假称离线已升级', { timeout: 60_000 }, async (t) => {
+test('upgrade without managed daemon: explicit want seek first start, do not false call offline already upgrade', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-norun-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -509,26 +509,26 @@ test('upgrade 无受管 daemon：显式要求先 start，不假称离线已升�
   const r = await runCli(['upgrade', '--data-dir', dir, '--json']);
   assert.equal(r.code, 1);
   const envelope = JSON.parse(r.err) as { error: { message: string } };
-  assert.match(envelope.error.message, /请先 helm-node start/);
+  assert.match(envelope.error.message, /please first helm-node start/);
 });
 
-test('upgrade flag 校验：--check 与 --version/--force 互斥', { timeout: 60_000 }, async () => {
+test('upgrade flag validate:--check and --version/--force mutual exclusion', { timeout: 60_000 }, async () => {
   const clash = await runCli(['upgrade', '--check', '--version', '1.2.3', '--data-dir', '/tmp/x', '--json']);
   assert.equal(clash.code, 1);
-  assert.match(JSON.parse(clash.err).error.message, /互斥/);
+  assert.match(JSON.parse(clash.err).error.message, /mutual exclusion/);
   const clash2 = await runCli(['upgrade', '--check', '--force', '--data-dir', '/tmp/x', '--json']);
   assert.equal(clash2.code, 1);
-  assert.match(JSON.parse(clash2.err).error.message, /互斥/);
+  assert.match(JSON.parse(clash2.err).error.message, /mutual exclusion/);
   const unknown = await runCli(['upgrade', '--no-such-flag', '--data-dir', '/tmp/x', '--json']);
   assert.equal(unknown.code, 1);
-  assert.match(JSON.parse(unknown.err).error.message, /未知选项/);
+  assert.match(JSON.parse(unknown.err).error.message, /unknown option/);
 });
 
 // ---------------------------------------------------------------------------
-// 控制通道：升级在途 stop 拒绝且通道仍可用
+// control channel: upgrade in-flight stop reject and channel still available
 // ---------------------------------------------------------------------------
 
-/** 起一个真实受控 daemon（start -d），返回 pid 记录与清理句柄。 */
+/** start a real subject to control daemon(start -d), return pid record and clean up handle. */
 async function startManagedDaemon(t: test.TestContext, dir: string, hubUrl: string): Promise<HandoffPidRecord> {
   await bindIdentityFromJoinToken(dir, 'upg-ctl:s', hubUrl);
   const started = await runCli(['start', '-d', '--data-dir', dir, '--json']);
@@ -542,7 +542,7 @@ async function startManagedDaemon(t: test.TestContext, dir: string, hubUrl: stri
   return raw;
 }
 
-test('控制通道 upgrade 请求：daemon 无升级宿主时显式拒绝且 stop/status 仍可用', { timeout: 60_000 }, async (t) => {
+test('control channel upgrade request:daemon without upgrade host when explicit reject and stop/status still available', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-ctl-');
   t.after(async () => {
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
@@ -581,24 +581,24 @@ test('控制通道 upgrade 请求：daemon 无升级宿主时显式拒绝且 sto
       });
     });
 
-  // status 仍可用
+  // status still available
   const status = await request('status');
-  assert.ok(status !== null && status.ok === true, 'status 必须可用');
+  assert.ok(status !== null && status.ok === true, 'status must available');
 
-  // upgrade 请求可达 daemon（受控实例注入了 prepare；此处目标版本非法被拒——
-  // 证明请求真实进入升级路径而非 unknown_command）
+  // upgrade request can reach daemon(subject to control instance inject prepare; this where target version illegal by refuse - -
+  // verify request real enter upgrade path while non- unknown_command)
   const upgrade = await request('upgrade', { input: { targetVersion: 'not-semver' } });
-  assert.ok(upgrade !== null, 'upgrade 请求必须得到应答');
+  assert.ok(upgrade !== null, 'upgrade request must obtain to reply');
   assert.equal(upgrade.ok, false);
-  assert.match(upgrade.error ?? '', /非法|SemVer|拒绝/);
+  assert.match(upgrade.error ?? '', /illegal|SemVer|reject/);
 
-  // stop 正常工作（未在升级中）
+  // stop normal work (not in upgrade in)
   const stopped = await runCli(['stop', '--data-dir', dir, '--json']);
   assert.equal(stopped.code, 0, stopped.err);
-  await waitFor(() => !realIsAlive(record.pid), 10_000, 'daemon 退出');
+  await waitFor(() => !realIsAlive(record.pid), 10_000, 'daemon exit');
 });
 
-test('start -d：升级在途 stop 被 upgrade_in_progress 拒绝（isUpgrading 真实状态）', { timeout: 60_000 }, async (t) => {
+test('start -d: upgrade in-flight stop by upgrade_in_progress reject (isUpgrading real state)', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-busy-');
   t.after(async () => {
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
@@ -610,9 +610,9 @@ test('start -d：升级在途 stop 被 upgrade_in_progress 拒绝（isUpgrading 
   });
   const record = await startManagedDaemon(t, dir, hub.url);
 
-  // 向真实 daemon 发起一个会长时间进行的 upgrade？——诚实性纪律：不伪造安装。
-  // 此处验证协议层：直接发 upgrade 请求（目标版本非法立即失败），确认请求
-  // 与 stop 并发时 daemon 不崩溃、控制通道仍应答。
+  // to real daemon start a will long time enter row upgrade? - - honest discipline: do not fabricate install.
+  // this where verify protocol layer: directly upgrade request (target version illegal immediately failed), confirm request
+  // and stop concurrency when daemon do not crash, control channel still reply.
   const upgradePromise = (async () => {
     return await new Promise<{ ok: boolean; error?: string } | null>((resolve) => {
       let buffer = '';
@@ -643,19 +643,19 @@ test('start -d：升级在途 stop 被 upgrade_in_progress 拒绝（isUpgrading 
     });
   })();
   const upgradeResponse = await upgradePromise;
-  assert.ok(upgradeResponse !== null, 'upgrade 应答必须存在');
+  assert.ok(upgradeResponse !== null, 'upgrade reply must store in');
   assert.equal(upgradeResponse.ok, false);
-  // daemon 仍存活且 status 可用
-  assert.ok(realIsAlive(record.pid), 'daemon 不得因升级请求崩溃');
+  // daemon still store and status available
+  assert.ok(realIsAlive(record.pid), 'daemon must not because upgrade request crash');
   const status = await runCli(['status', '--data-dir', dir, '--json']);
   assert.equal(status.code, 0, status.err);
 });
 
 // ---------------------------------------------------------------------------
-// launcher 语义（start 前台无控制 env）
+// launcher semantics (start foreground without control env)
 // ---------------------------------------------------------------------------
 
-test('前台 start（无控制 env）成为 launcher：拉起受控 daemon 并跟踪', { timeout: 60_000 }, async (t) => {
+test('foreground start(without control env) into is launcher: pull start subject to control daemon and trace', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-launcher-');
   t.after(async () => {
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
@@ -668,7 +668,7 @@ test('前台 start（无控制 env）成为 launcher：拉起受控 daemon 并�
   });
   await bindIdentityFromJoinToken(dir, 'upg-launch:s', hub.url);
 
-  // launcher 子进程：真实 tsx 源入口运行 start（前台）
+  // launcher child process: real tsx source entry run start(foreground)
   const cliEntry = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
   let child: ChildProcess | undefined;
   child = spawn(process.execPath, ['--import', import.meta.resolve('tsx'), cliEntry, 'start', '--data-dir', dir], {
@@ -678,28 +678,28 @@ test('前台 start（无控制 env）成为 launcher：拉起受控 daemon 并�
   let stdout = '';
   child.stdout?.on('data', (c: Buffer) => (stdout += c.toString('utf8')));
 
-  // launcher 拉起受控 daemon 并写 pid 留档
+  // launcher pull start subject to control daemon and write pid Profile
   await waitFor(async () => {
     const raw = await fs.readFile(path.join(dir, 'node.pid'), 'utf8').then(() => true, () => false);
     return raw;
-  }, 30_000, 'launcher 拉起 daemon 并写 pid 留档');
+  }, 30_000, 'launcher pull start daemon and write pid Profile');
   const record = JSON.parse(await fs.readFile(path.join(dir, 'node.pid'), 'utf8')) as HandoffPidRecord;
   assert.ok(record.pid > 0);
   assert.ok(realIsAlive(record.pid));
-  assert.ok(realIsAlive(child.pid ?? 0), 'launcher 自身保持存活');
+  assert.ok(realIsAlive(child.pid ?? 0), 'launcher itself keep store');
   assert.match(stdout, /launcher/);
 
-  // SIGTERM launcher：经控制通道停止 daemon 后退出
+  // SIGTERM launcher: via control channel stop daemon after exit
   child.kill('SIGTERM');
-  await waitFor(() => !realIsAlive(child!.pid ?? 0), 15_000, 'launcher 退出');
-  await waitFor(() => !realIsAlive(record.pid), 15_000, 'daemon 经控制通道停止');
+  await waitFor(() => !realIsAlive(child!.pid ?? 0), 15_000, 'launcher exit');
+  await waitFor(() => !realIsAlive(record.pid), 15_000, 'daemon via control channel stop');
 });
 
 // ---------------------------------------------------------------------------
-// USAGE 与 status 版本输出
+// USAGE and status version output
 // ---------------------------------------------------------------------------
 
-test('USAGE 含 upgrade 命令与新 flag；status 输出真实运行 version', { timeout: 60_000 }, async (t) => {
+test('USAGE contains upgrade command and new flag;status output real run version', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-usage-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -719,13 +719,13 @@ test('USAGE 含 upgrade 命令与新 flag；status 输出真实运行 version', 
 });
 
 // ---------------------------------------------------------------------------
-// 精准修复验收：shutdown await / PID 不覆盖 / control 版本优先
+// precise allow fix verify:shutdown await / PID does not override / control version takes precedence
 // ---------------------------------------------------------------------------
 
 /**
- * 慢停控制 server fixture：stop 应答固定延迟 slowMs（>200ms），status 响应携带
- * 指定 version；用于验证 launcher 必须 await 关闭链落定（旧实现 fire-and-forget
- * 只等 200ms 会早退）与 status 版本优先级。
+ * slow stop control server fixture:stop reply fixed latency slowMs(>200ms),status response carry
+ * designate version; used to verify launcher must await close chain set (old implement fire-and-forget
+ * only etc. 200ms will early retreat) and status version priority.
  */
 async function startFixtureControl(options: {
   dataDir: string;
@@ -822,15 +822,15 @@ async function writePidRecordRaw(dir: string, record: HandoffPidRecord): Promise
   await fs.writeFile(path.join(dir, 'node.pid'), `${JSON.stringify(record)}\n`, 'utf8');
 }
 
-test('launcher shutdown：stop 慢应答（>200ms）时必须 await 落定后才返回', { timeout: 60_000 }, async (t) => {
+test('launcher shutdown:stop slow reply (>200ms) when must await set after only then return', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-slowstop-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
   await bindIdentityFromJoinToken(dir, 'slow-stop:s', 'http://127.0.0.1:1');
-  // 慢停延迟必须大于「跟踪轮询余量 + 旧实现固定等待 200ms」：取 700ms，旧
-  // fire-and-forget 实现最迟 ~450ms 返回（必然早退），新实现必须 await 到
-  // stop 应答（≥700ms）后才返回。轮询注入 50ms，验证窗口同步缩短。
+  // slow stop latency must greater than trace polling remaining amount + old implement fixed wait for 200ms: take 700ms, old
+  // fire-and-forget implement most late ~450ms return (must however early retreat), new implement must await to
+  // stop reply (≥700ms) after only then return. polling inject 50ms, verify window sync shrink short.
   const SLOW_MS = 700;
   let control: Awaited<ReturnType<typeof startFixtureControl>> | undefined;
   t.after(async () => {
@@ -839,12 +839,12 @@ test('launcher shutdown：stop 慢应答（>200ms）时必须 await 落定后才
 
   let stdout = '';
   const launcherPromise = runNodeCli(['start', '--data-dir', dir], {
-    // 剥除宿主控制/身份 env：本用例的前提是「无控制 env 的前台 start 成为
-    // launcher」，宿主受管变量不得伪造受控身份。
+    // strip except host control/identity env: this case before mention is without control env foreground start into is
+    // launcher, host managed variable must not fabricate subject to control identity.
     env: sanitizedHostEnv(),
     launcherPollMs: 50,
     out: (text) => (stdout += text),
-    // 本测试进程即「daemon」：pid=自身，存活直到 fixture 应答 stop 后置停。
+    // this test process i.e.daemon:pid=itself, store until fixture reply stop after placement stop.
     isAlive: (pid) => pid === process.pid && !(control?.stopped() ?? false),
     spawnDaemon: async (options) => {
       control = await startFixtureControl({
@@ -857,25 +857,25 @@ test('launcher shutdown：stop 慢应答（>200ms）时必须 await 落定后才
     },
   });
 
-  // 等 launcher 完成启动并注册信号监听（非 json 模式打印启动消息后注册）。
-  await waitFor(() => stdout.includes('launcher'), 15_000, 'launcher 启动消息');
+  // etc. launcher complete start and register signal listen (non- json pattern print start message after register).
+  await waitFor(() => stdout.includes('launcher'), 15_000, 'launcher start message');
   await new Promise((resolve) => setTimeout(resolve, 50));
   const sigtermAt = Date.now();
   process.kill(process.pid, 'SIGTERM');
   const code = await launcherPromise;
   const returnedAt = Date.now();
 
-  assert.ok(control?.stopped(), 'fixture 必须已应答 stop');
+  assert.ok(control?.stopped(), 'fixture must already reply stop');
   assert.ok(
     returnedAt - sigtermAt >= SLOW_MS - 200,
-    `launcher 在 stop 慢应答落定前早退（信号到返回仅 ${returnedAt - sigtermAt}ms < ${SLOW_MS - 200}ms 慢停延迟）`,
+    `launcher in stop slow reply set before early retreat (signal to return only ${returnedAt - sigtermAt}ms < ${SLOW_MS - 200}ms slow stop latency)`,
   );
   assert.equal(code, 0);
-  // 关闭链完成 CAS 清理：pid 留档已删。
-  assert.equal(await fs.stat(path.join(dir, 'node.pid')).then(() => true, () => false), false, 'pid 留档应被 CAS 清理');
+  // close chain complete CAS clean up:pid Profile already delete.
+  assert.equal(await fs.stat(path.join(dir, 'node.pid')).then(() => true, () => false), false, 'pid Profile should by CAS clean up');
 });
 
-test('upgrade emit：保留 result 新实例 pid，旧源 pid 以 previousPid 展示', { timeout: 60_000 }, async (t) => {
+test('upgrade emit: keep result new instance pid, old source pid with previousPid render', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-pid-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -889,7 +889,7 @@ test('upgrade emit：保留 result 新实例 pid，旧源 pid 以 previousPid �
   t.after(async () => {
     await control.close();
   });
-  // 留档指向旧 daemon（本进程）：envelope pid=旧，result.pid=新 424242。
+  // Profile points to old daemon(this process):envelope pid=old,result.pid=new 424242.
   await writePidRecordRaw(dir, { pid: process.pid, instanceId, endpoint: control.endpoint });
   t.after(async () => {
     await fs.rm(path.join(dir, 'node.pid'), { force: true }).catch(() => undefined);
@@ -898,13 +898,13 @@ test('upgrade emit：保留 result 新实例 pid，旧源 pid 以 previousPid �
   const r = await runCli(['upgrade', '--data-dir', dir, '--json'], { isAlive: () => true });
   assert.equal(r.code, 0, r.err);
   const payload = JSON.parse(r.out) as { pid: number; previousPid: number; upgraded: boolean };
-  assert.equal(payload.pid, 424242, 'result 新实例 pid 不得被 envelope 旧 pid 覆盖');
-  assert.equal(payload.previousPid, process.pid, '旧源 pid 以 previousPid 展示');
+  assert.equal(payload.pid, 424242, 'result new instance pid must not by envelope old pid override');
+  assert.equal(payload.previousPid, process.pid, 'old source pid with previousPid render');
   assert.notEqual(payload.pid, payload.previousPid);
   assert.equal(payload.upgraded, true);
 });
 
-test('upgrade：同版本无需切换时允许没有候选 pid 的合法结果', { timeout: 60_000 }, async (t) => {
+test('upgrade: same version no need to switch when allows no choose pid legal result', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-noop-');
   const instanceId = 'ef'.repeat(16);
   const control = await startFixtureControl({
@@ -921,11 +921,11 @@ test('upgrade：同版本无需切换时允许没有候选 pid 的合法结果',
   assert.equal(result.code, 0, result.err);
   const payload = JSON.parse(result.out) as { upgraded: boolean; pid?: number; previousPid: number };
   assert.equal(payload.upgraded, false);
-  assert.equal(payload.pid, undefined, '无操作时不编造新进程 PID');
+  assert.equal(payload.pid, undefined, 'without operation when do not edit build new process PID');
   assert.equal(payload.previousPid, process.pid);
 });
 
-test('upgrade：result 非法（缺 ok/upgraded/pid）时拒绝伪造成功退出非零', { timeout: 60_000 }, async (t) => {
+test('upgrade:result illegal (missing ok/upgraded/pid) when reject fabricate succeeded exit non-zero', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-badres-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -942,13 +942,13 @@ test('upgrade：result 非法（缺 ok/upgraded/pid）时拒绝伪造成功退�
 
   const r = await runCli(['upgrade', '--data-dir', dir, '--json'], { isAlive: () => true });
   assert.equal(r.code, 1);
-  assert.equal(r.out, '', '非法 result 不得输出成功 JSON');
+  assert.equal(r.out, '', 'illegal result must not output succeeded JSON');
   const envelope = JSON.parse(r.err) as { error: { code: string; message: string } };
   assert.equal(envelope.error.code, 'invalid_upgrade_result');
-  assert.match(envelope.error.message, /拒绝伪造成功/);
+  assert.match(envelope.error.message, /reject fabricate succeeded/);
 });
 
-test('status：控制通道上报 version 优先；无 live 实例才用 current.json 兑底', { timeout: 60_000 }, async (t) => {
+test('status: control channel on report version takes precedence; without live instance only then use current.json honor bottom', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-ver-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -958,7 +958,7 @@ test('status：控制通道上报 version 优先；无 live 实例才用 current
   t.after(async () => {
     await control.close();
   });
-  // 本地 current.json 指向另一版本：仅在无 live 实例时作为已选择版本兑底。
+  // local current.json points to another version: only in without live instance when as already choose version honor bottom.
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(
     path.join(dir, 'current.json'),
@@ -967,18 +967,18 @@ test('status：控制通道上报 version 优先；无 live 实例才用 current
   );
   await writePidRecordRaw(dir, { pid: process.pid, instanceId, endpoint: control.endpoint });
 
-  // live 实例经控制通道上报 99.9.9：必须优先于本地 current.json。
+  // live instance via control channel on report 99.9.9: must takes precedence at local current.json.
   const live = await runCli(['status', '--data-dir', dir, '--json'], { isAlive: () => true });
   assert.equal(live.code, 0, live.err);
   const livePayload = JSON.parse(live.out) as { version: string; state: string };
-  assert.equal(livePayload.version, '99.9.9', '控制通道上报版本必须优先');
+  assert.equal(livePayload.version, '99.9.9', 'control channel on report version must takes precedence');
   assert.equal(livePayload.state, 'registered');
 
-  // 无 live 实例（pid 留档移除）：回退 current.json 已选择版本。
+  // without live instance (pid Profile remove): fall back current.json already choose version.
   await fs.rm(path.join(dir, 'node.pid'), { force: true });
   const offline = await runCli(['status', '--data-dir', dir, '--json']);
   assert.equal(offline.code, 0, offline.err);
   const offlinePayload = JSON.parse(offline.out) as { version: string; pid: number | null };
-  assert.equal(offlinePayload.version, '0.0.1-current', '无 live 实例时 current.json 作为兑底');
+  assert.equal(offlinePayload.version, '0.0.1-current', 'without live instance when current.json as honor bottom');
   assert.equal(offlinePayload.pid, null);
 });

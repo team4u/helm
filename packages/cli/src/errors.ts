@@ -1,4 +1,4 @@
-/** CLI 统一错误：code 面向 --json 机器消费；exitCode 非零即失败。 */
+/** CLI unify error:code for --json machine consume;exitCode non-zero i.e. failed. */
 export class CliError extends Error {
   constructor(
     message: string,
@@ -26,7 +26,7 @@ export function describeError(error: unknown): DescribedError {
   return { message: String(error), code: 'internal_error', exitCode: 1 };
 }
 
-/** 与 Hub HTTP 错误信封同构：{error:{code,message,details?}}。 */
+/** and Hub HTTP error message seal same construct:{error:{code,message,details?}}. */
 export function errorEnvelope(error: DescribedError): { error: { code: string; message: string; details?: unknown } } {
   const inner: { code: string; message: string; details?: unknown } = {
     code: error.code,

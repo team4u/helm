@@ -1,11 +1,11 @@
 /**
- * 会话上下文操作模块：reset / compact / fork。
+ * conversation context operation module:reset / compact / fork.
  *
- * 职责：
- * - 关停守卫与上下文前置校验；
- * - 会话上下文重置（reset，支持 handoff）；
- * - 会话历史手动压缩（compact，支持自定义 instructions）；
- * - 会话历史断点分叉（fork，继承源会话元数据并对齐模型）。
+ * responsibility:
+ * - closure stop guard and context pre- validate;
+ * - conversation context reset (reset, support handoff);
+ * - conversation history manually compress (compact, support self define instructions);
+ * - conversation history checkpoint fork (fork, inherit source conversation metadata and align model).
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Harness } from '@earendil-works/pi-durable'
@@ -31,22 +31,22 @@ export interface ConversationContextOpsHost {
 export class ConversationContextOps {
   constructor(private readonly host: ConversationContextOpsHost) {}
 
-  /** 内核关闭守卫（上下文操作共用）。 */
+  /** kernel close guard (context operation shared use). */
   assertOpen(): void {
-    if (this.host.isClosed()) throw new HelmError('runtime_closed', '内核正在关闭，拒绝提交新输入', 503)
+    if (this.host.isClosed()) throw new HelmError('runtime_closed', 'kernel is now close, reject commit new input', 503)
   }
 
-  /** 取已存在的会话元数据与 SDK 句柄（不存在统一 404）。 */
+  /** take already exists conversation metadata and SDK handle (missing unify 404). */
   async conversationForContextOp(
     id: number,
   ): Promise<{ meta: NonNullable<ReturnType<HelmStore['getConv']>>; conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>> }> {
     const meta = requireConv(this.host.store, id)
     const conversation = await this.host.harness.conversation(id as never, BACKGROUND_CONTEXT)
-    if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+    if (!conversation) throw new HelmError('not_found', `conversation missing:${id}`, 404)
     return { meta, conversation }
   }
 
-  /** 重置会话上下文：SDK reset(handoff) 后推进 stateChangeSeq 并广播摘要。 */
+  /** reset conversation context:SDK reset(handoff) after push enter stateChangeSeq and broadcast summary. */
   async resetConversation(id: number, opts?: { handoff?: string }): Promise<ConversationSummary> {
     this.assertOpen()
     const { meta, conversation } = await this.conversationForContextOp(id)
@@ -54,14 +54,14 @@ export class ConversationContextOps {
       opts?.handoff !== undefined && opts.handoff !== '' ? this.host.stash.redact(opts.handoff) : undefined
     await conversation.reset(safeHandoff, BACKGROUND_CONTEXT)
     this.host.store.upsertConv({ ...meta, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() })
-    // 重置后上下文从零开始：立即触发用量重算（观察路径的 pi.reset 条目触发去重兑底）。
+    // reset after context from zero start: immediately trigger use amount heavy compute (observe path pi.reset item trigger dedupe honor bottom).
     this.host.tracker.scheduleContextUsageRefresh(id)
     const summary = this.host.tracker.summaryOf(id)
     this.host.events.publish('conversation.upsert', this.host.withOwnership(summary))
     return summary
   }
 
-  /** 手动压缩：SDK compact(instructions) 返回后台任务 ID；返回 { taskId, conversation }。 */
+  /** manually compress:SDK compact(instructions) return background task ID; return { taskId, conversation }. */
   async compactConversation(
     id: number,
     opts?: { instructions?: string },
@@ -74,8 +74,8 @@ export class ConversationContextOps {
         : undefined
     const taskId = await conversation.compact(safeInstructions, BACKGROUND_CONTEXT)
     this.host.store.upsertConv({ ...meta, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() })
-    // 手动压缩已受理：立即触发用量重算（compacting 状态与压缩后 tokens 由
-    // 观察路径的 live/entry 触发继续迫齐；空闲会话不经 live 帧短路）。
+    // manually compress already subject to: immediately trigger use amount heavy compute (compacting state and compress after tokens by
+    // observe path live/entry trigger continue force complete; idle conversation do not via live frame short route).
     this.host.tracker.scheduleContextUsageRefresh(id)
     const summary = this.host.tracker.summaryOf(id)
     this.host.events.publish('conversation.upsert', this.host.withOwnership(summary))
@@ -83,18 +83,18 @@ export class ConversationContextOps {
   }
 
   /**
-   * 从指定条目分叉新会话：SDK fork(entryId) 后登记 helm 镜像
-   *（继承 profile/tags/cwd/model/override；父链指向源会话）并对齐模型。
+   * from designate item fork new conversation:SDK fork(entryId) after register helm mirror
+   *(inherit profile/tags/cwd/model/override; parent chain points to source conversation) and align model.
    */
   async forkConversation(id: number, opts: { entryId: number; title?: string }): Promise<ConversationSummary> {
     this.assertOpen()
     if (!Number.isSafeInteger(opts.entryId) || opts.entryId <= 0) {
-      throw new HelmError('validation_error', `entryId 需为安全正整数（收到 ${String(opts.entryId)}）`, 400, {
+      throw new HelmError('validation_error', `entryId must be security positive integer (receives ${String(opts.entryId)})`, 400, {
         entryId: opts.entryId,
       })
     }
     const { meta: sourceMeta, conversation: sourceConv } = await this.conversationForContextOp(id)
-    // 条目存在性精确校验（min=max=entryId 取 1 条；不存在 404）。
+    // item store in precise validate (min=max=entryId take 1 ; missing 404).
     const page = await sourceConv.entries(
       { minEntryId: opts.entryId as never, maxEntryId: opts.entryId as never, order: 'ascending' },
       1,
@@ -102,7 +102,7 @@ export class ConversationContextOps {
       BACKGROUND_CONTEXT,
     )
     if (page.items.length === 0 || (page.items[0] as { id: number }).id !== opts.entryId) {
-      throw new HelmError('not_found', `条目 ${opts.entryId} 在会话 ${id} 中不存在`, 404, {
+      throw new HelmError('not_found', `item ${opts.entryId} in conversation ${id} in missing`, 404, {
         conversationId: id,
         entryId: opts.entryId,
       })
@@ -114,11 +114,11 @@ export class ConversationContextOps {
     )
     const newId = forked.id as number
     const now = Date.now()
-    const baseTitle = sourceMeta.title !== '' ? sourceMeta.title : `会话 ${id}`
+    const baseTitle = sourceMeta.title !== '' ? sourceMeta.title : `conversation ${id}`
     const title =
       opts.title !== undefined && opts.title.trim() !== ''
         ? this.host.stash.redact(opts.title.trim())
-        : `${baseTitle} (分叉)`
+        : `${baseTitle} (fork)`
     this.host.store.upsertConv({
       id: newId,
       title,

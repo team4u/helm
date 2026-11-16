@@ -1,10 +1,10 @@
 /**
- * RuntimeOwnershipManager：会话归属权与插件会话管理权维护（从 KernelRuntime 拆出）。
+ * RuntimeOwnershipManager: conversation ownership right and plugin conversation manage right maintain (from KernelRuntime split out).
  *
- * 职责：
- * - 会话归属权判定与持久标记（getOwnership, markOwnership）；
- * - 插件会话管理权持有与释放（manage, release）；
- * - 归属变化投射 conversation.upsert 事件。
+ * responsibility:
+ * - conversation ownership right decide and durable mark record (getOwnership, markOwnership);
+ * - plugin conversation manage right hold has and release (manage, release);
+ * - ownership change throw shoot conversation.upsert event.
  */
 
 import type { ConversationSummary } from '@helm/protocol'
@@ -25,20 +25,20 @@ export interface RuntimeOwnershipDeps {
 }
 
 export class RuntimeOwnershipManager {
-  /** 会话插件管理权：conversationId -> 持有 pluginId 集合（删除保护）。 */
+  /** conversation plugin manage right:conversationId -> hold has pluginId set (delete protect). */
   readonly managedConversations = new Map<number, Set<string>>()
 
   constructor(private readonly deps: RuntimeOwnershipDeps) {}
 
   /**
-   * 会话归属权现读（Watchdog 红线判定唯一可信来源）：
-   * - 会话不存在（含已删除 tombstone）时抛 not_found；
-   * - 未标记/标记非法值一律 human（宁漏管不越权）。
+   * conversation ownership right now read (Watchdog hard rule decide unique can message source):
+   * - conversation missing (contains deleted tombstone) when throw not_found;
+   * - not mark record/mark record illegal value one rule human(rather leak manage do not exceeds right).
    */
   getOwnership(conversationId: number): ConversationOwnership {
     const meta = this.deps.store.getConv(conversationId)
     if (meta === undefined || this.deps.store.isDeleted(conversationId)) {
-      throw new HelmError('not_found', `会话不存在：${conversationId}`, 404, { conversationId })
+      throw new HelmError('not_found', `conversation missing:${conversationId}`, 404, { conversationId })
     }
     const owners = this.deps.documentStore.get<Record<string, string>>('conversation-ownership', {})
     const marked = owners[String(conversationId)]
@@ -46,9 +46,9 @@ export class RuntimeOwnershipManager {
   }
 
   /**
-   * 会话归属权标记（Watchdog 红线判定唯一可信来源）：
-   * - 不依赖用户可改的 tags/parent 推断；未标记一律视为 human；
-   * - 持久化于全局 doc（'conversation-ownership'），重启保留。
+   * conversation ownership right mark record (Watchdog hard rule decide unique can message source):
+   * - independent of user can change tags/parent push assert; not mark record one rule treated as human;
+   * - persist at global doc('conversation-ownership'), restart keep.
    */
   markOwnership(conversationId: number, owner: ConversationOwnership): void {
     const key = 'conversation-ownership'
@@ -69,7 +69,7 @@ export class RuntimeOwnershipManager {
   }
 
   /**
-   * 插件会话管理权（删除保护）：仅已启用插件可持有；返回释放函数。
+   * plugin conversation manage right (delete protect): only enabled plugin can hold has; return release function.
    */
   manage(conversationId: number, pluginId: string): () => void {
     let owners = this.managedConversations.get(conversationId)

@@ -1,11 +1,11 @@
 /**
- * EventHub 真实 HTTP 集成测试：真 Response.body reader + AbortController。
+ * EventHub real HTTP integration test: true Response.body reader + AbortController.
  *
- * 覆盖：SSE 首帧 snapshot / 增量帧协议、abort 与 reader.cancel 退订、close() 清场、
- * 慢消费者字节背压关流、快照竞态无丢帧、快照脱敏、publish 序号时序、
- * plugin.changed 信封/直传双形状、CustomHelmEvent 透传、非法 payload 显式失败、
- * conversation.upsert / ask.upsert / notification 逐字段严格校验（不静默降级）。
- * 纯内存 fixture（无真实模型、无真实 store；persistSeq 用 callback 捕获）。
+ * override:SSE first frame snapshot / incremental frame protocol,abort and reader.cancel unsubscribe,close() clean field,
+ * slow consumer byte back press closure stream, snapshot race without lose frame, snapshot redaction,publish ordinal when order,
+ * plugin.changed message seal/direct pass double shape,CustomHelmEvent pass-through, illegal payload explicit failed,
+ * conversation.upsert / ask.upsert / notification one by one field strictly validate (not silently fall back).
+ * in-memory fixture(without real model, without real store;persistSeq use callback catch).
  */
 import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
@@ -50,7 +50,7 @@ function makeFixture(opts?: { maxPendingBytes?: number; initialSeq?: number; kee
   return fixture
 }
 
-/** 解析一段 SSE 文本为 {event, data} 列表。 */
+/** parse one segment SSE text is {event, data} list. */
 function parseSse(text: string): Array<{ event: string; data: unknown }> {
   const frames: Array<{ event: string; data: unknown }> = []
   for (const block of text.split('\n\n')) {
@@ -66,12 +66,12 @@ function parseSse(text: string): Array<{ event: string; data: unknown }> {
   return frames
 }
 
-/** 读到流结束，返回完整文本；可选每帧回调。 */
+/** read to stream end, return complete text; optional each frame call back. */
 async function readAll(
   response: Response,
   onChunk?: (text: string) => void,
 ): Promise<string> {
-  assert.ok(response.body !== null, 'SSE 响应必须有 body 流')
+  assert.ok(response.body !== null, 'SSE response must has body stream')
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let all = ''
@@ -85,7 +85,7 @@ async function readAll(
   return all
 }
 
-/** 单次读取附带 Deadline：心跳未按时到达即显式失败（不让测试挂到套件超时）。 */
+/** single time read attach carries Deadline: heartbeat not by when reach i.e. explicit failed (do not let test hang to set piece timeout). */
 async function readWithDeadline(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   ms = 2000,
@@ -95,7 +95,7 @@ async function readWithDeadline(
     return await Promise.race([
       reader.read(),
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`读取超时（${ms}ms）：心跳未到达`)), ms)
+        timer = setTimeout(() => reject(new Error(`read timeout (${ms}ms): heartbeat not reach`)), ms)
       }),
     ])
   } finally {
@@ -104,13 +104,13 @@ async function readWithDeadline(
 }
 
 // ---------------------------------------------------------------------------
-// response()：真实 HTTP 语义
+// response(): real HTTP semantics
 // ---------------------------------------------------------------------------
 
-describe('EventHub.response SSE 协议', { timeout: 60_000 }, () => {
-  it('首帧 event:snapshot 携带 HelmSnapshot，增量帧 event:<type> 携带 {seq,event}', { timeout: 60_000 }, async () => {
+describe('EventHub.response SSE protocol', { timeout: 60_000 }, () => {
+  it('first frame event:snapshot carry HelmSnapshot, incremental frame event:<type> carry {seq,event}', { timeout: 60_000 }, async () => {
     const { hub, snapshotValue } = makeFixture()
-    snapshotValue.conversations = [summary(1, '个人助理')]
+    snapshotValue.conversations = [summary(1, 'person assist')]
     const controller = new AbortController()
     const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
     assert.equal(response.status, 200)
@@ -128,11 +128,11 @@ describe('EventHub.response SSE 协议', { timeout: 60_000 }, () => {
     await reading
 
     const first = frames[0]
-    assert.ok(first && first.event === 'snapshot', '首帧必须是 snapshot')
+    assert.ok(first && first.event === 'snapshot', 'first frame must be snapshot')
     const snap = first.data as HelmSnapshot
     assert.equal(snap.seq, 0)
     assert.equal(snap.conversations.length, 1)
-    assert.equal(snap.conversations[0]?.title, '个人助理')
+    assert.equal(snap.conversations[0]?.title, 'person assist')
     assert.deepEqual(snap.pendingAsks, [])
     assert.deepEqual(snap.plugins, [])
 
@@ -144,21 +144,21 @@ describe('EventHub.response SSE 协议', { timeout: 60_000 }, () => {
     })
   })
 
-  it('Request.signal abort 退订并关流；重连凭新 snapshot 对齐', { timeout: 60_000 }, async () => {
+  it('Request.signal abort unsubscribe and closure stream; reconnect rely on new snapshot align', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture()
     const controller = new AbortController()
     const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
     assert.equal(hub.subscriberCount, 1)
     controller.abort()
-    assert.equal(hub.subscriberCount, 0, 'abort 后立即退订')
+    assert.equal(hub.subscriberCount, 0, 'abort after immediately unsubscribe')
     const text = await readAll(response, () => {})
-    assert.match(text, /event: snapshot/, '关流前已写入的首帧仍可读')
-    // abort 后发布不再进入该流（reader 已 done）。
-    hub.publish('notification', { level: 'info', title: '后发' })
+    assert.match(text, /event: snapshot/, 'closure stream before already write first frame still can read')
+    // abort after publish no longer enter the stream (reader already done).
+    hub.publish('notification', { level: 'info', title: 'after' })
     assert.equal(hub.subscriberCount, 0)
   })
 
-  it('ReadableStream.cancel 同样退订（客户端主动断开）', { timeout: 60_000 }, async () => {
+  it('ReadableStream.cancel same unsubscribe (client actively disconnect)', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture()
     const controller = new AbortController()
     const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
@@ -168,12 +168,12 @@ describe('EventHub.response SSE 协议', { timeout: 60_000 }, () => {
     assert.ok(first.done !== true)
     assert.equal(hub.subscriberCount, 1)
     await reader.cancel()
-    assert.equal(hub.subscriberCount, 0, 'cancel 后立即退订')
-    hub.publish('notification', { level: 'info', title: '取消后' })
+    assert.equal(hub.subscriberCount, 0, 'cancel after immediately unsubscribe')
+    hub.publish('notification', { level: 'info', title: 'cancel after' })
     assert.equal(hub.subscriberCount, 0)
   })
 
-  it('close() 清空全部订阅（kernel 关停用）', { timeout: 60_000 }, async () => {
+  it('close() empty all subscribe (kernel closure deactivate)', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture()
     const c1 = new AbortController()
     const c2 = new AbortController()
@@ -187,7 +187,7 @@ describe('EventHub.response SSE 协议', { timeout: 60_000 }, () => {
     c2.abort()
   })
 
-  it('无事件时保持流（不回退 JSON/204），增量在任意时刻到达即达', { timeout: 60_000 }, async () => {
+  it('without event when keep stream (does not fall back JSON/204), incremental in any moment reach i.e. reach', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture()
     const controller = new AbortController()
     const response = hub.response(new Request('http://x', { signal: controller.signal }))
@@ -198,8 +198,8 @@ describe('EventHub.response SSE 协议', { timeout: 60_000 }, () => {
     const reading = readAll(response, (text) => {
       if (text.includes('conversation.upsert')) resolveFrame()
     })
-    // 任意时刻发布（模拟空闲后突发）。
-    setTimeout(() => hub.publish('conversation.upsert', summary(2, '突发会话')), 30)
+    // any moment publish (simulated idle after sudden).
+    setTimeout(() => hub.publish('conversation.upsert', summary(2, 'sudden conversation')), 30)
     await frameCame
     controller.abort()
     await reading
@@ -207,12 +207,12 @@ describe('EventHub.response SSE 协议', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// 背压：慢消费者
+// back press: slow consumer
 // ---------------------------------------------------------------------------
 
-describe('EventHub 慢消费者背压', { timeout: 60_000 }, () => {
-  it('流式阶段未读字节超限：明确关流（不丢帧不静默续传）', { timeout: 60_000 }, async () => {
-    // 1 KiB 上限：单帧约 100+ 字节，慢读 2 帧内必触发。
+describe('EventHub slow consumer back press', { timeout: 60_000 }, () => {
+  it('streaming phase not read byte over limit: explicit closure stream (do not lose frame not silently resume)', { timeout: 60_000 }, async () => {
+    // 1 KiB cap: single frame about 100+ byte, slow read 2 frame inside must trigger.
     const { hub } = makeFixture({ maxPendingBytes: 1024 })
     const controller = new AbortController()
     const response = hub.response(new Request('http://x', { signal: controller.signal }))
@@ -220,7 +220,7 @@ describe('EventHub 慢消费者背压', { timeout: 60_000 }, () => {
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let text = ''
-    // 只读第一块（snapshot），随后不读——制造积压。
+    // only read one chunk (snapshot), then do not read - - fabricate accumulate press.
     const first = await reader.read()
     assert.ok(first.value)
     text += decoder.decode(first.value, { stream: true })
@@ -230,22 +230,22 @@ describe('EventHub 慢消费者背压', { timeout: 60_000 }, () => {
       hub.publish('notification', { level: 'info', title: `n${i}`, body: 'x'.repeat(64) })
       if (hub.subscriberCount === 0) break
     }
-    assert.equal(hub.subscriberCount, 0, '字节积压超限后订阅被明确移除')
-    // 流已被服务端关闭；队列内已入队帧仍可读，最终得到 done（不再投递新帧）。
+    assert.equal(hub.subscriberCount, 0, 'byte accumulate press over limit after subscribe by explicit remove')
+    // stream already by server side close; queue inside already queue frame still can read, eventually obtain to done(no longer delivery new frame).
     let done = false
     while (!done) {
       const next = await reader.read()
       done = next.done === true
     }
-    hub.publish('notification', { level: 'info', title: '关流后不应到达' })
+    hub.publish('notification', { level: 'info', title: 'closure stream after must not reach' })
     const after = await reader.read()
-    assert.ok(after.done, '关流后不再投递新帧')
+    assert.ok(after.done, 'closure stream after no longer delivery new frame')
     controller.abort()
   })
 
-  it('正常消费者逐块持续读取不受背压影响', { timeout: 60_000 }, async () => {
-    // 16 KiB 预算远大于单帧，但同步 burst 会瞬间堆积（读取是异步的），
-    // 故逐块交替发布/等待验证正常消费者水远不被误关。
+  it('normal consumer one by one chunk continuous read do not subject to back press affect', { timeout: 60_000 }, async () => {
+    // 16 KiB pre- compute far greater than single frame, but sync burst will instant between heap accumulate (read is async),
+    // reason one by one chunk hand over replace publish/wait for verify normal consumer water far do not by mistakenly closure.
     const { hub } = makeFixture({ maxPendingBytes: 16 * 1024 })
     const controller = new AbortController()
     const response = hub.response(new Request('http://x', { signal: controller.signal }))
@@ -253,24 +253,24 @@ describe('EventHub 慢消费者背压', { timeout: 60_000 }, () => {
     const reading = readAll(response, (t) => chunks.push(t))
     await waitFor(() => chunks.length >= 1)
     for (let i = 0; i < 50 && hub.subscriberCount > 0; i++) {
-      hub.publish('notification', { level: 'info', title: `事件${i}` })
-      await waitFor(() => chunks.join('').includes(`事件${i}`))
+      hub.publish('notification', { level: 'info', title: `event${i}` })
+      await waitFor(() => chunks.join('').includes(`event${i}`))
     }
-    assert.equal(hub.subscriberCount, 1, '逐块读取的消费者保持订阅')
+    assert.equal(hub.subscriberCount, 1, 'one by one chunk read consumer keep subscribe')
     controller.abort()
     await reading
   })
 })
 
 // ---------------------------------------------------------------------------
-// 快照竞态：订阅先于快照，无丢帧
+// snapshot race: subscribe first at snapshot, without lose frame
 // ---------------------------------------------------------------------------
 
-describe('EventHub 快照竞态', { timeout: 60_000 }, () => {
-  it('快照取定后、冲刷前发布的事件（seq 更大）必达且不重复', { timeout: 60_000 }, async () => {
-    // initialSeq 与 snapshot.seq 对齐为 5；发布后的 seq=6 事件必须出现在流中。
+describe('EventHub snapshot race', { timeout: 60_000 }, () => {
+  it('snapshot take set after, conflict refresh before publish event (seq more large) must reach and does not repeat', { timeout: 60_000 }, async () => {
+    // initialSeq and snapshot.seq align is 5; publish after seq=6 event must appear in stream in.
     const { hub, snapshotValue } = makeFixture({ initialSeq: 5 })
-    snapshotValue.conversations = [summary(1, '竞态基线')]
+    snapshotValue.conversations = [summary(1, 'race baseline')]
     const controller = new AbortController()
     const response = hub.response(new Request('http://x', { signal: controller.signal }))
     const frames: Array<{ event: string; data: unknown }> = []
@@ -278,8 +278,8 @@ describe('EventHub 快照竞态', { timeout: 60_000 }, () => {
       for (const f of parseSse(text)) frames.push(f)
     })
     await waitFor(() => frames.length >= 1 && frames[0]?.event === 'snapshot')
-    // snapshot.seq=5；发布 seq=6 事件，必须出现在流中。
-    hub.publish('notification', { level: 'warning', title: '竞态事件' })
+    // snapshot.seq=5; publish seq=6 event, must appear in stream in.
+    hub.publish('notification', { level: 'warning', title: 'race event' })
     await waitFor(() => frames.some((f) => f.event === 'notification'))
     controller.abort()
     await reading
@@ -292,11 +292,11 @@ describe('EventHub 快照竞态', { timeout: 60_000 }, () => {
     }>
     assert.equal(eventFrames.length, 1)
     assert.equal(eventFrames[0]?.data.seq, 6)
-    assert.equal((eventFrames[0]?.data.event as { title?: string }).title, '竞态事件')
+    assert.equal((eventFrames[0]?.data.event as { title?: string }).title, 'race event')
   })
 
-  it('snapshot provider 同步重入发布：订阅缓冲阶段溢出被明确关流', { timeout: 60_000 }, async () => {
-    // provider 首次被调用同步发布 600 个事件（>512 缓冲上限）。
+  it('snapshot provider sync heavy publish: subscribe buffer phase overflow by explicit closure stream', { timeout: 60_000 }, async () => {
+    // provider first time by invoke sync publish 600 event (>512 buffer cap).
     let reentrant = false
     const persisted: number[] = []
     const snapValue: HelmSnapshot = { bootId: 'test-boot', seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [], pluginDocs: [] }
@@ -315,7 +315,7 @@ describe('EventHub 快照竞态', { timeout: 60_000 }, () => {
     const response = hub.response(new Request('http://x', { signal: controller.signal }))
     assert.ok(response.body)
     const reader = response.body.getReader()
-    // 读到流结束：溢出发生在快照返回前，流可能零帧即关（客户端重连取新快照）。
+    // read to stream end: overflow occur in snapshot return before, stream may zero frame i.e. closure (client reconnect take new snapshot).
     const decoder = new TextDecoder()
     let text = ''
     for (;;) {
@@ -323,37 +323,37 @@ describe('EventHub 快照竞态', { timeout: 60_000 }, () => {
       if (done) break
       text += decoder.decode(value, { stream: true })
     }
-    assert.ok(!text.includes('r599'), '不得截断续传（丢帧后伪装完整流）')
-    assert.equal(hub.subscriberCount, 0, '缓冲溢出后订阅被明确移除')
+    assert.ok(!text.includes('r599'), 'must not truncate resume (lose frame after disguise complete stream)')
+    assert.equal(hub.subscriberCount, 0, 'buffer overflow after subscribe by explicit remove')
     controller.abort()
   })
 })
 
 // ---------------------------------------------------------------------------
-// 脱敏：快照与事件
+// redaction: snapshot and event
 // ---------------------------------------------------------------------------
 
-describe('EventHub 脱敏', { timeout: 60_000 }, () => {
-  it('首帧 snapshot 递归脱敏：secret 明文（含字段名）绝不出现', { timeout: 60_000 }, async () => {
+describe('EventHub redaction', { timeout: 60_000 }, () => {
+  it('first frame snapshot recursion redaction:secret plaintext (contains field name) never appear', { timeout: 60_000 }, async () => {
     const { hub, snapshotValue } = makeFixture()
     hub.redactFn = (t) => t.replaceAll('sk-secret', '[REDACTED]')
     snapshotValue.conversations = [
-      { ...summary(1, '密钥会话'), doing: 'upload sk-secret-token' },
+      { ...summary(1, 'secret key conversation'), doing: 'upload sk-secret-token' },
     ]
     const controller = new AbortController()
     const response = hub.response(new Request('http://x', { signal: controller.signal }))
-    // 未 abort 先读：服务端未关流时 readAll 会挂起，故用带超时的有限读验证首帧。
+    // not abort first read: server side not closure stream when readAll will suspended, reason use carries timeout finite read verify first frame.
     assert.ok(response.body)
     const reader = response.body.getReader()
     const { value } = await reader.read()
     const text = new TextDecoder().decode(value ?? new Uint8Array())
     controller.abort()
     await reader.cancel().catch(() => {})
-    assert.ok(!text.includes('sk-secret'), '快照明文 secret 必须脱敏')
+    assert.ok(!text.includes('sk-secret'), 'snapshot plaintext secret must redaction')
     assert.ok(text.includes('[REDACTED]'))
   })
 
-  it('publish 事件先字符串递归脱敏：带引号/换行的 payload 不漏', { timeout: 60_000 }, async () => {
+  it('publish event first string recursion redaction: carries quotes/newline payload do not leak', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture()
     hub.redactFn = (t) => t.replaceAll('leak-me', '[REDACTED]')
     const controller = new AbortController()
@@ -378,10 +378,10 @@ describe('EventHub 脱敏', { timeout: 60_000 }, () => {
     await reading
     const frame = frames[1]?.data as { event: { type: string; payload: Record<string, unknown> } }
     assert.equal(frame.event.type, 'custom.progress')
-    assert.ok(!JSON.stringify(frame).includes('leak-me'), '事件 payload 不得漏明文')
+    assert.ok(!JSON.stringify(frame).includes('leak-me'), 'event payload must not leak plaintext')
   })
 
-  it('快照含非法 JSON 值（Date）：currentSnapshot 显式抛 HelmError 不静默转换', { timeout: 60_000 }, () => {
+  it('snapshot contains illegal JSON value (Date):currentSnapshot explicit throw HelmError not silently convert', { timeout: 60_000 }, () => {
     const { hub, snapshotValue } = makeFixture()
     snapshotValue.conversations = [
       { ...summary(1, 'x'), createdAt: new Date(0) as unknown as number },
@@ -391,24 +391,24 @@ describe('EventHub 脱敏', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// publish 序号时序与事件形状
+// publish ordinal when order and event shape
 // ---------------------------------------------------------------------------
 
-describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
-  it('组装失败不推进 seq（mirror seq 一致），成功后 seq 连续持久化', { timeout: 60_000 }, () => {
+describe('EventHub.publish event shape', { timeout: 60_000 }, () => {
+  it('group install failed do not push enter seq(mirror seq consistent), after success seq connect continue persist', { timeout: 60_000 }, () => {
     const { hub, persistedSeqs } = makeFixture()
     hub.publish('notification', { level: 'info', title: 'a' })
     assert.equal(hub.seq, 1)
     assert.deepEqual(persistedSeqs, [1])
     assert.throws(() => hub.publish('conversation.deleted', { conversationId: 'NaN!' }))
-    assert.equal(hub.seq, 1, '失败不推进序号')
-    assert.deepEqual(persistedSeqs, [1], '失败不持久化序号')
+    assert.equal(hub.seq, 1, 'failed do not push enter ordinal')
+    assert.deepEqual(persistedSeqs, [1], 'failed do not persist ordinal')
     hub.publish('conversation.deleted', { conversationId: 7 })
     assert.equal(hub.seq, 2)
     assert.deepEqual(persistedSeqs, [1, 2])
   })
 
-  it('payload 含循环引用：publish 显式抛错，不静默降级', { timeout: 60_000 }, () => {
+  it('payload contains loop reference:publish explicit throws, not silently fall back', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const cyclic: Record<string, unknown> = { self: null }
     cyclic['self'] = cyclic
@@ -416,7 +416,7 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
     assert.equal(hub.seq, 0)
   })
 
-  it('plugin.changed 接受完整信封 {type,plugin,ui} 与直接 {plugin,ui} 双形状；裸 summary 缺 ui 显式拒绝', { timeout: 60_000 }, () => {
+  it('plugin.changed accept complete message seal {type,plugin,ui} and directly {plugin,ui} double shape; bare summary missing ui explicit reject', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const plugin = {
       id: 'builtin:herdr',
@@ -432,31 +432,31 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
     ]
     const frames: HelmEventFrame[] = []
     const off = hub.subscribe((f) => frames.push(f))
-    // 完整信封形状（PluginHost emitEvent 现状：{type, plugin, ui}）。
+    // complete message seal shape (PluginHost emitEvent now state:{type, plugin, ui}).
     hub.publish('plugin.changed', { type: 'plugin.changed', plugin, ui })
-    // 直接 {plugin, ui} 形状。
+    // directly {plugin, ui} shape.
     hub.publish('plugin.changed', { plugin, ui })
     off()
     const e1 = frames[0]?.event as { type: string; plugin: { id: string }; ui: unknown[] }
     const e2 = frames[1]?.event as { type: string; plugin: { id: string }; ui: unknown[] }
     assert.equal(e1.type, 'plugin.changed')
     assert.equal(e1.plugin.id, 'builtin:herdr')
-    assert.deepEqual(e1.ui, ui, '信封形状 ui 完整携带')
-    assert.ok(!('type' in (e1.plugin as Record<string, unknown>)), '信封拆包：plugin 内不得残留 type 嵌套')
+    assert.deepEqual(e1.ui, ui, 'message seal shape ui complete carry')
+    assert.ok(!('type' in (e1.plugin as Record<string, unknown>)), 'message seal split package:plugin inside must not leftover type embed set')
     assert.equal(e2.type, 'plugin.changed')
     assert.equal(e2.plugin.id, 'builtin:herdr')
-    assert.deepEqual(e2.ui, ui, '直传形状 ui 完整携带')
-    // 旧裸 summary（缺 ui）不再接受：新契约无兼容垫片。
+    assert.deepEqual(e2.ui, ui, 'direct pass shape ui complete carry')
+    // old bare summary(missing ui) no longer accept: new contract without compatibility cushion piece.
     assert.throws(() => hub.publish('plugin.changed', plugin), /plugin\.changed|invalid_event/)
-    // 停用/卸载：ui 为空数组（客户端据此清除该插件贡献）。
+    // deactivate/unload:ui is empty array (client based on this clear the plugin contribution).
     hub.publish('plugin.changed', { plugin, ui: [] })
     const off2 = hub.subscribe(() => {})
     off2()
   })
 
-  it('core 其他类型同样接受信封/直传双形状', { timeout: 60_000 }, () => {
+  it('core other type same accept message seal/direct pass double shape', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
-    const conv = summary(3, '双形状')
+    const conv = summary(3, 'double shape')
     const frames: HelmEventFrame[] = []
     const off = hub.subscribe((f) => frames.push(f))
     hub.publish('conversation.upsert', conv)
@@ -475,15 +475,15 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
     assert.equal(del2.conversationId, 10)
   })
 
-  it('conversation.upsert 非法形状显式拒绝且不推进 seq（缺字段/错类型/可选字段类型不符）', { timeout: 60_000 }, () => {
+  it('conversation.upsert illegal shape explicit reject and do not push enter seq(missing field/wrong type/optional field type do not symbol)', { timeout: 60_000 }, () => {
     const { hub, persistedSeqs } = makeFixture()
     hub.publish('notification', { level: 'info', title: 'baseline' })
     assert.equal(hub.seq, 1)
-    // 非对象。
+    // non- object.
     assert.throws(() => hub.publish('conversation.upsert', 'not-a-summary'), /conversation\.upsert|invalid_event/)
-    // 缺核心字段（无 title/status/updatedAt 等）。
+    // missing core field (without title/status/updatedAt etc.).
     assert.throws(() => hub.publish('conversation.upsert', { id: 1, profileId: 'assistant' }), /conversation\.upsert/)
-    // 核心字段类型错（status 非五态、id 非整数、tags 混入非 string）。
+    // core field type wrong (status non- five state,id non- integer,tags mix non- string).
     assert.throws(
       () => hub.publish('conversation.upsert', { ...summary(1, 'x'), status: 'busy' as never }),
       /conversation\.upsert/,
@@ -496,7 +496,7 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
       () => hub.publish('conversation.upsert', { ...summary(1, 'x'), tags: ['a', 2 as never] }),
       /conversation\.upsert/,
     )
-    // 可选字段存在但类型错（可缺不可错）。
+    // optional field store in but type wrong (can missing cannot wrong).
     assert.throws(
       () => hub.publish('conversation.upsert', { ...summary(1, 'x'), ownedBy: 'alien' as never }),
       /conversation\.upsert/,
@@ -509,7 +509,7 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
       () => hub.publish('conversation.upsert', { ...summary(1, 'x'), doing: 42 as never }),
       /conversation\.upsert/,
     )
-    // 合法摘要（含可选字段）不受影响。
+    // legal summary (contains optional field) do not subject to affect.
     hub.publish('conversation.upsert', {
       ...summary(4, 'ok'),
       ownedBy: 'bot',
@@ -520,28 +520,28 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
     assert.deepEqual(persistedSeqs, [1, 2])
   })
 
-  it('ask.upsert 非法形状显式拒绝且不推进 seq（缺字段/错状态/field 形状非法）', { timeout: 60_000 }, () => {
+  it('ask.upsert illegal shape explicit reject and do not push enter seq(missing field/wrong state/field shape illegal)', { timeout: 60_000 }, () => {
     const { hub, persistedSeqs } = makeFixture()
     hub.publish('notification', { level: 'info', title: 'baseline' })
     const baseAsk = {
       id: 'ask-1',
       conversationId: 3,
-      title: '部署审批',
-      fields: [{ name: 'approve', label: '是否批准', type: 'confirm' }],
+      title: 'deploy approval',
+      fields: [{ name: 'approve', label: 'is otherwise batch allow', type: 'confirm' }],
       status: 'pending',
       createdAt: 1_000,
     }
-    // 非对象。
+    // non- object.
     assert.throws(() => hub.publish('ask.upsert', 'oops'), /ask\.upsert|invalid_event/)
-    // 缺核心字段。
+    // missing core field.
     assert.throws(() => hub.publish('ask.upsert', { id: 'ask-1' }), /ask\.upsert/)
-    // status 非四态。
+    // status non- four state.
     assert.throws(() => hub.publish('ask.upsert', { ...baseAsk, status: 'expired' as never }), /ask\.upsert/)
-    // id 空串 / conversationId 非整数 / fields 空数组。
+    // id empty string / conversationId non- integer / fields empty array.
     assert.throws(() => hub.publish('ask.upsert', { ...baseAsk, id: '' }), /ask\.upsert/)
     assert.throws(() => hub.publish('ask.upsert', { ...baseAsk, conversationId: 3.5 }), /ask\.upsert/)
     assert.throws(() => hub.publish('ask.upsert', { ...baseAsk, fields: [] }), /ask\.upsert/)
-    // field 形状非法（type 非三选一、select 缺 options）。
+    // field shape illegal (type non- three choose one,select missing options).
     assert.throws(
       () => hub.publish('ask.upsert', { ...baseAsk, fields: [{ name: 'x', label: 'X', type: 'radio' as never }] }),
       /ask\.upsert/,
@@ -549,26 +549,26 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
     assert.throws(
       () => hub.publish('ask.upsert', {
         ...baseAsk,
-        fields: [{ name: 'env', label: '环境', type: 'select' as never }],
+        fields: [{ name: 'env', label: 'environment', type: 'select' as never }],
       }),
       /ask\.upsert/,
     )
-    // 可选字段类型错（expectedStateSeq 非整数）。
+    // optional field type wrong (expectedStateSeq non- integer).
     assert.throws(
       () => hub.publish('ask.upsert', { ...baseAsk, expectedStateSeq: '3' as never }),
       /ask\.upsert/,
     )
-    assert.equal(hub.seq, 1, '非法输入不推进 seq')
+    assert.equal(hub.seq, 1, 'invalid input do not push enter seq')
     assert.deepEqual(persistedSeqs, [1])
-    // 合法 AskSpec（含可选字段）不受影响；answered 终态同样可发布。
+    // legal AskSpec(contains optional field) do not subject to affect;answered terminal state same can publish.
     hub.publish('ask.upsert', { ...baseAsk, expectedStateSeq: 7, ownerPluginId: 'builtin:herdr' })
     hub.publish('ask.upsert', { ...baseAsk, id: 'ask-2', status: 'answered' as never })
     assert.equal(hub.seq, 3)
   })
 
-  it('ask.upsert 同步校验机密生命周期，非法元数据不进入续传缓存', { timeout: 60_000 }, () => {
+  it('ask.upsert sync validate secret lifecycle, illegal metadata does not enter resume cache', { timeout: 60_000 }, () => {
     const { hub, persistedSeqs } = makeFixture()
-    const ask = { id: 'lifetime-ask', conversationId: 1, title: '机密', status: 'pending', createdAt: 1 }
+    const ask = { id: 'lifetime-ask', conversationId: 1, title: 'secret', status: 'pending', createdAt: 1 }
     for (const secretLifetime of [{ ttlMs: 0 }, { scope: 'unknown' }, { ttl: 100 }, new Date()]) {
       assert.throws(() => hub.publish('ask.upsert', {
         ...ask,
@@ -590,20 +590,20 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
     hub.close()
   })
 
-  it('notification 非法载荷显式拒绝且不推进 seq（不静默修正 level/title）', { timeout: 60_000 }, () => {
+  it('notification illegal payload explicit reject and do not push enter seq(not silently fix correct level/title)', { timeout: 60_000 }, () => {
     const { hub, persistedSeqs } = makeFixture()
     hub.publish('notification', { level: 'info', title: 'baseline' })
     assert.equal(hub.seq, 1)
-    // 非法 level：不再静默折回 'info'。
+    // illegal level: no longer static default fold back 'info'.
     assert.throws(() => hub.publish('notification', { level: 'fatal', title: 'x' }), /notification|invalid_event/)
-    assert.throws(() => hub.publish('notification', { title: '缺 level' }), /notification/)
-    // 非法 title：不再静默替换为 'notification'。
+    assert.throws(() => hub.publish('notification', { title: 'missing level' }), /notification/)
+    // illegal title: no longer static default replace is 'notification'.
     assert.throws(() => hub.publish('notification', { level: 'info' }), /notification/)
     assert.throws(() => hub.publish('notification', { level: 'info', title: '' }), /notification/)
     assert.throws(() => hub.publish('notification', { level: 'info', title: 42 as never }), /notification/)
-    // body 存在但非 string。
+    // body store in but non- string.
     assert.throws(() => hub.publish('notification', { level: 'info', title: 'x', body: 1 as never }), /notification/)
-    // conversationId 存在但非整数。
+    // conversationId store in but non- integer.
     assert.throws(
       () => hub.publish('notification', { level: 'info', title: 'x', conversationId: 1.5 }),
       /notification/,
@@ -612,16 +612,16 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
       () => hub.publish('notification', { level: 'info', title: 'x', conversationId: '3' as never }),
       /notification/,
     )
-    assert.equal(hub.seq, 1, '非法输入不推进 seq')
-    assert.deepEqual(persistedSeqs, [1], '非法输入不持久化序号')
-    // 合法载荷（可选字段省略/携带）不受影响。
-    hub.publish('notification', { level: 'warning', title: '仅标题' })
-    hub.publish('notification', { level: 'error', title: '全字段', body: '详情', conversationId: 9 })
+    assert.equal(hub.seq, 1, 'invalid input do not push enter seq')
+    assert.deepEqual(persistedSeqs, [1], 'invalid input do not persist ordinal')
+    // legal payload (optional field omit/carry) do not subject to affect.
+    hub.publish('notification', { level: 'warning', title: 'only title' })
+    hub.publish('notification', { level: 'error', title: 'all field', body: 'detail situation', conversationId: 9 })
     assert.equal(hub.seq, 3)
     assert.deepEqual(persistedSeqs, [1, 2, 3])
   })
 
-  it('node.changed 接受信封/直传双形状，保留完整 NodeInfo 字段；removed 透传', { timeout: 60_000 }, () => {
+  it('node.changed accept message seal/direct pass double shape, keep complete NodeInfo field;removed pass-through', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const frames: HelmEventFrame[] = []
     const off = hub.subscribe((f) => frames.push(f))
@@ -644,11 +644,11 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
         diskTotalBytes: 4,
       },
     }
-    // 完整信封形状（KernelRuntime 现状：{type, node}）。
+    // complete message seal shape (KernelRuntime now state:{type, node}).
     hub.publish('node.changed', { type: 'node.changed', node })
-    // 直接 {node} 形状（无信封 type）。
+    // directly {node} shape (without message seal type).
     hub.publish('node.changed', { node: { ...node, online: false, lastSeenAt: 3_000 } })
-    // removed: true（removeNode 统一发布）。
+    // removed: true(removeNode unify publish).
     hub.publish('node.changed', { type: 'node.changed', node: { id: 'gpu-box', kind: 'byom', online: false }, removed: true })
     off()
     assert.equal(frames.length, 3)
@@ -659,8 +659,8 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
     assert.equal(e1.node.kind, 'byom')
     assert.equal(e1.node.online, true)
     assert.equal(e1.node.hostname, 'gpu')
-    assert.equal(e1.node.health?.diskTotalBytes, 4, '完整真实 NodeInfo 字段保留（含 health）')
-    assert.equal('removed' in e1, false, '无 removed 字段时不携带')
+    assert.equal(e1.node.health?.diskTotalBytes, 4, 'complete real NodeInfo field keep (contains health)')
+    assert.equal('removed' in e1, false, 'without removed field when does not carry')
     const e2 = frames[1]?.event
     assert.ok(e2 && 'node' in e2)
     assert.equal(e2.node.online, false)
@@ -668,55 +668,55 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
     const e3 = frames[2]?.event
     assert.ok(e3 && 'node' in e3)
     assert.equal(e3.node.id, 'gpu-box')
-    assert.equal(e3.removed, true, 'removed: true 透传（Web 据此从列表移除）')
-    // 事件形状满足 Web applyEventFrame 的 'node' in event 判定（不再坠入 Custom payload 嵌套）。
-    assert.ok(!('payload' in e1), '不得坠入 CustomHelmEvent payload 嵌套')
+    assert.equal(e3.removed, true, 'removed: true pass-through (Web based on this from list remove)')
+    // event shape satisfy Web applyEventFrame  'node' in event decide (no longer fall Custom payload embed set).
+    assert.ok(!('payload' in e1), 'must not fall CustomHelmEvent payload embed set')
   })
 
-  it('node.changed 非法输入显式拒绝且不推进 seq', { timeout: 60_000 }, () => {
+  it('node.changed invalid input explicit reject and do not push enter seq', { timeout: 60_000 }, () => {
     const { hub, persistedSeqs } = makeFixture()
     hub.publish('notification', { level: 'info', title: 'baseline' })
     assert.equal(hub.seq, 1)
-    // 缺 node。
+    // missing node.
     assert.throws(() => hub.publish('node.changed', { type: 'node.changed' }), /node\.changed|invalid_event/)
-    // node 缺 id / id 非字符串 / 空串。
+    // node missing id / id non- string / empty string.
     assert.throws(() => hub.publish('node.changed', { node: { kind: 'byom', online: true } }), /node\.changed/)
     assert.throws(
       () => hub.publish('node.changed', { node: { id: 42 as unknown as string, kind: 'byom', online: true } }),
       /node\.changed/,
     )
     assert.throws(() => hub.publish('node.changed', { node: { id: '', kind: 'byom', online: true } }), /node\.changed/)
-    // 非法 kind。
+    // illegal kind.
     assert.throws(
       () => hub.publish('node.changed', { node: { id: 'x', kind: 'ssh' as never, online: true } }),
       /node\.changed/,
     )
-    // online 非 boolean。
+    // online non- boolean.
     assert.throws(
       () => hub.publish('node.changed', { node: { id: 'x', kind: 'byom', online: 'yes' as never } }),
       /node\.changed/,
     )
-    // removed 非 boolean（若存在）。
+    // removed non- boolean(if store in).
     assert.throws(
       () => hub.publish('node.changed', { node: { id: 'x', kind: 'byom', online: false }, removed: 'true' as never }),
       /removed/,
     )
-    // node 非对象。
+    // node non- object.
     assert.throws(() => hub.publish('node.changed', 'gpu-box'), /node\.changed/)
-    // 全部失败不推进 seq、不持久化。
-    assert.equal(hub.seq, 1, '非法输入不推进 seq')
-    assert.deepEqual(persistedSeqs, [1], '非法输入不持久化序号')
-    // 合法发布恢复正常。
+    // all failed do not push enter seq, do not persist.
+    assert.equal(hub.seq, 1, 'invalid input do not push enter seq')
+    assert.deepEqual(persistedSeqs, [1], 'invalid input do not persist ordinal')
+    // legal publish restore normal.
     hub.publish('node.changed', { node: { id: 'x', kind: 'byom', online: true } })
     assert.equal(hub.seq, 2)
   })
 
-  it('未知 type 透传 CustomHelmEvent {type,payload}，不伪装成 notification', { timeout: 60_000 }, () => {
+  it('unknown type pass-through CustomHelmEvent {type,payload}, does not pretend to be into notification', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const frames: HelmEventFrame[] = []
     const off = hub.subscribe((f) => frames.push(f))
     hub.publish('workflow.progress', { step: 3, detail: { done: true } })
-    hub.publish('herdr.pane.update', 'pane-2 附加信息')
+    hub.publish('herdr.pane.update', 'pane-2 additional information')
     hub.publish('notification', { level: 'error', title: 't' })
     off()
     assert.equal(frames.length, 3)
@@ -725,15 +725,15 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
     assert.deepEqual(e1.payload, { step: 3, detail: { done: true } })
     const e2 = frames[1]?.event as { type: string; payload: unknown }
     assert.equal(e2.type, 'herdr.pane.update')
-    assert.equal(e2.payload, 'pane-2 附加信息')
-    // 六个 core 类型保持强契约：不进入 Custom 分支。
+    assert.equal(e2.payload, 'pane-2 additional information')
+    // six core type keep strong contract: does not enter Custom branch.
     const core = frames[2]?.event as { type: string; title?: string; payload?: unknown }
     assert.equal(core.type, 'notification')
     assert.equal(core.title, 't')
-    assert.equal(core.payload, undefined, 'notification 不携带 payload 字段')
+    assert.equal(core.payload, undefined, 'notification does not carry payload field')
   })
 
-  it('订阅回调抛错只隔离该订阅，不影响其他订阅者', { timeout: 60_000 }, () => {
+  it('subscribe call back throws only isolated the subscribe, does not affect other subscribe', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const good: HelmEventFrame[] = []
     const bad = (): void => {
@@ -741,35 +741,35 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
     }
     hub.subscribe(bad)
     hub.subscribe((f) => good.push(f))
-    assert.doesNotThrow(() => hub.publish('notification', { level: 'info', title: '隔离' }))
+    assert.doesNotThrow(() => hub.publish('notification', { level: 'info', title: 'isolated' }))
     assert.equal(good.length, 1)
-    assert.equal((good[0]?.event as { title?: string }).title, '隔离')
+    assert.equal((good[0]?.event as { title?: string }).title, 'isolated')
   })
 })
 
 // ---------------------------------------------------------------------------
-// sseStream：可编程消费（含退订）
+// sseStream: can edit process consume (contains unsubscribe)
 // ---------------------------------------------------------------------------
 
-describe('EventHub.sseStream 可编程消费', { timeout: 60_000 }, () => {
-  it('返回退订句柄；消费 return false 即退订；退订后 publish 不再投递', { timeout: 60_000 }, () => {
+describe('EventHub.sseStream can edit process consume', { timeout: 60_000 }, () => {
+  it('return unsubscribe handle; consume return false i.e. unsubscribe; unsubscribe after publish no longer delivery', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const frames: SseFrame[] = []
     const sub = hub.sseStream((frame) => {
       frames.push(frame)
-      return frames.length < 2 // 第二帧后返回 false
+      return frames.length < 2 // second frame after return false
     })
     assert.equal(hub.subscriberCount, 1)
-    hub.publish('notification', { level: 'info', title: '一' })
-    hub.publish('notification', { level: 'info', title: '二' })
-    assert.equal(hub.subscriberCount, 0, 'return false 后自动退订')
-    hub.publish('notification', { level: 'info', title: '三' })
+    hub.publish('notification', { level: 'info', title: 'one' })
+    hub.publish('notification', { level: 'info', title: 'two' })
+    assert.equal(hub.subscriberCount, 0, 'return false after automatically unsubscribe')
+    hub.publish('notification', { level: 'info', title: 'three' })
     assert.equal(frames.length, 2)
-    sub.unsubscribe() // 幂等
+    sub.unsubscribe() // idempotent
     assert.equal(hub.subscriberCount, 0)
   })
 
-  it('消费者抛错：退订清理且异常不逃逸到 publish', { timeout: 60_000 }, () => {
+  it('consumer throws: unsubscribe clean up and exception do not escape to publish', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const other: HelmEventFrame[] = []
     hub.subscribe((f) => other.push(f))
@@ -777,18 +777,18 @@ describe('EventHub.sseStream 可编程消费', { timeout: 60_000 }, () => {
       throw new Error('boom')
     })
     hub.publish('notification', { level: 'info', title: 'after' })
-    assert.equal(hub.subscriberCount, 1, '抛错订阅被清理，仅剩正常订阅')
+    assert.equal(hub.subscriberCount, 1, 'throws subscribe by clean up, only remain normal subscribe')
     assert.equal(other.length, 1)
   })
 
-  it('sseStream 内快照后冲刷缓冲帧（无丢帧、seq 严格大于快照）', { timeout: 60_000 }, async () => {
+  it('sseStream inside snapshot after conflict refresh buffer frame (without lose frame,seq strictly greater than snapshot)', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture({ initialSeq: 2 })
     const frames: SseFrame[] = []
-    // 订阅回调中发布（快照刚取定、冲刷前的经典竞态）。
+    // subscribe call back in publish (snapshot just take set, conflict refresh before via classic race).
     const sub = hub.sseStream((frame) => {
       frames.push(frame)
       if (frames.length === 1) {
-        queueMicrotask(() => hub.publish('notification', { level: 'info', title: '竞态增量' }))
+        queueMicrotask(() => hub.publish('notification', { level: 'info', title: 'race incremental' }))
       }
       return true
     })
@@ -803,11 +803,11 @@ describe('EventHub.sseStream 可编程消费', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// 空闲心跳（keepalive）：代理/中间层保活 + 客户端卡死检测依据
+// idle heartbeat (keepalive): proxy/middle layer keep-alive + client card die detect based on
 // ---------------------------------------------------------------------------
 
-describe('EventHub SSE 空闲心跳', { timeout: 60_000 }, () => {
-  it('空闲连接周期收到 : keepalive 注释行：不携带 event/data、不伪造业务事件、不推进 seq', { timeout: 60_000 }, async () => {
+describe('EventHub SSE idle heartbeat', { timeout: 60_000 }, () => {
+  it('idle connect cycle receives : keepalive note release row: does not carry event/data, do not fabricate business event, do not push enter seq', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture({ keepaliveMs: 20 })
     const controller = new AbortController()
     const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
@@ -817,25 +817,25 @@ describe('EventHub SSE 空闲心跳', { timeout: 60_000 }, () => {
     const first = await reader.read()
     assert.match(decoder.decode(first.value ?? new Uint8Array()), /event: snapshot/)
 
-    // 下一个 chunk 应是心跳注释行（: 开头，无 event:/data:，解析不出任何帧）。
+    // under a chunk should is heartbeat note release row (: open head, without event:/data:, parse do not out any frame).
     const beat = await readWithDeadline(reader)
     const beatText = decoder.decode(beat.value ?? new Uint8Array())
-    assert.ok(beatText.startsWith(':'), `心跳应是 SSE 注释行，实际: ${beatText}`)
-    assert.ok(!beatText.includes('event:') && !beatText.includes('data:'), '心跳不得伪造业务事件')
-    // 真实客户端 SseParser 跳过 : 开头注释行（live-state.test.ts 已锁定）：
-    // 心跳文本解析不出任何携带 data 的帧。
-    assert.ok(parseSse(beatText).every((frame) => frame.data === null), '心跳不得携带数据帧')
-    assert.equal(hub.seq, 0, '心跳不推进事件序号')
+    assert.ok(beatText.startsWith(':'), `heartbeat should is SSE note release row, actual: ${beatText}`)
+    assert.ok(!beatText.includes('event:') && !beatText.includes('data:'), 'heartbeat must not fabricate business event')
+    // real client SseParser skip : open head note release row (live-state.test.ts already lock):
+    // heartbeat text parse do not out any carry data frame.
+    assert.ok(parseSse(beatText).every((frame) => frame.data === null), 'heartbeat must not carry data frame')
+    assert.equal(hub.seq, 0, 'heartbeat do not push enter event ordinal')
 
-    // 心跳不干扰业务事件：发布后事件帧照常到达。
-    hub.publish('notification', { level: 'info', title: '心跳间事件' })
+    // heartbeat do not interference business event: publish after event frame per common reach.
+    hub.publish('notification', { level: 'info', title: 'heartbeat between event' })
     const eventChunk = await readWithDeadline(reader)
     assert.match(decoder.decode(eventChunk.value ?? new Uint8Array()), /event: notification/)
     controller.abort()
     await reader.cancel().catch(() => {})
   })
 
-  it('abort 后心跳 timer 随 shutdown 清理：退订关流，无后续字节（进程不因泄漏 timer 挂起）', { timeout: 60_000 }, async () => {
+  it('abort after heartbeat timer follow shutdown clean up: unsubscribe closure stream, without after continue byte (process do not because leak leak timer suspended)', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture({ keepaliveMs: 20 })
     const controller = new AbortController()
     const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
@@ -843,22 +843,22 @@ describe('EventHub SSE 空闲心跳', { timeout: 60_000 }, () => {
     const reader = response.body.getReader()
     await reader.read() // snapshot
     controller.abort()
-    assert.equal(hub.subscriberCount, 0, 'abort 后立即退订')
+    assert.equal(hub.subscriberCount, 0, 'abort after immediately unsubscribe')
 
-    // 服务端已关流：耗尽已入队字节后读到 done。
+    // server side already closure stream: exhausted already queue byte after read to done.
     let done = false
     while (!done) {
       const next = await reader.read()
       done = next.done === true
     }
-    // 等待多个心跳周期：泄漏的 interval 会保持事件循环存活使套件无法退出
-    // （本套件能正常结束即问接验证 timer 已清理），且不会再写入任何字节。
+    // wait for multiple heartbeat cycle: leak leak interval will keep event loop store make set piece cannot exit
+    // (this set piece can normal end i.e. question connect verify timer already clean up), and will not again write any byte.
     await new Promise((r) => setTimeout(r, 100))
     const after = await reader.read()
-    assert.ok(after.done, '关流后不再有心跳字节')
+    assert.ok(after.done, 'closure stream after no longer has heartbeat byte')
   })
 
-  it('ReadableStream.cancel 同样清理心跳 timer（客户端主动断开）', { timeout: 60_000 }, async () => {
+  it('ReadableStream.cancel same clean up heartbeat timer(client actively disconnect)', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture({ keepaliveMs: 20 })
     const controller = new AbortController()
     const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
@@ -866,15 +866,15 @@ describe('EventHub SSE 空闲心跳', { timeout: 60_000 }, () => {
     const reader = response.body.getReader()
     await reader.read() // snapshot
     await reader.cancel()
-    assert.equal(hub.subscriberCount, 0, 'cancel 后立即退订')
+    assert.equal(hub.subscriberCount, 0, 'cancel after immediately unsubscribe')
     await new Promise((r) => setTimeout(r, 100))
     assert.equal(hub.subscriberCount, 0)
     controller.abort()
   })
 
-  it('心跳受字节背压有界约束：不读的慢消费者堆积超限被明确关流', { timeout: 60_000 }, async () => {
-    // 预算 320B：首帧 snapshot（含 bootId，约 150B）可通过；单条心跳约 14B，
-    // 堆积 20 余次即超限（keepaliveMs=5 下约百余毫秒内触发）。
+  it('heartbeat subject to byte back press has boundary constraint: do not read slow consumer heap accumulate over limit by explicit closure stream', { timeout: 60_000 }, async () => {
+    // pre- compute 320B: first frame snapshot(contains bootId, about 150B) can via; single heartbeat about 14B,
+    // heap accumulate 20 remaining time i.e. over limit (keepaliveMs=5 under about hundred remaining milli second inside trigger).
     const { hub } = makeFixture({ keepaliveMs: 5, maxPendingBytes: 320 })
     const controller = new AbortController()
     const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
@@ -882,7 +882,7 @@ describe('EventHub SSE 空闲心跳', { timeout: 60_000 }, () => {
     const reader = response.body.getReader()
     const first = await reader.read()
     assert.match(new TextDecoder().decode(first.value ?? new Uint8Array()), /event: snapshot/)
-    // 不再读：心跳字节持续堆积，超限即慢客户端明确关流（绝不满仓无限排队）。
+    // no longer read: heartbeat byte continuous heap accumulate, over limit i.e. slow client explicit closure stream (never full warehouse unbounded queue up).
     await waitFor(() => hub.subscriberCount === 0)
     let done = false
     while (!done) {
@@ -892,18 +892,18 @@ describe('EventHub SSE 空闲心跳', { timeout: 60_000 }, () => {
     controller.abort()
   })
 
-  it('keepaliveMs 非正值停用心跳：空闲流不再写入任何字节', { timeout: 60_000 }, async () => {
+  it('keepaliveMs non- correct value deactivate heartbeat: idle stream no longer write any byte', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture({ keepaliveMs: 0 })
     const controller = new AbortController()
     const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
     assert.ok(response.body)
     const reader = response.body.getReader()
     await reader.read() // snapshot
-    // 等待起过一个默认心跳周期仍无任何写入（read 持续 pending，用短 Deadline 反证）。
+    // wait for start a by default heartbeat cycle still without any write (read continuous pending, use short Deadline reverse verify).
     await new Promise((r) => setTimeout(r, 60))
     const pending = reader.read()
     const won = await Promise.race([pending.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), 80))])
-    assert.equal(won, false, '停用心跳后空闲流不应再有字节到达')
+    assert.equal(won, false, 'deactivate heartbeat after idle stream must not again has byte reach')
     controller.abort()
     await reader.cancel().catch(() => {})
   })

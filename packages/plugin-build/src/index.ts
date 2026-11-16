@@ -1,13 +1,13 @@
 /**
- * @helm/plugin-build —— 插件构建端口（PluginBuildProvider）的默认实现。
+ * @helm/plugin-build - - plugin build port (PluginBuildProvider) by default implement.
  *
- * 由产品组合根（hub）显式注入内核 PluginHost（PluginHostOptions.buildProvider）；
- * 本包只依赖 @helm/protocol 契约与 esbuild，不反向依赖 kernel / hub / web。
+ * by produce product composition root (hub) explicit inject kernel PluginHost(PluginHostOptions.buildProvider);
+ * this package only dependency @helm/protocol contract and esbuild, do not reverse dependency kernel / hub / web.
  *
- * 能力：
- * - compileClientModule：client.tsx -> 浏览器 ESM 产物（共享依赖 shim、CSS、
- *   受控 npm 依赖、代码分割、内容 hash 缓存、gzip 预压缩；实现见 client-compiler.ts）；
- * - transformBackendTs：外部插件后端 TS 源 -> ESM（module hooks 底座的转译函数）。
+ * capability:
+ * - compileClientModule:client.tsx -> browser ESM artifact (sharing dependency shim,CSS,
+ *   subject to control npm dependency, code split, content hash cache,gzip pre- compress; implement see client-compiler.ts);
+ * - transformBackendTs: external plugin backend TS source -> ESM(module hooks bottom seat transpile function).
  */
 import type { PluginBuildProvider } from '@helm/protocol';
 import { transformBackendTs } from './backend-ts-transform.js';
@@ -25,10 +25,10 @@ export {
   type ClientCompileResult,
   type ClientNpmRoot,
 } from './client-compiler.js';
-// 测试专用入口：Node 进程内执行编译产物时显式安装 chunk 桥（生产编译路径不改写 globalThis）
+// test dedicated use entry:Node process inside execute compile artifact when explicit install chunk bridge (produce compile path do not change write globalThis)
 export { installNodeChunkBridge } from './node-chunk-bridge.js';
 
-/** 构造默认插件构建端口（client 编译 + 后端 TS 转译；同一 esbuild 实例）。 */
+/** construct by default plugin build port (client compile + backend TS transpile; the same esbuild instance). */
 export function createPluginBuildProvider(): PluginBuildProvider {
   return {
     compileClientModule: (request) =>

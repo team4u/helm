@@ -1,15 +1,15 @@
 /**
- * 文件版动态模型目录缓存（models-store.json）：pi-ai ModelsStore 的持久实现。
+ * file edition motion state model directory cache (models-store.json):pi-ai ModelsStore durable implement.
  *
- * 职责：
- * - 按 providerId 持久化动态目录条目（ModelsStoreEntry：models/etag/lastModified/
- *   checkedAt），重启后 models.refresh({ allowNetwork: false }) 可离线恢复缓存目录；
- * - read/write/delete 全部经 withFileLock 按真实路径进程内串行 + 原子落盘（0600），
- *   并发 update 不丢失彼此写入；
- * - 文件不存在（ENOENT）返回空目录；JSON 解析失败或顶层非 plain object 显式抛
- *   HelmError('models_store_corrupted')，绝不静默当空目录用（诚实性纪律）。
+ * responsibility:
+ * - by providerId persist motion state directory item (ModelsStoreEntry:models/etag/lastModified/
+ *   checkedAt), after restart models.refresh({ allowNetwork: false }) can offline restore cache directory;
+ * - read/write/delete all via withFileLock by real path process inside serial + atomic (0600),
+ *   concurrency update without losing each other write;
+ * - file missing (ENOENT) return empty directory;JSON failed to parse or top-level non- plain object explicit throw
+ *   HelmError('models_store_corrupted'), never static default when empty directory use (honest discipline).
  *
- * 该文件不含任何密钥（模型目录元数据非机密；0600 仅为一致性保守权限）。
+ * the file excludes any secret key (model directory metadata non- secret;0600 only is consistency keep guard permission).
  */
 
 import type { ModelsStore, ModelsStoreEntry } from '@earendil-works/pi-ai'
@@ -19,13 +19,13 @@ import { join } from 'node:path'
 import { atomicWriteJson } from '../services/atomic-file.js'
 import { withFileLock } from '../services/file-lock.js'
 
-/** 顶层形状：providerId -> 持久化目录条目。 */
+/** top-level shape:providerId -> persist directory item. */
 type StoreShape = Record<string, ModelsStoreEntry>
 
-/** ModelsStore.update 变更函数：undefined = 不改写；null = 删除；对象 = 写入。 */
+/** ModelsStore.update change function:undefined = do not change write;null = delete; object = write. */
 type Mutation = (current: ModelsStoreEntry | undefined) => Promise<ModelsStoreEntry | null | undefined> | ModelsStoreEntry | null | undefined
 
-/** ENOENT 判定（文件缺失是合法空目录，其余读取错误原样上抛）。 */
+/** ENOENT decide (file missing is legal empty directory, the rest read error original on throw). */
 function isNoSuchFileError(err: unknown): boolean {
   return (
     typeof err === 'object' &&
@@ -34,7 +34,7 @@ function isNoSuchFileError(err: unknown): boolean {
   )
 }
 
-/** 读取并解析 models-store.json；损坏显式抛 models_store_corrupted（不静默清空）。 */
+/** read and parse models-store.json; corrupt explicit throw models_store_corrupted(not silently empty). */
 async function loadRaw(path: string): Promise<StoreShape> {
   let text: string
   try {
@@ -49,14 +49,14 @@ async function loadRaw(path: string): Promise<StoreShape> {
   } catch (err) {
     throw new HelmError(
       'models_store_corrupted',
-      `models-store.json 不是合法 JSON（${path}）：${err instanceof Error ? err.message : String(err)}`,
+      `models-store.json is not legal JSON(${path}):${err instanceof Error ? err.message : String(err)}`,
       500,
     )
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     throw new HelmError(
       'models_store_corrupted',
-      `models-store.json 顶层需为对象（providerId -> 目录条目）：${path}`,
+      `models-store.json top-level must be an object (providerId -> directory item):${path}`,
       500,
     )
   }
@@ -64,8 +64,8 @@ async function loadRaw(path: string): Promise<StoreShape> {
 }
 
 /**
- * 文件版 ModelsStore（单 Hub 进程使用；跨进程写并发不在本契约范围——
- * CLI 一律经 HTTP 触发内核刷新，不直写该文件）。
+ * file edition ModelsStore(single Hub process use; across process write concurrency do not in this contract scope - -
+ * CLI one rule via HTTP trigger kernel refresh, do not direct write the file).
  */
 export class FileModelsStore implements ModelsStore {
   private readonly path: string
@@ -89,7 +89,7 @@ export class FileModelsStore implements ModelsStore {
     await this.update(providerId, () => null)
   }
 
-  /** 锁内读改写：fn 返回 undefined 不改写；null 删除；对象写入并原子落盘。 */
+  /** lock inside read change write:fn return undefined do not change write;null delete; object write and atomic. */
   async update(providerId: string, fn: Mutation): Promise<void> {
     await withFileLock(this.path, async () => {
       const current = await loadRaw(this.path)
@@ -102,7 +102,7 @@ export class FileModelsStore implements ModelsStore {
   }
 }
 
-/** 工厂：与 services 层其余存储同构（dataDir -> FileModelsStore）。 */
+/** work vendor: and services layer the rest store same construct (dataDir -> FileModelsStore). */
 export function createFileModelsStore(dataDir: string): FileModelsStore {
   return new FileModelsStore(dataDir)
 }

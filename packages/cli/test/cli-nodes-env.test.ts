@@ -1,8 +1,8 @@
 /**
- * 新增核心命令测试：nodes / env exec / api 逃生舱 / conversations --node /
- * profiles 语义化 flag / plugins config --set / 管理面故障隔离。
- * 真实 HTTP server 模拟 Hub 契约（cli.test.ts 同款模式），验证路径、方法、
- * 请求体、退出码语义与 --json / 人类可读输出。每项显式 timeout: 60_000。
+ * new increase core command test:nodes / env exec / api escape generate cabin / conversations --node /
+ * profiles semantics flag / plugins config --set / manage side fault isolated.
+ * real HTTP server simulated Hub contract (cli.test.ts same style pattern), verify path, method,
+ * request body, exit code semantics and --json / person class can read output. each items explicit timeout: 60_000.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -57,7 +57,7 @@ const NODE_LIST = [
 // 1. nodes list / issue / remove
 // ---------------------------------------------------------------------------
 
-test('nodes list：GET /api/nodes；--json 原始数组、人类模式关键列表格', { timeout: 60_000 }, async (t) => {
+test('nodes list:GET /api/nodes;--json original array, person class pattern key list format', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub({ 'GET /api/nodes': () => ({ body: NODE_LIST }) }, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
@@ -77,26 +77,26 @@ test('nodes list：GET /api/nodes；--json 原始数组、人类模式关键列�
   assert.match(human.out, /platform/)
 })
 
-test('nodes list --json：透传节点 health 健康快照（local 与在线 BYOM；离线节点无 health 键）', { timeout: 60_000 }, async (t) => {
+test('nodes list --json: pass-through node health health snapshot (local and online BYOM; offline node without health key)', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub({ 'GET /api/nodes': () => ({ body: NODE_LIST }) }, { autoRegisterCleanup: t })
   const r = await runCliCaptured(['nodes', 'list', '--json'], makeCliEnv(hub.url, dir))
   assert.equal(r.code, 0, r.err)
   const nodes = JSON.parse(r.out) as Array<{ id: string; health?: Record<string, unknown> }>
-  // local 节点：完整健康快照原样透传。
+  // local node: complete health snapshot original pass-through.
   const local = nodes.find((n) => n.id === 'local')!
-  assert.deepEqual(local.health, LOCAL_HEALTH, 'local health 快照必须原样透传（含磁盘字段）')
-  // 在线 BYOM 节点：心跳/注册捎带的快照原样透传（缺磁盘字段时不得伪造）。
+  assert.deepEqual(local.health, LOCAL_HEALTH, 'local health snapshot must original pass-through (contains disk field)')
+  // online BYOM node: heartbeat/register incidentally snapshot original pass-through (missing disk field when must not fabricate).
   const byom = nodes.find((n) => n.id === 'gpu-box')!
-  assert.deepEqual(byom.health, BYOM_HEALTH, '在线 BYOM health 快照必须原样透传')
-  assert.equal('diskFreeBytes' in (byom.health ?? {}), false, '未上报磁盘字段不得伪造')
-  // 离线节点：不残留过期 health。
+  assert.deepEqual(byom.health, BYOM_HEALTH, 'online BYOM health snapshot must original pass-through')
+  assert.equal('diskFreeBytes' in (byom.health ?? {}), false, 'not on report disk field must not fabricate')
+  // offline node: leaves no residue expired health.
   const offline = nodes.find((n) => n.id === 'laptop')!
-  assert.equal(offline.health, undefined, '离线节点不得残留过期 health')
+  assert.equal(offline.health, undefined, 'offline node must not leftover expired health')
   assert.equal('health' in offline, false)
 })
 
-test('nodes issue：POST /api/nodes/issue {nodeId}；--json 全量、人类模式突出 token', { timeout: 60_000 }, async (t) => {
+test('nodes issue:POST /api/nodes/issue {nodeId};--json all amount, person class pattern sudden out token', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const issued = { nodeId: 'dev-1', token: 'dev-1:sec-abc', createdAt: 123 }
   const hub = await startMockHub({ 'POST /api/nodes/issue': () => ({ body: issued }) }, { autoRegisterCleanup: t })
@@ -112,13 +112,13 @@ test('nodes issue：POST /api/nodes/issue {nodeId}；--json 全量、人类模�
   assert.match(human.out, /dev-1:sec-abc/)
   assert.match(human.out, /helm-node connect/)
 
-  // 缺位置参数显式报错
+  // missing location parameter explicit errors
   const missing = await runCliCaptured(['nodes', 'issue', '--json'], env)
   assert.equal(missing.code, 1)
   assert.equal(parseCliError(missing).code, 'missing_id')
 })
 
-test('nodes remove：DELETE /api/nodes/:id；多余位置参数拒绝', { timeout: 60_000 }, async (t) => {
+test('nodes remove:DELETE /api/nodes/:id; redundant location parameter reject', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub({ 'DELETE /api/nodes/gpu-box': () => ({ status: 204 }) }, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
@@ -138,7 +138,7 @@ test('nodes remove：DELETE /api/nodes/:id；多余位置参数拒绝', { timeou
 // 2. env exec
 // ---------------------------------------------------------------------------
 
-test('env exec：--node/--cwd/--timeout/--current 全量映射 body；成功退出码 0', { timeout: 60_000 }, async (t) => {
+test('env exec:--node/--cwd/--timeout/--current all amount mapping body; succeeded exit code 0', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub(
     {
@@ -162,13 +162,13 @@ test('env exec：--node/--cwd/--timeout/--current 全量映射 body；成功退�
     conversationId: 9,
   })
 
-  // --json 输出完整 JSON 响应（--json 需在 -- 之前：-- 之后均为命令词项）
+  // --json output complete JSON response (--json must in -- before:-- after all is command term items)
   const json = await runCliCaptured(['env', 'exec', '--json', '--', 'true'], makeCliEnv(hub.url, dir))
   assert.equal(json.code, 0, json.err)
   assert.deepEqual(JSON.parse(json.out), { ok: true, exitCode: 0, output: '3 passed\n', timedOut: false })
 })
 
-test('env exec：失败命令（exitCode!==0）非零退出码；timeout / ok=false 同样失败', { timeout: 60_000 }, async (t) => {
+test('env exec: failed command (exitCode!==0) non-zero exit code;timeout / ok=false same failed', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub(
     {
@@ -195,13 +195,13 @@ test('env exec：失败命令（exitCode!==0）非零退出码；timeout / ok=fa
 
   const timedOut = await runCliCaptured(['env', 'exec', '--', 'timeout-cmd'], env)
   assert.equal(timedOut.code, 1)
-  assert.match(timedOut.err, /超时/)
+  assert.match(timedOut.err, /timeout/)
 
   const ok = await runCliCaptured(['env', 'exec', '--', 'true'], env)
   assert.equal(ok.code, 0)
 })
 
-test('env exec：单命令字符串（含空格）原样透传；缺命令/非法 timeout 显式报错', { timeout: 60_000 }, async (t) => {
+test('env exec: single command string (contains space) original pass-through; missing command/illegal timeout explicit errors', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub(
     {
@@ -215,7 +215,7 @@ test('env exec：单命令字符串（含空格）原样透传；缺命令/非�
   assert.equal(shell.code, 0, shell.err)
   assert.deepEqual(hub.hits.at(-1)?.body, { command: 'echo hello && echo world' })
 
-  // -- 之后的词项（含 --json 样式 token）均为命令一部分，不被当作全局开关
+  // -- after term items (contains --json style token) all is command one part, do not by when act global switch
   const literal = await runCliCaptured(['env', 'exec', '--', 'echo', '--json'], env)
   assert.equal(literal.code, 0, literal.err)
   assert.deepEqual(hub.hits.at(-1)?.body, { command: ['echo', '--json'] })
@@ -228,21 +228,21 @@ test('env exec：单命令字符串（含空格）原样透传；缺命令/非�
   assert.equal(badTimeout.code, 1)
   assert.equal(parseCliError(badTimeout).code, 'invalid_flag_value')
 
-  // 超过上限 600000（与后端 POST /api/env/exec 校验对齐）在 CLI 侧直接拒绝：validation_error + 退出码 2
+  // exceeds cap 600000(and backend POST /api/env/exec validate align) in CLI side directly reject:validation_error + exit code 2
   const overTimeout = await runCliCaptured(['env', 'exec', '--json', '--timeout', '600001', '--', 'true'], env)
   assert.equal(overTimeout.code, 2)
   assert.equal(parseCliError(overTimeout).code, 'validation_error')
   assert.match(overTimeout.err, /600000/)
-  // 请求未发向 Hub（CLI 侧先行拦截）
+  // request not to Hub(CLI side first row intercept)
   assert.ok(!hub.hits.some((h) => h.path === '/api/env/exec' && (h.body as { timeoutMs?: number } | undefined)?.timeoutMs === 600001))
 
-  // 恰好 600000 合法（边界含端）
+  // exactly 600000 legal (boundary contains end)
   const boundary = await runCliCaptured(['env', 'exec', '--json', '--timeout', '600000', '--', 'true'], env)
   assert.equal(boundary.code, 0, boundary.err)
   assert.equal((hub.hits.filter((h) => h.path === '/api/env/exec').at(-1)?.body as { timeoutMs?: number }).timeoutMs, 600000)
 })
 
-test('env exec --current：未传 --node 时请求体不强塞 nodeId，由 Hub 按会话绑定解析', { timeout: 60_000 }, async (t) => {
+test('env exec --current: not pass --node when request body do not strong stuff nodeId, by Hub by conversation bind set parse', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub(
     {
@@ -252,28 +252,28 @@ test('env exec --current：未传 --node 时请求体不强塞 nodeId，由 Hub 
   )
   const envWithConv = makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '12' })
 
-  // --current 且无 --node：body 仅含 command 与 conversationId，绝无 nodeId:'local'（防误跑 Hub 本机）
+  // --current and without --node:body only contains command and conversationId, absolute without nodeId:'local'(guard against mistakenly run Hub local machine)
   const r = await runCliCaptured(['env', 'exec', '--current', '--', 'git', 'status'], envWithConv)
   assert.equal(r.code, 0, r.err)
   const hit = hub.hits.find((h) => h.path === '/api/env/exec')!
   assert.deepEqual(hit.body, { command: ['git', 'status'], conversationId: 12 })
-  assert.ok(!('nodeId' in (hit.body as Record<string, unknown>)), '未传 --node 时不得强塞 nodeId（含 local）')
-  assert.ok(!('cwd' in (hit.body as Record<string, unknown>)), '未传 --cwd 时不得覆盖会话绑定 cwd')
+  assert.ok(!('nodeId' in (hit.body as Record<string, unknown>)), 'not pass --node when must not strong stuff nodeId(contains local)')
+  assert.ok(!('cwd' in (hit.body as Record<string, unknown>)), 'not pass --cwd when must not override conversation bind set cwd')
 
-  // 显式 --node 仍优先（覆盖会话绑定）
+  // explicit --node still takes precedence (override conversation bind set)
   const explicit = await runCliCaptured(['env', 'exec', '--current', '--node', 'gpu-box', '--', 'nvidia-smi'], envWithConv)
   assert.equal(explicit.code, 0, explicit.err)
   assert.deepEqual(hub.hits.at(-1)?.body, { command: ['nvidia-smi'], nodeId: 'gpu-box', conversationId: 12 })
 
-  // 无 --current 无 --node：同样不强塞（Hub 缺省 local）
+  // without --current without --node: same do not strong stuff (Hub default local)
   const plain = await runCliCaptured(['env', 'exec', '--', 'ls'], makeCliEnv(hub.url, dir))
   assert.equal(plain.code, 0, plain.err)
   assert.deepEqual(hub.hits.at(-1)?.body, { command: ['ls'] })
 })
 
-test('env exec --stream：NDJSON 逐块消费（不缓冲全响应）；失败 exitCode 传播', { timeout: 60_000 }, async (t) => {
+test('env exec --stream:NDJSON one by one chunk consume (do not buffer all response); failed exitCode pass broadcast', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
-  // 逐块写出多帧（分多个 chunk 写 socket，验证 CLI 不等全响应才开始消费）
+  // one by one chunk write out many frame (multiple chunk write socket, verify CLI do not etc. all response only then start consume)
   const hub = await startMockHub(
     {
       'POST /api/env/exec': (body, _req, res) => {
@@ -297,7 +297,7 @@ test('env exec --stream：NDJSON 逐块消费（不缓冲全响应）；失败 e
   assert.deepEqual(hit.body, { command: ['build'], nodeId: 'gpu-box', stream: true })
   await hub.close()
 
-  // 失败 exitCode 经 exit 帧传播为非零退出码
+  // failed exitCode via exit frame pass broadcast is non-zero exit code
   const hub2 = await startMockHub(
     {
       'POST /api/env/exec': (_body, _req, res) => {
@@ -314,7 +314,7 @@ test('env exec --stream：NDJSON 逐块消费（不缓冲全响应）；失败 e
   assert.match(failed.err, /exitCode=3/)
 })
 
-test('env exec --stream --json：输出帧逐行 JSON、终态帧全量；SIGINT 取消传播', { timeout: 60_000 }, async (t) => {
+test('env exec --stream --json: output frame one by one row JSON, terminal state frame all amount;SIGINT cancel pass broadcast', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub(
     {
@@ -332,7 +332,7 @@ test('env exec --stream --json：输出帧逐行 JSON、终态帧全量；SIGINT
   const lines = r.out.trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>)
   assert.deepEqual(lines[0], { type: 'output', stream: 'stdout', text: 'step1\n' })
   assert.deepEqual(lines[1], { type: 'exit', ok: true, exitCode: 0, timedOut: false })
-  // 流式请求体携带 stream: true
+  // streaming request body carry stream: true
   assert.equal((hub.hits.find((h) => h.path === '/api/env/exec')?.body as { stream?: boolean }).stream, true)
 })
 
@@ -340,7 +340,7 @@ test('env exec --stream --json：输出帧逐行 JSON、终态帧全量；SIGINT
 // 3. conversations create/update --node
 // ---------------------------------------------------------------------------
 
-test('conversations create/update：--node 映射 body.nodeId；原有 flag 不受影响', { timeout: 60_000 }, async (t) => {
+test('conversations create/update:--node mapping body.nodeId; original has flag do not subject to affect', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub(
     {
@@ -352,17 +352,17 @@ test('conversations create/update：--node 映射 body.nodeId；原有 flag 不�
   const env = makeCliEnv(hub.url, dir)
 
   const created = await runCliCaptured(
-    ['conversations', 'create', '--node', 'gpu-box', '--cwd', '/workspace', '--title', '训练', '--json'],
+    ['conversations', 'create', '--node', 'gpu-box', '--cwd', '/workspace', '--title', 'train', '--json'],
     env,
   )
   assert.equal(created.code, 0, created.err)
   assert.deepEqual(hub.hits.find((h) => h.path === '/api/conversations')?.body, {
     nodeId: 'gpu-box',
     cwd: '/workspace',
-    title: '训练',
+    title: 'train',
   })
 
-  // 原 flag 组合保持原语义（--tags/--model/--profile-id）
+  // original flag combine keep original semantics (--tags/--model/--profile-id)
   const full = await runCliCaptured(
     ['conversations', 'create', '--profile-id', 'worker', '--model', 'openai/gpt', '--tags', 'a,b', '--json'],
     env,
@@ -374,51 +374,51 @@ test('conversations create/update：--node 映射 body.nodeId；原有 flag 不�
   assert.equal(updated.code, 0, updated.err)
   assert.deepEqual(hub.hits.find((h) => h.method === 'PATCH')?.body, { nodeId: 'gpu-box' })
 
-  // update --node 与其他字段可组合
+  // update --node and other field can combine
   const combo = await runCliCaptured(['conversations', 'update', '7', '--node', 'laptop', '--cwd', '/x', '--pinned', '--json'], env)
   assert.equal(combo.code, 0, combo.err)
   assert.deepEqual(hub.hits.at(-1)?.body, { nodeId: 'laptop', cwd: '/x', pinned: true })
 })
 
 // ---------------------------------------------------------------------------
-// 4. profiles 语义化 flag
+// 4. profiles semantics flag
 // ---------------------------------------------------------------------------
 
-test('profiles create：语义化 flag（--name/--model/--node/--cwd）直接构造 Profile', { timeout: 60_000 }, async (t) => {
+test('profiles create: semantics flag(--name/--model/--node/--cwd) directly construct Profile', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub({ 'POST /api/profiles': (body) => ({ body }) }, { autoRegisterCleanup: t })
   const r = await runCliCaptured(
-    ['profiles', 'create', 'worker', '--name', '工人', '--model', 'openai/gpt-4o', '--node', 'gpu-box', '--cwd', '/workspace', '--json'],
+    ['profiles', 'create', 'worker', '--name', 'work person', '--model', 'openai/gpt-4o', '--node', 'gpu-box', '--cwd', '/workspace', '--json'],
     makeCliEnv(hub.url, dir),
   )
   assert.equal(r.code, 0, r.err)
   assert.deepEqual(JSON.parse(r.out), {
     id: 'worker',
-    name: '工人',
+    name: 'work person',
     model: 'openai/gpt-4o',
     nodeId: 'gpu-box',
     cwd: '/workspace',
   })
 })
 
-test('profiles create：--system-file 全文进 body；语义化 flag 覆盖 --input 同名字段', { timeout: 60_000 }, async (t) => {
+test('profiles create:--system-file all text enter body; semantics flag override --input same name segment', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const systemFile = path.join(dir, 'SYSTEM.md')
-  await fsp.writeFile(systemFile, '# 系统\n你是工人。')
+  await fsp.writeFile(systemFile, '# system\nyou is work person.')
   const hub = await startMockHub({ 'POST /api/profiles': (body) => ({ body }) }, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
 
   const r = await runCliCaptured(['profiles', 'create', 'worker', '--system-file', systemFile, '--json'], env)
   assert.equal(r.code, 0, r.err)
   const body = JSON.parse(r.out) as Record<string, unknown>
-  assert.equal(body['system'], '# 系统\n你是工人。')
+  assert.equal(body['system'], '# system\nyou is work person.')
 
-  // --input 为基底，语义化 flag 覆盖对应字段（name/model 被覆盖，cwd 保留）
+  // --input is base bottom, semantics flag override for should field (name/model by override,cwd keep)
   const merged = await runCliCaptured(
     [
       'profiles', 'create',
-      '--input', '{"id":"x","name":"基底","model":"old/m","cwd":"/base","extra":1}',
-      '--name', '覆盖名', '--model', 'new/m',
+      '--input', '{"id":"x","name":"base bottom","model":"old/m","cwd":"/base","extra":1}',
+      '--name', 'override name', '--model', 'new/m',
       '--json',
     ],
     env,
@@ -426,30 +426,30 @@ test('profiles create：--system-file 全文进 body；语义化 flag 覆盖 --i
   assert.equal(merged.code, 0, merged.err)
   assert.deepEqual(JSON.parse(merged.out), {
     id: 'x',
-    name: '覆盖名',
+    name: 'override name',
     model: 'new/m',
     cwd: '/base',
     extra: 1,
   })
 
-  // 全缺报错
+  // all missing errors
   const none = await runCliCaptured(['profiles', 'create', '--json'], env)
   assert.equal(none.code, 1)
   assert.equal(parseCliError(none).code, 'missing_update_fields')
 })
 
-test('profiles update：语义化 flag 先 GET 合并后 PUT（整体替换契约防丢字段）', { timeout: 60_000 }, async (t) => {
+test('profiles update: semantics flag first GET merge after PUT(whole replace contract guard against lose field)', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
-  // 既有完整配置：含 nodeId/cwd/tags/runtime 等绑定字段与 system/memory 全文
+  // since has complete config: contains nodeId/cwd/tags/runtime etc. bind set field and system/memory all text
   const existing = {
     id: 'worker',
-    name: '旧名',
+    name: 'old name',
     model: 'old/m',
     nodeId: 'gpu-box',
     cwd: '/workspace',
     tags: ['a', 'b'],
     runtime: { kind: 'herdr', agent: 'agy' },
-    system: '# 系统提示词全文',
+    system: '# system prompt all text',
   }
   let putBody: unknown
   const hub = await startMockHub(
@@ -464,45 +464,45 @@ test('profiles update：语义化 flag 先 GET 合并后 PUT（整体替换契�
   )
   const env = makeCliEnv(hub.url, dir)
 
-  // 只改 --model：GET 先于 PUT，且 PUT body 保留全部绑定字段（nodeId/cwd/tags/runtime）
+  // only change --model:GET first at PUT, and PUT body keep all bind set field (nodeId/cwd/tags/runtime)
   const r = await runCliCaptured(['profiles', 'update', 'worker', '--model', 'anthropic/sonnet', '--json'], env)
   assert.equal(r.code, 0, r.err)
   const getHit = hub.hits.find((h) => h.method === 'GET' && h.path === '/api/profiles/worker')
   const putHit = hub.hits.find((h) => h.method === 'PUT' && h.path === '/api/profiles/worker')
-  assert.ok(getHit, '语义化 flag 路径必须先 GET 完整 Profile')
-  assert.ok(putHit, '随后 PUT 合并结果')
-  assert.ok(hub.hits.indexOf(getHit!) < hub.hits.indexOf(putHit!), 'GET 必须先于 PUT')
+  assert.ok(getHit, 'semantics flag path must first GET complete Profile')
+  assert.ok(putHit, 'then PUT merge result')
+  assert.ok(hub.hits.indexOf(getHit!) < hub.hits.indexOf(putHit!), 'GET must first at PUT')
   assert.deepEqual(putBody, {
     id: 'worker',
-    name: '旧名',
+    name: 'old name',
     model: 'anthropic/sonnet',
     nodeId: 'gpu-box',
     cwd: '/workspace',
     tags: ['a', 'b'],
     runtime: { kind: 'herdr', agent: 'agy' },
   })
-  // GET 带回的 system 全文不得回传（未显式给出时）
+  // GET carries back system all text must not back pass (not explicit to out when)
   assert.ok(!('system' in (putBody as Record<string, unknown>)))
 
-  // 只改 --name 同样不丢 nodeId（防会话误跑 local 的回归键）
-  const rename = await runCliCaptured(['profiles', 'update', 'worker', '--name', '新名', '--json'], env)
+  // only change --name same do not lose nodeId(guard against conversation mistakenly run local regression key)
+  const rename = await runCliCaptured(['profiles', 'update', 'worker', '--name', 'new name', '--json'], env)
   assert.equal(rename.code, 0, rename.err)
   const lastPut = hub.hits.filter((h) => h.method === 'PUT').at(-1)!.body as Record<string, unknown>
-  assert.equal(lastPut['name'], '新名')
+  assert.equal(lastPut['name'], 'new name')
   assert.equal(lastPut['nodeId'], 'gpu-box')
   assert.equal(lastPut['cwd'], '/workspace')
   assert.ok(!('system' in lastPut))
 })
 
-test('profiles update：显式 --system 进 body；--input 与语义化 flag 组合稳定合并', { timeout: 60_000 }, async (t) => {
+test('profiles update: explicit --system enter body;--input and semantics flag combine stable merge', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const existing = {
     id: 'worker',
-    name: '基底',
+    name: 'base bottom',
     model: 'old/m',
     nodeId: 'gpu-box',
     cwd: '/workspace',
-    system: '旧系统提示词',
+    system: 'old system prompt',
   }
   const hub = await startMockHub(
     {
@@ -513,22 +513,22 @@ test('profiles update：显式 --system 进 body；--input 与语义化 flag 组
   )
   const env = makeCliEnv(hub.url, dir)
 
-  // 显式 --system 覆盖（MEMORY.md 由 builtin:memory 插件管理，不经 Profile）
+  // explicit --system override (MEMORY.md by builtin:memory plugin manage, do not via Profile)
   const r = await runCliCaptured(
-    ['profiles', 'update', 'worker', '--system', '新系统提示词', '--node', 'laptop', '--json'],
+    ['profiles', 'update', 'worker', '--system', 'new system prompt', '--node', 'laptop', '--json'],
     env,
   )
   assert.equal(r.code, 0, r.err)
   const body = hub.hits.filter((h) => h.method === 'PUT').at(-1)!.body as Record<string, unknown>
-  assert.equal(body['system'], '新系统提示词')
+  assert.equal(body['system'], 'new system prompt')
   assert.equal(body['nodeId'], 'laptop')
-  assert.equal(body['name'], '基底')
+  assert.equal(body['name'], 'base bottom')
 
-  // --input + 语义化 flag 组合：以 GET 基底 + --input 覆盖 + flag 覆盖，字段不丢
+  // --input + semantics flag combine: with GET base bottom + --input override + flag override, field do not lose
   const merged = await runCliCaptured(
     [
       'profiles', 'update', 'worker',
-      '--input', '{"name":"中文名","cwd":"/new-cwd"}',
+      '--input', '{"name":"Chinese name","cwd":"/new-cwd"}',
       '--model', 'new/m',
       '--json',
     ],
@@ -538,39 +538,39 @@ test('profiles update：显式 --system 进 body；--input 与语义化 flag 组
   const body2 = hub.hits.filter((h) => h.method === 'PUT').at(-1)!.body as Record<string, unknown>
   assert.deepEqual(body2, {
     id: 'worker',
-    name: '中文名',
+    name: 'Chinese name',
     model: 'new/m',
-    nodeId: 'gpu-box', // GET 基底保留，未丢
-    cwd: '/new-cwd', // --input 覆盖
+    nodeId: 'gpu-box', // GET base bottom keep, not lose
+    cwd: '/new-cwd', // --input override
   })
 })
 
-test('profiles update --input 单独使用：全量替换语义（无 GET）；GET 404 如实上抛', { timeout: 60_000 }, async (t) => {
+test('profiles update --input separate use: all amount replace semantics (without GET);GET 404 such as on throw', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub(
     {
       'PUT /api/profiles/worker': (body) => ({ body }),
-      'GET /api/profiles/ghost': () => ({ status: 404, body: { error: { code: 'not_found', message: '无此 Profile' } } }),
+      'GET /api/profiles/ghost': () => ({ status: 404, body: { error: { code: 'not_found', message: 'without this Profile' } } }),
     },
     { autoRegisterCleanup: t },
   )
   const env = makeCliEnv(hub.url, dir)
 
-  // --input 单独使用 = 显式全量替换：不发 GET，body 即 --input + id
+  // --input separate use = explicit all amount replace: do not GET,body i.e. --input + id
   const whole = await runCliCaptured(
-    ['profiles', 'update', 'worker', '--input', '{"name":"全量","model":"m"}', '--json'],
+    ['profiles', 'update', 'worker', '--input', '{"name":"all amount","model":"m"}', '--json'],
     env,
   )
   assert.equal(whole.code, 0, whole.err)
-  assert.ok(!hub.hits.some((h) => h.method === 'GET' && h.path === '/api/profiles/worker'), '纯 --input 不得 GET')
-  assert.deepEqual(hub.hits.at(-1)?.body, { name: '全量', model: 'm', id: 'worker' })
+  assert.ok(!hub.hits.some((h) => h.method === 'GET' && h.path === '/api/profiles/worker'), 'pure --input must not GET')
+  assert.deepEqual(hub.hits.at(-1)?.body, { name: 'all amount', model: 'm', id: 'worker' })
 
-  // 语义化 flag 目标不存在：GET 404 错误信封如实上抛（不伪造基底盲改）
+  // semantics flag target missing:GET 404 error message seal such as on throw (do not fabricate base bottom blind change)
   const ghost = await runCliCaptured(['profiles', 'update', 'ghost', '--name', 'x', '--json'], env)
   assert.equal(ghost.code, 1)
   assert.equal(parseCliError(ghost).code, 'not_found')
 
-  // 全缺报错
+  // all missing errors
   const none = await runCliCaptured(['profiles', 'update', 'worker', '--json'], env)
   assert.equal(none.code, 1)
   assert.equal(parseCliError(none).code, 'missing_update_fields')
@@ -580,7 +580,7 @@ test('profiles update --input 单独使用：全量替换语义（无 GET）；G
 // 5. plugins config --set
 // ---------------------------------------------------------------------------
 
-test('plugins config --set：key=value 可重复、标量语义解析；与 --input 共存覆盖同键', { timeout: 60_000 }, async (t) => {
+test('plugins config --set:key=value can duplicate, mark amount semantics parse; and --input shared store override same key', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub(
     {
@@ -592,16 +592,16 @@ test('plugins config --set：key=value 可重复、标量语义解析；与 --in
   const env = makeCliEnv(hub.url, dir)
 
   const r = await runCliCaptured(
-    ['plugins', 'config', 'builtin:herdr', '--set', 'retries=5', '--set', 'verbose=true', '--set', 'label=herdr 主机', '--json'],
+    ['plugins', 'config', 'builtin:herdr', '--set', 'retries=5', '--set', 'verbose=true', '--set', 'label=herdr host', '--json'],
     env,
   )
   assert.equal(r.code, 0, r.err)
   assert.equal(hub.hits.at(-1)?.method, 'PUT')
   assert.deepEqual(hub.hits.at(-1)?.body, {
-    values: { retries: 5, verbose: true, label: 'herdr 主机' },
+    values: { retries: 5, verbose: true, label: 'herdr host' },
   })
 
-  // --set 覆盖 --input 同键，保留其余键
+  // --set override --input same key, keep the rest key
   const merged = await runCliCaptured(
     ['plugins', 'config', 'builtin:herdr', '--input', '{"retries":9,"other":"keep"}', '--set', 'retries=1', '--json'],
     env,
@@ -609,23 +609,23 @@ test('plugins config --set：key=value 可重复、标量语义解析；与 --in
   assert.equal(merged.code, 0, merged.err)
   assert.deepEqual(hub.hits.at(-1)?.body, { values: { retries: 1, other: 'keep' } })
 
-  // 无 --set 且无 --input：保持 GET 语义
+  // without --set and without --input: keep GET semantics
   const get = await runCliCaptured(['plugins', 'config', 'builtin:herdr', '--json'], env)
   assert.equal(get.code, 0, get.err)
   assert.equal(hub.hits.at(-1)?.method, 'GET')
   assert.deepEqual(JSON.parse(get.out), { values: { retries: 3 }, schema: {} })
 
-  // 非法 --set（无 =）显式报错
+  // illegal --set(without =) explicit errors
   const bad = await runCliCaptured(['plugins', 'config', 'builtin:herdr', '--set', 'novalue', '--json'], env)
   assert.equal(bad.code, 1)
   assert.equal(parseCliError(bad).code, 'invalid_flag_value')
 })
 
 // ---------------------------------------------------------------------------
-// 6. api 逃生舱
+// 6. api escape generate cabin
 // ---------------------------------------------------------------------------
 
-test('api GET：大小写不敏感、path 自动补齐前导 /；--field 构造 POST body', { timeout: 60_000 }, async (t) => {
+test('api GET: large small write do not sensitive,path automatically patch complete before lead /;--field construct POST body', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub(
     {
@@ -636,12 +636,12 @@ test('api GET：大小写不敏感、path 自动补齐前导 /；--field 构造 
   )
   const env = makeCliEnv(hub.url, dir)
 
-  // method 小写 + path 带前导 /
+  // method small write + path carries before lead /
   const list = await runCliCaptured(['api', 'get', '/api/nodes', '--json'], env)
   assert.equal(list.code, 0, list.err)
   assert.deepEqual(JSON.parse(list.out), NODE_LIST)
 
-  // method 混合大小写 + path 不带前导 /
+  // method mixed large small write + path do not carries before lead /
   const list2 = await runCliCaptured(['api', 'Get', 'api/nodes', '--json'], env)
   assert.equal(list2.code, 0, list2.err)
   assert.equal(hub.hits.at(-1)?.method, 'GET')
@@ -653,13 +653,13 @@ test('api GET：大小写不敏感、path 自动补齐前导 /；--field 构造 
   assert.equal(hub.hits.at(-1)?.path, '/api/nodes/issue')
   assert.deepEqual(hub.hits.at(-1)?.body, { nodeId: 'dev-1' })
 
-  // 非法 method 显式报错
+  // illegal method explicit errors
   const bad = await runCliCaptured(['api', 'TRACE', '/api/nodes', '--json'], env)
   assert.equal(bad.code, 1)
   assert.equal(parseCliError(bad).code, 'invalid_flag_value')
 })
 
-test('api PUT --field 标量语义（number/boolean/string）；--input 整体 body', { timeout: 60_000 }, async (t) => {
+test('api PUT --field mark amount semantics (number/boolean/string);--input whole body', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub(
     {
@@ -671,11 +671,11 @@ test('api PUT --field 标量语义（number/boolean/string）；--input 整体 b
   const env = makeCliEnv(hub.url, dir)
 
   const fields = await runCliCaptured(
-    ['api', 'put', 'api/profiles/p1', '--field', 'n=42', '--field', 'ok=false', '--field', 's=纯文本', '--json'],
+    ['api', 'put', 'api/profiles/p1', '--field', 'n=42', '--field', 'ok=false', '--field', 's=pure text', '--json'],
     env,
   )
   assert.equal(fields.code, 0, fields.err)
-  assert.deepEqual(hub.hits.at(-1)?.body, { n: 42, ok: false, s: '纯文本' })
+  assert.deepEqual(hub.hits.at(-1)?.body, { n: 42, ok: false, s: 'pure text' })
 
   const whole = await runCliCaptured(['api', 'PUT', '/api/providers', '--input', '[{"id":"g"}]', '--json'], env)
   assert.equal(whole.code, 0, whole.err)
@@ -683,15 +683,15 @@ test('api PUT --field 标量语义（number/boolean/string）；--input 整体 b
 })
 
 // ---------------------------------------------------------------------------
-// 7. 管理面故障隔离：/api/actions 500 时核心命令仍 100% 可用
+// 7. manage side fault isolated:/api/actions 500 when core command still 100% available
 // ---------------------------------------------------------------------------
 
-test('管理面故障隔离：GET /api/actions 500 时 nodes/env/plugins 等核心命令照常执行', { timeout: 60_000 }, async (t) => {
+test('manage side fault isolated:GET /api/actions 500 when nodes/env/plugins etc. core command per common execute', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub(
     {
-      // manifest 端点炸掉（模拟坏插件拖垮动作总线）
-      'GET /api/actions': () => ({ status: 500, body: { error: { code: 'internal_error', message: '坏插件 manifest' } } }),
+      // manifest end point blast (simulated broken plugin drag collapse action total line)
+      'GET /api/actions': () => ({ status: 500, body: { error: { code: 'internal_error', message: 'broken plugin manifest' } } }),
       'GET /api/nodes': () => ({ body: NODE_LIST }),
       'POST /api/env/exec': () => ({ body: { ok: true, exitCode: 0, output: 'ok\n', timedOut: false } }),
       'POST /api/plugins/builtin%3Aevil/disable': () => ({ body: { ok: true } }),
@@ -702,7 +702,7 @@ test('管理面故障隔离：GET /api/actions 500 时 nodes/env/plugins 等核�
   )
   const env = makeCliEnv(hub.url, dir)
 
-  // 核心命令精确匹配即执行：绝不因 /api/actions 500 阻断
+  // core command precise match i.e. execute: never because /api/actions 500 block assert
   const nodes = await runCliCaptured(['nodes', 'list', '--json'], env)
   assert.equal(nodes.code, 0, nodes.err)
   assert.deepEqual(JSON.parse(nodes.out), NODE_LIST)
@@ -722,20 +722,20 @@ test('管理面故障隔离：GET /api/actions 500 时 nodes/env/plugins 等核�
   const profiles = await runCliCaptured(['profiles', 'list', '--json'], env)
   assert.equal(profiles.code, 0, profiles.err)
 
-  // api 逃生舱同样不受影响
+  // api escape generate cabin same do not subject to affect
   const api = await runCliCaptured(['api', 'GET', '/api/nodes', '--json'], env)
   assert.equal(api.code, 0, api.err)
 
-  // 仅真正的动态命令路径才拉 /api/actions 并显式报错（错误信封透传 500）
+  // only truly motion state command path only then pull /api/actions and explicit errors (error message seal pass-through 500)
   const dynamic = await runCliCaptured(['some', 'plugin', 'action', '--json'], env)
   assert.equal(dynamic.code, 1)
   assert.equal(parseCliError(dynamic).code, 'internal_error')
 })
 
-test('env exec --stream：取消传播——已到帧已消费、aborted 非零退出、服务端立即感知断开', { timeout: 60_000 }, async (t) => {
+test('env exec --stream: cancel pass broadcast - - already to frame already consume,aborted non-zero exit, server side immediately aware disconnect', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const seenDisconnect = { value: false }
-  // NDJSON 端点：先出一帧后挂起；连接断开立即置位（验证 CLI 取消即断流，不继续拉取）
+  // NDJSON end point: first out one frame after suspended; connect disconnect immediately placement (verify CLI cancel i.e. assert stream, do not continue pull)
   const hub = await startMockHub(
     {
       'POST /api/env/exec': (_body, _req, res) => {
@@ -744,30 +744,30 @@ test('env exec --stream：取消传播——已到帧已消费、aborted 非零�
         res.on('close', () => {
           seenDisconnect.value = true
         })
-        return null // 永不主动 end：只有客户端取消才断
+        return null // forever do not actively end: only client cancel only then assert
       },
     },
     { autoRegisterCleanup: t },
   )
   const ac = new AbortController()
-  // 经 Io.fetchImpl 注入替身：首帧消费后立即 abort（等价 SIGINT 的 aborted 错误路径）
+  // via Io.fetchImpl inject replace body: first frame consume after immediately abort(etc. price SIGINT  aborted error path)
   const r = await runCliCaptured(['env', 'exec', '--stream', '--', 'sleep', '10'], makeCliEnv(hub.url, dir), {
     onStdout: (chunk) => {
       if (chunk.includes('frame-1')) queueMicrotask(() => ac.abort())
     },
     fetch: (input, init) => fetch(input, { ...init, signal: ac.signal }),
   })
-  assert.equal(r.code, 130, `退出码需为 130（SIGINT 惯例），实得 ${r.code}，stderr=${r.err}`)
-  assert.equal(r.out, 'frame-1\n', '取消前已到帧必须已消费（真逐块，非缓冲）')
-  assert.match(r.err, /已取消/)
+  assert.equal(r.code, 130, `exit code must be 130(SIGINT convention), got ${r.code},stderr=${r.err}`)
+  assert.equal(r.out, 'frame-1\n', 'cancel before already to frame must already consume (true one by one chunk, non- buffer)')
+  assert.match(r.err, /cancelled/)
   await waitFor(() => seenDisconnect.value, {
     timeoutMs: 2_000,
     intervalMs: 10,
-    message: '取消必须立即断流，不继续拉取',
+    message: 'cancel must immediately assert stream, do not continue pull',
   })
 })
 
-test('帮助文本包含 nodes/env/api 命令说明；nodes 命令族不与动态命令冲突', { timeout: 60_000 }, async (t) => {
+test('help text contains nodes/env/api command note;nodes command family do not and motion state command conflict', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub({ 'GET /api/nodes': () => ({ body: [] }) }, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
@@ -780,39 +780,39 @@ test('帮助文本包含 nodes/env/api 命令说明；nodes 命令族不与动�
   assert.match(help.out, /env exec/)
   assert.match(help.out, /api <method> <path>/)
 
-  // nodes list 即使有同名动态声明（若 manifest 抢占）也按核心执行——已由故障隔离测试覆盖
+  // nodes list even if has same name motion state declaration (if manifest preempt) also by core execute - - already by fault isolated test override
   const nodes = await runCliCaptured(['nodes', 'list'], env)
   assert.equal(nodes.code, 0, nodes.err)
   assert.match(nodes.out, /\(empty\)/)
 })
 
 // ---------------------------------------------------------------------------
-// 8. 静态命令表唯一性断言（防未来新增命令撞路径被 matchCommand exact[0] 静默吞掉）
+// 8. static command table uniqueness assertion (guard against not come new increase command collide path by matchCommand exact[0] static default swallow)
 // ---------------------------------------------------------------------------
 
-test('静态命令表：coreCommands 路径全等唯一且互不为前缀冲突', { timeout: 60_000 }, () => {
-  const commands = coreCommands() // 内部已校验，重复/前缀冲突会抛 command_table_conflict
+test('static command table:coreCommands path all etc. unique and mutual do not is prefix conflict', { timeout: 60_000 }, () => {
+  const commands = coreCommands() // internal already validate, duplicate/prefix conflict will throw command_table_conflict
   const paths = commands.map((c) => c.path.join(' '))
-  assert.equal(new Set(paths).size, paths.length, `静态命令路径重复：${JSON.stringify(paths)}`)
-  // 互不为前缀：较短路径不得是任何较长路径的头部序列
+  assert.equal(new Set(paths).size, paths.length, `static command path duplicate:${JSON.stringify(paths)}`)
+  // mutual do not is prefix: relatively short path must not is any relatively long path header sequence
   for (const cmd of commands) {
     for (const other of commands) {
       if (cmd === other || other.path.length >= cmd.path.length) continue
       const isPrefix = other.path.every((seg, i) => seg === cmd.path[i])
-      assert.equal(isPrefix, false, `命令前缀冲突："${cmd.path.join(' ')}" 会遮蔽 "${other.path.join(' ')}"`)
+      assert.equal(isPrefix, false, `command prefix conflict:"${cmd.path.join(' ')}" will obscure "${other.path.join(' ')}"`)
     }
   }
 })
 
 // ---------------------------------------------------------------------------
-// 9. cli-token 锁竞态：空/半截锁文件宽限重读，陈旧残留如实判损坏
+// 9. cli-token lock race: empty/half truncate lock file wide limit heavy read, stale leftover such as judge corrupt
 // ---------------------------------------------------------------------------
 
-test('cli-token 锁：空锁文件刚创建不久视为持有者正在写入，等待后成功；陈旧空锁如实报 credentials_lock_broken', { timeout: 60_000 }, async (t) => {
+test('cli-token lock: empty lock file just create do not long treated as holder is now write, wait for after succeeded; stale empty lock such as report credentials_lock_broken', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const lockFile = path.join(dir, 'cli-token.lock')
-  // 场景 1：模拟旧平台 fallback 的「先建空文件后写内容」慢持有者：占位空锁（新鲜 mtime），
-  // 150ms 后持有者写满 owner 行（覆盖至少一轮 100ms 宽限退避）、350ms 后释放。竞争方在宽限窗内等待重读，绝不误杀并发者。
+  // scenario 1: simulated old platform fallback first create empty file after write content slow holder: occupy empty lock (fresh mtime),
+  // 150ms after holder write full owner row (override at least one round 100ms wide limit backoff),350ms after release. competition way in wide limit window inside wait for heavy read, never mistakenly kill concurrency.
   await fsp.writeFile(lockFile, '', { mode: 0o600 })
   const holderOwner = `${process.pid} holder-uuid`
   const fillTimer = setTimeout(() => { void fsp.writeFile(lockFile, `${holderOwner}\n`).catch(() => {}) }, 150)
@@ -825,11 +825,11 @@ test('cli-token 锁：空锁文件刚创建不久视为持有者正在写入，�
   }
   const saved = JSON.parse(await fsp.readFile(path.join(dir, 'cli-token'), 'utf8')) as { token: string }
   assert.equal(saved.token, 'tok')
-  // 锁与临时文件不残留
+  // lock and temp file leaves no residue
   const leftovers = (await fsp.readdir(dir)).filter((f) => f.includes('.lock') || f.includes('.tmp'))
   assert.deepEqual(leftovers, [])
 
-  // 场景 2：陈旧空锁（mtime 超过宽限窗且无人补写）→ 如实抛 credentials_lock_broken，绝不静默当无锁
+  // scenario 2: stale empty lock (mtime exceeds wide limit window and without person patch write)→ such as throw credentials_lock_broken, never static default when without lock
   await fsp.writeFile(lockFile, '', { mode: 0o600 })
   const old = new Date(Date.now() - 60_000)
   await fsp.utimes(lockFile, old, old)
@@ -839,10 +839,10 @@ test('cli-token 锁：空锁文件刚创建不久视为持有者正在写入，�
   )
 })
 
-test('cli-token 锁：半截锁内容同样受宽限窗保护，等待持有者完成后成功', { timeout: 60_000 }, async (t) => {
+test('cli-token lock: half truncate lock content same subject to wide limit window protect, wait for holder after completion succeeded', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const lockFile = path.join(dir, 'cli-token.lock')
-  // 半截内容（首 token 非 PID）+ 慢持有者在宽限窗内补写完整 owner 行随后释放
+  // half truncate content (first token non- PID)+ slow holder in wide limit window inside patch write complete owner row then release
   await fsp.writeFile(lockFile, 'garbage ', { mode: 0o600 })
   const fillTimer = setTimeout(() => { void fsp.writeFile(lockFile, `${process.pid} filler\n`).catch(() => {}) }, 150)
   const releaseTimer = setTimeout(() => { void fsp.rm(lockFile, { force: true }).catch(() => {}) }, 300)

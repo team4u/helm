@@ -1,6 +1,6 @@
 /**
- * PluginHost / Hook 管道 / 动作总线 / 在途任务保护 测试。
- * runner: tsx --test；每项显式 timeout: 60_000 防死锁。
+ * PluginHost / Hook pipeline / action total line / in-flight task protect test.
+ * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
  */
 import test, { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -36,7 +36,7 @@ import {
 } from './helpers.js';
 
 // ---------------------------------------------------------------------------
-// 测试基建
+// test base create
 // ---------------------------------------------------------------------------
 
 function makeConversation(id: number) {
@@ -44,9 +44,9 @@ function makeConversation(id: number) {
 }
 
 /**
- * 插件宿主后端端口的完整 fake（新契约：AskResult 三态 + 生命周期端口）。
- * 记录 manageConversation / onWorkflowSettled / registerAskSeqResolver 调用，
- * 供生命周期释放测试断言。
+ * plugin host backend port complete fake(new contract:AskResult three state + lifecycle port).
+ * record manageConversation / onWorkflowSettled / registerAskSeqResolver invoke,
+ * supply lifecycle release test assertion.
  */
 function makeHostApi(events: string[] = []): PluginHostBackend {
   return {
@@ -84,7 +84,7 @@ function makeHostApi(events: string[] = []): PluginHostBackend {
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     execEnv: async () => {
-      throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501);
+      throw new HelmError('unsupported', 'this fixture do not execute node command', 501);
     },
     emitEvent: (type, payload) => {
       events.push(`event:${type}`);
@@ -106,13 +106,13 @@ function makeEnvelope(over: Partial<ExternalTriggerEnvelope> = {}): ExternalTrig
 let dataDir: string;
 let docs: MemoryDocStore;
 let events: string[];
-/** emitEvent 完整载荷（plugin.changed 的 ui 字段等断言用）。 */
+/** emitEvent complete payload (plugin.changed  ui field etc. assertion use). */
 let eventPayloads: Array<{ type: string; payload: unknown }>;
 
-/** 断言同步函数抛指定 code 的 HelmError。 */
+/** assertion sync function throw designate code  HelmError. */
 function throwsCode(fn: () => unknown, code: string): void {
   assert.throws(fn, (err: unknown) => {
-    assert.ok(err instanceof HelmError, `期望 HelmError，实际：${String(err)}`);
+    assert.ok(err instanceof HelmError, `expectation HelmError, actual:${String(err)}`);
     assert.equal(err.code, code);
     return true;
   });
@@ -134,10 +134,10 @@ afterEach(async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Hook 管道：优先级 / transform / handled / block / 非法产物
+// Hook pipeline: priority / transform / handled / block / illegal artifact
 // ---------------------------------------------------------------------------
 
-test('优先级与同优先级注册顺序：高 priority 先跑，同 priority 按注册顺序', { timeout: 60_000 }, async () => {
+test('priority and same priority register order: high priority first run, same priority by register order', { timeout: 60_000 }, async () => {
   const host = makeHost();
   const order: string[] = [];
   await host.register({
@@ -172,7 +172,7 @@ test('优先级与同优先级注册顺序：高 priority 先跑，同 priority 
   assert.deepEqual(order, ['a-p10', 'b-p10', 'a-p0']);
 });
 
-test('transform.value 传下游：后续处理器看到改写后的载荷', { timeout: 60_000 }, async () => {
+test('transform.value pass downstream: after continue handle see to change write after payload', { timeout: 60_000 }, async () => {
   const host = makeHost();
   const seen: string[] = [];
   await host.register({
@@ -196,7 +196,7 @@ test('transform.value 传下游：后续处理器看到改写后的载荷', { ti
   assert.deepEqual(seen, ['low:7']);
 });
 
-test('handled 短路：后续处理器不执行，默认行为被接管', { timeout: 60_000 }, async () => {
+test('handled short route: after continue handle do not execute, by default behavior by take over', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let downstreamRan = false;
   await host.register({
@@ -217,13 +217,13 @@ test('handled 短路：后续处理器不执行，默认行为被接管', { time
   assert.equal(downstreamRan, false);
 });
 
-test('tool_call block 携带 reason 短路；block 缺 reason 显式报错', { timeout: 60_000 }, async () => {
+test('tool_call block carry reason short route;block missing reason explicit errors', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'p:guard',
     definePlugin: (ctx) => {
       ctx.hook.onToolCall((p) =>
-        p.toolName === 'bash' ? { action: 'block', reason: '敏感命令需人工确认' } : { action: 'continue' },
+        p.toolName === 'bash' ? { action: 'block', reason: 'sensitive command must human confirm' } : { action: 'continue' },
       );
     },
   });
@@ -233,7 +233,7 @@ test('tool_call block 携带 reason 短路；block 缺 reason 显式报错', { t
     toolName: 'bash',
     input: { command: 'rm -rf /' },
   });
-  assert.deepEqual(blocked, { action: 'block', reason: '敏感命令需人工确认' });
+  assert.deepEqual(blocked, { action: 'block', reason: 'sensitive command must human confirm' });
 
   const host2 = makeHost();
   await host2.register({
@@ -253,7 +253,7 @@ test('tool_call block 携带 reason 短路；block 缺 reason 显式报错', { t
   );
 });
 
-test('before_turn 返回 block 显式 invalid_hook_result；turn_settled block 转异常隔离告警不阻断下游', { timeout: 60_000 }, async () => {
+test('before_turn return block explicit invalid_hook_result;turn_settled block rotate exception isolated alert do not block assert downstream', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'p:illegal',
@@ -276,8 +276,8 @@ test('before_turn 返回 block 显式 invalid_hook_result；turn_settled block �
     },
   );
 
-  // turn_settled 对不支持动作（block）做单插件异常隔离：发 notification 告警，
-  // 不阻断下游插件的结算处理器，也不向上抛错。
+  // turn_settled for unsupported action (block) do single plugin exception isolated: notification alert,
+  // do not block assert downstream plugin compute handle, also do not to on throws.
   const host2 = makeHost();
   const settled: string[] = [];
   await host2.register({
@@ -302,15 +302,15 @@ test('before_turn 返回 block 显式 invalid_hook_result；turn_settled block �
     settledAt: 1,
   });
   assert.equal(result.action, 'transform');
-  assert.deepEqual(settled, ['ok'], '下游 turn_settled 处理器照常执行');
+  assert.deepEqual(settled, ['ok'], 'downstream turn_settled handle per common execute');
   const notified = eventPayloads.filter((e) => e.type === 'notification');
-  assert.equal(notified.length, 1, '异常插件收到一条 warning 告警');
+  assert.equal(notified.length, 1, 'exception plugin receives a warning alert');
   const payload = notified[0]!.payload as { level: string; title: string };
   assert.equal(payload.level, 'warning');
-  assert.match(payload.title, /p:settle-bad 回合结算钩子异常/);
+  assert.match(payload.title, /p:settle-bad turn compute hook exception/);
 });
 
-test('钩子返回 undefined 等价 continue；transform 缺 value / 破坏必要字段 / 未知 action 均显式报错', { timeout: 60_000 }, async () => {
+test('hook return undefined etc. price continue;transform missing value / break must want field / unknown action all explicit errors', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'p:void',
@@ -319,9 +319,9 @@ test('钩子返回 undefined 等价 continue；transform 缺 value / 破坏必�
     },
   });
   const ok = await host.runHook('trigger', makeEnvelope());
-  assert.equal(ok.action, 'transform'); // 管道只有 void 处理器，载荷原样传出
+  assert.equal(ok.action, 'transform'); // pipeline only void handle, payload original pass out
 
-  // transform 缺 value
+  // transform missing value
   const h2 = makeHost();
   await h2.register({
     id: 'p:no-value',
@@ -331,7 +331,7 @@ test('钩子返回 undefined 等价 continue；transform 缺 value / 破坏必�
   });
   await assertRejectsCode(() => h2.runHook('trigger', makeEnvelope()), 'invalid_hook_result');
 
-  // transform 破坏必要字段（source 被删）
+  // transform break must want field (source by delete)
   const h3 = makeHost();
   await h3.register({
     id: 'p:break',
@@ -348,7 +348,7 @@ test('钩子返回 undefined 等价 continue；transform 缺 value / 破坏必�
     return true;
   });
 
-  // 未知 action
+  // unknown action
   const h4 = makeHost();
   await h4.register({
     id: 'p:unknown-action',
@@ -359,13 +359,13 @@ test('钩子返回 undefined 等价 continue；transform 缺 value / 破坏必�
   await assertRejectsCode(() => h4.runHook('trigger', makeEnvelope()), 'invalid_hook_result');
 });
 
-test('钩子执行抛异常：包装 hook_execution_failed 且不静默', { timeout: 60_000 }, async () => {
+test('hook execute throw exception: wrap hook_execution_failed and not silently', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'p:throw',
     definePlugin: (ctx) => {
       ctx.hook.onInput(() => {
-        throw new Error('插件内部崩溃');
+        throw new Error('plugin internal crash');
       });
     },
   });
@@ -378,24 +378,24 @@ test('钩子执行抛异常：包装 hook_execution_failed 且不静默', { time
       assert.ok(err instanceof HelmError);
       assert.equal(err.code, 'hook_execution_failed');
       assert.equal(err.status, 500);
-      assert.match(err.message, /插件内部崩溃/);
+      assert.match(err.message, /plugin internal crash/);
       return true;
     },
   );
 });
 
 // ---------------------------------------------------------------------------
-// 动作总线：schema 校验 / 全限定 id 解析 / 五端共用入口
+// action total line:schema validate / all limit set id parse / five end shared use entry
 // ---------------------------------------------------------------------------
 
-test('invokeAction：入参校验失败 400 validation_error，输出违约 500 invalid_plugin_output', { timeout: 60_000 }, async () => {
+test('invokeAction: reference validation failed 400 validation_error, output violate about 500 invalid_plugin_output', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'builtin:demo',
     definePlugin: (ctx) => {
       ctx.action({
         id: 'echo',
-        description: '回显',
+        description: 'back visible',
         inputSchema: {
           type: 'object',
           properties: { name: { type: 'string' } },
@@ -406,7 +406,7 @@ test('invokeAction：入参校验失败 400 validation_error，输出违约 500 
       });
       ctx.action({
         id: 'bad-output',
-        description: '输出违约',
+        description: 'output violate about',
         inputSchema: { type: 'object' },
         outputSchema: { type: 'object', properties: { must: { type: 'number' } }, required: ['must'] },
         handler: () => ({ must: 'not-a-number' }) as never,
@@ -439,7 +439,7 @@ test('invokeAction：入参校验失败 400 validation_error，输出违约 500 
   });
 });
 
-test('parseQualifiedActionId：pluginId 含 ":" 时按首个 "." 正确分割', { timeout: 60_000 }, () => {
+test('parseQualifiedActionId:pluginId contains ":" when by first "." correct split', { timeout: 60_000 }, () => {
   assert.deepEqual(PluginHost.parseQualifiedActionId('builtin:profile.update_memory'), {
     pluginId: 'builtin:profile',
     actionId: 'update_memory',
@@ -452,14 +452,14 @@ test('parseQualifiedActionId：pluginId 含 ":" 时按首个 "." 正确分割', 
   assert.throws(() => PluginHost.parseQualifiedActionId('trailing.'), HelmError);
 });
 
-test('listActions / listTools：manifest 字段准确，exposeAsTool 动作派生工具', { timeout: 60_000 }, async () => {
+test('listActions / listTools:manifest field accurate,exposeAsTool action derive tool', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'builtin:mixed',
     definePlugin: (ctx) => {
       ctx.action({
         id: 'visible',
-        description: '直投工具',
+        description: 'direct throw tool',
         inputSchema: { type: 'object' },
         outputSchema: { type: 'object' },
         exposeAsTool: true,
@@ -467,14 +467,14 @@ test('listActions / listTools：manifest 字段准确，exposeAsTool 动作派�
       });
       ctx.action({
         id: 'hidden_tool',
-        description: '经 run_action 调用',
+        description: 'via run_action invoke',
         inputSchema: { type: 'object' },
         outputSchema: { type: 'object' },
         handler: () => ({}),
       });
       ctx.tool({
         name: 'dedicated_tool',
-        description: '专用工具',
+        description: 'dedicated use tool',
         inputSchema: { type: 'object', properties: { q: { type: 'string' } } },
         execute: () => 'ok',
       });
@@ -491,14 +491,14 @@ test('listActions / listTools：manifest 字段准确，exposeAsTool 动作派�
   const tools = host.listTools();
   const names = tools.map((t) => t.name);
   assert.ok(names.includes('dedicated_tool'));
-  // 动作派生工具使用 provider-safe 别名（不含 ':'/'.'），manifest 仍全限定 ID
+  // action derive tool use provider-safe alias (excludes ':'/'.'),manifest still all limit set ID
   const derived = tools.find((t) => t.sourceKind === 'action')!;
   assert.equal(derived.qualifiedId, 'builtin:mixed.visible');
   assert.match(derived.name, /^[A-Za-z0-9_-]{1,64}$/);
   assert.ok(!derived.name.includes(':') && !derived.name.includes('.'));
   assert.ok(!names.includes('builtin:mixed.hidden_tool'));
 
-  // executeTool 走派生动作：别名与全限定名皆可，输入经同一 schema 校验
+  // executeTool away derive action: alias and all limit set name all can, input via the same schema validate
   const r = await host.executeTool(derived.name, {}, { conversationId: 1 });
   assert.deepEqual(r, {});
   const r2 = await host.executeTool('builtin:mixed.visible', {}, { conversationId: 1 });
@@ -513,7 +513,7 @@ test('listActions / listTools：manifest 字段准确，exposeAsTool 动作派�
   );
 });
 
-test('动作声明缺 inputSchema/outputSchema 在注册边界显式拒绝', { timeout: 60_000 }, async () => {
+test('action declaration missing inputSchema/outputSchema in register boundary explicit reject', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await assert.rejects(
     host.register({
@@ -521,7 +521,7 @@ test('动作声明缺 inputSchema/outputSchema 在注册边界显式拒绝', { t
       definePlugin: (ctx) => {
         ctx.action({
           id: 'x',
-          description: '缺 schema',
+          description: 'missing schema',
           inputSchema: undefined as never,
           outputSchema: { type: 'object' },
           handler: () => ({}),
@@ -534,15 +534,15 @@ test('动作声明缺 inputSchema/outputSchema 在注册边界显式拒绝', { t
       return true;
     },
   );
-  // 注册失败即回滚：不出现在清单
+  // register failed i.e. rollback: do not appear in manifest
   assert.equal(host.list().length, 0);
 });
 
 // ---------------------------------------------------------------------------
-// 在途任务保护（409 plugin_has_live_tasks）
+// in-flight task protect (409 plugin_has_live_tasks)
 // ---------------------------------------------------------------------------
 
-test('disable 遇在途 action / tool / 挂起 spawn 一律 409，结束后可停用', { timeout: 60_000 }, async () => {
+test('disable encounter in-flight action / tool / suspended spawn one rule 409, after end can deactivate', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let release!: () => void;
   const gate = new Promise<void>((res) => (release = res));
@@ -551,7 +551,7 @@ test('disable 遇在途 action / tool / 挂起 spawn 一律 409，结束后可�
     definePlugin: (ctx) => {
       ctx.action({
         id: 'slow',
-        description: '慢动作',
+        description: 'slow action',
         inputSchema: { type: 'object' },
         outputSchema: { type: 'object' },
         handler: async () => {
@@ -572,7 +572,7 @@ test('disable 遇在途 action / tool / 挂起 spawn 一律 409，结束后可�
   assert.equal(host.list().find((p) => p.id === 'p:busy')!.enabled, false);
 });
 
-test('挂起 agent_spawn 与自定义 task 也计入在途保护', { timeout: 60_000 }, async () => {
+test('suspended agent_spawn and self define task also count in-flight protect', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'p:spawner',
@@ -593,7 +593,7 @@ test('挂起 agent_spawn 与自定义 task 也计入在途保护', { timeout: 60
   await host.disable('p:spawner');
 });
 
-test('runHook 执行期间 disable 被拒绝（钩子在途计为任务）', { timeout: 60_000 }, async () => {
+test('runHook execute during disable by reject (hook in-flight count is task)', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let release!: () => void;
   const gate = new Promise<void>((res) => (release = res));
@@ -615,10 +615,10 @@ test('runHook 执行期间 disable 被拒绝（钩子在途计为任务）', { t
 });
 
 // ---------------------------------------------------------------------------
-// 服务生命周期：rollback 与逆向 stop
+// service lifecycle:rollback and inverse to stop
 // ---------------------------------------------------------------------------
 
-test('服务 start 失败：已启动者逆向 stop，注册整体回滚', { timeout: 60_000 }, async () => {
+test('service start failed: already start inverse to stop, register whole rollback', { timeout: 60_000 }, async () => {
   const host = makeHost();
   const events: string[] = [];
   await assert.rejects(
@@ -638,7 +638,7 @@ test('服务 start 失败：已启动者逆向 stop，注册整体回滚', { tim
           id: 'b',
           start: () => {
             events.push('b:start');
-            throw new Error('b 启动崩溃');
+            throw new Error('b start crash');
           },
           stop: () => {
             events.push('b:stop');
@@ -661,12 +661,12 @@ test('服务 start 失败：已启动者逆向 stop，注册整体回滚', { tim
     },
   );
   assert.deepEqual(events, ['a:start', 'b:start', 'a:stop']);
-  // 回滚后插件不存在，动作不可见
+  // rollback after plugin missing, action invisible
   assert.equal(host.list().length, 0);
   assert.equal(host.listActions().length, 0);
 });
 
-test('正常 disable：服务按注册逆序 stop', { timeout: 60_000 }, async () => {
+test('normal disable: service by register inverse order stop', { timeout: 60_000 }, async () => {
   const host = makeHost();
   const stops: string[] = [];
   await host.register({
@@ -678,16 +678,16 @@ test('正常 disable：服务按注册逆序 stop', { timeout: 60_000 }, async (
   });
   await host.disable('p:svc-ok');
   assert.deepEqual(stops, ['second', 'first']);
-  // 再 enable：服务重新启动
+  // again enable: service re- start
   await host.enable('p:svc-ok');
   assert.equal(host.list().find((p) => p.id === 'p:svc-ok')!.enabled, true);
 });
 
 // ---------------------------------------------------------------------------
-// locked 插件 / doc 命名空间 / config 诚实性
+// locked plugin / doc naming empty between / config honest
 // ---------------------------------------------------------------------------
 
-test('locked 插件 disable/unregister 403 plugin_locked', { timeout: 60_000 }, async () => {
+test('locked plugin disable/unregister 403 plugin_locked', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'builtin:profile',
@@ -703,7 +703,7 @@ test('locked 插件 disable/unregister 403 plugin_locked', { timeout: 60_000 }, 
   await assertRejectsCode(() => host.unregister('builtin:profile'), 'plugin_locked', 403);
 });
 
-test('doc 命名空间隔离 pluginId:name；get 返回 clone 防未持久化突变', { timeout: 60_000 }, async () => {
+test('doc naming empty interval leave pluginId:name;get return clone guard against not persisted sudden change', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'p:docs',
@@ -711,7 +711,7 @@ test('doc 命名空间隔离 pluginId:name；get 返回 clone 防未持久化突
       const doc = ctx.doc('counter', { n: 0, items: [] as string[] });
       doc.update((s) => ({ ...s, n: s.n + 1 }));
       doc.set({ n: 99, items: ['a'] });
-      // get 的 clone：原地 push 不应污染 store
+      // get  clone: original ground push must not pollute store
       doc.get().items.push('MUTANT');
     },
   });
@@ -726,11 +726,11 @@ test('doc 命名空间隔离 pluginId:name；get 返回 clone 防未持久化突
   const a = docs.get('p:docs:counter', { n: -1, items: [] as string[] });
   const b = docs.get('p:docs2:counter', { n: -1, items: [] as string[] });
   assert.equal(a.n, 99);
-  assert.deepEqual(a.items, ['a']); // MUTANT 未泄漏
-  assert.equal(b.n, 5); // 命名空间隔离
+  assert.deepEqual(a.items, ['a']); // MUTANT not leak leak
+  assert.equal(b.n, 5); // naming empty interval leave
 });
 
-test('未提供 ConfigStore 时 setConfig 显式 501，不假持久化；提供时可写', { timeout: 60_000 }, async () => {
+test('not provide ConfigStore when setConfig explicit 501, do not false persist; provide when can write', { timeout: 60_000 }, async () => {
   const noStore = makeHost();
   await noStore.register({ id: 'p:cfg', definePlugin: () => {} });
   await assert.rejects(noStore.setConfig('p:cfg', { k: 1 }), (err: unknown) => {
@@ -754,10 +754,10 @@ test('未提供 ConfigStore 时 setConfig 显式 501，不假持久化；提供�
 });
 
 // ---------------------------------------------------------------------------
-// 路由 / UI 收集 / dispose
+// routing / UI collect / dispose
 // ---------------------------------------------------------------------------
 
-test('路由声明相对路径：宿主拼接到插件命名空间，完整 /api 前缀/点段/查询串/空段拒绝', { timeout: 60_000 }, async () => {
+test('routing declaration relative path: host concatenate to plugin naming empty between, complete /api prefix/point segment/query string/empty segment reject', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'triggers',
@@ -775,7 +775,7 @@ test('路由声明相对路径：宿主拼接到插件命名空间，完整 /api
   assert.equal(routes[0]!.path, '/api/plugins/triggers/routes/hook');
   assert.equal(routes[0]!.public, true);
 
-  // 冒号插件 id 经 encodeURIComponent 拼入前缀；参数段合法
+  // smoke number plugin id via encodeURIComponent piece together prefix; parameter segment legal
   const h2 = makeHost();
   await h2.register({
     id: 'builtin:webhook',
@@ -796,7 +796,7 @@ test('路由声明相对路径：宿主拼接到插件命名空间，完整 /api
       .some((r) => r.pluginId === 'p:params' && r.path === '/api/plugins/p%3Aparams/routes/webhook/:id'),
   );
 
-  // 完整 /api 前缀一律拒绝（新契约只收相对路径，命名空间由宿主负责）
+  // complete /api prefix one rule reject (new contract only relative path, naming empty between by host negative duty)
   await assertRejectsCode(
     () =>
       host.register({
@@ -816,7 +816,7 @@ test('路由声明相对路径：宿主拼接到插件命名空间，完整 /api
       }),
     'invalid_route_path',
   );
-  // 点段 / 编码点段 / 查询串 / 片段 / 空段 / 尾斜杠 / 仅根：相对路径形态非法
+  // point segment / encode point segment / query string / fragment / empty segment / tail slash / only: relative path form illegal
   const rejectPath = async (suffix: string) => {
     const pluginId = `p:seg-${suffix.length}-${suffix.replaceAll(/[^A-Za-z0-9]/g, 'p')}`;
     await assertRejectsCode(
@@ -839,22 +839,22 @@ test('路由声明相对路径：宿主拼接到插件命名空间，完整 /api
   await rejectPath('/');
 });
 
-test('UI 七类十函数统一收集可序列化 spec；不可序列化 spec 拒绝', { timeout: 60_000 }, async () => {
+test('UI seven class ten function unify collect can serialization spec; cannot serialization spec reject', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'p:ui',
     clientRoot: process.cwd(),
     definePlugin: (ctx) => {
-      ctx.ui.sidebarItem({ id: 'home', label: '个人助理', target: 'conversation:1' });
+      ctx.ui.sidebarItem({ id: 'home', label: 'person assist', target: 'conversation:1' });
       ctx.ui.sidebarSection({ id: 'workers', label: 'Worker' });
-      ctx.ui.screen({ id: 'graph', label: '召回图谱', client: { module: 'index.tsx', export: 'Graph' } });
+      ctx.ui.screen({ id: 'graph', label: 'recall graph', client: { module: 'index.tsx', export: 'Graph' } });
       ctx.ui.timelineRenderer({ id: 'report', kinds: ['worker.report'] });
       ctx.ui.toolView({ id: 'term', toolNames: ['bash'] });
       ctx.ui.composerPill({ id: 'pill', label: 'P' });
       ctx.ui.composerWidget({ id: 'widget' });
-      ctx.ui.workbenchPanel({ id: 'panel', label: '产物' });
-      ctx.ui.command({ id: 'cmd', title: '跑巡检', actionPluginId: 'builtin:superagent', actionId: 'patrol' });
-      ctx.ui.settingsPanel({ id: 'set', label: '设置' });
+      ctx.ui.workbenchPanel({ id: 'panel', label: 'artifact' });
+      ctx.ui.command({ id: 'cmd', title: 'run inspection', actionPluginId: 'builtin:superagent', actionId: 'patrol' });
+      ctx.ui.settingsPanel({ id: 'set', label: 'settings' });
     },
   });
   const ui = host.listUi();
@@ -872,16 +872,16 @@ test('UI 七类十函数统一收集可序列化 spec；不可序列化 spec 拒
     'commandPalette',
     'settings.panel',
   ]) {
-    assert.ok(surfaces.has(expected), `缺少 ${expected}`);
+    assert.ok(surfaces.has(expected), `missing ${expected}`);
   }
   const home = ui.find((u) => u.surface === 'sidebar.item')!;
-  assert.deepEqual(home.spec, { id: 'home', label: '个人助理', target: 'conversation:1' });
+  assert.deepEqual(home.spec, { id: 'home', label: 'person assist', target: 'conversation:1' });
 
   await assert.rejects(
     host.register({
       id: 'p:ui-bad',
       definePlugin: (ctx) => {
-        // JSON-safe 边界：client 之外的任意 spec 字段携带函数必须拒绝（新契约无 json 字段）。
+        // JSON-safe boundary:client of outside any spec field carry function must reject (new contract without json field).
         ctx.ui.screen({ id: 'fn', label: 'x', client: { module: 'index.tsx', export: 'X' }, cb: () => 1 } as never);
       },
     }),
@@ -893,7 +893,7 @@ test('UI 七类十函数统一收集可序列化 spec；不可序列化 spec 拒
   );
 });
 
-test('dispose 逆序停用全部插件；dispose 后调用显式报错', { timeout: 60_000 }, async () => {
+test('dispose inverse order deactivate all plugin;dispose after invoke explicit errors', { timeout: 60_000 }, async () => {
   const host = makeHost();
   const stops: string[] = [];
   await host.register({
@@ -912,17 +912,17 @@ test('dispose 逆序停用全部插件；dispose 后调用显式报错', { timeo
   assert.deepEqual(stops, ['second', 'first']);
   throwsCode(() => host.listActions(), 'plugin_host_disposed');
   await assertRejectsCode(() => host.register({ id: 'p:x', definePlugin: () => {} }), 'plugin_host_disposed');
-  await host.dispose(); // 幂等
+  await host.dispose(); // idempotent
 });
 
-test('cli.command 语义化命令路径：合法声明透传 manifest，动作 id 禁止点号', { timeout: 60_000 }, async () => {
+test('cli.command semantics command path: legal declaration pass-through manifest, action id forbidden point number', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'builtin:triggers',
     definePlugin: (ctx) => {
       ctx.action({
         id: 'cron_create',
-        description: '创建定时任务',
+        description: 'create cron job',
         inputSchema: { type: 'object' },
         outputSchema: { type: 'object' },
         cli: { command: ['cron', 'create'] },
@@ -933,7 +933,7 @@ test('cli.command 语义化命令路径：合法声明透传 manifest，动作 i
   const manifest = host.listActions().find((a) => a.id === 'cron_create')!;
   assert.deepEqual(manifest.cli?.command, ['cron', 'create']);
 
-  // 动作 id 禁止点号：全限定 ID 以首个 '.' 分割，含点会产生歧义解析
+  // action id forbidden point number: all limit set ID with first '.' split, contains point will produce ambiguity parse
   const hDot = makeHost();
   await assertRejectsCode(
     () =>
@@ -952,7 +952,7 @@ test('cli.command 语义化命令路径：合法声明透传 manifest，动作 i
     'invalid_action_spec',
   );
   assert.equal(hDot.list().length, 0);
-  // doc id / 服务 id 仍允许点号（禁令仅限动作 id，别误禁其他标识）
+  // doc id / service id still allows point number (forbid make only limit action id, other mistakenly forbid other identifier)
   await hDot.register({
     id: 'p:dot-ok',
     definePlugin: (ctx) => {
@@ -999,7 +999,7 @@ test('cli.command 语义化命令路径：合法声明透传 manifest，动作 i
   );
 });
 
-test('重复注册 / 未知插件 / 未启用插件动作调用均显式报错', { timeout: 60_000 }, async () => {
+test('duplicate register / unknown plugin / not enabled plugin action invoke all explicit errors', { timeout: 60_000 }, async () => {
   const host = makeHost();
   const def: PluginDefinition = { id: 'p:dup', definePlugin: () => {} };
   await host.register(def);
@@ -1014,16 +1014,16 @@ test('重复注册 / 未知插件 / 未启用插件动作调用均显式报错',
 });
 
 // ---------------------------------------------------------------------------
-// 回归：enable 重建周期 / epoch 防护 / dataDir
+// regression:enable rebuild cycle / epoch protect / dataDir
 // ---------------------------------------------------------------------------
 
-test('disable→enable 重建完整注册周期：重复 ctx.doc / configSchema 不再抛 duplicate，持久数据保留', { timeout: 60_000 }, async () => {
+test('disable→enable rebuild complete register cycle: duplicate ctx.doc / configSchema no longer throw duplicate, durable data keep', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'p:cycle',
     definePlugin: (ctx) => {
       const doc = ctx.doc('state', { n: 0 });
-      doc.set({ n: doc.get().n + 1 }); // 每周期 +1
+      doc.set({ n: doc.get().n + 1 }); // each cycle +1
       ctx.configSchema({ token: { type: 'string', secret: true } });
       ctx.action({
         id: 'ping',
@@ -1036,19 +1036,19 @@ test('disable→enable 重建完整注册周期：重复 ctx.doc / configSchema 
     },
   });
   await host.disable('p:cycle');
-  await host.enable('p:cycle'); // 旧实现此处抛 duplicate_doc
-  await host.enable('p:cycle'); // 再来一轮也不抛 duplicate_config_schema
+  await host.enable('p:cycle'); // old implement this where throw duplicate_doc
+  await host.enable('p:cycle'); // again come one round also do not throw duplicate_config_schema
 
-  // doc 持久数据跨周期保留：两周期各 +1
+  // doc durable data across cycle keep: two cycle each +1
   const seen = docs.get('p:cycle:state', { n: -1 });
   assert.equal(seen.n, 2);
-  // 动作/钩子/schema 均重建
+  // action/hook/schema all rebuild
   assert.deepEqual(await host.invokeAction('p:cycle', 'ping', {}), { pong: true });
   assert.equal(host.getConfigSchema('p:cycle').token?.type, 'string');
   assert.deepEqual(host.list().find((p) => p.id === 'p:cycle')!.hooks, ['trigger']);
 });
 
-test('旧 context 在 disable 后不允许继续注册/修改：epoch 使句柄即刻失效', { timeout: 60_000 }, async () => {
+test('old context in disable after disallows continue register/modify:epoch make handle i.e. moment expires', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let stolen: Parameters<NonNullable<PluginDefinition['definePlugin']>>[0] | undefined;
   let stolenDoc: ReturnType<Parameters<NonNullable<PluginDefinition['definePlugin']>>[0]['doc']> | undefined;
@@ -1057,22 +1057,22 @@ test('旧 context 在 disable 后不允许继续注册/修改：epoch 使句柄�
     definePlugin: (ctx) => {
       stolen = ctx;
       stolenDoc = ctx.doc('k', { n: 0 });
-      stolenDoc.set({ n: 0 }); // 周期内写入基准值，验证后续失效拒绝不产生新写入
+      stolenDoc.set({ n: 0 }); // cycle inside write base allow value, verify after continue expires reject produces no new write
     },
   });
   await host.disable('p:steal');
 
-  // 旧 context：一切注册方法拒绝
+  // old context: everything register method reject
   throwsCode(() => stolen!.action({ id: 'x', description: 'x', inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, handler: () => ({}) }), 'plugin_context_closed');
   throwsCode(() => stolen!.hook.onTrigger(() => undefined), 'plugin_context_closed');
   throwsCode(() => stolen!.configSchema({ a: { type: 'string' } }), 'plugin_context_closed');
   throwsCode(() => stolen!.route({ method: 'GET', path: '/x', handler: () => new Response('x') }), 'plugin_context_closed');
-  // 旧 doc 句柄：读写拒绝，且未污染持久层（仍是周期内写入的 0）
+  // old doc handle: read write reject, and not pollute durable layer (still is cycle inside write 0)
   throwsCode(() => stolenDoc!.set({ n: 1 }), 'plugin_context_expired');
   throwsCode(() => stolenDoc!.get(), 'plugin_context_expired');
   assert.equal(docs.get('p:steal:k', { n: -1 }).n, 0);
 
-  // 新周期重新拿到的 doc 句柄恢复正常（重新注册后写入验证持久层）
+  // new cycle re- gets doc handle restore normal (re- register after write verify durable layer)
   await host.unregister('p:steal');
   await host.register({
     id: 'p:steal',
@@ -1085,7 +1085,7 @@ test('旧 context 在 disable 后不允许继续注册/修改：epoch 使句柄�
   void stolen;
 });
 
-test('ctx.dataDir 是插件专属子目录 join(root, plugins, id) 且已创建', { timeout: 60_000 }, async () => {
+test('ctx.dataDir is plugin dedicated belong subdirectory join(root, plugins, id) and already create', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let seen: string | undefined;
   await host.register({
@@ -1094,17 +1094,17 @@ test('ctx.dataDir 是插件专属子目录 join(root, plugins, id) 且已创建'
       seen = ctx.dataDir;
     },
   });
-  // id 中的 `:` 落盘时转义为 %3A（Windows NTFS 交替数据流红线），
-  // 目录名经 pluginDataDirName 唯一权威点计算。
+  // id in `:` when escaping is %3A(Windows NTFS hand over replace data stream hard rule),
+  // directory name via pluginDataDirName unique right threat point compute.
   assert.equal(seen, join(dataDir, 'plugins', pluginDataDirName('builtin:sub')));
-  assert.ok(existsSync(seen!), '插件数据目录应在注册时创建');
+  assert.ok(existsSync(seen!), 'plugin data directory should in register when create');
 });
 
 // ---------------------------------------------------------------------------
-// 回归：生命周期异步竞态
+// regression: lifecycle async race
 // ---------------------------------------------------------------------------
 
-test('disable 的 await 期间新 invokeAction/executeTool/runHook 被隔离；stop 失败不产生虚假 enabled 状态', { timeout: 60_000 }, async () => {
+test('disable  await during new invokeAction/executeTool/runHook by isolated;stop failed produces no fake enabled state', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let releaseStop!: () => void;
   const stopGate = new Promise<void>((res) => (releaseStop = res));
@@ -1133,8 +1133,8 @@ test('disable 的 await 期间新 invokeAction/executeTool/runHook 被隔离；s
 
   const disabling = host.disable('p:race');
   await new Promise((r) => setTimeout(r, 20));
-  assert.ok(stopStarted, 'stop 应已开始（处于 await）');
-  // await 期间新任务一律拒绝；runHook 不执行其 handler（无参与者走 continue）
+  assert.ok(stopStarted, 'stop should already start (where at await)');
+  // await during new task one rule reject;runHook do not execute its handler(without reference and away continue)
   await assertRejectsCode(() => host.invokeAction('p:race', 'ping', {}), 'plugin_disabled');
   await assertRejectsCode(() => host.executeTool('nope', {}, { conversationId: 1 }), 'unknown_tool');
   const hookResult = await host.runHook('trigger', makeEnvelope());
@@ -1144,7 +1144,7 @@ test('disable 的 await 期间新 invokeAction/executeTool/runHook 被隔离；s
   assert.equal(host.list().find((p) => p.id === 'p:race')!.enabled, false);
 });
 
-test('runHook 在 disable await 期间不被执行：未启用插件的 handler 绝不调用', { timeout: 60_000 }, async () => {
+test('runHook in disable await during do not by execute: not enabled plugin handler never invoke', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let releaseStop!: () => void;
   const stopGate = new Promise<void>((res) => (releaseStop = res));
@@ -1161,7 +1161,7 @@ test('runHook 在 disable await 期间不被执行：未启用插件的 handler 
   });
   const disabling = host.disable('p:dying');
   await new Promise((r) => setTimeout(r, 20));
-  // stop await 中（enabled 仍 true 但 phase=deactivating）：handler 不执行
+  // stop await in (enabled still true but phase=deactivating):handler do not execute
   const r = await host.runHook('trigger', makeEnvelope());
   assert.equal(r.action, 'continue');
   assert.equal(hookRan, false);
@@ -1169,7 +1169,7 @@ test('runHook 在 disable await 期间不被执行：未启用插件的 handler 
   await disabling;
 });
 
-test('register 途中（definePlugin await 挂起）runHook 不执行未启用插件 handler', { timeout: 60_000 }, async () => {
+test('register route in (definePlugin await suspended)runHook do not execute not enabled plugin handler', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let releaseDefine!: () => void;
   const defineGate = new Promise<void>((res) => (releaseDefine = res));
@@ -1190,13 +1190,13 @@ test('register 途中（definePlugin await 挂起）runHook 不执行未启用�
   assert.equal(hookRan, false);
   releaseDefine();
   await registering;
-  // 注册完成后可执行
+  // register after completion can execute
   const r2 = await host.runHook('trigger', makeEnvelope());
   assert.equal(r2.action, 'transform');
   assert.equal(hookRan, true);
 });
 
-test('同插件 enable/disable 串行化：并发调用不交错执行', { timeout: 60_000 }, async () => {
+test('same plugin enable/disable serial: concurrency invoke do not hand over wrong execute', { timeout: 60_000 }, async () => {
   const host = makeHost();
   const order: string[] = [];
   let gateA!: () => void;
@@ -1212,51 +1212,51 @@ test('同插件 enable/disable 串行化：并发调用不交错执行', { timeo
   const enabling = host.enable('p:serial').then(() => order.push('enable-done'));
   const disabling = host.disable('p:serial').then(() => order.push('disable-done'));
   await Promise.all([enabling, disabling]);
-  // 串行链保证 enable-done 先于 disable-done（后到者等待前者）
+  // serial chain guarantee enable-done first at disable-done(after to wait for before)
   assert.deepEqual(order, ['enable-done', 'disable-done']);
   assert.equal(host.list().find((p) => p.id === 'p:serial')!.enabled, false);
   void gateA;
 });
 
-test('disable 遇 stop 失败：状态落位已停用（不虚假 enabled=true）且错误如实上抛', { timeout: 60_000 }, async () => {
+test('disable encounter stop failed: state deactivated (do not fake enabled=true) and error such as on throw', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'p:stopfail',
     definePlugin: (ctx) => {
-      ctx.service({ id: 'svc', start: () => {}, stop: () => { throw new Error('stop 崩溃'); } });
+      ctx.service({ id: 'svc', start: () => {}, stop: () => { throw new Error('stop crash'); } });
     },
   });
   await assertRejectsCode(() => host.disable('p:stopfail'), 'plugin_service_stop_failed');
-  // 关键：不维持 enabled=true 但注册已清空的虚假状态
+  // key: do not dimension hold enabled=true but register already empty fake state
   const summary = host.list().find((p) => p.id === 'p:stopfail')!;
   assert.equal(summary.enabled, false);
   assert.deepEqual(summary.actions, []);
-  // 再次 disable 幂等成功（已停用直接返回）
+  // again disable idempotent succeeded (deactivated directly return)
   await host.disable('p:stopfail');
 });
 
 // ---------------------------------------------------------------------------
-// 回归：stop 失败但状态已实际转换时，仍必须发布真实 plugin.changed 事件
-// （enabled:false / ui:[]），与「无状态变化的拒绝」严格区分
+// regression:stop failed but state already actual convert when, still must publish real plugin.changed event
+// (enabled:false / ui:[]), and without state change reject strictly zone
 // ---------------------------------------------------------------------------
 
-/** 当前全部 plugin.changed 载荷。 */
+/** when before all plugin.changed payload. */
 function changedPayloads(): Array<{ plugin: { id: string; enabled: boolean }; ui: unknown[] }> {
   return eventPayloads
     .filter((e) => e.type === 'plugin.changed')
     .map((e) => e.payload as { plugin: { id: string; enabled: boolean }; ui: unknown[] });
 }
 
-/** 声明带 UI / 动作 / 工具 / 服务 / 宿主资源的完整插件（stop 行为可注入）。 */
+/** declaration carries UI / action / tool / service / host asset complete plugin (stop behavior can inject). */
 function fullPlugin(id: string, stop: () => void): PluginDefinition {
   return {
     id,
     definePlugin: (ctx) => {
-      ctx.ui.screen({ id: 'scr', label: '屏' });
-      ctx.ui.sidebarItem({ id: 'nav', label: '导航' });
+      ctx.ui.screen({ id: 'scr', label: 'screen' });
+      ctx.ui.sidebarItem({ id: 'nav', label: 'navigation' });
       ctx.action({
         id: 'act',
-        description: '动作',
+        description: 'action',
         inputSchema: { type: 'object' },
         outputSchema: { type: 'object' },
         exposeAsTool: true,
@@ -1264,7 +1264,7 @@ function fullPlugin(id: string, stop: () => void): PluginDefinition {
       });
       ctx.tool({
         name: 'direct_tool',
-        description: '工具',
+        description: 'tool',
         inputSchema: { type: 'object' },
         execute: () => 'ok',
       });
@@ -1274,9 +1274,9 @@ function fullPlugin(id: string, stop: () => void): PluginDefinition {
   };
 }
 
-test('disable stop 失败：已落位停用，仍发一次 plugin.changed(enabled:false, ui:[])，原错误上抛，能力全部失效且托管释放', { timeout: 60_000 }, async () => {
+test('disable stop failed: already deactivate, still once plugin.changed(enabled:false, ui:[]), original error on throw, capability all expires and hosting release', { timeout: 60_000 }, async () => {
   const host = makeHost();
-  await host.register(fullPlugin('p:dfail', () => { throw new Error('svc 炸了'); }));
+  await host.register(fullPlugin('p:dfail', () => { throw new Error('svc blast'); }));
   assert.equal(host.listUi().length, 2);
   assert.equal(host.listTools().length, 2);
   assert.ok(events.includes('manage:p:dfail:7'));
@@ -1284,14 +1284,14 @@ test('disable stop 失败：已落位停用，仍发一次 plugin.changed(enable
   const changedBefore = changedPayloads().length;
   let disableDiag: HelmError | undefined;
   await assert.rejects(host.disable('p:dfail'), (err: unknown) => {
-    assert.ok(err instanceof HelmError, `期望 HelmError，实际：${String(err)}`);
+    assert.ok(err instanceof HelmError, `expectation HelmError, actual:${String(err)}`);
     assert.equal(err.code, 'plugin_service_stop_failed');
-    // 诊断 JSON-safe：服务 ID 与原始 stop message 均保留且可序列化（HTTP 错误信封红线）
+    // diagnose JSON-safe: service ID and original stop message all keep and can serialization (HTTP error message seal hard rule)
     const details = err.details as { pluginId: string; stopErrors: Array<{ serviceId: string; error: { message: string } }> };
     assert.equal(details.pluginId, 'p:dfail');
     assert.deepEqual(
       details.stopErrors.map((e) => [e.serviceId, e.error.message]),
-      [['svc', 'svc 炸了']],
+      [['svc', 'svc blast']],
     );
     assert.doesNotThrow(() => JSON.stringify(err.details));
     disableDiag = err;
@@ -1299,14 +1299,14 @@ test('disable stop 失败：已落位停用，仍发一次 plugin.changed(enable
   });
   assert.ok(disableDiag instanceof HelmError);
 
-  // plugin.changed 恰好一次、enabled:false、ui:[]（不靠重连 snapshot 才移除 UI）
+  // plugin.changed exactly once,enabled:false,ui:[](do not rely reconnect snapshot only then remove UI)
   const changed = changedPayloads();
   assert.equal(changed.length, changedBefore + 1);
   assert.equal(changed.at(-1)!.plugin.id, 'p:dfail');
   assert.equal(changed.at(-1)!.plugin.enabled, false);
   assert.deepEqual(changed.at(-1)!.ui, []);
 
-  // 实际状态：list/listUi/listTools/动作/工具全部失效
+  // actual state:list/listUi/listTools/action/tool all expires
   assert.deepEqual(host.listUi(), []);
   assert.deepEqual(host.listTools(), []);
   const summary = host.list().find((p) => p.id === 'p:dfail')!;
@@ -1317,10 +1317,10 @@ test('disable stop 失败：已落位停用，仍发一次 plugin.changed(enable
   await assertRejectsCode(() => host.invokeAction('p:dfail', 'act', {}), 'plugin_disabled');
   await assertRejectsCode(() => host.executeTool('direct_tool', {}, { conversationId: 1 }), 'unknown_tool');
 
-  // 宿主托管资源在 stop 失败路径同样被释放
+  // host hosting asset in stop failed path same by release
   assert.ok(events.includes('release:p:dfail:7'));
 
-  // 再走 unregister（已停用路径）：照发真实移除事件（enabled:false / ui:[]）
+  // again away unregister(deactivated path): per real remove event (enabled:false / ui:[])
   const beforeUnregister = changedPayloads().length;
   await host.unregister('p:dfail');
   assert.equal(changedPayloads().length, beforeUnregister + 1);
@@ -1331,9 +1331,9 @@ test('disable stop 失败：已落位停用，仍发一次 plugin.changed(enable
   assert.equal(host.list().find((p) => p.id === 'p:dfail'), undefined);
 });
 
-test('unregister stop 失败：插件已移除仍发一次 plugin.changed(enabled:false, ui:[])，原错误上抛', { timeout: 60_000 }, async () => {
+test('unregister stop failed: plugin already remove still once plugin.changed(enabled:false, ui:[]), original error on throw', { timeout: 60_000 }, async () => {
   const host = makeHost();
-  await host.register(fullPlugin('p:ufail', () => { throw new Error('svc 崩了'); }));
+  await host.register(fullPlugin('p:ufail', () => { throw new Error('svc crash'); }));
   assert.equal(host.listUi().length, 2);
 
   const changedBefore = changedPayloads().length;
@@ -1342,7 +1342,7 @@ test('unregister stop 失败：插件已移除仍发一次 plugin.changed(enable
     const details = err.details as { stopErrors: Array<{ serviceId: string; error: { message: string } }> };
     assert.deepEqual(
       details.stopErrors.map((e) => [e.serviceId, e.error.message]),
-      [['svc', 'svc 崩了']],
+      [['svc', 'svc crash']],
     );
     assert.doesNotThrow(() => JSON.stringify(err.details));
     return true;
@@ -1354,58 +1354,58 @@ test('unregister stop 失败：插件已移除仍发一次 plugin.changed(enable
   assert.equal(changed.at(-1)!.plugin.enabled, false);
   assert.deepEqual(changed.at(-1)!.ui, []);
 
-  // 注册表已实际移除
+  // register table already actual remove
   assert.equal(host.list().find((p) => p.id === 'p:ufail'), undefined);
   assert.deepEqual(host.listUi(), []);
   assert.deepEqual(host.listTools(), []);
   assert.ok(events.includes('release:p:ufail:7'));
 });
 
-test('stop 与事件发布同时失败：保留 stop 诊断（聚合 eventError），不掩盖原始错误', { timeout: 60_000 }, async () => {
-  const stopErr = new Error('stop 诊断');
-  // 让宿主 emitEvent 在 plugin.changed 时抛错（双失败）；其余事件正常入账
+test('stop and event publish also failed: keep stop diagnose (aggregate eventError), do not mask original error', { timeout: 60_000 }, async () => {
+  const stopErr = new Error('stop diagnose');
+  // let host emitEvent in plugin.changed when throws (double failed); the rest event normal account
   const backend = makeHostApi(events);
   const originalEmit = backend.emitEvent;
   let emitBroken = false;
   backend.emitEvent = (type, payload) => {
-    if (emitBroken && type === 'plugin.changed') throw new Error('事件管道崩');
+    if (emitBroken && type === 'plugin.changed') throw new Error('event pipeline crash');
     originalEmit.call(backend, type, payload);
   };
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs });
   await host.register(fullPlugin('p:double', () => { throw stopErr; }));
   emitBroken = true;
 
-  // teardown 聚合为 HelmError(plugin_service_stop_failed)，双重失败仍以它为主错误；
-  // 诊断已 JSON-safe 归一（Error 不可序列化）：按语义校验原 message/name，不要求引用相等
+  // teardown aggregate is HelmError(plugin_service_stop_failed), double heavy failed still with it is main error;
+  // diagnose already JSON-safe archive one (Error cannot serialization): by semantics validate original message/name, do not want seek reference each other etc.
   await assert.rejects(host.disable('p:double'), (err: unknown) => {
-    assert.ok(err instanceof HelmError, `期望 HelmError，实际：${String(err)}`);
+    assert.ok(err instanceof HelmError, `expectation HelmError, actual:${String(err)}`);
     assert.equal(err.code, 'plugin_service_stop_failed');
     const details = err.details as {
       stopErrors?: Array<{ serviceId: string; error: { name: string; message: string } }>;
       eventError?: { name: string; message: string };
     };
     const stopDiag = details.stopErrors?.find((e) => e.serviceId === 'svc')?.error;
-    assert.equal(stopDiag?.message, 'stop 诊断', 'stop 诊断保留在 details.stopErrors（原 message）');
+    assert.equal(stopDiag?.message, 'stop diagnose', 'stop diagnose keep in details.stopErrors(original message)');
     assert.equal(stopDiag?.name, 'Error');
-    assert.equal(details.eventError?.message, '事件管道崩', '事件发布错误聚合在 details.eventError（原 message）');
+    assert.equal(details.eventError?.message, 'event pipeline crash', 'event publish error aggregate in details.eventError(original message)');
     assert.equal(details.eventError?.name, 'Error');
-    // 整个 details 必须可序列化（HTTP 错误信封出站红线）
+    // the whole details must can serialization (HTTP error message seal out station hard rule)
     assert.doesNotThrow(() => JSON.stringify(details));
     return true;
   });
-  // 实际状态仍落位：已停用（事件失败不回滚状态，也不伪报成功）
+  // actual state still: deactivated (event failed do not rollback state, also do not fake report succeeded)
   assert.equal(host.list().find((p) => p.id === 'p:double')!.enabled, false);
 });
 
-test('真实 HTTP 桥：stop 失败的 disable 错误信封可序列化可脱敏（500 plugin_service_stop_failed），UI 事件仍到达', { timeout: 60_000 }, async () => {
-  // 真实 AuthService + SecretStash + createHubHandler：验证错误信封真正出得去
-  // （redactJsonValue 严格拒绝 Error——若诊断未在产生处归一，这里会变 500 invalid_json_value）
+test('real HTTP bridge:stop failed disable error message seal can serialization can redaction (500 plugin_service_stop_failed),UI event still reach', { timeout: 60_000 }, async () => {
+  // real AuthService + SecretStash + createHubHandler: verify error message seal truly out obtain remove
+  // (redactJsonValue strictly reject Error- - if diagnose not in produce where archive one, this in will change 500 invalid_json_value)
   const auth = new AuthService(dataDir);
   const stash = new SecretStash();
   const secretValue = 'sk-stopfail-supersecret';
   stash.addRedaction(secretValue);
   const httpHost = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeHostApi(events), docs });
-  await httpHost.register(fullPlugin('p:http', () => { throw new Error(`stop 失败含秘密 ${secretValue}`); }));
+  await httpHost.register(fullPlugin('p:http', () => { throw new Error(`stop failed contains secret ${secretValue}`); }));
 
   const kernel = {
     dataDir,
@@ -1426,7 +1426,7 @@ test('真实 HTTP 桥：stop 失败的 disable 错误信封可序列化可脱敏
   const authed = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
 
   const changedBefore = changedPayloads().length;
-  // POST /api/plugins/:id/disable：500 plugin_service_stop_failed，信封真实序列化成功
+  // POST /api/plugins/:id/disable:500 plugin_service_stop_failed, message seal real serialization succeeded
   const res = await handler(new Request('http://127.0.0.1:3202/api/plugins/p:http/disable', { method: 'POST', headers: authed }));
   assert.equal(res.status, 500);
   assert.equal(res.headers.get('content-type'), 'application/json; charset=utf-8');
@@ -1441,28 +1441,28 @@ test('真实 HTTP 桥：stop 失败的 disable 错误信封可序列化可脱敏
   assert.equal(body.error.details.pluginId, 'p:http');
   assert.deepEqual(
     body.error.details.stopErrors.map((e) => [e.serviceId, e.error.name, e.error.message]),
-    [['svc', 'Error', 'stop 失败含秘密 [REDACTED]']],
-    '服务 ID 与原 stop message 保留，秘密逐值脱敏',
+    [['svc', 'Error', 'stop failed contains secret [REDACTED]']],
+    'service ID and original stop message keep, secret one by one value redaction',
   );
 
-  // 状态已停用且 plugin.changed 事件在错误前已到达（enabled:false / ui:[]）
+  // state deactivated and plugin.changed event in error before already reach (enabled:false / ui:[])
   assert.equal(httpHost.list().find((p) => p.id === 'p:http')!.enabled, false);
   assert.equal(changedPayloads().length, changedBefore + 1);
   assert.deepEqual(changedPayloads().at(-1)!.ui, []);
 });
 
-test('真实 HTTP 桥：双失败（stop + 事件发布）信封同样可序列化且保留双诊断', { timeout: 60_000 }, async () => {
+test('real HTTP bridge: double failed (stop + event publish) message seal same can serialization and keep double diagnose', { timeout: 60_000 }, async () => {
   const auth = new AuthService(dataDir);
   const backend = makeHostApi(events);
-  // 事件管道崩：emitEvent 在 plugin.changed 时抛错，与 stop 失败叠加
+  // event pipeline crash:emitEvent in plugin.changed when throws, and stop failed stack add
   const originalEmit = backend.emitEvent;
   let emitBroken = false;
   backend.emitEvent = (type, payload) => {
-    if (emitBroken && type === 'plugin.changed') throw new Error('事件管道崩');
+    if (emitBroken && type === 'plugin.changed') throw new Error('event pipeline crash');
     originalEmit.call(backend, type, payload);
   };
   const httpHost = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs });
-  await httpHost.register(fullPlugin('p:dbl', () => { throw new Error('stop 双失败诊断'); }));
+  await httpHost.register(fullPlugin('p:dbl', () => { throw new Error('stop double failed diagnose'); }));
   emitBroken = true;
 
   const kernel = {
@@ -1493,22 +1493,22 @@ test('真实 HTTP 桥：双失败（stop + 事件发布）信封同样可序列�
       };
     };
   };
-  // 主错误仍是 stop 失败（不掩盖），双诊断均可序列化并保留原 message
+  // main error still is stop failed (do not mask), double diagnose all can serialization and keep original message
   assert.equal(body.error.code, 'plugin_service_stop_failed');
   assert.deepEqual(
     body.error.details.stopErrors.map((e) => [e.serviceId, e.error.message]),
-    [['svc', 'stop 双失败诊断']],
+    [['svc', 'stop double failed diagnose']],
   );
-  assert.deepEqual(body.error.details.eventError, { name: 'Error', message: '事件管道崩' });
-  // 状态仍落位已停用
+  assert.deepEqual(body.error.details.eventError, { name: 'Error', message: 'event pipeline crash' });
+  // state still deactivated
   assert.equal(httpHost.list().find((p) => p.id === 'p:dbl')!.enabled, false);
 });
 
 // ---------------------------------------------------------------------------
-// 回归：plugin.changed 事件与失败不伪报
+// regression:plugin.changed event and failed do not fake report
 // ---------------------------------------------------------------------------
 
-test('register/enable/disable/unregister 成功后发 plugin.changed 事件；无状态变化的拒绝不发', { timeout: 60_000 }, async () => {
+test('register/enable/disable/unregister after success plugin.changed event; without state change reject do not', { timeout: 60_000 }, async () => {
   const host = makeHost();
   const changed = () => events.filter((e) => e === 'event:plugin.changed').length;
   await host.register({ id: 'p:ev', definePlugin: () => {} });
@@ -1520,7 +1520,7 @@ test('register/enable/disable/unregister 成功后发 plugin.changed 事件；�
   await host.unregister('p:ev');
   assert.equal(changed(), 4);
 
-  // 拒绝但无状态变化（locked / 在途任务 / 不存在）不发伪变更事件
+  // reject but without state change (locked / in-flight task / missing) do not fake change event
   const h2 = makeHost();
   await h2.register({ id: 'p:locked', locked: true, definePlugin: () => {} });
   const before = events.length;
@@ -1528,16 +1528,16 @@ test('register/enable/disable/unregister 成功后发 plugin.changed 事件；�
   await assertRejectsCode(() => h2.unregister('p:locked'), 'plugin_locked');
   await assertRejectsCode(() => h2.disable('p:none'), 'unknown_plugin');
   await assertRejectsCode(() => h2.unregister('p:none'), 'unknown_plugin');
-  assert.equal(events.length, before); // 拒绝未新增事件
+  assert.equal(events.length, before); // reject not new increase event
 });
 
-test('plugin.changed 携带 ui 贡献：启用含全部声明，停用/卸载为空数组', { timeout: 60_000 }, async () => {
+test('plugin.changed carry ui contribution: enable contains all declaration, deactivate/unload is empty array', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'p:ui-sync',
     definePlugin: (ctx) => {
-      ctx.ui.screen({ id: 'graph', label: '图谱' });
-      ctx.ui.sidebarItem({ id: 'home', label: '主页' });
+      ctx.ui.screen({ id: 'graph', label: 'graph' });
+      ctx.ui.sidebarItem({ id: 'home', label: 'main page' });
     },
   });
   const changedEvents = () =>
@@ -1545,7 +1545,7 @@ test('plugin.changed 携带 ui 贡献：启用含全部声明，停用/卸载为
       .filter((e) => e.type === 'plugin.changed')
       .map((e) => e.payload as { plugin: { id: string }; ui: Array<{ surface: string; spec: { id?: string } }> });
 
-  // 注册（启用）事件：ui 含该插件全部贡献
+  // register (enable) event:ui contains the plugin all contribution
   const registered = changedEvents().at(-1)!;
   assert.equal(registered.plugin.id, 'p:ui-sync');
   assert.deepEqual(
@@ -1553,27 +1553,27 @@ test('plugin.changed 携带 ui 贡献：启用含全部声明，停用/卸载为
     ['screen:graph', 'sidebar.item:home'],
   );
 
-  // 停用：ui 为空数组（前端凭单帧移除该插件全部 UI，不靠轮询/重连）
+  // deactivate:ui is empty array (frontend rely on single frame remove the plugin all UI, do not rely polling/reconnect)
   await host.disable('p:ui-sync');
   const disabled = changedEvents().at(-1)!;
   assert.equal(disabled.plugin.id, 'p:ui-sync');
   assert.deepEqual(disabled.ui, []);
 
-  // 重新启用：ui 恢复全部贡献
+  // re- enable:ui restore all contribution
   await host.enable('p:ui-sync');
   const enabled = changedEvents().at(-1)!;
   assert.equal(enabled.ui.length, 2);
 
-  // 卸载：ui 再次为空
+  // unload:ui again is empty
   await host.unregister('p:ui-sync');
   const unregistered = changedEvents().at(-1)!;
   assert.deepEqual(unregistered.ui, []);
 
-  // 只携带本插件的贡献：另一插件的事件不含别人的 UI
+  // only carry this plugin contribution: another plugin event excludes other person UI
   await host.register({
     id: 'p:other',
     definePlugin: (ctx) => {
-      ctx.ui.screen({ id: 'other-screen', label: '另一个' });
+      ctx.ui.screen({ id: 'other-screen', label: 'another' });
     },
   });
   const other = changedEvents().at(-1)!;
@@ -1582,10 +1582,10 @@ test('plugin.changed 携带 ui 贡献：启用含全部声明，停用/卸载为
 });
 
 // ---------------------------------------------------------------------------
-// 回归：JSON-safe 边界（ui spec / doc / action output）
+// regression:JSON-safe boundary (ui spec / doc / action output)
 // ---------------------------------------------------------------------------
 
-test('ui spec 边界拒 Map/Date/BigInt/循环/undefined：structuredClone 会放行但 JSON 必丢数据', { timeout: 60_000 }, async () => {
+test('ui spec boundary refuse Map/Date/BigInt/loop/undefined:structuredClone will let through but JSON must lose data', { timeout: 60_000 }, async () => {
   const host = makeHost();
   const bad: Array<[string, unknown]> = [
     ['Map', { id: 'x', json: { m: new Map([[1, 2]]) } }],
@@ -1601,13 +1601,13 @@ test('ui spec 边界拒 Map/Date/BigInt/循环/undefined：structuredClone 会�
     await assert.rejects(
       host.register({ id: `p:ui-json-${label}`, definePlugin: (ctx) => void ctx.ui.screen(spec as never) }),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError, `${label} 应拒`);
-        assert.equal(err.code, 'invalid_ui_spec', `${label} 应 invalid_ui_spec`);
+        assert.ok(err instanceof HelmError, `${label} should refuse`);
+        assert.equal(err.code, 'invalid_ui_spec', `${label} should invalid_ui_spec`);
         return true;
       },
     );
   }
-  // 合法 spec（有限数字数组 + null + 纯对象）接受
+  // legal spec(finite number array + null + pure object) accept
   await host.register({
     id: 'p:ui-ok',
     definePlugin: (ctx) => {
@@ -1616,13 +1616,13 @@ test('ui spec 边界拒 Map/Date/BigInt/循环/undefined：structuredClone 会�
   });
   const ui = host.listUi();
   assert.equal(ui.length, 1);
-  // 产物本身可无损 JSON 序列化
+  // artifact itself can without loss JSON serialization
   assert.doesNotThrow(() => JSON.parse(JSON.stringify(ui)));
 });
 
-test('doc 初始值/set/update 边界拒非 JSON 值；合法纯对象/有限数字数组/null 接受', { timeout: 60_000 }, async () => {
+test('doc initial value/set/update boundary refuse non- JSON value; legal pure object/finite number array/null accept', { timeout: 60_000 }, async () => {
   const host = makeHost();
-  // 初始值含 Map：注册失败回滚（invalid_json_value 是 HelmError，原样上抛）
+  // initial value contains Map: register failed rollback (invalid_json_value is HelmError, original on throw)
   await assert.rejects(
     host.register({
       id: 'p:doc-bad-init',
@@ -1645,30 +1645,30 @@ test('doc 初始值/set/update 边界拒非 JSON 值；合法纯对象/有限数
       doc = ctx.doc('k', { n: 0, items: [] });
     },
   });
-  doc!.set({ n: 1, items: ['a'] }); // 合法 set 不抛
+  doc!.set({ n: 1, items: ['a'] }); // legal set do not throw
   assert.equal(docs.get('p:doc:k', { n: -1, items: [] }).n, 1);
   throwsCode(() => doc!.set({ n: NaN, items: [] } as never), 'invalid_json_value');
   throwsCode(() => doc!.set({ n: 1, items: ['a'], d: new Date() } as never), 'invalid_json_value');
-  // undefined 字段被拒而非静默丢弃
+  // undefined field by refuse while non- static default discard
   throwsCode(() => doc!.set({ n: 1, items: [], extra: undefined } as never), 'invalid_json_value');
-  // update 传入非法产物同样拒
+  // update pass illegal artifact same refuse
   throwsCode(
     () =>
       doc!.update(() => ({ n: 1, items: [10n as unknown as string] })),
     'invalid_json_value',
   );
-  // store 未被污染
+  // store not by pollute
   const cur = docs.get('p:doc:k', { n: -1, items: [] });
   assert.equal(cur.n, 1);
   assert.deepEqual(cur.items, ['a']);
-  // get 返回 JSON-safe clone
+  // get return JSON-safe clone
   const got = doc!.get();
   assert.deepEqual(got, { n: 1, items: ['a'] });
   got.items.push('MUT');
   assert.deepEqual(docs.get('p:doc:k', { n: -1, items: [] }).items, ['a']);
 });
 
-test('action 输出含 Map/undefined/循环等非 JSON 值时边界显式报错，不静默丢数据', { timeout: 60_000 }, async () => {
+test('action output contains Map/undefined/loop etc. non- JSON value when boundary explicit errors, not silently lose data', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'p:out',
@@ -1694,10 +1694,10 @@ test('action 输出含 Map/undefined/循环等非 JSON 值时边界显式报错�
 });
 
 // ---------------------------------------------------------------------------
-// 回归：$async Schema 与注册期预编译
+// regression:$async Schema and register phase pre- compile
 // ---------------------------------------------------------------------------
 
-test('action 声明 $async Schema 在注册边界即拒（invalid_plugin_schema）并整体回滚', { timeout: 60_000 }, async () => {
+test('action declaration $async Schema in register boundary i.e. refuse (invalid_plugin_schema) and whole rollback', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await assertRejectsCode(
     () =>
@@ -1717,7 +1717,7 @@ test('action 声明 $async Schema 在注册边界即拒（invalid_plugin_schema�
   );
   assert.equal(host.list().length, 0);
 
-  // 非法 Schema（无法编译）同样在注册边界回滚，不等首次调用
+  // illegal Schema(cannot compile) same in register boundary rollback, do not etc. first time invoke
   await assertRejectsCode(
     () =>
       host.register({
@@ -1737,25 +1737,25 @@ test('action 声明 $async Schema 在注册边界即拒（invalid_plugin_schema�
   assert.equal(host.list().length, 0);
 });
 
-test('$async Schema 若绕过注册（validatePluginInput 直接调用）也不会把 Promise 当 true 放行非法输入', { timeout: 60_000 }, async () => {
-  // AJV $async 校验函数返回 Promise：同步 boolean 判断会误当通过。
-  // compile 边界已拒，这里验证直接调用也不故行：非法输入仍拒绝。
+test('$async Schema if bypass register (validatePluginInput directly invoke) also will not Promise when true let through invalid input', { timeout: 60_000 }, async () => {
+  // AJV $async validate function return Promise: sync boolean decide will mistakenly when via.
+  // compile boundary already refuse, this in verify directly invoke also do not reason row: invalid input still reject.
   const schema = { type: 'object', properties: { n: { type: 'number' } }, required: ['n'], $async: true } as never;
   throwsCode(() => validatePluginInput('p', 'a', schema, { n: 'not-a-number' }), 'invalid_plugin_schema');
 });
 
 // ---------------------------------------------------------------------------
-// 回归：provider-safe 工具名
+// regression:provider-safe tool name
 // ---------------------------------------------------------------------------
 
-test('exposeAsTool 派生工具名 provider-safe：模拟 provider 请求工具名 regex 全部通过', { timeout: 60_000 }, async () => {
+test('exposeAsTool derive tool name provider-safe: simulated provider request tool name regex all via', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'builtin:test',
     definePlugin: (ctx) => {
       ctx.action({
         id: 'do_thing',
-        description: '下划线动作',
+        description: 'underscore action',
         inputSchema: { type: 'object' },
         outputSchema: { type: 'object' },
         exposeAsTool: true,
@@ -1770,26 +1770,26 @@ test('exposeAsTool 派生工具名 provider-safe：模拟 provider 请求工具�
     },
   });
   const tools = host.listTools();
-  // OpenAI 函数名约束：^[a-zA-Z0-9_-]{1,64}$（真实 provider 会拒绝其余形态）
+  // OpenAI function name constraint:^[a-zA-Z0-9_-]{1,64}$(real provider will reject the rest form)
   const providerToolNameRegex = /^[a-zA-Z0-9_-]{1,64}$/;
   for (const t of tools) {
-    assert.match(t.name, providerToolNameRegex, `工具名 ${t.name} 未通过 provider regex`);
+    assert.match(t.name, providerToolNameRegex, `tool name ${t.name} not via provider regex`);
   }
   const derived = tools.find((t) => t.sourceKind === 'action')!;
   assert.equal(derived.qualifiedId, 'builtin:test.do_thing');
-  // 别名稳定（跨 host 实例同名同 id 同 hash）
+  // alias stable (across host instance same name same id same hash)
   assert.equal(derived.name, actionToolAlias('builtin:test', 'do_thing'));
-  // manifest 仍用原 ID：run_action / HTTP / CLI 不受别名影响
+  // manifest still use original ID:run_action / HTTP / CLI do not subject to alias affect
   assert.equal(host.listActions().find((a) => a.id === 'do_thing')!.pluginId, 'builtin:test');
-  // executeTool 别名映射回原动作并经 schema 校验
+  // executeTool alias mapping back original action and via schema validate
   assert.deepEqual(await host.executeTool(derived.name, {}, { conversationId: 1 }), { ok: true });
-  // 全限定名仍可解析
+  // all limit set name still can parse
   assert.deepEqual(await host.executeTool('builtin:test.do_thing', {}, { conversationId: 1 }), { ok: true });
 });
 
-test('ctx.tool 名 provider-safe 校验：点/超长拒绝；不同长 id 的别名不碰撞', { timeout: 60_000 }, async () => {
+test('ctx.tool name provider-safe validate: point/over long reject; different long id alias do not collision', { timeout: 60_000 }, async () => {
   const host = makeHost();
-  // 点与超长能过通用 id 校验但不过 provider-safe 校验
+  // point and over long can through use id validate but however provider-safe validate
   for (const [i, name] of ['has.dot', 'a'.repeat(65)].entries()) {
     await assertRejectsCode(
       () =>
@@ -1801,7 +1801,7 @@ test('ctx.tool 名 provider-safe 校验：点/超长拒绝；不同长 id 的别
       'invalid_tool_spec',
     );
   }
-  // 冒号/空格/空名在通用 id 校验即拒（invalid_identifier），同样回滚
+  // smoke number/space/empty name in through use id validate i.e. refuse (invalid_identifier), same rollback
   for (const [i, name] of ['has:colon', 'has space', ''].entries()) {
     await assertRejectsCode(
       () =>
@@ -1813,7 +1813,7 @@ test('ctx.tool 名 provider-safe 校验：点/超长拒绝；不同长 id 的别
       'invalid_identifier',
     );
   }
-  // 合法名字正常注册（64 上限边界）
+  // legal name normal register (64 cap boundary)
   await host.register({
     id: 'p:tn-ok',
     definePlugin: (ctx) => {
@@ -1823,7 +1823,7 @@ test('ctx.tool 名 provider-safe 校验：点/超长拒绝；不同长 id 的别
   });
   assert.equal(host.listTools().length, 2);
 
-  // 别名不碰撞：两插件同动作 id、同插件不同动作，清洗后前缀相同也不冲突
+  // alias do not collision: two plugin same action id, same plugin different action, cleanse after prefix identical also do not conflict
   const h2 = makeHost();
   await h2.register({
     id: 'p:one',
@@ -1839,14 +1839,14 @@ test('ctx.tool 名 provider-safe 校验：点/超长拒绝；不同长 id 的别
     },
   });
   const names = h2.listTools().map((t) => t.name);
-  assert.equal(new Set(names).size, names.length); // 三个别名互不相同
+  assert.equal(new Set(names).size, names.length); // three alias mutual do not identical
 });
 
 // ---------------------------------------------------------------------------
-// 回归：hook 载荷校验收紧（model 空串 / 数字字段整数化 / trigger.id）
+// regression:hook payload validate tight (model empty string / number field integer / trigger.id)
 // ---------------------------------------------------------------------------
 
-test('model 允许空串：无模型配置的 root 会话也能过 before_turn 校验', { timeout: 60_000 }, async () => {
+test('model allows empty string: without model config root conversation also can before_turn validate', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let ran = false;
   await host.register({
@@ -1858,16 +1858,16 @@ test('model 允许空串：无模型配置的 root 会话也能过 before_turn �
     },
   });
   const conv = makeConversation(1);
-  conv.model = ''; // 未配置模型的会话
-  // 不抛 invalid_hook_result 且钩子正常执行
+  conv.model = ''; // not config model conversation
+  // do not throw invalid_hook_result and hook normal execute
   const r = await host.runHook('before_turn', { conversation: conv, inputs: [], tools: [], sections: [], messages: [] });
   assert.equal(r.action, 'transform');
   assert.equal(ran, true);
 });
 
-test('hook 数字字段收紧：非整数/负 id/负 seq 拒绝，合法空 text 默认数据通过', { timeout: 60_000 }, async () => {
+test('hook number field tight: non- integer/negative id/negative seq reject, legal empty text by default data via', { timeout: 60_000 }, async () => {
   const host = makeHost();
-  // 驱动插件：载荷校验只对实际参与管道执行
+  // drive plugin: payload validate only for actual reference and pipeline execute
   await host.register({
     id: 'p:drive',
     definePlugin: (ctx) => {
@@ -1883,7 +1883,7 @@ test('hook 数字字段收紧：非整数/负 id/负 seq 拒绝，合法空 text
       return true;
     });
   };
-  // conversation.id 必须正整数；seq 类字段非负整数
+  // conversation.id must positive integer;seq class field non- negative integer
   await expectInvalid(
     host.runHook('before_turn', { conversation: { ...makeConversation(1), id: 1.5 }, inputs: [], tools: [], sections: [], messages: [] }),
   );
@@ -1899,10 +1899,10 @@ test('hook 数字字段收紧：非整数/负 id/负 seq 拒绝，合法空 text
   await expectInvalid(
     host.runHook('input', { conversationId: 1.5, input: { id: 'i', text: 'hi', origin: 'human', createdAt: 1 } }),
   );
-  // trigger.id 缺失/空拒绝
+  // trigger.id missing/empty reject
   await expectInvalid(host.runHook('trigger', { ...makeEnvelope(), id: '' }));
 
-  // 合法空 text（默认数据）不拒绝：仅类型校验不强制非空；createdAt=0 合法
+  // legal empty text(by default data) do not reject: only type validate do not force non-empty;createdAt=0 legal
   const ok = await host.runHook('input', { conversationId: 1, input: { id: 'i', text: '', origin: 'human', createdAt: 0 } });
   assert.equal(ok.action, 'transform');
   const okEnv = await host.runHook('trigger', makeEnvelope());
@@ -1913,7 +1913,7 @@ test('hook 数字字段收紧：非整数/负 id/负 seq 拒绝，合法空 text
 // ctx.host.execEnv / prepareAction / idempotent
 // ---------------------------------------------------------------------------
 
-test('ctx.host.execEnv：真实调用 backend（required 端口）+ 在途任务保护（withTask）阻止 disable', { timeout: 60_000 }, async () => {
+test('ctx.host.execEnv: real invoke backend(required port)+ in-flight task protect (withTask) block stop disable', { timeout: 60_000 }, async () => {
   let finishExec!: (res: { ok: boolean; exitCode: number; output: string; timedOut: boolean }) => void;
   const execPromise = new Promise<{ ok: boolean; exitCode: number; output: string; timedOut: boolean }>((resolve) => {
     finishExec = resolve;
@@ -1944,26 +1944,26 @@ test('ctx.host.execEnv：真实调用 backend（required 端口）+ 在途任务
     },
   });
 
-  // 发起动作，卡在 execEnv 中
+  // start action, card in execEnv in
   actionPromise = host.invokeAction('p:exec-live', 'run-cmd', {});
   await new Promise((r) => setTimeout(r, 20));
 
-  // 此时在途有 host.execEnv 和 action:p:exec-live.run-cmd，disable 必须被 409 拒绝
+  // now in-flight has host.execEnv and action:p:exec-live.run-cmd,disable must by 409 reject
   await assertRejectsCode(() => host.disable('p:exec-live'), 'plugin_has_live_tasks', 409);
 
-  // 放行 execEnv
+  // let through execEnv
   finishExec({ ok: true, exitCode: 0, output: 'finished', timedOut: false });
   const actionRes = (await actionPromise) as { out: string };
   assert.equal(actionRes.out, 'finished');
 
-  // 在途任务清空后，可以成功 disable
+  // in-flight task empty after, can succeeded disable
   await host.disable('p:exec-live');
   assert.equal(host.list().find((p) => p.id === 'p:exec-live')!.enabled, false);
 });
 
-test('ctx.action idempotent：注册期校验与 manifest 反映', { timeout: 60_000 }, async () => {
+test('ctx.action idempotent: register phase validate and manifest reverse reflect', { timeout: 60_000 }, async () => {
   const host = makeHost();
-  // 必须是 boolean
+  // must be boolean
   await assert.rejects(
     host.register({
       id: 'p:bad-idempotent',
@@ -2014,7 +2014,7 @@ test('ctx.action idempotent：注册期校验与 manifest 反映', { timeout: 60
   assert.equal(writeM?.idempotent, false);
 });
 
-test('prepareAction：Pre-flight 前置校验状态、scope 与 inputSchema 并返回 idempotent', { timeout: 60_000 }, async () => {
+test('prepareAction:Pre-flight pre- validate state,scope and inputSchema and return idempotent', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'p:prep',
@@ -2035,27 +2035,27 @@ test('prepareAction：Pre-flight 前置校验状态、scope 与 inputSchema 并�
     },
   });
 
-  // 1) 校验通过，返回定义端 idempotent: true
+  // 1) validate via, return define end idempotent: true
   const prepOk = host.prepareAction('p:prep', 'safe-read', { name: 'helm' });
   assert.equal(prepOk.idempotent, true);
 
-  // 2) 未知 action -> 404
+  // 2) unknown action -> 404
   throwsCode(() => host.prepareAction('p:prep', 'non-existent', {}), 'unknown_action');
 
-  // 3) inputSchema 校验失败 -> 400 validation_error
+  // 3) inputSchema validation failed -> 400 validation_error
   throwsCode(() => host.prepareAction('p:prep', 'safe-read', { name: 123 }), 'validation_error');
 
-  // 4) 插件未启用 -> 409 plugin_disabled
+  // 4) plugin not enabled -> 409 plugin_disabled
   await host.disable('p:prep');
   throwsCode(() => host.prepareAction('p:prep', 'safe-read', { name: 'helm' }), 'plugin_disabled');
 });
 
-test('doc 生命周期回归：同 ID 卸载后重新注册（epoch 重置为 1），旧 doc 句柄全部拒绝且无副作用，新句柄可用', { timeout: 60_000 }, async () => {
+test('doc lifecycle regression: same ID unload after re- register (epoch reset is 1), old doc handle all reject and no side effects, new handle available', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let oldHandle: PluginDocHandle<{ count: number }> | undefined;
   let newHandle: PluginDocHandle<{ count: number }> | undefined;
 
-  // 1. 注册插件 P 并获取旧 doc 句柄（初始 epoch 为 1）
+  // 1. register plugin P and get old doc handle (initial epoch is 1)
   await host.register({
     id: 'p:doc-lifecycle',
     definePlugin: (ctx) => {
@@ -2068,14 +2068,14 @@ test('doc 生命周期回归：同 ID 卸载后重新注册（epoch 重置为 1�
   oldHandle.set({ count: 20 });
   assert.deepEqual(oldHandle.get(), { count: 20 });
 
-  // 2. 取消注册 P
+  // 2. cancel register P
   await host.unregister('p:doc-lifecycle');
 
-  // 清空事件历史以便精准断言后续无副作用
+  // empty event history with convenient precise allow assertion after continue no side effects
   eventPayloads.length = 0;
   const storeBefore = (docs as unknown as { get: (k: string, init: unknown) => unknown }).get('p:doc-lifecycle:state', null);
 
-  // 3. 再次以相同 ID 注册 P（全新 PluginState，epoch 重新为 1）
+  // 3. again with identical ID register P(all new PluginState,epoch re- is 1)
   await host.register({
     id: 'p:doc-lifecycle',
     definePlugin: (ctx) => {
@@ -2084,10 +2084,10 @@ test('doc 生命周期回归：同 ID 卸载后重新注册（epoch 重置为 1�
   });
 
   assert.ok(newHandle);
-  // 新句柄可用
-  assert.deepEqual(newHandle.get(), { count: 20 }); // 持久化 store 中已是 20
+  // new handle available
+  assert.deepEqual(newHandle.get(), { count: 20 }); // persist store in already is 20
 
-  // 4. 旧句柄 get / set / update / flush 全部拒绝并抛出 plugin_context_expired
+  // 4. old handle get / set / update / flush all reject and throw plugin_context_expired
   throwsCode(() => oldHandle!.get(), 'plugin_context_expired');
   throwsCode(() => oldHandle!.set({ count: 999 }), 'plugin_context_expired');
   throwsCode(() => oldHandle!.update((s) => ({ count: s.count + 1 })), 'plugin_context_expired');
@@ -2098,19 +2098,19 @@ test('doc 生命周期回归：同 ID 卸载后重新注册（epoch 重置为 1�
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_context_expired',
   );
 
-  // 5. 校验旧句柄被拒绝时禁止存储与事件副作用
+  // 5. validate old handle by reject when forbidden store and event side effect
   assert.deepEqual((docs as unknown as { get: (k: string, init: unknown) => unknown }).get('p:doc-lifecycle:state', null), storeBefore);
   const docUpdatedEvents = eventPayloads.filter((e) => e.type === 'plugin.doc.updated');
-  assert.equal(docUpdatedEvents.length, 0, '旧 doc 句柄操作被拒绝后不得产生 plugin.doc.updated 事件副作用');
+  assert.equal(docUpdatedEvents.length, 0, 'old doc handle operation by reject after must not produce plugin.doc.updated event side effect');
 
-  // 6. 新句柄依然完全正常可用
+  // 6. new handle still fully normal available
   newHandle.set({ count: 42 });
   assert.deepEqual(newHandle.get(), { count: 42 });
   await newHandle.flush();
   assert.deepEqual((docs as unknown as { get: (k: string, init: unknown) => unknown }).get('p:doc-lifecycle:state', null), { count: 42 });
 });
 
-test('client 模块编译在途回归：同 ID 卸载后重新注册（epoch 重置为 1），编译完成前旧周期作废并拒绝', { timeout: 60_000 }, async (t) => {
+test('client module compile in-flight regression: same ID unload after re- register (epoch reset is 1), compile complete before old cycle act abandon and reject', { timeout: 60_000 }, async (t) => {
   let compileStartedResolve!: () => void;
   const compileStarted = new Promise<void>((r) => { compileStartedResolve = r; });
   let compileFinishResolve!: () => void;
@@ -2128,7 +2128,7 @@ test('client 模块编译在途回归：同 ID 卸载后重新注册（epoch 重
         };
       },
       transformBackendTs: () => {
-        throw new HelmError('not_supported', '测试桩不提供后端转译', 501);
+        throw new HelmError('not_supported', 'test stub do not provide backend transpile', 501);
       },
     },
   });
@@ -2143,25 +2143,25 @@ test('client 模块编译在途回归：同 ID 卸载后重新注册（epoch 重
     definePlugin: () => {},
   };
 
-  // 1. 注册插件 P
+  // 1. register plugin P
   await host.register(def);
 
-  // 2. 发起 client 模块编译，进入内部 compile 门控中
+  // 2. start client module compile, enter internal compile gate control in
   const compilingPromise = host.getClientModule('p:client-race', 'index.tsx');
 
-  // 等待编译进入挂起状态（确定性门控，禁止 sleep）
+  // wait for compile enter suspended state (determinism gate control, forbidden sleep)
   await compileStarted;
 
-  // 3. 在编译挂起在途期间，取消注册 P
+  // 3. in compile suspended in-flight during, cancel register P
   await host.unregister('p:client-race');
 
-  // 4. 再次以相同 ID 重新注册 P（全新 PluginState，epoch 重新为 1，状态 idle）
+  // 4. again with identical ID re- register P(all new PluginState,epoch re- is 1, state idle)
   await host.register(def);
 
-  // 5. 放行编译完成
+  // 5. let through compile complete
   compileFinishResolve();
 
-  // 6. 验证在途编译因 registration identity 不匹配而被拒绝（409 plugin_client_unavailable）
+  // 6. verify in-flight compile because registration identity does not match while by reject (409 plugin_client_unavailable)
   await assert.rejects(
     compilingPromise,
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_client_unavailable',

@@ -1,11 +1,11 @@
 /**
- * 流式解码与行扫描（local-env 子模块）：语义与 `@earendil-works/pi-durable`
- * 的 decode.ts / line-scan.ts 对齐——契约测试（test/node-local-env-contract.test.ts）
- * 钉住关键行为特征：chunk 化解码与整体解码逐字节一致、BOM 只在流首剥离一次、
- * LineScan 字节偏移与选区字节数口径。
+ * streaming decode and row scan (local-env sub- module): semantics and `@earendil-works/pi-durable`
+ *  decode.ts / line-scan.ts align - - contract test (test/node-local-env-contract.test.ts)
+ * pin key behavior special sign:chunk decode and whole decode one by one byte consistent,BOM only in stream first strip once,
+ * LineScan byte offset and choose zone byte count opening path.
  */
 
-/** 行扫描结果（字节偏移基于原始文件字节，含 BOM；*Bytes 为解码后字节数）。 */
+/** row scan result (byte offset based on original file byte, contains BOM;*Bytes is decode after byte count). */
 export interface LineScan {
   newlines: number;
   start: number;
@@ -16,19 +16,19 @@ export interface LineScan {
   firstLineBytes: number;
 }
 
-/** 字节范围解码器：BOM 交给调用方处理（ignoreBOM）。 */
+/** byte scope decode:BOM hand over to caller handle (ignoreBOM). */
 function rangeDecoder(): TextDecoder {
   return new TextDecoder('utf-8', { ignoreBOM: true });
 }
 
-/** 前三字节是否为 UTF-8 BOM。 */
+/** before three byte is otherwise is UTF-8 BOM. */
 function startsWithBom(firstBytes: Uint8Array): boolean {
   return firstBytes[0] === 0xef && firstBytes[1] === 0xbb && firstBytes[2] === 0xbf;
 }
 
 /**
- * 按 chunk 解码单个流，结果与整体一次解码完全一致：Node 流式解码器在
- * chunk 边界后的 U+FEFF 处理有缺陷，故关闭 BOM 处理并自行剥离流首标记。
+ * by chunk decode single stream, result and whole once decode fully consistent:Node streaming decode in
+ * chunk boundary after U+FEFF handle has defect, reason close BOM handle and self row strip stream first mark record.
  */
 export class StreamDecoder {
   #decoder = rangeDecoder();
@@ -37,7 +37,7 @@ export class StreamDecoder {
     const text = bytes === undefined ? this.#decoder.decode() : this.#decoder.decode(bytes, { stream: true });
     if (this.#started || text === '') return text;
     this.#started = true;
-    // U+FEFF 仅编码为 EF BB BF，流首 U+FEFF 即字节序标记。
+    // U+FEFF only encode is EF BB BF, stream first U+FEFF i.e. byte order mark record.
     return text.startsWith('\ufeff') ? text.slice(1) : text;
   }
 }
@@ -48,8 +48,8 @@ const lineScanEncoder = new TextEncoder();
 const decodedBytes = (text: string): number => (text === '' ? 0 : lineScanEncoder.encode(text).length);
 
 /**
- * 按序喂入文件字节，产出 LineScan：任意大小文件都能在有限内存中扫描。
- * 解码字节数与整体解码相同（流式 WHATWG 解码器）。
+ * by order feed file byte, produce out LineScan: any large small file all can in finite memory in scan.
+ * decode byte count and whole decode identical (streaming WHATWG decode).
  */
 export class LineScanner {
   #startLine: number;
@@ -65,7 +65,7 @@ export class LineScanner {
   #firstLineBytes = 0;
   #selection?: TextDecoder;
   #firstLine?: TextDecoder;
-  /** 文件首字节：攒满 3 字节后判定是否 BOM。 */
+  /** file first token node: accumulate full 3 byte after decide is otherwise BOM. */
   #head?: number[];
   #bom = false;
 
@@ -140,7 +140,7 @@ export class LineScanner {
       start: this.#start,
       end: this.#end ?? size,
       firstLineEnd: this.#firstLineEnd ?? size,
-      // 超出最后一行的选区以最后一行结束。
+      // exceeds finally one row choose zone with finally one row end.
       lastLineStart: this.#lastLineStart ?? this.#lineStart,
       selectedBytes: this.#selectedBytes,
       firstLineBytes: this.#firstLineBytes,
@@ -166,9 +166,9 @@ export class LineScanner {
     this.#selection = undefined;
   }
 
-  /** 喂 chunk[from, to)（起始于文件偏移 base）给仍打开的选区解码器。 */
+  /** feed chunk[from, to)(start at file offset base) to still open choose zone decode. */
   #feed(chunk: Uint8Array, base: number, from: number, to: number): void {
-    // 整体解码会丢弃文件首的 BOM。
+    // whole decode will discard file first BOM.
     if (this.#bom && base + from < 3) from = Math.min(to, 3 - base);
     if (to <= from) return;
     const bytes = chunk.subarray(from, to);

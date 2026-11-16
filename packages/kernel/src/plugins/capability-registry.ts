@@ -1,11 +1,11 @@
 /**
- * capability-registry.ts: 负责工具（Tool）、动作（Action）、自定义路由（Route）的注册、查找、可见性与执行。
+ * capability-registry.ts: negative duty tool (Tool), action (Action), self define routing (Route) register, find, visible and execute.
  *
- * 职责：
- * - 注册边界 Schema 预编译与参数强校验（CLI 命令与位置参数、provider-safe 别名生成、相对路由命名空间拼装）；
- * - ConversationScope 会话级可见性过滤与执行期二次校验（双保险防绕过）；
- * - 工具清单派生（DerivedToolSpec，合并 ctx.tool 与 exposeAsTool 动作，校验工具名全局唯一）；
- * - 动作与工具的预检（prepareAction）、执行调度（invokeAction、executeTool）与 PluginTaskTracker 集成。
+ * responsibility:
+ * - register boundary Schema pre- compile and parameter strong validate (CLI command and location parameter,provider-safe alias generate, each other for routing naming empty between piece together install);
+ * - ConversationScope conversation level visible filter and execute phase second validate (double keep risk guard against bypass);
+ * - tool manifest derive (DerivedToolSpec, merge ctx.tool and exposeAsTool action, validate tool name global unique);
+ * - action and tool preflight (prepareAction), execute scheduling (invokeAction,executeTool) and PluginTaskTracker collection into.
  */
 import { createHash } from 'node:crypto';
 import {
@@ -36,15 +36,15 @@ export interface DerivedToolSpec {
   name: string;
   description: string;
   inputSchema: JsonSchema;
-  /** 结构化输出 Schema（ctx.tool 声明时透传；run_action 派生工具无此字段）。 */
+  /** structure output Schema(ctx.tool declaration when pass-through;run_action derive tool without this field). */
   structuredOutputSchema?: JsonSchema;
-  /** 工具使用指引完整段落（仅激活工具投射；未激活不产生幻影文本）。 */
+  /** tool use refer quote complete segment (only activate tool throw shoot; inactive produces no phantom text). */
   promptSnippet?: string;
-  /** 单行要点（聚合进 prompt.tools.guidelines 共享 section）。 */
+  /** single row want point (aggregate enter prompt.tools.guidelines sharing section). */
   promptGuidelines?: string[];
   sourcePluginId: string;
   sourceKind: 'action' | 'tool';
-  /** 仅 sourceKind === 'action'：pluginId.actionId 全限定 ID。 */
+  /** only sourceKind === 'action':pluginId.actionId all limit set ID. */
   qualifiedId?: string;
 }
 
@@ -52,13 +52,13 @@ export interface PluginRouteEntry extends PluginRouteSpec {
   pluginId: string;
 }
 
-/** 模型工具名的 provider 安全约束（OpenAI 函数名子集，全 provider 通用）。 */
+/** model tool name provider security constraint (OpenAI function name sub- collection, all provider through use). */
 export const PROVIDER_SAFE_TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
- * 为 exposeAsTool 动作生成稳定 provider-safe 别名：语义前缀 + 全限定 ID 短哈希。
- * 纯函数、跨重启确定：pi-ai convertTools 原样发送 tool.name，含 ':'/'.' 的
- * 全限定 ID 不被任何 provider 接受，且朴素清洗（替换非法字符）会碰撞，故附哈希。
+ * is exposeAsTool action generate stable provider-safe alias: semantics prefix + all limit set ID short hash.
+ * pure function, across restarts determine:pi-ai convertTools original send tool.name, contains ':'/'.' 
+ * all limit set ID do not by any provider accept, and plain cleanse (replace illegal character) will collision, reason attach hash.
  */
 export function actionToolAlias(pluginId: string, actionId: string): string {
   const semantic = `${pluginId.replace(/^builtin:/, '')}.${actionId}`
@@ -71,13 +71,13 @@ export function actionToolAlias(pluginId: string, actionId: string): string {
 }
 
 /**
- * 解析全限定 actionId（pluginId.actionId）。pluginId 允许含 ':'（builtin:profile），
- * 因此不能简单 split 最后一个 '.' —— 以第一个 '.' 分割。
+ * parse all limit set actionId(pluginId.actionId).pluginId allows contains ':'(builtin:profile),
+ * therefore cannot simple split finally a '.' - - with a '.' split.
  */
 export function parseQualifiedActionId(qualified: string): { pluginId: string; actionId: string } {
   const dot = qualified.indexOf('.');
   if (dot <= 0 || dot >= qualified.length - 1) {
-    throw new HelmError('invalid_action_id', `非法动作全限定 id：${qualified}（期望 pluginId.actionId）`, 400, {
+    throw new HelmError('invalid_action_id', `illegal action all limit set id:${qualified}(expectation pluginId.actionId)`, 400, {
       qualified,
     });
   }
@@ -93,7 +93,7 @@ export interface ActionEntry {
   cli?: PluginActionSpec<unknown, unknown>['cli'];
   exposeAsTool: boolean;
   idempotent?: boolean;
-  /** 动作使用指引（经 run_action 或直接工具可达时投射；已校验防御拷贝）。 */
+  /** action use refer quote (via run_action or directly tool can reach when throw shoot; already validate guard against defend copy). */
   promptSnippet?: string;
   promptGuidelines?: string[];
   toolAlias: string;
@@ -107,9 +107,9 @@ export interface ToolEntry {
 }
 
 /**
- * scope 执行期校验：scope 未声明或调用无会话上下文（人工调用）
- * 直接放行；否则经 getConversation 解析会话后按 matchesConversationScope
- * 判定。会话不存在由 getConversation 如实抛错。
+ * scope execute phase validate:scope not declaration or invoke without conversation context (human invoke)
+ * directly let through; otherwise via getConversation parse conversation after by matchesConversationScope
+ * decide. conversation missing by getConversation such as throws.
  */
 export function assertScopeAllows(
   pluginId: string,
@@ -121,7 +121,7 @@ export function assertScopeAllows(
   if (scope === undefined || conversationId === undefined) return;
   const conversation = getConversation(conversationId);
   if (!matchesConversationScope(scope, conversation)) {
-    throw new HelmError('conversation_scope_violation', `${what} 不允许在会话 ${conversationId} 上执行（scope 未命中）`, 403, {
+    throw new HelmError('conversation_scope_violation', `${what} disallows in conversation ${conversationId} on execute (scope missed)`, 403, {
       pluginId,
       conversationId,
     });
@@ -133,10 +133,10 @@ function pluginRoutePrefix(pluginId: string): string {
 }
 
 /**
- * 工具使用指引字段注册边界强校验（ctx.tool 与 ctx.action 同标准，防提示目录
- * 被空文本污染）：promptSnippet 非空非纯空白字符串；promptGuidelines 非空
- * 数组且逐项非空非纯空白。通过后返回防御拷贝（数组复制），声明者注册后
- * 原地修改不回灌已校验数据。
+ * tool use refer quote field register boundary strong validate (ctx.tool and ctx.action same standard, guard against hint directory
+ * by empty text pollute):promptSnippet non-empty non- pure whitespace string;promptGuidelines non-empty
+ * array and one by one items non-empty non- pure whitespace. via after return guard against defend copy (array duplicate), declaration register after
+ * original ground modify do not back pour already validate data.
  */
 function validatedPromptFields(
   what: string,
@@ -147,7 +147,7 @@ function validatedPromptFields(
     fields.promptSnippet !== undefined &&
     (typeof fields.promptSnippet !== 'string' || fields.promptSnippet.trim().length === 0)
   ) {
-    throw new HelmError(code, `${what} 的 promptSnippet 必须是非空非纯空白字符串`, 400);
+    throw new HelmError(code, `${what}  promptSnippet must be non-empty non- pure whitespace string`, 400);
   }
   const guidelines = fields.promptGuidelines;
   if (
@@ -156,7 +156,7 @@ function validatedPromptFields(
       guidelines.length === 0 ||
       Array.from(guidelines).some((item) => typeof item !== 'string' || item.trim().length === 0))
   ) {
-    throw new HelmError(code, `${what} 的 promptGuidelines 必须是非空字符串数组（每项非空非纯空白）`, 400);
+    throw new HelmError(code, `${what}  promptGuidelines must be non-empty string array (each items non-empty non- pure whitespace)`, 400);
   }
   return {
     ...(typeof fields.promptSnippet === 'string' ? { promptSnippet: fields.promptSnippet } : {}),
@@ -196,26 +196,26 @@ export class CapabilityRegistry {
   private routes = new Map<string, PluginRouteEntry[]>();
 
   registerAction<TIn, TOut>(pluginId: string, spec: PluginActionSpec<TIn, TOut>): void {
-    assertValidId('动作', spec.id);
+    assertValidId('action', spec.id);
     if (spec.id.includes('.')) {
       throw new HelmError(
         'invalid_action_spec',
-        `插件 ${pluginId} 动作 id 不允许点号（全限定解析以首个 '.' 分割）：${spec.id}`,
+        `plugin ${pluginId} action id disallows point number (all limit set parse with first '.' split):${spec.id}`,
         400,
       );
     }
     if (typeof spec.description !== 'string' || spec.description.length === 0) {
-      throw new HelmError('invalid_action_spec', `插件 ${pluginId} 动作 ${spec.id} 缺少 description`, 400);
+      throw new HelmError('invalid_action_spec', `plugin ${pluginId} action ${spec.id} missing description`, 400);
     }
     if (!isJsonObject(spec.inputSchema) || !isJsonObject(spec.outputSchema)) {
       throw new HelmError(
         'invalid_action_spec',
-        `插件 ${pluginId} 动作 ${spec.id} 必须同时声明 inputSchema 与 outputSchema（单点 Schema 契约）`,
+        `plugin ${pluginId} action ${spec.id} must also declaration inputSchema and outputSchema(single point Schema contract)`,
         400,
       );
     }
     if (typeof spec.handler !== 'function') {
-      throw new HelmError('invalid_action_spec', `插件 ${pluginId} 动作 ${spec.id} 缺少 handler`, 400);
+      throw new HelmError('invalid_action_spec', `plugin ${pluginId} action ${spec.id} missing handler`, 400);
     }
     if (
       spec.cli?.command !== undefined &&
@@ -225,7 +225,7 @@ export class CapabilityRegistry {
     ) {
       throw new HelmError(
         'invalid_action_spec',
-        `插件 ${pluginId} 动作 ${spec.id} 的 cli.command 必须是非空字符串数组（语义化顶层命令路径）`,
+        `plugin ${pluginId} action ${spec.id}  cli.command must be non-empty string array (semantics top-level command path)`,
         400,
       );
     }
@@ -233,7 +233,7 @@ export class CapabilityRegistry {
       if (!Array.isArray(spec.cli.positional)) {
         throw new HelmError(
           'invalid_action_spec',
-          `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional 必须是数组`,
+          `plugin ${pluginId} action ${spec.id}  cli.positional must be array`,
           400,
         );
       }
@@ -244,7 +244,7 @@ export class CapabilityRegistry {
       if (properties === undefined) {
         throw new HelmError(
           'invalid_action_spec',
-          `插件 ${pluginId} 动作 ${spec.id} 声明 cli.positional 但 inputSchema 不是带 properties 的 object`,
+          `plugin ${pluginId} action ${spec.id} declaration cli.positional but inputSchema is not carries properties  object`,
           400,
         );
       }
@@ -254,28 +254,28 @@ export class CapabilityRegistry {
         if (!isPlainObject(pos) || Object.keys(pos).some((k) => k !== 'field' && k !== 'required' && k !== 'readFileInto')) {
           throw new HelmError(
             'invalid_action_spec',
-            `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional 项仅允许 { field, required?, readFileInto? }`,
+            `plugin ${pluginId} action ${spec.id}  cli.positional items only allows { field, required?, readFileInto? }`,
             400,
           );
         }
         if (typeof pos.field !== 'string' || pos.field.length === 0) {
           throw new HelmError(
             'invalid_action_spec',
-            `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional[].field 必须是非空字符串`,
+            `plugin ${pluginId} action ${spec.id}  cli.positional[].field must be non-empty string`,
             400,
           );
         }
         if (pos.required !== undefined && typeof pos.required !== 'boolean') {
           throw new HelmError(
             'invalid_action_spec',
-            `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional[${pos.field}].required 必须是 boolean`,
+            `plugin ${pluginId} action ${spec.id}  cli.positional[${pos.field}].required must be boolean`,
             400,
           );
         }
         if (pos.readFileInto !== undefined && (typeof pos.readFileInto !== 'string' || pos.readFileInto.length === 0)) {
           throw new HelmError(
             'invalid_action_spec',
-            `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional[${pos.field}].readFileInto 必须是非空字符串字段名`,
+            `plugin ${pluginId} action ${spec.id}  cli.positional[${pos.field}].readFileInto must be non-empty string field name`,
             400,
           );
         }
@@ -284,14 +284,14 @@ export class CapabilityRegistry {
           if (name === '__proto__' || name === 'constructor' || name === 'prototype') {
             throw new HelmError(
               'invalid_action_spec',
-              `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional 字段名 "${name}" 不可用（原型污染键）`,
+              `plugin ${pluginId} action ${spec.id}  cli.positional field name "${name}" unavailable (prototype pollute key)`,
               400,
             );
           }
           if (writeTargets.has(name)) {
             throw new HelmError(
               'invalid_action_spec',
-              `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional 重复写入字段 "${name}"（field/readFileInto 目标不得重叠）`,
+              `plugin ${pluginId} action ${spec.id}  cli.positional duplicate write field "${name}"(field/readFileInto target must not overlap)`,
               400,
             );
           }
@@ -299,7 +299,7 @@ export class CapabilityRegistry {
           if (!Object.hasOwn(properties, name)) {
             throw new HelmError(
               'invalid_action_spec',
-              `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional 字段 "${name}" 不在 inputSchema.properties 中`,
+              `plugin ${pluginId} action ${spec.id}  cli.positional field "${name}" do not in inputSchema.properties in`,
               400,
             );
           }
@@ -309,7 +309,7 @@ export class CapabilityRegistry {
           if (target === null || typeof target !== 'object' || target.type !== 'string') {
             throw new HelmError(
               'invalid_action_spec',
-              `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional "${pos.field}" 的 readFileInto 目标 "${pos.readFileInto}" 需为 type: string 属性`,
+              `plugin ${pluginId} action ${spec.id}  cli.positional "${pos.field}"  readFileInto target "${pos.readFileInto}" must be type: string property`,
               400,
             );
           }
@@ -318,7 +318,7 @@ export class CapabilityRegistry {
           if (seenOptional) {
             throw new HelmError(
               'invalid_action_spec',
-              `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional required 字段 "${pos.field}" 出现在 optional 之后（required 必须连续）`,
+              `plugin ${pluginId} action ${spec.id}  cli.positional required field "${pos.field}" appear in optional after (required must connect continue)`,
               400,
             );
           }
@@ -333,15 +333,15 @@ export class CapabilityRegistry {
     ) {
       throw new HelmError(
         'invalid_action_spec',
-        `插件 ${pluginId} 动作 ${spec.id} 的 cli.timeoutMs 必须是 >= 0 的有限数字（0 表示无超时）`,
+        `plugin ${pluginId} action ${spec.id}  cli.timeoutMs must be >= 0 finite number (0 means without timeout)`,
         400,
       );
     }
-    assertConversationScope(pluginId, `插件 ${pluginId} 动作 ${spec.id}`, spec.scope);
+    assertConversationScope(pluginId, `plugin ${pluginId} action ${spec.id}`, spec.scope);
     if (spec.idempotent !== undefined && typeof spec.idempotent !== 'boolean') {
-      throw new HelmError('validation_error', `插件 ${pluginId} 动作 ${spec.id} 的 idempotent 必须为 boolean`, 400);
+      throw new HelmError('validation_error', `plugin ${pluginId} action ${spec.id}  idempotent must is boolean`, 400);
     }
-    const prompt = validatedPromptFields(`插件 ${pluginId} 动作 ${spec.id}`, spec, 'invalid_action_spec');
+    const prompt = validatedPromptFields(`plugin ${pluginId} action ${spec.id}`, spec, 'invalid_action_spec');
 
     let pluginActions = this.actions.get(pluginId);
     if (!pluginActions) {
@@ -349,7 +349,7 @@ export class CapabilityRegistry {
       this.actions.set(pluginId, pluginActions);
     }
     if (pluginActions.has(spec.id)) {
-      throw new HelmError('duplicate_action', `插件 ${pluginId} 重复声明动作 ${spec.id}`, 409);
+      throw new HelmError('duplicate_action', `plugin ${pluginId} duplicate declaration action ${spec.id}`, 409);
     }
 
     assertSchemaCompilable(spec.inputSchema);
@@ -373,35 +373,35 @@ export class CapabilityRegistry {
   }
 
   registerTool<TIn>(pluginId: string, spec: PluginToolSpec<TIn>): void {
-    assertValidId('工具', spec.name);
+    assertValidId('tool', spec.name);
     if (!PROVIDER_SAFE_TOOL_NAME.test(spec.name)) {
       throw new HelmError(
         'invalid_tool_spec',
-        `插件 ${pluginId} 工具名 ${spec.name} 必须匹配 ${PROVIDER_SAFE_TOOL_NAME.source}（provider 函数名约束）`,
+        `plugin ${pluginId} tool name ${spec.name} must match ${PROVIDER_SAFE_TOOL_NAME.source}(provider function name constraint)`,
         400,
       );
     }
     if (typeof spec.description !== 'string' || spec.description.length === 0) {
-      throw new HelmError('invalid_tool_spec', `插件 ${pluginId} 工具 ${spec.name} 缺少 description`, 400);
+      throw new HelmError('invalid_tool_spec', `plugin ${pluginId} tool ${spec.name} missing description`, 400);
     }
     if (!isJsonObject(spec.inputSchema)) {
-      throw new HelmError('invalid_tool_spec', `插件 ${pluginId} 工具 ${spec.name} 缺少 inputSchema`, 400);
+      throw new HelmError('invalid_tool_spec', `plugin ${pluginId} tool ${spec.name} missing inputSchema`, 400);
     }
     if (spec.structuredOutputSchema !== undefined) {
       if (!isJsonObject(spec.structuredOutputSchema)) {
         throw new HelmError(
           'invalid_tool_spec',
-          `插件 ${pluginId} 工具 ${spec.name} 的 structuredOutputSchema 必须是 JSON Schema 对象`,
+          `plugin ${pluginId} tool ${spec.name}  structuredOutputSchema must be JSON Schema object`,
           400,
         );
       }
       assertSchemaCompilable(spec.structuredOutputSchema);
     }
-    const prompt = validatedPromptFields(`插件 ${pluginId} 工具 ${spec.name}`, spec, 'invalid_tool_spec');
+    const prompt = validatedPromptFields(`plugin ${pluginId} tool ${spec.name}`, spec, 'invalid_tool_spec');
     if (typeof spec.execute !== 'function') {
-      throw new HelmError('invalid_tool_spec', `插件 ${pluginId} 工具 ${spec.name} 缺少 execute`, 400);
+      throw new HelmError('invalid_tool_spec', `plugin ${pluginId} tool ${spec.name} missing execute`, 400);
     }
-    assertConversationScope(pluginId, `插件 ${pluginId} 工具 ${spec.name}`, spec.scope);
+    assertConversationScope(pluginId, `plugin ${pluginId} tool ${spec.name}`, spec.scope);
 
     let pluginTools = this.tools.get(pluginId);
     if (!pluginTools) {
@@ -409,11 +409,11 @@ export class CapabilityRegistry {
       this.tools.set(pluginId, pluginTools);
     }
     if (pluginTools.has(spec.name)) {
-      throw new HelmError('duplicate_tool', `插件 ${pluginId} 重复声明工具 ${spec.name}`, 409);
+      throw new HelmError('duplicate_tool', `plugin ${pluginId} duplicate declaration tool ${spec.name}`, 409);
     }
     assertSchemaCompilable(spec.inputSchema);
 
-    // 保存声明快照，避免注册后重绑指引字段或修改数组绕过校验。
+    // save declaration snapshot, avoid register after heavy bind refer quote field or modify array bypass validate.
     const storedToolSpec: PluginToolSpec<TIn> = { ...spec, ...prompt };
     pluginTools.set(spec.name, { pluginId, spec: storedToolSpec as PluginToolSpec });
   }
@@ -422,24 +422,24 @@ export class CapabilityRegistry {
     if (typeof spec.path !== 'string' || !spec.path.startsWith('/')) {
       throw new HelmError(
         'invalid_route_path',
-        `插件 ${pluginId} 路由 path 必须是以 / 开头的相对路径（宿主自动挂载到插件命名空间）：${String(spec.path)}`,
+        `plugin ${pluginId} routing path must be with / open head relative path (host automatically mount to plugin naming empty between):${String(spec.path)}`,
         400,
       );
     }
     if (spec.path === '/api' || spec.path.startsWith('/api/')) {
       throw new HelmError(
         'invalid_route_path',
-        `插件 ${pluginId} 路由 ${spec.method} ${spec.path} 不允许携带 /api 前缀（请声明相对路径，宿主负责命名空间拼接）`,
+        `plugin ${pluginId} routing ${spec.method} ${spec.path} disallows carry /api prefix (please declaration relative path, host negative duty naming empty between concatenate)`,
         400,
       );
     }
     if (spec.path === '/') {
-      throw new HelmError('invalid_route_path', `插件 ${pluginId} 路由相对路径至少需要一段（不允许仅 /）`, 400);
+      throw new HelmError('invalid_route_path', `plugin ${pluginId} routing relative path at least need to one segment (disallows only /)`, 400);
     }
     if (spec.path.includes('?') || spec.path.includes('#')) {
       throw new HelmError(
         'invalid_route_path',
-        `插件 ${pluginId} 路由 ${spec.method} ${spec.path} 不允许携带查询串或片段`,
+        `plugin ${pluginId} routing ${spec.method} ${spec.path} disallows carry query string or fragment`,
         400,
       );
     }
@@ -447,7 +447,7 @@ export class CapabilityRegistry {
       if (seg.length === 0) {
         throw new HelmError(
           'invalid_route_path',
-          `插件 ${pluginId} 路由 ${spec.method} ${spec.path} 不允许空路径段（// 或尾斜杠）`,
+          `plugin ${pluginId} routing ${spec.method} ${spec.path} disallows empty path segment (// or tail slash)`,
           400,
         );
       }
@@ -455,13 +455,13 @@ export class CapabilityRegistry {
       if (decoded === '.' || decoded === '..' || decoded.includes('/')) {
         throw new HelmError(
           'invalid_route_path',
-          `插件 ${pluginId} 路由 ${spec.method} ${spec.path} 不允许点段（. / ..）或编码斜杠`,
+          `plugin ${pluginId} routing ${spec.method} ${spec.path} disallows point segment (. / ..) or encode slash`,
           400,
         );
       }
     }
     if (typeof spec.handler !== 'function') {
-      throw new HelmError('invalid_route_handler', `插件 ${pluginId} 路由 ${spec.path} 缺少 handler`, 400);
+      throw new HelmError('invalid_route_handler', `plugin ${pluginId} routing ${spec.path} missing handler`, 400);
     }
 
     let pluginRoutes = this.routes.get(pluginId);
@@ -483,8 +483,8 @@ export class CapabilityRegistry {
   }
 
   /**
-   * 只读动作绑定查询（UI 声明引用动作的存在性与 idempotent 标记校验用）。
-   * 未声明返回 undefined；不触发任何注册副作用。
+   * only read action bind set query (UI declaration reference action store in and idempotent mark record validate use).
+   * not declaration return undefined; does not trigger any register side effect.
    */
   getActionBinding(pluginId: string, actionId: string): { idempotent: boolean } | undefined {
     const entry = this.actions.get(pluginId)?.get(actionId);
@@ -550,7 +550,7 @@ export class CapabilityRegistry {
     if (dups.length > 0) {
       throw new HelmError(
         'duplicate_tool_name',
-        `插件工具名冲突（provider-safe 名必须唯一）：${[...new Set(dups.map((d) => d.name))].join(', ')}`,
+        `plugin tool name conflict (provider-safe name must unique):${[...new Set(dups.map((d) => d.name))].join(', ')}`,
         500,
         { duplicates: [...new Set(dups.map((d) => d.name))] },
       );
@@ -579,9 +579,9 @@ export class CapabilityRegistry {
     const actions = this.actions.get(pluginId);
     const entry = actions?.get(actionId);
     if (!entry) {
-      throw new HelmError('unknown_action', `插件 ${pluginId} 未声明动作 ${actionId}`, 404, { pluginId, actionId });
+      throw new HelmError('unknown_action', `plugin ${pluginId} not declaration action ${actionId}`, 404, { pluginId, actionId });
     }
-    assertScopeAllows(pluginId, `动作 ${pluginId}.${actionId}`, entry.scope, context.conversationId, options.getConversation);
+    assertScopeAllows(pluginId, `action ${pluginId}.${actionId}`, entry.scope, context.conversationId, options.getConversation);
     validatePluginInput(pluginId, actionId, entry.inputSchema, input);
     return { idempotent: entry.idempotent === true };
   }
@@ -609,11 +609,11 @@ export class CapabilityRegistry {
     options: CapabilityExecutionOptions,
   ): Promise<unknown> {
     const found = this.findToolByName(name, options);
-    if (!found) throw new HelmError('unknown_tool', `未注册的工具：${name}`, 404, { name });
+    if (!found) throw new HelmError('unknown_tool', `not registered tool:${name}`, 404, { name });
 
     const { pluginId, spec } = found;
     options.assertActive(pluginId);
-    assertScopeAllows(pluginId, `工具 ${name}`, spec.scope, context.conversationId, options.getConversation);
+    assertScopeAllows(pluginId, `tool ${name}`, spec.scope, context.conversationId, options.getConversation);
     validatePluginInput(pluginId, spec.name, spec.inputSchema, input);
     return options.tracker.withTask(pluginId, `tool:${name}`, () =>
       Promise.resolve(spec.execute(input as never, context)),
@@ -624,13 +624,13 @@ export class CapabilityRegistry {
     name: string,
     options: CapabilityExecutionOptions,
   ): { pluginId: string; spec: PluginToolSpec } | undefined {
-    // 1. ctx.tool 直投名（provider-safe，无 '.'）
+    // 1. ctx.tool direct throw name (provider-safe, without '.')
     for (const [pluginId, pluginTools] of this.tools) {
       if (!options.isPluginRegistered(pluginId)) continue;
       const direct = pluginTools.get(name);
       if (direct) return { pluginId, spec: direct.spec };
     }
-    // 2. 全限定动作名 pluginId.actionId（pluginId 可含 ':'，取首个 '.' 分割）
+    // 2. all limit set action name pluginId.actionId(pluginId can contains ':', take first '.' split)
     const dot = name.indexOf('.');
     if (dot > 0) {
       const pluginId = name.slice(0, dot);
@@ -640,7 +640,7 @@ export class CapabilityRegistry {
         if (spec) return spec;
       }
     }
-    // 3. provider-safe 别名（不含 '.'，需扫描 exposeAsTool 动作）
+    // 3. provider-safe alias (excludes '.', must scan exposeAsTool action)
     for (const pluginId of this.actions.keys()) {
       if (!options.isPluginRegistered(pluginId)) continue;
       const spec = this.derivedToolSpec(pluginId, name, name, options);

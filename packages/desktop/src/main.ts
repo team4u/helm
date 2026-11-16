@@ -29,12 +29,12 @@ function describe(error: unknown): string {
 function createBoot(electron?: ElectronApi): DesktopBoot {
   const resources = electron?.app.isPackaged ? process.resourcesPath : undefined;
   const bundled = resources === undefined ? undefined : JSON.parse(readFileSync(join(resources, 'hub', 'package.json'), 'utf8')) as { name?: unknown; version?: unknown };
-  if (bundled !== undefined && typeof bundled.name !== 'string') throw new Error('安装包缺少有效的更新包名称');
+  if (bundled !== undefined && typeof bundled.name !== 'string') throw new Error('install package missing valid update package name');
   const config = resolveDesktopConfig(process.env, resources === undefined ? {} : {
     payloadPackage: process.env.HELM_PAYLOAD_PACKAGE ?? bundled?.name as string,
-    // 打包形态 hub 入口：payload manifest entries.hub = "hub/dist/main.js"，落在
-    // <resources>/hub（extraResources）下即 hub/hub/dist/main.js（@helm/hub 包 dist；
-    // topology 拆分后不再位于 kernel 包）。
+    // bundle form hub entry:payload manifest entries.hub = "hub/dist/main.js", in
+    // <resources>/hub(extraResources) under i.e. hub/hub/dist/main.js(@helm/hub package dist;
+    // topology split after no longer at kernel package).
     hubEntry: process.env.HELM_DESKTOP_HUB_ENTRY ?? join(resources, 'hub', 'hub', 'dist', 'main.js'),
     cliEntry: process.env.HELM_CLI_ENTRY ?? join(resources, 'hub', 'cli', 'dist', 'index.js'),
     webDistDir: process.env.HELM_DESKTOP_WEB_DIST ?? join(resources, 'hub', 'web', 'dist'),
@@ -42,7 +42,7 @@ function createBoot(electron?: ElectronApi): DesktopBoot {
   const npmCli = resources === undefined
     ? fileURLToPath(new URL('../node_modules/npm/bin/npm-cli.js', import.meta.url))
     : join(resources, 'hub', 'tools', 'npm', 'bin', 'npm-cli.js');
-  if (npmCli !== undefined && !existsSync(npmCli)) throw new Error(`安装包缺少 npm 运行时：${npmCli}`);
+  if (npmCli !== undefined && !existsSync(npmCli)) throw new Error(`install package missing npm runtime:${npmCli}`);
   const updater = createPayloadUpdater(config, {
     npmInstaller: new HostNpmInstaller({
       command: [process.execPath, npmCli],
@@ -61,9 +61,9 @@ function createBoot(electron?: ElectronApi): DesktopBoot {
       childWrapper: resources === undefined ? undefined : join(resources, 'hub-child.mjs'),
       isElectron: process.versions.electron !== undefined,
       events: {
-        stateChange: (next, prev) => log(`Hub：${prev} -> ${next}`),
-        runnerSelected: (info) => log(`运行器：${info.kind} ${info.nodeVersion ?? ''}`),
-        restartScheduled: (attempt, ms, reason) => log(`第 ${attempt} 次重启，等待 ${ms}ms：${reason}`),
+        stateChange: (next, prev) => log(`Hub:${prev} -> ${next}`),
+        runnerSelected: (info) => log(`run:${info.kind} ${info.nodeVersion ?? ''}`),
+        restartScheduled: (attempt, ms, reason) => log(` ${attempt} time restart, wait for ${ms}ms:${reason}`),
         problem: (error) => log(describe(error)),
       },
     },
@@ -74,7 +74,7 @@ async function runHeadless(): Promise<void> {
   const boot = createBoot();
   await boot.start();
   await boot.confirmReady();
-  log(`就绪：${boot.supervisor.hubUrl}`);
+  log(`ready:${boot.supervisor.hubUrl}`);
   let quitting = false;
   const stop = async () => {
     if (quitting) return;
@@ -85,7 +85,7 @@ async function runHeadless(): Promise<void> {
   process.once('SIGTERM', () => void stop());
 }
 
-const splash = 'data:text/html;charset=utf-8,' + encodeURIComponent(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><title>Helm</title><style>html{color-scheme:dark light;font:14px system-ui}body{margin:0;min-height:100vh;display:grid;place-content:center;text-align:center}h1{font-size:24px;font-weight:600}p{opacity:.65}</style><h1>Helm</h1><p>正在启动…</p></html>`);
+const splash = 'data:text/html;charset=utf-8,' + encodeURIComponent(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><title>Helm</title><style>html{color-scheme:dark light;font:14px system-ui}body{margin:0;min-height:100vh;display:grid;place-content:center;text-align:center}h1{font-size:24px;font-weight:600}p{opacity:.65}</style><h1>Helm</h1><p>is now start...</p></html>`);
 
 async function waitForReact(win: BrowserWindowLike): Promise<void> {
   const deadline = Date.now() + 20_000;
@@ -94,24 +94,24 @@ async function waitForReact(win: BrowserWindowLike): Promise<void> {
     if (ready === true) return;
     await delay(100);
   }
-  throw new Error('页面已加载，但界面在 20 秒内未完成渲染');
+  throw new Error('page already load, but UI in 20 second inside not complete render');
 }
 
 async function runElectron(electron: ElectronApi): Promise<void> {
   const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog } = electron;
-  // Linux AppImage 退出兜底须先于任何可能退出的路径就位（其余平台 / 形态零开销）。
+  // Linux AppImage exit fall back must first at any may exit path then (the rest platform / form zero overhead).
   installLinuxExitChildSweep({ isPackaged: app.isPackaged });
   const browserData = join(process.env.HELM_DESKTOP_DATA_DIR ?? process.env.HELM_DATA_DIR ?? join(homedir(), '.helm'), 'desktop');
   mkdirSync(browserData, { recursive: true });
   app.setPath('userData', browserData);
-  // Linux 桌面身份（Wayland app_id / X11 WM_CLASS）必须在 ready 之前设置，见 pre-ready.ts。
+  // Linux desktop identity (Wayland app_id / X11 WM_CLASS) must in ready before settings, see pre-ready.ts.
   applyLinuxDesktopName(app, process.platform);
   if (!app.requestSingleInstanceLock()) { app.quit(); return; }
   await app.whenReady();
   if (!smoke) {
-    try { await restoreShellPath(); } catch (error) { log(`登录 shell PATH 恢复失败，继续使用当前环境：${describe(error)}`); }
+    try { await restoreShellPath(); } catch (error) { log(`login shell PATH restore failed, continue use when before environment:${describe(error)}`); }
   }
-  if (smoke && process.env.HELM_DATA_DIR === undefined && process.env.HELM_DESKTOP_DATA_DIR === undefined) throw new Error('冒烟测试必须显式指定隔离的数据目录');
+  if (smoke && process.env.HELM_DATA_DIR === undefined && process.env.HELM_DESKTOP_DATA_DIR === undefined) throw new Error('smoke test must explicit designate isolated data directory');
   const boot = createBoot(electron);
   let smokeToken: string | undefined;
   const verifyNativeCompiler = async (hubUrl: string) => {
@@ -122,17 +122,17 @@ async function runElectron(electron: ElectronApi): Promise<void> {
         body: JSON.stringify({ password: randomBytes(24).toString('hex') }),
         signal: AbortSignal.timeout(5000),
       });
-      if (!response.ok) throw new Error(`冒烟测试鉴权初始化失败：${response.status}，请使用新的数据目录`);
+      if (!response.ok) throw new Error(`smoke test authentication failed to initialize:${response.status}, use new data directory`);
       const body: unknown = await response.json();
-      if (body === null || typeof body !== 'object' || !('token' in body) || typeof body.token !== 'string') throw new Error('鉴权响应缺少 token');
+      if (body === null || typeof body !== 'object' || !('token' in body) || typeof body.token !== 'string') throw new Error('authentication response missing token');
       smokeToken = body.token;
     }
     for (const pluginId of ['builtin:workflow', 'builtin:mermaid']) {
       const response = await fetch(`${hubUrl}/api/plugins/${encodeURIComponent(pluginId)}/client.mjs?module=index.tsx`, {
         headers: { authorization: `Bearer ${smokeToken}` }, signal: AbortSignal.timeout(30_000),
       });
-      if (!response.ok) throw new Error(`${pluginId} 客户端编译失败：${response.status} ${await response.text()}`);
-      if ((await response.text()).length === 0) throw new Error(`${pluginId} 客户端编译结果为空`);
+      if (!response.ok) throw new Error(`${pluginId} client failed to compile:${response.status} ${await response.text()}`);
+      if ((await response.text()).length === 0) throw new Error(`${pluginId} client compile result is empty`);
     }
   };
   let quitting = false;
@@ -167,7 +167,7 @@ async function runElectron(electron: ElectronApi): Promise<void> {
   const external = (url: string) => {
     try {
       if (['https:', 'http:', 'mailto:'].includes(new URL(url).protocol)) void shell.openExternal(url).catch((error) => log(describe(error)));
-    } catch { log(`无法打开链接：${url}`); }
+    } catch { log(`cannot open link:${url}`); }
   };
   win.webContents.setWindowOpenHandler(({ url }) => { external(url); return { action: 'deny' }; });
   win.webContents.on('will-navigate', (event, url) => {
@@ -176,28 +176,28 @@ async function runElectron(electron: ElectronApi): Promise<void> {
   const checkUpdates = () => {
     if (updateTask !== null) return;
     updateTask = boot.checkForUpdate().then((status) => {
-      const label = status.updateAvailable ? `更新 ${status.latest?.version} 已就绪，下次启动安装`
-        : status.reason === 'updater_not_configured' ? '尚未配置更新源'
-        : status.reason === 'latest_blocked' ? '最新更新不可用，已保留当前版本' : '当前已是最新版本';
+      const label = status.updateAvailable ? `update ${status.latest?.version} ready, under time start install`
+        : status.reason === 'updater_not_configured' ? 'not yet config update source'
+        : status.reason === 'latest_blocked' ? 'most new update unavailable, already keep when before version' : 'when before already is most new version';
       log(label); updateMenu(label);
     }).catch((error) => {
-      log(`检查更新失败：${describe(error)}`);
-      updateMenu('检查更新失败，点击重试');
+      log(`check update failed:${describe(error)}`);
+      updateMenu('check update failed, point strike retry');
     }).finally(() => { updateTask = null; });
   };
-  const updateMenu = (label = '检查更新') => {
+  const updateMenu = (label = 'check update') => {
     tray?.setContextMenu(Menu.buildFromTemplate([
-      { label: '打开 Helm', click: show },
+      { label: 'open Helm', click: show },
       { label, click: checkUpdates, enabled: boot.supervisor.owned },
-      { label: '下载桌面新版', click: () => external('https://github.com/team4u/helm/releases/latest') },
+      { label: 'download desktop new edition', click: () => external('https://github.com/team4u/helm/releases/latest') },
       { type: 'separator' },
-      { label: '退出', click: () => void quit() },
+      { label: 'exit', click: () => void quit() },
     ]));
   };
   try {
     await win.loadURL(splash);
     let result = await boot.start();
-    if (smoke && result.mode !== 'owned') throw new Error('冒烟测试拒绝附着外部 Hub，请释放测试端口');
+    if (smoke && result.mode !== 'owned') throw new Error('smoke test reject attach external Hub, please release test port');
     try {
       await win.loadURL(result.hubUrl);
       await waitForReact(win);
@@ -214,14 +214,14 @@ async function runElectron(electron: ElectronApi): Promise<void> {
       tray = new Tray(nativeImage.createFromDataURL(TRAY_ICON_DATA_URL));
       tray.setToolTip('Helm'); tray.on('click', show); updateMenu();
     } catch (error) {
-      log(`系统托盘不可用，关闭窗口将退出：${describe(error)}`);
+      log(`system tray unavailable, close window exit:${describe(error)}`);
     }
     if (smoke) {
-      if (smokeDir === undefined) throw new Error('--smoke-test 需要 --smoke-output=<目录>');
+      if (smokeDir === undefined) throw new Error('--smoke-test need to --smoke-output=<directory>');
       mkdirSync(smokeDir, { recursive: true });
       const isolated: unknown = await win.webContents.executeJavaScript('typeof window.require === "undefined" && typeof window.process === "undefined"');
-      if (isolated !== true) throw new Error('渲染进程隔离校验失败');
-      // DOM 就绪不等于合成帧已提交；截图必须等真实绘制，尤其是 Xvfb 软件合成。
+      if (isolated !== true) throw new Error('render process isolated validation failed');
+      // DOM ready is not equal to together into frame committed; truncate diagram must etc. real draw, especially is Xvfb software together into.
       await win.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))');
       const image = await win.webContents.capturePage();
       writeFileSync(join(smokeDir, 'window.png'), image.toPNG());
@@ -230,12 +230,12 @@ async function runElectron(electron: ElectronApi): Promise<void> {
       let portReleased = false;
       try { await fetch(`${result.hubUrl}/api/auth/status`, { signal: AbortSignal.timeout(1000) }); }
       catch { portReleased = true; }
-      if (!portReleased) throw new Error('关闭后 Hub 端口仍在监听');
+      if (!portReleased) throw new Error('close after Hub port still in listen');
       writeFileSync(join(smokeDir, 'smoke.json'), JSON.stringify({ ok: true, mode: result.mode, hubPid, rendererIsolated: true, nativeCompiler: true, portReleased, electron: process.versions.electron, node: process.versions.node }));
       log('SMOKE_TEST_OK');
       await quit();
     } else {
-      log(`就绪：${result.mode} ${result.hubUrl}`);
+      log(`ready:${result.mode} ${result.hubUrl}`);
       if (result.mode === 'owned') {
         checkUpdates();
         updateTimer = setInterval(checkUpdates, 6 * 60 * 60 * 1000);
@@ -249,7 +249,7 @@ async function runElectron(electron: ElectronApi): Promise<void> {
       mkdirSync(smokeDir, { recursive: true });
       writeFileSync(join(smokeDir, 'smoke.json'), JSON.stringify({ ok: false, error: message }));
     }
-    if (!smoke) dialog.showErrorBox('Helm 启动失败', message);
+    if (!smoke) dialog.showErrorBox('Helm failed to start', message);
     await quit(1);
   }
 }
@@ -257,14 +257,14 @@ async function runElectron(electron: ElectronApi): Promise<void> {
 async function main(): Promise<void> {
   if (process.env.HELM_DESKTOP_HEADLESS === '1') { await runHeadless(); return; }
   const electron = getElectron();
-  if (electron === null) throw new Error('请使用 pnpm --filter @helm/desktop exec electron . 启动，或设置 HELM_DESKTOP_HEADLESS=1');
+  if (electron === null) throw new Error('use pnpm --filter @helm/desktop exec electron . start, or settings HELM_DESKTOP_HEADLESS=1');
   await runElectron(electron);
 }
 void main().catch((error) => {
   process.stderr.write(`${describe(error)}\n`);
   const electron = getElectron();
   if (electron !== null) {
-    if (!smoke) electron.dialog.showErrorBox('Helm 启动失败', describe(error));
+    if (!smoke) electron.dialog.showErrorBox('Helm failed to start', describe(error));
     electron.app.exit(1);
   } else process.exitCode = 1;
 });

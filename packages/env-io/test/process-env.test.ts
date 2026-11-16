@@ -8,8 +8,8 @@ import {
   setEnvEntry,
 } from '../src/index.js'
 
-describe('process-env：跨平台环境变量大小写原语', { timeout: 60_000 }, () => {
-  it('win32：宿主只有 Path 时 prependEnvPath 原地前置且不生成冲突 PATH 键', { timeout: 60_000 }, () => {
+describe('process-env: across platform environment variable large small write original language', { timeout: 60_000 }, () => {
+  it('win32: host only Path when prependEnvPath original ground pre- and do not generate conflict PATH key', { timeout: 60_000 }, () => {
     const env: Record<string, string> = {
       Path: 'C:\\Windows\\System32;C:\\Program Files\\nodejs',
       TEMP: 'C:\\Temp',
@@ -27,7 +27,7 @@ describe('process-env：跨平台环境变量大小写原语', { timeout: 60_000
     assert.equal(env['TEMP'], 'C:\\Temp')
   })
 
-  it('win32：已存在多份大小写变体或缺失时 prependEnvPath 收敛为单键', { timeout: 60_000 }, () => {
+  it('win32: already exists many large small write change body or missing when prependEnvPath converge is single key', { timeout: 60_000 }, () => {
     const collided: Record<string, string> = {
       Path: 'C:\\Windows\\System32',
       PATH: 'D:\\Custom\\bin',
@@ -45,7 +45,7 @@ describe('process-env：跨平台环境变量大小写原语', { timeout: 60_000
     assert.deepEqual(empty, { PATH: 'C:\\helm\\bin' })
   })
 
-  it('win32：setEnvEntry / getEnvEntry / findEnvKey / deleteEnvEntry 大小写不敏感合并', { timeout: 60_000 }, () => {
+  it('win32:setEnvEntry / getEnvEntry / findEnvKey / deleteEnvEntry large small write do not sensitive merge', { timeout: 60_000 }, () => {
     const env: Record<string, string> = { Path: 'C:\\Win', helm_token: 'old' }
     assert.equal(findEnvKey(env, 'PATH', 'win32'), 'Path')
     assert.equal(getEnvEntry(env, 'PATH', 'win32'), 'C:\\Win')
@@ -59,7 +59,7 @@ describe('process-env：跨平台环境变量大小写原语', { timeout: 60_000
     assert.equal('helm_token' in env, false)
   })
 
-  it('linux：Path 与 PATH 互不干扰，分隔符为冒号', { timeout: 60_000 }, () => {
+  it('linux:Path and PATH mutual do not interference, isolate symbol is smoke number', { timeout: 60_000 }, () => {
     const env: Record<string, string> = {
       Path: '/not-system-path',
       PATH: '/usr/bin:/bin',

@@ -1,20 +1,20 @@
 /**
- * SecretStash 生命周期收敛测试：
- * - TTL（注入 clock 惰性失效）：到期仅停止注入（envFor/has/stats），byUuid 旧值
- *   继续用于全部输出脱敏（含跨 chunk 流式 KMP）；同名覆盖旧值同样脱敏；
- * - SecretLifetime 边界校验：ttlMs 有限正 safe integer 且不超 24h、scope 枚举、
- *   未知键拒绝（AskDoc spec 与 stash.put 共用同一套拒绝）；
- * - turn 作用域按「出生结算序」精确归属：本回合登记随结算回收、结算后登记
- *   （异步审批落地/late hook）属下一回合不被误扫、会话级不受结算影响、
- *   idle 不清扫；停止注入 != 停止脱敏；clear(conversationId) 回收脱敏旧值；
- * - AskService 接线：secretLifetime 仅 secret 字段允许、非法形状 400、
- *   合法值原样透传 stash（未声明 = 会话级，与旧行为一致）；
- * - buildSpawnEnv 最小授权：缺省不携带任何父会话机密、显式 secretNames 逐名
- *   注入、缺失/过期名字显式 404、非法形状 400；
- * - Herdr 窗格端到端：远端窗格默认无业务机密但保留受管 HELM_*（含节点通道
- *   hubUrl 回连）与 Profile 显式变量；同名 Profile 值不被未授予的父机密覆盖；
- *   显式授予时机密值权威；授予缺失名字在建窗副作用前显式拒绝；
- * - workflow journal 指纹：secretNames 参与调用 key（授予变化不复用旧缓存）。
+ * SecretStash lifecycle converge test:
+ * - TTL(inject clock lazy expires): expires only stop inject (envFor/has/stats),byUuid old value
+ *   continue used to all output redaction (contains across chunk streaming KMP); same name override old value same redaction;
+ * - SecretLifetime boundary validate:ttlMs finite correct safe integer and do not over 24h,scope enumeration,
+ *   unknown key reject (AskDoc spec and stash.put shared use the same set reject);
+ * - turn effect domain by out generate compute order precise ownership: this turn register follow compute reclaim, compute after register
+ *   (async approval persisted/late hook) belong under one turn do not by mistakenly scan, conversation level do not subject to compute affect,
+ *   idle do not clean scan; stop inject != stop redaction;clear(conversationId) reclaim redaction old value;
+ * - AskService connect line:secretLifetime only secret field allows, illegal shape 400,
+ *   legal value original pass-through stash(not declaration = conversation level, and old behavior consistent);
+ * - buildSpawnEnv most small authorization: default does not carry any parent conversation secret, explicit secretNames one by one name
+ *   inject, missing/expired name explicit 404, illegal shape 400;
+ * - Herdr pane end-to-end: remote pane by default without business secret but keep managed HELM_*(contains node channel
+ *   hubUrl back connect) and Profile explicit variable; same name Profile value do not by not grant parent secret override;
+ *   explicit grant when secret value right threat; grant missing name in create window side effect before explicit reject;
+ * - workflow journal refer grain:secretNames reference and invoke key(grant change do not re- use old cache).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -44,53 +44,53 @@ import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../../plugins/src/
 import { createHubTestApp, waitFor } from './helpers/hub-test-env.js'
 
 // ---------------------------------------------------------------------------
-// SecretStash：TTL（fake clock）
+// SecretStash:TTL(fake clock)
 // ---------------------------------------------------------------------------
 
-/** fake clock stash：now 可任意推进。 */
+/** fake clock stash:now can any push enter. */
 function fakeClockStash(): { stash: SecretStash; now: { ms: number } } {
   const now = { ms: 1_000_000 }
   return { stash: new SecretStash({ now: () => now.ms }), now }
 }
 
-test('TTL：注入 clock 惰性失效——到期仅停注入，脱敏继续（含流式跨 chunk）', { timeout: 60_000 }, () => {
+test('TTL: inject clock lazy expires - - expires only stop inject, redaction continue (contains streaming across chunk)', { timeout: 60_000 }, () => {
   const { stash, now } = fakeClockStash()
   stash.put(7, 'DEPLOY_TOKEN', 'tok-abc-123', { ttlMs: 5_000 })
   assert.deepEqual(stash.envFor(7), { DEPLOY_TOKEN: 'tok-abc-123' })
   assert.equal(stash.has(7, 'DEPLOY_TOKEN'), true)
 
   now.ms += 4_999
-  assert.equal(stash.has(7, 'DEPLOY_TOKEN'), true, '到期前一刻仍注入')
+  assert.equal(stash.has(7, 'DEPLOY_TOKEN'), true, 'expires before one moment still inject')
   assert.deepEqual(stash.stats(), { conversations: 1, secrets: 1 })
 
   now.ms += 1
-  assert.deepEqual(stash.envFor(7), {}, '到期即停止注入（读路径惰性回收）')
+  assert.deepEqual(stash.envFor(7), {}, 'expires i.e. stop inject (read path lazy reclaim)')
   assert.equal(stash.has(7, 'DEPLOY_TOKEN'), false)
   assert.deepEqual(stash.stats(), { conversations: 1, secrets: 0 })
 
-  // 停止注入 != 停止脱敏：旧值仍替换为占位符。
+  // stop inject != stop redaction: old value still replace is placeholder.
   assert.equal(stash.redact('leak: tok-abc-123').includes('tok-abc-123'), false)
   assert.ok(stash.redact('leak: tok-abc-123').startsWith('leak: [REDACTED:stash:'))
 
-  // 流式 redactor 跨 chunk 撕裂匹配在到期后依旧脱敏（KMP 后缀保持）。
+  // streaming redactor across chunk tear match in expires after still redaction (KMP suffix keep).
   const stream = stash.createStreamingRedactor()
   const out = stream.push('prefix tok-abc-') + stream.push('123 tail') + stream.flush()
   assert.equal(out.includes('tok-abc-123'), false)
   assert.ok(out.includes('[REDACTED:stash:'))
 })
 
-test('TTL：同名覆盖旧值——旧值停止注入后仍被脱敏（两个值都不可回显）', { timeout: 60_000 }, () => {
+test('TTL: same name override old value - - old value stop inject after still by redaction (two value all cannot back visible)', { timeout: 60_000 }, () => {
   const { stash, now } = fakeClockStash()
   stash.put(7, 'KEY', 'old-value', { ttlMs: 1_000 })
   now.ms += 2_000
   stash.put(7, 'KEY', 'new-value')
-  assert.deepEqual(stash.envFor(7), { KEY: 'new-value' }, '新值生效')
+  assert.deepEqual(stash.envFor(7), { KEY: 'new-value' }, 'new value takes effect')
   const text = stash.redact('old-value / new-value')
-  assert.equal(text.includes('old-value'), false, '已过期旧值继续脱敏')
+  assert.equal(text.includes('old-value'), false, 'expired old value continue redaction')
   assert.equal(text.includes('new-value'), false)
 })
 
-test('TTL 上限边界：恰好 24h 合法，超出/非整数/非正/非数值拒绝', { timeout: 60_000 }, () => {
+test('TTL cap boundary: exactly 24h legal, exceeds/non- integer/non- correct/non- count value reject', { timeout: 60_000 }, () => {
   const { stash } = fakeClockStash()
   stash.put(7, 'OK_TTL', 'v', { ttlMs: MAX_SECRET_TTL_MS })
   assert.equal(stash.has(7, 'OK_TTL'), true)
@@ -98,7 +98,7 @@ test('TTL 上限边界：恰好 24h 合法，超出/非整数/非正/非数值�
     assert.throws(
       () => stash.put(7, 'BAD_TTL', 'v', { ttlMs: bad as number }),
       (e: unknown) => e instanceof HelmError && e.code === 'validation_error',
-      `ttlMs=${String(bad)} 必须拒绝`,
+      `ttlMs=${String(bad)} must reject`,
     )
   }
   assert.throws(
@@ -107,7 +107,7 @@ test('TTL 上限边界：恰好 24h 合法，超出/非整数/非正/非数值�
   )
 })
 
-test('SecretLifetime 形状：scope 枚举、未知键、非对象均拒绝；空对象合法（=缺省语义）', { timeout: 60_000 }, () => {
+test('SecretLifetime shape:scope enumeration, unknown key, non- object all reject; empty object legal (=default semantics)', { timeout: 60_000 }, () => {
   const { stash } = fakeClockStash()
   assert.throws(
     () => stash.put(7, 'S', 'v', { scope: 'session' } as never),
@@ -116,56 +116,56 @@ test('SecretLifetime 形状：scope 枚举、未知键、非对象均拒绝；�
   assert.throws(
     () => stash.put(7, 'S', 'v', { ttl: 5_000 } as never),
     (e: unknown) => e instanceof HelmError && e.code === 'validation_error',
-    "未知键 'ttl'（ttlMs 拼写错漏必须显式失败，不能静默变成无 TTL）",
+    "unknown key 'ttl'(ttlMs piece together write wrong leak must explicit failed, cannot static default becomes without TTL)",
   )
-  assert.throws(() => stash.put(7, 'S', 'v', null as never), /validation_error|需为对象/)
-  assert.throws(() => stash.put(7, 'S', 'v', [1] as never), /validation_error|需为对象/)
-  assert.throws(() => stash.put(7, 'S', 'v', new Date() as never), /validation_error|需为对象/)
-  assert.throws(() => stash.put(7, 'S', 'v', new Map() as never), /validation_error|需为对象/)
+  assert.throws(() => stash.put(7, 'S', 'v', null as never), /validation_error|must be an object/)
+  assert.throws(() => stash.put(7, 'S', 'v', [1] as never), /validation_error|must be an object/)
+  assert.throws(() => stash.put(7, 'S', 'v', new Date() as never), /validation_error|must be an object/)
+  assert.throws(() => stash.put(7, 'S', 'v', new Map() as never), /validation_error|must be an object/)
   stash.put(7, 'S', 'v', {})
-  assert.equal(stash.has(7, 'S'), true, '空对象 = 缺省会话级')
+  assert.equal(stash.has(7, 'S'), true, 'empty object = default conversation level')
 })
 
 // ---------------------------------------------------------------------------
-// SecretStash：turn 作用域（出生结算序）
+// SecretStash:turn effect domain (out generate compute order)
 // ---------------------------------------------------------------------------
 
-test('turn：本回合登记随结算回收（停止注入），脱敏继续；会话级不受结算影响', { timeout: 60_000 }, () => {
+test('turn: this turn register follow compute reclaim (stop inject), redaction continue; conversation level do not subject to compute affect', { timeout: 60_000 }, () => {
   const { stash } = fakeClockStash()
   stash.put(7, 'TURN_KEY', 'turn-secret', { scope: 'turn' })
   stash.put(7, 'SESSION_KEY', 'session-secret')
   stash.settleTurn(7)
   assert.equal(stash.has(7, 'TURN_KEY'), false)
-  assert.equal(stash.has(7, 'SESSION_KEY'), true, '会话级（缺省）不随回合结算回收')
+  assert.equal(stash.has(7, 'SESSION_KEY'), true, 'conversation level (default) do not follow turn compute reclaim')
   assert.deepEqual(stash.envFor(7), { SESSION_KEY: 'session-secret' })
-  assert.equal(stash.redact('turn-secret').includes('turn-secret'), false, '结算后旧值继续脱敏')
+  assert.equal(stash.redact('turn-secret').includes('turn-secret'), false, 'compute after old value continue redaction')
 })
 
-test('turn：旧回合结束不清新回合机密——结算后登记属下一回合，idle 不清扫', { timeout: 60_000 }, () => {
+test('turn: old turn end do not clean new turn secret - - compute after register belong under one turn,idle do not clean scan', { timeout: 60_000 }, () => {
   const { stash } = fakeClockStash()
   stash.put(7, 'A', 'a', { scope: 'turn' })
-  stash.settleTurn(7) // 回合 A 结算：A 回收（出生序 0 < 1）。
-  // 异步审批落地/late hook：结算之后登记（出生序 1），属下一回合。
+  stash.settleTurn(7) // turn A compute:A reclaim (out generate order 0 < 1).
+  // async approval persisted/late hook: compute after register (out generate order 1), belong under one turn.
   stash.put(7, 'B', 'b', { scope: 'turn' })
   stash.put(7, 'C', 'c', { scope: 'turn' })
-  // 无任何 idle 扫描：下一回合进行中 B/C 持续注入。
+  // without any idle scan: under one turn in progress B/C continuous inject.
   assert.deepEqual(stash.envFor(7), { B: 'b', C: 'c' })
-  stash.settleTurn(7) // 回合 B 结算：回收出生序 < 2 的 B/C，不影响下一回合。
+  stash.settleTurn(7) // turn B compute: reclaim out generate order < 2  B/C, does not affect under one turn.
   assert.deepEqual(stash.envFor(7), {})
-  assert.equal(stash.redact('b c').includes('b c'), false, '旧值继续脱敏')
+  assert.equal(stash.redact('b c').includes('b c'), false, 'old value continue redaction')
 })
 
-test('turn：结算后（counter 已推进）再登记的 turn 机密在本次结算内存活', { timeout: 60_000 }, () => {
+test('turn: compute after (counter already push enter) again register turn secret in this time compute memory', { timeout: 60_000 }, () => {
   const { stash } = fakeClockStash()
   stash.settleTurn(7)
   stash.put(7, 'LATE', 'late-value', { scope: 'turn' })
   stash.settleTurn(7)
-  // LATE 出生序 1：第二次结算（counter 1→2）应回收它；但紧随第一次结算登记
-  // 后、下一次结算前它必须存活——上一用例已覆盖存活面，这里回收面闭环。
+  // LATE out generate order 1: second time compute (counter 1→2) should reclaim it; but tight follow first time compute register
+  // after, under once compute before it must store - - on one case already override store side, this in reclaim side closed ring.
   assert.equal(stash.has(7, 'LATE'), false)
 })
 
-test('turn：按会话隔离——会话 7 的结算不碰会话 8 的 turn 机密', { timeout: 60_000 }, () => {
+test('turn: by conversation isolated - - conversation 7 compute do not touch conversation 8  turn secret', { timeout: 60_000 }, () => {
   const { stash } = fakeClockStash()
   stash.put(7, 'K', 'v7', { scope: 'turn' })
   stash.put(8, 'K', 'v8', { scope: 'turn' })
@@ -174,20 +174,20 @@ test('turn：按会话隔离——会话 7 的结算不碰会话 8 的 turn 机�
   assert.deepEqual(stash.envFor(8), { K: 'v8' })
 })
 
-test('clear：会话级回收同时停止注入与脱敏旧值；stats 归零', { timeout: 60_000 }, () => {
+test('clear: conversation level reclaim also stop inject and redaction old value;stats reset to zero', { timeout: 60_000 }, () => {
   const { stash } = fakeClockStash()
   stash.put(7, 'A', 'gone-value', { scope: 'turn' })
   stash.settleTurn(7)
   stash.put(7, 'B', 'live-value')
   stash.clear(7)
   assert.deepEqual(stash.envFor(7), {})
-  assert.equal(stash.redact('gone-value live-value').includes('gone-value'), true, 'clear 后旧值不再替换（已回收）')
+  assert.equal(stash.redact('gone-value live-value').includes('gone-value'), true, 'clear after old value no longer replace (already reclaim)')
   assert.equal(stash.has(7, 'B'), false)
   assert.deepEqual(stash.stats(), { conversations: 0, secrets: 0 })
 })
 
 // ---------------------------------------------------------------------------
-// AskService 接线（真实 store + SecretStash）
+// AskService connect line (real store + SecretStash)
 // ---------------------------------------------------------------------------
 
 async function openAskCtx(): Promise<{ service: AskService; stash: SecretStash; close(): Promise<void> }> {
@@ -214,7 +214,7 @@ async function openAskCtx(): Promise<{ service: AskService; stash: SecretStash; 
   }
 }
 
-test('AskService：secretLifetime 仅 secret 字段允许；非法形状 400 拒绝', { timeout: 60_000 }, async () => {
+test('AskService:secretLifetime only secret field allows; illegal shape 400 reject', { timeout: 60_000 }, async () => {
   const ctx = await openAskCtx()
   try {
     await assert.rejects(
@@ -225,7 +225,7 @@ test('AskService：secretLifetime 仅 secret 字段允许；非法形状 400 拒
         fields: [{ name: 'plain', label: 'p', type: 'text', secretLifetime: { scope: 'turn' } }],
       }),
       (e: unknown) => e instanceof HelmError && e.code === 'validation_error',
-      '非 secret 字段声明 secretLifetime 必须拒绝',
+      'non- secret field declaration secretLifetime must reject',
     )
     await assert.rejects(
       ctx.service.createAsk({
@@ -235,7 +235,7 @@ test('AskService：secretLifetime 仅 secret 字段允许；非法形状 400 拒
         fields: [{ name: 'tok', label: 't', type: 'text', secret: true, secretLifetime: { ttlMs: 0 } }],
       }),
       (e: unknown) => e instanceof HelmError && e.code === 'validation_error',
-      '非法 ttlMs 必须在写库前拒绝',
+      'illegal ttlMs must in write store before reject',
     )
     await assert.rejects(
       ctx.service.createAsk({
@@ -245,14 +245,14 @@ test('AskService：secretLifetime 仅 secret 字段允许；非法形状 400 拒
         fields: [{ name: 'tok', label: 't', type: 'text', secret: true, secretLifetime: { scopes: 'turn' } as never }],
       }),
       (e: unknown) => e instanceof HelmError && e.code === 'validation_error',
-      '未知键必须拒绝',
+      'unknown key must reject',
     )
   } finally {
     await ctx.close()
   }
 })
 
-test('AskService：合法 secretLifetime 透传 stash；未声明 = 会话级（不随结算回收）', { timeout: 60_000 }, async () => {
+test('AskService: legal secretLifetime pass-through stash; not declaration = conversation level (do not follow compute reclaim)', { timeout: 60_000 }, async () => {
   const ctx = await openAskCtx()
   try {
     const settled = ctx.service.createAsk({
@@ -272,9 +272,9 @@ test('AskService：合法 secretLifetime 透传 stash；未声明 = 会话级（
 
     assert.deepEqual(ctx.stash.envFor(1), { TURN_TOKEN: 'turn-tok', SESSION_TOKEN: 'session-tok' })
     ctx.stash.settleTurn(1)
-    assert.deepEqual(ctx.stash.envFor(1), { SESSION_TOKEN: 'session-tok' }, 'turn 随结算停注入，未声明 = 会话级')
+    assert.deepEqual(ctx.stash.envFor(1), { SESSION_TOKEN: 'session-tok' }, 'turn follow compute stop inject, not declaration = conversation level')
     assert.equal(ctx.stash.redact('turn-tok').includes('turn-tok'), false)
-    // 两笔 ask 均已达终态，createAsk promise 已结算（不悬挂）。
+    // two pen ask all already reach terminal state,createAsk promise already compute (do not pending).
     assert.equal((await settled).status, 'answered')
     assert.equal((await plain).status, 'answered')
   } finally {
@@ -282,21 +282,21 @@ test('AskService：合法 secretLifetime 透传 stash；未声明 = 会话级（
   }
 })
 
-/** 轮询 store 直到出现 pending ask（createAsk 异步入库）。 */
+/** polling store until appear pending ask(createAsk async store). */
 async function pollPending(service: AskService): Promise<{ id: string }> {
   for (let i = 0; i < 200; i += 1) {
     const pending = service.listPendingByConversation(1)
     if (pending.length > 0) return { id: pending[pending.length - 1]!.id }
     await delay(5)
   }
-  throw new Error('pending ask 未入库')
+  throw new Error('pending ask not store')
 }
 
 // ---------------------------------------------------------------------------
-// buildSpawnEnv：外部 spawn 最小授权
+// buildSpawnEnv: external spawn most small authorization
 // ---------------------------------------------------------------------------
 
-/** 最小 RuntimeAgentSpawn 装配（只驱动 buildSpawnEnv；其余端口 throw）。 */
+/** most small RuntimeAgentSpawn install match (only drive buildSpawnEnv; the rest port throw). */
 function spawnEnvBackend(stash: SecretStash, options: { token?: string; nodeHubUrl?: string } = {}) {
   return new RuntimeAgentSpawn({
     store: { getConv: () => ({ nodeId: 'local' }) } as never,
@@ -321,29 +321,29 @@ function spawnEnvBackend(stash: SecretStash, options: { token?: string; nodeHubU
     hookBridge: {} as never,
     stashService: stash,
     updateConversation: (() => {
-      throw new Error('本测试不触发')
+      throw new Error('this test does not trigger')
     }) as never,
     markConversationOwnership: () => undefined,
   })
 }
 
-test('buildSpawnEnv：缺省零机密（最小授权），受管 HELM_* 完整', { timeout: 60_000 }, () => {
+test('buildSpawnEnv: default zero secret (most small authorization), managed HELM_* complete', { timeout: 60_000 }, () => {
   const { stash } = fakeClockStash()
   stash.put(7, 'DEPLOY_TOKEN', 'tok-7')
   stash.put(7, 'API_KEY', 'key-7')
   const backend = spawnEnvBackend(stash, { token: 'managed-token' })
   const env = backend.buildSpawnEnv(7, '/w', 'local')
-  assert.equal(env['DEPLOY_TOKEN'], undefined, '缺省不携带任何父会话机密')
+  assert.equal(env['DEPLOY_TOKEN'], undefined, 'default does not carry any parent conversation secret')
   assert.equal(env['API_KEY'], undefined)
   assert.equal(env['HELM_ENV'], '1')
   assert.equal(env['HELM_CONVERSATION_ID'], '7')
   assert.equal(env['HELM_CWD'], '/w')
   assert.equal(env['HELM_NODE_ID'], 'local')
   assert.equal(env['HELM_DATA_DIR'], '/tmp/helm-spawnenv-data')
-  assert.equal(env['HELM_TOKEN'], 'managed-token', '受管 token 与机密授予正交')
+  assert.equal(env['HELM_TOKEN'], 'managed-token', 'managed token and secret grant correct hand over')
 })
 
-test('buildSpawnEnv：显式 secretNames 逐名注入；未选中的不注入', { timeout: 60_000 }, () => {
+test('buildSpawnEnv: explicit secretNames one by one name inject; not choose in do not inject', { timeout: 60_000 }, () => {
   const { stash } = fakeClockStash()
   stash.put(7, 'A_KEY', 'va')
   stash.put(7, 'B_KEY', 'vb')
@@ -355,7 +355,7 @@ test('buildSpawnEnv：显式 secretNames 逐名注入；未选中的不注入', 
   assert.equal(env['__proto__'], 'prototype-named-secret')
 })
 
-test('buildSpawnEnv：缺失/过期/已结算名字显式 404，绝不静默空注入', { timeout: 60_000 }, () => {
+test('buildSpawnEnv: missing/expired/already compute name explicit 404, never static default empty inject', { timeout: 60_000 }, () => {
   const { stash, now } = fakeClockStash()
   stash.put(7, 'GONE_TTL', 'v', { ttlMs: 1_000 })
   now.ms += 2_000
@@ -366,12 +366,12 @@ test('buildSpawnEnv：缺失/过期/已结算名字显式 404，绝不静默空�
     assert.throws(
       () => backend.buildSpawnEnv(7, '/w', 'local', { secretNames: [name] }),
       (e: unknown) => e instanceof HelmError && e.code === 'secret_not_found',
-      `${name}（缺失/TTL 过期/回合已结算）必须显式失败`,
+      `${name}(missing/TTL expired/turn already compute) must explicit failed`,
     )
   }
 })
 
-test('buildSpawnEnv：secretNames 非法形状（重复/坏名/非数组）400 拒绝', { timeout: 60_000 }, () => {
+test('buildSpawnEnv:secretNames illegal shape (duplicate/broken name/non- array)400 reject', { timeout: 60_000 }, () => {
   const backend = spawnEnvBackend(new SecretStash())
   for (const bad of [['A', 'A'], ['bad-name!'], [''], 42]) {
     assert.throws(
@@ -381,19 +381,19 @@ test('buildSpawnEnv：secretNames 非法形状（重复/坏名/非数组）400 �
   }
 })
 
-test('buildSpawnEnv：TTL 边界单次采样——clock 逐次推进不会出现「存在性检查过了、取值时过期」的假成功空注入', { timeout: 60_000 }, () => {
-  // clock 每次读取 +1：旧实现「先 has 后 envFor」两次采样会在 TTL 边界跨界
-  // （has 时未过期、envFor 时已过期），授予名单存在却返回不含该键的假成功 env。
-  // 单次 envFor 选择读取 + 基于实际返回键判缺失后，同批同刻判定。
+test('buildSpawnEnv:TTL boundary single time sampling - -clock one by one time push enter will not appear store in check, take value when expired false succeeded empty inject', { timeout: 60_000 }, () => {
+  // clock each time read +1: old implement first has after envFortwo time sampling will in TTL boundary across boundary
+  // (has when not expired,envFor when expired), grant name single store in yet return excludes the key false succeeded env.
+  // single time envFor choose read + based on actual return key judge missing after, same batch same moment decide.
   const counter = { ms: 1_000 }
   const stash = new SecretStash({ now: () => (counter.ms += 1) })
-  stash.put(7, 'EDGE_KEY', 'edge-value', { ttlMs: 2 }) // put 采样 1001 → expiresAt 1003
+  stash.put(7, 'EDGE_KEY', 'edge-value', { ttlMs: 2 }) // put sampling 1001 → expiresAt 1003
   const backend = spawnEnvBackend(stash)
-  // 本次授予唯一采样 t=1002（未过期）：携带值成功（旧实现此处 has(1002) 过、
-  // envFor(1003) 过期 → 空注入假成功）。
+  // this time grant unique sampling t=1002(not expired): carry value succeeded (old implement this where has(1002) ,
+  // envFor(1003) expired → empty inject false succeeded).
   const env = backend.buildSpawnEnv(7, '/w', 'local', { secretNames: ['EDGE_KEY'] })
-  assert.equal(env['EDGE_KEY'], 'edge-value', '边界内单次采样：要么带值成功，要么 404，绝不假成功空注入')
-  // 下一刻（t≥1003 已过期）：显式 404。
+  assert.equal(env['EDGE_KEY'], 'edge-value', 'boundary inside single time sampling: want particle carries value succeeded, want particle 404, never false succeeded empty inject')
+  // under one moment (t≥1003 expired): explicit 404.
   assert.throws(
     () => backend.buildSpawnEnv(7, '/w', 'local', { secretNames: ['EDGE_KEY'] }),
     (e: unknown) => e instanceof HelmError && e.code === 'secret_not_found',
@@ -401,7 +401,7 @@ test('buildSpawnEnv：TTL 边界单次采样——clock 逐次推进不会出现
 })
 
 // ---------------------------------------------------------------------------
-// Herdr 窗格端到端（真实 executor + 真实内核 buildSpawnEnv 合成）
+// Herdr pane end-to-end (real executor + real kernel buildSpawnEnv together into)
 // ---------------------------------------------------------------------------
 
 interface FakePane {
@@ -414,13 +414,13 @@ interface FakePane {
   name?: string
 }
 
-/** 受控 transport：记录 tab.create env 与 gate env；prompt 即完成（写交接文件），可挂 onPrompted 在 Gate 前推进时钟/改写 stash。 */
+/** subject to control transport: record tab.create env and gate env;prompt i.e. complete (write handover file), can hang onPrompted in Gate before push enter clock/change write stash. */
 class FakeTransport implements HerdrTransport {
   panes = new Map<string, FakePane>()
   tabEnvs: Array<Record<string, string>> = []
   gateEnvs: Array<Record<string, string>> = []
   calls: Array<{ method: string; params: Record<string, unknown> }> = []
-  /** prompt 完成回调（交接文件写入前）：测试在 Gate 前注入时钟推进/stash 改写。 */
+  /** prompt complete call back (handover file before write): test in Gate before inject clock push enter/stash change write. */
   onPrompted?: () => void
 
   private paneOf(ref: unknown): FakePane {
@@ -530,11 +530,11 @@ interface PaneEnv {
 }
 
 /**
- * 真实执行器装配：buildSpawnEnv 用真实 RuntimeAgentSpawn（真 SecretStash +
- * buildManagedEnv 合成），Profile 'ci-runner' 指向远端 node-a（通道上报可达
- * hubUrl），runtime.env 携带 CI_FLAG / 同名 DEPLOY_TOKEN / 受管覆盖尝试
- * HELM_CWD。父会话 7 stash 预置 DEPLOY_TOKEN / API_KEY。
- * 可选 clock 注入 stash（fake clock TTL）；onPrompted 在交接完成后、Gate 前触发。
+ * real execute install match:buildSpawnEnv use real RuntimeAgentSpawn(true SecretStash +
+ * buildManagedEnv together into),Profile 'ci-runner' points to remote node-a(channel on report can reach
+ * hubUrl),runtime.env carry CI_FLAG / same name DEPLOY_TOKEN / managed override attempt
+ * HELM_CWD. parent conversation 7 stash pre- placement DEPLOY_TOKEN / API_KEY.
+ * optional clock inject stash(fake clock TTL);onPrompted in handover after completion,Gate before trigger.
  */
 async function openPaneEnv(options: { clock?: () => number; onPrompted?: () => void } = {}): Promise<PaneEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-paneenv-'))
@@ -567,10 +567,10 @@ async function openPaneEnv(options: { clock?: () => number; onPrompted?: () => v
     notify: () => undefined,
     startupTimeoutMs: () => 5_000,
     createAsk: (() => {
-      throw new HelmError('unsupported', 'happy path 无 Ask', 501)
+      throw new HelmError('unsupported', 'happy path without Ask', 501)
     }) as never,
     cancelAsk: (() => {
-      throw new HelmError('unsupported', 'happy path 无 Ask', 501)
+      throw new HelmError('unsupported', 'happy path without Ask', 501)
     }) as never,
   }
   const executor = new HerdrExecutor(
@@ -584,10 +584,10 @@ async function openPaneEnv(options: { clock?: () => number; onPrompted?: () => v
         isOnline: () => true,
         getNodeHubUrl: () => 'http://10.0.0.5:3202',
         ipcCall: () => {
-          throw new HelmError('unsupported', '本测试不经 IPC', 501)
+          throw new HelmError('unsupported', 'this test do not via IPC', 501)
         },
         envFor: () => {
-          throw new HelmError('unsupported', '本测试不用 envFor', 501)
+          throw new HelmError('unsupported', 'this test do not use envFor', 501)
         },
       },
       transport,
@@ -603,29 +603,29 @@ async function openPaneEnv(options: { clock?: () => number; onPrompted?: () => v
   return { executor, transport, stash, dataDir, async close() { rmSync(dataDir, { recursive: true, force: true }) } }
 }
 
-test('herdr 窗格：远端默认无业务机密；受管 HELM_* 与 Profile 变量正确，Profile 不被误删也不得覆盖受管键', { timeout: 60_000 }, async () => {
+test('herdr pane: remote by default without business secret; managed HELM_* and Profile variable correct,Profile do not by mistakenly delete also must not override managed key', { timeout: 60_000 }, async () => {
   const env = await openPaneEnv()
   try {
     const outcome = (await env.executor.handle({
       parentConversationId: 7,
-      prompt: '部署它',
+      prompt: 'deploy it',
       agentType: 'ci-runner',
     })) as { action: string }
     assert.equal(outcome.action, 'handled')
     const paneEnv = env.transport.tabEnvs[0]!
-    // 业务机密缺省不注入。
-    assert.equal(paneEnv['API_KEY'], undefined, '未授予的父会话机密不进入窗格')
-    assert.equal(paneEnv['DEPLOY_TOKEN'], 'profile-deploy', '同名 Profile 显式值原样保留（父机密未授予，不存在误删）')
-    // Profile 合法变量保留。
+    // business secret default do not inject.
+    assert.equal(paneEnv['API_KEY'], undefined, 'not grant parent conversation secret does not enter pane')
+    assert.equal(paneEnv['DEPLOY_TOKEN'], 'profile-deploy', 'same name Profile explicit value original keep (parent secret not grant, missing mistakenly delete)')
+    // Profile legal variable keep.
     assert.equal(paneEnv['CI_FLAG'], 'profile-yes')
-    // 受管 HELM_*：内核权威，Profile 不得覆盖。
+    // managed HELM_*: kernel right threat,Profile must not override.
     assert.equal(paneEnv['HELM_ENV'], '1')
     assert.equal(paneEnv['HELM_CWD'] ?? paneEnv['HELM_CWD'], paneEnv['HELM_CWD'])
-    assert.notEqual(paneEnv['HELM_CWD'], '/hijack', 'Profile 覆盖受管 HELM_CWD 被固定覆盖拒绝')
+    assert.notEqual(paneEnv['HELM_CWD'], '/hijack', 'Profile override managed HELM_CWD by fixed override reject')
     assert.equal(paneEnv['HELM_CONVERSATION_ID'], '7')
     assert.equal(paneEnv['HELM_NODE_ID'], 'node-a')
-    assert.equal(paneEnv['HELM_DATA_DIR'], undefined, '远端不注入 Hub 本机 DATA_DIR')
-    // 节点通道上报的可达 hubUrl + 受管 token 回连保留。
+    assert.equal(paneEnv['HELM_DATA_DIR'], undefined, 'remote do not inject Hub local machine DATA_DIR')
+    // node channel on report can reach hubUrl + managed token back connect keep.
     assert.equal(paneEnv['HELM_HUB_URL'], 'http://10.0.0.5:3202')
     assert.equal(paneEnv['HELM_TOKEN'], 'managed-token')
   } finally {
@@ -633,20 +633,20 @@ test('herdr 窗格：远端默认无业务机密；受管 HELM_* 与 Profile 变
   }
 })
 
-test('herdr 窗格：显式 secretNames 逐名授予（机密权威覆盖 Profile 同名值），未授予名仍不注入', { timeout: 60_000 }, async () => {
+test('herdr pane: explicit secretNames one by one name grant (secret right threat override Profile same name value), not grant name still do not inject', { timeout: 60_000 }, async () => {
   const env = await openPaneEnv()
   env.stash.put(7, '__proto__', 'pane-prototype-named-secret')
   try {
     const outcome = (await env.executor.handle({
       parentConversationId: 7,
-      prompt: '部署它',
+      prompt: 'deploy it',
       agentType: 'ci-runner',
       secretNames: ['DEPLOY_TOKEN', '__proto__'],
     })) as { action: string }
     assert.equal(outcome.action, 'handled')
     const paneEnv = env.transport.tabEnvs[0]!
-    assert.equal(paneEnv['DEPLOY_TOKEN'], 'secret-deploy-7', '显式授予的机密值权威（覆盖 Profile 同名配置）')
-    assert.equal(paneEnv['API_KEY'], undefined, '未选中的机密仍不注入')
+    assert.equal(paneEnv['DEPLOY_TOKEN'], 'secret-deploy-7', 'explicit grant secret value right threat (override Profile same name config)')
+    assert.equal(paneEnv['API_KEY'], undefined, 'not choose in secret still do not inject')
     assert.equal(paneEnv['CI_FLAG'], 'profile-yes')
     assert.equal(Object.hasOwn(paneEnv, '__proto__'), true)
     assert.equal(paneEnv['__proto__'], 'pane-prototype-named-secret')
@@ -655,27 +655,27 @@ test('herdr 窗格：显式 secretNames 逐名授予（机密权威覆盖 Profil
   }
 })
 
-test('herdr 窗格：授予缺失机密在建窗副作用前显式拒绝（404 secret_not_found）', { timeout: 60_000 }, async () => {
+test('herdr pane: grant missing secret in create window side effect before explicit reject (404 secret_not_found)', { timeout: 60_000 }, async () => {
   const env = await openPaneEnv()
   try {
     await assert.rejects(
       env.executor.handle({
         parentConversationId: 7,
-        prompt: '部署它',
+        prompt: 'deploy it',
         agentType: 'ci-runner',
         secretNames: ['NOT_IN_STASH'],
       }),
       (e: unknown) => e instanceof HelmError && e.code === 'secret_not_found',
     )
-    assert.equal(env.transport.calls.length, 0, '拒绝发生在任何建窗副作用之前')
+    assert.equal(env.transport.calls.length, 0, 'reject occur in any create window side effect before')
   } finally {
     await env.close()
   }
 })
 
-test('herdr Gate：机密不缓存——Gate 启动前从当前 stash 重新授权取值（建窗后同名轮换以新值执行）', { timeout: 60_000 }, async () => {
-  // 建窗时授予 v1；任务完成后、Gate 前同名轮换为 v2：Gate 子进程拿到的必须是
-  // 当前 stash 的 v2，绝不是建窗时刻缓存的 v1（paneEnvs 只存基线）。
+test('herdr Gate: secret do not cache - -Gate start before from when before stash re- authorization take value (create window after same name round swap with new value execute)', { timeout: 60_000 }, async () => {
+  // create window when grant v1; task after completion,Gate before same name round swap is v2:Gate child process gets must be
+  // when before stash  v2, never is create window moment cache v1(paneEnvs only store baseline).
   const env = await openPaneEnv()
   const creationValue = env.stash.envFor(7)['DEPLOY_TOKEN']!
   env.transport.onPrompted = () => {
@@ -684,30 +684,30 @@ test('herdr Gate：机密不缓存——Gate 启动前从当前 stash 重新授�
   try {
     const outcome = (await env.executor.handle({
       parentConversationId: 7,
-      prompt: '部署它',
+      prompt: 'deploy it',
       agentType: 'ci-runner',
       gate: 'true',
       secretNames: ['DEPLOY_TOKEN'],
     })) as { action: string }
     assert.equal(outcome.action, 'handled')
-    assert.equal(env.transport.tabEnvs[0]!['DEPLOY_TOKEN'], creationValue, '建窗时刻注入的是当时的 v1')
-    assert.equal(env.transport.gateEnvs.length, 1, 'Gate 恰好执行一次')
+    assert.equal(env.transport.tabEnvs[0]!['DEPLOY_TOKEN'], creationValue, 'create window moment inject is when when v1')
+    assert.equal(env.transport.gateEnvs.length, 1, 'Gate exactly execute once')
     const gateEnv = env.transport.gateEnvs[0]!
-    assert.equal(gateEnv['DEPLOY_TOKEN'], 'rotated-value', 'Gate 取当前 stash 值（非建窗时刻缓存值）')
-    assert.equal(gateEnv['CI_FLAG'], 'profile-yes', 'Gate 基线保留 Profile 合法变量')
-    assert.equal(gateEnv['HELM_ENV'], '1', 'Gate 基线保留受管变量')
-    assert.equal(gateEnv['HELM_HUB_URL'], 'http://10.0.0.5:3202', 'Gate 基线保留节点回连')
+    assert.equal(gateEnv['DEPLOY_TOKEN'], 'rotated-value', 'Gate take when before stash value (non- create window moment cache value)')
+    assert.equal(gateEnv['CI_FLAG'], 'profile-yes', 'Gate baseline keep Profile legal variable')
+    assert.equal(gateEnv['HELM_ENV'], '1', 'Gate baseline keep managed variable')
+    assert.equal(gateEnv['HELM_HUB_URL'], 'http://10.0.0.5:3202', 'Gate baseline keep node back connect')
   } finally {
     await env.close()
   }
 })
 
-test('herdr Gate：TTL 在 agent 工作期间到期——Gate 子进程启动前 404 拒绝（零 Gate 副作用）', { timeout: 60_000 }, async () => {
+test('herdr Gate:TTL in agent work during expires - -Gate child process start before 404 reject (zero Gate side effect)', { timeout: 60_000 }, async () => {
   const clock = { ms: 10_000 }
   const env = await openPaneEnv({
     clock: () => clock.ms,
     onPrompted: () => {
-      clock.ms += 100 // TTL 50ms：任务期间推进时钟跨过到期点
+      clock.ms += 100 // TTL 50ms: task during push enter clock across expires point
     },
   })
   try {
@@ -715,68 +715,68 @@ test('herdr Gate：TTL 在 agent 工作期间到期——Gate 子进程启动前
     await assert.rejects(
       env.executor.handle({
         parentConversationId: 7,
-        prompt: '部署它',
+        prompt: 'deploy it',
         agentType: 'ci-runner',
         gate: 'true',
         secretNames: ['SHORT_TTL'],
       }),
       (e: unknown) => e instanceof HelmError && e.code === 'secret_not_found',
-      '工作期间到期的授予：Gate 前显式 404，不静默降级、不注入旧值',
+      'work during expires grant:Gate before explicit 404, not silently fall back, do not inject old value',
     )
-    assert.equal(env.transport.gateEnvs.length, 0, 'Gate 子进程零启动（无副作用）')
+    assert.equal(env.transport.gateEnvs.length, 0, 'Gate child process zero start (no side effects)')
   } finally {
     await env.close()
   }
 })
 
-test('herdr Gate：授予不跨任务沿用——后续任务不带 secretNames 时 Gate 只用基线（不注入旧授予值）', { timeout: 60_000 }, async () => {
+test('herdr Gate: grant do not across task along use - - after continue task do not carries secretNames when Gate only use baseline (do not inject old grant value)', { timeout: 60_000 }, async () => {
   const env = await openPaneEnv()
   const creationValue = env.stash.envFor(7)['DEPLOY_TOKEN']!
   try {
-    // 任务 1：带授予 + Gate → Gate 环境含机密值。
+    // task 1: carries grant + Gate → Gate environment contains secret value.
     await env.executor.handle({
       parentConversationId: 7,
-      prompt: '第一次部署',
+      prompt: 'first time deploy',
       agentType: 'ci-runner',
       gate: 'true',
       secretNames: ['DEPLOY_TOKEN'],
     })
     assert.equal(env.transport.gateEnvs[0]!['DEPLOY_TOKEN'], creationValue)
-    // 任务 2（新窗格）：不带授予 + Gate → 基线内同名 Profile 值生效，绝不注入任务 1 的旧授予值。
+    // task 2(new pane): do not carries grant + Gate → baseline inside same name Profile value takes effect, never inject task 1 old grant value.
     await env.executor.handle({
       parentConversationId: 7,
-      prompt: '第二次部署不带机密',
+      prompt: 'second time deploy do not carries secret',
       agentType: 'ci-runner',
       gate: 'true',
     })
     const gateEnv = env.transport.gateEnvs[1]!
-    assert.equal(gateEnv['DEPLOY_TOKEN'], 'profile-deploy', '无授予时同名 Profile 显式值生效（不沿用旧授予）')
-    assert.equal(gateEnv['API_KEY'], undefined, '其它机密同样不注入')
+    assert.equal(gateEnv['DEPLOY_TOKEN'], 'profile-deploy', 'without grant when same name Profile explicit value takes effect (do not along use old grant)')
+    assert.equal(gateEnv['API_KEY'], undefined, 'other secret same do not inject')
   } finally {
     await env.close()
   }
 })
 
 // ---------------------------------------------------------------------------
-// workflow journal 指纹
+// workflow journal refer grain
 // ---------------------------------------------------------------------------
 
-test('agentJournalKey：secretNames 参与指纹（授予变化不复用旧缓存；缺省与 undefined 同 key，无跨版本不变承诺）', { timeout: 60_000 }, () => {
+test('agentJournalKey:secretNames reference and refer grain (grant change do not re- use old cache; default and undefined same key, without across version do not change promise)', { timeout: 60_000 }, () => {
   const base = { prompt: 'p', agentType: 'ci-runner' }
   const without = agentJournalKey(base)
-  assert.equal(agentJournalKey({ ...base, secretNames: undefined }), without, 'undefined 与缺省同 key（同为 null 槽）')
+  assert.equal(agentJournalKey({ ...base, secretNames: undefined }), without, 'undefined and default same key(same is null slot)')
   const withGrant = agentJournalKey({ ...base, secretNames: ['DEPLOY_TOKEN'] })
   assert.notEqual(withGrant, without)
-  assert.notEqual(agentJournalKey({ ...base, secretNames: ['API_KEY'] }), withGrant, '不同授予不同 key')
+  assert.notEqual(agentJournalKey({ ...base, secretNames: ['API_KEY'] }), withGrant, 'different grant different key')
 })
 
 // ---------------------------------------------------------------------------
-// 真实回合结算联动（createHelm + faux：completed/failed/aborted + late hook）
+// real turn compute join motion (createHelm + faux:completed/failed/aborted + late hook)
 // ---------------------------------------------------------------------------
 
-test('真实回合结算：completed/failed/aborted 均停注入 turn 机密；旧值仍脱敏；late hook 登记留下一回合', { timeout: 60_000 }, async () => {
+test('real turn compute:completed/failed/aborted all stop inject turn secret; old value still redaction;late hook register under one turn', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-secret-turnsettle-'))
-  // 慢速流（1 tok/s、4 字符/token）：aborted 场景需真实在途流可被取消；短回复仍秒级完成。
+  // slow fast stream (1 tok/s,4 character/token):aborted scenario must real in-flight stream can by cancel; short back re- still second level complete.
   const { app, faux } = await createHubTestApp({
     dataDir,
     cwd: dataDir,
@@ -789,12 +789,12 @@ test('真实回合结算：completed/failed/aborted 均停注入 turn 机密；�
     let latePut = false
     await kernel.plugins!.register({
       id: 'test:secret-settle-probe',
-      name: '机密结算探针',
+      name: 'secret compute probe needle',
       definePlugin(ctx) {
         ctx.hook.onTurnSettled((payload) => {
           outcomes.push(payload.outcome)
-          // late hook（只在首次结算登记，验证回收边界）：结算链内登记 turn 机密
-          // （settleTurn 已先行推进计数）→ 属下一回合。
+          // late hook(only in first time compute register, verify reclaim boundary): compute chain inside register turn secret
+          // (settleTurn already first row push enter counter)→ belong under one turn.
           if (!latePut) {
             latePut = true
             stash.put(payload.conversation.id, 'LATE_HOOK_KEY', `late-${payload.conversation.id}`, { scope: 'turn' })
@@ -803,47 +803,47 @@ test('真实回合结算：completed/failed/aborted 均停注入 turn 机密；�
       },
     } satisfies PluginDefinition)
 
-    // --- completed：真实成功回合
-    const conv = await kernel.createConversation({ title: '机密回合' })
+    // --- completed: real succeeded turn
+    const conv = await kernel.createConversation({ title: 'secret turn' })
     stash.put(conv.id, 'TURN_TOKEN', 'turn-tok-value', { scope: 'turn' })
     stash.put(conv.id, 'SESSION_TOKEN', 'session-tok-value')
-    faux.setResponses([fauxAssistantMessage('完成回答')])
-    await kernel.submitInput(conv.id, '第一问')
+    faux.setResponses([fauxAssistantMessage('complete answer')])
+    await kernel.submitInput(conv.id, 'one question')
     await kernel.waitForIdle(conv.id)
     await waitFor(() => outcomes.length >= 1, { timeoutMs: 8_000, intervalMs: 15 })
     assert.equal(outcomes[0], 'completed')
-    assert.equal(stash.has(conv.id, 'TURN_TOKEN'), false, 'completed 结算后 turn 机密停注入（payload.conversation.id 真实联动）')
-    assert.equal(stash.has(conv.id, 'SESSION_TOKEN'), true, '会话级不受结算影响')
-    assert.equal(stash.envFor(conv.id)['LATE_HOOK_KEY'], `late-${conv.id}`, 'late hook 登记的 turn 机密存活（属下一回合）')
-    assert.equal(stash.redact('turn-tok-value').includes('turn-tok-value'), false, '结算后旧值仍脱敏')
+    assert.equal(stash.has(conv.id, 'TURN_TOKEN'), false, 'completed compute after turn secret stop inject (payload.conversation.id real join motion)')
+    assert.equal(stash.has(conv.id, 'SESSION_TOKEN'), true, 'conversation level do not subject to compute affect')
+    assert.equal(stash.envFor(conv.id)['LATE_HOOK_KEY'], `late-${conv.id}`, 'late hook register turn secret store (belong under one turn)')
+    assert.equal(stash.redact('turn-tok-value').includes('turn-tok-value'), false, 'compute after old value still redaction')
 
-    // --- late hook 登记随下一次结算回收
-    faux.setResponses([fauxAssistantMessage('第二答')])
-    await kernel.submitInput(conv.id, '第二问')
+    // --- late hook register follow under once compute reclaim
+    faux.setResponses([fauxAssistantMessage('second answer')])
+    await kernel.submitInput(conv.id, 'second question')
     await kernel.waitForIdle(conv.id)
     await waitFor(() => outcomes.length >= 2, { timeoutMs: 8_000, intervalMs: 15 })
     assert.equal(outcomes[1], 'completed')
-    assert.equal(stash.has(conv.id, 'LATE_HOOK_KEY'), false, 'late 登记随下一次回合结算回收')
+    assert.equal(stash.has(conv.id, 'LATE_HOOK_KEY'), false, 'late register follow under once turn compute reclaim')
 
-    // --- failed：真实失败回合（faux stopReason=error）
-    const failed = await kernel.createConversation({ title: '失败回合' })
+    // --- failed: real failed turn (faux stopReason=error)
+    const failed = await kernel.createConversation({ title: 'failed turn' })
     stash.put(failed.id, 'FAIL_TURN', 'fail-secret', { scope: 'turn' })
     faux.setResponses([fauxAssistantMessage('boom', { stopReason: 'error' })])
-    await kernel.submitInput(failed.id, '会失败的问题')
+    await kernel.submitInput(failed.id, 'will failed issue')
     await kernel.waitForIdle(failed.id)
     await waitFor(() => outcomes.includes('failed'), { timeoutMs: 8_000, intervalMs: 15 })
-    assert.equal(stash.has(failed.id, 'FAIL_TURN'), false, 'failed 结算同样回收 turn 机密')
+    assert.equal(stash.has(failed.id, 'FAIL_TURN'), false, 'failed compute same reclaim turn secret')
     assert.equal(stash.redact('fail-secret').includes('fail-secret'), false)
 
-    // --- aborted：慢速流式中真实在途取消
-    const abortedConv = await kernel.createConversation({ title: '中止回合' })
+    // --- aborted: slow fast streaming in real in-flight cancel
+    const abortedConv = await kernel.createConversation({ title: 'abort turn' })
     stash.put(abortedConv.id, 'ABORT_TURN', 'abort-secret', { scope: 'turn' })
-    faux.setResponses([fauxAssistantMessage('这是一段被慢速流式输出的长文本确保中止时回合仍在流式中')])
-    await kernel.submitInput(abortedConv.id, '会被中止的问题')
+    faux.setResponses([fauxAssistantMessage('this is one segment by slow fast streaming output long text ensure abort when turn still in streaming in')])
+    await kernel.submitInput(abortedConv.id, 'will by abort issue')
     await kernel.abortConversation(abortedConv.id)
     await kernel.waitForIdle(abortedConv.id)
     await waitFor(() => outcomes.includes('aborted'), { timeoutMs: 8_000, intervalMs: 15 })
-    assert.equal(stash.has(abortedConv.id, 'ABORT_TURN'), false, 'aborted 结算同样回收 turn 机密')
+    assert.equal(stash.has(abortedConv.id, 'ABORT_TURN'), false, 'aborted compute same reclaim turn secret')
     assert.equal(stash.redact('abort-secret').includes('abort-secret'), false)
   } finally {
     await app.close()
@@ -852,12 +852,12 @@ test('真实回合结算：completed/failed/aborted 均停注入 turn 机密；�
 })
 
 // ---------------------------------------------------------------------------
-// 原生执行行诚实拒绝（无外部运行时消费时绝不假装授予成功）
+// original generate execute row honest reject (without external runtime consume when never pretend grant succeeded)
 // ---------------------------------------------------------------------------
 
-test('原生执行行：非空 secretNames 显式 unsupported_secret_grant（默认插件集无外部运行时不静默忽略）；空数组等同未授予', { timeout: 60_000 }, async () => {
+test('original generate execute row: non-empty secretNames explicit unsupported_secret_grant(by default plugin collection without external runtime not silently ignore); empty array etc. same not grant', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-secret-native-'))
-  // 默认插件集：builtin:herdr 停用 → agent_spawn 无外部运行时接管，原生执行行必须显式拒绝。
+  // by default plugin collection:builtin:herdr deactivate → agent_spawn without external runtime take over, original generate execute row must explicit reject.
   const { app, faux } = await createHubTestApp({ dataDir, cwd: dataDir })
   try {
     const kernel = app.kernel
@@ -865,21 +865,21 @@ test('原生执行行：非空 secretNames 显式 unsupported_secret_grant（默
     await assert.rejects(
       kernel.spawnAgent({
         parentConversationId: 1,
-        prompt: '原生任务带机密授予',
+        prompt: 'original generate task carries secret grant',
         agentType: 'assistant',
         secretNames: ['NATIVE_KEY'],
       }),
       (e: unknown) => e instanceof HelmError && e.code === 'unsupported_secret_grant',
-      '原生子会话不能承接父会话机密授予：显式报错，不静默忽略、不假装子代理已取得',
+      'original generate sub-conversation cannot bear connect parent conversation secret grant: explicit errors, not silently ignore, do not pretend subagent already acquire',
     )
-    // 空数组 = 未授予：原生执行行正常执行（faux 子会话真实完成）。
-    faux.setResponses([fauxAssistantMessage('原生回答')])
+    // empty array = not grant: original generate execute row normal execute (faux sub-conversation real complete).
+    faux.setResponses([fauxAssistantMessage('original generate answer')])
     const result = await kernel.spawnAgent({
       parentConversationId: 1,
-      prompt: '空授予任务',
+      prompt: 'empty grant task',
       secretNames: [],
     })
-    assert.ok(result !== undefined, '空数组等同未授予，原生执行不受影响')
+    assert.ok(result !== undefined, 'empty array etc. same not grant, original generate execute do not subject to affect')
   } finally {
     await app.close()
     rmSync(dataDir, { recursive: true, force: true })
@@ -887,11 +887,11 @@ test('原生执行行：非空 secretNames 显式 unsupported_secret_grant（默
 })
 
 // ---------------------------------------------------------------------------
-// 插件配置命名空间与动态凭据隔离（原 plugin-config-namespace.test.ts）
+// plugin config naming empty between and motion state credentials isolated (original plugin-config-namespace.test.ts)
 // ---------------------------------------------------------------------------
 
-// 动态凭据与 configSchema secret 共用 credentials.json，但只有声明的配置可出站。
-test('插件配置 HTTP 在重启和停用时均隐藏动态凭据，并保留已声明配置的脱敏', { timeout: 60_000 }, async () => {
+// motion state credentials and configSchema secret shared use credentials.json, but only declaration config can out station.
+test('plugin config HTTP in restart and deactivate when all hide motion state credentials, and keep already declaration config redaction', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-config-namespace-'))
   const pluginId = 'test:dynamic-credentials'
   const dynamicSecret = 'dynamic-hook-signing-key-7e4a'
@@ -920,9 +920,9 @@ test('插件配置 HTTP 在重启和停用时均隐藏动态凭据，并保留�
         }))
         assert.equal(response.status, 200)
         const body = await response.text()
-        assert.ok(!body.includes(dynamicSecret), '停用插件的动态密钥不得经配置接口泄漏')
-        assert.ok(!body.includes('webhook:demo'), '动态密钥不应成为公开配置字段')
-        assert.ok(!body.includes(configSecret), '声明的 secret 必须掩码')
+        assert.ok(!body.includes(dynamicSecret), 'deactivate plugin motion state secret key must not via config interface leak leak')
+        assert.ok(!body.includes('webhook:demo'), 'motion state secret key must not into is public config field')
+        assert.ok(!body.includes(configSecret), 'declaration secret must mask code')
         const parsed = JSON.parse(body) as { values: Record<string, unknown> }
         assert.equal(parsed.values.apiKey, '******')
         assert.equal(Object.hasOwn(parsed.values, 'webhook:demo'), false)

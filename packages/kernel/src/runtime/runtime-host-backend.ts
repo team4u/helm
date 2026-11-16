@@ -1,11 +1,11 @@
 /**
- * RuntimeHostBackend：PluginHost 宿主适配器构造工厂（从 KernelRuntime 拆出）。
+ * RuntimeHostBackend:PluginHost host adapt construct work vendor (from KernelRuntime split out).
  *
- * 职责：
- * - 将 KernelRuntime 提供的各项能力（profiles, skills, secrets, nodeIpc, conversations, asks, actions 等）
- *   封装为 PluginHost 所需的强类型 PluginHostBackend 接口对象；
- * - 构造 PluginSessionDocStore 会话分片持久层；
- * - 统一边界错误规范化（如 normalizeProfileBoundaryError，FileNotFoundError -> 404 not_found）。
+ * responsibility:
+ * -  KernelRuntime provide each items capability (profiles, skills, secrets, nodeIpc, conversations, asks, actions etc.)
+ *   wrap is PluginHost which must strong type PluginHostBackend interface object;
+ * - construct PluginSessionDocStore conversation shard durable layer;
+ * - unify boundary error specification (such as normalizeProfileBoundaryError,FileNotFoundError -> 404 not_found).
  */
 
 import { HelmError } from '@helm/protocol'
@@ -20,26 +20,26 @@ import type { PluginHostBackend, PluginSessionDocStore } from '../plugins/index.
 import type { HelmStore } from './store.js'
 import type { KernelRuntime } from './runtime.js'
 
-/** profiles.get/directory 边界归一：非法 id -> 400 validation_error；其余错误原样上抛。 */
+/** profiles.get/directory boundary archive one: illegal id -> 400 validation_error; the rest error original on throw. */
 export function normalizeProfileBoundaryError(id: string, err: unknown): unknown {
   try {
     assertProfileId(id)
     return err
   } catch {
-    return new HelmError('validation_error', `Profile id 非法：${String(id)}`, 400, { profileId: id })
+    return new HelmError('validation_error', `Profile id illegal:${String(id)}`, 400, { profileId: id })
   }
 }
 
 /**
- * 启用/停用后取插件清单：真实生命周期已在 PluginHost 完成，这里只做事实回读；
- * 操作成功但清单缺失属于宿主状态不一致，如实报错不虚构。
+ * enable/deactivate after take plugin manifest: real lifecycle already in PluginHost complete, this in only do things back read;
+ * operation succeeded but manifest missing belongs to host state inconsistent, such as errors do not virtual construct.
  */
 function requirePluginSummary(runtime: KernelRuntime, pluginId: string) {
   const summary = runtime.plugins.list().find((p) => p.id === pluginId)
   if (!summary) {
     throw new HelmError(
       'plugin_enable_failed',
-      `插件 ${pluginId} 生命周期操作后未在宿主清单中发现该插件（内部状态不一致）`,
+      `plugin ${pluginId} lifecycle operation after not in host manifest in discover the plugin (internal state inconsistent)`,
       500,
       { pluginId },
     )
@@ -48,7 +48,7 @@ function requirePluginSummary(runtime: KernelRuntime, pluginId: string) {
 }
 
 /**
- * 构造 PluginHost 所需的宿主后端接口（PluginHostBackend）。
+ * construct PluginHost which must host backend interface (PluginHostBackend).
  */
 export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBackend {
   return {
@@ -64,7 +64,7 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
           return await runtime.profiles.getSystem(id)
         } catch (err) {
           if (err instanceof FileNotFoundError) {
-            throw new HelmError('not_found', `Profile '${id}' 的 SYSTEM.md 不存在`, 404, { profileId: id })
+            throw new HelmError('not_found', `Profile '${id}'  SYSTEM.md missing`, 404, { profileId: id })
           }
           throw err
         }
@@ -89,10 +89,10 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
     nodeIpc: {
       isOnline: (nodeId) => runtime.envFabric.isOnline(nodeId),
       getNodeHubUrl: (nodeId) => runtime.envFabric.getNodeHubUrl(nodeId),
-      // 可信节点平台（NodeRegistry 注册上报；local → process.platform）:
-      // 插件按目标节点平台做 cwd 规范化用（远端未注册 / 未上报 = undefined，
-      // 消费方不猜不改写）。统一走 EnvFabric.nodePlatformOf 唯一只读端口，
-      // 不在此重复平台事实查找逻辑。
+      // can message node platform (NodeRegistry register on report;local → process.platform):
+      // plugin by target node platform do cwd specification use (remote not registered / not on report = undefined,
+      // consumer do not guess do not change write). unify away EnvFabric.nodePlatformOf unique only read port,
+      // do not in this duplicate platform fact find logic.
       nodePlatform: (nodeId) => runtime.envFabric.nodePlatformOf(nodeId),
       call: (nodeId, input, signal) => runtime.envFabric.ipcCall(nodeId, input, signal),
       subscribe: (nodeId, input, onLine, onClosed, signal) =>
@@ -101,9 +101,9 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
     nodeFetch: (nodeId) => runtime.envFabric.nodeFetch(nodeId),
     openTunnel: ((nodeId: string, target: { host?: string; port: number }, signal?: AbortSignal) =>
       runtime.envFabric.openTunnel(nodeId, target, signal)) as HelmHostOpenTunnelPort,
-    // 宿主插件治理端口：直接委托 PluginHost 既有公共方法（与 HTTP 管理面同链：
-    // per-plugin 生命周期队列、在途任务跟踪、locked/在途保护全部复用，
-    // 不引入第二套包管理器）。enable/disable 后返回最新清单。
+    // host plugin governance port: directly delegate PluginHost since has public method (and HTTP manage side same chain:
+    // per-plugin lifecycle queue, in-flight task trace,locked/in-flight protect all re- use,
+    // does not introduce second set package manage).enable/disable after return most new manifest.
     plugins: {
       doctorPlugin: (target) => runtime.plugins.doctorExternalPlugin(target),
       installPlugin: (source, options) => runtime.plugins.installPluginPackage(source, options),
@@ -173,7 +173,7 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
 }
 
 /**
- * 构造全局持久文档存储端口（PluginHost docs 与内核元数据共用）。
+ * construct global durable document store port (PluginHost docs and kernel metadata shared use).
  */
 export function createGlobalDocumentStore(store: HelmStore): {
   get<T>(key: string, initial: T): T
@@ -198,7 +198,7 @@ export function createGlobalDocumentStore(store: HelmStore): {
 }
 
 /**
- * 构造 PluginHost 所需的会话分片持久层（PluginSessionDocStore）。
+ * construct PluginHost which must conversation shard durable layer (PluginSessionDocStore).
  */
 export function createPluginSessionDocStore(store: HelmStore): PluginSessionDocStore {
   return {

@@ -1,20 +1,20 @@
 /**
- * pnpm 已安装依赖闭包的构建期工具（payload build 与 desktop assemble-hub 共享；
- * 仅构建脚本使用，不进任何运行时产物）。
+ * pnpm installed dependency closed package build phase tool (payload build and desktop assemble-hub sharing;
+ * only build script use, does not enter any runtime artifact).
  *
- * 机制：pnpm 把每个包的解析结果（含 peer 配对）以符号链接挂在包真实目录的
- * node_modules 下——从任意包目录逐依赖 realpath 即可还原真实依赖图，无需重算
- * 版本选择。所有函数只读，绝不写仓库。
+ * mechanism:pnpm each package parse result (contains peer match for) with symlink hang in package real directory
+ * node_modules under - - from any package directory one by one dependency realpath i.e. can restore real dependency graph, no need to heavy compute
+ * version choose. all function only read, never write repository.
  */
 import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 
 /**
- * 解析某包目录下一个依赖的真实目录与 package.json（optional 缺失返回 null，必选缺失返回 error）。
+ * parse a certain package directory under a dependency real directory and package.json(optional missing return null, must choose missing return error).
  *
- * 解析规则与 Node 一致：从包真实目录逐层上溯 node_modules——workspace 包的依赖在
- * 自身 node_modules 下；.pnpm 虚拍店内包的依赖是同层兄弟符号链接
- * （.pnpm/<n>@<v>/node_modules/<sibling>，不在 <n> 自己目录里）。
+ * parse rule and Node consistent: from package real directory one by one layer on trace node_modules- -workspace package dependency in
+ * itself node_modules under;.pnpm virtual clap shop inside package dependency is same layer brother symlink
+ * (.pnpm/<n>@<v>/node_modules/<sibling>, do not in <n> itself directory in).
  */
 export function resolveDepRealDir(fromPkgDir, name, optional) {
   try {
@@ -28,22 +28,22 @@ export function resolveDepRealDir(fromPkgDir, name, optional) {
           const realDir = realpathSync(direct);
           return { realDir, pkgJson: JSON.parse(readFileSync(path.join(realDir, 'package.json'), 'utf-8')) };
         }
-      } catch { /* 本层无此依赖，继续上溯 */ }
+      } catch { /* this layer without this dependency, continue on trace */ }
       const parent = path.dirname(cur);
       if (parent === cur) break;
       cur = parent;
     }
-    throw new Error('不在任何 node_modules 解析层级内');
+    throw new Error('do not in any node_modules parse tier inside');
   } catch {
     if (optional) return null;
-    return { error: `依赖 ${name} 未安装于 ${fromPkgDir}（先 pnpm install）` };
+    return { error: `dependency ${name} not installed at ${fromPkgDir}(first pnpm install)` };
   }
 }
 
 /**
- * 生产依赖清单：dependencies（必需）+ optionalDependencies（平台可选）+
- * peerDependencies（peerDependenciesMeta.optional 标记者视为可选，未安装则跳过；
- * 其余 peer 为运行时必需，缺失显式报错）。
+ * produce dependency manifest:dependencies(must must)+ optionalDependencies(platform optional)+
+ * peerDependencies(peerDependenciesMeta.optional mark record treated as optional, not installed then skip;
+ * the rest peer is runtime must must, missing explicit errors).
  */
 export function prodDepEntries(pkgJson) {
   const meta = pkgJson.peerDependenciesMeta ?? {};
@@ -56,12 +56,12 @@ export function prodDepEntries(pkgJson) {
   return out;
 }
 
-/** 极简 semver satisfies：支持精确 / ^ / ~ / >= / *（仅构建期 override 判定用，误判方向安全）。 */
+/** extreme simple semver satisfies: support precise / ^ / ~ / >= / *(only build phase override decide use, mistakenly judge direction security). */
 export function looseSatisfies(version, range) {
   if (range === '*' || range === '' || range === 'latest') return true;
   const clean = (v) => v.replace(/^[=v\s]+/, '');
   if (range.includes(' ')) {
-    // 复合范围（如 ">=1 <2"）：全部条件同时满足（忽略 || 之外的罕见形态，如实回退 false）。
+    // re- together scope (such as ">=1 <2"): all condition also satisfy (ignore || of outside rare form, such as fall back false).
     return range.split(/\s+/).every((part) => looseSatisfies(version, part));
   }
   const v = clean(version).split('.').map(Number);
@@ -81,13 +81,13 @@ export function looseSatisfies(version, range) {
 const cmp = (a, b) => (a[0] - b[0]) || (a[1] - b[1]) || ((a[2] ?? 0) - (b[2] ?? 0));
 
 /**
- * 扫描闭包内与根依赖冲突的 peer 声明：npm 默认严格 peer 解析（ERESOLVE），
- * pnpm 安装却允许（如 chord peerOptional 钉 ws@8.21.0 而仓库锁定 8.22.1）。
- * 返回 Map<peerName, rootVersion> —— 作为 dist 根 package.json 的 overrides
- * （值恒等于根直接依赖的精确版本，符合 npm「直接依赖 override 须同 spec」规则）。
+ * scan closed package inside and dependency conflict peer declaration:npm by default strictly peer parse (ERESOLVE),
+ * pnpm install yet allows (such as chord peerOptional pin ws@8.21.0 while repository lock 8.22.1).
+ * return Map<peerName, rootVersion> - - as dist  package.json  overrides
+ * (value constant equals directly dependency precise version, conforms to npmdirectly dependency override must same specrule).
  */
 export function scanPeerOverrides(rootEntries) {
-  // rootEntries: [{ name, version, fromPkgDir }]（根依赖 + 解析起点）。
+  // rootEntries: [{ name, version, fromPkgDir }](dependency + parse start point).
   const rootVersion = new Map(rootEntries.map((e) => [e.name, e.version]));
   const overrides = new Map();
   const visited = new Set();
@@ -98,8 +98,8 @@ export function scanPeerOverrides(rootEntries) {
     visited.add(realDir);
     for (const [peerName, spec] of Object.entries(pkgJson.peerDependencies ?? {})) {
       const root = rootVersion.get(peerName);
-      // 只处理根持有的名字：根版本即最终 override 值（npm 侧全树统一到根版本，
-      // 与 pnpm 闭包的实际配对一致——pnpm 正是用根版本满足的这些 peer）。
+      // only handle hold has name: version i.e. eventually override value (npm side all tree unify to version,
+      // and pnpm closed package actual match for consistent - -pnpm correct is use version satisfy these peer).
       if (root !== undefined && !looseSatisfies(root, spec)) overrides.set(peerName, root);
     }
     for (const { name: depName, optional } of prodDepEntries(pkgJson)) {
@@ -110,7 +110,7 @@ export function scanPeerOverrides(rootEntries) {
   return overrides;
 }
 
-/** 兼容 assemble-hub 既有签名：复制包时排除 node_modules 符号链接条目的过滤器工厂。 */
+/** compatibility assemble-hub since has signature: duplicate package when exclude node_modules symlink purpose filter work vendor. */
 export function packageCopyFilter(srcDir) {
   return (candidate) => {
     const rel = path.relative(srcDir, candidate);
@@ -118,7 +118,7 @@ export function packageCopyFilter(srcDir) {
     const segs = rel.split(path.sep);
     const nmIdx = segs.indexOf('node_modules');
     if (nmIdx === -1) return true;
-    if (segs.length === nmIdx + 1) return true; // node_modules 目录本身：继续遍历以保留真实条目
+    if (segs.length === nmIdx + 1) return true; // node_modules directory itself: continue iterate with keep real item
     const topEntry = path.join(srcDir, ...segs.slice(0, nmIdx + 2));
     try {
       return !lstatSync(topEntry).isSymbolicLink();

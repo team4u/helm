@@ -22,7 +22,7 @@ async function withArchive(archive: Buffer, fn: (input: string, output: string) 
   } finally { await rm(dir, { recursive: true, force: true }); }
 }
 
-test('归档拒绝符号链接、硬链接和设备条目', { timeout: 60_000 }, async () => {
+test('archive reject symlink, hard link connect and device item', { timeout: 60_000 }, async () => {
   for (const type of ['1', '2', '3', '6']) {
     const tar = buildTar([{ name: 'package/link', content: '' }]);
     tar.write(type, 156, 1);
@@ -41,18 +41,18 @@ function paxRecord(key: string, value: string): string {
   return `${length} ${body}`;
 }
 
-test('pax 多条扩展记录正确应用路径并保留文件内容', { timeout: 60_000 }, async () => {
-  const pax = paxRecord('mtime', '123') + paxRecord('path', 'package/目录/内容.txt');
+test('pax many extend record correct should use path and keep file content', { timeout: 60_000 }, async () => {
+  const pax = paxRecord('mtime', '123') + paxRecord('path', 'package/directory/content.txt');
   const tar = buildTar([{ name: 'package/pax', content: pax }, { name: 'package/placeholder', content: 'payload' }]);
   tar.write('x', 156, 1);
   checksum(tar.subarray(0, 512));
   await withArchive(tar, async (input, output) => {
     await extractTarGzip(input, output);
-    assert.equal(await readFile(join(output, '目录', '内容.txt'), 'utf8'), 'payload');
+    assert.equal(await readFile(join(output, 'directory', 'content.txt'), 'utf8'), 'payload');
   });
 });
 
-test('归档在分配扩展元数据前检查长度上限', { timeout: 60_000 }, async () => {
+test('archive in allocate extend metadata before check length cap', { timeout: 60_000 }, async () => {
   const tar = buildTar([{ name: 'package/pax', content: '' }]);
   tar.write('x', 156, 1);
   tar.write(`${(10 * 1024 * 1024).toString(8).padStart(11, '0')}\0`, 124, 12);

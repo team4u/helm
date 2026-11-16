@@ -1,32 +1,32 @@
 /**
- * HTTP 边界基础设施：错误信封、CORS、body 读取与限制。
+ * HTTP boundary basis set apply: error message seal,CORS,body read and restrict.
  *
- * - 成功：直接实体/数组（不包 data）。
- * - 失败：{ error: { code, message, details? } }；HelmError 携带 status/code。
- * - unexpected 500：绝不把异常堆栈/内部秘密返回客户端。
- * - 出站 JSON 一律先经 redactJsonValue 按值脱敏（stash marker 保持脱敏，
- *   含引号/换行的 secret 也不会因序列化转义而漏出），再序列化。
+ * - succeeded: directly entity/array (do not package data).
+ * - failed:{ error: { code, message, details? } };HelmError carry status/code.
+ * - unexpected 500: never exception stack/internal secret return client.
+ * - out station JSON one rule first via redactJsonValue by value redaction (stash marker keep redaction,
+ *   contains quotes/newline secret also will not because serialization escaping while leak out), again serialization.
  */
 import { HelmError } from '@helm/protocol'
 import { redactJsonValue } from '../redact.js'
 
-// BodyError/readBody 已收口 @helm/protocol（内核与插件共享唯一实现）；
-// 此处导入内核内使用，并由本模块再导出供既有相对路径引用保持稳定。
+// BodyError/readBody already consolidate @helm/protocol(kernel and plugin sharing unique implement);
+// this where import kernel inside use, and by this module again export supply since has relative path reference keep stable.
 import { BodyError, readBody } from '@helm/protocol'
 
 export const DEFAULT_MAX_BODY_BYTES = 1024 * 1024 // 1 MiB
 
-/** 无 stash（未接机密服务）时的恒等脱敏：值本身已是安全产物。 */
+/** without stash(not connect secret service) when constant etc. redaction: value itself already is security artifact. */
 const identityRedact = (text: string): string => text
 
 /**
- * 深度丢弃对象上的 undefined 属性（与 JSON.stringify 的对象语义一致：
- * 可选字段缺省即省略）。数组元素中的 undefined 不在此豁免（仍由
- * redactJsonValue 显式拒绝——那是真正的违约输出，不是缺省字段）。
+ * deep discard object on undefined property (and JSON.stringify object semantics consistent:
+ * optional field default i.e. omit). array element in undefined do not in this exemption (still by
+ * redactJsonValue explicit reject - - that is truly violate about output, is not default field).
  */
 function omitUndefinedProperties(value: unknown, seen: WeakSet<object>): unknown {
   if (value === null || typeof value !== 'object') return value
-  if (seen.has(value)) return value // 环结构交由 redactJsonValue 判定
+  if (seen.has(value)) return value // ring structure hand over by redactJsonValue decide
   seen.add(value)
   if (Array.isArray(value)) {
     return value.map((item) => omitUndefinedProperties(item, seen))
@@ -48,17 +48,17 @@ export function makeJsonRedactor(redact?: (text: string) => string): JsonRedacto
   return (value: unknown): string => JSON.stringify(redactJsonValue(omitUndefinedProperties(value, new WeakSet()), redact))
 }
 
-/** 出站 JSON 脱敏器：递归处理字符串值后序列化；非法 JSON 值（循环/
- *  undefined/NaN/稀疏数组/非 JSON 对象）由 redactJsonValue 显式抛错。 */
+/** out station JSON redaction: recursion handle string value after serialization; illegal JSON value (loop/
+ *  undefined/NaN/sparse array/non- JSON object) by redactJsonValue explicit throws. */
 export interface JsonRedactor {
   (value: unknown): string
 }
 
 export function jsonOk(redact: JsonRedactor | undefined, body: unknown, init?: ResponseInit): Response {
-  // 合法 null 原样返回；undefined 是 output 边界违约（伪造成功即造假），
-  // 显式 500 交由上层定位。循环/非 JSON 值同理由 redactJsonValue 拒绝。
+  // legal null original return;undefined is output boundary violate about (fabricate succeeded i.e. build false),
+  // explicit 500 hand over by on layer locate. loop/non- JSON value same by redactJsonValue reject.
   if (body === undefined) {
-    throw new HelmError('invalid_output', '服务返回 undefined，拒绝序列化为成功响应', 500)
+    throw new HelmError('invalid_output', 'service return undefined, reject serialization is succeeded response', 500)
   }
   const serialize = redact ?? makeJsonRedactor()
   return new Response(serialize(body), {
@@ -86,19 +86,19 @@ export function errorResponse(
   })
 }
 
-/** HelmError -> Response；其他异常一律 500 internal 且不泄漏堆栈。 */
+/** HelmError -> Response; other exception one rule 500 internal and without leaking stack. */
 export function errorToResponse(redactor: JsonRedactor | undefined, redactText: (text: string) => string, error: unknown): Response {
   if (error instanceof HelmError) {
-    // details 可能携带内部值（含 secret），同样经脱敏序列化。
+    // details may carry internal value (contains secret), same via redaction serialization.
     return errorResponse(redactor, error.status, error.code, error.message, error.details)
   }
-  // 诚实但不泄密：服务端日志保留可诊断信息（经 stash 脱敏），
-  // 客户端只收稳定信封，绝不回传堆栈。
+  // honest but do not leak: server side log keep can diagnose information (via stash redaction),
+  // client only stable message seal, never back pass stack.
   console.error('[hub] unhandled error:', redactText(describeError(error)))
-  return errorResponse(undefined, 500, 'internal_error', '服务器内部错误')
+  return errorResponse(undefined, 500, 'internal_error', 'server internal error')
 }
 
-/** 错误可打印形态：Error 取 name+message+stack，其他取 String()。 */
+/** error can print form:Error take name+message+stack, other take String(). */
 function describeError(error: unknown): string {
   if (error instanceof Error) {
     return `${error.name}: ${error.message}\n${error.stack ?? ''}`
@@ -107,7 +107,7 @@ function describeError(error: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
-// CORS：不限制任何来源，带 Origin 请求均反射并允许凭据
+// CORS: do not restrict any source, carries Origin request all reflection and allows credentials
 // ---------------------------------------------------------------------------
 
 export function corsHeaders(origin: string | null): Record<string, string> {
@@ -141,22 +141,22 @@ export function preflightResponse(origin: string | null): Response {
 }
 
 // ---------------------------------------------------------------------------
-// Body：非法 JSON / 超限 / 编码统一拒绝
+// Body: illegal JSON / over limit / encode unify reject
 // ---------------------------------------------------------------------------
 
-/** 读取任意 JSON 值（对象/数组/标量/null 均可）。 */
+/** read any JSON value (object/array/mark amount/null all can). */
 export async function readJsonValue(
   request: Request,
   maxBytes: number = DEFAULT_MAX_BODY_BYTES,
 ): Promise<unknown> {
   const raw = await readBody(request, maxBytes)
   if (raw.length === 0) {
-    throw new BodyError('invalid_json', '请求体不能为空')
+    throw new BodyError('invalid_json', 'request body cannot be empty')
   }
   try {
     return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw))
   } catch {
-    throw new BodyError('invalid_json', '请求体不是合法 JSON')
+    throw new BodyError('invalid_json', 'request body is not legal JSON')
   }
 }
 
@@ -166,21 +166,21 @@ export async function readJsonBody(
 ): Promise<Record<string, unknown>> {
   const parsed = await readJsonValue(request, maxBytes)
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new BodyError('invalid_json', '请求体需为 JSON 对象')
+    throw new BodyError('invalid_json', 'request body must be JSON object')
   }
   return parsed as Record<string, unknown>
 }
 
 /**
- * 二进制上传体读取（产物上传等跨平台场景）：content-length 预检 + 流式累加，
- * 超限立即取消 reader 并抛 413 artifact_too_large（错误码与产物语义对齐）。
+ * two enter system upload body read (artifact upload etc. across platform scenario):content-length preflight + streaming accumulate add,
+ * over limit immediately cancel reader and throw 413 artifact_too_large(error code and artifact semantics align).
  */
 export async function readBinaryBodyWithLimit(request: Request, maxBytes: number): Promise<Uint8Array> {
   const declaredHeader = request.headers.get('content-length')
   if (declaredHeader !== null) {
     const declared = Number(declaredHeader)
     if (Number.isFinite(declared) && declared > maxBytes) {
-      throw new HelmError('artifact_too_large', `请求体超过 ${maxBytes} 字节上限`, 413, { maxBytes })
+      throw new HelmError('artifact_too_large', `request body exceeds ${maxBytes} byte cap`, 413, { maxBytes })
     }
   }
   const reader = request.body?.getReader()
@@ -194,7 +194,7 @@ export async function readBinaryBodyWithLimit(request: Request, maxBytes: number
       totalBytes += value.byteLength
       if (totalBytes > maxBytes) {
         await reader.cancel().catch(() => {})
-        throw new HelmError('artifact_too_large', `请求体超过 ${maxBytes} 字节上限`, 413, { maxBytes })
+        throw new HelmError('artifact_too_large', `request body exceeds ${maxBytes} byte cap`, 413, { maxBytes })
       }
       chunks.push(value)
     }

@@ -1,19 +1,19 @@
 /**
- * 输入脱敏回归测试（对齐1 根因修复的最小真实回归）。
+ * input redaction regression test (align1 because fix most small real regression).
  *
- * 背景：core-alignment.integration.test.ts:292 真实失败——submitInput 只对
- * meta 脱敏，text/effectiveText 原样进入 SDK content 与 helm.input.data，
- * 导致已登记秘密（受管 Token、SecretStash marker）明文进入模型上下文与
- * state.sqlite。
+ * background:core-alignment.integration.test.ts:292 real failed - -submitInput only for
+ * meta redaction,text/effectiveText original enter SDK content and helm.input.data,
+ * leads to already register secret (managed Token,SecretStash marker) plaintext enter model context and
+ * state.sqlite.
  *
- * 本文件以真实 KernelRuntime + faux provider + 临时 dataDir 验证：
- * 1. 直接输入含受管 token / stash 秘密 → 模型请求、helm.input entry、
- *    自动标题、FTS、state.sqlite 全链只见 marker/占位符；
- * 2. input hook transform 产物含秘密 → 同样全链脱敏（transform 语义保留：
- *    transform 后的 text/origin 生效）。
+ * this file with real KernelRuntime + faux provider + temporary dataDir verify:
+ * 1. directly input contains managed token / stash secret → model request,helm.input entry,
+ *    automatically title,FTS,state.sqlite all chain only see marker/placeholder;
+ * 2. input hook transform artifact contains secret → same all chain redaction (transform semantics keep:
+ *    transform after text/origin takes effect).
  *
- * 诚实性：全部断言基于真实 SQLite 文件与 faux 捕获的模型请求，无 mock 断言。
- * runner: tsx --test；每项显式 timeout: 60_000。
+ * honest: all assertion based on real SQLite file and faux catch model request, without mock assertion.
+ * runner: tsx --test; each items explicit timeout: 60_000.
  */
 import { test } from 'node:test'
 import { join } from 'node:path'
@@ -26,7 +26,7 @@ import { cleanupDir, makeFauxModels, makeTempDir } from './helpers.js'
 
 import assert from 'node:assert/strict'
 
-/** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
+/** initial conversation id(SDK keep #1 bear load; ordinary conversation semantics, without produce product level special right). */
 const ROOT_CONVERSATION_ID = 1 as const
 
 interface Env {
@@ -44,7 +44,7 @@ async function makeEnv(prefix: string): Promise<Env> {
   const managedToken = (kernel as unknown as {
     toolDeps: { processToken(): string | undefined }
   }).toolDeps.processToken()
-  assert.ok(managedToken, 'runtime ctor 应创建受管进程 token')
+  assert.ok(managedToken, 'runtime ctor should create managed process token')
   return {
     dataDir,
     faux,
@@ -60,7 +60,7 @@ async function makeEnv(prefix: string): Promise<Env> {
   }
 }
 
-/** sqlite 全表扫描：包含 needle 的表名集合（与 core-alignment 同法）。 */
+/** sqlite all table scan: contains needle table name set (and core-alignment same method). */
 function sqliteTablesContaining(dbPath: string, needle: string): string[] {
   const db = new DatabaseSync(dbPath, { readOnly: true })
   try {
@@ -76,10 +76,10 @@ function sqliteTablesContaining(dbPath: string, needle: string): string[] {
   }
 }
 
-test('直接输入含受管 token 与 stash 秘密：text/meta/标题/entry/FTS/SQLite 全链脱敏', { timeout: 60_000 }, async () => {
+test('directly input contains managed token and stash secret:text/meta/title/entry/FTS/SQLite all chain redaction', { timeout: 60_000 }, async () => {
   const env = await makeEnv('helm-input-redact-direct-')
   try {
-    // 会话级 stash 秘密（marker 形态：redact 后为 [REDACTED:stash:<uuid>]）。
+    // conversation level stash secret (marker form:redact after is [REDACTED:stash:<uuid>]).
     const conversation = await env.kernel.createConversation()
     const placeholder = env.kernel.stash.put(conversation.id, 'API_KEY', 'sk-secret-plain-value-9f3k')
     assert.ok(placeholder.startsWith('[REDACTED:stash:'))
@@ -88,53 +88,53 @@ test('直接输入含受管 token 与 stash 秘密：text/meta/标题/entry/FTS/
     env.faux.setResponses([
       (ctx) => {
         requests.push(JSON.stringify(ctx.messages))
-        return fauxAssistantMessage('收到')
+        return fauxAssistantMessage('receives')
       },
     ])
 
     await env.kernel.submitInput(
       conversation.id,
-      `凭据是 ${env.managedToken} 与 sk-secret-plain-value-9f3k，另外 meta 也带`,
+      `credentials is ${env.managedToken} and sk-secret-plain-value-9f3k, additionally meta also carries`,
       { meta: { token: env.managedToken, key: 'sk-secret-plain-value-9f3k' } },
     )
     await env.kernel.waitForIdle(conversation.id)
 
-    // 1) 模型请求（SDK content）不得含任何明文。
-    assert.equal(requests.length, 1, '应捕获一次模型请求')
-    assert.ok(!requests[0]!.includes(env.managedToken), '模型请求不得含受管 Token 明文')
-    assert.ok(!requests[0]!.includes('sk-secret-plain-value-9f3k'), '模型请求不得含 stash 秘密明文')
-    // 脱敏值真实进入模型（非空壳）。
-    assert.ok(requests[0]!.includes('[REDACTED]'), '受管 token 应以 [REDACTED] marker 进入模型')
-    assert.ok(requests[0]!.includes(placeholder), 'stash 秘密应以占位符进入模型')
+    // 1) model request (SDK content) must not contains any plaintext.
+    assert.equal(requests.length, 1, 'should catch once model request')
+    assert.ok(!requests[0]!.includes(env.managedToken), 'model request must not contains managed Token plaintext')
+    assert.ok(!requests[0]!.includes('sk-secret-plain-value-9f3k'), 'model request must not contains stash secret plaintext')
+    // redaction value real enter model (non-empty shell).
+    assert.ok(requests[0]!.includes('[REDACTED]'), 'managed token should with [REDACTED] marker enter model')
+    assert.ok(requests[0]!.includes(placeholder), 'stash secret should with placeholder enter model')
 
-    // 2) 全库扫描：任何表不得存明文（含 helm.input entry、标题列、FTS）。
+    // 2) all store scan: any table must not store plaintext (contains helm.input entry, title column,FTS).
     const dbPath = join(env.dataDir, 'state.sqlite')
-    assert.deepEqual(sqliteTablesContaining(dbPath, env.managedToken), [], 'state.sqlite 不得含受管 Token 明文')
-    assert.deepEqual(sqliteTablesContaining(dbPath, 'sk-secret-plain-value-9f3k'), [], 'state.sqlite 不得含 stash 秘密明文')
+    assert.deepEqual(sqliteTablesContaining(dbPath, env.managedToken), [], 'state.sqlite must not contains managed Token plaintext')
+    assert.deepEqual(sqliteTablesContaining(dbPath, 'sk-secret-plain-value-9f3k'), [], 'state.sqlite must not contains stash secret plaintext')
 
-    // 3) 标题脱敏（首输入自动标题取 effectiveText）。
+    // 3) title redaction (first input automatically title take effectiveText).
     const conv = env.kernel.getConversation(conversation.id)
-    assert.ok(conv.title.includes('[REDACTED]'), '首输入应生成包含脱敏文本的标题')
-    assert.ok(!conv.title.includes(env.managedToken), '自动标题不得含受管 Token 明文')
+    assert.ok(conv.title.includes('[REDACTED]'), 'first input should generate contains redaction text title')
+    assert.ok(!conv.title.includes(env.managedToken), 'automatically title must not contains managed Token plaintext')
     const detail = await env.kernel.getConversationDetail(conversation.id)
     const input = detail.entries.find((entry) => entry.kind === 'helm.input')?.data as
       { text: string; meta: Record<string, unknown> } | undefined
-    assert.ok(input, '详情应保留真实输入条目')
-    assert.equal(input.text, `凭据是 [REDACTED] 与 ${placeholder}，另外 meta 也带`)
+    assert.ok(input, 'detail situation should keep real input item')
+    assert.equal(input.text, `credentials is [REDACTED] and ${placeholder}, additionally meta also carries`)
     assert.deepEqual(input.meta, { token: '[REDACTED]', key: placeholder })
 
-    // 4) FTS 检索得到脱敏文本而非明文。
+    // 4) FTS inspect index obtain to redaction text while non- plaintext.
     const hits = await env.kernel.search('[REDACTED]')
-    assert.ok(hits.length >= 1, '脱敏文本应可被 FTS 检索')
+    assert.ok(hits.length >= 1, 'redaction text should can by FTS inspect index')
     for (const hit of hits) {
-      assert.ok(!JSON.stringify(hit).includes(env.managedToken), 'FTS 结果不得回显明文')
+      assert.ok(!JSON.stringify(hit).includes(env.managedToken), 'FTS result must not back visible plaintext')
     }
   } finally {
     await env.close()
   }
 })
 
-test('input hook transform 产物含秘密：同样全链脱敏，transform 语义保留', { timeout: 60_000 }, async () => {
+test('input hook transform artifact contains secret: same all chain redaction,transform semantics keep', { timeout: 60_000 }, async () => {
   const env = await makeEnv('helm-input-redact-transform-')
   try {
     await env.kernel.plugins.register({
@@ -147,7 +147,7 @@ test('input hook transform 产物含秘密：同样全链脱敏，transform 语�
               ...payload,
               input: {
                 ...payload.input,
-                text: `${payload.input.text} 附加秘密 ${env.managedToken}`,
+                text: `${payload.input.text} additional secret ${env.managedToken}`,
                 origin: 'agent',
                 meta: { injected: env.managedToken },
               },
@@ -161,23 +161,23 @@ test('input hook transform 产物含秘密：同样全链脱敏，transform 语�
     env.faux.setResponses([
       (ctx) => {
         requests.push(JSON.stringify(ctx.messages))
-        return fauxAssistantMessage('收到 transform 输入')
+        return fauxAssistantMessage('receives transform input')
       },
     ])
 
-    await env.kernel.submitInput(ROOT_CONVERSATION_ID, '原始输入')
+    await env.kernel.submitInput(ROOT_CONVERSATION_ID, 'original input')
     await env.kernel.waitForIdle(ROOT_CONVERSATION_ID)
 
-    assert.equal(requests.length, 1, '应捕获一次模型请求')
-    assert.ok(!requests[0]!.includes(env.managedToken), 'transform 产物不得把受管 Token 明文送入模型')
-    // transform 语义保留：改写后的文本与 origin 真实生效。
-    assert.ok(requests[0]!.includes('附加秘密'), 'transform 追加文本应生效')
-    assert.ok(requests[0]!.includes('[REDACTED]'), 'transform 产物中秘密应以 marker 进入模型')
+    assert.equal(requests.length, 1, 'should catch once model request')
+    assert.ok(!requests[0]!.includes(env.managedToken), 'transform artifact must not managed Token plaintext send model')
+    // transform semantics keep: change write after text and origin real takes effect.
+    assert.ok(requests[0]!.includes('additional secret'), 'transform append text should take effect')
+    assert.ok(requests[0]!.includes('[REDACTED]'), 'transform artifact in secret should with marker enter model')
 
     const dbPath = join(env.dataDir, 'state.sqlite')
-    assert.deepEqual(sqliteTablesContaining(dbPath, env.managedToken), [], 'transform 产物不得在 state.sqlite 留明文')
+    assert.deepEqual(sqliteTablesContaining(dbPath, env.managedToken), [], 'transform artifact must not in state.sqlite plaintext')
 
-    // turn_settled 输入清单里的 text 同为脱敏值（钩子载荷从 entry 重建）。
+    // turn_settled input manifest in text same is redaction value (hook payload from entry rebuild).
     const settledTexts: string[] = []
     await env.kernel.plugins.register({
       id: 'test:settled-observer',
@@ -187,12 +187,12 @@ test('input hook transform 产物含秘密：同样全链脱敏，transform 语�
         })
       },
     })
-    env.faux.setResponses([fauxAssistantMessage('第二回合')])
-    await env.kernel.submitInput(ROOT_CONVERSATION_ID, `再来一次 ${env.managedToken}`)
+    env.faux.setResponses([fauxAssistantMessage('second turn')])
+    await env.kernel.submitInput(ROOT_CONVERSATION_ID, `again come once ${env.managedToken}`)
     await env.kernel.waitForIdle(ROOT_CONVERSATION_ID)
-    assert.ok(settledTexts.length >= 1, '应捕获 turn_settled')
+    assert.ok(settledTexts.length >= 1, 'should catch turn_settled')
     for (const text of settledTexts) {
-      assert.ok(!text.includes(env.managedToken), 'turn_settled inputs.text 不得含明文')
+      assert.ok(!text.includes(env.managedToken), 'turn_settled inputs.text must not contains plaintext')
     }
   } finally {
     await env.close()

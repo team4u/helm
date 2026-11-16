@@ -1,33 +1,33 @@
 /**
- * 内核自带本机工具（组合出口）：实现按职责拆分在本目录子模块，本文件仅
- * 再导出，供 runtime.ts / spawn.ts / tool-registry.ts 及测试的既有
- * `./tools.js` 导入路径保持稳定。
+ * kernel self carries local machine tool (combine exit): implement by responsibility split in this directory sub- module, this file only
+ * again export, supply runtime.ts / spawn.ts / tool-registry.ts and test since has
+ * `./tools.js` import path keep stable.
  *
- * - shell 执行引擎（runShell / runGate / bash 工具）：tools/shell-exec.ts——
- *   真实进程组、超时、abort、跨 chunk UTF-8 保真、输出限额显式报错；
- * - 受管 env 合成（buildToolEnv / buildManagedEnv / executionScopeHash）：
- *   tools/managed-env.ts——受管 HELM_* 变量固定覆盖，合成权威在
- *   env/scoped-env.ts 的 ScopedExecutionEnv；
- * - 路径词法解析（resolveTargetPath）：tools/target-path.ts——按目标路径
- *   形状选纯 posix/win32 规则，绝不用 Hub 宿主 node:path 默认规则解析
- *   远端路径；isAbsoluteTargetPath/targetPathShape 再导出自 @helm/protocol；
- * - 远端守卫（env_fabric_missing / node_offline）：tools/guards.ts——
- *   EnvFabric 缺失与节点离线显式失败，绝不静默回退 local；
- * - read/write/edit 文件工具：tools/file-ops.ts + tools/file-env.ts——
- *   local（进程内 fs）与 EnvFabric 远端分支收敛为统一执行环境适配 +
- *   单一模板；读-改-写经 env/file-mutation-queue 互斥；edit 行级差异在
- *   runtime/tool-edit-diff.ts 唯一实现；
- * - register_artifact / read_artifact：tools/artifact-tools.ts——真实普通
- *   文件复制登记（上限 15 MiB、同 fd 有界读取、中途变更显式拒绝）与
- *   spill 产物分页读取（UTF-8 边界对齐保证前进）；read_artifact 区分
- * 「产物不存在」与「存储读取失败」，后者如实透出原始错误。
+ * - shell execute engine (runShell / runGate / bash tool):tools/shell-exec.ts- -
+ *   real process group, timeout,abort, across chunk UTF-8 fidelity, output limit quota explicit errors;
+ * - managed env together into (buildToolEnv / buildManagedEnv / executionScopeHash):
+ *   tools/managed-env.ts- - managed HELM_* variable fixed override, together into right threat in
+ *   env/scoped-env.ts  ScopedExecutionEnv;
+ * - path term method parse (resolveTargetPath):tools/target-path.ts- - by target path
+ *   shape choose pure posix/win32 rule, never use Hub host node:path by default rule parse
+ *   remote path;isAbsoluteTargetPath/targetPathShape again export self @helm/protocol;
+ * - remote guard (env_fabric_missing / node_offline):tools/guards.ts- -
+ *   EnvFabric missing and node offline explicit failed, never static default fall back local;
+ * - read/write/edit file tool:tools/file-ops.ts + tools/file-env.ts- -
+ *   local(process inside fs) and EnvFabric remote branch converge is unify execute environment adapt +
+ *   single one template; read-change-write via env/file-mutation-queue mutual exclusion;edit row level difference in
+ *   runtime/tool-edit-diff.ts unique implement;
+ * - register_artifact / read_artifact:tools/artifact-tools.ts- - real ordinary
+ *   file duplicate register (cap 15 MiB, same fd has boundary read, in route change explicit reject) and
+ *   spill artifact page read (UTF-8 boundary align guarantee before enter);read_artifact zone
+ * artifact missing and store failed to read, after such as through out original error.
  *
- * 文件路径契约（read/write/edit，对齐 pi）：会话 cwd 仅作为相对路径的解析
- * 基准，绝对路径与 ../ 跨目录访问一律允许——bash 本就无文件边界，文件工具
- * 与 bash 同权，不设 cwd 沙箱；权限边界交给操作系统本身。timeoutMs 必须为
- * 正有限整数且 ≤ 上限，非法值显式 invalid_timeout。SecretStash 脱敏在聚合
- * 完成的全文上执行（先完整拼接再 redact，跨 chunk 撕裂的秘密也必然完整
- * 匹配），绝不反向还原。
+ * file path contract (read/write/edit, align pi): conversation cwd only as relative path parse
+ * base allow, absolute path and ../ across directory access one rule allows - -bash this then without file boundary, file tool
+ * and bash same right, do not set cwd sandbox; permission boundary hand over to OS itself.timeoutMs must is
+ * correct finite integer and ≤ cap, illegal value explicit invalid_timeout.SecretStash redaction in aggregate
+ * complete all text on execute (first complete concatenate again redact, across chunk tear secret also must however complete
+ * match), never reverse restore.
  */
 export { resolveTargetPath } from './tools/target-path.js'
 export {
@@ -49,6 +49,6 @@ export {
   type ArtifactFileBytes,
   type ArtifactReadHandle,
 } from './tools/artifact-tools.js'
-// 形状判定与词法规则子集收口 @helm/protocol（浏览器安全纯函数，内核与
-// @helm/plugins 共享）；此处再导出供既有相对路径引用保持稳定。
+// shape decide and term method rule sub- collection consolidate @helm/protocol(browser security pure function, kernel and
+// @helm/plugins sharing); this where again export supply since has relative path reference keep stable.
 export { isAbsoluteTargetPath, targetPathShape } from '@helm/protocol'

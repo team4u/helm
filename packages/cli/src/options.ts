@@ -1,17 +1,17 @@
 import process from 'node:process';
 
-/** stdin 抽象：ask 等命令读取管道内容；测试注入替身避免真实进程 IO。 */
+/** stdin abstraction:ask etc. command read pipeline content; test inject replace body avoid real process IO. */
 export interface StdinSource {
-  /** 交互终端判定：TTY 下绝不读取管道（避免阻塞等待永不到来的 EOF）。 */
+  /** interaction terminal decide:TTY under never read pipeline (avoid block wait for forever fewer than come EOF). */
   isTTY: boolean;
-  /** 读取管道全部内容直到 EOF（仅非 TTY 时调用）。 */
+  /** read pipeline all content until EOF(only non- TTY when invoke). */
   readAll(): Promise<string>;
 }
 
-/** runCli 注入点：测试以内存 writer 与 fetch 替身替换真实进程 IO。 */
+/** runCli inject point: test within store writer and fetch replace body replace real process IO. */
 export interface RunCliOptions {
   env?: NodeJS.ProcessEnv;
-  /** CLI 进程工作目录（本地文件路径解析基准）；缺省 process.cwd()。测试注入以避免 process.chdir 并发污染。 */
+  /** CLI process work directory (local file path parse base allow); default process.cwd(). test inject with avoid process.chdir concurrency pollute. */
   cwd?: string;
   stdout?: (text: string) => void;
   stderr?: (text: string) => void;
@@ -27,7 +27,7 @@ export interface Io {
   stdin: StdinSource;
 }
 
-/** 默认 stdin 源：TTY 判定（惰性，避免模块加载期触碰进程状态）后整读管道。 */
+/** by default stdin source:TTY decide (lazy, avoid module load phase trigger touch process state) after whole read pipeline. */
 function processStdin(): StdinSource {
   return {
     get isTTY(): boolean {
@@ -46,7 +46,7 @@ export function buildIo(options: RunCliOptions = {}): Io {
     env: options.env ?? process.env,
     out: options.stdout ?? ((text) => process.stdout.write(text)),
     err: options.stderr ?? ((text) => process.stderr.write(text)),
-    // 不在模块加载期捕获全局 fetch：留给每次调用，测试可注入替身
+    // do not in module load phase catch global fetch: to each time invoke, test can inject replace body
     fetchImpl: options.fetch ?? ((input, init) => fetch(input, init)),
     stdin: options.stdin ?? processStdin(),
   };

@@ -1,18 +1,18 @@
 /**
- * 模型接入：pi-ai 全量内置 provider + providers.json 兼容网关。
+ * model access:pi-ai all amount inside placement provider + providers.json compatibility gateway.
  *
- * 事实依据（@earendil-works/pi-ai 1.5.0 实测源码）：
- * - `createProvider({ auth })` 的 auth 即 `ProviderAuth`（`apiKey?: ApiKeyAuth` +
- *   `oauth?: OAuthAuth`），ApiKeyAuth.resolve 输入 `{ ctx, credential?, signal }`，
- *   返回 `AuthResult | undefined`（undefined = 该渠道未配置，是合法状态）。
- * - `Model` 必填 `provider`（须等于注册的 provider id，请求分发按它查 provider）
- *   与 `baseUrl`（openai-completions 直接对它做字符串探测）；`cost` 四费率必填。
- * - 内置 provider 自行处理凭据、环境变量与供应商特有配置；helm 只将已存 key
- *   注入原生 ApiKeyAuth 的 credential，不替换原生认证判断或 oauth 策略。
+ * fact based on (@earendil-works/pi-ai 1.5.0 measured source code):
+ * - `createProvider({ auth })`  auth i.e. `ProviderAuth`(`apiKey?: ApiKeyAuth` +
+ *   `oauth?: OAuthAuth`),ApiKeyAuth.resolve input `{ ctx, credential?, signal }`,
+ *   return `AuthResult | undefined`(undefined = the channel not config, is legal state).
+ * - `Model` required `provider`(must equals register provider id, request dispatch by it inspect provider)
+ *   and `baseUrl`(openai-completions directly for it do string probe);`cost` four cost rate required.
+ * - inside placement provider self row handle credentials, environment variable and provider special has config;helm only already store key
+ *   inject original generate ApiKeyAuth  credential, do not replace original generate recognize verify decide or oauth policy.
  *
- * providers.json 的 `models: string[]` 只有静态模型 ID，不含能力元数据；
- * 未探测到的能力（contextWindow 等）以显式标记的保守缺省给出，绝不冒充真实探测值。
- * 未配置模型时显式抛 model_not_configured，绝不 faux fallback 假装回答。
+ * providers.json  `models: string[]` only static model ID, excludes capability metadata;
+ * not probe to capability (contextWindow etc.) with explicit mark record keep guard default to out, never smoke fill real probe value.
+ * not config model when explicit throw model_not_configured, never faux fallback pretend answer.
  */
 
 import { anthropicMessagesApi } from '@earendil-works/pi-ai/api/anthropic-messages.lazy'
@@ -35,55 +35,55 @@ import {
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
 import { HelmError, type ModelCatalog, type ModelCatalogEntry, type ModelProviderSummary, type ProviderConfig } from '@helm/protocol'
 
-// 共享目录条目类型统一来自 @helm/protocol（此处重新导出，消费方无需改导入路径）。
+// sharing directory item type unify from @helm/protocol(this where re- export, consumer no need to change import path).
 export type { ModelCatalog, ModelCatalogEntry }
 
 export interface ModelGatewayOptions {
-  /** providers.json 条目。 */
+  /** providers.json item. */
   providers: ProviderConfig[]
-  /** providerId -> API Key（宿主 credentials 解析结果）。 */
+  /** providerId -> API Key(host credentials parse result). */
   apiKeys: () => Record<string, string>
-  /** 动态模型目录持久缓存（models-store.json）；缺省纯内存（不落盘）。 */
+  /** motion state model directory durable cache (models-store.json); default in-memory (do not). */
   modelsStore?: ModelsStore
-  /** 运行时动态注册的额外供应商（插件注册；凭据注入同内置供应商）。 */
+  /** runtime motion state register extra provider (plugin register; credentials inject same inside placement provider). */
   extraProviders?: Provider[]
 }
 
 /**
- * helm 附加在 pi 模型对象上的来源元数据（局部交叉类型，不进 SDK 契约）。
+ * helm additional in pi model object on source metadata (local cross type, does not enter SDK contract).
  *
- * `helmContextWindowKnown`：contextWindow 是否为真实已知值。pi-ai 的 Model
- * 契约要求 contextWindow 必填数字，静态来源（providers.json 兼容网关、上游
- * 目录缺窗口的 Magpie 条目）只能填保守缺省——这些模型显式标记 false；
- * 内置 provider 与显式模型目录的窗口是策展数据，缺省（undefined）视为已知。
- * 字段随模型对象经 Models.setProvider/getModel 原样保留（SDK 不裁剪未知字段）。
+ * `helmContextWindowKnown`:contextWindow is otherwise is real known value.pi-ai  Model
+ * contract want seek contextWindow required number, static source (providers.json compatibility gateway, upstream
+ * directory missing window Magpie item) only can fill keep guard default - - these model explicit mark record false;
+ * inside placement provider and explicit model directory window is policy expand data, default (undefined) treated as known.
+ * field follow model object via Models.setProvider/getModel original keep (SDK do not trim unknown field).
  */
 export interface HelmModelSourceMeta {
   helmContextWindowKnown?: boolean
 }
 
-/** 模型真实已知的上下文窗口：仅当窗口为正的有限数且未被标记为静态缺省时
- * 返回；未知（模型不在集合 / 标记 false / 窗口非正或非有限）返回 undefined，
- * 不伪造。 */
+/** model real known context window: only when window is correct finite count and not by mark recorded as static default when
+ * return; unknown (model do not in set / mark record false / window non- correct or non- finite) return undefined,
+ * do not fabricate. */
 export function knownContextWindowOf(model: Model<Api> | undefined): number | undefined {
   if (model === undefined) return undefined
   if ((model as Model<Api> & HelmModelSourceMeta).helmContextWindowKnown === false) return undefined
   return Number.isFinite(model.contextWindow) && model.contextWindow > 0 ? model.contextWindow : undefined
 }
 
-/** 兼容网关静态模型的保守缺省。providers.json 只给模型 ID（string[]），
- * pi-ai 的 Model 契约要求 contextWindow / maxTokens / cost 为必填数字——
- * 这些是「让请求能发出去」的最小缺省，不是探测到的真实能力：
- * 真实能力只能来自上游目录（如 /v1/models 探测），helm 目前不做探测。
+/** compatibility gateway static model keep guard default.providers.json only to model ID(string[]),
+ * pi-ai  Model contract want seek contextWindow / maxTokens / cost is required number - -
+ * these is let request can out most small default, is not probe to real capability:
+ * real capability only can from upstream directory (such as /v1/models probe),helm item before does not probe.
  */
 const COMPAT_MODEL_DEFAULTS = {
   contextWindow: 128_000,
   maxTokens: 8_192,
-  /** 费率未知记 0：pi-ai 用它计算 usage.cost，未知费率按 0 计价并如实标注。 */
+  /** cost rate unknown record 0:pi-ai use it compute usage.cost, unknown cost rate by 0 count price and such as mark note. */
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 } as const
 
-/** 兼容网关的静态模型（真实 Model 类型，无任何 as 断言）。 */
+/** compatibility gateway static model (real Model type, without any as assertion). */
 function compatModel(
   id: string,
   config: ProviderConfig,
@@ -95,7 +95,7 @@ function compatModel(
     baseUrl: config.baseUrl,
     input: ['text'] as ModelInputModality[],
     ...COMPAT_MODEL_DEFAULTS,
-    // 静态缺省窗口不是探测值：显式标记未知（knownContextWindowOf 据此省略）。
+    // static default window is not probe value: explicit mark record unknown (knownContextWindowOf based on this omit).
     helmContextWindowKnown: false,
   }
   return config.protocol === 'anthropic'
@@ -103,7 +103,7 @@ function compatModel(
     : { ...shared, api: 'openai-completions', reasoning: false }
 }
 
-/** 兼容网关的 ApiKeyAuth：credential key（宿主解析注入）优先，未配置返回 undefined。 */
+/** compatibility gateway ApiKeyAuth:credential key(host parse inject) takes precedence, not config return undefined. */
 function compatApiKeyAuth(providerId: string, apiKey: string | undefined): ApiKeyAuth {
   return {
     name: `${providerId} API key`,
@@ -132,10 +132,10 @@ function buildCompatProvider(config: ProviderConfig, apiKey: string | undefined)
 }
 
 /**
- * 构建当前 Models 集合。providers.json / credentials 变化后由宿主重建，
- * 通过 HarnessOptions.models 的 getter 形式热生效（无需重开 harness）。
- * 注册顺序：内置 provider -> 运行时动态注册（extraProviders）-> 自定义兼容网关；
- * 后注册者覆盖同 id 先注册者（与 reloadModels 的冲突前置校验配套，这里不重复拦截）。
+ * build when before Models set.providers.json / credentials change after by host rebuild,
+ * via HarnessOptions.models  getter form hot takes effect (no need to heavy open harness).
+ * register order: inside placement provider -> runtime motion state register (extraProviders)-> self define compatibility gateway;
+ * after register override same id first register (and reloadModels conflict pre- validate match set, this in does not repeat intercept).
  */
 export function buildModels(options: ModelGatewayOptions): Models {
   const models = createModels(options.modelsStore ? { modelsStore: options.modelsStore } : undefined)
@@ -156,7 +156,7 @@ export function buildModels(options: ModelGatewayOptions): Models {
   return models
 }
 
-/** 保留供应商原生认证逻辑；OAuth-only 供应商不得被注入伪造的 API Key 方式。 */
+/** keep provider original generate recognize verify logic;OAuth-only provider must not by inject fabricate API Key way. */
 function withInjectedKey(provider: Provider, injectedKey: string | undefined): Provider {
   const base = provider.auth.apiKey
   if (!injectedKey || !base) return provider
@@ -173,9 +173,9 @@ function withInjectedKey(provider: Provider, injectedKey: string | undefined): P
 }
 
 /**
- * 显式投影公开元数据，绝不序列化 SDK provider 内的 headers 或认证回调。
- * dynamic：实现了 refreshModels 的供应商支持远端目录刷新；
- * baseUrl / pluginId：非机密展示与通用插件归属挂载（运行时注册表传入）。
+ * explicit throw shadow public metadata, never serialization SDK provider inside headers or recognize verify call back.
+ * dynamic: implement refreshModels provider support remote directory refresh;
+ * baseUrl / pluginId: non- secret render and through use plugin ownership mount (runtime register table pass).
  */
 export function listModelProviders(
   models: Models,
@@ -203,19 +203,19 @@ export interface ModelRefParts {
 export function parseModelRef(ref: string): ModelRefParts {
   const slash = ref.indexOf('/')
   if (slash <= 0 || slash >= ref.length - 1) {
-    throw new HelmError('validation_error', `模型引用格式应为 'provider/model'：${ref}`)
+    throw new HelmError('validation_error', `model reference format should be 'provider/model':${ref}`)
   }
   return { provider: ref.slice(0, slash), modelId: ref.slice(slash + 1) }
 }
 
 /**
- * 列出全部模型目录（含未配置 key 的，标注 available）与各模型思考档位。
- * checkAuth 语义：undefined = 合法的「未配置凭据」；仅此情况记 available=false。
- * 读取错误 / 协议错误（ModelsError code auth 等）向上抛出诊断，绝不静默吞掉。
- * contextWindow 只投影真实已知窗口（knownContextWindowOf）：静态缺省、
- * 上游未给窗口或非法值（非正/非有限）一律省略，绝不把 128k 兑底冒充事实。
- * disabledSnapshot：providerId -> 用户显式禁用的模型 ID 集（可用性语义不变，
- * 禁用仅作为目录标注；过滤在会话模型解析入口执行）。
+ * column out all model directory (contains not config key , mark note available) and each model think Profile.
+ * checkAuth semantics:undefined = legal not config credentials; only this case record available=false.
+ * read error / protocol error (ModelsError code auth etc.) to on throw diagnose, never static default swallow.
+ * contextWindow only throw shadow real known window (knownContextWindowOf): static default,
+ * upstream not to window or illegal value (non- correct/non- finite) one rule omit, never 128k honor bottom smoke fill fact.
+ * disabledSnapshot:providerId -> user explicit disable model ID collection (availability semantics do not change,
+ * disable only as directory mark note; filter in conversation model parse entry execute).
  */
 export async function listModelCatalog(
   models: Models,
@@ -246,12 +246,12 @@ export async function listModelCatalog(
   }
 }
 
-/** 解析默认模型引用；任何缺失都显式报错（不假造模型）。 */
+/** parse by default model reference; any missing all explicit errors (do not false build model). */
 export function requireModelRef(ref: string | undefined): ModelRefParts {
   if (!ref || ref.trim() === '') {
     throw new HelmError(
       'model_not_configured',
-      '未配置任何模型：请在 providers.json / profile 中配置，或设置 HELM_MODEL 环境变量',
+      'not config any model: please in providers.json / profile in config, or settings HELM_MODEL environment variable',
       503,
     )
   }
@@ -259,21 +259,21 @@ export function requireModelRef(ref: string | undefined): ModelRefParts {
 }
 
 /**
- * 按目标模型能力收敛思考档位（setModel → setThinkingLevel 的内核收口）。
+ * by target model capability converge think Profile (setModel → setThinkingLevel kernel consolidate).
  *
- * 事实依据（pi-ai 1.5.0 源码）：
- * - `getSupportedThinkingLevels`：reasoning:false → ['off']；reasoning:true 无
- *   thinkingLevelMap → ['off'..'high']（xhigh/max 必须显式 map 才可用）；
- * - `clampThinkingLevel`：不支持的档位按 SDK 可用档位序列就近收敛
- *   （先向上找最近可用档，再向下找）。
+ * fact based on (pi-ai 1.5.0 source code):
+ * - `getSupportedThinkingLevels`:reasoning:false → ['off'];reasoning:true without
+ *   thinkingLevelMap → ['off'..'high'](xhigh/max must explicit map only then available);
+ * - `clampThinkingLevel`: unsupported Profile by SDK available Profile sequence then near converge
+ *   (first to on find most near available Profile, again to under find).
  *
- * 透传豁免（能力未知不破坏契约）：
- * - 模型不在当前 Models 集合（faux 测试模型、目录刷新窗口、外部注入集合）
- *   时原样返回——helm 不虚构能力，绝不因查无元数据改写用户配置；
- * - `reasoning:false` 且无 `thinkingLevelMap` 的模型不视为已声明能力边界，
- *   档位原样透传，由底层适配器决定实际参数行为。
+ * pass-through exemption (capability unknown do not break contract):
+ * - model do not in when before Models set (faux test model, directory refresh window, external inject set)
+ *   when original return - -helm do not virtual construct capability, never because inspect without metadata change write user config;
+ * - `reasoning:false` and without `thinkingLevelMap` model do not treated as already declaration capability boundary,
+ *   Profile original pass-through, by underlying adapt decide actual parameter behavior.
  *
- * 空串（未配置）原样返回：不把「跟随继承链」误变成显式 off。
+ * empty string (not config) original return: does not with follow inherit chain mistakenly becomes explicit off.
  */
 export function clampThinkingLevelForModel(
   models: Models,
@@ -283,13 +283,13 @@ export function clampThinkingLevelForModel(
   if (modelRef === undefined || level === undefined || level === '') return level
   const model = models.getModel(modelRef.provider, modelRef.modelId)
   if (model === undefined) return level
-  // 能力声明判定：显式 thinkingLevelMap 是唯一可信边界；reasoning:true 且
-  // 无 map 的模型按 pi-ai 缺省档位（off..high）收敛（例如 max → high）。
+  // capability declaration decide: explicit thinkingLevelMap is unique can message boundary;reasoning:true and
+  // without map model by pi-ai default Profile (off..high) converge (e.g. max → high).
   if (model.reasoning !== true && model.thinkingLevelMap === undefined) return level
   const supported = getSupportedThinkingLevels(model)
   if (supported.includes(level as ModelThinkingLevel)) return level
-  // SDK off 语义（generation: thinkingLevel==='off' 不发 reasoning 参数）对任何
-  // 模型都可满足，不被 clamp 抬升到最小可用档；用户显式关闭思考的意图保留。
+  // SDK off semantics (generation: thinkingLevel==='off' do not reasoning parameter) for any
+  // model all can satisfy, do not by clamp lift rise to most small available Profile; user explicit close think intent keep.
   if (level === 'off') return 'off'
   return clampToModelLevels(model, level as ModelThinkingLevel)
 }

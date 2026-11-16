@@ -1,25 +1,25 @@
 /**
- * helm-node 升级交接 IPC（CLI 侧，运行在旧 daemon 进程内）。
+ * helm-node upgrade handover IPC(CLI side, run in old daemon process inside).
  *
- * 协议（Node 原生 stdio IPC，单通道三阶段）：
- *  1) 候选真实 registered 后上报 {type:'helm-node.ready', pid, instanceId,
- *     state:'registered'}；state 为 starting 一律视为未就绪（升级要求真实
- *     注册，不允许带病提交）；
- *  2) commit() 是唯一提交点：先原子写新 node.pid（内存备份旧记录），再发
- *     {type:'helm-node.activate', attemptId, version, previousVersion, pid}，
- *     等候选本机 {type:'helm-node.activated'} 确认才 resolve——Hub ACK 不作
- *     为本机 IPC 成功条件（候选侧 confirmUpgrade 本地落地后异步重试 Hub）；
- *  3) activate 发出后的确认丢失分两类：
- *     - 写入失败（send 抛错/回调带错）＝确定未送达：候选永远不可能激活或
- *       向 Hub 提交，抛普通错误走安全回滚（abort 杀候选 + CAS 还原旧 pid，
- *       旧宿主继续服务），不留 10 分钟 pendingActivation 空窗；
- *     - 已写入但回执丢失（断开/超时/候选退出）＝送达状态未知：只抛
- *       UpgradeCommitUnconfirmedError，绝不 kill 候选、绝不回滚 pid——候选
- *       可能已向 Hub 上报提交，反向回滚会让已成功的升级被撤销。
+ * protocol (Node original generate stdio IPC, single channel three phase):
+ *  1) choose real registered after on report {type:'helm-node.ready', pid, instanceId,
+ *     state:'registered'};state is starting one rule treated as not ready (upgrade want seek real
+ *     register, disallows carries illness commit);
+ *  2) commit() is unique commit point: first atomic write new node.pid(memory backup old record), again
+ *     {type:'helm-node.activate', attemptId, version, previousVersion, pid},
+ *     etc. choose local machine {type:'helm-node.activated'} confirm only then resolve- -Hub ACK do not act
+ *     is local machine IPC succeeded condition (choose side confirmUpgrade local persisted after async retry Hub);
+ *  3) activate out after confirm lose two class:
+ *     - failed to write (send throws/call back carries wrong) = determine not send reach: choose never may activate or
+ *       to Hub commit, throw ordinary error away security rollback (abort kill choose + CAS restore old pid,
+ *       old host continue service), do not 10 minute pendingActivation empty window;
+ *     - already write but back hold lose (disconnect/timeout/choose exit) = send reach state unknown: only throw
+ *       UpgradeCommitUnconfirmedError, never kill choose, never rollback pid- - choose
+ *       may already to Hub on report commit, reverse rollback will let already succeeded upgrade by undo.
  *
- * 确定性未提交（候选显式 activate-rejected，activate 写入失败，或 activate
- * 尚未发出的任何失败）才允许 abort()：杀自有 child 并按 instanceId CAS
- * 还原旧 pid；留档已被他人接管时不动（绝不误删他人的 node.pid）。
+ * determinism uncommitted (choose explicit activate-rejected,activate failed to write, or activate
+ * not yet out any failed) only then allows abort(): kill self has child and by instanceId CAS
+ * restore old pid; Profile already by other person take over when do not motion (never mistakenly delete other person node.pid).
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import fsp from 'node:fs/promises';
@@ -27,21 +27,21 @@ import process from 'node:process';
 import { randomBytes } from 'node:crypto';
 import { UpgradeCommitUnconfirmedError, type PreparedNodeReplacement, type StagedNodeRelease } from './upgrader.js';
 
-/** 候选就绪预算：覆盖 Hub 短暂不可达时的数次退避重连（与候选侧注册等待同量级）。 */
+/** choose ready pre- compute: override Hub short temporary cannot reach when count time backoff reconnect (and choose side register wait for same amount level). */
 export const CANDIDATE_READY_TIMEOUT_MS = 150_000;
-/** activate 发出后等待本机 activated 确认的预算。 */
+/** activate out after wait for local machine activated confirm pre- compute. */
 export const ACTIVATE_ACK_TIMEOUT_MS = 30_000;
-/** 候选等待 activate 的总预算（父进程提交点在排空之后，这里取宽裕上限）。 */
+/** choose wait for activate total pre- compute (parent process commit point in arrange empty after, this in take wide headroom cap). */
 export const CANDIDATE_ACTIVATE_WAIT_MS = 10 * 60_000;
 
-/** 升级交接上下文（与引擎 prepareReplacement 回调的 context 同源）。 */
+/** upgrade handover context (and engine prepareReplacement call back context same source). */
 export interface UpgradeHandoffContext {
   attemptId: string;
   previousVersion: string;
   targetVersion: string;
 }
 
-/** pid 留档内容（与 cli.ts 的 PidRecord 结构一致，避免循环依赖单独声明）。 */
+/** pid Profile content (and cli.ts  PidRecord structure consistent, avoid loop dependency separate declaration). */
 export interface HandoffPidRecord {
   pid: number;
   instanceId: string;
@@ -51,20 +51,20 @@ export interface HandoffPidRecord {
 export interface PrepareNodeReplacementOptions {
   dataDir: string;
   hubUrl: string;
-  /** 候选日志落点（与守护进程共用 node.log）。 */
+  /** choose log point (and daemon shared use node.log). */
   logPath: string;
   controlEndpoint(dataDir: string, instanceId: string): string;
   readPidRecord(): Promise<HandoffPidRecord | null>;
   writePidRecord(record: HandoffPidRecord): Promise<void>;
   removePidFile(): Promise<void>;
-  /** 候选基础环境（缺省 process.env；测试可注入）。 */
+  /** choose basis environment (default process.env; test can inject). */
   env?: NodeJS.ProcessEnv;
-  /** node 可执行（缺省 process.execPath；测试注入）。 */
+  /** node can execute (default process.execPath; test inject). */
   execPath?: string;
   readyTimeoutMs?: number;
   activateAckTimeoutMs?: number;
 }
-/** 候选侧协议消息（与父侧 commit() 发出的 ActivateMessage 同一契约）。 */
+/** choose side protocol message (and parent side commit() out ActivateMessage the same contract). */
 export interface ActivateMessage {
   type: 'helm-node.activate';
   attemptId: string;
@@ -73,7 +73,7 @@ export interface ActivateMessage {
   pid: number;
 }
 
-/** 候选启动 env 注入的升级上下文（prepareNodeReplacement 写入、候选进程解析）。 */
+/** choose start env inject upgrade context (prepareNodeReplacement write, choose process parse). */
 export interface CandidateUpgradeHandoff {
   attemptId: string;
   previousVersion?: string;
@@ -81,8 +81,8 @@ export interface CandidateUpgradeHandoff {
 }
 
 /**
- * 候选侧解析启动 env 注入的升级上下文：HELM_NODE_UPGRADE_ATTEMPT 缺失即
- * 非候选（返回 undefined）；previousVersion/targetVersion 可选透传。
+ * choose side parse start env inject upgrade context:HELM_NODE_UPGRADE_ATTEMPT missing i.e.
+ * non- choose (return undefined);previousVersion/targetVersion optional pass-through.
  */
 export function parseUpgradeHandoffEnv(env: NodeJS.ProcessEnv | undefined): CandidateUpgradeHandoff | undefined {
   const attemptId = env?.['HELM_NODE_UPGRADE_ATTEMPT'];
@@ -96,7 +96,7 @@ export function parseUpgradeHandoffEnv(env: NodeJS.ProcessEnv | undefined): Cand
   };
 }
 
-/** 激活消息边界校验（候选侧）：完整 commit 上下文，字段缺失/类型非法一律拒绝。 */
+/** activate message boundary validate (choose side): complete commit context, field missing/type illegal one rule reject. */
 export function parseActivateMessage(message: unknown): ActivateMessage | undefined {
   if (typeof message !== 'object' || message === null) return undefined;
   const record = message as Record<string, unknown>;
@@ -114,7 +114,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const asString = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
 
-/** 有界日志尾读：只读文件末尾最多 64KiB，再取最后 maxLines 行（日志再大也不全量读入）。 */
+/** has boundary log tail read: only read file tail at most 64KiB, again take finally maxLines row (log again large also do not all amount read). */
 export async function readLogTailBounded(logFile: string, maxLines: number): Promise<string> {
   const maxBytes = 64 * 1024;
   try {
@@ -134,9 +134,9 @@ export async function readLogTailBounded(logFile: string, maxLines: number): Pro
 }
 
 /**
- * 准备替换 daemon：以受控后台方式拉起候选 release 入口（无 tsx loader、全新
- * instanceId/endpoint、不继承父控制 env、清 HELM_VERSION_OVERRIDE），候选真实
- * registered 后返回 {pid, commit, abort}。native stdio IPC 保留到本机提交完成。
+ * prepare replace daemon: with subject to control background way pull start choose release entry (without tsx loader, all new
+ * instanceId/endpoint, do not inherit parent control env, clean HELM_VERSION_OVERRIDE), choose real
+ * registered after return {pid, commit, abort}.native stdio IPC keep to local machine commit complete.
  */
 export async function prepareNodeReplacement(
   release: StagedNodeRelease,
@@ -144,15 +144,15 @@ export async function prepareNodeReplacement(
   options: PrepareNodeReplacementOptions,
 ): Promise<PreparedNodeReplacement> {
   if (options.hubUrl === '') {
-    throw new Error('升级交接需要 Hub 地址（候选守护进程据此注册）');
+    throw new Error('upgrade handover need to Hub address (choose daemon based on this register)');
   }
   const readyTimeoutMs = options.readyTimeoutMs ?? CANDIDATE_READY_TIMEOUT_MS;
   const activateAckTimeoutMs = options.activateAckTimeoutMs ?? ACTIVATE_ACK_TIMEOUT_MS;
   const instanceId = randomBytes(16).toString('hex');
   const endpoint = options.controlEndpoint(options.dataDir, instanceId);
   const childEnv: NodeJS.ProcessEnv = { ...(options.env ?? process.env) };
-  // 候选拥有独立控制身份：不复用父 instanceId/endpoint；清版本覆盖确保上报
-  // 真实运行版本；去 NODE_OPTIONS 防 dev 父进程向编译产物注入 tsx loader。
+  // choose own independent control identity: do not re- use parent instanceId/endpoint; clean version override ensure on report
+  // real run version; remove NODE_OPTIONS guard against dev parent process to compile artifact inject tsx loader.
   delete childEnv['HELM_NODE_INSTANCE_ID'];
   delete childEnv['HELM_NODE_CONTROL_ENDPOINT'];
   delete childEnv['HELM_NODE_PENDING_ACTIVATION'];
@@ -174,7 +174,7 @@ export async function prepareNodeReplacement(
   try {
     logHandle = await fsp.open(options.logPath, 'a');
   } catch (error) {
-    throw new Error(`打开候选日志文件失败（${options.logPath}）：${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`open choose log file failed (${options.logPath}):${error instanceof Error ? error.message : String(error)}`);
   }
 
   let child: ChildProcess;
@@ -186,19 +186,19 @@ export async function prepareNodeReplacement(
     });
   } catch (error) {
     await logHandle.close().catch(() => undefined);
-    throw new Error(`候选守护进程 spawn 失败：${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`choose daemon spawn failed:${error instanceof Error ? error.message : String(error)}`);
   }
 
   const killChild = (): void => {
     try {
       child.kill('SIGKILL');
     } catch {
-      // 已退出。
+      // already exit.
     }
     try {
       if (child.connected) child.disconnect();
     } catch {
-      // 已断开。
+      // disconnected.
     }
     child.unref();
   };
@@ -240,32 +240,32 @@ export async function prepareNodeReplacement(
     await logHandle.close().catch(() => undefined);
     const reason =
       ready.kind === 'starting'
-        ? `候选上报 starting：升级要求真实 registered（attemptId ${context.attemptId}），拒绝带病提交`
+        ? `choose on report starting: upgrade want seek real registered(attemptId ${context.attemptId}), reject carries illness commit`
         : ready.kind === 'error'
-          ? `候选守护进程启动失败（spawn error）：${ready.error.message}`
+          ? `choose daemon failed to start (spawn error):${ready.error.message}`
           : ready.kind === 'exit'
-            ? `候选守护进程启动后立即退出（code=${ready.code ?? 'null'}）`
-            : `候选 ${readyTimeoutMs}ms 内未上报 registered 就绪`;
+            ? `choose daemon after startup immediately exit (code=${ready.code ?? 'null'})`
+            : `choose ${readyTimeoutMs}ms inside not on report registered ready`;
     const tail = await readLogTailBounded(options.logPath, 40);
-    throw new Error(`${reason}${tail !== '' ? `\n--- ${options.logPath} 最后 40 行 ---\n${tail}` : ''}`);
+    throw new Error(`${reason}${tail !== '' ? `\n--- ${options.logPath} finally 40 row ---\n${tail}` : ''}`);
   }
   if (child.pid === undefined) {
     killChild();
     await logHandle.close().catch(() => undefined);
-    throw new Error('候选就绪后 pid 不可用（内部错误）');
+    throw new Error('choose ready after pid unavailable (internal error)');
   }
   const candidatePid = child.pid;
-  // 父侧日志 fd 已 dup 进子进程：候选存活期间持有写端，父侧可关闭。
+  // parent side log fd already dup enter child process: choose store during hold has write end, parent side can close.
   await logHandle.close().catch(() => undefined);
   child.unref();
 
-  // —— activate/ack 状态机 ————————————————————————————————————————
+  // - - activate/ack state machine - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   type Phase = 'ready' | 'activating' | 'activated' | 'rejected' | 'unsent' | 'lost' | 'dead';
   let phase: Phase = 'ready';
   let activateSent = false;
-  /** activate 写入结果：undefined＝未发出或回调未回；true＝已写入通道；false＝写入失败（确定未送达）。 */
+  /** activate write result:undefined= not out or call back not back;true= already write channel;false= failed to write (determine not send reach). */
   let activateWritten: boolean | undefined;
-  /** 写入回调未回时候选退出：等回调定性（失败→unsent；成功→dead）。 */
+  /** write call back not back when choose exit: etc. call back set (failed→unsent; succeeded→dead). */
   let exitWhileWritePending = false;
   let pidWritten = false;
   let oldRecord: HandoffPidRecord | null = null;
@@ -297,26 +297,26 @@ export async function prepareNodeReplacement(
   child.on('message', onAckMessage);
   child.once('exit', () => {
     if (phase === 'activating') {
-      // 写入结果未回时不立即定性：通道关闭会触发 send 回调（失败→unsent
-      // 安全回滚；成功→dead 按未确认处理）；已写入则直接按候选退出处理。
+      // write result not back when do not immediately set: channel close will trigger send call back (failed→unsent
+      // security rollback; succeeded→dead by not confirm handle); already write then directly by choose exit handle.
       if (activateWritten === true) finishAck('dead');
       else exitWhileWritePending = true;
     } else if (phase === 'ready') phase = 'dead';
   });
-  // disconnect 不直接定性为 lost：通道关闭会触发 send 回调给出确定的写入结果
-  //（失败→unsent；成功→等 activated 或超时按未确认处理），避免把「确定未
-  // 送达」误归入「送达状态未知」而放弃快速回滚。
+  // disconnect do not directly set is lost: channel close will trigger send call back to out determine write result
+  //(failed→unsent; succeeded→etc. activated or timeout by not confirm handle), avoid determine not
+  // send reach mistakenly archive send reach state unknown while abandon fast rollback.
 
   const commit = async (): Promise<void> => {
-    if (phase === 'activated') return; // 幂等
+    if (phase === 'activated') return; // idempotent
     if (phase !== 'ready') {
-      throw new Error(`候选不在可提交状态（${phase}${phase === 'dead' ? '：候选已退出或 IPC 通道断开' : ''}），activate 未发出`);
+      throw new Error(`choose do not in can commit state (${phase}${phase === 'dead' ? ': choose already exit or IPC channel disconnect' : ''}),activate not out`);
     }
     if (!child.connected) {
       phase = 'dead';
-      throw new Error('候选 IPC 通道已断开（activate 未发出，安全回滚）');
+      throw new Error('choose IPC channel disconnected (activate not out, security rollback)');
     }
-    // 提交点前奏：备份旧留档并原子写新记录；旧记录用于 abort 的 CAS 还原。
+    // commit point before rhythm: backup old Profile and atomic write new record; old record used to abort  CAS restore.
     oldRecord = await options.readPidRecord();
     await options.writePidRecord({ pid: candidatePid, instanceId, endpoint });
     pidWritten = true;
@@ -340,8 +340,8 @@ export async function prepareNodeReplacement(
       activateSent = true;
       try {
         child.send(activate, (error) => {
-          // 写入结果定性：失败＝确定未送达（unsent，安全回滚）；成功但候选
-          // 已退出＝按未确认处理（可能已提交后崩溃）。
+          // write result set: failed = determine not send reach (unsent, security rollback); succeeded but choose
+          // already exit = by not confirm handle (may committed after crash).
           if (error !== undefined && error !== null) {
             unsentReason = error.message;
             finishAck('unsent');
@@ -352,45 +352,45 @@ export async function prepareNodeReplacement(
         });
       } catch (error) {
         unsentReason = error instanceof Error ? error.message : String(error);
-        finishAck('unsent'); // 同步抛错：消息未写入通道，确定未送达
+        finishAck('unsent'); // sync throws: message not written channel, determine not send reach
       }
     });
     if (outcome === 'activated') {
       try {
         if (child.connected) child.disconnect();
       } catch {
-        // 已断开。
+        // disconnected.
       }
       child.unref();
       return;
     }
     if (outcome === 'rejected') {
-      throw new Error(`候选拒绝激活：${rejectReason}（未提交，安全回滚）`);
+      throw new Error(`choose reject activate:${rejectReason}(uncommitted, security rollback)`);
     }
     if (outcome === 'unsent') {
-      throw new Error(`activate 写入候选 IPC 通道失败（${unsentReason}，确定未送达，候选不可能已提交），安全回滚`);
+      throw new Error(`activate write choose IPC channel failed (${unsentReason}, determine not send reach, choose cannot can committed), security rollback`);
     }
     if (outcome === 'dead') {
-      throw new UpgradeCommitUnconfirmedError(`候选在激活确认前退出（activate 已写入，可能已完成本机提交），不回滚`);
+      throw new UpgradeCommitUnconfirmedError(`choose in activate confirm before exit (activate already write, may completed local machine commit), do not rollback`);
     }
     if (outcome === 'timeout') {
-      throw new UpgradeCommitUnconfirmedError(`等待 activated 确认超时（${activateAckTimeoutMs}ms，activate 已写入），不回滚`);
+      throw new UpgradeCommitUnconfirmedError(`wait for activated confirm timeout (${activateAckTimeoutMs}ms,activate already write), do not rollback`);
     }
-    throw new UpgradeCommitUnconfirmedError('activate 已写入但本机 IPC 确认丢失（通道断开），不回滚');
+    throw new UpgradeCommitUnconfirmedError('activate already write but local machine IPC confirm lose (channel disconnect), do not rollback');
   };
 
   const abort = async (): Promise<void> => {
     if (phase === 'activated') {
-      throw new Error('候选已激活：拒绝 abort（不得回滚已提交的替换）');
+      throw new Error('choose already activate: reject abort(must not rollback committed replace)');
     }
-    // activate 已写入通道（送达状态未知或已送达）且未收到显式拒绝：拒绝
-    // abort。写入失败（unsent）与显式拒绝一样属于「确定未激活」，允许安全回滚。
+    // activate already write channel (send reach state unknown or already send reach) and not received explicit reject: reject
+    // abort. failed to write (unsent) and explicit reject the same belongs to determine inactive, allows security rollback.
     if (activateSent && activateWritten !== false && phase !== 'rejected') {
-      throw new Error('activate 已发出且未收到显式拒绝：拒绝 abort（不得杀候选或回滚 pid）');
+      throw new Error('activate already out and not received explicit reject: reject abort(must not kill choose or rollback pid)');
     }
     killChild();
     if (pidWritten) {
-      // instanceId CAS：只有留档仍指向本候选时才还原，已被他人接管则不动。
+      // instanceId CAS: only Profile still points to this choose when only then restore, already by other person take over then do not motion.
       const current = await options.readPidRecord().catch(() => null);
       if (current !== null && current.instanceId === instanceId) {
         if (oldRecord !== null) await options.writePidRecord(oldRecord);

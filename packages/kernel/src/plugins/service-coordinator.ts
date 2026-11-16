@@ -1,5 +1,5 @@
 /**
- * 插件服务声明、生命周期屏障（prepare -> start -> stop）与受管资源跟踪。
+ * plugin service declaration, lifecycle screen fault (prepare -> start -> stop) and managed asset trace.
  */
 import {
   HelmError,
@@ -13,12 +13,12 @@ import type { PluginTaskTracker } from './tracking.js';
 import type { PluginInUseItem, PluginState, ServiceEntry } from './types.js';
 
 /**
- * 在受控停止 doc 写入窗口内执行服务 stop：stop 期间（含引擎 close 内部
- * 由 abort 唤醒的异步 settle 链）本插件本周期 ctx.doc 句柄的最终持久化写入
- * 与 STOP_WINDOW_HOST_CALLS 被放行（phase 为 deactivating 时不再拒绝）；stop 返回（成功/失败）即
- * 复位窗口，之后一切写入恢复常规拒绝。窗口按 PluginState 标记而非异步上下
- * 文传播：引擎 settle 链的 promise 在 stop 之前创建，AsyncLocalStorage 无法
- * 跨越已存在的 promise 边界。
+ * in subject to control stop doc write window inside execute service stop:stop during (contains engine close internal
+ * by abort wake async settle chain) this plugin this cycle ctx.doc handle eventually persist write
+ * and STOP_WINDOW_HOST_CALLS by let through (phase is deactivating when no longer reject);stop return (succeeded/failed) i.e.
+ * re- window, after everything write restore common rule reject. window by PluginState mark record while non- async on under
+ * text pass broadcast: engine settle chain promise in stop before create,AsyncLocalStorage cannot
+ * across exceeds already exists promise boundary.
  */
 export async function runControlledStop(
   state: PluginState,
@@ -32,7 +32,7 @@ export async function runControlledStop(
   }
 }
 
-/** 插件内全部服务 prepare（按声明顺序；无 prepare 的服务跳过；每服务仅执行一次）。 */
+/** plugin inside all service prepare(by declaration order; without prepare service skip; each service only execute once). */
 export async function prepareServices(state: PluginState): Promise<void> {
   for (const svc of state.services) {
     if (svc.prepare === undefined || svc.prepared) continue;
@@ -44,7 +44,7 @@ export async function prepareServices(state: PluginState): Promise<void> {
         ? err
         : new HelmError(
             'plugin_service_prepare_failed',
-            `插件 ${state.definition.id} 服务 ${svc.id} prepare 失败：${err instanceof Error ? err.message : String(err)}`,
+            `plugin ${state.definition.id} service ${svc.id} prepare failed:${err instanceof Error ? err.message : String(err)}`,
             500,
             { pluginId: state.definition.id, serviceId: svc.id },
           );
@@ -52,7 +52,7 @@ export async function prepareServices(state: PluginState): Promise<void> {
   }
 }
 
-/** 按声明顺序 start 服务；任一失败对已启动者逆向 stop（stop 失败聚合进诊断）。 */
+/** by declaration order start service; any one failed for already start inverse to stop(stop failed aggregate enter diagnose). */
 export async function startServices(state: PluginState): Promise<void> {
   const started: ServiceEntry[] = [];
   try {
@@ -83,7 +83,7 @@ export async function startServices(state: PluginState): Promise<void> {
     }
     throw new HelmError(
       'plugin_service_start_failed',
-      `插件 ${state.definition.id} 服务启动失败：${err instanceof Error ? err.message : String(err)}`,
+      `plugin ${state.definition.id} service failed to start:${err instanceof Error ? err.message : String(err)}`,
       500,
       { pluginId: state.definition.id, stopErrors },
     );
@@ -91,8 +91,8 @@ export async function startServices(state: PluginState): Promise<void> {
 }
 
 /**
- * 启动后失败的逆向 stop：聚合各服务 stop 错误（teardown 同款聚合），
- * 已停用条目跳过；用于 start 屏障阶段 2 的回滚。
+ * after startup failed inverse to stop: aggregate each service stop error (teardown same style aggregate),
+ * deactivated item skip; used to start screen fault phase 2 rollback.
  */
 export async function stopServicesQuietly(state: PluginState): Promise<void> {
   const errors: Array<{ serviceId: string; error: JsonSafeErrorInfo }> = [];
@@ -109,7 +109,7 @@ export async function stopServicesQuietly(state: PluginState): Promise<void> {
   if (errors.length > 0) {
     throw new HelmError(
       'plugin_service_stop_failed',
-      `回滚停止插件 ${state.definition.id} 服务时失败：${errors.map((e) => e.serviceId).join(', ')}`,
+      `rollback stop plugin ${state.definition.id} service when failed:${errors.map((e) => e.serviceId).join(', ')}`,
       500,
       { pluginId: state.definition.id, stopErrors: errors },
     );
@@ -117,7 +117,7 @@ export async function stopServicesQuietly(state: PluginState): Promise<void> {
 }
 
 /**
- * 清理时逆向停止插件已启动服务，返回聚合的 stop 错误列表。
+ * clean up when inverse to stop plugin already start service, return aggregate stop error list.
  */
 export async function stopPluginServices(
   state: PluginState,
@@ -137,18 +137,18 @@ export async function stopPluginServices(
 }
 
 /**
- * 显式启动屏障：先对所有已启用插件逐个执行服务 prepare，
- * 再逐插件按声明顺序 start（原子性屏障：任一失败即刻回滚并显式抛错）。
+ * explicit start screen fault: first for all enabled plugin one by one execute service prepare,
+ * again one by one plugin by declaration order start(atomicity screen fault: any one failed i.e. moment rollback and explicit throws).
  */
 export async function startServiceBarrier(
   enabledPlugins: PluginState[],
 ): Promise<void> {
-  // 阶段 1：全局 prepare 先行
+  // phase 1: global prepare first row
   for (const state of enabledPlugins) {
     await prepareServices(state);
   }
 
-  // 阶段 2：全局 start（原子性回滚：任一失败逆序 stop 已启动插件的服务）
+  // phase 2: global start(atomicity rollback: any one failed inverse order stop already start plugin service)
   const started: PluginState[] = [];
   try {
     for (const state of enabledPlugins) {
@@ -185,7 +185,7 @@ export async function startServiceBarrier(
       }
       throw new HelmError(
         'plugin_service_start_failed',
-        `插件服务启动失败：${err instanceof Error ? err.message : String(err)}`,
+        `plugin service failed to start:${err instanceof Error ? err.message : String(err)}`,
         500,
         { rollbackStopErrors },
       );
@@ -195,9 +195,9 @@ export async function startServiceBarrier(
 }
 
 /**
- * 停用/卸载前的持久资源占用聚合：遍历已启动且声明 inUse 的服务，合并
- * 返回值。服务 inUse 抛错或返回非法形状时显式 plugin_in_use_check_failed
- * （未知即占用原则），绝不静默当空放行。
+ * deactivate/unload before durable asset occupy aggregate: iterate already start and declaration inUse service, merge
+ * return value. service inUse throws or return illegal shape when explicit plugin_in_use_check_failed
+ * (unknown i.e. occupy principle), never static default when empty let through.
  */
 export async function collectServiceInUse(
   pluginId: string,
@@ -212,7 +212,7 @@ export async function collectServiceInUse(
     } catch (err) {
       throw new HelmError(
         'plugin_in_use_check_failed',
-        `插件 ${pluginId} 服务 ${svc.id} 的 inUse 检查抛出异常，按占用处理拒绝停用`,
+        `plugin ${pluginId} service ${svc.id}  inUse check throw exception, by occupy handle reject deactivate`,
         500,
         { pluginId, serviceId: svc.id, error: toJsonSafeError(err) },
       );
@@ -234,7 +234,7 @@ export async function collectServiceInUse(
     ) {
       throw new HelmError(
         'plugin_in_use_check_failed',
-        `插件 ${pluginId} 服务 ${svc.id} 的 inUse 必须返回 { kind, id, label } 均为非空字符串的数组`,
+        `plugin ${pluginId} service ${svc.id}  inUse must return { kind, id, label } all is non-empty string array`,
         500,
         { pluginId, serviceId: svc.id, returned: String(declared) },
       );
@@ -245,10 +245,10 @@ export async function collectServiceInUse(
 }
 
 /**
- * 停用/卸载前的在途任务闸门：tracker 任务 + 已启动服务声明的 liveTasks 标签
- * 取并集，有任一即 409 拒绝（不进入 stop、不改持久开关）。liveTasks 异常或
- * 返回非字符串数组时把异常/非法输出如实显式报错，绝不静默当空——插件声明
- * 的保活检查坏了就必须修，不能靠猜放行。
+ * deactivate/unload before in-flight task gate:tracker task + already start service declaration liveTasks tag
+ * take and collection, has any one i.e. 409 reject (does not enter stop, do not change durable switch).liveTasks exception or
+ * return non- string array when exception/illegal output such as explicit errors, never static default when empty - - plugin declaration
+ * keep-alive check broken then must fix, cannot rely guess let through.
  */
 export function assertNoLiveTasks(
   pluginId: string,
@@ -265,7 +265,7 @@ export function assertNoLiveTasks(
       } catch (err) {
         throw new HelmError(
           'plugin_live_tasks_check_failed',
-          `插件 ${pluginId} 服务 ${svc.id} 的 liveTasks 检查抛出异常，拒绝停用/卸载`,
+          `plugin ${pluginId} service ${svc.id}  liveTasks check throw exception, reject deactivate/unload`,
           500,
           { pluginId, serviceId: svc.id, error: toJsonSafeError(err) },
         );
@@ -276,7 +276,7 @@ export function assertNoLiveTasks(
       ) {
         throw new HelmError(
           'plugin_live_tasks_check_failed',
-          `插件 ${pluginId} 服务 ${svc.id} 的 liveTasks 必须返回字符串数组，实际：${Object.prototype.toString.call(declared)}`,
+          `plugin ${pluginId} service ${svc.id}  liveTasks must return string array, actual:${Object.prototype.toString.call(declared)}`,
           500,
           { pluginId, serviceId: svc.id, returned: String(declared) },
         );
@@ -284,14 +284,14 @@ export function assertNoLiveTasks(
       labels.push(...declared);
     }
   }
-  // tracker 标签最后读：svc.liveTasks 是任意同步插件代码，期间同步启动的任务
-  //（如同步调用 invokeAction）也会被尾读捕获；读完后至调用方置 deactivating
-  // 无 await，门禁闭合无窗口。
+  // tracker tag finally read:svc.liveTasks is any sync plugin code, during sync start task
+  //(such as sync invoke invokeAction) also will by tail read catch; read completely after until caller placement deactivating
+  // without await, gate closed together without window.
   labels.push(...tracker.activeLabels(pluginId));
   if (labels.length > 0) {
     throw new HelmError(
       'plugin_has_live_tasks',
-      `插件 ${pluginId} 仍有 ${labels.length} 个在途任务（${labels.join(', ')}），拒绝停用/卸载`,
+      `plugin ${pluginId} still has ${labels.length} in-flight task (${labels.join(', ')}), reject deactivate/unload`,
       409,
       { pluginId, activeTasks: labels },
     );

@@ -1,5 +1,5 @@
 /**
- * 插件生命周期辅助函数：定义校验、启停持久化判定、资源清理与终态错误聚合。
+ * plugin lifecycle auxiliary function: define validate, start stop persist decide, asset clean up and terminal state error aggregate.
  */
 import {
   HelmError,
@@ -23,13 +23,13 @@ import { unregisterProviders } from './provider-coordinator.js';
 
 export function assertDefinition(definition: PluginDefinition): void {
   if (!definition || typeof definition.id !== 'string' || definition.id.length === 0) {
-    throw new HelmError('invalid_plugin_definition', '插件定义缺少 id', 400);
+    throw new HelmError('invalid_plugin_definition', 'plugin define missing id', 400);
   }
   if (!/^[A-Za-z0-9:_-]+$/.test(definition.id)) {
-    throw new HelmError('invalid_plugin_definition', `插件 id 仅允许字母数字 : _ -：${definition.id}`, 400);
+    throw new HelmError('invalid_plugin_definition', `plugin id only allows character parent number : _ -:${definition.id}`, 400);
   }
   if (typeof definition.definePlugin !== 'function') {
-    throw new HelmError('invalid_plugin_definition', `插件 ${definition.id} 缺少 definePlugin 函数`, 400);
+    throw new HelmError('invalid_plugin_definition', `plugin ${definition.id} missing definePlugin function`, 400);
   }
   normalizeDependencies(definition);
   if (
@@ -40,20 +40,20 @@ export function assertDefinition(definition: PluginDefinition): void {
   ) {
     throw new HelmError(
       'invalid_plugin_definition',
-      `插件 ${definition.id} 的 clientRoot 必须是不含 .. 段的跨平台绝对目录路径（POSIX /、Windows 盘符或 UNC）`,
+      `plugin ${definition.id}  clientRoot must be excludes .. segment across platform absolute directory path (POSIX /,Windows symbol or UNC)`,
       400,
       { pluginId: definition.id },
     );
   }
 }
 
-/** 插件间依赖 ID 字符集（与插件 id 同集：字母数字 : _ -）。 */
+/** plugin between dependency ID character collection (and plugin id same collection: character parent number : _ -). */
 const PLUGIN_DEPENDENCY_ID_PATTERN = /^[A-Za-z0-9:_-]+$/;
 
 /**
- * 依赖声明边界归一：可选数组，逐项必须是非空且匹配插件 id 字符集的字符串；
- * 按声明序去重（重复不是错误，但图与清单只保留一份）；自依赖是长度 1 的
- * 环路，在此直接显式拒绝。返回归一后的列表（无依赖时为空数组）。
+ * dependency declaration boundary archive one: optional array, one by one items must be non-empty and match plugin id character collection string;
+ * by declaration order dedupe (duplicate is not error, but diagram and manifest only keep a); self dependency is length 1 
+ * ring route, in this directly explicit reject. return archive one after list (without dependency when is empty array).
  */
 export function normalizeDependencies(definition: PluginDefinition): string[] {
   const deps = definition.dependencies;
@@ -61,7 +61,7 @@ export function normalizeDependencies(definition: PluginDefinition): string[] {
   if (!Array.isArray(deps) || deps.some((d) => typeof d !== 'string' || !PLUGIN_DEPENDENCY_ID_PATTERN.test(d))) {
     throw new HelmError(
       'invalid_plugin_definition',
-      `插件 ${definition.id} 的 dependencies 必须是插件 ID 字符串数组（仅允许字母数字 : _ -，不支持版本说明符）`,
+      `plugin ${definition.id}  dependencies must be plugin ID string array (only allows character parent number : _ -, unsupported version note symbol)`,
       400,
       { pluginId: definition.id, dependencies: Array.isArray(deps) ? deps.map((d) => String(d)) : String(deps) },
     );
@@ -72,7 +72,7 @@ export function normalizeDependencies(definition: PluginDefinition): string[] {
     if (dep === definition.id) {
       throw new HelmError(
         'plugin_dependency_cycle',
-        `插件 ${definition.id} 声明了自依赖（依赖图环路）`,
+        `plugin ${definition.id} declaration self dependency (dependency graph ring route)`,
         409,
         { pluginId: definition.id, cycle: [definition.id, definition.id] },
       );
@@ -85,10 +85,10 @@ export function normalizeDependencies(definition: PluginDefinition): string[] {
 }
 
 /**
- * 依赖图环路检测：从起点插件的依赖声明出发，沿已注册插件的依赖边深度优先，
- * 回到起点即成环。返回环路上的插件 ID 序列（不成环返回 undefined）。只追踪
- * 已注册节点（起点依赖经 startDependencies 注入；未注册依赖是 enable 阶段的
- * 缺失错误，不是环）。
+ * dependency graph ring route detect: from start point plugin dependency declaration starting from, along registered plugin dependency edge deep takes precedence,
+ * back to start point i.e. into ring. return ring route on plugin ID sequence (do not into ring return undefined). only append trace
+ * registered node (start point dependency via startDependencies inject; not registered dependency is enable phase
+ * missing error, is not ring).
  */
 export function findDependencyCycle(
   startPluginId: string,
@@ -120,10 +120,10 @@ export function findDependencyCycle(
 }
 
 /**
- * 依赖拓扑排序（确定性 Kahn）：输入保持注册序，仅统计集合内依赖边（依赖
- * 集合外/未注册插件的边不参与排序）；同层结点按注册序出队，被依赖者先出。
- * 输入已无环（注册边界拒绝环路）；防御性兑底：若检测到环，抛
- * plugin_dependency_cycle 而不是死循环。
+ * dependency topology sort (determinism Kahn): input keep register order, only count set inside dependency edge (dependency
+ * set outside/not registered plugin edge does not participate sort); same layer point by register order out queue, by dependency first out.
+ * input already without ring (register boundary reject ring route); guard against defend honor bottom: if detect to ring, throw
+ * plugin_dependency_cycle while is not infinite loop.
  */
 export function topoSortByDependencies<T>(
   items: T[],
@@ -154,8 +154,8 @@ export function topoSortByDependencies<T>(
       const deps = depsOf.get(dependentId)!;
       deps.delete(id);
       if (deps.size === 0 && !queued.has(dependentId)) {
-        // 同层保持注册序：入队项按原注册序插入（dependentsOf 本身按注册序追加，
-        // 且 queued 防重复；多源同时解锁时出队顺序由解锁顺序决定，确定性是够的）。
+        // same layer keep register order: queue items by original register order insert (dependentsOf itself by register order append,
+        // and queued guard against duplicate; many source also unlock when out queue order by unlock order decide, determinism is enough).
         queued.add(dependentId);
         const source = items.find((i) => idOf(i) === dependentId)!;
         pending.push(source);
@@ -166,7 +166,7 @@ export function topoSortByDependencies<T>(
     const stuck = items.filter((i) => !out.includes(i)).map(idOf);
     throw new HelmError(
       'plugin_dependency_cycle',
-      `插件依赖图存在环路，无法拓扑排序：${stuck.join(' -> ')}`,
+      `plugin dependency graph store in ring route, cannot topology sort:${stuck.join(' -> ')}`,
       409,
       { pluginIds: stuck },
     );
@@ -176,23 +176,23 @@ export function topoSortByDependencies<T>(
 
 export function assertNotLocked(state: PluginState): void {
   if (state.definition.locked === true) {
-    throw new HelmError('plugin_locked', `插件 ${state.definition.id} 已锁定，禁止停用/卸载`, 403, {
+    throw new HelmError('plugin_locked', `plugin ${state.definition.id} already lock, forbidden deactivate/unload`, 403, {
       pluginId: state.definition.id,
     });
   }
 }
 
-/** 对外可用 = 已启用且不在 definePlugin / 停用过渡态。 */
+/** for outside available = enabled and do not in definePlugin / deactivate transition state. */
 export function assertActive(state: PluginState): void {
   if (!state.enabled || state.phase !== 'idle') {
-    throw new HelmError('plugin_disabled', `插件 ${state.definition.id} 未启用或正在切换启用状态`, 409, {
+    throw new HelmError('plugin_disabled', `plugin ${state.definition.id} not enabled or is now switch enable state`, 409, {
       pluginId: state.definition.id,
       phase: state.phase,
     });
   }
 }
 
-/** 周期内可用性守卫：周期更替/停用中/已停用一律失效（doc 句柄与宿主资源共用）。 */
+/** cycle inside availability guard: cycle more replace/deactivate in/deactivated one rule expires (doc handle and host asset shared use). */
 export function assertContextUsable(
   state: PluginState,
   epoch: number,
@@ -201,7 +201,7 @@ export function assertContextUsable(
   isDisposed: boolean,
 ): void {
   if (isDisposed) {
-    throw new HelmError('plugin_host_disposed', 'PluginHost 已 dispose', 409);
+    throw new HelmError('plugin_host_disposed', 'PluginHost already dispose', 409);
   }
   if (
     currentState !== state ||
@@ -211,7 +211,7 @@ export function assertContextUsable(
   ) {
     throw new HelmError(
       'plugin_context_expired',
-      `插件 ${state.definition.id} 的 ${what} 已失效（插件已停用或进入新启用周期）`,
+      `plugin ${state.definition.id}  ${what} already expires (plugin deactivated or enter new enable cycle)`,
       409,
     );
   }
@@ -230,7 +230,7 @@ export function resolveInitialEnabled(
     if (err instanceof HelmError) throw err;
     throw new HelmError(
       'plugin_registration_failed',
-      `插件 ${definition.id} 注册失败：读取持久启停状态时出错：${err instanceof Error ? err.message : String(err)}`,
+      `plugin ${definition.id} register failed: read durable start stop state when fails:${err instanceof Error ? err.message : String(err)}`,
       500,
       { pluginId: definition.id },
     );
@@ -238,7 +238,7 @@ export function resolveInitialEnabled(
   if (persisted !== undefined && typeof persisted !== 'boolean') {
     throw new HelmError(
       'plugin_enabled_state_invalid',
-      `插件 ${definition.id} 的持久启停状态非法（期望布尔值，实际：${typeof persisted}），拒绝注册`,
+      `plugin ${definition.id} durable start stop state illegal (expectation boolean value, actual:${typeof persisted}), reject register`,
       500,
       { pluginId: definition.id, persisted: String(persisted) },
     );
@@ -248,8 +248,8 @@ export function resolveInitialEnabled(
 }
 
 /**
- * 持久化启停状态（store 未实现 setEnabled 时为无副作用的内存机制）。
- * 失败显式 reject，由调用方决定回滚（enable）或聚合诊断（disable）。
+ * persist start stop state (store not implemented setEnabled when is no side effects memory mechanism).
+ * failed explicit reject, by caller decide rollback (enable) or aggregate diagnose (disable).
  */
 export async function persistEnabled(
   store: PluginConfigStore | undefined,
@@ -262,7 +262,7 @@ export async function persistEnabled(
   } catch (err) {
     throw new HelmError(
       'plugin_enabled_persist_failed',
-      `插件 ${state.definition.id} 启停状态持久化失败：${err instanceof Error ? err.message : String(err)}`,
+      `plugin ${state.definition.id} start stop state persist failed:${err instanceof Error ? err.message : String(err)}`,
       500,
       { pluginId: state.definition.id, enabled, persistError: toJsonSafeError(err) },
     );
@@ -270,7 +270,7 @@ export async function persistEnabled(
 }
 
 /**
- * 停用时清理服务与 Provider，释放宿主生命周期资源，清空能力注册表。
+ * deactivate when clean up service and Provider, release host lifecycle asset, empty capability register table.
  */
 export async function teardownPlugin(
   state: PluginState,
@@ -307,7 +307,7 @@ export async function teardownPlugin(
   if (stopErrors.length > 0) {
     throw new HelmError(
       'plugin_service_stop_failed',
-      `插件 ${state.definition.id} 清理时服务 stop 失败：${stopErrors.map((e) => e.serviceId).join(', ')}`,
+      `plugin ${state.definition.id} clean up when service stop failed:${stopErrors.map((e) => e.serviceId).join(', ')}`,
       500,
       {
         pluginId: state.definition.id,
@@ -320,7 +320,7 @@ export async function teardownPlugin(
   if (providerErrors.length > 0) {
     throw new HelmError(
       'plugin_provider_unregister_failed',
-      `插件 ${state.definition.id} 清理时 provider 卸载失败：${providerErrors.map((e) => e.providerId).join(', ')}`,
+      `plugin ${state.definition.id} clean up when provider failed to uninstall:${providerErrors.map((e) => e.providerId).join(', ')}`,
       500,
       { pluginId: state.definition.id, providerErrors },
     );
@@ -328,7 +328,7 @@ export async function teardownPlugin(
   if (releaseErrors.length > 0) {
     throw new HelmError(
       'plugin_resource_release_failed',
-      `插件 ${state.definition.id} 清理时宿主资源释放失败（管理保护/监听可能残留，需人工核查）`,
+      `plugin ${state.definition.id} clean up when host asset release failed (manage protect/listen may leftover, must human core inspect)`,
       500,
       { pluginId: state.definition.id, releaseErrors },
     );
@@ -336,8 +336,8 @@ export async function teardownPlugin(
 }
 
 /**
- * 异常归一为结构化插件诊断（PluginDiagnosticError）：HelmError 保留
- * code/status 与 details，其他异常包装为 plugin_execution_failed。
+ * exception archive one is structure plugin diagnose (PluginDiagnosticError):HelmError keep
+ * code/status and details, other exception wrap is plugin_execution_failed.
  */
 export function toDiagnosticError(
   err: unknown,
@@ -377,7 +377,7 @@ export function wrapRegistrationError(
   }
   return new HelmError(
     'plugin_registration_failed',
-    `插件 ${pluginId} 注册失败：${err instanceof Error ? err.message : String(err)}`,
+    `plugin ${pluginId} register failed:${err instanceof Error ? err.message : String(err)}`,
     500,
     { pluginId, registerSeq: seq, ...(rollbackError ? { rollbackError } : {}) },
   );
@@ -399,7 +399,7 @@ export function wrapEnableError(
   }
   return new HelmError(
     'plugin_enable_failed',
-    `插件 ${pluginId} 启用失败：${err instanceof Error ? err.message : String(err)}`,
+    `plugin ${pluginId} enable failed:${err instanceof Error ? err.message : String(err)}`,
     500,
     { pluginId, ...(rollbackError ? { rollbackError } : {}) },
   );
@@ -430,11 +430,11 @@ export function pluginSummaryOf(
 export function getActiveEnabledPluginIds(plugins: Map<string, PluginState>): string[] {
   const ids: string[] = [];
   for (const [id, s] of plugins) {
-    // 清单可见性要求 enabled+idle：拆毁期（disable 已置 phase=deactivating 而
-    // enabled 尚未落 false，teardown 至 clearRegistrations 之间）的插件必须从
-    // 工具/动作/路由/UI 清单即时消失，不再向已停服务派发新请求。register 与
-    // enable 的 enabled 与 idle 为同步相邻置位，不存在「enabled 已置而 phase
-    // 未 idle」的启动期窗口，清单出现时机不变。
+    // manifest visible want seek enabled+idle: split destroy phase (disable already placement phase=deactivating while
+    // enabled not yet false,teardown until clearRegistrations between) plugin must from
+    // tool/action/routing/UI manifest i.e. when disappear, no longer to already stop service dispatch new request.register and
+    // enable  enabled and idle is sync adjacent placement, missingenabled already placement while phase
+    // not idlestartup phase window, manifest appear when machine do not change.
     if (s.enabled && s.phase === 'idle') ids.push(id);
   }
   return ids;
@@ -455,8 +455,8 @@ export async function disposePlugins(
   removeRegistries: (pluginId: string) => void,
 ): Promise<void> {
   const errors: Array<{ pluginId: string; error: JsonSafeErrorInfo }> = [];
-  // 逆依赖拓扑序拆毁：依赖者先干依赖它的插件停止（依赖它的插件先停，被依赖
-  // 者后停）；无依赖关系的插件保持注册序的逆序，与既有行为一致。
+  // inverse dependency topology order split destroy: dependency first dry dependency it plugin stop (dependency it plugin first stop, by dependency
+  // after stop); without dependency closure system plugin keep register order inverse order, and since has behavior consistent.
   const ordered = topoSortByDependencies(
     [...plugins.values()],
     (s) => s.definition.id,
@@ -479,7 +479,7 @@ export async function disposePlugins(
   if (errors.length > 0) {
     throw new HelmError(
       'plugin_dispose_failed',
-      `dispose 时部分插件清理失败：${errors.map((e) => e.pluginId).join(', ')}`,
+      `dispose when part plugin clean up failed:${errors.map((e) => e.pluginId).join(', ')}`,
       500,
       { errors },
     );
@@ -487,9 +487,9 @@ export async function disposePlugins(
 }
 
 /**
- * settleLifecycleChanged：启停持久化失败（persistError）与 stop 错误
- * 同层聚合。三重失败（stop + 持久化 + 事件发布）时以 stop 诊断为主链，其余
- * JSON-safe 归一后附入 details，绝不静默变成功，也绝不让后发错误掩盖先发诊断。
+ * settleLifecycleChanged: start stop persist failed (persistError) and stop error
+ * same layer aggregate. three heavy failed (stop + persist + event publish) when with stop diagnose is main chain, the rest
+ * JSON-safe archive one after attach details, never static default becomes feature, also never let after error mask first diagnose.
  */
 export function settleLifecycleChanged(
   state: PluginState,
@@ -520,7 +520,7 @@ export function settleLifecycleChanged(
   if (persistError && !stopError) {
     throw new HelmError(
       'plugin_enabled_persist_failed',
-      `插件 ${state.definition.id} 已停用，但启停状态持久化失败：${persistError.err instanceof Error ? persistError.err.message : String(persistError.err)}`,
+      `plugin ${state.definition.id} deactivated, but start stop state persist failed:${persistError.err instanceof Error ? persistError.err.message : String(persistError.err)}`,
       500,
       {
         pluginId: state.definition.id,
@@ -532,7 +532,7 @@ export function settleLifecycleChanged(
   if (eventError) {
     throw new HelmError(
       'plugin_changed_emit_failed',
-      `插件 ${state.definition.id} 已完成实际停用/移除，但服务 stop 与 plugin.changed 事件发布双双失败`,
+      `plugin ${state.definition.id} completed actual deactivate/remove, but service stop and plugin.changed event publish double double failed`,
       500,
       { pluginId: state.definition.id, stopError: toJsonSafeError(stopError!.err), ...extras },
     );

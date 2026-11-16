@@ -1,6 +1,6 @@
 /**
- * 新版插件核心契约测试：会话作用域、公共文档、宿主生命周期端口、相对路由。
- * runner: tsx --test；每项显式 timeout: 60_000 防死锁。
+ * new edition plugin core contract test: conversation effect domain, public document, host lifecycle port, each other for routing.
+ * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
  */
 import test, { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,18 +17,18 @@ import {
 } from './helpers.js';
 
 // ---------------------------------------------------------------------------
-// 测试基建
+// test base create
 // ---------------------------------------------------------------------------
 
 function makeConversation(id: number, over: Partial<ConversationSummary> = {}): ConversationSummary {
   return makeConversationSummary({ id, ...over });
 }
 
-/** 可编程会话面：scope 执行期校验经 host.getConversation 现取真实摘要。 */
+/** can edit process conversation side:scope execute phase validate via host.getConversation now take real summary. */
 class FakeBackend extends PluginHostBackendFixtureBase {
   conversations = new Map<number, ConversationSummary>();
   events: Array<{ type: string; payload: unknown }> = [];
-  /** 会话管理保护记录：(conversationId, pluginId) → 仍生效即存在。 */
+  /** conversation manage protect record:(conversationId, pluginId) → still takes effect i.e. store in. */
   managed = new Map<string, { conversationId: number; pluginId: string }>();
   askSeqResolvers = new Set<(askId: string) => MaybePromise<number | undefined>>();
   workflowListeners = new Set<(run: unknown) => void | Promise<void>>();
@@ -55,7 +55,7 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   }
   getConversation(id: number): ConversationSummary {
     const found = this.conversations.get(id);
-    if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404);
+    if (found === undefined) throw new HelmError('not_found', `conversation missing: ${id}`, 404);
     return found;
   }
   updateConversation(id: number): Promise<ConversationSummary> {
@@ -82,9 +82,9 @@ class FakeBackend extends PluginHostBackendFixtureBase {
     return { idempotent: false };
   }
   execEnv(): Promise<EnvExecResponse> {
-    return Promise.reject(new HelmError('unsupported', '本 fixture 不执行节点命令', 501));
+    return Promise.reject(new HelmError('unsupported', 'this fixture do not execute node command', 501));
   }
-  withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') }
+  withFileMutationQueue(): Promise<never> { throw new Error('this fixture do not bear load file mutual exclusion queue') }
   listActions(): [] {
     return [];
   }
@@ -133,13 +133,13 @@ function makeHost(): PluginHost {
 
 function throwsCode(fn: () => unknown, code: string): void {
   assert.throws(fn, (err: unknown) => {
-    assert.ok(err instanceof HelmError, `期望 HelmError，实际：${String(err)}`);
+    assert.ok(err instanceof HelmError, `expectation HelmError, actual:${String(err)}`);
     assert.equal(err.code, code);
     return true;
   });
 }
 
-/** 构造一个声明工具与动作的插件（scope 可配；名字带 id 后缀避免跨插件重名）。 */
+/** construct a declaration tool and action plugin (scope can match; name carries id suffix avoid across plugin heavy name). */
 function scopedPlugin(
   id: string,
   scope: { tool?: unknown; action?: unknown },
@@ -168,7 +168,7 @@ function scopedPlugin(
 }
 
 
-/** scopedPlugin 的工具注册名（与实现保持同一派生规则）。 */
+/** scopedPlugin tool register name (and implement keep the same derive rule). */
 function scopedToolName(pluginId: string): string {
   return `scoped_tool_${pluginId.replaceAll(/[^A-Za-z0-9]/g, '_')}`;
 }
@@ -184,10 +184,10 @@ afterEach(async () => {
 });
 
 // ---------------------------------------------------------------------------
-// 1. ConversationScope：注册边界校验
+// 1. ConversationScope: register boundary validate
 // ---------------------------------------------------------------------------
 
-test('scope 注册边界：非纯对象/未知字段/非法元素一律 invalid_plugin_scope 并整体回滚', { timeout: 60_000 }, async () => {
+test('scope register boundary: non- pure object/unknown field/illegal element one rule invalid_plugin_scope and whole rollback', { timeout: 60_000 }, async () => {
   const host = makeHost();
   const badScopes: unknown[] = [
     'not-object',
@@ -214,21 +214,21 @@ test('scope 注册边界：非纯对象/未知字段/非法元素一律 invalid_
       400,
     );
   }
-  // 全部回滚：无插件注册
+  // all rollback: without plugin register
   assert.equal(host.list().length, 0);
-  // 动作 scope 同样在注册边界拒绝
+  // action scope same in register boundary reject
   await assertRejectsCode(
     () => host.register(scopedPlugin('p:bad-action', { action: { tags: [new Date()] } })),
     'invalid_plugin_scope',
   );
 
-  // 合法 scope（正整数 ID / 非空字符串 / 空数组语义另测）正常注册
+  // legal scope(positive integer ID / non-empty string / empty array semantics another test) normal register
   const ok = makeHost();
   await ok.register(scopedPlugin('p:ok', { tool: { conversationIds: [1, 2], tags: ['worker'] } }));
   assert.equal(ok.list().length, 1);
 });
 
-test('模型供应商 scope 随会话切换生效，执行边界复核工具与动作', { timeout: 60_000 }, async () => {
+test('model provider scope follow conversation switch takes effect, execute boundary re-check tool and action', { timeout: 60_000 }, async () => {
   const host = makeHost();
   const scope = { modelProviders: ['example'] };
   await host.register(scopedPlugin('p:model-provider', { tool: scope, action: scope }));
@@ -242,7 +242,7 @@ test('模型供应商 scope 随会话切换生效，执行边界复核工具与�
   await assertRejectsCode(() => host.invokeAction('p:model-provider', 'scoped_action', {}, { conversationId: 1 }), 'conversation_scope_violation', 403);
 });
 
-test('ui scope 也在注册边界校验：非法 ui spec scope 拒绝', { timeout: 60_000 }, async () => {
+test('ui scope also in register boundary validate: illegal ui spec scope reject', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await assertRejectsCode(
     () =>
@@ -254,7 +254,7 @@ test('ui scope 也在注册边界校验：非法 ui spec scope 拒绝', { timeou
       }),
     'invalid_plugin_scope',
   );
-  // 合法 ui scope 注册成功且进清单
+  // legal ui scope register succeeded and enter manifest
   await host.register({
     id: 'p:ui-scope-ok',
     definePlugin: (ctx) => {
@@ -266,7 +266,7 @@ test('ui scope 也在注册边界校验：非法 ui spec scope 拒绝', { timeou
   assert.deepEqual((ui[0]!.spec as { scope?: unknown }).scope, { profileIds: ['superagent'] });
 });
 
-test('timeline.renderer matchMeta 仅允许 { renderer: 非空字符串 }', { timeout: 60_000 }, async () => {
+test('timeline.renderer matchMeta only allows { renderer: non-empty string }', { timeout: 60_000 }, async () => {
   const host = makeHost();
   for (const [i, matchMeta] of [
     { renderer: '' },
@@ -297,14 +297,14 @@ test('timeline.renderer matchMeta 仅允许 { renderer: 非空字符串 }', { ti
 });
 
 // ---------------------------------------------------------------------------
-// 2. listTools(conversation) 按会话筛选 + executeTool / invokeAction 双重校验
+// 2. listTools(conversation) by conversation filter choose + executeTool / invokeAction double heavy validate
 // ---------------------------------------------------------------------------
 
-test('listTools 无参全量（runtime 热注册）；有参按 scope 筛选（profileIds 为主示例，tags 通用）', { timeout: 60_000 }, async () => {
+test('listTools without reference all amount (runtime hot register); has reference by scope filter choose (profileIds is main example,tags through use)', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register(
     scopedPlugin('p:superagent-tools', {
-      // 新角色示例：中枢 scope 用 profileIds 表达
+      // new role example: router hub scope use profileIds express
       tool: { profileIds: ['superagent', 'watchdog'] },
       action: { profileIds: ['superagent', 'watchdog'] },
     }),
@@ -314,7 +314,7 @@ test('listTools 无参全量（runtime 热注册）；有参按 scope 筛选（p
     definePlugin: (ctx) => {
       ctx.action({
         id: 'archive',
-        description: '归档 worker',
+        description: 'archive worker',
         inputSchema: { type: 'object' },
         outputSchema: { type: 'object' },
         scope: { tags: ['worker'] },
@@ -325,28 +325,28 @@ test('listTools 无参全量（runtime 热注册）；有参按 scope 筛选（p
   });
   await host.register(scopedPlugin('p:unscoped', {}));
 
-  // 无参：全部工具（含无 scope 与命中 scope 的）
+  // without reference: all tool (contains without scope and hit scope )
   const all = host.listTools();
   assert.equal(all.length, 3); // scoped_tool(superagent) + archive(worker) + scoped_tool(unscoped)
 
-  // superagent 会话：可见 profileIds 命中的两个 + 无 scope 的一个
+  // superagent conversation: visible profileIds hit two + without scope a
   const routerView = host.listTools(backend.conversations.get(2)!);
   const routerNames = routerView.map((t) => t.sourcePluginId).sort();
   assert.deepEqual(routerNames, ['p:superagent-tools', 'p:unscoped']);
 
-  // worker 会话（tags 命中）+ 无 scope
+  // worker conversation (tags hit)+ without scope
   const workerView = host.listTools(backend.conversations.get(5)!);
   assert.deepEqual(
     workerView.map((t) => t.sourcePluginId).sort(),
     ['p:unscoped', 'p:worker-tools'],
   );
 
-  // assistant 会话：只剩无 scope 的
+  // assistant conversation: only remain without scope 
   const assistantView = host.listTools(backend.conversations.get(1)!);
   assert.deepEqual(assistantView.map((t) => t.sourcePluginId), ['p:unscoped']);
 });
 
-test('显式空数组 scope 匹配不到任何会话（非「不限」）；缺省字段不限', { timeout: 60_000 }, async () => {
+test('explicit empty array scope match fewer than any conversation (non- do not limit); default field do not limit', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register(scopedPlugin('p:none', { tool: { conversationIds: [] } }));
   await host.register(scopedPlugin('p:partial', { tool: { profileIds: ['superagent'], tags: [] } }));
@@ -354,12 +354,12 @@ test('显式空数组 scope 匹配不到任何会话（非「不限」）；缺�
 
   const conv = backend.conversations.get(2)!;
   const names = host.listTools(conv).map((t) => t.sourcePluginId);
-  // p:none 空 conversationIds 不命中；p:partial profileIds 命中但 tags 空数组 AND 不命中；
-  // p:open 无实质约束命中
+  // p:none empty conversationIds do not hit;p:partial profileIds hit but tags empty array AND do not hit;
+  // p:open without quality constraint hit
   assert.deepEqual(names, ['p:open']);
 });
 
-test('executeTool 双重校验：scope 未命中 403，命中放行；无 scope 保持旧行为', { timeout: 60_000 }, async () => {
+test('executeTool double heavy validate:scope missed 403, hit let through; without scope keep old behavior', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register(
     scopedPlugin('p:guard', {
@@ -368,32 +368,32 @@ test('executeTool 双重校验：scope 未命中 403，命中放行；无 scope 
     }),
   );
 
-  // 会话 1（assistant）不在 scope：可见性之外的直接执行也被拒
+  // conversation 1(assistant) do not in scope: visible of outside directly execute also by refuse
   await assertRejectsCode(() => host.executeTool(scopedToolName('p:guard'), {}, { conversationId: 1 }), 'conversation_scope_violation', 403);
   await assertRejectsCode(
     () => host.invokeAction('p:guard', 'scoped_action', {}, { conversationId: 1 }),
     'conversation_scope_violation',
     403,
   );
-  // 会话 2（superagent）命中：放行
+  // conversation 2(superagent) hit: let through
   assert.deepEqual(await host.executeTool(scopedToolName('p:guard'), {}, { conversationId: 2 }), { ok: true });
   assert.deepEqual(await host.invokeAction('p:guard', 'scoped_action', {}, { conversationId: 2 }), { ok: true });
 
-  // 无 conversationId 的人工调用（HTTP/CLI 无会话上下文）：放行（scope 是会话策略非用户鉴权）
+  // without conversationId human invoke (HTTP/CLI without conversation context): let through (scope is conversation policy non- user authentication)
   assert.deepEqual(await host.invokeAction('p:guard', 'scoped_action', {}), { ok: true });
 
-  // 无 scope 插件：任何会话与无会话上下文都放行（旧行为）
+  // without scope plugin: any conversation and without conversation context all let through (old behavior)
   await host.register(scopedPlugin('p:free', {}));
   assert.deepEqual(await host.executeTool(scopedToolName('p:free'), {}, { conversationId: 1 }), { ok: true });
 });
 
-test('scope 会话摘要经 host.getConversation 现取：会话不存在如实抛 not_found', { timeout: 60_000 }, async () => {
+test('scope conversation summary via host.getConversation now take: conversation missing such as throw not_found', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register(
     scopedPlugin('p:gone', { tool: { conversationIds: [999] }, action: { conversationIds: [999] } }),
   );
   await assertRejectsCode(() => host.executeTool(scopedToolName('p:gone'), {}, { conversationId: 999 }), 'not_found', 404);
-  // 私改 conversations 面板不影响：getConversation 现取真实数据
+  // private change conversations panel does not affect:getConversation now take real data
   backend.conversations.delete(1);
   await assertRejectsCode(
     () => host.invokeAction('p:gone', 'scoped_action', {}, { conversationId: 1 }),
@@ -401,14 +401,14 @@ test('scope 会话摘要经 host.getConversation 现取：会话不存在如实�
   );
 });
 
-test('exposeAsTool 动作派生工具继承 scope：executeTool 经 invokeAction 二次校验', { timeout: 60_000 }, async () => {
+test('exposeAsTool action derive tool inherit scope:executeTool via invokeAction second validate', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'p:derived',
     definePlugin: (ctx) => {
       ctx.action({
         id: 'patrol',
-        description: '巡检',
+        description: 'inspection',
         inputSchema: { type: 'object' },
         outputSchema: { type: 'object' },
         scope: { profileIds: ['watchdog'] },
@@ -417,23 +417,23 @@ test('exposeAsTool 动作派生工具继承 scope：executeTool 经 invokeAction
       });
     },
   });
-  const tools = host.listTools(backend.conversations.get(3)!); // watchdog 会话可见
+  const tools = host.listTools(backend.conversations.get(3)!); // watchdog conversation visible
   assert.equal(tools.length, 1);
   const alias = tools[0]!.name;
   assert.deepEqual(await host.executeTool(alias, {}, { conversationId: 3 }), { patrolled: true });
-  // 其他会话不可见且执行被拒（双重校验）
+  // other conversation invisible and execute by refuse (double heavy validate)
   assert.equal(host.listTools(backend.conversations.get(1)!).length, 0);
   await assertRejectsCode(() => host.executeTool(alias, {}, { conversationId: 1 }), 'conversation_scope_violation');
-  // listActions manifest 携带 scope（run_action 清单注入用）
+  // listActions manifest carry scope(run_action manifest inject use)
   const manifest = host.listActions().find((a) => a.id === 'patrol')!;
   assert.deepEqual(manifest.scope, { profileIds: ['watchdog'] });
 });
 
 // ---------------------------------------------------------------------------
-// 3. 公共文档：public 第三参 / getPublicDoc / plugin.doc.updated
+// 3. public document:public third reference / getPublicDoc / plugin.doc.updated
 // ---------------------------------------------------------------------------
 
-test('ctx.doc 第三参 public：私有默认；公共变更发 plugin.doc.updated（值 JSON-safe）', { timeout: 60_000 }, async () => {
+test('ctx.doc third reference public: private by default; public change plugin.doc.updated(value JSON-safe)', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let publicHandle!: { set: (v: { n: number }) => void; update: (fn: (c: { n: number }) => { n: number }) => void };
   let privateHandle!: { set: (v: { n: number }) => void };
@@ -450,7 +450,7 @@ test('ctx.doc 第三参 public：私有默认；公共变更发 plugin.doc.updat
       .filter((e) => e.type === 'plugin.doc.updated')
       .map((e) => (e.payload as { doc: { pluginId: string; name: string; value: { n: number } } }).doc);
 
-  // set / update 都发事件，载荷是 PublicPluginDoc
+  // set / update all event, payload is PublicPluginDoc
   publicHandle.set({ n: 1 });
   publicHandle.update((c) => ({ n: c.n + 1 }));
   const emitted = docEvents();
@@ -459,51 +459,51 @@ test('ctx.doc 第三参 public：私有默认；公共变更发 plugin.doc.updat
   assert.equal(emitted[0]!.pluginId, 'p:docs');
   assert.equal(emitted[0]!.name, 'pub');
 
-  // 私有 doc 写入不发事件
+  // private doc write do not event
   privateHandle.set({ n: 9 });
   assert.equal(docEvents().length, 2);
 });
 
-test('getPublicDoc：public 可读（含未写过的初值）；private/missing/停用/未注册统一 404', { timeout: 60_000 }, async () => {
+test('getPublicDoc:public can read (contains not write initial value);private/missing/deactivate/not registered unify 404', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let publicHandle!: { set: (v: { n: number }) => void };
   await host.register({
     id: 'p:pub',
     definePlugin: (ctx) => {
-      ctx.doc('fresh', { n: 7 }, { public: true }); // 从未 set
+      ctx.doc('fresh', { n: 7 }, { public: true }); // from not set
       ctx.doc('written', { n: 0 }, { public: true });
       ctx.doc('secret', { n: 0 });
       publicHandle = ctx.doc('written', { n: 0 }, { public: true }) as never;
     },
   }).catch(() => {
-    // written 重复声明会 duplicate_doc —— 换个干净写法
+    // written duplicate declaration will duplicate_doc - - swap clean write method
   });
 
-  // 上面故意注册失败（duplicate_doc），换干净插件验证
+  // on side deliberately register failed (duplicate_doc), swap clean plugin verify
   assert.equal(host.list().length, 0);
   await host.register({
     id: 'p:pub',
     definePlugin: (ctx) => {
-      ctx.doc('fresh', { n: 7 }, { public: true }); // 从未 set：初值可读
+      ctx.doc('fresh', { n: 7 }, { public: true }); // from not set: initial value can read
       ctx.doc('written', { n: 0 }, { public: true });
       ctx.doc('secret', { n: 0 });
     },
   });
 
-  // 初值在未写过时即可读
+  // initial value in not write when i.e. can read
   assert.deepEqual(host.getPublicDoc('p:pub', 'fresh'), { pluginId: 'p:pub', name: 'fresh', value: { n: 7 } });
   assert.deepEqual(host.getPublicDoc('p:pub', 'written'), { pluginId: 'p:pub', name: 'written', value: { n: 0 } });
 
-  // 私有 / 未声明：统一 404（外部无从探测私有 doc 存在性）
+  // private / not declaration: unify 404(external without from probe private doc store in)
   throwsCode(() => host.getPublicDoc('p:pub', 'secret'), 'plugin_doc_not_found');
   throwsCode(() => host.getPublicDoc('p:pub', 'missing'), 'plugin_doc_not_found');
 
-  // 停用后统一 404；未注册插件 404
+  // deactivate after unify 404; not registered plugin 404
   await host.disable('p:pub');
   throwsCode(() => host.getPublicDoc('p:pub', 'fresh'), 'plugin_doc_not_found');
   throwsCode(() => host.getPublicDoc('p:none', 'any'), 'plugin_doc_not_found');
 
-  // 公共 doc 非法值（非 JSON）：set 边界拒绝且不发事件
+  // public doc illegal value (non- JSON):set boundary reject and do not event
   const h2 = makeHost();
   let handle2!: ReturnType<Parameters<NonNullable<PluginDefinition['definePlugin']>>[0]['doc']>;
   await h2.register({
@@ -520,7 +520,7 @@ test('getPublicDoc：public 可读（含未写过的初值）；private/missing/
   void publicHandle;
 });
 
-test('doc opts 只允许 { public?: boolean }：未知字段拒绝', { timeout: 60_000 }, async () => {
+test('doc opts only allows { public?: boolean }: unknown field reject', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await assertRejectsCode(
     () =>
@@ -545,10 +545,10 @@ test('doc opts 只允许 { public?: boolean }：未知字段拒绝', { timeout: 
 });
 
 // ---------------------------------------------------------------------------
-// 4. 宿主生命周期端口：manageConversation / onWorkflowSettled / askSeq 解除
+// 4. host lifecycle port:manageConversation / onWorkflowSettled / askSeq solve except
 // ---------------------------------------------------------------------------
 
-test('ctx.host.manageConversation 自动携带本插件 pluginId；释放句柄幂等', { timeout: 60_000 }, async () => {
+test('ctx.host.manageConversation automatically carry this plugin pluginId; release handle idempotent', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let release!: () => void;
   await host.register({
@@ -557,15 +557,15 @@ test('ctx.host.manageConversation 自动携带本插件 pluginId；释放句柄�
       release = ctx.host.manageConversation(2);
     },
   });
-  // 后端收到的是 (2, 'p:manager')——插件侧只有单参，身份由宿主包装注入
+  // backend receives is (2, 'p:manager')- - plugin side only single reference, identity by host wrap inject
   assert.ok(backend.managed.has('2:p:manager'));
 
-  // 手动释放幂等：多次调用只解除一次
+  // manually release idempotent: many time invoke only solve except once
   release();
   release();
   assert.ok(!backend.managed.has('2:p:manager'));
 
-  // 停用自动释放：重新 manage 后 disable，不再需要插件手动释放
+  // deactivate automatically release: re- manage after disable, no longer need to plugin manually release
   await host.register({
     id: 'p:manager2',
     definePlugin: (ctx) => {
@@ -577,7 +577,7 @@ test('ctx.host.manageConversation 自动携带本插件 pluginId；释放句柄�
   assert.ok(!backend.managed.has('3:p:manager2'));
 });
 
-test('register/enable 失败不泄漏宿主生命周期资源（definePlugin 抛错即回滚释放）', { timeout: 60_000 }, async () => {
+test('register/enable failed without leaking host lifecycle asset (definePlugin throws i.e. rollback release)', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await assertRejectsCode(
     () =>
@@ -587,18 +587,18 @@ test('register/enable 失败不泄漏宿主生命周期资源（definePlugin 抛
           void ctx.host.manageConversation(2);
           void ctx.host.onEvent('workflow.settled', () => {});
           void ctx.host.registerAskSeqResolver(() => undefined);
-          throw new Error('definePlugin 崩溃');
+          throw new Error('definePlugin crash');
         },
       }),
     'plugin_registration_failed',
   );
-  // 三类资源全部回滚释放
+  // three class asset all rollback release
   assert.equal(backend.managed.size, 0);
   assert.equal(backend.workflowListeners.size, 0);
   assert.equal(backend.askSeqResolvers.size, 0);
 
-  // enable 失败同样回滚：先注册成功再改坏 definePlugin 不可行（定义不可变），
-  // 用 service start 失败驱动 enable 回滚路径
+  // enable failed same rollback: first register succeeded again change broken definePlugin cannot row (define cannot change),
+  // use service start failed drive enable rollback path
   let failStart = false;
   await host.register({
     id: 'p:leak2',
@@ -607,7 +607,7 @@ test('register/enable 失败不泄漏宿主生命周期资源（definePlugin 抛
       ctx.service({
         id: 'svc',
         start: () => {
-          if (failStart) throw new Error('start 失败');
+          if (failStart) throw new Error('start failed');
         },
         stop: () => {},
       });
@@ -619,15 +619,15 @@ test('register/enable 失败不泄漏宿主生命周期资源（definePlugin 抛
   assert.equal(backend.managed.size, 0);
 });
 
-test('onEvent(workflow.settled) 监听：停用自动解除；回调计入在途任务保护；每 run 只触发一次', { timeout: 60_000 }, async () => {
+test('onEvent(workflow.settled) listen: deactivate automatically solve except; call back count in-flight task protect; each run only trigger once', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let settledRuns: string[] = [];
   await host.register({
     id: 'p:wf',
     definePlugin: (ctx) => {
       void ctx.host.onEvent('workflow.settled', async (raw) => {
-        // 通用事件通道：payload 对内核是不透明 unknown（workflow.settled 的
-        // 业务形状由 @helm/plugins 契约解释，kernel 不依赖插件业务契约）。
+        // through use event channel:payload for kernel is do not transparent unknown(workflow.settled 
+        // business shape by @helm/plugins contract explain,kernel independent of plugin business contract).
         const run = raw as { id: string };
         await new Promise((r) => setTimeout(r, 10));
         settledRuns.push(run.id);
@@ -640,11 +640,11 @@ test('onEvent(workflow.settled) 监听：停用自动解除；回调计入在途
     id,
   });
 
-  // 正常触发（监听是后端集合：直接调用即可）
+  // normal trigger (listen is backend set: directly invoke i.e. can)
   for (const listener of backend.workflowListeners) await listener(makeRun('wf_a'));
   assert.deepEqual(settledRuns, ['wf_a']);
 
-  // 回调在途期间 disable 被拒（plugin_has_live_tasks）
+  // call back in-flight during disable by refuse (plugin_has_live_tasks)
   const firing = (async () => {
     for (const listener of backend.workflowListeners) await listener(makeRun('wf_b'));
   })();
@@ -653,13 +653,13 @@ test('onEvent(workflow.settled) 监听：停用自动解除；回调计入在途
   await firing;
   assert.deepEqual(settledRuns, ['wf_a', 'wf_b']);
 
-  // 停用自动解除监听
+  // deactivate automatically solve except listen
   await host.disable('p:wf');
   assert.equal(backend.workflowListeners.size, 0);
   settledRuns = [];
 });
 
-test('registerAskSeqResolver 停用自动解除；旧周期 ctx 的宿主资源获取被 epoch 守卫拒绝', { timeout: 60_000 }, async () => {
+test('registerAskSeqResolver deactivate automatically solve except; old cycle ctx host asset get by epoch guard reject', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let stolenHost: Parameters<NonNullable<PluginDefinition['definePlugin']>>[0]['host'] | undefined;
   await host.register({
@@ -673,13 +673,13 @@ test('registerAskSeqResolver 停用自动解除；旧周期 ctx 的宿主资源�
   await host.disable('p:seq');
   assert.equal(backend.askSeqResolvers.size, 0);
 
-  // 旧周期句柄：获取宿主生命周期资源即刻失效（409 plugin_context_expired）
+  // old cycle handle: get host lifecycle asset i.e. moment expires (409 plugin_context_expired)
   throwsCode(() => stolenHost!.manageConversation(1), 'plugin_context_expired');
   throwsCode(() => stolenHost!.onEvent('workflow.settled', () => {}), 'plugin_context_expired');
   throwsCode(() => stolenHost!.registerAskSeqResolver(() => undefined), 'plugin_context_expired');
 });
 
-test('ctx.host 包装层转发新端口：updateConversation / markConversationOwnership / createAsk 三态', { timeout: 60_000 }, async () => {
+test('ctx.host wrap layer forwarding new port:updateConversation / markConversationOwnership / createAsk three state', { timeout: 60_000 }, async () => {
   const host = makeHost();
   const marked: Array<{ id: number; owner: string }> = [];
   const origMark = backend.markConversationOwnership.bind(backend);
@@ -694,7 +694,7 @@ test('ctx.host 包装层转发新端口：updateConversation / markConversationO
       ctx.host.markConversationOwnership(5, 'bot');
       void ctx.host.createAsk({
         conversationId: 1,
-        title: '确认',
+        title: 'confirm',
         fields: [{ name: 'ok', label: 'OK', type: 'confirm' }],
       });
     },
@@ -704,10 +704,10 @@ test('ctx.host 包装层转发新端口：updateConversation / markConversationO
 });
 
 // ---------------------------------------------------------------------------
-// 5. 相对路由契约（新：只收相对路径）
+// 5. each other for routing contract (new: only relative path)
 // ---------------------------------------------------------------------------
 
-test('相对路由：宿主拼接命名空间，listRoutes 输出完整挂载路径', { timeout: 60_000 }, async () => {
+test('each other for routing: host concatenate naming empty between,listRoutes output complete mount path', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'builtin:triggers',
@@ -720,7 +720,7 @@ test('相对路由：宿主拼接命名空间，listRoutes 输出完整挂载路
   assert.equal(routes[0]!.path, '/api/plugins/builtin%3Atriggers/routes/webhook/:id');
   assert.equal(routes[0]!.public, true);
 
-  // 完整 /api 前缀、点段逃逸、编码逃逸一律拒绝
+  // complete /api prefix, point segment escape, encode escape one rule reject
   await assertRejectsCode(
     () =>
       host.register({
@@ -741,7 +741,7 @@ test('相对路由：宿主拼接命名空间，listRoutes 输出完整挂载路
       }),
     'invalid_route_path',
   );
-  // 非法百分号编码（%zz）注册边界即拒
+  // illegal hundred number encode (%zz) register boundary i.e. refuse
   await assertRejectsCode(
     () =>
       host.register({

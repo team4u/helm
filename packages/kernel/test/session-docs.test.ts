@@ -1,14 +1,14 @@
 /**
- * P0–P4 后端扩展与会话文档测试：
- * - UI 新扩展点注册校验（profileRuntime / 微动作三轨 / slot target /
- *   slash 保留词 / priority-order 安全整数 / sessionDocs 引用）；
- * - 跨插件 kind / slash 唯一性（define 阶段 + 提交点终检 + 停用探测不占名）；
- * - ctx.sessionDoc 生命周期（读写深拷贝 / flush / 删除后拒绝孤儿写 /
- *   停用后句柄失效 / 受控 stop 窗口 / doc 与 sessionDoc 不得重名 / 无存储 501）；
- * - SessionDocEventHub 专用流（首帧 snapshot / 增量 / 不进全局流 / abort 清理）；
- * - HTTP：GET docs?conversationId、专用 SSE、404 停止语义；
- * - HelmStore 会话文档持久层与会话删除级联清理（真实 sqlite）。
- * runner: tsx --test；每项显式 timeout: 60_000 防死锁。
+ * P0-P4 backend extend and conversation document test:
+ * - UI new extension point register validate (profileRuntime / micro action three track / slot target /
+ *   slash keep term / priority-order security integer / sessionDocs reference);
+ * - across plugin kind / slash uniqueness (define phase + commit point final inspect + deactivate probe do not occupy name);
+ * - ctx.sessionDoc lifecycle (read write deep copy / flush / after deletion reject orphan child write /
+ *   deactivate after handle expires / subject to control stop window / doc and sessionDoc must not heavy name / without store 501);
+ * - SessionDocEventHub dedicated use stream (first frame snapshot / incremental / does not enter global stream / abort clean up);
+ * - HTTP:GET docs?conversationId, dedicated use SSE,404 stop semantics;
+ * - HelmStore conversation document durable layer and conversation delete level join clean up (real sqlite).
+ * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
@@ -35,14 +35,14 @@ import {
 } from './helpers.js'
 
 // ---------------------------------------------------------------------------
-// 测试基建
+// test base create
 // ---------------------------------------------------------------------------
 
 function makeConversation(id: number) {
   return makeConversationSummary({ id, profileId: 'default' })
 }
 
-/** 可变会话表 fixture：deleteConversation 后 getConversation 如实抛 404。 */
+/** can change conversation table fixture:deleteConversation after getConversation such as throw 404. */
 function makeHostApi(options: { existing: Set<number> } = { existing: new Set([1, 2]) }) {
   const events: Array<{ type: string; payload: unknown }> = []
   const backend: PluginHostBackend = {
@@ -53,7 +53,7 @@ function makeHostApi(options: { existing: Set<number> } = { existing: new Set([1
     listConversations: () => [...options.existing].map((id) => makeConversation(id)),
     getConversation: (id) => {
       if (!options.existing.has(id)) {
-        throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+        throw new HelmError('not_found', `conversation missing: ${id}`, 404)
       }
       return makeConversation(id)
     },
@@ -71,7 +71,7 @@ function makeHostApi(options: { existing: Set<number> } = { existing: new Set([1
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     execEnv: async () => {
-      throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501)
+      throw new HelmError('unsupported', 'this fixture do not execute node command', 501)
     },
     emitEvent: (type, payload) => {
       events.push({ type, payload })
@@ -125,7 +125,7 @@ function makeHost(opts: { sessionDocs?: MemorySessionDocStore | null } = {}): Pl
 
 function throwsCode(fn: () => unknown, code: string, status?: number): void {
   assert.throws(fn, (err: unknown) => {
-    assert.ok(err instanceof HelmError, `期望 HelmError，实际：${String(err)}`)
+    assert.ok(err instanceof HelmError, `expectation HelmError, actual:${String(err)}`)
     assert.equal(err.code, code)
     if (status !== undefined) assert.equal(err.status, status)
     return true
@@ -144,21 +144,21 @@ afterEach(async () => {
 })
 
 // ---------------------------------------------------------------------------
-// UI 新扩展点注册校验
+// UI new extension point register validate
 // ---------------------------------------------------------------------------
 
-test('profileRuntime/微动作/slot 注册成功并进 listUi；priority/order 校验安全整数', { timeout: 60_000 }, async () => {
+test('profileRuntime/micro action/slot register succeeded and enter listUi;priority/order validate security integer', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await host.register({
     id: 'p:ui',
     definePlugin: (ctx) => {
-      ctx.ui.profileRuntime({ id: 'herdr', kind: 'herdr', label: 'Herdr 运行时', order: 10 })
-      ctx.ui.action({ id: 'a1', target: 'conversation:header', label: '归档', actionId: 'archive', placement: 'toolbar' })
-      ctx.ui.action({ id: 'a2', target: 'conversation:row', label: '清理', actionId: 'cleanup' })
+      ctx.ui.profileRuntime({ id: 'herdr', kind: 'herdr', label: 'Herdr runtime', order: 10 })
+      ctx.ui.action({ id: 'a1', target: 'conversation:header', label: 'archive', actionId: 'archive', placement: 'toolbar' })
+      ctx.ui.action({ id: 'a2', target: 'conversation:row', label: 'clean up', actionId: 'cleanup' })
       ctx.ui.action({
         id: 'a3',
         target: 'timeline:entry',
-        label: '引用',
+        label: 'reference',
         actionId: 'quote',
         kinds: ['user'],
         roles: ['user'],
@@ -178,7 +178,7 @@ test('profileRuntime/微动作/slot 注册成功并进 listUi；priority/order �
   ])
 })
 
-test('非法形状显式拒绝：priority 非整数 / slash 保留词 / slot target 多斜杠 / 微动作三轨全空', { timeout: 60_000 }, async () => {
+test('illegal shape explicit reject:priority non- integer / slash keep term / slot target many slash / micro action three track all empty', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await assert.rejects(
     host.register({
@@ -193,7 +193,7 @@ test('非法形状显式拒绝：priority 非整数 / slash 保留词 / slot tar
     host.register({
       id: 'p:x2',
       definePlugin: (ctx) => {
-        ctx.ui.command({ id: 'c', title: '新建', slash: 'new' })
+        ctx.ui.command({ id: 'c', title: 'creates new', slash: 'new' })
       },
     }),
     (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec',
@@ -202,7 +202,7 @@ test('非法形状显式拒绝：priority 非整数 / slash 保留词 / slot tar
     host.register({
       id: 'p:x3',
       definePlugin: (ctx) => {
-        ctx.ui.command({ id: 'c', title: '技能', slash: 'skill:foo' })
+        ctx.ui.command({ id: 'c', title: 'skill', slash: 'skill:foo' })
       },
     }),
     (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec',
@@ -220,7 +220,7 @@ test('非法形状显式拒绝：priority 非整数 / slash 保留词 / slot tar
     host.register({
       id: 'p:x5',
       definePlugin: (ctx) => {
-        ctx.ui.action({ id: 'a', target: 'conversation:header', label: '空' })
+        ctx.ui.action({ id: 'a', target: 'conversation:header', label: 'empty' })
       },
     }),
     (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec',
@@ -229,16 +229,16 @@ test('非法形状显式拒绝：priority 非整数 / slash 保留词 / slot tar
     host.register({
       id: 'p:x6',
       definePlugin: (ctx) => {
-        ctx.ui.action({ id: 'a', target: 'timeline:entry', label: '坏角色', actionId: 'x', roles: ['system'] as never })
+        ctx.ui.action({ id: 'a', target: 'timeline:entry', label: 'broken role', actionId: 'x', roles: ['system'] as never })
       },
     }),
     (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec',
   )
 })
 
-test('sessionDocs 声明已随声明式轨道移除：spec 不得再携带该字段', { timeout: 60_000 }, async () => {
+test('sessionDocs declaration already follow declaration style track path remove:spec must not again carry the field', { timeout: 60_000 }, async () => {
   const host = makeHost()
-  // sessionDoc 本身仍可声明（client.tsx 组件经 usePluginSessionDoc 订阅）
+  // sessionDoc itself still can declaration (client.tsx component via usePluginSessionDoc subscribe)
   await host.register({
     id: 'p:s3',
     definePlugin: (ctx) => {
@@ -249,10 +249,10 @@ test('sessionDocs 声明已随声明式轨道移除：spec 不得再携带该字
   const ui = host.listUi()
   const tool = ui.find((u) => u.surface === 'tool.view')
   assert.ok(tool !== undefined)
-  assert.equal('sessionDocs' in (tool.spec as Record<string, unknown>), false, 'spec 无 sessionDocs 字段（JSON 轨道已移除）')
+  assert.equal('sessionDocs' in (tool.spec as Record<string, unknown>), false, 'spec without sessionDocs field (JSON track path already remove)')
 })
 
-test('跨插件同 kind 显式拒绝（提交点终检）；停用探测 enabled:false 不占用名字', { timeout: 60_000 }, async () => {
+test('across plugin same kind explicit reject (commit point final inspect); deactivate probe enabled:false does not occupy name', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await host.register({
     id: 'p:a',
@@ -269,7 +269,7 @@ test('跨插件同 kind 显式拒绝（提交点终检）；停用探测 enabled
     }),
     (err: unknown) => err instanceof HelmError && err.code === 'duplicate_profile_runtime_kind',
   )
-  // 停用探测不占名：enabled:false 注册同 kind 成功，且不影响已启用插件。
+  // deactivate probe do not occupy name:enabled:false register same kind succeeded, and does not affect enabled plugin.
   await host.register(
     {
       id: 'p:c',
@@ -279,13 +279,13 @@ test('跨插件同 kind 显式拒绝（提交点终检）；停用探测 enabled
     },
     { enabled: false },
   )
-  // 已启用插件仍存在；探测插件 UI 不露出。
+  // enabled plugin still store in; probe plugin UI do not expose out.
   const ui = host.listUi().filter((u) => u.surface === 'profile.runtime')
   assert.equal(ui.length, 1)
   assert.equal(ui[0]!.pluginId, 'p:a')
 })
 
-test('停用探测不占名：enabled:false 后 enable 时仍与已启用插件冲突被拒', { timeout: 60_000 }, async () => {
+test('deactivate probe do not occupy name:enabled:false after enable when still and enabled plugin conflict by refuse', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await host.register({
     id: 'p:a',
@@ -306,21 +306,21 @@ test('停用探测不占名：enabled:false 后 enable 时仍与已启用插件�
     host.enable('p:probe'),
     (err: unknown) => err instanceof HelmError && err.code === 'duplicate_profile_runtime_kind',
   )
-  // 停用 p:a 后探测插件可启用（名字已释放）。
+  // deactivate p:a after probe plugin can enable (name already release).
   await host.disable('p:a')
   await host.enable('p:probe')
   assert.ok(host.listUi().some((u) => u.pluginId === 'p:probe' && u.surface === 'profile.runtime'))
 })
 
-test('跨插件 slash 冲突：define 阶段与提交点均拒绝', { timeout: 60_000 }, async () => {
+test('across plugin slash conflict:define phase and commit point all reject', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await host.register({
     id: 'p:a',
     definePlugin: (ctx) => {
-      ctx.ui.command({ id: 'c', title: '归档', slash: 'archive', actionId: 'archive' })
+      ctx.ui.command({ id: 'c', title: 'archive', slash: 'archive', actionId: 'archive' })
       ctx.action({
         id: 'archive',
-        description: '归档',
+        description: 'archive',
         inputSchema: { type: 'object' },
         outputSchema: { type: 'object' },
         handler: () => ({}),
@@ -331,7 +331,7 @@ test('跨插件 slash 冲突：define 阶段与提交点均拒绝', { timeout: 6
     host.register({
       id: 'p:b',
       definePlugin: (ctx) => {
-        ctx.ui.command({ id: 'c', title: '归档B', slash: 'archive', actionId: 'x' })
+        ctx.ui.command({ id: 'c', title: 'archiveB', slash: 'archive', actionId: 'x' })
       },
     }),
     (err: unknown) => err instanceof HelmError && err.code === 'duplicate_command_slash',
@@ -339,10 +339,10 @@ test('跨插件 slash 冲突：define 阶段与提交点均拒绝', { timeout: 6
 })
 
 // ---------------------------------------------------------------------------
-// ctx.sessionDoc 生命周期
+// ctx.sessionDoc lifecycle
 // ---------------------------------------------------------------------------
 
-test('sessionDoc 读写深拷贝/初值回退/listConversationIds/delete 事件', { timeout: 60_000 }, async () => {
+test('sessionDoc read write deep copy/initial value fall back/listConversationIds/delete event', { timeout: 60_000 }, async () => {
   const host = makeHost()
   let handle!: {
     get(id: number): { tokens: number }
@@ -361,23 +361,23 @@ test('sessionDoc 读写深拷贝/初值回退/listConversationIds/delete 事件'
   handle.set(1, { tokens: 5 })
   const got = handle.get(1)
   got.tokens = 99
-  assert.deepEqual(handle.get(1), { tokens: 5 }, 'get 返回深拷贝，外部突变不回写')
+  assert.deepEqual(handle.get(1), { tokens: 5 }, 'get return deep copy, external sudden change do not back write')
   handle.update(1, (c) => ({ tokens: c.tokens + 1 }))
   assert.deepEqual(handle.get(1), { tokens: 6 })
   handle.set(2, { tokens: 100 })
   assert.deepEqual(handle.listConversationIds(), [1, 2])
   handle.delete(1)
-  assert.deepEqual(handle.get(1), { tokens: 0 }, '删除后回到初始值')
+  assert.deepEqual(handle.get(1), { tokens: 0 }, 'after deletion back to initial value')
   assert.deepEqual(handle.listConversationIds(), [2])
   const sessionEvents = hostApi.events.filter((e) => e.type === 'plugin.session_doc.updated')
-  // set(1) + update(1) + set(2) + delete(1) = 4 条 public 事件
+  // set(1) + update(1) + set(2) + delete(1) = 4  public event
   assert.equal(sessionEvents.length, 4)
   const deleted = sessionEvents[3]!.payload as { doc: { deleted?: boolean; value: unknown } }
   assert.equal(deleted.doc.deleted, true)
   assert.deepEqual(deleted.doc.value, { tokens: 0 })
 })
 
-test('sessionDoc 读写校验：非法 ID / 会话不存在', { timeout: 60_000 }, async () => {
+test('sessionDoc read write validate: illegal ID / conversation missing', { timeout: 60_000 }, async () => {
   const host = makeHost()
   let handle!: { get(id: number): unknown; set(id: number, v: unknown): void }
   await host.register({
@@ -393,7 +393,7 @@ test('sessionDoc 读写校验：非法 ID / 会话不存在', { timeout: 60_000 
   assert.deepEqual(handle.get(1), { a: 1 })
 })
 
-test('doc 与 sessionDoc 不得重名；sessionDoc 缺持久层时 501', { timeout: 60_000 }, async () => {
+test('doc and sessionDoc must not heavy name;sessionDoc missing durable layer when 501', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await assert.rejects(
     host.register({
@@ -417,7 +417,7 @@ test('doc 与 sessionDoc 不得重名；sessionDoc 缺持久层时 501', { timeo
   )
 })
 
-test('getPublicSessionDoc：public/私有/停用/会话不存在语义 + 全局文档名冲突提示', { timeout: 60_000 }, async () => {
+test('getPublicSessionDoc:public/private/deactivate/conversation missing semantics + global document name conflict hint', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await host.register({
     id: 'p:pub',
@@ -438,13 +438,13 @@ test('getPublicSessionDoc：public/私有/停用/会话不存在语义 + 全局�
   throwsCode(() => host.getPublicSessionDoc('p:pub', 'pub', 999), 'not_found', 404)
   throwsCode(() => host.getPublicSessionDoc('p:pub', 'global', 1), 'global_doc_unexpected_conversation', 400)
   throwsCode(() => host.getPublicSessionDoc('p:pub', 'pub', 0), 'invalid_conversation_id', 400)
-  // 全局 doc 路由命中 sessionDoc 名：session_doc_requires_conversation
+  // global doc routing hit sessionDoc name:session_doc_requires_conversation
   throwsCode(() => host.getPublicDoc('p:pub', 'pub'), 'session_doc_requires_conversation', 400)
   await host.disable('p:pub')
   throwsCode(() => host.getPublicSessionDoc('p:pub', 'pub', 1), 'plugin_doc_not_found', 404)
 })
 
-test('会话删除后 sessionDoc 写入被拒绝（防孤儿重建）', { timeout: 60_000 }, async () => {
+test('conversation after deletion sessionDoc write by reject (guard against orphan child rebuild)', { timeout: 60_000 }, async () => {
   const existing = new Set([1, 2])
   hostApi = makeHostApi({ existing })
   const host = makeHost()
@@ -458,12 +458,12 @@ test('会话删除后 sessionDoc 写入被拒绝（防孤儿重建）', { timeou
   handle.set(2, { a: 2 })
   existing.delete(2)
   throwsCode(() => handle.set(2, { a: 3 }), 'not_found', 404)
-  // 会话 1 仍可用
+  // conversation 1 still available
   handle.set(1, { a: 1 })
   assert.deepEqual(handle.get(1), { a: 1 })
 })
 
-test('插件停用后 sessionDoc 句柄失效；重新启用后可继续读写（持久层数据保留）', { timeout: 60_000 }, async () => {
+test('plugin deactivate after sessionDoc handle expires; re- enable after can continue read write (durable layer data keep)', { timeout: 60_000 }, async () => {
   const host = makeHost()
   let handle!: { get(id: number): { n: number }; set(id: number, v: { n: number }): void }
   await host.register({
@@ -476,16 +476,16 @@ test('插件停用后 sessionDoc 句柄失效；重新启用后可继续读写�
   await host.disable('p:sd')
   throwsCode(() => handle.set(1, { n: 8 }), 'plugin_context_expired')
   await host.enable('p:sd')
-  // enable 重新执行 definePlugin，handle 已被新周期句柄覆盖：读到持久化值
-  // {n:7} 证明会话文档数据跨启停周期保留（与 doc 同一持久化语义）。
+  // enable re- execute definePlugin,handle already by new cycle handle override: read to persist value
+  // {n:7} verify conversation document data across start stop cycle keep (and doc the same persist semantics).
   assert.deepEqual(handle.get(1), { n: 7 })
 })
 
 // ---------------------------------------------------------------------------
-// SessionDocEventHub 专用流
+// SessionDocEventHub dedicated use stream
 // ---------------------------------------------------------------------------
 
-test('SessionDocEventHub：dispatch 只投递订阅了该三元组的监听器；非法载荷拒绝且不 TypeError', { timeout: 60_000 }, () => {
+test('SessionDocEventHub:dispatch only delivery subscribe the three meta group listener; illegal payload reject and do not TypeError', { timeout: 60_000 }, () => {
   const hub = new SessionDocEventHub()
   const frames: HelmEventFrame[] = []
   const other: HelmEventFrame[] = []
@@ -496,7 +496,7 @@ test('SessionDocEventHub：dispatch 只投递订阅了该三元组的监听器�
     doc: { pluginId: 'p:a', name: 'm', conversationId: 1, value: { n: 1 } },
   })
   assert.equal(frames.length, 1)
-  assert.equal(other.length, 0, '其他会话的订阅者不收帧')
+  assert.equal(other.length, 0, 'other conversation subscribe do not frame')
   assert.equal(frames[0]!.event.type, 'plugin.session_doc.updated')
   throwsCode(
     () =>
@@ -506,22 +506,22 @@ test('SessionDocEventHub：dispatch 只投递订阅了该三元组的监听器�
       }),
     'invalid_event',
   )
-  // doc 缺失 / null / 非对象：先形状门禁，不得在读字段前 TypeError。
+  // doc missing / null / non- object: first shape gate, must not in read field before TypeError.
   throwsCode(() => hub.dispatch({ type: 'plugin.session_doc.updated' }), 'invalid_event')
   throwsCode(() => hub.dispatch({ type: 'plugin.session_doc.updated', doc: null }), 'invalid_event')
   throwsCode(() => hub.dispatch(undefined), 'invalid_event')
   throwsCode(() => hub.dispatch('junk'), 'invalid_event')
-  // 非法事件不推进 seq。
+  // illegal event do not push enter seq.
   const seqBefore = hub.seq
   assert.equal(hub.seq, seqBefore)
-  assert.equal(hub.subscriberCount, 2, 'subscriberCount 统计实际订阅者个数')
+  assert.equal(hub.subscriberCount, 2, 'subscriberCount count actual subscribe count')
   off()
   offOther()
   hub.close()
   assert.equal(hub.subscriberCount, 0)
 })
 
-test('SessionDocEventHub：同一三元组多订阅者的 subscriberCount 与 close 真正关流', { timeout: 60_000 }, async () => {
+test('SessionDocEventHub: the same three meta group many subscribe subscriberCount and close truly closure stream', { timeout: 60_000 }, async () => {
   const hub = new SessionDocEventHub()
   const c1 = new AbortController()
   const target = { pluginId: 'p:a', name: 'm', conversationId: 1 }
@@ -529,15 +529,15 @@ test('SessionDocEventHub：同一三元组多订阅者的 subscriberCount 与 cl
     snapshot: () => ({ seq: 0, doc: { ...target, value: { n: 0 } } }),
     target,
   })
-  // 同一三元组第二条连接：流句柄各自登记，互不覆盖。
+  // the same three meta group second connect: stream handle each register, mutual does not override.
   const r2 = hub.response(new Request('http://x'), {
     snapshot: () => ({ seq: 0, doc: { ...target, value: { n: 0 } } }),
     target,
   })
-  assert.equal(hub.subscriberCount, 2, '两条连接各占一个订阅')
+  assert.equal(hub.subscriberCount, 2, 'two connect each occupy a subscribe')
   hub.close()
-  assert.equal(hub.subscriberCount, 0, 'close 清空全部订阅')
-  // close 后两条流都被服务端结束（读到 done）；后续 dispatch 不再投递。
+  assert.equal(hub.subscriberCount, 0, 'close empty all subscribe')
+  // close after two stream all by server side end (read to done); after continue dispatch no longer delivery.
   hub.dispatch({ type: 'plugin.session_doc.updated', doc: { ...target, value: { n: 9 } } })
   for (const res of [r1, r2]) {
     const reader = (res.body as ReadableStream<Uint8Array>).getReader()
@@ -546,12 +546,12 @@ test('SessionDocEventHub：同一三元组多订阅者的 subscriberCount 与 cl
       const next = await reader.read()
       done = next.done === true
     }
-    assert.ok(done, 'close() 后流结束')
+    assert.ok(done, 'close() after stream end')
   }
   c1.abort()
 })
 
-test('SessionDocEventHub：closeForPlugin/closeForConversation 只关匹配流', { timeout: 60_000 }, async () => {
+test('SessionDocEventHub:closeForPlugin/closeForConversation only closure match stream', { timeout: 60_000 }, async () => {
   const hub = new SessionDocEventHub()
   const t1 = { pluginId: 'p:a', name: 'm', conversationId: 1 }
   const t2 = { pluginId: 'p:b', name: 'm', conversationId: 2 }
@@ -564,9 +564,9 @@ test('SessionDocEventHub：closeForPlugin/closeForConversation 只关匹配流',
   const r2 = mk(t2)
   assert.equal(hub.subscriberCount, 2)
   hub.closeForPlugin('p:a')
-  assert.equal(hub.subscriberCount, 1, '插件 p:a 的流被关闭')
+  assert.equal(hub.subscriberCount, 1, 'plugin p:a stream by close')
   hub.closeForConversation(2)
-  assert.equal(hub.subscriberCount, 0, '会话 2 的流被关闭')
+  assert.equal(hub.subscriberCount, 0, 'conversation 2 stream by close')
   for (const res of [r1, r2]) {
     const reader = (res.body as ReadableStream<Uint8Array>).getReader()
     let done = false
@@ -577,14 +577,14 @@ test('SessionDocEventHub：closeForPlugin/closeForConversation 只关匹配流',
   }
 })
 
-test('SessionDocEventHub.response：快照 provider 重入发布不丢帧不重复（seq 筛选）', { timeout: 60_000 }, async () => {
+test('SessionDocEventHub.response: snapshot provider heavy publish do not lose frame does not repeat (seq filter choose)', { timeout: 60_000 }, async () => {
   const hub = new SessionDocEventHub()
   const target = { pluginId: 'p:a', name: 'm', conversationId: 1 }
   let providerSeq = 0
   const response = hub.response(new Request('http://x'), {
-    // provider 同步重入 dispatch：模拟订阅建立后、快照返回前的并发更新。
-    // n=1 在 provider 内发布（seq=1，快照水位取 provider 返回时的 hub.seq=1），
-    // n=2 在 provider 返回后、流冲刷前发布（seq=2，水位之后必须冲刷）。
+    // provider sync heavy dispatch: simulated subscribe establish after, snapshot return before concurrency update.
+    // n=1 in provider inside publish (seq=1, snapshot watermark take provider return when hub.seq=1),
+    // n=2 in provider return after, stream conflict refresh before publish (seq=2, watermark after must conflict refresh).
     snapshot: () => {
       hub.dispatch({ type: 'plugin.session_doc.updated', doc: { ...target, value: { n: 1 } } })
       providerSeq = hub.seq
@@ -598,36 +598,36 @@ test('SessionDocEventHub.response：快照 provider 重入发布不丢帧不重�
   const first = await reader.read()
   text += decoder.decode(first.value!, { stream: true })
   assert.match(text, /event: snapshot/)
-  assert.match(text, /"n":1/, '快照为 provider 时点值')
-  // 快照冲刷阶段：seq=1 的缓冲帧已体现在快照里（不得重复），水位后无新帧。
-  assert.ok(!text.includes('plugin.session_doc.updated'), '快照内的更新不重复下发')
+  assert.match(text, /"n":1/, 'snapshot is provider when point value')
+  // snapshot conflict refresh phase:seq=1 buffer frame already body now snapshot in (must not duplicate), watermark after without new frame.
+  assert.ok(!text.includes('plugin.session_doc.updated'), 'snapshot inside update does not repeat under')
   hub.dispatch({ type: 'plugin.session_doc.updated', doc: { ...target, value: { n: 2 } } })
   const second = await reader.read()
   text += decoder.decode(second.value!, { stream: true })
   assert.match(text, /event: plugin\.session_doc\.updated/)
-  assert.match(text, /"n":2/, '水位后的更新必达')
-  // 终态：每帧恰一次（n=1 只在快照，n=2 只在增量）。
+  assert.match(text, /"n":2/, 'watermark after update must reach')
+  // terminal state: each frame exactly once (n=1 only in snapshot,n=2 only in incremental).
   assert.equal((text.match(/"n":1/g) ?? []).length, 1)
   assert.equal((text.match(/"n":2/g) ?? []).length, 1)
 })
 
-test('SessionDocEventHub.response：快照 provider 出错同步清理（不建流不残留订阅）', { timeout: 60_000 }, () => {
+test('SessionDocEventHub.response: snapshot provider fails sync clean up (do not create stream leaves no residue subscribe)', { timeout: 60_000 }, () => {
   const hub = new SessionDocEventHub()
   const target = { pluginId: 'p:a', name: 'm', conversationId: 1 }
   assert.throws(
     () =>
       hub.response(new Request('http://x'), {
         snapshot: () => {
-          throw new HelmError('plugin_doc_not_found', '插件已停用', 404)
+          throw new HelmError('plugin_doc_not_found', 'plugin deactivated', 404)
         },
         target,
       }),
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
   )
-  assert.equal(hub.subscriberCount, 0, 'provider 失败后无订阅残留')
+  assert.equal(hub.subscriberCount, 0, 'provider failed after without subscribe leftover')
 })
 
-test('SessionDocEventHub.response：快照期间缓冲溢出立即关流，随后抛错仍保留原诊断', { timeout: 60_000 }, async () => {
+test('SessionDocEventHub.response: snapshot during buffer overflow immediately closure stream, then throws still keep original diagnose', { timeout: 60_000 }, async () => {
   const target = { pluginId: 'p:overflow', name: 'metrics', conversationId: 1 }
   for (const shouldThrow of [false, true]) {
     const hub = new SessionDocEventHub()
@@ -650,7 +650,7 @@ test('SessionDocEventHub.response：快照期间缓冲溢出立即关流，随�
   }
 })
 
-test('SessionDocEventHub.response：未消费流字节背压超限主动终止并退订（1MiB 默认外的显式小上限）', { timeout: 60_000 }, async () => {
+test('SessionDocEventHub.response: unconsumed stream byte back press over limit actively terminate and unsubscribe (1MiB by default outside explicit small cap)', { timeout: 60_000 }, async () => {
   const hub = new SessionDocEventHub({ maxPendingBytes: 1024 })
   const controller = new AbortController()
   const target = { pluginId: 'p:a', name: 'm', conversationId: 1 }
@@ -660,8 +660,8 @@ test('SessionDocEventHub.response：未消费流字节背压超限主动终止�
   })
   const reader = (response.body as ReadableStream<Uint8Array>).getReader()
   const first = await reader.read()
-  assert.ok(first.value, '首帧 snapshot 可读')
-  // 不再读：同步堆积大量大帧，超过 1KiB 上限后订阅被移除（慢客户端关流）。
+  assert.ok(first.value, 'first frame snapshot can read')
+  // no longer read: sync heap accumulate large amount large frame, exceeds 1KiB cap after subscribe by remove (slow client closure stream).
   for (let i = 0; i < 64; i++) {
     hub.dispatch({
       type: 'plugin.session_doc.updated',
@@ -669,8 +669,8 @@ test('SessionDocEventHub.response：未消费流字节背压超限主动终止�
     })
     if (hub.subscriberCount === 0) break
   }
-  assert.equal(hub.subscriberCount, 0, '字节积压超限后订阅被明确移除')
-  // 已入队帧仍可读，最终得到 done（不再投递新帧）。
+  assert.equal(hub.subscriberCount, 0, 'byte accumulate press over limit after subscribe by explicit remove')
+  // already queue frame still can read, eventually obtain to done(no longer delivery new frame).
   let done = false
   while (!done) {
     const next = await reader.read()
@@ -678,11 +678,11 @@ test('SessionDocEventHub.response：未消费流字节背压超限主动终止�
   }
   hub.dispatch({ type: 'plugin.session_doc.updated', doc: { ...target, value: { n: -1 } } })
   const after = await reader.read()
-  assert.ok(after.done, '关流后不再投递新帧')
+  assert.ok(after.done, 'closure stream after no longer delivery new frame')
   controller.abort()
 })
 
-test('SessionDocEventHub.response：首帧 snapshot 后增量；abort 清理订阅', { timeout: 60_000 }, async () => {
+test('SessionDocEventHub.response: first frame snapshot after incremental;abort clean up subscribe', { timeout: 60_000 }, async () => {
   const hub = new SessionDocEventHub()
   const controller = new AbortController()
   const target = { pluginId: 'p:a', name: 'm', conversationId: 1 }
@@ -707,14 +707,14 @@ test('SessionDocEventHub.response：首帧 snapshot 后增量；abort 清理订�
   assert.match(buffered, /event: plugin\.session_doc\.updated/)
   assert.match(buffered, /"n":2/)
   controller.abort()
-  assert.equal(hub.subscriberCount, 0, 'abort 后订阅清理')
+  assert.equal(hub.subscriberCount, 0, 'abort after subscribe clean up')
 })
 
 // ---------------------------------------------------------------------------
-// HelmStore 持久层（真实 sqlite）
+// HelmStore durable layer (real sqlite)
 // ---------------------------------------------------------------------------
 
-test('HelmStore 会话文档 CRUD + 会话删除级联清理（真实 sqlite）', { timeout: 60_000 }, async () => {
+test('HelmStore conversation document CRUD + conversation delete level join clean up (real sqlite)', { timeout: 60_000 }, async () => {
   const dir = await makeTempDir('helm-store-sd-')
   try {
     const db = await openHelmDatabase(dir)
@@ -748,7 +748,7 @@ test('HelmStore 会话文档 CRUD + 会话删除级联清理（真实 sqlite）'
     assert.equal(store.getPluginSessionDoc('p:a', 'm', 1), '{"n":3}')
     store.deletePluginSessionDoc('p:a', 'm', 2)
     assert.equal(store.getPluginSessionDoc('p:a', 'm', 2), undefined)
-    // 会话删除：同事务清理该会话全部会话文档
+    // conversation delete: same transaction clean up the conversation all conversation document
     store.deleteConv(1)
     assert.equal(store.getPluginSessionDoc('p:a', 'm', 1), undefined)
     assert.equal(store.getPluginSessionDoc('p:b', 'x', 1), undefined)
@@ -756,8 +756,8 @@ test('HelmStore 会话文档 CRUD + 会话删除级联清理（真实 sqlite）'
     const rows = await db.db.all<{ conversation_id: number }>(
       'SELECT conversation_id FROM helm_plugin_session_docs',
     )
-    assert.equal(rows.length, 0, '会话 1 删除后库中无残留')
-    // 非法 JSON 拒绝
+    assert.equal(rows.length, 0, 'conversation 1 after deletion store in no residue')
+    // illegal JSON reject
     assert.throws(() => store.putPluginSessionDoc('p:a', 'bad', 2, '{oops'))
     await store.close()
     await db.close()
@@ -766,7 +766,7 @@ test('HelmStore 会话文档 CRUD + 会话删除级联清理（真实 sqlite）'
   }
 })
 
-test('HelmStore 重启后镜像恢复会话文档（真实 sqlite）', { timeout: 60_000 }, async () => {
+test('HelmStore after restart mirror restore conversation document (real sqlite)', { timeout: 60_000 }, async () => {
   const dir = await makeTempDir('helm-store-sd2-')
   try {
     {

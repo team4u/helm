@@ -14,7 +14,7 @@ import { createWriteTool } from '../src/runtime/tools.js'
 import type { HelmToolDeps } from '../src/runtime/tool-deps.js'
 import type { EnvFabric } from '../src/env/index.js'
 
-describe('write 工具登记产物特性', { timeout: 60_000 }, () => {
+describe('write tool register artifact special', { timeout: 60_000 }, () => {
   let rootDir: string
 
   before(() => {
@@ -35,7 +35,7 @@ describe('write 工具登记产物特性', { timeout: 60_000 }, () => {
     }
   }
 
-  it('local 节点：默认 artifact: undefined/false 仅写入 cwd，不登记产物', { timeout: 60_000 }, async () => {
+  it('local node: by default artifact: undefined/false only write cwd, do not register artifact', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'local-plain')
     await ensureDataDir(dir)
     const stash = new SecretStash()
@@ -57,21 +57,21 @@ describe('write 工具登记产物特性', { timeout: 60_000 }, () => {
     assert.equal(res.isError, undefined)
     const noteAbs = join(dir, 'note.txt')
     const outputText = (res.output as Array<{ text: string }>)[0]!.text
-    assert.equal(outputText, `write_ok: ${noteAbs}（节点 local，11 字节）`)
+    assert.equal(outputText, `write_ok: ${noteAbs}(node local,11 byte)`)
     assert.doesNotMatch(outputText, /\[Artifact\]/)
     const structured = res.structuredOutput as { path: string; nodeId: string; bytesWritten: number; artifactId?: string }
-    assert.equal(structured.path, noteAbs, '结构化 path 回显真实绝对路径（非原始入参）')
+    assert.equal(structured.path, noteAbs, 'structure path back visible real absolute path (non- original reference)')
     assert.equal(structured.nodeId, 'local')
     assert.equal(structured.bytesWritten, 11)
     assert.equal(structured.artifactId, undefined)
-    // details 持久化 UI 通道与 structuredOutput 同值（Web 写入字节/产物展示读它）。
+    // details persist UI channel and structuredOutput same value (Web write byte/artifact render read it).
     assert.deepEqual(res.details, structured)
     assert.equal(readFileSync(noteAbs, 'utf8'), 'hello world')
-    // 产物仓库应为空
+    // artifact repository should be empty
     assert.equal((await artifacts.list(1)).length, 0)
   })
 
-  it('local 节点：artifact: true 同步写入 cwd 并登记为会话产物，返回 [Artifact] 与 artifactId', { timeout: 60_000 }, async () => {
+  it('local node:artifact: true sync write cwd and register is conversation artifact, return [Artifact] and artifactId', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'local-art')
     await ensureDataDir(dir)
     const stash = new SecretStash()
@@ -96,14 +96,14 @@ describe('write 工具登记产物特性', { timeout: 60_000 }, () => {
     const outputText = (res.output as Array<{ text: string }>)[0]!.text
     assert.equal(
       outputText,
-      `write_ok: ${chartAbs}（节点 local，17 字节）\n[Artifact] id=${structured.artifactId} name=chart.svg`,
+      `write_ok: ${chartAbs}(node local,17 byte)\n[Artifact] id=${structured.artifactId} name=chart.svg`,
     )
-    assert.equal(structured.path, chartAbs, '结构化 path 回显真实绝对路径')
+    assert.equal(structured.path, chartAbs, 'structure path back visible real absolute path')
     assert.equal(structured.nodeId, 'local')
     assert.equal(structured.bytesWritten, 17)
     assert.ok(typeof structured.artifactId === 'string')
 
-    // 验证文件在 cwd 与产物服务中都存在
+    // verify file in cwd and artifact service in all store in
     assert.equal(readFileSync(chartAbs, 'utf8'), '<svg>circle</svg>')
     const metaList = await artifacts.list(2)
     assert.equal(metaList.length, 1)
@@ -111,7 +111,7 @@ describe('write 工具登记产物特性', { timeout: 60_000 }, () => {
     assert.equal(metaList[0]!.name, 'chart.svg')
   })
 
-  it('artifact: true 但产物服务未配置 writeUploaded 时显式报错', { timeout: 60_000 }, async () => {
+  it('artifact: true but artifact service not config writeUploaded when explicit errors', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'no-write-uploaded')
     await ensureDataDir(dir)
     const stash = new SecretStash()
@@ -132,16 +132,16 @@ describe('write 工具登记产物特性', { timeout: 60_000 }, () => {
     }
     const tool = createWriteTool(deps)
     const res = await tool.execute(
-      { path: 'test.md', content: '# 测试', artifact: true },
+      { path: 'test.md', content: '# test', artifact: true },
       makeApi(dir, 3) as never,
       BACKGROUND_CONTEXT,
     )
     assert.equal(res.isError, true)
     const outputText = (res.output as Array<{ text: string }>)[0]!.text
-    assert.equal(outputText, 'write_failed: 产物服务未配置 writeUploaded，无法登记会话产物')
+    assert.equal(outputText, 'write_failed: artifact service not config writeUploaded, cannot register conversation artifact')
   })
 
-  it('远端节点：artifact: true 写入远端并同步登记会话产物', { timeout: 60_000 }, async () => {
+  it('remote node:artifact: true write remote and sync register conversation artifact', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'remote-art')
     await ensureDataDir(dir)
     const stash = new SecretStash()
@@ -200,10 +200,10 @@ describe('write 工具登记产物特性', { timeout: 60_000 }, () => {
     assert.equal(res.isError, undefined)
     const resultAbs = '/remote/workspace/output/result.json'
     const outputText = (res.output as Array<{ text: string }>)[0]!.text
-    assert.ok(outputText.startsWith(`write_ok: ${resultAbs}（节点 worker-node-1，17 字节）`), `应回显远端绝对路径与节点（${outputText}）`)
+    assert.ok(outputText.startsWith(`write_ok: ${resultAbs}(node worker-node-1,17 byte)`), `should back visible remote absolute path and node (${outputText})`)
     assert.match(outputText, /\[Artifact\] id=([A-Za-z0-9-]+) name=result\.json/)
     const structured = res.structuredOutput as { path: string; nodeId: string; bytesWritten: number; artifactId?: string }
-    assert.equal(structured.path, resultAbs, '远端结构化 path 回显绝对路径')
+    assert.equal(structured.path, resultAbs, 'remote structure path back visible absolute path')
     assert.equal(structured.nodeId, 'worker-node-1')
     assert.ok(typeof structured.artifactId === 'string')
     assert.equal(remoteFiles.get(resultAbs), '{"status":"done"}')

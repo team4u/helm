@@ -1,17 +1,17 @@
 /**
- * 动作发现运行时集成验收（createHelm 真实组合 + faux provider 最终模型请求）。
+ * action discover runtime collection into verify (createHelm real combine + faux provider eventually model request).
  *
- * 覆盖（全部断言在真实 provider 请求载荷上，不 mock runtime）：
- * - 普通插件动作（无 exposeAsTool）：启用后 <available_actions> 目录（prompt.actions 段）
- *   进入最终模型请求；停用后下一回合消失（无幻影残留）；
- * - scope：不匹配会话（tags/modelProviders）不进目录；exposeAsTool 派生工具声明
- *   不泄露进 scope 外会话请求（请求级裁剪），scope 内会话正常可用；
- * - run_action 被 before_turn 钩子剥离时目录清除；直接动作工具被钩子剥离时不经目录复活；
- * - 两条调用路径指引只注入一次（exposeAsTool 走 prompt.tools.*，非直投走 prompt.actions）；
- * - CLI 覆写 / hidden 渲染；描述/元数据更新不留旧提示；
- * - describe 模式真实工具调用：完整 Schema 返回、handler 不执行、停用与 scope 外拒绝。
+ * override (all assertion in real provider request payload on, do not mock runtime):
+ * - ordinary plugin action (without exposeAsTool): enable after <available_actions> directory (prompt.actions segment)
+ *   enter eventually model request; deactivate after under one turn disappear (without phantom leftover);
+ * - scope: does not match conversation (tags/modelProviders) does not enter directory;exposeAsTool derive tool declaration
+ *   do not leak enter scope outside conversation request (request level trim),scope inside conversation normal available;
+ * - run_action by before_turn hook strip when directory clear; directly action tool by hook strip when do not via directory re-;
+ * - two invoke path refer quote only inject once (exposeAsTool away prompt.tools.*, non- direct throw away prompt.actions);
+ * - CLI override / hidden render; description/metadata update do not old hint;
+ * - describe pattern real tool invoke: complete Schema return,handler do not execute, deactivate and scope outside reject.
  *
- * runner: tsx --test；每项显式 timeout: 60_000 防死锁。
+ * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
  */
 import { test } from 'node:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -27,10 +27,10 @@ import type { ConversationEntry, ConversationSummary, PluginDefinition } from '@
 import { openHubTestEnv, type FauxProviderHandle, type HubTestApp } from './helpers/hub-test-env.js'
 import assert from 'node:assert/strict'
 
-/** 捕获的单次最终模型请求（回放语义折叠后的视图）。 */
+/** catch single time eventually model request (back put semantics collapse after view). */
 interface CapturedRequest {
   toolNames: string[]
-  /** 全部 system 消息 sections 的折叠视图（与内核 systemSectionsOf 同口径）。 */
+  /** all system message sections collapse view (and kernel systemSectionsOf same opening path). */
   sectionsById: Record<string, string | null>
 }
 
@@ -44,7 +44,7 @@ interface TestEnv {
   toolCallStep(name: string, input: Record<string, unknown>): FauxResponseStep
   submitAndWait(convId: number, text: string): Promise<void>
   createTaggedConversation(tags: string[]): Promise<ConversationSummary>
-  /** 会话时间线全部工具结果文本（pi.tool-result 的 model 内容序列化）。 */
+  /** conversation timeline all tool result text (pi.tool-result  model content serialization). */
   toolResultTexts(entries: ConversationEntry[]): string
   close(): Promise<void>
 }
@@ -54,7 +54,7 @@ async function makeEnv(): Promise<TestEnv> {
   const initialConv = app.kernel
     .listConversations()
     .find((c) => c.profileId === 'assistant' && c.parentConversationId === undefined)
-  if (initialConv === undefined) throw new Error('初始会话缺失')
+  if (initialConv === undefined) throw new Error('initial conversation missing')
 
   const requests: CapturedRequest[] = []
   const fold = (context: { messages: unknown[] }): CapturedRequest => {
@@ -72,7 +72,7 @@ async function makeEnv(): Promise<TestEnv> {
   }
   const capture = (): FauxResponseStep => (context) => {
     requests.push(fold(context))
-    return fauxAssistantMessage('已捕获请求')
+    return fauxAssistantMessage('already catch request')
   }
 
   const env: TestEnv = {
@@ -104,16 +104,16 @@ async function makeEnv(): Promise<TestEnv> {
   return env
 }
 
-/** 目录段文本（不存在时 undefined）。 */
+/** directory segment text (missing when undefined). */
 function actionsSection(request: CapturedRequest): string | null | undefined {
   return request.sectionsById['prompt.actions']
 }
 
 // ---------------------------------------------------------------------------
-// 1. 普通外部插件动作：启用即入目录、目录内容契约、停用后下一回合消失
+// 1. ordinary external plugin action: enable i.e. directory, directory content contract, deactivate after under one turn disappear
 // ---------------------------------------------------------------------------
 
-test('动作目录: 仅 ctx.action 的普通插件——启用即出现在最终请求，停用后下一回合清除且无残留', { timeout: 60_000 }, async () => {
+test('action directory: only ctx.action ordinary plugin - - enable i.e. appear in eventually request, deactivate after under one turn clear and no residue', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const host = env.app.kernel.plugins!
@@ -122,7 +122,7 @@ test('动作目录: 仅 ctx.action 的普通插件——启用即出现在最终
       definePlugin: (ctx) => {
         ctx.action({
           id: 'greet',
-          description: '多行描述第一行\n第二行包含 <xml> 与 & 符号',
+          description: 'many row description one row\nsecond row contains <xml> and & symbol',
           inputSchema: {
             type: 'object',
             properties: {
@@ -141,66 +141,66 @@ test('动作目录: 仅 ctx.action 的普通插件——启用即出现在最终
     await host.register(def, { enabled: true })
 
     env.faux.setResponses([env.capture()])
-    await env.submitAndWait(env.initialConvId, '第一回合')
+    await env.submitAndWait(env.initialConvId, 'one turn')
     const first = env.requests[0]!
     const section = actionsSection(first)
-    assert.ok(section, '启用后最终模型请求应含 prompt.actions 目录段')
-    assert.ok(section.includes('<available_actions>'), '目录应有 XML 围栏')
-    assert.ok(section.includes('demo:plain.greet'), '目录应含全限定动作 ID')
-    // 多行描述规范化为一行 + XML 转义
-    assert.ok(!section.includes('\n第二行'), '多行描述应压成单行')
-    assert.ok(section.includes('&lt;xml&gt;'), '描述中的 XML 应转义')
-    assert.ok(section.includes('&amp;'), '描述中的 & 应转义')
-    // 紧凑签名：必填/可选 + 类型 + 嵌套标注
-    assert.ok(section.includes('name: string（必填）'))
-    assert.ok(section.includes('times: number（可选）'))
-    assert.ok(section.includes('config: object（嵌套）（describe 查询）（可选）'), '嵌套对象应标注按需查询')
-    assert.ok(section.includes('tags: string[]（可选）'))
-    // 缺省 CLI：helm <pluginId 剥 builtin:> <actionId>
+    assert.ok(section, 'enable after eventually model request should contains prompt.actions directory segment')
+    assert.ok(section.includes('<available_actions>'), 'directory should has XML surround column')
+    assert.ok(section.includes('demo:plain.greet'), 'directory should contains all limit set action ID')
+    // many row description specification is one row + XML escaping
+    assert.ok(!section.includes('\nsecond row'), 'many row description should press into single row')
+    assert.ok(section.includes('&lt;xml&gt;'), 'description in XML should escaping')
+    assert.ok(section.includes('&amp;'), 'description in & should escaping')
+    // compact signature: required/optional + type + embed set mark note
+    assert.ok(section.includes('name: string(required)'))
+    assert.ok(section.includes('times: number(optional)'))
+    assert.ok(section.includes('config: object(embed set)(describe query)(optional)'), 'embed set object should mark note on demand query')
+    assert.ok(section.includes('tags: string[](optional)'))
+    // default CLI:helm <pluginId strip builtin:> <actionId>
     assert.ok(section.includes('CLI: helm demo:plain greet'))
-    // 目录引导 describe 与 helm actions list
+    // directory quote lead describe and helm actions list
     assert.ok(section.includes('describe: true'))
     assert.ok(section.includes('helm actions list --json'))
 
-    // 停用：下一回合目录不再含该插件动作（内置插件动作仍在目录属正常）；
-    // 段内无旧文本残留，也不存在指向已停用动作的任何 prompt.actions 幻影段
+    // deactivate: under one turn directory no longer contains the plugin action (built-in plugin action still in directory belong normal);
+    // segment inside without old text leftover, also missing points to deactivated action any prompt.actions phantom segment
     await host.disable('demo:plain')
     env.requests.length = 0
     env.faux.setResponses([env.capture()])
-    await env.submitAndWait(env.initialConvId, '第二回合')
+    await env.submitAndWait(env.initialConvId, 'second turn')
     const second = env.requests[0]!
     const secondSection = actionsSection(second) ?? ''
-    assert.ok(!secondSection.includes('demo:plain'), '停用后目录不得残留 demo:plain 动作')
+    assert.ok(!secondSection.includes('demo:plain'), 'deactivate after directory must not leftover demo:plain action')
     for (const [id, text] of Object.entries(second.sectionsById)) {
       if (id === 'prompt.actions') continue
-      assert.ok(!((text ?? '')).includes('demo:plain.greet'), `其他段 ${id} 不得残留已停用动作文本`)
+      assert.ok(!((text ?? '')).includes('demo:plain.greet'), `other segment ${id} must not leftover deactivated action text`)
     }
-    // 再补一回合：确认田旧目录（含转义后的描述）不会经回放复活
+    // again patch one turn: confirm refresh old directory (contains escaping after description) will not via back put re-
     env.requests.length = 0
     env.faux.setResponses([env.capture()])
-    await env.submitAndWait(env.initialConvId, '第三回合')
+    await env.submitAndWait(env.initialConvId, 'third turn')
     const third = env.requests[0]!
-    assert.ok(!((actionsSection(third) ?? '')).includes('&lt;xml&gt;'), '旧目录文本不得经回放复活')
+    assert.ok(!((actionsSection(third) ?? '')).includes('&lt;xml&gt;'), 'old directory text must not via back put re-')
   } finally {
     await env.close()
   }
 })
 
-test('磁盘外部插件: rescan 后默认隐藏，启用即自动发现，停用即清理', { timeout: 60_000 }, async () => {
+test('disk external plugin: rescan after by default hide, enable i.e. automatically discover, deactivate i.e. clean up', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const host = env.app.kernel.plugins!
     const pluginDir = join(env.dataDir, 'plugins', 'external-notice')
     mkdirSync(pluginDir, { recursive: true })
     writeFileSync(join(pluginDir, 'plugin.json'), JSON.stringify({
-      id: 'external-notice', name: '外部通知', version: '1.0.0', main: 'index.mjs',
+      id: 'external-notice', name: 'external notify', version: '1.0.0', main: 'index.mjs',
     }))
     writeFileSync(join(pluginDir, 'index.mjs'), `export default {
       id: 'external-notice',
       definePlugin(ctx) {
         ctx.action({
-          id: 'send', description: '来自磁盘外部插件的通知动作',
-          promptGuidelines: ['EXTERNAL_NOTICE_GUIDE 核对收件人与通知内容'],
+          id: 'send', description: 'from disk external plugin notify action',
+          promptGuidelines: ['EXTERNAL_NOTICE_GUIDE core for piece person and notify content'],
           inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'], additionalProperties: false },
           outputSchema: { type: 'object', properties: { delivered: { type: 'boolean' } }, required: ['delivered'] },
           handler() { return { delivered: true } },
@@ -208,14 +208,14 @@ test('磁盘外部插件: rescan 后默认隐藏，启用即自动发现，停�
       },
     }`)
     const rescanned = await host.rescanExternalPlugins()
-    assert.ok(rescanned.registered.includes('external-notice'), '必须经真实外部加载器注册')
+    assert.ok(rescanned.registered.includes('external-notice'), 'must via real external load register')
     env.faux.setResponses([env.capture()])
-    await env.submitAndWait(env.initialConvId, '外部插件启用前')
+    await env.submitAndWait(env.initialConvId, 'external plugin enable before')
     assert.ok(!actionsSection(env.requests.at(-1)!)?.includes('external-notice'))
 
     await host.enable('external-notice')
     env.faux.setResponses([env.capture()])
-    await env.submitAndWait(env.initialConvId, '外部插件启用后')
+    await env.submitAndWait(env.initialConvId, 'external plugin enable after')
     const section = actionsSection(env.requests.at(-1)!)!
     assert.ok(section.includes('external-notice.send'))
     assert.ok(section.includes('EXTERNAL_NOTICE_GUIDE'))
@@ -223,7 +223,7 @@ test('磁盘外部插件: rescan 后默认隐藏，启用即自动发现，停�
 
     await host.disable('external-notice')
     env.faux.setResponses([env.capture()])
-    await env.submitAndWait(env.initialConvId, '外部插件停用后')
+    await env.submitAndWait(env.initialConvId, 'external plugin deactivate after')
     assert.ok(!actionsSection(env.requests.at(-1)!)?.includes('external-notice'))
     assert.ok(!JSON.stringify(env.requests.at(-1)!.sectionsById).includes('EXTERNAL_NOTICE_GUIDE'))
   } finally {
@@ -232,10 +232,10 @@ test('磁盘外部插件: rescan 后默认隐藏，启用即自动发现，停�
 })
 
 // ---------------------------------------------------------------------------
-// 2. scope：目录与 exposeAsTool 工具声明的请求级过滤
+// 2. scope: directory and exposeAsTool tool declaration request level filter
 // ---------------------------------------------------------------------------
 
-test('动作目录 scope: 不匹配会话不进目录；exposeAsTool 派生工具声明不泄露进 scope 外会话请求', { timeout: 60_000 }, async () => {
+test('action directory scope: does not match conversation does not enter directory;exposeAsTool derive tool declaration do not leak enter scope outside conversation request', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const host = env.app.kernel.plugins!
@@ -244,7 +244,7 @@ test('动作目录 scope: 不匹配会话不进目录；exposeAsTool 派生工�
       definePlugin: (ctx) => {
         ctx.action({
           id: 'plain_scoped',
-          description: '仅 alpha 会话可用',
+          description: 'only alpha conversation available',
           inputSchema: { type: 'object' },
           outputSchema: { type: 'object' },
           scope: { tags: ['alpha'] },
@@ -252,7 +252,7 @@ test('动作目录 scope: 不匹配会话不进目录；exposeAsTool 派生工�
         })
         ctx.action({
           id: 'direct_scoped',
-          description: '仅 alpha 会话可用的直投动作',
+          description: 'only alpha conversation available direct throw action',
           inputSchema: { type: 'object' },
           outputSchema: { type: 'object' },
           exposeAsTool: true,
@@ -264,28 +264,28 @@ test('动作目录 scope: 不匹配会话不进目录；exposeAsTool 派生工�
     await host.register(def, { enabled: true })
     const alphaConv = await env.createTaggedConversation(['alpha'])
 
-    // scope 外（无 tag）会话：目录不含该插件动作；直投工具声明不泄露
+    // scope outside (without tag) conversation: directory excludes the plugin action; direct throw tool declaration do not leak
     env.faux.setResponses([env.capture()])
-    await env.submitAndWait(env.initialConvId, 'scope 外会话')
+    await env.submitAndWait(env.initialConvId, 'scope outside conversation')
     const outside = env.requests[0]!
     const outsideSection = actionsSection(outside)
-    assert.ok(outsideSection === undefined || !(outsideSection ?? '').includes('demo:scoped'), 'scope 外目录不得含 scoped 动作')
+    assert.ok(outsideSection === undefined || !(outsideSection ?? '').includes('demo:scoped'), 'scope outside directory must not contains scoped action')
     const leakedDirect = outside.toolNames.find((name) => name.includes('direct_scoped'))
-    assert.equal(leakedDirect, undefined, 'scope 外请求不得泄露 exposeAsTool 派生工具声明')
-    assert.ok(outside.toolNames.includes('run_action'), '内核工具不受 scope 裁剪影响')
+    assert.equal(leakedDirect, undefined, 'scope outside request must not leak exposeAsTool derive tool declaration')
+    assert.ok(outside.toolNames.includes('run_action'), 'kernel tool do not subject to scope trim affect')
 
-    // scope 内（alpha tag）会话：目录含 plain_scoped；直投工具声明存在
+    // scope inside (alpha tag) conversation: directory contains plain_scoped; direct throw tool declaration store in
     env.requests.length = 0
     env.faux.setResponses([env.capture()])
-    await env.submitAndWait(alphaConv.id, 'scope 内会话')
+    await env.submitAndWait(alphaConv.id, 'scope inside conversation')
     const inside = env.requests[0]!
     const insideSection = actionsSection(inside)
-    assert.ok(insideSection, 'scope 内会话应有目录段')
-    assert.ok(insideSection!.includes('demo:scoped.plain_scoped'), '目录应含 scope 命中的普通动作')
-    assert.ok(!insideSection!.includes('demo:scoped.direct_scoped'), 'exposeAsTool 直投动作不进 run_action 目录')
+    assert.ok(insideSection, 'scope inside conversation should has directory segment')
+    assert.ok(insideSection!.includes('demo:scoped.plain_scoped'), 'directory should contains scope hit ordinary action')
+    assert.ok(!insideSection!.includes('demo:scoped.direct_scoped'), 'exposeAsTool direct throw action does not enter run_action directory')
     assert.ok(
       inside.toolNames.some((name) => name.includes('direct_scoped')),
-      'scope 内 exposeAsTool 派生工具声明应存在',
+      'scope inside exposeAsTool derive tool declaration should store in',
     )
   } finally {
     await env.close()
@@ -293,27 +293,27 @@ test('动作目录 scope: 不匹配会话不进目录；exposeAsTool 派生工�
 })
 
 // ---------------------------------------------------------------------------
-// 3. run_action 被钩子剥离：目录清除；直投动作工具被剥离：不经目录复活
+// 3. run_action by hook strip: directory clear; direct throw action tool by strip: do not via directory re-
 // ---------------------------------------------------------------------------
 
-test('动作目录可达性: before_turn 剥离 run_action 时目录清除；直投工具剥离后不经目录复活', { timeout: 60_000 }, async () => {
+test('action directory can reach: before_turn strip run_action when directory clear; direct throw tool strip after do not via directory re-', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const host = env.app.kernel.plugins!
-    // 先注册普通动作插件（目录存在）
+    // first register ordinary action plugin (directory store in)
     const plainDef: PluginDefinition = {
       id: 'demo:reach',
       definePlugin: (ctx) => {
         ctx.action({
           id: 'probe',
-          description: '探测动作',
+          description: 'probe action',
           inputSchema: { type: 'object' },
           outputSchema: { type: 'object' },
           handler: () => ({ ok: true }),
         })
         ctx.action({
           id: 'direct_one',
-          description: '直投动作',
+          description: 'direct throw action',
           inputSchema: { type: 'object' },
           outputSchema: { type: 'object' },
           exposeAsTool: true,
@@ -323,7 +323,7 @@ test('动作目录可达性: before_turn 剥离 run_action 时目录清除；直
     }
     await host.register(plainDef, { enabled: true })
 
-    // 再注册剥离钩子插件（priority 高于默认，后注册先执行由 priority 决定）
+    // again register strip hook plugin (priority high at by default, after register first execute by priority decide)
     const stripDef: PluginDefinition = {
       id: 'demo:stripper',
       definePlugin: (ctx) => {
@@ -346,29 +346,29 @@ test('动作目录可达性: before_turn 剥离 run_action 时目录清除；直
     await host.register(stripDef, { enabled: true })
 
     env.faux.setResponses([env.capture()])
-    await env.submitAndWait(env.initialConvId, '剥离回合')
+    await env.submitAndWait(env.initialConvId, 'strip turn')
     const request = env.requests[0]!
-    assert.equal(actionsSection(request), undefined, 'run_action 被剥离后目录必须清除')
-    assert.ok(!request.toolNames.includes('run_action'), 'run_action 应被剥离')
+    assert.equal(actionsSection(request), undefined, 'run_action by strip after directory must clear')
+    assert.ok(!request.toolNames.includes('run_action'), 'run_action should by strip')
     assert.ok(
       !request.toolNames.some((name) => name.includes('direct_one')),
-      '直投动作工具应被剥离',
+      'direct throw action tool should by strip',
     )
-    // 直投动作不得借目录复活（目录整体已清；即便未来按动作判断也不得出现 direct_one）
+    // direct throw action must not borrow directory re- (directory whole already clean; i.e. convenient not come by action decide also must not appear direct_one)
     const allSectionText = Object.values(request.sectionsById).join('\n')
-    assert.ok(!allSectionText.includes('demo:reach.direct_one'), '被剥离的直投动作不得经目录复活')
+    assert.ok(!allSectionText.includes('demo:reach.direct_one'), 'by strip direct throw action must not via directory re-')
 
-    // 移除剥离钩子（停用 stripper）：run_action 恢复 → 目录恢复，直投动作回工具通道
+    // remove strip hook (deactivate stripper):run_action restore → directory restore, direct throw action back tool channel
     await host.disable('demo:stripper')
     env.requests.length = 0
     env.faux.setResponses([env.capture()])
-    await env.submitAndWait(env.initialConvId, '恢复回合')
+    await env.submitAndWait(env.initialConvId, 'restore turn')
     const restored = env.requests[0]!
     assert.ok(restored.toolNames.includes('run_action'))
-    assert.ok(actionsSection(restored)?.includes('demo:reach.probe'), 'run_action 恢复后目录恢复')
+    assert.ok(actionsSection(restored)?.includes('demo:reach.probe'), 'run_action restore after directory restore')
     assert.ok(
       restored.toolNames.some((name) => name.includes('direct_one')),
-      '直投动作工具恢复声明',
+      'direct throw action tool restore declaration',
     )
   } finally {
     await env.close()
@@ -376,10 +376,10 @@ test('动作目录可达性: before_turn 剥离 run_action 时目录清除；直
 })
 
 // ---------------------------------------------------------------------------
-// 4. 指引只注入一次：exposeAsTool 走 prompt.tools.*，非直投走 prompt.actions
+// 4. refer quote only inject once:exposeAsTool away prompt.tools.*, non- direct throw away prompt.actions
 // ---------------------------------------------------------------------------
 
-test('指引单次注入: exposeAsTool 动作指引走工具管道；非直投动作指引只出现在目录且带全限定 ID', { timeout: 60_000 }, async () => {
+test('refer quote single time inject: exposeAsTool action refer quote away tool pipeline; non- direct throw action refer quote only appear in directory and carries all limit set ID', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const host = env.app.kernel.plugins!
@@ -388,21 +388,21 @@ test('指引单次注入: exposeAsTool 动作指引走工具管道；非直投�
       definePlugin: (ctx) => {
         ctx.action({
           id: 'direct_guided',
-          description: '直投带指引',
+          description: 'direct throw carries refer quote',
           inputSchema: { type: 'object' },
           outputSchema: { type: 'object' },
           exposeAsTool: true,
-          promptSnippet: 'DIRECT_SNIPPET_MARKER 直投专属段落',
-          promptGuidelines: ['DIRECT_GUIDELINE_MARKER 直投要点'],
+          promptSnippet: 'DIRECT_SNIPPET_MARKER direct throw dedicated belong segment',
+          promptGuidelines: ['DIRECT_GUIDELINE_MARKER direct throw want point'],
           handler: () => ({ ok: true }),
         })
         ctx.action({
           id: 'plain_guided',
-          description: '普通动作带指引',
+          description: 'ordinary action carries refer quote',
           inputSchema: { type: 'object' },
           outputSchema: { type: 'object' },
-          promptSnippet: 'PLAIN_SNIPPET_MARKER 普通动作段落\n第二行',
-          promptGuidelines: ['PLAIN_GUIDELINE_MARKER 普通动作要点'],
+          promptSnippet: 'PLAIN_SNIPPET_MARKER ordinary action segment\nsecond row',
+          promptGuidelines: ['PLAIN_GUIDELINE_MARKER ordinary action want point'],
           handler: () => ({ ok: true }),
         })
       },
@@ -410,37 +410,37 @@ test('指引单次注入: exposeAsTool 动作指引走工具管道；非直投�
     await host.register(def, { enabled: true })
 
     env.faux.setResponses([env.capture()])
-    await env.submitAndWait(env.initialConvId, '指引回合')
+    await env.submitAndWait(env.initialConvId, 'refer quote turn')
     const request = env.requests[0]!
     const section = actionsSection(request)
-    assert.ok(section, '目录段应存在')
+    assert.ok(section, 'directory segment should store in')
 
-    // 直投指引：只经 prompt.tools.* 工具管道，不进目录
+    // direct throw refer quote: only via prompt.tools.* tool pipeline, does not enter directory
     const directToolSection = Object.entries(request.sectionsById)
       .filter(([id]) => id.startsWith('prompt.tools.'))
       .map(([, text]) => text ?? '')
       .join('\n')
-    assert.ok(directToolSection.includes('DIRECT_SNIPPET_MARKER'), '直投 promptSnippet 应经工具管道注入')
-    assert.ok(directToolSection.includes('DIRECT_GUIDELINE_MARKER'), '直投 promptGuidelines 应经工具管道注入')
-    assert.ok(!section!.includes('DIRECT_SNIPPET_MARKER'), '直投指引不得重复进目录')
-    assert.ok(!section!.includes('DIRECT_GUIDELINE_MARKER'), '直投要点不得重复进目录')
+    assert.ok(directToolSection.includes('DIRECT_SNIPPET_MARKER'), 'direct throw promptSnippet should via tool pipeline inject')
+    assert.ok(directToolSection.includes('DIRECT_GUIDELINE_MARKER'), 'direct throw promptGuidelines should via tool pipeline inject')
+    assert.ok(!section!.includes('DIRECT_SNIPPET_MARKER'), 'direct throw refer quote must not duplicate enter directory')
+    assert.ok(!section!.includes('DIRECT_GUIDELINE_MARKER'), 'direct throw want point must not duplicate enter directory')
 
-    // 非直投指引：只在目录段，带全限定 ID 标注
-    assert.ok(section!.includes('PLAIN_SNIPPET_MARKER'), '普通动作 promptSnippet 应进目录')
-    assert.ok(section!.includes('PLAIN_GUIDELINE_MARKER'), '普通动作 promptGuidelines 应进目录')
-    assert.ok(section!.includes('指引（demo:guide.plain_guided）'), '目录指引应带全限定 ID 标注')
-    assert.ok(section!.includes('说明（demo:guide.plain_guided）'), '目录说明应带全限定 ID 标注')
-    assert.ok(!directToolSection.includes('PLAIN_SNIPPET_MARKER'), '普通动作指引不得进工具管道')
+    // non- direct throw refer quote: only in directory segment, carries all limit set ID mark note
+    assert.ok(section!.includes('PLAIN_SNIPPET_MARKER'), 'ordinary action promptSnippet should enter directory')
+    assert.ok(section!.includes('PLAIN_GUIDELINE_MARKER'), 'ordinary action promptGuidelines should enter directory')
+    assert.ok(section!.includes('refer quote (demo:guide.plain_guided)'), 'directory refer quote should carries all limit set ID mark note')
+    assert.ok(section!.includes('note (demo:guide.plain_guided)'), 'directory note should carries all limit set ID mark note')
+    assert.ok(!directToolSection.includes('PLAIN_SNIPPET_MARKER'), 'ordinary action refer quote must not enter tool pipeline')
   } finally {
     await env.close()
   }
 })
 
 // ---------------------------------------------------------------------------
-// 5. CLI 渲染：command 覆写生效；hidden 不展示 CLI
+// 5. CLI render:command override takes effect;hidden do not render CLI
 // ---------------------------------------------------------------------------
 
-test('CLI 渲染: cli.command 覆写展示真实命令；cli.hidden 不展示 CLI', { timeout: 60_000 }, async () => {
+test('CLI render: cli.command override render real command;cli.hidden do not render CLI', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const host = env.app.kernel.plugins!
@@ -449,7 +449,7 @@ test('CLI 渲染: cli.command 覆写展示真实命令；cli.hidden 不展示 CL
       definePlugin: (ctx) => {
         ctx.action({
           id: 'custom_path',
-          description: '覆写命令路径',
+          description: 'override command path',
           inputSchema: { type: 'object' },
           outputSchema: { type: 'object' },
           cli: { command: ['team', 'report', 'make'] },
@@ -457,7 +457,7 @@ test('CLI 渲染: cli.command 覆写展示真实命令；cli.hidden 不展示 CL
         })
         ctx.action({
           id: 'secret_cmd',
-          description: '隐藏 CLI 动作',
+          description: 'hide CLI action',
           inputSchema: { type: 'object' },
           outputSchema: { type: 'object' },
           cli: { hidden: true },
@@ -468,29 +468,29 @@ test('CLI 渲染: cli.command 覆写展示真实命令；cli.hidden 不展示 CL
     await host.register(def, { enabled: true })
 
     env.faux.setResponses([env.capture()])
-    await env.submitAndWait(env.initialConvId, 'CLI 渲染回合')
+    await env.submitAndWait(env.initialConvId, 'CLI render turn')
     const section = actionsSection(env.requests[0]!)!
-    assert.ok(section.includes('CLI: helm team report make'), 'cli.command 覆写应展示真实命令')
-    // hidden：动作仍在目录（run_action 可达），但不展示不存在的 CLI
-    assert.ok(section.includes('demo:cli.secret_cmd'), 'hidden 动作仍在目录（run_action 可达）')
+    assert.ok(section.includes('CLI: helm team report make'), 'cli.command override should render real command')
+    // hidden: action still in directory (run_action can reach), but do not render missing CLI
+    assert.ok(section.includes('demo:cli.secret_cmd'), 'hidden action still in directory (run_action can reach)')
     const secretIdx = section.indexOf('demo:cli.secret_cmd')
     const nextEntry = section.indexOf('- demo:cli.', secretIdx + 1)
     const secretBlock = section.slice(secretIdx, nextEntry === -1 ? section.length : nextEntry)
-    assert.ok(!secretBlock.includes('CLI:'), 'hidden 动作不得展示 CLI 行')
+    assert.ok(!secretBlock.includes('CLI:'), 'hidden action must not render CLI row')
   } finally {
     await env.close()
   }
 })
 
 // ---------------------------------------------------------------------------
-// 6. 元数据更新：reload 后目录按新元数据渲染，不留旧提示
+// 6. metadata update:reload after directory by new metadata render, do not old hint
 // ---------------------------------------------------------------------------
 
-test('元数据更新: 插件 reload 后目录按新描述渲染，旧文本不残留', { timeout: 60_000 }, async () => {
+test('metadata update: plugin reload after directory by new description render, old text leaves no residue', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const host = env.app.kernel.plugins!
-    let description = '旧描述文本 OLD_DESC_MARKER'
+    let description = 'old description text OLD_DESC_MARKER'
     const def = (): PluginDefinition => ({
       id: 'demo:refresh',
       definePlugin: (ctx) => {
@@ -506,11 +506,11 @@ test('元数据更新: 插件 reload 后目录按新描述渲染，旧文本不�
     await host.register(def(), { enabled: true })
 
     env.faux.setResponses([env.capture()])
-    await env.submitAndWait(env.initialConvId, '更新前回合')
-    assert.ok(actionsSection(env.requests[0]!)!.includes('OLD_DESC_MARKER'), '更新前目录含旧描述')
+    await env.submitAndWait(env.initialConvId, 'update before turn')
+    assert.ok(actionsSection(env.requests[0]!)!.includes('OLD_DESC_MARKER'), 'update before directory contains old description')
 
-    // 热更新：停用→注销→重注册（持久化停用状态优先，需显式 enable；真实能力变化路径）
-    description = '新描述文本 NEW_DESC_MARKER'
+    // hot update: deactivate→deregister→heavy register (persist deactivate state takes precedence, must explicit enable; real capability change path)
+    description = 'new description text NEW_DESC_MARKER'
     await host.disable('demo:refresh')
     await host.unregister('demo:refresh')
     await host.register(def())
@@ -518,20 +518,20 @@ test('元数据更新: 插件 reload 后目录按新描述渲染，旧文本不�
 
     env.requests.length = 0
     env.faux.setResponses([env.capture()])
-    await env.submitAndWait(env.initialConvId, '更新后回合')
+    await env.submitAndWait(env.initialConvId, 'update after turn')
     const section = actionsSection(env.requests[0]!)!
-    assert.ok(section.includes('NEW_DESC_MARKER'), '更新后目录含新描述')
-    assert.ok(!section.includes('OLD_DESC_MARKER'), '旧描述不得残留')
+    assert.ok(section.includes('NEW_DESC_MARKER'), 'update after directory contains new description')
+    assert.ok(!section.includes('OLD_DESC_MARKER'), 'old description must not leftover')
   } finally {
     await env.close()
   }
 })
 
 // ---------------------------------------------------------------------------
-// 7. describe 模式：真实工具调用返回完整 Schema、不执行 handler、边界拒绝
+// 7. describe pattern: real tool invoke return complete Schema, do not execute handler, boundary reject
 // ---------------------------------------------------------------------------
 
-test('describe 模式: 真实 run_action 调用返回完整 Schema 且不执行 handler；停用/scope 外拒绝', { timeout: 60_000 }, async () => {
+test('describe pattern: real run_action invoke return complete Schema and do not execute handler; deactivate/scope outside reject', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const host = env.app.kernel.plugins!
@@ -541,7 +541,7 @@ test('describe 模式: 真实 run_action 调用返回完整 Schema 且不执行 
       definePlugin: (ctx) => {
         ctx.action({
           id: 'nested',
-          description: '嵌套 Schema 动作',
+          description: 'embed set Schema action',
           inputSchema: {
             type: 'object',
             properties: {
@@ -557,7 +557,7 @@ test('describe 模式: 真实 run_action 调用返回完整 Schema 且不执行 
         })
         ctx.action({
           id: 'alpha_only',
-          description: '仅 alpha 会话',
+          description: 'only alpha conversation',
           inputSchema: { type: 'object' },
           outputSchema: { type: 'object' },
           scope: { tags: ['alpha'] },
@@ -567,54 +567,54 @@ test('describe 模式: 真实 run_action 调用返回完整 Schema 且不执行 
     }
     await host.register(def, { enabled: true })
 
-    // describe 真实调用：经 faux 发起 run_action 工具调用
+    // describe real invoke: via faux start run_action tool invoke
     env.faux.setResponses([
       env.toolCallStep('run_action', { actionId: 'demo:describe.nested', describe: true }),
       env.capture(),
     ])
-    await env.submitAndWait(env.initialConvId, '查询嵌套 Schema')
-    assert.equal(handlerRuns, 0, 'describe 模式绝不执行 handler')
+    await env.submitAndWait(env.initialConvId, 'query embed set Schema')
+    assert.equal(handlerRuns, 0, 'describe pattern never execute handler')
 
-    // 工具结果已入时间线：pi.tool-result 的 model 内容携带完整 manifest
+    // tool result already timeline:pi.tool-result  model content carry complete manifest
     const detail = await env.app.kernel.getConversationDetail(env.initialConvId)
     const describeTexts = env.toolResultTexts(detail.entries)
-    assert.ok(describeTexts.includes('demo:describe') && describeTexts.includes('nested'), 'describe 结果应真实落盘（manifest 字段）')
-    // 完整 Schema 可读（嵌套字段与 outputSchema 均在结果中）
-    assert.ok(describeTexts.includes('payload'), '顶层 Schema 字段应完整可读')
-    assert.ok(describeTexts.includes('deep'), '嵌套 Schema 字段应完整可读')
-    assert.ok(describeTexts.includes('outputSchema'), 'outputSchema 应完整可读')
+    assert.ok(describeTexts.includes('demo:describe') && describeTexts.includes('nested'), 'describe result should real (manifest field)')
+    // complete Schema can read (embed set field and outputSchema all in result in)
+    assert.ok(describeTexts.includes('payload'), 'top-level Schema field should complete can read')
+    assert.ok(describeTexts.includes('deep'), 'embed set Schema field should complete can read')
+    assert.ok(describeTexts.includes('outputSchema'), 'outputSchema should complete can read')
 
-    // 默认行为不变：不带 describe 真实执行 handler
+    // by default behavior do not change: do not carries describe real execute handler
     env.requests.length = 0
     env.faux.setResponses([
       env.toolCallStep('run_action', { actionId: 'demo:describe.nested', input: { payload: { deep: 'x' } } }),
       env.capture(),
     ])
-    await env.submitAndWait(env.initialConvId, '真实执行')
-    assert.equal(handlerRuns, 1, '默认调用应执行 handler 一次')
+    await env.submitAndWait(env.initialConvId, 'real execute')
+    assert.equal(handlerRuns, 1, 'by default invoke should execute handler once')
 
-    // scope 外 describe 拒绝：结果文本含 scope 违规、不含 Schema 内容
+    // scope outside describe reject: result text contains scope violate rule, excludes Schema content
     env.requests.length = 0
     env.faux.setResponses([
       env.toolCallStep('run_action', { actionId: 'demo:describe.alpha_only', describe: true }),
       env.capture(),
     ])
-    await env.submitAndWait(env.initialConvId, 'scope 外查询')
+    await env.submitAndWait(env.initialConvId, 'scope outside query')
     const scopedDetail = await env.app.kernel.getConversationDetail(env.initialConvId)
     const scopedText = env.toolResultTexts(scopedDetail.entries)
-    assert.ok(scopedText.includes('scope'), 'scope 外 describe 应显式拒绝')
+    assert.ok(scopedText.includes('scope'), 'scope outside describe should explicit reject')
 
-    // 停用后 describe 拒绝
+    // deactivate after describe reject
     await host.disable('demo:describe')
     env.requests.length = 0
     env.faux.setResponses([
       env.toolCallStep('run_action', { actionId: 'demo:describe.nested', describe: true }),
       env.capture(),
     ])
-    await env.submitAndWait(env.initialConvId, '停用后查询')
+    await env.submitAndWait(env.initialConvId, 'deactivate after query')
     const disabledDetail = await env.app.kernel.getConversationDetail(env.initialConvId)
     const disabledText = env.toolResultTexts(disabledDetail.entries)
-    assert.ok(disabledText.includes('未声明动作'), '停用后 describe 应显式拒绝（unknown_action）')
+    assert.ok(disabledText.includes('not declaration action'), 'deactivate after describe should explicit reject (unknown_action)')
   } finally {
     await env.close()
   }

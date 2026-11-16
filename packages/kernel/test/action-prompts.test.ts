@@ -1,9 +1,9 @@
 /**
- * action-prompts 纯函数单测：目录渲染契约 + prompt.actions 段投射。
+ * action-prompts pure function single test: directory render contract + prompt.actions segment throw shoot.
  *
- * 覆盖：紧凑签名（必填/可选/类型/嵌套/组合器/非对象顶层）、CLI 渲染
- * （缺省剥 builtin: / 覆写 / hidden）、多行描述规范化与 XML 转义、
- * 指引带全限定 ID、段落 set-or-clear 语义。
+ * override: compact signature (required/optional/type/embed set/combine/non- object top-level),CLI render
+ * (default strip builtin: / override / hidden), many row description specification and XML escaping,
+ * refer quote carries all limit set ID, segment set-or-clear semantics.
  * runner: tsx --test
  */
 import { test } from 'node:test'
@@ -21,14 +21,14 @@ function manifest(patch: Partial<ActionManifest> = {}): ActionManifest {
   return {
     pluginId: 'demo:probe',
     id: 'plain',
-    description: '普通动作',
+    description: 'ordinary action',
     inputSchema: { type: 'object' },
     outputSchema: { type: 'object' },
     ...patch,
   }
 }
 
-test('紧凑签名: 必填/可选、类型、数组元素、嵌套对象与组合器', { timeout: 60_000 }, () => {
+test('compact signature: required/optional, type, array element, embed set object and combine', { timeout: 60_000 }, () => {
   const signature = compactActionSignature({
     type: 'object',
     properties: {
@@ -43,29 +43,29 @@ test('紧凑签名: 必填/可选、类型、数组元素、嵌套对象与组�
     },
     required: ['q', 'cfg'],
   })
-  assert.ok(signature.includes('q: string（必填）'))
-  assert.ok(signature.includes('times: number（可选）'))
-  assert.ok(signature.includes('flags: string[]（可选）'), '数组元素类型应内联')
-  assert.ok(signature.includes('matrix: object[]（describe 查询）（可选）'), '对象数组应标注按需查询')
-  assert.ok(signature.includes('cfg: object（嵌套）（describe 查询）（必填）'), '嵌套对象应标注按需查询')
-  assert.ok(signature.includes('freeform: object（可选）'), '无属性对象为普通自由形')
-  assert.ok(signature.includes('either: 复杂（describe 查询）（可选）'))
-  assert.ok(signature.includes('refd: 复杂（describe 查询）（可选）'))
+  assert.ok(signature.includes('q: string(required)'))
+  assert.ok(signature.includes('times: number(optional)'))
+  assert.ok(signature.includes('flags: string[](optional)'), 'array element type should inline')
+  assert.ok(signature.includes('matrix: object[](describe query)(optional)'), 'object array should mark note on demand query')
+  assert.ok(signature.includes('cfg: object(embed set)(describe query)(required)'), 'embed set object should mark note on demand query')
+  assert.ok(signature.includes('freeform: object(optional)'), 'without property object is ordinary self by shape')
+  assert.ok(signature.includes('either: complex(describe query)(optional)'))
+  assert.ok(signature.includes('refd: complex(describe query)(optional)'))
 
-  assert.equal(compactActionSignature({ type: 'object', properties: {}, additionalProperties: false }), '（无参数）')
-  assert.equal(compactActionSignature({ type: 'object', additionalProperties: false }), '（无参数）')
-  assert.ok(compactActionSignature({ type: 'object' }).includes('describe 查询'), '开放对象不能误报为无参数')
-  assert.ok(compactActionSignature({ type: 'object', properties: {} }).includes('describe 查询'))
-  assert.ok(compactActionSignature({ oneOf: [{ type: 'object' }, { type: 'null' }] }).includes('run_action describe 查询'))
-  assert.ok(compactActionSignature({ type: 'string' }).includes('顶层类型 string'))
+  assert.equal(compactActionSignature({ type: 'object', properties: {}, additionalProperties: false }), '(without parameter)')
+  assert.equal(compactActionSignature({ type: 'object', additionalProperties: false }), '(without parameter)')
+  assert.ok(compactActionSignature({ type: 'object' }).includes('describe query'), 'open put object cannot mistakenly report is without parameter')
+  assert.ok(compactActionSignature({ type: 'object', properties: {} }).includes('describe query'))
+  assert.ok(compactActionSignature({ oneOf: [{ type: 'object' }, { type: 'null' }] }).includes('run_action describe query'))
+  assert.ok(compactActionSignature({ type: 'string' }).includes('top-level type string'))
 })
 
-test('CLI 渲染: 缺省剥 builtin:；command 覆写；hidden 不展示', { timeout: 60_000 }, () => {
+test('CLI render: default strip builtin:;command override;hidden do not render', { timeout: 60_000 }, () => {
   assert.equal(actionCliCommand(manifest()), 'helm demo:probe plain')
   assert.equal(
     actionCliCommand(manifest({ pluginId: 'builtin:workflow' })),
     'helm workflow plain',
-    '内置插件剥 builtin: 前缀',
+    'built-in plugin strip builtin: prefix',
   )
   assert.equal(
     actionCliCommand(manifest({ cli: { command: ['team', 'report', 'make'] } })),
@@ -74,41 +74,41 @@ test('CLI 渲染: 缺省剥 builtin:；command 覆写；hidden 不展示', { tim
   assert.equal(actionCliCommand(manifest({ cli: { hidden: true } })), undefined)
 })
 
-test('目录渲染: 转义、多行描述规范化、全量无截断、指引带全限定 ID、hidden 无 CLI 行', { timeout: 60_000 }, () => {
-  assert.equal(renderAvailableActionsSection([]), undefined, '空目录返回 undefined（清除信号）')
+test('directory render: escaping, many row description specification, all amount without truncate, refer quote carries all limit set ID,hidden without CLI row', { timeout: 60_000 }, () => {
+  assert.equal(renderAvailableActionsSection([]), undefined, 'empty directory return undefined(clear signal)')
   const text = renderAvailableActionsSection([
     {
       manifest: manifest({
-        description: '第一行 <b>加粗</b> &\n第二行续',
+        description: 'one row <b>add coarse</b> &\nsecond row continue',
         inputSchema: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'] },
-        promptSnippet: 'SNIP 第一行\nSNIP 第二行 </available_actions>',
-        promptGuidelines: ['要点 A', '要点 B <external_event> &'],
+        promptSnippet: 'SNIP one row\nSNIP second row </available_actions>',
+        promptGuidelines: ['want point A', 'want point B <external_event> &'],
       }),
       cliCommand: 'helm demo:probe plain',
     },
     {
-      manifest: manifest({ id: 'secret', description: '隐藏动作', cli: { hidden: true } }),
+      manifest: manifest({ id: 'secret', description: 'hide action', cli: { hidden: true } }),
     },
   ])!
   assert.ok(text.startsWith('<available_actions>'))
   assert.ok(text.endsWith('</available_actions>'))
-  assert.ok(text.includes('demo:probe.plain'), '全限定 ID')
-  assert.ok(text.includes('&lt;b&gt;加粗&lt;/b&gt; &amp;'), '描述 XML 转义')
-  assert.ok(!/\n第二行续/.test(text), '多行描述压成单行')
-  assert.ok(text.includes('q: string（必填）'))
+  assert.ok(text.includes('demo:probe.plain'), 'all limit set ID')
+  assert.ok(text.includes('&lt;b&gt;add coarse&lt;/b&gt; &amp;'), 'description XML escaping')
+  assert.ok(!/\nsecond row continue/.test(text), 'many row description press into single row')
+  assert.ok(text.includes('q: string(required)'))
   assert.ok(text.includes('CLI: helm demo:probe plain'))
-  assert.ok(text.includes('指引（demo:probe.plain）:'))
-  assert.ok(text.includes('- 要点 A') && text.includes('- 要点 B'))
-  assert.ok(text.includes('说明（demo:probe.plain）:'))
-  assert.ok(text.includes('SNIP 第二行 &lt;/available_actions&gt;'), 'snippet 换行保留且标签转义')
-  assert.ok(text.includes('要点 B &lt;external_event&gt; &amp;'), 'guidelines 标签与特殊字符转义')
-  assert.equal(text.split('</available_actions>').length, 2, '指引不能提前闭合目录标签')
-  assert.ok(text.includes('demo:probe.secret'), 'hidden 动作仍在目录（run_action 可达）')
+  assert.ok(text.includes('refer quote (demo:probe.plain):'))
+  assert.ok(text.includes('- want point A') && text.includes('- want point B'))
+  assert.ok(text.includes('note (demo:probe.plain):'))
+  assert.ok(text.includes('SNIP second row &lt;/available_actions&gt;'), 'snippet newline keep and tag escaping')
+  assert.ok(text.includes('want point B &lt;external_event&gt; &amp;'), 'guidelines tag and special character escaping')
+  assert.equal(text.split('</available_actions>').length, 2, 'refer quote cannot mention before closed together directory tag')
+  assert.ok(text.includes('demo:probe.secret'), 'hidden action still in directory (run_action can reach)')
   const secretBlock = text.slice(text.indexOf('demo:probe.secret'))
-  assert.ok(!secretBlock.slice(0, secretBlock.indexOf('- demo:probe.') + 1 || undefined).includes('CLI:'), 'hidden 无 CLI 行')
+  assert.ok(!secretBlock.slice(0, secretBlock.indexOf('- demo:probe.') + 1 || undefined).includes('CLI:'), 'hidden without CLI row')
 })
 
-test('段落投射: set-or-clear、保留他段、未变化返回原引用', { timeout: 60_000 }, () => {
+test('segment throw shoot: set-or-clear, keep other segment, not change return original reference', { timeout: 60_000 }, () => {
   const base = [
     { id: 'profile.system', text: 'SYS' },
     { id: 'prompt.tools.guidelines', text: 'G' },
@@ -116,16 +116,16 @@ test('段落投射: set-or-clear、保留他段、未变化返回原引用', { t
   const set1 = projectActionPromptSection(base, 'DIR_V1')
   assert.deepEqual(set1.map((s) => s.id), ['profile.system', 'prompt.actions', 'prompt.tools.guidelines'])
   const sameRef = projectActionPromptSection(set1, 'DIR_V1')
-  assert.equal(sameRef, set1, '内容未变化时返回原引用')
+  assert.equal(sameRef, set1, 'content not change when return original reference')
   const set2 = projectActionPromptSection(set1, 'DIR_V2')
   assert.equal(set2.find((s) => s.id === ACTIONS_PROMPT_SECTION_ID)?.text, 'DIR_V2')
   const cleared = projectActionPromptSection(set2, undefined)
-  assert.ok(!cleared.some((s) => s.id === ACTIONS_PROMPT_SECTION_ID), 'undefined 清除管理段')
+  assert.ok(!cleared.some((s) => s.id === ACTIONS_PROMPT_SECTION_ID), 'undefined clear manage segment')
   assert.deepEqual(
     cleared.map((s) => s.id),
     ['profile.system', 'prompt.tools.guidelines'],
-    '其他段不受影响',
+    'other segment do not subject to affect',
   )
   const emptyClear = projectActionPromptSection(base, undefined)
-  assert.equal(emptyClear, base, '本无管理段时清除为幂等')
+  assert.equal(emptyClear, base, 'this without manage segment when clear is idempotent')
 })

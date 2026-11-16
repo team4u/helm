@@ -1,5 +1,5 @@
 /**
- * Node.js 原生适配层：为 shell-config.ts 提供真实文件系统与子进程探测。
+ * Node.js original generate adapt layer: is shell-config.ts provide real file system and child process probe.
  */
 import { spawn } from 'node:child_process'
 import { constants } from 'node:fs'
@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { getEnvEntry } from './process-env.js'
 import { resolveShellConfigWithIo, type ResolveShellResult, type ShellProbeIo } from './shell-config.js'
 
-/** 终止探测子进程树（仅用于超时清理自身 spawn 出的短命探测命令）。 */
+/** terminate probe child process tree (only used to timeout clean up itself spawn out short life probe command). */
 export function killProbeProcessTree(pid: number): void {
   if (process.platform === 'win32') {
     try {
@@ -21,7 +21,7 @@ export function killProbeProcessTree(pid: number): void {
       })
       child.once('error', () => {})
     } catch {
-      // 忽略清理失败。
+      // ignore clean up failed.
     }
     return
   }
@@ -31,7 +31,7 @@ export function killProbeProcessTree(pid: number): void {
     try {
       process.kill(pid, 'SIGKILL')
     } catch {
-      // 进程已退出。
+      // process already exit.
     }
   }
 }
@@ -89,7 +89,7 @@ async function safeRealpath(targetPath: string): Promise<string | null> {
   }
 }
 
-/** 创建基于当前 Node.js 宿主的 ShellProbeIo，允许测试覆写部分字段。 */
+/** create based on when before Node.js host ShellProbeIo, allows test override part field. */
 export function createNodeShellProbeIo(overrides: Partial<ShellProbeIo> = {}): ShellProbeIo {
   return {
     platform: overrides.platform ?? process.platform,
@@ -101,7 +101,7 @@ export function createNodeShellProbeIo(overrides: Partial<ShellProbeIo> = {}): S
   }
 }
 
-/** 解析宿主机可用的 bash 配置（Hub 本机与 @helm/node 共用同一探测实现）。 */
+/** parse host machine available bash config (Hub local machine and @helm/node shared use the same probe implement). */
 export async function resolveHostShellConfig(
   customShellPath?: string,
   io?: ShellProbeIo,

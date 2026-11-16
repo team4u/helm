@@ -1,11 +1,11 @@
 /**
- * 节点侧 TCP 隧道（nodeTunnelOpen / nodeTunnelAbort）测试：真实 TCP 回环 +
- * Duplex.from({readable,writable}) 构成的真实双工对（数据真的流经隧道双端，
- * 绝不用旁路 TCP 冒充隧道成功）。
- * 覆盖：入参严格校验（含严格端口/host 拒绝）、端口拒绝 connect_failed、
- * host 缺省 127.0.0.1 与显式 host 透传、握手中 dispose 立即 settle、握手期
- * 对端断开、abort RPC 取消建连、banner 首包不丢、大 payload、end 语义
- * flush 完整响应。
+ * node side TCP tunnel (nodeTunnelOpen / nodeTunnelAbort) test: real TCP loopback +
+ * Duplex.from({readable,writable}) construct into real double work for (data true stream via tunnel double end,
+ * never use beside route TCP smoke fill tunnel succeeded).
+ * override: reference strictly validate (contains strictly port/host reject), port reject connect_failed,
+ * host default 127.0.0.1 and explicit host pass-through, grasp manually in dispose immediately settle, grasp manually phase
+ * for end disconnect,abort RPC cancel create connect,banner first package do not lose, large payload,end semantics
+ * flush complete response.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,7 +17,7 @@ import { sleep as delay } from '@helm/test-kit';
 import { makeTempDir as tempDir } from '@helm/test-kit/node';
 import { createNodeEnvRpcServer } from '../src/daemon/env-rpc-server.js';
 
-/** 真实双工对：a 与 b 互为对端，写入 a 的数据可从 b 读到（经隧道流真实转发）。 */
+/** real double work for:a and b mutual is for end, write a data can from b read to (via tunnel stream real forwarding). */
 function duplexPair(): [DuplexType, DuplexType] {
   const toNode = new PassThrough();
   const toHub = new PassThrough();
@@ -27,7 +27,7 @@ function duplexPair(): [DuplexType, DuplexType] {
   ];
 }
 
-/** 回环 TCP 服务：accept 即发 banner；echo 其后收到的数据。 */
+/** loopback TCP service:accept i.e. banner;echo its after receives data. */
 async function startBannerEchoServer(banner: string): Promise<{
   port: number;
   received: Buffer[];
@@ -59,7 +59,7 @@ async function startBannerEchoServer(banner: string): Promise<{
   };
 }
 
-test('nodeTunnelOpen：严格入参校验（未知字段/坏 tunnelId/严格端口拒绝）', { timeout: 60_000 }, async () => {
+test('nodeTunnelOpen: strictly reference validate (unknown field/broken tunnelId/strictly port reject)', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-tunnel-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir, openTunnelStream: async () => new PassThrough() });
   try {
@@ -81,19 +81,19 @@ test('nodeTunnelOpen：严格入参校验（未知字段/坏 tunnelId/严格端�
       { tunnelId: 't1', port: 80, host: 'a'.repeat(256) },
     ]) {
       const result = await server.nodeTunnelOpen(bad as never);
-      assert.equal(result.ok, false, `应拒绝 ${JSON.stringify(bad)}`);
-      assert.equal(!result.ok && result.error.code, 'invalid', `应 invalid ${JSON.stringify(bad)}`);
+      assert.equal(result.ok, false, `should reject ${JSON.stringify(bad)}`);
+      assert.equal(!result.ok && result.error.code, 'invalid', `should invalid ${JSON.stringify(bad)}`);
     }
-    assert.equal(server.getActiveTunnelCount(), 0, '全部被拒，无在途隧道');
+    assert.equal(server.getActiveTunnelCount(), 0, 'all by refuse, without in-flight tunnel');
   } finally {
     await server.dispose();
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
 
-test('nodeTunnelOpen：端口拒绝归一 connect_failed，不静默伪造隧道', { timeout: 60_000 }, async () => {
+test('nodeTunnelOpen: port reject archive one connect_failed, not silently fabricate tunnel', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-tunnel-');
-  // 占用一个端口后立即关闭：该端口无监听（回环 connect 拒绝）。
+  // occupy a port after immediately close: the port without listen (loopback connect reject).
   const probe = await startBannerEchoServer('x');
   const deadPort = probe.port;
   await probe.close();
@@ -102,21 +102,21 @@ test('nodeTunnelOpen：端口拒绝归一 connect_failed，不静默伪造隧道
     const result = await server.nodeTunnelOpen({ tunnelId: 't-refused', port: deadPort });
     assert.equal(result.ok, false);
     if (!result.ok) {
-      assert.equal(result.error.code, 'connect_failed', 'TCP 错误归一 connect_failed（系统码不外溢 code）');
-      assert.match(result.error.message, /ECONNREFUSED/, 'message 保留底层系统诊断');
+      assert.equal(result.error.code, 'connect_failed', 'TCP error archive one connect_failed(system code do not outside overflow code)');
+      assert.match(result.error.message, /ECONNREFUSED/, 'message keep underlying system diagnose');
     }
-    assert.equal(server.getActiveTunnelCount(), 0, '失败隧道不残留');
+    assert.equal(server.getActiveTunnelCount(), 0, 'failed tunnel leaves no residue');
   } finally {
     await server.dispose();
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
 
-test('nodeTunnelOpen：握手延迟后经隧道双工流读到 banner（pause 不丢首包）', { timeout: 60_000 }, async () => {
+test('nodeTunnelOpen: grasp manually latency after via tunnel double work stream read to banner(pause do not lose first package)', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-tunnel-');
   const banner = 'HELLO-BANNER\r\n';
   const srv = await startBannerEchoServer(banner);
-  // 隧道对端流延迟交付（模拟 WS 握手耗时）；peer 侧代表 Hub 端流。
+  // tunnel for end stream latency deliver (simulated WS grasp manually time cost);peer side proxy table Hub end stream.
   const pending: Array<Promise<DuplexType>> = [];
   const server = createNodeEnvRpcServer({
     defaultCwd: dir,
@@ -130,8 +130,8 @@ test('nodeTunnelOpen：握手延迟后经隧道双工流读到 banner（pause �
   try {
     const opened = await server.nodeTunnelOpen({ tunnelId: 't-banner', port: srv.port });
     assert.equal(opened.ok, true);
-    // banner 在 TCP accept 即发出（早于流握手完成）：pause 缓冲、pipe 放行，
-    // peer 端经隧道流读到完整 banner——真实流经隧道，非旁路。
+    // banner in TCP accept i.e. out (early at stream grasp manually complete):pause buffer,pipe let through,
+    // peer end via tunnel stream read to complete banner- - real stream via tunnel, non- beside route.
     const peer = await pending[0]!;
     const gotBanner = await new Promise<string>((resolve) => {
       let buf = '';
@@ -144,8 +144,8 @@ test('nodeTunnelOpen：握手延迟后经隧道双工流读到 banner（pause �
         }
       });
     });
-    assert.ok(gotBanner.includes(banner), `peer 应经隧道读到 banner，实际: ${JSON.stringify(gotBanner)}`);
-    // 经隧道流发数据 → 节点 TCP → echo 服务 → 回到 peer 端。
+    assert.ok(gotBanner.includes(banner), `peer should via tunnel read to banner, actual: ${JSON.stringify(gotBanner)}`);
+    // via tunnel stream data → node TCP → echo service → back to peer end.
     peer.write('ping-through-tunnel');
     const echoed = await new Promise<string>((resolve) => {
       let buf = '';
@@ -158,8 +158,8 @@ test('nodeTunnelOpen：握手延迟后经隧道双工流读到 banner（pause �
         }
       });
     });
-    assert.ok(echoed.includes('ping-through-tunnel'), '请求经隧道往返');
-    assert.ok(srv.received.some((c) => c.toString().includes('ping-through-tunnel')), 'echo 服务确实收到（真实转发）');
+    assert.ok(echoed.includes('ping-through-tunnel'), 'request via tunnel to return');
+    assert.ok(srv.received.some((c) => c.toString().includes('ping-through-tunnel')), 'echo service indeed receives (real forwarding)');
     peer.destroy();
     peer.on('error', () => undefined);
   } finally {
@@ -169,7 +169,7 @@ test('nodeTunnelOpen：握手延迟后经隧道双工流读到 banner（pause �
   }
 });
 
-test('nodeTunnelOpen：大 payload 经隧道双向完整传输', { timeout: 60_000 }, async () => {
+test('nodeTunnelOpen: large payload via tunnel double to complete transfer', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-tunnel-');
   const srv = await startBannerEchoServer('');
   const pending: Array<Promise<DuplexType>> = [];
@@ -185,7 +185,7 @@ test('nodeTunnelOpen：大 payload 经隧道双向完整传输', { timeout: 60_0
     const opened = await server.nodeTunnelOpen({ tunnelId: 't-big', port: srv.port });
     assert.equal(opened.ok, true);
     const peer = await pending[0]!;
-    // 4 MiB 超过单帧/缓冲的高水位，验证分片重组后完整往返。
+    // 4 MiB exceeds single frame/buffer high watermark, verify shard heavy group after complete to return.
     const payload = 'A'.repeat(4 * 1024 * 1024);
     const chunks: Buffer[] = [];
     let total = 0;
@@ -205,8 +205,8 @@ test('nodeTunnelOpen：大 payload 经隧道双向完整传输', { timeout: 60_0
       peer.on('data', check);
       check();
     });
-    assert.equal(echoed.length, payload.length, '大 payload 完整往返（长度一致）');
-    assert.equal(echoed, payload, '大 payload 完整往返（内容一致）');
+    assert.equal(echoed.length, payload.length, 'large payload complete to return (length consistent)');
+    assert.equal(echoed, payload, 'large payload complete to return (content consistent)');
     peer.destroy();
     peer.on('error', () => undefined);
   } finally {
@@ -216,9 +216,9 @@ test('nodeTunnelOpen：大 payload 经隧道双向完整传输', { timeout: 60_0
   }
 });
 
-test('nodeTunnelOpen：正常 end 语义 flush 完整响应（不 destroy 掐断）', { timeout: 60_000 }, async () => {
+test('nodeTunnelOpen: normal end semantics flush complete response (do not destroy pinch assert)', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-tunnel-');
-  // 服务收到请求后写大响应再 end：验证 pipe 的 end 链路完整 flush。
+  // service receives request after write large response again end: verify pipe  end link complete flush.
   const response = 'R'.repeat(2 * 1024 * 1024);
   const server = net.createServer((socket) => {
     socket.on('data', (chunk) => {
@@ -258,7 +258,7 @@ test('nodeTunnelOpen：正常 end 语义 flush 完整响应（不 destroy 掐断
     ]).finally(() => {
       if (timeoutId !== undefined) clearTimeout(timeoutId);
     });
-    assert.equal(echoed, response, 'end 语义下完整响应 flush 回达，不被 destroy 掐断');
+    assert.equal(echoed, response, 'end semantics under complete response flush back reach, do not by destroy pinch assert');
   } finally {
     await rpc.dispose();
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -266,7 +266,7 @@ test('nodeTunnelOpen：正常 end 语义 flush 完整响应（不 destroy 掐断
   }
 });
 
-test('nodeTunnelOpen：握手中 dispose 立即销毁并 settle，不等预算耗尽', { timeout: 60_000 }, async () => {
+test('nodeTunnelOpen: grasp manually in dispose immediately destroy and settle, do not etc. pre- compute exhausted', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-tunnel-');
   const srv = await startBannerEchoServer('');
   let resolveStream: ((stream: DuplexType) => void) | undefined;
@@ -282,23 +282,23 @@ test('nodeTunnelOpen：握手中 dispose 立即销毁并 settle，不等预算�
   });
   try {
     const openPromise = server.nodeTunnelOpen({ tunnelId: 't-dispose', port: srv.port, timeoutMs: 15_000 });
-    // 等 TCP 连上、进入 WS 握手等待。
+    // etc. TCP connect on, enter WS grasp manually wait for.
     await delay(100);
     assert.equal(server.getActiveTunnelCount(), 1);
     const start = Date.now();
     await server.dispose();
     const elapsed = Date.now() - start;
-    assert.ok(elapsed < 5_000, `dispose 应立即 settle（实际 ${elapsed}ms）`);
+    assert.ok(elapsed < 5_000, `dispose should immediately settle(actual ${elapsed}ms)`);
     const result = await openPromise;
-    assert.equal(result.ok, false, '握手中的 open 随 dispose 失败');
+    assert.equal(result.ok, false, 'grasp manually in open follow dispose failed');
     if (!result.ok) {
       assert.equal(result.error.code, 'aborted');
     }
     assert.equal(server.getActiveTunnelCount(), 0);
-    // dispose 后迟到的流 resolve 不得复活隧道/泄漏。
+    // dispose after late to stream resolve must not re- tunnel/leak leak.
     resolveStream?.(new PassThrough());
     await delay(50);
-    assert.equal(server.getActiveTunnelCount(), 0, '迟到流不复活隧道');
+    assert.equal(server.getActiveTunnelCount(), 0, 'late to stream does not resurrect tunnel');
   } finally {
     await server.dispose();
     await srv.close();
@@ -306,7 +306,7 @@ test('nodeTunnelOpen：握手中 dispose 立即销毁并 settle，不等预算�
   }
 });
 
-test('nodeTunnelAbort：握手中取消建连立即失败（不等预算），signal 已通知', { timeout: 60_000 }, async () => {
+test('nodeTunnelAbort: grasp manually in cancel create connect immediately failed (do not etc. pre- compute),signal already notify', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-tunnel-');
   const srv = await startBannerEchoServer('');
   const streamSignals: AbortSignal[] = [];
@@ -315,7 +315,7 @@ test('nodeTunnelAbort：握手中取消建连立即失败（不等预算），si
     openTunnelStream: (tunnelId, signal) =>
       new Promise<DuplexType>(() => {
         streamSignals.push(signal!);
-        // 永不 resolve：仅 signal 能终结。
+        // forever do not resolve: only signal can final.
       }),
   });
   try {
@@ -326,12 +326,12 @@ test('nodeTunnelAbort：握手中取消建连立即失败（不等预算），si
     await server.nodeTunnelAbort('t-abort');
     const result = await openPromise;
     const elapsed = Date.now() - start;
-    assert.ok(elapsed < 5_000, `abort 后 open 应立即失败（实际 ${elapsed}ms）`);
+    assert.ok(elapsed < 5_000, `abort after open should immediately failed (actual ${elapsed}ms)`);
     assert.equal(result.ok, false);
     if (!result.ok) assert.equal(result.error.code, 'aborted');
     assert.equal(server.getActiveTunnelCount(), 0);
-    assert.equal(streamSignals[0]?.aborted, true, '建连 signal 已 abort（WS 立即断开）');
-    // 未知 tunnelId 幂等无害。
+    assert.equal(streamSignals[0]?.aborted, true, 'create connect signal already abort(WS immediately disconnect)');
+    // unknown tunnelId idempotent without harm.
     await server.nodeTunnelAbort('no-such');
   } finally {
     await server.dispose();
@@ -340,27 +340,27 @@ test('nodeTunnelAbort：握手中取消建连立即失败（不等预算），si
   }
 });
 
-test('nodeTunnelOpen：握手期对端（服务）断开返回结构化错误', { timeout: 60_000 }, async () => {
+test('nodeTunnelOpen: grasp manually phase for end (service) disconnect return structure error', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-tunnel-');
   const srv = await startBannerEchoServer('');
   const server = createNodeEnvRpcServer({
     defaultCwd: dir,
-    // 握手永远悬挂：由 TCP 侧断开（服务销毁 socket）终结。
+    // grasp manually forever pending: by TCP side disconnect (service destroy socket) final.
     openTunnelStream: () => new Promise<DuplexType>(() => undefined),
   });
   try {
     const openPromise = server.nodeTunnelOpen({ tunnelId: 't-early', port: srv.port, timeoutMs: 15_000 });
     await delay(100);
-    // 服务侧主动断开：TCP error/close 必须被统一处理（不未捕获崩进程），
-    // open 立即以 connect_failed/aborted 结构化失败（不得拖到 15s 超时）。
+    // service side actively disconnect:TCP error/close must by unify handle (do not not catch crash process),
+    // open immediately with connect_failed/aborted structure failed (must not drag to 15s timeout).
     const start = Date.now();
     for (const socket of srv.sockets) socket.destroy();
     const result = await openPromise;
     const elapsed = Date.now() - start;
-    assert.ok(elapsed < 2_000, `握手期对端断开应立即失败（实际 ${elapsed}ms）`);
+    assert.ok(elapsed < 2_000, `grasp manually phase for end disconnect should immediately failed (actual ${elapsed}ms)`);
     assert.equal(result.ok, false);
     if (!result.ok) {
-      assert.ok(['connect_failed', 'aborted'].includes(result.error.code), `结构化错误，实际 ${result.error.code}`);
+      assert.ok(['connect_failed', 'aborted'].includes(result.error.code), `structure error, actual ${result.error.code}`);
     }
     assert.equal(server.getActiveTunnelCount(), 0);
   } finally {
@@ -370,7 +370,7 @@ test('nodeTunnelOpen：握手期对端（服务）断开返回结构化错误', 
   }
 });
 
-test('nodeTunnelOpen：draining 拒绝新隧道；dispose 销毁全部并等待 settle', { timeout: 60_000 }, async () => {
+test('nodeTunnelOpen:draining reject new tunnel;dispose destroy all and wait for settle', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-tunnel-');
   const srv = await startBannerEchoServer('');
   const streams: PassThrough[] = [];
@@ -391,17 +391,17 @@ test('nodeTunnelOpen：draining 拒绝新隧道；dispose 销毁全部并等待 
     server.setDraining(true);
     const rejected = await server.nodeTunnelOpen({ tunnelId: 't-c', port: srv.port });
     assert.equal(rejected.ok, false);
-    assert.equal(!rejected.ok && rejected.error.code, 'node_draining', 'draining 期间新隧道被拒（node_draining）');
-    assert.equal(server.getActiveTunnelCount(), 2, '在途隧道不受 draining 影响');
+    assert.equal(!rejected.ok && rejected.error.code, 'node_draining', 'draining during new tunnel by refuse (node_draining)');
+    assert.equal(server.getActiveTunnelCount(), 2, 'in-flight tunnel do not subject to draining affect');
 
     await server.dispose();
     assert.equal(server.getActiveTunnelCount(), 0);
     for (const stream of streams) {
-      assert.equal(stream.destroyed, true, '双工流已销毁');
+      assert.equal(stream.destroyed, true, 'double work stream already destroy');
     }
     const afterDispose = await server.nodeTunnelOpen({ tunnelId: 't-d', port: srv.port });
     assert.equal(afterDispose.ok, false);
-    assert.equal(!afterDispose.ok && afterDispose.error.code, 'aborted', 'disposed 后拒绝（aborted）');
+    assert.equal(!afterDispose.ok && afterDispose.error.code, 'aborted', 'disposed after reject (aborted)');
   } finally {
     await server.dispose();
     await srv.close();
@@ -409,7 +409,7 @@ test('nodeTunnelOpen：draining 拒绝新隧道；dispose 销毁全部并等待 
   }
 });
 
-test('nodeTunnelOpen：host 显式透传（localhost 域名解析后连接真实服务）', { timeout: 60_000 }, async () => {
+test('nodeTunnelOpen:host explicit pass-through (localhost domain parse after connect real service)', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-tunnel-');
   const srv = await startBannerEchoServer('HOST-BANNER\r\n');
   const pending: Array<Promise<DuplexType>> = [];
@@ -422,7 +422,7 @@ test('nodeTunnelOpen：host 显式透传（localhost 域名解析后连接真实
     },
   });
   try {
-    // 显式 host=localhost：节点解析域名并连接（等价 127.0.0.1 上的测试服务）。
+    // explicit host=localhost: node parse domain and connect (etc. price 127.0.0.1 on test service).
     const opened = await server.nodeTunnelOpen({ tunnelId: 't-host', host: 'localhost', port: srv.port });
     assert.equal(opened.ok, true);
     const peer = await pending[0]!;
@@ -434,14 +434,14 @@ test('nodeTunnelOpen：host 显式透传（localhost 域名解析后连接真实
         if (buf.includes('HOST-BANNER')) { clearTimeout(timer); resolve(buf); }
       });
     });
-    assert.ok(got.includes('HOST-BANNER'), '经显式 host 建立的隧道真实读到 banner');
+    assert.ok(got.includes('HOST-BANNER'), 'via explicit host establish tunnel real read to banner');
     peer.destroy();
     peer.on('error', () => undefined);
-    // host 缺省：默认 127.0.0.1（与既有 loopback 语义一致）。
+    // host default: by default 127.0.0.1(and since has loopback semantics consistent).
     const openedDefault = await server.nodeTunnelOpen({ tunnelId: 't-default', port: srv.port });
     assert.equal(openedDefault.ok, true);
-    // 消费并关闭第二条隧道的 peer（模拟 Hub 端断开；未消费的 peer 在节点侧
-    // 销毁时会以未处理 error 崩溃——真实部署中 Hub 端必然持有消费者）。
+    // consume and close second tunnel peer(simulated Hub end disconnect; unconsumed peer in node side
+    // destroy when will with not handle error crash - - real deploy in Hub end must however hold has consumer).
     const peerDefault = await pending[1]!;
     peerDefault.on('error', () => undefined);
     peerDefault.destroy();
@@ -452,9 +452,9 @@ test('nodeTunnelOpen：host 显式透传（localhost 域名解析后连接真实
   }
 });
 
-test('nodeTunnelOpen：host 目标连接失败归一 connect_failed（真实目标入 message）', { timeout: 60_000 }, async () => {
+test('nodeTunnelOpen:host target failed to connect archive one connect_failed(real target message)', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-tunnel-');
-  // 占用后立即释放：得到一个回环上必拒绝的端口。
+  // occupy after immediately release: obtain to a loopback on must reject port.
   const probe = await startBannerEchoServer('x');
   const deadPort = probe.port;
   await probe.close();
@@ -466,8 +466,8 @@ test('nodeTunnelOpen：host 目标连接失败归一 connect_failed（真实目�
     const result = await server.nodeTunnelOpen({ tunnelId: 't-refused-host', host: 'localhost', port: deadPort });
     assert.equal(result.ok, false);
     if (!result.ok) {
-      assert.equal(result.error.code, 'connect_failed', '连接失败归一 connect_failed');
-      assert.match(result.error.message, new RegExp(`localhost:${deadPort}`), '错误信息包含真实目标 host:port');
+      assert.equal(result.error.code, 'connect_failed', 'failed to connect archive one connect_failed');
+      assert.match(result.error.message, new RegExp(`localhost:${deadPort}`), 'error information contains real target host:port');
     }
   } finally {
     await server.dispose();

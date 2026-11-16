@@ -1,63 +1,63 @@
 /**
- * 桌面壳配置解析：显式覆盖 > 环境变量 > 缺省值，入口处强校验。
+ * desktop shell config parse: explicit override > environment variable > default value, entry where strong validate.
  *
- * 边界纪律：
- * - 端口铁律：默认 3202，永不占用 3000（外部）/3001/3002（botd）/3101/3102（botx）；
- * - 数据隔离：dataDir 仅作为子进程 HELM_DATA_DIR 传入（缺省沿用 kernel 的 ~/.helm 约定）；
- * - payload 入口（HELM_DESKTOP_PAYLOAD_ENTRY）：未来 npm Hub payload 的 hub 入口 JS，
- *   配置后优先于仓库 kernel dist（payload 加载路径，不 import kernel）。
+ * boundary discipline:
+ * - port iron rule: by default 3202, forever does not occupy 3000(external)/3001/3002(botd)/3101/3102(botx);
+ * - data isolated:dataDir only as child process HELM_DATA_DIR pass (default along use kernel  ~/.helm convention);
+ * - payload entry (HELM_DESKTOP_PAYLOAD_ENTRY): not come npm Hub payload  hub entry JS,
+ *   config after takes precedence at repository kernel dist(payload load path, do not import kernel).
  */
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { DesktopError } from './errors.js';
 
 export const DESKTOP_DEFAULT_PORT = 3202;
-/** 端口铁律：这些端口属于外部与历史系统，桌面壳永不占用。 */
+/** port iron rule: these port belongs to external and history system, desktop shell forever does not occupy. */
 export const FORBIDDEN_PORTS: readonly number[] = [3000, 3001, 3002, 3101, 3102];
 
 export interface DesktopConfig {
-  /** Hub 端口（默认 3202）。 */
+  /** Hub port (by default 3202). */
   readonly port: number;
-  /** 仅本机回环（桌面壳不承担远程接入）。 */
+  /** only local machine loopback (desktop shell do not bear bear far process access). */
   readonly hostname: '127.0.0.1';
   /** http://127.0.0.1:<port> */
   readonly hubUrl: string;
-  /** 传给 Hub 子进程的 HELM_DATA_DIR；undefined = kernel 缺省（~/.helm）。 */
+  /** pass to Hub child process HELM_DATA_DIR;undefined = kernel default (~/.helm). */
   readonly dataDir?: string;
-  /** 传给 Hub 子进程的 HELM_WEB_DIST_DIR；undefined = kernel 缺省探测。 */
+  /** pass to Hub child process HELM_WEB_DIST_DIR;undefined = kernel default probe. */
   readonly webDistDir?: string;
-  /** 与当前载荷同版的 helm CLI 入口。 */
+  /** and when before payload same edition helm CLI entry. */
   readonly cliEntry?: string;
-  /** npm Hub payload 的 hub 入口 JS；设置则优先于 hubEntry。 */
+  /** npm Hub payload  hub entry JS; settings then takes precedence at hubEntry. */
   readonly payloadEntry?: string;
-  /** payload 入口附加参数（HELM_DESKTOP_PAYLOAD_ENTRY_ARGS，空格拆分；仅 payload 入口可用）。 */
+  /** payload entry additional parameter (HELM_DESKTOP_PAYLOAD_ENTRY_ARGS, space split; only payload entry available). */
   readonly payloadEntryArgs?: string[];
-  /** npm payload 包名（HELM_PAYLOAD_PACKAGE）；不硬编码任何 @helm 名称。 */
+  /** npm payload package name (HELM_PAYLOAD_PACKAGE); do not hard encode any @helm name. */
   readonly payloadPackage?: string;
-  /** npm registry base URL（HELM_PAYLOAD_REGISTRY；缺省公开 npm registry）。 */
+  /** npm registry base URL(HELM_PAYLOAD_REGISTRY; default public npm registry). */
   readonly payloadRegistry?: string;
-  /** 锁定 payload 精确版本（HELM_PAYLOAD_VERSION）；缺省跟踪 dist-tags.latest。 */
+  /** lock payload precise version (HELM_PAYLOAD_VERSION); default trace dist-tags.latest. */
   readonly payloadVersion?: string;
-  /** 仓库内 hub dist 的入口（缺省 <repo>/packages/hub/dist/main.js）。 */
+  /** repository inside hub dist entry (default <repo>/packages/hub/dist/main.js). */
   readonly hubEntry?: string;
-  /** 完整命令覆写（最高优先，空格拆分自 HELM_DESKTOP_HUB_CMD）。 */
+  /** complete command override (most high takes precedence, space split self HELM_DESKTOP_HUB_CMD). */
   readonly hubCommand?: string[];
-  /** node 可执行文件覆写（用于运行 Hub 子进程）。 */
+  /** node can execute file override (used to run Hub child process). */
   readonly hubNode?: string;
-  /** 就绪等待上限（ms）。 */
+  /** ready wait for cap (ms). */
   readonly readyTimeoutMs: number;
-  /** 就绪轮询间隔（ms）。 */
+  /** ready polling interval (ms). */
   readonly probeIntervalMs: number;
-  /** 单次探测 HTTP 超时（ms）。 */
+  /** single time probe HTTP timeout (ms). */
   readonly probeTimeoutMs: number;
-  /** owned Hub 崩溃自动重启上限（稳定 stableMs 后重置）。 */
+  /** owned Hub crash automatically restart cap (stable stableMs after reset). */
   readonly restartMaxRetries: number;
-  /** 重启退避基数（ms），指数递增封顶 restartBackoffMaxMs。 */
+  /** restart backoff base count (ms), refer count pass increase seal top restartBackoffMaxMs. */
   readonly restartBackoffMs: number;
   readonly restartBackoffMaxMs: number;
-  /** 子进程稳定运行多久后重置重启预算（ms）。 */
+  /** child process stable run how long after reset restart pre- compute (ms). */
   readonly stableMs: number;
-  /** stop() 优雅期：SIGTERM 后超过此时长强制 SIGKILL（ms）。 */
+  /** stop() graceful phase:SIGTERM after exceeds now long force SIGKILL(ms). */
   readonly stopGraceMs: number;
 }
 
@@ -87,7 +87,7 @@ export type DesktopOverrides = Partial<
   >
 >;
 
-/** hub 入口缺省路径（src 与 dist 下同构：均上溯两级到 packages/）。 */
+/** hub entry default path (src and dist under same construct: all on trace two level to packages/). */
 export function defaultHubEntryPath(): string {
   return fileURLToPath(new URL('../../hub/dist/main.js', import.meta.url));
 }
@@ -95,18 +95,18 @@ export function defaultHubEntryPath(): string {
 function parsePort(raw: string | undefined, origin: string): number {
   const port = Number(raw);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new DesktopError('config_invalid', `${origin} 必须是 1 到 65535 的整数，实际: ${raw ?? '(空)'}`);
+    throw new DesktopError('config_invalid', `${origin} must be 1 to 65535 integer, actual: ${raw ?? '(empty)'}`);
   }
   if (FORBIDDEN_PORTS.includes(port)) {
     throw new DesktopError(
       'config_invalid',
-      `端口 ${port} 属于外部/历史系统保留端口（${FORBIDDEN_PORTS.join('/')}），桌面壳禁止占用`,
+      `port ${port} belongs to external/history system keep port (${FORBIDDEN_PORTS.join('/')}), desktop shell forbidden occupy`,
     );
   }
   return port;
 }
 
-/** 未设置或空串视为未配置（缺省值），其余非法值显式拒绝。 */
+/** not settings or empty string treated as not config (default value), the rest illegal value explicit reject. */
 function envValue(raw: string | undefined): string | undefined {
   return raw === undefined || raw === '' ? undefined : raw;
 }
@@ -114,30 +114,30 @@ function envValue(raw: string | undefined): string | undefined {
 function parsePositiveInt(raw: string | undefined, origin: string, min: number): number {
   const value = Number(raw);
   if (!Number.isInteger(value) || value < min) {
-    throw new DesktopError('config_invalid', `${origin} 必须是 >= ${min} 的整数，实际: ${raw ?? '(空)'}`);
+    throw new DesktopError('config_invalid', `${origin} must be >= ${min} integer, actual: ${raw ?? '(empty)'}`);
   }
   return value;
 }
 
-/** npm 版本说明符（semver 及 prerelease/build 字符集，禁分隔符）。 */
+/** npm version note symbol (semver and prerelease/build character collection, forbid isolate symbol). */
 const SAFE_VERSION_RE = /^[a-zA-Z0-9.+~-]+$/;
 
-/** 空白拆分参数串；空串视为未配置。 */
+/** whitespace split parameter string; empty string treated as not config. */
 function parseArgList(raw: string | undefined): string[] | undefined {
   const value = envValue(raw)?.trim();
   return value === undefined ? undefined : value.split(/\s+/).filter((a) => a.length > 0);
 }
 
 /**
- * 解析桌面壳配置。env 优先读 HELM_DESKTOP_* 命名空间；overrides 显式覆盖一切
- * （测试与编程式调用通道）。非法值显式抛错，绝不静默回落。
+ * parse desktop shell config.env takes precedence read HELM_DESKTOP_* naming empty between;overrides explicit override everything
+ * (test and edit process style invoke channel). illegal value explicit throws, never static default back.
  */
 export function resolveDesktopConfig(env: NodeJS.ProcessEnv, overrides: DesktopOverrides = {}): DesktopConfig {
   const portRaw = overrides.port !== undefined ? String(overrides.port) : envValue(env['HELM_DESKTOP_PORT']);
-  const port = portRaw === undefined ? DESKTOP_DEFAULT_PORT : parsePort(portRaw, '端口（HELM_DESKTOP_PORT）');
+  const port = portRaw === undefined ? DESKTOP_DEFAULT_PORT : parsePort(portRaw, 'port (HELM_DESKTOP_PORT)');
   const hubCommand = overrides.hubCommand ?? (env['HELM_DESKTOP_HUB_CMD']?.trim() ? env['HELM_DESKTOP_HUB_CMD'].trim().split(/\s+/) : undefined);
   if (hubCommand !== undefined && hubCommand.length === 0) {
-    throw new DesktopError('config_invalid', 'hubCommand 不能为空');
+    throw new DesktopError('config_invalid', 'hubCommand cannot be empty');
   }
   const payloadEntryArgs =
     overrides.payloadEntryArgs ?? parseArgList(env['HELM_DESKTOP_PAYLOAD_ENTRY_ARGS']);
@@ -145,7 +145,7 @@ export function resolveDesktopConfig(env: NodeJS.ProcessEnv, overrides: DesktopO
     overrides.payloadPackage !== undefined ? overrides.payloadPackage : envValue(env['HELM_PAYLOAD_PACKAGE']);
   const payloadPackage = payloadPackageRaw?.trim();
   if (payloadPackage === '') {
-    throw new DesktopError('config_invalid', 'HELM_PAYLOAD_PACKAGE 不能是空白串');
+    throw new DesktopError('config_invalid', 'HELM_PAYLOAD_PACKAGE cannot is whitespace string');
   }
   const payloadRegistryRaw =
     overrides.payloadRegistry !== undefined ? overrides.payloadRegistry : envValue(env['HELM_PAYLOAD_REGISTRY']);
@@ -153,25 +153,25 @@ export function resolveDesktopConfig(env: NodeJS.ProcessEnv, overrides: DesktopO
     try {
       const parsed = new URL(payloadRegistryRaw);
       if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-        throw new Error(`协议 ${parsed.protocol} 不支持`);
+        throw new Error(`protocol ${parsed.protocol} unsupported`);
       }
     } catch (error) {
       throw new DesktopError(
         'config_invalid',
-        `HELM_PAYLOAD_REGISTRY 必须是 http(s) URL（${error instanceof Error ? error.message : String(error)}）`,
+        `HELM_PAYLOAD_REGISTRY must be http(s) URL(${error instanceof Error ? error.message : String(error)})`,
       );
     }
   }
   const payloadVersionRaw =
     overrides.payloadVersion !== undefined ? overrides.payloadVersion : envValue(env['HELM_PAYLOAD_VERSION']);
   if (payloadVersionRaw !== undefined && payloadVersionRaw !== 'latest' && !SAFE_VERSION_RE.test(payloadVersionRaw)) {
-    throw new DesktopError('config_invalid', `HELM_PAYLOAD_VERSION 必须是版本号或 latest，实际: ${payloadVersionRaw}`);
+    throw new DesktopError('config_invalid', `HELM_PAYLOAD_VERSION must be version number or latest, actual: ${payloadVersionRaw}`);
   }
   const payloadEntry = overrides.payloadEntry ?? envValue(env['HELM_DESKTOP_PAYLOAD_ENTRY']);
   if (payloadEntryArgs !== undefined && payloadEntry === undefined) {
     throw new DesktopError(
       'config_invalid',
-      'HELM_DESKTOP_PAYLOAD_ENTRY_ARGS 仅在 HELM_DESKTOP_PAYLOAD_ENTRY（payload 入口）配置后可用',
+      'HELM_DESKTOP_PAYLOAD_ENTRY_ARGS only in HELM_DESKTOP_PAYLOAD_ENTRY(payload entry) config after available',
     );
   }
   const config: DesktopConfig = {
@@ -203,12 +203,12 @@ export function resolveDesktopConfig(env: NodeJS.ProcessEnv, overrides: DesktopO
     stopGraceMs: overrides.stopGraceMs ?? 5_000,
   };
   if (config.probeIntervalMs < 50) {
-    throw new DesktopError('config_invalid', 'probeIntervalMs 过小（>= 50ms）');
+    throw new DesktopError('config_invalid', 'probeIntervalMs small (>= 50ms)');
   }
   return config;
 }
 
-/** 生效的 hub 入口与来源（payload 优先）；args 为 payload 入口附加参数（契约上恒空）。 */
+/** takes effect hub entry and source (payload takes precedence);args is payload entry additional parameter (contract on constant empty). */
 export interface HubEntrySelection {
   entry: string;
   source: 'payload' | 'hub-entry';
@@ -225,8 +225,8 @@ export function resolveHubEntry(config: DesktopConfig): HubEntrySelection | null
 }
 
 /**
- * Hub 子进程环境：剥离 HELM_DESKTOP_* 与 HELM_PAYLOAD_*（防桌面壳语义泄漏到 Hub），
- * 注入内核约定变量。ELECTRON_RUN_AS_NODE 由 runner 层按需追加（见 runners.ts）。
+ * Hub child process environment: strip HELM_DESKTOP_* and HELM_PAYLOAD_*(guard against desktop shell semantics leak leak to Hub),
+ * inject kernel convention variable.ELECTRON_RUN_AS_NODE by runner layer on demand append (see runners.ts).
  */
 export function buildHubChildEnv(config: DesktopConfig, baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const child: NodeJS.ProcessEnv = {};

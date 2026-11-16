@@ -1,12 +1,12 @@
 /**
- * 节点升级排空（node_draining）在 kernel 侧的消费语义：
- * - fabric.ipcCall：RpcResult 原样保留 node_draining 错误码（连接仍在，
- *   由调用方分型，不吞成 aborted/unknown）；
- * - fabric.ipcSubscribe：排空拒新抛 HelmError node_draining(503)，
- *   与 ipc_subscribe_failed(502) 区分，且 onClosed 恰好回调一次；
- * - remote-env exec：节点 envExec 返回 node_draining 时错误码运行时透传
- *   （不被归并为 aborted/unknown），立即失败、不触发等待重连
- *  （节点在线，排空 ≠ 离线）；真实取消仍为 aborted。
+ * node upgrade arrange empty (node_draining) in kernel side consume semantics:
+ * - fabric.ipcCall:RpcResult original keep node_draining error code (connect still in,
+ *   by caller type, do not swallow into aborted/unknown);
+ * - fabric.ipcSubscribe: arrange empty refuse new throw HelmError node_draining(503),
+ *   and ipc_subscribe_failed(502) zone, and onClosed exactly call back once;
+ * - remote-env exec: node envExec return node_draining when error code runtime pass-through
+ *   (do not by archive and is aborted/unknown), immediately failed, does not trigger wait for reconnect
+ *  (node online, arrange empty ≠ offline); real cancel still is aborted.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -26,7 +26,7 @@ class FakeSocket extends EventEmitter {
   close() { this.readyState = 3; this.emit('close') }
 }
 
-/** 注册假节点（鉴权恒过），可注入任意 env RPC 函数（ipcSubscribe 等）。 */
+/** register false node (authentication constant), can inject any env RPC function (ipcSubscribe etc.). */
 async function registerFakeNode(registry: NodeRegistry, nodeId: string, rpc: Record<string, unknown>): Promise<FakeSocket> {
   const socket = new FakeSocket()
   const outcome = await registry.register(
@@ -38,7 +38,7 @@ async function registerFakeNode(registry: NodeRegistry, nodeId: string, rpc: Rec
   return socket
 }
 
-test('fabric.ipcCall：排空拒新 RpcResult 保留 node_draining 原码（不拋不吞）', { timeout: 60_000 }, async () => {
+test('fabric.ipcCall: arrange empty refuse new RpcResult keep node_draining original code (do not throw do not swallow)', { timeout: 60_000 }, async () => {
   const fabric = createEnvFabric({ authenticate: () => true })
   try {
     const socket = await registerFakeNode(fabric.registry, 'drain-node', {
@@ -58,7 +58,7 @@ test('fabric.ipcCall：排空拒新 RpcResult 保留 node_draining 原码（不�
   }
 })
 
-test('fabric.ipcSubscribe：排空拒新抛 HelmError node_draining(503)，onClosed 恰好一次', { timeout: 60_000 }, async () => {
+test('fabric.ipcSubscribe: arrange empty refuse new throw HelmError node_draining(503),onClosed exactly once', { timeout: 60_000 }, async () => {
   const fabric = createEnvFabric({ authenticate: () => true })
   try {
     const socket = await registerFakeNode(fabric.registry, 'drain-sub-node', {
@@ -74,7 +74,7 @@ test('fabric.ipcSubscribe：排空拒新抛 HelmError node_draining(503)，onClo
       (error: unknown) =>
         error instanceof HelmError && error.code === 'node_draining' && error.status === 503 && /draining/.test(error.message),
     )
-    // 订阅未建立：finish 已在拒绝路径回调 onClosed（无泄漏等待）。
+    // subscribe not establish:finish already in reject path call back onClosed(without leak leak wait for).
     await delay(20)
     assert.equal(closed, 1)
     socket.close()
@@ -83,7 +83,7 @@ test('fabric.ipcSubscribe：排空拒新抛 HelmError node_draining(503)，onClo
   }
 })
 
-test('remote-env exec：node_draining 运行时透传（非 aborted/unknown），不等待重连', { timeout: 60_000 }, async () => {
+test('remote-env exec:node_draining runtime pass-through (non- aborted/unknown), without waiting reconnect', { timeout: 60_000 }, async () => {
   let waitCalled = 0
   const drainingRpc = {
     envExec: async () => ({
@@ -94,7 +94,7 @@ test('remote-env exec：node_draining 运行时透传（非 aborted/unknown）�
   } as unknown as NodeEnvRpcFunctions
   const resolver: NodeRpcResolver = {
     getNodeEnvRpc: () => drainingRpc,
-    // 排空期间节点在线：不应走到等待重连（走到即语义错误）。
+    // arrange empty during node online: must not away to wait for reconnect (away to i.e. semantics error).
     waitForNodeOnline: () => {
       waitCalled += 1
       return Promise.resolve(drainingRpc)
@@ -107,18 +107,18 @@ test('remote-env exec：node_draining 运行时透传（非 aborted/unknown）�
   const elapsed = Date.now() - startedAt
 
   assert.equal(result.ok, false)
-  // 运行时错误码原样保留：上层可区分「节点正在升级排空」与
-  // aborted（取消）/unknown（断连结果未知），绝不归并。
+  // runtime error code original keep: on layer can zone node is now upgrade arrange empty and
+  // aborted(cancel)/unknown(assert connect result unknown), never archive and.
   assert.equal(!result.ok && result.error.code, 'node_draining')
   assert.match(!result.ok ? result.error.message : '', /draining/)
-  // 立即失败（有界返回，不进入重连等待）。
-  assert.ok(elapsed < 2_000, `应在有界时间内返回（实际 ${elapsed}ms）`)
-  assert.equal(waitCalled, 0, '节点在线期间排空拒绝不得触发 waitForNodeOnline')
+  // immediately failed (has boundary return, does not enter reconnect wait for).
+  assert.ok(elapsed < 2_000, `should in has boundary time inside return (actual ${elapsed}ms)`)
+  assert.equal(waitCalled, 0, 'node online during arrange empty reject must not trigger waitForNodeOnline')
 })
 
-test('remote-env exec：真实取消仍为 aborted（不因排空码改动回归）', { timeout: 60_000 }, async () => {
+test('remote-env exec: real cancel still is aborted(do not because arrange empty code change regression)', { timeout: 60_000 }, async () => {
   const rpc = {
-    // 模拟用户取消：节点侧命令被 abort，RPC 返回 aborted。
+    // simulated user cancel: node side command by abort,RPC return aborted.
     envExec: async () => ({ ok: false, error: { code: 'aborted', message: 'Command aborted' } }),
     envAbortExec: async () => undefined,
   } as unknown as NodeEnvRpcFunctions
@@ -128,5 +128,5 @@ test('remote-env exec：真实取消仍为 aborted（不因排空码改动回归
   const context = withAbortSignal(controller.signal, BACKGROUND_CONTEXT)
   const result = await env.exec('sleep 5', undefined, context)
   assert.equal(result.ok, false)
-  assert.equal(!result.ok && result.error.code, 'aborted', '真实取消必须保持 aborted')
+  assert.equal(!result.ok && result.error.code, 'aborted', 'real cancel must keep aborted')
 })

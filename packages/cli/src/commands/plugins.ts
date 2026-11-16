@@ -1,9 +1,9 @@
 /**
- * 插件域：plugins list/enable/disable/config/doc/client 与 doctor/reload/rescan
- * （DX 闭环）、install/update/remove（受管包管理）与 actions list。config 除
- * --input <json> 外支持可重复 --set key=value（值按 JSON boolean/number 语义
- * 解析，否则 string）。plugins init 为本地脚手架命令（minimal/full 通用插件与
- * app 全栈微应用三档模板，app 产物直接通过 helm apps validate 预检）。
+ * plugin domain:plugins list/enable/disable/config/doc/client and doctor/reload/rescan
+ * (DX closed ring),install/update/remove(managed package manage) and actions list.config except
+ * --input <json> outside support can duplicate --set key=value(value by JSON boolean/number semantics
+ * parse, otherwise string).plugins init is local foot manually frame command (minimal/full through use plugin and
+ * app full-stack micro app three Profile template,app artifact directly via helm apps validate preflight).
  */
 import type {
   ActionManifest,
@@ -46,10 +46,10 @@ import {
 } from './shared.js'
 
 /**
- * 会话文档订阅（--watch）：消费专用 SSE（GET /api/plugins/:id/docs/:name/events?conversationId=N）。
- * - --json：每帧 NDJSON 输出（snapshot 帧与增量帧均原样）；
- * - 人类模式：snapshot 打印当前值，增量帧打印一行变更摘要 + 新值；
- * - 建连 404（插件停用/会话删除/文档非 public）显式报错并停止（不重试）。
+ * conversation document subscribe (--watch): consume dedicated use SSE(GET /api/plugins/:id/docs/:name/events?conversationId=N).
+ * - --json: each frame NDJSON output (snapshot frame and incremental frame all original);
+ * - person class pattern:snapshot print when before value, incremental frame print one row change summary + new value;
+ * - create connect 404(plugin deactivate/conversation delete/document non- public) explicit errors and stop (do not retry).
  */
 async function watchSessionDoc(
   ctx: CommandContext,
@@ -63,7 +63,7 @@ async function watchSessionDoc(
   const onSignal = () => controller.abort()
   process.once('SIGINT', onSignal)
   process.once('SIGTERM', onSignal)
-  const label = `${pluginId}/${name}#会话${conversationId}`
+  const label = `${pluginId}/${name}#conversation${conversationId}`
   try {
     await hub.streamSse(`${base}/events?conversationId=${conversationId}`, {
       signal: controller.signal,
@@ -72,7 +72,7 @@ async function watchSessionDoc(
         try {
           payload = JSON.parse(data)
         } catch {
-          ctx.io.err(`helm: 忽略非 JSON SSE 帧（${data.slice(0, 120)}）\n`)
+          ctx.io.err(`helm: ignore non- JSON SSE frame (${data.slice(0, 120)})\n`)
           return
         }
         if (ctx.json) {
@@ -81,13 +81,13 @@ async function watchSessionDoc(
         }
         if (event === 'snapshot') {
           const snap = payload as { doc?: { value?: unknown; deleted?: boolean } }
-          ctx.io.out(`[${label}] 快照\n`)
+          ctx.io.out(`[${label}] snapshot\n`)
           printValue(ctx.io, snap.doc?.value ?? null, false)
           return
         }
         const frame = payload as { seq?: number; event?: { doc?: { value?: unknown; deleted?: boolean } } }
         const doc = frame.event?.doc
-        ctx.io.out(`[${label}] 更新 seq=${frame.seq ?? '?'}${doc?.deleted === true ? '（已删除）' : ''}\n`)
+        ctx.io.out(`[${label}] update seq=${frame.seq ?? '?'}${doc?.deleted === true ? '(deleted)' : ''}\n`)
         printValue(ctx.io, doc?.value ?? null, false)
       },
     })
@@ -101,25 +101,25 @@ async function watchSessionDoc(
 }
 
 /**
- * 破坏性移除确认（复用 CLI 既有 TTY/非 TTY 分流惯例，与 login 密码同风格）：
- * --yes 与 --json 非交互放行；TTY 终端 stdin 提问一行（y/yes 确认）；
- * 非 TTY 无 --yes 显式拒绝——绝不在无人值守的管道上悬等输入。
+ * break remove confirm (re- use CLI since has TTY/non- TTY stream convention, and login password same style):
+ * --yes and --json non- interaction let through;TTY terminal stdin mention question one row (y/yes confirm);
+ * non- TTY without --yes explicit reject - - never in without person value guard pipeline on pending etc. input.
  */
 async function confirmRemove(ctx: CommandContext, assumedYes: boolean, pluginId: string): Promise<void> {
   if (ctx.json || assumedYes) return
   if (process.stdin.isTTY !== true) {
     throw new CliError(
-      `移除 ${pluginId} 为破坏性操作（清理 Hub 主机安装目录，不可恢复）：非交互环境需 --yes 确认`,
+      `remove ${pluginId} is break operation (clean up Hub host install directory, cannot restore): non- interaction environment must --yes confirm`,
       'confirmation_required',
     )
   }
   const { createInterface } = await import('node:readline/promises')
   const rl = createInterface({ input: process.stdin, output: process.stderr })
   try {
-    const answer = await rl.question(`将移除插件 ${pluginId} 及其安装目录（不可恢复）。输入 yes 确认：`)
+    const answer = await rl.question(`remove plugin ${pluginId} and its install directory (cannot restore). input yes confirm:`)
     const normalized = answer.trim().toLowerCase()
     if (normalized !== 'y' && normalized !== 'yes') {
-      throw new CliError('已取消：未确认移除', 'not_confirmed')
+      throw new CliError('cancelled: not confirm remove', 'not_confirmed')
     }
   } finally {
     rl.close()
@@ -130,7 +130,7 @@ export function pluginsCommands(): CommandSpec[] {
   const cmds: CommandSpec[] = []
   cmds.push({
     path: ['plugins', 'list'],
-    description: '列出插件（GET /api/plugins）',
+    description: 'column out plugin (GET /api/plugins)',
     async run(ctx: CommandContext) {
       parseNoFlags(ctx)
       const hub = await ctx.hub()
@@ -140,7 +140,7 @@ export function pluginsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['plugins', 'enable'],
-    description: '启用插件（POST /api/plugins/:id/enable）',
+    description: 'enable plugin (POST /api/plugins/:id/enable)',
     positional: '<id>',
     async run(ctx: CommandContext) {
       const parsed = parseFlags([], ctx.args)
@@ -152,9 +152,9 @@ export function pluginsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['plugins', 'disable'],
-    description: '停用插件（POST /api/plugins/:id/disable；--force 忽略持久资源占用告警）',
+    description: 'deactivate plugin (POST /api/plugins/:id/disable;--force ignore durable asset occupy alert)',
     flags: [
-      { name: 'force', type: 'boolean', help: '强制停用（忽略持久配置/资源占用告警；在途运行任务仍不可跳过）' },
+      { name: 'force', type: 'boolean', help: 'force deactivate (ignore durable config/asset occupy alert; in-flight run task still cannot skip)' },
     ],
     positional: '<id>',
     async run(ctx: CommandContext) {
@@ -165,8 +165,8 @@ export function pluginsCommands(): CommandSpec[] {
       const hub = await ctx.hub()
       const path = `/api/plugins/${encodeURIComponent(id)}/disable`
       try {
-        // 无 --force 时保持无 body 调用：服务端遇持久资源占用返回 409
-        // plugin_in_use，由下方富化为占用清单 + --force 提示。
+        // without --force when keep without body invoke: server side encounter durable asset occupy return 409
+        // plugin_in_use, by under way rich is occupy manifest + --force hint.
         printResult(
           ctx,
           force ? await hub.post<unknown>(path, { force: true }) : await hub.post<unknown>(path),
@@ -182,11 +182,11 @@ export function pluginsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['plugins', 'config'],
-    description: '查看/更新插件配置（GET 返回 {values,schema}；PUT 发送 {values}；--set key=value 与 --unset key 可重复）',
+    description: 'view/update plugin config (GET return {values,schema};PUT send {values};--set key=value and --unset key can duplicate)',
     flags: [
-      { name: 'input', type: 'json', help: '整体 values JSON 对象（与 --set 可共存，--set 覆盖对应键）' },
-      { name: 'set', type: 'string', repeated: true, help: '单项赋值 key=value，可重复；值按 JSON boolean/number 解析，否则 string' },
-      { name: 'unset', type: 'string', repeated: true, help: '重置指定配置键回默认值（发送 null 删除显式覆写值，可重复）' },
+      { name: 'input', type: 'json', help: 'whole values JSON object (and --set can shared store,--set override for should key)' },
+      { name: 'set', type: 'string', repeated: true, help: 'single items assignment key=value, can duplicate; value by JSON boolean/number parse, otherwise string' },
+      { name: 'unset', type: 'string', repeated: true, help: 'reset designate config key back default value (send null delete explicit override value, can duplicate)' },
     ],
     positional: '<id>',
     async run(ctx: CommandContext) {
@@ -205,7 +205,7 @@ export function pluginsCommands(): CommandSpec[] {
       const unsets = repeatedValues(parsed.flags, 'unset')
       for (const key of unsets) {
         if (key.length === 0 || key.includes('=')) {
-          throw new CliError(`--unset 需为配置键名（非空、不含 =），实得 "${key}"`, 'invalid_flag_value')
+          throw new CliError(`--unset must be config key name (non-empty, excludes =), got "${key}"`, 'invalid_flag_value')
         }
       }
       const hub = await ctx.hub()
@@ -217,7 +217,7 @@ export function pluginsCommands(): CommandSpec[] {
       const setValues = parseKeyValues(sets, 'set')
       for (const key of unsets) {
         if (key in setValues) {
-          throw new CliError(`--set 与 --unset 不能同时作用于同一字段: ${key}`, 'conflicting_flags')
+          throw new CliError(`--set and --unset cannot also effect at the same field: ${key}`, 'conflicting_flags')
         }
       }
       const values: Record<string, unknown> = hasInput ? coerceMetaFlag(parsed.flags.get('input'), 'input') : {}
@@ -230,11 +230,11 @@ export function pluginsCommands(): CommandSpec[] {
   cmds.push({
     path: ['plugins', 'doc'],
     description:
-      '读取插件公共文档（GET /api/plugins/:id/docs/:name；--conversation/--current 读会话文档；--watch 订阅会话文档专用 SSE）',
+      'read plugin public document (GET /api/plugins/:id/docs/:name;--conversation/--current read conversation document;--watch subscribe conversation document dedicated use SSE)',
     flags: [
-      { name: 'conversation', type: 'number', help: '会话文档目标会话 ID（与 --current 互斥）' },
-      { name: 'current', type: 'boolean', help: '使用 env HELM_CONVERSATION_ID（与 --conversation 互斥）' },
-      { name: 'watch', type: 'boolean', help: '订阅会话文档专用 SSE（需 --conversation/--current；Ctrl-C 退出）' },
+      { name: 'conversation', type: 'number', help: 'conversation document target conversation ID(and --current mutual exclusion)' },
+      { name: 'current', type: 'boolean', help: 'use env HELM_CONVERSATION_ID(and --conversation mutual exclusion)' },
+      { name: 'watch', type: 'boolean', help: 'subscribe conversation document dedicated use SSE(must --conversation/--current;Ctrl-C exit)' },
     ],
     positional: '<pluginId> <name>',
     async run(ctx: CommandContext) {
@@ -249,19 +249,19 @@ export function pluginsCommands(): CommandSpec[] {
       const pluginId = parsed.positionals[0]
       const name = parsed.positionals[1]
       if (pluginId === undefined || name === undefined) {
-        throw new CliError('缺少位置参数：plugins doc <pluginId> <name>', 'missing_id')
+        throw new CliError('missing location parameter:plugins doc <pluginId> <name>', 'missing_id')
       }
       assertNoExtraPositionals(parsed.positionals, 2)
       const hasConversation = parsed.flags.has('conversation')
       const hasCurrent = parsed.flags.get('current') === true
       if (hasConversation && hasCurrent) {
-        throw new CliError('--conversation 与 --current 互斥', 'conflicting_flags')
+        throw new CliError('--conversation and --current mutual exclusion', 'conflicting_flags')
       }
       let conversationId: number | undefined
       if (hasConversation) {
         const value = parsed.flags.get('conversation')
         if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
-          throw new CliError('--conversation 需为正整数会话 ID', 'invalid_flag_value')
+          throw new CliError('--conversation must be a positive integer conversation ID', 'invalid_flag_value')
         }
         conversationId = value
       } else if (hasCurrent) {
@@ -271,7 +271,7 @@ export function pluginsCommands(): CommandSpec[] {
       const hub = await ctx.hub()
       if (parsed.flags.get('watch') === true) {
         if (conversationId === undefined) {
-          throw new CliError('--watch 需要会话目标（--conversation <id> 或 --current）', 'missing_conversation_target')
+          throw new CliError('--watch need to conversation target (--conversation <id> or --current)', 'missing_conversation_target')
         }
         await watchSessionDoc(ctx, hub, base, conversationId, pluginId, name)
         return
@@ -289,7 +289,7 @@ export function pluginsCommands(): CommandSpec[] {
         printResult(ctx, doc)
         return
       }
-      // 人类模式：文档名 + 值（JSON 保真；文本值直出）
+      // person class pattern: document name + value (JSON fidelity; text value direct out)
       if (typeof doc.value === 'string') {
         ctx.io.out(`${doc.name}\n`)
         printPlainText(ctx, doc.value)
@@ -301,11 +301,11 @@ export function pluginsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['plugins', 'client'],
-    description: '获取插件 client.tsx 编译产物（GET /api/plugins/:id/client.mjs?module=...；--module 缺省 client.tsx）',
+    description: 'get plugin client.tsx compile artifact (GET /api/plugins/:id/client.mjs?module=...;--module default client.tsx)',
     flags: [
-      { name: 'module', type: 'string', help: '相对插件 clientRoot 的模块路径（缺省 client.tsx）' },
-      { name: 'chunk', type: 'string', help: '可选 chunk 文件名（如 vendor.js）' },
-      { name: 'output', type: 'string', help: '写入目标文件路径（缺省 stdout；--json 时仍写文件并打印元信息）' },
+      { name: 'module', type: 'string', help: 'each other for plugin clientRoot module path (default client.tsx)' },
+      { name: 'chunk', type: 'string', help: 'optional chunk filename (such as vendor.js)' },
+      { name: 'output', type: 'string', help: 'write target file path (default stdout;--json when still write file and print meta information)' },
     ],
     positional: '<id>',
     async run(ctx: CommandContext) {
@@ -322,7 +322,7 @@ export function pluginsCommands(): CommandSpec[] {
       const moduleRef = (parsed.flags.get('module') as string | undefined) ?? 'client.tsx'
       const chunk = parsed.flags.get('chunk') as string | undefined
       if (parsed.flags.has('output') && typeof parsed.flags.get('output') !== 'string') {
-        throw new CliError('--output 需要文件路径', 'invalid_flag_value')
+        throw new CliError('--output need to file path', 'invalid_flag_value')
       }
       const outPath = parsed.flags.get('output') as string | undefined
       const hub = await ctx.hub()
@@ -345,7 +345,7 @@ export function pluginsCommands(): CommandSpec[] {
       if (outPath !== undefined) {
         const { writeFile } = await import('node:fs/promises')
         await writeFile(outPath, code, 'utf8')
-        if (!ctx.json) ctx.io.out(`已写入 ${outPath}（${code.length} 字节，hash ${contentHash}）\n`)
+        if (!ctx.json) ctx.io.out(`already write ${outPath}(${code.length} byte,hash ${contentHash})\n`)
         return
       }
       if (!ctx.json) ctx.io.out(code)
@@ -354,11 +354,11 @@ export function pluginsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['plugins', 'doctor'],
-    description: '外部插件源码静态自检（POST /api/plugins/doctor；真实加载+真实注册+client 编译）',
+    description: 'external plugin source code static self inspect (POST /api/plugins/doctor; real load+real register+client compile)',
     flags: [
-      { name: 'path', type: 'string', help: '外部插件源目录绝对路径（与 --dir 等价；--id/<id> 互斥）' },
-      { name: 'dir', type: 'string', help: '--path 的兼容别名（等价）' },
-      { name: 'id', type: 'string', help: '已注册外部插件 id（服务端解析其源目录；与路径互斥）' },
+      { name: 'path', type: 'string', help: 'external plugin source directory absolute path (and --dir etc. price;--id/<id> mutual exclusion)' },
+      { name: 'dir', type: 'string', help: '--path compatibility alias (etc. price)' },
+      { name: 'id', type: 'string', help: 'registered external plugin id(server side parse its source directory; and path mutual exclusion)' },
     ],
     positional: '[<id> | <dir>]',
     async run(ctx: CommandContext) {
@@ -374,7 +374,7 @@ export function pluginsCommands(): CommandSpec[] {
       const dirFlag = parsed.flags.get('dir')
       const idFlag = parsed.flags.get('id')
       const positional = parsed.positionals[0]
-      // 位置参数语义推断：绝对路径 -> 目录目标；否则 -> 插件 id。
+      // location parameter semantics push assert: absolute path -> directory target; otherwise -> plugin id.
       const positionalIsPath =
         positional !== undefined &&
         (positional.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(positional) || positional.startsWith('\\\\'))
@@ -393,10 +393,10 @@ export function pluginsCommands(): CommandSpec[] {
             ? positional
             : undefined
       if (pathDir === undefined && id === undefined) {
-        throw new CliError('缺少目标：<id>、--path <dir> 或 --dir <dir>（择一）', 'missing_id')
+        throw new CliError('missing target:<id>,--path <dir> or --dir <dir>(choose one)', 'missing_id')
       }
       if (pathDir !== undefined && id !== undefined) {
-        throw new CliError('id 与路径目标互斥（择一提供）', 'conflicting_flags')
+        throw new CliError('id and path target mutual exclusion (choose one provide)', 'conflicting_flags')
       }
       const usedPositionals = positional !== undefined && (positionalIsPath ? pathDir === positional : id === positional) ? 1 : 0
       assertNoExtraPositionals(parsed.positionals, usedPositionals)
@@ -407,21 +407,21 @@ export function pluginsCommands(): CommandSpec[] {
         printResult(ctx, report)
       } else {
         ctx.io.out(
-          `插件自检：${report.dir}${report.pluginId ? `（id: ${report.pluginId}）` : ''}${report.requestedId ? `（目标 id: ${report.requestedId}）` : ''}\n`,
+          `plugin self inspect:${report.dir}${report.pluginId ? `(id: ${report.pluginId})` : ''}${report.requestedId ? `(target id: ${report.requestedId})` : ''}\n`,
         )
         for (const check of report.checks) {
           if (check.error === undefined) {
-            ctx.io.out(`  [ok] ${check.id} — ${check.label}\n`)
+            ctx.io.out(`  [ok] ${check.id} - ${check.label}\n`)
           } else {
-            ctx.io.out(`  [!!] ${check.id} — ${check.label}\n        ${check.error.code}: ${check.error.message}\n`)
+            ctx.io.out(`  [!!] ${check.id} - ${check.label}\n        ${check.error.code}: ${check.error.message}\n`)
           }
         }
-        ctx.io.out(report.ok ? '结论：全部检查通过\n' : '结论：存在失败项（见上）\n')
+        ctx.io.out(report.ok ? 'conclusion: all check via\n' : 'conclusion: store in failed items (see on)\n')
       }
-      // 预检失败：报告已完整输出（stdout），以非零退出码收尾供脚本消费。
+      // preflight failed: report already complete output (stdout), with non-zero exit code wrap-up supply script consume.
       if (!report.ok) {
         throw new CliError(
-          `插件自检存在失败项（${report.checks.filter((c) => c.error !== undefined).length} 项）`,
+          `plugin self inspect store in failed items (${report.checks.filter((c) => c.error !== undefined).length} items)`,
           'doctor_failed',
         )
       }
@@ -430,7 +430,7 @@ export function pluginsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['plugins', 'reload'],
-    description: '外部插件受控热重载（POST /api/plugins/:id/reload；预检失败旧实例保持不动）',
+    description: 'external plugin subject to control hot reload (POST /api/plugins/:id/reload; preflight failed old instance keep do not motion)',
     positional: '<id>',
     async run(ctx: CommandContext) {
       const parsed = parseFlags([], ctx.args)
@@ -444,7 +444,7 @@ export function pluginsCommands(): CommandSpec[] {
         return
       }
       ctx.io.out(
-        `已重载 ${result.pluginId}（代际 ${result.generation}，启用状态保持：${result.wasEnabled ? '已启用' : '已停用'}）\n`,
+        `already reload ${result.pluginId}(proxy boundary ${result.generation}, enable state keep:${result.wasEnabled ? 'enabled' : 'deactivated'})\n`,
       )
       printResult(ctx, result.summary)
     },
@@ -452,7 +452,7 @@ export function pluginsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['plugins', 'rescan'],
-    description: '增量重扫描插件目录（POST /api/plugins/rescan；只注册新外部插件，默认停用）',
+    description: 'incremental heavy scan plugin directory (POST /api/plugins/rescan; only register new external plugin, by default deactivate)',
     async run(ctx: CommandContext) {
       parseNoFlags(ctx)
       const hub = await ctx.hub()
@@ -462,29 +462,29 @@ export function pluginsCommands(): CommandSpec[] {
         return
       }
       if (result.registered.length === 0) {
-        ctx.io.out('未发现新插件（已注册插件与纯数据目录不重载）\n')
+        ctx.io.out('not found new plugin (registered plugin and pure data directory do not reload)\n')
       } else {
-        ctx.io.out(`新注册 ${result.registered.length} 个插件（默认停用）：\n`)
+        ctx.io.out(`new register ${result.registered.length} plugin (by default deactivate):\n`)
         for (const id of result.registered) ctx.io.out(`  - ${id}\n`)
-        ctx.io.out('启用：helm plugins enable <id>\n')
+        ctx.io.out('enable:helm plugins enable <id>\n')
       }
-      ctx.io.out(`（跳过 ${result.skipped} 个目录；当前共 ${result.plugins.length} 个插件）\n`)
+      ctx.io.out(`(skip ${result.skipped} directory; when before shared ${result.plugins.length} plugin)\n`)
     },
   })
 
   cmds.push({
     path: ['plugins', 'init'],
     description:
-      '本地脚手架：在目标目录生成外部插件骨架（不访问 Hub）；--template app 生成可通过 helm apps validate 的全栈微应用',
+      'local foot manually frame: in target directory generate external plugin skeleton (do not access Hub);--template app generate can via helm apps validate full-stack micro app',
     flags: [
-      { name: 'dir', type: 'string', help: '目标父目录（默认 <dataDir>/plugins；目录需已存在或可创建）' },
-      { name: 'name', type: 'string', help: '插件目录名与默认 id（字母数字与 - _，默认 sample-plugin）' },
+      { name: 'dir', type: 'string', help: 'target parent directory (by default <dataDir>/plugins; directory must already exists or can create)' },
+      { name: 'name', type: 'string', help: 'plugin directory name and by default id(character parent number and - _, by default sample-plugin)' },
       {
         name: 'template',
         type: 'string',
-        help: '骨架模板：minimal（仅后端探针动作）| full（含 doc/动作/前端面板）| app（全栈微应用：doc/双动作/screen 主视图 + 侧栏入口，产物直接过 helm apps validate）；默认 full',
+        help: 'skeleton template:minimal(only backend probe needle action)| full(contains doc/action/frontend panel)| app(full-stack micro app:doc/double action/screen main view + sidebar entry, artifact directly helm apps validate); by default full',
       },
-      { name: 'force', type: 'boolean', help: '目标目录非空时继续（默认拒绝，防覆盖）' },
+      { name: 'force', type: 'boolean', help: 'target directory non-empty when continue (by default reject, guard against override)' },
     ],
     positional: '[name]',
     async run(ctx: CommandContext) {
@@ -495,15 +495,15 @@ export function pluginsCommands(): CommandSpec[] {
   cmds.push({
     path: ['plugins', 'install'],
     description:
-      '从 npm/git/本地路径安装外部插件包并注册（POST /api/plugins/install；默认停用，--enable 装后即启用）。source 由 Hub 解析，本地路径相对 Hub 主机；安装启用即在 Hub 内执行可信插件代码，无沙箱',
-    flags: [{ name: 'enable', type: 'boolean', help: '安装后立即启用（缺省注册为停用）' }],
+      'from npm/git/local path install external plugin package and register (POST /api/plugins/install; by default deactivate,--enable install after i.e. enable).source by Hub parse, local path each other for Hub host; install enable i.e. in Hub inside execute can message plugin code, without sandbox',
+    flags: [{ name: 'enable', type: 'boolean', help: 'install after immediately enable (default register is deactivate)' }],
     positional: '<source>',
     async run(ctx: CommandContext) {
       const parsed = parseFlags([{ name: 'enable', type: 'boolean' }], ctx.args)
       const source = requirePositional(parsed.positionals, 0, 'source')
       if (source.trim() === '') {
         throw new CliError(
-          '<source> 不能为空（npm:<spec> / git:<repo>@<ref> / HTTPS Git URL / 本地路径，语法由 Hub 解析）',
+          '<source> cannot be empty (npm:<spec> / git:<repo>@<ref> / HTTPS Git URL / local path, language method by Hub parse)',
           'invalid_flag_value',
         )
       }
@@ -519,20 +519,20 @@ export function pluginsCommands(): CommandSpec[] {
         return
       }
       ctx.io.out(
-        `已安装 ${result.summary.id}${result.record.version === '' ? '' : ` ${result.record.version}`}（来源 ${result.record.source.raw}）\n`,
+        `installed ${result.summary.id}${result.record.version === '' ? '' : ` ${result.record.version}`}(source ${result.record.source.raw})\n`,
       )
-      ctx.io.out(`安装目录（Hub 主机）：${result.record.installPath}\n`)
+      ctx.io.out(`install directory (Hub host):${result.record.installPath}\n`)
       ctx.io.out(
         result.summary.enabled
-          ? '状态：已启用\n'
-          : `状态：已停用（启用：helm plugins enable ${result.summary.id}）\n`,
+          ? 'state: enabled\n'
+          : `state: deactivated (enable:helm plugins enable ${result.summary.id})\n`,
       )
     },
   })
 
   cmds.push({
     path: ['plugins', 'update'],
-    description: '更新已安装的外部插件包并重载（POST /api/plugins/:id/update；目标须为受管安装的插件）',
+    description: 'update installed external plugin package and reload (POST /api/plugins/:id/update; target must is managed install plugin)',
     positional: '<id>',
     async run(ctx: CommandContext) {
       const parsed = parseFlags([], ctx.args)
@@ -546,14 +546,14 @@ export function pluginsCommands(): CommandSpec[] {
         printResult(ctx, result)
         return
       }
-      const ver = (v: string): string => (v === '' ? '未知版本' : v)
+      const ver = (v: string): string => (v === '' ? 'unknown version' : v)
       if (result.changed) {
-        ctx.io.out(`已更新 ${result.record.pluginId}：${ver(result.previousVersion)} -> ${ver(result.record.version)}\n`)
+        ctx.io.out(`already update ${result.record.pluginId}:${ver(result.previousVersion)} -> ${ver(result.record.version)}\n`)
       } else {
-        ctx.io.out(`${result.record.pluginId} 源未变化，无更新（当前 ${ver(result.record.version)}）\n`)
+        ctx.io.out(`${result.record.pluginId} source not change, without update (when before ${ver(result.record.version)})\n`)
       }
       ctx.io.out(
-        `安装目录（Hub 主机）：${result.record.installPath}；状态：${result.summary.enabled ? '已启用' : '已停用'}\n`,
+        `install directory (Hub host):${result.record.installPath}; state:${result.summary.enabled ? 'enabled' : 'deactivated'}\n`,
       )
     },
   })
@@ -561,8 +561,8 @@ export function pluginsCommands(): CommandSpec[] {
   cmds.push({
     path: ['plugins', 'remove'],
     description:
-      '移除受管安装的外部插件包（POST /api/plugins/:id/remove；停用并清理 Hub 主机上的安装目录与记录，不可恢复）。人类模式默认确认（TTY 输入 yes），非交互环境用 --yes',
-    flags: [{ name: 'yes', type: 'boolean', help: '跳过确认（非交互/脚本环境）' }],
+      'remove managed install external plugin package (POST /api/plugins/:id/remove; deactivate and clean up Hub host on install directory and record, cannot restore). person class pattern by default confirm (TTY input yes), non- interaction environment use --yes',
+    flags: [{ name: 'yes', type: 'boolean', help: 'skip confirm (non- interaction/script environment)' }],
     positional: '<id>',
     async run(ctx: CommandContext) {
       const parsed = parseFlags([{ name: 'yes', type: 'boolean' }], ctx.args)
@@ -577,14 +577,14 @@ export function pluginsCommands(): CommandSpec[] {
         printResult(ctx, result)
         return
       }
-      ctx.io.out(`已移除 ${result.pluginId}（安装记录 ${result.installId}；移除前${result.wasEnabled ? '启用中' : '已停用'}）\n`)
-      ctx.io.out(`已清理目录（Hub 主机）：${result.installPath}\n`)
+      ctx.io.out(`already remove ${result.pluginId}(install record ${result.installId}; remove before${result.wasEnabled ? 'enable in' : 'deactivated'})\n`)
+      ctx.io.out(`already clean up directory (Hub host):${result.installPath}\n`)
     },
   })
 
   cmds.push({
     path: ['actions', 'list'],
-    description: '列出插件动作清单（GET /api/actions）',
+    description: 'column out plugin action manifest (GET /api/actions)',
     async run(ctx: CommandContext) {
       parseNoFlags(ctx)
       const hub = await ctx.hub()
@@ -596,10 +596,10 @@ export function pluginsCommands(): CommandSpec[] {
 }
 
 // ---------------------------------------------------------------------------
-// 409 plugin_in_use 富化：保留 code/details，消息附带占用清单与 --force 提示
+// 409 plugin_in_use rich: keep code/details, message attach carries occupy manifest and --force hint
 // ---------------------------------------------------------------------------
 
-/** 从错误 details 中提取结构合法的占用列表（usages: [{kind,id,label}]）。 */
+/** from error details in extract structure legal occupy list (usages: [{kind,id,label}]). */
 function extractInUseUsages(details: unknown): Array<{ kind: string; id: string; label: string }> {
   if (details === null || typeof details !== 'object') return []
   const usages = (details as { usages?: unknown }).usages
@@ -614,27 +614,27 @@ function extractInUseUsages(details: unknown): Array<{ kind: string; id: string;
   )
 }
 
-/** 保留原 CliError 的 code/details/exitCode，仅富化人类可读消息。 */
+/** keep original CliError  code/details/exitCode, only rich person class can read message. */
 function enrichPluginInUseError(err: CliError): CliError {
   const usages = extractInUseUsages(err.details)
   if (usages.length === 0) return err
-  const lines = [err.message, '占用中的持久资源：']
+  const lines = [err.message, 'occupy in durable asset:']
   for (const usage of usages) {
-    lines.push(`  - [${usage.kind}] ${usage.id}：${usage.label}`)
+    lines.push(`  - [${usage.kind}] ${usage.id}:${usage.label}`)
   }
-  lines.push('确认后可使用 --force 强制停用（在途运行任务仍不可跳过）。')
+  lines.push('confirm after can use --force force deactivate (in-flight run task still cannot skip).')
   return new CliError(lines.join('\n'), err.code, err.exitCode, err.details)
 }
 
 // ---------------------------------------------------------------------------
-// plugins init：本地脚手架（不访问 Hub；文件落盘后用 doctor/reload 闭环验证）
-// 文件内容模板见 scaffold-templates.ts（纯数据模块）
+// plugins init: local foot manually frame (do not access Hub; file after use doctor/reload closed ring verify)
+// file content template see scaffold-templates.ts(pure data module)
 // ---------------------------------------------------------------------------
 
-/** 插件 id/目录名：字母数字开头，允许 - _（与 protocol 插件 id 规则对齐，禁 builtin:）。 */
+/** plugin id/directory name: character parent number open head, allows - _(and protocol plugin id rule align, forbid builtin:). */
 const PLUGIN_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
 
-/** 生成插件骨架文件（存在性预检 + 非空目录拒绝 + 模板选择 + 明确产出清单）。 */
+/** generate plugin skeleton file (store in preflight + non-empty directory reject + template choose + explicit produce out manifest). */
 async function runPluginsInit(ctx: CommandContext): Promise<void> {
   const parsed = parseFlags(
     [
@@ -649,17 +649,17 @@ async function runPluginsInit(ctx: CommandContext): Promise<void> {
   const namePositional = parsed.positionals[0]
   const name = typeof nameFlag === 'string' && nameFlag.length > 0 ? nameFlag : namePositional
   if (typeof name !== 'string' || name.length === 0) {
-    throw new CliError('缺少 <name>（--name 或位置参数）', 'missing_id')
+    throw new CliError('missing <name>(--name or location parameter)', 'missing_id')
   }
   if (!PLUGIN_NAME_PATTERN.test(name) || name.startsWith('builtin:')) {
     throw new CliError(
-      `插件名非法：${name}（需匹配 ${PLUGIN_NAME_PATTERN}，且禁止 builtin: 前缀）`,
+      `plugin name illegal:${name}(must match ${PLUGIN_NAME_PATTERN}, and forbidden builtin: prefix)`,
       'invalid_flag_value',
     )
   }
   const templateRaw = parsed.flags.get('template')
   if (templateRaw !== undefined && !SCAFFOLD_TEMPLATES.includes(templateRaw as ScaffoldTemplate)) {
-    throw new CliError(`--template 需为 ${SCAFFOLD_TEMPLATES.join(' | ')}`, 'invalid_flag_value')
+    throw new CliError(`--template must be ${SCAFFOLD_TEMPLATES.join(' | ')}`, 'invalid_flag_value')
   }
   const template = (templateRaw ?? 'full') as ScaffoldTemplate
   const usedPositionals = name === namePositional ? 1 : 0
@@ -673,34 +673,34 @@ async function runPluginsInit(ctx: CommandContext): Promise<void> {
 
   const fsp = await import('node:fs/promises')
   const path = await import('node:path')
-  // 父目录：不存在时创建（与 plugins 目录约定一致）；存在但非目录显式报错。
+  // parent directory: missing when create (and plugins directory convention consistent); store in but non- directory explicit errors.
   try {
     const st = await fsp.stat(parentDir)
     if (!st.isDirectory()) {
-      throw new CliError(`--dir 不是目录：${parentDir}`, 'invalid_flag_value')
+      throw new CliError(`--dir is not directory:${parentDir}`, 'invalid_flag_value')
     }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
       if (err instanceof CliError) throw err
       throw new CliError(
-        `检查 --dir 失败（${parentDir}）：${err instanceof Error ? err.message : String(err)}`,
+        `check --dir failed (${parentDir}):${err instanceof Error ? err.message : String(err)}`,
         'read_failed',
       )
     }
     await fsp.mkdir(parentDir, { recursive: true })
   }
-  // 目标目录：已存在且非空时默认拒绝（--force 继续）；已存在为空时复用。
+  // target directory: already exists and non-empty when by default reject (--force continue); already exists is empty when re- use.
   let targetExisted = false
   try {
     const st = await fsp.stat(target)
     if (!st.isDirectory()) {
-      throw new CliError(`目标路径已存在且不是目录：${target}`, 'conflict')
+      throw new CliError(`target path already exists and is not directory:${target}`, 'conflict')
     }
     targetExisted = true
     const existing = await fsp.readdir(target)
     if (existing.length > 0 && !force) {
       throw new CliError(
-        `目标目录非空：${target}（使用 --force 继续；现有文件不会被删除，但同名文件将被覆盖）`,
+        `target directory non-empty:${target}(use --force continue; existing file will not by delete, but same name file by override)`,
         'conflict',
       )
     }
@@ -708,12 +708,12 @@ async function runPluginsInit(ctx: CommandContext): Promise<void> {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
       if (err instanceof CliError) throw err
       throw new CliError(
-        `检查目标目录失败（${target}）：${err instanceof Error ? err.message : String(err)}`,
+        `check target directory failed (${target}):${err instanceof Error ? err.message : String(err)}`,
         'read_failed',
       )
     }
   }
-  // 目标目录不存在时创建（minimal 模板无 client 子目录，根目录必须显式建）。
+  // target directory missing when create (minimal template without client subdirectory, directory must explicit create).
   await fsp.mkdir(target, { recursive: true })
   const files: string[] = ['plugin.json', 'index.ts', 'tsconfig.json']
   await fsp.writeFile(path.join(target, 'plugin.json'), SCAFFOLD_PLUGIN_JSON(name, template), 'utf8')
@@ -722,7 +722,7 @@ async function runPluginsInit(ctx: CommandContext): Promise<void> {
     template === 'minimal'
       ? SCAFFOLD_INDEX_TS_MINIMAL(name)
       : template === 'app'
-        ? SCAFFOLD_INDEX_TS_APP(name, `${name} 应用`)
+        ? SCAFFOLD_INDEX_TS_APP(name, `${name} should use`)
         : SCAFFOLD_INDEX_TS_FULL(name),
     'utf8',
   )
@@ -757,9 +757,9 @@ async function runPluginsInit(ctx: CommandContext): Promise<void> {
     return
   }
   ctx.io.out(
-    `已生成${template === 'app' ? '全栈微应用' : '插件'}骨架（模板 ${template}）：${target}${targetExisted ? '（目录已存在，文件已写入/覆盖）' : ''}\n`,
+    `already generate${template === 'app' ? 'full-stack micro app' : 'plugin'}skeleton (template ${template}):${target}${targetExisted ? '(directory already exists, file already write/override)' : ''}\n`,
   )
   for (const file of summary.files) ctx.io.out(`  - ${file}\n`)
-  ctx.io.out('后续步骤：\n')
+  ctx.io.out('after continue step:\n')
   for (const step of summary.nextSteps) ctx.io.out(`  ${step}\n`)
 }

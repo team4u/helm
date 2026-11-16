@@ -1,7 +1,7 @@
 /**
- * HTTP 层会话文档契约测试：GET /api/plugins/:id/docs/:name?conversationId=N、
- * 专用 SSE（/events?conversationId=N）、404 停止语义、鉴权与全局流隔离。
- * 真实 PluginHost + 真实 SessionDocEventHub + 真实路由层。
+ * HTTP layer conversation document contract test:GET /api/plugins/:id/docs/:name?conversationId=N,
+ * dedicated use SSE(/events?conversationId=N),404 stop semantics, authentication and global stream isolated.
+ * real PluginHost + real SessionDocEventHub + real routing layer.
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
@@ -41,7 +41,7 @@ const backend: PluginHostBackend = {
   createConversation: async () => makeConversation(42),
   listConversations: () => [...existing].map(makeConversation),
   getConversation: (id) => {
-    if (!existing.has(id)) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+    if (!existing.has(id)) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
     return makeConversation(id)
   },
   updateConversation: async (id) => makeConversation(id),
@@ -58,7 +58,7 @@ const backend: PluginHostBackend = {
   spawnAgent: async () => ({}),
   runGate: async () => ({ ok: true, output: '' }),
   execEnv: async () => {
-    throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501)
+    throw new HelmError('unsupported', 'this fixture do not execute node command', 501)
   },
   emitEvent: (type, payload) => {
     if (type === 'plugin.session_doc.updated') {
@@ -120,12 +120,12 @@ beforeEach(async () => {
     plugins: pluginHost,
     listConversations: async () => [...existing].map(makeConversation),
     getConversationDetail: async (id) => {
-      if (!existing.has(id)) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      if (!existing.has(id)) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
       return { ...makeConversation(id), entries: [] } as never
     },
     getConversationEntry: async (id, entryId) => {
-      if (!existing.has(id)) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
-      throw new HelmError('not_found', `条目 ${entryId} 在会话 ${id} 中不存在`, 404)
+      if (!existing.has(id)) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
+      throw new HelmError('not_found', `item ${entryId} in conversation ${id} in missing`, 404)
     },
     createConversation: async () => makeConversation(3),
     updateConversation: async (id) => makeConversation(id),
@@ -146,7 +146,7 @@ beforeEach(async () => {
     issueNodeToken: async () => ({ nodeId: 'local', token: 't', createdAt: 0 }),
     removeNode: async () => {},
     execEnv: async () => {
-      throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501)
+      throw new HelmError('unsupported', 'this fixture do not execute node command', 501)
     },
   }
   const handle = await startHub({ kernel, port: 0 })
@@ -163,7 +163,7 @@ function authInit(): RequestInit {
   return { headers: { authorization: `Bearer ${token}` } }
 }
 
-test('GET docs?conversationId 读取会话文档；私有/不存在/停用 404；全局文档名 400', { timeout: 60_000 }, async () => {
+test('GET docs?conversationId read conversation document; private/missing/deactivate 404; global document name 400', { timeout: 60_000 }, async () => {
   metricsHandle!.set(1, { n: 5 })
   const ok = await fetch(
     `${hubUrl}/api/plugins/p%3Asd/docs/metrics?conversationId=1`,
@@ -181,15 +181,15 @@ test('GET docs?conversationId 读取会话文档；私有/不存在/停用 404�
   assert.equal(convMissing.status, 404)
   const globalDoc = await fetch(`${hubUrl}/api/plugins/p%3Asd/docs/global?conversationId=1`, authInit())
   assert.equal(globalDoc.status, 400)
-  // sessionDoc 名不带 conversationId：400 session_doc_requires_conversation
+  // sessionDoc name do not carries conversationId:400 session_doc_requires_conversation
   const noConv = await fetch(`${hubUrl}/api/plugins/p%3Asd/docs/metrics`, authInit())
   assert.equal(noConv.status, 400)
-  // 非法 conversationId
+  // illegal conversationId
   const badConv = await fetch(`${hubUrl}/api/plugins/p%3Asd/docs/metrics?conversationId=abc`, authInit())
   assert.equal(badConv.status, 400)
 })
 
-test('专用 SSE：首帧 snapshot + 增量；鉴权失败 401；事件不进全局流', { timeout: 60_000 }, async () => {
+test('dedicated use SSE: first frame snapshot + incremental; authentication failed 401; event does not enter global stream', { timeout: 60_000 }, async () => {
   metricsHandle!.set(1, { n: 1 })
   const controller = new AbortController()
   const res = await fetch(
@@ -204,7 +204,7 @@ test('专用 SSE：首帧 snapshot + 增量；鉴权失败 401；事件不进全
     let out = ''
     for (;;) {
       const { done, value } = await reader.read()
-      assert.ok(!done, '流意外结束')
+      assert.ok(!done, 'stream unexpected end')
       out += decoder.decode(value, { stream: true })
       if (out.includes('\n\n')) return out
     }
@@ -216,11 +216,11 @@ test('专用 SSE：首帧 snapshot + 增量；鉴权失败 401；事件不进全
   const update = await readFrame()
   assert.match(update, /event: plugin\.session_doc\.updated/)
   assert.match(update, /"n":2/)
-  // 全局流零帧（emitEvent 分流验证）
+  // global stream zero frame (emitEvent stream verify)
   assert.equal(globalFrames.filter((f) => (f.event as { type: string }).type === 'plugin.session_doc.updated').length, 0)
   controller.abort()
 
-  // 鉴权失败：401（显式错误，不建流）
+  // authentication failed:401(explicit error, do not create stream)
   const unauth = await fetch(`${hubUrl}/api/plugins/p%3Asd/docs/metrics/events?conversationId=1`, {
     headers: { accept: 'text/event-stream' },
   })
@@ -228,7 +228,7 @@ test('专用 SSE：首帧 snapshot + 增量；鉴权失败 401；事件不进全
   await unauth.arrayBuffer()
 })
 
-test('专用 SSE：插件停用/会话删除返回 404（客户端停止重试依据）', { timeout: 60_000 }, async () => {
+test('dedicated use SSE: plugin deactivate/conversation delete return 404(client stop retry based on)', { timeout: 60_000 }, async () => {
   await pluginHost.disable('p:sd')
   const res = await fetch(
     `${hubUrl}/api/plugins/p%3Asd/docs/metrics/events?conversationId=1`,

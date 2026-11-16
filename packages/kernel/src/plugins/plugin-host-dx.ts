@@ -1,5 +1,5 @@
 /**
- * 外部插件 DX 闭环（doctor / reload / rescan）与受管包宿主持久适配层。
+ * external plugin DX closed ring (doctor / reload / rescan) and managed package host durable adapt layer.
  */
 import { join } from 'node:path';
 import {
@@ -47,7 +47,7 @@ export interface DxCoordinatorDeps {
 }
 
 /**
- * 宿主清单必达断言：生命周期操作完成后 list() 仍找不到插件即内部状态不一致。
+ * host manifest must reach assertion: lifecycle operation after completion list() still find fewer than plugin i.e. internal state inconsistent.
  */
 function requireSummary(
   host: Pick<DxReloadHostPort, 'list'>,
@@ -67,10 +67,10 @@ export async function doctorExternalPluginDir(
   let requestedId: string | undefined;
   if (target.id !== undefined) {
     if (target.dir !== undefined) {
-      throw new HelmError('validation_error', 'doctor 目标 id 与 dir/path 互斥（择一提供）', 400);
+      throw new HelmError('validation_error', 'doctor target id and dir/path mutual exclusion (choose one provide)', 400);
     }
     if (target.id.trim().length === 0) {
-      throw new HelmError('validation_error', 'doctor 目标 id 需为非空字符串', 400);
+      throw new HelmError('validation_error', 'doctor target id must be a non-empty string', 400);
     }
     const source = await findSourceDirByPluginId(options.dataDir, target.id, {
       transform: options.buildProvider?.transformBackendTs,
@@ -78,7 +78,7 @@ export async function doctorExternalPluginDir(
     if (source === undefined) {
       throw new HelmError(
         'plugin_source_missing',
-        `在 ${join(options.dataDir, 'plugins')} 下未找到 id 为 ${target.id} 的外部插件源目录`,
+        `in ${join(options.dataDir, 'plugins')} under not found id is ${target.id} external plugin source directory`,
         404,
         { pluginId: target.id, pluginsDir: join(options.dataDir, 'plugins') },
       );
@@ -89,7 +89,7 @@ export async function doctorExternalPluginDir(
     assertDoctorTargetDir(target.dir, 'dir');
     dir = target.dir;
   } else {
-    throw new HelmError('validation_error', 'doctor 需提供目标：dir/path（目录绝对路径）或 id（已注册插件）', 400);
+    throw new HelmError('validation_error', 'doctor must provide target:dir/path(directory absolute path) or id(registered plugin)', 400);
   }
   const report = await doctorPluginDir(dir, { buildProvider: options.buildProvider });
   return requestedId === undefined ? report : { ...report, requestedId };
@@ -106,7 +106,7 @@ export async function reloadExternalPluginFlow(
   pluginId: string,
   options: { doctor?: boolean } = {},
 ): Promise<PluginReloadResult> {
-  // 在途任务预检先于 doctor：正在运行的实例受保护，不进入任何重载路径
+  // in-flight task preflight first at doctor: is now run instance subject to protect, does not enter any reload path
   assertManagedUpdateIdle(deps, pluginId);
   const skipDoctor = options.doctor === false;
   const result = await reloadExternalPlugin(deps.dataDir, pluginId, deps.host, {
@@ -118,7 +118,7 @@ export async function reloadExternalPluginFlow(
             const first = report.checks.find((c) => c.error !== undefined);
             throw new HelmError(
               'plugin_reload_preflight_failed',
-              `插件 ${pluginId} 重载预检失败（${first ? `${first.label}：${first.error!.message}` : '未知检查失败'}），旧实例保持不变`,
+              `plugin ${pluginId} reload preflight failed (${first ? `${first.label}:${first.error!.message}` : 'unknown check failed'}), old instance keep do not change`,
               422,
               { pluginId, dir, report },
             );
@@ -127,7 +127,7 @@ export async function reloadExternalPluginFlow(
   });
   const summary = requireSummary(deps.host, pluginId, {
     code: 'plugin_reload_failed',
-    message: `重载后未在宿主清单中发现插件 ${pluginId}（内部状态不一致）`,
+    message: `reload after not in host manifest in discover plugin ${pluginId}(internal state inconsistent)`,
     details: { pluginId },
   });
   return {
@@ -146,7 +146,7 @@ export async function rescanExternalPluginDirs(
   return { registered: result.registered, skipped: result.skipped, plugins: host.list() };
 }
 
-/** PackageManagerHost 端口适配：per-plugin 队列串行由宿主 register/enable/unregister 保证。 */
+/** PackageManagerHost port adapt:per-plugin queue serial by host register/enable/unregister guarantee. */
 export function createPackageManagerHost(deps: DxCoordinatorDeps): PackageManagerHost {
   return {
     registerManagedPlugin: async (dir, options) => {
@@ -158,7 +158,7 @@ export function createPackageManagerHost(deps: DxCoordinatorDeps): PackageManage
         if (entryPath === undefined) {
           throw new HelmError(
             'plugin_entry_missing',
-            `受管安装目录不含插件入口（无 plugin.json 且无约定入口）：${dir}`,
+            `managed install directory excludes plugin entry (without plugin.json and without convention entry):${dir}`,
             500,
             { dir },
           );
@@ -170,7 +170,7 @@ export function createPackageManagerHost(deps: DxCoordinatorDeps): PackageManage
         }
         const summary = requireSummary(deps.host, definition.id, {
           code: 'plugin_package_install_failed',
-          message: `受管安装注册后未在宿主清单中发现插件 ${definition.id}`,
+          message: `managed install register after not in host manifest in discover plugin ${definition.id}`,
           details: { pluginId: definition.id, dir },
         });
         return { summary, pluginId: definition.id };
@@ -183,7 +183,7 @@ export function createPackageManagerHost(deps: DxCoordinatorDeps): PackageManage
       await deps.host.enable(pluginId);
       return requireSummary(deps.host, pluginId, {
         code: 'plugin_enable_failed',
-        message: `启用后未在宿主清单中发现插件 ${pluginId}`,
+        message: `enable after not in host manifest in discover plugin ${pluginId}`,
         details: { pluginId },
       });
     },
@@ -196,7 +196,7 @@ export function createPackageManagerHost(deps: DxCoordinatorDeps): PackageManage
       void options;
       const summary = requireSummary(deps.host, pluginId, {
         code: 'plugin_package_update_failed',
-        message: `更新重载后未在宿主清单中发现插件 ${pluginId}`,
+        message: `update reload after not in host manifest in discover plugin ${pluginId}`,
         details: { pluginId },
       });
       return { summary };
@@ -210,7 +210,7 @@ export function createPackageManagerHost(deps: DxCoordinatorDeps): PackageManage
       return { wasEnabled };
     },
     purgePluginPersistentData: async (pluginId) => {
-      // 等待 DELETE 真实落盘后才 resolve；失败时 remove 保留目录与安装记录以便重试
+      // wait for DELETE real after only then resolve; on failure remove keep directory and install record with convenient retry
       await deps.docRegistry.purgePlugin(pluginId);
     },
     listSummaries: () => deps.host.list(),

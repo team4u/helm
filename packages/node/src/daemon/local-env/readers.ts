@@ -1,7 +1,7 @@
 /**
- * 三类 Reader 实现（local-env 子模块）：TextLineReader（严格 LF 切行）、
- * BinaryReader（显式位置读 + 行扫描）、DirReader（增量枚举 + lstat）。
- * 句柄结构面（FileHandleLike / DirHandleLike）供测试注入。
+ * three class Reader implement (local-env sub- module):TextLineReader(strictly LF cut row),
+ * BinaryReader(explicit location read + row scan),DirReader(incremental enumeration + lstat).
+ * handle structure side (FileHandleLike / DirHandleLike) supply test inject.
  */
 
 import { lstat } from 'node:fs/promises';
@@ -12,7 +12,7 @@ import { LineScanner, StreamDecoder, type LineScan } from './decode.js';
 import { joinTargetPath } from './target-path.js';
 
 // ---------------------------------------------------------------------------
-// 元信息类型
+// meta information type
 // ---------------------------------------------------------------------------
 
 export type FileKind = 'file' | 'directory' | 'symlink';
@@ -31,24 +31,24 @@ export interface TextLine {
 }
 
 // ---------------------------------------------------------------------------
-// fs/promises 句柄的最小结构面（测试可注入）
+// fs/promises handle most small structure side (test can inject)
 // ---------------------------------------------------------------------------
 
-/** fs/promises FileHandle 的最小结构面（测试可注入）。 */
+/** fs/promises FileHandle most small structure side (test can inject). */
 export interface FileHandleLike {
   read(buffer: Uint8Array, offset: number, length: number, position: number): Promise<{ bytesRead: number }>;
   stat(): Promise<{ isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean; size: number; mtimeMs: number }>;
   close(): Promise<void>;
 }
 
-/** fs/promises DirHandle（opendir 返回值）的最小结构面。 */
+/** fs/promises DirHandle(opendir return value) most small structure side. */
 export interface DirHandleLike {
   read(): Promise<{ name: string } | null>;
   close(): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
-// Reader 接口
+// Reader interface
 // ---------------------------------------------------------------------------
 
 export interface TextLineReader {
@@ -87,14 +87,14 @@ export function fileInfoFromStats(path: string, stats: { isFile(): boolean; isDi
 
 const closedResult = (what: string, path: string) => err(new FileError('invalid', `${what} is closed`, path));
 
-/** BinaryReader 单次最大读块：巨大 length 只按文件实际内容分配。 */
+/** BinaryReader single time most large read chunk: huge length only by file actual content allocate. */
 const BINARY_READ_CHUNK = 1024 * 1024;
 
 // ---------------------------------------------------------------------------
-// TextLineReader / BinaryReader / DirReader 实现
+// TextLineReader / BinaryReader / DirReader implement
 // ---------------------------------------------------------------------------
 
-/** 严格按 LF 切行：Node readline 不报告最后一行是否有换行结尾。 */
+/** strictly by LF cut row:Node readline do not report finally one row is otherwise has newline tail. */
 export class LocalTextLineReader implements TextLineReader {
   #file: FileHandleLike;
   #path: string;
@@ -128,7 +128,7 @@ export class LocalTextLineReader implements TextLineReader {
           this.#buffered = '';
           return ok({ text, terminated: false });
         }
-        // 显式位置读：中止后的重试不会跳过字节。
+        // explicit location read: abort after retry will not skip byte.
         const { bytesRead } = await this.#file.read(this.#chunk, 0, this.#chunk.length, this.#byteOffset);
         const afterReadAbort = abortResult(signal, this.#path);
         if (afterReadAbort) return afterReadAbort;
@@ -152,7 +152,7 @@ export class LocalTextLineReader implements TextLineReader {
     try {
       await this.#file.close();
     } catch {
-      // 关闭是尽力而为，包括取消后或早前 I/O 失败后。
+      // close is exhaust force while is, including cancel after or early before I/O failed after.
     }
   }
 }
@@ -285,7 +285,7 @@ export class LocalDirReader implements DirReader {
         try {
           stats = await lstat(entryPath);
         } catch (error) {
-          // 枚举到 lstat 之间消失的条目：不再是列表的一部分。
+          // enumeration to lstat between disappear item: no longer is list one part.
           if (isNodeError(error) && error.code === 'ENOENT') continue;
           return err(toFileError(error, entryPath));
         }

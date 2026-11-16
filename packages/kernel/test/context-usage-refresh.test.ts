@@ -1,26 +1,26 @@
 /**
- * ConversationTracker 上下文用量刷新的确定性单测（fake harness，真实 tracker）：
+ * ConversationTracker context use amount refresh determinism single test (fake harness, real tracker):
  *
- * 1. 边界水位线：初始快照内的历史标记（pi.compaction 等）与连续普通观察更新
- *    不重调度刷新（无写放大）；仅超过旧水位线的新标记条目恰触发一次；
- * 2. ensureContextUsage：多调用方合并同一次在途刷新；已缓存零刷新；
- * 3. 代数守护（含 undefined 捕获）：未观察会话的刷新在并发 observe 换代后
- *    迟到结果丢弃，不回写旧值；
- * 4. stopObserving / 元数据删除后的迟到刷新不复活缓存、不发幽灵事件；
- * 5. 首次填充携带 compacting 时必须发布 upsert（否则订阅方永远看不到）；
- *    无压缩状态的首次填充保持静默；
- * 6. 窗口来源诚实性：helmContextWindowKnown === false 的静态缺省窗口不得
- *    作为已知窗口携带（contextWindow 省略）；
- * 7. 压缩失败通知：新的 compactionFailure 恰发一次脱敏 error notification，
- *    同一 taskId 重复快照不重复通知，新 taskId 再报；
- * 8. models.changed 定向迫齐（onModelsChanged）：未知→已知/已知→移除的窗口
- *    变化经既有刷新链追齐，usage-only 更新可达 summary 且不推进
- *    stateChangeSeq；providers 定向与同值重复事件去重；在途置 dirty 迫齐；
- * 9. 活跃 run 期间窗口变化仍发布（不静默到回合结束），相同窗口不重复发帧。
+ * 1. boundary watermark line: initial snapshot inside history mark record (pi.compaction etc.) and connect continue ordinary observe update
+ *    do not heavy scheduling refresh (without write put large); only exceeds old watermark line new mark record item exactly trigger once;
+ * 2. ensureContextUsage: many caller merge the same time in-flight refresh; already cache zero refresh;
+ * 3. proxy count guard (contains undefined catch): not observe conversation refresh in concurrency observe swap proxy after
+ *    late to result discard, do not back write old value;
+ * 4. stopObserving / metadata after deletion late to refresh does not resurrect cache, do not ghost event;
+ * 5. first time fill carry compacting when must publish upsert(otherwise subscribe way forever see fewer than);
+ *    without compress state first time fill keep static default;
+ * 6. window source honest:helmContextWindowKnown === false static default window must not
+ *    as known window carry (contextWindow omit);
+ * 7. compress failed notify: new compactionFailure exactly once redaction error notification,
+ *    the same taskId duplicate snapshot does not repeat notify, new taskId again report;
+ * 8. models.changed set to force complete (onModelsChanged): unknown→known/known→remove window
+ *    change via since has refresh chain append complete,usage-only update can reach summary and do not push enter
+ *    stateChangeSeq;providers set to and same value duplicate event dedupe; in-flight placement dirty force complete;
+ * 9. leap run during window change still publish (not silently to turn end), identical window does not resend frame.
  *
- * 确定性：刷新的调度与 harness.conversation 调用都在同步段发生（断言即时可
- * 见）；异步推进全部经手动释放的 deferred / ensureContextUsage settle 事件，
- * 不依赖 sleep 或计时。
+ * determinism: refresh scheduling and harness.conversation invoke all in sync segment occur (assertion i.e. when can
+ * see); async push enter all via manually release deferred / ensureContextUsage settle event,
+ * independent of sleep or count when.
  */
 import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
@@ -33,7 +33,7 @@ import { ConversationTracker, type TrackerEvents } from '../src/runtime/conversa
 import type { ConvMeta, HelmStore } from '../src/runtime/store.js'
 
 // ---------------------------------------------------------------------------
-// 构造工具
+// construct tool
 // ---------------------------------------------------------------------------
 
 interface EntrySpec {
@@ -52,7 +52,7 @@ function userContent(chars: number): UserMessage {
   return { role: 'user', content: 'a'.repeat(chars), timestamp: 1 }
 }
 
-/** 刷新读到的 ContextView（tokens 由消息估算长度区分）。 */
+/** refresh read to ContextView(tokens by message estimate compute length zone). */
 function usageView(chars: number): ContextView {
   return {
     head: undefined,
@@ -63,16 +63,16 @@ function usageView(chars: number): ContextView {
 }
 
 function tokensOf(chars: number): number {
-  // 固定期望（pi agent chars/4）：usageView 的用户消息为 'a'.repeat(chars)，
-  // 不镜像被测实现。
+  // fixed expectation (pi agent chars/4):usageView user message is 'a'.repeat(chars),
+  // do not mirror by test implement.
   return Math.ceil(chars / 4)
 }
 
-/** 刷新结果队列项：即时视图或手动释放的 deferred。 */
+/** refresh result queue items: i.e. when view or manually release deferred. */
 type ContextResult = { view: ContextView } | { deferred: Promise<ContextView> }
 
 class FakeHarness {
-  /** refreshContextUsageOnce 启动次数（同步段递增；断言即时可见）。 */
+  /** refreshContextUsageOnce start time count (sync segment pass increase; assertion i.e. when visible). */
   contextCalls = 0
   private readonly queue: ContextResult[] = []
   private observer: Observer<ConversationView> | undefined
@@ -92,7 +92,7 @@ class FakeHarness {
     return { resolve }
   }
 
-  /** 模拟 SDK 快照推进（同步调用 tracker adopt 路径）。 */
+  /** simulated SDK snapshot push enter (sync invoke tracker adopt path). */
   advance(view: ConversationView): void {
     this.observer?.advance({ kind: 'value', value: view } as never, undefined as never)
   }
@@ -131,7 +131,7 @@ class FakeStore {
 function metaOf(model: string): ConvMeta {
   return {
     id: 1,
-    title: '会话一',
+    title: 'conversation one',
     profileId: 'assistant',
     tags: [],
     nodeId: 'local',
@@ -168,7 +168,7 @@ function eventsOf(): TrackerEvents & {
   }
 }
 
-/** 已知/未知窗口双模型的最小 Models 集合（窗口来源诚实性用）。 */
+/** known/unknown window double model most small Models set (window source honest use). */
 function modelsWithFaux(): Models {
   const models = createModels()
   const known = {
@@ -201,7 +201,7 @@ function trackerEnv(options?: {
   initialEntries?: EntrySpec[]
   initialLive?: Record<string, unknown>
   redactError?: (text: string) => string
-  /** 目录集合现读（缺省固定 faux 双模型）；模拟目录刷新 = 重新赋值返回值。 */
+  /** directory set now read (default fixed faux double model); simulated directory refresh = re- assignment return value. */
   models?: () => Models
 }): {
   harness: FakeHarness
@@ -226,7 +226,7 @@ function trackerEnv(options?: {
   return { harness, store, events, tracker }
 }
 
-/** 排空微任务链（手动释放 deferred 后等待刷新链收敛）。 */
+/** arrange empty micro task chain (manually release deferred after wait for refresh chain converge). */
 async function flush(): Promise<void> {
   for (let i = 0; i < 4; i += 1) {
     await new Promise<void>((resolve) => setImmediate(resolve))
@@ -234,11 +234,11 @@ async function flush(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// 1. 边界水位线（观察刷新写放大）
+// 1. boundary watermark line (observe refresh write put large)
 // ---------------------------------------------------------------------------
 
-describe('上下文用量刷新：边界水位线', { timeout: 60_000 }, () => {
-  it('历史标记不触发；普通更新不重调度；新标记恰触发一次', { timeout: 60_000 }, async () => {
+describe('context use amount refresh: boundary watermark line', { timeout: 60_000 }, () => {
+  it('history mark record does not trigger; ordinary update do not heavy scheduling; new mark record exactly trigger once', { timeout: 60_000 }, async () => {
     const env = trackerEnv({
       initialEntries: [
         { id: 5, kind: 'pi.user' },
@@ -247,9 +247,9 @@ describe('上下文用量刷新：边界水位线', { timeout: 60_000 }, () => {
     })
     await env.tracker.observe(1)
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.harness.contextCalls, 1, '初始挂接（idle 会话）恰一次刷新')
+    assert.equal(env.harness.contextCalls, 1, 'initial hang connect (idle conversation) exactly once refresh')
 
-    // 连续普通观察更新：历史含 pi.compaction 但低于水位线，不得重调度。
+    // connect continue ordinary observe update: history contains pi.compaction but low at watermark line, must not heavy scheduling.
     env.harness.advance(
       viewOf({
         entries: [
@@ -259,7 +259,7 @@ describe('上下文用量刷新：边界水位线', { timeout: 60_000 }, () => {
         ],
       }),
     )
-    assert.equal(env.harness.contextCalls, 1, '普通新条目不得触发刷新')
+    assert.equal(env.harness.contextCalls, 1, 'ordinary new item must not trigger refresh')
     env.harness.advance(
       viewOf({
         entries: [
@@ -270,9 +270,9 @@ describe('上下文用量刷新：边界水位线', { timeout: 60_000 }, () => {
         ],
       }),
     )
-    assert.equal(env.harness.contextCalls, 1, '重复快照（含历史标记）不得触发刷新')
+    assert.equal(env.harness.contextCalls, 1, 'duplicate snapshot (contains history mark record) must not trigger refresh')
 
-    // 新 boundary 条目（id 超过旧水位线）：恰触发一次。
+    // new boundary item (id exceeds old watermark line): exactly trigger once.
     env.harness.advance(
       viewOf({
         entries: [
@@ -284,9 +284,9 @@ describe('上下文用量刷新：边界水位线', { timeout: 60_000 }, () => {
         ],
       }),
     )
-    assert.equal(env.harness.contextCalls, 2, '新标记条目恰触发一次刷新')
+    assert.equal(env.harness.contextCalls, 2, 'new mark record item exactly trigger once refresh')
 
-    // 水位线已推进：同一标记重复出现不再触发。
+    // watermark line already push enter: the same mark record duplicate appear no longer trigger.
     env.harness.advance(
       viewOf({
         entries: [
@@ -296,65 +296,65 @@ describe('上下文用量刷新：边界水位线', { timeout: 60_000 }, () => {
         ],
       }),
     )
-    assert.equal(env.harness.contextCalls, 2, '已扫过的标记不得重复触发')
+    assert.equal(env.harness.contextCalls, 2, 'already scan mark record must not duplicate trigger')
   })
 })
 
 // ---------------------------------------------------------------------------
-// 2. ensureContextUsage：合并与零刷新
+// 2. ensureContextUsage: merge and zero refresh
 // ---------------------------------------------------------------------------
 
-describe('上下文用量刷新：ensureContextUsage', { timeout: 60_000 }, () => {
-  it('并发调用合并同一次刷新；已缓存直通零刷新', { timeout: 60_000 }, async () => {
+describe('context use amount refresh:ensureContextUsage', { timeout: 60_000 }, () => {
+  it('concurrency invoke merge the same time refresh; already cache direct through zero refresh', { timeout: 60_000 }, async () => {
     const env = trackerEnv({})
     await env.tracker.observe(1)
     const first = env.tracker.ensureContextUsage(1)
     const second = env.tracker.ensureContextUsage(1)
     await first
     await second
-    assert.equal(env.harness.contextCalls, 1, '并发 ensure 合并为一次刷新')
+    assert.equal(env.harness.contextCalls, 1, 'concurrency ensure merge is once refresh')
     const usage = env.tracker.summaryOf(1).contextUsage
-    assert.ok(usage, '等待后缓存已填充')
+    assert.ok(usage, 'wait for after cache already fill')
 
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.harness.contextCalls, 1, '已缓存时 ensure 不再刷新')
+    assert.equal(env.harness.contextCalls, 1, 'already cache when ensure no longer refresh')
   })
 })
 
 // ---------------------------------------------------------------------------
-// 3. 代数守护（undefined 捕获同样参与比较）
+// 3. proxy count guard (undefined catch same reference and compare)
 // ---------------------------------------------------------------------------
 
-describe('上下文用量刷新：代数守护', { timeout: 60_000 }, () => {
-  it('未观察会话的刷新遇并发 observe：迟到旧值丢弃，仅新刷新生效', { timeout: 60_000 }, async () => {
+describe('context use amount refresh: proxy count guard', { timeout: 60_000 }, () => {
+  it('not observe conversation refresh encounter concurrency observe: late to old value discard, only new refresh takes effect', { timeout: 60_000 }, async () => {
     const env = trackerEnv({})
-    // R1：未观察（generation === undefined）时由 summaryOf 缓存缺失路径触发。
+    // R1: not observe (generation === undefined) when by summaryOf cache missing path trigger.
     const gate = env.harness.pushDeferred()
     env.harness.pushView(usageView(800))
     env.tracker.summaryOf(1)
-    assert.equal(env.harness.contextCalls, 1, '缓存缺失读取触发一次刷新')
+    assert.equal(env.harness.contextCalls, 1, 'cache missing read trigger once refresh')
 
-    // 并发 observe：换代 + adoptInitial 调度（R1 在途 → dirty，不立即启动）。
+    // concurrency observe: swap proxy + adoptInitial scheduling (R1 in-flight → dirty, do not immediately start).
     const observed = env.tracker.observe(1)
-    assert.equal(env.harness.contextCalls, 1, '在途刷新期间新触发只置 dirty')
+    assert.equal(env.harness.contextCalls, 1, 'in-flight refresh during new trigger only placement dirty')
     await observed
 
-    gate.resolve(usageView(120)) // R1 的迟到旧值
+    gate.resolve(usageView(120)) // R1 late to old value
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.harness.contextCalls, 2, 'R1 被丢弃后仅重跑一次')
+    assert.equal(env.harness.contextCalls, 2, 'R1 by discard after only heavy run once')
 
     const usage = env.tracker.summaryOf(1).contextUsage
     assert.ok(usage)
-    assert.equal(usage.tokens, tokensOf(800), '迟到旧值不得回写缓存')
+    assert.equal(usage.tokens, tokensOf(800), 'late to old value must not back write cache')
   })
 })
 
 // ---------------------------------------------------------------------------
-// 4. 停观 / 删除后的迟到刷新
+// 4. stop observe / after deletion late to refresh
 // ---------------------------------------------------------------------------
 
-describe('上下文用量刷新：停观与删除守护', { timeout: 60_000 }, () => {
-  it('stopObserving 后迟到刷新不复活缓存、不发事件', { timeout: 60_000 }, async () => {
+describe('context use amount refresh: stop observe and delete guard', { timeout: 60_000 }, () => {
+  it('stopObserving after late to refresh does not resurrect cache, do not event', { timeout: 60_000 }, async () => {
     const env = trackerEnv({})
     await env.tracker.observe(1)
     await env.tracker.ensureContextUsage(1)
@@ -363,19 +363,19 @@ describe('上下文用量刷新：停观与删除守护', { timeout: 60_000 }, (
     const gate = env.harness.pushDeferred()
     env.harness.pushView(usageView(200))
     env.tracker.scheduleContextUsageRefresh(1)
-    assert.equal(env.harness.contextCalls, 2, '新刷新已启动（gated）')
+    assert.equal(env.harness.contextCalls, 2, 'new refresh already start (gated)')
 
     env.tracker.stopObserving(1)
     gate.resolve(usageView(60))
     await flush()
 
-    // 若迟到刷新复活了缓存，ensure 将直通零刷新；正确行为是需要全新刷新。
+    // if late to refresh re- cache,ensure direct through zero refresh; correct behavior is need to all new refresh.
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.harness.contextCalls, 3, '迟到结果被丢弃，ensure 需全新刷新')
-    assert.equal(env.events.summaries.length, 0, '停观后不得发布任何幽灵事件')
+    assert.equal(env.harness.contextCalls, 3, 'late to result by discard,ensure must all new refresh')
+    assert.equal(env.events.summaries.length, 0, 'stop observe after must not publish any ghost event')
   })
 
-  it('刷新期间元数据被删除：迟到结果不回写缓存', { timeout: 60_000 }, async () => {
+  it('refresh during metadata by delete: late to result do not back write cache', { timeout: 60_000 }, async () => {
     const env = trackerEnv({})
     await env.tracker.observe(1)
     await env.tracker.ensureContextUsage(1)
@@ -387,92 +387,92 @@ describe('上下文用量刷新：停观与删除守护', { timeout: 60_000 }, (
     gate.resolve(usageView(90))
     await flush()
 
-    // 已删除：ensure 立即返回且不再调度。
+    // deleted:ensure immediately return and no longer scheduling.
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.harness.contextCalls, 2, '删除后不得再启动刷新')
+    assert.equal(env.harness.contextCalls, 2, 'after deletion must not again start refresh')
     assert.equal(env.events.summaries.length, 0)
   })
 })
 
 // ---------------------------------------------------------------------------
-// 5. 首次填充的事件纪律
+// 5. first time fill event discipline
 // ---------------------------------------------------------------------------
 
-describe('上下文用量刷新：首次填充发布规则', { timeout: 60_000 }, () => {
-  it('首次填充携带 compacting 时必须发布 upsert（订阅方无后续语义帧可见）', { timeout: 60_000 }, async () => {
+describe('context use amount refresh: first time fill publish rule', { timeout: 60_000 }, () => {
+  it('first time fill carry compacting when must publish upsert(subscribe way without after continue semantics frame visible)', { timeout: 60_000 }, async () => {
     const env = trackerEnv({
       initialLive: { compactions: [{ taskId: 9, trigger: 'manual', blocking: false }] },
     })
     await env.tracker.observe(1)
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.events.summaries.length, 1, '首次填充携带压缩状态必须发布')
+    assert.equal(env.events.summaries.length, 1, 'first time fill carry compress state must publish')
     const usage = env.events.summaries[0]!.contextUsage
-    assert.equal(usage?.compacting, true, '发布帧必须携带 compacting 布尔')
+    assert.equal(usage?.compacting, true, 'publish frame must carry compacting boolean')
   })
 
-  it('无压缩状态的首次填充保持静默（帧纪律不变）', { timeout: 60_000 }, async () => {
+  it('without compress state first time fill keep static default (frame discipline do not change)', { timeout: 60_000 }, async () => {
     const env = trackerEnv({})
     await env.tracker.observe(1)
     await env.tracker.ensureContextUsage(1)
     assert.equal(env.events.summaries.length, 0)
-    assert.ok(env.tracker.summaryOf(1).contextUsage, '静默填充经读路径仍可见')
+    assert.ok(env.tracker.summaryOf(1).contextUsage, 'static default fill via read path still visible')
   })
 })
 
 // ---------------------------------------------------------------------------
-// 6. 窗口来源诚实性（helmContextWindowKnown）
+// 6. window source honest (helmContextWindowKnown)
 // ---------------------------------------------------------------------------
 
-describe('上下文用量刷新：窗口来源诚实性', { timeout: 60_000 }, () => {
-  it('已知窗口模型携带 contextWindow；静态缺省标记模型省略', { timeout: 60_000 }, async () => {
+describe('context use amount refresh: window source honest', { timeout: 60_000 }, () => {
+  it('known window model carry contextWindow; static default mark record model omit', { timeout: 60_000 }, async () => {
     const known = trackerEnv({ model: 'faux/m-known' })
     await known.tracker.observe(1)
     await known.tracker.ensureContextUsage(1)
     const knownUsage = known.tracker.summaryOf(1).contextUsage!
     assert.ok(knownUsage)
-    assert.equal(knownUsage.contextWindow, 200_000, '策展窗口如实携带')
+    assert.equal(knownUsage.contextWindow, 200_000, 'policy expand window such as carry')
 
     const unknown = trackerEnv({ model: 'faux/m-unknown' })
     await unknown.tracker.observe(1)
     await unknown.tracker.ensureContextUsage(1)
     const unknownUsage = unknown.tracker.summaryOf(1).contextUsage!
     assert.ok(unknownUsage)
-    assert.ok(unknownUsage.tokens !== null && unknownUsage.tokens > 0, '用量估算仍然提供')
-    assert.equal(unknownUsage.contextWindow, undefined, '静态缺省窗口不得显示为已知')
+    assert.ok(unknownUsage.tokens !== null && unknownUsage.tokens > 0, 'use amount estimate compute still provide')
+    assert.equal(unknownUsage.contextWindow, undefined, 'static default window must not show is known')
   })
 })
 
 // ---------------------------------------------------------------------------
-// 7. 压缩失败通知（脱敏 + 去重）
+// 7. compress failed notify (redaction + dedupe)
 // ---------------------------------------------------------------------------
 
-describe('上下文用量刷新：压缩失败通知', { timeout: 60_000 }, () => {
-  it('新的 compactionFailure 恰发一次脱敏 error notification；同一 taskId 重复快照不重复；新 taskId 再报', { timeout: 60_000 }, async () => {
-    const failure = { taskId: 5, trigger: 'manual', error: 'sk-abc 网关 500' }
+describe('context use amount refresh: compress failed notify', { timeout: 60_000 }, () => {
+  it('new compactionFailure exactly once redaction error notification; the same taskId duplicate snapshot does not repeat; new taskId again report', { timeout: 60_000 }, async () => {
+    const failure = { taskId: 5, trigger: 'manual', error: 'sk-abc gateway 500' }
     const env = trackerEnv({
       initialLive: { compactionFailure: failure },
       redactError: (t) => t.replace('sk-abc', '***'),
     })
     await env.tracker.observe(1)
-    assert.equal(env.events.notifications.length, 1, '初始快照的失败必须上报（不静默）')
+    assert.equal(env.events.notifications.length, 1, 'initial snapshot failed must on report (not silently)')
     const notice = env.events.notifications[0]!
     assert.equal(notice.level, 'error')
-    assert.equal(notice.title, '上下文精简失败')
+    assert.equal(notice.title, 'context streamline failed')
     assert.equal(notice.conversationId, 1)
-    assert.match(notice.body ?? '', /\*\*\* 网关 500/, '错误摘要必须经注入 redact 脱敏')
-    assert.ok(!(notice.body ?? '').includes('sk-abc'), '机密不得回显')
+    assert.match(notice.body ?? '', /\*\*\* gateway 500/, 'error summary must via inject redact redaction')
+    assert.ok(!(notice.body ?? '').includes('sk-abc'), 'secret must not back visible')
 
-    // 同一失败重复出现在后续快照：不得重复通知。
+    // the same failed duplicate appear in after continue snapshot: must not duplicate notify.
     env.harness.advance(viewOf({ live: { compactionFailure: failure } }))
     env.harness.advance(viewOf({ live: { compactionFailure: failure, run: { taskId: 3, inputs: [] } } }))
-    assert.equal(env.events.notifications.length, 1, '同一 taskId 不得重复通知')
+    assert.equal(env.events.notifications.length, 1, 'the same taskId must not duplicate notify')
 
-    // 新的失败（新 taskId）：再报一次。
+    // new failed (new taskId): again report once.
     env.harness.advance(viewOf({ live: { compactionFailure: { taskId: 6, trigger: 'threshold', error: 'again' } } }))
     assert.equal(env.events.notifications.length, 2)
-    assert.match(env.events.notifications[1]!.body ?? '', /阈值/)
+    assert.match(env.events.notifications[1]!.body ?? '', /threshold/)
 
-    // 无失败的快照：不发；失败清除后再次出现同一 taskId 也不重报（同 runtime 去重）。
+    // without failed snapshot: do not; failed clear after again appear the same taskId also do not heavy report (same runtime dedupe).
     env.harness.advance(viewOf({ live: {} }))
     env.harness.advance(viewOf({ live: { compactionFailure: { taskId: 6, trigger: 'threshold', error: 'again' } } }))
     assert.equal(env.events.notifications.length, 2)
@@ -480,11 +480,11 @@ describe('上下文用量刷新：压缩失败通知', { timeout: 60_000 }, () =
 })
 
 // ---------------------------------------------------------------------------
-// 8. models.changed 定向迫齐（onModelsChanged）
+// 8. models.changed set to force complete (onModelsChanged)
 // ---------------------------------------------------------------------------
 
-/** 单模型 faux 目录集：known 携带真实窗口；未知用静态缺省标记；
- * served=false 模拟供应商不再供应该模型（getModel 命不中）。 */
+/** single model faux directory collection:known carry real window; unknown use static default mark record;
+ * served=false simulated provider no longer supply should model (getModel life do not in). */
 function modelsWithWindowState(window: number, known: boolean, served: boolean): Models {
   const models = createModels()
   const base = {
@@ -514,46 +514,46 @@ function modelsWithWindowState(window: number, known: boolean, served: boolean):
   return models
 }
 
-describe('上下文用量刷新：models.changed 定向迫齐', { timeout: 60_000 }, () => {
-  it('未知→已知：idle 会话不发新输入也追齐窗口，summary 可达且不推进 stateChangeSeq', { timeout: 60_000 }, async () => {
+describe('context use amount refresh:models.changed set to force complete', { timeout: 60_000 }, () => {
+  it('unknown→known:idle conversation do not new input also append complete window,summary can reach and do not push enter stateChangeSeq', { timeout: 60_000 }, async () => {
     let models = modelsWithWindowState(0, false, true)
     const env = trackerEnv({ model: 'faux/m-1', models: () => models })
     await env.tracker.observe(1)
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, undefined, '初始目录无窗口')
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, undefined, 'initial directory without window')
     const seqBefore = env.store.convs.get(1)!.stateChangeSeq
     env.events.summaries.length = 0
 
     models = modelsWithWindowState(400_000, true, true)
     env.tracker.onModelsChanged([])
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 400_000, '目录刷新后窗口追齐')
-    assert.equal(env.events.summaries.length, 1, '用量变化必须发布 summary（可达 SSE）')
-    assert.equal(env.store.convs.get(1)!.stateChangeSeq, seqBefore, 'usage-only 不得推进 stateChangeSeq')
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 400_000, 'directory refresh after window append complete')
+    assert.equal(env.events.summaries.length, 1, 'use amount change must publish summary(can reach SSE)')
+    assert.equal(env.store.convs.get(1)!.stateChangeSeq, seqBefore, 'usage-only must not push enter stateChangeSeq')
   })
 
-  it('providers 定向：非目标供应商不刷新；同值重复事件不重复发帧', { timeout: 60_000 }, async () => {
+  it('providers set to: non- target provider does not refresh; same value duplicate event does not resend frame', { timeout: 60_000 }, async () => {
     let models = modelsWithWindowState(0, false, true)
     const env = trackerEnv({ model: 'faux/m-1', models: () => models })
     await env.tracker.observe(1)
     await env.tracker.ensureContextUsage(1)
     const calls = env.harness.contextCalls
     env.tracker.onModelsChanged(['other'])
-    assert.equal(env.harness.contextCalls, calls, '非目标供应商不得触发刷新')
+    assert.equal(env.harness.contextCalls, calls, 'non- target provider must not trigger refresh')
 
     models = modelsWithWindowState(300_000, true, true)
     env.tracker.onModelsChanged(['faux'])
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 300_000, '定向命中后追齐')
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 300_000, 'set to hit after append complete')
     const published = env.events.summaries.length
 
     env.tracker.onModelsChanged([])
     env.tracker.onModelsChanged([])
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.events.summaries.length, published, '同值重复事件经指纹去重不重复发帧')
+    assert.equal(env.events.summaries.length, published, 'same value duplicate event via refer grain dedupe does not resend frame')
   })
 
-  it('已知→供应商不再供应：窗口恢复未知并发布', { timeout: 60_000 }, async () => {
+  it('known→provider no longer supply should: window restore unknown concurrency publish', { timeout: 60_000 }, async () => {
     let models = modelsWithWindowState(400_000, true, true)
     const env = trackerEnv({ model: 'faux/m-1', models: () => models })
     await env.tracker.observe(1)
@@ -563,11 +563,11 @@ describe('上下文用量刷新：models.changed 定向迫齐', { timeout: 60_00
     models = modelsWithWindowState(0, false, false)
     env.tracker.onModelsChanged([])
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, undefined, '模型不在集合：窗口恢复未知')
-    assert.ok(env.events.summaries.length >= 1, '恢复未知也要可达 summary')
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, undefined, 'model do not in set: window restore unknown')
+    assert.ok(env.events.summaries.length >= 1, 'restore unknown also want can reach summary')
   })
 
-  it('刷新在途期间的二次事件置 dirty 迫齐：不并启新刷新，最终取最新窗口', { timeout: 60_000 }, async () => {
+  it('refresh in-flight during second event placement dirty force complete: do not and start new refresh, eventually take most new window', { timeout: 60_000 }, async () => {
     let models = modelsWithWindowState(0, false, true)
     const env = trackerEnv({ model: 'faux/m-1', models: () => models })
     await env.tracker.observe(1)
@@ -579,14 +579,14 @@ describe('上下文用量刷新：models.changed 定向迫齐', { timeout: 60_00
     const inFlight = env.harness.contextCalls
     models = modelsWithWindowState(999_000, true, true)
     env.tracker.onModelsChanged([])
-    assert.equal(env.harness.contextCalls, inFlight, '在途期间二次事件不得并启新刷新')
+    assert.equal(env.harness.contextCalls, inFlight, 'in-flight during second event must not and start new refresh')
 
     gate.resolve(usageView(100))
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 999_000, 'dirty 迫齐后取最新窗口')
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 999_000, 'dirty force complete after take most new window')
   })
 
-  it('未观察但有缓存的会话同样追齐（stopObserving 后目录刷新仍更新缓存）', { timeout: 60_000 }, async () => {
+  it('not observe but has cache conversation same append complete (stopObserving after directory refresh still update cache)', { timeout: 60_000 }, async () => {
     let models = modelsWithWindowState(0, false, true)
     const env = trackerEnv({ model: 'faux/m-1', models: () => models })
     await env.tracker.observe(1)
@@ -596,16 +596,16 @@ describe('上下文用量刷新：models.changed 定向迫齐', { timeout: 60_00
     models = modelsWithWindowState(400_000, true, true)
     env.tracker.onModelsChanged([])
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 400_000, '缓存会话不观察也追齐')
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 400_000, 'cache conversation do not observe also append complete')
   })
 })
 
 // ---------------------------------------------------------------------------
-// 9. 活跃 run 期间的窗口变化发布
+// 9. leap run during window change publish
 // ---------------------------------------------------------------------------
 
-describe('上下文用量刷新：活跃 run 期间的窗口变化', { timeout: 60_000 }, () => {
-  it('窗口变化仍发布（不静默到回合结束）；相同窗口重复事件不重复发帧', { timeout: 60_000 }, async () => {
+describe('context use amount refresh: leap run during window change', { timeout: 60_000 }, () => {
+  it('window change still publish (not silently to turn end); identical window duplicate event does not resend frame', { timeout: 60_000 }, async () => {
     let models = modelsWithWindowState(0, false, true)
     const env = trackerEnv({
       model: 'faux/m-1',
@@ -614,18 +614,18 @@ describe('上下文用量刷新：活跃 run 期间的窗口变化', { timeout: 
     })
     await env.tracker.observe(1)
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.events.summaries.length, 0, '首次填充无 compacting 保持静默')
+    assert.equal(env.events.summaries.length, 0, 'first time fill without compacting keep static default')
     const seqBefore = env.store.convs.get(1)!.stateChangeSeq
 
     models = modelsWithWindowState(400_000, true, true)
     env.tracker.onModelsChanged([])
     await env.tracker.ensureContextUsage(1)
     assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 400_000)
-    assert.equal(env.events.summaries.length, 1, 'active run 期间窗口变化必须发布')
-    assert.equal(env.store.convs.get(1)!.stateChangeSeq, seqBefore, '不推进 stateChangeSeq')
+    assert.equal(env.events.summaries.length, 1, 'active run during window change must publish')
+    assert.equal(env.store.convs.get(1)!.stateChangeSeq, seqBefore, 'do not push enter stateChangeSeq')
 
     env.tracker.onModelsChanged([])
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.events.summaries.length, 1, '相同窗口重复事件不得重复发帧')
+    assert.equal(env.events.summaries.length, 1, 'identical window duplicate event must not duplicate frame')
   })
 })

@@ -1,14 +1,14 @@
 /**
- * 原地覆盖重发（replaceFromEntryId）原子性回归测试（真实 pi-durable SDK）：
- * - 单事务 commit：同批事件同时含 rewind 与新 input，无半成品 rewind；
- * - 并发两次编辑同一 entry：最多一次成功，另一次 409；
- * - input hook 阻拦：保留旧问答（不 rewind）；
- * - 非 human / 非 helm.input 目标拒绝（400/409）；
- * - 分页投影：marker 滑出第一页后旧记录不复活（加载全部页仍不含旧内容），
- *   同时 SDK raw entries 验证历史仍保存；
- * - FTS 重建排除旧记录且保留同事务新输入；
- * - 新回答失败时 getLastAssistantText 不返回被覆盖答案；
- * - faux factory 捕获真实 provider TranscriptContext，验证不含被覆盖旧问答。
+ * original ground override heavy (replaceFromEntryId) atomicity regression test (real pi-durable SDK):
+ * - single transaction commit: same batch event also contains rewind and new input, without half into product rewind;
+ * - concurrency two time edit the same entry: at most once succeeded, another time 409;
+ * - input hook block intercept: keep old question answer (do not rewind);
+ * - non- human / non- helm.input target reject (400/409);
+ * - page throw shadow:marker slide out one page after old record does not resurrect (load all page still excludes old content),
+ *   also SDK raw entries verify history still save;
+ * - FTS rebuild exclude old record and keep same transaction new input;
+ * - new answer on failure getLastAssistantText do not return by override answer proposal;
+ * - faux factory catch real provider TranscriptContext, verify excludes by override old question answer.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -62,7 +62,7 @@ interface TurnEntry {
   data?: unknown
 }
 
-/** 会话全量条目摘要（SDK raw entries；证明历史仍保存）。 */
+/** conversation all amount item summary (SDK raw entries; verify history still save). */
 async function entrySummaries(env: Env, convId: number): Promise<TurnEntry[]> {
   const conv = await harnessOf(env).conversation(convId as never, BACKGROUND_CONTEXT)
   assert.ok(conv)
@@ -98,38 +98,38 @@ async function askTurn(env: Env, convId: number, text: string): Promise<void> {
   await env.app.kernel.waitForIdle(convId)
 }
 
-test('原子事务：同批 commit 事件含 rewind 与新 input；SDK raw 历史仍保存；provider 上下文不含旧问答', { timeout: 60_000 }, async () => {
+test('atomic transaction: same batch commit event contains rewind and new input;SDK raw history still save;provider context excludes old question answer', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
-    // 最后一次 faux 响应用工厂函数捕获真实 TranscriptContext。
+    // finally once faux response use work vendor function catch real TranscriptContext.
     const contexts: TranscriptContext[] = []
     env.faux.setResponses([
-      fauxAssistantMessage('第一轮回答'),
-      fauxAssistantMessage('第二轮旧回答'),
+      fauxAssistantMessage('one round answer'),
+      fauxAssistantMessage('second round old answer'),
       (async (ctx: TranscriptContext) => {
         contexts.push(ctx)
-        return fauxAssistantMessage('重发后的新回答')
+        return fauxAssistantMessage('heavy after new answer')
       }) as never,
     ])
-    const conv = await env.app.kernel.createConversation({ title: '原子重发' })
-    await askTurn(env, conv.id, '第一轮问题')
-    await askTurn(env, conv.id, '第二轮旧问题')
+    const conv = await env.app.kernel.createConversation({ title: 'atomic heavy' })
+    await askTurn(env, conv.id, 'one round issue')
+    await askTurn(env, conv.id, 'second round old issue')
 
     const entries = await entrySummaries(env, conv.id)
-    const secondInput = entries.find((e) => e.kind === 'helm.input' && e.text === '第二轮旧问题')
-    assert.ok(secondInput, '应存在第二轮 helm.input')
+    const secondInput = entries.find((e) => e.kind === 'helm.input' && e.text === 'second round old issue')
+    assert.ok(secondInput, 'should store in second round helm.input')
 
-    // 观察同批 commit 事件：rewind 与新 input 应在同一批 entry 落库中。
-    const { submissionId } = await env.app.kernel.submitInput(conv.id, '改写后的新问题', {
+    // observe same batch commit event:rewind and new input should in the same batch entry written to the database in.
+    const { submissionId } = await env.app.kernel.submitInput(conv.id, 'change write after new issue', {
       replaceFromEntryId: secondInput.id,
     })
     assert.ok(Number.isInteger(Number(submissionId)))
     await env.app.kernel.waitForIdle(conv.id)
 
-    // 1) rewind 标记携带闭区间契约（fromEntryId/throughEntryId/omittedInputIds）。
+    // 1) rewind mark record carry closed zone between contract (fromEntryId/throughEntryId/omittedInputIds).
     const after = await entrySummaries(env, conv.id)
     const rewind = after.find((e) => e.kind === 'helm.rewind')
-    assert.ok(rewind, '应存在 helm.rewind 标记')
+    assert.ok(rewind, 'should store in helm.rewind mark record')
     const rewindData = rewind.data as {
       fromEntryId: number
       throughEntryId: number
@@ -137,28 +137,28 @@ test('原子事务：同批 commit 事件含 rewind 与新 input；SDK raw 历�
       omittedInputIds: string[]
     }
     assert.equal(rewindData.fromEntryId, secondInput.id)
-    assert.ok(rewindData.throughEntryId >= secondInput.id, 'throughEntryId 覆盖目标')
-    // 新 input 条目 ID 必须 > throughEntryId（不被自家区间误删）。
-    const newInput = after.find((e) => e.kind === 'helm.input' && e.text === '改写后的新问题')
-    assert.ok(newInput, '新输入应落库')
-    assert.ok(Number(newInput.id) > rewindData.throughEntryId, '新输入 ID 高于覆盖区间上界')
-    // omittedInputIds 收集被覆盖的人类输入 request id。
+    assert.ok(rewindData.throughEntryId >= secondInput.id, 'throughEntryId override target')
+    // new input item ID must > throughEntryId(do not by self household zone between mistakenly delete).
+    const newInput = after.find((e) => e.kind === 'helm.input' && e.text === 'change write after new issue')
+    assert.ok(newInput, 'new input should written to the database')
+    assert.ok(Number(newInput.id) > rewindData.throughEntryId, 'new input ID high at override zone between on boundary')
+    // omittedInputIds collect by override person class input request id.
     assert.ok(
       rewindData.omittedInputIds.some((id) => id.length > 0),
-      'omittedInputIds 应包含被覆盖输入的 request id',
+      'omittedInputIds should contain by override input request id',
     )
 
-    // 2) SDK raw entries：旧问答仍物理保存（逻辑隐藏而非删除）。
+    // 2) SDK raw entries: old question answer still thing save (logic hide while non- delete).
     assert.ok(
-      after.some((e) => e.kind === 'helm.input' && e.text === '第二轮旧问题'),
-      'SDK raw entries 应仍保存旧提问（逻辑隐藏）',
+      after.some((e) => e.kind === 'helm.input' && e.text === 'second round old issue'),
+      'SDK raw entries should still save old mention question (logic hide)',
     )
     assert.ok(
-      after.some((e) => e.kind === 'pi.assistant' && e.text === '第二轮旧回答'),
-      'SDK raw entries 应仍保存旧回答',
+      after.some((e) => e.kind === 'pi.assistant' && e.text === 'second round old answer'),
+      'SDK raw entries should still save old answer',
     )
 
-    // 3) 详情投影：旧内容隐藏，新内容出现，第一轮保留。
+    // 3) detail situation throw shadow: old content hide, new content appear, one round keep.
     const detail = await env.app.kernel.getConversationDetail(conv.id, { limit: 200 })
     const detailTexts = detail.entries
       .map((e) => {
@@ -176,83 +176,83 @@ test('原子事务：同批 commit 事件含 rewind 与新 input；SDK raw 历�
         return ''
       })
       .filter((t) => t !== '')
-    assert.ok(!detailTexts.some((t) => t === '第二轮旧问题'), `旧提问应被投影隐藏：${JSON.stringify(detailTexts)}`)
-    assert.ok(!detailTexts.some((t) => t === '第二轮旧回答'), '旧回答应被投影隐藏')
-    assert.ok(detailTexts.some((t) => t.includes('第一轮问题')), '第一轮保留')
-    assert.ok(detailTexts.some((t) => t.includes('改写后的新问题')), '新提问出现')
-    assert.ok(detailTexts.some((t) => t.includes('重发后的新回答')), '新回答出现')
+    assert.ok(!detailTexts.some((t) => t === 'second round old issue'), `old mention question should by throw shadow hide:${JSON.stringify(detailTexts)}`)
+    assert.ok(!detailTexts.some((t) => t === 'second round old answer'), 'old answer should by throw shadow hide')
+    assert.ok(detailTexts.some((t) => t.includes('one round issue')), 'one round keep')
+    assert.ok(detailTexts.some((t) => t.includes('change write after new issue')), 'new mention question appear')
+    assert.ok(detailTexts.some((t) => t.includes('heavy after new answer')), 'new answer appear')
 
-    // 4) 真实 provider TranscriptContext：模型请求不含被覆盖旧问答。
-    assert.equal(contexts.length, 1, '工厂函数应捕获一次 provider 调用')
+    // 4) real provider TranscriptContext: model request excludes by override old question answer.
+    assert.equal(contexts.length, 1, 'work vendor function should catch once provider invoke')
     const providerTexts = messageTexts(contexts[0]!.messages as never as Array<{ role: string; content: unknown }>)
     assert.ok(
-      !providerTexts.some((t) => t.includes('第二轮旧问题')),
-      `provider 上下文不应含旧提问：${JSON.stringify(providerTexts)}`,
+      !providerTexts.some((t) => t.includes('second round old issue')),
+      `provider context must not contains old mention question:${JSON.stringify(providerTexts)}`,
     )
     assert.ok(
-      !providerTexts.some((t) => t.includes('第二轮旧回答')),
-      'provider 上下文不应含旧回答',
+      !providerTexts.some((t) => t.includes('second round old answer')),
+      'provider context must not contains old answer',
     )
-    assert.ok(providerTexts.some((t) => t.includes('改写后的新问题')), 'provider 上下文含新提问')
-    assert.ok(providerTexts.some((t) => t.includes('第一轮问题')), 'provider 上下文保留第一轮')
+    assert.ok(providerTexts.some((t) => t.includes('change write after new issue')), 'provider context contains new mention question')
+    assert.ok(providerTexts.some((t) => t.includes('one round issue')), 'provider context keep one round')
   } finally {
     await env.close()
   }
 })
 
-test('并发两次编辑同一 entry：最多一次成功，另一次 409，无半成品 rewind', { timeout: 60_000 }, async () => {
+test('concurrency two time edit the same entry: at most once succeeded, another time 409, without half into product rewind', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     env.faux.setResponses([
-      fauxAssistantMessage('并发旧回答'),
-      fauxAssistantMessage('并发新回答 A'),
-      fauxAssistantMessage('并发新回答 B'),
+      fauxAssistantMessage('concurrency old answer'),
+      fauxAssistantMessage('concurrency new answer A'),
+      fauxAssistantMessage('concurrency new answer B'),
     ])
-    const conv = await env.app.kernel.createConversation({ title: '并发重发' })
-    await askTurn(env, conv.id, '并发旧问题')
+    const conv = await env.app.kernel.createConversation({ title: 'concurrency heavy' })
+    await askTurn(env, conv.id, 'concurrency old issue')
     const entries = await entrySummaries(env, conv.id)
-    const target = entries.find((e) => e.kind === 'helm.input' && e.text === '并发旧问题')
+    const target = entries.find((e) => e.kind === 'helm.input' && e.text === 'concurrency old issue')
     assert.ok(target)
 
-    // 同一 tick 并发两次编辑：两个事务都读同一尾部，后落者 rewind 区间
-    // 核验（first 已被覆盖）或 submit 冲突必须失败。
+    // the same tick concurrency two time edit: two transaction all read the same tail part, after rewind zone between
+    // core verify (first already by override) or submit conflict must failed.
     const [a, b] = await Promise.allSettled([
-      env.app.kernel.submitInput(conv.id, '并发新问题 A', { replaceFromEntryId: target.id }),
-      env.app.kernel.submitInput(conv.id, '并发新问题 B', { replaceFromEntryId: target.id }),
+      env.app.kernel.submitInput(conv.id, 'concurrency new issue A', { replaceFromEntryId: target.id }),
+      env.app.kernel.submitInput(conv.id, 'concurrency new issue B', { replaceFromEntryId: target.id }),
     ])
     const settled = [a, b]
     const fulfilled = settled.filter((r) => r.status === 'fulfilled')
     const rejected = settled.filter((r) => r.status === 'rejected')
-    assert.ok(fulfilled.length >= 1, '至少一次成功')
-    assert.ok(rejected.length >= 1, '至少一次 409 拒绝')
+    assert.ok(fulfilled.length >= 1, 'at least once succeeded')
+    assert.ok(rejected.length >= 1, 'at least once 409 reject')
     for (const r of rejected) {
       const err = r.reason as HelmError
       assert.ok(
         err instanceof HelmError && (err.status === 409 || err.status === 404),
-        `拒绝应为 409/404（实际 ${String(err?.status)} ${String(err?.code)}）`,
+        `reject should be 409/404(actual ${String(err?.status)} ${String(err?.code)})`,
       )
     }
     await env.app.kernel.waitForIdle(conv.id).catch(() => {})
 
-    // 无半成品 rewind：成功者区间完整，且成功的新输入仍可见。
+    // without half into product rewind: succeeded zone between complete, and succeeded new input still visible.
     const after = await entrySummaries(env, conv.id)
     const rewinss = after.filter((e) => e.kind === 'helm.rewind')
-    assert.ok(rewinss.length <= 2, 'rewind 标记数量受控')
+    assert.ok(rewinss.length <= 2, 'rewind mark record amount subject to control')
     for (const marker of rewinss) {
       const data = marker.data as { fromEntryId: number; throughEntryId: number; omittedEntryIds: number[] }
-      assert.ok(Number.isSafeInteger(data.throughEntryId), 'rewind 携带 throughEntryId')
-      assert.ok(data.throughEntryId >= data.fromEntryId, '覆盖区间合法')
+      assert.ok(Number.isSafeInteger(data.throughEntryId), 'rewind carry throughEntryId')
+      assert.ok(data.throughEntryId >= data.fromEntryId, 'override zone between legal')
     }
     const winnerText = fulfilled.length === 1
       ? (fulfilled[0] as PromiseFulfilledResult<{ submissionId: string }>).value
       : undefined
-    assert.ok(winnerText !== undefined || fulfilled.length === 1, '成功者返回 submissionId')
+    assert.ok(winnerText !== undefined || fulfilled.length === 1, 'succeeded return submissionId')
   } finally {
     await env.close()
   }
 })
 
-test('陈旧编辑在 input 钩子挂起后恢复：拒绝时不得中止已成功编辑的新回合', { timeout: 60_000 }, async () => {
+test('stale edit in input hook suspended after restore: reject when must not abort already succeeded edit new turn', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   let releaseHook!: () => void
   let enteredHook!: () => void
@@ -265,39 +265,39 @@ test('陈旧编辑在 input 钩子挂起后恢复：拒绝时不得中止已成�
   try {
     const kernel = env.app.kernel
     env.faux.setResponses([
-      fauxAssistantMessage('旧回答'),
+      fauxAssistantMessage('old answer'),
       async () => {
         startedModel()
         await modelGate
-        return fauxAssistantMessage('成功编辑的回答')
+        return fauxAssistantMessage('succeeded edit answer')
       },
     ])
-    const conv = await kernel.createConversation({ title: '延迟编辑竞态' })
-    await askTurn(env, conv.id, '旧问题')
+    const conv = await kernel.createConversation({ title: 'latency edit race' })
+    await askTurn(env, conv.id, 'old issue')
     const target = (await entrySummaries(env, conv.id)).find((entry) => entry.kind === 'helm.input')!
     await kernel.plugins.register({
       id: 'test:delayed-edit',
       definePlugin(ctx) {
         ctx.hook.onInput(async (payload) => {
-          if (payload.input.text === '陈旧编辑') {
+          if (payload.input.text === 'stale edit') {
             enteredHook()
             await hookGate
           }
         })
       },
     }, { enabled: true })
-    const stale = kernel.submitInput(conv.id, '陈旧编辑', { replaceFromEntryId: target.id })
+    const stale = kernel.submitInput(conv.id, 'stale edit', { replaceFromEntryId: target.id })
       .then(() => undefined, (error: unknown) => error)
     await hookEntered
-    const accepted = await kernel.submitInput(conv.id, '成功编辑', { replaceFromEntryId: target.id })
+    const accepted = await kernel.submitInput(conv.id, 'succeeded edit', { replaceFromEntryId: target.id })
     await modelStarted
     releaseHook()
     const error = await stale
     assert.ok(error instanceof HelmError && error.status === 409)
-    assert.equal(kernel.getConversation(conv.id).status, 'working', '陈旧编辑不能中止成功者')
+    assert.equal(kernel.getConversation(conv.id).status, 'working', 'stale edit cannot abort succeeded')
     releaseModel()
     await kernel.waitForIdle(conv.id)
-    assert.equal((await kernel.waitForInput(conv.id, accepted.submissionId)).text, '成功编辑的回答')
+    assert.equal((await kernel.waitForInput(conv.id, accepted.submissionId)).text, 'succeeded edit answer')
   } finally {
     releaseHook()
     releaseModel()
@@ -305,74 +305,74 @@ test('陈旧编辑在 input 钩子挂起后恢复：拒绝时不得中止已成�
   }
 })
 
-test('input hook 阻拦：旧问答保留（无 rewind 副作用）', { timeout: 60_000 }, async () => {
+test('input hook block intercept: old question answer keep (without rewind side effect)', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
-    // 经内核插件宿主挂一个接管型 input hook：对接管文本不产生真实回合
-    //（input 钩子语义：handled 接管；AGENTS.md 中 block 属 tool_call）。
+    // via kernel plugin host hang a take over type input hook: for take over text produces no real turn
+    //(input hook semantics:handled take over;AGENTS.md in block belong tool_call).
     let armed = true
     await env.app.kernel.plugins.register({
       id: 'test:input-block',
       definePlugin(ctx) {
         ctx.hook.onInput((payload: { input: { text: string } }) => {
-          if (armed && payload.input.text === '被阻拦的编辑') {
-            return { action: 'handled', result: '测试接管' }
+          if (armed && payload.input.text === 'by block intercept edit') {
+            return { action: 'handled', result: 'test take over' }
           }
           return undefined
         })
       },
     })
-    env.faux.setResponses([fauxAssistantMessage('阻拦前回答')])
-    const conv = await env.app.kernel.createConversation({ title: 'hook 阻拦' })
-    await askTurn(env, conv.id, '阻拦前问题')
+    env.faux.setResponses([fauxAssistantMessage('block intercept before answer')])
+    const conv = await env.app.kernel.createConversation({ title: 'hook block intercept' })
+    await askTurn(env, conv.id, 'block intercept before issue')
 
     const entries = await entrySummaries(env, conv.id)
-    const target = entries.find((e) => e.kind === 'helm.input' && e.text === '阻拦前问题')
+    const target = entries.find((e) => e.kind === 'helm.input' && e.text === 'block intercept before issue')
     assert.ok(target)
 
-    // 接管：不产生 rewind，旧问答完好，无真实回合提交。
-    const handled = await env.app.kernel.submitInput(conv.id, '被阻拦的编辑', {
+    // take over: produces no rewind, old question answer completely well, without real turn commit.
+    const handled = await env.app.kernel.submitInput(conv.id, 'by block intercept edit', {
       replaceFromEntryId: target.id,
     })
-    assert.ok(handled.submissionId.startsWith('handled:'), '接管提交返回 handled: 前缀')
+    assert.ok(handled.submissionId.startsWith('handled:'), 'take over commit return handled: prefix')
     const afterBlock = await entrySummaries(env, conv.id)
-    assert.ok(!afterBlock.some((e) => e.kind === 'helm.rewind'), '阻拦后不得有 rewind')
+    assert.ok(!afterBlock.some((e) => e.kind === 'helm.rewind'), 'block intercept after must not has rewind')
     const ctxAfter = await (await harnessOf(env).conversation(conv.id as never, BACKGROUND_CONTEXT))!.context(BACKGROUND_CONTEXT)
     const textsAfter = messageTexts(ctxAfter.messages as never as Array<{ role: string; content: unknown }>)
-    assert.ok(textsAfter.some((t) => t.includes('阻拦前问题')), '旧提问保留')
-    assert.ok(textsAfter.some((t) => t.includes('阻拦前回答')), '旧回答保留')
+    assert.ok(textsAfter.some((t) => t.includes('block intercept before issue')), 'old mention question keep')
+    assert.ok(textsAfter.some((t) => t.includes('block intercept before answer')), 'old answer keep')
 
-    // 解除阻拦后同一目标可正常编辑。
+    // solve except block intercept after the same target can normal edit.
     armed = false
-    env.faux.setResponses([fauxAssistantMessage('解除后新回答')])
-    await env.app.kernel.submitInput(conv.id, '解除后的编辑', { replaceFromEntryId: target.id })
+    env.faux.setResponses([fauxAssistantMessage('solve except after new answer')])
+    await env.app.kernel.submitInput(conv.id, 'solve except after edit', { replaceFromEntryId: target.id })
     await env.app.kernel.waitForIdle(conv.id)
     const ctxOk = await (await harnessOf(env).conversation(conv.id as never, BACKGROUND_CONTEXT))!.context(BACKGROUND_CONTEXT)
     const textsOk = messageTexts(ctxOk.messages as never as Array<{ role: string; content: unknown }>)
-    assert.ok(textsOk.some((t) => t.includes('解除后的编辑')), '解除后编辑生效')
-    assert.ok(!textsOk.some((t) => t.includes('阻拦前回答')), '旧回答被覆盖')
+    assert.ok(textsOk.some((t) => t.includes('solve except after edit')), 'solve except after edit takes effect')
+    assert.ok(!textsOk.some((t) => t.includes('block intercept before answer')), 'old answer by override')
   } finally {
     await env.close()
   }
 })
 
-test('非 human / 非 helm.input 目标拒绝：assistant 400；agent/trigger 来源 409', { timeout: 60_000 }, async () => {
+test('non- human / non- helm.input target reject:assistant 400;agent/trigger source 409', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
-    env.faux.setResponses([fauxAssistantMessage('目标判定旧回答')])
-    const conv = await env.app.kernel.createConversation({ title: '目标判定' })
-    // agent 来源输入。
-    await env.app.kernel.submitInput(conv.id, 'agent 来源问题', { origin: 'agent' })
+    env.faux.setResponses([fauxAssistantMessage('target decide old answer')])
+    const conv = await env.app.kernel.createConversation({ title: 'target decide' })
+    // agent source input.
+    await env.app.kernel.submitInput(conv.id, 'agent source issue', { origin: 'agent' })
     await env.app.kernel.waitForIdle(conv.id)
-    // trigger 来源输入。
-    await env.app.kernel.submitInput(conv.id, 'trigger 来源问题', { origin: 'trigger' })
+    // trigger source input.
+    await env.app.kernel.submitInput(conv.id, 'trigger source issue', { origin: 'trigger' })
     await env.app.kernel.waitForIdle(conv.id)
-    // human 来源输入。
-    await askTurn(env, conv.id, 'human 来源问题')
+    // human source input.
+    await askTurn(env, conv.id, 'human source issue')
 
     const entries = await entrySummaries(env, conv.id)
-    const agentInput = entries.find((e) => e.kind === 'helm.input' && e.text === 'agent 来源问题')
-    const triggerInput = entries.find((e) => e.kind === 'helm.input' && e.text === 'trigger 来源问题')
+    const agentInput = entries.find((e) => e.kind === 'helm.input' && e.text === 'agent source issue')
+    const triggerInput = entries.find((e) => e.kind === 'helm.input' && e.text === 'trigger source issue')
     const assistant = entries.find((e) => e.kind === 'pi.assistant')
     assert.ok(agentInput && triggerInput && assistant)
 
@@ -403,28 +403,28 @@ test('非 human / 非 helm.input 目标拒绝：assistant 400；agent/trigger �
   }
 })
 
-test('分页投影：小 limit 跨页且 marker 滑出第一页，加载全部页仍不含旧内容', { timeout: 60_000 }, async () => {
+test('page throw shadow: small limit across page and marker slide out one page, load all page still excludes old content', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     env.faux.setResponses([
-      fauxAssistantMessage('分页第一轮回答'),
-      fauxAssistantMessage('分页第二轮旧回答'),
-      fauxAssistantMessage('分页新回答'),
-      fauxAssistantMessage('分页后续回答'),
+      fauxAssistantMessage('page one round answer'),
+      fauxAssistantMessage('page second round old answer'),
+      fauxAssistantMessage('page new answer'),
+      fauxAssistantMessage('page after continue answer'),
     ])
-    const conv = await env.app.kernel.createConversation({ title: '分页投影' })
-    await askTurn(env, conv.id, '分页第一轮问题')
-    await askTurn(env, conv.id, '分页第二轮旧问题')
+    const conv = await env.app.kernel.createConversation({ title: 'page throw shadow' })
+    await askTurn(env, conv.id, 'page one round issue')
+    await askTurn(env, conv.id, 'page second round old issue')
 
     const entries = await entrySummaries(env, conv.id)
-    const secondInput = entries.find((e) => e.kind === 'helm.input' && e.text === '分页第二轮旧问题')
+    const secondInput = entries.find((e) => e.kind === 'helm.input' && e.text === 'page second round old issue')
     assert.ok(secondInput)
-    await env.app.kernel.submitInput(conv.id, '分页新问题', { replaceFromEntryId: secondInput.id })
+    await env.app.kernel.submitInput(conv.id, 'page new issue', { replaceFromEntryId: secondInput.id })
     await env.app.kernel.waitForIdle(conv.id)
-    // rewind 之后再补一轮正常对话，把 marker 推得离尾部更远（滑出小页）。
-    await askTurn(env, conv.id, '分页后续问题')
+    // rewind after again patch one round normal dialog, marker push obtain leave tail part more far (slide out small page).
+    await askTurn(env, conv.id, 'page after continue issue')
 
-    // limit=2 逐页加载直到耗尽。
+    // limit=2 one by one page load until exhausted.
     const seenTexts: string[] = []
     let cursor: string | undefined = undefined
     let pages = 0
@@ -453,97 +453,97 @@ test('分页投影：小 limit 跨页且 marker 滑出第一页，加载全部�
       }
       if (page.nextCursor === undefined) break
       cursor = page.nextCursor
-      assert.ok(pages < 50, '分页不得死循环')
+      assert.ok(pages < 50, 'page must not infinite loop')
     }
-    assert.ok(pages >= 2, '至少跨两页')
-    // 全部页加载完：被覆盖旧内容绝不复活。
+    assert.ok(pages >= 2, 'at least across two page')
+    // all page load completely: by override old content never re-.
     assert.ok(
-      !seenTexts.some((t) => t === '分页第二轮旧问题'),
-      `全部页不应含被覆盖旧提问：${JSON.stringify(seenTexts)}`,
+      !seenTexts.some((t) => t === 'page second round old issue'),
+      `all page must not contains by override old mention question:${JSON.stringify(seenTexts)}`,
     )
     assert.ok(
-      !seenTexts.some((t) => t === '分页第二轮旧回答'),
-      '全部页不应含被覆盖旧回答',
+      !seenTexts.some((t) => t === 'page second round old answer'),
+      'all page must not contains by override old answer',
     )
-    // 有效内容全部在册（新问答与前后轮保留）。
-    assert.ok(seenTexts.some((t) => t.includes('分页第一轮问题')), '第一轮可见')
-    assert.ok(seenTexts.some((t) => t.includes('分页新问题')), '新提问可见')
-    assert.ok(seenTexts.some((t) => t.includes('分页后续问题')), '后续轮可见')
+    // valid content all in manual (new question answer and before after round keep).
+    assert.ok(seenTexts.some((t) => t.includes('page one round issue')), 'one round visible')
+    assert.ok(seenTexts.some((t) => t.includes('page new issue')), 'new mention question visible')
+    assert.ok(seenTexts.some((t) => t.includes('page after continue issue')), 'after continue round visible')
   } finally {
     await env.close()
   }
 })
 
-test('FTS：原子事务新输入立即可检索；rebuildFts 排除旧记录且保留新内容', { timeout: 60_000 }, async () => {
+test('FTS: atomic transaction new input immediately can inspect index;rebuildFts exclude old record and keep new content', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     env.faux.setResponses([
-      fauxAssistantMessage('ftsa 第一轮回答'),
-      fauxAssistantMessage('ftsb 旧回答正文'),
-      fauxAssistantMessage('ftsc 新回答正文'),
+      fauxAssistantMessage('ftsa one round answer'),
+      fauxAssistantMessage('ftsb old answer body text'),
+      fauxAssistantMessage('ftsc new answer body text'),
     ])
-    const conv = await env.app.kernel.createConversation({ title: 'FTS 重发' })
-    await askTurn(env, conv.id, 'ftsq1 第一轮提问')
-    await askTurn(env, conv.id, 'ftsq2 旧提问正文')
+    const conv = await env.app.kernel.createConversation({ title: 'FTS heavy' })
+    await askTurn(env, conv.id, 'ftsq1 one round mention question')
+    await askTurn(env, conv.id, 'ftsq2 old mention question body text')
     const entries = await entrySummaries(env, conv.id)
-    const second = entries.find((e) => e.kind === 'helm.input' && e.text === 'ftsq2 旧提问正文')
+    const second = entries.find((e) => e.kind === 'helm.input' && e.text === 'ftsq2 old mention question body text')
     assert.ok(second)
-    await env.app.kernel.submitInput(conv.id, 'ftsq3 独有新提问', { replaceFromEntryId: second.id })
+    await env.app.kernel.submitInput(conv.id, 'ftsq3 solely has new mention question', { replaceFromEntryId: second.id })
     await env.app.kernel.waitForIdle(conv.id)
 
-    // 原子事务新输入入索引（观察路径 indexFts onInputCommitted）。
+    // atomic transaction new input index (observe path indexFts onInputCommitted).
     const newHit = await env.app.kernel.search('ftsq3')
-    assert.ok(newHit.some((h) => h.conversationId === conv.id), '新提问应命中 FTS')
-    // 旧内容不再命中（唯一 token，避免前缀误命中其他条目）。
+    assert.ok(newHit.some((h) => h.conversationId === conv.id), 'new mention question should hit FTS')
+    // old content no longer hit (unique token, avoid prefix mistakenly hit other item).
     const oldQ = await env.app.kernel.search('ftsq2')
-    assert.equal(oldQ.filter((h) => h.conversationId === conv.id).length, 0, '旧提问不命中')
+    assert.equal(oldQ.filter((h) => h.conversationId === conv.id).length, 0, 'old mention question do not hit')
     const oldA = await env.app.kernel.search('ftsb')
-    assert.equal(oldA.filter((h) => h.conversationId === conv.id).length, 0, '旧回答不命中')
+    assert.equal(oldA.filter((h) => h.conversationId === conv.id).length, 0, 'old answer do not hit')
 
-    // rebuildFts 后：旧内容仍不命中，新内容保留。
+    // rebuildFts after: old content still do not hit, new content keep.
     await env.app.kernel.rebuildFts()
     const rebuiltOld = await env.app.kernel.search('ftsb')
-    assert.equal(rebuiltOld.filter((h) => h.conversationId === conv.id).length, 0, 'rebuild 后旧回答不命中')
+    assert.equal(rebuiltOld.filter((h) => h.conversationId === conv.id).length, 0, 'rebuild after old answer do not hit')
     const rebuiltNew = await env.app.kernel.search('ftsq3')
-    assert.ok(rebuiltNew.some((h) => h.conversationId === conv.id), 'rebuild 后新提问保留')
+    assert.ok(rebuiltNew.some((h) => h.conversationId === conv.id), 'rebuild after new mention question keep')
     const rebuiltNewA = await env.app.kernel.search('ftsc')
-    assert.ok(rebuiltNewA.some((h) => h.conversationId === conv.id), 'rebuild 后新回答保留')
+    assert.ok(rebuiltNewA.some((h) => h.conversationId === conv.id), 'rebuild after new answer keep')
   } finally {
     await env.close()
   }
 })
 
-test('新回答失败：getLastAssistantText 不返回被覆盖答案', { timeout: 60_000 }, async () => {
+test('new answer failed:getLastAssistantText do not return by override answer proposal', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     env.faux.setResponses([
-      fauxAssistantMessage('失败前第一轮回答'),
-      fauxAssistantMessage('将被覆盖的旧回答'),
+      fauxAssistantMessage('failed before one round answer'),
+      fauxAssistantMessage('by override old answer'),
     ])
-    const conv = await env.app.kernel.createConversation({ title: '失败缓存' })
-    await askTurn(env, conv.id, '失败前第一轮问题')
-    await askTurn(env, conv.id, '将被覆盖的问题')
+    const conv = await env.app.kernel.createConversation({ title: 'failed cache' })
+    await askTurn(env, conv.id, 'failed before one round issue')
+    await askTurn(env, conv.id, 'by override issue')
 
     const before = await env.app.kernel.getLastAssistantText(conv.id)
-    assert.equal(before, '将被覆盖的旧回答')
+    assert.equal(before, 'by override old answer')
 
     const entries = await entrySummaries(env, conv.id)
-    const target = entries.find((e) => e.kind === 'helm.input' && e.text === '将被覆盖的问题')
+    const target = entries.find((e) => e.kind === 'helm.input' && e.text === 'by override issue')
     assert.ok(target)
 
-    // 新回答注入失败：faux 工厂抛错（faux.setResponses 空 → 出错路径）。
+    // new answer inject failed:faux work vendor throws (faux.setResponses empty → fails path).
     env.faux.setResponses([
       (async () => {
-        throw new Error('faux 模型注入失败')
+        throw new Error('faux model inject failed')
       }) as never,
     ])
-    await env.app.kernel.submitInput(conv.id, '注定失败的编辑', { replaceFromEntryId: target.id })
-    // 等待回合结算（失败也是终态）。
+    await env.app.kernel.submitInput(conv.id, 'note set failed edit', { replaceFromEntryId: target.id })
+    // wait for turn compute (failed also is terminal state).
     await env.app.kernel.waitForIdle(conv.id).catch(() => {})
 
-    // 缓存已被 rewind 失效：不返回被覆盖旧答案。
+    // cache already by rewind expires: do not return by override old answer proposal.
     const after = await env.app.kernel.getLastAssistantText(conv.id)
-    assert.notEqual(after, '将被覆盖的旧回答', '不得返回被覆盖旧答案')
+    assert.notEqual(after, 'by override old answer', 'must not return by override old answer proposal')
   } finally {
     await env.close()
   }

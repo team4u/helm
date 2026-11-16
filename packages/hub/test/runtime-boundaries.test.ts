@@ -17,7 +17,7 @@ function collectStrings(value: unknown): string[] {
   return [];
 }
 
-test('真实组合：插件结果改写、机密脱敏与超长输出 Spill 共用最终边界', { timeout: 60_000 }, async () => {
+test('real combine: plugin result change write, secret redaction and over long output Spill shared use eventually boundary', { timeout: 60_000 }, async () => {
   const fixture = await openFixture();
   try {
     const { kernel } = fixture.app;
@@ -27,8 +27,8 @@ test('真实组合：插件结果改写、机密脱敏与超长输出 Spill 共�
     await kernel.plugins.register({
       id: 'boundary:results',
       definePlugin(ctx) {
-        ctx.tool({ name: 'object_probe', description: '测试对象输出', inputSchema: { type: 'object' }, execute: () => { executions++; return { nested: { value: secret } }; } });
-        ctx.tool({ name: 'transform_probe', description: '测试输出改写', inputSchema: { type: 'object' }, execute: () => { executions++; return 'original-output'; } });
+        ctx.tool({ name: 'object_probe', description: 'test object output', inputSchema: { type: 'object' }, execute: () => { executions++; return { nested: { value: secret } }; } });
+        ctx.tool({ name: 'transform_probe', description: 'test output change write', inputSchema: { type: 'object' }, execute: () => { executions++; return 'original-output'; } });
         ctx.hook.onToolResult((payload) => payload.toolName === 'transform_probe'
           ? { action: 'transform', value: { ...payload, result: { output: [{ type: 'text', text: `transformed ${secret} ${'x'.repeat(40 * 1024)}` }] } } }
           : undefined);
@@ -39,7 +39,7 @@ test('真实组合：插件结果改写、机密脱敏与超长输出 Spill 共�
       fauxAssistantMessage([fauxToolCall('object_probe', {}), fauxToolCall('transform_probe', {})], { stopReason: 'toolUse' }),
       (context) => { observed = collectStrings(context.messages); return fauxAssistantMessage('finished'); },
     ]);
-    await kernel.submitInput(1, '检查插件输出');
+    await kernel.submitInput(1, 'check plugin output');
     await kernel.waitForIdle(1);
     assert.equal(executions, 2);
     assert.ok(observed.some((text) => text.includes(marker)));
@@ -58,7 +58,7 @@ test('真实组合：插件结果改写、机密脱敏与超长输出 Spill 共�
   } finally { await fixture.close(); }
 });
 
-test('真实组合：before_turn 可筛选内核工具，同时应用消息与系统段变更', { timeout: 60_000 }, async () => {
+test('real combine:before_turn can filter choose kernel tool, also should use message and system segment change', { timeout: 60_000 }, async () => {
   const fixture = await openFixture();
   try {
     let sawKernelTool = false;
@@ -84,14 +84,14 @@ test('真实组合：before_turn 可筛选内核工具，同时应用消息与�
       assert.ok(collectStrings(context.messages).includes('MESSAGE_EDIT'));
       return fauxAssistantMessage('checked');
     }]);
-    await fixture.app.kernel.submitInput(1, '检查回合钩子');
+    await fixture.app.kernel.submitInput(1, 'check turn hook');
     await fixture.app.kernel.waitForIdle(1);
     assert.equal(sawKernelTool, true);
     assert.equal(await fixture.app.kernel.getLastAssistantText(1), 'checked');
   } finally { await fixture.close(); }
 });
 
-test('真实组合：关停释放插件服务并结束仍连接的 SSE 读取', { timeout: 60_000 }, async () => {
+test('real combine: closure stop release plugin service and end still connect SSE read', { timeout: 60_000 }, async () => {
   const fixture = await openFixture();
   try {
     let stopped = false;
@@ -103,8 +103,8 @@ test('真实组合：关停释放插件服务并结束仍连接的 SSE 读取', 
     assert.equal((await reader.read()).done, false);
     await fixture.app.close();
     assert.equal(stopped, true);
-    // 关闭前的最终文档广播可能已入流队列；消费完已入队帧后必须收到 EOF。
-    while (!(await reader.read()).done) { /* 排空剩余 SSE 帧直至 EOF */ }
+    // close before eventually document broadcast may already stream queue; consume completely already queue frame after must receives EOF.
+    while (!(await reader.read()).done) { /* arrange empty remaining SSE frame direct until EOF */ }
     assert.equal(fixture.app.kernel.events.subscriberCount, 0);
   } finally { await fixture.close(); }
 });

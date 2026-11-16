@@ -1,14 +1,14 @@
 /**
- * 插件卸载关联清理（purgePluginPersistentData）端到端：
- * 真实 HelmStore（临时 SQLite）+ 真实 PluginHost，注入生产级 doc/sessionDoc
- * 端口（createGlobalDocumentStore / createPluginSessionDocStore），验证：
- * - 卸载清理真正落库删除该插件全部文档（全局 doc + 全部会话文档），重启不复活；
- * - purge 自身等待 DELETE 真实落盘后才 resolve（无外部补刷）；
- * - 真实 PluginPackageManager.remove：purge 落盘成功后才删目录/删记录；
- * - purge DELETE 落盘失败：remove 显式拒绝，目录与安装记录保留可重试；
- * - 含冒号插件 id（如 `demo:sub`）不被 `demo` 的清理交叉误删；
- * - 其他插件数据与内核元数据键（无冒号）不受影响；
- * - 停用（disable）不清数据，重新启用读回原值（与卸载语义的分界）。
+ * plugin unload related clean up (purgePluginPersistentData) end-to-end:
+ * real HelmStore(temporary SQLite)+ real PluginHost, inject produce level doc/sessionDoc
+ * port (createGlobalDocumentStore / createPluginSessionDocStore), verify:
+ * - unload clean up truly written to the database delete the plugin all document (global doc + all conversation document), restart does not resurrect;
+ * - purge itself wait for DELETE real after only then resolve(without external patch refresh);
+ * - real PluginPackageManager.remove:purge after success only then delete directory/delete record;
+ * - purge DELETE failed:remove explicit reject, directory and install record keep can retry;
+ * - contains smoke number plugin id(such as `demo:sub`) do not by `demo` clean up cross mistakenly delete;
+ * - other plugin data and kernel metadata key (without smoke number) do not subject to affect;
+ * - deactivate (disable) do not clean data, re- enable read back original value (and unload semantics boundary).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -33,8 +33,8 @@ import { cleanupDir, makeConversationSummary, makeTempDir } from './helpers.js'
 interface StoreHandle {
   store: HelmStore
   /**
-   * 一次性 SQL 故障注入：首条包含 substr 的 db.run 拒绝（只注入错误，不 mock
-   * 数据）；非命中语句原样放行，命中后恢复原始实现。
+   * once SQL fault inject: first contains substr  db.run reject (only inject error, do not mock
+   * data); non- hit statement original let through, hit after restore original implement.
    */
   failNextRun(substr: string): void
   close(): Promise<void>
@@ -70,7 +70,7 @@ function makeHost(handle: StoreHandle, dataDir: string): PluginHost {
     emitEvent: () => {},
     getConversation: (id: number): ConversationSummary => {
       if (id !== 1) {
-        throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+        throw new HelmError('not_found', `conversation missing: ${id}`, 404)
       }
       return makeConversationSummary({ id, title: 'conv-1', profileId: 'default' })
     },
@@ -83,7 +83,7 @@ function makeHost(handle: StoreHandle, dataDir: string): PluginHost {
   })
 }
 
-test('purgePluginPersistentData：SQLite 中该插件全局 doc 与会话文档整体清除、不交叉误删、重启不复活', { timeout: 60_000 }, async () => {
+test('purgePluginPersistentData:SQLite in the plugin global doc and conversation document whole clear, do not cross mistakenly delete, restart does not resurrect', { timeout: 60_000 }, async () => {
   const base = await makeTempDir('helm-purge-e2e-')
   try {
     const handle = await openStore(base)
@@ -110,32 +110,32 @@ test('purgePluginPersistentData：SQLite 中该插件全局 doc 与会话文档�
     })
     await handle.store.flushPublic()
 
-    // 内核元数据（无冒号键）与生产存储同宿主共存，清理不得波及
+    // kernel metadata (without smoke number key) and produce store same host shared store, clean up must not wave and
     handle.store.putPluginDoc('__global', 'conversation-ownership', '{"1":"human"}')
 
-    // 卸载清理（与 package-manager.remove 的调用点一致）：purge 自身等待
-    // DELETE 真实落盘后才 resolve——此处不补刷 flushPublic，重开库即验证。
+    // unload clean up (and package-manager.remove invoke point consistent):purge itself wait for
+    // DELETE real after only then resolve- - this where do not patch refresh flushPublic, heavy open store i.e. verify.
     await host.asPackageManagerHost().purgePluginPersistentData('demo')
 
-    assert.equal(handle.store.getPluginDoc('__global', 'demo:records'), undefined, '目标插件全局 doc 应被删除')
-    assert.equal(handle.store.getPluginSessionDoc('demo', 'runs', 1), undefined, '目标插件会话文档应被删除')
+    assert.equal(handle.store.getPluginDoc('__global', 'demo:records'), undefined, 'target plugin global doc should by delete')
+    assert.equal(handle.store.getPluginSessionDoc('demo', 'runs', 1), undefined, 'target plugin conversation document should by delete')
     assert.equal(
       handle.store.getPluginDoc('__global', 'demo:sub:records'),
       '{"n":9}',
-      '含冒号插件 id（demo:sub）的数据不得被 demo 的清理交叉误删',
+      'contains smoke number plugin id(demo:sub) data must not by demo clean up cross mistakenly delete',
     )
-    assert.equal(handle.store.getPluginDoc('__global', 'other:records'), '{"n":2}', '其他插件数据不受影响')
+    assert.equal(handle.store.getPluginDoc('__global', 'other:records'), '{"n":2}', 'other plugin data do not subject to affect')
     assert.equal(
       handle.store.getPluginDoc('__global', 'conversation-ownership'),
       '{"1":"human"}',
-      '内核元数据键（无冒号）不受影响',
+      'kernel metadata key (without smoke number) do not subject to affect',
     )
     await handle.close()
 
-    // 重开库：删除真实落盘，不复活
+    // heavy open store: delete real, does not resurrect
     const reopened = await openStore(base)
-    assert.equal(reopened.store.getPluginDoc('__global', 'demo:records'), undefined, '重启后不得复活')
-    assert.equal(reopened.store.getPluginSessionDoc('demo', 'runs', 1), undefined, '重启后不得复活')
+    assert.equal(reopened.store.getPluginDoc('__global', 'demo:records'), undefined, 'after restart must not re-')
+    assert.equal(reopened.store.getPluginSessionDoc('demo', 'runs', 1), undefined, 'after restart must not re-')
     assert.equal(reopened.store.getPluginDoc('__global', 'demo:sub:records'), '{"n":9}')
     await reopened.close()
   } finally {
@@ -143,7 +143,7 @@ test('purgePluginPersistentData：SQLite 中该插件全局 doc 与会话文档�
   }
 })
 
-/** 构造受管安装最终态：受管目录 + 安装记录（与 install 事务产物等价）。 */
+/** construct managed install eventually state: managed directory + install record (and install transaction artifact etc. price). */
 async function seedManagedInstall(
   base: string,
   pluginId: string,
@@ -165,7 +165,7 @@ async function seedManagedInstall(
   return { managed, pkgStore }
 }
 
-test('PluginPackageManager.remove：purge 落盘成功后才删目录与安装记录（重开库不复活）', { timeout: 60_000 }, async () => {
+test('PluginPackageManager.remove:purge after success only then delete directory and install record (heavy open store does not resurrect)', { timeout: 60_000 }, async () => {
   const base = await makeTempDir('helm-purge-rm-')
   try {
     const handle = await openStore(base)
@@ -188,22 +188,22 @@ test('PluginPackageManager.remove：purge 落盘成功后才删目录与安装�
 
     const removed = await manager.remove('demo')
     assert.equal(removed.pluginId, 'demo')
-    assert.ok(!existsSync(managed), 'remove 返回前受管目录必须已删除')
-    assert.equal(pkgStore.getRecord('demo'), undefined, 'remove 返回前安装记录必须已删除')
+    assert.ok(!existsSync(managed), 'remove return before managed directory must deleted')
+    assert.equal(pkgStore.getRecord('demo'), undefined, 'remove return before install record must deleted')
 
-    // remove resolve 即代表 purge 的 DELETE 已真实落盘：不补任何 flush，
-    // 直接重开库验证（若 purge 未等待落盘，此处会复活）。
+    // remove resolve i.e. proxy table purge  DELETE already real: do not patch any flush,
+    // directly heavy open store verify (if purge not wait for, this where will re-).
     await handle.close()
     const reopened = await openStore(base)
-    assert.equal(reopened.store.getPluginDoc('__global', 'demo:records'), undefined, 'remove resolve 后删除必须已落盘')
-    assert.equal(reopened.store.getPluginSessionDoc('demo', 'runs', 1), undefined, 'remove resolve 后删除必须已落盘')
+    assert.equal(reopened.store.getPluginDoc('__global', 'demo:records'), undefined, 'remove resolve after delete must already')
+    assert.equal(reopened.store.getPluginSessionDoc('demo', 'runs', 1), undefined, 'remove resolve after delete must already')
     await reopened.close()
   } finally {
     await cleanupDir(base)
   }
 })
 
-test('purge DELETE 落盘失败：remove 显式拒绝，目录与安装记录保留，故障恢复后可重试', { timeout: 60_000 }, async () => {
+test('purge DELETE failed:remove explicit reject, directory and install record keep, fault restore after can retry', { timeout: 60_000 }, async () => {
   const base = await makeTempDir('helm-purge-fail-')
   try {
     const handle = await openStore(base)
@@ -224,24 +224,24 @@ test('purge DELETE 落盘失败：remove 显式拒绝，目录与安装记录保
     })
     await handle.store.flushPublic()
 
-    // 注入全局 doc DELETE 落盘失败：remove 必须显式拒绝，不得继续删目录/记录
+    // inject global doc DELETE failed:remove must explicit reject, must not continue delete directory/record
     handle.failNextRun('DELETE FROM helm_plugin_docs')
     await assert.rejects(
       manager.remove('demo'),
       (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed',
     )
-    assert.ok(existsSync(managed), 'purge 落盘失败时受管目录必须保留')
-    assert.ok(pkgStore.getRecord('demo'), 'purge 落盘失败时安装记录必须保留（可重试）')
+    assert.ok(existsSync(managed), 'purge on failure managed directory must keep')
+    assert.ok(pkgStore.getRecord('demo'), 'purge on failure install record must keep (can retry)')
     await handle.close()
 
-    // 故障恢复后重开（等价进程重启）：失败的 DELETE 未清除已落盘数据
+    // fault restore after heavy open (etc. price process restart): failed DELETE not clear already data
     const reopened = await openStore(base)
-    assert.notEqual(reopened.store.getPluginDoc('__global', 'demo:records'), undefined, '失败的 DELETE 不得虚删已落盘数据')
-    // 全新宿主链重试 remove：实例已注销由 removeManagedPlugin 幂等容忍，完整成功
+    assert.notEqual(reopened.store.getPluginDoc('__global', 'demo:records'), undefined, 'failed DELETE must not virtual delete already data')
+    // all new host chain retry remove: instance deregistered by removeManagedPlugin idempotent contain tolerate, complete succeeded
     const retryHost = makeHost(reopened, join(base, 'plugins'))
     const retryPkgStore = new PluginPackageManagerStore(new ConfigService(base))
     await retryPkgStore.load()
-    assert.ok(retryPkgStore.getRecord('demo'), '重开的安装记录应完整恢复')
+    assert.ok(retryPkgStore.getRecord('demo'), 'heavy open install record should complete restore')
     const retryManager = new PluginPackageManager({
       dataDir: base,
       cwd: base,
@@ -250,21 +250,21 @@ test('purge DELETE 落盘失败：remove 显式拒绝，目录与安装记录保
     })
     const removed = await retryManager.remove('demo')
     assert.equal(removed.pluginId, 'demo')
-    assert.equal(removed.wasEnabled, false, '首次失败已注销实例，重试 wasEnabled 如实为 false')
-    assert.ok(!existsSync(managed), '重试成功后受管目录删除')
-    assert.equal(retryPkgStore.getRecord('demo'), undefined, '重试成功后安装记录删除')
+    assert.equal(removed.wasEnabled, false, 'first time failed deregistered instance, retry wasEnabled such as is false')
+    assert.ok(!existsSync(managed), 'retry after success managed directory delete')
+    assert.equal(retryPkgStore.getRecord('demo'), undefined, 'retry after success install record delete')
     await reopened.close()
 
     const verified = await openStore(base)
-    assert.equal(verified.store.getPluginDoc('__global', 'demo:records'), undefined, '重试成功的删除真实落盘')
-    assert.equal(verified.store.getPluginSessionDoc('demo', 'runs', 1), undefined, '重试成功的删除真实落盘')
+    assert.equal(verified.store.getPluginDoc('__global', 'demo:records'), undefined, 'retry succeeded delete real')
+    assert.equal(verified.store.getPluginSessionDoc('demo', 'runs', 1), undefined, 'retry succeeded delete real')
     await verified.close()
   } finally {
     await cleanupDir(base)
   }
 })
 
-test('停用不清数据：disable 后 doc/sessionDoc 持久保留，重新启用读回原值', { timeout: 60_000 }, async () => {
+test('deactivate do not clean data:disable after doc/sessionDoc durable keep, re- enable read back original value', { timeout: 60_000 }, async () => {
   const base = await makeTempDir('helm-purge-disable-')
   try {
     const handle = await openStore(base)
@@ -281,11 +281,11 @@ test('停用不清数据：disable 后 doc/sessionDoc 持久保留，重新启�
 
     await host.disable('demo')
     await handle.store.flushPublic()
-    // 停用只清注册表句柄，不动持久数据
-    assert.equal(handle.store.getPluginDoc('__global', 'demo:records'), '{"n":1}', '停用不得删除持久数据')
-    assert.equal(handle.store.getPluginSessionDoc('demo', 'runs', 1), '{"ids":["r1"]}', '停用不得删除持久数据')
+    // deactivate only clean register table handle, do not motion durable data
+    assert.equal(handle.store.getPluginDoc('__global', 'demo:records'), '{"n":1}', 'deactivate must not delete durable data')
+    assert.equal(handle.store.getPluginSessionDoc('demo', 'runs', 1), '{"ids":["r1"]}', 'deactivate must not delete durable data')
 
-    // 重新启用：注册表重建，读回旧值
+    // re- enable: register table rebuild, read back old value
     await host.enable('demo')
     const doc = host.getPublicDoc('demo', 'records')
     assert.deepEqual(doc.value, { n: 1 })

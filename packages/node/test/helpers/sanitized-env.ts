@@ -1,7 +1,7 @@
 /**
- * packages/node 测试专用：宿主受管 Helm 环境变量剥除助手（委托 `@helm/test-kit/node`）。
+ * packages/node test dedicated use: host managed Helm environment variable strip except assist manually (delegate `@helm/test-kit/node`).
  *
- * 保持与原模块一致的导出符号 `sanitizedHostEnv` 与 `HOST_MANAGED_HELM_ENV_NAMES`，
- * 供 packages/node 测试及契约测试使用。
+ * keep and original module consistent export symbol `sanitizedHostEnv` and `HOST_MANAGED_HELM_ENV_NAMES`,
+ * supply packages/node test and contract test use.
  */
 export { HOST_MANAGED_HELM_ENV_NAMES, sanitizedHostEnv } from '@helm/test-kit/node';

@@ -1,20 +1,20 @@
 /**
- * 会话产物工具（register_artifact / read_artifact）。
+ * conversation artifact tool (register_artifact / read_artifact).
  *
- * register_artifact：把会话靶点节点上的真实普通文件复制登记为当前会话产物
- *（经 artifacts.writeUploaded 落 Hub 数据目录，Web 可预览/下载），支持二进制，
- * 上限 15 MiB。诚实性契约：远端必经 EnvFabric 的 canonicalPath / fileInfo
- * 预检 + openBinaryReader 同 fd 有界读取；节点离线或 EnvFabric 缺失显式失败
- *（guards.ts），绝不回退 local 误读 Hub 本机磁盘，也不 fallback
- * readBinaryFile 的无界全量缓冲；只接受普通文件（stat 预检 + O_NONBLOCK
- *（平台支持时）封 stat→open 竞态 + 同一 fd fstat 权威复核）；local 有界
- * 循环读到 EOF（readArtifactBytesFromHandle）。尺寸超限/中途变更文案在此
- * 常量化（预检/打开后/读取后共用，绝不漂移）。
+ * register_artifact: conversation target node on real ordinary file duplicate register is when before conversation artifact
+ *(via artifacts.writeUploaded  Hub data directory,Web can preview/download), support two enter system,
+ * cap 15 MiB. honest contract: remote must via EnvFabric  canonicalPath / fileInfo
+ * preflight + openBinaryReader same fd has boundary read; node offline or EnvFabric missing explicit failed
+ *(guards.ts), never fall back local mistakenly read Hub local machine disk, also do not fallback
+ * readBinaryFile without boundary all amount buffer; only accept ordinary file (stat preflight + O_NONBLOCK
+ *(platform support when) seal stat→open race + the same fd fstat right threat re-check);local has boundary
+ * loop read to EOF(readArtifactBytesFromHandle). size over limit/in route change text proposal in this
+ * constant (preflight/open after/read after shared use, never drift).
  *
- * read_artifact：分页读取 spill 产物（≤4KiB，UTF-8 边界对齐保证前进）；仅
- * 允许当前会话（含父会话授权链）产物，不接受任意路径。诚实性：仅把
- *「产物不存在」（FileNotFoundError）归为 artifact_not_found；存储真实读取
- * 失败如实透出原始错误（artifact_read_failed，经脱敏），绝不吞成 not_found。
+ * read_artifact: page read spill artifact (≤4KiB,UTF-8 boundary align guarantee before enter); only
+ * allows when before conversation (contains parent conversation authorization chain) artifact, do not accept any path. honest: only
+ *artifact missing (FileNotFoundError) archive is artifact_not_found; store real read
+ * failed such as through out original error (artifact_read_failed, via redaction), never swallow into not_found.
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { JsonValue } from '@earendil-works/chord/json'
@@ -30,21 +30,21 @@ import { requireRemoteEnv } from './guards.js'
 import { basenameForShape } from './file-env.js'
 import type { HelmToolDeps } from '../tool-deps.js'
 
-/** register_artifact 共用分类/超限文案（预检 / 打开后复核 / 读取后共用）。 */
+/** register_artifact shared use classify/over limit text proposal (preflight / open after re-check / read after shared use). */
 const registerIsDirectoryText = (path: string): string =>
-  `register_failed: ${path} 是目录，register_artifact 仅支持普通文件`
+  `register_failed: ${path} is directory,register_artifact only support ordinary file`
 const artifactTooLargeText = (path: string, size: number): string =>
-  `artifact_too_large: ${path} 为 ${size} 字节，超过单产物 ${MAX_ARTIFACT_BYTES} 字节（15 MiB）上限`
+  `artifact_too_large: ${path} is ${size} byte, exceeds single artifact ${MAX_ARTIFACT_BYTES} byte (15 MiB) cap`
 const artifactTooLargeReadText = (path: string, size: number): string =>
-  `artifact_too_large: ${path} 读取到 ${size} 字节，超过单产物 ${MAX_ARTIFACT_BYTES} 字节（15 MiB）上限`
+  `artifact_too_large: ${path} read to ${size} byte, exceeds single artifact ${MAX_ARTIFACT_BYTES} byte (15 MiB) cap`
 
-/** register_artifact local 读取结果：成功携带完整字节；失败为机器可读码。 */
+/** register_artifact local read result: succeeded carry complete byte; failed is machine can read code. */
 export type ArtifactFileBytes =
   | { ok: true; bytes: Buffer; size: number }
   | { ok: false; code: 'artifact_too_large'; read: number }
   | { ok: false; code: 'file_changed'; detail: string }
 
-/** helper 读取所需的最小句柄面（真实 FileHandle 结构化满足，便于测试注入短读/变更）。 */
+/** helper read which must most small handle side (real FileHandle structure satisfy, convenient at test inject short read/change). */
 export interface ArtifactReadHandle {
   stat(): Promise<{ size: number; mtimeMs: number; ctimeMs: number }>
   read(
@@ -55,13 +55,13 @@ export interface ArtifactReadHandle {
   ): Promise<{ bytesRead: number; buffer: Buffer }>
 }
 
-/** 单次读取块大小（有界循环读，避免一次性占 15 MiB 缓冲）。 */
+/** single time read chunk large small (has boundary loop read, avoid once occupy 15 MiB buffer). */
 const ARTIFACT_READ_CHUNK_BYTES = 256 * 1024
 
-/** local 打开标志：O_RDONLY + 平台支持时 O_NONBLOCK。stat 预检与 open 之间存在
- *  竞态窗口（普通文件被换成 FIFO/设备文件会使纯 O_RDONLY 的 open 无限阻塞），
- *  O_NONBLOCK 让 open 立即返回、由同一 fd 上的 fstat 权威拒绝；Windows
- *  libuv 不支持 O_NONBLOCK，仅用 O_RDONLY（Windows 无 FIFO，风险面不同）。 */
+/** local open flag:O_RDONLY + platform support when O_NONBLOCK.stat preflight and open between store in
+ *  race window (ordinary file by swap into FIFO/device file will make pure O_RDONLY  open unbounded block),
+ *  O_NONBLOCK let open immediately return, by the same fd on fstat right threat reject;Windows
+ *  libuv unsupported O_NONBLOCK, only use O_RDONLY(Windows without FIFO, risk side different). */
 function artifactOpenFlags(): number {
   return process.platform === 'win32'
     ? fsConstants.O_RDONLY
@@ -69,10 +69,10 @@ function artifactOpenFlags(): number {
 }
 
 /**
- * 同一 FileHandle 上有界读到 EOF（register_artifact local 路径唯一实现）：
- * 逐块循环到 EOF（短读只推进游标，绝不当完整文件）；总预算 MAX+1（读到
- * 上限+1 即实证超限）；读后同 fd stat 对比 size/mtime/ctime，中途变更显式
- * file_changed，绝不把旧前缀登记成功。
+ * the same FileHandle on has boundary read to EOF(register_artifact local path unique implement):
+ * one by one chunk loop to EOF(short read only push enter cursor, never when complete file); total pre- compute MAX+1(read to
+ * cap+1 i.e. verify over limit); read after same fd stat compare size/mtime/ctime, in route change explicit
+ * file_changed, never old prefix register succeeded.
  */
 export async function readArtifactBytesFromHandle(handle: ArtifactReadHandle): Promise<ArtifactFileBytes> {
   const before = await handle.stat()
@@ -100,24 +100,24 @@ export async function readArtifactBytesFromHandle(handle: ArtifactReadHandle): P
     return {
       ok: false,
       code: 'file_changed',
-      detail: `读取期间文件发生变化（size ${before.size} -> ${after.size}，mtime ${before.mtimeMs} -> ${after.mtimeMs}，ctime ${before.ctimeMs} -> ${after.ctimeMs}），拒绝登记可能不完整的快照`,
+      detail: `read during file occur change (size ${before.size} -> ${after.size},mtime ${before.mtimeMs} -> ${after.mtimeMs},ctime ${before.ctimeMs} -> ${after.ctimeMs}), reject register may do not complete snapshot`,
     }
   }
   return { ok: true, bytes: Buffer.concat(chunks, total), size: after.size }
 }
 
 const registerArtifactParameters = obj({
-  path: str({ description: '要登记为会话产物的源文件路径（相对会话 cwd 或绝对路径，支持 ../ 跨目录，与 bash 同权）' }),
-  name: opt(str({ description: '产物展示名（缺省用源文件名）' })),
-  mimeType: opt(str({ description: 'MIME 类型（缺省按扩展名探测；文本类会脱敏后落盘，二进制字节原样保留）' })),
+  path: str({ description: 'want register is conversation artifact source file path (each other for conversation cwd or absolute path, support ../ across directory, and bash same right)' }),
+  name: opt(str({ description: 'artifact render name (default use source file name)' })),
+  mimeType: opt(str({ description: 'MIME type (default by extension probe; text class will redaction after, two enter system byte original keep)' })),
 })
 
 /**
- * register_artifact 工具：把会话靶点节点上的真实普通文件复制登记为当前
- * 会话产物（经 artifacts.writeUploaded 落 Hub 数据目录，Web 可预览/下载）。
- * 结构化结果回显 artifactId、源文件绝对路径（local 为词法绝对路径、远端
- * 为 canonical 解析后）、nodeId、name、size/mime；二进制保真与文本脱敏
- * 由 ArtifactService 统一处理；一切异常文本经 deps.redact 脱敏。
+ * register_artifact tool: conversation target node on real ordinary file duplicate register is when before
+ * conversation artifact (via artifacts.writeUploaded  Hub data directory,Web can preview/download).
+ * structure result back visible artifactId, source file absolute path (local is term method absolute path, remote
+ * is canonical parse after),nodeId,name,size/mime; two enter system fidelity and text redaction
+ * by ArtifactService unify handle; everything exception text via deps.redact redaction.
  */
 export function createRegisterArtifactTool(
   deps: HelmToolDeps,
@@ -125,17 +125,17 @@ export function createRegisterArtifactTool(
   return defineTool({
     name: 'register_artifact',
     description:
-      '把会话靶点节点上的真实普通文件登记为当前会话产物（复制进 Hub 数据目录，Web 界面可见/可预览/可下载）。支持二进制（字节原样保真）与文本（脱敏后落盘）；单文件上限 15 MiB；会话绑定远端节点时在目标节点读取，绝不回退本机。生成新文本内容时优先用 write(..., artifact: true)；本工具用于把已有文件（如命令输出、构建产物、图片）交给用户。',
+      'conversation target node on real ordinary file register is when before conversation artifact (duplicate enter Hub data directory,Web UI visible/can preview/can download). support two enter system (byte original fidelity) and text (redaction after); single file cap 15 MiB; conversation bind set remote node when in target node read, never fall back local machine. generate new text content when takes precedence use write(..., artifact: true); this tool used to already has file (such as command output, build artifact, diagram piece) hand over to user.',
     parameters: registerArtifactParameters,
     structuredOutputSchema: {
       type: 'object',
       properties: {
-        artifactId: { type: 'string', description: '产物 ID（可用 [文件名](artifact:<id>) 渲染）' },
-        path: { type: 'string', description: '源文件绝对路径（远端为 canonical 解析后）' },
-        nodeId: { type: 'string', description: '实际读取节点' },
-        name: { type: 'string', description: '产物展示名' },
-        size: { type: 'number', description: '登记字节数（文本类为脱敏后大小）' },
-        mimeType: { type: 'string', description: '产物 MIME 类型' },
+        artifactId: { type: 'string', description: 'artifact ID(available [filename](artifact:<id>) render)' },
+        path: { type: 'string', description: 'source file absolute path (remote is canonical parse after)' },
+        nodeId: { type: 'string', description: 'actual read node' },
+        name: { type: 'string', description: 'artifact render name' },
+        size: { type: 'number', description: 'register byte count (text class is redaction after large small)' },
+        mimeType: { type: 'string', description: 'artifact MIME type' },
       },
       required: ['artifactId', 'path', 'nodeId', 'name', 'size', 'mimeType'],
     },
@@ -143,7 +143,7 @@ export function createRegisterArtifactTool(
       if (deps.artifacts.writeUploaded === undefined) {
         return {
           output: [
-            { type: 'text', text: 'register_failed: 产物服务未配置 writeUploaded，无法登记会话产物' },
+            { type: 'text', text: 'register_failed: artifact service not config writeUploaded, cannot register conversation artifact' },
           ],
           isError: true,
         }
@@ -163,13 +163,13 @@ export function createRegisterArtifactTool(
         let bytes: Uint8Array
         let sourcePath: string
         if (nodeId !== 'local') {
-          // 远端：必经 EnvFabric（缺失/离线显式失败，绝不回退 local）。
-          const remote = requireRemoteEnv(deps.envFabric, nodeId, base, '读取')
+          // remote: must via EnvFabric(missing/offline explicit failed, never fall back local).
+          const remote = requireRemoteEnv(deps.envFabric, nodeId, base, 'read')
           if ('error' in remote) {
             return { output: [{ type: 'text', text: remote.error }], isError: true }
           }
           const env = remote.env
-          // canonicalPath 先解析软链（与 read 一致）：fileInfo 是 lstat 语义。
+          // canonicalPath first parse symlink (and read consistent):fileInfo is lstat semantics.
           const targetRealR = await env.canonicalPath(lexicalAbs, context)
           if (!targetRealR.ok) throw new Error(targetRealR.error.message)
           sourcePath = targetRealR.value
@@ -185,7 +185,7 @@ export function createRegisterArtifactTool(
           if (info.kind !== 'file') {
             return {
               output: [
-                { type: 'text', text: `register_failed: ${args.path} 不是普通文件（kind=${info.kind}）` },
+                { type: 'text', text: `register_failed: ${args.path} is not ordinary file (kind=${info.kind})` },
               ],
               isError: true,
             }
@@ -196,16 +196,16 @@ export function createRegisterArtifactTool(
               isError: true,
             }
           }
-          // 有界二进制读取：openBinaryReader 打开后的同 fd positional 读取
-          //（节点实现 O_NONBLOCK 打开 + 同 fd fstat 拒特殊文件），绝不走
-          // readBinaryFile 的无界全量缓冲（源文件增长数 GB 会先整体缓冲传输
-          // 后才拒绝）。打开失败显式拒绝，无任何回退。
+          // has boundary two enter system read:openBinaryReader open after same fd positional read
+          //(node implement O_NONBLOCK open + same fd fstat refuse special file), never away
+          // readBinaryFile without boundary all amount buffer (source file increase long count GB will first whole buffer transfer
+          // after only then reject). failed to open explicit reject, without any fall back.
           const readerR = await env.openBinaryReader(sourcePath, { noFollow: true }, context)
           if (!readerR.ok) throw new Error(readerR.error.message)
           const reader = readerR.value
           try {
-            // 打开后权威信息（同 fd，非路径视图）：kind/size/mtime 以 reader
-            // 的 info 为准，预检 size 只作快速拒绝。
+            // open after right threat information (same fd, non- path view):kind/size/mtime with reader
+            //  info is allow, preflight size only act fast reject.
             const openedR = await reader.info(context)
             if (!openedR.ok) throw new Error(openedR.error.message)
             const opened = openedR.value
@@ -214,7 +214,7 @@ export function createRegisterArtifactTool(
                 output: [
                   {
                     type: 'text',
-                    text: `register_failed: ${args.path} 在打开后不是普通文件（kind=${opened.kind}），拒绝读取`,
+                    text: `register_failed: ${args.path} in open after is not ordinary file (kind=${opened.kind}), reject read`,
                   },
                 ],
                 isError: true,
@@ -226,8 +226,8 @@ export function createRegisterArtifactTool(
                 isError: true,
               }
             }
-            // 请求上限+1：SDK 契约「最多 length 字节、仅 EOF 处更短」，内部
-            // 循环短读至 length 或 EOF——超限即实证，绝无先全量后拒绝。
+            // request cap+1:SDK contract at most length byte, only EOF where more short, internal
+            // loop short read until length or EOF- - over limit i.e. verify, absolute without first all amount after reject.
             const readR = await reader.read(0, MAX_ARTIFACT_BYTES + 1, context)
             if (!readR.ok) throw new Error(readR.error.message)
             const readBytes = readR.value
@@ -237,8 +237,8 @@ export function createRegisterArtifactTool(
                 isError: true,
               }
             }
-            // 读后二次 info（同 fd）：size/mtime 与打开时不一致或读取长短与
-            // 稳定 size 不一致均拒绝（读途中增长/截断不得截断当成功）。
+            // read after second info(same fd):size/mtime and open when inconsistent or read long short and
+            // stable size inconsistent all reject (read route in increase long/truncate must not truncate when succeeded).
             const afterR = await reader.info(context)
             if (!afterR.ok) throw new Error(afterR.error.message)
             const after = afterR.value
@@ -248,8 +248,8 @@ export function createRegisterArtifactTool(
                   {
                     type: 'text',
                     text:
-                      `file_changed: ${args.path} 读取期间文件发生变化` +
-                      `（size ${opened.size} -> ${after.size}，mtime ${opened.mtimeMs} -> ${after.mtimeMs}），拒绝登记可能不完整的快照`,
+                      `file_changed: ${args.path} read during file occur change` +
+                      `(size ${opened.size} -> ${after.size},mtime ${opened.mtimeMs} -> ${after.mtimeMs}), reject register may do not complete snapshot`,
                   },
                 ],
                 isError: true,
@@ -260,7 +260,7 @@ export function createRegisterArtifactTool(
                 output: [
                   {
                     type: 'text',
-                    text: `file_changed: ${args.path} 读取到 ${readBytes.byteLength} 字节与稳定大小 ${opened.size} 不一致，拒绝截断当成功`,
+                    text: `file_changed: ${args.path} read to ${readBytes.byteLength} byte and stable large small ${opened.size} inconsistent, reject truncate when succeeded`,
                   },
                 ],
                 isError: true,
@@ -268,17 +268,17 @@ export function createRegisterArtifactTool(
             }
             bytes = readBytes
           } finally {
-            // 取消/失败路径同样释放远端句柄（节点侧 reader 生命周期与连接
-            // 绑定，显式 close 立即回收）。
+            // cancel/failed path same release remote handle (node side reader lifecycle and connect
+            // bind set, explicit close immediately reclaim).
             await reader.close(BACKGROUND_CONTEXT)
           }
         } else {
-          // local：与 read 工具同构——先 stat（跟随软链）预检分类（目录/特殊
-          // 文件/超限；FIFO 等特殊文件在无竞态场景下预检即拒绝）；打开用
-          // O_NONBLOCK（平台支持时）封住 stat→open 竞态窗口（普通文件被换成
-          // FIFO 后纯 O_RDONLY 的 open 会无限阻塞）；同一 fd 上 fstat 权威复核
-          // 后有界循环读到 EOF（短读继续、超限实证、中途变更显式 file_changed，
-          // 见 readArtifactBytesFromHandle）。
+          // local: and read tool same construct - - first stat(with follow symlink) preflight classify (directory/special
+          // file/over limit;FIFO etc. special file in without race scenario under preflight i.e. reject); open use
+          // O_NONBLOCK(platform support when) seal stat→open race window (ordinary file by swap into
+          // FIFO after pure O_RDONLY  open will unbounded block); the same fd on fstat right threat re-check
+          // after has boundary loop read to EOF(short read continue, over limit verify, in route change explicit file_changed,
+          // see readArtifactBytesFromHandle).
           const preInfo = await stat(lexicalAbs)
           if (preInfo.isDirectory()) {
             return {
@@ -289,7 +289,7 @@ export function createRegisterArtifactTool(
           if (!preInfo.isFile()) {
             return {
               output: [
-                { type: 'text', text: `register_failed: ${args.path} 不是普通文件（特殊文件）` },
+                { type: 'text', text: `register_failed: ${args.path} is not ordinary file (special file)` },
               ],
               isError: true,
             }
@@ -312,7 +312,7 @@ export function createRegisterArtifactTool(
             if (!statInfo.isFile()) {
               return {
                 output: [
-                  { type: 'text', text: `register_failed: ${args.path} 在打开后不是普通文件（特殊文件），拒绝读取` },
+                  { type: 'text', text: `register_failed: ${args.path} in open after is not ordinary file (special file), reject read` },
                 ],
                 isError: true,
               }
@@ -355,7 +355,7 @@ export function createRegisterArtifactTool(
               type: 'text',
               text:
                 `[Artifact] id=${meta.id} name=${meta.name}\n` +
-                `register_artifact_ok: 源 ${sourcePath}（节点 ${nodeId}，${meta.size} 字节，${meta.mimeType}）`,
+                `register_artifact_ok: source ${sourcePath}(node ${nodeId},${meta.size} byte,${meta.mimeType})`,
             },
           ],
           structuredOutput: {
@@ -380,20 +380,20 @@ export function createRegisterArtifactTool(
 const ARTIFACT_PAGE_BYTES = 4 * 1024
 
 const readArtifactParameters = obj({
-  id: str({ description: '产物 ID（artifact metadata 的 id）' }),
-  offset: opt(int({ minimum: 0, description: '起始字节偏移（默认 0）' })),
+  id: str({ description: 'artifact ID(artifact metadata  id)' }),
+  offset: opt(int({ minimum: 0, description: 'start byte offset (by default 0)' })),
   limit: opt(
     int({
       minimum: 1,
       maximum: ARTIFACT_PAGE_BYTES,
-      description: `本次读取字节数上限（默认 ${ARTIFACT_PAGE_BYTES}，最大 ${ARTIFACT_PAGE_BYTES}）`,
+      description: `this time read byte count cap (by default ${ARTIFACT_PAGE_BYTES}, most large ${ARTIFACT_PAGE_BYTES})`,
     }),
   ),
 })
 
 /**
- * read_artifact 工具：分页读取 spill 产物。仅允许当前会话及其父链授权会话的产物，
- * 不接受任意文件路径；每页 ≤4KiB，UTF-8 边界对齐且保证 nextOffset 严格前进。
+ * read_artifact tool: page read spill artifact. only allows when before conversation and its parent chain authorization conversation artifact,
+ * do not accept any file path; each page ≤4KiB,UTF-8 boundary align and guarantee nextOffset strictly before enter.
  */
 export function createReadArtifactTool(
   deps: HelmToolDeps,
@@ -401,10 +401,10 @@ export function createReadArtifactTool(
 ): ToolRegistration<typeof readArtifactParameters, never> {
   return defineTool({
     name: 'read_artifact',
-    // 纯只读分页工具：中断重开允许安全重放。
+    // pure only read page tool: interrupt heavy open allows security replay.
     replay: 'safe',
     description:
-      '分页读取产物（spill 全文等）。每页最多 4KiB，按 UTF-8 边界对齐返回 nextOffset；为空表示已读完。',
+      'page read artifact (spill all text etc.). each page at most 4KiB, by UTF-8 boundary align return nextOffset; is empty means already read completely.',
     parameters: readArtifactParameters,
     structuredOutputSchema: {
       type: 'object',
@@ -421,9 +421,9 @@ export function createReadArtifactTool(
       const offset = args.offset ?? 0
       const limit = args.limit ?? ARTIFACT_PAGE_BYTES
       const conversationId = api.conversationId as number
-      // 诚实性：仅「产物不存在」（FileNotFoundError）是 artifact_not_found；
-      // 存储真实读取失败（仓库/DB 故障等）如实透出原始错误文本（经脱敏，
-      // 与下方 readBuffer 同码 artifact_read_failed），绝不吞成 not_found。
+      // honest: only artifact missing (FileNotFoundError) is artifact_not_found;
+      // store real failed to read (repository/DB fault etc.) such as through out original error text (via redaction,
+      // and under way readBuffer same code artifact_read_failed), never swallow into not_found.
       let meta: Awaited<ReturnType<HelmToolDeps['artifacts']['get']>>
       try {
         meta = await deps.artifacts.get(id)
@@ -444,7 +444,7 @@ export function createReadArtifactTool(
           output: [
             {
               type: 'text',
-              text: `artifact_forbidden: 产物 ${id} 属于会话 ${meta.conversationId}，当前会话 ${conversationId} 无权读取`,
+              text: `artifact_forbidden: artifact ${id} belongs to conversation ${meta.conversationId}, when before conversation ${conversationId} without right read`,
             },
           ],
           isError: true,
@@ -468,29 +468,29 @@ export function createReadArtifactTool(
       if (offset === buffer.length) {
         return {
           output: [
-            { type: 'text', text: `[artifact ${id} bytes ${offset}-${offset}/${buffer.length}]\n（已读完）` },
+            { type: 'text', text: `[artifact ${id} bytes ${offset}-${offset}/${buffer.length}]\n(already read completely)` },
           ],
           structuredOutput: { id, offset, chunk: '' } as JsonValue,
         }
       }
-      // UTF-8 边界对齐：offset 或 end 落在多字节序列中间时，起点跳到下一个
-      // 完整字符首字节、终点回退到字符起点（保前进且绝不解出替换符）。
+      // UTF-8 boundary align:offset or end in multibyte sequence middle when, start point jump to under a
+      // complete character first token node, final point fall back to character start point (keep before enter and never solve out replace symbol).
       let start = offset
       while (start < buffer.length && (buffer[start]! & 0xc0) === 0x80) start += 1
       const end = Math.min(buffer.length, offset + limit)
       let safeEnd = Math.max(end, start)
       while (safeEnd < buffer.length && (buffer[safeEnd]! & 0xc0) === 0x80) safeEnd -= 1
-      // 兜底：limit=1 且 start 是多字节首字节时 safeEnd 可能退回 start；推进到
-      // 下一个字符首字节，保证一页至少完整读出一个字符。
+      // fall back:limit=1 and start is multibyte first token node when safeEnd may retreat back start; push enter to
+      // under a character first token node, guarantee one page at least complete read out a character.
       while (safeEnd <= start && safeEnd < buffer.length) {
         safeEnd += 1
         while (safeEnd < buffer.length && (buffer[safeEnd]! & 0xc0) === 0x80) safeEnd += 1
       }
       const chunk = buffer.subarray(start, safeEnd).toString('utf8')
       const hasMore = safeEnd < buffer.length
-      const header = `[artifact ${id} bytes ${offset}-${safeEnd}/${buffer.length}${start > offset ? `（offset ${offset} 位于多字节字符中间，已从 ${start} 起读）` : ''}]`
+      const header = `[artifact ${id} bytes ${offset}-${safeEnd}/${buffer.length}${start > offset ? `(offset ${offset} at multibyte character middle, already from ${start} start read)` : ''}]`
       const text = hasMore ? `${header}\n${chunk}\n[nextOffset=${safeEnd}]` : `${header}\n${chunk}`
-      // nextOffset 仅在还有剩余时出现，绝不输出 undefined 字段（JSON-safe）。
+      // nextOffset only in also has remaining when appear, never output undefined field (JSON-safe).
       const structured: Record<string, unknown> = { id, offset, chunk }
       if (hasMore) structured['nextOffset'] = safeEnd
       return {

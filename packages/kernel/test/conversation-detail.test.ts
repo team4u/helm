@@ -1,10 +1,10 @@
 /**
- * ConversationDetailService 并行化测试（faux host，确定性时序）：
- * - contextUsage 刷新（ensureContextUsage）与时间线分页并行；ensure 慢、
- *   detail 腿先完成时，两腿完成后重取的权威摘要合并进最终 detail
- *   （并行窗内抢先读取的旧摘要不得丢失新刷出的 contextUsage）；
- * - ensure 腿失败：整体拒绝，绝不返回伪造详情（Promise.all 传播）；
- * - detail 腿失败：同样整体拒绝。
+ * ConversationDetailService parallel test (faux host, determinism when order):
+ * - contextUsage refresh (ensureContextUsage) and timeline page parallel;ensure slow,
+ *   detail leg first complete when, two leg after completion heavy take right threat summary merge enter eventually detail
+ *   (parallel window inside grab first read old summary must not lose new refresh out contextUsage);
+ * - ensure leg failed: whole reject, never return fabricate detail situation (Promise.all pass broadcast);
+ * - detail leg failed: same whole reject.
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -23,7 +23,7 @@ function summaryOf(id: number, withUsage: boolean): ConversationSummary {
   const now = Date.now()
   return {
     id,
-    title: `会话 ${id}`,
+    title: `conversation ${id}`,
     profileId: 'assistant',
     tags: [],
     cwd: '/tmp',
@@ -51,8 +51,8 @@ function makeService(state: HostState): ConversationDetailService {
     harness: { conversation: async () => fauxConversation } as never,
     store: {} as never,
     stash: {} as never,
-    // 权威摘要现读：assembleDetail 与并行合并两处都会调用——本测试用它模拟
-    // 「contextUsage 在并行窗内被刷出」的时序。
+    // right threat summary now read:assembleDetail and parallel merge two where all will invoke - - this test use it simulated
+    // contextUsage in parallel window inside by refresh out when order.
     getConversation: () => state.summary,
     collectRewindIntervals: async () => [],
     ensureContextUsage: async () => {
@@ -63,30 +63,30 @@ function makeService(state: HostState): ConversationDetailService {
   })
 }
 
-test('并行合并：ensure 慢、detail 先完成，最终 detail 携带新刷出的 contextUsage', { timeout: 60_000 }, async () => {
+test('parallel merge:ensure slow,detail first complete, eventually detail carry new refresh out contextUsage', { timeout: 60_000 }, async () => {
   const state: HostState = {
     summary: summaryOf(5, false),
     entries: [
-      { id: 2, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '答案' }] }] },
-      { id: 1, kind: 'helm.input', data: { id: 'i1', text: '问' } },
+      { id: 2, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'answer proposal' }] }] },
+      { id: 1, kind: 'helm.input', data: { id: 'i1', text: 'question' } },
     ],
     ensureDelayMs: 40,
   }
   const service = makeService(state)
   const detail = await service.getConversationDetail(5, { limit: 10 })
-  assert.ok((detail as { contextUsage?: unknown }).contextUsage !== undefined, '合并后的摘要应携带 contextUsage')
+  assert.ok((detail as { contextUsage?: unknown }).contextUsage !== undefined, 'merge after summary should carry contextUsage')
   assert.equal(detail.entries.length, 2)
-  // 降序收集后 reverse：时间线为时间升序（旧在前）
+  // drop order collect after reverse: timeline is time rise order (old in before)
   assert.equal(detail.entries[0]!.kind, 'helm.input')
   assert.equal(detail.entries[1]!.kind, 'pi.assistant')
 })
 
-test('ensure 腿失败：整体拒绝，绝不返回伪造详情', { timeout: 60_000 }, async () => {
+test('ensure leg failed: whole reject, never return fabricate detail situation', { timeout: 60_000 }, async () => {
   const state: HostState = {
     summary: summaryOf(5, false),
     entries: [],
     ensureDelayMs: 5,
-    ensureError: new HelmError('runtime_closed', '内核正在关闭', 503),
+    ensureError: new HelmError('runtime_closed', 'kernel is now close', 503),
   }
   const service = makeService(state)
   await assert.rejects(
@@ -95,7 +95,7 @@ test('ensure 腿失败：整体拒绝，绝不返回伪造详情', { timeout: 60
   )
 })
 
-test('detail 腿失败：整体拒绝（404 会话不存在语义透传）', { timeout: 60_000 }, async () => {
+test('detail leg failed: whole reject (404 conversation missing semantics pass-through)', { timeout: 60_000 }, async () => {
   const state: HostState = {
     summary: summaryOf(5, false),
     entries: [],

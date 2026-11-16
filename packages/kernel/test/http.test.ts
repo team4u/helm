@@ -1,15 +1,15 @@
 /**
- * HTTP/SSE 传输层测试：真实临时目录 + 真实 services（auth/credentials/
- * profiles/skills/providers/artifacts/SecretStash）+ 真实 PluginHost 路由
- * 注册（ctx.route 完整路径声明）+ 模拟 runtime 会话面。
+ * HTTP/SSE transfer layer test: real temp directory + real services(auth/credentials/
+ * profiles/skills/providers/artifacts/SecretStash)+ real PluginHost routing
+ * register (ctx.route complete path declaration)+ simulated runtime conversation side.
  *
- * 覆盖：鉴权边界（status 如实反映 token）、setup/login、初始会话删除、
- * 会话 CRUD 与 origin、路径段解码（编码 pluginId / 非法编码 400 / 多余
- * 段 404）、插件动态路由（真实 register、public 豁免、原始 URL 透传）、
- * 动作 null 原样 / undefined 违约 500、出站 JSON stash 脱敏（含引号/
- * 换行 secret）、providers PUT 原始数组、plugin config {values}、
- * profiles 删除 409、artifacts 伪造 meta/符号链接越界拒绝与真实字节、
- * skills traversal、body 上限、SSE 首帧与断开清理、关停无遗留。
+ * override: authentication boundary (status such as reverse reflect token),setup/login, initial conversation delete,
+ * conversation CRUD and origin, path segment decode (encode pluginId / illegal encode 400 / redundant
+ * segment 404), plugin motion state routing (real register,public exemption, original URL pass-through),
+ * action null original / undefined violate about 500, out station JSON stash redaction (contains quotes/
+ * newline secret),providers PUT original array,plugin config {values},
+ * profiles delete 409,artifacts fabricate meta/symlink out of bounds reject and real byte,
+ * skills traversal,body cap,SSE first frame and disconnect clean up, closure stop without legacy.
  */
 import assert from 'node:assert/strict'
 import { test, before, after } from 'node:test'
@@ -35,11 +35,11 @@ import type { EventHub, KernelRuntimeLike } from '../src/http/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import { MemoryDocStore, cleanupDir, makeConversationSummary, makeTempDir } from './helpers.js'
 
-/** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
+/** initial conversation id(SDK keep #1 bear load; ordinary conversation semantics, without produce product level special right). */
 const ROOT_CONVERSATION_ID = 1 as const
 
 // ---------------------------------------------------------------------------
-// 测试基座
+// test base seat
 // ---------------------------------------------------------------------------
 
 let dataDir: string
@@ -54,7 +54,7 @@ let pluginHost: PluginHost
 let handler0: ReturnType<typeof createHubHandler>
 let token: string | undefined
 
-/** 模拟 EventHub：真实订阅语义 + SSE response（首帧 snapshot + 增量）。 */
+/** simulated EventHub: real subscribe semantics + SSE response(first frame snapshot + incremental). */
 class TestEventHub implements EventHub {
   seq = 0
   private listeners = new Set<(event: { type: string; payload: unknown }) => void>()
@@ -91,7 +91,7 @@ class TestEventHub implements EventHub {
           try {
             controller.close()
           } catch {
-            /* 已关 */
+            /* already closure */
           }
         })
       },
@@ -113,7 +113,7 @@ function summary(id: number, title: string): ConversationSummary {
   return makeConversationSummary({ id, title, model: 'faux/model', createdAt: now, updatedAt: now })
 }
 
-/** 内存会话面：真实服务 + 模拟 conversation/ask/search。 */
+/** memory conversation side: real service + simulated conversation/ask/search. */
 const conversations = new Map<number, ConversationSummary>()
 const asks = new Map<string, AskSpec>()
 const submitted: Array<{ id: number; text: string; opts?: Record<string, unknown> }> = []
@@ -130,12 +130,12 @@ const waitForInputCalls: Array<{ id: number; submissionId: string }> = []
 const setHubUrlCalls: string[] = []
 
 function detailOf(overrides: Partial<ConversationDetail> = {}): ConversationDetail {
-  const base = summary(1, '个人助理')
+  const base = summary(1, 'person assist')
   return {
     ...base,
     entries: [
-      { id: 'e2', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '回答' }] }], createdAt: 2 },
-      { id: 'e1', kind: 'helm.input', data: { id: 'i1', text: '问', origin: 'human', createdAt: 1 } },
+      { id: 'e2', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'answer' }] }], createdAt: 2 },
+      { id: 'e1', kind: 'helm.input', data: { id: 'i1', text: 'question', origin: 'human', createdAt: 1 } },
     ],
     nextCursor: '{"order":"descending","after":5}',
     ...overrides,
@@ -144,10 +144,10 @@ function detailOf(overrides: Partial<ConversationDetail> = {}): ConversationDeta
 
 function makeKernel(): KernelRuntimeLike {
   return {
-    listNodes() { throw new Error('本 HTTP fixture 不提供节点管理') },
-    async issueNodeToken() { throw new Error('本 HTTP fixture 不签发节点身份') },
-    async removeNode() { throw new Error('本 HTTP fixture 不移除节点') },
-    async execEnv() { throw new Error('本 HTTP fixture 不执行节点命令') },
+    listNodes() { throw new Error('this HTTP fixture do not provide node manage') },
+    async issueNodeToken() { throw new Error('this HTTP fixture do not sign node identity') },
+    async removeNode() { throw new Error('this HTTP fixture do not remove node') },
+    async execEnv() { throw new Error('this HTTP fixture do not execute node command') },
     dataDir,
     auth,
     events: hub0,
@@ -174,7 +174,7 @@ function makeKernel(): KernelRuntimeLike {
     },
     async getConversationDetail(id: number, opts?: { limit?: number; cursor?: string }) {
       detailCalls.push({ id, opts })
-      if (!conversations.has(id)) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      if (!conversations.has(id)) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
       if (detailFixture !== undefined) {
         return { ...detailFixture, id }
       }
@@ -182,13 +182,13 @@ function makeKernel(): KernelRuntimeLike {
     },
     async getConversationEntry(id: number, entryId: number) {
       entryCalls.push({ id, entryId })
-      if (!conversations.has(id)) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      if (!conversations.has(id)) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
       if (entryFixture !== undefined) return { ...entryFixture, id: String(entryId) }
-      throw new HelmError('not_found', `条目 ${entryId} 在会话 ${id} 中不存在`, 404, { conversationId: id, entryId })
+      throw new HelmError('not_found', `item ${entryId} in conversation ${id} in missing`, 404, { conversationId: id, entryId })
     },
     async createConversation(init) {
       const id = Math.max(0, ...conversations.keys()) + 1
-      const created = summary(id, init?.title ?? `会话 ${id}`)
+      const created = summary(id, init?.title ?? `conversation ${id}`)
       if (init?.profileId !== undefined) created.profileId = init.profileId
       if (init?.model !== undefined) created.model = init.model
       conversations.set(id, created)
@@ -197,22 +197,22 @@ function makeKernel(): KernelRuntimeLike {
     async updateConversation(id, patch) {
       updateCalls.push({ id, patch: { ...patch } })
       const found = conversations.get(id)
-      if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      if (found === undefined) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
       const next = { ...found, ...patch }
       conversations.set(id, next)
       return next
     },
     async deleteConversation(id) {
-      if (!conversations.has(id)) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      if (!conversations.has(id)) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
       conversations.delete(id)
     },
     async submitInput(id, text, opts) {
-      if (!conversations.has(id)) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      if (!conversations.has(id)) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
       submitted.push({ id, text, opts })
       return { submissionId: 'sub-mock' }
     },
     async withdrawQueuedInput(id, opts) {
-      if (!conversations.has(id)) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      if (!conversations.has(id)) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
       withdrawn.push({ id, submissionId: opts.submissionId })
       return { status: 'withdrawn' }
     },
@@ -227,32 +227,32 @@ function makeKernel(): KernelRuntimeLike {
     },
     async resetConversation(id) {
       const found = conversations.get(id)
-      if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      if (found === undefined) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
       return found
     },
     async compactConversation(id) {
       const found = conversations.get(id)
-      if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      if (found === undefined) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
       return { taskId: 1, conversation: found }
     },
     async forkConversation(id) {
-      if (!conversations.has(id)) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
-      return summary(id + 100, `会话 ${id} (分叉)`)
+      if (!conversations.has(id)) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
+      return summary(id + 100, `conversation ${id} (fork)`)
     },
     async listAsks() {
       return [...asks.values()]
     },
     async answerAsk(id, answers, expectedStateSeq) {
       const ask = asks.get(id)
-      if (ask === undefined) throw new HelmError('not_found', `提问不存在: ${id}`, 404)
+      if (ask === undefined) throw new HelmError('not_found', `mention question missing: ${id}`, 404)
       if (expectedStateSeq !== undefined && ask.expectedStateSeq !== undefined && expectedStateSeq < ask.expectedStateSeq) {
-        throw new HelmError('superseded', '已在终端处理', 409)
+        throw new HelmError('superseded', 'already in terminal handle', 409)
       }
       void answers
       asks.delete(id)
     },
     async cancelAsk(id) {
-      if (!asks.has(id)) throw new HelmError('not_found', `提问不存在: ${id}`, 404)
+      if (!asks.has(id)) throw new HelmError('not_found', `mention question missing: ${id}`, 404)
       asks.delete(id)
     },
     async search(q) {
@@ -264,7 +264,7 @@ function makeKernel(): KernelRuntimeLike {
   }
 }
 
-/** 可注入 refreshModels 的 mock kernel（验证 501 分支时置 undefined）。 */
+/** can inject refreshModels  mock kernel(verify 501 branch when placement undefined). */
 function makeKernelWithRefresh(refreshImpl?: KernelRuntimeLike['refreshModels']): KernelRuntimeLike {
   const kernel = makeKernel()
   if (refreshImpl !== undefined) kernel.refreshModels = refreshImpl
@@ -299,7 +299,7 @@ async function call(handler: (req: Request) => Promise<Response>, method: string
 }
 
 // ---------------------------------------------------------------------------
-// 真实 PluginHost 路由注册（definePlugin(ctx) ctx.route 完整路径声明）
+// real PluginHost routing register (definePlugin(ctx) ctx.route complete path declaration)
 // ---------------------------------------------------------------------------
 
 let publicHandlerCalls: Request[] = []
@@ -314,12 +314,12 @@ function hostApiForPluginHost(): PluginHostBackend {
     listConversations: () => [...conversations.values()],
     getConversation: (id: number) => {
       const found = conversations.get(id)
-      if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      if (found === undefined) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
       return found
     },
     updateConversation: async (id: number) => {
       const found = conversations.get(id)
-      if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      if (found === undefined) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
       return found
     },
     manageConversation: () => () => {},
@@ -334,13 +334,13 @@ function hostApiForPluginHost(): PluginHostBackend {
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
-    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
+    execEnv: async () => { throw new HelmError('unsupported', 'this fixture do not execute node command', 501) },
+    withFileMutationQueue(): Promise<never> { throw new Error('this fixture do not bear load file mutual exclusion queue') },
     emitEvent: () => {},
   }
 }
 
-/** 真实 register 一个含 public/private 路由与动作的插件。 */
+/** real register a contains public/private routing and action plugin. */
 async function registerRoutePlugin(host: PluginHost): Promise<void> {
   publicHandlerCalls = []
   privateHandlerCalls = []
@@ -348,7 +348,7 @@ async function registerRoutePlugin(host: PluginHost): Promise<void> {
     id: 'builtin:triggers',
     name: 'triggers',
     async definePlugin(ctx: HelmPluginContext) {
-      // PluginHost 声明相对路径，宿主自动拼接到 /api/plugins/<enc id>/routes/...
+      // PluginHost declaration relative path, host automatically concatenate to /api/plugins/<enc id>/routes/...
       ctx.route({
         method: 'POST',
         path: '/webhook/:hookId',
@@ -368,12 +368,12 @@ async function registerRoutePlugin(host: PluginHost): Promise<void> {
       })
       ctx.action({
         id: 'echo',
-        description: '回声',
+        description: 'back sound',
         inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
         outputSchema: { type: 'object' },
         async handler(input) {
           const text = (input as { text?: unknown }).text
-          if (typeof text !== 'string') throw new HelmError('validation_error', 'text 需为字符串', 400)
+          if (typeof text !== 'string') throw new HelmError('validation_error', 'text must be a string', 400)
           return { echoed: text }
         },
       })
@@ -408,15 +408,15 @@ before(async () => {
   await registerDocPlugin(pluginHost)
   hub0 = new TestEventHub()
   handler0 = createHubHandler(makeKernel())
-  conversations.set(ROOT_CONVERSATION_ID, summary(1, '个人助理'))
-  conversations.set(2, { ...summary(2, '工人'), profileId: 'worker', tags: ['worker'] })
+  conversations.set(ROOT_CONVERSATION_ID, summary(1, 'person assist'))
+  conversations.set(2, { ...summary(2, 'work person'), profileId: 'worker', tags: ['worker'] })
   conversations.set(3, {
-    ...summary(3, '子代理 3'),
+    ...summary(3, 'subagent 3'),
     parentConversationId: ROOT_CONVERSATION_ID,
     parentToolCallId: 'call-1',
     ownedBy: 'helm',
   })
-  conversations.set(4, { ...summary(4, '分叉 4'), parentConversationId: 2 })
+  conversations.set(4, { ...summary(4, 'fork 4'), parentConversationId: 2 })
 })
 
 after(async () => {
@@ -424,10 +424,10 @@ after(async () => {
 })
 
 // ---------------------------------------------------------------------------
-// 鉴权边界
+// authentication boundary
 // ---------------------------------------------------------------------------
 
-test('未配置时 setup 前所有私有端点 401（无匿名初始化漏洞）', { timeout: 60_000 }, async () => {
+test('not config when setup before all private end point 401(without anonymous initialize loophole)', { timeout: 60_000 }, async () => {
   token = undefined
   const { handler } = makeHandlers()
   const res = await call(handler, 'GET', '/api/conversations', { auth: false })
@@ -435,13 +435,13 @@ test('未配置时 setup 前所有私有端点 401（无匿名初始化漏洞）
   assert.equal(res.body.error.code, 'unauthorized')
 })
 
-test('GET /api/auth/status 如实反映 Bearer token：未配置/无 token/错 token 均 false', { timeout: 60_000 }, async () => {
+test('GET /api/auth/status such as reverse reflect Bearer token: not config/without token/wrong token all false', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
-  // 未配置 + 无 token
+  // not config + without token
   const noSetup = await call(handler, 'GET', '/api/auth/status', { auth: false })
   assert.equal(noSetup.status, 200)
   assert.deepEqual(noSetup.body, { configured: false, authenticated: false })
-  // 未配置 + 错误 token：configured 与 authenticated 独立汇报
+  // not config + error token:configured and authenticated independent gather report
   const saved = token
   token = 'deadbeef-token'
   const badToken = await call(handler, 'GET', '/api/auth/status')
@@ -449,7 +449,7 @@ test('GET /api/auth/status 如实反映 Bearer token：未配置/无 token/错 t
   token = saved
 })
 
-test('配置后 status：无 token false；错误 token false；有效 token true', { timeout: 60_000 }, async () => {
+test('config after status: without token false; error token false; valid token true', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const setup = await call(handler, 'POST', '/api/auth/setup', { auth: false, body: { password: 'hunter2hunter2' } })
   assert.equal(setup.status, 200)
@@ -465,15 +465,15 @@ test('配置后 status：无 token false；错误 token false；有效 token tru
   assert.deepEqual(ok.body, { configured: true, authenticated: true })
 })
 
-test('恶意网页抢先 setup 防护：恶意 Origin 403 且不写配置；text/plain 冒充 415', { timeout: 60_000 }, async () => {
-  // 独立 dataDir：验证恶意请求绝不写入 auth 配置（抢先设置密码失败）
+test('malicious network page grab first setup protect: malicious Origin 403 and do not write config;text/plain smoke fill 415', { timeout: 60_000 }, async () => {
+  // independent dataDir: verify malicious request never write auth config (grab first settings password failed)
   const evilDir = await makeTempDir('helm-http-evil-')
   try {
     const evilAuth = new AuthService(evilDir)
     const evilKernel = makeKernel()
     ;(evilKernel as { auth: AuthService }).auth = evilAuth
     const handler = createHubHandler(evilKernel)
-    // 非 JSON 的简单 POST（跨站表单可发）→ 415，不进入 setup
+    // non- JSON simple POST(across station table single can)→ 415, does not enter setup
     const malicious = await call(handler, 'POST', '/api/auth/setup', {
       auth: false,
       origin: 'https://evil.example',
@@ -482,9 +482,9 @@ test('恶意网页抢先 setup 防护：恶意 Origin 403 且不写配置；text
     })
     assert.equal(malicious.status, 415)
     assert.equal(malicious.body.error.code, 'unsupported_media_type')
-    // 配置未被写入：仍是未配置状态
+    // config not by write: still is not config state
     assert.deepEqual(await evilAuth.status(), { configured: false })
-    // 任意源 + JSON 正常 setup
+    // any source + JSON normal setup
     const ok = await call(handler, 'POST', '/api/auth/setup', {
       auth: false,
       origin: 'http://192.168.31.26:3201',
@@ -492,7 +492,7 @@ test('恶意网页抢先 setup 防护：恶意 Origin 403 且不写配置；text
     })
     assert.equal(ok.status, 200)
     assert.equal(typeof ok.body.token, 'string')
-    // 已配置后再来非 JSON 也被拒
+    // already config after again come non- JSON also by refuse
     const again = await call(handler, 'POST', '/api/auth/setup', {
       auth: false,
       origin: 'https://evil.example',
@@ -500,7 +500,7 @@ test('恶意网页抢先 setup 防护：恶意 Origin 403 且不写配置；text
       raw: JSON.stringify({ password: 'evil-password-456' }),
     })
     assert.equal(again.status, 415)
-    // 无 Origin 的 CLI 调用：text/plain 仍拒（JSON 端点），JSON 通过
+    // without Origin  CLI invoke:text/plain still refuse (JSON end point),JSON via
     const cliBad = await call(handler, 'POST', '/api/auth/setup', {
       auth: false,
       contentType: 'text/plain',
@@ -517,7 +517,7 @@ test('恶意网页抢先 setup 防护：恶意 Origin 403 且不写配置；text
   }
 })
 
-test('POST /api/auth/setup 弱密码 400 weak_password；重复 setup 409', { timeout: 60_000 }, async () => {
+test('POST /api/auth/setup weak password 400 weak_password; duplicate setup 409', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const res = await call(handler, 'POST', '/api/auth/setup', { auth: false, body: { password: 'short' } })
   assert.equal(res.status, 400)
@@ -527,8 +527,8 @@ test('POST /api/auth/setup 弱密码 400 weak_password；重复 setup 409', { ti
   assert.equal(dup.body.error.code, 'already_setup')
 })
 
-test('POST /api/auth/login 未 setup 时 409 not_setup', { timeout: 60_000 }, async () => {
-  // 独立 dataDir：全局基座在首个鉴权测试前已完成 setup，无法覆盖未配置分支
+test('POST /api/auth/login not setup when 409 not_setup', { timeout: 60_000 }, async () => {
+  // independent dataDir: global base seat in first authentication test before completed setup, cannot override not config branch
   const freshDir = await makeTempDir('helm-http-nosetup-')
   try {
     const freshKernel = makeKernel()
@@ -537,13 +537,13 @@ test('POST /api/auth/login 未 setup 时 409 not_setup', { timeout: 60_000 }, as
     const res = await call(handler, 'POST', '/api/auth/login', { auth: false, body: { password: '{{SECRET_nsetup9q}}' } })
     assert.equal(res.status, 409)
     assert.equal(res.body.error.code, 'not_setup')
-    assert.equal(res.body.error.message, '尚未完成 setup，请先执行初始化')
+    assert.equal(res.body.error.message, 'not yet complete setup, please first execute initialize')
   } finally {
     await cleanupDir(freshDir)
   }
 })
 
-test('POST /api/auth/login 正确密码 200 / 错误密码 401 invalid_credentials', { timeout: 60_000 }, async () => {
+test('POST /api/auth/login correct password 200 / error password 401 invalid_credentials', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const ok = await call(handler, 'POST', '/api/auth/login', { auth: false, body: { password: 'hunter2hunter2' } })
   assert.equal(ok.status, 200)
@@ -553,7 +553,7 @@ test('POST /api/auth/login 正确密码 200 / 错误密码 401 invalid_credentia
   assert.equal(bad.body.error.code, 'invalid_credentials')
 })
 
-test('无效 token 401；有效 token 通过', { timeout: 60_000 }, async () => {
+test('invalid token 401; valid token via', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const bad = await call(handler, 'GET', '/api/conversations', { auth: false })
   assert.equal(bad.status, 401)
@@ -568,18 +568,18 @@ test('无效 token 401；有效 token 通过', { timeout: 60_000 }, async () => 
 })
 
 // ---------------------------------------------------------------------------
-// 会话生命周期
+// conversation lifecycle
 // ---------------------------------------------------------------------------
 
-test('POST /api/conversations 创建；PATCH 更新；DELETE 会话 200（无 id 级豁免）', { timeout: 60_000 }, async () => {
+test('POST /api/conversations create;PATCH update;DELETE conversation 200(without id level exemption)', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
-  const created = await call(handler, 'POST', '/api/conversations', { body: { title: '测试会话', cwd: '/tmp', tags: ['worker'] } })
+  const created = await call(handler, 'POST', '/api/conversations', { body: { title: 'test conversation', cwd: '/tmp', tags: ['worker'] } })
   assert.equal(created.status, 201)
-  assert.equal(created.body.title, '测试会话')
+  assert.equal(created.body.title, 'test conversation')
   const id = created.body.id
-  const patched = await call(handler, 'PATCH', `/api/conversations/${id}`, { body: { title: '改名', pinned: true } })
+  const patched = await call(handler, 'PATCH', `/api/conversations/${id}`, { body: { title: 'change name', pinned: true } })
   assert.equal(patched.status, 200)
-  assert.equal(patched.body.title, '改名')
+  assert.equal(patched.body.title, 'change name')
   assert.equal(patched.body.pinned, true)
   const deleted = await call(handler, 'DELETE', `/api/conversations/${id}`)
   assert.equal(deleted.status, 200)
@@ -587,7 +587,7 @@ test('POST /api/conversations 创建；PATCH 更新；DELETE 会话 200（无 id
   assert.equal(gone.status, 404)
 })
 
-test('POST /api/conversations（create）model 不接受空串：仍需 provider/model', { timeout: 60_000 }, async () => {
+test('POST /api/conversations(create)model do not accept empty string: still must provider/model', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const res = await call(handler, 'POST', '/api/conversations', { body: { model: '' } })
   assert.equal(res.status, 400)
@@ -598,39 +598,39 @@ test('POST /api/conversations（create）model 不接受空串：仍需 provider
   assert.equal(ok.status, 201)
 })
 
-test('PATCH /:id model 覆盖与空串清覆盖边界；其他字段不受空串影响', { timeout: 60_000 }, async () => {
+test('PATCH /:id model override and empty string clean override boundary; other field do not subject to empty string affect', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
-  // 合法 provider/model 覆盖透传
+  // legal provider/model override pass-through
   const set = await call(handler, 'PATCH', `/api/conversations/${ROOT_CONVERSATION_ID}`, {
     body: { model: 'openai/gpt-4o' },
   })
   assert.equal(set.status, 200)
   assert.deepEqual(updateCalls.at(-1)?.patch, { model: 'openai/gpt-4o' })
 
-  // 空串 = 清除覆盖（边界接受并透传；语义由 kernel.updateConversation 落实）
+  // empty string = clear override (boundary accept and pass-through; semantics by kernel.updateConversation )
   const clear = await call(handler, 'PATCH', `/api/conversations/${ROOT_CONVERSATION_ID}`, {
     body: { model: '' },
   })
   assert.equal(clear.status, 200)
   assert.deepEqual(updateCalls.at(-1)?.patch, { model: '' })
 
-  // 模型 ID 可以含斜杠（例如动态路由组）；首段仍是 provider。
+  // model ID can contains slash (e.g. motion state routing group); first segment still is provider.
   const nested = await call(handler, 'PATCH', `/api/conversations/${ROOT_CONVERSATION_ID}`, { body: { model: 'gateway/group/smart' } })
   assert.equal(nested.status, 200)
   assert.deepEqual(updateCalls.at(-1)?.patch, { model: 'gateway/group/smart' })
 
-  // 错误形状仍 400：缺 provider、含空白、纯空格
+  // error shape still 400: missing provider, contains whitespace, pure space
   for (const bad of ['gpt-4o', 'openai /gpt', 'openai/ gpt', ' ']) {
     const res = await call(handler, 'PATCH', `/api/conversations/${ROOT_CONVERSATION_ID}`, { body: { model: bad } })
-    assert.equal(res.status, 400, `model=${JSON.stringify(bad)} 应 400`)
+    assert.equal(res.status, 400, `model=${JSON.stringify(bad)} should 400`)
     assert.equal(res.body.error.code, 'validation_error')
   }
-  // 非字符串类型拒绝
+  // non- string type reject
   const num = await call(handler, 'PATCH', `/api/conversations/${ROOT_CONVERSATION_ID}`, { body: { model: 42 } })
   assert.equal(num.status, 400)
 })
 
-test('GET /api/conversations?profileId 过滤透传（与 tag/status 可组合语义在 kernel 侧）', { timeout: 60_000 }, async () => {
+test('GET /api/conversations?profileId filter pass-through (and tag/status can combine semantics in kernel side)', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const res = await call(handler, 'GET', '/api/conversations?profileId=worker')
   assert.equal(res.status, 200)
@@ -640,37 +640,37 @@ test('GET /api/conversations?profileId 过滤透传（与 tag/status 可组合�
   assert.deepEqual(none.body, [])
 })
 
-test('会话列表降噪契约：缺省仅顶层、all=1 全量、parent=<id> 直接子会话、非法参数 400', { timeout: 60_000 }, async () => {
+test('conversation list drop noise contract: default only top-level,all=1 all amount,parent=<id> directly sub-conversation, illegal parameter 400', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
-  // 缺省：仅顶层会话（无 parentConversationId）
+  // default: only top-level conversation (without parentConversationId)
   const top = await call(handler, 'GET', '/api/conversations')
   assert.equal(top.status, 200)
-  assert.ok(top.body.every((c: ConversationSummary) => c.parentConversationId === undefined), '缺省不得含子会话')
-  assert.ok(top.body.some((c: ConversationSummary) => c.id === ROOT_CONVERSATION_ID), '顶层入口会话必须在列')
-  // --all：全量（含子代理与分叉）
+  assert.ok(top.body.every((c: ConversationSummary) => c.parentConversationId === undefined), 'default must not contains sub-conversation')
+  assert.ok(top.body.some((c: ConversationSummary) => c.id === ROOT_CONVERSATION_ID), 'top-level entry conversation must in column')
+  // --all: all amount (contains subagent and fork)
   const all = await call(handler, 'GET', '/api/conversations?all=1')
   assert.equal(all.status, 200)
-  assert.ok(all.body.some((c: ConversationSummary) => c.id === 3), 'all=1 应含子代理子会话')
-  assert.ok(all.body.some((c: ConversationSummary) => c.id === 4), 'all=1 应含分叉子会话')
-  // parent=<id>：精确直接子会话
+  assert.ok(all.body.some((c: ConversationSummary) => c.id === 3), 'all=1 should contains subagent sub-conversation')
+  assert.ok(all.body.some((c: ConversationSummary) => c.id === 4), 'all=1 should contains fork sub-conversation')
+  // parent=<id>: precise directly sub-conversation
   const children = await call(handler, 'GET', `/api/conversations?parent=${ROOT_CONVERSATION_ID}`)
   assert.equal(children.status, 200)
   assert.deepEqual(
     children.body.map((c: ConversationSummary) => c.id),
     [3],
-    'parent=1 仅返回直接子会话',
+    'parent=1 only return directly sub-conversation',
   )
   const noneChildren = await call(handler, 'GET', '/api/conversations?parent=999')
   assert.equal(noneChildren.status, 200)
   assert.deepEqual(noneChildren.body, [])
-  // 与其它过滤维度 AND 组合（分叉 4 继承 worker profile：验证父子维度叠加）
+  // and other filter dimension AND combine (fork 4 inherit worker profile: verify parent sub- dimension stack add)
   const workerChild = await call(handler, 'GET', '/api/conversations?parent=2&profileId=assistant')
   assert.equal(workerChild.status, 200)
   assert.deepEqual(workerChild.body.map((c: ConversationSummary) => c.id), [4])
-  // 严格输入校验：非法 parent / all 与 parent 互斥 / 非法 all
+  // strictly input validate: illegal parent / all and parent mutual exclusion / illegal all
   for (const bad of ['abc', '0', '-1', '1.5', '999999999999999999999']) {
     const res = await call(handler, 'GET', `/api/conversations?parent=${bad}`)
-    assert.equal(res.status, 400, `parent=${bad} 应 400`)
+    assert.equal(res.status, 400, `parent=${bad} should 400`)
     assert.equal(res.body.error.code, 'validation_error')
   }
   const conflict = await call(handler, 'GET', `/api/conversations?all=1&parent=${ROOT_CONVERSATION_ID}`)
@@ -679,13 +679,13 @@ test('会话列表降噪契约：缺省仅顶层、all=1 全量、parent=<id> �
   const badAll = await call(handler, 'GET', '/api/conversations?all=yes')
   assert.equal(badAll.status, 400)
   assert.equal(badAll.body.error.code, 'validation_error')
-  // all=0 显式回缺省（仅顶层），与 parent 也可组合（all=0 不构成互斥冲突）
+  // all=0 explicit back default (only top-level), and parent also can combine (all=0 do not construct into mutual exclusion conflict)
   const allOff = await call(handler, 'GET', `/api/conversations?all=0&parent=${ROOT_CONVERSATION_ID}`)
   assert.equal(allOff.status, 200)
   assert.deepEqual(allOff.body.map((c: ConversationSummary) => c.id), [3])
 })
 
-test('非法 conversationId 与非法字段 400 validation_error', { timeout: 60_000 }, async () => {
+test('illegal conversationId and illegal field 400 validation_error', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const badId = await call(handler, 'GET', '/api/conversations/abc')
   assert.equal(badId.status, 400)
@@ -696,25 +696,25 @@ test('非法 conversationId 与非法字段 400 validation_error', { timeout: 60
   assert.equal(unknownField.status, 400)
 })
 
-test('GET /:id 返回 detail（summary 字段 + entries + nextCursor 顶层结构）', { timeout: 60_000 }, async () => {
+test('GET /:id return detail(summary field + entries + nextCursor top-level structure)', { timeout: 60_000 }, async () => {
   detailFixture = detailOf()
   const { handler } = makeHandlers()
   const res = await call(handler, 'GET', `/api/conversations/${ROOT_CONVERSATION_ID}`)
   assert.equal(res.status, 200)
-  // 顶层 summary 字段仍直接可访问（id/title/status...），entries/nextCursor 平铺
+  // top-level summary field still directly can access (id/title/status...),entries/nextCursor flat spread
   assert.equal(res.body.id, ROOT_CONVERSATION_ID)
-  assert.equal(res.body.title, '个人助理')
+  assert.equal(res.body.title, 'person assist')
   assert.equal(res.body.status, 'idle')
   assert.ok(Array.isArray(res.body.entries))
   assert.equal(res.body.entries.length, 2)
   assert.equal(res.body.entries[0].kind, 'pi.assistant')
   assert.ok(Array.isArray(res.body.entries[0].model))
   assert.equal(res.body.entries[1].kind, 'helm.input')
-  assert.deepEqual(res.body.entries[1].data, { id: 'i1', text: '问', origin: 'human', createdAt: 1 })
+  assert.deepEqual(res.body.entries[1].data, { id: 'i1', text: 'question', origin: 'human', createdAt: 1 })
   assert.equal(typeof res.body.nextCursor, 'string')
 })
 
-test('GET /:id?limit/cursor 透传 kernel.getConversationDetail；非法值 400', { timeout: 60_000 }, async () => {
+test('GET /:id?limit/cursor pass-through kernel.getConversationDetail; illegal value 400', { timeout: 60_000 }, async () => {
   detailFixture = detailOf()
   const { handler } = makeHandlers()
   const ok = await call(handler, 'GET', `/api/conversations/${ROOT_CONVERSATION_ID}?limit=10&cursor=${encodeURIComponent('{"a":1}')}`)
@@ -732,7 +732,7 @@ test('GET /:id?limit/cursor 透传 kernel.getConversationDetail；非法值 400'
   assert.equal(emptyCursor.status, 400)
 })
 
-test('GET /:id 会话不存在 404；多余段 404', { timeout: 60_000 }, async () => {
+test('GET /:id conversation missing 404; redundant segment 404', { timeout: 60_000 }, async () => {
   detailFixture = undefined
   const { handler } = makeHandlers()
   const missing = await call(handler, 'GET', '/api/conversations/999')
@@ -741,7 +741,7 @@ test('GET /:id 会话不存在 404；多余段 404', { timeout: 60_000 }, async 
   assert.equal(extra.status, 404)
 })
 
-test('GET /:id/entries/:entryId 单条条目端点：透传/404/400/多余段', { timeout: 60_000 }, async () => {
+test('GET /:id/entries/:entryId single item end point: pass-through/404/400/redundant segment', { timeout: 60_000 }, async () => {
   entryFixture = {
     id: '7',
     kind: 'pi.tool-result',
@@ -757,7 +757,7 @@ test('GET /:id/entries/:entryId 单条条目端点：透传/404/400/多余段', 
 
   const missingConv = await call(handler, 'GET', '/api/conversations/999/entries/7')
   assert.equal(missingConv.status, 404)
-  entryFixture = undefined // 会话存在但条目缺失：404
+  entryFixture = undefined // conversation store in but item missing:404
   const missingEntry = await call(handler, 'GET', `/api/conversations/${ROOT_CONVERSATION_ID}/entries/8`)
   assert.equal(missingEntry.status, 404)
   assert.equal(missingEntry.body.error.code, 'not_found')
@@ -773,7 +773,7 @@ test('GET /:id/entries/:entryId 单条条目端点：透传/404/400/多余段', 
   assert.equal(wrongMethod.status, 404)
 })
 
-test('JSON 响应 gzip：阈值/协商/Vary 合并/Content-Length/解压一致', { timeout: 60_000 }, async () => {
+test('JSON response gzip: threshold/negotiate/Vary merge/Content-Length/decompress consistent', { timeout: 60_000 }, async () => {
   detailFixture = detailOf({
     entries: [
       {
@@ -784,7 +784,7 @@ test('JSON 响应 gzip：阈值/协商/Vary 合并/Content-Length/解压一致',
     ],
   })
   const { handler } = makeHandlers()
-  // 带 Origin + Accept-Encoding: gzip：压缩 + Vary 合并（Origin 与 Accept-Encoding 并存）
+  // carries Origin + Accept-Encoding: gzip: compress + Vary merge (Origin and Accept-Encoding and store)
   const direct = new Request(`http://127.0.0.1:3202/api/conversations/${ROOT_CONVERSATION_ID}?limit=50`, {
     headers: { authorization: `Bearer ${token}`, 'accept-encoding': 'gzip, br', origin: 'http://x' },
   })
@@ -800,7 +800,7 @@ test('JSON 响应 gzip：阈值/协商/Vary 合并/Content-Length/解压一致',
   const parsed = JSON.parse(decompressed)
   assert.equal(parsed.entries[0].model[0].content[0].text, 'y'.repeat(8192))
 
-  // 小响应（<1KiB）不压缩但仍合并 Vary；body 完整可读（clone 未消费原 body）
+  // small response (<1KiB) do not compress but still merge Vary;body complete can read (clone unconsumed original body)
   const smallReq = new Request('http://127.0.0.1:3202/api/conversations', {
     headers: { authorization: `Bearer ${token}`, 'accept-encoding': 'gzip' },
   })
@@ -808,16 +808,16 @@ test('JSON 响应 gzip：阈值/协商/Vary 合并/Content-Length/解压一致',
   assert.equal(small.headers.get('content-encoding'), null)
   assert.ok(
     (small.headers.get('vary') ?? '').toLowerCase().split(',').map((t) => t.trim()).includes('accept-encoding'),
-    'identity 小响应也要带 Vary: Accept-Encoding',
+    'identity small response also want carries Vary: Accept-Encoding',
   )
   const smallBody = await small.text()
-  assert.ok(Array.isArray(JSON.parse(smallBody)), 'identity 响应 body 未被 clone 消费')
+  assert.ok(Array.isArray(JSON.parse(smallBody)), 'identity response body not by clone consume')
 
-  // 客户端不接受 gzip：identity
+  // client do not accept gzip:identity
   const identity = await call(handler, 'GET', `/api/conversations/${ROOT_CONVERSATION_ID}?limit=50`)
   assert.equal(identity.headers.get('content-encoding'), null)
 
-  // q=0 视为拒绝
+  // q=0 treated as reject
   const q0 = new Request(`http://127.0.0.1:3202/api/conversations/${ROOT_CONVERSATION_ID}?limit=50`, {
     headers: { authorization: `Bearer ${token}`, 'accept-encoding': 'gzip;q=0, br' },
   })
@@ -825,16 +825,16 @@ test('JSON 响应 gzip：阈值/协商/Vary 合并/Content-Length/解压一致',
   assert.equal(q0res.headers.get('content-encoding'), null)
   await q0res.text()
 
-  // SSE 不压缩（text/event-stream）
+  // SSE do not compress (text/event-stream)
   const sseReq = new Request('http://127.0.0.1:3202/api/events', {
     headers: { authorization: `Bearer ${token}`, 'accept-encoding': 'gzip' },
   })
   const sse = await handler(sseReq)
   assert.equal(sse.headers.get('content-type'), 'text/event-stream')
   assert.equal(sse.headers.get('content-encoding'), null)
-  await sse.body?.cancel() // mock SSE 流保持打开：读全文会悬挂，直接 cancel
+  await sse.body?.cancel() // mock SSE stream keep open: read all text will pending, directly cancel
 
-  // HEAD 不压缩
+  // HEAD do not compress
   const headReq = new Request(`http://127.0.0.1:3202/api/conversations/${ROOT_CONVERSATION_ID}`, {
     method: 'HEAD',
     headers: { authorization: `Bearer ${token}`, 'accept-encoding': 'gzip' },
@@ -844,7 +844,7 @@ test('JSON 响应 gzip：阈值/协商/Vary 合并/Content-Length/解压一致',
   await head.text()
 })
 
-test('POST /:id/input 校验 origin/whenBusy 枚举并透传 kernel.submitInput', { timeout: 60_000 }, async () => {
+test('POST /:id/input validate origin/whenBusy enumeration and pass-through kernel.submitInput', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const ok = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/input`, {
     body: { text: '你好', origin: 'human', whenBusy: 'followUp' },
@@ -863,7 +863,7 @@ test('POST /:id/input 校验 origin/whenBusy 枚举并透传 kernel.submitInput'
   assert.equal(badWhenBusy.status, 400)
 })
 
-test('POST input meta：纯 JSON 对象透传 opts.meta；数组/标量/未知字段 400', { timeout: 60_000 }, async () => {
+test('POST input meta: pure JSON object pass-through opts.meta; array/mark amount/unknown field 400', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const ok = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/input`, {
     body: { text: 'x', meta: { source: 'cron', extra: { nested: [1, 2] } } },
@@ -886,12 +886,12 @@ test('POST input meta：纯 JSON 对象透传 opts.meta；数组/标量/未知�
   assert.equal(unknown.body.error.code, 'validation_error')
 })
 
-test('POST input?wait=1 调用 waitForInput 并返回 ConversationInputResult；非法 wait 400', { timeout: 60_000 }, async () => {
+test('POST input?wait=1 invoke waitForInput and return ConversationInputResult; illegal wait 400', { timeout: 60_000 }, async () => {
   waitForInputResult = {
     conversationId: ROOT_CONVERSATION_ID,
     submissionId: 'sub-1',
     text: '你好',
-    entry: { id: 'e9', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '答' }] }] },
+    entry: { id: 'e9', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'answer' }] }] },
   }
   const { handler } = makeHandlers()
   const res = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/input?wait=1`, {
@@ -908,8 +908,8 @@ test('POST input?wait=1 调用 waitForInput 并返回 ConversationInputResult；
   })
   assert.equal(bad.status, 400)
 
-  // wait 中 kernel 抛 HelmError（aborted 等）→ 错误信封如实透传
-  waitForInputError = new HelmError('input_unanswered', '输入未获回答（aborted）', 409, { reason: 'aborted' })
+  // wait in kernel throw HelmError(aborted etc.)→ error message seal such as pass-through
+  waitForInputError = new HelmError('input_unanswered', 'input not obtain answer (aborted)', 409, { reason: 'aborted' })
   const failed = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/input?wait=1`, {
     body: { text: 'x' },
   })
@@ -919,34 +919,34 @@ test('POST input?wait=1 调用 waitForInput 并返回 ConversationInputResult；
   waitForInputResult = undefined
 })
 
-test('POST /:id/input replaceFromEntryId 校验与透传；缺省时 opts 形状不变', { timeout: 60_000 }, async () => {
+test('POST /:id/input replaceFromEntryId validate and pass-through; default when opts shape do not change', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const ok = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/input`, {
-    body: { text: '覆盖重发', replaceFromEntryId: 5 },
+    body: { text: 'override heavy', replaceFromEntryId: 5 },
   })
   assert.equal(ok.status, 202)
   assert.deepEqual(submitted.at(-1)?.opts, { replaceFromEntryId: 5 })
-  // 缺省：不携带 replaceFromEntryId 键（opts 形状与既有契约一致）。
+  // default: does not carry replaceFromEntryId key (opts shape and since has contract consistent).
   const plain = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/input`, {
-    body: { text: '普通提交' },
+    body: { text: 'ordinary commit' },
   })
   assert.equal(plain.status, 202)
   assert.equal(
     submitted.at(-1)?.opts && 'replaceFromEntryId' in (submitted.at(-1)!.opts as object),
     false,
-    '缺省时 opts 不应携带 replaceFromEntryId 键',
+    'default when opts must not carry replaceFromEntryId key',
   )
-  // 非法值：0、负数、小数、非安全整数均 400。
+  // illegal value:0, negative number, decimal, non- security integer all 400.
   for (const bad of [0, -3, 1.5, Number.MAX_SAFE_INTEGER + 1, '5']) {
     const res = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/input`, {
       body: { text: 'x', replaceFromEntryId: bad },
     })
-    assert.equal(res.status, 400, `replaceFromEntryId=${String(bad)} 应 400`)
+    assert.equal(res.status, 400, `replaceFromEntryId=${String(bad)} should 400`)
     assert.equal(res.body.error.code, 'validation_error')
   }
 })
 
-test('POST /:id/withdraw 校验 submissionId 并调用 withdrawQueuedInput', { timeout: 60_000 }, async () => {
+test('POST /:id/withdraw validate submissionId and invoke withdrawQueuedInput', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const ok = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/withdraw`, {
     body: { submissionId: 42 },
@@ -954,7 +954,7 @@ test('POST /:id/withdraw 校验 submissionId 并调用 withdrawQueuedInput', { t
   assert.equal(ok.status, 200)
   assert.deepEqual(ok.body, { status: 'withdrawn' })
   assert.deepEqual(withdrawn.at(-1), { id: ROOT_CONVERSATION_ID, submissionId: 42 })
-  // 非法 body：缺字段 / 0 / 小数 / 未知字段。
+  // illegal body: missing field / 0 / decimal / unknown field.
   const missing = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/withdraw`, { body: {} })
   assert.equal(missing.status, 400)
   const zero = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/withdraw`, {
@@ -969,17 +969,17 @@ test('POST /:id/withdraw 校验 submissionId 并调用 withdrawQueuedInput', { t
     body: { submissionId: 1, extra: true },
   })
   assert.equal(unknown.status, 400)
-  // 不存在会话 404（mock 抛 not_found）。
+  // missing conversation 404(mock throw not_found).
   const nf = await call(handler, 'POST', '/api/conversations/88888/withdraw', { body: { submissionId: 1 } })
   assert.equal(nf.status, 404)
-  // 多余段 404。
+  // redundant segment 404.
   const extra = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/withdraw/x`, {
     body: { submissionId: 1 },
   })
   assert.equal(extra.status, 404)
 })
 
-test('POST /:id/abort 调用 abortConversation', { timeout: 60_000 }, async () => {
+test('POST /:id/abort invoke abortConversation', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const res = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/abort`)
   assert.equal(res.status, 200)
@@ -987,27 +987,27 @@ test('POST /:id/abort 调用 abortConversation', { timeout: 60_000 }, async () =
 })
 
 // ---------------------------------------------------------------------------
-// 路径段解码
+// path segment decode
 // ---------------------------------------------------------------------------
 
-test('编码 pluginId 正确解码：builtin%3Atriggers 等价 builtin:triggers', { timeout: 60_000 }, async () => {
+test('encode pluginId correct decode:builtin%3Atriggers etc. price builtin:triggers', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const encoded = await call(handler, 'GET', '/api/plugins/builtin%3Atriggers/config')
   assert.equal(encoded.status, 200)
   const plain = await call(handler, 'GET', '/api/plugins/builtin:triggers/config')
   assert.equal(plain.status, 200)
-  // 编码段与明文段返回一致内容
+  // encode segment and plaintext segment return consistent content
   assert.deepEqual(encoded.body, plain.body)
 })
 
-test('非法百分号编码 400 invalid_path_encoding', { timeout: 60_000 }, async () => {
+test('illegal hundred number encode 400 invalid_path_encoding', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const res = await call(handler, 'GET', '/api/plugins/builtin%3Aassistant%zz/config')
   assert.equal(res.status, 400)
   assert.equal(res.body.error.code, 'invalid_path_encoding')
 })
 
-test('多余路径段 404：不落入操作分支（auth/status/foo、workflows abort/extra 等）', { timeout: 60_000 }, async () => {
+test('redundant path segment 404: do not operation branch (auth/status/foo,workflows abort/extra etc.)', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const statusFoo = await call(handler, 'GET', '/api/auth/status/foo')
   assert.equal(statusFoo.status, 404)
@@ -1019,10 +1019,10 @@ test('多余路径段 404：不落入操作分支（auth/status/foo、workflows 
   assert.equal(artifactsExtra.status, 404)
 })
 
-test('编码 slash（%2F）不重新分段：解码后仍是一个段', { timeout: 60_000 }, async () => {
+test('encode slash(%2F) do not re- segment: decode after still is a segment', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
-  // %2F 解码后是段内容的一部分（'a/b'），不会重新切分路由；该值不是
-  // 合法 profileId，按单段参数校验拒绝 400。
+  // %2F decode after is segment content one part ('a/b'), will not re- cut routing; the value is not
+  // legal profileId, by single segment parameter validate reject 400.
   const res = await call(handler, 'GET', '/api/profiles/a%2Fb')
   assert.equal(res.status, 400)
   assert.equal(res.body.error.code, 'validation_error')
@@ -1032,7 +1032,7 @@ test('编码 slash（%2F）不重新分段：解码后仍是一个段', { timeou
 // SSE
 // ---------------------------------------------------------------------------
 
-test('SSE 首帧 snapshot + 增量事件 + 断开取消订阅（无遗留 listener）', { timeout: 60_000 }, async () => {
+test('SSE first frame snapshot + incremental event + disconnect cancel subscribe (without legacy listener)', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const controller = new AbortController()
   const request = new Request('http://127.0.0.1:3202/api/events', {
@@ -1049,7 +1049,7 @@ test('SSE 首帧 snapshot + 增量事件 + 断开取消订阅（无遗留 listen
   assert.ok(firstText.includes('event: snapshot'))
   assert.ok(firstText.includes('"conversations"'))
   assert.ok(hub0.listenerCount() >= 1)
-  hub0.publish('conversation.upsert', { type: 'conversation.upsert', conversation: summary(9, '事件会话') })
+  hub0.publish('conversation.upsert', { type: 'conversation.upsert', conversation: summary(9, 'event conversation') })
   const second = await reader.read()
   assert.ok(decoder.decode(second.value).includes('conversation.upsert'))
   const before = hub0.listenerCount()
@@ -1058,7 +1058,7 @@ test('SSE 首帧 snapshot + 增量事件 + 断开取消订阅（无遗留 listen
   assert.equal(hub0.listenerCount(), before - 1)
 })
 
-test('SSE 未认证 401', { timeout: 60_000 }, async () => {
+test('SSE unauthenticated 401', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const request = new Request('http://127.0.0.1:3202/api/events')
   const response = await handler(request)
@@ -1069,34 +1069,34 @@ test('SSE 未认证 401', { timeout: 60_000 }, async () => {
 // Profiles / Providers / Credentials / Skills / Models
 // ---------------------------------------------------------------------------
 
-test('profiles CRUD（真实 ProfileService + system 在线读写；memory 契约已删）', { timeout: 60_000 }, async () => {
+test('profiles CRUD(real ProfileService + system online read write;memory contract already delete)', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const created = await call(handler, 'POST', '/api/profiles', {
     body: {
       id: 'researcher',
-      name: '研究员',
+      name: 'research member',
       runtime: { kind: 'herdr', agent: 'agy' },
-      system: '# 研究员系统提示词\n保持严谨。',
+      system: '# research member system prompt\nkeep severe careful.',
     },
   })
   assert.equal(created.status, 201)
   assert.equal(created.body.id, 'researcher')
-  assert.equal(created.body.system, '# 研究员系统提示词\n保持严谨。')
-  assert.equal(created.body.memory, undefined, 'Profile 契约不再含 memory 字段')
+  assert.equal(created.body.system, '# research member system prompt\nkeep severe careful.')
+  assert.equal(created.body.memory, undefined, 'Profile contract no longer contains memory field')
   const list = await call(handler, 'GET', '/api/profiles')
   assert.ok(list.body.some((p: any) => p.id === 'researcher'))
   const put = await call(handler, 'PUT', '/api/profiles/researcher', {
-    body: { name: '资深研究员', system: '# 资深研究员提示词\n升级版。' },
+    body: { name: 'resource deep research member', system: '# resource deep research member prompt\nupgrade edition.' },
   })
   assert.equal(put.status, 200)
-  assert.equal(put.body.name, '资深研究员')
-  assert.equal(put.body.system, '# 资深研究员提示词\n升级版。')
+  assert.equal(put.body.name, 'resource deep research member')
+  assert.equal(put.body.system, '# resource deep research member prompt\nupgrade edition.')
   const got = await call(handler, 'GET', '/api/profiles/researcher')
   assert.equal(got.status, 200)
-  assert.equal(got.body.system, '# 资深研究员提示词\n升级版。')
-  // 旧 memory 字段请求被边界拒绝（不做兼容读取）
+  assert.equal(got.body.system, '# resource deep research member prompt\nupgrade edition.')
+  // old memory field request by boundary reject (does not compatibility read)
   const rejected = await call(handler, 'PUT', '/api/profiles/researcher', {
-    body: { memory: '# 旧记忆' },
+    body: { memory: '# old memory' },
   })
   assert.equal(rejected.status, 400)
   assert.match(String(rejected.body?.error?.message ?? ''), /memory/)
@@ -1106,9 +1106,9 @@ test('profiles CRUD（真实 ProfileService + system 在线读写；memory 契�
   assert.equal(gone.status, 404)
 })
 
-test('profiles 详情读取失败显式报错，不返回可覆盖原文件的空白正文', { timeout: 60_000 }, async () => {
+test('profiles detail situation failed to read explicit errors, do not return can override original file whitespace body text', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
-  await profiles.save({ id: 'missing-system', name: '缺失正文' })
+  await profiles.save({ id: 'missing-system', name: 'missing body text' })
   await rm(join(dataDir, 'profiles', 'missing-system', 'SYSTEM.md'))
   const result = await call(handler, 'GET', '/api/profiles/missing-system')
   assert.equal(result.status, 404)
@@ -1116,102 +1116,102 @@ test('profiles 详情读取失败显式报错，不返回可覆盖原文件的�
   assert.equal(result.body.system, undefined)
 })
 
-test('profiles POST/PUT 绑定禁用模型在落盘前拒绝（409 model_disabled），未提供端口时不阻塞', { timeout: 60_000 }, async () => {
-  // 基座 kernel 未提供 assertModelEnabled 端口：保存不阻塞（可选端口语义）。
+test('profiles POST/PUT bind set disable model in before reject (409 model_disabled), not provide port when non-blocking', { timeout: 60_000 }, async () => {
+  // base seat kernel not provide assertModelEnabled port: save non-blocking (optional port semantics).
   {
     const { handler } = makeHandlers()
     const created = await call(handler, 'POST', '/api/profiles', {
-      body: { id: 'no-port-profile', name: '无端口', model: 'faux/model' },
+      body: { id: 'no-port-profile', name: 'without port', model: 'faux/model' },
     })
     assert.equal(created.status, 201)
   }
-  // 提供端口：POST 与 PUT 绑定禁用模型均 409，且不落盘。
+  // provide port:POST and PUT bind set disable model all 409, and do not.
   const kernel = makeKernel()
   kernel.assertModelEnabled = (provider, modelId) => {
     if (provider === 'faux' && modelId === 'disabled-model') {
-      throw new HelmError('model_disabled', `模型 ${provider}/${modelId} 已被禁用`, 409)
+      throw new HelmError('model_disabled', `model ${provider}/${modelId} already by disable`, 409)
     }
   }
   const handler = createHubHandler(kernel)
   const rejected = await call(handler, 'POST', '/api/profiles', {
-    body: { id: 'disabled-bind', name: '绑定禁用模型', model: 'faux/disabled-model' },
+    body: { id: 'disabled-bind', name: 'bind set disable model', model: 'faux/disabled-model' },
   })
   assert.equal(rejected.status, 409)
   assert.equal(rejected.body.error.code, 'model_disabled')
-  assert.equal(await profiles.get('disabled-bind'), undefined, 'POST 拒绝后不得落盘')
+  assert.equal(await profiles.get('disabled-bind'), undefined, 'POST reject after must not')
 
-  // PUT 同规：既有 profile 改绑禁用模型拒绝。
-  await profiles.save({ id: 'put-target', name: '既有角色' })
+  // PUT same rule: since has profile change bind disable model reject.
+  await profiles.save({ id: 'put-target', name: 'since has role' })
   const putRejected = await call(handler, 'PUT', '/api/profiles/put-target', {
-    body: { name: '改绑禁用模型', model: 'faux/disabled-model' },
+    body: { name: 'change bind disable model', model: 'faux/disabled-model' },
   })
   assert.equal(putRejected.status, 409)
   assert.equal(putRejected.body.error.code, 'model_disabled')
-  assert.equal((await profiles.get('put-target'))?.model, undefined, 'PUT 拒绝后原值不变')
+  assert.equal((await profiles.get('put-target'))?.model, undefined, 'PUT reject after original value do not change')
 
-  // 合法模型仍可正常保存；清除（缺 model 字段）不触发预检。
+  // legal model still can normal save; clear (missing model field) does not trigger preflight.
   const ok = await call(handler, 'PUT', '/api/profiles/put-target', {
-    body: { name: '改绑可用模型', model: 'faux/model' },
+    body: { name: 'change bind available model', model: 'faux/model' },
   })
   assert.equal(ok.status, 200)
   assert.equal(ok.body.model, 'faux/model')
 })
 
-test('profiles DELETE 仍被会话绑定返回 409 profile_in_use', { timeout: 60_000 }, async () => {
+test('profiles DELETE still by conversation bind set return 409 profile_in_use', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   await call(handler, 'POST', '/api/profiles', {
-    body: { id: 'bound-profile', name: '绑定中', runtime: { kind: 'herdr', agent: 'agy' } },
+    body: { id: 'bound-profile', name: 'bind set in', runtime: { kind: 'herdr', agent: 'agy' } },
   })
   const created = await call(handler, 'POST', '/api/conversations', {
-    body: { title: '绑定会话', profileId: 'bound-profile' },
+    body: { title: 'bind set conversation', profileId: 'bound-profile' },
   })
   assert.equal(created.status, 201)
   assert.equal(created.body.profileId, 'bound-profile')
   const rejected = await call(handler, 'DELETE', '/api/profiles/bound-profile')
   assert.equal(rejected.status, 409)
   assert.equal(rejected.body.error.code, 'profile_in_use')
-  // 解绑后可删
+  // solve bind after can delete
   await call(handler, 'PATCH', `/api/conversations/${created.body.id}`, { body: { profileId: 'assistant' } })
-  // 模拟会话面 PATCH 不改 profileId，直接改内存以验证删除路径
+  // simulated conversation side PATCH do not change profileId, directly change memory with verify delete path
   const conv = conversations.get(created.body.id)!
   conv.profileId = 'assistant'
   const ok = await call(handler, 'DELETE', '/api/profiles/bound-profile')
   assert.equal(ok.status, 200)
 })
 
-test('profiles skills 白名单 HTTP roundtrip：创建/更新/读回三态，非法 id 与未知字段拒绝', { timeout: 60_000 }, async () => {
+test('profiles skills blank name single HTTP roundtrip: create/update/read back three state, illegal id and unknown field reject', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
-  // 创建：白名单去重 + 允许暂缺 id（运行时可后装）
+  // create: blank name single dedupe + allows temporary missing id(runtime can after install)
   const created = await call(handler, 'POST', '/api/profiles', {
-    body: { id: 'skills-profile', name: '技能白名单', skills: ['helm-cli', 'future-skill', 'helm-cli'] },
+    body: { id: 'skills-profile', name: 'skill blank name single', skills: ['helm-cli', 'future-skill', 'helm-cli'] },
   })
   assert.equal(created.status, 201)
-  assert.deepEqual(created.body.skills, ['helm-cli', 'future-skill'], '重复项去重后返回')
+  assert.deepEqual(created.body.skills, ['helm-cli', 'future-skill'], 'duplicate items dedupe after return')
 
-  // PUT 更新为空数组（禁用全部）——整体替换契约，非缺省
+  // PUT update is empty array (disable all) - - whole replace contract, non- default
   const put = await call(handler, 'PUT', '/api/profiles/skills-profile', {
-    body: { name: '技能白名单', skills: [] },
+    body: { name: 'skill blank name single', skills: [] },
   })
   assert.equal(put.status, 200)
-  assert.deepEqual(put.body.skills, [], '空数组必须透传持久化')
+  assert.deepEqual(put.body.skills, [], 'empty array must pass-through persist')
   const onDisk = JSON.parse(
     await readFile(join(dataDir, 'profiles', 'skills-profile', 'profile.json'), 'utf8'),
   ) as { skills?: string[] }
-  assert.deepEqual(onDisk.skills, [], 'HTTP 写入路径落盘保留空数组')
+  assert.deepEqual(onDisk.skills, [], 'HTTP write path keep empty array')
 
-  // PUT 不带 skills（整体替换语义：回到缺省全部可用）
+  // PUT do not carries skills(whole replace semantics: back to default all available)
   const put2 = await call(handler, 'PUT', '/api/profiles/skills-profile', {
-    body: { name: '技能白名单' },
+    body: { name: 'skill blank name single' },
   })
   assert.equal(put2.status, 200)
-  assert.equal(put2.body.skills, undefined, 'PUT 省略 skills 回到缺省（不写键）')
+  assert.equal(put2.body.skills, undefined, 'PUT omit skills back to default (do not write key)')
 
-  // GET 读回服务层真实状态
+  // GET read back service layer real state
   const got = await call(handler, 'GET', '/api/profiles/skills-profile')
   assert.equal(got.status, 200)
   assert.equal(got.body.skills, undefined)
 
-  // 非法 skill id（路径注入形态）拒绝，不产生部分写入
+  // illegal skill id(path inject form) reject, produces no part write
   const bad = await call(handler, 'POST', '/api/profiles', {
     body: { id: 'bad-skills', skills: ['../profiles/assistant'] },
   })
@@ -1221,64 +1221,64 @@ test('profiles skills 白名单 HTTP roundtrip：创建/更新/读回三态，�
     body: { skills: 'helm-cli' },
   })
   assert.equal(bad2.status, 400)
-  // 上述拒绝不改变已保存状态（仍是缺省）
+  // on state reject does not change already save state (still is default)
   const after = await call(handler, 'GET', '/api/profiles/skills-profile')
   assert.equal(after.body.skills, undefined)
 })
 
-test('profiles 托管保护：managedByPlugin 拒绝删除与篡改，POST 不可伪造托管身份', { timeout: 60_000 }, async () => {
+test('profiles hosting protect:managedByPlugin reject delete and tamper,POST cannot fabricate hosting identity', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
-  // 可信插件自举资产直写（不经 HTTP）：ProfileService.save 带 managedByPlugin
+  // can message plugin self raise asset direct write (do not via HTTP):ProfileService.save carries managedByPlugin
   await profiles.save({
     id: 'hub-managed',
-    name: '受管中枢',
+    name: 'managed router hub',
     managedByPlugin: 'builtin:superagent',
     humanSelectable: false,
   })
-  // DELETE：托管 Profile 403（无会话绑定占用，纯粹四托管保护）
+  // DELETE: hosting Profile 403(without conversation bind set occupy, purely four hosting protect)
   const del = await call(handler, 'DELETE', '/api/profiles/hub-managed')
   assert.equal(del.status, 403)
   assert.equal(del.body.error.code, 'profile_managed_by_plugin')
 
-  // PUT 移除 managedByPlugin（整体替换契约下缺失即移除）：403
+  // PUT remove managedByPlugin(whole replace contract under missing i.e. remove):403
   const putStrip = await call(handler, 'PUT', '/api/profiles/hub-managed', {
-    body: { name: '改名' },
+    body: { name: 'change name' },
   })
   assert.equal(putStrip.status, 403)
   assert.equal(putStrip.body.error.code, 'profile_managed_by_plugin')
 
-  // PUT 改写为其他插件：403
+  // PUT change write is other plugin:403
   const putFake = await call(handler, 'PUT', '/api/profiles/hub-managed', {
-    body: { name: '改名', managedByPlugin: 'builtin:other' },
+    body: { name: 'change name', managedByPlugin: 'builtin:other' },
   })
   assert.equal(putFake.status, 403)
 
-  // PUT 原样携带相同值：合法（保留其余字段编辑能力）
+  // PUT original carry identical value: legal (keep the rest field edit capability)
   const putKeep = await call(handler, 'PUT', '/api/profiles/hub-managed', {
-    body: { name: '受管中枢改名', managedByPlugin: 'builtin:superagent', humanSelectable: false },
+    body: { name: 'managed router hub change name', managedByPlugin: 'builtin:superagent', humanSelectable: false },
   })
   assert.equal(putKeep.status, 200)
-  assert.equal(putKeep.body.name, '受管中枢改名')
+  assert.equal(putKeep.body.name, 'managed router hub change name')
   assert.equal(putKeep.body.managedByPlugin, 'builtin:superagent')
 
-  // POST 创建带 managedByPlugin：403（托管身份仅可信插件自举可声明）
+  // POST create carries managedByPlugin:403(hosting identity only can message plugin self raise can declaration)
   const post = await call(handler, 'POST', '/api/profiles', {
-    body: { id: 'fake-managed', name: '伪造托管', managedByPlugin: 'builtin:superagent' },
+    body: { id: 'fake-managed', name: 'fabricate hosting', managedByPlugin: 'builtin:superagent' },
   })
   assert.equal(post.status, 403)
   assert.equal(post.body.error.code, 'profile_managed_by_plugin')
 
   const overwrite = await call(handler, 'POST', '/api/profiles', {
-    body: { id: 'hub-managed', name: '覆盖并移除托管' },
+    body: { id: 'hub-managed', name: 'override and remove hosting' },
   })
-  assert.equal(overwrite.status, 403, 'POST 不得绕过 PUT 的托管保护')
+  assert.equal(overwrite.status, 403, 'POST must not bypass PUT hosting protect')
   assert.equal((await profiles.get('hub-managed'))?.managedByPlugin, 'builtin:superagent')
 
-  await profiles.save({ id: 'ordinary', name: '普通配置' })
+  await profiles.save({ id: 'ordinary', name: 'ordinary config' })
   const inject = await call(handler, 'PUT', '/api/profiles/ordinary', {
-    body: { name: '伪造受管配置', managedByPlugin: 'builtin:superagent' },
+    body: { name: 'fabricate managed config', managedByPlugin: 'builtin:superagent' },
   })
-  assert.equal(inject.status, 403, 'PUT 不得给普通配置伪造托管身份')
+  assert.equal(inject.status, 403, 'PUT must not to ordinary config fabricate hosting identity')
   assert.equal((await profiles.get('ordinary'))?.managedByPlugin, undefined)
 
   for (const invalid of [{ managedByPlugin: '' }, { managedByPlugin: '  ' }, { managedByPlugin: 42 }, { humanSelectable: 'false' }]) {
@@ -1288,12 +1288,12 @@ test('profiles 托管保护：managedByPlugin 拒绝删除与篡改，POST 不�
   }
 })
 
-test('profiles runtime nodeId/workspace/env：合法保存回读；非法形状 400', { timeout: 60_000 }, async () => {
+test('profiles runtime nodeId/workspace/env: legal save back read; illegal shape 400', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const ok = await call(handler, 'POST', '/api/profiles', {
     body: {
       id: 'ops-runner',
-      name: '运维',
+      name: 'transport dimension',
       runtime: {
         kind: 'herdr',
         agent: 'pi',
@@ -1314,30 +1314,30 @@ test('profiles runtime nodeId/workspace/env：合法保存回读；非法形状 
   })
 
   const cases: Array<{ runtime: unknown; why: string }> = [
-    { runtime: { kind: 'herdr', agent: 'pi', nodeId: '' }, why: 'nodeId 空串' },
-    { runtime: { kind: 'herdr', agent: 'pi', workspace: '' }, why: 'workspace 空串' },
-    { runtime: { kind: 'herdr', agent: 'pi', env: { K: 1 } }, why: 'env 值非字符串' },
-    { runtime: { kind: 'herdr', agent: 'pi', env: { '': 'v' } }, why: 'env 键空串' },
-    { runtime: { kind: 'herdr', agent: 'pi', env: ['a'] }, why: 'env 数组' },
-    { runtime: { kind: 'herdr', agent: 'pi', bogus: 1 }, why: 'runtime 未知键' },
-    { runtime: { kind: 'herdr', agent: 'pi', nodeId: 42 }, why: 'nodeId 非字符串' },
+    { runtime: { kind: 'herdr', agent: 'pi', nodeId: '' }, why: 'nodeId empty string' },
+    { runtime: { kind: 'herdr', agent: 'pi', workspace: '' }, why: 'workspace empty string' },
+    { runtime: { kind: 'herdr', agent: 'pi', env: { K: 1 } }, why: 'env value non- string' },
+    { runtime: { kind: 'herdr', agent: 'pi', env: { '': 'v' } }, why: 'env key empty string' },
+    { runtime: { kind: 'herdr', agent: 'pi', env: ['a'] }, why: 'env array' },
+    { runtime: { kind: 'herdr', agent: 'pi', bogus: 1 }, why: 'runtime unknown key' },
+    { runtime: { kind: 'herdr', agent: 'pi', nodeId: 42 }, why: 'nodeId non- string' },
   ]
   for (const c of cases) {
     const res = await call(handler, 'POST', '/api/profiles', { body: { id: 'bad-profile', runtime: c.runtime } })
-    assert.equal(res.status, 400, `${c.why} 应 400`)
+    assert.equal(res.status, 400, `${c.why} should 400`)
     assert.equal(res.body.error.code, 'validation_error', c.why)
   }
 })
 
-test('profiles DELETE 默认 assistant 受保护（被根会话绑定或内核默认保护，不可经 HTTP 删除）', { timeout: 60_000 }, async () => {
+test('profiles DELETE by default assistant subject to protect (by conversation bind set or kernel by default protect, cannot via HTTP delete)', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const del = await call(handler, 'DELETE', '/api/profiles/assistant')
-  // fixture 未建根会话时命中内核 DEFAULT_PROFILE_ID 保护（403）；
-  // 已建根会话时命中会话绑定保护（409）——两者均为拒绝，绝不允许 200。
-  assert.ok(del.status === 403 || del.status === 409, `assistant 删除应被拒绝（实际 ${del.status}）`)
+  // fixture not create conversation when hit kernel DEFAULT_PROFILE_ID protect (403);
+  // already create conversation when hit conversation bind set protect (409) - - two all is reject, never allows 200.
+  assert.ok(del.status === 403 || del.status === 409, `assistant delete should by reject (actual ${del.status})`)
 })
 
-test('providers PUT 接受完整原始数组（CLI 约定）与 { providers } 包裹', { timeout: 60_000 }, async () => {
+test('providers PUT accept complete original array (CLI convention) and { providers } package wrap', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const array = [
     { id: 'groq', protocol: 'openai', baseUrl: 'https://api.groq.com/v1', models: ['llama-3.3-70b'], enabled: true },
@@ -1349,17 +1349,17 @@ test('providers PUT 接受完整原始数组（CLI 约定）与 { providers } �
   assert.equal(list1.body[0].id, 'groq')
   const putWrapped = await call(handler, 'PUT', '/api/providers', { body: { providers: array } })
   assert.equal(putWrapped.status, 200)
-  // 原始数组内的非法项同样 400（不因形态放宽）
+  // original array inside illegal items same 400(do not because form put wide)
   const bad = await call(handler, 'PUT', '/api/providers', {
     body: [{ id: 'x', protocol: 'grpc', baseUrl: 'ftp://x', models: [], enabled: true }],
   })
   assert.equal(bad.status, 400)
-  // 非数组非对象 400
+  // non- array non- object 400
   const notObj = await call(handler, 'PUT', '/api/providers', { body: 'nope' })
   assert.equal(notObj.status, 400)
 })
 
-test('credentials 仅 id/configured 键，绝无明文；PUT/DELETE 生效', { timeout: 60_000 }, async () => {
+test('credentials only id/configured key, absolute without plaintext;PUT/DELETE takes effect', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const put = await call(handler, 'PUT', '/api/credentials/groq', { body: { value: 'sk-super-secret' } })
   assert.equal(put.status, 200)
@@ -1373,12 +1373,12 @@ test('credentials 仅 id/configured 键，绝无明文；PUT/DELETE 生效', { t
   assert.deepEqual(list2.body, [])
 })
 
-test('skills list + read {text}；path traversal 拒绝', { timeout: 60_000 }, async () => {
+test('skills list + read {text};path traversal reject', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const skillDir = join(dataDir, 'skills', 'demo-skill')
   await mkdir(join(skillDir, 'references'), { recursive: true })
-  await writeFile(join(skillDir, 'SKILL.md'), '---\nname: demo\ndescription: 演示\n---\n# Demo\n')
-  await writeFile(join(skillDir, 'references', 'guide.md'), '# Guide\n内容')
+  await writeFile(join(skillDir, 'SKILL.md'), '---\nname: demo\ndescription: demo\n---\n# Demo\n')
+  await writeFile(join(skillDir, 'references', 'guide.md'), '# Guide\ncontent')
   const list = await call(handler, 'GET', '/api/skills')
   assert.ok(Array.isArray(list.body))
   assert.ok(list.body.some((s: any) => s.id === 'demo-skill'))
@@ -1394,7 +1394,7 @@ test('skills list + read {text}；path traversal 拒绝', { timeout: 60_000 }, a
   assert.equal(traversal.body.error.code, 'path_traversal')
 })
 
-test('models/providers 返回公开供应商元数据；路径不匹配不误入目录', { timeout: 60_000 }, async () => {
+test('models/providers return public provider metadata; path does not match do not mistakenly directory', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const res = await call(handler, 'GET', '/api/models/providers')
   assert.equal(res.status, 200)
@@ -1402,7 +1402,7 @@ test('models/providers 返回公开供应商元数据；路径不匹配不误入
   assert.equal((await call(handler, 'GET', '/api/models/providers/extra')).status, 404)
 })
 
-test('默认配置部分更新保留未提供的模型字段并拒绝空/非法 body', { timeout: 60_000 }, async () => {
+test('by default config part update keep not provide model field and reject empty/illegal body', { timeout: 60_000 }, async () => {
   const calls: Array<[string | undefined, string | undefined]> = []
   const kernel = makeKernel()
   kernel.setDefaultModel = async (model, level) => { calls.push([model, level]) }
@@ -1418,15 +1418,15 @@ test('默认配置部分更新保留未提供的模型字段并拒绝空/非法 
   assert.equal(calls.length, 2)
 })
 
-test('models 返回目录对象（models 数组 + thinkingLevels）', { timeout: 60_000 }, async () => {
+test('models return directory object (models array + thinkingLevels)', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const res = await call(handler, 'GET', '/api/models')
   assert.equal(res.status, 200)
   assert.ok(Array.isArray(res.body.models))
 })
 
-test('POST /api/models/refresh：空/{} 全量、provider/providers/force 透传；非法字段 400；未实现 501', { timeout: 60_000 }, async () => {
-  // 1) mock 提供实现：空 body / {} / 单选 / 多选 + force 透传。
+test('POST /api/models/refresh: empty/{} all amount,provider/providers/force pass-through; illegal field 400; not implemented 501', { timeout: 60_000 }, async () => {
+  // 1) mock provide implement: empty body / {} / single choose / many choose + force pass-through.
   const calls: Array<{ providers?: string[]; force?: boolean } | undefined> = []
   const refreshResult = {
     providers: [],
@@ -1471,7 +1471,7 @@ test('POST /api/models/refresh：空/{} 全量、provider/providers/force 透传
   const badJson = await call(handler, 'POST', '/api/models/refresh', { raw: '{oops' })
   assert.equal(badJson.status, 400)
 
-  // 2) mock 不提供实现：501 not_implemented。
+  // 2) mock do not provide implement:501 not_implemented.
   const bare = makeHandlers(makeKernelWithRefresh())
   const notImpl = await call(bare.handler, 'POST', '/api/models/refresh', { body: {} })
   assert.equal(notImpl.status, 501)
@@ -1479,13 +1479,13 @@ test('POST /api/models/refresh：空/{} 全量、provider/providers/force 透传
 })
 
 // ---------------------------------------------------------------------------
-// Artifacts（安全边界 + 真实字节）
+// Artifacts(security boundary + real byte)
 // ---------------------------------------------------------------------------
 
-test('artifacts 列表 + content 真实 content-type/disposition/字节；未知 404', { timeout: 60_000 }, async () => {
+test('artifacts list + content real content-type/disposition/byte; unknown 404', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const source = join(dataDir, 'note.md')
-  await writeFile(source, '# 产物\n内容')
+  await writeFile(source, '# artifact\ncontent')
   const meta = await artifacts.register(ROOT_CONVERSATION_ID, source, { name: 'note.md' })
   const list = await call(handler, 'GET', `/api/conversations/${ROOT_CONVERSATION_ID}/artifacts`)
   assert.equal(list.status, 200)
@@ -1494,12 +1494,12 @@ test('artifacts 列表 + content 真实 content-type/disposition/字节；未知
   assert.equal(content.status, 200)
   assert.equal(content.headers.get('content-type'), 'text/markdown')
   assert.equal(content.headers.get('content-disposition'), 'inline; filename="note.md"; filename*=UTF-8\'\'note.md')
-  assert.ok(content.text.includes('# 产物'))
+  assert.ok(content.text.includes('# artifact'))
   const missing = await call(handler, 'GET', '/api/artifacts/no-such-id/content')
   assert.equal(missing.status, 404)
 })
 
-test('中文产物文件名使用 UTF-8 disposition，预览与下载不因响应头编码报 500', { timeout: 60_000 }, async () => {
+test('Chinese artifact filename use UTF-8 disposition, preview and download do not because response head encode report 500', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const metadata = await artifacts.writeUploaded(1, { name: '验收说明.md', mimeType: 'text/markdown', bytes: new TextEncoder().encode('# 中文文件') })
   for (const suffix of ['', '?inline=1']) {
@@ -1510,9 +1510,9 @@ test('中文产物文件名使用 UTF-8 disposition，预览与下载不因响�
   }
 })
 
-test('artifacts 二进制按字节原样返回（不转字符串）', { timeout: 60_000 }, async () => {
+test('artifacts two enter system by byte original return (do not rotate string)', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
-  // 8 个 0xFF 字节：UTF-8 解码会损坏
+  // 8  0xFF byte:UTF-8 decode will corrupt
   const source = join(dataDir, 'blob.bin')
   const raw = new Uint8Array([0xff, 0xfe, 0x00, 0x81, 0xff, 0xfe, 0x00, 0x81])
   await writeFile(source, raw)
@@ -1520,7 +1520,7 @@ test('artifacts 二进制按字节原样返回（不转字符串）', { timeout:
   const res = await call(handler, 'GET', `/api/artifacts/${meta.id}/content`)
   assert.equal(res.status, 200)
   assert.equal(res.headers.get('content-length'), '8')
-  // 直接请求原始字节（不经 call() 的 text/JSON 解析路径）
+  // directly request original byte (do not via call()  text/JSON parse path)
   const direct = await handler(new Request(`http://127.0.0.1:3202/api/artifacts/${meta.id}/content`, {
     headers: { authorization: `Bearer ${token}` },
   }))
@@ -1528,7 +1528,7 @@ test('artifacts 二进制按字节原样返回（不转字符串）', { timeout:
   assert.deepEqual([...bytes], [...raw])
 })
 
-test('artifacts 伪造 metadata（path=credentials.json）不得泄密', { timeout: 60_000 }, async () => {
+test('artifacts fabricate metadata(path=credentials.json) must not leak', { timeout: 60_000 }, async () => {
   const evilRepo = new InMemoryArtifactRepository()
   const evilArtifacts = new ArtifactService(dataDir, evilRepo, stash)
   await writeFile(join(dataDir, 'credentials.json'), JSON.stringify({ providers: { x: { value: 'leak-me' } } }), { mode: 0o600 })
@@ -1552,7 +1552,7 @@ test('artifacts 伪造 metadata（path=credentials.json）不得泄密', { timeo
   assert.ok(!res.text.includes('leak-me'))
 })
 
-test('artifacts 伪 metadata（artifacts/<convId>/../../escape）拒绝', { timeout: 60_000 }, async () => {
+test('artifacts fake metadata(artifacts/<convId>/../../escape) reject', { timeout: 60_000 }, async () => {
   const evilRepo = new InMemoryArtifactRepository()
   const evilArtifacts = new ArtifactService(dataDir, evilRepo, stash)
   const secretFile = join(dataDir, 'escape-secret.txt')
@@ -1577,7 +1577,7 @@ test('artifacts 伪 metadata（artifacts/<convId>/../../escape）拒绝', { time
   assert.ok(!res.text.includes('TOP-SECRET'))
 })
 
-test('artifacts 符号链接越界拒绝（文件名段软链逃逸）', { timeout: 60_000 }, async () => {
+test('artifacts symlink out of bounds reject (filename segment symlink escape)', { timeout: 60_000 }, async () => {
   const evilRepo = new InMemoryArtifactRepository()
   const evilArtifacts = new ArtifactService(dataDir, evilRepo, stash)
   const secretFile = join(dataDir, 'symlink-secret.txt')
@@ -1605,13 +1605,13 @@ test('artifacts 符号链接越界拒绝（文件名段软链逃逸）', { timeo
   assert.ok(!res.text.includes('SYMLINK-SECRET'))
 })
 
-test('artifacts 会话目录软链逃逸拒绝', { timeout: 60_000 }, async () => {
+test('artifacts conversation directory symlink escape reject', { timeout: 60_000 }, async () => {
   const evilRepo = new InMemoryArtifactRepository()
   const evilArtifacts = new ArtifactService(dataDir, evilRepo, stash)
   const outsideDir = join(dataDir, 'outside')
   await mkdir(outsideDir, { recursive: true })
   await writeFile(join(outsideDir, 'loot.txt'), 'CONV-SYMLINK-SECRET')
-  // artifacts/777777 本身是指向界外目录的软链（攻击者预置）
+  // artifacts/777777 itself is points to boundary outside directory symlink (attack pre- placement)
   const artifactsRoot = join(dataDir, 'artifacts')
   await mkdir(artifactsRoot, { recursive: true })
   const convLink = join(artifactsRoot, '777777')
@@ -1637,7 +1637,7 @@ test('artifacts 会话目录软链逃逸拒绝', { timeout: 60_000 }, async () =
   assert.ok(!res.text.includes('CONV-SYMLINK-SECRET'))
 })
 
-test('artifacts 非法或缺失 kind 元数据门禁拒绝（500 artifact_metadata_illegal）', { timeout: 60_000 }, async () => {
+test('artifacts illegal or missing kind metadata gate reject (500 artifact_metadata_illegal)', { timeout: 60_000 }, async () => {
   const evilRepo = new InMemoryArtifactRepository()
   const evilArtifacts = new ArtifactService(dataDir, evilRepo, stash)
   const valid = await evilArtifacts.writeUploaded(ROOT_CONVERSATION_ID, {
@@ -1667,7 +1667,7 @@ test('artifacts 非法或缺失 kind 元数据门禁拒绝（500 artifact_metada
   }
 })
 
-test('artifacts 读权限错误不伪称 missing（非 ENOENT 原样 500）', { timeout: 60_000 }, async () => {
+test('artifacts read permission error do not fake call missing(non- ENOENT original 500)', { timeout: 60_000 }, async () => {
   const repo = new InMemoryArtifactRepository()
   const artifactsNoPerm = new ArtifactService(dataDir, repo, stash)
   const source = join(dataDir, 'perm.md')
@@ -1679,7 +1679,7 @@ test('artifacts 读权限错误不伪称 missing（非 ENOENT 原样 500）', { 
   ;(kernel as { artifacts: ArtifactService }).artifacts = artifactsNoPerm
   const handler = createHubHandler(kernel)
   const res = await call(handler, 'GET', `/api/artifacts/${meta.id}/content`)
-  // 进程是 root 时 chmod 000 仍可读：此时应成功返回内容（如实反映可读性）
+  // process is root when chmod 000 still can read: now should succeeded return content (such as reverse reflect can read)
   if (process.getuid?.() === 0) {
     assert.equal(res.status, 200)
   } else {
@@ -1694,7 +1694,7 @@ test('artifacts 读权限错误不伪称 missing（非 ENOENT 原样 500）', { 
 // Search / Workflows
 // ---------------------------------------------------------------------------
 
-test('search?q= 透传；空 q 400', { timeout: 60_000 }, async () => {
+test('search?q= pass-through; empty q 400', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const res = await call(handler, 'GET', '/api/search?q=hello')
   assert.equal(res.status, 200)
@@ -1703,7 +1703,7 @@ test('search?q= 透传；空 q 400', { timeout: 60_000 }, async () => {
   assert.equal(empty.status, 400)
 })
 
-test('workflows / worktrees 硬编码路由已删除：一律 404（编排经插件动作 /api/actions）', { timeout: 60_000 }, async () => {
+test('workflows / worktrees hard encode routing deleted: one rule 404(orchestration via plugin action /api/actions)', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const list = await call(handler, 'GET', '/api/workflows')
   assert.equal(list.status, 404)
@@ -1716,67 +1716,67 @@ test('workflows / worktrees 硬编码路由已删除：一律 404（编排经插
 })
 
 // ---------------------------------------------------------------------------
-// Plugins（真实 PluginHost）/ Actions
+// Plugins(real PluginHost)/ Actions
 // ---------------------------------------------------------------------------
 
-test('真实 PluginHost 路由：public webhook 豁免鉴权；非 public 需 token；handler 收到原始 URL', { timeout: 60_000 }, async () => {
+test('real PluginHost routing:public webhook exemption authentication; non- public must token;handler receives original URL', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   publicHandlerCalls = []
-  // public 豁免（无 token 直达）
+  // public exemption (without token direct reach)
   const pub = await call(handler, 'POST', '/api/plugins/builtin:triggers/routes/webhook/hook-1', { auth: false, body: {} })
   assert.equal(pub.status, 200)
-  // handler 收到的 URL 保持完整原始路径（含 : 与参数段），未被改写
+  // handler receives URL keep complete original path (contains : and parameter segment), not by change write
   assert.equal(pub.body.got, '/api/plugins/builtin:triggers/routes/webhook/hook-1')
   assert.equal(publicHandlerCalls.length, 1)
   assert.equal(new URL(publicHandlerCalls[0]!.url).pathname, '/api/plugins/builtin:triggers/routes/webhook/hook-1')
-  // 插件原始路由可接收非 JSON 正文；验签策略由插件声明。
+  // plugin original routing can receive non- JSON body text; signature verification policy by plugin declaration.
   const raw = await handler(new Request('http://localhost/api/plugins/builtin:triggers/routes/webhook/hook-raw', {
     method: 'POST', headers: { 'content-type': 'text/plain' }, body: 'raw webhook example',
   }))
   assert.equal(raw.status, 200)
-  // 非 public 未认证 401
+  // non- public unauthenticated 401
   const noAuth = await call(handler, 'GET', '/api/plugins/builtin:triggers/routes/status', { auth: false })
   assert.equal(noAuth.status, 401)
   assert.equal(privateHandlerCalls.length, 0)
-  // 认证后可访问
+  // recognize verify after can access
   const ok = await call(handler, 'GET', '/api/plugins/builtin:triggers/routes/status')
   assert.equal(ok.status, 200)
   assert.deepEqual(ok.body, { ok: true })
-  // 不存在的插件路由 404
+  // missing plugin routing 404
   const missing = await call(handler, 'GET', '/api/plugins/builtin:triggers/routes/nothing')
   assert.equal(missing.status, 404)
-  // 参数段不匹配（多一段）：未认证先撞鉴权门 401；带 token 后如实 404
+  // parameter segment does not match (many one segment): unauthenticated first collide authentication gate 401; carries token after such as 404
   const extraNoAuth = await call(handler, 'POST', '/api/plugins/builtin:triggers/routes/webhook/hook-1/extra', { auth: false, body: {} })
   assert.equal(extraNoAuth.status, 401)
   const extra = await call(handler, 'POST', '/api/plugins/builtin:triggers/routes/webhook/hook-1/extra', { body: {} })
   assert.equal(extra.status, 404)
 })
 
-test('真实 PluginHost 路由：编码 pluginId 也能命中（完整路径匹配器两处一致）', { timeout: 60_000 }, async () => {
+test('real PluginHost routing: encode pluginId also can hit (complete path match two where consistent)', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const pub = await call(handler, 'POST', '/api/plugins/builtin%3Atriggers/routes/webhook/hook-2', { auth: false, body: {} })
   assert.equal(pub.status, 200)
   assert.equal(pub.body.got, '/api/plugins/builtin%3Atriggers/routes/webhook/hook-2')
 })
 
-test('plugins list；config PUT 保持 { values } 包裹', { timeout: 60_000 }, async () => {
+test('plugins list;config PUT keep { values } package wrap', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const list = await call(handler, 'GET', '/api/plugins')
   assert.equal(list.status, 200)
   assert.ok(Array.isArray(list.body))
   assert.ok(list.body.some((p: any) => p.id === 'builtin:triggers'))
-  // setConfig 在无持久化 PluginConfigStore 时显式 501 config_store_unavailable
-  //（诚实不支持，不伪造写入成功；真实 kernel 装配 store 后即为 200）。
+  // setConfig in without persist PluginConfigStore when explicit 501 config_store_unavailable
+  //(honest unsupported, do not fabricate write succeeded; real kernel install match store after i.e. is 200).
   const set = await call(handler, 'PUT', '/api/plugins/builtin:triggers/config', { body: { values: { retries: 3 } } })
   assert.ok(set.status === 200 || set.status === 501, `unexpected ${set.status}`)
   if (set.status === 501) assert.equal(set.body.error.code, 'config_store_unavailable')
-  // 非 { values } 包裹形态 400（边界校验先行）
+  // non- { values } package wrap form 400(boundary validate first row)
   const badShape = await call(handler, 'PUT', '/api/plugins/builtin:triggers/config', { body: { retries: 3 } })
   assert.equal(badShape.status, 400)
   assert.equal(badShape.body.error.code, 'validation_error')
 })
 
-test('GET /api/plugins/:id/docs/:name 返回 {pluginId,name,value}；私有/未声明/停用/未知 404', { timeout: 60_000 }, async () => {
+test('GET /api/plugins/:id/docs/:name return {pluginId,name,value}; private/not declaration/deactivate/unknown 404', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const ok = await call(handler, 'GET', '/api/plugins/builtin:statusboard/docs/board')
   assert.equal(ok.status, 200)
@@ -1791,33 +1791,33 @@ test('GET /api/plugins/:id/docs/:name 返回 {pluginId,name,value}；私有/未�
   const unknownPlugin = await call(handler, 'GET', '/api/plugins/builtin:ghost/docs/board')
   assert.equal(unknownPlugin.status, 404)
 
-  // 鉴权不能绕过：无 token 401
+  // authentication cannot bypass: without token 401
   const noAuth = await call(handler, 'GET', '/api/plugins/builtin:statusboard/docs/board', { auth: false })
   assert.equal(noAuth.status, 401)
 
-  // 非法 doc name（以点开头）400；合法形状但未声明 404；多余段 404
+  // illegal doc name(with point open head)400; legal shape but not declaration 404; redundant segment 404
   const badName = await call(handler, 'GET', '/api/plugins/builtin:statusboard/docs/.hidden')
   assert.equal(badName.status, 400)
   const extra = await call(handler, 'GET', '/api/plugins/builtin:statusboard/docs/board/extra')
   assert.equal(extra.status, 404)
 })
 
-test('真实 action：invoke 200；null 原样返回不伪造成功对象', { timeout: 60_000 }, async () => {
-  // 追加一个返回 null 的动作（null 是合法输出）
+test('real action:invoke 200;null original return do not fabricate succeeded object', { timeout: 60_000 }, async () => {
+  // append a return null action (null is legal output)
   await pluginHost.register({
     id: 'builtin:nullish',
     name: 'nullish',
     async definePlugin(ctx: HelmPluginContext) {
       ctx.action({
         id: 'get-null',
-        description: '返回 null',
+        description: 'return null',
         inputSchema: { type: 'object' },
         outputSchema: { type: 'null' },
         handler: () => null,
       })
       ctx.action({
         id: 'get-undefined',
-        description: '返回 undefined（违约输出）',
+        description: 'return undefined(violate about output)',
         inputSchema: { type: 'object' },
         outputSchema: { type: 'object' },
         handler: () => undefined,
@@ -1827,28 +1827,28 @@ test('真实 action：invoke 200；null 原样返回不伪造成功对象', { ti
   const { handler } = makeHandlers()
   const invoked = await call(handler, 'POST', '/api/actions/builtin:nullish/get-null', { body: { input: {} } })
   assert.equal(invoked.status, 200)
-  // 原样 null：响应体是 "null"，绝不伪造成 {ok:true}
+  // original null: response body is "null", never fabricate into {ok:true}
   assert.deepEqual(invoked.body, null)
   assert.equal(invoked.text, 'null')
   const undef = await call(handler, 'POST', '/api/actions/builtin:nullish/get-undefined', { body: { input: {} } })
   assert.equal(undef.status, 500)
   assert.ok(['invalid_output', 'invalid_plugin_output'].includes(undef.body.error.code))
   assert.notEqual(undef.text, '{"ok":true}')
-  // 真实 echo action 正常
+  // real echo action normal
   const echo = await call(handler, 'POST', '/api/actions/builtin:triggers/echo', { body: { input: { text: 'hi' } } })
   assert.equal(echo.status, 200)
   assert.deepEqual(echo.body, { echoed: 'hi' })
 })
 
 // ---------------------------------------------------------------------------
-// 出站 JSON stash 脱敏
+// out station JSON stash redaction
 // ---------------------------------------------------------------------------
 
-test('出站 JSON 递归脱敏：含引号/换行的 secret 也不泄漏，marker 不还原', { timeout: 60_000 }, async () => {
+test('out station JSON recursion redaction: contains quotes/newline secret also without leaking,marker do not restore', { timeout: 60_000 }, async () => {
   const kernel = makeKernel()
   const trickySecret = 'sk-"quoted"\nline-break\ttab'
   const placeholder = stash.put(ROOT_CONVERSATION_ID, 'TRICKY_KEY', trickySecret)
-  // search 返回含 secret 明文与 marker 的嵌套结构
+  // search return contains secret plaintext and marker embed set structure
   ;(kernel as { search: (q: string) => Promise<unknown[]> }).search = async () => [
     { conversationId: 1, snippet: `prefix ${trickySecret} middle [marker]${placeholder} end` },
     { nested: { list: [trickySecret, { deep: trickySecret }] } },
@@ -1858,17 +1858,17 @@ test('出站 JSON 递归脱敏：含引号/换行的 secret 也不泄漏，marke
   assert.equal(res.status, 200)
   assert.ok(!res.text.includes('sk-"quoted"'))
   assert.ok(!res.text.includes('line-break\\ttab'.replace('\\\\', '\\')))
-  // marker 保持脱敏形态（不还原为明文）
+  // marker keep redaction form (do not restore is plaintext)
   assert.ok(res.text.includes(placeholder))
   assert.ok(res.text.includes('[REDACTED:stash:'))
 })
 
-test('error.details 同样脱敏', { timeout: 60_000 }, async () => {
+test('error.details same redaction', { timeout: 60_000 }, async () => {
   const kernel = makeKernel()
   const secret = 'err-detail-secret-123'
   stash.put(ROOT_CONVERSATION_ID, 'ERR_KEY', secret)
   ;(kernel as { search: (q: string) => Promise<unknown[]> }).search = async () => {
-    throw new HelmError('search_failed', '搜索失败', 500, { trace: secret })
+    throw new HelmError('search_failed', 'search failed', 500, { trace: secret })
   }
   const handler = createHubHandler(kernel)
   const res = await call(handler, 'GET', '/api/search?q=x')
@@ -1877,17 +1877,17 @@ test('error.details 同样脱敏', { timeout: 60_000 }, async () => {
 })
 
 // ---------------------------------------------------------------------------
-// 请求体边界
+// request body boundary
 // ---------------------------------------------------------------------------
 
-test('非法 JSON 400 invalid_json', { timeout: 60_000 }, async () => {
+test('illegal JSON 400 invalid_json', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const res = await call(handler, 'POST', '/api/auth/login', { auth: false, raw: '{not-json' })
   assert.equal(res.status, 400)
   assert.equal(res.body.error.code, 'invalid_json')
 })
 
-test('body 超 1MiB 413 body_too_large', { timeout: 60_000 }, async () => {
+test('body over 1MiB 413 body_too_large', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const big = 'x'.repeat(1024 * 1024 + 100)
   const res = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/input`, {
@@ -1897,7 +1897,7 @@ test('body 超 1MiB 413 body_too_large', { timeout: 60_000 }, async () => {
   assert.equal(res.body.error.code, 'body_too_large')
 })
 
-test('未知路由 404；未知方法 405', { timeout: 60_000 }, async () => {
+test('unknown routing 404; unknown method 405', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const nf = await call(handler, 'GET', '/api/no-such-thing')
   assert.equal(nf.status, 404)
@@ -1906,14 +1906,14 @@ test('未知路由 404；未知方法 405', { timeout: 60_000 }, async () => {
   assert.equal(mna.status, 405)
 })
 
-test('非 /api 前缀 404（显式 webDistDir:false 的纯 API 行为；默认静态托管由 static-web.test.ts 覆盖）', { timeout: 60_000 }, async () => {
+test('non- /api prefix 404(explicit webDistDir:false pure API behavior; by default static hosting by static-web.test.ts override)', { timeout: 60_000 }, async () => {
   const kernel = makeKernel()
   const handler = createHubHandler({ kernel, webDistDir: false })
   const res = await call(handler, 'GET', '/favicon.ico')
   assert.equal(res.status, 404)
 })
 
-test('FileNotFoundError 映射 404 而非 500', { timeout: 60_000 }, async () => {
+test('FileNotFoundError mapping 404 while non- 500', { timeout: 60_000 }, async () => {
   const kernel = makeKernel()
   ;(kernel as { plugins: unknown }).plugins = {
     ...(pluginHost as unknown as object),
@@ -1927,10 +1927,10 @@ test('FileNotFoundError 映射 404 而非 500', { timeout: 60_000 }, async () =>
 })
 
 // ---------------------------------------------------------------------------
-// startHub：真实 node 监听 + 关停
+// startHub: real node listen + closure stop
 // ---------------------------------------------------------------------------
 
-test('startHub port:0 监听 127.0.0.1，真实 HTTP 往返，close 迅速完成且 SSE 无遗留', { timeout: 60_000 }, async () => {
+test('startHub port:0 listen 127.0.0.1, real HTTP to return,close rapid complete and SSE without legacy', { timeout: 60_000 }, async () => {
   const kernel = makeKernel()
   const handle = await startHub({ kernel, port: 0 })
   try {
@@ -1953,7 +1953,7 @@ test('startHub port:0 监听 127.0.0.1，真实 HTTP 往返，close 迅速完成
     const start = Date.now()
     await handle.close()
     const elapsed = Date.now() - start
-    assert.ok(elapsed < 5_000, `close 应迅速完成，实际 ${elapsed}ms`)
+    assert.ok(elapsed < 5_000, `close should rapid complete, actual ${elapsed}ms`)
     await new Promise((r) => setTimeout(r, 50))
     assert.equal(hub0.listenerCount(), listenersBefore - 1)
   } finally {
@@ -1961,7 +1961,7 @@ test('startHub port:0 监听 127.0.0.1，真实 HTTP 往返，close 迅速完成
   }
 })
 
-test('startHub 真实往返：编码 pluginId 经 node 服务器命中 action', { timeout: 60_000 }, async () => {
+test('startHub real to return: encode pluginId via node server hit action', { timeout: 60_000 }, async () => {
   const kernel = makeKernel()
   const handle = await startHub({ kernel, port: 0 })
   try {
@@ -1977,27 +1977,27 @@ test('startHub 真实往返：编码 pluginId 经 node 服务器命中 action', 
   }
 })
 
-test('startHub(port:0) 监听后 kernel.setHubUrl 收到真实 URL', { timeout: 60_000 }, async () => {
+test('startHub(port:0) listen after kernel.setHubUrl receives real URL', { timeout: 60_000 }, async () => {
   const kernel = makeKernel()
   setHubUrlCalls.length = 0
   const handle = await startHub({ kernel, port: 0 })
   try {
     assert.equal(setHubUrlCalls.length, 1)
     assert.equal(setHubUrlCalls[0], handle.url)
-    // 真实往返仍通
+    // real to return still through
     const res = await fetch(`${handle.url}/api/conversations`, { headers: { authorization: `Bearer ${token}` } })
     assert.equal(res.status, 200)
   } finally {
     await handle.close()
   }
-  // 不提供 setHubUrl 的 kernel 也不报错
+  // do not provide setHubUrl  kernel also do not errors
   const bare = makeKernel()
   delete (bare as { setHubUrl?: unknown }).setHubUrl
   const handle2 = await startHub({ kernel: bare, port: 0 })
   await handle2.close()
 })
 
-test('CORS：任意来源均反射并带凭据头', { timeout: 60_000 }, async () => {
+test('CORS: any source all reflection and carries credentials head', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const allowed = await handler(
     new Request('http://127.0.0.1:3202/api/conversations', {

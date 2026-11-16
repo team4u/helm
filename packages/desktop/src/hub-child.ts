@@ -1,9 +1,9 @@
 import { pathToFileURL } from 'node:url';
 
 const entry = process.argv[2];
-if (entry === undefined) throw new Error('缺少 Hub 子进程入口');
+if (entry === undefined) throw new Error('missing Hub child process entry');
 process.argv = [process.execPath, entry, ...process.argv.slice(3)];
-// Windows 没有可供 Node 处理的 SIGTERM；IPC 让各平台走同一关闭入口。
+// Windows no can supply Node handle SIGTERM;IPC let each platform away the same close entry.
 process.on('message', (message: unknown) => {
   if (typeof message !== 'object' || message === null || !('type' in message) || message.type !== 'shutdown') return;
   process.disconnect?.();

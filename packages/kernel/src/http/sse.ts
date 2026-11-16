@@ -1,6 +1,6 @@
 /**
- * SSE 编码：text/event-stream 帧写入（event: + data:），一次性 flush。
- * 保持流式无缓冲语义：每帧独立 encode + enqueue，不整流攒批。
+ * SSE encode:text/event-stream frame write (event: + data:), once flush.
+ * keep streaming without buffer semantics: each frame independent encode + enqueue, do not whole stream accumulate batch.
  */
 
 export interface SseSink {
@@ -19,7 +19,7 @@ export function openSse(controller: ReadableStreamDefaultController<Uint8Array>)
       try {
         controller.close()
       } catch {
-        // 已关闭：幂等。
+        // already close: idempotent.
       }
     },
   }

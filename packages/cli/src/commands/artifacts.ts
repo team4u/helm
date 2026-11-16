@@ -1,4 +1,4 @@
-/** 产物域：artifacts list / put / get。 */
+/** artifact domain:artifacts list / put / get. */
 import type { ArtifactMetadata } from '@helm/protocol'
 import path from 'node:path'
 import { CliError } from '../errors.js'
@@ -7,11 +7,11 @@ import type { CommandContext, CommandSpec } from './shared.js'
 import { printPlainText, printResult, requirePositional, resolveConversationTarget } from './shared.js'
 import { printValue } from '../output.js'
 
-const convFlags = [{ name: 'current', type: 'boolean', help: '使用 env HELM_CONVERSATION_ID' }] as const
+const convFlags = [{ name: 'current', type: 'boolean', help: 'use env HELM_CONVERSATION_ID' }] as const
 
 /**
- * 按调用方（CLI 进程）cwd 把本地路径解析为绝对路径：绝不按 HELM_CWD 静默切换，
- * 也不做全盘查找。目录差异本身是合法 cd，仅作为诊断附注返回。
+ * by caller (CLI process)cwd local path parse is absolute path: never by HELM_CWD static default switch,
+ * also does not all find. directory difference itself is legal cd, only as diagnose attach note return.
  */
 function resolveCallerPath(ctx: CommandContext, requested: string): { resolvedPath: string; sessionCwd?: string } {
   const resolvedPath = path.resolve(ctx.cwd, requested)
@@ -23,7 +23,7 @@ function resolveCallerPath(ctx: CommandContext, requested: string): { resolvedPa
   return { resolvedPath, sessionCwd }
 }
 
-/** 路径诊断结构化 details（--json 信封供脚本消费）。 */
+/** path diagnose structure details(--json message seal supply script consume). */
 function pathDetails(requested: string, resolvedPath: string, ctx: CommandContext, sessionCwd?: string): Record<string, string> {
   return {
     requestedPath: requested,
@@ -33,11 +33,11 @@ function pathDetails(requested: string, resolvedPath: string, ctx: CommandContex
   }
 }
 
-/** 人类可读多行诊断（含可选会话 cwd 附注）。 */
+/** person class can read many row diagnose (contains optional conversation cwd attach note). */
 function pathDiagLines(requested: string, resolvedPath: string, ctx: CommandContext, sessionCwd?: string): string {
   const hint =
-    sessionCwd !== undefined ? `\n  会话 cwd（HELM_CWD）=${sessionCwd}（目录差异属合法 cd；相对路径仍按 CLI cwd 解析）` : ''
-  return `\n  请求路径=${requested}\n  绝对路径=${resolvedPath}\n  CLI cwd=${ctx.cwd}${hint}`
+    sessionCwd !== undefined ? `\n  conversation cwd(HELM_CWD)=${sessionCwd}(directory difference belong legal cd; relative path still by CLI cwd parse)` : ''
+  return `\n  request path=${requested}\n  absolute path=${resolvedPath}\n  CLI cwd=${ctx.cwd}${hint}`
 }
 
 export function artifactsCommands(): CommandSpec[] {
@@ -45,7 +45,7 @@ export function artifactsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['artifacts', 'list'],
-    description: '列出会话产物（GET /api/conversations/:id/artifacts）',
+    description: 'column out conversation artifact (GET /api/conversations/:id/artifacts)',
     flags: [...convFlags],
     positional: '[id]',
     async run(ctx: CommandContext) {
@@ -58,11 +58,11 @@ export function artifactsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['artifacts', 'put'],
-    description: '上传本地文件为会话产物（POST /api/conversations/:id/artifacts）',
+    description: 'upload local file is conversation artifact (POST /api/conversations/:id/artifacts)',
     flags: [
       ...convFlags,
-      { name: 'name', type: 'string', help: '自定义产物名（缺省用本地文件名）' },
-      { name: 'mime-type', type: 'string', help: '显式 MIME 类型' },
+      { name: 'name', type: 'string', help: 'self define artifact name (default use local filename)' },
+      { name: 'mime-type', type: 'string', help: 'explicit MIME type' },
     ],
     positional: '<filePath> [id]',
     async run(ctx: CommandContext) {
@@ -77,7 +77,7 @@ export function artifactsCommands(): CommandSpec[] {
       const filePath = requirePositional(parsed.positionals, 0, 'filePath', 'missing_file_path')
       const id = resolveConversationTarget(parsed.flags, parsed.positionals[1], ctx.env)
       if (parsed.positionals.length > 2) {
-        throw new CliError(`多余位置参数：${parsed.positionals.slice(2).join(' ')}`, 'unexpected_positional')
+        throw new CliError(`redundant location parameter:${parsed.positionals.slice(2).join(' ')}`, 'unexpected_positional')
       }
       const fsp = await import('node:fs/promises')
       const { resolvedPath, sessionCwd } = resolveCallerPath(ctx, filePath)
@@ -86,7 +86,7 @@ export function artifactsCommands(): CommandSpec[] {
         const st = await fsp.stat(resolvedPath)
         if (!st.isFile()) {
           throw new CliError(
-            `上传源不是常规文件（目录/设备）${pathDiagLines(filePath, resolvedPath, ctx, sessionCwd)}`,
+            `upload source is not common rule file (directory/device)${pathDiagLines(filePath, resolvedPath, ctx, sessionCwd)}`,
             'read_failed',
             1,
             pathDetails(filePath, resolvedPath, ctx, sessionCwd),
@@ -97,7 +97,7 @@ export function artifactsCommands(): CommandSpec[] {
       } catch (err) {
         if (err instanceof CliError) throw err
         throw new CliError(
-          `读取上传文件失败（${err instanceof Error ? err.message : String(err)}）${pathDiagLines(filePath, resolvedPath, ctx, sessionCwd)}`,
+          `read upload file failed (${err instanceof Error ? err.message : String(err)})${pathDiagLines(filePath, resolvedPath, ctx, sessionCwd)}`,
           'read_failed',
           1,
           pathDetails(filePath, resolvedPath, ctx, sessionCwd),
@@ -116,8 +116,8 @@ export function artifactsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['artifacts', 'get'],
-    description: '读取产物内容（GET /api/artifacts/:id/content；文本直出，二进制需 --output）',
-    flags: [{ name: 'output', type: 'string', help: '二进制落盘路径（按 CLI 调用方 cwd 解析为绝对路径）' }],
+    description: 'read artifact content (GET /api/artifacts/:id/content; text direct out, two enter system must --output)',
+    flags: [{ name: 'output', type: 'string', help: 'two enter system path (by CLI caller cwd parse is absolute path)' }],
     positional: '<id>',
     async run(ctx: CommandContext) {
       const parsed = parseFlags([{ name: 'output', type: 'string' }], ctx.args)
@@ -130,13 +130,13 @@ export function artifactsCommands(): CommandSpec[] {
       if (output !== undefined) {
         const fsp = await import('node:fs/promises')
         const { resolvedPath, sessionCwd } = resolveCallerPath(ctx, output)
-        // 完整接收后才写文件，传输失败不能被误报为写盘失败或覆盖已有交付文件。
+        // complete receive after only then write file, transfer failed cannot by mistakenly report is write failed or override already has deliver file.
         let buffer: Buffer
         try {
           buffer = Buffer.from(await response.arrayBuffer())
         } catch (err) {
           throw new CliError(
-            `下载产物内容失败（${err instanceof Error ? err.message : String(err)}）${pathDiagLines(output, resolvedPath, ctx, sessionCwd)}`,
+            `download artifact content failed (${err instanceof Error ? err.message : String(err)})${pathDiagLines(output, resolvedPath, ctx, sessionCwd)}`,
             'download_failed',
             1,
             pathDetails(output, resolvedPath, ctx, sessionCwd),
@@ -146,18 +146,18 @@ export function artifactsCommands(): CommandSpec[] {
           await fsp.writeFile(resolvedPath, buffer)
         } catch (err) {
           throw new CliError(
-            `写入产物落盘文件失败（${err instanceof Error ? err.message : String(err)}）${pathDiagLines(output, resolvedPath, ctx, sessionCwd)}`,
+            `write artifact file failed (${err instanceof Error ? err.message : String(err)})${pathDiagLines(output, resolvedPath, ctx, sessionCwd)}`,
             'write_failed',
             1,
             pathDetails(output, resolvedPath, ctx, sessionCwd),
           )
         }
         if (ctx.json) printValue(ctx.io, { written: resolvedPath, bytes: buffer.byteLength }, true)
-        else ctx.io.out(`已写入 ${resolvedPath}（${buffer.byteLength} 字节）\n`)
+        else ctx.io.out(`already write ${resolvedPath}(${buffer.byteLength} byte)\n`)
         return
       }
       if (!isText) {
-        throw new CliError(`产物为二进制（${contentType || '未知类型'}）：使用 --output <path> 落盘`, 'binary_content_requires_output')
+        throw new CliError(`artifact is two enter system (${contentType || 'unknown type'}): use --output <path> `, 'binary_content_requires_output')
       }
       const text = await response.text()
       if (ctx.json) printValue(ctx.io, text, true)

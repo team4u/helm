@@ -1,8 +1,8 @@
 /**
- * hook 桥：SDK GenerationTask/ToolTask 钩子 -> helm 7 类生命周期 hook 管道。
+ * hook bridge:SDK GenerationTask/ToolTask hook -> helm 7 class lifecycle hook pipeline.
  *
- * 从 runtime.ts 拆出。tool_call/tool_result/before_turn 在此接到 PluginHost
- * 的 runHook；turn_settled 的兑底清理（handled 接管残留）由宿主经回调注入。
+ * from runtime.ts split out.tool_call/tool_result/before_turn in this connect to PluginHost
+ *  runHook;turn_settled honor bottom clean up (handled take over leftover) by host via call back inject.
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Message } from '@earendil-works/pi-ai'
@@ -50,7 +50,7 @@ export type HookDecision =
   | { action: 'handled'; result?: unknown }
   | { action: 'block'; reason: string }
 
-/** tool_call handled 接管缓存条目（execute 层包装器消费；归属会话用于兑底清理）。 */
+/** tool_call handled take over cache item (execute layer wrap consume; ownership conversation used to honor bottom clean up). */
 export interface HandledToolCallEntry {
   conversationId: number | undefined
   result: { output: Array<{ type: 'text'; text: string }>; isError: boolean }
@@ -58,17 +58,17 @@ export interface HandledToolCallEntry {
 
 export interface HookBridgeOptions {
   readonly registry: { install(extension: Extension): void }
-  /** pluginHost 热注入（initialize 阶段可能尚未创建）。 */
+  /** pluginHost hot inject (initialize phase may not yet create). */
   readonly pluginHost: () => PluginHost | undefined
   readonly handledToolCalls: Map<string, HandledToolCallEntry>
-  /** 工具结果出站统一处理（Spill 边界 + 脱敏；宿主实现）。 */
+  /** tool result out station unify handle (Spill boundary + redaction; host implement). */
   readonly prepareToolResult: (conversationId: number, result: ToolExecutionResult) => Promise<ToolExecutionResult>
-  /** 会话摘要安全读取（不存在/损坏返回 undefined -> 跳过 before_turn）。 */
+  /** conversation summary security read (missing/corrupt return undefined -> skip before_turn). */
   readonly safeSummary: (conversationId: number) => ConversationSummary | undefined
-  /** 当前回合输入清单（before_turn payload 用）。 */
+  /** when before turn input manifest (before_turn payload use). */
   readonly currentRunInputs: (conversationId: number) => BeforeTurnHookPayload['inputs']
   readonly redact: (text: string) => string
-  /** 工具产物落盘端口（prepareToolResult 的宿主实现用）。 */
+  /** tool artifact port (prepareToolResult host implement use). */
   readonly artifacts: {
     spill(conversationId: number, id: string, text: string): Promise<{ artifact?: unknown; text: string }>
   }
@@ -81,14 +81,14 @@ export class HookBridge {
     this.options = options
   }
 
-  /** 安装 SDK 钩子扩展（initialize 阶段一次）。 */
+  /** install SDK hook extend (initialize phase once). */
   install(): void {
     this.options.registry.install(
       defineExtension({
         name: 'helm-hook-bridge',
         hooks: [
           hook(ToolTask, {
-            /** tool_call：transform 改写参数 / block 拦截。 */
+            /** tool_call:transform change write parameter / block intercept. */
             beforeTool: async (call, api) => {
               const outcome = await this.runHookChain('tool_call', {
                 conversationId: api.conversationId,
@@ -100,8 +100,8 @@ export class HookBridge {
                 return { block: this.options.redact(outcome.reason ?? 'blocked') }
               }
               if (outcome?.action === 'handled') {
-                // 接管：结果登记到 execute 层缓存（wrapToolCalls 包装器消费）；
-                // 同时记录归属会话，回合终态/abort/删除时兑底清理未消费残留。
+                // take over: result register to execute layer cache (wrapToolCalls wrap consume);
+                // also record ownership conversation, turn terminal state/abort/delete when honor bottom clean up unconsumed leftover.
                 this.options.handledToolCalls.set(call.id, {
                   conversationId: api.conversationId,
                   result: toolResultOf(outcome.result),
@@ -115,7 +115,7 @@ export class HookBridge {
               }
               return undefined
             },
-            /** 所有工具最终输出都在持久化前经过同一脱敏与 Spill 边界。 */
+            /** all tool eventually output all in persist before through the same redaction and Spill boundary. */
             afterTool: async (call, result, api) => {
               this.options.handledToolCalls.delete(call.id)
               try {
@@ -129,11 +129,11 @@ export class HookBridge {
                 let effective = result
                 if (outcome?.action === 'transform') {
                   const transformed = normalizeToolResult(outcome.value.result)
-                  if (!transformed) throw new HelmError('invalid_hook_result', 'tool_result 必须返回合法工具结果', 500)
+                  if (!transformed) throw new HelmError('invalid_hook_result', 'tool_result must return legal tool result', 500)
                   effective = transformed as ToolExecutionResult
                 } else if (outcome?.action === 'handled') {
                   const handled = normalizeToolResult(outcome.result)
-                  if (!handled) throw new HelmError('invalid_hook_result', 'tool_result 接管产物不是合法工具结果', 500)
+                  if (!handled) throw new HelmError('invalid_hook_result', 'tool_result take over artifact is not legal tool result', 500)
                   effective = handled as ToolExecutionResult
                 }
                 return await this.options.prepareToolResult(api.conversationId, effective)
@@ -147,12 +147,12 @@ export class HookBridge {
           }),
           hook(GenerationTask, {
             /**
-             * before_turn 桥：SDK 原生 sections（PromptSection）与 tools 已在
-             * prepare 阶段解析（request.messages 内含 pi.system 段消息），
-             * beforeRequest 收到的 messages 是最终模型消息（含 system 前导）。
-             * 这里把 sections/tools/messages 真实载荷交给插件，transform 结果
-             * 通过 system 消息 sections / toolsAdded 真正改写模型请求。
-             * 钩子链收敛后宿主统一投射 prompt.tools.* 段（见 transformBeforeTurn）。
+             * before_turn bridge:SDK original generate sections(PromptSection) and tools already in
+             * prepare phase parse (request.messages inside contains pi.system segment message),
+             * beforeRequest receives messages is eventually model message (contains system before lead).
+             * this in sections/tools/messages real payload hand over to plugin,transform result
+             * via system message sections / toolsAdded truly change write model request.
+             * hook chain converge after host unify throw shoot prompt.tools.* segment (see transformBeforeTurn).
              */
             beforeRequest: async (request, api) => {
               const conversationId = api.conversationId
@@ -166,7 +166,7 @@ export class HookBridge {
     )
   }
 
-  /** before_turn transform 应用（sections / messages / tools 三路手术）。 */
+  /** before_turn transform should use (sections / messages / tools three route manually technique). */
   private async transformBeforeTurn(
     request: { readonly messages: readonly Message[] },
     summary: ConversationSummary,
@@ -174,8 +174,8 @@ export class HookBridge {
   ): Promise<{ readonly messages: readonly Message[] } | undefined> {
     const host = this.options.pluginHost()
     const runtimeTools = getCurrentTools(request.messages)
-    // scope 裁剪：插件工具全局安装（helm-plugins）扩展，但 scope 外会话不得
-    // 看到 declaration——进入钩子链前按本会话可用 spec 过滤，内核工具保留。
+    // scope trim: plugin tool global install (helm-plugins) extend, but scope outside conversation must not
+    // see to declaration- - enter hook chain before by this conversation available spec filter, kernel tool keep.
     const effectiveTools = host !== undefined ? this.scopeLocalTools(host, summary, runtimeTools) : runtimeTools
     const original = request.messages as unknown as Array<Record<string, unknown>>
     const payload: BeforeTurnHookPayload = {
@@ -190,9 +190,9 @@ export class HookBridge {
       messages: original,
     }
     const outcome = await this.runHookChain('before_turn', payload)
-    // 宿主终局投射：无论钩子是否 transform，按最终 active tools 统一重写
-    // prompt.tools.* 段（仅激活工具进提示词；停用/剥离的工具旧段一并清除，
-    // 不留幻影文本）。投射基于 PluginHost 当前声明（含 prompt 元数据）。
+    // host final scoped throw shoot: regardless of hook is otherwise transform, by eventually active tools unify heavy write
+    // prompt.tools.* segment (only activate tool enter prompt; deactivate/strip tool old segment one and clear,
+    // do not phantom text). throw shoot based on PluginHost when before declaration (contains prompt metadata).
     const activeTools = this.activeToolPrompts(summary, effectiveTools, outcome)
     const outcomeSections = outcome?.action === 'transform'
       ? outcome.value.sections
@@ -205,21 +205,21 @@ export class HookBridge {
       ? { ...outcome.value, sections: projected }
       : { ...payload, sections: projected }
 
-    // sections 变更 -> 改写前导 system 消息的 sections（SDK 原生机制）。
-    // messages 变更 -> 整体替换（插件显式要求时）。边界校验：
-    // 1. 必须是非空数组且前导为 system 消息（SDK 回放机制依赖前导 system）；
-    // 2. 保留原前导 system 的 content 基底（sections/tools 声明可改，人格与
-    //    历史正文绝不可被插件覆写——防原地 mutation diff 不可靠与 system 头损坏）；
-    // 3. 原第一条非 system 消息之后的历史一律保留原序（只允许截断头部，
-    //    不允许重写/伪造历史）。
+    // sections change -> change write before lead system message sections(SDK original generate mechanism).
+    // messages change -> whole replace (plugin explicit want seek when). boundary validate:
+    // 1. must be non-empty array and before lead is system message (SDK back put mechanism dependency before lead system);
+    // 2. keep original before lead system  content base bottom (sections/tools declaration can change, person format and
+    //    history body text never can by plugin override - - guard against original ground mutation diff cannot rely and system head corrupt);
+    // 3. original a non- system message after history one rule keep original order (only allows truncate header,
+    //    disallows heavy write/fabricate history).
     let messages = original
     const sectionsChanged = !sectionsEqual(value.sections, payload.sections)
     const messagesChanged = value.messages !== payload.messages
     if (messagesChanged) messages = assertSafeMessageSurgery(original, value.messages)
     if (sectionsChanged) messages = withSections(messages, value.sections)
 
-    // 声明重写基线是 SDK 原始解析工具集（含 scope 外插件工具）：只要最终集
-    // 与原始集有差（scope 裁剪或钩子剥离），都经 toolsRemoved/toolsAdded 重放。
+    // declaration heavy write baseline is SDK original parse tool collection (contains scope outside plugin tool): as long as eventually collection
+    // and original collection has difference (scope trim or hook strip), all via toolsRemoved/toolsAdded replay.
     const initialNames = new Set(runtimeTools.map((tool) => tool.name))
     const declared = new Set(value.tools.map((tool) => tool.name))
     if (declared.size !== initialNames.size || [...declared].some((name) => !initialNames.has(name))) {
@@ -230,9 +230,9 @@ export class HookBridge {
   }
 
   /**
-   * 插件工具 scope 裁剪：全局安装的插件工具（helm-plugins）中，scope 不匹配
-   * 当前会话者在进入钩子链前剥离 declaration（内核工具与 scope 内插件工具
-   * 保留）。执行期 assertScopeAllows 二次校验不变；这里消除的是请求级泄露。
+   * plugin tool scope trim: global install plugin tool (helm-plugins) in,scope does not match
+   * when before conversation in enter hook chain before strip declaration(kernel tool and scope inside plugin tool
+   * keep). execute phase assertScopeAllows second validate do not change; this in eliminate is request level leak.
    */
   private scopeLocalTools<T extends { name: string }>(
     host: PluginHost,
@@ -246,10 +246,10 @@ export class HookBridge {
   }
 
   /**
-   * 动作目录段渲染：仅当 run_action 在本请求工具与钩子最终工具的交集内
-   * （真实可达）时生成；scope 命中且非 exposeAsTool 直投（直投动作经各自
-   * 工具通道宣传，钩子剥离后也不经目录复活）。无可达动作返回 undefined
-   * （prompt.actions 旧段随之清除）。
+   * action directory segment render: only when run_action in this request tool and hook eventually tool hand over collection inside
+   * (real can reach) when generate;scope hit and non- exposeAsTool direct throw (direct throw action via each
+   * tool channel declare pass, hook strip after also do not via directory re-). without can reach action return undefined
+   * (prompt.actions old segment follow of clear).
    */
   private renderActionDirectory(
     host: PluginHost | undefined,
@@ -278,9 +278,9 @@ export class HookBridge {
   }
 
   /**
-   * 最终 active tools 的提示词元数据集：PluginHost 当前声明（scope 过滤）
-   * 与钩子链收敛后的工具清单取交集——被插件剥离（如 memory 关闭）的工具
-   * 不投射任何段落。钩子未 transform 时以 SDK 解析的请求工具集为准。
+   * eventually active tools prompt metadata collection:PluginHost when before declaration (scope filter)
+   * and hook chain converge after tool manifest take hand over collection - - by plugin strip (such as memory close) tool
+   * do not throw shoot any segment. hook not transform when with SDK parse request tool collection is allow.
    */
   private activeToolPrompts(
     summary: ConversationSummary,
@@ -313,7 +313,7 @@ export class HookBridge {
     return out
   }
 
-  /** 统一 hook 管道执行；返回最终决定（continue 归一为 undefined 由调用方走默认）。 */
+  /** unify hook pipeline execute; return eventually decide (continue archive one is undefined by caller away by default). */
   async runHookChain<K extends HookName>(
     name: K,
     payload: HookPayloadMap[K],
@@ -331,8 +331,8 @@ export class HookBridge {
   }
 
   /**
-   * around（continuation）钩子执行（仅 agent_spawn）：插件可经受控 next
-   * 包裹完整执行（含后续管道与默认原生执行行）。无插件时直接 defaultRun。
+   * around(continuation) hook execute (only agent_spawn): plugin can via subject to control next
+   * package wrap complete execute (contains after continue pipeline and by default original generate execute row). without plugin when directly defaultRun.
    */
   runHookAround(
     name: 'agent_spawn',
@@ -345,14 +345,14 @@ export class HookBridge {
   }
 }
 
-/** SDK 结果出站统一处理：脱敏 + Spill 边界（artifacts 上限截断到产物）。 */
+/** SDK result out station unify handle: redaction + Spill boundary (artifacts cap truncate to artifact). */
 export async function prepareToolResultWith(
   artifacts: HookBridgeOptions['artifacts'],
   redact: (text: string) => string,
   conversationId: number,
   result: ToolExecutionResult,
 ): Promise<ToolExecutionResult> {
-  // SDK 结果的可选属性可为 undefined；先按 JSON 语义省略，再逐字符串脱敏。
+  // SDK result optional property can is undefined; first by JSON semantics omit, again one by one string redaction.
   const safe = redactJsonValue(JSON.parse(JSON.stringify(result)), redact) as ToolExecutionResult
   const output = safe.output ?? []
   const text = output.filter((block) => block.type === 'text').map((block) => block.text).join('\n')

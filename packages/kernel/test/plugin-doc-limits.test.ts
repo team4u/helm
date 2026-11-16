@@ -1,15 +1,15 @@
 /**
- * 插件文档体积防线测试（doc / sessionDoc 的 initial / set / update）：
- * - JSON 序列化结果超过 PLUGIN_DOC_MAX_JSON_BYTES（2 MiB）在写入镜像、持久层
- *   与公共事件之前显式拒绝（413 plugin_doc_too_large，details 含
- *   pluginId/name/kind/bytes/maxBytes），旧值保持不变；
- * - 边界值（恰好等于上限）放行；
- * - 失败后持久 store 不写、公共事件不发；
- * - PluginDocRegistry 构造参数 maxDocJsonBytes 可注入更小上限（测试友好，
- *   不破坏既有 API）；
- * - JSON 不可序列化 / undefined 等既有显式失败行为保持不变。
+ * plugin document body accumulate guard against line test (doc / sessionDoc  initial / set / update):
+ * - JSON serialization result exceeds PLUGIN_DOC_MAX_JSON_BYTES(2 MiB) in write mirror, durable layer
+ *   and public event before explicit reject (413 plugin_doc_too_large,details contains
+ *   pluginId/name/kind/bytes/maxBytes), old value keep do not change;
+ * - boundary value (exactly equals cap) let through;
+ * - failed after durable store do not write, public event do not;
+ * - PluginDocRegistry construct parameter maxDocJsonBytes can inject more small cap (test friend well,
+ *   do not break since has API);
+ * - JSON cannot serialization / undefined etc. since has explicit failed behavior keep do not change.
  *
- * runner: tsx --test；每项显式 timeout: 60_000 防死锁。
+ * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
@@ -26,7 +26,7 @@ import { createPluginBuildProvider } from '@helm/plugin-build'
 import { MemoryDocStore, assertRejectsCode, cleanupDir, makeTempDir } from './helpers.js'
 
 // ---------------------------------------------------------------------------
-// 测试基建
+// test base create
 // ---------------------------------------------------------------------------
 
 class MemorySessionDocStore implements PluginSessionDocStore {
@@ -82,7 +82,7 @@ function throwsCode(fn: () => unknown, code: string, status?: number): HelmError
   } catch (err) {
     caught = err
   }
-  assert.ok(caught instanceof HelmError, `期望 HelmError，实际：${String(caught)}`)
+  assert.ok(caught instanceof HelmError, `expectation HelmError, actual:${String(caught)}`)
   assert.equal(caught.code, code)
   if (status !== undefined) assert.equal(caught.status, status)
   return caught
@@ -100,12 +100,12 @@ afterEach(async () => {
 })
 
 // ---------------------------------------------------------------------------
-// 全局 doc
+// global doc
 // ---------------------------------------------------------------------------
 
-test('doc initial 超限：注册拒绝 plugin_doc_too_large，details 完整', { timeout: 60_000 }, async () => {
+test('doc initial over limit: register reject plugin_doc_too_large,details complete', { timeout: 60_000 }, async () => {
   const host = makeHost()
-  const big = 'x'.repeat(PLUGIN_DOC_MAX_JSON_BYTES) // 序列化 = 上限 + 2 字节（引号）
+  const big = 'x'.repeat(PLUGIN_DOC_MAX_JSON_BYTES) // serialization = cap + 2 byte (quotes)
   const err = (await assertRejectsCode(
     () =>
       host.register({
@@ -125,7 +125,7 @@ test('doc initial 超限：注册拒绝 plugin_doc_too_large，details 完整', 
   assert.equal(docs.store.size, 0)
 })
 
-test('doc set/update 超限：拒绝且旧值不变、持久 store 不写、公共事件不发', { timeout: 60_000 }, async () => {
+test('doc set/update over limit: reject and old value do not change, durable store do not write, public event do not', { timeout: 60_000 }, async () => {
   let handle: PluginDocHandle<{ keep: string; blob?: string }> | undefined
   const host = makeHost()
   await host.register({
@@ -137,7 +137,7 @@ test('doc set/update 超限：拒绝且旧值不变、持久 store 不写、公�
   assert.ok(handle)
   const h = handle
   h.set({ keep: 'v1' })
-  // 正常写入发布 plugin.doc.updated；后续超限失败不再发任何事件。
+  // normal write publish plugin.doc.updated; after continue over limit failed no longer any event.
   assert.ok(events.some((e) => e.type === 'plugin.doc.updated'))
   const baseline = events.length
 
@@ -147,9 +147,9 @@ test('doc set/update 超限：拒绝且旧值不变、持久 store 不写、公�
     413,
   )
   assert.equal((err.details as { kind: string }).kind, 'doc')
-  assert.equal(h.get().keep, 'v1', '旧值保持不变')
+  assert.equal(h.get().keep, 'v1', 'old value keep do not change')
   assert.deepEqual(docs.store.get('p:doc:state'), { keep: 'v1' })
-  assert.equal(events.length, baseline, '超限写入不发布 plugin.doc.updated')
+  assert.equal(events.length, baseline, 'over limit write do not publish plugin.doc.updated')
 
   throwsCode(
     () => h.update((s) => ({ ...s, blob: 'z'.repeat(PLUGIN_DOC_MAX_JSON_BYTES) })),
@@ -161,7 +161,7 @@ test('doc set/update 超限：拒绝且旧值不变、持久 store 不写、公�
   assert.equal(events.length, baseline)
 })
 
-test('doc 边界：序列化恰好等于上限时放行', { timeout: 60_000 }, async () => {
+test('doc boundary: serialization exactly equals cap when let through', { timeout: 60_000 }, async () => {
   let handle: PluginDocHandle<string> | undefined
   const host = makeHost()
   await host.register({
@@ -172,7 +172,7 @@ test('doc 边界：序列化恰好等于上限时放行', { timeout: 60_000 }, a
   })
   assert.ok(handle)
   const h = handle
-  // JSON.stringify("...") = 内容 + 2 个引号；内容 = 上限 - 2 时恰好等于上限。
+  // JSON.stringify("...") = content + 2 quotes; content = cap - 2 when exactly equals cap.
   h.set('a'.repeat(PLUGIN_DOC_MAX_JSON_BYTES - 2))
   assert.equal(h.get().length, PLUGIN_DOC_MAX_JSON_BYTES - 2)
   h.update(() => 'b'.repeat(PLUGIN_DOC_MAX_JSON_BYTES - 2))
@@ -180,10 +180,10 @@ test('doc 边界：序列化恰好等于上限时放行', { timeout: 60_000 }, a
 })
 
 // ---------------------------------------------------------------------------
-// 会话 sessionDoc
+// conversation sessionDoc
 // ---------------------------------------------------------------------------
 
-test('sessionDoc initial 超限：注册拒绝 plugin_doc_too_large', { timeout: 60_000 }, async () => {
+test('sessionDoc initial over limit: register reject plugin_doc_too_large', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await assertRejectsCode(
     () =>
@@ -204,14 +204,14 @@ test('sessionDoc initial 超限：注册拒绝 plugin_doc_too_large', { timeout:
   assert.equal(sessionDocs.store.size, 0)
 })
 
-test('sessionDoc set/update 超限：拒绝且旧值不变、持久层不写、事件不发', { timeout: 60_000 }, async () => {
+test('sessionDoc set/update over limit: reject and old value do not change, durable layer do not write, event do not', { timeout: 60_000 }, async () => {
   let handle: PluginSessionDocHandle<{ n: number; blob?: string }> | undefined
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: {
       ...makeBackend(),
       getConversation: (id: number) => {
-        if (id !== 7) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+        if (id !== 7) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
         return { id } as never
       },
     },
@@ -239,7 +239,7 @@ test('sessionDoc set/update 超限：拒绝且旧值不变、持久层不写、�
   assert.equal(details.conversationId, 7)
   assert.deepEqual(h.get(7), { n: 1 })
   assert.equal(sessionDocs.store.get(`p:sdoc\0runs\0${7}`), JSON.stringify({ n: 1 }))
-  assert.equal(events.length, baseline, '超限写入不发布 plugin.session_doc.updated')
+  assert.equal(events.length, baseline, 'over limit write do not publish plugin.session_doc.updated')
 
   throwsCode(
     () => h.update(7, (s) => ({ ...s, blob: 'v'.repeat(PLUGIN_DOC_MAX_JSON_BYTES) })),
@@ -250,7 +250,7 @@ test('sessionDoc set/update 超限：拒绝且旧值不变、持久层不写、�
   assert.equal(events.length, baseline)
 })
 
-test('sessionDoc 边界：序列化恰好等于上限时放行', { timeout: 60_000 }, async () => {
+test('sessionDoc boundary: serialization exactly equals cap when let through', { timeout: 60_000 }, async () => {
   let handle: PluginSessionDocHandle<string> | undefined
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
@@ -274,10 +274,10 @@ test('sessionDoc 边界：序列化恰好等于上限时放行', { timeout: 60_0
 })
 
 // ---------------------------------------------------------------------------
-// 构造参数注入 & 既有显式失败行为
+// construct parameter inject & since has explicit failed behavior
 // ---------------------------------------------------------------------------
 
-test('maxDocJsonBytes 构造参数：更小上限生效（不破坏既有 API）', { timeout: 60_000 }, () => {
+test('maxDocJsonBytes construct parameter: more small cap takes effect (do not break since has API)', { timeout: 60_000 }, () => {
   const store = new MemoryDocStore()
   const registry = new PluginDocRegistry(
     store,
@@ -293,7 +293,7 @@ test('maxDocJsonBytes 构造参数：更小上限生效（不破坏既有 API）
   assert.equal(store.get('p:small:blob', '').length, 61)
 })
 
-test('默认上限常量为 2 MiB；不可序列化值保持既有显式失败', { timeout: 60_000 }, async () => {
+test('by default cap constant is 2 MiB; cannot serialization value keep since has explicit failed', { timeout: 60_000 }, async () => {
   assert.equal(PLUGIN_DOC_MAX_JSON_BYTES, 2 * 1024 * 1024)
   let handle: PluginDocHandle<unknown> | undefined
   const host = makeHost()
@@ -305,7 +305,7 @@ test('默认上限常量为 2 MiB；不可序列化值保持既有显式失败',
   })
   assert.ok(handle)
   const h = handle
-  // undefined / 循环引用：jsonClone 边界显式失败（既有行为），不是体积错误。
+  // undefined / loop reference:jsonClone boundary explicit failed (since has behavior), is not body accumulate error.
   throwsCode(() => h.set(undefined), 'invalid_json_value')
   const circular: Record<string, unknown> = {}
   circular.self = circular

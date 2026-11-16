@@ -1,16 +1,16 @@
 /**
- * edit 工具真实差异结果（runtime/tool-edit-diff.ts）测试。
+ * edit tool real difference result (runtime/tool-edit-diff.ts) test.
  *
- * 覆盖：
- * 1. 纯函数 computeEditDiff：精确行号（真实扫描）、±3 上下文窗口、行内/多行/
- *    纯增删、CRLF、末尾无换行、尾部空行、重复上下文、巨长行与行数/文本预算
- *    截断（统计仍覆盖完整差异）、no-op；
- * 2. 脱敏安全：全文先行脱敏（单行秘密命中占位符）；跨行秘密与横跨窗口边界
- *    的秘密（窗口切片脱敏会泄漏的形态）必须回退 rows=[]/truncated=true 且
- *    序列化结果无任何秘密残段；行号/统计始终反映原文；
- * 3. 工具级：local 与远端共享同一纯函数（同内容产出完全一致 diff）、结构化
- *    输出符合 @helm/protocol EDIT_TOOL_RESULT_SCHEMA（Ajv 真实校验）、字面
- *    替换（$& 不解释）、失败（不存在/多次）绝不产生成功 diff 且文件不变。
+ * override:
+ * 1. pure function computeEditDiff: precise row number (real scan),±3 context window, row inside/many row/
+ *    pure increase delete,CRLF, tail without newline, tail part empty row, duplicate context, huge long row and row count/text pre- compute
+ *    truncate (count still override complete difference),no-op;
+ * 2. redaction security: all text first row redaction (single row secret hit placeholder); across row secret and horizontal across window boundary
+ *    secret (window cut piece redaction will leak leak form) must fall back rows=[]/truncated=true and
+ *    serialization result without any secret leftover segment; row number/count always reverse reflect original text;
+ * 3. tool level:local and remote sharing the same pure function (same content produce out fully consistent diff), structure
+ *    output conforms to @helm/protocol EDIT_TOOL_RESULT_SCHEMA(Ajv real validate), literal
+ *    replace ($& do not explain), failed (missing/many time) never produce succeeded diff and file do not change.
  */
 
 import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
@@ -41,15 +41,15 @@ import type { EnvFabric } from '../src/env/index.js'
 
 const identityRedact = (text: string): string => text
 
-/** n 行 'l1..ln'，末行带换行。 */
+/** n row 'l1..ln', end row carries newline. */
 function numberedLines(n: number): string {
   return Array.from({ length: n }, (_, i) => `l${i + 1}`).join('\n') + '\n'
 }
 
-/** 对 (original, oldText, newText) 做唯一精确替换后的全文。 */
+/** for (original, oldText, newText) do unique precise replace after all text. */
 function applyEdit(original: string, oldText: string, newText: string): string {
   const offset = original.indexOf(oldText)
-  assert.ok(offset >= 0, `测试前置：oldText 应存在（${JSON.stringify(oldText.slice(0, 20))}）`)
+  assert.ok(offset >= 0, `test pre-:oldText should store in (${JSON.stringify(oldText.slice(0, 20))})`)
   return original.slice(0, offset) + newText + original.slice(offset + oldText.length)
 }
 
@@ -62,7 +62,7 @@ function rowTexts(rows: ToolDiffRow[]): string[] {
   return rows.map((row) => row.text)
 }
 
-/** 全部行级断言辅助：逐行 kind + 行号 + 文本。 */
+/** all row level assertion auxiliary: one by one row kind + row number + text. */
 function assertRows(actual: ToolDiffRow[], expected: ToolDiffRow[]): void {
   assert.deepEqual(actual, expected)
 }
@@ -77,8 +77,8 @@ after(async () => {
   rmSync(rootDir, { recursive: true, force: true })
 })
 
-describe('computeEditDiff 纯函数：行号与窗口', { timeout: 60_000 }, () => {
-  it('行内替换：精确行号、±3 上下文窗口、行级统计', { timeout: 60_000 }, () => {
+describe('computeEditDiff pure function: row number and window', { timeout: 60_000 }, () => {
+  it('row inside replace: precise row number,±3 context window, row level count', { timeout: 60_000 }, () => {
     const original = numberedLines(12)
     const diff = diffOf(original, 'l7', 'L7')
     assert.equal(diff.truncated, false)
@@ -97,7 +97,7 @@ describe('computeEditDiff 纯函数：行号与窗口', { timeout: 60_000 }, () 
     ])
   })
 
-  it('大前缀下行号来自真实扫描（第 100 行编辑，窗口 97-103）', { timeout: 60_000 }, () => {
+  it('large prefix under row number from real scan ( 100 row edit, window 97-103)', { timeout: 60_000 }, () => {
     const original = numberedLines(120)
     const diff = diffOf(original, 'l100', 'CHANGED')
     assert.equal(diff.firstChangedLine, 100)
@@ -106,23 +106,23 @@ describe('computeEditDiff 纯函数：行号与窗口', { timeout: 60_000 }, () 
     const last = diff.rows[diff.rows.length - 1]!
     assert.equal(last.kind, 'context')
     assert.equal((last as { oldLine: number }).oldLine, 103)
-    assert.ok(diff.rows.every((row) => row.text.length <= 7), '窗口只覆盖 97-103 行（不 diff 全文件）')
-    // 上下文行号连续且 oldLine === newLine（未变更区间行号一致）。
+    assert.ok(diff.rows.every((row) => row.text.length <= 7), 'window only override 97-103 row (do not diff all file)')
+    // context row number connect continue and oldLine === newLine(not change zone between row number consistent).
     const contexts = diff.rows.filter((row) => row.kind === 'context') as Array<{ oldLine: number; newLine: number }>
     assert.ok(contexts.every((row) => row.oldLine === row.newLine))
   })
 
-  it('文件开头编辑：窗口从第 1 行起（不越界）', { timeout: 60_000 }, () => {
+  it('file open head edit: window from 1 row start (do not out of bounds)', { timeout: 60_000 }, () => {
     const original = numberedLines(8)
     const diff = diffOf(original, 'l1', 'FIRST')
     assert.equal(diff.firstChangedLine, 1)
     assert.equal((diff.rows[0] as { oldLine: number }).oldLine, 1)
-    // 窗口为涉及行（第 1 行）±3：末行是第 4 行，而非文件末尾。
+    // window is involves row ( 1 row)±3: end row is 4 row, while non- file tail.
     const last = diff.rows[diff.rows.length - 1] as { oldLine: number }
     assert.equal(last.oldLine, 4)
   })
 
-  it('多行替换：首变更行与增删统计', { timeout: 60_000 }, () => {
+  it('many row replace: first change row and increase delete count', { timeout: 60_000 }, () => {
     const original = numberedLines(12)
     const diff = diffOf(original, 'l5\nl6\n', 'n1\nn2\nn3\n')
     assert.equal(diff.addedLines, 3)
@@ -132,7 +132,7 @@ describe('computeEditDiff 纯函数：行号与窗口', { timeout: 60_000 }, () 
     assert.deepEqual(removes.map((r) => r.oldLine), [5, 6])
     const adds = diff.rows.filter((r) => r.kind === 'add') as Array<{ newLine: number }>
     assert.deepEqual(adds.map((r) => r.newLine), [5, 6, 7])
-    // 变更后上下文行号错位：old 7-9 ↔ new 8-10（行号跳跃真实）。
+    // change after context row number wrong:old 7-9 ↔ new 8-10(row number jump real).
     const tail = diff.rows.filter((r) => r.kind === 'context') as Array<{ oldLine: number; newLine: number }>
     const after = tail.filter((r) => r.oldLine >= 7)
     assert.deepEqual(
@@ -145,7 +145,7 @@ describe('computeEditDiff 纯函数：行号与窗口', { timeout: 60_000 }, () 
     )
   })
 
-  it('纯删除（中部）：firstChangedLine 为删除点新行号', { timeout: 60_000 }, () => {
+  it('pure delete (in part):firstChangedLine is delete point new row number', { timeout: 60_000 }, () => {
     const original = '1\n2\n3\n4\n5\n'
     const diff = diffOf(original, '3\n', '')
     assert.equal(diff.addedLines, 0)
@@ -160,21 +160,21 @@ describe('computeEditDiff 纯函数：行号与窗口', { timeout: 60_000 }, () 
     ])
   })
 
-  it('纯删除（EOF）：firstChangedLine 钳到新文件末行', { timeout: 60_000 }, () => {
+  it('pure delete (EOF):firstChangedLine clamp to new file end row', { timeout: 60_000 }, () => {
     const diff = diffOf('a\nb\nc\n', 'c\n', '')
     assert.equal(diff.removedLines, 1)
-    assert.equal(diff.firstChangedLine, 2, '新文件共 2 行，EOF 删除取末行')
+    assert.equal(diff.firstChangedLine, 2, 'new file shared 2 row,EOF delete take end row')
   })
 
-  it('整文件删空：firstChangedLine 钳到 1（Schema 最小值）', { timeout: 60_000 }, () => {
+  it('whole file delete empty:firstChangedLine clamp to 1(Schema most small value)', { timeout: 60_000 }, () => {
     const diff = diffOf('a\nb\n', 'a\nb\n', '')
     assert.equal(diff.removedLines, 2)
     assert.equal(diff.firstChangedLine, 1)
   })
 })
 
-describe('computeEditDiff 纯函数：行边界形态', { timeout: 60_000 }, () => {
-  it('CRLF：行文本剥 \r，行号与统计正确', { timeout: 60_000 }, () => {
+describe('computeEditDiff pure function: row boundary form', { timeout: 60_000 }, () => {
+  it('CRLF: row text strip \r, row number and count correct', { timeout: 60_000 }, () => {
     const original = 'a\r\nb\r\nc\r\n'
     const diff = diffOf(original, 'b', 'B')
     assert.equal(diff.addedLines, 1)
@@ -189,7 +189,7 @@ describe('computeEditDiff 纯函数：行边界形态', { timeout: 60_000 }, () 
     ])
   })
 
-  it('CRLF 与 LF 混合并改含 CRLF 的行', { timeout: 60_000 }, () => {
+  it('CRLF and LF mixed and change contains CRLF row', { timeout: 60_000 }, () => {
     const original = 'x\r\ny\nz'
     const diff = diffOf(original, 'x', 'X')
     assert.equal(diff.firstChangedLine, 1)
@@ -201,7 +201,7 @@ describe('computeEditDiff 纯函数：行边界形态', { timeout: 60_000 }, () 
     ])
   })
 
-  it('末尾无换行：末行编辑行文本无换行且计数正确', { timeout: 60_000 }, () => {
+  it('tail without newline: end row edit row text without newline and counter correct', { timeout: 60_000 }, () => {
     const original = 'a\nb\nc'
     const diff = diffOf(original, 'c', 'C')
     assert.equal(diff.addedLines, 1)
@@ -215,14 +215,14 @@ describe('computeEditDiff 纯函数：行边界形态', { timeout: 60_000 }, () 
     ])
   })
 
-  it('替换引入末尾换行（c -> c\n）：真实行级差异', { timeout: 60_000 }, () => {
+  it('replace introduce tail newline (c -> c\n): real row level difference', { timeout: 60_000 }, () => {
     const diff = diffOf('a\nb\nc', 'c', 'c\n')
-    // 旧末行 'c'（无换行）被 'c\n' 替换：行级差异表现为删 1 增 1（含末行换行变化）。
+    // old end row 'c'(without newline) by 'c\n' replace: row level difference table now is delete 1 increase 1(contains end row newline change).
     assert.equal(diff.removedLines, 1)
     assert.equal(diff.addedLines >= 1, true)
   })
 
-  it('尾部空行参与替换：空行行号真实', { timeout: 60_000 }, () => {
+  it('tail part empty row reference and replace: empty row row number real', { timeout: 60_000 }, () => {
     const original = 'a\nb\n\n\n'
     const diff = diffOf(original, 'b\n\n\n', 'B\n')
     assert.equal(diff.addedLines, 1)
@@ -237,7 +237,7 @@ describe('computeEditDiff 纯函数：行边界形态', { timeout: 60_000 }, () 
     ])
   })
 
-  it('重复上下文：同文本不同行号（行号真实不折叠）', { timeout: 60_000 }, () => {
+  it('duplicate context: same text different row number (row number real do not collapse)', { timeout: 60_000 }, () => {
     const original = 'r\nr\nr\nTARGET\nr\nr\nr\n'
     const diff = diffOf(original, 'TARGET', 'DONE')
     const contexts = diff.rows.filter((r) => r.kind === 'context')
@@ -245,7 +245,7 @@ describe('computeEditDiff 纯函数：行边界形态', { timeout: 60_000 }, () 
     assert.deepEqual(rowTexts(contexts), ['r', 'r', 'r', 'r', 'r', 'r'])
   })
 
-  it('行内纯插入（无整行增删）：仍为删旧行增新行', { timeout: 60_000 }, () => {
+  it('row inside pure insert (without whole row increase delete): still is delete old row increase new row', { timeout: 60_000 }, () => {
     const diff = diffOf('alpha\nbeta\n', 'beta', 'bbeta')
     assert.equal(diff.addedLines, 1)
     assert.equal(diff.removedLines, 1)
@@ -253,8 +253,8 @@ describe('computeEditDiff 纯函数：行边界形态', { timeout: 60_000 }, () 
   })
 })
 
-describe('computeEditDiff 纯函数：预算与截断', { timeout: 60_000 }, () => {
-  it('巨长行：单行文本截断到上限，统计覆盖完整差异，不把巨长行传回', { timeout: 60_000 }, () => {
+describe('computeEditDiff pure function: pre- compute and truncate', { timeout: 60_000 }, () => {
+  it('huge long row: single row text truncate to cap, count override complete difference, does not huge long row pass back', { timeout: 60_000 }, () => {
     const long = 'x'.repeat(9_000)
     const original = `head\n${long}\ntail\n`
     const diff = diffOf(original, long, long.replace(/^x/, 'y'))
@@ -264,38 +264,38 @@ describe('computeEditDiff 纯函数：预算与截断', { timeout: 60_000 }, () 
     const changed = diff.rows.filter((r) => r.kind !== 'context')
     assert.equal(changed.length, 2)
     for (const row of changed) {
-      assert.ok(row.text.length <= TOOL_DIFF_MAX_ROW_CHARS, `单行文本 ≤ ${TOOL_DIFF_MAX_ROW_CHARS}`)
+      assert.ok(row.text.length <= TOOL_DIFF_MAX_ROW_CHARS, `single row text ≤ ${TOOL_DIFF_MAX_ROW_CHARS}`)
       assert.ok(!row.text.includes('\n'))
     }
   })
 
-  it('巨长行截断避开 UTF-16 代理对（不产生半个字符）', { timeout: 60_000 }, () => {
-    // 1 个 BMP 字符 + 3000 个 emoji（每个 2 个代码单元）：截断点落在高代理项上。
+  it('huge long row truncate avoid open UTF-16 proxy for (produces no half character)', { timeout: 60_000 }, () => {
+    // 1  BMP character + 3000  emoji(each 2 code unit): truncate point in high proxy items on.
     const line = 'x' + '😊'.repeat(3_000)
     const original = `${line}\n`
     const diff = diffOf(original, 'x😊', 'x🚀')
     assert.equal(diff.truncated, true)
     for (const row of diff.rows.filter((r) => r.kind !== 'context')) {
       const last = row.text.charCodeAt(row.text.length - 1)
-      assert.ok(!(last >= 0xd800 && last <= 0xdbff), '末字符不得是孤立高代理项')
+      assert.ok(!(last >= 0xd800 && last <= 0xdbff), 'end character must not is isolated high proxy items')
     }
   })
 
-  it('行数预算：rows ≤ 160、truncated=true、统计覆盖完整差异', { timeout: 60_000 }, () => {
+  it('row count pre- compute:rows ≤ 160,truncated=true, count override complete difference', { timeout: 60_000 }, () => {
     const oldBlock = Array.from({ length: 200 }, (_, i) => `old-${i}`).join('\n') + '\n'
     const newBlock = Array.from({ length: 200 }, (_, i) => `new-${i}`).join('\n') + '\n'
     const original = `before\n${oldBlock}after\n`
     const diff = diffOf(original, oldBlock, newBlock)
     assert.equal(diff.truncated, true)
     assert.ok(diff.rows.length <= TOOL_DIFF_MAX_ROWS)
-    assert.equal(diff.rows.length, TOOL_DIFF_MAX_ROWS, '本例骨架远超预算，应恰好裁到上限')
-    // 统计不受 rows 截断影响。
+    assert.equal(diff.rows.length, TOOL_DIFF_MAX_ROWS, 'this example skeleton far over pre- compute, should exactly trim to cap')
+    // count do not subject to rows truncate affect.
     assert.equal(diff.removedLines, 200)
     assert.equal(diff.addedLines, 200)
     assert.equal(diff.firstChangedLine, 2)
   })
 
-  it('累计文本预算：以脱敏后文本计，总文本不超限且 truncated=true', { timeout: 60_000 }, () => {
+  it('cumulative text pre- compute: with redaction after text count, total text do not over limit and truncated=true', { timeout: 60_000 }, () => {
     const line = 'c'.repeat(1_000)
     const oldBlock = Array.from({ length: 60 }, (_, i) => `${line}-old-${i}`).join('\n') + '\n'
     const newBlock = Array.from({ length: 60 }, (_, i) => `${line}-new-${i}`).join('\n') + '\n'
@@ -305,11 +305,11 @@ describe('computeEditDiff 纯函数：预算与截断', { timeout: 60_000 }, () 
     assert.equal(diff.addedLines, 60)
     assert.equal(diff.removedLines, 60)
     const total = rowTexts(diff.rows).reduce((sum, text) => sum + text.length, 0)
-    assert.ok(total <= TOOL_DIFF_MAX_TEXT_CHARS, `累计文本 ≤ ${TOOL_DIFF_MAX_TEXT_CHARS}，实际 ${total}`)
-    assert.ok(diff.rows.length < 60, '文本预算应先于行数预算截断')
+    assert.ok(total <= TOOL_DIFF_MAX_TEXT_CHARS, `cumulative text ≤ ${TOOL_DIFF_MAX_TEXT_CHARS}, actual ${total}`)
+    assert.ok(diff.rows.length < 60, 'text pre- compute should first at row count pre- compute truncate')
   })
 
-  it('no-op（oldText === newText）：rows=[] counts=0 firstChangedLine=替换所在行', { timeout: 60_000 }, () => {
+  it('no-op(oldText === newText):rows=[] counts=0 firstChangedLine=replace which in row', { timeout: 60_000 }, () => {
     const original = numberedLines(10)
     const diff = diffOf(original, 'l4', 'l4')
     assert.deepEqual(diff, {
@@ -321,36 +321,36 @@ describe('computeEditDiff 纯函数：预算与截断', { timeout: 60_000 }, () 
     })
   })
 
-  it('替换区间越界：前置条件立即抛错（写盘前失败）', { timeout: 60_000 }, () => {
-    assert.throws(() => computeEditDiff('abc', 'abc', 3, 2, identityRedact), /前置条件失败/)
-    assert.throws(() => computeEditDiff('abc', 'abc', -1, 1, identityRedact), /前置条件失败/)
-    assert.throws(() => computeEditDiff('abc', 'abc', 0, 0, identityRedact), /前置条件失败/)
+  it('replace zone between out of bounds: pre- condition immediately throws (write before failed)', { timeout: 60_000 }, () => {
+    assert.throws(() => computeEditDiff('abc', 'abc', 3, 2, identityRedact), /pre- condition failed/)
+    assert.throws(() => computeEditDiff('abc', 'abc', -1, 1, identityRedact), /pre- condition failed/)
+    assert.throws(() => computeEditDiff('abc', 'abc', 0, 0, identityRedact), /pre- condition failed/)
   })
 
-  it('算法预算（maxEditLength）超限：整段替换表示，公共前后缀保留、统计一致、truncated=true', { timeout: 60_000 }, () => {
-    // 2100 行旧块替换为 2100 行全新新块：编辑长度远超预算 2000，diffLines 超限。
+  it('algorithm pre- compute (maxEditLength) over limit: whole segment replace means, public before suffix keep, count consistent,truncated=true', { timeout: 60_000 }, () => {
+    // 2100 row old chunk replace is 2100 row all new new chunk: edit length far over pre- compute 2000,diffLines over limit.
     const oldBlock = Array.from({ length: 2_100 }, (_, i) => `old-${i}`).join('\n') + '\n'
     const newBlock = Array.from({ length: 2_100 }, (_, i) => `new-${i}`).join('\n') + '\n'
     const original = `head\n${oldBlock}tail\n`
     const diff = diffOf(original, oldBlock, newBlock)
-    // 整段替换表示：truncated 显式标记（非最小差异），统计与该表示一致。
+    // whole segment replace means:truncated explicit mark record (non- most small difference), count and the means consistent.
     assert.equal(diff.truncated, true)
     assert.equal(diff.removedLines, 2_100)
     assert.equal(diff.addedLines, 2_100)
-    assert.equal(diff.firstChangedLine, 2, '公共前缀（head）后第一处变更在新文件第 2 行')
-    assert.equal(diff.rows.length, TOOL_DIFF_MAX_ROWS, '行预算裁剪')
-    // 骨架保留公共前后缀上下文：首行是 head（第 1 行）。
+    assert.equal(diff.firstChangedLine, 2, 'public prefix (head) after one where change in new file 2 row')
+    assert.equal(diff.rows.length, TOOL_DIFF_MAX_ROWS, 'row pre- compute trim')
+    // skeleton keep public before suffix context: first row is head( 1 row).
     assert.equal(diff.rows[0]!.kind, 'context')
     assert.equal((diff.rows[0] as { oldLine: number }).oldLine, 1)
-    // 整段表示的 remove 行连续来自旧窗口第 2 行起。
+    // whole segment means remove row connect continue from old window 2 row start.
     const firstRemove = diff.rows.find((r) => r.kind === 'remove') as { oldLine: number; text: string }
     assert.equal(firstRemove.oldLine, 2)
     assert.equal(firstRemove.text, 'old-0')
   })
 
-  it('算法预算内的同规模窗口不触发整段表示（最小差异正常产出）', { timeout: 60_000 }, () => {
-    // 800 行互换（编辑长度 < 2000）：产出最小差异而非整段替换；同规模保证
-    // 两分支规模相当，超限行为确实由编辑长度驱动。
+  it('algorithm pre- compute inside same rule mode window does not trigger whole segment means (most small difference normal produce out)', { timeout: 60_000 }, () => {
+    // 800 row mutual swap (edit length < 2000): produce out most small difference while non- whole segment replace; same rule mode guarantee
+    // two branch rule mode fairly, over limit behavior indeed by edit length drive.
     const oldBlock = Array.from({ length: 800 }, (_, i) => `old-${i}`).join('\n') + '\n'
     const newBlock = Array.from({ length: 800 }, (_, i) => `new-${i}`).join('\n') + '\n'
     const original = `head\n${oldBlock}tail\n`
@@ -358,13 +358,13 @@ describe('computeEditDiff 纯函数：预算与截断', { timeout: 60_000 }, () 
     assert.equal(diff.removedLines, 800)
     assert.equal(diff.addedLines, 800)
     assert.equal(diff.rows.length, TOOL_DIFF_MAX_ROWS)
-    assert.equal(diff.truncated, true, '行预算截断仍如实标记')
-    // 最小差异与整段表示在此构造下骨架等价（全量删/全量增），区别在超限分支
-    // 由预算驱动；这里验证统计一致且首变更行相同。
+    assert.equal(diff.truncated, true, 'row pre- compute truncate still such as mark record')
+    // most small difference and whole segment means in this construct under skeleton etc. price (all amount delete/all amount increase), difference in over limit branch
+    // by pre- compute drive; this in verify count consistent and first change row identical.
     assert.equal(diff.firstChangedLine, 2)
   })
 
-  it('稀疏变更只保留各变更周围的上下文，行数预算不吞掉后续变更', { timeout: 60_000 }, () => {
+  it('sparse change only keep each change surrounding context, row count pre- compute do not swallow after continue change', { timeout: 60_000 }, () => {
     const original = Array.from({ length: 400 }, (_, i) => `line-${i + 1}`).join('\n') + '\n'
     const updated = original.replace('line-20\n', 'changed-20\n').replace('line-380\n', 'changed-380\n')
     const diff = computeEditDiff(original, updated, 0, original.length, (text) => text)
@@ -380,8 +380,8 @@ describe('computeEditDiff 纯函数：预算与截断', { timeout: 60_000 }, () 
   })
 })
 
-describe('computeEditDiff 纯函数：脱敏', { timeout: 60_000 }, () => {
-  it('单行秘密：行文本替换为占位符，行号/统计与未脱敏一致', { timeout: 60_000 }, () => {
+describe('computeEditDiff pure function: redaction', { timeout: 60_000 }, () => {
+  it('single row secret: row text replace is placeholder, row number/count and not redaction consistent', { timeout: 60_000 }, () => {
     const original = 'l1\nl2 token=s3cret-value\nl3\n'
     const redact = (text: string): string => text.split('s3cret-value').join('[REDACTED]')
     const plain = diffOf(original, 'l2', 'L2')
@@ -391,23 +391,23 @@ describe('computeEditDiff 纯函数：脱敏', { timeout: 60_000 }, () => {
     assert.equal(masked.removedLines, plain.removedLines)
     assert.equal(masked.firstChangedLine, plain.firstChangedLine)
     const serialized = JSON.stringify(masked)
-    assert.ok(!serialized.includes('s3cret-value'), '序列化结果不得包含秘密')
-    assert.ok(serialized.includes('[REDACTED]'), '命中的秘密行显示占位符')
-    // 行号仍是真实行号（与未脱敏运行一致）。
+    assert.ok(!serialized.includes('s3cret-value'), 'serialization result must not contains secret')
+    assert.ok(serialized.includes('[REDACTED]'), 'hit secret row show placeholder')
+    // row number still is real row number (and not redaction run consistent).
     assert.deepEqual(
       masked.rows.map((r) => r.kind),
       plain.rows.map((r) => r.kind),
     )
   })
 
-  it('跨行秘密（含换行）：行数改变，回退 rows=[]/truncated=true，统计保留原文', { timeout: 60_000 }, () => {
+  it('across row secret (contains newline): row count change, fall back rows=[]/truncated=true, count keep original text', { timeout: 60_000 }, () => {
     const original = 'a\nHEAD\nTAIL\nb\n'
-    // 秘密 'HEAD\nTAIL' 横跨第 2、3 行；整值脱敏后行数 4 -> 3。
+    // secret 'HEAD\nTAIL' horizontal across 2,3 row; whole value redaction after row count 4 -> 3.
     const redact = (text: string): string => text.split('HEAD\nTAIL').join('[X]')
     const diff = diffOf(original, 'b', 'B', redact)
     assert.equal(diff.truncated, true)
-    assert.deepEqual(diff.rows, [], '行数被脱敏改变时绝不展示行（无法对应真实行号）')
-    // 统计与首变更行仍是原文真实差异（b -> B 在第 4 行）。
+    assert.deepEqual(diff.rows, [], 'row count by redaction change when never render row (cannot for should real row number)')
+    // count and first change row still is original text real difference (b -> B in 4 row).
     assert.equal(diff.addedLines, 1)
     assert.equal(diff.removedLines, 1)
     assert.equal(diff.firstChangedLine, 4)
@@ -415,9 +415,9 @@ describe('computeEditDiff 纯函数：脱敏', { timeout: 60_000 }, () => {
     assert.ok(!serialized.includes('HEAD') && !serialized.includes('TAIL'))
   })
 
-  it('横跨窗口边界的多行秘密：全文先行脱敏，窗口内残段绝不泄漏', { timeout: 60_000 }, () => {
-    // 窗口为第 3-9 行（编辑第 6 行）；秘密横跨第 2/3 行（窗口边界）。
-    // 若先裁窗口再脱敏，窗口内的 'BOUNDARY-TAIL' 残段将命中不了整值秘密而泄漏。
+  it('horizontal across window boundary many row secret: all text first row redaction, window inside leftover segment never leak leak', { timeout: 60_000 }, () => {
+    // window is 3-9 row (edit 6 row); secret horizontal across 2/3 row (window boundary).
+    // if first trim window again redaction, window inside 'BOUNDARY-TAIL' leftover segment hit do not whole value secret while leak leak.
     const original =
       'l1\npre BOUNDARY-HEAD\nBOUNDARY-TAIL l3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\nl11\nl12\n'
     const secret = 'BOUNDARY-HEAD\nBOUNDARY-TAIL'
@@ -426,30 +426,30 @@ describe('computeEditDiff 纯函数：脱敏', { timeout: 60_000 }, () => {
     assert.equal(diff.truncated, true)
     assert.deepEqual(diff.rows, [])
     const serialized = JSON.stringify(diff)
-    assert.ok(!serialized.includes('BOUNDARY-TAIL'), '窗口内秘密残段不得泄漏')
+    assert.ok(!serialized.includes('BOUNDARY-TAIL'), 'window inside secret leftover segment must not leak leak')
     assert.ok(!serialized.includes('BOUNDARY-HEAD'))
-    // 统计仍是原文真实差异。
+    // count still is original text real difference.
     assert.equal(diff.addedLines, 1)
     assert.equal(diff.removedLines, 1)
     assert.equal(diff.firstChangedLine, 6)
   })
 
-  it('秘密只在窗口外的行：全文脱敏行数不变，窗口行照常展示且无秘密', { timeout: 60_000 }, () => {
+  it('secret only in window outside row: all text redaction row count do not change, window row per common render and without secret', { timeout: 60_000 }, () => {
     const original = 'secret-line=s3cret\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n'
     const redact = (text: string): string => text.split('s3cret').join('[R]')
     const diff = diffOf(original, 'l5', 'L5', redact)
     assert.equal(diff.truncated, false)
     assert.equal(diff.firstChangedLine, 5)
-    assert.ok(!JSON.stringify(diff).includes('s3cret'), '序列化结果不得包含秘密')
-    // 窗口从第 2 行起（第 5 行 - 3）：含秘密的第 1 行不在窗口内，也不出现在任何行文本。
+    assert.ok(!JSON.stringify(diff).includes('s3cret'), 'serialization result must not contains secret')
+    // window from 2 row start ( 5 row - 3): contains secret 1 row do not in window inside, also do not appear in any row text.
     const contexts = diff.rows.filter((r) => r.kind === 'context') as Array<{ oldLine: number; text: string }>
-    assert.equal(contexts[0]!.oldLine, 2, '窗口首行是第 2 行')
-    assert.ok(rowTexts(diff.rows).every((text) => !text.includes('[R]')), '窗口行不含脱敏占位符（秘密不在窗口内）')
+    assert.equal(contexts[0]!.oldLine, 2, 'window first row is 2 row')
+    assert.ok(rowTexts(diff.rows).every((text) => !text.includes('[R]')), 'window row excludes redaction placeholder (secret do not in window inside)')
   })
 })
 
 // ---------------------------------------------------------------------------
-// 工具级（真实执行）
+// tool level (real execute)
 // ---------------------------------------------------------------------------
 
 function makeApi(cwd: string, conversationId = 1) {
@@ -470,15 +470,15 @@ function makeApi(cwd: string, conversationId = 1) {
     commit: async (change: () => unknown) => change(),
     memo: async () => undefined,
     createTask: async () => {
-      throw new Error('测试不使用')
+      throw new Error('test does not use')
     },
     getTask: () => undefined,
     waitForTask: async () => {
-      throw new Error('测试不使用')
+      throw new Error('test does not use')
     },
     conversation: async () => undefined,
     executeTool: async () => {
-      throw new Error('测试不使用')
+      throw new Error('test does not use')
     },
   } as never
 }
@@ -500,11 +500,11 @@ const ajv = new Ajv({ allErrors: true, strict: false })
 const validateEditResult = ajv.compile<EditToolResult>(EDIT_TOOL_RESULT_SCHEMA)
 
 function assertSchemaValid(structured: unknown): EditToolResult {
-  assert.ok(validateEditResult(structured), `结构化输出应符合 EDIT_TOOL_RESULT_SCHEMA：${JSON.stringify(validateEditResult.errors)}`)
+  assert.ok(validateEditResult(structured), `structure output should conforms to EDIT_TOOL_RESULT_SCHEMA:${JSON.stringify(validateEditResult.errors)}`)
   return structured
 }
 
-/** 受控远端 env：真实内存文件表（对齐 file-mutation-queue.test.ts 模式）。 */
+/** subject to control remote env: real memory file table (align file-mutation-queue.test.ts pattern). */
 function makeRemoteEnv(files: Map<string, string>) {
   return {
     id: 'remote:test-node',
@@ -551,8 +551,8 @@ function makeStubFabric(env: ReturnType<typeof makeRemoteEnv>): EnvFabric {
   } as never
 }
 
-describe('edit 工具：local 真实差异结构化输出', { timeout: 60_000 }, () => {
-  it('local：结构化输出符合协议 Schema，diff 行号/文本/统计真实；newText 字面写入（$& 不解释）', { timeout: 60_000 }, async () => {
+describe('edit tool:local real difference structure output', { timeout: 60_000 }, () => {
+  it('local: structure output conforms to protocol Schema,diff row number/text/count real;newText literal write ($& do not explain)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'tool-local')
     mkdirSync(dir, { recursive: true })
     const deps = await makeRealDeps(dir)
@@ -565,8 +565,8 @@ describe('edit 工具：local 真实差异结构化输出', { timeout: 60_000 },
     )
     assert.equal(!!result.isError, false)
     const structured = assertSchemaValid(result.structuredOutput)
-    // details 是持久化 UI 通道（Web 差异展示读它），必须与 structuredOutput
-    // 同值且同样符合协议 Schema。
+    // details is persist UI channel (Web difference render read it), must and structuredOutput
+    // same value and same conforms to protocol Schema.
     assert.deepEqual(assertSchemaValid(result.details), structured)
     assert.equal(structured.path, file)
     assert.equal(structured.nodeId, 'local')
@@ -581,11 +581,11 @@ describe('edit 工具：local 真实差异结构化输出', { timeout: 60_000 },
       { kind: 'add', newLine: 2, text: 'BETA $& \\1' },
       { kind: 'context', oldLine: 3, newLine: 3, text: 'omega' },
     ])
-    // 落盘内容与 diff 同源：newText 字面写入，$& 绝不被解释为反向引用。
+    // content and diff same source:newText literal write,$& never by explain is reverse reference.
     assert.equal(readFileSync(file, 'utf8'), 'alpha\nBETA $& \\1\nomega\n')
   })
 
-  it('失败（不存在/多次出现）：isError 且绝不产生成功 diff，文件字节不变', { timeout: 60_000 }, async () => {
+  it('failed (missing/many time appear):isError and never produce succeeded diff, file byte do not change', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'tool-fail')
     mkdirSync(dir, { recursive: true })
     const deps = await makeRealDeps(dir)
@@ -598,11 +598,11 @@ describe('edit 工具：local 真实差异结构化输出', { timeout: 60_000 },
     const dup = await tool.execute({ path: 'dup.txt', oldText: 'same\n', newText: 'x' }, makeApi(dir), BACKGROUND_CONTEXT)
     assert.equal(dup.isError, true)
     assert.equal(dup.structuredOutput, undefined)
-    assert.ok((dup.output as Array<{ text: string }>)[0]!.text.includes('出现 2 次'))
-    assert.equal(readFileSync(file, 'utf8'), 'a\nsame\nb\nsame\nc\n', '失败路径文件必须保持原样')
+    assert.ok((dup.output as Array<{ text: string }>)[0]!.text.includes('appear 2 time'))
+    assert.equal(readFileSync(file, 'utf8'), 'a\nsame\nb\nsame\nc\n', 'failed path file must keep original')
   })
 
-  it('真实 SecretStash 脱敏贯穿结构化输出（巨长行截断仍不泄漏）', { timeout: 60_000 }, async () => {
+  it('real SecretStash redaction throughout structure output (huge long row truncate still without leaking)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'tool-redact')
     mkdirSync(dir, { recursive: true })
     const stash = new SecretStash()
@@ -619,11 +619,11 @@ describe('edit 工具：local 真实差异结构化输出', { timeout: 60_000 },
     assert.equal(!!result.isError, false)
     const structured = assertSchemaValid(result.structuredOutput)
     const serialized = JSON.stringify(structured)
-    assert.ok(!serialized.includes('hunter2-super-secret'), '序列化结果不得包含秘密')
+    assert.ok(!serialized.includes('hunter2-super-secret'), 'serialization result must not contains secret')
     assert.ok(serialized.includes('[REDACTED]'))
-    // details 镜像同一脱敏后的对象：持久化 UI 通道同样不泄漏。
-    assert.ok(!JSON.stringify(result.details).includes('hunter2-super-secret'), 'details 不得包含秘密')
-    // 含秘密的巨长行被截断显示：预算生效且统计完整。
+    // details mirror the same redaction after object: persist UI channel same without leaking.
+    assert.ok(!JSON.stringify(result.details).includes('hunter2-super-secret'), 'details must not contains secret')
+    // contains secret huge long row by truncate show: pre- compute takes effect and count complete.
     assert.equal(structured.diff.truncated, true)
     assert.equal(structured.diff.removedLines, 1)
     assert.equal(structured.diff.addedLines, 1)
@@ -633,9 +633,9 @@ describe('edit 工具：local 真实差异结构化输出', { timeout: 60_000 },
   })
 })
 
-describe('edit 工具：远端共享同一纯函数', { timeout: 60_000 }, () => {
-  it('远端与 local 对同内容产出完全一致 diff；文件写回远端内存文件表', { timeout: 60_000 }, async () => {
-    // local 侧（真实磁盘）。
+describe('edit tool: remote sharing the same pure function', { timeout: 60_000 }, () => {
+  it('remote and local for same content produce out fully consistent diff; file write back remote memory file table', { timeout: 60_000 }, async () => {
+    // local side (real disk).
     const localDir = join(rootDir, 'share-local')
     mkdirSync(localDir, { recursive: true })
     const content = 'one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n'
@@ -648,7 +648,7 @@ describe('edit 工具：远端共享同一纯函数', { timeout: 60_000 }, () =>
     )
     assert.equal(!!localResult.isError, false)
 
-    // 远端侧（受控内存文件表 + stub fabric）。
+    // remote side (subject to control memory file table + stub fabric).
     const remoteDir = join(rootDir, 'share-remote')
     const remoteDeps = await makeRealDeps(remoteDir)
     const files = new Map<string, string>([['/workspace/same.txt', content]])
@@ -664,13 +664,13 @@ describe('edit 工具：远端共享同一纯函数', { timeout: 60_000 }, () =>
     const remoteStructured = assertSchemaValid(remoteResult.structuredOutput)
     assert.equal(remoteStructured.nodeId, 'test-node')
     assert.equal(remoteStructured.path, '/workspace/same.txt')
-    // 两条路径必须复用同一纯函数：diff 逐字段一致（nodeId/path 除外）。
+    // two path must re- use the same pure function:diff one by one field consistent (nodeId/path except outside).
     const localStructured = assertSchemaValid(localResult.structuredOutput)
     assert.deepEqual(remoteStructured.diff, localStructured.diff)
     assert.equal(files.get('/workspace/same.txt'), content.replace('five', 'FIVE'))
   })
 
-  it('远端 oldText 不存在：失败且远端文件表不变、无结构化输出', { timeout: 60_000 }, async () => {
+  it('remote oldText missing: failed and remote file table do not change, without structure output', { timeout: 60_000 }, async () => {
     const remoteDir = join(rootDir, 'remote-fail')
     const remoteDeps = await makeRealDeps(remoteDir)
     const files = new Map<string, string>([['/workspace/x.txt', 'a\nb\n']])

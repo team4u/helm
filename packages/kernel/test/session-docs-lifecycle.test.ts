@@ -1,11 +1,11 @@
 /**
- * 会话文档专用 SSE 生命周期集成测试（真实 KernelRuntime + 真实 HTTP hub）。
+ * conversation document dedicated use SSE lifecycle integration test (real KernelRuntime + real HTTP hub).
  *
- * 覆盖：
- * - 建流后插件停用（plugin.changed enabled=false）：已建流被服务端终止（事件驱动，非轮询）；
- * - 建流后会话删除（conversation.deleted）：已建流被服务端终止；
- * - kernel.close() 关闭全部专用流并释放生命周期订阅。
- * fixture：faux 模型 + 真实 KernelRuntime.open + startHub（port 0）。
+ * override:
+ * - create stream after plugin deactivate (plugin.changed enabled=false): already create stream by server side terminate (event drive, non- polling);
+ * - create stream after conversation delete (conversation.deleted): already create stream by server side terminate;
+ * - kernel.close() close all dedicated use stream and release lifecycle subscribe.
+ * fixture:faux model + real KernelRuntime.open + startHub(port 0).
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -67,7 +67,7 @@ function sseUrl(url: string, conversationId: number): string {
   return `${url}/api/plugins/p%3Alifecycle/docs/metrics/events?conversationId=${conversationId}`
 }
 
-/** 读取到流结束（done），返回全部文本；超时防挂死。 */
+/** read to stream end (done), return all text; timeout guard against hang die. */
 async function readUntilDone(
   body: ReadableStream<Uint8Array>,
   timeoutMs = 10_000,
@@ -88,7 +88,7 @@ async function readUntilDone(
   }
 }
 
-test('专用 SSE：插件停用后已建流被终止（事件驱动关流）', { timeout: 60_000 }, async () => {
+test('dedicated use SSE: plugin deactivate after already create stream by terminate (event drive closure stream)', { timeout: 60_000 }, async () => {
   const app = await openApp()
   try {
     app.metrics.set(1, { n: 1 })
@@ -96,13 +96,13 @@ test('专用 SSE：插件停用后已建流被终止（事件驱动关流）', {
       headers: { authorization: `Bearer ${app.token}`, accept: 'text/event-stream' },
     })
     assert.equal(res.status, 200)
-    // 停用插件：plugin.changed enabled=false -> closeForPlugin -> 流终止。
+    // deactivate plugin:plugin.changed enabled=false -> closeForPlugin -> stream terminate.
     const readAll = readUntilDone(res.body as ReadableStream<Uint8Array>)
     await app.kernel.plugins.disable('p:lifecycle')
     const text = await readAll
-    assert.match(text, /event: snapshot/, '关流前首帧 snapshot 已达')
+    assert.match(text, /event: snapshot/, 'closure stream before first frame snapshot already reach')
     assert.ok(text.length >= 0)
-    // 停用后再建连：provider 校验 404（不建流）。
+    // deactivate after again create connect:provider validate 404(do not create stream).
     const rejected = await fetch(sseUrl(app.url, 1), {
       headers: { authorization: `Bearer ${app.token}`, accept: 'text/event-stream' },
     })
@@ -113,10 +113,10 @@ test('专用 SSE：插件停用后已建流被终止（事件驱动关流）', {
   }
 })
 
-test('专用 SSE：会话删除后已建流被终止（conversation.deleted 关流）', { timeout: 60_000 }, async () => {
+test('dedicated use SSE: conversation after deletion already create stream by terminate (conversation.deleted closure stream)', { timeout: 60_000 }, async () => {
   const app = await openApp()
   try {
-    // 新建独立会话验证删除级联，不依赖播种入口的固定 ID。
+    // creates new independent conversation verify delete level join, independent of broadcast entry fixed ID.
     const conv = await app.kernel.createConversation({})
     const conversationId = conv.id
     app.metrics.set(conversationId, { n: 1 })
@@ -127,13 +127,13 @@ test('专用 SSE：会话删除后已建流被终止（conversation.deleted 关�
     const readAll = readUntilDone(res.body as ReadableStream<Uint8Array>)
     await app.kernel.deleteConversation(conversationId)
     const text = await readAll
-    assert.match(text, /event: snapshot/, '关流前首帧 snapshot 已达')
+    assert.match(text, /event: snapshot/, 'closure stream before first frame snapshot already reach')
   } finally {
     await app.close()
   }
 })
 
-test('kernel.close()：专用流全部终止且生命周期订阅释放', { timeout: 60_000 }, async () => {
+test('kernel.close(): dedicated use stream all terminate and lifecycle subscribe release', { timeout: 60_000 }, async () => {
   const app = await openApp()
   app.metrics.set(1, { n: 1 })
   const res = await fetch(sseUrl(app.url, 1), {
@@ -143,7 +143,7 @@ test('kernel.close()：专用流全部终止且生命周期订阅释放', { time
   const readAll = readUntilDone(res.body as ReadableStream<Uint8Array>)
   await app.kernel.close()
   const text = await readAll
-  assert.match(text, /event: snapshot/, '关停前首帧 snapshot 已达')
-  assert.equal(app.kernel.sessionDocEvents.subscriberCount, 0, 'close 后无订阅残留')
+  assert.match(text, /event: snapshot/, 'closure stop before first frame snapshot already reach')
+  assert.equal(app.kernel.sessionDocEvents.subscriberCount, 0, 'close after without subscribe leftover')
   await app.close()
 })

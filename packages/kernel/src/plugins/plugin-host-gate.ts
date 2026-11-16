@@ -1,10 +1,10 @@
 /**
- * PluginHost 并发控制门：per-plugin 生命周期串行队列 + 写者优先服务屏障读写锁。
+ * PluginHost concurrency control gate:per-plugin lifecycle serial queue + write takes precedence service screen fault read write lock.
  *
- * Why: 启动屏障（prepare 可耗时）必须与跨插件生命周期操作互斥，否则屏障期
- * 并发 enable 的服务会漏启动、并发 disable 会被复活、stop() 会因未置位而空跑。
- * 读门保持跨插件并发，写门保证屏障与全量停止原子性；锁序恒为「per-plugin
- * 队列 → 读门」，写门不经插件队列，不存在死锁环。
+ * Why: start screen fault (prepare can time cost) must and across plugin lifecycle operation mutual exclusion, otherwise screen fault phase
+ * concurrency enable service will leak start, concurrency disable will by re-,stop() will because not placement while empty run.
+ * read gate keep across plugin concurrency, write gate guarantee screen fault and all amount stop atomicity; lock order constant isper-plugin
+ * queue → read gate, write gate do not via plugin queue, missing deadlock ring.
  */
 export class PluginHostGate {
   private lifecycle = new Map<string, Promise<unknown>>();
@@ -30,7 +30,7 @@ export class PluginHostGate {
   }
 
   /**
-   * 按 pluginId 串行执行生命周期操作，并在执行期间持有服务屏障读门。
+   * by pluginId serial execute lifecycle operation, and in execute during hold has service screen fault read gate.
    */
   enqueue<T>(pluginId: string, op: () => Promise<T>): Promise<T> {
     const prev = this.lifecycle.get(pluginId) ?? Promise.resolve();
@@ -98,7 +98,7 @@ export class PluginHostGate {
     }
   }
 
-  /** 等待所有已入队的生命周期任务收敛并清空队列索引（dispose 时调用）。 */
+  /** wait for all already queue lifecycle task converge and empty queue index (dispose when invoke). */
   async drain(): Promise<void> {
     await Promise.allSettled([...this.lifecycle.values()]);
     this.lifecycle.clear();

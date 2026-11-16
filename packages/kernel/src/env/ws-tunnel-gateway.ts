@@ -1,19 +1,19 @@
 /**
- * 节点透传隧道独立网关：/ws/node-tunnel。
+ * node pass-through tunnel independent gateway:/ws/node-tunnel.
  *
- * 与 /ws/node（birpc 控制面）不同，本网关只承载「首帧 JSON 认证 → 之后
- * 纯字节管道」的隧道连接：
- * - 首帧必须是 NodeTunnelHello（无 type 字段）且 ≤ 4096 字节；非法 JSON/
- *   结构不符/鉴权失败/pending 不存在或不匹配 → 回 NodeTunnelControl error
- *   帧后关闭（诚实拒绝，不静默挂死）；error 之后绝不进入数据期；
- * - 首帧超时：从不发 hello 的连接在时限（缺省 10s，对照 /ws/node 的
- *   registerTimeoutMs）后 close(4001)，防恶意/异常客户端堆积空闲连接；
- * - 成功路径：**先认证 + 一次性匹配 + epoch 复查全通过（acceptTunnel），
- *   再发 {type:'ok'}，随后 createWebSocketStream 交棒 grantTunnel**——
- *   ok 帧绝不早于认证；grantTunnel 发现 pending 已定格失败时销毁交来的
- *   流（registry 内防泄漏），本网关亦不残留任何资源；
- * - 交棒后停止一切 JSON 解析：后续帧只走 Duplex 字节流（数据期单帧上限
- *   由 wss maxPayload 界定，远大于首帧 4096 限制）。
+ * and /ws/node(birpc control side) different, this gateway only bear load first frame JSON recognize verify → after
+ * pure byte pipeline tunnel connect:
+ * - first frame must be NodeTunnelHello(without type field) and ≤ 4096 byte; illegal JSON/
+ *   structure do not symbol/authentication failed/pending missing or does not match → back NodeTunnelControl error
+ *   frame after close (honest reject, not silently hang die);error after never enter data phase;
+ * - first frame timeout: never hello connect in when limit (default 10s, compare /ws/node 
+ *   registerTimeoutMs) after close(4001), guard against malicious/exception client heap accumulate idle connect;
+ * - succeeded path:**first recognize verify + once match + epoch re- inspect all via (acceptTunnel),
+ *   again {type:'ok'}, then createWebSocketStream hand over fine grantTunnel**- -
+ *   ok frame never early at recognize verify;grantTunnel discover pending already set format on failure destroy hand over come
+ *   stream (registry inside guard against leak leak), this gateway also leaves no residue any asset;
+ * - hand over fine after stop everything JSON parse: after continue frame only away Duplex byte stream (data phase single frame cap
+ *   by wss maxPayload boundary set, far greater than first frame 4096 restrict).
  */
 import type { Server as HttpServer, IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
@@ -24,7 +24,7 @@ import type { NodeRegistry } from './registry.js'
 export interface NodeTunnelGatewayOptions {
   registry: NodeRegistry
   path?: string
-  /** 首帧 hello 超时（毫秒），缺省 10s（对照 /ws/node 网关）。 */
+  /** first frame hello timeout (milli second), default 10s(compare /ws/node gateway). */
   helloTimeoutMs?: number
   log?: (message: string) => void
 }
@@ -35,7 +35,7 @@ export interface NodeTunnelGateway {
 
 const HELLO_MAX_BYTES = 4096
 
-/** 首帧 hello 超时缺省（对照 ws-gateway 的 registerTimeoutMs=10s）。 */
+/** first frame hello timeout default (compare ws-gateway  registerTimeoutMs=10s). */
 const DEFAULT_HELLO_TIMEOUT_MS = 10_000
 
 const isHello = (data: unknown): data is NodeTunnelHello =>
@@ -51,8 +51,8 @@ export function attachNodeTunnelGateway(server: HttpServer, options: NodeTunnelG
     helloTimeoutMs = DEFAULT_HELLO_TIMEOUT_MS,
     log = (message: string) => console.error(`[helm] node tunnel gateway: ${message}`),
   } = options
-  // 数据期单帧上限 1MiB（daemon 侧 stream 写侧 HWM 自适应分帧）；
-  // 首帧 hello 另行独立校验 ≤ 4096 字节。
+  // data phase single frame cap 1MiB(daemon side stream write side HWM self fit should frame);
+  // first frame hello another row independent validate ≤ 4096 byte.
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 })
   let closing: Promise<void> | undefined
 
@@ -62,7 +62,7 @@ export function attachNodeTunnelGateway(server: HttpServer, options: NodeTunnelG
     if (closing) { socket.destroy(); return }
     wss.handleUpgrade(request, socket, head, (ws) => handleConnection(ws))
   }
-  // 复用同一 server 的 upgrade 事件流（与 /ws/node 网关按 pathname 分流）。
+  // re- use the same server  upgrade event stream (and /ws/node gateway by pathname stream).
   server.on('upgrade', onUpgrade)
 
   function fail(ws: WebSocket, code: NodeTunnelErrorCode, message: string): void {
@@ -70,20 +70,20 @@ export function attachNodeTunnelGateway(server: HttpServer, options: NodeTunnelG
     try {
       ws.send(JSON.stringify(frame))
     } catch {
-      // 发送失败即随关闭回收。
+      // failed to send i.e. follow close reclaim.
     }
     ws.close(4004, 'tunnel rejected')
   }
 
   function handleConnection(ws: WebSocket): void {
-    // 首帧超时：从不发 hello 的连接到时关闭（不静默挂死，也不无限堆积）。
+    // first frame timeout: never hello connect to when close (not silently hang die, also do not unbounded heap accumulate).
     const helloTimer = setTimeout(() => ws.close(4001, 'tunnel hello timeout'), helloTimeoutMs)
     const onFirstFrame = (raw: unknown): void => {
       clearTimeout(helloTimer)
       const bytes = typeof raw === 'string' ? Buffer.byteLength(raw) : (raw as Buffer).length
       if (bytes > HELLO_MAX_BYTES) {
         ws.removeListener('message', onFirstFrame)
-        fail(ws, 'invalid', `隧道首帧超过 ${HELLO_MAX_BYTES} 字节上限`)
+        fail(ws, 'invalid', `tunnel first frame exceeds ${HELLO_MAX_BYTES} byte cap`)
         return
       }
       let data: unknown
@@ -91,26 +91,26 @@ export function attachNodeTunnelGateway(server: HttpServer, options: NodeTunnelG
         data = JSON.parse(typeof raw === 'string' ? raw : Buffer.from(raw as Buffer).toString('utf8'))
       } catch {
         ws.removeListener('message', onFirstFrame)
-        fail(ws, 'invalid', '隧道首帧不是合法 JSON')
+        fail(ws, 'invalid', 'tunnel first frame is not legal JSON')
         return
       }
       if (!isHello(data)) {
         ws.removeListener('message', onFirstFrame)
-        fail(ws, 'invalid', '隧道首帧不是合法 hello')
+        fail(ws, 'invalid', 'tunnel first frame is not legal hello')
         return
       }
       const hello = data
       ws.removeListener('message', onFirstFrame)
       void registry.acceptTunnel(hello.nodeId, hello.token, hello.tunnelId).then((accepted) => {
         if (!accepted) {
-          // 认证/一次性匹配/epoch 复查任一失败：error 帧 + 关闭（ok 从未发出，
-          // 不进入数据期；此连接从未建 stream，无资源需要回收）。
-          fail(ws, 'permission_denied', '隧道拒绝：tunnelId 无效、节点换代或鉴权失败')
+          // recognize verify/once match/epoch re- inspect any one failed:error frame + close (ok from not out,
+          // does not enter data phase; this connect from not create stream, without asset need to reclaim).
+          fail(ws, 'permission_denied', 'tunnel reject:tunnelId invalid, node swap proxy or authentication failed')
           return
         }
-        // 全部通过：先发 ok（节点侧据此开始转发字节），再建 stream、交棒。
-        // grantTunnel 发现 pending 已定格失败（超时/abort 刚好插队）时会
-        // 销毁交来的流——此处再关 ws 兜底，两侧都不泄漏。
+        // all via: first ok(node side based on this start forwarding byte), again create stream, hand over fine.
+        // grantTunnel discover pending already set format failed (timeout/abort just well insert queue) when will
+        // destroy hand over come stream - - this where again closure ws fall back, two side all without leaking.
         const okFrame: NodeTunnelControl = { type: 'ok' }
         try {
           ws.send(JSON.stringify(okFrame))
@@ -121,8 +121,8 @@ export function attachNodeTunnelGateway(server: HttpServer, options: NodeTunnelG
         const stream = createWebSocketStream(ws)
         registry.grantTunnel(hello.tunnelId, stream)
       }).catch((error: unknown) => {
-        log(`隧道交接失败：${error instanceof Error ? error.message : String(error)}`)
-        fail(ws, 'unknown', '隧道交接失败')
+        log(`tunnel handover failed:${error instanceof Error ? error.message : String(error)}`)
+        fail(ws, 'unknown', 'tunnel handover failed')
       })
     }
     ws.on('message', onFirstFrame)
@@ -131,7 +131,7 @@ export function attachNodeTunnelGateway(server: HttpServer, options: NodeTunnelG
       ws.removeListener('message', onFirstFrame)
     })
     ws.once('error', (error) => {
-      log(`隧道连接错误：${error instanceof Error ? error.message : String(error)}`)
+      log(`tunnel connect error:${error instanceof Error ? error.message : String(error)}`)
       clearTimeout(helloTimer)
       ws.removeListener('message', onFirstFrame)
       ws.terminate()

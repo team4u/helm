@@ -1,41 +1,41 @@
 /**
- * 目标节点文件互斥队列（对齐 pi-durable 的 withFileMutationQueue）。
+ * target node file mutual exclusion queue (align pi-durable  withFileMutationQueue).
  *
- * 为什么需要：内核 write/edit 与插件自定义文件读改写在同一 Hub 进程内并发
- * 时（同一回合、多会话、后台服务），互相「读同一旧内容后各自写回」会丢更新。
- * 以「文件系统 id + canonical 路径」为 key 的进程级队列让所有调用方严格排队。
+ * is what need to: kernel write/edit and plugin self define file read change write in the same Hub process inside concurrency
+ * when (the same turn, many conversation, background service), mutual each other read the same old content after each write back will lose update.
+ * with file system id + canonical path is key process level queue let all caller strictly queue up.
  *
- * 与 pi-durable 的关系（语义对齐、实现独立）：
- * - pi-durable 的 tools/write、tools/edit 内部用同一算法的
- *   withFileMutationQueue 串行化，但该函数未从包 exports 暴露（deep import
- *   违反封装边界），且 helm 的 write/edit 是内核自带工具、不经 SDK 工具；
- * - 因此本模块在 helm 进程内提供同一语义的队列，并把内核 write/edit 与
- *   插件 API（EnvFabric.withFileMutationQueue）都接到这一份实现上。
+ * and pi-durable closure system (semantics align, implement independent):
+ * - pi-durable  tools/write,tools/edit internal use the same algorithm
+ *   withFileMutationQueue serial, but the function not from package exports expose (deep import
+ *   violate reverse wrap boundary), and helm  write/edit is kernel self carries tool, do not via SDK tool;
+ * - therefore this module in helm process inside provide the same semantics queue, and kernel write/edit and
+ *   plugin API(EnvFabric.withFileMutationQueue) all connect to this a implement on.
  *
- * 锁契约：
- * - key = `${文件系统 id}\u0000${canonical 路径}`；local 底座 id 恒为 'node:local'
- *   （Hub 本机文件系统），远端底座 id 为 'remote:<nodeId>'（每节点一台文件
- *   系统）——不同节点的同形路径天然不同 key，互不阻塞；
- * - canonical：realpath 解析软链别名（不同写法指向同一文件共享一把锁）；
- *   新文件（尚不存在）取「最近存在祖先的 canonical + 剩余段」拼接，保证
- *   「创建它的 write」与「之后的 edit」同 key；整条链都不存在时退化为
- *   词法绝对路径（进程内仍互斥；跨进程无锁承诺，见下）；
- * - 只锁 fn 执行窗口（读-改-写），不锁无关文件、不阻塞读操作；
- * - 队列条目按链尾结算自清理：被取消的排队者立即释放执行权，但其 Map 占位
- *   保留到前序结算后才消失——绝不提前删掉仍在运行的头部锁（否则后续新任务
- *   会与持锁者并发）；长运行进程无泄漏；
- * - 排队中被取消：与前序任务竞争等待，signal 先到立即拒绝（不等前序、不执行
- *   fn），abort listener 无论去向均清理；
- * - 不可重入：同一异步链（AsyncLocalStorage 传播）内对同一 key 嵌套入队立即
- *   显式报错 `file_mutation_queue_reentrant`，绝不静默挂死。fn 内直接调用底层
- *   writeFile（不再次入队）合法；绕过本进程异步链发起的嵌套（如独立 HTTP
- *   请求回调绕回）无法检测，仍按普通排队语义等待。
+ * lock contract:
+ * - key = `${file system id}\u0000${canonical path}`;local bottom seat id constant is 'node:local'
+ *   (Hub local machine file system), remote bottom seat id is 'remote:<nodeId>'(each node one stage file
+ *   system) - - different node same shape path day however different key, mutual non-blocking;
+ * - canonical:realpath parse symlink alias (different write method points to the same file sharing one lock);
+ *   new file (still missing) take most near store in ancestor canonical + remaining segment concatenate, guarantee
+ *   create it writeand after editsame key; whole chain all missing when retreat is
+ *   term method absolute path (process inside still mutual exclusion; across process without lock promise, see under);
+ * - only lock fn execute window (read-change-write), do not lock without closure file, non-blocking read operation;
+ * - queue item by chain tail compute self clean up: by cancel queue up immediately release execute right, but its Map occupy
+ *   keep to before order compute after only then disappear - - never mention before delete still in run header lock (otherwise after continue new task
+ *   will and hold lock concurrency); long run process without leak leak;
+ * - queue up in by cancel: and before order task competition wait for,signal first to immediately reject (do not etc. before order, do not execute
+ *   fn),abort listener regardless of remove to all clean up;
+ * - cannot heavy: the same async chain (AsyncLocalStorage pass broadcast) inside for the same key embed set queue immediately
+ *   explicit errors `file_mutation_queue_reentrant`, never static default hang die.fn inside directly invoke underlying
+ *   writeFile(no longer time queue) legal; bypass this process async chain start embed set (such as independent HTTP
+ *   request call back bypass back) cannot detect, still by ordinary queue up semantics wait for.
  *
- * 诚实边界（不承诺的）：
- * - 不是对 bash / 其他进程的锁——shell 与外部工具仍可能并发改文件；
- * - 不是跨进程/跨 Hub 的分布式锁：同一远端节点如有第二个 Hub 进程接入，
- *   两个 Hub 各自的队列互不可见。当前部署模型一个节点只接一个 Hub；
- * - 可信插件仍可直接 node:fs / bash 绕过本队列（无沙箱承诺）。
+ * honest boundary (does not promise):
+ * - is not for bash / other process lock - -shell and external tool still may concurrency change file;
+ * - is not across process/across Hub distributed style lock: the same remote node such as has second Hub process access,
+ *   two Hub each queue mutual invisible. when before deploy model a node only connect a Hub;
+ * - can message plugin still can directly node:fs / bash bypass this queue (without sandbox promise).
  */
 
 import { BACKGROUND_CONTEXT, withAbortSignal, type Context } from '@earendil-works/chord/context'
@@ -44,35 +44,35 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { realpath } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 
-/** 每文件链尾（Promise<void>：链上前序任务全部结算即 resolve，绝不 reject）。 */
+/** each file chain tail (Promise<void>: chain on before order task all compute i.e. resolve, never reject). */
 const queues = new Map<string, Promise<void>>()
 
-/** 内部/测试入队通知监听器（绝不进 env/index 公共出口）。 */
+/** internal/test queue notify listener (never enter env/index public exports). */
 const enqueueListeners = new Set<(event: { key: string; waiting: boolean }) => void>()
 
-/** 当前异步链持有的锁 key 集（嵌套重入检测）。 */
+/** when before async chain hold has lock key collection (embed set heavy detect). */
 const activeKeys = new AsyncLocalStorage<Set<string>>()
 
-/** env 调用失败上抛（Result 模型归一为异常，错误如实传播不吞）。 */
+/** env failed to invoke on throw (Result model archive one is exception, error such as pass broadcast do not swallow). */
 async function unwrapOrThrow<T>(result: { ok: true; value: T } | { ok: false; error: FileError }): Promise<T> {
   if (result.ok) return result.value
   throw result.error
 }
 
 /**
- * canonical 路径：文件不存在时取「canonical 父目录 + 文件名」逐级上溯
- * （软链目录下的新文件与创建它的 write / 后续 edit 同 key）。ENOTDIR
- * （路径中某段是文件而非目录，pi-durable 与节点侧 local-env 映射
- * not_directory）与 ENOENT 同按「不存在」上溯：与 localCanonical 及内核
- * 工具的探测链一致，否则同一 `/已存在文件/x` 路径会在两入口算出不同 key
- *（local 直连上溯、env 入口抛错），双锁与报错分叉都由此而来。
+ * canonical path: file missing when takecanonical parent directory + filename one by one level on trace
+ * (symlink directory under new file and create it write / after continue edit same key).ENOTDIR
+ * (path in a certain segment is file while non- directory,pi-durable and node side local-env mapping
+ * not_directory) and ENOENT same by missing on trace: and localCanonical and kernel
+ * tool probe chain consistent, otherwise the same `/already exists file/x` path will in two entry compute out different key
+ *(local direct connect on trace,env entry throws), double lock and errors fork all by this while come.
  */
 async function canonicalPath(env: ExecutionEnv, absolutePath: string, context: Context): Promise<string> {
   const direct = await env.canonicalPath(absolutePath, context)
   if (direct.ok) return direct.value
   if (direct.error.code === 'not_supported') return absolutePath
   if (direct.error.code !== 'not_found' && direct.error.code !== 'not_directory') throw direct.error
-  // 环境按分隔符拆分路径：名字可能含其他文件系统的分隔符字符。
+  // environment by isolate symbol split path: name may contains other file system isolate symbol character.
   const parent = await unwrapOrThrow(await env.joinPath([absolutePath, '..'], context))
   if (parent === absolutePath || !absolutePath.startsWith(parent)) return absolutePath
   const name = absolutePath.slice(parent.length + (/[/\\]$/.test(parent) ? 0 : 1))
@@ -81,16 +81,16 @@ async function canonicalPath(env: ExecutionEnv, absolutePath: string, context: C
   return unwrapOrThrow(await env.joinPath([parentCanonical, name], context))
 }
 
-/** 队列 key：文件系统 id + canonical 路径。 */
+/** queue key: file system id + canonical path. */
 async function mutationKey(env: ExecutionEnv, path: string, context: Context): Promise<string> {
   const absolute = await unwrapOrThrow(await env.absolutePath(path, context))
   return `${env.id}\u0000${await canonicalPath(env, absolute, context)}`
 }
 
 /**
- * local canonical：与 canonicalPath 同语义，直接用 node:fs realpath。
- * 仅 ENOENT / ENOTDIR（路径组件缺失）按「不存在」上溯拼接；EACCES / EIO 等
- * 如实上抛（吞掉会把真实故障伪装成不存在，违反诚实性纪律）。
+ * local canonical: and canonicalPath same semantics, directly use node:fs realpath.
+ * only ENOENT / ENOTDIR(path component missing) by missing on trace concatenate;EACCES / EIO etc.
+ * such as on throw (swallow will real fault disguise into missing, violate reverse honest discipline).
  */
 async function localCanonical(absolutePath: string): Promise<string> {
   try {
@@ -99,24 +99,24 @@ async function localCanonical(absolutePath: string): Promise<string> {
     const code = (error as { code?: string }).code
     if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error
     const parent = dirname(absolutePath)
-    // 根终止：父即自身（realpath('/') 失败的病态文件系统），绝不再递归。
+    // terminate: parent i.e. itself (realpath('/') failed illness state file system), never again recursion.
     if (parent === absolutePath) return absolutePath
     return join(await localCanonical(parent), basename(absolutePath))
   }
 }
 
-/** 重入检测：同 key 已被当前异步链持有时立即显式报错（绝不静默挂死）。 */
+/** heavy detect: same key already by when before async chain hold has when immediately explicit errors (never static default hang die). */
 function assertNotReentrant(key: string): void {
   if (activeKeys.getStore()?.has(key)) {
     const canonical = key.split('\u0000')[1] ?? key
     throw new Error(
-      `file_mutation_queue_reentrant: 路径 ${canonical} 的互斥队列不可重入——fn 内不得再对同一文件入队` +
-        '（常见成因：持锁窗口内调用同样会对该文件入队的 write/edit；请在锁外发起，或改为在 fn 内直接底层写入）',
+      `file_mutation_queue_reentrant: path ${canonical} mutual exclusion queue cannot heavy - -fn inside must not again for the same file queue` +
+        '(common into because: hold lock window inside invoke same will for the file queue write/edit; please in lock outside start, or change is in fn inside directly underlying write)',
     )
   }
 }
 
-/** 在「持有 key」的异步上下文中执行 fn（供嵌套调用重入检测）。 */
+/** in hold has keyasync context in execute fn(supply embed set invoke heavy detect). */
 async function runWithKey<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const store = new Set(activeKeys.getStore())
   store.add(key)
@@ -124,12 +124,12 @@ async function runWithKey<T>(key: string, fn: () => Promise<T>): Promise<T> {
 }
 
 /**
- * 共享调度核心（env / local 两入口唯一实现，消除重复）：
- * - 占位后与前序任务竞争 signal：排队中被取消立即拒绝（不等前序、不执行
- *   fn），abort listener 无论去向均清理；前序先结算则进入执行窗口，窗口内
- *   取消交由 fn 自身的 signal 语义；
- * - finally 无条件释放本位（done），Map 条目删除只在链尾自身结算之后——
- *   被取消排队者的占位随前序结算自然消失，绝不提前删掉仍在运行的头部锁。
+ * sharing scheduling core (env / local two entry unique implement, eliminate duplicate):
+ * - occupy after and before order task competition signal: queue up in by cancel immediately reject (do not etc. before order, do not execute
+ *   fn),abort listener regardless of remove to all clean up; before order first compute then enter execute window, window inside
+ *   cancel hand over by fn itself signal semantics;
+ * - finally without condition release this (done),Map item delete only in chain tail itself compute after - -
+ *   by cancel queue up occupy follow before order compute self however disappear, never mention before delete still in run header lock.
  */
 async function runQueued<T>(
   key: string,
@@ -148,7 +148,7 @@ async function runQueued<T>(
   for (const listener of [...enqueueListeners]) {
     listener({ key, waiting })
   }
-  // 链尾结算（前序完成 + 本位释放）后才允许删除 Map 条目。
+  // chain tail compute (before order complete + this release) after only then allows delete Map item.
   void tail.then(() => {
     if (queues.get(key) === tail) queues.delete(key)
   })
@@ -176,8 +176,8 @@ async function runQueued<T>(
 }
 
 /**
- * 同一文件（canonical）的变更严格串行；排队中取消立即拒绝（见 runQueued）。
- * 并发同文件调用按「key 解析完成的顺序」排队（与 pi-durable 一致）。
+ * the same file (canonical) change strictly serial; queue up in cancel immediately reject (see runQueued).
+ * concurrency same file invoke bykey parse complete order queue up (and pi-durable consistent).
  */
 export async function envWithFileMutationQueue<T>(
   env: ExecutionEnv,
@@ -191,8 +191,8 @@ export async function envWithFileMutationQueue<T>(
 }
 
 /**
- * local Hub 磁盘文件的互斥队列（与经 ExecutionEnv 的 local 底座同 key 空间：
- * key 前缀同为 'node:local'，canonical 算法一致，因此两种入口互斥）。
+ * local Hub disk file mutual exclusion queue (and via ExecutionEnv  local bottom seat same key empty between:
+ * key prefix same is 'node:local',canonical algorithm consistent, therefore two kinds of entry mutual exclusion).
  */
 export async function localWithFileMutationQueue<T>(
   absolutePath: string,
@@ -204,12 +204,12 @@ export async function localWithFileMutationQueue<T>(
   return runQueued(key, previous, fn, signal)
 }
 
-/** 队列内现存条目数（诊断/测试内省；不进 env/index 公共出口）。 */
+/** queue inside now store item count (diagnose/test inside omit; does not enter env/index public exports). */
 export function fileMutationQueueSize(): number {
   return queues.size
 }
 
-/** 订阅队列入队事件（诊断/测试内省；不进 env/index 公共出口）：任务完成 canonical 解析并挂入 queues 后同步触发。 */
+/** subscribe queue queue event (diagnose/test inside omit; does not enter env/index public exports): task complete canonical parse and hang queues after sync trigger. */
 export function onFileMutationEnqueue(listener: (event: { key: string; waiting: boolean }) => void): () => void {
   enqueueListeners.add(listener)
   return () => {

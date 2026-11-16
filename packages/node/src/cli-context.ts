@@ -1,42 +1,42 @@
 /**
- * CLI 层公共基座：输出注入点（NodeCliIo）、用法错误与 pid/日志路径小助手。
- * 纯机制、无命令业务；被入口 cli.ts 与各命令模块共用，保持领域文件之间零横向依赖。
+ * CLI layer public base seat: output inject point (NodeCliIo), use method error and pid/log path small assist manually.
+ * pure mechanism, without command business; by entry cli.ts and each command module shared use, keep domain file between zero horizontal dependency.
  */
 import { randomBytes } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 
-/** 注入点：测试以内存 writer 与 spawn 替身替换真实进程 IO。 */
+/** inject point: test within store writer and spawn replace body replace real process IO. */
 export interface NodeCliIo {
   env?: NodeJS.ProcessEnv;
   out: (text: string) => void;
   err: (text: string) => void;
-  /** 后台启动器（缺省真实 detached spawn + stdio IPC 就绪上报）。 */
+  /** background start (default real detached spawn + stdio IPC ready on report). */
   spawnDaemon?: (options: {
     nodePath: string;
     args: readonly string[];
     execArgv: readonly string[];
     dataDir: string;
     env: NodeJS.ProcessEnv;
-    /** 本实例控制标识（经 env 传给子进程；绝不进 argv/日志）。 */
+    /** this instance control identifier (via env pass to child process; never enter argv/log). */
     instanceId: string;
-    /** 控制端点（UDS 路径或 Windows pipe 名）。 */
+    /** control end point (UDS path or Windows pipe name). */
     endpoint: string;
-    /** 就绪上报总超时（缺省 45s）。 */
+    /** ready on report total timeout (default 45s). */
     readyTimeoutMs?: number;
   }) => Promise<{ pid: number; readyState: import('./control.js').DaemonReadyState; logPath: string }>;
-  /** 存活探测（缺省 process.kill(pid, 0)）。 */
+  /** store probe (default process.kill(pid, 0)). */
   isAlive?: (pid: number) => boolean;
-  /** 就绪上报总超时（缺省 45s）：测试注入短时限。 */
+  /** ready on report total timeout (default 45s): test inject short when limit. */
   readyTimeoutMs?: number;
-  /** launcher 跟踪轮询间隔（缺省 2s）：测试注入短间隔。 */
+  /** launcher trace polling interval (default 2s): test inject short interval. */
   launcherPollMs?: number;
-  /** service install 入口覆盖（缺省解析编译产物 dist/cli.js）。 */
+  /** service install entry override (default parse compile artifact dist/cli.js). */
   serviceEntry?: string;
 }
 
-/** 用法/输入校验错误：code 随 JSON 错误信封输出（其余错误 internal_error）。 */
+/** use method/input validate error:code follow JSON error message seal output (the rest error internal_error). */
 export class UsageError extends Error {
   constructor(
     message: string,
@@ -64,7 +64,7 @@ export function isAliveOf(io: NodeCliIo): (pid: number) => boolean {
   );
 }
 
-/** pid 留档内容：pid + 实例标识 + 控制端点（身份验证不依赖 /proc，跨平台一致）。 */
+/** pid Profile content:pid + instance identifier + control end point (identity verify independent of /proc, across platform consistent). */
 export interface PidRecord {
   pid: number;
   instanceId: string;
@@ -72,8 +72,8 @@ export interface PidRecord {
 }
 
 /**
- * 读 pid 留档：仅 ENOENT 视为「无后台进程」返回 null；损坏/结构非法/IO 错误
- * 显式抛出，绝不把坏文件静默当作「未运行」。
+ * read pid Profile: only ENOENT treated as without background process return null; corrupt/structure illegal/IO error
+ * explicit throw, never broken file static default when act not run.
  */
 export async function readPidRecord(dataDir: string): Promise<PidRecord | null> {
   let raw: string;
@@ -81,14 +81,14 @@ export async function readPidRecord(dataDir: string): Promise<PidRecord | null> 
     raw = await fsp.readFile(pidPath(dataDir), 'utf8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw new Error(`读取 pid 文件失败（${pidPath(dataDir)}）：${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`read pid file failed (${pidPath(dataDir)}):${error instanceof Error ? error.message : String(error)}`);
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
     throw new Error(
-      `pid 文件损坏（${pidPath(dataDir)}）：${error instanceof Error ? error.message : String(error)}；请人工确认无残留进程后删除该文件`,
+      `pid file corrupt (${pidPath(dataDir)}):${error instanceof Error ? error.message : String(error)}; please human confirm no residue process after delete the file`,
     );
   }
   const record = parsed as Partial<PidRecord>;
@@ -102,13 +102,13 @@ export async function readPidRecord(dataDir: string): Promise<PidRecord | null> 
     record.endpoint === ''
   ) {
     throw new Error(
-      `pid 文件内容非法（${pidPath(dataDir)}）：期望 { pid, instanceId, endpoint }；请人工确认无残留进程后删除该文件`,
+      `pid file content illegal (${pidPath(dataDir)}): expectation { pid, instanceId, endpoint }; please human confirm no residue process after delete the file`,
     );
   }
   return { pid: record.pid, instanceId: record.instanceId, endpoint: record.endpoint };
 }
 
-/** 原子写 pid 留档（同目录临时文件 + rename；0600，非 Windows chmod 失败显式抛出）。 */
+/** atomic write pid Profile (same directory temp file + rename;0600, non- Windows chmod failed explicit throw). */
 export async function writePidRecord(dataDir: string, record: PidRecord): Promise<void> {
   await fsp.mkdir(dataDir, { recursive: true });
   const target = pidPath(dataDir);
@@ -119,7 +119,7 @@ export async function writePidRecord(dataDir: string, record: PidRecord): Promis
     if (process.platform !== 'win32') await fsp.chmod(target, 0o600);
   } catch (error) {
     await fsp.unlink(temp).catch(() => undefined);
-    throw new Error(`写入 pid 文件失败（${target}）：${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`write pid file failed (${target}):${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -127,14 +127,14 @@ export async function removePidFile(dataDir: string): Promise<void> {
   try {
     await fsp.rm(pidPath(dataDir), { force: true });
   } catch (error) {
-    throw new Error(`移除 pid 文件失败（${pidPath(dataDir)}）：${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`remove pid file failed (${pidPath(dataDir)}):${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
 /**
- * CAS 删除 pid 留档：仅当文件内容仍指向 expected（pid+instanceId）时才删。
- * 升级/并发场景下 node.pid 可能已被新实例接管：绝不误删他人的留档。
- * expected 为 undefined（无原记录可校验）时不删，交由 stale 流程处理。
+ * CAS delete pid Profile: only when file content still points to expected(pid+instanceId) when only then delete.
+ * upgrade/concurrency scenario under node.pid may already by new instance take over: never mistakenly delete other person Profile.
+ * expected is undefined(without original record can validate) when do not delete, hand over by stale stream process handle.
  */
 export async function removePidFileIfMatch(dataDir: string, expected: PidRecord | undefined | null): Promise<boolean> {
   if (expected === null || expected === undefined) return false;
@@ -144,7 +144,7 @@ export async function removePidFileIfMatch(dataDir: string, expected: PidRecord 
   return true;
 }
 
-/** 等待 pid 消失（进程真正退出）；超时返回 false。 */
+/** wait for pid disappear (process truly exit); timeout return false. */
 export async function waitForExit(pid: number, timeoutMs: number, isAlive: (pid: number) => boolean): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {

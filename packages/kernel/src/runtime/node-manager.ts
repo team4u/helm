@@ -1,9 +1,9 @@
 /**
- * 节点管理器：令牌签发 / CLI bin 安装 / 磁盘与健康统计 / NodeInfo 拼装 /
- * 节点升级状态机 / 跨节点命令执行。
+ * node manage: token sign / CLI bin install / disk and health count / NodeInfo piece together install /
+ * node upgrade state machine / across node command execute.
  *
- * 从 runtime.ts 拆出（上帝类第一职责簇）。机制层：不含任何业务角色概念；
- * 升级等待经 EnvFabric registry 的 beginUpgrade waiter 与节点 RPC race。
+ * from runtime.ts split out (on emperor class one responsibility cluster). mechanism layer: excludes any business role concept;
+ * upgrade wait for via EnvFabric registry  beginUpgrade waiter and node RPC race.
  */
 import { randomBytes } from 'node:crypto'
 import { hostname, loadavg, freemem, totalmem, uptime } from 'node:os'
@@ -20,7 +20,7 @@ import { buildPosixHostShim, buildWindowsCmdWrapper, buildWindowsPosixShim, type
 import type { HelmToolDeps } from './tool-deps.js'
 import { compareStrictSemVer, hubVersion, isStrictSemVer, normalizeExplicitVersion, rpcFailureToHelmError, safeJson, unwrapUpgradeCheckRpc, unwrapUpgradeRpc, validateUpgradeCheckResult, validateUpgradeResult } from './semver.js'
 
-/** local 磁盘统计后台刷新间隔（unref 定时器，不阻退出）。 */
+/** local disk count background refresh interval (unref timer, do not block exit). */
 const LOCAL_DISK_REFRESH_MS = 30_000
 
 export interface NodeManagerOptions {
@@ -30,13 +30,13 @@ export interface NodeManagerOptions {
   readonly stash: SecretStash
   readonly toolDeps: HelmToolDeps
   readonly events: { publish(type: 'notification', payload: unknown): void; publish(type: 'node.changed', payload: unknown): void }
-  /** 节点升级等待 commit 确认超时（毫秒；缺省 120000）。 */
+  /** node upgrade wait for commit confirm timeout (milli second; default 120000). */
   readonly nodeUpgradeTimeoutMs: number
 }
 
 /**
- * 节点 RpcResult 原始形状（conn.rpc.nodeCheckUpgrade 的返回类型形参化）。
- * 校验统一经 semver.ts 的 unwrap* 函数（非法形状 502，绝不透传脏数据）。
+ * node RpcResult original shape (conn.rpc.nodeCheckUpgrade return type shape reference).
+ * validate unify via semver.ts  unwrap* function (illegal shape 502, never pass-through dirty data).
  */
 type UpgradeRpcCheck = RpcResult<NodeUpgradeCheckResult>
 type UpgradeRpcResult = RpcResult<NodeUpgradeResult>
@@ -49,20 +49,20 @@ export class NodeManager {
   private readonly toolDeps: HelmToolDeps
   private readonly events: NodeManagerOptions['events']
   readonly NODE_UPGRADE_TIMEOUT_MS: number
-  /** config.json 中登记的节点签发记录（nodeId -> sha256(token)）。 */
+  /** config.json in register node sign record (nodeId -> sha256(token)). */
   private readonly nodeTokenIndex = new Map<string, string>()
-  /** helm CLI 包装脚本目录（ensureCliBinDir 生成后非空）。 */
+  /** helm CLI wrap script directory (ensureCliBinDir generate after non-empty). */
   private cliBinDirValue: string | undefined = undefined
-  /** local 节点磁盘统计缓存（fs.statfs 异步采集；同步快照直接复用）。 */
+  /** local node disk count cache (fs.statfs async collect; sync snapshot directly re- use). */
   private localDiskStats: { diskFreeBytes: number; diskTotalBytes: number } | undefined
-  /** local 磁盘统计后台刷新定时器（unref；close 时清理）。 */
+  /** local disk count background refresh timer (unref;close when clean up). */
   private localDiskRefreshTimer: NodeJS.Timeout | undefined
-  /** local 磁盘统计在途刷新（singleflight，防重入叠加）。 */
+  /** local disk count in-flight refresh (singleflight, guard against heavy stack add). */
   private localDiskRefreshing: Promise<void> = Promise.resolve()
-  /** 自动升级去重：同节点一次进程生命周期只自动尝试一轮。 */
+  /** automatically upgrade dedupe: same node once process lifecycle only automatically attempt one round. */
   readonly #autoUpgradeAttempted = new Set<string>()
 
-  /** 会话元数据解析（宿主注入 store.getConv + 404 语义）。 */
+  /** conversation metadata parse (host inject store.getConv + 404 semantics). */
   private readonly convOf: (conversationId: number) => { nodeId?: string; cwd: string }
 
   constructor(options: NodeManagerOptions & { convOf: (conversationId: number) => { nodeId?: string; cwd: string } }) {
@@ -76,7 +76,7 @@ export class NodeManager {
     this.convOf = options.convOf
   }
 
-  /** HELM_AUTO_UPGRADE_NODES=1 显式开启才自动升级（缺省关）。 */
+  /** HELM_AUTO_UPGRADE_NODES=1 explicit open start only then automatically upgrade (default closure). */
   private get autoUpgradeEnabled(): boolean {
     return process.env['HELM_AUTO_UPGRADE_NODES'] === '1'
   }
@@ -86,27 +86,27 @@ export class NodeManager {
   }
 
   // ------------------------------------------------------------------
-  // 签发表（config.json.nodes）
+  // sign table (config.json.nodes)
   // ------------------------------------------------------------------
 
-  /** 加载 config.json 的 nodes 签发表（nodeId -> sha256(token)）；损坏显式上抛。 */
+  /** load config.json  nodes sign table (nodeId -> sha256(token)); corrupt explicit on throw. */
   async loadNodeTokens(): Promise<void> {
     const config = await this.configSvc.get()
     const nodes = config['nodes']
     this.nodeTokenIndex.clear()
     if (nodes === undefined) return
     if (typeof nodes !== 'object' || nodes === null || Array.isArray(nodes)) {
-      throw new HelmError('config_corrupt', 'config.json.nodes 需为对象（nodeId -> sha256(token)）', 500)
+      throw new HelmError('config_corrupt', 'config.json.nodes must be an object (nodeId -> sha256(token))', 500)
     }
     for (const [nodeId, digest] of Object.entries(nodes as Record<string, unknown>)) {
       if (typeof digest !== 'string' || digest === '') {
-        throw new HelmError('config_corrupt', `config.json.nodes['${nodeId}'] 需为非空字符串摘要`, 500)
+        throw new HelmError('config_corrupt', `config.json.nodes['${nodeId}'] must be a non-empty string summary`, 500)
       }
       this.nodeTokenIndex.set(nodeId, digest)
     }
   }
 
-  /** 把当前签发表写回 config.json.nodes。 */
+  /** when before sign table write back config.json.nodes. */
   private async persistNodeTokens(): Promise<void> {
     const nodes: Record<string, string> = {}
     for (const [nodeId, digest] of this.nodeTokenIndex) nodes[nodeId] = digest
@@ -117,21 +117,21 @@ export class NodeManager {
     return this.nodeTokenIndex.has(nodeId)
   }
 
-  /** 签发摘要现读（EnvFabric fail-closed 鉴权器消费；nodeId -> sha256(token)）。 */
+  /** sign summary now read (EnvFabric fail-closed authentication consume;nodeId -> sha256(token)). */
   nodeDigestOf(nodeId: string): string | undefined {
     return this.nodeTokenIndex.get(nodeId)
   }
 
-  /** 签发节点接入令牌：明文 token 仅本次返回，服务端只存 sha256。 */
+  /** sign node access token: plaintext token only this time return, server side only store sha256. */
   async issueNodeToken(nodeId: string): Promise<NodeIssuedToken> {
     if (nodeId === 'local') {
-      throw new HelmError('cannot_issue_local', "local 是内建节点，无需接入令牌", 400, { nodeId })
+      throw new HelmError('cannot_issue_local', "local is inside create node, no need to access token", 400, { nodeId })
     }
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(nodeId)) {
       throw new HelmError(
         'validation_error',
-        'nodeId 需匹配 /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/' +
-          '（字母数字开头，可含 . _ -，最长 128 字符）',
+        'nodeId must match /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/' +
+          '(character parent number open head, can contains . _ -, most long 128 character)',
         400,
         { nodeId },
       )
@@ -140,7 +140,7 @@ export class NodeManager {
     const token = `${nodeId}:${secret}`
     this.nodeTokenIndex.set(nodeId, sha256hex(token))
     await this.persistNodeTokens()
-    // 明文 token 入出站脱敏（绝不落库/进模型上下文/出现在日志）。
+    // plaintext token out station redaction (never written to the database/enter model context/appear in log).
     this.stash.addRedaction(token)
     this.stash.addRedaction(secret)
     this.events.publish('node.changed', {
@@ -150,18 +150,18 @@ export class NodeManager {
     return { nodeId, token, createdAt: Date.now() }
   }
 
-  /** 移除节点：从签发表删除并立即掐断在途 WS 连接。 */
+  /** remove node: from sign table delete and immediately pinch assert in-flight WS connect. */
   async removeNode(nodeId: string): Promise<void> {
     if (nodeId === 'local') {
-      throw new HelmError('cannot_remove_local_node', 'local 是内建节点，不可移除', 400, { nodeId })
+      throw new HelmError('cannot_remove_local_node', 'local is inside create node, cannot remove', 400, { nodeId })
     }
     if (!this.nodeTokenIndex.has(nodeId)) {
-      throw new HelmError('not_found', `节点不存在：${nodeId}`, 404, { nodeId })
+      throw new HelmError('not_found', `node missing:${nodeId}`, 404, { nodeId })
     }
     this.nodeTokenIndex.delete(nodeId)
     await this.persistNodeTokens()
-    // 先掐断在途连接（可能触发 onNodeChanged 离线回调；彼时 nodeTokenIndex
-    // 已删除，回调侧会跳过），再统一发布带 removed: true 的移除事件。
+    // first pinch assert in-flight connect (may trigger onNodeChanged offline call back; that when nodeTokenIndex
+    // deleted, call back side will skip), again unify publish carries removed: true remove event.
     this.envFabric.registry.disconnect(nodeId)
     this.events.publish('node.changed', {
       type: 'node.changed',
@@ -171,19 +171,19 @@ export class NodeManager {
   }
 
   // ------------------------------------------------------------------
-  // CLI bin 包装脚本
+  // CLI bin wrap script
   // ------------------------------------------------------------------
 
   /**
-   * 在 dataDir 下生成 <dataDir>/bin 包装脚本目录（使受管子进程在 PATH 中
-   * 直接运行 helm 命令，--current 语义开箱即通）：
-   * - POSIX host：helm = `#!/bin/sh` exec 直调（cli-shim.buildPosixHostShim）；
-   * - win32 host：helm.cmd = cmd.exe wrapper（历史行为不变）；helm = 面向
-   *   WSL / Git Bash 的 POSIX shim——运行时经 wslpath/cygpath 仅解析
-   *   node.exe 可执行文件，入口保持 Windows 路径；解析失败显式诊断并
-   *   127 退出，绝不回退 Linux node（cli-shim.buildWindowsPosixShim）。
-   * 幂等：内容变化时重写，权限恒 0o755。platform/execPath 缺省取当前
-   * 进程（测试注入模拟 win32 host；生成逻辑全部在 cli-shim.ts 纯函数）。
+   * in dataDir under generate <dataDir>/bin wrap script directory (make managed child process in PATH in
+   * directly run helm command,--current semantics open box i.e. through):
+   * - POSIX host:helm = `#!/bin/sh` exec direct tune (cli-shim.buildPosixHostShim);
+   * - win32 host:helm.cmd = cmd.exe wrapper(history behavior do not change);helm = for
+   *   WSL / Git Bash  POSIX shim- - runtime via wslpath/cygpath only parse
+   *   node.exe can execute file, entry keep Windows path; failed to parse explicit diagnose and
+   *   127 exit, never fall back Linux node(cli-shim.buildWindowsPosixShim).
+   * idempotent: content change when heavy write, permission constant 0o755.platform/execPath default take when before
+   * process (test inject simulated win32 host; generate logic all in cli-shim.ts pure function).
    */
   async ensureCliBinDir(
     override: { platform?: NodeJS.Platform; execPath?: string } = {},
@@ -192,25 +192,25 @@ export class NodeManager {
     const execPath = override.execPath ?? process.execPath
     const binDir = join(this.dataDir, 'bin')
     const helmPath = join(binDir, 'helm')
-    // Electron 宿主注入：Hub 以 ELECTRON_RUN_AS_NODE 运行时 process.execPath 是
-    // Electron 二进制，生成的 CLI wrapper 必须同样携带 ELECTRON_RUN_AS_NODE=1，
-    // 否则 wrapper exec 出的是 GUI 进程而非 Node CLI。仅注入这一个必要字段，
-    // 不把 Electron 环境泄漏给全部 shell。
+    // Electron host inject:Hub with ELECTRON_RUN_AS_NODE runtime process.execPath is
+    // Electron two enter system, generate CLI wrapper must same carry ELECTRON_RUN_AS_NODE=1,
+    // otherwise wrapper exec out is GUI process while non- Node CLI. only inject this a must want field,
+    // does not Electron environment leak leak to all shell.
     const env = process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : undefined
     let plan: CliShimPlan
-    // 显式 CLI 入口（安装包 payload 布局无 packages/cli 目录，上溯推导会落空；
-    // 由桌面主代理指向 <release>/cli/dist/index.js）。只接受单入口文件路径。
+    // explicit CLI entry (install package payload layout without packages/cli directory, on trace push lead will empty;
+    // by desktop main proxy points to <release>/cli/dist/index.js). only accept single entry file path.
     const explicitEntry = process.env.HELM_CLI_ENTRY
     if (explicitEntry) {
       plan = { execPath, entryArgs: [explicitEntry], ...(env ? { env } : {}) }
     } else {
-      // tsx CLI 与仓库 CLI 入口：以当前模块位置推导（源码运行与 dist 运行同构）。
+      // tsx CLI and repository CLI entry: with when before module location push lead (source code run and dist run same construct).
       const kernelDir = dirname(fileURLToPath(import.meta.url))
       const repoRoot = this.resolveRepoRoot(kernelDir)
       const compiledCli = join(repoRoot, 'packages', 'cli', 'dist', 'index.js')
       const sourceCli = join(repoRoot, 'packages', 'cli', 'src', 'index.ts')
       const compiled = await access(compiledCli).then(() => true, () => false)
-      // 源码内核必须配套源码 CLI，避免旧 dist 命令表与新 protocol 契约混用。
+      // source code kernel must match set source code CLI, avoid old dist command table and new protocol contract mix use.
       const useCompiled = basename(dirname(kernelDir)) !== 'src' && compiled
       plan = {
         execPath,
@@ -234,27 +234,27 @@ export class NodeManager {
       }
       this.cliBinDirValue = binDir
     } catch (error) {
-      // 包装脚本生成失败不阻断内核启动（受管子进程仍可用绝对路径），
-      // 但显式通知（不静默吞）。
+      // wrap script generate failed do not block assert kernel start (managed child process still available absolute path),
+      // but explicit notify (not silently swallow).
       this.events.publish('notification', {
         level: 'warning',
-        title: 'helm CLI 包装脚本生成失败',
+        title: 'helm CLI wrap script generate failed',
         body: String(error instanceof Error ? error.message : error),
       })
     }
   }
 
-  /** 从 kernel 模块位置推导仓库根（src/runtime -> 上溯两级；dist 同构）。 */
+  /** from kernel module location push lead repository (src/runtime -> on trace two level;dist same construct). */
   private resolveRepoRoot(kernelDir: string): string {
-    // src/runtime 或 dist/runtime → packages/kernel/<x> → 仓库根。
+    // src/runtime or dist/runtime → packages/kernel/<x> → repository.
     return dirname(dirname(dirname(dirname(kernelDir))))
   }
 
   // ------------------------------------------------------------------
-  // local 磁盘 / 健康统计
+  // local disk / health count
   // ------------------------------------------------------------------
 
-  /** 单次 fs.statfs(dataDir) 采集 local 磁盘空间（失败时保留上次缓存，不阻断列表）。 */
+  /** single time fs.statfs(dataDir) collect local disk empty between (on failure keep on time cache, do not block assert list). */
   private async refreshLocalDiskStats(): Promise<void> {
     try {
       const st = await statfs(this.dataDir)
@@ -263,12 +263,12 @@ export class NodeManager {
         diskTotalBytes: Number(st.blocks) * Number(st.bsize),
       }
     } catch {
-      // 磁盘统计失败不影响节点列表主体（health 磁盘字段缺省），
-      // 保留最近一次有效缓存。
+      // disk count failed does not affect node list body (health disk field default),
+      // keep most near once valid cache.
     }
   }
 
-  /** 异步刷新 local 磁盘缓存（singleflight）；首次调用同时启动后台定时刷新。 */
+  /** async refresh local disk cache (singleflight); first time invoke also after startup stage set when refresh. */
   ensureLocalDiskStats(): Promise<void> {
     this.localDiskRefreshing = this.localDiskRefreshing.then(() => this.refreshLocalDiskStats())
     if (this.localDiskRefreshTimer === undefined) {
@@ -281,7 +281,7 @@ export class NodeManager {
     return this.localDiskRefreshing
   }
 
-  /** local 节点实时健康快照（内存/负载实时采集；磁盘用最近一次缓存）。 */
+  /** local node real-time health snapshot (memory/load real-time collect; disk use most near once cache). */
   private localHealthSnapshot(): NodeHealthSnapshot {
     const [la1, la5, la15] = loadavg()
     const health: NodeHealthSnapshot = {
@@ -300,8 +300,8 @@ export class NodeManager {
   }
 
   /**
-   * 登记节点（byom）的 NodeInfo 拼装：onNodeChanged 事件与 listNodesSync
-   * 共用同一实现（字段展开规则同源，消除两处重复）。
+   * register node (byom) NodeInfo piece together install:onNodeChanged event and listNodesSync
+   * shared use the same implement (field expand rule same source, eliminate two where duplicate).
    */
   byomNodeInfo(nodeId: string, conn: { hostname?: string; platform?: string; version?: string; hubUrl?: string; connectedAt?: number; lastSeenAt?: number; health?: NodeHealthSnapshot } | undefined): NodeInfo {
     return {
@@ -318,7 +318,7 @@ export class NodeManager {
     }
   }
 
-  /** local 节点 NodeInfo（版本恒取 Hub 自身；健康为实时快照）。 */
+  /** local node NodeInfo(version constant take Hub itself; health is real-time snapshot). */
   localNodeInfo(): NodeInfo {
     return {
       id: 'local',
@@ -331,13 +331,13 @@ export class NodeManager {
     }
   }
 
-  /** 节点列表：首项恒为 local；随后为 config.json 登记节点与实时在线状态。 */
+  /** node list: first items constant is local; then is config.json register node and real-time online state. */
   async listNodes(): Promise<NodeInfo[]> {
     await this.ensureLocalDiskStats()
     return this.listNodesSync()
   }
 
-  /** 同步版（SSE snapshot provider 用；与 listNodes 同一数据源）。 */
+  /** sync edition (SSE snapshot provider use; and listNodes the same data source). */
   listNodesSync(): NodeInfo[] {
     const out: NodeInfo[] = [this.localNodeInfo()]
     for (const nodeId of this.nodeTokenIndex.keys()) {
@@ -347,34 +347,34 @@ export class NodeManager {
   }
 
   // ------------------------------------------------------------------
-  // 节点升级（check / upgrade 状态机）
+  // node upgrade (check / upgrade state machine)
   // ------------------------------------------------------------------
 
-  /** 升级前置：local 拒绝、未知 404、离线 409；返回当前在线连接。 */
+  /** upgrade pre-:local reject, unknown 404, offline 409; return when before online connect. */
   private requireUpgradableConnection(nodeId: string): { version?: string; rpc: NodeEnvRpcFunctions } {
     if (nodeId === 'local') {
-      throw new HelmError('cannot_upgrade_local', 'local 与 Hub 同进程，升级 Hub 即升级 local', 400, { nodeId })
+      throw new HelmError('cannot_upgrade_local', 'local and Hub same process, upgrade Hub i.e. upgrade local', 400, { nodeId })
     }
     if (!this.nodeTokenIndex.has(nodeId)) {
-      throw new HelmError('not_found', `节点不存在：${nodeId}`, 404, { nodeId })
+      throw new HelmError('not_found', `node missing:${nodeId}`, 404, { nodeId })
     }
     const conn = this.envFabric.registry.get(nodeId)
     if (conn === undefined) {
-      throw new HelmError('node_offline', `节点离线：${nodeId}`, 409, { nodeId })
+      throw new HelmError('node_offline', `node offline:${nodeId}`, 409, { nodeId })
     }
     return conn
   }
 
   /**
-   * 检查节点可用更新（GET /api/nodes/:id/upgrade/check）：透传节点 RPC
-   * nodeCheckUpgrade 并校验 RpcResult 与结果边界。
-   * - local：400（不支持）；未知节点：404；离线：409；
-   * - 节点不支持升级：501；RpcResult 结构化失败/结果非法：400/502。
+   * check node available update (GET /api/nodes/:id/upgrade/check): pass-through node RPC
+   * nodeCheckUpgrade and validate RpcResult and result boundary.
+   * - local:400(unsupported); unknown node:404; offline:409;
+   * - node unsupported upgrade:501;RpcResult structure failed/result illegal:400/502.
    */
   async checkNodeUpgrade(nodeId: string, input: NodeUpgradeCheckInput = {}): Promise<NodeUpgradeCheckResult> {
     const conn = this.requireUpgradableConnection(nodeId)
     if (conn.rpc.nodeCheckUpgrade === undefined) {
-      throw new HelmError('node_upgrade_not_supported', `节点 ${nodeId} 不支持升级（旧版 @helm/node）`, 501, { nodeId })
+      throw new HelmError('node_upgrade_not_supported', `node ${nodeId} unsupported upgrade (old edition @helm/node)`, 501, { nodeId })
     }
     let result: UpgradeRpcCheck
     try {
@@ -382,7 +382,7 @@ export class NodeManager {
     } catch (error) {
       throw new HelmError(
         'node_upgrade_unavailable',
-        `节点 ${nodeId} 升级检查传输失败：${error instanceof Error ? error.message : String(error)}`,
+        `node ${nodeId} upgrade check transfer failed:${error instanceof Error ? error.message : String(error)}`,
         502,
         { nodeId },
       )
@@ -391,17 +391,17 @@ export class NodeManager {
   }
 
   /**
-   * 触发节点升级（POST /api/nodes/:id/upgrade）：
-   * 1. 解析精确 targetVersion（显式版本规范化；空目标先 check 取 latest）；
-   *    previousVersion 取自节点上报的当前版本；缺失时先 check 取其真实
-   *    currentVersion（绝不伪造 'unknown'——那永不匹配 commit）；
-   * 2. 生成随机 attemptId，先安装注册表升级等待器，再调 conn.rpc.nodeUpgrade；
-   *    与等待器结果/超时真正 race（RPC 永久不返回时整体仍有界，绝不挂
-   *    30min birpc 预算），迟到 RPC 结果不产生 unhandled rejection；
-   * 3. 节点明确返回「无操作且合法」（ok/upgraded:false）→ 取消等待并如实返回；
-   * 4. 节点结构化失败 / 结果非法 → 取消等待并报错；原 socket 传输断开 →
-   *    继续等 commit，绝不假成功；超时未确认 → 502 显式「结果未确认」；
-   * 5. 任何非 commit 终止路径统一 finally 清理等待器（绝不让后续升级永久 busy）。
+   * trigger node upgrade (POST /api/nodes/:id/upgrade):
+   * 1. parse precise targetVersion(explicit version specification; empty target first check take latest);
+   *    previousVersion take self node on report when before version; missing when first check take its real
+   *    currentVersion(never fabricate 'unknown'- - that forever does not match commit);
+   * 2. generate random attemptId, first install register table upgrade wait for, again tune conn.rpc.nodeUpgrade;
+   *    and wait for result/timeout truly race(RPC forever long do not return when whole still has boundary, never hang
+   *    30min birpc pre- compute), late to RPC result produces no unhandled rejection;
+   * 3. node explicit return without operation and legal (ok/upgraded:false)→ cancel wait for and such as return;
+   * 4. node structure failed / result illegal → cancel wait for and errors; original socket transfer disconnect →
+   *    continue etc. commit, never false succeeded; timeout not confirm → 502 explicit result not confirm;
+   * 5. any non- commit terminate path unify finally clean up wait for (never let after continue upgrade forever long busy).
    */
   async upgradeNode(
     nodeId: string,
@@ -409,7 +409,7 @@ export class NodeManager {
   ): Promise<NodeUpgradeResult> {
     const conn = this.requireUpgradableConnection(nodeId)
     if (conn.rpc.nodeUpgrade === undefined) {
-      throw new HelmError('node_upgrade_not_supported', `节点 ${nodeId} 不支持升级（旧版 @helm/node）`, 501, { nodeId })
+      throw new HelmError('node_upgrade_not_supported', `node ${nodeId} unsupported upgrade (old edition @helm/node)`, 501, { nodeId })
     }
     const { targetVersion, previousVersion } = await this.resolveUpgradeVersions(nodeId, conn.version, input)
     const attemptId = randomBytes(16).toString('hex')
@@ -419,9 +419,9 @@ export class NodeManager {
       previousVersion,
       timeoutMs: this.NODE_UPGRADE_TIMEOUT_MS,
     })
-    // 所有非 commit 终止路径统一清理等待器（否则后续升级永久 busy）。
+    // all non- commit terminate path unify clean up wait for (otherwise after continue upgrade forever long busy).
     const finallyCancel = (): void => {
-      waiter.cancel(new HelmError('node_upgrade_cancelled', `节点 ${nodeId} 升级等待已终结`, 502))
+      waiter.cancel(new HelmError('node_upgrade_cancelled', `node ${nodeId} upgrade wait for already final`, 502))
     }
     try {
       return await this.settleUpgradeAttempt(nodeId, conn, {
@@ -435,14 +435,14 @@ export class NodeManager {
     }
   }
 
-  /** 目标与基准版本解析：显式规范化；缺失经 check RPC 取真实值（绝不伪造）。 */
+  /** target and base allow version parse: explicit specification; missing via check RPC take real value (never fabricate). */
   private async resolveUpgradeVersions(
     nodeId: string,
     nodeVersion: string | undefined,
     input: { targetVersion?: string; registryUrl?: string },
   ): Promise<{ targetVersion: string; previousVersion: string }> {
-    // 显式目标版本：trim + 去单个 v 前缀 + 严格 SemVer；规范化后用于
-    // attempt 创建、RPC 调用与 commit 对账（三方同源）。
+    // explicit target version:trim + remove single v prefix + strictly SemVer; specification after used to
+    // attempt create,RPC invoke and commit for account (three way same source).
     const explicitTarget =
       input.targetVersion !== undefined && input.targetVersion !== ''
         ? normalizeExplicitVersion(input.targetVersion)
@@ -460,16 +460,16 @@ export class NodeManager {
   }
 
   /**
-   * 单次升级 attempt 的结算（upgradeNode 拆出的阶段函数；嵌套上限 4 层）。
+   * single time upgrade attempt compute (upgradeNode split out phase function; embed set cap 4 layer).
    *
-   * race 语义约束：RPC 与等待器（commit / 超时）只 race 一次；后续终态一律
-   * 只 await commitPromise（等待器自带 timer，有界）；绝不重复 race 已
-   * settle 的 rpcPromise（它瞬间重放同一败值，会把「断开等 commit」误判成
-   * 终态失败）。birpc $close 会先置 $closed 再 reject 在途调用；ws-gateway
-   * 的 onGeneralError 返回 true 会把该 reject 吞成 resolve(undefined)。
-   * 因此仅当「应答为 undefined 且本次调用所用 rpc 实例已确实关闭」时才归为
-   * 传输中断（候选顶替旧 socket 的必经链），转为 rpcError 继续等 commit；
-   * 其余非法应答仍按 invalid shape 502，绝不让任意非法值无限等待。
+   * race semantics constraint:RPC and wait for (commit / timeout) only race once; after continue terminal state one rule
+   * only await commitPromise(wait for self carries timer, has boundary); never duplicate race already
+   * settle  rpcPromise(it instant between replay the same failed value, will disconnect etc. commitmistakenly judge into
+   * terminal state failed).birpc $close will first placement $closed again reject in-flight invoke;ws-gateway
+   *  onGeneralError return true will the reject swallow into resolve(undefined).
+   * therefore only when reply is undefined and this time invoke which use rpc instance already indeed close when only then archive is
+   * transfer interrupt (choose top replace old socket must via chain), rotate is rpcError continue etc. commit;
+   * the rest illegal reply still by invalid shape 502, never let any illegal value unbounded wait for.
    */
   private async settleUpgradeAttempt(
     nodeId: string,
@@ -497,7 +497,7 @@ export class NodeManager {
           return {
             kind: 'rpcError' as const,
             error: new Error(
-              'nodeUpgrade 在途调用因旧 socket 被顶替而关闭（birpc $close 的 reject 被 onGeneralError 吞成 resolve(undefined)）',
+              'nodeUpgrade in-flight invoke because old socket by top replace while close (birpc $close  reject by onGeneralError swallow into resolve(undefined))',
             ),
           }
         }
@@ -509,40 +509,40 @@ export class NodeManager {
       (value) => ({ kind: 'commit' as const, value }),
       (error: unknown) => ({ kind: 'waiterError' as const, error }),
     )
-    // RPC 完成但被 commit 先到掩盖时，迟到分支不会再被读取——已在上方
-    // then 内捕获为普通值，无 unhandled rejection 风险。
+    // RPC complete but by commit first to mask when, late to branch will not again by read - - already in on way
+    // then inside catch is ordinary value, without unhandled rejection risk.
     const first = await Promise.race([commitPromise, rpcPromise])
     if (first.kind === 'commit') {
       return first.value
     }
     if (first.kind === 'waiterError') {
-      // 等待器已终结（超时/取消）而 RPC 未先回：升级结果未确认。
-      throw this.unconfirmedError(nodeId, targetVersion, attemptId, first.error, '结果未确认')
+      // wait for already final (timeout/cancel) while RPC not first back: upgrade result not confirm.
+      throw this.unconfirmedError(nodeId, targetVersion, attemptId, first.error, 'result not confirm')
     }
     if (first.kind === 'rpcError') {
-      // 传输层断开（旧 socket 被候选顶替时必然发生）：不是终态——继续
-      // 等 commit（候选注册后以 attemptId 对账）。
+      // transfer layer disconnect (old socket by choose top replace when must however occur): is not terminal state - - continue
+      // etc. commit(choose register after with attemptId for account).
       const failure = first.error instanceof Error ? first.error.message : String(first.error)
       const settled = await commitPromise
       if (settled.kind === 'commit') return settled.value
-      throw this.unconfirmedError(nodeId, targetVersion, attemptId, settled.error, `升级触发失败且未确认（传输中断）：${failure}`)
+      throw this.unconfirmedError(nodeId, targetVersion, attemptId, settled.error, `upgrade trigger failed and not confirm (transfer interrupt):${failure}`)
     }
-    // first.kind === 'rpc'：节点结构化应答（校验后按无操作 / 已启动分流）。
+    // first.kind === 'rpc': node structure reply (validate after by without operation / already start stream).
     return this.settleStructuredRpcReply(nodeId, { targetVersion, attemptId, input }, commitPromise, first.value)
   }
 
-  /** 「结果未确认」错误统一构造（502；附 attemptId 与目标版本诊断）。 */
+  /** result not confirm error unify construct (502; attach attemptId and target version diagnose). */
   private unconfirmedError(nodeId: string, targetVersion: string, attemptId: string, cause: unknown, lead: string): HelmError {
     const message = cause instanceof Error ? cause.message : String(cause)
     return new HelmError(
       'node_upgrade_unconfirmed',
-      `节点 ${nodeId} 升级到 ${targetVersion} ${lead}：${message}`,
+      `node ${nodeId} upgrade to ${targetVersion} ${lead}:${message}`,
       502,
       { nodeId, attemptId, targetVersion },
     )
   }
 
-  /** 节点结构化应答结算：非法形状 502 / 结构化拒绝原样报错 / 无操作核对 / 已启动等 commit。 */
+  /** node structure reply compute: illegal shape 502 / structure reject original errors / without operation core for / already start etc. commit. */
   private async settleStructuredRpcReply(
     nodeId: string,
     plan: { targetVersion: string; attemptId: string; input: { force?: boolean } },
@@ -550,47 +550,47 @@ export class NodeManager {
     rpcResult: unknown,
   ): Promise<NodeUpgradeResult> {
     const { targetVersion, attemptId, input } = plan
-    // 先校验 RpcResult 形状（对象 / boolean ok / 合法 value 或合法 error.code+message），非法按 502 拒绝。
+    // first validate RpcResult shape (object / boolean ok / legal value or legal error.code+message), illegal by 502 reject.
     if (!isRpcResultEnvelope(rpcResult)) {
       throw new HelmError(
         'node_upgrade_invalid_result',
-        `节点 ${nodeId} 升级返回非法 RpcResult（非对象或 ok/error 形状错误）：${safeJson(rpcResult)}`,
+        `node ${nodeId} upgrade return illegal RpcResult(non- object or ok/error shape error):${safeJson(rpcResult)}`,
         502,
         { nodeId, attemptId, targetVersion },
       )
     }
     if (rpcResult.ok !== true) {
-      // 节点结构化拒绝（not_supported / invalid / ...）：显式报错。
-      throw rpcFailureToHelmError(nodeId, '升级', rpcResult.error as { code: string; message: string })
+      // node structure reject (not_supported / invalid / ...): explicit errors.
+      throw rpcFailureToHelmError(nodeId, 'upgrade', rpcResult.error as { code: string; message: string })
     }
     const value = validateUpgradeResult(nodeId, rpcResult.value as NodeUpgradeResult)
     if (!value.ok) {
-      throw new HelmError('node_upgrade_failed', `节点 ${nodeId} 返回升级未完成`, 502, { nodeId, attemptId, targetVersion })
+      throw new HelmError('node_upgrade_failed', `node ${nodeId} return upgrade not complete`, 502, { nodeId, attemptId, targetVersion })
     }
     if (value.upgraded === false) {
       return this.settleNoOpReply(nodeId, plan, value)
     }
-    // 节点报告已启动升级流程：唯一可信终态是等待器的匹配 commit。
-    // 同样只 await commitPromise（timer 有界，绝不重 race 已 settle 的 rpc）。
+    // node report already start upgrade stream process: unique can message terminal state is wait for match commit.
+    // same only await commitPromise(timer has boundary, never heavy race already settle  rpc).
     const settled = await commitPromise
     if (settled.kind === 'commit') return settled.value
-    throw this.unconfirmedError(nodeId, targetVersion, attemptId, settled.error, '结果未确认')
+    throw this.unconfirmedError(nodeId, targetVersion, attemptId, settled.error, 'result not confirm')
   }
 
-  /** 无操作应答核对（force 语义下不存在合法无操作；版本必须与固定目标一致）。 */
+  /** without operation reply core for (force semantics under missing legal without operation; version must and fixed target consistent). */
   private settleNoOpReply(
     nodeId: string,
     plan: { targetVersion: string; attemptId: string; input: { force?: boolean } },
     value: NodeUpgradeResult,
   ): NodeUpgradeResult {
     const { targetVersion, attemptId, input } = plan
-    // 节点明确无操作（已是目标版本等）：必须 ok:true 且 previous/target
-    // 均等于本次固定目标（否则节点谎报，绝不放行）；force 语义下不存在
-    // 合法无操作（强制重装必有结果），一律按非法结果 502 拒绝。
+    // node explicit without operation (already is target version etc.): must ok:true and previous/target
+    // all equals this time fixed target (otherwise node lie report, never let through);force semantics under missing
+    // legal without operation (force heavy install must has result), one rule by illegal result 502 reject.
     if (input.force === true) {
       throw new HelmError(
         'node_upgrade_invalid_result',
-        `节点 ${nodeId} force 升级返回无操作结果（force 不接受无操作）：${safeJson(value)}`,
+        `node ${nodeId} force upgrade return without operation result (force do not accept without operation):${safeJson(value)}`,
         502,
         { nodeId, attemptId, targetVersion },
       )
@@ -598,7 +598,7 @@ export class NodeManager {
     if (value.previousVersion !== targetVersion || value.targetVersion !== targetVersion) {
       throw new HelmError(
         'node_upgrade_invalid_result',
-        `节点 ${nodeId} 升级无操作结果与固定目标不一致（期望 previous/target 均为 ${targetVersion}，实得 previous=${value.previousVersion}，target=${value.targetVersion}）`,
+        `node ${nodeId} upgrade without operation result and fixed target inconsistent (expectation previous/target all is ${targetVersion}, got previous=${value.previousVersion},target=${value.targetVersion})`,
         502,
         { nodeId, attemptId, targetVersion, result: value },
       )
@@ -607,8 +607,8 @@ export class NodeManager {
   }
 
   /**
-   * 节点上线自动升级（HELM_AUTO_UPGRADE_NODES=1）：严格 SemVer 落后 Hub
-   * 才触发；去重（同节点一次）；失败只发 warning 通知，绝不阻塞注册。
+   * node enable automatically upgrade (HELM_AUTO_UPGRADE_NODES=1): strictly SemVer after Hub
+   * only then trigger; dedupe (same node once); failed only warning notify, never block register.
    */
   async autoUpgradeIfEligible(nodeId: string, version: string | undefined): Promise<void> {
     if (!this.autoUpgradeEnabled) return
@@ -622,20 +622,20 @@ export class NodeManager {
     } catch (error) {
       this.events.publish('notification', {
         level: 'warning',
-        title: `节点 ${nodeId} 自动升级失败`,
+        title: `node ${nodeId} automatically failed to upgrade`,
         body: String(error instanceof Error ? error.message : error),
       })
     }
   }
 
   // ------------------------------------------------------------------
-  // 跨节点命令执行（execEnv）
+  // across node command execute (execEnv)
   // ------------------------------------------------------------------
 
   /**
-   * 跨节点命令执行（POST /api/env/exec）：在目标 (nodeId, cwd) 执行命令。
-   * 远端节点离线时 409 node_offline（绝不回退 local）；onChunk 逐块回放
-   * stdout/stderr（NDJSON 流式模式用）；signal 传播取消（杀远端进程树）。
+   * across node command execute (POST /api/env/exec): in target (nodeId, cwd) execute command.
+   * remote node offline when 409 node_offline(never fall back local);onChunk one by one chunk back put
+   * stdout/stderr(NDJSON streaming pattern use);signal pass broadcast cancel (kill remote process tree).
    */
   async execEnv(
     req: EnvExecRequest,
@@ -643,7 +643,7 @@ export class NodeManager {
     signal?: AbortSignal,
   ): Promise<EnvExecResponse> {
     if (typeof req.command !== 'string' && !Array.isArray(req.command)) {
-      throw new HelmError('validation_error', 'command 需为字符串或字符串数组', 400)
+      throw new HelmError('validation_error', 'command must be a string or string array', 400)
     }
     const { nodeId, cwd } = this.resolveExecTarget(req)
     const result = await runShell(this.toolDeps, req.command as string, {
@@ -653,10 +653,10 @@ export class NodeManager {
       ...(req.env === undefined ? {} : { env: req.env }),
       ...(req.timeoutMs === undefined ? {} : { timeoutMs: req.timeoutMs }),
       signal,
-      // 流式模式：逐块回调透传（客户端自行限流）；Hub 侧聚合预算由
-      // runShell 的 STREAM_AGGREGATE_LIMIT_BYTES 统一收敛（旧 64MiB 全文
-      // 复制是内存泄漏）——流式客户端已收到全部逐块输出，终态 output
-      // 仅作诊断聚合，超限显式 output_limit_exceeded（不改变帧协议）。
+      // streaming pattern: one by one chunk call back pass-through (client self row rate limiting);Hub side aggregate pre- compute by
+      // runShell  STREAM_AGGREGATE_LIMIT_BYTES unify converge (old 64MiB all text
+      // duplicate is memory leak leak) - - streaming client already receives all one by one chunk output, terminal state output
+      // only act diagnose aggregate, over limit explicit output_limit_exceeded(does not change frame protocol).
       ...(onChunk !== undefined ? { onOutputChunk: onChunk } : {}),
     })
     return {
@@ -668,12 +668,12 @@ export class NodeManager {
   }
 
   /**
-   * 靶点解析：显式 nodeId/cwd > 会话绑定 (nodeId, cwd) > 'local'/Hub cwd。
-   * 缺省参数绝不误跑 Hub：带 conversationId 时继承该会话的远端绑定。
-   * cwd 绝对性按目标形状判定（POSIX / 与 Windows 盘符/UNC 均合法），
-   * 盘符相对（C:relative）拒绝；绝不用 Hub 宿主 isAbsolute 拒 Windows 路径。
-   * cwd 随后按目标节点平台规范化（win32 目标上 POSIX 视图转 Windows 路径；
-   * 平台未知不猜；无法映射的裸 POSIX 根 validation_error 并保留原始 cwd）。
+   * target parse: explicit nodeId/cwd > conversation bind set (nodeId, cwd) > 'local'/Hub cwd.
+   * default parameter never mistakenly run Hub: carries conversationId when inherit the conversation remote bind set.
+   * cwd absolute by target shape decide (POSIX / and Windows symbol/UNC all legal),
+   * symbol each other for (C:relative) reject; never use Hub host isAbsolute refuse Windows path.
+   * cwd then by target node platform specification (win32 target on POSIX view rotate Windows path;
+   * platform unknown do not guess; cannot mapping bare POSIX  validation_error and keep original cwd).
    */
   resolveExecTarget(req: { nodeId?: string; cwd?: string; conversationId?: number }): { nodeId: string; cwd: string | undefined } {
     let nodeId = req.nodeId
@@ -688,48 +688,48 @@ export class NodeManager {
     if (cwd !== undefined && (typeof cwd !== 'string' || !isAbsoluteTargetPath(cwd))) {
       throw new HelmError(
         'validation_error',
-        `cwd 需为绝对路径（POSIX / 开头或 Windows 盘符/UNC；拒绝盘符相对与相对路径。收到 ${String(cwd)}）`,
+        `cwd must be absolute path (POSIX / open head or Windows symbol/UNC; reject symbol each other for and relative path. receives ${String(cwd)})`,
         400,
         { cwd },
       )
     }
-    // 目标平台感知的 cwd 规范化（与 runShell 同一原语，不在此另写规则）：
-    // local 用 Hub 宿主平台，远端仅用注册登记平台（离线/未上报 → 平台
-    // 未知，原样透传不猜，由下方在线检查给出真实原因）；win32 目标上
-    // WSL / Git Bash POSIX 视图转规范 Windows 路径，无法映射的裸 POSIX 根
-    // 显式 validation_error（保留原始 cwd）。
+    // target platform aware cwd specification (and runShell the same original language, do not in this another write rule):
+    // local use Hub host platform, remote only use register register platform (offline/not on report → platform
+    // unknown, original pass-through do not guess, by under way online check to out real reason);win32 target on
+    // WSL / Git Bash POSIX view rotate specification Windows path, cannot mapping bare POSIX 
+    // explicit validation_error(keep original cwd).
     const platformInfo = targetPlatformForNode(this.envFabric, nodeId)
     if (cwd !== undefined) {
       const cwdNorm = normalizePathForTarget(cwd, platformInfo)
       if (!cwdNorm.ok) {
         throw new HelmError(
           'validation_error',
-          `cwd 无法规范化到目标节点平台：${cwdNorm.reason}`,
+          `cwd cannot specification to target node platform:${cwdNorm.reason}`,
           400,
           { cwd, pathCode: cwdNorm.code },
         )
       }
       cwd = cwdNorm.path
     }
-    // 远端且未给定 cwd：拒绝盲跑（节点守护进程 dataDir 不是用户的意图靶点；
-    // 安全目标：缺省参数绝不把远端会话命令误跑 Hub 或随机目录）。
+    // remote and not to set cwd: reject blind run (node daemon dataDir is not user intent target;
+    // security target: default parameter never remote conversation command mistakenly run Hub or random directory).
     if (nodeId !== 'local' && cwd === undefined) {
       throw new HelmError(
         'validation_error',
-        `远端节点 ${nodeId} 执行需显式 cwd 或绑定会话（拒绝盲跑节点默认目录）`,
+        `remote node ${nodeId} execute must explicit cwd or bind set conversation (reject blind run node by default directory)`,
         400,
         { nodeId },
       )
     }
     if (nodeId !== 'local' && !this.envFabric.isOnline(nodeId)) {
-      throw new HelmError('node_offline', `节点 ${nodeId} 离线或未接入，拒绝执行（绝不回退本机）`, 409, {
+      throw new HelmError('node_offline', `node ${nodeId} offline or not access, reject execute (never fall back local machine)`, 409, {
         nodeId,
       })
     }
     return { nodeId, cwd }
   }
 
-  /** 关停：清理磁盘统计定时器并等待在途刷新完成。 */
+  /** closure stop: clean up disk count timer and wait for in-flight refresh complete. */
   async dispose(): Promise<void> {
     if (this.localDiskRefreshTimer !== undefined) {
       clearInterval(this.localDiskRefreshTimer)
@@ -739,7 +739,7 @@ export class NodeManager {
   }
 }
 
-/** RpcResult 边界形状判定（升级结构化应答分流用；详细校验在 unwrap / validate 系列）。 */
+/** RpcResult boundary shape decide (upgrade structure reply stream use; detailed validate in unwrap / validate system column). */
 function isRpcResultEnvelope(value: unknown): value is { ok: boolean; value?: unknown; error?: unknown } {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
   const v = value as Record<string, unknown>

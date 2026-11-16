@@ -1,14 +1,14 @@
 /**
- * 内核资源回收与 watchdogTick transform 回归。
+ * kernel asset reclaim and watchdogTick transform regression.
  *
- * 覆盖：
- * 1. watchdogTick 返回钩子链 transform 后的最终 payload（插件可扩充
- *    WatchdogTickPayload；旧实现返回初始快照，插件注入字段丢失）；
- * 2. handledToolCalls 中断残留清理：tool_call handled 登记带会话归属，
- *    会话回合结束（turn_settled）/ abortConversation / deleteConversation
- *    时兜底清理未被 afterTool 消费的条目（block/异常路径不走 execute）；
- * 3. EnvFabric.evictConversation：deleteConversation 后该会话的靶点缓存
- *    （bases）与输出 sink 注册被清理，反复建删不残留。
+ * override:
+ * 1. watchdogTick return hook chain transform after eventually payload(plugin can expand fill
+ *    WatchdogTickPayload; old implement return initial snapshot, plugin inject field lose);
+ * 2. handledToolCalls interrupt leftover clean up:tool_call handled register carries conversation ownership,
+ *    conversation turn end (turn_settled)/ abortConversation / deleteConversation
+ *    when fall back clean up not by afterTool consume item (block/exception path do not away execute);
+ * 3. EnvFabric.evictConversation:deleteConversation after the conversation target cache
+ *    (bases) and output sink register by clean up, reverse re- create delete leaves no residue.
  */
 
 import { strict as assert } from 'node:assert'
@@ -30,9 +30,9 @@ function internalsOf(kernel: KernelRuntime): RuntimeInternals {
 }
 
 function fabricBasesOf(fabric: EnvFabric): Map<string, unknown> {
-  // EnvFabric 的 bases 是 createEnvFabric 闭包内私有；经 RemoteExecutionEnv
-  // 实例身份 + envFor 行为验证（见 evictConversation 测试），无需直接读取。
-  throw new Error('不应直接读取 bases（闭包私有）')
+  // EnvFabric  bases is createEnvFabric closed package inside private; via RemoteExecutionEnv
+  // instance identity + envFor behavior verify (see evictConversation test), no need to directly read.
+  throw new Error('must not directly read bases(closed package private)')
 }
 
 const timeout = { timeout: 60_000 } as const
@@ -59,14 +59,14 @@ async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: FauxH
   return Object.assign(runtime, { __faux: faux })
 }
 
-describe('diagnostics.collect 外部采集（原 watchdogTick transform 扩充同语义）', { timeout: 60_000 }, () => {
-  it('采集监听器追加的事实出现在最终 collection 中（await 语义）', timeout, async () => {
+describe('diagnostics.collect external collect (original watchdogTick transform expand fill same semantics)', { timeout: 60_000 }, () => {
+  it('collect listener append fact appear in eventually collection in (await semantics)', timeout, async () => {
     const kernel = await openRuntime(join(root, 'tick-1'))
     try {
       await kernel.plugins.register({
         id: 'test:collector',
         definePlugin(ctx) {
-          // 模拟 builtin:herdr 式外部采集：在 collection 上追加探针（保留原字段）。
+          // simulated builtin:herdr style external collect: in collection on append probe needle (keep original field).
           ctx.host.onEvent('diagnostics.collect', (raw) => {
             const collection = raw as { probes: unknown[] }
             collection.probes.push({
@@ -81,17 +81,17 @@ describe('diagnostics.collect 外部采集（原 watchdogTick transform 扩充�
           })
         },
       })
-      // 事件由宿主 emitEvent 分发（broadcast:false 仅内部监听器）。
+      // event by host emitEvent dispatch (broadcast:false only internal listener).
       const collected: { probes: unknown[] } = { probes: [] }
       await kernel.emitHostEvent('diagnostics.collect', collected, { broadcast: false })
-      assert.equal(collected.probes.length, 1, '监听器追加事实进入 collection')
+      assert.equal(collected.probes.length, 1, 'listener append fact enter collection')
       assert.equal((collected.probes[0] as { targetId: string }).targetId, 'ext:p1')
     } finally {
       await kernel.close()
     }
   })
 
-  it('无监听器时 emitHostEvent 正常完成（空采集不报错）', timeout, async () => {
+  it('without listener when emitHostEvent normal complete (empty collect do not errors)', timeout, async () => {
     const kernel = await openRuntime(join(root, 'tick-2'))
     try {
       const collected: { probes: unknown[] } = { probes: [] }
@@ -103,14 +103,14 @@ describe('diagnostics.collect 外部采集（原 watchdogTick transform 扩充�
   })
 })
 
-describe('handledToolCalls 中断残留清理', { timeout: 60_000 }, () => {
-  it('tool_call handled 后回合结束（turn_settled）兜底清残留', timeout, async () => {
+describe('handledToolCalls interrupt leftover clean up', { timeout: 60_000 }, () => {
+  it('tool_call handled after turn end (turn_settled) fall back clean leftover', timeout, async () => {
     const kernel = await openRuntime(join(root, 'handled-1'))
     try {
       const internals = internalsOf(kernel)
-      // 注册一个 tool_call hook：对 probe 工具返回 handled（不执行真实工具），
-      // 且模型不发起真实工具调用（faux 直接文本回答）——handled 条目成为
-      // 未消费残留，靠 turn_settled 兜底清理。
+      // register a tool_call hook: for probe tool return handled(do not execute real tool),
+      // and model do not start real tool invoke (faux directly text answer) - -handled item into is
+      // unconsumed leftover, rely turn_settled fall back clean up.
       await kernel.plugins.register({
         id: 'test:handled-residue',
         definePlugin(ctx) {
@@ -118,19 +118,19 @@ describe('handledToolCalls 中断残留清理', { timeout: 60_000 }, () => {
             if (call.toolName !== 'probe') return undefined
             return {
               action: 'handled',
-              result: { output: [{ type: 'text', text: '已接管' }], isError: false },
+              result: { output: [{ type: 'text', text: 'already take over' }], isError: false },
             }
           })
         },
       })
       const conv = await kernel.createConversation({})
-      kernel.__faux.setResponses([fauxAssistantMessage('直接回答，不调用工具')])
-      await kernel.submitInput(conv.id, '随便问')
+      kernel.__faux.setResponses([fauxAssistantMessage('directly answer, do not invoke tool')])
+      await kernel.submitInput(conv.id, 'follow convenient question')
       await kernel.waitForIdle(conv.id)
-      // 回合已结束：即使 handled 从未被 execute 消费，残留也必须被清空。
+      // turn already end: even if handled from not by execute consume, leftover also must by empty.
       for (const key of internals.handledToolCalls.keys()) {
         const entry = internals.handledToolCalls.get(key)
-        assert.notEqual(entry?.conversationId, conv.id, '回合结束后该会话残留应被清理')
+        assert.notEqual(entry?.conversationId, conv.id, 'turn after end the conversation leftover should by clean up')
       }
       await kernel.deleteConversation(conv.id)
     } finally {
@@ -138,12 +138,12 @@ describe('handledToolCalls 中断残留清理', { timeout: 60_000 }, () => {
     }
   })
 
-  it('abortConversation 与 deleteConversation 兜底清理该会话残留', timeout, async () => {
+  it('abortConversation and deleteConversation fall back clean up the conversation leftover', timeout, async () => {
     const kernel = await openRuntime(join(root, 'handled-2'))
     try {
       const internals = internalsOf(kernel)
       const conv = await kernel.createConversation({})
-      // 直接注入残留（模拟 tool_call handled 登记后模型回合被取消）。
+      // directly inject leftover (simulated tool_call handled register after model turn by cancel).
       internals.handledToolCalls.set('call-residue-1', {
         conversationId: conv.id,
         result: { output: [{ type: 'text', text: 'x' }], isError: false },
@@ -156,9 +156,9 @@ describe('handledToolCalls 中断残留清理', { timeout: 60_000 }, () => {
       assert.equal(
         internals.handledToolCalls.has('call-residue-1'),
         false,
-        'abort 应清理该会话 handled 残留',
+        'abort should clean up the conversation handled leftover',
       )
-      assert.equal(internals.handledToolCalls.has('call-other-conv'), true, '其他归属不受影响')
+      assert.equal(internals.handledToolCalls.has('call-other-conv'), true, 'other ownership do not subject to affect')
 
       internals.handledToolCalls.set('call-residue-2', {
         conversationId: conv.id,
@@ -168,7 +168,7 @@ describe('handledToolCalls 中断残留清理', { timeout: 60_000 }, () => {
       assert.equal(
         internals.handledToolCalls.has('call-residue-2'),
         false,
-        '删除会话应清理该会话 handled 残留',
+        'delete conversation should clean up the conversation handled leftover',
       )
     } finally {
       await kernel.close()
@@ -177,7 +177,7 @@ describe('handledToolCalls 中断残留清理', { timeout: 60_000 }, () => {
 })
 
 describe('EnvFabric.evictConversation', { timeout: 60_000 }, () => {
-  it('清理该会话的靶点缓存实例（envForTarget 每次返回新实例）', timeout, async () => {
+  it('clean up the conversation target cache instance (envForTarget each time return new instance)', timeout, async () => {
     const fabric = createEnvFabric({
       envOptions: () => ({ HELM_CONVERSATION_ID: '42' }),
     })
@@ -185,23 +185,23 @@ describe('EnvFabric.evictConversation', { timeout: 60_000 }, () => {
       const a = fabric.envForTarget({ conversationId: 42, nodeId: 'local', cwd: root })
       fabric.evictConversation(42)
       const b = fabric.envForTarget({ conversationId: 42, nodeId: 'local', cwd: root })
-      // 驱逐后重建：两实例底层 base 不同（a 的 base 已被清理出缓存）。
+      // drive one by one after rebuild: two instance underlying base different (a  base already by clean up out cache).
       assert.notEqual((a as unknown as { id: string }).id === (b as unknown as { id: string }).id, false)
-      // 不影响其他会话靶点（43 未被驱逐）。
+      // does not affect other conversation target (43 not by drive one by one).
       const c1 = fabric.envForTarget({ conversationId: 43, nodeId: 'local', cwd: root })
       fabric.evictConversation(42)
       const c2 = fabric.envForTarget({ conversationId: 43, nodeId: 'local', cwd: root })
       assert.equal(
         (c1 as unknown as { id: string }).id,
         (c2 as unknown as { id: string }).id,
-        '其他会话靶点不受 evictConversation 影响',
+        'other conversation target do not subject to evictConversation affect',
       )
     } finally {
       await fabric.dispose()
     }
   })
 
-  it('靶点缓存按会话精确驱逐：bases 计数收缩、其他会话保留；无会话靶点不进缓存', timeout, async () => {
+  it('target cache by conversation precise drive one by one:bases counter shrink, other conversation keep; without conversation target does not enter cache', timeout, async () => {
     const fabric = createEnvFabric({})
     try {
       assert.equal(fabric.debugBaseCount(), 0)
@@ -209,21 +209,21 @@ describe('EnvFabric.evictConversation', { timeout: 60_000 }, () => {
       fabric.envForTarget({ conversationId: 7, nodeId: 'offline-node', cwd: '/other' })
       fabric.envForTarget({ conversationId: 8, nodeId: 'offline-node', cwd: '/srv' })
       assert.equal(fabric.debugBaseCount(), 3)
-      // 无会话靶点是短生命周期对象（envFor / envForTarget 无 conversationId）：
-      // 每次全新实例、绝不进缓存——反复调用不堆积 bases。
+      // without conversation target is short lifecycle object (envFor / envForTarget without conversationId):
+      // each time all new instance, never enter cache - - reverse re- invoke do not heap accumulate bases.
       fabric.envFor('offline-node', '/srv')
       fabric.envFor('offline-node', '/srv')
       fabric.envForTarget({ nodeId: 'offline-node', cwd: '/srv' })
       fabric.envForTarget({ nodeId: 'local', cwd: root })
-      assert.equal(fabric.debugBaseCount(), 3, '无会话靶点绝不进入缓存')
-      // 驱逐会话 7：仅清其两个靶点，会话 8 保留。
+      assert.equal(fabric.debugBaseCount(), 3, 'without conversation target never enter cache')
+      // drive one by one conversation 7: only clean its two target, conversation 8 keep.
       fabric.evictConversation(7)
-      assert.equal(fabric.debugBaseCount(), 1, '会话 7 的两个靶点被清理')
+      assert.equal(fabric.debugBaseCount(), 1, 'conversation 7 two target by clean up')
       fabric.evictConversation(7)
-      assert.equal(fabric.debugBaseCount(), 1, '幂等：重复驱逐无额外影响')
+      assert.equal(fabric.debugBaseCount(), 1, 'idempotent: duplicate drive one by one without extra affect')
       fabric.evictConversation(8)
       assert.equal(fabric.debugBaseCount(), 0)
-      // debugBases 与计数同源。
+      // debugBases and counter same source.
       fabric.envForTarget({ conversationId: 9, nodeId: 'n', cwd: '/x' })
       const bases = fabric.debugBases()
       assert.equal(bases.length, 1)
@@ -235,12 +235,12 @@ describe('EnvFabric.evictConversation', { timeout: 60_000 }, () => {
     }
   })
 
-  it('驱逐不杀在途命令：evict 后旧实例上的 exec 自然完成', timeout, async () => {
+  it('drive one by one do not kill in-flight command:evict after old instance on exec self however complete', timeout, async () => {
     const fabric = createEnvFabric({})
     try {
       const scoped = fabric.envForTarget({ conversationId: 50, nodeId: 'local', cwd: root })
       fabric.evictConversation(50)
-      // 旧实例引用仍存活：真实 exec 必须自然完成（evict 只移缓存不杀进程）。
+      // old instance reference still store: real exec must self however complete (evict only move cache do not kill process).
       const result = await scoped.exec('echo alive', undefined, { abortSignal: undefined } as never)
       assert.equal(result.ok, true)
       assert.equal(result.value.exitCode, 0)
@@ -249,16 +249,16 @@ describe('EnvFabric.evictConversation', { timeout: 60_000 }, () => {
     }
   })
 
-  it('deleteConversation 经 runtime 联动 evictConversation（无异常且后续 exec 正常）', timeout, async () => {
+  it('deleteConversation via runtime join motion evictConversation(without exception and after continue exec normal)', timeout, async () => {
     void fabricBasesOf
     const kernel = await openRuntime(join(root, 'evict-1'))
     try {
       const conv = await kernel.createConversation({})
-      // 触发一次真实 exec 建立会话靶点缓存（local exec echo）。
+      // trigger once real exec establish conversation target cache (local exec echo).
       const result = await kernel.execEnv({ command: 'echo evicted', conversationId: conv.id })
       assert.equal(result.ok, true)
       await kernel.deleteConversation(conv.id)
-      // 删除后再对同号会话靶点执行：应 404（会话已删），而非内部错误。
+      // after deletion again for same number conversation target execute: should 404(conversation already delete), while non- internal error.
       const again = await kernel
         .execEnv({ command: 'echo again', conversationId: conv.id })
         .then(
@@ -270,40 +270,40 @@ describe('EnvFabric.evictConversation', { timeout: 60_000 }, () => {
       await kernel.close()
     }
   })
-  it('updateConversation 变更 cwd/nodeId 时释放旧靶点缓存（不影响其他会话）', timeout, async () => {
+  it('updateConversation change cwd/nodeId when release old target cache (does not affect other conversation)', timeout, async () => {
     const kernel = await openRuntime(join(root, 'evict-2'))
     try {
       const conv = await kernel.createConversation({})
       const other = await kernel.createConversation({})
       const fabric = kernel.envFabric as EnvFabric
       const before = fabric.debugBaseCount()
-      // 两次真实 exec 建立两个会话靶点。
+      // two time real exec establish two conversation target.
       await kernel.execEnv({ command: 'echo one', conversationId: conv.id })
       await kernel.execEnv({ command: 'echo two', conversationId: other.id })
       assert.equal(fabric.debugBaseCount(), before + 2)
-      // 变更 conv 的 cwd：旧靶点释放，other 不受影响。
+      // change conv  cwd: old target release,other do not subject to affect.
       const newDir = join(root, 'evict-2-new-cwd')
       await kernel.updateConversation(conv.id, { cwd: newDir })
-      assert.equal(fabric.debugBaseCount(), before + 1, '变更会话旧靶点被释放')
+      assert.equal(fabric.debugBaseCount(), before + 1, 'change conversation old target by release')
       const bases = fabric.debugBases()
       assert.ok(
         bases.every((b) => b.conversationId !== conv.id),
-        `会话 ${conv.id} 的旧靶点应全部释放：${JSON.stringify(bases)}`,
+        `conversation ${conv.id} old target should all release:${JSON.stringify(bases)}`,
       )
-      // 其他会话靶点仍在缓存（同实例复用）。
+      // other conversation target still in cache (same instance re- use).
       assert.ok(bases.some((b) => b.conversationId === other.id))
-      // 仅改 title 不触发释放。
+      // only change title does not trigger release.
       const count = fabric.debugBaseCount()
-      await kernel.updateConversation(other.id, { title: '仅标题' })
-      assert.equal(fabric.debugBaseCount(), count, '非靶点变更不释放缓存')
+      await kernel.updateConversation(other.id, { title: 'only title' })
+      assert.equal(fabric.debugBaseCount(), count, 'non- target change do not release cache')
     } finally {
       await kernel.close()
     }
   })
 })
 
-describe('faux 工具链回归（handled 消费路径仍工作）', { timeout: 60_000 }, () => {
-  it('tool_call handled 后 execute 层正常返回接管结果（不破坏正常路径）', timeout, async () => {
+describe('faux tool chain regression (handled consume path still work)', { timeout: 60_000 }, () => {
+  it('tool_call handled after execute layer normal return take over result (do not break happy path)', timeout, async () => {
     const kernel = await openRuntime(join(root, 'handled-ok'))
     try {
       await kernel.plugins.register({
@@ -313,19 +313,19 @@ describe('faux 工具链回归（handled 消费路径仍工作）', { timeout: 6
             if (call.toolName !== 'bash') return undefined
             return {
               action: 'handled',
-              result: { output: [{ type: 'text', text: '接管结果：echo 被拦截' }], isError: false },
+              result: { output: [{ type: 'text', text: 'take over result:echo by intercept' }], isError: false },
             }
           })
         },
       })
       kernel.__faux.setResponses([
         fauxAssistantMessage([fauxToolCall('bash', { command: 'echo hi' })], { stopReason: 'toolUse' }),
-        fauxAssistantMessage('完成'),
+        fauxAssistantMessage('complete'),
       ])
-      await kernel.submitInput(1, '跑一下 echo')
+      await kernel.submitInput(1, 'run echo')
       await kernel.waitForIdle(1)
-      assert.equal(await kernel.getLastAssistantText(1), '完成')
-      // 正常消费路径：handled 条目在 execute 后即时删除。
+      assert.equal(await kernel.getLastAssistantText(1), 'complete')
+      // normal consume path:handled item in execute after i.e. when delete.
       assert.equal(internalsOf(kernel).handledToolCalls.size, 0)
     } finally {
       await kernel.close()

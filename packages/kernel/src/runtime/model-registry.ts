@@ -1,10 +1,10 @@
 /**
- * 模型集合注册表：Models 实例生命周期 / 运行时供应商 / 动态目录刷新 /
- * 全局默认模型与思考档位。
+ * model set register table:Models instance lifecycle / runtime provider / motion state directory refresh /
+ * global by default model and think Profile.
  *
- * 从 runtime.ts 拆出（上帝类的模型全家职责簇）。串行约束：reload /
- * register / unregister / refresh 全部经 modelsChain 排队，避免并发重建后
- * 旧集合覆盖新集合；外部注入 Models（测试/嵌入）时集合归调用方，空操作。
+ * from runtime.ts split out (on emperor class model all household responsibility cluster). serial constraint:reload /
+ * register / unregister / refresh all via modelsChain queue up, avoid concurrency rebuild after
+ * old set override new set; external inject Models(test/embed) when set archive caller, empty operation.
  */
 import type { AssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream'
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
@@ -15,20 +15,20 @@ import { HelmError } from '@helm/protocol'
 import type { ConfigService, CredentialService, ProviderService, SecretStash } from '../services/index.js'
 import { listModelCatalog, listModelProviders, buildModels } from './models.js'
 
-/** PI 内置供应商 id 集（惰性一次构建；注册冲突预检用，不硬编码清单）。 */
+/** PI inside placement provider id collection (lazy once build; register conflict preflight use, do not hard encode manifest). */
 const builtinProviderIds = new Set(builtinProviders().map((p) => p.id))
 
 /**
- * models-store.json 文件级损坏检测：SDK refresh 把 store 读写错误包进
- * result.errors（不 reject，避免单供应商失败阻断其余），但文件损坏是全局
- * 事故——静默降级空目录等于丢失全部已缓存动态目录。此处显式上抛。
+ * models-store.json file level corrupt detect:SDK refresh  store read write error package enter
+ * result.errors(do not reject, avoid single provider failed block assert the rest), but file corrupt is global
+ * incident - - static default fall back empty directory equals lose all already cache motion state directory. this where explicit on throw.
  */
 function assertModelsStoreHealthy(result: { errors: ReadonlyMap<string, Error> }): void {
   for (const [providerId, err] of result.errors) {
     if (err instanceof HelmError && err.code === 'models_store_corrupted') {
       throw new HelmError(
         'models_store_corrupted',
-        `models-store.json 损坏（读取 ${providerId} 时发现）：${err.message}`,
+        `models-store.json corrupt (read ${providerId} when discover):${err.message}`,
         500,
       )
     }
@@ -36,21 +36,21 @@ function assertModelsStoreHealthy(result: { errors: ReadonlyMap<string, Error> }
 }
 
 /**
- * config.json.disabledModels 结构解析（providerId -> modelId[]）；缺省空集，
- * 非法形状显式抛 config_corrupt（绝不静默丢弃）。
+ * config.json.disabledModels structure parse (providerId -> modelId[]); default empty collection,
+ * illegal shape explicit throw config_corrupt(never static default discard).
  */
 function parseDisabledModelsConfig(raw: unknown): Record<string, string[]> {
   if (raw === undefined || raw === null) return {}
   if (typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new HelmError('config_corrupt', 'config.json.disabledModels 必须为对象（providerId -> modelId[]）', 500)
+    throw new HelmError('config_corrupt', 'config.json.disabledModels must is object (providerId -> modelId[])', 500)
   }
   const result: Record<string, string[]> = {}
   for (const [providerId, ids] of Object.entries(raw as Record<string, unknown>)) {
     if (typeof providerId !== 'string' || providerId === '') {
-      throw new HelmError('config_corrupt', `config.json.disabledModels 键需为非空 provider id：${String(providerId)}`, 500)
+      throw new HelmError('config_corrupt', `config.json.disabledModels key must be non-empty provider id:${String(providerId)}`, 500)
     }
     if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string' && id !== '')) {
-      throw new HelmError('config_corrupt', `config.json.disabledModels['${providerId}'] 必须为非空字符串数组`, 500)
+      throw new HelmError('config_corrupt', `config.json.disabledModels['${providerId}'] must is non-empty string array`, 500)
     }
     result[providerId] = [...(ids as string[])]
   }
@@ -64,14 +64,14 @@ export interface ModelRegistryOptions {
   readonly configSvc: ConfigService
   readonly stash: SecretStash
   readonly modelsStore: ModelsStore
-  /** 热替换槽位（Harness models getter 经它读到最新集合）。 */
+  /** hot replace slot (Harness models getter via it read to most new set). */
   readonly setModels: (m: Models) => void
-  /** 外部注入 Models（测试）：注入时本注册表全部变更路径空操作/拒绝。 */
+  /** external inject Models(test): inject when this register table all change path empty operation/reject. */
   readonly externalModels: boolean
   readonly events: { publish(type: 'models.changed', payload: { providers: string[] }): void }
-  /** pluginHost 热注入（assertProviderAvailable 预检用）。 */
+  /** pluginHost hot inject (assertProviderAvailable preflight use). */
   readonly pluginHost: () => { assertProviderAvailable(pluginId: string): void } | undefined
-  /** 对齐全部会话生效模型（默认模型变化后；宿主实现）。 */
+  /** align all conversation takes effect model (by default model change after; host implement). */
   readonly alignAllConversations: () => Promise<void>
 }
 
@@ -86,29 +86,29 @@ export class ModelRegistry {
   private readonly events: ModelRegistryOptions['events']
   private readonly pluginHost: ModelRegistryOptions['pluginHost']
   private readonly alignAllConversations: ModelRegistryOptions['alignAllConversations']
-  /** 运行时动态注册的供应商（插件经 HostOptions.providers.register 注入）。 */
+  /** runtime motion state register provider (plugin via HostOptions.providers.register inject). */
   private readonly runtimeProviders = new Map<string, Provider>()
-  /** 运行时供应商归属（providerId -> 注册它的 pluginId；注销一并清除）。 */
+  /** runtime provider ownership (providerId -> register it pluginId; deregister one and clear). */
   private readonly runtimeProviderOwners = new Map<string, string>()
-  /** models 变更串行链：reload / register / unregister 共用，避免 stale 替换。 */
+  /** models change serial chain:reload / register / unregister shared use, avoid stale replace. */
   private modelsChain: Promise<unknown> = Promise.resolve()
   private modelsRefreshAbort: AbortController | undefined
-  /** models 集合代数（每次成功发布新集合 +1；在途 refresh 防旧集合重新发布）。 */
+  /** models set proxy count (each time succeeded publish new set +1; in-flight refresh guard against old set re- publish). */
   private modelsGeneration = 0
-  /** 运行时供应商在途使用计数（providerId -> streaming/refresh 未结算数；teardown 预检用）。 */
+  /** runtime provider in-flight use counter (providerId -> streaming/refresh not compute count;teardown preflight use). */
   private readonly runtimeProviderUsage = new Map<string, number>()
-  /** 注销中标记（仅 modelsChain 串行域内短暂存在）：rebuild 的 await 窗口内
-   *  新发起的 stream/refresh acquire 显式失败，收口「检查通过→窗口内在途→
-   *  不可检测」的 TOCTOU（usage 递增不在本串行域，见 wrapRuntimeProvider）。 */
+  /** deregister in mark record (only modelsChain serial domain inside short staged in):rebuild  await window inside
+   *  new start stream/refresh acquire explicit failed, consolidate check via→window inside in-flight→
+   *  cannot detect TOCTOU(usage pass increase do not in this serial domain, see wrapRuntimeProvider). */
   private readonly retiringRuntimeProviders = new Set<string>()
-  /** 同步读 key 缓存（启动预热 + reload 刷新；buildModels 闭包消费）。 */
+  /** sync read key cache (start warm up + reload refresh;buildModels closed package consume). */
   readonly apiKeyCache: Record<string, string> = {}
   private modelsCurrent: Models
   defaultModel: string | undefined
   defaultThinkingLevel: string | undefined
-  /** 未配置模型时的 hooks 载荷占位（提交时 requireModelRef 显式报错）。 */
+  /** not config model when hooks payload occupy (commit when requireModelRef explicit errors). */
   modelPlaceholder = 'unconfigured'
-  /** 用户显式禁用的模型（providerId -> modelId[]；config.json.disabledModels）。 */
+  /** user explicit disable model (providerId -> modelId[];config.json.disabledModels). */
   private disabledModels: Record<string, string[]> = {}
 
   constructor(options: ModelRegistryOptions, initialModels: Models, defaults: { model?: string; thinkingLevel?: string }) {
@@ -117,7 +117,7 @@ export class ModelRegistry {
     this.configSvc = options.configSvc
     this.stash = options.stash
     this.modelsStore = options.modelsStore
-    this.setModels = options.externalModels ? () => { /* 外部注入：热重载不得替换调用方模型集合 */ } : options.setModels
+    this.setModels = options.externalModels ? () => { /* external inject: hot reload must not replace caller model set */ } : options.setModels
     this.externalModels = options.externalModels
     this.events = options.events
     this.pluginHost = options.pluginHost
@@ -134,14 +134,14 @@ export class ModelRegistry {
     return this.modelsRefreshAbort
   }
 
-  /** modelsChain 尾排队执行（异常向后传播，不阻断后续排队）。 */
+  /** modelsChain tail queue up execute (exception to after pass broadcast, do not block assert after continue queue up). */
   private enqueueModelsChange<T>(fn: () => Promise<T>): Promise<T> {
     const run = this.modelsChain.then(fn, fn)
     this.modelsChain = run.then(() => undefined, () => undefined)
     return run
   }
 
-  /** 关停前等待全部在途模型变更收敛。 */
+  /** closure stop before wait for all in-flight model change converge. */
   async dispose(): Promise<void> {
     await this.modelsChain
   }
@@ -158,14 +158,14 @@ export class ModelRegistry {
     return listModelProviders(this.modelsCurrent, this.runtimeProviderOwners)
   }
 
-  /** 从 config.json 读取全局默认模型与思考档位（启动时；格式非法显式抛）。 */
+  /** from config.json read global by default model and think Profile (at startup; format illegal explicit throw). */
   async loadDefaultsFromConfig(): Promise<void> {
     const raw: Record<string, unknown> = (await this.configSvc.get()) as Record<string, unknown>
     if (this.defaultModel === undefined) {
       const configured = raw['model']
       if (configured !== undefined && configured !== '') {
         if (typeof configured !== 'string' || !/^[^/\s]+\/[^\s]+$/.test(configured)) {
-          throw new HelmError('config_corrupt', 'config.json.model 必须为 provider/model 形式的字符串', 500)
+          throw new HelmError('config_corrupt', 'config.json.model must is provider/model form string', 500)
         }
         this.defaultModel = configured
       }
@@ -173,7 +173,7 @@ export class ModelRegistry {
     if (this.defaultThinkingLevel === undefined) {
       const configuredLevel = raw['thinkingLevel'] as string | undefined | null
       if (configuredLevel !== undefined && configuredLevel !== '') {
-        // 枚举校验由宿主注入的校验器完成（THINKING_LEVELS 属 spawn 契约）。
+        // enumeration validate by host inject validate complete (THINKING_LEVELS belong spawn contract).
         await this.configuredThinkingLevelValidated(configuredLevel as string)
         this.defaultThinkingLevel = configuredLevel as string
       }
@@ -182,17 +182,17 @@ export class ModelRegistry {
     this.modelPlaceholder = this.defaultModel ?? 'unconfigured'
   }
 
-  /** 思考档位枚举校验回调（宿主注入，避免本模块依赖 spawn 的 THINKING_LEVELS）。 */
+  /** think Profile enumeration validate call back (host inject, avoid this module dependency spawn  THINKING_LEVELS). */
   private configuredThinkingLevelValidated = async (_level: string): Promise<void> => {
-    throw new HelmError('config_corrupt', '内部错误：thinkingLevel 校验器未注入', 500)
+    throw new HelmError('config_corrupt', 'internal error:thinkingLevel validate not inject', 500)
   }
 
-  /** 注入思考档位枚举校验器（构造后立刻调用；loadDefaultsFromConfig 前生效）。 */
+  /** inject think Profile enumeration validate (construct after immediately invoke;loadDefaultsFromConfig before takes effect). */
   setThinkingLevelValidator(validate: (level: string) => Promise<void>): void {
     this.configuredThinkingLevelValidated = validate
   }
 
-  /** 设置全局默认模型与思考档位（config.json）：格式校验后原子写入并即时生效；空串删除键。 */
+  /** settings global by default model and think Profile (config.json): format validate after atomic write and i.e. when takes effect; empty string delete key. */
   async setDefaultModel(
     model: string | undefined,
     thinkingLevel: string | undefined,
@@ -214,7 +214,7 @@ export class ModelRegistry {
       if (trimmed === '') delete next.model
       else if (trimmed !== undefined) next.model = trimmed
       if (thinkingLevel === undefined) {
-        // 未传入则不动既有思考档位键。
+        // not pass then do not motion since has think Profile key.
       } else if (nextLevel === undefined) {
         delete next.thinkingLevel
       } else {
@@ -225,30 +225,30 @@ export class ModelRegistry {
     if (trimmed !== undefined) this.defaultModel = trimmed === '' ? undefined : trimmed
     if (thinkingLevel !== undefined) this.defaultThinkingLevel = nextLevel
     this.modelPlaceholder = this.defaultModel ?? 'unconfigured'
-    // 两个覆盖字段互相独立，模型被覆盖的会话仍可继承全局思考档位。
+    // two override field mutual each other independent, model by override conversation still can inherit global think Profile.
     await this.alignAllConversations()
   }
 
-  /** 校验 'provider/model' 引用（create/update 共用）。 */
+  /** validate 'provider/model' reference (create/update shared use). */
   parseModelRefOrThrow(ref: string): { provider: string; modelId: string } {
     const slash = ref.indexOf('/')
     if (slash <= 0 || slash >= ref.length - 1) {
-      throw new HelmError('validation_error', `模型引用格式应为 'provider/model'：${ref}`)
+      throw new HelmError('validation_error', `model reference format should be 'provider/model':${ref}`)
     }
     return { provider: ref.slice(0, slash), modelId: ref.slice(slash + 1) }
   }
 
-  /** 同步查询模型是否被用户显式禁用（会话解析入口过滤用）。 */
+  /** sync query model is otherwise by user explicit disable (conversation parse entry filter use). */
   isModelDisabled(providerId: string, modelId: string): boolean {
     return this.disabledModels[providerId]?.includes(modelId) === true
   }
 
-  /** 模型禁用时显式拒绝（409 model_disabled），供显式选用入口复用。 */
+  /** model disable when explicit reject (409 model_disabled), supply explicit choose use entry re- use. */
   assertModelEnabled(providerId: string, modelId: string): void {
     if (this.isModelDisabled(providerId, modelId)) {
       throw new HelmError(
         'model_disabled',
-        `模型 ${providerId}/${modelId} 已被禁用：请在「模型与凭证中心」或 helm models filter 重新启用后选用`,
+        `model ${providerId}/${modelId} already by disable: please in model and rely on verify center or helm models filter re- enable after choose use`,
         409,
         { provider: providerId, modelId },
       )
@@ -256,22 +256,22 @@ export class ModelRegistry {
   }
 
   /**
-   * 设置模型禁用集（PUT /api/models/filter）：provider 为 undefined 时清空全部
-   * （此时 modelIds 必须为空数组）；写入 config.json 原子持久化并返回最新目录。
-   * 后端不校验模型存在性（存储自由字符串；目录标注仅命中目录内模型）。
+   * settings model disable collection (PUT /api/models/filter):provider is undefined when empty all
+   * (now modelIds must is empty array); write config.json atomic persist and return most new directory.
+   * backend do not validate model store in (store self by string; directory mark note only hit directory inside model).
    */
   async setDisabledModels(provider: string | undefined, modelIds: string[]): Promise<ModelCatalog> {
     if (provider === undefined || provider === '') {
       if (modelIds.length > 0) {
-        throw new HelmError('validation_error', '未指定 provider 时只能清空全部禁用项（disabledModels 必须为空数组）', 400)
+        throw new HelmError('validation_error', 'not designate provider when only can empty all disable items (disabledModels must is empty array)', 400)
       }
     }
     const unique: string[] = []
     for (const id of modelIds) {
-      // modelId 允许含 '/'：聚合网关（OpenRouter、magpie）的模型 id 本身就是
-      // 'vendor/model' 形态，斜杠是模型名的一部分，不带 provider 前缀。
+      // modelId allows contains '/': aggregate gateway (OpenRouter,magpie) model id itself is exactly
+      // 'vendor/model' form, slash is model name one part, do not carries provider prefix.
       if (typeof id !== 'string' || id === '') {
-        throw new HelmError('validation_error', `模型 ID 必须为非空字符串：${String(id)}`, 400)
+        throw new HelmError('validation_error', `model ID must is non-empty string:${String(id)}`, 400)
       }
       if (!unique.includes(id)) unique.push(id)
     }
@@ -289,16 +289,16 @@ export class ModelRegistry {
       return merged
     })
     this.disabledModels = parseDisabledModelsConfig(next['disabledModels'])
-    // 内存快照已生效：发布 models.changed 让已连接的 Web 客户端重拉目录
-    //（publish 侧组装/脱敏失败会同步抛出，不静默吞掉）。
+    // memory snapshot already takes effect: publish models.changed let connected Web client heavy pull directory
+    //(publish side group install/redaction failed will sync throw, not silently swallow).
     this.events.publish('models.changed', { providers: provider ? [provider] : [] })
     return this.listModels()
   }
 
   /**
-   * 重建并发布模型集（providers.json / credentials / 运行时供应商变化共用）。
-   * 串行：经 modelsChain 排队，避免并发重建至后旧集合覆盖新集合；
-   * 外部注入 Models（测试/嵌入场景）空操作（模型集合归调用方）。
+   * rebuild concurrency publish model collection (providers.json / credentials / runtime provider change shared use).
+   * serial: via modelsChain queue up, avoid concurrency rebuild until after old set override new set;
+   * external inject Models(test/embed scenario) empty operation (model set archive caller).
    */
   async reloadModels(): Promise<void> {
     await this.enqueueModelsChange(async () => {
@@ -306,7 +306,7 @@ export class ModelRegistry {
     })
   }
 
-  /** 已在 modelsChain 内执行的重建（外部注入集合空操作）。 */
+  /** already in modelsChain inside execute rebuild (external inject set empty operation). */
   private async rebuildModelsLocked(): Promise<void> {
     if (this.externalModels) return
     const providerConfigs = await this.providersSvc.list()
@@ -317,7 +317,7 @@ export class ModelRegistry {
     }
     const collision = providerConfigs.find((config) => this.runtimeProviders.has(config.id))
     if (collision) {
-      throw new HelmError('runtime_provider_conflict', `网关 ${collision.id} 与插件注册的供应商冲突`, 409)
+      throw new HelmError('runtime_provider_conflict', `gateway ${collision.id} and plugin register provider conflict`, 409)
     }
     const models = buildModels({
       providers: providerConfigs,
@@ -325,11 +325,11 @@ export class ModelRegistry {
       modelsStore: this.modelsStore,
       extraProviders: [...this.runtimeProviders.values()],
     })
-    // 离线恢复缓存目录（allowNetwork:false 不发网络请求）。models-store.json 损坏
-    // 是文件级事故（非单供应商失败）：SDK 会把它包进 result.errors 而不 reject，
-    // 这里必须显式上抛，绝不静默降级空目录。
+    // offline restore cache directory (allowNetwork:false do not network request).models-store.json corrupt
+    // is file level incident (non- single provider failed):SDK will it package enter result.errors while do not reject,
+    // this in must explicit on throw, never static default fall back empty directory.
     await assertModelsStoreHealthy(await models.refresh({ allowNetwork: false }))
-    // 完整读取成功后才发布；整体替换，确保删除密钥后旧缓存也失效。
+    // complete read after success only then publish; whole replace, ensure delete secret key after old cache also expires.
     for (const id of Object.keys(this.apiKeyCache)) delete this.apiKeyCache[id]
     Object.assign(this.apiKeyCache, nextKeys)
     this.modelsGeneration += 1
@@ -339,24 +339,24 @@ export class ModelRegistry {
   }
 
   /**
-   * 运行时注册动态供应商（插件经 HostOptions.providers.register 注入）。
-   * 冲突拒绝（不覆盖任何已有供应商）：内置 provider / providers.json 自定义网关 /
-   * 其他 owner 已注册的同 id；providers.json 当前未启用的同 id 网关同样占用命名空间。
-   * 外部注入 Models 场景显式 unsupported（集合归调用方，注册成功却目录不变即欺骗）。
-   * 返回幂等注销函数：仅当 map 仍指向同一 provider 实例时删除并重建。
+   * runtime register motion state provider (plugin via HostOptions.providers.register inject).
+   * conflict reject (does not override any already has provider): inside placement provider / providers.json self define gateway /
+   * other owner registered same id;providers.json when before not enabled same id gateway same occupy naming empty between.
+   * external inject Models scenario explicit unsupported(set archive caller, register succeeded yet directory do not change i.e. deceive).
+   * return idempotent deregister function: only when map still points to the same provider instance when delete and rebuild.
    */
   async registerRuntimeProvider(provider: Provider, pluginId?: string): Promise<() => Promise<void>> {
     if (this.externalModels) {
       throw new HelmError(
         'runtime_provider_unsupported',
-        '外部注入 Models 时不支持运行时供应商注册（模型集合归调用方所有）',
+        'external inject Models when unsupported runtime provider register (model set archive caller all)',
         400,
       )
     }
     if (typeof provider?.id !== 'string' || provider.id === '') {
-      throw new HelmError('validation_error', `运行时供应商 id 需为非空字符串：${String(provider?.id)}`, 400)
+      throw new HelmError('validation_error', `runtime provider id must be a non-empty string:${String(provider?.id)}`, 400)
     }
-    // 捕获本次注册的包装实例；旧释放句柄不得寻址后续同名注册。
+    // catch this time register wrap instance; old release handle must not seek address after continue same name register.
     const registered = await this.enqueueModelsChange(async () => {
       const conflict = await this.findRuntimeProviderConflict(provider.id)
       if (conflict !== undefined) {
@@ -368,7 +368,7 @@ export class ModelRegistry {
       try {
         await this.rebuildModelsLocked()
       } catch (error) {
-        // 回滚：注册失败不留孤儿 map 项（下次 reload 也不会再包含它）。
+        // rollback: register failed do not orphan child map items (under time reload also will not again contains it).
         this.runtimeProviders.delete(provider.id)
         this.runtimeProviderOwners.delete(provider.id)
         throw error
@@ -387,38 +387,38 @@ export class ModelRegistry {
     }
   }
 
-  /** 冲突检测：返回错误消息（undefined = 无冲突）。内置/自定义网关/其他 owner 互斥。 */
+  /** conflict detect: return error message (undefined = without conflict). inside placement/self define gateway/other owner mutual exclusion. */
   private async findRuntimeProviderConflict(providerId: string): Promise<string | undefined> {
     const existing = this.runtimeProviders.get(providerId)
     if (existing !== undefined) {
       const owner = this.runtimeProviderOwners.get(providerId)
-      return `供应商 id '${providerId}' 已被运行时注册${owner !== undefined ? `（插件 ${owner}）` : ''}，不得覆盖`
+      return `provider id '${providerId}' already by runtime register${owner !== undefined ? `(plugin ${owner})` : ''}, must not override`
     }
     const config = await this.providersSvc.get(providerId)
     if (config !== undefined) {
-      return `供应商 id '${providerId}' 与 providers.json 自定义网关冲突（enabled: ${String(config.enabled)}）`
+      return `provider id '${providerId}' and providers.json self define gateway conflict (enabled: ${String(config.enabled)})`
     }
     const builtin = builtinProviderIds.has(providerId)
     if (builtin) {
-      return `供应商 id '${providerId}' 与 PI 内置供应商冲突，不得覆盖`
+      return `provider id '${providerId}' and PI inside placement provider conflict, must not override`
     }
     return undefined
   }
 
-  /** 注销：仅当 map 仍指向同一实例时删除（幂等；被覆盖/已删时不重复重建）。 */
+  /** deregister: only when map still points to the same instance when delete (idempotent; by override/already delete when does not repeat rebuild). */
   private async unregisterRuntimeProvider(provider: Provider): Promise<void> {
     if (this.externalModels) return
     await this.enqueueModelsChange(async () => {
       if (this.runtimeProviders.get(provider.id) !== provider) return
       const owner = this.runtimeProviderOwners.get(provider.id)
       if ((this.runtimeProviderUsage.get(provider.id) ?? 0) > 0) {
-        throw new HelmError('plugin_has_live_tasks', `供应商 ${provider.id} 仍有在途请求`, 409, { providers: [provider.id] })
+        throw new HelmError('plugin_has_live_tasks', `provider ${provider.id} still has in-flight request`, 409, { providers: [provider.id] })
       }
-      // usage 检查与 retiring 标记之间无 await（串行域内同步段）：此后
-      // rebuild 的多个 await 窗口中，旧集合仍可能被新回合调起 stream（旧
-      // modelsCurrent 尚未替换）——窗口内新 acquire 显式失败，保证注销返回
-      // 后不再出现该供应商的在途流（否则 assertRuntimeProvidersIdle 因归属
-      // 已删而检测不到，停用/teardown 会与在途模型流并发）。
+      // usage check and retiring mark record between without await(serial domain inside sync segment): this after
+      // rebuild multiple await window in, old set still may by new turn tune start stream(old
+      // modelsCurrent not yet replace) - - window inside new acquire explicit failed, guarantee deregister return
+      // after no longer appear the provider in-flight stream (otherwise assertRuntimeProvidersIdle because ownership
+      // already delete while detect fewer than, deactivate/teardown will and in-flight model stream concurrency).
       this.retiringRuntimeProviders.add(provider.id)
       this.runtimeProviders.delete(provider.id)
       this.runtimeProviderOwners.delete(provider.id)
@@ -435,10 +435,10 @@ export class ModelRegistry {
   }
 
   /**
-   * 刷新动态模型目录（POST /api/models/refresh）。
-   * 目标运行时供应商在途计数覆盖整个 refresh 周期（teardown 预检拒绝中途回收）；
-   * 捕获调用时集合与代数：等待期间集合被替换时不再发布旧集合快照事件；
-   * 错误消息经 stash 脱敏后返回。
+   * refresh motion state model directory (POST /api/models/refresh).
+   * target runtime provider in-flight counter override the whole refresh cycle (teardown preflight reject in route reclaim);
+   * catch invoke when set and proxy count: wait for during set by replace when no longer publish old set snapshot event;
+   * error message via stash redaction after return.
    */
   async refreshModels(isClosed: () => boolean, options?: {
     providers?: string[]
@@ -453,11 +453,11 @@ export class ModelRegistry {
     allowNetwork?: boolean
     force?: boolean
   }): Promise<ModelProvidersRefreshResult> {
-    if (isClosed()) throw new HelmError('runtime_closing', '内核正在关闭，不能刷新模型目录', 409)
+    if (isClosed()) throw new HelmError('runtime_closing', 'kernel is now close, cannot refresh model directory', 409)
     if (this.externalModels) {
       throw new HelmError(
         'runtime_provider_unsupported',
-        '外部注入 Models 时不支持动态目录刷新（模型集合归调用方所有）',
+        'external inject Models when unsupported motion state directory refresh (model set archive caller all)',
         400,
       )
     }
@@ -474,8 +474,8 @@ export class ModelRegistry {
     try {
       for (const id of options?.providers ?? []) {
         const provider = instanceAtStart.getProvider(id)
-        if (!provider) throw new HelmError('model_provider_not_found', `供应商 ${id} 未注册`, 404)
-        if (!provider.refreshModels) throw new HelmError('model_provider_static', `供应商 ${id} 使用静态模型目录，不支持动态刷新`, 400)
+        if (!provider) throw new HelmError('model_provider_not_found', `provider ${id} not registered`, 404)
+        if (!provider.refreshModels) throw new HelmError('model_provider_static', `provider ${id} use static model directory, unsupported motion state refresh`, 400)
       }
       result = await instanceAtStart.refresh({
         signal: controller.signal,
@@ -487,7 +487,7 @@ export class ModelRegistry {
       if (this.modelsRefreshAbort === controller) this.modelsRefreshAbort = undefined
       release()
     }
-    // 文件级损坏（models_store_corrupted）不是单供应商失败，显式上抛。
+    // file level corrupt (models_store_corrupted) is not single provider failed, explicit on throw.
     await assertModelsStoreHealthy(result)
     const errors: Record<string, string> = {}
     for (const [providerId, err] of result.errors) {
@@ -507,15 +507,15 @@ export class ModelRegistry {
     }
   }
 
-  /** 关停时中止在途 refresh。 */
+  /** closure stop when abort in-flight refresh. */
   abortRefresh(reason: Error): void {
     this.modelsRefreshAbort?.abort(reason)
   }
 
   /**
-   * teardown 预检：插件 owner 的运行时供应商若有在途 streaming/refresh 则抛
-   * 409 plugin_has_live_tasks（防止插件标为 disabled 但 provider 仍在目录）。
-   * 只要 busy 就保留现状（模型引用保留且下一回合可用）。
+   * teardown preflight: plugin owner runtime provider if has in-flight streaming/refresh then throw
+   * 409 plugin_has_live_tasks(guard against plugin mark is disabled but provider still in directory).
+   * as long as busy then keep now state (model reference keep and under one turn available).
    */
   assertRuntimeProvidersIdle(pluginId: string): void {
     const busy: string[] = []
@@ -525,21 +525,21 @@ export class ModelRegistry {
     if (busy.length > 0) {
       throw new HelmError(
         'plugin_has_live_tasks',
-        `插件 ${pluginId} 的运行时供应商仍有在途模型请求：${busy.join(', ')}`,
+        `plugin ${pluginId} runtime provider still has in-flight model request:${busy.join(', ')}`,
         409,
         { providers: busy },
       )
     }
   }
 
-  /** 在途使用计数：目标 provider 各 +1；返回幂等释放函数（各 -1，归零清除）。 */
+  /** in-flight use counter: target provider each +1; return idempotent release function (each -1, reset to zero clear). */
   private acquireRuntimeProviders(ids: readonly string[]): () => void {
     for (const id of ids) {
-      // 注销窗口内的新请求显式失败：放行会成为归属已删、检测不到的在途流
+      // deregister window inside new request explicit failed: let through will into is ownership already delete, detect fewer than in-flight stream
       if (this.retiringRuntimeProviders.has(id)) {
         throw new HelmError(
           'runtime_provider_retiring',
-          `供应商 ${id} 正在注销（插件停用中），拒绝新的模型请求`,
+          `provider ${id} is now deregister (plugin deactivate in), reject new model request`,
           409,
           { providers: [id] },
         )
@@ -565,14 +565,14 @@ export class ModelRegistry {
   }
 
   /**
-   * 运行时供应商使用计数包装：stream/streamSimple 真正调用时 +1，事件流终态
-   * （result() 在 done/error/end 时 resolve）后 -1；不消费 asyncIterator。
-   * refreshModels 同样计数（目录刷新在途时 teardown 预检拒绝）。
+   * runtime provider use counter wrap:stream/streamSimple truly invoke when +1, event stream terminal state
+   * (result() in done/error/end when resolve) after -1; do not consume asyncIterator.
+   * refreshModels same counter (directory refresh in-flight when teardown preflight reject).
    */
   private wrapRuntimeProvider(provider: Provider): Provider {
     const acquire = () => this.acquireRuntimeProviders([provider.id])
-    // 通用包装：先取流后 result().finally 释放（同步抛同样释放，不留永久 busy）；
-    // 不消费 asyncIterator、不改写 options（泛型参数仅随具体化签名传递）。
+    // through use wrap: first take stream after result().finally release (sync throw same release, do not forever long busy);
+    // do not consume asyncIterator, do not change write options(generic parameter only follow specific signature pass).
     const counted = (open: () => AssistantMessageEventStream): AssistantMessageEventStream => {
       const release = acquire()
       let stream: AssistantMessageEventStream

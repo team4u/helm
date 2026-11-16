@@ -1,32 +1,32 @@
 /**
- * client.tsx 编译产物的 chunk 图规划（纯函数，无 IO / 无 esbuild 依赖）。
+ * client.tsx compile artifact chunk diagram rule plan (pure function, without IO / without esbuild dependency).
  *
- * 输入是 Pass 1 metafile 的「basename -> 输出元数据」映射（只消费 imports 边），
- * 输出代码分割所需的模块集合划分与前置依赖拓扑序。从 client-compiler.ts 的
- * 嵌套闭包提取为顶层纯函数，便于对划分 / 引用计数 / 拓扑排序做单元测试；
- * 遍历顺序与原实现逐语句一致（Set 迭代顺序参与产物注册顺序与 chunks 键序，
- * 不得重排）。
+ * input is Pass 1 metafile basename -> output metadata mapping (only consume imports edge),
+ * output code split which must module set divide and pre- dependency topology order. from client-compiler.ts 
+ * embed set closed package extract is top-level pure function, convenient at for divide / reference counter / topology sort do unit test;
+ * iterate order and original implement one by one statement consistent (Set iterate order reference and artifact register order and chunks key order,
+ * must not heavy arrange).
  */
 import { basename } from 'node:path';
 
-/** metafile 输出间依赖边（esbuild outputs[].imports 的结构子集）。 */
+/** metafile output between dependency edge (esbuild outputs[].imports structure sub- collection). */
 export interface ChunkImportEdge {
   path: string;
   kind: string;
   external?: boolean;
 }
 
-/** chunk 图节点：本模块只消费静态/动态 import 边。 */
+/** chunk diagram node: this module only consume static/motion state import edge. */
 export interface ChunkGraphNode {
   imports?: ReadonlyArray<ChunkImportEdge>;
 }
 
-/** chunk 图：产物 basename -> 节点元数据（esbuild metafile outputs 的结构子集）。 */
+/** chunk diagram: artifact basename -> node metadata (esbuild metafile outputs structure sub- collection). */
 export type ChunkGraph = ReadonlyMap<string, ChunkGraphNode>;
 
 /**
- * 入口静态 import 闭包（含入口自身）：按 imports 声明顺序深度优先展开，
- * 仅纳入图中存在的 basename（虚拟产物之外的输入不参与划分）。
+ * entry static import closed package (contains entry itself): by imports declaration order deep takes precedence expand,
+ * only accept diagram in store in basename(virtual artifact of outside input does not participate divide).
  */
 export function collectStaticImportClosure(graph: ChunkGraph, entry: string): Set<string> {
   const closure = new Set<string>([entry]);
@@ -48,9 +48,9 @@ export function collectStaticImportClosure(graph: ChunkGraph, entry: string): Se
 }
 
 /**
- * 可达动态 import 目标集合：先扫 baseClosure 各成员的动态导入，再对每个动态
- * 目标广度遍历其静态闭包继续发现动态导入（动态链路上的静态依赖不再进 baseClosure，
- * 由各自异步单元承接）。
+ * can reach motion state import target set: first scan baseClosure each member motion state import, again for each motion state
+ * target broad iterate its static closed package continue discover motion state import (motion state link on static dependency no longer enter baseClosure,
+ * by each async unit bear connect).
  */
 export function collectDynamicImportTargets(
   graph: ChunkGraph,
@@ -96,28 +96,28 @@ export function collectDynamicImportTargets(
   return dynamicTargets;
 }
 
-/** 分包规划结果：共享异步 chunk 集合与每个异步单元的前置共享依赖拓扑序。 */
+/** package rule plan result: sharing async chunk set and each async unit pre- sharing dependency topology order. */
 export interface AsyncChunkPlan {
-  /** 被 ≥2 个异步单元引用（含传递依赖）的模块：提为共享 chunk，经命名空间桥注册。 */
+  /** by ≥2 async unit reference (contains pass dependency) module: mention is sharing chunk, via naming empty between bridge register. */
   sharedAsyncChunks: Set<string>;
-  /** 异步单元 -> 加载该单元前必须先求值的共享 chunk 列表（依赖在前）。 */
+  /** async unit -> load the unit before must first seek value sharing chunk list (dependency in before). */
   chunkDeps: Record<string, string[]>;
 }
 
 /**
- * 异步单元划分与前置依赖拓扑排序：
- * 1. 求每个动态目标的独占静态闭包（排除 baseClosure 成员）；
- * 2. 对闭包成员做引用计数，被 ≥2 个单元引用者提为共享 chunk，并沿其静态依赖
- *    传递纳入其他共享 chunk；
- * 3. 每个单元收集其需要的共享 chunk（含传递），按静态依赖后序 DFS 拓扑排序
- *    （依赖先于使用者求值）。
+ * async unit divide and pre- dependency topology sort:
+ * 1. seek each motion state target exclusive static closed package (exclude baseClosure member);
+ * 2. for closed package member do reference counter, by ≥2 unit reference mention is sharing chunk, and along its static dependency
+ *    pass accept other sharing chunk;
+ * 3. each unit collect its need to sharing chunk(contains pass), by static dependency after order DFS topology sort
+ *    (dependency first at use seek value).
  */
 export function computeAsyncChunkPlan(
   graph: ChunkGraph,
   baseClosure: ReadonlySet<string>,
   dynamicTargets: ReadonlySet<string>,
 ): AsyncChunkPlan {
-  // 每个异步单元的独占静态闭包（不含单元自身）
+  // each async unit exclusive static closed package (excludes unit itself)
   const dynStaticClosures = new Map<string, Set<string>>();
   for (const d of dynamicTargets) {
     const closure = new Set<string>();
@@ -138,7 +138,7 @@ export function computeAsyncChunkPlan(
     dynStaticClosures.set(d, closure);
   }
 
-  // 引用计数：被多个异步单元独占闭包引用的模块提为共享 chunk
+  // reference counter: by multiple async unit exclusive closed package reference module mention is sharing chunk
   const refCount = new Map<string, number>();
   for (const [, closure] of dynStaticClosures) {
     for (const chunk of closure) {
@@ -164,7 +164,7 @@ export function computeAsyncChunkPlan(
   };
   for (const chunk of Array.from(sharedAsyncChunks)) addSharedDeps(chunk);
 
-  // 每个异步单元的前置共享依赖表（共享 chunk 间按拓扑顺序排列，依赖在前）
+  // each async unit pre- sharing dependency table (sharing chunk between by topology order arrange column, dependency in before)
   const chunkDeps: Record<string, string[]> = {};
   for (const d of dynamicTargets) {
     const staticClosure = dynStaticClosures.get(d) ?? new Set<string>();

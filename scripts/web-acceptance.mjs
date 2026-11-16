@@ -1,4 +1,4 @@
-// Browser acceptance only: real kernel/SQLite/HTTP; model output comes from the SDK faux provider.
+// only supply browser verify: real kernel/SQLite/HTTP, model output by SDK faux provider provide.
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -16,19 +16,19 @@ models.setProvider(faux.provider)
 const app = await createHelm({ dataDir, cwd: projectRoot, model: 'faux/faux-1', models })
 const testPassword = crypto.randomUUID()
 const issued = await app.kernel.auth.setup(testPassword)
-const chat = await app.kernel.createConversation({ title: 'Web 验收：消息与附件' })
-const history = await app.kernel.createConversation({ title: '历史分页验收' })
+const chat = await app.kernel.createConversation({ title: 'Web verify: message and attachment' })
+const history = await app.kernel.createConversation({ title: 'history page verify' })
 const example = [
-  '这是一条 **Web 验收用的固定模型响应**，用于检查真实持久会话和浏览器的渲染连接。',
+  'this is a **Web verify use fixed model response**, used to check real durable conversation and browser render connect.',
   '',
-  '| 项目 | 状态 |', '| --- | --- |', '| 真实工具执行 | 已完成 |', '| 多模态附件 | 已登记 |',
+  '| items item | state |', '| --- | --- |', '| real tool execute | completed |', '| multimodal attachment | already register |',
   '', '```typescript', 'const message = "Helm Web"', 'console.log(message)', '```',
-  '', '```mermaid', 'flowchart LR', '  A[用户输入] --> B[持久会话]', '  B --> C[工具执行]', '  C --> D[结果展示]', '```',
-  '', '```ui', JSON.stringify({ component: 'Card', title: '声明式消息卡', children: [{ component: 'Text', text: '使用与插件相同的原语组件。' }, { component: 'Button', label: '打开个人助理', action: { type: 'helm:open', target: 'conversation:1', split: true } }] }), '```',
+  '', '```mermaid', 'flowchart LR', '  A[user input] --> B[durable conversation]', '  B --> C[tool execute]', '  C --> D[result render]', '```',
+  '', '```ui', JSON.stringify({ component: 'Card', title: 'declaration style message card', children: [{ component: 'Text', text: 'use and plugin identical original language component.' }, { component: 'Button', label: 'open person assist', action: { type: 'helm:open', target: 'conversation:1', split: true } }] }), '```',
 ].join('\n')
-faux.setResponses(Array.from({ length: 90 }, (_, i) => fauxAssistantMessage(`分页检查 ${i + 1}`)))
+faux.setResponses(Array.from({ length: 90 }, (_, i) => fauxAssistantMessage(`page check ${i + 1}`)))
 for (let index = 0; index < 85; index++) {
-  await app.kernel.submitInput(history.id, `历史记录 ${index + 1}：${index === 0 ? '唯一最早搜索标记 HelmHistoryNeedle' : '检查分页'}`)
+  await app.kernel.submitInput(history.id, `history record ${index + 1}:${index === 0 ? 'unique most early search mark record HelmHistoryNeedle' : 'check page'}`)
   await app.kernel.waitForIdle(history.id)
 }
 faux.setResponses([
@@ -36,23 +36,23 @@ faux.setResponses([
   fauxAssistantMessage(example),
   ...Array.from({ length: 40 }, () => fauxAssistantMessage(example)),
 ])
-await app.kernel.submitInput(chat.id, '请执行一次本地测试命令，再展示 Markdown、图表与声明式卡片。')
+await app.kernel.submitInput(chat.id, 'please execute once local test command, again render Markdown, diagram table and declaration style card.')
 await app.kernel.waitForIdle(chat.id)
-await app.kernel.artifacts.writeUploaded(chat.id, { name: '验收说明.md', mimeType: 'text/markdown', bytes: new TextEncoder().encode('# Helm Web 验收\n\n真实产物文件。') })
+await app.kernel.artifacts.writeUploaded(chat.id, { name: 'verify note.md', mimeType: 'text/markdown', bytes: new TextEncoder().encode('# Helm Web verify\n\nreal artifact file.') })
 await app.kernel.plugins.register({
-  id: 'test:web-acceptance', name: 'Web 验收组件样例', version: '1.0.0', definePlugin(ctx) {
-    const doc = ctx.doc('catalog', { enabled: false, rows: [{ conversationId: chat.id, label: '消息与附件' }, { conversationId: history.id, label: '历史记录' }] }, { public: true })
-    ctx.action({ id: 'toggle', description: '验收 Switch 原始布尔参数', inputSchema: { type: 'object', properties: { enabled: { type: 'boolean' } }, required: ['enabled'], additionalProperties: false }, outputSchema: { type: 'object', properties: { enabled: { type: 'boolean' } }, required: ['enabled'] }, handler(input) { doc.update((old) => ({ ...old, enabled: input.enabled })); return { enabled: input.enabled } } })
-    ctx.ui.sidebarItem({ id: 'catalog', label: '组件验收样例', icon: 'layers', target: 'screen:test:web-acceptance/catalog' })
-    ctx.ui.screen({ id: 'catalog', label: '组件验收样例', docs: ['catalog'], json: { component: 'Stack', children: [
-      { component: 'Callout', title: '测试专用', text: '此页只在独立验收服务中注册。' },
-      { component: 'KeyValueList', items: [{ label: '原始布尔值', key: '/$docs/catalog/enabled' }, { label: '会话数量', key: '/$docs/catalog/rows/length' }] },
-      { component: 'Switch', label: '启用样例', value: '{$docs.catalog.enabled}', action: { type: 'helm:action', actionId: 'toggle', input: { enabled: '{$value}' } } },
-      { component: 'Table', columns: [{ key: 'conversationId', label: '会话' }, { key: 'label', label: '用途' }], rows: '{$docs.catalog.rows}', rowActions: [{ label: '在右屏打开', action: { type: 'helm:open', target: 'conversation:{$row.conversationId}', split: true } }] },
+  id: 'test:web-acceptance', name: 'Web verify component example', version: '1.0.0', definePlugin(ctx) {
+    const doc = ctx.doc('catalog', { enabled: false, rows: [{ conversationId: chat.id, label: 'message and attachment' }, { conversationId: history.id, label: 'history record' }] }, { public: true })
+    ctx.action({ id: 'toggle', description: 'verify Switch original boolean parameter', inputSchema: { type: 'object', properties: { enabled: { type: 'boolean' } }, required: ['enabled'], additionalProperties: false }, outputSchema: { type: 'object', properties: { enabled: { type: 'boolean' } }, required: ['enabled'] }, handler(input) { doc.update((old) => ({ ...old, enabled: input.enabled })); return { enabled: input.enabled } } })
+    ctx.ui.sidebarItem({ id: 'catalog', label: 'component verify example', icon: 'layers', target: 'screen:test:web-acceptance/catalog' })
+    ctx.ui.screen({ id: 'catalog', label: 'component verify example', docs: ['catalog'], json: { component: 'Stack', children: [
+      { component: 'Callout', title: 'test dedicated use', text: 'this page only in independent verify service in register.' },
+      { component: 'KeyValueList', items: [{ label: 'original boolean value', key: '/$docs/catalog/enabled' }, { label: 'conversation amount', key: '/$docs/catalog/rows/length' }] },
+      { component: 'Switch', label: 'enable example', value: '{$docs.catalog.enabled}', action: { type: 'helm:action', actionId: 'toggle', input: { enabled: '{$value}' } } },
+      { component: 'Table', columns: [{ key: 'conversationId', label: 'conversation' }, { key: 'label', label: 'purpose' }], rows: '{$docs.catalog.rows}', rowActions: [{ label: 'in right screen open', action: { type: 'helm:open', target: 'conversation:{$row.conversationId}', split: true } }] },
     ] } })
   },
 })
-// client.tsx second-track acceptance fixture: real clientRoot + dynamic compile-load (for browser acceptance)
+// client.tsx second track path verify fixture: real clientRoot + motion state compile load (browser verify use)
 const clientSrcDir = join(dataDir, 'client-src')
 await mkdir(join(clientSrcDir, 'parts'), { recursive: true })
 await writeFile(
@@ -70,30 +70,30 @@ await writeFile(
     '    <div className="card" style={{ display: \'flex\', flexDirection: \'column\', gap: 8 }}>',
     '      <div style={{ display: \'flex\', alignItems: \'center\', gap: 6 }}>',
     '        <Activity size={13} />',
-    '        <strong>client.tsx 动态组件验收</strong>',
+    '        <strong>client.tsx motion state component verify</strong>',
     '      </div>',
-    '      <p style={{ margin: 0, fontSize: 12.5 }}>screenId: {props.screenId}；点击计数：{count}</p>',
+    '      <p style={{ margin: 0, fontSize: 12.5 }}>screenId: {props.screenId}; point strike counter:{count}</p>',
     '      <p style={{ margin: 0, fontSize: 12.5 }}>{statusLine()}</p>',
     '      <p style={{ margin: 0, fontSize: 12.5 }}>docs.catalog: {JSON.stringify(catalog)}</p>',
-    '      <button className="btn btn-sm" onClick={() => setCount(count + 1)}>client 组件内计数</button>',
+    '      <button className="btn btn-sm" onClick={() => setCount(count + 1)}>client component inside counter</button>',
     '    </div>',
     '  )',
     '}',
     '',
   ].join('\n'),
 )
-await writeFile(join(clientSrcDir, 'parts', 'line.ts'), "export const statusLine = () => '本地依赖（parts/line.ts）已随插件闭包编译进产物'\n")
+await writeFile(join(clientSrcDir, 'parts', 'line.ts'), "export const statusLine = () => 'local dependency (parts/line.ts) already follow plugin closed package compile enter artifact'\n")
 await app.kernel.plugins.register({
-  id: 'test:client-acceptance', name: 'Web 验收 client.tsx 样例', version: '1.0.0', clientRoot: clientSrcDir, definePlugin(ctx) {
-    ctx.ui.sidebarItem({ id: 'client-demo', label: 'client.tsx 验收', icon: 'code', target: 'screen:test:client-acceptance/demo' })
-    ctx.ui.screen({ id: 'demo', label: 'client.tsx 动态组件', client: { module: 'client.tsx', export: 'Panel' } })
+  id: 'test:client-acceptance', name: 'Web verify client.tsx example', version: '1.0.0', clientRoot: clientSrcDir, definePlugin(ctx) {
+    ctx.ui.sidebarItem({ id: 'client-demo', label: 'client.tsx verify', icon: 'code', target: 'screen:test:client-acceptance/demo' })
+    ctx.ui.screen({ id: 'demo', label: 'client.tsx motion state component', client: { module: 'client.tsx', export: 'Panel' } })
   },
 })
 
-void app.kernel.createAsk({ conversationId: chat.id, title: '浏览器验收：请确认', description: '这是验收服务的审批卡，不控制真实终端。', fields: [{ name: 'allow', label: '继续测试', type: 'confirm', required: true }] }).catch(console.error)
+void app.kernel.createAsk({ conversationId: chat.id, title: 'browser verify: please confirm', description: 'this is verify service approval card, do not control real terminal.', fields: [{ name: 'allow', label: 'continue test', type: 'confirm', required: true }] }).catch(console.error)
 const hub = await startHub({ kernel: app.kernel, workflows: app.workflows, port: 3202 })
 const infoPath = process.env.HELM_WEB_ACCEPTANCE_INFO ?? join(dataDir, 'browser.json')
 await writeFile(infoPath, JSON.stringify({ dataDir, chatId: chat.id, historyId: history.id, url: hub.url, token: issued.token }), { mode: 0o600 })
-console.log(`Standalone acceptance service ready: ${hub.url}; conversation ${chat.id}, history ${history.id}; data dir ${dataDir}`)
-console.log(`Test login password: ${testPassword} (scoped to this throwaway data dir only)`)
+console.log(`independent verify service ready:${hub.url}; conversation ${chat.id}, history ${history.id}; data directory ${dataDir}`)
+console.log(`test login password:${testPassword}(only used to this time temporary data directory)`)
 for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, async () => { await hub.close(); await app.close(); process.exit(0) })

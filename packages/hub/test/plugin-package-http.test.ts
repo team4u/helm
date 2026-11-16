@@ -1,19 +1,19 @@
 /**
- * 插件包管理 HTTP 路由集成测试（install / update / remove）。
+ * plugin package manage HTTP routing integration test (install / update / remove).
  *
- * 组合纪律：真实 createHubHandler + 真实 PluginHost（接线 PluginPackageManager
- * 与真实 ConfigService store）+ 真实 local 插件源目录（doctor 全链真实执行，
- * 含真实 TS 转译与临时宿主注册）；npm/git 不触网（本文件只测 local 路径）。
+ * combine discipline: real createHubHandler + real PluginHost(connect line PluginPackageManager
+ * and real ConfigService store)+ real local plugin source directory (doctor all chain real execute,
+ * contains real TS transpile and temporary host register);npm/git do not trigger network (this file only test local path).
  *
- * 覆盖：
- * - POST /api/plugins/install body { source, enable? }：默认 disabled、enable
- *   后 enabled、enableError 透传、未知字段 400、非法 source 400；
- * - POST /api/plugins/:id/update：重同步 + 记录推进；未受管插件 404；
- * - POST /api/plugins/:id/remove：受管目录删除、记录删除；
- * - 未接线安装器（纯 PluginHost）时三端点 501；
- * - GET /api/plugins 的 managed 映射（store 驱动，重启恢复语义同链）。
+ * override:
+ * - POST /api/plugins/install body { source, enable? }: by default disabled,enable
+ *   after enabled,enableError pass-through, unknown field 400, illegal source 400;
+ * - POST /api/plugins/:id/update: heavy sync + record push enter; not managed plugin 404;
+ * - POST /api/plugins/:id/remove: managed directory delete, record delete;
+ * - not connect line install (pure PluginHost) when three end point 501;
+ * - GET /api/plugins  managed mapping (store drive, restart restore semantics same chain).
  *
- * runner: tsx --test；每项显式 timeout: 60_000。
+ * runner: tsx --test; each items explicit timeout: 60_000.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -25,7 +25,7 @@ import { createHubHandler } from '../../kernel/src/http/index.js'
 import { createHubTestApp, openHubTestEnv } from './helpers/hub-test-env.js'
 
 // ---------------------------------------------------------------------------
-// 基建
+// base create
 // ---------------------------------------------------------------------------
 
 const PLUGIN_SRC = (id: string) => `export default {
@@ -34,7 +34,7 @@ const PLUGIN_SRC = (id: string) => `export default {
   definePlugin(ctx) {
     ctx.action({
       id: 'ping',
-      description: '探针',
+      description: 'probe needle',
       inputSchema: { type: 'object', additionalProperties: false },
       outputSchema: { type: 'object', properties: { pong: { type: 'boolean' } }, required: ['pong'], additionalProperties: false },
       handler: () => ({ pong: true }),
@@ -53,13 +53,13 @@ interface HubEnv {
 async function makeHub(): Promise<HubEnv> {
   const env = await openHubTestEnv({ prefix: 'helm-pkg-http-' })
   const handler = createHubHandler(env.kernel as never)
-  // 真实鉴权链：setup 取 token，后续 Bearer 携带
+  // real authentication chain:setup take token, after continue Bearer carry
   const setupResponse = await handler(new Request('http://127.0.0.1:3202/api/auth/setup', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ password: 'helm-pkg-http-test-pass' }),
   }))
-  if (setupResponse.status !== 200) throw new Error(`auth setup 失败: ${setupResponse.status}`)
+  if (setupResponse.status !== 200) throw new Error(`auth setup failed: ${setupResponse.status}`)
   const token = ((await setupResponse.json()) as { token: string }).token
   const call = async (method: string, path: string, body?: unknown) => {
     const response = await handler(new Request(`http://127.0.0.1:3202${path}`, {
@@ -96,10 +96,10 @@ function writeLocalPlugin(parent: string, id: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// 路由
+// routing
 // ---------------------------------------------------------------------------
 
-test('install（默认 disabled）-> list 含 managed -> enable 联动', { timeout: 60_000 }, async () => {
+test('install(by default disabled)-> list contains managed -> enable join motion', { timeout: 60_000 }, async () => {
   const env = await makeHub()
   try {
     const srcParent = mkdtempSync(join(tmpdir(), 'helm-pkg-httpsrc-'))
@@ -107,18 +107,18 @@ test('install（默认 disabled）-> list 含 managed -> enable 联动', { timeo
     const installed = await env.call('POST', '/api/plugins/install', { source: src })
     assert.equal(installed.status, 200)
     assert.equal(installed.body.record.pluginId, 'http-demo')
-    assert.equal(installed.body.summary.enabled, false, '默认 disabled')
-    assert.ok(installed.body.summary.managed, 'summary 应携带 managed')
+    assert.equal(installed.body.summary.enabled, false, 'by default disabled')
+    assert.ok(installed.body.summary.managed, 'summary should carry managed')
     assert.equal(installed.body.summary.managed.source.path, src)
 
-    // 受管目录存在；list 端点 managed 映射
+    // managed directory store in;list end point managed mapping
     assert.ok(existsSync(join(env.dataDir, 'plugins', 'http-demo', 'index.mjs')))
     const list = await env.call('GET', '/api/plugins')
     const found = list.body.find((p: any) => p.id === 'http-demo')
-    assert.ok(found, 'list 应含受管插件')
-    assert.ok(found.managed, 'list 端点 managed 映射生效')
+    assert.ok(found, 'list should contains managed plugin')
+    assert.ok(found.managed, 'list end point managed mapping takes effect')
 
-    // enable: true 路径
+    // enable: true path
     const src2 = writeLocalPlugin(srcParent, 'http-demo-2')
     const enabled = await env.call('POST', '/api/plugins/install', { source: src2, enable: true })
     assert.equal(enabled.status, 200)
@@ -128,7 +128,7 @@ test('install（默认 disabled）-> list 含 managed -> enable 联动', { timeo
   }
 })
 
-test('install body 边界：未知字段 400、空 source 400、非法 grammar 400', { timeout: 60_000 }, async () => {
+test('install body boundary: unknown field 400, empty source 400, illegal grammar 400', { timeout: 60_000 }, async () => {
   const env = await makeHub()
   try {
     const unknownField = await env.call('POST', '/api/plugins/install', { source: '/tmp/x', extra: true })
@@ -144,7 +144,7 @@ test('install body 边界：未知字段 400、空 source 400、非法 grammar 4
   }
 })
 
-test('update：local 源编辑后重同步 + 记录版本推进；未受管 404', { timeout: 60_000 }, async () => {
+test('update:local source edit after heavy sync + record version push enter; not managed 404', { timeout: 60_000 }, async () => {
   const env = await makeHub()
   try {
     const srcParent = mkdtempSync(join(tmpdir(), 'helm-pkg-httpsrc-'))
@@ -157,7 +157,7 @@ test('update：local 源编辑后重同步 + 记录版本推进；未受管 404'
     assert.equal(updated.status, 200)
     assert.equal(updated.body.record.version, '2.0.0')
     assert.equal(updated.body.summary.version, '2.0.0')
-    assert.equal(updated.body.summary.enabled, true, '更新保持启用状态')
+    assert.equal(updated.body.summary.enabled, true, 'update keep enable state')
     const missing = await env.call('POST', '/api/plugins/never-installed/update')
     assert.equal(missing.status, 404)
     const builtinReject = await env.call('POST', '/api/plugins/builtin%3Aprofile/update')
@@ -167,7 +167,7 @@ test('update：local 源编辑后重同步 + 记录版本推进；未受管 404'
   }
 })
 
-test('remove：受管目录与记录删除、builtin 403/404、未受管 404', { timeout: 60_000 }, async () => {
+test('remove: managed directory and record delete,builtin 403/404, not managed 404', { timeout: 60_000 }, async () => {
   const env = await makeHub()
   try {
     const srcParent = mkdtempSync(join(tmpdir(), 'helm-pkg-httpsrc-'))
@@ -177,11 +177,11 @@ test('remove：受管目录与记录删除、builtin 403/404、未受管 404', {
     assert.equal(removed.status, 200)
     assert.equal(removed.body.pluginId, 'http-rm')
     assert.equal(removed.body.wasEnabled, true)
-    assert.ok(!existsSync(join(env.dataDir, 'plugins', 'http-rm')), '受管目录应删除')
-    assert.ok(existsSync(join(src, 'index.mjs')), '用户源目录完好')
+    assert.ok(!existsSync(join(env.dataDir, 'plugins', 'http-rm')), 'managed directory should delete')
+    assert.ok(existsSync(join(src, 'index.mjs')), 'user source directory completely well')
     const config = JSON.parse(readFileSync(join(env.dataDir, 'config.json'), 'utf8')) as { pluginPackages?: Record<string, unknown> }
     assert.equal(config.pluginPackages?.['http-rm'], undefined)
-    // 再删 404
+    // again delete 404
     const again = await env.call('POST', '/api/plugins/http-rm/remove')
     assert.equal(again.status, 404)
   } finally {
@@ -189,8 +189,8 @@ test('remove：受管目录与记录删除、builtin 403/404、未受管 404', {
   }
 })
 
-test('重启恢复：pluginPackages 记录驱动 GET /api/plugins 的 managed 映射（磁盘持久，非内存）', { timeout: 60_000 }, async () => {
-  // 阶段一：安装并关闭 Hub（记录落 config.json）
+test('restart restore:pluginPackages record drive GET /api/plugins  managed mapping (disk durable, non- memory)', { timeout: 60_000 }, async () => {
+  // phase one: install and close Hub(record config.json)
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-pkg-restart-'))
   const srcParent = mkdtempSync(join(tmpdir(), 'helm-pkg-restart-src-'))
   const src = writeLocalPlugin(srcParent, 'restart-demo')
@@ -199,14 +199,14 @@ test('重启恢复：pluginPackages 记录驱动 GET /api/plugins 的 managed �
     await app.kernel.plugins.installPluginPackage(src)
     await app.close()
   }
-  // 阶段二：全新 Hub 进程内状态（同一 dataDir）——managed 必须仍在
+  // phase two: all new Hub process inside state (the same dataDir) - -managed must still in
   {
     const { app } = await createHubTestApp({ dataDir, cwd: dataDir })
     const summary = app.kernel.plugins.list().find((p) => p.id === 'restart-demo')
-    assert.ok(summary, '重启后插件应自动注册')
-    assert.ok(summary.managed, '重启后 managed 映射必须仍在（磁盘记录驱动）')
+    assert.ok(summary, 'after restart plugin should automatically register')
+    assert.ok(summary.managed, 'after restart managed mapping must still in (disk record drive)')
     assert.equal(summary.managed.source.kind, 'local')
-    // update/remove 在重启后同样可用（记录恢复）
+    // update/remove in after restart same available (record restore)
     const removed = await app.kernel.plugins.removePluginPackage('restart-demo')
     assert.equal(removed.pluginId, 'restart-demo')
     await app.close()

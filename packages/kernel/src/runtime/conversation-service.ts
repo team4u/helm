@@ -1,9 +1,9 @@
 /**
- * 会话服务：CRUD / 详情分页 / 输入提交（submitInput）/ 原地覆盖重发
- * （rewrite）/ fork / reset / compact / 模型继承链对齐 / 附件内容拼装。
+ * conversation service:CRUD / detail situation page / input commit (submitInput)/ original ground override heavy
+ * (rewrite)/ fork / reset / compact / model inherit chain align / attachment content piece together install.
  *
- * 从 runtime.ts 拆出（上帝类最大职责簇）。对外行为与原 KernelRuntime 方法
- * 逐一致；内部将历史重写、上下文操作、附件解析、详情分页、角色对齐和输入管道委托给专门子模块。
+ * from runtime.ts split out (on emperor class most large responsibility cluster). for outside behavior and original KernelRuntime method
+ * one by one lead to; internal history heavy write, context operation, attachment parse, detail situation page, role align and input pipeline delegate to dedicated sub- module.
  */
 import { awaitWithContext, BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
 import type { Harness, AgentChange } from '@earendil-works/pi-durable'
@@ -55,62 +55,62 @@ export interface ConversationServiceOptions {
   readonly stash: SecretStash
   readonly dataDir: string
   readonly toolDeps: { defaultCwd: string }
-  /** 会话靶点变更时释放旧靶点底座缓存（宿主注入 envFabric.evictConversation）。 */
+  /** conversation target change when release old target bottom seat cache (host inject envFabric.evictConversation). */
   readonly evictConversationBase: (conversationId: number) => void
-  /** 插件会话管理权（删除保护；宿主注入）。 */
+  /** plugin conversation manage right (delete protect; host inject). */
   readonly managedConversations: Map<number, Set<string>>
-  /** 挂起 Ask 级联取消（删除会话时；宿主注入 asks.cancelByConversation）。 */
+  /** suspended Ask level join cancel (delete conversation when; host inject asks.cancelByConversation). */
   readonly cancelAsksByConversation: (id: number) => Promise<void>
-  /** 原地覆盖重发前挂起 Ask 销单 superseded（宿主注入 asks.listPendingByConversation + cancelAsk）。 */
+  /** original ground override heavy before suspended Ask deregister single superseded(host inject asks.listPendingByConversation + cancelAsk). */
   readonly cancelPendingAsksForRewrite: (id: number) => Promise<void>
-  /** handled 接管残留清理（删除/abort 兑底）。 */
+  /** handled take over leftover clean up (delete/abort honor bottom). */
   readonly evictHandledToolCalls: (conversationId: number) => void
-  /** 归属标记（删除兑底恢复 human；宿主注入）。 */
+  /** ownership mark record (delete honor bottom restore human; host inject). */
   readonly markOwnership: (id: number, owner: 'helm' | 'bot' | 'human') => void
-  /** 归属现读（摘要投射用）。 */
+  /** ownership now read (summary throw shoot use). */
   readonly ownershipOf: (id: number) => 'helm' | 'bot' | 'human'
-  /** input hook 管道（宿主 HookBridge.runHookChain）。 */
+  /** input hook pipeline (host HookBridge.runHookChain). */
   readonly runInputHook: (payload: unknown) => Promise<{ action: string; value?: unknown; reason?: string; result?: unknown } | undefined>
-  /** 关闭守卫（isClosed）。 */
+  /** close guard (isClosed). */
   readonly isClosed: () => boolean
   /**
-   * 启动生命周期事实（KernelRuntime.started 只读投射）：start() 完成即
-   * harness.resume 之后的同步段置位。abortConversationGuarded 用它做快路径
-   * 门——未启动时才付一次只读 harness.inspect 的权威相位复核（prepare
-   * 屏障窗口持久标记；autoResume:false 手动提交后的未启动窗口按 inspect
-   * 权威结果走常规中止），绝不维护第二份镜像状态。
+   * start lifecycle fact (KernelRuntime.started only read throw shoot):start() complete i.e.
+   * harness.resume after sync segment placement.abortConversationGuarded use it do fast path
+   * gate - - not at startup only then pay once only read harness.inspect right threat each other re-check (prepare
+   * screen fault window durable mark record;autoResume:false manually after commit not start window by inspect
+   * right threat result away common rule abort), never maintain second mirror state.
    */
   readonly isStarted: () => boolean
-  /** 模型解析链（默认模型）。 */
+  /** model parse chain (by default model). */
   readonly defaultModel: () => string | undefined
   readonly defaultThinkingLevel: () => string | undefined
-  /** 当前 Models 集合（思考档位能力收敛用）。 */
+  /** when before Models set (think Profile capability converge use). */
   readonly models: () => Models
   readonly parseModelRefOrThrow: (ref: string) => { provider: string; modelId: string }
-  /** 模型禁用预检（ModelRegistry.assertModelEnabled；禁用模型拒绝选用与提交）。 */
+  /** model disable preflight (ModelRegistry.assertModelEnabled; disable model reject choose use and commit). */
   readonly assertModelEnabled: (provider: string, modelId: string) => void
   /**
-   * 可信节点平台来源（EnvFabric.registry 上报；缺省仅 local 可解析）。
-   * create/update cwd 按目标节点平台规范化用（见 runtime/target-cwd.ts）。
+   * can message node platform source (EnvFabric.registry on report; default only local can parse).
+   * create/update cwd by target node platform specification use (see runtime/target-cwd.ts).
    */
   readonly trustedPlatformOf?: TrustedNodePlatformSource
 }
 
-/** 提交输入的可选参数（HTTP/CLI/内部同构）。 */
+/** commit input optional parameter (HTTP/CLI/internal same construct). */
 export interface SubmitInputOptions {
   origin?: InputOrigin
   whenBusy?: WhenBusy
-  /** @internal guarded 提交可要求 SDK 原子拒绝空闲会话；HTTP/CLI 不开放。 */
+  /** @internal guarded commit can want seek SDK atomic reject idle conversation;HTTP/CLI do not open put. */
   whenIdle?: 'reject'
   meta?: Record<string, unknown>
   attachments?: string[]
   replaceFromEntryId?: number
-  /** 内部完成回报的持久幂等键；HTTP 输入不开放此字段。 */
+  /** internal complete back report durable idempotent key;HTTP input do not open put this field. */
   requestId?: string
   /**
-   * @internal 内核 guarded mutation 通道（submitInputGuarded 注入；宿主 API
-   * 与 HTTP/CLI 均不暴露）：在提交点（SDK submit 调用前、最后一个 await
-   * 之后）同步复核归属与水位，失败 409/404 且不产生提交副作用。
+   * @internal kernel guarded mutation channel (submitInputGuarded inject; host API
+   * and HTTP/CLI all do not expose): in commit point (SDK submit invoke before, finally a await
+   * after) sync re-check ownership and watermark, failed 409/404 and produces no commit side effect.
    */
   mutationGuard?: GuardedMutationExpectation
 }
@@ -135,7 +135,7 @@ export class ConversationService {
   private readonly inputPipeline: ConversationInputPipeline
   private fatalErrorProvider: (() => Error | undefined) | undefined
 
-  /** 挂载宿主致命存储故障读取器（仅写/变更新请求拒绝用，不改变正常关停语义）。 */
+  /** mount host lead to life store fault read (only write/change new request reject use, does not change normal closure stop semantics). */
   setFatalErrorProvider(provider: () => Error | undefined): void {
     this.fatalErrorProvider = provider
   }
@@ -201,7 +201,7 @@ export class ConversationService {
       defaultThinkingLevel: this.o.defaultThinkingLevel,
       parseModelRefOrThrow: this.o.parseModelRefOrThrow,
       summaryWithOwnership: (id) => this.summaryWithOwnership(id),
-      // 模型/档位对齐后上下文窗口与阈值可能变化：触发用量重算。
+      // model/Profile align after context window and threshold may change: trigger use amount heavy compute.
       scheduleContextUsageRefresh: (id) => this.tracker.scheduleContextUsageRefresh(id),
     })
 
@@ -217,16 +217,16 @@ export class ConversationService {
   }
 
   // ------------------------------------------------------------------
-  // guarded mutation（自动化红线内核执行层）
+  // guarded mutation(automatically hard rule kernel execute layer)
   // ------------------------------------------------------------------
 
-  /** 会话级 guarded 变更串行门（promise 尾链）：同一会话的自动化中止/提交
-   * 在「复核 + 第一个不可逆动作」临界区上完全有序，不同会话互不阻塞。 */
+  /** conversation level guarded change serial gate (promise tail chain): the same conversation automatically abort/commit
+   * in re-check + a cannot inverse action critical zone on fully has order, different conversation mutual non-blocking. */
   private readonly mutationGates = new Map<number, Promise<unknown>>()
 
   private withMutationGate<T>(id: number, op: () => Promise<T>): Promise<T> {
     const prev = this.mutationGates.get(id) ?? Promise.resolve()
-    // 前序失败不阻断后续（尾链吸收错误；op 每次真实执行）。
+    // before order failed do not block assert after continue (tail chain absorb error;op each time real execute).
     const run = prev.then(op, op)
     const tail = run.then(
       () => undefined,
@@ -239,10 +239,10 @@ export class ConversationService {
     return run
   }
 
-  /** 守卫载荷边界校验（同步抛 400）：expectedOwnership 严禁 'human'。 */
+  /** guard payload boundary validate (sync throw 400):expectedOwnership strictly forbidden 'human'. */
   private assertGuardShape(guard: GuardedMutationExpectation): void {
     if (typeof guard !== 'object' || guard === null) {
-      throw new HelmError('validation_error', 'guarded mutation 需要 guard 对象', 400)
+      throw new HelmError('validation_error', 'guarded mutation need to guard object', 400)
     }
     if (
       guard.expectedOwnership !== undefined &&
@@ -251,7 +251,7 @@ export class ConversationService {
     ) {
       throw new HelmError(
         'validation_error',
-        `expectedOwnership 仅允许 'bot' | 'helm'（自动化红线严禁 human）：收到 ${String(guard.expectedOwnership)}`,
+        `expectedOwnership only allows 'bot' | 'helm'(automatically hard rule strictly forbidden human): receives ${String(guard.expectedOwnership)}`,
         400,
         { expectedOwnership: guard.expectedOwnership },
       )
@@ -262,7 +262,7 @@ export class ConversationService {
     ) {
       throw new HelmError(
         'validation_error',
-        `expectedStateSeq 需为非负安全整数：收到 ${String(guard.expectedStateSeq)}`,
+        `expectedStateSeq must be non- negative security integer: receives ${String(guard.expectedStateSeq)}`,
         400,
         { expectedStateSeq: guard.expectedStateSeq },
       )
@@ -270,19 +270,19 @@ export class ConversationService {
   }
 
   /**
-   * 守卫复核（同步、零 await）：会话存在性 + 归属（human 永远拒绝）+
-   * 可选 CAS 水位。调用方保证本复核与第一个不可逆动作（SDK abort/submit
-   * 调用）之间无任何事件循环让出——单线程内 markOwnership 无法插入，
-   * 这是 human 红线竞态窗口的真正关闭点。
+   * guard re-check (sync, zero await): conversation store in + ownership (human forever reject)+
+   * optional CAS watermark. caller guarantee this re-check and a cannot inverse action (SDK abort/submit
+   * invoke) between without any event loop let out - - single thread inside markOwnership cannot insert,
+   * this is human hard rule race window truly close point.
    */
   assertMutationGuard(id: number, guard: GuardedMutationExpectation): void {
-    // getOwnership 对缺失/已删（tombstone）会话显式 not_found——显式目标
-    // 失效直接拒绝，绝不被缺省路由掩盖。
+    // getOwnership for missing/already delete (tombstone) conversation explicit not_found- - explicit target
+    // expires directly reject, never by default routing mask.
     const ownedBy = this.o.ownershipOf(id)
     if (ownedBy === 'human' || (guard.expectedOwnership !== undefined && ownedBy !== guard.expectedOwnership)) {
       throw new HelmError(
         'ownership_conflict',
-        `会话 ${id} 当前归属 ${ownedBy}${guard.expectedOwnership !== undefined ? `（期望 ${guard.expectedOwnership}）` : ''}，拒绝自动化变更（human 红线）`,
+        `conversation ${id} when before ownership ${ownedBy}${guard.expectedOwnership !== undefined ? `(expectation ${guard.expectedOwnership})` : ''}, reject automatically change (human hard rule)`,
         409,
         {
           conversationId: id,
@@ -294,12 +294,12 @@ export class ConversationService {
     if (guard.expectedStateSeq !== undefined) {
       const meta = this.store.getConv(id)
       if (meta === undefined || this.store.isDeleted(id)) {
-        throw new HelmError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
+        throw new HelmError('not_found', `conversation missing:${id}`, 404, { conversationId: id })
       }
       if (meta.stateChangeSeq !== guard.expectedStateSeq) {
         throw new HelmError(
           'state_seq_conflict',
-          `会话 ${id} 权威水位 ${meta.stateChangeSeq} 与期望 ${guard.expectedStateSeq} 不一致（探针事实已过期，不得作用于新回合）`,
+          `conversation ${id} right threat watermark ${meta.stateChangeSeq} and expectation ${guard.expectedStateSeq} inconsistent (probe needle fact expired, must not effect at new turn)`,
           409,
           { conversationId: id, currentSeq: meta.stateChangeSeq, expectedSeq: guard.expectedStateSeq },
         )
@@ -308,25 +308,25 @@ export class ConversationService {
   }
 
   /**
-   * 自动化 guarded 中止：守卫复核与 SDK abort 调用（第一个不可逆动作）在
-   * 同一串行域内背靠背执行（零 await 间隔）；复核失败绝不发起中止。
-   * 普通 abortConversation 语义不变（人类/CLI 路径不绑定自动化守卫）。
+   * automatically guarded abort: guard re-check and SDK abort invoke (a cannot inverse action) in
+   * the same serial domain inside back rely back execute (zero await interval); re-check failed never start abort.
+   * ordinary abortConversation semantics do not change (person class/CLI path do not bind set automatically guard).
    *
-   * 相位自适应（取代旧专用 prepareInterruptedConversations）：
-   * - SDK 调度器 running：SDK Conversation.abort + 等待空闲（既有语义，
-   *   热路径零额外 await——运行中取消不得因相位探测而变慢）；
-   * - 调度器 paused（服务 prepare 屏障、resume 之前）：对会话名下全部存活
-   *   SDK 任务逐一提交持久 abort 标记（harness.abortTask：不 resume、
-   *   不等结算），每个不可逆动作前同步复核归属（human 一律拒绝）——
-   *   恢复编排据此在调度器启动前持久取消自己登记的中断子会话。
+   * each other self fit should (take proxy old dedicated use prepareInterruptedConversations):
+   * - SDK scheduler running:SDK Conversation.abort + wait for idle (since has semantics,
+   *   hot path zero extra await- - run in cancel must not because each other probe while change slow);
+   * - scheduler paused(service prepare screen fault,resume before): for conversation name under all store
+   *   SDK task one by one commit durable abort mark record (harness.abortTask: do not resume,
+   *   do not etc. compute), each cannot inverse action before sync re-check ownership (human one rule reject) - -
+   *   restore orchestration based on this in scheduler start before durable cancel itself register interrupt sub-conversation.
    */
   async abortConversationGuarded(id: number, guard: GuardedMutationExpectation): Promise<void> {
     this.assertWritable()
     this.assertGuardShape(guard)
     return this.withMutationGate(id, async () => {
-      // 恢复屏障路径：仅当内核尚未完成 start（生命周期事实，非镜像状态）时
-      // 才付一次只读 inspect 的权威相位复核；标记前逐任务同步复核（human
-      // 红线覆盖恢复窗口，优于旧专用方法的无守卫批量取消）。
+      // restore screen fault path: only when kernel not yet complete start(lifecycle fact, non- mirror state) when
+      // only then pay once only read inspect right threat each other re-check; mark record before one by one task sync re-check (human
+      // hard rule override restore window, optimal at old dedicated use method without guard batch amount cancel).
       if (!this.o.isStarted()) {
         const inspection = await this.harness.inspect(BACKGROUND_CONTEXT)
         if (inspection.scheduling === 'paused') {
@@ -334,22 +334,22 @@ export class ConversationService {
           for (const task of inspection.tasks) {
             if (task.record.conversationId !== (id as never)) continue
             matched = true
-            // 与下方 abortTask 调用之间零 await（单线程内 ownership 无法插入）。
+            // and under way abortTask invoke between zero await(single thread inside ownership cannot insert).
             this.assertMutationGuard(id, guard)
             await this.harness.abortTask(task.record.id, BACKGROUND_CONTEXT)
           }
           if (!matched) {
-            // 会话名下无存活任务也必须验证会话存在 + 归属：缺失 not_found、
-            // human 拒绝，绝不给 human/idle 目标返回成功。
+            // conversation name under without store task also must verify conversation store in + ownership: missing not_found,
+            // human reject, never to human/idle target return succeeded.
             this.assertMutationGuard(id, guard)
           }
           return
         }
-        // 意外 running（autoResume:false 进程先提交过后、尚未 start）：落回常规路径。
+        // unexpected running(autoResume:false process first commit after, not yet start): back common rule path.
       }
       const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
-      if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
-      // 最终复核：与下方 abort 调用之间零 await（上方 await 窗口内的归属翻转在此拦截）。
+      if (!conversation) throw new HelmError('not_found', `conversation missing:${id}`, 404)
+      // eventually re-check: and under way abort invoke between zero await(on way await window inside ownership translate rotate in this intercept).
       this.assertMutationGuard(id, guard)
       const wasBusy = this.tracker.hasLiveWork(id)
       await conversation.abort(BACKGROUND_CONTEXT)
@@ -360,9 +360,9 @@ export class ConversationService {
   }
 
   /**
-   * 自动化 guarded 提交：入口同步快检（fail-fast，零副作用）后走完整输入管道；
-   * 钩子/模型解析等准备工作完成后，在提交点（SDK submit 调用前）原子复核
-   * （见 ConversationInputPipeline.submitFreshInput）。复核失败不产生提交副作用。
+   * automatically guarded commit: entry sync fast inspect (fail-fast, zero side effect) after away complete input pipeline;
+   * hook/model parse etc. prepare work after completion, in commit point (SDK submit invoke before) atomic re-check
+   * (see ConversationInputPipeline.submitFreshInput). re-check failed produces no commit side effect.
    */
   async submitInputGuarded(
     id: number,
@@ -373,24 +373,24 @@ export class ConversationService {
     this.assertWritable()
     this.assertGuardShape(guard)
     if (opts?.whenIdle !== undefined && opts.whenIdle !== 'reject') {
-      throw new HelmError('validation_error', 'guarded 提交的 whenIdle 仅允许 reject', 400)
+      throw new HelmError('validation_error', 'guarded commit whenIdle only allows reject', 400)
     }
     if (opts?.replaceFromEntryId !== undefined) {
       throw new HelmError(
         'validation_error',
-        '自动化 guarded 提交不支持 replaceFromEntryId（自动化不重写历史）',
+        'automatically guarded commit unsupported replaceFromEntryId(automatically do not heavy write history)',
         400,
         { conversationId: id, replaceFromEntryId: opts.replaceFromEntryId },
       )
     }
     this.contextOps.assertOpen()
-    // 入口快检：任何持久副作用（钩子观察/标题派生/提交）之前拒绝。
+    // entry fast inspect: any durable side effect (hook observe/title derive/commit) before reject.
     this.assertMutationGuard(id, guard)
     return this.submitInput(id, text, { ...opts, mutationGuard: guard })
   }
 
   // ------------------------------------------------------------------
-  // 摘要与归属投射
+  // summary and ownership throw shoot
   // ------------------------------------------------------------------
 
   summaryWithOwnership(id: number): ConversationSummary {
@@ -422,16 +422,16 @@ export class ConversationService {
   }
 
   // ------------------------------------------------------------------
-  // 详情分页与 FTS 重建（委托给 detailOps）
+  // detail situation page and FTS rebuild (delegate to detailOps)
   // ------------------------------------------------------------------
 
   async getConversationDetail(id: number, options?: { limit?: number; cursor?: string }): Promise<ConversationDetail> {
-    // contextUsage 刷新与时间线分页在 detailOps 内并行，两腿完成后重取
-    // 权威摘要合并（见 conversation-detail.ts）；任一腿失败整体拒绝。
+    // contextUsage refresh and timeline page in detailOps inside parallel, two leg after completion heavy take
+    // right threat summary merge (see conversation-detail.ts); any one leg failed whole reject.
     return this.detailOps.getConversationDetail(id, options)
   }
 
-  /** 单条时间线条目（未截断、已脱敏；rewind 可见性与详情分页一致）。 */
+  /** single timeline item (not truncate, already redaction;rewind visible and detail situation page consistent). */
   async getConversationEntry(id: number, entryId: number): Promise<ConversationEntry> {
     return this.detailOps.getConversationEntry(id, entryId)
   }
@@ -447,7 +447,7 @@ export class ConversationService {
   }
 
   // ------------------------------------------------------------------
-  // Profile / 模型继承链（委托给 profileAlignment）
+  // Profile / model inherit chain (delegate to profileAlignment)
   // ------------------------------------------------------------------
 
   async readProfile(profileId: string): Promise<Profile | undefined> {
@@ -478,7 +478,7 @@ export class ConversationService {
     const requested = init.profileId ?? 'assistant'
     const found = await this.readProfile(requested)
     if (!found) {
-      throw new HelmError('validation_error', `profile 不存在：${requested}（先创建 profiles/${requested}）`, 400)
+      throw new HelmError('validation_error', `profile missing:${requested}(first create profiles/${requested})`, 400)
     }
     return requested
   }
@@ -499,7 +499,7 @@ export class ConversationService {
       init.nodeId ?? profile?.nodeId ?? parentMeta?.nodeId ?? 'local'
 
     const inheritedCwd = init.cwd ?? profile?.cwd ?? parentMeta?.cwd
-    /** cwd 按目标节点平台统一收口（词法规范化；零磁盘访问；坏 POSIX cwd 不落库）。 */
+    /** cwd by target node platform unify consolidate (term method specification; zero disk access; broken POSIX cwd do not written to the database). */
     const platformSource = this.o.trustedPlatformOf ?? trustedPlatformFromEnvFabric(undefined)
     const normalizeCwd = (raw: string): string =>
       normalizeSessionCwd(raw, { nodeId, trustedPlatform: platformSource, entry: 'conversation.create' })
@@ -511,7 +511,7 @@ export class ConversationService {
     } else {
       throw new HelmError(
         'validation_error',
-        `会话绑定远端节点 ${nodeId} 但未提供 cwd（Profile.cwd / 父会话 cwd / init.cwd 均缺失；拒绝盲跑节点默认目录）`,
+        `conversation bind set remote node ${nodeId} but not provide cwd(Profile.cwd / parent conversation cwd / init.cwd all missing; reject blind run node by default directory)`,
         400,
         { nodeId },
       )
@@ -564,7 +564,7 @@ export class ConversationService {
     if (patch.profileId !== undefined) {
       const found = await this.readProfile(patch.profileId)
       if (!found) {
-        throw new HelmError('validation_error', `profile 不存在：${patch.profileId}`, 400)
+        throw new HelmError('validation_error', `profile missing:${patch.profileId}`, 400)
       }
     }
     let nextOverride: string | undefined
@@ -583,7 +583,7 @@ export class ConversationService {
       if (level !== '' && !THINKING_LEVELS.has(level)) {
         throw new HelmError(
           'validation_error',
-          `thinkingLevel '${level}' 非法；合法值：${[...THINKING_LEVELS].join(' | ')}`,
+          `thinkingLevel '${level}' illegal; legal value:${[...THINKING_LEVELS].join(' | ')}`,
           400,
         )
       }
@@ -592,14 +592,14 @@ export class ConversationService {
     const nextProfileId = patch.profileId ?? meta.profileId
     const effectiveModel = await this.resolveEffectiveModel(nextOverride, nextProfileId)
     const effectiveRef = effectiveModel ? this.o.parseModelRefOrThrow(effectiveModel) : undefined
-    // 模型/Profile 变化后：显式思考覆盖同样按目标模型能力收敛到 SDK
-    // 可用档位（单一收口 clampThinkingLevelForModel；能力未知时透传不破坏契约）。
+    // model/Profile change after: explicit think override same by target model capability converge to SDK
+    // available Profile (single one consolidate clampThinkingLevelForModel; capability unknown when pass-through do not break contract).
     const clampedOverride = effectiveRef
       ? clampThinkingLevelForModel(this.o.models(), effectiveRef, nextThinkingOverride)
       : nextThinkingOverride
     const nextThinking = await this.resolveEffectiveThinkingLevel(clampedOverride, nextProfileId, effectiveRef)
-    // 显式 cwd，或 nodeId 迁移时的既有 cwd，均按新目标节点平台统一收口，
-    // 再进入 SDK configure 与镜像持久化；坏 POSIX cwd 显式拒绝。
+    // explicit cwd, or nodeId migration when since has cwd, all by new target node platform unify consolidate,
+    // again enter SDK configure and mirror persist; broken POSIX cwd explicit reject.
     const nextNodeId = patch.nodeId ?? meta.nodeId
     const cwdToNormalize =
       patch.cwd !== undefined ? patch.cwd : patch.nodeId !== undefined ? meta.cwd : undefined
@@ -617,7 +617,7 @@ export class ConversationService {
       thinkingLevel: (nextThinking as ModelThinkingLevel | undefined) ?? null,
     }
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
-    if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+    if (!conversation) throw new HelmError('not_found', `conversation missing:${id}`, 404)
     await conversation.configure(configureChange, BACKGROUND_CONTEXT)
     const latest = requireConv(this.store, id)
     const updated: typeof meta = {
@@ -640,7 +640,7 @@ export class ConversationService {
     if (patch.nodeId !== undefined || patch.cwd !== undefined) {
       this.o.evictConversationBase(id)
     }
-    // 模型/思考档位变化后窗口与阈值可能变化：触发上下文用量重算（去重）。
+    // model/think Profile change after window and threshold may change: trigger context use amount heavy compute (dedupe).
     if (patch.model !== undefined || patch.profileId !== undefined || patch.thinkingLevel !== undefined) {
       this.tracker.scheduleContextUsageRefresh(id)
     }
@@ -656,23 +656,23 @@ export class ConversationService {
     if (owners.length > 0) {
       throw new HelmError(
         'conversation_managed_by_plugin',
-        `会话 ${id} 正被插件管理（${owners.join(', ')}），先释放管理权再删除`,
+        `conversation ${id} correct by plugin manage (${owners.join(', ')}), first release manage right again delete`,
         409,
         { conversationId: id, owners },
       )
     }
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
     if (conversation) await conversation.abort(BACKGROUND_CONTEXT)
-    // 级联取消等待真实落盘；IO 失败必须向上 reject（阻止后续删除副作用），
-    // 绝不吞错很成功。
+    // level join cancel wait for real;IO failed must to on reject(block stop after continue delete side effect),
+    // never swallow wrong very succeeded.
     await this.o.cancelAsksByConversation(id)
     await this.artifactsSvc.deleteConversation(id)
-    // 纯内存机密同步回收（含仅用于脱敏的旧值）：会话删除即彻底释放。
+    // in-memory secret sync reclaim (contains only used to redaction old value): conversation delete i.e. completely release.
     this.stash.clear(id)
     this.events.publish('notification', {
       level: 'info',
-      title: '会话已删除',
-      body: `会话 ${id} 及其产物/待答 AskDoc/内存机密已清理`,
+      title: 'conversation deleted',
+      body: `conversation ${id} and its artifact/await answer AskDoc/memory secret already clean up`,
       conversationId: id,
     })
     this.tracker.stopObserving(id)
@@ -684,7 +684,7 @@ export class ConversationService {
   }
 
   // ------------------------------------------------------------------
-  // 产物授权与附件（委托给 attachments）
+  // artifact authorization and attachment (delegate to attachments)
   // ------------------------------------------------------------------
 
   isArtifactAuthorized(conversationId: number, artifactConversationId: number): boolean {
@@ -729,11 +729,11 @@ export class ConversationService {
     this.contextOps.assertOpen()
     const convMeta = requireConv(this.store, id)
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
-    if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+    if (!conversation) throw new HelmError('not_found', `conversation missing:${id}`, 404)
 
     if (opts?.requestId !== undefined) {
       if (typeof opts.requestId !== 'string' || opts.requestId.trim() === '') {
-        throw new HelmError('validation_error', '内部 requestId 必须为非空字符串', 400)
+        throw new HelmError('validation_error', 'internal requestId must is non-empty string', 400)
       }
       const previous = await this.harness.commit(
         (tx) => tx.submissionByRequest(id as never, opts.requestId!),
@@ -746,12 +746,12 @@ export class ConversationService {
     if (!effectiveModelRef) {
       throw new HelmError(
         'model_not_configured',
-        `会话 ${id}（profile ${convMeta.profileId}）与全局均未配置模型：请在 Profile、HELM_MODEL、config.json.model 或会话中配置 model`,
+        `conversation ${id}(profile ${convMeta.profileId}) and global all not config model: please in Profile,HELM_MODEL,config.json.model or conversation in config model`,
         503,
         { conversationId: id, profileId: convMeta.profileId },
       )
     }
-    // 生效模型被禁用（如默认模型事后被禁用）：提交入口拒绝，绝不静默回退其它模型。
+    // takes effect model by disable (such as by default model matter after by disable): commit entry reject, never static default fall back other model.
     {
       const effectiveRef = this.o.parseModelRefOrThrow(effectiveModelRef)
       this.o.assertModelEnabled(effectiveRef.provider, effectiveRef.modelId)
@@ -763,8 +763,8 @@ export class ConversationService {
         ? await this.resolveAuthorizedAttachments(id, opts.attachments)
         : undefined
     const prepared = await this.inputPipeline.prepareInput(id, text, opts, initialAttachments)
-    // guarded 提交：钩子执行后、任何持久副作用（handled 接管返回/标题派生/
-    // 提交）之前复核；最终原子复核在提交点（submitFreshInput）执行。
+    // guarded commit: hook execute after, any durable side effect (handled take over return/title derive/
+    // commit) before re-check; eventually atomic re-check in commit point (submitFreshInput) execute.
     if (opts?.mutationGuard !== undefined) {
       this.assertMutationGuard(id, opts.mutationGuard)
     }
@@ -802,15 +802,15 @@ export class ConversationService {
       ...(opts?.mutationGuard !== undefined ? { mutationGuard: opts.mutationGuard } : {}),
     }
     if (opts?.mutationGuard !== undefined) {
-      // guarded 提交串行门：只覆盖「提交点复核 + SDK submit 调用」临界区，
-      // input 钩子在门外执行（钩子内再入 guarded 变更不会死锁）。
+      // guarded commit serial gate: only override commit point re-check + SDK submit invoke critical zone,
+      // input hook in gate outside execute (hook inside again guarded change will not deadlock).
       return this.withMutationGate(id, () => this.inputPipeline.submitFreshInput(conversation, id, freshSubmission))
     }
     return this.inputPipeline.submitFreshInput(conversation, id, freshSubmission)
   }
 
   // ------------------------------------------------------------------
-  // 原地覆盖重发委托（直接调用/测试兼容）
+  // original ground override heavy delegate (directly invoke/test compatibility)
   // ------------------------------------------------------------------
 
   async withHistoryEdit<T>(id: number, operation: () => Promise<T>): Promise<T> {
@@ -838,19 +838,19 @@ export class ConversationService {
     if (submissionId.startsWith('handled:')) {
       throw new HelmError(
         'wait_not_applicable',
-        `提交 ${submissionId} 被 input 钩子接管，无真实回合可等待`,
+        `commit ${submissionId} by input hook take over, without real turn can wait for`,
         409,
         { conversationId: id, submissionId },
       )
     }
     const numericId = Number(submissionId)
     if (!Number.isInteger(numericId) || numericId <= 0) {
-      throw new HelmError('validation_error', `非法 submissionId：${submissionId}`, 400)
+      throw new HelmError('validation_error', `illegal submissionId:${submissionId}`, 400)
     }
     requireConv(this.store, id)
     const waitContext = signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(signal, BACKGROUND_CONTEXT)
     const waitAbortedError = (): HelmError =>
-      new HelmError('aborted', `等待会话 ${id} 提交 ${submissionId} 结果已取消`, 499, {
+      new HelmError('aborted', `wait for conversation ${id} commit ${submissionId} result cancelled`, 499, {
         conversationId: id,
         submissionId,
       })
@@ -865,7 +865,7 @@ export class ConversationService {
     }
     const submission = await runWaitOp(() => this.harness.submission(numericId as never, waitContext))
     if (!submission) {
-      throw new HelmError('not_found', `提交不存在：${submissionId}`, 404, {
+      throw new HelmError('not_found', `commit missing:${submissionId}`, 404, {
         conversationId: id,
         submissionId,
       })
@@ -880,7 +880,7 @@ export class ConversationService {
       String(status.id) !== submissionId ||
       status.type !== 'input'
     ) {
-      throw new HelmError('not_found', `提交 ${submissionId} 不属于会话 ${id}`, 404, {
+      throw new HelmError('not_found', `commit ${submissionId} do not belongs to conversation ${id}`, 404, {
         conversationId: id,
         submissionId,
       })
@@ -896,7 +896,7 @@ export class ConversationService {
       const aborted = reason === 'aborted' || reason === 'interrupted' || reason === 'reset'
       throw new HelmError(
         aborted ? 'turn_aborted' : 'turn_failed',
-        `会话 ${id} 本轮未获回答（${reason}${settled.detail !== undefined ? `：${String(settled.detail)}` : ''}）`,
+        `conversation ${id} this round not obtain answer (${reason}${settled.detail !== undefined ? `:${String(settled.detail)}` : ''})`,
         aborted ? 499 : 502,
         {
           conversationId: id,
@@ -907,14 +907,14 @@ export class ConversationService {
       )
     }
     if (settled.status !== 'done' || settled.answer === undefined) {
-      throw new HelmError('turn_failed', `提交 ${submissionId} 结算为非终态 ${settled.status}`, 502, {
+      throw new HelmError('turn_failed', `commit ${submissionId} compute is non- terminal state ${settled.status}`, 502, {
         conversationId: id,
         submissionId,
         status: settled.status,
       })
     }
     const conversation = await runWaitOp(() => this.harness.conversation(id as never, waitContext))
-    if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+    if (!conversation) throw new HelmError('not_found', `conversation missing:${id}`, 404)
     const page = await runWaitOp(() =>
       conversation.entries(
         { minEntryId: settled.answer as never, maxEntryId: settled.answer as never, order: 'ascending' },
@@ -927,7 +927,7 @@ export class ConversationService {
       | { id: number; kind: string; data?: unknown; model?: unknown[] }
       | undefined
     if (raw === undefined || raw.id !== settled.answer) {
-      throw new HelmError('not_found', `回答条目缺失：${settled.answer}`, 502, {
+      throw new HelmError('not_found', `answer item missing:${settled.answer}`, 502, {
         conversationId: id,
         submissionId,
       })
@@ -939,11 +939,11 @@ export class ConversationService {
 
   async withdrawQueuedInput(id: number, opts: { submissionId: number }): Promise<ConversationWithdrawResponse> {
     this.assertWritable()
-    if (this.o.isClosed()) throw new HelmError('runtime_closed', '内核正在关闭，拒绝撤回', 503)
+    if (this.o.isClosed()) throw new HelmError('runtime_closed', 'kernel is now close, reject withdraw back', 503)
     requireConv(this.store, id)
     const raw = opts.submissionId
     if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw <= 0) {
-      throw new HelmError('validation_error', `submissionId 需为安全正整数（收到 ${String(raw)}）`, 400, {
+      throw new HelmError('validation_error', `submissionId must be security positive integer (receives ${String(raw)})`, 400, {
         conversationId: id,
         submissionId: raw,
       })
@@ -955,14 +955,14 @@ export class ConversationService {
       String(rec.conversationId) !== String(id) ||
       rec.type !== 'input'
     ) {
-      throw new HelmError('not_found', `提交 ${raw} 在会话 ${id} 中不存在`, 404, {
+      throw new HelmError('not_found', `commit ${raw} in conversation ${id} in missing`, 404, {
         conversationId: id,
         submissionId: raw,
       })
     }
     const outcome = await this.harness.abortSubmission(raw as never, BACKGROUND_CONTEXT, id as never)
     if (outcome === 'not_found') {
-      throw new HelmError('not_found', `提交 ${raw} 在会话 ${id} 中不存在`, 404, {
+      throw new HelmError('not_found', `commit ${raw} in conversation ${id} in missing`, 404, {
         conversationId: id,
         submissionId: raw,
       })
@@ -981,7 +981,7 @@ export class ConversationService {
   async abortConversation(id: number): Promise<void> {
     this.assertWritable()
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
-    if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+    if (!conversation) throw new HelmError('not_found', `conversation missing:${id}`, 404)
     const wasBusy = this.tracker.hasLiveWork(id)
     await conversation.abort(BACKGROUND_CONTEXT)
     if (wasBusy) this.tracker.settleAborted(id)
@@ -990,7 +990,7 @@ export class ConversationService {
   }
 
   // ------------------------------------------------------------------
-  // reset / compact / fork（委托给 contextOps）
+  // reset / compact / fork(delegate to contextOps)
   // ------------------------------------------------------------------
 
   async resetConversation(id: number, opts?: { handoff?: string }): Promise<ConversationSummary> {
@@ -1017,7 +1017,7 @@ export class ConversationService {
 
   async waitForIdle(id: number): Promise<void> {
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
-    if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+    if (!conversation) throw new HelmError('not_found', `conversation missing:${id}`, 404)
     await conversation.waitForIdle(BACKGROUND_CONTEXT)
     await this.tracker.waitTurnSettled(id)
   }

@@ -1,31 +1,31 @@
 /**
- * EventHub：全局持久化 seq 的事件总线 + SSE 快照/增量流。
+ * EventHub: global persist seq event total line + SSE snapshot/incremental stream.
  *
- * 语义（按设计文档 §1.2）：
- * - seq 单调递增且持久化（helm_seq），重启不回退；发布严格按「组装脱敏 -> 编码
- *   -> 持久化 nextSeq -> 推进内存水位 -> 入 ring -> 广播」排序，任一步失败都不
- *   推进水位、不留半成品（绝不产生无 ring 记录的裸 seq 缺口）；
- * - 每个实例随机生成 bootId（事件代）：`?afterSeq`+`?bootId` 双凭据均校验通过才
- *   允许短断线续传（首帧 resumed + ring 补发 + 实时增量，严格无重复无遗漏）；
- *   跨代、seq 越界（未来）或 ring 缺口一律回退 snapshot 全量对齐，绝不越缺口
- *   假成功；畸形查询参数（非非负安全整数/长度超限/单凭据）显式 400；
- * - 续传 ring：保存发布时编码一次的不可变 SSE 字节（订阅者与重放共享同一份，
- *   防订阅者篡改重放数据；不复制 SQLite 事件库），帧数/字节双上限（默认 256 帧 /
- *   1 MiB）超限从头淘汰；单帧超字节预算即清空 ring，禁止任何客户端跨该帧续传；
- *   重放经 ReadableStream.pull 按消费者节奏逐步冲刷，绝不在 start 内一次性塞满
- *   队列（快消费者也不被字节预算误杀；冲刷期间新到达帧另行计入慢消费者预算）；
- * - publish 与 subscribe 同名保留（app 使用 kernel.events.publish(type, payload)）；
- * - response(request)：标准 SSE——先订阅缓冲，再同步采样（快照或 ring+headSeq），
- *   首帧 `event: snapshot`（HelmSnapshot，含 bootId）或 `event: resumed`
- *   （HelmResumedFrame），随后逐帧 `event: <type>` + `data: {seq,event}`；
- *   Request.signal abort 与 ReadableStream.cancel 均退订关流；无事件时保持连接（纯实时流）；
- * - sseStream(consume)：可编程消费入口（同 snapshot 先行语义），返回退订句柄；
- *   消费者 return false 或抛错即隔离该订阅并清理，不影响其他订阅者；
- * - 载荷边界校验/组装在 event-validation.ts（纯函数）；SSE 编码与字节背压
- *   原语在 sse-stream.ts（与 SessionDocEventHub 共享）；
- * - 未知 type 走 CustomHelmEvent {type, payload} 原样透传，不伪装成 notification；
- * - 背压有界：未决帧数/字节数超上限视为慢客户端，显式关流（客户端凭 snapshot 重连
- *   对齐），绝不静默丢帧；快照 provider 是同步的，无需异步快照系统。
+ * semantics (by design document §1.2):
+ * - seq single tune pass increase and persist (helm_seq), restart does not fall back; publish strictly by group install redaction -> encode
+ *   -> persist nextSeq -> push enter memory watermark ->  ring -> broadcast sort, any one step failed all do not
+ *   push enter watermark, do not half into product (never produce without ring record bare seq missing opening);
+ * - each instance random generate bootId(event proxy):`?afterSeq`+`?bootId` double credentials all validate via only then
+ *   allows short disconnection resume (first frame resumed + ring patch + real-time incremental, strictly without duplicate without omission);
+ *   across proxy,seq out of bounds (not come) or ring missing opening one rule fall back snapshot all amount align, never exceeds missing opening
+ *   false succeeded; distortion shape query parameter (non- non- negative security integer/length over limit/single credentials) explicit 400;
+ * - resume ring: save publish when encode once cannot change SSE byte (subscribe and replay sharing the same,
+ *   guard against subscribe tamper replay data; do not duplicate SQLite event store), frame count/byte double cap (by default 256 frame /
+ *   1 MiB) over limit from head eliminate; single frame over byte pre- compute i.e. empty ring, forbidden any client across the frame resume;
+ *   replay via ReadableStream.pull by consumer rhythm one by one step conflict refresh, never in start inside once stuff full
+ *   queue (fast consumer also do not by byte pre- compute mistakenly kill; conflict refresh during new reach frame another row count slow consumer pre- compute);
+ * - publish and subscribe same name keep (app use kernel.events.publish(type, payload));
+ * - response(request): standard SSE- - first subscribe buffer, again sync sampling (snapshot or ring+headSeq),
+ *   first frame `event: snapshot`(HelmSnapshot, contains bootId) or `event: resumed`
+ *   (HelmResumedFrame), then one by one frame `event: <type>` + `data: {seq,event}`;
+ *   Request.signal abort and ReadableStream.cancel all unsubscribe closure stream; without event when keep connect (pure real-time stream);
+ * - sseStream(consume): can edit process consume entry (same snapshot first row semantics), return unsubscribe handle;
+ *   consumer return false or throws i.e. isolated the subscribe and clean up, does not affect other subscribe;
+ * - payload boundary validate/group install in event-validation.ts(pure function);SSE encode and byte back press
+ *   original language in sse-stream.ts(and SessionDocEventHub sharing);
+ * - unknown type away CustomHelmEvent {type, payload} original pass-through, does not pretend to be into notification;
+ * - back press has boundary: not decide frame count/byte count over cap treated as slow client, explicit closure stream (client rely on snapshot reconnect
+ *   align), never static default lose frame; snapshot provider is sync, no need to async snapshot system.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -42,8 +42,8 @@ import { assembleHelmEvent, assertSessionDocUpdateShape, pruneUndefined } from '
 import { byteBoundedWrite, closeControllerQuietly, encodeSseChunk, KEEPALIVE_CHUNK, sseResponse } from './sse-stream.js'
 
 /**
- * 快照内容 provider：不含 bootId（由 EventHub 实例注入，单一事实来源），
- * seq 为 provider 侧已知水位，最终以 hub 当前 seq 取最大为准。
+ * snapshot content provider: excludes bootId(by EventHub instance inject, single one fact source),
+ * seq is provider side known watermark, eventually with hub when before seq take most large is allow.
  */
 export type SnapshotProvider = () => Omit<HelmSnapshot, 'bootId'>
 
@@ -51,57 +51,57 @@ export interface EventSubscription {
   unsubscribe(): void
 }
 
-/** 单次 publish 的投递结果。 */
+/** single time publish delivery result. */
 export interface EventPublishResult {
-  /** 本次发布的已验证+脱敏事件帧（SSE ring 已入队、广播已隔离完成）。 */
+  /** this time publish already verify+redaction event frame (SSE ring already queue, broadcast already isolated complete). */
   readonly frame: HelmEventFrame
-  /** 内部宿主监听器投递（单次；未安装投递器时 undefined）。发布方按需 await
-   *（公开 emitEvent 契约）；不 await 即 fire-and-forget（内核自动事件路径，
-   * 投递器内部逐监听器隔离错误、返回的 promise 绝不 reject）。 */
+  /** internal host listener delivery (single time; not installed delivery when undefined). publish way on demand await
+   *(public emitEvent contract); do not await i.e. fire-and-forget(kernel automatically event path,
+   * delivery internal one by one listener isolated error, return promise never reject). */
   readonly internal: MaybePromise<void> | undefined
 }
 
-/** SSE 输出帧：首帧 snapshot/resumed 控制帧或增量 {seq, event}。 */
+/** SSE output frame: first frame snapshot/resumed control frame or incremental {seq, event}. */
 export type SseFrame = HelmSnapshot | HelmEventFrame
 
-/** 续传 ring 条目：发布时编码的不可变 SSE 字节（防订阅者修改重放数据）。 */
+/** resume ring item: publish when encode cannot change SSE byte (guard against subscribe modify replay data). */
 interface RingEntry {
   seq: number
   chunk: Uint8Array
 }
 
-/** 订阅建立到快照冲刷完成之间的未决帧数上限（溢出即慢客户端，关流重连）。 */
+/** subscribe establish to snapshot conflict refresh complete between not decide frame count cap (overflow i.e. slow client, closure stream reconnect). */
 const MAX_PENDING_EVENTS = 512
 
-/** 续传 ring 默认上限：256 帧 / 1 MiB 字节（超限从头剪裁）。 */
+/** resume ring by default cap:256 frame / 1 MiB byte (over limit from head trim). */
 const DEFAULT_RING_MAX_FRAMES = 256
 const DEFAULT_RING_MAX_BYTES = 1024 * 1024
 
-/** 流式阶段未读字节上限（默认 1 MiB，可用 maxPendingBytes 覆盖，测试用小值）。 */
+/** streaming phase not read byte cap (by default 1 MiB, available maxPendingBytes override, test use small value). */
 const DEFAULT_MAX_PENDING_BYTES = 1024 * 1024
 
-/** SSE 空闲心跳间隔（默认 15s；注释行走统一字节背压路径，测试可用 keepaliveMs 覆盖）。 */
+/** SSE idle heartbeat interval (by default 15s; note release row away unify byte back press path, test available keepaliveMs override). */
 const DEFAULT_KEEPALIVE_MS = 15_000
 
 export class EventHub {
   private seqValue: number
-  /** 事件代标识（实例随机生成）：续传双凭据之一，同代内 seq 才连续可比。 */
+  /** event proxy identifier (instance random generate): resume double credentials of one, same proxy inside seq only then connect continue can than. */
   readonly bootId: string
-  /** 续传 ring（seq 连续区段，从头淘汰；单帧超预算即清空禁跨帧续传）。 */
+  /** resume ring(seq connect continue zone segment, from head eliminate; single frame over pre- compute i.e. empty forbid across frame resume). */
   private readonly ring: RingEntry[] = []
   private ringBytes = 0
   private readonly ringMaxFrames: number
   private readonly ringMaxBytes: number
   private readonly subscribers = new Set<(frame: HelmEventFrame, chunk: Uint8Array) => void>()
-  /** 内部宿主事件投递器（runtime 安装；每次 publish 恰调用一次，单一投递边界）。 */
+  /** internal host event delivery (runtime install; each time publish exactly invoke once, single one delivery boundary). */
   private hostDispatcher: ((event: HelmEvent) => MaybePromise<void>) | undefined
   private readonly snapshot: SnapshotProvider
   private readonly persistSeq: (seq: number) => void
   private readonly streamClosers = new Set<() => void>()
   private readonly maxPendingBytes: number
-  /** SSE 空闲心跳间隔（非正值停用）；注释行让中间层/代理保活并可被客户端检测卡死。 */
+  /** SSE idle heartbeat interval (non- correct value deactivate); note release row let middle layer/proxy keep-alive and can by client detect card die. */
   private readonly keepaliveMs: number
-  /** redact(text) -> 脱敏文本（secret 明文 -> marker；复用 redactJsonValue 递归）。 */
+  /** redact(text) -> redaction text (secret plaintext -> marker; re- use redactJsonValue recursion). */
   redact: (text: string) => string = (t) => t
 
   set redactFn(fn: (text: string) => string) {
@@ -112,15 +112,15 @@ export class EventHub {
     initialSeq: number
     snapshot: SnapshotProvider
     persistSeq?: (seq: number) => void
-    /** 流式阶段未读字节上限（慢客户端判定）；默认 1 MiB。 */
+    /** streaming phase not read byte cap (slow client decide); by default 1 MiB. */
     maxPendingBytes?: number
-    /** SSE 空闲心跳间隔（毫秒）；默认 15s，非正值停用（测试用小值加速）。 */
+    /** SSE idle heartbeat interval (milli second); by default 15s, non- correct value deactivate (test use small value speed up). */
     keepaliveMs?: number
-    /** 事件代标识（默认随机 UUID；测试可注入固定值）。 */
+    /** event proxy identifier (by default random UUID; test can inject fixed value). */
     bootId?: string
-    /** 续传 ring 帧数上限；默认 256（测试可调小验证淘汰）。 */
+    /** resume ring frame count cap; by default 256(test can tune small verify eliminate). */
     ringMaxFrames?: number
-    /** 续传 ring 字节上限；默认 1 MiB（测试可调小验证淘汰）。 */
+    /** resume ring byte cap; by default 1 MiB(test can tune small verify eliminate). */
     ringMaxBytes?: number
   }) {
     this.seqValue = options.initialSeq
@@ -137,12 +137,12 @@ export class EventHub {
     return this.seqValue
   }
 
-  /** 当前活跃订阅数（诊断与测试用）。 */
+  /** when before leap subscribe count (diagnose and test use). */
   get subscriberCount(): number {
     return this.subscribers.size
   }
 
-  /** 清空全部订阅（kernel.close 时调用，杜绝订阅泄漏）。 */
+  /** empty all subscribe (kernel.close when invoke, eliminate subscribe leak leak). */
   close(): void {
     for (const stop of [...this.streamClosers]) stop()
     this.subscribers.clear()
@@ -150,34 +150,34 @@ export class EventHub {
   }
 
   /**
-   * 安装内部宿主事件投递器（ctx.host.onEvent 监听面的单一投递边界）：每次
-   * publish 在 SSE 广播之后恰调用一次，参数为已验证+脱敏的完整 HelmEvent
-   * 信封（协议 onEvent 契约形状）。投递器必须同步返回（可返回 promise）、
-   * 不得抛出（监听器错误由投递器自身隔离），否则会破坏 publish 的既有
-   * 错误语义（广播已完成后再报错属于假失败）。
+   * install internal host event delivery (ctx.host.onEvent listen side single one delivery boundary): each time
+   * publish in SSE broadcast after exactly invoke once, parameter is already verify+redaction complete HelmEvent
+   * message seal (protocol onEvent contract shape). delivery must sync return (can return promise),
+   * must not throw (listener error by delivery itself isolated), otherwise will break publish since has
+   * error semantics (broadcast completed after again errors belongs to false failed).
    */
   setHostDispatcher(dispatch: (event: HelmEvent) => MaybePromise<void>): void {
     this.hostDispatcher = dispatch
   }
 
   /**
-   * 发布事件（严格顺序：组装脱敏 -> 编码 -> 持久化 -> 推进内存 -> 入 ring -> 广播
-   * -> 内部宿主投递）。buildEvent/persistSeq 失败均抛出且不推进水位、不入
-   * ring、不广播——持久化报错绝不留下裸 seq（否则下一次成功发布会在 ring 里
-   * 形成缺口，续传时假承诺）。帧只编码一次（不可变字节），ring 重放与全部
-   * 订阅者共享同一份。
+   * publish event (strictly order: group install redaction -> encode -> persist -> push enter memory ->  ring -> broadcast
+   * -> internal host delivery).buildEvent/persistSeq failed all throw and do not push enter watermark, do not
+   * ring, do not broadcast - - persist errors never under bare seq(otherwise under once succeeded publish will in ring in
+   * shape into missing opening, resume when false promise). frame only encode once (cannot change byte),ring replay and all
+   * subscribe sharing the same.
    *
-   * 返回本次 frame 与内部宿主监听器投递（恰一次）：需要等待异步内部监听器的
-   * 发布方（公开 emitEvent）await internal；内核自动事件（tracker 等）忽略
-   * 返回即 fire-and-forget，绝不阻塞发布点（如 SDK advance 同步观察路径）。
+   * return this time frame and internal host listener delivery (exactly once): need to wait for async internal listener
+   * publish way (public emitEvent)await internal; kernel automatically event (tracker etc.) ignore
+   * return i.e. fire-and-forget, never block publish point (such as SDK advance sync observe path).
    */
   publish(type: string, payload: unknown): EventPublishResult {
     const nextSeq = this.seqValue + 1
     const event = this.buildEvent(type, payload)
     const frame: HelmEventFrame = { seq: nextSeq, event }
-    // V8 无法 freeze 非空 TypedArray 视图；不可变性由结构保证：ring 只存这份独立
-    // 编码字节（不共享事件对象图，订阅者改对象改不到重放数据），宿主内全部消费
-    // 路径（ring 重放 / controller.enqueue）均只读，绝不回写。
+    // V8 cannot freeze non-empty TypedArray view; cannot change by structure guarantee:ring only store this independent
+    // encode byte (do not sharing event object diagram, subscribe change object change fewer than replay data), host inside all consume
+    // path (ring replay / controller.enqueue) all only read, never back write.
     const chunk = encodeSseChunk(String(event.type), frame)
     this.persistSeq(nextSeq)
     this.seqValue = nextSeq
@@ -186,15 +186,15 @@ export class EventHub {
       try {
         deliver(frame, chunk)
       } catch {
-        // 订阅方回调抛错只隔离自身（各订阅内部自行清理），不影响其他订阅者。
+        // subscribe way call back throws only isolated itself (each subscribe internal self row clean up), does not affect other subscribe.
       }
     }
     return { frame, internal: this.hostDispatcher?.(event) }
   }
 
-  /** ring 追加：非连续 append（防御：任何途径产生的裸 seq 缺口）先作废旧区段，
-   * 从本帧重建；帧数/字节超限从头淘汰保持连续；单帧超字节预算即清空，
-   * 禁止任何客户端跨该帧续传（宁可回退 snapshot，不越缺口假成功）。 */
+  /** ring append: non- connect continue append(guard against defend: any way produce bare seq missing opening) first act abandon old zone segment,
+   * from this frame rebuild; frame count/byte over limit from head eliminate keep connect continue; single frame over byte pre- compute i.e. empty,
+   * forbidden any client across the frame resume (rather can fall back snapshot, do not exceeds missing opening false succeeded). */
   private pushRing(seq: number, chunk: Uint8Array): void {
     const last = this.ring[this.ring.length - 1]
     if (last !== undefined && last.seq + 1 !== seq) {
@@ -216,15 +216,15 @@ export class EventHub {
     }
   }
 
-  /** 当前快照（供 HTTP GET 与 SSE 首帧复用）；经 prune + 递归脱敏后返回，
-   * 并注入实例 bootId（事件代单一事实来源）。 */
+  /** when before snapshot (supply HTTP GET and SSE first frame re- use); via prune + recursion redaction after return,
+   * and inject instance bootId(event proxy single one fact source). */
   currentSnapshot(): HelmSnapshot {
     const snap = this.snapshot()
     const redacted = redactJsonValue(pruneUndefined(snap, new WeakSet()), (t) => this.redact(t)) as HelmSnapshot
     return { ...redacted, seq: Math.max(snap.seq, this.seqValue), bootId: this.bootId }
   }
 
-  /** 订阅增量帧；返回退订函数（HTTP 层只消费 response，此入口供编程消费与测试）。 */
+  /** subscribe incremental frame; return unsubscribe function (HTTP layer only consume response, this entry supply edit process consume and test). */
   subscribe(listener: (frame: HelmEventFrame) => void): () => void {
     this.subscribers.add(listener)
     return () => {
@@ -233,8 +233,8 @@ export class EventHub {
   }
 
   /**
-   * SSE 流（可编程消费）：先建缓冲订阅，再取快照；首帧 snapshot 后冲刷 seq > snapshot.seq
-   * 的缓冲帧。消费者 return false 或抛错、快照失败都先退订再结束/重抛，绝不泄漏订阅。
+   * SSE stream (can edit process consume): first create buffer subscribe, again take snapshot; first frame snapshot after conflict refresh seq > snapshot.seq
+   * buffer frame. consumer return false or throws, snapshot failed all first unsubscribe again end/heavy throw, never leak leak subscribe.
    */
   sseStream(consume: (frame: SseFrame) => boolean | void): EventSubscription {
     const handle = this.openStream((frame) => consume(frame) !== false)
@@ -259,37 +259,37 @@ export class EventHub {
   }
 
   /**
-   * HTTP SSE 响应：立即返回 Response；首帧 snapshot（或续传 resumed），随后按 seq 增量。
-   * `?afterSeq`+`?bootId` 双凭据校验通过则首帧改发 resumed 并按 seq 补发 ring 缓存帧；
-   * 跨代/未来 seq/缓存缺口一律回退 snapshot；畸形凭据显式 400。
-   * 重放字节不经 start 一次性入队（消费者尚未 pull 会撞上 1 MiB 排队预算，误杀快
-   * 消费者），而是统一进入冲刷队列由 pull 按消费者节奏逐步冲刷；冲刷期间新到达的
-   * 实时帧计入独立慢消费者预算（replay 引用共享 ring 字节，不重复计数）。
-   * request.signal abort 与 ReadableStream.cancel 都退订关流；无事件时保持连接，
-   * 绝不回退 JSON；空闲期间按 keepaliveMs 周期写入 `: keepalive` 注释行（仅在冲刷
-   * 完成后启动，冲刷期数据本身流动；心跳走统一 write 背压路径，abort/cancel/close
-   * 随 shutdown 一并清理 timer）。
+   * HTTP SSE response: immediately return Response; first frame snapshot(or resume resumed), then by seq incremental.
+   * `?afterSeq`+`?bootId` double credentials validate via then first frame change resumed and by seq patch ring cache frame;
+   * across proxy/not come seq/cache missing opening one rule fall back snapshot; distortion shape credentials explicit 400.
+   * replay byte do not via start once queue (consumer not yet pull will collide on 1 MiB queue up pre- compute, mistakenly kill fast
+   * consumer), but rather unify enter conflict refresh queue by pull by consumer rhythm one by one step conflict refresh; conflict refresh during new reach
+   * real-time frame count independent slow consumer pre- compute (replay reference sharing ring byte, does not repeat counter).
+   * request.signal abort and ReadableStream.cancel all unsubscribe closure stream; without event when keep connect,
+   * never fall back JSON; idle during by keepaliveMs cycle write `: keepalive` note release row (only in conflict refresh
+   * after completion start, conflict refresh phase data itself stream motion; heartbeat away unify write back press path,abort/cancel/close
+   * follow shutdown one and clean up timer).
    */
   response(request: Request): Response {
     const query = EventHub.parseResumeQuery(request)
     if (query.error !== undefined) {
-      // 边界强校验：畸形续传凭据显式 400，绝不静默忽略或半续传。
+      // boundary strong validate: distortion shape resume credentials explicit 400, never static default ignore or half resume.
       return new Response(JSON.stringify({ error: { code: 'invalid_input', message: query.error } }), {
         status: 400,
         headers: { 'content-type': 'application/json; charset=utf-8' },
       })
     }
 
-    /** 冲刷队列条目：replay 引用（共享 ring 字节）或冲刷期间新到达帧/心跳。 */
+    /** conflict refresh queue item:replay reference (sharing ring byte) or conflict refresh during new reach frame/heartbeat. */
     interface OutboundEntry {
       chunk: Uint8Array
-      /** 计入慢消费者预算的字节数（replay 引用为 0，不重复计数 ring 内存）。 */
+      /** count slow consumer pre- compute byte count (replay reference is 0, does not repeat counter ring memory). */
       liveBytes: number
     }
 
     let outbound: OutboundEntry[] = []
     let outboundLiveBytes = 0
-    /** 重放/积压冲刷中：业务字节只入冲刷队列，由 pull 按消费者节奏逐步入队。 */
+    /** replay/accumulate press conflict refresh in: business byte only conflict refresh queue, by pull by consumer rhythm one by one step queue. */
     let flushing = false
     let closed = false
     let unsubscribe: (() => void) | undefined
@@ -299,7 +299,7 @@ export class EventHub {
     const write = (chunk: Uint8Array): boolean =>
       byteBoundedWrite(controllerRef, closed, chunk, this.maxPendingBytes)
 
-    /** 冲刷期间到达的帧/心跳入冲刷队列尾（保持严格字节序；新字节计入慢消费者预算）。 */
+    /** conflict refresh during reach frame/heartbeat conflict refresh queue tail (keep strictly byte order; new byte count slow consumer pre- compute). */
     const pushOutbound = (chunk: Uint8Array): boolean => {
       if (outboundLiveBytes + chunk.byteLength > this.maxPendingBytes) return false
       outboundLiveBytes += chunk.byteLength
@@ -323,19 +323,19 @@ export class EventHub {
     }
 
     const startKeepalive = (): void => {
-      // 空闲心跳：SSE 注释行（: 开头），客户端解析器忽略，绝不伪造业务事件、
-      // 不推进 seq；走统一 write 背压路径（不读的慢消费者堆积超限同样关流）。
+      // idle heartbeat:SSE note release row (: open head), client parse ignore, never fabricate business event,
+      // do not push enter seq; away unify write back press path (do not read slow consumer heap accumulate over limit same closure stream).
       if (this.keepaliveMs <= 0 || keepaliveTimer !== undefined || closed) return
       keepaliveTimer = setInterval(() => {
         if (!write(KEEPALIVE_CHUNK)) shutdown()
       }, this.keepaliveMs)
     }
 
-    // 先订阅再同步采样（同 microtask 内完成，缓冲不丢帧）；快照失败同步抛给 HTTP 层。
+    // first subscribe again sync sampling (same microtask inside complete, buffer do not lose frame); snapshot failed sync throw to HTTP layer.
     const handle = this.openStream(
       (frame, chunk) => {
         if (closed) return false
-        // 冲刷期间到达的帧排在重放之后（严格字节序）；冲刷完转流式直写（字节背压接管）。
+        // conflict refresh during reach frame arrange in replay after (strictly byte order); conflict refresh completely rotate streaming direct write (byte back press take over).
         if (flushing) return pushOutbound(chunk)
         return write(chunk)
       },
@@ -348,7 +348,7 @@ export class EventHub {
     let handshake: Uint8Array
     let replay: Uint8Array[] = []
     if (resume !== undefined && this.canResume(resume)) {
-      // 续传：采样 headSeq + ring 切片（订阅已建立，此后发布进冲刷队列/直写，无窗口）。
+      // resume: sampling headSeq + ring cut piece (subscribe already establish, this after publish enter conflict refresh queue/direct write, without window).
       liveSeq = this.seqValue
       handshake = encodeSseChunk('resumed', { bootId: this.bootId, seq: resume.afterSeq, headSeq: liveSeq })
       replay = this.ring.filter((entry) => entry.seq > resume.afterSeq).map((entry) => entry.chunk)
@@ -366,10 +366,10 @@ export class EventHub {
 
     return sseResponse({
       start: (controller) => {
-        // 无 byte 策略时运行时必为默认控制器（原内联构造同一事实）。
+        // without byte policy when runtime must is by default control (original inline construct the same fact).
         controllerRef = controller as ReadableStreamDefaultController<Uint8Array>
         if (closed) {
-          // 关闭发生在流建立之前（如快照 provider 同步重入溢出）：立即关流。
+          // close occur in stream establish before (such as snapshot provider sync heavy overflow): immediately closure stream.
           closeControllerQuietly(controllerRef)
           return
         }
@@ -378,15 +378,15 @@ export class EventHub {
           return
         }
         request.signal.addEventListener('abort', shutdown)
-        // 握手帧直接写入（受字节预算约束）；重放字节绝不在此入队——留给 pull
-        // 按消费者节奏逐步冲刷，避免消费者尚未 pull 就撞满 1 MiB 排队预算。
+        // grasp manually frame directly write (subject to byte pre- compute constraint); replay byte never in this queue - - to pull
+        // by consumer rhythm one by one step conflict refresh, avoid consumer not yet pull then collide full 1 MiB queue up pre- compute.
         if (!write(handshake)) {
           shutdown()
           return
         }
         outbound = replay.map((chunk) => ({ chunk, liveBytes: 0 }))
         flushing = outbound.length > 0
-        // 冲刷订阅缓冲（seq > liveSeq 的帧）：冲刷中入冲刷队列尾，否则直写。
+        // conflict refresh subscribe buffer (seq > liveSeq frame): conflict refresh in conflict refresh queue tail, otherwise direct write.
         if (!handle.goLive(liveSeq)) return
         if (!flushing) startKeepalive()
       },
@@ -397,7 +397,7 @@ export class EventHub {
         outboundLiveBytes -= entry.liveBytes
         const controller = controllerRef
         if (controller === undefined) return
-        // pull 语义：消费者已持有 pending read，本次入队直接满足读取，不堆积排队预算。
+        // pull semantics: consumer already hold has pending read, this time queue directly satisfy read, do not heap accumulate queue up pre- compute.
         try {
           controller.enqueue(entry.chunk)
         } catch {
@@ -415,41 +415,41 @@ export class EventHub {
     })
   }
 
-  /** 解析 `?afterSeq`/`?bootId` 续传查询：不携带即普通连接；携带则必须成对、不
-   * 重复且形状合法（非负安全整数 / 长度 1..64 的非空字符串），畸形/重复显式 400，
-   * 绝不半续传（URLSearchParams.get 会吞重复参数，重复即拒绝）。 */
+  /** parse `?afterSeq`/`?bootId` resume query: does not carry i.e. ordinary connect; carry then must into for, do not
+   * duplicate and shape legal (non- negative security integer / length 1..64 non-empty string), distortion shape/duplicate explicit 400,
+   * never half resume (URLSearchParams.get will swallow duplicate parameter, duplicate i.e. reject). */
   private static parseResumeQuery(request: Request): { resume?: { afterSeq: number; bootId: string }; error?: string } {
     let params: URLSearchParams
     try {
       params = new URL(request.url).searchParams
     } catch {
-      return { error: '无法解析请求 URL 查询参数' }
+      return { error: 'cannot parse request URL query parameter' }
     }
     const afterSeqAll = params.getAll('afterSeq')
     const bootIdAll = params.getAll('bootId')
     if (afterSeqAll.length > 1 || bootIdAll.length > 1) {
-      return { error: '?afterSeq 与 ?bootId 不得重复携带' }
+      return { error: '?afterSeq and ?bootId must not duplicate carry' }
     }
     if (afterSeqAll.length === 0 && bootIdAll.length === 0) return {}
     if (afterSeqAll.length === 0 || bootIdAll.length === 0) {
-      return { error: '?afterSeq 与 ?bootId 必须成对携带才能续传' }
+      return { error: '?afterSeq and ?bootId must into for carry only then can resume' }
     }
     const afterSeqRaw = afterSeqAll[0]!
     const bootIdRaw = bootIdAll[0]!
     if (!/^\d{1,16}$/.test(afterSeqRaw) || !Number.isSafeInteger(Number(afterSeqRaw))) {
-      return { error: 'afterSeq 必须是非负安全整数' }
+      return { error: 'afterSeq must be non- negative security integer' }
     }
     if (bootIdRaw.length === 0 || bootIdRaw.length > 64) {
-      return { error: 'bootId 必须是长度 1..64 的非空字符串' }
+      return { error: 'bootId must be length 1..64 non-empty string' }
     }
     return { resume: { afterSeq: Number(afterSeqRaw), bootId: bootIdRaw } }
   }
 
-  /** 续传可行性：同代、不越未来，且需要的 (afterSeq, headSeq] 非空时必须被 ring
-   * 完整连续覆盖（首帧 <= afterSeq+1、末帧恰为当前 head、区段内逐帧 +1 连续；
-   * ring 最多 256 帧线性检验足够），任一不满足回退 snapshot——末帧缺失会让客户端
-   * 永远追不平 headSeq（心跳仍到、空闲看门狗不触发），绝不发假 resumed 承诺；
-   * afterSeq == headSeq（已追平头部）零补发续传，但同样必须同代。 */
+  /** resume can row: same proxy, do not exceeds not come, and need to (afterSeq, headSeq] non-empty when must by ring
+   * complete connect continue override (first frame <= afterSeq+1, end frame exactly is when before head, zone segment inside one by one frame +1 connect continue;
+   * ring at most 256 frame line inspect verify enough), any one do not satisfy fall back snapshot- - end frame missing will let client
+   * forever append do not flat headSeq(heartbeat still to, idle watchdog does not trigger), never false resumed promise;
+   * afterSeq == headSeq(already append flat header) zero patch resume, but same must same proxy. */
   private canResume(resume: { afterSeq: number; bootId: string }): boolean {
     if (resume.bootId !== this.bootId) return false
     const headSeq = this.seqValue
@@ -465,9 +465,9 @@ export class EventHub {
   }
 
   /**
-   * 建立带缓冲的内部订阅：订阅先入缓冲（帧与预编码字节一同入队，冲刷时零重编码），
-   * goLive(snapshotSeq) 冲刷 seq 更新的缓冲帧后转实时。onFrame 返回 false
-   * （写入失败/溢出/消费者停止）或抛错都立即退订并回调 onStop。
+   * establish carries buffer internal subscribe: subscribe first buffer (frame and pre- encode byte one same queue, conflict refresh when zero heavy encode),
+   * goLive(snapshotSeq) conflict refresh seq update buffer frame after rotate real-time.onFrame return false
+   * (failed to write/overflow/consumer stop) or throws all immediately unsubscribe and call back onStop.
    */
   private openStream(
     onFrame: (frame: HelmEventFrame, chunk: Uint8Array) => boolean,
@@ -496,7 +496,7 @@ export class EventHub {
       if (done) return
       if (!live) {
         if (buffer.length >= MAX_PENDING_EVENTS) {
-          // 订阅建立即缓冲阶段溢出（provider 同步重入发布才会触发）：同样明确关流。
+          // subscribe establish i.e. buffer phase overflow (provider sync heavy publish only then will trigger): same explicit closure stream.
           stop()
           return
         }
@@ -523,13 +523,13 @@ export class EventHub {
     }
   }
 
-  /** 组装+校验+脱敏（委托 event-validation 纯函数；redact 注入实例脱敏器）。 */
+  /** group install+validate+redaction (delegate event-validation pure function;redact inject instance redaction). */
   private buildEvent(type: string, payload: unknown): HelmEvent {
     return assembleHelmEvent(type, payload, (t) => this.redact(t))
   }
 }
 
-/** 会话文档订阅首帧：{seq, doc}；由 HTTP 层经同步 provider 原子读取。 */
+/** conversation document subscribe first frame:{seq, doc}; by HTTP layer via sync provider atomic read. */
 export interface SessionDocSnapshot {
   seq: number
   doc: PublicPluginSessionDoc
@@ -540,35 +540,35 @@ interface SessionDocStreamEntry {
   stop: () => void
 }
 
-/** 缓冲阶段的未决帧（保留 seq，冲刷时只发 seq > snapshot.seq 的帧）。 */
+/** buffer phase not decide frame (keep seq, conflict refresh when only seq > snapshot.seq frame). */
 interface SessionDocQueuedFrame {
   seq: number
   chunk: Uint8Array
 }
 
 /**
- * SessionDocEventHub：会话文档专用事件面。
+ * SessionDocEventHub: conversation document dedicated use event side.
  *
- * plugin.session_doc.updated 绝不进入全局 /api/events（写放大与跨会话泄漏）；
- * 本枢纽只把 (pluginId, name, conversationId) 三元组的更新分发给订阅了该
- * 三元组的专用 SSE 流。帧形状与全局流一致（HelmEventFrame {seq, event}），
- * seq 只维护本枢纽自己的单调计数；首帧 snapshot 由 response 的同步 provider
- * （如 kernel.plugins.getPublicSessionDoc）在订阅建立之后调用，保证
- * 「先订阅缓冲、后取快照」的原子窗口——快照与首帧增量之间不丢帧、不重复。
+ * plugin.session_doc.updated never enter global /api/events(write put large and across conversation leak leak);
+ * this hub only (pluginId, name, conversationId) three meta group update dispatch to subscribe the
+ * three meta group dedicated use SSE stream. frame shape and global stream consistent (HelmEventFrame {seq, event}),
+ * seq only maintain this hub itself single tune counter; first frame snapshot by response sync provider
+ * (such as kernel.plugins.getPublicSessionDoc) in subscribe establish after invoke, guarantee
+ * first subscribe buffer, after take snapshot atomic window - - snapshot and first frame incremental between do not lose frame, does not repeat.
  *
- * 生命周期：response 为每条流登记 (target, stop)；hub.close() 真正关闭全部
- * 流（ReadableStream close + 退订）；closeForPlugin/closeForConversation 由
- * runtime 监听 core 事件驱动（plugin.changed enabled=false / conversation.deleted），
- * 事件驱动而非轮询，无外部调用时零开销。
+ * lifecycle:response is each stream register (target, stop);hub.close() truly close all
+ * stream (ReadableStream close + unsubscribe);closeForPlugin/closeForConversation by
+ * runtime listen core event drive (plugin.changed enabled=false / conversation.deleted),
+ * event drive while non- polling, without external invoke when zero overhead.
  */
 export class SessionDocEventHub {
   private seqValue = 0
   private readonly subscribers = new Map<string, Set<(frame: HelmEventFrame) => void>>()
-  /** 每条专用流的关闭句柄（close()/定向关闭用；同一三元组多连接各自登记）。 */
+  /** each dedicated use stream close handle (close()/set to close use; the same three meta group many connect each register). */
   private readonly streams = new Set<SessionDocStreamEntry>()
-  /** 订阅建立到快照冲刷完成之间的未决帧数上限（溢出即慢客户端，关流重连）。 */
+  /** subscribe establish to snapshot conflict refresh complete between not decide frame count cap (overflow i.e. slow client, closure stream reconnect). */
   private readonly maxPending = MAX_PENDING_EVENTS
-  /** 流式阶段未读字节上限（默认 1 MiB；慢客户端显式关流，绝不无限排队）。 */
+  /** streaming phase not read byte cap (by default 1 MiB; slow client explicit closure stream, never unbounded queue up). */
   private readonly maxPendingBytes: number
   private redactFn: (text: string) => string = (t) => t
 
@@ -588,25 +588,25 @@ export class SessionDocEventHub {
     return `${doc.pluginId}\0${doc.name}\0${doc.conversationId}`
   }
 
-  /** 当前活跃订阅数（实际监听器个数，诊断与测试用）。 */
+  /** when before leap subscribe count (actual listener count, diagnose and test use). */
   get subscriberCount(): number {
     let total = 0
     for (const set of this.subscribers.values()) total += set.size
     return total
   }
 
-  /** 真正关闭全部专用流并清空订阅（kernel.close 时调用，杜绝泄漏）。 */
+  /** truly close all dedicated use stream and empty subscribe (kernel.close when invoke, eliminate leak leak). */
   close(): void {
     this.closeStreams(() => true)
     this.subscribers.clear()
   }
 
-  /** 关闭指定插件的全部专用流（插件停用/注销：plugin.changed enabled=false）。 */
+  /** close designate plugin all dedicated use stream (plugin deactivate/deregister:plugin.changed enabled=false). */
   closeForPlugin(pluginId: string): void {
     this.closeStreams((entry) => entry.target.pluginId === pluginId)
   }
 
-  /** 关闭指定会话的全部专用流（会话删除：conversation.deleted）。 */
+  /** close designate conversation all dedicated use stream (conversation delete:conversation.deleted). */
   closeForConversation(conversationId: number): void {
     this.closeStreams((entry) => entry.target.conversationId === conversationId)
   }
@@ -618,10 +618,10 @@ export class SessionDocEventHub {
   }
 
   /**
-   * 发布一条会话文档更新：只投递订阅了该三元组的监听器。
-   * 载荷在边界做形状校验（event-validation 纯函数）+ JSON 脱敏（与
-   * EventHub.buildEvent 同一纪律），非法载荷显式抛 HelmError 且不推进 seq，
-   * 绝不静默降级。
+   * publish a conversation document update: only delivery subscribe the three meta group listener.
+   * payload in boundary do shape validate (event-validation pure function)+ JSON redaction (and
+   * EventHub.buildEvent the same discipline), illegal payload explicit throw HelmError and do not push enter seq,
+   * never static default fall back.
    */
   dispatch(payload: unknown): void {
     const clean = redactJsonValue(assertSessionDocUpdateShape(payload), (t) => this.redactFn(t)) as PublicPluginSessionDoc
@@ -635,14 +635,14 @@ export class SessionDocEventHub {
       try {
         deliver(frame)
       } catch {
-        // 订阅方回调抛错只隔离自身（各订阅内部自行清理），不影响其他订阅者。
+        // subscribe way call back throws only isolated itself (each subscribe internal self row clean up), does not affect other subscribe.
       }
     }
   }
 
   /**
-   * 订阅指定三元组的增量帧；返回退订函数。
-   * 与 EventHub.subscribe 同名语义：HTTP 层先订阅缓冲再同步取快照。
+   * subscribe designate three meta group incremental frame; return unsubscribe function.
+   * and EventHub.subscribe same name semantics:HTTP layer first subscribe buffer again sync take snapshot.
    */
   subscribe(
     doc: { pluginId: string; name: string; conversationId: number },
@@ -664,28 +664,28 @@ export class SessionDocEventHub {
   }
 
   /**
-   * 专用 SSE 响应：首帧 `event: snapshot`（PluginSessionDocSnapshot {seq, doc}），
-   * 随后 `event: plugin.session_doc.updated` + HelmEventFrame 增量。
+   * dedicated use SSE response: first frame `event: snapshot`(PluginSessionDocSnapshot {seq, doc}),
+   * then `event: plugin.session_doc.updated` + HelmEventFrame incremental.
    *
-   * 原子窗口：先建立缓冲订阅，再同步调用 options.snapshot provider 读取快照
-   * （provider 同时完成 public/会话存在性再校验，失败同步抛给 HTTP 层），
-   * 发送快照后只冲刷 seq > snapshot.seq 的缓冲帧——不丢帧、不重复。
-   * provider 出错或 request 已 abort：同步退订清理，不建流。
+   * atomic window: first establish buffer subscribe, again sync invoke options.snapshot provider read snapshot
+   * (provider also complete public/conversation store in again validate, failed sync throw to HTTP layer),
+   * send snapshot after only conflict refresh seq > snapshot.seq buffer frame - - do not lose frame, does not repeat.
+   * provider fails or request already abort: sync unsubscribe clean up, do not create stream.
    *
-   * 背压与清理：缓冲阶段受 MAX_PENDING_EVENTS 限制，流式阶段以字节上限判定
-   * （sse-stream 共享原语），超限即慢客户端，显式关流退订（绝不无限排队）；
-   * abort / cancel / hub 定向关闭同样关流。重连即重新订阅并重置 snapshot
-   * （无跨连接残留）。
+   * back press and clean up: buffer phase subject to MAX_PENDING_EVENTS restrict, streaming phase with byte cap decide
+   * (sse-stream sharing original language), over limit i.e. slow client, explicit closure stream unsubscribe (never unbounded queue up);
+   * abort / cancel / hub set to close same closure stream. reconnect i.e. re- subscribe and reset snapshot
+   * (without across connect leftover).
    */
   response(
     request: Request,
     options: {
-      /** 同步快照 provider：在订阅建立后调用，返回 {seq, doc}；出错同步抛。 */
+      /** sync snapshot provider: in subscribe establish after invoke, return {seq, doc}; fails sync throw. */
       snapshot: () => SessionDocSnapshot
       target: { pluginId: string; name: string; conversationId: number }
     },
   ): Response {
-    /** 快照冲刷完成前的未决帧（此后改用流内字节背压）。 */
+    /** snapshot conflict refresh complete before not decide frame (this after change use stream inside byte back press). */
     let pending: SessionDocQueuedFrame[] = []
     let streaming = false
     let closed = false
@@ -695,7 +695,7 @@ export class SessionDocEventHub {
     const write = (chunk: Uint8Array): boolean =>
       byteBoundedWrite(controllerRef, closed, chunk, this.maxPendingBytes)
 
-    /** shutdown 注册句柄；provider 阶段（尚未登记）为 undefined，删除幂等。 */
+    /** shutdown register handle;provider phase (not yet register) is undefined, delete idempotent. */
     let streamEntry: SessionDocStreamEntry | undefined
     const shutdown = (): void => {
       if (closed) return
@@ -709,7 +709,7 @@ export class SessionDocEventHub {
       closeControllerQuietly(controller)
     }
 
-    // 先订阅缓冲（与快照读取同一同步窗口，不丢帧；缓冲帧保留 seq 供冲刷筛选）。
+    // first subscribe buffer (and snapshot read the same sync window, do not lose frame; buffer frame keep seq supply conflict refresh filter choose).
     unsubscribe = this.subscribe(options.target, (frame) => {
       if (closed) return
       const chunk = encodeSseChunk('plugin.session_doc.updated', frame)
@@ -718,17 +718,17 @@ export class SessionDocEventHub {
         return
       }
       if (pending.length >= this.maxPending) {
-        // 快照尚未冲刷完就积压超限（provider 同步重入发布才会触发）：明确关流。
+        // snapshot not yet conflict refresh completely then accumulate press over limit (provider sync heavy publish only then will trigger): explicit closure stream.
         shutdown()
         return
       }
       pending.push({ seq: frame.seq, chunk })
     })
 
-    // 再同步取快照（provider 失败/已 abort：同步退订，不建流、不伪造快照）。
+    // again sync take snapshot (provider failed/already abort: sync unsubscribe, do not create stream, do not fabricate snapshot).
     let snap: SessionDocSnapshot
     try {
-      if (request.signal.aborted) throw new HelmError('aborted', '订阅建立前请求已中断', 499)
+      if (request.signal.aborted) throw new HelmError('aborted', 'subscribe establish before request interrupted', 499)
       snap = options.snapshot()
     } catch (error) {
       shutdown()
@@ -740,7 +740,7 @@ export class SessionDocEventHub {
 
     return sseResponse({
       start: (controller) => {
-        // 无 byte 策略时运行时必为默认控制器（原内联构造同一事实）。
+        // without byte policy when runtime must is by default control (original inline construct the same fact).
         controllerRef = controller as ReadableStreamDefaultController<Uint8Array>
         if (closed) {
           closeControllerQuietly(controllerRef)
@@ -751,8 +751,8 @@ export class SessionDocEventHub {
           return
         }
         request.signal.addEventListener('abort', shutdown)
-        // 订阅缓冲已建立且快照已取定：先发首帧 snapshot，再冲刷 seq 更新的
-        // 缓冲帧（seq <= snapshot.seq 的已体现在快照里，重发即重复）。
+        // subscribe buffer already establish and snapshot already take set: first first frame snapshot, again conflict refresh seq update
+        // buffer frame (seq <= snapshot.seq already body now snapshot in, heavy i.e. duplicate).
         if (!write(snapshotChunk)) {
           shutdown()
           return

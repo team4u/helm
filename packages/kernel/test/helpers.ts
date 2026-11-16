@@ -1,6 +1,6 @@
 /**
- * helm 内核服务测试基座：委托 `@helm/test-kit` 提供目录、等待、DTO 与内存存储夹具。
- * 保持纯内存模块（无 `node:fs` / `node:child_process` 直接导入），确保纯测试可分片运行。
+ * helm kernel service test base seat: delegate `@helm/test-kit` provide directory, wait for,DTO and memory store fixture.
+ * keep in-memory module (without `node:fs` / `node:child_process` directly import), ensure pure test can shard run.
  */
 import assert from 'node:assert/strict'
 import { createModels } from '@earendil-works/pi-ai/models'
@@ -24,12 +24,12 @@ import {
 } from '@helm/test-kit/node'
 import type { PluginConfigStore, PluginDocStore } from '../src/plugins/index.js'
 
-/** 每个测试组独立的临时数据目录（真实文件行为）。 */
+/** each test group independent temporary data directory (real file behavior). */
 export async function makeTempDir(prefix = 'helm-services-test-'): Promise<string> {
   return kitMakeTempDir(prefix)
 }
 
-/** 轮询等待条件成立（支持位置参数 `(predicate, timeoutMs, intervalMs)` 与选项对象）。 */
+/** polling wait for condition into establish (support location parameter `(predicate, timeoutMs, intervalMs)` and option object). */
 export async function waitFor(
   predicate: () => boolean | Promise<boolean>,
   timeoutOrOptions: number | WaitForOptions = {},
@@ -42,7 +42,7 @@ export async function waitFor(
   return kitWaitFor(predicate, options)
 }
 
-/** 内存插件全局文档存储实现，供插件/宿主测试共享。 */
+/** memory plugin global document store implement, supply plugin/host test sharing. */
 export class MemoryDocStore implements PluginDocStore {
   readonly store = new Map<string, unknown>()
 
@@ -64,7 +64,7 @@ export class MemoryDocStore implements PluginDocStore {
   async flush(): Promise<void> {}
 }
 
-/** 内存插件配置存储实现，供插件/宿主测试共享。 */
+/** memory plugin config store implement, supply plugin/host test sharing. */
 export class MemoryConfigStore implements PluginConfigStore {
   readonly store = new Map<string, Record<string, unknown>>()
 
@@ -77,7 +77,7 @@ export class MemoryConfigStore implements PluginConfigStore {
   }
 }
 
-/** 构造已挂载 fauxProvider 的 Models 实例及其控制句柄。 */
+/** construct already mount fauxProvider  Models instance and its control handle. */
 export function makeFauxModels(options?: Parameters<typeof fauxProvider>[0]): {
   models: ReturnType<typeof createModels>
   faux: ReturnType<typeof fauxProvider>

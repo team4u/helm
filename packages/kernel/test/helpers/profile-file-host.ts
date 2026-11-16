@@ -17,16 +17,16 @@ function validateId(id: string): void {
   }
 }
 
-/** skill id 边界归一（镜像 kernel skillDirectory：非法 id -> HelmError 400）。 */
+/** skill id boundary archive one (mirror kernel skillDirectory: illegal id -> HelmError 400). */
 function validateSkillId(id: string): void {
   try {
     assertSkillId(id)
   } catch (error) {
-    throw new HelmError('validation_error', `Skill id 非法：${error instanceof Error ? error.message : String(error)}`, 400, { skillId: id })
+    throw new HelmError('validation_error', `Skill id illegal:${error instanceof Error ? error.message : String(error)}`, 400, { skillId: id })
   }
 }
 
-/** 真文件服务适配公共插件端口；测试不向插件工厂注入内核私有对象。 */
+/** true file service adapt public plugin port; test do not to plugin work vendor inject kernel private object. */
 export function createProfileFileHost(
   dataDir: string,
   profiles = new ProfileService(dataDir),

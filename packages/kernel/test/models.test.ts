@@ -1,14 +1,14 @@
 /**
- * 模型接入测试：本地 HTTP fake OpenAI/Anthropic 兼容服务捕获真实 pi-ai SDK
- * 发出的请求（明确不是外网模型），验证：
- * - baseURL / path / bearer / x-api-key / model id 组装正确；
- * - credential 注入 key 优先于环境变量，环境变量是合法回退；
- * - 缺 key 显式不可用（checkAuth undefined / 流式错误），无 fallback 假回答；
- * - checkAuth 是 SDK 真实语义（AuthCheck | undefined），不做 Boolean(source) 臆测；
- * - listModelCatalog 不吞读取/协议错误（无凭据的不可用是合法状态，错误必须抛出）。
+ * model access test: local HTTP fake OpenAI/Anthropic compatibility service catch real pi-ai SDK
+ * out request (explicit is not outside network model), verify:
+ * - baseURL / path / bearer / x-api-key / model id group install correct;
+ * - credential inject key takes precedence at environment variable, environment variable is legal fall back;
+ * - missing key explicit unavailable (checkAuth undefined / streaming error), without fallback false answer;
+ * - checkAuth is SDK real semantics (AuthCheck | undefined), does not Boolean(source) conjecture;
+ * - listModelCatalog do not swallow read/protocol error (without credentials unavailable is legal state, error must throw).
  *
- * 凭据全部使用显式 fixture，不读取真实环境变量；相关 env 在 beforeEach 设置、
- * afterEach 恢复删除。
+ * credentials all use explicit fixture, do not read real environment variable; related env in beforeEach settings,
+ * afterEach restore delete.
  */
 
 import assert from 'node:assert/strict'
@@ -38,10 +38,10 @@ import { createFileModelsStore } from '../src/runtime/models-store.js'
 import { HelmError } from '@helm/protocol'
 import { useTempDir } from './helpers.js'
 
-/** 单个捕获到的请求。 */
+/** single catch to request. */
 interface CapturedRequest {
   method: string
-  /** 完整路径（含 query）。 */
+  /** complete path (contains query). */
   path: string
   headers: Record<string, string | string[] | undefined>
   body: unknown
@@ -50,7 +50,7 @@ interface CapturedRequest {
 const OPENAI_FIXTURE_KEY = 'fixture-openai-key-000'
 const ANTHROPIC_FIXTURE_KEY = 'fixture-anthropic-key-000'
 
-/** 通用 SSE / JSON fake 服务：记录请求，按 protocol 回放合法响应。 */
+/** through use SSE / JSON fake service: record request, by protocol back put legal response. */
 class FakeGateway {
   readonly requests: CapturedRequest[] = []
   private readonly server: Server
@@ -74,7 +74,7 @@ class FakeGateway {
     else this.replyAnthropic(res)
   }
 
-  /** OpenAI chat.completions 流式响应：两个 content 增量 + finish + usage。 */
+  /** OpenAI chat.completions streaming response: two content incremental + finish + usage. */
   private replyOpenAi(res: ServerResponse): void {
     res.writeHead(200, { 'content-type': 'text/event-stream' })
     const chunks = [
@@ -88,7 +88,7 @@ class FakeGateway {
     res.end()
   }
 
-  /** Anthropic messages SSE：message_start → content_block_start → delta → stop → message_delta/stop。 */
+  /** Anthropic messages SSE:message_start → content_block_start → delta → stop → message_delta/stop. */
   private replyAnthropic(res: ServerResponse): void {
     res.writeHead(200, { 'content-type': 'text/event-stream' })
     const events = [
@@ -106,7 +106,7 @@ class FakeGateway {
   }
 
   get url(): string {
-    assert.ok(this.baseUrl !== '', 'fake gateway 未启动')
+    assert.ok(this.baseUrl !== '', 'fake gateway not start')
     return this.baseUrl
   }
 
@@ -124,7 +124,7 @@ class FakeGateway {
 
   last(): CapturedRequest {
     const req = this.requests[this.requests.length - 1]
-    assert.ok(req, 'fake gateway 未收到请求')
+    assert.ok(req, 'fake gateway not received request')
     return req
   }
 
@@ -173,7 +173,7 @@ function openaiCompatConfig(baseUrl: string): ProviderConfig {
     protocol: 'openai',
     baseUrl,
     models: ['gw-openai-model'],
-    label: 'OpenAI 兼容网关',
+    label: 'OpenAI compatibility gateway',
     enabled: true,
   }
 }
@@ -188,7 +188,7 @@ function anthropicCompatConfig(baseUrl: string): ProviderConfig {
   }
 }
 
-/** 收集流式事件到 done/error。 */
+/** collect streaming event to done/error. */
 async function drainStream(stream: AsyncIterable<unknown>): Promise<{ done: boolean; error: boolean; events: unknown[] }> {
   const events: unknown[] = []
   let done = false
@@ -203,29 +203,29 @@ async function drainStream(stream: AsyncIterable<unknown>): Promise<{ done: bool
 }
 
 // ---------------------------------------------------------------------------
-// 兼容网关：真实 SDK 请求组装（本地 fake HTTP，明确不是外网模型）
+// compatibility gateway: real SDK request group install (local fake HTTP, explicit is not outside network model)
 // ---------------------------------------------------------------------------
 
-describe('兼容网关（openai 协议）', { timeout: 60_000 }, () => {
-  test('静态模型窗口显式标记未知（helmContextWindowKnown 经 setProvider/getModel 保留）', { timeout: 60_000 }, () => {
+describe('compatibility gateway (openai protocol)', { timeout: 60_000 }, () => {
+  test('static model window explicit mark record unknown (helmContextWindowKnown via setProvider/getModel keep)', { timeout: 60_000 }, () => {
     const models = buildModels({
       providers: [openaiCompatConfig('http://127.0.0.1:9/v1')],
       apiKeys: () => ({}),
     })
     const model = models.getModel('gw-openai', 'gw-openai-model')
-    assert.ok(model, 'compat 模型应注册到目录')
-    // 请求契约缺省仍在（发送请求需要），但不得当作真实已知窗口。
+    assert.ok(model, 'compat model should register to directory')
+    // request contract default still in (send request need to), but must not when act real known window.
     assert.equal(model.contextWindow, 128_000)
-    assert.equal((model as typeof model & HelmModelSourceMeta).helmContextWindowKnown, false, 'compat 静态模型必须携带未知标记')
-    assert.equal(knownContextWindowOf(model), undefined, '已知窗口解析必须省略静态缺省')
-    // 内置 provider 模型缺省视为已知：窗口是策展数据。
+    assert.equal((model as typeof model & HelmModelSourceMeta).helmContextWindowKnown, false, 'compat static model must carry unknown mark record')
+    assert.equal(knownContextWindowOf(model), undefined, 'known window parse must omit static default')
+    // inside placement provider model default treated as known: window is policy expand data.
     const builtin = models.getModels().find((entry) => entry.contextWindow > 0)
-    assert.ok(builtin, '内置 provider 目录应存在带窗口模型')
-    assert.equal(knownContextWindowOf(builtin), builtin.contextWindow, '内置模型窗口如实已知')
+    assert.ok(builtin, 'inside placement provider directory should store in carries window model')
+    assert.equal(knownContextWindowOf(builtin), builtin.contextWindow, 'inside placement model window such as known')
     assert.equal(knownContextWindowOf(undefined), undefined)
   })
 
-  test('listModelCatalog 只投影真实已知窗口：静态缺省/非正/非有限一律省略', { timeout: 60_000 }, async () => {
+  test('listModelCatalog only throw shadow real known window: static default/non- correct/non- finite one rule omit', { timeout: 60_000 }, async () => {
     const models = createModels()
     const base = {
       name: 'w',
@@ -237,8 +237,8 @@ describe('兼容网关（openai 协议）', { timeout: 60_000 }, () => {
       reasoning: false,
       maxTokens: 4_096,
     }
-    // 形态对齐 Magpie 目录产物（toPiModel）：已知窗口无标记，未知携带
-    // helmContextWindowKnown:false + 保守缺省 128k。
+    // form align Magpie directory artifact (toPiModel): known window without mark record, unknown carry
+    // helmContextWindowKnown:false + keep guard default 128k.
     const list = [
       { ...base, id: 'known', contextWindow: 400_000 },
       { ...base, id: 'static-default', contextWindow: 128_000, helmContextWindowKnown: false },
@@ -257,27 +257,27 @@ describe('兼容网关（openai 协议）', { timeout: 60_000 }, () => {
 
     const catalog = await listModelCatalog(models)
     const byId = new Map(catalog.models.map((entry) => [entry.modelId, entry]))
-    assert.equal(byId.get('known')!.contextWindow, 400_000, '真实已知窗口如实投影')
-    assert.equal('contextWindow' in (byId.get('static-default') ?? {}), false, '静态缺省窗口必须省略')
-    assert.equal('contextWindow' in (byId.get('infinite') ?? {}), false, '非有限窗口必须省略')
-    assert.equal('contextWindow' in (byId.get('zero') ?? {}), false, '非正窗口必须省略')
-    assert.equal(knownContextWindowOf(list[2] as never), undefined, 'Infinity 不得透传')
+    assert.equal(byId.get('known')!.contextWindow, 400_000, 'real known window such as throw shadow')
+    assert.equal('contextWindow' in (byId.get('static-default') ?? {}), false, 'static default window must omit')
+    assert.equal('contextWindow' in (byId.get('infinite') ?? {}), false, 'non- finite window must omit')
+    assert.equal('contextWindow' in (byId.get('zero') ?? {}), false, 'non- correct window must omit')
+    assert.equal(knownContextWindowOf(list[2] as never), undefined, 'Infinity must not pass-through')
   })
 
-  test('streamSimple 组装 baseURL/path/bearer/model id 并收到真实流式回答', { timeout: 60_000 }, async () => {
+  test('streamSimple group install baseURL/path/bearer/model id and receives real streaming answer', { timeout: 60_000 }, async () => {
     const models = buildModels({
       providers: [openaiCompatConfig(`${openaiGateway.url}/v1`)],
       apiKeys: () => ({ 'gw-openai': 'fixture-gw-key-111' }),
     })
     const model = models.getModel('gw-openai', 'gw-openai-model')
-    assert.ok(model, 'compat 模型应注册到目录')
+    assert.ok(model, 'compat model should register to directory')
     assert.equal(model.provider, 'gw-openai')
     assert.equal(model.baseUrl, `${openaiGateway.url}/v1`)
 
     const result = await drainStream(
       models.streamSimple(model, { messages: [{ role: 'user', content: 'hi', timestamp: Date.now() }] }),
     )
-    assert.equal(result.error, false, 'fake 网关回放合法流，不应出错')
+    assert.equal(result.error, false, 'fake gateway back put legal stream, must not fails')
     assert.equal(result.done, true)
 
     const req = openaiGateway.last()
@@ -287,7 +287,7 @@ describe('兼容网关（openai 协议）', { timeout: 60_000 }, () => {
     assert.equal((req.body as { model?: string }).model, 'gw-openai-model')
   })
 
-  test('checkAuth 与 getAuth 反映注入凭据（SDK 真实语义）', { timeout: 60_000 }, async () => {
+  test('checkAuth and getAuth reverse reflect inject credentials (SDK real semantics)', { timeout: 60_000 }, async () => {
     const models = buildModels({
       providers: [openaiCompatConfig(`${openaiGateway.url}/v1`)],
       apiKeys: () => ({ 'gw-openai': 'fixture-gw-key-111' }),
@@ -296,7 +296,7 @@ describe('兼容网关（openai 协议）', { timeout: 60_000 }, () => {
     assert.ok(auth)
     assert.equal(auth.auth.apiKey, 'fixture-gw-key-111')
     const check = await models.checkAuth('gw-openai')
-    assert.ok(check, '已注入 key 的网关 checkAuth 应有 AuthCheck')
+    assert.ok(check, 'already inject key gateway checkAuth should has AuthCheck')
     assert.equal(check.type, 'api_key')
 
     const bare = buildModels({
@@ -304,13 +304,13 @@ describe('兼容网关（openai 协议）', { timeout: 60_000 }, () => {
       apiKeys: () => ({}),
     })
     const bareAuth = await bare.getAuth('gw-openai')
-    assert.equal(bareAuth, undefined, '无凭据是合法的未配置状态（undefined）')
+    assert.equal(bareAuth, undefined, 'without credentials is legal not config state (undefined)')
     assert.equal(await bare.checkAuth('gw-openai'), undefined)
   })
 })
 
-describe('兼容网关（anthropic 协议）', { timeout: 60_000 }, () => {
-  test('streamSimple 组装 /v1/messages 路径与 x-api-key 头', { timeout: 60_000 }, async () => {
+describe('compatibility gateway (anthropic protocol)', { timeout: 60_000 }, () => {
+  test('streamSimple group install /v1/messages path and x-api-key head', { timeout: 60_000 }, async () => {
     const models = buildModels({
       providers: [anthropicCompatConfig(anthropicGateway.url)],
       apiKeys: () => ({ 'gw-anthropic': 'fixture-gw-key-222' }),
@@ -329,17 +329,17 @@ describe('兼容网关（anthropic 协议）', { timeout: 60_000 }, () => {
     assert.equal(req.path.split('?')[0], '/v1/messages')
     assert.equal(anthropicGateway.header(req, 'x-api-key'), 'fixture-gw-key-222')
     assert.equal((req.body as { model?: string }).model, 'gw-anthropic-model')
-    // max_tokens 来自 compat 缺省（显式标记的保守配置，非探测值）
+    // max_tokens from compat default (explicit mark record keep guard config, non- probe value)
     assert.equal(typeof (req.body as { max_tokens?: number }).max_tokens, 'number')
   })
 })
 
 // ---------------------------------------------------------------------------
-// 官方 provider：SDK checkAuth 语义 + credential 优先于 env
+// official provider:SDK checkAuth semantics + credential takes precedence at env
 // ---------------------------------------------------------------------------
 
-describe('PI 全量供应商', { timeout: 60_000 }, () => {
-  test('直接注册全部内置供应商，保留原生模型元数据与零模型供应商', { timeout: 60_000 }, () => {
+describe('PI all amount provider', { timeout: 60_000 }, () => {
+  test('directly register all inside placement provider, keep original generate model metadata and zero model provider', { timeout: 60_000 }, () => {
     const models = buildModels({ providers: [], apiKeys: () => ({}) })
     const native = builtinProviders()
     assert.deepEqual(models.getProviders().map((provider) => provider.id), native.map((provider) => provider.id))
@@ -350,12 +350,12 @@ describe('PI 全量供应商', { timeout: 60_000 }, () => {
     assert.equal(summaries.length, native.length)
     assert.ok(summaries.some((provider) => provider.id === 'typesafe' && provider.modelCount === 0))
     assert.deepEqual(summaries.find((provider) => provider.id === 'openai-codex')?.authMethods.map((method) => method.type), ['oauth'])
-    // 内置摘要基础四种固定键；baseUrl 是合法公开字段（deepseek 等多数网关均有）；
-    // dynamic 仅真正实现 refreshModels 的供应商（radius）携带。
+    // inside placement summary basis four fixed key;baseUrl is legal public field (deepseek etc. many count gateway all has);
+    // dynamic only truly implement refreshModels provider (radius) carry.
     const radius = summaries.find((provider) => provider.id === 'radius')
     assert.ok(radius)
     assert.equal(radius.dynamic, true)
-    assert.equal(radius.baseUrl, undefined, 'radius 无固定网关 baseUrl，不得伪造')
+    assert.equal(radius.baseUrl, undefined, 'radius without fixed gateway baseUrl, must not fabricate')
     assert.ok(
       summaries
         .filter((provider) => provider.id !== 'radius')
@@ -366,14 +366,14 @@ describe('PI 全量供应商', { timeout: 60_000 }, () => {
     assert.equal('dynamic' in deepseek, false)
   })
 
-  test('非 OpenAI/Anthropic 供应商原生 key 注入且不伪造 OAuth-only 的 API Key', { timeout: 60_000 }, async () => {
+  test('non- OpenAI/Anthropic provider original generate key inject and do not fabricate OAuth-only  API Key', { timeout: 60_000 }, async () => {
     const models = buildModels({ providers: [], apiKeys: () => ({ deepseek: 'fixture-deepseek', 'openai-codex': 'fixture-not-oauth' }) })
     assert.equal((await models.getAuth('deepseek'))?.auth.apiKey, 'fixture-deepseek')
     assert.equal(models.getProvider('openai-codex')?.auth.apiKey, undefined)
     assert.ok(models.getProvider('openai-codex')?.auth.oauth)
   })
 
-  test('Cloudflare 原生配置校验与认证头转换不可被通用 Bearer 覆盖', { timeout: 60_000 }, async () => {
+  test('Cloudflare original generate config validate and recognize verify head convert cannot by through use Bearer override', { timeout: 60_000 }, async () => {
     const models = buildModels({ providers: [], apiKeys: () => ({ 'cloudflare-ai-gateway': 'fixture-cloudflare' }) })
     const apiKey = models.getProvider('cloudflare-ai-gateway')?.auth.apiKey
     assert.ok(apiKey)
@@ -387,7 +387,7 @@ describe('PI 全量供应商', { timeout: 60_000 }, () => {
     assert.equal(auth?.env?.['CLOUDFLARE_ACCOUNT_ID'], 'fixture-account')
   })
 
-  test('自定义网关保持显式覆盖与停用语义', { timeout: 60_000 }, () => {
+  test('self define gateway keep explicit override and deactivate semantics', { timeout: 60_000 }, () => {
     const override = { ...openaiCompatConfig('http://127.0.0.1/v1'), id: 'deepseek' }
     const enabled = buildModels({ providers: [override], apiKeys: () => ({}) })
     assert.deepEqual(enabled.getModels('deepseek').map((model) => model.id), ['gw-openai-model'])
@@ -395,7 +395,7 @@ describe('PI 全量供应商', { timeout: 60_000 }, () => {
     assert.deepEqual(disabled.getModels('deepseek'), builtinProviders().find((provider) => provider.id === 'deepseek')!.getModels())
   })
 
-  test('extraProviders 注册运行时供应商且不丢失目录摘要字段', { timeout: 60_000 }, () => {
+  test('extraProviders register runtime provider and without losing directory summary field', { timeout: 60_000 }, () => {
     const faux = fauxProvider({ provider: 'plugin-fx', models: [{ id: 'fx-model' }] })
     const models = buildModels({ providers: [], apiKeys: () => ({}), extraProviders: [faux.provider] })
     assert.ok(models.getProvider('plugin-fx'))
@@ -404,30 +404,30 @@ describe('PI 全量供应商', { timeout: 60_000 }, () => {
     const fx = summaries.find((summary) => summary.id === 'plugin-fx')
     assert.ok(fx)
     assert.equal(fx.modelCount, 1)
-    // faux 无 refreshModels：不得伪造 dynamic 标记。
+    // faux without refreshModels: must not fabricate dynamic mark record.
     assert.equal(fx.dynamic, undefined)
   })
 
-  test('listModelProviders 附带 dynamic/baseUrl/pluginId（按 providerOwners）', { timeout: 60_000 }, () => {
+  test('listModelProviders attach carries dynamic/baseUrl/pluginId(by providerOwners)', { timeout: 60_000 }, () => {
     const faux = fauxProvider({ provider: 'plugin-owned', models: [{ id: 'owned-model' }] })
     const models = buildModels({ providers: [], apiKeys: () => ({}), extraProviders: [faux.provider] })
     const owners = new Map([['plugin-owned', 'builtin:demo']])
     const owned = listModelProviders(models, owners).find((summary) => summary.id === 'plugin-owned')
     assert.equal(owned?.pluginId, 'builtin:demo')
-    // 同一集合不传 owners：无 pluginId 字段（不伪造归属）。
+    // the same set do not pass owners: without pluginId field (do not fabricate ownership).
     const anon = listModelProviders(models).find((summary) => summary.id === 'plugin-owned')
     assert.equal(anon?.pluginId, undefined)
-    // 内置动态供应商（radius）标记 dynamic；无 owners 时不带 pluginId、不伪造 baseUrl。
+    // inside placement motion state provider (radius) mark record dynamic; without owners when do not carries pluginId, do not fabricate baseUrl.
     const radius = listModelProviders(models).find((summary) => summary.id === 'radius')
-    assert.ok(radius, '内置 radius 供应商应在目录中')
+    assert.ok(radius, 'inside placement radius provider should in directory in')
     assert.equal(radius.dynamic, true)
     assert.equal(radius.baseUrl, undefined)
     assert.equal(radius.pluginId, undefined)
   })
 })
 
-describe('文件版动态目录缓存（models-store.json）', { timeout: 60_000 }, () => {
-  test('ENOENT 返回空；write/update/delete 持久化且并发 update 不丢写', { timeout: 60_000 }, async (t) => {
+describe('file edition motion state directory cache (models-store.json)', { timeout: 60_000 }, () => {
+  test('ENOENT return empty;write/update/delete persist and concurrency update do not lose write', { timeout: 60_000 }, async (t) => {
     const dataDir = useTempDir(t, 'helm-models-store-')
     const store = createFileModelsStore(dataDir)
     assert.equal(await store.read('p1'), undefined)
@@ -437,7 +437,7 @@ describe('文件版动态目录缓存（models-store.json）', { timeout: 60_000
     assert.deepEqual(await store.read('p1'), { models: [], checkedAt: 111 })
     assert.deepEqual(await store.read('p2'), { models: [], checkedAt: 222, etag: '"v1"' })
 
-    // update：undefined 不改写；对象写入。
+    // update:undefined do not change write; object write.
     await store.update('p1', async () => undefined)
     assert.deepEqual(await store.read('p1'), { models: [], checkedAt: 111 })
     await store.update('p1', async (current) => ({ ...current!, checkedAt: 333 }))
@@ -445,7 +445,7 @@ describe('文件版动态目录缓存（models-store.json）', { timeout: 60_000
     await store.delete('p2')
     assert.equal(await store.read('p2'), undefined)
 
-    // 并发 update：两个不同 provider 同时读改写，锁内串行不丢彼此写入。
+    // concurrency update: two different provider also read change write, lock inside serial do not lose each other write.
     await Promise.all([
       store.update('a', async () => ({ models: [], checkedAt: 1 })),
       store.update('b', async () => ({ models: [], checkedAt: 2 })),
@@ -453,7 +453,7 @@ describe('文件版动态目录缓存（models-store.json）', { timeout: 60_000
     assert.equal((await store.read('a'))?.checkedAt, 1)
     assert.equal((await store.read('b'))?.checkedAt, 2)
 
-    // 落盘为 0600 且顶层为对象（Windows 无 POSIX mode，跳过模式位校验）。
+    // is 0600 and top-level is object (Windows without POSIX mode, skip pattern validate).
     const raw = JSON.parse(await readFile(join(dataDir, 'models-store.json'), 'utf8')) as Record<string, unknown>
     assert.ok(typeof raw['p1'] === 'object')
     if (process.platform !== 'win32') {
@@ -463,7 +463,7 @@ describe('文件版动态目录缓存（models-store.json）', { timeout: 60_000
     }
   })
 
-  test('损坏文件显式抛 models_store_corrupted，绝不静默当空目录', { timeout: 60_000 }, async (t) => {
+  test('corrupt file explicit throw models_store_corrupted, never static default when empty directory', { timeout: 60_000 }, async (t) => {
     const dataDir = useTempDir(t, 'helm-models-store-corrupt-')
     const path = join(dataDir, 'models-store.json')
     await writeFile(path, '{invalid-json')
@@ -487,18 +487,18 @@ describe('文件版动态目录缓存（models-store.json）', { timeout: 60_000
   })
 })
 
-describe('官方 provider auth', { timeout: 60_000 }, () => {
-  test('无凭据无环境变量：checkAuth undefined（合法不可用，无 fallback）', { timeout: 60_000 }, async () => {
+describe('official provider auth', { timeout: 60_000 }, () => {
+  test('without credentials without environment variable:checkAuth undefined(legal unavailable, without fallback)', { timeout: 60_000 }, async () => {
     const models = buildModels({ providers: [], apiKeys: () => ({}) })
     assert.equal(await models.checkAuth('openai'), undefined)
     assert.equal(await models.checkAuth('anthropic'), undefined)
     const catalog = await listModelCatalog(models)
     const official = catalog.models.filter((e: ModelCatalogEntry) => e.provider === 'openai' || e.provider === 'anthropic')
-    assert.ok(official.length > 0, '官方目录模型仍列出（含不可用项）')
+    assert.ok(official.length > 0, 'official directory model still column out (contains unavailable items)')
     assert.ok(official.every((e: ModelCatalogEntry) => !e.available))
   })
 
-  test('环境变量回退：官方 provider 原生语义', { timeout: 60_000 }, async () => {
+  test('environment variable fall back: official provider original generate semantics', { timeout: 60_000 }, async () => {
     process.env['OPENAI_API_KEY'] = OPENAI_FIXTURE_KEY
     const models = buildModels({ providers: [], apiKeys: () => ({}) })
     const auth = await models.getAuth('openai')
@@ -507,7 +507,7 @@ describe('官方 provider auth', { timeout: 60_000 }, () => {
     assert.equal(auth.source, 'OPENAI_API_KEY')
   })
 
-  test('credential 注入 key 优先于环境变量', { timeout: 60_000 }, async () => {
+  test('credential inject key takes precedence at environment variable', { timeout: 60_000 }, async () => {
     process.env['OPENAI_API_KEY'] = 'env-should-lose'
     const models = buildModels({ providers: [], apiKeys: () => ({ openai: OPENAI_FIXTURE_KEY }) })
     const auth = await models.getAuth('openai')
@@ -516,38 +516,38 @@ describe('官方 provider auth', { timeout: 60_000 }, () => {
     assert.notEqual(auth.auth.apiKey, 'env-should-lose')
   })
 
-  test('注入 key 后 oauth 等其它 auth 策略保留', { timeout: 60_000 }, async () => {
+  test('inject key after oauth etc. other auth policy keep', { timeout: 60_000 }, async () => {
     const models = buildModels({ providers: [], apiKeys: () => ({ anthropic: ANTHROPIC_FIXTURE_KEY }) })
     const provider = models.getProvider('anthropic')
-    assert.ok(provider, 'anthropic provider 应注册')
-    assert.ok(provider.auth.oauth, '官方 oauth 策略必须保留（不因注入 apiKey 而丢失）')
+    assert.ok(provider, 'anthropic provider should register')
+    assert.ok(provider.auth.oauth, 'official oauth policy must keep (do not because inject apiKey while lose)')
     const auth = await models.getAuth('anthropic')
     assert.ok(auth)
     assert.equal(auth.auth.apiKey, ANTHROPIC_FIXTURE_KEY)
   })
 
-  test('无凭据请求模型：流以显式错误结束，无 fallback 假回答', { timeout: 60_000 }, async () => {
+  test('without credentials request model: stream with explicit error end, without fallback false answer', { timeout: 60_000 }, async () => {
     const models = buildModels({ providers: [], apiKeys: () => ({}) })
     const model = models.getModel('openai', 'gpt-5.2')
-    assert.ok(model, '官方目录中的模型应可解析')
+    assert.ok(model, 'official directory in model should can parse')
     const result = await drainStream(
       models.streamSimple(model, { messages: [{ role: 'user', content: 'hi', timestamp: Date.now() }] }),
     )
-    assert.equal(result.done, false, '无凭据绝不能成功回答')
-    assert.equal(result.error, true, '必须以显式流式错误结束')
+    assert.equal(result.done, false, 'without credentials never can succeeded answer')
+    assert.equal(result.error, true, 'must with explicit streaming error end')
     const errorEvent = result.events.find((e) => (e as { type?: string }).type === 'error') as
       | { error?: { errorMessage?: string } }
       | undefined
-    assert.ok(errorEvent?.error?.errorMessage, '错误事件应带诊断信息')
+    assert.ok(errorEvent?.error?.errorMessage, 'error event should carries diagnose information')
   })
 })
 
 // ---------------------------------------------------------------------------
-// 模型目录与错误语义
+// model directory and error semantics
 // ---------------------------------------------------------------------------
 
-describe('listModelCatalog 错误语义', { timeout: 60_000 }, () => {
-  test('未配置凭据的网关模型 available=false（合法状态，不抛错）', { timeout: 60_000 }, async () => {
+describe('listModelCatalog error semantics', { timeout: 60_000 }, () => {
+  test('not config credentials gateway model available=false(legal state, do not throws)', { timeout: 60_000 }, async () => {
     const models = buildModels({
       providers: [openaiCompatConfig(`${openaiGateway.url}/v1`)],
       apiKeys: () => ({}),
@@ -559,15 +559,15 @@ describe('listModelCatalog 错误语义', { timeout: 60_000 }, () => {
     assert.equal(entry.available, false)
   })
 
-  test('checkAuth 抛出的读取/协议错误必须向上传播，不静默 available=false', { timeout: 60_000 }, async () => {
+  test('checkAuth throw read/protocol error must to upload broadcast, not silently available=false', { timeout: 60_000 }, async () => {
     const models = buildModels({
       providers: [openaiCompatConfig(`${openaiGateway.url}/v1`)],
       apiKeys: () => ({}),
     })
-    // 直接注入一个 checkAuth 抛错的 provider 验证传播语义（协议层契约）。
+    // directly inject a checkAuth throws provider verify pass broadcast semantics (protocol layer contract).
     const provider = models.getProvider('gw-openai')
     assert.ok(provider)
-    assert.ok(provider.auth.apiKey, 'compat provider 必有 apiKey auth')
+    assert.ok(provider.auth.apiKey, 'compat provider must has apiKey auth')
     const brokenApiKey: ApiKeyAuth = {
       ...provider.auth.apiKey,
       name: 'broken',
@@ -588,16 +588,16 @@ describe('listModelCatalog 错误语义', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// 模型引用解析
+// model reference parse
 // ---------------------------------------------------------------------------
 
-describe('模型引用', { timeout: 60_000 }, () => {
-  test('parseModelRef 拆 provider/model', { timeout: 60_000 }, () => {
+describe('model reference', { timeout: 60_000 }, () => {
+  test('parseModelRef split provider/model', { timeout: 60_000 }, () => {
     assert.deepEqual(parseModelRef('openai/gpt-5.2'), { provider: 'openai', modelId: 'gpt-5.2' })
     assert.deepEqual(parseModelRef('gw-x/model-with/slash'), { provider: 'gw-x', modelId: 'model-with/slash' })
   })
 
-  test('非法引用与缺失配置显式报错', { timeout: 60_000 }, () => {
+  test('illegal reference and missing config explicit errors', { timeout: 60_000 }, () => {
     assert.throws(() => parseModelRef('noslash'), HelmError)
     assert.throws(() => parseModelRef('/leading'), HelmError)
     assert.throws(() => parseModelRef('trailing/'), HelmError)

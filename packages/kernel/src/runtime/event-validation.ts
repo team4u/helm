@@ -1,14 +1,14 @@
 /**
- * 事件载荷边界校验（纯函数；自 events.ts 拆出，可独立单测）。
+ * event payload boundary validate (pure function; self events.ts split out, can independent single test).
  *
- * 纪律（迁移前语义原样保持）：
- * - publish 侧统一 JSON 校验 + 脱敏（字符串与字段名都过 redact），payload 非法
- *   直接抛 HelmError，绝不静默降级；core 类型入参同时接受调用方直接 payload 与
- *   完整事件信封（如 PluginHost emitEvent('plugin.changed', {type, plugin})），
- *   信封只拆包不二次嵌套；未知 type 走 CustomHelmEvent {type, payload} 原样
- *   透传，不伪装成 notification；
- * - 「可缺不可错」：可选字段存在即校验，类型不符同样抛错，不静默修正
- *   （如 notification 的非法 level 不折回 'info'）。
+ * discipline (migration before semantics original keep):
+ * - publish side unify JSON validate + redaction (string and field name all redact),payload illegal
+ *   directly throw HelmError, never static default fall back;core type reference also accept caller directly payload and
+ *   complete event message seal (such as PluginHost emitEvent('plugin.changed', {type, plugin})),
+ *   message seal only split package do not second embed set; unknown type away CustomHelmEvent {type, payload} original
+ *   pass-through, does not pretend to be into notification;
+ * - can missing cannot wrong: optional field store in i.e. validate, type do not symbol same throws, not silently fix correct
+ *   (such as notification illegal level do not fold back 'info').
  */
 
 import { HelmError } from '@helm/protocol'
@@ -33,10 +33,10 @@ const ASK_STATUSES = new Set(['pending', 'answered', 'cancelled', 'superseded'])
 const ASK_FIELD_TYPES = new Set(['text', 'select', 'confirm'])
 
 /**
- * 递归剔除值为 undefined 的可选字段。
- * 仅对 plain object / array 递归；其余值（含 Date/Map 等非法 JSON 值）原样返回，
- * 由 redactJsonValue 在 JSON 边界统一拒绝，不做静默转换。
- * 已在访问路径上的对象原样返回（真循环留给 redactJsonValue 显式抛错，不在这里无限递归）。
+ * recursion remove value is undefined optional field.
+ * only for plain object / array recursion; the rest value (contains Date/Map etc. illegal JSON value) original return,
+ * by redactJsonValue in JSON boundary unify reject, does not static default convert.
+ * already in access path on object original return (true loop to redactJsonValue explicit throws, do not in this in unbounded recursion).
  */
 export function pruneUndefined(value: unknown, visiting: WeakSet<object>): unknown {
   if (Array.isArray(value)) {
@@ -65,13 +65,13 @@ export function pruneUndefined(value: unknown, visiting: WeakSet<object>): unkno
 }
 
 /**
- * conversation.upsert 载荷校验：事件消费方（web live-state / cli / 协议类型）
- * 实际读取的 ConversationSummary 核心字段；可选字段存在即校验，类型不符同样抛错
- *（可缺不可错）。
+ * conversation.upsert payload validate: event consumer (web live-state / cli / protocol type)
+ * actual read ConversationSummary core field; optional field store in i.e. validate, type do not symbol same throws
+ *(can missing cannot wrong).
  */
 function assertConversationSummaryShape(value: unknown): void {
   if (value === null || typeof value !== 'object') {
-    throw new HelmError('invalid_event', 'conversation.upsert 需要 ConversationSummary 形状的 conversation', 500)
+    throw new HelmError('invalid_event', 'conversation.upsert need to ConversationSummary shape conversation', 500)
   }
   const conv = value as Record<string, unknown>
   if (
@@ -94,7 +94,7 @@ function assertConversationSummaryShape(value: unknown): void {
   ) {
     throw new HelmError(
       'invalid_event',
-      'conversation.upsert 需要 ConversationSummary 形状的 conversation（id/title/profileId/tags/cwd/model/thinkingLevel/status/stateChangeSeq/completionSeq/unread/pinned/pendingAskCount/createdAt/updatedAt）',
+      'conversation.upsert need to ConversationSummary shape conversation(id/title/profileId/tags/cwd/model/thinkingLevel/status/stateChangeSeq/completionSeq/unread/pinned/pendingAskCount/createdAt/updatedAt)',
       500,
     )
   }
@@ -113,15 +113,15 @@ function assertConversationSummaryShape(value: unknown): void {
   ) {
     throw new HelmError(
       'invalid_event',
-      'conversation.upsert 的可选字段（parentConversationId/parentToolCallId/ownedBy/nodeId/thinkingLevelOverride/doing/lastError/contextUsage）存在时类型必须合法',
+      'conversation.upsert optional field (parentConversationId/parentToolCallId/ownedBy/nodeId/thinkingLevelOverride/doing/lastError/contextUsage) store in when type must legal',
       500,
     )
   }
 }
 
-/** contextUsage 形状校验（可缺不可错；契约收敛为 tokens/contextWindow/compacting
- * 三字段，未知字段拒绝——不留死字段；tokens 为 null 表示上下文未知；速率类
- * 指标不随用量携带，由可选插件策略层自行展示）。 */
+/** contextUsage shape validate (can missing cannot wrong; contract converge is tokens/contextWindow/compacting
+ * three field, unknown field reject - - do not die field;tokens is null means context unknown; rate class
+ * metric do not follow use amount carry, by optional plugin policy layer self row render). */
 function isContextUsageShape(value: unknown): boolean {
   if (value === null || typeof value !== 'object') return false
   const usage = value as Record<string, unknown>
@@ -152,9 +152,9 @@ function isContextUsageShape(value: unknown): boolean {
   return true
 }
 
-/** conversation.live 的通用流式 generation 事实形状（可缺不可错）：
- * taskId / attempt 正整数（身份不可伪造）；message.content 为数组且仅含
- * 受限块形状；usage.output 正有限数。非法即拒绝，不静默降级。 */
+/** conversation.live through use streaming generation fact shape (can missing cannot wrong):
+ * taskId / attempt positive integer (identity cannot fabricate);message.content is array and only contains
+ * subject to limit chunk shape;usage.output correct finite count. illegal i.e. reject, not silently fall back. */
 function isLiveGenerationShape(value: unknown): boolean {
   if (value === null || typeof value !== 'object') return false
   const generation = value as Record<string, unknown>
@@ -211,10 +211,10 @@ function isLiveGenerationShape(value: unknown): boolean {
   return typeof u['output'] === 'number' && Number.isFinite(u['output']) && u['output'] > 0
 }
 
-/** ask.upsert 载荷校验：AskSpec 核心字段形状（业务级规则由 createAsk 的 validateAskSpec 把守）。 */
+/** ask.upsert payload validate:AskSpec core field shape (business level rule by createAsk  validateAskSpec guard). */
 function assertAskSpecShape(value: unknown): void {
   if (value === null || typeof value !== 'object') {
-    throw new HelmError('invalid_event', 'ask.upsert 需要 AskSpec 形状的 ask', 500)
+    throw new HelmError('invalid_event', 'ask.upsert need to AskSpec shape ask', 500)
   }
   const ask = value as Record<string, unknown>
   if (
@@ -230,7 +230,7 @@ function assertAskSpecShape(value: unknown): void {
   ) {
     throw new HelmError(
       'invalid_event',
-      'ask.upsert 需要 AskSpec 形状的 ask（id/conversationId/title/fields/status/createdAt）',
+      'ask.upsert need to AskSpec shape ask(id/conversationId/title/fields/status/createdAt)',
       500,
     )
   }
@@ -242,19 +242,19 @@ function assertAskSpecShape(value: unknown): void {
       typeof (field as Record<string, unknown>)['label'] !== 'string' ||
       !ASK_FIELD_TYPES.has((field as Record<string, unknown>)['type'] as string)
     ) {
-      throw new HelmError('invalid_event', 'ask.upsert 的 field 需要 { name: string; label: string; type: text|select|confirm } 形状', 500)
+      throw new HelmError('invalid_event', 'ask.upsert  field need to { name: string; label: string; type: text|select|confirm } shape', 500)
     }
     const f = field as Record<string, unknown>
     if (f['secretLifetime'] !== undefined) {
-      if (f['secret'] !== true) throw new HelmError('invalid_event', 'ask.upsert 的 secretLifetime 仅允许用于 secret 字段', 500)
+      if (f['secret'] !== true) throw new HelmError('invalid_event', 'ask.upsert  secretLifetime only allows used to secret field', 500)
       try {
         validateSecretLifetime(f['secretLifetime'] as SecretLifetime, 'ask.upsert field.secretLifetime')
       } catch (error) {
-        throw new HelmError('invalid_event', error instanceof Error ? error.message : 'ask.upsert field.secretLifetime 格式无效', 500)
+        throw new HelmError('invalid_event', error instanceof Error ? error.message : 'ask.upsert field.secretLifetime format invalid', 500)
       }
     }
     if (f['type'] === 'select' && (!Array.isArray(f['options']) || f['options'].length === 0)) {
-      throw new HelmError('invalid_event', 'ask.upsert 的 select 字段需要非空 options（与 createAsk 校验一致）', 500)
+      throw new HelmError('invalid_event', 'ask.upsert  select field need to non-empty options(and createAsk validate consistent)', 500)
     }
     if (
       (f['options'] !== undefined &&
@@ -265,7 +265,7 @@ function assertAskSpecShape(value: unknown): void {
       (f['secret'] !== undefined && typeof f['secret'] !== 'boolean') ||
       (f['required'] !== undefined && typeof f['required'] !== 'boolean')
     ) {
-      throw new HelmError('invalid_event', 'ask.upsert 的 field 可选字段（options/secret/required）存在时类型必须合法', 500)
+      throw new HelmError('invalid_event', 'ask.upsert  field optional field (options/secret/required) store in when type must legal', 500)
     }
   }
   if (
@@ -273,16 +273,16 @@ function assertAskSpecShape(value: unknown): void {
     (ask['description'] !== undefined && typeof ask['description'] !== 'string') ||
     (ask['expectedStateSeq'] !== undefined && !Number.isInteger(ask['expectedStateSeq']))
   ) {
-    throw new HelmError('invalid_event', 'ask.upsert 的可选字段（ownerPluginId/description/expectedStateSeq）存在时类型必须合法', 500)
+    throw new HelmError('invalid_event', 'ask.upsert optional field (ownerPluginId/description/expectedStateSeq) store in when type must legal', 500)
   }
 }
 
 /**
- * 把 (type, payload) 组装为协议 HelmEvent；先 prune 可选 undefined，再整体递归
- * JSON 脱敏（字符串值与字段名都过 redact）。core 类型接受直接 payload 或完整
- * 事件信封；未知 type 走 CustomHelmEvent {type, payload} 原样透传（不伪报成
- * notification）；任何非法 JSON 值（循环、Date、Map 等）或 core 类型字段形状不符
- * 均抛 HelmError 不静默降级、不静默修正。
+ *  (type, payload) group install is protocol HelmEvent; first prune optional undefined, again whole recursion
+ * JSON redaction (string value and field name all redact).core type accept directly payload or complete
+ * event message seal; unknown type away CustomHelmEvent {type, payload} original pass-through (do not fake report into
+ * notification); any illegal JSON value (loop,Date,Map etc.) or core type field shape do not symbol
+ * all throw HelmError not silently fall back, not silently fix correct.
  */
 export function assembleHelmEvent(
   type: string,
@@ -290,14 +290,14 @@ export function assembleHelmEvent(
   redact: (text: string) => string,
 ): HelmEvent {
   if (typeof type !== 'string' || type.length === 0) {
-    throw new HelmError('invalid_event', '事件 type 必须是非空字符串', 500)
+    throw new HelmError('invalid_event', 'event type must be non-empty string', 500)
   }
   const clean = pruneUndefined(payload, new WeakSet())
   const redacted = redactJsonValue(clean, (t) => redact(t))
   const record =
     redacted !== null && typeof redacted === 'object' ? (redacted as Record<string, unknown>) : undefined
 
-  // 完整事件信封（payload 自带同名的 type 字段）：拆包取各类型专属字段，不二次嵌套。
+  // complete event message seal (payload self carries same name type field): split package take each type dedicated belong field, do not second embed set.
   const envelope = record !== undefined && record['type'] === type ? record : undefined
 
   switch (type) {
@@ -311,7 +311,7 @@ export function assembleHelmEvent(
       const source = (envelope ?? record) as Record<string, unknown> | undefined
       const conversationId = Number(source?.['conversationId'])
       if (!Number.isInteger(conversationId)) {
-        throw new HelmError('invalid_event', 'conversation.deleted 需要 number conversationId', 500)
+        throw new HelmError('invalid_event', 'conversation.deleted need to number conversationId', 500)
       }
       return { type, conversationId }
     }
@@ -320,7 +320,7 @@ export function assembleHelmEvent(
       const conversationId = Number(source?.['conversationId'])
       const entry = source?.['entry']
       if (!Number.isInteger(conversationId)) {
-        throw new HelmError('invalid_event', 'conversation.entry 需要 number conversationId', 500)
+        throw new HelmError('invalid_event', 'conversation.entry need to number conversationId', 500)
       }
       if (
         entry === null ||
@@ -330,7 +330,7 @@ export function assembleHelmEvent(
       ) {
         throw new HelmError(
           'invalid_event',
-          'conversation.entry 需要 { id: string; kind: string; ... } 形状的 entry',
+          'conversation.entry need to { id: string; kind: string; ... } shape entry',
           500,
         )
       }
@@ -339,7 +339,7 @@ export function assembleHelmEvent(
         taskId !== undefined &&
         (typeof taskId !== 'number' || !Number.isInteger(taskId) || taskId <= 0)
       ) {
-        throw new HelmError('invalid_event', 'conversation.entry 的 taskId 必须是正整数（可缺不可错）', 500)
+        throw new HelmError('invalid_event', 'conversation.entry  taskId must be positive integer (can missing cannot wrong)', 500)
       }
       return { type, conversationId, entry: entry as ConversationEntry }
     }
@@ -356,7 +356,7 @@ export function assembleHelmEvent(
       ) {
         throw new HelmError(
           'invalid_event',
-          'conversation.live 需要 { conversationId, text, tools, updatedAt } 形状的 live',
+          'conversation.live need to { conversationId, text, tools, updatedAt } shape live',
           500,
         )
       }
@@ -364,7 +364,7 @@ export function assembleHelmEvent(
       if (generation !== undefined && !isLiveGenerationShape(generation)) {
         throw new HelmError(
           'invalid_event',
-          'conversation.live 的 generation 需要 { taskId: 正整数, attempt: 正整数, message?: { content, usage? } } 形状',
+          'conversation.live  generation need to { taskId: positive integer, attempt: positive integer, message?: { content, usage? } } shape',
           500,
         )
       }
@@ -381,7 +381,7 @@ export function assembleHelmEvent(
       const askId = source?.['askId']
       const status = source?.['status']
       if (typeof askId !== 'string' || (status !== 'answered' && status !== 'cancelled' && status !== 'superseded')) {
-        throw new HelmError('invalid_event', 'ask.resolved 需要 string askId 与合法 status', 500)
+        throw new HelmError('invalid_event', 'ask.resolved need to string askId and legal status', 500)
       }
       return { type, askId, status }
     }
@@ -397,7 +397,7 @@ export function assembleHelmEvent(
       ) {
         throw new HelmError(
           'invalid_event',
-          'plugin.changed 需要 { plugin: PluginSummary; ui: PluginUiContribution[] }（停用/卸载时 ui 为空数组）',
+          'plugin.changed need to { plugin: PluginSummary; ui: PluginUiContribution[] }(deactivate/unload when ui is empty array)',
           500,
         )
       }
@@ -415,18 +415,18 @@ export function assembleHelmEvent(
       ) {
         throw new HelmError(
           'invalid_event',
-          'plugin.doc.updated 需要 { pluginId: string; name: string; value } 形状的 doc',
+          'plugin.doc.updated need to { pluginId: string; name: string; value } shape doc',
           500,
         )
       }
       return { type, doc: doc as PublicPluginDoc }
     }
     case 'plugin.session_doc.updated': {
-      // 全局流防御性拒绝：会话文档事件只允许专用流（SessionDocEventHub），
-      // 误投全局广播属于契约违约，显式报错而不是降级透传（防写放大回归）。
+      // global stream guard against defend reject: conversation document event only allows dedicated use stream (SessionDocEventHub),
+      // mistakenly throw global broadcast belongs to contract violate about, explicit errors while is not fall back pass-through (guard against write put large regression).
       throw new HelmError(
         'invalid_event',
-        'plugin.session_doc.updated 不允许进入全局事件流（仅专用会话文档 SSE）',
+        'plugin.session_doc.updated disallows enter global event stream (only dedicated use conversation document SSE)',
         500,
       )
     }
@@ -444,12 +444,12 @@ export function assembleHelmEvent(
       ) {
         throw new HelmError(
           'invalid_event',
-          "node.changed 需要 { node: { id: string; kind: 'local' | 'byom'; online: boolean; ... } } 形状（removed 可选）",
+          "node.changed need to { node: { id: string; kind: 'local' | 'byom'; online: boolean; ... } } shape (removed optional)",
           500,
         )
       }
       if (removed !== undefined && typeof removed !== 'boolean') {
-        throw new HelmError('invalid_event', 'node.changed 的 removed 若有必须为 boolean', 500)
+        throw new HelmError('invalid_event', 'node.changed  removed if has must is boolean', 500)
       }
       return {
         type,
@@ -464,16 +464,16 @@ export function assembleHelmEvent(
       const body = source?.['body']
       const conversationId = source?.['conversationId']
       if (level !== 'info' && level !== 'warning' && level !== 'error') {
-        throw new HelmError('invalid_event', "notification 需要 level 为 'info' | 'warning' | 'error'", 500)
+        throw new HelmError('invalid_event', "notification need to level is 'info' | 'warning' | 'error'", 500)
       }
       if (typeof title !== 'string' || title === '') {
-        throw new HelmError('invalid_event', 'notification 需要 title 为非空字符串', 500)
+        throw new HelmError('invalid_event', 'notification need to title is non-empty string', 500)
       }
       if (body !== undefined && typeof body !== 'string') {
-        throw new HelmError('invalid_event', 'notification 的 body 若有必须为 string', 500)
+        throw new HelmError('invalid_event', 'notification  body if has must is string', 500)
       }
       if (conversationId !== undefined && (typeof conversationId !== 'number' || !Number.isInteger(conversationId))) {
-        throw new HelmError('invalid_event', 'notification 的 conversationId 若有必须为整数', 500)
+        throw new HelmError('invalid_event', 'notification  conversationId if has must is integer', 500)
       }
       return {
         type,
@@ -484,7 +484,7 @@ export function assembleHelmEvent(
       }
     }
     default: {
-      // CustomHelmEvent：未知 type 原样透传，不伪报成 notification。
+      // CustomHelmEvent: unknown type original pass-through, do not fake report into notification.
       const custom: CustomHelmEvent = { type: String(type), payload: redacted }
       return custom
     }
@@ -492,9 +492,9 @@ export function assembleHelmEvent(
 }
 
 /**
- * plugin.session_doc.updated 载荷边界校验（SessionDocEventHub.dispatch 用）：
- * 先做形状门禁（doc 为 null/非对象时不得进入任何字段读取），再校验三元组
- * 字段与 deleted 约束；返回已验证的 doc（脱敏由调用方完成）。
+ * plugin.session_doc.updated payload boundary validate (SessionDocEventHub.dispatch use):
+ * first do shape gate (doc is null/non- object when must not enter any field read), again validate three meta group
+ * field and deleted constraint; return already verify doc(redaction by caller complete).
  */
 export function assertSessionDocUpdateShape(payload: unknown): PublicPluginSessionDoc {
   const source = (payload ?? undefined) as { type?: unknown; doc?: unknown } | undefined
@@ -502,7 +502,7 @@ export function assertSessionDocUpdateShape(payload: unknown): PublicPluginSessi
   if (doc === null || typeof doc !== 'object') {
     throw new HelmError(
       'invalid_event',
-      'plugin.session_doc.updated 需要 { pluginId: string; name: string; conversationId: number; value } 形状的 doc',
+      'plugin.session_doc.updated need to { pluginId: string; name: string; conversationId: number; value } shape doc',
       500,
     )
   }
@@ -522,12 +522,12 @@ export function assertSessionDocUpdateShape(payload: unknown): PublicPluginSessi
   ) {
     throw new HelmError(
       'invalid_event',
-      'plugin.session_doc.updated 需要 { pluginId: string; name: string; conversationId: number; value } 形状的 doc',
+      'plugin.session_doc.updated need to { pluginId: string; name: string; conversationId: number; value } shape doc',
       500,
     )
   }
   if (record['deleted'] !== undefined && record['deleted'] !== true) {
-    throw new HelmError('invalid_event', 'plugin.session_doc.updated 的 deleted 若有必须为 true', 500)
+    throw new HelmError('invalid_event', 'plugin.session_doc.updated  deleted if has must is true', 500)
   }
   return doc as PublicPluginSessionDoc
 }

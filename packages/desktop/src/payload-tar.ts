@@ -1,11 +1,11 @@
 /**
- * 最小安全 tar.gz 解包器（纯 Node 零依赖）：面向 npm 包 tarball（ustar + pax 扩展头 +
- * GNU longname），流式解压落盘，强制三重防线：
- * 1. 条目名 containment：拒绝绝对路径 / `..` 穿越 / 反斜杠（Windows 语义不确定）/
- *    非 `package/` 前缀（npm 包布局铁律）；
- * 2. 类型白名单：仅文件 / 目录；链接、设备文件与 FIFO 显式拒绝；
- * 3. 上限：条目数与解包总字节封顶（防解压炸弹）。
- * 任何违规显式抛 DesktopError（tar_*），绝不静默跳过。
+ * most small security tar.gz unwrap (pure Node zero dependency): for npm package tarball(ustar + pax extend head +
+ * GNU longname), streaming decompress, force three heavy guard against line:
+ * 1. item name containment: reject absolute path / `..` through exceeds / backslash (Windows semantics uncertain)/
+ *    non- `package/` prefix (npm package layout iron rule);
+ * 2. type blank name single: only file / directory; link, device file and FIFO explicit reject;
+ * 3. cap: item count and unwrap total byte seal top (guard against decompress bomb).
+ * any violate rule explicit throw DesktopError(tar_*), never static default skip.
  */
 import {
   closeSync,
@@ -23,7 +23,7 @@ const BLOCK_SIZE = 512;
 export interface TarExtractOptions {
   maxEntries: number;
   maxTotalBytes: number;
-  /** npm tarball 根前缀（npm pack 布局恒为 package/）。 */
+  /** npm tarball prefix (npm pack layout constant is package/). */
   stripPrefix: string;
 }
 
@@ -39,7 +39,7 @@ const DEFAULTS: TarExtractOptions = {
   stripPrefix: 'package',
 };
 
-/** 按需拉取的可缓冲字节源（异步迭代器天然背压，避免整包驻留内存）。 */
+/** on demand pull can buffer byte source (async iterate day however back press, avoid whole package resident memory). */
 class BlockSource {
   private buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
   private done = false;
@@ -57,7 +57,7 @@ class BlockSource {
     return true;
   }
 
-  /** 恰好 n 字节（跨 chunk 聚合）；流提前结束返回 null。 */
+  /** exactly n byte (across chunk aggregate); stream mention before end return null. */
   async readExact(n: number): Promise<Buffer | null> {
     while (this.buffer.length < n) {
       if (!(await this.fill())) return null;
@@ -67,7 +67,7 @@ class BlockSource {
     return out;
   }
 
-  /** 至多 n 字节（至少 1 字节可用）；流结束返回 null。 */
+  /** at most n byte (at least 1 byte available); stream end return null. */
   async readUpTo(n: number): Promise<Buffer | null> {
     if (this.buffer.length === 0 && !(await this.fill())) return null;
     const take = Math.min(n, this.buffer.length);
@@ -76,13 +76,13 @@ class BlockSource {
     return out;
   }
 
-  /** 丢弃 n 字节；流提前结束抛 tar_truncated。 */
+  /** discard n byte; stream mention before end throw tar_truncated. */
   async skipBytes(n: number): Promise<void> {
     let remaining = n;
     while (remaining > 0) {
       const chunk = await this.readUpTo(Math.min(remaining, BLOCK_SIZE * 2));
       if (chunk === null) {
-        throw new DesktopError('tar_truncated', 'tar 流在条目内容中途结束（文件损坏或截断）');
+        throw new DesktopError('tar_truncated', 'tar stream in item content in route end (file corrupt or truncate)');
       }
       remaining -= chunk.length;
     }
@@ -94,7 +94,7 @@ function parseOctal(field: Buffer, what: string): number {
   if (text.length === 0) return 0;
   const value = Number.parseInt(text, 8);
   if (!/^[0-7]+$/.test(text) || !Number.isSafeInteger(value) || value < 0) {
-    throw new DesktopError('tar_header_invalid', `tar 头部 ${what} 字段不是合法八进制: ${JSON.stringify(text)}`);
+    throw new DesktopError('tar_header_invalid', `tar header ${what} field is not legal eight enter system: ${JSON.stringify(text)}`);
   }
   return value;
 }
@@ -106,28 +106,28 @@ function verifyChecksum(header: Buffer): void {
     sum += i >= 148 && i < 156 ? 32 : header[i]!;
   }
   if (sum !== stored) {
-    throw new DesktopError('tar_header_invalid', `tar 头部校验和不一致（期望 ${stored}，实际 ${sum}）`);
+    throw new DesktopError('tar_header_invalid', `tar header validate and inconsistent (expectation ${stored}, actual ${sum})`);
   }
 }
 
-/** pax 扩展头记录解析（`<len> key=value\n` 重复结构）。 */
+/** pax extend head record parse (`<len> key=value\n` duplicate structure). */
 function parsePaxRecords(content: Buffer): Record<string, string> {
   const records: Record<string, string> = {};
   let offset = 0;
   while (offset < content.length) {
     const spaceIdx = content.indexOf(' ', offset);
     if (spaceIdx < 0) {
-      throw new DesktopError('tar_header_invalid', 'pax 记录缺少长度字段');
+      throw new DesktopError('tar_header_invalid', 'pax record missing length field');
     }
     const len = Number.parseInt(content.subarray(offset, spaceIdx).toString('utf8'), 10);
     if (!Number.isInteger(len) || len <= 0 || offset + len > content.length) {
-      throw new DesktopError('tar_header_invalid', `pax 记录长度非法: ${len}`);
+      throw new DesktopError('tar_header_invalid', `pax record length illegal: ${len}`);
     }
     const record = content.subarray(spaceIdx + 1, offset + len).toString('utf8');
     const eq = record.indexOf('=');
     if (eq > 0 && record.endsWith('\n')) {
       const key = record.slice(0, eq);
-      if (key === '__proto__' || key === 'constructor' || key === 'prototype') throw new DesktopError('tar_header_invalid', 'pax 键非法');
+      if (key === '__proto__' || key === 'constructor' || key === 'prototype') throw new DesktopError('tar_header_invalid', 'pax key illegal');
       records[key] = record.slice(eq + 1, -1);
     }
     offset += len;
@@ -140,19 +140,19 @@ function stripTrailingNul(text: string): string {
 }
 
 /**
- * 条目名 → 目标绝对路径（containment 强校验）。违规抛 tar_entry_escape /
- * tar_entry_prefix / tar_entry_invalid，绝不产出 destDir 之外的路径。
+ * item name → target absolute path (containment strong validate). violate rule throw tar_entry_escape /
+ * tar_entry_prefix / tar_entry_invalid, never produce out destDir of outside path.
  */
 function entryTarget(destDir: string, rawName: string, stripPrefix: string, kind: string): string {
   if (rawName.length === 0) {
-    throw new DesktopError('tar_entry_invalid', 'tar 条目名为空');
+    throw new DesktopError('tar_entry_invalid', 'tar item name is empty');
   }
   if (rawName.includes('\\')) {
-    throw new DesktopError('tar_entry_invalid', `tar 条目名含反斜杠（Windows 路径语义不确定，拒绝）: ${rawName}`);
+    throw new DesktopError('tar_entry_invalid', `tar item name contains backslash (Windows path semantics uncertain, reject): ${rawName}`);
   }
   const normalized = path.posix.normalize(rawName);
   if (path.posix.isAbsolute(normalized) || normalized === '..' || normalized.startsWith('../')) {
-    throw new DesktopError('tar_entry_escape', `tar 条目名逃逸目标目录（${kind}）: ${rawName}`);
+    throw new DesktopError('tar_entry_escape', `tar item name escape target directory (${kind}): ${rawName}`);
   }
   let rel: string;
   if (normalized === stripPrefix) {
@@ -160,12 +160,12 @@ function entryTarget(destDir: string, rawName: string, stripPrefix: string, kind
   } else if (normalized.startsWith(`${stripPrefix}/`)) {
     rel = normalized.slice(stripPrefix.length + 1);
   } else {
-    throw new DesktopError('tar_entry_prefix', `tar 条目不在 ${stripPrefix}/ 前缀下（非 npm 包布局）: ${rawName}`);
+    throw new DesktopError('tar_entry_prefix', `tar item do not in ${stripPrefix}/ prefix under (non- npm package layout): ${rawName}`);
   }
   const target = rel === '.' ? destDir : path.resolve(destDir, rel);
   const containment = path.relative(destDir, target);
   if (containment.startsWith('..') || path.isAbsolute(containment)) {
-    throw new DesktopError('tar_entry_escape', `tar 条目路径逃逸（${kind}）: ${rawName}`);
+    throw new DesktopError('tar_entry_escape', `tar item path escape (${kind}): ${rawName}`);
   }
   return target;
 }
@@ -173,7 +173,7 @@ function entryTarget(destDir: string, rawName: string, stripPrefix: string, kind
 async function readFull(source: BlockSource, size: number): Promise<Buffer> {
   const out = await source.readExact(size);
   if (out === null) {
-    throw new DesktopError('tar_truncated', `tar 流在元数据内容中途结束（size=${size}）`);
+    throw new DesktopError('tar_truncated', `tar stream in metadata content in route end (size=${size})`);
   }
   return out;
 }
@@ -190,7 +190,7 @@ async function writeFileStreaming(source: BlockSource, target: string, size: num
     while (remaining > 0) {
       const chunk = await source.readUpTo(Math.min(remaining, 1024 * 1024));
       if (chunk === null) {
-        throw new DesktopError('tar_truncated', `tar 流在文件内容中途结束: ${target}`);
+        throw new DesktopError('tar_truncated', `tar stream in file content in route end: ${target}`);
       }
       writeSync(fh, chunk, 0, chunk.length);
       remaining -= chunk.length;
@@ -202,8 +202,8 @@ async function writeFileStreaming(source: BlockSource, target: string, size: num
 }
 
 /**
- * 解压 npm tarball（.tgz）到 destDir，剥离 `package/` 根前缀。
- * 返回文件/目录计数；任何结构性问题显式抛 DesktopError。
+ * decompress npm tarball(.tgz) to destDir, strip `package/` prefix.
+ * return file/directory counter; any structure issue explicit throw DesktopError.
  */
 export async function extractTarGzip(
   tgzPath: string,
@@ -227,8 +227,8 @@ export async function extractTarGzip(
     mkdirSync(destDir, { recursive: true });
     for (;;) {
       const header = await source.readExact(BLOCK_SIZE);
-      if (header === null) throw new DesktopError('tar_truncated', 'tar 缺少结束标记');
-      if (header.every((b) => b === 0)) break; // end-of-archive 标记块
+      if (header === null) throw new DesktopError('tar_truncated', 'tar missing end mark record');
+      if (header.every((b) => b === 0)) break; // end-of-archive mark record chunk
       verifyChecksum(header);
       const rawName = stripTrailingNul(header.subarray(0, 100).toString('utf8'));
       const size = parseOctal(header.subarray(124, 136), 'size');
@@ -237,10 +237,10 @@ export async function extractTarGzip(
       const mode = parseOctal(header.subarray(100, 108), 'mode') & 0o777;
 
       headerCount += 1;
-      if (headerCount > options.maxEntries || size > options.maxTotalBytes) throw new DesktopError('tar_size_limit', 'tar 元数据或条目超限');
+      if (headerCount > options.maxEntries || size > options.maxTotalBytes) throw new DesktopError('tar_size_limit', 'tar metadata or item over limit');
       if (typeflag === 'g' || typeflag === 'x' || typeflag === 'L') {
         metadataBytes += size;
-        if (metadataBytes > Math.min(options.maxTotalBytes, 1024 * 1024)) throw new DesktopError('tar_size_limit', 'tar 扩展元数据超过上限');
+        if (metadataBytes > Math.min(options.maxTotalBytes, 1024 * 1024)) throw new DesktopError('tar_size_limit', 'tar extend metadata exceeds cap');
       }
       if (typeflag === 'g' || typeflag === 'x') {
         const content = await readFull(source, size);
@@ -257,7 +257,7 @@ export async function extractTarGzip(
         continue;
       }
 
-      // 条目属性合成：pax 记录 > GNU long* > ustar 头部
+      // item property together into:pax record > GNU long* > ustar header
       const effective = { ...globalPax, ...(nextPax ?? {}) };
       nextPax = null;
       let name = rawName;
@@ -273,30 +273,30 @@ export async function extractTarGzip(
       if (typeof effective['size'] === 'string') {
         const paxSize = Number.parseInt(effective['size'], 10);
         if (!/^\d+$/.test(effective['size']) || !Number.isSafeInteger(paxSize) || paxSize < 0) {
-          throw new DesktopError('tar_header_invalid', `pax size 记录非法: ${effective['size']}`);
+          throw new DesktopError('tar_header_invalid', `pax size record illegal: ${effective['size']}`);
         }
         entrySize = paxSize;
       }
 
       if (result.files + result.directories >= options.maxEntries) {
-        throw new DesktopError('tar_entry_limit', `tar 条目数超过上限 ${options.maxEntries}`);
+        throw new DesktopError('tar_entry_limit', `tar item count exceeds cap ${options.maxEntries}`);
       }
       if (result.totalBytes + entrySize > options.maxTotalBytes) {
-        throw new DesktopError('tar_size_limit', `tar 解包总字节超过上限 ${options.maxTotalBytes}`);
+        throw new DesktopError('tar_size_limit', `tar unwrap total byte exceeds cap ${options.maxTotalBytes}`);
       }
 
       const isDirectory =
         typeflag === '5' || ((typeflag === '0' || typeflag === '\0') && entrySize === 0 && name.endsWith('/'));
       if (isDirectory) {
-        if (entrySize !== 0) throw new DesktopError('tar_header_invalid', 'tar 目录不得含文件内容');
-        const target = entryTarget(destDir, name.replace(/\/+$/, ''), options.stripPrefix, '目录');
+        if (entrySize !== 0) throw new DesktopError('tar_header_invalid', 'tar directory must not contains file content');
+        const target = entryTarget(destDir, name.replace(/\/+$/, ''), options.stripPrefix, 'directory');
         mkdirSync(target, { recursive: true });
         result.directories += 1;
         await skipPadding(source, entrySize);
         continue;
       }
       if (typeflag === '0' || typeflag === '\0') {
-        const target = entryTarget(destDir, name, options.stripPrefix, '文件');
+        const target = entryTarget(destDir, name, options.stripPrefix, 'file');
         await writeFileStreaming(source, target, entrySize, mode);
         result.files += 1;
         result.totalBytes += entrySize;
@@ -304,13 +304,13 @@ export async function extractTarGzip(
       }
       throw new DesktopError(
         'tar_unsupported_type',
-        `tar 条目类型不支持（typeflag=${JSON.stringify(typeflag)}，仅文件/目录）: ${name}`,
+        `tar item type unsupported (typeflag=${JSON.stringify(typeflag)}, only file/directory): ${name}`,
       );
     }
     return result;
   } catch (error) {
     if (error instanceof DesktopError) throw error;
-    throw new DesktopError('tar_extract_failed', `tar.gz 解包失败: ${error instanceof Error ? error.message : String(error)}`);
+    throw new DesktopError('tar_extract_failed', `tar.gz unwrap failed: ${error instanceof Error ? error.message : String(error)}`);
   } finally {
     sourceStream.destroy();
     gunzip.destroy();

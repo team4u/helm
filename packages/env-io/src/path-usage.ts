@@ -1,51 +1,51 @@
 /**
- * 目标路径进程占用扫描的纯编排器（Linux /proc 语义；删除前快照）。
+ * target path process occupy scan pure orchestration (Linux /proc semantics; before deletion snapshot).
  *
- * 架构约束：本模块属于 @helm/env-io（kernel 与 @helm/node 共享的执行实现
- * 包），保留可注入 io 面（PathUsageIo）——测试与非 Node 宿主可注入 fixture；
- * 节点侧真实 fs 访问统一用同包 createNodePathUsageIo 适配。RPC 形状
- * （NodePathUsage / NodePathUsageProcess）唯一真源在 @helm/protocol env-rpc；
- * 错误信封 `{ code, message }` 由两侧适配方映射为 RpcResult（节点 RPC）或
- * HelmError（Hub fabric）。
+ * architecture constraint: this module belongs to @helm/env-io(kernel and @helm/node sharing execute implement
+ * package), keep can inject io side (PathUsageIo) - - test and non- Node host can inject fixture;
+ * node side real fs access unify use same package createNodePathUsageIo adapt.RPC shape
+ * (NodePathUsage / NodePathUsageProcess) unique true source in @helm/protocol env-rpc;
+ * error message seal `{ code, message }` by two side adapt way mapping is RpcResult(node RPC) or
+ * HelmError(Hub fabric).
  *
- * 诚实性纪律（fail-closed）：
- * - 平台非 Linux（无 /proc 可靠语义）→ not_supported，绝不伪造结果；
- * - 进程已退出（ENOENT/ESRCH）是正常竞态，忽略；读取被拒与其他读取
- *   错误必须可见，绝不当作干净。语义按 errno 分治：持久 EACCES/EPERM
- *   拒读（经复核确认 PID 存活且重读仍拒）不论 uid 一律是权限不可观测的
- *   结构性盲区（跨 uid，或 non-dumpable 进程如 systemd --user——属主
- *   自己也读不了；OS 能力模型如此，非扫描器异常）——unobservable 计数
- *   + diagnostics 如实呈现（附 uid），不置 complete=false（绝不静默
- *   丢弃）；非权限类读取错误（EIO 等）与 stat 自身非权限类异常仍置
- *   complete=false（fail-closed）；与 Hub 同 uid 的普通可转储进程
- *   （helm 派生的子代理/git/shell）永远可观测，保护面不受影响；
- * - 扫描 PID 上限触发 → complete=false（绝不静默漏报）；
- * - 命中清单受报告上限截断时 matchedTotal 保留真实计数；
- * - 只读取定位信息（cwd、fd 链接、comm），绝不读 cmdline/environ（机密）。
+ * honest discipline (fail-closed):
+ * - platform non- Linux(without /proc can rely semantics)→ not_supported, never fabricate result;
+ * - process already exit (ENOENT/ESRCH) is normal race, ignore; read by refuse and other read
+ *   error must visible, never when act clean. semantics by errno govern: durable EACCES/EPERM
+ *   refuse read (via re-check confirm PID store and heavy read still refuse) do not argument uid one rule is permission cannot observability
+ *   structure blind spot (across uid, or non-dumpable process such as systemd --user- - belong main
+ *   itself also read do not;OS capability model such as this, non- scan exception) - -unobservable counter
+ *   + diagnostics such as present (attach uid), do not placement complete=false(never static default
+ *   discard); non- permission class read error (EIO etc.) and stat itself non- permission class exception still placement
+ *   complete=false(fail-closed); and Hub same uid ordinary can rotate store process
+ *   (helm derive subagent/git/shell) forever can observability, protect side do not subject to affect;
+ * - scan PID cap trigger → complete=false(never static default leak report);
+ * - hit manifest subject to report cap truncate when matchedTotal keep real counter;
+ * - only read locate information (cwd,fd link,comm), never read cmdline/environ(secret).
  *
- * 匹配规则：候选路径（cwd 或 fd 真实路径）等于目标路径、或位于其下（路径
- * 分量边界——'/a' 不匹配 '/ab'，只匹配 '/a' 与 '/a/...'）；已删除文件后缀
- * " (deleted)" 在匹配前剥离（报告保留原值）。同时匹配调用方传入路径与
- * realpath 解析结果（软链拼写的候选不漏报）。
+ * match rule: choose path (cwd or fd real path) equals target path, or at its under (path
+ * amount boundary - -'/a' does not match '/ab', only match '/a' and '/a/...'); deleted file suffix
+ * " (deleted)" in match before strip (report keep original value). also match caller pass path and
+ * realpath parse result (symlink piece together write choose do not leak report).
  */
 
 import type { NodePathUsage, NodePathUsageProcess } from '@helm/protocol'
 
-/** 注入的只读 fs 面（browser-safe；两侧适配用 node:fs/promises 实现）。 */
+/** inject only read fs side (browser-safe; two side adapt use node:fs/promises implement). */
 export interface PathUsageIo {
-  /** 符号链接解析（/proc/<pid>/cwd、/proc/<pid>/fd/<n>、目标 realpath）。 */
+  /** symlink parse (/proc/<pid>/cwd,/proc/<pid>/fd/<n>, target realpath). */
   readlink(path: string): Promise<string>
-  /** 目录列举（仅名字；/proc 与 /proc/<pid>/fd）。 */
+  /** directory column raise (only name;/proc and /proc/<pid>/fd). */
   readdir(path: string): Promise<string[]>
-  /** 取属主 uid（被拒 PID 的诊断；/proc/<pid> 的 st_uid 世界可读）。 */
+  /** take belong main uid(by refuse PID diagnose;/proc/<pid>  st_uid is world-readable). */
   stat(path: string): Promise<{ uid: number }>
-  /** 读小文本（/proc/<pid>/comm；仅在命中时惰性读取）。 */
+  /** read small text (/proc/<pid>/comm; only in hit when lazy read). */
   readFile(path: string): Promise<string>
-  /** 目标路径的 realpath（软链拼写消歧；适配方实现）。 */
+  /** target path realpath(symlink piece together write consume ambiguity; adapt way implement). */
   realpath(path: string): Promise<string>
 }
 
-/** 扫描失败码（适配方映射：invalid→400/not_supported→501/aborted→499/permission_denied与unknown→502）。 */
+/** scan failed code (adapt way mapping:invalid→400/not_supported→501/aborted→499/permission_deniedandunknown→502). */
 export type PathUsageFailureCode = 'invalid' | 'not_supported' | 'aborted' | 'permission_denied' | 'unknown'
 
 export type PathUsageScanResult =
@@ -54,43 +54,43 @@ export type PathUsageScanResult =
 
 export interface ScanPathUsageOptions {
   io: PathUsageIo
-  /** 目标平台（process.platform 口径）；非 'linux' 显式 not_supported。 */
+  /** target platform (process.platform opening path); non- 'linux' explicit not_supported. */
   platform: string
-  /** /proc 根（缺省 '/proc'；测试可注入 fixture 目录）。 */
+  /** /proc (default '/proc'; test can inject fixture directory). */
   procRoot?: string
-  /** 扫描 PID 数上限（缺省 262_144；触发即 complete=false，绝不静默漏报）。 */
+  /** scan PID count cap (default 262_144; trigger i.e. complete=false, never static default leak report). */
   maxPids?: number
-  /** 命中进程报告上限（缺省 256；matchedTotal 始终保留真实计数）。 */
+  /** hit process report cap (default 256;matchedTotal always keep real counter). */
   maxReported?: number
-  /** 诊断条数上限（缺省 32；超出聚合计数，不无限膨胀）。 */
+  /** diagnose count cap (default 32; exceeds aggregate counter, do not unbounded expansion). */
   maxDiagnostics?: number
   signal?: AbortSignal
 }
 
-/** POSIX 绝对路径校验（扫描仅支持 Linux，按 POSIX 规则收口）：非空、≤4096、无 NUL、以 '/' 开头、无 '.'/'..' 段、无尾随 '/'（根除外）。 */
+/** POSIX absolute path validate (scan only support Linux, by POSIX rule consolidate): non-empty,≤4096, without NUL, with '/' open head, without '.'/'..' segment, without tail follow '/'(except outside). */
 export function validatePosixScanPath(path: string): { ok: true; value: string } | { ok: false; message: string } {
-  if (typeof path !== 'string' || path.length === 0) return { ok: false, message: 'path 必须是非空字符串' }
-  if (path.includes('\u0000')) return { ok: false, message: 'path 含 NUL 字节' }
-  if (path.length > 4096) return { ok: false, message: `path 超过 4096 字符（收到 ${path.length}）` }
-  if (!path.startsWith('/')) return { ok: false, message: `path 必须是绝对路径（以 '/' 开头，收到 ${JSON.stringify(path.slice(0, 40))}）` }
-  // 归一化尾随 '/'（根 '/' 除外）。
+  if (typeof path !== 'string' || path.length === 0) return { ok: false, message: 'path must be non-empty string' }
+  if (path.includes('\u0000')) return { ok: false, message: 'path contains NUL byte' }
+  if (path.length > 4096) return { ok: false, message: `path exceeds 4096 character (receives ${path.length})` }
+  if (!path.startsWith('/')) return { ok: false, message: `path must be absolute path (with '/' open head, receives ${JSON.stringify(path.slice(0, 40))})` }
+  // archive one tail follow '/'( '/' except outside).
   let normalized = path.length > 1 && path.endsWith('/') ? path.replace(/\/+$/, '') : path
   if (normalized === '') normalized = '/'
   if (normalized !== '/') {
     for (const segment of normalized.split('/').slice(1)) {
-      if (segment === '') return { ok: false, message: `path 含空路径段（收到 ${JSON.stringify(path.slice(0, 40))}）` }
-      if (segment === '.' || segment === '..') return { ok: false, message: `path 含 '.'/'..' 段（收到 ${JSON.stringify(path.slice(0, 40))}）` }
+      if (segment === '') return { ok: false, message: `path contains empty path segment (receives ${JSON.stringify(path.slice(0, 40))})` }
+      if (segment === '.' || segment === '..') return { ok: false, message: `path contains '.'/'..' segment (receives ${JSON.stringify(path.slice(0, 40))})` }
     }
   }
   return { ok: true, value: normalized }
 }
 
-/** 匹配前剥离已删除文件后缀（报告保留原值，匹配用剥离值）。 */
+/** match before strip deleted file suffix (report keep original value, match use strip value). */
 function stripDeletedSuffix(candidate: string): string {
   return candidate.endsWith(' (deleted)') ? candidate.slice(0, -' (deleted)'.length) : candidate
 }
 
-/** 路径分量边界包含：base === candidate 或 candidate 位于 base 之下（'/a' 不匹配 '/ab'）。 */
+/** path amount boundary contains:base === candidate or candidate at base of under ('/a' does not match '/ab'). */
 function pathContains(base: string, candidate: string): boolean {
   const c = stripDeletedSuffix(candidate)
   if (c === base) return true
@@ -98,7 +98,7 @@ function pathContains(base: string, candidate: string): boolean {
   return c.startsWith(prefix)
 }
 
-/** 读取错误分类（注入的 fs 实现抛错须带 `code` 属性，与 node:fs 一致）。 */
+/** read error classify (inject fs implement throws must carries `code` property, and node:fs consistent). */
 type ReadOutcome = { kind: 'value'; value: string } | { kind: 'gone' } | { kind: 'denied'; code: string; message: string }
 
 async function readLink(io: PathUsageIo, path: string): Promise<ReadOutcome> {
@@ -111,7 +111,7 @@ async function readLink(io: PathUsageIo, path: string): Promise<ReadOutcome> {
     return { kind: 'denied', code: code ?? 'UNKNOWN', message }
   }
 }
-/** 诊断聚合（上限截断后聚合剩余计数，不无限膨胀）。 */
+/** diagnose aggregate (cap truncate after aggregate remaining counter, do not unbounded expansion). */
 class Diagnostics {
   private readonly entries: string[] = []
   private extra = 0
@@ -121,16 +121,16 @@ class Diagnostics {
     else this.extra += 1
   }
   get values(): string[] {
-    return this.extra > 0 ? [...this.entries, `…另有 ${this.extra} 条不完整原因未列出`] : [...this.entries]
+    return this.extra > 0 ? [...this.entries, `... another has ${this.extra} do not complete reason not column out`] : [...this.entries]
   }
 }
 
 /**
- * 扫描目标绝对路径的进程占用（cwd + 打开 fd）。返回值约定见 NodePathUsage；
- * 本函数自身不抛错（一切失败，含注入 io 的非 ENOENT 异常，经 Result error
- * 信封显式返回）：
- * - 目标 realpath 解析失败：ENOENT 只用原始路径匹配（目录存在性由上游
- *   负责）；EACCES/EPERM → permission_denied（权限可诊断）；其他 → unknown。
+ * scan target absolute path process occupy (cwd + open fd). return value convention see NodePathUsage;
+ * this function itself do not throws (everything failed, contains inject io non- ENOENT exception, via Result error
+ * message seal explicit return):
+ * - target realpath failed to parse:ENOENT only use original path match (directory store in by upstream
+ *   negative duty);EACCES/EPERM → permission_denied(permission can diagnose); other → unknown.
  */
 export async function scanPathUsage(target: string, options: ScanPathUsageOptions): Promise<PathUsageScanResult> {
   const { io, platform } = options
@@ -144,7 +144,7 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
       ok: false,
       error: {
         code: 'not_supported',
-        message: `进程占用扫描当前仅实现 Linux /proc 只读语义（目标平台 '${platform}' 不支持；不伪造跨平台结果）`,
+        message: `process occupy scan when before only implement Linux /proc only read semantics (target platform '${platform}' unsupported; do not fabricate across platform result)`,
       },
     }
   }
@@ -152,8 +152,8 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
   if (!validated.ok) return { ok: false, error: { code: 'invalid', message: validated.message } }
   const rawPath = validated.value
 
-  // 匹配基：入参原样 + realpath（软链拼写的候选不漏报；realpath 失败按
-  // 头注释策略显式分类，绝不向上抛裸异常）。
+  // match base: reference original + realpath(symlink piece together write choose do not leak report;realpath failed by
+  // head note release policy explicit classify, never to on throw bare exception).
   const bases = new Set<string>([rawPath])
   let real: string | undefined
   try {
@@ -167,7 +167,7 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
         ok: false,
         error: {
           code: 'permission_denied',
-          message: `无权解析目标路径 realpath（${code}: ${error instanceof Error ? error.message : String(error)}）；匹配基不完整，拒绝扫描`,
+          message: `without right parse target path realpath(${code}: ${error instanceof Error ? error.message : String(error)}); match base do not complete, reject scan`,
         },
       }
     } else {
@@ -175,7 +175,7 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
         ok: false,
         error: {
           code: 'unknown',
-          message: `目标路径 realpath 解析失败（${code ?? 'UNKNOWN'}: ${error instanceof Error ? error.message : String(error)}），拒绝扫描`,
+          message: `target path realpath failed to parse (${code ?? 'UNKNOWN'}: ${error instanceof Error ? error.message : String(error)}), reject scan`,
         },
       }
     }
@@ -191,7 +191,7 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
       ok: false,
       error: {
         code: code === 'EACCES' || code === 'EPERM' ? 'not_supported' : 'unknown',
-        message: `无法列举 ${procRoot}（${code ?? 'UNKNOWN'}: ${error instanceof Error ? error.message : String(error)}）`,
+        message: `cannot column raise ${procRoot}(${code ?? 'UNKNOWN'}: ${error instanceof Error ? error.message : String(error)})`,
       },
     }
   }
@@ -204,11 +204,11 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
   let complete = true
   if (pids.length > maxPids) {
     complete = false
-    diagnostics.add(`PID 数 ${pids.length} 超过扫描上限 ${maxPids}，仅扫描前 ${maxPids} 个（其余未扫描，不假装完整）`)
+    diagnostics.add(`PID count ${pids.length} exceeds scan cap ${maxPids}, only scan before ${maxPids} (the rest not scan, do not pretend complete)`)
   }
 
   const processes: NodePathUsageProcess[] = []
-  /** 命中进程唯一 PID 集（同进程 cwd+多个 fd 只计一次；首个引用 cwd 优先）。 */
+  /** hit process unique PID collection (same process cwd+multiple fd only count once; first reference cwd takes precedence). */
   const matchedPids = new Set<number>()
   let matchedTotal = 0
   let truncated = false
@@ -217,11 +217,11 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
   let scanned = 0
 
   /**
-   * 记录持久拒读（同 PID 去重）：按 errno 分治——EACCES/EPERM 是权限
-   * 不可观测的结构性盲区（跨 uid 或 non-dumpable，如 systemd --user；
-   * 不论 uid、uid 未知亦计入），如实计数 unobservable + 诊断（附 uid），
-   * 不计入完整性判定；其他 errno（EIO 等）仍 fail-closed：
-   * complete=false + 诊断。
+   * record durable refuse read (same PID dedupe): by errno govern - -EACCES/EPERM is permission
+   * cannot observability structure blind spot (across uid or non-dumpable, such as systemd --user;
+   * do not argument uid,uid unknown also count), such as counter unobservable + diagnose (attach uid),
+   * do not count complete decide; other errno(EIO etc.) still fail-closed:
+   * complete=false + diagnose.
    */
   const recordDenied = (pid: number, what: string, uid: number | undefined, code: string): void => {
     if (pidDenied.has(pid)) return
@@ -230,15 +230,15 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
     if (code === 'EACCES' || code === 'EPERM') {
       unobservable += 1
       diagnostics.add(
-        `pid ${pid}${owner}: 无权读取 ${what}（${code}），权限不可观测（跨 uid 或 non-dumpable，如 systemd --user；未计入完整性判定）`,
+        `pid ${pid}${owner}: without right read ${what}(${code}), permission cannot observability (across uid or non-dumpable, such as systemd --user; not count complete decide)`,
       )
       return
     }
     complete = false
-    diagnostics.add(`pid ${pid}${owner}: 读取 ${what} 失败（${code}），该进程占用情况未知`)
+    diagnostics.add(`pid ${pid}${owner}: read ${what} failed (${code}), the process occupy case unknown`)
   }
 
-  /** PID 存活探测：ENOENT/ESRCH 证实已退出；其他错误无法证明存在状态。 */
+  /** PID store probe:ENOENT/ESRCH verify already exit; other error cannot verify store in state. */
   const statPid = async (
     pid: number,
   ): Promise<{ kind: 'exists'; uid: number } | { kind: 'gone' } | { kind: 'unknown'; code: string }> => {
@@ -252,14 +252,14 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
   }
 
   /**
-   * 被拒读取的有界复核（恰一次，纯只读重读证明，不凭延时/身份猜测）：
-   * - stat 证实 PID 已退出（ENOENT/ESRCH）→ 退出竞态，忽略（契约允许）；
-   * - PID 仍在 → 重读一次：成功则如实采用（瞬时错误不算盲区）；仍拒或
-   *   gone（本次重读证实退出）则按退出/盲区如实结算；
-   * - stat 自身非退出类错误 → 无法证明存在状态，同样经 recordDenied 按
-   *   errno 分治（EACCES/EPERM 盲区——uid 未知也计入；其余 fail-closed）。
-   * 绝不因「应该可读」放过真 EACCES：仍拒且 PID 存活时必经 recordDenied
-   * 如实结算（权限类 errno 盲区计数呈现，非权限类错误置 complete=false）。
+   * by refuse read has boundary re-check (exactly once, pure only read heavy read verify, do not rely on extend when/identity guess):
+   * - stat verify PID already exit (ENOENT/ESRCH)→ exit race, ignore (contract allows);
+   * - PID still in → heavy read once: succeeded then such as adopt (instantaneous error do not compute blind spot); still refuse or
+   *   gone(this time heavy read verify exit) then by exit/blind spot such as compute;
+   * - stat itself non- exit class error → cannot verify store in state, same via recordDenied by
+   *   errno govern (EACCES/EPERM blind spot - -uid unknown also count; the rest fail-closed).
+   * never because should can read put true EACCES: still refuse and PID store when must via recordDenied
+   * such as compute (permission class errno blind spot counter present, non- permission class error placement complete=false).
    */
   const settleDenied = async <T>(
     pid: number,
@@ -279,23 +279,23 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
     return { result: 'denied' }
   }
 
-  /** readLink 结果适配为 settleDenied 重读面。 */
+  /** readLink result adapt is settleDenied heavy read side. */
   const retryLink = (p: string) =>
     readLink(io, p).then((o): { ok: true; value: string } | { ok: false; code: string } =>
       o.kind === 'value' ? { ok: true, value: o.value } : { ok: false, code: o.kind === 'gone' ? 'ENOENT' : o.code })
 
-  /** 被拒 readLink 的有界复核（settleDenied 语义）：结果映射回 ReadOutcome（重读成功如实采用）。 */
+  /** by refuse readLink has boundary re-check (settleDenied semantics): result mapping back ReadOutcome(heavy read succeeded such as adopt). */
   const settleLink = async (pid: number, what: string, p: string): Promise<ReadOutcome> => {
     const settled = await settleDenied<string>(pid, what, () => retryLink(p))
     if (settled.result === 'ok') return { kind: 'value', value: settled.value }
     if (settled.result === 'gone') return { kind: 'gone' }
-    return { kind: 'denied', code: 'DENIED', message: '复核后仍被拒' }
+    return { kind: 'denied', code: 'DENIED', message: 're-check after still by refuse' }
   }
 
   /**
-   * 登记一次命中（按 PID 去重）：同进程的 cwd/fd 多处引用只计一个进程、
-   * 只报首个引用（cwd 先扫故优先）；matchedTotal 始终为唯一 PID 真实计数，
-   * 报告清单截断不影响计数。
+   * register once hit (by PID dedupe): same process cwd/fd many where reference only count a process,
+   * only report first reference (cwd first scan reason takes precedence);matchedTotal always is unique PID real counter,
+   * report manifest truncate does not affect counter.
    */
   const pushMatch = async (pid: number, source: 'cwd' | 'fd', path: string): Promise<void> => {
     if (matchedPids.has(pid)) return
@@ -305,25 +305,25 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
       truncated = true
       return
     }
-    // 进程名惰性读取（仅首个命中时一次；世界可读；失败缺省不阻塞）。
+    // process name lazy read (only first hit when once;is world-readable; failed default non-blocking).
     let name: string | undefined
     try {
       const comm = await io.readFile(`${procRoot}/${pid}/comm`)
       name = comm.trim().split('\n', 1)[0]
       if (name === '') name = undefined
     } catch {
-      // comm 不可读（竞态/权限）：占用事实已成立（cwd/fd 命中），不缺省名。
+      // comm cannot read (race/permission): occupy fact already into establish (cwd/fd hit), do not default name.
     }
     processes.push({ pid, ...(name !== undefined ? { name } : {}), source, path })
   }
 
   for (const pid of pids) {
-    if (scanned >= maxPids) break // 上限触发已在 diagnostics 记录，complete=false。
+    if (scanned >= maxPids) break // cap trigger already in diagnostics record,complete=false.
     scanned += 1
     if (options.signal?.aborted === true) {
-      return { ok: false, error: { code: 'aborted', message: '进程占用扫描已取消' } }
+      return { ok: false, error: { code: 'aborted', message: 'process occupy scan cancelled' } }
     }
-    // cwd（进程工作目录在目标内）。被拒时先有界复核：PID 已退出 → 竞态忽略；重读成功 → 如实采用。
+    // cwd(process work directory in target inside). by refuse when first has boundary re-check:PID already exit → race ignore; heavy read succeeded → such as adopt.
     let cwd = await readLink(io, `${procRoot}/${pid}/cwd`)
     if (cwd.kind === 'denied') {
       cwd = await settleLink(pid, 'cwd', `${procRoot}/${pid}/cwd`)
@@ -331,36 +331,36 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
     if (cwd.kind === 'value' && cwd.value.startsWith('/') && [...bases].some((base) => pathContains(base, cwd.value))) {
       await pushMatch(pid, 'cwd', cwd.value)
     }
-    // fd（打开的文件/目录在目标内；socket:/pipe:/anon_inode: 等非路径直接跳过）。
+    // fd(open file/directory in target inside;socket:/pipe:/anon_inode: etc. non- path directly skip).
     let fdNames: string[] | undefined
     try {
       fdNames = await io.readdir(`${procRoot}/${pid}/fd`)
     } catch (error) {
       const code = (error as { code?: string } | null)?.code
-      if (code === 'ENOENT' || code === 'ESRCH') continue // 进程已退出（正常竞态）。
-      // 被拒：先有界复核（stat 证实退出 → 竞态忽略；仍在 → 重读一次定夺）。
+      if (code === 'ENOENT' || code === 'ESRCH') continue // process already exit (normal race).
+      // by refuse: first has boundary re-check (stat verify exit → race ignore; still in → heavy read once set seize).
       const settled = await settleDenied(pid, 'fd', () =>
         io.readdir(`${procRoot}/${pid}/fd`).then(
           (names): { ok: true; value: string[] } | { ok: false; code: string } => ({ ok: true, value: names }),
           (e: unknown) => ({ ok: false as const, code: (e as { code?: string } | null)?.code ?? 'UNKNOWN' }),
         ),
       )
-      if (settled.result !== 'ok') continue // 竞态退出或仍拒：本 PID 结算完毕。
+      if (settled.result !== 'ok') continue // race exit or still refuse: this PID compute done.
       fdNames = settled.value
     }
     for (const fdName of fdNames) {
       if (!/^\d+$/.test(fdName)) continue
-      // 局部变量重读：abort 可发生在本循环体内 await 期间，不能被循环头的
-      // 窄化结论掩盖（TS 对属性链的窄化不跨 await 更新）。
+      // local variable heavy read:abort can occur in this loop body inside await during, cannot by loop head
+      // narrow conclusion mask (TS for property chain narrow do not across await update).
       const signal = options.signal
       if (signal?.aborted === true) {
-        return { ok: false, error: { code: 'aborted', message: '进程占用扫描已取消' } }
+        return { ok: false, error: { code: 'aborted', message: 'process occupy scan cancelled' } }
       }
       let link = await readLink(io, `${procRoot}/${pid}/fd/${fdName}`)
       if (link.kind === 'denied') {
         link = await settleLink(pid, `fd/${fdName}`, `${procRoot}/${pid}/fd/${fdName}`)
       }
-      // gone（含复核证实退出）是常态竞态：跳过；denied 已在复核内记录盲区。
+      // gone(contains re-check verify exit) is common state race: skip;denied already in re-check inside record blind spot.
       if (link.kind !== 'value') {
         continue
       }

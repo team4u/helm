@@ -1,7 +1,7 @@
 /**
- * pre-ready 桌面身份：Linux setDesktopName 的取值与调用时机（必须早于 whenReady）、
- * 非 Linux 平台零行为、与 electron-builder 产物的
- * .desktop 文件基名跨文件锁定一致。
+ * pre-ready desktop identity:Linux setDesktopName take value and invoke when machine (must early at whenReady),
+ * non- Linux platform zero behavior, and electron-builder artifact
+ * .desktop file base name across file lock consistent.
  */
 import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
@@ -12,7 +12,7 @@ import { applyLinuxDesktopName, LINUX_DESKTOP_NAME, type DesktopNameApp } from '
 
 const srcDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
-test('Linux：设置 desktopName，且 main.ts 调用时机须在 whenReady 之前（源序锁定）', { timeout: 60_000 }, () => {
+test('Linux: settings desktopName, and main.ts invoke when machine must in whenReady before (source order lock)', { timeout: 60_000 }, () => {
   const calls: string[] = [];
   const app: DesktopNameApp = { setDesktopName: (name) => { calls.push(`setDesktopName:${name}`); } };
   assert.equal(applyLinuxDesktopName(app, 'linux'), true);
@@ -22,11 +22,11 @@ test('Linux：设置 desktopName，且 main.ts 调用时机须在 whenReady 之�
   const sweep = main.indexOf('installLinuxExitChildSweep({');
   const identity = main.indexOf('applyLinuxDesktopName(app');
   const ready = main.indexOf('await app.whenReady()');
-  assert.ok(sweep > 0 && identity > 0 && ready > 0, 'main.ts 应同时包含兜底安装、身份设置与 whenReady');
-  assert.ok(sweep < identity && identity < ready, '退出兜底与桌面身份都必须发生在 whenReady 之前');
+  assert.ok(sweep > 0 && identity > 0 && ready > 0, 'main.ts should also contains fall back install, identity settings and whenReady');
+  assert.ok(sweep < identity && identity < ready, 'exit fall back and desktop identity all must occur in whenReady before');
 });
 
-test('win32 / darwin：不设置 desktopName，保持既有行为', { timeout: 60_000 }, () => {
+test('win32 / darwin: do not settings desktopName, keep since has behavior', { timeout: 60_000 }, () => {
   const calls: string[] = [];
   const app: DesktopNameApp = { setDesktopName: (name) => { calls.push(name); } };
   assert.equal(applyLinuxDesktopName(app, 'win32'), false);
@@ -34,9 +34,9 @@ test('win32 / darwin：不设置 desktopName，保持既有行为', { timeout: 6
   assert.deepEqual(calls, []);
 });
 
-test('标识与 electron-builder 产物一致：desktopName = executableName 基名，现有标识不动', { timeout: 60_000 }, () => {
+test('identifier and electron-builder artifact consistent:desktopName = executableName base name, existing identifier do not motion', { timeout: 60_000 }, () => {
   const yml = readFileSync(join(srcDir, '..', 'electron-builder.yml'), 'utf8');
   assert.equal(LINUX_DESKTOP_NAME, 'helm-desktop');
-  assert.match(yml, /executableName:\s*helm-desktop\b/, '.desktop 文件基名来自 executableName');
-  assert.match(yml, /appId:\s*dev\.helm\.desktop\b/, 'appId 现有标识保持不变');
+  assert.match(yml, /executableName:\s*helm-desktop\b/, '.desktop file base name from executableName');
+  assert.match(yml, /appId:\s*dev\.helm\.desktop\b/, 'appId existing identifier keep do not change');
 });

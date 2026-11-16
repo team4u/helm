@@ -1,6 +1,6 @@
 /**
- * 数据目录解析与布局：默认 `~/.helm`，可被 `HELM_DATA_DIR` 覆盖，
- * 与旧系统（~/.botx / ~/.botd）完全隔离。
+ * data directory parse and layout: by default `~/.helm`, can by `HELM_DATA_DIR` override,
+ * and old system (~/.botx / ~/.botd) fully isolated.
  */
 import { mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -11,10 +11,10 @@ export const HELM_DATA_DIR_ENV = 'HELM_DATA_DIR'
 export function resolveDataDir(override?: string): string {
   if (override !== undefined) {
     if (override.trim() === '') {
-      throw new Error('dataDir 覆盖值不能为空字符串')
+      throw new Error('dataDir override value cannot be empty string')
     }
     if (!isAbsolute(override)) {
-      throw new Error(`dataDir 覆盖值必须是绝对路径: ${override}`)
+      throw new Error(`dataDir override value must be absolute path: ${override}`)
     }
     return override
   }
@@ -23,7 +23,7 @@ export function resolveDataDir(override?: string): string {
   return join(homedir(), '.helm')
 }
 
-/** 设计文档约定的数据目录子目录布局。 */
+/** design document convention data directory subdirectory layout. */
 export const DATA_SUBDIRS = [
   'profiles',
   'skills',
@@ -33,7 +33,7 @@ export const DATA_SUBDIRS = [
   'cache',
 ] as const
 
-/** 幂等创建数据目录及全部设计子目录（已存在则保持不动）。 */
+/** idempotent create data directory and all design subdirectory (already exists then keep do not motion). */
 export async function ensureDataDir(dataDir: string): Promise<void> {
   await mkdir(dataDir, { recursive: true })
   for (const sub of DATA_SUBDIRS) {

@@ -1,18 +1,16 @@
 #!/usr/bin/env node
 /**
- * Dev-time bin mounting: places thin wrapper scripts in a system PATH directory that run
- * the repo sources directly via tsx.
+ * development phase bin command mount: in system PATH directory put placement thin wrap script, via tsx direct run repository source code.
  *
- * Unlike npm link (which points at dist/ and needs a rebuild after source changes), this
- * wraps the src/ entries so edits take effect immediately. Unix only (Linux/macOS);
- * exits with an explicit error on Windows.
+ * and npm link(points to dist/, change source code must re- build) different, this script wrap src/ entry,
+ * change i.e. when takes effect. only support Unix(Linux/macOS);Windows under explicit errors exit.
  *
- * Usage:
- *   pnpm link:bins             # install helm / helm-node / helm-hub wrapper scripts
- *   pnpm unlink:bins           # remove them
+ * use method:
+ *   pnpm link:bins             # install helm / helm-node / helm-hub wrap script
+ *   pnpm unlink:bins           # remove
  *
- * Environment:
- *   HELM_BIN_DIR  override the install directory (default /usr/local/bin)
+ * environment variable:
+ *   HELM_BIN_DIR  override install directory (by default /usr/local/bin)
  */
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -22,7 +20,7 @@ import path from 'node:path'
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const MARKER = 'generated-by:helm/scripts/link-bins.mjs'
 
-/** bin name -> source entry (repo-relative); helm-hub goes through scripts/run-hub.mjs for dev path resolution */
+/** bin name → source code entry (each other for repository);helm-hub via scripts/run-hub.mjs inject dev path parse */
 const BINS = {
   helm: 'packages/cli/src/index.ts',
   'helm-node': 'packages/node/src/cli.ts',
@@ -31,7 +29,7 @@ const BINS = {
 
 const removeMode = process.argv.includes('--remove')
 if (process.platform === 'win32') {
-  console.error('link-bins does not support Windows yet: use npm link instead (bins point at dist/, so run pnpm build after code changes).')
+  console.error('link-bins temporary unsupported Windows: use... instead npm link(bin points to dist/, change code after must pnpm build).')
   process.exit(1)
 }
 
@@ -39,25 +37,25 @@ const binDir = process.env.HELM_BIN_DIR || '/usr/local/bin'
 const tsx = path.join(ROOT, 'node_modules', '.bin', 'tsx')
 
 if (!removeMode && !fs.existsSync(tsx)) {
-  console.error(`tsx not found: ${tsx}; run pnpm install at the repo root first.`)
+  console.error(`not found tsx:${tsx}, please first in repository execute pnpm install.`)
   process.exit(1)
 }
 if (!fs.existsSync(binDir)) {
-  console.error(`Target directory does not exist: ${binDir} (override with HELM_BIN_DIR).`)
+  console.error(`target directory missing:${binDir}(available HELM_BIN_DIR override).`)
   process.exit(1)
 }
 
 function wrapper(entry) {
   return [
     '#!/bin/sh',
-    `# ${MARKER} — do not edit by hand; run pnpm unlink:bins to undo`,
+    `# ${MARKER} - do not manually change; undo execute pnpm unlink:bins`,
     `exec "${tsx}" "${path.join(ROOT, entry)}" "$@"`,
     '',
   ].join('\n')
 }
 
 function npmLinkRemnant(p) {
-  // npm link leftovers: bin symlinks or package symlinks inside global node_modules
+  // npm link legacy:bin symlink or global node_modules in package symlink
   try {
     return fs.lstatSync(p).isSymbolicLink() ? fs.readlinkSync(p) : null
   } catch {
@@ -66,20 +64,20 @@ function npmLinkRemnant(p) {
 }
 
 function unlinkSyncSafe(p) {
-  // Always unlink symlinks: fs.rmSync misreports ERR_FS_EISDIR on symlinks pointing at directories
+  // delete symlink unify use unlink:fs.rmSync encounters points to directory symlink will mistakenly report ERR_FS_EISDIR
   try {
     fs.unlinkSync(p)
   } catch {}
 }
 
 function cleanNpmLinkLibRemnants() {
-  // npm link also leaves package symlinks at <prefix>/lib/node_modules/@helm/<pkg>; clean those too (best effort)
+  // npm link will in <prefix>/lib/node_modules/@helm/<pkg> package symlink, one and clean (exhaust force while is)
   const nm = path.resolve(binDir, '..', 'lib', 'node_modules')
   for (const pkg of ['cli', 'node', 'kernel']) {
     const p = path.join(nm, '@helm', pkg)
     if (npmLinkRemnant(p)) {
       unlinkSyncSafe(p)
-      console.log(`  cleaning npm link leftover symlink ${p}`)
+      console.log(`  clean up npm link legacy symlink ${p}`)
       const scopeDir = path.join(nm, '@helm')
       try {
         if (fs.readdirSync(scopeDir).length === 0) fs.rmdirSync(scopeDir)
@@ -89,7 +87,7 @@ function cleanNpmLinkLibRemnants() {
 }
 
 if (removeMode) {
-  console.log(`Removing ${Object.keys(BINS).join(' / ')} (${binDir})`)
+  console.log(`remove ${Object.keys(BINS).join(' / ')}(${binDir})`)
   for (const name of Object.keys(BINS)) {
     const p = path.join(binDir, name)
     let content = ''
@@ -98,17 +96,17 @@ if (removeMode) {
     } catch {}
     if (content.includes(MARKER) || npmLinkRemnant(p)) {
       unlinkSyncSafe(p)
-      console.log(`  removed ${p}`)
+      console.log(`  already remove ${p}`)
     } else if (fs.existsSync(p)) {
-      console.warn(`  skipped ${p}: not produced by this script, left untouched`)
+      console.warn(`  skip ${p}: non- this script artifact, not motion`)
     }
   }
   cleanNpmLinkLibRemnants()
-  console.log('Done.')
+  console.log('complete.')
   process.exit(0)
 }
 
-console.log(`Installing dev wrapper scripts to ${binDir} (tsx runs the sources; edits apply immediately):`)
+console.log(`install development wrap script to ${binDir}(tsx direct run source code, change i.e. when takes effect):`)
 for (const [name, entry] of Object.entries(BINS)) {
   const p = path.join(binDir, name)
   let st = null
@@ -116,14 +114,13 @@ for (const [name, entry] of Object.entries(BINS)) {
     st = fs.lstatSync(p)
   } catch {}
   if (st && !st.isSymbolicLink()) {
-    // Existing regular file: overwrite only if it is this script's own output, otherwise
-    // refuse explicitly (it might be some other tool's binary)
+    // already has ordinary file: only when is this script old artifact when override, otherwise explicit reject (may is other tool two enter system)
     if (!fs.readFileSync(p, 'utf8').includes(MARKER)) {
-      console.error(`  refusing to overwrite ${p}: an existing file not produced by this script is in the way; verify it manually first.`)
+      console.error(`  reject override ${p}: already exists non- this script artifact file, please first human confirm.`)
       process.exit(1)
     }
   } else if (st) {
-    // Symlink (dangling included): npm link leftovers or an old install; remove and rewrite
+    // symlink (contains dangling):npm link legacy or old install, remove after heavy write
     unlinkSyncSafe(p)
   }
   fs.writeFileSync(p, wrapper(entry), { mode: 0o755 })
@@ -132,15 +129,14 @@ for (const [name, entry] of Object.entries(BINS)) {
 }
 cleanNpmLinkLibRemnants()
 
-// Self-check: tsx exists and the command starts (--help quick smoke; same for helm-node;
-// helm-hub would really start the kernel, so only its syntax gets checked)
+// self inspect:tsx store in and can start (--help fast smoke,helm-node same;helm-hub will true start kernel, only validate language method)
 for (const name of ['helm', 'helm-node']) {
   try {
     execFileSync(path.join(binDir, name), ['--help'], { stdio: 'pipe', timeout: 60_000 })
-    console.log(`  self-check passed: ${name} --help`)
+    console.log(`  self inspect via:${name} --help`)
   } catch (err) {
-    console.error(`  self-check failed: ${name} --help\n${err.stderr || err.message}`)
+    console.error(`  self inspect failed:${name} --help\n${err.stderr || err.message}`)
     process.exit(1)
   }
 }
-console.log('Done. Run pnpm unlink:bins to undo.')
+console.log('complete. undo execute pnpm unlink:bins.')

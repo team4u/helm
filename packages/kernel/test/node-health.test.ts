@@ -1,13 +1,13 @@
 /**
- * 节点健康快照（NodeHealthSnapshot）内核支持测试：
- * 1. sanitizeNodeHealth 边界校验：必填字段非法整体丢弃、可选磁盘字段
- *    非法单独忽略、未校验的脏字段（多余键）绝不透传。
- * 2. NodeRegistry.register / noteHeartbeat / /ws/node 真实链路：
- *    注册携带合法/非法 health 的过滤与保存；心跳捎带新快照实时刷新；
- *    非本连接伪造心跳无法篡改其它节点的 health。
- * 3. GET /api/nodes：local 节点与在线 BYOM 节点均包含完整健康快照
- *    （uptimeSec/loadAvg/memFreeBytes/memTotalBytes/diskFreeBytes/diskTotalBytes），
- *    与宿主真实 os 指标一致；节点离线后 online:false 不残留过期 health。
+ * node health snapshot (NodeHealthSnapshot) kernel support test:
+ * 1. sanitizeNodeHealth boundary validate: required field illegal whole discard, optional disk field
+ *    illegal separate ignore, not validate dirty field (redundant key) never pass-through.
+ * 2. NodeRegistry.register / noteHeartbeat / /ws/node real link:
+ *    register carry legal/illegal health filter and save; heartbeat incidentally new snapshot real-time refresh;
+ *    non- this connect fabricate heartbeat cannot tamper other node health.
+ * 3. GET /api/nodes:local node and online BYOM node all contains complete health snapshot
+ *    (uptimeSec/loadAvg/memFreeBytes/memTotalBytes/diskFreeBytes/diskTotalBytes),
+ *    and host real os metric consistent; node offline after online:false leaves no residue expired health.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -24,10 +24,10 @@ import { startHub } from '../src/http/index.js'
 import { cleanupDir, makeFauxModels, makeTempDir, sleep as delay } from './helpers.js'
 
 // ---------------------------------------------------------------------------
-// 测试基座
+// test base seat
 // ---------------------------------------------------------------------------
 
-/** 极简 EventEmitter（避免与 ws WebSocket 的构造差异；同事件监听/触发语义）。 */
+/** extreme simple EventEmitter(avoid and ws WebSocket construct difference; same event listen/trigger semantics). */
 class EventEmitterShim {
   readonly #listeners = new Map<string, Set<() => void>>()
   on(event: string, listener: () => void): void {
@@ -50,7 +50,7 @@ class EventEmitterShim {
   }
 }
 
-/** 可控时序的注册表层 socket 替身（同 env-registry-races.test.ts 模式）。 */
+/** can control when order register table layer socket replace body (same env-registry-races.test.ts pattern). */
 class RegistrySocket extends EventEmitterShim {
   OPEN = 1
   CLOSED = 3
@@ -91,7 +91,7 @@ async function registerFake(
   return { socket, accepted: result.accepted }
 }
 
-/** 真实 /ws/node 网关 + 原始 WS 客户端（手动 register/heartbeat，可控时序）。 */
+/** real /ws/node gateway + original WS client (manually register/heartbeat, can control when order). */
 async function startGatewayHub(): Promise<{
   url: string
   registry: NodeRegistry
@@ -115,7 +115,7 @@ async function startGatewayHub(): Promise<{
   }
 }
 
-/** 原始 WS 节点客户端（birpc：register + heartbeat 捎带 health）。 */
+/** original WS node client (birpc:register + heartbeat incidentally health). */
 async function connectNode(
   url: string,
   nodeId: string,
@@ -152,7 +152,7 @@ async function connectNode(
           try {
             cb(JSON.parse(text) as never)
           } catch {
-            /* 非 JSON 帧忽略 */
+            /* non- JSON frame ignore */
           }
         })
       },
@@ -176,18 +176,18 @@ async function connectNode(
       try {
         rpc.$close()
       } catch {
-        /* 已关 */
+        /* already closure */
       }
       try {
         ws.close()
       } catch {
-        /* 已关 */
+        /* already closure */
       }
     },
   }
 }
 
-/** 完整 Hub（KernelRuntime + startHub，含 /api/nodes 与 /ws/node 网关）。 */
+/** complete Hub(KernelRuntime + startHub, contains /api/nodes and /ws/node gateway). */
 async function openHubApp(dir: string): Promise<{
   kernel: KernelRuntime
   hub: Awaited<ReturnType<typeof startHub>>
@@ -229,15 +229,15 @@ async function listNodesViaApi(hubUrl: string, token: string): Promise<Array<Rec
 }
 
 function assertCompleteHealth(health: unknown): void {
-  assert.ok(health !== null && typeof health === 'object', `health 需为对象：${JSON.stringify(health)}`)
+  assert.ok(health !== null && typeof health === 'object', `health must be an object:${JSON.stringify(health)}`)
   const h = health as Record<string, unknown>
-  assert.ok(Number.isFinite(h['collectedAt']), 'collectedAt 需为有限数')
+  assert.ok(Number.isFinite(h['collectedAt']), 'collectedAt must be finite count')
   assert.ok(typeof h['uptimeSec'] === 'number' && Number.isFinite(h['uptimeSec']) && h['uptimeSec'] >= 0)
   assert.ok(
     Array.isArray(h['loadAvg']) &&
       h['loadAvg'].length === 3 &&
       h['loadAvg'].every((v) => typeof v === 'number' && Number.isFinite(v)),
-    `loadAvg 需为长度 3 的有限数元组：${JSON.stringify(h['loadAvg'])}`,
+    `loadAvg must be length 3 finite count meta group:${JSON.stringify(h['loadAvg'])}`,
   )
   assert.ok(typeof h['memFreeBytes'] === 'number' && Number.isFinite(h['memFreeBytes']) && h['memFreeBytes'] >= 0)
   assert.ok(typeof h['memTotalBytes'] === 'number' && Number.isFinite(h['memTotalBytes']) && h['memTotalBytes'] >= 0)
@@ -247,15 +247,15 @@ function assertCompleteHealth(health: unknown): void {
 
 let rootDir: string
 
-test('setup: 创建临时根目录', { timeout: 60_000 }, async () => {
+test('setup: create temporary directory', { timeout: 60_000 }, async () => {
   rootDir = await makeTempDir('helm-node-health-')
 })
 
 // ---------------------------------------------------------------------------
-// 1. sanitizeNodeHealth 边界校验
+// 1. sanitizeNodeHealth boundary validate
 // ---------------------------------------------------------------------------
 
-test('sanitizeNodeHealth：合法载荷全量保留，未知脏字段剔除', { timeout: 60_000 }, () => {
+test('sanitizeNodeHealth: legal payload all amount keep, unknown dirty field remove', { timeout: 60_000 }, () => {
   const raw = {
     ...validHealth(),
     extraField: 'dirty',
@@ -270,10 +270,10 @@ test('sanitizeNodeHealth：合法载荷全量保留，未知脏字段剔除', { 
     diskFreeBytes: 2048,
     diskTotalBytes: 8192,
   })
-  assert.equal(clean !== undefined && 'extraField' in clean, false, '未校验的脏字段绝不透传')
+  assert.equal(clean !== undefined && 'extraField' in clean, false, 'not validate dirty field never pass-through')
 })
 
-test('sanitizeNodeHealth：必填字段任一非法整体丢弃（undefined，绝不抛异常）', { timeout: 60_000 }, () => {
+test('sanitizeNodeHealth: required field any one illegal whole discard (undefined, never throw exception)', { timeout: 60_000 }, () => {
   const bad: unknown[] = [
     undefined,
     null,
@@ -281,35 +281,35 @@ test('sanitizeNodeHealth：必填字段任一非法整体丢弃（undefined，�
     42,
     [],
     {},
-    // collectedAt 非法
+    // collectedAt illegal
     { ...validHealth(), collectedAt: -1 },
     { ...validHealth(), collectedAt: Number.NaN },
     { ...validHealth(), collectedAt: Number.POSITIVE_INFINITY },
     { ...validHealth(), collectedAt: '123' },
-    // uptimeSec 非法
+    // uptimeSec illegal
     { ...validHealth(), uptimeSec: -5 },
     { ...validHealth(), uptimeSec: Number.NaN },
-    // loadAvg 非法（长度 / 类型）
+    // loadAvg illegal (length / type)
     { ...validHealth(), loadAvg: [0.1, 0.2] },
     { ...validHealth(), loadAvg: [0.1, 0.2, 0.3, 0.4] },
     { ...validHealth(), loadAvg: [0.1, 'x', 0.3] },
     { ...validHealth(), loadAvg: [0.1, Number.NaN, 0.3] },
     { ...validHealth(), loadAvg: 'not-array' },
-    // memFreeBytes / memTotalBytes 非法
+    // memFreeBytes / memTotalBytes illegal
     { ...validHealth(), memFreeBytes: -1 },
     { ...validHealth(), memFreeBytes: Number.NaN },
     { ...validHealth(), memTotalBytes: -1 },
     { ...validHealth(), memTotalBytes: Number.POSITIVE_INFINITY },
   ]
   for (const payload of bad) {
-    assert.equal(sanitizeNodeHealth(payload), undefined, `非法载荷必须返回 undefined：${JSON.stringify(payload)}`)
+    assert.equal(sanitizeNodeHealth(payload), undefined, `illegal payload must return undefined:${JSON.stringify(payload)}`)
   }
 })
 
-test('sanitizeNodeHealth：可选磁盘字段非法仅忽略该字段，其余保留', { timeout: 60_000 }, () => {
+test('sanitizeNodeHealth: optional disk field illegal only ignore the field, the rest keep', { timeout: 60_000 }, () => {
   const noDisk = sanitizeNodeHealth({ ...validHealth(), diskFreeBytes: undefined })
   assert.ok(noDisk !== undefined)
-  assert.equal('diskFreeBytes' in noDisk, false, 'diskFreeBytes 缺省时不得出现该键')
+  assert.equal('diskFreeBytes' in noDisk, false, 'diskFreeBytes default when must not appear the key')
   assert.equal(noDisk.diskTotalBytes, 8192)
 
   const badDisk = sanitizeNodeHealth({
@@ -318,16 +318,16 @@ test('sanitizeNodeHealth：可选磁盘字段非法仅忽略该字段，其余�
     diskTotalBytes: 'lots',
   })
   assert.ok(badDisk !== undefined)
-  assert.equal('diskFreeBytes' in badDisk, false, '非法 diskFreeBytes 忽略')
-  assert.equal('diskTotalBytes' in badDisk, false, '非法 diskTotalBytes 忽略')
-  assert.equal(badDisk.memTotalBytes, 4096, '其余字段不受影响')
+  assert.equal('diskFreeBytes' in badDisk, false, 'illegal diskFreeBytes ignore')
+  assert.equal('diskTotalBytes' in badDisk, false, 'illegal diskTotalBytes ignore')
+  assert.equal(badDisk.memTotalBytes, 4096, 'the rest field do not subject to affect')
 })
 
 // ---------------------------------------------------------------------------
-// 2. 注册表：register 过滤保存 + noteHeartbeat 刷新 + 伪造心跳防篡改
+// 2. register table:register filter save + noteHeartbeat refresh + fabricate heartbeat guard against tamper
 // ---------------------------------------------------------------------------
 
-test('register：合法 health 保存、非法 health 过滤、缺省不产生 health 键', { timeout: 60_000 }, async () => {
+test('register: legal health save, illegal health filter, default produces no health key', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   try {
     const good = validHealth()
@@ -340,18 +340,18 @@ test('register：合法 health 保存、非法 health 过滤、缺省不产生 h
       loadAvg: [1, 2],
       memTotalBytes: -1,
     })
-    assert.equal(bad.accepted, true, '非法 health 不影响注册本身（边界过滤，不拒绝连接）')
-    assert.equal(registry.get('node-bad')?.health, undefined, '非法 health 不得保存')
+    assert.equal(bad.accepted, true, 'illegal health does not affect register itself (boundary filter, do not reject connect)')
+    assert.equal(registry.get('node-bad')?.health, undefined, 'illegal health must not save')
 
     const none = await registerFake(registry, 'node-none')
     assert.equal(none.accepted, true)
-    assert.equal('health' in (registry.get('node-none') ?? {}), false, '未上报 health 时不产生空键')
+    assert.equal('health' in (registry.get('node-none') ?? {}), false, 'not on report health when produces no empty key')
   } finally {
     await registry.close()
   }
 })
 
-test('noteHeartbeat：新快照实时刷新；无载荷仅刷新 lastSeenAt；非法载荷不覆盖', { timeout: 60_000 }, async () => {
+test('noteHeartbeat: new snapshot real-time refresh; without payload only refresh lastSeenAt; illegal payload does not override', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   try {
     const first = validHealth()
@@ -363,28 +363,28 @@ test('noteHeartbeat：新快照实时刷新；无载荷仅刷新 lastSeenAt；�
     const second = { ...validHealth(), uptimeSec: 999_999, collectedAt: Date.now() }
     assert.equal(registry.noteHeartbeat('hb-node', socket as unknown as import('ws').WebSocket, { health: second }), true)
     const refreshed = registry.get('hb-node')!.health!
-    assert.equal(refreshed.uptimeSec, 999_999, '心跳快照必须覆盖旧值')
+    assert.equal(refreshed.uptimeSec, 999_999, 'heartbeat snapshot must override old value')
     assert.ok(refreshed.collectedAt >= first.collectedAt)
 
-    // 无载荷心跳：只刷新 lastSeenAt，health 保持不变。
+    // without payload heartbeat: only refresh lastSeenAt,health keep do not change.
     const keep = registry.get('hb-node')!.health
     assert.equal(registry.noteHeartbeat('hb-node', socket as unknown as import('ws').WebSocket), true)
     assert.deepEqual(registry.get('hb-node')!.health, keep)
 
-    // 非法载荷：不覆盖既有合法快照。
+    // illegal payload: does not override since has legal snapshot.
     assert.equal(
       registry.noteHeartbeat('hb-node', socket as unknown as import('ws').WebSocket, {
         health: { ...validHealth(), memFreeBytes: Number.NaN } as never,
       }),
       true,
     )
-    assert.deepEqual(registry.get('hb-node')!.health, keep, '非法快照不得覆盖合法值')
+    assert.deepEqual(registry.get('hb-node')!.health, keep, 'illegal snapshot must not override legal value')
   } finally {
     await registry.close()
   }
 })
 
-test('noteHeartbeat：非本连接伪造心跳无法篡改其它节点的 health（返回 false）', { timeout: 60_000 }, async () => {
+test('noteHeartbeat: non- this connect fabricate heartbeat cannot tamper other node health(return false)', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   try {
     const victim = validHealth()
@@ -392,21 +392,21 @@ test('noteHeartbeat：非本连接伪造心跳无法篡改其它节点的 health
     const b = await registerFake(registry, 'attacker-node')
     const stranger = new RegistrySocket()
 
-    // B 连接伪造 A 节点心跳：必须被拒。
+    // B connect fabricate A node heartbeat: must by refuse.
     assert.equal(
       registry.noteHeartbeat('victim-node', b.socket as unknown as import('ws').WebSocket, {
         health: { ...validHealth(), uptimeSec: 666 },
       }),
       false,
     )
-    assert.deepEqual(registry.get('victim-node')?.health, victim, '伪造心跳不得篡改 victim health')
+    assert.deepEqual(registry.get('victim-node')?.health, victim, 'fabricate heartbeat must not tamper victim health')
 
-    // 未注册连接伪造：同样被拒。
+    // not registered connect fabricate: same by refuse.
     assert.equal(
       registry.noteHeartbeat('victim-node', stranger as unknown as import('ws').WebSocket, { health: validHealth() }),
       false,
     )
-    // 不存在节点：拒。
+    // missing node: refuse.
     assert.equal(
       registry.noteHeartbeat('ghost', a.socket as unknown as import('ws').WebSocket, { health: validHealth() }),
       false,
@@ -418,34 +418,34 @@ test('noteHeartbeat：非本连接伪造心跳无法篡改其它节点的 health
 })
 
 // ---------------------------------------------------------------------------
-// 3. 真实 /ws/node 网关链路：注册与心跳捎带 health
+// 3. real /ws/node gateway link: register and heartbeat incidentally health
 // ---------------------------------------------------------------------------
 
-test('/ws/node：register 与 heartbeat 携带 health 快照实时写入连接', { timeout: 60_000 }, async () => {
+test('/ws/node:register and heartbeat carry health snapshot real-time write connect', { timeout: 60_000 }, async () => {
   const hub = await startGatewayHub()
   try {
     const node = await connectNode(hub.url, 'ws-health-node')
     const registered = await node.register({ ...validHealth(), uptimeSec: 100 }).catch((error: unknown) => {
-      throw new Error(`register 调用失败：${String(error instanceof Error ? error.stack : error)}`)
+      throw new Error(`register failed to invoke:${String(error instanceof Error ? error.stack : error)}`)
     })
-    assert.equal(registered.ok, true, `注册被拒：${JSON.stringify(registered)}`)
+    assert.equal(registered.ok, true, `register by refuse:${JSON.stringify(registered)}`)
     assert.deepEqual(hub.registry.get('ws-health-node')?.health?.uptimeSec, 100)
     assertCompleteHealth(hub.registry.get('ws-health-node')?.health)
 
-    // 心跳捎带新快照：实时覆盖。
+    // heartbeat incidentally new snapshot: real-time override.
     assert.equal(await node.heartbeat({ health: { ...validHealth(), uptimeSec: 200 } }), true)
     assert.equal(hub.registry.get('ws-health-node')?.health?.uptimeSec, 200)
 
-    // 无第二参数的旧式心跳仍兼容（仅刷新 lastSeenAt）。
+    // without second parameter old style heartbeat still compatibility (only refresh lastSeenAt).
     assert.equal(await node.heartbeat(), true)
     assert.equal(hub.registry.get('ws-health-node')?.health?.uptimeSec, 200)
 
-    // 心跳携带非法快照：不覆盖既有值。
+    // heartbeat carry illegal snapshot: does not override since has value.
     assert.equal(
       await node.heartbeat({ health: { ...validHealth(), loadAvg: [9] } as never }),
       true,
     )
-    assert.equal(hub.registry.get('ws-health-node')?.health?.uptimeSec, 200, '非法快照不覆盖')
+    assert.equal(hub.registry.get('ws-health-node')?.health?.uptimeSec, 200, 'illegal snapshot does not override')
     node.close()
   } finally {
     await hub.close()
@@ -453,14 +453,14 @@ test('/ws/node：register 与 heartbeat 携带 health 快照实时写入连接',
 })
 
 // ---------------------------------------------------------------------------
-// 4. GET /api/nodes：local 与在线 BYOM 节点完整 health；离线不残留
+// 4. GET /api/nodes:local and online BYOM node complete health; offline leaves no residue
 // ---------------------------------------------------------------------------
 
-test('GET /api/nodes：local 与在线 BYOM 均含完整真实 health；离线不残留过期 health', { timeout: 60_000 }, async () => {
+test('GET /api/nodes:local and online BYOM all contains complete real health; offline leaves no residue expired health', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'api-'))
   const app = await openHubApp(dir)
   try {
-    // local：与宿主真实 os 指标一致。
+    // local: and host real os metric consistent.
     const initial = await listNodesViaApi(app.hub.url, app.token)
     assert.equal(initial.length, 1)
     assert.equal(initial[0]!['id'], 'local')
@@ -468,15 +468,15 @@ test('GET /api/nodes：local 与在线 BYOM 均含完整真实 health；离线�
     assertCompleteHealth(localHealth)
     assert.ok(
       Math.abs((localHealth['uptimeSec'] as number) - os.uptime()) < 60,
-      `local uptimeSec 应接近宿主 os.uptime()：${String(localHealth['uptimeSec'])}`,
+      `local uptimeSec should connect near host os.uptime():${String(localHealth['uptimeSec'])}`,
     )
     assert.ok(
       Math.abs((localHealth['memTotalBytes'] as number) - os.totalmem()) < 1024 * 1024,
-      'local memTotalBytes 应等于宿主 os.totalmem()',
+      'local memTotalBytes should equal host os.totalmem()',
     )
-    assert.deepEqual(localHealth['loadAvg'], os.loadavg(), 'local loadAvg 应等于宿主 os.loadavg()')
+    assert.deepEqual(localHealth['loadAvg'], os.loadavg(), 'local loadAvg should equal host os.loadavg()')
 
-    // 签发 + 注册真实 WS 节点（register 捎带完整 health）。
+    // sign + register real WS node (register incidentally complete health).
     const issue = await fetch(`${app.hub.url}/api/nodes/issue`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${app.token}` },
@@ -493,26 +493,26 @@ test('GET /api/nodes：local 与在线 BYOM 均含完整真实 health；离线�
     const byom = withByom.find((n) => n['id'] === 'health-byom')!
     assert.equal(byom['online'], true)
     assertCompleteHealth(byom['health'])
-    assert.equal((byom['health'] as { uptimeSec: number }).uptimeSec, 1234, '注册快照原样透传')
+    assert.equal((byom['health'] as { uptimeSec: number }).uptimeSec, 1234, 'register snapshot original pass-through')
 
-    // 心跳捎带新快照 -> API 实时可见。
+    // heartbeat incidentally new snapshot -> API real-time visible.
     assert.equal(await node.heartbeat({ health: { ...validHealth(), uptimeSec: 4321 } }), true)
     const refreshed = (await listNodesViaApi(app.hub.url, app.token)).find((n) => n['id'] === 'health-byom')!
-    assert.equal((refreshed['health'] as { uptimeSec: number }).uptimeSec, 4321, '心跳快照经 API 实时可见')
+    assert.equal((refreshed['health'] as { uptimeSec: number }).uptimeSec, 4321, 'heartbeat snapshot via API real-time visible')
 
-    // 断开 -> 离线不残留过期 health。
+    // disconnect -> offline leaves no residue expired health.
     node.close()
     await delay(300)
     const offline = (await listNodesViaApi(app.hub.url, app.token)).find((n) => n['id'] === 'health-byom')!
     assert.equal(offline['online'], false)
-    assert.equal(offline['health'], undefined, '离线后不得残留过期 health')
+    assert.equal(offline['health'], undefined, 'offline after must not leftover expired health')
   } finally {
     await app.close().catch(() => undefined)
     await cleanupDir(dir).catch(() => undefined)
   }
 })
 
-/** 用真实签发 token 连接（connectNode 的 token 固定为 <nodeId>:secret，仅网关替身用）。 */
+/** use real sign token connect (connectNode  token fixed is <nodeId>:secret, only gateway replace body use). */
 async function connectNodeWithToken(
   url: string,
   nodeId: string,
@@ -550,7 +550,7 @@ async function connectNodeWithToken(
           try {
             cb(JSON.parse(text) as never)
           } catch {
-            /* 非 JSON 帧忽略 */
+            /* non- JSON frame ignore */
           }
         })
       },
@@ -574,17 +574,17 @@ async function connectNodeWithToken(
       try {
         rpc.$close()
       } catch {
-        /* 已关 */
+        /* already closure */
       }
       try {
         ws.close()
       } catch {
-        /* 已关 */
+        /* already closure */
       }
     },
   }
 }
 
-test('teardown: 清理临时根目录', { timeout: 60_000 }, async () => {
+test('teardown: clean up temporary directory', { timeout: 60_000 }, async () => {
   await cleanupDir(rootDir)
 })

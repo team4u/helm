@@ -1,25 +1,25 @@
 /**
- * createHubHandler：Web Standard 请求处理器（核心路由 + 鉴权门禁 + CORS）。
+ * createHubHandler:Web Standard request handle (core routing + authentication gate + CORS).
  *
- * 鉴权策略：
- * - 公开端点：/api/auth/setup、/api/auth/login、/api/auth/status、
- *   插件 route({ public: true })（插件自行验签）。
- * - 其余一律 Bearer token 经 kernel.auth.verifyToken；无匿名初始化漏洞。
+ * authentication policy:
+ * - public end point:/api/auth/setup,/api/auth/login,/api/auth/status,
+ *   plugin route({ public: true })(plugin self row signature verification).
+ * - the rest one rule Bearer token via kernel.auth.verifyToken; without anonymous initialize loophole.
  *
- * public 插件路由豁免与 routes.ts 的派发共用同一完整路径匹配器
- * （route-match.ts），两处语义不会漂移；路径段非法百分号编码统一 400。
+ * public plugin routing exemption and routes.ts dispatch shared use the same complete path match
+ * (route-match.ts), two where semantics will not drift; path segment illegal hundred number encode unify 400.
  *
- * 跨源策略：本地个人助理场景（本机/局域网自用，无浏览器跨站防护
- * 需求），有意不做跨站限制——带 Origin 的请求一律反射其 Origin 并
- * 允许凭据（见 http-utils.ts 的 withCors），真实边界由 Bearer token
- * 鉴权承担；不带 Origin 的 CLI/服务端调用不受影响。
- * JSON 端点同时校验 content-type application/json（charset 可选），
- * 拒绝跨站表单/text-simple POST 冒充 JSON；插件 public 原始路由不强制
- * JSON（webhook 载荷形态由插件自定）。
+ * across source policy: local person assist scenario (local machine/scoped domain network self use, without browser across station protect
+ * requirement), has intent does not across station restrict - - carries Origin request one rule reflection its Origin and
+ * allows credentials (see http-utils.ts  withCors), real boundary by Bearer token
+ * authentication bear bear; do not carries Origin  CLI/server side invoke do not subject to affect.
+ * JSON end point also validate content-type application/json(charset optional),
+ * reject across station table single/text-simple POST smoke fill JSON; plugin public original routing do not force
+ * JSON(webhook payload form by plugin self set).
  *
- * SSE：kernel.events.response() 由 runtime 提供；HTTP 层不做缓存/转换、
- * 不压缩（gzip 仅覆盖 application/json，见 gzip.ts）；
- * 断开（signal abort）由 events 实现负责取消订阅。
+ * SSE:kernel.events.response() by runtime provide;HTTP layer does not cache/convert,
+ * do not compress (gzip only override application/json, see gzip.ts);
+ * disconnect (signal abort) by events implement negative duty cancel subscribe.
  */
 import {
   errorResponse,
@@ -39,11 +39,11 @@ import type { KernelRuntimeLike } from './contracts.js'
 export interface HubHandlerOptions {
   kernel: KernelRuntimeLike
   /**
-   * 生产静态托管目录（产品策略，由组合层/hub 入口显式提供）：
-   * - 字符串：显式指定目录；失效时结构化 web_dist_invalid 报错，绝不静默禁用；
-   * - false / 缺省：不启用静态托管（非 /api 一律 JSON 404，纯 API 形态）。
-   * 内核不做任何默认目录探测（不硬编码 Web 包位置；嵌入式 Kernel 的 HTTP
-   * 默认行为不随仓旁是否存在 web dist 改变）。
+   * produce static hosting directory (produce product policy, by combine layer/hub entry explicit provide):
+   * - string: explicit designate directory; expires when structure web_dist_invalid errors, never static default disable;
+   * - false / default: does not enable static hosting (non- /api one rule JSON 404, pure API form).
+   * kernel does not any by default directory probe (do not hard encode Web package location; embed style Kernel  HTTP
+   * by default behavior do not follow warehouse beside is otherwise store in web dist change).
    */
   webDistDir?: string | false
 }
@@ -65,7 +65,7 @@ export function createHubHandler(
   const { kernel } = options
   const redactor: JsonRedactor | undefined = makeRedactor(kernel)
   const webDistDir = options.webDistDir
-  // 目录解析缓存（handler 实例内，仅缓存成功结果）：dir → 服务
+  // directory parse cache (handler instance inside, only cache succeeded result):dir → service
   let staticServeCache: StaticCacheEntry | null = null
   const resolveStaticServe = async (): Promise<StaticServe | undefined> => {
     if (webDistDir === false || webDistDir === undefined) return undefined
@@ -77,10 +77,10 @@ export function createHubHandler(
     try {
       serve = await createStaticServe(dir)
     } catch (err) {
-      // 显式指定失效目录：结构化诊断，绝不静默禁用（诚实性纪律）
+      // explicit designate expires directory: structure diagnose, never static default disable (honest discipline)
       throw new HelmError(
         'web_dist_invalid',
-        `静态托管目录不可用: ${dir}（${err instanceof Error ? err.message : String(err)}）`,
+        `static hosting directory unavailable: ${dir}(${err instanceof Error ? err.message : String(err)})`,
         500,
         { dir },
       )
@@ -97,33 +97,33 @@ export function createHubHandler(
       const url = new URL(request.url)
 
       if (!url.pathname.startsWith('/api/') && url.pathname !== '/api') {
-        // 生产静态托管：非 /api 的 GET/HEAD 走 webDistDir（未启用时回落 JSON 404）
+        // produce static hosting: non- /api  GET/HEAD away webDistDir(not enabled when back JSON 404)
         if (request.method === 'GET' || request.method === 'HEAD') {
           const serve = await resolveStaticServe()
           if (serve !== undefined) {
             return gzipJsonResponse(request, withCors(await serve.serve(request.method, url.pathname, { acceptGzip: acceptsGzip(request) }), origin))
           }
         }
-        return gzipJsonResponse(request, withCors(errorResponse(redactor, 404, 'not_found', '路由不存在'), origin))
+        return gzipJsonResponse(request, withCors(errorResponse(redactor, 404, 'not_found', 'routing missing'), origin))
       }
 
-      // 去尾斜杠归一（/api/conversations/ 等价 /api/conversations）
+      // remove tail slash archive one (/api/conversations/ etc. price /api/conversations)
       const normalized = url.pathname.length > 1 && url.pathname.endsWith('/') ? url.pathname.slice(0, -1) : url.pathname
 
       const segments = decodeSegments(normalized)
 
       if (PUBLIC_PATHS.has(normalized)) {
-        // auth/setup|login 是 JSON 端点：跨站 text/plain 简单 POST 冒充被拒。
+        // auth/setup|login is JSON end point: across station text/plain simple POST smoke fill by refuse.
         if (request.method !== 'GET' && request.method !== 'HEAD' && !jsonContentTypeOk(request)) {
-          return gzipJsonResponse(request, withCors(errorResponse(redactor, 415, 'unsupported_media_type', 'JSON 端点需 content-type: application/json'), origin))
+          return gzipJsonResponse(request, withCors(errorResponse(redactor, 415, 'unsupported_media_type', 'JSON end point must content-type: application/json'), origin))
         }
         return gzipJsonResponse(request, withCors(await handleApi(request, kernel, redactor), origin))
       }
 
-      // 插件 public 路由豁免（其 handler 自行验签）；与派发共用匹配器。
+      // plugin public routing exemption (its handler self row signature verification); and dispatch shared use match.
       const isPublic = isPublicPluginRoute(kernel, request.method, segments)
       if (!isPublic && isJsonEndpoint(request.method, normalized) && !jsonContentTypeOk(request)) {
-        return gzipJsonResponse(request, withCors(errorResponse(redactor, 415, 'unsupported_media_type', 'JSON 端点需 content-type: application/json'), origin))
+        return gzipJsonResponse(request, withCors(errorResponse(redactor, 415, 'unsupported_media_type', 'JSON end point must content-type: application/json'), origin))
       }
       if (isPublic) {
         return gzipJsonResponse(request, withCors(await handleApi(request, kernel, redactor), origin))
@@ -131,16 +131,16 @@ export function createHubHandler(
 
       const token = bearerToken(request)
       if (token === undefined) {
-        return gzipJsonResponse(request, withCors(errorResponse(redactor, 401, 'unauthorized', '缺少 Bearer token'), origin))
+        return gzipJsonResponse(request, withCors(errorResponse(redactor, 401, 'unauthorized', 'missing Bearer token'), origin))
       }
       const valid = await kernel.auth.verifyToken(token)
       if (valid !== true) {
-        return gzipJsonResponse(request, withCors(errorResponse(redactor, 401, 'unauthorized', 'token 无效或已过期'), origin))
+        return gzipJsonResponse(request, withCors(errorResponse(redactor, 401, 'unauthorized', 'token invalid or expired'), origin))
       }
 
       return gzipJsonResponse(request, withCors(await handleApi(request, kernel, redactor), origin))
     } catch (error) {
-      // 非法路径编码（含 public 匹配阶段）也要给出结构化 400，而非 500。
+      // illegal path encode (contains public match phase) also want to out structure 400, while non- 500.
       if (error instanceof PathDecodeError) {
         return gzipJsonResponse(request, withCors(errorResponse(redactor, 400, 'invalid_path_encoding', error.message), origin))
       }
@@ -161,20 +161,20 @@ function redactText(kernel: KernelRuntimeLike): (text: string) => string {
   return (text: string) => stash.redact(text)
 }
 
-/** 是否 JSON 端点：除插件 public 原始路由与产物二进制上传外全部核心端点都是 JSON。 */
+/** is otherwise JSON end point: except plugin public original routing and artifact two enter system upload outside all core end point all is JSON. */
 function isJsonEndpoint(method: string, pathname: string): boolean {
   if (method === 'GET' || method === 'HEAD' || method === 'DELETE') return false
   if (!pathname.startsWith('/api/')) return false
-  // 插件动态路由命名空间：public webhook 载荷形态由插件自定义。
+  // plugin motion state routing naming empty between:public webhook payload form by plugin self define.
   const segs = pathname.split('/').filter((s) => s.length > 0)
   if (segs[0] === 'api' && segs[1] === 'plugins' && segs[3] === 'routes') return false
-  // 产物上传：POST /api/conversations/:id/artifacts 接受二进制流
-  //（application/octet-stream；application/json 分支在路由内自行处理）。
+  // artifact upload:POST /api/conversations/:id/artifacts accept two enter system stream
+  //(application/octet-stream;application/json branch in routing inside self row handle).
   if (segs[0] === 'api' && segs[1] === 'conversations' && segs[3] === 'artifacts' && segs.length === 4) return false
   return true
 }
 
-/** 请求是否携带 body（chunked 或 content-length > 0）。 */
+/** request is otherwise carry body(chunked or content-length > 0). */
 function requestHasBody(request: Request): boolean {
   if (request.headers.get('transfer-encoding') !== null) return true
   const cl = request.headers.get('content-length')
@@ -182,9 +182,9 @@ function requestHasBody(request: Request): boolean {
 }
 
 /**
- * content-type 校验：application/json（charset 参数可选）。
- * 无 body 的请求（POST abort 等）允许缺省 content-type；带 body 却缺失
- * 或非 JSON（跨站表单 text/plain）一律拒绝。
+ * content-type validate:application/json(charset parameter optional).
+ * without body request (POST abort etc.) allows default content-type; carries body yet missing
+ * or non- JSON(across station table single text/plain) one rule reject.
  */
 function jsonContentTypeOk(request: Request): boolean {
   const raw = request.headers.get('content-type')
@@ -199,7 +199,7 @@ function bearerToken(request: Request): string | undefined {
   return match?.[1] ?? undefined
 }
 
-/** 判断是否命中插件声明为 public 的动态路由（segments 已解码）。 */
+/** decide is otherwise hit plugin declaration is public motion state routing (segments already decode). */
 export function isPublicPluginRoute(kernel: KernelRuntimeLike, method: string, segments: string[]): boolean {
   if (segments.length === 0 || segments[0] !== 'api') return false
   let routes

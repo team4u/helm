@@ -1,5 +1,5 @@
 /**
- * Hub 集成测试共用环境与夹具辅助，复用 `@helm/test-kit` 原语。
+ * Hub integration test shared use environment and fixture auxiliary, re- use `@helm/test-kit` original language.
  */
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
@@ -32,7 +32,7 @@ export type FauxProviderOptions = Parameters<typeof fauxProvider>[0]
 export type FauxProviderHandle = ReturnType<typeof fauxProvider>
 export type ModelsRegistry = ReturnType<typeof createModels>
 
-/** 创建并注册官方 faux provider 的 Models 实例。 */
+/** create and register official faux provider  Models instance. */
 export function makeFauxModels(options?: FauxProviderOptions): {
   models: ModelsRegistry
   faux: FauxProviderHandle
@@ -50,7 +50,7 @@ export interface CreateHubTestAppOptions extends Omit<HelmOptions, 'models'> {
   fauxOptions?: FauxProviderOptions
 }
 
-/** 启动挂载 faux provider 的真实 `createHelm` 实例。 */
+/** start mount faux provider real `createHelm` instance. */
 export async function createHubTestApp(options: CreateHubTestAppOptions = {}): Promise<{
   app: HubTestApp
   kernel: HubTestApp['kernel']
@@ -78,15 +78,15 @@ export interface HubTestEnv {
 }
 
 export interface OpenHubTestEnvOptions extends CreateHubTestAppOptions {
-  /** 临时目录前缀（仅在未传 dataDir 时生效）。 */
+  /** temp directory prefix (only in not pass dataDir when takes effect). */
   prefix?: string
-  /** 是否忽略 app.close() 异常（少数测试在已有已知基座 close 缺陷跟踪时显式开启）。 */
+  /** is otherwise ignore app.close() exception (few count test in already has known base seat close defect trace when explicit open start). */
   swallowCloseError?: boolean
 }
 
 /**
- * 创建带临时 `dataDir`（若未显式提供）的真实 `createHelm` 环境。
- * 仅当目录由本函数自建时，`close` 才会递归清理该目录。
+ * create carries temporary `dataDir`(if not explicit provide) real `createHelm` environment.
+ * only when directory by this function self create when,`close` only then will recursion clean up the directory.
  */
 export async function openHubTestEnv(options: OpenHubTestEnvOptions = {}): Promise<HubTestEnv> {
   const {
@@ -128,7 +128,7 @@ export async function openHubTestEnv(options: OpenHubTestEnvOptions = {}): Promi
   }
 }
 
-/** 内存插件文档存储夹具（供无 SQLite 的 PluginHost 治理单测使用）。 */
+/** memory plugin document store fixture (supply without SQLite  PluginHost governance single test use). */
 export class MemoryDocStore implements PluginDocStore {
   store = new Map<string, unknown>()
   get<T>(key: string, initial: T): T {
@@ -146,7 +146,7 @@ export class MemoryDocStore implements PluginDocStore {
   async flush(): Promise<void> {}
 }
 
-/** 内存插件配置存储夹具（支持 null 删除语义，与 `HelmPluginConfigStore` 一致）。 */
+/** memory plugin config store fixture (support null delete semantics, and `HelmPluginConfigStore` consistent). */
 export class MemoryConfigStore implements PluginConfigStore {
   store = new Map<string, Record<string, unknown>>()
   get(pluginId: string): Record<string, unknown> {

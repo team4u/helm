@@ -1,18 +1,18 @@
 /**
- * helm-node 自升级引擎：npm 双包（@helm/node + @helm/cli）版本化安装事务。
+ * helm-node self upgrade engine:npm double package (@helm/node + @helm/cli) version install transaction.
  *
- * 设计要点（与 botd 升级引擎同源但更严格）：
- * - 双包同版本安装：一次 release 同时固定 @helm/node 与 @helm/cli 的精确
- *   版本，各自校验 registry 元数据 dist.integrity（sha512）后下载 tarball
- *   并校验哈希，再以本地 tgz 离线安装到同一 staging 目录；
- * - 候选目录 immutable：`releases/<ver>/<uuid>/`，永不删除（含正在运行的
- *   同版本目录）；版本根 `.complete` 指向完整候选并缓存校验过的入口；
- * - JSON 记录（current.json / update-blocked.json / .complete）仅 ENOENT
- *   返回 null，损坏与 IO 错误显式抛出（诚实错误纪律）；一律 0600 原子写；
- * - 提交点语义：`prepareReplacement` 返回"已注册但未激活"的候选，
- *   `replacement.commit()`（写 pid、发 activate 并等新 daemon 回报）才是
- *   唯一提交点；仅启动/注册不当作提交；commit 失败走 abort + 回滚 +
- *   写 blocked + 解除新命令 gate，绝不静默降级或伪造 PID。
+ * design want point (and botd upgrade engine same source but more strictly):
+ * - double package same version install: once release also fixed @helm/node and @helm/cli precise
+ *   version, each validate registry metadata dist.integrity(sha512) after download tarball
+ *   and validate hash, again with local tgz offline install to the same staging directory;
+ * - choose directory immutable:`releases/<ver>/<uuid>/`, forever do not delete (contains is now run
+ *   same version directory); version `.complete` points to complete choose and cache validate entry;
+ * - JSON record (current.json / update-blocked.json / .complete) only ENOENT
+ *   return null, corrupt and IO error explicit throw (honest error discipline); one rule 0600 atomic write;
+ * - commit point semantics:`prepareReplacement` return"registered but inactive"choose,
+ *   `replacement.commit()`(write pid, activate and etc. new daemon back report) only then is
+ *   unique commit point; only start/register do not when act commit;commit failed away abort + rollback +
+ *   write blocked + solve except new command gate, never static default fall back or fabricate PID.
  */
 import fs, { type FileHandle } from 'node:fs/promises';
 import rawFs from 'node:fs';
@@ -32,33 +32,33 @@ import { killProcessTree } from './local-env.js';
 
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org';
 
-/** 输入非法/策略拒绝（调用方可映射 4xx）。 */
+/** input illegal/policy reject (caller can mapping 4xx). */
 export class UpgradeRejectedError extends Error {}
 
 /**
- * 提交结果未确认：activate 已发出、候选可能已向 Hub 上报 commit，仅本机
- * 确认丢失（如 ACK 超时）。这是特殊分支——不 abort、不回滚 current、不写
- * blocked；保持新 current 与 draining gate，通知 onScheduleShutdown 让旧宿主
- * 退出，向上抛“新版本已选择，激活结果未确认”而非 rollback。候选收到
- * activate 后保持激活并幂等重试 Hub commit；Hub 只依据收到的 commit 判定
- * 成功，避免 Hub 已成功却因本地 ACK 超时被反向回滚。
+ * commit result not confirm:activate already out, choose may already to Hub on report commit, only local machine
+ * confirm lose (such as ACK timeout). this is special branch - - do not abort, do not rollback current, do not write
+ * blocked; keep new current and draining gate, notify onScheduleShutdown let old host
+ * exit, to on throw"new version already choose, activate result not confirm"while non- rollback. choose receives
+ * activate after keep activate and idempotent retry Hub commit;Hub only based on receives commit decide
+ * succeeded, avoid Hub already succeeded yet because local ACK timeout by reverse rollback.
  */
 export class UpgradeCommitUnconfirmedError extends Error {}
 
-// —— 固定接口 ——————————————————————————————————————————————————————
+// - - fixed interface - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-/** 已就绪的候选 release（不可变目录 + 已校验入口）。 */
+/** ready choose release(cannot change directory + already validate entry). */
 export interface StagedNodeRelease {
   version: string;
-  /** 不可变候选目录（releases/<ver>/<uuid>）。 */
+  /** cannot change choose directory (releases/<ver>/<uuid>). */
   releaseDir: string;
-  /** @helm/node 守护入口（dist/cli.js）绝对路径。 */
+  /** @helm/node guard entry (dist/cli.js) absolute path. */
   entryPath: string;
-  /** @helm/cli 受管 helm 客户端 bin 目录（node_modules/.bin）绝对路径。 */
+  /** @helm/cli managed helm client bin directory (node_modules/.bin) absolute path. */
   cliBinDir: string;
 }
 
-/** 已完成 Hub 注册、等待激活的替换 daemon；commit() 是唯一提交点。 */
+/** completed Hub register, wait for activate replace daemon;commit() is unique commit point. */
 export interface PreparedNodeReplacement {
   pid: number;
   commit(): Promise<void>;
@@ -77,7 +77,7 @@ export interface PerformNodeUpgradeOptions {
     release: StagedNodeRelease,
     context: { attemptId: string; previousVersion: string; targetVersion: string },
   ) => Promise<PreparedNodeReplacement>;
-  /** 排空口径回调：返回仍需等待收敛的在途操作数（exec + 隧道 + 一次性 IPC call）。 */
+  /** arrange empty opening path call back: return still must wait for converge in-flight operation count (exec + tunnel + once IPC call). */
   getActiveExecCount?: () => number;
   setDraining?: (value: boolean) => void;
   drainTimeoutMs?: number;
@@ -87,9 +87,9 @@ export interface PerformNodeUpgradeOptions {
 export interface StageReleaseOptions {
   registryUrl?: string;
   fetchFn?: typeof fetch;
-  /** 仅单测注入：返回相对 staging 的入口与 bin 目录；校验无路径逃逸。 */
+  /** only single test inject: return each other for staging entry and bin directory; validate without path escape. */
   stageExtractor?: (stagingDir: string, targetVersion: string) => Promise<{ entryPath: string; cliBinDir: string }>;
-  /** 强制重装：跳过 .complete 缓存复用，生成新的不可变候选（绝不删除既有候选，含正在运行的同版本目录）。 */
+  /** force heavy install: skip .complete cache re- use, generate new cannot change choose (never delete since has choose, contains is now run same version directory). */
   force?: boolean;
 }
 
@@ -112,25 +112,25 @@ export interface BlockedReleaseRecord {
   at: string;
 }
 
-// —— 版本 ——————————————————————————————————————————————————————————
+// - - version - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-/** 严格 SemVer 解析/比较唯一实现位于 @helm/protocol/semver；此处仅保留本引擎的错误信封（UpgradeRejectedError → RPC invalid）。 */
+/** strictly SemVer parse/compare unique implement at @helm/protocol/semver; this where only keep this engine error message seal (UpgradeRejectedError → RPC invalid). */
 function requireStrictVersion(input: string, label: string): void {
   if (!isStrictSemver(input)) {
     throw new UpgradeRejectedError(
-      `非法 SemVer 版本号（${label}）："${input}"（要求严格 x.y.z[-pre][+build]，不允许 v 前缀）`,
+      `illegal SemVer version number (${label}):"${input}"(want seek strictly x.y.z[-pre][+build], disallows v prefix)`,
     );
   }
 }
 
-/** 严格 SemVer 比较（预发布优先级：正式版 > 预发布；数字段按数值、字母段按 ASCII；build metadata 按规范不参与比较）。非法输入抛 UpgradeRejectedError。 */
+/** strictly SemVer compare (pre- publish priority: formal edition > pre- publish; number segment by count value, character parent segment by ASCII;build metadata by specification does not participate compare). invalid input throw UpgradeRejectedError. */
 export function compareSemver(a: string, b: string): number {
   requireStrictVersion(a, 'a');
   requireStrictVersion(b, 'b');
   return compareStrictSemverShared(a, b);
 }
 
-/** Web/UI 允许 ` v1.0.0 ` 形态：trim 并去掉一个 v/V 前缀，再严格校验。 */
+/** Web/UI allows ` v1.0.0 ` form:trim and remove a v/V prefix, again strictly validate. */
 export function normalizeTargetVersion(input: string): string {
   const trimmed = stripSemverVPrefix(input);
   requireStrictVersion(trimmed, 'targetVersion');
@@ -139,7 +139,7 @@ export function normalizeTargetVersion(input: string): string {
 
 let cachedPackageVersion: string | undefined;
 
-/** 读取自身 @helm/node 包 package.json 的版本（不读 current.json 假装运行版）；HELM_VERSION_OVERRIDE 用于开发覆盖。 */
+/** read itself @helm/node package package.json version (do not read current.json pretend run edition);HELM_VERSION_OVERRIDE used to development override. */
 export function getNodeVersion(): string {
   const override = process.env.HELM_VERSION_OVERRIDE?.trim();
   if (override) return override;
@@ -149,32 +149,32 @@ export function getNodeVersion(): string {
     try {
       const parsed = JSON.parse(rawFs.readFileSync(pkgPath, 'utf8')) as { version?: unknown };
       if (typeof parsed.version !== 'string' || !isStrictSemver(parsed.version)) {
-        throw new Error(`version 字段缺失或非法：${JSON.stringify(parsed.version)}`);
+        throw new Error(`version field missing or illegal:${JSON.stringify(parsed.version)}`);
       }
       version = parsed.version;
     } catch (error) {
-      // 读不到自身版本属于安装损坏，显式报错而不是假装一个默认版本。
-      throw new Error(`无法读取 @helm/node 自身版本（${pkgPath}）：${error instanceof Error ? error.message : String(error)}`);
+      // read fewer than itself version belongs to install corrupt, explicit errors while is not pretend a by default version.
+      throw new Error(`cannot read @helm/node itself version (${pkgPath}):${error instanceof Error ? error.message : String(error)}`);
     }
     cachedPackageVersion = version;
   }
   return cachedPackageVersion;
 }
 
-/** 离线 CLI 读取当前激活入口的版本：current.json 优先，缺失回退自身包版本。 */
+/** offline CLI read when before activate entry version:current.json takes precedence, missing fall back itself package version. */
 export async function resolveEffectiveNodeVersion(dataDir: string): Promise<string> {
   const current = await readCurrentRelease(dataDir);
   return current?.version ?? getNodeVersion();
 }
 
-// —— registry 允许清单 ————————————————————————————————————————————
+// - - registry allows manifest - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 const normalizeRegistry = (url: string | undefined): string => (url ?? '').trim().replace(/\/+$/, '');
 
 /**
- * RPC 入站 registry 允许清单：仅官方 registry 或显式配置的 HELM_NPM_REGISTRY。
- * 显式传入其他源时抛 UpgradeRejectedError（不静默换源）；未传返回 undefined
- * （调用方自行走 env/默认解析）。
+ * RPC station registry allows manifest: only official registry or explicit config HELM_NPM_REGISTRY.
+ * explicit pass other source when throw UpgradeRejectedError(not silently swap source); not pass return undefined
+ * (caller self row away env/by default parse).
  */
 export function filterRpcRegistryUrl(registryUrl?: string): string | undefined {
   const requested = normalizeRegistry(registryUrl);
@@ -183,7 +183,7 @@ export function filterRpcRegistryUrl(registryUrl?: string): string | undefined {
   const envRegistry = normalizeRegistry(process.env.HELM_NPM_REGISTRY);
   if (envRegistry && requested === envRegistry) return requested;
   throw new UpgradeRejectedError(
-    `拒绝非受信 npm registry：${requested}（仅允许 ${DEFAULT_REGISTRY} 或 HELM_NPM_REGISTRY 配置的源）`,
+    `reject non- subject to message npm registry:${requested}(only allows ${DEFAULT_REGISTRY} or HELM_NPM_REGISTRY config source)`,
   );
 }
 
@@ -191,7 +191,7 @@ function resolveRegistryUrl(explicit?: string): string {
   return normalizeRegistry(explicit || process.env.HELM_NPM_REGISTRY || DEFAULT_REGISTRY);
 }
 
-// —— JSON 记录：仅 ENOENT 返回 null，损坏/IO 错误显式抛出；0600 原子写 ————
+// - - JSON record: only ENOENT return null, corrupt/IO error explicit throw;0600 atomic write - - - -
 
 async function readJsonRecord<T>(filePath: string, validate: (raw: unknown) => T, label: string): Promise<T | null> {
   let raw: string;
@@ -200,16 +200,16 @@ async function readJsonRecord<T>(filePath: string, validate: (raw: unknown) => T
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ENOENT') return null;
-    throw new Error(`读取 ${label} 失败（${filePath}）：${code ?? (error instanceof Error ? error.message : String(error))}`);
+    throw new Error(`read ${label} failed (${filePath}):${code ?? (error instanceof Error ? error.message : String(error))}`);
   }
   try {
     return validate(JSON.parse(raw));
   } catch (error) {
-    throw new Error(`${label} 损坏（${filePath}）：${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`${label} corrupt (${filePath}):${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
-/** 0600 原子写：同目录临时文件 + rename（失败清理临时文件并如实抛出）。 */
+/** 0600 atomic write: same directory temp file + rename(failed clean up temp file and such as throw). */
 async function writeSecureJson(filePath: string, data: unknown): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const temp = `${filePath}.${randomUUID().slice(0, 8)}.tmp`;
@@ -219,20 +219,20 @@ async function writeSecureJson(filePath: string, data: unknown): Promise<void> {
     await fs.chmod(filePath, 0o600);
   } catch (error) {
     await fs.unlink(temp).catch(() => undefined);
-    throw new Error(`写入 ${filePath} 失败：${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`write ${filePath} failed:${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
 function requireString(raw: Record<string, unknown>, key: string): string {
   const value = raw[key];
   if (typeof value !== 'string' || value === '') {
-    throw new Error(`字段 ${key} 缺失或不是非空字符串`);
+    throw new Error(`field ${key} missing or is not non-empty string`);
   }
   return value;
 }
 
 function validateCurrentRecord(raw: unknown): CurrentReleaseRecord {
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('不是对象');
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('is not object');
   const rec = raw as Record<string, unknown>;
   const record: CurrentReleaseRecord = {
     version: requireString(rec, 'version'),
@@ -240,13 +240,13 @@ function validateCurrentRecord(raw: unknown): CurrentReleaseRecord {
     updatedAt: requireString(rec, 'updatedAt'),
   };
   if (rec.cliBinDir !== undefined && typeof rec.cliBinDir !== 'string') {
-    throw new Error('字段 cliBinDir 不是字符串');
+    throw new Error('field cliBinDir is not string');
   }
   return rec.cliBinDir === undefined ? record : { ...record, cliBinDir: rec.cliBinDir };
 }
 
 function validateBlockedRecord(raw: unknown): BlockedReleaseRecord {
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('不是对象');
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('is not object');
   const rec = raw as Record<string, unknown>;
   return {
     version: requireString(rec, 'version'),
@@ -284,7 +284,7 @@ export async function clearBlockedRelease(dataDir: string): Promise<void> {
   await fs.rm(blockedReleasePath(dataDir), { force: true });
 }
 
-// —— 升级检查 ——————————————————————————————————————————————————————
+// - - upgrade check - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 export async function checkNodeUpgrade(
   dataDir: string,
@@ -299,13 +299,13 @@ export async function checkNodeUpgrade(
   try {
     const data = (await fetchJsonWithTimeout(url, fetchImpl, METADATA_TIMEOUT_MS)) as { version?: unknown };
     if (typeof data.version !== 'string') {
-      throw new Error(`响应缺少 version 字段：${JSON.stringify(data).slice(0, 200)}`);
+      throw new Error(`response missing version field:${JSON.stringify(data).slice(0, 200)}`);
     }
     latestVersion = data.version;
   } catch (error) {
-    throw new Error(`查询 ${url} 最新版本失败：${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`query ${url} most new version failed:${error instanceof Error ? error.message : String(error)}`);
   }
-  // registry 返回非法版本是明确的坏数据，直接拒绝而不是带病比较。
+  // registry return illegal version is explicit broken data, directly reject while is not carries illness compare.
   requireStrictVersion(latestVersion, 'latest');
 
   const currentVersion =
@@ -320,7 +320,7 @@ export async function checkNodeUpgrade(
   };
 }
 
-// —— staging：npm 双包下载 + 校验 + 本地 tgz 安装 ————————————————————
+// - - staging:npm double package download + validate + local tgz install - - - - - - - - - - - - - - - - - - - -
 
 const METADATA_TIMEOUT_MS = 30_000;
 const TARBALL_TIMEOUT_MS = 180_000;
@@ -335,7 +335,7 @@ async function fetchJsonWithTimeout(url: string, fetchImpl: typeof fetch, timeou
     if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
     return await res.json();
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') throw new Error(`请求超时（${timeoutMs}ms）`);
+    if (error instanceof Error && error.name === 'AbortError') throw new Error(`request timeout (${timeoutMs}ms)`);
     throw error;
   } finally {
     clearTimeout(timer);
@@ -356,7 +356,7 @@ async function fetchTarballWithTimeout(
     const body = Buffer.from(await res.arrayBuffer());
     await fs.writeFile(destPath, body, { mode: 0o600 });
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') throw new Error(`下载超时（${timeoutMs}ms）`);
+    if (error instanceof Error && error.name === 'AbortError') throw new Error(`download timeout (${timeoutMs}ms)`);
     throw error instanceof Error ? error : new Error(String(error));
   } finally {
     clearTimeout(timer);
@@ -379,21 +379,21 @@ async function fetchExactManifest(
   try {
     data = (await fetchJsonWithTimeout(url, fetchImpl, METADATA_TIMEOUT_MS)) as typeof data;
   } catch (error) {
-    throw new Error(`获取 ${pkgName}@${version} 元数据失败（${url}）：${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`get ${pkgName}@${version} metadata failed (${url}):${error instanceof Error ? error.message : String(error)}`);
   }
   if (data.name !== pkgName) {
-    throw new Error(`registry 元数据包名不符：期望 ${pkgName}，实际 ${JSON.stringify(data.name)}`);
+    throw new Error(`registry metadata package name do not symbol: expectation ${pkgName}, actual ${JSON.stringify(data.name)}`);
   }
   if (data.version !== version) {
-    throw new Error(`registry 元数据版本不符：期望 ${version}，实际 ${JSON.stringify(data.version)}`);
+    throw new Error(`registry metadata version do not symbol: expectation ${version}, actual ${JSON.stringify(data.version)}`);
   }
   const integrity = data.dist?.integrity;
   const tarball = data.dist?.tarball;
   if (typeof integrity !== 'string' || !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(integrity)) {
-    throw new Error(`${pkgName}@${version} 元数据缺少合法的 sha512 dist.integrity`);
+    throw new Error(`${pkgName}@${version} metadata missing legal sha512 dist.integrity`);
   }
   if (typeof tarball !== 'string' || !/^https?:\/\//.test(tarball)) {
-    throw new Error(`${pkgName}@${version} 元数据缺少合法的 dist.tarball`);
+    throw new Error(`${pkgName}@${version} metadata missing legal dist.tarball`);
   }
   return { integrity, tarball };
 }
@@ -414,29 +414,29 @@ function lastLines(text: string, count: number): string {
 }
 
 /**
- * 解析 npm 入口：Windows 上现代 Node 不允许 spawn(.cmd, shell:false)，因此
- * 不猜 npm.cmd，而是定位 node 可执行文件旁的 node_modules/npm/bin/npm-cli.js
- * （官方 Windows 安装布局），以 [process.execPath, npmCliJs] 执行——无 shell、
- * 无字符串拼接注入。定位不到时显式报错，不做不安全的 fallback。
+ * parse npm entry:Windows on now proxy Node disallows spawn(.cmd, shell:false), therefore
+ * do not guess npm.cmd, but rather locate node can execute file beside node_modules/npm/bin/npm-cli.js
+ * (official Windows install layout), with [process.execPath, npmCliJs] execute - - without shell,
+ * without string concatenate inject. locate fewer than when explicit errors, does not do not security fallback.
  */
 function resolveNpmCommand(): { command: string; args: string[] } {
   if (process.platform !== 'win32') return { command: 'npm', args: [] };
   const execDir = path.dirname(process.execPath);
   const candidates = [
     path.join(execDir, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
-    path.join(execDir, '..', 'node_modules', 'npm', 'bin', 'npm-cli.js'), // zip 布局：node.exe 在 bin/ 下
+    path.join(execDir, '..', 'node_modules', 'npm', 'bin', 'npm-cli.js'), // zip layout:node.exe in bin/ under
   ];
   for (const cliJs of candidates) {
     if (rawFs.existsSync(cliJs)) return { command: process.execPath, args: [cliJs] };
   }
   throw new Error(
-    `无法定位 npm 入口 npm-cli.js（已尝试：${candidates.join(' ; ')}）。当前 Node 禁止直接 spawn npm.cmd，请修复 Node 安装或在 PATH 中提供官方 npm 布局后重试`,
+    `cannot locate npm entry npm-cli.js(already attempt:${candidates.join(' ; ')}). when before Node forbidden directly spawn npm.cmd, please fix Node install or in PATH in provide official npm layout after retry`,
   );
 }
 
-/** 运行 npm（有界超时）；失败错误包含退出码与输出最后 40 行诊断。
- * POSIX 独立进程组：npm 生命周期脚本孙进程与 npm 同组，超时整组 SIGKILL
- * （复用 killProcessTree），不留孤儿继续写正被清理的 staging 目录。 */
+/** run npm(has boundary timeout); failed error contains exit code and output finally 40 row diagnose.
+ * POSIX independent process group:npm lifecycle script descendant process and npm same group, timeout whole group SIGKILL
+ * (re- use killProcessTree), do not orphan child continue write correct by clean up staging directory. */
 export function runNpm(args: string[], cwd: string, timeoutMs: number): Promise<void> {
   let npm: { command: string; args: string[] };
   try {
@@ -457,7 +457,7 @@ export function runNpm(args: string[], cwd: string, timeoutMs: number): Promise<
         shell: false,
       });
     } catch (error) {
-      reject(new Error(`无法启动 ${displayCmd}（${npm.command}）：${error instanceof Error ? error.message : String(error)}`));
+      reject(new Error(`cannot start ${displayCmd}(${npm.command}):${error instanceof Error ? error.message : String(error)}`));
       return;
     }
     let stdout = '';
@@ -478,18 +478,18 @@ export function runNpm(args: string[], cwd: string, timeoutMs: number): Promise<
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      // 杀整个进程组（npm + sh + 生命周期脚本孙进程）；单杀 npm 会留孤儿。
+      // kill the whole process group (npm + sh + lifecycle script descendant process); single kill npm will orphan child.
       if (child.pid !== undefined) killProcessTree(child.pid);
-      reject(new Error(`${displayCmd} 超时（${timeoutMs}ms）被终止。输出最后 ${NPM_OUTPUT_DIAG_LINES} 行：\n${lastLines(`${stdout}\n${stderr}`, NPM_OUTPUT_DIAG_LINES)}`));
+      reject(new Error(`${displayCmd} timeout (${timeoutMs}ms) by terminate. output finally ${NPM_OUTPUT_DIAG_LINES} row:\n${lastLines(`${stdout}\n${stderr}`, NPM_OUTPUT_DIAG_LINES)}`));
     }, timeoutMs);
-    child.on('error', (error) => finish(new Error(`${displayCmd} 启动失败：${error.message}`)));
-    // 用 close（而非 exit）确保流已排空，诊断输出完整。
+    child.on('error', (error) => finish(new Error(`${displayCmd} failed to start:${error.message}`)));
+    // use close(while non- exit) ensure stream already arrange empty, diagnose output complete.
     child.on('close', (code) => {
       if (code === 0) finish(null);
       else {
         finish(
           new Error(
-            `${displayCmd} 以退出码 ${code} 失败。输出最后 ${NPM_OUTPUT_DIAG_LINES} 行：\n${lastLines(`${stdout}\n${stderr}`, NPM_OUTPUT_DIAG_LINES)}`,
+            `${displayCmd} with exit code ${code} failed. output finally ${NPM_OUTPUT_DIAG_LINES} row:\n${lastLines(`${stdout}\n${stderr}`, NPM_OUTPUT_DIAG_LINES)}`,
           ),
         );
       }
@@ -512,12 +512,12 @@ interface CompleteMarker {
   entryPath: string;
   cliBinDir: string;
   completedAt: string;
-  /** 候选来源：npm 正常安装（'npm'）或测试注入的 stageExtractor（'extractor'，复用时仅验证结构）。 */
+  /** choose source:npm normal install ('npm') or test inject stageExtractor('extractor', re- use when only verify structure). */
   origin?: 'npm' | 'extractor';
 }
 
 function validateCompleteMarker(raw: unknown): CompleteMarker {
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('不是对象');
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('is not object');
   const rec = raw as Record<string, unknown>;
   const marker: CompleteMarker = {
     version: requireString(rec, 'version'),
@@ -527,22 +527,22 @@ function validateCompleteMarker(raw: unknown): CompleteMarker {
     completedAt: requireString(rec, 'completedAt'),
   };
   if (rec.origin !== undefined && rec.origin !== 'npm' && rec.origin !== 'extractor') {
-    throw new Error(`字段 origin 非法：${JSON.stringify(rec.origin)}`);
+    throw new Error(`field origin illegal:${JSON.stringify(rec.origin)}`);
   }
   return rec.origin === undefined ? marker : { ...marker, origin: rec.origin };
 }
 
-/** stageExtractor 返回的相对路径必须落在 stagingDir 内（拒绝绝对路径与逃逸）。 */
+/** stageExtractor return relative path must in stagingDir inside (reject absolute path and escape). */
 function resolveInside(stagingDir: string, relative: string, label: string): string {
   if (typeof relative !== 'string' || relative === '') {
-    throw new Error(`stageExtractor 返回的 ${label} 不是非空字符串`);
+    throw new Error(`stageExtractor return ${label} is not non-empty string`);
   }
   if (path.isAbsolute(relative)) {
-    throw new Error(`stageExtractor 返回的 ${label} 必须是相对路径，收到绝对路径：${relative}`);
+    throw new Error(`stageExtractor return ${label} must be relative path, receives absolute path:${relative}`);
   }
   const resolved = path.resolve(stagingDir, relative);
   if (resolved !== stagingDir && !resolved.startsWith(stagingDir + path.sep)) {
-    throw new Error(`stageExtractor 返回的 ${label} 路径逃逸：${relative}（解析为 ${resolved}）`);
+    throw new Error(`stageExtractor return ${label} path escape:${relative}(parse is ${resolved})`);
   }
   return resolved;
 }
@@ -553,20 +553,20 @@ async function readInstalledPackageJson(pkgDir: string, pkgName: string, version
   try {
     parsed = JSON.parse(await fs.readFile(pkgJsonPath, 'utf8')) as Record<string, unknown>;
   } catch (error) {
-    throw new Error(`安装产物 ${pkgName} 的 package.json 不可读（${pkgJsonPath}）：${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`install artifact ${pkgName}  package.json cannot read (${pkgJsonPath}):${error instanceof Error ? error.message : String(error)}`);
   }
   if (parsed.name !== pkgName || parsed.version !== version) {
     throw new Error(
-      `安装产物包名/版本不符：期望 ${pkgName}@${version}，实际 ${String(parsed.name)}@${String(parsed.version)}（${pkgJsonPath}）`,
+      `install artifact package name/version do not symbol: expectation ${pkgName}@${version}, actual ${String(parsed.name)}@${String(parsed.version)}(${pkgJsonPath})`,
     );
   }
   return parsed;
 }
 
 /**
- * 缓存复用前的严格复核：candidate/entry/bin 必须位于本版本不可变目录内，
- * 且双包 package.json 名称/版本与入口/bin 目标仍有效（stageExtractor 产物
- * 按测试路径仅验证结构与存在性）。任何不匹配显式拒绝，不删除旧候选。
+ * cache re- use before strictly re-check:candidate/entry/bin must at this version cannot change directory inside,
+ * and double package package.json name/version and entry/bin target still valid (stageExtractor artifact
+ * by test path only verify structure and store in). any does not match explicit reject, do not delete old choose.
  */
 async function revalidateCachedRelease(
   dataDir: string,
@@ -577,7 +577,7 @@ async function revalidateCachedRelease(
   const inside = (candidate: string, base: string, label: string): string => {
     const resolved = path.resolve(candidate);
     if (resolved !== base && !resolved.startsWith(base + path.sep)) {
-      throw new Error(`.complete 缓存的 ${label} 不在本版本不可变目录内：${candidate}（期望位于 ${base} 下）`);
+      throw new Error(`.complete cache ${label} do not in this version cannot change directory inside:${candidate}(expectation at ${base} under)`);
     }
     return resolved;
   };
@@ -586,13 +586,13 @@ async function revalidateCachedRelease(
   const entryPath = inside(marker.entryPath, candidateDir, 'entryPath');
   const cliBinDir = inside(marker.cliBinDir, candidateDir, 'cliBinDir');
   if (!(await fileExists(entryPath))) {
-    throw new Error(`.complete 缓存复用失败：入口文件不存在：${entryPath}`);
+    throw new Error(`.complete cache re- use failed: entry file missing:${entryPath}`);
   }
   if (!(await fileExists(cliBinDir))) {
-    throw new Error(`.complete 缓存复用失败：bin 目录不存在：${cliBinDir}`);
+    throw new Error(`.complete cache re- use failed:bin directory missing:${cliBinDir}`);
   }
 
-  // stageExtractor（测试注入）产物仅验证结构；npm 产物重新核对双包元信息与入口/bin。
+  // stageExtractor(test inject) artifact only verify structure;npm artifact re- core for double package meta information and entry/bin.
   if (marker.origin !== 'npm') {
     return { version: targetVersion, releaseDir: candidateDir, entryPath, cliBinDir };
   }
@@ -604,10 +604,10 @@ async function revalidateCachedRelease(
   await readInstalledPackageJson(nodePkgDir, nodePkg, targetVersion);
   const cliPkgJson = await readInstalledPackageJson(cliPkgDir, cliPkg, targetVersion);
   if (path.relative(candidateDir, entryPath) !== path.join('node_modules', ...nodePkg.split('/'), 'dist', 'cli.js')) {
-    throw new Error(`.complete 缓存的入口不是 ${nodePkg} 的 dist/cli.js：${entryPath}`);
+    throw new Error(`.complete cache entry is not ${nodePkg}  dist/cli.js:${entryPath}`);
   }
   if (!(await fileExists(path.join(cliPkgDir, 'dist', 'index.js')))) {
-    throw new Error(`.complete 缓存复用失败：${cliPkg} 入口 dist/index.js 不存在（${cliPkgDir}）`);
+    throw new Error(`.complete cache re- use failed:${cliPkg} entry dist/index.js missing (${cliPkgDir})`);
   }
   const bin = cliPkgJson.bin;
   const binTarget =
@@ -615,10 +615,10 @@ async function revalidateCachedRelease(
       ? (bin as Record<string, string>).helm
       : undefined;
   if (binTarget === undefined) {
-    throw new Error(`.complete 缓存复用失败：${cliPkg} package.json 缺少 helm bin 声明`);
+    throw new Error(`.complete cache re- use failed:${cliPkg} package.json missing helm bin declaration`);
   }
   if (!(await fileExists(path.resolve(cliPkgDir, binTarget)))) {
-    throw new Error(`.complete 缓存复用失败：${cliPkg} bin 目标不存在：${binTarget}`);
+    throw new Error(`.complete cache re- use failed:${cliPkg} bin target missing:${binTarget}`);
   }
 
   return { version: targetVersion, releaseDir: candidateDir, entryPath, cliBinDir };
@@ -634,8 +634,8 @@ export async function stageReleaseFromNpm(
   const versionRoot = path.join(dataDir, 'releases', targetVersion);
   const completePath = path.join(versionRoot, '.complete');
 
-  // 已有完整候选且非 force：严格复核缓存标记与产物后复用，绝不删除旧候选。
-  // force 跳过缓存重新下载安装，生成新的不可变候选。
+  // already has complete choose and non- force: strictly re-check cache mark record and artifact after re- use, never delete old choose.
+  // force skip cache re- download install, generate new cannot change choose.
   if (!options?.force) {
     const cached = await readJsonRecord(completePath, validateCompleteMarker, '.complete');
     if (cached && cached.version === targetVersion) {
@@ -657,10 +657,10 @@ export async function stageReleaseFromNpm(
       const entryPath = resolveInside(stagingDir, extracted.entryPath, 'entryPath');
       const cliBinDir = resolveInside(stagingDir, extracted.cliBinDir, 'cliBinDir');
       if (!(await fileExists(entryPath))) {
-        throw new Error(`stageExtractor 返回的入口文件不存在：${entryPath}`);
+        throw new Error(`stageExtractor return entry file missing:${entryPath}`);
       }
       if (!(await fileExists(cliBinDir))) {
-        throw new Error(`stageExtractor 返回的 bin 目录不存在：${cliBinDir}`);
+        throw new Error(`stageExtractor return bin directory missing:${cliBinDir}`);
       }
       entryRelative = path.relative(stagingDir, entryPath);
       binRelative = path.relative(stagingDir, cliBinDir);
@@ -670,7 +670,7 @@ export async function stageReleaseFromNpm(
       const cliPkg = process.env.HELM_NPM_CLI_PACKAGE || '@helm/cli';
       const fetchImpl = options?.fetchFn ?? fetch;
 
-      // 双包各自取精确版本元数据 → 下载 tarball → sha512 校验。
+      // double package each take precise version metadata → download tarball → sha512 validate.
       const downloads = path.join(stagingDir, '.downloads');
       await fs.mkdir(downloads, { recursive: true });
       const tarballPaths: string[] = [];
@@ -680,12 +680,12 @@ export async function stageReleaseFromNpm(
         try {
           await fetchTarballWithTimeout(manifest.tarball, fetchImpl, TARBALL_TIMEOUT_MS, tarballPath);
         } catch (error) {
-          throw new Error(`下载 ${pkgName}@${targetVersion} tarball 失败（${manifest.tarball}）：${error instanceof Error ? error.message : String(error)}`);
+          throw new Error(`download ${pkgName}@${targetVersion} tarball failed (${manifest.tarball}):${error instanceof Error ? error.message : String(error)}`);
         }
         const actual = await computeSri(tarballPath);
         if (actual !== manifest.integrity) {
           throw new Error(
-            `${pkgName}@${targetVersion} tarball sha512 完整性校验失败：期望 ${manifest.integrity}，实际 ${actual}`,
+            `${pkgName}@${targetVersion} tarball sha512 complete validation failed: expectation ${manifest.integrity}, actual ${actual}`,
           );
         }
         tarballPaths.push(tarballPath);
@@ -710,7 +710,7 @@ export async function stageReleaseFromNpm(
         NPM_INSTALL_TIMEOUT_MS,
       );
 
-      // 安装产物三重校验：package.json 名称/版本 + node dist/cli.js + cli dist/index.js 与 bin 目标。
+      // install artifact three heavy validate:package.json name/version + node dist/cli.js + cli dist/index.js and bin target.
       const nodePkgDir = path.join(stagingDir, 'node_modules', ...nodePkg.split('/'));
       const cliPkgDir = path.join(stagingDir, 'node_modules', ...cliPkg.split('/'));
       await readInstalledPackageJson(nodePkgDir, nodePkg, targetVersion);
@@ -718,11 +718,11 @@ export async function stageReleaseFromNpm(
 
       const nodeEntry = path.join(nodePkgDir, 'dist', 'cli.js');
       if (!(await fileExists(nodeEntry))) {
-        throw new Error(`安装产物缺少 @helm/node 守护入口 dist/cli.js：${nodeEntry}`);
+        throw new Error(`install artifact missing @helm/node guard entry dist/cli.js:${nodeEntry}`);
       }
       const cliEntry = path.join(cliPkgDir, 'dist', 'index.js');
       if (!(await fileExists(cliEntry))) {
-        throw new Error(`安装产物缺少 @helm/cli 入口 dist/index.js：${cliEntry}`);
+        throw new Error(`install artifact missing @helm/cli entry dist/index.js:${cliEntry}`);
       }
       const bin = cliPkgJson.bin;
       const binTarget =
@@ -730,18 +730,18 @@ export async function stageReleaseFromNpm(
           ? (bin as Record<string, string>).helm
           : undefined;
       if (binTarget === undefined) {
-        throw new Error(`@helm/cli 安装产物 package.json 缺少 helm bin 声明（${path.join(cliPkgDir, 'package.json')}）`);
+        throw new Error(`@helm/cli install artifact package.json missing helm bin declaration (${path.join(cliPkgDir, 'package.json')})`);
       }
       const binFile = path.resolve(cliPkgDir, binTarget);
       if (!(await fileExists(binFile))) {
-        throw new Error(`@helm/cli bin 目标文件不存在：${binFile}`);
+        throw new Error(`@helm/cli bin target file missing:${binFile}`);
       }
 
       entryRelative = path.relative(stagingDir, nodeEntry);
       binRelative = 'node_modules/.bin';
     }
 
-    // 候选目录 immutable：staging 原子改名为 releases/<ver>/<uuid>，永不复用/删除。
+    // choose directory immutable:staging atomic change name is releases/<ver>/<uuid>, forever do not re- use/delete.
     const candidateDir = path.join(versionRoot, randomUUID());
     await fs.rename(stagingDir, candidateDir);
     const finalEntry = path.join(candidateDir, entryRelative);
@@ -759,21 +759,21 @@ export async function stageReleaseFromNpm(
 
     return { version: targetVersion, releaseDir: candidateDir, entryPath: finalEntry, cliBinDir: finalBin };
   } catch (error) {
-    // 只清理本次 staging（未改名的半成品）；历史候选一律保留。清理失败
-    // 不吞：把残留目录附注到错误消息（保留原错误类不被包装，升级事务
-    // 依赖 instanceof 判定回滚语义）。
+    // only clean up this time staging(not change name half into product); history choose one rule keep. clean up failed
+    // do not swallow: leftover directory attach note to error message (keep original error class do not by wrap, upgrade transaction
+    // dependency instanceof decide rollback semantics).
     try {
       await fs.rm(stagingDir, { recursive: true, force: true });
     } catch (rmError) {
       if (error instanceof Error) {
-        error.message += `；staging 清理失败（${rmError instanceof Error ? rmError.message : String(rmError)}），残留目录待人工处理：${stagingDir}`;
+        error.message += `;staging clean up failed (${rmError instanceof Error ? rmError.message : String(rmError)}), leftover directory await human handle:${stagingDir}`;
       }
     }
     throw error;
   }
 }
 
-// —— 升级事务 ——————————————————————————————————————————————————————
+// - - upgrade transaction - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 const UPGRADE_BLOCK_COOLDOWN_MS = (): number => {
   const raw = Number(process.env.HELM_UPGRADE_BLOCK_COOLDOWN_MS);
@@ -782,7 +782,7 @@ const UPGRADE_BLOCK_COOLDOWN_MS = (): number => {
 
 const DRAIN_POLL_INTERVAL_MS = 50;
 
-/** 跨进程升级锁：upgrade.lock（O_CREAT|O_EXCL）。不做陈锁仲裁，占用即显式拒绝。 */
+/** across process upgrade lock:upgrade.lock(O_CREAT|O_EXCL). does not stale lock arbitration, occupy i.e. explicit reject. */
 async function withUpgradeLock<T>(dataDir: string, fn: () => Promise<T>): Promise<T> {
   const lockPath = path.join(dataDir, 'upgrade.lock');
   await fs.mkdir(dataDir, { recursive: true });
@@ -792,9 +792,9 @@ async function withUpgradeLock<T>(dataDir: string, fn: () => Promise<T>): Promis
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'EEXIST') {
-      throw new UpgradeRejectedError(`升级已在进行中（锁文件已存在：${lockPath}）`);
+      throw new UpgradeRejectedError(`upgrade already in in progress (lock file already exists:${lockPath})`);
     }
-    throw new Error(`创建升级锁失败（${lockPath}）：${code ?? (error instanceof Error ? error.message : String(error))}`);
+    throw new Error(`create upgrade lock failed (${lockPath}):${code ?? (error instanceof Error ? error.message : String(error))}`);
   }
   try {
     await handle.write(`${process.pid} ${new Date().toISOString()}\n`);
@@ -811,9 +811,9 @@ export async function performNodeUpgrade(
 ): Promise<NodeUpgradeResult> {
   return withUpgradeLock(dataDir, async () => {
     if (!options?.prepareReplacement) {
-      // 没有受管 daemon 提交点就没有真实 PID，明确拒绝而不是伪造。
+      // no managed daemon commit point then no real PID, explicit reject while is not fabricate.
       throw new UpgradeRejectedError(
-        '拒绝升级：未提供 prepareReplacement（helm-node 升级需要受管 daemon 完成注册与激活提交，不伪造 PID）',
+        'reject upgrade: not provide prepareReplacement(helm-node upgrade need to managed daemon complete register and activate commit, do not fabricate PID)',
       );
     }
 
@@ -838,7 +838,7 @@ export async function performNodeUpgrade(
 
     if (!options?.force && compareSemver(targetVersion, previousVersion) < 0) {
       throw new UpgradeRejectedError(
-        `拒绝从 ${previousVersion} 降级到 ${targetVersion}（防降级保护；如确需降级请使用 force）`,
+        `reject from ${previousVersion} fall back to ${targetVersion}(guard against fall back protect; such as indeed must fall back use force)`,
       );
     }
 
@@ -847,16 +847,16 @@ export async function performNodeUpgrade(
       const blockedAtMs = Date.parse(blocked.at);
       const withinCooldown = Number.isFinite(blockedAtMs) && Date.now() - blockedAtMs < UPGRADE_BLOCK_COOLDOWN_MS();
       if (withinCooldown) {
-        throw new UpgradeRejectedError(`版本 ${targetVersion} 处于失败冷却期，拒绝重试：${blocked.reason}（blocked at ${blocked.at}）`);
+        throw new UpgradeRejectedError(`version ${targetVersion} where at failed cool down phase, reject retry:${blocked.reason}(blocked at ${blocked.at})`);
       }
     }
 
-    // 旧 current 快照在进入 drain 前读取：drain 之后的一切失败都走统一回滚路径。
+    // old current snapshot in enter drain before read:drain after everything failed all away unify rollback path.
     const existingCurrent = await readCurrentRelease(dataDir);
 
     const attemptId = options?.attemptId ?? randomUUID();
     let committed = false;
-    // 提交未确认分支（UpgradeCommitUnconfirmedError）也不释放 gate：新版本可能已激活。
+    // commit not confirm branch (UpgradeCommitUnconfirmedError) also do not release gate: new version may already activate.
     let keepGate = false;
     let gateReleased = false;
     const releaseGate = async () => {
@@ -864,13 +864,13 @@ export async function performNodeUpgrade(
       gateReleased = true;
       options?.setDraining?.(false);
     };
-    /** 写 blocked 失败不吞：附在错误中如实上报。 */
+    /** write blocked failed do not swallow: attach in error in such as on report. */
     const writeBlockedOrFail = async (reason: string): Promise<string> => {
       try {
         await writeBlockedRelease(dataDir, { version: targetVersion, reason, at: new Date().toISOString() });
-        return `已写入版本 ${targetVersion} 的 blocked 记录`;
+        return `already write version ${targetVersion}  blocked record`;
       } catch (blockedError) {
-        return `写入 blocked 记录失败（需人工处理）：${blockedError instanceof Error ? blockedError.message : String(blockedError)}`;
+        return `write blocked record failed (must human handle):${blockedError instanceof Error ? blockedError.message : String(blockedError)}`;
       }
     };
 
@@ -882,8 +882,8 @@ export async function performNodeUpgrade(
         force: options?.force,
       });
 
-      // 进入排空：停止受理新命令（envExec/隧道/IPC call/IPC subscribe），
-      // 等待已受理 exec 与 IPC 调用全部结束（不强杀；长驻订阅不等待）。
+      // enter arrange empty: stop subject to new command (envExec/tunnel/IPC call/IPC subscribe),
+      // wait for already subject to exec and IPC invoke all end (do not strong kill; long resident subscribe without waiting).
       options?.setDraining?.(true);
 
       const getActiveExecCount = options?.getActiveExecCount ?? (() => 0);
@@ -891,7 +891,7 @@ export async function performNodeUpgrade(
       const drainStart = Date.now();
       while (getActiveExecCount() > 0) {
         if (Date.now() - drainStart > drainTimeoutMs) {
-          throw new Error(`等待在途命令排空超时（${drainTimeoutMs}ms，剩余 ${getActiveExecCount()} 个），本次升级已放弃且未做任何变更`);
+          throw new Error(`wait for in-flight command arrange empty timeout (${drainTimeoutMs}ms, remaining ${getActiveExecCount()} ), this time upgrade already abandon and not do any change`);
         }
         await new Promise((resolve) => setTimeout(resolve, DRAIN_POLL_INTERVAL_MS));
       }
@@ -903,13 +903,13 @@ export async function performNodeUpgrade(
         const reason = error instanceof Error ? error.message : String(error);
         const blockedNote = await writeBlockedOrFail(reason);
         throw new Error(
-          `准备替换 daemon 失败（升级到 ${targetVersion} 中止，current 未变更，宿主保持接管状态）：${reason}；${blockedNote}`,
+          `prepare replace daemon failed (upgrade to ${targetVersion} abort,current not change, host keep take over state):${reason};${blockedNote}`,
         );
       }
 
-      // 提交点：一切可能影响成败的文件操作（含清理 blocked）都在 commit 之前完成；
-      // commit 是最后的 fallible 提交步骤，之后仅剩非关键通知，不得因清理失败
-      // 误报升级失败（否则新进程已向 Hub 回报提交而旧进程永久 draining）。
+      // commit point: everything may affect into failed file operation (contains clean up blocked) all in commit before complete;
+      // commit is finally fallible commit step, after only remain non- key notify, must not because clean up failed
+      // mistakenly report failed to upgrade (otherwise new process already to Hub back report commit while old process forever long draining).
       try {
         await writeCurrentRelease(dataDir, {
           version: targetVersion,
@@ -921,14 +921,14 @@ export async function performNodeUpgrade(
         await replacement.commit();
       } catch (error) {
         if (error instanceof UpgradeCommitUnconfirmedError) {
-          // 特殊分支：activate 已发出、候选可能已向 Hub 上报 commit，仅本机确认
-          // 丢失。反向回滚会让 Hub 已成功的升级被本地 ACK 超时撤销——因此不
-          // abort、不回滚 current、不写 blocked；保持新 current 与 gate，旧宿主
-          // 让位，由候选幂等重试 Hub commit。
+          // special branch:activate already out, choose may already to Hub on report commit, only local machine confirm
+          // lose. reverse rollback will let Hub already succeeded upgrade by local ACK timeout undo - - therefore do not
+          // abort, do not rollback current, do not write blocked; keep new current and gate, old host
+          // let, by choose idempotent retry Hub commit.
           options?.onScheduleShutdown?.(replacement.pid);
           keepGate = true;
           throw new Error(
-            `升级到 ${targetVersion}：新版本已选择，激活结果未确认（${error.message}）。不回滚：current.json 已指向 ${targetVersion}，候选将幂等重试向 Hub 提交，旧宿主已安排退出`,
+            `upgrade to ${targetVersion}: new version already choose, activate result not confirm (${error.message}). do not rollback:current.json already points to ${targetVersion}, choose idempotent retry to Hub commit, old host already arrange exit`,
             { cause: error },
           );
         }
@@ -936,35 +936,35 @@ export async function performNodeUpgrade(
         const rollbackNotes: string[] = [];
         try {
           await replacement.abort();
-          rollbackNotes.push('replacement 已 abort');
+          rollbackNotes.push('replacement already abort');
         } catch (abortError) {
-          rollbackNotes.push(`replacement abort 失败：${abortError instanceof Error ? abortError.message : String(abortError)}`);
+          rollbackNotes.push(`replacement abort failed:${abortError instanceof Error ? abortError.message : String(abortError)}`);
         }
         try {
           if (existingCurrent) {
             await writeCurrentRelease(dataDir, existingCurrent);
-            rollbackNotes.push(`current.json 已还原到 ${existingCurrent.version}`);
+            rollbackNotes.push(`current.json already restore to ${existingCurrent.version}`);
           } else {
             await deleteCurrentRelease(dataDir);
-            rollbackNotes.push('current.json 已删除（此前不存在）');
+            rollbackNotes.push('current.json deleted (this before missing)');
           }
         } catch (restoreError) {
-          rollbackNotes.push(`current.json 还原失败：${restoreError instanceof Error ? restoreError.message : String(restoreError)}`);
+          rollbackNotes.push(`current.json restore failed:${restoreError instanceof Error ? restoreError.message : String(restoreError)}`);
         }
         rollbackNotes.push(await writeBlockedOrFail(reason));
         throw new Error(
-          `升级到 ${targetVersion} 提交失败，已回滚到 ${previousVersion}：${reason}；回滚详情：${rollbackNotes.join('；')}`,
+          `upgrade to ${targetVersion} commit failed, already rollback to ${previousVersion}:${reason}; rollback detail situation:${rollbackNotes.join(';')}`,
         );
       }
 
-      // 提交已成：旧宿主让位（gate 保持 draining，等待退出）；清理失败不再影响结果。
+      // commit already into: old host let (gate keep draining, wait for exit); clean up failed no longer affect result.
       committed = true;
       options?.onScheduleShutdown?.(replacement.pid);
 
       return { ok: true, previousVersion, targetVersion, upgraded: true, pid: replacement.pid };
     } finally {
-      // 任何失败（含回调抛错、读取损坏、写 blocked 失败）都解除 gate；成功与
-      // 提交未确认路径不解除（旧宿主即将退出，新宿主已接管或可能已接管）。
+      // any failed (contains call back throws, read corrupt, write blocked failed) all solve except gate; succeeded and
+      // commit not confirm path do not solve except (old host i.e. exit, new host already take over or may already take over).
       if (!committed && !keepGate) await releaseGate();
     }
   });

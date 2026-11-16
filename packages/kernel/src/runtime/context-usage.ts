@@ -1,34 +1,34 @@
 /**
- * 会话上下文用量计算（纯函数；对齐 pi agent 1.5.2 的真实源码语义）。
+ * conversation context use amount compute (pure function; align pi agent 1.5.2 real source code semantics).
  *
- * 事实依据（@earendil-works/pi-coding-agent 1.5.2 实测源码）：
- * - `dist/core/agent-session.js` 的 `getContextUsage`：有效 assistant usage
- *   （stopReason 非 aborted/error 且上下文 tokens > 0）位于最近一次压缩之后
- *   才可信；压缩后尚无仍在 projection 中的有效 assistant 时 tokens 未知
- *   （null）；
- * - `dist/core/compaction/compaction.js` 的 `estimateProjectedContextTokens`：
- *   最后一次 usage 若位于最近一次 context invalidation（compaction /
- *   context_edit）之前一律失效，退化为全量估算——先用 pi-ai 公开的
- *   `getCurrentSystemMessage(messages)` 折叠当前生效 system（content 追加、
- *   sections 按名 patch、tools 重放），估算它一次，再逐条估算非 system
- *   消息（不重复计被更新的旧 system）；
- * - 同文件 `estimateTokens`：chars/4 保守估算（图片按 4800 字符、system 把
- *   content + sections + toolsAdded 合并计总字符后 Math.ceil(/4)）。
+ * fact based on (@earendil-works/pi-coding-agent 1.5.2 measured source code):
+ * - `dist/core/agent-session.js`  `getContextUsage`: valid assistant usage
+ *   (stopReason non- aborted/error and context tokens > 0) at most near once compress after
+ *   only then can message; compress after still without still in projection in valid assistant when tokens unknown
+ *   (null);
+ * - `dist/core/compaction/compaction.js`  `estimateProjectedContextTokens`:
+ *   finally once usage if at most near once context invalidation(compaction /
+ *   context_edit) before one rule expires, retreat is all amount estimate compute - - first use pi-ai public
+ *   `getCurrentSystemMessage(messages)` collapse when before takes effect system(content append,
+ *   sections by name patch,tools replay), estimate compute it once, again one by one estimate compute non- system
+ *   message (does not repeat count by update old system);
+ * - same file `estimateTokens`:chars/4 keep guard estimate compute (diagram piece by 4800 character,system 
+ *   content + sections + toolsAdded merge count total character after Math.ceil(/4)).
  *
- * 为什么本地提取而不复用现成导出：pi CLI 的 `estimateTokens` 未从任何公开
- * 包导出（仅 CLI dist 内部模块），走私有子路径或引入整个 CLI 包都违反包
- * 边界；pi-ai 公开的 `estimateMessageTokens` 是 CHARS_PER_TOKEN=3.5 的另一
- * 套算法（system 计法也不同），不冒充同源。此处按 Pi 源码逐行提取为小纯
- * 函数并注明出处；`calculateContextTokens` 与 `getCurrentSystemMessage`
- * 仍复用 pi-ai 公开导出（与 Pi 同一来源公式）。
+ * is what local extract while do not re- use now into export:pi CLI  `estimateTokens` not from any public
+ * package export (only CLI dist internal module), away private sub- path or introduce the whole CLI package all violate reverse package
+ * boundary;pi-ai public `estimateMessageTokens` is CHARS_PER_TOKEN=3.5 another
+ * set algorithm (system count method also different), do not smoke fill same source. this where by Pi source code one by one row extract is small pure
+ * function and note out where;`calculateContextTokens` and `getCurrentSystemMessage`
+ * still re- use pi-ai public export (and Pi the same source public style).
  *
- * helm 语义映射（pi branch 条目 -> pi-durable ContextView）：
- * - compaction / context edit 均为 context invalidation：前者是 head 标记
- *   （pi.compaction / pi.reset），后者是携带 `edits` 的条目（如 helm.rewind
- *   的 omit/replace）；锚点只有晚于「head 边界与最新 edits 非空条目 id 的
- *   较大者」才可信（泛化判定 entry.edits，不硬编码 helm.rewind 策略）；
- * - contributions 已按 edits 应用（omit 条目贡献为空数组），post-compaction
- *   有效 assistant 判定天然只看仍在 projection 中的消息。
+ * helm semantics mapping (pi branch item -> pi-durable ContextView):
+ * - compaction / context edit all is context invalidation: before is head mark record
+ *   (pi.compaction / pi.reset), after is carry `edits` item (such as helm.rewind
+ *    omit/replace); anchor only later thanhead boundary and most new edits non-empty item id 
+ *   relatively large only then can message (generalize decide entry.edits, do not hard encode helm.rewind policy);
+ * - contributions already by edits should use (omit item contribution is empty array),post-compaction
+ *   valid assistant decide day however only see still in projection in message.
  */
 
 import type { ContextView } from '@earendil-works/pi-durable'
@@ -36,22 +36,22 @@ import { getCurrentSystemMessage, type Message } from '@earendil-works/pi-ai'
 import { calculateContextTokens } from '@earendil-works/pi-ai/utils/estimate'
 import type { ConversationContextUsage } from '@helm/protocol'
 
-/** 有效 assistant usage 的消息形状（pi getAssistantUsage 判定的结构子集）。 */
+/** valid assistant usage message shape (pi getAssistantUsage decide structure sub- collection). */
 type MeasuredAssistant = {
   role: 'assistant'
   usage: Parameters<typeof calculateContextTokens>[0]
 }
 
-/** 估算结果；tokens 为 null 表示真实上下文未知（压缩后尚无有效 usage）。 */
+/** estimate compute result;tokens is null means real context unknown (compress after still without valid usage). */
 export interface ContextUsageEstimate {
   tokens: number | null
 }
 
-/** pi agent compaction.js `ESTIMATED_IMAGE_CHARS`：图片按 4800 字符计。 */
+/** pi agent compaction.js `ESTIMATED_IMAGE_CHARS`: diagram piece by 4800 character count. */
 const ESTIMATED_IMAGE_CHARS = 4800
 
-/** pi agent compaction.js `estimateTextAndImageContentChars` 同款：
- * 字符串按长度；块数组累计 text 块字符与图片固定字符（空文本块跳过）。 */
+/** pi agent compaction.js `estimateTextAndImageContentChars` same style:
+ * string by length; chunk array cumulative text chunk character and diagram piece fixed character (empty text chunk skip). */
 function textAndImageContentChars(content: unknown): number {
   if (typeof content === 'string') return content.length
   if (!Array.isArray(content)) return 0
@@ -69,12 +69,12 @@ function textAndImageContentChars(content: unknown): number {
 }
 
 /**
- * 消息 tokens 保守估算（chars/4），逐行对齐 pi agent compaction.js 的
- * `estimateTokens`；覆盖 helm 上下文支持的四种 Message 角色
- * （system / user / assistant / toolResult），未知角色计 0：
- * - system：content + sections 值 + toolsAdded 的 JSON 序列化合并总字符；
- * - user / toolResult：text 与图片内容字符（图片按 4800）；
- * - assistant：text / thinking 块字符 + toolCall 的 name 与参数 JSON 字符。
+ * message tokens keep guard estimate compute (chars/4), one by one row align pi agent compaction.js 
+ * `estimateTokens`; override helm context support four Message role
+ * (system / user / assistant / toolResult), unknown role count 0:
+ * - system:content + sections value + toolsAdded  JSON serialization merge total character;
+ * - user / toolResult:text and diagram piece content character (diagram piece by 4800);
+ * - assistant:text / thinking chunk character + toolCall  name and parameter JSON character.
  */
 export function estimateTokens(message: Message): number {
   let chars = 0
@@ -111,10 +111,10 @@ export function estimateTokens(message: Message): number {
   return 0
 }
 
-/** pi agent compaction.js `getAssistantUsage` 同款判定：role 为 assistant、
- * stopReason 非 aborted/error、usage 形状可算且上下文 tokens > 0（pi-durable
- * 的 contributions 已剔除 aborted/error/deferred 消息，此处按同一规则防御
- * 非常规来源，派生展示数据不因个别损坏条目中断刷新）。 */
+/** pi agent compaction.js `getAssistantUsage` same style decide:role is assistant,
+ * stopReason non- aborted/error,usage shape can compute and context tokens > 0(pi-durable
+ *  contributions already remove aborted/error/deferred message, this where by the same rule guard against defend
+ * very rule source, derive render data do not because other corrupt item interrupt refresh). */
 function isValidMeasuredAssistant(message: unknown): message is MeasuredAssistant {
   if (message === null || typeof message !== 'object') return false
   const m = message as { role?: unknown; usage?: unknown; stopReason?: unknown }
@@ -124,26 +124,26 @@ function isValidMeasuredAssistant(message: unknown): message is MeasuredAssistan
 }
 
 /**
- * 对齐 pi agent `getContextUsage` 的上下文估算。
+ * align pi agent `getContextUsage` context estimate compute.
  *
- * - 失效边界：head 标记（compaction/reset）与最新携带非空 `edits` 的条目
- *   取较大者；锚点扫描跳过边界及更早的条目（压缩保留前缀与被 rewind 覆盖
- *   区间内的旧 usage 均不可信，pi 语义：最新 invalidation 之前的 usage 一律失效）；
- * - 压缩后未知：head 为 pi.compaction 且 head 之后没有任何仍在 projection
- *   中的有效 assistant（含被后续 edit omit 的情况）时 tokens=null——摘要
- *   字符估算不冒充真实上下文，直到下一次 LLM 响应上报 usage；pi.reset 是
- *   全新上下文，全量估算（0）即真实值，不为 null；
- * - 实测锚点：边界之后最近一条有效 assistant（contributions 内最后一条）；
- *   锚点必须在最终 view.messages 中可定位（防御：定位失败按无锚点处理，
- *   绝不把 usage 与全量估算相加造成重复计量）；tokens = 锚点 usage 上下文
- *   tokens + 其后消息逐条 chars/4 估算；
- * - 全量估算：`getCurrentSystemMessage` 折叠当前生效 system 估算一次 +
- *   每条非 system 消息逐条估算（pi 同款，不重复计被更新的旧 system）。
+ * - expires boundary:head mark record (compaction/reset) and most new carry non-empty `edits` item
+ *   take relatively large; anchor scan skip boundary and more early item (compress keep prefix and by rewind override
+ *   zone between inside old usage all cannot message,pi semantics: most new invalidation before usage one rule expires);
+ * - compress after unknown:head is pi.compaction and head after no any still in projection
+ *   in valid assistant(contains by after continue edit omit case) when tokens=null- - summary
+ *   character estimate compute do not smoke fill real context, until under once LLM response on report usage;pi.reset is
+ *   all new context, all amount estimate compute (0) i.e. real value, do not is null;
+ * - measured anchor: boundary after most near a valid assistant(contributions inside finally a);
+ *   anchor must in eventually view.messages in can locate (guard against defend: locate failed by without anchor handle,
+ *   never usage and all amount estimate compute each other add build into duplicate count amount);tokens = anchor usage context
+ *   tokens + its after message one by one chars/4 estimate compute;
+ * - all amount estimate compute:`getCurrentSystemMessage` collapse when before takes effect system estimate compute once +
+ *   each non- system message one by one estimate compute (pi same style, does not repeat count by update old system).
  */
 export function estimateContextUsage(view: ContextView): ContextUsageEstimate {
   const head = view.head
   const headBoundary = head?.id ?? Number.NEGATIVE_INFINITY
-  // 最新 edits 非空条目（泛化判定：任何携带上下文覆盖的条目都是 invalidation）。
+  // most new edits non-empty item (generalize decide: any carry context override item all is invalidation).
   let latestEditBoundary = Number.NEGATIVE_INFINITY
   for (const entry of view.entries) {
     if (entry.edits !== undefined && entry.edits.length > 0 && entry.id > latestEditBoundary) {
@@ -152,15 +152,15 @@ export function estimateContextUsage(view: ContextView): ContextUsageEstimate {
   }
   const trustBoundary = Math.max(headBoundary, latestEditBoundary)
 
-  // 尾向扫描：锚点 = 边界之后最近一条有效 assistant；同时判定 head 之后
-  // 是否存在任何仍在 projection 中的有效 assistant（压缩后未知判定用，
-  // 不受 edit 边界影响——被 edit 失效与从未存在是两回事）。
+  // tail to scan: anchor = boundary after most near a valid assistant; also decide head after
+  // is otherwise store in any still in projection in valid assistant(compress after unknown decide use,
+  // do not subject to edit boundary affect - - by edit expires and from not store in is two back matter).
   let postHeadValidAssistant = false
   let anchor: MeasuredAssistant | undefined
   for (let index = view.entries.length - 1; index >= 0; index -= 1) {
     const entry = view.entries[index]!
-    // head 标记本身及其之前的旧条目（含压缩保留前缀）都不可信；entries 并非
-    // 升序（head 标记居首、保留条目 id 更小），只能逐条跳过不能提前 break。
+    // head mark record itself and its before old item (contains compress keep prefix) all cannot message;entries is not
+    // rise order (head mark record reside first, keep item id more small), only can one by one skip cannot mention before break.
     if (entry.id <= headBoundary) continue
     let entryAnchor: MeasuredAssistant | undefined
     for (const message of view.contributions[index]!) {
@@ -176,8 +176,8 @@ export function estimateContextUsage(view: ContextView): ContextUsageEstimate {
 
   if (head?.kind === 'pi.compaction' && !postHeadValidAssistant) return { tokens: null }
 
-  // 锚点对象来自 contributions，与 messages 同源同引用（lastIndexOf 按身份
-  // 命中）；定位失败（-1）按无锚点走全量估算，绝不重复计量。
+  // anchor object from contributions, and messages same source same reference (lastIndexOf by identity
+  // hit); locate failed (-1) by without anchor away all amount estimate compute, never duplicate count amount.
   const anchorIndex = anchor === undefined ? -1 : view.messages.lastIndexOf(anchor as Message)
   if (anchor !== undefined && anchorIndex >= 0) {
     let tokens = calculateContextTokens(anchor.usage)
@@ -194,28 +194,28 @@ export function estimateContextUsage(view: ContextView): ContextUsageEstimate {
   return { tokens }
 }
 
-/** pi.live compaction 状态的结构子集（tracker 镜像透传用；字段按真实 SDK 形状）。 */
+/** pi.live compaction state structure sub- collection (tracker mirror pass-through use; field by real SDK shape). */
 export interface LiveCompactionShape {
   taskId: number
   trigger: string
   blocking: boolean
 }
 
-/** pi.live compactionFailure 的结构子集。 */
+/** pi.live compactionFailure structure sub- collection. */
 export interface LiveCompactionFailureShape {
   taskId: number
   trigger: string
   error: string
 }
 
-/** pi.live 压缩相关字段的结构子集（compactionLiveKeyOf 指纹比对用）。 */
+/** pi.live compress related field structure sub- collection (compactionLiveKeyOf refer grain than for use). */
 export interface LiveCompactionStateShape {
   compactions?: LiveCompactionShape[]
   compactionFailure?: LiveCompactionFailureShape
 }
 
-/** pi.live 压缩状态指纹（仅内存比对用，不对外发布）：compactions 的
- * (taskId,trigger,blocking) 序列 + compactionFailure 的 (taskId,trigger,error)。 */
+/** pi.live compress state refer grain (only memory than for use, do not for outside publish):compactions 
+ * (taskId,trigger,blocking) sequence + compactionFailure  (taskId,trigger,error). */
 export function compactionLiveKeyOf(live: LiveCompactionStateShape | undefined): string {
   if (live === undefined) return ''
   return JSON.stringify([
@@ -226,32 +226,32 @@ export function compactionLiveKeyOf(live: LiveCompactionStateShape | undefined):
   ])
 }
 
-/** pi.live compactions 非空即压缩进行中（只读展示「精简中…」；多项任务
- * 取任何一项在途都为真，不伪造 trigger 细节）。 */
+/** pi.live compactions non-empty i.e. compress in progress (only read render streamline in...; many items task
+ * take any a in-flight all is true, do not fabricate trigger detail). */
 export function compactingOf(compactions: readonly LiveCompactionShape[] | undefined): boolean | undefined {
   return compactions !== undefined && compactions.length > 0 ? true : undefined
 }
 
 const COMPACTION_TRIGGER_LABEL: Record<string, string> = {
-  manual: '手动',
-  threshold: '阈值',
-  overflow: '溢出',
+  manual: 'manually',
+  threshold: 'threshold',
+  overflow: 'overflow',
 }
 
-/** 压缩失败通知正文（trigger 语义 + 脱敏错误摘要，截断 400 字符）。
- * 压缩失败不得静默：由 tracker 经 notification 事件显式上报一次。 */
+/** compress failed notify body text (trigger semantics + redaction error summary, truncate 400 character).
+ * compress failed must not static default: by tracker via notification event explicit on report once. */
 export function compactionFailureNoticeOf(
   failure: LiveCompactionFailureShape,
   redact: (text: string) => string,
 ): string {
   const trigger = COMPACTION_TRIGGER_LABEL[failure.trigger] ?? failure.trigger
   const error = redact(failure.error ?? '').trim().slice(0, 400)
-  return error === '' ? `${trigger}触发的上下文精简失败（无错误详情）` : `${trigger}触发的上下文精简失败：${error}`
+  return error === '' ? `${trigger} trigger context streamline failed (without error detail)` : `${trigger} trigger context streamline failed:${error}`
 }
 
 /**
- * 组装完整 contextUsage（可缺字段全部省略，不伪造）。
- * contextWindow 由调用方按模型解析结果给出（未知传 undefined）。
+ * group install complete contextUsage(can missing field all omit, do not fabricate).
+ * contextWindow by caller by model parse result to out (unknown pass undefined).
  */
 export function assembleContextUsage(parts: {
   estimate: ContextUsageEstimate
@@ -266,7 +266,7 @@ export function assembleContextUsage(parts: {
 }
 
 /**
- * contextUsage 语义指纹（发布去重）：任一承载字段变化才发布 conversation.upsert。
+ * contextUsage semantics refer grain (publish dedupe): any one bear load field change only then publish conversation.upsert.
  */
 export function contextUsageKeyOf(usage: ConversationContextUsage | undefined): string {
   if (usage === undefined) return ''
