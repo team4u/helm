@@ -89,7 +89,8 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
   const [widgetsExpanded, setWidgetsExpanded] = useState(false)
   const [slashMenuItems, setSlashMenuItems] = useState<Array<{ id: string; label: string; hint?: string; apply?: string; run?: () => void }>>([])
 
-  const working = conversation.status === 'working' || conversation.status === 'blocked'
+  const compacting = conversation.contextUsage?.compacting === true
+  const working = conversation.status === 'working' || conversation.status === 'blocked' || compacting
   const isMobile = useIsMobile(680)
   const detail = store.conversationDetails[conversation.id]
   // 历史尚未完整加载且当前页没有 reset 时，不能把缺少消息的分页窗口当作空会话。

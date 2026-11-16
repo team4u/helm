@@ -368,8 +368,17 @@ function ContextDivider({ item }: { item: DividerItem }) {
     <div className="context-divider-wrap">
       <div className="context-divider">
         <span className="context-divider-label">
-          <HelmIcon name={item.divider === 'reset' ? 'rotate-ccw' : 'archive'} size={11} />
-          {item.divider === 'reset' ? '上下文已重置' : '上下文已精简'}
+          {item.pending === true ? (
+            <>
+              <HelmIcon name="loader" size={11} className="spin-slow" />
+              正在精简上下文…
+            </>
+          ) : (
+            <>
+              <HelmIcon name={item.divider === 'reset' ? 'rotate-ccw' : 'archive'} size={11} />
+              {item.divider === 'reset' ? '上下文已重置' : '上下文已精简'}
+            </>
+          )}
         </span>
       </div>
       {expandable !== undefined ? (
@@ -656,16 +665,18 @@ export function ConversationTimeline({
   }, [conversation.id])
 
   const isWorking = conversation.status === 'working'
+  const isCompacting = conversation.contextUsage?.compacting === true
   const items = useMemo(
     () =>
       timelineItems ??
       buildTimelineItems(detailEntries, {
         ...(live !== undefined ? { live } : {}),
         working: isWorking,
+        compacting: isCompacting,
         timelineRenderers: store.groupedUi.timelineRenderers,
         toolViews: store.groupedUi.toolViews,
       }),
-    [timelineItems, detailEntries, live, isWorking, store.groupedUi.timelineRenderers, store.groupedUi.toolViews],
+    [timelineItems, detailEntries, live, isWorking, isCompacting, store.groupedUi.timelineRenderers, store.groupedUi.toolViews],
   )
 
   // timeline.entry.action 锚点索引：以 props 传入的 detailEntries（经 rewind
@@ -934,7 +945,7 @@ export function ConversationTimeline({
       .join(',')
   }, [items])
 
-  const contentFingerprint = `${items.length}:${detailEntries.length}:${conversation.status}:${lastTurnSummary}:${live?.updatedAt ?? 0}:${live?.thinking?.length ?? 0}:${live?.text.length ?? 0}:${live?.queuedInputs?.map((q) => `${q.id}:${q.mode}`).join(',') ?? ''}:${resolvedAsks.length}`
+  const contentFingerprint = `${items.length}:${detailEntries.length}:${conversation.status}:${conversation.contextUsage?.compacting === true ? 1 : 0}:${lastTurnSummary}:${live?.updatedAt ?? 0}:${live?.thinking?.length ?? 0}:${live?.text.length ?? 0}:${live?.queuedInputs?.map((q) => `${q.id}:${q.mode}`).join(',') ?? ''}:${resolvedAsks.length}`
   // 会话历史就绪（conversationDetails 存在，含合法空会话）：loading 的空白
   // mount 不启动初始贴底窗口，避免硬上界在空白期被空转耗尽。
   const detailsReady = store.conversationDetails[conversation.id] !== undefined
