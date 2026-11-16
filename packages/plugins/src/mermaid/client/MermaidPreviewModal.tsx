@@ -1,12 +1,38 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { HelmIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helm/plugin-client'
-import { usePluginContext } from '@helm/plugin-client'
+import {
+  HelmIcon,
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+  usePluginContext,
+  usePluginLocale,
+  usePluginTranslator,
+} from '@helm/plugin-client'
 import mermaid from 'mermaid'
 import { getMermaidConfig } from './mermaid-theme.ts'
+import {
+  MERMAID_ACTUAL_TITLE,
+  MERMAID_CLOSE,
+  MERMAID_CLOSE_TITLE,
+  MERMAID_COPY_SOURCE,
+  MERMAID_FIT_SCREEN,
+  MERMAID_FIT_SCREEN_TITLE,
+  MERMAID_FIT_WIDTH,
+  MERMAID_FIT_WIDTH_TITLE,
+  MERMAID_PREVIEW_TITLE,
+  MERMAID_VIEW_DIAGRAM,
+  MERMAID_VIEW_SOURCE,
+  MERMAID_ZOOM_IN_TITLE,
+  MERMAID_ZOOM_OUT_TITLE,
+  mermaidModalStatus,
+} from './copy.ts'
 
 export interface MermaidPreviewModalProps {
   code: string
-  /** 已渲染的 SVG（内联块已渲染时复用；未渲染则弹窗内自行渲染）。 */
+  /** Already-rendered SVG (reused when the inline block rendered it; otherwise the modal renders on its own). */
   svg?: string | null
   onClose: () => void
 }
@@ -15,7 +41,7 @@ const MIN_SCALE = 0.1
 const MAX_SCALE = 5
 const SCALE_STEP = 0.15
 
-/** 剪贴板写入（navigator.clipboard 不可用时失败返回 false，不静默假装成功）。 */
+/** Clipboard write (returns false when navigator.clipboard is unavailable; never fakes success). */
 async function copyText(text: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(text)
@@ -26,16 +52,23 @@ async function copyText(text: string): Promise<boolean> {
 }
 
 /**
- * Mermaid 放大预览弹窗：
- * - 纯全屏沉浸式画板（固定占满整屏视口，无多余窗口边距）；
- * - 默认 1:1 实际比例，且严格从上往下展示（Top-aligned），避免头部被截断或需反复拖拽；
- * - 普通鼠标滚轮自然上下平移长图，Ctrl/Cmd+滚轮平滑缩放，按住鼠标全局平移；
- * - 解析 SVG viewBox 真实固有尺寸，彻底消除 Flex shrink 误压缩为 300px 的问题；
- * - 提供适屏全貌（看整体鸟瞰）、适宽（铺满视口宽度）与 1:1（从上往下自然阅读）切换；
- * - 源码 / 图形切换与一键复制源码。
+ * Mermaid zoom-in preview modal:
+ * - a pure fullscreen immersive canvas (fills the whole viewport, no extra
+ *   window margins);
+ * - defaults to 1:1 actual scale, strictly top-aligned, so the head is never
+ *   cut off and no repeated dragging is needed;
+ * - plain mouse wheel pans long diagrams naturally, Ctrl/Cmd+wheel zooms
+ *   smoothly, holding the mouse button pans globally;
+ * - parses the SVG viewBox for the true intrinsic size, eliminating the
+ *   Flex-shrink mis-compression to 300px;
+ * - fit-screen (whole-diagram overview), fit-width (fill the viewport width)
+ *   and 1:1 (top-down natural reading) toggles;
+ * - source / diagram view toggle and one-click source copy.
  */
 export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalProps) {
   const { theme } = usePluginContext()
+  const locale = usePluginLocale()
+  const t = usePluginTranslator()
   const [scale, setScale] = useState(1)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
   const [view, setView] = useState<'diagram' | 'source'>('diagram')
@@ -88,7 +121,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
     }
   }, [])
 
-  // 当外部 svg 属性更新（且非空）时同步至 renderedSvg
+  // Sync a non-empty external svg prop into renderedSvg when it updates.
   useEffect(() => {
     if (svg) {
       setRenderedSvg(svg)
@@ -96,14 +129,15 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
     }
   }, [svg])
 
-  // 当未提供 svg，或 theme 发生变化，或 code 改变时，在弹窗内重新渲染
+  // Re-render inside the modal when no svg was provided, the theme changed,
+  // or the code changed.
   useEffect(() => {
     const isThemeChanged = lastThemeRef.current !== theme
     const isCodeChanged = lastCodeRef.current !== code
     lastThemeRef.current = theme
     lastCodeRef.current = code
 
-    // 如果初始化时已有传入 svg 且主题与代码均未变，则直接复用
+    // Reuse the passed-in svg directly at init when neither theme nor code changed.
     if (svg && !isThemeChanged && !isCodeChanged) return
 
     let cancelled = false
@@ -128,7 +162,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
     }
   }, [code, svg, theme])
 
-  // 从 SVG 字符串中提取 viewBox 固有的真实宽与高
+  // Extract the true intrinsic width/height from the SVG's viewBox.
   const intrinsicSize = useMemo<{ width: number; height: number } | null>(() => {
     if (!renderedSvg) return null
     const match = /viewBox=["']\s*([0-9.-]+)\s+([0-9.-]+)\s+([0-9.-]+)\s+([0-9.-]+)\s*["']/i.exec(renderedSvg)
@@ -142,7 +176,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
     return null
   }, [renderedSvg])
 
-  // 适应屏幕全貌计算（保证整张图完全落在画布中）
+  // Fit-whole-diagram scale (the entire diagram stays inside the canvas).
   const calcFitScreen = useCallback(() => {
     const stage = stageRef.current
     if (!stage || !intrinsicSize) return 1
@@ -152,7 +186,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
     return Math.max(MIN_SCALE, Math.min(MAX_SCALE, Number(fit.toFixed(2))))
   }, [intrinsicSize])
 
-  // 适宽展示计算（宽度填满画布，纵向从上往下阅读）
+  // Fit-width scale (fill the canvas width, read top-down).
   const calcFitWidth = useCallback(() => {
     const stage = stageRef.current
     if (!stage || !intrinsicSize) return 1
@@ -161,7 +195,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
     return Math.max(MIN_SCALE, Math.min(MAX_SCALE, Number(fit.toFixed(2))))
   }, [intrinsicSize])
 
-  // 适屏全貌重置（全貌展示并居中）
+  // Fit-screen reset (whole diagram, centered).
   const resetFitScreen = useCallback(() => {
     const stage = stageRef.current
     if (!stage || !intrinsicSize) {
@@ -184,7 +218,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
     applyTransformDirect()
   }, [calcFitScreen, intrinsicSize, applyTransformDirect])
 
-  // 适宽重置（宽度贴合视口，从上往下自然展现）
+  // Fit-width reset (width hugs the viewport, natural top-down reading).
   const resetFitWidth = useCallback(() => {
     const fitW = calcFitWidth()
     setScale(fitW)
@@ -194,7 +228,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
     applyTransformDirect()
   }, [calcFitWidth, applyTransformDirect])
 
-  // 1:1 实际比例重置（从上往下自然阅读）
+  // 1:1 actual-size reset (natural top-down reading).
   const resetActual = useCallback(() => {
     setScale(1)
     setOffset({ x: 0, y: 0 })
@@ -203,7 +237,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
     applyTransformDirect()
   }, [applyTransformDirect])
 
-  // 快捷键支持
+  // Keyboard shortcuts.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
@@ -234,7 +268,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose, resetFitScreen, resetFitWidth, resetActual, applyTransformDirect])
 
-  // 滚轮操作：Ctrl/Cmd 缩放，普通滚轮顺畅平移长图
+  // Wheel: Ctrl/Cmd zooms, plain wheel pans long diagrams smoothly.
   const onWheel = (e: React.WheelEvent): void => {
     e.preventDefault()
     if (e.ctrlKey || e.metaKey) {
@@ -254,10 +288,11 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
     }
   }
 
-  // 指针拖拽与多点触控：全局 window 监听，rAF 驱动 GPU 合成变换（零 React 重渲染，移动端 60/120fps 丝滑）
+  // Pointer drag & multi-touch: global window listeners, rAF-driven GPU
+  // compositing transform (zero React re-renders; silky 60/120fps on mobile).
   const onPointerDown = (e: React.PointerEvent): void => {
     if ((e.target as HTMLElement).closest('button')) return
-    // 阻止浏览器默认页面拖拽、文字选取或拉动刷新手势
+    // Block browser-default page drag, text selection and pull-to-refresh gestures.
     if (e.cancelable) e.preventDefault()
 
     activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
@@ -403,7 +438,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
       <DialogPortal>
         <DialogOverlay className="modal-backdrop modal-fullscreen-backdrop">
-          <DialogContent className="modal modal-fullscreen" aria-label="Mermaid 图预览">
+          <DialogContent className="modal modal-fullscreen" aria-label={t(MERMAID_PREVIEW_TITLE)}>
             <div className="modal-header mermaid-modal-header">
               <DialogTitle
                 className="modal-title mermaid-modal-title"
@@ -415,7 +450,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
                   textOverflow: 'ellipsis',
                 }}
               >
-                Mermaid 图预览
+                {t(MERMAID_PREVIEW_TITLE)}
               </DialogTitle>
           <div className="mermaid-modal-actions">
             <span className="badge badge-neutral mono tabular-nums">{Math.round(scale * 100)}%</span>
@@ -428,7 +463,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
                 scaleRef.current = next
                 applyTransformDirect()
               }}
-              title="放大 (+)"
+              title={t(MERMAID_ZOOM_IN_TITLE)}
             >
               <HelmIcon name="zoom-in" size={12} />
             </button>
@@ -441,7 +476,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
                 scaleRef.current = next
                 applyTransformDirect()
               }}
-              title="缩小 (-)"
+              title={t(MERMAID_ZOOM_OUT_TITLE)}
             >
               <HelmIcon name="zoom-out" size={12} />
             </button>
@@ -449,23 +484,23 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
               type="button"
               className="btn btn-sm"
               onClick={resetFitScreen}
-              title="适应屏幕全貌 (0)"
+              title={t(MERMAID_FIT_SCREEN_TITLE)}
             >
-              适屏
+              {t(MERMAID_FIT_SCREEN)}
             </button>
             <button
               type="button"
               className="btn btn-sm"
               onClick={resetFitWidth}
-              title="适应视口宽度 (W)"
+              title={t(MERMAID_FIT_WIDTH_TITLE)}
             >
-              适宽
+              {t(MERMAID_FIT_WIDTH)}
             </button>
             <button
               type="button"
               className="btn btn-sm"
               onClick={resetActual}
-              title="实际大小 100% (1)"
+              title={t(MERMAID_ACTUAL_TITLE)}
             >
               1:1
             </button>
@@ -474,19 +509,19 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
               className="btn btn-sm"
               onClick={() => setView(view === 'diagram' ? 'source' : 'diagram')}
             >
-              {view === 'diagram' ? '查看源码' : '查看图形'}
+              {view === 'diagram' ? t(MERMAID_VIEW_SOURCE) : t(MERMAID_VIEW_DIAGRAM)}
             </button>
             <button type="button" className="btn btn-sm" onClick={() => void copySource()}>
               <HelmIcon name={copied ? 'check' : 'copy'} size={12} />
-              复制源码
+              {t(MERMAID_COPY_SOURCE)}
             </button>
           </div>
           <DialogClose asChild>
             <button
               type="button"
               className="btn btn-ghost btn-sm mermaid-modal-close"
-              title="关闭 (Esc)"
-              aria-label="关闭"
+              title={t(MERMAID_CLOSE_TITLE)}
+              aria-label={t(MERMAID_CLOSE)}
             >
               <HelmIcon name="x" size={13} />
             </button>
@@ -528,9 +563,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
                     dangerouslySetInnerHTML={{ __html: renderedSvg }}
                   />
                 ) : (
-                  <span className="mermaid-status-hint">
-                    {error !== null ? `渲染失败：${error}` : '正在渲染…'}
-                  </span>
+                  <span className="mermaid-status-hint">{mermaidModalStatus(error, locale)}</span>
                 )}
               </div>
             </div>

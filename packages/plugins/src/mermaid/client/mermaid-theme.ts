@@ -1,9 +1,11 @@
 import type { MermaidConfig } from 'mermaid'
 
 /**
- * Mermaid 测量引擎在 Canvas 2D 环境计算文本包围盒。
- * 必须提供具体字体栈（不能使用 CSS 变量 var(--font-sans)），否则 Canvas 无法解析
- * 会静默退化为 10px sans-serif，导致节点尺寸计算过小并在渲染时截断文字。
+ * The Mermaid measuring engine computes text bounding boxes in a Canvas 2D
+ * context. A concrete font stack is required (CSS variables like
+ * var(--font-sans) cannot be used): otherwise Canvas fails to parse it and
+ * silently degrades to 10px sans-serif, undersizing nodes and truncating
+ * labels at render time.
  */
 export const MERMAID_FONT_FAMILY =
   '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif'

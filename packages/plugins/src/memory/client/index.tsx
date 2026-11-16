@@ -1,17 +1,41 @@
 /**
- * builtin:memory 插件 client.tsx 组件（只导出组件，保 Fast Refresh 契约）：
- * - ProfileMemorySection：注入 builtin:profile/detail-section 子插槽的单 Profile
- *   长期记忆区块（开关 + MEMORY.md 编辑器 + 保存）。
+ * builtin:memory plugin client.tsx components (component exports only, Fast
+ * Refresh contract):
+ * - ProfileMemorySection: the single-profile long-term memory block (enable
+ *   switch + MEMORY.md editor + save) injected into the
+ *   builtin:profile/detail-section sub-slot.
  *
- * 数据不依赖公共文档（记忆全文是磁盘权威）：经 ctx.callAction('get') 按需
- * 拉取当前 Profile 的内容与开关；启停经 'configure'、内容保存经 'set'。
+ * Data does not depend on public docs (memory content is disk-authoritative):
+ * pulled on demand via ctx.callAction('get') for the current profile's
+ * content and switch; toggling goes through 'configure', saving through 'set'.
+ *
+ * Display copy resolves from copy.ts against the active host locale (no
+ * independent language state, no localStorage); backend error messages pass
+ * through unchanged.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ProfileDetailSlotProps } from '@helm/protocol'
-import { Switch, usePluginContext } from '@helm/plugin-client'
+import { Switch, usePluginContext, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
 
 import { Loader2, Save } from 'lucide-react'
+import {
+  MEMORY_DIRTY_HINT,
+  MEMORY_DISABLED_HINT,
+  MEMORY_LOAD_FAILED,
+  MEMORY_LOADING,
+  MEMORY_NEW_PROFILE_HINT,
+  MEMORY_NOT_LOADED,
+  MEMORY_PLACEHOLDER,
+  MEMORY_RETRY,
+  MEMORY_SAVE,
+  MEMORY_SAVING,
+  MEMORY_SECTION_TITLE,
+  MEMORY_SWITCH_LABEL,
+  MEMORY_TEXTAREA_LABEL,
+  memoryCharCount,
+  memoryLineCount,
+} from './copy.ts'
 import './index.css'
 
 interface MemoryGetResult {
@@ -28,9 +52,11 @@ interface Versioned<T> {
   value: T
 }
 
-/** 单 Profile 长期记忆区块（Profile 详情抽屉插件子插槽）。 */
+/** Single-profile long-term memory block (profile detail drawer sub-slot). */
 export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
   const ctx = usePluginContext()
+  const locale = usePluginLocale()
+  const t = usePluginTranslator()
   const { profileId, isNew, disabled } = props
   const effectiveId = isNew ? '' : profileId.trim()
 
@@ -45,7 +71,8 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
   const draftRef = useRef<Versioned<string> | null>(null)
   const callAction = useRef(ctx.callAction)
 
-  // PluginUiView 可随 store 更新重建 ctx；更新委托引用，但不让其身份触发重载。
+  // PluginUiView may rebuild ctx as the store updates; update the delegated
+  // references, but never let their identity trigger a reload.
   currentProfile.current = effectiveId
   callAction.current = ctx.callAction
 
@@ -55,7 +82,8 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
 
   const load = useCallback(async (targetId: string, token: number, existingRequestToken?: number): Promise<void> => {
     if (!isCurrent(targetId, token, existingRequestToken)) return
-    // 先核对 Profile 生命周期，旧入口不可通过递增请求代数作废新 Profile 的加载。
+    // Check the profile lifecycle first: an old entry must not invalidate a
+    // newer profile's load by bumping the request generation.
     const requestToken = existingRequestToken ?? ++requestGeneration.current
     setBusy({ profileId: targetId, generation: token, value: 'load' })
     setError(null)
@@ -71,7 +99,8 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
       }
     } catch (err) {
       if (!isCurrent(targetId, token, requestToken)) return
-      // configure 已成功但刷新失败时，旧的 enabled 也不再是当前服务端事实。
+      // If configure succeeded but the refresh failed, the stale `enabled`
+      // value is no longer the current server-side fact either.
       setState(null)
       setError({
         profileId: targetId,
@@ -125,7 +154,8 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
       await callAction.current('configure', { profileId: targetId, enabled: next })
       if (!isCurrent(targetId, token, requestToken)) return
       await load(targetId, token, requestToken)
-      // 开关即时生效；内容编辑独立保存，不随开关回滚。
+      // The switch takes effect immediately; content editing saves
+      // independently and never rolls back with the switch.
     } catch (err) {
       if (!isCurrent(targetId, token, requestToken)) return
       setError({ profileId: targetId, generation: token, value: err instanceof Error ? err.message : String(err) })
@@ -170,11 +200,9 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
     return (
       <section className="section-flat">
         <div className="section-flat-header">
-          <span className="section-flat-title">长期记忆 (MEMORY.md)</span>
+          <span className="section-flat-title">{t(MEMORY_SECTION_TITLE)}</span>
         </div>
-        <div className="text-subtle text-xs">
-          保存并创建角色后，可在此开启或关闭该角色的长期记忆并编辑 MEMORY.md。
-        </div>
+        <div className="text-subtle text-xs">{t(MEMORY_NEW_PROFILE_HINT)}</div>
       </section>
     )
   }
@@ -192,13 +220,13 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
   return (
     <section className="section-flat">
       <div className="section-flat-header memory-section-header">
-        <span className="section-flat-title">长期记忆 (MEMORY.md)</span>
+        <span className="section-flat-title">{t(MEMORY_SECTION_TITLE)}</span>
         {currentState !== null && (
           <Switch
             checked={currentState.enabled}
             disabled={disabled || currentBusy !== null}
             onChange={(next) => void handleToggle(next)}
-            label="启用长期记忆"
+            label={t(MEMORY_SWITCH_LABEL)}
           />
         )}
       </div>
@@ -213,37 +241,35 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
         <div className="memory-section-load">
           {currentBusy === 'load' && <Loader2 size={12} className="spin-slow" />}
           {currentError === null ? (
-            <span>{currentBusy === 'load' ? '加载记忆中…' : '尚未加载记忆状态'}</span>
+            <span>{currentBusy === 'load' ? t(MEMORY_LOADING) : t(MEMORY_NOT_LOADED)}</span>
           ) : (
             <>
-              <span>无法读取记忆状态，未更改此 Profile 的启用状态。</span>
+              <span>{t(MEMORY_LOAD_FAILED)}</span>
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
                 disabled={currentBusy !== null}
                 onClick={() => void load(effectiveId, token)}
               >
-                重试
+                {t(MEMORY_RETRY)}
               </button>
             </>
           )}
         </div>
       ) : !currentState.enabled ? (
-        <div className="text-subtle text-xs">
-          已为此角色关闭长期记忆：对话中不会注入 MEMORY.md，也不会提供 update_memory 工具。
-          开关即时生效，已保存的记忆内容保留在磁盘上。
-        </div>
+        <div className="text-subtle text-xs">{t(MEMORY_DISABLED_HINT)}</div>
       ) : (
         <>
           <div className="flex-row-between memory-section-meta">
             <span className="mono">
-              {effectiveDraft.length} / 65536 字符{effectiveDraft ? ` · ${effectiveDraft.split('\n').length} 行` : ''}
+              {memoryCharCount(effectiveDraft.length, locale)}
+              {effectiveDraft ? memoryLineCount(effectiveDraft.split('\n').length, locale) : ''}
             </span>
           </div>
           <textarea
             className="input mono memory-section-textarea"
             rows={8}
-            placeholder="该角色的长期记忆全文（支持 Markdown）…"
+            placeholder={t(MEMORY_PLACEHOLDER)}
             value={effectiveDraft}
             disabled={disabled}
             onChange={(e) => {
@@ -251,7 +277,7 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
               draftRef.current = nextDraft
               setDraft(nextDraft)
             }}
-            aria-label="长期记忆"
+            aria-label={t(MEMORY_TEXTAREA_LABEL)}
           />
           <div className="flex-row memory-section-actions">
             <button
@@ -261,11 +287,9 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
               onClick={() => void handleSave()}
             >
               {currentBusy === 'save' ? <Loader2 size={13} className="spin-slow" /> : <Save size={13} />}
-              <span>{currentBusy === 'save' ? '保存中…' : '保存记忆'}</span>
+              <span>{currentBusy === 'save' ? t(MEMORY_SAVING) : t(MEMORY_SAVE)}</span>
             </button>
-            {dirty && (
-              <span className="text-subtle text-xs">有未保存的修改（记忆内容独立保存，不随「取消角色编辑」回滚）</span>
-            )}
+            {dirty && <span className="text-subtle text-xs">{t(MEMORY_DIRTY_HINT)}</span>}
           </div>
         </>
       )}

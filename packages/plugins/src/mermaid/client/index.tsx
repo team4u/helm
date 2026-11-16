@@ -1,18 +1,31 @@
 /**
- * builtin:mermaid client 组件：```mermaid 代码块渲染。
+ * builtin:mermaid client components: ```mermaid code-block rendering.
  *
- * - mermaid 经受控 npm 依赖 bundle 进本插件产物（内核只提供解析根与边界校验）；
- * - 代码变化 250ms 防抖，主题切换即时重绘无闪烁；
- * - 代际守卫：缓存命中也推进代际，卸载/参数变更后迟到的异步 render 结果一律丢弃
- *   （绝不覆盖缓存命中态）；渲染失败显式展示诊断与可复制源码，绝不静默截取脏文本。
+ * - mermaid is bundled into this plugin's artifact as a controlled npm
+ *   dependency (the kernel only provides the resolution root and boundary
+ *   checks);
+ * - code changes debounce at 250ms, theme switches repaint immediately
+ *   without flicker;
+ * - generation guard: cache hits also advance the generation, so late async
+ *   render results after unmount/parameter changes are always discarded
+ *   (never overwrite a cache-hit state); render failures show diagnostics
+ *   and copyable source explicitly, never silently swap in dirty text.
+ *
+ * Display copy resolves from copy.ts against the active host locale (no
+ * independent language state, no localStorage).
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { HelmIcon, CopyButton, Callout } from '@helm/plugin-client'
-import { usePluginContext } from '@helm/plugin-client'
+import { HelmIcon, CopyButton, Callout, usePluginContext, usePluginTranslator } from '@helm/plugin-client'
 import type { MarkdownCodeBlockProps } from '@helm/protocol'
 import mermaid from 'mermaid'
 import { getMermaidConfig } from './mermaid-theme.ts'
 import { MermaidPreviewModal } from './MermaidPreviewModal.tsx'
+import {
+  MERMAID_COPY_SOURCE,
+  MERMAID_RENDERING,
+  MERMAID_RENDER_FAILED,
+  MERMAID_ZOOM_IN,
+} from './copy.ts'
 import './styles.css'
 
 const MERMAID_CACHE_LIMIT = 200
@@ -34,11 +47,13 @@ export { mermaid }
 
 export function MermaidCodeBlock({ code }: MarkdownCodeBlockProps): ReactNode {
   const { theme } = usePluginContext()
+  const t = usePluginTranslator()
   const cacheKey = mermaidCacheKey(theme, code)
   const [svg, setSvg] = useState<string | null>(() => mermaidSvgCache.get(cacheKey) ?? null)
   const [error, setError] = useState<string | null>(null)
   const [zoomOpen, setZoomOpen] = useState(false)
-  // 代际单调递增：任何渲染参数变化（含缓存命中路径）都使旧代异步结果失效。
+  // Monotonic generation: any render-parameter change (including the
+  // cache-hit path) invalidates stale async results of older generations.
   const seqRef = useRef(0)
   const aliveRef = useRef(true)
 
@@ -71,7 +86,8 @@ export function MermaidCodeBlock({ code }: MarkdownCodeBlockProps): ReactNode {
           const id = `helm-mermaid-${theme}-${seq}-${Math.random().toString(36).slice(2, 8)}`
           const { svg: rendered } = await mermaid.render(id, code)
           setCachedSvg(currentKey, rendered)
-          // 代际或存活检查：迟到结果一律丢弃（卸载 / 参数已变 / 缓存命中新代）。
+          // Generation / liveness check: late results are always discarded
+          // (unmounted / parameters changed / a newer cache hit).
           if (aliveRef.current && seqRef.current === seq) {
             setSvg(rendered)
             setError(null)
@@ -99,23 +115,24 @@ export function MermaidCodeBlock({ code }: MarkdownCodeBlockProps): ReactNode {
             type="button"
             className="btn btn-ghost btn-sm"
             onClick={() => setZoomOpen(true)}
-            title="放大预览"
+            title={t(MERMAID_ZOOM_IN)}
           >
             <HelmIcon name="maximize" size={12} />
-            放大预览
+            {t(MERMAID_ZOOM_IN)}
           </button>
-          <CopyButton text={code} label="复制源码" />
+          <CopyButton text={code} label={t(MERMAID_COPY_SOURCE)} />
         </span>
       </div>
       <div className="mermaid-body selectable">
         {svg !== null ? (
           <div
             className="mermaid-svg-host"
-            // strict 模式禁用用户脚本和 HTML 标签；只注入 Mermaid 转换后的 SVG。
+            // strict mode disables user scripts and HTML tags; only inject the
+            // Mermaid-transformed SVG.
             dangerouslySetInnerHTML={{ __html: svg }}
           />
         ) : error !== null ? (
-          <Callout tone="err" title="Mermaid 渲染失败">
+          <Callout tone="err" title={t(MERMAID_RENDER_FAILED)}>
             <span className="selectable">{error}</span>
             <pre className="code-block-pre code-block-pre-flush selectable">
               <code>{code}</code>
@@ -125,7 +142,7 @@ export function MermaidCodeBlock({ code }: MarkdownCodeBlockProps): ReactNode {
           <div className="mermaid-placeholder">
             <div style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, color: 'var(--fg-secondary)', padding: '4px 0 8px' }}>
               <HelmIcon name="loader" size={13} className="spin-slow" />
-              <span>正在渲染 Mermaid 图表...</span>
+              <span>{t(MERMAID_RENDERING)}</span>
             </div>
             <pre className="code-block-pre code-block-pre-flush selectable" style={{ opacity: 0.5 }}>
               <code>{code}</code>

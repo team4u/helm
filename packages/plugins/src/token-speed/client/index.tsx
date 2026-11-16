@@ -1,23 +1,31 @@
 /**
- * builtin:token-speed 插件 client.tsx 组件（只导出组件，保 Fast Refresh 契约）：
- * - TokenSpeedStatusBadge：宿主输入区状态行（COMPOSER_STATUS_SLOT）的只读
- *   速率徽标；订阅本插件 speed 会话文档（专用 SSE，随挂载按需连接）。
+ * builtin:token-speed plugin client.tsx components (component exports only,
+ * Fast Refresh contract):
+ * - TokenSpeedStatusBadge: read-only rate badge on the host composer status
+ *   row (COMPOSER_STATUS_SLOT); subscribes to this plugin's `speed` session
+ *   doc (dedicated SSE, connected on demand while mounted).
  *
- * 诚实性：工具暂停与流式间隙保留本回合最近有效速率（工具执行不计入解码时间）；
- * 仅在首测前或终态无可靠测量时渲染 null，绝不以 0.0 tok/s 冒充；tooltip 口径见 label.ts。
+ * Honesty: tool pauses and streaming gaps keep the last valid rate of the
+ * turn (tool execution is not counted as decode time); renders null before
+ * the first measurement or when the settled turn has no reliable measurement
+ * — never fakes a rate with 0.0 tok/s. Tooltip disclosures live in label.ts.
+ *
+ * Display copy follows the host locale via usePluginLocale (no independent
+ * language state, no localStorage).
  */
 import type { ReactNode } from 'react'
 import type { ComposerScopeProps } from '@helm/protocol'
-import { usePluginSessionDoc } from '@helm/plugin-client'
+import { usePluginLocale, usePluginSessionDoc } from '@helm/plugin-client'
 import type { TokenSpeedStatus } from '../contracts.js'
 import { tokenSpeedLabelOf } from './label.ts'
 import './index.css'
 
-/** 输入区状态行只读速率徽标（props 形状与 composer.pill/widget 同形）。 */
+/** Read-only rate badge for the composer status row (props shape mirrors composer.pill/widget). */
 export function TokenSpeedStatusBadge(_props: ComposerScopeProps): ReactNode {
   const status = usePluginSessionDoc<TokenSpeedStatus | null>('speed')
+  const locale = usePluginLocale()
   if (status === null || status === undefined) return null
-  const label = tokenSpeedLabelOf(status)
+  const label = tokenSpeedLabelOf(status, locale)
   if (label === null) return null
   return (
     <span className="token-speed-status mono tabular-nums" title={label.title}>
