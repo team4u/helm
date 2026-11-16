@@ -4,6 +4,7 @@ import { asksApi } from '../lib/api.js'
 import { HelmIcon } from '@helm/plugin-client'
 import { Tooltip } from '../ui/Tooltip.js'
 import type { HelmStoreValue } from '../lib/types.js'
+import type { SidebarTargetPresence } from './sidebar-model.js'
 import {
   backgroundAwareStatusTooltip,
   resolveStatusLight,
@@ -123,6 +124,22 @@ export function RemoteNodeTag({ nodeId }: { nodeId: string }) {
       title={`运行节点：${nodeId}`}
     >
       @{nodeId}
+    </span>
+  )
+}
+
+const PANE_TAG_TITLES: Record<NonNullable<SidebarTargetPresence['paneTag']>, string> = {
+  主: '主屏打开',
+  分: '分屏打开',
+  '主·分': '主屏与分屏均打开',
+}
+
+/** 分屏开启时在侧栏行尾展示的面板归属微标（主 / 分 / 主·分）。 */
+export function SidebarPaneTag({ paneTag }: { paneTag: SidebarTargetPresence['paneTag'] }) {
+  if (paneTag === null) return null
+  return (
+    <span className="nav-pane-tag" title={PANE_TAG_TITLES[paneTag]}>
+      {paneTag}
     </span>
   )
 }

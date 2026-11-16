@@ -15,11 +15,11 @@ import { useHelmStore } from '../lib/store-context.js'
 import type { HelmStoreValue } from '../lib/types.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
-import { buildArchivedConversationList, isConversationActive } from './sidebar-model.js'
+import { activeConversationIdsOf, buildArchivedConversationList, getConversationPresence } from './sidebar-model.js'
 import type { ArchivedConversationListItem } from './sidebar-model.js'
 import { archiveBatchNotice, patchConversationsArchived } from './archive-ops.js'
 import type { ConversationBackgroundIndex } from './background-activity-model.js'
-import { ConversationStatusDot } from './SidebarPrimitives.js'
+import { ConversationStatusDot, SidebarPaneTag } from './SidebarPrimitives.js'
 
 /** 已归档分组的单个会话行：状态灯前置行首 + 标题 + 归属智能体徽标 + 动作区菜单。 */
 function ArchivedConversationRow({
@@ -40,11 +40,11 @@ function ArchivedConversationRow({
   onToggleSelect?: (id: number) => void
 }): ReactNode {
   const conv = item.conv
-  const active = isConversationActive(store, conv.id)
+  const presence = getConversationPresence(store, conv.id)
 
   return (
     <div
-      className={`nav-item nav-item-sub${active ? ' nav-item-active' : ''}`}
+      className={`nav-item nav-item-sub${presence.active ? ' nav-item-active' : presence.splitSecondary ? ' nav-item-split' : ''}${presence.focused ? ' nav-item-focused' : ''}`}
       onClick={() => {
         if (batchMode) onToggleSelect?.(conv.id)
       }}
@@ -70,7 +70,7 @@ function ArchivedConversationRow({
           store.openTarget({ kind: 'conversation', conversationId: conv.id })
           onNavigate?.()
         }}
-        aria-current={active ? 'page' : undefined}
+        aria-current={presence.active ? 'page' : undefined}
       >
         <span className="nav-status-slot">
           <ConversationStatusDot conv={conv} background={background.get(conv.id)} />
@@ -78,6 +78,7 @@ function ArchivedConversationRow({
         <span className="nav-item-label">{conv.title || `会话 #${conv.id}`}</span>
       </button>
       <span className="nav-item-meta">
+        <SidebarPaneTag paneTag={presence.paneTag} />
         <span
           className="badge badge-neutral archived-profile-label"
           title={`归属智能体：${item.profileLabel}`}
@@ -102,11 +103,6 @@ export function ArchivedConversationsGroup({
   onNavigate?: () => void
 }): ReactNode {
   const store = useHelmStore()
-  const [open, setOpen] = useState(false)
-  const [batchMode, setBatchMode] = useState(false)
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
-  const [restoring, setRestoring] = useState(false)
-
   const items = useMemo(
     () =>
       buildArchivedConversationList({
@@ -118,13 +114,16 @@ export function ArchivedConversationsGroup({
     [store.conversations, store.profiles, store.plugins, store.groupedUi.sidebarSections],
   )
 
-  const activeConversationIds = [
-    store.primaryTarget.kind === 'conversation' ? store.primaryTarget.conversationId : null,
-    store.splitTarget?.kind === 'conversation' ? store.splitTarget.conversationId : null,
-  ]
+  const activeConversationIds = activeConversationIdsOf(store)
+  const hasActiveArchived = items.some((item) => activeConversationIds.has(item.conv.id))
+  const [open, setOpen] = useState(hasActiveArchived)
+  const [batchMode, setBatchMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [restoring, setRestoring] = useState(false)
+
   useEffect(() => {
-    if (items.some((item) => activeConversationIds.includes(item.conv.id))) setOpen(true)
-  }, [items, store.primaryTarget, store.splitTarget])
+    if (hasActiveArchived) setOpen(true)
+  }, [hasActiveArchived, store.primaryTarget, store.splitTarget])
 
   const toggleSelect = (id: number) => {
     setSelectedIds((prev) => {
