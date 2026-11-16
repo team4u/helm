@@ -17,14 +17,27 @@
  *   skill-viewer/artifact-preview 等只读弹窗同样不在自动刷新下冒险，
  *   且 ActiveModal 无稳定的「只读」标记可依赖，按类型枚举会随形态演化腐烂）。
  *   服务端已持久化的会话流不构成挂起条件；
- * - 刷新策略：clean 时检测到新版本立即 reload；挂起时显示持久横幅（非自动
+ * - 刷新策略：clean 时检测到新版本立即刷新；挂起时显示持久横幅（非自动
  *   消失 toast，状态驱动不堆积）并提供「立即刷新」；挂起条件全部解除（含
- *   输入失焦）后自动补刷；reload 只触发一次（防循环/重复探测/重复通知）；
- *   vite:preloadError 恒 preventDefault（Vite 6 契约：未取消会重抛底层错误
- *   覆盖提示），其证据驱动的自动刷新占用每 tab 一次的 sessionStorage 名额
- *   （跨 reload 防环：瞬态错误反复触发时重试一次后仅保留提示、手动刷新；
- *   storage 不可用一律拒绝自动刷新；指纹变化驱动的正常刷新不设跨页标记）；
- *   卸载后在途探测回包不再推进状态机或触发 reload（代际守卫）；
+ *   输入失焦）后自动补刷；
+ * - 刷新执行是 WebView-safe 顶层导航（部分 Android WebView/WKWebView 壳会
+ *   吞掉 `location.reload()` 或对同址导航回吐旧缓存）：第一次尝试用
+ *   `location.replace()` 保持原 pathname/query/hash 的干净同址导航（真文档
+ *   reload 语义）；短延迟后页面仍存活（导航被吞）即升级为带唯一
+ *   cache-buster 的 replace 重试一次（每次新值替换旧值，地址不累积、不碰
+ *   hash 路由），升级前复查挂起条件防误伤刚开始的输入；
+ * - 手动「立即刷新」是显式动作：不受自动刷新的一次性闸门（reloadTriggered）、
+ *   preloadError 名额或指纹跨页防环约束——自动刷新已尝试过而浏览器未真正
+ *   导航时，再次点击必须仍能发起导航（且直接进入带 buster 的高一级尝试）；
+ * - 自动刷新防环：页内 reloadTriggered 只触发一次（重复探测/重复通知不再
+ *   刷）；preloadError 证据驱动的刷新占用每 tab 一次的 sessionStorage 名额
+ *   （storage 不可用一律拒绝自动刷新）；指纹变化驱动的刷新对同一目标入口
+ *   每 tab 只自动发起一次（WebView 回吐旧缓存时不无限循环），正常连续部署
+ *   （入口不同）不受影响；
+ * - vite:preloadError 恒 preventDefault（Vite 6 契约：未取消会重抛底层错误
+ *   覆盖提示）；
+ * - 卸载后在途探测回包不再推进状态机或触发刷新、升级重试 timer 一并清理
+ *   （代际守卫）；
  * - bootId 变化只触发探测，是否刷新仍由入口指纹比对决定（内核重启未必更换
  *   Web 产物）；断线提示仍由 App 连接横幅负责，两套提示互不替代。
  * 本模块只导出 hook 与纯类型（无组件），保持 .ts Fast Refresh 约定。
@@ -35,6 +48,8 @@ import { composerDirty, subscribeComposerDirty } from '../conversation/composer-
 import { standbyDraftsDirty, subscribeStandbyDrafts } from '../conversation/standby-model.js'
 import {
   applyProbeResult,
+  buildVersionReloadUrl,
+  claimFingerprintAutoReload,
   claimPreloadAutoReload,
   detectDocumentProductionEntry,
   initialVersionWatchState,
@@ -44,6 +59,7 @@ import {
   shouldReloadNow,
   versionUpdatePending,
   type VersionDeferReason,
+  type VersionReloadLocation,
   type VersionWatchState,
 } from './version-watch-model.js'
 
@@ -53,6 +69,9 @@ export const versionWatchTimings = {
   visibilityThrottleMs: 5_000,
   /** 页面可见期间的周期探测间隔（毫秒）；hidden 期间跳过。 */
   pollIntervalMs: 60_000,
+  /** 刷新升级重试延迟（毫秒）：同址 replace 后页面仍存活视为导航被吞，
+   *  升级为带 cache-buster 的重试。 */
+  reloadEscalateMs: 2_000,
 }
 
 /** 安全读取 sessionStorage（隐私模式 getter 抛错 / 无 window 环境均返回 null）。 */
@@ -65,8 +84,11 @@ function safeSessionStorage(): Storage | null {
 }
 
 export interface VersionWatcherOptions {
-  /** 刷新执行（默认 window.location.reload；测试注入）。 */
+  /** 刷新导航完全接管（缺省 WebView-safe location.replace 阶梯；测试注入）。
+   *  注入后不注册升级重试——调用方自持导航语义与计数。 */
   reload?: () => void
+  /** 刷新导航的 location（缺省 window.location；测试注入替身观察导航 URL）。 */
+  location?: VersionReloadLocation
 }
 
 /** 自动刷新挂起原因：null = 未挂起（clean）。 */
@@ -77,7 +99,8 @@ export interface VersionWatcherView {
   updateAvailable: boolean
   /** 自动刷新挂起原因（草稿事实/焦点保护/弹窗；横幅文案依据；null = 未挂起）。 */
   deferReason: VersionDeferReason
-  /** 横幅「立即刷新」动作：显式触发一次刷新（幂等，不重复 reload）。 */
+  /** 横幅「立即刷新」动作：显式手动刷新，不受自动闸门/名额/跨页防环约束，
+   *  可重复触发（WebView 吞掉前次导航后再次点击仍会发起导航）。 */
   reloadNow: () => void
 }
 
@@ -121,21 +144,64 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
   const bootIdSeenRef = useRef<string | null>(null)
   const reloadRef = useRef<(() => void) | undefined>(options.reload)
   reloadRef.current = options.reload
+  const locationRef = useRef<VersionReloadLocation | undefined>(options.location)
+  locationRef.current = options.location
+  /** 已发起的刷新导航次数（自动+手动共用）：≥2 起每次携带新 buster。 */
+  const reloadAttemptsRef = useRef(0)
+  /** 同址导航被 WebView 吞掉后的升级重试 timer（卸载时清理）。 */
+  const escalateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** 装配存活标记：卸载后迟到的探测回包不再推进状态机或触发 reload。 */
   const activeRef = useRef(true)
   useEffect(() => {
     activeRef.current = true
     return () => {
       activeRef.current = false
+      if (escalateTimerRef.current !== null) {
+        clearTimeout(escalateTimerRef.current)
+        escalateTimerRef.current = null
+      }
     }
   }, [])
 
-  const reloadOnce = useCallback((): void => {
+  /**
+   * 发起一次刷新导航（WebView-safe）：
+   * - 注入 reload 时完全委托（测试语义）；
+   * - 第一次尝试 = 保持 pathname/query/hash 的干净同址 `location.replace()`
+   *   （真文档 reload 语义，桌面行为不变、地址不引入参数）；
+   * - 此后每次尝试（升级重试或用户再次手动触发）携带唯一 cache-buster，
+   *   每次新值替换旧值，地址不累积、不触碰 hash 路由；
+   * - 第一次尝试后短延迟内页面仍存活（导航被容器吞掉）且仍待刷新、无本地
+   *   交互现场时，自动升级重试一次；之后不再自动升级（防循环，手动始终可用）。
+   */
+  const issueReloadNavigation = useCallback(function navigate(): void {
+    reloadAttemptsRef.current += 1
+    const attempt = reloadAttemptsRef.current
+    const injected = reloadRef.current
+    if (injected !== undefined) {
+      injected()
+      return
+    }
+    const loc = locationRef.current ?? (typeof window !== 'undefined' ? window.location : undefined)
+    if (loc === undefined) return
+    const nonce = attempt === 1 ? null : `${Date.now().toString(36)}-${attempt}`
+    loc.replace(buildVersionReloadUrl(loc, nonce))
+    if (attempt !== 1 || escalateTimerRef.current !== null) return
+    escalateTimerRef.current = setTimeout(() => {
+      escalateTimerRef.current = null
+      // 导航确实没有发生（页面还活着）：仍待刷新、且挂起条件未在窗口内出现
+      // 才升级重试；用户刚开始输入则放弃自动升级，横幅与手动动作保留。
+      if (!activeRef.current || !pendingRef.current) return
+      if (draftDirtyRef.current || modalOpenRef.current || textFocusRef.current) return
+      navigate()
+    }, versionWatchTimings.reloadEscalateMs)
+  }, [])
+
+  /** 自动刷新一次性闸门：本页生命周期内自动路径只发起一次（防重复探测/通知循环）。 */
+  const autoReloadOnce = useCallback((): void => {
     if (reloadTriggeredRef.current) return
     reloadTriggeredRef.current = true
-    const reload = reloadRef.current ?? (typeof window !== 'undefined' ? () => window.location.reload() : undefined)
-    reload?.()
-  }, [])
+    issueReloadNavigation()
+  }, [issueReloadNavigation])
 
   /** 状态机推进 + pending 变化通知渲染 + clean 时自动刷新判定。 */
   const settle = useCallback((): void => {
@@ -156,15 +222,18 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
     ) {
       return
     }
-    // 纯 preloadError 证据驱动的刷新占用每 tab 一次的自动重试名额（跨 reload
-    // 防环：瞬态错误或部署窗口反复触发时，重试一次后仅保留提示、手动刷新）；
-    // 真实指纹变化驱动的刷新不经此守卫（正常升级路径无跨页标记）。
-    if (!fingerprintPending && forcedPendingRef.current) {
-      if (claimPreloadAutoReload(safeSessionStorage())) reloadOnce()
+    if (fingerprintPending) {
+      // 指纹驱动的自动刷新对同一目标入口每 tab 只发起一次：WebView 对同址
+      // 导航回吐旧缓存时不再无限循环，保留横幅与手动动作；连续部署（入口
+      // 不同）不受影响；storage 异常放行（无循环证据不拦截正常升级）。
+      if (claimFingerprintAutoReload(safeSessionStorage(), stateRef.current.latestEntry)) autoReloadOnce()
       return
     }
-    reloadOnce()
-  }, [reloadOnce])
+    // 纯 preloadError 证据驱动的刷新占用每 tab 一次的自动重试名额（跨 reload
+    // 防环：瞬态错误或部署窗口反复触发时，重试一次后仅保留提示、手动刷新）；
+    // 真实指纹变化驱动的刷新不经此守卫（正常升级路径见上分支）。
+    if (claimPreloadAutoReload(safeSessionStorage())) autoReloadOnce()
+  }, [autoReloadOnce])
 
   const runProbe = useCallback(async (): Promise<void> => {
     if (currentEntry === null) return
@@ -204,7 +273,7 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
   }, [kernelBootId, currentEntry, runProbe])
 
   // 挂起条件（草稿/弹窗/文本焦点）全部解除：仍有待刷新版本（含 preloadError
-  // 强制挂起）即自动补刷（reloadOnce 幂等防循环）。
+  // 强制挂起）即自动补刷（自动路径一次性闸门防循环）。
   useEffect(() => {
     if (currentEntry === null) return
     if (!draftDirty && !modalOpen && !textInputFocused) settle()
@@ -258,7 +327,7 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
       document.removeEventListener('focusout', syncTextInputFocus)
       clearInterval(timer)
     }
-  }, [currentEntry, runProbe, reloadOnce, settle])
+  }, [currentEntry, runProbe, issueReloadNavigation, settle])
 
   // 会话 Composer 脏状态由各组件实例自行上报与清除（composer-dirty 桥接），
   // 本 hook 只订阅聚合结果，无需额外清理。
@@ -275,6 +344,8 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
   return {
     updateAvailable: currentEntry !== null && updateAvailable,
     deferReason: currentEntry !== null ? deferReason : null,
-    reloadNow: reloadOnce,
+    // 手动动作直发导航：不被自动闸门/名额短路，WebView 吞掉前次导航后
+    // 再次点击自动升到带 buster 的尝试。
+    reloadNow: issueReloadNavigation,
   }
 }

@@ -1,7 +1,8 @@
 /**
  * 版本感知纯逻辑测试（version-watch-model.ts + 脏状态桥接）：
  * 生产/dev 入口识别、合法 HTML 解析、探测失败不误报、版本变化判定、节流判定、
- * 待命草稿与 Composer 脏状态聚合（自动刷新挂起条件的纯事实源）。
+ * WebView-safe 刷新 URL 构造与防环名额、待命草稿与 Composer 脏状态聚合
+ * （自动刷新挂起条件的纯事实源）。
  */
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
@@ -11,14 +12,19 @@ GlobalRegistrator.register()
 
 import {
   applyProbeResult,
+  buildIndexProbeUrl,
+  buildVersionReloadUrl,
+  claimFingerprintAutoReload,
   claimPreloadAutoReload,
   detectDocumentProductionEntry,
+  FINGERPRINT_RELOAD_GUARD_KEY,
   initialVersionWatchState,
   isTextInputElement,
   parseIndexHtmlProductionEntry,
   PRELOAD_RELOAD_GUARD_KEY,
   probeAllowed,
   probeLatestIndexEntry,
+  RELOAD_CACHE_BUSTER_PARAM,
   shouldReloadNow,
   versionDeferHint,
   versionUpdatePending,
@@ -72,6 +78,19 @@ const CLEAN_COMPOSER: ComposerDirtySnapshot = { hasDraftText: false, editingEntr
 test('生产入口识别：唯一 /assets/ module script（含 crossorigin 构建形态）即指纹', { timeout: 60_000 }, () => {
   const doc = docOf(builtIndexHtml('/assets/index-BE2B9fA8.js'))
   assert.equal(detectDocumentProductionEntry(doc), '/assets/index-BE2B9fA8.js')
+})
+
+test('入口指纹忽略 src 查询/片段参数：部署通道附加的防缓存参数不改变指纹', { timeout: 60_000 }, () => {
+  const doc = docOf(builtIndexHtml('/assets/index-Q.js?v=2&x=1#frag'))
+  assert.equal(detectDocumentProductionEntry(doc), '/assets/index-Q.js', '指纹只取路径部分')
+  // 同一路径带不带参数是同一构建：不产生第二个候选（多义即休眠）
+  const two = docOf(
+    '<html><head>' +
+      '<script type="module" src="/assets/index-Q.js?v=1"></script>' +
+      '<script type="module" src="/assets/index-Q.js?v=2"></script>' +
+      '</head></html>',
+  )
+  assert.equal(detectDocumentProductionEntry(two), '/assets/index-Q.js', '查询参数不同的同路径脚本去重为唯一候选')
 })
 
 test('Vite dev 入口（/src/main.tsx）休眠：返回 null，不猜测', { timeout: 60_000 }, () => {
@@ -138,13 +157,23 @@ function makeProbeStub(initial: () => Response | Promise<Response>): ProbeStub {
 const htmlResponse = (html: string, contentType = 'text/html; charset=utf-8'): Response =>
   new Response(html, { status: 200, headers: { 'content-type': contentType } })
 
-test('探测成功：no-store 拉取 /index.html，2xx + text/html + 唯一生产入口', { timeout: 60_000 }, async () => {
+test('探测成功：唯一化 URL 拉取 /index.html，no-store + Accept: text/html + 唯一生产入口', { timeout: 60_000 }, async () => {
   const stub = makeProbeStub(() => htmlResponse(builtIndexHtml('/assets/index-NEW.js')))
-  const entry = await probeLatestIndexEntry(stub.deps)
+  const entry = await probeLatestIndexEntry({ ...stub.deps, nonce: () => 'n-1' })
   assert.equal(entry, '/assets/index-NEW.js')
   assert.equal(stub.calls.length, 1)
-  assert.equal(stub.calls[0]!.url, '/index.html')
+  assert.equal(stub.calls[0]!.url, '/index.html?helmv=n-1', 'URL 携带防缓存唯一参数（穿透忽略 no-store 的 WebView 缓存层）')
   assert.equal(stub.calls[0]!.init.cache, 'no-store')
+  assert.deepEqual(stub.calls[0]!.init.headers, { accept: 'text/html' })
+  assert.equal(buildIndexProbeUrl('zzz'), '/index.html?helmv=zzz')
+})
+
+test('探测 URL 随机数默认自增：同毫秒内两次探测的 URL 也互不相同', { timeout: 60_000 }, async () => {
+  const stub = makeProbeStub(() => htmlResponse(builtIndexHtml('/assets/index-A.js')))
+  await probeLatestIndexEntry(stub.deps)
+  await probeLatestIndexEntry(stub.deps)
+  assert.equal(stub.calls.length, 2)
+  assert.notEqual(stub.calls[0]!.url, stub.calls[1]!.url, '缺省随机数含自增序号，必然唯一')
 })
 
 test('探测失败矩阵：网络错误 / 非 2xx / 非 HTML / 结构无效 / dev 形态均返回 null 且不抛错', { timeout: 60_000 }, async () => {
@@ -266,6 +295,52 @@ test('preloadError 自动重试名额：首次占用成功并落标记，之后�
   assert.equal(claimPreloadAutoReload(null), false, '无 storage 拒绝')
   assert.equal(claimPreloadAutoReload(memoryStorage({ getItem: true })), false, '读取抛错拒绝')
   assert.equal(claimPreloadAutoReload(memoryStorage({ setItem: true })), false, '写入抛错拒绝（不误允自动刷新）')
+})
+
+// ---------------------------------------------------------------------------
+// WebView-safe 刷新 URL 构造
+// ---------------------------------------------------------------------------
+
+test('刷新 URL：nonce=null 保留 pathname/query/hash 的干净同址导航，不引入任何参数', { timeout: 60_000 }, () => {
+  assert.equal(buildVersionReloadUrl({ pathname: '/', search: '', hash: '' }, null), '/')
+  assert.equal(buildVersionReloadUrl({ pathname: '/', search: '', hash: '#/c/7' }, null), '/#/c/7')
+  assert.equal(buildVersionReloadUrl({ pathname: '/', search: '?x=1&y=2', hash: '#/a/p1' }, null), '/?x=1&y=2#/a/p1')
+})
+
+test('刷新 URL cache-buster：追加唯一参数且每次替换旧值，绝不累积；hash 原样保留在末尾', { timeout: 60_000 }, () => {
+  const loc = { pathname: '/', search: '', hash: '#/a/p1' }
+  assert.equal(buildVersionReloadUrl(loc, 'aaa'), `/?${RELOAD_CACHE_BUSTER_PARAM}=aaa#/a/p1`)
+  // 已带旧 buster 的地址再次构造：替换而非叠加
+  assert.equal(
+    buildVersionReloadUrl({ ...loc, search: `?${RELOAD_CACHE_BUSTER_PARAM}=aaa` }, 'bbb'),
+    `/?${RELOAD_CACHE_BUSTER_PARAM}=bbb#/a/p1`,
+    '旧 buster 被替换，不累积',
+  )
+  // nonce=null 清理历史 buster，其余既有参数原样保留
+  assert.equal(
+    buildVersionReloadUrl({ ...loc, search: `?x=1&${RELOAD_CACHE_BUSTER_PARAM}=aaa&y=2` }, null),
+    '/?x=1&y=2#/a/p1',
+  )
+  // 连续升级多次也只存在一个 buster 参数
+  const first = buildVersionReloadUrl(loc, 'n1')
+  const second = buildVersionReloadUrl({ ...loc, search: first.slice(first.indexOf('?')) }, 'n2')
+  assert.equal(second.match(new RegExp(`${RELOAD_CACHE_BUSTER_PARAM}=`, 'g'))?.length, 1, '地址中至多一个 buster')
+})
+
+// ---------------------------------------------------------------------------
+// 指纹自动刷新跨页防环
+// ---------------------------------------------------------------------------
+
+test('指纹自动刷新跨页防环：同一目标入口只自动发起一次；不同入口/无证据放行', { timeout: 60_000 }, () => {
+  const storage = memoryStorage()
+  assert.equal(claimFingerprintAutoReload(storage, '/assets/index-B.js'), true, '首次对 B 发起：允许并记录')
+  assert.equal(storage.getItem(FINGERPRINT_RELOAD_GUARD_KEY), '/assets/index-B.js')
+  assert.equal(claimFingerprintAutoReload(storage, '/assets/index-B.js'), false, '同入口再次自动发起：拒绝（上次未落地，防环）')
+  assert.equal(claimFingerprintAutoReload(storage, '/assets/index-C.js'), true, '新部署（不同入口）：正常允许')
+  assert.equal(claimFingerprintAutoReload(storage, null), true, '无指纹证据（不应发生）：放行，不拦截')
+  assert.equal(claimFingerprintAutoReload(null, '/assets/index-B.js'), true, 'storage 不可用（隐私模式）：放行')
+  assert.equal(claimFingerprintAutoReload(memoryStorage({ getItem: true }), '/assets/index-B.js'), true, '读取抛错放行')
+  assert.equal(claimFingerprintAutoReload(memoryStorage({ setItem: true }), '/assets/index-D.js'), true, '写入抛错放行（fail-open）')
 })
 
 // ---------------------------------------------------------------------------

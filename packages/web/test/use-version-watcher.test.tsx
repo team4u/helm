@@ -1,8 +1,10 @@
 /**
  * 版本感知装配 hook 测试（use-version-watcher.ts）：
  * bootId 首次/变化触发、clean 自动刷新与 dirty 挂起/补刷、visibility/focus
- * 5s 节流、hidden/visible 轮询行为、vite:preloadError 兜底、卸载后 listener/
- * timer 清理，以及 HelmStoreProvider 对 kernelBootId 的快照暴露。
+ * 5s 节流、hidden/visible 轮询行为、vite:preloadError 兜底、WebView-safe
+ * 刷新导航阶梯（同址 replace → cache-buster 升级重试、手动不被自动闸门短路、
+ * 同入口跨页防环）、卸载后 listener/timer 清理，以及 HelmStoreProvider 对
+ * kernelBootId 的快照暴露。
  */
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
@@ -21,7 +23,12 @@ import {
   versionWatchTimings,
   type VersionWatcherView,
 } from '../src/shell/use-version-watcher.js'
-import { PRELOAD_RELOAD_GUARD_KEY } from '../src/shell/version-watch-model.js'
+import {
+  FINGERPRINT_RELOAD_GUARD_KEY,
+  PRELOAD_RELOAD_GUARD_KEY,
+  RELOAD_CACHE_BUSTER_PARAM,
+  type VersionReloadLocation,
+} from '../src/shell/version-watch-model.js'
 import { clearComposerDirty, setComposerDirty, type ComposerDirtySnapshot } from '../src/conversation/composer-dirty.js'
 import { useComposerSend, type ComposerSendApi } from '../src/conversation/composer-send.js'
 import type { ConversationSummary } from '@helm/protocol'
@@ -67,11 +74,33 @@ interface Harness {
   fetchCalls: Array<{ url: string; init: RequestInit }>
   reloads: () => number
   respond: (builder: () => Response | Promise<Response>) => void
+  /** location 注入模式下记录的 replace 导航 URL（reload 注入模式为空数组）。 */
+  replaceUrls: () => string[]
   unmount: () => void
 }
 
-/** 挂载 hook（经 makeTestStore 提供上下文）；/index.html 响应体可运行时切换。 */
-function mountWatcher(initialHtml = builtIndexHtml(CURRENT_ENTRY)): Harness {
+/** 可变 location 替身：replace 只记录不导航（模拟 WebView 吞掉导航、页面仍存活）。 */
+function makeStubLocation(base: { pathname?: string; search?: string; hash?: string }): {
+  location: VersionReloadLocation
+  replaceUrls: string[]
+} {
+  const replaceUrls: string[] = []
+  return {
+    location: {
+      pathname: base.pathname ?? '/',
+      search: base.search ?? '',
+      hash: base.hash ?? '',
+      replace: (url: string) => {
+        replaceUrls.push(url)
+      },
+    },
+    replaceUrls,
+  }
+}
+
+/** 挂载 hook（经 makeTestStore 提供上下文）；/index.html 响应体可运行时切换。
+ *  缺省注入计数 reload；传 nav.location 时改用 location.replace 阶梯（观察真实导航 URL）。 */
+function mountWatcher(initialHtml = builtIndexHtml(CURRENT_ENTRY), nav: { location?: VersionReloadLocation } = {}): Harness {
   const fetchCalls: Array<{ url: string; init: RequestInit }> = []
   let buildResponse = (): Response | Promise<Response> =>
     new Response(initialHtml, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } })
@@ -82,9 +111,26 @@ function mountWatcher(initialHtml = builtIndexHtml(CURRENT_ENTRY)): Harness {
   }) as typeof fetch
 
   let reloadCount = 0
+  const replaceCalls: string[] = []
+  // location 注入模式：包装 replace 记录导航 URL（替身本身不导航，页面持续存活，
+  // 恰好模拟 WebView 吞掉导航的真实处境）。
+  const navLocation: VersionReloadLocation | undefined = nav.location
+  const wrappedLocation: VersionReloadLocation | undefined = navLocation === undefined ? undefined : {
+    pathname: navLocation.pathname,
+    search: navLocation.search,
+    hash: navLocation.hash,
+    replace: (url: string) => {
+      replaceCalls.push(url)
+      navLocation.replace(url)
+    },
+  }
   let currentView: VersionWatcherView | null = null
   const WatcherProbe = (): React.ReactNode => {
-    currentView = useVersionWatcher({ reload: () => { reloadCount += 1 } })
+    currentView = useVersionWatcher(
+      wrappedLocation !== undefined
+        ? { location: wrappedLocation }
+        : { reload: () => { reloadCount += 1 } },
+    )
     return null
   }
   const StoreHost = ({ store }: { store: HelmStoreValue }): React.ReactNode => (
@@ -106,10 +152,11 @@ function mountWatcher(initialHtml = builtIndexHtml(CURRENT_ENTRY)): Harness {
     renderStore,
     view: () => currentView!,
     fetchCalls,
-    reloads: () => reloadCount,
+    reloads: () => (wrappedLocation !== undefined ? replaceCalls.length : reloadCount),
     respond: (builder) => {
       buildResponse = builder
     },
+    replaceUrls: () => [...replaceCalls],
     unmount: () => {
       act(() => {
         root.unmount()
@@ -148,6 +195,7 @@ afterEach(() => {
   clearComposerDirty('watch-composer-instance')
   try {
     sessionStorage.removeItem(PRELOAD_RELOAD_GUARD_KEY)
+    sessionStorage.removeItem(FINGERPRINT_RELOAD_GUARD_KEY)
   } catch {
     /* happy-dom 环境恒可用；防御性兜底 */
   }
@@ -175,7 +223,7 @@ test('bootId 首次快照只建基线不探测；之后变化立即探测且指�
   h.renderStore('boot-2')
   await flush()
   assert.equal(h.fetchCalls.length, 1)
-  assert.equal(h.fetchCalls[0]!.url, '/index.html')
+  assert.match(h.fetchCalls[0]!.url, /^\/index\.html\?helmv=/, '探测 URL 携带防缓存唯一参数')
   assert.equal(h.fetchCalls[0]!.init.cache, 'no-store')
   assert.equal(h.view().updateAvailable, false, '入口指纹未变不算新版本')
   assert.equal(h.reloads(), 0)
@@ -694,7 +742,7 @@ test('preloadError 自动重试每 tab 仅一次：名额用完保留提示，�
   assert.equal(h.reloads(), 1)
 })
 
-test('preloadError 名额拒绝后：真实指纹变化仍正常自动刷新（不设跨页标记）', { timeout: 60_000 }, async () => {
+test('preloadError 名额拒绝后：真实指纹变化仍正常自动刷新（不受 preload 名额限制）', { timeout: 60_000 }, async () => {
   entryCleanup = installProductionEntry(CURRENT_ENTRY)
   sessionStorage.setItem(PRELOAD_RELOAD_GUARD_KEY, '1')
   harness = mountWatcher()
@@ -737,6 +785,131 @@ test('storage 不可用兜底：preloadError 拒绝自动刷新，保留提示',
     if (descriptor !== undefined) Object.defineProperty(globalThis, 'sessionStorage', descriptor)
     else delete (globalThis as { sessionStorage?: unknown }).sessionStorage
   }
+})
+
+// ---------------------------------------------------------------------------
+// WebView-safe 刷新：导航阶梯、手动不短路、升级重试与跨页防环
+// ---------------------------------------------------------------------------
+
+test('手动「立即刷新」不被一次性闸门短路：自动刷新已尝试（页面未真正导航）后仍可再触发', { timeout: 60_000 }, async () => {
+  entryCleanup = installProductionEntry(CURRENT_ENTRY)
+  harness = mountWatcher()
+  const h = harness
+  h.renderStore('boot-1')
+  await flush()
+  h.respond(() => htmlOf(NEW_ENTRY))
+  h.renderStore('boot-2')
+  await flush()
+  assert.equal(h.view().updateAvailable, true)
+  assert.equal(h.reloads(), 1, 'clean 自动刷新已尝试一次（注入 reload 不卸载页面，模拟导航被吞）')
+
+  act(() => {
+    h.view().reloadNow()
+  })
+  await flush()
+  assert.equal(h.reloads(), 2, '再次手动点击必须仍能发起刷新（旧行为被 reloadTriggeredRef 短路）')
+
+  act(() => {
+    h.view().reloadNow()
+  })
+  await flush()
+  assert.equal(h.reloads(), 3, '手动动作可重复触发，不受自动闸门/名额约束')
+})
+
+test('WebView 吞掉同址导航时自动升级 cache-buster：URL 保留 pathname/query/hash 且不累积', { timeout: 60_000 }, async () => {
+  entryCleanup = installProductionEntry(CURRENT_ENTRY)
+  const stub = makeStubLocation({ pathname: '/', search: '?x=1', hash: '#/c/7' })
+  harness = mountWatcher(builtIndexHtml(CURRENT_ENTRY), { location: stub.location })
+  const h = harness
+  h.renderStore('boot-1')
+  await flush()
+  h.respond(() => htmlOf(NEW_ENTRY))
+  await withTimings({ reloadEscalateMs: 60 }, async () => {
+    h.renderStore('boot-2')
+    await flush()
+    assert.equal(h.reloads(), 1, 'clean 自动刷新第一次尝试')
+    assert.deepEqual(h.replaceUrls(), ['/?x=1#/c/7'], '首次是干净同址导航：保留 query/hash、不加任何参数')
+
+    // 替身 replace 不卸载页面 = 导航被容器吞掉：升级重试自动发生
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200))
+    })
+    assert.equal(h.reloads(), 2, '页面仍存活 → 升级为 cache-buster 导航重试一次')
+    const escalated = h.replaceUrls()[1]!
+    assert.match(escalated, new RegExp(`[?]x=1&${RELOAD_CACHE_BUSTER_PARAM}=`), '既有 query 参数保留，buster 追加其后')
+    assert.ok(escalated.endsWith('#/c/7'), 'hash 路由原样保留')
+
+    // 升级重试后不再自动升级（防循环）；手动动作仍可用且直接进入带 buster 的尝试
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 120))
+    })
+    assert.equal(h.reloads(), 2, '自动升级至多一次，不循环')
+    act(() => {
+      h.view().reloadNow()
+    })
+    await flush()
+    assert.equal(h.reloads(), 3, '手动刷新在自动尝试/升级之后仍可发起')
+    const manual = h.replaceUrls()[2]!
+    assert.equal(manual.match(new RegExp(`${RELOAD_CACHE_BUSTER_PARAM}=`, 'g'))?.length, 1, '地址中至多一个 buster（新值替换旧值）')
+    assert.ok(manual.endsWith('#/c/7'), 'hash 保留')
+  })
+})
+
+test('升级窗口内出现本地输入现场：放弃自动升级；转清后自动路径也不再重复导航，手动仍可用', { timeout: 60_000 }, async () => {
+  entryCleanup = installProductionEntry(CURRENT_ENTRY)
+  const stub = makeStubLocation({ hash: '#/c/9' })
+  harness = mountWatcher(builtIndexHtml(CURRENT_ENTRY), { location: stub.location })
+  const h = harness
+  h.renderStore('boot-1')
+  await flush()
+  h.respond(() => htmlOf(NEW_ENTRY))
+  await withTimings({ reloadEscalateMs: 60 }, async () => {
+    h.renderStore('boot-2')
+    await flush()
+    assert.equal(h.reloads(), 1, '自动刷新第一次尝试')
+
+    // 用户在升级窗口内开始输入：升级重试让位（保守保护未提交内容）
+    act(() => {
+      setComposerDirty('watch-test-composer', { ...CLEAN_COMPOSER, hasDraftText: true })
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200))
+    })
+    assert.equal(h.reloads(), 1, '升级窗口内出现草稿：不自动升级')
+
+    act(() => {
+      setComposerDirty('watch-test-composer', CLEAN_COMPOSER)
+    })
+    await flush()
+    assert.equal(h.reloads(), 1, '自动路径一次性闸门：转清补刷不重复自动导航（防循环）')
+
+    act(() => {
+      h.view().reloadNow()
+    })
+    await flush()
+    assert.equal(h.reloads(), 2, '手动「立即刷新」始终可用')
+  })
+})
+
+test('同目标入口的自动刷新跨页仅一次：上一页未落地不再自动刷，横幅与手动动作保留', { timeout: 60_000 }, async () => {
+  entryCleanup = installProductionEntry(CURRENT_ENTRY)
+  // 模拟上一页已对同一新入口自动发起过刷新（WebView 回吐旧缓存、未真正落地）
+  sessionStorage.setItem(FINGERPRINT_RELOAD_GUARD_KEY, NEW_ENTRY)
+  harness = mountWatcher()
+  const h = harness
+  h.renderStore('boot-1')
+  await flush()
+  h.respond(() => htmlOf(NEW_ENTRY))
+  h.renderStore('boot-2')
+  await flush()
+  assert.equal(h.view().updateAvailable, true, '待刷新提示保留')
+  assert.equal(h.reloads(), 0, '同入口自动刷新不再重复发起（跨页防环）')
+
+  act(() => {
+    h.view().reloadNow()
+  })
+  await flush()
+  assert.equal(h.reloads(), 1, '手动刷新不受跨页防环约束')
 })
 
 // ---------------------------------------------------------------------------
