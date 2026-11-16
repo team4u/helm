@@ -11,6 +11,7 @@
 import { useSyncExternalStore } from 'react'
 import type { ArtifactMetadata, ConversationInit, ConversationSummary } from '@helm/protocol'
 import { envDraftError, type EnvDraft } from './composer-model.js'
+import { resolveEffectiveThinkingLevel } from './keybindings-model.js'
 
 /** 发送前本地暂存附件（不创建会话、不上传）。 */
 export interface StandbyLocalFile {
@@ -214,6 +215,42 @@ export function standbyManageAction(payload: string): StandbyManageAction {
   if (cmd === '/new') return { kind: 'clear-draft' }
   if (cmd === '/clear' || cmd === '/compact') return { kind: 'needs-conversation', command: cmd }
   return null
+}
+
+/**
+ * 解析待命页实际生效模型：草稿显式覆盖 > Profile 绑定 > 全局默认模型。
+ * 全空时返回 undefined（触发按钮显示「默认模型」，提交时不附带 model 字段）。
+ */
+export function resolveStandbyEffectiveModel(
+  draftModel: string | undefined,
+  profileModel: string | undefined,
+  globalDefaultModel: string | undefined,
+): string | undefined {
+  if (draftModel !== undefined && draftModel !== '') return draftModel
+  if (profileModel !== undefined && profileModel !== '') return profileModel
+  if (globalDefaultModel !== undefined && globalDefaultModel !== '') return globalDefaultModel
+  return undefined
+}
+
+/**
+ * 解析待命页实际生效思考档位：草稿显式覆盖 > Profile 绑定 > 全局默认思考档位，
+ * 并收敛到当前模型支持列表（不支持时兜底 off 或首项支持档位）。
+ */
+export function resolveStandbyThinkingLevel(
+  levels: ReadonlyArray<string>,
+  draftLevel: string | undefined,
+  profileLevel: string | undefined,
+  globalDefaultLevel: string | undefined,
+): string {
+  const raw =
+    draftLevel !== undefined && draftLevel !== ''
+      ? draftLevel
+      : profileLevel !== undefined && profileLevel !== ''
+        ? profileLevel
+        : globalDefaultLevel !== undefined && globalDefaultLevel !== ''
+          ? globalDefaultLevel
+          : ''
+  return resolveEffectiveThinkingLevel(levels, raw)
 }
 
 /** 环境定制后的校验（复用会话环境条规则：目录必填且必须绝对路径）。未定制时恒通过。 */
