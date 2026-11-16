@@ -8,10 +8,17 @@
  */
 import assert from 'node:assert/strict'
 import { test, beforeEach, afterEach } from 'node:test'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createPluginBuildProvider, transformBackendTs } from '../src/index.js'
+import {
+  clearClientCompilerMemoryCache,
+  compilePluginClientModule,
+  createPluginBuildProvider,
+  safeDirName,
+  safeFileName,
+  transformBackendTs,
+} from '../src/index.js'
 import { assertModuleRefShape, clientNpmRootsOf } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
 
@@ -126,4 +133,54 @@ test('契约纯函数：assertModuleRefShape 与 clientNpmRootsOf 形状（proto
       ['/pkgs/b', ['react']],
     ],
   )
+})
+
+test('并发调用 compilePluginClientModule 共享缓存目录安全复用且无残留临时文件', { timeout: 60_000 }, async () => {
+  clearClientCompilerMemoryCache()
+  const clientRoot = join(workDir, 'concurrent-client')
+  const sharedCacheDir = join(workDir, 'shared-cache')
+  mkdirSync(clientRoot, { recursive: true })
+  writeFileSync(join(clientRoot, 'dep.ts'), 'export const label = "concurrent-ok";\n')
+  writeFileSync(join(clientRoot, 'index.tsx'), 'import { label } from "./dep.js";\nexport const value = label;\n')
+
+  const firstWave = await Promise.all([
+    compilePluginClientModule('test:concurrent-a', clientRoot, 'index.tsx', sharedCacheDir),
+    compilePluginClientModule('test:concurrent-a', clientRoot, 'index.tsx', sharedCacheDir),
+    compilePluginClientModule('test:concurrent-a', clientRoot, 'index.tsx', sharedCacheDir),
+    compilePluginClientModule('test:concurrent-b', clientRoot, 'index.tsx', sharedCacheDir),
+  ])
+
+  for (const res of firstWave) {
+    assert.ok(res.code.includes('concurrent-ok'))
+    assert.ok(res.exports.includes('value'))
+    assert.equal(res.contentHash, firstWave[0]!.contentHash)
+  }
+  assert.equal(firstWave[1]!.code, firstWave[0]!.code)
+  assert.equal(firstWave[2]!.code, firstWave[0]!.code)
+
+  const baseName = safeFileName('index.tsx')
+  for (const pluginId of ['test:concurrent-a', 'test:concurrent-b']) {
+    const stagingDir = join(sharedCacheDir, 'plugin-staging', safeDirName(pluginId))
+    const files = readdirSync(stagingDir)
+    assert.ok(!files.some((f) => f.includes('.tmp-')), `不得残留临时文件：${files.join(', ')}`)
+    assert.ok(existsSync(join(stagingDir, `${baseName}.deps.json`)), `${pluginId} 应存在 deps.json`)
+    const manifest = JSON.parse(readFileSync(join(stagingDir, `${baseName}.deps.json`), 'utf8')) as {
+      contentHash: string
+    }
+    assert.equal(manifest.contentHash, firstWave[0]!.contentHash)
+    assert.ok(existsSync(join(stagingDir, `${baseName}.${manifest.contentHash}.mjs`)))
+  }
+
+  // 清空内存缓存后再次并发调用，验证磁盘缓存跨实例/并发复用的安全性
+  clearClientCompilerMemoryCache()
+  const secondWave = await Promise.all([
+    compilePluginClientModule('test:concurrent-a', clientRoot, 'index.tsx', sharedCacheDir),
+    compilePluginClientModule('test:concurrent-a', clientRoot, 'index.tsx', sharedCacheDir),
+    compilePluginClientModule('test:concurrent-b', clientRoot, 'index.tsx', sharedCacheDir),
+  ])
+  for (const res of secondWave) {
+    assert.equal(res.contentHash, firstWave[0]!.contentHash)
+    assert.equal(res.code, firstWave[0]!.code)
+  }
+  clearClientCompilerMemoryCache()
 })
