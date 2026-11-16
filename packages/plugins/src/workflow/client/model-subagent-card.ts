@@ -9,8 +9,8 @@ import type {
   ConversationSummary,
 } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
-import { firstLineOf } from './model-format.ts'
-import type { SubagentParentToolSummary } from './model-subagent-link.ts'
+import { extractCleanPreviewLine, firstLineOf } from './model-format.ts'
+import { parseSubagentExecutionInfo, type SubagentParentToolSummary } from './model-subagent-link.ts'
 import { buildSubagentStreamLines, formatSemanticToolAction } from './model-subagent-stream.ts'
 
 /** 子会话卡片状态。 */
@@ -53,6 +53,7 @@ export function subagentBadge(
   summaryStatus: string | undefined,
   toolStatus: 'running' | 'done' | 'error' | 'unknown',
   run?: SubagentRunView,
+  options?: { isBackgroundHandle?: boolean; handleStatus?: string },
 ): SubagentBadge {
   const trueBackground = run !== undefined && isTrueBackgroundRun(run)
   if (summaryStatus === 'blocked') return { status: 'blocked', label: '等待审批', badge: 'badge-warn' }
@@ -76,6 +77,11 @@ export function subagentBadge(
     if (toolStatus === 'running') return { status: 'working', label: '执行中', badge: 'badge-accent' }
     if (toolStatus === 'error') return { status: 'error', label: '异常', badge: 'badge-err' }
     return { status: 'done', label: '已完成', badge: 'badge-ok' }
+  }
+  if (summaryStatus === undefined && run === undefined && options?.isBackgroundHandle === true && toolStatus === 'done') {
+    return options.handleStatus === 'running'
+      ? { status: 'working', label: '后台运行中', badge: 'badge-accent' }
+      : { status: 'pending', label: '进行中', badge: 'badge-neutral' }
   }
   if (toolStatus === 'running') return { status: 'working', label: '执行中', badge: 'badge-accent' }
   if (toolStatus === 'error') return { status: 'error', label: '异常', badge: 'badge-err' }
@@ -117,27 +123,65 @@ function stripSubagentFooter(text: string): string {
   return text.replace(SUBAGENT_FOOTER_TAIL_RE, '')
 }
 
-/** 卡片头部任务标题：用户标题 > 父工具 prompt > 后台 run 首节点 label / prompt。 */
+function inputEntryText(entry: ConversationEntry): string | undefined {
+  if (entry.kind !== 'helm.input') return undefined
+  if (entry.data === null || typeof entry.data !== 'object' || Array.isArray(entry.data)) return undefined
+  const text = (entry.data as Record<string, unknown>)['text']
+  return typeof text === 'string' && text.trim() !== '' ? text : undefined
+}
+
+/** 提取最近一轮 helm.input 的发起时间戳（仅真实记录值，不伪造）。 */
+export function latestTurnStartedAt(entries: ReadonlyArray<ConversationEntry> | undefined): number | undefined {
+  if (entries === undefined) return undefined
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i]!
+    if (entry.kind !== 'helm.input') continue
+    if (typeof entry.createdAt === 'number' && Number.isFinite(entry.createdAt) && entry.createdAt > 0) {
+      return entry.createdAt
+    }
+    if (entry.data !== null && typeof entry.data === 'object' && !Array.isArray(entry.data)) {
+      const ts = (entry.data as Record<string, unknown>)['createdAt']
+      if (typeof ts === 'number' && Number.isFinite(ts) && ts > 0) return ts
+    }
+    break
+  }
+  return undefined
+}
+
+/** 卡片头部任务标题：用户标题 > 父工具 prompt > 后台 run 首节点 label / prompt > 首条 helm.input。 */
 export function resolveSubagentTaskTitle(
   summary: ConversationSummary | undefined,
   childConversationId: number,
   toolSummary?: SubagentParentToolSummary,
   backgroundRun?: WorkflowRunSummary,
+  entries?: ReadonlyArray<ConversationEntry>,
 ): string | undefined {
   const custom = compactCardTitle(summary?.title, childConversationId)
   if (custom !== undefined) return custom
   const prompt = toolSummary?.prompt
   if (prompt !== undefined && prompt.trim() !== '') {
-    return firstLineOf(stripStructuredOutputContract(prompt), 60)
+    const cleaned = extractCleanPreviewLine(stripStructuredOutputContract(prompt), 60)
+    if (cleaned !== '') return cleaned
   }
   const firstNode = backgroundRun?.nodes?.[0]
   const label = firstNode?.label
   if (label !== undefined && label.trim() !== '' && label.trim() !== 'subagent') {
-    return firstLineOf(label, 60)
+    const cleaned = extractCleanPreviewLine(label, 60)
+    if (cleaned !== '') return cleaned
   }
   const nodePrompt = firstNode?.prompt
   if (nodePrompt !== undefined && nodePrompt.trim() !== '') {
-    return firstLineOf(nodePrompt, 60)
+    const cleaned = extractCleanPreviewLine(stripStructuredOutputContract(nodePrompt), 60)
+    if (cleaned !== '') return cleaned
+  }
+  if (entries !== undefined) {
+    for (const entry of entries) {
+      const text = inputEntryText(entry)
+      if (text !== undefined) {
+        const cleaned = extractCleanPreviewLine(stripStructuredOutputContract(text), 60)
+        if (cleaned !== '') return cleaned
+      }
+    }
   }
   return undefined
 }
@@ -146,8 +190,9 @@ export function resolveSubagentTaskTitle(
  * 卡片总耗时：仅以真实记录的边界计时——本次父工具调用 startedAt/durationMs、
  * 后台 run createdAt / 首节点 durationMs。自身 working / blocked（在途，含等待
  * 审批）有时钟则随 nowMs 动态推进；其余（含后代仍在跑而自身已结算）定格在
- * 自身持久化 duration，不用会话 createdAt 伪造一次 resume 的总耗时；无本轮
- * 可靠边界时返回 undefined（调用方如实省略）。
+ * 自身持久化 duration，不用会话 createdAt 伪造一次 resume 的总耗时；
+ * 当 toolSummary.resultText 仅是后台派发句柄（runId 存在）且 backgroundRun
+ * 尚未解析到终态耗时时，严禁回退读取派发工具的 ~34ms durationMs（如实省略）。
  */
 export function resolveSubagentElapsedMs(input: {
   backgroundRun?: WorkflowRunSummary
@@ -165,9 +210,19 @@ export function resolveSubagentElapsedMs(input: {
       ? input.nowMs - start
       : undefined
   }
-  const elapsed = input.backgroundRun !== undefined
-    ? input.backgroundRun.nodes?.[0]?.durationMs ?? input.backgroundRun.updatedAt - input.backgroundRun.createdAt
-    : input.toolSummary?.durationMs
+  if (input.backgroundRun !== undefined) {
+    const nodeDuration = input.backgroundRun.nodes?.[0]?.durationMs
+    if (input.backgroundRun.status === 'running') {
+      return nodeDuration !== undefined && Number.isFinite(nodeDuration) && nodeDuration >= 0 ? nodeDuration : undefined
+    }
+    const elapsed = nodeDuration ?? input.backgroundRun.updatedAt - input.backgroundRun.createdAt
+    return elapsed !== undefined && Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : undefined
+  }
+  // 后台运行句柄返回时 toolSummary.durationMs 只是派发确认耗时（~34ms），绝不冒充任务总耗时。
+  if (parseSubagentExecutionInfo(input.toolSummary?.resultText)?.runId !== undefined) {
+    return undefined
+  }
+  const elapsed = input.toolSummary?.durationMs
   return elapsed !== undefined && Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : undefined
 }
 
@@ -190,7 +245,10 @@ export function extractSubagentResultPreview(resultText: string | undefined): st
         const record = parsed as Record<string, unknown>
         for (const key of ['result', 'output', 'summary']) {
           const v = record[key]
-          if (typeof v === 'string' && v.trim() !== '') return firstLineOf(v, 100)
+          if (typeof v === 'string' && v.trim() !== '') {
+            const cleaned = extractCleanPreviewLine(v, 100)
+            if (cleaned !== '') return cleaned
+          }
           if (v !== undefined && v !== null && typeof v === 'object') return firstLineOf(JSON.stringify(v), 100)
         }
         return firstLineOf(JSON.stringify(parsed), 100)
@@ -201,7 +259,8 @@ export function extractSubagentResultPreview(resultText: string | undefined): st
   }
   const stripped = stripSubagentFooter(trimmed)
   if (stripped.trim() === '') return undefined
-  return firstLineOf(stripped, 100)
+  const cleaned = extractCleanPreviewLine(stripped, 100)
+  return cleaned !== '' ? cleaned : undefined
 }
 
 /** 从父工具 resultText 提取错误文本。 */
@@ -269,7 +328,7 @@ function lastErrorLine(entries: ReadonlyArray<ConversationEntry> | undefined): s
   return undefined
 }
 
-/** entries 中最后一条 assistant 正文（剥离结构化输出契约样板）。 */
+/** entries 中最后一条 assistant 正文（剥离结构化输出契约样板与 Markdown 前缀）。 */
 function lastAssistantText(entries: ReadonlyArray<ConversationEntry> | undefined): string | undefined {
   if (entries === undefined) return undefined
   const latestInputIndex = entries.findLastIndex((entry) => entry.kind === 'helm.input')
@@ -278,7 +337,10 @@ function lastAssistantText(entries: ReadonlyArray<ConversationEntry> | undefined
     const line = lines[i]!
     if (line.kind !== 'text') continue
     const stripped = stripStructuredOutputContract(line.text).trim()
-    if (stripped !== '') return firstLineOf(stripped, 100)
+    if (stripped !== '') {
+      const cleaned = extractCleanPreviewLine(stripped, 100)
+      if (cleaned !== '') return cleaned
+    }
   }
   return undefined
 }

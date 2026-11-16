@@ -4,18 +4,28 @@
  * - WorkflowRunCardBody：工作流运行卡共用执行树视图（时间线与工作台共用）；
  *   run 内节点卡族见 WorkflowNodeCards，重放表单见 WorkflowReplayForm。
  */
-import { useMemo, useRef, useState } from 'react'
+import { useId, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolViewProps } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
-import { formatDurationMs, useConversations, usePluginContext, useToolActivity } from '@helm/plugin-client'
+import {
+  PopoverClose,
+  PopoverContent,
+  PopoverRoot,
+  PopoverTrigger,
+  formatCompactTimestamp,
+  formatDurationMs,
+  useConversations,
+  usePluginContext,
+  useToolActivity,
+} from '@helm/plugin-client'
 import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
 import { WorkflowNodeCard } from './WorkflowNodeCards.tsx'
 import { WorkflowReplayForm } from './WorkflowReplayForm.tsx'
 import { useElapsedNowMs, usePluginSessionDoc } from './hooks.ts'
 import { SPIN, RUN_LABEL, RUN_BADGE, PHASE_ICON, EXECUTION_LABEL, EXECUTION_BADGE } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
-import { stringifyPretty } from './model-format.ts'
+import { cleanInlineMarkdown, stringifyPretty } from './model-format.ts'
 import { canSaveRunAsWorkflow, parseWorkflowArgsInput, parseWorkflowSaveResult } from './model-library.ts'
 import {
   buildWorkflowPhaseSections,
@@ -24,74 +34,178 @@ import {
   canResumeWorkflowRun,
   extractWorkflowLogs,
   formatNodeOutputPreview,
+  isBackgroundWorkflowResultHandle,
   resolveRunElapsedMs,
   resolveWorkflowRunForTool,
+  resolveWorkflowToolFallbackLabel,
 } from './model-run.ts'
 import type { DetachViewerScope } from './model-run.ts'
 import { aggregateExecutionNodes, buildExecutionTree } from './model-execution-tree.ts'
 import type { ExecutionNode } from './model-execution-tree.ts'
 import { collectExecutionApprovals } from './model-execution-view.ts'
 import { effectiveRunNodeStatus, executionRunStatus } from './model-execution-status.ts'
+import { requestWorkbenchRunFocus } from './workbench-focus.ts'
 
 // ---------------------------------------------------------------------------
 // WorkflowToolView：tool.view 扩展点组件（SubagentWorkflow 工具行）
 // ---------------------------------------------------------------------------
 
 export function WorkflowToolView(props: ToolViewProps): ReactNode {
-  const runsDoc = usePluginSessionDoc<{ runs: WorkflowRunSummary[] }>('runs', { conversationId: props.conversationId })
+  const ctx = usePluginContext()
+  const viewerConversationId = props.conversationId ?? ctx.conversationId
+  const runsDoc = usePluginSessionDoc<{ runs: WorkflowRunSummary[] }>(
+    'runs',
+    viewerConversationId !== undefined ? { conversationId: viewerConversationId } : undefined,
+  )
   const conversations = useConversations()
-  const [cardOpen, setCardOpen] = useState(true)
-  const [resultOpen, setResultOpen] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const detailsId = useId()
 
+  const runs = runsDoc?.runs ?? []
   const run = useMemo(
     () =>
-      resolveWorkflowRunForTool(
-        { callId: props.callId, result: typeof props.result === 'string' ? props.result : undefined },
-        props.conversationId,
-        runsDoc?.runs ?? [],
-      ),
-    [props.callId, props.result, props.conversationId, runsDoc],
+      viewerConversationId !== undefined
+        ? resolveWorkflowRunForTool(
+            { callId: props.callId, result: typeof props.result === 'string' ? props.result : undefined },
+            viewerConversationId,
+            runs,
+          )
+        : undefined,
+    [props.callId, props.result, viewerConversationId, runs],
   )
 
-  // 统一执行树：run 节点的子树（agent 节点会话的深层后代经会话链递归）。
   const childNodes = useMemo(
     () =>
-      run === undefined
-        ? undefined
-        : buildExecutionTree({
-            rootConversationId: props.conversationId,
+      run === undefined || viewerConversationId === undefined
+        ? []
+        : (buildExecutionTree({
+            rootConversationId: viewerConversationId,
             conversations,
-            runs: runsDoc?.runs ?? [],
-          }).find((node) => node.kind === 'workflow' && node.run?.id === run.id)?.children,
-    [run, props.conversationId, conversations, runsDoc],
+            runs,
+          }).find((node) => node.kind === 'workflow' && node.run?.id === run.id)?.children ?? []),
+    [run, viewerConversationId, conversations, runs],
   )
+  const subtree = useMemo(() => aggregateExecutionNodes(childNodes), [childNodes])
+  const effectiveStatus = run !== undefined ? effectiveRunNodeStatus(run, subtree) : undefined
+  const isRunning =
+    run !== undefined
+      ? run.status === 'running' || effectiveStatus === 'working' || effectiveStatus === 'blocked'
+      : props.status === 'running'
 
-  useToolActivity(props.callId, run?.status === 'running')
+  useToolActivity(props.callId, isRunning)
+  const nowMs = useElapsedNowMs(isRunning)
+  const resultText = typeof props.result === 'string' ? props.result : undefined
+  const isBgHandle = run === undefined && isBackgroundWorkflowResultHandle(resultText)
+
+  const elapsedMs = useMemo(() => {
+    if (run !== undefined) return resolveRunElapsedMs(run, nowMs)
+    if (isBgHandle) return undefined
+    if (props.status === 'running' && props.startedAt !== undefined && nowMs !== undefined) return Math.max(0, nowMs - props.startedAt)
+    return props.durationMs
+  }, [run, nowMs, isBgHandle, props.status, props.startedAt, props.durationMs])
 
   if (run === undefined) {
-    // 引擎尚未建立关联 run：保留原始调用详情，不猜测其他 run。
+    const fallbackLabel = resolveWorkflowToolFallbackLabel(props.input)
+    const isError = props.status === 'error'
+    const badgeCls = isError ? 'badge-err' : isBgHandle || props.status === 'running' ? 'badge-accent' : 'badge-ok'
+    const badgeText = isError ? '失败' : isBgHandle ? '后台运行中' : props.status === 'running' ? '运行中' : '已完成'
+    const summaryText =
+      isError && resultText !== undefined && resultText.trim() !== ''
+        ? cleanInlineMarkdown(resultText.split(/\r?\n/, 1)[0] ?? '')
+        : isBgHandle
+          ? '已派发后台运行'
+          : undefined
+
     return (
       <div className="trace-entry">
-        <ToolCallDetailsInline input={props.input} result={props.result} artifactRef={props.artifactRef} />
+        <button
+          type="button"
+          className={`trace-row workflow-trace-row-btn${isError ? ' trace-row-error' : ''}`}
+          aria-expanded={detailsOpen}
+          aria-controls={detailsId}
+          aria-label={`${fallbackLabel} — ${detailsOpen ? '收起详情' : '展开详情'}`}
+          onClick={() => setDetailsOpen((v) => !v)}
+        >
+          <span className="trace-row-left">
+            <Icon name={isError ? 'alert-circle' : isRunning ? 'loader' : 'workflow'} size={12} className={isRunning ? SPIN : undefined} />
+            <span className="trace-tool-name">{fallbackLabel}</span>
+            {summaryText !== undefined ? (
+              <span className={`trace-tool-summary${isError ? ' workflow-trace-error' : ''}`} title={summaryText}>
+                {summaryText}
+              </span>
+            ) : null}
+          </span>
+          <span className="trace-row-right workflow-trace-right">
+            <span className={`badge workflow-trace-badge ${badgeCls}`}>{badgeText}</span>
+            {elapsedMs !== undefined ? <span className="trace-duration tabular-nums">{formatDurationMs(elapsedMs)}</span> : null}
+            <Icon name={detailsOpen ? 'chevron-down' : 'chevron-right'} size={11} />
+          </span>
+        </button>
+        <div id={detailsId} hidden={!detailsOpen}>
+          {detailsOpen ? (
+            <ToolCallDetailsInline input={props.input} result={props.result} artifactRef={props.artifactRef} />
+          ) : null}
+        </div>
       </div>
     )
   }
 
+  const nodes = run.nodes ?? []
+  const doneCount = nodes.filter((n) => n.status === 'done').length
+  const selfRunStatus = executionRunStatus(run)
+  const displayStatus = effectiveStatus ?? selfRunStatus
+  const isError = run.status === 'failed' || run.status === 'aborted' || displayStatus === 'error'
+  const isBlocked = displayStatus === 'blocked'
+  const statusBadgeCls =
+    effectiveStatus !== undefined && effectiveStatus !== selfRunStatus
+      ? (EXECUTION_BADGE[effectiveStatus] ?? 'badge-neutral')
+      : (RUN_BADGE[run.status] ?? 'badge-neutral')
+  const statusBadgeText =
+    effectiveStatus !== undefined && effectiveStatus !== selfRunStatus
+      ? (EXECUTION_LABEL[effectiveStatus] ?? effectiveStatus)
+      : (RUN_LABEL[run.status] ?? run.status)
+
+  const progressPart = nodes.length > 0 ? `${doneCount}/${nodes.length} 节点` : undefined
+  const activeNode = nodes.find((n) => n.status === 'running')
+  const livePart = activeNode !== undefined ? `进行中: ${activeNode.label ?? activeNode.id}` : undefined
+  const errorPart =
+    run.error !== undefined && run.error.trim() !== '' ? cleanInlineMarkdown(run.error.split(/\r?\n/, 1)[0] ?? '') : undefined
+  const summaryParts = [progressPart, isError ? errorPart : isRunning ? livePart : undefined].filter(
+    (part): part is string => part !== undefined && part !== '',
+  )
+  const summaryText = summaryParts.join(' · ') || run.description
+
   return (
-    <WorkflowRunCardBody
-      run={run}
-      childNodes={childNodes}
-      cardOpen={cardOpen}
-      onToggleCard={() => setCardOpen((v) => !v)}
-      resultOpen={resultOpen}
-      onToggleResult={() => setResultOpen((v) => !v)}
-      toolProps={props}
-      inWorkbench={false}
-      viewer={{
-        conversationId: props.conversationId,
-        ownedBy: conversations.find((conversation) => conversation.id === props.conversationId)?.ownedBy,
-      }}
-    />
+    <div className="trace-entry">
+      <button
+        type="button"
+        className={`trace-row workflow-trace-row-btn${isError ? ' trace-row-error' : ''}`}
+        aria-label={`工作流 ${run.name}${summaryText ? ` · ${summaryText}` : ''} — 在工作台查看详情`}
+        onClick={() => {
+          requestWorkbenchRunFocus(viewerConversationId ?? run.conversationId, run.id)
+          ctx.openWorkbench(`plugin:${ctx.pluginId}/tasks`)
+        }}
+      >
+        <span className="trace-row-left">
+          <Icon
+            name={isError ? 'alert-circle' : isBlocked ? 'alert-triangle' : isRunning ? 'loader' : 'workflow'}
+            size={12}
+            className={isRunning ? SPIN : undefined}
+          />
+          <span className="trace-tool-name">{run.name}</span>
+          {summaryText !== undefined && summaryText !== '' ? (
+            <span className={`trace-tool-summary${isError ? ' workflow-trace-error' : ''}`} title={summaryText}>
+              {summaryText}
+            </span>
+          ) : null}
+        </span>
+        <span className="trace-row-right workflow-trace-right">
+          <span className={`badge workflow-trace-badge ${statusBadgeCls}`}>{statusBadgeText}</span>
+          {elapsedMs !== undefined ? <span className="trace-duration tabular-nums">{formatDurationMs(elapsedMs)}</span> : null}
+          <Icon name="chevron-right" size={11} />
+        </span>
+      </button>
+    </div>
   )
 }
 
@@ -121,7 +235,6 @@ export function WorkflowRunCardBody(props: {
   const tokens = nodes.reduce((sum, n) => sum + (n.tokens ?? 0), 0)
   const sections = useMemo(() => buildWorkflowPhaseSections(run), [run])
   const logs = useMemo(() => extractWorkflowLogs(run), [run])
-  const hasNamedPhases = sections.length > 1 || (sections.length === 1 && sections[0]!.title !== '')
 
   // 统一执行树：子树计数与后代审批（存在深层后代时才展示，不虚构）。
   const childNodes = props.childNodes ?? []
@@ -248,7 +361,7 @@ export function WorkflowRunCardBody(props: {
         {run.savedName !== undefined ? (
           <span className="badge badge-neutral" title={`已保存工作流：${run.savedName}`}>已保存定义</span>
         ) : null}
-        <span style={{ flex: 1 }} />
+        <span className="workflow-run-header-spacer" />
         <span className="workflow-run-stats tabular-nums">
           {nodes.length > 0 ? <span>{`节点 ${done}/${nodes.length}`}</span> : null}
           {deeperCount > 0 ? <span>{`子树 ${subtree.done}/${subtree.total}`}</span> : null}
@@ -287,35 +400,63 @@ export function WorkflowRunCardBody(props: {
             断点恢复
           </button>
         ) : null}
-        {canReplayWorkflowRun(run) ? (
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={busy}
-            onClick={() => {
-              setReplayOpen((v) => !v)
-              setReplayError(undefined)
-            }}
-            title="打开重放表单（resumeFromRunId：沿用原会话与原脚本源，args 可覆盖）"
-          >
-            <Icon name="rotate-cw" size={11} />
-            重放
-          </button>
-        ) : null}
-        {canSaveRunAsWorkflow(run) ? (
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={busy}
-            onClick={saveAsWorkflow}
-            title="把这个内联运行固化成跨会话可复用的工作流定义（保存名取脚本 meta.name）"
-          >
-            <Icon name="check" size={11} />
-            保存为工作流
-          </button>
+        {canReplayWorkflowRun(run) || canSaveRunAsWorkflow(run) ? (
+          <PopoverRoot>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={busy}
+                aria-label="更多操作"
+                title="更多工作流操作"
+              >
+                <Icon name="more" size={12} />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="workflow-run-menu-popover">
+              <div className="workflow-run-menu">
+                {canReplayWorkflowRun(run) ? (
+                  <PopoverClose asChild>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm workflow-run-menu-item"
+                      disabled={busy}
+                      onClick={() => {
+                        setReplayOpen((v) => !v)
+                        setReplayError(undefined)
+                      }}
+                    >
+                      <Icon name="rotate-cw" size={11} />
+                      重放
+                    </button>
+                  </PopoverClose>
+                ) : null}
+                {canSaveRunAsWorkflow(run) ? (
+                  <PopoverClose asChild>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm workflow-run-menu-item"
+                      disabled={busy}
+                      onClick={saveAsWorkflow}
+                    >
+                      <Icon name="check" size={11} />
+                      保存为工作流
+                    </button>
+                  </PopoverClose>
+                ) : null}
+              </div>
+            </PopoverContent>
+          </PopoverRoot>
         ) : null}
         {!inWorkbench ? (
-          <button className="btn btn-sm" onClick={() => ctx.openWorkbench(`plugin:${ctx.pluginId}/tasks`)}>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => {
+              requestWorkbenchRunFocus(run.conversationId, run.id)
+              ctx.openWorkbench(`plugin:${ctx.pluginId}/tasks`)
+            }}
+          >
             工作台详情
           </button>
         ) : null}
@@ -336,21 +477,26 @@ export function WorkflowRunCardBody(props: {
       {run.description !== undefined && run.description !== '' ? <p className="workflow-run-description">{run.description}</p> : null}
       {cardOpen ? (
         <>
-          {hasNamedPhases ? (
-            <div className="phase-bar">
-              {sections.map((section, idx) => (
-                <span
-                  key={section.key}
-                  className={`phase-segment${section.status === 'running' ? ' phase-segment-active' : section.status === 'done' ? ' phase-segment-done' : section.status === 'failed' ? ' phase-segment-failed' : ''}`}
-                  title={section.detail ?? section.title}
-                >
-                  <Icon name={PHASE_ICON[section.status]} size={11} className={section.status === 'running' ? SPIN : undefined} />
-                  {`${idx + 1}. ${section.title}`}
-                  {`(${section.doneCount}/${section.totalCount})`}
-                </span>
-              ))}
-            </div>
-          ) : null}
+          <div className="kv-grid workflow-run-meta">
+            <span className="kv-key">运行 ID</span>
+            <span className="kv-val mono">{run.id}</span>
+            <span className="kv-key">发起时间</span>
+            <span className="kv-val tabular-nums">{formatCompactTimestamp(run.createdAt)}</span>
+            <span className="kv-key">更新时间</span>
+            <span className="kv-val tabular-nums">{formatCompactTimestamp(run.updatedAt)}</span>
+            {run.replayedFrom !== undefined ? (
+              <>
+                <span className="kv-key">源 run</span>
+                <span className="kv-val mono">{run.replayedFrom}</span>
+              </>
+            ) : null}
+            {run.savedName !== undefined ? (
+              <>
+                <span className="kv-key">保存定义</span>
+                <span className="kv-val mono">{run.savedName}</span>
+              </>
+            ) : null}
+          </div>
           {logs.length > 0 ? (
             <div className="workflow-log-list">
               {logs.map((log) => (
@@ -366,9 +512,14 @@ export function WorkflowRunCardBody(props: {
               <div key={section.key} className="workflow-phase-group">
                 {section.title !== '' ? (
                   <div className="workflow-phase-header">
-                    <Icon name={PHASE_ICON[section.status]} size={11} className={section.status === 'running' ? SPIN : undefined} />
-                    <span className="workflow-phase-title">{`${section.index + 1}. ${section.title}`}</span>
-                    <span className="workflow-phase-count tabular-nums">{`(${section.doneCount}/${section.totalCount})`}</span>
+                    <span
+                      className={`phase-segment${section.status === 'running' ? ' phase-segment-active' : section.status === 'done' ? ' phase-segment-done' : section.status === 'failed' ? ' phase-segment-failed' : ''}`}
+                      title={section.detail ?? section.title}
+                    >
+                      <Icon name={PHASE_ICON[section.status]} size={11} className={section.status === 'running' ? SPIN : undefined} />
+                      {`${section.index + 1}. ${section.title}`}
+                      {` (${section.doneCount}/${section.totalCount})`}
+                    </span>
                   </div>
                 ) : null}
                 {section.nodes.map((node) => (

@@ -59,7 +59,7 @@ export function WorkflowLibraryScreen(props: WorkflowLibraryScreenProps): ReactN
       <div className="screen-section">
         <div className="workflow-lib-toolbar">
           <div className="workflow-lib-search">
-            <Icon name="circle" size={13} />
+            <Icon name="search" size={13} />
             <input
               type="text"
               className="input"

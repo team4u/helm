@@ -14,12 +14,16 @@ export {
   toolResultPreviewTruncated,
   isScrolledToBottom,
   firstLineOf,
+  cleanInlineMarkdown,
+  extractCleanPreviewLine,
+  summarizeReadableJson,
   formatShortModelName,
   stringifyPretty,
 } from './model-format.ts'
 
 // subagent 运行期关联（model-subagent-link.ts）
 export {
+  parseSubagentExecutionInfo,
   resolveSubagentConversationId,
   resolveSubagentExecutionMeta,
   isLatestSubagentCallForTarget,
@@ -40,6 +44,7 @@ export type { SubagentStreamLine } from './model-subagent-stream.ts'
 export {
   subagentBadge,
   compactCardTitle,
+  latestTurnStartedAt,
   resolveSubagentTaskTitle,
   resolveSubagentElapsedMs,
   extractSubagentResultPreview,
@@ -51,6 +56,8 @@ export type { SubagentCardStatus, SubagentBadge, SubagentHeaderSnippet, Subagent
 // 工作流运行卡纯逻辑（model-run.ts）
 export {
   resolveWorkflowRunForTool,
+  isBackgroundWorkflowResultHandle,
+  resolveWorkflowToolFallbackLabel,
   hasNodeExtraDetail,
   formatNodeOutputPreview,
   resolveNodeSummaryText,
@@ -99,3 +106,27 @@ export { buildExecutionTree, aggregateExecutionNodes } from './model-execution-t
 export type { ExecutionAggregate, ExecutionNodeStatus } from './model-execution-status.ts'
 export type { ExecutionFrontlineItem, ExecutionApprovalItem } from './model-execution-view.ts'
 export type { ExecutionNodeKind, ExecutionNode, BuildExecutionTreeInput } from './model-execution-tree.ts'
+
+// 后台汇报解析 / 底部活动托盘 / 工作台 run 定位总线
+export {
+  parseBackgroundReportEntry,
+  backgroundReportPreview,
+  isBackgroundReportDefaultOpen,
+} from './model-background-report.ts'
+export type {
+  BackgroundReportKind,
+  BackgroundReportStatus,
+  BackgroundReportOtherTask,
+  BackgroundReportView,
+  BackgroundReportInvalidView,
+  BackgroundReportParse,
+} from './model-background-report.ts'
+export { buildActiveTraySummary } from './model-active-tray.ts'
+export type { ActiveTrayItem, ActiveTraySummary } from './model-active-tray.ts'
+export {
+  requestWorkbenchRunFocus,
+  peekWorkbenchRunFocus,
+  clearWorkbenchRunFocus,
+  subscribeWorkbenchRunFocus,
+} from './workbench-focus.ts'
+export type { WorkbenchRunFocusRequest } from './workbench-focus.ts'

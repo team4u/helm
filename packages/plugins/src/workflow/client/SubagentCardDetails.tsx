@@ -7,7 +7,7 @@
  */
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import { usePluginContext } from '@helm/plugin-client'
+import { formatCompactTimestamp, usePluginContext } from '@helm/plugin-client'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { SPIN, EXECUTION_BADGE, EXECUTION_LABEL } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
@@ -190,13 +190,26 @@ export function SubagentCardActions(props: {
   )
 }
 
-/** 第 2 层动态副栏：当前动作 / 思考 / 结论 / 错误 + 前线活动摘要。 */
+/** 第 2 层动态副栏：当前动作 / 思考 / 结论 / 错误 + 前线活动摘要 + 无损元数据。 */
 export function SubagentCardSublines(props: {
   snippet: SubagentHeaderSnippet | undefined
   frontline: ExecutionFrontlineItem[]
+  nodeId?: string
+  cwd?: string
+  createdAt?: number
+  runId?: string
 }): ReactNode {
-  const { snippet, frontline } = props
-  if (snippet === undefined && frontline.length === 0) return undefined
+  const { snippet, frontline, nodeId, cwd, createdAt, runId } = props
+  const coord =
+    nodeId !== undefined && nodeId !== '' && cwd !== undefined && cwd !== ''
+      ? `${nodeId}:${cwd}`
+      : cwd !== undefined && cwd !== ''
+        ? cwd
+        : nodeId !== undefined && nodeId !== ''
+          ? nodeId
+          : undefined
+  const hasMeta = coord !== undefined || (createdAt !== undefined && Number.isFinite(createdAt)) || runId !== undefined
+  if (snippet === undefined && frontline.length === 0 && !hasMeta) return undefined
   return (
     <>
       {snippet !== undefined ? (
@@ -214,6 +227,15 @@ export function SubagentCardSublines(props: {
           <Icon name="corner-down-right" size={11} />
           <span className="subagent-live-subline-tag">前线</span>
           <span className="subagent-live-subline-text">{frontline.map((item) => item.text).join(' · ')}</span>
+        </div>
+      ) : null}
+      {hasMeta ? (
+        <div className="subagent-live-meta-row">
+          {coord !== undefined ? <span className="subagent-live-meta-item mono">{coord}</span> : null}
+          {createdAt !== undefined && Number.isFinite(createdAt) ? (
+            <span className="subagent-live-meta-item tabular-nums">{formatCompactTimestamp(createdAt)}</span>
+          ) : null}
+          {runId !== undefined ? <span className="subagent-live-meta-item mono">{runId}</span> : null}
         </div>
       ) : null}
     </>

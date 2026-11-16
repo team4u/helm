@@ -27,7 +27,7 @@ export function WorkflowLibraryCard(props: { item: SavedWorkflowView; onShowDeta
         <strong className="workflow-lib-card-name" title={item.path ?? item.name}>{item.name}</strong>
       </div>
       {item.metadataError !== undefined ? (
-        <div className="callout callout--warn workflow-lib-card-meta-error">元数据校验失败：{firstLineOf(item.metadataError, 120)}</div>
+        <div className="callout callout--warning workflow-lib-card-meta-error">元数据校验失败：{firstLineOf(item.metadataError, 120)}</div>
       ) : (
         <>
           {description !== undefined ? (

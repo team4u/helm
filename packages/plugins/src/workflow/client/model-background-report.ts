@@ -1,7 +1,7 @@
 /**
  * builtin:workflow 后台结算汇报（helm.input + meta.renderer 精确接管）纯解析层。
  *
- * 既有正文契约：单行引导语 + '\\n' + report JSON（deliverBackgroundReport 生成）。
+ * 既有正文契约：单行引导语 + '\n' + report JSON（deliverBackgroundReport 生成）。
  * 本模块按首个换行分离并严格校验实际读取展示/导航的字段（runId 与 meta 一致、
  * 合法终态、execution 正整数会话 ID 等）；result 是业务值——null/false/0/空串
  * 均合法，只按键存在性判别，绝不用 truthy 丢弃。数据损坏时返回 invalid 视图
@@ -9,6 +9,7 @@
  */
 
 import type { ConversationEntry } from '@helm/protocol'
+import { extractCleanPreviewLine, summarizeReadableJson } from './model-format.ts'
 
 /** 汇报种类（meta.kind；决定卡片标题）。 */
 export type BackgroundReportKind = 'subagent_report' | 'workflow_report'
@@ -29,6 +30,8 @@ export interface BackgroundReportView {
   kind: BackgroundReportKind
   runId: string
   status: BackgroundReportStatus
+  /** 投递时间戳（epoch ms，来自 entry.createdAt 或 data.createdAt）。 */
+  createdAt?: number
   /** report 是否携带 result 键（值可为任何 JSON 值，含 null/false/0/''）。 */
   hasResult: boolean
   result: unknown
@@ -44,6 +47,7 @@ export interface BackgroundReportView {
 /** 损坏汇报视图：仍允许展开查看与复制原文。 */
 export interface BackgroundReportInvalidView {
   invalid: true
+  createdAt?: number
   rawText: string
 }
 
@@ -55,6 +59,17 @@ function isSafePositiveInt(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
 }
 
+function extractEntryCreatedAt(entry: ConversationEntry, data: Record<string, unknown> | undefined): number | undefined {
+  if (typeof entry.createdAt === 'number' && Number.isFinite(entry.createdAt) && entry.createdAt > 0) {
+    return entry.createdAt
+  }
+  if (data !== undefined) {
+    const raw = data['createdAt']
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return raw
+  }
+  return undefined
+}
+
 /**
  * 解析汇报 entry。校验失败（形状/JSON/runId 不一致/非法终态等）返回 invalid，
  * 调用方不得把 invalid 当成功渲染。
@@ -63,6 +78,7 @@ export function parseBackgroundReportEntry(entry: ConversationEntry): Background
   const data = entry.data
   if (data === null || typeof data !== 'object' || Array.isArray(data)) return invalidOf(entry)
   const d = data as Record<string, unknown>
+  const createdAt = extractEntryCreatedAt(entry, d)
   if (typeof d.text !== 'string') return invalidOf(entry)
   const meta = d.meta
   if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) return invalidOf(entry)
@@ -120,6 +136,7 @@ export function parseBackgroundReportEntry(entry: ConversationEntry): Background
     kind,
     runId: r.runId,
     status: r.status as BackgroundReportStatus,
+    ...(createdAt !== undefined ? { createdAt } : {}),
     hasResult: Object.hasOwn(r, 'result'),
     result: r.result,
     error: typeof r.error === 'string' ? r.error : undefined,
@@ -131,29 +148,33 @@ export function parseBackgroundReportEntry(entry: ConversationEntry): Background
 
 function invalidOf(entry: ConversationEntry): BackgroundReportInvalidView {
   const data = entry.data
-  const text = data !== null && typeof data === 'object' && !Array.isArray(data) &&
-    typeof (data as Record<string, unknown>).text === 'string'
-    ? ((data as Record<string, unknown>).text as string)
+  const record = data !== null && typeof data === 'object' && !Array.isArray(data)
+    ? (data as Record<string, unknown>)
+    : undefined
+  const text = record !== undefined && typeof record['text'] === 'string'
+    ? (record['text'] as string)
     : ''
-  return { invalid: true, rawText: text }
+  const createdAt = extractEntryCreatedAt(entry, record)
+  return {
+    invalid: true,
+    ...(createdAt !== undefined ? { createdAt } : {}),
+    rawText: text,
+  }
 }
 
-/** 折叠态单行预览：字符串取首行；其余 JSON 值取紧凑序列化（均截断）。 */
+/** 失败、中止或格式异常汇报默认自动展开，确保异常一眼可见。 */
+export function isBackgroundReportDefaultOpen(view: BackgroundReportParse): boolean {
+  return view.invalid || view.status === 'failed' || view.status === 'aborted'
+}
+
+/** 折叠态单行预览：清洗 Markdown 与纯标题行；JSON 提取可读键值摘要；失败优先错误。 */
 export function backgroundReportPreview(view: BackgroundReportView, maxChars: number): string {
-  const source =
-    view.status === 'failed' || view.status === 'aborted'
-      ? firstNonEmpty(view.error, previewOfResult(view))
-      : previewOfResult(view)
-  const line = source.trim().split('\n')[0] ?? ''
-  return line.length > maxChars ? `${line.slice(0, maxChars)}…` : line
-}
-
-function previewOfResult(view: BackgroundReportView): string {
+  if ((view.status === 'failed' || view.status === 'aborted') && view.error !== undefined && view.error.trim() !== '') {
+    return extractCleanPreviewLine(view.error, maxChars)
+  }
   if (!view.hasResult) return ''
-  if (typeof view.result === 'string') return view.result
-  return JSON.stringify(view.result) ?? ''
-}
-
-function firstNonEmpty(a: string | undefined, b: string): string {
-  return a !== undefined && a.trim() !== '' ? a : b
+  if (typeof view.result === 'string') {
+    return extractCleanPreviewLine(view.result, maxChars)
+  }
+  return summarizeReadableJson(view.result, maxChars)
 }

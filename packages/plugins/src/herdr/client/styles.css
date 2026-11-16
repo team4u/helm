@@ -2,25 +2,46 @@
  * builtin:herdr 插件自有样式（clientRoot 内本地 CSS）。
  *
  * 通用结构一律复用宿主设计系统原语（.helm-table-wrap / .helm-table / .callout /
- * .stack-row / Callout 组件等），此处仅保留 Herdr 总览视图专属业务布局。
+ * .stack-row / Callout 组件等），此处保留 Herdr 总览视图双端响应式布局与容器断点适配。
  */
 .herdr-overview {
   width: 100%;
   height: 100%;
   overflow-y: auto;
+  overflow-x: hidden;
   box-sizing: border-box;
+  container-type: inline-size;
+  container-name: herdr-overview;
 }
 
 .herdr-overview-toolbar {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--border-subtle, var(--border));
 }
 
-.herdr-overview-content {
-  padding: 12px 16px 24px;
+.herdr-toolbar-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.herdr-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.herdr-overview-stale {
+  margin: 10px 16px 0;
 }
 
 .herdr-overview-filters {
@@ -32,9 +53,83 @@
   justify-content: flex-start;
 }
 
-/* 筛选下拉固定宽度契约（宿主 Select 默认 width: 100%，此处收窄为筛选条尺寸） */
+.herdr-filter-select {
+  flex: 0 1 140px;
+  min-width: 110px;
+}
+
+/* 筛选下拉宽度契约（宿主 Select 默认 width: 100%，由外层控制宽度） */
 .herdr-filter-select .helm-select-trigger {
   width: 100%;
+}
+
+/* 行计小字 */
+.herdr-metric-label {
+  margin-left: 4px;
+}
+
+.herdr-overview-content {
+  padding: 12px 16px 24px;
+  min-width: 0;
+}
+
+.herdr-content-inner {
+  width: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
+  min-width: 0;
+}
+
+.herdr-col-node {
+  width: 75px;
+}
+
+.herdr-col-pane {
+  width: 110px;
+}
+
+.herdr-col-loc {
+  width: 140px;
+}
+
+.herdr-col-owner {
+  width: 65px;
+}
+
+.herdr-col-status {
+  width: 75px;
+}
+
+.herdr-col-cli {
+  width: 85px;
+}
+
+.herdr-col-outcome {
+  width: 75px;
+}
+
+.herdr-col-actions {
+  width: 140px;
+  text-align: right;
+}
+
+.herdr-cell-truncate {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.herdr-badge-inline {
+  margin-left: 6px;
+}
+
+.herdr-muted {
+  color: var(--fg-muted);
+}
+
+.herdr-subtle {
+  color: var(--fg-subtle);
 }
 
 .herdr-actions-cell {
@@ -43,21 +138,116 @@
   min-width: 120px;
 }
 
-/* 行计小字（复用 .text-subtle.tabular-nums；此处仅补左侧间距节奏） */
-.herdr-metric-label {
-  margin-left: 4px;
+.herdr-actions-stack {
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
-/* 待审批列表：本插件专属纵向容器 */
+/* 窄屏卡片布局：默认隐藏，仅在 <=680px 容器或视口下切换呈现，杜绝横向溢出 */
+.herdr-mobile-cards {
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.herdr-mobile-empty {
+  padding: 14px 12px;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+}
+
+.herdr-pane-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.herdr-pane-card-human {
+  background: var(--bg-subtle);
+}
+
+.herdr-pane-card-top {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.herdr-pane-card-id {
+  font-weight: 600;
+  color: var(--fg);
+  font-size: 12.5px;
+}
+
+.herdr-pane-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  min-width: 0;
+}
+
+.herdr-pane-card-cwd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 11.5px;
+  color: var(--fg-subtle);
+}
+
+.herdr-pane-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-subtle, var(--border));
+}
+
+/* 待审批列表 */
+.herdr-asks-card {
+  margin-top: 12px;
+}
+
+.herdr-asks-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
 .herdr-ask-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
-/* 终端快照模态：宿主 .modal 默认 680px，此处放宽到快照阅读宽度 */
+.herdr-ask-row {
+  justify-content: space-between;
+  width: 100%;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.herdr-ask-target {
+  font-size: 12px;
+}
+
+/* 终端快照模态：宿主 .modal 默认 680px，桌面放宽到阅读宽度，窄屏自动贴合 */
 .herdr-snapshot-modal {
-  max-width: 860px;
+  max-width: min(860px, calc(100vw - 24px));
 }
 
 .herdr-snapshot-modal .code-block-pre {
@@ -65,4 +255,62 @@
   border-radius: var(--radius-sm);
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+@media (max-width: 680px) {
+  .herdr-overview-toolbar,
+  .herdr-overview-filters {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .herdr-overview-content {
+    padding: 10px 12px 20px;
+  }
+
+  .herdr-overview-stale {
+    margin: 8px 12px 0;
+  }
+
+  .herdr-filter-select {
+    flex: 1 1 calc(50% - 8px);
+    min-width: 110px;
+  }
+
+  .herdr-desktop-table {
+    display: none;
+  }
+
+  .herdr-mobile-cards {
+    display: flex;
+  }
+}
+
+@container herdr-overview (max-width: 680px) {
+  .herdr-overview-toolbar,
+  .herdr-overview-filters {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .herdr-overview-content {
+    padding: 10px 12px 20px;
+  }
+
+  .herdr-overview-stale {
+    margin: 8px 12px 0;
+  }
+
+  .herdr-filter-select {
+    flex: 1 1 calc(50% - 8px);
+    min-width: 110px;
+  }
+
+  .herdr-desktop-table {
+    display: none;
+  }
+
+  .herdr-mobile-cards {
+    display: flex;
+  }
 }

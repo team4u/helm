@@ -5,7 +5,7 @@
  * meta.renderer 精确匹配折叠卡；工作流库是跨会话可复用资产的独立视图
  * 空间（定义管理不属会话 workbench）。
  */
-import type { HelmPluginContext } from '@helm/protocol'
+import { COMPOSER_DOCK_SLOT, type HelmPluginContext } from '@helm/protocol'
 import { WORKFLOW_PLUGIN_ID, WORKFLOW_RUN_BADGES_DOC } from '../contracts.js'
 import { BACKGROUND_REPORT_RENDERER } from './background.js'
 
@@ -27,6 +27,11 @@ export function registerWorkflowUi(ctx: HelmPluginContext): void {
     toolNames: ['SubagentWorkflow'],
     replaceRow: true,
     client: { module: 'index.tsx', export: 'WorkflowToolView' },
+  })
+  ctx.ui.slot({
+    id: 'active-tray',
+    target: COMPOSER_DOCK_SLOT,
+    client: { module: 'index.tsx', export: 'WorkflowActiveTray' },
   })
   ctx.ui.workbenchPanel({
     id: 'tasks',

@@ -32,6 +32,7 @@ import { buildSubagentStatSegments, buildSubagentStreamLines } from './model-sub
 import {
   resolveSubagentElapsedMs,
   resolveSubagentHeaderSnippet,
+  latestTurnStartedAt,
   resolveSubagentTaskTitle,
   subagentBadge,
 } from './model-subagent-card.ts'
@@ -87,7 +88,7 @@ export function SubagentLiveCard(props: {
     pendingAsk !== undefined || (summary?.pendingAskCount ?? 0) > 0
       ? { status: 'blocked', label: '等待审批', badge: 'badge-warn' }
       : subagentBadge(summary?.status, toolStatus, backgroundRun)
-  const taskTitle = resolveSubagentTaskTitle(summary, childConversationId, toolSummary, backgroundRun)
+  const taskTitle = resolveSubagentTaskTitle(summary, childConversationId, toolSummary, backgroundRun, detail?.entries)
   const statSegments = useMemo(
     () =>
       buildSubagentStatSegments({
@@ -135,10 +136,11 @@ export function SubagentLiveCard(props: {
   // 总耗时独立展示位：仅以真实边界解析（本次调用 / 后台 run；运行中随秒表
   // 动态推进、结算定格持久化 duration；无本轮边界如实省略，不用会话
   // createdAt 伪造一次 resume 的耗时）。
+  const fallbackStartedAt = startedAt ?? latestTurnStartedAt(detail?.entries)
   const elapsedMs = resolveSubagentElapsedMs({
     ...(backgroundRun !== undefined ? { backgroundRun } : {}),
     ...(toolSummary !== undefined ? { toolSummary } : {}),
-    ...(startedAt !== undefined ? { startedAt } : {}),
+    ...(fallbackStartedAt !== undefined ? { startedAt: fallbackStartedAt } : {}),
     nowMs,
     status: elapsedActive ? 'working' : effectiveStatus,
   })
@@ -202,7 +204,16 @@ export function SubagentLiveCard(props: {
           viewer={props.viewer}
         />
       }
-      snippet={<SubagentCardSublines snippet={snippet} frontline={frontline} />}
+      snippet={
+        <SubagentCardSublines
+          snippet={snippet}
+          frontline={frontline}
+          nodeId={summary?.nodeId}
+          cwd={summary?.cwd}
+          createdAt={backgroundRun?.createdAt ?? summary?.createdAt}
+          runId={backgroundRun?.id}
+        />
+      }
     >
       {childNodes.length > 0 ? <ExecutionChildrenRows nodes={childNodes} /> : null}
       {props.expanded === true && streamLines.length > 0 ? (

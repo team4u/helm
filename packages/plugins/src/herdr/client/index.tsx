@@ -1,16 +1,15 @@
 /**
  * builtin:herdr 插件 client.tsx 组件（只导出组件，保 Fast Refresh 契约）：
- * - HerdrOverviewScreen：Herdr 终端总览全屏视图（原 @helm/web 同构迁移）。
+ * - HerdrOverviewScreen：Herdr 终端总览全屏视图（桌面表格 + <=680px 双行卡片自适应）。
  *
- * 数据经 @helm/plugin-client 共享 hooks（usePluginDoc / usePluginContext）
- * 从宿主 store 响应式读取；focus / read / list 动作经 ctx.callAction 走
- * POST /api/actions/builtin:herdr/<actionId>，无任何宿主私有 store 依赖。
- * 归属红线：human 行不携带任何管理字段，界面上也不提供管理动作。
- * node / owner / status 筛选经 ScreenProps.params / setParams 深链可恢复。
+ * 归属红线（AGENTS.md §3）：
+ * - ownedBy === 'human' 的人类直连终端窗格仅允许只读诊断与状态展示，
+ *   绝不渲染聚焦、快照、发送按键或中止类破坏性操作控件。
+ * - 仅 ownedBy === 'helm' 的受管窗格开放关联会话、聚焦与只读快照入口。
  */
 import { useMemo, useState } from 'react'
 import './styles.css'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import type { ScreenProps } from '@helm/protocol'
 import {
   Callout,
@@ -33,15 +32,19 @@ import {
   computeStats,
   filterPanes,
   filtersToParamsPatch,
+  isHumanOwnedPane,
   outcomeLabel,
+  OWNER_FILTER_OPTIONS,
+  paneCwdText,
+  paneLocationText,
   paneRowKey,
   parseFilters,
   parseManagedMap,
   parseReadText,
+  STATUS_FILTER_OPTIONS,
   type OverviewDoc,
   type OverviewPaneRow,
 } from './models.ts'
-
 import {
   Check,
   ChevronDown,
@@ -54,7 +57,17 @@ import {
   X,
 } from 'lucide-react'
 
-function Icon({ name, size = 12, className, style }: { name: string; size?: number; className?: string; style?: React.CSSProperties }): ReactNode {
+function Icon({
+  name,
+  size = 12,
+  className,
+  style,
+}: {
+  name: string
+  size?: number
+  className?: string
+  style?: CSSProperties
+}): ReactNode {
   const map: Record<string, typeof Terminal> = {
     check: Check,
     circle: Circle,
@@ -76,19 +89,16 @@ function FilterSelect({
   options,
   ariaLabel,
   onChange,
-  width,
 }: {
   value: string
   options: ReadonlyArray<{ value: string; label: string }>
   ariaLabel: string
   onChange: (next: string) => void
-  width?: number
 }): ReactNode {
   return (
     <Select
       size="sm"
       className="herdr-filter-select"
-      style={{ width }}
       value={value}
       options={options}
       aria-label={ariaLabel}
@@ -96,21 +106,6 @@ function FilterSelect({
     />
   )
 }
-
-const OWNER_FILTER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
-  { value: 'all', label: '全部归属' },
-  { value: 'helm', label: 'helm 受管' },
-  { value: 'human', label: 'human 直连' },
-]
-
-const STATUS_FILTER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
-  { value: 'all', label: '全部状态' },
-  { value: 'working', label: 'working' },
-  { value: 'idle', label: 'idle' },
-  { value: 'blocked', label: 'blocked' },
-  { value: 'done', label: 'done' },
-  { value: 'unknown', label: 'unknown' },
-]
 
 export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
   const { isSplit, params, setParams } = props
@@ -154,16 +149,19 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
     }
   }
 
-  const focusPane = (row: OverviewPaneRow) =>
-    invokeWithGuard(`focus:${paneRowKey(row)}`, async () => {
+  const focusPane = (row: OverviewPaneRow) => {
+    if (isHumanOwnedPane(row)) return
+    return invokeWithGuard(`focus:${paneRowKey(row)}`, async () => {
       await ctx.callAction('focus', {
         paneId: row.paneId,
         ...(row.nodeId !== 'local' ? { nodeId: row.nodeId } : {}),
       })
     })
+  }
 
-  const readPane = (row: OverviewPaneRow) =>
-    invokeWithGuard(`read:${paneRowKey(row)}`, async () => {
+  const readPane = (row: OverviewPaneRow) => {
+    if (isHumanOwnedPane(row)) return
+    return invokeWithGuard(`read:${paneRowKey(row)}`, async () => {
       const result = await ctx.callAction('read', {
         paneId: row.paneId,
         lines: 40,
@@ -174,6 +172,7 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
         text: parseReadText(result),
       })
     })
+  }
 
   /** 受管 pane 的 parentConversationId 经 list 动作一次性拉取（显式操作，不逐行轮询）。 */
   const loadManagedMap = () =>
@@ -181,14 +180,74 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
       setManagedMap(parseManagedMap(await ctx.callAction('list', {})))
     })
 
+  const renderManagedActions = (row: OverviewPaneRow, key: string, parentConversationId: number | undefined): ReactNode => {
+    if (isHumanOwnedPane(row)) {
+      return (
+        <span className="badge badge-neutral" title="人类直连终端仅支持只读诊断与状态展示">
+          只读
+        </span>
+      )
+    }
+    const showFocus = canFocusPane(row)
+    const showRead = canSnapshotPane(row)
+    const showConversation = row.ownedBy === 'helm' && (row.pendingAsk === true || parentConversationId !== undefined)
+    if (!showFocus && !showRead && !showConversation) {
+      return <span className="herdr-subtle">—</span>
+    }
+    return (
+      <>
+        {showFocus ? (
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={busyPane !== null}
+            onClick={() => void focusPane(row)}
+          >
+            {busyPane === `focus:${key}` ? <Icon name="loader" size={11} /> : null}
+            聚焦
+          </button>
+        ) : null}
+        {showRead ? (
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={busyPane !== null}
+            onClick={() => void readPane(row)}
+          >
+            {busyPane === `read:${key}` ? <Icon name="loader" size={11} /> : null}
+            快照
+          </button>
+        ) : null}
+        {showConversation ? (
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            disabled={parentConversationId === undefined}
+            title={parentConversationId !== undefined ? `会话 #${parentConversationId}` : '点「刷新关联」获取受管窗格的关联会话'}
+            onClick={() => {
+              if (parentConversationId === undefined) return
+              if (isSplit) ctx.openConversationDrawer(parentConversationId)
+              else ctx.openScreen(`conversation:${parentConversationId}`)
+            }}
+          >
+            <Icon name="message-square" size={11} />
+            打开关联会话
+          </button>
+        ) : null}
+      </>
+    )
+  }
+
   return (
     <div className="herdr-overview">
       <div className="herdr-overview-toolbar">
-        <div className="pane-actions">
+        <div className="herdr-toolbar-stats">
           <span className="badge badge-neutral">窗格 {stats.total}</span>
           <span className="badge badge-accent">工作中 {stats.working}</span>
           <span className="badge badge-warn">待确认 {stats.blocked}</span>
           <span className="badge badge-neutral">节点 {stats.nodes}</span>
+        </div>
+        <div className="herdr-toolbar-actions">
           <button type="button" className="btn btn-sm" onClick={() => void loadManagedMap()}>
             <Icon name="refresh-cw" size={12} />
             刷新关联
@@ -206,30 +265,27 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
       </div>
 
       {(doc?.stale === true || doc?.error !== undefined) && (
-        <div style={{ margin: '10px 16px 0' }}>
+        <div className="herdr-overview-stale">
           <Callout tone="warn">
             Herdr 连接降级或不可达：{doc?.error ?? '未知错误'}（以下为最后已知快照，时间 {formatCompactTimestamp(doc?.updatedAt ?? 0)}）
           </Callout>
         </div>
       )}
 
-      <div className="pane-actions herdr-overview-filters">
+      <div className="herdr-overview-filters">
         <FilterSelect
-          width={140}
           value={filters.node}
           options={nodeFilterOptions}
           ariaLabel="节点筛选"
           onChange={(next) => updateFilter('node', next)}
         />
         <FilterSelect
-          width={140}
           value={filters.owner}
           options={OWNER_FILTER_OPTIONS}
           ariaLabel="归属筛选"
           onChange={(next) => updateFilter('owner', next)}
         />
         <FilterSelect
-          width={140}
           value={filters.status}
           options={STATUS_FILTER_OPTIONS}
           ariaLabel="状态筛选"
@@ -241,134 +297,139 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
       </div>
 
       <div className="herdr-overview-content">
-        <div style={{ width: '100%', maxWidth: 1100, margin: '0 auto' }}>
-          <div className="helm-table-wrap">
+        <div className="herdr-content-inner">
+          <div className="helm-table-wrap herdr-desktop-table">
             <table className="helm-table">
               <thead>
                 <tr>
-                  <th style={{ width: 75 }}>节点</th>
-                  <th style={{ width: 110 }}>窗格</th>
-                  <th style={{ width: 140 }}>位置</th>
-                  <th style={{ width: 65 }}>归属</th>
-                  <th style={{ width: 75 }}>状态</th>
-                  <th style={{ width: 85 }}>CLI</th>
+                  <th className="herdr-col-node">节点</th>
+                  <th className="herdr-col-pane">窗格</th>
+                  <th className="herdr-col-loc">位置</th>
+                  <th className="herdr-col-owner">归属</th>
+                  <th className="herdr-col-status">状态</th>
+                  <th className="herdr-col-cli">CLI</th>
                   <th>工作目录</th>
-                  <th style={{ width: 75 }}>终态</th>
-                  <th style={{ width: 120, textAlign: 'right' }}>操作</th>
+                  <th className="herdr-col-outcome">终态</th>
+                  <th className="herdr-col-actions">操作</th>
                 </tr>
               </thead>
               <tbody>
-                {doc === undefined && (
+                {doc === undefined ? (
                   <tr>
-                    <td colSpan={9} style={{ color: 'var(--fg-muted)' }}>
+                    <td colSpan={9} className="herdr-muted">
                       正在加载 overview 文档...
                     </td>
                   </tr>
-                )}
-                {doc !== undefined && filtered.length === 0 && (
+                ) : filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={9} style={{ color: 'var(--fg-muted)' }}>
+                    <td colSpan={9} className="herdr-muted">
                       没有匹配的窗格
                     </td>
                   </tr>
+                ) : (
+                  filtered.map((row) => {
+                    const key = paneRowKey(row)
+                    const statusTone = agentStatusTone(row.agentStatus)
+                    const outcomeMeta = outcomeLabel(row.outcome)
+                    const parentConversationId = managedMap[key]
+                    const locText = paneLocationText(row)
+                    const cwdText = paneCwdText(row)
+                    return (
+                      <tr key={key}>
+                        <td className="mono">{row.nodeId}</td>
+                        <td className="mono">
+                          {row.paneId}
+                          {row.focused === true ? <span className="badge badge-accent herdr-badge-inline">聚焦</span> : null}
+                          {row.pendingAsk === true ? <span className="badge badge-warn herdr-badge-inline">待审批</span> : null}
+                        </td>
+                        <td className="herdr-cell-truncate" title={locText}>
+                          {locText}
+                        </td>
+                        <td>
+                          <span className={`badge ${row.ownedBy === 'helm' ? 'badge-accent' : 'badge-neutral'}`}>
+                            {row.ownedBy === 'helm' ? 'helm' : 'human'}
+                          </span>
+                        </td>
+                        <td>
+                          <span className={`badge badge-${statusTone}`}>{row.agentStatus}</span>
+                        </td>
+                        <td className="mono">{row.agentName ?? row.agent ?? '—'}</td>
+                        <td className="mono herdr-cell-truncate" title={row.foregroundCwd ?? row.cwd ?? ''}>
+                          {cwdText}
+                        </td>
+                        <td>
+                          {outcomeMeta !== undefined ? (
+                            <span className={`badge badge-${outcomeMeta.tone}`}>{outcomeMeta.label}</span>
+                          ) : (
+                            <span className="herdr-subtle">—</span>
+                          )}
+                        </td>
+                        <td className="herdr-actions-cell">
+                          <div className="stack-row herdr-actions-stack">
+                            {renderManagedActions(row, key, parentConversationId)}
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })
                 )}
-                {filtered.map((row) => {
-                  const key = paneRowKey(row)
-                  const statusTone = agentStatusTone(row.agentStatus)
-                  const outcomeMeta = outcomeLabel(row.outcome)
-                  const parentConversationId = managedMap[key]
-                  return (
-                    <tr key={key}>
-                      <td className="mono">{row.nodeId}</td>
-                      <td className="mono">
-                        {row.paneId}
-                        {row.focused === true && <span className="badge badge-accent" style={{ marginLeft: 6 }}>聚焦</span>}
-                        {row.pendingAsk === true && <span className="badge badge-warn" style={{ marginLeft: 6 }}>待审批</span>}
-                      </td>
-                      <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {row.title ?? row.label ?? row.workspaceId}
-                      </td>
-                      <td>
-                        <span className={`badge ${row.ownedBy === 'helm' ? 'badge-accent' : 'badge-neutral'}`}>
-                          {row.ownedBy === 'helm' ? 'helm' : 'human'}
-                        </span>
-                      </td>
-                      <td>
-                        <span className={`badge badge-${statusTone}`}>{row.agentStatus}</span>
-                      </td>
-                      <td className="mono">{row.agentName ?? row.agent ?? '—'}</td>
-                      <td
-                        className="mono"
-                        style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                        title={row.foregroundCwd ?? row.cwd ?? ''}
-                      >
-                        {row.foregroundCwd ?? row.cwd ?? '—'}
-                      </td>
-                      <td>
-                        {outcomeMeta !== undefined ? (
-                          <span className={`badge badge-${outcomeMeta.tone}`}>{outcomeMeta.label}</span>
-                        ) : (
-                          <span style={{ color: 'var(--fg-subtle)' }}>—</span>
-                        )}
-                      </td>
-                      <td className="herdr-actions-cell" style={{ textAlign: 'right' }}>
-                        <div className="stack-row" style={{ justifyContent: 'flex-end' }}>
-                          {canFocusPane(row) && (
-                            <button
-                              type="button"
-                              className="btn btn-sm"
-                              disabled={busyPane !== null}
-                              onClick={() => void focusPane(row)}
-                            >
-                              {busyPane === `focus:${key}` && <Icon name="loader" size={11} />}
-                              聚焦
-                            </button>
-                          )}
-                          {canSnapshotPane(row) && (
-                            <button
-                              type="button"
-                              className="btn btn-sm"
-                              disabled={busyPane !== null}
-                              onClick={() => void readPane(row)}
-                            >
-                              {busyPane === `read:${key}` && <Icon name="loader" size={11} />}
-                              快照
-                            </button>
-                          )}
-                          {row.ownedBy === 'helm' && (row.pendingAsk === true || parentConversationId !== undefined) && (
-                            <button
-                              type="button"
-                              className="btn btn-sm btn-ghost"
-                              disabled={parentConversationId === undefined}
-                              title={parentConversationId !== undefined ? `会话 #${parentConversationId}` : '点「刷新关联」获取受管窗格的关联会话'}
-                              onClick={() => {
-                                if (parentConversationId === undefined) return
-                                if (isSplit) ctx.openConversationDrawer(parentConversationId)
-                                else ctx.openScreen(`conversation:${parentConversationId}`)
-                              }}
-                            >
-                              <Icon name="message-square" size={11} />
-                              打开关联会话
-                            </button>
-                          )}
-                          {!canFocusPane(row) && !canSnapshotPane(row) && !(row.ownedBy === 'helm' && (row.pendingAsk === true || parentConversationId !== undefined)) && (
-                            <span style={{ color: 'var(--fg-subtle)' }}>—</span>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
               </tbody>
             </table>
           </div>
+
+          <div className="herdr-mobile-cards" aria-label="窗格列表（移动视图）">
+            {doc === undefined ? (
+              <div className="herdr-mobile-empty">正在加载 overview 文档...</div>
+            ) : filtered.length === 0 ? (
+              <div className="herdr-mobile-empty">没有匹配的窗格</div>
+            ) : (
+              filtered.map((row) => {
+                const key = paneRowKey(row)
+                const statusTone = agentStatusTone(row.agentStatus)
+                const outcomeMeta = outcomeLabel(row.outcome)
+                const parentConversationId = managedMap[key]
+                const humanOnly = isHumanOwnedPane(row)
+                const locText = paneLocationText(row)
+                const cwdText = paneCwdText(row)
+                return (
+                  <article
+                    key={key}
+                    className={`herdr-pane-card${humanOnly ? ' herdr-pane-card-human' : ''}`}
+                    data-owned-by={humanOnly ? 'human' : 'helm'}
+                  >
+                    <div className="herdr-pane-card-top">
+                      <span className="mono herdr-pane-card-id">{`${row.paneId}@${row.nodeId}`}</span>
+                      <span className={`badge ${row.ownedBy === 'helm' ? 'badge-accent' : 'badge-neutral'}`}>
+                        {row.ownedBy === 'helm' ? 'helm' : 'human'}
+                      </span>
+                      <span className={`badge badge-${statusTone}`}>{row.agentStatus}</span>
+                      {outcomeMeta !== undefined ? (
+                        <span className={`badge badge-${outcomeMeta.tone}`}>{outcomeMeta.label}</span>
+                      ) : null}
+                      {row.focused === true ? <span className="badge badge-accent">聚焦</span> : null}
+                      {row.pendingAsk === true ? <span className="badge badge-warn">待审批</span> : null}
+                    </div>
+                    <div className="herdr-pane-card-meta">
+                      <span className="mono">{row.agentName ?? row.agent ?? '—'}</span>
+                      {locText !== undefined && locText !== '' ? <span>{locText}</span> : null}
+                    </div>
+                    <div className="mono herdr-pane-card-cwd">{cwdText}</div>
+                    <div className="herdr-pane-card-actions">
+                      {renderManagedActions(row, key, parentConversationId)}
+                    </div>
+                  </article>
+                )
+              })
+            )}
+          </div>
+
           {doc !== undefined && doc.asks.length > 0 && (
-            <div className="card" style={{ marginTop: 12 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>待审批（asks）</div>
+            <div className="card herdr-asks-card">
+              <div className="herdr-asks-title">待审批（asks）</div>
               <div className="herdr-ask-list">
                 {doc.asks.map((ask, i) => (
-                  <div key={i} className="stack-row" style={{ justifyContent: 'space-between', width: '100%' }}>
-                    <span className="mono" style={{ fontSize: 12 }}>
+                  <div key={i} className="stack-row herdr-ask-row">
+                    <span className="mono herdr-ask-target">
                       {ask.paneId}@{ask.nodeId}
                     </span>
                     <span className="badge badge-warn">

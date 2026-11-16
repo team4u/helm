@@ -8,7 +8,7 @@
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { WorkflowNodeState } from '../../contracts.js'
-import { formatDurationMs, usePluginContext } from '@helm/plugin-client'
+import { formatCompactTimestamp, formatDurationMs, usePluginContext } from '@helm/plugin-client'
 import { useElapsedNowMs } from './hooks.ts'
 import { SPIN, NODE_LABEL, NODE_BADGE } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
@@ -184,6 +184,12 @@ function WorkflowNodeDetail({ node }: { node: WorkflowNodeState }): ReactNode {
     <div className="workflow-node-detail">
       {rows.length > 0 ? (
         <div className="kv-grid">
+        {node.startedAt !== undefined ? (
+          <>
+            <span className="kv-key">开始时间</span>
+            <span className="kv-val tabular-nums">{formatCompactTimestamp(node.startedAt)}</span>
+          </>
+        ) : null}
           {rows.map(([k, v]) => (
             <span key={k} style={{ display: 'contents' }}>
               <span className="kv-key">{k}</span>

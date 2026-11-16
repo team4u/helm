@@ -5,7 +5,7 @@
  */
 import type { ConversationSummary } from '@helm/protocol'
 import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts.js'
-import { formatShortModelName } from './model-format.ts'
+import { firstLineOf, formatShortModelName, inputString } from './model-format.ts'
 
 /** 工具输出 JSON 里的 run id 字段（"id":"wf_xxx"）精确提取（不匹配子串/前缀）。 */
 const WORKFLOW_RUN_ID_IN_RESULT_RE = /"id"\s*:\s*"([^"]+)"/
@@ -32,6 +32,38 @@ export function resolveWorkflowRunForTool(
     }
   }
   return undefined
+}
+
+/** 判定 SubagentWorkflow 工具返回文本是否为后台启动句柄（非最终结算结果）。 */
+export function isBackgroundWorkflowResultHandle(result: unknown): boolean {
+  if (typeof result !== 'string') return false
+  const trimmed = result.trim()
+  if (!trimmed.startsWith('{')) return false
+  try {
+    const parsed: unknown = JSON.parse(trimmed)
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return false
+    const record = parsed as Record<string, unknown>
+    return record['background'] === true
+  } catch {
+    return false
+  }
+}
+
+/** 无关联 run 记录时从工具入参提取可读标题，避免裸露空白。 */
+export function resolveWorkflowToolFallbackLabel(input: unknown): string {
+  const name = inputString(input, 'name')
+  if (name !== undefined) return firstLineOf(name, 60)
+  const scriptPath = inputString(input, 'scriptPath')
+  if (scriptPath !== undefined) return firstLineOf(scriptPath, 60)
+  const resumeFromRunId = inputString(input, 'resumeFromRunId')
+  if (resumeFromRunId !== undefined) return `恢复 ${resumeFromRunId}`
+  const script = inputString(input, 'script')
+  if (script !== undefined) {
+    const metaName = /name\s*:\s*["']([^"']+)["']/.exec(script)?.[1]
+    if (metaName !== undefined && metaName !== '') return metaName
+    return firstLineOf(script, 60)
+  }
+  return 'SubagentWorkflow'
 }
 
 // ---------------------------------------------------------------------------

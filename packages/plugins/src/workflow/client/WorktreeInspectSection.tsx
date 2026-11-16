@@ -125,7 +125,7 @@ export function WorktreeInspectSection(props: {
           {data !== undefined ? (
             <>
               {unavailableText !== undefined ? (
-                <div className="callout callout--warn">{unavailableText}，无法执行 git 检视；仅展示登记元数据。</div>
+                <div className="callout callout--warning">{unavailableText}，无法执行 git 检视；仅展示登记元数据。</div>
               ) : null}
               <div className="kv-grid">
                 <span className="kv-key">分支</span>

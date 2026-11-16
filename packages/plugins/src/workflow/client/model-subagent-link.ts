@@ -42,9 +42,11 @@ export interface SubagentExecutionInfo {
   effectiveCwd?: string
   worktree?: { path: string; branch: string }
   runId?: string
+  background?: boolean
+  status?: string
 }
 
-function parseSubagentExecutionInfo(text: string | undefined): SubagentExecutionInfo | undefined {
+export function parseSubagentExecutionInfo(text: string | undefined): SubagentExecutionInfo | undefined {
   if (typeof text !== 'string' || text === '') return undefined
   // 分离末尾 footer：正文才是 JSON 信封（footer 非合法 JSON 成员）。
   const body = text.replace(SUBAGENT_FOOTER_LINE_RE, '').trim()
@@ -78,6 +80,8 @@ function parseSubagentExecutionInfo(text: string | undefined): SubagentExecution
     }
   }
   if (typeof envelope['runId'] === 'string' && envelope['runId'] !== '') info.runId = envelope['runId']
+  if (typeof envelope['background'] === 'boolean') info.background = envelope['background']
+  if (typeof envelope['status'] === 'string' && envelope['status'] !== '') info.status = envelope['status']
   return info.conversationId !== undefined ||
     info.executionId !== undefined ||
     info.worktree !== undefined ||

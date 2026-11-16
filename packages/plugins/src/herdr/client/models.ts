@@ -201,3 +201,32 @@ export function canSnapshotPane(row: OverviewPaneRow): boolean {
   return true
 }
 
+/** 归属判定：非 helm 托管一律视为人类直连（严格只读诊断，禁渲染控制动作）。 */
+export function isHumanOwnedPane(row: Pick<OverviewPaneRow, 'ownedBy'>): boolean {
+  return row.ownedBy !== 'helm'
+}
+
+export function paneLocationText(row: Pick<OverviewPaneRow, 'title' | 'label' | 'workspaceId'>): string | undefined {
+  return row.title ?? row.label ?? row.workspaceId
+}
+
+export function paneCwdText(row: Pick<OverviewPaneRow, 'foregroundCwd' | 'cwd'>): string {
+  return row.foregroundCwd ?? row.cwd ?? '—'
+}
+
+export const OWNER_FILTER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: 'all', label: '全部归属' },
+  { value: 'helm', label: 'helm 受管' },
+  { value: 'human', label: 'human 直连' },
+]
+
+export const STATUS_FILTER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: 'all', label: '全部状态' },
+  { value: 'working', label: 'working' },
+  { value: 'idle', label: 'idle' },
+  { value: 'blocked', label: 'blocked' },
+  { value: 'done', label: 'done' },
+  { value: 'unknown', label: 'unknown' },
+]
+
+

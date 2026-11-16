@@ -165,7 +165,7 @@ export function WorkflowLibraryDrawer(props: {
 
           <div className="primary-drawer-body">
             {item.metadataError !== undefined ? (
-              <div className="callout callout--warn">元数据校验失败：{item.metadataError}</div>
+              <div className="callout callout--warning">元数据校验失败：{item.metadataError}</div>
             ) : null}
 
             <div className="form-grid">
@@ -249,7 +249,7 @@ export function WorkflowLibraryDrawer(props: {
                   title={conversationOptions.length === 0 ? '无可用顶层会话' : `在选定会话运行工作流 ${item.name}`}
                   onClick={run}
                 >
-                  <Icon name={running ? 'loader' : 'circle'} size={11} className={running ? SPIN : undefined} />
+                  <Icon name={running ? 'loader' : 'play'} size={11} className={running ? SPIN : undefined} />
                   运行
                 </button>
               </div>
@@ -267,7 +267,7 @@ export function WorkflowLibraryDrawer(props: {
           </div>
 
           {deleteError !== undefined ? (
-            <div className="callout callout--error" style={{ margin: '0 20px 8px' }}>{deleteError}</div>
+            <div className="callout callout--error workflow-lib-delete-error">{deleteError}</div>
           ) : null}
 
           <div className="primary-drawer-footer">

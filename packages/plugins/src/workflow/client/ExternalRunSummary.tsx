@@ -3,7 +3,7 @@
  * 不虚构子会话入口）。运行中的前台同步 run 附带「转入后台」动作（detach）。
  */
 import type { ReactNode } from 'react'
-import { formatDurationMs, usePluginContext } from '@helm/plugin-client'
+import { formatCompactTimestamp, formatDurationMs, usePluginContext } from '@helm/plugin-client'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { useElapsedNowMs } from './hooks.ts'
 import { SPIN } from './presentation.ts'
@@ -16,11 +16,13 @@ export function ExternalRunSummary(props: {
   worktree?: { path: string; branch: string }
   toolStatus: 'running' | 'done' | 'error'
   executionId?: string
+  nodeId?: string
+  effectiveCwd?: string
   /** 查看方作用域（会话 + 归属）：前台同步 run 的「转入后台」可见性判定。 */
   viewer?: DetachViewerScope
 }): ReactNode {
   const ctx = usePluginContext()
-  const { run, worktree, toolStatus, executionId } = props
+  const { run, worktree, toolStatus, executionId, nodeId, effectiveCwd } = props
   const nodes = run?.nodes ?? []
   const running = nodes.filter((n) => n.status === 'running').length
   const failed = nodes.find((n) => n.status === 'failed')
@@ -71,6 +73,22 @@ export function ExternalRunSummary(props: {
         ) : null}
       </div>
       <div className="subagent-live-stream subagent-external-body">
+        {run !== undefined || nodeId !== undefined || effectiveCwd !== undefined || worktree !== undefined ? (
+          <div className="subagent-live-meta-row">
+            {run !== undefined ? <span className="subagent-live-meta-item mono">{run.id}</span> : null}
+            {run !== undefined ? (
+              <span className="subagent-live-meta-item tabular-nums">{formatCompactTimestamp(run.createdAt)}</span>
+            ) : null}
+            {nodeId !== undefined || effectiveCwd !== undefined ? (
+              <span className="subagent-live-meta-item mono">
+                {[nodeId, effectiveCwd].filter((s) => s !== undefined && s !== '').join(':')}
+              </span>
+            ) : null}
+            {worktree !== undefined ? (
+              <span className="subagent-live-meta-item mono">{`${worktree.branch} (${worktree.path})`}</span>
+            ) : null}
+          </div>
+        ) : null}
         {nodes.length > 0 ? (
           <div className="workflow-node-list">
             {nodes.map((n) => (
