@@ -145,7 +145,7 @@ const sortedFiles = [...files].sort((a, b) => lptWeight(b) - lptWeight(a) || a.l
 // 复用 run-tests.mjs：跨平台 tsx spawn、单测/总超时与进程树清理都在那边，绝不重复实现。
 const child = spawn(
   process.execPath,
-  [path.join(repoRoot, 'scripts', 'run-tests.mjs'), ...sortedFiles, ...extraArgs],
+  [path.join(repoRoot, 'scripts', 'run-tests.mjs'), ...extraArgs, ...sortedFiles],
   { stdio: 'inherit', env: process.env, cwd: repoRoot },
 );
 

@@ -23,7 +23,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -103,18 +102,10 @@ if (childEnv.TSX_TSCONFIG_PATH === undefined) {
   childEnv.NODE_OPTIONS = parts.join(' ');
 }
 
-const hasTestConcurrency = forwardArgs.some(
-  (a) => a === '--test-concurrency' || a.startsWith('--test-concurrency='),
-);
-const defaultConcurrency = Math.min(
-  typeof os.availableParallelism === 'function' ? os.availableParallelism() : 8,
-  8,
-);
 const runnerArgs = [
   tsxCli,
   '--test',
   '--test-timeout=20000',
-  ...(hasTestConcurrency ? [] : [`--test-concurrency=${defaultConcurrency}`]),
   ...forwardArgs,
 ];
 
