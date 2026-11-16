@@ -1,6 +1,6 @@
 /**
  * 产物预览文本解码纯逻辑（无组件导出，供 ArtifactPreviewModal 与测试共用） */
-import type { ArtifactMetadata } from '@helm/protocol'
+import type { ArtifactMetadata } from '@helm/protocol/browser'
 
 /** 协议契约：宿主最多向插件解码 1 MiB 文本。 */
 export const MAX_PREVIEW_TEXT_BYTES = 1024 * 1024

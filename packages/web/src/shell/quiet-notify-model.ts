@@ -23,7 +23,7 @@
  *   跳转该树内 updatedAt 最新的 blocked 会话。
  */
 
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helm/protocol/browser'
 import { MAX_ANCESTRY_DEPTH } from '../conversation/ancestry-model.js'
 import type { ConversationBackgroundIndex } from './background-activity-model.js'
 

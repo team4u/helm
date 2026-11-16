@@ -4,16 +4,16 @@ import type {
   Profile as ProtocolProfile,
   ProfileRuntime,
   ProfileStarterPrompt,
-} from '@helm/protocol'
+} from '@helm/protocol/browser'
 import {
   PROFILE_STARTERS_MAX_ITEMS,
   PROFILE_STARTER_LABEL_MAX_LENGTH,
   PROFILE_STARTER_PROMPT_MAX_LENGTH,
-} from '@helm/protocol'
+} from '@helm/protocol/browser'
 import { assetsApi, type ModelDescriptor } from '../lib/api.js'
 import type { SelectOption } from '@helm/plugin-client'
 
-declare module '@helm/protocol' {
+declare module '@helm/protocol/browser' {
   interface Profile {
     description?: string
     defaultModel?: string
@@ -21,8 +21,8 @@ declare module '@helm/protocol' {
   }
 }
 
-export type { Profile } from '@helm/protocol'
-import type { Profile } from '@helm/protocol'
+export type { Profile } from '@helm/protocol/browser'
+import type { Profile } from '@helm/protocol/browser'
 
 export type ProfileCategoryTab = 'all' | 'system' | 'custom' | 'herdr'
 

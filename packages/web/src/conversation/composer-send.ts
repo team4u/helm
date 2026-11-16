@@ -10,7 +10,7 @@
  * 本模块只导出 hook 与纯类型（无组件），保持 .ts Fast Refresh 约定。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ConversationAttachmentRef, ConversationSummary, QueuedConversationInput, WhenBusy } from '@helm/protocol'
+import type { ConversationAttachmentRef, ConversationSummary, QueuedConversationInput, WhenBusy } from '@helm/protocol/browser'
 import { conversationsApi } from '../lib/api.js'
 import {
   executePluginSlashAction,

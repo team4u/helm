@@ -6,7 +6,7 @@
  * - 汇总顶栏「工作台」按钮总角标计数与最高优先级色调（warn > accent > neutral）；
  * - 解析当前有效激活页签（无效页签回退首个可用页签）。
  */
-import type { ArtifactKind, ArtifactMetadata, WorkbenchPanelBadgeSpec, WorkbenchPanelSpec } from '@helm/protocol'
+import type { ArtifactKind, ArtifactMetadata, WorkbenchPanelBadgeSpec, WorkbenchPanelSpec } from '@helm/protocol/browser'
 import type { GroupedUiSpecs } from '../lib/types.js'
 
 export type WorkbenchBadgeTone = 'warn' | 'accent' | 'neutral'

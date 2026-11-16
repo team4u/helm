@@ -7,7 +7,7 @@
  * - scope：需宿主已加载真实会话元数据才命中（无会话上下文不可泛命中）；
  * - 排序：priority 降序 -> 贡献顺序稳定。
  */
-import type { ArtifactPreviewerSpec, ConversationSummary } from '@helm/protocol'
+import type { ArtifactPreviewerSpec, ConversationSummary } from '@helm/protocol/browser'
 import { matchesUiScope, type QualifiedUiSpec } from '../lib/types.js'
 
 export type ArtifactPreviewerContribution = QualifiedUiSpec<ArtifactPreviewerSpec>

@@ -7,7 +7,7 @@
  * 保存其它字段时不得暗中删除。
  */
 
-import type { Profile, SkillSummary } from '@helm/protocol'
+import type { Profile, SkillSummary } from '@helm/protocol/browser'
 
 /** 技能区块的三种编辑模式：跟随全部（skills=undefined）/ 白名单 / 显式禁用（skills=[]）。 */
 export type SkillsEditMode = 'all' | 'allowlist' | 'none'

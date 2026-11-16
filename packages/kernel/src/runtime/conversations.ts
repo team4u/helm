@@ -42,6 +42,7 @@ import type { Models } from '@earendil-works/pi-ai'
 import type { ConvMeta, HelmStore } from './store.js'
 import { summaryOf } from './store.js'
 import { deriveConversationLive, toConversationEntry, type EntryRecordLike } from './entries.js'
+import { emitDiagnostic, type KernelDiagnosticInput, type KernelDiagnosticSink } from './diagnostics.js'
 import { compactionFailureNoticeOf } from './context-usage.js'
 import { ContextUsageRefresh, type ContextUsageHost } from './context-usage-refresh.js'
 import {
@@ -110,6 +111,8 @@ export class ConversationTracker {
     models?: () => Models
     /** 宿主关闭状态回调（与 tracker.close() 双保险）。 */
     isClosed?: () => boolean
+    /** 诊断通道 sink（缺省走 defaultDiagnosticSink）。 */
+    onDiagnostic?: KernelDiagnosticSink
   }) {
     this.harness = options.harness
     this.store = options.store
@@ -118,6 +121,7 @@ export class ConversationTracker {
     this.ownershipOf = options.ownershipOf
     this.modelsOf = options.models
     this.isClosedFn = options.isClosed
+    this.diagnosticSink = options.onDiagnostic
     const host: ContextUsageHost = {
       harness: this.harness,
       store: this.store,
@@ -127,12 +131,25 @@ export class ConversationTracker {
       liveOf: (id) => this.mirrors.get(id)?.live,
       summaryOf: (id) => this.summaryOf(id),
       isClosing: () => this.isClosing,
+      emitDiagnostic: (input) => this.reportDiagnostic(input),
     }
     this.usage = new ContextUsageRefresh(host)
   }
 
   /** 错误诊断摘要脱敏（Runtime 注入 stashService.redact；防 provider 错误回显已登记秘密）。 */
   private readonly redactError: (text: string) => string
+
+  /** 诊断通道 sink（Runtime 构造后可注入；缺省走 defaultDiagnosticSink）。 */
+  private diagnosticSink: KernelDiagnosticSink | undefined
+
+  /** 挂载或替换诊断通道 sink（供 KernelRuntime 构造期接线）。 */
+  setDiagnosticSink(sink: KernelDiagnosticSink | undefined): void {
+    this.diagnosticSink = sink
+  }
+
+  private reportDiagnostic(input: KernelDiagnosticInput): void {
+    emitDiagnostic(this.diagnosticSink, this.redactError, input)
+  }
 
   /** 会话归属权现读（缺省恒 human）；仅回合结算 unread 策略消费。 */
   private readonly ownershipOf: ((id: number) => 'helm' | 'bot' | 'human') | undefined
@@ -1136,7 +1153,13 @@ export class ConversationTracker {
       }
     } catch (error) {
       if (this.isClosing) return
-      console.error(`[helm] 会话 ${id} 精简结束对账失败:`, error)
+      this.reportDiagnostic({
+        level: 'error',
+        source: 'tracker.compaction',
+        message: '精简结束对账失败',
+        error,
+        conversationId: id,
+      })
     }
   }
 

@@ -14,7 +14,6 @@
  * 落盘前基于实读内容计算真实行级差异（runtime/tool-edit-diff.ts 唯一实现，
  * local/远端共享；符合 @helm/protocol EDIT_TOOL_RESULT_SCHEMA）。
  */
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { JsonValue } from '@earendil-works/chord/json'
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
 import { bool, obj, opt, str } from '@earendil-works/pi-schema'
@@ -58,10 +57,10 @@ export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof read
         content: { type: 'string' },
       },
       required: ['path', 'nodeId', 'content'],
-    } as never,
+    },
     async execute(args, api, context) {
       const raw = args.path
-      const agent = await api.agent(BACKGROUND_CONTEXT)
+      const agent = await api.agent(context)
       // 路径语义按会话 cwd 靶点形状（POSIX/Windows）解析，绝不用 Hub 宿主
       // node:path 默认规则解析远端路径（Linux Hub 上 resolve('C:\\x') 会得到
       // 错误结果）；api.agent 与工具共享同一 SDK Context（cancel 传播到远端）。
@@ -161,9 +160,9 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
         artifactId: { type: 'string' },
       },
       required: ['path', 'nodeId', 'bytesWritten'],
-    } as never,
+    },
     async execute(args, api, context) {
-      const target0 = await resolveToolTarget(deps, api)
+      const target0 = await resolveToolTarget(deps, api, context)
       if ('error' in target0) {
         return { output: [{ type: 'text', text: `write_failed: ${target0.error}` }], isError: true }
       }
@@ -276,9 +275,9 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
     description:
       '精确替换文件文本片段。oldText 必须在文件中恰好出现一次（不存在或多次出现均报错）；路径相对会话 cwd 解析，支持绝对路径与 ../ 跨目录访问（与 bash 同权）；会话绑定远端节点时在目标节点读取与写回。',
     parameters: editParameters,
-    structuredOutputSchema: EDIT_TOOL_RESULT_SCHEMA as never,
+    structuredOutputSchema: EDIT_TOOL_RESULT_SCHEMA,
     async execute(args, api, context) {
-      const target0 = await resolveToolTarget(deps, api)
+      const target0 = await resolveToolTarget(deps, api, context)
       if ('error' in target0) {
         return { output: [{ type: 'text', text: `edit_failed: ${target0.error}` }], isError: true }
       }

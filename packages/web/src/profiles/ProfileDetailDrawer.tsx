@@ -17,7 +17,7 @@ import { useHelmStore } from '../lib/store-context.js'
 import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
 import { ConfirmDialog } from '../ui/AlertDialog.js'
 import { ThinkingLevelControl } from '../ui/ThinkingLevelControl.js'
-import { PROFILE_DETAIL_SECTION_SLOT, PROFILE_STARTERS_MAX_ITEMS } from '@helm/protocol'
+import { PROFILE_DETAIL_SECTION_SLOT, PROFILE_STARTERS_MAX_ITEMS } from '@helm/protocol/browser'
 
 export interface ProfileDetailDrawerProps {
   profile: Profile | null

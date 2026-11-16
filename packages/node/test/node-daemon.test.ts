@@ -455,7 +455,7 @@ test('ipcSubscribe 订阅流、事件转发与 ipcUnsubscribe 关闭', { timeout
     socket.write(`${JSON.stringify({ id: req.id, result: { type: 'something_else' } })}\n`);
   });
   try {
-    const r = await await server.ipcSubscribe!({
+    const r = await server.ipcSubscribe!({
       subscribeId: 'sub-3',
       endpoint: badAckSrv.path,
       line: JSON.stringify({ id: 'sub', method: 'events.subscribe' }),

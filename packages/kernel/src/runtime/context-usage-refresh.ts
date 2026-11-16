@@ -29,6 +29,7 @@ import {
   contextUsageKeyOf,
   estimateContextUsage,
 } from './context-usage.js'
+import { emitDiagnostic, type KernelDiagnosticEmitter } from './diagnostics.js'
 import type { EntryRecordLike } from './entries.js'
 
 /** 刷新链对宿主（ConversationTracker）的最小端口。 */
@@ -47,6 +48,8 @@ export interface ContextUsageHost {
   summaryOf(conversationId: number): ConversationSummary
   /** 宿主关停守卫（harness.close 先行关闭后阻断对已关闭 Harness 的无谓刷新）。 */
   isClosing?(): boolean
+  /** 诊断通道上报（缺省走 defaultDiagnosticSink）。 */
+  emitDiagnostic?: KernelDiagnosticEmitter
 }
 
 export class ContextUsageRefresh {
@@ -96,7 +99,18 @@ export class ContextUsageRefresh {
       .catch((error: unknown) => {
         if (this.host.isClosing?.()) return
         // 刷新失败如实记录：缓存保持旧值（绝不静默伪造），不阻断观察主路径。
-        console.error(`[helm] 会话 ${conversationId} 上下文用量刷新失败:`, error)
+        const event = {
+          level: 'error' as const,
+          source: 'tracker.context_usage',
+          message: '上下文用量刷新失败',
+          error,
+          conversationId,
+        }
+        if (this.host.emitDiagnostic !== undefined) {
+          this.host.emitDiagnostic(event)
+        } else {
+          emitDiagnostic(undefined, undefined, event)
+        }
       })
       .finally(() => {
         this.pending.delete(conversationId)

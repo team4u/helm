@@ -16,7 +16,7 @@
  * - 导出不存在 / HTTP 错误 / import 抛错 / 保留导出类型非法均显式报错，绝不静默空白。
  */
 import type { ComponentType } from 'react'
-import { PLUGIN_CLIENT_CSS_EXPORT } from '@helm/protocol'
+import { PLUGIN_CLIENT_CSS_EXPORT } from '@helm/protocol/browser'
 import { getStoredToken } from './api.js'
 
 export interface LoadedClientModule {

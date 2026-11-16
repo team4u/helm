@@ -43,7 +43,7 @@ import type {
   ConversationWithdrawRequest,
   ConversationWithdrawResponse,
   WhenBusy,
-} from '@helm/protocol'
+} from '@helm/protocol/browser'
 
 // HTTP 请求/响应形状以 @helm/protocol 为唯一事实源；下列别名仅兼容既有导入。
 export type {

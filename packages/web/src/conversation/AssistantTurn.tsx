@@ -1,5 +1,5 @@
 import { useContext, useMemo, useState } from 'react'
-import type { ConversationEntry, ConversationSummary } from '@helm/protocol'
+import type { ConversationEntry, ConversationSummary } from '@helm/protocol/browser'
 import { CopyButton, HelmIcon, ToolActivityContext } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import { PluginMicroAction } from '../ui/PluginMicroAction.js'
@@ -40,7 +40,7 @@ export function AssistantModelBoundary({ model }: { model: AssistantModelIdentit
 export interface AssistantTurnViewProps {
   turn: AssistantTurn
   conversation: ConversationSummary
-  siblingCalls: ReadonlyArray<import('@helm/protocol').ToolViewSiblingCall>
+  siblingCalls: ReadonlyArray<import('@helm/protocol/browser').ToolViewSiblingCall>
   isLatestTurn?: boolean
   /** 回合锚点对应的真实持久化 pi.assistant 条目（见 resolveAssistantAnchorEntry）。 */
   anchorEntry?: ConversationEntry

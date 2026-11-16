@@ -31,8 +31,8 @@ import type {
   TimelineRendererSpec,
   ToolViewSpec,
   WorkbenchPanelSpec,
-} from '@helm/protocol'
-import { matchesConversationScope } from '@helm/protocol'
+} from '@helm/protocol/browser'
+import { matchesConversationScope, parsePluginUiContribution } from '@helm/protocol/browser'
 import type { ModelDescriptor } from './api.js'
 import type { SessionDocKey } from './session-docs.js'
 
@@ -136,63 +136,63 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
     pluginSlots: [],
   }
   for (const item of contributions) {
-    const spec = item.spec as Record<string, unknown> | undefined
-    if (!spec || typeof spec !== 'object') continue
-    switch (item.surface) {
+    const known = parsePluginUiContribution(item)
+    if (!known) continue
+    switch (known.surface) {
       case 'sidebar.item':
-        grouped.sidebarItems.push({ pluginId: item.pluginId, spec: spec as unknown as SidebarItemSpec })
+        grouped.sidebarItems.push({ pluginId: known.pluginId, spec: known.spec })
         break
       case 'sidebar.section':
-        grouped.sidebarSections.push({ pluginId: item.pluginId, spec: spec as unknown as SidebarSectionSpec })
+        grouped.sidebarSections.push({ pluginId: known.pluginId, spec: known.spec })
         break
       case 'screen':
-        grouped.screens.push({ pluginId: item.pluginId, spec: spec as unknown as ScreenSpec })
+        grouped.screens.push({ pluginId: known.pluginId, spec: known.spec })
         break
       case 'timeline.renderer':
-        grouped.timelineRenderers.push({ pluginId: item.pluginId, spec: spec as unknown as TimelineRendererSpec })
+        grouped.timelineRenderers.push({ pluginId: known.pluginId, spec: known.spec })
         break
       case 'markdown.codeBlock':
-        grouped.markdownCodeBlocks.push({ pluginId: item.pluginId, spec: spec as unknown as MarkdownCodeBlockSpec })
+        grouped.markdownCodeBlocks.push({ pluginId: known.pluginId, spec: known.spec })
         break
       case 'tool.view':
-        grouped.toolViews.push({ pluginId: item.pluginId, spec: spec as unknown as ToolViewSpec })
+        grouped.toolViews.push({ pluginId: known.pluginId, spec: known.spec })
         break
       case 'composer.pill':
-        grouped.composerPills.push({ pluginId: item.pluginId, spec: spec as unknown as ComposerPillSpec })
+        grouped.composerPills.push({ pluginId: known.pluginId, spec: known.spec })
         break
       case 'composer.widget':
-        grouped.composerWidgets.push({ pluginId: item.pluginId, spec: spec as unknown as ComposerWidgetSpec })
+        grouped.composerWidgets.push({ pluginId: known.pluginId, spec: known.spec })
         break
       case 'composer.completer':
-        grouped.composerCompleters.push({ pluginId: item.pluginId, spec: spec as unknown as ComposerCompleterSpec })
+        grouped.composerCompleters.push({ pluginId: known.pluginId, spec: known.spec })
         break
       case 'artifact.previewer':
-        grouped.artifactPreviewers.push({ pluginId: item.pluginId, spec: spec as unknown as ArtifactPreviewerSpec })
+        grouped.artifactPreviewers.push({ pluginId: known.pluginId, spec: known.spec })
         break
       case 'workbench.panel':
-        grouped.workbenchPanels.push({ pluginId: item.pluginId, spec: spec as unknown as WorkbenchPanelSpec })
+        grouped.workbenchPanels.push({ pluginId: known.pluginId, spec: known.spec })
         break
       case 'commandPalette':
       case 'command':
-        grouped.commands.push({ pluginId: item.pluginId, spec: spec as unknown as CommandSpec })
+        grouped.commands.push({ pluginId: known.pluginId, spec: known.spec })
         break
       case 'profile.runtime':
-        grouped.profileRuntimes.push({ pluginId: item.pluginId, spec: spec as unknown as ProfileRuntimeUiSpec })
+        grouped.profileRuntimes.push({ pluginId: known.pluginId, spec: known.spec })
         break
       case 'conversation.header.action':
-        grouped.uiActions.push({ pluginId: item.pluginId, spec: spec as unknown as UiActionSpec, target: 'conversation:header' })
+        grouped.uiActions.push({ pluginId: known.pluginId, spec: known.spec, target: 'conversation:header' })
         break
       case 'conversation.row.action':
-        grouped.uiActions.push({ pluginId: item.pluginId, spec: spec as unknown as UiActionSpec, target: 'conversation:row' })
+        grouped.uiActions.push({ pluginId: known.pluginId, spec: known.spec, target: 'conversation:row' })
         break
       case 'timeline.entry.action':
-        grouped.uiActions.push({ pluginId: item.pluginId, spec: spec as unknown as UiActionSpec, target: 'timeline:entry' })
+        grouped.uiActions.push({ pluginId: known.pluginId, spec: known.spec, target: 'timeline:entry' })
         break
       case 'plugin.slot':
-        grouped.pluginSlots.push({ pluginId: item.pluginId, spec: spec as unknown as PluginSlotContributionSpec })
+        grouped.pluginSlots.push({ pluginId: known.pluginId, spec: known.spec })
         break
       case 'settings.panel':
-        grouped.settingsPanels.push({ pluginId: item.pluginId, spec: spec as unknown as SettingsPanelSpec })
+        grouped.settingsPanels.push({ pluginId: known.pluginId, spec: known.spec })
         break
     }
   }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helm/protocol/browser'
 import { conversationsApi } from '../lib/api.js'
 import { HelmIcon, Select, type SelectOption } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'

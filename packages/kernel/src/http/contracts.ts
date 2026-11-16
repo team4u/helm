@@ -277,6 +277,7 @@ export interface KernelRuntimeLike {
   waitForInput(
     id: number,
     submissionId: string,
+    signal?: AbortSignal,
   ): Promise<ConversationInputResult> | ConversationInputResult
   abortConversation(id: number): Promise<void> | void
   /** 重置会话上下文（新上下文以 handoff 文本开始）；返回更新后的摘要。 */

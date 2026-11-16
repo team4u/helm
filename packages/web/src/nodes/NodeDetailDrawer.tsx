@@ -15,7 +15,7 @@ import {
   isNodeOnline,
   type NodeInfo,
 } from './node-center-model.js'
-import { NODE_DETAIL_SECTION_SLOT } from '@helm/protocol'
+import { NODE_DETAIL_SECTION_SLOT } from '@helm/protocol/browser'
 
 export interface NodeDetailDrawerProps {
   node: NodeInfo | null

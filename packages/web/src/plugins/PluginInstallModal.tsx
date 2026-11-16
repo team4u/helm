@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import type { PluginDoctorReport } from '@helm/protocol'
+import type { PluginDoctorReport } from '@helm/protocol/browser'
 import { pluginsApi } from '../lib/api.js'
 import { HelmIcon, Dialog, DialogClose, DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogTitle, Switch } from '@helm/plugin-client'
 import {

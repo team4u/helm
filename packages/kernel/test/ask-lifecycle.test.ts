@@ -51,10 +51,14 @@ async function openService(
   options: {
     validateConversation?: (id: number) => boolean
     onEvent?: (type: string, payload: unknown) => void
+    onError?: (error: unknown) => void
   } = {},
 ): Promise<TestContext> {
   const db = await openHelmDatabase(join(rootDir, `ask-${Math.random().toString(36).slice(2)}`))
-  const store = new HelmStore(db)
+  const store = new HelmStore(
+    db,
+    options.onError !== undefined ? { onError: options.onError } : {},
+  )
   await store.load()
   const stash = new SecretStash()
   const events: Array<{ type: string; payload: unknown }> = []
@@ -292,10 +296,10 @@ describe('Ask 持久化失败（SQL 尾链注入）：不返回假成功', { tim
   }
 
   it('创建 INSERT 落盘失败：createAsk reject，不发布 ask.upsert，后续写显式拒绝', { timeout: 60_000 }, async () => {
-    const ctx = await openService()
     reported = []
-    const { setStoreErrorReporter } = await import('../src/runtime/store.js')
-    setStoreErrorReporter((error) => reported.push(error))
+    const ctx = await openService({
+      onError: (error) => reported.push(error),
+    })
     try {
       patchRun(ctx.store, (sql) => sql.includes('INSERT INTO helm_asks'))
       await assert.rejects(
@@ -312,18 +316,15 @@ describe('Ask 持久化失败（SQL 尾链注入）：不返回假成功', { tim
       // 错误已上报（不静默吞）。
       assert.ok(reported.length >= 1, '持久化错误必须上报')
     } finally {
-      setStoreErrorReporter((error) => {
-        console.error('[helm] store persistence error:', error)
-      })
       await ctx.close()
     }
   })
 
   it('结算 UPDATE 落盘失败：不返回假 answered，createAsk 同错误 reject，无 ask.resolved', { timeout: 60_000 }, async () => {
-    const ctx = await openService()
     reported = []
-    const { setStoreErrorReporter } = await import('../src/runtime/store.js')
-    setStoreErrorReporter((error) => reported.push(error))
+    const ctx = await openService({
+      onError: (error) => reported.push(error),
+    })
     try {
       // 创建 INSERT 的 settled_at 绑定为 null；结算写回为数值——只拦结算。
       patchRun(ctx.store, (sql, params) => sql.includes('helm_asks') && typeof params[8] === 'number')
@@ -343,9 +344,6 @@ describe('Ask 持久化失败（SQL 尾链注入）：不返回假成功', { tim
       assert.equal(ctx.events.find((e) => e.type === 'ask.resolved'), undefined)
       assert.ok(reported.length >= 1, '持久化错误必须上报')
     } finally {
-      setStoreErrorReporter((error) => {
-        console.error('[helm] store persistence error:', error)
-      })
       await ctx.close()
     }
   })
@@ -395,7 +393,6 @@ describe('Ask 持久化失败（SQL 尾链注入）：不返回假成功', { tim
 
   it('ask.resolved 发布器抛错：answer reject，createAsk waiter 同错误 reject 不悬挂', { timeout: 60_000 }, async () => {
     // 落盘成功但事件回调抛错：也必须如实失败，不能装作已结算。
-    let resolver: ((type: string, payload: unknown) => void) | undefined
     const db = await openHelmDatabase(join(rootDir, `ask-${Math.random().toString(36).slice(2)}`))
     const store = new HelmStore(db)
     await store.load()
@@ -407,7 +404,6 @@ describe('Ask 持久化失败（SQL 尾链注入）：不返回假成功', { tim
       onEvent: (type, payload) => {
         events.push({ type, payload })
         if (type === 'ask.resolved') throw new Error('事件发布器故障')
-        resolver?.(type, payload)
       },
       onConvPendingChanged: () => {},
     })

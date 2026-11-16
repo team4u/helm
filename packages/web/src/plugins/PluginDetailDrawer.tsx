@@ -5,7 +5,7 @@ import {
   pluginErrorStageLabel,
   type PluginUsageItem,
 } from './plugin-card-model.js'
-import type { PluginSummary } from '@helm/protocol'
+import type { PluginSummary } from '@helm/protocol/browser'
 import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../lib/api.js'
 import { HelmIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Switch } from '@helm/plugin-client'
 import { HelmStoreContext } from '../lib/store-context.js'

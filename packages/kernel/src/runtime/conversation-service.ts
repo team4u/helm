@@ -5,7 +5,7 @@
  * 从 runtime.ts 拆出（上帝类最大职责簇）。对外行为与原 KernelRuntime 方法
  * 逐一致；内部将历史重写、上下文操作、附件解析、详情分页、角色对齐和输入管道委托给专门子模块。
  */
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
+import { awaitWithContext, BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
 import type { Harness, AgentChange } from '@earendil-works/pi-durable'
 import type { ModelThinkingLevel, Models } from '@earendil-works/pi-ai'
 import type {
@@ -133,6 +133,17 @@ export class ConversationService {
   private readonly detailOps: ConversationDetailService
   private readonly profileAlignment: ConversationProfileService
   private readonly inputPipeline: ConversationInputPipeline
+  private fatalErrorProvider: (() => Error | undefined) | undefined
+
+  /** 挂载宿主致命存储故障读取器（仅写/变更新请求拒绝用，不改变正常关停语义）。 */
+  setFatalErrorProvider(provider: () => Error | undefined): void {
+    this.fatalErrorProvider = provider
+  }
+
+  private assertWritable(): void {
+    const fatal = this.fatalErrorProvider?.()
+    if (fatal !== undefined) throw fatal
+  }
 
   constructor(options: ConversationServiceOptions) {
     this.o = options
@@ -310,6 +321,7 @@ export class ConversationService {
    *   恢复编排据此在调度器启动前持久取消自己登记的中断子会话。
    */
   async abortConversationGuarded(id: number, guard: GuardedMutationExpectation): Promise<void> {
+    this.assertWritable()
     this.assertGuardShape(guard)
     return this.withMutationGate(id, async () => {
       // 恢复屏障路径：仅当内核尚未完成 start（生命周期事实，非镜像状态）时
@@ -358,6 +370,7 @@ export class ConversationService {
     opts?: SubmitInputOptions,
     guard: GuardedMutationExpectation = {},
   ): Promise<{ submissionId: string }> {
+    this.assertWritable()
     this.assertGuardShape(guard)
     if (opts?.whenIdle !== undefined && opts.whenIdle !== 'reject') {
       throw new HelmError('validation_error', 'guarded 提交的 whenIdle 仅允许 reject', 400)
@@ -471,6 +484,7 @@ export class ConversationService {
   }
 
   async createConversation(init: ConversationInit = {}): Promise<ConversationSummary> {
+    this.assertWritable()
     const profileId = await this.resolveProfileForCreate(init)
     const profile = await this.readProfile(profileId)
     if (init.model !== undefined && init.model !== '') {
@@ -541,6 +555,7 @@ export class ConversationService {
   }
 
   async updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary> {
+    this.assertWritable()
     return this.profileAlignment.withConversationChange(id, () => this.updateConversationConfiguration(id, patch))
   }
 
@@ -635,6 +650,7 @@ export class ConversationService {
   }
 
   async deleteConversation(id: number): Promise<void> {
+    this.assertWritable()
     requireConv(this.store, id)
     const owners = [...(this.o.managedConversations.get(id) ?? [])]
     if (owners.length > 0) {
@@ -709,6 +725,7 @@ export class ConversationService {
     text: string,
     opts?: SubmitInputOptions,
   ): Promise<{ submissionId: string }> {
+    this.assertWritable()
     this.contextOps.assertOpen()
     const convMeta = requireConv(this.store, id)
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
@@ -813,7 +830,11 @@ export class ConversationService {
   // waitForInput / withdraw / abort
   // ------------------------------------------------------------------
 
-  async waitForInput(id: number, submissionId: string): Promise<ConversationInputResult> {
+  async waitForInput(
+    id: number,
+    submissionId: string,
+    signal?: AbortSignal,
+  ): Promise<ConversationInputResult> {
     if (submissionId.startsWith('handled:')) {
       throw new HelmError(
         'wait_not_applicable',
@@ -827,14 +848,29 @@ export class ConversationService {
       throw new HelmError('validation_error', `非法 submissionId：${submissionId}`, 400)
     }
     requireConv(this.store, id)
-    const submission = await this.harness.submission(numericId as never, BACKGROUND_CONTEXT)
+    const waitContext = signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(signal, BACKGROUND_CONTEXT)
+    const waitAbortedError = (): HelmError =>
+      new HelmError('aborted', `等待会话 ${id} 提交 ${submissionId} 结果已取消`, 499, {
+        conversationId: id,
+        submissionId,
+      })
+    const runWaitOp = async <T>(op: () => Promise<T>): Promise<T> => {
+      if (signal?.aborted) throw waitAbortedError()
+      try {
+        return await awaitWithContext(op(), waitContext)
+      } catch (error) {
+        if (signal?.aborted) throw waitAbortedError()
+        throw error
+      }
+    }
+    const submission = await runWaitOp(() => this.harness.submission(numericId as never, waitContext))
     if (!submission) {
       throw new HelmError('not_found', `提交不存在：${submissionId}`, 404, {
         conversationId: id,
         submissionId,
       })
     }
-    const status = (await submission.status(BACKGROUND_CONTEXT)) as unknown as {
+    const status = (await runWaitOp(() => submission.status(waitContext))) as unknown as {
       conversationId?: unknown
       id?: unknown
       type?: string
@@ -849,7 +885,7 @@ export class ConversationService {
         submissionId,
       })
     }
-    const settled = (await submission.wait(BACKGROUND_CONTEXT)) as unknown as {
+    const settled = (await runWaitOp(() => submission.wait(waitContext))) as unknown as {
       status: 'queued' | 'placed' | 'done' | 'unanswered'
       answer?: number
       reason?: string
@@ -877,13 +913,15 @@ export class ConversationService {
         status: settled.status,
       })
     }
-    const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
+    const conversation = await runWaitOp(() => this.harness.conversation(id as never, waitContext))
     if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
-    const page = await conversation.entries(
-      { minEntryId: settled.answer as never, maxEntryId: settled.answer as never, order: 'ascending' },
-      1,
-      undefined,
-      BACKGROUND_CONTEXT,
+    const page = await runWaitOp(() =>
+      conversation.entries(
+        { minEntryId: settled.answer as never, maxEntryId: settled.answer as never, order: 'ascending' },
+        1,
+        undefined,
+        waitContext,
+      ),
     )
     const raw = page.items[0] as
       | { id: number; kind: string; data?: unknown; model?: unknown[] }
@@ -900,6 +938,7 @@ export class ConversationService {
   }
 
   async withdrawQueuedInput(id: number, opts: { submissionId: number }): Promise<ConversationWithdrawResponse> {
+    this.assertWritable()
     if (this.o.isClosed()) throw new HelmError('runtime_closed', '内核正在关闭，拒绝撤回', 503)
     requireConv(this.store, id)
     const raw = opts.submissionId
@@ -940,6 +979,7 @@ export class ConversationService {
   }
 
   async abortConversation(id: number): Promise<void> {
+    this.assertWritable()
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
     if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
     const wasBusy = this.tracker.hasLiveWork(id)
@@ -954,6 +994,7 @@ export class ConversationService {
   // ------------------------------------------------------------------
 
   async resetConversation(id: number, opts?: { handoff?: string }): Promise<ConversationSummary> {
+    this.assertWritable()
     return this.contextOps.resetConversation(id, opts)
   }
 
@@ -961,10 +1002,12 @@ export class ConversationService {
     id: number,
     opts?: { instructions?: string },
   ): Promise<{ taskId: number; conversation: ConversationSummary }> {
+    this.assertWritable()
     return this.contextOps.compactConversation(id, opts)
   }
 
   async forkConversation(id: number, opts: { entryId: number; title?: string }): Promise<ConversationSummary> {
+    this.assertWritable()
     return this.contextOps.forkConversation(id, opts)
   }
 

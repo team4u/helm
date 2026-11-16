@@ -5,7 +5,7 @@
  * 全部无副作用，便于单测与 Fast Refresh 隔离。
  */
 
-import type { NodeInfo, NodeUpgradeCheckResult } from '@helm/protocol'
+import type { NodeInfo, NodeUpgradeCheckResult } from '@helm/protocol/browser'
 import { formatBytes } from '../lib/format.js'
 
 export { formatBytes }

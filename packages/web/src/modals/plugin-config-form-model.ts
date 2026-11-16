@@ -9,7 +9,7 @@
  *    新值才提交该字段。
  */
 
-import type { PluginConfigFieldSchema, PluginConfigFieldSource } from '@helm/protocol'
+import type { PluginConfigFieldSchema, PluginConfigFieldSource } from '@helm/protocol/browser'
 
 export type ConfigValue = string | number | boolean
 

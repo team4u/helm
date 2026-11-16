@@ -8,7 +8,7 @@
  */
 import { Ajv, type ValidateFunction } from 'ajv'
 import { HelmError } from './error.js'
-import type { JsonSchema } from './plugin.js'
+import type { JsonSchema } from './plugin-dto.js'
 
 const ajv = new Ajv({ allErrors: true, strict: false, useDefaults: false })
 

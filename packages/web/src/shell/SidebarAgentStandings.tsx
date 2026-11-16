@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react'
 import { conversationsApi } from '../lib/api.js'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helm/protocol/browser'
 import { archiveBatchNotice, patchConversationsArchived } from './archive-ops.js'
 import { HelmIcon, Checkbox } from '@helm/plugin-client'
 import { Tooltip } from '../ui/Tooltip.js'

@@ -5,7 +5,7 @@
  * doctor 结构化检查结果的展示条目化、HTTP 错误诊断文案。
  * 仅做前端输入引导；最终解析与校验由 Hub 安装器裁决。
  */
-import type { PluginDoctorReport, PluginPackageSource } from '@helm/protocol'
+import type { PluginDoctorReport, PluginPackageSource } from '@helm/protocol/browser'
 
 /** 安装来源的本地识别结果（仅用于输入引导与安全提示，不预判服务端行为）。 */
 export type PluginSourceKindHint = 'npm' | 'git' | 'local' | 'unknown'

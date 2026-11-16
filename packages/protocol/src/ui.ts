@@ -4,7 +4,7 @@
  */
 
 import type { ConversationAttachmentRef, ConversationEntry, ConversationScope, ConversationSummary, ToolResultTruncation, WhenBusy } from './conversation.js'
-import type { PluginSummary } from './plugin.js'
+import type { PluginSummary } from './plugin-dto.js'
 
 /** 编译器保留的 CSS 文本导出名；加载器确认模块有效后才将其挂入页面。 */
 export const PLUGIN_CLIENT_CSS_EXPORT = '__helmClientCss' as const
@@ -375,6 +375,76 @@ export interface PluginUiContribution {
   pluginId: string
   surface: string
   spec: unknown
+}
+
+/**
+ * 可辨识联合类型的已知 UI 贡献：覆盖全部注册 surface，供消费方（如 groupUiContributions）
+ * 在守卫后免去 `as unknown as` 强制转换。
+ */
+export type KnownPluginUiContribution =
+  | { pluginId: string; surface: 'sidebar.item'; spec: SidebarItemSpec }
+  | { pluginId: string; surface: 'sidebar.section'; spec: SidebarSectionSpec }
+  | { pluginId: string; surface: 'screen'; spec: ScreenSpec }
+  | { pluginId: string; surface: 'timeline.renderer'; spec: TimelineRendererSpec }
+  | { pluginId: string; surface: 'markdown.codeBlock'; spec: MarkdownCodeBlockSpec }
+  | { pluginId: string; surface: 'tool.view'; spec: ToolViewSpec }
+  | { pluginId: string; surface: 'composer.pill'; spec: ComposerPillSpec }
+  | { pluginId: string; surface: 'composer.widget'; spec: ComposerWidgetSpec }
+  | { pluginId: string; surface: 'composer.completer'; spec: ComposerCompleterSpec }
+  | { pluginId: string; surface: 'artifact.previewer'; spec: ArtifactPreviewerSpec }
+  | { pluginId: string; surface: 'workbench.panel'; spec: WorkbenchPanelSpec }
+  | { pluginId: string; surface: 'commandPalette' | 'command'; spec: CommandSpec }
+  | { pluginId: string; surface: 'settings.panel'; spec: SettingsPanelSpec }
+  | { pluginId: string; surface: 'profile.runtime'; spec: ProfileRuntimeUiSpec }
+  | { pluginId: string; surface: 'conversation.header.action'; spec: UiActionSpec }
+  | { pluginId: string; surface: 'conversation.row.action'; spec: UiActionSpec }
+  | { pluginId: string; surface: 'timeline.entry.action'; spec: UiActionSpec }
+  | { pluginId: string; surface: 'plugin.slot'; spec: PluginSlotContributionSpec }
+
+/** 已知 UI 贡献 surface 唯一真源（与 KnownPluginUiContribution 双向锁定）。 */
+export const KNOWN_PLUGIN_UI_SURFACES = [
+  'sidebar.item',
+  'sidebar.section',
+  'screen',
+  'timeline.renderer',
+  'markdown.codeBlock',
+  'tool.view',
+  'composer.pill',
+  'composer.widget',
+  'composer.completer',
+  'artifact.previewer',
+  'workbench.panel',
+  'commandPalette',
+  'command',
+  'settings.panel',
+  'profile.runtime',
+  'conversation.header.action',
+  'conversation.row.action',
+  'timeline.entry.action',
+  'plugin.slot',
+] as const satisfies readonly KnownPluginUiContribution['surface'][]
+
+type _AssertAllKnownUiSurfacesListed =
+  Exclude<KnownPluginUiContribution['surface'], (typeof KNOWN_PLUGIN_UI_SURFACES)[number]> extends never
+    ? true
+    : never
+const _assertAllKnownUiSurfacesListed: _AssertAllKnownUiSurfacesListed = true
+void _assertAllKnownUiSurfacesListed
+
+const KNOWN_PLUGIN_UI_SURFACE_SET: ReadonlySet<string> = new Set(KNOWN_PLUGIN_UI_SURFACES)
+
+/**
+ * 校验并收窄 PluginUiContribution：检查已知 surface 与 spec 非空纯对象后返回判别联合成员；
+ * 未知 surface 或非对象 spec 返回 undefined。
+ */
+export function parsePluginUiContribution(
+  item: PluginUiContribution,
+): KnownPluginUiContribution | undefined {
+  if (item === null || typeof item !== 'object') return undefined
+  if (typeof item.pluginId !== 'string' || typeof item.surface !== 'string') return undefined
+  if (!KNOWN_PLUGIN_UI_SURFACE_SET.has(item.surface)) return undefined
+  if (item.spec === null || typeof item.spec !== 'object' || Array.isArray(item.spec)) return undefined
+  return item as KnownPluginUiContribution
 }
 
 // ---------------------------------------------------------------------------

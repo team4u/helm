@@ -7,7 +7,7 @@
  */
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { ComponentType, ReactNode } from 'react'
-import type { ClientComponentRef, ComposerController } from '@helm/protocol'
+import type { ClientComponentRef, ComposerController } from '@helm/protocol/browser'
 import { HelmIcon, createPluginClientContext, PluginClientContext, usePluginClientHost, ViewBoundary } from '@helm/plugin-client'
 import { getCachedClientComponent, getPluginClientCacheRevision, loadPluginClientModule, PluginClientError, requireClientExport, subscribePluginClientCacheInvalidation } from '../lib/plugin-client.js'
 

@@ -2,7 +2,7 @@
  * 全局单键快捷键、分屏焦点路由、桌面侧栏折叠持久化与命令面板排序纯函数。
  * 零 React / DOM 挂载副作用，供 HelmStoreProvider / CommandPaletteModal / Sidebar 共用。
  */
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helm/protocol/browser'
 import { isConversationArchived } from '../conversation/archive-model.js'
 import type { ActiveModal, FocusedPanel, ResolvedTarget } from '../lib/types.js'
 

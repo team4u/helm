@@ -9,7 +9,7 @@
  * 本文件无组件导出（Fast Refresh 友好）。
  */
 import { createContext, useContext } from 'react'
-import type { ComposerController, PluginClientContext as PluginClientContextType } from '@helm/protocol'
+import type { ComposerController, PluginClientContext as PluginClientContextType } from '@helm/protocol/browser'
 import type { PluginClientHostPort } from './host-port.js'
 
 export const PluginClientContext = createContext<PluginClientContextType | null>(null)

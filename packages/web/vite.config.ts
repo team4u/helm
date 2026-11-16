@@ -9,7 +9,10 @@ export default defineConfig({
   clearScreen: false,
   plugins: [react()],
   resolve: {
-    alias: { '@helm/protocol': fileURLToPath(new URL('../protocol/src/index.ts', import.meta.url)) },
+    alias: [
+      { find: '@helm/protocol/browser', replacement: fileURLToPath(new URL('../protocol/src/browser.ts', import.meta.url)) },
+      { find: /^@helm\/protocol$/, replacement: fileURLToPath(new URL('../protocol/src/index.ts', import.meta.url)) },
+    ],
     dedupe: ['react', 'react-dom'],
   },
   server: {

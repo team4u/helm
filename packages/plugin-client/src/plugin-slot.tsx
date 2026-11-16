@@ -13,7 +13,7 @@
  */
 import { createContext, useContext } from 'react'
 import type { ReactNode } from 'react'
-import type { ComposerController } from '@helm/protocol'
+import type { ComposerController } from '@helm/protocol/browser'
 import { HelmIcon } from './icons.js'
 import { usePluginClientHost } from './host-port.js'
 import { PluginClientContext } from './plugin-context.js'

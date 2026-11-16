@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { SearchHit } from '@helm/protocol'
+import type { SearchHit } from '@helm/protocol/browser'
 import { searchApi } from '../lib/api.js'
 import { commandActionPluginId, commandHint, commandsForConversation } from '../lib/commands-model.js'
 import { HelmIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helm/plugin-client'
@@ -12,7 +12,7 @@ import {
   type HelmShortcutDetail,
 } from '../shell/shortcuts-model.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
-import type { CommandSpec } from '@helm/protocol'
+import type { CommandSpec } from '@helm/protocol/browser'
 
 type PaletteRow =
   | { kind: 'command'; id: string; title: string; hint?: string; shortcut?: string; icon?: string; keywords?: string[]; run: () => void }

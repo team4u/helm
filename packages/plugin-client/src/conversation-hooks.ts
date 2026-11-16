@@ -3,7 +3,7 @@
  * 本文件无组件导出（Fast Refresh 友好）。
  */
 import { useCallback, useEffect } from 'react'
-import type { AskSpec, ConversationDetail, ConversationLive, ConversationSummary, UsePluginsResult } from '@helm/protocol'
+import type { AskSpec, ConversationDetail, ConversationLive, ConversationSummary, UsePluginsResult } from '@helm/protocol/browser'
 import { usePluginClientHost } from './host-port.js'
 
 /** 全部会话摘要（SSE 实时同步；与宿主左栏同一数据源）。 */

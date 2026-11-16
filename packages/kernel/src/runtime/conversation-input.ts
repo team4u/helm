@@ -10,8 +10,8 @@
  * - 全新输入提交到 SDK harness 并与 tracker 登记绑定。
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { copyJson, type JsonValue } from '@earendil-works/chord/json'
-import { InboxDoc, LiveDoc, type Harness } from '@earendil-works/pi-durable'
+import { copyJson, type JsonRepresentation } from '@earendil-works/chord/json'
+import { InboxDoc, LiveDoc, type Harness, type UserInput } from '@earendil-works/pi-durable'
 import type {
   ArtifactMetadata,
   ConversationAttachmentRef,
@@ -25,8 +25,9 @@ import { redactJsonValue } from '../redact.js'
 import type { SecretStash } from '../services/index.js'
 import { deriveTitle, type ConversationTracker } from './conversations.js'
 import { normalizeBusyError } from './runtime-helpers.js'
+import { asConversationId } from './sdk-ids.js'
 import type { SubmitInputOptions } from './conversation-service.js'
-import type { HelmStore } from './store.js'
+import type { ConvMeta, HelmStore } from './store.js'
 
 export interface ConversationInputPipelineHost {
   readonly harness: Harness
@@ -138,10 +139,10 @@ export class ConversationInputPipeline {
   }
 
   /** 首输入自动标题（派生自脱敏后文本；stateChangeSeq 同步推进）。 */
-  applyFirstInputTitle(meta: { id: number; title: string; stateChangeSeq: number }, effectiveText: string): void {
+  applyFirstInputTitle(meta: ConvMeta, effectiveText: string): void {
     if (meta.title !== '') return
     const title = deriveTitle(effectiveText)
-    this.host.store.upsertConv({ ...meta, title, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() } as never)
+    this.host.store.upsertConv({ ...meta, title, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() })
   }
 
   /** 新输入 SDK 提交（非 rewind 路径；tracker 登记与失败撤销）。 */
@@ -181,10 +182,11 @@ export class ConversationInputPipeline {
       // 原子核对 pi.live：SDK admitSubmission 只看 live.run 而不看 live.compactions，
       // 在无活跃 run 但存在进行中压缩任务时，在此事务内把输入排入 pi.inbox（或 reject），
       // 避免新回合在未精简的旧上下文上抢跑。
+      const convId = asConversationId(id)
       const queueResult = await conversation.commit(async (tx) => {
-        const live = await tx.doc(LiveDoc, id as never)
-        const inbox = await tx.doc(InboxDoc, id as never)
-        const existing = await tx.submissionByRequest(id as never, requestId)
+        const live = await tx.doc(LiveDoc, convId)
+        const inbox = await tx.doc(InboxDoc, convId)
+        const existing = await tx.submissionByRequest(convId, requestId)
         if (existing !== undefined) {
           if (existing.type !== 'input') {
             throw new Error(`Request ${requestId} already identifies a submission of type ${existing.type}`)
@@ -204,7 +206,7 @@ export class ConversationInputPipeline {
             this.host.assertMutationGuard(id, mutationGuard)
           }
           const sub = await tx.createSubmission({
-            conversationId: id as never,
+            conversationId: convId,
             requestId,
             type: 'input',
             status: 'queued',
@@ -212,7 +214,7 @@ export class ConversationInputPipeline {
           inbox.items.push({
             id: sub.id,
             mode: finalWhenBusy === 'steer' ? 'steer' : 'followUp',
-            content: copyJson(content, { omitUndefinedProperties: true }) as never,
+            content: copyJson(content, { omitUndefinedProperties: true }) as JsonRepresentation<UserInput>,
             entry: {
               kind: 'helm.input',
               data: entryData,
@@ -235,7 +237,7 @@ export class ConversationInputPipeline {
       const submission = await conversation.submit(
         {
           type: 'input',
-          content: content as never,
+          content,
           whenBusy: finalWhenBusy,
           ...(prepared.whenIdle !== undefined ? { whenIdle: prepared.whenIdle } : {}),
           entry: {

@@ -1,4 +1,4 @@
-import type { AskSpec, ConversationDetail, ConversationEntry, ConversationLive, ConversationSummary, HelmEventFrame, HelmSnapshot, NodeInfo, PluginSummary, PluginUiContribution } from '@helm/protocol'
+import type { AskSpec, ConversationDetail, ConversationEntry, ConversationLive, ConversationSummary, HelmEventFrame, HelmSnapshot, NodeInfo, PluginSummary, PluginUiContribution } from '@helm/protocol/browser'
 
 export interface LiveState {
   seq: number

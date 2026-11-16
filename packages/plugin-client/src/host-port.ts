@@ -21,7 +21,7 @@ import type {
   PluginSummary,
   ScreenSpec,
   WhenBusy,
-} from '@helm/protocol'
+} from '@helm/protocol/browser'
 
 /** 会话级插件文档订阅元组（宿主 ref-count 共享专用 SSE 流的 key）。 */
 export interface PluginSessionDocKey {

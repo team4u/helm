@@ -10,7 +10,7 @@
 import { useHelmStore } from '../lib/store-context.js'
 import { useStableCallback } from '../lib/use-stable-callback.js'
 import { conversationsApi } from '../lib/api.js'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helm/protocol/browser'
 import type { EditRequestTarget } from './timeline-model.js'
 
 export interface TimelineEntryActions {

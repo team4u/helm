@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
-import type { ToolViewSpec } from '@helm/protocol'
+import type { ToolViewSpec } from '@helm/protocol/browser'
 import { HelmIcon } from '@helm/plugin-client'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { ToolExpandedBody, ToolRawBody } from './ToolExpandedBody.js'
@@ -29,7 +29,7 @@ export function TraceRow({
   conversationId: number
   defaultOpen: boolean
   /** 当前时间线内全部工具调用轻量摘要（透传给 tool.view 插件组件）。 */
-  siblingCalls: ReadonlyArray<import('@helm/protocol').ToolViewSiblingCall>
+  siblingCalls: ReadonlyArray<import('@helm/protocol/browser').ToolViewSiblingCall>
 }) {
   const [open, setOpen] = useState(defaultOpen)
 
@@ -142,7 +142,7 @@ export function StepGroup({
   steps: FoldableStep[]
   active: boolean
   conversationId: number
-  siblingCalls: ReadonlyArray<import('@helm/protocol').ToolViewSiblingCall>
+  siblingCalls: ReadonlyArray<import('@helm/protocol/browser').ToolViewSiblingCall>
   shortcutToggle?: ProcessShortcutCommand
 }) {
   const firstStep = steps[0]
@@ -179,7 +179,7 @@ function MultiStepGroup({
   steps: FoldableStep[]
   active: boolean
   conversationId: number
-  siblingCalls: ReadonlyArray<import('@helm/protocol').ToolViewSiblingCall>
+  siblingCalls: ReadonlyArray<import('@helm/protocol/browser').ToolViewSiblingCall>
   shortcutToggle?: ProcessShortcutCommand
 }) {
   const [userOverride, setUserOverride] = useState<boolean | null>(null)

@@ -4,7 +4,7 @@
  * 提供技能分类推导、多维检索（名称/ID/描述/参考文件）、来源区分及指标统计。
  * 遵循前端 Fast Refresh 规范：纯函数、常量与数据模型统一定义于此，不与组件混写。
  */
-import type { SkillSummary } from '@helm/protocol'
+import type { SkillSummary } from '@helm/protocol/browser'
 import { assetsApi } from '../lib/api.js'
 
 export type SkillCategoryTab = 'all' | 'builtin' | 'plugins' | 'agents' | 'workspace'

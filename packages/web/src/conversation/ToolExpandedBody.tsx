@@ -17,7 +17,7 @@
  */
 import { Fragment, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ToolEditDiff } from '@helm/protocol'
+import type { ToolEditDiff } from '@helm/protocol/browser'
 import { HelmIcon, CopyButton } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import { formatBytes } from '../lib/format.js'

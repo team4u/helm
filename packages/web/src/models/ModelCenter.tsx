@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import type { ModelProviderSummary } from '@helm/protocol'
+import type { ModelProviderSummary } from '@helm/protocol/browser'
 import { assetsApi } from '../lib/api.js'
 import { HelmIcon, Tabs, TabsContent, TabsList, TabsTrigger } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
+import type { ModelsCenterTab } from '../lib/types.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { GlobalDefaultsPanel } from './GlobalDefaultsPanel.js'
 import { ModelCard } from './ModelCard.js'
@@ -115,7 +116,7 @@ export function ModelCenter({
       : store.primaryTarget
   const selectedProviderId =
     currentTarget.kind === 'models' ? currentTarget.providerId : undefined
-  const centerTab = currentTarget.kind === 'models' ? currentTarget.tab ?? 'providers' : 'providers'
+  const centerTab: ModelsCenterTab = currentTarget.kind === 'models' ? currentTarget.tab ?? 'providers' : 'providers'
 
   const selectedProvider = useMemo(() => {
     if (!selectedProviderId) return null
@@ -242,7 +243,7 @@ export function ModelCenter({
       return
     }
     store.openTarget(
-      { kind: 'models', providerId: selectedProviderId, tab: centerTab as any },
+      { kind: 'models', providerId: selectedProviderId, tab: centerTab },
       { split: true },
     )
   }

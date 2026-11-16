@@ -8,7 +8,7 @@
  * - 指标统计与默认模型选项构建。
  * - 遵循前端规范：纯属性驱动，零 ID 字符串硬编码推测。
  */
-import type { ModelProviderSummary, ProviderConfig } from '@helm/protocol'
+import type { ModelProviderSummary, ProviderConfig } from '@helm/protocol/browser'
 import type { CredentialSummary, ModelDescriptor } from '../lib/api.js'
 import { formatTokens } from '../lib/format.js'
 

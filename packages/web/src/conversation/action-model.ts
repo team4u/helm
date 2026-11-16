@@ -14,7 +14,7 @@ import type {
   ConversationEntry,
   ConversationSummary,
   UiActionSpec,
-} from '@helm/protocol'
+} from '@helm/protocol/browser'
 import { matchesUiScope, type QualifiedUiSpec, type QualifiedUiActionSpec } from '../lib/types.js'
 
 /** UI 动作 action-only 判定：未声明 client，仅靠 actionId 执行。 */

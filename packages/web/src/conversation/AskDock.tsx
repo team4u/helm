@@ -1,5 +1,5 @@
 import { useId, useMemo, useState } from 'react'
-import type { AskFieldSpec, AskSpec } from '@helm/protocol'
+import type { AskFieldSpec, AskSpec } from '@helm/protocol/browser'
 import { asksApi } from '../lib/api.js'
 import { HelmIcon, Select } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'

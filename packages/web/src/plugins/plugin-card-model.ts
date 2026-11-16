@@ -6,7 +6,7 @@
  *   系统默认占位图标（DEFAULT_PLUGIN_ICON: 'puzzle'）；
  * - 不按插件 ID 硬编码任何业务特判——属性是插件自己的事，前端只负责展示。
  */
-import type { PluginSummary, ScreenSpec } from '@helm/protocol'
+import type { PluginSummary, ScreenSpec } from '@helm/protocol/browser'
 import type { GroupedUiSpecs } from '../lib/types.js'
 
 /** 插件中心默认占位图标（当插件未显式提供 icon 时使用）。 */

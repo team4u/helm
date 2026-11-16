@@ -9,10 +9,14 @@
  * 3. 消费与 HookBridge 共享的 handledToolCalls Map，实现无反向依赖的工具级拦截短路。
  */
 
+import type { Context } from '@earendil-works/chord/context'
+import type { JsonValue } from '@earendil-works/chord/json'
 import {
   defineExtension,
   defineTool,
   type Extension,
+  type ToolExecutionApi,
+  type ToolExecutionResult,
   type ToolRegistration,
 } from '@earendil-works/pi-durable'
 import { HelmError, matchesConversationScope } from '@helm/protocol'
@@ -44,13 +48,23 @@ export interface RuntimeToolRegistryOptions {
   readonly getConversation: (conversationId: number) => ConversationSummary
 }
 
+type PluginToolApi = Pick<ToolExecutionApi, 'conversationId'> & {
+  callId?: string
+  output?: (chunk: string) => void
+}
+
 /** 内核/插件工具 execute 包装：tool_call handled 接管结果优先返回（不执行真实工具）。 */
-export function wrapToolExecute(
+export function wrapToolExecute<
+  TArgs,
+  TApi extends { callId?: string },
+  TContext extends { abortSignal?: AbortSignal },
+  TResult,
+>(
   handledToolCalls: Map<string, HandledToolCallEntry>,
-  execute: (args: never, api: never, context: { abortSignal?: AbortSignal }) => Promise<unknown>,
-): (args: never, api: never, context: { abortSignal?: AbortSignal }) => Promise<unknown> {
+  execute: (args: TArgs, api: TApi, context: TContext) => Promise<TResult>,
+): (args: TArgs, api: TApi, context: TContext) => Promise<TResult | HandledToolCallEntry['result']> {
   return async (args, api, context) => {
-    const callId = (api as unknown as { callId?: string }).callId
+    const callId = api.callId
     const handled = callId !== undefined ? handledToolCalls.get(callId) : undefined
     if (handled !== undefined) {
       handledToolCalls.delete(callId!)
@@ -62,6 +76,20 @@ export function wrapToolExecute(
     throwIfToolAborted(context?.abortSignal)
     return result
   }
+}
+
+/**
+ * 统一包装具体工具注册并擦除逆变参数泛型，集中收口到 `Extension.tools` 的异构数组边界。
+ */
+function wrapToolRegistration<TParameters extends object, TDetails extends JsonValue>(
+  handledToolCalls: Map<string, HandledToolCallEntry>,
+  tool: ToolRegistration<TParameters, TDetails>,
+): ToolRegistration {
+  const execute = wrapToolExecute(handledToolCalls, tool.execute.bind(tool))
+  return {
+    ...tool,
+    execute,
+  } as unknown as ToolRegistration
 }
 
 export class RuntimeToolRegistry {
@@ -119,38 +147,21 @@ export class RuntimeToolRegistry {
       },
       redact: (text: string) => redact(text),
     }
-    const kernelTools = [
-      createBashTool(toolDeps),
-      createReadTool(toolDeps),
-      createWriteTool(toolDeps),
-      createEditTool(toolDeps),
-      createReadArtifactTool(toolDeps, (convId: number, artifactConvId: number) =>
-        isArtifactAuthorized(convId, artifactConvId),
-      ),
-      createRegisterArtifactTool(toolDeps),
-      createRunActionTool(toolHost),
-    ].map((tool) => {
-      const raw = tool as unknown as Record<string, unknown>
-      const execute = raw['execute'] as (
-        args: never,
-        api: never,
-        context: never,
-      ) => Promise<unknown>
-      return {
-        ...raw,
-        execute: wrapToolExecute(
-          handledToolCalls,
-          execute.bind(raw) as unknown as (
-            args: never,
-            api: never,
-            context: { abortSignal?: AbortSignal },
-          ) => Promise<unknown>,
+    const kernelTools: ToolRegistration[] = [
+      wrapToolRegistration(handledToolCalls, createBashTool(toolDeps)),
+      wrapToolRegistration(handledToolCalls, createReadTool(toolDeps)),
+      wrapToolRegistration(handledToolCalls, createWriteTool(toolDeps)),
+      wrapToolRegistration(handledToolCalls, createEditTool(toolDeps)),
+      wrapToolRegistration(
+        handledToolCalls,
+        createReadArtifactTool(toolDeps, (convId: number, artifactConvId: number) =>
+          isArtifactAuthorized(convId, artifactConvId),
         ),
-      } as unknown as ToolRegistration
-    })
-    registry.install(
-      defineExtension({ name: 'helm-core', tools: kernelTools }) as Extension,
-    )
+      ),
+      wrapToolRegistration(handledToolCalls, createRegisterArtifactTool(toolDeps)),
+      wrapToolRegistration(handledToolCalls, createRunActionTool(toolHost)),
+    ]
+    registry.install(defineExtension({ name: 'helm-core', tools: kernelTools }))
   }
 
   /**
@@ -163,16 +174,17 @@ export class RuntimeToolRegistry {
     const { registry, getPluginHost, redact, handledToolCalls } = this.options
     const host = getPluginHost()
     if (!host) return
-    const tools = specs.map((spec) => {
+    const tools: ToolRegistration[] = specs.map((spec) => {
+      const parameters = (spec.inputSchema ?? { type: 'object', properties: {} }) as Record<string, unknown>
       const raw = defineTool({
         name: spec.name,
         description: spec.description,
-        parameters: (spec.inputSchema ?? { type: 'object', properties: {} }) as Record<string, object>,
+        parameters,
         ...(spec.structuredOutputSchema !== undefined
-          ? { structuredOutputSchema: spec.structuredOutputSchema as Record<string, object> }
+          ? { structuredOutputSchema: spec.structuredOutputSchema }
           : {}),
-        async execute(args: unknown, api: never, context: { abortSignal?: AbortSignal }) {
-          const toolApi = api as unknown as { conversationId: number; callId?: string; output?: (chunk: string) => void }
+        async execute(args: unknown, api: ToolExecutionApi, context: Context): Promise<ToolExecutionResult> {
+          const toolApi: PluginToolApi = api
           const result = await host.executeTool(spec.name, args, {
             conversationId: toolApi.conversationId,
             ...(typeof toolApi.callId === 'string' && toolApi.callId !== '' ? { callId: toolApi.callId } : {}),
@@ -203,24 +215,12 @@ export class RuntimeToolRegistry {
             structuredOutputSchema: spec.structuredOutputSchema,
             toolName: spec.name,
             ...(typeof toolApi.callId === 'string' && toolApi.callId !== '' ? { callId: toolApi.callId } : {}),
-          })
+          }) as ToolExecutionResult
         },
-      } as never) as unknown as {
-        execute: (args: never, api: never, context: { abortSignal?: AbortSignal }) => Promise<unknown>
-      }
-      return {
-        ...raw,
-        execute: wrapToolExecute(
-          handledToolCalls,
-          raw.execute.bind(raw) as unknown as (
-            args: never,
-            api: never,
-            context: { abortSignal?: AbortSignal },
-          ) => Promise<unknown>,
-        ),
-      } as never
+      })
+      return wrapToolRegistration(handledToolCalls, raw)
     })
-    registry.install(defineExtension({ name: 'helm-plugins', tools }) as Extension)
+    registry.install(defineExtension({ name: 'helm-plugins', tools }))
   }
 
   /** 插件启停后热更新工具集（app 组合层与 enable/disable 路径调用）。 */

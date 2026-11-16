@@ -16,6 +16,7 @@
     "test:force-exit": "node scripts/run-tests.mjs --test-force-exit \"packages/*/test/*.test.ts\" \"packages/*/test/*.test.tsx\"",
     "check:changed": "node scripts/check-changed.mjs",
     "check:hygiene": "node scripts/check-test-hygiene.mjs",
+    "lint": "oxlint",
     "dev": "pnpm --filter @helm/protocol run build && pnpm --parallel --stream --filter @helm/hub --filter @helm/web run dev",
     "dev:kernel": "pnpm --filter @helm/protocol run build && node scripts/run-hub.mjs",
     "dev:web": "pnpm --filter @helm/web dev",
@@ -29,6 +30,7 @@
     "@helm/cli": "workspace:*",
     "@helm/node": "workspace:*",
     "@types/node": "^24.0.0",
+    "oxlint": "^1.93.0",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0"
   }

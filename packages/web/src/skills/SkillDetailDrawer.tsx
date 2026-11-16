@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import type { SkillSummary } from '@helm/protocol'
+import type { SkillSummary } from '@helm/protocol/browser'
 import { HelmIcon, CopyButton, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Select } from '@helm/plugin-client'
 import type { SelectOption } from '@helm/plugin-client'
 import { CodeBlockView, MarkdownView } from '../conversation/MarkdownView.js'

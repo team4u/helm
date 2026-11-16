@@ -17,7 +17,7 @@
  * - 支持滚动位置激活态计算：根据可视区顶部基准线与各锚点元素偏移量，推导当前阅读所处的激活大纲项。
  */
 
-import type { ConversationEntry, InputOrigin } from '@helm/protocol'
+import type { ConversationEntry, InputOrigin } from '@helm/protocol/browser'
 import {
   parseHelmInputData,
   toolSummaryText,

@@ -4,7 +4,7 @@
  * 排序规则：priority 降序 -> order 升序 -> 贡献顺序（groupedUi.pluginSlots
  * 的数组序，先注册先命中）；三者合成一次稳定排序。
  */
-import type { ConversationScope, PluginSlotContributionSpec } from '@helm/protocol'
+import type { ConversationScope, PluginSlotContributionSpec } from '@helm/protocol/browser'
 import type { QualifiedUiSpec } from '../lib/types.js'
 
 export type SlotContribution = QualifiedUiSpec<PluginSlotContributionSpec>

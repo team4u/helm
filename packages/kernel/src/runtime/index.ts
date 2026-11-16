@@ -15,7 +15,18 @@ export { AskService, type AskSeqResolver, type AskSettled } from './asks.js'
 export { ConversationTracker, deriveTitle, type TrackerEvents } from './conversations.js'
 export { toConversationEntry, deriveConversationLive, type EntryRecordLike } from './entries.js'
 export { openHelmDatabase, type HelmDatabase } from './sqlite.js'
-export { HelmStore, convStatusOf, summaryOf, type ConvMeta, type AskRow, type ArtifactRow } from './store.js'
+export {
+  createDiagnosticEmitter,
+  defaultDiagnosticSink,
+  emitDiagnostic,
+  formatDiagnosticError,
+  type KernelDiagnosticEmitter,
+  type KernelDiagnosticEvent,
+  type KernelDiagnosticInput,
+  type KernelDiagnosticLevel,
+  type KernelDiagnosticSink,
+} from './diagnostics.js'
+export { HelmStore, convStatusOf, summaryOf, type ConvMeta, type AskRow, type ArtifactRow, type HelmStoreOptions } from './store.js'
 export { runShell, runGate, createBashTool, createReadTool, createWriteTool, createEditTool, createReadArtifactTool, createRegisterArtifactTool, type ShellRunResult } from './tools.js'
 export { runNativeSpawn, type NativeSpawnDeps } from './spawn.js'
 export { validateJsonSchema } from './structured-output.js'
