@@ -2,7 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { conversationsApi } from '../lib/api.js'
 import type { ConversationAttachmentRef } from '@helm/protocol'
 import { HelmIcon } from '@helm/plugin-client'
-import { isConversationDeletable, isHumanSelectableProfile } from '../shell/sidebar-model.js'
+import {
+  isConversationArchivable,
+  isConversationArchived,
+  isConversationDeletable,
+  isHumanSelectableProfile,
+  partitionSidebarUi,
+} from '../shell/sidebar-model.js'
+import { patchConversationArchived } from '../shell/archive-ops.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuPortal, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/DropdownMenu.js'
 import { Tooltip } from '../ui/Tooltip.js'
@@ -194,6 +201,11 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   // 其余（缺省 'menu'）收纳进「更多操作」下拉菜单；均按 scope 过滤当前会话。
   const headerActions = matchConversationActions(store.groupedUi.uiActions, 'conversation:header', conversation)
   const { toolbar: toolbarActions, menu: menuActions } = splitConversationHeaderActions(headerActions)
+  const archived = isConversationArchived(conversation)
+  const canManageArchive = isConversationArchivable(
+    conversation,
+    partitionSidebarUi([], store.groupedUi.sidebarSections).sectionTags,
+  )
 
   const saveTitle = async (): Promise<void> => {
     const next = titleDraft.trim()
@@ -445,6 +457,30 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                       精简上下文 (/compact)
                     </span>
                   </DropdownMenuItem>
+                  {canManageArchive && (
+                    <DropdownMenuItem
+                      className="popover-item"
+                      disabled={actionPending !== null}
+                      onSelect={() => {
+                        void runAction(
+                          archived ? 'restore-archive' : 'archive',
+                          () => patchConversationArchived(conversation, !archived),
+                          archived ? '已恢复会话' : '已归档会话',
+                        )
+                      }}
+                    >
+                      <span className="pane-more-item-label">
+                        <HelmIcon
+                          name={actionPending === 'archive' || actionPending === 'restore-archive'
+                            ? 'loader'
+                            : archived ? 'rotate-ccw' : 'archive'}
+                          size={13}
+                          className={actionPending === 'archive' || actionPending === 'restore-archive' ? 'spin-slow' : undefined}
+                        />
+                        {archived ? '恢复会话' : '归档会话'}
+                      </span>
+                    </DropdownMenuItem>
+                  )}
                   {menuActions.length > 0 && (
                     <>
                       <DropdownMenuSeparator className="popover-separator" />
