@@ -463,7 +463,7 @@ function MultiSelectInner<T extends string = string>({
  */
 export function Select<T extends string = string>(props: SelectProps<T>) {
   if (props.multiple === true) {
-    return <MultiSelectInner {...props} />
+    return <MultiSelectInner<T> {...props} />
   }
   return <SingleSelectInner {...props} />
 }
