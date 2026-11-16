@@ -1,17 +1,21 @@
 /**
- * incremental build before clean up dist/ isolated stale artifact (take proxy whole directory rmSync break tsc incremental cache).
+ * Prune orphaned stale artifacts from dist/ before incremental builds (replacing whole-directory
+ * rmSync that destroys the tsc incremental cache).
  *
- * Why: enable tsc incremental after if each time build before whole directory delete dist, will lose already has compile produce out and
- * trigger all amount heavy edit (even in keep .tsbuildinfo when leads to tsc mistakenly judge without change while do not re- artifact);
- * but directly do not clean up again will legacy split package migration or delete change file after old artifact (such as kernel/dist/main.js,
- * kernel/dist/builtin-plugins/*), by payload / desktop whole directory bundle silently carries away.
- * this module only precise delete source code in already missing for should file artifact and empty directory; pass --force or settings
- * HELM_CLEAN_DIST=1 when fall back all amount empty and sync remove for should .tsbuildinfo.
+ * Why: with tsc incremental enabled, deleting the whole dist directory before every build
+ * discards prior compiler output and forces a full rebuild (and when .tsbuildinfo is kept,
+ * tsc can even misjudge nothing changed and skip re-emitting artifacts); but never cleaning
+ * leaves stale outputs behind after package splits or file removals (e.g.
+ * kernel/dist/main.js, kernel/dist/builtin-plugins/*), which payload / desktop then sweep
+ * up in whole-directory packaging. This module surgically deletes only artifacts whose
+ * source files no longer exist, plus empty directories; passing --force or setting
+ * HELM_CLEAN_DIST=1 falls back to a full wipe that also removes the matching
+ * .tsbuildinfo.
  */
 import { existsSync, lstatSync, readdirSync, readFileSync, rmdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 
-/** TS compile artifact suffix table (long suffix takes precedence match, ensure .d.ts.map first at .js.map / .d.ts). */
+/** TS build artifact suffix table (longest suffix first, so .d.ts.map matches before .js.map / .d.ts). */
 const TS_OUTPUT_SPECS = [
   { ext: '.d.ts.map', sources: ['.ts', '.tsx'] },
   { ext: '.d.mts.map', sources: ['.mts'] },
@@ -39,7 +43,7 @@ function isExistingFile(filePath) {
   }
 }
 
-/** from package tsconfig.json parse tsBuildInfoFile absolute path (if config speech). */
+/** Resolve the absolute tsBuildInfoFile path from a package's tsconfig.json (if configured). */
 export function resolveTsBuildInfoFile(pkgRoot) {
   const tsconfigPath = path.join(pkgRoot, 'tsconfig.json');
   if (!existsSync(tsconfigPath)) return null;
@@ -53,10 +57,10 @@ export function resolveTsBuildInfoFile(pkgRoot) {
   }
 }
 
-/** decide dist relative path is otherwise match src in still store in source code. */
+/** Decide whether a dist-relative path still matches a source file present in src. */
 function hasMatchingSource(srcDir, posixRel, preserveClients) {
   const parts = posixRel.split('/');
-  // packages/plugins: dist/<pluginName>/client/** and src/<pluginName>/client/** keep precise mirror.
+  // packages/plugins: dist/<pluginName>/client/** mirrors src/<pluginName>/client/** exactly.
   if (preserveClients && parts.length >= 3 && parts[1] === 'client') {
     return isExistingFile(path.join(srcDir, ...parts));
   }
@@ -64,14 +68,14 @@ function hasMatchingSource(srcDir, posixRel, preserveClients) {
     if (!posixRel.endsWith(spec.ext)) continue;
     const stem = posixRel.slice(0, -spec.ext.length);
     if (!stem) return false;
-    // preserveClients open start when tsconfig exclude src/*/client, must not client in .ts when into dist JS based on.
+    // With preserveClients on, tsconfig excludes src/*/client; client .ts files must not count as dist JS evidence.
     if (preserveClients && parts.length >= 3 && parts[1] === 'client') return false;
     return spec.sources.some((srcExt) => isExistingFile(path.join(srcDir, `${stem}${srcExt}`)));
   }
   return false;
 }
 
-/** self bottom to on clean up dist inside empty directory (do not delete dist directory itself, by caller on demand handle). */
+/** Remove empty directories inside dist bottom-up (the dist root itself is left for the caller). */
 function pruneEmptySubdirs(dir, removedDirs) {
   let entries;
   try {
@@ -89,14 +93,14 @@ function pruneEmptySubdirs(dir, removedDirs) {
           removedDirs.push(sub);
         }
       } catch {
-        // ignore concurrency clean up leads to ENOENT
+        // Ignore ENOENT from concurrent cleanup
       }
     }
   }
 }
 
 /**
- * by source code tree incremental clean up dist/ in stale isolated file and empty directory.
+ * Incrementally prune stale orphaned files and empty directories from dist/ based on the source tree.
  * @param {{ pkgRoot: string, force?: boolean, preserveClients?: boolean, tsBuildInfoFile?: string | null, env?: NodeJS.ProcessEnv }} options
  * @returns {{ mode: 'wiped' | 'pruned' | 'noop', removedFiles: string[], removedDirs: string[] }}
  */
@@ -117,7 +121,7 @@ export function pruneDist(options) {
   }
 
   if (!existsSync(distDir)) {
-    // if dist already by external delete empty but .tsbuildinfo still in,tsc incremental pattern will skip re- output artifact; must sync clean cache.
+    // If dist was emptied externally while .tsbuildinfo remains, tsc incremental mode skips re-emitting; the cache must go too.
     if (buildInfo) rmSync(buildInfo, { force: true });
     return { mode: 'noop', removedFiles: [], removedDirs: [] };
   }
@@ -148,7 +152,7 @@ export function pruneDist(options) {
   visit(distDir, '');
   pruneEmptySubdirs(distDir, removedDirs);
 
-  // dist inside without any valid JS artifact when treated as cold state, clean .tsbuildinfo guard against tsc skip output.
+  // With no valid JS artifacts left in dist, treat it as cold: drop .tsbuildinfo so tsc cannot skip output.
   if (keptJsCount === 0 && buildInfo) {
     rmSync(buildInfo, { force: true });
   }
@@ -161,7 +165,7 @@ export function pruneDist(options) {
 }
 
 /**
- * each package scripts/clean-dist.mjs shared use CLI entry.
+ * Shared CLI entry for each package's scripts/clean-dist.mjs.
  * @param {string} pkgRoot
  * @param {string[]} argv
  * @param {{ preserveClients?: boolean }} [options]

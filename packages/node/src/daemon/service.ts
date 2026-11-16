@@ -408,10 +408,10 @@ function parseRunningState(platform: NodeJS.Platform, result: { code: number | n
     return 'unknown';
   }
   if (platform === 'win32') {
-    // schtasks /Query: Chinese system output "is now run"/"ready", English "Running"/"Ready".
+    // schtasks emits localized status labels; match the original Windows output.
     if (result.code !== 0) return 'unknown';
-    if (/is now run|Running/i.test(text) && !/Ready|ready/i.test(text)) return 'running';
-    if (/Ready|ready/i.test(text)) return 'stopped';
+    if (/正在运行|Running/i.test(text) && !/Ready|就绪/i.test(text)) return 'running';
+    if (/Ready|就绪/i.test(text)) return 'stopped';
     return 'unknown';
   }
   return 'unknown';
@@ -444,7 +444,7 @@ export async function getNodeServiceStatus(
   const result = await exec.run(desc.statusCmd[0]!, desc.statusCmd.slice(1));
   const detail = `${result.stdout}${result.stderr}`.trim();
   const running = parseRunningState(desc.platform, result);
-  const missing = /could not find|not found|no such process|cannot find|find fewer than|missing/i.test(detail);
+  const missing = /could not find|not found|no such process|cannot find|找不到|不存在/i.test(detail);
   const installed: boolean | null = desc.platform === 'linux'
     ? targetExists
     : result.code === 0 ? true : missing ? false : null;

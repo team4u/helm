@@ -1,18 +1,22 @@
 /**
- * Workspace package diagram and change file → subject to affect test package keep guard mapping.
+ * Workspace package graph and the conservative "changed file -> affected test packages"
+ * mapping.
  *
- * principle: rather can many run cannot leak run. package inside non- test file change → the package + all (pass) dependency it package test
- * (based on each packages/<pkg>/package.json  dependencies/devDependencies in @helm/* workspace
- * edge do reverse closed package); pure test file change → only the package (other package code not change). lock file, tsconfig,
- * test basis set apply (run-tests / test-suites) change affect global → all Profile.
+ * Principle: better to over-run than to miss. A non-test change inside a package -> that
+ * package + the tests of every (transitively) depending package (reverse closure over the
+ * @helm/* workspace edges in each packages/<pkg>/package.json's
+ * dependencies/devDependencies); a test-only change -> that package alone (no other
+ * package's code changed). Lockfile, root tsconfig, or test infrastructure (run-tests /
+ * test-suites) changes affect everything -> all tiers.
  *
- * PACKAGE_TIERS only used to render package belongs to which one Profile, and scripts/test-suites.mjs  SUITES mirror sync
- * (by packages/cli/test/check-changed.test.ts lock, change SUITES Profile must sync this in).
+ * PACKAGE_TIERS is display-only (which tier a package belongs to) and mirrors the SUITES in
+ * scripts/test-suites.mjs (locked by packages/cli/test/check-changed.test.ts; changing
+ * SUITES tiers must update this too).
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
-/** level affect global trigger file (each other for repository precise path). */
+/** Root-level "affects everything" trigger files (exact paths relative to the repo root). */
 export const FULL_TIER_TRIGGERS = new Set([
   'package.json',
   'pnpm-lock.yaml',
@@ -23,7 +27,7 @@ export const FULL_TIER_TRIGGERS = new Set([
   'scripts/run-tests.mjs',
   'scripts/test-suites.mjs',
 ]);
-/** and scripts/test-suites.mjs  SUITES mirror: package directory → Profile (only used to report render). */
+/** Mirror of scripts/test-suites.mjs SUITES: package dir -> tier (display-only). */
 export const PACKAGE_TIERS = {
   protocol: 'unit',
   'env-io': 'unit',
@@ -46,7 +50,7 @@ export const TEST_SUFFIXES = ['.test.ts', '.test.tsx'];
  * @typedef {{ name: string, dir: string, workspaceDeps: string[] }} WorkspacePackage
  */
 
-/** read packages/ under all package and its @helm/* workspace dependency edge. */
+/** Read every package under packages/ and its @helm/* workspace dependency edges. */
 export function loadWorkspacePackages(repoRoot) {
   const packagesDir = path.join(repoRoot, 'packages');
   let entries;
@@ -76,14 +80,16 @@ export function loadWorkspacePackages(repoRoot) {
 }
 
 /**
- * reverse closed package:seed package itself + all (pass) dependency seed package. dependency edge by package name parse to directory.
+ * Reverse closure: the seed package itself + every package that (transitively) depends on
+ * the seed. Dependency edges resolve package names to directories.
  * @param {string[]} seedDirs
  * @param {WorkspacePackage[]} pkgs
- * @returns {Set<string>} package directory set
+ * @returns {Set<string>} set of package directories
  */
 export function reverseClosure(seedDirs, pkgs) {
   const byName = new Map(pkgs.map((p) => [p.name, p.dir]));
-  // dependents: dir -> dependency it dir list (dependency direction pkg -> dep, reverse i.e. dep by who use).
+  // dependents: dir -> list of dirs depending on it (edges point pkg -> dep, so reversing
+  // answers who uses dep).
   const dependents = new Map(pkgs.map((p) => [p.dir, []]));
   for (const p of pkgs) {
     for (const depName of p.workspaceDeps) {
@@ -105,10 +111,11 @@ export function reverseClosure(seedDirs, pkgs) {
 }
 
 /**
- * single file classify.
- * scripts/ under can execute source code (.mjs, contains lib/) directly construct into build/test/verify basis set apply,
- * change i.e. trigger all Profile (single change fast gate itself implement cannot without check via); pure document (.md etc.) does not trigger.
- * @param {string} file each other for repository path (correct slash)
+ * Classify a single file.
+ * Executable sources under scripts/ (.mjs, lib/ included) are build/test/verification
+ * infrastructure themselves: any change triggers all tiers (a change to the fast gate's own
+ * implementation must not "pass with no checks"); pure docs (.md etc.) trigger nothing.
+ * @param {string} file repo-root-relative path (forward slashes)
  * @returns {{ pkg: string | null, kind: 'test' | 'source' | 'root-trigger' | 'outside' }}
  */
 export function classifyChange(file) {
@@ -124,8 +131,8 @@ export function classifyChange(file) {
 }
 
 /**
- * compute subject to affect test package.
- * @param {string[]} files each other for repository change file list
+ * Compute the affected test packages.
+ * @param {string[]} files repo-root-relative changed file list
  * @param {WorkspacePackage[]} pkgs
  * @returns {{ affected: Set<string>, fullTier: boolean, outside: string[] }}
  */
@@ -145,8 +152,9 @@ export function computeAffectedPackages(files, pkgs) {
       if (c.kind === 'test') testOnly.add(c.pkg);
       else source.add(c.pkg);
     } else if (c.pkg) {
-      // packages/ under not register directory: keep guard and source will in closed package in by allDirs filter,
-      // this in by unknown package directly upgrade is all Profile, never static default discard.
+      // An unregistered directory under packages/: conservatively folding it into source
+      // would get filtered out by allDirs in the closure; escalate straight to all tiers as
+      // an unknown package — never silently drop it.
       fullTier = true;
     }
   }
@@ -156,7 +164,7 @@ export function computeAffectedPackages(files, pkgs) {
   return { affected, fullTier: false, outside: outside.sort() };
 }
 
-/** enumeration a certain package test/ directory under all test file (and test-suites.mjs identical enumeration rule). */
+/** Enumerate every test file under a package's test/ directory (same rules as test-suites.mjs). */
 export function testFilesOfPackage(repoRoot, pkgDir) {
   const dir = path.join(repoRoot, 'packages', pkgDir, 'test');
   let entries;
@@ -172,13 +180,17 @@ export function testFilesOfPackage(repoRoot, pkgDir) {
 }
 
 /**
- * fast gate command plan (pure function, supply CLI execute and --list re-check shared use):
- *   0. has test file → node scripts/check-test-hygiene.mjs --files <files...>(static guard generate check, early at typecheck);
- *   1. any one subject to affect package → pnpm typecheck(will first build protocol/node/kernel/plugins/hub, is test type/run pre-);
- *   2. choose in desktop test → first pnpm --filter @helm/desktop run build(typecheck do not produce
- *      packages/desktop/dist/hub-child.js, cold worktree do not patch create then desktop test must failed, and change
- *      hub-child source code may test to old dist);
- *   3. has test file → node scripts/run-tests.mjs <files...>(re- use across platform timeout and process tree clean up).
+ * Fast-gate command plan (a pure function shared by CLI execution and --list review):
+ *   0. any test files -> node scripts/check-test-hygiene.mjs --files <files...> (static
+ *      hygiene check, before typecheck);
+ *   1. any affected package -> pnpm typecheck (builds protocol/node/kernel/plugins/hub
+ *      first; a type/runtime prerequisite of the tests);
+ *   2. desktop tests selected -> pnpm --filter @helm/desktop run build first (typecheck
+ *      does not produce packages/desktop/dist/hub-child.js; on a cold worktree the desktop
+ *      tests would fail without it, and a changed hub-child source could be tested against
+ *      a stale dist);
+ *   3. any test files -> node scripts/run-tests.mjs <files...> (reusing the cross-platform
+ *      timeouts and process-tree cleanup).
  * @param {{ affectedDirs: string[], testFiles: string[], pm: { cmd: string, args: string[] }, execPath: string, repoRoot: string }} input
  * @returns {Array<{ cmd: string, args: string[], label: string }>}
  */
@@ -188,28 +200,28 @@ export function planCheckCommands({ affectedDirs, testFiles, pm, execPath, repoR
     commands.push({
       cmd: execPath,
       args: [path.join(repoRoot, 'scripts', 'check-test-hygiene.mjs'), '--files', ...testFiles],
-      label: `check-hygiene(${testFiles.length} subject to affect test file)`,
+      label: `check-hygiene (${testFiles.length} affected test file(s))`,
     });
   }
   if (affectedDirs.length > 0) {
     commands.push({
       cmd: pm.cmd,
       args: [...pm.args, 'typecheck'],
-      label: 'pnpm typecheck(contains protocol/node/kernel/plugins/hub build)',
+      label: 'pnpm typecheck (includes protocol/node/kernel/plugins/hub build)',
     });
   }
   if (testFiles.some((f) => f.startsWith('packages/desktop/test/'))) {
     commands.push({
       cmd: pm.cmd,
       args: [...pm.args, '--filter', '@helm/desktop', 'run', 'build'],
-      label: 'pnpm --filter @helm/desktop run build(desktop test pre-:typecheck do not produce dist)',
+      label: 'pnpm --filter @helm/desktop run build (desktop test prerequisite: typecheck emits no dist)',
     });
   }
   if (testFiles.length > 0) {
     commands.push({
       cmd: execPath,
       args: [path.join(repoRoot, 'scripts', 'run-tests.mjs'), ...testFiles],
-      label: `run-tests(${testFiles.length} test file)`,
+      label: `run-tests (${testFiles.length} test file(s))`,
     });
   }
   return commands;

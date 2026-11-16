@@ -33,11 +33,11 @@ test('Profile 文件资产拒绝未知运行时靶点字段，不静默回到本
   try {
     const service = new ProfileService(dir)
     const invalid = { id: 'old-target', runtime: { kind: 'herdr', agent: 'pi', machine: 'remote-box' } }
-    await assert.rejects(service.save(invalid), /未知字段.*machine/)
+    await assert.rejects(service.save(invalid), /unknown field.*machine/)
     const profileDir = join(dir, 'profiles', 'old-target')
     await mkdir(profileDir, { recursive: true })
     await writeFile(join(profileDir, 'profile.json'), JSON.stringify(invalid))
-    await assert.rejects(service.get('old-target'), /未知字段.*machine/)
+    await assert.rejects(service.get('old-target'), /unknown field.*machine/)
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 

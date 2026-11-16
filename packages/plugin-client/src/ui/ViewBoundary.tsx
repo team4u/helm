@@ -1,26 +1,37 @@
 import { Component, type ReactNode } from 'react'
+import type { LocaleTranslator } from '@helm/protocol/browser'
 import { HelmIcon } from '../icons.js'
+import { usePluginTranslator } from '../i18n.js'
+import { uiCopy } from '../ui-copy.js'
 
-/**
- * A plugin render failure only affects the current extension view; the host
- * navigation and other conversations remain usable. The fixed texts below
- * (default label / heading / retry button) are SDK defaults in English; pass
- * the label prop to override the default for host-side localization.
- */
-export class ViewBoundary extends Component<{ children: ReactNode; label?: string }, { message: string | null }> {
+export interface ViewBoundaryProps {
+  children: ReactNode
+  label?: string
+}
+
+/** A render failure stays inside its extension view and can be retried. */
+class RenderBoundary extends Component<ViewBoundaryProps & { translate: LocaleTranslator }, { message: string | null }> {
   state: { message: string | null } = { message: null }
   static getDerivedStateFromError(error: unknown) {
     return { message: error instanceof Error ? error.message : String(error) }
   }
   render() {
     if (!this.state.message) return this.props.children
+    const t = this.props.translate
+    const label = this.props.label ?? t(uiCopy.view)
     return <div className="callout callout--error" role="alert">
       <HelmIcon name="alert-triangle" />
       <div>
-        <strong>{this.props.label ?? 'View'} failed to render</strong>
+        <strong>{t({ en: `${label} failed to render`, 'zh-CN': `${label}渲染失败` })}</strong>
         <p className="selectable">{this.state.message}</p>
-        <button className="btn btn-sm" onClick={() => this.setState({ message: null })}>Render again</button>
+        <button className="btn btn-sm" onClick={() => this.setState({ message: null })}>{t(uiCopy.renderAgain)}</button>
       </div>
     </div>
   }
+}
+
+/** Keep the error state intact when the shared UI locale changes. */
+export function ViewBoundary(props: ViewBoundaryProps): ReactNode {
+  const translate = usePluginTranslator()
+  return <RenderBoundary {...props} translate={translate} />
 }

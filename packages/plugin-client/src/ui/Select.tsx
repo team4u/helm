@@ -1,6 +1,8 @@
 import React, { useEffect, useId, useMemo, useState } from 'react'
 import * as RadixSelect from '@radix-ui/react-select'
 import { HelmIcon } from '../icons.js'
+import { usePluginTranslator } from '../i18n.js'
+import { uiCopy } from '../ui-copy.js'
 import { Checkbox } from './Checkbox.js'
 import { Popover, PopoverContent, PopoverTrigger } from './Popover.js'
 import { useOverlayChildStyle } from './overlay-stack.js'
@@ -75,8 +77,7 @@ export function SelectPortal({
 
 /**
  * Generic single-select dropdown implementation (keeps the original Radix UI Select contract).
- * Fixed texts below (placeholder) are SDK defaults in English; pass the
- * placeholder prop to override them for host-side localization.
+ * The default placeholder follows the shared UI locale; an explicit prop wins.
  */
 function SingleSelectInner<T extends string = string>({
   value,
@@ -84,7 +85,7 @@ function SingleSelectInner<T extends string = string>({
   onChange,
   disabled = false,
   prefixIcon,
-  placeholder = 'Select…',
+  placeholder,
   className = '',
   style,
   size,
@@ -97,6 +98,8 @@ function SingleSelectInner<T extends string = string>({
   inline = false,
   popoverClassName,
 }: SingleSelectProps<T>) {
+  const t = usePluginTranslator()
+  const resolvedPlaceholder = placeholder ?? t(uiCopy.select)
   const generatedId = useId()
   const selectId = id ?? generatedId
   const [internalOpen, setInternalOpen] = useState(false)
@@ -122,7 +125,7 @@ function SingleSelectInner<T extends string = string>({
 
   const displayedLabel = (
     <span className={`helm-select-label${selectedOption ? '' : ' helm-select-placeholder'}`}>
-      {selectedOption ? selectedOption.label : placeholder}
+      {selectedOption ? selectedOption.label : resolvedPlaceholder}
     </span>
   )
 
@@ -208,10 +211,7 @@ function SingleSelectInner<T extends string = string>({
 
 /**
  * Generic multi-select dropdown implementation (built on the Radix UI Popover + Checkbox primitives).
- * Fixed texts below (placeholder, select-all / clear actions, search box,
- * summary labels) are SDK defaults in English; if they ever need to be
- * translated by the host, override them via props rather than extending the
- * protocol.
+ * Defaults for placeholders, actions and summaries follow the shared UI locale.
  */
 function MultiSelectInner<T extends string = string>({
   value,
@@ -220,7 +220,7 @@ function MultiSelectInner<T extends string = string>({
   onValuesChange,
   disabled = false,
   prefixIcon,
-  placeholder = 'Select…',
+  placeholder,
   className = '',
   style,
   size,
@@ -236,6 +236,8 @@ function MultiSelectInner<T extends string = string>({
   renderTriggerLabel,
   popoverClassName,
 }: MultiSelectProps<T>) {
+  const t = usePluginTranslator()
+  const resolvedPlaceholder = placeholder ?? t(uiCopy.select)
   const generatedId = useId()
   const selectId = id ?? generatedId
   const [internalOpen, setInternalOpen] = useState(false)
@@ -311,7 +313,7 @@ function MultiSelectInner<T extends string = string>({
     }
     if (selectedValues.length === 0) {
       return (
-        <span className="helm-select-label helm-select-placeholder">{placeholder}</span>
+        <span className="helm-select-label helm-select-placeholder">{resolvedPlaceholder}</span>
       )
     }
     if (selectedValues.length === 1) {
@@ -320,12 +322,12 @@ function MultiSelectInner<T extends string = string>({
     }
     const allCount = options.filter((opt) => !opt.disabled).length
     if (selectedValues.length === allCount && allCount > 0) {
-      return <span className="helm-select-label">{`All selected (${selectedValues.length})`}</span>
+      return <span className="helm-select-label">{t({ en: `All selected (${selectedValues.length})`, 'zh-CN': `已全选 (${selectedValues.length})` })}</span>
     }
     return (
-      <span className="helm-select-label">{`${selectedValues.length} selected`}</span>
+      <span className="helm-select-label">{t({ en: `${selectedValues.length} selected`, 'zh-CN': `已选择 ${selectedValues.length} 项` })}</span>
     )
-  }, [renderTriggerLabel, selectedValues, options, placeholder])
+  }, [renderTriggerLabel, selectedValues, options, resolvedPlaceholder, t])
 
   const contentNode = (
     <div className="helm-select-viewport" style={{ maxHeight: 280, overflowY: 'auto' }}>
@@ -336,8 +338,8 @@ function MultiSelectInner<T extends string = string>({
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Search options…"
-            aria-label="Search options"
+            placeholder={t(uiCopy.searchPlaceholder)}
+            aria-label={t(uiCopy.searchOptions)}
           />
         </div>
       )}
@@ -351,7 +353,7 @@ function MultiSelectInner<T extends string = string>({
             onClick={handleSelectAll}
             disabled={disabled}
           >
-            Select all
+            {t(uiCopy.selectAll)}
           </button>
           <button
             type="button"
@@ -359,7 +361,7 @@ function MultiSelectInner<T extends string = string>({
             onClick={handleClearAll}
             disabled={disabled || selectedValues.length === 0}
           >
-            Clear
+            {t(uiCopy.clear)}
           </button>
         </div>
       )}
@@ -474,5 +476,5 @@ export function Select<T extends string = string>(props: SelectProps<T>) {
 export function MultiSelect<T extends string = string>(
   props: Omit<MultiSelectProps<T>, 'multiple'>,
 ) {
-  return <Select multiple {...props} />
+  return <Select<T> multiple {...props} />
 }

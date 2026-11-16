@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { copyToClipboard } from './clipboard.js'
 import { HelmIcon } from './icons.js'
+import { usePluginTranslator } from './i18n.js'
+import { uiCopy } from './ui-copy.js'
 
 /**
  * Copy button: switches to a check icon for 1.5s on success; shows a warning
- * hint on failure so errors are never silently swallowed. The fixed texts
- * below are SDK defaults in English; pass the label prop to override them for
- * host-side localization.
+ * hint on failure so errors are never silently swallowed. Defaults follow
+ * the shared UI locale; a caller-provided label overrides the idle text.
  */
 export function CopyButton({ text, label, className = 'btn btn-ghost btn-sm' }: { text: string; label?: string; className?: string }) {
+  const t = usePluginTranslator()
   const [copied, setCopied] = useState(false)
   const [failed, setFailed] = useState(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -40,11 +42,11 @@ export function CopyButton({ text, label, className = 'btn btn-ghost btn-sm' }: 
         e.stopPropagation()
         void onCopy()
       }}
-      title={copied ? 'Copied' : failed ? 'Copy failed (environment restriction; select and copy manually)' : 'Copy'}
-      aria-label={copied ? 'Copied' : failed ? 'Copy failed' : (label ?? 'Copy')}
+      title={copied ? t(uiCopy.copied) : failed ? t(uiCopy.copyFailureHint) : t(uiCopy.copy)}
+      aria-label={copied ? t(uiCopy.copied) : failed ? t(uiCopy.copyFailed) : (label ?? t(uiCopy.copy))}
     >
       <HelmIcon name={copied ? 'check' : failed ? 'alert-circle' : 'copy'} size={12} />
-      {label !== undefined ? <span>{copied ? 'Copied' : failed ? 'Copy failed' : label}</span> : null}
+      {label !== undefined ? <span>{copied ? t(uiCopy.copied) : failed ? t(uiCopy.copyFailed) : label}</span> : null}
     </button>
   )
 }

@@ -386,7 +386,7 @@ describe('EventHub redaction', { timeout: 60_000 }, () => {
     snapshotValue.conversations = [
       { ...summary(1, 'x'), createdAt: new Date(0) as unknown as number },
     ]
-    assert.throws(() => hub.currentSnapshot(), /invalid_json_value|非 JSON/)
+    assert.throws(() => hub.currentSnapshot(), /non-JSON objects/)
   })
 })
 
@@ -412,7 +412,7 @@ describe('EventHub.publish event shape', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const cyclic: Record<string, unknown> = { self: null }
     cyclic['self'] = cyclic
-    assert.throws(() => hub.publish('custom.x', cyclic), /invalid_json_value|循环/)
+    assert.throws(() => hub.publish('custom.x', cyclic), /free of cycles/)
     assert.equal(hub.seq, 0)
   })
 
@@ -573,7 +573,7 @@ describe('EventHub.publish event shape', { timeout: 60_000 }, () => {
       assert.throws(() => hub.publish('ask.upsert', {
         ...ask,
         fields: [{ name: 'TOKEN', label: 'Token', type: 'text', secret: true, secretLifetime }],
-      }), /secretLifetime|非 JSON/)
+      }), /secretLifetime|non-JSON objects/)
     }
     assert.throws(() => hub.publish('ask.upsert', {
       ...ask,
