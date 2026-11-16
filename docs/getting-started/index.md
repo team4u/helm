@@ -13,20 +13,22 @@
 | **节点 Node** | 承载命令执行的计算机器：内建 `local` 节点，远端机器部署 `helm-node` 守护进程后经反向 WebSocket 接入 |
 | **插件 Plugin** | 经 `definePlugin(ctx)` 声明的扩展单元：注册工具、动作、Hook 与界面贡献，动作自动映射为 HTTP 端点与 CLI 命令 |
 
-一个直观的分工例子：会话说「在哪个节点的哪个目录工作」，Profile 决定「这个会话由什么角色扮演、会什么技能」，工作流决定「一批子智能体按什么脚本协作」，而这三者的具体实现都不在内核里。
+一个直观的分工例子：会话说「在哪个节点的哪个目录工作」，Profile 决定「这个会话由什么角色扮演、会什么技能」，工作流决定「一批子智能体按什么脚本协作」，而这三者的具体实现都不在内核里——内核只提供机制，策略由插件、配置与用户层给出。
 
 ## 三步上手
 
-**第一步：安装与初始化**。按[安装与配置指南](installation.md)确认 Node.js 24.12+、pnpm 9+ 与 Git 2.30+，然后启动前后端（`HELM_PORT=3202 pnpm dev`），初始化管理员并完成 CLI 登录。完成后 Web 控制台在 `3201` 端口可用，内核 Hub 在 `3202` 端口可用；执行 `pnpm link:bins` 可把 `helm` / `helm-node` / `helm-hub` 挂为全局命令，后续示例即可省去 `pnpm` 前缀。
+**第一步：安装与初始化**。按[安装与配置指南](installation.md)确认 Node.js `>= 24.12.0`、pnpm 12.x 与 Git，然后安装依赖、构建并启动前后端（`HELM_PORT=3202 pnpm dev`），初始化管理员并完成 CLI 登录。完成后 Web 控制台在 `3201` 端口可用，内核 Hub 在 `3202` 端口可用；执行 `pnpm link:bins` 可把 `helm` / `helm-node` / `helm-hub` 挂为全局命令，后续示例即可省去 `pnpm` 前缀。
 
-**第二步：会话与交互**。会话是 Helm 的基本交互单元。既可以在 Web 控制台直接对话，也可以用 CLI 驱动：
+**第二步：会话与交互**。会话是 Helm 的基本交互单元：绑定一个节点与工作目录，输入与回答全量落盘，可检索、可分叉、可断点续接。既可以在 Web 控制台直接对话，也可以用 CLI 驱动：
 
 ```bash
 pnpm helm conversations list --json        # 查看现有会话
-pnpm helm send <id> "分析这个仓库的测试结构" --wait
+pnpm helm send 1 "分析这个仓库的测试结构" --wait
 ```
 
-**第三步：首个工作流**。新工作流必须指定目标会话。选定或创建会话后，运行仓库自带的演示脚本并观察执行：
+首次部署即存在入口会话 `#1`（无 ID 级删除豁免，见[pi-durable 持久会话状态机](../architecture/pi-durable.md)）。发送前需要至少配置一个可用的模型供应商凭据并选定默认模型（`helm credentials set` / `helm models default`，见[安装与配置指南](installation.md)）。
+
+**第三步：首个工作流**。新启动的工作流 run 必须显式指定目标会话（`--conversation-id <id>` 或设置 `HELM_CONVERSATION_ID` 后用 `--current`），引擎不做缺省路由：
 
 ```bash
 pnpm helm conversations list --json
@@ -34,7 +36,7 @@ pnpm helm workflows run demo/hello-orchestra.workflow.js \
   --args '{"word":"开源"}' --conversation-id 1 --wait --json
 ```
 
-完整过程（含 Web 界面观察与断点恢复）见[编写首个工作流](first-workflow.md)。
+完整过程（含 Web 界面观察、断点恢复与失败语义）见[编写首个工作流](first-workflow.md)。
 
 ## 进阶阅读
 
