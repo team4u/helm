@@ -1,0 +1,32 @@
+{
+  "name": "@helm/test-kit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./node": {
+      "types": "./src/node.ts",
+      "default": "./src/node.ts"
+    },
+    "./http": {
+      "types": "./src/http.ts",
+      "default": "./src/http.ts"
+    },
+    "./git": {
+      "types": "./src/git.ts",
+      "default": "./src/git.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@helm/protocol": "workspace:*",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

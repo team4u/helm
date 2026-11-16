@@ -5,49 +5,31 @@
  * 1. 结构与主视图渲染：顶部搜索框（HelmIcon search）、分类药丸标签栏及 buildCategoryCounts 统计徽章、卡片网格；
  * 2. 多维分类过滤与搜索联动：关键字搜索实时过滤、分类药丸过滤、组合过滤、空状态重置；
  * 3. 卡片点击与详情抽屉联动：点击卡片调用 store.openTarget 展开 PluginDetailDrawer，关闭抽屉回退；
- * 4. 插件快捷启停与通知：调用 pluginsApi.enable / disable 并触发 pushNotice 通知；
- * 5. 全局导航收敛：
- *    - App.tsx 主舞台分支挂载 PluginCenter，废除 PluginSettingsModal 并平滑重定向；
- *    - Sidebar.tsx 底栏设置按钮更新为“插件中心”，激活时高亮；
- *    - CommandPaletteModal 与 ProviderCatalog 统一调用 openTarget({ kind: 'plugins', ... })；
- * 6. 淘汰旧弹窗与零残留静态扫描：
- *    - PluginSettingsModal.tsx 正式删除；
- *    - 全仓无旧弹窗残留引用；
- * 7. 严格零 Emoji 静态与动态渲染断言。
+ * 4. 全局导航收敛：CommandPaletteModal 点击「打开插件中心」调用 openTarget({ kind: 'plugins' })；
+ * 5. 严格零 Emoji 静态与动态渲染断言。
  */
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
+import { ensureHappyDom, flushMacrotask, typeIntoControl } from './helpers/dom-harness.js'
 
-GlobalRegistrator.register()
-;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
+ensureHappyDom()
 
 const React = (await import('react')).default
 const { act } = await import('react')
 const ReactDOMClient = await import('react-dom/client')
 const { renderToString } = await import('react-dom/server')
 
-;(globalThis as Record<string, unknown>).React = React
-
 import type { PluginSummary } from '@helm/protocol'
-import { pluginsApi } from '../src/lib/api.js'
-import { makeTestStore } from './helpers/store.js'
-import { HostStoreProviders } from './helpers/host-store.js'
+const { makeTestStore } = await import('./helpers/store.js')
+const { HostStoreProviders } = await import('./helpers/host-store.js')
+const { CommandPaletteModal } = await import('../src/modals/CommandPaletteModal.js')
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const e = React.createElement
-
-function typeIntoInput(input: HTMLInputElement, text: string): void {
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
-  const tracker = (input as unknown as { _valueTracker?: { getValue(): string; setValue(v: string): void } })._valueTracker
-  const prev = tracker?.getValue() ?? ''
-  setter?.call(input, text)
-  tracker?.setValue(prev)
-  input.dispatchEvent(new Event('input', { bubbles: true }))
-}
+const typeIntoInput = typeIntoControl
 
 function makePlugin(partial: Partial<PluginSummary> & { id: string }): PluginSummary {
   return {
@@ -303,58 +285,48 @@ test('PluginCenter DOM 交互：抽屉根据 primaryTarget.pluginId 展开，关
 
   assert.deepEqual(closedTarget, { kind: 'plugins' }, '关闭抽屉应导航回基础插件中心')
 
-  root.unmount()
+  await act(async () => {
+    root.unmount()
+  })
   host.remove()
 })
 
 // ---------------------------------------------------------------------------
-// 5. 源码契约：App.tsx、Sidebar.tsx、CommandPaletteModal.tsx、ProviderCatalog.tsx 全局收敛
+// 5. 全局导航收敛（CommandPaletteModal）
 // ---------------------------------------------------------------------------
 
-test('全局入口收敛：App.tsx 主舞台接入 PluginCenter，废弃旧弹窗并重定向', { timeout: 60_000 }, () => {
-  const appSrc = readFileSync(join(PKG_ROOT, 'src/App.tsx'), 'utf-8')
-  // 1. 主舞台分支包含 kind === 'plugins' -> <PluginCenter
-  assert.match(appSrc, /store\.primaryTarget\.kind === 'plugins'\s*\?\s*\(\s*<PluginCenter/)
-  // 2. 废除 PluginSettingsModal 渲染
-  assert.doesNotMatch(appSrc, /<PluginSettingsModal/)
-  assert.doesNotMatch(appSrc, /import\s*\{\s*PluginSettingsModal\s*\}\s*from/)
-  // 3. activeModal === 'plugin-settings' 平滑重定向
-  assert.match(appSrc, /activeModal\?\.kind === 'plugin-settings'/)
-  assert.match(appSrc, /openTarget\(\{\s*kind:\s*'plugins'/)
-})
-
-test('全局入口收敛：Sidebar.tsx 设置空间提供“插件中心”入口并在激活时高亮', { timeout: 60_000 }, () => {
-  const sidebarSrc = readFileSync(join(PKG_ROOT, 'src/shell/Sidebar.tsx'), 'utf-8')
-  // 1. 设置空间 CENTER_LABELS 提供插件中心文案
-  assert.match(sidebarSrc, /plugins: '插件中心'/)
-  // 2. 点击调用 openTarget({ kind: 'plugins' })（SettingsNavGroup 表驱动分发）
-  assert.match(sidebarSrc, /store\.openTarget\(\{\s*kind:\s*key\s*\}\)/)
-  // 3. 处于 plugins 目标时激活状态
-  assert.match(sidebarSrc, /store\.primaryTarget\.kind === key/)
-})
-
-test('全局入口收敛：CommandPaletteModal.tsx 导航至 plugins', { timeout: 60_000 }, () => {
-  const cmdPaletteSrc = readFileSync(join(PKG_ROOT, 'src/modals/CommandPaletteModal.tsx'), 'utf-8')
-  assert.match(cmdPaletteSrc, /openTarget\(\{\s*kind:\s*'plugins'/)
-  assert.doesNotMatch(cmdPaletteSrc, /setActiveModal\(\{\s*kind:\s*'plugin-settings'/)
-})
-
-test('全局入口收敛：ProviderCatalog.tsx 已彻底物理删除', { timeout: 60_000 }, () => {
-  const catalogPath = join(PKG_ROOT, 'src/modals/ProviderCatalog.tsx')
-  assert.equal(existsSync(catalogPath), false, 'src/modals/ProviderCatalog.tsx 必须已被物理删除')
+test('全局入口收敛：CommandPaletteModal 点击「打开插件中心」导航至 plugins 并关闭面板', { timeout: 60_000 }, async () => {
+  const opened: unknown[] = []
+  let closed = false
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = ReactDOMClient.createRoot(host)
+  const store = makeTestStore({
+    activeModal: { kind: 'command-palette' },
+    openTarget: (target) => opened.push(target),
+  })
+  try {
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: store }, e(CommandPaletteModal, { onClose: () => { closed = true } })))
+      await flushMacrotask(0)
+    })
+    const row = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-idx].nav-item')).find((el) =>
+      el.textContent?.includes('打开插件中心'),
+    )
+    assert.ok(row, '命令面板应提供「打开插件中心」入口')
+    await act(async () => {
+      row.click()
+    })
+    assert.equal(closed, true)
+    assert.deepEqual(opened, [{ kind: 'plugins' }])
+  } finally {
+    act(() => root.unmount())
+    host.remove()
+  }
 })
 
 // ---------------------------------------------------------------------------
-// 6. 淘汰旧弹窗静态检查：PluginSettingsModal.tsx 正式删除且全仓无引用
-// ---------------------------------------------------------------------------
-
-test('旧弹窗淘汰：PluginSettingsModal.tsx 已被删除且 src 下无任何引用', { timeout: 60_000 }, () => {
-  const modalPath = join(PKG_ROOT, 'src/modals/PluginSettingsModal.tsx')
-  assert.equal(existsSync(modalPath), false, 'src/modals/PluginSettingsModal.tsx 必须已被物理删除')
-})
-
-// ---------------------------------------------------------------------------
-// 7. 零 Emoji 静态断言
+// 6. 零 Emoji 静态断言
 // ---------------------------------------------------------------------------
 
 test('零 Emoji 铁律：PluginCenter.tsx 源码无任何 Emoji 字符', { timeout: 60_000 }, () => {

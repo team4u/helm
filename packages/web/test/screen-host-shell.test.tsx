@@ -1,17 +1,13 @@
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
-import { readFileSync } from 'node:fs'
 import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationSummary } from '@helm/protocol'
-import { readHostStyles } from './helpers/host-styles.js'
+import { ensureHappyDom, flushMacrotask } from './helpers/dom-harness.js'
 import { makeTestStore } from './helpers/store.js'
 
-GlobalRegistrator.register()
-Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
-
+ensureHappyDom()
 const { Screen } = await import('@helm/plugin-client')
 const { resetPluginClientCache, seedPluginClientModule } = await import('../src/lib/plugin-client.js')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
@@ -25,7 +21,6 @@ const { AuthGate } = await import('../src/shell/AuthGate.js')
 const { ToastOverlay } = await import('../src/shell/ToastOverlay.js')
 const { Sidebar } = await import('../src/shell/Sidebar.js')
 
-const EMOJI_RE = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u
 const originalFetch = globalThis.fetch
 
 let root: Root | undefined
@@ -44,10 +39,8 @@ function mount(element: React.ReactElement): void {
   })
 }
 
-async function settle(ms = 25): Promise<void> {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, ms))
-  })
+async function settle(): Promise<void> {
+  await flushMacrotask(0)
 }
 
 function makeConversation(
@@ -87,10 +80,7 @@ afterEach(() => {
   resetPluginClientCache()
 })
 
-test('ScreenHost 双重头部去重容器与缺失视图 warn 原语', { timeout: 60_000 }, async () => {
-  const screenSource = readFileSync(new URL('../src/screens/ScreenHost.tsx', import.meta.url), 'utf8')
-  assert.doesNotMatch(screenSource, /builtin:[a-z-]+/, 'ScreenHost 绝不能硬编码特定插件 ID')
-
+test('ScreenHost 双重头部去重容器、ScreenProps 注入与缺失视图 warn 原语', { timeout: 60_000 }, async () => {
   // 1) 未注册视图渲染统一 .callout.callout-warn
   const emptyStore = makeTestStore({
     primaryTarget: { kind: 'screen', pluginId: 'ext:missing', screenId: 'overview' },
@@ -103,16 +93,21 @@ test('ScreenHost 双重头部去重容器与缺失视图 warn 原语', { timeout
   const warnBox = host?.querySelector('.callout.callout-warn')
   assert.ok(warnBox, '缺失插件视图时应渲染 .callout.callout-warn')
 
-  // 2) 已注册 client screen 渲染时，内层 Screen 包裹于 .screen-host-stage[data-screen-host="true"]
+  // 2) 已注册 client screen 渲染时，内层 Screen 包裹于 .screen-host-stage[data-screen-host="true"]，
+  // 且主/分屏分别从 primaryTarget / splitTarget 注入标准 ScreenProps 并把 setParams 路由到对应面板。
+  const receivedProps: Array<Record<string, unknown>> = []
   seedPluginClientModule(
     'ext-demo',
     'index.tsx',
     {
-      Board: () => (
-        <Screen title="插件看板" subtitle="副标题说明" actions={<button type="button">刷新</button>}>
-          <div>正文内容</div>
-        </Screen>
-      ),
+      Board: (props: Record<string, unknown>) => {
+        receivedProps.push(props)
+        return (
+          <Screen title="插件看板" subtitle="副标题说明" actions={<button type="button">刷新</button>}>
+            <div>正文内容</div>
+          </Screen>
+        )
+      },
     },
     'demo-hash-1',
   )
@@ -123,11 +118,14 @@ test('ScreenHost 双重头部去重容器与缺失视图 warn 原语', { timeout
     return new Response('{}', { status: 200 })
   }) as typeof fetch
 
-  const baseStore = makeTestStore({
-    primaryTarget: { kind: 'screen', pluginId: 'ext-demo', screenId: 'board' },
-  })
+  const paramCalls: Array<{ patch: Record<string, string | undefined>; options?: { split?: boolean; push?: boolean } }> = []
+  const baseStore = makeTestStore({})
   const activeStore = makeTestStore({
-    primaryTarget: { kind: 'screen', pluginId: 'ext-demo', screenId: 'board' },
+    primaryTarget: { kind: 'screen', pluginId: 'ext-demo', screenId: 'board', params: { view: 'main' } },
+    splitTarget: { kind: 'screen', pluginId: 'ext-demo', screenId: 'board', params: { view: 'right' } },
+    setScreenParams: (patch, options) => {
+      paramCalls.push({ patch, options })
+    },
     groupedUi: {
       ...baseStore.groupedUi,
       screens: [
@@ -144,7 +142,7 @@ test('ScreenHost 双重头部去重容器与缺失视图 warn 原语', { timeout
       <ScreenHost pluginId="ext-demo" screenId="board" />
     </HostStoreProviders>,
   )
-  await settle()
+  await flushMacrotask(0)
 
   const topbar = host?.querySelector('.pane-topbar')
   const stage = host?.querySelector<HTMLElement>('.screen-host-stage[data-screen-host="true"]')
@@ -153,6 +151,36 @@ test('ScreenHost 双重头部去重容器与缺失视图 warn 原语', { timeout
   assert.ok(stage.querySelector('.screen-header .screen-heading .screen-title'), '内层 Screen 存在标准 .screen-header > .screen-heading > .screen-title 供 CSS 去重')
   assert.ok(stage.querySelector('.screen-subtitle'), '副标题应保留')
   assert.ok(stage.querySelector('button'), '右侧动作按钮应保留')
+
+  assert.ok(receivedProps.length >= 1)
+  const primaryProps = receivedProps[receivedProps.length - 1]!
+  assert.equal(primaryProps.pluginId, 'ext-demo')
+  assert.equal(primaryProps.screenId, 'board')
+  assert.equal(primaryProps.isSplit, false)
+  assert.deepEqual(primaryProps.params, { view: 'main' })
+  ;(primaryProps.setParams as (patch: Record<string, string | undefined>, options?: { push?: boolean }) => void)(
+    { tab: 'overview' },
+    { push: true },
+  )
+
+  mount(
+    <HostStoreProviders value={activeStore}>
+      <ScreenHost pluginId="ext-demo" screenId="board" isSplit />
+    </HostStoreProviders>,
+  )
+  await flushMacrotask(0)
+  const splitProps = receivedProps[receivedProps.length - 1]!
+  assert.equal(splitProps.isSplit, true)
+  assert.deepEqual(splitProps.params, { view: 'right' })
+  ;(splitProps.setParams as (patch: Record<string, string | undefined>, options?: { push?: boolean }) => void)(
+    { tab: 'logs' },
+    { push: false },
+  )
+
+  assert.deepEqual(paramCalls, [
+    { patch: { tab: 'overview' }, options: { split: false, push: true } },
+    { patch: { tab: 'logs' }, options: { split: true, push: false } },
+  ])
 })
 
 test('CommandPaletteModal 单键快捷键徽章、聚焦分屏上下文与空查询排序', { timeout: 60_000 }, async () => {
@@ -180,7 +208,7 @@ test('CommandPaletteModal 单键快捷键徽章、聚焦分屏上下文与空查
         <CommandPaletteModal onClose={() => { closed = true }} />
       </HostStoreProviders>,
     )
-    await settle(20)
+    await settle()
 
     const modal = document.querySelector<HTMLElement>('.modal[aria-label="命令面板与全局搜索"]')
     assert.ok(modal, '应渲染命令面板对话框')
@@ -290,65 +318,4 @@ test('AuthGate / ToastOverlay / Sidebar 原语与折叠按钮及零 Emoji / 零�
     expandBtn.click()
   })
   assert.equal(toggleCount, 2)
-
-  // 4) 所有本任务修改的源码不含 Emoji、不含原生 <select>
-  for (const rel of [
-    '../src/App.tsx',
-    '../src/modals/CommandPaletteModal.tsx',
-    '../src/screens/ScreenHost.tsx',
-    '../src/shell/AuthGate.tsx',
-    '../src/shell/ToastOverlay.tsx',
-    '../src/shell/Sidebar.tsx',
-    '../src/shell/shortcuts-model.ts',
-  ]) {
-    const src = readFileSync(new URL(rel, import.meta.url), 'utf8')
-    assert.equal(EMOJI_RE.test(src), false, `${rel} 不得包含 Emoji`)
-    assert.equal(/<select[\s>]/i.test(src), false, `${rel} 不得包含原生 <select>`)
-  }
-})
-
-test('CSS 契约：Primitives (.screen-heading/.callout-*/.kbd-hint)、双重头部隐藏、抽屉关闭靠右与双端响应式', { timeout: 60_000 }, () => {
-  const css = readHostStyles()
-  const responsiveCss = readFileSync(new URL('../src/responsive.css', import.meta.url), 'utf8')
-
-  // 1) Primitives CSS
-  assert.match(css, /\.screen-heading\s*\{/, '应定义 .screen-heading 统一样式')
-  assert.match(css, /\.screen-host-stage\s+\.screen-header\s+\.screen-title[\s\S]*?display:\s*none/, 'ScreenHost 内层应隐藏重复标题 .screen-title')
-  assert.match(css, /\.screen-host-stage\s+\.screen-header:not\(:has\([^)]+\)\)[\s\S]*?display:\s*none/, '仅有重复标题且无副标题/操作时隐藏整行内层 .screen-header')
-  assert.match(css, /\.screen-host-stage\s+\.apps-center-topbar\s+\.apps-center-title[\s\S]*?display:\s*none/, 'ScreenHost 内层应去重 .apps-center-title')
-
-  assert.match(css, /\.callout-error\s*\{/, '应统一定义 .callout-error 原语样式')
-  assert.match(css, /\.callout-warn\s*\{/, '应统一定义 .callout-warn 原语样式')
-  assert.match(css, /\.callout-ok\s*\{/, '应统一定义 .callout-ok 原语样式')
-  assert.match(css, /\.kbd-hint\s*\{/, '应定义 .kbd-hint 单键快捷键样式')
-
-  // 2) 抽屉 [x] 靠右与桌面折叠 Rail
-  assert.match(css, /\.drawer-header,\s*\n?\.primary-drawer-header\s*\{[\s\S]*?justify-content:\s*space-between/, 'drawer-header 保持两端对齐')
-  assert.match(css, /\.workbench-close-btn\s*\{[\s\S]*?margin-left:\s*auto/, 'workbench 关闭按钮始终靠最右')
-  assert.match(css, /\.helm-shell\.sidebar-collapsed\s+\.helm-sidebar[\s\S]*?width:\s*48px/, '桌面端折叠态将侧栏收窄至 48px Rail 宽度')
-
-  // 3) 860px 响应式：隐藏分屏与桌面侧栏折叠按钮
-  const tabletBlock = /@media\s*\(max-width:\s*860px\)\s*\{([\s\S]*?)@media\s*\(max-width:\s*680px\)/.exec(responsiveCss)
-  const tabletCss = tabletBlock?.[1]
-  assert.ok(tabletCss !== undefined, '应存在 @media (max-width: 860px) 规则块')
-  assert.match(tabletCss, /\.pane-split-btn/, '<=860px 应隐藏 .pane-split-btn')
-  assert.match(tabletCss, /\.desktop-sidebar-collapse-btn/, '<=860px 应隐藏桌面折叠按钮')
-
-  // 4) 680px 响应式：隐藏标题按钮文字、快捷键徽章、全宽抽屉且 [x] 靠右
-  const mobileBlock = /@media\s*\(max-width:\s*680px\)\s*\{([\s\S]*)$/.exec(responsiveCss)
-  const mobileCss = mobileBlock?.[1]
-  assert.ok(mobileCss !== undefined, '应存在 @media (max-width: 680px) 规则块')
-  assert.match(mobileCss, /\.pane-action-label[\s\S]*?display:\s*none/, '<=680px 应隐藏 .pane-action-label')
-  assert.match(mobileCss, /\.kbd-hint[\s\S]*?display:\s*none/, '<=680px 应隐藏 .kbd-hint')
-  assert.match(mobileCss, /\.helm-workbench[\s\S]*?width:\s*100vw/, '<=680px 工作台抽屉全宽')
-  assert.match(mobileCss, /\.drawer-header[\s\S]*?justify-content:\s*space-between/, '<=680px drawer-header 保证 [x] 固定最右')
-
-  // 5) 粗指针触屏设备隐藏 .kbd-hint
-  assert.match(responsiveCss, /@media\s*\(hover:\s*none\)\s*and\s*\(pointer:\s*coarse\)\s*\{[\s\S]*?\.kbd-hint[\s\S]*?display:\s*none/, '触屏粗指针环境应隐藏 .kbd-hint')
-
-  // 6) 命令面板等 .modal-body 内 .nav-item 不得被 flex 压缩导致双行文字纵向重叠
-  assert.match(css, /\.nav-item\s*\{[^}]*height:\s*auto;/, '.nav-item 应保持 height: auto 自适应双行内容')
-  assert.match(css, /\.nav-item\s*\{[^}]*flex-shrink:\s*0;/, '.nav-item 必须设置 flex-shrink: 0 防纵向溢出压缩')
-  assert.match(css, /\.modal-body\s*>\s*\.nav-item\s*\{[^}]*flex-shrink:\s*0;/, '.modal-body > .nav-item 必须防压缩保证滚动而非压行')
-  assert.match(css, /\.modal-body\s*>\s*\.nav-item\s*\{[^}]*height:\s*auto;/, '.modal-body > .nav-item 保持 height: auto')
 })

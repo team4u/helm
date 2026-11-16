@@ -27,7 +27,7 @@ import { createPluginBuildProvider } from '@helm/plugin-build'
 import { createHerdrPlugin } from '../src/herdr.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { completeBackend } from '../../kernel/test/helpers/host-backend-stub.js'
-import { FsOutputFiles, serveTransport } from './helpers/herdr-unit-fixture.js'
+import { FsOutputFiles, HERDR_FAST_TEST_TIMINGS, serveTransport } from './helpers/herdr-unit-fixture.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
 import { SEND_KEYS_CAS_CAPABILITY } from '../src/herdr/rpc.js'
 
@@ -372,7 +372,7 @@ async function makeEnv(): Promise<Env> {
     config: new MemoryConfigStore({ socketPath }),
   })
   hostRef.current = host
-  await host.register(createHerdrPlugin(), { enabled: true })
+  await host.register(createHerdrPlugin(HERDR_FAST_TEST_TIMINGS), { enabled: true })
   await host.register(createWorkflowPlugin())
   return {
     host,
@@ -388,7 +388,7 @@ async function makeEnv(): Promise<Env> {
   }
 }
 
-async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 8_000, intervalMs = 25): Promise<void> {
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 8_000, intervalMs = 10): Promise<void> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     if (await predicate()) return

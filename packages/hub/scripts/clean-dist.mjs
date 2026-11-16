@@ -1,13 +1,10 @@
 #!/usr/bin/env node
 /**
- * 构建前置清理：删除本包 dist。
- *
- * Why：tsc 增量输出不清理陈旧文件，交付必须只含当前源码树的产物；
- * payload / 桌面组装按目录整体复制本包 dist，陈旧文件会被悄悄带走。
+ * 构建前置清理：增量裁剪本包 dist 中已无对应源码的陈旧产物（--force / HELM_CLEAN_DIST=1 全量清空）。
  */
-import { rmSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runCleanDistCli } from '../../../scripts/lib/prune-dist.mjs';
 
 const pkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-rmSync(join(pkgRoot, 'dist'), { recursive: true, force: true });
+runCleanDistCli(pkgRoot, process.argv.slice(2), { preserveClients: false });

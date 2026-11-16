@@ -11,6 +11,7 @@ import net from 'node:net';
 import { exec as execCb } from 'node:child_process';
 import {
   createNodeEnvRpcServer,
+  MAX_IPC_FRAME_BYTES,
   resolveHerdrIpcEndpoint,
 } from '../src/daemon/env-rpc-server.js';
 
@@ -826,9 +827,8 @@ test('升级排空纳入 IPC：draining 拒新 call/subscribe，在途 call 不�
   await waitListening(echo.path);
 
   // 在途一次性 call（无 callId）也计入排空口径：升级事务据此等待其收敛
-  const pending = server.ipcCall!({ endpoint: hold.path, line: 'wait-req', timeoutMs: 600 });
-  await delay(150);
-  assert.equal(server.getActiveIpcCallCount(), 1, '在途 IPC call 应计入排空计数');
+  const pending = server.ipcCall!({ endpoint: hold.path, line: 'wait-req', timeoutMs: 250 });
+  await waitFor(() => server.getActiveIpcCallCount() === 1, 2_000, '在途 IPC call 应计入排空计数');
 
   server.setDraining(true);
   const rejectedCall = await server.ipcCall!({ endpoint: echo.path, line: 'new-call', timeoutMs: 1_000 });
@@ -884,15 +884,17 @@ test('envCleanup：draining/disposed 显式拒绝（按 cwd 杀同 cwd 全部会
 // ---------------------------------------------------------------------------
 
 test('ipcCall 单帧上限：带换行的完整超长行同样拒绝（不再整行进内存回传）', { timeout: 60_000 }, async (t) => {
+  assert.equal(MAX_IPC_FRAME_BYTES, 32 * 1024 * 1024, '默认单帧上限必须为 32 MiB');
   const dir = await tempDir('ipc-frame-limit-');
-  // 回一行超限内容 + '\n'：修复前完整行从不检查长度，直接通过
+  const frameLimitBytes = 64 * 1024;
+  // 回一行超限内容 + '\n'：修复前完整行从不检查长度，直接通过（注入阈值避免测试 32 MiB 分配开销）
   const srv = startLineServer(dir, 'bigline', (_line, socket) => {
-    socket.write(Buffer.concat([Buffer.alloc(32 * 1024 * 1024 + 1, 0x61), Buffer.from('\n')]));
+    socket.write(Buffer.concat([Buffer.alloc(frameLimitBytes + 1, 0x61), Buffer.from('\n')]));
   });
   t.after(async () => {
     await srv.close();
   });
-  const server = createNodeEnvRpcServer({ defaultCwd: dir });
+  const server = createNodeEnvRpcServer({ defaultCwd: dir, maxIpcFrameBytes: frameLimitBytes });
   t.after(async () => {
     await server.dispose();
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);

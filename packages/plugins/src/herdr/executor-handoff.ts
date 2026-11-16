@@ -51,11 +51,13 @@ export interface PaneHandoffPort {
   markFailed(pane: ManagedPane, note: string): Promise<void>
   /** 本机 Gate 执行端口（远端走 transport.runGate）。 */
   runLocalGate: HerdrPluginDependencies['runLocalGate']
+  /** md 交接稳定性复检间隔（测试可缩短；生产缺省 300ms）。 */
+  mdStableRecheckMs?: number
 }
 
 export class PaneHandoff {
   /** md 交接稳定性复检的间隔（两次读一致才接受；json 有 schema 硬校验无需此检）。 */
-  private static readonly MD_STABLE_RECHECK_MS = 300
+  private static readonly DEFAULT_MD_STABLE_RECHECK_MS = 300
 
   constructor(private readonly port: PaneHandoffPort) {}
 
@@ -109,7 +111,8 @@ export class PaneHandoff {
     const readOnceStable = async (): Promise<{ ok: true; value: unknown } | { ok: false; reason: string; recoverable: boolean }> => {
       const first = await readOnce()
       if (!first.ok || request.schema !== undefined) return first
-      await delay(PaneHandoff.MD_STABLE_RECHECK_MS, undefined, { signal: request.signal })
+      const recheckMs = this.port.mdStableRecheckMs ?? PaneHandoff.DEFAULT_MD_STABLE_RECHECK_MS
+      await delay(recheckMs, undefined, { signal: request.signal })
       const second = await readOnce()
       if (!second.ok) return second
       if (second.value !== first.value) {

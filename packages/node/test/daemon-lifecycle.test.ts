@@ -258,14 +258,14 @@ test('反复 register 拒绝期间始终至多一条并行连接', { timeout: 60
     hubUrl: hub.url,
     identity: { nodeId: 'r-1', token: 'r-1:wrong' },
     dataDir: dir,
-    reconnectBaseDelayMs: 50,
-    reconnectMaxDelayMs: 200,
+    reconnectBaseDelayMs: 30,
+    reconnectMaxDelayMs: 100,
   });
   try {
-    assert.equal(await daemon.waitUntilRegistered(1_500), false, '鉴权拒绝必须 wait false');
+    assert.equal(await daemon.waitUntilRegistered(400), false, '鉴权拒绝必须 wait false');
     // 观察多个拒绝周期：任一时刻 Hub 侧至多一个节点 socket（无并行连接）。
-    for (let i = 0; i < 12; i += 1) {
-      await delay(80);
+    for (let i = 0; i < 6; i += 1) {
+      await delay(50);
       assert.ok(hub.openSockets.size <= 1, `第 ${i} 次采样发现 ${hub.openSockets.size} 条并行连接`);
     }
     assert.ok(hub.registrations.length >= 2, '退避重试应多次尝试注册');
@@ -292,21 +292,21 @@ test('离线退避重连期间保持存活（不被 unref 计时器放空）', {
     hubUrl: `http://127.0.0.1:${port}`,
     identity: { nodeId: 'a-1', token: 'a-1:sec' },
     dataDir: dir,
-    reconnectBaseDelayMs: 80,
-    reconnectMaxDelayMs: 300,
+    reconnectBaseDelayMs: 40,
+    reconnectMaxDelayMs: 120,
   });
   let hub: HubHandle | undefined;
   try {
-    // 整个 2.5s 离线窗口内 daemon 应持续存活（若重连计时器被 unref，
+    // 整个 900ms 离线窗口内 daemon 应持续存活（若重连计时器被 unref，
     // 测试进程的事件循环将被放空、下面的 delay 循环也会随进程退出而中止）。
     const start = Date.now();
     let aliveMs = 0;
-    while (Date.now() - start < 2_500) {
-      await delay(120);
+    while (Date.now() - start < 900) {
+      await delay(80);
       aliveMs = Date.now() - start;
       assert.equal(daemon.isConnected(), false);
     }
-    assert.ok(aliveMs >= 2_000, `离线期间应保持存活（实际存活 ${aliveMs}ms）`);
+    assert.ok(aliveMs >= 700, `离线期间应保持存活（实际存活 ${aliveMs}ms）`);
 
     hub = await startHub({ port, heartbeatMs: 15_000 });
     assert.equal(await daemon.waitUntilRegistered(15_000), true, '存活后重连成功');

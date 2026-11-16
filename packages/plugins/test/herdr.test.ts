@@ -45,7 +45,7 @@ import type { DiagnosticsCollection } from '../src/diagnostics.js'
 import { LocalNodeChannel } from '../src/herdr/local-node-channel.js'
 import type { HelmHostNodeIpcPort } from '@helm/protocol'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
-import { FsOutputFiles, ipcLineCall, serveTransport } from './helpers/herdr-unit-fixture.js'
+import { FsOutputFiles, HERDR_FAST_TEST_TIMINGS, ipcLineCall, serveTransport } from './helpers/herdr-unit-fixture.js'
 
 // ---------------------------------------------------------------------------
 // 受控 HerdrTransport
@@ -587,6 +587,7 @@ async function makeEnv(options: {
   dataDir?: string
   transport?: FakeTransport
   backend?: FakeBackend
+  timingOverrides?: Parameters<typeof createHerdrPlugin>[0]
   /** AI 快照解析注入：completeText 可编程实现（零参插件经 host.completeText
    * 装配分析器；返回模型原始文本，由 parseAiSnapshotAnalysisText 解析）。 */
   analyzeBlockedSnapshot?: (input: { snapshot: string; conversationId: number }) => Promise<string>
@@ -631,12 +632,8 @@ async function makeEnv(options: {
   })
   await host.register(
     createHerdrPlugin({
-      pollIntervalMs: 25,
-      blockedBackoffBaseMs: 30,
-      blockedBackoffCapMs: 100,
-      askPollTransientBackoffBaseMs: 30,
-      askPollTransientBackoffCapMs: 100,
-      abortCancelBackoffCapMs: 100,
+      ...HERDR_FAST_TEST_TIMINGS,
+      ...options.timingOverrides,
     }),
     { enabled: options.enabled ?? true },
   )
@@ -933,9 +930,8 @@ test('非法输入拒绝: 相对 cwd / 非法 kind / nodeId 注入 / 显式 mode
 // ---------------------------------------------------------------------------
 
 test('审批桥: 双路径单飞——只建一次 Ask、只发一次键、CAS 复核', { timeout: 60_000 }, async () => {
-  // 退避不用全局快参：本用例验证「同 seq 不重发不重建」窗口，重开需 2 次退避（400+800ms）后才触发。
-  // 生产退避缺省（500ms/4000ms）：本用例只验证同 seq 不重发不重建（100ms 观察窗内必然成立）。
-  const env = await makeEnv()
+  // 退避不用全局快参：本用例验证「同 seq 不重发不重建」窗口，重开需 2 次退避（300+300ms）后才触发。
+  const env = await makeEnv({ timingOverrides: { blockedBackoffBaseMs: 150, blockedBackoffCapMs: 300 } })
   try {
     env.transport.promptStatus = 'blocked'
     const resultPromise = spawnDirect(env, { agentType: 'herdr:agy' })
@@ -948,7 +944,7 @@ test('审批桥: 双路径单飞——只建一次 Ask、只发一次键、CAS �
     const pane = [...env.transport.panes.values()][0]!
     env.transport.emit({ type: 'pane.updated', paneId: pane.paneId })
     env.transport.emit({ type: 'pane.updated', paneId: pane.paneId })
-    await delay(100)
+    await delay(40)
     assert.equal(env.backend.createdAsks.length, 1, '重复事件不重建 Ask')
     // 人类回答 allow-y -> 复核 seq -> 一次 send_keys。
     env.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-y' } })
@@ -956,7 +952,7 @@ test('审批桥: 双路径单飞——只建一次 Ask、只发一次键、CAS �
     assert.deepEqual(env.transport.sendKeysLog[0]!.keys, ['y'])
     // send_keys 已发但 agent.get 短暂仍 blocked 同 seq + socket 重复：不重发不重建。
     env.transport.emit({ type: 'pane.updated', paneId: pane.paneId })
-    await delay(100)
+    await delay(40)
     assert.equal(env.transport.sendKeysLog.length, 1, '同 seq 不重发键')
     assert.equal(env.backend.createdAsks.length, 1)
     // 终端真实进展（延迟推进）-> done -> 文件交接成功。
@@ -1315,7 +1311,7 @@ test('服务启动半途失败: snapshot 失败时自行清理订阅，注册整
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore(), config: new MemoryConfigStore({ socketPath }) })
   try {
     await assert.rejects(
-      host.register(createHerdrPlugin()),
+      host.register(createHerdrPlugin(HERDR_FAST_TEST_TIMINGS)),
       (e: unknown) => ['plugin_registration_failed', 'plugin_service_start_failed', 'herdr_socket'].includes((e as HelmError).code),
     )
     // 订阅已清理（listener 集空）。wire stop() 只 destroy 客户端 socket；
@@ -1367,7 +1363,7 @@ test('启动对账: 孤儿回收；failed 保留；同 ID 换 human agent 不误
     // 真实 ~/.config/herdr/herdr.sock（对账拿到外部 pane 集合，孤儿回收误判）。
     const doc = docs.store.get('builtin:herdr:managed') as { panes: Array<{ target: Record<string, unknown> }> }
     for (const pane of doc.panes) pane.target = { socketPath }
-    await host.register(createHerdrPlugin())
+    await host.register(createHerdrPlugin(HERDR_FAST_TEST_TIMINGS))
     assert.equal(transport.tabs.get('ws-default:t1')!.closed, true, '孤儿（running+done）回收')
     assert.equal(transport.tabs.get('ws-default:t2')!.closed, false, 'failed 保留现场（即使实际 idle）')
     assert.equal(transport.tabs.get('ws-default:t3')!.closed, false, '同 ID 换 human agent 不误关')
@@ -1388,7 +1384,7 @@ test('human 红线: 非自有 pane 的 blocked 事件不建 Ask、不发键', { 
   try {
     env.transport.panes.set('ws-other:p9', { paneId: 'ws-other:p9', tabId: 'ws-other:t9', workspaceId: 'ws-other', agentStatus: 'blocked', seq: 5, cwd: '/tmp' })
     env.transport.emit({ type: 'pane.updated', paneId: 'ws-other:p9' })
-    await delay(100)
+    await delay(40)
     assert.equal(env.backend.createdAsks.length, 0)
     assert.equal(env.transport.sendKeysLog.length, 0)
   } finally {
@@ -1404,7 +1400,7 @@ test('report_metadata 防自激: 同 token 重复事件不重复投射', { timeo
     await waitFor(() => env.transport.calls.some((c) => c.method === 'agent.prompt'))
     const pane = [...env.transport.panes.values()][0]!
     for (let i = 0; i < 5; i += 1) env.transport.emit({ type: 'pane.updated', paneId: pane.paneId })
-    await delay(150)
+    await delay(50)
     const reports = env.transport.metadataReports.filter((r) => r['pane_id'] === pane.paneId)
     assert.ok(reports.length <= 2, `同 token 去重（实际 ${reports.length} 次）`)
     await p
@@ -1714,7 +1710,7 @@ test('单测D-1: 正则命中标准菜单时不调 AI（0ms 快路径优先）',
     env.transport.snapshotText = AGY_TRUST_SNAPSHOT
     const resultPromise = spawnDirect(env, { agentType: 'herdr:agy' })
     await waitFor(() => env.backend.createdAsks.length === 1)
-    await delay(200)
+    await delay(40)
     assert.equal(aiCalls, 0, '正则命中时不调 AI（省 Token）')
     const ask = env.backend.createdAsks[0]!
     const options = ((ask['fields'] as Array<{ name: string; options?: Array<{ label: string; value: string }> }>)[0]!.options)!
@@ -2181,7 +2177,7 @@ async function makeHerdrProbeEnv(
     config: new MemoryConfigStore({ socketPath }),
   })
   try {
-    await host.register(createHerdrPlugin(), { enabled: true })
+    await host.register(createHerdrPlugin(HERDR_FAST_TEST_TIMINGS), { enabled: true })
   } catch (error) {
     await host.dispose().catch(() => {})
     await served.close()
@@ -2223,7 +2219,7 @@ test('herdr tick：agent.get / session.snapshot 全部带 5s 短超时', { timeo
   }
 })
 
-test('herdr tick：5 个 300ms 探针并发采集（串行 1.5s 应压到 1s 内）', { timeout: 60_000 }, async () => {
+test('herdr tick：5 个 100ms 探针并发采集（串行 500ms 应压到 350ms 内）', { timeout: 60_000 }, async () => {
   const panes = Array.from({ length: 5 }, (_, i) => ({
     paneId: `w:p${i + 1}`,
     agentName: `helm-wf-${i + 1}`,
@@ -2233,12 +2229,12 @@ test('herdr tick：5 个 300ms 探针并发采集（串行 1.5s 应压到 1s 内
   }))
   const env = await makeHerdrProbeEnv(panes)
   try {
-    env.transport.agentGetDelayMs = 300
+    env.transport.agentGetDelayMs = 100
     const start = Date.now()
     const payload = await runHerdrTick(env)
     const elapsed = Date.now() - start
     assert.equal(payload.probes.length, 5)
-    assert.ok(elapsed < 1_000, `并发采集应在 1s 内完成（实际 ${elapsed}ms，疑似串行）`)
+    assert.ok(elapsed < 350, `并发采集应在 350ms 内完成（实际 ${elapsed}ms，疑似串行）`)
   } finally {
     await env.close()
   }
@@ -2251,16 +2247,12 @@ test('herdr 订阅断线：onError 后自动退避重连（watchdogEnabled 无�
   try {
     const before = env.transport.subscribeCount
     env.transport.failLatestSubscription(new Error('socket reset by peer'))
-    const deadline = Date.now() + 2_000
-    while (!env.backend.notifications.some((n) => n.title === 'Herdr 事件订阅断开')) {
-      if (Date.now() > deadline) break
-      await delay(50)
-    }
+    await waitFor(() => env.backend.notifications.some((n) => n.title === 'Herdr 事件订阅断开'), 2_000, 15)
     assert.ok(
       env.backend.notifications.some((n) => n.title === 'Herdr 事件订阅断开'),
       '断线应发出通知',
     )
-    await delay(1_800) // 首次退避 ~1s + 余量
+    await waitFor(() => env.transport.subscribeCount > before, 2_000, 15)
     assert.ok(
       env.transport.subscribeCount > before,
       `断线后应自动重建订阅（before=${before} after=${env.transport.subscribeCount}）`,
@@ -2275,9 +2267,10 @@ test('herdr 订阅重连后的流再次断线仍继续退避重试', { timeout: 
   try {
     const before = env.transport.subscribeCount
     env.transport.failLatestSubscription(new Error('down 1'))
-    await delay(1_800)
+    await waitFor(() => env.transport.subscribeCount >= before + 1, 2_000, 15)
+    await delay(30)
     env.transport.failLatestSubscription(new Error('down 2'))
-    await delay(2_500)
+    await waitFor(() => env.transport.subscribeCount >= before + 2, 2_000, 15)
     assert.ok(
       env.transport.subscribeCount >= before + 2,
       `多次断线应持续重连（before=${before} after=${env.transport.subscribeCount}）`,

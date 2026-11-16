@@ -9,10 +9,10 @@
  *
  * runner: tsx --test；每项显式 timeout: 60_000。
  */
-import test from 'node:test'
+import test, { after, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -53,9 +53,11 @@ function write(dir: string, rel: string, content: string): void {
   writeFileSync(abs, content)
 }
 
-/** 多 commit + 工作区脏（暂存/未暂存）+ 未跟踪 + 删除 + rename + 空格路径的完整夹具。 */
-function makeFixtureRepo(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), 'helm-check-changed-'))
+let cachedTemplateRepo: string | undefined
+
+function getTemplateRepo(): string {
+  if (cachedTemplateRepo) return cachedTemplateRepo
+  const dir = mkdtempSync(path.join(tmpdir(), 'helm-check-changed-tpl-'))
   git(dir, 'init', '-b', 'main')
   write(dir, 'base.txt', 'v1')
   write(dir, 'space dir/f.txt', 'v1')
@@ -74,6 +76,21 @@ function makeFixtureRepo(): string {
   write(dir, 'staged file.ts', 's')
   git(dir, 'add', 'staged file.ts')
   write(dir, 'untracked file.ts', 'u')
+  cachedTemplateRepo = dir
+  return dir
+}
+
+after(() => {
+  if (cachedTemplateRepo) {
+    rmSync(cachedTemplateRepo, { recursive: true, force: true })
+    cachedTemplateRepo = undefined
+  }
+})
+
+/** 多 commit + 工作区脏（暂存/未暂存）+ 未跟踪 + 删除 + rename + 空格路径的完整夹具（复用模板仓库）。 */
+function makeFixtureRepo(): string {
+  const dir = mkdtempSync(path.join(tmpdir(), 'helm-check-changed-'))
+  cpSync(getTemplateRepo(), dir, { recursive: true })
   return dir
 }
 
@@ -558,32 +575,33 @@ process.exit(code)
   rmSync(dir, { recursive: true, force: true })
 }
 
-test('进程纪律：孙进程忽略 SIGTERM 时整组仍被收割，退出 143，重复信号幂等', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX 进程组信号语义（128+n 退出码 / kill(-pid)）；Windows 走 taskkill 路径，不适用' : false }, async () => {
-  await runSignalTreeTest('SIGTERM', 143)
-})
+describe('进程纪律与看门狗并发收割', { concurrency: true }, () => {
+  test('进程纪律：孙进程忽略 SIGTERM 时整组仍被收割，退出 143，重复信号幂等', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX 进程组信号语义（128+n 退出码 / kill(-pid)）；Windows 走 taskkill 路径，不适用' : false }, async () => {
+    await runSignalTreeTest('SIGTERM', 143)
+  })
 
-test('进程纪律：孙进程忽略 SIGINT 时同样收割，退出 130', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX 进程组信号语义（128+n 退出码 / kill(-pid)）；Windows 走 taskkill 路径，不适用' : false }, async () => {
-  await runSignalTreeTest('SIGINT', 130)
-})
+  test('进程纪律：孙进程忽略 SIGINT 时同样收割，退出 130', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX 进程组信号语义（128+n 退出码 / kill(-pid)）；Windows 走 taskkill 路径，不适用' : false }, async () => {
+    await runSignalTreeTest('SIGINT', 130)
+  })
 
-test('回归：runManagedCommand → 本仓 run-tests.mjs → 忽略 TERM 孙进程的真实拓扑无孤儿', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX 进程组信号语义（128+n 退出码 / kill(-pid)）；Windows 走 taskkill 路径，不适用' : false }, async () => {
-  // 完整真实链路：外层受管命令 = node scripts/run-tests.mjs <holder>；holder 是一个
-  // 永不结束的 *.test.ts，其内 spawn 忽略 SIGTERM 的孙进程（写 PID marker）。
-  // 取消外层后：run-tests（G1 leader）收到 TERM → 转发其 owned G2 → tsx leader 退出但
-  // G2 孙进程存活 → run-tests 不得因 leader 退出即结算，须等 G2 排空（5s SIGKILL 升级）
-  // 后退 143 → 外层 G1 排空后同样退 143。全部使用生产默认 timings，验证实际拓扑。
-  const dir = path.join(repoRoot, 'node_modules', '.helm-runtests-regression')
-  rmSync(dir, { recursive: true, force: true })
-  mkdirSync(dir, { recursive: true })
-  const marker = path.join(dir, 'grandchild.pid')
-  const holder = path.join(dir, 'hold.test.ts')
-  const grandchildCode =
-    `process.on('SIGTERM', () => {});` +
-    `require('node:fs').writeFileSync(${JSON.stringify(marker)}, String(process.pid));` +
-    `setInterval(() => {}, 1000);`
-  writeFileSync(
-    holder,
-    `import test from 'node:test'
+  test('回归：runManagedCommand → 本仓 run-tests.mjs → 忽略 TERM 孙进程的真实拓扑无孤儿', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX 进程组信号语义（128+n 退出码 / kill(-pid)）；Windows 走 taskkill 路径，不适用' : false }, async () => {
+    // 完整真实链路：外层受管命令 = node scripts/run-tests.mjs <holder>；holder 是一个
+    // 永不结束的 *.test.ts，其内 spawn 忽略 SIGTERM 的孙进程（写 PID marker）。
+    // 取消外层后：run-tests（G1 leader）收到 TERM → 转发其 owned G2 → tsx leader 退出但
+    // G2 孙进程存活 → run-tests 不得因 leader 退出即结算，须等 G2 排空（5s SIGKILL 升级）
+    // 后退 143 → 外层 G1 排空后同样退 143。全部使用生产默认 timings，验证实际拓扑。
+    const dir = path.join(repoRoot, 'node_modules', '.helm-runtests-regression')
+    rmSync(dir, { recursive: true, force: true })
+    mkdirSync(dir, { recursive: true })
+    const marker = path.join(dir, 'grandchild.pid')
+    const holder = path.join(dir, 'hold.test.ts')
+    const grandchildCode =
+      `process.on('SIGTERM', () => {});` +
+      `require('node:fs').writeFileSync(${JSON.stringify(marker)}, String(process.pid));` +
+      `setInterval(() => {}, 1000);`
+    writeFileSync(
+      holder,
+      `import test from 'node:test'
 import { spawn } from 'node:child_process'
 test('hold', { timeout: 60_000 }, () => {
   const g = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildCode)}], { stdio: 'ignore' })
@@ -591,9 +609,9 @@ test('hold', { timeout: 60_000 }, () => {
   return new Promise(() => {})
 })
 `,
-  )
+    )
 
-  const wrapperCode = `
+    const wrapperCode = `
 const m = await import(${JSON.stringify(pathToFileURL(path.join(scriptsDir, 'lib', 'spawn-checked.mjs')).href)})
 // 剥离外层 node:test 注入的递归运行上下文，等价真实开发者 shell 环境。
 const env = { ...process.env }
@@ -608,49 +626,116 @@ const code = await m.runManagedCommand(
 )
 process.exit(code)
 `
-  const wrapper = spawn(process.execPath, ['--input-type=module', '-e', wrapperCode], {
-    cwd: repoRoot,
-    stdio: ['ignore', 'ignore', 'pipe'],
-  })
-  let stderr = ''
-  wrapper.stderr?.on('data', (d) => {
-    stderr += String(d)
-  })
-
-  try {
-    const up = Date.now() + 30_000
-    while (!existsSync(marker) && Date.now() < up) {
-      await new Promise((r) => setTimeout(r, 100))
-    }
-    assert.ok(existsSync(marker), `孙进程 marker 未出现；stderr: ${stderr}`)
-    const grandchildPid = Number(readFileSync(marker, 'utf8'))
-    assert.ok(Number.isInteger(grandchildPid) && grandchildPid > 0)
-
-    wrapper.kill('SIGTERM')
-    const wrapperExit = await new Promise<number | null>((resolve) => {
-      wrapper.on('exit', (c, s) => resolve(c ?? (s === 'SIGTERM' ? 143 : -1)))
+    const wrapper = spawn(process.execPath, ['--input-type=module', '-e', wrapperCode], {
+      cwd: repoRoot,
+      stdio: ['ignore', 'ignore', 'pipe'],
     })
-    assert.equal(
-      wrapperExit,
-      143,
-      `外层应等 G1（含 run-tests 排空 G2）后才按 143 退出；stderr: ${stderr}`,
-    )
-    assert.ok(stderr.includes('owned 测试进程组已排空'), `run-tests 应等待其 G2 排空；stderr: ${stderr}`)
+    let stderr = ''
+    wrapper.stderr?.on('data', (d) => {
+      stderr += String(d)
+    })
 
-    // 忽略 TERM 的孙进程最终必须被 run-tests 的 SIGKILL 升级收割（Linux Z 状态视为已终止）。
-    const gone = await new Promise<boolean>((resolve) => {
-      const start = Date.now()
-      const poll = () => {
-        if (!pidAlive(grandchildPid)) resolve(true)
-        else if (Date.now() - start > 15_000) resolve(false)
-        else setTimeout(poll, 100)
+    try {
+      const up = Date.now() + 30_000
+      while (!existsSync(marker) && Date.now() < up) {
+        await new Promise((r) => setTimeout(r, 100))
       }
-      poll()
-    })
-    assert.ok(gone, `忽略 TERM 的孙进程必须被真实拓扑整组收割，不留孤儿`)
-  } finally {
+      assert.ok(existsSync(marker), `孙进程 marker 未出现；stderr: ${stderr}`)
+      const grandchildPid = Number(readFileSync(marker, 'utf8'))
+      assert.ok(Number.isInteger(grandchildPid) && grandchildPid > 0)
+
+      wrapper.kill('SIGTERM')
+      const wrapperExit = await new Promise<number | null>((resolve) => {
+        wrapper.on('exit', (c, s) => resolve(c ?? (s === 'SIGTERM' ? 143 : -1)))
+      })
+      assert.equal(
+        wrapperExit,
+        143,
+        `外层应等 G1（含 run-tests 排空 G2）后才按 143 退出；stderr: ${stderr}`,
+      )
+      assert.ok(stderr.includes('owned 测试进程组已排空'), `run-tests 应等待其 G2 排空；stderr: ${stderr}`)
+
+      // 忽略 TERM 的孙进程最终必须被 run-tests 的 SIGKILL 升级收割（Linux Z 状态视为已终止）。
+      const gone = await new Promise<boolean>((resolve) => {
+        const start = Date.now()
+        const poll = () => {
+          if (!pidAlive(grandchildPid)) resolve(true)
+          else if (Date.now() - start > 15_000) resolve(false)
+          else setTimeout(poll, 100)
+        }
+        poll()
+      })
+      assert.ok(gone, `忽略 TERM 的孙进程必须被真实拓扑整组收割，不留孤儿`)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('进程纪律：run-tests.mjs 被 SIGKILL 强杀时父死看门狗自动收割 detached 测试进程组', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX 父死看门狗与进程组信号语义；Windows 不适用' : false }, async () => {
+    const dir = path.join(repoRoot, 'node_modules', '.helm-runtests-sigkill')
     rmSync(dir, { recursive: true, force: true })
-  }
+    mkdirSync(dir, { recursive: true })
+    const marker = path.join(dir, 'grandchild.pid')
+    const holder = path.join(dir, 'hold.test.ts')
+    const grandchildCode =
+      `process.on('SIGTERM', () => {}); process.on('SIGINT', () => {});` +
+      `require('node:fs').writeFileSync(${JSON.stringify(marker)}, String(process.pid));` +
+      `setInterval(() => {}, 1000);`
+    writeFileSync(
+      holder,
+      `import test from 'node:test'
+import { spawn } from 'node:child_process'
+test('hold-sigkill', { timeout: 60_000 }, () => {
+  const g = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildCode)}], { stdio: 'ignore' })
+  if (g.pid == null) throw new Error('grandchild spawn failed')
+  return new Promise(() => {})
+})
+`,
+    )
+
+    const env = { ...process.env }
+    delete env.NODE_TEST_CONTEXT
+    const runner = spawn(process.execPath, [path.join(scriptsDir, 'run-tests.mjs'), holder], {
+      cwd: repoRoot,
+      env,
+      stdio: ['ignore', 'ignore', 'pipe'],
+    })
+    let stderr = ''
+    runner.stderr?.on('data', (d) => {
+      stderr += String(d)
+    })
+
+    try {
+      const up = Date.now() + 30_000
+      while (!existsSync(marker) && Date.now() < up) {
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      assert.ok(existsSync(marker), `孙进程 PID marker 未出现；stderr: ${stderr}`)
+      const grandchildPid = Number(readFileSync(marker, 'utf8'))
+      assert.ok(Number.isInteger(grandchildPid) && grandchildPid > 0)
+      assert.ok(pidAlive(grandchildPid), '强杀 run-tests 前孙进程必须存活')
+
+      runner.kill('SIGKILL')
+      const exitSignal = await new Promise<string | null>((resolve) => {
+        runner.on('exit', (_c, s) => resolve(s))
+      })
+      assert.equal(exitSignal, 'SIGKILL')
+
+      // 父进程暴毙后，detached 看门狗应在 1s SIGKILL 升级内收割整棵 detached 测试进程组
+      const gone = await new Promise<boolean>((resolve) => {
+        const start = Date.now()
+        const poll = () => {
+          if (!pidAlive(grandchildPid)) resolve(true)
+          else if (Date.now() - start > 10_000) resolve(false)
+          else setTimeout(poll, 100)
+        }
+        poll()
+      })
+      assert.ok(gone, 'run-tests.mjs 被 SIGKILL 后父死看门狗必须收割其 detached 测试进程组，不留孤儿')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 // ---------------------------------------------------------------- unsafe-dom-assert / safe-test-assert / SIGKILL 看门狗
@@ -757,70 +842,4 @@ test('safe-test-assert：循环 __reactFiber$ 模拟 DOM 节点 assert.equal(el,
     () => assert.deepEqual({ alpha: 1 }, { alpha: 2 }),
     (err: unknown) => err instanceof assert.AssertionError && err.message.includes('alpha'),
   )
-})
-
-test('进程纪律：run-tests.mjs 被 SIGKILL 强杀时父死看门狗自动收割 detached 测试进程组', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX 父死看门狗与进程组信号语义；Windows 不适用' : false }, async () => {
-  const dir = path.join(repoRoot, 'node_modules', '.helm-runtests-sigkill')
-  rmSync(dir, { recursive: true, force: true })
-  mkdirSync(dir, { recursive: true })
-  const marker = path.join(dir, 'grandchild.pid')
-  const holder = path.join(dir, 'hold.test.ts')
-  const grandchildCode =
-    `process.on('SIGTERM', () => {}); process.on('SIGINT', () => {});` +
-    `require('node:fs').writeFileSync(${JSON.stringify(marker)}, String(process.pid));` +
-    `setInterval(() => {}, 1000);`
-  writeFileSync(
-    holder,
-    `import test from 'node:test'
-import { spawn } from 'node:child_process'
-test('hold-sigkill', { timeout: 60_000 }, () => {
-  const g = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildCode)}], { stdio: 'ignore' })
-  if (g.pid == null) throw new Error('grandchild spawn failed')
-  return new Promise(() => {})
-})
-`,
-  )
-
-  const env = { ...process.env }
-  delete env.NODE_TEST_CONTEXT
-  const runner = spawn(process.execPath, [path.join(scriptsDir, 'run-tests.mjs'), holder], {
-    cwd: repoRoot,
-    env,
-    stdio: ['ignore', 'ignore', 'pipe'],
-  })
-  let stderr = ''
-  runner.stderr?.on('data', (d) => {
-    stderr += String(d)
-  })
-
-  try {
-    const up = Date.now() + 30_000
-    while (!existsSync(marker) && Date.now() < up) {
-      await new Promise((r) => setTimeout(r, 100))
-    }
-    assert.ok(existsSync(marker), `孙进程 PID marker 未出现；stderr: ${stderr}`)
-    const grandchildPid = Number(readFileSync(marker, 'utf8'))
-    assert.ok(Number.isInteger(grandchildPid) && grandchildPid > 0)
-    assert.ok(pidAlive(grandchildPid), '强杀 run-tests 前孙进程必须存活')
-
-    runner.kill('SIGKILL')
-    const exitSignal = await new Promise<string | null>((resolve) => {
-      runner.on('exit', (_c, s) => resolve(s))
-    })
-    assert.equal(exitSignal, 'SIGKILL')
-
-    // 父进程暴毙后，detached 看门狗应在 1s SIGKILL 升级内收割整棵 detached 测试进程组
-    const gone = await new Promise<boolean>((resolve) => {
-      const start = Date.now()
-      const poll = () => {
-        if (!pidAlive(grandchildPid)) resolve(true)
-        else if (Date.now() - start > 10_000) resolve(false)
-        else setTimeout(poll, 100)
-      }
-      poll()
-    })
-    assert.ok(gone, 'run-tests.mjs 被 SIGKILL 后父死看门狗必须收割其 detached 测试进程组，不留孤儿')
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
 })

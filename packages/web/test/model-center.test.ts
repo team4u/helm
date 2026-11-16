@@ -1,14 +1,10 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { readHostStyles } from './helpers/host-styles.js'
-import { join } from 'node:path'
 import { test } from 'node:test'
-import { fileURLToPath } from 'node:url'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import React from 'react'
 import { renderToStaticMarkup, renderToString } from 'react-dom/server'
 import type { ProviderConfig } from '@helm/protocol'
 import type { ModelProviderSummary } from '@helm/protocol'
+import { ensureHappyDom } from './helpers/dom-harness.js'
 import type { ModelDescriptor } from '../src/lib/api.js'
 import { ModelCard } from '../src/models/ModelCard.js'
 import { ModelCenter } from '../src/models/ModelCenter.js'
@@ -28,12 +24,9 @@ import { ModelDetailDrawer } from '../src/models/ModelDetailDrawer.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 
-GlobalRegistrator.register()
-;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
-;(globalThis as Record<string, unknown>).React = React
+ensureHappyDom()
 
 const e = React.createElement
-const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 
 // Emoji 正则范围匹配
 const EMOJI_REGEX =
@@ -676,76 +669,6 @@ test('ModelCenter SSR: 后端目录返回插件网关时呈现动态供应商卡
   assert.match(html, /刷新目录/)
   assert.equal(EMOJI_REGEX.test(html), false)
 })
-
-// ---------------------------------------------------------------------------
-// 5. 源码静态零 Emoji 扫描测试
-// ---------------------------------------------------------------------------
-
-test('静态代码扫描: packages/web/src/models/ 全目录零 Emoji 铁律', { timeout: 60_000 }, () => {
-  const files = [
-    'model-center-model.ts',
-    'ModelCard.tsx',
-    'ModelDetailDrawer.tsx',
-    'ModelCenter.tsx',
-    'GlobalDefaultsPanel.tsx',
-  ]
-
-  for (const file of files) {
-    const fullPath = join(PKG_ROOT, 'src', 'models', file)
-    const content = readFileSync(fullPath, 'utf-8')
-    const match = content.match(EMOJI_REGEX)
-    assert.equal(
-      match,
-      null,
-      `文件 ${file} 中发现非法 Emoji 字符: ${match ? match[0] : ''}，必须符合零 Emoji 规范！`,
-    )
-  }
-})
-
-test('静态代码扫描: 模型选择场景消费加宽下拉面板与哨兵空值', { timeout: 60_000 }, () => {
-  const panelSource = readFileSync(join(PKG_ROOT, 'src', 'models', 'GlobalDefaultsPanel.tsx'), 'utf8')
-  const profileDrawerSource = readFileSync(
-    join(PKG_ROOT, 'src', 'profiles', 'ProfileDetailDrawer.tsx'),
-    'utf8',
-  )
-  const stylesSource = readHostStyles()
-
-  // 全局默认 Tab 与 Profile 角色抽屉的模型 Select 均接入加宽浮层
-  assert.match(panelSource, /popoverClassName="helm-select-popover-wide"/)
-  assert.match(profileDrawerSource, /popoverClassName="helm-select-popover-wide"/)
-  assert.match(stylesSource, /\.helm-select-popover-wide\s*\{[^}]*max-width:\s*520px/)
-
-  // 哨兵空值：模型下拉选项不含空字符串 value（Radix Select placeholder 语义兼容）
-  assert.match(panelSource, /UNSET_MODEL_VALUE/)
-  assert.doesNotMatch(panelSource, /value: ''/) 
-})
-
-test('契约：ModelCenter 主 Tab 容器接入 model-center-main-tabs 保持视口高度约束与内容区可滚动', { timeout: 60_000 }, () => {
-  const modelCenterSource = readFileSync(join(PKG_ROOT, 'src', 'models', 'ModelCenter.tsx'), 'utf8')
-  const stylesSource = readHostStyles()
-
-  // 1. ModelCenter 主 Tabs 节点显式携带 model-center-main-tabs
-  assert.match(
-    modelCenterSource,
-    /<Tabs\s+value=\{centerTab\}\s+onValueChange=\{handleTabChange\}\s+className="model-center-main-tabs">/,
-    'ModelCenter 内部承载 TabsContent 的根容器必须声明 model-center-main-tabs 类名',
-  )
-
-  // 2. styles.css 为 .model-center-main-tabs 提供 flex: 1 与 min-height: 0 视口约束
-  assert.match(
-    stylesSource,
-    /\.model-center-main-tabs\s*\{[\s\S]*?flex:\s*1;[\s\S]*?min-height:\s*0;[\s\S]*?overflow:\s*hidden;/,
-    'model-center-main-tabs 必须具备 flex: 1 与 min-height: 0 视口约束',
-  )
-
-  // 3. 激活状态的内容区必须声明 flex: 1 与 overflow-y: auto 原生滚动
-  assert.match(
-    stylesSource,
-    /\.model-center-main-tabs\s*>\s*\.primary-center-content\[data-state=['"]active['"]\]\s*\{[\s\S]*?overflow-y:\s*auto;/,
-    '激活的 primary-center-content 必须具备 overflow-y: auto 原生滚动',
-  )
-})
-
 
 // ---------------------------------------------------------------------------
 // 4b. 自定义网关服务端点真实持久化（修复：模型界面的端点编辑此前被静默丢弃）

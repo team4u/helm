@@ -35,7 +35,7 @@ import { HelmError, type AskResult, type ConversationSummary } from '@helm/proto
 import { PluginHost, type PluginConfigStore, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createHerdrPlugin } from '../src/herdr.js'
 import { completeBackend } from '../../kernel/test/helpers/host-backend-stub.js'
-import { FsOutputFiles, serveTransport } from './helpers/herdr-unit-fixture.js'
+import { FsOutputFiles, HERDR_FAST_TEST_TIMINGS, serveTransport } from './helpers/herdr-unit-fixture.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
 import { parsePong, SEND_KEYS_CAS_CAPABILITY } from '../src/herdr/rpc.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
@@ -478,7 +478,7 @@ async function makeEnv(options: { transport?: SteerFakeTransport; startupTimeout
       startupTimeoutMs: options.startupTimeoutMs ?? 3001,
     }),
   })
-  await host.register(createHerdrPlugin(), { enabled: true })
+  await host.register(createHerdrPlugin(HERDR_FAST_TEST_TIMINGS), { enabled: true })
   return {
     host,
     transport,
@@ -548,7 +548,7 @@ async function spawnRun(
 }
 
 /** 任务 prompt（首轮）投递后等待 pane 进入指定状态。 */
-async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 8_000, intervalMs = 25): Promise<void> {
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 8_000, intervalMs = 10): Promise<void> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     if (await predicate()) return
@@ -1077,7 +1077,7 @@ test('steer: 按 pane 互斥——在途 steer 期间重入拒绝', { timeout: 6
     const { promise, pane } = await spawnRun(env)
     await taskPromptDelivered(env)
     await waitFor(() => pane().agentStatus === 'working')
-    env.transport.steerPromptDelayMs = 250
+    env.transport.steerPromptDelayMs = 80
     const first = env.host.invokeAction('builtin:herdr', 'steer', steerInput(pane())) as Promise<Record<string, unknown>>
     await waitFor(() => steerPromptCalls(env).length >= 1)
     await rejectsSteer(env, steerInput(pane(), { text: '第二条' }), 'herdr_steer_in_flight', 409)
@@ -1173,7 +1173,7 @@ test('steer: run 取消交错——取消后不发送新 prompt，在途单次�
     await taskPromptDelivered(env)
     await waitFor(() => pane().agentStatus === 'working')
     // 在途 steer（慢 RPC）期间取消原 run：abortCleanup 关闭自有窗格。
-    env.transport.steerPromptDelayMs = 300
+    env.transport.steerPromptDelayMs = 100
     const paneState = pane()
     const steerPromise = env.host.invokeAction('builtin:herdr', 'steer', steerInput(paneState)) as Promise<unknown>
     void steerPromise.catch(() => {})

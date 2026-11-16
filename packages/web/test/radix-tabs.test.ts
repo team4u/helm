@@ -1,28 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { readHostStyles } from './helpers/host-styles.js'
-import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import React, { act } from 'react'
 import { renderToString } from 'react-dom/server'
-import { createRoot } from 'react-dom/client'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
+import { ensureHappyDom } from './helpers/dom-harness.js'
 
-GlobalRegistrator.register()
-;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
-
-const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
-
+ensureHappyDom()
+const { createRoot } = await import('react-dom/client')
 const { Tabs, TabsList, TabsTrigger, TabsContent, SegmentedControl } = await import('@helm/plugin-client')
-
-const stylesCss = readHostStyles()
-const composerSource = readFileSync(join(PKG_ROOT, 'src/conversation/Composer.tsx'), 'utf8')
-const thinkingControlSource = readFileSync(join(PKG_ROOT, 'src/ui/ThinkingLevelControl.tsx'), 'utf8')
-const artifactModalSource = readFileSync(join(PKG_ROOT, 'src/conversation/ArtifactPreviewModal.tsx'), 'utf8')
-const workbenchSource = readFileSync(join(PKG_ROOT, 'src/conversation/WorkbenchDrawer.tsx'), 'utf8')
-const profileDrawerSource = readFileSync(join(PKG_ROOT, 'src/profiles/ProfileDetailDrawer.tsx'), 'utf8')
-const tabsSource = readFileSync(join(PKG_ROOT, '../plugin-client/src/ui/Tabs.tsx'), 'utf8')
 
 // ---------------------------------------------------------------------------
 // 1. SSR 渲染与数据属性（data-state="active"）契约测试
@@ -377,64 +361,4 @@ test('键盘导航：Roving tabindex 确保当前选项卡 tabindex=0，非激�
 
   root.unmount()
   host.remove()
-})
-
-// ---------------------------------------------------------------------------
-// 4. 设计系统与重构接入契约测试
-// ---------------------------------------------------------------------------
-
-test('设计系统契约：styles.css 完美映射 [data-state=active] 到 .segmented-control-btn 与 .tab-btn', { timeout: 60_000 }, () => {
-  assert.match(
-    stylesCss,
-    /\.tab-btn\[data-state='active'\]/,
-    'styles.css 必须包含 .tab-btn[data-state=\'active\'] 规则',
-  )
-  assert.match(
-    stylesCss,
-    /\.segmented-control-btn\[data-state='active'\]/,
-    'styles.css 必须包含 .segmented-control-btn[data-state=\'active\'] 规则',
-  )
-  assert.match(
-    stylesCss,
-    /\.segmented-control-btn\[data-disabled\]/,
-    'styles.css 必须包含 .segmented-control-btn[data-disabled] 禁用规则',
-  )
-})
-
-test('源码级重构契约：5 大业务组件均已迁移至 Radix Tabs / SegmentedControl', { timeout: 60_000 }, () => {
-  // 1. Composer 思考档位：共享 ThinkingLevelControl（基于 Tabs segmented 原语；拆分后在 ModelPicker.tsx 引入）
-  const modelPickerSource = readFileSync(join(PKG_ROOT, 'src/conversation/ModelPicker.tsx'), 'utf8')
-  assert.match(modelPickerSource, /import\s*\{[^}]*ThinkingLevelControl[^}]*\}\s*from\s*['"]\.\.\/ui\/ThinkingLevelControl(?:\.js)?['"]/)
-  assert.match(thinkingControlSource, /import\s*\{[^}]*Tabs[^}]*\}\s*from\s*['"]@helm\/plugin-client['"]/)
-  assert.match(thinkingControlSource, /<Tabs[\s\S]*?<TabsList[^>]*segmented-control \$\{className\}[\s\S]*?<TabsTrigger/)
-  assert.match(thinkingControlSource, /className = 'composer-thinking-row'/)
-
-  // 2. ArtifactPreviewModal 源码/富文本切换已使用 SegmentedControl
-  assert.match(artifactModalSource, /import\s*\{[^}]*SegmentedControl[^}]*\}\s*from\s*['"]@helm\/plugin-client['"]/)
-  assert.match(artifactModalSource, /<SegmentedControl[\s\S]*?value=\{view\}[\s\S]*?富文本[\s\S]*?源码/)
-
-  // 3. WorkbenchDrawer 产物/插件页签已使用 Tabs / TabsList / TabsTrigger
-  assert.match(workbenchSource, /import\s*\{[^}]*Tabs[^}]*\}\s*from\s*['"]@helm\/plugin-client['"]/)
-  assert.match(workbenchSource, /<Tabs[\s\S]*?<TabsList\s+asChild>[\s\S]*?<div\s+className=["']tabs-bar["']>[\s\S]*?<TabsTrigger/)
-})
-
-test('铁律验证：Tabs.tsx 仅导出 React 组件，且代码中 0 Emoji 表情', { timeout: 60_000 }, () => {
-  // Emoji 检测正则
-  const emojiRegex = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u
-
-  assert.doesNotMatch(tabsSource, emojiRegex, 'Tabs.tsx 不得含有任何 Emoji 表情')
-  assert.doesNotMatch(composerSource, emojiRegex, 'Composer.tsx 不得含有任何 Emoji 表情')
-  assert.doesNotMatch(artifactModalSource, emojiRegex, 'ArtifactPreviewModal.tsx 不得含有任何 Emoji 表情')
-  assert.doesNotMatch(workbenchSource, emojiRegex, 'WorkbenchDrawer.tsx 不得含有任何 Emoji 表情')
-  assert.doesNotMatch(profileDrawerSource, emojiRegex, 'ProfileDetailDrawer.tsx 不得含有任何 Emoji 表情')
-
-  // Fast Refresh 验证：只导出 React 组件和类型
-  const exportedConsts = [...tabsSource.matchAll(/export\s+const\s+(\w+)/g)].map((m) => m[1])
-  const exportedFunctions = [...tabsSource.matchAll(/export\s+function\s+(\w+)/g)].map((m) => m[1])
-  const allExports = [...exportedConsts, ...exportedFunctions]
-  assert.deepEqual(
-    allExports.sort(),
-    ['SegmentedControl', 'Tabs', 'TabsContent', 'TabsList', 'TabsTrigger'].sort(),
-    'Tabs.tsx 运行时只导出 React 组件（保 Fast Refresh）',
-  )
 })

@@ -18,7 +18,7 @@ import { HelmError, type Profile } from '@helm/protocol'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createHerdrPlugin } from '../src/herdr.js'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
-import { FsOutputFiles, ipcLineCall, serveTransport } from './helpers/herdr-unit-fixture.js'
+import { FsOutputFiles, HERDR_FAST_TEST_TIMINGS, ipcLineCall, serveTransport } from './helpers/herdr-unit-fixture.js'
 import type { HerdrEvent, HerdrNodeChannel, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
 import { SEND_KEYS_CAS_CAPABILITY } from '../src/herdr/rpc.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
@@ -426,7 +426,7 @@ async function makeEnv(opts: { withGetArtifact?: boolean; hubUrls?: Record<strin
     docs: new MemoryDocStore(),
     config: new MemoryConfigStore({ socketPath }),
   })
-  await host.register(createHerdrPlugin(), { enabled: true })
+  await host.register(createHerdrPlugin(HERDR_FAST_TEST_TIMINGS), { enabled: true })
   return {
     host,
     transport,

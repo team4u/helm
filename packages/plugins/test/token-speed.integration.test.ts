@@ -1,6 +1,6 @@
 /**
  * builtin:token-speed 真实组合层集成测试（真 createHelm + 真 PluginHost /
- * Kernel / sessionDoc 持久层 + faux provider 按真实时间节流流式，~1.2s 生成）。
+ * Kernel / sessionDoc 持久层 + faux provider 按真实时间节流流式，~500ms 生成）。
  *
  * 覆盖生命周期全景：
  * 1. 默认停用：无 UI 贡献（COMPOSER_STATUS_SLOT 无注册）；
@@ -26,7 +26,7 @@ import { createPluginBuildProvider } from '@helm/plugin-build'
 import { createHelm } from '../../hub/src/app.js'
 import { TOKEN_SPEED_DOC, TOKEN_SPEED_PLUGIN_ID, type TokenSpeedStatus } from '../src/token-speed/contracts.js'
 
-/** 480 字符 ≈ 120 tokens，tokensPerSecond=100 → 约 1.2s 真实流式生成。 */
+/** 480 字符 ≈ 120 tokens，tokensPerSecond=240 → 约 500ms 真实流式生成（跨越采样窗口）。 */
 const STREAM_TEXT = 'x'.repeat(480)
 const STREAM_TOKENS = 120
 
@@ -39,7 +39,7 @@ interface Env {
 
 async function makeEnv(): Promise<Env> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-token-speed-it-'))
-  const faux = fauxProvider({ tokensPerSecond: 100 })
+  const faux = fauxProvider({ tokensPerSecond: 240 })
   const models = createModels()
   models.setProvider(faux.provider)
   const app = await createHelm({
@@ -84,7 +84,7 @@ async function pollSpeedDoc(
     if (Date.now() - start > deadlineMs) {
       throw new Error(`等待 speed sessionDoc ${what} 超时（最后值：${JSON.stringify(status)}）`)
     }
-    await sleep(50)
+    await sleep(15)
   }
 }
 
@@ -141,7 +141,7 @@ test('token-speed 集成：默认停用无 UI → 启用全链路流式测量 �
     await env.app.kernel.resetConversation(conv.id, { handoff: 'token-speed 集成交接' })
     assert.equal(speedDocOf(env, conv.id), null, 'reset 后不回退显示旧 TPS')
     // reset 后新回合从零重建（证明清空是「宁空不假」而非永久损坏）。
-    env.faux.setResponses([fauxAssistantMessage('y'.repeat(400))])
+    env.faux.setResponses([fauxAssistantMessage('y'.repeat(160))])
     await env.app.kernel.submitInput(conv.id, 'reset 后再测一轮')
     await env.app.kernel.waitForIdle(conv.id)
     const rebuilt = await pollSpeedDoc(
@@ -151,7 +151,7 @@ test('token-speed 集成：默认停用无 UI → 启用全链路流式测量 �
       'reset 后重建终态',
       5_000,
     )
-    assert.equal(rebuilt!.outputTokens, 100, '新回合测量从零累计')
+    assert.equal(rebuilt!.outputTokens, 40, '新回合测量从零累计')
 
     // ---- 6. 停用：文档 404、UI 消失；重启用：prepare 清上周期持久行 --------
     await env.app.kernel.plugins.disable(TOKEN_SPEED_PLUGIN_ID)
@@ -216,15 +216,15 @@ test('token-speed 集成：多工具轮——工具执行期保持有效 TPS 且
 
     env.faux.setResponses([
       fauxAssistantMessage([fauxToolCall('slow_speed_probe', { payload: 'p'.repeat(240) })], { stopReason: 'toolUse' }),
-      fauxAssistantMessage('z'.repeat(400)),
+      fauxAssistantMessage('z'.repeat(320)),
     ])
 
     const conv = await env.app.kernel.createConversation({ title: 'token-speed 多工具轮集成测速' })
     await env.app.kernel.submitInput(conv.id, '请执行工具后再回答')
 
     await toolEntered
-    // 真实阻塞约 250ms，并在 tools 阶段轮询 speed sessionDoc：必须始终保有非零 TPS
-    await sleep(250)
+    // 真实阻塞约 150ms，并在 tools 阶段轮询 speed sessionDoc：必须始终保有非零 TPS
+    await sleep(150)
     const duringTools = await pollSpeedDoc(
       env,
       conv.id,

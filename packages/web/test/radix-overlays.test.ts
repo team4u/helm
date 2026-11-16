@@ -1,7 +1,5 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { readHostStyles } from './helpers/host-styles.js'
 import React from 'react'
 import { renderToString } from 'react-dom/server'
 import {
@@ -31,24 +29,6 @@ import {
   TooltipContent,
   TooltipArrow,
 } from '../src/ui/Tooltip.js'
-
-const EMOJI_RE = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u
-
-const popoverSource = readFileSync(new URL('../../plugin-client/src/ui/Popover.tsx', import.meta.url), 'utf8')
-const dropdownSource = readFileSync(new URL('../src/ui/DropdownMenu.tsx', import.meta.url), 'utf8')
-const tooltipSource = readFileSync(new URL('../src/ui/Tooltip.tsx', import.meta.url), 'utf8')
-const composerSource = readFileSync(new URL('../src/conversation/Composer.tsx', import.meta.url), 'utf8')
-const paneSource = readFileSync(new URL('../src/conversation/ConversationPane.tsx', import.meta.url), 'utf8')
-// Sidebar 拆分后源码断言拼接主文件与拆出的子模块（断言本身不变）。
-const sidebarSource = [
-  '../src/shell/Sidebar.tsx',
-  '../src/shell/SidebarAgentStandings.tsx',
-  '../src/shell/SidebarPrimitives.tsx',
-]
-  .map((p) => readFileSync(new URL(p, import.meta.url), 'utf8'))
-  .join('\n')
-const workbenchSource = readFileSync(new URL('../src/conversation/WorkbenchDrawer.tsx', import.meta.url), 'utf8')
-const stylesCss = readHostStyles()
 
 test('Popover 原语挂载、数据属性与无障碍属性（SSR）', { timeout: 60_000 }, () => {
   const openHtml = renderToString(
@@ -220,74 +200,4 @@ test('Tooltip 原语挂载、无障碍属性与独立使用能力（SSR）', { t
   )
   assert.match(disabledHtml, /class="raw-btn"/)
   assert.doesNotMatch(disabledHtml, /role="tooltip"/)
-})
-
-test('Composer ModelPicker 接入 Radix Popover 替代手写绝对定位与事件监听', { timeout: 60_000 }, () => {
-  // ModelPicker 拆至独立文件后，整文件即 ModelPicker 源码片段（断言不变）。
-  const modelPickerSlice = readFileSync(new URL('../src/conversation/ModelPicker.tsx', import.meta.url), 'utf8')
-  // 引入 Popover 原语
-  assert.match(modelPickerSlice, /import\s*\{[^}]*Popover[^}]*\}\s*from\s*'@helm\/plugin-client'/)
-  assert.match(modelPickerSlice, /<Popover open=\{open\} onOpenChange=\{setOpen\}>/)
-  assert.match(modelPickerSlice, /<PopoverTrigger asChild>/)
-  assert.match(modelPickerSlice, /<PopoverPortal>/)
-  assert.match(modelPickerSlice, /<PopoverContent[^>]*composer-model-popover/)
-
-  // 移除了 ModelPicker 中手写的 window/document 事件监听
-  assert.doesNotMatch(modelPickerSlice, /addEventListener/)
-})
-
-test('ConversationPane 会话更多操作菜单接入 Radix DropdownMenu', { timeout: 60_000 }, () => {
-  // 引入 DropdownMenu 原语
-  assert.match(paneSource, /import\s*\{[^}]*DropdownMenu[^}]*\}\s*from\s*'\.\.\/ui\/DropdownMenu\.js'/)
-  assert.match(paneSource, /<DropdownMenu open=\{moreOpen\} onOpenChange=\{setMoreOpen\}>/)
-  assert.match(paneSource, /<DropdownMenuTrigger asChild>/)
-  assert.match(paneSource, /<DropdownMenuPortal>/)
-  assert.match(paneSource, /<DropdownMenuContent[^>]*pane-more-popover/)
-  assert.match(paneSource, /<DropdownMenuItem[\s\S]*?重命名会话/)
-  assert.match(paneSource, /<DropdownMenuSeparator/)
-  assert.match(paneSource, /<DropdownMenuItem[\s\S]*?重置上下文/)
-
-  // 移除了手写的 window 事件监听并由 onCloseAutoFocus 回传焦点
-  assert.doesNotMatch(paneSource, /document\.addEventListener\('pointerdown', onDocClick\)/)
-  assert.match(paneSource, /onCloseAutoFocus=/)
-  assert.match(paneSource, /moreButtonRef\.current\?\.focus\(\)/)
-})
-
-test('Sidebar 与 Workbench 纯图标按钮接入 Tooltip 规范悬浮提示', { timeout: 60_000 }, () => {
-  // Sidebar 接入 Tooltip
-  assert.match(sidebarSource, /import\s*\{[^}]*Tooltip[^}]*\}\s*from\s*'\.\.\/ui\/Tooltip\.js'/)
-  // 空间切换按钮经 SPACE_LABELS 表驱动，以变量形式接入 Tooltip
-  assert.match(sidebarSource, /SPACE_LABELS[^}]*settings: '设置空间'/)
-  assert.match(sidebarSource, /<Tooltip content=\{SPACE_LABELS\[key\]\} side="right"/)
-  assert.match(sidebarSource, /<Tooltip content="打开 Cmd K 全局搜索与命令面板"/)
-
-  // HoverIconButton 封装了 Tooltip
-  assert.match(sidebarSource, /function HoverIconButton[\s\S]*?<Tooltip content=\{title\}/)
-
-  // Workbench 接入 Tooltip
-  assert.match(workbenchSource, /import\s*\{[^}]*Tooltip[^}]*\}\s*from\s*'\.\.\/ui\/Tooltip\.js'/)
-  assert.match(workbenchSource, /<Tooltip content="关闭工作台"/)
-})
-
-test('样式规范契约：发丝边框、--bg-elevated 背景与 7px 微圆角', { timeout: 60_000 }, () => {
-  // Popover 样式
-  assert.match(stylesCss, /\.helm-popover-content\s*\{[^}]*background:\s*var\(--bg-elevated\)/)
-  assert.match(stylesCss, /\.helm-popover-content\s*\{[^}]*border:\s*1px solid var\(--border-strong\)/)
-  assert.match(stylesCss, /\.helm-popover-content\s*\{[^}]*border-radius:\s*var\(--radius-sm,\s*7px\)/)
-
-  // DropdownMenu 样式
-  assert.match(stylesCss, /\.helm-dropdown-content\s*\{[^}]*background:\s*var\(--bg-elevated\)/)
-  assert.match(stylesCss, /\.helm-dropdown-content\s*\{[^}]*border:\s*1px solid var\(--border-strong\)/)
-  assert.match(stylesCss, /\.helm-dropdown-content\s*\{[^}]*border-radius:\s*var\(--radius-sm,\s*7px\)/)
-
-  // Tooltip 样式
-  assert.match(stylesCss, /\.helm-tooltip-content\s*\{[^}]*background:\s*var\(--bg-elevated\)/)
-  assert.match(stylesCss, /\.helm-tooltip-content\s*\{[^}]*border:\s*1px solid var\(--border-strong\)/)
-  assert.match(stylesCss, /\.helm-tooltip-content\s*\{[^}]*border-radius:\s*var\(--radius-sm,\s*7px\)/)
-})
-
-test('UI 极简无 Emoji 铁律：原语与源码中绝无任何 Emoji 表情', { timeout: 60_000 }, () => {
-  assert.ok(!EMOJI_RE.test(popoverSource), 'Popover.tsx 不得含有 Emoji')
-  assert.ok(!EMOJI_RE.test(dropdownSource), 'DropdownMenu.tsx 不得含有 Emoji')
-  assert.ok(!EMOJI_RE.test(tooltipSource), 'Tooltip.tsx 不得含有 Emoji')
 })

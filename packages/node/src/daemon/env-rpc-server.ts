@@ -43,7 +43,7 @@ import { drainingRejection, invalidInput, isRecord, rpcFail } from './env-rpc-sh
 import { createIpcBridge, resolveHerdrIpcEndpoint } from './env-rpc-ipc.js';
 import { createTunnelHandler } from './env-rpc-tunnel.js';
 
-export { resolveHerdrIpcEndpoint } from './env-rpc-ipc.js';
+export { MAX_IPC_FRAME_BYTES, resolveHerdrIpcEndpoint } from './env-rpc-ipc.js';
 export type { IpcEndpointContext } from './env-rpc-ipc.js';
 
 export interface NodeEnvRpcServerOptions {
@@ -68,6 +68,8 @@ export interface NodeEnvRpcServerOptions {
    * Herdr 长任务等待不能被守护进程偷偷施加一个额外的固定死线。
    */
   ipcCallIdleTimeoutMs?: number;
+  /** 可选 IPC 单帧（单行）字节上限（默认 MAX_IPC_FRAME_BYTES = 32 MiB）。 */
+  maxIpcFrameBytes?: number;
   /**
    * 进程占用扫描注入（仅测试或受控宿主注入；生产不伪造）：
    * - procRoot：/proc 根替代（缺省 '/proc'）；
@@ -265,6 +267,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     onIpcEvent: options.onIpcEvent,
     onIpcClosed: options.onIpcClosed,
     ipcCallIdleTimeoutMs: ipcIdleTimeoutMs,
+    maxIpcFrameBytes: options.maxIpcFrameBytes,
     isDisposed: () => disposed,
   });
   const tunnels = createTunnelHandler({

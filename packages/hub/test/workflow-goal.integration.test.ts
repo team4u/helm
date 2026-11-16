@@ -9,7 +9,7 @@
  *   隔离树；gate 由内核 settleGate → runGate → runShell 真实执行，超时杀整
  *   个进程组（不 mock 核心超时）。
  * - goal({ label: 'worker-c', isolation: 'worktree', maxAttempts: 3,
- *   gateTimeoutMs: 1500 })：第 1 次门禁挂起 8s（被 1.5s 进程组超时强杀）、
+ *   gateTimeoutMs: 1000 })：第 1 次门禁挂起 3s（被 1s 进程组超时强杀）、
  *   第 2 次门禁 exitCode=1、第 3 次成功。
  * - 断言：三次尝试共用同一 conversationId 与同一 worktree（path/branch/id
  *   一致，全程只派生一个子会话）；账本逐次记录 gate.timedOut / gate.exitCode
@@ -224,15 +224,15 @@ describe('T2 goal 门禁失败自动重试（真内核/faux/WorkflowService/work
     const env = await openRuntime(dataDir, repo)
 
     // 门禁脚本（gate 在 worktree 内执行，按标记文件决定行为）：
-    // - 仅 attempt-1：挂起 8 秒（超过 gateTimeoutMs=1500，应被进程组超时杀掉；
-    //   若 kill 失效，8s 后写出逃逸标记 gate-1-escaped.txt 并以 0 退出）
+    // - 仅 attempt-1：挂起 3 秒（超过 gateTimeoutMs=1000，应被进程组超时杀掉；
+    //   若 kill 失效，3s 后写出逃逸标记 gate-1-escaped.txt 并以 0 退出）
     // - attempt-2 存在：exit 1
     // - attempt-3 存在：exit 0
     const gateCommand =
       'node -e "const fs=require(\'fs\');' +
       "if(fs.existsSync('attempt-3.txt'))process.exit(0);" +
       "if(fs.existsSync('attempt-2.txt'))process.exit(1);" +
-      "setTimeout(function(){fs.writeFileSync('gate-1-escaped.txt','alive')},8000)" +
+      "setTimeout(function(){fs.writeFileSync('gate-1-escaped.txt','alive')},3000)" +
       '"'
     const script =
       'export const meta = { name: "t2-goal-retry", description: "goal 门禁三态重试验收" }\n' +
@@ -241,7 +241,7 @@ describe('T2 goal 门禁失败自动重试（真内核/faux/WorkflowService/work
       '  objective: "T2-GOAL-OBJECTIVE：在隔离工作树内完成提交并通过门禁",\n' +
       '  isolation: "worktree",\n' +
       `  gate: ${JSON.stringify(gateCommand)},\n` +
-      '  gateTimeoutMs: 1500,\n' +
+      '  gateTimeoutMs: 1000,\n' +
       '  maxAttempts: 3,\n' +
       '})\n' +
       'return result\n'
@@ -310,7 +310,7 @@ describe('T2 goal 门禁失败自动重试（真内核/faux/WorkflowService/work
         [[0, 1, false], [1, 2, false], [2, 3, true]],
         `尝试账本应按 index/attempt/ok 落账：${JSON.stringify(entries.map((e) => ({ i: e['index'], a: e['attempt'], ok: e['ok'] })))}`,
       )
-      // 第 1 次：门禁 1.5s 进程组超时强杀（真实 runShell 超时路径）。
+      // 第 1 次：门禁 1s 进程组超时强杀（真实 runShell 超时路径）。
       assert.equal(first['timedOut'], true, '原生门禁超时也应标记本次尝试 timedOut')
       assert.equal(first['gate'].ok, false)
       assert.equal(first['gate'].timedOut, true, '第 1 次门禁应如实回传 timedOut=true')
@@ -338,8 +338,8 @@ describe('T2 goal 门禁失败自动重试（真内核/faux/WorkflowService/work
       }
       assert.ok(existsSync(worktree.path), '重试全程保留同一 worktree（失败不回收）')
 
-      // ---- 进程组 kill 真实性：挂起门禁若未被杀，8s 后会写出逃逸标记；
-      // 且整个 run 会被拖到 8s 以上（本轮实测约 2s）。----
+      // ---- 进程组 kill 真实性：挂起门禁若未被杀，3s 后会写出逃逸标记；
+      // 且整个 run 会被拖到 3s 以上。----
       const goalNode = (run.nodes ?? []).find((n: Record<string, any>) => n['label'] === 'worker-c')
       assert.ok(goalNode, '应存在 label worker-c 的 agent 节点')
       assert.equal(goalNode!['status'], 'done')
@@ -349,19 +349,19 @@ describe('T2 goal 门禁失败自动重试（真内核/faux/WorkflowService/work
         'run 摘要应携带 createdAt/updatedAt',
       )
       assert.ok(
-        run['updatedAt'] - run['createdAt'] < 8_000,
-        `整个 run 用时 ${run['updatedAt'] - run['createdAt']}ms 应远小于 8s 挂起下限（门禁被 1.5s 进程组超时终止）`,
+        run['updatedAt'] - run['createdAt'] < 3_000,
+        `整个 run 用时 ${run['updatedAt'] - run['createdAt']}ms 应远小于 3s 挂起下限（门禁被 1s 进程组超时终止）`,
       )
       const escaped = findFileRecursive(dir, 'gate-1-escaped.txt')
       if (escaped.length > 0) {
         // 已存在即立刻失败（快于逃逸窗口的防御分支）。
         assert.fail(`门禁进程逃逸（未被进程组杀死）：${escaped.join(', ')}`)
       }
-      while (Date.now() - startedAt < 9_500) await sleep(200)
+      while (Date.now() - startedAt < 3_500) await sleep(100)
       assert.deepEqual(
         findFileRecursive(dir, 'gate-1-escaped.txt'),
         [],
-        '被杀门禁进程在 8s 逃逸窗口后不得写出存活标记（进程组 kill 真实生效）',
+        '被杀门禁进程在 3s 逃逸窗口后不得写出存活标记（进程组 kill 真实生效）',
       )
     } finally {
       await env.close()

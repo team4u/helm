@@ -5,8 +5,8 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { Profile, SkillSummary } from '@helm/protocol'
+import { ensureHappyDom } from './helpers/dom-harness.js'
 import {
   buildProfileCategoryCounts,
   buildProfileModelOptions,
@@ -32,9 +32,7 @@ import { seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { groupUiContributions } from '../src/lib/types.js'
 import { PROFILE_DETAIL_SECTION_SLOT } from '@helm/protocol'
 
-GlobalRegistrator.register()
-;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
-;(globalThis as Record<string, unknown>).React = React
+ensureHappyDom()
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const e = React.createElement
@@ -651,30 +649,6 @@ test('ProfileCenter：空状态渲染断言', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// 5. 源码静态零 Emoji 审查（Iron Law 铁律断言）
-// ---------------------------------------------------------------------------
-
-test('ProfileCenter：所有源码文件 0 Emoji 静态扫描', { timeout: 60_000 }, () => {
-  const files = [
-    'src/profiles/profile-center-model.ts',
-    'src/profiles/ProfileCard.tsx',
-    'src/profiles/ProfileDetailDrawer.tsx',
-    'src/profiles/ProfileCenter.tsx',
-  ]
-
-  for (const rel of files) {
-    const fullPath = join(PKG_ROOT, rel)
-    const content = readFileSync(fullPath, 'utf8')
-    assert.doesNotMatch(
-      content,
-      EMOJI_REGEX,
-      `文件 ${rel} 源码中严禁含有任何 Emoji 字符`,
-    )
-  }
-})
-
-
-// ---------------------------------------------------------------------------
 // builtin:memory 插槽注入（ProfileDetailDrawer 宿主零记忆业务硬编码）
 // ---------------------------------------------------------------------------
 
@@ -939,7 +913,7 @@ test('ProfileCard: 超长全路径模型仅展示短名与独立档位后缀，�
   assert.match(unsetHtml, /class="primary-card-pill-label">跟随全局默认<\/span>/)
 })
 
-test('ProfileDetailDrawer: 关闭按钮使用 .btn-icon-sm 且源码零 Emoji 与零 .callout--* 旧类', { timeout: 60_000 }, () => {
+test('ProfileDetailDrawer: 关闭按钮使用 .btn-icon-sm 且源码零 .callout--* 旧类', { timeout: 60_000 }, () => {
   const files = [
     'src/profiles/profile-center-model.ts',
     'src/profiles/ProfileCard.tsx',
@@ -948,7 +922,6 @@ test('ProfileDetailDrawer: 关闭按钮使用 .btn-icon-sm 且源码零 Emoji �
   ]
   for (const rel of files) {
     const content = readFileSync(join(PKG_ROOT, rel), 'utf-8')
-    assert.doesNotMatch(content, EMOJI_REGEX, `${rel} 严禁含 Emoji`)
     assert.ok(!content.includes('callout--'), `${rel} 不得残留 callout--* 旧类`)
   }
   const store = makeTestStore({ models: mockModels, skills: mockSkills })

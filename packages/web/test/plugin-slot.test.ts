@@ -7,25 +7,25 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import * as React from 'react'
-import { act } from 'react'
-import { createRoot, type Root } from 'react-dom/client'
-import type { PluginUiContribution } from '@helm/protocol'
-import { PluginClientContext, createPluginClientContext, usePluginContext } from '@helm/plugin-client'
-import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
-import { PluginSlot } from '@helm/plugin-client'
-import { collectSlotItems, isValidSlotTarget } from '../src/ui/plugin-slot-model.js'
-import { seedPluginClientModule } from '../src/lib/plugin-client.js'
-import { makeTestStore } from './helpers/store.js'
-import { HostStoreProviders } from './helpers/host-store.js'
-import { createPluginClientHostPort } from '../src/lib/plugin-client-host.js'
+import type { ConversationSummary, PluginUiContribution } from '@helm/protocol'
+import { ensureHappyDom } from './helpers/dom-harness.js'
+
+ensureHappyDom()
+
+const React = await import('react')
+const { act } = React
+const { createRoot } = await import('react-dom/client')
+type Root = import('react-dom/client').Root
+const { PluginClientContext, createPluginClientContext, usePluginContext, PluginSlot } = await import('@helm/plugin-client')
+const { groupUiContributions, matchesUiScope } = await import('../src/lib/types.js')
+type HelmStoreValue = import('../src/lib/types.js').HelmStoreValue
+const { collectSlotItems, isValidSlotTarget } = await import('../src/ui/plugin-slot-model.js')
+const { seedPluginClientModule } = await import('../src/lib/plugin-client.js')
+const { makeTestStore } = await import('./helpers/store.js')
+const { HostStoreProviders } = await import('./helpers/host-store.js')
+const { createPluginClientHostPort } = await import('../src/lib/plugin-client-host.js')
 
 const e = React.createElement
-;(globalThis as Record<string, unknown>).React = React
-
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
-GlobalRegistrator.register()
-;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 const slotContribution = (pluginId: string, id: string, target: string, extra: Record<string, unknown> = {}): PluginUiContribution => ({
   pluginId,
@@ -159,4 +159,21 @@ test('PluginSlot：环检测显式告警且不死循环', { timeout: 60_000 }, (
   // 有限深度内终止：渲染结果包含环告警文本（链上 p2/cycle 两次出现）
   assert.match(host.textContent ?? '', /循环嵌套|最大深度/, '显式环告警而非栈溢出')
   act(() => { root.unmount() })
+})
+
+test('matchesUiScope：按模型供应商、profileId 与 tags 组合过滤（原 ui-scope.test.ts 合并）', { timeout: 60_000 }, () => {
+  const scopeConversation: ConversationSummary = {
+    id: 1, title: 'Scope fixture', profileId: 'assistant', tags: ['work'],
+    cwd: '/tmp', model: 'example/group/nested-model', thinkingLevel: '', status: 'idle',
+    stateChangeSeq: 1, completionSeq: 0, unread: false, pinned: false,
+    pendingAskCount: 0, createdAt: 1, updatedAt: 1,
+  }
+  const scope = { modelProviders: ['example'], profileIds: ['assistant'], tags: ['work'] }
+  assert.equal(matchesUiScope(scopeConversation, scope), true)
+  assert.equal(matchesUiScope({ ...scopeConversation, model: 'another/model' }, scope), false)
+  assert.equal(matchesUiScope({ ...scopeConversation, profileId: 'another' }, scope), false)
+  assert.equal(matchesUiScope({ ...scopeConversation, model: '' }, scope), false)
+  assert.equal(matchesUiScope(scopeConversation, { modelProviders: [] }), false)
+  assert.equal(matchesUiScope(undefined, scope), false)
+  assert.equal(matchesUiScope(undefined, undefined), true)
 })

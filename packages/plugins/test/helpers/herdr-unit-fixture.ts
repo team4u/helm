@@ -20,7 +20,36 @@ import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { HelmError, type RpcResult } from '@helm/protocol'
-import type { HerdrEvent, HerdrTransport } from '../../src/herdr/contracts.js'
+import type { HerdrEvent, HerdrPluginDependencies, HerdrTransport } from '../../src/herdr/contracts.js'
+
+/**
+ * 单元/集成测试用极速时间参数（缩短轮询、退避、md 稳定性复检与 steer 预算，
+ * 避免无谓真时钟睡眠；生产默认值保留在各自模块内）。
+ */
+export const HERDR_FAST_TEST_TIMINGS: Pick<
+  HerdrPluginDependencies,
+  | 'pollIntervalMs'
+  | 'blockedBackoffBaseMs'
+  | 'blockedBackoffCapMs'
+  | 'askPollTransientBackoffBaseMs'
+  | 'askPollTransientBackoffCapMs'
+  | 'abortCancelBackoffCapMs'
+  | 'mdStableRecheckMs'
+  | 'subscriptionRetryBaseMs'
+  | 'subscriptionRetryCapMs'
+  | 'steerWaitBudgetMs'
+> = {
+  pollIntervalMs: 10,
+  blockedBackoffBaseMs: 15,
+  blockedBackoffCapMs: 60,
+  askPollTransientBackoffBaseMs: 15,
+  askPollTransientBackoffCapMs: 60,
+  abortCancelBackoffCapMs: 80,
+  mdStableRecheckMs: 10,
+  subscriptionRetryBaseMs: 25,
+  subscriptionRetryCapMs: 80,
+  steerWaitBudgetMs: 150,
+}
 
 /**
  * Map 形状的交接文件存储（真实落盘）：生产链路 readLocalOutput /

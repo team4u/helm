@@ -161,13 +161,12 @@ void kernel.spawnAgent({
   onResolved: (info) => { if (info.conversationId) childId = info.conversationId },
   signal: AbortSignal.timeout(120_000),
 }).catch((e) => { process.stderr.write('seed spawn error: ' + e + '\\n') })
-// 等子会话真正进入 working（真实回合在跑）
-for (let i = 0; i < 200; i++) {
-  await delay(100)
-  if (childId && kernel.listConversations().some((c) => c.id === childId && c.status === 'working')) break
+// 等子会话真正进入 working 且模型流式调用已发起（prepare/request 检查点已落盘）
+for (let i = 0; i < 400; i++) {
+  await delay(10)
+  if (childId && faux.state.callCount >= 1 && kernel.listConversations().some((c) => c.id === childId && c.status === 'working')) break
 }
-if (!childId) { process.stderr.write('seed: no child\\n'); process.exit(3) }
-await delay(1200) // 让部分 token 落盘（progress persistWithinMs 默认 1000ms）
+if (!childId || faux.state.callCount < 1) { process.stderr.write('seed: no child\\n'); process.exit(3) }
 // 植入 startBackgroundAgent 的持久 run 记录（新契约：插件私有 records 文档
 // 只存 workflow/runs 轻量索引；完整 RunRecord 落插件数据目录记录文件
 // <dataDir>/plugins/builtin%3Aworkflow/artifacts/<convId>/workflow-<runId>.record.json）
@@ -186,8 +185,7 @@ doc.set('builtin:workflow:records', {
   'workflow/runs': [{ id: 'wf_seed_real', conversationId: 1, status: 'running', createdAt: now, updatedAt: now }],
 })
 await doc.flush()
-process.stdout.write('CHILD=' + childId + '\\n')
-await delay(300) // flush 落盘窗口
+await new Promise((resolve) => process.stdout.write('CHILD=' + childId + '\\n', resolve))
 process.kill(process.pid, 'SIGKILL')
 `
 }
@@ -326,7 +324,8 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
     const startPromise = kernel.start()
     // 屏障中间：workflow prepareRecovery 已落 abort 标记，但没有任何服务 start，
     // 调度器仍 paused、零模型调用。用只读探针 Harness 验证持久中间态。
-    await delay(200)
+    for (let i = 0; i < 400 && !probeOrder.includes('prepare'); i++) await delay(5)
+    assert.ok(probeOrder.includes('prepare'), '探针 prepare 阶段必须已进入屏障')
     const midPrepare = await readOnlyInspect(dataDir)
     assert.equal(midPrepare.scheduling, 'paused', `prepare 屏障期间调度器必须仍 paused（实际 ${midPrepare.scheduling}）`)
     const interruptedTask = midPrepare.tasks.find(
@@ -353,7 +352,7 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
 
     // ---- 5) kernel.start() 恢复调度：旧子会话不再生成新回合 ----
     await kernel.start()
-    await delay(600)
+    await delay(150)
     assert.equal(faux.state.callCount, 1, 'kernel.start 后旧子会话仍不得再发起模型调用')
 
     // 相位自适应（专用恢复方法已删除）：调度器已 resume 后，同一
@@ -501,19 +500,17 @@ const { run } = await kernel.plugins.invokeAction('builtin:workflow', 'run', {
   script: 'export const meta = { name: "sync-sigkill", description: "test" }\\nreturn await agent("slow-sync-step")',
 }) as { run: { id: string } }
 let childId = 0
-for (let i = 0; i < 200; i++) {
-  await delay(50)
+for (let i = 0; i < 400; i++) {
+  await delay(10)
   const working = kernel.listConversations().find((c) => c.parentConversationId === 1 && c.status === 'working')
-  if (working) {
+  if (working && faux.state.callCount >= 1) {
     childId = working.id
     break
   }
 }
 if (!childId) process.exit(4)
-await delay(1100)
 await kernel.documentStore.flush()
-process.stdout.write('CHILD=' + childId + ',RUN=' + run.id + '\\n')
-await delay(100)
+await new Promise((resolve) => process.stdout.write('CHILD=' + childId + ',RUN=' + run.id + '\\n', resolve))
 process.kill(process.pid, 'SIGKILL')
 `,
     'utf8',
@@ -630,8 +627,8 @@ process.kill(process.pid, 'SIGKILL')
     script: 'export const meta = { name: "sync-graceful", description: "test" }\nreturn await agent("slow-sync-close")',
   })) as { run: { id: string } }
   let closeChildId = 0
-  for (let i = 0; i < 200; i++) {
-    await delay(30)
+  for (let i = 0; i < 400; i++) {
+    await delay(10)
     const working = k1.listConversations().find((c) => c.parentConversationId === ROOT && c.status === 'working')
     if (working) {
       closeChildId = working.id
@@ -719,19 +716,20 @@ const { run } = await kernel.plugins.invokeAction('builtin:workflow', 'run', {
   script: 'export const meta = { name: "wt-sigkill", description: "test" }\\nreturn await agent("wt-slow", { isolation: "worktree" })',
 }) as { run: { id: string } }
 let childId = 0
-for (let i = 0; i < 200; i++) {
-  await delay(50)
+for (let i = 0; i < 400; i++) {
+  await delay(10)
   const working = kernel.listConversations().find((c) => c.parentConversationId === 1 && c.status === 'working')
-  if (working) {
+  const wtState = kernel.documentStore.get('builtin:workflow:worktree-state', {})
+  const wtLeases = (wtState['worktree-leases'] ?? {})
+  const hasLease = working && Object.values(wtLeases).some((l) => l && l.info && l.info.conversationId === working.id)
+  if (working && hasLease && faux.state.callCount >= 1) {
     childId = working.id
     break
   }
 }
 if (!childId) process.exit(5)
-await delay(1100)
 await kernel.documentStore.flush()
-process.stdout.write('CHILD=' + childId + ',RUN=' + run.id + '\\n')
-await delay(100)
+await new Promise((resolve) => process.stdout.write('CHILD=' + childId + ',RUN=' + run.id + '\\n', resolve))
 process.kill(process.pid, 'SIGKILL')
 `,
     'utf8',

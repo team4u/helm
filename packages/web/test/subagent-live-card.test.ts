@@ -1149,6 +1149,8 @@ test('折叠子代理卡：不渲染内联流与展开箭头，整卡通过抽�
   assert.ok(!html.includes('subagent-live-stream'), '不得内联渲染实时流')
   assert.ok(!html.includes('进入会话'), '不得渲染进入会话页面按钮')
   assert.ok(!html.includes('并排查看'), '卡片不得渲染并排查看按钮')
+  assert.doesNotMatch(html, /subagent-split-btn|workbench-split-btn/, '卡片不得包含已移除的并排按钮类名')
+  assert.ok(html.includes('打开子会话 #11 抽屉'), '整卡应带有打开抽屉的可访问性描述')
   assert.ok(html.includes('点击打开子会话抽屉'), '应支持点击卡片打开子会话抽屉')
 })
 
