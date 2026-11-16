@@ -18,7 +18,7 @@ import { checkAborted, contextOf, HerdrTransportError } from './transport-shared
 
 /** 交接文件读取上限；超限显式失败，绝不静默截断充当成功。 */
 export const MAX_OUTPUT_BYTES = 32 * 1024 * 1024
-const OUTPUT_FILE_PATTERN = /^wf-out-[A-Za-z0-9_.-]{1,64}\.(json|md)$/
+export const OUTPUT_FILE_PATTERN = /^wf-out-[A-Za-z0-9_.-]{1,64}\.(json|md)$/
 
 export function assertSafeOutputName(fileName: string, target: string): void {
   if (!OUTPUT_FILE_PATTERN.test(fileName)) {

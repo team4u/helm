@@ -225,13 +225,14 @@ export class SteerDispatcher {
       if (this.port.activeTaskOf(key) !== origin || origin.signal?.aborted || this.port.isClosingPane(current)) {
         throw new HelmError('herdr_steer_task_ended', `pane ${pane.paneId} 的输入已投递，但原任务已取消或关闭；请检查现场，不要重发`, 409)
       }
-      // 成功投递后重定向唯一交接文件；结算排空在途 steer 时必然可见。
+      // 成功投递后重定向唯一交接文件并冲刷持久化；结算排空在途 steer 时必然可见。
       this.port.registry.update(nodeIdOf(current), current.paneId, { outputFileName: next })
       const retired = this.steerRetiredFiles.get(key) ?? []
       if (current.outputFileName !== undefined && current.outputFileName !== '') {
         retired.push(current.outputFileName)
       }
       this.steerRetiredFiles.set(key, retired)
+      await this.port.registry.flushDisk()
       return { stateChangeSeq: authority.stateChangeSeq }
     })().finally(() => this.activeSteers.delete(key))
     this.activeSteers.set(key, steer)

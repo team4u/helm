@@ -55,29 +55,37 @@ export interface PaneHandoffPort {
   mdStableRecheckMs?: number
 }
 
+export type HandoffReadAttempt =
+  | { ok: true; value: unknown }
+  | { ok: false; reason: string; recoverable: boolean; kind: 'missing' | 'invalid' }
+
 export class PaneHandoff {
   /** md 交接稳定性复检的间隔（两次读一致才接受；json 有 schema 硬校验无需此检）。 */
   private static readonly DEFAULT_MD_STABLE_RECHECK_MS = 300
 
   constructor(private readonly port: PaneHandoffPort) {}
 
-  async readAndValidateOutput(request: AgentSpawnRequest, pane: ManagedPane): Promise<unknown> {
+  /**
+   * 非破坏性地探测并校验一次交接文件（不触发追问自愈，供 reattach 优先检查）；
+   * 非缺失 IO/逃逸错误照常显式上抛。
+   */
+  async tryReadValidOutput(request: AgentSpawnRequest, pane: ManagedPane): Promise<HandoffReadAttempt> {
     const transport = this.port.transport
     const fileName = pane.outputFileName!
     const target = targetOf(pane)
-    const readOnce = async (): Promise<{ ok: true; value: unknown } | { ok: false; reason: string; recoverable: boolean }> => {
+    const readOnce = async (): Promise<HandoffReadAttempt> => {
       let raw: string
       try {
         raw = await transport.readOutput(target, pane.effectiveCwd, fileName, request.signal)
       } catch (error) {
         if (error instanceof HelmError && error.code === 'herdr_output_missing') {
-          return { ok: false, reason: `交接文件缺失：${fileName}`, recoverable: true }
+          return { ok: false, reason: `交接文件缺失：${fileName}`, recoverable: true, kind: 'missing' }
         }
         // 其它 IO/SSH/权限错误：如实抛诊断，不当缺文件自愈。
         throw error
       }
       if (request.schema === undefined) {
-        if (raw.trim() === '') return { ok: false, reason: '交接文件为空', recoverable: true }
+        if (raw.trim() === '') return { ok: false, reason: '交接文件为空', recoverable: true, kind: 'invalid' }
         return { ok: true, value: this.port.redact(raw) }
       }
       let parsed: unknown
@@ -88,6 +96,7 @@ export class PaneHandoff {
           ok: false,
           reason: `交接文件不是合法 JSON：${err instanceof Error ? err.message : String(err)}`,
           recoverable: true,
+          kind: 'invalid',
         }
       }
       try {
@@ -95,7 +104,7 @@ export class PaneHandoff {
         return { ok: true, value: JSON.parse(this.port.redact(JSON.stringify(parsed))) as unknown }
       } catch (err) {
         if (err instanceof HelmError && err.code === 'schema_validation_failed') {
-          return { ok: false, reason: err.message, recoverable: true }
+          return { ok: false, reason: err.message, recoverable: true, kind: 'invalid' }
         }
         throw err
       }
@@ -108,27 +117,32 @@ export class PaneHandoff {
      * 残余风险：两次读间隔内恰好写完且不再变化的前缀截断仍无法区分，由
      * 自愈追问兑底）。
      */
-    const readOnceStable = async (): Promise<{ ok: true; value: unknown } | { ok: false; reason: string; recoverable: boolean }> => {
-      const first = await readOnce()
-      if (!first.ok || request.schema !== undefined) return first
-      const recheckMs = this.port.mdStableRecheckMs ?? PaneHandoff.DEFAULT_MD_STABLE_RECHECK_MS
-      await delay(recheckMs, undefined, { signal: request.signal })
-      const second = await readOnce()
-      if (!second.ok) return second
-      if (second.value !== first.value) {
-        return { ok: false, reason: '交接文件仍在写入（间隔复读内容不一致）', recoverable: true }
-      }
-      return first
+    const first = await readOnce()
+    if (!first.ok || request.schema !== undefined) return first
+    const recheckMs = this.port.mdStableRecheckMs ?? PaneHandoff.DEFAULT_MD_STABLE_RECHECK_MS
+    await delay(recheckMs, undefined, { signal: request.signal })
+    const second = await readOnce()
+    if (!second.ok) return second
+    if (second.value !== first.value) {
+      return { ok: false, reason: '交接文件仍在写入（间隔复读内容不一致）', recoverable: true, kind: 'invalid' }
     }
+    return first
+  }
 
-    let attempt = await readOnceStable()
+  /** 移除已通过校验的交接文件（幂等）。 */
+  async removeValidatedOutput(pane: ManagedPane, signal?: AbortSignal): Promise<void> {
+    await this.port.transport.removeOutput(targetOf(pane), pane.effectiveCwd, pane.outputFileName!, signal)
+  }
+
+  async readAndValidateOutput(request: AgentSpawnRequest, pane: ManagedPane): Promise<unknown> {
+    let attempt = await this.tryReadValidOutput(request, pane)
     if (!attempt.ok) {
       this.port.notify('Herdr 交接自愈', `pane ${pane.paneId} 首次交接失败（${attempt.reason}），追问一次`, 'info')
       await this.port.project(pane, `heal:${pane.agentName}`)
       // 自愈追问本身也可能 blocked：同一审批桥等待真实进展后再读文件，
       // 不能读缺文件就判失败。
       await this.promptAndWaitHeal(request, pane, attempt.reason)
-      attempt = await readOnceStable()
+      attempt = await this.tryReadValidOutput(request, pane)
     }
     if (!attempt.ok) {
       await this.port.markFailed(pane, attempt.reason)
@@ -140,7 +154,7 @@ export class PaneHandoff {
         { paneId: pane.paneId, reason: attempt.reason, snapshot },
       )
     }
-    await transport.removeOutput(target, pane.effectiveCwd, fileName, request.signal)
+    await this.removeValidatedOutput(pane, request.signal)
     return attempt.value
   }
 

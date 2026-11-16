@@ -15,6 +15,7 @@
 
 import { HelmError, isAbsoluteTargetPath, normalizeTargetPath, type Profile, type TargetPlatform } from '@helm/protocol'
 import { isValidNodeId } from './transport.js'
+import { OUTPUT_FILE_PATTERN } from './transport-output.js'
 
 /** Herdr CLI Agent kind 标识（如 agy/claude/codex/pi；不做枚举硬编码，交由 Herdr 校验）。 */
 const KIND_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/
@@ -263,7 +264,7 @@ export const HashShort = {
 /** 交接文件名：wf-out-<safeId>.json|.md（与 transport 的 OUTPUT_FILE_PATTERN 对齐）。 */
 export function buildOutputFileName(safeId: string, ext: 'json' | 'md'): string {
   const name = `wf-out-${safeId}.${ext}`
-  if (!/^wf-out-[A-Za-z0-9_.-]{1,64}\.(json|md)$/.test(name)) {
+  if (!OUTPUT_FILE_PATTERN.test(name)) {
     throw new HelmError('validation_error', `交接文件名非法：${name}`, 400, { name })
   }
   return name

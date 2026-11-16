@@ -41,6 +41,7 @@ import { PaneRegistry, nodeIdOf, paneCloseKey, paneStateKey, targetOf, type Mana
 import { SteerDispatcher } from './executor-steer.js'
 import { PaneHandoff } from './executor-handoff.js'
 import { ResumeCoordinator } from './executor-resume.js'
+import { ReattachCoordinator } from './executor-reattach.js'
 import {
   assertOkResult,
   parseAgentResult,
@@ -116,6 +117,10 @@ export interface ExecutorHost {
   createAsk(spec: CreateAskSpecLike): Promise<CreateAskResultLike>
   /** 宿主 cancelAsk（404 = 已结算，调用方据此清条目；其余错误如实上抛）。 */
   cancelAsk(askId: string, reason: 'cancelled' | 'superseded'): Promise<void>
+  /** 宿主是否处于整体关停中（isClosing=true 时保活断连，绝不关窗/改标 failed）。可选，缺省 false。 */
+  isClosing?(): boolean
+  /** 本启用周期连接取消信号（服务 stop 时中止，唤醒在途任务等待）。可选。 */
+  connectionSignal?: AbortSignal
 }
 
 interface WindowPane {
@@ -172,6 +177,8 @@ export class HerdrExecutor {
   private readonly paneHandoff: PaneHandoff
   /** resume 权威确认与路由恢复（见 executor-resume.ts）。 */
   private readonly resumeCoordinator: ResumeCoordinator
+  /** 跨重启原位重挂与交接对账（见 executor-reattach.ts）。 */
+  private readonly reattachCoordinator: ReattachCoordinator
 
   constructor(
     private readonly deps: HerdrPluginDependencies,
@@ -246,6 +253,47 @@ export class HerdrExecutor {
       preloadAttachmentMeta: (request) => this.preloadAttachmentMeta(request),
       runManagedTask: (request, pane) => this.runManagedTask(request, pane),
     })
+    this.reattachCoordinator = new ReattachCoordinator({
+      registry: this.registry,
+      profiles: deps.profiles,
+      transport: this.transport,
+      redact: deps.redact,
+      startupTimeoutMs: () => host.startupTimeoutMs(),
+      agentGet: (target, paneId, signal) => this.agentGet(target, paneId, signal),
+      waitInteractiveReady: (target, paneId, initial, signal) =>
+        this.waitInteractiveReady(target, paneId, initial, signal),
+      assertAttachmentsReachable: (request, target, routing) =>
+        this.assertAttachmentsReachable(request, target, routing),
+      executionInfoOf: (pane) => this.executionInfoOf(pane),
+      hasPaneEnv: (key) => this.paneEnvs.has(key),
+      setPaneEnv: (key, env) => {
+        this.paneEnvs.set(key, env)
+      },
+      buildPaneBaselineEnv: (parentConversationId, cwd, routing, target) =>
+        this.buildPaneBaselineEnv(parentConversationId, cwd, routing, target),
+      preloadAttachmentMeta: (request) => this.preloadAttachmentMeta(request),
+      hasActiveTask: (key) => this.activeTasks.has(key),
+      setPhase: (key, phase) => {
+        this.panePhases.set(key, phase)
+      },
+      project: (pane, token) => this.project(pane, token),
+      tryReadValidOutput: (request, pane) => this.paneHandoff.tryReadValidOutput(request, pane),
+      removeValidatedOutput: (pane, signal) => this.paneHandoff.removeValidatedOutput(pane, signal),
+      readAndValidateOutput: (request, pane) => this.paneHandoff.readAndValidateOutput(request, pane),
+      settleThroughSteers: (request, pane, initialFileName, initial) =>
+        this.steerDispatcher.settleThroughSteers(request, pane, initialFileName, initial),
+      clearRetiredOutputs: (request, pane) => this.steerDispatcher.clearRetiredOutputs(request, pane),
+      runGateFor: (request, pane) => this.paneHandoff.runGateFor(request, pane),
+      driveTask: (request, pane) => this.driveTask(request, pane),
+      finishHandoffAndGate: (request, pane, preloadedOutput) =>
+        this.finishHandoffAndGate(request, pane, preloadedOutput),
+      runTaskLifecycle: (request, pane, body) => this.runTaskLifecycle(request, pane, body),
+    })
+  }
+
+  /** 目标窗格当前是否存在正在执行或重挂中的任务（供启动对账规避误关）。 */
+  isActiveTask(pane: ManagedPane): boolean {
+    return this.activeTasks.has(this.paneKey(pane))
   }
 
   /**
@@ -262,6 +310,9 @@ export class HerdrExecutor {
    *   resume）显式拒绝；原生 passthrough 不受影响。
    */
   async handle(request: AgentSpawnRequest): Promise<HandleOutcome> {
+    if (request.reattach !== undefined) {
+      return this.handleReattach(request)
+    }
     if (request.resume !== undefined) {
       const candidates = this.registry.findByResumeRef(request.resume)
       if (candidates.length === 0) {
@@ -297,6 +348,91 @@ export class HerdrExecutor {
     this.assertAttachmentsReachable(request, target, routing)
     const result = await this.spawnNew(request, routing, target)
     return { action: 'handled', result }
+  }
+
+  private async handleReattach(request: AgentSpawnRequest): Promise<HandleOutcome> {
+    const routing = await resolveSpawnRouting(request.agentType, this.deps.profiles)
+    const reattach = request.reattach
+    const isPlainObj = typeof reattach === 'object' && reattach !== null && !Array.isArray(reattach)
+    const executionId = isPlainObj ? reattach.executionId : undefined
+
+    if (routing === undefined) {
+      if (request.agentType !== undefined && request.agentType !== '') {
+        return { action: 'continue' }
+      }
+      if (!isPlainObj || executionId === undefined) {
+        return { action: 'continue' }
+      }
+      const candidates = this.registry.all().filter((p) => p.paneId === executionId)
+      if (candidates.length === 0) {
+        return { action: 'continue' }
+      }
+      this.assertReattachRequestValid(request, false)
+      let pane: ManagedPane | undefined
+      if (candidates.length === 1) {
+        pane = candidates[0]
+      } else {
+        const parentNodeId = targetNodeId({ nodeId: this.parentNodeIdOrThrow(request.parentConversationId) })
+        pane = this.registry.get(parentNodeId, executionId)
+      }
+      if (pane === undefined) {
+        throw new HelmError(
+          'herdr_reattach_missing',
+          `重挂目标 executionId '${executionId}' 存在多节点同名窗格，无法根据父会话唯一确定`,
+          409,
+          { executionId },
+        )
+      }
+      return { action: 'handled', result: await this.reattachCoordinator.reattachInto(request, pane, undefined) }
+    }
+
+    // 目标明确归属 Herdr（herdr:<kind> 或 Profile.runtime.kind === 'herdr'）。
+    this.assertReattachRequestValid(request, true)
+    const target = this.resolveSpawnTarget(request, routing)
+    const pane = this.registry.get(targetNodeId(target), executionId as string)
+    if (pane === undefined) {
+      throw new HelmError(
+        'herdr_reattach_missing',
+        `无法重挂窗格 ${String(executionId)}@${targetNodeId(target) ?? 'local'}：受管窗格记录不存在`,
+        404,
+        { executionId, nodeId: targetNodeId(target) ?? 'local' },
+      )
+    }
+    return { action: 'handled', result: await this.reattachCoordinator.reattachInto(request, pane, routing) }
+  }
+
+  private assertReattachRequestValid(request: AgentSpawnRequest, requireExecutionId: boolean): void {
+    const reattach = request.reattach
+    if (typeof reattach !== 'object' || reattach === null || Array.isArray(reattach)) {
+      throw new HelmError('validation_error', 'reattach 必须是对象', 400)
+    }
+    if (request.resume !== undefined) {
+      throw new HelmError('validation_error', 'reattach 与 resume 互斥：不能同时重挂并续接', 400, {
+        resume: request.resume,
+      })
+    }
+    if (request.fork !== undefined && request.fork !== false) {
+      if (typeof request.fork !== 'boolean') {
+        throw new HelmError('validation_error', `fork 必须为 boolean（收到 ${typeof request.fork}）`, 400, {
+          fork: request.fork,
+        })
+      }
+      throw new HelmError('validation_error', 'reattach 与 fork 互斥：不能同时重挂并分叉派生', 400)
+    }
+    if (reattach.conversationId !== undefined) {
+      throw new HelmError('validation_error', 'Herdr 外部运行时重挂不支持 conversationId', 400, {
+        conversationId: reattach.conversationId,
+      })
+    }
+    if (reattach.executionId === undefined) {
+      if (requireExecutionId) {
+        throw new HelmError('herdr_reattach_missing', 'Herdr 重挂请求缺少 executionId', 400)
+      }
+    } else if (typeof reattach.executionId !== 'string' || reattach.executionId.trim() === '') {
+      throw new HelmError('validation_error', 'reattach.executionId 必须是非空字符串', 400)
+    }
+    this.assertNoGateTimeout(request)
+    assertNoUnsupportedOverrides(request.model, request.effort)
   }
 
   /**
@@ -474,6 +610,7 @@ export class HerdrExecutor {
       createdAt: Date.now(),
     }
     this.registry.add(managed)
+    await this.registry.flushDisk()
     const key = this.paneKey(managed)
     this.paneEnvs.set(key, this.buildPaneBaselineEnv(request.parentConversationId, window.effectiveCwd, routing, window.target))
     this.unstartedPanes.add(key)
@@ -824,13 +961,58 @@ export class HerdrExecutor {
 
   /** 任务启动、首轮、自愈均在同一取消与错误收尾边界内。 */
   private async runManagedTask(request: AgentSpawnRequest, pane: ManagedPane, start?: SpawnRouting): Promise<unknown> {
+    return this.runTaskLifecycle(request, pane, async (effectiveRequest) => {
+      effectiveRequest.signal?.throwIfAborted()
+      effectiveRequest.onResolved?.(this.executionInfoOf(pane))
+      if (start !== undefined) {
+        let info = await this.startAgentAndWaitReady(pane.target, pane.paneId, start, effectiveRequest.signal)
+        this.unstartedPanes.delete(this.paneKey(pane))
+        for (;;) {
+          await this.waitUntilSettled(effectiveRequest, pane, info)
+          info = await this.waitInteractiveReady(
+            pane.target,
+            pane.paneId,
+            await this.agentGet(pane.target, pane.paneId, effectiveRequest.signal),
+            effectiveRequest.signal,
+          )
+          if (info.agentStatus !== 'blocked') break
+        }
+      }
+      return this.driveTask(effectiveRequest, pane)
+    })
+  }
+
+  /** 任务、重挂与自愈共用的生命周期外壳（abort / timeout / connectionAbort / markFailed / 清理）。 */
+  private async runTaskLifecycle(
+    request: AgentSpawnRequest,
+    pane: ManagedPane,
+    body: (effectiveRequest: AgentSpawnRequest) => Promise<unknown>,
+  ): Promise<unknown> {
     const taskKey = this.paneKey(pane)
-    this.activeTasks.set(taskKey, request)
+    if (this.activeTasks.has(taskKey)) {
+      throw new HelmError('pane_busy', `pane ${pane.paneId} 正在被另一个执行占用`, 409, { paneId: pane.paneId })
+    }
+    const connectionSignal = this.host.connectionSignal
+    const effectiveSignal =
+      request.signal !== undefined && connectionSignal !== undefined
+        ? AbortSignal.any([request.signal, connectionSignal])
+        : (request.signal ?? connectionSignal)
+    const effectiveRequest: AgentSpawnRequest =
+      effectiveSignal === request.signal ? request : { ...request, signal: effectiveSignal }
+    this.activeTasks.set(taskKey, effectiveRequest)
     this.panePhases.set(taskKey, 'startup')
     let cleanup: Promise<void> | undefined
     let rejectAbort!: (error: Error) => void
     const aborted = new Promise<never>((_, reject) => { rejectAbort = reject })
     const onAbort = () => {
+      if (this.host.isClosing?.() === true) {
+        rejectAbort(new HelmError('aborted', `pane ${pane.paneId} 因宿主关闭断连保活`, 499))
+        return
+      }
+      if (connectionSignal?.aborted && !request.signal?.aborted) {
+        rejectAbort(new HelmError('aborted', `pane ${pane.paneId} 服务连接已断开`, 499))
+        return
+      }
       if (isTimeoutSignal(request.signal)) {
         rejectAbort(new HelmError('agent_timeout', `pane ${pane.paneId} 执行超时，保留窗格与诊断（resume 前将权威确认底层 CLI 状态）`, 408))
         return
@@ -839,25 +1021,22 @@ export class HerdrExecutor {
       void cleanup.catch(() => {})
       rejectAbort(new HelmError('aborted', `pane ${pane.paneId} 执行已取消`, 499))
     }
-    request.signal?.addEventListener('abort', onAbort, { once: true })
-    if (request.signal?.aborted) onAbort()
-    const task = async () => {
-      request.signal?.throwIfAborted()
-      request.onResolved?.(this.executionInfoOf(pane))
-      if (start !== undefined) {
-        let info = await this.startAgentAndWaitReady(pane.target, pane.paneId, start, request.signal)
-        this.unstartedPanes.delete(this.paneKey(pane))
-        for (;;) {
-          await this.waitUntilSettled(request, pane, info)
-          info = await this.waitInteractiveReady(pane.target, pane.paneId, await this.agentGet(pane.target, pane.paneId, request.signal), request.signal)
-          if (info.agentStatus !== 'blocked') break
-        }
-      }
-      return this.driveTask(request, pane)
-    }
+    effectiveSignal?.addEventListener('abort', onAbort, { once: true })
+    if (effectiveSignal?.aborted) onAbort()
     try {
-      return await Promise.race([aborted, task()])
+      return await Promise.race([aborted, body(effectiveRequest)])
     } catch (error) {
+      if (this.host.isClosing?.() === true) {
+        // 宿主优雅关停：保活断连，绝不关窗、绝不改写 outcome='failed'/'settled'。
+        throw error instanceof HelmError
+          ? error
+          : new HelmError('aborted', `pane ${pane.paneId} 因宿主关闭断连保活`, 499)
+      }
+      if (connectionSignal?.aborted && !request.signal?.aborted) {
+        throw error instanceof HelmError
+          ? error
+          : new HelmError('aborted', `pane ${pane.paneId} 服务连接已断开`, 499)
+      }
       if (isTimeoutSignal(request.signal)) {
         await this.markFailed(pane, error instanceof Error ? error.message : 'execution timed out')
         const snapshot = await this.paneHandoff.readDiagnostic(pane)
@@ -879,6 +1058,10 @@ export class HerdrExecutor {
         throw new HelmError('aborted', `pane ${pane.paneId} 执行已取消`, 499)
       }
       await this.markFailed(pane, error instanceof Error ? error.message : String(error))
+      if (error instanceof HelmError && error.code === 'herdr_ownership_lost') {
+        // 归属已变（可能为人类接管）：不调 agent.read 窥视终端。
+        throw error
+      }
       const snapshot = await this.paneHandoff.readDiagnostic(pane)
       const failure = error as { code?: unknown; status?: unknown }
       throw new HelmError(
@@ -888,7 +1071,7 @@ export class HerdrExecutor {
         { paneId: pane.paneId, snapshot },
       )
     } finally {
-      request.signal?.removeEventListener('abort', onAbort)
+      effectiveSignal?.removeEventListener('abort', onAbort)
       // 本次请求结算（成功/失败/取消）：任务阶段/在途登记/插话失败记录与
       // 附件元数据缓存同步回收，后续 steer 按「无可插话任务」拒绝。
       this.activeTasks.delete(taskKey)
@@ -910,7 +1093,24 @@ export class HerdrExecutor {
     if (latest?.outputFileName === undefined) {
       throw new HelmError('herdr_context_unavailable', `pane ${pane.paneId} 的交接上下文已失效`, 409)
     }
-    const output = await this.paneHandoff.readAndValidateOutput(request, latest)
+    return this.finishHandoffAndGate(request, latest)
+  }
+
+  /** 交接读取（或复用已预读输出）+ 删交接文件 + Gate + 清理作废旧文件 + 置 keepalive。 */
+  private async finishHandoffAndGate(
+    request: AgentSpawnRequest,
+    pane: ManagedPane,
+    preloadedOutput?: unknown,
+  ): Promise<unknown> {
+    const key = this.paneKey(pane)
+    this.panePhases.set(key, 'handoff')
+    let output: unknown
+    if (preloadedOutput !== undefined) {
+      await this.paneHandoff.removeValidatedOutput(pane, request.signal)
+      output = preloadedOutput
+    } else {
+      output = await this.paneHandoff.readAndValidateOutput(request, pane)
+    }
     if (request.gate !== undefined) {
       this.panePhases.set(key, 'gate')
       await this.paneHandoff.runGateFor(request, pane)
@@ -919,6 +1119,7 @@ export class HerdrExecutor {
     // 成功交接后清理已被插话作废的旧结果文件（失败路径保留现场）。
     await this.steerDispatcher.clearRetiredOutputs(request, pane)
     this.registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'keepalive', outputFileName: undefined })
+    await this.registry.flushDisk()
     return output
   }
 
@@ -1110,7 +1311,11 @@ export class HerdrExecutor {
         // 服务 stop 路径：持久 doc 句柄已随停用失效，仅内存标记（对账下周期重建）。
         this.registry.markSettledVolatile(nodeIdOf(pane), pane.paneId)
       } else {
-        this.registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+        this.registry.update(nodeIdOf(pane), pane.paneId, {
+          outcome: 'settled',
+          settledAt: Date.now(),
+          outputFileName: undefined,
+        })
       }
       this.projector.forget(pane.paneId, nodeIdOf(pane))
       this.paneEnvs.delete(this.paneKey(pane))
@@ -1148,7 +1353,15 @@ export class HerdrExecutor {
     try {
       await this.host.cancelAsk(askId, reason)
     } catch (error) {
-      if (error instanceof HelmError && error.status === 404) return
+      if (
+        error instanceof HelmError &&
+        (error.status === 404 ||
+          error.code === 'ask_already_settled' ||
+          error.code === 'plugin_host_disposed' ||
+          error.code === 'plugin_context_expired')
+      ) {
+        return
+      }
       this.host.notify(
         'Herdr 审批销单失败',
         `ask ${askId} cancel 失败：${error instanceof Error ? this.deps.redact(error.message) : String(error)}`,
@@ -1164,6 +1377,7 @@ export class HerdrExecutor {
       outcome: 'failed',
       failureNote: this.deps.redact(note).slice(0, 500),
       settledAt: Date.now(),
+      outputFileName: undefined,
     })
     this.projector.forget(pane.paneId, nodeIdOf(pane))
     for (const removed of this.asks.paneClosed(pane.paneId, nodeIdOf(pane)) ?? []) {
