@@ -178,6 +178,18 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
     width: 38px;
     height: 38px;
   }
+  /* 移动端抽屉 Rail 重排：品牌标识留顶部，空间切换按钮沉底到拇指易达区；
+     主题按钮维持沉底，以通栏分隔线与空间按钮分组区隔，布局清晰不混排 */
+  .activity-rail-spaces {
+    margin-top: auto;
+    padding-bottom: 8px;
+  }
+  .activity-rail-footer {
+    margin-top: 0;
+    align-self: stretch;
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+  }
   .helm-panes > .helm-pane > .pane-topbar { padding-left: max(48px, calc(env(safe-area-inset-left) + 44px)); }
   /* 一级中心（角色/模型/技能/节点/插件）顶栏同样为左上角悬浮汉堡让位 */
   .primary-center-topbar { padding-left: max(48px, calc(env(safe-area-inset-left) + 44px)); }

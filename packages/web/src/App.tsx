@@ -18,6 +18,7 @@ import { ScreenHost } from './screens/ScreenHost.js'
 import { SkillCenter } from './skills/SkillCenter.js'
 import { AuthGate } from './shell/AuthGate.js'
 import { Sidebar } from './shell/Sidebar.js'
+import { useSidebarSwipeGesture } from './shell/sidebar-swipe-model.js'
 import { ToastOverlay } from './shell/ToastOverlay.js'
 import { TooltipProvider } from './ui/Tooltip.js'
 import { useQuietNotifier } from './shell/use-quiet-notifier.js'
@@ -27,6 +28,8 @@ import { versionDeferHint } from './shell/version-watch-model.js'
 function HelmShellInner() {
   const store = useHelmStore()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  // 移动端滑动手势：composer-shell 右滑开、侧栏/遮罩左滑关；汉堡按钮仍是显式兜底。
+  const sidebarSwipe = useSidebarSwipeGesture({ sidebarOpen, onOpenChange: setSidebarOpen })
   // 「全部空闲」浏览器通知：全局装配一次（内部自行门控偏好/认证状态）。
   useQuietNotifier()
   // 版本感知与自动刷新：全局装配一次（生产入口识别不到时内部休眠）。
@@ -94,6 +97,9 @@ function HelmShellInner() {
           setSidebarOpen(false)
         }
       }}
+      onTouchStart={sidebarSwipe.onTouchStart}
+      onTouchEnd={sidebarSwipe.onTouchEnd}
+      onTouchCancel={sidebarSwipe.onTouchCancel}
     >
       <button
         type="button"
