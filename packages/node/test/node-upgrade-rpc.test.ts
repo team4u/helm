@@ -15,10 +15,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import process from 'node:process';
+import { sleep as delay } from '@helm/test-kit';
+import { makeTempDir as tempDir, waitFor as kitWaitFor } from '@helm/test-kit/node';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createBirpc, type BirpcReturn } from 'birpc';
 import type {
@@ -39,21 +40,9 @@ import {
   type StagedNodeRelease,
 } from '../src/daemon/upgrader.js';
 
-const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
 /** 轮询等待可观察条件成立（替代固定 sleep），超时显式失败。 */
-async function waitFor(condition: () => boolean | Promise<boolean>, timeoutMs: number, what: string): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await condition()) return;
-    await delay(20);
-  }
-  assert.ok(await condition(), `等待超时：${what}`);
-}
-
-async function tempDir(prefix: string): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
-}
+const waitFor = (condition: () => boolean | Promise<boolean>, timeoutMs: number, what: string): Promise<void> =>
+  kitWaitFor(condition, { timeoutMs, message: `等待超时：${what}` });
 
 // ---------------------------------------------------------------------------
 // 1. env server draining gate 与 exec 计数（guard 入口受理）

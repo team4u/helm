@@ -32,6 +32,7 @@
   "devDependencies": {
     "@helm/node": "workspace:*",
     "@helm/plugin-build": "workspace:*",
+    "@helm/test-kit": "workspace:*",
     "@types/ws": "^8.18.0"
   }
 }

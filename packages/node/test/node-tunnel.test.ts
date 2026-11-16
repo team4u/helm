@@ -11,16 +11,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import net from 'node:net';
-import os from 'node:os';
 import path from 'node:path';
 import { Duplex, PassThrough, type Duplex as DuplexType } from 'node:stream';
+import { sleep as delay } from '@helm/test-kit';
+import { makeTempDir as tempDir } from '@helm/test-kit/node';
 import { createNodeEnvRpcServer } from '../src/daemon/env-rpc-server.js';
-
-async function tempDir(prefix: string): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
-}
-
-const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** 真实双工对：a 与 b 互为对端，写入 a 的数据可从 b 读到（经隧道流真实转发）。 */
 function duplexPair(): [DuplexType, DuplexType] {

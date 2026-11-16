@@ -15,6 +15,7 @@ import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
 import type { HelmEventFrame, HelmResumedFrame, HelmSnapshot } from '@helm/protocol'
 import { EventHub } from '../src/runtime/events.js'
+import { waitFor } from './helpers.js'
 
 interface HubFixture {
   hub: EventHub
@@ -93,15 +94,6 @@ function connect(hub: EventHub, url: string): {
       controller.abort()
       await reading.catch(() => {})
     },
-  }
-}
-
-/** 等待条件成立（轮询 microtask+短 timer，防挂死）。 */
-async function waitFor(cond: () => boolean, ms = 3000): Promise<void> {
-  const deadline = Date.now() + ms
-  while (!cond()) {
-    if (Date.now() > deadline) throw new Error('waitFor 超时')
-    await new Promise((r) => setTimeout(r, 5))
   }
 }
 

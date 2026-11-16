@@ -20,31 +20,27 @@
  */
 import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import type { HelmEventFrame, MaybePromise } from '@helm/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { EventHub } from '../src/runtime/events.js'
+import { cleanupDir, deferred, makeFauxModels, makeTempDir } from './helpers.js'
 
-type FauxHandle = ReturnType<typeof fauxProvider>
+type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
 
 let root: string
 
 before(async () => {
-  root = mkdtempSync(join(tmpdir(), 'helm-host-event-delivery-'))
+  root = await makeTempDir('helm-host-event-delivery-')
 })
 
 after(async () => {
-  rmSync(root, { recursive: true, force: true })
+  await cleanupDir(root)
 })
 
 async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: FauxHandle }> {
-  const models = createModels()
-  const faux = fauxProvider()
-  models.setProvider(faux.provider)
+  const { models, faux } = makeFauxModels()
   const runtime = await KernelRuntime.open({
     dataDir: dir,
     cwd: dir,
@@ -53,15 +49,6 @@ async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: FauxH
     autoResume: false,
   })
   return Object.assign(runtime, { __faux: faux })
-}
-
-/** 手写 gate：显式握手，不用 sleep 猜时序。 */
-function deferred(): { promise: Promise<void>; resolve(): void } {
-  let resolve!: () => void
-  const promise = new Promise<void>((done) => {
-    resolve = done
-  })
-  return { promise, resolve }
 }
 
 /** 经插件注册内部监听器（真实 ctx.host.onEvent 路径，含 host-api 生命周期包装）。 */

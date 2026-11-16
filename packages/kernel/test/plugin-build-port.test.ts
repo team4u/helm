@@ -17,8 +17,7 @@
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { HelmError, type PluginDefinition } from '@helm/protocol'
@@ -27,33 +26,16 @@ import { PluginHost } from '../src/plugins/plugin-host.js'
 import { UiRegistry } from '../src/plugins/ui-registry.js'
 import { doctorPluginDir } from '../src/plugins/plugin-doctor.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
-import type { PluginDocStore } from '../src/plugins/doc-registry.js'
-
-class MemoryDocStore implements PluginDocStore {
-  private values = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.values.has(key) ? (this.values.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.values.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.values.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.values.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
+import { MemoryDocStore, cleanupDir, makeTempDir } from './helpers.js'
 
 let dataDir: string
 
-beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'helm-build-port-'))
+beforeEach(async () => {
+  dataDir = await makeTempDir('helm-build-port-')
 })
 
-afterEach(() => {
-  rmSync(dataDir, { recursive: true, force: true })
+afterEach(async () => {
+  await cleanupDir(dataDir)
 })
 
 function makeHost(buildProvider?: ReturnType<typeof createPluginBuildProvider>): PluginHost {
@@ -139,7 +121,7 @@ console.log('CHILD_OK')
   writeFileSync(childPath, childSrc)
   t.after(() => {
     try {
-      rmSync(childPath, { force: true })
+      unlinkSync(childPath)
     } catch {
       /* 已随 dataDir 清理 */
     }

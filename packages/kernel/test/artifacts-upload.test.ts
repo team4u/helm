@@ -12,8 +12,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { join } from 'node:path'
-import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { symlink, writeFile } from 'node:fs/promises'
 import {
   ArtifactService,
   CredentialService,
@@ -32,6 +31,7 @@ import { createHubHandler } from '../src/http/index.js'
 import type { EventHub, KernelRuntimeLike} from '../src/http/index.js'
 import { HelmError, type ConversationSummary } from '@helm/protocol'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import { MemoryDocStore, cleanupDir, makeConversationSummary, makeTempDir } from './helpers.js'
 
 // ---------------------------------------------------------------------------
 // 基座
@@ -52,23 +52,7 @@ class NoopEventHub implements EventHub {
 
 function summary(id: number, title: string): ConversationSummary {
   const now = Date.now()
-  return {
-    id,
-    title,
-    profileId: 'assistant',
-    tags: [],
-    cwd: '/tmp',
-    model: 'faux/model',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: now,
-    updatedAt: now,
-  }
+  return makeConversationSummary({ id, title, model: 'faux/model', createdAt: now, updatedAt: now })
 }
 
 function makeKernel(): KernelRuntimeLike {
@@ -88,12 +72,7 @@ function makeKernel(): KernelRuntimeLike {
     plugins: new PluginHost({ buildProvider: createPluginBuildProvider(),
       dataDir,
       host: undefined as unknown as PluginHostBackend,
-      docs: {
-        get: <T,>(_key: string, initial: T): T => initial,
-        set: <T,>(_key: string, _value: T): void => {},
-        deletePlugin: (_pluginId: string): void => {},
-        flush: async () => {},
-      },
+      docs: new MemoryDocStore(),
     }),
     stash,
     async listConversations() {
@@ -174,7 +153,7 @@ async function call(
 }
 
 test.before(async () => {
-  dataDir = await mkdtemp(join(tmpdir(), 'helm-upload-test-'))
+  dataDir = await makeTempDir('helm-upload-test-')
   stash = new SecretStash()
   artifacts = new ArtifactService(dataDir, new InMemoryArtifactRepository(), stash)
   conversations.set(1, summary(1, '个人助理'))
@@ -193,7 +172,7 @@ test.before(async () => {
 })
 
 test.after(async () => {
-  await rm(dataDir, { recursive: true, force: true })
+  await cleanupDir(dataDir)
 })
 
 // ---------------------------------------------------------------------------
@@ -415,7 +394,7 @@ test('HTTP 文本上传触发脱敏（秘密不落盘）；GET 列表包含全�
 })
 
 test('产物读取拒绝跨会话元数据和软链越界，保持二进制字节', { timeout: 60_000 }, async () => {
-  const root = await mkdtemp(join(tmpdir(), 'helm-artifact-boundary-'))
+  const root = await makeTempDir('helm-artifact-boundary-')
   try {
     await ensureDataDir(root)
     const repository = new InMemoryArtifactRepository()
@@ -435,6 +414,6 @@ test('产物读取拒绝跨会话元数据和软链越界，保持二进制字�
     await assert.rejects(artSvc.readContent('link'), /拒绝读取/)
     await assert.rejects(artSvc.spill(-1, 'call', 'text'), /conversationId/)
   } finally {
-    await rm(root, { recursive: true, force: true })
+    await cleanupDir(root)
   }
 })

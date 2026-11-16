@@ -7,14 +7,11 @@
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { createModels } from '@earendil-works/pi-ai/models'
 import {
   fauxAssistantMessage,
-  fauxProvider,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
@@ -37,18 +34,9 @@ import {
   runShell,
 } from '../src/runtime/tools.js'
 import type { HelmToolDeps } from '../src/runtime/tool-deps.js'
+import { cleanupDir, makeFauxModels, makeTempDir } from './helpers.js'
 
-interface FauxHandle {
-  setResponses(messages: unknown[]): void
-  provider: { id: string }
-}
-
-function makeFauxModels() {
-  const models = createModels()
-  const faux = fauxProvider() as unknown as FauxHandle
-  models.setProvider(faux.provider as never)
-  return { models, faux }
-}
+type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
 
 async function openRuntime(dir: string) {
   const { models, faux } = makeFauxModels()
@@ -56,9 +44,9 @@ async function openRuntime(dir: string) {
     dataDir: dir,
     cwd: dir,
     model: 'faux/faux-1',
-    models: models as never,
+    models,
   })
-  return Object.assign(runtime, { __faux: faux } as never)
+  return Object.assign(runtime, { __faux: faux })
 }
 
 /** 真实服务依赖：真实 ArtifactService（Promise 签名）+ 真实 SecretStash。 */
@@ -78,11 +66,11 @@ async function makeRealDeps(dir: string, stash = new SecretStash()): Promise<Hel
 let rootDir: string
 
 before(async () => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-tools-test-'))
+  rootDir = await makeTempDir('helm-tools-test-')
 })
 
 after(async () => {
-  rmSync(rootDir, { recursive: true, force: true })
+  await cleanupDir(rootDir)
 })
 
 describe('runShell 真实进程行为', { timeout: 60_000 }, () => {

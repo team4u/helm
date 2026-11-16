@@ -15,41 +15,23 @@ import { PassThrough } from 'node:stream'
 import http from 'node:http'
 import net from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { HelmError, type ConversationSummary, type HelmHostApi, type PluginDefinition } from '@helm/protocol'
+import { HelmError, type HelmHostApi, type PluginDefinition } from '@helm/protocol'
 import {
   PluginHost,
-  type PluginDocStore,
   type PluginHostBackend,
 } from '../src/plugins/index.js'
 import { projectToolPromptSections } from '../src/runtime/runtime-helpers.js'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import { MemoryDocStore, makeConversationSummary, useTempDir } from './helpers.js'
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 
 // ---------------------------------------------------------------------------
 // 基建
 // ---------------------------------------------------------------------------
 
-function makeConversation(id: number): ConversationSummary {
-  return {
-    id,
-    title: `conv-${id}`,
-    profileId: 'assistant',
-    tags: [],
-    cwd: '/tmp',
-    model: 'test/model',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-  }
+function makeConversation(id: number) {
+  return makeConversationSummary({ id })
 }
 
 interface NodeIpcCalls {
@@ -75,10 +57,8 @@ function makeBackend(over: {
 }): PluginHostBackend {
   const calls = over.nodeIpcCalls ?? { subscribeStarted: [], stopCalls: 0 }
   return {
-    isClosing: () => false,
-    async resolveSpawnTarget() { throw new HelmError('unsupported', 'fixture 不解析 spawn 靶点', 501) },
+    ...createPluginHostBackendFixture(),
     listActiveSpawnExecutions: () => [],
-    async inspectNodePathUsage() { throw new HelmError('unsupported', 'fixture 不扫描进程占用', 501) },
     profiles: {
       list: async () => [{ id: 'assistant' }] as never,
       get: async (id) => ({ id }) as never,
@@ -132,7 +112,6 @@ function makeBackend(over: {
     getConversationOwnership: () => 'helm',
     listArtifacts: async () => [],
     getArtifact: async () => { throw new HelmError('not_found', 'no artifact', 404) },
-    redact: (t) => t,
     refreshModels: async () => ({ providers: [], aborted: false, errors: {}, models: [], providerCatalog: [] }),
     withFileLock: async (_p, fn) => fn(),
     atomicWriteFile: async () => {},
@@ -144,8 +123,6 @@ function makeBackend(over: {
     buildSpawnEnv: () => ({}),
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    execEnv: async () => { throw new HelmError('unsupported', 'fixture', 501) },
-    withFileMutationQueue(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不承载文件互斥队列', 501) },
     manageConversation: () => () => {},
     markConversationOwnership: () => {},
     createAsk: async () => ({ id: 'a', status: 'answered', answers: {} }),
@@ -183,28 +160,10 @@ function makeBackend(over: {
   }
 }
 
-class MemoryDocStore implements PluginDocStore {
-  store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
-
 let dataDir: string
 
 test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
-  dataDir = mkdtempSync(join(tmpdir(), 'helm-host-core-'))
-  t.after(() => rmSync(dataDir, { recursive: true, force: true }))
+  dataDir = useTempDir(t, 'helm-host-core-')
 
   await t.test('epoch 守卫：停用后旧句柄 host 调用一律 409 plugin_context_expired', async () => {
     const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({}), docs: new MemoryDocStore() })

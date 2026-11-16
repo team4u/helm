@@ -16,46 +16,35 @@
  */
 import test, { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   ConfigService,
   CredentialService,
 } from '../src/services/index.js';
 import { HelmPluginConfigStore } from '../src/runtime/plugin-config-store.js';
-import { HelmError, type ConversationSummary, type PluginDefinition } from '@helm/protocol';
+import { HelmError, type PluginDefinition } from '@helm/protocol';
 import {
   PluginHost,
-  type PluginDocStore,
   type PluginConfigStore,
   type PluginHostBackend,
 } from '../src/plugins/index.js';
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
 import { createPluginBuildProvider } from '@helm/plugin-build';
+import {
+  MemoryDocStore,
+  assertRejectsCode,
+  cleanupDir,
+  makeConversationSummary,
+  makeTempDir,
+} from './helpers.js';
 
 // ---------------------------------------------------------------------------
 // 测试基建
 // ---------------------------------------------------------------------------
 
-function makeConversation(id: number): ConversationSummary {
-  return {
-    id,
-    title: `conv-${id}`,
-    profileId: 'default',
-    tags: [],
-    cwd: '/tmp',
-    model: 'test/model',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-  };
+function makeConversation(id: number) {
+  return makeConversationSummary({ id, profileId: 'default' });
 }
 
 function makeHostApi(events: string[]): PluginHostBackend & { __payload: Array<{ type: string; payload: unknown }> } {
@@ -96,24 +85,6 @@ function makeHostApi(events: string[]): PluginHostBackend & { __payload: Array<{
 /** 事件载荷记录器（plugin.changed 断言用）。 */
 function payloadRecorder(hostApi: PluginHostBackend): Array<{ type: string; payload: unknown }> {
   return (hostApi as PluginHostBackend & { __payload?: Array<{ type: string; payload: unknown }> }).__payload ?? [];
-}
-
-class MemoryDocStore implements PluginDocStore {
-  store = new Map<string, unknown>();
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial;
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value));
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-
-  async flush(): Promise<void> {}
 }
 
 /**
@@ -191,26 +162,14 @@ function pluginChangedPayloads(recorder: Array<{ type: string; payload: unknown 
     .map((e) => e.payload as { plugin: { id: string; enabled: boolean }; ui: unknown[] });
 }
 
-async function rejectsCode(promise: Promise<unknown>, code: string): Promise<HelmError> {
-  let caught: HelmError | undefined;
-  await assert.rejects(promise, (err: unknown) => {
-    assert.ok(err instanceof HelmError, `期望 HelmError，实际：${String(err)}`);
-    assert.equal(err.code, code);
-    caught = err;
-    return true;
-  });
-  assert.ok(caught instanceof HelmError);
-  return caught;
-}
-
-beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'helm-plugin-toggle-test-'));
+beforeEach(async () => {
+  dataDir = await makeTempDir('helm-plugin-toggle-test-');
   docs = new MemoryDocStore();
   events = [];
 });
 
-afterEach(() => {
-  rmSync(dataDir, { recursive: true, force: true });
+afterEach(async () => {
+  await cleanupDir(dataDir);
 });
 
 // ---------------------------------------------------------------------------
@@ -240,7 +199,7 @@ test('enabled:false 注册：声明运行获得 schema，但服务不启动、�
   assert.deepEqual(host.listUi(), []);
   assert.deepEqual(host.listRoutes(), []);
   // 动作/工具在停用态拒绝
-  await rejectsCode(host.invokeAction('builtin:herdr', 'ping', {}), 'plugin_disabled');
+  await assertRejectsCode(() => host.invokeAction('builtin:herdr', 'ping', {}), 'plugin_disabled');
   // runHook 无参与者直通
   const r = await host.runHook('trigger', {
     id: 'e1',
@@ -474,7 +433,7 @@ test('locked 插件恒启用：声明 enabled:false 也强行启用，disable 40
   );
   assert.equal(host.list().find((p) => p.id === 'builtin:profile')!.enabled, true);
   assert.deepEqual(started, ['start']);
-  await rejectsCode(host.disable('builtin:profile'), 'plugin_locked');
+  await assertRejectsCode(() => host.disable('builtin:profile'), 'plugin_locked');
   // locked 未持久化任何启停值（disable 被拒不产生写副作用）
   assert.equal(store.enabled.has('builtin:profile'), false);
 });
@@ -492,7 +451,7 @@ test('disable 持久化失败：实际已停用仍发真实 plugin.changed(enabl
 
   const rec = recorder;
   const before = pluginChangedPayloads(rec).length;
-  const err = await rejectsCode(host.disable('builtin:herdr'), 'plugin_enabled_persist_failed');
+  const err = (await assertRejectsCode(() => host.disable('builtin:herdr'), 'plugin_enabled_persist_failed')) as HelmError;
   assert.equal(err.status, 500);
   assert.match(err.message, /磁盘只读/);
   assert.doesNotThrow(() => JSON.stringify(err.details));
@@ -519,7 +478,7 @@ test('disable stop 与持久化双失败：stop 诊断为主链，persistError �
   );
   const rec = recorder;
   const before = pluginChangedPayloads(rec).length;
-  const err = await rejectsCode(host.disable('builtin:herdr'), 'plugin_service_stop_failed');
+  const err = (await assertRejectsCode(() => host.disable('builtin:herdr'), 'plugin_service_stop_failed')) as HelmError;
   const details = err.details as {
     stopErrors: Array<{ serviceId: string; error: { message: string } }>;
     persistError: { message: string };
@@ -544,7 +503,7 @@ test('enable 持久化失败：回滚为停用、不发布 enabled 事件、可�
   store.failSetEnabled = new Error('网络盘断开');
   const rec = recorder;
   const before = pluginChangedPayloads(rec).length;
-  const err = await rejectsCode(host.enable('builtin:herdr'), 'plugin_enabled_persist_failed');
+  const err = (await assertRejectsCode(() => host.enable('builtin:herdr'), 'plugin_enabled_persist_failed')) as HelmError;
   assert.match(err.message, /网络盘断开/);
   assert.doesNotThrow(() => JSON.stringify(err.details));
 
@@ -574,13 +533,13 @@ test('liveTasks 声明保活任务：无 tracker 在途任务时仍拒绝 disabl
   );
 
   panes.add('win-1');
-  const err = await rejectsCode(host.disable('builtin:herdr'), 'plugin_has_live_tasks');
+  const err = (await assertRejectsCode(() => host.disable('builtin:herdr'), 'plugin_has_live_tasks')) as HelmError;
   assert.equal(err.status, 409);
   assert.deepEqual((err.details as { activeTasks: string[] }).activeTasks, ['pane:win-1']);
   // 拒绝路径不产生任何副作用：未 stop、未持久化、状态未变
   assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, true);
   assert.equal(store.enabled.has('builtin:herdr'), false);
-  const errU = await rejectsCode(host.unregister('builtin:herdr'), 'plugin_has_live_tasks');
+  const errU = (await assertRejectsCode(() => host.unregister('builtin:herdr'), 'plugin_has_live_tasks')) as HelmError;
   assert.deepEqual((errU.details as { activeTasks: string[] }).activeTasks, ['pane:win-1']);
 
   // 任务清空后可停用
@@ -599,7 +558,7 @@ test('liveTasks 异常或非法输出：显式 plugin_live_tasks_check_failed，
       },
     }),
   );
-  const err = await rejectsCode(host.disable('builtin:herdr'), 'plugin_live_tasks_check_failed');
+  const err = (await assertRejectsCode(() => host.disable('builtin:herdr'), 'plugin_live_tasks_check_failed')) as HelmError;
   assert.equal(err.status, 500);
   const details = err.details as { serviceId: string; error: { message: string } };
   assert.equal(details.serviceId, 'daemon');
@@ -613,7 +572,7 @@ test('liveTasks 异常或非法输出：显式 plugin_live_tasks_check_failed，
       liveTasks: (() => ['ok', 42]) as unknown as () => string[],
     }),
   );
-  await rejectsCode(host2.disable('builtin:herdr'), 'plugin_live_tasks_check_failed');
+  await assertRejectsCode(() => host2.disable('builtin:herdr'), 'plugin_live_tasks_check_failed');
 });
 
 test('liveTasks 注册校验：非函数显式 invalid_service_spec；未声明/未启动服务不参与检查', { timeout: 60_000 }, async () => {
@@ -682,7 +641,7 @@ test('register 定义抛错：无论 options.enabled 与否，注册整体回滚
       throw new Error('定义崩了');
     },
   };
-  await rejectsCode(host.register(bad, { enabled: false }), 'plugin_registration_failed');
-  await rejectsCode(host.register(bad), 'plugin_registration_failed');
+  await assertRejectsCode(() => host.register(bad, { enabled: false }), 'plugin_registration_failed');
+  await assertRejectsCode(() => host.register(bad), 'plugin_registration_failed');
   assert.equal(host.list().find((p) => p.id === 'p:boom'), undefined);
 });

@@ -16,15 +16,13 @@
  * runner: tsx --test；每项显式 timeout: 60_000。
  */
 import { test } from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 
 import { KernelRuntime } from '../src/runtime/index.js'
+import { cleanupDir, makeFauxModels, makeTempDir } from './helpers.js'
 
 import assert from 'node:assert/strict'
 
@@ -33,17 +31,15 @@ const ROOT_CONVERSATION_ID = 1 as const
 
 interface Env {
   dataDir: string
-  faux: ReturnType<typeof fauxProvider>
+  faux: ReturnType<typeof makeFauxModels>['faux']
   kernel: KernelRuntime
   managedToken: string
   close(): Promise<void>
 }
 
 async function makeEnv(prefix: string): Promise<Env> {
-  const dataDir = mkdtempSync(join(tmpdir(), prefix))
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
+  const dataDir = await makeTempDir(prefix)
+  const { models, faux } = makeFauxModels()
   const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   const managedToken = (kernel as unknown as {
     toolDeps: { processToken(): string | undefined }
@@ -58,7 +54,7 @@ async function makeEnv(prefix: string): Promise<Env> {
       try {
         await kernel.close()
       } finally {
-        rmSync(dataDir, { recursive: true, force: true })
+        await cleanupDir(dataDir)
       }
     },
   }

@@ -31,39 +31,15 @@ import { HookPipeline } from '../src/plugins/hooks.js'
 import { PluginPackageManager, type PackageManagerHost } from '../src/plugins/package-manager.js'
 import { PluginPackageManagerStore } from '../src/plugins/package-store.js'
 import { ConfigService } from '../src/services/config.js'
-import type { PluginConfigStore, PluginDocStore, PluginHostBackend, PluginProviderPort } from '../src/plugins/index.js'
+import type { PluginConfigStore, PluginHostBackend, PluginProviderPort } from '../src/plugins/index.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import type { Provider } from '@earendil-works/pi-ai'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import { MemoryDocStore, assertRejectsCode, deferred } from './helpers.js'
 
 // ---------------------------------------------------------------------------
 // 基建
 // ---------------------------------------------------------------------------
-
-class MemoryDocStore implements PluginDocStore {
-  store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    this.store.delete(pluginId)
-  }
-  async flush(): Promise<void> {}
-}
-
-/** 受控延迟门（确定性时序，不 sleep 竞速）。 */
-function deferred<T = void>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } {
-  let resolve!: (v: T) => void
-  let reject!: (e: unknown) => void
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res
-    reject = rej
-  })
-  return { promise, resolve, reject }
-}
 
 function makeHost(overrides: { deferServices?: boolean; backend?: PluginHostBackend; providers?: PluginProviderPort } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-conc-fix-'))
@@ -90,19 +66,6 @@ function makeHost(overrides: { deferServices?: boolean; backend?: PluginHostBack
       }
     },
   }
-}
-
-async function rejectsCode(promise: Promise<unknown>, code: string, status?: number): Promise<HelmError> {
-  let caught: HelmError | undefined
-  await assert.rejects(promise, (err: unknown) => {
-    assert.ok(err instanceof HelmError, `期望 HelmError，实际：${String(err)}`)
-    assert.equal(err.code, code)
-    if (status !== undefined) assert.equal(err.status, status)
-    caught = err
-    return true
-  })
-  assert.ok(caught instanceof HelmError)
-  return caught
 }
 
 // ---------------------------------------------------------------------------
@@ -152,7 +115,7 @@ test('disable 门禁 TOCTOU：inUse 收集窗口内进入的在途任务被二�
 
     // 释放 inUse（返回空占用）：二次门禁必须抓住窗口内进入的 action → 409
     releaseInUse()
-    await rejectsCode(disabling, 'plugin_has_live_tasks', 409)
+    await assertRejectsCode(() => disabling, 'plugin_has_live_tasks', 409)
     // 状态未被破坏：仍启用且 idle，action 正常收敛
     const summary = host.get('p:toctou')
     assert.equal(summary?.enabled, true)
@@ -188,7 +151,7 @@ test('disable 门禁 plugin_in_use 拒绝后状态保持 enabled+idle，后续�
       },
     }, { enabled: true })
 
-    await rejectsCode(host.disable('p:inuse'), 'plugin_in_use', 409)
+    await assertRejectsCode(() => host.disable('p:inuse'), 'plugin_in_use', 409)
     assert.equal(host.get('p:inuse')?.enabled, true)
     // 门禁拒绝不是终态：插件继续可用
     const out = await host.invokeAction('p:inuse', 'ping', {})
@@ -590,7 +553,7 @@ test('update 回滚诚实性：恢复性 reload 失败不再谎报「已回滚�
     writeFileSync(join(userSrc, 'plugin.json'), JSON.stringify({ id: 'honest-rollback', version: '2.0.0', main: 'index.mjs' }, null, 2))
     writeFileSync(join(userSrc, 'index.mjs'), PLUGIN_SRC('honest-rollback', '2.0.0'))
 
-    const err = await rejectsCode(env.manager.update('honest-rollback'), 'plugin_package_update_failed', 500)
+    const err = (await assertRejectsCode(() => env.manager.update('honest-rollback'), 'plugin_package_update_failed', 500)) as HelmError
     const details = err.details as { rolledBack?: boolean; rollbackError?: { message: string } }
     assert.equal(details.rolledBack, false, '恢复性 reload 失败必须如实 rolledBack:false')
     assert.match(err.message, /旧目录已恢复，但旧实例重载失败/, '错误信息必须说明目录已恢复但实例未恢复')
@@ -618,7 +581,7 @@ test('update 回滚成功路径：恢复性 reload 成功时仍如实 rolledBack
     await env.manager.install(userSrc)
     writeFileSync(join(userSrc, 'plugin.json'), JSON.stringify({ id: 'ok-rollback', version: '2.0.0', main: 'index.mjs' }, null, 2))
     writeFileSync(join(userSrc, 'index.mjs'), PLUGIN_SRC('ok-rollback', '2.0.0'))
-    const err = await rejectsCode(env.manager.update('ok-rollback'), 'plugin_package_update_failed', 500)
+    const err = (await assertRejectsCode(() => env.manager.update('ok-rollback'), 'plugin_package_update_failed', 500)) as HelmError
     assert.equal((err.details as { rolledBack?: boolean }).rolledBack, true)
     assert.match(err.message, /已回滚到更新前目录与实例/)
   } finally {
@@ -636,7 +599,7 @@ test('install 记录持久化失败且回滚注销失败：目录与实例保留
   try {
     const userSrc = writeLocalPlugin(env.cwd, 'keep-dir', '1.0.0')
     env.store.failNextSave = true
-    const err = await rejectsCode(env.manager.install(userSrc, { enable: true }), 'plugin_package_install_failed', 500)
+    const err = (await assertRejectsCode(() => env.manager.install(userSrc, { enable: true }), 'plugin_package_install_failed', 500)) as HelmError
     const details = err.details as { rolledBack?: boolean; rollbackError?: { message: string } }
     assert.equal(details.rolledBack, false, '回滚注销失败必须如实 rolledBack:false')
     assert.match(err.message, /目录与实例已保留/, '错误信息必须说明保留现状待人工处理')
@@ -669,7 +632,7 @@ test('install 注册失败遇并发同名已注册实例：目录保留给该实
   })
   try {
     const userSrc = writeLocalPlugin(env.cwd, 'raced-plugin', '1.0.0')
-    const err = await rejectsCode(env.manager.install(userSrc), 'plugin_package_install_failed', 500)
+    const err = (await assertRejectsCode(() => env.manager.install(userSrc), 'plugin_package_install_failed', 500)) as HelmError
     const details = err.details as { rolledBack?: boolean }
     assert.equal(details.rolledBack, false)
     assert.match(err.message, /同名插件已注册/)
@@ -689,7 +652,7 @@ test('install 注册失败且无同名实例：仍删目录回滚（既有语义
   })
   try {
     const userSrc = writeLocalPlugin(env.cwd, 'plain-fail', '1.0.0')
-    const err = await rejectsCode(env.manager.install(userSrc), 'plugin_package_install_failed', 500)
+    const err = (await assertRejectsCode(() => env.manager.install(userSrc), 'plugin_package_install_failed', 500)) as HelmError
     assert.equal((err.details as { rolledBack?: boolean }).rolledBack, true)
     assert.ok(!existsSync(join(env.dataDir, 'plugins', 'plain-fail')), '无并发实例时按原语义删目录回滚')
   } finally {

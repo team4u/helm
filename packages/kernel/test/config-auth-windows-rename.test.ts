@@ -10,11 +10,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import { createHubHandler, type EventHub, type KernelRuntimeLike } from '../src/http/index.js'
-import { PluginHost, type PluginDocStore } from '../src/plugins/index.js'
+import { PluginHost } from '../src/plugins/index.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import {
   AuthService,
@@ -25,20 +24,7 @@ import {
   copyFilePrivate,
 } from '../src/services/index.js'
 import { HelmPluginConfigStore } from '../src/runtime/plugin-config-store.js'
-
-class MemoryDocStore implements PluginDocStore {
-  private readonly store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    this.store.delete(pluginId)
-  }
-  async flush(): Promise<void> {}
-}
+import { MemoryDocStore, cleanupDir, makeTempDir } from './helpers.js'
 
 function errnoError(code: string, message = `模拟系统错误 (${code})`): NodeJS.ErrnoException {
   return Object.assign(new Error(message), { code, errno: -4048, syscall: 'rename' })
@@ -51,11 +37,11 @@ function fakePlatform(platform: NodeJS.Platform): () => void {
 }
 
 async function withTempDir(prefix: string, fn: (dir: string) => Promise<void>): Promise<void> {
-  const dir = await fsp.mkdtemp(join(tmpdir(), prefix))
+  const dir = await makeTempDir(prefix)
   try {
     await fn(dir)
   } finally {
-    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {})
+    await cleanupDir(dir).catch(() => {})
   }
 }
 

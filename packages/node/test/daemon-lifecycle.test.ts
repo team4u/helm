@@ -15,6 +15,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
+import { sleep as delay } from '@helm/test-kit';
+import { makeTempDir as tempDir } from '@helm/test-kit/node';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createBirpc, type BirpcReturn } from 'birpc';
 import type {
@@ -31,12 +33,6 @@ import {
   resolveManagedHelmBinDir,
   writeNodeIdentity,
 } from '../src/daemon/index.js';
-
-const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function tempDir(prefix: string): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
-}
 
 /** 复用端口：先占住一个空闲端口，关掉后给 fixture 回listen（重连回同端口用）。 */
 async function reservePort(): Promise<number> {

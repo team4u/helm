@@ -1,12 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { HelmError, type PluginDefinition } from '@helm/protocol'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import { MemoryDocStore, deferred, useTempDir } from './helpers.js'
 
 function createHostBackend(): PluginHostBackend {
   const unused = (): never => { throw new Error('本测试只验证 UI 启用，不应执行宿主业务操作') }
@@ -24,24 +22,16 @@ function createHostBackend(): PluginHostBackend {
 }
 
 // 两次持久化都挂起后再放行，确定性覆盖「预检通过 → await → 最终发布」窗口。
-test('并发启用重复 slash：只发布一个插件，失败方回滚持久开关且不残留贡献', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-ui-activation-'))
+test('并发启用重复 slash：只发布一个插件，失败方回滚持久开关且不残留贡献', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helm-ui-activation-')
   const enabled = new Map<string, boolean>()
-  const docs = new Map<string, unknown>()
   let arrived = 0
-  let release!: () => void
-  let bothArrived!: () => void
-  const gate = new Promise<void>((resolve) => { release = resolve })
-  const ready = new Promise<void>((resolve) => { bothArrived = resolve })
+  const gate = deferred()
+  const ready = deferred()
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: createHostBackend(),
-    docs: {
-      get: <T>(key: string, initial: T): T => (docs.has(key) ? docs.get(key) as T : initial),
-      set: (key, value) => { docs.set(key, value) },
-      deletePlugin: () => {},
-      flush: async () => {},
-    },
+    docs: new MemoryDocStore(),
     config: {
       get: () => ({}),
       set: () => {},
@@ -50,8 +40,8 @@ test('并发启用重复 slash：只发布一个插件，失败方回滚持久�
         enabled.set(id, value)
         if (!value) return
         arrived++
-        if (arrived === 2) bothArrived()
-        await gate
+        if (arrived === 2) ready.resolve()
+        await gate.promise
       },
     },
   })
@@ -65,8 +55,8 @@ test('并发启用重复 slash：只发布一个插件，失败方回滚持久�
     await host.register(plugin('test:first'), { enabled: false })
     await host.register(plugin('test:second'), { enabled: false })
     const pending = [host.enable('test:first'), host.enable('test:second')]
-    await ready
-    release()
+    await ready.promise
+    gate.resolve()
     const results = await Promise.allSettled(pending)
     assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1)
     const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')!
@@ -79,8 +69,7 @@ test('并发启用重复 slash：只发布一个插件，失败方回滚持久�
     assert.equal(enabled.get(loser.id), false)
     assert.deepEqual(host.listUi().map((item) => item.pluginId), [winner.id])
   } finally {
-    release()
+    gate.resolve()
     await host.dispose()
-    rmSync(dataDir, { recursive: true, force: true })
   }
 })

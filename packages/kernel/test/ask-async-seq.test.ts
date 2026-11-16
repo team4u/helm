@@ -27,14 +27,13 @@
 import { HelmError } from '@helm/protocol'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AskService } from '../src/runtime/asks.js'
 import { HelmStore } from '../src/runtime/store.js'
 import { openHelmDatabase } from '../src/runtime/sqlite.js'
 import { SecretStash } from '../src/services/index.js'
 import { errorToResponse } from '../src/http/http-utils.js'
+import { cleanupDir, deferred as kitDeferred, makeTempDir } from './helpers.js'
 
 interface TestContext {
   service: AskService
@@ -47,11 +46,11 @@ interface TestContext {
 let rootDir: string
 
 before(async () => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-ask-async-seq-'))
+  rootDir = await makeTempDir('helm-ask-async-seq-')
 })
 
 after(async () => {
-  rmSync(rootDir, { recursive: true, force: true })
+  await cleanupDir(rootDir)
 })
 
 async function openService(): Promise<TestContext> {
@@ -78,34 +77,22 @@ async function openService(): Promise<TestContext> {
   }
 }
 
-/** 手写 deferred（不用 sleep 对齐并发时序）。 */
-interface Deferred<T> {
-  promise: Promise<T>
-  resolve(value: T): void
-  reject(error: unknown): void
-  isSettled(): boolean
-}
-
-function deferred<T>(): Deferred<T> {
+/** 带 isSettled 观察器的 deferred 包装（复用 helpers.deferred）。 */
+function deferred<T>() {
   let settled = false
-  let resolve!: (value: T) => void
-  let reject!: (error: unknown) => void
-  const promise = new Promise<T>((res, rej) => {
-    resolve = (value) => {
-      if (settled) return
-      settled = true
-      res(value)
-    }
-    reject = (error) => {
-      if (settled) return
-      settled = true
-      rej(error)
-    }
-  })
+  const inner = kitDeferred<T>()
   return {
-    promise,
-    resolve,
-    reject,
+    promise: inner.promise,
+    resolve: (value: T) => {
+      if (settled) return
+      settled = true
+      inner.resolve(value)
+    },
+    reject: (error: unknown) => {
+      if (settled) return
+      settled = true
+      inner.reject(error)
+    },
     isSettled: () => settled,
   }
 }

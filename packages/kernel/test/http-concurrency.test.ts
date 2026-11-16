@@ -12,45 +12,28 @@
 import assert from 'node:assert/strict'
 import { test, before, after } from 'node:test'
 import { join } from 'node:path'
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { stat, writeFile } from 'node:fs/promises'
 import { HelmError, type PluginSummary, type HelmPluginContext } from '@helm/protocol'
 import type { ConversationSummary, NodeForwardEvent, NodeForwardSession } from '@helm/protocol'
 import { ArtifactService, InMemoryArtifactRepository, ProfileService } from '../src/services/index.js'
 import { PluginHost } from '../src/plugins/index.js'
 import { hostBackendStub } from './helpers/host-backend-stub.js'
-import type { PluginDocStore } from '../src/plugins/index.js'
 import { handleApi } from '../src/http/routes.js'
 import type { KernelRuntimeLike } from '../src/http/contracts.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
-
-const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
-
-class MemoryDocStore implements PluginDocStore {
-  readonly store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    this.store.delete(pluginId)
-  }
-  async flush(): Promise<void> {}
-}
+import { MemoryDocStore, cleanupDir, makeConversationSummary, makeTempDir, sleep as delay } from './helpers.js'
 
 let dataDir: string
 let host: PluginHost
 
 before(async () => {
-  dataDir = await mkdtemp(join(tmpdir(), 'helm-http-conc-'))
+  dataDir = await makeTempDir('helm-http-conc-')
   host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: hostBackendStub(), docs: new MemoryDocStore() })
 })
 
 after(async () => {
   await host.dispose().catch(() => undefined)
-  await rm(dataDir, { recursive: true, force: true })
+  await cleanupDir(dataDir)
 })
 
 // ---------------------------------------------------------------------------
@@ -269,7 +252,7 @@ test('监控流客户端主动 cancel 同样释放租约（finish 幂等）', { 
 // ---------------------------------------------------------------------------
 
 test('ProfileService.delete 服务层复核：isProfileInUse 为真时 409 且目录不删', { timeout: 60_000 }, async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'helm-profile-del-'))
+  const dir = await makeTempDir('helm-profile-del-')
   try {
     const profiles = new ProfileService(dir)
     await profiles.save({ id: 'bound-profile', name: '绑定中' })
@@ -283,12 +266,12 @@ test('ProfileService.delete 服务层复核：isProfileInUse 为真时 409 且�
     await profiles.delete('bound-profile', { isProfileInUse: async () => false })
     assert.equal(await profiles.get('bound-profile'), undefined)
   } finally {
-    await rm(dir, { recursive: true, force: true })
+    await cleanupDir(dir)
   }
 })
 
 test('DELETE /api/profiles/:id TOCTOU：快速路径通过后并发绑定在服务层复核处被拒', { timeout: 60_000 }, async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'helm-profile-tou-'))
+  const dir = await makeTempDir('helm-profile-tou-')
   try {
     const profiles = new ProfileService(dir)
     await profiles.save({ id: 'race-profile', name: '竞态' })
@@ -313,7 +296,7 @@ test('DELETE /api/profiles/:id TOCTOU：快速路径通过后并发绑定在服�
     assert.equal(listCalls, 2, '快速路径与服务层复核各查一次')
     assert.notEqual(await profiles.get('race-profile'), undefined, 'profile 未被删除')
   } finally {
-    await rm(dir, { recursive: true, force: true })
+    await cleanupDir(dir)
   }
 })
 
@@ -322,7 +305,7 @@ test('DELETE /api/profiles/:id TOCTOU：快速路径通过后并发绑定在服�
 // ---------------------------------------------------------------------------
 
 test('writeUploaded 服务层复核：会话不存在时 404 且不留孤儿目录', { timeout: 60_000 }, async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'helm-artifact-del-'))
+  const dir = await makeTempDir('helm-artifact-del-')
   try {
     const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository())
     await assert.rejects(
@@ -347,12 +330,12 @@ test('writeUploaded 服务层复核：会话不存在时 404 且不留孤儿目�
     assert.equal(meta.conversationId, 99)
     assert.equal((await artifacts.listFiles(99)).length, 1)
   } finally {
-    await rm(dir, { recursive: true, force: true })
+    await cleanupDir(dir)
   }
 })
 
 test('POST /api/conversations/:id/artifacts TOCTOU：入口校验通过后会话被删，写盘前复核 404', { timeout: 60_000 }, async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'helm-artifact-tou-'))
+  const dir = await makeTempDir('helm-artifact-tou-')
   try {
     const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository())
     // 第一次 getConversationDetail（入口快速路径）成功；第二次（服务层落盘前
@@ -390,7 +373,7 @@ test('POST /api/conversations/:id/artifacts TOCTOU：入口校验通过后会话
       '不留 artifacts/<已删会话>/ 孤儿目录',
     )
   } finally {
-    await rm(dir, { recursive: true, force: true })
+    await cleanupDir(dir)
   }
 })
 
@@ -398,21 +381,5 @@ test('POST /api/conversations/:id/artifacts TOCTOU：入口校验通过后会话
 
 function summaryOf(id: number): ConversationSummary {
   const now = Date.now()
-  return {
-    id,
-    title: `conv-${id}`,
-    profileId: 'assistant',
-    tags: [],
-    cwd: '/tmp',
-    model: 'faux/model',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: now,
-    updatedAt: now,
-  }
+  return makeConversationSummary({ id, model: 'faux/model', createdAt: now, updatedAt: now })
 }

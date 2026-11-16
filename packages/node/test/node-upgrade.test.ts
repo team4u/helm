@@ -10,9 +10,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import rawFs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { sleep as delay } from '@helm/test-kit';
+import { makeTempDir as tempDir } from '@helm/test-kit/node';
 import {
   UpgradeRejectedError,
   UpgradeCommitUnconfirmedError,
@@ -33,12 +34,6 @@ import {
   type StagedNodeRelease,
   type PreparedNodeReplacement,
 } from '../src/daemon/upgrader.js';
-
-async function tempDir(prefix: string): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
-}
-
-const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 function makeReplacement(pid: number, opts?: { commitError?: Error; abortError?: Error }) {
   const calls: string[] = [];

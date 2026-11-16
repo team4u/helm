@@ -16,9 +16,6 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import {
   HelmError,
   PLUGIN_UI_METHOD_NAMES,
@@ -29,6 +26,7 @@ import { UiRegistry } from '../src/plugins/ui-registry.js';
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js';
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
 import { createPluginBuildProvider } from '@helm/plugin-build';
+import { MemoryDocStore, cleanupDir, makeTempDir } from './helpers.js';
 
 const isHelmError = (code: string) => (err: unknown): boolean => err instanceof HelmError && err.code === code;
 
@@ -202,8 +200,8 @@ interface HostFixture {
   events: Array<{ type: string; pluginId: string; uiCount: number }>;
 }
 
-function createHost(): HostFixture {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-ui-contracts-'));
+async function createHost(): Promise<HostFixture> {
+  const dataDir = await makeTempDir('helm-ui-contracts-');
   const events: HostFixture['events'] = [];
   // 会话分片内存存储（sessionDoc 声明要求持久层，拒绝内存降级是内核语义，测试补齐最小实现）
   const sessionData = new Map<string, string>();
@@ -220,12 +218,7 @@ function createHost(): HostFixture {
         }
       },
     },
-    docs: {
-      get: <T>(_key: string, initial: T): T => initial,
-      set: () => {},
-      deletePlugin: () => {},
-      flush: async () => {},
-    },
+    docs: new MemoryDocStore(),
     sessionDocs: {
       get: (pluginId, name, conversationId) => sessionData.get(sessionKey(pluginId, name, conversationId)),
       put: (pluginId, name, conversationId, valueJson) => {
@@ -253,7 +246,7 @@ const noopAction = (id: string, extra: Partial<PluginActionSpec<unknown, unknown
 });
 
 test('host：新契约注册/停用/snapshot 与方法数量消费者对齐', { timeout: 60_000 }, async () => {
-  const { host, dataDir } = createHost();
+  const { host, dataDir } = await createHost();
   const plugin: PluginDefinition = {
     id: 'test:contracts',
     definePlugin(ctx) {
@@ -313,12 +306,12 @@ test('host：新契约注册/停用/snapshot 与方法数量消费者对齐', { 
     assert.ok(PLUGIN_UI_METHOD_NAMES.includes('artifactPreviewer' as const));
   } finally {
     await host.dispose();
-    rmSync(dataDir, { recursive: true, force: true });
+    await cleanupDir(dataDir);
   }
 });
 
 test('host：completer 绑定本插件动作——缺动作/非幂等在定义期末拒绝', { timeout: 60_000 }, async () => {
-  const { host, dataDir } = createHost();
+  const { host, dataDir } = await createHost();
   try {
     // 引用未声明动作：定义期末拒绝（注册失败，不留残影）
     const missing: PluginDefinition = {
@@ -367,12 +360,12 @@ test('host：completer 绑定本插件动作——缺动作/非幂等在定义�
     assert.equal(host.listUi().length, 1);
   } finally {
     await host.dispose();
-    rmSync(dataDir, { recursive: true, force: true });
+    await cleanupDir(dataDir);
   }
 });
 
 test('host：completer 跨插件动作——目标启用时校验、未注册不禁止合法稍后注册', { timeout: 60_000 }, async () => {
-  const { host, dataDir } = createHost();
+  const { host, dataDir } = await createHost();
   const consumer = (target?: string): PluginDefinition => ({
     id: 'test:consumer',
     definePlugin(ctx) {
@@ -430,6 +423,6 @@ test('host：completer 跨插件动作——目标启用时校验、未注册不
     assert.equal(host.listUi().filter((c) => c.pluginId === 'test:consumer3').length, 1);
   } finally {
     await host.dispose();
-    rmSync(dataDir, { recursive: true, force: true });
+    await cleanupDir(dataDir);
   }
 });

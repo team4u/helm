@@ -25,6 +25,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@helm/test-kit": "workspace:*",
     "@types/ws": "^8.18.0"
   }
 }

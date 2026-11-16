@@ -22,6 +22,7 @@ import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { useTempDir } from '@helm/test-kit/node';
 
 import type { ShellProbeIo } from '@helm/env-io';
 import { LineScanner, LocalExecutionEnv, StreamDecoder } from '../src/daemon/local-env.js';
@@ -261,49 +262,41 @@ test('exec 退出语义：超时错误消息格式为 timeout:<秒>；预中止�
 // spill 溢写（对齐 pi-durable：超阈值的完整输出保留在溢写文件）
 // ---------------------------------------------------------------------------
 
-test('spill：超阈值输出完整保留在溢写文件；阈值内不产生溢写文件', { timeout: 60_000 }, async () => {
-  const workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'helm-spill-'));
-  try {
-    const env = new LocalExecutionEnv({ cwd: workdir });
-    const big = await env.exec("node -e \"process.stdout.write('a'.repeat(200000))\"", {
-      spill: { afterBytes: 4096, afterLines: 10 },
-    });
-    assert.ok(big.ok);
-    if (big.ok) {
-      assert.equal(big.value.exitCode, 0);
-      assert.ok(big.value.spillPath !== undefined, '超阈值必须产生溢写文件');
-      if (big.value.spillPath !== undefined) {
-        assert.equal(await fs.readFile(big.value.spillPath, 'utf8'), 'a'.repeat(200000));
-      }
+test('spill：超阈值输出完整保留在溢写文件；阈值内不产生溢写文件', { timeout: 60_000 }, async (t) => {
+  const workdir = useTempDir(t, 'helm-spill-');
+  const env = new LocalExecutionEnv({ cwd: workdir });
+  const big = await env.exec("node -e \"process.stdout.write('a'.repeat(200000))\"", {
+    spill: { afterBytes: 4096, afterLines: 10 },
+  });
+  assert.ok(big.ok);
+  if (big.ok) {
+    assert.equal(big.value.exitCode, 0);
+    assert.ok(big.value.spillPath !== undefined, '超阈值必须产生溢写文件');
+    if (big.value.spillPath !== undefined) {
+      assert.equal(await fs.readFile(big.value.spillPath, 'utf8'), 'a'.repeat(200000));
     }
-    const small = await env.exec("node -e \"process.stdout.write('a'.repeat(100))\"", {
-      spill: { afterBytes: 4096, afterLines: 10 },
-    });
-    assert.deepEqual(small, { ok: true, value: { exitCode: 0 } });
-  } finally {
-    await fs.rm(workdir, { recursive: true, force: true });
   }
+  const small = await env.exec("node -e \"process.stdout.write('a'.repeat(100))\"", {
+    spill: { afterBytes: 4096, afterLines: 10 },
+  });
+  assert.deepEqual(small, { ok: true, value: { exitCode: 0 } });
 });
 
-test('spill：超时被杀的命令同样携带溢写文件且内容完整', { timeout: 60_000 }, async () => {
-  const workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'helm-spill-timeout-'));
-  try {
-    const env = new LocalExecutionEnv({ cwd: workdir });
-    const result = await env.exec("node -e \"process.stdout.write('x'.repeat(200000))\"; sleep 5", {
-      timeout: 1,
-      spill: { afterBytes: 1024, afterLines: 10 },
-    });
-    assert.equal(result.ok, false);
-    if (!result.ok) {
-      assert.equal(result.error.code, 'timeout');
-      assert.equal(result.error.message, 'timeout:1');
-      assert.ok(result.error.spillPath !== undefined, '超时结算必须携带溢写文件路径');
-      if (result.error.spillPath !== undefined) {
-        assert.equal(await fs.readFile(result.error.spillPath, 'utf8'), 'x'.repeat(200000));
-      }
+test('spill：超时被杀的命令同样携带溢写文件且内容完整', { timeout: 60_000 }, async (t) => {
+  const workdir = useTempDir(t, 'helm-spill-timeout-');
+  const env = new LocalExecutionEnv({ cwd: workdir });
+  const result = await env.exec("node -e \"process.stdout.write('x'.repeat(200000))\"; sleep 5", {
+    timeout: 1,
+    spill: { afterBytes: 1024, afterLines: 10 },
+  });
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.error.code, 'timeout');
+    assert.equal(result.error.message, 'timeout:1');
+    assert.ok(result.error.spillPath !== undefined, '超时结算必须携带溢写文件路径');
+    if (result.error.spillPath !== undefined) {
+      assert.equal(await fs.readFile(result.error.spillPath, 'utf8'), 'x'.repeat(200000));
     }
-  } finally {
-    await fs.rm(workdir, { recursive: true, force: true });
   }
 });
 

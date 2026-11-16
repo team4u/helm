@@ -19,15 +19,12 @@
  */
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import type { ConversationSummary, HelmEventFrame } from '@helm/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
+import { cleanupDir, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 
-type FauxHandle = ReturnType<typeof fauxProvider>
+type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
 
 interface Env {
   dataDir: string
@@ -39,10 +36,8 @@ interface Env {
 }
 
 async function makeEnv(prefix: string): Promise<Env> {
-  const dataDir = mkdtempSync(join(tmpdir(), prefix))
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
+  const dataDir = await makeTempDir(prefix)
+  const { models, faux } = makeFauxModels()
   const kernel = await KernelRuntime.open({
     dataDir,
     cwd: dataDir,
@@ -66,17 +61,9 @@ async function makeEnv(prefix: string): Promise<Env> {
       try {
         await kernel.close()
       } finally {
-        rmSync(dataDir, { recursive: true, force: true })
+        await cleanupDir(dataDir)
       }
     },
-  }
-}
-
-async function waitFor(cond: () => boolean, ms = 8_000): Promise<void> {
-  const deadline = Date.now() + ms
-  while (!cond()) {
-    if (Date.now() > deadline) throw new Error('waitFor 超时')
-    await new Promise((r) => setTimeout(r, 15))
   }
 }
 
@@ -131,10 +118,8 @@ test('失败终态：lastError 透传到 getConversation 与 conversation.upsert
 })
 
 test('失败持久性：lastError 跨进程重启仍可见（pi.live 权威状态）', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-last-error-restart-'))
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
+  const dataDir = await makeTempDir('helm-last-error-restart-')
+  const { models, faux } = makeFauxModels()
   const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   try {
     faux.setResponses([
@@ -149,9 +134,7 @@ test('失败持久性：lastError 跨进程重启仍可见（pi.live 权威状�
   }
 
   // 重启：凭 pi.live.runFailure 恢复 error 状态与诊断摘要。
-  const faux2 = fauxProvider()
-  const models2 = createModels()
-  models2.setProvider(faux2.provider)
+  const { models: models2 } = makeFauxModels()
   const kernel2 = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: models2 })
   try {
     const summary = kernel2.getConversation(1)
@@ -162,7 +145,7 @@ test('失败持久性：lastError 跨进程重启仍可见（pi.live 权威状�
     )
   } finally {
     await kernel2.close().catch(() => {})
-    rmSync(dataDir, { recursive: true, force: true })
+    await cleanupDir(dataDir)
   }
 })
 

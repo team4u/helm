@@ -19,13 +19,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import http from 'node:http';
 import { createRequire } from 'node:module';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { makeTempDir as tempDir, waitFor as kitWaitFor } from '@helm/test-kit/node';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createBirpc } from 'birpc';
 import type { EnvExecOutputEvent } from '@helm/protocol';
@@ -34,10 +34,6 @@ import { UpgradeCommitUnconfirmedError, type StagedNodeRelease } from '../src/da
 import { prepareNodeReplacement, type HandoffPidRecord } from '../src/daemon/upgrade-handoff.js';
 import { runNodeCli, type NodeCliIo } from '../src/cli.js';
 import { sanitizedHostEnv } from './helpers/sanitized-env.js';
-
-async function tempDir(prefix: string): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
-}
 
 const nodeRequire = createRequire(import.meta.url);
 const wsModulePath = nodeRequire.resolve('ws');
@@ -71,14 +67,8 @@ const realIsAlive = (pid: number): boolean => {
   }
 };
 
-async function waitFor(condition: () => boolean | Promise<boolean>, timeoutMs: number, what: string): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await condition()) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  assert.ok(await condition(), `等待超时：${what}`);
-}
+const waitFor = (condition: () => boolean | Promise<boolean>, timeoutMs: number, what: string): Promise<void> =>
+  kitWaitFor(condition, { timeoutMs, intervalMs: 100, message: `等待超时：${what}` });
 
 // ---------------------------------------------------------------------------
 // Hub fixture（复用 node-cli-review 同款真实 WS + birpc）
