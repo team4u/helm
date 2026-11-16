@@ -8,7 +8,7 @@
 | :--- | :--- | :--- |
 | Node.js | `>= 24.12.0` | 根 `package.json` 的 `engines` 字段强制约束 |
 | pnpm | `12.x` | 根 `package.json` 的 `packageManager` 固定为 `pnpm@12.16.1` |
-| Git | `>= 2.30.0` | 支撑 Worktree 沙箱派生 |
+| Git | 已安装 | `builtin:workflow` 的 Worktree 隔离与代码门禁需要 Git |
 | 操作系统 | Linux / macOS / WSL2 | 主流 POSIX 环境 |
 
 当前未发布安装制品，以下流程即源代码模式安装：所有命令直接从仓库运行。
@@ -148,10 +148,14 @@ pnpm helm models default --set '<provider>/<model>' --json     # 选定全局默
 | `HELM_HOST` | `127.0.0.1` | `@helm/hub` | Hub 绑定地址；远端节点接入需显式 `0.0.0.0` 或反代 |
 | `HELM_WEB_DIST_DIR` | 产品入口旁的 `web/dist` | `@helm/hub` | 显式指定 Web 产物目录；`false` / `0` / 空串关闭静态托管。直接嵌入内核时通过 `webDistDir` 参数指定 |
 | `HELM_DATA_DIR` | `~/.helm` | 全部包 | 数据与凭据主目录，与旧系统 `~/.botx`、`~/.botd` 完全隔离 |
-| `HELM_HUB_URL` | `http://127.0.0.1:3202` | `@helm/cli` | CLI 目标 Hub 地址；与 `cli-token` 同源绑定 |
+| `HELM_HUB_URL` | `http://127.0.0.1:3202` | `@helm/cli`、`@helm/node` | CLI 目标 Hub 地址；节点 CLI 用于指定连接目标 |
 | `HELM_TOKEN` | 无 | `@helm/cli` | 显式令牌，优先级高于磁盘凭据（不触碰磁盘） |
 | `HELM_CONVERSATION_ID` | 无 | `@helm/cli` | 供所有 `--current` 标志解析当前会话 |
 | `HELM_NODE_ID` | 无 | `@helm/cli` | 供节点命令的 `--current` 解析目标节点 |
+| `HELM_CWD` | Hub 进程 cwd | `@helm/hub`、受管子进程 | Hub 缺省工作目录；受管执行中表示会话工作目录 |
+| `HELM_MODEL` | 无 | `@helm/hub` | Hub 启动时的默认模型覆盖 |
+| `VITE_HOST` | `0.0.0.0` | `@helm/web` | Vite dev 服务器绑定地址；本机使用可设为 `127.0.0.1` |
+| `HERDR_SOCKET_PATH` | 平台默认路径 | `@helm/node`、`builtin:herdr` | Herdr IPC socket/pipe 路径覆盖 |
 
 凭据解析优先级为 `HELM_TOKEN` / `HELM_HUB_URL` 环境变量优先，其次 `cli-token` 文件。令牌与 `hubUrl` 同源绑定：当 `HELM_HUB_URL` 指向另一个 Hub 时，CLI 不会把旧 Hub 的令牌发送过去。
 

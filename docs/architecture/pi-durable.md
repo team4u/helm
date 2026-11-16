@@ -103,7 +103,7 @@ sequenceDiagram
     Note over Hub: 不向终端重复发送任何按键
 ```
 
-CAS 以持久化的 `spec.expectedStateSeq` 为准：客户端提供的不同 seq 返回 `409 ask_seq_conflict`；已结算审批再操作返回 `409 ask_already_settled`。CAS 水位的解析可注册异步 resolver（`ctx.host.registerAskSeqResolver`）——Herdr 场景下真实水位需经远端 IO 现查，而非创建时快照；声明的 expectedStateSeq 无 resolver 命中时显式拒绝校验，不猜测。`pnpm helm asks answer --expected-state-seq N` 在 CLI 侧提供同一保护。对 `ownedBy: 'human'` 会话的终端窗格，任何自动化路径（含 superseded 流转）都不得发送按键，这是归属权红线的直接推论；Herdr 的 `agent.send_keys` 强制要求服务端 `send_keys_expected_state_seq` 能力门禁。
+CAS 以持久化的 `spec.expectedStateSeq` 为准：客户端提供的不同 seq 返回 `409 ask_state_conflict`；已结算审批再操作返回 `409 ask_already_settled`。当前水位无法解析时返回 `ask_state_unavailable`。CAS 水位的解析可注册异步 resolver（`ctx.host.registerAskSeqResolver`）——Herdr 场景下真实水位需经远端 IO 现查，而非创建时快照；声明的 expectedStateSeq 无 resolver 命中时显式拒绝校验，不猜测。`pnpm helm asks answer --expected-state-seq N` 在 CLI 侧提供同一保护。对 `ownedBy: 'human'` 会话的终端窗格，任何自动化路径（含 superseded 流转）都不得发送按键，这是归属权红线的直接推论；Herdr 的 `agent.send_keys` 强制要求服务端 `send_keys_expected_state_seq` 能力门禁。
 
 ## EventHub SSE：快照、事件代与短断线续传
 

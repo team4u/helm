@@ -1,6 +1,6 @@
 # EnvFabric 跨平台执行底座
 
-本文面向需要理解或调试跨节点执行的读者：插件开发者（经 `ctx.host.execEnv / runGate / nodeIpc / nodeFetch / openTunnel` 使用底座）、节点运维者（部署 `helm-node`、管理令牌与升级）、以及排查「命令到底在哪台机器上执行」的工程师。Helm 的模型工具（`bash / read / write / edit`）、产物登记、验收门禁、插件受管执行、文件互斥、本机 IPC 桥与节点透传隧道全部经由 EnvFabric 调度，与任何插件是否启用正交。会话如何绑定 `(nodeId, cwd)` 见 [pi-durable 集成](pi-durable.md)；工作流如何消费这些端口见 [DSL 手册](../workflows/dsl-guide.md)。
+本文面向需要理解或调试跨节点执行的读者：插件开发者（经 `ctx.host.execEnv / runGate / nodeIpc / nodeFetch / openTunnel` 使用底座）、节点运维者（部署 `helm-node`、管理令牌与升级）、以及排查「命令到底在哪台机器上执行」的工程师。EnvFabric 负责会话绑定节点上的命令、文件、产物登记、验收门禁、插件受管执行、文件互斥、本机 IPC 桥与节点透传隧道；Hub 产物读取和插件动作调用保留在 Hub 内，不会伪装成节点执行。会话如何绑定 `(nodeId, cwd)` 见 [pi-durable 集成](pi-durable.md)；工作流如何消费这些端口见 [DSL 手册](../workflows/dsl-guide.md)。
 
 ## 架构定位与执行环境分层
 
@@ -37,7 +37,7 @@ flowchart TD
 
 ## 内核工具与宿主端口
 
-内核自带六个模型工具与一个元工具（`packages/kernel/src/runtime/tool-registry.ts`），全部经 EnvFabric 在会话绑定的 `(nodeId, cwd)` 执行：`bash`（shell 命令，结构化结果附带执行节点与启动 cwd）、`read`（文本文件读取）、`write`（UTF-8 整体覆盖写）、`edit`（精确片段替换）、`read_artifact`（分页读取溢出产物）、`register_artifact`（把节点上的真实文件登记为会话产物，离线节点、非普通文件或超过 15 MiB 显式失败）与 `run_action`（按需调用插件动作）。
+内核提供文件与命令工具，以及 `read_artifact`、`register_artifact`、`run_action` 等通用模型工具（清单见 `packages/kernel/src/runtime/tool-registry.ts`）。`bash / read / write / edit` 与 `register_artifact` 的节点文件读取使用 EnvFabric 和会话绑定的 `(nodeId, cwd)`；`read_artifact` 读取 Hub 产物存储，`run_action` 经插件动作总线执行，不经过节点通道。`register_artifact` 对离线节点、非普通文件或超过 15 MiB 的文件显式失败。
 
 插件侧的两个宿主端口：`ctx.host.runGate(command, options)` 在目标节点/会话工作目录执行验证门禁命令（返回 `ok / output / exitCode / timedOut`）；`ctx.host.execEnv(req)` 经同一通道执行命令（复用 SecretStash 注入与脱敏，靶点解析优先级：显式 nodeId/cwd > conversationId 绑定坐标 > `local`/Hub cwd）。`subagent` 等编排工具不在内核——它们由 `builtin:workflow` 提供。
 
@@ -159,7 +159,7 @@ sequenceDiagram
 | 场景 | 错误码 | HTTP |
 | :--- | :--- | :--- |
 | 节点未连接 | `node_offline` | 409 |
-| 节点正在升级排空，拒绝受理新命令/IPC/隧道 | `node_draining` | 409 |
+| 节点正在升级排空，拒绝受理新命令/IPC/隧道 | `node_draining` | 503 |
 | 节点守护进程版本不支持隧道 | `node_tunnel_not_supported` | 501 |
 | 建隧道超时（缺省 10s） | `node_tunnel_timeout` | 504 |
 | 节点侧 `net.connect` 失败（端口未监听） | `node_tunnel_connect_failed` | 502 |
@@ -217,7 +217,7 @@ sequenceDiagram
 1. **双包同版本绑定**：对两个包的 registry 元数据 `dist.integrity`（SHA-512）与下载后的 tarball 哈希做双阶段校验，再以本地 tgz 离线安装到同一 staging 目录——安装过程不依赖网络可用性。
 2. **不可变候选目录**：staging 原子改名为 `releases/<ver>/<uuid>/`，永不复用、永不删除；正在执行的旧版本文件永不被覆写。
 3. **金丝雀握手与唯一提交点**：仅「候选收到 activate 并向 Hub 提交 `upgradeCommit` 心跳成功」才算升级完成——「已注册未激活」不算提交。失败时终止候选、回滚旧版本，并把该版本写入 `update-blocked.json` 隔离（后续 `upgrade/check` 会携带 blocked 记录）。
-4. **排空判据含隧道**：在途命令与在途隧道都归零后才切换（`getActiveExecCount() === 0 && getActiveTunnelCount() === 0`），防止长耗时流式回答被自升级生硬切断。
+4. **排空判据**：在途命令、IPC 调用与隧道都归零后才切换（包括 IPC call 与 subscription），防止长耗时操作被自升级生硬切断。
 
 **排空语义**：`node_draining` 表示节点正在升级排空、拒绝受理**新**命令/IPC/隧道（守护进程仍在运行、连接仍在，只是让位升级）——与 `aborted`（用户或宿主主动取消/终止在途操作）严格区分，上层不得将其归并为取消。文件操作不排空（只读探测与文件读写继续可用）。执行升级时客户端应禁用默认超时（升级含排空与进程替换，耗时较长）。
 

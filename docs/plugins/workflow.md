@@ -80,7 +80,7 @@
 | 引擎 / 隔离 / 钩子 / 动作 / 工具 / UI | `packages/plugins/src/workflow/`（`engine/`、`isolation*.ts`、`hooks.ts`、`actions*.ts`、`tools*.ts`、`ui.ts`、`worktree*.ts`） |
 | 插件配置 Schema | `packages/plugins/src/workflow/config.ts` |
 | 共享契约（run/doc/worktree/meta 形状） | `packages/plugins/src/contracts.ts` |
-| 主要测试 | `packages/plugins/test/workflow*.test.ts`（引擎、恢复重放、steer、detach、abort 级联、库管理）、`worktree-*.test.ts`、`workflow-shutdown.integration.test.ts`、`background-restart.integration.test.ts` |
+| 主要测试 | `packages/plugins/test/workflow*.test.ts`（引擎、恢复重放、steer、detach、abort 级联、库管理）、`native-worktree.test.ts`、`worktree-process-usage.test.ts`、`workflow-shutdown.integration.test.ts`、`background-restart.integration.test.ts` |
 
 ## 相关文档
 
