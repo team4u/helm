@@ -87,6 +87,8 @@ export class ApprovalBridge {
   private static readonly MAX_ASK_POLL_TRANSIENT_FAILURES = 6
   private static readonly DEFAULT_ASK_POLL_TRANSIENT_BACKOFF_BASE_MS = 500
   private static readonly DEFAULT_ASK_POLL_TRANSIENT_BACKOFF_CAP_MS = 4_000
+  /** 跨重启同 seq AskDoc ID 冲突（ask_id_conflict）推进 :r<N> 的最大重试上限。 */
+  private static readonly MAX_ASK_CONFLICT_RETRIES = 20
 
   /** send_keys CAS 能力探测结果（同一启用周期内按 target 冻结）。 */
   private readonly sendKeysCasSupport = new Map<string, boolean>()
@@ -169,104 +171,121 @@ export class ApprovalBridge {
     // 快照统一取尾部 1500 字符：与 AI 解析所据内容同口径，保证人类看到
     // 模型做出判断所依据的当前菜单（长快照头部往往是无关节奏输出）。
     const description = `${retryHint}${aiSummaryLine}${aiFallbackLine}终端 agent (${pane.agentName}) 在 ${pane.effectiveCwd} 等待选择。终端快照（脱敏）：\n\`\`\`\n${snapshot.slice(-1500)}\n\`\`\``
-    const pending = this.port.host.createAsk({
-      id: entry.askId,
-      conversationId,
-      ownerPluginId: 'builtin:herdr',
-      title: `Herdr 审批：pane ${pane.paneId}`,
-      description,
-      fields: [
-        {
-          name: 'decision',
-          label: '如何处理该阻塞？',
-          type: 'select',
-          required: true,
-          options: plan.options,
-        },
-        {
-          name: 'key',
-          label: '自定义按键序列（仅 decision=custom 时使用，多键用空格或逗号分隔，如 enter / esc / down, enter）',
-          type: 'text',
-          required: false,
-        },
-      ],
-      expectedStateSeq: entry.seq,
-    })
-    this.port.asks.markPending(entry)
-    // createAsk 返回的是终态 promise；其入库可晚于事件销单的 404。
-    // 在该 promise 结束前持续复核并销单，远端同样无需依赖本机 socket 事件。
-    const monitor = new AbortController()
-    const result = pending.finally(() => monitor.abort())
-    const polling = (async () => {
-      // 存续复核容错边界：瞬时故障（herdr_timeout/节点闪断）退避重试，超过
-      // 上限才先销宿主 AskDoc 再显式失败；绝不让一次抖动击穿任务，也绝不
-      // 留下永远 pending 的孤儿审批卡。
-      let transientFailures = 0
-      let abortCancelAttempts = 0
-      while (!monitor.signal.aborted) {
-        try { await delay(this.port.pollIntervalMs, undefined, { signal: monitor.signal }) }
-        catch (error) { if (monitor.signal.aborted) return; throw error }
-        if (request.signal?.aborted) {
-          // abort 后销单退避有界：cancel 持续非 404 失败时不得每 100ms
-          // 重试+通知风暴；超限后交由 closePane 的 paneClosed 清单兑底。
-          if (abortCancelAttempts >= ApprovalBridge.MAX_ABORT_CANCEL_ATTEMPTS) return
-          if (abortCancelAttempts > 0) {
+    for (let conflict = 0; ; conflict += 1) {
+      const pending = this.port.host.createAsk({
+        id: entry.askId,
+        conversationId,
+        ownerPluginId: 'builtin:herdr',
+        title: `Herdr 审批：pane ${pane.paneId}`,
+        description,
+        fields: [
+          {
+            name: 'decision',
+            label: '如何处理该阻塞？',
+            type: 'select',
+            required: true,
+            options: plan.options,
+          },
+          {
+            name: 'key',
+            label: '自定义按键序列（仅 decision=custom 时使用，多键用空格或逗号分隔，如 enter / esc / down, enter）',
+            type: 'text',
+            required: false,
+          },
+        ],
+        expectedStateSeq: entry.seq,
+      })
+      this.port.asks.markPending(entry)
+      // createAsk 返回的是终态 promise；其入库可晚于事件销单的 404。
+      // 在该 promise 结束前持续复核并销单，远端同样无需依赖本机 socket 事件。
+      const monitor = new AbortController()
+      const result = pending.finally(() => monitor.abort())
+      const polling = (async () => {
+        // 存续复核容错边界：瞬时故障（herdr_timeout/节点闪断）退避重试，超过
+        // 上限才先销宿主 AskDoc 再显式失败；绝不让一次抖动击穿任务，也绝不
+        // 留下永远 pending 的孤儿审批卡。
+        let transientFailures = 0
+        let abortCancelAttempts = 0
+        while (!monitor.signal.aborted) {
+          try { await delay(this.port.pollIntervalMs, undefined, { signal: monitor.signal }) }
+          catch (error) { if (monitor.signal.aborted) return; throw error }
+          if (request.signal?.aborted) {
+            // abort 后销单退避有界：cancel 持续非 404 失败时不得每 100ms
+            // 重试+通知风暴；超限后交由 closePane 的 paneClosed 清单兑底。
+            if (abortCancelAttempts >= ApprovalBridge.MAX_ABORT_CANCEL_ATTEMPTS) return
+            if (abortCancelAttempts > 0) {
+              try {
+                const abortCancelBackoffCapMs =
+                  this.port.abortCancelBackoffCapMs ?? ApprovalBridge.DEFAULT_ABORT_CANCEL_BACKOFF_CAP_MS
+                await delay(
+                  Math.min(this.port.pollIntervalMs * 2 ** abortCancelAttempts, abortCancelBackoffCapMs),
+                  undefined,
+                  { signal: monitor.signal },
+                )
+              } catch (error) { if (monitor.signal.aborted) return; throw error }
+            }
+            await this.port.cancelAskQuietly(entry.askId, 'cancelled')
+            abortCancelAttempts += 1
+            continue
+          }
+          let current: HerdrAgentInfo
+          try {
+            current = await this.port.agentGet(targetOf(pane), pane.paneId, monitor.signal)
+            transientFailures = 0
+          } catch (error) {
+            if (monitor.signal.aborted) return
+            if ((error as { code?: string }).code === 'herdr_aborted') throw error
+            transientFailures += 1
+            if (transientFailures > ApprovalBridge.MAX_ASK_POLL_TRANSIENT_FAILURES) {
+              // 最终失败：异步销宿主 AskDoc 后立即上抛真实错误（不 await——
+              // 等待会让宿主 cancelled 终态先赢 Promise.race，把基础设施失败
+              // 伪装成「人类取消」abort 路径关掉失败现场）；兑底 cancel 由
+              // 任务链 catch 的同步销单保证，绝不留 pending 孤儿审批卡。
+              void this.port.cancelAskQuietly(entry.askId, 'cancelled')
+              throw error
+            }
             try {
-              const abortCancelBackoffCapMs =
-                this.port.abortCancelBackoffCapMs ?? ApprovalBridge.DEFAULT_ABORT_CANCEL_BACKOFF_CAP_MS
+              const backoffBaseMs =
+                this.port.askPollTransientBackoffBaseMs ?? ApprovalBridge.DEFAULT_ASK_POLL_TRANSIENT_BACKOFF_BASE_MS
+              const backoffCapMs =
+                this.port.askPollTransientBackoffCapMs ?? ApprovalBridge.DEFAULT_ASK_POLL_TRANSIENT_BACKOFF_CAP_MS
               await delay(
-                Math.min(this.port.pollIntervalMs * 2 ** abortCancelAttempts, abortCancelBackoffCapMs),
+                Math.min(backoffBaseMs * 2 ** (transientFailures - 1), backoffCapMs),
                 undefined,
                 { signal: monitor.signal },
               )
             } catch (error) { if (monitor.signal.aborted) return; throw error }
+            continue
           }
-          await this.port.cancelAskQuietly(entry.askId, 'cancelled')
-          abortCancelAttempts += 1
-          continue
-        }
-        let current: HerdrAgentInfo
-        try {
-          current = await this.port.agentGet(targetOf(pane), pane.paneId, monitor.signal)
-          transientFailures = 0
-        } catch (error) {
-          if (monitor.signal.aborted) return
-          if ((error as { code?: string }).code === 'herdr_aborted') throw error
-          transientFailures += 1
-          if (transientFailures > ApprovalBridge.MAX_ASK_POLL_TRANSIENT_FAILURES) {
-            // 最终失败：异步销宿主 AskDoc 后立即上抛真实错误（不 await——
-            // 等待会让宿主 cancelled 终态先赢 Promise.race，把基础设施失败
-            // 伪装成「人类取消」abort 路径关掉失败现场）；兑底 cancel 由
-            // 任务链 catch 的同步销单保证，绝不留 pending 孤儿审批卡。
-            void this.port.cancelAskQuietly(entry.askId, 'cancelled')
-            throw error
+          if (current.stateChangeSeq !== entry.seq || current.agentStatus !== 'blocked') {
+            this.port.asks.observeAuthority({ nodeId: nodeIdOf(pane), paneId: pane.paneId, seq: current.stateChangeSeq, status: current.agentStatus })
+            await this.port.cancelAskQuietly(entry.askId, 'superseded')
           }
-          try {
-            const backoffBaseMs =
-              this.port.askPollTransientBackoffBaseMs ?? ApprovalBridge.DEFAULT_ASK_POLL_TRANSIENT_BACKOFF_BASE_MS
-            const backoffCapMs =
-              this.port.askPollTransientBackoffCapMs ?? ApprovalBridge.DEFAULT_ASK_POLL_TRANSIENT_BACKOFF_CAP_MS
-            await delay(
-              Math.min(backoffBaseMs * 2 ** (transientFailures - 1), backoffCapMs),
-              undefined,
-              { signal: monitor.signal },
-            )
-          } catch (error) { if (monitor.signal.aborted) return; throw error }
-          continue
         }
-        if (current.stateChangeSeq !== entry.seq || current.agentStatus !== 'blocked') {
-          this.port.asks.observeAuthority({ nodeId: nodeIdOf(pane), paneId: pane.paneId, seq: current.stateChangeSeq, status: current.agentStatus })
+      })()
+      try {
+        return { outcome: await Promise.race([result, polling.then(() => result)]), plan }
+      } catch (error) {
+        const isIdConflict = error instanceof HelmError && error.code === 'ask_id_conflict'
+        if (!isIdConflict || conflict >= ApprovalBridge.MAX_ASK_CONFLICT_RETRIES) {
+          throw error
+        }
+        const existingStatus = (error.details as { existingStatus?: unknown } | undefined)?.existingStatus
+        if (existingStatus === 'pending') {
           await this.port.cancelAskQuietly(entry.askId, 'superseded')
         }
+        const latest = await this.port.agentGet(targetOf(pane), pane.paneId, request.signal)
+        await this.cancelSuperseded(pane, latest)
+        if (latest.stateChangeSeq !== entry.seq || latest.agentStatus !== 'blocked') {
+          return this.settleSuperseded(entry)
+        }
+        this.port.asks.advanceRetryOnConflict(entry)
+      } finally {
+        monitor.abort()
+        await polling.catch((error: unknown) => {
+          if ((error as { code?: string }).code !== 'herdr_aborted') throw error
+        })
       }
-    })()
-    try {
-      return { outcome: await Promise.race([result, polling.then(() => result)]), plan }
-    } finally {
-      monitor.abort()
-      await polling.catch((error: unknown) => {
-        if ((error as { code?: string }).code !== 'herdr_aborted') throw error
-      })
     }
   }
 

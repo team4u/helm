@@ -30,6 +30,7 @@ import { AskCoordinator, type AskEntry } from './herdr/asks.js'
 import { MetadataProjector } from './herdr/metadata.js'
 import { PaneRegistry, EMPTY_MANAGED_DOC, nodeIdOf, type ManagedDoc } from './herdr/panes.js'
 import { HerdrExecutor } from './herdr/executor.js'
+import { isPaneLostError } from './herdr/executor-reattach.js'
 import { registerHerdrActions } from './herdr/actions.js'
 import { HerdrProbeCollector } from './herdr/probes.js'
 import {
@@ -118,6 +119,7 @@ export function createHerdrPlugin(
       let managedDoc: ReturnType<typeof ctx.doc<ManagedDoc>>
       let asksRelease: (() => void) | undefined
       let workflowRelease: (() => void) | undefined
+      let runtimeStartedRelease: (() => void) | undefined
 
       /** 最近一次 socket 事件处理的 pane seq 缓存（事件去重，agent.get 为权威）。 */
       const eventSeqCache = new Map<string, number>()
@@ -131,7 +133,11 @@ export function createHerdrPlugin(
         localTarget: () => frozenLocalTarget,
         signal: () => connectionAbort.signal,
         settleUnmanaged: (pane) => {
-          registryRef.current?.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+          registryRef.current?.update(nodeIdOf(pane), pane.paneId, {
+            outcome: 'settled',
+            settledAt: Date.now(),
+            outputFileName: undefined,
+          })
           executorRef.current?.releasePaneState(pane)
           forgetPaneCaches(nodeIdOf(pane), pane.paneId)
         },
@@ -329,7 +335,11 @@ export function createHerdrPlugin(
             // 就驻留一份 HELM_TOKEN 直到停用重建。
             executorRef.current?.releasePaneState(pane)
             if (pane.outcome !== 'failed' && pane.outcome !== 'settled') {
-              registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+              registry.update(nodeIdOf(pane), pane.paneId, {
+                outcome: 'settled',
+                settledAt: Date.now(),
+                outputFileName: undefined,
+              })
             }
             forgetPaneCaches(nodeIdOf(pane), pane.paneId)
             refreshOverview()
@@ -371,7 +381,15 @@ export function createHerdrPlugin(
         try {
           await ctx.host.cancelAsk(entry.askId, reason)
         } catch (error) {
-          if (error instanceof HelmError && error.status === 404) return
+          if (
+            error instanceof HelmError &&
+            (error.status === 404 ||
+              error.code === 'ask_already_settled' ||
+              error.code === 'plugin_host_disposed' ||
+              error.code === 'plugin_context_expired')
+          ) {
+            return
+          }
           host.notify(
             'Herdr 审批销单失败',
             `ask ${entry.askId} cancel 失败：${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
@@ -389,18 +407,30 @@ export function createHerdrPlugin(
 
       async function reconcile(): Promise<void> {
         const registry = registryRef.current!
+        const workflowPluginActive = ctx.host
+          .listPlugins()
+          .some((plugin) => plugin.id === 'builtin:workflow' && plugin.enabled)
         const snapshots = new Map<string, ReturnType<typeof parseSessionSnapshot>>([
           [JSON.stringify(frozenLocalTarget), parseSessionSnapshot(await transportOf().call(frozenLocalTarget, 'session.snapshot', {}, { timeoutMs: 5_000 }))],
         ])
         for (const pane of registry.all()) {
-          if (pane.outcome === 'settled') continue
+          if (pane.outcome === 'settled' || pane.outcome === 'failed') continue
+          if (executorRef.current?.isActiveTask(pane)) continue
           const key = JSON.stringify(pane.target)
           if (!snapshots.has(key)) snapshots.set(key, parseSessionSnapshot(await transportOf().call(pane.target, 'session.snapshot', {}, { timeoutMs: 5_000 })))
           const agent = snapshots.get(key)!.agents.find((a) => a.paneId === pane.paneId)
-          if (pane.outcome === 'failed') continue // 持久 failed：保留诊断现场
           if (agent === undefined) {
+            if (pane.outcome === 'running' && pane.outputFileName !== undefined) {
+              // 重启窗口内可能已写完交接文件后退出，或需由重挂流程诚实判定丢失：
+              // 保留记录待 reattach 优先核查 .helm/<outputFileName> 与显式报 herdr_pane_lost。
+              continue
+            }
             // 窗格已消失：登记 settled（无资源可回收）+ executor 侧对齐。
-            registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+            registry.update(nodeIdOf(pane), pane.paneId, {
+              outcome: 'settled',
+              settledAt: Date.now(),
+              outputFileName: undefined,
+            })
             executorRef.current?.releasePaneState(pane)
             forgetPaneCaches(nodeIdOf(pane), pane.paneId)
             continue
@@ -408,12 +438,16 @@ export function createHerdrPlugin(
           // 精确归属验证：agent.name 必须等于记录的 agentName（不 startsWith——
           // helm-wf-abc 不能认领 helm-wf-abcde）。身份不符放弃所有权，不误关。
           if (agent.name !== pane.agentName) {
-            registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+            registry.update(nodeIdOf(pane), pane.paneId, {
+              outcome: 'settled',
+              settledAt: Date.now(),
+              outputFileName: undefined,
+            })
             executorRef.current?.releasePaneState(pane)
             forgetPaneCaches(nodeIdOf(pane), pane.paneId)
             continue
           }
-          // 真正仍在 working/blocked：保留并报告（绝不伪装结束自动回收）。
+          // 真正仍在 working/blocked/unknown：保留并报告（绝不伪装结束自动回收）。
           if (agent.agentStatus === 'working' || agent.agentStatus === 'blocked' || agent.agentStatus === 'unknown') {
             host.notify(
               'Herdr 启动对账发现在途窗格',
@@ -422,7 +456,16 @@ export function createHerdrPlugin(
             )
             continue
           }
-          // 已结束（idle/done/unknown）且无在途 spawn（进程重启）：孤儿可回收。
+          // 携带持久化 outputFileName 的在途 running 窗格：在重启期间刚转为 idle/done，
+          // 保留交由重挂流程优先收取交接文件或执行单次自愈，绝不误杀关闭。
+          if (pane.outcome === 'running' && pane.outputFileName !== undefined) {
+            continue
+          }
+          // 归属启用中 workflow 的 keepalive 窗格：保留至 workflow.settled（或启动后兜底清理）。
+          if (pane.outcome === 'keepalive' && pane.workflowRunId !== undefined && workflowPluginActive) {
+            continue
+          }
+          // 已结束（idle/done）且无在途重挂/工作流归属（进程重启孤儿）：安全回收。
           if (pane.outcome === 'running' || pane.outcome === 'keepalive') {
             await executorRef.current!.closePane(pane, 'settled').catch((error) => {
               host.notify(
@@ -433,6 +476,93 @@ export function createHerdrPlugin(
             })
           }
         }
+      }
+
+      /**
+       * 全局启动完成（runtime.started，所有插件已进入 idle）后的兜底对账：
+       * 若某些带 workflowRunId 的窗格因 autoRecoverOnRestart=false 或重启前已终态
+       * 而未被重挂，且所属 workflow 已达终态/不存在，则安全回收已空闲/已消失窗格
+       * （仍在 working/blocked 的窗格依然严格保留不误杀）。
+       */
+      async function reconcileWorkflowOrphansAfterStartup(): Promise<void> {
+        if (stopping || connectionAbort.signal.aborted) return
+        const registry = registryRef.current
+        const executor = executorRef.current
+        if (!registry || !executor) return
+        const workflowPluginActive = ctx.host
+          .listPlugins()
+          .some((plugin) => plugin.id === 'builtin:workflow' && plugin.enabled)
+        if (!workflowPluginActive) return
+        for (const pane of registry.all()) {
+          if (stopping || connectionAbort.signal.aborted) return
+          if (pane.workflowRunId === undefined) continue
+          if (pane.outcome === 'settled' || pane.outcome === 'failed') continue
+          if (executor.isActiveTask(pane)) continue
+          let runStatus: string | undefined
+          try {
+            const summary = (await ctx.host.invokeAction('builtin:workflow', 'inspect', {
+              runId: pane.workflowRunId,
+            })) as { status?: string } | undefined
+            runStatus = summary?.status
+          } catch (error) {
+            if (error instanceof HelmError && error.code === 'not_found') {
+              runStatus = 'not_found'
+            } else {
+              continue
+            }
+          }
+          if (runStatus === 'running') continue
+          if (pane.outcome === 'keepalive') {
+            await executor.closePane(pane, 'workflow-settled').catch((error) => {
+              host.notify(
+                'Herdr workflow 孤儿清理失败',
+                `pane ${pane.paneId}（workflow ${pane.workflowRunId}）清理失败：${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
+                'error',
+              )
+            })
+            continue
+          }
+          try {
+            const info = parseAgentResult(
+              await transportOf().call(pane.target, 'agent.get', { target: pane.paneId }, {
+                signal: connectionAbort.signal,
+                timeoutMs: 5_000,
+              }),
+              'agent.get',
+              'agent_info',
+            )
+            if (info.name !== pane.agentName || info.tabId !== pane.tabId) {
+              registry.update(nodeIdOf(pane), pane.paneId, {
+                outcome: 'settled',
+                settledAt: Date.now(),
+                outputFileName: undefined,
+              })
+              executor.releasePaneState(pane)
+              forgetPaneCaches(nodeIdOf(pane), pane.paneId)
+              continue
+            }
+            if (info.agentStatus === 'idle' || info.agentStatus === 'done') {
+              await executor.closePane(pane, 'workflow-settled').catch((error) => {
+                host.notify(
+                  'Herdr workflow 孤儿清理失败',
+                  `pane ${pane.paneId}（workflow ${pane.workflowRunId}）清理失败：${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
+                  'error',
+                )
+              })
+            }
+          } catch (error) {
+            if (isPaneLostError(error)) {
+              registry.update(nodeIdOf(pane), pane.paneId, {
+                outcome: 'settled',
+                settledAt: Date.now(),
+                outputFileName: undefined,
+              })
+              executor.releasePaneState(pane)
+              forgetPaneCaches(nodeIdOf(pane), pane.paneId)
+            }
+          }
+        }
+        registry.prune()
       }
 
       // ---- 双轨清理 ----
@@ -555,25 +685,23 @@ export function createHerdrPlugin(
         },
       })
 
-      // ---- service：start 连接（ack 先于对账），stop 清理全部 ----
-      ctx.service({
-        id: 'herdr-connection',
-        liveTasks() {
-          return registryRef.current ? registryRef.current.liveTaskLabels() : []
-        },
-        async start() {
-          stopping = false
-          connectionAbort = new AbortController()
-          const config = ctx.getConfig() as Partial<HerdrConfig>
-          // 端口组装（周期内冻结；缺端口能力由宿主端口自身显式报错）。
+      /** 准备阶段（纯内存 + 持久记录校验，不触网）：使 workflow.start 重挂先于 herdr.start 时执行器已就位。 */
+      function prepareLocalRuntime(): void {
+        stopping = false
+        connectionAbort = new AbortController()
+        const config = ctx.getConfig() as Partial<HerdrConfig>
+        try {
           resolveDeps()
           const deps = depsRef.current!
-          // 冻结本启用周期的本机连接目标（此后所有调用共用；热配置不再生效）。
           frozenLocalTarget = resolveLocalTarget(config)
           const startupTimeout = normalizeStartupTimeoutMs(config.startupTimeoutMs)
           const restored = managedDoc.get()
           const registry = new PaneRegistry(
-            { get: () => managedDoc.get(), set: (doc) => managedDoc.set(doc) },
+            {
+              get: () => managedDoc.get(),
+              set: (doc) => managedDoc.set(doc),
+              flush: () => managedDoc.flush(),
+            },
             restored,
           )
           registryRef.current = registry
@@ -590,12 +718,38 @@ export function createHerdrPlugin(
               startupTimeoutMs: () => startupTimeout,
               createAsk: host.createAsk,
               cancelAsk: host.cancelAsk,
+              isClosing: () => hostApi.isClosing,
+              connectionSignal: connectionAbort.signal,
             },
             deps.transport!,
             frozenLocalTarget,
             deps.pollIntervalMs,
           )
           executorRef.current = executor
+        } catch (error) {
+          registryRef.current = undefined
+          executorRef.current = undefined
+          projectorRef.current = undefined
+          depsRef.current = undefined
+          throw error
+        }
+      }
+
+      // ---- service：prepare 本地就位，start 连接（ack 先于对账），stop 按 isClosing 分流 ----
+      ctx.service({
+        id: 'herdr-connection',
+        liveTasks() {
+          return registryRef.current ? registryRef.current.liveTaskLabels() : []
+        },
+        prepare() {
+          prepareLocalRuntime()
+        },
+        async start() {
+          if (registryRef.current === undefined || executorRef.current === undefined) {
+            prepareLocalRuntime()
+          }
+          const deps = depsRef.current!
+          const registry = registryRef.current!
           overviewRef.current = new OverviewProjector(
             { redact: deps.redact, notify: host.notify },
             (doc) => { if (!stopping) overviewDoc.set(doc) },
@@ -635,6 +789,7 @@ export function createHerdrPlugin(
             }),
           )
           workflowRelease = ctx.host.onEvent('workflow.settled', (raw) => settleWorkflow(raw as WorkflowRunSummary))
+          runtimeStartedRelease = ctx.host.onEvent('runtime.started', () => reconcileWorkflowOrphansAfterStartup())
 
           try {
             // subscribe ack 先行；任一步失败都释放解析器、监听与已获取资源。
@@ -651,7 +806,7 @@ export function createHerdrPlugin(
           }
         },
         async stop() {
-          await stopResources()
+          await stopResources(true)
         },
       })
 
@@ -668,9 +823,15 @@ export function createHerdrPlugin(
         return { socketPath: resolveSocketPath({ ...(session !== undefined ? { session } : {}), ...(socketPath !== undefined ? { socketPath } : {}) }) }
       }
 
-      /** 服务资源清理：订阅/解析器/监听 + 可回收自有 pane（failed 保留现场）。 */
-      async function stopResources(): Promise<void> {
+      /**
+       * 服务资源清理：订阅/解析器/监听 + 按宿主是否正在关停分流自有 pane：
+       * - isClosing === true（Hub 进程优雅关停）：保留 running 窗格（以及仍归属
+       *   workflow 的 keepalive 窗格）继续在 Herdr 守护进程运行并写交接文件；
+       * - isClosing === false（手动停用插件/测试 dispose）：关闭全部非 failed/settled 窗格。
+       */
+      async function stopResources(fromStop = false): Promise<void> {
         const errors: unknown[] = []
+        const closingHost = hostApi.isClosing
         stopping = true
         connectionAbort.abort()
         clearSubscriptionRetry()
@@ -705,6 +866,12 @@ export function createHerdrPlugin(
           errors.push(err)
         }
         workflowRelease = undefined
+        try {
+          runtimeStartedRelease?.()
+        } catch (err) {
+          errors.push(err)
+        }
+        runtimeStartedRelease = undefined
         // 销单全部 pending Ask；取消失败如实记录（不空吞）。dispose 路径宿主
         // 可能已先行销毁（plugin_host_disposed 409 属预期终态，不再计为失败——
         // AskService 自身的进程级清理负责收尾，协调器条目已全部兜底结算）。
@@ -714,7 +881,11 @@ export function createHerdrPlugin(
               await ctx.host.cancelAsk(entry.askId, 'cancelled')
             } catch (err) {
               const expected =
-                err instanceof HelmError && (err.status === 404 || err.code === 'plugin_host_disposed' || err.code === 'plugin_context_expired')
+                err instanceof HelmError &&
+                (err.status === 404 ||
+                  err.code === 'ask_already_settled' ||
+                  err.code === 'plugin_host_disposed' ||
+                  err.code === 'plugin_context_expired')
               if (!expected) errors.push(err)
             }
           }
@@ -724,6 +895,10 @@ export function createHerdrPlugin(
         if (registry) {
           for (const pane of registry.all()) {
             if (pane.outcome === 'failed' || pane.outcome === 'settled') continue
+            if (closingHost) {
+              if (pane.outcome === 'running') continue
+              if (pane.outcome === 'keepalive' && pane.workflowRunId !== undefined) continue
+            }
             // 远端可回收 pane 同样清理（closePane 幂等、仅关自有资源；
             // 冻结 target 保证触达的是创建它的那台服务器）。
             try {
@@ -731,6 +906,16 @@ export function createHerdrPlugin(
             } catch (err) {
               errors.push(err)
             }
+          }
+        }
+        if (closingHost && fromStop) {
+          try {
+            await managedDoc.flush()
+          } catch (err) {
+            const expected =
+              err instanceof HelmError &&
+              (err.code === 'plugin_host_disposed' || err.code === 'plugin_context_expired')
+            if (!expected) errors.push(err)
           }
         }
         registryRef.current = undefined

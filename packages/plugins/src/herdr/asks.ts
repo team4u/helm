@@ -169,6 +169,18 @@ export class AskCoordinator {
     return entry
   }
 
+  /**
+   * 宿主 AskDoc ID 冲突（如跨重启同 seq 已有历史 AskDoc）时推进重试后缀（:r<N>），
+   * 重回 creating 相位以便重建带新 ID 的待答 AskDoc（parseAskId 与 seqResolver 同源支持）。
+   */
+  advanceRetryOnConflict(entry: AskEntry): void {
+    if (this.entries_map.get(entry.key) !== entry) return
+    entry.attempt += 1
+    entry.askId = `${entry.key}:r${entry.attempt}`
+    entry.phase = 'creating'
+    this.onChange()
+  }
+
   /** 创建失败（IO/宿主错误/销单确认）：条目移除（允许后续重试），错误由调用方上抛。 */
   failCreate(entry: AskEntry): void {
     this.removeEntry(entry)

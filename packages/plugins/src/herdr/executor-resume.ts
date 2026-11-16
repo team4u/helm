@@ -141,6 +141,7 @@ export class ResumeCoordinator {
       agentId: request.agentId ?? pane.agentId,
       ...(spawnRunId !== undefined ? { workflowRunId: spawnRunId } : {}),
     })!
+    await this.port.registry.flushDisk()
     request.onResolved?.(this.port.executionInfoOf(updated))
     // request.cwd 缺省代表沿用窗格实际 cwd（不重开窗、不重建 env tab）。
     // 续接不重跑 agent.start（窗格已有 agent）；直接进入投递-审批-交接循环。
