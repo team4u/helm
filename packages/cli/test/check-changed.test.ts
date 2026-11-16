@@ -237,7 +237,7 @@ test('planCheckCommands：desktop 选中时插入 dist build 前置；顺序固�
   assert.deepEqual(withDesktop[0]?.args, ['/pnpm/bin/pnpm.cjs', 'typecheck'])
   assert.deepEqual(withDesktop[1]?.args, ['/pnpm/bin/pnpm.cjs', '--filter', '@helm/desktop', 'run', 'build'])
   assert.match(withDesktop[1]?.label ?? '', /desktop/)
-  assert.equal(withDesktop[2]?.args[0], '/repo/scripts/run-tests.mjs')
+  assert.equal(withDesktop[2]?.args[0], path.join('/repo', 'scripts', 'run-tests.mjs'))
   assert.equal(withDesktop[2]?.args.length, 3)
 
   const withoutDesktop = planCheckCommands({
@@ -434,7 +434,15 @@ test('resolvePackageManagerInvoke：npm_execpath 校验后缀后用当前 Node �
   assert.deepEqual(resolvePackageManagerInvoke({ npm_execpath: '/x/pnpm/bin/pnpm.js' }).args, [
     '/x/pnpm/bin/pnpm.js',
   ])
-  // 非脚本后缀（可执行 shim / 恶意值）不盲信，回退。
+  // pnpm 官方 standalone 安装（Windows）：npm_execpath 指向 pnpm.exe 可执行启动器。
+  // .exe 是真实可执行文件（非 .cmd 脚本），无需 shell、无注入面，直接 spawn；否则回退
+  // 裸 'pnpm' 在 Windows 上解析为 pnpm.cmd，spawn EINVAL（产品 bug，非仅测试问题）。
+  assert.deepEqual(resolvePackageManagerInvoke({ npm_execpath: 'C:\\Tools\\pnpm.exe' }), {
+    cmd: 'C:\\Tools\\pnpm.exe',
+    args: [],
+  })
+  // 非脚本后缀（可执行 shim / 恶意值）不盲信，回退；.cmd 是脚本注入面，绝不直接 spawn。
+  assert.deepEqual(resolvePackageManagerInvoke({ npm_execpath: '/x/pnpm.cmd' }), { cmd: 'pnpm', args: [] })
   assert.deepEqual(resolvePackageManagerInvoke({ npm_execpath: '/x/evil.sh' }), { cmd: 'pnpm', args: [] })
   assert.deepEqual(resolvePackageManagerInvoke({ npm_execpath: '' }), { cmd: 'pnpm', args: [] })
 })
@@ -540,15 +548,15 @@ process.exit(code)
   rmSync(dir, { recursive: true, force: true })
 }
 
-test('进程纪律：孙进程忽略 SIGTERM 时整组仍被收割，退出 143，重复信号幂等', { timeout: 60_000 }, async () => {
+test('进程纪律：孙进程忽略 SIGTERM 时整组仍被收割，退出 143，重复信号幂等', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX 进程组信号语义（128+n 退出码 / kill(-pid)）；Windows 走 taskkill 路径，不适用' : false }, async () => {
   await runSignalTreeTest('SIGTERM', 143)
 })
 
-test('进程纪律：孙进程忽略 SIGINT 时同样收割，退出 130', { timeout: 60_000 }, async () => {
+test('进程纪律：孙进程忽略 SIGINT 时同样收割，退出 130', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX 进程组信号语义（128+n 退出码 / kill(-pid)）；Windows 走 taskkill 路径，不适用' : false }, async () => {
   await runSignalTreeTest('SIGINT', 130)
 })
 
-test('回归：runManagedCommand → 本仓 run-tests.mjs → 忽略 TERM 孙进程的真实拓扑无孤儿', { timeout: 60_000 }, async () => {
+test('回归：runManagedCommand → 本仓 run-tests.mjs → 忽略 TERM 孙进程的真实拓扑无孤儿', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX 进程组信号语义（128+n 退出码 / kill(-pid)）；Windows 走 taskkill 路径，不适用' : false }, async () => {
   // 完整真实链路：外层受管命令 = node scripts/run-tests.mjs <holder>；holder 是一个
   // 永不结束的 *.test.ts，其内 spawn 忽略 SIGTERM 的孙进程（写 PID marker）。
   // 取消外层后：run-tests（G1 leader）收到 TERM → 转发其 owned G2 → tsx leader 退出但
