@@ -11,7 +11,7 @@ import type {
   HelmEventFrame,
   HelmResumedFrame,
   HelmSnapshot,
-} from '@helm/protocol'
+} from '@helm/protocol/browser'
 import { getStoredToken } from './api.js'
 import { errorText } from './format.js'
 import {

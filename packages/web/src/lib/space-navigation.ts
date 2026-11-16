@@ -1,7 +1,7 @@
 /**
  * 侧栏空间记忆判定、默认回跳目标、删除回退与 Screen 路由参数补丁纯函数（零 React 依赖）。
  */
-import type { ConversationSummary, Profile } from '@helm/protocol'
+import type { ConversationSummary, Profile } from '@helm/protocol/browser'
 import { isConversationArchived } from '../conversation/archive-model.js'
 import {
   isPrototypeParamKey,

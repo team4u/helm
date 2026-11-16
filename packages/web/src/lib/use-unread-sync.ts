@@ -2,7 +2,7 @@
  * 前台可见聚焦门控自动清未读与可见会话首载同步 hook。
  */
 import { useCallback, useEffect, useRef, type MutableRefObject } from 'react'
-import type { ArtifactMetadata, ConversationDetail, ConversationSummary } from '@helm/protocol'
+import type { ArtifactMetadata, ConversationDetail, ConversationSummary } from '@helm/protocol/browser'
 import { conversationsApi } from './api.js'
 import { isPageActive } from './browser-notification.js'
 import { errorText } from './format.js'

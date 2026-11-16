@@ -3,7 +3,7 @@
  * 负责 1.5s 确认窗口武装、提示横幅增删、目标切换/非运行态自动复位及卸载定时器清理。
  */
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
-import type { ConversationDetail, ConversationSummary } from '@helm/protocol'
+import type { ConversationDetail, ConversationSummary } from '@helm/protocol/browser'
 import { conversationsApi } from './api.js'
 import { errorText } from './format.js'
 import type { FocusedPanel, ResolvedTarget, ToastNotice } from './types.js'

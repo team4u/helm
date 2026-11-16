@@ -250,15 +250,12 @@ test('浏览器侧源码与 @helm/protocol/browser 传递闭包禁止导入 node
     }
   }
 
-  // HelmStoreProvider.tsx 正处于并行重构过渡期，其余 @helm/web/src 文件必须全部从 @helm/protocol/browser 导入。
-  const transitionalProtocolRootAllowlist = new Set(['lib/HelmStoreProvider.tsx'])
   const webSrcDir = join(packagesDir, 'web/src')
   for (const file of sourceFiles(webSrcDir)) {
-    const relFromWebSrc = relative(webSrcDir, file).replace(/\\/g, '/')
     for (const specifier of imports(file)) {
       const problem = isForbiddenBrowserRuntimeImport(specifier)
       if (problem) violations.push(`${relative(packagesDir, file)}: ${problem}`)
-      if (specifier === '@helm/protocol' && !transitionalProtocolRootAllowlist.has(relFromWebSrc)) {
+      if (specifier === '@helm/protocol') {
         violations.push(`${relative(packagesDir, file)}: 必须从 @helm/protocol/browser 导入，禁止导入 @helm/protocol 根入口`)
       }
     }

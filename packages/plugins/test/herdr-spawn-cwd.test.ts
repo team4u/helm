@@ -12,7 +12,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -133,6 +133,7 @@ interface FakePane {
 /** 受控 transport：记录全部协议调用；prompt 即完成（写交接文件）。 */
 class FakeTransport implements HerdrTransport {
   panes = new Map<string, FakePane>()
+  outputs = new Map<string, string>()
   calls: Array<{ target: HerdrTarget; method: string; params: Record<string, unknown> }> = []
 
   private paneOf(ref: unknown): FakePane {
@@ -197,11 +198,9 @@ class FakeTransport implements HerdrTransport {
         const pane = this.paneOf(params['target'])
         pane.status = 'done'
         pane.seq += 1
-        // prompt 即完成：写交接文件（与生产链路同路径 <cwd>/.helm/wf-out-*.md）。
+        // prompt 即完成：内存模拟交接文件（锚定规范化后的 pane.cwd，避免在 Linux 宿主真实创建 C:\work\helm）。
         const fileName = (params['text'] as string).match(/wf-out-[A-Za-z0-9_.-]+\.(json|md)/)?.[0] ?? ''
-        const dir = join(pane.cwd, '.helm')
-        mkdirSync(dir, { recursive: true })
-        writeFileSync(join(dir, fileName), 'herdr-done')
+        this.outputs.set(`${pane.cwd}\0${fileName}`, 'herdr-done')
         return { type: 'agent_prompted', agent: this.infoOf(pane) }
       }
       case 'agent.get':
@@ -216,12 +215,15 @@ class FakeTransport implements HerdrTransport {
   }
 
   async readOutput(_target: HerdrTarget, cwd: string, fileName: string): Promise<string> {
-    const path = join(cwd, '.helm', fileName)
-    return await import('node:fs').then((fs) => fs.readFileSync(path, 'utf8'))
+    const content = this.outputs.get(`${cwd}\0${fileName}`)
+    if (content === undefined) {
+      throw new HelmError('herdr_output_missing', `交接文件不存在: ${cwd}/.helm/${fileName}`, 404)
+    }
+    return content
   }
 
   async removeOutput(_target: HerdrTarget, cwd: string, fileName: string): Promise<void> {
-    await import('node:fs').then((fs) => fs.rmSync(join(cwd, '.helm', fileName)))
+    this.outputs.delete(`${cwd}\0${fileName}`)
   }
 
   async runGate(): Promise<AgentGateResult> {

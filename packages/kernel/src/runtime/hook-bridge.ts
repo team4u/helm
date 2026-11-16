@@ -83,7 +83,6 @@ export class HookBridge {
 
   /** 安装 SDK 钩子扩展（initialize 阶段一次）。 */
   install(): void {
-    const self = this
     this.options.registry.install(
       defineExtension({
         name: 'helm-hook-bridge',
@@ -91,19 +90,19 @@ export class HookBridge {
           hook(ToolTask, {
             /** tool_call：transform 改写参数 / block 拦截。 */
             beforeTool: async (call, api) => {
-              const outcome = await self.runHookChain('tool_call', {
+              const outcome = await this.runHookChain('tool_call', {
                 conversationId: api.conversationId,
                 callId: call.id,
                 toolName: call.name,
                 input: call.arguments,
               })
               if (outcome?.action === 'block') {
-                return { block: self.options.redact(outcome.reason ?? 'blocked') }
+                return { block: this.options.redact(outcome.reason ?? 'blocked') }
               }
               if (outcome?.action === 'handled') {
                 // 接管：结果登记到 execute 层缓存（wrapToolCalls 包装器消费）；
                 // 同时记录归属会话，回合终态/abort/删除时兑底清理未消费残留。
-                self.options.handledToolCalls.set(call.id, {
+                this.options.handledToolCalls.set(call.id, {
                   conversationId: api.conversationId,
                   result: toolResultOf(outcome.result),
                 })
@@ -118,9 +117,9 @@ export class HookBridge {
             },
             /** 所有工具最终输出都在持久化前经过同一脱敏与 Spill 边界。 */
             afterTool: async (call, result, api) => {
-              self.options.handledToolCalls.delete(call.id)
+              this.options.handledToolCalls.delete(call.id)
               try {
-                const outcome = await self.runHookChain('tool_result', {
+                const outcome = await this.runHookChain('tool_result', {
                   conversationId: api.conversationId,
                   callId: call.id,
                   toolName: call.name,
@@ -137,11 +136,11 @@ export class HookBridge {
                   if (!handled) throw new HelmError('invalid_hook_result', 'tool_result 接管产物不是合法工具结果', 500)
                   effective = handled as ToolExecutionResult
                 }
-                return await self.options.prepareToolResult(api.conversationId, effective)
+                return await this.options.prepareToolResult(api.conversationId, effective)
               } catch (error) {
                 return {
                   isError: true,
-                  output: [{ type: 'text', text: self.options.redact(`tool_result_failed: ${error instanceof Error ? error.message : String(error)}`) }],
+                  output: [{ type: 'text', text: this.options.redact(`tool_result_failed: ${error instanceof Error ? error.message : String(error)}`) }],
                 }
               }
             },
@@ -157,9 +156,9 @@ export class HookBridge {
              */
             beforeRequest: async (request, api) => {
               const conversationId = api.conversationId
-              const summary = self.options.safeSummary(conversationId)
+              const summary = this.options.safeSummary(conversationId)
               if (!summary) return undefined
-              return self.transformBeforeTurn(request, summary, conversationId)
+              return this.transformBeforeTurn(request, summary, conversationId)
             },
           }),
         ],

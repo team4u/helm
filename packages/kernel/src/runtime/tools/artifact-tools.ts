@@ -148,7 +148,7 @@ export function createRegisterArtifactTool(
           isError: true,
         }
       }
-      const target0 = await resolveToolTarget(deps, api)
+      const target0 = await resolveToolTarget(deps, api, context)
       if ('error' in target0) {
         return { output: [{ type: 'text', text: `register_failed: ${target0.error}` }], isError: true }
       }

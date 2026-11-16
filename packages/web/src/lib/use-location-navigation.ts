@@ -3,7 +3,7 @@
  * 浏览器地址栏读写边界（hashchange/popstate 与 pushState/replaceState）留在 HelmStoreProvider。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
-import type { ConversationDetail, Profile } from '@helm/protocol'
+import type { ConversationDetail, Profile } from '@helm/protocol/browser'
 import { entryMatchesReference, type LiveState } from './live-state.js'
 import { defaultSpaceTarget, resolveSpaceSwitch, type SpaceTargetInput } from './space-navigation.js'
 import {
