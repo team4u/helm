@@ -5,7 +5,7 @@
  */
 import type { ConversationSummary } from '@helm/protocol'
 import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts.js'
-import { firstLineOf, formatShortModelName, inputString } from './model-format.ts'
+import { firstLineOf, formatShortModelName, inputString, inspectString } from './model-format.ts'
 
 /** 工具输出 JSON 里的 run id 字段（"id":"wf_xxx"）精确提取（不匹配子串/前缀）。 */
 const WORKFLOW_RUN_ID_IN_RESULT_RE = /"id"\s*:\s*"([^"]+)"/
@@ -265,9 +265,94 @@ export function extractWorkflowLogs(run: WorkflowRunSummary): WorkflowLogLine[] 
     .map((p, idx) => ({ key: `log:${idx}:${p.at}`, at: p.at, message: p.message }))
 }
 
-/** 断点恢复可用判定：仅 DSL 编排工作流失败或中止后可用。 */
+/** 断点恢复可用判定：仅 DSL 编排工作流失败或中止、且尚未被新续跑接管时可用。 */
 export function canResumeWorkflowRun(run: WorkflowRunSummary): boolean {
-  return run.kind !== 'subagent' && (run.status === 'failed' || run.status === 'aborted')
+  return (
+    run.kind !== 'subagent' &&
+    (run.status === 'failed' || run.status === 'aborted') &&
+    run.resumedByRunId === undefined
+  )
+}
+
+function hasRunExecutionHandle(run: WorkflowRunSummary): boolean {
+  return (run.nodes ?? []).some(
+    (node) =>
+      (node.conversationId !== undefined && Number.isSafeInteger(node.conversationId) && node.conversationId > 0) ||
+      (typeof node.executionId === 'string' && node.executionId.trim() !== ''),
+  )
+}
+
+/** 后台子代理单卡恢复可用判定：subagent 失败或中止、未被接管且具备可续接执行句柄。 */
+export function canResumeSubagentRun(
+  run: WorkflowRunSummary | undefined,
+  hasExecutionHandle: boolean,
+): boolean {
+  if (run === undefined) return false
+  if (run.kind !== 'subagent') return false
+  if (run.status !== 'failed' && run.status !== 'aborted') return false
+  if (run.resumedByRunId !== undefined) return false
+  return hasExecutionHandle || hasRunExecutionHandle(run)
+}
+
+function isNonResumableRunError(error: string | undefined): boolean {
+  if (error === undefined) return false
+  const normalized = error.toLowerCase()
+  return (
+    normalized.includes('workflow_action_uncertain') ||
+    normalized.includes('[crash_recovery_limit]') ||
+    normalized.includes('crash_recovery_limit') ||
+    normalized.includes('secret_grant_expired_on_restart') ||
+    normalized.includes('[validation_error]') ||
+    normalized.includes('validation_error') ||
+    normalized.includes('workflow script has a syntax error')
+  )
+}
+
+/**
+ * 筛选当前会话下可自动批量恢复的失败记录（排除已被接管、不可自动恢复错误
+ * 及无续接句柄的后台单子代理）。
+ */
+export function listResumableFailedRuns(
+  runs: ReadonlyArray<WorkflowRunSummary>,
+  conversationId: number,
+): WorkflowRunSummary[] {
+  const seenIds = new Set<string>()
+  const result: WorkflowRunSummary[] = []
+  for (const run of runs) {
+    if (seenIds.has(run.id)) continue
+    seenIds.add(run.id)
+    if (run.conversationId !== conversationId) continue
+    if (run.status !== 'failed') continue
+    if (run.resumedByRunId !== undefined) continue
+    if (isNonResumableRunError(run.error)) continue
+    if (run.kind === 'subagent' && !hasRunExecutionHandle(run)) continue
+    result.push(run)
+  }
+  return result
+}
+
+export interface ResumeFailedSummaryView {
+  resumedCount: number
+  skippedCount: number
+}
+
+/** 严格解析 resume_failed 动作结果（非法形状返回 undefined，绝不猜计数）。 */
+export function parseResumeFailedResult(raw: unknown): ResumeFailedSummaryView | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const record = raw as Record<string, unknown>
+  const resumed = record['resumed']
+  const skipped = record['skipped']
+  if (!Array.isArray(resumed) || !Array.isArray(skipped)) return undefined
+  for (const item of resumed) {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) return undefined
+    if (inspectString(item as Record<string, unknown>, 'id') === undefined) return undefined
+  }
+  for (const item of skipped) {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) return undefined
+    const entry = item as Record<string, unknown>
+    if (inspectString(entry, 'runId') === undefined || typeof entry['reason'] !== 'string') return undefined
+  }
+  return { resumedCount: resumed.length, skippedCount: skipped.length }
 }
 
 /**

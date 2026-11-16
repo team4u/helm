@@ -64,13 +64,22 @@ export {
   buildWorkflowPhaseSections,
   extractWorkflowLogs,
   canResumeWorkflowRun,
+  canResumeSubagentRun,
+  listResumableFailedRuns,
+  parseResumeFailedResult,
   canReplayWorkflowRun,
   canDetachForegroundRun,
   formatWorkflowNodeStats,
   resolveRunElapsedMs,
   resolveNodeElapsedMs,
 } from './model-run.ts'
-export type { NodeSummaryText, WorkflowPhaseSection, WorkflowLogLine, DetachViewerScope } from './model-run.ts'
+export type {
+  NodeSummaryText,
+  WorkflowPhaseSection,
+  WorkflowLogLine,
+  DetachViewerScope,
+  ResumeFailedSummaryView,
+} from './model-run.ts'
 
 // 受管工作树只读检视（model-worktree.ts）
 export { parseWorktreeInspectResult, buildWorktreeSelector, buildWorktreeReviewRequest } from './model-worktree.ts'
