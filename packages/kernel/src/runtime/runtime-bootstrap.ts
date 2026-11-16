@@ -288,34 +288,18 @@ export async function teardownKernelRuntime(deps: {
   await step('nodes.dispose', () => deps.nodes.dispose())
   await step('assetReloader.waitForInflight', () => deps.assetReloader.waitForInflight())
   await step('modelsRegistry.dispose', () => deps.modelsRegistry.dispose())
+  // 先行关闭 Harness：此时 pluginHost、envFabric、HelmStore 与受管 token 仍在线，
+  // 运行中 GenerationTask / ToolTask 经 writeAtClose() 退回 pending（不写 aborted、
+  // 不计 restarts），供下次启动原位恢复。
+  await step('harness.close', () => deps.harness.close(BACKGROUND_CONTEXT))
   await step('settledInflight', () => deps.settledInflight())
-  const closeAborts: Array<Promise<void>> = []
-  for (const meta of deps.store.listConvs()) {
-    const conversation = await deps.harness
-      .conversation(meta.id as never, BACKGROUND_CONTEXT)
-      .catch(() => undefined)
-    if (!conversation) continue
-    const wasBusy = deps.tracker.hasLiveWork(meta.id)
-    closeAborts.push(
-      conversation
-        .abort(BACKGROUND_CONTEXT)
-        .then(() => {
-          if (wasBusy) deps.tracker.settleAborted(meta.id)
-        })
-        .catch(() => {}),
-    )
-  }
-  await Promise.allSettled(closeAborts)
-  // abort 唤醒的回合在 settle 链上追加新的 turn_settled 回调：getter 现读
-  // 最新链再等待一轮，防止中止触发的结算写入与 store.close 竞态。
-  await step('settledInflight#2', () => deps.settledInflight())
-  await step('settledInflight#3', () => deps.settledInflight())
   deps.tracker.close()
   await step('pluginHost.dispose', () => deps.pluginHost?.dispose() ?? Promise.resolve())
+  // 排空插件停止窗口内排入的结算回调，防止写入与 store.close 竞态。
+  await step('settledInflight#2', () => deps.settledInflight())
   await step('nodeForward.close', () => deps.nodeForward?.close() ?? Promise.resolve())
   await step('envFabric.dispose', () => deps.envFabric.dispose())
   deps.processTokenHandle?.dispose()
-  await step('harness.close', () => deps.harness.close(BACKGROUND_CONTEXT))
   let storeError: unknown
   try {
     storeError = await deps.store.close()

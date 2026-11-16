@@ -19,7 +19,6 @@ import { readJournal } from './journal.js'
 import {
   backgroundChildIds,
   errorMessage,
-  isBackgroundRecord,
   isNonRetryableWorkflowError,
   type RunRecord,
 } from './run-store.js'
@@ -38,16 +37,19 @@ export class StartupRecovery {
   private recovered = false
   private recoveryPrepared = false
   private initPromise?: Promise<void>
+  private readonly preparedChildIds = new Set<number>()
+  private readonly pendingSettlementChildIds = new Set<number>()
+  private settlementPromise?: Promise<void>
 
   constructor(private readonly svc: WorkflowServiceContext) {}
 
   /**
-   * 启动恢复（阶段一：全局服务 prepare 屏障，SDK 调度器仍 paused）：把跨
-   * 重启遗留的 running run 的子会话经 host.abortConversationGuarded（paused
-   * 相位：只落持久 abort 标记，不唤醒调度器、不等结算）逐个持久取消。
+   * 启动恢复（阶段一：全局服务 prepare 屏障，SDK 调度器仍 paused）：扫描全部
+   * running 与 pendingChildCleanup 记录（含后台、同步与 CLI 工作流），把遗留
+   * 原生子会话经 host.abortConversationGuarded（paused 相位：只落持久 abort
+   * 标记，不唤醒调度器、不等结算）逐个持久取消。
    * 幂等；run() 首次调用前自动执行，也可由宿主显式调用。失败可重试：
-   * initPromise 仅在恢复完整成功（含 flush）后保留，异常时清缓存，下一次
-   * init()/run() 重新执行。
+   * recoveryPrepared / initPromise 仅在完整成功后保留。
    */
   async prepareRecovery(): Promise<void> {
     if (this.recoveryPrepared) return
@@ -63,7 +65,7 @@ export class StartupRecovery {
         if (error instanceof HelmError && error.code === 'not_found') continue
         throw error
       }
-      if (record.status !== 'running' || !isBackgroundRecord(record)) continue
+      if (record.status !== 'running' && record.pendingChildCleanup !== true) continue
       for (const id of backgroundChildIds(record)) childIds.add(id)
     }
     // 逐会话守卫取消。仅两类确定性可接受失败可诊断后继续：not_found（会话
@@ -87,6 +89,7 @@ export class StartupRecovery {
         throw error
       }
     }
+    for (const id of childIds) this.preparedChildIds.add(id)
     this.recoveryPrepared = true
   }
 
@@ -128,22 +131,34 @@ export class StartupRecovery {
               this.svc.writeRecord(target)
             })
           }
-          if (record.status !== 'running') continue
-          if (isBackgroundRecord(record)) {
-            // 权威坐标 = 运行期即时持久化的 childConversationIds（合并 subagentMeta/
-            // nodes 冗余投影）。全部执行已在 prepareRecovery 持久标记取消；此处仅
-            // 等待真实终态，不能先回报 interrupted 却让旧模型回合继续运行。守卫
-            // 中止逐个诊断：单个子会话拒绝（human 接管等红线事实）不阻断其余恢复。
-            const children = new Set<number>(backgroundChildIds(record))
-            await Promise.all([...children].map(async (id) => {
-              try {
-                await this.svc.host.abortConversationGuarded(id)
-              } catch (error) {
-                process.stderr.write(
-                  `workflow init: guarded abort conversation ${id} failed: ${errorMessage(error)}\n`,
-                )
+          if (record.status !== 'running') {
+            if (record.pendingChildCleanup === true) {
+              for (const id of backgroundChildIds(record)) {
+                this.pendingSettlementChildIds.add(id)
               }
-            }))
+              delete record.pendingChildCleanup
+              this.svc.writeRecord(record)
+              changed = true
+            }
+            continue
+          }
+          // 权威坐标 = 运行期即时持久化的 childConversationIds（合并 subagentMeta/
+          // nodes 冗余投影）。覆盖后台、同步与 CLI 全部运行中工作流，防止遗留
+          // ownerless 原生子会话在 harness.resume() 后成为孤儿任务继续执行；
+          // 守卫中止逐个诊断，单个拒绝不阻断其余恢复。
+          const children = new Set<number>(backgroundChildIds(record))
+          for (const id of children) this.pendingSettlementChildIds.add(id)
+          await Promise.all([...children].map(async (id) => {
+            try {
+              await this.svc.host.abortConversationGuarded(id)
+            } catch (error) {
+              process.stderr.write(
+                `workflow init: guarded abort conversation ${id} failed: ${errorMessage(error)}\n`,
+              )
+            }
+          }))
+          if (record.pendingChildCleanup !== undefined) {
+            delete record.pendingChildCleanup
           }
           record.status = 'failed'
           record.updatedAt = Date.now()
@@ -151,15 +166,15 @@ export class StartupRecovery {
             record.kind === 'subagent'
               ? 'subagent run interrupted by process restart（可凭 conversationId/executionId 通过 resume 续接）'
               : `run interrupted by process restart（账本完好，可经 resumeFromRunId 恢复）：${record.error ?? ''}`.trim()
-          if (isBackgroundRecord(record) && record.nodes !== undefined) {
+          if (record.nodes !== undefined) {
             record.nodes = record.nodes.map((node) => node.status === 'running' || node.status === 'pending'
               ? { ...node, status: 'failed', settledAt: record.updatedAt, error: record.error }
               : node)
           }
           this.svc.writeRecord(record)
           changed = true
-          // interrupted 的后台 run（subagent 与后台 workflow）同样须补发通知
-          //（通知内容即 failed 终态本身）。
+          // 仅 notifyParentOnSettle=true 的后台 run 补发通知；同步与 CLI 工作流
+          // 绝不向父会话发通知。
           if (record.notifyParentOnSettle === true && record.notifiedAt === undefined) {
             const target = record
             pendingNotifies.push(async () => {
@@ -207,6 +222,51 @@ export class StartupRecovery {
       }
     })()
     return this.initPromise
+  }
+
+  /**
+   * 启动后收敛（由 runtime.started 在 harness.resume() 后触发；幂等）：
+   * 此时调度器已进入 running 相位，对恢复收集到的全部遗留子会话再次调用
+   * abortConversationGuarded，真实等待尚未停下的取消句柄完成并收敛至 idle，
+   * 确保随后回收原生 Worktree 崩溃租约前底层子会话已彻底停止。
+   */
+  async awaitPreparedChildrenSettled(): Promise<void> {
+    if (this.settlementPromise !== undefined) return this.settlementPromise
+    const ids = new Set<number>([...this.preparedChildIds, ...this.pendingSettlementChildIds])
+    if (ids.size === 0) return
+    let run: Promise<void> | undefined
+    run = (async () => {
+      try {
+        await Promise.all(
+          [...ids].map(async (id) => {
+            try {
+              await this.svc.host.abortConversationGuarded(id)
+              this.preparedChildIds.delete(id)
+              this.pendingSettlementChildIds.delete(id)
+            } catch (error) {
+              if (
+                error instanceof HelmError &&
+                (error.code === 'not_found' || error.code === 'ownership_conflict')
+              ) {
+                this.preparedChildIds.delete(id)
+                this.pendingSettlementChildIds.delete(id)
+                process.stderr.write(
+                  `workflow awaitPreparedChildrenSettled: skip conversation ${id}（${error.code}，确定性跳过）: ${errorMessage(error)}\n`,
+                )
+                return
+              }
+              process.stderr.write(
+                `workflow awaitPreparedChildrenSettled: guarded abort conversation ${id} failed: ${errorMessage(error)}\n`,
+              )
+            }
+          }),
+        )
+      } finally {
+        if (this.settlementPromise === run) this.settlementPromise = undefined
+      }
+    })()
+    this.settlementPromise = run
+    return run
   }
 
   /**

@@ -401,6 +401,8 @@ export function createReadArtifactTool(
 ): ToolRegistration<typeof readArtifactParameters, never> {
   return defineTool({
     name: 'read_artifact',
+    // 纯只读分页工具：中断重开允许安全重放。
+    replay: 'safe',
     description:
       '分页读取产物（spill 全文等）。每页最多 4KiB，按 UTF-8 边界对齐返回 nextOffset；为空表示已读完。',
     parameters: readArtifactParameters,

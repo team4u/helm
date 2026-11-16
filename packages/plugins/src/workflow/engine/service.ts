@@ -134,6 +134,11 @@ export class WorkflowService {
     return this.recovery.init()
   }
 
+  /** 启动后收敛（runtime.started 阶段：等待遗留子会话结算至 idle；幂等）。 */
+  async awaitPreparedChildrenSettled(): Promise<void> {
+    return this.recovery.awaitPreparedChildrenSettled()
+  }
+
   // 工作流库：list / get / save / delete（实现位于 library-store）
 
   /** 列出带 meta 声明的工作流脚本；非法 meta 附 metadataError，文件读取错误显式失败。 */

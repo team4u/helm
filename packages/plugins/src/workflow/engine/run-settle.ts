@@ -9,6 +9,7 @@
 
 import { redactJsonValue } from '@helm/protocol'
 import { resolveForegroundWaiters, type ActiveRun } from './active-run.js'
+import { backgroundChildIds } from './run-store.js'
 import { nodesFromProgress, redactNodes, toSummary } from './run-summary.js'
 import type { WorkflowRunResult } from './runtime.js'
 import type { WorkflowServiceContext } from './service-context.js'
@@ -33,15 +34,28 @@ export async function settleWorkflowRun(
       clearTimeout(run.pendingEventTimer)
       run.pendingEventTimer = undefined
     }
+    const hostClosing = svc.host.isHostClosing?.() === true
     if (result !== undefined) {
-      record.status = result.status === 'killed' ? 'aborted' : result.status
+      record.status =
+        result.status === 'killed'
+          ? 'aborted'
+          : hostClosing && result.status !== 'completed'
+            ? 'aborted'
+            : result.status
       if (result.error !== undefined) record.error = svc.redact(result.error)
       if (result.value !== undefined) record.result = redactJsonValue(result.value, svc.redact)
     } else {
       // runWorkflow 本身失败（坏 meta/语法/worker 启动异常/state 写失败续）。
-      record.status = 'failed'
+      record.status = hostClosing ? 'aborted' : 'failed'
       const message = failure instanceof Error ? failure.message : failure !== undefined ? String(failure) : 'unknown workflow failure'
       record.error = svc.redact(message)
+    }
+    if (
+      hostClosing &&
+      record.status !== 'completed' &&
+      (run.childConversations.size > 0 || backgroundChildIds(record).length > 0)
+    ) {
+      record.pendingChildCleanup = true
     }
     // 账本记账失败诊断（保守面：run 不中断，但绝不隐瞒）。
     // 三路来源合一：引擎 agent 行写失败（result 携带）+ resume 旧账本损行 +
@@ -127,6 +141,7 @@ export async function settleWorkflowRun(
     // notifiedAt 防重复；失败/关停窗口不置位，init() 下次启动补发）。
     if (
       !svc.isClosed() &&
+      svc.host.isHostClosing?.() !== true &&
       record.notifyParentOnSettle === true &&
       record.notifiedAt === undefined &&
       svc.host.onBackgroundAgentSettled !== undefined

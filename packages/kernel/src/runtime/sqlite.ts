@@ -7,6 +7,7 @@
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
+import type { SqliteDatabase } from '@earendil-works/chord/sqlite'
 import { openNodeSqliteDatabase } from '@earendil-works/chord/sqlite/node'
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite'
 import type { SqliteStorage as SqliteStorageT } from '@earendil-works/pi-durable/storage/sqlite'
@@ -114,18 +115,36 @@ CREATE VIRTUAL TABLE IF NOT EXISTS helm_conversation_fts USING fts5(
 export async function openHelmDatabase(dataDir: string): Promise<HelmDatabase> {
   const statePath = join(dataDir, 'state.sqlite')
   const db = await openNodeSqliteDatabase(statePath)
-  const storage = await SqliteStorage.open(db, { prefix: 'pi_' })
-  // helm 表 DDL 也走 adapter（排队，避免与 pi 迁移竞争）。开发阶段直接采用新 schema。
-  await db.exec(HELM_SCHEMA)
-  await db.exec(FTS_SCHEMA)
+  // 代理视图：pi-durable SqliteStorage 与 HelmStore 共享同一物理连接及串行
+  // 事务队列，因此 harness.close() -> storage.close() 时不得提前断开物理 db
+  // （由 teardownKernelRuntime 末尾的 database.close() 唯一关闭）。
+  const storageDb: SqliteDatabase = {
+    exec: (sql) => db.exec(sql),
+    run: (sql, ...params) => db.run(sql, ...params),
+    runCounted: (sql, ...params) => db.runCounted(sql, ...params),
+    get: (sql, ...params) => db.get(sql, ...params),
+    all: (sql, ...params) => db.all(sql, ...params),
+    transaction: (callback) => db.transaction(callback),
+    close: async () => {},
+  }
+  let storage: SqliteStorageT
+  try {
+    storage = await SqliteStorage.open(storageDb, { prefix: 'pi_' })
+    // helm 表 DDL 也走 adapter（排队，避免与 pi 迁移竞争）。开发阶段直接采用新 schema。
+    await db.exec(HELM_SCHEMA)
+    await db.exec(FTS_SCHEMA)
+  } catch (error) {
+    await db.close().catch(() => {})
+    throw error
+  }
   let closed = false
   return {
     storage,
     db,
     async close() {
-      // 幂等：SDK 侧（harness.close -> storage.close）可能已关闭同一连接，
-      // SqliteStorage.close 与 adapter.close 均缓存/置位幂等，这里再显式置位
-      // 防御未来 SDK 行为变化，保证重复关闭不抛错。
+      // 幂等：harness.close() 可能已关闭 storage（storageDb.close 为 no-op，
+      // 物理 db 由此处唯一关闭）；保留 storage.close() 兜底确保单独打开
+      // HelmDatabase 的测试路径同样封口 storage。
       if (closed) return
       closed = true
       await storage.close(BACKGROUND_CONTEXT)

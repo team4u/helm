@@ -21,7 +21,7 @@ import type { DerivedToolSpec, PluginHost } from '../plugins/index.js'
 import type { HandledToolCallEntry } from './hook-bridge.js'
 import { createRunActionTool, type KernelToolHost } from './kernel-tools.js'
 import { pluginToolResult } from './runtime-helpers.js'
-import type { HelmToolDeps } from './tool-deps.js'
+import { throwIfToolAborted, type HelmToolDeps } from './tool-deps.js'
 import {
   createBashTool,
   createEditTool,
@@ -56,7 +56,11 @@ export function wrapToolExecute(
       handledToolCalls.delete(callId!)
       return handled.result
     }
-    return execute(args, api, context)
+    const result = await execute(args, api, context)
+    // 若工具实现吞掉或转换了中止（如返回 { isError: true }），在此统一抛出中止
+    // 异常，确保 pi-durable ToolTask 进入中断 / writeAtClose() 退回 pending 分支。
+    throwIfToolAborted(context?.abortSignal)
+    return result
   }
 }
 

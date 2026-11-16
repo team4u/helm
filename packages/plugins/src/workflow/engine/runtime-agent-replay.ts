@@ -328,9 +328,14 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
     base.attempt = replayedEntry.attempt ?? attempt
     ctx.counters.replayedCount++
     const replayedText = replayedEntry.text ?? ''
-    // 缓存节点也登记为可 resume 的 child（标 replayed）：同一脚本内后续
-    // 匹配账本的 resume 调用可直接返回缓存文本；但它无活会话，前缀失配
-    // 后需要真正续接时由上方 replayed 守卫显式失败。
+    const nativeResumeRef =
+      execution?.conversationId !== undefined && execution.executionId === undefined
+        ? String(execution.conversationId)
+        : undefined
+    // 缓存节点登记：原生持久子会话（有 conversationId 且无外部 executionId）
+    // 保留 resumeRef 供后续未落账的 agent({ resume: label }) 真实续接原子会话；
+    // 外部运行时或无 conversationId 的纯缓存记录维持 replayed: true（前缀失配
+    // 后需要实时续接时由下方 replayed 守卫显式失败）。
     ctx.completedByLabel.set(scopedResumeKey(scopeId, label), {
       agentId,
       label,
@@ -338,7 +343,7 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
       ...(model !== undefined ? { model } : {}),
       ...(isolation !== undefined ? { isolation } : {}),
       scopeId,
-      replayed: true,
+      ...(nativeResumeRef !== undefined ? { resumeRef: nativeResumeRef } : { replayed: true }),
     })
     const at = Date.now()
     ctx.emit([

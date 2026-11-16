@@ -23,7 +23,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HelmError, type AgentExecutionInfo } from '@helm/protocol'
-import type { WorkflowRunSummary } from '../src/contracts.js'
+import { withWorkflowSpawnMeta, type WorkflowRunSummary } from '../src/contracts.js'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
 
 const timeout = { timeout: 60_000 } as const
@@ -646,5 +646,205 @@ describe('startBackgroundAgent', () => {
     assert.equal(host.settledCalls.length, 1)
     assert.equal(host.settledCalls[0]!.summary.status, 'aborted')
     await reopened.close()
+  })
+
+  it('startBackgroundAgent：保留 request.meta（如 maxSubagentDepth 与自定义字段）并合并 runId', timeout, async () => {
+    const host = makeHost()
+    host.behavior = { kind: 'hanging', execution: { conversationId: 42 }, result: 'ok' }
+    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const meta = withWorkflowSpawnMeta({ customNs: { tag: 'keep-me' } }, { maxSubagentDepth: 4 })
+    const { run } = await service.startBackgroundAgent({
+      parentConversationId: 1,
+      prompt: 'with-meta',
+      meta,
+    })
+    host.release()
+    await service.wait(run.id)
+    assert.equal(host.spawns.length, 1)
+    assert.deepEqual(host.spawns[0]!['meta'], {
+      customNs: { tag: 'keep-me' },
+      'builtin:workflow': { maxSubagentDepth: 4, runId: run.id },
+    })
+    await service.close()
+  })
+
+  it('isHostClosing=true 关停期间：因 Session 关闭中断则标 aborted + pendingChildCleanup=true；若已完成则保留 completed 且延迟到下次重启 outbox 通知', timeout, async () => {
+    let hostClosing = false
+    const host = makeHost()
+    host.isHostClosing = () => hostClosing
+    let rejectShutdownSpawn!: (error: Error) => void
+    const origSpawn = host.spawnAgent.bind(host)
+    host.spawnAgent = async (req) => {
+      if (req.prompt === 'close-while-closing') {
+        req.onResolved?.({ conversationId: 55 })
+        return await new Promise<never>((_resolve, reject) => {
+          rejectShutdownSpawn = reject
+        })
+      }
+      return origSpawn(req)
+    }
+    const state = makeStateStore()
+    const service = new WorkflowService({ dataDir, host, state })
+    const { run } = await service.startBackgroundAgent({
+      parentConversationId: 1,
+      prompt: 'close-while-closing',
+    })
+    host.behavior = { kind: 'hanging', execution: { conversationId: 56 }, result: 'real-finished-result' }
+    const { run: completedRun } = await service.startBackgroundAgent({
+      parentConversationId: 1,
+      prompt: 'finish-right-before-harness-close',
+    })
+
+    // 模拟 Harness.close() 先于 pluginHost.dispose() 到来：host.isHostClosing 已为 true，
+    // 在途 run 因 Session is closed 拒绝（绝不调用 abortConversationGuarded）；而在关停
+    // 窗口内实际已完成的 completedRun 仍保留 completed 与结果，仅延迟通知到重启 outbox。
+    hostClosing = true
+    rejectShutdownSpawn(new Error('Session is closed'))
+    host.release()
+    await service.wait(run.id)
+    await service.wait(completedRun.id)
+
+    const saved = readRecord(dataDir, run.id)
+    assert.equal(saved['status'], 'aborted')
+    assert.equal(saved['pendingChildCleanup'], true)
+    const savedCompleted = readRecord(dataDir, completedRun.id)
+    assert.equal(savedCompleted['status'], 'completed')
+    assert.equal(savedCompleted['result'], 'real-finished-result')
+    assert.equal(savedCompleted['pendingChildCleanup'], undefined)
+    assert.equal(host.abortedConversations.length, 0, 'host closing 期不再调用已关闭的 abortConversationGuarded')
+    assert.equal(host.settledCalls.length, 0, 'host closing 期不向父会话发通知')
+
+    // 重启后恢复：prepareRecovery 收集 55 并守卫中止，init 清除 pendingChildCleanup 并补发两条 outbox
+    hostClosing = false
+    const reopened = new WorkflowService({ dataDir, host, state })
+    await reopened.prepareRecovery()
+    assert.deepEqual(host.abortedConversations, [55])
+    await reopened.init()
+    await reopened.awaitPreparedChildrenSettled()
+    assert.deepEqual(host.abortedConversations, [55, 55])
+    assert.equal(readRecord(dataDir, run.id)['pendingChildCleanup'], undefined, 'init 必须清除 pendingChildCleanup')
+    assert.equal(host.settledCalls.length, 2, '重启 outbox 应补发两条待汇报记录')
+    assert.equal(host.settledCalls.find((c) => c.summary.id === run.id)?.summary.status, 'aborted')
+    assert.equal(host.settledCalls.find((c) => c.summary.id === completedRun.id)?.summary.status, 'completed')
+    await reopened.close()
+  })
+
+  it('isHostClosing=true 同步工作流 + pendingChildCleanup 严格布尔校验：关停标 aborted 且打标，重启收割子会话且不通知父会话，非布尔损坏拒绝', timeout, async () => {
+    let hostClosing = false
+    const host = makeHost()
+    host.isHostClosing = () => hostClosing
+    const state = makeStateStore()
+    const service = new WorkflowService({ dataDir, host, state })
+    host.behavior = { kind: 'hanging', execution: { conversationId: 77 } }
+    let rejectWorkflowSpawn!: (error: Error) => void
+    host.spawnAgent = async (req) => {
+      req.onResolved?.({ conversationId: 77 })
+      return await new Promise<never>((_resolve, reject) => {
+        rejectWorkflowSpawn = reject
+      })
+    }
+
+    const run = await service.run({
+      conversationId: 1,
+      script: 'export const meta = { name: "sync-close", description: "test" }\nreturn await agent("child")',
+    })
+    // 等待 spawnAgent 进入
+    await new Promise<void>((resolve) => {
+      const check = () => {
+        if (rejectWorkflowSpawn !== undefined) resolve()
+        else setTimeout(check, 10)
+      }
+      check()
+    })
+    hostClosing = true
+    rejectWorkflowSpawn(new Error('Session is closed'))
+    await service.wait(run.id)
+
+    const saved = readRecord(dataDir, run.id)
+    assert.equal(saved['status'], 'aborted')
+    assert.equal(saved['pendingChildCleanup'], true)
+    assert.equal(host.abortedConversations.length, 0)
+    assert.equal(host.settledCalls.length, 0)
+
+    hostClosing = false
+    const reopened = new WorkflowService({ dataDir, host, state })
+    await reopened.prepareRecovery()
+    assert.deepEqual(host.abortedConversations, [77])
+    await reopened.init()
+    await reopened.awaitPreparedChildrenSettled()
+    assert.deepEqual(host.abortedConversations, [77, 77])
+    assert.equal(readRecord(dataDir, run.id)['pendingChildCleanup'], undefined)
+    assert.equal(host.settledCalls.length, 0, '同步工作流绝不能在恢复期向父会话发通知')
+    await reopened.close()
+
+    // 非布尔 pendingChildCleanup 必须触发显式 workflow_record_corrupt
+    const badId = 'wf_bad_pending_cleanup01'
+    seedRecord(dataDir, {
+      id: badId,
+      name: 'bad',
+      conversationId: 1,
+      status: 'aborted',
+      pendingChildCleanup: 'yes',
+      createdAt: 1,
+      updatedAt: 1,
+      journalPath: join(dataDir, `${badId}.jsonl`),
+    })
+    const currentIndex = state.get<Array<Record<string, unknown>>>('workflow/runs', [])
+    state.set('workflow/runs', [
+      ...currentIndex,
+      { id: badId, conversationId: 1, status: 'aborted', createdAt: 1, updatedAt: 1 },
+    ])
+    assert.throws(
+      () => reopened.getRun(badId),
+      (err: unknown) => err instanceof HelmError && err.code === 'workflow_record_corrupt',
+    )
+  })
+
+  it('isHostClosing=true 关停窗口账本完整性：已执行完的 action/agent 正常落账，下一步 prepareAction 在写 action_started 前中止不留悬空行', timeout, async () => {
+    let hostClosing = false
+    const host = makeHost()
+    host.isHostClosing = () => hostClosing
+    host.listActions = () => [
+      { pluginId: 'test', id: 'step1', description: 's1', inputSchema: {}, outputSchema: {} },
+      { pluginId: 'test', id: 'step2', description: 's2', inputSchema: {}, outputSchema: {} },
+    ]
+    let step2Invoked = false
+    host.invokeAction = async (_pluginId, actionId) => {
+      if (actionId === 'step1') {
+        // 模拟 step1 实际已完成，恰在返回瞬间宿主进入关停态
+        hostClosing = true
+        return { done: 1 }
+      }
+      step2Invoked = true
+      return { done: 2 }
+    }
+    const state = makeStateStore()
+    const service = new WorkflowService({ dataDir, host, state })
+    const run = await service.run({
+      conversationId: 1,
+      script:
+        'export const meta = { name: "closing-action-journal", description: "test" }\n' +
+        'const a = await action("test.step1", { x: 1 })\n' +
+        'const b = await action("test.step2", { x: 2 })\n' +
+        'return [a, b]',
+    })
+    await service.wait(run.id)
+    assert.equal(step2Invoked, false, '关停态不得启动后续 step2 动作')
+    const saved = readRecord(dataDir, run.id)
+    assert.equal(saved['status'], 'aborted')
+    const journalLines = readFileSync(String(saved['journalPath']), 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; index: number; ok?: boolean })
+    // step1 必须同时落盘 action_started 与配对终态 action(ok: true)，且不存在 step2 的悬空 action_started
+    assert.deepEqual(
+      journalLines.map((l) => ({ type: l.type, index: l.index, ...(l.ok !== undefined ? { ok: l.ok } : {}) })),
+      [
+        { type: 'action_started', index: 0 },
+        { type: 'action', index: 0, ok: true },
+      ],
+    )
+    await service.close()
   })
 })

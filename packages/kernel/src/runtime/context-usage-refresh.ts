@@ -45,6 +45,8 @@ export interface ContextUsageHost {
   liveOf(conversationId: number): LiveStateShape | undefined
   /** 权威摘要现读（发布帧构造；内部回读本模块缓存，不形成调度环）。 */
   summaryOf(conversationId: number): ConversationSummary
+  /** 宿主关停守卫（harness.close 先行关闭后阻断对已关闭 Harness 的无谓刷新）。 */
+  isClosing?(): boolean
 }
 
 export class ContextUsageRefresh {
@@ -83,6 +85,7 @@ export class ContextUsageRefresh {
 
   /** 调度异步上下文用量刷新（fire-and-forget；observe 回调内同步调用不可 await）。 */
   schedule(conversationId: number): void {
+    if (this.host.isClosing?.()) return
     if (!this.host.store.getConv(conversationId)) return
     if (this.pending.has(conversationId)) {
       this.dirty.add(conversationId)
@@ -91,6 +94,7 @@ export class ContextUsageRefresh {
     this.pending.add(conversationId)
     void this.refreshOnce(conversationId)
       .catch((error: unknown) => {
+        if (this.host.isClosing?.()) return
         // 刷新失败如实记录：缓存保持旧值（绝不静默伪造），不阻断观察主路径。
         console.error(`[helm] 会话 ${conversationId} 上下文用量刷新失败:`, error)
       })

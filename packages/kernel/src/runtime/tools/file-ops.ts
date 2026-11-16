@@ -21,7 +21,7 @@ import { bool, obj, opt, str } from '@earendil-works/pi-schema'
 import { EDIT_TOOL_RESULT_SCHEMA, isAbsoluteTargetPath, type EditToolResult } from '@helm/protocol'
 import { computeEditDiff } from '../tool-edit-diff.js'
 import { targetPlatformForNode } from '../target-platform.js'
-import type { HelmToolDeps } from '../tool-deps.js'
+import { throwIfToolAborted, type HelmToolDeps } from '../tool-deps.js'
 import { resolveTargetPath } from './target-path.js'
 import { resolveToolTarget } from './tool-target.js'
 import {
@@ -45,6 +45,8 @@ const readParameters = obj({
 export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof readParameters> {
   return defineTool({
     name: 'read',
+    // 纯只读且 spill 槽按 callId 确定性命名：中断重开允许安全重放。
+    replay: 'safe',
     description:
       '读取文本文件内容；路径相对会话 cwd 解析，支持绝对路径与 ../ 跨目录访问（与 bash 同权）；仅支持普通文件，单文件上限 128KiB（超限请用 bash + read_artifact 分页）；会话绑定远端节点时在目标节点读取。',
     parameters: readParameters,
@@ -91,13 +93,17 @@ export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof read
         // 绝不回退本机）与 local（进程内 fs + fd 读取）同一读取模板。
         const envR = readableEnvFor(deps, nodeId, sessionId)
         if ('error' in envR) {
+          throwIfToolAborted(context.abortSignal)
           return { output: [{ type: 'text', text: envR.error }], isError: true }
         }
         const readR = await envR.env.readText(lexicalAbs, raw, context)
         if (!readR.ok) {
+          throwIfToolAborted(context.abortSignal)
           return { output: [{ type: 'text', text: readR.errorText }], isError: true }
         }
         const content = deps.redact(readR.content)
+        // 关停/取消窗口禁止在磁盘写入无意义的 spill 产物文件。
+        throwIfToolAborted(context.abortSignal)
         const spill = await deps.artifacts.spill(
           api.conversationId as number,
           `read-${api.callId}`,
@@ -112,6 +118,7 @@ export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof read
           details: { path: readR.displayPath, nodeId } as JsonValue,
         }
       } catch (error) {
+        throwIfToolAborted(context.abortSignal)
         return {
           output: [{ type: 'text', text: `read_failed: ${deps.redact(String(error))}` }],
           isError: true,

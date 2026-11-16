@@ -375,6 +375,7 @@ export class KernelRuntime {
       // resume 后同一同步段置位（无 await 间隔）：外部 isStarted() 读到 true
       // 时调度器必然已离开 paused。
       this.#started = true
+      await this.emitHostEvent('runtime.started', {}, { broadcast: false })
     })()
     this.startPromise = attempt
     try {
