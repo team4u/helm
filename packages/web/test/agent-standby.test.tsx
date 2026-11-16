@@ -80,6 +80,15 @@ const state = {
   uploadFailures: 0,
   profilesFail: false,
   resetCalls: [] as number[],
+  profiles: undefined as Array<Record<string, unknown>> | undefined,
+  skills: [] as Array<Record<string, unknown>>,
+  plugins: [] as Array<Record<string, unknown>>,
+  ui: [] as Array<Record<string, unknown>>,
+  actions: [] as Array<Record<string, unknown>>,
+  docs: {} as Record<string, unknown>,
+  actionCalls: [] as Array<{ pluginId: string; actionId: string; body: Record<string, unknown> }>,
+  actionResponse: undefined as ((pluginId: string, actionId: string, body: Record<string, unknown>) => unknown) | undefined,
+  actionError: undefined as string | undefined,
 }
 
 function resetState(): void {
@@ -98,6 +107,15 @@ function resetState(): void {
   state.submitFailures = 0
   state.uploadFailures = 0
   state.profilesFail = false
+  state.profiles = undefined
+  state.skills = []
+  state.plugins = []
+  state.ui = []
+  state.actions = []
+  state.docs = {}
+  state.actionCalls = []
+  state.actionResponse = undefined
+  state.actionError = undefined
 }
 
 const profiles = [
@@ -141,8 +159,8 @@ function installFetch(): void {
           seq: eventSeq,
           conversations: state.conversations,
           pendingAsks: [],
-          plugins: [],
-          ui: [],
+          plugins: state.plugins,
+          ui: state.ui,
           nodes: [
             { id: 'local', name: '本机', online: true },
             { id: 'remote-1', name: '远端一', online: true },
@@ -153,7 +171,29 @@ function installFetch(): void {
     if (url === '/api/profiles' && method === 'GET') {
       if (state.assetsGate !== undefined) await state.assetsGate.promise
       if (state.profilesFail) return jsonResponse({ error: { code: 'internal_error', message: 'profiles down' } }, 500)
-      return jsonResponse(profiles)
+      return jsonResponse(state.profiles ?? profiles)
+    }
+    if (url === '/api/skills' && method === 'GET') return jsonResponse(state.skills)
+    if (url === '/api/actions' && method === 'GET') return jsonResponse(state.actions)
+    const docMatch = /^\/api\/plugins\/([^/]+)\/docs\/([^/?]+)$/.exec(url)
+    if (docMatch && method === 'GET') {
+      const pluginId = decodeURIComponent(docMatch[1]!)
+      const name = decodeURIComponent(docMatch[2]!)
+      return jsonResponse({ pluginId, name, value: state.docs[`${pluginId}/${name}`] ?? null })
+    }
+    const actionMatch = /^\/api\/actions\/([^/]+)\/([^/]+)$/.exec(url)
+    if (actionMatch && method === 'POST') {
+      const pluginId = decodeURIComponent(actionMatch[1]!)
+      const actionId = decodeURIComponent(actionMatch[2]!)
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+      state.actionCalls.push({ pluginId, actionId, body })
+      if (state.actionError !== undefined) {
+        return jsonResponse({ error: { code: 'action_failed', message: state.actionError } }, 500)
+      }
+      if (state.actionResponse !== undefined) {
+        return jsonResponse(state.actionResponse(pluginId, actionId, body))
+      }
+      return jsonResponse({ ok: true })
     }
     if (url === '/api/models' && method === 'GET') return jsonResponse(modelCatalog)
     if (url === '/api/nodes' && method === 'GET') {
@@ -268,7 +308,10 @@ const MAIN_LABEL = '向 个人助理 输入首条消息'
 
 function typeInto(el: HTMLTextAreaElement, value: string): void {
   const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
+  const tracker = (el as unknown as { _valueTracker?: { getValue(): string; setValue(v: string): void } })._valueTracker
+  const prev = tracker?.getValue() ?? ''
   setter.call(el, value)
+  tracker?.setValue(prev)
   el.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
@@ -663,12 +706,15 @@ test('待命页管理命令：/new 清理草稿，/clear 提示需先创建会�
   await mount('#/a/assistant')
   const input = textarea(MAIN_LABEL)
   act(() => { typeInto(input, '/new') })
+  // 第一次 Enter 被斜杠浮层捕获回填 '/new'，第二次 Enter 提交管理命令
+  await act(async () => { pressEnter(input) })
   await act(async () => { pressEnter(input) })
   await settle()
   assert.equal(state.createCalls.length, 0)
   assert.equal(state.submitCalls.length, 0)
   assert.equal(input.value, '', '/new 清理草稿正文')
   act(() => { typeInto(input, '/clear') })
+  await act(async () => { pressEnter(input) })
   await act(async () => { pressEnter(input) })
   await settle()
   assert.equal(state.createCalls.length, 0, '/clear 不创建会话')
@@ -875,4 +921,288 @@ test('真实 File 经 input change 事件路径首发全链路（create -> uploa
   assert.deepEqual(state.uploadCalls, [{ id: 9, name: 'real-input.txt' }], 'create 后上传到真实会话')
   assert.deepEqual((state.submitCalls[0]!.body as { attachments?: string[] }).attachments, ['art-1'])
   assert.equal(window.location.hash, '#/c/9')
+})
+
+// ---------------------------------------------------------------------------
+// 待命页（草稿状态）'/' 斜杠技能与命令浮层
+// ---------------------------------------------------------------------------
+
+test('草稿状态输入 /：弹出内置命令、按 Profile 过滤的技能与全局插件命令，排除会话限定与停用插件项', { timeout: 60_000 }, async () => {
+  state.profiles = [
+    { id: 'assistant', name: '个人助理', skills: ['review', 'herdr-tool'] },
+    { id: 'coder', name: '编码专员', skills: [] },
+  ]
+  state.skills = [
+    { id: 'review', name: '代码审查', references: [] },
+    { id: 'tally', name: '记账汇总', references: [] },
+    { id: 'herdr-tool', name: '终端工具', managedByPlugin: 'builtin:herdr', references: [] },
+  ]
+  state.plugins = [
+    { id: 'builtin:profile', name: 'assistant', locked: true, enabled: true, hooks: [], actions: [], tools: [] },
+    { id: 'builtin:herdr', name: 'herdr', locked: false, enabled: false, hooks: [], actions: [], tools: [] },
+    { id: 'p1', name: 'p1', locked: false, enabled: true, hooks: [], actions: ['ping'], tools: [] },
+  ]
+  state.ui = [
+    {
+      pluginId: 'p1',
+      surface: 'command',
+      spec: { id: 'ping', title: '全局诊断', slash: 'ping', description: '全局斜杠命令', actionId: 'ping' },
+    },
+    {
+      pluginId: 'p1',
+      surface: 'command',
+      spec: { id: 'scoped', title: '仅工作流会话', slash: 'wf-only', actionId: 'ping', scope: { tags: ['worker'] } },
+    },
+  ]
+
+  await mount('#/a/assistant')
+  const input = textarea(MAIN_LABEL)
+  act(() => { typeInto(input, '/') })
+  await settle()
+
+  const popover = document.querySelector<HTMLElement>('.agent-standby-pane .composer-popover')
+  assert.ok(popover, '草稿状态输入 / 应弹出斜杠浮层')
+  const text = popover!.textContent ?? ''
+  assert.match(text, /\/new/, '包含内置命令 /new')
+  assert.match(text, /\/clear/, '包含内置命令 /clear')
+  assert.match(text, /\/compact/, '包含内置命令 /compact')
+  assert.match(text, /\/skill:review/, '包含白名单内可用技能')
+  assert.doesNotMatch(text, /\/skill:tally/, '排除白名单外技能')
+  assert.doesNotMatch(text, /\/skill:herdr-tool/, '排除已停用插件托管技能')
+  assert.match(text, /\/ping/, '包含无会话作用域限制的插件命令')
+  assert.doesNotMatch(text, /\/wf-only/, '排除有会话作用域限制的插件命令')
+
+  // Escape 关闭浮层，不触发创建或发送
+  await act(async () => {
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+  })
+  assert.equal(document.querySelector('.agent-standby-pane .composer-popover'), null, 'Esc 关闭斜杠浮层')
+  assert.equal(state.createCalls.length, 0)
+
+  // 切换到 skills: [] 的 coder 待命页：浮层关闭且不展示任何技能
+  await act(async () => { navigateHash('#/a/coder') })
+  await settle()
+  const coderInput = textarea('向 编码专员 输入首条消息')
+  act(() => { typeInto(coderInput, '/') })
+  await settle()
+  const coderPopover = document.querySelector<HTMLElement>('.agent-standby-pane .composer-popover')
+  assert.ok(coderPopover, 'coder 待命页输入 / 弹出浮层')
+  assert.doesNotMatch(coderPopover!.textContent ?? '', /skill:/, 'skills=[] 时不展示技能')
+})
+
+test('草稿状态输入 / 过滤与回填技能：仅替换触发 token，随后发送才创建并提交完整文本', { timeout: 60_000 }, async () => {
+  state.skills = [
+    { id: 'review', name: '代码审查', references: [] },
+    { id: 'tally', name: '记账汇总', references: [] },
+  ]
+  await mount('#/a/assistant')
+  const input = textarea(MAIN_LABEL)
+
+  // 路径中段斜杠不误触发
+  act(() => { typeInto(input, 'src/index') })
+  await settle()
+  assert.equal(document.querySelector('.agent-standby-pane .composer-popover'), null, '路径中段 / 不误弹出')
+
+  // 保留前文 + 触发 /rev 过滤，Enter 选中回填 /skill:review （带尾空格），不预建会话
+  act(() => { typeInto(input, '请执行 /rev') })
+  await settle()
+  const popover = document.querySelector<HTMLElement>('.agent-standby-pane .composer-popover')
+  assert.ok(popover, '空白后 /rev 弹出浮层')
+  assert.match(popover!.textContent ?? '', /\/skill:review/)
+  assert.doesNotMatch(popover!.textContent ?? '', /\/skill:tally/)
+
+  // IME composing 期间 Enter 不选候选也不提交
+  await act(async () => {
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true }))
+  })
+  assert.equal(input.value, '请执行 /rev')
+  assert.ok(document.querySelector('.agent-standby-pane .composer-popover'), 'IME 组合中浮层保持')
+
+  await act(async () => { pressEnter(input) })
+  await settle()
+  assert.equal(input.value, '请执行 /skill:review ', '仅替换 /rev token，保留前缀文本')
+  assert.equal(document.querySelector('.agent-standby-pane .composer-popover'), null, '选中回填后浮层关闭')
+  assert.equal(state.createCalls.length, 0, '回填技能不提前创建会话')
+
+  // 补充指令后 Enter 才真正 create -> submit
+  act(() => { typeInto(input, '请执行 /skill:review 检查变更') })
+  await act(async () => { pressEnter(input) })
+  await settle()
+  assert.equal(state.createCalls.length, 1)
+  assert.equal(state.submitCalls.length, 1)
+  assert.equal(state.submitCalls[0]!.body.text, '请执行 /skill:review 检查变更')
+})
+
+test('草稿状态插件斜杠命令：浮层选中即执行且关闭浮层，失败保留草稿，均不创建会话', { timeout: 60_000 }, async () => {
+  state.plugins = [
+    { id: 'p1', name: 'p1', locked: false, enabled: true, hooks: [], actions: ['ping'], tools: [] },
+  ]
+  state.ui = [
+    {
+      pluginId: 'p1',
+      surface: 'command',
+      spec: { id: 'ping', title: '诊断探针', slash: 'ping', actionId: 'ping', input: { source: 'standby' } },
+    },
+  ]
+
+  await mount('#/a/assistant')
+  const input = textarea(MAIN_LABEL)
+  act(() => { typeInto(input, '草稿前缀 /pi') })
+  await settle()
+  assert.ok(document.querySelector('.agent-standby-pane .composer-popover'), '弹出插件命令浮层')
+
+  await act(async () => { pressEnter(input) })
+  await settle()
+  assert.equal(state.actionCalls.length, 1, '触发插件动作')
+  assert.equal(state.actionCalls[0]!.pluginId, 'p1')
+  assert.equal(state.actionCalls[0]!.actionId, 'ping')
+  assert.deepEqual(state.actionCalls[0]!.body, { input: { source: 'standby' } }, '未锚定时不伪造 conversationId')
+  assert.equal(document.querySelector('.agent-standby-pane .composer-popover'), null, '执行插件命令后浮层关闭')
+  assert.equal(input.value, '草稿前缀 ', '仅消费触发 token，保留其余草稿')
+  assert.equal(state.createCalls.length, 0, '执行插件命令不创建会话')
+
+  // 直接提交 /ping（无浮层）：同样命中插件命令执行，失败时保留草稿
+  state.actionError = 'plugin offline'
+  act(() => { typeInto(input, '/ping') })
+  await settle()
+  // Esc 关闭浮层后直接 Enter 提交
+  await act(async () => {
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+  })
+  await act(async () => { pressEnter(input) })
+  await settle()
+  assert.equal(state.actionCalls.length, 2)
+  assert.equal(input.value, '/ping', '插件命令失败保留原草稿')
+  assert.ok(document.body.textContent?.includes('命令执行失败：/ping'), '显式错误通知')
+  assert.equal(state.createCalls.length, 0)
+})
+
+// ---------------------------------------------------------------------------
+// 待命页（草稿状态）'@ / # / :' composerCompleter 补全浮层
+// ---------------------------------------------------------------------------
+
+test('草稿状态输入 @：弹出点名角色候选（携带 profileId）、过滤并选中插入，随后发送才创建并提交', { timeout: 60_000 }, async () => {
+  state.plugins = [
+    { id: 'builtin:profile', name: '角色与技能底座', locked: true, enabled: true, hooks: [], actions: ['list_mentionable'], tools: [] },
+  ]
+  state.ui = [
+    {
+      pluginId: 'builtin:profile',
+      surface: 'composer.completer',
+      spec: {
+        id: 'profile-mentions',
+        label: '点名角色',
+        trigger: '@',
+        priority: 100,
+        source: { kind: 'action', actionId: 'list_mentionable' },
+      },
+    },
+  ]
+  state.actions = [
+    {
+      pluginId: 'builtin:profile',
+      id: 'list_mentionable',
+      description: '列出可点名角色',
+      idempotent: true,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string' },
+          conversationId: { type: 'number' },
+          profileId: { type: 'string' },
+        },
+        additionalProperties: false,
+      },
+      outputSchema: { type: 'object' },
+    },
+  ]
+  state.actionResponse = (_pluginId, _actionId, body) => {
+    const input = (body.input ?? {}) as { query?: string; profileId?: string }
+    const q = (input.query ?? '').toLowerCase()
+    const all = [
+      { id: 'coder', label: '@coder · 编码专员', insertText: '@coder ', hint: '编码协作', icon: 'bot' },
+      { id: 'reviewer', label: '@reviewer · 代码评审', insertText: '@reviewer ', hint: '评审协作', icon: 'bot' },
+    ].filter((c) => c.id !== input.profileId && (q === '' || c.label.toLowerCase().includes(q)))
+    return { items: all }
+  }
+
+  await mount('#/a/assistant')
+  const input = textarea(MAIN_LABEL)
+
+  // 邮箱中间 @ 不误触发
+  act(() => { typeInto(input, 'user@example.com') })
+  await act(async () => { await new Promise((r) => setTimeout(r, 200)) })
+  assert.equal(document.querySelector('.composer-completion-popover'), null, '邮箱中间 @ 不误弹出')
+
+  // 行中空白后输入 @co：防抖触发 action 查询（携带 profileId: assistant，不伪造 conversationId）
+  act(() => { typeInto(input, '请帮我找 @co') })
+  await act(async () => { await new Promise((r) => setTimeout(r, 220)) })
+  assert.equal(state.actionCalls.length, 1, '发起一次防抖补全查询')
+  assert.deepEqual(state.actionCalls[0]!.body, { input: { query: 'co', profileId: 'assistant' } }, '携带待命角色 profileId 且不伪造 conversationId')
+
+  const popover = document.querySelector<HTMLElement>('.composer-completion-popover')
+  assert.ok(popover, '草稿状态输入 @ 弹出补全浮层')
+  assert.match(popover!.textContent ?? '', /@coder · 编码专员/)
+  assert.doesNotMatch(popover!.textContent ?? '', /@reviewer/)
+
+  // Enter 选中候选：只替换 @co，保留前缀，关闭浮层，不提前创建或提交会话
+  await act(async () => { pressEnter(input) })
+  await settle()
+  assert.equal(input.value, '请帮我找 @coder ', '仅替换 @co token，保留前缀')
+  assert.equal(document.querySelector('.composer-completion-popover'), null, '选中后浮层关闭')
+  assert.equal(state.createCalls.length, 0, '选中 @ 候选不提前创建会话')
+  assert.equal(state.submitCalls.length, 0)
+
+  // 补充文本后再次 Enter 才真正 create -> submit
+  act(() => { typeInto(input, '请帮我找 @coder 看下代码') })
+  await act(async () => { pressEnter(input) })
+  await settle()
+  assert.equal(state.createCalls.length, 1)
+  assert.equal(state.submitCalls.length, 1)
+  assert.equal(state.submitCalls[0]!.body.text, '请帮我找 @coder 看下代码')
+})
+
+test('草稿状态输入 # / :：支持全局 doc 补全源并正常替换；sessionDoc 源明确提示需已有会话', { timeout: 60_000 }, async () => {
+  state.plugins = [
+    { id: 'p1', name: 'p1', locked: false, enabled: true, hooks: [], actions: [], tools: [] },
+  ]
+  state.ui = [
+    {
+      pluginId: 'p1',
+      surface: 'composer.completer',
+      spec: { id: 'tags', label: '标签', trigger: '#', source: { kind: 'doc', name: 'tags', itemsField: 'items' } },
+    },
+    {
+      pluginId: 'p1',
+      surface: 'composer.completer',
+      spec: { id: 'sess', label: '会话项', trigger: ':', source: { kind: 'sessionDoc', name: 'items', itemsField: 'items' } },
+    },
+  ]
+  state.docs = {
+    'p1/tags': { items: [{ id: 'bug', label: '#缺陷', insertText: '#缺陷 ' }] },
+  }
+
+  await mount('#/a/assistant')
+  const input = textarea(MAIN_LABEL)
+  act(() => { typeInto(input, '#') })
+  await settle()
+  const hashPopover = document.querySelector<HTMLElement>('.composer-completion-popover')
+  assert.ok(hashPopover, 'doc 补全源在草稿态弹出')
+  assert.match(hashPopover!.textContent ?? '', /#缺陷/)
+  await act(async () => { pressEnter(input) })
+  await settle()
+  assert.equal(input.value, '#缺陷 ')
+  assert.equal(document.querySelector('.composer-completion-popover'), null)
+  assert.equal(state.createCalls.length, 0)
+
+  // sessionDoc 源在无会话的草稿态下明确提示，不无限 loading
+  act(() => { typeInto(input, ':') })
+  await settle()
+  const colonPopover = document.querySelector<HTMLElement>('.composer-completion-popover')
+  assert.ok(colonPopover, 'sessionDoc 源弹出明确诊断浮层')
+  assert.match(colonPopover!.textContent ?? '', /需要已有会话/)
+  await act(async () => {
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+  })
+  assert.equal(document.querySelector('.composer-completion-popover'), null, 'Escape 关闭补全浮层')
 })

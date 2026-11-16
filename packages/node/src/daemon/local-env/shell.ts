@@ -7,9 +7,15 @@
  */
 
 import { spawn } from 'node:child_process';
-import { constants } from 'node:fs';
-import { access } from 'node:fs/promises';
-import { join, win32 } from 'node:path';
+import { join } from 'node:path';
+import {
+  getBashShellConfig as envGetBashShellConfig,
+  getEnvEntry,
+  isLegacyWslBashPath as envIsLegacyWslBashPath,
+  resolveHostShellConfig,
+  setEnvEntry,
+  type ShellProbeIo,
+} from '@helm/env-io';
 import { ExecutionError, err, ok, type Result } from './errors.js';
 
 // ---------------------------------------------------------------------------
@@ -72,17 +78,8 @@ export function resolveTimeoutMs(timeout: number | undefined): Result<undefined 
   return ok(timeoutMs);
 }
 
-async function pathExists(path: string): Promise<boolean> {
-  try {
-    await access(path, constants.F_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // ---------------------------------------------------------------------------
-// shell 定位（含 WSL legacy 判定）
+// shell 定位（委托 @helm/env-io，含 Windows 宿主机 Git Bash 探测与 WSL 过滤）
 // ---------------------------------------------------------------------------
 
 export interface ShellConfig {
@@ -91,112 +88,24 @@ export interface ShellConfig {
   commandTransport: 'stdin' | 'argv';
 }
 
-async function runCommand(
-  command: string,
-  args: string[],
-  timeoutMs: number,
-): Promise<{ stdout: string; status: number | null }> {
-  return await new Promise((resolve) => {
-    let stdout = '';
-    let child;
-    try {
-      child = spawn(command, args, { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
-    } catch {
-      resolve({ stdout: '', status: null });
-      return;
-    }
-    const timeout = setTimeout(() => {
-      if (child.pid) killProcessTree(child.pid);
-    }, timeoutMs);
-    child.stdout?.setEncoding('utf8');
-    child.stdout?.on('data', (chunk: string) => {
-      stdout += chunk;
-    });
-    child.on('error', () => {
-      clearTimeout(timeout);
-      resolve({ stdout: '', status: null });
-    });
-    child.on('close', (status) => {
-      clearTimeout(timeout);
-      resolve({ stdout, status });
-    });
-  });
-}
-
-async function findBashOnPath(): Promise<string | null> {
-  const result = process.platform === 'win32'
-    ? await runCommand('where', ['bash.exe'], 5000)
-    : await runCommand('which', ['bash'], 5000);
-  if (result.status !== 0 || !result.stdout) return null;
-  const firstMatch = result.stdout.trim().split(/\r?\n/)[0];
-  return firstMatch !== undefined && firstMatch !== '' && (await pathExists(firstMatch)) ? firstMatch : null;
-}
-
 /** 与 pi coding-agent shell.ts 保持同步：旧版 WSL bash 启动器需经 stdin 传输命令。 */
 export function isLegacyWslBashPath(path: string): boolean {
-  const normalized = win32.normalize(path).toLowerCase();
-  const systemRoot = process.env['SystemRoot'];
-  if (systemRoot) {
-    if (!/^[a-z]:[\\/]/i.test(systemRoot)) return false;
-    return ['System32', 'Sysnative'].some(
-      (directory) => normalized === win32.join(systemRoot, directory, 'bash.exe').toLowerCase(),
-    );
-  }
-  // Windows 目录未知时仅按惯例启动器路径回退。
-  return /^[a-z]:\\windows\\(?:system32|sysnative)\\bash\.exe$/.test(normalized);
+  return envIsLegacyWslBashPath(path, process.env);
 }
 
 export function getBashShellConfig(shell: string): ShellConfig {
-  return isLegacyWslBashPath(shell)
-    ? { shell, args: ['-s'], commandTransport: 'stdin' }
-    : { shell, args: ['-c'], commandTransport: 'argv' };
+  return envGetBashShellConfig(shell, process.env);
 }
 
 export async function getShellConfig(
   customShellPath: string | undefined,
+  io?: ShellProbeIo,
 ): Promise<Result<ShellConfig>> {
-  if (customShellPath) {
-    if (await pathExists(customShellPath)) {
-      return ok(getBashShellConfig(customShellPath));
-    }
-    return err(
-      new ExecutionError('shell_unavailable', `Custom shell path not found: ${customShellPath}`),
-    );
+  const resolved = await resolveHostShellConfig(customShellPath, io);
+  if (!resolved.ok) {
+    return err(new ExecutionError('shell_unavailable', resolved.message));
   }
-  if (process.platform === 'win32') {
-    const candidates: string[] = [];
-    const programFiles = process.env['ProgramFiles'];
-    if (programFiles) candidates.push(`${programFiles}\\Git\\bin\\bash.exe`);
-    const programFilesX86 = process.env['ProgramFiles(x86)'];
-    if (programFilesX86) candidates.push(`${programFilesX86}\\Git\\bin\\bash.exe`);
-    for (const candidate of candidates) {
-      if (await pathExists(candidate)) {
-        return ok(getBashShellConfig(candidate));
-      }
-    }
-    const bashOnPath = await findBashOnPath();
-    if (bashOnPath) {
-      return ok(getBashShellConfig(bashOnPath));
-    }
-    return err(
-      new ExecutionError(
-        'shell_unavailable',
-        `No bash shell found. Options:\n` +
-          `  1. Install Git for Windows: https://git-scm.com/download/win\n` +
-          `  2. Add your bash to PATH (Cygwin, MSYS2, etc.)\n` +
-          `  3. Configure an explicit shellPath\n\n` +
-          `Searched Git Bash in:\n${candidates.map((path) => `  ${path}`).join('\n')}`,
-      ),
-    );
-  }
-  if (await pathExists('/bin/bash')) {
-    return ok(getBashShellConfig('/bin/bash'));
-  }
-  const bashOnPath = await findBashOnPath();
-  if (bashOnPath) {
-    return ok(getBashShellConfig(bashOnPath));
-  }
-  return ok({ shell: 'sh', args: ['-c'], commandTransport: 'argv' });
+  return ok(resolved.value);
 }
 
 // ---------------------------------------------------------------------------
@@ -222,15 +131,25 @@ export function getShellEnv(
   baseEnv: NodeJS.ProcessEnv | undefined,
   extraEnv: Record<string, string> | undefined,
   inheritEnv = true,
+  platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
-  if (!inheritEnv) return { ...extraEnv };
-  const inherited: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value === undefined) continue;
-    if (isManagedHelmEnvKey(key)) continue;
-    inherited[key] = value;
+  const merged: Record<string, string> = {};
+  if (inheritEnv) {
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value === undefined) continue;
+      if (isManagedHelmEnvKey(key)) continue;
+      setEnvEntry(merged, key, value, platform);
+    }
+    for (const [key, value] of Object.entries(baseEnv ?? {})) {
+      if (value === undefined) continue;
+      setEnvEntry(merged, key, value, platform);
+    }
   }
-  return { ...inherited, ...baseEnv, ...extraEnv };
+  for (const [key, value] of Object.entries(extraEnv ?? {})) {
+    if (value === undefined) continue;
+    setEnvEntry(merged, key, value, platform);
+  }
+  return merged;
 }
 
 // ---------------------------------------------------------------------------
@@ -240,8 +159,9 @@ export function getShellEnv(
 export function killProcessTree(pid: number): void {
   if (process.platform === 'win32') {
     try {
+      const systemRoot = getEnvEntry(process.env, 'SystemRoot', 'win32') ?? 'C:\\Windows';
       const child = spawn(
-        join(process.env['SystemRoot'] ?? 'C:\\Windows', 'System32', 'taskkill.exe'),
+        join(systemRoot, 'System32', 'taskkill.exe'),
         ['/F', '/T', '/PID', String(pid)],
         { stdio: 'ignore', detached: true, windowsHide: true },
       );

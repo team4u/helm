@@ -27,7 +27,7 @@ import {
   type DirReader,
   type TextLineReader,
 } from './local-env.js';
-import { createNodePathUsageIo, scanPathUsage } from '@helm/env-io';
+import { createNodePathUsageIo, scanPathUsage, setEnvEntry } from '@helm/env-io';
 import type {
   EnvExecInput,
   EnvExecOk,
@@ -300,14 +300,14 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
         // 受管身份变量剥除（HELM_TOKEN / HELM_EXECUTION_SCOPE）：daemon 宿主
         // 自身的值绝不静默进入子命令；合法值只由调用方 input.env 按次注入。
         if (value === undefined || isManagedHelmEnvKey(key)) continue;
-        merged[key] = value;
+        setEnvEntry(merged, key, value);
       }
     }
     for (const [key, value] of Object.entries(shellEnv ?? {})) {
-      if (value !== undefined) merged[key] = value;
+      if (value !== undefined) setEnvEntry(merged, key, value);
     }
     for (const [key, value] of Object.entries(input.env ?? {})) {
-      merged[key] = value;
+      if (value !== undefined) setEnvEntry(merged, key, value);
     }
     return { env: merged, inheritEnv: false as const };
   };

@@ -47,6 +47,7 @@ import {
 import { constants as osConstants, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FileHandle } from 'node:fs/promises';
+import type { ShellProbeIo } from '@helm/env-io';
 import { targetPlatformOf, type TargetPlatform } from '@helm/protocol';
 import { ExecutionError, FileError, abortResult, err, isNodeError, ok, toError, toFileError, type Result } from './local-env/errors.js';
 import { StreamDecoder } from './local-env/decode.js';
@@ -111,6 +112,8 @@ export interface LocalExecutionEnvOptions {
    * normalizeTargetPath 的 POSIX 视图确定性转换；测试注入用，生产不传。
    */
   platform?: string;
+  /** 测试注入口：覆写 Shell 探测 I/O（生产不传）。 */
+  shellProbeIo?: ShellProbeIo;
 }
 
 export class LocalExecutionEnv {
@@ -120,6 +123,7 @@ export class LocalExecutionEnv {
   #shellPath?: string;
   #shellEnv?: NodeJS.ProcessEnv;
   #platform: TargetPlatform;
+  #shellProbeIo?: ShellProbeIo;
   #activeChildPids = new Set<number>();
 
   constructor(options: LocalExecutionEnvOptions) {
@@ -127,6 +131,7 @@ export class LocalExecutionEnv {
     this.#shellPath = options.shellPath;
     this.#shellEnv = options.shellEnv;
     this.#platform = targetPlatformOf(options.platform ?? process.platform);
+    this.#shellProbeIo = options.shellProbeIo;
   }
 
   /** file API 与 exec 共用的目标路径解析原语（见 resolveTargetPath）。 */
@@ -189,7 +194,7 @@ export class LocalExecutionEnv {
     let args: string[];
     let stdinCommand: string | undefined;
     if (typeof command === 'string') {
-      const shellConfig = await getShellConfig(this.#shellPath);
+      const shellConfig = await getShellConfig(this.#shellPath, this.#shellProbeIo);
       if (!shellConfig.ok) return shellConfig;
       const commandFromStdin = shellConfig.value.commandTransport === 'stdin';
       program = shellConfig.value.shell;

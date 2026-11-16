@@ -720,6 +720,23 @@ test('Standby 待命页：继承全局默认模型 glm-5.3·max，支持 Shift+T
       },
     ],
     defaultModelInfo: { defaultModel: 'magpie/auto/glm-5.3', defaultThinkingLevel: 'max' },
+    uiContributions: [
+      {
+        pluginId: 'builtin:memory',
+        surface: 'composer.completer',
+        spec: { id: 'mem', label: '记忆', trigger: '@', source: { kind: 'doc', name: 'refs', itemsField: 'items' } },
+      },
+    ],
+    groupedUi: groupUiContributions([
+      {
+        pluginId: 'builtin:memory',
+        surface: 'composer.completer',
+        spec: { id: 'mem', label: '记忆', trigger: '@', source: { kind: 'doc', name: 'refs', itemsField: 'items' } },
+      },
+    ]),
+    pluginDocs: {
+      'builtin:memory/refs': { items: [{ id: 'm-1', label: '@memory', insertText: '@memory ' }] },
+    },
   })
 
   const host = mountTree(
@@ -776,6 +793,19 @@ test('Standby 待命页：继承全局默认模型 glm-5.3·max，支持 Shift+T
     ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
   })
   assert.equal(ta.value, '/skill:review ', '选中技能仅回填触发词，不创建会话')
+
+  // 通用 '@' 补全浮层在待命页同步工作（与 '/' 技能补全、Ctrl+L、Shift+Tab 共存无冲突）
+  await act(async () => {
+    typeInto(ta, '/skill:review @mem')
+  })
+  await act(async () => {})
+  const atPopover = host.querySelector<HTMLElement>('.composer-completion-popover')
+  assert.ok(atPopover, '待命页输入 @ 应弹出 CompletionPopover')
+  assert.match(atPopover.textContent ?? '', /@memory/)
+  await act(async () => {
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+  })
+  assert.equal(ta.value, '/skill:review @memory ', 'Enter 选中 @ 候选仅补全触发文本，不创建会话')
 })
 
 test('Composer 提交键位：Enter steer、Ctrl/Cmd+Enter followUp、Shift+Enter 换行、Alt+Enter 禁止别名', { timeout: 60_000 }, async () => {

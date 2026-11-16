@@ -488,16 +488,33 @@ export function countOutlineTurns(nodes: ReadonlyArray<OutlineNode>): number {
 // 大纲过滤与滚动激活态计算
 // ---------------------------------------------------------------------------
 
+export type OutlineFilterMode = 'dialogue' | 'questions' | 'all'
+
 export interface FilterOutlineOptions {
   /** 搜索关键词（大小写不敏感；匹配人类/助手全文、轮次号 `#N`、Markdown 标题与卡片可搜索文本）。 */
   query?: string
-  /** 仅提问模式（默认 false）：只保留 `human` 与 `divider`，过滤助手正文/标题/业务卡子节点。 */
-  questionsOnly?: boolean
+  /**
+   * 过滤模式（默认 `'all'`；大纲面板在启用切换栏时默认传入 `'dialogue'`）：
+   * - `'dialogue'`：保留人工发起的 `human`（`origin === 'human'`）、`assistant`、`heading` 与 `divider`，
+   *   过滤业务卡 `card` 及 `agent`/`trigger` 发起的输入；
+   * - `'questions'`：仅保留人工发起的 `human`（`origin === 'human'`）与 `divider`；
+   * - `'all'`：保留全部节点。
+   */
+  mode?: OutlineFilterMode
+}
+
+function matchesOutlineFilterMode(node: OutlineNode, mode: OutlineFilterMode): boolean {
+  if (mode === 'all') return true
+  if (mode === 'questions') {
+    return (node.kind === 'human' && node.origin === 'human') || node.kind === 'divider'
+  }
+  if (node.kind === 'human') return node.origin === 'human'
+  return node.kind === 'assistant' || node.kind === 'heading' || node.kind === 'divider'
 }
 
 /**
  * 过滤大纲节点：
- * - `questionsOnly === true` 时仅保留 `human` 与 `divider`；
+ * - 先按 `mode`（`'dialogue' | 'questions' | 'all'`）过滤；
  * - 有搜索词时：
  *   1. `human` 节点匹配 `label`、`fullText` 或 `#turnIndex`；
  *   2. `assistant` 节点匹配 `label` 或 `fullText`；
@@ -509,10 +526,8 @@ export function filterOutlineNodes(
   nodes: ReadonlyArray<OutlineNode>,
   options: FilterOutlineOptions = {},
 ): OutlineNode[] {
-  const base =
-    options.questionsOnly === true
-      ? nodes.filter((n) => n.kind === 'human' || n.kind === 'divider')
-      : [...nodes]
+  const mode = options.mode ?? 'all'
+  const base = mode === 'all' ? [...nodes] : nodes.filter((node) => matchesOutlineFilterMode(node, mode))
   const q = (options.query ?? '').trim().toLowerCase()
   if (q === '') return base
 

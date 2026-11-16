@@ -33,6 +33,9 @@ import {
 } from '../src/runtime/tools.js'
 import type { HelmToolDeps } from '../src/runtime/tool-deps.js'
 import type { EnvFabric } from '../src/env/index.js'
+import { composeExecutionEnv } from '../src/env/scoped-env.js'
+import { createLocalExecutionEnv } from '../src/env/local-host-env.js'
+import type { ShellProbeIo } from '@helm/env-io'
 
 /** 受控 ExecutionEnv：记录真实收到的路径与 Context，绝不伪造完成结果。 */
 interface RecordedCall {
@@ -494,5 +497,84 @@ describe('buildToolEnv / buildManagedEnv 远端语义', { timeout: 60_000 }, () 
     }
     const managed = buildManagedEnv(deps, 'C:\\workspace', 3, 'node-no-url')
     assert.equal('HELM_HUB_URL' in managed, false, '未上报 hubUrl 时省略该键，daemon 保持其真实值')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 5. Windows 宿主 Path 大小写保留 + LocalHostExecutionEnv 拒入 WSL
+// ---------------------------------------------------------------------------
+describe('Windows 宿主 env 大小写保留与 Shell 探测防 WSL 劫持', { timeout: 60_000 }, () => {
+  it('composeExecutionEnv(win32)：剥除 helm_token，保留宿主 Path 并在原键前置 cliBinDir', { timeout: 60_000 }, () => {
+    const env = composeExecutionEnv(
+      'local',
+      { HELM_CONVERSATION_ID: '12', HELM_TOKEN: 'managed-tok' },
+      {},
+      {
+        platform: 'win32',
+        cliBinDir: 'C:\\Users\\me\\.helm\\bin',
+        hostEnv: {
+          Path: 'C:\\Windows\\System32;C:\\Program Files\\nodejs',
+          helm_token: 'stale-host-token',
+          HELM_HUB_URL: 'http://stale',
+        },
+      },
+    )
+    const pathKeys = Object.keys(env).filter((k) => k.toUpperCase() === 'PATH')
+    assert.deepEqual(pathKeys, ['Path'], 'win32 不得生成冲突的 PATH/Path 双键')
+    assert.equal(
+      env['Path'],
+      'C:\\Users\\me\\.helm\\bin;C:\\Windows\\System32;C:\\Program Files\\nodejs',
+    )
+    assert.equal('helm_token' in env, false, '大小写变体 helm_token 必须剥除')
+    assert.equal(env['HELM_TOKEN'], 'managed-tok')
+    assert.equal('HELM_HUB_URL' in env, false, '宿主受管变量必须剥除')
+  })
+
+  it('createLocalExecutionEnv：仅存 System32\\bash.exe 时显式 shell_unavailable；跳过 WSL 后可执行真实 bash', { timeout: 60_000 }, async () => {
+    const wslOnlyIo: ShellProbeIo = {
+      platform: 'win32',
+      env: {
+        SystemRoot: 'C:\\Windows',
+        ProgramFiles: 'C:\\Program Files',
+        'ProgramFiles(x86)': 'C:\\Program Files (x86)',
+        LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local',
+        USERPROFILE: 'C:\\Users\\me',
+      },
+      homedir: () => 'C:\\Users\\me',
+      pathExists: async (p) => p.toLowerCase() === 'c:\\windows\\system32\\bash.exe',
+      realpath: async () => null,
+      execProbe: async (_cmd, args) =>
+        args[0] === 'bash.exe'
+          ? { stdout: 'C:\\Windows\\System32\\bash.exe\r\n', status: 0 }
+          : { stdout: '', status: 1 },
+    }
+
+    const wslOnlyEnv = createLocalExecutionEnv({ cwd: process.cwd(), shellProbeIo: wslOnlyIo })
+    const blocked = await wslOnlyEnv.exec('echo hi', undefined, BACKGROUND_CONTEXT)
+    assert.equal(blocked.ok, false)
+    if (!blocked.ok) {
+      assert.equal(blocked.error.code, 'shell_unavailable')
+      assert.match(blocked.error.message, /Skipped WSL launcher\(s\): C:\\Windows\\System32\\bash\.exe/)
+    }
+
+    const realShell = existsSync('/bin/bash') ? '/bin/bash' : '/bin/sh'
+    const skippedWslIo: ShellProbeIo = {
+      ...wslOnlyIo,
+      pathExists: async (p) => p === realShell || p.toLowerCase() === 'c:\\windows\\system32\\bash.exe',
+      execProbe: async (_cmd, args) =>
+        args[0] === 'bash.exe'
+          ? { stdout: `C:\\Windows\\System32\\bash.exe\r\n${realShell}\r\n`, status: 0 }
+          : { stdout: '', status: 1 },
+    }
+    const okEnv = createLocalExecutionEnv({ cwd: process.cwd(), shellProbeIo: skippedWslIo })
+    let output = ''
+    const ran = await okEnv.exec(
+      'printf ok',
+      { onOutput: (chunk) => { output += chunk } },
+      BACKGROUND_CONTEXT,
+    )
+    assert.equal(ran.ok, true)
+    if (ran.ok) assert.equal(ran.value.exitCode, 0)
+    assert.equal(output, 'ok')
   })
 })

@@ -23,7 +23,7 @@
 import type { ExecutionEnv, Result, ShellExecOptions, ShellExecResult } from '@earendil-works/pi-durable/env'
 import type { ExecutionError } from '@earendil-works/pi-durable/env'
 import type { Context } from '@earendil-works/chord/context'
-import { delimiter as pathDelimiter } from 'node:path'
+import { prependEnvPath, setEnvEntry } from '@helm/env-io'
 import type { EnvOptionsComposer } from './fabric.js'
 
 /** 执行靶点：会话 + 节点 + 工作目录（Profile×节点组合后的物理落点）。 */
@@ -66,21 +66,32 @@ export function composeExecutionEnv(
   nodeId: string,
   composed: Record<string, string>,
   perCall: Record<string, string> = {},
-  options: { inheritEnv?: boolean; cliBinDir?: string } = {},
+  options: {
+    inheritEnv?: boolean
+    cliBinDir?: string
+    hostEnv?: Readonly<Record<string, string | undefined>>
+    platform?: NodeJS.Platform
+  } = {},
 ): Record<string, string> {
+  const platform = options.platform ?? process.platform
+  const hostEnv = options.hostEnv ?? process.env
   const env: Record<string, string> = {}
   if (nodeId === 'local' && options.inheritEnv !== false) {
-    for (const [key, value] of Object.entries(process.env)) {
-      if (value !== undefined && !MANAGED_ENV_NAMES.has(key.toUpperCase())) env[key] = value
+    for (const [key, value] of Object.entries(hostEnv)) {
+      if (value !== undefined && !MANAGED_ENV_NAMES.has(key.toUpperCase())) {
+        setEnvEntry(env, key, value, platform)
+      }
     }
   }
   const boundNames = new Set([...MANAGED_ENV_NAMES, ...Object.keys(composed).map((key) => key.toUpperCase())])
   for (const [key, value] of Object.entries(perCall)) {
-    if (!boundNames.has(key.toUpperCase())) env[key] = value
+    if (!boundNames.has(key.toUpperCase())) setEnvEntry(env, key, value, platform)
   }
-  Object.assign(env, composed)
+  for (const [key, value] of Object.entries(composed)) {
+    setEnvEntry(env, key, value, platform)
+  }
   if (nodeId === 'local' && options.cliBinDir) {
-    env['PATH'] = `${options.cliBinDir}${env['PATH'] !== undefined ? pathDelimiter + env['PATH'] : ''}`
+    prependEnvPath(env, options.cliBinDir, platform)
   }
   return env
 }

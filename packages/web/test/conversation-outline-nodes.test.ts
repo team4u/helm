@@ -351,15 +351,39 @@ test('搜索：助手全文、卡片摘要与标题均可命中，且保留父�
   assert.ok(byToolName.some((n) => n.kind === 'card'))
 })
 
-test('仅提问模式：只保留 human 与 divider，助手正文/标题/业务卡全部过滤', { timeout: 60_000 }, () => {
-  const nodes = buildMixedNodes()
-  assert.deepEqual(kindsOf(nodes), ['human', 'card', 'human', 'assistant', 'card'])
-  const questionsOnly = filterOutlineNodes(nodes, { questionsOnly: true })
-  assert.deepEqual(
-    questionsOnly.map((n) => n.kind),
-    ['human', 'human'],
+test('三态过滤模式：dialogue 过滤 card 与 agent/trigger 输入；questions 仅留人工提问与分割线；all 保留全部', { timeout: 60_000 }, () => {
+  const items = buildTimelineItems(
+    [
+      humanEntry('1', '派子代理调研数据库索引'),
+      toolCallEntry('2', 'call-1', 'subagent', { prompt: '调研数据库索引缺失' }),
+      toolResultEntry('3', 'call-1', 'subagent'),
+      { id: '3b', kind: 'helm.input', data: { id: 'in-agent', text: '子代理自动跟进检查', origin: 'agent' }, createdAt: 1500 },
+      { id: '3c', kind: 'helm.input', data: { id: 'in-trigger', text: '定时巡检触发消息', origin: 'trigger' }, createdAt: 1600 },
+      humanEntry('4', '总结一下'),
+      assistantTextEntry('5', '索引缺失是慢查询根因，建议补建复合索引。'),
+      backgroundReportEntry,
+    ],
+    { toolViews: TOOL_VIEWS, timelineRenderers: RENDERERS },
   )
-  // 默认（不传）为完整回合导航
+  const nodes = buildConversationOutline(items)
+  assert.deepEqual(kindsOf(nodes), ['human', 'card', 'human', 'human', 'human', 'assistant', 'card'])
+
+  const dialogue = filterOutlineNodes(nodes, { mode: 'dialogue' })
+  assert.deepEqual(
+    dialogue.map((n) => (n.kind === 'human' ? `${n.kind}:${n.label}` : n.kind)),
+    ['human:派子代理调研数据库索引', 'human:总结一下', 'assistant'],
+    'dialogue 模式过滤掉 card 以及 agent/trigger 发起的 human 输入，仅保留人工对话与助手正文/标题/分割线',
+  )
+
+  const questionsOnly = filterOutlineNodes(nodes, { mode: 'questions' })
+  assert.deepEqual(
+    questionsOnly.map((n) => (n.kind === 'human' ? n.label : n.kind)),
+    ['派子代理调研数据库索引', '总结一下'],
+    'questions 模式仅保留 origin === human 的提问与 divider',
+  )
+
+  // all 与默认（不传 mode）保留完整大纲节点
+  assert.deepEqual(kindsOf(filterOutlineNodes(nodes, { mode: 'all' })), kindsOf(nodes))
   assert.deepEqual(kindsOf(filterOutlineNodes(nodes)), kindsOf(nodes))
 })
 

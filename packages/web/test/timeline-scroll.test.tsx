@@ -464,3 +464,79 @@ test('跟底 RO 观察滚动容器自身：working 贴底时视口缩小维持�
   innerResizeObserver().trigger()
   assert.equal(mock.top(), 1200, '用户脱离后同样的视口缩小不吸回')
 })
+
+// ---------------------------------------------------------------------------
+// 回到底部浮动 ↓ 按钮（L206）
+// ---------------------------------------------------------------------------
+
+test('回到底部按钮：距底 <=240px 隐藏、>240px 浮现，带生成/未读活动点，点击平滑置底并恢复跟底吸附', { timeout: 60_000 }, async () => {
+  const raf = installManualRaf()
+  const convIdle = makeConv(10, { status: 'idle' })
+  const baseEntries = [humanEntry('1', '问'), assistantEntry('2', '答')]
+  const scroller = await renderTimeline(convIdle, baseEntries)
+  const mock = setupClampedScroll(scroller, { scrollHeight: 2000, clientHeight: 800, scrollTop: 0 })
+  const smoothCalls: Array<ScrollToOptions | undefined> = []
+  ;(scroller as HTMLElement & { scrollTo: (opts?: ScrollToOptions) => void }).scrollTo = (opts?: ScrollToOptions) => {
+    smoothCalls.push(opts)
+    if (typeof opts?.top === 'number') scroller.scrollTop = opts.top
+  }
+
+  await exhaustInitialWindow(raf)
+  assert.equal(host!.querySelector('button[aria-label="回到底部"]'), null, '贴底时隐藏回到底部按钮')
+
+  // 上滚正好 240px（scrollTop = 1200 - 240 = 960）：严格 >240 才显示，240px 不显示
+  scroller.dispatchEvent(wheelUpEvent())
+  mock.setTopSilent(960)
+  await act(async () => {
+    scroller.dispatchEvent(new Event('scroll'))
+  })
+  assert.equal(host!.querySelector('button[aria-label="回到底部"]'), null, '距底 240px 阈值边界不显示')
+
+  // 再上滚 1px 至 241px（scrollTop = 959）：按钮出现，渲染箭头矢量图标，静止无未读时无活动点
+  mock.setTopSilent(959)
+  await act(async () => {
+    scroller.dispatchEvent(new Event('scroll'))
+  })
+  const btn = host!.querySelector<HTMLButtonElement>('.timeline-scroll-bottom-btn[aria-label="回到底部"]')
+  assert.ok(btn !== null, '距底 >240px 应显示回到底部浮动按钮')
+  assert.ok(btn.closest('.timeline-container') !== null && btn.closest('.timeline-scroll') === null, '应挂载在 .timeline-container 上而非滚走')
+  assert.ok(btn.querySelector('svg.lucide-arrow-down') !== null, '应渲染 HelmIcon arrow-down 矢量图标')
+  assert.equal(btn.querySelector('.timeline-scroll-bottom-dot'), null, 'idle 且无新增内容时不显示活动点')
+
+  // 脱离贴底期间收到新内容推送（并即使随后恢复 idle）：持续保留未读活动点
+  await rerenderTimeline({
+    conv: makeConv(10, { status: 'working' }),
+    entries: [...baseEntries, assistantEntry('3', '流式追加一段')],
+  })
+  assert.ok(
+    host!.querySelector('.timeline-scroll-bottom-btn .timeline-scroll-bottom-dot') !== null,
+    'working 生成中应显示活动点',
+  )
+  await rerenderTimeline({
+    conv: makeConv(10, { status: 'idle' }),
+    entries: [...baseEntries, assistantEntry('3', '完整追加回答')],
+  })
+  assert.ok(
+    host!.querySelector('.timeline-scroll-bottom-btn .timeline-scroll-bottom-dot') !== null,
+    '离底期间产生的新消息在 idle 后仍保留未读活动点',
+  )
+
+  // 点击回到底部：调用 smooth scrollTo 至 scrollHeight、隐藏按钮并恢复贴底吸附
+  await act(async () => {
+    host!.querySelector<HTMLButtonElement>('.timeline-scroll-bottom-btn')!.click()
+  })
+  assert.equal(smoothCalls.length, 1)
+  assert.equal(smoothCalls[0]?.behavior, 'smooth')
+  assert.equal(smoothCalls[0]?.top, 2000)
+  assert.equal(mock.top(), 1200, '点击回到底部应置底到最大可滚位置')
+  assert.equal(host!.querySelector('button[aria-label="回到底部"]'), null, '点击回到底部后按钮隐藏')
+
+  // 验证贴底吸附已恢复：重新进入 working 并增长高度时 ResizeObserver 自动跟随到底端
+  await rerenderTimeline({
+    conv: makeConv(10, { status: 'working' }),
+    entries: [...baseEntries, assistantEntry('3', '新一轮流式生成')],
+  })
+  mock.setHeight(2500)
+  innerResizeObserver().trigger()
+  assert.equal(mock.top(), 1700, '点击回到底部后必须恢复自动跟底（2500-800）')
+})

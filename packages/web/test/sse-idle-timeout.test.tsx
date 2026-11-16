@@ -81,6 +81,7 @@ interface Observed {
   authenticated: boolean
   connectionError: string | null
   sseConnected: boolean
+  eventsCalls: number
 }
 
 const snapshotPayload = { bootId: 'test-boot', seq: 1, conversations: [], pendingAsks: [], plugins: [], ui: [] }
@@ -100,7 +101,7 @@ test('挂起流空闲超时中止并重连，重连 401 必须登出且不再无
   const { useHelmStore } = await import('../src/lib/store-context.js')
   const originalIdleTimeoutMs = sseClientTimings.idleTimeoutMs
   const originalFetch = globalThis.fetch
-  sseClientTimings.idleTimeoutMs = 40
+  sseClientTimings.idleTimeoutMs = 250
   localStorage.setItem('helm:token', 'stale-token')
   let eventsCalls = 0
   globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -119,10 +120,12 @@ test('挂起流空闲超时中止并重连，重连 401 必须登出且不再无
     return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } })
   }) as typeof fetch
 
-  let observed: Observed = { authenticated: false, connectionError: null, sseConnected: false }
+  let observed: Observed = { authenticated: false, connectionError: null, sseConnected: false, eventsCalls: 0 }
+  const history: Observed[] = []
   const Probe = (): React.ReactNode => {
     const store = useHelmStore()
-    observed = { authenticated: store.authenticated, connectionError: store.connectionError, sseConnected: store.sseConnected }
+    observed = { authenticated: store.authenticated, connectionError: store.connectionError, sseConnected: store.sseConnected, eventsCalls }
+    history.push(observed)
     return null
   }
 
@@ -143,12 +146,11 @@ test('挂起流空闲超时中止并重连，重连 401 必须登出且不再无
       r.render(React.createElement(HelmStoreProvider, null, React.createElement(Probe)))
     })
     // 第一条连接：snapshot 到达、进入挂起态（无任何后续字节）。
-    await waitForObs((o) => o.sseConnected === true)
-    assert.equal(eventsCalls, 1)
-    // 40ms 空闲超时：判卡死、中止当前连接并显式提示（进入既有重连路径）。
-    await waitForObs((o) => (o.connectionError ?? '').includes('空闲超时'))
+    await waitForObs(() => history.some((o) => o.sseConnected === true && o.eventsCalls === 1))
+    // 250ms 空闲超时：判卡死、中止当前连接并显式提示（进入既有重连路径）。
+    await waitForObs(() => history.some((o) => (o.connectionError ?? '').includes('空闲超时')))
     // 重连 fetch 拿 401：必须登出（authenticated=false、token 清除）。
-    await waitForObs((o) => o.authenticated === false)
+    await waitForObs((o) => o.authenticated === false && o.eventsCalls >= 2)
     assert.equal(eventsCalls, 2, '恰好两次 /api/events：挂起流一次 + 401 一次')
     assert.equal(localStorage.getItem('helm:token'), null, '登出必须清除存储 token')
     assert.equal(observed.sseConnected, false)

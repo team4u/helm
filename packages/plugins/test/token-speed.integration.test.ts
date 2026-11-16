@@ -20,7 +20,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { COMPOSER_STATUS_SLOT, HelmError } from '@helm/protocol'
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import { createHelm } from '../../hub/src/app.js'
@@ -177,6 +177,79 @@ test('token-speed 集成：默认停用无 UI → 启用全链路流式测量 �
       '重启用后 UI 插槽恢复',
     )
   } finally {
+    await env.close()
+  }
+})
+
+test('token-speed 集成：多工具轮——工具执行期保持有效 TPS 且不计入解码净耗时，终态正确对账', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  let toolEnteredResolve!: () => void
+  const toolEntered = new Promise<void>((resolve) => {
+    toolEnteredResolve = resolve
+  })
+  let releaseTool!: () => void
+  const toolGate = new Promise<void>((resolve) => {
+    releaseTool = resolve
+  })
+  try {
+    await env.app.kernel.plugins.register({
+      id: 'test:speed-tool-probe',
+      name: 'speed tool probe',
+      definePlugin(ctx) {
+        ctx.tool({
+          name: 'slow_speed_probe',
+          description: '阻塞等待以观测工具执行期 TPS 显示',
+          inputSchema: {
+            type: 'object',
+            properties: { payload: { type: 'string' } },
+            additionalProperties: false,
+          },
+          async execute() {
+            toolEnteredResolve()
+            await toolGate
+            return { output: [{ type: 'text', text: 'probe ok' }] }
+          },
+        })
+      },
+    })
+    await env.app.kernel.plugins.enable(TOKEN_SPEED_PLUGIN_ID)
+
+    env.faux.setResponses([
+      fauxAssistantMessage([fauxToolCall('slow_speed_probe', { payload: 'p'.repeat(240) })], { stopReason: 'toolUse' }),
+      fauxAssistantMessage('z'.repeat(400)),
+    ])
+
+    const conv = await env.app.kernel.createConversation({ title: 'token-speed 多工具轮集成测速' })
+    await env.app.kernel.submitInput(conv.id, '请执行工具后再回答')
+
+    await toolEntered
+    // 真实阻塞约 250ms，并在 tools 阶段轮询 speed sessionDoc：必须始终保有非零 TPS
+    await sleep(250)
+    const duringTools = await pollSpeedDoc(
+      env,
+      conv.id,
+      (status) => status !== null && status.phase === 'tools' && typeof status.tps === 'number' && status.tps > 0,
+      '工具执行期保持有效 TPS',
+    )
+    assert.ok(duringTools!.tps! > 0, '工具执行期绝不清空 TPS')
+    assert.ok(duringTools!.outputTokens > 0, '工具调用参数计数保留')
+
+    releaseTool()
+    await env.app.kernel.waitForIdle(conv.id)
+
+    const settled = await pollSpeedDoc(
+      env,
+      conv.id,
+      (status) => status !== null && status.phase === 'settled',
+      '多工具轮终态 settled',
+      5_000,
+    )
+    assert.ok(settled!.outputTokens >= 100, '汇总多轮输出 tokens')
+    assert.equal(settled!.source, 'provider', '终态经 provider usage 对账')
+    assert.ok(settled!.tps! > 0, '多工具轮终态对账速率 > 0')
+    assert.ok(settled!.decodeMs > 0, '多工具轮净解码时长可测')
+  } finally {
+    releaseTool()
     await env.close()
   }
 })

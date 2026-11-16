@@ -553,6 +553,9 @@ function TurnErrorNotice({
 // 主时间线
 // ---------------------------------------------------------------------------
 
+/** 滚离底部超过该阈值（px）后显示「回到底部」浮动按钮。 */
+const SCROLL_TO_BOTTOM_THRESHOLD_PX = 240
+
 export function ConversationTimeline({
   conversation,
   detailEntries,
@@ -571,6 +574,8 @@ export function ConversationTimeline({
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [localHighlightEntryId, setLocalHighlightEntryId] = useState<string | null>(null)
   const [processToggle, setProcessToggle] = useState<{ turnKey: string; command: ProcessShortcutCommand } | null>(null)
+  const [showScrollBottom, setShowScrollBottom] = useState(false)
+  const [hasUnreadScrollUpdates, setHasUnreadScrollUpdates] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const innerRef = useRef<HTMLDivElement | null>(null)
@@ -578,7 +583,9 @@ export function ConversationTimeline({
   const processToggleSeqRef = useRef(0)
   const latestProcessTurnKeyRef = useRef<string | undefined>(undefined)
   const stickToBottomRef = useRef(true)
+  const programmaticBottomScrollRef = useRef(false)
   const lastScrollTopRef = useRef(0)
+  const prevFingerprintRef = useRef<{ conversationId: number; value: string } | null>(null)
   const lastHumanRef = useRef<{ conversationId: number; key: string | undefined } | null>(null)
   const lastOutlineTickRef = useRef<number | null>(null)
   const lastActiveEntryRef = useRef<string | undefined>(undefined)
@@ -593,10 +600,48 @@ export function ConversationTimeline({
   // 不消费，重挂后可重新启动，避免一次性资格被 effect 重演提前耗尽。
   const initialBottomRef = useRef<{ active: boolean; consumed: boolean }>({ active: false, consumed: false })
 
+  const syncScrollBottomVisibility = useCallback((el: HTMLElement): void => {
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    if (distanceFromBottom <= SCROLL_TO_BOTTOM_THRESHOLD_PX) {
+      programmaticBottomScrollRef.current = false
+    }
+    if (distanceFromBottom <= 32) {
+      setHasUnreadScrollUpdates(false)
+    }
+    const visible =
+      !initialBottomRef.current.active &&
+      !programmaticBottomScrollRef.current &&
+      distanceFromBottom > SCROLL_TO_BOTTOM_THRESHOLD_PX
+    setShowScrollBottom((prev) => (prev === visible ? prev : visible))
+  }, [])
+
   const stopFollowingBottom = useCallback((): void => {
     stickToBottomRef.current = false
+    programmaticBottomScrollRef.current = false
     initialBottomRef.current.consumed = true
     if (activeCalibrationRef.current?.kind === 'initial-bottom') activeCalibrationRef.current.cancel()
+  }, [])
+
+  const scrollToBottomAndFollow = useCallback((): void => {
+    activeCalibrationRef.current?.cancel()
+    activeCalibrationRef.current = null
+    initialBottomRef.current.active = false
+    initialBottomRef.current.consumed = true
+    stickToBottomRef.current = true
+    programmaticBottomScrollRef.current = true
+    setShowScrollBottom(false)
+    setHasUnreadScrollUpdates(false)
+    const el = scrollRef.current
+    if (el === null) return
+    if (typeof el.scrollTo === 'function') {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    } else {
+      el.scrollTop = el.scrollHeight
+    }
+    if (el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_TO_BOTTOM_THRESHOLD_PX) {
+      programmaticBottomScrollRef.current = false
+    }
+    lastScrollTopRef.current = el.scrollTop
   }, [])
 
   // 启动最终锚点校准并接管在途任务（新定位/搜索高亮互斥，旧的立即 cancel）。
@@ -626,13 +671,17 @@ export function ConversationTimeline({
   // 初始贴底窗口同样只取消不消费：StrictMode 的 cleanup→setup 重演后可重启。
   useEffect(() => {
     stickToBottomRef.current = true
+    programmaticBottomScrollRef.current = false
     lastScrollTopRef.current = 0
+    prevFingerprintRef.current = null
     // 重置大纲 tick 消费记录：换会话/StrictMode 重挂后，尚在生效的定位请求
     // 必须重新执行（否则 setup 重置的贴底初态会抢走定位目的地）。
     lastOutlineTickRef.current = null
     initialBottomRef.current.active = false
     initialBottomRef.current.consumed = false
     setProcessToggle(null)
+    setShowScrollBottom(false)
+    setHasUnreadScrollUpdates(false)
     const ownedConversationId = conversation.id
     return () => {
       const active = activeCalibrationRef.current
@@ -788,17 +837,22 @@ export function ConversationTimeline({
       const top = el.scrollTop
       if (initialBottomRef.current.active) {
         lastScrollTopRef.current = top
+        setShowScrollBottom(false)
         return
       }
       const distanceFromBottom = el.scrollHeight - top - el.clientHeight
       if (top < lastScrollTopRef.current) {
         // 输入框收起或内容收缩会把 scrollTop 夹紧到新底部；保留既有跟随意图，
         // 既不误判为用户上翻，也不恢复用户已经解除的贴底。
-        if (distanceFromBottom > 1) stickToBottomRef.current = false
+        if (distanceFromBottom > 1) {
+          stickToBottomRef.current = false
+          programmaticBottomScrollRef.current = false
+        }
       } else if (distanceFromBottom <= 32 && (top > lastScrollTopRef.current || distanceFromBottom <= 8)) {
         stickToBottomRef.current = true
       }
       lastScrollTopRef.current = top
+      syncScrollBottomVisibility(el)
     }
     const onWheel = (event: WheelEvent): void => {
       if (event.deltaY < 0) stopFollowingBottom()
@@ -816,7 +870,7 @@ export function ConversationTimeline({
       el.removeEventListener('wheel', onWheel)
       el.removeEventListener('keydown', onKeyDown)
     }
-  }, [stopFollowingBottom])
+  }, [stopFollowingBottom, syncScrollBottomVisibility])
 
   // 视口当前阅读锚点追踪（供大纲浮层高亮）：IntersectionObserver 观察区域
   // 下缘收窄到「容器顶 + OUTLINE_ACTIVE_LINE_PX 基准线」，行相交 ⟺ 行顶已
@@ -956,16 +1010,18 @@ export function ConversationTimeline({
     if (inner === null || scroller === null || typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(() => {
       const el = scrollRef.current
-      if (el === null || !stickToBottomRef.current) return
-      if (!isWorking && !hasLiveTurn) return
-      el.scrollTop = el.scrollHeight
-      lastScrollTopRef.current = el.scrollTop
+      if (el === null) return
+      if (stickToBottomRef.current && (isWorking || hasLiveTurn)) {
+        el.scrollTop = el.scrollHeight
+        lastScrollTopRef.current = el.scrollTop
+      }
+      syncScrollBottomVisibility(el)
     })
     ro.observe(inner)
     // Composer 高度、移动端键盘等只改变视口，不一定改变 inner 的尺寸。
     ro.observe(scroller)
     return () => ro.disconnect()
-  }, [isWorking, hasLiveTurn])
+  }, [isWorking, hasLiveTurn, syncScrollBottomVisibility])
 
   useEffect(() => {
     if (store.highlightedEntry?.conversationId === conversation.id) stopFollowingBottom()
@@ -992,10 +1048,22 @@ export function ConversationTimeline({
   const detailsReady = store.conversationDetails[conversation.id] !== undefined
   useEffect(() => {
     if (detailsReady) {
+      const previousFingerprint = prevFingerprintRef.current
+      if (
+        previousFingerprint !== null &&
+        previousFingerprint.conversationId === conversation.id &&
+        previousFingerprint.value !== contentFingerprint &&
+        !stickToBottomRef.current
+      ) {
+        setHasUnreadScrollUpdates(true)
+      }
+      prevFingerprintRef.current = { conversationId: conversation.id, value: contentFingerprint }
       const previous = lastHumanRef.current
       // 初始化历史只记录锚点；已就绪的空会话随后首次发送仍是新增输入，须贴底。
       if (previous?.conversationId === conversation.id && lastHumanKey !== undefined && lastHumanKey !== previous.key) {
         stickToBottomRef.current = true
+        programmaticBottomScrollRef.current = false
+        setHasUnreadScrollUpdates(false)
       }
       lastHumanRef.current = { conversationId: conversation.id, key: lastHumanKey }
     }
@@ -1004,10 +1072,11 @@ export function ConversationTimeline({
       el.scrollTop = el.scrollHeight
       lastScrollTopRef.current = el.scrollTop
     }
+    if (el !== null) syncScrollBottomVisibility(el)
     // 历史就绪后启动一次性初始贴底校准（窗口内部自守卫：已消费/在途/已释放
     // 贴底时不动作）；数据延迟就绪时由 detailsReady 依赖在本 effect 重启时启动。
     if (detailsReady) beginInitialBottomCalibration()
-  }, [contentFingerprint, lastHumanKey, detailsReady, conversation.id, beginInitialBottomCalibration])
+  }, [contentFingerprint, lastHumanKey, detailsReady, conversation.id, beginInitialBottomCalibration, syncScrollBottomVisibility])
 
   const loading = !detailsReady
 
@@ -1163,6 +1232,20 @@ export function ConversationTimeline({
       </div>
       <div ref={bottomRef} className="timeline-scroll-anchor" />
       </div>
+      {showScrollBottom ? (
+        <button
+          type="button"
+          className={`timeline-scroll-bottom-btn${hasUnreadScrollUpdates ? ' has-unread' : ''}`}
+          aria-label="回到底部"
+          title="回到底部"
+          onClick={scrollToBottomAndFollow}
+        >
+          <HelmIcon name="arrow-down" size={16} />
+          {isWorking || hasLiveTurn || sendingPending || hasUnreadScrollUpdates ? (
+            <span className="timeline-scroll-bottom-dot" aria-hidden="true" />
+          ) : null}
+        </button>
+      ) : null}
     </div>
   )
 }

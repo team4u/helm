@@ -111,10 +111,11 @@ export interface ComposerCompletionItem {
   icon?: string
 }
 
-/** 查询动作只接收文本与会话身份；nodeId/cwd 应从服务端真实会话解析。 */
+/** 查询动作只接收文本与上下文身份（真实会话传 conversationId；待命草稿态支持传 profileId）。 */
 export interface ComposerCompletionQuery {
   query: string
-  conversationId: number
+  conversationId?: number
+  profileId?: string
 }
 
 export interface ComposerCompletionResult {

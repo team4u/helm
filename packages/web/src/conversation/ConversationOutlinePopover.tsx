@@ -4,6 +4,7 @@ import { formatMessageTime } from '../lib/format.js'
 import {
   countOutlineTurns,
   filterOutlineNodes,
+  type OutlineFilterMode,
   type OutlineNode,
 } from './outline-model.js'
 
@@ -31,7 +32,7 @@ export interface ConversationOutlinePopoverProps {
   searchPlaceholder?: string
   /** 浮层与搜索框的无障碍名称。 */
   accessibilityLabel?: string
-  /** 是否显示「全部 / 仅提问」切换，文档大纲不需要该切换。 */
+  /** 是否显示「对话 / 仅提问 / 全部」切换，文档大纲不需要该切换。 */
   showModeToggle?: boolean
   /** 是否通过 Portal 渲染浮层；Dialog 内嵌使用 false 避免落到模态层外。 */
   portalled?: boolean
@@ -71,21 +72,25 @@ export function ConversationOutlinePopover({
 }: ConversationOutlinePopoverProps) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
-  const [questionsOnly, setQuestionsOnly] = useState(false)
+  const [mode, setMode] = useState<OutlineFilterMode>('dialogue')
   const [selectedIdx, setSelectedIdx] = useState(0)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
 
+  const effectiveMode: OutlineFilterMode = showModeToggle ? mode : 'all'
   const turnCount = useMemo(() => countOutlineTurns(nodes), [nodes])
   const displayCount = badgeCount ?? turnCount
-  const hasSubNodes = useMemo(
-    () => nodes.some((n) => n.kind !== 'human' && n.kind !== 'divider'),
+  const hasFilterableNodes = useMemo(
+    () =>
+      nodes.some(
+        (n) => (n.kind === 'human' && n.origin !== 'human') || (n.kind !== 'human' && n.kind !== 'divider'),
+      ),
     [nodes],
   )
 
   const filtered = useMemo(
-    () => filterOutlineNodes(nodes, { query, questionsOnly }),
-    [nodes, query, questionsOnly],
+    () => filterOutlineNodes(nodes, { query, mode: effectiveMode }),
+    [nodes, query, effectiveMode],
   )
 
   // 打开浮层时：默认将键盘焦点索引对齐到当前激活项（若存在），否则置为最后一项（最新提问）或首项。
@@ -114,7 +119,7 @@ export function ConversationOutlinePopover({
   // 搜索词或过滤开关变化时重置选中索引
   useEffect(() => {
     setSelectedIdx(0)
-  }, [query, questionsOnly])
+  }, [query, effectiveMode])
 
   // 键盘移动或初次打开时将选中项滚动进浮层可视区
   useEffect(() => {
@@ -205,24 +210,25 @@ export function ConversationOutlinePopover({
                 </button>
               ) : null}
             </div>
-            {hasSubNodes && showModeToggle ? (
+            {hasFilterableNodes && showModeToggle ? (
               <div className="segmented-control conversation-outline-mode" role="group" aria-label="大纲层级切换">
-                <button
-                  type="button"
-                  className={`segmented-control-btn${!questionsOnly ? ' is-active' : ''}`}
-                  aria-pressed={!questionsOnly}
-                  onClick={() => setQuestionsOnly(false)}
-                >
-                  全部
-                </button>
-                <button
-                  type="button"
-                  className={`segmented-control-btn${questionsOnly ? ' is-active' : ''}`}
-                  aria-pressed={questionsOnly}
-                  onClick={() => setQuestionsOnly(true)}
-                >
-                  仅提问
-                </button>
+                {(
+                  [
+                    ['dialogue', '对话'],
+                    ['questions', '仅提问'],
+                    ['all', '全部'],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={`segmented-control-btn${mode === value ? ' is-active' : ''}`}
+                    aria-pressed={mode === value}
+                    onClick={() => setMode(value)}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
             ) : null}
           </div>

@@ -124,13 +124,22 @@
   font-weight: 500;
 }
 
-/* 行首状态槽：固定宽度灯位，idle 空槽保持续行标题对齐（灯不渲染槽仍在） */
+/* 行首状态槽：固定宽度灯位，idle 空槽保持续行标题对齐（灯不渲染槽仍在）。
+ * 紧凑左缘：槽压至 8px 并以 -4px 左负边距伸入行内边距，灯芯贴近行左缘，
+ * 标题不再被推远；跨行对齐依赖槽宽固定，不随灯是否渲染变化。 */
 .nav-status-slot {
-  width: 12px;
+  width: 8px;
+  margin-left: -4px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+}
+
+/* 仅带灯槽的行收紧 main 间距（标题紧贴灯槽）：设置导航/视图行的图标位
+ * 不渲染 nav-status-slot，保持 .nav-item-main 基础 8px gap 不受影响。 */
+.nav-item-main:has(> .nav-status-slot) {
+  gap: 4px;
 }
 
 .nav-item-meta {
@@ -151,8 +160,8 @@
 }
 
 .agent-standing-group .agent-conversations-list {
-  margin: 4px 0 2px 16px;
-  padding-left: 6px;
+  margin: 4px 0 2px 12px;
+  padding-left: 4px;
   border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;

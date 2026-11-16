@@ -29,6 +29,7 @@ Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 const { ConversationPane } = await import('../src/conversation/ConversationPane.js')
+const { ConversationOutlinePopover } = await import('../src/conversation/ConversationOutlinePopover.js')
 const e = React.createElement
 
 let root: Root | undefined
@@ -131,11 +132,18 @@ test('buildConversationOutline 与 filterOutlineNodes：构建完整树、支持
     ],
   )
 
-  // 仅看提问模式：过滤掉所有助手子节点（正文/标题/卡片），保留 human 与 divider
-  const questionsOnly = filterOutlineNodes(nodes, { questionsOnly: true })
+  // 仅看提问模式：过滤掉所有助手子节点（正文/标题/卡片）与非人工输入，保留 human 与 divider
+  const questionsOnly = filterOutlineNodes(nodes, { mode: 'questions' })
   assert.deepEqual(
     questionsOnly.map((n) => n.kind),
     ['human', 'divider', 'human'],
+  )
+
+  // 对话模式：保留人工提问、助手正文、Markdown 标题与分割线
+  const dialogueOnly = filterOutlineNodes(nodes, { mode: 'dialogue' })
+  assert.deepEqual(
+    dialogueOnly.map((n) => n.kind),
+    ['human', 'heading', 'heading', 'divider', 'human', 'heading'],
   )
 
   // 搜索子标题 "索引缺失"：自动保留所属父提问 Q#1
@@ -370,11 +378,31 @@ test('ConversationPane 大纲业务卡节点：tool.view 卡经 cardId 二级锚
   await act(async () => {
     document.querySelector<HTMLButtonElement>('.conversation-outline-trigger')!.click()
   })
+  // 大纲默认以「对话」模式打开：过滤业务卡与 agent/trigger 输入，仅保留人工提问
+  const modeButtons = [...document.querySelectorAll<HTMLButtonElement>('.conversation-outline-mode .segmented-control-btn')]
+  assert.deepEqual(
+    modeButtons.map((btn) => btn.textContent?.trim()),
+    ['对话', '仅提问', '全部'],
+  )
+  assert.equal(modeButtons[0]?.getAttribute('aria-pressed'), 'true', '默认激活「对话」模式')
+  const dialogueOptions = [...document.querySelectorAll<HTMLButtonElement>('.conversation-outline-item')]
+  assert.deepEqual(
+    dialogueOptions.map((btn) => btn.className.match(/conversation-outline-(human|assistant|heading|card|divider)/)?.[1]),
+    ['human'],
+    '「对话」模式默认过滤业务卡，仅保留人工提问',
+  )
+
+  // 切换到「全部」模式以查看并跳转业务卡节点
+  const allModeBtn = modeButtons.find((btn) => btn.textContent?.trim() === '全部')
+  assert.ok(allModeBtn, '应提供「全部」切换按钮')
+  await act(async () => {
+    allModeBtn.click()
+  })
   const options = [...document.querySelectorAll<HTMLButtonElement>('.conversation-outline-item')]
   assert.deepEqual(
     options.map((btn) => btn.className.match(/conversation-outline-(human|assistant|heading|card|divider)/)?.[1]),
     ['human', 'card', 'card'],
-    '大纲应包含提问 + subagent 业务卡 + 背景汇报卡（无空 assistant 节点）',
+    '「全部」模式应包含提问 + subagent 业务卡 + 背景汇报卡（无空 assistant 节点）',
   )
 
   const scrolledElements: HTMLElement[] = []
@@ -413,4 +441,101 @@ test('ConversationPane 大纲业务卡节点：tool.view 卡经 cardId 二级锚
     HTMLElement.prototype.scrollIntoView = origScrollIntoView
     globalThis.fetch = origFetch
   }
+})
+
+test('ConversationOutlinePopover 三态切换：默认「对话」过滤非人工/卡片，切「仅提问」与「全部」精准生效；showModeToggle=false 保持全量展示', { timeout: 60_000 }, async () => {
+  const items = buildTimelineItems(
+    [
+      { id: '1', kind: 'helm.input', data: { id: 'q1', text: '人类第一问', origin: 'human' }, createdAt: 1000 },
+      {
+        id: '2',
+        kind: 'pi.assistant',
+        model: [
+          {
+            role: 'assistant',
+            content: [
+              { type: 'text', text: '# 一级结论\n内容详情' },
+              { type: 'toolCall', id: 'c1', name: 'subagent', arguments: { prompt: '执行巡检' } },
+            ],
+          },
+        ],
+      },
+      {
+        id: '2r',
+        kind: 'pi.tool-result',
+        model: [{ role: 'toolResult', toolCallId: 'c1', toolName: 'subagent', content: [{ type: 'text', text: '完成' }] }],
+      },
+      { id: '3', kind: 'helm.input', data: { id: 'q2', text: '后台代理触发输入', origin: 'agent' }, createdAt: 2000 },
+      { id: '4', kind: 'pi.compaction', model: [{ role: 'user', content: '摘要' }] },
+    ],
+    {
+      toolViews: [
+        { pluginId: 'builtin:workflow', spec: { id: 'subagent-card', toolNames: ['subagent'], replaceRow: true } },
+      ],
+    },
+  )
+  const nodes = buildConversationOutline(items)
+
+  host = document.createElement('div')
+  document.body.appendChild(host)
+  root = createRoot(host)
+  await act(async () => {
+    root!.render(
+      e(ConversationOutlinePopover, {
+        nodes,
+        showModeToggle: true,
+        portalled: false,
+        forceMount: true,
+        onSelectTarget: () => {},
+      }),
+    )
+  })
+
+  await act(async () => {
+    host!.querySelector<HTMLButtonElement>('.conversation-outline-trigger')!.click()
+  })
+  const toggleBtns = [...host.querySelectorAll<HTMLButtonElement>('.conversation-outline-mode .segmented-control-btn')]
+  assert.deepEqual(toggleBtns.map((b) => b.textContent?.trim()), ['对话', '仅提问', '全部'])
+  assert.equal(toggleBtns[0]?.getAttribute('aria-pressed'), 'true')
+
+  // 1. 默认「对话」：保留 人类第一问 + 一级结论 + divider（过滤 card 与 origin=agent 输入）
+  const labels = (): string[] =>
+    [...host!.querySelectorAll<HTMLButtonElement>('.conversation-outline-item')].map((el) => el.textContent ?? '')
+  assert.equal(labels().length, 3)
+  assert.match(labels()[0]!, /人类第一问/)
+  assert.match(labels()[1]!, /一级结论/)
+  assert.match(labels()[2]!, /上下文已精简/)
+
+  // 2. 切换「仅提问」：仅保留 人类第一问 + divider
+  await act(async () => {
+    toggleBtns[1]!.click()
+  })
+  assert.equal(toggleBtns[1]?.getAttribute('aria-pressed'), 'true')
+  assert.equal(labels().length, 2)
+  assert.match(labels()[0]!, /人类第一问/)
+  assert.match(labels()[1]!, /上下文已精简/)
+
+  // 3. 切换「全部」：保留 人类第一问 + 一级结论 + subagent card + agent 输入 + divider
+  await act(async () => {
+    toggleBtns[2]!.click()
+  })
+  assert.equal(toggleBtns[2]?.getAttribute('aria-pressed'), 'true')
+  assert.equal(labels().length, 5)
+  assert.ok(labels().some((t) => t.includes('subagent：执行巡检')))
+  assert.ok(labels().some((t) => t.includes('后台代理触发输入')))
+
+  // 4. showModeToggle=false（如文档大纲）：不渲染模式切换栏，始终全量展示（含全部标题与卡片）
+  await act(async () => {
+    root!.render(
+      e(ConversationOutlinePopover, {
+        nodes,
+        showModeToggle: false,
+        portalled: false,
+        forceMount: true,
+        onSelectTarget: () => {},
+      }),
+    )
+  })
+  assert.equal(host.querySelector('.conversation-outline-mode'), null)
+  assert.equal(labels().length, 5)
 })

@@ -13,7 +13,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ConversationAttachmentRef, ConversationSummary, QueuedConversationInput, WhenBusy } from '@helm/protocol'
 import { conversationsApi } from '../lib/api.js'
 import {
-  commandActionPluginId,
+  executePluginSlashAction,
   insertAtCaret,
   matchExactPluginSlash,
   removeTokenBeforeCaret,
@@ -229,25 +229,15 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
   )
 
   // ⌘K 与斜杠菜单复用同一动作寻址；失败必须返回给提交者。
-  const runPluginCommandFrom = useCallback(async (cmd: QualifiedCommand): Promise<void> => {
-    const actionId = cmd.spec.actionId
-    if (actionId === undefined) throw new Error('插件命令未绑定动作')
-    await store
-      .invokePluginAction(commandActionPluginId(cmd), actionId, cmd.spec.input, conversation.id)
-      .then(() => {
-        store.pushNotice({
-          type: 'notification',
-          level: 'info',
-          title: '命令已执行',
-          body: `${cmd.spec.slash !== undefined ? `/${cmd.spec.slash} · ` : ''}${cmd.spec.title}`,
-          conversationId: conversation.id,
-        })
-      })
-      .catch((err: unknown) => {
-        notifyError(`命令执行失败：/${cmd.spec.slash ?? cmd.spec.id}`, err)
-        throw err
-      })
-  }, [store, conversation.id, notifyError])
+  const runPluginCommandFrom = useCallback(
+    (cmd: QualifiedCommand): Promise<void> =>
+      executePluginSlashAction(cmd, {
+        invokePluginAction: store.invokePluginAction,
+        pushNotice: store.pushNotice,
+        conversationId: conversation.id,
+      }),
+    [store, conversation.id],
+  )
 
   // 命令成功后才消费触发词；用户已经修改草稿时不得覆盖新内容。
   const runPluginCommandImpl = useCallback((cmd: QualifiedCommand): void => {

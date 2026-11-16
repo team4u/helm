@@ -768,6 +768,12 @@ describe('Workflow 三区零重复与无损呈现', () => {
       libMount.unmount()
     }
 
+    // 1b. WorkflowIcon 必须完全委托 @helm/plugin-client HelmIcon，禁止私有导入 lucide-react
+    const iconSrc = await readFile(join(WORKFLOW_CLIENT_DIR, 'WorkflowIcon.tsx'), 'utf8')
+    assert.match(iconSrc, /from '@helm\/plugin-client'/, 'WorkflowIcon 必须复用 @helm/plugin-client')
+    assert.doesNotMatch(iconSrc, /from 'lucide-react'/, 'WorkflowIcon 不得私建 lucide-react 映射表')
+    assert.match(iconSrc, /<HelmIcon\b/, 'WorkflowIcon 应直接委托 <HelmIcon />')
+
     // 2. 全量扫描 workflow/client/*.tsx 与 herdr/client/*.tsx：零 Emoji、零 callout--warn、仅导出组件与 TS 类型
     const emojiRe = /\p{Extended_Pictographic}/u
     for (const dir of [WORKFLOW_CLIENT_DIR, HERDR_CLIENT_DIR]) {

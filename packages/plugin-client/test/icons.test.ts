@@ -15,12 +15,16 @@ import * as IconsModule from '../src/icons.js'
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
 
-test('HelmIcon：支持 laptop / server / circle-slash / file 新注册矢量图标（SSR）', { timeout: 60_000 }, () => {
+test('HelmIcon：支持 laptop / server / circle-slash / file 与共享补充矢量图标（SSR）', { timeout: 60_000 }, () => {
   const cases: ReadonlyArray<[HelmIconName, RegExp]> = [
     ['laptop', /lucide-laptop/],
     ['server', /lucide-server/],
     ['circle-slash', /lucide-circle-slash/],
     ['file', /lucide-file(?!-)/],
+    ['arrow-down', /lucide-arrow-down(?!-)/],
+    ['arrow-down-to-line', /lucide-arrow-down-to-line/],
+    ['git-pull-request', /lucide-git-pull-request/],
+    ['more-horizontal', /lucide-ellipsis/],
   ]
   for (const [name, pattern] of cases) {
     const html = renderToString(e(HelmIcon, { name, size: 16 }))

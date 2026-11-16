@@ -3,8 +3,8 @@
  * - TokenSpeedStatusBadge：宿主输入区状态行（COMPOSER_STATUS_SLOT）的只读
  *   速率徽标；订阅本插件 speed 会话文档（专用 SSE，随挂载按需连接）。
  *
- * 诚实性：无可靠速率（工具暂停 / 窗口滑空 / 首字前 / 无终态测量）渲染 null，
- * 绝不以 0.0 tok/s 冒充；tooltip 口径见 label.ts。
+ * 诚实性：工具暂停与流式间隙保留本回合最近有效速率（工具执行不计入解码时间）；
+ * 仅在首测前或终态无可靠测量时渲染 null，绝不以 0.0 tok/s 冒充；tooltip 口径见 label.ts。
  */
 import type { ReactNode } from 'react'
 import type { ComposerScopeProps } from '@helm/protocol'

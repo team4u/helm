@@ -8,8 +8,8 @@
  *   burst/stall 平滑、按 taskId 精确对账、工具执行时间剔除（见 tracker.ts）；
  *   停用本插件不产生任何额外内核计算或持久写放大；
  * - 高频会话级状态只进 public sessionDoc（专用 SSE 按需订阅，写入按
- *   250ms 节流；首测 / 阶段变化 / 终态立即写），绝不进全局 ctx.doc 或
- *   conversation summary；
+ *   120ms 节流并在窗口尾部延迟补写末帧；首测 / 阶段变化 / 终态立即写），
+ *   绝不进全局 ctx.doc 或 conversation summary；
  * - 展示经 ctx.ui.slot 注入 COMPOSER_STATUS_SLOT（宿主输入区状态行），
  *   停用即随 UI 贡献一起消失，无幻影提示词；无动作 / 无工具 / 无 CLI
  *   （纯只读展示，不触发五端映射义务）。
@@ -52,7 +52,7 @@ import { ConversationTokenSpeedTracker } from './token-speed/tracker.js'
 
 export { TOKEN_SPEED_PLUGIN_ID }
 
-export function createTokenSpeedPlugin(): PluginDefinition {
+export function createTokenSpeedPlugin(options?: { now?: () => number }): PluginDefinition {
   return {
     id: TOKEN_SPEED_PLUGIN_ID,
     name: 'Token 速率',
@@ -63,6 +63,7 @@ export function createTokenSpeedPlugin(): PluginDefinition {
     clientRoot: resolvePluginClientRoot(TOKEN_SPEED_PLUGIN_ID, 'token-speed', 'token_speed_plugin_client_missing'),
     definePlugin(rawCtx) {
       const ctx = rawCtx
+      const clock = options?.now ?? Date.now
 
       ctx.configSchema({
         slidingWindowMs: {
@@ -82,8 +83,12 @@ export function createTokenSpeedPlugin(): PluginDefinition {
       const trackers = new Map<number, ConversationTokenSpeedTracker>()
       /** 会话 -> 上次 sessionDoc 写入时间（节流）。 */
       const lastWriteAt = new Map<number, number>()
+      /** 会话 -> 节流尾帧延迟补写定时器与待写状态。 */
+      const writeTimers = new Map<number, ReturnType<typeof setTimeout>>()
+      const pendingStatuses = new Map<number, TokenSpeedStatus>()
       /** 链已终结的会话：下一个 generation 帧重置链（新回合从零累计）。 */
       const settledChains = new Set<number>()
+      let serviceActive = true
 
       const windowMsOf = (): number => {
         const raw = (ctx.getConfig() as { slidingWindowMs?: unknown }).slidingWindowMs
@@ -103,26 +108,65 @@ export function createTokenSpeedPlugin(): PluginDefinition {
         return tracker
       }
 
-      /** 写 sessionDoc（节流；force 用于首测 / 阶段变化 / 终态 / 清理）。 */
-      const publish = (conversationId: number, status: TokenSpeedStatus | null, force: boolean, now: number): void => {
-        const previous = speedDoc.get(conversationId)
-        if (!force) {
-          if (status !== null && previous?.phase === status.phase) {
-            const last = lastWriteAt.get(conversationId) ?? 0
-            if (now - last < DOC_WRITE_INTERVAL_MS) return
-          }
+      const nowOf = (fallback: number): number =>
+        Number.isFinite(fallback) && fallback > 0 ? fallback : clock()
+
+      const cancelPendingWrite = (conversationId: number): void => {
+        const timer = writeTimers.get(conversationId)
+        if (timer !== undefined) {
+          clearTimeout(timer)
+          writeTimers.delete(conversationId)
         }
-        lastWriteAt.set(conversationId, now)
-        speedDoc.set(conversationId, status)
+        pendingStatuses.delete(conversationId)
       }
 
-      const nowOf = (fallback: number): number =>
-        Number.isFinite(fallback) && fallback > 0 ? fallback : Date.now()
+      const writeDocSafe = (conversationId: number, status: TokenSpeedStatus | null): void => {
+        try {
+          speedDoc.set(conversationId, status)
+        } catch (error) {
+          if (!(error instanceof HelmError && error.status === 404)) throw error
+        }
+      }
 
-      /** 彻底清空某会话的速率状态（内存态 + 会话文档）。会话行已消失时文档
+      /** 写 sessionDoc（节流 + 尾帧延迟补写；force 用于首测 / 阶段变化 / 速率首现 / 终态 / 清理）。 */
+      const publish = (conversationId: number, status: TokenSpeedStatus | null, force: boolean, now: number): void => {
+        const previous = speedDoc.get(conversationId)
+        const shouldThrottle =
+          !force &&
+          status !== null &&
+          previous !== null &&
+          previous.phase === status.phase &&
+          !(previous.tps === undefined && status.tps !== undefined)
+        if (shouldThrottle) {
+          const last = lastWriteAt.get(conversationId)
+          if (last !== undefined && now >= last && now - last < DOC_WRITE_INTERVAL_MS) {
+            pendingStatuses.set(conversationId, status)
+            if (!writeTimers.has(conversationId)) {
+              const delayMs = Math.max(1, DOC_WRITE_INTERVAL_MS - (now - last))
+              const timer = setTimeout(() => {
+                writeTimers.delete(conversationId)
+                const pending = pendingStatuses.get(conversationId)
+                pendingStatuses.delete(conversationId)
+                if (!serviceActive || pending === undefined) return
+                lastWriteAt.set(conversationId, nowOf(clock()))
+                writeDocSafe(conversationId, pending)
+              }, delayMs)
+              timer.unref?.()
+              writeTimers.set(conversationId, timer)
+            }
+            return
+          }
+        }
+        cancelPendingWrite(conversationId)
+        lastWriteAt.set(conversationId, now)
+        writeDocSafe(conversationId, status)
+      }
+
+      /** 彻底清空某会话的速率状态（内存态 + 节流定时器 + 会话文档）。会话行已消失时文档
        * 删除按 not_found 容忍（会话 id 单调不复用，残留不可达），其余错误如实
        * 上抛。上下文失效 marker / 失败中止回合 / 会话删除共用。 */
       const clearConversationState = (conversationId: number): void => {
+        cancelPendingWrite(conversationId)
         trackers.delete(conversationId)
         lastWriteAt.delete(conversationId)
         settledChains.delete(conversationId)
@@ -149,14 +193,17 @@ export function createTokenSpeedPlugin(): PluginDefinition {
         const status = tracker.liveStatus(now)
         if (status === undefined) return
         const previous = speedDoc.get(frame.conversationId)
-        const force = previous === null || previous.phase !== status.phase
+        const force =
+          previous === null ||
+          previous.phase !== status.phase ||
+          (previous.tps === undefined && status.tps !== undefined)
         publish(frame.conversationId, status, force, now)
       })
 
       // 落库条目：先校验信封与边界 marker。pi.reset / pi.compaction /
       // helm.rewind 表示旧上下文已失效——清空该会话全部速率状态，不回读旧
       // 上下文、不回退旧 TPS；pi.assistant 完成事实（taskId / usage /
-      // stopReason）按请求身份精确对账（成败处置归策略层，此处只透传事实）。
+      // stopReason / contentChars）按请求身份精确对账并补算尾帧后刷新发布。
       ctx.host.onEvent('conversation.entry', (raw) => {
         const envelope = asConversationEntryEnvelope(raw)
         if (envelope === undefined) return
@@ -168,12 +215,28 @@ export function createTokenSpeedPlugin(): PluginDefinition {
         if (kind !== 'pi.assistant') return
         const completion = asAssistantCompletion(raw)
         if (completion === undefined) return
-        trackers.get(conversationId)?.noteCompletion({
-          taskId: completion.taskId,
-          entryId: completion.entryId,
-          usageOutput: completion.usageOutput,
-          stopReason: completion.stopReason,
-        })
+        const tracker = trackers.get(conversationId)
+        if (tracker === undefined) return
+        const now = nowOf(clock())
+        tracker.noteCompletion(
+          {
+            taskId: completion.taskId,
+            entryId: completion.entryId,
+            usageOutput: completion.usageOutput,
+            stopReason: completion.stopReason,
+            ...(completion.contentChars !== undefined ? { contentChars: completion.contentChars } : {}),
+          },
+          now,
+        )
+        if (settledChains.has(conversationId)) return
+        const status = tracker.liveStatus(now)
+        if (status === undefined) return
+        const previous = speedDoc.get(conversationId)
+        const force =
+          previous === null ||
+          previous.phase !== status.phase ||
+          (previous.tps === undefined && status.tps !== undefined)
+        publish(conversationId, status, force, now)
       })
 
       // 回合结算：working = 工具轮 handOver 的中间结算（链继续）；
@@ -189,7 +252,7 @@ export function createTokenSpeedPlugin(): PluginDefinition {
         const tracker = trackers.get(conversationId)
         settledChains.add(conversationId)
         if (tracker === undefined) return
-        const now = Date.now()
+        const now = nowOf(payload.settledAt)
         const status = tracker.settle(now)
         publish(conversationId, status ?? null, true, now)
       })
@@ -207,10 +270,11 @@ export function createTokenSpeedPlugin(): PluginDefinition {
       // 开始时（全局 prepare 屏障，先于任何服务 start / 输入恢复）清空上一
       // 周期遗留的 speed 会话文档——重启或中途启用拿不到完整测量，宁可显示
       // 空，绝不把上周期的 decoding/tools 实时态冒充当前；无迁移、无回退。
-      // stop 清内存态（句柄随周期拆除，无在途后台任务可等）。
+      // stop 清内存态与节流补写定时器（句柄随周期拆除，无在途后台任务可等）。
       ctx.service({
         id: 'speed-lifecycle',
         prepare: () => {
+          serviceActive = true
           for (const conversationId of speedDoc.listConversationIds()) {
             try {
               speedDoc.delete(conversationId)
@@ -220,9 +284,14 @@ export function createTokenSpeedPlugin(): PluginDefinition {
           }
         },
         start: () => {
+          serviceActive = true
           // 无后台任务可启动（事件驱动 + 只读展示）；周期清理已在 prepare 完成。
         },
         stop: () => {
+          serviceActive = false
+          for (const timer of writeTimers.values()) clearTimeout(timer)
+          writeTimers.clear()
+          pendingStatuses.clear()
           trackers.clear()
           lastWriteAt.clear()
           settledChains.clear()

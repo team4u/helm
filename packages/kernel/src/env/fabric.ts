@@ -24,8 +24,8 @@
  *   对象丢弃即无注册残留，不需要调用方显式 release。
  */
 
-import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
+import { createLocalExecutionEnv } from './local-host-env.js'
 import { BACKGROUND_CONTEXT, withAbortSignal, type Context } from '@earendil-works/chord/context'
 import {
   HelmError,
@@ -325,7 +325,7 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
   /** 无缓存新建底座：local 进程内直建；远端 Remote（sink 由 exec 生命周期自管理）。 */
   const freshBase = (nodeId: string, cwd: string): ExecutionEnv =>
     nodeId === 'local'
-      ? new NodeExecutionEnv({ cwd })
+      ? createLocalExecutionEnv({ cwd })
       : new RemoteExecutionEnv(
           remoteResolver,
           {

@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { Profile } from '@helm/protocol'
+import type { ConversationSummary, Profile } from '@helm/protocol'
 import { assetsApi, conversationsApi } from '../lib/api.js'
+import {
+  buildSlashMenuItems,
+  executePluginSlashAction,
+  matchExactPluginSlash,
+  pluginSlashCommandsFor,
+  removeTokenBeforeCaret,
+  type QualifiedCommand,
+} from '../lib/commands-model.js'
 import { errorText, formatBytes } from '../lib/format.js'
 import { HelmIcon, Select, type SelectOption } from '@helm/plugin-client'
 import { isSameResolvedTarget, type ResolvedTarget } from '../lib/types.js'
@@ -10,19 +18,22 @@ import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
 import { collectEnabledPluginIds, isHumanSelectableProfile } from '../shell/sidebar-model.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { Tooltip } from '../ui/Tooltip.js'
-import { CommandPopover, type PopoverItem } from './CommandPopover.js'
+import { CommandPopover } from './CommandPopover.js'
+import { CompletionPopover } from './CompletionPopover.js'
 import { ModelPickerControl } from './ModelPicker.js'
-import { detectCompletionToken } from './composer-completion-model.js'
+import { focusWithCaret } from './composer-controller.js'
 import { envDraftOnNodeChange, useIsMobile } from './composer-model.js'
+import { slashMenuSkills } from './slash-menu-skills.js'
+import { autoGrowTextarea, useComposerPopovers, useElementWidthResize } from './use-composer-popovers.js'
 import {
   COMPOSER_SHORTCUTS,
   isComposerSubmitEnterEvent,
   isShiftTabEvent,
   nextThinkingLevel,
 } from './keybindings-model.js'
-import { slashMenuSkills } from './slash-menu-skills.js'
 import {
   admitStandbyFiles,
+  currentStandbyDraftEpoch,
   executeStandbySend,
   getStandbyDraft,
   inheritedEnvOf,
@@ -64,11 +75,29 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
   const draft = useStandbyDraft(draftKey)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const isMobile = useIsMobile(680)
 
   const profile = useMemo(() => store.profiles.find((p) => p.id === profileId), [store.profiles, profileId])
   const enabledPluginIds = useMemo(() => collectEnabledPluginIds(store.plugins), [store.plugins])
   const humanSelectable = profile !== undefined && isHumanSelectableProfile(profile, enabledPluginIds)
+  const anchoredConversation = useMemo(
+    () => (draft.conversationId !== undefined ? store.conversations.find((c) => c.id === draft.conversationId) : undefined),
+    [draft.conversationId, store.conversations],
+  )
+  const slashPluginCommands = useMemo(
+    () => pluginSlashCommandsFor(store.groupedUi.commands, anchoredConversation),
+    [store.groupedUi.commands, anchoredConversation],
+  )
+  const availableSkills = useMemo(
+    () => (profile !== undefined ? slashMenuSkills(profile, store.skills, enabledPluginIds) : []),
+    [profile, store.skills, enabledPluginIds],
+  )
+  const commandPendingRef = useRef(false)
+  const [commandPending, setCommandPending] = useState(false)
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
 
   // store 未携带全局默认模型时，按需读取 /api/models/default 补全模型与思考档位继承链。
   const [fetchedDefaultModelInfo, setFetchedDefaultModelInfo] = useState<{ defaultModel: string; defaultThinkingLevel: string } | null>(null)
@@ -185,10 +214,47 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     requestAnimationFrame(() => textareaRef.current?.focus())
   }, [draftKey, store])
 
-  // 首发提交入口：先拦截会话管理命令（无真实会话可绑定，绝不作为普通输入发给模型），
+  const executeStandbyPluginCommand = useCallback((cmd: QualifiedCommand, mode: 'token' | 'clear'): void => {
+    const record = getStandbyDraft(draftKey)
+    if (commandPendingRef.current || record.sending) return
+    commandPendingRef.current = true
+    setCommandPending(true)
+    const el = textareaRef.current
+    const epoch = currentStandbyDraftEpoch()
+    const beforeText = record.text
+    const caret = el?.selectionStart ?? beforeText.length
+    const resolved = mode === 'token' ? removeTokenBeforeCaret(beforeText, caret) : { next: '', nextCaret: 0 }
+    void executePluginSlashAction(cmd, {
+      invokePluginAction: store.invokePluginAction,
+      pushNotice: store.pushNotice,
+      ...(record.conversationId !== undefined ? { conversationId: record.conversationId } : {}),
+    }).then(() => {
+      if (epoch !== currentStandbyDraftEpoch()) return
+      if (getStandbyDraft(draftKey).text !== beforeText) return
+      updateStandbyDraft(draftKey, { text: resolved.next })
+      if (mode === 'token' && el !== null && el.isConnected) focusWithCaret(el, resolved.nextCaret)
+    }).catch(() => {
+      /* 动作调用已发送明确失败通知，保留原草稿。 */
+    }).finally(() => {
+      commandPendingRef.current = false
+      if (mountedRef.current) setCommandPending(false)
+    })
+  }, [draftKey, store.invokePluginAction, store.pushNotice])
+  const runPluginCommand = useStableCallback((cmd: QualifiedCommand): void => {
+    executeStandbyPluginCommand(cmd, 'token')
+  })
+
+  // 首发提交入口：先拦截插件斜杠命令与宿主管理命令（无真实会话可绑定，绝不作为普通输入发给模型），
   // 再进入真实首发编排。
   const submitDraft = useCallback((): void => {
-    const action = standbyManageAction(getStandbyDraft(draftKey).text)
+    const record = getStandbyDraft(draftKey)
+    if (commandPendingRef.current || record.sending) return
+    const pluginCmd = matchExactPluginSlash(record.text.trim(), slashPluginCommands)
+    if (pluginCmd !== undefined) {
+      executeStandbyPluginCommand(pluginCmd, 'clear')
+      return
+    }
+    const action = standbyManageAction(record.text)
     if (action !== null) {
       if (action.kind === 'clear-draft') {
         updateStandbyDraft(draftKey, { text: '', localFiles: [], uploaded: [], error: null })
@@ -204,7 +270,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
       return
     }
     void send()
-  }, [draftKey, send, store])
+  }, [draftKey, executeStandbyPluginCommand, send, slashPluginCommands, store])
 
   // 恢复默认：清除继承/自定义环境；URL 已携带继承坐标时经唯一导航移除对应参数（刷新不复活），
   // 草稿正文随坐标转移，目标坐标已有草稿时不覆盖并显式告知。
@@ -226,14 +292,6 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     }
     store.openTarget({ kind: 'agent', profileId }, isSplit ? { split: true } : undefined)
   }, [draft.sending, draft.conversationId, draftKey, isSplit, panel, profileId, store])
-
-  const autoGrow = useCallback((): void => {
-    const el = textareaRef.current
-    if (el === null) return
-    el.style.height = '0px'
-    el.style.height = `${el.scrollHeight}px`
-  }, [])
-  useLayoutEffect(() => { autoGrow() }, [draft.text, isMobile, autoGrow])
 
   const toggleSplit = (): void => {
     if (isSplit) {
@@ -328,10 +386,14 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
           draftKey={draftKey}
           draft={draft}
           profile={profile}
-          enabledPluginIds={enabledPluginIds}
           defaultModelInfo={effectiveDefaultModelInfo}
           envError={envError}
           anchored={draft.conversationId !== undefined}
+          anchoredConversation={anchoredConversation}
+          commandPending={commandPending}
+          availableSkills={availableSkills}
+          slashPluginCommands={slashPluginCommands}
+          onRunPluginCommand={runPluginCommand}
           isSplit={isSplit}
           textareaRef={textareaRef}
           fileInputRef={fileInputRef}
@@ -353,11 +415,15 @@ interface StandbyComposerProps {
   draftKey: string
   draft: StandbyDraftState
   profile: Profile
-  enabledPluginIds: ReadonlySet<string>
   defaultModelInfo: { defaultModel: string; defaultThinkingLevel: string } | null
   envError: string | null
   /** create 已锁定真实会话：模型/思考/环境随会话固化，不再接受修改。 */
   anchored: boolean
+  anchoredConversation: ConversationSummary | undefined
+  commandPending: boolean
+  availableSkills: ReadonlyArray<{ id: string; name: string }>
+  slashPluginCommands: ReadonlyArray<QualifiedCommand>
+  onRunPluginCommand: (cmd: QualifiedCommand) => void
   isSplit?: boolean
   textareaRef: { current: HTMLTextAreaElement | null }
   fileInputRef: { current: HTMLInputElement | null }
@@ -371,10 +437,14 @@ function StandbyComposer({
   draftKey,
   draft,
   profile,
-  enabledPluginIds,
   defaultModelInfo,
   envError,
   anchored,
+  anchoredConversation,
+  commandPending,
+  availableSkills,
+  slashPluginCommands,
+  onRunPluginCommand,
   isSplit,
   textareaRef,
   fileInputRef,
@@ -384,13 +454,12 @@ function StandbyComposer({
   onCatalogRefreshed,
 }: StandbyComposerProps) {
   const store = useHelmStore()
+  const composerBoxRef = useRef<HTMLDivElement | null>(null)
   const dragDepthRef = useRef(0)
   const [dragging, setDragging] = useState(false)
-  const [slashOpen, setSlashOpen] = useState(false)
-  const [slashQuery, setSlashQuery] = useState('')
   const isMobile = useIsMobile(680)
   const busy = draft.sending
-  const sendDisabled = busy || draft.text.trim() === '' || envError !== null
+  const sendDisabled = busy || commandPending || draft.text.trim() === '' || envError !== null
   // 锚定后锁定一切影响创建的配置：重试跳过 create，新设置不会生效，不可显现可改但不生效。
   const configLocked = busy || anchored
 
@@ -410,112 +479,52 @@ function StandbyComposer({
     defaultModelInfo?.defaultThinkingLevel,
   )
 
-  useEffect(() => {
-    setSlashOpen(false)
-    setSlashQuery('')
+  useLayoutEffect(() => {
+    autoGrowTextarea(textareaRef.current)
+  }, [draft.text, isMobile])
+  useElementWidthResize(textareaRef, () => autoGrowTextarea(textareaRef.current))
+
+  const readLiveDraft = useCallback((): string => getStandbyDraft(draftKey).text, [draftKey])
+  const setDraftState = useCallback((next: string): void => {
+    updateStandbyDraft(draftKey, { text: next })
   }, [draftKey])
 
-  const detectSlashPopover = useCallback((value: string, caret: number): void => {
-    const token = detectCompletionToken(value.slice(0, caret))
-    if (token !== null && token.trigger === '/') {
-      setSlashOpen(true)
-      setSlashQuery(token.query)
-      return
-    }
-    setSlashOpen(false)
-    setSlashQuery('')
-  }, [])
-
-  const applySlashPick = (apply: string): void => {
-    const el = textareaRef.current
-    const current = getStandbyDraft(draftKey).text
-    if (el === null) {
-      setSlashOpen(false)
-      return
-    }
-    const caret = el.selectionStart ?? current.length
-    const before = current.slice(0, caret)
-    const tokenRe = /(?:^|\s)(\/[a-zA-Z0-9:_-]*)$/
-    const m = tokenRe.exec(before)
-    const start = m !== null ? caret - (m[1]?.length ?? 0) : caret
-    const next = `${current.slice(0, start)}${apply}${current.slice(caret)}`
-    updateStandbyDraft(draftKey, { text: next })
-    setSlashOpen(false)
-    requestAnimationFrame(() => {
-      const pos = start + apply.length
-      el.focus()
-      el.setSelectionRange(pos, pos)
-    })
-  }
-  const applySlashPickStable = useStableCallback(applySlashPick)
-  const closeSlashPopoverStable = useStableCallback((): void => {
-    setSlashOpen(false)
+  const {
+    slashOpen,
+    popoverQuery,
+    completionOpen,
+    completionTrigger,
+    completionSnapshot,
+    detectPopover,
+    handleTextareaKeyUp,
+    handleTextareaClick,
+    shouldDeferKeyToPopover,
+    applySlashPick,
+    closeSlashPopover,
+    applyCompletionPick,
+    closeCompletionPopover,
+  } = useComposerPopovers({
+    textareaRef,
+    draftText: draft.text,
+    readLiveDraft,
+    setDraftState,
+    completers: store.groupedUi.composerCompleters,
+    conversation: anchoredConversation,
+    profileId: profile.id,
+    resetKey: draftKey,
+    disabled: busy,
   })
 
-  const availableSkills = useMemo(
-    () => slashMenuSkills(profile, store.skills, enabledPluginIds),
-    [profile, store.skills, enabledPluginIds],
+  const slashMenuItems = useMemo(
+    () => buildSlashMenuItems(availableSkills, slashPluginCommands, onRunPluginCommand),
+    [availableSkills, slashPluginCommands, onRunPluginCommand],
   )
-  const slashMenuItems = useMemo<PopoverItem[]>(() => {
-    const hostItems: PopoverItem[] = [
-      {
-        id: '/new',
-        label: '/new',
-        hint: '开始新话题',
-        run: () => {
-          setSlashOpen(false)
-          if (getStandbyDraft(draftKey).sending) return
-          updateStandbyDraft(draftKey, { text: '', localFiles: [], uploaded: [], error: null })
-          store.pushNotice({ type: 'notification', level: 'info', title: '已开始新草稿', body: '继续输入新的首条消息即可' })
-        },
-      },
-      {
-        id: '/clear',
-        label: '/clear',
-        hint: '重置上下文',
-        run: () => {
-          setSlashOpen(false)
-          store.pushNotice({
-            type: 'notification',
-            level: 'warning',
-            title: '/clear 需要已有会话',
-            body: '请先发送首条消息创建会话后再使用该命令',
-          })
-        },
-      },
-      {
-        id: '/compact',
-        label: '/compact',
-        hint: '精简上下文',
-        run: () => {
-          setSlashOpen(false)
-          store.pushNotice({
-            type: 'notification',
-            level: 'warning',
-            title: '/compact 需要已有会话',
-            body: '请先发送首条消息创建会话后再使用该命令',
-          })
-        },
-      },
-    ]
-    const skillItems: PopoverItem[] = availableSkills.map((s) => ({
-      id: `/skill:${s.id}`,
-      label: `/skill:${s.id}`,
-      hint: s.name,
-      apply: `/skill:${s.id} `,
-    }))
-    return [...hostItems, ...skillItems]
-  }, [availableSkills, draftKey, store])
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
     if (e.defaultPrevented || e.nativeEvent.defaultPrevented) {
       return
     }
-    if (
-      slashOpen &&
-      !e.nativeEvent.isComposing &&
-      (e.key === 'Enter' || e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Escape')
-    ) {
+    if (shouldDeferKeyToPopover(e)) {
       return
     }
     if (isShiftTabEvent(e) && !e.nativeEvent.isComposing) {
@@ -594,6 +603,7 @@ function StandbyComposer({
         ) : null}
         <div
           className="composer-box"
+          ref={composerBoxRef}
           data-dragging={dragging ? 'true' : undefined}
           onDragEnter={(e) => {
             e.preventDefault()
@@ -659,31 +669,33 @@ function StandbyComposer({
             value={draft.text}
             rows={1}
             readOnly={busy}
-            placeholder={isMobile ? '输入消息开始新话题…' : '输入消息开始新话题；Enter 发送 · Shift+Enter 换行 · 可拖入或粘贴附件'}
+            placeholder={isMobile ? '输入消息开始新话题…' : '输入消息开始新话题；/ 命令与技能 · @ 点名，⌘V 粘贴附件'}
             onChange={(e) => {
               updateStandbyDraft(draftKey, { text: e.target.value })
-              detectSlashPopover(e.target.value, e.target.selectionStart ?? e.target.value.length)
+              detectPopover(e.target.value, e.target.selectionStart ?? e.target.value.length)
             }}
-            onKeyUp={(e) => {
-              if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') {
-                detectSlashPopover(e.currentTarget.value, e.currentTarget.selectionStart ?? e.currentTarget.value.length)
-              }
-            }}
-            onClick={(e) => {
-              detectSlashPopover(e.currentTarget.value, e.currentTarget.selectionStart ?? e.currentTarget.value.length)
-            }}
+            onKeyUp={handleTextareaKeyUp}
+            onClick={handleTextareaClick}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
             spellCheck={false}
           />
           {slashOpen ? (
             <CommandPopover
-              query={slashQuery}
+              query={popoverQuery}
               slashItems={slashMenuItems}
-              onPick={applySlashPickStable}
-              onClose={closeSlashPopoverStable}
+              onPick={applySlashPick}
+              onClose={closeSlashPopover}
             />
           ) : null}
+          <CompletionPopover
+            open={completionOpen}
+            trigger={completionTrigger}
+            snapshot={completionSnapshot}
+            onPick={applyCompletionPick}
+            onClose={closeCompletionPopover}
+            anchorRef={composerBoxRef}
+          />
           <div className="composer-toolbar">
             <div className="composer-toolbar-left">
               <Tooltip content="选择附件（发送时才上传）" side="top">
