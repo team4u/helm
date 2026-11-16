@@ -2,8 +2,9 @@
  * 侧栏会话行紧凑左缘契约（CSS 源码级）：
  * 状态灯前置后标题曾被行内边距 + 12px 灯槽 + 8px main gap 推到距行边约 30px，
  * 用户反馈左侧显得空。收紧策略（只作用于带灯槽的行，不碰全体 nav-item 内边距）：
- * 1. 灯槽固定 8px 并以 -4px 左负边距伸入行内边距（槽宽固定保证跨行对齐、
- *    idle 空槽续行标题对齐不变）；
+ * 1. 灯槽固定 10px 并以 -4px 左负边距伸入行内边距（槽宽固定保证跨行对齐、
+ *    idle 空槽续行标题对齐不变；10px 为 7px 灯芯的最小安全余量，更窄会在
+ *    移动端非整数缩放下把圆点挤成椭圆）；
  * 2. 仅渲染 nav-status-slot 的行把 nav-item-main gap 收至 4px（标题紧贴灯槽），
  *    设置导航/视图行的图标位保持基础 8px gap；
  * 3. Agent 二级会话子列表外层缩进适度减小（margin-left 8px / padding-left 4px）。
@@ -35,10 +36,10 @@ function cssBlock(source: string, selector: string): string | null {
   return null
 }
 
-test('紧凑灯槽：nav-status-slot 固定 8px 槽宽 + -4px 左负边距伸入行内边距', { timeout: 60_000 }, () => {
+test('紧凑灯槽：nav-status-slot 固定 10px 槽宽 + -4px 左负边距伸入行内边距', { timeout: 60_000 }, () => {
   const slot = cssBlock(navigationSource, '.nav-status-slot')
   assert.ok(slot, 'navigation.css 必须保留 .nav-status-slot 规则（灯位契约）')
-  assert.match(slot, /width:\s*8px/, '灯槽压至 8px（原 12px 过宽，左侧显空）')
+  assert.match(slot, /width:\s*10px/, '灯槽 10px：显著大于 7px 灯芯留足取整余量（8px 在移动端非整数缩放下会把圆点挤成椭圆）')
   assert.match(slot, /margin-left:\s*-4px/, '灯槽以 -4px 左负边距伸入行内边距，灯芯贴近行左缘')
   assert.match(slot, /flex-shrink:\s*0/, '槽宽固定不收缩：idle 空槽保持续行标题跨行对齐')
 })
