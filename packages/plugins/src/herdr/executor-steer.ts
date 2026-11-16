@@ -36,6 +36,8 @@ export interface SteerDispatcherPort {
   waitUntilSettled(request: AgentSpawnRequest, pane: ManagedPane, initial: HerdrAgentInfo): Promise<void>
   /** agent.start 启动超时（config.startupTimeoutMs；预算复用口径见各调用点）。 */
   startupTimeoutMs(): number
+  /** 插话后等待后续回合起步的预算（测试可缩短；缺省复用 startupTimeoutMs()）。 */
+  steerWaitBudgetMs?: number
   /** 在途受管任务请求（steer 门禁复核原 run signal）。 */
   activeTaskOf(key: string): AgentSpawnRequest | undefined
   /** 在途任务当前阶段（startup/task/handoff/gate；无任务 undefined）。 */
@@ -443,13 +445,14 @@ export class SteerDispatcher {
     request: AgentSpawnRequest,
     pane: ManagedPane,
   ): Promise<HerdrAgentInfo | undefined> {
+    const budgetMs = this.port.steerWaitBudgetMs ?? this.port.startupTimeoutMs()
     try {
       return parseAgentResult(
         await this.port.transport.call(
           pane.target,
           'agent.wait',
-          { target: pane.paneId, until: ['working', 'blocked'], timeout_ms: this.port.startupTimeoutMs() },
-          { signal: request.signal, timeoutMs: this.port.startupTimeoutMs() + 1_000 },
+          { target: pane.paneId, until: ['working', 'blocked'], timeout_ms: budgetMs },
+          { signal: request.signal, timeoutMs: budgetMs + 1_000 },
         ),
         'agent.wait',
         'agent_info',

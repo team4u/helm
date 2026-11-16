@@ -399,7 +399,7 @@ test('prepareNodeReplacement：activate ACK 丢失抛 UpgradeCommitUnconfirmedEr
     hubUrl: hub.url,
     mode: 'no-ack',
     oldRecord,
-    activateAckTimeoutMs: 1_500,
+    activateAckTimeoutMs: 400,
   });
   assert.ok(replacement !== undefined, `准备失败：${error?.message}`);
 
@@ -838,10 +838,10 @@ test('launcher shutdown：stop 慢应答（>200ms）时必须 await 落定后才
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
   await bindIdentityFromJoinToken(dir, 'slow-stop:s', 'http://127.0.0.1:1');
-  // 慢停延迟必须大于「跟踪轮询余量 + 旧实现固定等待 200ms」：取 1s，旧
-  // fire-and-forget 实现最迟 ~450ms 返回（必然早干），新实现必须 await 到
-  // stop 应答（≥1s）后才返回。轮询注入 100ms，验证窗口同步缩短。
-  const SLOW_MS = 1_000;
+  // 慢停延迟必须大于「跟踪轮询余量 + 旧实现固定等待 200ms」：取 700ms，旧
+  // fire-and-forget 实现最迟 ~450ms 返回（必然早退），新实现必须 await 到
+  // stop 应答（≥700ms）后才返回。轮询注入 50ms，验证窗口同步缩短。
+  const SLOW_MS = 700;
   let control: Awaited<ReturnType<typeof startFixtureControl>> | undefined;
   t.after(async () => {
     await control?.close();
@@ -852,7 +852,7 @@ test('launcher shutdown：stop 慢应答（>200ms）时必须 await 落定后才
     // 剥除宿主控制/身份 env：本用例的前提是「无控制 env 的前台 start 成为
     // launcher」，宿主受管变量不得伪造受控身份。
     env: sanitizedHostEnv(),
-    launcherPollMs: 100,
+    launcherPollMs: 50,
     out: (text) => (stdout += text),
     // 本测试进程即「daemon」：pid=自身，存活直到 fixture 应答 stop 后置停。
     isAlive: (pid) => pid === process.pid && !(control?.stopped() ?? false),
@@ -869,7 +869,7 @@ test('launcher shutdown：stop 慢应答（>200ms）时必须 await 落定后才
 
   // 等 launcher 完成启动并注册信号监听（非 json 模式打印启动消息后注册）。
   await waitFor(() => stdout.includes('launcher'), 15_000, 'launcher 启动消息');
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  await new Promise((resolve) => setTimeout(resolve, 50));
   const sigtermAt = Date.now();
   process.kill(process.pid, 'SIGTERM');
   const code = await launcherPromise;
@@ -877,8 +877,8 @@ test('launcher shutdown：stop 慢应答（>200ms）时必须 await 落定后才
 
   assert.ok(control?.stopped(), 'fixture 必须已应答 stop');
   assert.ok(
-    returnedAt - sigtermAt >= SLOW_MS - 400,
-    `launcher 在 stop 慢应答落定前早退（信号到返回仅 ${returnedAt - sigtermAt}ms < ${SLOW_MS - 500}ms 慢停延迟）`,
+    returnedAt - sigtermAt >= SLOW_MS - 200,
+    `launcher 在 stop 慢应答落定前早退（信号到返回仅 ${returnedAt - sigtermAt}ms < ${SLOW_MS - 200}ms 慢停延迟）`,
   );
   assert.equal(code, 0);
   // 关闭链完成 CAS 清理：pid 留档已删。

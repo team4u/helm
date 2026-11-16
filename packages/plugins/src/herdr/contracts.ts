@@ -152,6 +152,13 @@ export interface HerdrPluginDependencies {
   askPollTransientBackoffCapMs?: number
   /** abort 后销单退避上限（测试可缩短；生产缺省 3200ms）。 */
   abortCancelBackoffCapMs?: number
+  /** md 交接稳定性复检间隔（测试可缩短；生产缺省 300ms）。 */
+  mdStableRecheckMs?: number
+  /** 事件订阅断线重连退避基数与上限（测试可缩短；生产缺省 1000ms / 60000ms）。 */
+  subscriptionRetryBaseMs?: number
+  subscriptionRetryCapMs?: number
+  /** 插话后等待后续回合起步的预算（测试可缩短；生产缺省复用 startupTimeoutMs()）。 */
+  steerWaitBudgetMs?: number
   /**
    * 可选：当确定性正则未从阻塞快照中识别出标准菜单时，调用会话模型解析
    * 脱敏终端快照并提取候选按键选项。返回 analysis 为 undefined 时附

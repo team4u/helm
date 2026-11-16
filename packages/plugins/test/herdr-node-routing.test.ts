@@ -26,6 +26,7 @@ import type { HelmHostNodeIpcPort } from '@helm/protocol'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
+import { HERDR_FAST_TEST_TIMINGS } from './helpers/herdr-unit-fixture.js'
 
 // ---------------------------------------------------------------------------
 // 受控环境（与 herdr-plugin-fixes 同构；父会话 nodeId 可配置）
@@ -394,7 +395,7 @@ async function makeEnv(over: Partial<ConversationSummary> = {}): Promise<Env> {
     config: new MemoryConfigStore({ socketPath }),
   })
   await host.register(
-    createHerdrPlugin(),
+    createHerdrPlugin(HERDR_FAST_TEST_TIMINGS),
     { enabled: true },
   )
   return {
@@ -422,7 +423,7 @@ function scriptSuccess(env: Env, content: string): void {
   }
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 5_000, intervalMs = 25): Promise<void> {
+async function waitFor(predicate: () => boolean, timeoutMs = 5_000, intervalMs = 10): Promise<void> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     if (predicate()) return

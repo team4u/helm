@@ -30,7 +30,7 @@ import type {
 import { invalidInput, isRecord, rpcFail, type RpcErrorCode } from './env-rpc-shared.js';
 
 /** 单帧（单行）字节上限：与内核 Herdr 传输层一致，超限显式报错不静默截断。 */
-const MAX_IPC_FRAME_BYTES = 32 * 1024 * 1024;
+export const MAX_IPC_FRAME_BYTES = 32 * 1024 * 1024;
 /** 订阅握手 ACK 超时。 */
 const IPC_SUBSCRIBE_ACK_TIMEOUT_MS = 15_000;
 /** Windows Named Pipe 命名空间前缀（NPFS 本地主机）。 */
@@ -55,6 +55,8 @@ const isValidHerdrSession = (session: string): boolean => {
 class LineAssembler {
   private buffer: Buffer = Buffer.alloc(0);
 
+  constructor(private readonly maxFrameBytes: number = MAX_IPC_FRAME_BYTES) {}
+
   /** 推入一个 chunk，返回其中完整行（不含换行符）；无完整行返回空数组。
    * 逐行长度检查：带换行的完整行与无换行残留同样受单帧上限约束，
    * 否则对端一帧超长行只要带换行即绕过限制整行进内存。 */
@@ -67,8 +69,8 @@ class LineAssembler {
       if (nl === -1) break;
       let end = nl;
       if (end > searchFrom && this.buffer[end - 1] === 0x0d) end -= 1; // 剥离 CR
-      if (end - searchFrom > MAX_IPC_FRAME_BYTES) {
-        throw new Error(`IPC frame exceeds ${MAX_IPC_FRAME_BYTES} bytes`);
+      if (end - searchFrom > this.maxFrameBytes) {
+        throw new Error(`IPC frame exceeds ${this.maxFrameBytes} bytes`);
       }
       lines.push(this.buffer.subarray(searchFrom, end).toString('utf8'));
       searchFrom = nl + 1;
@@ -77,8 +79,8 @@ class LineAssembler {
     if (this.buffer.includes(0)) {
       throw new Error('IPC frame contains NUL byte');
     }
-    if (this.buffer.length > MAX_IPC_FRAME_BYTES) {
-      throw new Error(`IPC frame exceeds ${MAX_IPC_FRAME_BYTES} bytes`);
+    if (this.buffer.length > this.maxFrameBytes) {
+      throw new Error(`IPC frame exceeds ${this.maxFrameBytes} bytes`);
     }
     return lines;
   }
@@ -191,6 +193,8 @@ export interface IpcBridgeOptions {
    * 额外的固定死线。
    */
   ipcCallIdleTimeoutMs?: number;
+  /** 可选单帧（单行）字节上限（默认 MAX_IPC_FRAME_BYTES = 32 MiB；仅测试注入小阈值）。 */
+  maxIpcFrameBytes?: number;
   /** 宿主 disposed 状态查询：dispose 后订阅事件帧转发立即停摆。 */
   isDisposed(): boolean;
 }
@@ -215,6 +219,7 @@ export interface IpcBridge {
 export function createIpcBridge(options: IpcBridgeOptions): IpcBridge {
   const { onIpcEvent, onIpcClosed, isDisposed } = options;
   const ipcIdleTimeoutMs = options.ipcCallIdleTimeoutMs;
+  const maxIpcFrameBytes = options.maxIpcFrameBytes ?? MAX_IPC_FRAME_BYTES;
   const activeIpcCalls = new Map<string, net.Socket>();
   const activeIpcSubscriptions = new Map<string, net.Socket>();
   const allIpcSockets = new Set<net.Socket>();
@@ -253,7 +258,7 @@ export function createIpcBridge(options: IpcBridgeOptions): IpcBridge {
       : ipcIdleTimeoutMs;
     return await new Promise<RpcResult<string>>((resolve) => {
       let settled = false;
-      const assembler = new LineAssembler();
+      const assembler = new LineAssembler(maxIpcFrameBytes);
       const socket: net.Socket = net.connect(endpoint);
       allIpcSockets.add(socket);
       socket.once('close', () => allIpcSockets.delete(socket));
@@ -328,7 +333,7 @@ export function createIpcBridge(options: IpcBridgeOptions): IpcBridge {
     return await new Promise<RpcResult<null>>((resolve) => {
       let settled = false;
       let acked = false;
-      const assembler = new LineAssembler();
+      const assembler = new LineAssembler(maxIpcFrameBytes);
       const socket: net.Socket = net.connect(endpoint);
       allIpcSockets.add(socket);
       activeIpcSubscriptions.set(input.subscribeId, socket);

@@ -65,6 +65,10 @@ export function createHerdrPlugin(
     | 'askPollTransientBackoffBaseMs'
     | 'askPollTransientBackoffCapMs'
     | 'abortCancelBackoffCapMs'
+    | 'mdStableRecheckMs'
+    | 'subscriptionRetryBaseMs'
+    | 'subscriptionRetryCapMs'
+    | 'steerWaitBudgetMs'
   >,
 ): PluginDefinition {
   return {
@@ -211,7 +215,10 @@ export function createHerdrPlugin(
         if (stopping || connectionAbort.signal.aborted) return
         if (subscriptionRetryTimer !== undefined) return
         const attempt = subscriptionRetryAttempt++
-        const delayMs = Math.min(1_000 * 2 ** Math.min(attempt, 6), 60_000)
+        const deps = depsOf()
+        const baseMs = deps.subscriptionRetryBaseMs ?? 1_000
+        const capMs = deps.subscriptionRetryCapMs ?? 60_000
+        const delayMs = Math.min(baseMs * 2 ** Math.min(attempt, 6), capMs)
         subscriptionRetryTimer = setTimeout(() => {
           subscriptionRetryTimer = undefined
           if (stopping || connectionAbort.signal.aborted) return

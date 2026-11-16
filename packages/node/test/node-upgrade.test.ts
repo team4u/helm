@@ -492,10 +492,10 @@ test('performNodeUpgrade：失败版本冷却期内拒绝，force 或过期后�
 test('performNodeUpgrade：排空 gate——exec 在超时内归零后放行', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   const log: UpgradeLog = { draining: [], execCount: { value: 2 }, shutdownPids: [] };
-  // 300ms 后 exec 自然归零
+  // 100ms 后 exec 自然归零
   setTimeout(() => {
     log.execCount.value = 0;
-  }, 300).unref();
+  }, 100).unref();
   const result = await performNodeUpgrade(dir, {
     targetVersion: '1.1.0',
     currentVersion: '1.0.0',
@@ -1034,9 +1034,9 @@ test('runNpm 超时杀进程组：npm run 的孙进程同步被杀（不留孤�
   });
 
   const { runNpm } = await import('../src/daemon/upgrader.js');
-  const npmPromise = runNpm(['run', 'hold'], dir, 6_000);
+  const npmPromise = runNpm(['run', 'hold'], dir, 3_000);
   // 等 npm 拉起 runner 与孙进程（pid 文件落地）再让超时触发，确保被测对象存在
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + 2_500;
   for (;;) {
     const exists = await fs.readFile(grandPidFile, 'utf8').then(
       () => true,
@@ -1044,7 +1044,7 @@ test('runNpm 超时杀进程组：npm run 的孙进程同步被杀（不留孤�
     );
     if (exists) break;
     if (Date.now() > deadline) throw new Error('npm run 未能在预算内拉起孙进程（fixture 失败）');
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 25));
   }
   await assert.rejects(() => npmPromise, /超时/);
 

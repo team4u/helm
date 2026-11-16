@@ -207,6 +207,7 @@ export class HerdrExecutor {
       agentGet: (target, paneId, signal) => this.agentGet(target, paneId, signal),
       waitUntilSettled: (request, pane, initial) => this.waitUntilSettled(request, pane, initial),
       startupTimeoutMs: () => host.startupTimeoutMs(),
+      steerWaitBudgetMs: deps.steerWaitBudgetMs,
       activeTaskOf: (key) => this.activeTasks.get(key),
       phaseOf: (key) => this.panePhases.get(key),
       setPhase: (key, phase) => {
@@ -227,6 +228,7 @@ export class HerdrExecutor {
       project: (pane, token) => this.project(pane, token),
       markFailed: (pane, note) => this.markFailed(pane, note),
       runLocalGate: deps.runLocalGate,
+      mdStableRecheckMs: deps.mdStableRecheckMs,
     })
     this.resumeCoordinator = new ResumeCoordinator({
       registry: this.registry,

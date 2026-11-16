@@ -33,7 +33,7 @@ import { HelmError, type AskResult, type ConversationSummary } from '@helm/proto
 import { PluginHost, type PluginConfigStore, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createHerdrPlugin } from '../src/herdr.js'
 import { completeBackend } from '../../kernel/test/helpers/host-backend-stub.js'
-import { FsOutputFiles, serveTransport } from './helpers/herdr-unit-fixture.js'
+import { FsOutputFiles, HERDR_FAST_TEST_TIMINGS, serveTransport } from './helpers/herdr-unit-fixture.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
 import {
   buildSendKeysParams,
@@ -405,7 +405,7 @@ async function makeEnv(options: { transport?: CasFakeTransport } = {}): Promise<
   const socketPath = join(dataDir, 'herdr.sock')
   const served = await serveTransport(transport, socketPath)
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore(), config: new MemoryConfigStore({ socketPath }) })
-  await host.register(createHerdrPlugin(), { enabled: true })
+  await host.register(createHerdrPlugin(HERDR_FAST_TEST_TIMINGS), { enabled: true })
   return {
     host,
     transport,
@@ -436,7 +436,7 @@ async function spawnDirect(env: Env, request: Record<string, unknown> = {}): Pro
   throw new HelmError('herdr_cas_unsupported', 'spawn 未被 herdr 插件接管（fixture 缺陷）', 500)
 }
 
-async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 8_000, intervalMs = 25): Promise<void> {
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 8_000, intervalMs = 10): Promise<void> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     if (await predicate()) return
@@ -509,7 +509,7 @@ test('审批桥 CAS: stale_state 拒绝时不重试、不记发送成功、Ask �
     // Ask 状态安全收敛：竞态推进后（working 新 seq）不重建 Ask；重复事件不触发重发。
     const pane = [...env.transport.panes.values()][0]!
     env.transport.emit({ type: 'pane.updated', paneId: pane.paneId })
-    await delay(150)
+    await delay(40)
     assert.equal(env.createdAsks.length, 1, '终端已推进（working）不重建 Ask')
     assert.equal(env.transport.calls.filter((c) => c.method === 'agent.send_keys').length, 1, '重复事件不重发键')
     // 主循环按权威状态收敛：done + 交接文件 -> 任务成功（未被 stale 击穿）。
