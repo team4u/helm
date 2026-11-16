@@ -15,10 +15,12 @@ import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs
 import {
   type AgentStanding,
   ARCHIVED_TAG,
+  activeConversationIdsOf,
+  activeProfileIdOf,
+  activeProfileIdsOf,
   archiveConversationTags,
   buildAgentStandings,
   buildArchivedConversationList,
-  buildProfileTopics,
   collectEnabledPluginIds,
   conversationStatusBadgeClass,
   conversationStatusDotClass,
@@ -28,8 +30,11 @@ import {
   filterAgentStandings,
   filterConversationsByTag,
   filterDeletableConversations,
-  filterTopicList,
   fuzzyMatchConversations,
+  getAgentStandbyPresence,
+  getConversationPresence,
+  isAgentStandbyActive,
+  isConversationActive,
   isConversationArchivable,
   isConversationArchived,
   isConversationDeletable,
@@ -38,6 +43,7 @@ import {
   isProfileVisible,
   isSkillVisible,
   partitionSidebarUi,
+  resolveSidebarTargetPresence,
 } from '../src/shell/sidebar-model.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 
@@ -594,83 +600,281 @@ test('filterDeletableConversations 过滤出可删除会话', { timeout: 60_000 
 })
 
 // ---------------------------------------------------------------------------
-// 双层导航纯函数：智能体行过滤 + 当前 Profile 话题列表
+// 侧栏深度过滤与分屏在场/焦点推导纯函数
 // ---------------------------------------------------------------------------
 
-test('filterAgentStandings 按 label / profileId / 会话标题过滤智能体行', { timeout: 60_000 }, () => {
-  const standings = buildAgentStandings(standingsInput())
-  // 空 query 返回全部
-  assert.equal(filterAgentStandings(standings, '').length, standings.length)
-  assert.equal(filterAgentStandings(standings, '  ').length, standings.length)
-  // label 命中
+test('filterAgentStandings 深度过滤：命中 Agent 自身保留全部话题，命中会话或 #id 仅保留命中会话', { timeout: 60_000 }, () => {
+  const richStandings = buildAgentStandings(
+    standingsInput({
+      conversations: [
+        ...conversations,
+        conv({ id: 41, title: '测试补全', profileId: 'coder' }),
+      ],
+    }),
+  )
+  // 空 query 原样返回
+  assert.equal(filterAgentStandings(richStandings, ''), richStandings)
+  assert.equal(filterAgentStandings(richStandings, '  '), richStandings)
+
+  // label 命中（'中枢'）
   assert.deepEqual(
-    filterAgentStandings(standings, '中枢').map((s) => s.profileId),
+    filterAgentStandings(richStandings, '中枢').map((s) => s.profileId),
     ['superagent'],
   )
-  // profileId 命中
+
+  // 命中智能体自身 label（'个人助理'）时保留名下完整 conversations（含未包含该词的 #11、#10）
+  const assistantByLabel = filterAgentStandings(richStandings, '个人助理')
+  assert.deepEqual(assistantByLabel.map((s) => s.profileId), ['assistant'])
+  assert.deepEqual(assistantByLabel[0]!.conversations.map((c) => c.id), [1, 11, 10])
+
+  // profileId 命中（'coder'）时保留名下完整 conversations
+  const coderByProfile = filterAgentStandings(richStandings, 'coder')
+  assert.deepEqual(coderByProfile.map((s) => s.profileId), ['coder'])
+  assert.deepEqual(coderByProfile[0]!.conversations.map((c) => c.id), [41, 40])
+
+  // 仅命中会话标题（'周末计划'）时：AgentStanding.conversations 仅含命中的会话，不保留同组其他会话
+  const byTitle = filterAgentStandings(richStandings, '周末计划')
+  assert.deepEqual(byTitle.map((s) => s.profileId), ['assistant'])
+  assert.deepEqual(byTitle[0]!.conversations.map((c) => c.id), [10])
+
+  // 纯数字 id 与 #id 井号匹配均仅保留命中的具体会话（#40 不带出 #41）
+  for (const query of ['40', '#40']) {
+    const byId = filterAgentStandings(richStandings, query)
+    assert.deepEqual(byId.map((s) => s.profileId), ['coder'])
+    assert.deepEqual(byId[0]!.conversations.map((c) => c.id), [40])
+  }
+
+  // 确认未原地篡改输入 standings 的 conversations
   assert.deepEqual(
-    filterAgentStandings(standings, 'coder').map((s) => s.profileId),
-    ['coder'],
+    richStandings.find((s) => s.profileId === 'coder')!.conversations.map((c) => c.id),
+    [41, 40],
   )
-  // 会话标题命中时保留整行（供用户进一步定位）
-  assert.deepEqual(
-    filterAgentStandings(standings, '周末计划').map((s) => s.profileId),
-    ['assistant'],
-  )
-  // 纯数字 id 命中
-  assert.deepEqual(
-    filterAgentStandings(standings, '40').map((s) => s.profileId),
-    ['coder'],
-  )
+
   // 无命中返回空
-  assert.equal(filterAgentStandings(standings, '不存在的关键词').length, 0)
+  assert.equal(filterAgentStandings(richStandings, '不存在的关键词').length, 0)
 })
 
-test('buildProfileTopics 构建当前 profile 的根话题列表：pinned/createdAt/id 稳定排序', { timeout: 60_000 }, () => {
-  const topics = buildProfileTopics(
-    [
-      // #1 最老会话但 AI 正在输出（updatedAt 最大），位置仍由 createdAt 决定、不被顶到最前
-      conv({ id: 1, profileId: 'assistant', updatedAt: 99999 }),
-      conv({ id: 10, profileId: 'assistant', createdAt: 5000, updatedAt: 5000 }),
-      conv({ id: 11, profileId: 'assistant', createdAt: 5000, updatedAt: 5000, pinned: true }),
-      conv({ id: 12, profileId: 'assistant', createdAt: 9000, updatedAt: 1000 }),
-      // 非 profile 会话与子代理派生会话不进入话题列表
-      conv({ id: 40, profileId: 'coder', updatedAt: 9999 }),
-      conv({ id: 41, profileId: 'assistant', parentConversationId: 1, updatedAt: 9999 }),
-    ],
-    'assistant',
-    1,
-  )
+test('resolveSidebarTargetPresence / getConversationPresence / getAgentStandbyPresence 覆盖单屏、分屏双开、焦点切换与同目标双开', { timeout: 60_000 }, () => {
+  // 1) 单屏模式（splitTarget === null）
+  const singleStore = {
+    primaryTarget: { kind: 'conversation' as const, conversationId: 1 },
+    splitTarget: null,
+    focusedPanel: undefined,
+  }
+  assert.deepEqual(getConversationPresence(singleStore, 1), {
+    inPrimary: true,
+    inSplit: false,
+    active: true,
+    splitSecondary: false,
+    focused: false,
+    paneTag: null,
+  })
+  assert.equal(isConversationActive(singleStore, 1), true)
+  assert.deepEqual(getConversationPresence(singleStore, 10), {
+    inPrimary: false,
+    inSplit: false,
+    active: false,
+    splitSecondary: false,
+    focused: false,
+    paneTag: null,
+  })
+  assert.equal(isConversationActive(singleStore, 10), false)
+
+  const singleStandbyStore = {
+    primaryTarget: { kind: 'agent' as const, profileId: 'assistant' },
+    splitTarget: null,
+  }
+  assert.deepEqual(getAgentStandbyPresence(singleStandbyStore, 'assistant'), {
+    inPrimary: true,
+    inSplit: false,
+    active: true,
+    splitSecondary: false,
+    focused: false,
+    paneTag: null,
+  })
+  assert.equal(isAgentStandbyActive(singleStandbyStore, 'assistant'), true)
+
+  // 2) 分屏双开不同会话（focusedPanel 缺省兜底 primary -> 再切换至 split）
+  const splitPrimaryFocus = {
+    primaryTarget: { kind: 'conversation' as const, conversationId: 1 },
+    splitTarget: { kind: 'conversation' as const, conversationId: 10 },
+    focusedPanel: undefined,
+  }
+  assert.deepEqual(getConversationPresence(splitPrimaryFocus, 1), {
+    inPrimary: true,
+    inSplit: false,
+    active: true,
+    splitSecondary: false,
+    focused: true,
+    paneTag: '主',
+  })
+  assert.deepEqual(getConversationPresence(splitPrimaryFocus, 10), {
+    inPrimary: false,
+    inSplit: true,
+    active: false,
+    splitSecondary: true,
+    focused: false,
+    paneTag: '分',
+  })
+  assert.deepEqual(getConversationPresence(splitPrimaryFocus, 99), {
+    inPrimary: false,
+    inSplit: false,
+    active: false,
+    splitSecondary: false,
+    focused: false,
+    paneTag: null,
+  })
+  assert.equal(isConversationActive(splitPrimaryFocus, 1), true)
+  assert.equal(isConversationActive(splitPrimaryFocus, 10), false)
+
+  const splitSecondaryFocus = {
+    ...splitPrimaryFocus,
+    focusedPanel: 'split' as const,
+  }
+  assert.deepEqual(getConversationPresence(splitSecondaryFocus, 1), {
+    inPrimary: true,
+    inSplit: false,
+    active: false,
+    splitSecondary: true,
+    focused: false,
+    paneTag: '主',
+  })
+  assert.deepEqual(getConversationPresence(splitSecondaryFocus, 10), {
+    inPrimary: false,
+    inSplit: true,
+    active: true,
+    splitSecondary: false,
+    focused: true,
+    paneTag: '分',
+  })
+  assert.equal(isConversationActive(splitSecondaryFocus, 1), false)
+  assert.equal(isConversationActive(splitSecondaryFocus, 10), true)
+
+  // 3) 同目标双开：主屏与分屏均为同一会话或同一待命页 -> paneTag 为 '主·分'，两焦点下均 active+focused
+  for (const focusedPanel of ['primary', 'split'] as const) {
+    const sameConvStore = {
+      primaryTarget: { kind: 'conversation' as const, conversationId: 10 },
+      splitTarget: { kind: 'conversation' as const, conversationId: 10 },
+      focusedPanel,
+    }
+    assert.deepEqual(getConversationPresence(sameConvStore, 10), {
+      inPrimary: true,
+      inSplit: true,
+      active: true,
+      splitSecondary: false,
+      focused: true,
+      paneTag: '主·分',
+    })
+
+    const sameAgentStore = {
+      primaryTarget: { kind: 'agent' as const, profileId: 'coder' },
+      splitTarget: { kind: 'agent' as const, profileId: 'coder' },
+      focusedPanel,
+    }
+    assert.deepEqual(getAgentStandbyPresence(sameAgentStore, 'coder'), {
+      inPrimary: true,
+      inSplit: true,
+      active: true,
+      splitSecondary: false,
+      focused: true,
+      paneTag: '主·分',
+    })
+  }
+
+  // 4) 混合分屏：主屏会话 + 分屏待命页，自定义 matches 验证 resolveSidebarTargetPresence
+  const mixedSplitStore = {
+    primaryTarget: { kind: 'conversation' as const, conversationId: 1 },
+    splitTarget: { kind: 'agent' as const, profileId: 'coder' },
+    focusedPanel: 'split' as const,
+  }
+  assert.deepEqual(getAgentStandbyPresence(mixedSplitStore, 'coder'), {
+    inPrimary: false,
+    inSplit: true,
+    active: true,
+    splitSecondary: false,
+    focused: true,
+    paneTag: '分',
+  })
+  assert.equal(isAgentStandbyActive(mixedSplitStore, 'coder'), true)
   assert.deepEqual(
-    topics.map((t) => t.conv.id),
-    [11, 12, 10, 1],
+    resolveSidebarTargetPresence(mixedSplitStore, (t) => t.kind === 'conversation' && t.conversationId === 1),
+    {
+      inPrimary: true,
+      inSplit: false,
+      active: false,
+      splitSecondary: true,
+      focused: false,
+      paneTag: '主',
+    },
   )
-  // 激活标记
-  assert.deepEqual(
-    topics.map((t) => t.active),
-    [false, false, false, true],
-  )
-  // markActiveId 为 null 时无激活项
-  const noActive = buildProfileTopics([conv({ id: 1, profileId: 'assistant' })], 'assistant', null)
-  assert.deepEqual(noActive.map((t) => t.active), [false])
 })
 
-test('filterTopicList 按标题与 #id 过滤话题', { timeout: 60_000 }, () => {
-  const items = buildProfileTopics(
-    [
-      conv({ id: 1, title: '周末计划', profileId: 'assistant' }),
-      conv({ id: 2, title: '代码审查', profileId: 'assistant' }),
-      conv({ id: 10, title: '杂记', profileId: 'assistant' }),
-    ],
-    'assistant',
-    null,
-  )
-  assert.deepEqual(filterTopicList(items, '').map((t) => t.conv.id), [10, 2, 1])
-  assert.deepEqual(filterTopicList(items, '周末').map((t) => t.conv.id), [1])
-  // #10 与 10 两种形式都命中 id 10（前缀命中）
-  assert.deepEqual(filterTopicList(items, '#10').map((t) => t.conv.id), [10])
-  assert.deepEqual(filterTopicList(items, '1').map((t) => t.conv.id), [10, 1])
-  assert.equal(filterTopicList(items, '不存在').length, 0)
+test('activeProfileIdsOf / activeProfileIdOf / activeConversationIdsOf 收集主分屏活跃目标与主屏优先序', { timeout: 60_000 }, () => {
+  const sampleConvs = [
+    conv({ id: 1, profileId: 'assistant' }),
+    conv({ id: 10, profileId: 'assistant' }),
+    conv({ id: 40, profileId: 'coder' }),
+  ]
+
+  // 单屏会话
+  const singleConv = {
+    primaryTarget: { kind: 'conversation' as const, conversationId: 1 },
+    splitTarget: null,
+    conversations: sampleConvs,
+  }
+  assert.deepEqual(Array.from(activeProfileIdsOf(singleConv)), ['assistant'])
+  assert.equal(activeProfileIdOf(singleConv), 'assistant')
+  assert.deepEqual(Array.from(activeConversationIdsOf(singleConv)), [1])
+
+  // 非智能体/会话目标（如 models）
+  const centerOnly = {
+    primaryTarget: { kind: 'models' as const },
+    splitTarget: null,
+    conversations: sampleConvs,
+  }
+  assert.equal(activeProfileIdsOf(centerOnly).size, 0)
+  assert.equal(activeProfileIdOf(centerOnly), null)
+  assert.equal(activeConversationIdsOf(centerOnly).size, 0)
+
+  // 分屏双开不同智能体（主屏 assistant 会话 + 分屏 coder 会话）：主屏优先插序
+  const splitDifferent = {
+    primaryTarget: { kind: 'conversation' as const, conversationId: 1 },
+    splitTarget: { kind: 'conversation' as const, conversationId: 40 },
+    conversations: sampleConvs,
+  }
+  assert.deepEqual(Array.from(activeProfileIdsOf(splitDifferent)), ['assistant', 'coder'])
+  assert.equal(activeProfileIdOf(splitDifferent), 'assistant')
+  assert.deepEqual(Array.from(activeConversationIdsOf(splitDifferent)), [1, 40])
+
+  // 分屏主屏会话 + 分屏待命页：profileId 主屏优先，conversationIds 仅含主屏会话
+  const splitWithStandby = {
+    primaryTarget: { kind: 'conversation' as const, conversationId: 40 },
+    splitTarget: { kind: 'agent' as const, profileId: 'assistant' },
+    conversations: sampleConvs,
+  }
+  assert.deepEqual(Array.from(activeProfileIdsOf(splitWithStandby)), ['coder', 'assistant'])
+  assert.equal(activeProfileIdOf(splitWithStandby), 'coder')
+  assert.deepEqual(Array.from(activeConversationIdsOf(splitWithStandby)), [40])
+
+  // 分屏同智能体两会话：profileId 自动去重，conversationIds 均保留
+  const splitSameProfile = {
+    primaryTarget: { kind: 'conversation' as const, conversationId: 1 },
+    splitTarget: { kind: 'conversation' as const, conversationId: 10 },
+    conversations: sampleConvs,
+  }
+  assert.deepEqual(Array.from(activeProfileIdsOf(splitSameProfile)), ['assistant'])
+  assert.equal(activeProfileIdOf(splitSameProfile), 'assistant')
+  assert.deepEqual(Array.from(activeConversationIdsOf(splitSameProfile)), [1, 10])
+
+  // 主屏会话未解析时兜底取分屏 profileId
+  const primaryUnresolved = {
+    primaryTarget: { kind: 'conversation' as const, conversationId: 999 },
+    splitTarget: { kind: 'agent' as const, profileId: 'coder' },
+    conversations: sampleConvs,
+  }
+  assert.deepEqual(Array.from(activeProfileIdsOf(primaryUnresolved)), ['coder'])
+  assert.equal(activeProfileIdOf(primaryUnresolved), 'coder')
+  assert.deepEqual(Array.from(activeConversationIdsOf(primaryUnresolved)), [999])
 })
 
 // ---------------------------------------------------------------------------
@@ -1016,8 +1220,9 @@ test('Sidebar 双层导航：Activity Rail 空间切换与系统中心直达（S
   assert.ok(!html.includes('>视图</div>'), '默认不渲染视图空间分组')
   assert.ok(!html.includes('settings-nav'), '默认不渲染设置空间分组')
 
-  // 紧凑搜索输入与 Cmd-K 按钮共存
-  assert.ok(html.includes('sidebar-search-input'), '智能体搜索输入')
+  // 默认收起筛选栏：渲染筛选切换按钮与 Cmd-K 按钮，无多余常驻搜索输入
+  assert.ok(html.includes('aria-label="筛选智能体与话题"'), '渲染智能体筛选开关按钮')
+  assert.ok(!html.includes('sidebar-search-input'), '默认收起筛选栏，不常驻渲染搜索输入框')
   assert.ok(html.includes('title="打开 Cmd K 全局搜索与命令面板"'), 'Cmd-K 按钮保留')
 
   // 底栏已移除：系统中心入口收敛到设置空间
@@ -1039,25 +1244,60 @@ test('Sidebar 设置空间：系统中心纵向列表与激活高亮（SSR）', 
   assert.ok(!html.includes('agent-standing-group'), '设置空间不渲染智能体分组')
 })
 
-test('Sidebar 双层导航：单展开仅当前智能体显示话题子列表，父子行同时点亮（SSR）', { timeout: 60_000 }, () => {
+test('Sidebar 双层导航：单展开仅当前智能体显示话题子列表，待命亮父行/进会话亮子行（SSR）', { timeout: 60_000 }, () => {
+  const conversations = [
+    conv({ id: 1, title: '个人助理', profileId: 'assistant' }),
+    conv({ id: 10, title: '周末计划', profileId: 'assistant' }),
+    conv({ id: 11, title: '代码审查', profileId: 'assistant' }),
+  ]
+  const profiles = [{ id: 'assistant', name: '个人助理' }]
+
+  // 1) 进会话态：站位行（父）仅弱亮分支态，当前会话子行（子）唯一点亮
+  const convStore = makeTestStore({ conversations, profiles })
+  const convHtml = renderToString(e(HostStoreProviders, { value: convStore }, e(Sidebar)))
+  assert.ok(convHtml.includes('agent-conversations-list'), '当前智能体渲染话题子列表')
+  assert.ok(convHtml.includes('nav-item-sub'), '话题子行使用二级行样式')
+  assert.ok(convHtml.includes('>3</span>'), '多会话智能体行展示计数徽标')
+  assert.ok(convHtml.includes('title="在 个人助理 下开始新话题"'), '智能体行新建按钮保留（进入待命态）')
+  assert.ok(convHtml.includes('class="nav-item agent-standing-row agent-standing-row-branch"'), '进会话时站位行（父）呈分支弱态')
+  assert.ok(!convHtml.includes('class="nav-item agent-standing-row nav-item-active"'), '进会话时站位行（父）不亮激活底')
+  assert.ok(convHtml.includes('class="nav-item nav-item-sub nav-item-active"'), '当前会话子行（子）唯一点亮')
+
+  // 2) 待命态 #/a/assistant：站位行（父）点亮，子列表展开但任何子行均不点亮
+  const standbyStore = makeTestStore({
+    conversations,
+    profiles,
+    primaryTarget: { kind: 'agent', profileId: 'assistant' },
+  })
+  const standbyHtml = renderToString(e(HostStoreProviders, { value: standbyStore }, e(Sidebar)))
+  assert.ok(standbyHtml.includes('agent-conversations-list'), '待命态展开所属智能体话题子列表')
+  assert.ok(standbyHtml.includes('class="nav-item agent-standing-row nav-item-active"'), '待命态站位行（父）点亮')
+  assert.ok(!standbyHtml.includes('agent-standing-row-branch'), '待命态站位行不附带分支弱态')
+  assert.ok(!standbyHtml.includes('nav-item-sub nav-item-active'), '待命态任何子行均不点亮')
+})
+
+test('Sidebar 分屏混开 SSR 回归：主屏会话 + 分屏待命且聚焦分屏时高亮与主/分微标准确呈现', { timeout: 60_000 }, () => {
   const store = makeTestStore({
     conversations: [
-      conv({ id: 1, title: '个人助理', profileId: 'assistant' }),
-      conv({ id: 10, title: '周末计划', profileId: 'assistant' }),
-      conv({ id: 11, title: '代码审查', profileId: 'assistant' }),
+      conv({ id: 1, title: '主屏会话', profileId: 'assistant' }),
+      conv({ id: 40, title: '编码历史', profileId: 'coder' }),
     ],
-    profiles: [{ id: 'assistant', name: '个人助理' }],
+    profiles: [
+      { id: 'assistant', name: '个人助理' },
+      { id: 'coder', name: '编码专员' },
+    ],
+    primaryTarget: { kind: 'conversation', conversationId: 1 },
+    splitTarget: { kind: 'agent', profileId: 'coder' },
+    focusedPanel: 'split',
   })
   const html = renderToString(e(HostStoreProviders, { value: store }, e(Sidebar)))
 
-  // 单展开：当前会话所属智能体（assistant）展开话题子列表
-  assert.ok(html.includes('agent-conversations-list'), '当前智能体渲染话题子列表')
-  assert.ok(html.includes('nav-item-sub'), '话题子行使用二级行样式')
-  assert.ok(html.includes('>3</span>'), '多会话智能体行展示计数徽标')
-  assert.ok(html.includes('title="在 个人助理 下开始新话题"'), '智能体行新建按钮保留（进入待命态）')
-  // 父强子弱（参考 magpie）：站位行（父）与当前会话子行（子）同时点亮
-  assert.ok(html.includes('class="nav-item agent-standing-row nav-item-active"'), '站位行（父）保持激活')
-  assert.ok(html.includes('class="nav-item nav-item-sub nav-item-active"'), '当前会话子行（子）激活')
+  assert.equal((html.match(/class="agent-conversations-list"/g) ?? []).length, 2, '分屏两侧所属智能体均展开')
+  assert.ok(html.includes('class="nav-item agent-standing-row agent-standing-row-branch"'), '主屏会话所属智能体父行呈分支弱态')
+  assert.ok(html.includes('class="nav-item nav-item-sub nav-item-split"'), '主屏非聚焦会话子行呈分屏在场态')
+  assert.ok(html.includes('<span class="nav-pane-tag" title="主屏打开">主</span>'), '主屏会话子行带「主」微标')
+  assert.ok(html.includes('class="nav-item agent-standing-row nav-item-active nav-item-focused"'), '分屏聚焦的待命智能体父行点亮并带焦点刻度')
+  assert.ok(html.includes('<span class="nav-pane-tag" title="分屏打开">分</span>'), '分屏待命父行带「分」微标')
 })
 
 

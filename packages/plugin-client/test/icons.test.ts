@@ -24,6 +24,7 @@ test('HelmIcon：支持 laptop / server / circle-slash / file 与共享补充矢
     ['arrow-down', /lucide-arrow-down(?!-)/],
     ['arrow-down-to-line', /lucide-arrow-down-to-line/],
     ['git-pull-request', /lucide-git-pull-request/],
+    ['list-filter', /lucide-list-filter/],
     ['more-horizontal', /lucide-ellipsis/],
   ]
   for (const [name, pattern] of cases) {

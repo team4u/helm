@@ -182,26 +182,103 @@ test('Sidebar 设置空间：点击设置空间按钮切换列表，点击插件
   assert.deepEqual(store.openTargetCalls, [{ target: { kind: 'plugins' }, split: undefined }])
 })
 
-test('Sidebar 智能体搜索：输入关键字过滤智能体行', { timeout: 60_000 }, async () => {
+test('Sidebar 智能体搜索：默认收起筛选栏，点击开启后支持过滤智能体与话题，清空或 Esc 收起', { timeout: 60_000 }, async () => {
   const store = makeStore()
   render(store, e(Sidebar))
   await act(async () => {})
 
+  // 默认收起筛选栏，不渲染输入框
+  assert.ok(document.body.querySelector('.sidebar-search-input') === null, '默认不渲染筛选输入框')
+  const filterBtn = document.body.querySelector('button[aria-label="筛选智能体与话题"]') as HTMLButtonElement
+  assert.ok(filterBtn, '筛选切换按钮存在')
+  assert.equal(filterBtn.getAttribute('aria-pressed'), 'false')
+
+  // 点击筛选按钮：显示输入框并自动聚焦
+  await act(async () => {
+    filterBtn.click()
+  })
+  assert.equal(filterBtn.getAttribute('aria-pressed'), 'true')
   const input = document.body.querySelector('.sidebar-search-input') as HTMLInputElement
-  assert.ok(input, '搜索输入存在')
+  assert.ok(input, '点击筛选按钮后显示输入框')
+  assert.ok(document.activeElement === input, '展开筛选栏自动聚焦输入框')
+
+  // 1) 按智能体名称过滤：命中智能体保留，未命中智能体过滤
   await act(async () => {
     setInputValue(input, '编码')
   })
-  assert.ok(document.body.textContent!.includes('编码专员'), '命中智能体保留')
-  assert.ok(!document.body.textContent!.includes('个人助理</span>'), '未命中智能体过滤')
+  assert.deepEqual(
+    [...document.body.querySelectorAll('.agent-standing-row .nav-item-label')].map((el) => el.textContent),
+    ['编码专员'],
+    '仅保留命中智能体行',
+  )
+  assert.ok(document.body.querySelector('.agent-conversations-list')?.textContent?.includes('重构方案'), '搜索时自动展开命中智能体话题')
 
   // 命中智能体点击行主体进入待命态（名称是稳定入口，首次发送才落库）
   const row = document.body.querySelector('.agent-standing .nav-item-main') as HTMLButtonElement
   await act(async () => {
     row.click()
   })
-  const call = store.openTargetCalls[0]
-  assert.deepEqual(call?.target, { kind: 'agent', profileId: 'coder' })
+  assert.deepEqual(store.openTargetCalls[0]?.target, { kind: 'agent', profileId: 'coder' })
+
+  // 2) 按会话标题关键词过滤：自动展开所属智能体并仅渲染命中子会话
+  await act(async () => {
+    setInputValue(input, '周末')
+  })
+  assert.deepEqual(
+    [...document.body.querySelectorAll('.agent-standing-row .nav-item-label')].map((el) => el.textContent),
+    ['个人助理'],
+  )
+  assert.deepEqual(
+    [...document.body.querySelectorAll('.nav-item-sub .nav-item-label')].map((el) => el.textContent),
+    ['周末计划'],
+    '按话题标题过滤仅显示命中的子会话',
+  )
+
+  // 3) 按 #id 过滤非当前智能体下会话：自动展开对应智能体并精确定位命中子会话
+  await act(async () => {
+    setInputValue(input, '#40')
+  })
+  assert.deepEqual(
+    [...document.body.querySelectorAll('.agent-standing-row .nav-item-label')].map((el) => el.textContent),
+    ['编码专员'],
+  )
+  assert.deepEqual(
+    [...document.body.querySelectorAll('.nav-item-sub .nav-item-label')].map((el) => el.textContent),
+    ['重构方案'],
+    '按 #id 过滤自动展开并仅显示命中子会话',
+  )
+
+  // 4) 点击清空按钮：清空输入并保持聚焦与恢复全量智能体
+  const clearBtn = document.body.querySelector('button.sidebar-search-clear') as HTMLButtonElement
+  assert.ok(clearBtn, '有关键词时显示清空按钮')
+  await act(async () => {
+    clearBtn.click()
+  })
+  assert.equal(input.value, '', '点击清空按钮清空关键词')
+  assert.ok(document.body.querySelector('.sidebar-search-input'), '清空后筛选框保持展开')
+  assert.ok(document.activeElement === input, '清空后输入框保持聚焦')
+  assert.deepEqual(
+    [...document.body.querySelectorAll('.agent-standing-row .nav-item-label')].map((el) => el.textContent),
+    ['个人助理', '编码专员'],
+  )
+
+  // 5) 无匹配空态与 Esc 两段式清空/收起
+  await act(async () => {
+    setInputValue(input, '毫无匹配的关键词')
+  })
+  assert.equal(document.body.querySelector('.sidebar-search-empty')?.textContent, '没有匹配的智能体或话题')
+
+  await act(async () => {
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+  })
+  assert.equal(input.value, '', '首次按 Esc 先清空筛选关键词')
+  assert.ok(document.body.querySelector('.sidebar-search-input'), '首次按 Esc 仍保留输入框')
+
+  await act(async () => {
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+  })
+  assert.ok(document.body.querySelector('.sidebar-search-input') === null, '空输入下再按 Esc 收起筛选栏')
+  assert.equal(filterBtn.getAttribute('aria-pressed'), 'false')
 })
 
 test('Sidebar 手风琴单展开：仅当前会话所属智能体展开话题子列表，切换后自动收起', { timeout: 60_000 }, async () => {
@@ -227,9 +304,10 @@ test('Sidebar 手风琴单展开：仅当前会话所属智能体展开话题子
   )
 })
 
-test('Sidebar 智能体行无折叠按钮：展开由当前目标唯一推导', { timeout: 60_000 }, async () => {
+test('Sidebar 智能体行无折叠按钮：展开由当前目标唯一推导，待命亮父行/进会话亮子行', { timeout: 60_000 }, async () => {
   const store = makeStore()
-  render(store, e(Sidebar))
+  const api: { current: { update?: (patch: Partial<HelmStoreValue>) => void } } = { current: {} }
+  render(store, e(MutableStoreSidebar, { base: store, apiRef: api }))
   await act(async () => {})
 
   // 折叠展开按钮已移除：展开只跟随当前目标，点击名称是唯一入口
@@ -238,12 +316,26 @@ test('Sidebar 智能体行无折叠按钮：展开由当前目标唯一推导', 
   assert.equal(lists.length, 1, '仅当前目标所属智能体展开话题列表')
   assert.ok(lists[0]!.textContent!.includes('周末计划'), '展开的是当前会话所属智能体的话题')
 
-  // 父强子弱（参考 magpie）：站位行（父）与当前会话子行（子）同时点亮
+  // 会话态：仅当前子行 nav-item-active，父站位行呈 agent-standing-row-branch 弱态
   const header = [...document.body.querySelectorAll('.agent-standing-row')]
     .find((r) => r.textContent!.includes('个人助理'))!
-  assert.ok(header.className.includes('nav-item-active'), '当前会话所属智能体站位行点亮（父）')
+  assert.ok(header.className.includes('agent-standing-row-branch'), '会话态父站位行仅呈分支弱态')
+  assert.ok(!header.className.includes('nav-item-active'), '会话态父站位行不点亮激活底')
+  assert.equal(header.querySelector('.nav-item-main')?.getAttribute('aria-current'), null)
   const sub = document.body.querySelector('.nav-item-sub.nav-item-active')
-  assert.ok(sub?.textContent!.includes('个人助理'), '当前会话子行同时点亮（子）')
+  assert.ok(sub?.textContent!.includes('个人助理'), '会话态仅当前会话子行点亮（子）')
+  assert.equal(sub?.querySelector('.nav-item-main')?.getAttribute('aria-current'), 'page')
+
+  // 待命态：仅父站位行 nav-item-active，子行均不点亮
+  await act(async () => {
+    api.current.update!({ primaryTarget: { kind: 'agent', profileId: 'assistant' } })
+  })
+  const standbyHeader = [...document.body.querySelectorAll('.agent-standing-row')]
+    .find((r) => r.textContent!.includes('个人助理'))!
+  assert.ok(standbyHeader.className.includes('nav-item-active'), '待命态父站位行唯一点亮')
+  assert.ok(!standbyHeader.className.includes('agent-standing-row-branch'), '待命态父行不带分支弱态')
+  assert.equal(standbyHeader.querySelector('.nav-item-main')?.getAttribute('aria-current'), 'page')
+  assert.ok(document.body.querySelector('.nav-item-sub.nav-item-active') === null, '待命态任何子行均不点亮')
 })
 
 test('Sidebar 话题列表展开随目标切换：切换后自动收起原智能体，无关更新不扰动', { timeout: 60_000 }, async () => {
@@ -286,5 +378,58 @@ test('Sidebar 智能体平铺：0 会话智能体直接平铺可见，不收进�
   assert.ok(document.body.querySelector('.sidebar-idle-group') === null, '不渲染闲置智能体折叠区')
   const labels = [...document.body.querySelectorAll('.agent-standing-row .nav-item-label')].map((el) => el.textContent)
   assert.deepEqual(labels, ['个人助理', '编码专员', '写作助手'], '0 会话智能体与活跃智能体稳定平铺在同一列表')
+})
+
+test('Sidebar 分屏协同展开与焦点高亮：双不同智能体均展开，主/分屏焦点切换同步高亮与主/分微标', { timeout: 60_000 }, async () => {
+  const base = makeStore()
+  const store: HelmStoreValue = {
+    ...base,
+    primaryTarget: { kind: 'conversation', conversationId: 1 },
+    splitTarget: { kind: 'conversation', conversationId: 40 },
+    focusedPanel: 'primary',
+  }
+  const api: { current: { update?: (patch: Partial<HelmStoreValue>) => void } } = { current: {} }
+  render(store, e(MutableStoreSidebar, { base: store, apiRef: api }))
+  await act(async () => {})
+
+  // 双不同智能体（assistant 与 coder）均展开话题列表，且站位父行均为分支弱态
+  const lists = document.body.querySelectorAll('.agent-conversations-list')
+  assert.equal(lists.length, 2, '分屏打开两个不同智能体会话时双方均展开')
+  const standingRows = [...document.body.querySelectorAll('.agent-standing-row')]
+  assert.equal(standingRows.filter((r) => r.className.includes('agent-standing-row-branch')).length, 2)
+  assert.equal(standingRows.filter((r) => r.className.includes('nav-item-active')).length, 0)
+
+  const findConvRow = (title: string) =>
+    [...document.body.querySelectorAll('.nav-item-sub')].find((el) =>
+      el.querySelector('.nav-item-label')?.textContent === title,
+    )!
+
+  // 1) 主屏聚焦：会话 1 获 .nav-item-active.nav-item-focused + 「主」；会话 40 获 .nav-item-split + 「分」
+  const conv1Primary = findConvRow('个人助理')
+  const conv40Primary = findConvRow('重构方案')
+  assert.ok(conv1Primary.className.includes('nav-item-active'))
+  assert.ok(conv1Primary.className.includes('nav-item-focused'))
+  assert.equal(conv1Primary.querySelector('.nav-item-main')?.getAttribute('aria-current'), 'page')
+  assert.equal(conv1Primary.querySelector('.nav-pane-tag')?.textContent, '主')
+  assert.ok(conv40Primary.className.includes('nav-item-split'))
+  assert.ok(!conv40Primary.className.includes('nav-item-active'))
+  assert.ok(!conv40Primary.className.includes('nav-item-focused'))
+  assert.equal(conv40Primary.querySelector('.nav-item-main')?.getAttribute('aria-current'), null)
+  assert.equal(conv40Primary.querySelector('.nav-pane-tag')?.textContent, '分')
+
+  // 2) 焦点切到分屏：会话 40 切换为 .nav-item-active.nav-item-focused，会话 1 切换为 .nav-item-split；「主」「分」微标位置不变
+  await act(async () => {
+    api.current.update!({ focusedPanel: 'split' })
+  })
+  const conv1Split = findConvRow('个人助理')
+  const conv40Split = findConvRow('重构方案')
+  assert.ok(conv1Split.className.includes('nav-item-split'))
+  assert.ok(!conv1Split.className.includes('nav-item-active'))
+  assert.ok(!conv1Split.className.includes('nav-item-focused'))
+  assert.equal(conv1Split.querySelector('.nav-pane-tag')?.textContent, '主')
+  assert.ok(conv40Split.className.includes('nav-item-active'))
+  assert.ok(conv40Split.className.includes('nav-item-focused'))
+  assert.equal(conv40Split.querySelector('.nav-item-main')?.getAttribute('aria-current'), 'page')
+  assert.equal(conv40Split.querySelector('.nav-pane-tag')?.textContent, '分')
 })
 

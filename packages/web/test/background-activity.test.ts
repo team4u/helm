@@ -4,7 +4,7 @@
  *   resolveStandingStatusIndicator / resolveStatusLight / backgroundAwareStatusTooltip
  *   的契约（tone=accent 才在途、neutral 历史计数与 warn 失败不误报、全局角标
  *   不参与、scope 过滤、插件贡献/doc 缺失归零、非 primary 会话后台活跃透出到
- *   一级站位行、error > blocked > working 优先级）；
+ *   一级站位行、error > blocked > working > done > idle 优先级）；
  * - 单灯优先级：working/blocked/error 主会话状态灯独占（不渲染后台空心环、
  *   tooltip 不叠加后台摘要）；idle/done + 后台在途仅渲染空心环（done 绿点让位）；
  *   无后台在途保持五态原样；
@@ -21,7 +21,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import type { ConversationSummary, PluginUiContribution, WorkbenchPanelSpec } from '@helm/protocol'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
-import { conversationStatusDotClass, conversationStatusTooltip } from '../src/shell/sidebar-model.js'
+import { ARCHIVED_TAG, conversationStatusDotClass, conversationStatusTooltip } from '../src/shell/sidebar-model.js'
 import {
   backgroundAwareStatusTooltip,
   collectBackgroundBadgeDocs,
@@ -274,21 +274,68 @@ test('Agent 子列表折叠预览始终保留当前会话与在途会话', { tim
   assert.equal(compactingPreview.hiddenCount, 2)
 })
 
-test('站位聚合优先级 error > blocked > working；并列取列表首个（primary 置顶序）', { timeout: 60_000 }, () => {
+test('resolveAgentSubListPreview：activeIds 中任一会话超出预览条数时整组展开（分屏保护）', { timeout: 60_000 }, () => {
+  const conversations = Array.from({ length: 8 }, (_, index) => conv({ id: index + 1 }))
+
+  // 主屏活跃在前 5 条内（id=1），分屏活跃在深度位置（id=7，index=6）：整组展开不隐藏分屏会话
+  const splitDeep = resolveAgentSubListPreview({
+    conversations,
+    showAll: false,
+    activeId: 1,
+    activeIds: new Set([1, 7]),
+    background: new Map(),
+  })
+  assert.deepEqual(splitDeep.visible.map((item) => item.id), [1, 2, 3, 4, 5, 6, 7, 8])
+  assert.equal(splitDeep.hiddenCount, 0)
+
+  // 仅传 activeIds（activeId=null）命中深度会话（id=8）同样整组展开
+  const onlySetDeep = resolveAgentSubListPreview({
+    conversations,
+    showAll: false,
+    activeId: null,
+    activeIds: new Set([8]),
+    background: new Map(),
+  })
+  assert.deepEqual(onlySetDeep.visible.map((item) => item.id), [1, 2, 3, 4, 5, 6, 7, 8])
+  assert.equal(onlySetDeep.hiddenCount, 0)
+
+  // activeIds 全部位于前 5 条内时正常折叠
+  const bothShallow = resolveAgentSubListPreview({
+    conversations,
+    showAll: false,
+    activeId: 1,
+    activeIds: new Set([1, 3]),
+    background: new Map(),
+  })
+  assert.deepEqual(bothShallow.visible.map((item) => item.id), [1, 2, 3, 4, 5])
+  assert.equal(bothShallow.hiddenCount, 3)
+})
+
+test('站位聚合优先级 error > blocked > working > done > idle；并列取列表首个（primary 置顶序）', { timeout: 60_000 }, () => {
   const conversations = [
     conv({ id: 1, status: 'working', updatedAt: 9000 }),
     conv({ id: 2, status: 'blocked' }),
     conv({ id: 3, status: 'error' }),
+    conv({ id: 4, status: 'done' }),
   ]
   const indicator = resolveStandingStatusIndicator(conversations, new Map())
   assert.equal(indicator?.representative.id, 3)
 
+  const workingBeatsDone = [conv({ id: 1, status: 'done', updatedAt: 9000 }), conv({ id: 2, status: 'working' })]
+  assert.equal(resolveStandingStatusIndicator(workingBeatsDone, new Map())?.representative.id, 2)
+
   const tie = [conv({ id: 1, status: 'working', updatedAt: 9000 }), conv({ id: 2, status: 'working' })]
   assert.equal(resolveStandingStatusIndicator(tie, new Map())?.representative.id, 1)
 
-  // 无高优先级状态：代表会话保持列表首个（与旧「看 primary」行为兼容）
-  const idle = [conv({ id: 1, updatedAt: 9000 }), conv({ id: 2, status: 'done' })]
-  assert.equal(resolveStandingStatusIndicator(idle, new Map())?.representative.id, 1)
+  // 非首条会话未读已完成（done）优先于 idle，确保折叠态能透出绿点；若存在后台在途则单灯语义仍让位空心环
+  const idleWithDone = [conv({ id: 1, updatedAt: 9000 }), conv({ id: 2, status: 'done' })]
+  const doneIndicator = resolveStandingStatusIndicator(idleWithDone, new Map())
+  assert.equal(doneIndicator?.representative.id, 2)
+  assert.equal(doneIndicator?.representative.status, 'done')
+
+  // 纯 idle 时保持列表首个（与旧「看 primary」行为兼容）
+  const pureIdle = [conv({ id: 1, status: 'idle', updatedAt: 9000 }), conv({ id: 2, status: 'idle' })]
+  assert.equal(resolveStandingStatusIndicator(pureIdle, new Map())?.representative.id, 1)
 
   assert.equal(resolveStandingStatusIndicator([], new Map()), null)
 })
@@ -880,4 +927,242 @@ test('Sidebar DOM 更新：conversations 的 compacting 从 false 变为 true �
     root?.unmount()
   })
   container.remove()
+})
+
+// ---------------------------------------------------------------------------
+// 侧栏动态分组、视图/设置空间导航与已归档分组：分屏在场、焦点刻度与微标 SSR 回归
+// ---------------------------------------------------------------------------
+
+function findNavRow(html: string, label: string): Element {
+  const host = document.createElement('div')
+  host.innerHTML = html
+  const match = [...host.querySelectorAll('.nav-item')].find(
+    (row) => row.querySelector('.nav-item-label')?.textContent === label,
+  )
+  assert.ok(match, `未找到标题为「${label}」的侧栏行`)
+  return match
+}
+
+test('sidebar.section 会话行分屏在场：splitTarget 命中渲染 .nav-item-split 与 分 微标，聚焦 split 切换 .nav-item-active.nav-item-focused', { timeout: 60_000 }, () => {
+  const contributions: PluginUiContribution[] = [
+    {
+      pluginId: 'builtin:superagent',
+      surface: 'sidebar.section',
+      spec: { id: 'workers', label: '后台 Worker', filterTag: 'worker' },
+    },
+  ]
+  const conversations = [
+    conv({ id: 20, title: 'Worker A', profileId: 'coder', tags: ['worker'] }),
+    conv({ id: 21, title: 'Worker B', profileId: 'coder', tags: ['worker'] }),
+    conv({ id: 50, title: '主控会话', profileId: 'assistant' }),
+  ]
+
+  const splitSecondaryHtml = renderSidebar(
+    sidebarStore({
+      conversations,
+      primaryTarget: { kind: 'conversation', conversationId: 50 },
+      splitTarget: { kind: 'conversation', conversationId: 20 },
+      groupedUi: groupUiContributions(contributions),
+    }),
+  )
+  const workerSecondary = findNavRow(splitSecondaryHtml, 'Worker A')
+  assert.equal(workerSecondary.classList.contains('nav-item-split'), true)
+  assert.equal(workerSecondary.classList.contains('nav-item-active'), false)
+  assert.equal(workerSecondary.classList.contains('nav-item-focused'), false)
+  assert.equal(workerSecondary.querySelector('.nav-item-main')?.getAttribute('aria-current'), null)
+  const secondaryMeta = workerSecondary.querySelector('.nav-item-meta')
+  assert.ok(secondaryMeta, 'Worker A 应渲染 .nav-item-meta')
+  const secondaryTag = secondaryMeta.children[0]
+  assert.equal(secondaryTag?.className, 'nav-pane-tag', 'paneTag 应前置在 .nav-item-meta 首位')
+  assert.equal(secondaryTag?.textContent, '分')
+  assert.equal(secondaryTag?.getAttribute('title'), '分屏打开')
+  assert.equal(secondaryMeta.children[1]?.textContent, '#20')
+
+  const workerOther = findNavRow(splitSecondaryHtml, 'Worker B')
+  assert.equal(workerOther.classList.contains('nav-item-split'), false)
+  assert.equal(workerOther.classList.contains('nav-item-active'), false)
+  assert.ok(workerOther.querySelector('.nav-pane-tag') === null)
+
+  const splitFocusedHtml = renderSidebar(
+    sidebarStore({
+      conversations,
+      primaryTarget: { kind: 'conversation', conversationId: 50 },
+      splitTarget: { kind: 'conversation', conversationId: 20 },
+      focusedPanel: 'split',
+      groupedUi: groupUiContributions(contributions),
+    }),
+  )
+  const workerFocused = findNavRow(splitFocusedHtml, 'Worker A')
+  assert.equal(workerFocused.classList.contains('nav-item-active'), true)
+  assert.equal(workerFocused.classList.contains('nav-item-focused'), true)
+  assert.equal(workerFocused.classList.contains('nav-item-split'), false)
+  assert.equal(workerFocused.querySelector('.nav-item-main')?.getAttribute('aria-current'), 'page')
+  assert.equal(workerFocused.querySelector('.nav-pane-tag')?.textContent, '分')
+  assert.equal(workerFocused.querySelector('.nav-pane-tag')?.getAttribute('title'), '分屏打开')
+})
+
+test('ViewNavGroup 与 SettingsNavGroup 分屏双开：主/分高亮、焦点刻度与 .nav-pane-tag（单屏不增设 Settings meta）', { timeout: 60_000 }, () => {
+  const viewContributions: PluginUiContribution[] = [
+    {
+      pluginId: 'builtin:herdr',
+      surface: 'sidebar.item',
+      spec: { id: 'herdr', label: 'Herdr 终端', icon: 'terminal', target: 'screen:builtin:herdr/overview' },
+    },
+    {
+      pluginId: 'builtin:workflow',
+      surface: 'sidebar.item',
+      spec: { id: 'runs', label: '工作流总览', icon: 'activity', target: 'screen:builtin:workflow/runs' },
+    },
+  ]
+  const viewSplitHtml = renderSidebar(
+    sidebarStore({
+      groupedUi: groupUiContributions(viewContributions),
+      primaryTarget: { kind: 'screen', pluginId: 'builtin:herdr', screenId: 'overview' },
+      splitTarget: { kind: 'screen', pluginId: 'builtin:workflow', screenId: 'runs' },
+      focusedPanel: 'split',
+    }),
+  )
+  const herdrRow = findNavRow(viewSplitHtml, 'Herdr 终端')
+  assert.equal(herdrRow.classList.contains('nav-item-split'), true)
+  assert.equal(herdrRow.classList.contains('nav-item-active'), false)
+  assert.equal(herdrRow.classList.contains('nav-item-focused'), false)
+  assert.equal(herdrRow.querySelector('.nav-item-main')?.getAttribute('aria-current'), null)
+  assert.equal(herdrRow.querySelector('.nav-pane-tag')?.textContent, '主')
+  assert.equal(herdrRow.querySelector('.nav-pane-tag')?.getAttribute('title'), '主屏打开')
+
+  const runsRow = findNavRow(viewSplitHtml, '工作流总览')
+  assert.equal(runsRow.classList.contains('nav-item-active'), true)
+  assert.equal(runsRow.classList.contains('nav-item-focused'), true)
+  assert.equal(runsRow.classList.contains('nav-item-split'), false)
+  assert.equal(runsRow.querySelector('.nav-item-main')?.getAttribute('aria-current'), 'page')
+  assert.equal(runsRow.querySelector('.nav-pane-tag')?.textContent, '分')
+  assert.equal(runsRow.querySelector('.nav-pane-tag')?.getAttribute('title'), '分屏打开')
+
+  const viewSameHtml = renderSidebar(
+    sidebarStore({
+      groupedUi: groupUiContributions(viewContributions),
+      primaryTarget: { kind: 'screen', pluginId: 'builtin:herdr', screenId: 'overview' },
+      splitTarget: { kind: 'screen', pluginId: 'builtin:herdr', screenId: 'overview' },
+    }),
+  )
+  const herdrBothRow = findNavRow(viewSameHtml, 'Herdr 终端')
+  assert.equal(herdrBothRow.classList.contains('nav-item-active'), true)
+  assert.equal(herdrBothRow.classList.contains('nav-item-focused'), true)
+  assert.equal(herdrBothRow.querySelector('.nav-pane-tag')?.textContent, '主·分')
+  assert.equal(herdrBothRow.querySelector('.nav-pane-tag')?.getAttribute('title'), '主屏与分屏均打开')
+
+  const singleSettingsHtml = renderSidebar(
+    sidebarStore({
+      primaryTarget: { kind: 'profiles' },
+      splitTarget: null,
+    }),
+  )
+  const singleProfiles = findNavRow(singleSettingsHtml, '角色')
+  assert.equal(singleProfiles.classList.contains('settings-nav-item'), true)
+  assert.equal(singleProfiles.classList.contains('nav-item-active'), true)
+  assert.equal(singleProfiles.classList.contains('nav-item-focused'), false)
+  assert.ok(singleProfiles.querySelector('.nav-item-meta') === null, '单屏 SettingsNavGroup 不渲染 .nav-item-meta')
+
+  const splitSettingsHtml = renderSidebar(
+    sidebarStore({
+      primaryTarget: { kind: 'profiles' },
+      splitTarget: { kind: 'models' },
+      focusedPanel: 'split',
+    }),
+  )
+  const profilesRow = findNavRow(splitSettingsHtml, '角色')
+  assert.equal(profilesRow.classList.contains('settings-nav-item'), true)
+  assert.equal(profilesRow.classList.contains('nav-item-split'), true)
+  assert.equal(profilesRow.classList.contains('nav-item-active'), false)
+  assert.equal(profilesRow.classList.contains('nav-item-focused'), false)
+  assert.equal(profilesRow.querySelector('.nav-item-main')?.getAttribute('aria-current'), null)
+  assert.equal(profilesRow.querySelector('.nav-item-meta .nav-pane-tag')?.textContent, '主')
+  assert.equal(profilesRow.querySelector('.nav-item-meta .nav-pane-tag')?.getAttribute('title'), '主屏打开')
+
+  const modelsRow = findNavRow(splitSettingsHtml, '模型与凭据')
+  assert.equal(modelsRow.classList.contains('settings-nav-item'), true)
+  assert.equal(modelsRow.classList.contains('nav-item-active'), true)
+  assert.equal(modelsRow.classList.contains('nav-item-focused'), true)
+  assert.equal(modelsRow.classList.contains('nav-item-split'), false)
+  assert.equal(modelsRow.querySelector('.nav-item-main')?.getAttribute('aria-current'), 'page')
+  assert.equal(modelsRow.querySelector('.nav-item-meta .nav-pane-tag')?.textContent, '分')
+  assert.equal(modelsRow.querySelector('.nav-item-meta .nav-pane-tag')?.getAttribute('title'), '分屏打开')
+
+  const skillsRow = findNavRow(splitSettingsHtml, '技能库')
+  assert.ok(skillsRow.querySelector('.nav-item-meta') === null, '未命中的设置项不渲染 .nav-item-meta')
+
+  const sameSettingsHtml = renderSidebar(
+    sidebarStore({
+      primaryTarget: { kind: 'profiles' },
+      splitTarget: { kind: 'profiles', profileId: 'coder' },
+      focusedPanel: 'primary',
+    }),
+  )
+  const profilesBothRow = findNavRow(sameSettingsHtml, '角色')
+  assert.equal(profilesBothRow.classList.contains('nav-item-active'), true)
+  assert.equal(profilesBothRow.classList.contains('nav-item-focused'), true)
+  assert.equal(profilesBothRow.querySelector('.nav-pane-tag')?.textContent, '主·分')
+  assert.equal(profilesBothRow.querySelector('.nav-pane-tag')?.getAttribute('title'), '主屏与分屏均打开')
+})
+
+test('ArchivedConversationsGroup 分屏命中归档会话：自动展开并渲染 .nav-item-split / .nav-item-active.nav-item-focused 与 .nav-pane-tag', { timeout: 60_000 }, () => {
+  const conversations = [
+    conv({ id: 1, title: '活跃会话', profileId: 'assistant' }),
+    conv({ id: 77, title: '已归档历史', profileId: 'assistant', tags: [ARCHIVED_TAG] }),
+  ]
+
+  const splitSecondaryHtml = renderSidebar(
+    sidebarStore({
+      conversations,
+      primaryTarget: { kind: 'conversation', conversationId: 1 },
+      splitTarget: { kind: 'conversation', conversationId: 77 },
+    }),
+  )
+  const secondaryHost = document.createElement('div')
+  secondaryHost.innerHTML = splitSecondaryHtml
+  assert.equal(
+    secondaryHost.querySelector('.archived-conversations-group .sidebar-group-header-toggle')?.getAttribute('aria-expanded'),
+    'true',
+    'splitTarget 指向归档会话时分组应自动展开',
+  )
+  const archivedSecondary = findNavRow(splitSecondaryHtml, '已归档历史')
+  assert.equal(archivedSecondary.classList.contains('nav-item-sub'), true)
+  assert.equal(archivedSecondary.classList.contains('nav-item-split'), true)
+  assert.equal(archivedSecondary.classList.contains('nav-item-active'), false)
+  assert.equal(archivedSecondary.classList.contains('nav-item-focused'), false)
+  assert.equal(archivedSecondary.querySelector('.nav-item-main')?.getAttribute('aria-current'), null)
+  const metaChildren = [...(archivedSecondary.querySelector('.nav-item-meta')?.children ?? [])]
+  assert.equal(metaChildren[0]?.className, 'nav-pane-tag', 'paneTag 应前置在 archived-profile-label 之前')
+  assert.equal(metaChildren[0]?.textContent, '分')
+  assert.equal(metaChildren[0]?.getAttribute('title'), '分屏打开')
+  assert.equal(metaChildren[1]?.classList.contains('archived-profile-label'), true)
+
+  const splitFocusedHtml = renderSidebar(
+    sidebarStore({
+      conversations,
+      primaryTarget: { kind: 'conversation', conversationId: 1 },
+      splitTarget: { kind: 'conversation', conversationId: 77 },
+      focusedPanel: 'split',
+    }),
+  )
+  const archivedFocused = findNavRow(splitFocusedHtml, '已归档历史')
+  assert.equal(archivedFocused.classList.contains('nav-item-sub'), true)
+  assert.equal(archivedFocused.classList.contains('nav-item-active'), true)
+  assert.equal(archivedFocused.classList.contains('nav-item-focused'), true)
+  assert.equal(archivedFocused.classList.contains('nav-item-split'), false)
+  assert.equal(archivedFocused.querySelector('.nav-item-main')?.getAttribute('aria-current'), 'page')
+  assert.equal(archivedFocused.querySelector('.nav-pane-tag')?.textContent, '分')
+
+  const sameArchivedHtml = renderSidebar(
+    sidebarStore({
+      conversations,
+      primaryTarget: { kind: 'conversation', conversationId: 77 },
+      splitTarget: { kind: 'conversation', conversationId: 77 },
+    }),
+  )
+  const archivedBoth = findNavRow(sameArchivedHtml, '已归档历史')
+  assert.equal(archivedBoth.classList.contains('nav-item-active'), true)
+  assert.equal(archivedBoth.classList.contains('nav-item-focused'), true)
+  assert.equal(archivedBoth.querySelector('.nav-pane-tag')?.textContent, '主·分')
+  assert.equal(archivedBoth.querySelector('.nav-pane-tag')?.getAttribute('title'), '主屏与分屏均打开')
 })

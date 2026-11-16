@@ -652,20 +652,24 @@ test('有历史智能体名称入口：点击站位行进待命态而非旧会�
   assert.equal(state.createCalls.length, 0)
 })
 
-test('侧栏无折叠钮且父子同时点亮：点击智能体展开其话题列表（参考 magpie）', { timeout: 60_000 }, async () => {
+test('侧栏无折叠钮且待命亮父行/进会话亮子行：点击智能体展开其话题列表', { timeout: 60_000 }, async () => {
   state.conversations.push(summary(5, { profileId: 'coder' }))
   await mount('#/c/1')
   // 折叠展开钮已移除：点击智能体名称是唯一展开入口
   assert.equal(document.querySelectorAll('.agent-collapse-btn').length, 0, '不渲染折叠展开钮')
 
-  // 父强子弱：当前会话所属智能体站位行（父）与当前会话子行（子）同时点亮
+  // 进会话仅亮子行：当前会话所属智能体站位行（父）仅呈分支弱态且无激活底/aria-current，当前会话子行（子）唯一点亮
   const standings0 = [...document.querySelectorAll('.agent-standing')]
   const assistant0 = standings0.find((el) => el.querySelector('.nav-item-label')?.textContent === '个人助理')
-  assert.ok(assistant0?.querySelector('.agent-standing-row')?.className.includes('nav-item-active'), '当前会话所属智能体站位行点亮（父）')
+  const assistant0Row = assistant0?.querySelector('.agent-standing-row')
+  assert.ok(assistant0Row?.className.includes('agent-standing-row-branch'), '当前会话所属智能体站位行呈分支弱态（父）')
+  assert.ok(!assistant0Row?.className.includes('nav-item-active'), '进会话时父站位行不点亮激活底')
+  assert.equal(assistant0Row?.querySelector('.nav-item-main')?.getAttribute('aria-current'), null, '进会话时父站位行不标 aria-current')
   const activeSub = assistant0?.querySelector('.nav-item-sub.nav-item-active')
-  assert.ok(activeSub?.textContent?.includes('会话 1'), '当前会话子行同时点亮（子）')
+  assert.ok(activeSub?.textContent?.includes('会话 1'), '当前会话子行唯一点亮（子）')
+  assert.equal(activeSub?.querySelector('.nav-item-main')?.getAttribute('aria-current'), 'page', '当前会话子行标 aria-current')
 
-  // 点击另一个智能体（编码专员）：进入其待命态并展开其话题列表，原智能体收起
+  // 点击另一个智能体（编码专员）：进入其待命态并展开其话题列表，父站位行点亮而子行不亮，原智能体收起并去掉分支弱态
   const coderName = [...document.querySelectorAll('.agent-standing-row .nav-item-main')]
     .find((btn) => btn.textContent?.includes('编码专员')) as HTMLButtonElement
   await act(async () => { coderName.click() })
@@ -677,8 +681,11 @@ test('侧栏无折叠钮且父子同时点亮：点击智能体展开其话题�
   const assistant = standings.find((el) => el.querySelector('.nav-item-label')?.textContent === '个人助理')
   assert.ok(coder?.querySelector('.agent-conversations-list'), '编码专员话题列表随目标展开')
   assert.ok(coder?.querySelector('.agent-standing-row')?.className.includes('nav-item-active'), '待命智能体站位行点亮')
+  assert.ok(!coder?.querySelector('.agent-standing-row')?.className.includes('agent-standing-row-branch'), '待命父行不带分支弱态')
+  assert.ok(coder?.querySelector('.nav-item-sub.nav-item-active') === null, '待命态下子会话行不点亮')
   assert.ok(!assistant?.querySelector('.agent-conversations-list'), '原智能体话题列表收起')
   assert.ok(!assistant?.querySelector('.agent-standing-row')?.className.includes('nav-item-active'), '原智能体不再点亮')
+  assert.ok(!assistant?.querySelector('.agent-standing-row')?.className.includes('agent-standing-row-branch'), '原智能体去掉分支弱态')
 
   // SSE 实时更新：展开与高亮由目标唯一推导，不被扰动
   await act(async () => {

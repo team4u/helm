@@ -67,9 +67,11 @@
   /* 分段控制器与导航滑轨阴影 */
   --seg-track: #e6e6eb;
   --seg-thumb: #ffffff;
-  --seg-edge: 0 1px 2px rgba(0, 0, 0, 0.14), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+  --seg-edge: 0 1px 2px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
 
-  /* 侧栏选中项 */
+  /* 侧栏交互与选中态色阶 */
+  --nav-hover-bg: #eeeef3;
+  --nav-split-bg: #f2f2f6;
   --nav-active-bg: var(--bg-elevated);
   --nav-active-fg: var(--fg);
   --nav-active-muted: var(--fg-muted);
@@ -167,9 +169,11 @@
 
   --seg-track: rgba(255, 255, 255, 0.035);
   --seg-thumb: rgba(255, 255, 255, 0.15);
-  --seg-edge: inset 0 0.5px 0 rgba(255, 255, 255, 0.08), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --seg-edge: inset 0 0.5px 0 rgba(255, 255, 255, 0.12), 0 1px 2px rgba(0, 0, 0, 0.34), 0 0 0 0.5px rgba(255, 255, 255, 0.07);
 
-  --nav-active-bg: rgba(255, 255, 255, 0.08);
+  --nav-hover-bg: #2a2a31;
+  --nav-split-bg: #27272e;
+  --nav-active-bg: #3c3c45;
   --nav-active-fg: var(--fg);
   --nav-active-muted: var(--fg-muted);
 

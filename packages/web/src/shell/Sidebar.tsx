@@ -8,7 +8,15 @@ import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { isSameResolvedTarget, resolveTargetString, CENTER_TARGETS, spaceForTarget, type HelmStoreValue, type SidebarSpace } from '../lib/types.js'
 import { readBrowserNotificationPermission } from '../lib/browser-notification.js'
 import { formatModShortcut } from './shortcuts-model.js'
-import { extractSidebarViews, filterConversationsByTag, isConversationActive, isConversationArchived } from './sidebar-model.js'
+import {
+  extractSidebarViews,
+  filterConversationsByTag,
+  getConversationPresence,
+  isConversationArchived,
+  presenceNavClassSuffix,
+  resolveSidebarTargetPresence,
+  type SidebarTargetPresence,
+} from './sidebar-model.js'
 import {
   collectBackgroundBadgeDocs,
   summarizeConversationBackgroundActivity,
@@ -21,6 +29,7 @@ import {
   ConversationStatusDot,
   HoverIconButton,
   PendingAsksPanel,
+  SidebarPaneTag,
   StatusDot,
 } from './SidebarPrimitives.js'
 
@@ -52,30 +61,36 @@ function SidebarSectionGroups({ store, background }: { store: HelmStoreValue; ba
 }
 
 /** 单条会话行（插件 sidebar.section 分组内渲染）：状态灯前置行首固定灯位，
- *  右侧只留 #id 与动作区；分屏入口收敛到会话详情顶栏，行内不携带分屏按钮。 */
+ *  右侧保留分屏微标（如有）、#id 与动作区；分屏入口收敛到会话详情顶栏，行内不携带分屏按钮。 */
 function ConversationRow({
   conv,
   background,
-  active,
+  presence,
   onOpen,
 }: {
   conv: ConversationSummary
   background?: ConversationBackgroundActivity
-  active: boolean
+  presence: SidebarTargetPresence
   onOpen: () => void
 }) {
   return (
     <div
-      className={`nav-item${active ? ' nav-item-active' : ''}`}
+      className={`nav-item${presenceNavClassSuffix(presence)}`}
       style={{ minHeight: 30, opacity: 1 }}
     >
-      <button type="button" className="nav-item-main nav-open" onClick={onOpen} aria-current={active ? 'page' : undefined}>
+      <button
+        type="button"
+        className="nav-item-main nav-open"
+        onClick={onOpen}
+        aria-current={presence.active ? 'page' : undefined}
+      >
         <span className="nav-status-slot">
           <ConversationStatusDot conv={conv} background={background} />
         </span>
         <span className="nav-item-label">{conv.title || `会话 #${conv.id}`}</span>
       </button>
       <span className="nav-item-meta">
+        <SidebarPaneTag paneTag={presence.paneTag} />
         <span className="tabular-nums">#{conv.id}</span>
         <span className="nav-item-row-actions">
           <ConversationRowActionsMenu conversation={conv} />
@@ -143,7 +158,7 @@ function SidebarSectionGroup({
             key={conv.id}
             conv={conv}
             background={background.get(conv.id)}
-            active={isConversationActive(store, conv.id)}
+            presence={getConversationPresence(store, conv.id)}
             onOpen={() => store.openTarget({ kind: 'conversation', conversationId: conv.id })}
           />
         ))}
@@ -171,23 +186,24 @@ function ViewNavGroup({ store }: { store: HelmStoreValue }) {
         </div>
       ))}
       {viewItems.map((view) => {
-        const active = isSameResolvedTarget(view.target, store.primaryTarget)
+        const presence = resolveSidebarTargetPresence(store, (t) => isSameResolvedTarget(t, view.target))
         return (
           <div
             key={view.key}
-            className={`nav-item${active ? ' nav-item-active' : ''}`}
+            className={`nav-item${presenceNavClassSuffix(presence)}`}
             style={{ cursor: 'pointer' }}
           >
             <button
               type="button"
               className="nav-item-main nav-open"
               onClick={() => store.openTarget(view.target)}
-              aria-current={active ? 'page' : undefined}
+              aria-current={presence.active ? 'page' : undefined}
             >
               <HelmIcon name={view.icon} size={14} />
               <span className="nav-item-label">{view.label}</span>
             </button>
             <span className="nav-item-meta" onClick={(e) => e.stopPropagation()}>
+              <SidebarPaneTag paneTag={presence.paneTag} />
               <span className="sidebar-split-action">
                 <HoverIconButton
                   className="split-toggle-btn sidebar-split-btn"
@@ -341,13 +357,13 @@ function SettingsNavGroup({ store, onNavigate }: { store: HelmStoreValue; onNavi
   return (
     <div className="sidebar-group settings-nav">
       {CENTER_TARGETS.map((key) => {
-        const active = store.primaryTarget.kind === key
+        const presence = resolveSidebarTargetPresence(store, (t) => t.kind === key)
         return (
-          <div key={key} className={`nav-item settings-nav-item${active ? ' nav-item-active' : ''}`}>
+          <div key={key} className={`nav-item settings-nav-item${presenceNavClassSuffix(presence)}`}>
             <button
               type="button"
               className="nav-item-main nav-open"
-              aria-current={active ? 'page' : undefined}
+              aria-current={presence.active ? 'page' : undefined}
               onClick={() => {
                 store.openTarget({ kind: key })
                 onNavigate?.()
@@ -356,6 +372,11 @@ function SettingsNavGroup({ store, onNavigate }: { store: HelmStoreValue; onNavi
               <HelmIcon name={CENTER_ICONS[key]} size={14} />
               <span className="nav-item-label">{CENTER_LABELS[key]}</span>
             </button>
+            {presence.paneTag !== null && (
+              <span className="nav-item-meta">
+                <SidebarPaneTag paneTag={presence.paneTag} />
+              </span>
+            )}
           </div>
         )
       })}
