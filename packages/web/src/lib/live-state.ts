@@ -260,6 +260,12 @@ export const sseClientTimings = {
    * （EventHub 默认 15s），避免误杀正常空闲连接。
    */
   idleTimeoutMs: 60_000,
+  /** 重连指数退避基础间隔（毫秒）。 */
+  reconnectBaseMs: 1_000,
+  /** 重连指数退避上限（毫秒）。 */
+  reconnectCapMs: 10_000,
+  /** 重连随机抖动上限（毫秒）。 */
+  reconnectJitterMs: 250,
 }
 
 /** 带空闲 Deadline 的单次读取结果：正常 chunk 或超时（连接卡死）。 */
@@ -271,23 +277,43 @@ export type SseIdleRead =
  * 读取一个 SSE chunk 并附带空闲 Deadline：chunk 在超时内到达即返回（每次到达
  * 自然重置下一轮 Deadline，不会误杀活跃连接）；超时返回 { kind: 'idle' }，
  * 由调用方 abort 当前连接解开挂起的 reader.read() 并走统一重连路径。
- * 读取 promise 已被 race 接管：超时取胜后迟到/拒绝的读取不会成为未处理 rejection。
+ * 可选 signal 在已取消或等待期间收到 abort 时立即 reject 并清理定时器与监听，
+ * 避免长超时定时器挂住事件循环。
+ * 读取 promise 已被 race 接管：超时/取消取胜后迟到/拒绝的读取不会成为未处理 rejection。
  */
 export async function readSseChunkWithDeadline(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   idleTimeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<SseIdleRead> {
-  let onIdle: () => void = () => {}
-  const idle = new Promise<void>((resolve) => {
-    onIdle = resolve
-  })
-  const timer = setTimeout(onIdle, idleTimeoutMs)
+  if (signal?.aborted) {
+    throw signal.reason ?? new DOMException('The operation was aborted.', 'AbortError')
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let onAbort: (() => void) | undefined
   try {
-    return await Promise.race([
-      reader.read().then((chunk): SseIdleRead => ({ kind: 'chunk', chunk })),
-      idle.then((): SseIdleRead => ({ kind: 'idle' })),
-    ])
+    const idle = new Promise<SseIdleRead>((resolve) => {
+      timer = setTimeout(() => {
+        resolve({ kind: 'idle' })
+      }, idleTimeoutMs)
+    })
+    const racers: Array<Promise<SseIdleRead>> = [idle]
+    if (signal !== undefined) {
+      racers.push(
+        new Promise<SseIdleRead>((_resolve, reject) => {
+          onAbort = () => {
+            reject(signal.reason ?? new DOMException('The operation was aborted.', 'AbortError'))
+          }
+          signal.addEventListener('abort', onAbort, { once: true })
+        }),
+      )
+    }
+    racers.unshift(reader.read().then((chunk): SseIdleRead => ({ kind: 'chunk', chunk })))
+    return await Promise.race(racers)
   } finally {
-    clearTimeout(timer)
+    if (timer !== undefined) clearTimeout(timer)
+    if (signal !== undefined && onAbort !== undefined) {
+      signal.removeEventListener('abort', onAbort)
+    }
   }
 }
