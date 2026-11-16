@@ -184,9 +184,14 @@ export const MarkdownView = memo(function MarkdownView({ text, conversationId, s
       if (block !== null) {
         return <CodeBlockRenderer language={block.language} code={block.code} conversationId={conversationId} />
       }
-      return <pre className="code-block-pre selectable">{children}</pre>
+      return <pre className="msg-md-pre-fallback code-block-pre selectable">{children}</pre>
     },
     code: ({ className, children }) => <code className={className}>{children}</code>,
+    table: ({ children }) => (
+      <div className="msg-md-table-wrap">
+        <table>{children}</table>
+      </div>
+    ),
     a: ({ href, children }) => {
       const artifactId = parseArtifactUrl(href)
       if (artifactId !== null) {

@@ -159,6 +159,21 @@ test('ConversationTimeline: 正式消息无 queued 样式，分叉按钮保留',
   ]
   const html = renderTimeline('idle', undefined, entries)
   assert.doesNotMatch(html, /msg-human-pill-queued/)
+  assert.doesNotMatch(html, /msg-human-row-external/)
   assert.match(html, /正式消息/)
   assert.match(html, /从此消息分叉新会话/)
+})
+
+test('ConversationTimeline: 外部来源（agent / trigger）行附加 msg-human-row-external 且保留胶囊与脚部类', { timeout: 60_000 }, () => {
+  const entries: ConversationEntry[] = [
+    { id: '10', kind: 'helm.input', data: { id: 't-1', text: '定时任务触发', origin: 'trigger', createdAt: 1 } },
+    { id: '11', kind: 'helm.input', data: { id: 'a-1', text: '智能体汇报内容', origin: 'agent', createdAt: 2 } },
+  ]
+  const html = renderTimeline('idle', undefined, entries)
+  assert.equal((html.match(/msg-human-row-external/g) ?? []).length, 2)
+  assert.match(html, /来自触发器/)
+  assert.match(html, /来自智能体汇报/)
+  assert.match(html, /msg-human-pill/)
+  assert.match(html, /msg-human-footer/)
+  assert.match(html, /msg-origin-tag/)
 })

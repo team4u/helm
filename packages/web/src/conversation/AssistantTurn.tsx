@@ -152,8 +152,13 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
         )
       })}
       {turn.live ? (
-        <span className="msg-origin-tag" aria-label="正在生成" role="status">
+        <span className="msg-origin-tag msg-live-indicator" aria-label="正在生成" role="status">
           <HelmIcon name="loader" size={12.5} className="spin-slow" />
+          <span className="msg-live-dots" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
         </span>
       ) : null}
       {hasTimeInfo || showHoverBar || showModelTag ? (
