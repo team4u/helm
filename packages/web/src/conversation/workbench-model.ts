@@ -6,7 +6,7 @@
  * - 汇总顶栏「工作台」按钮总角标计数与最高优先级色调（warn > accent > neutral）；
  * - 解析当前有效激活页签（无效页签回退首个可用页签）。
  */
-import type { WorkbenchPanelBadgeSpec, WorkbenchPanelSpec } from '@helm/protocol'
+import type { ArtifactKind, ArtifactMetadata, WorkbenchPanelBadgeSpec, WorkbenchPanelSpec } from '@helm/protocol'
 import type { GroupedUiSpecs } from '../lib/types.js'
 
 export type WorkbenchBadgeTone = 'warn' | 'accent' | 'neutral'
@@ -100,7 +100,7 @@ export function buildWorkbenchTabs(input: {
   const tabs: WorkbenchTab[] = [
     {
       id: WORKBENCH_ARTIFACTS_TAB_ID,
-      label: `产物 (${input.artifactCount})`,
+      label: '产物',
       order: 20,
       count: input.artifactCount,
       tone: 'neutral',
@@ -148,12 +148,85 @@ export function resolveActiveWorkbenchTab(
   return tabs[0]?.id ?? WORKBENCH_ARTIFACTS_TAB_ID
 }
 
-/** 抽屉底部状态栏文案：拼接各面板非空 footerText 与产物计数。 */
+/** 抽屉底部状态栏文案：拼接各面板非空 footerText。 */
 export function buildWorkbenchFooter(tabs: ReadonlyArray<WorkbenchTab>): string[] {
   const parts: string[] = []
   for (const tab of tabs) {
     if (tab.footerText !== undefined && tab.footerText !== '') parts.push(tab.footerText)
-    else if (tab.id === WORKBENCH_ARTIFACTS_TAB_ID && tab.count > 0) parts.push(`产物 ${tab.count}`)
   }
   return parts
+}
+
+/** 按产物类型分离正式产物（registered / upload）与系统超长输出溢出快照（spill）。 */
+export interface PartitionedArtifacts {
+  readonly deliverables: ReadonlyArray<ArtifactMetadata>
+  readonly spills: ReadonlyArray<ArtifactMetadata>
+}
+
+export function partitionArtifactsByKind(artifacts: ReadonlyArray<ArtifactMetadata> | undefined): PartitionedArtifacts {
+  if (!Array.isArray(artifacts) || artifacts.length === 0) {
+    return { deliverables: [], spills: [] }
+  }
+  const deliverables: ArtifactMetadata[] = []
+  const spills: ArtifactMetadata[] = []
+  for (const artifact of artifacts) {
+    if (artifact.kind === 'spill') spills.push(artifact)
+    else deliverables.push(artifact)
+  }
+  return { deliverables, spills }
+}
+
+/** 统计当前会话中的正式交付产物数量（排除 spill 输出快照）。 */
+export function countDeliverableArtifacts(artifacts: ReadonlyArray<ArtifactMetadata> | undefined): number {
+  if (!Array.isArray(artifacts) || artifacts.length === 0) return 0
+  let count = 0
+  for (const artifact of artifacts) {
+    if (artifact.kind !== 'spill') count += 1
+  }
+  return count
+}
+
+export function artifactKindLabel(kind: ArtifactKind): string {
+  if (kind === 'registered') return '注册产物'
+  if (kind === 'upload') return '上传附件'
+  return '输出快照'
+}
+
+export function isImageArtifact(mimeType: string): boolean {
+  return mimeType.toLowerCase().startsWith('image/')
+}
+
+export function artifactFormatLabel(mimeType: string, filename: string): string {
+  const mime = mimeType.toLowerCase()
+  if (mime.startsWith('image/')) return '图片'
+  if (mime === 'application/pdf') return 'PDF'
+  if (mime.includes('markdown') || filename.toLowerCase().endsWith('.md')) return 'Markdown'
+  if (mime.includes('json') || filename.toLowerCase().endsWith('.json')) return 'JSON'
+  if (mime.includes('csv') || filename.toLowerCase().endsWith('.csv')) return 'CSV'
+  if (mime.includes('html') || /\.(html?|xhtml)$/i.test(filename)) return 'HTML'
+  if (mime.includes('yaml') || /\.(ya?ml)$/i.test(filename)) return 'YAML'
+  if (mime.startsWith('text/')) return '文本'
+  const dot = filename.lastIndexOf('.')
+  if (dot > 0 && dot < filename.length - 1) {
+    const ext = filename.slice(dot + 1).trim()
+    if (ext.length > 0 && ext.length <= 6) return ext.toUpperCase()
+  }
+  return '文件'
+}
+
+export function artifactIconName(mimeType: string, kind: ArtifactKind): 'file-code' | 'file-text' | 'file' {
+  if (kind === 'spill') return 'file-text'
+  const mime = mimeType.toLowerCase()
+  if (
+    mime.includes('json')
+    || mime.includes('javascript')
+    || mime.includes('typescript')
+    || mime.includes('html')
+    || mime.includes('xml')
+    || mime.includes('yaml')
+  ) {
+    return 'file-code'
+  }
+  if (mime.startsWith('text/') || mime.includes('markdown')) return 'file-text'
+  return 'file'
 }

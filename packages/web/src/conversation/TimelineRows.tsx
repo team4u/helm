@@ -9,6 +9,7 @@ import {
   toolStatusIcon,
   toolSummaryText,
   type FoldableStep,
+  type ProcessShortcutCommand,
   type ToolTrace,
 } from './timeline-model.js'
 import { toolRowStats } from './tool-body-model.js'
@@ -136,11 +137,13 @@ export function StepGroup({
   active,
   conversationId,
   siblingCalls,
+  shortcutToggle,
 }: {
   steps: FoldableStep[]
   active: boolean
   conversationId: number
   siblingCalls: ReadonlyArray<import('@helm/protocol').ToolViewSiblingCall>
+  shortcutToggle?: ProcessShortcutCommand
 }) {
   const firstStep = steps[0]
   if (steps.length === 1 && firstStep !== undefined && firstStep.kind === 'thinking') {
@@ -149,10 +152,36 @@ export function StepGroup({
         text={firstStep.thinking.text}
         active={firstStep.thinking.active ?? active}
         conversationId={conversationId}
+        shortcutToggle={shortcutToggle}
+        isRootProcessToggle
       />
     )
   }
 
+  return (
+    <MultiStepGroup
+      steps={steps}
+      active={active}
+      conversationId={conversationId}
+      siblingCalls={siblingCalls}
+      shortcutToggle={shortcutToggle}
+    />
+  )
+}
+
+function MultiStepGroup({
+  steps,
+  active,
+  conversationId,
+  siblingCalls,
+  shortcutToggle,
+}: {
+  steps: FoldableStep[]
+  active: boolean
+  conversationId: number
+  siblingCalls: ReadonlyArray<import('@helm/protocol').ToolViewSiblingCall>
+  shortcutToggle?: ProcessShortcutCommand
+}) {
   const [userOverride, setUserOverride] = useState<boolean | null>(null)
   const prevActiveRef = useRef(active)
   if (prevActiveRef.current !== active) {
@@ -161,7 +190,18 @@ export function StepGroup({
       setUserOverride(null)
     }
   }
+  const shortcutExpandSeqRef = useRef<number | null>(null)
+  const prevShortcutSeqRef = useRef<number | undefined>(shortcutToggle?.seq)
+  if (shortcutToggle !== undefined && shortcutToggle.seq !== prevShortcutSeqRef.current) {
+    prevShortcutSeqRef.current = shortcutToggle.seq
+    setUserOverride(shortcutToggle.open)
+    shortcutExpandSeqRef.current = shortcutToggle.open ? shortcutToggle.seq : null
+  }
   const open = userOverride ?? active
+  const openedByCurrentShortcut =
+    shortcutToggle !== undefined &&
+    shortcutToggle.open &&
+    shortcutExpandSeqRef.current === shortcutToggle.seq
 
   const hasOnlyThinking = steps.every((s) => s.kind === 'thinking')
   const summaryTitle = hasOnlyThinking
@@ -177,7 +217,12 @@ export function StepGroup({
       <button
         type="button"
         className="trace-group-summary"
-        onClick={() => setUserOverride(!open)}
+        aria-expanded={open}
+        data-process-toggle="root"
+        onClick={() => {
+          shortcutExpandSeqRef.current = null
+          setUserOverride(!open)
+        }}
         title={open ? '收起思考与执行过程' : '展开思考与执行过程'}
       >
         <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
@@ -193,6 +238,8 @@ export function StepGroup({
                 text={step.thinking.text}
                 active={step.thinking.active}
                 conversationId={conversationId}
+                defaultOpen={openedByCurrentShortcut}
+                shortcutToggle={shortcutToggle}
               />
             ) : (
               <TraceRow
@@ -215,11 +262,15 @@ export function ThinkingRow({
   conversationId,
   active = false,
   defaultOpen = false,
+  shortcutToggle,
+  isRootProcessToggle = false,
 }: {
   text: string
   conversationId?: number
   active?: boolean
   defaultOpen?: boolean
+  shortcutToggle?: ProcessShortcutCommand
+  isRootProcessToggle?: boolean
 }) {
   const [userOverride, setUserOverride] = useState<boolean | null>(null)
   const prevActiveRef = useRef(active)
@@ -229,6 +280,11 @@ export function ThinkingRow({
       setUserOverride(null)
     }
   }
+  const prevShortcutSeqRef = useRef<number | undefined>(shortcutToggle?.seq)
+  if (shortcutToggle !== undefined && shortcutToggle.seq !== prevShortcutSeqRef.current) {
+    prevShortcutSeqRef.current = shortcutToggle.seq
+    setUserOverride(shortcutToggle.open)
+  }
   const open = userOverride ?? (active || defaultOpen)
 
   return (
@@ -236,6 +292,8 @@ export function ThinkingRow({
       <button
         type="button"
         className="trace-group-summary"
+        aria-expanded={open}
+        {...(isRootProcessToggle ? { 'data-process-toggle': 'root' } : {})}
         onClick={() => setUserOverride(!open)}
         title={open ? '收起思考过程' : '展开思考过程'}
       >

@@ -302,7 +302,7 @@ test('动态工作台按 scope/order/public-doc badge 渲染，首帧前保留�
     await ui.render(store, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
     assert.deepEqual(selections, [], '快照到达后有效深链仍然有效')
     const labels = [...ui.host.querySelectorAll('.tab-btn')].map((button) => button.textContent)
-    assert.deepEqual(labels, ['动态队列', '产物 (0)', '后置面板'])
+    assert.deepEqual(labels, ['动态队列3', '产物', '后置面板'])
     assert.match(ui.host.textContent!, /3 项待处理/)
     assert.doesNotMatch(ui.host.textContent!, /其他档案/)
     assert.ok(!docs.some(([, doc]) => doc === 'hidden'), '不可见面板不应加载角标文档')
