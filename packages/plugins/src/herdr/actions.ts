@@ -1,11 +1,11 @@
 /**
- * builtin:herdr 的 ctx.action 注册（list / read / focus / steer）与 pane 消歧。
+ * builtin:herdr's ctx.action registrations (list / read / focus / steer) and pane disambiguation.
  *
- * 从 herdr.ts 拆出（行为与拆分前逐行等价）；依赖经 HerdrActionsDeps 注入：
- * - HTTP/CLI 同权 --json；read 40 行脱敏；focus 为用户显式操作；
- * - read/focus 支持 nodeId 消歧，歧义显式 409；
- * - steer 为 onResolved.controls.steer 委托目标：直调同样独立做调用方祖先链
- *   授权、父会话/run 强匹配与受管 (nodeId, paneId) 精确定位（不因直调豁免授权）。
+ * Split out of herdr.ts (behavior line-for-line equivalent to before the split); dependencies injected via HerdrActionsDeps:
+ * - HTTP/CLI equal footing with --json; read redacts to the last 40 lines; focus is an explicit user action;
+ * - read/focus support nodeId disambiguation, ambiguity returns explicit 409;
+ * - steer is the delegation target of onResolved.controls.steer: direct calls still independently perform
+ *   caller-ancestor-chain authorization, parent conversation/run strict matching and exact managed (nodeId, paneId) targeting (no authorization exemption for direct calls).
  */
 
 import { HelmError, type HelmPluginContext } from '@helm/protocol'
@@ -17,32 +17,32 @@ import { nodeIdOf, type ManagedPane, type PaneRegistry } from './panes.js'
 import { parseAgentResult, parsePaneRead } from './rpc.js'
 import { isValidNodeId } from './transport.js'
 
-/** actions 对插件主干（herdr.ts）的最小依赖面。 */
+/** The actions' minimal dependency surface on the plugin main (herdr.ts). */
 export interface HerdrActionsDeps {
-  /** registry 现值（未启用时 undefined：list 空表，其余按未管理/未连接报错）。 */
+  /** The registry's current value (undefined when not enabled: list is empty, others report unmanaged/not-connected). */
   registry(): PaneRegistry | undefined
   executor(): HerdrExecutor | undefined
   transport(): HerdrTransport
   redact(text: string): string
   /**
-   * 会话父链解析（宿主 getConversation 桥；not_found 折叠为 undefined，
-   * 其余错误如实上抛）——steer 调用方祖先链授权用。
+   * Conversation parent-chain resolution (host getConversation bridge; not_found folds to undefined,
+   * other errors propagate as-is) -- for the steer caller-ancestor-chain authorization.
    */
   parentOfConversation(id: number): number | undefined
 }
 
-/** pane 消歧解析：registry 命中多个节点同 ID pane 时显式 409。 */
+/** Pane disambiguation resolution: an explicit 409 when the registry hits same-ID panes on multiple nodes. */
 function resolvePane(registry: PaneRegistry | undefined, input: { paneId: string; nodeId?: string }): ManagedPane {
   if (registry === undefined) {
-    throw new HelmError('not_found', `pane ${input.paneId} 不由 builtin:herdr 管理`, 404, { paneId: input.paneId })
+    throw new HelmError('not_found', `pane ${input.paneId} is not managed by builtin:herdr`, 404, { paneId: input.paneId })
   }
   if (input.nodeId !== undefined && input.nodeId !== '') {
     if (!isValidNodeId(input.nodeId)) {
-      throw new HelmError('validation_error', `nodeId '${input.nodeId}' 非法`, 400, { nodeId: input.nodeId })
+      throw new HelmError('validation_error', `nodeId '${input.nodeId}' is invalid`, 400, { nodeId: input.nodeId })
     }
     const pane = registry.get(input.nodeId === 'local' ? undefined : input.nodeId, input.paneId)
     if (pane === undefined) {
-      throw new HelmError('not_found', `pane ${input.paneId}@${input.nodeId} 不由 builtin:herdr 管理`, 404, {
+      throw new HelmError('not_found', `pane ${input.paneId}@${input.nodeId} is not managed by builtin:herdr`, 404, {
         paneId: input.paneId,
         nodeId: input.nodeId,
       })
@@ -51,12 +51,12 @@ function resolvePane(registry: PaneRegistry | undefined, input: { paneId: string
   }
   const candidates = registry.all().filter((p) => p.paneId === input.paneId)
   if (candidates.length === 0) {
-    throw new HelmError('not_found', `pane ${input.paneId} 不由 builtin:herdr 管理`, 404, { paneId: input.paneId })
+    throw new HelmError('not_found', `pane ${input.paneId} is not managed by builtin:herdr`, 404, { paneId: input.paneId })
   }
   if (candidates.length > 1) {
     throw new HelmError(
       'pane_ambiguous',
-      `pane ${input.paneId} 在多个节点存在（${candidates.map((p) => nodeIdOf(p) ?? 'local').join(', ')}），请用 nodeId 字段消歧`,
+      `pane ${input.paneId} exists on multiple nodes (${candidates.map((p) => nodeIdOf(p) ?? 'local').join(', ')}); disambiguate with the nodeId field`,
       409,
       { paneId: input.paneId, nodeIds: candidates.map((p) => nodeIdOf(p) ?? 'local') },
     )
@@ -64,12 +64,12 @@ function resolvePane(registry: PaneRegistry | undefined, input: { paneId: string
   return candidates[0]!
 }
 
-/** 注册 list / read / focus / steer 四个动作（herdr.ts definePlugin 期调用一次）。 */
+/** Register the four actions list / read / focus / steer (called once at herdr.ts definePlugin). */
 export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsDeps): void {
-  // ---- actions（HTTP/CLI 同权；read 40 行脱敏；focus 显式操作） ----
+  // ---- actions (HTTP/CLI equal footing; read redacts to 40 lines; focus is an explicit action) ----
   ctx.action<Record<string, never>, { panes: Array<Record<string, unknown>> }>({
     id: 'list',
-    description: '列出本插件管理的 Herdr 窗格（nodeId/pane/状态/归属）',
+    description: 'List Herdr panes managed by this plugin (nodeId/pane/status/ownership)',
     idempotent: true,
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     outputSchema: {
@@ -98,13 +98,13 @@ export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsD
 
   ctx.action<{ paneId: string; nodeId?: string }, { paneId: string; nodeId: string; text: string }>({
     id: 'read',
-    description: '读取本插件管理窗格的终端尾部快照（40 行，脱敏；跨节点同 ID 用 nodeId 消歧）',
+    description: 'Read the terminal tail snapshot of a pane managed by this plugin (40 lines, redacted; use nodeId to disambiguate same-ID panes across nodes)',
     idempotent: true,
     inputSchema: {
       type: 'object',
       properties: {
         paneId: { type: 'string', minLength: 1 },
-        nodeId: { type: 'string', description: '目标节点（缺省本机；同 ID 多节点时必填消歧）' },
+        nodeId: { type: 'string', description: 'Target node (defaults to local; required for disambiguation when the same ID exists on multiple nodes)' },
       },
       required: ['paneId'],
       additionalProperties: false,
@@ -131,12 +131,12 @@ export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsD
 
   ctx.action<{ paneId: string; nodeId?: string }, { paneId: string; nodeId: string; focused: boolean }>({
     id: 'focus',
-    description: '在 Herdr 终端聚焦指定窗格（用户显式操作；跨节点同 ID 用 nodeId 消歧）',
+    description: 'Focus a pane in the Herdr terminal (explicit user action; use nodeId to disambiguate same-ID panes across nodes)',
     inputSchema: {
       type: 'object',
       properties: {
         paneId: { type: 'string', minLength: 1 },
-        nodeId: { type: 'string', description: '目标节点（缺省本机；同 ID 多节点时必填消歧）' },
+        nodeId: { type: 'string', description: 'Target node (defaults to local; required for disambiguation when the same ID exists on multiple nodes)' },
       },
       required: ['paneId'],
       additionalProperties: false,
@@ -149,8 +149,8 @@ export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsD
     },
     async handler(input) {
       const pane = resolvePane(deps.registry(), input)
-      // 真实协议（服务端源码 agents.rs:35-41）：agent.focus 返回
-      // ResponseResult::AgentInfo { agent }（agent_info），非 ok。
+      // Real protocol (server source agents.rs:35-41): agent.focus returns
+      // ResponseResult::AgentInfo { agent } (agent_info), not ok.
       const info = parseAgentResult(
         await deps.transport().call(pane.target, 'agent.focus', { target: pane.paneId }),
         'agent.focus',
@@ -159,7 +159,7 @@ export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsD
       if (info.focused !== true) {
         throw new HelmError(
           'herdr_focus_failed',
-          `agent.focus 返回 focused=false（pane ${pane.paneId}@${nodeIdOf(pane) ?? 'local'}）`,
+          `agent.focus returned focused=false (pane ${pane.paneId}@${nodeIdOf(pane) ?? 'local'})`,
           502,
           { paneId: pane.paneId, nodeId: nodeIdOf(pane) ?? 'local' },
         )
@@ -168,24 +168,24 @@ export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsD
     },
   })
 
-  // ---- 动作 steer：受管窗格运行中插话（onResolved.controls.steer 委托目标） ----
-  // 通常由 builtin:workflow.steer 依据节点 controls 动态路由到本动作，也可
-  // HTTP/CLI/run_action 直调；直调同样独立做调用方祖先链授权、父会话/run
-  // 强匹配与受管 (nodeId, paneId) 精确定位（不因直调豁免授权）。投递唯一
-  // 入口 executor.steerPane：受管 task 阶段预检后调用现有 agent.prompt；
-  // preflight 不承诺提交点 CAS，steered 仅代表投递成功。
+  // ---- action steer: in-flight steer for a managed pane (onResolved.controls.steer delegation target) ----
+  // Usually builtin:workflow.steer routes here dynamically per node controls; it can also be
+  // called directly via HTTP/CLI/run_action; direct calls still independently perform
+  // caller-ancestor-chain authorization, parent conversation/run strict matching and exact
+  // managed (nodeId, paneId) targeting (no authorization exemption for direct calls). The single delivery
+  // entry is executor.steerPane: after the managed task-phase precheck it calls the existing agent.prompt;
   ctx.action<ExternalSteerRequest, ExternalSteerResult>({
     id: HERDR_STEER_CONTROLS.actionId,
     description:
-      '向本插件受管、且由 workflow run 派生的 Herdr 窗格补充指导。仅任务执行期预检为 working 时发送，使用 Herdr 原生 agent.prompt；预检与投递之间刚变为 idle 时允许接续一轮。blocked 交原审批桥处理，关闭、交接和 Gate 阶段拒绝。guardLevel=preflight 表示发送前检查，不保证提交点 CAS；steered=true 仅代表已投递。超时或断线不自动重试。',
+      'Supplement guidance to a Herdr pane managed by this plugin and derived from a workflow run. Sent only when the task-phase precheck is working, using the native Herdr agent.prompt; a submission that just turned idle between precheck and delivery is allowed to continue for one round. blocked goes to the original approval bridge; closing, handoff and Gate phases are rejected. guardLevel=preflight means a pre-send check with no commit-point CAS guarantee; steered=true only means delivered. Timeouts or disconnects are not auto-retried.',
     inputSchema: {
       type: 'object',
       properties: {
-        executionId: { type: 'string', minLength: 1, description: '受管执行标识（onResolved.executionId，即 paneId）' },
-        nodeId: { type: 'string', description: "实际执行节点（'local' 或节点 ID；必须与窗格登记一致）" },
-        workflowRunId: { type: 'string', minLength: 1, description: '派生该窗格的 workflow run ID（强匹配；仅限 run 管理下的窗格）' },
-        parentConversationId: { type: 'number', minimum: 1, description: '派生该窗格的父会话 ID（强匹配）' },
-        text: { type: 'string', minLength: 1, description: '插话指导内容（非空；脱敏后附交接契约提醒注入终端）' },
+        executionId: { type: 'string', minLength: 1, description: 'Managed execution identifier (onResolved.executionId, i.e. the paneId)' },
+        nodeId: { type: 'string', description: "Actual execution node ('local' or a node ID; must match the pane registration)" },
+        workflowRunId: { type: 'string', minLength: 1, description: 'The workflow run ID that derived the pane (strict match; only for panes managed under a run)' },
+        parentConversationId: { type: 'number', minimum: 1, description: 'The parent conversation ID that derived the pane (strict match)' },
+        text: { type: 'string', minLength: 1, description: 'Steer guidance text (non-empty; redacted and injected into the terminal with a handoff-contract reminder)' },
       },
       required: ['executionId', 'nodeId', 'workflowRunId', 'parentConversationId', 'text'],
       additionalProperties: false,
@@ -196,16 +196,16 @@ export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsD
         steered: { type: 'boolean', const: true },
         executionId: { type: 'string' },
         nodeId: { type: 'string' },
-        stateChangeSeq: { type: 'number', minimum: 0, description: '发送前预检观测的权威水位' },
+        stateChangeSeq: { type: 'number', minimum: 0, description: 'The authoritative watermark observed by the pre-send precheck' },
         ownership: { type: 'string', const: 'helm' },
-        guardLevel: { type: 'string', const: 'preflight', description: '发送前预检，不承诺提交点 CAS' },
+        guardLevel: { type: 'string', const: 'preflight', description: 'Pre-send check; no commit-point CAS promise' },
       },
       required: ['steered', 'executionId', 'nodeId', 'stateChangeSeq', 'ownership', 'guardLevel'],
       additionalProperties: false,
     },
     cli: {
       command: ['herdr', 'steer'],
-      description: '向受管 Herdr 窗格补充指导（通常用 helm workflows steer <runId> 自动路由）',
+      description: 'Supplement guidance to a managed Herdr pane (usually auto-routed via helm workflows steer <runId>)',
       timeoutMs: 15_000,
     },
     async handler(input, context) {
@@ -214,39 +214,39 @@ export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsD
       if (registry === undefined || executor === undefined) {
         throw new HelmError(
           'herdr_not_connected',
-          'Herdr 服务未启动（未连接目标服务器），无法插话',
+          'The Herdr service is not started (target server not connected); cannot steer',
           409,
         )
       }
-      // 受管节点精确定位：显式 nodeId 必须与登记一致（不接受同 pane 不同
-      // node；'local' 折叠为本机缺省）。
+      // Exact managed-node targeting: an explicit nodeId must match the registration (the same pane on a
+      // different node is not accepted; 'local' folds to the local default).
       if (input.nodeId !== 'local' && !isValidNodeId(input.nodeId)) {
-        throw new HelmError('validation_error', `nodeId '${input.nodeId}' 非法`, 400, { nodeId: input.nodeId })
+        throw new HelmError('validation_error', `nodeId '${input.nodeId}' is invalid`, 400, { nodeId: input.nodeId })
       }
       const pane = registry.get(input.nodeId === 'local' ? undefined : input.nodeId, input.executionId)
       if (pane === undefined) {
         throw new HelmError(
           'not_found',
-          `窗格 ${input.executionId}@${input.nodeId} 不由 builtin:herdr 管理`,
+          `pane ${input.executionId}@${input.nodeId} is not managed by builtin:herdr`,
           404,
           { executionId: input.executionId, nodeId: input.nodeId },
         )
       }
-      // 调用方祖先链独立授权：携带会话上下文的调用必须是 run 父会话的
-      // 自身或祖先。会话上下文在模型路径由内核注入；HTTP 自报
-      // conversationId 仅作作用域提示（非认证），不匹配同样拒绝。
+      // Caller-ancestor-chain authorization, independent: a call carrying conversation context must be the
+      // run's parent conversation itself or an ancestor. The conversation context is injected by the kernel on
+      // the model path; a self-reported HTTP conversationId is a scope hint only (not authentication) and mismatches are rejected too.
       const caller = context.conversationId
       if (caller !== undefined) {
         if (!isAncestorOrSelf(input.parentConversationId, caller, deps.parentOfConversation)) {
           throw new HelmError(
             'herdr_steer_out_of_scope',
-            `会话 ${caller} 无权插话窗格 ${input.executionId}：该窗格属父会话 ${input.parentConversationId} 的运行，仅其自身或祖先（或人工 HTTP/CLI）可插话`,
+            `conversation ${caller} is not allowed to steer pane ${input.executionId}: the pane belongs to a run of parent conversation ${input.parentConversationId}; only itself or its ancestors (or manual HTTP/CLI) may steer`,
             403,
             { callerConversationId: caller, parentConversationId: input.parentConversationId, executionId: input.executionId },
           )
         }
       }
-      // 投递（归属、阶段与运行状态在 executor 内独立复核）。
+      // Delivery (ownership, phase and run state are independently rechecked inside the executor).
       const { stateChangeSeq } = await executor.steerPane(pane, {
         workflowRunId: input.workflowRunId,
         parentConversationId: input.parentConversationId,
