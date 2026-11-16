@@ -25,8 +25,7 @@
  *    一律不放行。
  */
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
 import { HelmError, type ConversationSummary } from '@helm/protocol'
@@ -35,6 +34,10 @@ import {
   type WorkflowServiceHost,
   type WorkflowStateStore,
 } from '../src/workflow/engine/service.js'
+import {
+  makeConversationSummary as baseConversationSummary,
+  useTempDir as createTempDir,
+} from './helpers/plugin-test-env.js'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -42,28 +45,11 @@ const timeout = { timeout: 60_000 } as const
 // 测试环境：真实 dataDir + Map 态 state store + 最小宿主桩
 // ---------------------------------------------------------------------------
 
-function makeConversationSummary(id: number): ConversationSummary {
-  return {
-    id,
-    title: `conv-${id}`,
-    profileId: 'assistant',
-    tags: [],
-    cwd: '/tmp',
-    model: 'faux/faux-1',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 0,
-    updatedAt: 0,
-  }
-}
+const makeConversationSummary = (id: number): ConversationSummary =>
+  baseConversationSummary({ id, model: 'faux/faux-1', createdAt: 0, updatedAt: 0 })
 
 function makeEnv(t: TestContext) {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-auto-resume-'))
+  const dataDir = createTempDir(t, 'helm-wf-auto-resume-')
   const docs = new Map<string, unknown>()
   const state: WorkflowStateStore = {
     get<T>(key: string, initial: T): T {
@@ -89,7 +75,6 @@ function makeEnv(t: TestContext) {
   const service = new WorkflowService({ dataDir, state, host })
   t.after(async () => {
     await service.close().catch(() => {})
-    rmSync(dataDir, { recursive: true, force: true })
   })
   return { dataDir, docs, service }
 }

@@ -1,26 +1,15 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { test } from 'node:test'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
 import type { TurnSettledPayload } from '@helm/protocol'
-
-function deferred() {
-  let resolve!: () => void
-  const promise = new Promise<void>((done) => { resolve = done })
-  return { promise, resolve }
-}
+import { cleanupDir, deferred, makeFauxModels, makeTempDir, type Deferred } from './helpers/plugin-test-env.js'
 
 async function fixture() {
-  const dataDir = await mkdtemp(join(tmpdir(), 'helm-settlement-'))
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
+  const dataDir = await makeTempDir('helm-settlement-')
+  const { models, faux } = makeFauxModels()
   const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
-  return { kernel, faux, async close() { try { await kernel.close() } finally { await rm(dataDir, { recursive: true, force: true }) } } }
+  return { kernel, faux, async close() { try { await kernel.close() } finally { await cleanupDir(dataDir) } } }
 }
 
 const nextLoop = () => new Promise<void>((resolve) => setImmediate(resolve))
@@ -95,7 +84,7 @@ test('close 等待所有并发会话的结算，不仅等待最后发起的一�
   const env = await fixture()
   const bothStarted = deferred()
   const order: number[] = []
-  const releases = new Map<number, ReturnType<typeof deferred>>()
+  const releases = new Map<number, Deferred<void>>()
   let closing: Promise<void> | undefined
   try {
     const second = await env.kernel.createConversation({})

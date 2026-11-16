@@ -10,25 +10,25 @@
  */
 import assert from 'node:assert/strict'
 import { test, before, after } from 'node:test'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HelmError, type ConversationSummary } from '@helm/protocol'
-import { PluginHost, type PluginHostBackend, type PluginDocStore } from '../../kernel/src/plugins/index.js'
+import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createHerdrPlugin } from '../src/herdr.js'
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
 import { compilePluginClientModule, createPluginBuildProvider } from '@helm/plugin-build'
 import { serveTransport } from './helpers/herdr-unit-fixture.js'
+import {
+  MemoryConfigStore,
+  MemoryDocStore,
+  cleanupDir,
+  makeConversationSummary,
+  makeTempDir,
+  useTempDir,
+} from './helpers/plugin-test-env.js'
 
 let dataDir: string
 let pluginHost: PluginHost
 let served: { close(): Promise<void> } | undefined
-
-class MemoryConfigStore {
-  constructor(private readonly initial: Record<string, unknown> = {}) {}
-  get(): Record<string, unknown> { return this.initial }
-  set(): void {}
-}
 
 /** 最小空协议 transport（snapshot 空会话；订阅空事件流）。 */
 function emptyTransport(): import('../src/herdr/contracts.js').HerdrTransport {
@@ -50,30 +50,7 @@ function emptyTransport(): import('../src/herdr/contracts.js').HerdrTransport {
   }
 }
 
-function summary(id: number): ConversationSummary {
-  return {
-    id, title: `conv-${id}`, profileId: 'assistant', tags: [], cwd: '/tmp', model: '', thinkingLevel: '',
-    status: 'idle', stateChangeSeq: 1, completionSeq: 0, unread: false, pinned: false,
-    pendingAskCount: 0, createdAt: 1, updatedAt: 1,
-  }
-}
-
-class MemoryDocStore implements PluginDocStore {
-  store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
+const summary = (id: number): ConversationSummary => makeConversationSummary({ id, model: '' })
 
 function makeBackend(): PluginHostBackend {
   return {
@@ -105,7 +82,7 @@ function makeBackend(): PluginHostBackend {
 }
 
 before(async () => {
-  dataDir = await mkdtemp(join(tmpdir(), 'helm-herdr-client-'))
+  dataDir = await makeTempDir('helm-herdr-client-')
   // 受控空协议服务器：启用即连接（snapshot/subscribe 成功即注册完成）。
   const socketPath = join(dataDir, 'herdr.sock')
   served = await serveTransport(emptyTransport(), socketPath)
@@ -120,7 +97,7 @@ before(async () => {
 after(async () => {
   await pluginHost.dispose().catch(() => {})
   await served?.close().catch(() => {})
-  await rm(dataDir, { recursive: true, force: true })
+  await cleanupDir(dataDir)
 })
 
 test('client/index.tsx 真实编译：产物含 HerdrOverviewScreen 导出与样式文本', { timeout: 60_000 }, async () => {
@@ -134,11 +111,10 @@ test('client/index.tsx 真实编译：产物含 HerdrOverviewScreen 导出与样
   assert.ok(contentHash.length > 0, '内容 hash 非空')
 })
 
-test('模型函数：筛选 / 统计 / 参数解析纯函数（models.ts 编译产物导入）', { timeout: 60_000 }, async () => {
+test('模型函数：筛选 / 统计 / 参数解析纯函数（models.ts 编译产物导入）', { timeout: 60_000 }, async (t) => {
   const definition = createHerdrPlugin()
-  const cacheDir = await mkdtemp(join(tmpdir(), 'helm-herdr-models-'))
-  try {
-    const { code } = await compilePluginClientModule('builtin:herdr', definition.clientRoot!, 'models.ts', cacheDir)
+  const cacheDir = useTempDir(t, 'helm-herdr-models-')
+  const { code } = await compilePluginClientModule('builtin:herdr', definition.clientRoot!, 'models.ts', cacheDir)
     const mod = (await import(`data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}`)) as Record<string, unknown>
     const parseFilters = mod['parseFilters'] as (p: Record<string, string>) => Record<string, string>
     const filtersToParamsPatch = mod['filtersToParamsPatch'] as (f: Record<string, string>) => Record<string, string | undefined>
@@ -208,9 +184,6 @@ test('模型函数：筛选 / 统计 / 参数解析纯函数（models.ts 编译�
     // 23 种 CLI 候选完整（Herdr detect::agent_label 全集）
     assert.equal(suggestions.length, 23)
     assert.ok(suggestions.includes('agy') && suggestions.includes('pi'))
-  } finally {
-    await rm(cacheDir, { recursive: true, force: true })
-  }
 })
 
 test('插件注册：screen client 引用与 profileRuntime 贡献如实进入 listUi', { timeout: 60_000 }, async () => {

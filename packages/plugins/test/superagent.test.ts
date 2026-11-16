@@ -17,13 +17,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxProvider, fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 
 import { HelmError } from '@helm/protocol'
 import { createHelm } from '../../hub/src/app.js'
 import { MemoryStore } from '../src/memory/store.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import { makeFauxModels, useTempDir, waitFor, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 import {
   parseMutedSources,
   resolveSuperAgentConfig,
@@ -48,7 +48,7 @@ const WORKER_REPORT_MARKER = 'superagent:worker-report'
 interface TestEnv {
   dataDir: string
   dbPath: string
-  faux: ReturnType<typeof fauxProvider>
+  faux: FauxProviderHandle
   app: Awaited<ReturnType<typeof createHelm>>
   /** 提交输入并等回合真正结算（含 turn_settled 钩子）。 */
   submitAndWait(conversationId: number, text: string, opts?: { origin?: 'human' | 'agent' | 'trigger' }): Promise<void>
@@ -57,9 +57,7 @@ interface TestEnv {
 
 async function makeEnv(): Promise<TestEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-superagent-'))
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
+  const { models, faux } = makeFauxModels()
   const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   faux.setResponses([])
   const env: TestEnv = {
@@ -99,16 +97,6 @@ async function readDocRaw(env: TestEnv, name: string): Promise<unknown> {
 
 async function enableSuperAgent(env: TestEnv): Promise<void> {
   await env.app.kernel.plugins.enable('builtin:superagent')
-}
-
-/** 等待谓词成立（轮询，默认 5s 超时）。 */
-async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    if (await predicate()) return
-    if (Date.now() > deadline) assert.fail('waitFor 超时：条件在限定时间内未成立')
-    await new Promise((r) => setTimeout(r, 25))
-  }
 }
 
 /** 取 doc index 中登记的 router/watchdog 会话 ID。 */
@@ -408,13 +396,11 @@ test('superagent5: 幂等自举——不覆盖用户文件；partial-start 补�
   }
 })
 
-test('superagent6: 重启复用常驻 ID；停用期间被删则重建；Profile 被改则显式诊断', { timeout: 60_000 }, async () => {
+test('superagent6: 重启复用常驻 ID；停用期间被删则重建；Profile 被改则显式诊断', { timeout: 60_000 }, async (t) => {
   // 6a. 重启复用
   {
-    const dataDir = mkdtempSync(join(tmpdir(), 'helm-superagent-restart-'))
-    const faux = fauxProvider()
-    const models = createModels()
-    models.setProvider(faux.provider)
+    const dataDir = useTempDir(t, 'helm-superagent-restart-')
+    const { models } = makeFauxModels()
     const first = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
     await first.kernel.plugins.enable('builtin:superagent')
     const ids1 = await residentIdsRaw(dataDir)
@@ -428,11 +414,7 @@ test('superagent6: 重启复用常驻 ID；停用期间被删则重建；Profile
       assert.equal(ids2.router, ids1.router)
       assert.equal(ids2.watchdog, ids1.watchdog)
     } finally {
-      try {
-        await second.close()
-      } finally {
-        rmSync(dataDir, { recursive: true, force: true })
-      }
+      await second.close()
     }
   }
   // 6b. 停用期间删除常驻会话 → 重新启用时重建（不盲目占用）
@@ -1106,11 +1088,9 @@ test('superagent16: UI 贡献——侧栏/分组/胶囊挂件/工具卡/时间�
 // 8. doc 损坏显式拒绝
 // ---------------------------------------------------------------------------
 
-test('superagent17: 持久 doc 损坏时启用显式失败（不静默重建）', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-superagent-corrupt-'))
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
+test('superagent17: 持久 doc 损坏时启用显式失败（不静默重建）', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helm-superagent-corrupt-')
+  const { models } = makeFauxModels()
   const first = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   try {
     await first.kernel.plugins.enable('builtin:superagent')
@@ -1122,17 +1102,13 @@ test('superagent17: 持久 doc 损坏时启用显式失败（不静默重建）'
   }
   // 重启：持久启停为 true → 注册期 service.start 读入坏 doc，启动显式失败
   // （createHelm 如实 reject，不静默重建、不吞错）。
-  try {
-    await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models }).then(
-      () => assert.fail('损坏 doc 下启动应显式失败'),
-      (err: unknown) => {
-        assert.ok(err instanceof HelmError, `应为 HelmError，实际 ${String(err)}`)
-        assert.equal(err.code, 'superagent_doc_corrupt')
-      },
-    )
-  } finally {
-    rmSync(dataDir, { recursive: true, force: true })
-  }
+  await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models }).then(
+    () => assert.fail('损坏 doc 下启动应显式失败'),
+    (err: unknown) => {
+      assert.ok(err instanceof HelmError, `应为 HelmError，实际 ${String(err)}`)
+      assert.equal(err.code, 'superagent_doc_corrupt')
+    },
+  )
 })
 
 // ---------------------------------------------------------------------------
@@ -1179,9 +1155,7 @@ test('superagent 记忆归属: 已初始化文件被删后重启/superagent 重�
     // 重启整个内核（superagent + memory 均随 createHelm 重新自举）
     const dataDir = env.dataDir
     await env.app.close()
-    const faux2 = fauxProvider()
-    const models2 = createModels()
-    models2.setProvider(faux2.provider)
+    const { models: models2, faux: faux2 } = makeFauxModels()
     const app2 = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: models2 })
     try {
       assert.equal(existsSync(memoryPath), false, '重启自举不得补回已删除的记忆文件')
@@ -1298,6 +1272,37 @@ test('superagent19: recall_context 只读（不写 routing doc）；已归档 Wo
     assert.equal(archived.defaultCollapsed, true)
     assert.equal(archived.order, 90)
     assert.doesNotMatch(JSON.stringify(sections), /\p{Extended_Pictographic}/u)
+  } finally {
+    await env.close()
+  }
+})
+
+test('派工自动标题和召回元数据不持久化已登记机密', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    await enableSuperAgent(env)
+    const secret = 'private-title-token-9f4d2a'
+    env.app.kernel.stash.put(1, 'PRIVATE_TOKEN', secret)
+    env.faux.setResponses([fauxAssistantMessage('处理完成'), fauxAssistantMessage('已收到汇报')])
+    const result = await env.app.kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', {
+      prompt: `处理 ${secret} 对应的任务`,
+    }) as { workerConversationId: number }
+    await env.app.kernel.waitForIdle(result.workerConversationId)
+    const index = (await env.app.kernel.plugins.getPublicDoc('builtin:superagent', 'index')).value as { routerConversationId: number }
+    await env.app.kernel.waitForIdle(index.routerConversationId)
+    assert.equal(env.app.kernel.getConversation(result.workerConversationId).title.includes(secret), false)
+    await env.app.kernel.documentStore.flush()
+    const db = new DatabaseSync(env.dbPath, { readOnly: true })
+    try {
+      const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
+      for (const { name } of tables) {
+        const quoted = name.replaceAll('"', '""')
+        const rows = db.prepare(`SELECT * FROM "${quoted}"`).all()
+        assert.equal(JSON.stringify(rows).includes(secret), false, `机密不得进入 ${name}`)
+      }
+    } finally {
+      db.close()
+    }
   } finally {
     await env.close()
   }

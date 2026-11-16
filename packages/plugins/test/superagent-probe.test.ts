@@ -24,8 +24,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import {
   HelmError,
   type ConversationSummary,
@@ -37,27 +36,24 @@ import {
   type WatchdogProbe,
 } from '../src/diagnostics.js'
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
-import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
+import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createHerdrPlugin } from '../src/herdr.js'
 import { ipcLineCall, serveTransport } from './helpers/herdr-unit-fixture.js'
 import type { HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
 import type { HelmHostNodeIpcPort, RpcResult } from '@helm/protocol'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import {
+  MemoryConfigStore,
+  MemoryDocStore,
+  makeFauxModels,
+  type FauxProviderHandle,
+} from './helpers/plugin-test-env.js'
 
 // ---------------------------------------------------------------------------
 // 共享测试基座
 // ---------------------------------------------------------------------------
 
-type FauxHandle = ReturnType<typeof fauxProvider>
-
-function makeFauxModels(): { models: ReturnType<typeof createModels>; faux: FauxHandle } {
-  const models = createModels()
-  const faux = fauxProvider()
-  models.setProvider(faux.provider)
-  return { models, faux }
-}
-
-async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: FauxHandle }> {
+async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: FauxProviderHandle }> {
   const { models, faux } = makeFauxModels()
   const runtime = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
     dataDir: dir,
@@ -476,23 +472,6 @@ class ProbeBackend implements PluginHostBackend {
   }
 }
 
-class ProbeDocStore implements PluginDocStore {
-  store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
-
 interface ProbeEnv {
   host: PluginHost
   backend: ProbeBackend
@@ -512,7 +491,7 @@ async function makeProbeEnv(
 ): Promise<ProbeEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-probe-'))
   const backend = new ProbeBackend()
-  const docs = new ProbeDocStore()
+  const docs = new MemoryDocStore()
   docs.set('builtin:herdr:managed', {
     version: 1,
     panes: managedPanes.map((p) => ({
@@ -577,10 +556,7 @@ async function makeProbeEnv(
     dataDir,
     host: backend,
     docs,
-    config: new (class {
-      get(): Record<string, unknown> { return { socketPath } }
-      set(): void {}
-    })(),
+    config: new MemoryConfigStore({ socketPath }),
   })
   await host.register(createHerdrPlugin(), { enabled: true })
   return {
@@ -756,7 +732,7 @@ async function makeUiHost(): Promise<{ host: PluginHost; dataDir: string }> {
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: new UiBackend(),
-    docs: new ProbeDocStore(),
+    docs: new MemoryDocStore(),
   })
   return { host, dataDir }
 }

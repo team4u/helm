@@ -45,7 +45,7 @@ import {
   type Result,
 } from '@earendil-works/pi-durable/env'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
-import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
+import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { ProfileService } from '../../kernel/src/services/index.js'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
@@ -56,49 +56,14 @@ import {
   type AgentsMdHostPort,
 } from '../src/profile/agents-md.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import { MemoryDocStore, makeConversationSummary } from './helpers/plugin-test-env.js'
 
 // ---------------------------------------------------------------------------
 // 测试基建
 // ---------------------------------------------------------------------------
 
-class MemoryDocStore implements PluginDocStore {
-  readonly store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, value)
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
-
-function makeConversation(id: number, over: Partial<ConversationSummary> = {}): ConversationSummary {
-  const now = Date.now()
-  return {
-    id,
-    title: `conv-${id}`,
-    profileId: 'assistant',
-    tags: [],
-    cwd: '/tmp',
-    model: 'test/model',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: now,
-    updatedAt: now,
-    ...over,
-  }
-}
+const makeConversation = (id: number, over: Partial<ConversationSummary> = {}): ConversationSummary =>
+  makeConversationSummary({ id, ...over })
 
 interface EnvCall {
   nodeId: string

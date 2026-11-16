@@ -17,7 +17,7 @@
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -29,7 +29,6 @@ import {
 } from '@helm/protocol'
 import {
   PluginHost,
-  type PluginDocStore,
   type PluginHostBackend,
 } from '../../kernel/src/plugins/index.js'
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
@@ -42,47 +41,15 @@ import type {
   SuperAgentConfig,
   SuperAgentWatchdogRuntime,
 } from '../src/superagent/contracts.js'
+import {
+  MemoryDocStore,
+  makeConversationSummary as baseConversationSummary,
+} from './helpers/plugin-test-env.js'
 
 const PLUGIN_ID = 'builtin:superagent'
 
-/** 内存版 PluginDocStore（与 superagent-watchdog.test.ts 同构）。 */
-class MemoryDocStore implements PluginDocStore {
-  readonly store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
-
-function makeConversationSummary(id: number, over: Partial<ConversationSummary> = {}): ConversationSummary {
-  return {
-    id,
-    title: `conv-${id}`,
-    profileId: 'assistant',
-    tags: [],
-    cwd: '/tmp/helm-workdir',
-    model: 'faux/faux-1',
-    thinkingLevel: '',
-    status: 'working',
-    stateChangeSeq: 10,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-    ...over,
-  }
-}
+const makeConversationSummary = (id: number, over: Partial<ConversationSummary> = {}): ConversationSummary =>
+  baseConversationSummary({ id, cwd: '/tmp/helm-workdir', model: 'faux/faux-1', status: 'working', stateChangeSeq: 10, ...over })
 
 interface InspectHarnessOptions {
   summary: ConversationSummary
@@ -118,9 +85,10 @@ async function makeInspectHarness(opts: InspectHarnessOptions) {
     },
   }
 
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-superagent-watchdog-inspect-'))
   const host = new PluginHost({
     buildProvider: createPluginBuildProvider(),
-    dataDir: mkdtempSync(join(tmpdir(), 'helm-superagent-watchdog-inspect-')),
+    dataDir,
     host: backend,
     docs: new MemoryDocStore(),
   })
@@ -157,6 +125,10 @@ async function makeInspectHarness(opts: InspectHarnessOptions) {
     async inspect(conversationId: number): Promise<Record<string, unknown>> {
       return host.invokeAction(PLUGIN_ID, 'watchdog_inspect', { conversationId }) as Promise<Record<string, unknown>>
     },
+    async dispose() {
+      await host.dispose()
+      rmSync(dataDir, { recursive: true, force: true })
+    },
   }
 }
 
@@ -192,7 +164,7 @@ test('activeProcesses：按 (nodeId ?? local, cwd) 现查并逐项脱敏为 {pid
   assert.equal(conversation['id'], 55)
   assert.equal(conversation['status'], 'working')
   assert.ok(Array.isArray(out['entries']))
-  await h.host.dispose()
+  await h.dispose()
 })
 
 test('activeProcesses：显式 nodeId 透传给 inspectNodePathUsage', { timeout: 60_000 }, async () => {
@@ -213,7 +185,7 @@ test('activeProcesses：显式 nodeId 透传给 inspectNodePathUsage', { timeout
   assert.deepEqual((out['conversation'] as Record<string, unknown>)['activeProcesses'], [
     { pid: 9, name: 'python', source: 'cwd', path: '/srv/data' },
   ])
-  await h.host.dispose()
+  await h.dispose()
 })
 
 test('activeProcesses：探测失败（节点离线）→ 字段缺省，主消息照常返回不伪造空清单', { timeout: 60_000 }, async () => {
@@ -228,7 +200,7 @@ test('activeProcesses：探测失败（节点离线）→ 字段缺省，主消�
   assert.equal('activeProcesses' in conversation, false, '探测失败必须字段缺省而非空数组')
   assert.equal(conversation['id'], 57)
   assert.ok(Array.isArray(out['entries']) && out['entries']!.length > 0)
-  await h.host.dispose()
+  await h.dispose()
 })
 
 test('activeProcesses：cwd 为空 → 不发起探测，字段缺省', { timeout: 60_000 }, async () => {
@@ -242,7 +214,7 @@ test('activeProcesses：cwd 为空 → 不发起探测，字段缺省', { timeou
   const conversation = out['conversation'] as Record<string, unknown>
   assert.equal('activeProcesses' in conversation, false)
   assert.equal(h.pathUsageCalls.length, 0)
-  await h.host.dispose()
+  await h.dispose()
 })
 
 test('技能资产：code-hang-loop.md 接入 WATCHDOG_PLAYBOOK_SKILL_ASSET 且 SKILL.md 索引可见', { timeout: 60_000 }, async () => {

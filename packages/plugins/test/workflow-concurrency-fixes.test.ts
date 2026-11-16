@@ -25,6 +25,7 @@ import { HelmError, type AgentExecutionInfo, type AgentSpawnRequest } from '@hel
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
 import { WorktreeIsolation, type WorktreeIsolationDeps } from '../src/workflow/isolation.js'
 import { extractWorkflowExecutionMeta } from '../src/contracts.js'
+import { makeConversationSummary } from './helpers/plugin-test-env.js'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -66,23 +67,7 @@ function makeServiceHost(over: { emitEvent?: WorkflowServiceHost['emitEvent'] } 
       return []
     },
     getConversation(id: number) {
-      return {
-        id,
-        title: `conv-${id}`,
-        profileId: 'assistant',
-        tags: [],
-        cwd: '/tmp',
-        model: 'x/y',
-        thinkingLevel: '',
-        status: 'idle',
-        stateChangeSeq: 1,
-        completionSeq: 0,
-        unread: false,
-        pinned: false,
-        pendingAskCount: 0,
-        createdAt: 0,
-        updatedAt: 0,
-      }
+      return makeConversationSummary({ id, model: 'x/y', createdAt: 0, updatedAt: 0 })
     },
     async abortConversationGuarded() {},
     emitEvent: over.emitEvent ?? (() => {}),

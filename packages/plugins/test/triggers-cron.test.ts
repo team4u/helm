@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HelmError, type ExternalTriggerEnvelope, type PluginDefinition } from '@helm/protocol'
-import { PluginHost, type PluginDocStore } from '../../kernel/src/plugins/index.js'
+import { PluginHost } from '../../kernel/src/plugins/index.js'
 import {
   advanceAfterFire,
   assertValidSchedule,
@@ -26,27 +26,11 @@ import {
 } from '../src/triggers/cron.js'
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import { MemoryDocStore, waitFor as baseWaitFor } from './helpers/plugin-test-env.js'
 
 // ---------------------------------------------------------------------------
 // 测试基建：内存 doc store + 可控时钟 + host fake
 // ---------------------------------------------------------------------------
-
-class MemoryDocStore implements PluginDocStore {
-  store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? structuredClone(this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
 
 /** 可控时钟：手动推进 now；setTimeout 暂存，advance 时触发到期项（含 unref 语义）。 */
 class FakeClock {
@@ -251,13 +235,8 @@ async function soleJob(h: Harness): Promise<Record<string, unknown>> {
 }
 
 /** 轮询等待条件成立（上限 5s）。 */
-async function waitFor(cond: () => boolean, timeoutMs = 5_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (!cond()) {
-    if (Date.now() > deadline) throw new Error('waitFor 超时')
-    await new Promise((resolve) => setTimeout(resolve, 5))
-  }
-}
+const waitFor = (cond: () => boolean, timeoutMs = 5_000): Promise<void> =>
+  baseWaitFor(cond, { timeoutMs, intervalMs: 5, message: 'waitFor 超时' })
 
 // ---------------------------------------------------------------------------
 // 纯函数：表达式与时区（真实 cron-parser）

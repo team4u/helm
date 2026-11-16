@@ -17,13 +17,14 @@ import { readFileSync } from 'node:fs'
 import process from 'node:process'
 import { HelmError, type ConversationSummary, type MaybePromise, type PluginDefinition, type ExternalTriggerEnvelope } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
-import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
+import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import { CredentialService, credentialsPath } from '../../kernel/src/services/index.js'
 import { SecretStash } from '../../kernel/src/services/secret-stash.js'
 import { createTriggersPlugin } from '../src/triggers.js'
 import { TRIGGERS_PLUGIN_ID, webhookSecretKey } from '../src/triggers/contracts.js'
 import { STOP_REQUEST_WAIT_MS } from '../src/triggers/webhook.js'
+import { MemoryDocStore, makeConversationSummary } from './helpers/plugin-test-env.js'
 
 /** POSIX 0600 断言：Windows 无 POSIX mode（NTFS 走 ACL），跳过模式位校验。 */
 async function assertCredentialsMode0600(dataDir: string): Promise<void> {
@@ -36,26 +37,8 @@ async function assertCredentialsMode0600(dataDir: string): Promise<void> {
 // 测试基建
 // ---------------------------------------------------------------------------
 
-function makeConversation(id: number, over: Partial<ConversationSummary> = {}): ConversationSummary {
-  return {
-    id,
-    title: `conv-${id}`,
-    profileId: 'assistant',
-    tags: [],
-    cwd: '/tmp',
-    model: 'test/model',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-    ...over,
-  }
-}
+const makeConversation = (id: number, over: Partial<ConversationSummary> = {}): ConversationSummary =>
+  makeConversationSummary({ id, ...over })
 
 class FakeBackend implements PluginHostBackend {
   conversations = new Map<number, ConversationSummary>()
@@ -204,26 +187,6 @@ class FakeBackend implements PluginHostBackend {
     directory: async () => {
       throw new HelmError('unsupported', '本 fixture 不提供 profiles.directory', 501)
     },
-  }
-}
-
-class MemoryDocStore implements PluginDocStore {
-  store = new Map<string, unknown>()
-  flushCount = 0
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {
-    this.flushCount += 1
   }
 }
 

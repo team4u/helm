@@ -38,9 +38,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { createModels } from '@earendil-works/pi-ai/models'
 import {
-  fauxProvider,
   fauxAssistantMessage,
   fauxToolCall,
   type FauxResponseStep,
@@ -49,6 +47,7 @@ import {
 import { createHelm } from '../../hub/src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import { makeFauxModels, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 
 import assert from 'node:assert/strict'
 
@@ -69,7 +68,7 @@ interface CapturedRequest {
 
 interface CollabEnv {
   dataDir: string
-  faux: ReturnType<typeof fauxProvider>
+  faux: FauxProviderHandle
   app: Awaited<ReturnType<typeof createHelm>>
   /** 每次模型请求的 system sections 与用户文本（faux TranscriptContext 捕获）。 */
   requests: CapturedRequest[]
@@ -85,9 +84,7 @@ interface CollabEnv {
 
 async function makeCollabEnv(): Promise<CollabEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-profile-collab-'))
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
+  const { models, faux } = makeFauxModels()
   // 真实组合入口：真 SQLite + 真 PluginHost + 真 builtin:profile/workflow/memory。
   const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   const kernel = app.kernel

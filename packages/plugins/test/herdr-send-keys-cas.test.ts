@@ -30,10 +30,23 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { HelmError, type AskResult, type ConversationSummary } from '@helm/protocol'
-import { PluginHost, type PluginConfigStore, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
+import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createHerdrPlugin } from '../src/herdr.js'
 import { completeBackend } from '../../kernel/test/helpers/host-backend-stub.js'
-import { FsOutputFiles, HERDR_FAST_TEST_TIMINGS, serveTransport } from './helpers/herdr-unit-fixture.js'
+import {
+  FsOutputFiles,
+  HERDR_FAST_TEST_TIMINGS,
+  agentInfoOf,
+  serveTransport,
+  type HerdrPaneState as PaneState,
+  type HerdrPaneStatus as PaneStatus,
+} from './helpers/herdr-unit-fixture.js'
+import {
+  MemoryConfigStore,
+  MemoryDocStore,
+  makeConversationSummary,
+  waitFor as baseWaitFor,
+} from './helpers/plugin-test-env.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
 import {
   buildSendKeysParams,
@@ -111,31 +124,6 @@ test('契约: isStaleStateError 只认 stale_state 错误码', { timeout: 60_000
 // ---------------------------------------------------------------------------
 // 受控 FakeTransport（最小面：审批桥 CAS 全链路所需方法）
 // ---------------------------------------------------------------------------
-
-type PaneStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown'
-
-interface PaneState {
-  paneId: string
-  tabId: string
-  workspaceId: string
-  agentStatus: PaneStatus
-  seq: number
-  name?: string
-  cwd: string
-}
-
-function agentInfoOf(pane: PaneState) {
-  return {
-    pane_id: pane.paneId,
-    tab_id: pane.tabId,
-    workspace_id: pane.workspaceId,
-    agent_status: pane.agentStatus,
-    interactive_ready: pane.agentStatus !== 'unknown',
-    state_change_seq: pane.seq,
-    cwd: pane.cwd,
-    ...(pane.name !== undefined ? { name: pane.name } : {}),
-  }
-}
 
 class CasFakeTransport implements HerdrTransport {
   panes = new Map<string, PaneState>()
@@ -304,48 +292,8 @@ class CasFakeTransport implements HerdrTransport {
 // 测试环境（completeBackend 桩 + 真实 PluginHost + 真实 UDS 行协议）
 // ---------------------------------------------------------------------------
 
-class MemoryDocStore implements PluginDocStore {
-  store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
-
-class MemoryConfigStore implements PluginConfigStore {
-  constructor(private readonly initial: Record<string, unknown> = {}) {}
-  get(): Record<string, unknown> { return this.initial }
-  set(): void {}
-}
-
-function makeConversation(id: number, cwd: string): ConversationSummary {
-  return {
-    id,
-    title: `conv-${id}`,
-    profileId: 'assistant',
-    tags: [],
-    cwd,
-    model: '',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-  }
-}
+const makeConversation = (id: number, cwd: string): ConversationSummary =>
+  makeConversationSummary({ id, cwd, model: '' })
 
 interface Env {
   host: PluginHost
@@ -436,14 +384,8 @@ async function spawnDirect(env: Env, request: Record<string, unknown> = {}): Pro
   throw new HelmError('herdr_cas_unsupported', 'spawn 未被 herdr 插件接管（fixture 缺陷）', 500)
 }
 
-async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 8_000, intervalMs = 10): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    if (await predicate()) return
-    if (Date.now() > deadline) assert.fail('waitFor 超时：条件在限定时间内未成立')
-    await delay(intervalMs)
-  }
-}
+const waitFor = (predicate: () => boolean | Promise<boolean>, timeoutMs = 8_000, intervalMs = 10): Promise<void> =>
+  baseWaitFor(predicate, { timeoutMs, intervalMs, message: 'waitFor 超时：条件在限定时间内未成立' })
 
 function fileNameOf(text: string): string {
   return text.match(/wf-out-[A-Za-z0-9_.-]+\.(json|md)/)?.[0] ?? ''

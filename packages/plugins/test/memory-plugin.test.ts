@@ -23,48 +23,14 @@ import { createProfilePlugin } from '../src/profile.js'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import { MemoryDocStore, makeConversationSummary, makeFauxModels, useTempDir } from './helpers/plugin-test-env.js'
 
 // ---------------------------------------------------------------------------
 // 基建
 // ---------------------------------------------------------------------------
 
-class MemoryDocStore implements PluginDocStore {
-  readonly store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
-
-function makeConversation(id: number, profileId = 'assistant'): ConversationSummary {
-  const now = Date.now()
-  return {
-    id,
-    title: `conv-${id}`,
-    profileId,
-    tags: [],
-    cwd: '/tmp',
-    model: 'faux/model',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: now,
-    updatedAt: now,
-  }
-}
+const makeConversation = (id: number, profileId = 'assistant'): ConversationSummary =>
+  makeConversationSummary({ id, profileId, model: 'faux/model' })
 
 function makeBackend(): PluginHostBackend & {
   notifications: Array<{ title: string; body: string; level: string }>
@@ -517,19 +483,14 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
 // 真实组合层：单 Profile 开关跨重启持久（ctx.doc 经真实 SQLite）
 // ---------------------------------------------------------------------------
 
-test('memory 单 Profile 开关跨重启持久（真实 createHelm）', { timeout: 60_000 }, async () => {
+test('memory 单 Profile 开关跨重启持久（真实 createHelm）', { timeout: 60_000 }, async (t) => {
   const { createHelm } = await import('../../hub/src/app.js')
-  const { createModels } = await import('@earendil-works/pi-ai/models')
-  const { fauxProvider } = await import('@earendil-works/pi-ai/providers/faux')
-  const dir = mkdtempSync(join(tmpdir(), 'helm-memory-persist-'))
-  try {
-    const build = async () => {
-      const faux = fauxProvider()
-      const models = createModels()
-      models.setProvider(faux.provider)
-      return createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models })
-    }
-    const first = await build()
+  const dir = useTempDir(t, 'helm-memory-persist-')
+  const build = async () => {
+    const { models } = makeFauxModels()
+    return createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models })
+  }
+  const first = await build()
     try {
       await first.kernel.plugins!.invokeAction('builtin:memory', 'set', {
         profileId: 'assistant',
@@ -559,17 +520,14 @@ test('memory 单 Profile 开关跨重启持久（真实 createHelm）', { timeou
       await second.close()
     }
 
-    const third = await build()
-    try {
-      const got = (await third.kernel.plugins!.invokeAction('builtin:memory', 'get', {
-        profileId: 'assistant',
-      })) as { enabled: boolean }
-      assert.equal(got.enabled, true, '重新开启后跨重启保持')
-    } finally {
-      await third.close()
-    }
+  const third = await build()
+  try {
+    const got = (await third.kernel.plugins!.invokeAction('builtin:memory', 'get', {
+      profileId: 'assistant',
+    })) as { enabled: boolean }
+    assert.equal(got.enabled, true, '重新开启后跨重启保持')
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    await third.close()
   }
 })
 

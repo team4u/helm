@@ -34,13 +34,14 @@ import assert from 'node:assert/strict'
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
 import { type HelmEventFrame, type PluginDefinition } from '@helm/protocol'
 
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
+import { makeFauxModels } from './helpers/plugin-test-env.js'
 
 const require = createRequire(import.meta.url)
 /** 主仓 packages/kernel（测试跨目录显式导入 kernel 源码；tsx loader 直跑源码）。 */
@@ -272,9 +273,7 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
     assert.ok(childId > 1, `必须拿到子会话 ID（收到 ${childId}）`)
 
     // ---- 2) 重启进程：KernelRuntime(autoResume:false) + builtin:workflow 插件（app 同款顺序）----
-    const faux = fauxProvider()
-    const models = createModels()
-    models.setProvider(faux.provider)
+    const { models, faux } = makeFauxModels()
     const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: false })
     t.after(async () => {
       await kernel.close().catch(() => {})
@@ -427,9 +426,7 @@ test('相位自适应 guarded 中止: paused 时逐会话落持久标记且不 r
     assert.ok(childId > 1, `必须拿到子会话 ID（收到 ${childId}）`)
 
     // 重启（不注册任何插件、autoResume:false：调度器保持 paused，恢复屏障窗口）。
-    const faux = fauxProvider()
-    const models = createModels()
-    models.setProvider(faux.provider)
+    const { models, faux } = makeFauxModels()
     const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: false })
     t.after(async () => {
       await kernel.close().catch(() => {})
@@ -564,9 +561,7 @@ process.kill(process.pid, 'SIGKILL')
     ])
     assert.ok(childId > 1 && runId !== '')
 
-    const faux = fauxProvider()
-    const models = createModels()
-    models.setProvider(faux.provider)
+    const { models, faux } = makeFauxModels()
     const kernel = await KernelRuntime.open({
       buildProvider: createPluginBuildProvider(),
       dataDir: sigkillDir,
@@ -601,9 +596,7 @@ process.kill(process.pid, 'SIGKILL')
 
   // ---- B) graceful kernel.close() 中断同步工作流 ----
   const closeDir = mkdtempSync(join(tmpdir(), 'helm-sync-close-'))
-  const fauxC1 = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
-  const modelsC1 = createModels()
-  modelsC1.setProvider(fauxC1.provider)
+  const { models: modelsC1, faux: fauxC1 } = makeFauxModels({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
   fauxC1.setResponses([fauxAssistantMessage('优雅关停期缓慢输出的同步子会话长回复内容确保仍在执行中')])
   const k1 = await KernelRuntime.open({
     buildProvider: createPluginBuildProvider(),
@@ -643,9 +636,7 @@ process.kill(process.pid, 'SIGKILL')
   assert.equal(recordAfterClose['status'], 'aborted')
   assert.equal(recordAfterClose['pendingChildCleanup'], true, 'host closing 时存在子会话必须写入 pendingChildCleanup')
 
-  const fauxC2 = fauxProvider()
-  const modelsC2 = createModels()
-  modelsC2.setProvider(fauxC2.provider)
+  const { models: modelsC2, faux: fauxC2 } = makeFauxModels()
   k2 = await KernelRuntime.open({
     buildProvider: createPluginBuildProvider(),
     dataDir: closeDir,
@@ -780,9 +771,7 @@ process.kill(process.pid, 'SIGKILL')
     ])
     assert.ok(childId > 1)
 
-    const faux = fauxProvider()
-    const models = createModels()
-    models.setProvider(faux.provider)
+    const { models, faux } = makeFauxModels()
     const kernel = await KernelRuntime.open({
       buildProvider: createPluginBuildProvider(),
       dataDir,

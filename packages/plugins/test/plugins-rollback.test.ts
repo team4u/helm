@@ -26,7 +26,7 @@ import { join } from 'node:path'
 
 import { HelmError, type ConversationSummary } from '@helm/protocol'
 import type { DiagnosticsCollection, WatchdogProbe } from '../src/diagnostics.js'
-import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
+import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
 import { createProfilePlugin } from '../src/profile.js'
 import { createMemoryPlugin, MAX_MEMORY_CHARS as MEM_MAX, MemoryStore } from '../src/memory.js'
@@ -35,49 +35,14 @@ import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin
 import { createSuperAgentPlugin } from '../src/superagent.js'
 import { ProfileService } from '../../kernel/src/services/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import { MemoryDocStore, makeConversationSummary } from './helpers/plugin-test-env.js'
 
 // ---------------------------------------------------------------------------
 // 共享基建
 // ---------------------------------------------------------------------------
 
-class MemoryDocStore implements PluginDocStore {
-  readonly store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-
-  async flush(): Promise<void> {}
-}
-
-function makeConversation(id: number, over: Partial<ConversationSummary> = {}): ConversationSummary {
-  return {
-    id,
-    title: `conv-${id}`,
-    profileId: 'assistant',
-    tags: [],
-    cwd: '/tmp',
-    model: 'test/model',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-    ...over,
-  }
-}
+const makeConversation = (id: number, over: Partial<ConversationSummary> = {}): ConversationSummary =>
+  makeConversationSummary({ id, ...over })
 
 interface ControlledBackend {
   conversations: Map<number, ConversationSummary>

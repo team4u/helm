@@ -17,22 +17,20 @@ import { join } from 'node:path'
 import { createServer, type Server, type Socket } from 'node:net'
 import { HelmError, type AgentGateResult, type AskResult, type ConversationSummary, type MaybePromise, type Profile } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
-import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
+import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createHerdrPlugin } from '../src/herdr.js'
 import { LocalNodeChannel } from '../src/herdr/local-node-channel.js'
-import type { PluginConfigStore } from '../../kernel/src/plugins/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import type { HelmHostNodeIpcPort } from '@helm/protocol'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
-import { HERDR_FAST_TEST_TIMINGS } from './helpers/herdr-unit-fixture.js'
+import { HERDR_FAST_TEST_TIMINGS, type HerdrPaneStatus as PaneStatus } from './helpers/herdr-unit-fixture.js'
+import { MemoryConfigStore, MemoryDocStore, waitFor as baseWaitFor } from './helpers/plugin-test-env.js'
 
 // ---------------------------------------------------------------------------
 // 受控环境（与 herdr-plugin-fixes 同构；父会话 nodeId 可配置）
 // ---------------------------------------------------------------------------
-
-type PaneStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown'
 
 class FakeTransport implements HerdrTransport {
   panes = new Map<string, { paneId: string; tabId: string; name?: string; status: PaneStatus; seq: number; cwd: string }>()
@@ -173,12 +171,6 @@ class FakeTransport implements HerdrTransport {
       },
     }
   }
-}
-
-class MemoryConfigStore implements PluginConfigStore {
-  constructor(private readonly initial: Record<string, unknown> = {}) {}
-  get(pluginId: string): Record<string, unknown> { return this.initial }
-  set(): void {}
 }
 
 class FakeBackend implements PluginHostBackend {
@@ -334,24 +326,6 @@ class FakeBackend implements PluginHostBackend {
   }
 }
 
-class MemoryDocStore implements PluginDocStore {
-  store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-
-  async flush(): Promise<void> {}
-}
-
 interface Env {
   host: PluginHost
   backend: FakeBackend
@@ -423,14 +397,8 @@ function scriptSuccess(env: Env, content: string): void {
   }
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 5_000, intervalMs = 10): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    if (predicate()) return
-    if (Date.now() > deadline) throw new Error('waitFor 超时')
-    await new Promise((resolve) => setTimeout(resolve, intervalMs))
-  }
-}
+const waitFor = (predicate: () => boolean, timeoutMs = 5_000, intervalMs = 10): Promise<void> =>
+  baseWaitFor(predicate, { timeoutMs, intervalMs, message: 'waitFor 超时' })
 
 async function spawnDirect(env: Env, request: Record<string, unknown>): Promise<unknown> {
   const outcome = await env.host.runHook('agent_spawn', {

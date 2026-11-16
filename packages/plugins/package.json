@@ -91,6 +91,7 @@
     "@happy-dom/global-registrator": "^21.0.4",
     "@helm/kernel": "workspace:*",
     "@helm/plugin-build": "workspace:*",
+    "@helm/test-kit": "workspace:*",
     "@types/react": "^19.0.0",
     "lucide-react": "^1.66.0"
   }

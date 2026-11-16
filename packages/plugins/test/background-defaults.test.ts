@@ -14,11 +14,10 @@
  * - 显式 background:false 在人类交互会话保留同步路径。
  */
 
-import { createModels } from '@earendil-works/pi-ai/models'
 import {
   fauxAssistantMessage,
-  fauxProvider,
   fauxToolCall,
+  type FauxResponseStep,
 } from '@earendil-works/pi-ai/providers/faux'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -28,18 +27,7 @@ import assert from 'node:assert/strict'
 import { createHelm } from '../../hub/src/app.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
-
-interface FauxHandle {
-  setResponses(messages: unknown[]): void
-  provider: { id: string }
-}
-
-function makeFauxModels(): { models: ReturnType<typeof createModels>; faux: FauxHandle } {
-  const models = createModels()
-  const faux = fauxProvider() as unknown as FauxHandle
-  models.setProvider(faux.provider as never)
-  return { models, faux }
-}
+import { makeFauxModels } from './helpers/plugin-test-env.js'
 
 type App = Awaited<ReturnType<typeof createHelm>>
 
@@ -367,19 +355,20 @@ describe('同步运行 detach 转后台（subagent / SubagentWorkflow 工具链�
    * 父会话续答 / 汇报回合（上下文含 tool 结果）立即良性回答。消费次序在
    * 父续答与子首答之间存在竞争，按调用方上下文分流使 FIFO 次序无关。
    */
-  function gatedSteps(gate: { promise: Promise<unknown>; release: (message: unknown) => void }, count: number): unknown[] {
-    const step = async (context: { messages: Array<{ role: string }> }): Promise<unknown> => {
+  type GateResult = ReturnType<typeof fauxAssistantMessage>
+  function gatedSteps(gate: { promise: Promise<GateResult>; release: (message: GateResult) => void }, count: number): FauxResponseStep[] {
+    const step: FauxResponseStep = async (context) => {
       // 子会话首回合上下文只有 system + user；父会话续答/汇报回合含 toolResult。
-      const isChildFirstTurn = !context.messages.some((m) => m.role === 'tool' || m.role === 'toolResult')
+      const isChildFirstTurn = !context.messages.some((m) => m.role === 'toolResult')
       if (isChildFirstTurn) return await gate.promise
       return fauxAssistantMessage('良性回答')
     }
     return Array.from({ length: count }, () => step)
   }
 
-  function makeGate(): { promise: Promise<unknown>; release: (message: unknown) => void } {
-    let release!: (message: unknown) => void
-    const promise = new Promise<unknown>((resolve) => {
+  function makeGate(): { promise: Promise<GateResult>; release: (message: GateResult) => void } {
+    let release!: (message: GateResult) => void
+    const promise = new Promise<GateResult>((resolve) => {
       release = resolve
     })
     return { promise, release }

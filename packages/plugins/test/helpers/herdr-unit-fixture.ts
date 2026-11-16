@@ -19,8 +19,9 @@ import { connect, createServer, type Server, type Socket } from 'node:net'
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
-import { HelmError, type RpcResult } from '@helm/protocol'
-import type { HerdrEvent, HerdrPluginDependencies, HerdrTransport } from '../../src/herdr/contracts.js'
+import { HelmError, type AgentGateResult, type RpcResult } from '@helm/protocol'
+import type { HerdrEvent, HerdrPluginDependencies, HerdrTarget, HerdrTransport } from '../../src/herdr/contracts.js'
+import { SEND_KEYS_CAS_CAPABILITY } from '../../src/herdr/rpc.js'
 
 /**
  * 单元/集成测试用极速时间参数（缩短轮询、退避、md 稳定性复检与 steer 预算，
@@ -257,4 +258,225 @@ export async function ipcLineCall(
 /** 临时目录工厂（测试自清理约定由调用方 rmSync）。 */
 export function unitTempDir(prefix: string): string {
   return join(tmpdir(), `${prefix}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+}
+
+/** 受控 Herdr 窗格状态枚举。 */
+export type HerdrPaneStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown'
+
+/** 受控 Herdr 窗格状态模型。 */
+export interface HerdrPaneState {
+  paneId: string
+  tabId: string
+  workspaceId: string
+  agentStatus: HerdrPaneStatus
+  seq: number
+  name?: string
+  cwd: string
+  focused?: boolean
+  launchPending?: boolean
+}
+
+/** 构造 wire `AgentInfo` 对象。 */
+export function agentInfoOf(pane: HerdrPaneState) {
+  return {
+    pane_id: pane.paneId,
+    tab_id: pane.tabId,
+    workspace_id: pane.workspaceId,
+    agent_status: pane.agentStatus,
+    interactive_ready: pane.agentStatus !== 'unknown',
+    state_change_seq: pane.seq,
+    cwd: pane.cwd,
+    ...(pane.launchPending !== undefined ? { launch_pending: pane.launchPending } : {}),
+    ...(pane.focused !== undefined ? { focused: pane.focused } : {}),
+    ...(pane.name !== undefined ? { name: pane.name } : {}),
+  }
+}
+
+/** 默认服务端 capabilities 通告（含 send_keys CAS 能力）。 */
+export const DEFAULT_HERDR_PONG_CAPABILITIES: Record<string, unknown> = {
+  live_handoff: false,
+  detached_server_daemon: false,
+  endpoint_protocol_generation: 1,
+  [SEND_KEYS_CAS_CAPABILITY]: true,
+}
+
+/**
+ * 共享受控 `HerdrTransport` 基座：封装 panes/tabs/workspaces 状态、调用记录、
+ * 事件订阅分发、CAS 校验、交接文件读写与 Gate stub，供各测试按需扩展 `call()`。
+ */
+export abstract class BaseFakeHerdrTransport implements HerdrTransport {
+  panes = new Map<string, HerdrPaneState>()
+  tabs = new Map<string, { closed: boolean }>()
+  workspaces = new Map<string, { closed: boolean }>()
+  calls: Array<{ target: HerdrTarget; method: string; params: Record<string, unknown> }> = []
+  eventListeners: Array<(e: HerdrEvent) => void> = []
+  sendKeysLog: Array<{ paneId: string; keys: string[] }> = []
+  metadataReports: Array<Record<string, unknown>> = []
+  removedFiles: string[] = []
+  outputFiles = new FsOutputFiles()
+  errors = new Map<string, () => Error>()
+  subscribeAck: 'ok' | 'fail' = 'ok'
+  promptStatus: HerdrPaneStatus | Array<HerdrPaneStatus> = 'idle'
+  onPrompt: ((pane: HerdrPaneState, text: string) => void) | undefined
+  pongCapabilities: Record<string, unknown> | null = { ...DEFAULT_HERDR_PONG_CAPABILITIES }
+  gateRuns = 0
+
+  protected record(target: HerdrTarget, method: string, params: Record<string, unknown>): void {
+    this.calls.push({ target, method, params })
+  }
+
+  protected paneOf(ref: unknown): HerdrPaneState {
+    const id = typeof ref === 'string' ? ref : String((ref as { pane_id?: unknown })?.pane_id ?? '')
+    const pane = this.panes.get(id)
+    if (!pane) throw new HelmError('agent_not_found', `no pane ${id}`, 404)
+    return pane
+  }
+
+  protected createTabPane(params: Record<string, unknown>, ensureDir = false) {
+    const n = this.panes.size + 1
+    const workspaceId = (params['workspace_id'] as string | undefined) ?? 'ws-default'
+    const paneId = `${workspaceId}:p${n}`
+    const tabId = `${workspaceId}:t${n}`
+    const paneCwd = (params['cwd'] as string) ?? '/tmp'
+    if (ensureDir) ensureHelmDir(paneCwd)
+    this.panes.set(paneId, {
+      paneId,
+      tabId,
+      workspaceId,
+      agentStatus: 'idle',
+      seq: 1,
+      cwd: paneCwd,
+    })
+    this.tabs.set(tabId, { closed: false })
+    return {
+      type: 'tab_created',
+      tab: { tab_id: tabId, workspace_id: workspaceId },
+      root_pane: { pane_id: paneId, workspace_id: workspaceId, tab_id: tabId },
+    }
+  }
+
+  protected createWorktreePane(params: Record<string, unknown>, ensureDir = false) {
+    const n = this.panes.size + 1
+    const workspaceId = `ws-wt-${n}`
+    const paneId = `${workspaceId}:p1`
+    const tabId = `${workspaceId}:t1`
+    const path = `${params['cwd']}/.worktrees/wt${n}`
+    if (ensureDir) ensureHelmDir(path)
+    this.panes.set(paneId, { paneId, tabId, workspaceId, agentStatus: 'idle', seq: 1, cwd: path })
+    this.tabs.set(tabId, { closed: false })
+    this.workspaces.set(workspaceId, { closed: false })
+    return {
+      type: 'worktree_created',
+      workspace: { workspace_id: workspaceId },
+      tab: { tab_id: tabId, workspace_id: workspaceId },
+      root_pane: { pane_id: paneId, workspace_id: workspaceId, tab_id: tabId },
+      worktree: { path, branch: (params['branch'] as string) ?? 'helm/wf-x' },
+    }
+  }
+
+  protected handlePing(version = 'test-server') {
+    return {
+      type: 'pong',
+      version,
+      protocol: 22,
+      ...(this.pongCapabilities !== null ? { capabilities: { ...this.pongCapabilities } } : {}),
+    }
+  }
+
+  protected assertSendKeysCas(pane: HerdrPaneState | undefined, params: Record<string, unknown>): void {
+    const expected = params['expected_state_seq']
+    if (typeof expected !== 'number' || !Number.isSafeInteger(expected) || expected < 0) {
+      throw new HelmError('invalid_params', 'agent.send_keys 必须携带非负整数 expected_state_seq（CAS 契约）', 400)
+    }
+    if (pane !== undefined && expected !== pane.seq) {
+      throw new HelmError('stale_state', `expected_state_seq=${expected} 与当前 state_change_seq=${pane.seq} 不符，按键未发送`, 409)
+    }
+  }
+
+  protected buildSessionSnapshot() {
+    return {
+      type: 'session_snapshot',
+      snapshot: {
+        version: 'test',
+        protocol: 22,
+        workspaces: [],
+        tabs: [],
+        layouts: [],
+        panes: [...this.panes.values()]
+          .filter((p) => !this.tabs.get(p.tabId)?.closed)
+          .map((p) => ({
+            pane_id: p.paneId,
+            workspace_id: p.workspaceId,
+            tab_id: p.tabId,
+            focused: p.focused ?? false,
+            agent_status: p.name !== undefined ? p.agentStatus : 'unknown',
+            cwd: p.cwd,
+          })),
+        agents: [...this.panes.values()]
+          .filter((p) => p.name !== undefined && !this.tabs.get(p.tabId)?.closed)
+          .map(agentInfoOf),
+      },
+    }
+  }
+
+  abstract call(target: HerdrTarget, method: string, params: Record<string, unknown>): Promise<unknown>
+
+  async readOutput(target: HerdrTarget, cwd: string, fileName: string): Promise<string> {
+    const errorFactory = this.errors.get('readOutput')
+    if (errorFactory) throw errorFactory()
+    this.record(target, 'readOutput', { cwd, fileName })
+    const content = this.outputFiles.get(`${cwd}/.helm/${fileName}`)
+    if (content === undefined) {
+      throw new HelmError('herdr_output_missing', `交接文件不存在: ${cwd}/.helm/${fileName}`, 404)
+    }
+    return content
+  }
+
+  async removeOutput(target: HerdrTarget, cwd: string, fileName: string): Promise<void> {
+    this.record(target, 'removeOutput', { cwd, fileName })
+    const key = `${cwd}/.helm/${fileName}`
+    if (this.outputFiles.delete(key)) this.removedFiles.push(key)
+  }
+
+  async runGate(
+    target: HerdrTarget,
+    command: string,
+    cwd: string,
+    signal?: AbortSignal,
+    env?: Record<string, string>,
+  ): Promise<AgentGateResult> {
+    void signal
+    this.record(target, 'runGate', { command, cwd, env })
+    this.gateRuns += 1
+    return { ok: true, output: 'remote gate ok' }
+  }
+
+  async subscribe(
+    target: HerdrTarget,
+    onEvent: (event: HerdrEvent) => void,
+    onError: (error: unknown) => void,
+  ): Promise<() => void> {
+    if (this.subscribeAck === 'fail') {
+      throw new HelmError('herdr_socket', 'subscribe failed', 502)
+    }
+    this.record(target, 'events.subscribe', {})
+    this.eventListeners.push(onEvent)
+    void onError
+    return () => {
+      this.eventListeners = this.eventListeners.filter((l) => l !== onEvent)
+    }
+  }
+
+  emit(event: HerdrEvent): void {
+    for (const listener of [...this.eventListeners]) listener(event)
+  }
+
+  advancePane(paneId: string, status: HerdrPaneStatus): void {
+    const pane = this.panes.get(paneId)
+    if (!pane) return
+    pane.agentStatus = status
+    pane.seq += 1
+    if (pane.launchPending !== undefined) pane.launchPending = false
+    this.emit({ type: 'pane.updated', paneId: pane.paneId })
+  }
 }

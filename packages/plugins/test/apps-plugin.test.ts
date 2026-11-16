@@ -42,49 +42,14 @@ import {
   type AppCatalogEntry,
   type AppsCatalogDoc,
 } from '../src/apps.js'
+import { MemoryDocStore, makeConversationSummary } from './helpers/plugin-test-env.js'
 
 // ---------------------------------------------------------------------------
 // 基建
 // ---------------------------------------------------------------------------
 
-class MemoryDocStore implements PluginDocStore {
-  readonly store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
-
-function makeConversation(id: number, overrides: Partial<ConversationSummary> = {}): ConversationSummary {
-  const now = Date.now()
-  return {
-    id,
-    title: `conv-${id}`,
-    profileId: 'assistant',
-    tags: [],
-    cwd: '/hub/work',
-    model: 'faux/model',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: now,
-    updatedAt: now,
-    ...overrides,
-  }
-}
+const makeConversation = (id: number, overrides: Partial<ConversationSummary> = {}): ConversationSummary =>
+  makeConversationSummary({ id, cwd: '/hub/work', model: 'faux/model', ...overrides })
 
 /** 模拟受管插件包端口（记录调用；行为按需注入）。 */
 interface FakePackageManagerState {

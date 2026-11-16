@@ -15,15 +15,14 @@ import { ProfileService } from '../../kernel/src/services/profiles-skills.js'
 import { AuthService } from '../../kernel/src/services/auth.js'
 import { createHubHandler, type KernelRuntimeLike } from '../../kernel/src/http/index.js'
 import { PROFILE_STARTERS_MAX_ITEMS } from '@helm/protocol'
-import { PluginHost, type PluginDocStore } from '../../kernel/src/plugins/index.js'
+import { PluginHost } from '../../kernel/src/plugins/index.js'
 import { createProfilePlugin } from '../src/profile.js'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import { MemoryDocStore, makeTempDir } from './helpers/plugin-test-env.js'
 
-async function freshDir(): Promise<string> {
-  return mkdtemp(join(tmpdir(), 'helm-starters-'))
-}
+const freshDir = () => makeTempDir('helm-starters-')
 
 test('profiles starters：合法输入持久化、label trim、prompt 保留原文、空数组显式保留', { timeout: 60_000 }, async () => {
   const dataDir = await freshDir()
@@ -187,19 +186,6 @@ test('profile：自举补写默认 Profile 的 managedByPlugin（缺失显式补
   try {
     const before = await profiles.get('assistant')
     assert.equal(before?.managedByPlugin, undefined, 'ensureDefault 不写托管元数据（不兼容归一化红线）')
-
-    class MemoryDocStore implements PluginDocStore {
-      readonly store = new Map<string, unknown>()
-      get<T>(key: string, initial: T): T { return this.store.has(key) ? (this.store.get(key) as T) : initial }
-      set<T>(key: string, value: T): void { this.store.set(key, structuredClone(value)) }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-      async flush(): Promise<void> {}
-    }
 
     const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
       dataDir,

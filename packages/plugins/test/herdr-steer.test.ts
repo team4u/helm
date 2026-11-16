@@ -32,10 +32,23 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { HelmError, type AskResult, type ConversationSummary } from '@helm/protocol'
-import { PluginHost, type PluginConfigStore, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
+import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createHerdrPlugin } from '../src/herdr.js'
 import { completeBackend } from '../../kernel/test/helpers/host-backend-stub.js'
-import { FsOutputFiles, HERDR_FAST_TEST_TIMINGS, serveTransport } from './helpers/herdr-unit-fixture.js'
+import {
+  FsOutputFiles,
+  HERDR_FAST_TEST_TIMINGS,
+  agentInfoOf,
+  serveTransport,
+  type HerdrPaneState as PaneState,
+  type HerdrPaneStatus as PaneStatus,
+} from './helpers/herdr-unit-fixture.js'
+import {
+  MemoryConfigStore,
+  MemoryDocStore,
+  makeConversationSummary,
+  waitFor as baseWaitFor,
+} from './helpers/plugin-test-env.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
 import { parsePong, SEND_KEYS_CAS_CAPABILITY } from '../src/herdr/rpc.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
@@ -70,34 +83,6 @@ test('契约: parsePong 真实形状解析（未知能力字段忽略；sendKeys
 // ---------------------------------------------------------------------------
 // 受控 FakeTransport（真实 protocol 22 语义）
 // ---------------------------------------------------------------------------
-
-type PaneStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown'
-
-interface PaneState {
-  paneId: string
-  tabId: string
-  workspaceId: string
-  agentStatus: PaneStatus
-  seq: number
-  name?: string
-  cwd: string
-  /** agent 启动序列：launch_pending 阶段 admission 拒绝输入。 */
-  launchPending?: boolean
-}
-
-function agentInfoOf(pane: PaneState) {
-  return {
-    pane_id: pane.paneId,
-    tab_id: pane.tabId,
-    workspace_id: pane.workspaceId,
-    agent_status: pane.agentStatus,
-    interactive_ready: pane.agentStatus !== 'unknown',
-    state_change_seq: pane.seq,
-    launch_pending: pane.launchPending === true,
-    cwd: pane.cwd,
-    ...(pane.name !== undefined ? { name: pane.name } : {}),
-  }
-}
 
 class SteerFakeTransport implements HerdrTransport {
   panes = new Map<string, PaneState>()
@@ -335,49 +320,13 @@ class SteerFakeTransport implements HerdrTransport {
 // 测试环境
 // ---------------------------------------------------------------------------
 
-class MemoryDocStore implements PluginDocStore {
-  store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
-
-class MemoryConfigStore implements PluginConfigStore {
-  constructor(private readonly initial: Record<string, unknown> = {}) {}
-  get(): Record<string, unknown> { return this.initial }
-  set(): void {}
-}
-
-function makeConversation(id: number, parent: number | undefined, cwd: string): ConversationSummary {
-  return {
+const makeConversation = (id: number, parent: number | undefined, cwd: string): ConversationSummary =>
+  makeConversationSummary({
     id,
-    title: `conv-${id}`,
-    profileId: 'assistant',
-    tags: [],
-    ...(parent !== undefined ? { parentConversationId: parent } : {}),
     cwd,
     model: '',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-  }
-}
+    ...(parent !== undefined ? { parentConversationId: parent } : {}),
+  })
 
 interface TrackedRun {
   abort: AbortController
@@ -548,14 +497,8 @@ async function spawnRun(
 }
 
 /** 任务 prompt（首轮）投递后等待 pane 进入指定状态。 */
-async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 8_000, intervalMs = 10): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    if (await predicate()) return
-    if (Date.now() > deadline) assert.fail('waitFor 超时：条件在限定时间内未成立')
-    await delay(intervalMs)
-  }
-}
+const waitFor = (predicate: () => boolean | Promise<boolean>, timeoutMs = 8_000, intervalMs = 10): Promise<void> =>
+  baseWaitFor(predicate, { timeoutMs, intervalMs, message: 'waitFor 超时：条件在限定时间内未成立' })
 
 /** 携带 wait 的任务/自愈 prompt（真实协议形状：target 为 paneId）。 */
 function taskPromptCalls(env: Env): Array<{ method: string; params: Record<string, unknown> }> {

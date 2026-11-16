@@ -25,14 +25,13 @@ import type { WorkflowRunSummary } from '../src/contracts.js'
 import { WORKFLOW_PLUGIN_ID } from '../src/contracts.js'
 import { steerBackgroundSubagent, parseExternalSteerResult } from '../src/workflow/steer.js'
 import { isAncestorOrSelf } from '../src/lineage.js'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { createHelm } from '../../hub/src/app.js'
-import { waitFor } from '../../kernel/test/helpers.js'
 import { actionToolAlias } from '../../kernel/src/plugins/capability-registry.js'
-import { PluginHost, type PluginDocStore } from '../../kernel/src/plugins/index.js'
+import { PluginHost } from '../../kernel/src/plugins/index.js'
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import { MemoryDocStore, makeFauxModels, useTempDir, waitFor } from './helpers/plugin-test-env.js'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -821,23 +820,6 @@ class SteerFakeBackend extends PluginHostBackendFixtureBase {
   emitEvent(): MaybePromise<void> {}
 }
 
-class MemoryDocStore implements PluginDocStore {
-  private store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
-
 class MemorySessionDocStore {
   private store = new Map<string, string>()
   get(pluginId: string, name: string, conversationId: number): string | undefined {
@@ -1021,11 +1003,9 @@ describe('workflow 插件 steer 动作（端到端）', () => {
   })
 })
 
-it('真实内核：在工具挂起期间纠偏，子代理读到新指令并将最终结果交回后台 run', timeout, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'wf-steer-native-'))
-  const models = createModels()
-  const faux = fauxProvider()
-  models.setProvider(faux.provider)
+it('真实内核：在工具挂起期间纠偏，子代理读到新指令并将最终结果交回后台 run', timeout, async (t) => {
+  const dataDir = useTempDir(t, 'wf-steer-native-')
+  const { models, faux } = makeFauxModels()
   const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   let releaseTool!: () => void
   const toolGate = new Promise<void>((resolve) => { releaseTool = resolve })
@@ -1077,6 +1057,5 @@ it('真实内核：在工具挂起期间纠偏，子代理读到新指令并将�
   } finally {
     releaseTool()
     await app.close()
-    rmSync(dataDir, { recursive: true, force: true })
   }
 })

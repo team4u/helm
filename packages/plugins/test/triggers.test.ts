@@ -20,14 +20,19 @@ import { join } from 'node:path'
 import process from 'node:process'
 import { DatabaseSync } from 'node:sqlite'
 
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 
 import { HelmError, type ConversationSummary, type ExternalTriggerEnvelope } from '@helm/protocol'
 import { createHelm } from '../../hub/src/app.js'
 import { createHubHandler } from '../../kernel/src/http/index.js'
 import { createDeliveryDispatch } from '../src/triggers/delivery.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import {
+  makeFauxModels,
+  useTempDir,
+  waitFor as baseWaitFor,
+  type FauxProviderHandle,
+} from './helpers/plugin-test-env.js'
 
 /** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
 const ROOT_CONVERSATION_ID = 1 as const
@@ -43,7 +48,7 @@ function assertMode0600(file: string, stat: { mode: number }): void {
 
 interface TestEnv {
   dataDir: string
-  faux: ReturnType<typeof fauxProvider>
+  faux: FauxProviderHandle
   app: Awaited<ReturnType<typeof createHelm>>
   handler: (req: Request) => Promise<Response>
   close(): Promise<void>
@@ -51,9 +56,7 @@ interface TestEnv {
 
 async function makeEnv(): Promise<TestEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-triggers-'))
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
+  const { models, faux } = makeFauxModels()
   const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   faux.setResponses([])
   const handler = createHubHandler(app.kernel)
@@ -81,14 +84,8 @@ function requireTriggersRegistered(env: TestEnv): void {
 }
 
 /** 等待谓词成立（轮询，默认 5s 超时）。 */
-async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    if (await predicate()) return
-    if (Date.now() > deadline) assert.fail('waitFor 超时：条件在限定时间内未成立')
-    await new Promise((r) => setTimeout(r, 25))
-  }
-}
+const waitFor = (predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000): Promise<void> =>
+  baseWaitFor(predicate, { timeoutMs, message: 'waitFor 超时：条件在限定时间内未成立' })
 
 /** 会话末条 helm.input entry 的 data（JSON 字符串化后断言用）。 */
 async function lastInputJson(env: TestEnv, conversationId: number): Promise<string> {
@@ -588,15 +585,10 @@ test('triggers9: secret 落 credentials.json 0600、不进 docs/SQLite、删除�
   }
 })
 
-test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复）；GET 配置不泄漏动态 secret', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-triggers-restart-'))
+test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复）；GET 配置不泄漏动态 secret', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helm-triggers-restart-')
   const SECRET = 'whsec_restart_roundtrip'
-  const mkModels = () => {
-    const faux = fauxProvider()
-    const models = createModels()
-    models.setProvider(faux.provider)
-    return { faux, models }
-  }
+  const mkModels = () => makeFauxModels()
   // 第一进程：setup 鉴权 + 启用 + 建 webhook（secret 落 credentials.json）
   const first = mkModels()
   const app1 = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: first.models })
@@ -661,11 +653,7 @@ test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复�
     assert.match(json, /webhook:persist/)
     assert.match(json, /restart-verify/)
   } finally {
-    try {
-      await app2.close()
-    } finally {
-      rmSync(dataDir, { recursive: true, force: true })
-    }
+    await app2.close()
   }
 })
 

@@ -23,10 +23,11 @@ import { join } from 'node:path'
 import assert from 'node:assert/strict'
 import type { ConversationSummary, PluginDefinition } from '@helm/protocol'
 import { COMPOSER_STATUS_SLOT, HelmError } from '@helm/protocol'
-import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
+import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import { createTokenSpeedPlugin } from '../src/token-speed.js'
+import { MemoryDocStore } from './helpers/plugin-test-env.js'
 import {
   DOC_WRITE_INTERVAL_MS,
   TOKEN_SPEED_DOC,
@@ -382,23 +383,6 @@ test('事件守卫：asAssistantCompletion 抽取通用完成事实（role/stopR
 // ---------------------------------------------------------------------------
 // 2. 插件装配层（真 PluginHost + 事件替身）
 // ---------------------------------------------------------------------------
-
-class MemoryDocStore implements PluginDocStore {
-  readonly store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? structuredClone(this.store.get(key) as T) : structuredClone(initial)
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
 
 class MemorySessionDocStore {
   store = new Map<string, string>()

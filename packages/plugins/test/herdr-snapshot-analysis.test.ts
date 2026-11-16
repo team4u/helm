@@ -19,23 +19,7 @@ import {
   createBlockedSnapshotAnalyzer,
   type ConversationTextPort,
 } from '../src/herdr/snapshot-analysis.js'
-
-/** 手写 deferred（不用 sleep 对齐并发时序）。 */
-interface Deferred<T> {
-  promise: Promise<T>
-  resolve(value: T): void
-  reject(error: unknown): void
-}
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void
-  let reject!: (error: unknown) => void
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res
-    reject = rej
-  })
-  return { promise, resolve, reject }
-}
+import { deferred } from './helpers/plugin-test-env.js'
 
 /** 不响应 signal 的端口（挂起直到手动结算）。 */
 function unresponsivePort(

@@ -25,9 +25,7 @@ import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
-import { createModels } from '@earendil-works/pi-ai/models'
 import {
-  fauxProvider,
   fauxAssistantMessage,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
@@ -36,6 +34,7 @@ import { HelmError, type PluginDefinition } from '@helm/protocol'
 import { createHelm } from '../../hub/src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import { makeFauxModels, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 
 import assert from 'node:assert/strict'
 
@@ -53,7 +52,7 @@ function dirnameOf(u: string): string {
 
 interface WfEnv {
   dataDir: string
-  faux: ReturnType<typeof fauxProvider>
+  faux: FauxProviderHandle
   app: Awaited<ReturnType<typeof createHelm>>
   /** echo action handler 执行计数（副作用哨兵）。 */
   echoCalls: string[]
@@ -65,9 +64,7 @@ interface WfEnv {
 
 async function makeWfEnv(): Promise<WfEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-e2e-'))
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
+  const { models, faux } = makeFauxModels()
   const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
 
   const echoCalls: string[] = []
@@ -238,9 +235,7 @@ test('工作流2: action() 经 PluginHost 动作总线共享 Schema 校验——
 test('工作流3: turn_settled 钩子收集 completed/failed/aborted 三态各一次，inputs origin 精确记录', { timeout: 60_000 }, async () => {
   // aborted 场景需要真实在途流：慢速 token 流（1 tok/s）确保 abort 时回合仍在流式中。
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-e2e-'))
-  const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
-  const models = createModels()
-  models.setProvider(faux.provider)
+  const { models, faux } = makeFauxModels({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
   const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   try {
     const settled: Array<{ outcome: string; origins: string[]; conversationId: number; error?: string }> = []

@@ -17,7 +17,7 @@
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -28,7 +28,6 @@ import {
 } from '@helm/protocol'
 import {
   PluginHost,
-  type PluginDocStore,
   type PluginHostBackend,
 } from '../../kernel/src/plugins/index.js'
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
@@ -42,47 +41,16 @@ import type {
   SuperAgentConfig,
   SuperAgentWatchdogRuntime,
 } from '../src/superagent/contracts.js'
+import {
+  MemoryDocStore,
+  makeConversationSummary as baseConversationSummary,
+} from './helpers/plugin-test-env.js'
 
 const SUPERAGENT_ID = 'builtin:superagent'
 const WORKFLOW_ID = 'builtin:workflow'
 
-class MemoryDocStore implements PluginDocStore {
-  readonly store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
-
-function makeConversationSummary(id: number, over: Partial<ConversationSummary> = {}): ConversationSummary {
-  return {
-    id,
-    title: `conv-${id}`,
-    profileId: 'assistant',
-    tags: [],
-    cwd: '/tmp',
-    model: 'faux/faux-1',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 10,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-    ...over,
-  }
-}
+const makeConversationSummary = (id: number, over: Partial<ConversationSummary> = {}): ConversationSummary =>
+  baseConversationSummary({ id, model: 'faux/faux-1', stateChangeSeq: 10, ...over })
 
 /** workflow run 动作受控实现：可换成抛错 / 挂起闸门。 */
 type WorkflowRunImpl = (input: Record<string, unknown>) => Promise<Record<string, unknown>>
@@ -133,9 +101,10 @@ async function makeResumeHarness() {
     },
   }
 
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-superagent-watchdog-resume-'))
   const host = new PluginHost({
     buildProvider: createPluginBuildProvider(),
-    dataDir: mkdtempSync(join(tmpdir(), 'helm-superagent-watchdog-resume-')),
+    dataDir,
     host: backend,
     docs: new MemoryDocStore(),
   })
@@ -222,6 +191,7 @@ async function makeResumeHarness() {
     tick,
     async dispose() {
       await host.dispose()
+      rmSync(dataDir, { recursive: true, force: true })
     },
   }
 }
