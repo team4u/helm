@@ -192,6 +192,38 @@ test('多面板聚合：footerText 去重后拼接，在途取并集', { timeout
   assert.deepEqual(index.get(1), { active: true, summary: '2 运行中' })
 })
 
+test('contextUsage.compacting=true 判定会话后台在途并合并「上下文精简中」（支持与面板角标去重拼接）', { timeout: 60_000 }, () => {
+  const conversations = [
+    conv({ id: 1, status: 'idle', contextUsage: { tokens: 1200, compacting: true } }),
+    conv({ id: 2, status: 'done', contextUsage: { tokens: null, compacting: true } }),
+    conv({ id: 3, status: 'idle', contextUsage: { tokens: 800, compacting: false } }),
+    conv({ id: 4, status: 'done' }),
+  ]
+  const index = summarize({
+    contributions: [],
+    conversations,
+  })
+  assert.deepEqual(index.get(1), { active: true, summary: '上下文精简中' })
+  assert.deepEqual(index.get(2), { active: true, summary: '上下文精简中' })
+  assert.equal(index.get(3), undefined, 'compacting=false 不得标为在途')
+  assert.equal(index.get(4), undefined, '无 compacting 字段不得标为在途')
+
+  const combined = summarize({
+    conversations: [
+      conv({ id: 1, status: 'idle', contextUsage: { tokens: 1200, compacting: true } }),
+      conv({ id: 2, status: 'idle', contextUsage: { tokens: 1200, compacting: true } }),
+    ],
+    pluginDocs: {
+      'builtin:workflow/run-badges': badgesDoc({
+        '1': { count: 2, tone: 'accent', footerText: '2 运行中' },
+        '2': { count: 1, tone: 'accent', footerText: '上下文精简中' },
+      }),
+    },
+  })
+  assert.deepEqual(combined.get(1), { active: true, summary: '2 运行中 · 上下文精简中' })
+  assert.deepEqual(combined.get(2), { active: true, summary: '上下文精简中' })
+})
+
 // ---------------------------------------------------------------------------
 // 纯函数层：一级站位聚合、单灯优先级与 tooltip 组合
 // ---------------------------------------------------------------------------
@@ -227,6 +259,19 @@ test('Agent 子列表折叠预览始终保留当前会话与在途会话', { tim
   assert.deepEqual(idlePreview.visible.map((item) => item.id), [1, 2, 3, 4, 5, 6])
   assert.equal(idlePreview.hiddenCount, 2)
   assert.equal(resolveAgentSubListPreview({ conversations, showAll: true, activeId: null, background: new Map() }).hiddenCount, 0)
+
+  // 折叠预览保留正在上下文精简的会话（即使处于闲置态且位于第 6 条之后）
+  const compactingConvs = Array.from({ length: 8 }, (_, index) => conv({ id: index + 1 }))
+  compactingConvs[6] = conv({ id: 7, status: 'idle', contextUsage: { tokens: 1500, compacting: true } })
+  const compactingBg = summarize({ contributions: [], conversations: compactingConvs })
+  const compactingPreview = resolveAgentSubListPreview({
+    conversations: compactingConvs,
+    showAll: false,
+    activeId: null,
+    background: compactingBg,
+  })
+  assert.deepEqual(compactingPreview.visible.map((item) => item.id), [1, 2, 3, 4, 5, 7])
+  assert.equal(compactingPreview.hiddenCount, 2)
 })
 
 test('站位聚合优先级 error > blocked > working；并列取列表首个（primary 置顶序）', { timeout: 60_000 }, () => {
@@ -679,6 +724,158 @@ test('Sidebar 挂载后按需 ensurePluginDoc 加载命中面板的 badge doc', 
     root.render(e(HelmStoreContext.Provider, { value: store }, e(Sidebar)))
   })
   assert.deepEqual(loaded, [{ pluginId: 'builtin:workflow', doc: 'run-badges' }])
+  await act(async () => {
+    root?.unmount()
+  })
+  container.remove()
+})
+
+// ---------------------------------------------------------------------------
+// Sidebar 渲染与 DOM 更新：contextUsage.compacting 后台空心环与单灯语义
+// ---------------------------------------------------------------------------
+
+test('Sidebar 渲染：idle/done 会话 compacting=true 渲染后台空心环，working 保持主灯独占，叠加 workflow 角标去重拼接', { timeout: 60_000 }, () => {
+  // idle + compacting=true -> 空心环 + 上下文精简中
+  const idleHtml = renderSidebar(
+    sidebarStore({
+      conversations: [
+        conv({
+          id: 1,
+          title: '精简中会话',
+          profileId: 'assistant',
+          status: 'idle',
+          contextUsage: { tokens: 2000, compacting: true },
+          createdAt: 9000,
+          updatedAt: 9000,
+        }),
+        conv({ id: 50, title: '别处', profileId: 'coder' }),
+      ],
+      primaryTarget: { kind: 'conversation', conversationId: 50 },
+    }),
+  )
+  assert.ok(idleHtml.includes('class="status-dot status-dot-background"'), 'idle + compacting 应渲染后台空心环')
+  assert.ok(idleHtml.includes('title="空闲 · 后台任务: 上下文精简中"'), 'tooltip 应包含 上下文精简中')
+  assert.equal(countStatusLights(idleHtml), 1)
+
+  // done + compacting=true -> 绿点让位空心环
+  const doneHtml = renderSidebar(
+    sidebarStore({
+      conversations: [
+        conv({
+          id: 1,
+          title: '已完成但精简中',
+          profileId: 'assistant',
+          status: 'done',
+          contextUsage: { tokens: 2000, compacting: true },
+          createdAt: 9000,
+          updatedAt: 9000,
+        }),
+        conv({ id: 50, title: '别处', profileId: 'coder' }),
+      ],
+      primaryTarget: { kind: 'conversation', conversationId: 50 },
+    }),
+  )
+  assert.ok(doneHtml.includes('class="status-dot status-dot-background"'), 'done + compacting 应渲染后台空心环')
+  assert.ok(!doneHtml.includes('class="status-dot status-dot-done"'), 'done 绿点必须让位')
+  assert.ok(doneHtml.includes('title="已完成 · 后台任务: 上下文精简中"'))
+  assert.equal(countStatusLights(doneHtml), 1)
+
+  // working + compacting=true -> 实心 working 灯独占（单灯不变式）
+  const workingHtml = renderSidebar(
+    sidebarStore({
+      conversations: [
+        conv({
+          id: 1,
+          title: '运行中且精简',
+          profileId: 'assistant',
+          status: 'working',
+          doing: '生成回答',
+          contextUsage: { tokens: 2000, compacting: true },
+          createdAt: 9000,
+          updatedAt: 9000,
+        }),
+        conv({ id: 50, title: '别处', profileId: 'coder' }),
+      ],
+      primaryTarget: { kind: 'conversation', conversationId: 50 },
+    }),
+  )
+  assert.ok(workingHtml.includes('class="status-dot status-dot-working"'), 'working 主状态灯必须独占')
+  assert.ok(!workingHtml.includes('status-dot-background'), 'working 时不得渲染后台空心环')
+  assert.ok(!workingHtml.includes('上下文精简中'), 'working 时 tooltip 不叠加后台摘要')
+  assert.equal(countStatusLights(workingHtml), 1)
+
+  // idle + compacting=true + workflow accent badge -> 组合摘要「2 运行中 · 上下文精简中」
+  const combinedHtml = renderSidebar(
+    sidebarStore({
+      conversations: [
+        conv({
+          id: 1,
+          title: '双后台任务',
+          profileId: 'assistant',
+          status: 'idle',
+          contextUsage: { tokens: 2000, compacting: true },
+          createdAt: 9000,
+          updatedAt: 9000,
+        }),
+        conv({ id: 50, title: '别处', profileId: 'coder' }),
+      ],
+      primaryTarget: { kind: 'conversation', conversationId: 50 },
+      groupedUi: groupUiContributions([panelContribution()]),
+      pluginDocs: {
+        'builtin:workflow/run-badges': badgesDoc({ '1': { count: 2, tone: 'accent', footerText: '2 运行中' } }),
+      },
+    }),
+  )
+  assert.ok(combinedHtml.includes('class="status-dot status-dot-background"'))
+  assert.ok(combinedHtml.includes('title="空闲 · 后台任务: 2 运行中 · 上下文精简中"'))
+  assert.equal(countStatusLights(combinedHtml), 1)
+})
+
+test('Sidebar DOM 更新：conversations 的 compacting 从 false 变为 true 时即时点亮空心环（无陈旧闭包）', { timeout: 60_000 }, async () => {
+  const basePanels = groupUiContributions([])
+  const initialStore = sidebarStore({
+    conversations: [
+      conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'idle', createdAt: 9000, updatedAt: 9000 }),
+      conv({ id: 50, title: '别处', profileId: 'coder' }),
+    ],
+    primaryTarget: { kind: 'conversation', conversationId: 50 },
+    groupedUi: basePanels,
+    pluginDocs: {},
+  })
+  const nextStore = sidebarStore({
+    conversations: [
+      conv({
+        id: 1,
+        title: '主会话',
+        profileId: 'assistant',
+        status: 'idle',
+        contextUsage: { tokens: 3000, compacting: true },
+        createdAt: 9000,
+        updatedAt: 9000,
+      }),
+      conv({ id: 50, title: '别处', profileId: 'coder' }),
+    ],
+    primaryTarget: { kind: 'conversation', conversationId: 50 },
+    groupedUi: basePanels,
+    pluginDocs: initialStore.pluginDocs,
+  })
+
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  let root: Root | undefined
+  await act(async () => {
+    root = createRoot(container)
+    root.render(e(HelmStoreContext.Provider, { value: initialStore }, e(Sidebar)))
+  })
+  assert.equal(container.querySelector('.status-dot-background'), null, '初始无 compacting 不渲染空心环')
+
+  await act(async () => {
+    root?.render(e(HelmStoreContext.Provider, { value: nextStore }, e(Sidebar)))
+  })
+  const ring = container.querySelector('.status-dot-background')
+  assert.ok(ring !== null, 'conversations 更新 compacting=true 后应即时点亮空心环')
+  assert.equal(ring.getAttribute('title'), '空闲 · 后台任务: 上下文精简中')
+
   await act(async () => {
     root?.unmount()
   })
