@@ -17,7 +17,7 @@ HELM_PORT=3202 pnpm dev        # 前后端一起（Web 3201 -> Hub 3202）
 HELM_PORT=3202 pnpm dev:kernel # 只起内核
 pnpm dev:web                   # 只起前端（需内核已在 3202）
 pnpm link:bins                 # 可选：在 /usr/local/bin 挂载 helm / helm-node / helm-hub 源码命令
-pnpm build && pnpm typecheck && pnpm test:all   # 全量验收；日常按第 5 节分层执行
+pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all # 全量验收（增量异常可加 HELM_CLEAN_DIST=1）
 ```
 
 ## 2. 架构边界与设计原则
@@ -64,14 +64,13 @@ pnpm build && pnpm typecheck && pnpm test:all   # 全量验收；日常按第 5 
 
 ## 5. 测试分层与执行规范
 
-- **分层入口**：`scripts/test-suites.mjs`（复用 `scripts/run-tests.mjs` 的跨平台超时与进程树清理），三档命令：`pnpm test:unit` / `pnpm test:integration` / `pnpm test:all`（`pnpm test` 等同 `test:all`）。
-- **单测防死锁**：每个测试显式声明 `{ timeout: 60_000 }`（runner 为 `tsx --test`）；不依赖 Unix `timeout` 命令；不用过滤管道隐藏失败日志；**勿设 `HELM_TEST_SUITE_TIMEOUT_MS` 环境变量**（kernel 的 `env-registry-races` 会因宿主残留 HELM_* 变量误报）。
+- **入口与卫生门禁**：分档跑 `pnpm test:unit` / `test:integration` / `test:all`（`scripts/test-suites.mjs`，AST 纯单测自动 `--test-isolation=none` 合片，其余进程隔离）；单跑指定文件用 `node scripts/run-tests.mjs <file...>`（禁裸跑 `node/tsx --test` 绕过超时看门狗与 `safe-test-assert`），不用过滤管道隐藏失败日志，不依赖 Unix `timeout`。`pnpm check:hygiene` AST 门禁强制四条红线：① 每个 `test/it` 显式 `{ timeout: 60_000 }`；② `skip` 必附理由字符串；③ **禁设 `HELM_TEST_SUITE_TIMEOUT_MS`**（触发 `env-registry-races` 误报）；④ **禁对 DOM 节点 / `Window` 调 `assert.equal` / `deepEqual`**（防 Fiber 树 `util.inspect` OOM，改用 `assert.ok(a === b)` 或断言标量属性）。
 - **分档与执行规则**：
-  - `unit` = `protocol + env-io + test-kit + cli + web + plugin-client`（进程内 / happy-dom DOM 模拟，不起真实服务）——改协议、测试基座、CLI、Web 或浏览器 SDK 时默认跑；
-  - `integration` = `kernel + plugins + hub + plugin-build + node + payload + desktop`（真实进程、SQLite、Git、WebSocket、源码构建、`createHelm`、daemon、payload 组装与桌面壳 Hub 子进程监督，全部视为集成）——改任一执行、插件、产品或构建包时必跑；
-  - 跨档契约变更两档都跑；合并前与全量验收跑 `test:all`。不变量 `all = unit ∪ integration` 不重不漏；新测试文件必须落在已登记包的 `test/` 目录，新包同步更新 `scripts/test-suites.mjs` 的 `SUITES` 分档与 `scripts/lib/workspace-meta.mjs` 的 `PACKAGE_TIERS`。
-- **共享测试基座与防散沙约束**：跨包测试构建器、同步原语与环境隔离统一复用 `@helm/test-kit`（仅允许 `devDependencies` 与 `test/` 引入，严禁进入生产依赖或 `src/`）及包级 harness（`cli-harness`、`dom-harness`、`plugin-test-env`、`hub-test-env`、`host-backend-stub`）；临时 Git 仓库使用 `createGitTemplate().cloneTo()`，同步等待使用 `deferred` / `waitFor` / 可注入计时配置而非硬编码长 `sleep`。**严禁**新增已删除功能的历史墓碑测试、用正则扫描 CSS/TSX 源码文本的脆弱断言（应测试 DOM 行为、导出模型或结构不变量），以及按零散问题单独新建一两行碎片测试文件（并入对应领域测试）；保持纯内存单测无全局副作用以便 `scripts/lib/test-sharding.mjs` 自动分片合跑。
-- **快速反馈门（补充而非替代）**：`pnpm check:changed` 按变更集（`--base <ref>` 显式基线优先；默认取分支 upstream 或 origin/HEAD 的 merge-base，均无则报错要求 `--base`，绝不静默退化 HEAD~1；变更集 = 已提交 ∪ 暂存/未暂存 ∪ 未跟踪；pnpm 传参用 `--` 分隔，如 `pnpm check:changed -- --base main --list`）选受影响包（workspace 依赖反向闭包，锁文件/根配置/测试基础设施（含 `scripts/**/*.mjs`）变更触发全档），顺序跑 `pnpm typecheck` →（选中 desktop 测试时先 `pnpm --filter @helm/desktop run build`，typecheck 不产其 dist）→ 受影响包测试（复用 `run-tests.mjs`）；`--list` 先复核选集。`pnpm check:hygiene` 用 TypeScript AST 静态检查测试卫生（显式 timeout、skip 必附理由、禁设 `HELM_TEST_SUITE_TIMEOUT_MS`）。二者只提供增量快速反馈，不改变本节分档必跑与合并前 `test:all` 的规定。
+  - `unit` = `protocol + env-io + test-kit + cli + web + plugin-client`（纯内存 / happy-dom，不起真实服务）——改协议、测试基座、CLI、Web 或浏览器 SDK 必跑；
+  - `integration` = `kernel + plugins + hub + plugin-build + node + payload + desktop`（真实进程、SQLite、Git、WS、构建、`createHelm`、daemon、payload 与桌面监督）——改执行、插件、产品或构建包必跑；
+  - 跨档变更两档都跑，合并前跑 `test:all`（不变量 `all = unit ∪ integration` 不重不漏）；新测试文件须落在已登记包的 `test/`，新包同步更新 `scripts/test-suites.mjs`（`SUITES`）与 `scripts/lib/workspace-meta.mjs`（`PACKAGE_TIERS`）。
+- **共享基座、防抖与防散沙**：复用 `@helm/test-kit`（仅限 `devDependencies` 与 `test/`，`package-boundaries` 锁死零生产泄漏）及包级 harness（`cli-harness`、`dom-harness`、`plugin-test-env`、`hub-test-env`、`host-backend-stub`）：临时目录用 `useTempDir`，Git 仓库用 `createGitTemplate().cloneTo()`，子进程环境用 `sanitizedHostEnv` / `makeCliEnv`，Web DOM 用 `ensureHappyDom()`。同步等待用 `deferred` / `waitFor` / 可注入计时参数，禁长固定 `sleep` 与无余量的硬编码墙钟上界断言（超时逃逸须拉大阻塞时长与阈值之比以抗高并发抖动）；纯内存单测保持零全局副作用以便 `test-sharding.mjs` 合片。**三禁**：禁已删功能的历史墓碑测试、禁正则扫描 CSS/TSX 源码的脆弱断言（测 DOM 行为、导出模型或结构不变量）、禁按零散问题新建一两行碎片测试文件（并入对应领域测试）。
+- **快速反馈门（补充而非替代）**：`pnpm check:changed` 按变更集（已提交 ∪ 暂存/未暂存 ∪ 未跟踪；`--base <ref>` 优先，默认取 upstream 或 `origin/HEAD` 的 merge-base，均无则报错要求 `--base`，绝不退化 `HEAD~1`；传参如 `pnpm check:changed -- --base main --list`）选反向闭包受影响包（锁文件/根配置/`scripts/**/*.mjs` 触发全档），顺序执行 `pnpm typecheck` →（含 desktop 时先 `pnpm --filter @helm/desktop run build`）→ 受影响包测试；配合 `pnpm check:hygiene` 提供增量快速反馈，不替代分档必跑与合并前 `test:all`。
 - **进程 kill 纪律**：只允许终止**自己 spawn 并持有 PID/句柄**的进程（POSIX：独立进程组 `kill(-pid)`，宽限后 SIGKILL；Windows：`taskkill /PID <pid> /T /F` 杀 owned `ChildProcess` 整棵树，参考 `scripts/run-tests.mjs`）；确需按端口清理时，必须先核验监听进程的 cwd 与实际归属再终止。**严禁按模糊名称/路径发信号（如 `pkill -f`、`pgrep | xargs kill`、`taskkill /IM`）**（会误杀他人会话、其他 worktree 的 dev 服务与无关系统进程），严禁猜测 PID。
 
 ## 6. 开发流程与多智能体协作
