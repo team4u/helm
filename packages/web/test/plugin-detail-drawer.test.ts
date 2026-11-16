@@ -263,8 +263,8 @@ test('PluginDetailDrawer：启停按钮响应用户操作并调用 onToggleEnabl
     })
 
     // 验证错误提示框出现且包含在途任务解释
-    const callout = container.querySelector('.callout--error')
-    assert.ok(callout, '发生 409 错误时必须呈现错误提示条')
+    const callout = container.querySelector('.callout-error')
+    assert.ok(callout, '发生 409 错误时必须呈现统一 .callout-error 错误提示条')
     assert.match(callout.textContent || '', /plugin_has_live_tasks/)
   } finally {
     pluginsApi.getConfig = originalGetConfig
@@ -564,7 +564,7 @@ test('PluginDetailDrawer：status === failed 时状态栏显示异常徽章与�
   assert.match(html, /<span>异常<\/span>/)
 
   // 2. 显式错误诊断框：阶段 + 错误码 + 完整消息
-  assert.match(html, /callout callout--error/)
+  assert.match(html, /callout callout-error/)
   assert.match(html, /故障阶段：模块加载（load） · 错误码：/)
   assert.match(html, /plugin_load_failed/)
   assert.match(html, /入口文件 index\.ts 转译失败/)
@@ -648,8 +648,8 @@ test('PluginDetailDrawer：停用遇 409 plugin_in_use 时展示占用清单并�
     })
 
     // 占用确认条出现并列出所有占用项
-    const callout = container.querySelector('.callout--warning')
-    assert.ok(callout, '409 plugin_in_use 应展示占用确认提示条')
+    const callout = container.querySelector('.callout-warn')
+    assert.ok(callout, '409 plugin_in_use 应展示统一 .callout-warn 占用确认提示条')
     assert.match(callout.textContent || '', /插件资源占用确认/)
     assert.match(callout.textContent || '', /角色 "coder" 绑定了运行时 herdr/)
     assert.match(callout.textContent || '', /Cron 定时任务 "nightly"/)
@@ -664,7 +664,7 @@ test('PluginDetailDrawer：停用遇 409 plugin_in_use 时展示占用清单并�
     await act(async () => {
       cancelBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
-    assert.equal(container.querySelector('.callout--warning'), null, '点击取消应关闭占用确认条')
+    assert.equal(container.querySelector('.callout-warn'), null, '点击取消应关闭占用确认条')
 
     // 重新触发停用，这次点击「强制停用」
     await act(async () => {
@@ -682,7 +682,7 @@ test('PluginDetailDrawer：停用遇 409 plugin_in_use 时展示占用清单并�
 
     assert.equal(toggleCalls.length, 3, '首次停用 + 重触停用 + 强制停用共三次调用')
     assert.deepEqual(toggleCalls[2], { force: true }, '强制停用应以 force: true 重试')
-    assert.equal(container.querySelector('.callout--warning'), null, '强制停用成功后确认条消失')
+    assert.equal(container.querySelector('.callout-warn'), null, '强制停用成功后确认条消失')
   } finally {
     pluginsApi.getConfig = originalGetConfig
     await act(async () => {
@@ -727,11 +727,11 @@ test('PluginDetailDrawer：409 plugin_has_live_tasks 仍保持硬阻断提示且
       disableBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
 
-    const callout = container.querySelector('.callout--error')
-    assert.ok(callout, '在途任务冲突应展示错误提示条')
+    const callout = container.querySelector('.callout-error')
+    assert.ok(callout, '在途任务冲突应展示统一 .callout-error 错误提示条')
     assert.match(callout.textContent || '', /plugin_has_live_tasks/)
     assert.match(callout.textContent || '', /请等待任务结束或中止后再试/)
-    assert.equal(container.querySelector('.callout--warning'), null, '在途任务不得提供强制停用入口')
+    assert.equal(container.querySelector('.callout-warn'), null, '在途任务不得提供强制停用入口')
     assert.equal(container.textContent?.includes('强制停用'), false)
   } finally {
     pluginsApi.getConfig = originalGetConfig
@@ -904,8 +904,47 @@ test('PluginDetailDrawer：标题与 ID 靠左对齐，零图标渲染，右上�
   assert.match(html, /plugin-drawer-id/)
 
   // 2. 右上角关闭按钮
-  assert.match(html, /plugin-drawer-close-btn/)
+  assert.match(html, /btn-icon-sm plugin-drawer-close-btn/)
 
   // 3. 杜绝图标容器
   assert.doesNotMatch(html, /plugin-drawer-icon-wrap/)
+})
+
+test('PluginDetailDrawer：「右屏打开」按钮具备窄屏隐藏类且不使用旧 callout--* 类', { timeout: 60_000 }, () => {
+  const store = makeTestStore({
+    groupedUi: {
+      sidebarItems: [],
+      sidebarSections: [],
+      screens: [{ pluginId: 'custom:demo', spec: { id: 'main', label: '主视图', title: '主视图', client: { module: 'index.tsx', export: 'Main' } } }],
+      timelineRenderers: [],
+      markdownCodeBlocks: [],
+      toolViews: [],
+      composerPills: [],
+      composerWidgets: [],
+      composerCompleters: [],
+      artifactPreviewers: [],
+      workbenchPanels: [],
+      commands: [],
+      settingsPanels: [],
+      profileRuntimes: [],
+      uiActions: [],
+      pluginSlots: [],
+    },
+  })
+  const html = renderToString(
+    e(
+      HostStoreProviders,
+      { value: store },
+      e(PluginDetailDrawer, {
+        plugin: makePlugin({ id: 'custom:demo', enabled: true }),
+        open: true,
+        inline: true,
+        onClose: () => {},
+        onToggleEnabled: async () => {},
+        toggling: false,
+      }),
+    ),
+  )
+  assert.match(html, /split-toggle-btn plugin-drawer-split-btn/)
+  assert.match(html, /右屏打开/)
 })

@@ -152,17 +152,17 @@ export function PluginInstallModal({
               />
             </div>
 
-            <div className="callout callout--warning plugin-install-security" role="note">
+            <div className="callout callout-warn plugin-install-security" role="note">
               <HelmIcon name="shield-alert" size={13} />
-              <span>
+              <span className="callout-text">
                 插件在 Hub 进程内运行，拥有宿主权限，不是沙箱。仅安装可信来源的插件包。
               </span>
             </div>
 
             {errorText && (
-              <div className="callout callout--error" role="alert">
+              <div className="callout callout-error" role="alert">
                 <HelmIcon name="alert-circle" size={13} />
-                <span className="selectable">{errorText}</span>
+                <span className="callout-text selectable">{errorText}</span>
               </div>
             )}
 

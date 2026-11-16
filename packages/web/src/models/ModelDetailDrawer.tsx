@@ -326,7 +326,7 @@ export function ModelDetailDrawer({
               <div className="primary-drawer-header-left">
                 <div className="primary-drawer-title-col">
                   <div className="primary-drawer-title-row">
-                    <DialogTitle className="primary-drawer-title">
+                    <DialogTitle className="primary-drawer-title break-word">
                       {provider?.name || '供应商详情'}
                     </DialogTitle>
                     {provider?.configured ? (
@@ -336,13 +336,13 @@ export function ModelDetailDrawer({
                     )}
                     {provider?.dynamic && <span className="badge badge-neutral">动态同步</span>}
                   </div>
-                  <div className="text-xs text-subtle mono">{provider?.id}</div>
+                  <div className="text-subtle mono break-word">{provider?.id}</div>
                 </div>
               </div>
               <DialogClose asChild>
                 <button
                   type="button"
-                  className="btn btn-ghost btn-sm"
+                  className="btn btn-ghost btn-icon-sm"
                   aria-label="关闭"
                   title="关闭"
                 >
@@ -361,11 +361,8 @@ export function ModelDetailDrawer({
                 <>
                   {/* 凭证与连接设置 */}
                   <div className="section-flat">
-                    <div
-                      className="section-flat-header"
-                      style={{ justifyContent: 'space-between' }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <div className="section-flat-header flex-row-between">
+                      <div className="flex-row">
                         <HelmIcon name="key" size={14} />
                         <span className="section-flat-title">凭证与连接设置</span>
                       </div>
@@ -390,13 +387,13 @@ export function ModelDetailDrawer({
                       <label htmlFor="model-drawer-api-key" className="form-grid-label">
                         API 密钥
                       </label>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div className="flex-col-xs">
                         {provider.pluginId ? (
                           <>
                             <div className="form-grid-value" title="插件网关密钥">
                               由插件 {provider.pluginId} 的配置管理
                             </div>
-                            <span className="text-xs text-subtle">
+                            <span className="text-subtle">
                               该密钥经插件中心对应插件的配置项设置，不存入内核凭据库；在此填写不会生效。
                             </span>
                           </>
@@ -415,7 +412,7 @@ export function ModelDetailDrawer({
                               }
                               autoComplete="off"
                             />
-                            <span className="text-xs text-subtle">
+                            <span className="text-subtle">
                               密钥密文将安全存储于系统保密箱中，调用时由内核自动注入，不向模型泄露。
                             </span>
                           </>
@@ -425,7 +422,7 @@ export function ModelDetailDrawer({
                       <label htmlFor="model-drawer-base-url" className="form-grid-label">
                         服务端点
                       </label>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div className="flex-col-xs">
                         {endpointEditable ? (
                           <input
                             id="model-drawer-base-url"
@@ -441,25 +438,16 @@ export function ModelDetailDrawer({
                             }
                           />
                         ) : (
-                          <div className="form-grid-value mono" title="只读端点">
+                          <div className="form-grid-value mono break-word" title="只读端点">
                             {provider.baseUrl || '—'}
                           </div>
                         )}
-                        <span className="text-xs text-subtle">{endpointHint}</span>
+                        <span className="text-subtle">{endpointHint}</span>
                       </div>
                     </div>
 
                     {/* 连通性测试与删除密钥 */}
-                    <div
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: 10,
-                        marginTop: 10,
-                        flexWrap: 'wrap',
-                      }}
-                    >
+                    <div className="flex-row-between flex-row-wrap">
                       <button
                         type="button"
                         className="btn btn-sm"
@@ -473,7 +461,7 @@ export function ModelDetailDrawer({
                       {provider.configured && (
                         <button
                           type="button"
-                          className="btn btn-sm btn-ghost text-danger"
+                          className="btn btn-sm btn-ghost text-err"
                           onClick={() => setDeleteConfirmOpen(true)}
                           disabled={deleting}
                         >
@@ -485,15 +473,14 @@ export function ModelDetailDrawer({
 
                     {testResult && (
                       <div
-                        className={`callout ${testResult.success ? 'callout callout--success' : 'callout callout--error'}`}
+                        className={`callout ${testResult.success ? 'callout-ok' : 'callout-error'}`}
                         role={testResult.success ? 'status' : 'alert'}
-                        style={{ marginTop: 8 }}
                       >
                         <HelmIcon
                           name={testResult.success ? 'check' : 'alert-circle'}
                           size={13}
                         />
-                        <span className="selectable">
+                        <span className="callout-text selectable">
                           {testResult.message}
                           {testResult.latencyMs !== undefined &&
                             `（延迟 ${testResult.latencyMs}ms）`}
@@ -504,25 +491,22 @@ export function ModelDetailDrawer({
 
                   {/* 模型列表管理 (Model Chips 交互) */}
                   <div className="section-flat">
-                    <div
-                      className="section-flat-header"
-                      style={{ justifyContent: 'space-between' }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <div className="section-flat-header flex-row-between">
+                      <div className="flex-row">
                         <HelmIcon name="cpu" size={14} />
                         <span className="section-flat-title">模型清单与路由控制</span>
                       </div>
-                      <span className="badge badge-neutral mono" style={{ fontSize: 11 }}>
+                      <span className="badge badge-neutral mono tabular-nums">
                         {`已启用 ${enabledModelIds.length} / 共 ${models.length} 个模型`}
                       </span>
                     </div>
 
-                    <p className="text-xs text-subtle" style={{ margin: '4px 0 10px' }}>
+                    <p className="text-subtle">
                       点击胶囊药丸切换模型启用状态，未启用的模型将在目录中标记停用，且会话无法选用。
                     </p>
 
                     {models.length === 0 ? (
-                      <div className="text-subtle text-xs" style={{ padding: '8px 0' }}>
+                      <div className="text-subtle">
                         {provider.dynamic
                           ? '该动态供应商可通过上方「刷新目录」拉取可用模型。'
                           : '该供应商暂未登记预置模型，保存端点配置后将自动同步目录。'}
@@ -531,7 +515,7 @@ export function ModelDetailDrawer({
                       <div className="models model-chips-container">
                         {/* 操作工具栏：过滤搜索与批量控制 */}
                         <div className="mbulk model-chips-toolbar">
-                          <div className="search-box" style={{ flex: 1, minWidth: 0, maxWidth: 260 }}>
+                          <div className="search-box flex-1">
                             <HelmIcon name="search" size={13} />
                             <input
                               type="text"
@@ -572,7 +556,7 @@ export function ModelDetailDrawer({
                           aria-label="选择启用的模型"
                         >
                           {visibleModels.length === 0 ? (
-                            <span className="text-xs text-subtle" style={{ padding: '6px 8px' }}>
+                            <span className="text-subtle">
                               未找到匹配的模型
                             </span>
                           ) : (
@@ -630,17 +614,20 @@ export function ModelDetailDrawer({
             </div>
 
             {/* 抽屉底部动作栏 */}
-            <div className="primary-drawer-footer">
-              {saveSuccess && (
-                <span className="text-xs text-ok" style={{ marginRight: 'auto' }}>
-                  配置已成功保存
-                </span>
-              )}
-              {saveError && (
-                <span className="text-xs text-danger" style={{ marginRight: 'auto' }}>
-                  {saveError}
-                </span>
-              )}
+            <div className="primary-drawer-footer flex-row-between">
+              <div className="flex-1">
+                {saveSuccess && (
+                  <span className="text-subtle" role="status">
+                    配置已成功保存
+                  </span>
+                )}
+                {saveError && (
+                  <div className="callout callout-error" role="alert">
+                    <HelmIcon name="alert-circle" size={13} />
+                    <span className="callout-text">{saveError}</span>
+                  </div>
+                )}
+              </div>
               <button
                 type="button"
                 className="btn btn-primary"

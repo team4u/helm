@@ -220,6 +220,48 @@ test('PluginCenter DOM 交互：搜索过滤实时联动', { timeout: 60_000 }, 
   host.remove()
 })
 
+test('PluginCenter DOM 交互：渲染「全部 / 已启用 / 已停用」筛选药丸并支持切换过滤', { timeout: 60_000 }, async () => {
+  const { PluginCenter } = await import('../src/plugins/PluginCenter.js')
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = ReactDOMClient.createRoot(host)
+
+  const store = makeTestStore({
+    plugins: mockPlugins,
+    primaryTarget: { kind: 'plugins' },
+  })
+
+  try {
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: store }, e(PluginCenter, { inlineDrawer: true })))
+    })
+
+    const enabledCount = mockPlugins.filter((p) => p.enabled).length
+    const disabledCount = mockPlugins.filter((p) => !p.enabled).length
+    const tabs = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+    assert.equal(tabs.length, 3, '应渲染 全部 / 已启用 / 已停用 三个状态药丸')
+    const disabledTab = tabs.find((t) => t.textContent?.includes('已停用'))
+    assert.ok(disabledTab)
+    assert.match(disabledTab.textContent ?? '', new RegExp(String(disabledCount)))
+
+    await act(async () => {
+      disabledTab.click()
+    })
+    assert.equal(host.querySelectorAll('.plugin-card').length, disabledCount)
+
+    const enabledTab = tabs.find((t) => t.textContent?.includes('已启用'))!
+    await act(async () => {
+      enabledTab.click()
+    })
+    assert.equal(host.querySelectorAll('.plugin-card').length, enabledCount)
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
+})
+
 // ---------------------------------------------------------------------------
 // 4. DOM 交互测试：抽屉展开与关闭联动
 // ---------------------------------------------------------------------------

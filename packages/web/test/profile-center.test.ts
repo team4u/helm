@@ -11,10 +11,13 @@ import {
   buildProfileCategoryCounts,
   buildProfileModelOptions,
   filterProfiles,
+  formatProfileLocation,
   isHerdrProfile,
   isSystemProfile,
   profileIdValid,
+  resolveEffectiveProfileModel,
   resolveProfileModel,
+  summarizeProfileActivity,
   summarizeProfiles,
   type ProfileCategoryTab,
 } from '../src/profiles/profile-center-model.js'
@@ -723,4 +726,194 @@ test('ProfileDetailDrawer：无 memory 插件贡献时不渲染长期记忆区�
     ),
   )
   assert.doesNotMatch(html, /长期记忆/, '无插件贡献时不得出现记忆区块')
+})
+
+test('profile-center-model: 有效模型/全局继承解析、节点工作目录与会话活跃态汇总', { timeout: 60_000 }, () => {
+  const bound = resolveEffectiveProfileModel(
+    { ...mockProfiles[3], thinkingLevel: 'high' },
+    { defaultModel: 'openai/gpt-4o', defaultThinkingLevel: 'medium' },
+  )
+  assert.deepEqual(bound, { model: 'deepseek-r1', thinkingLevel: 'high', source: 'bound' })
+
+  const inherited = resolveEffectiveProfileModel(
+    { id: 'worker', name: 'Worker' },
+    { defaultModel: 'openai/gpt-4o', defaultThinkingLevel: 'low' },
+  )
+  assert.deepEqual(inherited, { model: 'openai/gpt-4o', thinkingLevel: 'low', source: 'global' })
+
+  const unset = resolveEffectiveProfileModel({ id: 'worker', name: 'Worker' }, null)
+  assert.deepEqual(unset, { source: 'unset' })
+
+  assert.deepEqual(formatProfileLocation({ id: 'x', nodeId: 'gpu-1', cwd: '/srv/app' }), {
+    nodeId: 'gpu-1',
+    isRemoteNode: true,
+    cwd: '/srv/app',
+  })
+  assert.deepEqual(formatProfileLocation({ id: 'x' }), {
+    nodeId: 'local',
+    isRemoteNode: false,
+    cwd: undefined,
+  })
+
+  const workingActivity = summarizeProfileActivity(
+    { id: 'coder', name: 'Coder' },
+    [
+      {
+        id: 1,
+        title: 'Task 1',
+        profileId: 'coder',
+        tags: [],
+        cwd: '/tmp',
+        model: 'm',
+        thinkingLevel: '',
+        status: 'working',
+        stateChangeSeq: 1,
+        completionSeq: 0,
+        unread: false,
+        pinned: false,
+        pendingAskCount: 0,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
+    [],
+  )
+  assert.equal(workingActivity.conversationCount, 1)
+  assert.equal(workingActivity.stateKind, 'working')
+  assert.equal(workingActivity.stateLabel, '运行中')
+
+  const disabledActivity = summarizeProfileActivity(
+    { id: 'herdr-worker', managedByPlugin: 'builtin:herdr' },
+    [],
+    [
+      {
+        id: 'builtin:herdr',
+        name: 'Herdr',
+        enabled: false,
+        locked: false,
+        tools: [],
+        actions: [],
+        hooks: [],
+      },
+    ],
+  )
+  assert.equal(disabledActivity.managingPluginDisabled, true)
+  assert.equal(disabledActivity.stateKind, 'plugin-disabled')
+  assert.equal(disabledActivity.stateLabel, '插件已停用')
+})
+
+test('ProfileCard: 展示继承全局模型、节点与工作目录、会话数及右下角「对话」直达且阻止冒泡', { timeout: 60_000 }, async () => {
+  const { act } = await import('react')
+  const ReactDOMClient = await import('react-dom/client')
+  const openedTargets: unknown[] = []
+  let selectCalls = 0
+
+  const profileWithNode: Profile = {
+    id: 'remote-dev',
+    name: '远程研发助手',
+    description: '在 GPU 节点运行',
+    nodeId: 'gpu-node-1',
+    cwd: '/data/workspace/helm',
+    skills: ['helm-cli'],
+  }
+
+  const store = makeTestStore({
+    defaultModelInfo: { defaultModel: 'anthropic/claude-3-7-sonnet', defaultThinkingLevel: 'high' },
+    conversations: [
+      {
+        id: 11,
+        title: '调试任务',
+        profileId: 'remote-dev',
+        tags: [],
+        cwd: '/data/workspace/helm',
+        model: 'anthropic/claude-3-7-sonnet',
+        thinkingLevel: 'high',
+        status: 'blocked',
+        stateChangeSeq: 1,
+        completionSeq: 0,
+        unread: true,
+        pinned: false,
+        pendingAskCount: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
+    openTarget: (target) => {
+      openedTargets.push(target)
+    },
+  })
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = ReactDOMClient.createRoot(host)
+
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: store },
+          e(ProfileCard, {
+            profile: profileWithNode,
+            onSelect: () => {
+              selectCalls++
+            },
+          }),
+        ),
+      )
+    })
+
+    const text = host.textContent ?? ''
+    assert.match(text, /anthropic\/claude-3-7-sonnet（全局默认） · high/)
+    assert.match(text, /gpu-node-1 · \/data\/workspace\/helm/)
+    assert.match(text, /待审批/)
+    assert.match(text, /关联 1 个会话/)
+    assert.equal(host.querySelectorAll('[style]').length, 0, 'ProfileCard 严禁残留内联 style')
+    assert.doesNotMatch(host.innerHTML, EMOJI_REGEX, 'ProfileCard 严禁包含 Emoji')
+
+    const chatBtn = Array.from(host.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('对话'),
+    )
+    assert.ok(chatBtn, 'ProfileCard 右下角应渲染对话按钮')
+    await act(async () => {
+      chatBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    assert.equal(selectCalls, 0, '点击「对话」按钮必须 stopPropagation 不触发卡片选中')
+    assert.deepEqual(openedTargets, [{ kind: 'agent', profileId: 'remote-dev' }])
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
+})
+
+test('ProfileDetailDrawer: 关闭按钮使用 .btn-icon-sm 且源码零 Emoji 与零 .callout--* 旧类', { timeout: 60_000 }, () => {
+  const files = [
+    'src/profiles/profile-center-model.ts',
+    'src/profiles/ProfileCard.tsx',
+    'src/profiles/ProfileCenter.tsx',
+    'src/profiles/ProfileDetailDrawer.tsx',
+  ]
+  for (const rel of files) {
+    const content = readFileSync(join(PKG_ROOT, rel), 'utf-8')
+    assert.doesNotMatch(content, EMOJI_REGEX, `${rel} 严禁含 Emoji`)
+    assert.ok(!content.includes('callout--'), `${rel} 不得残留 callout--* 旧类`)
+  }
+  const store = makeTestStore({ models: mockModels, skills: mockSkills })
+  const html = renderToStaticMarkup(
+    e(
+      HostStoreProviders,
+      { value: store },
+      e(ProfileDetailDrawer, {
+        profile: { ...mockProfiles[3], thinkingLevel: 'xhigh' },
+        isNew: false,
+        open: true,
+        inline: true,
+        onClose: () => {},
+      }),
+    ),
+  )
+  assert.match(html, /btn btn-ghost btn-icon-sm/, '关闭按钮应使用固定宽高 .btn-icon-sm')
+  assert.match(html, /callout callout-warn/, '不支持的思考档位提示应使用统一 .callout-warn')
 })

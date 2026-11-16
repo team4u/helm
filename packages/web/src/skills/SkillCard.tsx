@@ -1,6 +1,6 @@
-import React from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import type { SkillSummary } from '@helm/protocol'
-import { HelmIcon } from '@helm/plugin-client'
+import { copyToClipboard, HelmIcon } from '@helm/plugin-client'
 import { getSkillSourceBadge } from './skill-center-model.js'
 
 export interface SkillCardProps {
@@ -12,9 +12,9 @@ export interface SkillCardProps {
 /**
  * 全屏技能中心单张技能卡片视图组件：
  * - 响应式网格流单元，遵循 1px 发丝边框与克制低饱和设计系统规范；
- * - 顶部展示名称、来源徽章（内置 / 共享 / 工作区 / 插件）与等宽 ID，零图标杂音；
+ * - 顶部展示名称、有效来源徽章（内置 / 共享 / 工作区 / 插件）与等宽 ID；
  * - 中部展示功能说明；
- * - 底部展示关联文件数量胶囊（N 个参考文件）；
+ * - 底部展示可一键复制的 `/skill:<id>` 指令胶囊与参考文件数（为 0 时省略）；
  * - 支持鼠标点击与键盘无障碍交互（Enter / Space 激活）；
  * - 严格遵循零 Emoji 铁律与 Fast Refresh 规范。
  */
@@ -26,6 +26,15 @@ export function SkillCard({
   const sourceBadge = getSkillSourceBadge(skill)
   const refCount = skill.references?.length ?? 0
   const description = skill.description || '暂无描述'
+  const slashCommand = `/skill:${skill.id}`
+  const [copied, setCopied] = useState(false)
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current)
+    }
+  }, [])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' || e.key === ' ') {
@@ -34,14 +43,26 @@ export function SkillCard({
     }
   }
 
+  const handleCopyCommand = async (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation()
+    const ok = await copyToClipboard(slashCommand)
+    if (!ok) return
+    setCopied(true)
+    if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current)
+    copyTimerRef.current = setTimeout(() => {
+      setCopied(false)
+      copyTimerRef.current = null
+    }, 1500)
+  }
+
   const badgeClass =
     sourceBadge.variant === 'builtin'
       ? 'badge badge-neutral'
       : sourceBadge.variant === 'plugin'
-        ? 'badge badge-subtle mono'
+        ? 'badge badge-neutral mono'
         : sourceBadge.variant === 'agents'
           ? 'badge badge-accent'
-          : 'badge badge-ghost'
+          : 'badge badge-neutral'
 
   const cardClasses = [
     'primary-card',
@@ -72,7 +93,7 @@ export function SkillCard({
               {sourceBadge.label}
             </span>
           </div>
-          <div className="primary-card-id mono" title={skill.id}>
+          <div className="primary-card-id mono text-subtle break-word" title={skill.id}>
             {skill.id}
           </div>
         </div>
@@ -83,13 +104,26 @@ export function SkillCard({
         {description}
       </div>
 
-      {/* 底部：参考文件数量胶囊 */}
+      {/* 底部：斜杠指令快捷复制与参考文件数量（为 0 时省略） */}
       <div className="primary-card-footer">
         <div className="primary-card-pills">
-          <span className="primary-card-pill" title={`${refCount} 个参考文件`}>
-            <HelmIcon name="file-text" size={11} />
-            <span>{`${refCount} 个参考文件`}</span>
-          </span>
+          <button
+            type="button"
+            className="primary-card-pill mono"
+            title={`复制斜杠指令 ${slashCommand}`}
+            aria-label={`复制斜杠指令 ${slashCommand}`}
+            onClick={(e) => void handleCopyCommand(e)}
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            <HelmIcon name={copied ? 'check' : 'copy'} size={10} />
+            <span>{copied ? '已复制' : slashCommand}</span>
+          </button>
+          {refCount > 0 && (
+            <span className="primary-card-pill" title={`${refCount} 个参考文件`}>
+              <HelmIcon name="file-text" size={11} />
+              <span>{`${refCount} 个参考文件`}</span>
+            </span>
+          )}
         </div>
       </div>
     </div>

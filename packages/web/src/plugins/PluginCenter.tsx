@@ -10,7 +10,14 @@ import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import {
   filterPlugins,
   summarizePlugins,
+  type PluginStatusFilter,
 } from './plugin-center-model.js'
+
+const PLUGIN_STATUS_TABS: Array<{ key: PluginStatusFilter; label: string }> = [
+  { key: 'all', label: '全部' },
+  { key: 'enabled', label: '已启用' },
+  { key: 'disabled', label: '已停用' },
+]
 
 export interface PluginCenterProps {
   isSplit?: boolean
@@ -35,6 +42,7 @@ export function PluginCenter({
 }: PluginCenterProps): React.JSX.Element {
   const store = useHelmStore()
   const [query, setQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState<PluginStatusFilter>('all')
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const [installOpen, setInstallOpen] = useState(false)
   // 刷新代数：安装/更新/卸载后拉取列表；SSE plugin.changed 到达时避免重复拉取覆盖当前 target
@@ -42,13 +50,15 @@ export function PluginCenter({
   const refreshGeneration = React.useRef(0)
 
   const plugins = store.plugins ?? []
+  const statusSummary = useMemo(() => summarizePlugins(plugins), [plugins])
 
   const filteredPlugins = useMemo(() => {
-    return filterPlugins(plugins, { query })
-  }, [plugins, query])
+    return filterPlugins(plugins, { query, status: statusFilter })
+  }, [plugins, query, statusFilter])
 
+  const currentTarget = isSplit ? store.splitTarget : store.primaryTarget
   const selectedPluginId =
-    store.primaryTarget.kind === 'plugins' ? store.primaryTarget.pluginId : undefined
+    currentTarget?.kind === 'plugins' ? currentTarget.pluginId : undefined
 
   const selectedPlugin = useMemo(
     () => plugins.find((p) => p.id === selectedPluginId) ?? null,
@@ -81,18 +91,25 @@ export function PluginCenter({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshTick])
 
+  const openPluginTarget = (pluginId?: string) => {
+    store.openTarget(
+      pluginId !== undefined ? { kind: 'plugins', pluginId } : { kind: 'plugins' },
+      isSplit ? { split: true } : undefined,
+    )
+  }
+
   const handleSelectPlugin = (pluginId: string) => {
-    store.openTarget({ kind: 'plugins', pluginId })
+    openPluginTarget(pluginId)
   }
 
   const handleCloseDrawer = () => {
-    store.openTarget({ kind: 'plugins' })
+    openPluginTarget(undefined)
   }
 
   // 安装成功：刷新列表并导航至新插件详情抽屉（HTTP 结果先到，SSE 随后 upsert，两者幂等）。
   // enable=true 但启用失败时，安装仍成功；必须显式提示，不把 disabled 状态伪装成已启用。
   const handleInstalled = (pluginId: string, enableError?: { code: string; message: string }) => {
-    store.openTarget({ kind: 'plugins', pluginId })
+    openPluginTarget(pluginId)
     handlePackageChanged()
     if (enableError !== undefined) {
       store.pushNotice({
@@ -106,7 +123,7 @@ export function PluginCenter({
 
   // 卸载成功：关闭抽屉并刷新列表（列表已无该插件，抽屉必须先收起）
   const handleRemoved = () => {
-    store.openTarget({ kind: 'plugins' })
+    openPluginTarget(undefined)
   }
 
   const handleTogglePlugin = async (
@@ -219,6 +236,35 @@ export function PluginCenter({
             </button>
           )}
         </div>
+
+        <div
+          className="primary-category-pills"
+          role="tablist"
+          aria-label="插件状态筛选"
+        >
+          {PLUGIN_STATUS_TABS.map((tab) => {
+            const count =
+              tab.key === 'all'
+                ? statusSummary.total
+                : tab.key === 'enabled'
+                  ? statusSummary.enabled
+                  : statusSummary.disabled
+            const isActive = statusFilter === tab.key
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                className={`primary-category-pill${isActive ? ' is-active' : ''}`}
+                onClick={() => setStatusFilter(tab.key)}
+              >
+                <span>{tab.label}</span>
+                <span className="badge tabular-nums">{count}</span>
+              </button>
+            )
+          })}
+        </div>
       </div>
 
       {/* 主视口：自适应响应式卡片网格或空状态 */}
@@ -243,14 +289,15 @@ export function PluginCenter({
             </div>
             <div className="plugin-center-empty-text">未找到匹配的插件</div>
             <div className="plugin-center-empty-hint text-subtle">
-              请尝试调整搜索关键字。
+              请尝试调整搜索关键字或切换启用状态筛选。
             </div>
-            {query && (
+            {(query || statusFilter !== 'all') && (
               <button
                 type="button"
                 className="btn btn-sm"
                 onClick={() => {
                   setQuery('')
+                  setStatusFilter('all')
                 }}
               >
                 <HelmIcon name="rotate-ccw" size={12} />

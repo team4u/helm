@@ -523,5 +523,57 @@ test('静态扫描: nodes/ 目录下所有源码绝对 0 Emoji', { timeout: 60_0
       EMOJI_REGEX,
       `${rel} 源码中严禁含有任何 Emoji 表情图标`,
     )
+    assert.ok(!content.includes('style='), `${rel} 源码不应残留内联 style`)
+  }
+})
+
+test('NodeCard & NodeDetailDrawer: 使用固定右上角 .btn-icon-sm 与统一 .callout-ok / .callout-error', { timeout: 60_000 }, async () => {
+  const cardHtml = renderToStaticMarkup(
+    e(NodeCard, { node: mockNodes()[1]!, onSelect: () => {} }),
+  )
+  assert.match(cardHtml, /GPU 推理集群节点 A/)
+  assert.ok(!cardHtml.includes('primary-card-desc'), 'NodeCard 状态徽章组不受 2 行截断容器包裹')
+
+  const store = makeTestStore({ nodes: mockNodes() as never })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ error: '节点内核离线' }), { status: 503 })) as typeof fetch
+
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: store },
+          e(NodeDetailDrawer, {
+            node: mockNodes()[1]!,
+            open: true,
+            inline: true,
+            onClose: () => {},
+          }),
+        ),
+      )
+    })
+
+    assert.ok(container.querySelector('.btn-icon-sm'), 'NodeDetailDrawer 关闭按钮应使用 .btn-icon-sm')
+    const healthBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('健康体检'),
+    )
+    assert.ok(healthBtn)
+    await act(async () => {
+      healthBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    await act(async () => {})
+    const errCallout = container.querySelector('.callout.callout-error')
+    assert.ok(errCallout, '健康体检失败应展示统一 .callout-error')
+  } finally {
+    globalThis.fetch = originalFetch
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
   }
 })

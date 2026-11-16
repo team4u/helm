@@ -35,8 +35,16 @@ export interface ProviderItem {
   models?: ProviderModelItem[]
 }
 
+export type ProviderFilterTab = 'all' | 'configured'
+
+export const PROVIDER_FILTER_TABS: Array<{ key: ProviderFilterTab; label: string }> = [
+  { key: 'all', label: '全部' },
+  { key: 'configured', label: '已配置' },
+]
+
 export interface FilterProvidersOptions {
   query?: string
+  statusTab?: ProviderFilterTab
 }
 
 export interface ProviderSummaryStats {
@@ -153,16 +161,68 @@ export const DEFAULT_PROVIDERS: ProviderItem[] = [
 ]
 
 /**
+ * 统计供应商全部与已配置数量
+ */
+export function buildProviderCategoryCounts(
+  providers: ProviderItem[],
+): Record<ProviderFilterTab, number> {
+  let configured = 0
+  for (const p of providers) {
+    if (p.configured) configured++
+  }
+  return {
+    all: providers.length,
+    configured,
+  }
+}
+
+/**
+ * 供应商列表默认排序：已配置优先，其次按名称升序
+ */
+export function sortProvidersConfiguredFirst(providers: ProviderItem[]): ProviderItem[] {
+  return [...providers].sort(
+    (a, b) =>
+      Number(b.configured) - Number(a.configured) ||
+      a.name.localeCompare(b.name),
+  )
+}
+
+/**
+ * 提取供应商卡片预览的前 N 个可用模型短名与剩余数量
+ */
+export function summarizeCardModels(
+  provider: ProviderItem,
+  maxPreview = 3,
+): { previewNames: string[]; remainingCount: number } {
+  const available = (provider.models ?? []).filter((m) => m.enabled !== false)
+  const previewNames = available.slice(0, maxPreview).map((m) => {
+    const raw = (m.name || m.id).trim()
+    const slashIdx = raw.lastIndexOf('/')
+    return slashIdx >= 0 && slashIdx < raw.length - 1 ? raw.slice(slashIdx + 1) : raw
+  })
+  const totalAvailable = available.length
+  return {
+    previewNames,
+    remainingCount: Math.max(0, totalAvailable - previewNames.length),
+  }
+}
+
+/**
  * 多维过滤供应商列表：
- * 匹配关键字（供应商名称、ID、描述或包含的模型 ID/名称）。
+ * 匹配分类状态（全部 / 已配置）与关键字（供应商名称、ID、描述或包含的模型 ID/名称）。
  */
 export function filterProviders(
   providers: ProviderItem[],
   options: FilterProvidersOptions,
 ): ProviderItem[] {
   const term = (options.query ?? '').trim().toLowerCase()
+  const statusTab = options.statusTab ?? 'all'
 
   return providers.filter((provider) => {
+    if (statusTab === 'configured' && !provider.configured) {
+      return false
+    }
+
     // 搜索词匹配
     if (!term) return true
 

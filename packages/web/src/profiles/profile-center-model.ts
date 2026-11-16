@@ -1,4 +1,10 @@
-import type { Profile as ProtocolProfile, ProfileRuntime, ProfileStarterPrompt } from '@helm/protocol'
+import type {
+  ConversationSummary,
+  PluginSummary,
+  Profile as ProtocolProfile,
+  ProfileRuntime,
+  ProfileStarterPrompt,
+} from '@helm/protocol'
 import {
   PROFILE_STARTERS_MAX_ITEMS,
   PROFILE_STARTER_LABEL_MAX_LENGTH,
@@ -223,6 +229,159 @@ export function visibleStarters(profile: Profile | undefined): ProfileStarterPro
 /** 是否已达上限（禁止继续新增）。 */
 export function startersAtLimit(drafts: StarterDraft[]): boolean {
   return drafts.length >= PROFILE_STARTERS_MAX_ITEMS
+}
+
+export interface EffectiveProfileModelInfo {
+  model?: string
+  thinkingLevel?: string
+  source: 'bound' | 'global' | 'unset'
+}
+
+/**
+ * 解析角色在界面上实际生效的模型与思考档位（自身绑定优先，否则继承全局默认）
+ */
+export function resolveEffectiveProfileModel(
+  profile: Profile,
+  defaultModelInfo?: { defaultModel?: string; defaultThinkingLevel?: string } | null,
+): EffectiveProfileModelInfo {
+  const boundModel = resolveProfileModel(profile)?.trim() ?? ''
+  if (boundModel !== '') {
+    const thinking = profile.thinkingLevel?.trim()
+    return {
+      model: boundModel,
+      thinkingLevel: thinking && thinking !== 'off' ? thinking : undefined,
+      source: 'bound',
+    }
+  }
+  const globalModel = defaultModelInfo?.defaultModel?.trim() ?? ''
+  if (globalModel !== '') {
+    const globalThinking = defaultModelInfo?.defaultThinkingLevel?.trim()
+    return {
+      model: globalModel,
+      thinkingLevel: globalThinking && globalThinking !== 'off' ? globalThinking : undefined,
+      source: 'global',
+    }
+  }
+  return { source: 'unset' }
+}
+
+/**
+ * 格式化角色默认计算节点与工作目录归属
+ */
+export function formatProfileLocation(profile: Profile): {
+  nodeId: string
+  isRemoteNode: boolean
+  cwd?: string
+} {
+  const nodeId = profile.nodeId?.trim() || 'local'
+  const cwd = profile.cwd?.trim() || undefined
+  return {
+    nodeId,
+    isRemoteNode: nodeId !== 'local',
+    cwd,
+  }
+}
+
+export interface ProfileActivitySummary {
+  conversationCount: number
+  workingCount: number
+  blockedCount: number
+  errorCount: number
+  managingPluginDisabled: boolean
+  stateKind: 'working' | 'blocked' | 'error' | 'plugin-disabled' | 'active' | 'idle'
+  stateLabel: string
+}
+
+/**
+ * 汇总角色当前关联会话活跃度与托管插件启用状态
+ */
+export function summarizeProfileActivity(
+  profile: Profile,
+  conversations: ConversationSummary[] = [],
+  plugins: PluginSummary[] = [],
+): ProfileActivitySummary {
+  let conversationCount = 0
+  let workingCount = 0
+  let blockedCount = 0
+  let errorCount = 0
+
+  for (const conv of conversations) {
+    if (conv.profileId !== profile.id) continue
+    conversationCount++
+    if (conv.status === 'working') workingCount++
+    else if (conv.status === 'blocked') blockedCount++
+    else if (conv.status === 'error') errorCount++
+  }
+
+  const managingPlugin = profile.managedByPlugin
+    ? plugins.find((plugin) => plugin.id === profile.managedByPlugin)
+    : undefined
+  const managingPluginDisabled = Boolean(managingPlugin && !managingPlugin.enabled)
+
+  if (managingPluginDisabled) {
+    return {
+      conversationCount,
+      workingCount,
+      blockedCount,
+      errorCount,
+      managingPluginDisabled,
+      stateKind: 'plugin-disabled',
+      stateLabel: '插件已停用',
+    }
+  }
+  if (workingCount > 0) {
+    return {
+      conversationCount,
+      workingCount,
+      blockedCount,
+      errorCount,
+      managingPluginDisabled,
+      stateKind: 'working',
+      stateLabel: workingCount > 1 ? `运行中 (${workingCount})` : '运行中',
+    }
+  }
+  if (blockedCount > 0) {
+    return {
+      conversationCount,
+      workingCount,
+      blockedCount,
+      errorCount,
+      managingPluginDisabled,
+      stateKind: 'blocked',
+      stateLabel: blockedCount > 1 ? `待审批 (${blockedCount})` : '待审批',
+    }
+  }
+  if (errorCount > 0) {
+    return {
+      conversationCount,
+      workingCount,
+      blockedCount,
+      errorCount,
+      managingPluginDisabled,
+      stateKind: 'error',
+      stateLabel: errorCount > 1 ? `异常 (${errorCount})` : '存在异常',
+    }
+  }
+  if (conversationCount > 0) {
+    return {
+      conversationCount,
+      workingCount,
+      blockedCount,
+      errorCount,
+      managingPluginDisabled,
+      stateKind: 'active',
+      stateLabel: `${conversationCount} 个会话`,
+    }
+  }
+  return {
+    conversationCount,
+    workingCount,
+    blockedCount,
+    errorCount,
+    managingPluginDisabled,
+    stateKind: 'idle',
+    stateLabel: '待命中',
+  }
 }
 
 /**

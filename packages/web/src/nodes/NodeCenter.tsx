@@ -56,8 +56,9 @@ export function NodeCenter({
     })
   }, [nodes, query, activeTab])
 
+  const currentTarget = isSplit ? store.splitTarget : store.primaryTarget
   const selectedNodeId =
-    store.primaryTarget?.kind === 'nodes' ? store.primaryTarget.nodeId : undefined
+    currentTarget?.kind === 'nodes' ? currentTarget.nodeId : undefined
 
   const selectedNode = useMemo(
     () => nodes.find((n) => n.id === selectedNodeId) ?? null,
@@ -68,12 +69,12 @@ export function NodeCenter({
 
   const handleSelectNode = (nodeId: string) => {
     setIsAddingNew(false)
-    store.openTarget({ kind: 'nodes', nodeId })
+    store.openTarget({ kind: 'nodes', nodeId }, isSplit ? { split: true } : undefined)
   }
 
   const handleCloseDrawer = () => {
     setIsAddingNew(false)
-    store.openTarget({ kind: 'nodes' })
+    store.openTarget({ kind: 'nodes' }, isSplit ? { split: true } : undefined)
   }
 
   const handleOpenAddNew = () => {

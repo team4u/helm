@@ -179,33 +179,35 @@ export function NodeDetailDrawer({
               </div>
               <div className="primary-drawer-title-col">
                 <div className="primary-drawer-title-row">
-                  <DialogTitle className="primary-drawer-title">{displayName}</DialogTitle>
+                  <DialogTitle className="primary-drawer-title break-word">
+                    {displayName}
+                  </DialogTitle>
                   {!isNew && (
                     <span
-                      className={`badge ${isOnline ? 'badge-ok' : 'badge-neutral'} text-xs`}
+                      className={`badge ${isOnline ? 'badge-ok' : 'badge-neutral'}`}
                     >
                       <HelmIcon name={isOnline ? 'check' : 'circle'} size={10} />
                       <span>{isOnline ? '在线' : '离线'}</span>
                     </span>
                   )}
                   {isLocal && (
-                    <span className="badge badge-neutral text-xs">本机</span>
+                    <span className="badge badge-neutral">本机</span>
                   )}
                   {node?.version && (
-                    <span className="badge badge-neutral mono text-xs">
+                    <span className="badge badge-neutral mono">
                       {node.version.startsWith('v') ? node.version : `v${node.version}`}
                     </span>
                   )}
                 </div>
                 {!isNew && node?.id && (
-                  <div className="mono text-xs text-subtle">{node.id}</div>
+                  <div className="mono text-subtle break-word">{node.id}</div>
                 )}
               </div>
             </div>
             <DialogClose asChild>
               <button
                 type="button"
-                className="btn btn-ghost btn-sm"
+                className="btn btn-ghost btn-icon-sm"
                 aria-label="关闭"
                 title="关闭"
                 onClick={onClose}
@@ -283,11 +285,8 @@ export function NodeDetailDrawer({
                 {/* 2. 节点健康体检 */}
                 {!isNew && node && (
                   <section className="section-flat">
-                    <div
-                      className="section-flat-header"
-                      style={{ justifyContent: 'space-between' }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <div className="section-flat-header flex-row-between">
+                      <div className="flex-row">
                         <HelmIcon name="activity" size={13} />
                         <span className="section-flat-title">健康体检与资源负载</span>
                       </div>
@@ -338,11 +337,14 @@ export function NodeDetailDrawer({
 
                     {healthResult && (
                       <div
-                        className="badge badge-ok"
-                        style={{ marginTop: '8px', padding: '6px 10px', width: '100%' }}
+                        className={`callout ${healthResult.updateAvailable ? 'callout-warn' : 'callout-ok'}`}
+                        role="status"
                       >
-                        <HelmIcon name="check" size={12} />
-                        <span>
+                        <HelmIcon
+                          name={healthResult.updateAvailable ? 'alert-triangle' : 'check'}
+                          size={13}
+                        />
+                        <span className="callout-text">
                           {healthResult.updateAvailable
                             ? `存在可用更新：v${healthResult.latestVersion}`
                             : '节点内核运行正常，版本已处于最新状态'}
@@ -351,12 +353,9 @@ export function NodeDetailDrawer({
                     )}
 
                     {healthError && (
-                      <div
-                        className="badge badge-warn"
-                        style={{ marginTop: '8px', padding: '6px 10px', width: '100%' }}
-                      >
-                        <HelmIcon name="alert-triangle" size={12} />
-                        <span>{healthError}</span>
+                      <div className="callout callout-error" role="alert">
+                        <HelmIcon name="alert-circle" size={13} />
+                        <span className="callout-text">{healthError}</span>
                       </div>
                     )}
                   </section>
@@ -371,7 +370,7 @@ export function NodeDetailDrawer({
                     </div>
 
                     {isNew && (
-                      <div className="form-grid" style={{ marginBottom: '10px' }}>
+                      <div className="form-grid">
                         <label htmlFor="new-node-id-input" className="form-grid-label">
                           节点 ID
                         </label>
@@ -386,7 +385,7 @@ export function NodeDetailDrawer({
                       </div>
                     )}
 
-                    <div style={{ marginBottom: '10px' }}>
+                    <div className="flex-row">
                       <button
                         type="button"
                         className="btn btn-sm btn-primary"
@@ -399,20 +398,17 @@ export function NodeDetailDrawer({
                     </div>
 
                     {tokenError && (
-                      <div
-                        className="badge badge-warn"
-                        style={{ marginBottom: '10px', padding: '6px 10px' }}
-                      >
-                        <HelmIcon name="alert-circle" size={12} />
-                        <span>{tokenError}</span>
+                      <div className="callout callout-error" role="alert">
+                        <HelmIcon name="alert-circle" size={13} />
+                        <span className="callout-text">{tokenError}</span>
                       </div>
                     )}
 
                     {issuedToken && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
-                        <div className="text-subtle text-xs">接入令牌（一次性展示）：</div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <code className="code-box selectable flex-1 mono text-xs">
+                      <div className="flex-col">
+                        <div className="text-subtle">接入令牌（一次性展示）：</div>
+                        <div className="flex-row flex-row-wrap">
+                          <code className="code-box selectable flex-1 mono">
                             {issuedToken}
                           </code>
                           <button
@@ -429,10 +425,10 @@ export function NodeDetailDrawer({
                     )}
 
                     {guide && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        <div className="text-subtle text-xs">一键接入命令行（后台守护进程启动）：</div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <code className="code-box selectable flex-1 mono text-xs">
+                      <div className="flex-col">
+                        <div className="text-subtle">一键接入命令行（后台守护进程启动）：</div>
+                        <div className="flex-row flex-row-wrap">
+                          <code className="code-box selectable flex-1 mono">
                             {guide.oneLineCommand}
                           </code>
                           <button
@@ -446,17 +442,17 @@ export function NodeDetailDrawer({
                           </button>
                         </div>
 
-                        <div className="text-subtle text-xs" style={{ marginTop: '4px' }}>
+                        <div className="text-subtle">
                           常用维护命令：
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <code className="code-box selectable flex-1 mono text-xs">
+                        <div className="flex-row flex-row-wrap">
+                          <code className="code-box selectable flex-1 mono">
                             {guide.startDaemonCommand}
                           </code>
                           <CopyButton text={guide.startDaemonCommand} />
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <code className="code-box selectable flex-1 mono text-xs">
+                        <div className="flex-row flex-row-wrap">
+                          <code className="code-box selectable flex-1 mono">
                             {guide.doctorCommand}
                           </code>
                           <CopyButton text={guide.doctorCommand} />
@@ -474,12 +470,11 @@ export function NodeDetailDrawer({
                       <span className="section-flat-title">注册工具能力</span>
                     </div>
 
-                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <div className="primary-card-pills">
                       {tools.map((tool) => (
                         <span
                           key={tool}
                           className="primary-card-pill mono"
-                          style={{ height: '24px', padding: '0 8px' }}
                           title={`工具: ${tool}`}
                         >
                           <HelmIcon name="terminal" size={11} />
