@@ -13,6 +13,7 @@ import {
   filterConversationsByTag,
   getConversationPresence,
   isConversationArchived,
+  presenceNavClassSuffix,
   resolveSidebarTargetPresence,
   type SidebarTargetPresence,
 } from './sidebar-model.js'
@@ -31,16 +32,6 @@ import {
   SidebarPaneTag,
   StatusDot,
 } from './SidebarPrimitives.js'
-
-/** 按在场/焦点推导侧栏行级状态修饰类名。 */
-function presenceClassSuffix(presence: SidebarTargetPresence): string {
-  const stateClass = presence.active
-    ? ' nav-item-active'
-    : presence.splitSecondary
-      ? ' nav-item-split'
-      : ''
-  return `${stateClass}${presence.focused ? ' nav-item-focused' : ''}`
-}
 
 /** 插件动态会话分组区（sidebar.section）：filterTag 分组通用渲染，支持 collapsible / defaultCollapsed。 */
 function SidebarSectionGroups({ store, background }: { store: HelmStoreValue; background: ConversationBackgroundIndex }) {
@@ -84,7 +75,7 @@ function ConversationRow({
 }) {
   return (
     <div
-      className={`nav-item${presenceClassSuffix(presence)}`}
+      className={`nav-item${presenceNavClassSuffix(presence)}`}
       style={{ minHeight: 30, opacity: 1 }}
     >
       <button
@@ -199,7 +190,7 @@ function ViewNavGroup({ store }: { store: HelmStoreValue }) {
         return (
           <div
             key={view.key}
-            className={`nav-item${presenceClassSuffix(presence)}`}
+            className={`nav-item${presenceNavClassSuffix(presence)}`}
             style={{ cursor: 'pointer' }}
           >
             <button
@@ -368,7 +359,7 @@ function SettingsNavGroup({ store, onNavigate }: { store: HelmStoreValue; onNavi
       {CENTER_TARGETS.map((key) => {
         const presence = resolveSidebarTargetPresence(store, (t) => t.kind === key)
         return (
-          <div key={key} className={`nav-item settings-nav-item${presenceClassSuffix(presence)}`}>
+          <div key={key} className={`nav-item settings-nav-item${presenceNavClassSuffix(presence)}`}>
             <button
               type="button"
               className="nav-item-main nav-open"

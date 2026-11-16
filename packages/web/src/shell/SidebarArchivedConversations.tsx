@@ -15,7 +15,12 @@ import { useHelmStore } from '../lib/store-context.js'
 import type { HelmStoreValue } from '../lib/types.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
-import { activeConversationIdsOf, buildArchivedConversationList, getConversationPresence } from './sidebar-model.js'
+import {
+  activeConversationIdsOf,
+  buildArchivedConversationList,
+  getConversationPresence,
+  presenceNavClassSuffix,
+} from './sidebar-model.js'
 import type { ArchivedConversationListItem } from './sidebar-model.js'
 import { archiveBatchNotice, patchConversationsArchived } from './archive-ops.js'
 import type { ConversationBackgroundIndex } from './background-activity-model.js'
@@ -44,7 +49,7 @@ function ArchivedConversationRow({
 
   return (
     <div
-      className={`nav-item nav-item-sub${presence.active ? ' nav-item-active' : presence.splitSecondary ? ' nav-item-split' : ''}${presence.focused ? ' nav-item-focused' : ''}`}
+      className={`nav-item nav-item-sub${presenceNavClassSuffix(presence)}`}
       onClick={() => {
         if (batchMode) onToggleSelect?.(conv.id)
       }}

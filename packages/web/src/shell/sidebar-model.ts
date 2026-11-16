@@ -507,6 +507,16 @@ export interface SidebarTargetPresence {
   paneTag: '主' | '分' | '主·分' | null
 }
 
+/** 按在场/焦点推导侧栏行级状态修饰类名后缀（供各侧栏行组件共用）。 */
+export function presenceNavClassSuffix(presence: SidebarTargetPresence): string {
+  const stateClass = presence.active
+    ? ' nav-item-active'
+    : presence.splitSecondary
+      ? ' nav-item-split'
+      : ''
+  return `${stateClass}${presence.focused ? ' nav-item-focused' : ''}`
+}
+
 /** 解析侧栏目标在主屏/分屏的在场、焦点与面板微标状态。 */
 export function resolveSidebarTargetPresence(
   store: Pick<HelmStoreValue, 'primaryTarget' | 'splitTarget' | 'focusedPanel'>,

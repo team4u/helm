@@ -18,8 +18,8 @@ import {
   getConversationPresence,
   isConversationDeletable,
   openAgentStandby,
+  presenceNavClassSuffix,
   type AgentStanding,
-  type SidebarTargetPresence,
 } from './sidebar-model.js'
 import {
   resolveStandingStatusIndicator,
@@ -30,6 +30,7 @@ import {
 import {
   ConversationStatusDot,
   RemoteNodeTag,
+  SidebarPaneTag,
   StandingStatusDot,
 } from './SidebarPrimitives.js'
 
@@ -57,22 +58,6 @@ function AgentNewConversationButton({
         <HelmIcon name="plus" size={13} />
       </button>
     </Tooltip>
-  )
-}
-
-/** 分屏开启时在行尾渲染主/分屏位置微标。 */
-function NavPaneTag({ paneTag }: { paneTag: SidebarTargetPresence['paneTag'] }) {
-  if (paneTag === null) return null
-  const title =
-    paneTag === '主·分'
-      ? '主屏与分屏均打开'
-      : paneTag === '主'
-        ? '主屏打开'
-        : '分屏打开'
-  return (
-    <span className="nav-pane-tag" title={title}>
-      {paneTag}
-    </span>
   )
 }
 
@@ -151,7 +136,7 @@ function AgentStandingItem({
   return (
     <div className={`agent-standing${isOpen ? ' agent-standing-open' : ''}`}>
       <div
-        className={`nav-item agent-standing-row${standbyPresence.active ? ' nav-item-active' : standbyPresence.splitSecondary ? ' nav-item-split' : ''}${standbyPresence.focused ? ' nav-item-focused' : ''}${isBranchActive ? ' agent-standing-row-branch' : ''}`}
+        className={`nav-item agent-standing-row${presenceNavClassSuffix(standbyPresence)}${isBranchActive ? ' agent-standing-row-branch' : ''}`}
         onClick={() => {
           if (batchMode && hasSubList) {
             setExpanded((v) => !v)
@@ -184,7 +169,7 @@ function AgentStandingItem({
           {agent.conversations.length > 1 && (
             <span className="badge badge-neutral tabular-nums">{agent.conversations.length}</span>
           )}
-          <NavPaneTag paneTag={standbyPresence.paneTag} />
+          <SidebarPaneTag paneTag={standbyPresence.paneTag} />
           {!batchMode && (
             <AgentNewConversationButton agent={agent} onCreate={onCreate} />
           )}
@@ -302,7 +287,7 @@ function AgentConversationRow({
 
   return (
     <div
-      className={`nav-item nav-item-sub${presence.active ? ' nav-item-active' : presence.splitSecondary ? ' nav-item-split' : ''}${presence.focused ? ' nav-item-focused' : ''}`}
+      className={`nav-item nav-item-sub${presenceNavClassSuffix(presence)}`}
       onClick={() => {
         if (batchMode && deletable) {
           onToggleSelect?.(conv.id)
@@ -343,7 +328,7 @@ function AgentConversationRow({
       <span className="nav-item-meta">
         <span className="tabular-nums">#{conv.id}</span>
         {conv.nodeId && conv.nodeId !== 'local' && <RemoteNodeTag nodeId={conv.nodeId} />}
-        <NavPaneTag paneTag={presence.paneTag} />
+        <SidebarPaneTag paneTag={presence.paneTag} />
         {!batchMode && (
           <span className="nav-item-row-actions">
             <ConversationRowActionsMenu conversation={conv} />
