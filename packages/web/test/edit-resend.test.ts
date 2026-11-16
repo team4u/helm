@@ -201,8 +201,8 @@ test('SSR 行为：human 消息渲染编辑铅笔，agent/trigger 消息不渲�
   assert.match(html, /人类提问/)
   assert.match(html, /From agent report/)
   assert.match(html, /From trigger/)
-  // 编辑入口（title=编辑并重发）只出现一次：仅 human 消息。
+  // The edit entry point (title=Edit and resend) appears exactly once: only the human message.
   assert.equal([...html.matchAll(/title="Edit and resend"/g)].length, 1)
-  // 三条消息的复制按钮均在。
-  assert.equal([...html.matchAll(/复制到剪贴板|复制/g)].length >= 3, true)
+  // All three messages keep their copy button.
+  assert.equal([...html.matchAll(/title="Copy"/g)].length >= 3, true)
 })

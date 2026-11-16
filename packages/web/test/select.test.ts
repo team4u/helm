@@ -257,12 +257,12 @@ test('Select multiple: 渲染多选触发器、全选与清空操作栏及复选
 
   // 1. 结构与多选类名
   assert.match(html, /class="[^"]*helm-select-multi[^"]*"/)
-  assert.match(html, /已选择[\s\S]*?2[\s\S]*?项/)
+  assert.match(html, /2 selected/)
   assert.match(html, /aria-label="模型多选"/)
 
   // 2. 快捷全选与清空按钮
-  assert.match(html, /全选/)
-  assert.match(html, /清空/)
+  assert.match(html, /Select all/)
+  assert.match(html, /Clear/)
 
   // 3. 复选框与选项呈现
   assert.match(html, /role="checkbox"/)
@@ -289,5 +289,5 @@ test('Select multiple: 全选时触发器显示已全选摘要文案', { timeout
     }),
   )
 
-  assert.match(html, /已全选[\s\S]*?\(2\)/)
+  assert.match(html, /All selected \(2\)/)
 })

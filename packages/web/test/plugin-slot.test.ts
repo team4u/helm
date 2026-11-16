@@ -156,8 +156,9 @@ test('PluginSlot：环检测显式告警且不死循环', { timeout: 60_000 }, (
       e(PluginSlot, { name: 'loop' })),
   ))
   assert.ok(host.textContent !== undefined)
-  // 有限深度内终止：渲染结果包含环告警文本（链上 p2/cycle 两次出现）
-  assert.match(host.textContent ?? '', /循环嵌套|最大深度/, '显式环告警而非栈溢出')
+  // Terminates within a bounded depth: the rendered output contains the cycle
+  // warning text (p2/cycle appears twice along the chain).
+  assert.match(host.textContent ?? '', /Plugin slot cycle detected/, 'explicit cycle warning instead of a stack overflow')
   act(() => { root.unmount() })
 })
 

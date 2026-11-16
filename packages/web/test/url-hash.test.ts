@@ -607,15 +607,18 @@ test('契约: HelmStoreProvider 初始状态取自 Hash、监听外部变更、�
   // 先取 rawHash 再 parseLocationHash，同源产出初始位置与首页落地判定）
   assert.match(source, /const rawHash = typeof window !== 'undefined' \? window\.location\.hash : ''/)
   assert.match(source, /parseLocationHash\(rawHash\)/)
-  // 监听外部 URL 变更（前进/后退/手动改 Hash）
+  // Listen for external URL changes (forward/back/manual hash edit)
   assert.match(source, /addEventListener\('hashchange'/)
   assert.match(source, /addEventListener\('popstate'/)
-  // 写回仅在 authenticated 后进行：AuthGate 阶段不得用默认态覆盖用户粘贴的深链
-  // （锚定写回 effect 注释；切片终点取末尾同步处，含完整 push/replace 分支）。
-  const writeBackStart = source.indexOf('// 状态写回地址栏')
+  // Write-back only after authentication: the AuthGate phase must not overwrite
+  // a user-pasted deep link with the default state. Anchor on the stable code
+  // semantics of the single write-back effect (comment text may be translated;
+  // slice ends at the final sync statement covering the full push/replace branches).
+  const writeBackStart = source.indexOf('const nextHash = formatLocationHash(locationState)')
   const writeBackEnd = source.indexOf('lastSyncedLocation.current = locationState', source.indexOf('lastSyncedLocation.current = locationState', writeBackStart) + 1)
   const writeBack = source.slice(writeBackStart, writeBackEnd)
-  assert.ok(writeBack.includes('nextHash === window.location.hash'), '写回前必须先比对当前地址栏')
+  assert.ok(writeBack.length > 0, 'write-back effect must exist with a stable code anchor')
+  assert.ok(writeBack.includes('nextHash === window.location.hash'), 'compare against the address bar before writing back')
   assert.ok(writeBack.includes('pushState') && writeBack.includes('replaceState'), '写回须区分 push/replace')
   // setParams push 标记与 openTarget history 选项经唯一写回 effect 消费，组件不直接操作 history
   assert.ok(writeBack.includes('pendingHistoryMode.current'), '显式历史标记须由唯一写回 effect 消费')

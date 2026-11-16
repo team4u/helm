@@ -260,7 +260,7 @@ test('点击展开全文：按 entry id 请求，成功后回填并在重渲染�
   const copy = findButton(m.host, 'Copy raw output')
   assert.ok(copy)
   assert.equal(copy!.disabled, false, '取回全文后复制启用')
-  assert.equal(copy!.title, '复制', '恢复标准复制语义')
+  assert.equal(copy!.title, 'Copy', 'back to the standard copy semantics')
 })
 
 test('取回失败：错误显式可见、可重试、预览保留且复制仍禁用', { timeout: 60_000 }, async (t) => {
