@@ -1,7 +1,8 @@
 /**
- * 严格 SemVer 契约（@helm/protocol/semver，全仓唯一实现）：
- * 语法判定、优先级比较（正式 > 预发布 / 数字 < 字母数字 / ASCII 字典序 /
- * build metadata 不参与）、v 前缀剥离与非法输入显式拒绝。
+ * Strict SemVer contract (@helm/protocol/semver, the repo's single implementation):
+ * grammar checks, precedence comparison (release > prerelease / numeric <
+ * alphanumeric / ASCII lexicographic / build metadata excluded), v-prefix
+ * stripping, and explicit rejection of invalid input.
  */
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
@@ -12,9 +13,11 @@ import {
   parseStrictSemver,
   stripSemverVPrefix,
 } from '@helm/protocol'
-// 跨包同构契约锁例外：desktop 零 workspace 运行时依赖（独立 Electron 壳），
-// 在 packages/desktop/src/runners.ts 保留与本包同契约的本地实现；此处以测试
-// 相对导入源码锁死两份实现行为一致（生产源码仍禁止跨包相对导入）。
+// Cross-package isomorphism lock exception: desktop has zero workspace runtime
+// dependencies (a standalone Electron shell) and keeps a local implementation of
+// the same contract in packages/desktop/src/runners.ts; this test relatively
+// imports the source to lock both implementations to identical behavior
+// (cross-package relative imports remain forbidden in production source).
 import {
   SemverFormatError as DesktopSemverFormatError,
   compareStrictSemver as desktopCompareStrictSemver,
@@ -52,7 +55,7 @@ describe('isStrictSemver / parseStrictSemver', () => {
     '1.2.3-beta..1',
   ]
   for (const text of valid) {
-    it(`合法："${text}"`, { timeout: 60_000 }, () => {
+    it(`valid: "${text}"`, { timeout: 60_000 }, () => {
       assert.equal(isStrictSemver(text), true)
       const parsed = parseStrictSemver(text)
       assert.ok(parsed !== null)
@@ -60,14 +63,14 @@ describe('isStrictSemver / parseStrictSemver', () => {
     })
   }
   for (const text of invalid) {
-    it(`非法："${text}"`, { timeout: 60_000 }, () => {
+    it(`invalid: "${text}"`, { timeout: 60_000 }, () => {
       assert.equal(isStrictSemver(text), false)
       assert.equal(parseStrictSemver(text), null)
     })
   }
 })
 
-describe('compareStrictSemver 优先级', () => {
+describe('compareStrictSemver precedence', () => {
   const ordered: readonly string[] = [
     '1.0.0-alpha',
     '1.0.0-alpha.1',
@@ -92,22 +95,22 @@ describe('compareStrictSemver 优先级', () => {
     }
   }
 
-  it('数字段按数值：2 < 11', { timeout: 60_000 }, () => {
+  it('numeric segments compare numerically: 2 < 11', { timeout: 60_000 }, () => {
     assert.equal(compareStrictSemver('1.0.0-alpha.2', '1.0.0-alpha.11'), -1)
   })
 
-  it('build metadata 不参与比较，核心号优先', { timeout: 60_000 }, () => {
+  it('build metadata excluded from comparison; core numbers take precedence', { timeout: 60_000 }, () => {
     assert.equal(compareStrictSemver('1.0.0+build.123', '1.0.0+build.456'), 0)
     assert.equal(compareStrictSemver('1.0.0+sha.a1b2c3', '1.0.0'), 0)
     assert.equal(compareStrictSemver('1.0.0-rc.1+b1', '1.0.0-rc.2+b2'), -1)
     assert.equal(compareStrictSemver('1.0.1+a', '1.0.0+b'), 1)
   })
 
-  it('预发布段少者更小', { timeout: 60_000 }, () => {
+  it('fewer prerelease segments sort lower', { timeout: 60_000 }, () => {
     assert.equal(compareStrictSemver('1.0.0-alpha', '1.0.0-alpha.1'), -1)
   })
 
-  it('非法输入显式拒绝：抛 SemverFormatError 且指明非法一侧', { timeout: 60_000 }, () => {
+  it('invalid input explicitly rejected: throws SemverFormatError naming the invalid side', { timeout: 60_000 }, () => {
     for (const bad of ['1.2', 'v1.2.3', 'latest', '']) {
       assert.throws(() => compareStrictSemver(bad, '1.0.0'), SemverFormatError)
       assert.throws(() => compareStrictSemver('1.0.0', bad), SemverFormatError)
@@ -138,10 +141,10 @@ describe('stripSemverVPrefix', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 跨包同构契约锁：@helm/protocol/semver 与 desktop 本地实现（runners.ts）
+// Cross-package isomorphism lock: @helm/protocol/semver vs the desktop local implementation (runners.ts)
 // ---------------------------------------------------------------------------
 
-describe('desktop 同构契约锁（packages/desktop/src/runners.ts 不漂移）', () => {
+describe('desktop isomorphism lock (packages/desktop/src/runners.ts must not drift)', () => {
   const valid: readonly string[] = [
     '0.0.0',
     '1.2.3',
@@ -172,17 +175,17 @@ describe('desktop 同构契约锁（packages/desktop/src/runners.ts 不漂移）
     '1.2.3-beta..1',
   ]
 
-  it('isStrictSemver 对合法 / 非法全集判定逐一一致', { timeout: 60_000 }, () => {
+  it('isStrictSemver agrees on every valid / invalid input', { timeout: 60_000 }, () => {
     for (const text of [...valid, ...invalid]) {
       assert.equal(
         desktopIsStrictSemver(text),
         isStrictSemver(text),
-        `desktop isStrictSemver(${JSON.stringify(text)}) 与 @helm/protocol 不一致`,
+        `desktop isStrictSemver(${JSON.stringify(text)}) disagrees with @helm/protocol`,
       )
     }
   })
 
-  it('compareStrictSemver 对全序配对（含 build metadata）结果逐一一致', { timeout: 60_000 }, () => {
+  it('compareStrictSemver agrees on every ordered pair (including build metadata)', { timeout: 60_000 }, () => {
     const ordered: readonly string[] = [
       '1.0.0-alpha',
       '1.0.0-alpha.1',
@@ -198,7 +201,7 @@ describe('desktop 同构契约锁（packages/desktop/src/runners.ts 不漂移）
       '2.0.0',
       '24.12.0',
     ]
-    // 加入 build metadata 与数字 / 字母数字标识变体，覆盖两份实现的全部比较分支。
+    // Add build metadata and numeric / alphanumeric identifier variants to cover every comparison branch of both implementations.
     const pool: readonly string[] = [
       ...ordered,
       '1.0.0+build.123',
@@ -215,39 +218,44 @@ describe('desktop 同构契约锁（packages/desktop/src/runners.ts 不漂移）
         assert.equal(
           desktopCompareStrictSemver(a, b),
           compareStrictSemver(a, b),
-          `desktop compareStrictSemver(${JSON.stringify(a)}, ${JSON.stringify(b)}) 与 @helm/protocol 不一致`,
+          `desktop compareStrictSemver(${JSON.stringify(a)}, ${JSON.stringify(b)}) disagrees with @helm/protocol`,
         )
       }
     }
   })
 
-  it('SemverFormatError 抛错条件、name 与错误文案完全一致', { timeout: 60_000 }, () => {
+  it('SemverFormatError throw conditions, name, and message shape fully aligned', { timeout: 60_000 }, () => {
     const capture = (fn: () => unknown): Error => {
       try {
         fn()
       } catch (error) {
-        assert.ok(error instanceof Error, '抛出的应是 Error 实例')
+        assert.ok(error instanceof Error, 'expected an Error instance to be thrown')
         return error
       }
-      assert.fail('期望抛出 SemverFormatError，实际未抛出')
+      assert.fail('expected a SemverFormatError to be thrown, but nothing was thrown')
     }
     for (const bad of invalid) {
-      // 两侧都显式拒绝（非法侧在左 / 在右均抛各自的 SemverFormatError）。
+      // Both sides explicitly reject (the invalid side on the left / right each throws its own SemverFormatError).
       assert.throws(() => compareStrictSemver(bad, '1.0.0'), SemverFormatError)
       assert.throws(() => compareStrictSemver('1.0.0', bad), SemverFormatError)
       assert.throws(() => desktopCompareStrictSemver(bad, '1.0.0'), DesktopSemverFormatError)
       assert.throws(() => desktopCompareStrictSemver('1.0.0', bad), DesktopSemverFormatError)
-      // 错误信封同构：name 与文案逐字一致，任一侧文案漂移即锁失败。
+      // Error envelope isomorphism: name must match verbatim and both messages must
+      // quote the rejected input. Verbatim message parity was intentionally dropped
+      // when @helm/protocol switched to English messages (desktop keeps its own
+      // localized copy; message text is presentation, not contract).
       const protocolError = capture(() => compareStrictSemver(bad, '1.0.0'))
       const desktopError = capture(() => desktopCompareStrictSemver(bad, '1.0.0'))
       assert.equal(protocolError.name, 'SemverFormatError')
       assert.equal(desktopError.name, 'SemverFormatError')
-      assert.equal(
-        desktopError.message,
-        protocolError.message,
-        `desktop SemverFormatError 文案与 @helm/protocol 不一致（输入 ${JSON.stringify(bad)}）`,
+      assert.ok(
+        protocolError.message.includes(bad),
+        `protocol SemverFormatError message should contain the rejected input (input ${JSON.stringify(bad)})`,
       )
-      assert.ok(protocolError.message.includes(bad), '错误文案应包含被拒绝的原始输入')
+      assert.ok(
+        desktopError.message.includes(bad),
+        `desktop SemverFormatError message should contain the rejected input (input ${JSON.stringify(bad)})`,
+      )
     }
   })
 })

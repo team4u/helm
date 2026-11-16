@@ -1,8 +1,8 @@
 /**
- * HTTP 边界基础设施：body 读取与限制（内核与插件共享的唯一实现）。
+ * HTTP boundary infrastructure: body reading and limits (the single implementation shared by kernel and plugins).
  *
- * 纯 Web Request API，不依赖 Node 内置模块。超限必须取消 reader
- * （否则连接悬挂）并显式抛 413，绝不静默截断当成功。
+ * Pure Web Request API with no Node builtin dependencies. Exceeding the limit must cancel the reader
+ * (otherwise the connection hangs) and explicitly throw 413; never silently truncate and pretend success.
  */
 import { HelmError } from './error.js'
 
@@ -15,7 +15,7 @@ export class BodyError extends HelmError {
 export async function readBody(request: Request, maxBytes: number): Promise<Uint8Array> {
   const declared = Number(request.headers.get('content-length'))
   if (Number.isFinite(declared) && declared > maxBytes) {
-    throw new BodyError('body_too_large', `请求体超过上限 ${maxBytes} 字节`, 413)
+    throw new BodyError('body_too_large', `Request body exceeds the ${maxBytes}-byte limit`, 413)
   }
   const reader = request.body?.getReader()
   if (reader === undefined) return new Uint8Array(0)
@@ -27,9 +27,9 @@ export async function readBody(request: Request, maxBytes: number): Promise<Uint
     if (value !== undefined) {
       total += value.byteLength
       if (total > maxBytes) {
-        // 必须取消 reader，否则连接悬挂。
+        // The reader must be cancelled, otherwise the connection hangs.
         await reader.cancel().catch(() => {})
-        throw new BodyError('body_too_large', `请求体超过上限 ${maxBytes} 字节`, 413)
+        throw new BodyError('body_too_large', `Request body exceeds the ${maxBytes}-byte limit`, 413)
       }
       chunks.push(value)
     }

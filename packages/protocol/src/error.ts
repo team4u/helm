@@ -1,9 +1,9 @@
 /**
- * 跨端共享错误契约：零依赖、可直接 instanceof 的 Error 子类。
- * HTTP 层约定：成功返回直接实体/数组；失败返回 { error: { code, message, details? } }。
+ * Cross-runtime shared error contract: dependency-free Error subclasses that support direct instanceof checks.
+ * HTTP layer convention: success returns the entity/array directly; failure returns { error: { code, message, details? } }.
  */
 
-/** 错误响应体（`ApiErrorBody['error']` 的内层形状）。 */
+/** Error response body (the inner shape of `ApiErrorBody['error']`). */
 export interface HelmErrorDetail {
   code: string
   message: string
@@ -11,13 +11,13 @@ export interface HelmErrorDetail {
 }
 
 /**
- * 机器可读错误码 + HTTP 状态码的错误。
- * code 稳定（如 'validation_error'、'not_found'、
- * 'plugin_has_live_tasks'），message 面向人类，details 附加诊断。
+ * Machine-readable error code + HTTP status error.
+ * `code` is stable (e.g. 'validation_error', 'not_found',
+ * 'plugin_has_live_tasks'); `message` is human-facing; `details` carries extra diagnostics.
  */
 export class HelmError extends Error {
   readonly code: string
-  /** HTTP 状态码，默认 400。 */
+  /** HTTP status code, defaults to 400. */
   readonly status: number
   readonly details?: unknown
 

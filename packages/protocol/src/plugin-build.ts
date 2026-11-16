@@ -1,81 +1,88 @@
 /**
- * 插件构建端口契约（内核 PluginHost 与构建实现包之间的唯一接口）。
+ * Plugin build port contract (the single interface between the kernel PluginHost and the build implementation package).
  *
- * 机制与策略分离：内核持有注册表 / 生命周期 / module hooks 等机制，编译与
- * 转译工具（esbuild）由外部 provider 实现并显式注入（产品组合在 hub 注入
- * 默认实现）。内核绝不静态或动态 import 构建实现包；本模块只含类型与
- * 纯函数，保持 protocol 零运行时重依赖与浏览器安全。
+ * Mechanism/policy separation: the kernel holds the mechanisms (registry / lifecycle /
+ * module hooks) while compilation and transpilation tooling (esbuild) is implemented by
+ * an external provider and injected explicitly (the product composition injects the
+ * default implementation in hub). The kernel never statically or dynamically imports
+ * the build implementation package; this module contains only types and pure functions,
+ * keeping protocol free of heavy runtime dependencies and browser-safe.
  */
 import { HelmError } from './error.js';
 
 /**
- * 受控 npm 依赖声明：specifiers 为允许的精确裸说明符（含子路径需逐项声明，
- * 不做前缀通配），packageRoot 是提供这些包的解析根（通常为插件宿主包根，
- * 包从其 node_modules 内解析；pnpm 符号链接布局以包目录 realpath 为界）。
+ * Controlled npm dependency declaration: `specifiers` are the allowed exact bare
+ * specifiers (subpaths must be declared item by item, no prefix wildcards), and
+ * `packageRoot` is the resolution root providing those packages (usually the plugin
+ * host package root; packages resolve from its node_modules; with the pnpm symlink
+ * layout the boundary is the package directory's realpath).
  */
 export interface PluginClientNpmRoot {
   specifiers: ReadonlyArray<string>;
   packageRoot: string;
 }
 
-/** client.tsx 编译产物（单入口）。 */
+/** client.tsx build output (single entry). */
 export interface PluginClientBundle {
-  /** 产物 JS 文本（自包含浏览器 ESM；共享依赖经 globalThis.__helm_shared_* 运行时解析）。 */
+  /** Output JS text (self-contained browser ESM; shared dependencies resolve at runtime via globalThis.__helm_shared_*). */
   code: string;
-  /** 内容 hash（入口 + 全部本地/受控 npm 依赖内容 sha256 + 编译参数）。 */
+  /** Content hash (entry + all local/controlled npm dependency content sha256 + compile options). */
   contentHash: string;
-  /** 产物 gzip 预压缩字节（供 HTTP 快速响应）。 */
+  /** Pre-gzipped bytes of the output (for fast HTTP responses). */
   gzipped?: Uint8Array;
-  /** 产物入口模块的具名导出清单（含 CSS 保留导出；悬空 export 校验消费）。 */
+  /** Named exports of the output entry module (including preserved CSS exports; consumed by dangling-export validation). */
   exports: string[];
-  /** 异步分包产物（code-splitting 路径生成；key 为 chunk 文件名）。 */
+  /** Async split chunks (produced by the code-splitting path; key is the chunk file name). */
   chunks?: Record<string, { code: string; gzipped?: Uint8Array }>;
 }
 
-/** client 模块编译请求：内核收集事实，provider 执行编译。 */
+/** client module compile request: the kernel gathers facts, the provider performs the compile. */
 export interface PluginClientCompileRequest {
-  /** 插件 ID（缓存目录隔离单位）。 */
+  /** Plugin ID (the cache directory isolation unit). */
   pluginId: string;
-  /** 插件声明并已校验的绝对源根目录。 */
+  /** The plugin's declared and validated absolute source root. */
   clientRoot: string;
-  /** 相对入口（形状已过 assertModuleRefShape）。 */
+  /** Relative entry (shape already checked by assertModuleRefShape). */
   moduleRef: string;
-  /** 宿主 dataDir；产物与依赖清单落盘 <cacheDir>/plugin-staging/<pluginId>/。 */
+  /** Host dataDir; output and dependency manifests land in <cacheDir>/plugin-staging/<pluginId>/. */
   cacheDir: string;
-  /** 受控 npm 依赖解析根（无声明时为空数组）。 */
+  /** Controlled npm dependency resolution roots (an empty array when none declared). */
   npmRoots: ReadonlyArray<PluginClientNpmRoot>;
 }
 
-/** 后端 TS 源转译请求（外部插件 Node module hooks 底座；同步调用）。 */
+/** Backend TS source transform request (the external plugin Node module hooks foundation; called synchronously). */
 export interface PluginBackendTsTransform {
-  /** 源文件全文。 */
+  /** Full source file text. */
   source: string;
-  /** 源文件绝对路径（诊断与 sourcefile 定位）。 */
+  /** Absolute source file path (for diagnostics and sourcefile positioning). */
   file: string;
-  /** 源形态：.ts/.mts/.cts 用 'ts'，.tsx 用 'tsx'。 */
+  /** Source form: 'ts' for .ts/.mts/.cts, 'tsx' for .tsx. */
   kind: 'ts' | 'tsx';
 }
 
 /**
- * 插件构建端口：内核 PluginHost 的唯一编译/转译依赖。
+ * Plugin build port: the kernel PluginHost's only compile/transpile dependency.
  *
- * 未注入（buildProvider 缺失）时内核显式拒绝相关能力，绝不静默降级：
- * - 带 client 引用的 UI 贡献注册 -> 501 unsupported_client_build；
- * - 外部插件 TS 源转译 -> 501 unsupported_backend_ts_build。
+ * When not injected (buildProvider missing), the kernel explicitly rejects the
+ * related capabilities, never silently degrading:
+ * - UI contribution registration with a client reference -> 501 unsupported_client_build;
+ * - external plugin TS source transform -> 501 unsupported_backend_ts_build.
  */
 export interface PluginBuildProvider {
-  /** 编译插件 client.tsx 模块为浏览器 ESM 产物（含磁盘/内存缓存、并发合并、hash 失效与 gzip）。 */
+  /** Compile a plugin client.tsx module into browser ESM output (with disk/memory caching, concurrent merging, hash invalidation and gzip). */
   compileClientModule(request: PluginClientCompileRequest): Promise<PluginClientBundle>;
-  /** 同步转译后端 TS 源文本为 ESM（jsx: automatic，target: node20；语义同 esbuild transformSync）。 */
+  /** Synchronously transpile backend TS source text into ESM (jsx: automatic, target: node20; semantics match esbuild transformSync). */
   transformBackendTs(transform: PluginBackendTsTransform): string;
 }
 
-/** ClientComponentRef.module 允许的字符集（相对路径段：字母数字 . _ -，禁止空段与 ..）。 */
+/** Allowed character set for ClientComponentRef.module (relative path segments: alphanumeric . _ -; empty segments and .. forbidden). */
 const MODULE_REF_PATTERN = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*\.(ts|tsx)$/;
 
 /**
- * 校验 ClientComponentRef.module 形状（相对 .ts/.tsx，无绝对/越根/编码逃逸）。
- * 内核注册边界与构建实现共用同一校验（按路径自身形式判定，跨平台）。
+ * Validate the shape of ClientComponentRef.module (relative .ts/.tsx; no absolute,
+ * root-escaping, or encoding escapes). The kernel registration boundary and the
+ * build implementation share this validation (judged by the path's own form,
+ * cross-platform).
  */
 export function assertModuleRefShape(pluginId: string, moduleRef: string): void {
   if (
@@ -89,7 +96,7 @@ export function assertModuleRefShape(pluginId: string, moduleRef: string): void 
   ) {
     throw new HelmError(
       'invalid_client_module',
-      `插件 ${pluginId} 的 client 模块引用非法（须为 clientRoot 内相对 .ts/.tsx 路径，禁止绝对路径/..越根/反斜杠）：${String(moduleRef)}`,
+      `client module reference of plugin ${pluginId} is invalid (must be a relative .ts/.tsx path inside clientRoot; absolute paths / .. root escapes / backslashes forbidden): ${String(moduleRef)}`,
       400,
       { pluginId, module: String(moduleRef) },
     );
@@ -97,8 +104,10 @@ export function assertModuleRefShape(pluginId: string, moduleRef: string): void 
 }
 
 /**
- * 把插件定义声明的 npmDependencies（说明符 -> 解析根）聚合为编译器可校验的 roots。
- * 内核运行链（ui-registry）与 doctor 静态自检链共用，保证同一映射口径。
+ * Aggregate the npmDependencies declared by a plugin definition (specifier ->
+ * resolution root) into compiler-validatable roots. Shared by the kernel runtime
+ * chain (ui-registry) and the doctor static self-check chain, guaranteeing a
+ * single mapping criterion.
  */
 export function clientNpmRootsOf(
   npmDependencies: Readonly<Record<string, string>> | undefined,

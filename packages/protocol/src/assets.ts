@@ -1,13 +1,13 @@
 /**
- * 纯文件静态认知资产契约（profiles / skills / providers）。
- * 存储与热重载机制在 kernel，这里只定义跨端共享的数据形状。
+ * Pure-file static cognitive asset contracts (profiles / skills / providers).
+ * Storage and hot-reload mechanics live in the kernel; only the cross-runtime shared data shapes are defined here.
  */
 
-/** 空白会话的静态引导词；点击仅回填草稿，不直接提交。 */
+/** Static starter prompt for an empty conversation; clicking only fills the draft, never submits directly. */
 export interface ProfileStarterPrompt {
-  /** 展示标题，去除首尾空白后最多 24 个 Unicode 码点。 */
+  /** Display title; at most 24 Unicode code points after trimming. */
   label: string
-  /** 保留原文，非纯空白，最多 4000 个 Unicode 码点。 */
+  /** Kept verbatim; non-whitespace-only; at most 4000 Unicode code points. */
   prompt: string
 }
 
@@ -16,64 +16,65 @@ export const PROFILE_STARTER_LABEL_MAX_LENGTH = 24
 export const PROFILE_STARTER_PROMPT_MAX_LENGTH = 4000
 
 /**
- * 会话 Profile：`~/.helm/profiles/<id>/profile.json` + SYSTEM.md。
- * MEMORY.md 长期记忆由 builtin:memory 插件自治管理（不进 Profile 契约）。
- * runtime 为协议层配置形状（如绑定 Herdr CLI），实际驱动在 builtin:herdr。
+ * Conversation Profile: `~/.helm/profiles/<id>/profile.json` + SYSTEM.md.
+ * MEMORY.md long-term memory is self-managed by the builtin:memory plugin (not part
+ * of the Profile contract). `runtime` is the protocol-layer config shape (e.g.
+ * binding a Herdr CLI); the actual driving lives in builtin:herdr.
  */
 export interface Profile {
   id: string
   name?: string
-  /** Profile 绑定的系统提示词与记忆由文件承载，详情接口（GET/POST/PUT）附带全文，profile.json 落盘时剥离。 */
+  /** The Profile's system prompt and memory are file-carried; detail endpoints (GET/POST/PUT) attach the full text, and it is stripped when profile.json is persisted. */
   model?: string
-  /** Profile 级思考档位（off/minimal/low/medium/high/xhigh/max）；未设置跟随全局缺省。 */
+  /** Profile-level thinking level (off/minimal/low/medium/high/xhigh/max); follows the global default when unset. */
   thinkingLevel?: string
-  /** Profile 默认绑定的计算节点 ID（缺省 'local'）。 */
+  /** Compute node ID the Profile binds to by default (defaults to 'local'). */
   nodeId?: string
-  /** Profile 默认工作目录。 */
+  /** Default working directory of the Profile. */
   cwd?: string
-  /** 作为 subagent / 工作流节点调用时的外部执行配置；持久会话仍由 pi-durable 承载。 */
+  /** External execution config when invoked as a subagent / workflow node; durable conversations are still carried by pi-durable. */
   runtime?: ProfileRuntime
   tags?: string[]
-  /** 可加载技能白名单；缺省为全部可用技能，空数组禁用全部。插件停用时其托管技能始终不可用。 */
+  /** Loadable skill allowlist; defaults to all available skills, an empty array disables all. A disabled plugin's managed skills are always unavailable. */
   skills?: string[]
-  /** 自举或托管该 Profile 的插件 ID（对应插件未启用时前端可按此隐藏）。 */
+  /** Plugin ID that bootstrapped or manages this Profile (the frontend may hide it when that plugin is not enabled). */
   managedByPlugin?: string
-  /** 人类是否可在「新建对话」下拉选择该 Profile；常驻单例角色置 false，缺省 true。 */
+  /** Whether humans can select this Profile in the "new conversation" dropdown; resident singleton roles set false; defaults to true. */
   humanSelectable?: boolean
-  /** 最多六项；缺省或空数组使用宿主空白会话提示。 */
+  /** At most six items; defaults or an empty array use the host's empty-conversation prompts. */
   starters?: ProfileStarterPrompt[]
-  /** SYSTEM.md 全文（详情接口读写，不写入 profile.json）。 */
+  /** Full SYSTEM.md text (read/written by detail endpoints; never written into profile.json). */
   system?: string
 }
 
-/** Profile 绑定的外部 Agent 运行时配置（如 'herdr'，由对应插件接管驱动）。 */
+/** External agent runtime config bound to a Profile (e.g. 'herdr', driven by the corresponding plugin). */
 export interface ProfileRuntime {
   kind: string
-  /** 外部 CLI Agent 标识，如 'agy' | 'claude' | 'codex' | 'pi'。 */
+  /** External CLI agent identifier, e.g. 'agy' | 'claude' | 'codex' | 'pi'. */
   agent: string
   args?: string[]
-  /** 目标计算节点标识（缺省本机 'local'）。 */
+  /** Target compute node identifier (defaults to local 'local'). */
   nodeId?: string
-  /** 会话工作目录（绝对路径）；缺省由运行时决定。 */
+  /** Conversation working directory (absolute path); decided by the runtime when absent. */
   workspace?: string
-  /** 注入子进程的环境变量覆盖。 */
+  /** Environment variable overrides injected into the subprocess. */
   env?: Record<string, string>
 }
 
-/** 技能目录摘要：dataDir 根 `~/.helm/skills/<id>/`（SKILL.md + references/*.md），或机器级共享来源 `~/.agents/skills/<id>/`（source='agents'；标识发现来源，不代表文件系统写权限）。 */
+/** Skill catalog summary: dataDir root `~/.helm/skills/<id>/` (SKILL.md + references/*.md), or machine-level shared source `~/.agents/skills/<id>/` (source='agents'; marks the discovery source, not a filesystem write permission). */
 export interface SkillSummary {
   id: string
   name: string
   description?: string
-  /** 支持按需读取的子文件相对路径（如 'references/xxx.md'）。 */
+  /** Relative paths of sub-files that support on-demand reading (e.g. 'references/xxx.md'). */
   references: string[]
-  /** 托管该 Skill 的插件 ID；对应插件未启用时，会话目录、技能菜单与 load_skill 均不可用。 */
+  /** Plugin ID managing this skill; when that plugin is not enabled, the conversation catalog, skill menu and load_skill are all unavailable. */
   managedByPlugin?: string
-  /** 来源根标识：缺省 'data'（~/.helm/skills）；'agents' 表示机器级共享来源 ~/.agents/skills（pi 生态技能库）；只标识扫描来源，不构成文件系统权限边界。 */
+  /** Source root marker: default 'data' (~/.helm/skills); 'agents' marks the machine-level shared source ~/.agents/skills (the pi ecosystem skill library); only marks the scan source, not a filesystem permission boundary. */
   source?: 'data' | 'agents'
 }
 
-/** 会话技能目录与 load_skill 共用的可用性规则；不是文件系统或工具执行权限边界。 */
+/** Availability rule shared by the conversation skill catalog and load_skill; not a filesystem or tool-execution permission boundary. */
 export function isSkillAvailable(
   skill: SkillSummary,
   profile: Pick<Profile, 'skills'>,
@@ -83,80 +84,80 @@ export function isSkillAvailable(
     (profile.skills === undefined || profile.skills.includes(skill.id))
 }
 
-/** `GET /api/models` 公开模型目录条目。 */
+/** Public model catalog entry of `GET /api/models`. */
 export interface ModelCatalogEntry {
   provider: string
   modelId: string
   available: boolean
-  /** 真实已知的模型上下文窗口（tokens）；未知省略。 */
+  /** Real known model context window (tokens); omitted when unknown. */
   contextWindow?: number
-  /** 用户显式禁用该模型（目录标注用；available 仍表示凭据可用，两者独立）。 */
+  /** User explicitly disabled this model (catalog annotation; available still reflects credential usability — the two are independent). */
   disabled?: boolean
 }
 
-/** `GET /api/models` 完整目录：模型列表 + 各模型思考档位（off/minimal/low/medium/high/xhigh/max）。 */
+/** Full catalog of `GET /api/models`: model list + per-model thinking levels (off/minimal/low/medium/high/xhigh/max). */
 export interface ModelCatalog {
   models: ModelCatalogEntry[]
-  /** provider/modelId -> 支持的思考档位（缺省仅 off）。 */
+  /** provider/modelId -> supported thinking levels (defaults to off only). */
   thinkingLevels: Record<string, string[]>
-  /** 全局默认模型（config.json.model / 启动参数；未配置省略）。 */
+  /** Global default model (config.json.model / startup argument; omitted when unset). */
   defaultModel?: string
-  /** 全局默认思考档位（config.json.thinkingLevel；未配置省略）。 */
+  /** Global default thinking level (config.json.thinkingLevel; omitted when unset). */
   defaultThinkingLevel?: string
 }
 
-/** PI 内置供应商、插件动态供应商与已启用自定义网关的公开目录，不含凭据或私有请求头。 */
+/** Public catalog of PI built-in providers, plugin dynamic providers and enabled custom gateways; contains no credentials or private request headers. */
 export interface ModelProviderSummary {
   id: string
   name: string
   modelCount: number
   authMethods: Array<{ type: 'api_key' | 'oauth'; label: string }>
-  /** 是否支持远端动态目录刷新（实现了 refreshModels 的供应商）。 */
+  /** Whether remote dynamic catalog refresh is supported (providers implementing refreshModels). */
   dynamic?: boolean
-  /** 供应商公开网关根地址或 baseUrl（非机密展示）。 */
+  /** The provider's public gateway root URL or baseUrl (non-secret display). */
   baseUrl?: string
-  /** 注册本供应商的插件 ID（内核自动填充；非插件供应商缺省）。 */
+  /** Plugin ID that registered this provider (auto-filled by the kernel; absent for non-plugin providers). */
   pluginId?: string
 }
 
-/** `POST /api/models/refresh` 动态模型目录刷新结果。 */
+/** Result of `POST /api/models/refresh` dynamic model catalog refresh. */
 export interface ModelProvidersRefreshResult {
-  /** 本次请求刷新的目标供应商 ID（空数组表示全部已配置动态供应商）。 */
+  /** Target provider IDs refreshed by this request (an empty array means all configured dynamic providers). */
   providers: string[]
-  /** 刷新是否在中途被取消。 */
+  /** Whether the refresh was aborted midway. */
   aborted: boolean
-  /** 各动态供应商刷新错误（providerId -> 错误消息）。 */
+  /** Per dynamic provider refresh errors (providerId -> error message). */
   errors: Record<string, string>
-  /** 刷新后的最新模型目录。 */
+  /** Latest model catalog after the refresh. */
   models: ModelCatalogEntry[]
-  /** 刷新后的最新供应商目录摘要。 */
+  /** Latest provider catalog summary after the refresh. */
   providerCatalog: ModelProviderSummary[]
 }
 
-/** `PUT /api/models/filter` 请求体：按 provider 设置显式禁用的模型 ID 集（空数组 = 清空该 provider 的全部禁用项；provider 缺省 = 清空全部）。 */
+/** `PUT /api/models/filter` request body: per-provider set of explicitly disabled model IDs (empty array = clear all disabled entries for that provider; provider omitted = clear all). */
 export interface SetModelFilterBody {
   provider?: string
   disabledModels: string[]
 }
 
-/** `PUT /api/models/filter` 响应：更新后的完整模型目录。 */
+/** `PUT /api/models/filter` response: the full updated model catalog. */
 export interface SetModelFilterResult {
   catalog: ModelCatalog
 }
 
 /**
- * `~/.helm/providers.json` 自定义模型网关条目。
- * 严禁包含密钥字段——API Key 一律存 credentials.json（恒 0600）。
+ * `~/.helm/providers.json` custom model gateway entry.
+ * Must never contain secret fields — API keys always live in credentials.json (mode 0600).
  */
 export interface ProviderConfig {
   id: string
-  /** OpenAI / Anthropic 兼容协议类型。 */
+  /** OpenAI / Anthropic compatible protocol type. */
   protocol: 'openai' | 'anthropic'
   baseUrl: string
-  /** 该网关下可用的模型 ID 列表。 */
+  /** Model IDs available under this gateway. */
   models: string[]
-  /** 展示名（非机密）。 */
+  /** Display name (non-secret). */
   label?: string
-  /** 是否启用。 */
+  /** Whether enabled. */
   enabled: boolean
 }

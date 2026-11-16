@@ -1,9 +1,11 @@
 /**
- * 目标路径词法规则（pathRulesForShape）对齐测试：以 node:path 的
- * posix / win32 实现为 oracle，逐用例校验 protocol 纯实现（浏览器安全、
- * 无 Node 内置依赖）在 normalize / join / dirname / basename 四个词法
- * 函数上与 Node 语义完全一致（含结尾分隔符保留、dirname 不消解 '..'、
- * win32 设备根（盘符 / UNC）、双分隔符与 '.\' 消歧前缀等行为）。
+ * Alignment tests for the target-path lexical rules (pathRulesForShape): using
+ * node:path's posix / win32 implementations as the oracle, case by case, verify
+ * that the protocol pure implementation (browser-safe, no Node builtins) matches
+ * Node semantics exactly on the four lexical functions normalize / join /
+ * dirname / basename (including trailing-separator preservation, dirname not
+ * resolving '..', win32 device roots (drive / UNC), double separators and the
+ * '.\' disambiguation prefix).
  */
 import { posix, win32 } from 'node:path'
 import { describe, it } from 'node:test'
@@ -13,7 +15,7 @@ import { isAbsoluteTargetPath, pathRulesForShape, targetPathShape } from '@helm/
 const posixRules = pathRulesForShape('posix')
 const win32Rules = pathRulesForShape('win32')
 
-/** 语料生成：分隔符/点段/设备根 token 组合 + 定向关键用例（探针确认过的 node 行为）。 */
+/** Corpus generation: separator/dot-segment/device-root token combinations + targeted key cases (node behaviors confirmed by probing). */
 function corpus(): string[] {
   const seps = ['/', '\\', '//', '\\\\', '/\\']
   const names = ['', '.', '..', 'a', 'ab', 'a.b', '.h', 'C:', 'C:a', 'AB:', 'z:', 'C:..']
@@ -38,8 +40,8 @@ function corpus(): string[] {
   return [...out]
 }
 
-describe('pathRulesForShape 词法规则与 node:path 逐用例对齐', () => {
-  it('normalize / dirname / basename 全语料一致', { timeout: 60_000 }, () => {
+describe('pathRulesForShape lexical rules aligned with node:path case by case', () => {
+  it('normalize / dirname / basename agree on the full corpus', { timeout: 60_000 }, () => {
     for (const p of corpus()) {
       assert.equal(posixRules.normalize(p), posix.normalize(p), `posix.normalize(${JSON.stringify(p)})`)
       assert.equal(posixRules.dirname(p), posix.dirname(p), `posix.dirname(${JSON.stringify(p)})`)
@@ -50,7 +52,7 @@ describe('pathRulesForShape 词法规则与 node:path 逐用例对齐', () => {
     }
   })
 
-  it('join 三元组全组合一致', { timeout: 60_000 }, () => {
+  it('join agrees on all triples of the full combination', { timeout: 60_000 }, () => {
     const tokens = ['', 'a', '/a', 'C:\\a', 'C:', '\\\\srv\\share', '..', '.', 'b', '\\b', 'C:/a', 'a/', 'D:\\x', 'AB:']
     for (const a of tokens) {
       for (const b of tokens) {
@@ -62,12 +64,12 @@ describe('pathRulesForShape 词法规则与 node:path 逐用例对齐', () => {
     }
   })
 
-  it('形状未知回退 POSIX（与内核原行为一致）', { timeout: 60_000 }, () => {
+  it('unknown shape falls back to POSIX (consistent with the kernel\'s original behavior)', { timeout: 60_000 }, () => {
     assert.equal(pathRulesForShape(undefined), posixRules)
     assert.equal(pathRulesForShape('win32'), win32Rules)
   })
 
-  it('关键行为定点抽查（win32 设备根 / posix 双斜杠根 / 结尾分隔符保留）', { timeout: 60_000 }, () => {
+  it('targeted spot checks of key behaviors (win32 device root / posix double-slash root / trailing-separator preservation)', { timeout: 60_000 }, () => {
     assert.equal(win32Rules.normalize('C:/a/b'), 'C:\\a\\b')
     assert.equal(win32Rules.normalize('C:'), 'C:.')
     assert.equal(win32Rules.normalize('\\\\srv\\share'), '\\\\srv\\share\\')

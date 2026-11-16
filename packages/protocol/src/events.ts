@@ -1,8 +1,10 @@
 /**
- * `GET /api/events` SSE 契约：首帧 snapshot（或续传 resumed）+ seq 水位线，
- * 随后增量事件流。短断线重连可携带 `?afterSeq=<seq>&bootId=<bootId>` 续传：
- * 校验通过首帧改发 resumed 并补发缺口帧；跨代（服务端重启）、seq 越界或
- * 缓存缺口一律回退 snapshot 全量对齐，绝不越缺口假成功。
+ * `GET /api/events` SSE contract: a first-frame snapshot (or a resume frame
+ * `resumed`) + a seq watermark, followed by the incremental event stream. Short
+ * reconnects may carry `?afterSeq=<seq>&bootId=<bootId>` to resume: when both
+ * credentials validate, the first frame becomes `resumed` and the gap frames are
+ * replayed; across generations (server restart), out-of-range seq or a cache gap
+ * always fall back to a full snapshot alignment — never a fake success across a gap.
  */
 
 import type { AskSpec } from './ask.js'
@@ -11,35 +13,37 @@ import type { NodeInfo } from './env-rpc.js'
 import type { PluginSummary, PublicPluginDoc, PublicPluginSessionDoc } from './plugin-dto.js'
 import type { PluginUiContribution } from './ui.js'
 
-/** SSE 全局事件序号（水位线）。 */
+/** SSE global event sequence number (watermark). */
 export type HelmEventSeq = number
 
 /**
- * 服务端事件代标识（EventHub 实例随机生成）：seq 只在同代内连续可比，
- * 跨代（服务端重启换实例）必须全量快照，绝不凭裸 seq 续传。
+ * Server-side event generation identifier (randomly generated per EventHub
+ * instance): seq is only contiguous and comparable within a generation; across
+ * generations (server restart swaps the instance) a full snapshot is mandatory —
+ * never resume on a bare seq.
  */
 export type HelmBootId = string
 
-/** 连接建立时原子读取的全量快照（首帧 `event: snapshot`）。 */
+/** Full snapshot read atomically at connection establishment (first frame `event: snapshot`). */
 export interface HelmSnapshot {
-  /** 当前事件代：客户端记录后作为重连续传凭据之一。 */
+  /** Current event generation: the client records it as one of its reconnect resume credentials. */
   bootId: HelmBootId
   seq: HelmEventSeq
   conversations: ConversationSummary[]
-  /** 当前待答 AskDoc（status = pending）。 */
+  /** Currently pending AskDocs (status = pending). */
   pendingAsks: AskSpec[]
   plugins: PluginSummary[]
-  /** 启用插件的公共 UI 贡献（全部扩展点）。 */
+  /** Public UI contributions of enabled plugins (all extension points). */
   ui: PluginUiContribution[]
-  /** 已启用插件的公共文档快照（首帧直投，免额外拉取）。 */
+  /** Public doc snapshot of enabled plugins (delivered in the first frame, avoiding extra fetches). */
   pluginDocs?: PublicPluginDoc[]
-  /** 活跃会话实时视图（working/blocked run 或仍有 queued 输入；重连首帧恢复时间线尾部胶囊）。 */
+  /** Live views of active conversations (working/blocked runs or still-queued input; reconnect first frame restores the timeline tail pills). */
   conversationLives?: ConversationLive[]
-  /** 已知计算节点列表（含 local 与 BYOM 节点）。 */
+  /** Known compute node list (including local and BYOM nodes). */
   nodes?: NodeInfo[]
 }
 
-/** 增量事件类型（`event:` 名）；未知类型客户端应原样保留。 */
+/** Incremental event types (`event:` names); clients should preserve unknown types as-is. */
 export type HelmEventType =
   | 'conversation.upsert'
   | 'conversation.deleted'
@@ -64,14 +68,14 @@ export interface ConversationDeletedEvent {
   conversationId: number
 }
 
-/** 新时间线条目落库。 */
+/** A new timeline entry persisted. */
 export interface ConversationEntryEvent {
   type: 'conversation.entry'
   conversationId: number
   entry: ConversationEntry
 }
 
-/** 会话实时增量（零 Token 文本与工具卡状态）。 */
+/** Conversation live increment (zero-token text and tool card state). */
 export interface ConversationLiveEvent {
   type: 'conversation.live'
   live: ConversationLive
@@ -82,7 +86,7 @@ export interface AskUpsertEvent {
   ask: AskSpec
 }
 
-/** AskDoc 终态流转（answered / cancelled / superseded）。 */
+/** AskDoc terminal transition (answered / cancelled / superseded). */
 export interface AskResolvedEvent {
   type: 'ask.resolved'
   askId: string
@@ -92,57 +96,58 @@ export interface AskResolvedEvent {
 export interface PluginChangedEvent {
   type: 'plugin.changed'
   plugin: PluginSummary
-  /** 该插件当前的 UI 贡献；停用或卸载时为空，客户端据此替换其贡献。 */
+  /** The plugin's current UI contributions; empty on disable or uninstall, and clients replace its contributions accordingly. */
   ui: PluginUiContribution[]
 }
 
-/** 插件公共文档变更（仅 public doc；发布前已逐值校验/脱敏）。 */
+/** Plugin public doc change (public doc only; per-value validated/redacted before publishing). */
 export interface PluginDocUpdatedEvent {
   type: 'plugin.doc.updated'
   doc: PublicPluginDoc
 }
 
-/** 仅出现在指定会话文档的 SSE 流，不广播至 /api/events。 */
+/** SSE stream scoped to a specific session doc; never broadcast on /api/events. */
 export interface PluginSessionDocUpdatedEvent {
   type: 'plugin.session_doc.updated'
   doc: PublicPluginSessionDoc
 }
 
-/** 会话文档订阅首帧；随后的更新使用 HelmEventFrame。 */
+/** First frame of a session doc subscription; subsequent updates use HelmEventFrame. */
 export interface PluginSessionDocSnapshot {
   seq: HelmEventSeq
   doc: PublicPluginSessionDoc
 }
 
-/** 模型配置或动态目录已更新；客户端重新读取模型与供应商目录。 */
+/** Model config or dynamic catalog updated; clients re-read the model and provider catalogs. */
 export interface ModelsChangedEvent {
   type: 'models.changed'
-  /** 空列表表示整个目录；采用 EventHub 通用 payload 信封。 */
+  /** An empty list means the whole catalog; uses the EventHub generic payload envelope. */
   payload: { providers: string[] }
 }
 
-/** 计算节点状态变更（上线/离线/注册/移除）。 */
+/** Compute node state change (online/offline/registered/removed). */
 export interface NodeChangedEvent {
   type: 'node.changed'
   node: NodeInfo
-  /** 当节点从 Hub 签发表移除时为 true，客户端据此从已知节点列表中移除该项。 */
+  /** True when the node is removed from the Hub's issuance table; clients remove it from the known node list accordingly. */
   removed?: boolean
 }
 
-/** 人类通知（如 Watchdog 只读诊断告警）。 */
+/** Human notification (e.g. Watchdog read-only diagnostic alerts). */
 export interface NotificationEvent {
   type: 'notification'
   level: 'info' | 'warning' | 'error'
   title: string
   body?: string
-  /** 关联会话，便于点击跳转。 */
+  /** Related conversation, for click-through navigation. */
   conversationId?: number
 }
 
 /**
- * 插件/工作流自定义事件（`ctx.host.emitEvent` 的非 core type 出口）。
- * payload 原样透传（宿主已在发布侧统一 JSON 校验与脱敏）；type 为任意非空字符串，
- * 不与 core 类型冲突（宿主在边界校验）。
+ * Plugin/workflow custom events (the non-core-type outlet of `ctx.host.emitEvent`).
+ * The payload passes through verbatim (the host already unifies JSON validation and
+ * redaction on the publishing side); type is any non-empty string that must not
+ * collide with core types (the host validates at the boundary).
  */
 export interface CustomHelmEvent {
   type: string
@@ -164,22 +169,24 @@ export type HelmEvent =
   | NotificationEvent
   | CustomHelmEvent
 
-/** SSE 增量事件帧：`data: JSON.stringify({ seq, event })`。 */
+/** SSE incremental event frame: `data: JSON.stringify({ seq, event })`. */
 export interface HelmEventFrame {
   seq: HelmEventSeq
   event: HelmEvent
 }
 
 /**
- * 续传控制首帧（`event: resumed`）：`?afterSeq`+`?bootId` 双凭据校验通过后
- * 发送，随后按 seq 顺序补发 `(afterSeq, headSeq]` 的缓存帧再接实时增量。
- * 客户端必须校验 bootId 与自身水位一致，且追平 headSeq 后才算恢复实时。
+ * Resume control first frame (`event: resumed`): sent after both `?afterSeq` +
+ * `?bootId` credentials validate; then the cached frames of `(afterSeq, headSeq]`
+ * are replayed in seq order before the live increment continues. The client must
+ * verify the bootId matches its own watermark and that it has caught up to headSeq
+ * before considering itself live again.
  */
 export interface HelmResumedFrame {
-  /** 服务端当前事件代（与请求携带的一致；跨代时服务端改发 snapshot）。 */
+  /** The server's current event generation (matching the request; the server sends a snapshot instead when across generations). */
   bootId: HelmBootId
-  /** 服务端确认续传的客户端水位（等于请求 afterSeq）。 */
+  /** The client watermark the server acknowledged for the resume (equal to the request's afterSeq). */
   seq: HelmEventSeq
-  /** 建连采样时刻的服务端事件头水位；补发追平该值后客户端才算 live。 */
+  /** Server event head watermark sampled at connection time; the client is live only after replaying past this value. */
   headSeq: HelmEventSeq
 }

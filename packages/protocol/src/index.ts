@@ -1,6 +1,6 @@
 /**
- * @helm/protocol —— helm 唯一共享契约包。
- * 零运行时重依赖；仅类型与极少数无依赖常量/错误类。
+ * @helm/protocol — helm's single shared contract package.
+ * Zero heavy runtime dependencies; only types and a few dependency-free constants/error classes.
  */
 
 export * from './conversation.js'

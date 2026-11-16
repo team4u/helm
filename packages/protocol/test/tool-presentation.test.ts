@@ -28,10 +28,10 @@ function result(): EditToolResult {
 }
 
 function validate(value: unknown): void {
-  validateOrThrow(EDIT_TOOL_RESULT_SCHEMA, value, 'edit 差异结果无效')
+  validateOrThrow(EDIT_TOOL_RESULT_SCHEMA, value, 'invalid edit diff result')
 }
 
-test('edit 展示契约接受真实行号、截断差异与无操作结果', { timeout: 60_000 }, () => {
+test('edit presentation contract accepts real line numbers, truncated diffs and no-op results', { timeout: 60_000 }, () => {
   validate(result())
   const truncated = result()
   truncated.diff.rows = []
@@ -44,7 +44,7 @@ test('edit 展示契约接受真实行号、截断差异与无操作结果', { t
   validate(unchanged)
 })
 
-test('edit 展示边界拒绝缺失字段、错误行形状与不可表示的行号', { timeout: 60_000 }, () => {
+test('edit presentation boundary rejects missing fields, wrong row shapes and unrepresentable line numbers', { timeout: 60_000 }, () => {
   const invalid: unknown[] = [
     { path: '/workspace/example.ts', nodeId: 'local', replaced: true },
     { ...result(), replaced: false },
@@ -59,17 +59,17 @@ test('edit 展示边界拒绝缺失字段、错误行形状与不可表示的行
     ].map((row) => ({ ...result(), diff: { ...result().diff, rows: [row] } })),
     { ...result(), diff: { ...result().diff, addedLines: -1 } },
   ]
-  for (const value of invalid) assert.throws(() => validate(value), /edit 差异结果无效/)
+  for (const value of invalid) assert.throws(() => validate(value), /invalid edit diff result/)
 })
 
-test('edit 展示边界拒绝超量行与超长行文本', { timeout: 60_000 }, () => {
+test('edit presentation boundary rejects excess rows and over-long row text', { timeout: 60_000 }, () => {
   const row = { kind: 'add', newLine: 1, text: 'line' }
   assert.throws(
     () => validate({ ...result(), diff: { ...result().diff, rows: Array.from({ length: TOOL_DIFF_MAX_ROWS + 1 }, () => row) } }),
-    /edit 差异结果无效/,
+    /invalid edit diff result/,
   )
   assert.throws(
     () => validate({ ...result(), diff: { ...result().diff, rows: [{ ...row, text: 'x'.repeat(TOOL_DIFF_MAX_ROW_CHARS + 1) }] } }),
-    /edit 差异结果无效/,
+    /invalid edit diff result/,
   )
 })

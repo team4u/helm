@@ -1,4 +1,4 @@
-/** 内置 edit 的实际执行结果；展示只消费已写入文件对应的差异。 */
+/** Actual execution result of the built-in edit tool; presentation only consumes diffs corresponding to the written file. */
 export type ToolDiffRow =
   | { kind: 'context'; oldLine: number; newLine: number; text: string }
   | { kind: 'remove'; oldLine: number; text: string }
@@ -9,7 +9,7 @@ export interface ToolEditDiff {
   addedLines: number
   removedLines: number
   firstChangedLine: number
-  /** 行数或文本预算使部分差异未展示；统计仍覆盖整个替换。 */
+  /** Row or text budget caused part of the diff to be omitted; the counters still cover the whole replacement. */
   truncated: boolean
 }
 
@@ -27,7 +27,7 @@ export const TOOL_DIFF_MAX_ROW_CHARS = 4_096
 const lineNumber = { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER }
 const text = { type: 'string', maxLength: TOOL_DIFF_MAX_ROW_CHARS }
 
-/** SDK 输出与 Web 展示入口共用同一 Schema，拒绝伪造的行号与非法数据。 */
+/** SDK output and the Web presentation entry share the same schema, rejecting forged line numbers and invalid data. */
 export const EDIT_TOOL_RESULT_SCHEMA = {
   type: 'object',
   properties: {

@@ -14,7 +14,7 @@ import {
 
 const pkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
-test('@helm/protocol/browser：导出声明与根入口纯跨端能力对齐', { timeout: 60_000 }, async () => {
+test('@helm/protocol/browser: export declarations aligned with the root entry\'s pure cross-runtime surface', { timeout: 60_000 }, async () => {
   const pkg = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8')) as {
     exports?: Record<string, { types?: string; default?: string }>
   }
@@ -57,16 +57,16 @@ test('@helm/protocol/browser：导出声明与根入口纯跨端能力对齐', {
   const rootRecord = rootExports as Record<string, unknown>
   assert.deepEqual(Object.keys(browserRecord).sort(), Object.keys(rootRecord).sort())
   for (const key of Object.keys(browserRecord)) {
-    assert.equal(browserRecord[key], rootRecord[key], `browser.ts 导出 ${key} 与 index.ts 应保持同源`)
-    assert.ok(key in pkgBrowser, `@helm/protocol/browser 包入口缺少导出 ${key}`)
+    assert.equal(browserRecord[key], rootRecord[key], `browser.ts export ${key} must stay identical to index.ts`)
+    assert.ok(key in pkgBrowser, `@helm/protocol/browser package entry is missing export ${key}`)
   }
   for (const key of requiredRuntimeExports) {
-    assert.ok(key in browserRecord, `browser.ts 缺少运行时导出 ${key}`)
-    assert.equal(browserRecord[key], rootRecord[key], `browser.ts 与 index.ts 导出 ${key} 应指向同一实例`)
+    assert.ok(key in browserRecord, `browser.ts is missing runtime export ${key}`)
+    assert.equal(browserRecord[key], rootRecord[key], `browser.ts and index.ts export ${key} must point to the same instance`)
   }
 })
 
-test('parsePluginUiContribution：覆盖全部已知 surface 并正确拒绝非法贡献', { timeout: 60_000 }, () => {
+test('parsePluginUiContribution: covers every known surface and rejects invalid contributions correctly', { timeout: 60_000 }, () => {
   for (const surface of KNOWN_PLUGIN_UI_SURFACES) {
     const item: PluginUiContribution = {
       pluginId: 'demo:plugin',
@@ -74,24 +74,24 @@ test('parsePluginUiContribution：覆盖全部已知 surface 并正确拒绝非�
       spec: { id: `spec-${surface}`, label: surface },
     }
     const parsed = parsePluginUiContribution(item)
-    assert.ok(parsed !== undefined, `已知 surface "${surface}" 应通过收窄`)
+    assert.ok(parsed !== undefined, `known surface "${surface}" should narrow successfully`)
     assert.equal(parsed.pluginId, 'demo:plugin')
     assert.equal(parsed.surface, surface)
-    // 验证判别联合可按 surface 分支收窄
+    // Verify the discriminated union narrows by surface
     const narrowed: KnownPluginUiContribution = parsed
     assert.equal(narrowed.spec.id, `spec-${surface}`)
   }
 
   const invalidCases: Array<{ label: string; value: PluginUiContribution }> = [
-    { label: '未知 surface', value: { pluginId: 'demo:plugin', surface: 'unknown.surface', spec: { id: 'x' } } },
-    { label: '空 surface', value: { pluginId: 'demo:plugin', surface: '', spec: { id: 'x' } } },
-    { label: '原型污染 surface', value: { pluginId: 'demo:plugin', surface: '__proto__', spec: { id: 'x' } } },
+    { label: 'unknown surface', value: { pluginId: 'demo:plugin', surface: 'unknown.surface', spec: { id: 'x' } } },
+    { label: 'empty surface', value: { pluginId: 'demo:plugin', surface: '', spec: { id: 'x' } } },
+    { label: 'prototype-pollution surface', value: { pluginId: 'demo:plugin', surface: '__proto__', spec: { id: 'x' } } },
     { label: 'null spec', value: { pluginId: 'demo:plugin', surface: 'screen', spec: null } },
     { label: 'undefined spec', value: { pluginId: 'demo:plugin', surface: 'screen', spec: undefined } },
     { label: 'array spec', value: { pluginId: 'demo:plugin', surface: 'screen', spec: [] } },
     { label: 'primitive spec', value: { pluginId: 'demo:plugin', surface: 'screen', spec: 'bad' } },
   ]
   for (const c of invalidCases) {
-    assert.equal(parsePluginUiContribution(c.value), undefined, `${c.label} 必须返回 undefined`)
+    assert.equal(parsePluginUiContribution(c.value), undefined, `${c.label} must return undefined`)
   }
 })

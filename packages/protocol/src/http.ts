@@ -1,8 +1,8 @@
 /**
- * HTTP 边界固定协议：
- * - 成功：直接返回实体或数组（不统一包 data）。
- * - 失败：`{ error: { code, message, details? } }`。
- * Request/Response 使用 base lib 的 DOM 类型，不依赖 node 内置模块。
+ * Fixed HTTP boundary protocol:
+ * - Success: the entity or array is returned directly (no unified data wrapper).
+ * - Failure: `{ error: { code, message, details? } }`.
+ * Request/Response use the base lib's DOM types, with no dependency on node builtins.
  */
 
 import type { ConversationSummary } from './conversation.js'
@@ -12,50 +12,50 @@ export interface ApiErrorBody {
   error: HelmErrorDetail
 }
 
-/** `GET /api/auth/status`。 */
+/** `GET /api/auth/status`. */
 export interface AuthStatus {
   configured: boolean
   authenticated: boolean
 }
 
-/** `POST /api/auth/setup` / `POST /api/auth/login` 成功响应。 */
+/** Success response of `POST /api/auth/setup` / `POST /api/auth/login`. */
 export interface AuthToken {
   token: string
 }
 
-/** `GET /api/credentials` 列表项；密钥本体永不离开服务端。 */
+/** `GET /api/credentials` list item; the secret itself never leaves the server. */
 export interface CredentialSummary {
   id: string
   configured: boolean
 }
 
-/** `POST /api/conversations/:id/fork` 请求体。 */
+/** `POST /api/conversations/:id/fork` request body. */
 export interface ConversationForkRequest {
-  /** 分叉锚点 entry ID（与 ConversationEntry.id 对应的正整数序号）。 */
+  /** Fork anchor entry ID (a positive integer ordinal corresponding to ConversationEntry.id). */
   entryId: number
   title?: string
 }
 
-/** `POST /api/conversations/:id/compact` 响应。 */
+/** `POST /api/conversations/:id/compact` response. */
 export interface ConversationCompactResponse {
   taskId: number
   conversation: ConversationSummary
 }
 
-/** `POST /api/conversations/:id/withdraw` 请求体。 */
+/** `POST /api/conversations/:id/withdraw` request body. */
 export interface ConversationWithdrawRequest {
-  /** 待撤回的排队 submission ID（正整数）。 */
+  /** Queued submission ID to withdraw (positive integer). */
   submissionId: number
 }
 
-/** `POST /api/conversations/:id/withdraw` 响应。 */
+/** `POST /api/conversations/:id/withdraw` response. */
 export interface ConversationWithdrawResponse {
   status: 'withdrawn' | 'already_placed' | 'settled'
-  /** 若该提交刚进入执行或已结算并分配了条目 ID，则返回对应的 entryId。 */
+  /** If the submission just entered execution or has settled and been assigned an entry ID, the corresponding entryId is returned. */
   entryId?: number
 }
 
-/** `GET /api/search?q=...` 命中条目。 */
+/** Hit entry of `GET /api/search?q=...`. */
 export interface SearchHit {
   conversationId: number
   entryId?: string
@@ -63,7 +63,7 @@ export interface SearchHit {
   title?: string
 }
 
-/** 静态核心 CLI 命令路径唯一真源（与 @helm/cli coreCommands() 及内置技能 SKILL.md 双向锁定）。 */
+/** Single source of truth for static core CLI command paths (bidirectionally locked with @helm/cli coreCommands() and the built-in skill SKILL.md). */
 export const CORE_CLI_COMMAND_PATHS = [
   'setup',
   'login',
@@ -133,4 +133,3 @@ export const CORE_CLI_COMMAND_PATHS = [
 ] as const
 
 export type CoreCliCommandPath = (typeof CORE_CLI_COMMAND_PATHS)[number]
-

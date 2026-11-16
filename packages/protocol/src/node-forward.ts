@@ -1,27 +1,28 @@
 /**
- * Hub 侧前台 TCP 端口转发契约（POST /api/nodes/:id/forward 与
- * /api/nodes/forward/* 的共享请求/响应类型；`helm nodes forward*` CLI 同权）。
+ * Hub-side foreground TCP port-forwarding contract (shared request/response types for
+ * POST /api/nodes/:id/forward and /api/nodes/forward/*; `helm nodes forward*` CLI has the same access).
  *
- * 生命周期（前台租约）：
- * - 监听器只在显式命令期间存在：创建后未在有限期限内绑定监控事件流
- *   （持有者）即自动停止；绑定后最后一个持有者断开时停止；显式
- *   DELETE / 宿主 close 同样停止——绝不残留监听器；
- * - 只读 list/get 不是持有者；持有/释放经 events 事件流隐式完成。
+ * Lifecycle (foreground lease):
+ * - The listener exists only for the duration of an explicit command: if it is not bound to a
+ *   monitoring event stream (a holder) within a bounded window after creation, it stops
+ *   automatically; once bound, it stops when the last holder disconnects; an explicit
+ *   DELETE / host close also stops it — never a leftover listener;
+ * - Read-only list/get is not a holder; acquire/release is done implicitly via the events stream.
  */
 
-/** POST /api/nodes/:id/forward 请求体。 */
+/** POST /api/nodes/:id/forward request body. */
 export interface NodeForwardInput {
-  /** Hub 侧监听地址（如 127.0.0.1 / 0.0.0.0；严格校验）。 */
+  /** Hub-side listen address (e.g. 127.0.0.1 / 0.0.0.0; strictly validated). */
   listenHost: string
-  /** Hub 侧监听端口（1..65535；0 不可用——显式端口才能转发）。 */
+  /** Hub-side listen port (1..65535; 0 is not usable — only an explicit port can be forwarded). */
   listenPort: number
-  /** 目标主机（节点视角；省略默认 127.0.0.1）。 */
+  /** Target host (from the node's perspective; defaults to 127.0.0.1 when omitted). */
   targetHost?: string
-  /** 目标端口（1..65535）。 */
+  /** Target port (1..65535). */
   targetPort: number
 }
 
-/** 转发会话快照（GET /api/nodes/forward 与 /api/nodes/forward/:id）。 */
+/** Forwarding session snapshot (GET /api/nodes/forward and /api/nodes/forward/:id). */
 export interface NodeForwardSession {
   forwardId: string
   nodeId: string
@@ -34,10 +35,10 @@ export interface NodeForwardSession {
   lastError?: string
 }
 
-/** GET /api/nodes/forward/:id/events 的 NDJSON 事件帧。 */
+/** NDJSON event frames of GET /api/nodes/forward/:id/events. */
 export type NodeForwardEvent =
   | { type: 'started'; listenHost: string; listenPort: number }
   | { type: 'connection'; count: number }
   | { type: 'error'; message: string }
-  /** 终态帧：stop 先发本帧再关停（监控流据此正常结束，不悬挂）。 */
+  /** Terminal frame: on stop this frame is sent first, then the listener shuts down (the monitoring stream ends normally instead of hanging). */
   | { type: 'stopped' }

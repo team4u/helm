@@ -1,10 +1,13 @@
 /**
- * HelmHostPluginsPort 契约锁定测试（纯类型形状，无运行时依赖）：
- * - HelmHostApi.plugins 挂载 HelmHostPluginsPort，且保留既有 listPlugins/listUi 兼容入口；
- * - 端口方法签名（list/listUi 同步快照；doctor/install/update/remove/enable/disable 异步）；
- * - 结果类型复用既有 PluginDoctorReport / PluginInstallResult / PluginUpdateResult /
- *   PluginRemoveResult / PluginSummary，不引入第二套模型；
- * - BackendPluginsLifecyclePort 与 ctx.host.plugins 写面方法一一对应（宿主后端拆窄面）。
+ * HelmHostPluginsPort contract lock tests (pure type shapes, no runtime dependencies):
+ * - HelmHostApi.plugins mounts HelmHostPluginsPort and keeps the existing
+ *   listPlugins/listUi compatibility entries;
+ * - port method signatures (list/listUi synchronous snapshots; doctor/install/
+ *   update/remove/enable/disable asynchronous);
+ * - result types reuse the existing PluginDoctorReport / PluginInstallResult /
+ *   PluginUpdateResult / PluginRemoveResult / PluginSummary — no second model set;
+ * - BackendPluginsLifecyclePort corresponds one-to-one with the ctx.host.plugins
+ *   write-side methods (the host backend's narrowed surface).
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -19,8 +22,8 @@ import type {
   PluginUpdateResult,
 } from '@helm/protocol'
 
-test('HelmHostApi.plugins 挂载 HelmHostPluginsPort 且保留 listPlugins/listUi 兼容入口', { timeout: 60_000 }, () => {
-  // 编译期类型校验：确保 HelmHostApi 挂载 HelmHostPluginsPort 且保留既有只读方法签名
+test('HelmHostApi.plugins mounts HelmHostPluginsPort and keeps the listPlugins/listUi compatibility entries', { timeout: 60_000 }, () => {
+  // Compile-time type checks: ensure HelmHostApi mounts HelmHostPluginsPort and keeps the existing read-only method signatures
   type HasPlugins = HelmHostApi['plugins'] extends HelmHostPluginsPort ? true : false
   type HasListPlugins = HelmHostApi['listPlugins'] extends () => PluginSummary[] ? true : false
   type HasListUi = HelmHostApi['listUi'] extends () => unknown[] ? true : false
@@ -28,7 +31,7 @@ test('HelmHostApi.plugins 挂载 HelmHostPluginsPort 且保留 listPlugins/listU
   assert.deepEqual(typeLocks, [true, true, true])
 })
 
-test('HelmHostPluginsPort 方法签名与既有结果模型（编译期形状锁定）', { timeout: 60_000 }, () => {
+test('HelmHostPluginsPort method signatures and existing result models (compile-time shape lock)', { timeout: 60_000 }, () => {
   const port: HelmHostPluginsPort = {
     list: (): PluginSummary[] => [],
     listUi: () => [],
@@ -56,18 +59,18 @@ test('HelmHostPluginsPort 方法签名与既有结果模型（编译期形状锁
   }
 })
 
-test('PluginDoctorReport.screens 为 additive 可选字段（类型守卫与结构防御）', { timeout: 60_000 }, () => {
+test('PluginDoctorReport.screens is an additive optional field (type guards and structural defense)', { timeout: 60_000 }, () => {
   type ScreensOptional = undefined extends PluginDoctorReport['screens'] ? true : false
   type ScreensType = string[] extends NonNullable<PluginDoctorReport['screens']> ? true : false
   const checks: [ScreensOptional, ScreensType] = [true, true]
   assert.deepEqual(checks, [true, true])
 
-  // 未提供 screens 字段时缺省为 undefined，仍为合法形状（不虚构）
+  // Without the screens field it defaults to undefined and is still a valid shape (nothing fabricated)
   const withoutScreens: PluginDoctorReport = { dir: '/x', ok: false, checks: [] }
   assert.equal(withoutScreens.screens, undefined)
 })
 
-test('BackendPluginsLifecyclePort 写面方法与 ctx.host.plugins 一一对应', { timeout: 60_000 }, () => {
+test('BackendPluginsLifecyclePort write-side methods correspond one-to-one with ctx.host.plugins', { timeout: 60_000 }, () => {
   const backend: BackendPluginsLifecyclePort = {
     doctorPlugin: async (): Promise<PluginDoctorReport> => ({ dir: '/x', ok: true, checks: [] }),
     installPlugin: async (): Promise<PluginInstallResult> => ({ record: null as never, summary: null as never }),

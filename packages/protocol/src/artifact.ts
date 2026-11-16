@@ -1,8 +1,9 @@
 /**
- * 会话产物契约：工具超长输出自动 Spill 与会话产出文件的统一元数据。
+ * Conversation artifact contract: unified metadata for automatic spill of over-long tool output
+ * and conversation-produced files.
  */
 
-/** 产物来源分类：upload=用户/工具显式上传，registered=本地文件登记，spill=超长输出溢出快照。 */
+/** Artifact source category: upload = explicit user/tool upload, registered = local file registration, spill = over-long output snapshot. */
 export type ArtifactKind = 'upload' | 'registered' | 'spill'
 
 export const ARTIFACT_KINDS = ['upload', 'registered', 'spill'] as const satisfies readonly ArtifactKind[]
@@ -11,22 +12,22 @@ export function isArtifactKind(value: unknown): value is ArtifactKind {
   return value === 'upload' || value === 'registered' || value === 'spill'
 }
 
-/** 产物元数据（与 services 层代理对齐的固定字段集）。 */
+/** Artifact metadata (a fixed field set aligned with the services layer agents). */
 export interface ArtifactMetadata {
   id: string
   conversationId: number
   kind: ArtifactKind
   name: string
-  /** 相对 dataDir 的文件路径（`artifacts/<convId>/<name>`）。 */
+  /** File path relative to dataDir (`artifacts/<convId>/<name>`). */
   path: string
   mimeType: string
-  /** 字节数。 */
+  /** Size in bytes. */
   size: number
-  /** Unix 毫秒时间戳。 */
+  /** Unix timestamp in milliseconds. */
   createdAt: number
 }
 
-/** 附着在会话输入上的轻量产物指针（SQLite 零 Base64 膨胀）。 */
+/** Lightweight artifact pointer attached to conversation input (zero Base64 bloat in SQLite). */
 export interface ConversationAttachmentRef {
   id: string
   name: string

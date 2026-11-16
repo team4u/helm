@@ -1,5 +1,5 @@
 /**
- * 产物 kind 契约与 COMPOSER_DOCK_SLOT 协议常量锁定测试。
+ * Artifact kind contract and COMPOSER_DOCK_SLOT protocol constant lock tests.
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -12,18 +12,18 @@ import {
   type ArtifactMetadata,
 } from '../src/index.js'
 
-test('COMPOSER_DOCK_SLOT 与 COMPOSER_STATUS_SLOT 导出且遵循 builtin:composer/* 命名空间', { timeout: 60_000 }, () => {
+test('COMPOSER_DOCK_SLOT and COMPOSER_STATUS_SLOT are exported and follow the builtin:composer/* namespace', { timeout: 60_000 }, () => {
   assert.equal(COMPOSER_STATUS_SLOT, 'builtin:composer/status')
   assert.equal(COMPOSER_DOCK_SLOT, 'builtin:composer/dock')
 })
 
-test('ArtifactKind / isArtifactKind / ArtifactMetadata.kind 必填契约', { timeout: 60_000 }, () => {
+test('ArtifactKind / isArtifactKind / ArtifactMetadata.kind required-field contract', { timeout: 60_000 }, () => {
   assert.deepEqual([...ARTIFACT_KINDS], ['upload', 'registered', 'spill'])
   for (const kind of ['upload', 'registered', 'spill'] as const satisfies readonly ArtifactKind[]) {
     assert.equal(isArtifactKind(kind), true)
   }
   for (const bad of [undefined, null, '', 'other', 'UPLOAD', 1, {}, '__proto__']) {
-    assert.equal(isArtifactKind(bad), false, `非法 kind ${String(bad)} 必须拒绝`)
+    assert.equal(isArtifactKind(bad), false, `invalid kind ${String(bad)} must be rejected`)
   }
   const meta: ArtifactMetadata = {
     id: 'art-1',
@@ -36,7 +36,7 @@ test('ArtifactKind / isArtifactKind / ArtifactMetadata.kind 必填契约', { tim
     createdAt: 1000,
   }
   assert.equal(meta.kind, 'upload')
-  // @ts-expect-error kind 为必填字段，不可省略
+  // @ts-expect-error kind is a required field and cannot be omitted
   const missingKind: ArtifactMetadata = {
     id: 'art-2',
     conversationId: 1,

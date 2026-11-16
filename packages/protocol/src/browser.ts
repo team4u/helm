@@ -1,8 +1,9 @@
 /**
- * `@helm/protocol/browser` —— 浏览器安全契约入口。
+ * `@helm/protocol/browser` — browser-safe contract entry.
  *
- * 仅重导出不含 `node:*`、不含 `@earendil-works/pi-*` 的纯跨端 DTO、工具函数与 UI 契约，
- * 供 `@helm/web` 与 `@helm/plugin-client` 等浏览器环境消费。
+ * Only re-exports pure cross-runtime DTOs, utility functions, and UI contracts that contain no `node:*`
+ * imports and no `@earendil-works/pi-*` dependencies, for consumption by browser environments such as
+ * `@helm/web` and `@helm/plugin-client`.
  */
 
 export * from './conversation.js'

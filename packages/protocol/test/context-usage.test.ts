@@ -1,23 +1,26 @@
 /**
- * ConversationContextUsage / ConversationLive 契约（类型级）：
- * - ConversationSummary.contextUsage 可选，不破坏既有公共形状；
- * - tokens 必填（number | null：null = 压缩后上下文未知），contextWindow /
- *   compacting 可选（未知/不可测量不伪造）；
- * - 速率类指标不随用量携带（response 等已删除：策略归可选插件
- *   builtin:token-speed，编译期负例锁定，防止死字段回潮）；
- * - ConversationLive.generation 为通用流式事实（attempt + 受限 message 投影），
- *   内核零速率计算；tokenSpeed 等策略字段不存在于协议（编译期负例锁定）。
+ * ConversationContextUsage / ConversationLive contracts (type level):
+ * - ConversationSummary.contextUsage is optional and does not break the existing public shape;
+ * - tokens is required (number | null: null = context unknown after compaction),
+ *   contextWindow / compacting optional (never fabricated when unknown/unmeasurable);
+ * - rate metrics do not ride along with usage (response etc. already removed:
+ *   policy belongs to the optional builtin:token-speed plugin; compile-time
+ *   negative cases lock this, preventing dead fields from creeping back);
+ * - ConversationLive.generation carries generic streaming facts (attempt +
+ *   restricted message projection) with zero rate computation in the kernel;
+ *   policy fields such as tokenSpeed do not exist in the protocol (compile-time
+ *   negative-case lock).
  */
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import type { ConversationContextUsage, ConversationLive, ConversationSummary } from '@helm/protocol'
 
-describe('ConversationSummary.contextUsage 契约', () => {
-  it('最小用量（仅 tokens）合法：未知窗口/压缩态省略', { timeout: 60_000 }, () => {
+describe('ConversationSummary.contextUsage contract', () => {
+  it('minimal usage (tokens only) is valid: unknown window/compaction state omitted', { timeout: 60_000 }, () => {
     const usage: ConversationContextUsage = { tokens: 12_345 }
     const summary: ConversationSummary = {
       id: 1,
-      title: '会话',
+      title: 'Conversation',
       profileId: 'assistant',
       tags: [],
       cwd: '/tmp',
@@ -36,7 +39,7 @@ describe('ConversationSummary.contextUsage 契约', () => {
     assert.equal(summary.contextUsage, usage)
   })
 
-  it('tokens 可为 null（压缩后尚无有效 usage）；全量形状 = tokens + 窗口 + 压缩中', { timeout: 60_000 }, () => {
+  it('tokens may be null (no valid usage since compaction); full shape = tokens + window + compacting', { timeout: 60_000 }, () => {
     const unknown: ConversationContextUsage = { tokens: null, contextWindow: 128_000 }
     assert.equal(unknown.tokens, null)
     const full: ConversationContextUsage = {
@@ -48,22 +51,22 @@ describe('ConversationSummary.contextUsage 契约', () => {
     assert.equal(full.contextWindow, 128_000)
   })
 
-  it('死字段编译期拒绝（measuredTokens / thresholds / compactionError / 裸 tps / response 速率）', { timeout: 60_000 }, () => {
-    // @ts-expect-error measuredTokens 已随旧 Popover 展示一起删除
+  it('dead fields rejected at compile time (measuredTokens / thresholds / compactionError / bare tps / response rate)', { timeout: 60_000 }, () => {
+    // @ts-expect-error measuredTokens was removed along with the old Popover display
     const withMeasured: ConversationContextUsage = { tokens: 1, measuredTokens: 1 }
-    // @ts-expect-error thresholds 已删除（阈值展示不再随用量携带）
+    // @ts-expect-error thresholds removed (threshold display no longer rides along with usage)
     const withThresholds: ConversationContextUsage = { tokens: 1, thresholds: { blockingTokens: 1 } }
-    // @ts-expect-error compactionError 已删除（失败改走 notification 事件）
+    // @ts-expect-error compactionError removed (failures now go through the notification event)
     const withError: ConversationContextUsage = { tokens: 1, compactionError: 'boom' }
-    // @ts-expect-error 裸 tps 不存在：速率策略归可选插件，不随内核用量携带
+    // @ts-expect-error bare tps does not exist: rate policy belongs to optional plugins, not kernel usage
     const withBareTps: ConversationContextUsage = { tokens: 1, tps: 52.4 }
-    // @ts-expect-error response 速率三元组已删除（同上；插件经 COMPOSER_STATUS_SLOT 展示）
+    // @ts-expect-error response rate triple removed (same as above; plugins display via COMPOSER_STATUS_SLOT)
     const withResponse: ConversationContextUsage = { tokens: 1, response: { responseTps: 52.4 } }
     assert.ok(withMeasured || withThresholds || withError || withBareTps || withResponse)
   })
 })
 
-describe('ConversationLive.generation 通用流式事实契约', () => {
+describe('ConversationLive.generation generic streaming facts contract', () => {
   const base: ConversationLive = {
     conversationId: 1,
     text: '',
@@ -71,14 +74,14 @@ describe('ConversationLive.generation 通用流式事实契约', () => {
     updatedAt: 0,
   }
 
-  it('最小 generation（仅 taskId+attempt，message 尚无内容时省略）合法', { timeout: 60_000 }, () => {
+  it('minimal generation (taskId+attempt only, message omitted while it has no content) is valid', { timeout: 60_000 }, () => {
     const live: ConversationLive = { ...base, generation: { taskId: 7, attempt: 1 } }
     assert.equal(live.generation?.taskId, 7)
     assert.equal(live.generation?.attempt, 1)
     assert.equal(live.generation?.message, undefined)
   })
 
-  it('全量 message 投影：text/thinking/toolCall 块 + 供应商累计 usage', { timeout: 60_000 }, () => {
+  it('full message projection: text/thinking/toolCall blocks + provider-cumulative usage', { timeout: 60_000 }, () => {
     const live: ConversationLive = {
       ...base,
       generation: {
@@ -86,8 +89,8 @@ describe('ConversationLive.generation 通用流式事实契约', () => {
         attempt: 2,
         message: {
           content: [
-            { type: 'thinking', thinking: '推理' },
-            { type: 'text', text: '回答' },
+            { type: 'thinking', thinking: 'reasoning' },
+            { type: 'text', text: 'answer' },
             { type: 'toolCall', name: 'bash', arguments: { command: 'ls' } },
           ],
           usage: { output: 128 },
@@ -98,10 +101,10 @@ describe('ConversationLive.generation 通用流式事实契约', () => {
     assert.equal(live.generation!.message!.usage!.output, 128)
   })
 
-  it('策略字段不存在于协议（tokenSpeed / decode 等；编译期负例锁定内核零速率计算）', { timeout: 60_000 }, () => {
-    // @ts-expect-error tokenSpeed 不存在：速率是插件策略，内核只透传事实
+  it('policy fields absent from the protocol (tokenSpeed / decode etc.; compile-time negative lock on zero kernel rate computation)', { timeout: 60_000 }, () => {
+    // @ts-expect-error tokenSpeed does not exist: rates are plugin policy; the kernel only passes facts through
     const withTokenSpeed: ConversationLive = { ...base, tokenSpeed: { phase: 'decoding', outputTokens: 1, decodeMs: 1, source: 'estimate', updatedAt: 0 } }
-    // @ts-expect-error response 不存在：终态速率同样归插件
+    // @ts-expect-error response does not exist: final-state rates also belong to plugins
     const withResponse: ConversationContextUsage = { tokens: 1, response: { decodeTps: 52.4 } }
     assert.ok(withTokenSpeed || withResponse)
   })
