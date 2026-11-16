@@ -119,6 +119,8 @@ function renderTimeline(opts: {
   conversation?: ConversationSummary
   entries?: ConversationEntry[]
   nextCursor?: string
+  omitDetail?: boolean
+  loadErrors?: Record<string, string>
   starters?: Array<{ label: string; prompt: string }>
   sendingPending?: boolean
   live?: { tools?: never[]; queuedInputs: Array<{ id: string; text: string; mode: 'steer' | 'followUp'; origin: InputOrigin; createdAt: number; submissionId: string }> }
@@ -127,7 +129,10 @@ function renderTimeline(opts: {
   const clicks: string[] = []
   const store = makeTestStore({
     conversations: [conversation],
-    conversationDetails: { [conversation.id]: { ...conversation, entries: opts.entries ?? [], ...(opts.nextCursor !== undefined ? { nextCursor: opts.nextCursor } : {}) } },
+    conversationDetails: opts.omitDetail
+      ? {}
+      : { [conversation.id]: { ...conversation, entries: opts.entries ?? [], ...(opts.nextCursor !== undefined ? { nextCursor: opts.nextCursor } : {}) } },
+    ...(opts.loadErrors !== undefined ? { loadErrors: opts.loadErrors } : {}),
     profiles: [{ id: 'helper', starters: opts.starters }],
     ...(opts.live !== undefined ? { conversationLives: { [conversation.id]: { conversationId: conversation.id, text: '', tools: [] as never[], queuedInputs: opts.live.queuedInputs, updatedAt: 1 } } } : {}),
   })
@@ -149,6 +154,29 @@ function renderTimeline(opts: {
   return { html, clicks }
 }
 
+/** 提取 `.timeline-center-slot` 的完整 DOM 片段及其结束下标（验证前置居中槽与 `.timeline-inner` 严格分离）。 */
+function extractCenterSlot(html: string): { html: string; endIndex: number } | null {
+  const marker = '<div class="timeline-center-slot">'
+  const start = html.indexOf(marker)
+  if (start === -1) return null
+  const tagRe = /<\/?div\b[^>]*>/g
+  tagRe.lastIndex = start
+  let depth = 0
+  let match: RegExpExecArray | null
+  while ((match = tagRe.exec(html)) !== null) {
+    if (match[0].startsWith('</div')) {
+      depth -= 1
+      if (depth === 0) {
+        const endIndex = match.index + match[0].length
+        return { html: html.slice(start, endIndex), endIndex }
+      }
+    } else {
+      depth += 1
+    }
+  }
+  return null
+}
+
 const sampleStarters = [
   { label: '写周报', prompt: '请汇总本周进展' },
   { label: '代码审查', prompt: '审查当前分支' },
@@ -156,7 +184,12 @@ const sampleStarters = [
 
 test('ConversationTimeline：空白会话渲染引导词按钮（非历史编辑锚点）', { timeout: 60_000 }, () => {
   const { html } = renderTimeline({ starters: sampleStarters })
-  assert.match(html, /timeline-starters/)
+  const slot = extractCenterSlot(html)
+  assert.ok(slot !== null, '空白会话应渲染 timeline-center-slot')
+  assert.match(slot.html, /timeline-empty-state/)
+  assert.match(slot.html, /timeline-starters/)
+  const innerIndex = html.indexOf('<div class="timeline-inner">')
+  assert.ok(innerIndex >= slot.endIndex, 'timeline-center-slot 必须在 timeline-inner 之前闭合')
   assert.match(html, /写周报/)
   assert.match(html, /代码审查/)
   // 是按钮（可点击回填），不是历史消息胶囊
@@ -169,15 +202,21 @@ test('ConversationTimeline：有更早分页/运行中/发送在途/排队输入
   // nextCursor 存在：历史未加载完
   const paged = renderTimeline({ starters: sampleStarters, nextCursor: '{"after":5}' })
   assert.doesNotMatch(paged.html, /timeline-starters/)
+  const pagedSlot = extractCenterSlot(paged.html)
+  assert.ok(pagedSlot !== null, 'nextCursor 存在时应在 timeline-center-slot 中渲染加载更早按钮')
+  assert.match(pagedSlot.html, /timeline-load-older-btn/)
+  assert.ok(paged.html.indexOf('<div class="timeline-inner">') >= pagedSlot.endIndex)
   // working
   const working = renderTimeline({ starters: sampleStarters, conversation: convSummary('working') })
   assert.doesNotMatch(working.html, /timeline-starters/)
+  assert.doesNotMatch(working.html, /timeline-center-slot/)
   // blocked（待审批）
   const blocked = renderTimeline({ starters: sampleStarters, conversation: convSummary('blocked') })
   assert.doesNotMatch(blocked.html, /timeline-starters/)
   // 发送在途
   const sending = renderTimeline({ starters: sampleStarters, sendingPending: true })
   assert.doesNotMatch(sending.html, /timeline-starters/)
+  assert.doesNotMatch(sending.html, /timeline-center-slot/)
   // 排队输入
   const queued = renderTimeline({
     starters: sampleStarters,
@@ -190,7 +229,32 @@ test('ConversationTimeline：有更早分页/运行中/发送在途/排队输入
     entries: [{ id: 'e1', kind: 'helm.input', data: { id: 'i1', text: 'hello', origin: 'human', createdAt: 1 } }],
   })
   assert.doesNotMatch(nonEmpty.html, /timeline-starters/)
+  assert.doesNotMatch(nonEmpty.html, /timeline-center-slot/, '非空且无前置状态时不渲染空 timeline-center-slot 占位')
+  // 非空但有更早分页 / 加载错误 / 正在加载：前置居中槽包裹对应元素并位于 timeline-inner 之前
+  const nonEmptyPaged = renderTimeline({
+    starters: sampleStarters,
+    nextCursor: '{"after":2}',
+    entries: [{ id: 'e1', kind: 'helm.input', data: { id: 'i1', text: 'hello', origin: 'human', createdAt: 1 } }],
+  })
+  const nonEmptyPagedSlot = extractCenterSlot(nonEmptyPaged.html)
+  assert.ok(nonEmptyPagedSlot !== null)
+  assert.match(nonEmptyPagedSlot.html, /timeline-load-older-btn/)
+  assert.ok(nonEmptyPaged.html.indexOf('<div class="timeline-inner">') >= nonEmptyPagedSlot.endIndex)
+
+  const loadingState = renderTimeline({ omitDetail: true })
+  const loadingSlot = extractCenterSlot(loadingState.html)
+  assert.ok(loadingSlot !== null)
+  assert.match(loadingSlot.html, /timeline-loading-state/)
+
+  const errState = renderTimeline({
+    entries: [{ id: 'e1', kind: 'helm.input', data: { id: 'i1', text: 'hello', origin: 'human', createdAt: 1 } }],
+    loadErrors: { 'history:7': '历史加载失败' },
+  })
+  const errSlot = extractCenterSlot(errState.html)
+  assert.ok(errSlot !== null)
+  assert.match(errSlot.html, /历史加载失败/)
   // starters 空列表
   const emptyList = renderTimeline({ starters: [] })
   assert.doesNotMatch(emptyList.html, /timeline-starters/)
+  assert.ok(extractCenterSlot(emptyList.html) !== null, '空会话仍有 empty-state 处于 timeline-center-slot')
 })

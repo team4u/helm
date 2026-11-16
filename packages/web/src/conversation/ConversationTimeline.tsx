@@ -263,7 +263,7 @@ function HumanMessage({
   }
 
   return (
-    <div className="msg-human-row" tabIndex={0}>
+    <div className={`msg-human-row${item.origin !== 'human' ? ' msg-human-row-external' : ''}`} tabIndex={0}>
       {item.queuedMode !== undefined ? (
         <span className="msg-origin-tag" role="status">
           <HelmIcon name={QUEUED_MODE_LABEL[item.queuedMode].icon} size={11} />
@@ -1095,6 +1095,10 @@ export function ConversationTimeline({
   // 引导词仅出现在「确实空白」的会话：历史已加载完且无更早分页、无在途
   // 发送/运行、无排队输入与待审批。任一不满足都不渲染，避免误判。
   const conversationDetail = store.conversationDetails[conversation.id]
+  const hasOlderCursor = Boolean(conversationDetail?.nextCursor)
+  const historyError = store.loadErrors[`history:${conversation.id}`]
+  const showEmptyState =
+    !loading && !sendingPending && !isWorking && items.length === 0 && resolvedAsks.length === 0
   const startersVisible =
     starters !== undefined &&
     starters.length > 0 &&
@@ -1107,42 +1111,48 @@ export function ConversationTimeline({
     (live?.queuedInputs?.length ?? 0) === 0 &&
     items.length === 0 &&
     resolvedAsks.length === 0
+  const hasLeadingCenterSlot =
+    hasOlderCursor || Boolean(historyError) || loading || showEmptyState || startersVisible
 
   return (
     <div ref={rootRef} className="timeline-container">
       <div ref={scrollRef} className="timeline-scroll">
-      {store.conversationDetails[conversation.id]?.nextCursor && (
-        <button className="btn btn-ghost btn-sm" disabled={loadingOlder} onClick={loadEarlierEntries}>
-          {loadingOlder ? '正在加载历史…' : '加载更早的消息'}
-        </button>
-      )}
-      {store.loadErrors[`history:${conversation.id}`] && <p className="callout callout--error" role="alert">{store.loadErrors[`history:${conversation.id}`]}</p>}
-      {loading ? (
-        <div className="timeline-loading-state">
-          <HelmIcon name="loader" size={14} className="spin-slow" />
-          正在加载会话…
-        </div>
-      ) : null}
-      {!loading && !sendingPending && !isWorking && items.length === 0 && resolvedAsks.length === 0 ? (
-        <div className="timeline-empty-state">
-          <HelmIcon name="message-square" size={22} />
-          <span>向助理描述目标，或从左侧选择会话开始</span>
-        </div>
-      ) : null}
-      {startersVisible ? (
-        <div className="timeline-starters">
-          {starters.map((starter, index) => (
-            <button
-              key={`starter-${index}-${starter.label}`}
-              type="button"
-              className="timeline-starter-btn"
-              title={starter.prompt}
-              onClick={() => onRequestStarter?.(starter.prompt)}
-            >
-              <HelmIcon name="corner-down-right" size={11} />
-              <span className="timeline-starter-label">{starter.label}</span>
+      {hasLeadingCenterSlot ? (
+        <div className="timeline-center-slot">
+          {hasOlderCursor ? (
+            <button type="button" className="btn btn-ghost btn-sm timeline-load-older-btn" disabled={loadingOlder} onClick={loadEarlierEntries}>
+              {loadingOlder ? '正在加载历史…' : '加载更早的消息'}
             </button>
-          ))}
+          ) : null}
+          {historyError ? <p className="callout callout--error" role="alert">{historyError}</p> : null}
+          {loading ? (
+            <div className="timeline-loading-state">
+              <HelmIcon name="loader" size={14} className="spin-slow" />
+              正在加载会话…
+            </div>
+          ) : null}
+          {showEmptyState ? (
+            <div className="timeline-empty-state">
+              <HelmIcon name="message-square" size={22} />
+              <span>向助理描述目标，或从左侧选择会话开始</span>
+            </div>
+          ) : null}
+          {startersVisible ? (
+            <div className="timeline-starters">
+              {starters.map((starter, index) => (
+                <button
+                  key={`starter-${index}-${starter.label}`}
+                  type="button"
+                  className="timeline-starter-btn"
+                  title={starter.prompt}
+                  onClick={() => onRequestStarter?.(starter.prompt)}
+                >
+                  <HelmIcon name="corner-down-right" size={11} />
+                  <span className="timeline-starter-label">{starter.label}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
       <div ref={innerRef} className="timeline-inner">
@@ -1218,8 +1228,14 @@ export function ConversationTimeline({
         })}
         {(isWorking && !hasLiveTurn) || (sendingPending && !isWorking) ? (
           <div className="msg-ai-block" role="status" aria-live="polite">
-            <span className="msg-origin-tag" aria-label="正在生成">
+            <span className="msg-origin-tag msg-live-waiting" aria-label="正在生成">
               <HelmIcon name="loader" size={12.5} className="spin-slow" />
+              <span className="msg-live-dots" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </span>
+              <span className="msg-live-label">生成中</span>
             </span>
           </div>
         ) : null}
