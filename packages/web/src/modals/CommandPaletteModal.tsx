@@ -4,11 +4,18 @@ import { searchApi } from '../lib/api.js'
 import { commandActionPluginId, commandHint, commandsForConversation } from '../lib/commands-model.js'
 import { HelmIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
+import {
+  activeTargetForPanel,
+  formatModShortcut,
+  resolveFocusedPanel,
+  selectRecentConversationsForPalette,
+  type HelmShortcutDetail,
+} from '../shell/shortcuts-model.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import type { CommandSpec } from '@helm/protocol'
 
 type PaletteRow =
-  | { kind: 'command'; id: string; title: string; hint?: string; icon?: string; keywords?: string[]; run: () => void }
+  | { kind: 'command'; id: string; title: string; hint?: string; shortcut?: string; icon?: string; keywords?: string[]; run: () => void }
   | { kind: 'search-hit'; id: string; hit: SearchHit }
 
 export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
@@ -62,123 +69,80 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
 
   const close = () => onClose()
 
-  // 当前 Profile 上下文：主屏待命页或会话所属角色；无上下文时不猜测默认角色。
-  const paletteProfileId = useMemo(() => {
-    if (store.primaryTarget.kind === 'agent') return store.primaryTarget.profileId
-    const target = store.primaryTarget
-    if (target.kind !== 'conversation') return undefined
-    return store.conversations.find((c) => c.id === target.conversationId)?.profileId
-  }, [store.primaryTarget, store.conversations])
+  const activePanel = resolveFocusedPanel(store.focusedPanel ?? 'primary', store.splitTarget)
+  const activeTarget = activeTargetForPanel(store.primaryTarget, store.splitTarget, activePanel)
 
-  const builtinCommands = useMemo<Array<PaletteRow>>(() => {
-    const rows: Array<PaletteRow> = [
-      {
+  // 当前 Profile 上下文：聚焦面板待命页或会话所属角色；无上下文时不猜测默认角色。
+  const paletteProfileId = useMemo(() => {
+    if (activeTarget.kind === 'agent') return activeTarget.profileId
+    if (activeTarget.kind !== 'conversation') return undefined
+    return store.conversations.find((c) => c.id === activeTarget.conversationId)?.profileId
+  }, [activeTarget, store.conversations])
+
+  // ⌘K 面板打开在当前聚焦面板会话上下文：与输入框 '/' 补全同一份作用域过滤，保证同一命令行为一致。
+  const paletteConversation = useMemo(() => {
+    if (activeTarget.kind !== 'conversation') return undefined
+    return store.conversations.find((c) => c.id === activeTarget.conversationId)
+  }, [activeTarget, store.conversations])
+
+  const contextCommands = useMemo<Array<PaletteRow>>(() => {
+    const rows: Array<PaletteRow> = []
+    if (activeTarget.kind === 'conversation' || activeTarget.kind === 'agent') {
+      rows.push({
         kind: 'command',
-        id: 'builtin:new-conversation',
-        title: '新建对话',
-        hint: paletteProfileId !== undefined ? paletteProfileId : '先选择角色',
-        icon: 'plus',
-        run: () => {
-          // 有当前 Profile 上下文进入待命态（首次发送才创建）；无上下文去角色中心选角色，
-          // 不硬编码默认 assistant。
-          store.openTarget(
-            paletteProfileId !== undefined
-              ? { kind: 'agent', profileId: paletteProfileId }
-              : { kind: 'profiles' },
-          )
-        },
-      },
-      {
-        kind: 'command',
-        id: 'builtin:goto-assistant',
-        title: '打开个人助理角色',
-        hint: 'assistant',
+        id: 'builtin:toggle-model-picker',
+        title: '切换当前模型',
+        shortcut: 'Ctrl+L',
         icon: 'sparkles',
-        run: () => store.openTarget({ kind: 'agent', profileId: 'assistant' }),
-      },
-      {
-        kind: 'command',
-        id: 'builtin:open-profile-editor',
-        title: '打开智能体角色中心',
-        icon: 'bot',
-        keywords: ['profile', 'profiles', '角色', '智能体'],
+        keywords: ['model', 'picker', '模型', '切换模型'],
         run: () => {
-          close()
-          store.openTarget({ kind: 'profiles' })
+          const detail: HelmShortcutDetail = { action: 'toggle-model-picker', panel: activePanel }
+          window.dispatchEvent(new CustomEvent<HelmShortcutDetail>('helm:shortcut', { detail }))
         },
-      },
-      {
+      })
+    }
+    if (activeTarget.kind === 'conversation') {
+      rows.push({
         kind: 'command',
-        id: 'builtin:open-provider-auth',
-        title: '打开模型与凭据中心',
-        icon: 'key',
-        keywords: ['model', 'models', 'provider', 'providers', 'key', '模型', '凭据'],
+        id: 'builtin:toggle-process-groups',
+        title: '展开 / 收起最近过程步骤',
+        shortcut: 'Ctrl+O',
+        icon: 'list-tree',
+        keywords: ['process', 'thinking', 'tools', '过程', '思考', '折叠'],
         run: () => {
-          close()
-          store.openTarget({ kind: 'models' })
+          const detail: HelmShortcutDetail = { action: 'toggle-process-groups', panel: activePanel }
+          window.dispatchEvent(new CustomEvent<HelmShortcutDetail>('helm:shortcut', { detail }))
         },
-      },
-      {
+      })
+    }
+    if (activeTarget.kind === 'conversation' || store.workbenchOpen) {
+      rows.push({
         kind: 'command',
-        id: 'builtin:open-skill-viewer',
-        title: '打开技能中心',
-        icon: 'sparkles',
-        keywords: ['skill', 'skills', '技能'],
-        run: () => {
-          close()
-          store.openTarget({ kind: 'skills' })
-        },
+        id: 'builtin:toggle-workbench',
+        title: store.workbenchOpen ? '关闭工作台抽屉' : '打开工作台抽屉',
+        shortcut: formatModShortcut('J'),
+        icon: 'panel-right',
+        keywords: ['workbench', 'drawer', '工作台', '产物'],
+        run: () => store.setWorkbenchOpen(!store.workbenchOpen),
+      })
+    }
+    rows.push({
+      kind: 'command',
+      id: 'builtin:new-conversation',
+      title: '新建对话',
+      hint: paletteProfileId !== undefined ? paletteProfileId : '先选择角色',
+      icon: 'plus',
+      run: () => {
+        // 有当前 Profile 上下文进入待命态（首次发送才创建）；无上下文去角色中心选角色，
+        // 不硬编码默认 assistant。
+        store.openTarget(
+          paletteProfileId !== undefined
+            ? { kind: 'agent', profileId: paletteProfileId }
+            : { kind: 'profiles' },
+          activePanel === 'split' ? { split: true } : undefined,
+        )
       },
-      {
-        kind: 'command',
-        id: 'builtin:open-nodes',
-        title: '打开计算节点中心',
-        icon: 'network',
-        keywords: ['node', 'nodes', 'byom', 'helm-node', '节点'],
-        run: () => {
-          close()
-          store.openTarget({ kind: 'nodes' })
-        },
-      },
-      {
-        kind: 'command',
-        id: 'builtin:open-plugin-center',
-        title: '打开插件中心',
-        icon: 'boxes',
-        keywords: ['plugin', 'plugins', 'settings', '插件', '设置', '插件中心'],
-        run: () => {
-          close()
-          store.openTarget({ kind: 'plugins' })
-        },
-      },
-      {
-        kind: 'command',
-        id: 'builtin:toggle-theme',
-        title:
-          store.themePreference === 'system'
-            ? '切换为浅色模式'
-            : store.themePreference === 'light'
-              ? '切换为暗色模式'
-              : '切换为跟随系统',
-        icon:
-          store.themePreference === 'system'
-            ? 'monitor'
-            : store.themePreference === 'light'
-              ? 'sun'
-              : 'moon',
-        run: () => store.toggleTheme(),
-      },
-      {
-        kind: 'command',
-        id: 'builtin:toggle-quiet-notify',
-        title: store.quietNotifyEnabled ? '关闭全部空闲浏览器通知' : '开启全部空闲浏览器通知（所有会话与后台在途结束后提醒）',
-        icon: store.quietNotifyEnabled ? 'bell' : 'bell-off',
-        keywords: ['notify', 'notification', 'quiet', 'idle', '通知', '提醒', '空闲'],
-        run: () => {
-          void store.setQuietNotify(!store.quietNotifyEnabled)
-        },
-      },
-    ]
+    })
     if (store.splitTarget) {
       rows.push({
         kind: 'command',
@@ -189,7 +153,109 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       })
     }
     return rows
-  }, [store, paletteProfileId])
+  }, [activePanel, activeTarget.kind, paletteProfileId, store])
+
+  const navCommands = useMemo<Array<PaletteRow>>(() => [
+    {
+      kind: 'command',
+      id: 'builtin:toggle-sidebar',
+      title: store.sidebarCollapsed ? '展开桌面左侧栏' : '收起桌面左侧栏',
+      shortcut: formatModShortcut('B'),
+      icon: 'columns',
+      keywords: ['sidebar', 'collapse', '侧栏', '折叠', '导航'],
+      run: () => store.toggleSidebarCollapsed?.(),
+    },
+    {
+      kind: 'command',
+      id: 'builtin:goto-assistant',
+      title: '打开个人助理角色',
+      hint: 'assistant',
+      icon: 'sparkles',
+      run: () => store.openTarget({ kind: 'agent', profileId: 'assistant' }),
+    },
+    {
+      kind: 'command',
+      id: 'builtin:open-profile-editor',
+      title: '打开智能体角色中心',
+      icon: 'bot',
+      keywords: ['profile', 'profiles', '角色', '智能体'],
+      run: () => {
+        close()
+        store.openTarget({ kind: 'profiles' })
+      },
+    },
+    {
+      kind: 'command',
+      id: 'builtin:open-provider-auth',
+      title: '打开模型与凭据中心',
+      icon: 'key',
+      keywords: ['model', 'models', 'provider', 'providers', 'key', '模型', '凭据'],
+      run: () => {
+        close()
+        store.openTarget({ kind: 'models' })
+      },
+    },
+    {
+      kind: 'command',
+      id: 'builtin:open-skill-viewer',
+      title: '打开技能中心',
+      icon: 'sparkles',
+      keywords: ['skill', 'skills', '技能'],
+      run: () => {
+        close()
+        store.openTarget({ kind: 'skills' })
+      },
+    },
+    {
+      kind: 'command',
+      id: 'builtin:open-nodes',
+      title: '打开计算节点中心',
+      icon: 'network',
+      keywords: ['node', 'nodes', 'byom', 'helm-node', '节点'],
+      run: () => {
+        close()
+        store.openTarget({ kind: 'nodes' })
+      },
+    },
+    {
+      kind: 'command',
+      id: 'builtin:open-plugin-center',
+      title: '打开插件中心',
+      icon: 'boxes',
+      keywords: ['plugin', 'plugins', 'settings', '插件', '设置', '插件中心'],
+      run: () => {
+        close()
+        store.openTarget({ kind: 'plugins' })
+      },
+    },
+    {
+      kind: 'command',
+      id: 'builtin:toggle-theme',
+      title:
+        store.themePreference === 'system'
+          ? '切换为浅色模式'
+          : store.themePreference === 'light'
+            ? '切换为暗色模式'
+            : '切换为跟随系统',
+      icon:
+        store.themePreference === 'system'
+          ? 'monitor'
+          : store.themePreference === 'light'
+            ? 'sun'
+            : 'moon',
+      run: () => store.toggleTheme(),
+    },
+    {
+      kind: 'command',
+      id: 'builtin:toggle-quiet-notify',
+      title: store.quietNotifyEnabled ? '关闭全部空闲浏览器通知' : '开启全部空闲浏览器通知（所有会话与后台在途结束后提醒）',
+      icon: store.quietNotifyEnabled ? 'bell' : 'bell-off',
+      keywords: ['notify', 'notification', 'quiet', 'idle', '通知', '提醒', '空闲'],
+      run: () => {
+        void store.setQuietNotify(!store.quietNotifyEnabled)
+      },
+    },
+  ], [store])
 
   // 声明了 client 内容的插件命令：作为可选中命令行列出（选中即内联渲染）
   const pluginContentCommands = useMemo(
@@ -199,13 +265,6 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
         .map((cmd) => ({ pluginId: cmd.pluginId, spec: cmd.spec })),
     [store.groupedUi.commands],
   )
-
-  // ⌘K 面板打开在当前会话上下文：与输入框 '/' 补全同一份作用域过滤，保证同一命令行为一致。
-  const paletteConversation = useMemo(() => {
-    const target = store.primaryTarget
-    if (target.kind !== 'conversation') return undefined
-    return store.conversations.find((c) => c.id === target.conversationId)
-  }, [store.primaryTarget, store.conversations])
 
   const pluginCommands = useMemo<Array<PaletteRow>>(
     () =>
@@ -286,19 +345,53 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
     [store.plugins, store.openTarget, close],
   )
 
+  const recentConversationRows = useMemo<Array<PaletteRow>>(
+    () =>
+      selectRecentConversationsForPalette(store.conversations, paletteConversation?.id, 5).map((conv) => ({
+        kind: 'search-hit' as const,
+        id: `recent-conv:${conv.id}`,
+        hit: {
+          conversationId: conv.id,
+          title: conv.title,
+          entryId: '',
+          snippet: `最近会话 #${conv.id} / ${conv.profileId}`,
+        },
+      })),
+    [store.conversations, paletteConversation?.id],
+  )
+
   const rows = useMemo<Array<PaletteRow>>(() => {
     const q = query.trim().toLowerCase()
-    const commands = [...builtinCommands, ...pluginCommands, ...pluginRows].filter((row) => {
+    if (!q) {
+      // 空搜索词首屏优先级：当前上下文高频操作 → 最近活跃会话（前 5 条）→ 空间与中心导航 → 插件命令与配置
+      return [
+        ...contextCommands,
+        ...recentConversationRows,
+        ...navCommands,
+        ...pluginCommands,
+        ...pluginRows,
+      ]
+    }
+    const commands = [...contextCommands, ...navCommands, ...pluginCommands, ...pluginRows].filter((row) => {
       if (row.kind !== 'command') return true
-      if (!q) return true
       return (
         row.title.toLowerCase().includes(q) ||
         (row.hint?.toLowerCase().includes(q) ?? false) ||
+        (row.shortcut?.toLowerCase().includes(q) ?? false) ||
         (row.keywords?.some((k) => k.toLowerCase().includes(q)) ?? false)
       )
     })
     return [...commands, ...conversationRows, ...searchRows]
-  }, [query, builtinCommands, pluginCommands, pluginRows, conversationRows, searchRows])
+  }, [
+    query,
+    contextCommands,
+    recentConversationRows,
+    navCommands,
+    pluginCommands,
+    pluginRows,
+    conversationRows,
+    searchRows,
+  ])
 
   useEffect(() => {
     setSelectedIdx(0)
@@ -450,7 +543,12 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
                   <HelmIcon name={row.icon} size={14} />
                   <span className="nav-item-label">{row.title}</span>
                 </span>
-                {row.hint && <span className="nav-item-meta mono">{row.hint}</span>}
+                {(row.hint || row.shortcut) && (
+                  <span className="nav-item-meta">
+                    {row.hint && <span className="mono">{row.hint}</span>}
+                    {row.shortcut && <kbd className="kbd-hint">{row.shortcut}</kbd>}
+                  </span>
+                )}
               </div>
             ) : (
               <div

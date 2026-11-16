@@ -130,6 +130,16 @@
   position: relative;
 }
 
+.helm-primary-pane {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
 .helm-split-pane {
   flex: 1;
   min-width: 0;
@@ -140,6 +150,106 @@
   border-left: 1px solid var(--border);
   overflow: hidden;
   position: relative;
+}
+
+.helm-primary-pane[data-helm-panel-focused='true']::after,
+.helm-split-pane[data-helm-panel-focused='true']::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* 桌面端侧栏折叠（Mod+B 切换）：仅保留 48px Activity Rail；移动端抽屉不受影响 */
+.desktop-sidebar-expand-btn {
+  display: none;
+}
+
+@media (min-width: 861px) {
+  .helm-shell.sidebar-collapsed .helm-sidebar {
+    width: 48px;
+    min-width: 48px;
+  }
+  .helm-shell.sidebar-collapsed .sidebar-context {
+    display: none;
+  }
+  .helm-shell.sidebar-collapsed .desktop-sidebar-expand-btn {
+    display: inline-flex;
+  }
+}
+
+/* 内核连接过渡与认证解锁门禁 */
+.app-loading-screen {
+  width: 100vw;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+
+.auth-gate {
+  width: 100vw;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  padding: 24px;
+}
+
+.auth-gate-card {
+  width: 100%;
+  max-width: 380px;
+  padding: 24px 24px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-shadow: var(--shadow-md);
+}
+
+.auth-gate-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.auth-gate-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.auth-gate-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.auth-gate-desc {
+  font-size: 12.5px;
+  color: var(--fg-muted);
+  line-height: 1.5;
+}
+
+.auth-gate-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.auth-gate-label {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  font-weight: 500;
+}
+
+.workbench-close-btn {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 /* 工作台抽屉遮罩：与 primary-drawer 同规范的毛玻璃遮罩，点击关闭 */

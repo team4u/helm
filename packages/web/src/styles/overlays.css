@@ -678,6 +678,7 @@
   animation: primaryDrawerSlideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+.drawer-header,
 .primary-drawer-header {
   display: flex;
   align-items: flex-start;
@@ -686,6 +687,12 @@
   padding: 16px 20px;
   border-bottom: 1px solid var(--line-2);
   background: var(--bg-elevated);
+  flex-shrink: 0;
+}
+
+.drawer-header > button:last-child,
+.primary-drawer-header > button:last-child {
+  margin-left: auto;
   flex-shrink: 0;
 }
 

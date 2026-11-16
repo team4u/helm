@@ -22,10 +22,25 @@ import { resetStandbyDrafts } from '../conversation/standby-model.js'
 import * as HelmPluginClient from '@helm/plugin-client'
 import { createPluginClientHostPort } from './plugin-client-host.js'
 import { formatLocationHash, hashHasPrimaryTarget, isSameLocationState, parseLocationHash, shouldPushLocationHistory, upgradeLegacyLocationState, type WorkspaceLocationState } from './url-hash-model.js'
-import { groupUiContributions, isPrototypeParamKey, resolveTargetString, SCREEN_PARAM_KEY_PATTERN, spaceForTarget, type ActiveModal, type GroupedUiSpecs, type HelmStoreValue, type ResolvedTarget, type SidebarSpace, type ThemeMode, type ThemePreference, type ToastNotice } from './types.js'
+import { groupUiContributions, isPrototypeParamKey, resolveTargetString, SCREEN_PARAM_KEY_PATTERN, spaceForTarget, type ActiveModal, type FocusedPanel, type GroupedUiSpecs, type HelmStoreValue, type ResolvedTarget, type SidebarSpace, type ThemeMode, type ThemePreference, type ToastNotice } from './types.js'
 import { errorText } from './format.js'
 import { requestBrowserNotificationPermission } from './browser-notification.js'
 import { isConversationArchived } from '../conversation/archive-model.js'
+import {
+  activeTargetForPanel,
+  ESC_ABORT_WINDOW_MS,
+  getStoredSidebarCollapsed,
+  hasAnyOpenOverlay,
+  hasBlockingAlertDialog,
+  hasDialogOpen,
+  hasNonModelPickerDialogOpen,
+  hasNonWorkbenchDialogOpen,
+  isConversationAbortable,
+  isInlineInputEscapeTarget,
+  persistSidebarCollapsed,
+  resolveFocusedPanel,
+  type HelmShortcutDetail,
+} from '../shell/shortcuts-model.js'
 
 const getStoredPreference = (): ThemePreference => {
   try {
@@ -153,6 +168,9 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   })
   const [primaryTarget, setPrimaryTarget] = useState<ResolvedTarget>(boot.location.primaryTarget)
   const [splitTarget, setSplitTarget] = useState<ResolvedTarget | null>(boot.location.splitTarget)
+  const [focusedPanel, setFocusedPanelState] = useState<FocusedPanel>('primary')
+  const [sidebarCollapsed, setSidebarCollapsedState] = useState<boolean>(getStoredSidebarCollapsed)
+  const [pendingEscAbortConversationId, setPendingEscAbortConversationId] = useState<number | null>(null)
   const [workbenchOpen, setWorkbenchOpen] = useState(boot.location.workbenchOpen)
   const [workbenchTab, setWorkbenchTab] = useState(boot.location.workbenchTab)
   const [activeModal, setActiveModal] = useState<ActiveModal>(boot.location.activeModal)
@@ -170,8 +188,16 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const failedDocs = useRef(new Set<string>())
   const pluginEpoch = useRef(new Map<string, number>())
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>())
+  const escAbortTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingEscAbortRef = useRef<number | null>(null)
   const targets = useRef({ primaryTarget, splitTarget })
   targets.current = { primaryTarget, splitTarget }
+  const focusedPanelRef = useRef<FocusedPanel>(focusedPanel)
+  focusedPanelRef.current = focusedPanel
+  const authenticatedRef = useRef(authenticated)
+  authenticatedRef.current = authenticated
+  const workbenchOpenRef = useRef(workbenchOpen)
+  workbenchOpenRef.current = workbenchOpen
   // 空间记忆：每个侧栏空间最近的主屏目标（会话内内存态，不进 URL）。Rail 切换回跳用；
   // 主屏 openTarget / 外部 Hash 恢复 / 删除回退统一在此更新，初始由深链目标播种。
   const spaceMemory = useRef<Partial<Record<SidebarSpace, ResolvedTarget>>>({
@@ -194,7 +220,60 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     const timer = setTimeout(() => { timers.current.delete(timer); fn() }, ms)
     timers.current.add(timer)
   }, [])
-  useEffect(() => () => { session.current++; for (const timer of timers.current) clearTimeout(timer) }, [])
+  useEffect(() => () => {
+    session.current++
+    for (const timer of timers.current) clearTimeout(timer)
+    escAbortTimerRef.current = null
+  }, [])
+
+  const ESC_ABORT_NOTICE_ID = 'esc-abort-confirm'
+  const clearEscAbortPrompt = useCallback(() => {
+    if (escAbortTimerRef.current !== null) {
+      clearTimeout(escAbortTimerRef.current)
+      timers.current.delete(escAbortTimerRef.current)
+      escAbortTimerRef.current = null
+    }
+    if (pendingEscAbortRef.current !== null) {
+      pendingEscAbortRef.current = null
+      setPendingEscAbortConversationId(null)
+    }
+    setNotices((prev) =>
+      prev.some((item) => item.id === ESC_ABORT_NOTICE_ID)
+        ? prev.filter((item) => item.id !== ESC_ABORT_NOTICE_ID)
+        : prev,
+    )
+  }, [])
+
+  const armEscAbortPrompt = useCallback((conversationId: number) => {
+    if (escAbortTimerRef.current !== null) {
+      clearTimeout(escAbortTimerRef.current)
+      timers.current.delete(escAbortTimerRef.current)
+      escAbortTimerRef.current = null
+    }
+    pendingEscAbortRef.current = conversationId
+    setPendingEscAbortConversationId(conversationId)
+    setNotices((prev) => [
+      ...prev.filter((item) => item.id !== ESC_ABORT_NOTICE_ID),
+      {
+        id: ESC_ABORT_NOTICE_ID,
+        type: 'notification',
+        level: 'warning',
+        title: '再按一次 Esc 停止当前执行',
+        body: '1.5 秒内再次按 Esc 将中止当前会话运行',
+        conversationId,
+        createdAt: Date.now(),
+      },
+    ])
+    const timer = setTimeout(() => {
+      timers.current.delete(timer)
+      escAbortTimerRef.current = null
+      pendingEscAbortRef.current = null
+      setPendingEscAbortConversationId(null)
+      setNotices((prev) => prev.filter((item) => item.id !== ESC_ABORT_NOTICE_ID))
+    }, ESC_ABORT_WINDOW_MS)
+    timers.current.add(timer)
+    escAbortTimerRef.current = timer
+  }, [])
 
   const dismissNotice = useCallback((id: string) => setNotices((prev) => prev.filter((notice) => notice.id !== id)), [])
   const pushNotice = useCallback((notice: Omit<ToastNotice, 'id' | 'createdAt'>) => {
@@ -309,9 +388,12 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     setAuthenticated(false)
     setSseConnected(false)
     // 清除断线横幅：登出前的空闲超时/断连提示不得残留到重新登录后的新连接窗口。
+    clearEscAbortPrompt()
     setConnectionError(null)
     setActiveModal(null)
     setSplitTarget(null)
+    focusedPanelRef.current = 'primary'
+    setFocusedPanelState('primary')
     setPrimaryTarget({ kind: 'profiles' })
     // 全量数据已清空：空间记忆一并复位为登出后的默认深链位置。
     spaceMemory.current = { settings: { kind: 'profiles' } }
@@ -477,7 +559,49 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     return task
   }, [pushNotice, reportLoad, updateLive])
 
-  const closeSplit = useCallback(() => setSplitTarget(null), [])
+  const setFocusedPanel = useCallback((panel: FocusedPanel) => {
+    const next = resolveFocusedPanel(panel, targets.current.splitTarget)
+    focusedPanelRef.current = next
+    setFocusedPanelState(next)
+  }, [])
+
+  const setSidebarCollapsed = useCallback((collapsed: boolean) => {
+    setSidebarCollapsedState(collapsed)
+    persistSidebarCollapsed(collapsed)
+  }, [])
+
+  const toggleSidebarCollapsed = useCallback(() => {
+    setSidebarCollapsedState((prev) => {
+      const next = !prev
+      persistSidebarCollapsed(next)
+      return next
+    })
+  }, [])
+
+  const closeSplit = useCallback(() => {
+    setSplitTarget(null)
+    focusedPanelRef.current = 'primary'
+    setFocusedPanelState('primary')
+  }, [])
+
+  useEffect(() => {
+    if (splitTarget === null && focusedPanelRef.current !== 'primary') {
+      focusedPanelRef.current = 'primary'
+      setFocusedPanelState('primary')
+    }
+  }, [splitTarget])
+
+  useEffect(() => {
+    if (pendingEscAbortConversationId === null) return
+    const activeTarget = activeTargetForPanel(primaryTarget, splitTarget, focusedPanel)
+    if (activeTarget.kind !== 'conversation' || activeTarget.conversationId !== pendingEscAbortConversationId) {
+      clearEscAbortPrompt()
+      return
+    }
+    const conv = live.conversations.find((c) => c.id === activeTarget.conversationId)
+      ?? live.conversationDetails[activeTarget.conversationId]
+    if (!isConversationAbortable(conv)) clearEscAbortPrompt()
+  }, [pendingEscAbortConversationId, primaryTarget, splitTarget, focusedPanel, live.conversations, live.conversationDetails, clearEscAbortPrompt])
 
   // 显式历史策略标记（openTarget history 选项 / setScreenParams push / openSpace）：
   // 只标记下一拍，实际 pushState/replaceState 由唯一的地址栏写回 effect 执行，组件不得直接操作 history。
@@ -677,17 +801,109 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [highlightedEntry, live.conversationDetails, loadEarlierEntries, loadErrors, delay, pushNotice])
 
+  // 全局唯一单键快捷键分发与双按 Esc 中断防误触：
+  // 严格一功能一键（Ctrl+L / Ctrl+O / Mod+K / Mod+B / Mod+J / Esc×2），无别名。
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+      if (!authenticatedRef.current) return
+      if (event.isComposing || event.keyCode === 229) return
+
+      const keyLower = event.key.toLowerCase()
+      const isMod = (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey
+      const isCtrlOnly = event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey
+      const panel = resolveFocusedPanel(focusedPanelRef.current, targets.current.splitTarget)
+      const activeTarget = activeTargetForPanel(
+        targets.current.primaryTarget,
+        targets.current.splitTarget,
+        panel,
+      )
+
+      if (isMod && keyLower === 'k') {
+        if (event.defaultPrevented || hasBlockingAlertDialog()) return
         event.preventDefault()
+        clearEscAbortPrompt()
         setActiveModal((current) => current?.kind === 'command-palette' ? null : { kind: 'command-palette' })
+        return
+      }
+
+      if (event.key === 'Escape' && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+        if (
+          event.defaultPrevented ||
+          hasAnyOpenOverlay(activeModalRef.current, workbenchOpenRef.current) ||
+          isInlineInputEscapeTarget(event.target)
+        ) {
+          clearEscAbortPrompt()
+          return
+        }
+        if (activeTarget.kind !== 'conversation') {
+          clearEscAbortPrompt()
+          return
+        }
+        const convId = activeTarget.conversationId
+        const conv =
+          liveRef.current.conversations.find((c) => c.id === convId) ??
+          liveRef.current.conversationDetails[convId]
+        if (!isConversationAbortable(conv)) {
+          clearEscAbortPrompt()
+          return
+        }
+        event.preventDefault()
+        if (pendingEscAbortRef.current === convId) {
+          clearEscAbortPrompt()
+          void conversationsApi.abort(convId).catch((error: unknown) => {
+            pushNotice({
+              type: 'notification',
+              level: 'error',
+              title: '停止当前执行失败',
+              body: errorText(error),
+              conversationId: convId,
+            })
+          })
+        } else {
+          armEscAbortPrompt(convId)
+        }
+        return
+      }
+
+      if (event.defaultPrevented) return
+
+      if (isMod && keyLower === 'j') {
+        if (activeModalRef.current !== null || hasNonWorkbenchDialogOpen()) return
+        if (!workbenchOpenRef.current && activeTarget.kind !== 'conversation') return
+        event.preventDefault()
+        clearEscAbortPrompt()
+        setWorkbenchOpen((open) => !open)
+        return
+      }
+
+      if (isMod && keyLower === 'b') {
+        if (activeModalRef.current !== null || hasNonWorkbenchDialogOpen()) return
+        event.preventDefault()
+        toggleSidebarCollapsed()
+        return
+      }
+
+      if (activeModalRef.current !== null || workbenchOpenRef.current) return
+
+      if (isCtrlOnly && keyLower === 'l') {
+        if (hasNonModelPickerDialogOpen()) return
+        event.preventDefault()
+        const detail: HelmShortcutDetail = { action: 'toggle-model-picker', panel }
+        window.dispatchEvent(new CustomEvent<HelmShortcutDetail>('helm:shortcut', { detail }))
+        return
+      }
+
+      if (hasDialogOpen()) return
+
+      if (isCtrlOnly && keyLower === 'o') {
+        event.preventDefault()
+        const detail: HelmShortcutDetail = { action: 'toggle-process-groups', panel }
+        window.dispatchEvent(new CustomEvent<HelmShortcutDetail>('helm:shortcut', { detail }))
       }
     }
     window.addEventListener('keydown', keydown)
     return () => window.removeEventListener('keydown', keydown)
-  }, [])
+  }, [armEscAbortPrompt, clearEscAbortPrompt, pushNotice, toggleSidebarCollapsed])
 
   useEffect(() => {
     if (!authenticated) return
@@ -892,13 +1108,13 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const store: HelmStoreValue = useMemo(
     () => ({
       ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, kernelBootId, theme, themePreference, quietNotifyEnabled, conversationArtifacts, assetsLoaded,
-      groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
-      setTheme, setThemePreference, toggleTheme, setQuietNotify, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, backfillConversationEntry, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, openSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
+      groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, focusedPanel, sidebarCollapsed, pendingEscAbortConversationId, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
+      setTheme, setThemePreference, toggleTheme, setQuietNotify, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, backfillConversationEntry, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setFocusedPanel, setSidebarCollapsed, toggleSidebarCollapsed, setScreenParams, setWorkbenchOpen, setWorkbenchTab, openSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     }),
     [
       live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, kernelBootId, theme, themePreference, quietNotifyEnabled, conversationArtifacts, assetsLoaded,
-      groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
-      setTheme, setThemePreference, toggleTheme, setQuietNotify, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, backfillConversationEntry, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, openSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
+      groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, focusedPanel, sidebarCollapsed, pendingEscAbortConversationId, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
+      setTheme, setThemePreference, toggleTheme, setQuietNotify, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, backfillConversationEntry, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setFocusedPanel, setSidebarCollapsed, toggleSidebarCollapsed, setScreenParams, setWorkbenchOpen, setWorkbenchTab, openSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     ],
   )
   useEffect(() => {

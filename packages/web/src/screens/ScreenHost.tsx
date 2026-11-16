@@ -4,7 +4,7 @@
  * 组装为协议标准 ScreenProps 经 slotProps 注入插件组件。
  */
 import * as React from 'react'
-import { useMemo, type ReactNode } from 'react'
+import { useMemo } from 'react'
 import { HelmIcon } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import type { ResolvedTarget } from '../lib/types.js'
@@ -83,7 +83,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
           </div>
         </div>
         <div className="timeline-scroll">
-          <div className="callout callout--warning">
+          <div className="callout callout-warn">
             <HelmIcon name="alert-triangle" size={13} />
             <span>
               该视图不存在或所属插件未启用（{pluginId}/{screenId}）。请确认插件已在设置中启用。
@@ -121,7 +121,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
         </div>
       </div>
       <div className="timeline-scroll">
-        <div className="timeline-inner" style={{ maxWidth: 1100 }}>
+        <div className="timeline-inner screen-host-stage" data-screen-host="true" style={{ maxWidth: 1100 }}>
           <PluginUiView
             pluginId={pluginId}
             spec={spec}

@@ -37,34 +37,15 @@ export function AuthGate() {
   }
 
   return (
-    <div
-      style={{
-        width: '100vw',
-        height: '100dvh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'var(--bg)',
-        padding: 24,
-      }}
-    >
+    <div className="auth-gate" style={{ height: '100dvh' }}>
       <form
         onSubmit={(e) => void handleSubmit(e)}
-        className="card"
-        style={{
-          width: '100%',
-          maxWidth: 380,
-          padding: '24px 24px 20px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 16,
-          boxShadow: 'var(--shadow-md)',
-        }}
+        className="card auth-gate-card"
       >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div className="auth-gate-header">
+          <div className="auth-gate-brand">
             <HelmIcon name="sparkles" size={18} />
-            <span style={{ fontSize: 16, fontWeight: 600 }}>Helm 主控台</span>
+            <span className="auth-gate-title">Helm 主控台</span>
           </div>
           <button
             type="button"
@@ -91,21 +72,21 @@ export function AuthGate() {
           </button>
         </div>
 
-        <div style={{ fontSize: 12.5, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+        <div className="auth-gate-desc">
           {isSetup
             ? '首次启动：请设置本机 Helm 主控密码（至少 8 位），用于保护会话、模型凭据与节点连接。'
             : '请输入本机 Helm 主控密码以解锁工作台。'}
         </div>
 
         {error && (
-          <div className="callout callout--error">
+          <div className="callout callout-error" role="alert">
             <HelmIcon name="alert-circle" size={14} />
             <span>{error}</span>
           </div>
         )}
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <label style={{ fontSize: 12, color: 'var(--fg-secondary)', fontWeight: 500 }}>
+        <div className="auth-gate-field">
+          <label className="auth-gate-label">
             {isSetup ? '设置主控密码' : '主控密码'}
           </label>
           <input
@@ -120,8 +101,8 @@ export function AuthGate() {
         </div>
 
         {isSetup && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <label style={{ fontSize: 12, color: 'var(--fg-secondary)', fontWeight: 500 }}>
+          <div className="auth-gate-field">
+            <label className="auth-gate-label">
               确认主控密码
             </label>
             <input
