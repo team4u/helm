@@ -474,5 +474,5 @@ export function Select<T extends string = string>(props: SelectProps<T>) {
 export function MultiSelect<T extends string = string>(
   props: Omit<MultiSelectProps<T>, 'multiple'>,
 ) {
-  return <Select multiple {...props} />
+  return <Select<T> multiple {...props} />
 }
