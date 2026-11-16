@@ -254,7 +254,15 @@ test('nodeTunnelOpen：正常 end 语义 flush 完整响应（不 destroy 掐断
       peer.on('close', () => resolve(Buffer.concat(chunks).toString()));
     });
     peer.end('req');
-    const echoed = await Promise.race([got, delay(10_000).then(() => 'TIMEOUT')]);
+    let timeoutId: NodeJS.Timeout | undefined;
+    const echoed = await Promise.race([
+      got,
+      new Promise<string>((resolve) => {
+        timeoutId = setTimeout(() => resolve('TIMEOUT'), 10_000);
+      }),
+    ]).finally(() => {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    });
     assert.equal(echoed, response, 'end 语义下完整响应 flush 回达，不被 destroy 掐断');
   } finally {
     await rpc.dispose();
@@ -349,12 +357,15 @@ test('nodeTunnelOpen：握手期对端（服务）断开返回结构化错误', 
     const openPromise = server.nodeTunnelOpen({ tunnelId: 't-early', port: srv.port, timeoutMs: 15_000 });
     await delay(100);
     // 服务侧主动断开：TCP error/close 必须被统一处理（不未捕获崩进程），
-    // open 以 connect_failed/aborted 结构化失败。
+    // open 立即以 connect_failed/aborted 结构化失败（不得拖到 15s 超时）。
+    const start = Date.now();
     for (const socket of srv.sockets) socket.destroy();
     const result = await openPromise;
+    const elapsed = Date.now() - start;
+    assert.ok(elapsed < 2_000, `握手期对端断开应立即失败（实际 ${elapsed}ms）`);
     assert.equal(result.ok, false);
     if (!result.ok) {
-      assert.ok(['connect_failed', 'aborted', 'timeout'].includes(result.error.code), `结构化错误，实际 ${result.error.code}`);
+      assert.ok(['connect_failed', 'aborted'].includes(result.error.code), `结构化错误，实际 ${result.error.code}`);
     }
     assert.equal(server.getActiveTunnelCount(), 0);
   } finally {

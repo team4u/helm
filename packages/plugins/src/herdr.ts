@@ -56,7 +56,17 @@ const HERDR_AGENT_SUGGESTIONS: ReadonlyArray<string> = [
   'amp', 'grok', 'hermes', 'kilo', 'qodercli', 'qwen', 'maki', 'muse',
 ]
 
-export function createHerdrPlugin(): PluginDefinition {
+export function createHerdrPlugin(
+  timingOverrides?: Pick<
+    HerdrPluginDependencies,
+    | 'pollIntervalMs'
+    | 'blockedBackoffBaseMs'
+    | 'blockedBackoffCapMs'
+    | 'askPollTransientBackoffBaseMs'
+    | 'askPollTransientBackoffCapMs'
+    | 'abortCancelBackoffCapMs'
+  >,
+): PluginDefinition {
   return {
     id: 'builtin:herdr',
     name: 'Herdr 终端',
@@ -76,7 +86,10 @@ export function createHerdrPlugin(): PluginDefinition {
       function resolveDeps(): HerdrPluginDependencies {
         const nodeChannel = nodeChannelFromHost(hostApi)
         transportRef.current ??= createHerdrTransport({ redact: (text) => hostApi.redact(text), nodeChannel })
-        depsRef.current = assembleHerdrDepsFromHost(hostApi, { transport: transportRef.current })
+        depsRef.current = {
+          ...assembleHerdrDepsFromHost(hostApi, { transport: transportRef.current }),
+          ...timingOverrides,
+        }
         return depsRef.current
       }
       const depsOf = (): HerdrPluginDependencies => depsRef.current ?? resolveDeps()
