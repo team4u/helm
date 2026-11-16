@@ -28,6 +28,7 @@ import { createNodeEnvRpcServer } from '../src/daemon/env-rpc-server.js';
 import { collectNodeHealth, createNodeDaemon, writeNodeIdentity } from '../src/daemon/index.js';
 import { runNodeDoctor } from '../src/daemon/doctor.js';
 import { runNodeCli } from '../src/cli.js';
+import { sanitizedHostEnv } from './helpers/sanitized-env.js';
 
 async function tempDir(prefix: string): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -290,7 +291,9 @@ async function runCli(argv: string[], env: NodeJS.ProcessEnv = {}): Promise<Capt
   let out = '';
   let err = '';
   const code = await runNodeCli(argv, {
-    env: { ...process.env, ...env },
+    // 剥除宿主受管 HELM_* 变量：doctor 的 Hub 探测目标（HELM_HUB_URL 优先
+    // 级高于身份文件）与 token 语义只由测试 fixture 决定。
+    env: { ...sanitizedHostEnv(), ...env },
     out: (t) => (out += t),
     err: (t) => (err += t),
   });
@@ -343,7 +346,7 @@ test('doctor：root 权限 warn 但身份与 Hub 正常时整体 ok=true（退�
     await writeNodeIdentity(dir, { nodeId: 'doctor-ok-node', token, hubUrl: hub.url });
     const report = await runNodeDoctor({
       dataDir: dir,
-      env: { ...process.env, HERDR_SOCKET_PATH: path.join(dir, 'no.sock') },
+      env: { ...sanitizedHostEnv(), HERDR_SOCKET_PATH: path.join(dir, 'no.sock') },
       checkPrivilege: async () => ({ isRoot: true, passwordlessSudo: false }),
     });
     const privilege = report.checks.find((c) => c.id === 'privilege');
@@ -378,7 +381,7 @@ test('doctor：真实 WS Hub mock 下 hub 项只读探测（零 register、零�
   await writeNodeIdentity(dir, { nodeId: 'doctor-hub-node', token, hubUrl: hub.url });
   const report = await runNodeDoctor({
     dataDir: dir,
-    env: { ...process.env, HERDR_SOCKET_PATH: path.join(dir, 'no.sock') },
+    env: { ...sanitizedHostEnv(), HERDR_SOCKET_PATH: path.join(dir, 'no.sock') },
     checkPrivilege: async () => ({ isRoot: false, passwordlessSudo: false }),
   });
   assert.equal(report.ok, true, JSON.stringify(report.checks));
@@ -427,7 +430,7 @@ test('doctor：在线 daemon 同 nodeId 时探测不干扰其连接（不断连�
     // nodeId register 顶掉在线连接，真实 Hub 侧即 evict + 在途命令被杀）。
     const report = await runNodeDoctor({
       dataDir: dir,
-      env: { ...process.env, HERDR_SOCKET_PATH: path.join(dir, 'no.sock') },
+      env: { ...sanitizedHostEnv(), HERDR_SOCKET_PATH: path.join(dir, 'no.sock') },
       checkPrivilege: async () => ({ isRoot: false, passwordlessSudo: false }),
     });
     assert.equal(report.ok, true, JSON.stringify(report.checks));
@@ -449,7 +452,7 @@ test('doctor：Hub 不可达时 hub 项报 error（握手失败如实呈现）',
     await writeNodeIdentity(dir, { nodeId: 'doctor-dead-node', token: 'doctor-dead-node:secret-1', hubUrl: 'http://127.0.0.1:1' });
     const report = await runNodeDoctor({
       dataDir: dir,
-      env: { ...process.env, HERDR_SOCKET_PATH: path.join(dir, 'no.sock') },
+      env: { ...sanitizedHostEnv(), HERDR_SOCKET_PATH: path.join(dir, 'no.sock') },
       connectTimeoutMs: 2_000,
       checkPrivilege: async () => ({ isRoot: false, passwordlessSudo: false }),
     });
@@ -477,7 +480,7 @@ test('doctor：herdr_ipc 端点可达时 ok、不可达时 info', { timeout: 60_
     // 可达：ok
     const reachable = await runNodeDoctor({
       dataDir: dir,
-      env: { ...process.env, HERDR_SOCKET_PATH: sockPath },
+      env: { ...sanitizedHostEnv(), HERDR_SOCKET_PATH: sockPath },
       checkPrivilege: async () => ({ isRoot: false, passwordlessSudo: false }),
     });
     const ipcOk = reachable.checks.find((c) => c.id === 'herdr_ipc');
@@ -487,7 +490,7 @@ test('doctor：herdr_ipc 端点可达时 ok、不可达时 info', { timeout: 60_
     // 不可达：info（可选能力不阻断）
     const missing = await runNodeDoctor({
       dataDir: dir,
-      env: { ...process.env, HERDR_SOCKET_PATH: path.join(dir, 'missing.sock') },
+      env: { ...sanitizedHostEnv(), HERDR_SOCKET_PATH: path.join(dir, 'missing.sock') },
       checkPrivilege: async () => ({ isRoot: false, passwordlessSudo: false }),
     });
     const ipcInfo = missing.checks.find((c) => c.id === 'herdr_ipc');

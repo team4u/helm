@@ -28,6 +28,7 @@ import { spawn } from 'node:child_process';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createBirpc } from 'birpc';
 import type { EnvExecOutputEvent } from '@helm/protocol';
+import { sanitizedHostEnv } from './helpers/sanitized-env.js';
 import { bindIdentityFromJoinToken } from '../src/daemon/index.js';
 import { isDirectRun, runNodeCli, type NodeCliIo } from '../src/cli.js';
 import {
@@ -53,7 +54,9 @@ async function runCli(argv: string[], io: Partial<NodeCliIo> = {}): Promise<Capt
   let out = '';
   let err = '';
   const code = await runNodeCli(argv, {
-    env: { ...process.env },
+    // 剥除宿主受管 HELM_* 变量：被测 CLI 的启动身份/Hub/数据目录语义只由
+    // 测试显式 argv 与 node.json 身份决定，不被宿主会话环境劫持。
+    env: sanitizedHostEnv(),
     out: (t) => (out += t),
     err: (t) => (err += t),
     ...io,
@@ -239,7 +242,7 @@ test('三个独立 CLI 子进程能启动、查询并停止同一后台节点实
   t.after(async () => { await runCli(['stop', '--data-dir', dir, '--json']); await hub.close(); await fs.rm(dir, { recursive: true, force: true }); });
   await bindIdentityFromJoinToken(dir, 'cli-process:s', hub.url);
   const childCli = (args: string[]): Promise<Captured> => new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['--import', import.meta.resolve('tsx'), fileURLToPath(new URL('../src/cli.ts', import.meta.url)), ...args, '--data-dir', dir, '--json'], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HELM_HUB_URL: hub.url } });
+    const child = spawn(process.execPath, ['--import', import.meta.resolve('tsx'), fileURLToPath(new URL('../src/cli.ts', import.meta.url)), ...args, '--data-dir', dir, '--json'], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...sanitizedHostEnv(), HELM_HUB_URL: hub.url } });
     let out = ''; let err = '';
     child.stdout.on('data', (chunk) => { out += chunk.toString() });
     child.stderr.on('data', (chunk) => { err += chunk.toString() });
