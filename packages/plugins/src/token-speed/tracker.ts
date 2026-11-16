@@ -36,7 +36,7 @@
  *   时退回 chars/4 估算。
  */
 import type { ConversationLiveMessage } from '@helm/protocol'
-import type { TokenSpeedSource, TokenSpeedStatus } from './contracts.js'
+import { contentCharsOfBlocks, type TokenSpeedSource, type TokenSpeedStatus } from './contracts.js'
 
 /** 窗口事件：一次内容增长帧（时间戳 + 增量 tokens + 所属段 id）。 */
 interface WindowEvent {
@@ -119,24 +119,7 @@ export class SlidingWindow {
  */
 export function generatedCharsOf(message: ConversationLiveMessage | undefined): number {
   if (message === undefined) return 0
-  let chars = 0
-  for (const block of message.content) {
-    if (block.type === 'text') {
-      chars += block.text.length
-    } else if (block.type === 'thinking') {
-      chars += block.thinking.length
-    } else if (block.type === 'toolCall') {
-      chars += block.name.length
-      if (block.arguments !== undefined) {
-        try {
-          chars += JSON.stringify(block.arguments).length
-        } catch {
-          // 非 JSON 参数形状：跳过（不伪造长度）。
-        }
-      }
-    }
-  }
-  return chars
+  return contentCharsOfBlocks(message.content)
 }
 
 /** chars/4 保守估算的单次增量（>0 时至少 1 token）。 */
@@ -164,6 +147,8 @@ interface Segment {
   usedProvider: boolean
   firstGrowthAt: number | undefined
   lastGrowthAt: number | undefined
+  /** 本段首次观测到空 generation 的帧时间（段级 TTFT 起点锚）。 */
+  emptySeenAt: number | undefined
   /** 中途接入基线段：历史内容时间不可归属（只测得 suffix）。 */
   baselineOnly: boolean
   /** 被整条 usage 对账后的基线段：计数与时间不可配对，不进速率对。 */
@@ -184,6 +169,8 @@ export interface CompletionFact {
   /** 供应商最终 usage.output（正有限数；无上报缺省）。 */
   usageOutput: number | undefined
   stopReason: string | undefined
+  /** model[0].content 的累计字符量（用于补算尾帧新增内容；缺省不补算）。 */
+  contentChars?: number | undefined
 }
 
 /**
@@ -205,8 +192,9 @@ export class ConversationTokenSpeedTracker {
   private readonly retired = { tokens: 0, decodeMs: 0, rateTokens: 0, rateDecodeMs: 0, provider: false, estimate: false }
   private readonly window: SlidingWindow
   private readonly windowMs: number
-  /** 最近一次观测到无内容 generation 的帧时间（TTFT 起点锚；仅干净观测可测）。 */
-  private emptyGenerationSeenAt: number | undefined
+  private readonly minSpanMs: number
+  /** 本回合最近一次有效实时速率；工具执行 / 轮间首字等待 / 短停顿期保留展示。 */
+  private lastLiveTps: number | undefined
   private firstContentAt: number | undefined
   private ttftMs: number | undefined
   /** 链内是否观测过无内容的 generation（干净起点 / 中途接入判定）。 */
@@ -215,11 +203,12 @@ export class ConversationTokenSpeedTracker {
 
   constructor(options: { windowMs: number; minSpanMs: number }) {
     this.windowMs = options.windowMs
+    this.minSpanMs = options.minSpanMs
     this.window = new SlidingWindow(options.windowMs, options.minSpanMs)
   }
 
-  /** 新落库 pi.assistant entry 的完成事实：按 taskId 精确关联段。 */
-  noteCompletion(fact: CompletionFact): void {
+  /** 新落库 pi.assistant entry 的完成事实：按 taskId 精确关联段，并补算尾帧增量。 */
+  noteCompletion(fact: CompletionFact, now?: number): void {
     if (fact.taskId === undefined) return // 身份不明：不关联不猜测
     if (fact.entryId !== undefined) {
       if (this.seenEntryIds.has(fact.entryId)) return
@@ -241,15 +230,74 @@ export class ConversationTokenSpeedTracker {
         this.active = undefined
         this.window.reset()
       }
+      const countedTokens = this.countedSegments().reduce((acc, item) => acc + item.tokens, this.retired.tokens)
+      if (countedTokens <= 0) this.lastLiveTps = undefined
       return
     }
     segment.state = 'done'
     if (this.active === segment) this.active = undefined
+
+    const prevChars = segment.chars
+    const deltaChars =
+      typeof fact.contentChars === 'number' && Number.isFinite(fact.contentChars) && fact.contentChars >= 0
+        ? Math.max(0, fact.contentChars - prevChars)
+        : 0
+    const hasContentOrUsage =
+      deltaChars > 0 || (typeof fact.usageOutput === 'number' && Number.isFinite(fact.usageOutput) && fact.usageOutput > 0)
+    if (hasContentOrUsage && this.firstContentAt === undefined && !segment.baselineOnly) {
+      if (
+        now !== undefined &&
+        !this.countedSegments().some((item) => item !== segment) &&
+        segment.emptySeenAt !== undefined &&
+        segment.emptySeenAt < now
+      ) {
+        this.ttftMs = now - segment.emptySeenAt
+      }
+      this.firstContentAt = now ?? -1
+    }
+
+    let estDelta = 0
+    if (deltaChars > 0) {
+      estDelta = estimateTokensOf(fact.contentChars!) - estimateTokensOf(prevChars)
+      const tailTokens =
+        typeof fact.usageOutput === 'number' && fact.usageOutput > 0 && !segment.baselineOnly
+          ? Math.max(0, fact.usageOutput - segment.tokens)
+          : estDelta
+      segment.chars = Math.max(segment.chars, fact.contentChars!)
+      if (now !== undefined) {
+        if (segment.firstGrowthAt !== undefined && now > segment.firstGrowthAt) {
+          segment.lastGrowthAt = now
+          if (tailTokens > 0) {
+            this.window.record(now, tailTokens, segment.id)
+            const tps = this.window.getTps(now)
+            if (tps > 0) this.lastLiveTps = tps
+          }
+        } else if (
+          segment.firstGrowthAt === undefined &&
+          !segment.baselineOnly &&
+          segment.emptySeenAt !== undefined &&
+          now >= segment.emptySeenAt
+        ) {
+          // 极短 <100ms 零中间 partial 帧：不改 decodeMs / settle() 口径（不混入 TTFT），
+          // 仅按整段跨度（下限 minSpanMs）估算保守速率供随后的工具期展示。
+          const effectiveTokens =
+            typeof fact.usageOutput === 'number' && fact.usageOutput > 0 ? fact.usageOutput : estDelta
+          if (effectiveTokens > 0) {
+            const span = Math.max(now - segment.emptySeenAt, this.minSpanMs)
+            this.lastLiveTps = (effectiveTokens * 1000) / span
+          }
+        }
+      }
+    }
+
     if (typeof fact.usageOutput === 'number' && fact.usageOutput >= 0) {
       if (segment.baselineOnly) segment.rateExcluded = true
       segment.tokens = fact.usageOutput
       segment.usedProvider = true
       segment.usedEstimate = false
+    } else if (deltaChars > 0) {
+      segment.tokens += estDelta
+      segment.usedEstimate ||= estDelta > 0
     }
   }
 
@@ -271,11 +319,6 @@ export class ConversationTokenSpeedTracker {
     this.phase = 'decoding'
 
     const chars = generatedCharsOf(generation.message)
-    if (chars === 0) {
-      // 观测到无内容的 generation（含链首与重试间隙）：TTFT 起点锚记。
-      this.emptyGenerationSeenAt = now
-      this.sawEmptyGeneration = true
-    }
     const current = this.active
     const identityChanged =
       current !== undefined &&
@@ -305,6 +348,7 @@ export class ConversationTokenSpeedTracker {
           usedProvider: false,
           firstGrowthAt: undefined,
           lastGrowthAt: undefined,
+          emptySeenAt: undefined,
           baselineOnly,
           rateExcluded: false,
         }
@@ -320,6 +364,11 @@ export class ConversationTokenSpeedTracker {
     }
 
     const segment = this.active!
+    if (chars === 0) {
+      // 段内首次观测到无内容 generation：作为该段 TTFT / 极短请求起点锚。
+      segment.emptySeenAt ??= now
+      this.sawEmptyGeneration = true
+    }
     const deltaChars = Math.max(0, chars - segment.chars)
     const provider = generation.message?.usage?.output
     let deltaTokens = 0
@@ -337,16 +386,24 @@ export class ConversationTokenSpeedTracker {
 
     if (this.firstContentAt === undefined) {
       this.firstContentAt = now
-      // TTFT 仅在起点可靠（先观测到空 generation，之后同一观测流出现内容）时
-      // 测量；中途接入（首帧即带内容、只建基线）拿不到起点，省略不伪造。
-      if (this.emptyGenerationSeenAt !== undefined && this.emptyGenerationSeenAt < now) {
-        this.ttftMs = now - this.emptyGenerationSeenAt
+      // TTFT 仅在起点可靠（本回合首个非废弃段先观测到空 generation，之后
+      // 同一观测流出现内容）时测量；中途接入或前序轮已开始时省略不伪造。
+      if (
+        !this.countedSegments().some((item) => item !== segment) &&
+        segment.emptySeenAt !== undefined &&
+        segment.emptySeenAt < now
+      ) {
+        this.ttftMs = now - segment.emptySeenAt
       }
     }
     if (segment.firstGrowthAt === undefined) segment.firstGrowthAt = now
     segment.lastGrowthAt = now
     segment.tokens += deltaTokens
-    if (deltaTokens > 0) this.window.record(now, deltaTokens, segment.id)
+    if (deltaTokens > 0) {
+      this.window.record(now, deltaTokens, segment.id)
+      const tps = this.window.getTps(now)
+      if (tps > 0) this.lastLiveTps = tps
+    }
   }
 
   /** 关闭活动段（边界帧 / 完成事实）：等待完成事实精确对账。 */
@@ -420,9 +477,15 @@ export class ConversationTokenSpeedTracker {
       windowMs: this.windowMs,
       updatedAt: now,
     }
-    if (this.phase === 'decoding') {
+    if (this.phase === 'decoding' && this.active?.firstGrowthAt !== undefined) {
       const tps = this.window.getTps(now)
-      if (tps > 0) return { ...status, tps }
+      if (tps > 0) {
+        this.lastLiveTps = tps
+        return { ...status, tps }
+      }
+    }
+    if (this.lastLiveTps !== undefined && this.lastLiveTps > 0) {
+      return { ...status, tps: this.lastLiveTps }
     }
     return status
   }
@@ -466,7 +529,7 @@ export class ConversationTokenSpeedTracker {
     this.highestTaskId = 0
     Object.assign(this.retired, { tokens: 0, decodeMs: 0, rateTokens: 0, rateDecodeMs: 0, provider: false, estimate: false })
     this.window.reset()
-    this.emptyGenerationSeenAt = undefined
+    this.lastLiveTps = undefined
     this.firstContentAt = undefined
     this.ttftMs = undefined
     this.sawEmptyGeneration = false

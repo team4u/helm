@@ -6,11 +6,12 @@
  *   的观测估算——即使终态 token 数经 provider usage 对账准确，时间仍是帧
  *   观测近似，徽标文本一律加 ≈ 前缀（移动端无 title 也能知道是估算），
  *   绝不暗示服务器精确解码时间；
- * - 无可靠速率（工具暂停 / 窗口滑空 / 首字前 / 终态无可测累计）不渲染任何
+ * - 工具暂停与流式间隙保留本回合最近有效速率（工具执行不计入解码时间，
+ *   并在 tooltip 明示暂停计时）；仅首测前或终态无可测累计时不渲染任何
  *   占位文本，绝不以 0.0 tok/s 冒充真实速率；
- * - tooltip 必须区分「实时滑动窗口观测」与「终态对账」口径，并如实标注：
- *   不含首字延迟与工具执行时间、估算口径（provider / estimate / mixed）、
- *   TTFT 起点是插件首次观测（非请求精确起点）。
+ * - tooltip 必须区分「实时滑动窗口观测」「工具暂停保持」与「终态对账」口径，
+ *   并如实标注：不含首字延迟与工具执行时间、估算口径（provider / estimate /
+ *   mixed）、TTFT 起点是插件首次观测（非请求精确起点）。
  */
 
 /** token 口径的展示文案。 */
@@ -55,6 +56,12 @@ export function tokenSpeedLabelOf(status: {
     return {
       text: `≈${tps.toFixed(1)} tok/s`,
       title: `最近回合解码 ≈${tps.toFixed(1)} tok/s（对账累计 ${tokens} tok，观测解码净耗时 ${secondsLabel(status.decodeMs)}，口径 ${source}；速率仅统计计数与时长可配对的响应；时间为节流帧观测近似，非服务器精确解码时间；不含首字延迟与工具执行${ttft}）`,
+    }
+  }
+  if (status.phase === 'tools') {
+    return {
+      text: `≈${tps.toFixed(1)} tok/s`,
+      title: `工具执行暂停计时 · 最近解码 ≈${tps.toFixed(1)} tok/s（口径 ${source}；工具执行耗时不计入解码时间；已生成 ${tokens} tok / 观测解码 ${secondsLabel(status.decodeMs)}${ttft}）`,
     }
   }
   const windowSeconds = status.windowMs / 1000

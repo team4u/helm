@@ -163,22 +163,30 @@ test('状态机：身份变化构成段重置（重试 / 新任务不重复累�
   assert.equal(status.outputTokens, 100 + 10 + 20 + 20, '回退帧 0 增量，随后 160-80 字符继续同段差分')
 })
 
-test('状态机：工具阶段暂停解码时钟——段间间隙绝不计入 decodeMs', { timeout: 60_000 }, () => {
+test('状态机：工具阶段暂停解码时钟但保留最近速率——段间间隙绝不计入 decodeMs', { timeout: 60_000 }, () => {
   const tracker = trackerOf()
-  // 段一：0-400ms 生成 40 tokens。
+  // 段一：0-400ms 生成 200 tokens。
   tracker.observeFrame(0, { generation: { taskId: 1, attempt: 1 } })
   tracker.observeFrame(100, { generation: { taskId: 1, attempt: 1, message: message([text('a'.repeat(400))]) } })
   tracker.observeFrame(400, { generation: { taskId: 1, attempt: 1, message: message([text('a'.repeat(800))]) } })
+  const decodingTps = tracker.liveStatus(400)!.tps!
+  assert.ok(Math.abs(decodingTps - (200 / 0.3)) < 1e-6)
   // 工具阶段：generation 缺席（5s 工具执行）。
   tracker.observeFrame(500, { hasTools: true })
   tracker.observeFrame(5_000, { hasTools: true })
   let status = tracker.liveStatus(5_000)!
   assert.equal(status.phase, 'tools')
   assert.equal(status.decodeMs, 300, '只有段一的 100->400ms')
-  assert.equal(status.tps, undefined, '工具阶段不给速率（不以 0 冒充）')
-  // 段二（工具轮 handOver：新任务 taskId，attempt 重置 1、内容从零）。
+  assert.ok(Math.abs((status.tps ?? 0) - decodingTps) < 1e-6, '工具阶段保留最近有效速率不清空')
+  // 段二（工具轮 handOver：新任务 taskId，空 generation 首字等待期）：保持最近速率不断流。
   tracker.observeFrame(5_100, { generation: { taskId: 2, attempt: 1 } })
+  status = tracker.liveStatus(5_100)!
+  assert.equal(status.phase, 'decoding')
+  assert.ok(Math.abs((status.tps ?? 0) - decodingTps) < 1e-6, '轮间首字等待期保持最近有效速率')
+  // 段二首增长帧到达：平滑切入新段窗口。
   tracker.observeFrame(5_200, { generation: { taskId: 2, attempt: 1, message: message([text('b'.repeat(400))]) } })
+  status = tracker.liveStatus(5_200)!
+  assert.ok(Math.abs((status.tps ?? 0) - 1000) < 1e-6, '新增长帧到达后切入新请求窗口（100 tok / 100ms）')
   tracker.observeFrame(5_500, { generation: { taskId: 2, attempt: 1, message: message([text('b'.repeat(800))]) } })
   status = tracker.liveStatus(5_500)!
   assert.equal(status.decodeMs, 300 + 300, '两段解码拼接，5s 工具时间被剔除')
@@ -253,12 +261,19 @@ test('状态机：settle 产出终态（对账速率）；resetChain 彻底清�
   assert.equal(tracker.settle(600), undefined)
 })
 
-test('展示模型：实时/终态口径区分与诚实标注；无可靠速率返回 null（不以 0.0 冒充）', { timeout: 60_000 }, () => {
+test('展示模型：实时/工具暂停/终态口径区分与诚实标注；无可靠速率返回 null（不以 0.0 冒充）', { timeout: 60_000 }, () => {
   const base = { outputTokens: 500, decodeMs: 4_000, source: 'mixed', windowMs: 1000 }
-  // 无速率（工具暂停 / 窗口滑空 / 首字前）：不渲染。
+  // 无速率（首字前 / 无测量）：不渲染。
   assert.equal(tokenSpeedLabelOf({ ...base, phase: 'tools' }), null)
   assert.equal(tokenSpeedLabelOf({ ...base, phase: 'decoding', tps: 0 }), null)
   assert.equal(tokenSpeedLabelOf({ ...base, phase: 'settled', tps: Number.NaN }), null)
+  // 工具暂停期保留最近有效速率，并在 tooltip 如实标注暂停计时。
+  const tools = tokenSpeedLabelOf({ ...base, phase: 'tools', tps: 52.35, ttftMs: 640 })!
+  assert.equal(tools.text, '≈52.4 tok/s')
+  assert.match(tools.title, /工具执行暂停计时 · 最近解码 ≈52\.4 tok\/s/)
+  assert.match(tools.title, /工具执行耗时不计入解码时间/)
+  assert.match(tools.title, /供应商 usage \+ 字符估算混合/)
+  assert.match(tools.title, /首字延迟 640ms/)
   // 实时：滑动窗口口径 + 口径标注 + TTFT 首次观测声明；一切速率均 ≈ 观测估算
   //（文本前缀即可见，移动端不依赖 title）。
   const live = tokenSpeedLabelOf({ ...base, phase: 'decoding', tps: 52.35, ttftMs: 640 })!
@@ -276,7 +291,7 @@ test('展示模型：实时/终态口径区分与诚实标注；无可靠速率�
   assert.match(settled.title, /观测解码净耗时/)
   assert.doesNotMatch(settled.title, /滑动窗口/)
   // 无 TTFT（中途接入）：tooltip 不编造首字延迟测量值。
-  assert.doesNotMatch(tokenSpeedLabelOf({ ...base, phase: 'settled', tps: 10 })!.title, /首字延迟 \\d+ms/)
+  assert.doesNotMatch(tokenSpeedLabelOf({ ...base, phase: 'settled', tps: 10 })!.title, /首字延迟 \d+ms/)
 })
 
 test('事件守卫：非法载荷丢弃（asConversationLiveFrame），合法最小帧通过', { timeout: 60_000 }, () => {
@@ -340,6 +355,28 @@ test('事件守卫：asAssistantCompletion 抽取通用完成事实（role/stopR
   assert.equal(zeroUsage!.usageOutput, undefined)
   const badTaskId = asAssistantCompletion({ ...base, entry: { id: '5', kind: 'pi.assistant', taskId: 'task-9', model: [{ role: 'assistant', stopReason: 'stop' }] } })
   assert.equal(badTaskId!.taskId, undefined)
+  // 含 content 数组时提取 text + thinking + toolCall 的字符总量。
+  const withContent = asAssistantCompletion({
+    ...base,
+    entry: {
+      id: '6',
+      kind: 'pi.assistant',
+      taskId: 10,
+      model: [
+        {
+          role: 'assistant',
+          stopReason: 'toolUse',
+          content: [
+            { type: 'thinking', thinking: 'think' },
+            { type: 'text', text: 'hello' },
+            { type: 'toolCall', id: 'c1', name: 'bash', arguments: { command: 'ls' } },
+          ],
+          usage: { output: 25 },
+        },
+      ],
+    },
+  })
+  assert.equal(withContent?.contentChars, 5 + 5 + 4 + JSON.stringify({ command: 'ls' }).length)
 })
 
 // ---------------------------------------------------------------------------
@@ -498,7 +535,7 @@ interface Harness {
   close: () => Promise<void>
 }
 
-async function openPlugin(): Promise<Harness> {
+async function openPlugin(options?: { now?: () => number }): Promise<Harness> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-token-speed-'))
   const backend = new EventBackend()
   const docs = new MemoryDocStore()
@@ -510,7 +547,7 @@ async function openPlugin(): Promise<Harness> {
     docs,
     sessionDocs: sessionDocs as never,
   })
-  await host.register(createTokenSpeedPlugin(), { enabled: true })
+  await host.register(createTokenSpeedPlugin(options), { enabled: true })
   return {
     host,
     backend,
@@ -543,16 +580,61 @@ test('插件装配：流式帧驱动 sessionDoc（首测立即写 + 节流 + 阶
     assert.ok(first.tps! > 0)
     assert.equal(first.windowMs, 1000)
     const writesAfterFirst = writesOf(CONV)
-    // 同阶段密集帧：250ms 节流内不重复写。
+    // 同阶段密集帧：120ms 节流内不立即写（进入尾帧延迟补写）。
     await backend.dispatch('conversation.live', liveEvent(CONV, 120, { taskId: 1, attempt: 1, message: message([text('a'.repeat(440))]) }))
     await backend.dispatch('conversation.live', liveEvent(CONV, 140, { taskId: 1, attempt: 1, message: message([text('a'.repeat(480))]) }))
     assert.equal(writesOf(CONV), writesAfterFirst, '同阶段节流窗口内不写')
-    // 阶段变化（工具）：立即写。
+    // 阶段变化（工具）：立即写（取消待写定时器并保留最近有效速率）。
     await backend.dispatch('conversation.live', liveEvent(CONV, 160, undefined, [{ callId: 'c1', toolName: 'bash', status: 'running' }]))
     const tools = docOf(CONV)!
     assert.equal(tools.phase, 'tools')
-    assert.equal(tools.tps, undefined, '工具阶段无速率')
+    assert.ok(typeof tools.tps === 'number' && tools.tps > 0, '工具阶段保留最近有效速率')
     assert.equal(writesOf(CONV), writesAfterFirst + 1)
+  } finally {
+    await close()
+  }
+})
+
+test('插件装配：节流尾帧延迟补写；reset/turn_settled 取消待写定时器不回写幽灵文档', { timeout: 60_000 }, async () => {
+  let fakeClock = 100
+  const { backend, host, docOf, writesOf, close } = await openPlugin({ now: () => fakeClock })
+  try {
+    const CONV = 11
+    await backend.dispatch('conversation.live', liveEvent(CONV, 100, { taskId: 1, attempt: 1 }))
+    await backend.dispatch('conversation.live', liveEvent(CONV, 120, { taskId: 1, attempt: 1, message: message([text('a'.repeat(400))]) }))
+    const writesAfterFirst = writesOf(CONV)
+    // 节流窗口内再发一帧：不立即写，由尾定时器在 120ms 到期补写。
+    fakeClock = 140
+    await backend.dispatch('conversation.live', liveEvent(CONV, 140, { taskId: 1, attempt: 1, message: message([text('a'.repeat(800))]) }))
+    assert.equal(writesOf(CONV), writesAfterFirst)
+    assert.equal(docOf(CONV)!.outputTokens, 100)
+    fakeClock = 260
+    await new Promise((resolve) => setTimeout(resolve, 160))
+    assert.equal(writesOf(CONV), writesAfterFirst + 1, '窗口尾部自动补写最后一跳')
+    assert.equal(docOf(CONV)!.outputTokens, 200)
+
+    // 再入节流窗口后立刻 reset：待写定时器必须被取消，绝不回写幽灵数据。
+    fakeClock = 280
+    await backend.dispatch('conversation.live', liveEvent(CONV, 280, { taskId: 1, attempt: 1, message: message([text('a'.repeat(1200))]) }))
+    assert.equal(writesOf(CONV), writesAfterFirst + 1)
+    await backend.dispatch('conversation.entry', markerEvent(CONV, 'pi.reset'))
+    assert.equal(docOf(CONV), null)
+    await new Promise((resolve) => setTimeout(resolve, 160))
+    assert.equal(docOf(CONV), null, 'reset 后已取消待写定时器，绝不复活旧数据')
+
+    // 再入节流窗口后 failed turn_settled：同样取消定时器且不回写。
+    fakeClock = 500
+    await backend.dispatch('conversation.live', liveEvent(CONV, 500, { taskId: 2, attempt: 1 }))
+    fakeClock = 520
+    await backend.dispatch('conversation.live', liveEvent(CONV, 520, { taskId: 2, attempt: 1, message: message([text('b'.repeat(400))]) }))
+    const writesBeforeThrottle = writesOf(CONV)
+    fakeClock = 540
+    await backend.dispatch('conversation.live', liveEvent(CONV, 540, { taskId: 2, attempt: 1, message: message([text('b'.repeat(800))]) }))
+    assert.equal(writesOf(CONV), writesBeforeThrottle)
+    await host.runHook('turn_settled', { conversation: conversationOf(CONV, 'error'), inputs: [], outcome: 'failed', error: 'err', settledAt: 550 })
+    assert.equal(docOf(CONV), null)
+    await new Promise((resolve) => setTimeout(resolve, 160))
+    assert.equal(docOf(CONV), null, 'failed 后待写定时器已取消，不复活测量')
   } finally {
     await close()
   }
@@ -759,7 +841,7 @@ test('插件装配：生命周期——prepare 清上周期 sessionDoc，stop �
 })
 
 test('文档写入节流常量与窗口配置存在性', { timeout: 60_000 }, () => {
-  assert.equal(DOC_WRITE_INTERVAL_MS, 250)
+  assert.equal(DOC_WRITE_INTERVAL_MS, 120)
   const definition: PluginDefinition = createTokenSpeedPlugin()
   assert.equal(definition.id, TOKEN_SPEED_PLUGIN_ID)
   assert.equal(typeof definition.clientRoot, 'string')
