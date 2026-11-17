@@ -8,7 +8,6 @@ import type { ReactNode } from 'react'
 import { formatCompactTimestamp, formatDurationMs, usePluginContext, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { useElapsedNowMs } from './hooks.ts'
-import { SPIN } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { subagentBadge, runFailureFallbackLabel } from './model-subagent-card.ts'
 import { canDetachForegroundRun, resolveRunElapsedMs, type DetachViewerScope } from './model-run.ts'
@@ -24,6 +23,7 @@ import {
   externalIdleLine,
   externalNodeFailedLabel,
   externalRunningNodes,
+  SPIN,
   worktreeBadgeTitle,
 } from './copy.ts'
 

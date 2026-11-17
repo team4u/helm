@@ -289,10 +289,21 @@ describe('builtin:worktree isolated derive (agent_spawn continuation)', { timeou
         .reverse()
         .find((e) => e.kind === 'pi.tool-result' && JSON.stringify(e.model ?? '').includes('"subagent"'))
       assert.ok(toolEntry, 'should store in subagent tool result entry')
-      const text = JSON.stringify(toolEntry.model ?? '')
-      assert.ok(text.includes('worktree='), `tool output should contains worktree metadata:${text.slice(0, 400)}`)
-      assert.ok(text.includes('cleanup_worktree'), 'tool output should contains cleanup_worktree clean up hint')
-      assert.ok(text.includes('worktreeId='), 'tool output should contains managed worktreeId')
+      const toolResultMsg = (toolEntry.model as Array<{
+        content?: Array<{ text?: string }>
+        details?: { execution?: { worktree?: { id?: string; path?: string; branch?: string } } }
+      }> | undefined)?.[0]
+      const payload = JSON.parse(toolResultMsg?.content?.[0]?.text ?? '{}') as {
+        execution?: { worktree?: { id?: string; path?: string; branch?: string } }
+      }
+      assert.ok(payload.execution?.worktree?.path, `tool output should contain execution.worktree.path: ${JSON.stringify(payload)}`)
+      assert.ok(payload.execution?.worktree?.branch, 'tool output should contain execution.worktree.branch')
+      assert.ok(payload.execution?.worktree?.id, 'tool output should contain managed worktree.id')
+      assert.equal(
+        toolResultMsg?.details?.execution?.worktree?.id,
+        payload.execution.worktree.id,
+        'toolResult.details should mirror structuredOutput.execution.worktree.id',
+      )
 
       // real sub-conversation create in real isolated tree inside (mirror cwd i.e. isolated tree path).
       const child = env.kernel.listConversations().find((c) => c.parentConversationId === 1)
@@ -1112,13 +1123,14 @@ describe('createHelm background subagent all chain (background + worktree + gate
         .map((e) => String((e.data as { text?: unknown } | undefined)?.text ?? ''))
         .filter((t) => t.includes(runId))
       assert.ok(reportTexts.length >= 1, 'gather report text should contains runId')
-      // gather report text should contain managed worktree id(person class can based on this resume/clean up; from tool output
-      // worktreeId handle extract, path contains / do not subject to subject to limit character class affect).
-      const toolMatch = /worktreeId=\\+"([^"\\\n]+)/.exec(toolText)
-      assert.ok(toolMatch, `tool output should contains managed worktreeId:${toolText.slice(0, 300)}`)
+      // gather report text should contain managed worktree id from structured execution.worktree.id.
+      const toolMsg = (toolEntry.model as Array<{ content?: Array<{ text?: string }> }> | undefined)?.[0]
+      const parsedTool = JSON.parse(toolMsg?.content?.[0]?.text ?? '{}') as { execution?: { worktree?: { id?: string } } }
+      const wtId = parsedTool.execution?.worktree?.id
+      assert.ok(typeof wtId === 'string' && wtId.length > 0, `tool output should contain execution.worktree.id:${toolText.slice(0, 300)}`)
       assert.ok(
-        reportTexts.some((t) => t.includes(toolMatch[1]!)),
-        `gather report should contains managed worktree id ${toolMatch[1]}`,
+        reportTexts.some((t) => t.includes(wtId)),
+        `gather report should contains managed worktree id ${wtId}`,
       )
     } finally {
       // guard against clean up deadlock: regardless of assertion into failed all release gate and wait for terminal state after again closure stop.

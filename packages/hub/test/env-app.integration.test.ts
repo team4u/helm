@@ -160,16 +160,25 @@ test('across node background original generate subagent: real WS node allocate w
       `background subagent run should completed(actual ${inspect.run.status}):run.error=${JSON.stringify(inspect.run.error)} nodes=${JSON.stringify(inspect.run.nodes?.map((n) => ({ id: n.id, status: n.status, error: n.error })))}`,
     )
     // sub-conversation bind set managed isolated tree: new contract under WorktreeAllocator belongs to builtin:workflow
-    //(KernelRuntime without worktrees port); managed id from tool output worktreeId handle
-    // extract, path = execution.effectiveCwd / sub-conversation cwd.
-    const toolEntry = JSON.stringify(
-      (await env.app.kernel.getConversationDetail(parent.id, { limit: 50 })).entries
-        .filter((e) => e.kind === 'pi.tool-result')
-        .map((e) => e.model),
+    //(KernelRuntime without worktrees port); managed id comes from structured JSON execution.worktree.id
+    // (and details mirror), path = execution.effectiveCwd / sub-conversation cwd.
+    const toolMessages = (await env.app.kernel.getConversationDetail(parent.id, { limit: 50 })).entries
+      .filter((e) => e.kind === 'pi.tool-result')
+      .flatMap((e) => (Array.isArray(e.model) ? e.model : []) as Array<{
+        toolName?: string
+        content?: Array<{ text?: string }>
+        details?: { execution?: { worktree?: { id?: string } } }
+      }>)
+    const subagentMsg = toolMessages.find((m) => m.toolName === 'subagent')
+    const parsedOutput = JSON.parse(subagentMsg?.content?.[0]?.text ?? '{}') as {
+      execution?: { worktree?: { id?: string } }
+    }
+    const wtId = parsedOutput.execution?.worktree?.id
+    assert.ok(
+      typeof wtId === 'string' && wtId.length > 0,
+      `tool output should contain managed execution.worktree.id: ${JSON.stringify(subagentMsg)}`,
     )
-    const wtIdMatch = /worktreeId=\\+"([^"\\\n]+)/.exec(toolEntry)
-    assert.ok(wtIdMatch, `tool output should contains managed worktreeId handle:${toolEntry.slice(0, 400)}`)
-    const wtId = wtIdMatch[1]!
+    assert.equal(subagentMsg?.details?.execution?.worktree?.id, wtId, 'toolResult.details should mirror structuredOutput.execution.worktree.id')
     assert.ok(wtId.startsWith('integration-node:'), `managed id should be nodeId:path form (remote node):${wtId}`)
     const wtPath = wtId.slice('integration-node:'.length)
     assert.equal(child.cwd, wtPath, 'sub-conversation cwd should be remote isolated tree')

@@ -96,6 +96,7 @@ export function pluginToolResult(
 ): {
   output: Array<{ type: 'text'; text: string }>
   structuredOutput?: unknown
+  details?: Record<string, unknown>
   isError?: boolean
 } {
   const where = options?.toolName !== undefined
@@ -136,7 +137,12 @@ export function pluginToolResult(
           500,
         )
       }
-      const result: { output: Array<{ type: 'text'; text: string }>; structuredOutput?: unknown; isError?: boolean } = {
+      const result: {
+        output: Array<{ type: 'text'; text: string }>
+        structuredOutput?: unknown
+        details?: Record<string, unknown>
+        isError?: boolean
+      } = {
         output,
       }
       // structuredOutput only in tool declaration schema when keep (SDK contract); value level redaction.
@@ -149,7 +155,13 @@ export function pluginToolResult(
         )
       }
       if (env.structuredOutput !== undefined && options?.structuredOutputSchema !== undefined) {
-        result.structuredOutput = redactJsonValue(env.structuredOutput, redact)
+        const redacted = redactJsonValue(env.structuredOutput, redact)
+        result.structuredOutput = redacted
+        // pi-durable 仅持久化 details 通道至 transcript tool-result.model[0].details（structuredOutput 仅供内存 executeTool 调用方读取）；
+        // 与内置 edit 工具保持一等公民契约一致，对象型结构化输出同步镜像到 details 供 Web Timeline / ToolViewProps.structuredOutput 消费。
+        if (redacted !== null && typeof redacted === 'object' && !Array.isArray(redacted)) {
+          result.details = redacted as Record<string, unknown>
+        }
       }
       if (env.isError === true) result.isError = true
       return result

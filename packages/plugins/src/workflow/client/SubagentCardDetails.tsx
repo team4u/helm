@@ -11,7 +11,6 @@ import { useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { formatCompactTimestamp, resolveLocalizedText, usePluginContext, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
 import type { WorkflowRunSummary } from '../../contracts.js'
-import { SPIN, EXECUTION_BADGE } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { buildWorktreeSelector } from './model-worktree.ts'
 import { canDetachForegroundRun, canResumeSubagentRun, type DetachViewerScope } from './model-run.ts'
@@ -43,10 +42,12 @@ import {
   approvalsTitle,
   BADGE_CACHED,
   cardSubagentHeading,
+  EXECUTION_BADGE,
   executionStatusLabel,
   runCardSelfStateTitle,
   selfAggregateTitle,
   selfStatusLabel,
+  SPIN,
   subtreeBadge,
   subtreeProgressTitle,
   SUBLINE_FRONTLINE_TAG,

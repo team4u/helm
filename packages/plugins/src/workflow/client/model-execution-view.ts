@@ -41,7 +41,7 @@ export function executionNodeTitle(node: ExecutionNode, locale: HelmLocale = DEF
     const custom = compactCardTitle(node.summary?.title, node.conversationId ?? 0)
     if (custom !== undefined) return custom
     if (label !== undefined && label.trim() !== '' && label.trim() !== 'subagent') return firstLineOf(label, 60)
-    const prompt = node.runNode?.prompt
+    const prompt = node.runNode?.prompt ?? node.run?.nodes?.[0]?.prompt
     if (prompt !== undefined && prompt.trim() !== '') return firstLineOf(prompt, 60)
     return execConversationTitle(node.conversationId ?? 0, locale)
   }

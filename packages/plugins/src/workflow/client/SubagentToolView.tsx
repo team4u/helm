@@ -1,15 +1,11 @@
 /**
  * builtin:workflow subagent tool call timeline one-line renderer:
- * - structurally identical to the host TimelineRows.tsx 26px `.trace-row`; no
- *   big cards stacked in the main timeline;
- * - resume dedup via `isLatestSubagentCallForTarget`: only the latest call
- *   reacts to in-flight state and `useToolActivity`; historical calls
- *   superseded by a later `resume` keep their own terminal state and are
- *   marked "Resumed below";
- * - AskDoc pending-approval facts take priority over `working`, so a
- *   subagent blocked on authorization is never mislabeled running;
- * - the ~34ms dispatch confirmation of an in-flight background subagent
- *   handle is never presented as the subagent's total duration.
+ * - structurally identical to the host TimelineRows.tsx 26px `.trace-row`;
+ * - reads `props.structuredOutput` (and `call.structuredOutput` on siblingCalls)
+ *   plus `parentToolCallId` directly (zero regex or footer scraping);
+ * - calls `useConversation(childId, { includeDetail: false })` and derives
+ *   title/elapsed from `childSummary`, `parentToolSummary`, and `backgroundRun`
+ *   (zero N+1 `GET /api/conversations/:id` detail fetches!).
  */
 import { useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -25,13 +21,11 @@ import {
   useToolActivity,
 } from '@helm/plugin-client'
 import { useElapsedNowMs, usePluginSessionDoc } from './hooks.ts'
-import { SPIN } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
 import {
   cleanInlineMarkdown,
   isLatestSubagentCallForTarget,
-  latestTurnStartedAt,
   parentToolSummaryOf,
   parseSubagentExecutionInfo,
   resolveRunElapsedMs,
@@ -45,6 +39,7 @@ import type { SubagentBadge } from './models.ts'
 import { requestWorkbenchRunFocus } from './workbench-focus.ts'
 import {
   SNIPPET_AWAITING_APPROVAL,
+  SPIN,
   TRACE_COLLAPSE_DETAILS,
   TRACE_EXPAND_DETAILS,
   TRACE_EXTERNAL_TOOL_NAME,
@@ -69,26 +64,38 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
   const resultText = typeof props.result === 'string' ? props.result : undefined
   const runs = runsDoc?.runs ?? []
 
-  const execInfo = useMemo(() => parseSubagentExecutionInfo(resultText), [resultText])
+  const execInfo = useMemo(
+    () => parseSubagentExecutionInfo(props.structuredOutput, resultText),
+    [props.structuredOutput, resultText],
+  )
   const execMeta = useMemo(
     () =>
       viewerConversationId !== undefined
-        ? resolveSubagentExecutionMeta({ callId: props.callId, result: props.result }, viewerConversationId, runs)
+        ? resolveSubagentExecutionMeta(
+            { callId: props.callId, structuredOutput: props.structuredOutput, result: props.result },
+            viewerConversationId,
+            runs,
+          )
         : undefined,
-    [props.callId, props.result, viewerConversationId, runs],
+    [props.callId, props.structuredOutput, props.result, viewerConversationId, runs],
   )
   const childId = useMemo(
     () =>
       viewerConversationId !== undefined
         ? resolveSubagentConversationId(
-            { callId: props.callId, input: props.input, result: props.result },
+            {
+              callId: props.callId,
+              input: props.input,
+              structuredOutput: props.structuredOutput,
+              result: props.result,
+            },
             viewerConversationId,
             conversations,
           )
         : undefined,
-    [props.callId, props.input, props.result, viewerConversationId, conversations],
+    [props.callId, props.input, props.structuredOutput, props.result, viewerConversationId, conversations],
   )
-  const childConv = useConversation(childId)
+  const childConv = useConversation(childId, { includeDetail: false })
   const childSummary = useMemo(
     () => (childId !== undefined ? (conversations.find((c) => c.id === childId) ?? childConv.summary) : undefined),
     [childId, conversations, childConv.summary],
@@ -109,6 +116,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
               callId: props.callId,
               input: props.input,
               result: props.result,
+              structuredOutput: props.structuredOutput,
               siblingCalls: props.siblingCalls,
               conversationId: viewerConversationId,
             },
@@ -120,6 +128,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
       props.callId,
       props.input,
       props.result,
+      props.structuredOutput,
       props.siblingCalls,
       viewerConversationId,
       childId,
@@ -175,10 +184,10 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
 
   const taskTitle =
     childId !== undefined
-      ? resolveSubagentTaskTitle(childSummary, childId, parentToolSummary, backgroundRun, childConv.detail?.entries)
+      ? resolveSubagentTaskTitle(childSummary, childId, parentToolSummary, backgroundRun)
       : cleanInlineMarkdown(rawPrompt ?? backgroundRun?.name ?? execMeta?.executionId ?? resolveLocalizedText(TRACE_SUBAGENT_CALL, locale))
 
-  const fallbackStartedAt = parentToolSummary.startedAt ?? latestTurnStartedAt(childConv.detail?.entries)
+  const fallbackStartedAt = parentToolSummary.startedAt
   const elapsedMs = useMemo(() => {
     if (!isLatest) {
       return isBgHandle ? undefined : props.durationMs

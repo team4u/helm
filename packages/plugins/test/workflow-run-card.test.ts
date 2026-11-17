@@ -1,27 +1,30 @@
 /**
- * builtin:workflow 插件 client 组件测试（kernel 真实 esbuild 编译产物 + SSR）：
+ * builtin:workflow 插件 client 组件与运行卡片测试（kernel 真实 esbuild 编译产物）：
  * - 纯逻辑（models.ts 编译产物）：resolveNodeSummaryText / buildWorkflowPhaseSections /
- *   extractWorkflowLogs / canResumeWorkflowRun / formatNodeOutputPreview /
- *   formatWorkflowNodeStats / buildExecutionTree 工作台关联（Active-First 去重）；
- * - SSR（index.tsx 编译产物，共享 React 真实渲染）：
- *   工作流节点无手风琴直出、子代理一体化整卡、无并排按钮、无 Emoji。
+ *   extractWorkflowLogs / canResumeWorkflowRun（含 run.resumable 与 errorCode）/
+ *   listResumableFailedRuns / formatNodeOutputPreview / formatWorkflowNodeStats /
+ *   buildExecutionTree（runs 唯一根源）；
+ * - SSR（index.tsx 编译产物）：工作流节点直出、子代理一体化整卡、无并排按钮、无 Emoji；
+ * - DOM 交互（真实 SDK hooks）：瘦身 run（hasResult: true, result: undefined, resultPreview）
+ *   折叠仅显示 resultPreview（零 inspect 请求），点击「Expand full result」按需调 inspect
+ *   加载完整结果并缓存，失败显式报错不伪造。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import * as React from 'react'
-import { renderToString } from 'react-dom/server'
 import type { ConversationSummary, PluginClientContext as PluginClientContextType, WorkbenchPanelProps } from '@helm/protocol'
-// 类型引用（test-only）：workflow/herdr 共享契约归属 @helm/plugins（自 @helm/protocol
-// 迁出，见 devDependency）；纯类型零运行时耦合，不放宽生产包边界。
-import type { WorkflowNodeState, WorkflowRunSummary } from '@helm/plugins/contracts'
-import { PluginClientContext, resolveLocalizedText } from '@helm/plugin-client'
-
+import type { WorkflowNodeState, WorkflowRunSummary } from '../src/contracts.js'
 import {
+  React,
+  SDK,
+  act,
+  createWorkflowHostHarness,
   importWorkflowClientModule,
   importWorkflowModels,
+  makeConvSummary,
   mountSharedPluginNamespaces,
+  renderToString,
   setWorkflowClientStub,
-} from './helpers/workflow-client.js'
+} from './helpers/workflow-client-harness.js'
 
 const e = React.createElement
 mountSharedPluginNamespaces()
@@ -44,24 +47,34 @@ function run(partial: Partial<WorkflowRunSummary> = {}): WorkflowRunSummary {
 }
 
 function summary(id: number, status: ConversationSummary['status'], parent?: number): ConversationSummary {
-  return {
-    id,
-    title: `子会话 ${id}`,
-    profileId: 'coder',
-    tags: [],
-    ...(parent !== undefined ? { parentConversationId: parent } : {}),
-    cwd: '/tmp',
-    model: '',
-    thinkingLevel: '',
+  return makeConvSummary(id, {
     status,
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 0,
-    updatedAt: 0,
-  }
+    ...(parent !== undefined ? { parentConversationId: parent } : {}),
+  })
+}
+
+function subagentRun(
+  id: string,
+  parentConversationId: number,
+  childConversationId: number,
+  status: WorkflowRunSummary['status'] = 'completed',
+  overrides: Partial<WorkflowRunSummary> = {},
+): WorkflowRunSummary {
+  return run({
+    id,
+    kind: 'subagent',
+    name: `subagent-${childConversationId}`,
+    conversationId: parentConversationId,
+    status,
+    nodes: [
+      node({
+        id: `n-${childConversationId}`,
+        status: status === 'running' ? 'running' : status === 'failed' || status === 'aborted' ? 'failed' : 'done',
+        conversationId: childConversationId,
+      }),
+    ],
+    ...overrides,
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -83,7 +96,7 @@ test('formatNodeOutputPreview：空值返回 undefined，字符串取首行，�
 })
 
 // ---------------------------------------------------------------------------
-// 纯逻辑：resolveNodeSummaryText（修复 durationMs 吞错 Bug）
+// 纯逻辑：resolveNodeSummaryText
 // ---------------------------------------------------------------------------
 
 test('resolveNodeSummaryText：失败节点 error 优先，durationMs 存在也不吞错', { timeout: 60_000 }, () => {
@@ -144,7 +157,7 @@ test('resolveNodeSummaryText：完成节点返回产出预览而非耗时；运�
 })
 
 // ---------------------------------------------------------------------------
-// 纯逻辑：buildWorkflowPhaseSections（不过滤节点 + 阶段合并）
+// 纯逻辑：buildWorkflowPhaseSections
 // ---------------------------------------------------------------------------
 
 test('buildWorkflowPhaseSections：保留全部节点（action / cached 无会话 / 外部 execution 均在内）', { timeout: 60_000 }, () => {
@@ -221,7 +234,7 @@ test('buildWorkflowPhaseSections：未匹配命名阶段的节点归入默认阶
 })
 
 // ---------------------------------------------------------------------------
-// 纯逻辑：extractWorkflowLogs / canResumeWorkflowRun / formatWorkflowNodeStats
+// 纯逻辑：extractWorkflowLogs / canResumeWorkflowRun / listResumableFailedRuns
 // ---------------------------------------------------------------------------
 
 test('extractWorkflowLogs：仅提取 kind=log 条目并保留顺序', { timeout: 60_000 }, () => {
@@ -243,9 +256,13 @@ test('extractWorkflowLogs：仅提取 kind=log 条目并保留顺序', { timeout
   )
 })
 
-test('canResumeWorkflowRun：仅非 subagent 且未接管的 failed/aborted run 可断点恢复', { timeout: 60_000 }, () => {
+test('canResumeWorkflowRun：优先消费 run.resumable 与结构化 errorCode，未接管 failed/aborted 可恢复', { timeout: 60_000 }, () => {
   assert.equal(m.canResumeWorkflowRun(run({ status: 'failed' })), true)
   assert.equal(m.canResumeWorkflowRun(run({ status: 'aborted' })), true)
+  assert.equal(m.canResumeWorkflowRun(run({ status: 'failed', resumable: false })), false, '权威 run.resumable=false 优先')
+  assert.equal(m.canResumeWorkflowRun(run({ status: 'failed', resumable: true, error: 'validation_error' })), true, '权威 run.resumable=true 优先')
+  assert.equal(m.canResumeWorkflowRun(run({ status: 'failed', errorCode: 'validation_error', error: '坏参数' })), false, '结构化 errorCode 阻断恢复')
+  assert.equal(m.canResumeWorkflowRun(run({ status: 'failed', errorCode: 'syntax_error', error: '语法错' })), false)
   assert.equal(m.canResumeWorkflowRun(run({ status: 'failed', resumedByRunId: 'wf_next' })), false)
   assert.equal(m.canResumeWorkflowRun(run({ status: 'aborted', resumedByRunId: 'wf_next' })), false)
   assert.equal(m.canResumeWorkflowRun(run({ status: 'failed', kind: 'subagent' })), false)
@@ -253,38 +270,26 @@ test('canResumeWorkflowRun：仅非 subagent 且未接管的 failed/aborted run 
   assert.equal(m.canResumeWorkflowRun(run({ status: 'completed' })), false)
 })
 
-test('canResumeSubagentRun：仅未接管、failed/aborted 且具备执行句柄的 subagent 可恢复', { timeout: 60_000 }, () => {
+test('canResumeSubagentRun：仅未接管、failed/aborted 且具备执行句柄的 subagent 可恢复（尊重 run.resumable）', { timeout: 60_000 }, () => {
   assert.equal(m.canResumeSubagentRun(undefined, true), false)
   assert.equal(m.canResumeSubagentRun(run({ kind: 'workflow', status: 'failed' }), true), false)
   assert.equal(m.canResumeSubagentRun(run({ status: 'failed' }), true), false)
   assert.equal(m.canResumeSubagentRun(run({ kind: 'subagent', status: 'running' }), true), false)
   assert.equal(m.canResumeSubagentRun(run({ kind: 'subagent', status: 'completed' }), true), false)
+  assert.equal(m.canResumeSubagentRun(run({ kind: 'subagent', status: 'failed', resumable: false }), true), false)
   assert.equal(
     m.canResumeSubagentRun(run({ kind: 'subagent', status: 'failed', resumedByRunId: 'wf_next' }), true),
     false,
   )
-  assert.equal(
-    m.canResumeSubagentRun(run({ kind: 'subagent', status: 'failed' }), true),
-    true,
-    '具备关联子会话句柄（hasExecutionHandle=true）时可恢复',
-  )
-  assert.equal(
-    m.canResumeSubagentRun(run({ kind: 'subagent', status: 'aborted' }), true),
-    true,
-    'aborted 后台子代理具备执行句柄时可恢复',
-  )
-  assert.equal(
-    m.canResumeSubagentRun(run({ kind: 'subagent', status: 'failed' }), false),
-    false,
-    '无外部句柄且 nodes 无坐标时不可恢复',
-  )
+  assert.equal(m.canResumeSubagentRun(run({ kind: 'subagent', status: 'failed' }), true), true)
+  assert.equal(m.canResumeSubagentRun(run({ kind: 'subagent', status: 'aborted' }), true), true)
+  assert.equal(m.canResumeSubagentRun(run({ kind: 'subagent', status: 'failed' }), false), false)
   assert.equal(
     m.canResumeSubagentRun(
       run({ kind: 'subagent', status: 'failed', nodes: [node({ id: 's0', status: 'failed', conversationId: 11 })] }),
       false,
     ),
     true,
-    'run.nodes 携带 conversationId 时可恢复',
   )
   assert.equal(
     m.canResumeSubagentRun(
@@ -292,13 +297,13 @@ test('canResumeSubagentRun：仅未接管、failed/aborted 且具备执行句柄
       false,
     ),
     true,
-    'run.nodes 携带 executionId 时可恢复',
   )
 })
 
-test('listResumableFailedRuns：按会话、状态、接管与错误类型过滤可批量恢复候选', { timeout: 60_000 }, () => {
+test('listResumableFailedRuns：按会话、状态、接管、run.resumable 与结构化错误码过滤', { timeout: 60_000 }, () => {
   const candidates = [
     run({ id: 'wf_ok', conversationId: 1, kind: 'workflow', status: 'failed', error: 'gate failed' }),
+    run({ id: 'wf_flag_true', conversationId: 1, kind: 'workflow', status: 'failed', resumable: true, error: 'ignored' }),
     run({
       id: 'wf_plain_valid',
       conversationId: 1,
@@ -320,7 +325,8 @@ test('listResumableFailedRuns：按会话、状态、接管与错误类型过滤
       status: 'failed',
       nodes: [node({ id: 's2', status: 'failed', executionId: 'pane-2' })],
     }),
-    // 排除项
+    run({ id: 'wf_flag_false', conversationId: 1, kind: 'workflow', status: 'failed', resumable: false }),
+    run({ id: 'wf_errcode', conversationId: 1, kind: 'workflow', status: 'failed', errorCode: 'crash_recovery_limit' }),
     run({ id: 'wf_other_conv', conversationId: 2, kind: 'workflow', status: 'failed' }),
     run({ id: 'wf_aborted', conversationId: 1, kind: 'workflow', status: 'aborted' }),
     run({ id: 'wf_running', conversationId: 1, kind: 'workflow', status: 'running' }),
@@ -335,7 +341,7 @@ test('listResumableFailedRuns：按会话、状态、接管与错误类型过滤
   const list = m.listResumableFailedRuns([...candidates, candidates[0]!], 1)
   assert.deepEqual(
     list.map((item) => item.id),
-    ['wf_ok', 'wf_plain_valid', 'wf_sub_conv', 'wf_sub_ext'],
+    ['wf_ok', 'wf_flag_true', 'wf_plain_valid', 'wf_sub_conv', 'wf_sub_ext'],
   )
 })
 
@@ -387,10 +393,10 @@ test('formatWorkflowNodeStats：模型短名 + 紧凑 token，无值返回空', 
 })
 
 // ---------------------------------------------------------------------------
-// 纯逻辑：buildExecutionTree 工作台关联（Active-First 去重，任意深度）
+// 纯逻辑：buildExecutionTree 工作台关联（runs 唯一根源）
 // ---------------------------------------------------------------------------
 
-test('buildExecutionTree：单子代理后台 run 认领的子会话与独立子会话合并去重', { timeout: 60_000 }, () => {
+test('buildExecutionTree：单子代理 run 认领的子会话各自独立挂载，DSL 认领的会话挂 run 下', { timeout: 60_000 }, () => {
   const conversations = [
     summary(11, 'done', 1),
     summary(12, 'working', 1),
@@ -400,18 +406,20 @@ test('buildExecutionTree：单子代理后台 run 认领的子会话与独立子
   const runs = [
     run({ id: 'wf_dsl', nodes: [node({ id: 'a', status: 'done', conversationId: 11 })] }),
     run({ id: 'wf_bg1', kind: 'subagent', nodes: [node({ id: 'b', status: 'running', conversationId: 12 })] }),
+    subagentRun('wf_bg2', 1, 13, 'completed'),
+    subagentRun('wf_other_root', 2, 21, 'completed'),
   ]
   const tree = m.buildExecutionTree({ rootConversationId: 1, conversations, runs })
   const convNodes = tree.filter((n) => n.kind === 'conversation')
   assert.deepEqual(
     convNodes.map((n) => n.conversationId),
     [12, 13],
-    'DSL 认领的 #11 挂 run 节点下；单子代理 run 认领的 #12 与独立 #13 合并去重',
+    'DSL 认领的 #11 挂 run 节点下；单子代理 run 认领的 #12 与 #13 挂根下',
   )
-  assert.equal(convNodes[0]!.run?.id, 'wf_bg1', '#12 应携带认领它的后台 run')
-  assert.equal(convNodes[1]!.run, undefined, '#13 独立子会话无后台 run')
+  assert.equal(convNodes[0]!.run?.id, 'wf_bg1')
+  assert.equal(convNodes[1]!.run?.id, 'wf_bg2')
   const wfNode = tree.find((n) => n.kind === 'workflow')!
-  assert.equal(wfNode.children[0]!.conversationId, 11, 'DSL 认领会话挂 run 节点下')
+  assert.equal(wfNode.children[0]!.conversationId, 11)
   assert.deepEqual(
     m.buildExecutionTree({ rootConversationId: 2, conversations, runs }).map((n) => n.conversationId),
     [21],
@@ -427,12 +435,19 @@ test('buildExecutionTree：Active-First 排序 blocked > working > error > done�
     { ...summary(35, 'idle', 1), updatedAt: 10 },
     { ...summary(36, 'idle', 1), updatedAt: 60 },
   ]
-  const tree = m.buildExecutionTree({ rootConversationId: 1, conversations, runs: [] })
+  const runs = [
+    subagentRun('wf_31', 1, 31, 'completed', { updatedAt: 50 }),
+    subagentRun('wf_32', 1, 32, 'running', { updatedAt: 40 }),
+    subagentRun('wf_33', 1, 33, 'running', { updatedAt: 30 }),
+    subagentRun('wf_34', 1, 34, 'failed', { updatedAt: 20 }),
+    subagentRun('wf_35', 1, 35, 'completed', { updatedAt: 10 }),
+    subagentRun('wf_36', 1, 36, 'completed', { updatedAt: 60 }),
+  ]
+  const tree = m.buildExecutionTree({ rootConversationId: 1, conversations, runs })
   assert.deepEqual(
     tree.map((n) => n.conversationId),
     [33, 32, 34, 36, 31, 35],
   )
-  // 子会话旧 idle + 后台 run running：树节点保持 working，不假完成
   const withBg = m.buildExecutionTree({
     rootConversationId: 1,
     conversations: [{ ...summary(41, 'idle', 1), updatedAt: 5 }],
@@ -472,36 +487,6 @@ test('buildExecutionTree：多个后台 run 优先 parentToolCallId 精确匹配
   }
 })
 
-test('buildExecutionTree：最新 parentToolCallId 无匹配 run 时不关联旧 run，无 parentToolCallId 按 createdAt 最新', { timeout: 60_000 }, () => {
-  const oldRun = run({
-    id: 'wf_old',
-    kind: 'subagent',
-    status: 'failed',
-    createdAt: 1_000,
-    updatedAt: 99_000,
-    parentToolCallId: 'call_old',
-    nodes: [node({ id: 'b', status: 'failed', conversationId: 12 })],
-  })
-  const child = { ...summary(12, 'working', 1), parentToolCallId: 'call_new' }
-  let tree = m.buildExecutionTree({ rootConversationId: 1, conversations: [child], runs: [oldRun] })
-  const conv12 = tree.find((n) => n.conversationId === 12)!
-  assert.equal(conv12.run, undefined, 'parentToolCallId 有值但无匹配 run 时不得关联旧 run')
-
-  const legacy = { ...summary(13, 'working', 1) }
-  const noCallRun = run({
-    id: 'wf_nocall',
-    kind: 'subagent',
-    status: 'running',
-    createdAt: 5_000,
-    updatedAt: 6_000,
-    nodes: [node({ id: 'c', status: 'running', conversationId: 13 })],
-  })
-  tree = m.buildExecutionTree({ rootConversationId: 1, conversations: [legacy], runs: [noCallRun, oldRun] })
-  const conv13 = tree.find((n) => n.conversationId === 13)
-  assert.ok(conv13 !== undefined)
-  assert.equal(conv13.run?.id, 'wf_nocall')
-})
-
 test('buildExecutionTree：缺失真实 summary 时仅携带 run 确认的 conversationId，不虚构对象', { timeout: 60_000 }, () => {
   const bgRun = run({
     id: 'wf_bg15',
@@ -524,13 +509,11 @@ test('resolveNodeSummaryText：done 节点不随后来 child blocked 改写为�
   assert.deepEqual(
     m.resolveNodeSummaryText(done, '正在复用追问', 'blocked'),
     { text: '调研完成', isError: false },
-    'done 历史终态节点保持产出预览',
   )
   const failed = node({ id: 'nd2', status: 'failed', error: 'gate 未通过' })
   assert.deepEqual(
     m.resolveNodeSummaryText(failed, undefined, 'blocked', '确认重试'),
     { text: 'gate 未通过', isError: true },
-    'failed 终态节点保持错误摘要',
   )
   const running = node({ id: 'nd3', status: 'running' })
   assert.deepEqual(
@@ -559,10 +542,9 @@ const stubCtx: PluginClientContextType = {
   conversationId: 1,
   theme: 'dark',
   locale: 'en' as const,
-  translate: (text) => resolveLocalizedText(text, 'en'),
+  translate: (text) => SDK.resolveLocalizedText(text, 'en'),
 }
 
-/** 渲染 WorkflowToolView：docValue 提供 runs 文档（可携带 conversations 桩）。 */
 async function renderWorkflowToolView(
   props: Record<string, unknown>,
   docValue: unknown = undefined,
@@ -572,11 +554,10 @@ async function renderWorkflowToolView(
   const mod = await importWorkflowClientModule('index.tsx')
   const WorkflowToolView = mod['WorkflowToolView'] as (p: Record<string, unknown>) => React.ReactElement
   return renderToString(
-    e(PluginClientContext.Provider, { value: stubCtx }, e(WorkflowToolView, props)),
+    e(SDK.PluginClientContext.Provider, { value: stubCtx }, e(WorkflowToolView, props)),
   )
 }
 
-/** 渲染 WorkflowWorkbenchPanel：docValue 提供 runs 文档（可携带 conversations 桩），conversation 默认 id=1。 */
 async function renderWorkflowWorkbench(
   docValue: unknown = undefined,
   conversations: unknown[] | undefined = undefined,
@@ -586,7 +567,7 @@ async function renderWorkflowWorkbench(
   const mod = await importWorkflowClientModule('index.tsx')
   const WorkflowWorkbenchPanel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
   return renderToString(
-    e(PluginClientContext.Provider, { value: stubCtx }, e(WorkflowWorkbenchPanel, { conversation: viewerConversation })),
+    e(SDK.PluginClientContext.Provider, { value: stubCtx }, e(WorkflowWorkbenchPanel, { conversation: viewerConversation })),
   )
 }
 
@@ -650,7 +631,7 @@ test('buildWorkflowPhaseSections：pending 节点不被 done 掩盖——终结 
     status: 'completed',
     nodes: [node({ id: 'a', status: 'done' }), node({ id: 'b', status: 'pending' })],
   })
-  assert.equal(m.buildWorkflowPhaseSections(completed)[0]!.status, 'pending', 'run 已终结但存在未执行节点不得判 done')
+  assert.equal(m.buildWorkflowPhaseSections(completed)[0]!.status, 'pending')
   const running = run({
     status: 'running',
     nodes: [node({ id: 'a', status: 'done' }), node({ id: 'b', status: 'pending' })],
@@ -661,7 +642,6 @@ test('buildWorkflowPhaseSections：pending 节点不被 done 掩盖——终结 
     nodes: [node({ id: 'a', status: 'done' }), node({ id: 'b', status: 'pending' })],
   })
   assert.equal(m.buildWorkflowPhaseSections(aborted)[0]!.status, 'pending')
-  // skipped 视为已结算：全部 done / skipped 才判 done
   const skipped = run({
     status: 'completed',
     nodes: [node({ id: 'a', status: 'done' }), node({ id: 'b', status: 'skipped' })],
@@ -675,10 +655,15 @@ test('SSR：run 主徽章同源有效状态——run 已完成但子任务仍在
   const doc = {
     runs: [
       run({
-        id: 'wf_straggler', kind: 'workflow', status: 'completed', parentToolCallId: 'call-x',
-        createdAt: 1_000, updatedAt: 60_000,
+        id: 'wf_straggler',
+        kind: 'workflow',
+        status: 'completed',
+        parentToolCallId: 'call-x',
+        createdAt: 1_000,
+        updatedAt: 60_000,
         nodes: [node({ id: 'a', kind: 'agent', status: 'done', conversationId: 11, label: '实现者' })],
       }),
+      subagentRun('wf_21', 11, 21, 'running'),
     ],
   }
   const toolHtml = await renderWorkflowToolView(
@@ -696,72 +681,79 @@ test('SSR：run 主徽章同源有效状态——run 已完成但子任务仍在
   assert.ok(html.includes('Subtree 0/2'), '子树计数如实展示未完成（深层后台子任务计入）')
 })
 
-test('SSR：run 全部子孙结算时主徽章保留自身终态文案（已完成 / 失败 / 已中止）', { timeout: 60_000 }, async () => {
-  const done = await renderWorkflowWorkbench(
-    {
-      runs: [
-        run({
-          id: 'wf_ok', kind: 'workflow', status: 'completed', parentToolCallId: 'c1',
-          nodes: [node({ id: 'a', kind: 'action', status: 'done', label: '动作' })],
-        }),
-      ],
-    },
-  )
-  assert.ok(done.includes('>Completed<'), '全部结算应显示已完成')
-  assert.ok(!done.includes('Self:'), '有效状态与自身一致时不得重复标注')
+test('SSR：run 全部子孙结算时主徽章保留自身终态文案（已完成 / 失败）', { timeout: 60_000 }, async () => {
+  const done = await renderWorkflowWorkbench({
+    runs: [
+      run({
+        id: 'wf_ok',
+        kind: 'workflow',
+        status: 'completed',
+        parentToolCallId: 'c1',
+        nodes: [node({ id: 'a', kind: 'action', status: 'done', label: '动作' })],
+      }),
+    ],
+  })
+  assert.ok(done.includes('>Completed<'))
+  assert.ok(!done.includes('Self:'))
 
-  const failed = await renderWorkflowWorkbench(
-    {
-      runs: [
-        run({
-          id: 'wf_bad', kind: 'workflow', status: 'failed', parentToolCallId: 'c2',
-          nodes: [node({ id: 'a', status: 'failed', error: 'gate 未通过' })],
-        }),
-      ],
-    },
-  )
-  assert.ok(failed.includes('>Failed<'), '自身失败保留更具体终态文案')
+  const failed = await renderWorkflowWorkbench({
+    runs: [
+      run({
+        id: 'wf_bad',
+        kind: 'workflow',
+        status: 'failed',
+        parentToolCallId: 'c2',
+        nodes: [node({ id: 'a', status: 'failed', error: 'gate 未通过' })],
+      }),
+    ],
+  })
+  assert.ok(failed.includes('>Failed<'))
 })
 
 test('SSR：WorkflowToolView 无关联 run 时收口单行并保留折叠详情开关（不虚构工作流卡）', { timeout: 60_000 }, async () => {
   const html = await renderWorkflowToolView({
-    callId: 'w1', toolName: 'SubagentWorkflow', input: { script: 'x' },
-    status: 'running', result: '原始工作流返回结果', conversationId: 1, siblingCalls: [],
+    callId: 'w1',
+    toolName: 'SubagentWorkflow',
+    input: { script: 'x' },
+    status: 'running',
+    result: '原始工作流返回结果',
+    conversationId: 1,
+    siblingCalls: [],
   })
-  assert.ok(html.includes('workflow-trace-row-btn'), '无 run 时渲染紧凑单行开关')
-  assert.ok(html.includes('aria-expanded="false"'), '默认折叠调用详情')
-  assert.ok(!html.includes('workflow-run-card'), '无 run 不虚构工作流卡')
-  assert.ok(!html.includes('原始工作流返回结果'), '折叠态不预先展开原始输出')
+  assert.ok(html.includes('workflow-trace-row-btn'))
+  assert.ok(html.includes('aria-expanded="false"'))
+  assert.ok(!html.includes('workflow-run-card'))
+  assert.ok(!html.includes('原始工作流返回结果'))
 })
 
 test('SSR：工作流节点无折叠手风琴壳，最外层直接直出一体化整卡与动作扁平卡', { timeout: 60_000 }, async () => {
   const html = await renderHelloRun()
-  assert.ok(html.includes('subagent-live-card'), '工作台应直接在最外层直出子代理一体化整卡')
-  assert.ok(html.includes('subagent-card-clickable'), '子代理卡必须携带整卡统一 hover 类')
-  assert.ok(html.includes('workflow-action-card'), '动作节点应渲染扁平双层卡')
-  assert.ok(!html.includes('展开Node details'), '不得包含节点展开/收起按钮文案')
-  assert.ok(!html.includes('收起Node details'), '不得包含节点收起按钮文案')
+  assert.ok(html.includes('subagent-live-card'))
+  assert.ok(html.includes('subagent-card-clickable'))
+  assert.ok(html.includes('workflow-action-card'))
+  assert.ok(!html.includes('展开Node details'))
+  assert.ok(!html.includes('收起Node details'))
 })
 
 test('SSR：多阶段工作流渲染阶段胶囊、日志、产出预览与徽章', { timeout: 60_000 }, async () => {
   const html = await renderHelloRun()
-  assert.ok(/1\.<!-- -->\s*调研|1\. 调研/.test(html), '应渲染阶段 1 标题')
-  assert.ok(/2\.<!-- -->\s*实现|2\. 实现/.test(html), '应渲染阶段 2 标题')
-  assert.ok(html.includes('3/3'), '应渲染全局节点完成计数')
-  assert.match(html, /phase-segment-done[\s\S]*?1\.[\s\S]*?调研[\s\S]*?\(2\/2\)/, '调研阶段胶囊应计入 agent 与 action 两个节点')
-  assert.match(html, /phase-segment-done[\s\S]*?2\.[\s\S]*?实现[\s\S]*?\(1\/1\)/, '实现阶段胶囊应计入 cached 完成节点')
+  assert.ok(/1\.<!-- -->\s*调研|1\. 调研/.test(html))
+  assert.ok(/2\.<!-- -->\s*实现|2\. 实现/.test(html))
+  assert.ok(html.includes('3/3'))
+  assert.match(html, /phase-segment-done[\s\S]*?1\.[\s\S]*?调研[\s\S]*?\(2\/2\)/)
+  assert.match(html, /phase-segment-done[\s\S]*?2\.[\s\S]*?实现[\s\S]*?\(1\/1\)/)
   assert.ok(html.includes('workflow-log-text'))
   assert.ok(html.includes('开始调研'))
   assert.ok(html.includes('实现完成'))
   assert.ok(html.includes('调研结论：可行'))
   assert.ok(html.includes('实现完成，测试通过'))
-  assert.match(html, /badge-warn[^>]*>\s*<!--\s*-->\s*Cached|badge-warn[^>]*>Cached/, 'cached 节点应有 Cached 徽章')
-  assert.ok(html.includes('subagent-worktree-badge'), 'worktree 节点应有分支徽章')
-  assert.ok(html.includes('helm/wf-hello'), '应显示分支名')
-  assert.ok(html.includes('Isolated worktree: /root/code/helm/.worktrees/wf-hello'), 'title 应含完整工作树路径')
-  assert.ok(html.includes('Action'), 'action 节点应显示动作徽章')
-  assert.ok(html.includes('Final output'), '完成 run 应渲染最终产出区')
-  assert.match(html, /workflow-result-preview[^>]*>[^<]*docs\/report\.md/, '折叠 JSON 结果预览不能只显示左花括号')
+  assert.match(html, /badge-warn[^>]*>\s*<!--\s*-->\s*Cached|badge-warn[^>]*>Cached/)
+  assert.ok(html.includes('subagent-worktree-badge'))
+  assert.ok(html.includes('helm/wf-hello'))
+  assert.ok(html.includes('Isolated worktree: /root/code/helm/.worktrees/wf-hello'))
+  assert.ok(html.includes('Action'))
+  assert.ok(html.includes('Final output'))
+  assert.match(html, /workflow-result-preview[^>]*>[^<]*docs\/report\.md/)
   assert.ok(html.includes('docs/report.md'))
   assert.ok(html.includes('Completed'))
   assert.ok(html.includes('Nodes 3/3'))
@@ -770,116 +762,100 @@ test('SSR：多阶段工作流渲染阶段胶囊、日志、产出预览与徽�
 
 test('SSR：一体化整卡无任何并排查看 / 分屏按钮（最新交互约定）', { timeout: 60_000 }, async () => {
   const html = await renderHelloRun()
-  assert.ok(!html.includes('并排查看'), '不得渲染并排查看按钮')
-  assert.ok(!html.includes('subagent-split-btn'), '不得残留分屏按钮类名')
-  assert.ok(!html.includes('workbench-split-btn'), '不得残留工作台分屏按钮类名')
-  assert.ok(!html.includes('在分屏并排打开'), '不得包含分屏打开文案')
+  assert.ok(!html.includes('并排查看'))
+  assert.ok(!html.includes('subagent-split-btn'))
+  assert.ok(!html.includes('workbench-split-btn'))
+  assert.ok(!html.includes('在分屏并排打开'))
 })
 
 test('SSR：断点恢复按钮仅 DSL 工作流可见，后台单子代理不显示', { timeout: 60_000 }, async () => {
-  const dslFailed = await renderWorkflowWorkbench(
-    { runs: [run({ id: 'wf_dsl', kind: 'workflow', status: 'failed', error: '阶段实现失败', parentToolCallId: 'call-dsl', nodes: [node({ id: 'a', status: 'failed', error: 'gate 未通过' })] })] },
-  )
-  assert.ok(dslFailed.includes('Resume from checkpoint'), '失败的 DSL 工作流应显示断点恢复按钮')
+  const dslFailed = await renderWorkflowWorkbench({
+    runs: [run({ id: 'wf_dsl', kind: 'workflow', status: 'failed', error: '阶段实现失败', parentToolCallId: 'call-dsl', nodes: [node({ id: 'a', status: 'failed', error: 'gate 未通过' })] })],
+  })
+  assert.ok(dslFailed.includes('Resume from checkpoint'))
   assert.ok(dslFailed.includes('Failed'))
-  assert.ok(dslFailed.includes('gate 未通过'), '失败节点应展示错误摘要')
+  assert.ok(dslFailed.includes('gate 未通过'))
 
-  const subagentFailed = await renderWorkflowWorkbench(
-    { runs: [run({ id: 'wf_sub', kind: 'subagent', status: 'failed', error: '子代理异常退出', parentToolCallId: 'call-sub', nodes: [node({ id: 'a', status: 'failed' })] })] },
-  )
-  assert.ok(!subagentFailed.includes('Resume from checkpoint'), '失败的后台单子代理不得显示断点恢复按钮')
+  const subagentFailed = await renderWorkflowWorkbench({
+    runs: [run({ id: 'wf_sub', kind: 'subagent', status: 'failed', error: '子代理异常退出', parentToolCallId: 'call-sub', nodes: [node({ id: 'a', status: 'failed' })] })],
+  })
+  assert.ok(!subagentFailed.includes('Resume from checkpoint'))
 })
 
 test('SSR：running 工作流显示中止按钮与执行中徽章', { timeout: 60_000 }, async () => {
-  const html = await renderWorkflowWorkbench(
-    { runs: [run({ id: 'wf_live', status: 'running', parentToolCallId: 'call-run', nodes: [node({ id: 'a', status: 'running', conversationId: 11, phaseTitle: '调研' })] })] },
-  )
-  assert.ok(html.includes('Abort'), 'running run 应显示中止按钮')
-  assert.ok(html.includes('Running'), '应显示执行中徽章')
-  assert.ok(!html.includes('Move to background'), '普通（非前台同步）running run 不得显示转入后台按钮')
+  const html = await renderWorkflowWorkbench({
+    runs: [run({ id: 'wf_live', status: 'running', parentToolCallId: 'call-run', nodes: [node({ id: 'a', status: 'running', conversationId: 11, phaseTitle: '调研' })] })],
+  })
+  assert.ok(html.includes('Abort'))
+  assert.ok(html.includes('Running'))
+  assert.ok(!html.includes('Move to background'))
 })
-
-// ---------------------------------------------------------------------------
-// 纯逻辑：canDetachForegroundRun（前台同步「转入后台」可见性）
-// ---------------------------------------------------------------------------
 
 test('canDetachForegroundRun：仅运行中前台同步 + 发起会话 + human（或缺省）查看方可见', { timeout: 60_000 }, () => {
   const fg = run({ id: 'wf_fg', status: 'running', syncForeground: true, conversationId: 1 })
-  // human / 未标注（缺省 human）：可见。
   assert.equal(m.canDetachForegroundRun(fg, { conversationId: 1, ownedBy: 'human' }), true)
-  assert.equal(m.canDetachForegroundRun(fg, { conversationId: 1 }), true, 'ownedBy 缺省按 human')
-  // automation（bot/helm）：隐藏（服务端同样拒绝，不显示注定失败的入口）。
+  assert.equal(m.canDetachForegroundRun(fg, { conversationId: 1 }), true)
   assert.equal(m.canDetachForegroundRun(fg, { conversationId: 1, ownedBy: 'helm' }), false)
   assert.equal(m.canDetachForegroundRun(fg, { conversationId: 1, ownedBy: 'bot' }), false)
-  // 非发起会话 / 无查看方：隐藏。
   assert.equal(m.canDetachForegroundRun(fg, { conversationId: 2 }), false)
   assert.equal(m.canDetachForegroundRun(fg, undefined), false)
-  // 已转后台 / 终态 / 普通后台 run：隐藏。
   assert.equal(m.canDetachForegroundRun(run({ id: 'wf_d', status: 'running', syncForeground: true, detachedAt: 1, conversationId: 1 }), { conversationId: 1 }), false)
   assert.equal(m.canDetachForegroundRun(run({ id: 'wf_t', status: 'completed', syncForeground: true, conversationId: 1 }), { conversationId: 1 }), false)
   assert.equal(m.canDetachForegroundRun(run({ id: 'wf_b', status: 'running', conversationId: 1 }), { conversationId: 1 }), false)
 })
 
 test('SSR：前台同步 run 仅在查看会话即发起会话且 human 归属时显示「转入后台」', { timeout: 60_000 }, async () => {
-  // 前台同步（syncForeground 未 detached）+ 当前会话 = 发起会话；会话列表
-  // 未提供 ownedBy（缺省 human）。
   const visible = await renderWorkflowWorkbench(
     { runs: [run({ id: 'wf_fg', status: 'running', syncForeground: true, parentToolCallId: 'call-fg', nodes: [node({ id: 'a', status: 'running' })] })] },
     [],
     summary(1, 'working'),
   )
-  assert.ok(visible.includes('Move to background'), '前台同步 running run 应显示转入后台按钮')
+  assert.ok(visible.includes('Move to background'))
 
-  // 查看会话归属 human：显示。
   const humanViewer = await renderWorkflowWorkbench(
     { runs: [run({ id: 'wf_fg_h', status: 'running', syncForeground: true, parentToolCallId: 'call-fg-h', nodes: [node({ id: 'a', status: 'running' })] })] },
     [{ ...summary(1, 'working'), ownedBy: 'human' }],
     { ...summary(1, 'working'), ownedBy: 'human' },
   )
-  assert.ok(humanViewer.includes('Move to background'), 'human 查看方应显示转入后台按钮')
+  assert.ok(humanViewer.includes('Move to background'))
 
-  // 查看会话归属 automation（helm/bot）：隐藏（服务端同样拒绝，不显示注定失败的入口）。
   for (const ownedBy of ['helm', 'bot'] as const) {
     const automationViewer = await renderWorkflowWorkbench(
       { runs: [run({ id: 'wf_fg_a', status: 'running', syncForeground: true, parentToolCallId: 'call-fg-a', nodes: [node({ id: 'a', status: 'running' })] })] },
       [{ ...summary(1, 'working'), ownedBy }],
       { ...summary(1, 'working'), ownedBy },
     )
-    assert.ok(!automationViewer.includes('Move to background'), `automation（${ownedBy}）查看方不得显示转入后台按钮`)
+    assert.ok(!automationViewer.includes('Move to background'))
   }
 
-  // 已转后台（detachedAt）：按钮消失（不可重复 detach）。
   const detached = await renderWorkflowWorkbench(
     { runs: [run({ id: 'wf_fg2', status: 'running', syncForeground: true, detachedAt: 123, parentToolCallId: 'call-fg2', nodes: [node({ id: 'a', status: 'running' })] })] },
     [],
     summary(1, 'working'),
   )
-  assert.ok(!detached.includes('Move to background'), '已转后台的 run 不得再显示转入后台按钮')
+  assert.ok(!detached.includes('Move to background'))
 
-  // 非发起会话查看（run 属于后代会话 2）：按钮隐藏，服务端授权仍兜底。
   const otherConv = await renderWorkflowWorkbench(
     { runs: [run({ id: 'wf_fg3', conversationId: 2, status: 'running', syncForeground: true, parentToolCallId: 'call-fg3', nodes: [node({ id: 'a', status: 'running' })] })] },
     [summary(1, 'working'), summary(2, 'working', 1)],
     summary(1, 'working'),
   )
-  assert.ok(!otherConv.includes('Move to background'), '查看会话非发起会话时不得显示转入后台按钮')
+  assert.ok(!otherConv.includes('Move to background'))
 
-  // 终态 run：按钮消失。
   const settled = await renderWorkflowWorkbench(
     { runs: [run({ id: 'wf_fg4', status: 'completed', syncForeground: true, parentToolCallId: 'call-fg4', nodes: [node({ id: 'a', status: 'done' })] })] },
     [],
     summary(1, 'working'),
   )
-  assert.ok(!settled.includes('Move to background'), '终态 run 不得显示转入后台按钮')
+  assert.ok(!settled.includes('Move to background'))
 })
 
 test('SSR：WorkflowWorkbenchPanel 空态显示占位文案', { timeout: 60_000 }, async () => {
   setWorkflowClientStub({})
   const mod = await importWorkflowClientModule('index.tsx')
   const WorkflowWorkbenchPanel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
-  const conv = summary(1, 'idle')
   const html = renderToString(
-    e(PluginClientContext.Provider, { value: stubCtx }, e(WorkflowWorkbenchPanel, { conversation: conv })),
+    e(SDK.PluginClientContext.Provider, { value: stubCtx }, e(WorkflowWorkbenchPanel, { conversation: summary(1, 'idle') })),
   )
   assert.ok(html.includes('No workflow or subagent runs in this conversation yet.'))
 })
@@ -887,8 +863,9 @@ test('SSR：WorkflowWorkbenchPanel 空态显示占位文案', { timeout: 60_000 
 test('SSR：WorkflowWorkbenchPanel 列出当前会话工作流与子代理', { timeout: 60_000 }, async () => {
   const wf = run({ id: 'wf_list', name: '列表工作流', status: 'running', parentToolCallId: 'c9' })
   const child12 = { ...summary(12, 'working', 1), doing: '正在跑测试' }
+  const sub12 = subagentRun('wf_12', 1, 12, 'running')
   setWorkflowClientStub({
-    docValue: { runs: [wf] },
+    docValue: { runs: [wf, sub12] },
     conversations: [child12],
     conversation: (id) =>
       id === 12
@@ -897,31 +874,35 @@ test('SSR：WorkflowWorkbenchPanel 列出当前会话工作流与子代理', { t
   })
   const mod = await importWorkflowClientModule('index.tsx')
   const WorkflowWorkbenchPanel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
-  const conv = summary(1, 'idle')
   const html = renderToString(
-    e(PluginClientContext.Provider, { value: stubCtx }, e(WorkflowWorkbenchPanel, { conversation: conv })),
+    e(SDK.PluginClientContext.Provider, { value: stubCtx }, e(WorkflowWorkbenchPanel, { conversation: summary(1, 'idle') })),
   )
-  assert.ok(html.includes('Current conversation tasks'), '应渲染工作台统一标题')
-  assert.ok(html.includes('Workflow library'), '应保留工作流库跳转入口')
+  assert.ok(html.includes('Current conversation tasks'))
+  assert.ok(html.includes('Workflow library'))
   assert.ok(html.includes('列表工作流'))
-  assert.ok(html.includes('正在跑测试'), '子代理卡副栏应显示实时 doing')
+  assert.ok(html.includes('正在跑测试'))
 })
 
 test('SSR：外部 agent 节点与 cached 无会话节点不伪造子会话或误标为动作', { timeout: 60_000 }, async () => {
-  const html = await renderWorkflowWorkbench(
-    { runs: [run({ parentToolCallId: 'external-call', status: 'completed', nodes: [
-      node({ id: 'external', kind: 'agent', status: 'done', executionId: 'pane-42', label: '外部实现者', output: '完成' }),
-      node({ id: 'cached', kind: 'agent', status: 'done', cached: true, label: '复用缓存', output: '缓存结果' }),
-    ] })] },
-  )
-  assert.ok(!html.includes('subagent-card-clickable'), '没有真实会话就不能渲染导航卡')
-  assert.ok(!html.includes('Subagent #'), '不能编造子会话编号')
-  assert.ok(!html.includes('workflow-action-card'), 'agent 节点不能误标为 action')
+  const html = await renderWorkflowWorkbench({
+    runs: [
+      run({
+        parentToolCallId: 'external-call',
+        status: 'completed',
+        nodes: [
+          node({ id: 'external', kind: 'agent', status: 'done', executionId: 'pane-42', label: '外部实现者', output: '完成' }),
+          node({ id: 'cached', kind: 'agent', status: 'done', cached: true, label: '复用缓存', output: '缓存结果' }),
+        ],
+      }),
+    ],
+  })
+  assert.ok(!html.includes('subagent-card-clickable'))
+  assert.ok(!html.includes('Subagent #'))
+  assert.ok(!html.includes('workflow-action-card'))
   assert.ok(html.includes('External run') && html.includes('pane-42'))
   assert.ok(html.includes('Cached') && html.includes('缓存结果'))
 })
 
-/** Emoji / 特殊符号黑名单。 */
 const EMOJI_RE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]/u
 
 test('SSR：WorkflowToolView 渲染输出全程无任何 Emoji 或特殊符号字符', { timeout: 60_000 }, async () => {
@@ -950,8 +931,8 @@ test('SSR：resumedByRunId 已接管隐藏恢复入口；工作台批量恢复�
     nodes: [node({ id: 'a', status: 'failed' })],
   })
   const takenHtml = await renderWorkflowWorkbench({ runs: [takenDsl] })
-  assert.ok(!takenHtml.includes('Resume from checkpoint'), 'resumedByRunId 已接管的 DSL run 不得再显示断点恢复按钮')
-  assert.ok(!takenHtml.includes('Resume failed'), '无未接管可恢复任务时不显示恢复失败按钮')
+  assert.ok(!takenHtml.includes('Resume from checkpoint'))
+  assert.ok(!takenHtml.includes('Resume failed'))
 
   const resumableSub = run({
     id: 'wf_sub_fail',
@@ -961,7 +942,136 @@ test('SSR：resumedByRunId 已接管隐藏恢复入口；工作台批量恢复�
     nodes: [node({ id: 's', status: 'failed', conversationId: 11 })],
   })
   const subHtml = await renderWorkflowWorkbench({ runs: [resumableSub] }, [conv11])
-  assert.ok(subHtml.includes('Resume failed (1)'), '工作台顶栏应显示恢复失败计数按钮')
-  assert.ok(subHtml.includes('Resume this background subagent task'), '子代理卡应显示单卡恢复按钮')
-  assert.ok(!EMOJI_RE.test(subHtml), '恢复入口渲染输出不得包含 Emoji')
+  assert.ok(subHtml.includes('Resume failed (1)'))
+  assert.ok(subHtml.includes('Resume this background subagent task'))
+  assert.ok(!EMOJI_RE.test(subHtml))
+})
+
+// ---------------------------------------------------------------------------
+// 回归：瘦身 runs 投影（hasResult + resultPreview，无 result）按需 inspect 完整结果
+// ---------------------------------------------------------------------------
+
+test('WorkflowRunCard / WorkflowWorkbenchPanel：瘦身 run 展示 resultPreview，展开才调 inspect 拉取完整结果并缓存', { timeout: 60_000 }, async () => {
+  mountSharedPluginNamespaces({ realHooks: true })
+  try {
+    const slimRun = run({
+      id: 'wf_slim',
+      name: '瘦身工作流',
+      kind: 'workflow',
+      status: 'completed',
+      createdAt: 1_000,
+      updatedAt: 2_000,
+      hasResult: true,
+      resultPreview: '首行瘦身预览结论…',
+      nodes: [node({ id: 'a', kind: 'action', status: 'done', label: '打包' })],
+    })
+    let resolveInspect: ((v: unknown) => void) | undefined
+    const h = createWorkflowHostHarness({
+      conversationId: 1,
+      runsByConversation: { 1: [slimRun] },
+      onAction: async (_pluginId, actionId) => {
+        if (actionId === 'inspect') {
+          return await new Promise((resolve) => {
+            resolveInspect = resolve
+          })
+        }
+        return {}
+      },
+    })
+    const mod = await importWorkflowClientModule('index.tsx')
+    const Panel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
+    const mounted = h.mountNode(e(Panel, { conversation: summary(1, 'idle') }))
+    try {
+      // 1) 折叠态展示 resultPreview 与「Expand full result」按钮，且零 inspect 请求。
+      assert.ok(mounted.container.textContent?.includes('首行瘦身预览结论…'), '应渲染 resultPreview')
+      assert.equal(h.log.actions.filter((a) => a.actionId === 'inspect').length, 0, '折叠态绝不预拉 inspect')
+      const expandBtn = [...mounted.container.querySelectorAll('button')].find((b) =>
+        (b.textContent ?? '').includes('Expand full result'),
+      ) as HTMLButtonElement | undefined
+      assert.ok(expandBtn, 'hasResult: true 时应提供展开完整结果按钮')
+
+      // 2) 点击展开：触发 inspect({ runId: 'wf_slim' })，等待期展示 loading。
+      act(() => {
+        expandBtn.click()
+      })
+      assert.deepEqual(
+        h.log.actions.filter((a) => a.actionId === 'inspect'),
+        [{ pluginId: 'builtin:workflow', actionId: 'inspect', input: { runId: 'wf_slim' } }],
+      )
+      assert.ok(mounted.container.textContent?.includes('Loading full result…'), '加载中应显示 loading 态')
+
+      // 3) inspect 返回完整结果后展示完整 JSON。
+      await act(async () => {
+        resolveInspect?.({
+          run: { ...slimRun, result: { summary: '完整最终结论', count: 42 } },
+        })
+      })
+      assert.ok(mounted.container.textContent?.includes('完整最终结论'), '展开后展示完整 result')
+      assert.ok(mounted.container.textContent?.includes('42'))
+
+      // 4) 收起再重新展开：命中缓存，不重复调 inspect。
+      const collapseBtn = [...mounted.container.querySelectorAll('button')].find((b) =>
+        (b.textContent ?? '').includes('Collapse full result'),
+      ) as HTMLButtonElement
+      act(() => {
+        collapseBtn.click()
+      })
+      assert.ok(mounted.container.textContent?.includes('首行瘦身预览结论…'))
+      const expandAgainBtn = [...mounted.container.querySelectorAll('button')].find((b) =>
+        (b.textContent ?? '').includes('Expand full result'),
+      ) as HTMLButtonElement
+      act(() => {
+        expandAgainBtn.click()
+      })
+      assert.equal(
+        h.log.actions.filter((a) => a.actionId === 'inspect').length,
+        1,
+        '同一 (runId, updatedAt) 再次展开应命中缓存，不重复发 inspect 请求',
+      )
+      assert.ok(mounted.container.textContent?.includes('完整最终结论'))
+    } finally {
+      mounted.unmount()
+    }
+  } finally {
+    mountSharedPluginNamespaces({ realHooks: false })
+  }
+})
+
+test('WorkflowRunResultBox：inspect 失败时显式展示错误信息（绝不伪造结果）', { timeout: 60_000 }, async () => {
+  mountSharedPluginNamespaces({ realHooks: true })
+  try {
+    const slimRun = run({
+      id: 'wf_inspect_err',
+      kind: 'workflow',
+      status: 'completed',
+      hasResult: true,
+      resultPreview: '预览内容',
+      nodes: [],
+    })
+    const h = createWorkflowHostHarness({
+      conversationId: 1,
+      runsByConversation: { 1: [slimRun] },
+      onAction: async (_p, actionId) => {
+        if (actionId === 'inspect') throw new Error('disk read failed')
+        return {}
+      },
+    })
+    const mod = await importWorkflowClientModule('index.tsx')
+    const Panel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
+    const mounted = h.mountNode(e(Panel, { conversation: summary(1, 'idle') }))
+    try {
+      const expandBtn = [...mounted.container.querySelectorAll('button')].find((b) =>
+        (b.textContent ?? '').includes('Expand full result'),
+      ) as HTMLButtonElement
+      await act(async () => {
+        expandBtn.click()
+      })
+      await act(async () => {})
+      assert.ok(mounted.container.textContent?.includes('Failed to load full result: disk read failed'))
+    } finally {
+      mounted.unmount()
+    }
+  } finally {
+    mountSharedPluginNamespaces({ realHooks: false })
+  }
 })

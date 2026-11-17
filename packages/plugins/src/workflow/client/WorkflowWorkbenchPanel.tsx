@@ -1,37 +1,26 @@
 /**
  * builtin:workflow right workbench panel (tasks):
  * - renders the current conversation's first-level execution nodes (workflow /
- *   external / conversation) per the unified execution tree
- *   `buildExecutionTree`, eliminating duplicated background native subagent
- *   cards, misclassified external nodes, deep-descendant flat-list leaks and
- *   double counting;
- * - keeps `backgroundRun`, `executionToolStatus` and `WorktreeInspectSection`
- *   for standalone/background native subagents (Git Diff inspection and
- *   cleanup), losslessly absorbing all details moved out of the timeline
- *   `.trace-row` collapse;
- * - supports jumping from a timeline or bottom activity tray click straight
- *   to the matching `run.id` via `workbench-focus`;
- * - the duplicated workflow definition library list is gone (only a light
- *   top-right jump to the standalone `library` fullscreen view remains).
+ *   external / conversation) rooted exclusively in `runs`;
+ * - supports on-demand `inspect` result expansion for slimmed projected runs.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { WorkbenchPanelProps } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
-import { MarkdownText, resolveLocalizedText, useConversations, usePluginContext, usePluginLocale } from '@helm/plugin-client'
+import { resolveLocalizedText, useConversations, usePluginContext, usePluginLocale } from '@helm/plugin-client'
 import { usePluginSessionDoc } from './hooks.ts'
-import { SPIN } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
-import { WorkflowRunCardBody } from './WorkflowRunCard.tsx'
+import { WorkflowRunCardBody, WorkflowRunResultBox } from './WorkflowRunCard.tsx'
 import { SubagentLiveCard } from './SubagentCard.tsx'
 import { ExternalRunSummary } from './ExternalRunSummary.tsx'
 import { WorktreeInspectSection } from './WorktreeInspectSection.tsx'
 import { buildExecutionTree } from './model-execution-tree.ts'
 import type { ExecutionNode } from './model-execution-tree.ts'
 import { executionToolStatus } from './model-execution-status.ts'
-import { stringifyPretty } from './model-format.ts'
 import { listResumableFailedRuns, parseResumeFailedResult } from './model-run.ts'
 import {
+  SPIN,
   WORKBENCH_EMPTY_NO_CONVERSATION,
   WORKBENCH_EMPTY_NO_RUNS,
   WORKBENCH_HEAD_TITLE,
@@ -251,6 +240,7 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
             }
 
             if (node.kind === 'external' && run !== undefined) {
+              const resultOpen = resultOpenIds[run.id] ?? false
               return (
                 <div
                   key={node.key}
@@ -260,7 +250,17 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
                   }}
                   className={`workflow-workbench-run-wrap${isFocused ? ' workflow-workbench-run-focused' : ''}`}
                 >
-                  <ExternalSubagentWorkbenchCard run={run} viewer={viewerScope} />
+                  <ExternalSubagentWorkbenchCard
+                    run={run}
+                    viewer={viewerScope}
+                    resultOpen={resultOpen}
+                    onToggleResult={() =>
+                      setResultOpenIds((prev) => ({
+                        ...prev,
+                        [run.id]: !(prev[run.id] ?? false),
+                      }))
+                    }
+                  />
                 </div>
               )
             }
@@ -307,17 +307,19 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
 function ExternalSubagentWorkbenchCard({
   run,
   viewer,
+  resultOpen,
+  onToggleResult,
 }: {
   run: WorkflowRunSummary
   viewer: { conversationId: number; ownedBy?: string } | undefined
+  resultOpen: boolean
+  onToggleResult: () => void
 }): ReactNode {
-  const locale = usePluginLocale()
   const worktreeNode = run.nodes?.find((n) => n.worktree !== undefined)
   const execNode = run.nodes?.find((n) => n.executionId !== undefined || n.nodeId !== undefined || n.effectiveCwd !== undefined)
   const worktree = worktreeNode?.worktree
   const executionId = execNode?.executionId
   const toolStatus = run.status === 'running' ? 'running' : run.status === 'completed' ? 'done' : 'error'
-  const resultPretty = useMemo(() => stringifyPretty(run.result), [run.result])
 
   return (
     <div className="workflow-workbench-external">
@@ -330,18 +332,13 @@ function ExternalSubagentWorkbenchCard({
         effectiveCwd={execNode?.effectiveCwd}
         viewer={viewer}
       />
-      {run.status === 'completed' && run.result !== undefined ? (
-        <div className="workflow-result-box">
-          <div className="trace-section-label">{resolveLocalizedText(WORKBENCH_RESULT_SECTION, locale)}</div>
-          {typeof run.result === 'string' ? (
-            <MarkdownText text={run.result} />
-          ) : resultPretty !== undefined ? (
-            <pre className="code-block-pre workflow-node-pre selectable">
-              <code>{resultPretty}</code>
-            </pre>
-          ) : null}
-        </div>
-      ) : null}
+      <WorkflowRunResultBox
+        run={run}
+        resultOpen={resultOpen}
+        onToggleResult={onToggleResult}
+        sectionLabel={WORKBENCH_RESULT_SECTION}
+        renderStringAsMarkdown
+      />
       {worktree !== undefined ? (
         <WorktreeInspectSection
           worktree={{

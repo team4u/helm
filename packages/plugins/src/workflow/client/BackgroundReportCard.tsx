@@ -13,9 +13,6 @@ import { useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { TimelineRendererProps } from '@helm/protocol'
 import { CopyButton, MarkdownText, formatCompactTimestamp, usePluginContext, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
-import type { HelmLocale } from '@helm/plugin-client'
-import { RUN_BADGE } from './presentation.ts'
-import { runStatusLabel } from './copy.ts'
 import {
   REPORT_INVALID_BADGE,
   REPORT_INVALID_CALLOUT,
@@ -34,6 +31,8 @@ import {
   REPORT_WORKFLOW_TITLE,
   reportOpenChildTitle,
   reportToggleLabel,
+  RUN_BADGE,
+  runStatusLabel,
 } from './copy.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import {

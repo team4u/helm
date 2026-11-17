@@ -9,9 +9,10 @@ import { Fragment, useState } from 'react'
 import type { ReactNode } from 'react'
 import { formatDurationMs, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helm/plugin-client'
 import { useElapsedNowMs } from './hooks.ts'
-import { SPIN, EXECUTION_BADGE, EXECUTION_ICON } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import {
+  EXECUTION_BADGE,
+  EXECUTION_ICON,
   execApprovalBadge,
   execCollapseChildrenLabel,
   EXEC_COLLAPSE_CHILDREN_TITLE,
@@ -20,6 +21,7 @@ import {
   execOpenConversationLabel,
   execOpenConversationTitle,
   executionStatusLabel,
+  SPIN,
 } from './copy.ts'
 import type { ExecutionNode } from './model-execution-tree.ts'
 import { executionNodeTitle, resolveExecutionNodeElapsedMs } from './model-execution-view.ts'

@@ -12,7 +12,6 @@ import type { ComposerScopeProps } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { formatDurationMs, resolveLocalizedText, useConversations, usePluginContext, usePluginLocale } from '@helm/plugin-client'
 import { useElapsedNowMs, usePluginSessionDoc } from './hooks.ts'
-import { SPIN } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { buildActiveTraySummary } from './model-active-tray.ts'
 import { requestWorkbenchRunFocus } from './workbench-focus.ts'
@@ -20,6 +19,7 @@ import {
   ACTION_ABORT,
   ACTION_DETACH,
   actionDetachDone,
+  SPIN,
   TRAY_COLLAPSE,
   TRAY_DETAILS,
   TRAY_EXPAND,

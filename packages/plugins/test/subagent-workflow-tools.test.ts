@@ -69,6 +69,17 @@ function toolResultText(detail: { entries: Array<{ kind: string; model?: unknown
     .join('\n')
 }
 
+/** 工具结果 entry 结构化输出（pi.tool-result 的 model[0].details）。 */
+function toolResultDetails(detail: { entries: Array<{ kind: string; model?: unknown[] }> }, toolName: string): Record<string, unknown> {
+  const entry = [...detail.entries]
+    .reverse()
+    .find((e) => e.kind === 'pi.tool-result' && toolNameOf(e.model) === toolName)
+  assert.ok(entry, `应存在 ${toolName} 的 pi.tool-result entry`)
+  const message = entry.model?.[0] as { details?: unknown } | undefined
+  assert.ok(message?.details && typeof message.details === 'object' && !Array.isArray(message.details), '应携带结构化 details')
+  return message.details as Record<string, unknown>
+}
+
 function toolNameOf(model: unknown[] | undefined): string | undefined {
   const message = model?.[0] as { toolName?: string } | undefined
   return message?.toolName
@@ -171,29 +182,27 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       assert.equal(payload.effort, 'low')
       assert.equal(payload.isolation, undefined, '未传 isolation 时不得凭空出现')
 
-      // 原生执行：真子会话派生；工具文本独立回报 conversationId（续接标识）。
+      // 原生执行：真子会话派生；structuredOutput.execution 与纯 JSON 文本回报执行元数据（无 [subagent ...] 尾行）。
       const detail = await kernel.getConversationDetail(1, { limit: 50 })
       const text = toolResultText(detail, 'subagent')
+      const structured = toolResultDetails(detail, 'subagent')
       const child = kernel
         .listConversations()
         .find((c) => c.parentConversationId === 1)
       assert.ok(child, '应派生真子会话')
-      assert.ok(
-        text.includes(`conversationId=${child.id}`),
-        `工具输出应含续接标识 conversationId=${child.id}，实得：${text.slice(-200)}`,
-      )
-      assert.ok(text.includes('子代理的回答'), '业务结果原样回传')
-      assert.ok(
-        text.includes(`cwd=${childCwd}`),
-        `执行元数据应含 effectiveCwd=${childCwd}`,
-      )
+      assert.equal(text.includes('[subagent '), false, `不得追加 [subagent ...] 尾行：${text}`)
+      assert.deepEqual(JSON.parse(text), structured, '文本通道应为纯 JSON 信封')
+      assert.equal(structured['result'], '子代理的回答', '业务结果原样回传')
+      const execution = structured['execution'] as Record<string, unknown>
+      assert.equal(execution['conversationId'], child.id, 'structuredOutput.execution 应含 conversationId')
+      assert.equal(execution['effectiveCwd'], childCwd, `执行元数据应含 effectiveCwd=${childCwd}`)
       assert.equal(await kernel.getLastAssistantText(1), '主回合完成')
     } finally {
       await kernel.close()
     }
   })
 
-  it('resume 续接：以首调返回的 conversationId 续接原会话，不新建；钩子载荷与尾行均可见 resume', { timeout: 60_000 }, async () => {
+  it('resume 续接：以首调返回的 conversationId 续接原会话，不新建；钩子载荷与 structuredOutput.execution 均可见', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'sa2')
     const { models, faux } = makeFauxModels()
     const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
@@ -238,11 +247,10 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
 
       const detail = await kernel.getConversationDetail(1, { limit: 50 })
       const text = toolResultText(detail, 'subagent')
-      assert.ok(
-        text.includes(`resume=${child.id}`) && text.includes(`conversationId=${child.id}`),
-        `续接输出应同时含 resume 与 conversationId 标识：${text.slice(-200)}`,
-      )
-      assert.ok(text.includes('续接回答'))
+      const structured = toolResultDetails(detail, 'subagent')
+      assert.equal(text.includes('[subagent '), false)
+      assert.equal((structured['execution'] as Record<string, unknown>)?.['conversationId'], child.id)
+      assert.equal(structured['result'], '续接回答')
     } finally {
       await kernel.close()
     }
@@ -331,12 +339,16 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
 
       const detail = await kernel.getConversationDetail(1, { limit: 50 })
       const text = toolResultText(detail, 'subagent')
-      // 文本尾行：外部执行标识可见（模型可作续接/对账凭据）。
-      assert.ok(text.includes('executionId=pane-9'), `输出应含 executionId：${text.slice(-200)}`)
-      assert.ok(text.includes('cwd=/srv/wt/helm-42'))
-      assert.ok(text.includes('worktree=/srv/wt/helm-42@helm/wf-run-1'))
-      // 业务 result 原样；元数据独立行，不混入 result 对象本身。
-      assert.ok(text.includes('external'))
+      const structured = toolResultDetails(detail, 'subagent')
+      assert.equal(text.includes('[subagent '), false)
+      assert.deepEqual(JSON.parse(text), structured)
+      assert.deepEqual(structured['result'], { external: 'done', detail: 7 })
+      assert.deepEqual(structured['execution'], {
+        nodeId: 'local',
+        executionId: 'pane-9',
+        effectiveCwd: '/srv/wt/helm-42',
+        worktree: { id: 'local:/srv/wt/helm-42', path: '/srv/wt/helm-42', branch: 'helm/wf-run-1' },
+      })
       assert.equal(
         kernel.listConversations().filter((c) => c.parentConversationId === 1).length,
         0,
@@ -574,10 +586,10 @@ function extractRunId(text: string): string | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// 2.5 subagent 失败但子会话已创建：错误结果同附 footer + execution
+// 2.5 subagent 失败但子会话已创建：错误结果仍持久化 structuredOutput.execution
 // ---------------------------------------------------------------------------
 
-test('subagent 失败于子会话创建后：错误输出仍附 footer 与 execution（失败卡可续接子会话）', { timeout: 60_000 }, async () => {
+test('subagent 失败于子会话创建后：错误结果不附文本 footer，仍持久化 structuredOutput.execution（失败卡可续接子会话）', { timeout: 60_000 }, async () => {
   const dir = join(rootDir, 'sa-err-footer')
   const { models, faux } = makeFauxModels()
   const app = await createHelm({ buildProvider: createPluginBuildProvider(),
@@ -602,13 +614,16 @@ test('subagent 失败于子会话创建后：错误输出仍附 footer 与 execu
 
     const detail = await app.kernel.getConversationDetail(1, { limit: 50 })
     const text = toolResultText(detail, 'subagent')
+    const structured = toolResultDetails(detail, 'subagent')
     assert.ok(text.includes('subagent_failed'), `应显式失败：${text.slice(0, 200)}`)
-    // 失败仍附标准 footer：前端可从失败卡直接关联/续接子会话。
+    assert.equal(text.includes('[subagent '), false, '失败文本不附 [subagent ...] 尾行')
+    // 失败仍附 structuredOutput.execution：前端直接读取结构化关联子会话。
     const child = app.kernel.listConversations().find((c) => c.parentConversationId === 1)
     assert.ok(child, '子会话应已创建')
-    assert.ok(
-      text.includes(`conversationId=${child.id}`),
-      `失败输出应附 footer conversationId=${child.id}，实得：${text.slice(-200)}`,
+    assert.equal(
+      (structured['execution'] as Record<string, unknown>)?.['conversationId'],
+      child.id,
+      `失败输出 structuredOutput.execution 应含 conversationId=${child.id}，实得：${JSON.stringify(structured)}`,
     )
     // 运行期关联也已登记（后续 resume 更新 parentToolCallId 前历史失败卡不失联）。
     assert.equal(child.parentToolCallId, 'call-err-1')
