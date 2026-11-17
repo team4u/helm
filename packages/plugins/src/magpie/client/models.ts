@@ -1,11 +1,15 @@
 /**
- * builtin:magpie 插件 client.tsx 纯数据模型（无组件导出，保 Fast Refresh 契约）。
+ * Pure data models for the builtin:magpie client.tsx (no component exports,
+ * Fast Refresh friendly).
  *
- * doc 形状与 magpie/contracts.ts MagpieStatusDoc 契约同构；宽容解析，
- * doc 未到达时返回安全缺省，不虚构数据。
+ * The doc shape mirrors the MagpieStatusDoc contract from magpie/contracts.ts;
+ * parsing is lenient: when the doc has not arrived we return safe defaults
+ * instead of fabricating data.
  */
+import { DEFAULT_HELM_LOCALE, type HelmLocale } from '@helm/plugin-client'
+import { magpieBoolLabel } from './copy.ts'
 
-/** MagpieStatusDoc 展示字段子集。 */
+/** Display field subset of MagpieStatusDoc. */
 export interface MagpieStatusView {
   gatewayUrl: string
   configuredRoot: boolean
@@ -34,7 +38,7 @@ const EMPTY: MagpieStatusView = {
   diagnostics: [],
 }
 
-/** 宽容读取 status doc（缺失字段回落安全缺省）。 */
+/** Lenient read of the status doc (missing fields fall back to safe defaults). */
 export function parseStatus(doc: MagpieStatusView | undefined): MagpieStatusView {
   if (doc === undefined || typeof doc !== 'object') return EMPTY
   return {
@@ -53,12 +57,12 @@ export function parseStatus(doc: MagpieStatusView | undefined): MagpieStatusView
   }
 }
 
-/** 布尔展示：是 / 否。 */
-export function boolLabel(value: boolean): string {
-  return value ? '是' : '否'
+/** Boolean display: yes / no (resolved against the given locale, defaults to en). */
+export function boolLabel(value: boolean, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+  return magpieBoolLabel(value, locale)
 }
 
-/** 配额剩余百分比色调（<20% 警戒）。 */
+/** Quota remaining-percent tone (<20% warning threshold). */
 export function quotaTone(remainingPercent: number): 'ok' | 'warn' | 'err' {
   if (remainingPercent < 5) return 'err'
   if (remainingPercent < 20) return 'warn'

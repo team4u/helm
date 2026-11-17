@@ -1,13 +1,21 @@
 /**
- * builtin:triggers 插件 client.tsx 组件（只导出组件，保 Fast Refresh 契约）：
- * - TriggersManagerScreen：cron / webhook 管理表 + 点击行打开右侧详情抽屉；
- *   行动作 cron_trigger / cron_delete / webhook_delete 经 ctx.callAction；
- * - TriggersSettingsPanel：设置面板（计数概览 + 管理入口引导）。
+ * builtin:triggers client.tsx components (component exports only, Fast
+ * Refresh contract):
+ * - TriggersManagerScreen: cron / webhook management tables + a right-side
+ *   detail drawer opened by row clicks; row actions cron_trigger /
+ *   cron_delete / webhook_delete go through ctx.callAction;
+ * - TriggersSettingsPanel: settings panel (count overview + manager entry).
  *
- * secret 边界：webhook secret 不在 doc 中展示（hasSecret 布尔协作契约）；
- * 创建与删除沿用 helm CLI / HTTP 动作端点。通用结构一律复用宿主设计系统与
- * @helm/plugin-client 原语（Screen / ScreenSection / KvGrid / Dialog / HelmIcon /
- * .callout-error / .helm-table / .loading-state），无原生下拉框，零 Emoji。
+ * Secret boundary: webhook secrets are never rendered from the doc (the
+ * hasSecret boolean is the collaboration contract); creation and deletion
+ * stay on the helm CLI / HTTP action endpoints. Generic structure reuses the
+ * host design system and @helm/plugin-client primitives (Screen /
+ * ScreenSection / KvGrid / Dialog / HelmIcon / .callout-error / .helm-table /
+ * .loading-state), no native selects, zero Emoji.
+ *
+ * Display copy resolves from copy.ts against the active host locale (no
+ * independent language state, no localStorage); backend error messages pass
+ * through unchanged apart from the localized failure prefix.
  */
 import { useState } from 'react'
 import './styles.css'
@@ -27,6 +35,8 @@ import {
   formatTime,
   usePluginContext,
   usePluginDoc,
+  usePluginLocale,
+  usePluginTranslator,
 } from '@helm/plugin-client'
 import {
   formatTriggerTargetSummary,
@@ -36,6 +46,55 @@ import {
   type TriggerDetailSelection,
   type WebhookRow,
 } from './models.ts'
+import {
+  TRIGGERS_CLOSE,
+  TRIGGERS_COL_ACTIONS,
+  TRIGGERS_COL_COMMAND,
+  TRIGGERS_COL_CREATED,
+  TRIGGERS_COL_DESCRIPTION,
+  TRIGGERS_COL_ENABLED,
+  TRIGGERS_COL_LAST_ERROR,
+  TRIGGERS_COL_LAST_RUN,
+  TRIGGERS_COL_NEXT_RUN,
+  TRIGGERS_COL_SCHEDULE,
+  TRIGGERS_COMMAND_SECTION,
+  TRIGGERS_CRON_DETAIL_SUBTITLE,
+  TRIGGERS_CRON_LOADING,
+  TRIGGERS_CRON_SECTION,
+  TRIGGERS_DELETE,
+  TRIGGERS_DETAIL_TITLE,
+  TRIGGERS_DISABLED,
+  TRIGGERS_ENABLED,
+  TRIGGERS_KV_CATCH_UP,
+  TRIGGERS_KV_CREATED,
+  TRIGGERS_KV_CRON_COUNT,
+  TRIGGERS_KV_CRON_EXPRESSION,
+  TRIGGERS_KV_DELIVERY_TARGET,
+  TRIGGERS_KV_DESCRIPTION,
+  TRIGGERS_KV_LAST_RUN,
+  TRIGGERS_KV_NEXT_RUN,
+  TRIGGERS_KV_SECRET_STATE,
+  TRIGGERS_KV_THREAD_KEY,
+  TRIGGERS_KV_TIMEZONE,
+  TRIGGERS_KV_WEBHOOK_COUNT,
+  TRIGGERS_MANAGER_NOTE,
+  TRIGGERS_OFF,
+  TRIGGERS_ON,
+  TRIGGERS_OPEN_MANAGER,
+  TRIGGERS_SCREEN_TITLE,
+  TRIGGERS_SECRET_CONFIGURED,
+  TRIGGERS_SECRET_MISSING,
+  TRIGGERS_SETTINGS_LOADING,
+  TRIGGERS_SETTINGS_NOTE,
+  TRIGGERS_SETTINGS_SECTION,
+  TRIGGERS_SPLIT_SUFFIX,
+  TRIGGERS_TABLE_EMPTY,
+  TRIGGERS_TRIGGER_NOW,
+  TRIGGERS_WEBHOOK_DETAIL_SUBTITLE,
+  TRIGGERS_WEBHOOK_LOADING,
+  TRIGGERS_WEBHOOK_SECTION,
+  triggersActionFailed,
+} from './copy.ts'
 
 function DocLoading({ label }: { label: string }): ReactNode {
   return (
@@ -56,12 +115,15 @@ function ActionError({ message }: { message: string }): ReactNode {
 }
 
 /**
- * 管理表内行动作钩子。pending 为全局单值：任一动作在途时全部行按钮统一
- * disabled（杜绝「看似可点实际无动作」），完成后恢复。由 ManagerScreen
- * 持有一份并下传两张表，保证跨表也互斥。
+ * Shared row-action hook for the management tables. `pending` is a single
+ * global value: while any action is in flight every row button is disabled
+ * uniformly (no "looks clickable but does nothing" states) and restored on
+ * completion. The ManagerScreen holds one instance and passes it down to
+ * both tables, so the mutual exclusion spans tables as well.
  */
 function useRowAction() {
   const ctx = usePluginContext()
+  const locale = usePluginLocale()
   const [pending, setPending] = useState<string | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   const run = (key: string, actionId: string, input: Record<string, unknown>): void => {
@@ -71,7 +133,7 @@ function useRowAction() {
     void ctx
       .callAction(actionId, input)
       .catch((err: unknown) => {
-        setError(`${actionId} 失败：${err instanceof Error ? err.message : String(err)}`)
+        setError(triggersActionFailed(actionId, err instanceof Error ? err.message : String(err), locale))
       })
       .finally(() => {
         setPending(undefined)
@@ -116,7 +178,7 @@ function RowAction({
   )
 }
 
-/** Cron 定时任务表（动作钩子由上层共享下传；点击行打开详情抽屉）。 */
+/** Cron jobs table (action hook shared from above; row clicks open the detail drawer). */
 function CronTable({
   jobs,
   loading,
@@ -130,6 +192,7 @@ function CronTable({
   selectedId?: string
   onSelect: (id: string) => void
 }): ReactNode {
+  const t = usePluginTranslator()
   const { pending, run } = actions
   return (
     <div className="tg-table-wrap">
@@ -138,26 +201,26 @@ function CronTable({
           <thead>
             <tr>
               <th>ID</th>
-              <th>调度</th>
-              <th>指令</th>
-              <th>启用</th>
-              <th>上次运行</th>
-              <th>下次运行</th>
-              <th>最近错误</th>
-              <th className="cell-actions">操作</th>
+              <th>{t(TRIGGERS_COL_SCHEDULE)}</th>
+              <th>{t(TRIGGERS_COL_COMMAND)}</th>
+              <th>{t(TRIGGERS_COL_ENABLED)}</th>
+              <th>{t(TRIGGERS_COL_LAST_RUN)}</th>
+              <th>{t(TRIGGERS_COL_NEXT_RUN)}</th>
+              <th>{t(TRIGGERS_COL_LAST_ERROR)}</th>
+              <th className="cell-actions">{t(TRIGGERS_COL_ACTIONS)}</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
                 <td colSpan={8}>
-                  <DocLoading label="Cron 任务读取中..." />
+                  <DocLoading label={t(TRIGGERS_CRON_LOADING)} />
                 </td>
               </tr>
             ) : jobs.length === 0 ? (
               <tr>
                 <td colSpan={8} className="table-empty">
-                  暂无数据
+                  {t(TRIGGERS_TABLE_EMPTY)}
                 </td>
               </tr>
             ) : (
@@ -175,32 +238,32 @@ function CronTable({
                   }}
                 >
                   <td data-label="ID" className="mono">{job.id}</td>
-                  <td data-label="调度" className="mono">{job.schedule}</td>
-                  <td data-label="指令" className="cell-ellipsis" title={job.text}>{job.text}</td>
-                  <td data-label="启用">
+                  <td data-label={t(TRIGGERS_COL_SCHEDULE)} className="mono">{job.schedule}</td>
+                  <td data-label={t(TRIGGERS_COL_COMMAND)} className="cell-ellipsis" title={job.text}>{job.text}</td>
+                  <td data-label={t(TRIGGERS_COL_ENABLED)}>
                     <span className={`badge badge-${job.enabled ? 'ok' : 'neutral'}`}>
-                      <span>{job.enabled ? '启用' : '停用'}</span>
+                      <span>{job.enabled ? t(TRIGGERS_ENABLED) : t(TRIGGERS_DISABLED)}</span>
                     </span>
                   </td>
-                  <td data-label="上次运行">{formatTime(job.lastRunAt) || '—'}</td>
-                  <td data-label="下次运行">{formatTime(job.nextRunAt) || '—'}</td>
-                  <td data-label="最近错误" className="cell-error" title={job.lastError ?? ''}>
+                  <td data-label={t(TRIGGERS_COL_LAST_RUN)}>{formatTime(job.lastRunAt) || '—'}</td>
+                  <td data-label={t(TRIGGERS_COL_NEXT_RUN)}>{formatTime(job.nextRunAt) || '—'}</td>
+                  <td data-label={t(TRIGGERS_COL_LAST_ERROR)} className="cell-error" title={job.lastError ?? ''}>
                     {job.lastError ?? '—'}
                   </td>
-                  <td data-label="操作" className="cell-actions">
+                  <td data-label={t(TRIGGERS_COL_ACTIONS)} className="cell-actions">
                     <div
                       className="row-actions-group"
                       onClick={(e) => e.stopPropagation()}
                       onKeyDown={(e) => e.stopPropagation()}
                     >
                       <RowAction
-                        label="立即触发"
+                        label={t(TRIGGERS_TRIGGER_NOW)}
                         iconName="zap"
                         disabled={pending !== undefined}
                         onClick={() => run(`trigger:${job.id}`, 'cron_trigger', { id: job.id })}
                       />
                       <RowAction
-                        label="删除"
+                        label={t(TRIGGERS_DELETE)}
                         iconName="trash-2"
                         disabled={pending !== undefined}
                         danger
@@ -218,7 +281,7 @@ function CronTable({
   )
 }
 
-/** Webhook 端点表（动作钩子由上层共享下传；点击行打开详情抽屉）。 */
+/** Webhook endpoints table (action hook shared from above; row clicks open the detail drawer). */
 function WebhookTable({
   webhooks,
   loading,
@@ -232,6 +295,7 @@ function WebhookTable({
   selectedId?: string
   onSelect: (id: string) => void
 }): ReactNode {
+  const t = usePluginTranslator()
   const { pending, run } = actions
   return (
     <div className="tg-table-wrap">
@@ -240,23 +304,23 @@ function WebhookTable({
           <thead>
             <tr>
               <th>ID</th>
-              <th>描述</th>
-              <th>ThreadKey</th>
-              <th>创建时间</th>
-              <th className="cell-actions">操作</th>
+              <th>{t(TRIGGERS_COL_DESCRIPTION)}</th>
+              <th>{t(TRIGGERS_KV_THREAD_KEY)}</th>
+              <th>{t(TRIGGERS_COL_CREATED)}</th>
+              <th className="cell-actions">{t(TRIGGERS_COL_ACTIONS)}</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
                 <td colSpan={5}>
-                  <DocLoading label="Webhook 端点读取中..." />
+                  <DocLoading label={t(TRIGGERS_WEBHOOK_LOADING)} />
                 </td>
               </tr>
             ) : webhooks.length === 0 ? (
               <tr>
                 <td colSpan={5} className="table-empty">
-                  暂无数据
+                  {t(TRIGGERS_TABLE_EMPTY)}
                 </td>
               </tr>
             ) : (
@@ -274,19 +338,19 @@ function WebhookTable({
                   }}
                 >
                   <td data-label="ID" className="mono">{hook.id}</td>
-                  <td data-label="描述" className="cell-ellipsis" title={hook.description ?? ''}>
+                  <td data-label={t(TRIGGERS_COL_DESCRIPTION)} className="cell-ellipsis" title={hook.description ?? ''}>
                     {hook.description ?? '—'}
                   </td>
-                  <td data-label="ThreadKey" className="mono">{hook.threadKey ?? '—'}</td>
-                  <td data-label="创建时间">{formatTime(hook.createdAt) || '—'}</td>
-                  <td data-label="操作" className="cell-actions">
+                  <td data-label={t(TRIGGERS_KV_THREAD_KEY)} className="mono">{hook.threadKey ?? '—'}</td>
+                  <td data-label={t(TRIGGERS_COL_CREATED)}>{formatTime(hook.createdAt) || '—'}</td>
+                  <td data-label={t(TRIGGERS_COL_ACTIONS)} className="cell-actions">
                     <div
                       className="row-actions-group"
                       onClick={(e) => e.stopPropagation()}
                       onKeyDown={(e) => e.stopPropagation()}
                     >
                       <RowAction
-                        label="删除"
+                        label={t(TRIGGERS_DELETE)}
                         iconName="trash-2"
                         disabled={pending !== undefined}
                         danger
@@ -317,7 +381,9 @@ function TriggerDetailDrawer({
   inline?: boolean
   onClose: () => void
 }): ReactNode {
-  const title = cronJob !== undefined ? cronJob.id : webhook !== undefined ? webhook.id : '触发器详情'
+  const locale = usePluginLocale()
+  const t = usePluginTranslator()
+  const title = cronJob !== undefined ? cronJob.id : webhook !== undefined ? webhook.id : t(TRIGGERS_DETAIL_TITLE)
 
   return (
     <Dialog
@@ -337,14 +403,14 @@ function TriggerDetailDrawer({
                   <DialogTitle className="primary-drawer-title break-word mono">{title}</DialogTitle>
                   {cronJob !== undefined ? (
                     <span className={`badge badge-${cronJob.enabled ? 'ok' : 'neutral'}`}>
-                      {cronJob.enabled ? '启用' : '停用'}
+                      {cronJob.enabled ? t(TRIGGERS_ENABLED) : t(TRIGGERS_DISABLED)}
                     </span>
                   ) : webhook !== undefined ? (
                     <span className="badge badge-neutral">Webhook</span>
                   ) : null}
                 </div>
                 <div className="text-subtle">
-                  {cronJob !== undefined ? 'Cron 定时触发器详情' : 'Webhook 触发端点详情'}
+                  {cronJob !== undefined ? t(TRIGGERS_CRON_DETAIL_SUBTITLE) : t(TRIGGERS_WEBHOOK_DETAIL_SUBTITLE)}
                 </div>
               </div>
             </div>
@@ -352,8 +418,8 @@ function TriggerDetailDrawer({
               <button
                 type="button"
                 className="btn btn-ghost btn-icon-sm tg-drawer-close"
-                aria-label="关闭"
-                title="关闭"
+                aria-label={t(TRIGGERS_CLOSE)}
+                title={t(TRIGGERS_CLOSE)}
               >
                 <HelmIcon name="x" size={14} />
               </button>
@@ -367,17 +433,17 @@ function TriggerDetailDrawer({
               <>
                 <KvGrid
                   items={[
-                    { key: '描述', value: cronJob.description ?? '—' },
-                    { key: 'Cron 表达式', value: <span className="mono">{cronJob.schedule}</span> },
-                    { key: '时区', value: <span className="mono">{cronJob.timezone || 'UTC'}</span> },
-                    { key: '错过补跑', value: cronJob.catchUp ? '开启' : '关闭' },
-                    { key: '投递目标', value: formatTriggerTargetSummary(cronJob) },
-                    { key: '上次运行', value: formatTime(cronJob.lastRunAt) || '—' },
-                    { key: '下次运行', value: formatTime(cronJob.nextRunAt) || '—' },
+                    { key: t(TRIGGERS_KV_DESCRIPTION), value: cronJob.description ?? '—' },
+                    { key: t(TRIGGERS_KV_CRON_EXPRESSION), value: <span className="mono">{cronJob.schedule}</span> },
+                    { key: t(TRIGGERS_KV_TIMEZONE), value: <span className="mono">{cronJob.timezone || 'UTC'}</span> },
+                    { key: t(TRIGGERS_KV_CATCH_UP), value: cronJob.catchUp ? t(TRIGGERS_ON) : t(TRIGGERS_OFF) },
+                    { key: t(TRIGGERS_KV_DELIVERY_TARGET), value: formatTriggerTargetSummary(cronJob, locale) },
+                    { key: t(TRIGGERS_KV_LAST_RUN), value: formatTime(cronJob.lastRunAt) || '—' },
+                    { key: t(TRIGGERS_KV_NEXT_RUN), value: formatTime(cronJob.nextRunAt) || '—' },
                   ]}
                 />
 
-                <ScreenSection title="触发指令">
+                <ScreenSection title={t(TRIGGERS_COMMAND_SECTION)}>
                   <pre className="tg-detail-text selectable mono">{cronJob.text}</pre>
                 </ScreenSection>
 
@@ -391,11 +457,11 @@ function TriggerDetailDrawer({
             ) : webhook !== undefined ? (
               <KvGrid
                 items={[
-                  { key: '描述', value: webhook.description ?? '—' },
-                  { key: 'ThreadKey', value: <span className="mono">{webhook.threadKey ?? '—'}</span> },
-                  { key: '投递目标', value: formatTriggerTargetSummary(webhook) },
-                  { key: 'Secret 状态', value: webhook.hasSecret ? '已配置（明文受保护不下发）' : '未配置' },
-                  { key: '创建时间', value: formatTime(webhook.createdAt) || '—' },
+                  { key: t(TRIGGERS_KV_DESCRIPTION), value: webhook.description ?? '—' },
+                  { key: t(TRIGGERS_KV_THREAD_KEY), value: <span className="mono">{webhook.threadKey ?? '—'}</span> },
+                  { key: t(TRIGGERS_KV_DELIVERY_TARGET), value: formatTriggerTargetSummary(webhook, locale) },
+                  { key: t(TRIGGERS_KV_SECRET_STATE), value: webhook.hasSecret ? t(TRIGGERS_SECRET_CONFIGURED) : t(TRIGGERS_SECRET_MISSING) },
+                  { key: t(TRIGGERS_KV_CREATED), value: formatTime(webhook.createdAt) || '—' },
                 ]}
               />
             ) : null}
@@ -410,7 +476,7 @@ function TriggerDetailDrawer({
                 onClick={() => actions.run(`delete:${cronJob.id}`, 'cron_delete', { id: cronJob.id })}
               >
                 <HelmIcon name="trash-2" size={12} />
-                <span>删除</span>
+                <span>{t(TRIGGERS_DELETE)}</span>
               </button>
               <button
                 type="button"
@@ -419,7 +485,7 @@ function TriggerDetailDrawer({
                 onClick={() => actions.run(`trigger:${cronJob.id}`, 'cron_trigger', { id: cronJob.id })}
               >
                 <HelmIcon name="zap" size={12} />
-                <span>立即触发</span>
+                <span>{t(TRIGGERS_TRIGGER_NOW)}</span>
               </button>
             </div>
           ) : webhook !== undefined ? (
@@ -431,7 +497,7 @@ function TriggerDetailDrawer({
                 onClick={() => actions.run(`webhook-delete:${webhook.id}`, 'webhook_delete', { id: webhook.id })}
               >
                 <HelmIcon name="trash-2" size={12} />
-                <span>删除</span>
+                <span>{t(TRIGGERS_DELETE)}</span>
               </button>
             </div>
           ) : null}
@@ -441,10 +507,11 @@ function TriggerDetailDrawer({
   )
 }
 
-/** 触发器管理全屏视图（cron + webhook 管理表 + 点击行查看详情抽屉；跨表共享同一动作互斥锁）。 */
+/** Trigger manager fullscreen view (cron + webhook tables + row-click detail drawer; one shared action mutex across both tables). */
 export function TriggersManagerScreen(
   props: ScreenProps & { inlineDrawer?: boolean },
 ): ReactNode {
+  const t = usePluginTranslator()
   const actions = useRowAction()
   const crons = usePluginDoc<{ jobs?: unknown }>('crons')
   const webhooks = usePluginDoc<{ webhooks?: unknown }>('webhooks')
@@ -462,13 +529,13 @@ export function TriggersManagerScreen(
       title={
         <>
           <HelmIcon name="clock" size={15} />
-          <span>触发器管理</span>
+          <span>{t(TRIGGERS_SCREEN_TITLE)}</span>
         </>
       }
       subtitle={
         <>
           Cron {jobs.length} · Webhook {hooks.length}
-          {props.isSplit ? ' · 分屏' : ''}
+          {props.isSplit ? t(TRIGGERS_SPLIT_SUFFIX) : ''}
         </>
       }
     >
@@ -478,7 +545,7 @@ export function TriggersManagerScreen(
         title={
           <>
             <HelmIcon name="clock" size={13} />
-            <span>Cron 定时任务</span>
+            <span>{t(TRIGGERS_CRON_SECTION)}</span>
           </>
         }
       >
@@ -495,7 +562,7 @@ export function TriggersManagerScreen(
         title={
           <>
             <HelmIcon name="webhook" size={13} />
-            <span>Webhook 端点</span>
+            <span>{t(TRIGGERS_WEBHOOK_SECTION)}</span>
           </>
         }
       >
@@ -508,9 +575,7 @@ export function TriggersManagerScreen(
         />
       </ScreenSection>
 
-      <div className="tg-note">
-        secret 不在文档中展示；创建与删除请使用 helm cron / helm webhook 命令或对应动作端点。
-      </div>
+      <div className="tg-note">{t(TRIGGERS_MANAGER_NOTE)}</div>
 
       {(selectedCron !== undefined || selectedWebhook !== undefined) && (
         <TriggerDetailDrawer
@@ -525,9 +590,10 @@ export function TriggersManagerScreen(
   )
 }
 
-/** 触发器设置面板：计数概览 + 管理视图 / CLI 引导。 */
+/** Trigger settings panel: count overview + manager view / CLI guidance. */
 export function TriggersSettingsPanel(): ReactNode {
   const ctx = usePluginContext()
+  const t = usePluginTranslator()
   const crons = usePluginDoc<{ jobs?: unknown }>('crons')
   const webhooks = usePluginDoc<{ webhooks?: unknown }>('webhooks')
   const jobs = parseCronJobs(crons)
@@ -539,23 +605,21 @@ export function TriggersSettingsPanel(): ReactNode {
       title={
         <>
           <HelmIcon name="clock" size={13} />
-          <span>触发器</span>
+          <span>{t(TRIGGERS_SETTINGS_SECTION)}</span>
         </>
       }
     >
       {crons === undefined || webhooks === undefined ? (
-        <DocLoading label="触发器状态读取中..." />
+        <DocLoading label={t(TRIGGERS_SETTINGS_LOADING)} />
       ) : (
         <KvGrid
           items={[
-            { key: 'Cron 任务数', value: jobs.length },
-            { key: 'Webhook 端点数', value: hooks.length },
+            { key: t(TRIGGERS_KV_CRON_COUNT), value: jobs.length },
+            { key: t(TRIGGERS_KV_WEBHOOK_COUNT), value: hooks.length },
           ]}
         />
       )}
-      <div className="tg-note">
-        cron 调度细节与 webhook 验签 secret 的管理请前往触发器管理视图或使用 helm CLI。
-      </div>
+      <div className="tg-note">{t(TRIGGERS_SETTINGS_NOTE)}</div>
       <div>
         <button
           type="button"
@@ -563,7 +627,7 @@ export function TriggersSettingsPanel(): ReactNode {
           onClick={() => ctx.openScreen('screen:builtin:triggers/manager')}
         >
           <HelmIcon name="external-link" size={11} />
-          <span>打开触发器管理</span>
+          <span>{t(TRIGGERS_OPEN_MANAGER)}</span>
         </button>
       </div>
     </ScreenSection>

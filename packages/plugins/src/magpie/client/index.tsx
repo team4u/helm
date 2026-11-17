@@ -1,21 +1,57 @@
 /**
- * builtin:magpie 插件 client.tsx 组件（只导出组件，保 Fast Refresh 契约）：
- * - MagpieSettingsPanel：设置面板（网关状态 / 诊断 / 配额 / 路由轨迹；
- *   docs: status 实时订阅；refresh 动作经 ctx.callAction）。
+ * builtin:magpie client.tsx components (component exports only, Fast Refresh
+ * contract):
+ * - MagpieSettingsPanel: settings panel (gateway status / diagnostics /
+ *   quotas / route history; live subscription to the 'status' doc; the
+ *   refresh action goes through ctx.callAction).
  *
- * 诚实性：reachable=false 时 modelCount 标注为缓存计数；lastError 与
- * diagnostics 如实展示；apiKey 绝不进入任何展示路径。
+ * Honesty: when reachable=false the model count is labeled as a cached
+ * count; lastError and diagnostics are shown verbatim; the apiKey never
+ * enters any display path.
+ *
+ * Display copy resolves from copy.ts against the active host locale (no
+ * independent language state, no localStorage); backend error messages pass
+ * through unchanged.
  */
 import { useState } from 'react'
 import './styles.css'
 import type { ReactNode } from 'react'
-import { formatTime, usePluginContext, usePluginDoc } from '@helm/plugin-client'
+import { formatTime, usePluginContext, usePluginDoc, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
 import {
   boolLabel,
   parseStatus,
   quotaTone,
   type MagpieStatusView,
 } from './models.ts'
+import {
+  MAGPIE_DIAGNOSTICS_COL,
+  MAGPIE_DIAGNOSTICS_EMPTY,
+  MAGPIE_DIAGNOSTICS_SECTION,
+  MAGPIE_KV_GATEWAY_URL,
+  MAGPIE_KV_GROUPS,
+  MAGPIE_KV_LAST_ERROR,
+  MAGPIE_KV_LAST_REFRESHED,
+  MAGPIE_KV_LOCAL_LOOPBACK,
+  MAGPIE_KV_MODELS,
+  MAGPIE_KV_MODELS_CACHED,
+  MAGPIE_KV_REACHABLE,
+  MAGPIE_LOADING,
+  MAGPIE_QUOTA_COL_ACCOUNT,
+  MAGPIE_QUOTA_COL_REMAINING,
+  MAGPIE_QUOTA_COL_RESET,
+  MAGPIE_QUOTA_COL_WINDOW,
+  MAGPIE_QUOTA_EMPTY,
+  MAGPIE_QUOTA_SECTION,
+  MAGPIE_REFRESH,
+  MAGPIE_REFRESHING,
+  MAGPIE_ROUTES_COL_GROUP,
+  MAGPIE_ROUTES_COL_MODEL,
+  MAGPIE_ROUTES_COL_STRATEGY,
+  MAGPIE_ROUTES_COL_TIME,
+  MAGPIE_ROUTES_EMPTY,
+  MAGPIE_ROUTES_SECTION,
+  MAGPIE_TITLE,
+} from './copy.ts'
 
 import { Activity, Gauge, Loader2, RefreshCw, Route, Server } from 'lucide-react'
 
@@ -36,29 +72,31 @@ function ActionError({ message }: { message: string }): ReactNode {
   )
 }
 
-/** 网关状态概览（KeyValueList 同构布局）。 */
+/** Gateway status overview (KeyValueList-shaped layout). */
 function StatusSummary({ status }: { status: MagpieStatusView }): ReactNode {
+  const locale = usePluginLocale()
+  const t = usePluginTranslator()
   return (
     <div className="kv-list">
-      <div className="kv-key">网关地址</div>
+      <div className="kv-key">{t(MAGPIE_KV_GATEWAY_URL)}</div>
       <div className="kv-val">{status.gatewayUrl || '—'}</div>
-      <div className="kv-key">本机 loopback</div>
-      <div className="kv-val">{boolLabel(status.local)}</div>
-      <div className="kv-key">可达</div>
+      <div className="kv-key">{t(MAGPIE_KV_LOCAL_LOOPBACK)}</div>
+      <div className="kv-val">{boolLabel(status.local, locale)}</div>
+      <div className="kv-key">{t(MAGPIE_KV_REACHABLE)}</div>
       <div className="kv-val">
         <span className={`badge badge-${status.reachable ? 'ok' : 'warn'}`}>
-          <span>{boolLabel(status.reachable)}</span>
+          <span>{boolLabel(status.reachable, locale)}</span>
         </span>
       </div>
-      <div className="kv-key">{status.reachable ? '模型数' : '模型数（缓存）'}</div>
+      <div className="kv-key">{status.reachable ? t(MAGPIE_KV_MODELS) : t(MAGPIE_KV_MODELS_CACHED)}</div>
       <div className="kv-val">{status.modelCount}</div>
-      <div className="kv-key">路由组数</div>
+      <div className="kv-key">{t(MAGPIE_KV_GROUPS)}</div>
       <div className="kv-val">{status.groupCount}</div>
-      <div className="kv-key">最近刷新</div>
+      <div className="kv-key">{t(MAGPIE_KV_LAST_REFRESHED)}</div>
       <div className="kv-val">{formatTime(status.lastRefreshedAt) || '—'}</div>
       {status.lastError !== undefined ? (
         <>
-          <div className="kv-key">最近错误</div>
+          <div className="kv-key">{t(MAGPIE_KV_LAST_ERROR)}</div>
           <div className="kv-val">{status.lastError}</div>
         </>
       ) : null}
@@ -66,20 +104,21 @@ function StatusSummary({ status }: { status: MagpieStatusView }): ReactNode {
   )
 }
 
-/** 诊断列表（不可用项；空时如实展示无诊断信息）。 */
+/** Diagnostics list (unavailable items; empty state shown honestly when there are none). */
 function DiagnosticsTable({ diagnostics }: { diagnostics: string[] }): ReactNode {
+  const t = usePluginTranslator()
   return (
     <div className="helm-table-wrap">
       <table className="helm-table">
         <thead>
           <tr>
-            <th>不可用项</th>
+            <th>{t(MAGPIE_DIAGNOSTICS_COL)}</th>
           </tr>
         </thead>
         <tbody>
           {diagnostics.length === 0 ? (
             <tr>
-              <td className="table-empty">无诊断信息</td>
+              <td className="table-empty">{t(MAGPIE_DIAGNOSTICS_EMPTY)}</td>
             </tr>
           ) : (
             diagnostics.map((message, i) => (
@@ -94,25 +133,26 @@ function DiagnosticsTable({ diagnostics }: { diagnostics: string[] }): ReactNode
   )
 }
 
-/** 配额表（剩余百分比按阈值着色）。 */
+/** Quota table (remaining percent colored by threshold). */
 function QuotaTable({ quotas }: { quotas: MagpieStatusView['quotas'] }): ReactNode {
+  const t = usePluginTranslator()
   return (
     <div className="helm-table-wrap">
       <table className="helm-table">
         <thead>
           <tr>
             <th>Provider</th>
-            <th>账号</th>
-            <th>窗口</th>
-            <th>剩余 %</th>
-            <th>重置</th>
+            <th>{t(MAGPIE_QUOTA_COL_ACCOUNT)}</th>
+            <th>{t(MAGPIE_QUOTA_COL_WINDOW)}</th>
+            <th>{t(MAGPIE_QUOTA_COL_REMAINING)}</th>
+            <th>{t(MAGPIE_QUOTA_COL_RESET)}</th>
           </tr>
         </thead>
         <tbody>
           {quotas.length === 0 ? (
             <tr>
               <td colSpan={5} className="table-empty">
-                暂无配额数据
+                {t(MAGPIE_QUOTA_EMPTY)}
               </td>
             </tr>
           ) : (
@@ -136,25 +176,26 @@ function QuotaTable({ quotas }: { quotas: MagpieStatusView['quotas'] }): ReactNo
   )
 }
 
-/** 路由轨迹表。 */
+/** Route history table. */
 function RouteTable({ routes }: { routes: MagpieStatusView['routes'] }): ReactNode {
+  const t = usePluginTranslator()
   return (
     <div className="helm-table-wrap">
       <table className="helm-table">
         <thead>
           <tr>
-            <th>路由组</th>
-            <th>策略</th>
+            <th>{t(MAGPIE_ROUTES_COL_GROUP)}</th>
+            <th>{t(MAGPIE_ROUTES_COL_STRATEGY)}</th>
             <th>Provider</th>
-            <th>命中模型</th>
-            <th>时间</th>
+            <th>{t(MAGPIE_ROUTES_COL_MODEL)}</th>
+            <th>{t(MAGPIE_ROUTES_COL_TIME)}</th>
           </tr>
         </thead>
         <tbody>
           {routes.length === 0 ? (
             <tr>
               <td colSpan={5} className="table-empty">
-                暂无路由记录
+                {t(MAGPIE_ROUTES_EMPTY)}
               </td>
             </tr>
           ) : (
@@ -174,9 +215,10 @@ function RouteTable({ routes }: { routes: MagpieStatusView['routes'] }): ReactNo
   )
 }
 
-/** Magpie 网关设置面板（状态 + 诊断 + 配额 + 路由轨迹 + 刷新动作）。 */
+/** Magpie gateway settings panel (status + diagnostics + quotas + route history + refresh action). */
 export function MagpieSettingsPanel(): ReactNode {
   const ctx = usePluginContext()
+  const t = usePluginTranslator()
   const doc = usePluginDoc<MagpieStatusView>('status')
   const status = parseStatus(doc)
   const [refreshing, setRefreshing] = useState(false)
@@ -201,38 +243,38 @@ export function MagpieSettingsPanel(): ReactNode {
       <div className="screen-header">
         <div className="screen-section-title">
           <Server size={13} strokeWidth={1.75} />
-          <span>Magpie 网关</span>
+          <span>{t(MAGPIE_TITLE)}</span>
         </div>
         <button type="button" className="btn btn-xs" disabled={refreshing} onClick={refresh}>
           {refreshing ? <Loader2 size={11} className="spin-slow" /> : <RefreshCw size={11} />}
-          <span>{refreshing ? '刷新中...' : '刷新模型目录'}</span>
+          <span>{refreshing ? t(MAGPIE_REFRESHING) : t(MAGPIE_REFRESH)}</span>
         </button>
       </div>
       {status.summaryText !== '' ? <div className="screen-subtitle">{status.summaryText}</div> : null}
       {error !== undefined ? <ActionError message={error} /> : null}
       {doc === undefined ? (
-        <DocLoading label="网关状态读取中..." />
+        <DocLoading label={t(MAGPIE_LOADING)} />
       ) : (
         <>
           <StatusSummary status={status} />
           <div className="screen-section">
             <div className="screen-section-title">
               <Activity size={12} strokeWidth={1.75} />
-              <span>诊断</span>
+              <span>{t(MAGPIE_DIAGNOSTICS_SECTION)}</span>
             </div>
             <DiagnosticsTable diagnostics={status.diagnostics} />
           </div>
           <div className="screen-section">
             <div className="screen-section-title">
               <Gauge size={12} strokeWidth={1.75} />
-              <span>配额</span>
+              <span>{t(MAGPIE_QUOTA_SECTION)}</span>
             </div>
             <QuotaTable quotas={status.quotas} />
           </div>
           <div className="screen-section">
             <div className="screen-section-title">
               <Route size={12} strokeWidth={1.75} />
-              <span>路由轨迹</span>
+              <span>{t(MAGPIE_ROUTES_SECTION)}</span>
             </div>
             <RouteTable routes={status.routes} />
           </div>

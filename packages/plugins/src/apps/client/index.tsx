@@ -1,14 +1,25 @@
 /**
- * builtin:apps 应用中心启动台（client.tsx，只导出组件保 Fast Refresh 契约）。
+ * builtin:apps app center launchpad (client.tsx, component exports only to
+ * keep the Fast Refresh contract).
  *
- * 数据全部来自 @helm/plugin-client 共享 hooks（usePlugins / usePluginDoc），无轮询：
- * - 应用列表：宿主 plugins + screens 左连接（非 builtin 外部插件 + 至少一个 Screen）；
- * - 产品元数据（置顶/分类/来源会话）：builtin:apps 公开文档 catalog（后端登记，
- *   缺失时如实回退插件摘要本身，绝不编造）。
- * 打开应用经 ctx.openScreen / ctx.openSplitScreen 唯一导航机制；
- * 点击卡片右下角 3 点按钮展开应用中心就地标准详情抽屉（保持应用中心上下文，不跳走菜单），
- * 抽屉内支持多视图直达、继续对话迭代与直接卸载删除应用；
- * 筛选 Tab、搜索词与选中应用 ID 写入 ScreenProps.params（sp.* / ssp.* 深链命名空间）。
+ * All data comes from @helm/plugin-client shared hooks (usePlugins /
+ * usePluginDoc), no polling:
+ * - app list: left join of host plugins + screens (non-builtin external
+ *   plugin with at least one Screen);
+ * - product metadata (pinned/category/origin conversation): the builtin:apps
+ *   public catalog doc (registered by the backend; when missing we honestly
+ *   fall back to the plugin summary itself, never fabricate).
+ * Opening an app goes exclusively through ctx.openScreen / ctx.openSplitScreen;
+ * the 3-dot button in the card footer opens the standard in-place detail
+ * drawer (keeps the app-center context instead of navigating away), which
+ * supports direct view access, iterating in the origin conversation and
+ * uninstalling the app outright; filter tab, search query and the selected
+ * app id are written into ScreenProps.params (sp.* / ssp.* deep-link
+ * namespaces).
+ *
+ * Display copy resolves from copy.ts against the active host locale (no
+ * independent language state, no localStorage); backend error messages pass
+ * through unchanged.
  */
 import { useEffect, useMemo, useState } from 'react'
 import './styles.css'
@@ -24,10 +35,11 @@ import {
   HelmIcon,
   usePluginContext,
   usePluginDoc,
+  usePluginLocale,
+  usePluginTranslator,
   usePlugins,
 } from '@helm/plugin-client'
 import {
-  APP_CATEGORY_LABELS,
   appScreenTarget,
   filterAppItems,
   formatAppTabParam,
@@ -39,8 +51,68 @@ import {
   type AppItem,
   type AppTabParam,
 } from './models.ts'
+import {
+  APP_BADGE_PINNED,
+  APP_CANCEL,
+  APP_CLOSE,
+  APP_DELETE_CONFIRM,
+  APP_DELETE_CONFIRM_LABEL,
+  APP_DELETING,
+  APP_DETAIL_TITLE,
+  APP_DESCRIPTION_FALLBACK,
+  APP_EMPTY_HINT_NO_APPS,
+  APP_EMPTY_HINT_NO_MATCH,
+  APP_EMPTY_NO_APPS,
+  APP_EMPTY_NO_MATCH,
+  APP_ENABLE_LABEL,
+  APP_ENABLE_TITLE,
+  APP_FILTER_LABEL,
+  APP_ITERATE,
+  APP_ITERATE_DISABLED_TITLE,
+  APP_ITERATE_TITLE,
+  APP_KV_APP_ID,
+  APP_KV_CATEGORY,
+  APP_KV_INSTALL_SOURCE,
+  APP_KV_ORIGIN_CONVERSATION,
+  APP_KV_PINNED,
+  APP_KV_VERSION,
+  APP_KV_WORKSPACE,
+  APP_OPEN_SPLIT_LABEL,
+  APP_OPEN_SPLIT_TITLE,
+  APP_OPEN_VIEW_LABEL,
+  APP_OPEN_VIEW_SPLIT_LABEL,
+  APP_OPEN_VIEW_TITLE,
+  APP_PINNED_NO,
+  APP_PINNED_TITLE,
+  APP_PINNED_YES,
+  APP_RESET_FILTERS,
+  APP_SEARCH_CLEAR,
+  APP_SEARCH_LABEL,
+  APP_SEARCH_PLACEHOLDER,
+  APP_STATUS_READY,
+  APP_STATUS_STOPPED,
+  APP_STOPPED_PILL,
+  APP_STOPPED_PILL_TITLE,
+  APP_TAB_ALL,
+  APP_TAB_PINNED,
+  APP_UNINSTALL,
+  APP_UNINSTALL_LABEL,
+  APP_UNINSTALL_TITLE,
+  APP_CENTER_SUBTITLE,
+  APP_CENTER_TITLE,
+  appActionsCount,
+  appActionsSectionTitle,
+  appCategoryLabel,
+  appCenterStats,
+  appDescriptionFromViews,
+  appDetailDialogLabel,
+  appOriginJumpTitle,
+  appVersionTitle,
+  appViewsCount,
+  appViewsSectionTitle,
+} from './copy.ts'
 
-/** 单个应用卡片：图标/名称/状态/描述 + 主视图快捷打开（主屏/右屏） + 详情抽屉入口。 */
+/** Single app card: icon/name/status/description + quick open (main/split pane) + detail drawer entry. */
 function AppCard({
   item,
   onOpen,
@@ -54,18 +126,20 @@ function AppCard({
   onShowDetail: () => void
   onEnableInPluginCenter: () => void
 }): ReactNode {
+  const locale = usePluginLocale()
+  const t = usePluginTranslator()
   const { plugin, screens, catalog } = item
   const target = appScreenTarget(item)
   const isReady = plugin.enabled && target !== null
   const versionLabel = plugin.version ? `v${plugin.version.replace(/^v/, '')}` : null
   const iconName = catalog?.icon ?? 'layout-grid'
-  const categoryLabel = APP_CATEGORY_LABELS[normalizeAppCategory(catalog?.category)]
+  const categoryLabel = appCategoryLabel(normalizeAppCategory(catalog?.category), locale)
   const description =
     plugin.description && plugin.description.trim() !== ''
       ? plugin.description
       : screens.length > 0
-        ? `提供 ${screens.map((s) => s.label).join('、')} 视图。`
-        : '全栈微应用。'
+        ? appDescriptionFromViews(screens.map((s) => s.label), locale)
+        : t(APP_DESCRIPTION_FALLBACK)
 
   return (
     <div
@@ -95,14 +169,14 @@ function AppCard({
             </span>
             {versionLabel && <span className="app-card-version">{versionLabel}</span>}
             {catalog?.pinned === true && (
-              <span className="badge badge-neutral" title="已置顶">
-                置顶
+              <span className="badge badge-neutral" title={t(APP_PINNED_TITLE)}>
+                {t(APP_BADGE_PINNED)}
               </span>
             )}
             {plugin.enabled ? (
-              <span className="badge badge-ok">已就绪</span>
+              <span className="badge badge-ok">{t(APP_STATUS_READY)}</span>
             ) : (
-              <span className="badge badge-neutral">已停用</span>
+              <span className="badge badge-neutral">{t(APP_STATUS_STOPPED)}</span>
             )}
           </div>
           <div className="app-card-id" title={plugin.id}>
@@ -119,17 +193,17 @@ function AppCard({
       <div className="app-card-footer">
         <div className="app-card-pills">
           {screens.length > 0 ? (
-            <span className="app-card-pill" title={`${screens.length} 个视图`}>
-              {`${screens.length} 视图`}
+            <span className="app-card-pill" title={appViewsCount(screens.length, locale)}>
+              {appViewsCount(screens.length, locale)}
             </span>
           ) : (
-            <span className="app-card-pill" title="插件已停用，视图贡献已卸载；启用后自动恢复">
-              已停用
+            <span className="app-card-pill" title={t(APP_STOPPED_PILL_TITLE)}>
+              {t(APP_STOPPED_PILL)}
             </span>
           )}
           {(plugin.actions?.length ?? 0) > 0 && (
-            <span className="app-card-pill" title={`${plugin.actions.length} 个动作`}>
-              {`${plugin.actions.length} 动作`}
+            <span className="app-card-pill" title={appActionsCount(plugin.actions.length, locale)}>
+              {appActionsCount(plugin.actions.length, locale)}
             </span>
           )}
         </div>
@@ -138,8 +212,8 @@ function AppCard({
             <button
               type="button"
               className="btn btn-xs btn-icon-xs"
-              title="在右侧分屏并排打开"
-              aria-label="分屏打开应用"
+              title={t(APP_OPEN_SPLIT_TITLE)}
+              aria-label={t(APP_OPEN_SPLIT_LABEL)}
               onClick={(e) => {
                 e.stopPropagation()
                 onOpenSplit(target)
@@ -151,21 +225,21 @@ function AppCard({
             <button
               type="button"
               className="btn btn-xs"
-              title="在插件中心启用该应用"
+              title={t(APP_ENABLE_TITLE)}
               onClick={(e) => {
                 e.stopPropagation()
                 onEnableInPluginCenter()
               }}
             >
               <HelmIcon name="settings" size={10} />
-              <span>插件中心启用</span>
+              <span>{t(APP_ENABLE_LABEL)}</span>
             </button>
           )}
           <button
             type="button"
             className="btn btn-xs btn-icon-xs"
-            title="查看应用详情"
-            aria-label="查看应用详情"
+            title={t(APP_DETAIL_TITLE)}
+            aria-label={t(APP_DETAIL_TITLE)}
             onClick={(e) => {
               e.stopPropagation()
               onShowDetail()
@@ -180,9 +254,11 @@ function AppCard({
 }
 
 /**
- * 应用详情抽屉：与 Skills/Profiles/Plugins 抽屉规范 100% 对齐的侧滑抽屉。
- * 保留在应用中心就地打开，不跳转页面、不切换菜单选中态，提供视图直达、
- * 「回到创建会话继续迭代」与在底栏旁边的「直接删除卸载应用」功能。
+ * App detail drawer: a side drawer 100% aligned with the Skills/Profiles/
+ * Plugins drawer conventions. It opens in place inside the app center — no
+ * page navigation, no menu selection change — and offers direct view access,
+ * "return to the origin conversation to keep iterating" and an
+ * "uninstall/delete the app" action next to the footer.
  */
 function AppDetailDrawer({
   item,
@@ -194,6 +270,8 @@ function AppDetailDrawer({
   onClose: () => void
 }): ReactNode {
   const ctx = usePluginContext()
+  const locale = usePluginLocale()
+  const t = usePluginTranslator()
   const { plugin, screens, catalog } = item
   const originConversationId = catalog?.originConversationId
   const iterateTarget = appScreenTarget(item)
@@ -230,13 +308,13 @@ function AppDetailDrawer({
   }
 
   const versionLabel = plugin.version ? `v${plugin.version.replace(/^v/, '')}` : null
-  const categoryLabel = APP_CATEGORY_LABELS[normalizeAppCategory(catalog?.category)]
+  const categoryLabel = appCategoryLabel(normalizeAppCategory(catalog?.category), locale)
   const description =
     plugin.description && plugin.description.trim() !== ''
       ? plugin.description
       : screens.length > 0
-        ? `提供 ${screens.map((s) => s.label).join('、')} 视图。`
-        : '全栈微应用。'
+        ? appDescriptionFromViews(screens.map((s) => s.label), locale)
+        : t(APP_DESCRIPTION_FALLBACK)
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
@@ -245,9 +323,9 @@ function AppDetailDrawer({
         <DialogContent
           className="primary-drawer-content app-detail-drawer"
           role="dialog"
-          aria-label={`${plugin.name || plugin.id} 应用详情`}
+          aria-label={appDetailDialogLabel(plugin.name || plugin.id, locale)}
         >
-          {/* 抽屉头部：统一复用 primary-drawer-header 规范 */}
+          {/* Drawer header: reuses the primary-drawer-header conventions */}
           <div className="primary-drawer-header">
             <div className="primary-drawer-header-left">
               <div className="primary-drawer-icon-wrap">
@@ -259,32 +337,32 @@ function AppDetailDrawer({
                     {plugin.name || plugin.id}
                   </DialogTitle>
                   {versionLabel && (
-                    <span className="badge badge-neutral mono" title={`版本 ${versionLabel}`}>
+                    <span className="badge badge-neutral mono" title={appVersionTitle(versionLabel, locale)}>
                       {versionLabel}
                     </span>
                   )}
                   {catalog?.pinned === true && (
-                    <span className="badge badge-neutral" title="已置顶">
-                      置顶
+                    <span className="badge badge-neutral" title={t(APP_PINNED_TITLE)}>
+                      {t(APP_BADGE_PINNED)}
                     </span>
                   )}
                   {plugin.enabled ? (
-                    <span className="badge badge-ok">已就绪</span>
+                    <span className="badge badge-ok">{t(APP_STATUS_READY)}</span>
                   ) : (
-                    <span className="badge badge-neutral">已停用</span>
+                    <span className="badge badge-neutral">{t(APP_STATUS_STOPPED)}</span>
                   )}
                 </div>
                 <div className="primary-drawer-id mono">{plugin.id}</div>
               </div>
             </div>
             <DialogClose asChild>
-              <button type="button" className="btn btn-ghost btn-sm" aria-label="关闭" title="关闭">
+              <button type="button" className="btn btn-ghost btn-sm" aria-label={t(APP_CLOSE)} title={t(APP_CLOSE)}>
                 <HelmIcon name="x" size={14} />
               </button>
             </DialogClose>
           </div>
 
-          {/* 抽屉正文：统一复用 primary-drawer-body 规范 */}
+          {/* Drawer body: reuses the primary-drawer-body conventions */}
           <div className="primary-drawer-body">
             {description && (
               <div className="app-detail-desc text-secondary" style={{ fontSize: '13px', lineHeight: 1.5 }}>
@@ -294,28 +372,28 @@ function AppDetailDrawer({
 
             <div className="form-grid">
               <div className="form-grid-row">
-                <span className="form-grid-label"><span>应用 ID</span></span>
+                <span className="form-grid-label"><span>{t(APP_KV_APP_ID)}</span></span>
                 <span className="form-grid-value mono">{plugin.id}</span>
               </div>
               {versionLabel && (
                 <div className="form-grid-row">
-                  <span className="form-grid-label"><span>版本</span></span>
+                  <span className="form-grid-label"><span>{t(APP_KV_VERSION)}</span></span>
                   <span className="form-grid-value mono">{versionLabel}</span>
                 </div>
               )}
               <div className="form-grid-row">
-                <span className="form-grid-label"><span>分类</span></span>
-                <span className="badge badge-neutral">{categoryLabel ?? '其他'}</span>
+                <span className="form-grid-label"><span>{t(APP_KV_CATEGORY)}</span></span>
+                <span className="badge badge-neutral">{categoryLabel}</span>
               </div>
               <div className="form-grid-row">
-                <span className="form-grid-label"><span>置顶状态</span></span>
+                <span className="form-grid-label"><span>{t(APP_KV_PINNED)}</span></span>
                 <span className="form-grid-value">
-                  {catalog?.pinned ? '已置顶' : '未置顶'}
+                  {catalog?.pinned ? t(APP_PINNED_YES) : t(APP_PINNED_NO)}
                 </span>
               </div>
               {catalog?.workspaceDir && (
                 <div className="form-grid-row">
-                  <span className="form-grid-label"><span>工作区源码</span></span>
+                  <span className="form-grid-label"><span>{t(APP_KV_WORKSPACE)}</span></span>
                   <span className="form-grid-value mono" title={catalog.workspaceDir}>
                     {catalog.workspaceDir}
                   </span>
@@ -323,7 +401,7 @@ function AppDetailDrawer({
               )}
               {plugin.managed?.source && (
                 <div className="form-grid-row">
-                  <span className="form-grid-label"><span>安装来源</span></span>
+                  <span className="form-grid-label"><span>{t(APP_KV_INSTALL_SOURCE)}</span></span>
                   <span className="form-grid-value mono" title={plugin.managed.source.raw}>
                     {plugin.managed.source.raw}
                   </span>
@@ -331,11 +409,11 @@ function AppDetailDrawer({
               )}
               {originConversationId !== undefined && (
                 <div className="form-grid-row">
-                  <span className="form-grid-label"><span>创建会话</span></span>
+                  <span className="form-grid-label"><span>{t(APP_KV_ORIGIN_CONVERSATION)}</span></span>
                   <button
                     type="button"
                     className="btn btn-ghost btn-xs mono"
-                    title={`跳转到创建此应用的会话 #${originConversationId}`}
+                    title={appOriginJumpTitle(originConversationId, locale)}
                     onClick={() => ctx.openScreen(`conversation:${originConversationId}`)}
                   >
                     <HelmIcon name="message-square" size={11} />
@@ -349,7 +427,7 @@ function AppDetailDrawer({
               <div className="app-detail-section">
                 <h4 className="app-detail-section-title">
                   <HelmIcon name="monitor" size={13} />
-                  <span>应用视图 ({screens.length})</span>
+                  <span>{appViewsSectionTitle(screens.length, locale)}</span>
                 </h4>
                 {screens.map((screen) => {
                   const target = `screen:${screen.pluginId}/${screen.screenId}`
@@ -363,17 +441,17 @@ function AppDetailDrawer({
                         <button
                           type="button"
                           className="btn btn-xs"
-                          title="在主屏打开此视图"
+                          title={t(APP_OPEN_VIEW_TITLE)}
                           onClick={() => ctx.openScreen(target)}
                         >
                           <HelmIcon name="play" size={11} />
-                          <span>打开视图</span>
+                          <span>{t(APP_OPEN_VIEW_LABEL)}</span>
                         </button>
                         <button
                           type="button"
                           className="btn btn-xs btn-icon-xs"
-                          title="在右侧分屏并排打开"
-                          aria-label="分屏打开此视图"
+                          title={t(APP_OPEN_SPLIT_TITLE)}
+                          aria-label={t(APP_OPEN_VIEW_SPLIT_LABEL)}
                           onClick={() => ctx.openSplitScreen(target)}
                         >
                           <HelmIcon name="columns" size={11} />
@@ -389,7 +467,7 @@ function AppDetailDrawer({
               <div className="app-detail-section">
                 <h4 className="app-detail-section-title">
                   <HelmIcon name="zap" size={13} />
-                  <span>导出能力 ({plugin.actions?.length})</span>
+                  <span>{appActionsSectionTitle(plugin.actions?.length ?? 0, locale)}</span>
                 </h4>
                 <div className="plugin-capability-tags" style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                   {plugin.actions?.map((act) => (
@@ -408,18 +486,18 @@ function AppDetailDrawer({
             </div>
           )}
 
-          {/* 抽屉底栏：统一复用 primary-drawer-footer 规范 */}
+          {/* Drawer footer: reuses the primary-drawer-footer conventions */}
           <div className="primary-drawer-footer">
             {confirmDelete ? (
               <div className="app-detail-delete-confirm">
-                <span className="text-subtle">确认卸载并删除此应用？</span>
+                <span className="text-subtle">{t(APP_DELETE_CONFIRM)}</span>
                 <button
                   type="button"
                   className="btn btn-sm btn-ghost"
                   disabled={deleting}
                   onClick={() => setConfirmDelete(false)}
                 >
-                  <span>取消</span>
+                  <span>{t(APP_CANCEL)}</span>
                 </button>
                 <button
                   type="button"
@@ -428,7 +506,7 @@ function AppDetailDrawer({
                   onClick={handleDelete}
                 >
                   <HelmIcon name="trash-2" size={12} />
-                  <span>{deleting ? '正在删除…' : '确认删除'}</span>
+                  <span>{deleting ? t(APP_DELETING) : t(APP_DELETE_CONFIRM_LABEL)}</span>
                 </button>
               </div>
             ) : (
@@ -438,7 +516,7 @@ function AppDetailDrawer({
                   className="btn btn-sm btn-ghost"
                   onClick={onClose}
                 >
-                  <span>关闭</span>
+                  <span>{t(APP_CLOSE)}</span>
                 </button>
                 <button
                   type="button"
@@ -446,23 +524,23 @@ function AppDetailDrawer({
                   disabled={originConversationId === undefined || iterateTarget === null || !plugin.enabled}
                   title={
                     originConversationId === undefined
-                      ? '该应用未登记创建会话'
-                      : '回到创建会话并把应用视图开到右屏，边看边改'
+                      ? t(APP_ITERATE_DISABLED_TITLE)
+                      : t(APP_ITERATE_TITLE)
                   }
                   onClick={handleIterate}
                 >
                   <HelmIcon name="message-square" size={12} />
-                  <span>继续对话迭代</span>
+                  <span>{t(APP_ITERATE)}</span>
                 </button>
                 <button
                   type="button"
                   className="btn btn-sm btn-ghost btn-danger"
-                  title="从系统卸载并删除此应用"
-                  aria-label="卸载删除应用"
+                  title={t(APP_UNINSTALL_TITLE)}
+                  aria-label={t(APP_UNINSTALL_LABEL)}
                   onClick={() => setConfirmDelete(true)}
                 >
                   <HelmIcon name="trash-2" size={12} />
-                  <span>删除</span>
+                  <span>{t(APP_UNINSTALL)}</span>
                 </button>
               </>
             )}
@@ -479,10 +557,13 @@ export interface AppCenterScreenProps extends ScreenProps {
 
 export function AppCenterScreen(props: AppCenterScreenProps): ReactNode {
   const ctx = usePluginContext()
+  const locale = usePluginLocale()
+  const t = usePluginTranslator()
   const { plugins, screens } = usePlugins()
   const catalog = usePluginDoc<AppCatalogDoc | undefined>('catalog')
 
-  // 深链参数（sp.* / ssp.* 命名空间）：tab / q / app 经 setParams 唯一导航机制回写
+  // Deep-link params (sp.* / ssp.* namespaces): tab / q / app are written back
+  // through setParams, the only navigation mechanism.
   const tab = useMemo(() => parseAppTabParam(props.params['tab']), [props.params])
   const queryFromUrl = props.params['q'] ?? ''
   const selectedAppId = props.params['app']
@@ -513,15 +594,15 @@ export function AppCenterScreen(props: AppCenterScreenProps): ReactNode {
         <div className="apps-center-title-wrap">
           <div className="apps-center-title">
             <HelmIcon name="layout-grid" size={16} />
-            <span>应用中心</span>
+            <span>{t(APP_CENTER_TITLE)}</span>
           </div>
           <span className="apps-center-subtitle text-subtle">
-            AI 生成与受管安装的全栈微应用启动台
+            {t(APP_CENTER_SUBTITLE)}
           </span>
         </div>
         <div className="apps-center-topbar-actions">
           <span className="apps-center-stats text-subtle">
-            {`共 ${stats.total} 个应用 · ${stats.ready} 个已就绪`}
+            {appCenterStats(stats.total, stats.ready, locale)}
           </span>
         </div>
       </div>
@@ -531,24 +612,24 @@ export function AppCenterScreen(props: AppCenterScreenProps): ReactNode {
           <HelmIcon name="search" size={14} />
           <input
             type="text"
-            placeholder="搜索应用名称、ID 或描述…"
+            placeholder={t(APP_SEARCH_PLACEHOLDER)}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            aria-label="搜索应用"
+            aria-label={t(APP_SEARCH_LABEL)}
           />
           {query !== '' && (
             <button
               type="button"
               className="btn btn-ghost btn-sm primary-search-clear"
-              title="清空搜索"
-              aria-label="清空搜索"
+              title={t(APP_SEARCH_CLEAR)}
+              aria-label={t(APP_SEARCH_CLEAR)}
               onClick={() => setQuery('')}
             >
               <HelmIcon name="x" size={12} />
             </button>
           )}
         </div>
-        <div className="primary-category-pills" role="tablist" aria-label="应用筛选">
+        <div className="primary-category-pills" role="tablist" aria-label={t(APP_FILTER_LABEL)}>
           <button
             type="button"
             role="tab"
@@ -556,7 +637,7 @@ export function AppCenterScreen(props: AppCenterScreenProps): ReactNode {
             className={`primary-category-pill${tab === 'all' ? ' is-active' : ''}`}
             onClick={() => setTab('all')}
           >
-            <span>全部</span>
+            <span>{t(APP_TAB_ALL)}</span>
             <span className="badge tabular-nums">{stats.total}</span>
           </button>
           <button
@@ -566,7 +647,7 @@ export function AppCenterScreen(props: AppCenterScreenProps): ReactNode {
             className={`primary-category-pill${tab === 'pinned' ? ' is-active' : ''}`}
             onClick={() => setTab('pinned')}
           >
-            <span>已置顶</span>
+            <span>{t(APP_TAB_PINNED)}</span>
             <span className="badge tabular-nums">{stats.pinned}</span>
           </button>
         </div>
@@ -589,12 +670,10 @@ export function AppCenterScreen(props: AppCenterScreenProps): ReactNode {
         <div className="apps-empty">
           <HelmIcon name="layout-grid" size={26} />
           <div className="apps-empty-title">
-            {items.length === 0 ? '还没有全栈应用' : '未找到匹配的应用'}
+            {items.length === 0 ? t(APP_EMPTY_NO_APPS) : t(APP_EMPTY_NO_MATCH)}
           </div>
           <div className="apps-empty-hint text-subtle">
-            {items.length === 0
-              ? '在会话中让 AI 生成一个全栈微应用并发布到应用中心，即可在此启动。'
-              : '请尝试调整搜索关键字或切换置顶标签。'}
+            {items.length === 0 ? t(APP_EMPTY_HINT_NO_APPS) : t(APP_EMPTY_HINT_NO_MATCH)}
           </div>
           {(query !== '' || tab !== 'all') && (
             <button
@@ -606,7 +685,7 @@ export function AppCenterScreen(props: AppCenterScreenProps): ReactNode {
               }}
             >
               <HelmIcon name="rotate-ccw" size={11} />
-              <span>重置筛选条件</span>
+              <span>{t(APP_RESET_FILTERS)}</span>
             </button>
           )}
         </div>
