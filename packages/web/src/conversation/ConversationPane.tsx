@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { conversationsApi } from '../lib/api.js'
-import type { ConversationAttachmentRef } from '@helm/protocol/browser'
+import type { ConversationAttachmentRef, ConversationEntry } from '@helm/protocol/browser'
 import { HelmIcon, Popover, PopoverContent, PopoverTrigger } from '@helm/plugin-client'
 import {
   isConversationArchivable,
@@ -26,6 +26,8 @@ import { useWorkbenchTabs } from './workbench-hooks.js'
 import { matchConversationActions, splitConversationHeaderActions } from './action-model.js'
 import { PluginMicroAction } from '../ui/PluginMicroAction.js'
 import { buildTimelineItems, type EditRequestTarget } from './timeline-model.js'
+
+const EMPTY_ENTRIES: ReadonlyArray<ConversationEntry> = []
 
 export interface ConversationPaneProps {
   conversationId: number
@@ -59,7 +61,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const isWorking = conversation?.status === 'working'
   const isCompacting = conversation?.contextUsage?.compacting === true
   const compactPending = actionPending === 'compact' || isCompacting
-  const detailEntries = detail?.entries ?? []
+  const detailEntries = detail?.entries ?? EMPTY_ENTRIES
   const timelineItems = useMemo(
     () =>
       buildTimelineItems(detailEntries, {

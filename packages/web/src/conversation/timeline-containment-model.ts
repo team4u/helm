@@ -39,8 +39,12 @@ export function containmentClassName(bucket: ContainmentBucket): string {
   return `tl-cv-${bucket}`
 }
 
-/** 正文估高参数：约 55 字符/行（中英混排折中）、每行约 23px。 */
-const CHARS_PER_LINE = 55
+/** 正文估高参数：桌面 820px 宽下约 55 字符/行（中英混排折中）、每行约 23px。 */
+const DEFAULT_CHARS_PER_LINE = 55
+const MIN_CHARS_PER_LINE = 18
+const AVG_MIXED_CHAR_WIDTH_PX = 14.9
+const MAX_TIMELINE_INNER_PX = 820
+const NARROW_CONTAINER_THRESHOLD_PX = 680
 const LINE_HEIGHT_PX = 23
 /** 单条工具行 / 折叠组摘要行（26px 行高 + 间隙均摊）。 */
 const TOOL_ROW_PX = 30
@@ -49,6 +53,26 @@ const HUMAN_CHROME_PX = 42
 const TURN_CHROME_PX = 48
 /** 每个附件芯片（缩略图/芯片行）估高。 */
 const ATTACHMENT_PX = 34
+
+export interface ContainmentEstimateOptions {
+  /** 滚动容器宽度（px）：窄屏/分屏自动收窄每行字符数，避免移动端估高偏矮。 */
+  containerWidthPx?: number
+  /** 显式指定每行字符数（优先级高于 containerWidthPx）。 */
+  charsPerLine?: number
+}
+
+/** 按容器宽度自适应每行估算字符数；未传或非法宽度回退桌面默认 55。 */
+export function resolveCharsPerLine(containerWidthPx?: number): number {
+  if (containerWidthPx === undefined || !Number.isFinite(containerWidthPx) || containerWidthPx <= 0) {
+    return DEFAULT_CHARS_PER_LINE
+  }
+  const horizontalPadding = containerWidthPx <= NARROW_CONTAINER_THRESHOLD_PX ? 28 : 48
+  const contentWidth = Math.min(MAX_TIMELINE_INNER_PX, Math.max(200, containerWidthPx - horizontalPadding))
+  return Math.max(
+    MIN_CHARS_PER_LINE,
+    Math.min(DEFAULT_CHARS_PER_LINE, Math.round(contentWidth / AVG_MIXED_CHAR_WIDTH_PX)),
+  )
+}
 
 function bucketByEstimatedHeight(px: number): ContainmentBucket {
   if (px <= 160) return 'sm'
@@ -63,11 +87,18 @@ function bucketByEstimatedHeight(px: number): ContainmentBucket {
  *   首次渲染后由 contain-intrinsic-size 的 auto 记忆沿用真实高度；
  * - human / assistant：按正文字符量（+附件/工具行数）粗估行数后分桶。
  */
-export function estimateContainmentBucket(item: TimelineItem): ContainmentBucket {
+export function estimateContainmentBucket(
+  item: TimelineItem,
+  options?: ContainmentEstimateOptions,
+): ContainmentBucket {
   if (item.kind === 'divider') return 'xs'
   if (item.kind === 'plugin-card') return 'md'
+  const charsPerLine =
+    options?.charsPerLine !== undefined && Number.isFinite(options.charsPerLine) && options.charsPerLine > 0
+      ? options.charsPerLine
+      : resolveCharsPerLine(options?.containerWidthPx)
   if (item.kind === 'human') {
-    const lines = Math.max(1, Math.ceil(item.text.length / CHARS_PER_LINE))
+    const lines = Math.max(1, Math.ceil(item.text.length / charsPerLine))
     const attachments = item.attachments?.length ?? 0
     return bucketByEstimatedHeight(lines * LINE_HEIGHT_PX + attachments * ATTACHMENT_PX + HUMAN_CHROME_PX)
   }
@@ -79,7 +110,7 @@ export function estimateContainmentBucket(item: TimelineItem): ContainmentBucket
     if (seg.kind === 'text') chars += seg.text.length
     else rows += 1
   }
-  const lines = chars === 0 ? 0 : Math.ceil(chars / CHARS_PER_LINE)
+  const lines = chars === 0 ? 0 : Math.ceil(chars / charsPerLine)
   return bucketByEstimatedHeight(lines * LINE_HEIGHT_PX + rows * TOOL_ROW_PX + TURN_CHROME_PX)
 }
 
@@ -100,6 +131,10 @@ export interface ContainmentExclusions {
   releasedEntryIds: ReadonlySet<string>
   /** 最新 assistant 回合 key：无论会话 busy 与否始终真实渲染（见下）。 */
   latestAssistantKey?: string
+  /** 滚动容器宽度（px），用于移动端/窄分屏自适应估高分桶。 */
+  containerWidthPx?: number
+  /** 显式每行字符数（优先级高于 containerWidthPx）。 */
+  charsPerLine?: number
 }
 
 /**
@@ -123,7 +158,12 @@ export function resolveContainmentClass(
     if (item.key === exclusions.latestAssistantKey) return ''
   }
   if (exclusions.releasedEntryIds.has(timelineAnchorId(item))) return ''
-  return containmentClassName(estimateContainmentBucket(item))
+  return containmentClassName(
+    estimateContainmentBucket(item, {
+      ...(exclusions.containerWidthPx !== undefined ? { containerWidthPx: exclusions.containerWidthPx } : {}),
+      ...(exclusions.charsPerLine !== undefined ? { charsPerLine: exclusions.charsPerLine } : {}),
+    }),
+  )
 }
 
 /**

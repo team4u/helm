@@ -540,3 +540,74 @@ test('回到底部按钮：距底 <=240px 隐藏、>240px 浮现，带生成/未
   innerResizeObserver().trigger()
   assert.equal(mock.top(), 1700, '点击回到底部后必须恢复自动跟底（2500-800）')
 })
+
+// ---------------------------------------------------------------------------
+// SWR 静默替换：贴底保持贴底、上滑维持稳定 scrollAnchor
+// ---------------------------------------------------------------------------
+
+test('SWR 静默替换：贴底用户保持贴底，已上滑用户维持 scrollAnchor 不跳回底部且后台 trigger/agent 不抢滚动', { timeout: 60_000 }, async () => {
+  const raf = installManualRaf()
+  const baseEntries: ConversationEntry[] = [
+    humanEntry('1', '问 1'),
+    assistantEntry('2', '答 1'),
+    humanEntry('3', '问 2'),
+    assistantEntry('4', '答 2'),
+  ]
+
+  // 1) 贴底用户：SWR 静默替换 entries（非空替换并新增尾部回复）→ 继续贴底
+  const scrollerA = await renderTimeline(makeConv(10, { status: 'idle' }), baseEntries)
+  const mockA = setupClampedScroll(scrollerA, { scrollHeight: 2000, clientHeight: 800, scrollTop: 0 })
+  await exhaustInitialWindow(raf)
+  assert.equal(mockA.top(), 1200, '初始贴底')
+
+  mockA.setHeight(2400)
+  await rerenderTimeline({
+    conv: makeConv(10, { status: 'idle' }),
+    entries: [...baseEntries.map((x) => ({ ...x })), assistantEntry('5', '重连补回的新回答')],
+  })
+  assert.equal(mockA.top(), 1600, '贴底用户在 SWR 静默替换后继续保持贴底')
+
+  act(() => root!.unmount())
+  root = undefined
+  host?.remove()
+  host = undefined
+
+  // 2) 已上滑阅读历史的用户：SWR 静默替换引起上方条目增高 +120px 或后台 trigger 注入 →
+  //    通过 scrollAnchor 精确补偿 +120px，保持不跳回底部
+  const scrollerB = await renderTimeline(makeConv(11, { status: 'idle' }), baseEntries)
+  const mockB = setupClampedScroll(scrollerB, { scrollHeight: 2000, clientHeight: 800, scrollTop: 0 })
+  await exhaustInitialWindow(raf)
+  assert.equal(mockB.top(), 1200)
+
+  // 用户上滑至 500 阅读条目 #3
+  scrollerB.dispatchEvent(wheelUpEvent())
+  mockB.setTopSilent(500)
+  scrollerB.dispatchEvent(new Event('scroll'))
+
+  const row3 = host!.querySelector<HTMLElement>('[data-entry-id="3"]')!
+  scrollerB.getBoundingClientRect = () => ({ top: 0, bottom: 800, left: 0, width: 400, height: 800 } as DOMRect)
+  row3.getBoundingClientRect = () => {
+    const top = scrollerB.querySelector('[data-entry-id="6"]') !== null ? 260 : 140
+    return { top, bottom: top + 60 } as DOMRect
+  }
+  const origElementFromPoint = document.elementFromPoint
+  document.elementFromPoint = () => row3
+  try {
+    // 模拟 SWR 重连替换 entries：DOM 提交条目 #6 后上方变高，row3 视觉向下偏移 +120px（140 -> 260），
+    // 且追加一条后台 trigger 输入（非人类主动输入）
+    mockB.setHeight(2300)
+    const triggerEntry: ConversationEntry = {
+      id: '6',
+      kind: 'helm.input',
+      data: { id: 'in-trig-6', text: '后台触发任务', origin: 'trigger' },
+      createdAt: 2000,
+    }
+    await rerenderTimeline({
+      conv: makeConv(11, { status: 'idle' }),
+      entries: [...baseEntries.map((x) => ({ ...x })), triggerEntry],
+    })
+    assert.equal(mockB.top(), 620, 'SWR 上方内容变化后通过 scrollAnchor 精确补偿 +120px，绝不跳回底部')
+  } finally {
+    document.elementFromPoint = origElementFromPoint
+  }
+})

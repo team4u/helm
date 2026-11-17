@@ -638,135 +638,116 @@ test('visible 期间按周期轮询；hidden 暂停；恢复 visible 后继续',
 })
 
 // ---------------------------------------------------------------------------
-// vite:preloadError 兜底
+// vite:preloadError 弱网安全守卫
 // ---------------------------------------------------------------------------
 
-test('vite:preloadError：clean 立即刷新且只刷一次；重复事件不重复刷新', { timeout: 60_000 }, async () => {
+test('vite:preloadError：/index.html 指纹未变时不强刷整页，暴露可恢复 preloadError 状态并推送通知', { timeout: 60_000 }, async () => {
+  entryCleanup = installProductionEntry(CURRENT_ENTRY)
+  const notices: Array<{ level?: string; title?: string }> = []
+  harness = mountWatcher(builtIndexHtml(CURRENT_ENTRY))
+  const h = harness
+  h.renderStore('boot-1', { pushNotice: (notice) => notices.push(notice) })
+  await flush()
+
+  const event = new Event('vite:preloadError', { cancelable: true })
+  act(() => {
+    window.dispatchEvent(event)
+  })
+  await flush()
+
+  assert.equal(event.defaultPrevented, true, 'handler 恒接管并取消默认重抛')
+  assert.equal(h.fetchCalls.length, 1, '触发 /index.html 入口指纹探测')
+  assert.equal(h.reloads(), 0, '指纹未变时绝不强刷整页导致会话/草稿丢失')
+  assert.equal(h.view().updateAvailable, false, '指纹未变时不误报新版本')
+  assert.equal(h.view().preloadError, true, '暴露可恢复 preloadError 状态供重试')
+  assert.equal(notices.length, 1)
+  assert.equal(notices[0]?.level, 'warning')
+
+  act(() => {
+    h.view().clearPreloadError()
+  })
+  await flush()
+  assert.equal(h.view().preloadError, false, '重试后可复位 preloadError 状态')
+})
+
+test('vite:preloadError：探测失败（500 / 离线）同样不强刷整页，保留草稿并暴露可恢复状态', { timeout: 60_000 }, async () => {
   entryCleanup = installProductionEntry(CURRENT_ENTRY)
   harness = mountWatcher()
   const h = harness
+  h.respond(() => new Response('offline', { status: 503 }))
   await flush()
+
   act(() => {
-    window.dispatchEvent(new Event('vite:preloadError'))
+    window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
   })
   await flush()
-  assert.equal(h.reloads(), 1)
-  act(() => {
-    window.dispatchEvent(new Event('vite:preloadError'))
-  })
-  await flush()
-  assert.equal(h.reloads(), 1, '防重复刷新')
+
+  assert.equal(h.fetchCalls.length, 1)
+  assert.equal(h.reloads(), 0, '探测失败不盲目强刷整页')
+  assert.equal(h.view().updateAvailable, false)
+  assert.equal(h.view().preloadError, true)
 })
 
-test('vite:preloadError + dirty：挂起提示不被后续指纹未变的探测解除；转清补刷', { timeout: 60_000 }, async () => {
+test('vite:preloadError：探测到 /index.html 指纹确已变更时升级重载（clean 立即刷新、dirty 挂起转清补刷）', { timeout: 60_000 }, async () => {
   entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher()
+  harness = mountWatcher(builtIndexHtml(NEW_ENTRY))
   const h = harness
   act(() => {
     setComposerDirty('watch-test-composer', { ...CLEAN_COMPOSER, hasAttachments: true })
   })
   await flush()
+
   act(() => {
-    window.dispatchEvent(new Event('vite:preloadError'))
+    window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
   })
   await flush()
-  assert.equal(h.view().updateAvailable, true, '资产失效即使指纹未变也提示待刷新')
-  assert.equal(h.reloads(), 0)
 
-  // 后续探测（bootId 首基线 -> 变化）返回相同指纹：挂起提示保持（chunk 已损坏）
-  h.renderStore('boot-1')
-  await flush()
-  assert.equal(h.fetchCalls.length, 0, '首基线不探测')
-  h.renderStore('boot-2')
-  await flush()
-  assert.ok(h.fetchCalls.length >= 1)
-  assert.equal(h.view().updateAvailable, true)
+  assert.equal(h.fetchCalls.length, 1)
+  assert.equal(h.view().updateAvailable, true, '确认新版本已发布，置 updateAvailable')
+  assert.equal(h.view().deferReason, 'draft', '有草稿时保守挂起不强刷')
+  assert.equal(h.view().preloadError, false, '已确认新版本时不留弱网重试态')
+  assert.equal(h.reloads(), 0)
 
   act(() => {
     setComposerDirty('watch-test-composer', CLEAN_COMPOSER)
   })
   await flush()
-  assert.equal(h.reloads(), 1)
+  assert.equal(h.reloads(), 1, '草稿转清后自动补刷一次')
+
+  // 重复事件不再二次刷新
+  act(() => {
+    window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
+  })
+  await flush()
+  assert.equal(h.reloads(), 1, '防重复刷新')
 })
 
-// ---------------------------------------------------------------------------
-// preloadError 跨 reload 防环与 Vite 事件契约
-// ---------------------------------------------------------------------------
-
-test('preloadError 事件被接管：cancelable 事件 preventDefault，Vite 不再重抛错误', { timeout: 60_000 }, async () => {
+test('vite:preloadError：先弱网失败后服务端发版，再次探测确认指纹变更后升级刷新', { timeout: 60_000 }, async () => {
   entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher()
+  harness = mountWatcher(builtIndexHtml(CURRENT_ENTRY))
   const h = harness
   await flush()
-  const event = new Event('vite:preloadError', { cancelable: true })
-  act(() => {
-    window.dispatchEvent(event)
-  })
-  await flush()
-  assert.equal(event.defaultPrevented, true, 'handler 恒接管并取消默认重抛')
-  assert.equal(h.reloads(), 1, 'clean 且名额可用时自动刷新')
-})
 
-test('preloadError 自动重试每 tab 仅一次：名额用完保留提示，仅允许手动刷新', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  // 模拟本 tab 此前已用完自动重试名额（跨 reload 的 sessionStorage 标记）
-  sessionStorage.setItem(PRELOAD_RELOAD_GUARD_KEY, '1')
-  harness = mountWatcher()
-  const h = harness
-  await flush()
-  const event = new Event('vite:preloadError', { cancelable: true })
   act(() => {
-    window.dispatchEvent(event)
-  })
-  await flush()
-  assert.equal(h.reloads(), 0, '名额已用完不再自动 reload（防环）')
-  assert.equal(h.view().updateAvailable, true, '保留待刷新提示')
-  assert.equal(event.defaultPrevented, true, '仍接管事件，错误不重抛')
-
-  // 挂起条件反复变化（失焦/聚焦）也不得绕过名额自动刷新
-  const input = document.createElement('input')
-  document.body.appendChild(input)
-  act(() => {
-    input.focus()
-  })
-  act(() => {
-    input.blur()
+    window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
   })
   await flush()
   assert.equal(h.reloads(), 0)
-  input.remove()
-
-  // 手动「立即刷新」不受名额限制
-  act(() => {
-    h.view().reloadNow()
-  })
-  await flush()
-  assert.equal(h.reloads(), 1)
-})
-
-test('preloadError 名额拒绝后：真实指纹变化仍正常自动刷新（不受 preload 名额限制）', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  sessionStorage.setItem(PRELOAD_RELOAD_GUARD_KEY, '1')
-  harness = mountWatcher()
-  const h = harness
-  h.renderStore('boot-1')
-  await flush()
-  act(() => {
-    window.dispatchEvent(new Event('vite:preloadError'))
-  })
-  await flush()
-  assert.equal(h.reloads(), 0)
-  assert.equal(h.view().updateAvailable, true)
+  assert.equal(h.view().preloadError, true)
 
   h.respond(() => htmlOf(NEW_ENTRY))
-  h.renderStore('boot-2')
+  act(() => {
+    window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
+  })
   await flush()
-  assert.equal(h.reloads(), 1, '指纹变化驱动的正常刷新不受名额限制')
+  assert.equal(h.view().preloadError, false)
+  assert.equal(h.view().updateAvailable, true)
+  assert.equal(h.reloads(), 1, '指纹变化后按版本更新逻辑刷新')
 })
 
-test('storage 不可用兜底：preloadError 拒绝自动刷新，保留提示', { timeout: 60_000 }, async () => {
+test('vite:preloadError 命中新指纹但 storage 不可用：fail-closed 保留横幅与手动刷新', { timeout: 60_000 }, async () => {
   entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher()
+  harness = mountWatcher(builtIndexHtml(NEW_ENTRY))
   const h = harness
   await flush()
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage')
@@ -778,10 +759,10 @@ test('storage 不可用兜底：preloadError 拒绝自动刷新，保留提示',
   })
   try {
     act(() => {
-      window.dispatchEvent(new Event('vite:preloadError'))
+      window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
     })
     await flush()
-    assert.equal(h.reloads(), 0, 'storage 不可用宁可提示，绝不跨页循环')
+    assert.equal(h.reloads(), 0, 'storage 不可用拒绝自动刷新，绝不跨页循环')
     assert.equal(h.view().updateAvailable, true)
   } finally {
     if (descriptor !== undefined) Object.defineProperty(globalThis, 'sessionStorage', descriptor)
@@ -1176,9 +1157,13 @@ test('App 版本横幅集成：渲染显式 type=button 立即刷新按钮并直
       replacedUrls.push(String(url))
     },
   })
+  let indexHtml = builtIndexHtml(CURRENT_ENTRY)
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     if (url === '/api/auth/status') return jsonResponse({ configured: true, authenticated: true })
+    if (url.startsWith('/index.html')) {
+      return new Response(indexHtml, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } })
+    }
     if (url === '/api/events' || url.startsWith('/api/events?')) {
       return new Response(
         hangingEventStream((send) => {
@@ -1203,8 +1188,18 @@ test('App 版本横幅集成：渲染显式 type=button 立即刷新按钮并直
       appRoot.render(<App />)
     })
     await waitForCondition(() => appHost.querySelector('.helm-shell') !== null)
+    // 弱网失败（指纹未变）：不弹版本横幅、不强刷，改为提示可恢复错误
     act(() => {
-      window.dispatchEvent(new Event('vite:preloadError'))
+      window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
+    })
+    await waitForCondition(() => appHost.querySelector('.toast-overlay') !== null)
+    assert.ok(appHost.querySelector('.version-banner[role="status"]') === null, '指纹未变不弹 version-banner')
+    assert.equal(replacedUrls.length, 0, '指纹未变不触发刷新')
+
+    // 服务端发版后再次触发：探测到 NEW_ENTRY，渲染 version-banner 并可立即刷新
+    indexHtml = builtIndexHtml(NEW_ENTRY)
+    act(() => {
+      window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
     })
     await waitForCondition(() => appHost.querySelector('.version-banner[role="status"]') !== null)
     const banner = appHost.querySelector<HTMLElement>('.version-banner[role="status"]')

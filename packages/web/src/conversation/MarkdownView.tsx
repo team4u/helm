@@ -6,6 +6,7 @@ import { SyntaxCode } from './SyntaxCode.js'
 import { CopyButton, HelmIcon, markdownUrlTransform, parseArtifactUrl } from '@helm/plugin-client'
 import type { MarkdownViewProps } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
+import { LazyMount } from '../ui/LazyMount.js'
 import { CodeBlockRenderer } from './CodeBlockRenderer.js'
 import { artifactsApi } from '../lib/api.js'
 import {
@@ -182,7 +183,25 @@ export const MarkdownView = memo(function MarkdownView({ text, conversationId, s
     pre: ({ children, node }) => {
       const block = extractCodeBlock(node)
       if (block !== null) {
-        return <CodeBlockRenderer language={block.language} code={block.code} conversationId={conversationId} />
+        const lineCount = block.code.split('\n').length
+        const estimatedHeight = Math.min(420, Math.max(72, lineCount * 20 + 40))
+        return (
+          <LazyMount
+            minHeight={estimatedHeight}
+            fallback={
+              <div className="code-block-wrap">
+                <div className="code-block-header">
+                  <span>{block.language === '' ? 'text' : block.language}</span>
+                </div>
+                <pre className="code-block-pre selectable">
+                  <code>{block.code}</code>
+                </pre>
+              </div>
+            }
+          >
+            <CodeBlockRenderer language={block.language} code={block.code} conversationId={conversationId} />
+          </LazyMount>
+        )
       }
       return <pre className="msg-md-pre-fallback code-block-pre selectable">{children}</pre>
     },
@@ -222,13 +241,24 @@ export const MarkdownView = memo(function MarkdownView({ text, conversationId, s
     img: ({ src, alt, title }) => {
       const artifactId = parseArtifactUrl(src)
       if (artifactId !== null) {
+        const label = alt || title || 'Artifacts'
         return (
-          <ArtifactInlineMedia
-            artifactId={artifactId}
-            conversationId={conversationId}
-            alt={alt}
-            title={title}
-          />
+          <LazyMount
+            inline
+            fallback={
+              <span className="attachment-chip">
+                <HelmIcon name="file-text" size={11} />
+                <span>{label}</span>
+              </span>
+            }
+          >
+            <ArtifactInlineMedia
+              artifactId={artifactId}
+              conversationId={conversationId}
+              alt={alt}
+              title={title}
+            />
+          </LazyMount>
         )
       }
       return <img src={src} alt={alt} title={title} loading="lazy" />

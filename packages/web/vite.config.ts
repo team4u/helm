@@ -5,6 +5,29 @@ import react from '@vitejs/plugin-react'
 const hubPort = process.env.HELM_PORT ?? '3202'
 const hubTarget = `http://127.0.0.1:${hubPort}`
 
+function packageNameFromId(id: string): string | null {
+  const normalized = id.replaceAll('\\', '/')
+  const marker = '/node_modules/'
+  const idx = normalized.lastIndexOf(marker)
+  if (idx === -1) return null
+  const rest = normalized.slice(idx + marker.length)
+  if (rest.startsWith('.pnpm/')) return null
+  if (rest.startsWith('@')) {
+    const parts = rest.split('/')
+    return parts.length >= 2 ? `${parts[0]}/${parts[1]}` : null
+  }
+  return rest.split('/', 1)[0] ?? null
+}
+
+const REACT_PKGS = new Set(['react', 'react-dom', 'scheduler'])
+const MARKDOWN_PKGS = new Set([
+  'react-markdown',
+  'remark-gfm',
+  'remark-parse',
+  'remark-rehype',
+  'unified',
+])
+
 export default defineConfig({
   clearScreen: false,
   plugins: [react()],
@@ -34,5 +57,21 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          const pkg = packageNameFromId(id)
+          if (pkg === null) return undefined
+          if (REACT_PKGS.has(pkg)) return 'vendor-react'
+          if (pkg.startsWith('@radix-ui/')) return 'vendor-radix'
+          if (pkg === 'lucide-react') return 'vendor-lucide'
+          if (MARKDOWN_PKGS.has(pkg) || pkg.startsWith('mdast-') || pkg.startsWith('hast-') || pkg.startsWith('micromark') || pkg.startsWith('unist-')) {
+            return 'vendor-markdown'
+          }
+          if (pkg === 'ajv') return 'vendor-ajv'
+          return undefined
+        },
+      },
+    },
   },
 })

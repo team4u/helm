@@ -7,15 +7,19 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helm/protocol'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
+import { renderToString } from 'react-dom/server'
 import {
   CONTAINMENT_INTRINSIC_PX,
   containmentClassName,
   estimateContainmentBucket,
   resolveActiveAnchorIndex,
+  resolveCharsPerLine,
   resolveContainmentClass,
   supportsTimelineContainment,
   timelineAnchorId,
 } from '../src/conversation/timeline-containment-model.js'
+import { LazyMount } from '../src/ui/LazyMount.js'
+import { MarkdownView } from '../src/conversation/MarkdownView.js'
 import {
   buildTimelineItems,
   type AssistantTurn,
@@ -493,4 +497,214 @@ test('buildTimelineItems 回归：隔离启用前后 items 锚点序列一致（
     items.map((item) => timelineAnchorId(item)),
     ['1', '2', '3', '4'],
   )
+})
+
+// ---------------------------------------------------------------------------
+// 7. 移动端容器宽度自适应估高分桶
+// ---------------------------------------------------------------------------
+
+test('resolveCharsPerLine 与窄屏估高：保留无参桌面默认 55，移动端宽度自动收窄避免估高偏矮', { timeout: 60_000 }, () => {
+  assert.equal(resolveCharsPerLine(), 55)
+  assert.equal(resolveCharsPerLine(undefined), 55)
+  assert.equal(resolveCharsPerLine(0), 55)
+  assert.equal(resolveCharsPerLine(1200), 55)
+  assert.equal(resolveCharsPerLine(375), 23)
+  assert.equal(resolveCharsPerLine(320), 20)
+
+  // 200 字符在桌面（55/行）只需 4 行（sm），在 375px 移动端折为 9 行（md）
+  const mediumHuman = human('m1', 'x'.repeat(200))
+  assert.equal(estimateContainmentBucket(mediumHuman), 'sm')
+  assert.equal(estimateContainmentBucket(mediumHuman, { containerWidthPx: 375 }), 'md')
+
+  // 600 字符在桌面为 md，在 375px 移动端折为 27 行（lg）
+  const longAssistant = turn('a1', 'x'.repeat(600))
+  assert.equal(estimateContainmentBucket(longAssistant), 'md')
+  assert.equal(estimateContainmentBucket(longAssistant, { containerWidthPx: 375 }), 'lg')
+
+  // resolveContainmentClass 透传 containerWidthPx / charsPerLine
+  assert.equal(
+    resolveContainmentClass(longAssistant, { releasedEntryIds: noRelease, containerWidthPx: 375 }, true),
+    'tl-cv-lg',
+  )
+  assert.equal(
+    resolveContainmentClass(mediumHuman, { releasedEntryIds: noRelease, charsPerLine: 23 }, true),
+    'tl-cv-md',
+  )
+})
+
+// ---------------------------------------------------------------------------
+// 8. LazyMount 近视口懒挂载（代码块 / 内联产物媒体 / 附件图片）
+// ---------------------------------------------------------------------------
+
+test('LazyMount：无 IO 与 SSR 环境直出 children；有 IO 时近视口挂载且保持不卸载', { timeout: 60_000 }, async () => {
+  // 1) SSR renderToString：无 IO，直出 children
+  const savedIO = (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver
+  ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = undefined
+  try {
+    const ssrHtml = renderToString(
+      e(LazyMount, {
+        fallback: e('span', { className: 'lazy-ph' }, 'waiting'),
+        children: e('span', { className: 'lazy-real' }, 'mounted'),
+      }),
+    )
+    assert.ok(ssrHtml.includes('lazy-real'), 'SSR 环境立即直出真实内容')
+    assert.ok(!ssrHtml.includes('lazy-ph'))
+
+    // 2) happy-dom 无 IO 环境（IntersectionObserver = undefined）：立即直出
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root = createRoot(host!)
+      root.render(
+        e(LazyMount, {
+          fallback: e('div', { className: 'lazy-ph' }),
+          children: e('div', { className: 'lazy-real' }, 'ready'),
+        }),
+      )
+    })
+    assert.ok(host.querySelector('.lazy-real') !== null, '无 IO 环境直接渲染')
+    act(() => root!.unmount())
+    root = undefined
+    host.remove()
+  } finally {
+    ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = savedIO
+  }
+
+  // 3) 真实 IO（FakeIntersectionObserver）：未进入近视口前仅渲染占位，进入后挂载且离开也不卸载
+  const prevInstances = [...FakeIntersectionObserver.instances]
+  FakeIntersectionObserver.instances = []
+  ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = FakeIntersectionObserver
+  try {
+    let mountCount = 0
+    let unmountCount = 0
+    function Probe(): React.ReactNode {
+      React.useEffect(() => {
+        mountCount += 1
+        return () => {
+          unmountCount += 1
+        }
+      }, [])
+      return e('div', { className: 'lazy-child' }, 'loaded')
+    }
+
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root = createRoot(host!)
+      root.render(
+        e(LazyMount, {
+          minHeight: 100,
+          fallback: e('div', { className: 'lazy-fallback' }, 'placeholder'),
+          children: e(Probe),
+        }),
+      )
+    })
+    assert.ok(host.querySelector('.lazy-fallback') !== null, '进视口前渲染轻量占位')
+    assert.ok(host.querySelector('.lazy-child') === null, '进视口前不挂载子组件')
+    assert.equal(mountCount, 0)
+    assert.equal(FakeIntersectionObserver.instances.length, 1)
+    const io = FakeIntersectionObserver.instances[0]!
+    assert.equal(io.rootMargin, '400px 0px', '默认提前 400px 近视口预挂载')
+
+    const slotEl = host.querySelector('.lazy-mount')!
+    await act(async () => {
+      io.deliver([{ target: slotEl, isIntersecting: true }])
+    })
+    assert.ok(host.querySelector('.lazy-child') !== null, '进入近视口后挂载真实子组件')
+    assert.equal(mountCount, 1)
+    assert.equal(io.disconnected, true, '一次性挂载后断开观察器')
+
+    // 即使后续滚离也不会卸载
+    await act(async () => {
+      io.deliver([{ target: slotEl, isIntersecting: false }])
+    })
+    assert.ok(host.querySelector('.lazy-child') !== null)
+    assert.equal(unmountCount, 0, '挂载后保持已挂载状态不反复卸载')
+  } finally {
+    ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = savedIO
+    FakeIntersectionObserver.instances = prevInstances
+  }
+})
+
+test('MarkdownView 与 ConversationTimeline：远视口内联媒体、附件图片与代码块延迟 fetch 直到接近视口', { timeout: 60_000 }, async () => {
+  const savedIO = (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver
+  const prevInstances = [...FakeIntersectionObserver.instances]
+  FakeIntersectionObserver.instances = []
+  ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = FakeIntersectionObserver
+
+  const fetchedUrls: string[] = []
+  const origFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    fetchedUrls.push(String(input))
+    return new Response(new Blob(['img'], { type: 'image/png' }), { status: 200, headers: { 'content-type': 'image/png' } })
+  }) as typeof fetch
+
+  try {
+    const conv = makeConv(10)
+    const entries: ConversationEntry[] = [
+      {
+        id: '1',
+        kind: 'helm.input',
+        data: {
+          id: 'in-1',
+          text: '看附件图',
+          origin: 'human',
+          attachments: [{ id: 'att-img-1', name: 'shot.png', mimeType: 'image/png', size: 120 }],
+        },
+        createdAt: 1000,
+      },
+      assistantEntry('2', '正文\n\n![内联图](artifact:art-inline-1)\n\n```ts\nconst x = 1\n```'),
+    ]
+    const store = makeTestStore({
+      conversations: [conv],
+      conversationDetails: { 10: { ...conv, entries } },
+    })
+
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root = createRoot(host!)
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: store },
+          e(ConversationTimeline, {
+            conversation: conv,
+            detailEntries: entries,
+            onRequestEdit: () => {},
+          }),
+        ),
+      )
+    })
+
+    // 进视口前：均停留在占位态，未触发任何 fetchBlob 请求，也未挂载 .code-block-wrap 完整代码块
+    assert.equal(fetchedUrls.length, 0, '视口外媒体与附件未触发任何 artifact fetch')
+    assert.ok(host.querySelector('.attachment-image-thumb') === null)
+    assert.ok(host.querySelector('.lazy-mount') !== null, '代码块处于 LazyMount 占位')
+    assert.ok(host.querySelector('.lazy-mount-inline') !== null, '附件与内联媒体处于内联 LazyMount 占位')
+
+    // 逐个触发近视口相交：附件图片和内联媒体才触发 fetchBlob
+    for (const io of FakeIntersectionObserver.instances) {
+      const entriesToDeliver = [...io.targets].map((target) => ({ target, isIntersecting: true }))
+      if (entriesToDeliver.length > 0) {
+        await act(async () => {
+          io.deliver(entriesToDeliver)
+        })
+      }
+    }
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    assert.ok(fetchedUrls.some((u) => u.includes('att-img-1')), '进入近视口后触发附件图片 fetch')
+    assert.ok(fetchedUrls.some((u) => u.includes('art-inline-1')), '进入近视口后触发内联媒体 fetch')
+    assert.ok(host.querySelector('.code-block-wrap') !== null, '进入近视口后挂载真实 CodeBlockRenderer')
+
+    // MarkdownView 单独验证无 Wrapper 残留（挂载后释放占位容器）
+    const mdHtml = host.querySelector('.msg-ai-body')?.innerHTML ?? ''
+    assert.ok(!mdHtml.includes('lazy-mount'), '挂载完成后 LazyMount 直接透传 children')
+  } finally {
+    globalThis.fetch = origFetch
+    ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = savedIO
+    FakeIntersectionObserver.instances = prevInstances
+  }
 })

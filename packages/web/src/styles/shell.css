@@ -321,3 +321,155 @@
   to { transform: translateX(0); }
 }
 
+/* ==========================================================================
+ * SSE 浮动重连胶囊、Suspense 懒加载占位与首页落地中性骨架屏
+ * ========================================================================== */
+
+/* 浮动重连胶囊：不进 .helm-main-stage 文档流，避免挤压 .helm-panes 触发时间线跳动 */
+.connection-banner {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 65;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  max-width: min(640px, calc(100vw - 32px));
+  padding: 6px 14px;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-md);
+  color: var(--warn);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.connection-banner-hint {
+  color: var(--fg-secondary);
+}
+
+.screen-loading {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: var(--fg-muted);
+  font-size: 12.5px;
+}
+
+.screen-loading-overlay {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 95;
+  flex: none;
+  padding: 10px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+
+.lazy-load-error {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.lazy-load-error-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 105;
+  background: var(--bg-backdrop);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.lazy-load-error .callout {
+  max-width: 420px;
+  align-items: flex-start;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+.lazy-load-error-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.lazy-load-error-body p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-secondary);
+  overflow-wrap: anywhere;
+}
+
+.lazy-load-error-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.home-landing-skeleton {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.home-landing-skeleton-bar {
+  height: 46px;
+  min-height: 46px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.home-landing-skeleton-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+}
+
+.home-landing-skeleton-line {
+  height: 12px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-muted);
+  animation: homeSkeletonPulse 1.6s ease-in-out infinite;
+}
+
+.home-landing-skeleton-line-title {
+  width: min(200px, 50%);
+  height: 16px;
+}
+
+.home-landing-skeleton-line-wide {
+  width: min(340px, 75%);
+}
+
+.home-landing-skeleton-line-short {
+  width: min(240px, 60%);
+}
+
+@keyframes homeSkeletonPulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 0.9; }
+}
+

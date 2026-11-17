@@ -22,6 +22,8 @@ import type { ResolvedTarget } from '../src/lib/types.js'
 GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
+const { App } = await import('../src/App.js')
+
 const e = React.createElement
 
 // ---------------------------------------------------------------------------
@@ -280,5 +282,198 @@ test('弹窗深链入口不落地：无显式主屏目标但有弹窗时主屏�
     assert.notEqual(window.location.hash, '#/a/assistant')
   } finally {
     app.unmount()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// App 级集成：落地中性骨架屏（不闪 ProfileCenter）、连接横幅 1500ms 防抖与懒加载
+// ---------------------------------------------------------------------------
+
+test('App 空 Hash 落地期渲染 .home-landing-skeleton，绝不闪现 ProfileCenter 后再跳走', { timeout: 60_000 }, async (t) => {
+  let releaseProfiles!: () => void
+  const profilesGate = new Promise<void>((resolve) => { releaseProfiles = resolve })
+  const stub = stubFetch({
+    snapshotPayload: snapshotOf([CONV_ROOT]),
+    profilesResponse: async () => {
+      await profilesGate
+      return [{ id: 'assistant', name: 'Assistant' }]
+    },
+  })
+  t.after(() => {
+    releaseProfiles()
+    stub.restore()
+  })
+  resetEmptyHash()
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  let sawProfileCenter = false
+  const observer = new MutationObserver(() => {
+    if (host.textContent?.includes('Agent Profile Center')) sawProfileCenter = true
+  })
+  observer.observe(host, { childList: true, subtree: true, characterData: true })
+
+  try {
+    await act(async () => {
+      root.render(e(App))
+    })
+
+    // 认证与 SSE 就绪但 profiles 尚未完成：homeLandingPending 为真，渲染中性骨架屏而非 ProfileCenter
+    const deadline = Date.now() + 10_000
+    while (host.querySelector('.home-landing-skeleton') === null) {
+      if (Date.now() > deadline) throw new Error('等待 .home-landing-skeleton 超时')
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 15)) })
+    }
+    assert.ok(host.querySelector('.home-landing-skeleton') !== null, '落地等待期渲染 .home-landing-skeleton')
+    assert.equal(sawProfileCenter, false, '落地等待期绝不闪现 ProfileCenter')
+
+    // 释放 profiles：就绪后直接落入待命页，全程未闪现 ProfileCenter
+    await act(async () => { releaseProfiles() })
+    const settleDeadline = Date.now() + 10_000
+    while (host.querySelector('.agent-standby-pane') === null) {
+      if (Date.now() > settleDeadline) throw new Error('等待 .agent-standby-pane 超时')
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 15)) })
+    }
+    assert.equal(sawProfileCenter, false, '全程未瞬时挂载 ProfileCenter')
+    assert.ok(host.querySelector('.home-landing-skeleton') === null, '落地完成后骨架屏退场')
+    assert.equal(window.location.hash, '#/a/assistant')
+  } finally {
+    observer.disconnect()
+    act(() => root.unmount())
+    host.remove()
+  }
+})
+
+test('App 空 Hash 且无任何角色/会话时：就绪后揭开 ProfileCenter 兜底（不永久卡在骨架屏）', { timeout: 60_000 }, async (t) => {
+  const stub = stubFetch({
+    snapshotPayload: snapshotOf([]),
+    profilesResponse: async () => [],
+  })
+  t.after(() => stub.restore())
+  resetEmptyHash()
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  try {
+    await act(async () => {
+      root.render(e(App))
+    })
+    const deadline = Date.now() + 10_000
+    while (!host.textContent?.includes('Agent Profile Center')) {
+      if (Date.now() > deadline) throw new Error(`等待 ProfileCenter 兜底超时: ${host.innerHTML}`)
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
+    }
+    assert.ok(host.querySelector('.home-landing-skeleton') === null)
+  } finally {
+    act(() => root.unmount())
+    host.remove()
+  }
+})
+
+test('App 连接横幅防抖：1500ms 内闪断不出现，断线持续 >=1500ms 才浮现，重连即消', { timeout: 60_000 }, async (t) => {
+  const originalFetch = globalThis.fetch
+  const encoder = new TextEncoder()
+  let sendEventsCount = 0
+  let closeStream: (() => void) | undefined
+  let releaseSecondConnect: (() => void) | undefined
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === '/api/auth/status') return jsonResponse({ configured: true, authenticated: true })
+    if (path.startsWith('/api/events')) {
+      sendEventsCount += 1
+      if (sendEventsCount === 2 && releaseSecondConnect === undefined) {
+        await new Promise<void>((resolve) => { releaseSecondConnect = resolve })
+      }
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode(`event: snapshot\ndata: ${JSON.stringify(snapshotOf([CONV_ROOT]))}\n\n`))
+            closeStream = () => {
+              try { controller.close() } catch { /* noop */ }
+            }
+            init?.signal?.addEventListener('abort', () => closeStream?.(), { once: true })
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'text/event-stream' } },
+      )
+    }
+    if (path === '/api/profiles') return jsonResponse([{ id: 'assistant', name: 'Assistant' }])
+    return jsonResponse([])
+  }) as typeof fetch
+  t.after(() => {
+    releaseSecondConnect?.()
+    globalThis.fetch = originalFetch
+  })
+
+  window.history.replaceState(null, '', '#/a/assistant')
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  try {
+    await act(async () => {
+      root.render(e(App))
+    })
+    const waitReadyDeadline = Date.now() + 10_000
+    while (host.querySelector('.agent-standby-pane') === null) {
+      if (Date.now() > waitReadyDeadline) throw new Error('等待待命页超时')
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 15)) })
+    }
+    assert.ok(host.querySelector('.connection-banner') === null, '首次快速建连不闪现 connection-banner')
+
+    // 触发断线并挂起第 2 次重连：在 1500ms 防抖期前绝不显示横幅
+    await act(async () => {
+      closeStream?.()
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    })
+    assert.ok(host.querySelector('.connection-banner') === null, '短断线（<1500ms）不闪现重连横幅')
+
+    // 越过 1500ms 后横幅浮现
+    const bannerDeadline = Date.now() + 5_000
+    while (host.querySelector('.connection-banner') === null) {
+      if (Date.now() > bannerDeadline) throw new Error('断线超过 1500ms 未展示 .connection-banner')
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
+    }
+    assert.ok(host.querySelector('.connection-banner') !== null)
+
+    // 恢复连接后横幅立即消失
+    await act(async () => {
+      releaseSecondConnect?.()
+    })
+    const clearDeadline = Date.now() + 5_000
+    while (host.querySelector('.connection-banner') !== null) {
+      if (Date.now() > clearDeadline) throw new Error('重连后 .connection-banner 未消失')
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
+    }
+    assert.ok(host.querySelector('.connection-banner') === null)
+  } finally {
+    act(() => root.unmount())
+    host.remove()
+  }
+})
+
+test('App 懒加载中心路由（#/settings/models）：Suspense 后渲染 ModelCenter', { timeout: 60_000 }, async (t) => {
+  const stub = stubFetch({ snapshotPayload: snapshotOf([CONV_ROOT]) })
+  t.after(() => stub.restore())
+  window.history.replaceState(null, '', '#/settings/models')
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  try {
+    await act(async () => {
+      root.render(e(App))
+    })
+    const deadline = Date.now() + 10_000
+    while (!host.textContent?.includes('Models & Credentials Center')) {
+      if (Date.now() > deadline) throw new Error(`等待 ModelCenter 懒加载超时: ${host.innerHTML}`)
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
+    }
+    assert.ok(host.textContent?.includes('Models & Credentials Center'))
+  } finally {
+    act(() => root.unmount())
+    host.remove()
   }
 })

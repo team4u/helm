@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type {
   AskSpec,
   ConversationAttachmentRef,
@@ -32,16 +32,18 @@ import {
 import { useTimelineEntryActions } from './timeline-actions.js'
 import { resolveActiveOutlineEntryId } from './outline-model.js'
 import { calibrateAnchorAfterSmoothScroll, calibrateInitialStickToBottom, type AnchorAlignment } from './timeline-scroll-calibration.js'
-import { captureTimelineScrollAnchor, restoreTimelineScrollAnchor } from './timeline-scroll-anchor.js'
+import { captureTimelineScrollAnchor, restoreTimelineScrollAnchor, type TimelineScrollAnchor } from './timeline-scroll-anchor.js'
 import {
   OUTLINE_ACTIVE_LINE_PX,
   resolveActiveAnchorIndex,
+  resolveCharsPerLine,
   resolveContainmentClass,
   supportsTimelineContainment,
   timelineAnchorId,
   type ContainmentExclusions,
 } from './timeline-containment-model.js'
 import { matchTimelineEntryActions, timelineEntryActionContextOf } from './action-model.js'
+import { LazyMount } from '../ui/LazyMount.js'
 import { PluginMicroAction } from '../ui/PluginMicroAction.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { formatBytes, formatDurationMs, formatFullTimestamp, formatMessageTime } from '../lib/format.js'
@@ -142,7 +144,18 @@ function AttachmentChips({
     <span className="msg-attachments-wrap">
       {attachments.map((att) =>
         att.mimeType.startsWith('image/') ? (
-          <AttachmentImage key={att.id} att={att} conversationId={conversationId} />
+          <LazyMount
+            key={att.id}
+            inline
+            fallback={
+              <span className="attachment-chip">
+                <HelmIcon name="file-text" size={11} />
+                {att.name}
+              </span>
+            }
+          >
+            <AttachmentImage att={att} conversationId={conversationId} />
+          </LazyMount>
         ) : (
           <button
             key={att.id}
@@ -595,6 +608,12 @@ export function ConversationTimeline({
     kind: 'anchor' | 'initial-bottom'
     cancel: () => void
   } | null>(null)
+  const prevConvIdRef = useRef(conversation.id)
+  const prevDetailEntriesRef = useRef(detailEntries)
+  const swrAnchorRef = useRef<{ entries: ReadonlyArray<ConversationEntry>; anchor: TimelineScrollAnchor } | null>(null)
+  const [charsPerLine, setCharsPerLine] = useState<number>(() =>
+    resolveCharsPerLine(typeof window !== 'undefined' && window.innerWidth > 0 ? window.innerWidth : undefined),
+  )
   // 一次性初始贴底窗口资格：consumed = 已被用户输入/自然收敛/显式定位取代，
   // 本会话内不再重启；换会话/StrictMode 重演的 cleanup 只取消（active=false）
   // 不消费，重挂后可重新启动，避免一次性资格被 effect 重演提前耗尽。
@@ -808,8 +827,8 @@ export function ConversationTimeline({
   }, [store.highlightedEntry, conversation.id, localHighlightEntryId, outlineScrollRequest])
 
   const cvExclusions = useMemo<ContainmentExclusions>(
-    () => ({ releasedEntryIds, latestAssistantKey: lastAssistantKey }),
-    [releasedEntryIds, lastAssistantKey],
+    () => ({ releasedEntryIds, latestAssistantKey: lastAssistantKey, charsPerLine }),
+    [releasedEntryIds, lastAssistantKey, charsPerLine],
   )
 
   // 锚点集合签名：仅当行集合（锚点 id 序列）变化时才重建阅读锚点观察器；
@@ -1007,8 +1026,18 @@ export function ConversationTimeline({
   useEffect(() => {
     const inner = innerRef.current
     const scroller = scrollRef.current
-    if (inner === null || scroller === null || typeof ResizeObserver === 'undefined') return
+    if (inner === null || scroller === null) return
+    const syncContainerWidth = (): void => {
+      const width = scroller.clientWidth
+      if (width > 0) {
+        const next = resolveCharsPerLine(width)
+        setCharsPerLine((prev) => (prev === next ? prev : next))
+      }
+    }
+    syncContainerWidth()
+    if (typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(() => {
+      syncContainerWidth()
       const el = scrollRef.current
       if (el === null) return
       if (stickToBottomRef.current && (isWorking || hasLiveTurn)) {
@@ -1029,7 +1058,8 @@ export function ConversationTimeline({
 
   const lastHumanKey = useMemo(() => {
     for (let i = items.length - 1; i >= 0; i--) {
-      if (items[i]!.kind === 'human') return items[i]!.key
+      const item = items[i]!
+      if (item.kind === 'human' && item.origin === 'human') return item.key
     }
     return undefined
   }, [items])
@@ -1046,6 +1076,52 @@ export function ConversationTimeline({
   // 会话历史就绪（conversationDetails 存在，含合法空会话）：loading 的空白
   // mount 不启动初始贴底窗口，避免硬上界在空白期被空转耗尽。
   const detailsReady = store.conversationDetails[conversation.id] !== undefined
+
+  // SWR 静默替换保护：已上滑阅读历史（!stickToBottomRef）且非手动翻页加载时，
+  // 若同一会话的 detailEntries 引用变化，于 DOM commit 前捕获当前可见行锚点，
+  // commit 后在 useLayoutEffect 同步恢复滚动锚点，防止重连/后台刷新引起位置跳动。
+  if (
+    prevConvIdRef.current === conversation.id &&
+    prevDetailEntriesRef.current !== detailEntries &&
+    detailsReady &&
+    !loadingOlder &&
+    !stickToBottomRef.current &&
+    scrollRef.current !== null &&
+    typeof document !== 'undefined' &&
+    typeof document.elementFromPoint === 'function'
+  ) {
+    const anchor = captureTimelineScrollAnchor(scrollRef.current)
+    swrAnchorRef.current = anchor !== undefined ? { entries: detailEntries, anchor } : null
+  } else if (prevConvIdRef.current !== conversation.id || stickToBottomRef.current) {
+    swrAnchorRef.current = null
+  }
+
+  useLayoutEffect(() => {
+    prevConvIdRef.current = conversation.id
+    prevDetailEntriesRef.current = detailEntries
+    const pending = swrAnchorRef.current
+    if (pending === null || pending.entries !== detailEntries) return
+    swrAnchorRef.current = null
+    if (stickToBottomRef.current) return
+    const scroller = scrollRef.current
+    if (scroller === null) return
+    const { anchor } = pending
+    const anchorEntryId = anchor.element.dataset.entryId
+    const resolvedAnchor =
+      anchor.element.isConnected && scroller.contains(anchor.element)
+        ? anchor
+        : anchorEntryId !== undefined
+          ? (() => {
+              const matched = Array.from(scroller.querySelectorAll<HTMLElement>('[data-entry-id]'))
+                .find((el) => el.dataset.entryId === anchorEntryId)
+              return matched !== undefined ? { element: matched, top: anchor.top } : undefined
+            })()
+          : undefined
+    restoreTimelineScrollAnchor(scroller, resolvedAnchor)
+    lastScrollTopRef.current = scroller.scrollTop
+    syncScrollBottomVisibility(scroller)
+  }, [conversation.id, detailEntries, syncScrollBottomVisibility])
+
   useEffect(() => {
     if (detailsReady) {
       const previousFingerprint = prevFingerprintRef.current
@@ -1076,7 +1152,7 @@ export function ConversationTimeline({
     // 历史就绪后启动一次性初始贴底校准（窗口内部自守卫：已消费/在途/已释放
     // 贴底时不动作）；数据延迟就绪时由 detailsReady 依赖在本 effect 重启时启动。
     if (detailsReady) beginInitialBottomCalibration()
-  }, [contentFingerprint, lastHumanKey, detailsReady, conversation.id, beginInitialBottomCalibration, syncScrollBottomVisibility])
+  }, [contentFingerprint, detailEntries, lastHumanKey, detailsReady, conversation.id, beginInitialBottomCalibration, syncScrollBottomVisibility])
 
   const loading = !detailsReady
 

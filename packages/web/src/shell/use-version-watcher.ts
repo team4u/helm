@@ -6,7 +6,8 @@
  * - 触发探测：SSE snapshot 的 bootId 变化（首次 snapshot 只建基线，不视为
  *   更新）、visibilitychange 变 visible 与 window.focus（约 5s 节流）、页面
  *   visible 期间每 60s 轮询（hidden 期间跳过）、Vite `vite:preloadError`
- *   动态 chunk 失效兜底；在途探测期间收到的新触发不丢弃（完成后立刻补探）；
+ *   触发入口探测（仅确认指纹已变才走升级刷新，指纹未变走可恢复错误状态）；
+ *   在途探测期间收到的新触发不丢弃（完成后立刻补探）；
  * - 刷新挂起条件 = 浏览器本地交互现场（三者并集，宁可保守）：
  *   ① 会话 Composer（文本/编辑目标/附件/发送上传在途，经 composer-dirty 桥接）
  *   ∪ 任意坐标待命草稿（standby-model）——权威草稿事实；
@@ -50,7 +51,6 @@ import {
   applyProbeResult,
   buildVersionReloadUrl,
   claimFingerprintAutoReload,
-  claimPreloadAutoReload,
   detectDocumentProductionEntry,
   initialVersionWatchState,
   isTextInputElement,
@@ -95,13 +95,17 @@ export interface VersionWatcherOptions {
 export type { VersionDeferReason }
 
 export interface VersionWatcherView {
-  /** 探测到待刷新的新版本（最新入口指纹 ≠ 当前页面入口指纹，或资产失效兜底）。 */
+  /** 探测到待刷新的新版本（最新入口指纹 ≠ 当前页面入口指纹）。 */
   updateAvailable: boolean
   /** 自动刷新挂起原因（草稿事实/焦点保护/弹窗；横幅文案依据；null = 未挂起）。 */
   deferReason: VersionDeferReason
   /** 横幅「立即刷新」动作：显式手动刷新，不受自动闸门/名额/跨页防环约束，
    *  可重复触发（WebView 吞掉前次导航后再次点击仍会发起导航）。 */
   reloadNow: () => void
+  /** 弱网等瞬时原因导致懒加载 chunk 失败但服务端指纹未变时为 true（不强刷整页，供用户/lazy 边界重试）。 */
+  preloadError: boolean
+  /** 用户或 lazy 边界重试时复位瞬态 preloadError 状态。 */
+  clearPreloadError: () => void
 }
 
 export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionWatcherView {
@@ -123,6 +127,7 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
   )
 
   const [updateAvailable, setUpdateAvailable] = useState(false)
+  const [preloadError, setPreloadError] = useState(false)
   // 回调侧最新事实经 ref 转发（listener/interval 不持有渲染闭包）。
   const stateRef = useRef<VersionWatchState>(
     currentEntry !== null ? initialVersionWatchState(currentEntry) : { currentEntry: '', latestEntry: null },
@@ -134,8 +139,9 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
   const textFocusRef = useRef(textInputFocused)
   textFocusRef.current = textInputFocused
   const pendingRef = useRef(false)
-  /** preloadError 强制挂起（页面资产已失效，横幅不得被后续未变化探测解除）。 */
-  const forcedPendingRef = useRef(false)
+  const preloadProbePendingRef = useRef(false)
+  const pushNoticeRef = useRef(store.pushNotice)
+  pushNoticeRef.current = store.pushNotice
   const reloadTriggeredRef = useRef(false)
   const probingRef = useRef(false)
   /** 在途探测期间收到的新触发（如 bootId 变化）：完成后立刻补一次，不吞快速触发。 */
@@ -212,36 +218,26 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
 
   /** 状态机推进 + pending 变化通知渲染 + clean 时自动刷新判定。 */
   const settle = useCallback((): void => {
-    // preloadError 已证实当前页面资产失效：pending 锁定直到刷新，后续探测
-    //（指纹恰好未变）不得解除提示。
     const fingerprintPending = versionUpdatePending(stateRef.current)
-    const pending = forcedPendingRef.current || fingerprintPending
-    if (pending !== pendingRef.current) {
-      pendingRef.current = pending
-      setUpdateAvailable(pending)
+    if (fingerprintPending !== pendingRef.current) {
+      pendingRef.current = fingerprintPending
+      setUpdateAvailable(fingerprintPending)
     }
     if (
       !shouldReloadNow({
-        pending,
+        pending: fingerprintPending,
         dirty: draftDirtyRef.current || modalOpenRef.current || textFocusRef.current,
         reloadTriggered: reloadTriggeredRef.current,
       })
     ) {
       return
     }
-    if (fingerprintPending) {
-      // 指纹驱动的自动刷新对同一目标入口每 tab 只发起一次（sessionStorage
-      // 名额，跨 tab 不共享）：WebView 对同址导航回吐旧缓存时不再无限循环，
-      // 保留横幅与手动动作；连续部署（入口不同）不受影响。storage 不可用
-      // 时 fail-closed 拒绝自动刷新（禁 storage 的 WebView + 回吐旧缓存 =
-      // 跨页无限刷新），只保留横幅与手动。
-      if (claimFingerprintAutoReload(safeSessionStorage(), stateRef.current.latestEntry)) autoReloadOnce()
-      return
-    }
-    // 纯 preloadError 证据驱动的刷新占用每 tab 一次的自动重试名额（跨 reload
-    // 防环：瞬态错误或部署窗口反复触发时，重试一次后仅保留提示、手动刷新）；
-    // 真实指纹变化驱动的刷新不经此守卫（正常升级路径见上分支）。
-    if (claimPreloadAutoReload(safeSessionStorage())) autoReloadOnce()
+    // 指纹驱动的自动刷新对同一目标入口每 tab 只发起一次（sessionStorage
+    // 名额，跨 tab 不共享）：WebView 对同址导航回吐旧缓存时不再无限循环，
+    // 保留横幅与手动动作；连续部署（入口不同）不受影响。storage 不可用
+    // 时 fail-closed 拒绝自动刷新（禁 storage 的 WebView + 回吐旧缓存 =
+    // 跨页无限刷新），只保留横幅与手动。
+    if (claimFingerprintAutoReload(safeSessionStorage(), stateRef.current.latestEntry)) autoReloadOnce()
   }, [autoReloadOnce])
 
   const runProbe = useCallback(async (): Promise<void> => {
@@ -261,6 +257,23 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
         if (!activeRef.current) return
         // 探测失败（null）不改变判定；成功才推进状态机。
         stateRef.current = applyProbeResult(stateRef.current, entry)
+        const pending = versionUpdatePending(stateRef.current)
+        if (pending) {
+          preloadProbePendingRef.current = false
+          setPreloadError(false)
+        } else if (preloadProbePendingRef.current && !probeQueuedRef.current) {
+          // vite:preloadError 触发探测后，/index.html 指纹未变化（或探测失败离线）：
+          // 说明是弱网瞬断导致的懒加载 chunk 失败，绝不整页强刷丢失当前会话或草稿，
+          // 改为暴露可恢复错误状态与通知供当前 lazy 边界或用户重试。
+          preloadProbePendingRef.current = false
+          setPreloadError(true)
+          pushNoticeRef.current({
+            type: 'notification',
+            level: 'warning',
+            title: 'Failed to load view module',
+            body: 'Network connection interrupted while loading a view. Retry when ready; your current session was preserved.',
+          })
+        }
         settle()
       } while (probeQueuedRef.current && activeRef.current)
     } finally {
@@ -303,13 +316,12 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
     const onFocus = (): void => probeThrottled()
     const onPreloadError = (event: Event): void => {
       // Vite 6 preload helper：事件未 preventDefault 时会重新抛出底层错误
-      //（cancelable: true）。本 handler 恒接管（自动刷新或保留提示），必须
-      // 取消默认行为，避免 dirty 挂起路径上未处理异常覆盖提示。
+      //（cancelable: true）。先取消默认行为，再调用 runProbe() 向服务端探测
+      // /index.html 指纹——仅当指纹确已变更时才走版本更新逻辑，指纹未变则走
+      // 可恢复重试路径，避免弱网瞬断强刷丢失草稿与对话。
       event.preventDefault()
-      forcedPendingRef.current = true
-      // 统一走 settle：clean 时按名额守卫决定自动刷新或保留提示；有本地交互
-      // 现场则挂起为待刷新（横幅 + 立即刷新），等待挂起条件解除补刷。
-      settle()
+      preloadProbePendingRef.current = true
+      void runProbe()
     }
     // 焦点保护：focusin/focusout 后按 document.activeElement 重算（焦点在
     // input/textarea 之间直接转移时两次事件同任务批处理，不产生中间态提交）。
@@ -350,11 +362,17 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
       : draftLike
         ? 'draft'
         : 'modal'
+  const clearPreloadError = useCallback((): void => {
+    setPreloadError(false)
+  }, [])
+
   return {
     updateAvailable: currentEntry !== null && updateAvailable,
     deferReason: currentEntry !== null ? deferReason : null,
     // 手动动作直发导航：不被自动闸门/名额短路，WebView 吞掉前次导航后
     // 再次点击自动升到带 buster 的尝试。
     reloadNow: issueReloadNavigation,
+    preloadError: currentEntry !== null && preloadError,
+    clearPreloadError,
   }
 }
