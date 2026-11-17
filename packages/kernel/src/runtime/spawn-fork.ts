@@ -94,19 +94,15 @@ export function resolveInheritedModelAndThinking(
       ? (explicitModel ?? (forkSameProfile ? (parentModel ?? profileModel) : (profileModel ?? parentModel)) ?? defaultModel())
       : (explicitModel ?? profileModel ?? defaultModel())
 
-  // Parent thinking (explicit override first, else the effective mirror) only carries when the child stays on the
-  // parent's model: an explicit model switch drops it so the new model's own default chain applies (same rule as
-  // conversation model switches).
+  // Only a real conversation override carries across a same-model fork. The parent's effective mirror may have
+  // come from Profile/global inheritance and must not shadow the target model's own default chain.
   const sameModelAsParent =
     parentModel !== undefined &&
     resolvedModel.provider === parentModel.provider &&
     resolvedModel.modelId === parentModel.modelId
-  const rawParentThinking =
-    (parentSummary?.thinkingLevelOverride && parentSummary.thinkingLevelOverride !== ''
-      ? parentSummary.thinkingLevelOverride
-      : undefined) ??
-    (parentSummary?.thinkingLevel && parentSummary.thinkingLevel !== '' ? parentSummary.thinkingLevel : undefined)
-  const parentThinking = sameModelAsParent ? rawParentThinking : undefined
+  const parentThinking = sameModelAsParent && parentSummary?.thinkingLevelOverride !== undefined && parentSummary.thinkingLevelOverride !== ''
+    ? parentSummary.thinkingLevelOverride
+    : undefined
   const perModelDefault = modelThinkingLevelOf?.(resolvedModel)
   const inheritedLevel =
     request.fork === true

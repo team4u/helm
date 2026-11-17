@@ -493,9 +493,10 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
         cwd: parentDir,
         model: 'faux/faux-parent',
       })
-      await kernel.updateConversation(parent.id, { thinkingLevel: 'high' })
       await kernel.submitInput(parent.id, 'establish parent conversation history')
       await kernel.waitForIdle(parent.id)
+      assert.equal(kernel.getConversation(parent.id).thinkingLevel, 'medium')
+      assert.equal(kernel.getConversation(parent.id).thinkingLevelOverride, undefined)
 
       const beforeIds = new Set(kernel.listConversations({ parentConversationId: parent.id }).map((c) => c.id))
       const pickNewChild = () => {
@@ -529,7 +530,19 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
       assert.equal(effortChild.thinkingLevel, 'minimal')
       assert.equal(effortChild.thinkingLevelOverride, 'minimal')
 
-      // 3. Same-profile fork staying on the parent model inherits the parent override.
+      // 3. A same-profile fork without a parent override uses the target model's default, not the parent's mirror.
+      await kernel.spawnAgent({
+        parentConversationId: parent.id,
+        fork: true,
+        prompt: 'fork follows model default',
+      })
+      const defaultModelFork = pickNewChild()
+      assert.equal(defaultModelFork.model, 'faux/faux-parent')
+      assert.equal(defaultModelFork.thinkingLevel, 'medium')
+      assert.equal(defaultModelFork.thinkingLevelOverride, undefined)
+
+      // 4. Once the parent has an explicit override, a same-model fork still inherits it.
+      await kernel.updateConversation(parent.id, { thinkingLevel: 'high' })
       await kernel.spawnAgent({
         parentConversationId: parent.id,
         fork: true,
@@ -540,7 +553,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
       assert.equal(sameModelFork.thinkingLevel, 'high')
       assert.equal(sameModelFork.thinkingLevelOverride, 'high')
 
-      // 4. Same-profile fork explicitly switching models drops the parent override (chosen for the old model)
+      // 5. Same-profile fork explicitly switching models drops the parent override (chosen for the old model)
       //    and resolves the new model's own per-model default instead.
       await kernel.spawnAgent({
         parentConversationId: parent.id,
