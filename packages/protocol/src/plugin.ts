@@ -44,6 +44,7 @@ import type {
   MaybePromise,
   PluginActionCliSpec,
   PluginConfigFieldSchema,
+  PluginDocOptions,
   PluginDoctorReport,
   PluginInUseItem,
   PluginInstallResult,
@@ -355,11 +356,6 @@ export interface PluginSessionDocHandle<TState = unknown> {
   delete(conversationId: number): void
   listConversationIds(): number[]
   flush(): Promise<void>
-}
-
-export interface PluginDocOptions {
-  /** true 时文档进入公共快照与 plugin.doc.updated 事件；默认私有。 */
-  public?: boolean
 }
 
 export interface PluginServiceSpec {

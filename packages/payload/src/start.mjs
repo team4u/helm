@@ -5,7 +5,7 @@
  * command:
  *   node start.mjs check   validate manifest/entries/checksums(strictly relative path), and by
  *                          dist  package.json dependencies from hub/kernel/plugins/
- *                          plugin-build/plugin-client/env-io/protocol/cli eight runtime entry one by one dependency do real parse (createRequire
+ *                          plugin-build/env-io/protocol/cli seven runtime entry one by one dependency do real parse (createRequire
  *                          - - and runtime Node parse semantics consistent;import.meta.resolve 
  *                          parent parameter in when before Node by default by ignore, unavailable at this), then measured
  *                          runtime capability:import node:sqlite, load esbuild and real
@@ -105,7 +105,7 @@ function checkLayout(entries, checksums, version) {
 
 /**
  * dependency parse: with dist  package.json dependencies is contract manifest, from hub / kernel /
- * plugins / plugin-build / plugin-client / env-io / protocol / cli eight runtime entry file starting from use createRequire(entry).resolve
+ * plugins / plugin-build / env-io / protocol / cli seven runtime entry file starting from use createRequire(entry).resolve
  * do real parse - - and Hub runtime Node parse semantics same source (import.meta.resolve second parameter
  * in Node by default by ignore, before implement will in any host directory under mistakenly judge).
  */
@@ -122,7 +122,6 @@ function resolveProdDeps(entries) {
     kernel: path.resolve(payloadRoot, entries.kernel ?? 'kernel/dist/index.js'),
     plugins: path.resolve(payloadRoot, entries.plugins ?? 'plugins/dist/index.js'),
     pluginBuild: path.resolve(payloadRoot, entries.pluginBuild ?? 'plugin-build/dist/index.js'),
-    pluginClient: path.resolve(payloadRoot, entries.pluginClient ?? 'plugin-client/src/index.ts'),
     envIo: path.resolve(payloadRoot, entries.envIo ?? 'env-io/dist/index.js'),
     protocol: path.resolve(payloadRoot, entries.protocol ?? 'protocol/dist/index.js'),
     cli: path.resolve(payloadRoot, entries.cli ?? 'cli/dist/index.js'),
@@ -190,7 +189,7 @@ async function probeRuntimeCapabilities(entries) {
 
 function reportDeps(result) {
   if (result.missing.length === 0) {
-    console.log(`[payload] produce dependency all can parse (${result.total}/${result.total},hub/kernel/plugins/plugin-build/plugin-client/env-io/protocol/cli eight entry)`);
+    console.log(`[payload] produce dependency all can parse (${result.total}/${result.total},hub/kernel/plugins/plugin-build/env-io/protocol/cli seven entry)`);
     return;
   }
   console.error(`[payload] runtime dependency missing (${result.missing.length} items): ${result.missing.join(', ')}`);

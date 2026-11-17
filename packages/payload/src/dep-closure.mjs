@@ -1,6 +1,6 @@
 /**
- * pnpm installed dependency closed package build phase tool (payload build and desktop assemble-hub sharing;
- * only build script use, does not enter any runtime artifact).
+ * pnpm installed dependency closure build-time helper (used only by payload build scripts,
+ * never shipped as a runtime artifact).
  *
  * mechanism:pnpm each package parse result (contains peer match for) with symlink hang in package real directory
  * node_modules under - - from any package directory one by one dependency realpath i.e. can restore real dependency graph, no need to heavy compute

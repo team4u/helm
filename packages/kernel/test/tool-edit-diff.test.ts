@@ -14,7 +14,6 @@
  */
 
 import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
-import { Ajv } from 'ajv'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -25,6 +24,7 @@ import {
   TOOL_DIFF_MAX_ROW_CHARS,
   TOOL_DIFF_MAX_ROWS,
   TOOL_DIFF_MAX_TEXT_CHARS,
+  validateOrThrow,
   type EditToolResult,
   type ToolDiffRow,
 } from '@helm/protocol'
@@ -496,12 +496,9 @@ async function makeRealDeps(dir: string, stash = new SecretStash()): Promise<Hel
   }
 }
 
-const ajv = new Ajv({ allErrors: true, strict: false })
-const validateEditResult = ajv.compile<EditToolResult>(EDIT_TOOL_RESULT_SCHEMA)
-
 function assertSchemaValid(structured: unknown): EditToolResult {
-  assert.ok(validateEditResult(structured), `structure output should conforms to EDIT_TOOL_RESULT_SCHEMA:${JSON.stringify(validateEditResult.errors)}`)
-  return structured
+  validateOrThrow(EDIT_TOOL_RESULT_SCHEMA, structured, 'structure output should conforms to EDIT_TOOL_RESULT_SCHEMA')
+  return structured as EditToolResult
 }
 
 /** subject to control remote env: real memory file table (align file-mutation-queue.test.ts pattern). */

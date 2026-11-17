@@ -43,8 +43,8 @@ export type { HelmLocale, LocalizedText, ExecutionText, LocaleTranslator } from 
 
 // ---- hooks: doc subscriptions / conversations / plugin list / tool activity ----
 export { usePluginDoc, usePluginDocValue, usePluginSessionDoc, usePluginSessionDocState, usePluginSessionDocValue } from './docs.js'
-export type { ConversationHookResult } from './conversation-hooks.js'
-export { useConversation, useConversations, usePlugins } from './conversation-hooks.js'
+export type { ConversationHookOptions, ConversationHookResult } from './conversation-hooks.js'
+export { useConversation, useConversations, usePlugins, useSharedNowMs } from './conversation-hooks.js'
 export { ToolActivityContext, useToolActivity } from './tool-activity.js'
 export type { ToolActivityRegistry } from './tool-activity.js'
 

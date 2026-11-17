@@ -21,9 +21,11 @@ import {
 } from '@helm/protocol'
 import {
   PluginHost,
+  type PluginDocStore,
   type PluginHostBackend,
   type PluginSessionDocStore,
 } from '../src/plugins/index.js'
+import { PluginDocRegistry } from '../src/plugins/doc-registry.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { SessionDocEventHub } from '../src/runtime/events.js'
 import { openHelmDatabase } from '../src/runtime/sqlite.js'
@@ -1063,4 +1065,184 @@ test('SessionDocEventHub.multiplexResponse handles snapshot failure cleanup, kee
     await bpReader.cancel().catch(() => {})
     bpHub.close()
   }
+})
+
+// ---------------------------------------------------------------------------
+// Transient in-memory plugin docs (`durable: false`)
+// ---------------------------------------------------------------------------
+
+test('durable: false on ctx.doc performs zero store I/O, broadcasts SSE, appears in public snapshots, enforces byte cap, and clears on disable', { timeout: 60_000 }, async () => {
+  let storeCalls = 0
+  const spyDocStore: PluginDocStore = {
+    get() {
+      storeCalls += 1
+      throw new Error('transient doc must not call store.get')
+    },
+    set() {
+      storeCalls += 1
+      throw new Error('transient doc must not call store.set')
+    },
+    deletePlugin() {},
+    async flush() {
+      storeCalls += 1
+      throw new Error('transient doc flush must not call store.flush')
+    },
+  }
+  const host = new PluginHost({
+    buildProvider: createPluginBuildProvider(),
+    dataDir,
+    host: hostApi.backend,
+    docs: spyDocStore,
+    sessionDocs,
+  })
+
+  let handle!: {
+    get(): { tps: number }
+    set(v: { tps: number }): void
+    update(fn: (c: { tps: number }) => { tps: number }): void
+    flush(): Promise<void>
+  }
+  await host.register({
+    id: 'p:transient-doc',
+    definePlugin: (ctx) => {
+      handle = ctx.doc('live', { tps: 0 }, { public: true, durable: false }) as never
+    },
+  })
+
+  assert.deepEqual(handle.get(), { tps: 0 })
+  assert.deepEqual(host.getPublicDoc('p:transient-doc', 'live'), {
+    pluginId: 'p:transient-doc',
+    name: 'live',
+    value: { tps: 0 },
+  })
+  assert.deepEqual(host.listPublicDocs(), [
+    { pluginId: 'p:transient-doc', name: 'live', value: { tps: 0 } },
+  ])
+
+  handle.set({ tps: 42 })
+  handle.update((cur) => ({ tps: cur.tps + 8 }))
+  await handle.flush()
+  assert.deepEqual(handle.get(), { tps: 50 })
+  assert.deepEqual(host.getPublicDoc('p:transient-doc', 'live').value, { tps: 50 })
+  assert.equal(storeCalls, 0, 'durable: false must perform zero PluginDocStore reads/writes/flushes')
+
+  const docEvents = hostApi.events.filter((e) => e.type === 'plugin.doc.updated')
+  assert.equal(docEvents.length, 2)
+
+  // Disable clears transient state; re-enabling resets back to initial value.
+  await host.disable('p:transient-doc')
+  throwsCode(() => handle.get(), 'plugin_context_expired')
+  await host.enable('p:transient-doc')
+  assert.deepEqual(handle.get(), { tps: 0 }, 're-enabling transient doc starts fresh at initial value')
+  assert.equal(storeCalls, 0)
+})
+
+test('durable: false on ctx.sessionDoc works without sessionStore, performs zero SQLite/store writes, broadcasts SSE, enforces byte limit, and clears on conversation delete / plugin stop', { timeout: 60_000 }, async () => {
+  const existing = new Set([1, 2, 3])
+  hostApi = makeHostApi({ existing })
+
+  // 1. Works even when sessionStore is completely absent (`sessionDocs: undefined`).
+  const noStoreHost = new PluginHost({
+    buildProvider: createPluginBuildProvider(),
+    dataDir,
+    host: hostApi.backend,
+    docs,
+    sessionDocs: undefined,
+  })
+  let handle!: {
+    get(id: number): { runs: string[] }
+    set(id: number, v: { runs: string[] }): void
+    update(id: number, fn: (c: { runs: string[] }) => { runs: string[] }): void
+    delete(id: number): void
+    listConversationIds(): number[]
+    flush(): Promise<void>
+  }
+  await noStoreHost.register({
+    id: 'p:transient-sd',
+    definePlugin: (ctx) => {
+      handle = ctx.sessionDoc('runs', { runs: [] }, { public: true, durable: false }) as never
+    },
+  })
+
+  assert.deepEqual(handle.get(1), { runs: [] })
+  handle.set(1, { runs: ['r1'] })
+  handle.update(1, (cur) => ({ runs: [...cur.runs, 'r2'] }))
+  handle.set(2, { runs: ['r3'] })
+  await handle.flush()
+  assert.deepEqual(handle.get(1), { runs: ['r1', 'r2'] })
+  assert.deepEqual(noStoreHost.getPublicSessionDoc('p:transient-sd', 'runs', 1), {
+    pluginId: 'p:transient-sd',
+    name: 'runs',
+    conversationId: 1,
+    value: { runs: ['r1', 'r2'] },
+  })
+  assert.deepEqual(handle.listConversationIds(), [1, 2])
+
+  // Conversation 2 deleted: listConversationIds prunes dead conversation, reads/writes reject 404.
+  existing.delete(2)
+  assert.deepEqual(handle.listConversationIds(), [1])
+  throwsCode(() => handle.get(2), 'not_found', 404)
+  throwsCode(() => handle.set(2, { runs: ['orphan'] }), 'not_found', 404)
+
+  // Explicit delete on live conversation emits deleted: true with initial value.
+  handle.delete(1)
+  assert.deepEqual(handle.get(1), { runs: [] })
+  assert.deepEqual(handle.listConversationIds(), [])
+
+  const sdEvents = hostApi.events.filter((e) => e.type === 'plugin.session_doc.updated')
+  assert.equal(sdEvents.length, 4)
+  const lastPayload = sdEvents[3]!.payload as { doc: { deleted?: boolean; value: unknown } }
+  assert.equal(lastPayload.doc.deleted, true)
+  assert.deepEqual(lastPayload.doc.value, { runs: [] })
+
+  // Disable clears transient state; re-enable resets to initial value.
+  handle.set(3, { runs: ['r-before-stop'] })
+  assert.deepEqual(handle.listConversationIds(), [3])
+  await noStoreHost.disable('p:transient-sd')
+  await noStoreHost.enable('p:transient-sd')
+  assert.deepEqual(handle.get(3), { runs: [] })
+  assert.deepEqual(handle.listConversationIds(), [])
+
+  // 2. Direct PluginDocRegistry test: zero sessionStore writes + maxDocJsonBytes cap + deleteConversation + invalid option rejection.
+  let sessionStoreCalls = 0
+  const spySessionStore: PluginSessionDocStore = {
+    get() { sessionStoreCalls += 1; return undefined },
+    put() { sessionStoreCalls += 1 },
+    delete() { sessionStoreCalls += 1 },
+    deletePlugin() {},
+    listConversationIds() { sessionStoreCalls += 1; return [] },
+    async flush() { sessionStoreCalls += 1 },
+  }
+  const smallRegistry = new PluginDocRegistry(
+    docs,
+    () => {},
+    {
+      sessionStore: spySessionStore,
+      assertConversationExists: (cid) => {
+        if (!existing.has(cid)) throw new HelmError('not_found', 'missing', 404)
+      },
+      emitSessionDocUpdated: () => {},
+      maxDocJsonBytes: 64,
+    },
+  )
+
+  throwsCode(
+    () => smallRegistry.registerDoc('p:bad', 'd', {}, { durable: 'nope' as never }, () => {}),
+    'invalid_doc_spec',
+    400,
+  )
+
+  const cappedDoc = smallRegistry.registerDoc('p:cap', 'd', { s: 'ok' }, { public: true, durable: false }, () => {})
+  const cappedSd = smallRegistry.registerSessionDoc('p:cap', 'sd', { s: 'ok' }, { public: true, durable: false }, () => {})
+  cappedDoc.set({ s: 'fine' })
+  cappedSd.set(1, { s: 'fine' })
+  throwsCode(() => cappedDoc.set({ s: 'x'.repeat(200) }), 'plugin_doc_too_large', 413)
+  throwsCode(() => cappedSd.set(1, { s: 'x'.repeat(200) }), 'plugin_doc_too_large', 413)
+  assert.deepEqual(cappedDoc.get(), { s: 'fine' }, 'rejected oversized write preserves previous transient doc value')
+  assert.deepEqual(cappedSd.get(1), { s: 'fine' }, 'rejected oversized write preserves previous transient sessionDoc value')
+  assert.equal(sessionStoreCalls, 0, 'transient sessionDoc never touches sessionStore even when provided')
+
+  smallRegistry.deleteConversation(1)
+  assert.deepEqual(cappedSd.get(1), { s: 'ok' }, 'deleteConversation clears transient sessionDoc entry')
+  assert.deepEqual(cappedSd.listConversationIds(), [])
 })

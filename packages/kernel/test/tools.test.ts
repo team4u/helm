@@ -15,8 +15,7 @@ import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { Ajv } from 'ajv'
-import { EDIT_TOOL_RESULT_SCHEMA, type EditToolResult } from '@helm/protocol'
+import { EDIT_TOOL_RESULT_SCHEMA, validateOrThrow, type EditToolResult } from '@helm/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
 import {
   ArtifactService,
@@ -707,8 +706,7 @@ describe('SDK real link (faux model drive tool invoke)', { timeout: 60_000 }, ()
       // SDK contract:structuredOutput do not write conversation item (only to embed set caller) - - persist
       // UI channel is details,Web difference render read it (regression: once all read fewer than leads to cannot render difference).
       assert.equal('structuredOutput' in editMessage!, false)
-      const validate = new Ajv({ allErrors: true, strict: false }).compile<EditToolResult>(EDIT_TOOL_RESULT_SCHEMA)
-      assert.ok(validate(editMessage!['details']), `details should conforms to EDIT_TOOL_RESULT_SCHEMA:${JSON.stringify(validate.errors)}`)
+      validateOrThrow(EDIT_TOOL_RESULT_SCHEMA, editMessage!['details'], 'details should conforms to EDIT_TOOL_RESULT_SCHEMA')
       assert.equal((editMessage!['details'] as EditToolResult).diff.addedLines, 1)
     } finally {
       await kernel.close()
