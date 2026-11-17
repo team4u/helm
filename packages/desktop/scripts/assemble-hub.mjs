@@ -63,6 +63,7 @@ for (const ent of readdirSync(payloadDist)) {
   cpSync(path.join(payloadDist, ent), path.join(hubDir, ent), { recursive: true, dereference: true });
 }
 const hubPkg = JSON.parse(readFileSync(path.join(hubDir, 'package.json'), 'utf-8'));
+const rootDeps = hubPkg.dependencies ?? {};
 
 // --- Production dependency closure materialization -------------------------------------------------------------------
 /** Copies a package directory: excludes symlink entries inside its node_modules (pnpm-injected) while keeping real directories (e.g. npm's bundled dependencies). */

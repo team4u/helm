@@ -43,6 +43,23 @@ async function reservePort(): Promise<number> {
   return port;
 }
 
+/**
+ * Waits for reconnect registration to succeed within budget, tolerating an in-flight attempt
+ * started before the server switched to accept settling false via confirmOffline().
+ */
+async function waitUntilReconnected(
+  daemon: { waitUntilRegistered(timeoutMs?: number): Promise<boolean> },
+  timeoutMs = 15_000,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const remaining = Math.max(1, deadline - Date.now());
+    if (await daemon.waitUntilRegistered(remaining)) return true;
+    await delay(10);
+  }
+  return false;
+}
+
 interface HubHandle {
   url: string;
   port: number;
@@ -189,7 +206,7 @@ test('first time failed to connect (Hub not start) after reconnect succeeded', {
 
     // start Hub: backoff reconnect after should register succeeded.
     hub = await startHub({ port, heartbeatMs: 15_000 });
-    const ok = await daemon.waitUntilRegistered(15_000);
+    const ok = await waitUntilReconnected(daemon, 15_000);
     assert.equal(ok, true, `Hub after startup should reconnect register succeeded (log:${logs.join(' | ')})`);
     assert.equal(daemon.isConnected(), true);
     assert.equal(hub.registrations.length, 1);
@@ -232,7 +249,7 @@ test('disconnection after waitUntilRegistered do not fabricate succeeded, reconn
 
     // server side restore accept: reconnect register after success, new wait translate true(do not cache failed).
     hub.setBehavior({ registerAck: () => ({ ok: true, heartbeatMs: 15_000 }) });
-    const ok = await daemon.waitUntilRegistered(15_000);
+    const ok = await waitUntilReconnected(daemon, 15_000);
     assert.equal(ok, true, 'reconnect register after success wait should translate true');
     assert.equal(daemon.isConnected(), true);
     assert.ok(hub.registrations.length > registrationsBefore, 'shared many time register attempt (initial + reconnect)');
@@ -269,7 +286,7 @@ test('reverse re- register reject during always at most a parallel connect', { t
 
     // rotate is accept: reject do not cache, restore after register succeeded.
     hub.setBehavior({ registerAck: () => ({ ok: true, heartbeatMs: 15_000 }) });
-    assert.equal(await daemon.waitUntilRegistered(15_000), true, 'restore accept after should register succeeded');
+    assert.equal(await waitUntilReconnected(daemon, 15_000), true, 'restore accept after should register succeeded');
   } finally {
     await daemon.close();
     await hub.close();
@@ -305,7 +322,7 @@ test('offline backoff reconnect during keep store (do not by unref count when pu
     assert.ok(aliveMs >= 700, `offline during should stay store (actual store ${aliveMs}ms)`);
 
     hub = await startHub({ port, heartbeatMs: 15_000 });
-    assert.equal(await daemon.waitUntilRegistered(15_000), true, 'store after reconnect succeeded');
+    assert.equal(await waitUntilReconnected(daemon, 15_000), true, 'store after reconnect succeeded');
   } finally {
     await daemon.close();
     await hub?.close();

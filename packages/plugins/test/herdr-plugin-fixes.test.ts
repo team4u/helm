@@ -1559,16 +1559,27 @@ test('keepalive 窗格的事件路径不登记幽灵 creating 审批条目', { t
 })
 
 test('md 交接稳定性复检：非原子分段写触发自愈追问，不把截断内容当结果', { timeout: 60_000 }, async () => {
-  const env = await makeEnv({ timingOverrides: { mdStableRecheckMs: 80 } })
+  const env = await makeEnv({ timingOverrides: { mdStableRecheckMs: 250 } })
   try {
     env.transport.promptStatus = 'done'
     let prompts = 0
+    let activeKey: string | undefined
+    const origCall = env.transport.call.bind(env.transport)
+    env.transport.call = async (target, method, params) => {
+      const res = await origCall(target, method, params)
+      if (method === 'agent.prompt' && prompts === 1 && activeKey) {
+        const targetKey = activeKey
+        activeKey = undefined
+        setTimeout(() => env.transport.outputFiles.set(targetKey, 'partial-first-half + rest'), 80)
+      }
+      return res
+    }
     env.transport.onPrompt = (pane, text) => {
       prompts += 1
       const key = `${pane.cwd}/.helm/${fileNameOf(text)}`
       if (prompts === 1) {
         env.transport.outputFiles.set(key, 'partial-first-half')
-        setTimeout(() => env.transport.outputFiles.set(key, 'partial-first-half + rest'), 20)
+        activeKey = key
       } else {
         env.transport.outputFiles.set(key, 'final-complete')
       }

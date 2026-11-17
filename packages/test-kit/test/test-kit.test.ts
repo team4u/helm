@@ -226,19 +226,18 @@ test('useTempDir / makeTempDir / cleanupDir lifecycle auto-cleanup and explicit 
 })
 
 test('sanitizedHostEnv strips host-managed vars case-insensitively and supports safe overrides', { timeout: 60_000 }, () => {
-  const saved: Record<string, string | undefined> = {}
-  const keysToTouch = [
-    ...HOST_MANAGED_HELM_ENV_NAMES,
-    'helm_token',
-    'Helm_Cwd',
-    'HELM_TEST_KIT_KEEP',
-  ]
-  for (const key of keysToTouch) {
-    saved[key] = process.env[key]
-  }
+  const managedUpper = new Set(HOST_MANAGED_HELM_ENV_NAMES.map((name) => name.toUpperCase()))
+  const savedEntries = Object.entries(process.env).filter(
+    ([key]) => managedUpper.has(key.toUpperCase()) || key.toUpperCase() === 'HELM_TEST_KIT_KEEP',
+  )
   try {
     for (const name of HOST_MANAGED_HELM_ENV_NAMES) {
-      process.env[name] = `host-${name}`
+      if (process.platform === 'win32' && (name === 'HELM_TOKEN' || name === 'HELM_CWD')) {
+        // On Windows, process.env keys are case-insensitive; clear uppercase first so lowercase/mixed-case keys are actually created.
+        delete process.env[name]
+      } else {
+        process.env[name] = `host-${name}`
+      }
     }
     process.env['helm_token'] = 'lower-host-token'
     process.env['Helm_Cwd'] = '/host/mixed-case'
@@ -251,7 +250,11 @@ test('sanitizedHostEnv strips host-managed vars case-insensitively and supports 
     assert.equal(clean['helm_token'], undefined)
     assert.equal(clean['Helm_Cwd'], undefined)
     assert.equal(clean['HELM_TEST_KIT_KEEP'], 'preserve-me')
-    assert.equal(process.env['HELM_TOKEN'], 'host-HELM_TOKEN', 'must not mutate global process.env')
+    assert.equal(process.env['HELM_DATA_DIR'], 'host-HELM_DATA_DIR', 'must not mutate global process.env')
+    assert.equal(process.env['helm_token'], 'lower-host-token', 'must not mutate global process.env')
+    if (process.platform !== 'win32') {
+      assert.equal(process.env['HELM_TOKEN'], 'host-HELM_TOKEN', 'must not mutate global process.env')
+    }
 
     const overridden = sanitizedHostEnv({
       HELM_HUB_URL: 'http://127.0.0.1:4444',
@@ -261,9 +264,13 @@ test('sanitizedHostEnv strips host-managed vars case-insensitively and supports 
     assert.equal(overridden['HELM_TOKEN'], undefined)
     assert.equal('HELM_TEST_KIT_KEEP' in overridden, false)
   } finally {
-    for (const [key, value] of Object.entries(saved)) {
-      if (value === undefined) delete process.env[key]
-      else process.env[key] = value
+    for (const key of Object.keys(process.env)) {
+      if (managedUpper.has(key.toUpperCase()) || key.toUpperCase() === 'HELM_TEST_KIT_KEEP') {
+        delete process.env[key]
+      }
+    }
+    for (const [key, value] of savedEntries) {
+      if (value !== undefined) process.env[key] = value
     }
   }
 })
