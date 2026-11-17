@@ -150,7 +150,7 @@ function makePort(log: PortLog, overrides: Partial<SDK.PluginClientHostPort> = {
       renderItem: slotRender,
     },
     markdown: {
-      view: ({ text }) => e('div', { 'data-md': 'host' }, text),
+      view: ({ text, workspaceBaseDir }) => e('div', { 'data-md': 'host', 'data-base-dir': workspaceBaseDir ?? '' }, text),
       codeBlock: ({ code, language }) => e('pre', { 'data-code': 'host', 'data-lang': language }, code),
     },
     ...overrides,
@@ -515,10 +515,22 @@ test('MarkdownView / CodeBlockView render the host-port injected implementations
   const html = renderToString(
     e(SDK.PluginClientHostContext.Provider, { value: port },
       e('div', null,
-        e(SDK.MarkdownView, { text: '# hi' }),
+        e(SDK.MarkdownView, { text: '# hi', workspaceBaseDir: 'docs/sub' }),
         e(SDK.CodeBlockView, { code: 'let x = 1', language: 'ts' }))))
   assert.match(html, /data-md="host"/, 'MarkdownView delegates to the host view')
+  assert.match(html, /data-base-dir="docs\/sub"/, 'MarkdownView forwards workspaceBaseDir to host view')
   assert.match(html, /# hi/)
   assert.match(html, /data-code="host"/, 'CodeBlockView delegates to the host codeBlock')
   assert.match(html, /data-lang="ts"/)
+})
+
+test('markdownUrlTransform allows artifact: and file: while filtering unsafe protocols', { timeout: 60_000 }, () => {
+  assert.equal(SDK.markdownUrlTransform('artifact:art-1'), 'artifact:art-1')
+  assert.equal(SDK.markdownUrlTransform('  file:///repo/README.md#L10  '), 'file:///repo/README.md#L10')
+  assert.equal(SDK.markdownUrlTransform('FILE:///C:/repo/a.png'), 'FILE:///C:/repo/a.png')
+  assert.equal(SDK.markdownUrlTransform('docs/guide.md#L5'), 'docs/guide.md#L5')
+  assert.equal(SDK.markdownUrlTransform('https://example.com/a'), 'https://example.com/a')
+  assert.equal(SDK.markdownUrlTransform('javascript:alert(1)'), '')
+  assert.equal(SDK.markdownUrlTransform('data:text/html,<script>alert(1)</script>'), '')
+  assert.equal(SDK.markdownUrlTransform('vbscript:msgbox(1)'), '')
 })

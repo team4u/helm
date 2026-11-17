@@ -57,6 +57,8 @@ export interface MarkdownViewProps {
   conversationId?: number
   /** true = streaming body: completed prefix blocks freeze their parsed form for reuse, only the trailing mutable block is re-parsed. */
   streaming?: boolean
+  /** Relative POSIX directory within the workspace (e.g. 'docs') used as base dir when resolving relative links/images in nested Markdown previews. */
+  workspaceBaseDir?: string
 }
 
 /** SDK CodeBlockViewProps (host syntax-highlighted code block props contract). */

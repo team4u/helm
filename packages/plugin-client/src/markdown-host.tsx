@@ -18,7 +18,14 @@ export type { MarkdownViewProps, CodeBlockViewProps }
 
 export function MarkdownView(props: MarkdownViewProps): ReactNode {
   const { view: HostView } = usePluginClientHost().markdown
-  return <HostView text={props.text} conversationId={props.conversationId} streaming={props.streaming} />
+  return (
+    <HostView
+      text={props.text}
+      conversationId={props.conversationId}
+      streaming={props.streaming}
+      workspaceBaseDir={props.workspaceBaseDir}
+    />
+  )
 }
 
 export function CodeBlockView(props: CodeBlockViewProps): ReactNode {

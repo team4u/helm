@@ -26,13 +26,18 @@ export function parseArtifactUrl(raw: string | undefined): string | null {
 }
 
 /**
- * Markdown URL transform: artifact links are allowed through (protocol prefix
- * preserved); everything else goes through react-markdown's default safe
- * interception (filters javascript: etc.).
+ * Markdown URL transform: artifact and file: links are allowed through (protocol
+ * prefix preserved so host components can validate or reject unsafe file://
+ * targets explicitly); everything else goes through react-markdown's default
+ * safe interception (filters javascript:, data:, vbscript:, etc.).
  */
 export function markdownUrlTransform(url: string): string {
   if (parseArtifactUrl(url) !== null) {
     return url.trim()
+  }
+  const trimmed = url.trim()
+  if (trimmed.toLowerCase().startsWith('file:')) {
+    return trimmed
   }
   return defaultUrlTransform(url)
 }

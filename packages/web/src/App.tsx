@@ -153,6 +153,10 @@ const ArtifactPreviewModal = lazyWithRetry(
   () => lazy(() => import('./conversation/ArtifactPreviewModal.js').then((m) => ({ default: m.ArtifactPreviewModal }))),
   { overlay: true },
 )
+const WorkspaceFilePreviewModal = lazyWithRetry(
+  () => lazy(() => import('./conversation/WorkspaceFilePreviewModal.js').then((m) => ({ default: m.WorkspaceFilePreviewModal }))),
+  { overlay: true },
+)
 const WorkbenchDrawer = lazyWithRetry(
   () => lazy(() => import('./conversation/WorkbenchDrawer.js').then((m) => ({ default: m.WorkbenchDrawer }))),
   { overlay: true },
@@ -431,6 +435,17 @@ function HelmShellInner() {
             <ArtifactPreviewModal
               artifactId={store.activeModal.artifactId}
               conversationId={store.activeModal.conversationId}
+              onClose={closeModal}
+            />
+          </Suspense>
+        )}
+        {store.activeModal?.kind === 'workspace-file' && (
+          <Suspense fallback={<div className="screen-loading screen-loading-overlay" role="status">{t('conv.shell.loadingPreview')}</div>}>
+            <WorkspaceFilePreviewModal
+              conversationId={store.activeModal.conversationId}
+              path={store.activeModal.path}
+              startLine={store.activeModal.startLine}
+              endLine={store.activeModal.endLine}
               onClose={closeModal}
             />
           </Suspense>

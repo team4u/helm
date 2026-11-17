@@ -293,6 +293,43 @@ export const conversationsApi = {
     }
     return (await res.json()) as ArtifactMetadata
   },
+  async fetchWorkspaceFileBlob(
+    conversationId: number,
+    path: string,
+    inline = true,
+    signal?: AbortSignal,
+  ): Promise<Blob> {
+    const res = await fetch(
+      `/api/conversations/${conversationId}/files/content?path=${encodeURIComponent(path)}${inline ? '&inline=1' : ''}`,
+      { headers: buildAuthHeaders(), signal },
+    )
+    if (!res.ok) {
+      throw await parseErrorResponse(res)
+    }
+    return await res.blob()
+  },
+  async downloadWorkspaceFileToBrowser(
+    conversationId: number,
+    path: string,
+    filename: string,
+  ): Promise<void> {
+    const blob = await this.fetchWorkspaceFileBlob(conversationId, path, false)
+    triggerBlobDownload(blob, filename)
+  },
+}
+
+function triggerBlobDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob)
+  try {
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 5_000)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -316,17 +353,7 @@ export const artifactsApi = {
   },
   async downloadToBrowser(artifactId: string, filename: string): Promise<void> {
     const blob = await this.fetchBlob(artifactId, false)
-    const url = URL.createObjectURL(blob)
-    try {
-      const a = document.createElement('a')
-      a.href = url
-      a.download = filename
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-    } finally {
-      setTimeout(() => URL.revokeObjectURL(url), 5_000)
-    }
+    triggerBlobDownload(blob, filename)
   },
 }
 

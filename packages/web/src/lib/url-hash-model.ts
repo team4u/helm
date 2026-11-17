@@ -1,3 +1,4 @@
+import { pathRulesForShape } from '@helm/protocol/browser'
 import { isSameResolvedTarget, isPrototypeParamKey, SCREEN_PARAM_KEY_PATTERN, type ActiveModal, type ResolvedTarget } from './types.js'
 
 /**
@@ -52,6 +53,7 @@ const MODAL_KIND_TO_KEY = {
   'plugin-settings': 'plugins',
   nodes: 'nodes',
   'artifact-preview': 'artifact',
+  'workspace-file': 'file',
   'conversation-drawer': 'drawer',
 } as const
 
@@ -62,6 +64,7 @@ const MODAL_KEY_TO_KIND = {
   plugins: 'plugin-settings',
   nodes: 'nodes',
   artifact: 'artifact-preview',
+  file: 'workspace-file',
   drawer: 'conversation-drawer',
 } as const
 
@@ -84,6 +87,37 @@ const parsePositiveInt = (raw: string): number | null => {
   if (!/^\d+$/.test(raw)) return null
   const value = Number(raw)
   return Number.isSafeInteger(value) && value > 0 ? value : null
+}
+
+function normalizeHashWorkspacePath(raw: string): string | null {
+  const trimmed = raw.trim()
+  if (trimmed === '' || trimmed.startsWith('/') || trimmed.includes('\\') || trimmed.includes('\0')) {
+    return null
+  }
+  const normalized = pathRulesForShape('posix').normalize(trimmed)
+  if (
+    normalized === '' ||
+    normalized === '.' ||
+    normalized === '..' ||
+    normalized.startsWith('../') ||
+    normalized.startsWith('/') ||
+    normalized.endsWith('/')
+  ) {
+    return null
+  }
+  return normalized
+}
+
+function parseHashLineRange(raw: string | null): { startLine?: number; endLine?: number } {
+  if (raw === null || raw === '') return {}
+  const match = /^(\d+)(?:-(\d+))?$/.exec(raw)
+  if (match === null) return {}
+  const startLine = parsePositiveInt(match[1]!)
+  if (startLine === null) return {}
+  if (match[2] === undefined) return { startLine }
+  const endLine = parsePositiveInt(match[2])
+  if (endLine === null || endLine < startLine) return { startLine }
+  return { startLine, endLine }
 }
 
 /** Namespace prefixes of primary/split screen params in the hash query string (mutually exclusive). */
@@ -336,6 +370,16 @@ function parseActiveModal(params: URLSearchParams): ActiveModal {
       return conversationId === null
         ? { kind: 'artifact-preview', artifactId: subId }
         : { kind: 'artifact-preview', artifactId: subId, conversationId }
+    case 'workspace-file': {
+      const fileConvId = parsePositiveInt(params.get('conv') ?? '')
+      if (fileConvId === null) return null
+      const rawPath = params.get('path')
+      if (rawPath === null) return null
+      const path = normalizeHashWorkspacePath(rawPath)
+      if (path === null) return null
+      const lineRange = parseHashLineRange(params.get('line'))
+      return { kind: 'workspace-file', conversationId: fileConvId, path, ...lineRange }
+    }
     case 'profile-editor':
       return subId === undefined ? { kind: 'profile-editor' } : { kind: 'profile-editor', profileId: subId }
     case 'skill-viewer':
@@ -444,6 +488,16 @@ export function formatLocationHash(state: WorkspaceLocationState): string {
       if (modal.conversationId !== undefined && Number.isSafeInteger(modal.conversationId) && modal.conversationId > 0) {
         query.push(['conv', String(modal.conversationId)])
       }
+    } else if (modal.kind === 'workspace-file') {
+      query.push(['conv', String(modal.conversationId)])
+      query.push(['path', modal.path])
+      if (modal.startLine !== undefined && Number.isSafeInteger(modal.startLine) && modal.startLine > 0) {
+        const lineStr =
+          modal.endLine !== undefined && Number.isSafeInteger(modal.endLine) && modal.endLine >= modal.startLine
+            ? `${modal.startLine}-${modal.endLine}`
+            : String(modal.startLine)
+        query.push(['line', lineStr])
+      }
     } else {
       const subId = modalSubId(modal)
       if (subId !== undefined && subId !== '') query.push(['id', subId])
@@ -471,6 +525,12 @@ export function isSameLocationState(a: WorkspaceLocationState, b: WorkspaceLocat
   if (modalA.kind === 'artifact-preview' && modalB.kind === 'artifact-preview') {
     return modalA.artifactId === modalB.artifactId
       && (modalA.conversationId ?? undefined) === (modalB.conversationId ?? undefined)
+  }
+  if (modalA.kind === 'workspace-file' && modalB.kind === 'workspace-file') {
+    return modalA.conversationId === modalB.conversationId
+      && modalA.path === modalB.path
+      && (modalA.startLine ?? undefined) === (modalB.startLine ?? undefined)
+      && (modalA.endLine ?? undefined) === (modalB.endLine ?? undefined)
   }
   return modalSubId(modalA) === modalSubId(modalB)
 }
@@ -554,6 +614,12 @@ export function shouldPushLocationHistory(prev: WorkspaceLocationState, next: Wo
   if (prevModal.kind === 'artifact-preview' && nextModal.kind === 'artifact-preview') {
     return prevModal.artifactId !== nextModal.artifactId
       || (prevModal.conversationId ?? undefined) !== (nextModal.conversationId ?? undefined)
+  }
+  if (prevModal.kind === 'workspace-file' && nextModal.kind === 'workspace-file') {
+    return prevModal.conversationId !== nextModal.conversationId
+      || prevModal.path !== nextModal.path
+      || (prevModal.startLine ?? undefined) !== (nextModal.startLine ?? undefined)
+      || (prevModal.endLine ?? undefined) !== (nextModal.endLine ?? undefined)
   }
   if (prevModal.kind === 'conversation-drawer' && nextModal.kind === 'conversation-drawer') {
     return prevModal.conversationId !== nextModal.conversationId

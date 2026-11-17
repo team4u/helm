@@ -1,15 +1,21 @@
-import { Fragment, memo, useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, Fragment, memo, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import Markdown, { type Components, type Options } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { SyntaxCode } from './SyntaxCode.js'
+import type { CodeLineRange } from './syntax-code-model.js'
 import { CopyButton, HelmIcon, markdownUrlTransform, parseArtifactUrl } from '@helm/plugin-client'
 import type { MarkdownViewProps } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import { LazyMount } from '../ui/LazyMount.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { CodeBlockRenderer } from './CodeBlockRenderer.js'
-import { artifactsApi } from '../lib/api.js'
+import { artifactsApi, conversationsApi } from '../lib/api.js'
+import {
+  isDisallowedFileUrl,
+  parseWorkspaceFileRef,
+  type WorkspaceFileRef,
+} from './workspace-file-url.js'
 import {
   countHeadingsUpToH3,
   remarkHeadingIndices,
@@ -19,21 +25,43 @@ import {
 /** 整篇渲染（非流式与 gate 回退路径）复用同一无状态插件组。 */
 const wholeDocumentRemarkPlugins = [remarkGfm, remarkHeadingIndices]
 
+/**
+ * 流式尾部块媒体抑制上下文：流式输出期间，仅尾部仍在增长的块设为 true，
+ * 避免未闭合或正在拼接的图片 URL 在流式过程中反复发网络请求。
+ * 使用轻量 Context 传递，保持 Markdown `components` 对象引用恒定，确保前缀块不重挂载。
+ */
+const DeferWorkspaceMediaContext = createContext(false)
+
 /** 宿主标准 Markdown 渲染的 props 契约唯一真源在 @helm/plugin-client（本组件经宿主端口注入 SDK）。 */
 export type { MarkdownViewProps }
 
 /**
- * 独立语法高亮代码块（产物预览等非 Markdown 场景消费）：
+ * 独立语法高亮代码块（产物/工作区预览等非 Markdown 场景消费）：
  * 语言为空串时优雅回退普通等宽代码样式，不猜造语言。
  */
-export function CodeBlockView({ code, language }: { code: string; language: string }): ReactNode {
+export function CodeBlockView({
+  code,
+  language,
+  showLineNumbers,
+  highlightLines,
+}: {
+  code: string
+  language: string
+  showLineNumbers?: boolean
+  highlightLines?: CodeLineRange
+}): ReactNode {
   return (
     <div className="code-block-wrap code-block-wrap-flush">
       <div className="code-block-header">
         <span>{language === '' ? 'text' : language}</span>
         <CopyButton text={code} />
       </div>
-      <SyntaxCode code={code} language={language} />
+      <SyntaxCode
+        code={code}
+        language={language}
+        showLineNumbers={showLineNumbers}
+        highlightLines={highlightLines}
+      />
     </div>
   )
 }
@@ -55,6 +83,65 @@ function extractCodeBlock(node: unknown): { language: string; code: string } | n
     .replace(/\n$/, '')
   if (code === '') return null
   return { language: langClass.replace('language-', '').trim(), code }
+}
+
+interface InlineMediaViewProps {
+  media: { url: string; mime: string } | null
+  loading: boolean
+  label: string
+  onOpenPreview: () => void
+}
+
+function InlineMediaView({ media, loading, label, onOpenPreview }: InlineMediaViewProps): ReactNode {
+  const { t } = useWebLocale()
+
+  if (loading) {
+    return (
+      <span className="attachment-chip">
+        <HelmIcon name="loader" size={11} />
+        <span>{label}</span>
+      </span>
+    )
+  }
+
+  if (media !== null) {
+    if (media.mime.startsWith('image/')) {
+      return (
+        <button
+          type="button"
+          className="attachment-image-thumb"
+          title={t('conv.attachment.clickToEnlarge', { name: label })}
+          onClick={onOpenPreview}
+        >
+          <img src={media.url} alt={label} loading="lazy" />
+        </button>
+      )
+    }
+    if (media.mime.startsWith('audio/')) {
+      return <audio controls src={media.url} className="markdown-media-audio" />
+    }
+    if (media.mime.startsWith('video/')) {
+      return (
+        <video
+          controls
+          src={media.url}
+          className="markdown-media-video"
+        />
+      )
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      className="attachment-chip"
+      title={t('conv.attachment.clickToPreview', { label })}
+      onClick={onOpenPreview}
+    >
+      <HelmIcon name="file-text" size={11} />
+      <span>{label}</span>
+    </button>
+  )
 }
 
 interface ArtifactInlineMediaProps {
@@ -105,57 +192,120 @@ function ArtifactInlineMedia({ artifactId, conversationId, alt, title }: Artifac
     }
   }, [artifactId])
 
-  if (loading) {
+  return (
+    <InlineMediaView
+      media={media}
+      loading={loading}
+      label={label}
+      onOpenPreview={openPreview}
+    />
+  )
+}
+
+interface WorkspaceInlineMediaProps {
+  conversationId: number
+  fileRef: WorkspaceFileRef
+  alt?: string
+  title?: string
+}
+
+function WorkspaceInlineMedia({ conversationId, fileRef, alt, title }: WorkspaceInlineMediaProps): ReactNode {
+  const store = useHelmStore()
+  const { t } = useWebLocale()
+  const [media, setMedia] = useState<{ url: string; mime: string } | null>(null)
+  const [loading, setLoading] = useState(true)
+  const label = alt || title || fileRef.path.split('/').pop() || t('conv.attachment.workspaceFileFallback')
+
+  const openPreview = () => {
+    store.setActiveModal({
+      kind: 'workspace-file',
+      conversationId,
+      path: fileRef.path,
+      ...(fileRef.startLine !== undefined ? { startLine: fileRef.startLine } : {}),
+      ...(fileRef.endLine !== undefined ? { endLine: fileRef.endLine } : {}),
+    })
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    let createdUrl: string | null = null
+    const controller = new AbortController()
+    setLoading(true)
+    setMedia(null)
+
+    void conversationsApi
+      .fetchWorkspaceFileBlob(conversationId, fileRef.path, true, controller.signal)
+      .then((blob) => {
+        if (cancelled) return
+        createdUrl = URL.createObjectURL(blob)
+        setMedia({ url: createdUrl, mime: (blob.type || '').toLowerCase() })
+        setLoading(false)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+      controller.abort()
+      if (createdUrl !== null) {
+        URL.revokeObjectURL(createdUrl)
+      }
+    }
+  }, [conversationId, fileRef.path])
+
+  return (
+    <InlineMediaView
+      media={media}
+      loading={loading}
+      label={label}
+      onOpenPreview={openPreview}
+    />
+  )
+}
+
+function WorkspaceMediaGate({
+  conversationId,
+  fileRef,
+  alt,
+  title,
+}: WorkspaceInlineMediaProps): ReactNode {
+  const defer = useContext(DeferWorkspaceMediaContext)
+  const { t } = useWebLocale()
+  const label = alt || title || fileRef.path.split('/').pop() || t('conv.attachment.workspaceFileFallback')
+
+  if (defer) {
     return (
       <span className="attachment-chip">
-        <HelmIcon name="loader" size={11} />
+        <HelmIcon name="file-text" size={11} />
         <span>{label}</span>
       </span>
     )
   }
 
-  if (media !== null) {
-    if (media.mime.startsWith('image/')) {
-      return (
-        <button
-          type="button"
-          className="attachment-image-thumb"
-          title={t('conv.attachment.clickToEnlarge', { name: label })}
-          onClick={openPreview}
-        >
-          <img src={media.url} alt={label} loading="lazy" />
-        </button>
-      )
-    }
-    if (media.mime.startsWith('audio/')) {
-      return <audio controls src={media.url} className="markdown-media-audio" />
-    }
-    if (media.mime.startsWith('video/')) {
-      return (
-        <video
-          controls
-          src={media.url}
-          className="markdown-media-video"
-        />
-      )
-    }
-  }
-
   return (
-    <button
-      type="button"
-      className="attachment-chip"
-      title={t('conv.attachment.clickToPreview', { label })}
-      onClick={openPreview}
+    <LazyMount
+      inline
+      fallback={
+        <span className="attachment-chip">
+          <HelmIcon name="file-text" size={11} />
+          <span>{label}</span>
+        </span>
+      }
     >
-      <HelmIcon name="file-text" size={11} />
-      <span>{label}</span>
-    </button>
+      <WorkspaceInlineMedia
+        conversationId={conversationId}
+        fileRef={fileRef}
+        alt={alt}
+        title={title}
+      />
+    </LazyMount>
   )
 }
 
 /**
- * 单块独立解析渲染。默认 memo 浅比较：block / headingOffset / components 均不变
+ * 单块独立解析渲染。默认 memo 浅比较：block / headingOffset / components / deferMediaFetch 均不变
  * 即整块复用（零重解析、零重挂载）；全部比较都是不可变 prop 值，无共享可变状态。
  */
 interface StreamingMarkdownBlockProps {
@@ -163,24 +313,39 @@ interface StreamingMarkdownBlockProps {
   /** 本块之前文档已出现的 H1~H3 数量（父组件从纯计数前缀和预算）。 */
   headingOffset: number
   components: Components
+  deferMediaFetch: boolean
 }
 
 const StreamingMarkdownBlock = memo(function StreamingMarkdownBlock({
   block,
   headingOffset,
   components,
+  deferMediaFetch,
 }: StreamingMarkdownBlockProps): ReactNode {
   const remarkPlugins: Options['remarkPlugins'] = [remarkGfm, [remarkHeadingIndices, { offset: headingOffset }]]
   return (
-    <Markdown remarkPlugins={remarkPlugins} urlTransform={markdownUrlTransform} components={components}>
-      {block}
-    </Markdown>
+    <DeferWorkspaceMediaContext.Provider value={deferMediaFetch}>
+      <Markdown remarkPlugins={remarkPlugins} urlTransform={markdownUrlTransform} components={components}>
+        {block}
+      </Markdown>
+    </DeferWorkspaceMediaContext.Provider>
   )
 })
 
-export const MarkdownView = memo(function MarkdownView({ text, conversationId, streaming }: MarkdownViewProps): ReactNode {
-  const { setActiveModal } = useHelmStore()
+export const MarkdownView = memo(function MarkdownView({
+  text,
+  conversationId,
+  streaming,
+  workspaceBaseDir,
+}: MarkdownViewProps): ReactNode {
+  const store = useHelmStore()
+  const { setActiveModal } = store
   const { t } = useWebLocale()
+  const conversationCwd =
+    conversationId !== undefined
+      ? store.conversations?.find((c) => c.id === conversationId)?.cwd
+      : undefined
+
   // 渲染器函数身份必须稳定，否则每次流式文本更新都会重挂载既有代码块。
   const components = useMemo<Components>(() => ({
     pre: ({ children, node }) => {
@@ -235,6 +400,33 @@ export const MarkdownView = memo(function MarkdownView({ text, conversationId, s
           </button>
         )
       }
+      if (conversationId !== undefined) {
+        const fileRef = parseWorkspaceFileRef(href, { conversationCwd, workspaceBaseDir })
+        if (fileRef !== null) {
+          return (
+            <button
+              type="button"
+              className="attachment-chip"
+              title={t('conv.attachment.clickToPreviewWorkspaceFile', { path: fileRef.path })}
+              onClick={() =>
+                setActiveModal({
+                  kind: 'workspace-file',
+                  conversationId,
+                  path: fileRef.path,
+                  ...(fileRef.startLine !== undefined ? { startLine: fileRef.startLine } : {}),
+                  ...(fileRef.endLine !== undefined ? { endLine: fileRef.endLine } : {}),
+                })
+              }
+            >
+              <HelmIcon name="file-text" size={11} />
+              <span>{children}</span>
+            </button>
+          )
+        }
+      }
+      if (isDisallowedFileUrl(href)) {
+        return <span className="msg-md-disallowed-file">{children}</span>
+      }
       return (
         <a href={href} target="_blank" rel="noreferrer noopener">
           {children}
@@ -264,9 +456,31 @@ export const MarkdownView = memo(function MarkdownView({ text, conversationId, s
           </LazyMount>
         )
       }
+      if (conversationId !== undefined) {
+        const fileRef = parseWorkspaceFileRef(src, { conversationCwd, workspaceBaseDir })
+        if (fileRef !== null) {
+          return (
+            <WorkspaceMediaGate
+              conversationId={conversationId}
+              fileRef={fileRef}
+              alt={alt}
+              title={title}
+            />
+          )
+        }
+      }
+      if (isDisallowedFileUrl(src)) {
+        const label = alt || title || t('conv.attachment.disallowedFileLabel')
+        return (
+          <span className="attachment-chip">
+            <HelmIcon name="file-text" size={11} />
+            <span>{label}</span>
+          </span>
+        )
+      }
       return <img src={src} alt={alt} title={title} loading="lazy" />
     },
-  }), [conversationId, setActiveModal, t])
+  }), [conversationId, conversationCwd, workspaceBaseDir, setActiveModal, t])
 
   const lastSplitTextRef = useRef<string | null>(null)
   const headingCacheRef = useRef<Map<string, number> | null>(null)
@@ -329,6 +543,7 @@ export const MarkdownView = memo(function MarkdownView({ text, conversationId, s
             block={block}
             headingOffset={offsets[index] ?? 0}
             components={components}
+            deferMediaFetch={streaming === true && index === blocks.length - 1}
           />
         </Fragment>
       ))}
