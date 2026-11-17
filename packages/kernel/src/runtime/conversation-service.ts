@@ -85,6 +85,8 @@ export interface ConversationServiceOptions {
   /** Model resolution chain (default model). */
   readonly defaultModel: () => string | undefined
   readonly defaultThinkingLevel: () => string | undefined
+  /** Per-model thinking defaults lookup (`config.json.modelThinkingLevels`, keyed by full `'provider/modelId'`). */
+  readonly modelThinkingLevelOf: (ref: { provider: string; modelId: string }) => string | undefined
   /** Current Models collection (used to clamp thinking levels to model capabilities). */
   readonly models: () => Models
   readonly parseModelRefOrThrow: (ref: string) => { provider: string; modelId: string }
@@ -200,6 +202,7 @@ export class ConversationService {
       models: this.o.models,
       defaultModel: this.o.defaultModel,
       defaultThinkingLevel: this.o.defaultThinkingLevel,
+      modelThinkingLevelOf: this.o.modelThinkingLevelOf,
       parseModelRefOrThrow: this.o.parseModelRefOrThrow,
       summaryWithOwnership: (id) => this.summaryWithOwnership(id),
       // Context window and thresholds may change after model/Profile alignment: trigger context usage recalculation.
@@ -572,9 +575,15 @@ export class ConversationService {
       this.o.assertModelEnabled(ref.provider, ref.modelId)
       nextOverride = patch.model
     }
+    const nextProfileId = patch.profileId ?? meta.profileId
+    const effectiveModel = await this.resolveEffectiveModel(nextOverride, nextProfileId)
+    // A model switch without a simultaneous explicit thinking change clears the stale conversation override:
+    // the override was chosen for the previous model and must not shadow the new model's own default chain
+    // (per-model default > Profile > global). Re-selecting the same effective model keeps the override.
+    const modelSwitched = patch.model !== undefined && (effectiveModel ?? '') !== meta.model
     let nextThinkingOverride: string | undefined
     if (patch.thinkingLevel === undefined) {
-      nextThinkingOverride = meta.thinkingLevelOverride
+      nextThinkingOverride = modelSwitched ? undefined : meta.thinkingLevelOverride
     } else {
       const level = patch.thinkingLevel.trim()
       if (level !== '' && !THINKING_LEVELS.has(level)) {
@@ -586,8 +595,6 @@ export class ConversationService {
       }
       nextThinkingOverride = level || undefined
     }
-    const nextProfileId = patch.profileId ?? meta.profileId
-    const effectiveModel = await this.resolveEffectiveModel(nextOverride, nextProfileId)
     const effectiveRef = effectiveModel ? this.o.parseModelRefOrThrow(effectiveModel) : undefined
     // After model/Profile changes, clamp any explicit thinking override to what the target model supports
     // (single clampThinkingLevelForModel helper; unknown capabilities pass through to keep the contract intact).

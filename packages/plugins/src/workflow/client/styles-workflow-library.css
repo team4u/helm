@@ -200,6 +200,12 @@
   white-space: nowrap;
 }
 
+/* 整卡即详情入口：右下角方向箭头为可点击暗示（键盘 Enter/Space 同样可进入） */
+.workflow-lib-card-entry {
+  color: var(--fg-subtle, var(--fg-muted));
+  flex-shrink: 0;
+}
+
 /* Detail drawer (business structure on top of the host primary-drawer skeleton) */
 
 .workflow-lib-drawer-section {

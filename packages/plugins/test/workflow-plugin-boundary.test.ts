@@ -384,7 +384,7 @@ test('pluginToolResult：无信封字段的业务对象走文本通道；output 
   )
 })
 
-test('pluginToolResult：合法信封（output+structuredOutput+isError）按 schema 保留结构化输出', { timeout: 60_000 }, () => {
+test('pluginToolResult：合法信封（output+structuredOutput+isError）按 schema 保留结构化输出并同步 details 持久通道', { timeout: 60_000 }, () => {
   const identity = (text: string) => text
   const envelope = {
     output: [{ type: 'text', text: 'summary' }],
@@ -398,7 +398,17 @@ test('pluginToolResult：合法信封（output+structuredOutput+isError）按 sc
   })
   assert.deepEqual(result.output, [{ type: 'text', text: 'summary' }])
   assert.deepEqual(result.structuredOutput, { ok: true, value: 7 })
+  assert.deepEqual(result.details, { ok: true, value: 7 }, '对象型 structuredOutput 必须镜像到 details 供 transcript 持久化')
   assert.equal(result.isError, undefined, 'isError:false 不置错误位')
+
+  // 非对象（数组/标量）structuredOutput 不写入 details（details 仅接受 plain object）。
+  const arrayResult = pluginToolResult(
+    { output: 'ok', structuredOutput: [1, 2, 3] },
+    identity,
+    { structuredOutputSchema: { type: 'array' } },
+  )
+  assert.deepEqual(arrayResult.structuredOutput, [1, 2, 3])
+  assert.equal(arrayResult.details, undefined)
 })
 
 test('pluginToolResult：未声明 schema 却返回 structuredOutput 显式拒绝（不静默丢数据）', { timeout: 60_000 }, () => {
@@ -430,7 +440,7 @@ test('pluginToolResult：isError 非 boolean 显式拒绝（不静默忽略）',
   )
 })
 
-test('pluginToolResult：结构化输出值级脱敏', { timeout: 60_000 }, () => {
+test('pluginToolResult：结构化输出值级脱敏（structuredOutput 与 details 同值脱敏）', { timeout: 60_000 }, () => {
   const redact = (text: string) => text.replaceAll('SECRET', '***')
   const result = pluginToolResult(
     { output: '含 SECRET 文本', structuredOutput: { token: 'SECRET', nested: { key: 'SECRET' } } },
@@ -439,6 +449,7 @@ test('pluginToolResult：结构化输出值级脱敏', { timeout: 60_000 }, () =
   )
   assert.deepEqual(result.output, [{ type: 'text', text: '含 *** 文本' }])
   assert.deepEqual(result.structuredOutput, { token: '***', nested: { key: '***' } })
+  assert.deepEqual(result.details, { token: '***', nested: { key: '***' } })
 })
 
 // ---------------------------------------------------------------------------

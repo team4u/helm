@@ -45,7 +45,7 @@ import {
   WORKFLOW_NESTED_CAP,
   workflowConcurrency,
 } from './runtime-validation.js'
-import { RuntimeControl, Semaphore } from './runtime-control.js'
+import { Semaphore } from './runtime-control.js'
 import { AgentJournalRecorder } from './runtime-recorder.js'
 import { handleAgentCall, type AgentCallContext } from './runtime-agent-handler.js'
 import { handleActionCall, type ActionCallContext } from './runtime-action-handler.js'
@@ -83,7 +83,6 @@ export type {
   WorkflowScriptSource,
   WorkflowHost,
   ResumeAgentOptions,
-  WorkflowControl,
   RunWorkflowOptions,
   WorkflowRunResult,
 } from './runtime-types.js'
@@ -142,11 +141,6 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 
   const allocateIndex = () => callIndex++
 
-  /* --- live control ---------------------------------------------------- */
-
-  const control = new RuntimeControl(host, () => aborted || settled)
-  options.onControl?.(control.toControl())
-
   const worker = new Worker(WORKER_SOURCE, {
     eval: true,
     workerData: {
@@ -191,7 +185,6 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       settled = true
       fireReattachHorizon()
       options.signal?.removeEventListener('abort', onAbort)
-      control.releasePause()
       if (!isSuspended()) {
         for (const agentId of inflight) host.abortAgent(agentId)
       }
@@ -233,7 +226,6 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       markNativeReattachResolved,
       inflight,
       semaphore,
-      control,
       completedByLabel,
       openLaunches,
       replay,
@@ -251,7 +243,6 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       openLaunches,
       replay,
       semaphore,
-      control,
       counters,
       appendJournal,
       redactText,

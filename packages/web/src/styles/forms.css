@@ -782,6 +782,22 @@
   color: var(--fg-secondary);
   vertical-align: middle;
 }
+button.attachment-chip {
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+button.attachment-chip:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+button.attachment-chip:active:not(:disabled) {
+  background: var(--bg-active);
+}
+button.attachment-chip:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
 .attachment-chip .btn-icon-xs {
   width: 18px;
   height: 18px;

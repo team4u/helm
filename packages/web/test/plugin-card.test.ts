@@ -371,13 +371,11 @@ test('PluginCard：status === failed 时渲染异常徽章与错误摘要并标�
   // 1. 卡片容器追加 is-failed 故障态类名
   assert.match(html, /class="[^"]*plugin-card[^"]*is-failed[^"]*"/)
 
-  // 2. 标题行渲染异常徽章（含 title 错误摘要）
-  assert.match(html, /class="[^"]*badge badge-err[^"]*"/)
-  assert.match(html, /title="入口文件 index\.ts 缺失"/)
-  assert.match(html, /<span>Error<\/span>/)
-
+  // 2. 标题行渲染异常状态灯（failed 实心红点 + 可见 Error 文案）
+  assert.match(html, /helm-status-light-failed[\s\S]*?status-dot-error[\s\S]*?Error/)
   // 3. 描述区域附带错误摘要
   assert.match(html, /plugin-card-error-summary/)
+  assert.match(html, /入口文件 index\.ts 缺失/, '错误摘要保留在卡片正文（不依赖 hover）')
 })
 
 test('PluginCard：scan/load 阶段失败禁用快捷开关并提示查看错误详情', { timeout: 60_000 }, () => {

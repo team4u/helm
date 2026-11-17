@@ -28,7 +28,6 @@
      blue=variables, orange=strings, green=numbers, gray=comments/punctuation); light theme desaturates one notch (S×0.85)
      for a paper-ink feel while keeping backgrounds ≥4.5:1 */
   --code-bg: #f6f8fa;
-  --code-header-bg: #eef1f4;
   --code-border: #d0d7de;
   --code-token-comment: #677176;
   --code-token-keyword: #36728f;
@@ -138,7 +137,6 @@
 
   /* 代码高亮：与浅色主题同一套 pi 语义色相，OKHSL L≈67% 保证深底高对比 */
   --code-bg: #161b22;
-  --code-header-bg: #21262d;
   --code-border: #30363d;
   --code-token-comment: #9da5a9;
   --code-token-keyword: #69add0;

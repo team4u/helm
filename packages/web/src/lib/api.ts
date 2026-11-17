@@ -506,6 +506,7 @@ export const assetsApi = {
     apiRequest<{
       defaultModel: string
       defaultThinkingLevel: string
+      modelThinkingLevels: Record<string, string>
       defaultCompactionModel?: string
       defaultCompactionThinkingLevel?: string
     }>('GET', '/api/models/default', undefined, opts?.signal),
@@ -514,11 +515,14 @@ export const assetsApi = {
     thinkingLevel?: string,
     compactionModel?: string,
     compactionThinkingLevel?: string,
+    modelThinking?: { model: string; level: string },
+    modelThinkingLevels?: Record<string, string>,
   ) =>
     apiRequest<{
       ok: boolean
       defaultModel: string
       defaultThinkingLevel: string
+      modelThinkingLevels: Record<string, string>
       defaultCompactionModel?: string
       defaultCompactionThinkingLevel?: string
     }>('PUT', '/api/models/default', {
@@ -526,6 +530,8 @@ export const assetsApi = {
       ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
       ...(compactionModel !== undefined ? { compactionModel } : {}),
       ...(compactionThinkingLevel !== undefined ? { compactionThinkingLevel } : {}),
+      ...(modelThinking !== undefined ? { modelThinking: modelThinking.model, modelThinkingLevel: modelThinking.level } : {}),
+      ...(modelThinkingLevels !== undefined ? { modelThinkingLevels } : {}),
     }),
   listModelProviders: (opts?: { signal?: AbortSignal }) =>
     apiRequest<ModelProviderSummary[]>('GET', '/api/models/providers', undefined, opts?.signal),

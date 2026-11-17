@@ -1,25 +1,27 @@
 /**
  * Workflow library fullscreen view component (screen extension point):
  * first-level main-stage card grid + right detail drawer; read-only browsing
- * / source viewing / running / deleting / refreshing, no source editing. The
- * workbench's compact run entry lives in WorkflowLibrarySection; the card /
- * detail drawer live in WorkflowLibraryCard / WorkflowLibraryDrawer.
+ * / source viewing / running / deleting / refreshing, no source editing.
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ScreenProps } from '@helm/protocol'
-import { resolveLocalizedText, usePluginLocale } from '@helm/plugin-client'
+import { formatBytes, formatTime, resolveLocalizedText, usePluginLocale } from '@helm/plugin-client'
 import { useWorkflowLibrary } from './hooks.ts'
-import { SPIN } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
-import { WorkflowLibraryCard } from './WorkflowLibraryCard.tsx'
 import { WorkflowLibraryDrawer } from './WorkflowLibraryDrawer.tsx'
-import { filterSavedWorkflows } from './model-library.ts'
+import { firstLineOf } from './model-format.ts'
+import { filterSavedWorkflows, type SavedWorkflowView } from './model-library.ts'
 import {
+  LIB_CARD_NO_DESCRIPTION,
+  libCardAria,
+  libDefinitionFileTitle,
   LIB_EMPTY,
   LIB_LOAD_FAILED,
   LIB_LOADING,
+  libMetadataError,
   LIB_NO_MATCH,
+  libPhases,
   LIB_REFRESH,
   LIB_REFRESH_TITLE,
   LIB_RETRY,
@@ -29,16 +31,59 @@ import {
   LIB_SEARCH_CLEAR_ARIA,
   LIB_SEARCH_CLEAR_TITLE,
   LIB_SEARCH_PLACEHOLDER,
+  SPIN,
 } from './copy.ts'
 
-/**
- * Selected item and search term are written into sp.* deep-link params
- * (setParams as the sole navigation mechanism); inlineDrawer lets host-inline
- * scenarios and SSR/test environments render the drawer inline (same
- * contract as AppCenterScreen).
- */
 export interface WorkflowLibraryScreenProps extends ScreenProps {
   inlineDrawer?: boolean
+}
+
+function WorkflowLibraryCard(props: { item: SavedWorkflowView; onShowDetail: () => void }): ReactNode {
+  const { item } = props
+  const locale = usePluginLocale()
+  const description = item.metadataError !== undefined ? undefined : item.description
+  return (
+    <div
+      className={`workflow-lib-card${item.metadataError !== undefined ? ' workflow-lib-card-warn' : ''}`}
+      role="button"
+      tabIndex={0}
+      aria-label={libCardAria(item.name, locale)}
+      onClick={props.onShowDetail}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          props.onShowDetail()
+        }
+      }}
+    >
+      <div className="workflow-lib-card-head">
+        <Icon name="terminal" size={14} />
+        <strong className="workflow-lib-card-name" title={item.path ?? item.name}>{item.name}</strong>
+      </div>
+      {item.metadataError !== undefined ? (
+        <div className="callout callout--warning workflow-lib-card-meta-error">{libMetadataError(firstLineOf(item.metadataError, 120), locale)}</div>
+      ) : (
+        <>
+          {description !== undefined ? (
+            <div className="workflow-lib-card-desc" title={description}>{firstLineOf(description, 140)}</div>
+          ) : (
+            <div className="workflow-lib-card-desc workflow-lib-card-desc-empty">{resolveLocalizedText(LIB_CARD_NO_DESCRIPTION, locale)}</div>
+          )}
+          {item.phases !== undefined ? (
+            <div className="workflow-lib-card-phases" title={item.phases.map((p) => p.title).join(' → ')}>
+              {libPhases(item.phases.length, item.phases.map((p) => p.title).join(' / '), locale)}
+            </div>
+          ) : null}
+        </>
+      )}
+      <div className="workflow-lib-card-footer">
+        <span className="workflow-lib-card-facts tabular-nums" title={libDefinitionFileTitle(`${item.path ?? item.name}.js`, locale)}>
+          {formatTime(item.updatedAt)} · {formatBytes(item.size)}
+        </span>
+        <Icon name="chevron-right" size={12} className="workflow-lib-card-entry" />
+      </div>
+    </div>
+  )
 }
 
 export function WorkflowLibraryScreen(props: WorkflowLibraryScreenProps): ReactNode {

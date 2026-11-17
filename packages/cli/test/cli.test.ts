@@ -140,6 +140,26 @@ test('thinkingLevel CLI passthrough: global default, current conversation overri
   assert.equal(clearCompaction.code, 0, clearCompaction.err)
   assert.deepEqual(JSON.parse(clearCompaction.out), { compactionModel: '', compactionThinkingLevel: '' })
 
+  // Per-model thinking defaults: provider/model=level (modelId may itself contain slashes); empty level clears.
+  const perModel = await runCliCaptured(['models', 'default', '--model-thinking', 'openrouter/vendor/nested-model=high', '--json'], env)
+  assert.equal(perModel.code, 0, perModel.err)
+  assert.deepEqual(JSON.parse(perModel.out), { modelThinking: 'openrouter/vendor/nested-model', modelThinkingLevel: 'high' })
+
+  const perModelClear = await runCliCaptured(['models', 'default', '--model-thinking', 'openrouter/vendor/nested-model=', '--json'], env)
+  assert.equal(perModelClear.code, 0, perModelClear.err)
+  assert.deepEqual(JSON.parse(perModelClear.out), { modelThinking: 'openrouter/vendor/nested-model', modelThinkingLevel: '' })
+
+  const perModelCombined = await runCliCaptured(['models', 'default', '--thinking', 'low', '--model-thinking', 'faux/faux-1=max', '--json'], env)
+  assert.equal(perModelCombined.code, 0, perModelCombined.err)
+  assert.deepEqual(JSON.parse(perModelCombined.out), { thinkingLevel: 'low', modelThinking: 'faux/faux-1', modelThinkingLevel: 'max' })
+
+  // Missing '=' is rejected client-side without sending a request.
+  const beforeHits = hub.hits.length
+  const perModelBad = await runCliCaptured(['models', 'default', '--model-thinking', 'faux/faux-1', '--json'], env)
+  assert.equal(perModelBad.code, 1)
+  assert.ok(perModelBad.err.includes('model-thinking'), `error should mention model-thinking: ${perModelBad.err}`)
+  assert.equal(hub.hits.length, beforeHits, 'invalid --model-thinking must not trigger a request')
+
   const conversation = await runCliCaptured(['conversations', 'update', '--current', '--thinking=', '--json'], env)
   assert.equal(conversation.code, 0, conversation.err)
   assert.deepEqual(JSON.parse(conversation.out), { thinkingLevel: '' })

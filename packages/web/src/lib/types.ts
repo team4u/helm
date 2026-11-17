@@ -465,6 +465,7 @@ export interface HelmStoreValue {
   defaultModelInfo?: {
     defaultModel: string
     defaultThinkingLevel: string
+    modelThinkingLevels?: Record<string, string>
     defaultCompactionModel?: string
     defaultCompactionThinkingLevel?: string
   } | null

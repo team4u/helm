@@ -10,10 +10,12 @@
  */
 
 import { HelmError, type ConversationSummary } from '@helm/protocol'
+import type { WorkflowRunSummary } from '../../contracts.js'
 import type { ActiveRun } from './active-run.js'
 import type { CancellationTracker } from './cancellation-tracker.js'
 import type { WorkflowServiceHost } from './host-adapter.js'
 import type { WorkflowLibrary } from './library-store.js'
+import type { ResumabilityContext } from './run-resumability.js'
 import type { RunRecord, RunStore, WorkflowStateStore } from './run-store.js'
 import type { WorkflowHost } from './runtime.js'
 
@@ -128,4 +130,8 @@ export interface WorkflowServiceContext {
   deferExternalReattach: boolean
   /** 推迟外部重挂时等待 runtime.started 放行门；非推迟模式下立即 resolved。 */
   waitExternalRuntimeReady(): Promise<void>
+  /** 单一权威可续跑评估上下文（含接管标记查验与脚本读取）。 */
+  resumabilityContext(): ResumabilityContext
+  /** 生成完整运行摘要（failed 状态自动附带权威 resumable 判定）。 */
+  summaryOf(record: RunRecord): WorkflowRunSummary
 }

@@ -2,8 +2,10 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   EDIT_TOOL_RESULT_SCHEMA,
+  HelmError,
   TOOL_DIFF_MAX_ROWS,
   TOOL_DIFF_MAX_ROW_CHARS,
+  assertSchemaCompilable,
   validateOrThrow,
   type EditToolResult,
 } from '../src/index.js'
@@ -72,4 +74,30 @@ test('edit presentation boundary rejects excess rows and over-long row text', { 
     () => validate({ ...result(), diff: { ...result().diff, rows: [{ ...row, text: 'x'.repeat(TOOL_DIFF_MAX_ROW_CHARS + 1) }] } }),
     /invalid edit diff result/,
   )
+})
+
+test('schema validator rejects $async and malformed JSON Schema declarations with invalid_plugin_schema', { timeout: 60_000 }, () => {
+  assertSchemaCompilable(EDIT_TOOL_RESULT_SCHEMA)
+  const badSchemas: unknown[] = [
+    null,
+    'not-an-object',
+    [],
+    { type: 'object', $async: true },
+    { type: 'object', properties: { nested: { type: 'string', $async: true } } },
+    { type: 'not-a-type' },
+    { type: ['string', 'quux'] },
+    { type: 'string', pattern: '[unclosed' },
+    { type: 'object', required: 'not-an-array' },
+    { type: 'array', minItems: -1 },
+  ]
+  for (const bad of badSchemas) {
+    assert.throws(
+      () => assertSchemaCompilable(bad as never),
+      (err: unknown) => err instanceof HelmError && err.code === 'invalid_plugin_schema' && err.status === 500,
+    )
+    assert.throws(
+      () => validateOrThrow(bad as never, {}, 'bad schema'),
+      (err: unknown) => err instanceof HelmError && err.code === 'invalid_plugin_schema' && err.status === 500,
+    )
+  }
 })

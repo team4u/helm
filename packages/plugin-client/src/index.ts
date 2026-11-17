@@ -43,8 +43,8 @@ export type { HelmLocale, LocalizedText, ExecutionText, LocaleTranslator } from 
 
 // ---- hooks: doc subscriptions / conversations / plugin list / tool activity ----
 export { usePluginDoc, usePluginDocValue, usePluginSessionDoc, usePluginSessionDocState, usePluginSessionDocValue } from './docs.js'
-export type { ConversationHookResult } from './conversation-hooks.js'
-export { useConversation, useConversations, usePluginConfig, usePlugins } from './conversation-hooks.js'
+export type { ConversationHookOptions, ConversationHookResult } from './conversation-hooks.js'
+export { useConversation, useConversations, usePluginConfig, usePlugins, useSharedNowMs } from './conversation-hooks.js'
 export { ToolActivityContext, useToolActivity } from './tool-activity.js'
 export type { ToolActivityRegistry } from './tool-activity.js'
 
@@ -65,6 +65,10 @@ export { Popover, PopoverPortal, PopoverRoot, PopoverTrigger, PopoverAnchor, Pop
 export { OverlayLayerContext, useOverlayChildStyle, useOverlayLayer } from './ui/overlay-stack.js'
 export type { OverlayLayer } from './ui/overlay-stack.js'
 export { ViewBoundary } from './ui/ViewBoundary.js'
+export { StatusLight } from './ui/StatusLight.js'
+export type { StatusLightProps } from './ui/StatusLight.js'
+export { normalizeStatusLightTone, statusLightDotClass } from './ui/status-light-model.js'
+export type { StatusLightTone } from './ui/status-light-model.js'
 
 // ---- Lightweight layout primitives and hints ----
 export { Screen, ScreenSection, DataTable, KvGrid } from './primitives.js'

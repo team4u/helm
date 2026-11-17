@@ -12,6 +12,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { readHostStyles } from './helpers/host-styles.js'
 
 const WEB_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const PLUGIN_CLIENT_SRC = fileURLToPath(new URL('../../plugin-client/src', import.meta.url))
@@ -109,6 +110,11 @@ test('宿主壳零插件 ID 特判与工作流私有状态渗入', { timeout: 60
     assert.doesNotMatch(content, /builtin:[a-z-]+/, `${rel} 不得硬编码特定插件 ID`)
     assert.doesNotMatch(content, /workflowRuns|SubagentLiveCard|WorkflowRunSummary/, `${rel} 不得渗入工作流私有状态`)
   }
+  const rowsSrc = readFileSync(join(WEB_SRC, 'conversation/TimelineRows.tsx'), 'utf8')
+  assert.match(rowsSrc, /replaceRow/)
+  const hostCss = [readHostStyles(), readFileSync(join(WEB_SRC, 'responsive.css'), 'utf8')].join('\n')
+  assert.doesNotMatch(hostCss, /\.(?:subagent|workflow)-/, '宿主样式表不得硬编码插件业务类')
+  assert.doesNotMatch(hostCss, /\.phase-segment/, '阶段胶囊样式归属插件，不得混入宿主 CSS')
 })
 
 test('index.html 与 favicon.svg：移动端 viewport 安全区与明暗自适应图标契约', { timeout: 60_000 }, () => {

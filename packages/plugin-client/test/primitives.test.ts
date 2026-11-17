@@ -20,6 +20,8 @@ import { renderToString } from 'react-dom/server'
 import { PLUGIN_CLIENT_SHARED_EXPORTS } from '@helm/protocol'
 import * as HelmPluginClient from '../src/index.js'
 import { Screen, ScreenSection, DataTable, KvGrid } from '../src/primitives.js'
+import { StatusLight } from '../src/ui/StatusLight.js'
+import { normalizeStatusLightTone, statusLightDotClass } from '../src/ui/status-light-model.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -194,4 +196,53 @@ test('KvGrid: items render as paired kv-grid direct children by key/value', { ti
   assert.match(html, /kv-val/)
   assert.match(html, /Cron jobs/)
   assert.match(html, /Webhook endpoints/)
+})
+
+// ---------------------------------------------------------------------------
+// StatusLight: unified status light (visually dot-only)
+// ---------------------------------------------------------------------------
+
+test('StatusLight: renders dot-only; the label is a screen-reader accessible name, never visible text', { timeout: 60_000 }, () => {
+  const html = renderToString(e(StatusLight, { status: 'running', label: 'Running' }))
+  assert.match(html, /helm-status-light helm-status-light-working/)
+  assert.match(html, /status-dot status-dot-working/)
+  assert.equal((html.match(/status-dot /g) ?? []).length, 1, 'exactly one dot')
+  // Accessible name: role=img + aria-label + sr-only text (no visible label node, no width cost).
+  assert.match(html, /role="img"/)
+  assert.match(html, /aria-label="Running"/)
+  assert.match(html, /helm-sr-only">Running</)
+  assert.doesNotMatch(html, /helm-status-light-label/, 'no visible label element')
+})
+
+test('StatusLight: settled and neutral tones map honestly (completed/aborted/skipped/offline/unknown)', { timeout: 60_000 }, () => {
+  assert.match(renderToString(e(StatusLight, { status: 'completed' })), /helm-status-light-done/)
+  assert.match(renderToString(e(StatusLight, { status: 'error' })), /status-dot-error/)
+  // Aborted is NOT the plain gray idle dot: it keeps the dedicated diamond class.
+  const aborted = renderToString(e(StatusLight, { status: 'aborted', label: 'Aborted' }))
+  assert.match(aborted, /status-dot-aborted/)
+  assert.doesNotMatch(aborted, /helm-status-light-idle/)
+  assert.match(renderToString(e(StatusLight, { status: 'skipped' })), /status-dot-pending/)
+  assert.match(renderToString(e(StatusLight, { status: 'offline' })), /helm-status-light-idle/)
+  // Unknown statuses never fabricate a done/failed verdict.
+  assert.match(renderToString(e(StatusLight, { status: 'weird-state' })), /helm-status-light-pending/)
+})
+
+test('StatusLight: without a label the raw status word becomes the accessible-name fallback; extra className is appended; non-string labels keep the sr-only text', { timeout: 60_000 }, () => {
+  const html = renderToString(e(StatusLight, { status: 'blocked', className: 'tray-status' }))
+  assert.match(html, /helm-status-light helm-status-light-blocked tray-status/)
+  assert.match(html, /status-dot status-dot-blocked/)
+  assert.match(html, /aria-label="blocked"/, 'role=img never ends up nameless: raw status fallback')
+  assert.doesNotMatch(html, /helm-sr-only/, 'no sr-only node without an explicit label')
+  const richLabel = renderToString(e(StatusLight, { status: 'done', label: e('em', undefined, 'Done') }))
+  assert.match(richLabel, /helm-sr-only"><em[^>]*>Done<\/em>/, 'ReactNode labels render as sr-only content')
+  assert.equal(typeof normalizeStatusLightTone, 'function')
+  assert.equal(statusLightDotClass('failed'), 'status-dot status-dot-error')
+})
+
+test('normalizeStatusLightTone: alias families collapse into the seven honest tones', { timeout: 60_000 }, () => {
+  assert.equal(normalizeStatusLightTone('RUNNING'), 'working')
+  assert.equal(normalizeStatusLightTone('superseded'), 'aborted')
+  assert.equal(normalizeStatusLightTone('queued'), 'pending')
+  assert.equal(normalizeStatusLightTone(undefined), 'pending')
+  assert.equal(normalizeStatusLightTone(''), 'pending')
 })

@@ -52,6 +52,7 @@ import {
   type RunRecord,
   type WorkflowStateStore,
 } from './run-store.js'
+import { inspectRunResumability, type ResumabilityContext } from './run-resumability.js'
 import { nodesFromProgress, redactSummaryNodes, toSummary } from './run-summary.js'
 import {
   resolveCaps,
@@ -140,6 +141,8 @@ export class WorkflowService {
         (this.isAutoRecoverOnRestart() && this.host.isHostClosing?.() === true && run.userAborted !== true),
       deferExternalReattach: this.deferExternalReattach,
       waitExternalRuntimeReady: () => this.externalRuntimeReadyGate,
+      resumabilityContext: () => this.resumabilityContext(),
+      summaryOf: (record) => this.summaryOf(record),
     }
     this.recovery = new StartupRecovery(this.ctx)
   }
@@ -269,55 +272,41 @@ export class WorkflowService {
   /** Memory first, falling back to the state store (cross-restart inspect). */
   getRun(runId: string): WorkflowRunSummary {
     const activeRun = this.active.get(runId)
-    if (activeRun !== undefined) {
-      // Background single-subagents skip the engine progress: use record.nodes directly (maintained live).
-      const collapsed =
-        activeRun.progress.length > 0 ? nodesFromProgress(activeRun.progress) : activeRun.summary.nodes
-      return redactSummaryNodes(this.redact, {
-        ...activeRun.summary,
-        ...(collapsed !== undefined ? { nodes: collapsed } : {}),
-        ...(activeRun.timeline.length > 0 ? { progress: [...activeRun.timeline] } : {}),
-      })
+    if (activeRun !== undefined) return this.activeSummaryOf(activeRun)
+    return this.summaryOf(this.runs.load(runId))
+  }
+
+  /**
+   * 仅列出内存活跃表中的在途运行摘要（O(active)，零索引读取与零磁盘 I/O）：
+   * 供 liveTasks 与后台结算 otherRunningTasks 快路径消费。
+   */
+  listActiveRuns(): WorkflowRunSummary[] {
+    const out: WorkflowRunSummary[] = []
+    for (const active of this.active.values()) {
+      out.push(this.activeSummaryOf(active))
     }
-    return toSummary(this.runs.load(runId))
+    out.sort((a, b) => b.createdAt - a.createdAt)
+    return out
   }
 
   /**
    * Summaries of all persisted runs (newest first): active runs fold nodes live;
-  // terminal runs read the store; runs of unsaved scripts are listed too (history stays inspectable).
-   *
-   * Index corruption (missing records, ID mismatches, invalid shapes) or store throws are persistence-layer
-   * service faults, not "a normal list missing a few" -- swallowing them silently would make
-   * HTTP/CLI/snapshot return seemingly successful truncated data. Throw workflow_index_corrupt
-   * (500) here with runId diagnostics; the 404 semantics of a single missing run stay with getRun.
-   * The snapshot provider takes the same path, so faults are not re-swallowed by snapshot (a throw
+   * terminal runs read the store via loadByEntry (single index read, O(N) file validation);
+   * runs of unsaved scripts are listed too (history stays inspectable).
    */
   listRuns(): WorkflowRunSummary[] {
-    // Index reading stays uniform with all other entry points (readRunIndex): store throws/shape
-    // corruption explicitly workflow_index_corrupt (with key and an identifiable runId); never coerce
-    // then TypeError on entry.id or treat it as a valid list.
     const index = this.runs.readIndex()
     const out: WorkflowRunSummary[] = []
     const seen = new Set<string>()
     for (const active of this.active.values()) {
       seen.add(active.runId)
-      const collapsed =
-        active.progress.length > 0 ? nodesFromProgress(active.progress) : active.summary.nodes
-      out.push(
-        redactSummaryNodes(this.redact, {
-          ...active.summary,
-          ...(collapsed !== undefined ? { nodes: collapsed } : {}),
-          ...(active.timeline.length > 0 ? { progress: [...active.timeline] } : {}),
-        }),
-      )
+      out.push(this.activeSummaryOf(active))
     }
     for (const entry of [...index].sort((a, b) => b.createdAt - a.createdAt)) {
       if (seen.has(entry.id)) continue
       seen.add(entry.id)
-      // loadRecord throws 404 for not_found (plain absence): in the list context this is a service
-      // fault of the index pointing at a missing record, re-reported as workflow_index_corrupt; likewise ID mismatches.
       try {
-        out.push(toSummary(this.runs.load(entry.id)))
+        out.push(this.summaryOf(this.runs.loadByEntry(entry)))
       } catch (error) {
         if (error instanceof HelmError && error.code === 'not_found') {
           throw this.runs.indexCorruptError(entry.id, `record missing or ID mismatch: ${error.message}`)
@@ -326,8 +315,6 @@ export class WorkflowService {
         throw this.runs.indexCorruptError(entry.id, `record corrupted: ${errorMessage(error)}`)
       }
     }
-    // The newest-first contract is global: active.values() is insertion order (old first); an older active
-    // run must not precede a newer terminal history item -- after merge-dedup, sort uniformly by createdAt descending.
     out.sort((a, b) => b.createdAt - a.createdAt)
     return out
   }
@@ -345,13 +332,7 @@ export class WorkflowService {
       .filter((entry) => entry.conversationId === conversationId)
       .sort((a, b) => b.createdAt - a.createdAt)
     for (const entry of index) {
-      let record: RunRecord
-      try {
-        record = this.runs.load(entry.id)
-      } catch (error) {
-        if (error instanceof HelmError && error.code === 'not_found') continue
-        throw error
-      }
+      const record = this.runs.loadByEntry(entry)
       if (record.parentToolCallId === parentToolCallId) return record
     }
     return undefined
@@ -362,6 +343,12 @@ export class WorkflowService {
     const active = this.active.get(runId)
     if (active !== undefined) return active.record
     return this.runs.load(runId)
+  }
+
+  /** 评估失败运行是否具备安全续跑条件（单一权威入口：summary.resumable 与 resume_failed 共用）。 */
+  inspectResumability(record: RunRecord): { resumable: true } | { resumable: false; reason: string } {
+    const verdict = inspectRunResumability(record, this.resumabilityContext())
+    return verdict.resumable ? { resumable: true } : { resumable: false, reason: verdict.reason }
   }
 
   /** 判断接管标记是否仍对应有效接管运行（非幽灵）。 */
@@ -538,6 +525,35 @@ export class WorkflowService {
       record.childConversationIds = [...active.childConversations]
     }
     this.runs.write(record)
+  }
+
+  private activeSummaryOf(activeRun: ActiveRun): WorkflowRunSummary {
+    const collapsed =
+      activeRun.progress.length > 0 ? nodesFromProgress(activeRun.progress) : activeRun.summary.nodes
+    return redactSummaryNodes(this.redact, {
+      ...activeRun.summary,
+      ...(collapsed !== undefined ? { nodes: collapsed } : {}),
+      ...(activeRun.timeline.length > 0 ? { progress: [...activeRun.timeline] } : {}),
+    })
+  }
+
+  private resumabilityContext(): ResumabilityContext {
+    return {
+      inspectTakeover: (takeoverRunId, conversationId) =>
+        this.runs.inspectTakeoverMarker(takeoverRunId, conversationId, {
+          reserved: this.takeoverReservations.has(takeoverRunId),
+          active: this.active.has(takeoverRunId),
+        }),
+      readScriptFile: (scriptPath) => this.library.readScriptFile(scriptPath),
+    }
+  }
+
+  private summaryOf(record: RunRecord): WorkflowRunSummary {
+    if (record.status === 'failed') {
+      const { resumable } = this.inspectResumability(record)
+      return toSummary(record, { resumable })
+    }
+    return toSummary(record)
   }
 
   private assertNotClosed(): void {

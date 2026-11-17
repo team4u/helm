@@ -14,19 +14,3 @@ export function executionOf(info: AgentExecutionInfo): Record<string, unknown> {
   }
   return out
 }
-
-/** 模型可将尾行的 conversationId / executionId 原样作为下次 resume 入参。 */
-export function subagentFooter(resumeRef: string | undefined, resolved: AgentExecutionInfo | undefined): string {
-  const parts: string[] = []
-  if (resumeRef !== undefined) parts.push(`resume=${resumeRef}`)
-  if (resolved?.conversationId !== undefined) parts.push(`conversationId=${resolved.conversationId}`)
-  if (resolved?.executionId !== undefined) parts.push(`executionId=${resolved.executionId}`)
-  if (resolved?.effectiveCwd !== undefined) parts.push(`cwd=${resolved.effectiveCwd}`)
-  const worktree = resolved === undefined ? undefined : extractWorkflowExecutionMeta(resolved).worktree
-  if (worktree !== undefined) {
-    parts.push(`worktree=${worktree.path}@${worktree.branch}`)
-    if (worktree.id !== undefined) parts.push(`worktreeId=${JSON.stringify(worktree.id)}`)
-    parts.push('cleanup=cleanup_worktree')
-  }
-  return parts.length === 0 ? '' : `[subagent ${parts.join(' ')}]`
-}

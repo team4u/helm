@@ -1,11 +1,12 @@
 /**
  * Workspace file link & image URL parser (pure functions, zero React/DOM deps).
  *
- * Recognizes safe workspace-relative paths and `file://` URLs strictly
- * contained within `conversationCwd`, normalizing relative references against
- * `workspaceBaseDir` and extracting optional `#L<start>(-L?<end>)` line ranges.
+ * Recognizes safe workspace-relative paths, bare absolute paths strictly contained
+ * within `conversationCwd`, and `file://` URLs strictly contained within
+ * `conversationCwd`, normalizing relative references against `workspaceBaseDir`
+ * and extracting optional `#L<start>(C<col>)?(-L?<end>(C<col>)?)?` line ranges.
  */
-import { pathRulesForShape, targetPathShape } from '@helm/protocol/browser'
+import { normalizeTargetPath, pathRulesForShape, targetPathShape } from '@helm/protocol/browser'
 
 export interface WorkspaceFileRef {
   path: string
@@ -14,14 +15,25 @@ export interface WorkspaceFileRef {
 }
 
 const EXPLICIT_SCHEME_RE = /^[a-zA-Z][a-zA-Z\d+.-]*:/
+const WINDOWS_DRIVE_ABS_RE = /^[A-Za-z]:[\\/]/
 const BARE_LOCALHOST_RE = /^localhost(?::\d+)?$/i
 const BARE_IPV4_RE = /^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?$/
 const BARE_WEB_TLD_RE = /\.(?:com|org|net|io|dev|app|ai|cn|edu|gov|co|me|xyz|info|biz)(?::\d+)?$/i
-const LINE_FRAGMENT_RE = /^L(\d+)(?:-L?(\d+))?$/i
+const LINE_FRAGMENT_RE = /^L(\d+)(?:C\d+)?(?:-L?(\d+)(?:C\d+)?)?$/i
 
-/** Returns true when a raw link/image URL uses the `file:` scheme (case-insensitive). */
+function isWindowsDriveOrUnc(raw: string): boolean {
+  return WINDOWS_DRIVE_ABS_RE.test(raw) || raw.startsWith('\\\\')
+}
+
+/**
+ * Returns true when a raw link/image URL uses a local filesystem reference
+ * (`file:` scheme or bare Windows drive/UNC path) that browsers must not follow
+ * as a hyperlink or `<img src>` when outside `conversationCwd`.
+ */
 export function isDisallowedFileUrl(raw: string | undefined): boolean {
-  return typeof raw === 'string' && raw.trim().toLowerCase().startsWith('file:')
+  if (typeof raw !== 'string') return false
+  const trimmed = raw.trim()
+  return trimmed.toLowerCase().startsWith('file:') || isWindowsDriveOrUnc(trimmed)
 }
 
 function parseLineRange(fragment: string): { startLine?: number; endLine?: number } {
@@ -38,15 +50,59 @@ function parseLineRange(fragment: string): { startLine?: number; endLine?: numbe
   return { startLine, endLine }
 }
 
+/**
+ * Resolve a decoded absolute path strictly inside `conversationCwd`, returning
+ * a normalized workspace-relative POSIX path or `null` on mismatch/escape.
+ */
+function relativizeInsideCwd(
+  candidatePath: string,
+  conversationCwd: string | undefined,
+  opts: { allowRootCwd: boolean },
+): string | null {
+  if (conversationCwd === undefined) return null
+  const trimmedCwd = conversationCwd.trim()
+  if (trimmedCwd === '') return null
+  if (candidatePath === '' || candidatePath.includes('\0')) return null
+
+  const cwdShape = targetPathShape(trimmedCwd)
+  if (cwdShape === undefined) return null
+
+  if (cwdShape === 'win32') {
+    const normCwdR = normalizeTargetPath(trimmedCwd, 'win32')
+    const normFileR = normalizeTargetPath(candidatePath, 'win32')
+    if (!normCwdR.ok || !normFileR.ok) return null
+    const normCwd = normCwdR.path
+    const normFile = normFileR.path
+    const base = /^[A-Za-z]:\\$/.test(normCwd) || normCwd === '\\' || normCwd.endsWith('\\') && pathRulesForShape('win32').dirname(normCwd) === normCwd
+      ? normCwd
+      : normCwd.replace(/\\+$/, '')
+    if (!opts.allowRootCwd && base.endsWith('\\')) return null
+    const prefix = base.endsWith('\\') ? base : `${base}\\`
+    if (!normFile.toLowerCase().startsWith(prefix.toLowerCase())) return null
+    const relWin = normFile.slice(prefix.length)
+    if (relWin === '' || relWin.endsWith('\\')) return null
+    return relWin.replace(/\\/g, '/')
+  }
+
+  if (targetPathShape(candidatePath) !== 'posix') return null
+  const posix = pathRulesForShape('posix')
+  const normCwd = posix.normalize(trimmedCwd)
+  const normFile = posix.normalize(candidatePath)
+  const base = normCwd === '/' ? '/' : normCwd.replace(/\/+$/, '')
+  if (!opts.allowRootCwd && base === '/') return null
+  const prefix = base === '/' ? '/' : `${base}/`
+  if (!normFile.startsWith(prefix)) return null
+  const relPosix = normFile.slice(prefix.length)
+  if (relPosix === '' || relPosix === '.' || relPosix.endsWith('/')) return null
+  return relPosix
+}
+
 function parseFileSchemeRef(
   beforeHash: string,
   conversationCwd: string | undefined,
 ): string | null {
   if (!beforeHash.toLowerCase().startsWith('file://')) return null
   if (beforeHash.includes('?')) return null
-  if (conversationCwd === undefined) return null
-  const trimmedCwd = conversationCwd.trim()
-  if (trimmedCwd === '') return null
 
   let url: URL
   try {
@@ -72,38 +128,14 @@ function parseFileSchemeRef(
     ? decodedPath.slice(1)
     : decodedPath
 
-  const cwdShape = targetPathShape(trimmedCwd)
-  if (cwdShape === undefined) return null
-  if (targetPathShape(candidatePath) !== cwdShape) return null
-
-  const rules = pathRulesForShape(cwdShape)
-  const normCwd = rules.normalize(trimmedCwd)
-  const normFile = rules.normalize(candidatePath)
-
-  if (cwdShape === 'win32') {
-    const base = /^[A-Za-z]:\\$/.test(normCwd) || normCwd === '\\'
-      ? normCwd
-      : normCwd.replace(/\\+$/, '')
-    const prefix = base.endsWith('\\') ? base : `${base}\\`
-    if (!normFile.toLowerCase().startsWith(prefix.toLowerCase())) return null
-    const relWin = normFile.slice(prefix.length)
-    if (relWin === '' || relWin.endsWith('\\')) return null
-    return relWin.replace(/\\/g, '/')
-  }
-
-  const base = normCwd === '/' ? '/' : normCwd.replace(/\/+$/, '')
-  const prefix = base === '/' ? '/' : `${base}/`
-  if (!normFile.startsWith(prefix)) return null
-  const relPosix = normFile.slice(prefix.length)
-  if (relPosix === '' || relPosix === '.' || relPosix.endsWith('/')) return null
-  return relPosix
+  return relativizeInsideCwd(candidatePath, conversationCwd, { allowRootCwd: true })
 }
 
 /**
  * Parse a Markdown link/image href/src into a workspace-relative file reference.
- * Returns null for anchors, external URLs, bare host/domain links, API paths,
- * absolute root paths, paths escaping the workspace root, or `file://` URLs
- * outside `conversationCwd` (or when `conversationCwd` is missing).
+ * Returns null for anchors, external URLs, bare host/domain links, query strings,
+ * paths escaping `conversationCwd`, or absolute paths outside `conversationCwd`
+ * (or when `conversationCwd` is missing or points to filesystem root).
  */
 export function parseWorkspaceFileRef(
   raw: string | undefined,
@@ -125,9 +157,23 @@ export function parseWorkspaceFileRef(
     return { path: relPath, ...parseLineRange(fragment) }
   }
 
-  // Reject absolute root paths (including /api/...) and query strings outside file://
-  if (beforeHash.startsWith('/')) return null
   if (beforeHash.includes('?')) return null
+
+  // Bare absolute paths (/repo/a.ts, C:/repo/a.ts, \\server\share\repo\a.ts):
+  // strictly narrow against conversationCwd (non-root) and return directly without workspaceBaseDir.
+  if (beforeHash.startsWith('/') || isWindowsDriveOrUnc(beforeHash)) {
+    let decodedAbs: string
+    try {
+      decodedAbs = decodeURIComponent(beforeHash)
+    } catch {
+      return null
+    }
+    if (decodedAbs.includes('?')) return null
+    const relPath = relativizeInsideCwd(decodedAbs, opts?.conversationCwd, { allowRootCwd: false })
+    if (relPath === null) return null
+    return { path: relPath, ...parseLineRange(fragment) }
+  }
+
   if (EXPLICIT_SCHEME_RE.test(beforeHash)) return null
   if (beforeHash.includes('\\')) return null
 

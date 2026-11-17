@@ -93,9 +93,9 @@ export function createWorkflowEngineHost(deps: WorkflowEngineHostDeps): Workflow
     emitEvent: async (type, payload) => {
       try {
         if (type === 'workflow.updated') {
-          projection.sync()
-          // 全局只发布状态失效提示，详情经会话投影订阅，不旁路广播节点输出。
+          // 全局只发布状态失效提示，会话分片走 O(1) 内存单条增量投影（零磁盘读）。
           const run = (payload as { run: WorkflowRunSummary }).run
+          projection.upsertRun(run)
           await host.emitEvent(type, { run: { id: run.id, conversationId: run.conversationId, status: run.status } })
           return
         }
@@ -114,14 +114,14 @@ export function createWorkflowEngineHost(deps: WorkflowEngineHostDeps): Workflow
       }
     },
     onRunSettled: async (summary) => {
-      projection.sync()
+      projection.upsertRun(summary)
       // workflow.settled：herdr 双轨保活清理等插件监听；emitEvent 可等待，
       // 清理监听器的错误经此上抛给引擎结算链（写入 run 诊断，不吞成
       // 后台 notification）。
       await host.emitEvent('workflow.settled', summary, { broadcast: false })
     },
     onBackgroundAgentSettled: async (summary, info) => {
-      projection.sync()
+      projection.upsertRun(summary)
       // stop 期间不投递（notifiedAt 未置位，下次 init 按 outbox 补发）。
       if (!projection.isStopping()) await deps.deliverBackgroundReport(summary, info)
     },

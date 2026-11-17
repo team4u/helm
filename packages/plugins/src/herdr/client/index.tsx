@@ -27,6 +27,7 @@ import {
   DialogOverlay,
   DialogPortal,
   DialogTitle,
+  StatusLight,
   formatCompactTimestamp,
   Select,
   usePluginContext,
@@ -379,7 +380,6 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
                 ) : (
                   filtered.map((row) => {
                     const key = paneRowKey(row)
-                    const statusTone = agentStatusTone(row.agentStatus)
                     const outcomeMeta = herdrOutcomeLabel(row.outcome, locale)
                     const parentConversationId = managedMap[key]
                     const locText = paneLocationText(row)
@@ -401,7 +401,8 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
                           </span>
                         </td>
                         <td>
-                          <span className={`badge badge-${statusTone}`}>{row.agentStatus}</span>
+                          {/* 表格保留可见状态文字（列语义不依赖列标题或颜色解释） */}
+                          <span className={`badge badge-${agentStatusTone(row.agentStatus)}`}>{row.agentStatus}</span>
                         </td>
                         <td className="mono">{row.agentName ?? row.agent ?? '—'}</td>
                         <td className="mono herdr-cell-truncate" title={row.foregroundCwd ?? row.cwd ?? ''}>
@@ -435,7 +436,6 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
             ) : (
               filtered.map((row) => {
                 const key = paneRowKey(row)
-                const statusTone = agentStatusTone(row.agentStatus)
                 const outcomeMeta = herdrOutcomeLabel(row.outcome, locale)
                 const parentConversationId = managedMap[key]
                 const humanOnly = isHumanOwnedPane(row)
@@ -449,10 +449,8 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
                   >
                     <div className="herdr-pane-card-top">
                       <span className="mono herdr-pane-card-id">{`${row.paneId}@${row.nodeId}`}</span>
-                      <span className={`badge ${row.ownedBy === 'helm' ? 'badge-accent' : 'badge-neutral'}`}>
-                        {row.ownedBy === 'helm' ? 'helm' : 'human'}
-                      </span>
-                      <span className={`badge badge-${statusTone}`}>{row.agentStatus}</span>
+                      <span className="herdr-pane-card-owner">{row.ownedBy === 'helm' ? 'helm' : 'human'}</span>
+                      <StatusLight status={row.agentStatus} label={row.agentStatus} />
                       {outcomeMeta !== undefined ? (
                         <span className={`badge badge-${outcomeMeta.tone}`}>{outcomeMeta.label}</span>
                       ) : null}

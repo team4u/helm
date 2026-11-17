@@ -684,7 +684,7 @@ test('StepGroup：收起且含失败工具时展示失败徽标与总耗时；�
     const errorBadge = summaryBtn.querySelector('.trace-group-badge.trace-group-badge-error')
     assert.equal(errorBadge?.textContent, '1 failed')
     const meta = summaryBtn.querySelector('.trace-group-meta.tabular-nums')
-    assert.equal(meta?.textContent, '1.5s')
+    assert.equal(meta?.textContent, 'Tools 1.5s')
 
     // 展开后：隐藏组级失败徽标与错误修饰类（组内失败行直接标红），保留总耗时
     await act(async () => {
@@ -693,7 +693,7 @@ test('StepGroup：收起且含失败工具时展示失败徽标与总耗时；�
     assert.equal(summaryBtn.getAttribute('aria-expanded'), 'true')
     assert.equal(summaryBtn.classList.contains('trace-group-summary-error'), false)
     assert.ok(summaryBtn.querySelector('.trace-group-badge-error') === null, '展开后隐藏失败徽标')
-    assert.equal(summaryBtn.querySelector('.trace-group-meta')?.textContent, '1.5s', '展开后保留总耗时')
+    assert.equal(summaryBtn.querySelector('.trace-group-meta')?.textContent, 'Tools 1.5s', '展开后保留累计工具耗时')
     assert.ok(m.host.querySelector('.trace-group-steps .trace-row.trace-row-error') !== null)
 
     // 再次收起：恢复错误徽标与修饰类
@@ -736,7 +736,7 @@ test('StepGroup：进行中（active=true）不显示总耗时，单思考步委
     assert.equal(summaryBtn.querySelector('.trace-group-badge-error')?.textContent, '1 failed')
     assert.ok(summaryBtn.querySelector('.trace-group-meta') === null, 'active=true 时收起仍不显示总耗时')
 
-    // 结束为非活跃态（active=false）：现在展示总耗时
+    // 结束为非活跃态（active=false）：现在展示累计工具耗时（带「Tools」标注，不冒充墙钟流逝）
     await m.render(
       stepGroupUi(
         [
@@ -747,7 +747,7 @@ test('StepGroup：进行中（active=true）不显示总耗时，单思考步委
       ),
     )
     assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false')
-    assert.equal(summaryBtn.querySelector('.trace-group-meta')?.textContent, '500ms')
+    assert.equal(summaryBtn.querySelector('.trace-group-meta')?.textContent, 'Tools 500ms')
 
     // 单步 thinking 保持早退 ThinkingRow，不出现 "(1 步)" 或组徽标
     await m.render(stepGroupUi([{ kind: 'thinking', thinking: { key: 'only', text: '单步思路' } }], false))

@@ -256,7 +256,66 @@ test('composerPill：开关渲染当前值并触发 set_router_mode 动作', { t
   }
 })
 
-test('toolView：派工卡展示 Worker 表并支持归档；在途时统一禁用本卡全部行按钮', { timeout: 60_000 }, async () => {
+test('toolView：派工卡为轻量单行回执（状态灯 + 摘要 + worker 会话入口），不再复制 worker 全表', { timeout: 60_000 }, async () => {
+  const spy = makeSpyCtx()
+  const { host, unmount } = await mount(
+    spy,
+    e(components.SuperAgentDispatchToolView, {
+      callId: 'call-1', toolName: 'dispatch_worker',
+      input: { prompt: '去修构建', profileId: 'coder', threadKey: 'ci/main' },
+      status: 'done', result: { workerConversationId: 11 }, structuredOutput: { workerConversationId: 11 },
+      conversationId: 7,
+    }),
+  )
+  try {
+    assert.match(host.textContent ?? '', /Worker dispatch/, '标题')
+    assert.match(host.textContent ?? '', /Dispatched worker #11/, '派工结果主显 worker 会话')
+    assert.match(host.textContent ?? '', /Profile coder/, '输入摘要')
+    assert.ok(host.querySelector('.sa-dispatch-receipt') !== null, '单行回执形态')
+    assert.ok(host.querySelector('.helm-status-light-done') !== null, '派发成功为完成灯（可访问名称，无可見状态文字）')
+    const receiptLight = host.querySelector('.sa-dispatch-receipt .helm-status-light') as HTMLElement | null
+    assert.ok(receiptLight !== null && receiptLight.getAttribute('aria-label') === 'Completed', '灯的可访问名称为短状态词（不与可见回执重复）')
+    assert.equal(host.querySelector('.helm-table') === null, true, '时间线派工卡不再渲染完整 worker 表')
+    const open = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Open'))
+    assert.ok(open, 'worker 会话入口保留')
+    await act(async () => {
+      open!.click()
+    })
+    assert.deepEqual(spy.screenCalls, ['conversation:11'], '入口打开 worker 会话')
+  } finally {
+    unmount()
+  }
+})
+
+test('toolView：运行中/失败回执分别为执行中灯与错误灯', { timeout: 60_000 }, async () => {
+  const spy = makeSpyCtx()
+  const running = await mount(
+    spy,
+    e(components.SuperAgentDispatchToolView, {
+      callId: 'call-r', toolName: 'dispatch_worker', input: {}, status: 'running', conversationId: 7,
+    }),
+  )
+  try {
+    assert.ok(running.host.querySelector('.helm-status-light-working .status-dot-working') !== null, '运行中为执行中灯')
+    assert.equal(running.host.querySelector('.sa-dispatch-receipt .helm-status-light')?.getAttribute('aria-label'), 'Running', '运行中灯可访问名称为短状态词')
+    assert.equal(running.host.querySelector('.helm-status-light-label') === null, true, '无可見状态文字')
+  } finally {
+    running.unmount()
+  }
+  const failed = await mount(
+    spy,
+    e(components.SuperAgentDispatchToolView, {
+      callId: 'call-f', toolName: 'dispatch_worker', input: {}, status: 'error', result: 'boom', conversationId: 7,
+    }),
+  )
+  try {
+    assert.ok(failed.host.querySelector('.status-dot-error') !== null, '失败为错误灯')
+  } finally {
+    failed.unmount()
+  }
+})
+
+test('composerWidget 承载 worker 中心：归档能力保留；在途时统一禁用本卡全部行按钮', { timeout: 60_000 }, async () => {
   const spy = makeSpyCtx()
   let release: (() => void) | undefined
   spy.callAction = async (actionId, input) => {
@@ -266,21 +325,10 @@ test('toolView：派工卡展示 Worker 表并支持归档；在途时统一禁�
     })
     return {}
   }
-  const { host, unmount } = await mount(
-    spy,
-    e(components.SuperAgentDispatchToolView, {
-      callId: 'call-1', toolName: 'dispatch_worker',
-      input: { prompt: '去修构建', profileId: 'coder' },
-      status: 'done', result: { workerConversationId: 11 }, structuredOutput: { workerConversationId: 11 },
-      conversationId: 7,
-    }),
-  )
+  const { host, unmount } = await mount(spy, e(components.SuperAgentComposerWidget, composerProps()))
   try {
-    assert.match(host.textContent ?? '', /Worker dispatch/, '标题')
-    assert.match(host.textContent ?? '', /Dispatched worker #11/, '派工结果')
-    assert.match(host.textContent ?? '', /Profile coder/, '输入摘要')
     const archive = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Archive'))
-    assert.ok(archive, '归档按钮存在')
+    assert.ok(archive, '枢纽 widget 归档按钮存在（能力未丢失）')
     await act(async () => {
       archive!.click()
     })
@@ -289,11 +337,11 @@ test('toolView：派工卡展示 Worker 表并支持归档；在途时统一禁�
       [{ actionId: 'archive_worker', input: { workerConversationId: 11 } }],
       '归档触发 archive_worker',
     )
-    // 在途期间：本卡全部行按钮（查看 + 归档）统一 disabled
+    // 在途期间：本卡全部行按钮（打开 + 归档）统一 disabled
     const rowButtons = [...host.querySelectorAll<HTMLButtonElement>('button')].filter(
-      (b) => b.textContent?.includes('View') || b.textContent?.includes('Archive'),
+      (b) => b.textContent?.includes('Open') || b.textContent?.includes('Archive'),
     )
-    assert.equal(rowButtons.length, 4, '2 Worker × (查看+归档) = 4 个行按钮')
+    assert.equal(rowButtons.length, 4, '2 Worker × (打开+归档) = 4 个行按钮')
     for (const b of rowButtons) {
       assert.equal(b.disabled, true, `在途时统一禁用：${b.textContent}`)
     }
@@ -362,6 +410,10 @@ test('screen：图谱视图渲染 recall 节点与事件订阅两张表', { time
   try {
     assert.match(host.textContent ?? '', /RecallGraph memory graph/, '标题')
     assert.match(host.textContent ?? '', /修复构建并跑通测试/, 'recall 摘要行')
+    // 表格语义保留：Outcome 列为可见文字徽章（不依赖列标题或颜色解释）。
+    const outcomeBadges = [...host.querySelectorAll('td .badge')] as HTMLElement[]
+    assert.ok(outcomeBadges.some((b) => (b.textContent ?? '') === 'completed'), 'Outcome 列显示可见 outcome 文字')
+    assert.ok(outcomeBadges.some((b) => (b.textContent ?? '') === 'failed'), '失败 outcome 文字可见')
     assert.match(host.textContent ?? '', /写作失败：模型拒绝/, '第二个节点')
     assert.match(host.textContent ?? '', /Event subscriptions/, '订阅区块标题')
     assert.match(host.textContent ?? '', /ci\/main/, 'threadKey 行')
@@ -419,7 +471,7 @@ test('zh-CN locale：SuperAgent 组件切换为中文展示文案', { timeout: 6
   }
 })
 
-test('四处会话表格单元格：有标题时显示 title + #id；占位/缺失时仅显示 #id 不伪造名称', { timeout: 60_000 }, async () => {
+test('三处会话表格单元格：有标题时显示 title + #id；占位/缺失时仅显示 #id 不伪造名称', { timeout: 60_000 }, async () => {
   const spy = makeSpyCtx()
   const liveConvs = [
     convSummary(11, '修复构建与单测'),
@@ -439,11 +491,7 @@ test('四处会话表格单元格：有标题时显示 title + #id；占位/缺�
     widget.unmount()
   }
 
-  // 2) Dispatch Status tool card workers table (含占位标题过滤验证)
-  const placeholderConvs = [
-    convSummary(11, '修复构建与单测'),
-    convSummary(12, '子代理 12'),
-  ]
+  // 2) 派工回执只主显单个 worker 会话（#11），不再复制全表
   const dispatch = await mount(
     spy,
     e(components.SuperAgentDispatchToolView, {
@@ -455,15 +503,10 @@ test('四处会话表格单元格：有标题时显示 title + #id；占位/缺�
       structuredOutput: { workerConversationId: 11 },
       conversationId: 7,
     }),
-    placeholderConvs,
   )
   try {
-    const cells = [...dispatch.host.querySelectorAll('tbody tr')].map((tr) => tr.querySelector('td'))
-    assert.equal(cells.length, 2)
-    assert.equal(cells[0]?.querySelector('.sa-conv-name')?.textContent, '修复构建与单测', 'dispatch 卡展示 #11 标题')
-    assert.equal(cells[0]?.querySelector('.sa-conv-id')?.textContent, '#11', 'dispatch 卡展示 #11 ID')
-    assert.equal(cells[1]?.textContent, '#12', 'dispatch 卡对占位标题仅展示 #12')
-    assert.ok(cells[1]?.querySelector('.sa-conv-name') === null, 'dispatch 卡对占位标题不泄露噪声')
+    assert.match(dispatch.host.textContent ?? '', /Dispatched worker #11/, '回执主显派工 worker')
+    assert.equal(dispatch.host.querySelectorAll('tbody tr').length, 0, '派工卡不再有 worker 表行')
   } finally {
     dispatch.unmount()
   }

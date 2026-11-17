@@ -18,7 +18,7 @@
  * This module exports only hooks and pure types (no components), honoring the
  * .ts Fast Refresh rule.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ConversationAttachmentRef, ConversationSummary, QueuedConversationInput, WhenBusy } from '@helm/protocol/browser'
 import { conversationsApi } from '../lib/api.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
@@ -32,7 +32,8 @@ import {
 import { useOptionalLocale, useStoreActions } from '../lib/store-context.js'
 import { DEFAULT_HELM_LOCALE } from '@helm/protocol/browser'
 import { useStableCallback } from '../lib/use-stable-callback.js'
-import { clearComposerDirty, setComposerDirty } from './composer-dirty.js'
+import { clearComposerDirty, setComposerDirty, type ComposerDirtySnapshot } from './composer-dirty.js'
+import type { ConversationDirtySink } from './conversation-window-model.js'
 import { focusWithCaret } from './composer-controller.js'
 import {
   attachmentsOfEditTarget,
@@ -82,6 +83,11 @@ export interface ComposerSendInput {
   /** Reporting key for the version auto-refresh pending check (unique per
    * component instance, e.g. useId()); omitted means no reporting. */
   dirtyKey?: string
+  /** Keep-alive window dirty sink: when provided (conversation windows live inside an
+   * <Activity>), the latest snapshot is also written here so the owning window frame can
+   * re-publish it while hidden — Activity hide destroys this effect (clearing the report)
+   * while the draft itself survives in component state. */
+  dirtySink?: ConversationDirtySink | null
 }
 
 export interface ComposerSendApi {
@@ -130,7 +136,7 @@ export interface ComposerSendApi {
 }
 
 export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslator = englishWebTranslator): ComposerSendApi {
-  const { conversation, prefill, onSendingChange, onNewThread, textareaRef, slashPluginCommands, envConfigurable, working, dirtyKey } = input
+  const { conversation, prefill, onSendingChange, onNewThread, textareaRef, slashPluginCommands, envConfigurable, working, dirtyKey, dirtySink } = input
   const { invokePluginAction, pushNotice } = useStoreActions()
   const locale = useOptionalLocale() ?? DEFAULT_HELM_LOCALE
   const [text, setText] = useState('')
@@ -587,18 +593,26 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
   const readLiveDraft = useCallback((): string => liveDraftRef.current.text, [])
 
   // Version auto-refresh pending check: report local draft dirtiness (aggregated
-  // by the external bridge store, see composer-dirty.ts). Sync immediately on
-  // change; clear on unmount by the instance key (the dep array holds only
-  // dirtyKey, so re-renders never clear the report twice).
-  useEffect(() => {
-    if (dirtyKey === undefined) return
-    setComposerDirty(dirtyKey, {
+  // by the external bridge store, see composer-dirty.ts).
+  // The snapshot is derived during render and mirrored into the keep-alive window sink right
+  // away (latest-value ref pattern): an Activity hide can land before any effect ran, so the
+  // owning window frame must be able to read the draft fact straight from render output.
+  const dirtySnapshot = useMemo<ComposerDirtySnapshot>(
+    () => ({
       hasDraftText: text.trim() !== '',
       editingEntry: editingEntryId !== null,
       hasAttachments: attachments.length > 0,
       busy: sending || uploading > 0,
-    })
-  }, [dirtyKey, text, editingEntryId, attachments, sending, uploading])
+    }),
+    [text, editingEntryId, attachments, sending, uploading],
+  )
+  if (dirtySink != null) dirtySink.current = dirtySnapshot
+  // Sync the external bridge on change; clear on unmount by the instance key (the dep array
+  // holds only dirtyKey, so re-renders never clear the report twice).
+  useEffect(() => {
+    if (dirtyKey === undefined) return
+    setComposerDirty(dirtyKey, dirtySnapshot)
+  }, [dirtyKey, dirtySnapshot])
   useEffect(() => {
     if (dirtyKey === undefined) return
     return () => clearComposerDirty(dirtyKey)

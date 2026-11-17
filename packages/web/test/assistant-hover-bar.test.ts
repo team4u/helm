@@ -1,13 +1,19 @@
 import assert from 'node:assert/strict'
 import { readHostStyles } from './helpers/host-styles.js'
 import { test } from 'node:test'
-import * as React from 'react'
-import { renderToString } from 'react-dom/server'
 import type { ConversationEntry, ConversationSummary } from '@helm/protocol'
-import { isAssistantTurnBusy } from '../src/conversation/timeline-model.js'
-import type { AssistantTurn } from '../src/conversation/timeline-model.js'
-import { makeTestStore as makeMockStore } from './helpers/store.js'
-import { HostStoreProviders } from './helpers/host-store.js'
+import { ensureHappyDom } from './helpers/dom-harness.js'
+
+ensureHappyDom()
+
+const React = (await import('react')).default
+const { act } = await import('react')
+const { createRoot } = await import('react-dom/client')
+const { renderToString } = await import('react-dom/server')
+const { isAssistantTurnBusy } = await import('../src/conversation/timeline-model.js')
+type AssistantTurn = import('../src/conversation/timeline-model.js').AssistantTurn
+const { makeTestStore: makeMockStore } = await import('./helpers/store.js')
+const { HostStoreProviders } = await import('./helpers/host-store.js')
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -240,4 +246,113 @@ test('ConversationTimeline：agent 回合响应中不显示复制与分叉按钮
   )
 
   assert.match(htmlSettled, /Fork a new conversation from here/)
+})
+
+test('ConversationTimeline：含工具调用的多段回合，复制按钮只复制最后一段助手回复文本', { timeout: 60_000 }, async () => {
+  const convIdle: ConversationSummary = {
+    id: 1,
+    title: '多段回复复制',
+    profileId: 'default',
+    tags: [],
+    cwd: '/workspace',
+    model: '',
+    thinkingLevel: '',
+    status: 'idle',
+    stateChangeSeq: 1,
+    completionSeq: 1,
+    unread: false,
+    pinned: false,
+    pendingAskCount: 0,
+    createdAt: 100,
+    updatedAt: 200,
+  }
+
+  const entries: ConversationEntry[] = [
+    { id: '1', kind: 'helm.input', data: { text: '帮我查一下配置', origin: 'human' } },
+    {
+      id: '2',
+      kind: 'pi.assistant',
+      model: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: '我先读取配置文件看一下。' },
+            { type: 'toolCall', id: 'call_1', name: 'read', arguments: { path: 'config.json' } },
+          ],
+        },
+      ],
+    },
+    {
+      id: '3',
+      kind: 'pi.tool-result',
+      model: [
+        {
+          role: 'toolResult',
+          toolCallId: 'call_1',
+          toolName: 'read',
+          content: [{ type: 'text', text: '{"port":3202}' }],
+        },
+      ],
+    },
+    {
+      id: '4',
+      kind: 'pi.assistant',
+      model: [
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: '端口配置为 3202，运行正常。' }],
+        },
+      ],
+    },
+  ]
+
+  let copiedText = ''
+  const navWithClipboard = globalThis.navigator as Navigator & {
+    clipboard?: { writeText?: (text: string) => Promise<void> }
+  }
+  const origClipboardDesc = Object.getOwnPropertyDescriptor(globalThis.navigator, 'clipboard')
+  Object.defineProperty(globalThis.navigator, 'clipboard', {
+    configurable: true,
+    value: {
+      writeText: async (text: string) => {
+        copiedText = text
+      },
+    },
+  })
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: makeMockStore({ conversations: [convIdle] }) },
+          e(ConversationTimeline, {
+            conversation: convIdle,
+            detailEntries: entries,
+            onRequestEdit: () => {},
+          }),
+        ),
+      )
+    })
+
+    const copyBtn = host.querySelector<HTMLButtonElement>('.msg-ai-block .msg-ai-footer .msg-hover-bar button[aria-label="Copy"]')
+    assert.ok(copyBtn !== null, '助手回合底部存在复制按钮')
+    await act(async () => {
+      copyBtn.click()
+      await Promise.resolve()
+    })
+    assert.equal(copiedText, '端口配置为 3202，运行正常。')
+    assert.equal(navWithClipboard !== undefined, true)
+  } finally {
+    act(() => root.unmount())
+    host.remove()
+    if (origClipboardDesc !== undefined) {
+      Object.defineProperty(globalThis.navigator, 'clipboard', origClipboardDesc)
+    } else {
+      Reflect.deleteProperty(globalThis.navigator, 'clipboard')
+    }
+  }
 })

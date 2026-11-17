@@ -39,9 +39,9 @@
 
 ### 前端贡献
 
-- `toolView`：`subagent-card`（`replaceRow: true`）与 `workflow-card`（`replaceRow: true`，含「保存为工作流」「断点恢复」「重放」入口）；
-- `timelineRenderer` `background-report`：后台结算汇报折叠卡；
-- `slot` `active-tray`（Composer 停靠区）与 `workbenchPanel` `tasks`（badge 绑定 `run-badges`）；
+- `toolView`：`subagent-card`（`replaceRow: true`）与 `workflow-card`（`replaceRow: true`，含「保存为工作流」「断点恢复」「重放」入口）；时间线单行与折叠 `SubagentLiveCard` 通过 `includeDetail: false` 跳过子会话全量详情拉取，仅展开态按需加载；子代理结果优先读取宿主 `pluginToolResult` 镜像到 `details` 的结构化 `structuredOutput`（零 `[subagent ...]` 尾注文本刮取），并使用宿主共享 1Hz 时钟 `useSharedNowMs`；
+- `timelineRenderer` `background-report`：后台结算汇报折叠卡，直接解析入口 `data.meta.report` 结构化载荷；
+- `slot` `active-tray`（Composer 停靠区）与 `workbenchPanel` `tasks`（badge 绑定 `run-badges`，工作台与停靠区统一以 `runs` 为唯一执行树根来源，人类 `fork` 与 SuperAgent 驻留 Worker 不进入工作流树；运行卡折叠仅渲染 `resultPreview`，点击展开才调 `inspect` 按需拉取并缓存完整 `result`）；
 - `sidebarItem` + `screen` `library`：工作流库全屏视图（只读浏览、显式选择目标会话运行、两步确认删除；无编辑器，「让 AI 修改」仅提供可复制请求文本）。
 
 ## 配置与数据边界
@@ -59,8 +59,8 @@
 | `records` | 私有 `ctx.doc` | run 索引 + 每 run 完整记录（引擎唯一持久层，重启恢复同一命名空间） |
 | `worktree-state` | 私有 `ctx.doc` | Worktree 登记表 + durable 租约表 + agentId 绑定表；停用期间不清除 |
 | `subagent-conversations` | 私有 `ctx.doc` | 受管子代理登记表（`depth` / `parentConversationId` / 子树上限），深度契约唯一事实来源 |
-| `runs` | 公开 `ctx.sessionDoc` | 当前会话及后代发起的 run 投影；专用 SSE 按会话订阅，不进全局首帧 |
-| `run-badges` | 公开 `ctx.doc` | 每会话紧凑角标（`count / tone / footerText`），有意全局 |
+| `runs` | 公开 `ctx.sessionDoc`（`durable: false`） | 纯内存瞬态投影：当前会话及后代发起的 run 分片（专有 SSE 订阅，单分片 `MAX_PROJECTED_RUNS_PER_CONVERSATION = 100` 保留全部 `running` + 最新终态，剥离完整 `result` 仅保留 `hasResult`/`resultPreview` 并附带 `errorCode`/`resumable`）；启动时自 `records` 重建，停用不落盘 |
+| `run-badges` | 公开 `ctx.doc`（`durable: false`） | 纯内存瞬态投影：基于全量运行态聚合的每会话紧凑角标（`count / tone / footerText`，不受 100 条分片滑窗影响）；启动时自 `records` 重建，停用不落盘 |
 
 工作流定义文件唯一存储真源是 `<ctx.dataDir>/workflows/<name>.js`。引擎经 `emitEvent` 发布 `workflow.updated`（全局仅状态失效提示）与 `workflow.settled`（完整 summary，`broadcast: false` 进程内分发，`builtin:herdr` 监听它做双轨保活清理）。
 
@@ -70,7 +70,7 @@
 
 - **liveTasks**：运行中 run 以 `workflow:<runId>` 标签声明——停用本插件时 `409 plugin_has_live_tasks` 硬阻断，不可 force；
 - **两阶段崩溃恢复**：阶段一 `prepareRecovery`（全局 prepare 屏障内，先于任何服务 start）只落持久 abort 标记，不唤醒 SDK 调度器、不提交输入；阶段二 `init`（全部插件 prepare 完成后）终止遗留子任务、把遗留 `running` 显式标 `failed(interrupted)`（subagent 类附 resume 提示、DSL 类附 `resumeFromRunId` 提示）、补发崩溃前未通知的父会话汇报；
-- **受控停用**：先置 stopping 拦截后台回调，await 引擎 close，再做最终 runs 投影并 `await records.flush()`；投影是派生观察面，持久层损坏时发显式 notification 后不阻断拆毁；
+- **受控停用**：先置 stopping 拦截后台回调并停掉 `runs` / `run-badges` 瞬态投影更新，await 引擎 close 后 `await records.flush()`；持久层损坏时发显式 notification 后不阻断拆毁；
 - **级联取消**：`turn_settled`（outcome=aborted）取消该会话子树内在途 run；受管子会话中止一律经 `abortConversationGuarded` 内核原子复核（human 红线）；
 - **Worktree 租约 fail-closed**：分配路径在 `git worktree add` 副作用之前持久登记占位，崩溃后不能证明停止就阻塞清理（`worktree_execution_unknown`），一切未知状态保留租约。
 
@@ -82,7 +82,7 @@
 | 引擎 / 隔离 / 钩子 / 动作 / 工具 / UI | `packages/plugins/src/workflow/`（`engine/`、`isolation*.ts`、`hooks.ts`、`actions*.ts`、`tools*.ts`、`ui.ts`、`worktree*.ts`） |
 | 插件配置 Schema | `packages/plugins/src/workflow/config.ts` |
 | 共享契约（run/doc/worktree/meta 形状） | `packages/plugins/src/contracts.ts` |
-| 主要测试 | `packages/plugins/test/workflow*.test.ts`（引擎、恢复重放、steer、detach、abort 级联、库管理）、`native-worktree.test.ts`、`worktree-process-usage.test.ts`、`workflow-shutdown.integration.test.ts`、`background-restart.integration.test.ts` |
+| 主要测试 | `packages/plugins/test/workflow*.test.ts`（引擎、恢复重放、steer、detach、abort 级联、库管理及迁移至此的客户端模型/组件/样式/工作树检视测试）、`native-worktree.test.ts`、`worktree-process-usage.test.ts`、`workflow-shutdown.integration.test.ts`、`background-restart.integration.test.ts` |
 
 ## 相关文档
 

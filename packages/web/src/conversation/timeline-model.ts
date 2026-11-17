@@ -97,6 +97,12 @@ export interface ThinkingTrace {
   key: string
   text: string
   active?: boolean
+  /** Eligible model-response duration (ms) of the assistant message that produced this thinking
+   * block (thinking + toolCall content, no non-empty visible text, finite positive durationMs).
+   * Attached structurally to exactly one thinking block per message (turn-scope allocation covers
+   * cross-group / standalone-card splits without any local dedup Set); aggregated only into the
+   * step-group model-time total — never rendered on the thinking row itself. */
+  responseDurationMs?: number
 }
 
 export type FoldableStep =
@@ -547,6 +553,8 @@ interface RawSegment {
   key: string
   text?: string
   tool?: ToolTrace
+  /** Eligible model-response duration attached to (only) the first thinking segment of its message. */
+  responseDurationMs?: number
 }
 
 interface TurnAcc {
@@ -605,7 +613,16 @@ export function isFoldableStep(step: FoldableStep): boolean {
 }
 
 function foldableOfRaw(seg: RawSegment): FoldableStep {
-  if (seg.kind === 'thinking') return { kind: 'thinking', thinking: { key: seg.key, text: seg.text ?? '' } }
+  if (seg.kind === 'thinking') {
+    return {
+      kind: 'thinking',
+      thinking: {
+        key: seg.key,
+        text: seg.text ?? '',
+        ...(seg.responseDurationMs !== undefined ? { responseDurationMs: seg.responseDurationMs } : {}),
+      },
+    }
+  }
   return { kind: 'tool', tool: seg.tool! }
 }
 
@@ -719,6 +736,32 @@ function flushTurn(acc: TurnAcc | null, items: TimelineItem[], live: boolean): v
   })
 }
 
+/**
+ * Eligibility scan of one assistant message's content for process-duration attribution:
+ * a non-empty thinking block AND a toolCall block, with no non-empty visible text block —
+ * such a response spent its measured duration thinking and issuing tool calls, so the duration
+ * is attributable process time; any visible reply text disqualifies it (the duration then covers
+ * reply generation and must not be labeled as thinking/execution time). Malformed shapes fail closed.
+ */
+function isEligibleProcessContent(content: unknown): boolean {
+  if (!Array.isArray(content)) return false
+  let hasThinking = false
+  let hasToolCall = false
+  let hasVisibleText = false
+  for (const block of content) {
+    if (block === null || typeof block !== 'object') continue
+    const b = block as { type?: unknown; text?: unknown; thinking?: unknown }
+    if (b.type === 'thinking') {
+      if (typeof b.thinking === 'string' && b.thinking.trim() !== '') hasThinking = true
+    } else if (b.type === 'text') {
+      if (typeof b.text === 'string' && b.text !== '') hasVisibleText = true
+    } else if (b.type === 'toolCall' || b.type === 'tool_use') {
+      hasToolCall = true
+    }
+  }
+  return hasThinking && hasToolCall && !hasVisibleText
+}
+
 /** Extract assistant message content blocks (thinking / text / toolCall); the first assistant locks
  * the turn's model identity; later entries maintain level-consistency and unknown-pollution flags. */
 function appendAssistantEntry(
@@ -781,6 +824,17 @@ function appendAssistantEntry(
         acc.durationMs = (acc.durationMs ?? 0) + msgDurationMs
       }
 
+      // Eligible process duration: this response carried thinking + toolCall and no non-empty
+      // visible text, so its whole duration is process time (thinking and issuing calls), never
+      // reply generation. Attached structurally to the message's first thinking segment exactly
+      // once; responses with visible text stay out of process stats entirely (their duration
+      // remains in the turn footer only). Zero/absent durations carry nothing to attribute.
+      const eligibleResponseMs =
+        msgDurationMs !== undefined && msgDurationMs > 0 && isEligibleProcessContent(m.content)
+          ? msgDurationMs
+          : undefined
+      let responseDurationAttached = eligibleResponseMs === undefined
+
       const content = m.content
       if (!Array.isArray(content)) continue
       for (let bi = 0; bi < content.length; bi++) {
@@ -790,7 +844,15 @@ function appendAssistantEntry(
         const key = `${entry.id}:${mi}:${bi}`
         if (b.type === 'thinking') {
           if (typeof b.thinking === 'string' && b.thinking.trim() !== '') {
-            acc.segments.push({ kind: 'thinking', key: `think:${key}`, text: b.thinking })
+            acc.segments.push({
+              kind: 'thinking',
+              key: `think:${key}`,
+              text: b.thinking,
+              ...(responseDurationAttached === false && eligibleResponseMs !== undefined
+                ? { responseDurationMs: eligibleResponseMs }
+                : {}),
+            })
+            if (eligibleResponseMs !== undefined) responseDurationAttached = true
           }
           continue
         }
@@ -832,7 +894,11 @@ function appendToolResultEntry(acc: TurnAcc, entry: ConversationEntry, opts: Bui
     const toolName = typeof m.toolName === 'string' ? m.toolName : '(unknown tool)'
     const resultText = contentTextOf(m.content)
     const isError = m.isError === true
-    const durationMs = typeof m.durationMs === 'number' && Number.isFinite(m.durationMs) ? m.durationMs : undefined
+    // External value boundary: only finite non-negative durations are accepted (negative/NaN/Infinity dropped, never displayed).
+    const durationMs =
+      typeof m.durationMs === 'number' && Number.isFinite(m.durationMs) && m.durationMs >= 0
+        ? m.durationMs
+        : undefined
     // Server truncation markers ride on the toolResult message (truncated/totalChars/totalLines).
     const truncation = readResultTruncation(m)
     // The persisted channel for structured outputs is the toolResult message details (pi-durable

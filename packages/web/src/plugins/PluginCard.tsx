@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react'
 import type { PluginSummary } from '@helm/protocol/browser'
 import { DEFAULT_HELM_LOCALE, resolveLocalizedText } from '@helm/protocol/browser'
-import { HelmIcon, Switch } from '@helm/plugin-client'
+import { HelmIcon, StatusLight, Switch } from '@helm/plugin-client'
 import { createWebTranslator } from '../i18n/catalog.js'
 import { useOptionalGroupedUi, useOptionalLocale, useOptionalStoreActions } from '../lib/store-context.js'
 import {
@@ -111,13 +111,10 @@ export function PluginCard({
               </span>
             )}
             {isPluginFailed(plugin) && (
-              <span
-                className="badge badge-err"
-                title={plugin.error?.message || t('plugins.card.failedFallbackTitle')}
-              >
-                <HelmIcon name="alert-circle" size={10} />
-                <span>{t('plugins.status.error')}</span>
-              </span>
+              <StatusLight
+                status="failed"
+                label={t('plugins.status.error')}
+              />
             )}
           </div>
           <div className="plugin-card-id mono" title={plugin.id}>

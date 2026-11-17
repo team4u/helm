@@ -33,6 +33,7 @@ import {
   DialogPortal,
   DialogTitle,
   HelmIcon,
+  StatusLight,
   usePluginContext,
   usePluginDoc,
   usePluginLocale,
@@ -170,11 +171,10 @@ function AppCard({
                 {t(APP_BADGE_PINNED)}
               </span>
             )}
-            {plugin.enabled ? (
-              <span className="badge badge-ok">{t(APP_STATUS_READY)}</span>
-            ) : (
-              <span className="badge badge-neutral">{t(APP_STATUS_STOPPED)}</span>
-            )}
+            <StatusLight
+              status={plugin.enabled ? 'online' : 'idle'}
+              label={t(plugin.enabled ? APP_STATUS_READY : APP_STATUS_STOPPED)}
+            />
           </div>
           <div className="app-card-id" title={plugin.id}>
             {plugin.id}
@@ -339,11 +339,10 @@ function AppDetailDrawer({
                       {t(APP_BADGE_PINNED)}
                     </span>
                   )}
-                  {plugin.enabled ? (
-                    <span className="badge badge-ok">{t(APP_STATUS_READY)}</span>
-                  ) : (
-                    <span className="badge badge-neutral">{t(APP_STATUS_STOPPED)}</span>
-                  )}
+                  <StatusLight
+                    status={plugin.enabled ? 'online' : 'idle'}
+                    label={t(plugin.enabled ? APP_STATUS_READY : APP_STATUS_STOPPED)}
+                  />
                 </div>
                 <div className="primary-drawer-id mono">{plugin.id}</div>
               </div>

@@ -53,7 +53,7 @@
  * - ./workflow/actions.ts: the 13 actions (reused across five ends)
  * - ./workflow/ui.ts: frontend UI extension point declarations
  */
-import { HelmError, type PluginDefinition } from '@helm/protocol'
+import type { PluginDefinition } from '@helm/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 import {
   WORKFLOW_PLUGIN_ID,
@@ -94,16 +94,20 @@ export function createWorkflowPlugin(): PluginDefinition {
     version: '0.1.0',
     ...resolvePluginClientAssets(WORKFLOW_PLUGIN_ID, 'workflow', 'workflow_plugin_client_missing'),
     definePlugin(ctx) {
-      // ---- Conversation-sharded public doc: runs (each parent conversation writes only its own run list) ----
+      // ---- Conversation-sharded public doc: runs (transient in-memory projection; zero SQLite I/O) ----
       // Not in the global first frame / global SSE; the frontend pulls and incrementally updates per conversation via the dedicated subscription stream.
-      const runsDoc = ctx.sessionDoc<WorkflowRunSessionDocState>(WORKFLOW_RUNS_DOC, { runs: [] }, { public: true })
+      const runsDoc = ctx.sessionDoc<WorkflowRunSessionDocState>(
+        WORKFLOW_RUNS_DOC,
+        { runs: [] },
+        { public: true, durable: false },
+      )
 
-      // ---- Global compact badge doc: run-badges (only count/tone/footerText, intentionally global) ----
+      // ---- Global compact badge doc: run-badges (transient in-memory projection; only count/tone/footerText, intentionally global) ----
       // Workbench navigation badges need cross-conversation visibility; full run summaries never enter this doc / the global stream.
       const badgesDoc = ctx.doc<WorkflowRunBadgesDocState>(
         WORKFLOW_RUN_BADGES_DOC,
         { byConversation: {} },
-        { public: true },
+        { public: true, durable: false },
       )
 
       // ---- Engine-private records doc (key-value store: run index + per-run records) ----
@@ -150,7 +154,7 @@ export function createWorkflowPlugin(): PluginDefinition {
         emitEvent: (type, payload) => ctx.host.emitEvent(type, payload),
         submitInput: (conversationId, text, opts) => ctx.host.submitInput(conversationId, text, opts),
         isConversationCancelling: (id) => workflows.isConversationCancelling(id),
-        listRuns: () => workflows.listRuns(),
+        listActiveRuns: () => workflows.listActiveRuns(),
       })
 
       // ---- runs conversation-shard projection and global badges (the stopping gate lives inside the projection) ----
@@ -256,50 +260,25 @@ export function createWorkflowPlugin(): PluginDefinition {
         async start() {
           // Recovery phase two (after all plugins finished prepare): init terminates leftover child tasks,
           // explicitly marks running as failed(interrupted), and re-delivers parent-conversation notifications
-          // (tools are registered by now, so re-delivered input consumption is safe). The persisted shard set is then snapshotted and projected synchronously.
+          // (tools are registered by now, so re-delivered input consumption is safe), then projects runs & badges in memory.
           await workflows.init()
-          projection.adoptPersistedConversations(runsDoc.listConversationIds())
           projection.sync()
         },
         async stop() {
-          // Controlled stop: first set stopping to intercept runtime background callbacks (projection refreshes and
-          // parent deliveries on the engine event chain), then await the engine close (in-flight run terminal states
-          // written to the private records doc; writes pass through the host's controlled-stop doc write window,
-          // failures propagate honestly). Then do the final runs shard and badge projection (not intercepted by
-          // stopping) and await records.flush for a real flush (in the real runtime, global docs and conversation
-          // docs share one transaction queue: records.flush waiting on the tail chain already includes the queued
-          // writes of conversation shards and badges; do not call runsDoc.flush again -- within the dispose
-          // window, sessionDoc handle flush guards reject the already-dismantled host).
-          // close/flush failures propagate directly (real persistence failures, not swallowed); the final projection
-          // is a derived observation plane: read failures (e.g. persistent-layer corruption) publish an explicit notification diagnostic without blocking teardown -- engine terminal states are already in records, and corruption will explicitly error on any business read path, never silently.
+          // Controlled stop: first set stopping to intercept runtime background callbacks, then await engine
+          // suspend/close and flush durable private records. Public runs and run-badges are transient in-memory
+          // projections (durable: false), so teardown performs zero SQLite projection writes.
           projection.beginStopping()
           if (ctx.host.isClosing && isEffectiveAutoRecover(ctx)) {
             await workflows.suspend()
           } else {
             await workflows.close()
           }
-          try {
-            projection.syncFinal()
-            await records.flush()
-          } catch (error) {
-            if (error instanceof HelmError && (error.code === 'workflow_index_corrupt' || error.code === 'workflow_record_corrupt')) {
-              const message = error instanceof Error ? error.message : String(error)
-              process.stderr.write(`builtin:workflow stop: final runs projection failed (terminal states already persisted in records): ${message}\n`)
-              // Explicit diagnostic event (not silent): the frontend and logs can see the projection is unsynced and why.
-              await ctx.host.emitEvent('notification', {
-                type: 'notification',
-                level: 'warning',
-                title: 'Workflow final projection unsynced',
-                body: `Failed to read the runs snapshot at shutdown (run terminal states already persisted): ${message}`,
-              })
-              return
-            }
-            throw error
-          }
+          await records.flush()
         },
         liveTasks() {
           return workflows
-            .listRuns()
+            .listActiveRuns()
             .filter((r) => r.status === 'running')
             .map((r) => `workflow:${r.id}`)
         },

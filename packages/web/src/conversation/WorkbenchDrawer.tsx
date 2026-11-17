@@ -18,6 +18,7 @@ import { formatBytes, formatFullTimestamp, formatMessageTime } from '../lib/form
 import {
   artifactFormatLabel,
   artifactIconName,
+  artifactMimeRedundant,
   artifactKindLabel,
   buildWorkbenchFooter,
   isImageArtifact,
@@ -78,6 +79,8 @@ function ArtifactCard({
   const { t } = useWebLocale()
   const formatLabel = artifactFormatLabel(artifact.mimeType, artifact.name, t)
   const timestamp = artifact.createdAt > 0 ? formatMessageTime(artifact.createdAt) : ''
+  // 显示格式已由 MIME 推导时不再重复渲染原始 MIME 串（完整 MIME 在预览弹层仍可见）。
+  const mimeRedundant = artifactMimeRedundant(artifact.mimeType, artifact.name)
 
   return (
     <div
@@ -105,8 +108,15 @@ function ArtifactCard({
           <span className={artifact.kind === 'registered' ? 'badge badge-accent' : 'badge badge-neutral'}>
             {artifactKindLabel(artifact.kind, t)}
           </span>
-          <span className="artifact-card-format">{formatLabel}</span>
-          <span className="mono artifact-card-mime" title={artifact.mimeType}>{artifact.mimeType}</span>
+          <span
+            className="artifact-card-format"
+            title={mimeRedundant ? artifact.mimeType : undefined}
+          >
+            {formatLabel}
+          </span>
+          {mimeRedundant ? null : (
+            <span className="mono artifact-card-mime" title={artifact.mimeType}>{artifact.mimeType}</span>
+          )}
           <span className="mono tabular-nums artifact-card-size">{formatBytes(artifact.size)}</span>
           {timestamp !== '' ? (
             <span className="artifact-card-time" title={formatFullTimestamp(artifact.createdAt)}>

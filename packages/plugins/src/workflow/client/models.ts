@@ -104,6 +104,7 @@ export type { SavedWorkflowView, SavedWorkflowDetailView } from './model-library
 export {
   aggregateExecutionStatuses,
   executionConversationStatus,
+  executionLightStatus,
   executionRunStatus,
   executionRunNodeStatus,
   effectiveRunNodeStatus,

@@ -23,7 +23,6 @@ import {
   MAX_AGENT_ATTEMPTS,
   runWorkflow,
   scopedResumeKey,
-  type WorkflowControl,
   type WorkflowHost,
 } from '../src/workflow/engine/runtime.js'
 
@@ -194,62 +193,6 @@ describe('workflow runtime attempt journal replay', () => {
     assert.deepEqual(resumed.value, { ok: true, output: 'fixed', attempts: 2, execution: { conversationId: 77 } }, JSON.stringify({ writes, replayCalls, replayWrites, progress: resumed.progress, error: resumed.error }))
     assert.deepEqual(replayCalls, [])
     assert.deepEqual(replayWrites.map((entry) => [entry.index, entry.attempt, entry.ok]), [[0, 1, false], [1, 2, true]])
-  })
-})
-
-// ---------------------------------------------------------------------------
-// ④ 手动 retry 环（maxAttempts 自动重试共用该环）
-// ---------------------------------------------------------------------------
-
-describe('workflow runtime manual retry ring', () => {
-  it('control.retry aborts the in-flight call and re-runs it with attempt counter', timeout, async () => {
-    let spawns = 0
-    let releaseFirst: ((r: { ok: boolean; text?: string; error?: string }) => void) | undefined
-    const host = baseHost({
-      async spawnAgent(request) {
-        spawns++
-        request.onResolved?.({ conversationId: 7 })
-        if (spawns === 1) {
-          return new Promise((resolve) => {
-            releaseFirst = resolve
-          })
-        }
-        return { ok: true, text: 'second-run' }
-      },
-    })
-    host.abortAgent = (agentId) => {
-      releaseFirst?.({ ok: false, error: `aborted:${agentId}` })
-      releaseFirst = undefined
-    }
-    let control: WorkflowControl | undefined
-    const result = await runWorkflow({
-      script: META('manual-retry') + 'const v = await agent("job", { label: "m" })\nreturn v',
-      host,
-      onControl(c) {
-        control = c
-      },
-      onProgress(entries) {
-        // 首条带 startedAt 的进度行发出后，spawn 已在途；微任务时机上
-        // live.started 必已置位，retry(0) 确定命中。
-        for (const entry of entries) {
-          if (entry.type !== 'workflow_agent' || control === undefined) continue
-          const agent = entry as WorkflowAgentEntry
-          if (agent.startedAt !== undefined) {
-            const c = control
-            control = undefined
-            void queueMicrotask(() => {
-              if (!c.retry(0)) throw new Error('retry(0) must hit the live agent')
-            })
-          }
-        }
-      },
-    })
-    assert.equal(spawns, 2)
-    assert.equal(result.status, 'completed')
-    assert.equal(result.value, 'second-run')
-    const done = agentEntriesOf(result.progress).find((e) => e.state === 'done')
-    assert.ok(done, 'retry ring settles with a done entry')
-    assert.equal(done.attempt, 2)
   })
 })
 
