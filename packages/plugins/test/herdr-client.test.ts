@@ -195,9 +195,9 @@ test('插件注册：screen client 引用与 profileRuntime 贡献如实进入 l
 
   const runtime = ui.find((u) => u.surface === 'profile.runtime')
   assert.ok(runtime, 'profile.runtime 贡献存在')
-  const runtimeSpec = runtime!.spec as { kind: string; label: string; agentSuggestions?: string[] }
+  const runtimeSpec = runtime!.spec as { kind: string; label: { en?: unknown; 'zh-CN'?: unknown }; agentSuggestions?: string[] }
   assert.equal(runtimeSpec.kind, 'herdr')
-  assert.equal(runtimeSpec.label, 'External Herdr Runtime')
+  assert.deepEqual(runtimeSpec.label, { en: 'External Herdr Runtime', 'zh-CN': '外部 Herdr 运行时' }, 'profileRuntime label 为 en+zh-CN 双语资源')
   assert.equal(runtimeSpec.agentSuggestions?.length, 23)
 
   const sidebar = ui.find((u) => u.surface === 'sidebar.item' && (u.spec as { id: string }).id === 'herdr')

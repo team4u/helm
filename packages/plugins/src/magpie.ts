@@ -166,8 +166,11 @@ export function createMagpiePlugin(): PluginDefinition {
 
   return {
     id: MAGPIE_PLUGIN_ID,
-    name: 'Magpie Gateway',
-    description: 'Magpie model gateway integration: dynamic model catalog, quotas, and routing groups, with silent refresh and a status panel.',
+    name: { en: 'Magpie Gateway', 'zh-CN': 'Magpie 网关' },
+    description: {
+      en: 'Magpie model gateway integration: dynamic model catalog, quotas, and routing groups, with silent refresh and a status panel.',
+      'zh-CN': 'Magpie 模型网关集成：动态模型目录、配额与路由组，静默刷新与状态面板。',
+    },
     icon: 'globe',
     version: '0.1.0',
     clientRoot: resolvePluginClientRoot(MAGPIE_PLUGIN_ID, 'magpie', 'magpie_plugin_client_missing'),
@@ -178,14 +181,20 @@ export function createMagpiePlugin(): PluginDefinition {
       ctx.configSchema({
         gatewayUrl: {
           type: 'string',
-          label: 'Magpie gateway address',
-          description: 'Defaults to the local http://127.0.0.1:3425 (you may set http://host:3425)',
+          label: { en: 'Magpie gateway address', 'zh-CN': 'Magpie 网关地址' },
+          description: {
+            en: 'Defaults to the local http://127.0.0.1:3425 (you may set http://host:3425)',
+            'zh-CN': '缺省为本地 http://127.0.0.1:3425（可设 http://host:3425）',
+          },
           default: 'http://127.0.0.1:3425',
         },
         apiKey: {
           type: 'string',
-          label: 'Magpie API Key',
-          description: 'Defaults to magpie on the local loopback; fill in the matching key for a remote gateway',
+          label: { en: 'Magpie API Key', 'zh-CN': 'Magpie API 密钥' },
+          description: {
+            en: 'Defaults to magpie on the local loopback; fill in the matching key for a remote gateway',
+            'zh-CN': '缺省使用本地回环上的 magpie；远端网关填写对应密钥',
+          },
           secret: true,
         },
       })
@@ -588,14 +597,14 @@ export function createMagpiePlugin(): PluginDefinition {
       // ---- Declarative UI (client.tsx React track; no Emoji, lucide line icons) --------
       ctx.ui.settingsPanel({
         id: 'magpie-panel',
-        label: 'Magpie Gateway',
+        label: { en: 'Magpie Gateway', 'zh-CN': 'Magpie 网关' },
         order: 25,
         client: { module: 'index.tsx', export: 'MagpieSettingsPanel' },
       })
 
       ctx.ui.command({
         id: 'magpie-refresh',
-        title: 'Refresh the Magpie model catalog',
+        title: { en: 'Refresh the Magpie model catalog', 'zh-CN': '刷新 Magpie 模型目录' },
         actionId: 'refresh',
         input: {},
         keywords: ['magpie', 'models', 'refresh'],

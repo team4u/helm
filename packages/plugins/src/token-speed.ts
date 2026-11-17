@@ -55,9 +55,11 @@ export { TOKEN_SPEED_PLUGIN_ID }
 export function createTokenSpeedPlugin(options?: { now?: () => number }): PluginDefinition {
   return {
     id: TOKEN_SPEED_PLUGIN_ID,
-    name: 'Token Speed',
-    description:
-      'Real-time decoding speed (tok/s) in the composer status line: streaming-observed speed, first-token latency, and terminal reconciliation (throttled-frame observation estimates; badges marked with an approx sign).',
+    name: { en: 'Token Speed', 'zh-CN': '解码速率' },
+    description: {
+      en: 'Real-time decoding speed (tok/s) in the composer status line: streaming-observed speed, first-token latency, and terminal reconciliation (throttled-frame observation estimates; badges marked with an approx sign).',
+      'zh-CN': '输入区状态栏实时解码速率（tok/s）：流式观测速率、首 token 延迟与终态对账（节流帧观测估算，徽标带约等号）。',
+    },
     icon: 'gauge',
     version: '0.1.0',
     clientRoot: resolvePluginClientRoot(TOKEN_SPEED_PLUGIN_ID, 'token-speed', 'token_speed_plugin_client_missing'),
@@ -68,8 +70,11 @@ export function createTokenSpeedPlugin(options?: { now?: () => number }): Plugin
       ctx.configSchema({
         slidingWindowMs: {
           type: 'number',
-          label: 'Sliding window (ms)',
-          description: 'The time window for real-time speed; 3000-15000 recommended for slow servers (aligned with pi-token-speed guidance)',
+          label: { en: 'Sliding window (ms)', 'zh-CN': '滑动窗口（毫秒）' },
+          description: {
+            en: 'The time window for real-time speed; 3000-15000 recommended for slow servers (aligned with pi-token-speed guidance)',
+            'zh-CN': '实时速率的时间窗口；慢服务器建议 3000-15000（与 pi-token-speed 指引一致）',
+          },
           default: DEFAULT_SLIDING_WINDOW_MS,
           minimum: MIN_SLIDING_WINDOW_MS,
           maximum: MAX_SLIDING_WINDOW_MS,

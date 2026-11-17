@@ -16,17 +16,17 @@ export function registerWorktreeActions(
 
   ctx.action({
     id: 'cleanup_worktree',
-    description: '清理受管 Git 工作树',
+    description: 'Clean up a managed Git worktree',
     inputSchema: {
       type: 'object',
       properties: {
-        worktreeId: { type: 'string', description: '受管 worktree 登记 ID（与 conversationId/path 互斥）' },
-        conversationId: { type: 'number', minimum: 1, description: '子会话 ID（与 worktreeId/path 互斥）' },
-        path: { type: 'string', description: 'worktree 绝对路径（可附 nodeId 消歧）' },
-        nodeId: { type: 'string', description: '目标节点 ID（仅可与 path 搭配）' },
-        deleteBranch: { type: 'boolean', description: '同时删除 helm/spawn-* 分支（默认保留）' },
-        mergedInto: { type: 'string', description: '已合入的目标分支或提交；缺省按记录 baseBranch 再回退主工作树 HEAD' },
-        force: { type: 'boolean', description: '强制清理（脏工作区默认拒绝）' },
+        worktreeId: { type: 'string', description: 'Managed worktree registration ID (mutually exclusive with conversationId/path)' },
+        conversationId: { type: 'number', minimum: 1, description: 'Sub-conversation ID (mutually exclusive with worktreeId/path)' },
+        path: { type: 'string', description: 'Worktree absolute path (may attach nodeId to disambiguate)' },
+        nodeId: { type: 'string', description: 'Target node ID (only combinable with path)' },
+        deleteBranch: { type: 'boolean', description: 'Also delete the helm/spawn-* branch (kept by default)' },
+        mergedInto: { type: 'string', description: 'Target branch or commit already merged into; defaults to the recorded baseBranch, falling back to the main worktree HEAD' },
+        force: { type: 'boolean', description: 'Force cleanup (dirty worktrees are refused by default)' },
       },
       additionalProperties: false,
     },
@@ -43,7 +43,7 @@ export function registerWorktreeActions(
       required: ['removed', 'worktreeId', 'path', 'branch', 'nodeId', 'branchDeleted'],
       additionalProperties: false,
     },
-    cli: { command: ['worktrees', 'cleanup'], description: '清理受管 Git 工作树' },
+    cli: { command: ['worktrees', 'cleanup'], description: 'Clean up a managed Git worktree' },
     async handler(input, context) {
       const a = input as Record<string, unknown>
       // 与工具同款语义：显式 conversationId 与上下文冲突拒绝；无任何显式
@@ -80,7 +80,7 @@ export function registerWorktreeActions(
 
   ctx.action({
     id: 'list_worktrees',
-    description: '列出受管 Git 工作树登记（含已清理记录的元数据）',
+    description: 'List managed Git worktree registrations (including metadata of cleaned-up records)',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     outputSchema: {
       type: 'object',
@@ -88,7 +88,7 @@ export function registerWorktreeActions(
       required: ['worktrees'],
       additionalProperties: false,
     },
-    cli: { command: ['worktrees', 'list'], description: '列出受管 Git 工作树登记' },
+    cli: { command: ['worktrees', 'list'], description: 'List managed Git worktree registrations' },
     async handler() {
       return { worktrees: isolation.allocator.list() }
     },
@@ -96,15 +96,15 @@ export function registerWorktreeActions(
 
   ctx.action({
     id: 'inspect_worktree',
-    description: '只读检视一个受管 Git 工作树：登记元数据 + 目标节点真实 git 只读探测（状态/统计/有上限 diff 预览）；仅登记记录可检视',
+    description: 'Read-only inspection of one managed Git worktree: registration metadata plus a real read-only git probe on the target node (status/stats/capped diff preview); only registered records can be inspected',
     inputSchema: {
       type: 'object',
       properties: {
-        worktreeId: { type: 'string', description: '受管 worktree 登记 ID（node:path；与 conversationId/path 互斥）' },
-        conversationId: { type: 'number', minimum: 1, description: '子会话 ID（与 worktreeId/path 互斥）' },
-        path: { type: 'string', description: 'worktree 绝对路径（与 conversationId 互斥；多节点同名路径需另附 nodeId）' },
-        nodeId: { type: 'string', description: '目标节点 ID（仅可与 path 搭配，跨节点同名路径消歧）' },
-        diff: { type: 'boolean', description: '是否包含 diff 预览（默认包含；登记元数据与统计始终返回）' },
+        worktreeId: { type: 'string', description: 'Managed worktree registration ID (node:path; mutually exclusive with conversationId/path)' },
+        conversationId: { type: 'number', minimum: 1, description: 'Sub-conversation ID (mutually exclusive with worktreeId/path)' },
+        path: { type: 'string', description: 'Worktree absolute path (mutually exclusive with conversationId; same-name paths across nodes need nodeId)' },
+        nodeId: { type: 'string', description: 'Target node ID (only combinable with path, disambiguating same-name paths across nodes)' },
+        diff: { type: 'boolean', description: 'Whether to include a diff preview (included by default; registration metadata and stats are always returned)' },
       },
       additionalProperties: false,
     },
@@ -131,7 +131,7 @@ export function registerWorktreeActions(
     },
     cli: {
       command: ['worktrees', 'inspect'],
-      description: '只读检视受管 Git 工作树（登记元数据 + 状态/统计/diff 预览）',
+      description: 'Read-only inspection of a managed Git worktree (registration metadata + status/stats/diff preview)',
       positional: [{ field: 'worktreeId', required: true }],
     },
     async handler(input, context) {

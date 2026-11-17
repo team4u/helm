@@ -86,22 +86,22 @@ export function registerWorkflowTools(ctx: HelmPluginContext, deps: WorkflowTool
     name: 'SubagentWorkflow',
     replay: 'safe',
     promptGuidelines: [
-      '后台工作流启动后可继续响应用户或处理其他工作；完成汇报会自动到达本会话，不要使用 sleep 或循环查询等待结果。',
-      '工作流返回运行句柄时表示已启动；必须等终态汇报后才能交付最终结果。',
+      'After a background workflow starts, keep responding to the user or work on other things; the completion report arrives in this conversation automatically — do not sleep or poll for the result.',
+      'A workflow returning a run handle means it has started; wait for the terminal-state report before delivering the final result.',
     ],
     description:
-      '在当前会话执行 SubagentWorkflow 确定性编排脚本。script 为内联 DSL 源码，scriptPath 指向脚本文件，name 引用已保存工作流（三者择一）；仅提供 resumeFromRunId 时可复用原脚本。args 为任意 JSON 原样传给脚本（字符串形 JSON 自动解包）。人类交互会话缺省后台执行（background 缺省 true）：启动后立即返回运行中 summary，完成后向本会话 steer 插话汇报；自动化会话（归属 bot/helm：受管子代理/驻留 Worker/触发会话）缺省同步等待终态（runId/status/nodes/result），显式 background=true 会被拒绝。同步运行阻塞期间可经 workflows detach 动作或界面「转入后台」按 runId 转后台：调用立即返回后台句柄（ok/background/summary），终态 steer 插话汇报。',
+      'Run a SubagentWorkflow deterministic orchestration script in the current conversation. script is inline DSL source, scriptPath points to a script file, and name references a saved workflow (exactly one of the three); providing only resumeFromRunId reuses the original script. args is any JSON passed to the script as-is (string-shaped JSON is auto-unwrapped). Human conversations default to background execution (background defaults to true): the call returns a running summary immediately and the completion arrives as a steer follow-up in this conversation; automated conversations (owned by bot/helm: managed subagents/resident workers/trigger sessions) default to waiting synchronously for the terminal state (runId/status/nodes/result), and an explicit background=true is rejected. While a synchronous run blocks, the workflows detach action (or the UI "move to background") can move it background by runId: the call immediately returns a background handle (ok/background/summary) and the terminal state arrives as a steer follow-up.',
     inputSchema: {
       type: 'object',
       properties: {
-        script: { type: 'string', description: '编排脚本源码（内联）' },
-        scriptPath: { type: 'string', description: '编排脚本文件路径（与 script、name 择一）' },
-        name: { type: 'string', description: '已保存工作流名（与 script、scriptPath 择一）' },
-        args: { description: '传给脚本的任意 JSON args（对象/数组/标量均可，字符串形 JSON 自动解包）' },
-        resumeFromRunId: { type: 'string', description: '断点恢复的既有 runId（可选）' },
+        script: { type: 'string', description: 'Orchestration script source (inline)' },
+        scriptPath: { type: 'string', description: 'Orchestration script file path (exactly one of script / scriptPath / name)' },
+        name: { type: 'string', description: 'Saved workflow name (exactly one of script / scriptPath / name)' },
+        args: { description: 'Any JSON args passed to the script (object/array/scalar; string-shaped JSON is auto-unwrapped)' },
+        resumeFromRunId: { type: 'string', description: 'Existing runId to resume from the last checkpoint (optional)' },
         background: {
           type: 'boolean',
-          description: '后台执行：启动后立即返回运行句柄，完成后向本会话 steer 插话汇报。人类交互会话缺省 true；自动化会话缺省 false 且显式 true 被拒绝（防早结算）',
+          description: 'Background execution: returns a run handle immediately and reports back to this conversation via a steer follow-up on completion. Defaults to true in human conversations; false in automated conversations, where an explicit true is rejected (prevents early settlement)',
         },
       },
       additionalProperties: false,
@@ -237,17 +237,17 @@ export function registerWorkflowTools(ctx: HelmPluginContext, deps: WorkflowTool
   ctx.tool({
     name: 'cleanup_worktree',
     description:
-      "清理一个受管的隔离 Git Worktree（isolation: 'worktree' 派生的子会话工作区）。按 worktreeId（node:path）、conversationId 或 worktree 路径（可附 nodeId 消歧）定位；工作区含未提交修改或未合入提交时默认拒绝（先检视/合入，或显式 force: true；force 不可越过占用/归属/locked 校验）；可选 deleteBranch: true 一并删除 helm/spawn-* 分支（分支删除失败可重试）。仅清理 helm 登记的受管 worktree，绝不触碰未登记目录。",
+      "Clean up one managed isolated Git worktree (the workspace of a sub-conversation spawned with isolation: 'worktree'). Locate it by worktreeId (node:path), conversationId, or worktree path (may attach nodeId to disambiguate); refused by default when the workspace has uncommitted changes or unmerged commits (inspect/merge first, or pass force: true; force cannot bypass occupancy/ownership/locked checks); optionally pass deleteBranch: true to also delete the helm/spawn-* branch (branch deletion failures can be retried). Only worktrees registered by helm are cleaned; unregistered directories are never touched.",
     inputSchema: {
       type: 'object',
       properties: {
-        worktreeId: { type: 'string', description: '受管 worktree 登记 ID（node:path；精确选择器，与 conversationId/path/nodeId 互斥）' },
-        conversationId: { type: 'number', description: '子会话 ID（与 path 择一）' },
-        path: { type: 'string', description: 'worktree 绝对路径（与 conversationId 择一；多节点同名路径需另附 nodeId）' },
-        nodeId: { type: 'string', description: '目标节点 ID（仅可与 path 搭配，跨节点同名路径消歧）' },
-        deleteBranch: { type: 'boolean', description: '同时删除 helm/spawn-* 分支（默认保留）' },
-        mergedInto: { type: 'string', description: '已合入的目标分支或提交；缺省按记录 baseBranch 再回退主工作树 HEAD' },
-        force: { type: 'boolean', description: '强制清理（仅越过未提交修改/未合入提交保护；不可越过占用/归属/locked 校验）' },
+        worktreeId: { type: 'string', description: 'Managed worktree registration ID (node:path; exact selector, mutually exclusive with conversationId/path/nodeId)' },
+        conversationId: { type: 'number', description: 'Sub-conversation ID (mutually exclusive with path)' },
+        path: { type: 'string', description: 'Worktree absolute path (mutually exclusive with conversationId; same-name paths across nodes need nodeId)' },
+        nodeId: { type: 'string', description: 'Target node ID (only combinable with path, disambiguating same-name paths across nodes)' },
+        deleteBranch: { type: 'boolean', description: 'Also delete the helm/spawn-* branch (kept by default)' },
+        mergedInto: { type: 'string', description: 'Target branch or commit already merged into; defaults to the recorded baseBranch, falling back to the main worktree HEAD' },
+        force: { type: 'boolean', description: 'Force cleanup (only bypasses the uncommitted-changes/unmerged-commits protection; never bypasses occupancy/ownership/locked checks)' },
       },
       additionalProperties: false,
     },

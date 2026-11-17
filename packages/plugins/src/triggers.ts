@@ -32,8 +32,11 @@ export { TRIGGERS_PLUGIN_ID }
 export function createTriggersPlugin(): PluginDefinition {
   return {
     id: TRIGGERS_PLUGIN_ID,
-    name: 'Triggers (cron + webhook)',
-    description: 'Inbound connector: cron timers and webhook inbound triggers, delivered to target conversations via escape-proof envelopes.',
+    name: { en: 'Triggers (cron + webhook)', 'zh-CN': '触发器（cron + webhook）' },
+    description: {
+      en: 'Inbound connector: cron timers and webhook inbound triggers, delivered to target conversations via escape-proof envelopes.',
+      'zh-CN': '入站连接器：cron 定时与 webhook 入站触发，经防逃逸信封投递到目标会话。',
+    },
     icon: 'webhook',
     version: '0.1.0',
     clientRoot: resolvePluginClientRoot(TRIGGERS_PLUGIN_ID, 'triggers', 'triggers_plugin_client_missing'),
@@ -54,20 +57,20 @@ export function createTriggersPlugin(): PluginDefinition {
       // ---- Management UI (client.tsx React track; no Emoji) ----
       ctx.ui.sidebarItem({
         id: 'triggers-manager',
-        label: 'Trigger Manager',
+        label: { en: 'Trigger Manager', 'zh-CN': '触发器管理' },
         icon: 'clock',
         target: `screen:${TRIGGERS_PLUGIN_ID}/${TRIGGERS_SCREEN_ID}`,
         order: 15,
       })
       ctx.ui.screen({
         id: TRIGGERS_SCREEN_ID,
-        label: 'Trigger Manager',
+        label: { en: 'Trigger Manager', 'zh-CN': '触发器管理' },
         icon: 'clock',
         client: { module: 'index.tsx', export: 'TriggersManagerScreen' },
       })
       ctx.ui.settingsPanel({
         id: 'triggers-settings',
-        label: 'Triggers',
+        label: { en: 'Triggers', 'zh-CN': '触发器' },
         order: 40,
         client: { module: 'index.tsx', export: 'TriggersSettingsPanel' },
       })

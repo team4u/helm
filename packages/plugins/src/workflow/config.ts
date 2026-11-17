@@ -19,20 +19,26 @@ export function registerWorkflowConfigSchema(ctx: HelmPluginContext): void {
   ctx.configSchema({
     maxConcurrentAgents: {
       type: 'number',
-      label: '工作流最大并发子代理数',
+      label: { en: 'Max concurrent subagents per workflow', 'zh-CN': '工作流最大并发子代理数' },
       minimum: 1,
       maximum: 128,
       integer: true,
-      description: '单个工作流 Run 的并发 agent 上限，默认按 CPU 并行度计算并限制在 2..32。',
+      description: {
+        en: 'Per-run concurrent agent cap; defaults to CPU parallelism clamped to 2..32.',
+        'zh-CN': '单个工作流 Run 的并发 agent 上限，默认按 CPU 并行度计算并限制在 2..32。',
+      },
       default: defaultMaxConcurrentAgents,
     },
     maxSubagentDepth: {
       type: 'number',
-      label: '子代理最大层级',
+      label: { en: 'Max subagent depth', 'zh-CN': '子代理最大层级' },
       minimum: 1,
       maximum: HARD_MAX_SUBAGENT_DEPTH,
       integer: true,
-      description: `1..${HARD_MAX_SUBAGENT_DEPTH} 的整数，默认 2。主会话为第 0 层；变更影响新派生的任务树，现有任务沿用其上限。`,
+      description: {
+        en: `Integer 1..${HARD_MAX_SUBAGENT_DEPTH}, default 2. The main conversation is depth 0; changes affect newly spawned task trees while existing ones keep their ceiling.`,
+        'zh-CN': `1..${HARD_MAX_SUBAGENT_DEPTH} 的整数，默认 2。主会话为第 0 层；变更影响新派生的任务树，现有任务沿用其上限。`,
+      },
       default: DEFAULT_MAX_SUBAGENT_DEPTH,
     },
     autoRecoverOnRestart: {

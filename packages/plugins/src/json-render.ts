@@ -44,8 +44,11 @@ function readSkillAssets(): { skillMd: string; references: Record<string, string
 export function createJsonRenderPlugin(): PluginDefinition {
   return {
     id: JSON_RENDER_PLUGIN_ID,
-    name: 'JSON 卡片渲染',
-    description: '聊天 ```ui 代码块渲染：把模型输出的安全 JSON Spec 渲染为交互卡片（表单/列表/图表原语），并随插件启停维护 generative-ui 技能。',
+    name: { en: 'JSON Card Rendering', 'zh-CN': 'JSON 卡片渲染' },
+    description: {
+      en: 'Chat ```ui code-block rendering: turns model-emitted safe JSON specs into interactive cards (form/list/chart primitives) and maintains the generative-ui skill with the plugin lifecycle.',
+      'zh-CN': '聊天 ```ui 代码块渲染：把模型输出的安全 JSON Spec 渲染为交互卡片（表单/列表/图表原语），并随插件启停维护 generative-ui 技能。',
+    },
     icon: 'layout',
     version: '0.1.0',
     clientRoot: resolvePluginClientRoot(JSON_RENDER_PLUGIN_ID, 'json-render', 'json_render_client_missing'),

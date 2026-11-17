@@ -22,17 +22,17 @@ export function registerWorkflowRunActions(
 
   ctx.action({
     id: 'run',
-    description: '在指定或当前会话启动工作流运行；CLI 使用 --current 传入当前会话',
+    description: 'Start a workflow run in the specified or current conversation; the CLI passes the current conversation via --current',
     inputSchema: {
       type: 'object',
       properties: {
-        name: { type: 'string', description: '已保存工作流名（与 script/scriptPath 择一）' },
-        script: { type: 'string', description: '编排脚本源码（内联）' },
-        scriptPath: { type: 'string', description: '编排脚本文件绝对路径' },
-        args: { description: '原样传给脚本的任意 JSON args' },
-        resumeFromRunId: { type: 'string', description: '断点恢复的既有 runId' },
-        conversationId: { type: 'number', minimum: 1, description: '目标会话；新 run 必须指定，CLI 可用 --current' },
-        wait: { type: 'boolean', description: '等待终态后返回最新 run（failed/aborted 抛错）' },
+        name: { type: 'string', description: 'Saved workflow name (exactly one of name / script / scriptPath)' },
+        script: { type: 'string', description: 'Orchestration script source (inline)' },
+        scriptPath: { type: 'string', description: 'Absolute path of the orchestration script file' },
+        args: { description: 'Arbitrary JSON args passed to the script as-is' },
+        resumeFromRunId: { type: 'string', description: 'Existing runId to resume from the last checkpoint' },
+        conversationId: { type: 'number', minimum: 1, description: 'Target conversation; a new run must specify one, the CLI can use --current' },
+        wait: { type: 'boolean', description: 'Wait for the terminal state and return the latest run (failed/aborted throw)' },
       },
       additionalProperties: false,
     },
@@ -44,7 +44,7 @@ export function registerWorkflowRunActions(
     },
     cli: {
       command: ['workflows', 'run'],
-      description: '在指定或当前会话启动工作流运行（CLI 使用 --current）',
+      description: 'Start a workflow run in the specified or current conversation (CLI uses --current)',
       positional: [{ field: 'name', readFileInto: 'script' }],
       timeoutMs: 0,
     },
@@ -106,12 +106,12 @@ export function registerWorkflowRunActions(
   ctx.action({
     id: 'steer',
     description:
-      '向运行中的后台子代理补充指导：原生子会话经内核 guarded 端口按归属与 CAS 水位原子复核；外部执行按节点 controls.steer 委托插件，并如实返回 guardLevel（preflight 为发送前预检，cas 为提交点原子复核）。仅支持 kind=subagent、status=running 的运行；DSL 工作流、缺控制引用的外部执行及 human 归属拒绝。会话内仅发起会话自身或其祖先可控制。steered=true 仅表示已投递，不表示指导已执行；超时或断线不自动重试。',
+      'Add mid-run guidance to a running background subagent: native sub-conversations go through the kernel guarded port with atomic ownership and CAS watermark rechecks; external executions are delegated to the node controls.steer plugin action, honestly reporting guardLevel (preflight is a pre-send check, cas is an atomic recheck at the commit point). Only runs with kind=subagent and status=running are supported; DSL workflows, external executions without control references, and human ownership are rejected. Within a conversation only the initiating conversation itself or its ancestors may steer. steered=true only means delivery succeeded, not that the guidance was executed; timeouts and disconnects are not retried automatically.',
     inputSchema: {
       type: 'object',
       properties: {
-        runId: { type: 'string', description: '后台子代理运行 ID（subagent 工具 background:true 返回的 runId）' },
-        text: { type: 'string', description: '插话指导内容（非空；原样注入目标执行，附运行来源前缀）' },
+        runId: { type: 'string', description: 'Background subagent run ID (the runId returned by the subagent tool with background:true)' },
+        text: { type: 'string', description: 'Guidance text to inject (non-empty; delivered verbatim into the target execution with a run-source prefix)' },
       },
       required: ['runId', 'text'],
       additionalProperties: false,
@@ -124,10 +124,10 @@ export function registerWorkflowRunActions(
             steered: { type: 'boolean', const: true },
             runId: { type: 'string' },
             targetKind: { type: 'string', const: 'native' },
-            conversationId: { type: 'number', description: '被插话的原生子会话 ID' },
+            conversationId: { type: 'number', description: 'Steered native sub-conversation ID' },
             ownership: { type: 'string', enum: ['bot', 'helm'] },
-            stateChangeSeq: { type: 'number', description: '提交时复核通过的权威水位' },
-            guardLevel: { type: 'string', const: 'cas', description: '守卫级别（内核 CAS 复核）' },
+            stateChangeSeq: { type: 'number', description: 'Authoritative watermark that passed the recheck at commit' },
+            guardLevel: { type: 'string', const: 'cas', description: 'Guard level (kernel CAS recheck)' },
           },
           required: ['steered', 'runId', 'targetKind', 'conversationId', 'ownership', 'stateChangeSeq', 'guardLevel'],
           additionalProperties: false,
@@ -137,11 +137,11 @@ export function registerWorkflowRunActions(
             steered: { type: 'boolean', const: true },
             runId: { type: 'string' },
             targetKind: { type: 'string', const: 'external' },
-            executionId: { type: 'string', description: '被插话的外部执行标识' },
-            nodeId: { type: 'string', description: '外部执行节点' },
+            executionId: { type: 'string', description: 'Steered external execution identifier' },
+            nodeId: { type: 'string', description: 'External execution node' },
             ownership: { type: 'string', const: 'helm' },
-            stateChangeSeq: { type: 'number', minimum: 0, description: '预检或提交点复核时观测的权威水位' },
-            guardLevel: { type: 'string', enum: ['preflight', 'cas'], description: '执行插件实际采用的守卫级别' },
+            stateChangeSeq: { type: 'number', minimum: 0, description: 'Authoritative watermark observed at the preflight or commit-point recheck' },
+            guardLevel: { type: 'string', enum: ['preflight', 'cas'], description: 'Guard level actually applied by the execution plugin' },
           },
           required: ['steered', 'runId', 'targetKind', 'executionId', 'nodeId', 'ownership', 'stateChangeSeq', 'guardLevel'],
           additionalProperties: false,
@@ -150,7 +150,7 @@ export function registerWorkflowRunActions(
     },
     cli: {
       command: ['workflows', 'steer'],
-      description: '向运行中的后台子代理插话纠偏（原生与外部（如 Herdr）执行按节点解析路由；无服务端原子守卫能力的外部目标显式拒绝）',
+      description: 'Steer a running background subagent back on course (native and external (e.g. Herdr) executions route by node; external targets without server-side atomic guard support are explicitly rejected)',
       positional: [{ field: 'runId', required: true }],
     },
     exposeAsTool: true,
@@ -187,11 +187,11 @@ export function registerWorkflowRunActions(
   ctx.action({
     id: 'detach',
     description:
-      '把运行中的前台同步 run（subagent / SubagentWorkflow 同步等待路径）转入后台：阻塞中的工具调用立即返回后台句柄，run 继续执行并在终态后 steer 插话汇报。仅前台同步标记且 running 的 run 可转（后台启动与已转后台的 run 拒绝）；run 发起会话必须 human-owned，自动化会话（bot/helm）同步等待是既定策略，拒绝 detach；会话内调用仅允许发起会话自身或其祖先。',
+      'Move a running foreground-sync run (the subagent / SubagentWorkflow synchronous-wait path) into the background: the blocked tool call immediately returns a background handle, the run keeps executing and reports via a steer follow-up on settle. Only runs marked foreground-sync and running can be moved (background-started and already-detached runs are rejected); the initiating conversation must be human-owned — synchronous waiting is the fixed policy for automated (bot/helm) conversations, which are refused; within a conversation only the initiating conversation itself or its ancestors may call.',
     inputSchema: {
       type: 'object',
       properties: {
-        runId: { type: 'string', description: '前台同步运行 ID（同步工具启动的 run）' },
+        runId: { type: 'string', description: 'Foreground-sync run ID (a run started by a synchronous tool call)' },
       },
       required: ['runId'],
       additionalProperties: false,
@@ -208,7 +208,7 @@ export function registerWorkflowRunActions(
     },
     cli: {
       command: ['workflows', 'detach'],
-      description: '把运行中的前台同步运行转入后台（阻塞中的工具调用立即返回后台句柄）',
+      description: 'Move a running foreground-sync run into the background (the blocked tool call immediately returns a background handle)',
       positional: [{ field: 'runId', required: true }],
     },
     async handler(input, context) {

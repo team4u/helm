@@ -28,8 +28,11 @@ function resolvePluginsPackageRoot(): string {
 export function createMermaidPlugin(): PluginDefinition {
   return {
     id: MERMAID_PLUGIN_ID,
-    name: 'Mermaid Diagrams',
-    description: 'Chat ```mermaid code-block rendering: renders Mermaid text into flowcharts/sequence diagrams/Gantt charts and other vector diagrams.',
+    name: { en: 'Mermaid Diagrams', 'zh-CN': 'Mermaid 图表' },
+    description: {
+      en: 'Chat ```mermaid code-block rendering: renders Mermaid text into flowcharts/sequence diagrams/Gantt charts and other vector diagrams.',
+      'zh-CN': '聊天 ```mermaid 代码块渲染：把 Mermaid 文本渲染为流程图/时序图/甘特图等矢量图表。',
+    },
     icon: 'git-branch',
     version: '0.1.0',
     clientRoot: resolvePluginClientRoot(MERMAID_PLUGIN_ID, 'mermaid', 'mermaid_client_missing'),

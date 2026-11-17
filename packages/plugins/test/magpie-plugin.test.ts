@@ -927,9 +927,9 @@ test('magpie19: UI spec 无 Emoji、scope 绑定 magpie、client 轨道组件导
 
     // settingsPanel：client 轨道（不再声明 json；真实编译产物可编译且导出组件函数）
     const panel = ui.find((u) => u.surface === 'settings.panel')!.spec as {
-      label: string; json?: unknown; docs?: unknown; client?: { module: string; export: string }
+      label: { en?: unknown; 'zh-CN'?: unknown }; json?: unknown; docs?: unknown; client?: { module: string; export: string }
     }
-    assert.equal(panel.label, 'Magpie Gateway')
+    assert.deepEqual(panel.label, { en: 'Magpie Gateway', 'zh-CN': 'Magpie 网关' }, 'settingsPanel label 为 en+zh-CN 双语资源')
     assert.equal(panel.json, undefined, 'settingsPanel 不再声明 JSON Spec（单轨 client）')
     assert.equal(panel.docs, undefined, 'settingsPanel 不再声明 docs（组件 usePluginDoc 自主订阅）')
     assert.equal(panel.client!.module, 'index.tsx')
@@ -946,8 +946,8 @@ test('magpie19: UI spec 无 Emoji、scope 绑定 magpie、client 轨道组件导
       rmSync(cacheDir, { recursive: true, force: true })
     }
 
-    const command = ui.find((u) => u.surface === 'commandPalette')!.spec as { title: string; actionId: string }
-    assert.equal(command.title, 'Refresh the Magpie model catalog')
+    const command = ui.find((u) => u.surface === 'commandPalette')!.spec as { title: { en?: unknown; 'zh-CN'?: unknown }; actionId: string }
+    assert.deepEqual(command.title, { en: 'Refresh the Magpie model catalog', 'zh-CN': '刷新 Magpie 模型目录' }, 'command title 为 en+zh-CN 双语资源')
     assert.equal(command.actionId, 'refresh')
 
     // 无模型目录时非 magpie 会话 settled 不触网（保持原行为回归）

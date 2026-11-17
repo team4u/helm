@@ -426,19 +426,19 @@ export function registerSuperAgentActions(
   registerRouterTool({
     name: 'dispatch_worker',
     description:
-      '非阻塞派生后台 Worker 会话执行任务（立即返回 workerConversationId，不等模型回合结束）。可选 profileId 点将专家 Profile、threadKey 绑定事件订阅。',
+      'Spawn a background worker conversation to execute a task without blocking (returns workerConversationId immediately, without waiting for the model turn to finish). Optionally pin an expert Profile via profileId and bind an event subscription via threadKey.',
     inputSchema: dispatchInputSchema,
     execute: (input: DispatchInput, context) => dispatchWorker(input, context.conversationId),
   })
   registerRouterTool({
     name: 'inspect_worker',
-    description: '读取后台 Worker 最近时间线摘要与产物列表。',
+    description: 'Read a background worker\'s recent timeline summary and artifact list.',
     inputSchema: workerIdInputSchema,
     execute: (input: { workerConversationId: number }, context) => inspectWorker(input, context.conversationId),
   })
   registerRouterTool({
     name: 'recall_context',
-    description: '检索 RecallGraph 记忆图谱（按关键词过滤历史任务摘要节点，多词 AND）。',
+    description: 'Search the RecallGraph memory graph (filters historical task-summary nodes by keywords, multiple words AND-combined).',
     inputSchema: {
       type: 'object',
       properties: { query: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 100 } },
@@ -448,7 +448,7 @@ export function registerSuperAgentActions(
   })
   registerRouterTool({
     name: 'subscribe_thread',
-    description: '将 threadKey 事件订阅绑定到指定后台 Worker（冲突显式拒绝，不抢占）。',
+    description: 'Bind a threadKey event subscription to the given background worker (conflicts are explicitly rejected, never preempted).',
     inputSchema: {
       type: 'object',
       properties: { threadKey: { type: 'string', minLength: 1, maxLength: 200 }, workerConversationId: workerIdSchema },
@@ -462,7 +462,7 @@ export function registerSuperAgentActions(
   // ---- ctx.action：HTTP/CLI/Workflow 五端复用同 handler ----
   ctx.action({
     id: 'dispatch_worker',
-    description: '非阻塞派生后台 Worker（中枢会话或人工 HTTP/CLI 调用）。',
+    description: 'Spawn a background worker without blocking (hub conversation or manual HTTP/CLI calls).',
     inputSchema: dispatchInputSchema,
     outputSchema: {
       type: 'object',
@@ -474,7 +474,7 @@ export function registerSuperAgentActions(
   })
   ctx.action({
     id: 'inspect_worker',
-    description: '读取后台 Worker 最近时间线摘要与产物列表。',
+    description: 'Read a background worker\'s recent timeline summary and artifact list.',
     idempotent: true,
     inputSchema: workerIdInputSchema,
     outputSchema: { type: 'object' },
@@ -482,7 +482,7 @@ export function registerSuperAgentActions(
   })
   ctx.action({
     id: 'recall_context',
-    description: '检索 RecallGraph 记忆图谱。',
+    description: 'Search the RecallGraph memory graph.',
     idempotent: true,
     inputSchema: {
       type: 'object',
@@ -494,7 +494,7 @@ export function registerSuperAgentActions(
   })
   ctx.action({
     id: 'subscribe_thread',
-    description: '将 threadKey 事件订阅绑定到指定后台 Worker。',
+    description: 'Bind a threadKey event subscription to the given background worker.',
     inputSchema: {
       type: 'object',
       properties: { threadKey: { type: 'string', minLength: 1, maxLength: 200 }, workerConversationId: workerIdSchema },
@@ -507,7 +507,7 @@ export function registerSuperAgentActions(
   })
   ctx.action({
     id: 'archive_worker',
-    description: '归档已完成 Worker：解绑订阅并把 worker 标签换为 worker-archived（中枢会话或人工调用）。',
+    description: 'Archive a finished worker: unbinds subscriptions and swaps the worker tag for worker-archived (hub conversation or manual calls).',
     inputSchema: workerIdInputSchema,
     outputSchema: {
       type: 'object',
@@ -519,7 +519,7 @@ export function registerSuperAgentActions(
   })
   ctx.action({
     id: 'set_router_mode',
-    description: '持久修改中枢路由收敛模式（写入插件配置 routerMode，即时生效）。',
+    description: 'Persistently change the hub router convergence mode (writes the plugin config routerMode, effective immediately).',
     inputSchema: {
       type: 'object',
       properties: { enabled: { type: 'boolean' } },

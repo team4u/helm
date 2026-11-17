@@ -258,8 +258,11 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
   const hubCwd = deps.hubCwd ?? process.cwd()
   return {
     id: APPS_PLUGIN_ID,
-    name: 'App Center',
-    description: 'Full-stack micro-app catalog and lifecycle: validate/publish/list/remove actions, the app center view, and the managed app-builder skill.',
+    name: { en: 'App Center', 'zh-CN': '应用中心' },
+    description: {
+      en: 'Full-stack micro-app catalog and lifecycle: validate/publish/list/remove actions, the app center view, and the managed app-builder skill.',
+      'zh-CN': '全栈微应用目录与生命周期：validate/publish/list/remove 动作、应用中心视图与受管 app-builder 技能。',
+    },
     icon: 'boxes',
     version: '0.1.0',
     locked: false,
@@ -661,14 +664,14 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
 
       ctx.ui.sidebarItem({
         id: 'app-center',
-        label: 'App Center',
+        label: { en: 'App Center', 'zh-CN': '应用中心' },
         icon: 'layout-grid',
         target: `screen:${APPS_PLUGIN_ID}/${APPS_SCREEN_ID}`,
         order: 15,
       })
       ctx.ui.screen({
         id: APPS_SCREEN_ID,
-        label: 'App Center',
+        label: { en: 'App Center', 'zh-CN': '应用中心' },
         icon: 'layout-grid',
         client: { module: 'index.tsx', export: 'AppCenterScreen' },
       })

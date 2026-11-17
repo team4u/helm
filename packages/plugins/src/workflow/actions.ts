@@ -28,7 +28,7 @@ export function registerWorkflowActions(ctx: HelmPluginContext, deps: WorkflowAc
 
   ctx.action({
     id: 'list',
-    description: '列出已保存的工作流定义',
+    description: 'List saved workflow definitions',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     outputSchema: {
       type: 'object',
@@ -36,7 +36,7 @@ export function registerWorkflowActions(ctx: HelmPluginContext, deps: WorkflowAc
       required: ['workflows'],
       additionalProperties: false,
     },
-    cli: { command: ['workflows', 'list'], description: '列出已保存的工作流定义' },
+    cli: { command: ['workflows', 'list'], description: 'List saved workflow definitions' },
     async handler() {
       return { workflows: workflows.list() }
     },
@@ -44,10 +44,10 @@ export function registerWorkflowActions(ctx: HelmPluginContext, deps: WorkflowAc
 
   ctx.action({
     id: 'get',
-    description: '读取已保存工作流的完整定义（只读源码与元数据；Web/AI 只读，不提供编辑）',
+    description: 'Read the full definition of a saved workflow (read-only source and metadata; Web/AI are read-only, no editing)',
     inputSchema: {
       type: 'object',
-      properties: { name: { type: 'string', description: '已保存工作流名' } },
+      properties: { name: { type: 'string', description: 'Saved workflow name' } },
       required: ['name'],
       additionalProperties: false,
     },
@@ -59,7 +59,7 @@ export function registerWorkflowActions(ctx: HelmPluginContext, deps: WorkflowAc
     },
     cli: {
       command: ['workflows', 'get'],
-      description: '读取已保存工作流定义（只读源码与元数据）',
+      description: 'Read a saved workflow definition (read-only source and metadata)',
       positional: [{ field: 'name', required: true }],
     },
     async handler(input) {
@@ -77,14 +77,14 @@ export function registerWorkflowActions(ctx: HelmPluginContext, deps: WorkflowAc
 
   ctx.action({
     id: 'save',
-    description: '保存工作流定义为跨会话资产（script 或 fromRunId 二选一；缺省名用 meta.name；默认拒绝覆盖，overwrite: true 才覆盖）',
+    description: 'Save a workflow definition as a cross-conversation asset (script or fromRunId, exactly one; the default name comes from meta.name; overwriting is refused unless overwrite: true)',
     inputSchema: {
       type: 'object',
       properties: {
-        script: { type: 'string', description: '完整脚本源码（与 fromRunId 二选一）' },
-        fromRunId: { type: 'string', description: '把既有运行持久化的脚本源固化为定义（与 script 二选一；不可用于后台子代理运行）' },
-        name: { type: 'string', description: '保存名称（可选；缺省用 meta.name，与 meta.name 不一致时拒绝）' },
-        overwrite: { type: 'boolean', description: '覆盖同名定义（默认拒绝）' },
+        script: { type: 'string', description: 'Full script source (exactly one of script / fromRunId)' },
+        fromRunId: { type: 'string', description: 'Persist the script source of an existing run as a definition (exactly one of script / fromRunId; not available for background subagent runs)' },
+        name: { type: 'string', description: 'Save name (optional; defaults to meta.name; rejected when it disagrees with meta.name)' },
+        overwrite: { type: 'boolean', description: 'Overwrite a definition with the same name (refused by default)' },
       },
       additionalProperties: false,
     },
@@ -99,7 +99,7 @@ export function registerWorkflowActions(ctx: HelmPluginContext, deps: WorkflowAc
     },
     cli: {
       command: ['workflows', 'save'],
-      description: '保存工作流定义（位置参数为本地脚本文件或目标名称；也可 --from-run-id 固化既有运行）',
+      description: 'Save a workflow definition (positional is a local script file or target name; --from-run-id persists an existing run)',
       positional: [{ field: 'name', readFileInto: 'script' }],
     },
     async handler(input) {
@@ -115,10 +115,10 @@ export function registerWorkflowActions(ctx: HelmPluginContext, deps: WorkflowAc
 
   ctx.action({
     id: 'delete',
-    description: '删除已保存工作流定义文件（历史运行记录不受影响）',
+    description: 'Delete a saved workflow definition file (historical run records are unaffected)',
     inputSchema: {
       type: 'object',
-      properties: { name: { type: 'string', description: '已保存工作流名' } },
+      properties: { name: { type: 'string', description: 'Saved workflow name' } },
       required: ['name'],
       additionalProperties: false,
     },
@@ -134,7 +134,7 @@ export function registerWorkflowActions(ctx: HelmPluginContext, deps: WorkflowAc
     },
     cli: {
       command: ['workflows', 'delete'],
-      description: '删除已保存工作流定义文件（历史运行记录不受影响）',
+      description: 'Delete a saved workflow definition file (historical run records are unaffected)',
       positional: [{ field: 'name', required: true }],
     },
     async handler(input) {
@@ -145,11 +145,11 @@ export function registerWorkflowActions(ctx: HelmPluginContext, deps: WorkflowAc
 
   ctx.action({
     id: 'runs',
-    description: '列出工作流运行记录',
+    description: 'List workflow run records',
     inputSchema: {
       type: 'object',
       properties: {
-        conversationId: { type: 'number', minimum: 1, description: '按会话过滤' },
+        conversationId: { type: 'number', minimum: 1, description: 'Filter by conversation' },
       },
       additionalProperties: false,
     },
@@ -159,7 +159,7 @@ export function registerWorkflowActions(ctx: HelmPluginContext, deps: WorkflowAc
       required: ['runs'],
       additionalProperties: false,
     },
-    cli: { command: ['workflows', 'runs'], description: '列出工作流运行记录' },
+    cli: { command: ['workflows', 'runs'], description: 'List workflow run records' },
     async handler(input, context) {
       const { conversationId } = input as { conversationId?: number }
       // 会话上下文（--current / run_action）缺省作为过滤器：与 CLI 历史语义一致。
@@ -171,10 +171,10 @@ export function registerWorkflowActions(ctx: HelmPluginContext, deps: WorkflowAc
 
   ctx.action({
     id: 'inspect',
-    description: '查看单个工作流运行详情',
+    description: 'Inspect a single workflow run',
     inputSchema: {
       type: 'object',
-      properties: { runId: { type: 'string', description: '运行 ID' } },
+      properties: { runId: { type: 'string', description: 'Run ID' } },
       required: ['runId'],
       additionalProperties: false,
     },
@@ -186,7 +186,7 @@ export function registerWorkflowActions(ctx: HelmPluginContext, deps: WorkflowAc
     },
     cli: {
       command: ['workflows', 'inspect'],
-      description: '查看单个工作流运行详情',
+      description: 'Inspect a single workflow run',
       positional: [{ field: 'runId', required: true }],
     },
     async handler(input) {
@@ -204,10 +204,10 @@ export function registerWorkflowActions(ctx: HelmPluginContext, deps: WorkflowAc
 
   ctx.action({
     id: 'abort',
-    description: '中止工作流运行',
+    description: 'Abort a workflow run',
     inputSchema: {
       type: 'object',
-      properties: { runId: { type: 'string', description: '运行 ID' } },
+      properties: { runId: { type: 'string', description: 'Run ID' } },
       required: ['runId'],
       additionalProperties: false,
     },
@@ -219,7 +219,7 @@ export function registerWorkflowActions(ctx: HelmPluginContext, deps: WorkflowAc
     },
     cli: {
       command: ['workflows', 'abort'],
-      description: '中止工作流运行',
+      description: 'Abort a workflow run',
       positional: [{ field: 'runId', required: true }],
     },
     async handler(input) {

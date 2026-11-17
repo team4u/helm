@@ -85,8 +85,11 @@ export { WORKFLOW_PLUGIN_ID }
 export function createWorkflowPlugin(): PluginDefinition {
   return {
     id: WORKFLOW_PLUGIN_ID,
-    name: 'Workflows & Subagents',
-    description: 'Deterministic multi-agent orchestration: subagent / SubagentWorkflow tools, managed Git worktrees, run records and the task panel.',
+    name: { en: 'Workflows & Subagents', 'zh-CN': '工作流与子代理' },
+    description: {
+      en: 'Deterministic multi-agent orchestration: subagent / SubagentWorkflow tools, managed Git worktrees, run records and the task panel.',
+      'zh-CN': '确定性多智能体编排：subagent / SubagentWorkflow 工具、受管 Git 工作树、运行记录与任务面板。',
+    },
     icon: 'workflow',
     version: '0.1.0',
     clientRoot: resolvePluginClientRoot(WORKFLOW_PLUGIN_ID, 'workflow', 'workflow_plugin_client_missing'),

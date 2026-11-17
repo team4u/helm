@@ -35,7 +35,7 @@ export function registerWorkflowUi(ctx: HelmPluginContext): void {
   })
   ctx.ui.workbenchPanel({
     id: 'tasks',
-    label: '工作流与子代理',
+    label: { en: 'Workflows & Subagents', 'zh-CN': '工作流与子代理' },
     icon: 'git-branch',
     order: 10,
     badge: { doc: WORKFLOW_RUN_BADGES_DOC, byConversationField: 'byConversation' },
@@ -44,14 +44,14 @@ export function registerWorkflowUi(ctx: HelmPluginContext): void {
   // 工作流库：跨会话可复用资产的独立视图空间（定义管理不属会话 workbench）。
   ctx.ui.sidebarItem({
     id: 'workflow-library',
-    label: '工作流库',
+    label: { en: 'Workflow Library', 'zh-CN': '工作流库' },
     icon: 'workflow',
     target: `screen:${WORKFLOW_PLUGIN_ID}/library`,
     order: 16,
   })
   ctx.ui.screen({
     id: 'library',
-    label: '工作流库',
+    label: { en: 'Workflow Library', 'zh-CN': '工作流库' },
     icon: 'workflow',
     client: { module: 'index.tsx', export: 'WorkflowLibraryScreen' },
   })

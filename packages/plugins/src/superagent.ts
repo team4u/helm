@@ -89,8 +89,11 @@ async function bootstrapAssets(host: Pick<HelmHostApi, 'profiles' | 'skills'> & 
 export function createSuperAgentPlugin(): PluginDefinition {
   return {
     id: SUPERAGENT_PLUGIN_ID,
-    name: 'SuperAgent 中枢',
-    description: '双层中枢：总控路由点名专家 Profile 派生后台 Worker，附归档汇报与两层巡检看门狗。',
+    name: { en: 'SuperAgent Hub', 'zh-CN': 'SuperAgent 中枢' },
+    description: {
+      en: 'Two-tier hub: the router dispatches expert-Profile background workers by name, with archived reporting and a two-layer inspection watchdog.',
+      'zh-CN': '双层中枢：总控路由点名专家 Profile 派生后台 Worker，附归档汇报与两层巡检看门狗。',
+    },
     icon: 'sparkles',
     version: '0.1.0',
     clientRoot: resolvePluginClientRoot(SUPERAGENT_PLUGIN_ID, 'superagent', 'superagent_plugin_client_missing'),
@@ -334,20 +337,46 @@ export function createSuperAgentPlugin(): PluginDefinition {
       ctx.configSchema({
         routerMode: {
           type: 'boolean',
-          label: '中枢路由收敛模式',
-          description: '开启后中枢会话剥离重度阻塞工具，仅保留派工与记忆工具',
+          label: { en: 'Router convergence mode', 'zh-CN': '中枢路由收敛模式' },
+          description: {
+            en: 'When on, the hub conversation sheds heavyweight blocking tools, keeping only dispatch and memory tools',
+            'zh-CN': '开启后中枢会话剥离重度阻塞工具，仅保留派工与记忆工具',
+          },
           default: true,
         },
         mutedSources: {
           type: 'string',
-          label: '静默事件源',
-          description: '逗号或换行分隔的精确 source 名称，命中即 0-Token 丢弃',
+          label: { en: 'Muted event sources', 'zh-CN': '静默事件源' },
+          description: {
+            en: 'Exact source names separated by commas or newlines; matches are dropped at zero token cost',
+            'zh-CN': '逗号或换行分隔的精确 source 名称，命中即 0-Token 丢弃',
+          },
           default: '',
         },
-        watchdogEnabled: { type: 'boolean', label: '启用看门狗', description: '关闭后不执行 Watchdog 巡检策略', default: true },
-        stalledAfterMs: { type: 'number', label: '停滞判定（毫秒）', description: '超过此时长视为停滞', default: 300_000 },
-        abortAfterMs: { type: 'number', label: '自动中止（毫秒）', description: '必须大于等于停滞判定', default: 1_800_000 },
-        errorThreshold: { type: 'number', label: '连续报错阈值', description: '达到阈值唤醒看门狗', default: 3 },
+        watchdogEnabled: {
+          type: 'boolean',
+          label: { en: 'Enable watchdog', 'zh-CN': '启用看门狗' },
+          description: { en: 'Turn off to skip the watchdog inspection policy', 'zh-CN': '关闭后不执行 Watchdog 巡检策略' },
+          default: true,
+        },
+        stalledAfterMs: {
+          type: 'number',
+          label: { en: 'Stall threshold (ms)', 'zh-CN': '停滞判定（毫秒）' },
+          description: { en: 'Idle longer than this is treated as stalled', 'zh-CN': '超过此时长视为停滞' },
+          default: 300_000,
+        },
+        abortAfterMs: {
+          type: 'number',
+          label: { en: 'Auto-abort (ms)', 'zh-CN': '自动中止（毫秒）' },
+          description: { en: 'Must be greater than or equal to the stall threshold', 'zh-CN': '必须大于等于停滞判定' },
+          default: 1_800_000,
+        },
+        errorThreshold: {
+          type: 'number',
+          label: { en: 'Consecutive error threshold', 'zh-CN': '连续报错阈值' },
+          description: { en: 'This many consecutive errors wakes the watchdog', 'zh-CN': '达到阈值唤醒看门狗' },
+          default: 3,
+        },
       })
 
       // 注册核心服务

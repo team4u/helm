@@ -74,8 +74,11 @@ export function createHerdrPlugin(
 ): PluginDefinition {
   return {
     id: 'builtin:herdr',
-    name: 'Herdr Terminals',
-    description: 'Cross-node Herdr coordination: drives remote CLI tool execution, terminal approval bridging (AskDoc CAS), and status-bar projection.',
+    name: { en: 'Herdr Terminals', 'zh-CN': 'Herdr 终端' },
+    description: {
+      en: 'Cross-node Herdr coordination: drives remote CLI tool execution, terminal approval bridging (AskDoc CAS), and status-bar projection.',
+      'zh-CN': '跨节点 Herdr 协同：驱动远端 CLI 工具执行、终端审批桥（AskDoc CAS）与状态栏投影。',
+    },
     icon: 'terminal',
     version: '0.1.0',
     clientRoot: resolveHerdrClientRoot(),
@@ -607,23 +610,26 @@ export function createHerdrPlugin(
 
       ctx.ui.sidebarItem({
         id: 'herdr',
-        label: 'Herdr Terminals',
+        label: { en: 'Herdr Terminals', 'zh-CN': 'Herdr 终端' },
         icon: 'terminal',
         target: 'screen:builtin:herdr/overview',
         order: 40,
       })
       ctx.ui.screen({
         id: 'overview',
-        label: 'Herdr Terminals Overview',
+        label: { en: 'Herdr Terminals Overview', 'zh-CN': 'Herdr 终端总览' },
         icon: 'terminal',
         client: { module: 'index.tsx', export: 'HerdrOverviewScreen' },
       })
       ctx.ui.profileRuntime({
         id: 'herdr',
         kind: 'herdr',
-        label: 'External Herdr Runtime',
+        label: { en: 'External Herdr Runtime', 'zh-CN': '外部 Herdr 运行时' },
         icon: 'terminal',
-        description: '(optional) bind to a Herdr CLI when used as a subagent',
+        description: {
+          en: '(optional) bind to a Herdr CLI when used as a subagent',
+          'zh-CN': '（可选）作为子代理使用时绑定 Herdr CLI',
+        },
         agentSuggestions: [...HERDR_AGENT_SUGGESTIONS],
       })
 
@@ -671,12 +677,28 @@ export function createHerdrPlugin(
 
       // ---- config schema (configurable before enable; changes take effect on next enable) ----
       ctx.configSchema({
-        session: { type: 'string', label: 'Herdr session name', description: 'Local herdr sessions/<name> subdirectory', default: '' },
-        socketPath: { type: 'string', label: 'Socket path override', description: 'Defaults to HERDR_SOCKET_PATH or the default session path', default: '' },
+        session: {
+          type: 'string',
+          label: { en: 'Herdr session name', 'zh-CN': 'Herdr 会话名' },
+          description: {
+            en: 'Local herdr sessions/<name> subdirectory',
+            'zh-CN': '本地 herdr sessions/<name> 子目录',
+          },
+          default: '',
+        },
+        socketPath: {
+          type: 'string',
+          label: { en: 'Socket path override', 'zh-CN': 'Socket 路径覆盖' },
+          description: {
+            en: 'Defaults to HERDR_SOCKET_PATH or the default session path',
+            'zh-CN': '缺省取 HERDR_SOCKET_PATH 或默认会话路径',
+          },
+          default: '',
+        },
         startupTimeoutMs: {
           type: 'number',
-          label: 'Agent startup timeout (ms)',
-          description: '3001..300000, default 30000',
+          label: { en: 'Agent startup timeout (ms)', 'zh-CN': 'Agent 启动超时（毫秒）' },
+          description: { en: '3001..300000, default 30000', 'zh-CN': '3001..300000，默认 30000' },
           default: 30000,
         },
       })

@@ -74,8 +74,11 @@ function resolveActionProfileId(
 export function createMemoryPlugin(): PluginDefinition {
   return {
     id: MEMORY_PLUGIN_ID,
-    name: 'Long-term Memory',
-    description: 'Autonomous long-term memory: manages MEMORY.md injection and toggles per Profile, providing the update_memory tool.',
+    name: { en: 'Long-term Memory', 'zh-CN': '长期记忆' },
+    description: {
+      en: 'Autonomous long-term memory: manages MEMORY.md injection and toggles per Profile, providing the update_memory tool.',
+      'zh-CN': '自主长期记忆：按 Profile 管理 MEMORY.md 注入与开关，提供 update_memory 工具。',
+    },
     icon: 'sparkles',
     version: '0.1.0',
     locked: false,

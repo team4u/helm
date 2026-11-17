@@ -87,8 +87,11 @@ const CATALOG_HOOK_PRIORITY = -100;
 export function createProfilePlugin(): PluginDefinition {
   return {
     id: 'builtin:profile',
-    name: 'Roles & Skills Foundation',
-    description: 'Resident foundation: injects SYSTEM.md and the available skill catalog per the conversation Profile, providing the load_skill tool and the default assistant role.',
+    name: { en: 'Roles & Skills Foundation', 'zh-CN': '角色与技能基座' },
+    description: {
+      en: 'Resident foundation: injects SYSTEM.md and the available skill catalog per the conversation Profile, providing the load_skill tool and the default assistant role.',
+      'zh-CN': '常驻基座：按会话 Profile 注入 SYSTEM.md 与可用技能目录，提供 load_skill 工具与默认助手角色。',
+    },
     icon: 'bot',
     version: '0.1.0',
     locked: true,
@@ -356,7 +359,7 @@ export function createProfilePlugin(): PluginDefinition {
       // ---- @ completion source declaration (reusing the host's generic completion rendering; label only orders plugin sources) ----
       ctx.ui.composerCompleter({
         id: 'profile-mentions',
-        label: 'Mention roles',
+        label: { en: 'Mention roles', 'zh-CN': '点名角色' },
         trigger: '@',
         priority: 100,
         source: { kind: 'action', actionId: 'list_mentionable' },
@@ -404,7 +407,7 @@ export function createProfilePlugin(): PluginDefinition {
       // conversation (the entry survives even with all conversations deleted; clicking creates a
       ctx.ui.sidebarItem({
         id: 'assistant',
-        label: 'Personal Assistant',
+        label: { en: 'Personal Assistant', 'zh-CN': '个人助理' },
         target: `conversation:profile:${DEFAULT_PROFILE_ID}`,
         order: 0,
       });

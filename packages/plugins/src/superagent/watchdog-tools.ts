@@ -231,12 +231,12 @@ export function registerWatchdogTools(
   const inspectSchema = {
     type: 'object',
     properties: {
-      conversationId: { type: 'integer', minimum: 1, description: '原生目标会话 ID（正整数）' },
+      conversationId: { type: 'integer', minimum: 1, description: 'Native target conversation ID (positive integer)' },
       probe: {
         type: 'object',
         properties: {
           targetKind: { type: 'string', enum: ['external'] },
-          nodeId: { type: 'string', minLength: 1, description: "外部目标节点 ID（缺省 'local'）" },
+          nodeId: { type: 'string', minLength: 1, description: "External target node ID (defaults to 'local')" },
           targetId: { type: 'string', minLength: 1 },
         },
         required: ['targetKind', 'targetId'],
@@ -255,14 +255,14 @@ export function registerWatchdogTools(
         properties: {
           activeProcesses: {
             type: 'array',
-            description: '会话工作目录 (nodeId ?? local, cwd) 的进程占用快照（已脱敏；探测失败时字段缺省）',
+            description: 'Process-occupancy snapshot of the conversation working directory (nodeId ?? local, cwd) (redacted; omitted when probing fails)',
             items: {
               type: 'object',
               properties: {
                 pid: { type: 'integer', minimum: 1 },
-                name: { type: 'string', description: '进程名（读取失败时缺省）' },
+                name: { type: 'string', description: 'Process name (omitted when reading fails)' },
                 source: { type: 'string', enum: ['cwd', 'fd'] },
-                path: { type: 'string', description: '引用方绝对路径（已脱敏）' },
+                path: { type: 'string', description: 'Referrer absolute path (redacted)' },
               },
               required: ['pid', 'source', 'path'],
               additionalProperties: false,
@@ -280,11 +280,11 @@ export function registerWatchdogTools(
     type: 'object',
     properties: {
       conversationId: { type: 'integer', minimum: 1 },
-      hint: { type: 'string', minLength: 1, description: '恢复提示文本（以 agent 来源提交给目标会话）' },
+      hint: { type: 'string', minLength: 1, description: 'Recovery hint text (submitted to the target conversation with agent origin)' },
       expectedStateSeq: {
         type: 'integer',
         minimum: 0,
-        description: '可选 CAS 水位（watchdog_inspect 现查 stateChangeSeq）；提供后目标状态已变则拒绝',
+        description: 'Optional CAS watermark (live stateChangeSeq from watchdog_inspect); when provided, rejects if the target state has advanced',
       },
     },
     required: ['conversationId', 'hint'],
@@ -299,7 +299,7 @@ export function registerWatchdogTools(
       expectedStateSeq: {
         type: 'integer',
         minimum: 0,
-        description: '可选 CAS 水位（watchdog_inspect 现查 stateChangeSeq）；提供后目标状态已变则拒绝',
+        description: 'Optional CAS watermark (live stateChangeSeq from watchdog_inspect); when provided, rejects if the target state has advanced',
       },
     },
     required: ['conversationId'],
@@ -320,7 +320,7 @@ export function registerWatchdogTools(
   ctx.tool<{ conversationId?: number; probe?: { targetKind: 'external'; nodeId?: string; targetId: string } }>({
     name: WATCHDOG_TOOL_INSPECT,
     description:
-      '读取巡检目标真实详情：conversationId 返回原生会话摘要与最近时间线（归属现查）；probe 返回最近一轮外部目标探针事实（只读，不假装控制外部窗格）。',
+      'Read the real details of an inspection target: conversationId returns the native conversation summary and recent timeline (ownership checked live); probe returns the latest external-target probe facts (read-only; never pretends to control external panes).',
     inputSchema: inspectSchema,
     scope: { profileIds: [WATCHDOG_PROFILE_ID] },
     async execute(input, context) {
@@ -332,7 +332,7 @@ export function registerWatchdogTools(
   ctx.tool<{ conversationId: number; hint: string; expectedStateSeq?: number }>({
     name: WATCHDOG_TOOL_RECOVER,
     description:
-      '向 owned（helm/bot）原生会话提交恢复提示（agent 来源，不等待模型回合）；归属经内核 guarded 端口在生效点原子复核，human 目标拒绝。',
+      'Submit a recovery hint to an owned (helm/bot) native conversation (agent origin, without waiting for a model turn); ownership is atomically rechecked at the effect point via the kernel guarded port; human targets are rejected.',
     inputSchema: recoverSchema,
     scope: { profileIds: [WATCHDOG_PROFILE_ID] },
     async execute(input, context) {
@@ -344,7 +344,7 @@ export function registerWatchdogTools(
   ctx.tool<{ conversationId: number; reason?: string; expectedStateSeq?: number }>({
     name: WATCHDOG_TOOL_ABORT,
     description:
-      '中止 owned（helm/bot）原生会话；归属经内核 guarded 端口在生效点原子复核，human/root/中枢/巡检自身拒绝。外部窗格只能经由其 owned 父会话间接中止。',
+      'Abort an owned (helm/bot) native conversation; ownership is atomically rechecked at the effect point via the kernel guarded port; human/root/hub/watchdog-itself are rejected. External panes can only be aborted indirectly via their owned parent conversation.',
     inputSchema: abortSchema,
     scope: { profileIds: [WATCHDOG_PROFILE_ID] },
     async execute(input, context) {
@@ -357,7 +357,7 @@ export function registerWatchdogTools(
   // 人工调用无会话上下文放行（目标所有权守卫照样生效），不 exposeAsTool 防重复工具。
   ctx.action<{ conversationId?: number; probe?: { targetKind: 'external'; nodeId?: string; targetId: string } }, Record<string, unknown>>({
     id: WATCHDOG_TOOL_INSPECT,
-    description: '读取巡检目标真实详情（原生会话或最近外部探针事实，只读）',
+    description: 'Read the real details of an inspection target (native conversation or the latest external probe facts, read-only)',
     idempotent: true,
     inputSchema: inspectSchema,
     outputSchema: inspectOutputSchema,
@@ -370,7 +370,7 @@ export function registerWatchdogTools(
 
   ctx.action<{ conversationId: number; hint: string; expectedStateSeq?: number }, Record<string, unknown>>({
     id: WATCHDOG_TOOL_RECOVER,
-    description: '向 owned 原生会话提交恢复提示（agent 来源，不等待模型回合；内核 guarded 原子复核归属）',
+    description: 'Submit a recovery hint to an owned native conversation (agent origin, without waiting for a model turn; ownership atomically rechecked via the kernel guarded port)',
     inputSchema: recoverSchema,
     outputSchema: mutationOutputSchema,
     scope: { profileIds: [WATCHDOG_PROFILE_ID] },
@@ -382,7 +382,7 @@ export function registerWatchdogTools(
 
   ctx.action<{ conversationId: number; reason?: string; expectedStateSeq?: number }, Record<string, unknown>>({
     id: WATCHDOG_TOOL_ABORT,
-    description: '中止 owned 原生会话（human/root/中枢/巡检自身拒绝；内核 guarded 原子复核归属）',
+    description: 'Abort an owned native conversation (human/root/hub/watchdog-itself rejected; ownership atomically rechecked via the kernel guarded port)',
     inputSchema: abortSchema,
     outputSchema: mutationOutputSchema,
     scope: { profileIds: [WATCHDOG_PROFILE_ID] },
@@ -404,7 +404,7 @@ export function registerWatchdogTickAction(
 ): void {
   ctx.action<Record<string, never>, { timestamp: number; conversations: number; probes: number; skipped?: boolean }>({
     id: 'watchdog_tick',
-    description: '手动触发一轮 Watchdog 巡检（采集原生会话与外部探针事实并执行规则表）',
+    description: 'Manually trigger one watchdog inspection round (collects native-conversation and external probe facts and runs the rule table)',
     idempotent: false,
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     outputSchema: {

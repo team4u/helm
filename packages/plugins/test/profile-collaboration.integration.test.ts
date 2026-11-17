@@ -228,8 +228,13 @@ test('协作1: builtin:profile 注册 @ 补全源（trigger/source/label）与�
       source?: { kind?: unknown; actionId?: unknown; actionPluginId?: unknown }
     }
     assert.equal(typeof spec.id, 'string', '补全源需要非空 id')
-    assert.equal(typeof spec.label, 'string', '补全源需要非空 label')
-    assert.ok((spec.label as string).length > 0, '补全源 label 应非空')
+    // 显示文案升级为 LocalizedText：登记形态为 en+zh-CN 双语资源（en 兜底非空）。
+    assert.ok(spec.label !== null && typeof spec.label === 'object', '补全源 label 应为 LocalizedText 资源对象')
+    const label = spec.label as { en?: unknown; 'zh-CN'?: unknown }
+    assert.equal(typeof label.en, 'string', '补全源 label.en 需为 string')
+    assert.ok((label.en as string).length > 0, '补全源 label.en 应非空')
+    assert.equal(typeof label['zh-CN'], 'string', '补全源 label.zh-CN 需为 string')
+    assert.ok((label['zh-CN'] as string).length > 0, '补全源 label.zh-CN 应非空')
     assert.equal(spec.trigger, '@', "点名补全源 trigger 应为 '@'")
     assert.ok(spec.source !== undefined && spec.source !== null, '补全源必须声明 source')
     assert.equal(spec.source!.kind, 'action', '点名补全应采用 action 数据源')
