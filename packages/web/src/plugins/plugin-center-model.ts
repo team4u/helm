@@ -6,8 +6,24 @@
  */
 import type { HelmLocale, PluginSummary } from '@helm/protocol/browser'
 import { resolveLocalizedText } from '@helm/protocol/browser'
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
 export type PluginStatusFilter = 'all' | 'enabled' | 'disabled'
+
+/** Localized status filter tab label (reuses common.all / common.enabled / common.disabled). */
+export function pluginStatusTabLabel(
+  status: PluginStatusFilter,
+  t: WebMessageTranslator = englishWebTranslator,
+): string {
+  switch (status) {
+    case 'all':
+      return t('common.all')
+    case 'enabled':
+      return t('common.enabled')
+    case 'disabled':
+      return t('common.disabled')
+  }
+}
 
 export interface PluginFilterState {
   query?: string

@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useRef, useState } from 'react'
+import React, { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
   extractPluginUsages,
   getPluginDescription,
@@ -9,6 +9,7 @@ import type { HelmLocale, PluginSummary } from '@helm/protocol/browser'
 import { DEFAULT_HELM_LOCALE, resolveLocalizedText } from '@helm/protocol/browser'
 import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../lib/api.js'
 import { HelmIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Switch } from '@helm/plugin-client'
+import { createWebTranslator } from '../i18n/catalog.js'
 import { HelmStoreContext } from '../lib/store-context.js'
 import {
   AlertDialog,
@@ -86,6 +87,7 @@ export function PluginConfigForm({
   locale,
   onSaved,
 }: PluginConfigFormProps): React.JSX.Element {
+  const t = useMemo(() => createWebTranslator(locale), [locale])
   const entries = Object.entries(config.schema ?? {})
   const [values, setValues] = useState<Record<string, ConfigValue>>(() => initialFormValues(config))
   const [saving, setSaving] = useState(false)
@@ -98,7 +100,7 @@ export function PluginConfigForm({
   }, [config])
 
   if (entries.length === 0) {
-    return <div className="text-subtle">This plugin declares no configuration options.</div>
+    return <div className="text-subtle">{t('plugins.config.empty')}</div>
   }
 
   const save = async () => {
@@ -149,13 +151,13 @@ export function PluginConfigForm({
                 </span>
                 {schema.required && <span className="text-err">*</span>}
                 {source === 'configured' && (
-                  <span className="badge badge-neutral plugin-config-source-tag" title="Explicitly configured by user">
-                    Configured
+                  <span className="badge badge-neutral plugin-config-source-tag" title={t('plugins.config.configuredTitle')}>
+                    {t('plugins.config.configured')}
                   </span>
                 )}
                 {source === 'default' && (
-                  <span className="text-subtle plugin-config-source-tag" title="Using default value">
-                    Default
+                  <span className="text-subtle plugin-config-source-tag" title={t('plugins.config.defaultTitle')}>
+                    {t('common.default')}
                   </span>
                 )}
               </label>
@@ -165,7 +167,7 @@ export function PluginConfigForm({
                     id={fieldId}
                     checked={values[key] === true}
                     onChange={(checked) => setValues((prev) => ({ ...prev, [key]: checked }))}
-                    label={values[key] === true ? 'On' : 'Close'}
+                    label={values[key] === true ? t('plugins.config.switchOn') : t('plugins.config.switchOff')}
                   />
                 ) : schema.type === 'number' ? (
                   <input
@@ -192,10 +194,10 @@ export function PluginConfigForm({
                     placeholder={
                       schema.secret
                         ? secretConfigured(config.values?.[key])
-                          ? 'Configured (leave empty to keep unchanged)'
+                          ? t('plugins.config.secretConfiguredPlaceholder')
                           : (schema.description !== undefined
                               ? resolveLocalizedText(schema.description, locale)
-                              : '') || 'Not configured'
+                              : '') || t('plugins.config.secretUnconfiguredPlaceholder')
                         : schema.description !== undefined
                           ? resolveLocalizedText(schema.description, locale)
                           : undefined
@@ -216,10 +218,10 @@ export function PluginConfigForm({
                     className="btn btn-ghost btn-xs"
                     disabled={saving || resettingKey !== null}
                     onClick={() => void resetField(key)}
-                    title={schema.secret ? 'Clear saved secret' : 'Reset to default'}
+                    title={schema.secret ? t('plugins.config.clearSecretTitle') : t('plugins.config.resetDefaultTitle')}
                   >
                     <HelmIcon name="rotate-ccw" size={11} />
-                    <span>{schema.secret ? 'Clear' : 'Reset'}</span>
+                    <span>{schema.secret ? t('plugins.config.clear') : t('plugins.config.reset')}</span>
                   </button>
                 )}
               </div>
@@ -236,7 +238,7 @@ export function PluginConfigForm({
       <div>
         <button className="btn btn-primary btn-sm" disabled={saving} onClick={() => void save()}>
           <HelmIcon name="check" size={12} />
-          <span>{saved ? 'Saved' : 'Save configuration'}</span>
+          <span>{saved ? t('plugins.config.saved') : t('plugins.config.save')}</span>
         </button>
       </div>
     </div>
@@ -267,6 +269,7 @@ export function PluginDetailDrawer({
   // LocalizedText 显示元数据（插件名 / 配置字段 label / 设置面板 label）按
   // store 权威 locale 解析；保留无 Provider 的 SSR 渲染容忍（缺省英文桥接）。
   const locale = store?.locale ?? DEFAULT_HELM_LOCALE
+  const t = useMemo(() => createWebTranslator(locale), [locale])
   const [config, setConfig] = useState<(PluginConfigResponse & { pluginId: string }) | null>(null)
   const [loadingConfig, setLoadingConfig] = useState(false)
   const [configError, setConfigError] = useState<string | null>(null)
@@ -326,12 +329,10 @@ export function PluginDetailDrawer({
         if (usages.length > 0) {
           setInUseConfirm({ plugin, usages })
         } else {
-          setActionError('Disable failed: the plugin holds persistent resources (plugin_in_use).')
+          setActionError(t('plugins.drawer.disableInUseError'))
         }
       } else if (err instanceof ApiClientError && err.status === 409) {
-        setActionError(
-          `Disable failed: plugin has live tasks (${err.code}). Wait for them to finish or abort them, then retry.`,
-        )
+        setActionError(t('plugins.drawer.disableLiveTasksError', { code: err.code }))
       } else {
         setActionError(err instanceof Error ? err.message : String(err))
       }
@@ -345,19 +346,25 @@ export function PluginDetailDrawer({
     setActionError(null)
     try {
       const result = await pluginsApi.update(plugin.id)
-      const versionLabel = result.record.version || 'Unknown version'
+      const versionLabel = result.record.version || t('plugins.package.unknownVersion')
       const noticeBody = result.changed
-        ? `Updated to ${versionLabel} (was ${result.previousVersion || 'Unknown version'})`
-        : `Source unchanged; still at ${versionLabel}`
+        ? t('plugins.package.updatedBody', {
+            version: versionLabel,
+            previous: result.previousVersion || t('plugins.package.unknownVersion'),
+          })
+        : t('plugins.package.unchangedBody', { version: versionLabel })
       store?.pushNotice({
         type: 'notification',
         level: 'info',
-        title: 'Plugin package updated',
-        body: `${resolveLocalizedText(plugin.name, locale) || plugin.id}：${noticeBody}`,
+        title: t('plugins.package.updateNoticeTitle'),
+        body: t('plugins.package.updateNoticeBody', {
+          name: resolveLocalizedText(plugin.name, locale) || plugin.id,
+          detail: noticeBody,
+        }),
       })
       onPackageChanged?.()
     } catch (err) {
-      setActionError(pluginPackageErrorText(err, 'Update'))
+      setActionError(pluginPackageErrorText(err, t('plugins.package.action.update'), t))
     } finally {
       setPackageOp('idle')
     }
@@ -373,14 +380,17 @@ export function PluginDetailDrawer({
       store?.pushNotice({
         type: 'notification',
         level: 'info',
-        title: 'Plugin package uninstalled',
-        body: `${resolveLocalizedText(plugin.name, locale) || plugin.id} removed (${plugin.id})`,
+        title: t('plugins.package.removeNoticeTitle'),
+        body: t('plugins.package.removeNoticeBody', {
+          name: resolveLocalizedText(plugin.name, locale) || plugin.id,
+          id: plugin.id,
+        }),
       })
       setConfirmRemoveOpen(false)
       onRemoved?.()
       onPackageChanged?.()
     } catch (err) {
-      setActionError(pluginPackageErrorText(err, 'Uninstall'))
+      setActionError(pluginPackageErrorText(err, t('plugins.package.action.uninstall'), t))
       setConfirmRemoveOpen(false)
     } finally {
       setPackageOp('idle')
@@ -419,8 +429,10 @@ export function PluginDetailDrawer({
           role="dialog"
           aria-label={
             plugin
-              ? `${resolveLocalizedText(plugin.name, locale) || plugin.id} details`
-              : 'Plugin details'
+              ? t('plugins.drawer.ariaSelected', {
+                  name: resolveLocalizedText(plugin.name, locale) || plugin.id,
+                })
+              : t('plugins.drawer.titleFallback')
           }
         >
           {/* Header metadata */}
@@ -429,37 +441,47 @@ export function PluginDetailDrawer({
               <div className="plugin-drawer-title-col">
                 <div className="plugin-drawer-title-row">
                   <DialogTitle className="plugin-drawer-title">
-                    {(plugin !== null ? resolveLocalizedText(plugin.name, locale) : '') || plugin?.id || 'Plugin details'}
+                    {(plugin !== null ? resolveLocalizedText(plugin.name, locale) : '') ||
+                      plugin?.id ||
+                      t('plugins.drawer.titleFallback')}
                   </DialogTitle>
                   {versionLabel && (
-                    <span className="badge badge-neutral mono" title={`Version ${versionLabel}`}>
+                    <span className="badge badge-neutral mono" title={t('plugins.card.versionTitle', { version: versionLabel })}>
                       {versionLabel}
                     </span>
                   )}
                   {plugin?.locked && (
-                    <span className="badge badge-warn" title="Resident core plugin; cannot be disabled">
+                    <span className="badge badge-warn" title={t('plugins.card.lockedTitle')}>
                       <HelmIcon name="lock" size={10} />
-                      <span>Resident</span>
+                      <span>{t('plugins.resident')}</span>
                     </span>
                   )}
                   {plugin?.dependencies && plugin.dependencies.length > 0 && (
                     <span
                       className="badge badge-neutral"
-                      title={`Dependencies: ${plugin.dependencies.join(', ')} (must be enabled first)`}
+                      title={t('plugins.drawer.dependenciesTitle', {
+                        deps: plugin.dependencies.join(t('plugins.desc.listSeparator')),
+                      })}
                     >
                       <HelmIcon name="network" size={10} />
-                      <span>{`Dependencies ${plugin.dependencies.length}`}</span>
+                      <span>{t('plugins.drawer.dependenciesCount', { count: plugin.dependencies.length })}</span>
                     </span>
                   )}
                 </div>
                 {plugin && <div className="plugin-drawer-id mono">{plugin.id}</div>}
                 {plugin && (
-                  <div className="plugin-drawer-desc">{getPluginDescription(plugin, locale)}</div>
+                  <div className="plugin-drawer-desc">{getPluginDescription(plugin, locale, t)}</div>
                 )}
                 {plugin?.status === 'failed' && plugin.error && (
                   <div className="plugin-drawer-failed-note" role="note">
-                    <span className="badge badge-err">Failed to load</span>
-                    <span className="mono selectable">{`${plugin.error.code}: ${plugin.error.message} (stage ${plugin.error.stage})`}</span>
+                    <span className="badge badge-err">{t('plugins.drawer.failedToLoad')}</span>
+                    <span className="mono selectable">
+                      {t('plugins.drawer.failedNoteDetail', {
+                        code: plugin.error.code,
+                        message: plugin.error.message,
+                        stage: plugin.error.stage,
+                      })}
+                    </span>
                   </div>
                 )}
               </div>
@@ -467,8 +489,8 @@ export function PluginDetailDrawer({
             <DialogClose asChild>
               <button
                 className="btn btn-ghost btn-icon-sm plugin-drawer-close-btn"
-                aria-label="Close"
-                title="Close"
+                aria-label={t('common.close')}
+                title={t('common.close')}
               >
                 <HelmIcon name="x" size={14} />
               </button>
@@ -478,25 +500,25 @@ export function PluginDetailDrawer({
           {/* Drawer body */}
           <div className="plugin-drawer-body">
             {!plugin ? (
-              <div className="empty-state">No plugin selected</div>
+              <div className="empty-state">{t('plugins.drawer.noSelection')}</div>
             ) : (
               <>
                 {/* Quick actions and enable/disable bar */}
                 <div className="plugin-drawer-action-bar">
                   <div className="plugin-drawer-status-wrap">
-                    <span className="text-subtle">Current status</span>
+                    <span className="text-subtle">{t('plugins.drawer.currentStatus')}</span>
                     {isPluginFailed(plugin) ? (
-                      <span className="badge badge-err" title="Plugin failed to load or enable; see diagnostics below">
+                      <span className="badge badge-err" title={t('plugins.drawer.errorBadgeTitle')}>
                         <HelmIcon name="alert-circle" size={10} />
-                        <span>Error</span>
+                        <span>{t('plugins.status.error')}</span>
                       </span>
                     ) : plugin.enabled ? (
                       <span className="badge badge-ok">
                         <HelmIcon name="check" size={10} />
-                        <span>Enabled</span>
+                        <span>{t('common.enabled')}</span>
                       </span>
                     ) : (
-                      <span className="badge badge-neutral">Disabled</span>
+                      <span className="badge badge-neutral">{t('common.disabled')}</span>
                     )}
                   </div>
                   <div className="plugin-drawer-screen-actions">
@@ -507,8 +529,11 @@ export function PluginDetailDrawer({
                           className="btn btn-sm"
                           title={
                             pluginScreens.length > 1
-                              ? `Open main view ${primaryScreen.screenId} (${pluginScreens.length} views in total)`
-                              : 'Open main view'
+                              ? t('plugins.drawer.openMainViewMultiTitle', {
+                                  screenId: primaryScreen.screenId,
+                                  count: pluginScreens.length,
+                                })
+                              : t('plugins.drawer.openMainViewTitle')
                           }
                           onClick={() =>
                             store.openTarget({
@@ -519,12 +544,12 @@ export function PluginDetailDrawer({
                           }
                         >
                           <HelmIcon name="play" size={12} />
-                          <span>Open view</span>
+                          <span>{t('plugins.openView')}</span>
                         </button>
                         <button
                           type="button"
                           className="btn btn-sm split-toggle-btn plugin-drawer-split-btn"
-                          title="Open side-by-side in the right split"
+                          title={t('plugins.drawer.openSplitTitle')}
                           onClick={() =>
                             store.openTarget(
                               {
@@ -537,7 +562,7 @@ export function PluginDetailDrawer({
                           }
                         >
                           <HelmIcon name="columns" size={12} />
-                          <span>Open in split</span>
+                          <span>{t('plugins.drawer.openSplit')}</span>
                         </button>
                       </>
                     )}
@@ -550,12 +575,12 @@ export function PluginDetailDrawer({
                       {plugin.enabled ? (
                         <>
                           <HelmIcon name="square" size={12} />
-                          <span>Disable plugin</span>
+                          <span>{t('plugins.drawer.disablePlugin')}</span>
                         </>
                       ) : (
                         <>
                           <HelmIcon name="play" size={12} />
-                          <span>Enable plugin</span>
+                          <span>{t('plugins.drawer.enablePlugin')}</span>
                         </>
                       )}
                     </button>
@@ -574,14 +599,14 @@ export function PluginDetailDrawer({
                   <div className="plugin-drawer-section plugin-package-section">
                     <h4 className="plugin-drawer-section-title">
                       <HelmIcon name="boxes" size={13} />
-                      <span>Package</span>
+                      <span>{t('plugins.package.sectionTitle')}</span>
                     </h4>
                     <div className="plugin-package-meta">
                       <div className="form-grid">
-                        <span className="form-grid-label"><span>Source</span></span>
+                        <span className="form-grid-label"><span>{t('plugins.package.sourceLabel')}</span></span>
                         <span className="form-grid-value">
                           <span className="badge badge-neutral mono" data-source-kind={plugin.managed.source.kind}>
-                            {pluginSourceBadgeLabel(plugin.managed.source)}
+                            {pluginSourceBadgeLabel(plugin.managed.source, t)}
                           </span>
                           <span className="mono selectable plugin-package-source-text">
                             {pluginSourceDisplayText(plugin.managed.source)}
@@ -590,25 +615,25 @@ export function PluginDetailDrawer({
                       </div>
                       {plugin.managed.installedVersion !== '' && (
                         <div className="form-grid">
-                          <span className="form-grid-label"><span>Installed version</span></span>
+                          <span className="form-grid-label"><span>{t('plugins.package.installedVersionLabel')}</span></span>
                           <span className="form-grid-value mono">{plugin.managed.installedVersion}</span>
                         </div>
                       )}
-                      {formatInstalledAt(plugin.managed.installedAt) !== '' && (
+                      {formatInstalledAt(plugin.managed.installedAt, locale) !== '' && (
                         <div className="form-grid">
-                          <span className="form-grid-label"><span>Installed at</span></span>
-                          <span className="form-grid-value">{formatInstalledAt(plugin.managed.installedAt)}</span>
+                          <span className="form-grid-label"><span>{t('plugins.package.installedAtLabel')}</span></span>
+                          <span className="form-grid-value">{formatInstalledAt(plugin.managed.installedAt, locale)}</span>
                         </div>
                       )}
                     </div>
                     <div className="plugin-package-actions">
                       <button className="btn btn-sm" disabled={packageOp !== 'idle'} onClick={() => void handleUpdatePackage()}>
                         <HelmIcon name="refresh-cw" size={12} />
-                        <span>{packageOp === 'updating' ? 'Updating…' : 'Check for updates'}</span>
+                        <span>{packageOp === 'updating' ? t('plugins.package.updating') : t('plugins.package.checkUpdates')}</span>
                       </button>
                       <button className="btn btn-danger btn-sm" disabled={packageOp !== 'idle'} onClick={() => setConfirmRemoveOpen(true)}>
                         <HelmIcon name="trash-2" size={12} />
-                        <span>{packageOp === 'removing' ? 'Uninstalling…' : 'Uninstall plugin'}</span>
+                        <span>{packageOp === 'removing' ? t('plugins.package.uninstalling') : t('plugins.package.uninstallPlugin')}</span>
                       </button>
                     </div>
                   </div>
@@ -619,9 +644,11 @@ export function PluginDetailDrawer({
                   <div className="callout callout-error" role="alert">
                     <HelmIcon name="alert-circle" size={13} />
                     <div className="plugin-diagnostic-body">
-                      <div className="plugin-diagnostic-title">Plugin failed to load or enable</div>
+                      <div className="plugin-diagnostic-title">{t('plugins.drawer.diagnosticTitle')}</div>
                       <div className="text-subtle">
-                        {`Failure stage: ${pluginErrorStageLabel(plugin.error.stage)} · Error code: `}
+                        {t('plugins.drawer.diagnosticMetaPrefix', {
+                          stage: pluginErrorStageLabel(plugin.error.stage, t),
+                        })}
                         <span className="mono">{plugin.error.code}</span>
                       </div>
                       <div className="selectable plugin-diagnostic-message">{plugin.error.message}</div>
@@ -634,8 +661,8 @@ export function PluginDetailDrawer({
                   <div className="callout callout-warn" role="alert">
                     <HelmIcon name="alert-triangle" size={13} />
                     <div className="plugin-inuse-body">
-                      <div className="plugin-diagnostic-title">Plugin resource confirmation (plugin_in_use)</div>
-                      <div className="text-subtle">The related resources below go offline after disabling; configuration is kept and restored on next enable:</div>
+                      <div className="plugin-diagnostic-title">{t('plugins.drawer.inUseTitle')}</div>
+                      <div className="text-subtle">{t('plugins.drawer.inUseHint')}</div>
                       <ul className="plugin-inuse-list">
                         {inUseConfirm.usages.map((usage) => (
                           <li key={`${usage.kind}/${usage.id}`} title={`${usage.kind}/${usage.id}`}>
@@ -645,11 +672,11 @@ export function PluginDetailDrawer({
                       </ul>
                       <div className="plugin-inuse-actions">
                         <button type="button" className="btn btn-ghost btn-sm" onClick={() => setInUseConfirm(null)}>
-                          Cancel
+                          {t('common.cancel')}
                         </button>
                         <button type="button" className="btn btn-danger btn-sm" disabled={toggling} onClick={() => void handleForceDisable()}>
                           <HelmIcon name="square" size={12} />
-                          <span>Force disable</span>
+                          <span>{t('plugins.drawer.forceDisable')}</span>
                         </button>
                       </div>
                     </div>
@@ -660,7 +687,7 @@ export function PluginDetailDrawer({
                 <div className="plugin-drawer-section">
                   <h4 className="plugin-drawer-section-title">
                     <HelmIcon name="boxes" size={13} />
-                    <span>Capabilities</span>
+                    <span>{t('plugins.drawer.capabilities')}</span>
                   </h4>
                   <div className="plugin-drawer-capabilities">
                     {/* Tools */}
@@ -680,7 +707,7 @@ export function PluginDetailDrawer({
                           ))}
                         </div>
                       ) : (
-                        <div className="text-subtle">No declared tools</div>
+                        <div className="text-subtle">{t('plugins.drawer.noTools')}</div>
                       )}
                     </div>
 
@@ -701,7 +728,7 @@ export function PluginDetailDrawer({
                           ))}
                         </div>
                       ) : (
-                        <div className="text-subtle">No declared actions</div>
+                        <div className="text-subtle">{t('plugins.drawer.noActions')}</div>
                       )}
                     </div>
 
@@ -722,7 +749,7 @@ export function PluginDetailDrawer({
                           ))}
                         </div>
                       ) : (
-                        <div className="text-subtle">No hooks</div>
+                        <div className="text-subtle">{t('plugins.drawer.noHooks')}</div>
                       )}
                     </div>
                   </div>
@@ -732,12 +759,12 @@ export function PluginDetailDrawer({
                 <div className="plugin-drawer-section">
                   <h4 className="plugin-drawer-section-title">
                     <HelmIcon name="sliders" size={13} />
-                    <span>Configuration</span>
+                    <span>{t('plugins.drawer.configuration')}</span>
                   </h4>
                   {loadingConfig ? (
                     <div className="loading-state">
                       <HelmIcon name="loader" size={13} className="spin-slow" />
-                      <span>Loading configuration...</span>
+                      <span>{t('plugins.drawer.loadingConfig')}</span>
                     </div>
                   ) : configError ? (
                     <div className="callout callout-error" role="alert">
@@ -752,7 +779,7 @@ export function PluginDetailDrawer({
                       onSaved={() => void reloadConfig(plugin.id)}
                     />
                   ) : (
-                    <div className="text-subtle">Configuration load failed or not declared.</div>
+                    <div className="text-subtle">{t('plugins.drawer.configUnavailable')}</div>
                   )}
                 </div>
 
@@ -763,9 +790,9 @@ export function PluginDetailDrawer({
                       <HelmIcon name="layout" size={13} />
                       <span>
                         {settingsPanels.length > 1
-                          ? `Extension settings panels (${settingsPanels.length})`
+                          ? t('plugins.drawer.settingsPanelsCount', { count: settingsPanels.length })
                           : resolveLocalizedText(settingsPanels[0]!.spec.label, locale) ||
-                            'Extension settings panels'}
+                            t('plugins.drawer.settingsPanels')}
                       </span>
                     </h4>
                     {settingsPanels.map((panel) => (
@@ -781,7 +808,7 @@ export function PluginDetailDrawer({
                         <PluginUiView
                           pluginId={plugin.id}
                           spec={panel.spec}
-                          label={`Settings panel ${panel.spec.id}`}
+                          label={t('plugins.drawer.settingsPanelLabel', { id: panel.spec.id })}
                         />
                       </div>
                     ))}
@@ -806,16 +833,17 @@ export function PluginDetailDrawer({
             <AlertDialogContent
               className="modal plugin-remove-confirm"
               role="alertdialog"
-              aria-label="Confirm plugin uninstall"
+              aria-label={t('plugins.package.confirmUninstallAria')}
             >
             <div className="modal-header">
-              <AlertDialogTitle className="modal-title">Uninstall plugin</AlertDialogTitle>
+              <AlertDialogTitle className="modal-title">{t('plugins.package.uninstallPlugin')}</AlertDialogTitle>
             </div>
             <div className="modal-body">
               <AlertDialogDescription className="plugin-remove-confirm-desc">
-                Uninstall{' '}
-                {(plugin !== null ? resolveLocalizedText(plugin.name, locale) : '') || plugin?.id || ''}{' '}
-                ({plugin?.id})? The install directory and registry entry will be deleted; this cannot be undone.
+                {t('plugins.package.confirmUninstallBody', {
+                  name: (plugin !== null ? resolveLocalizedText(plugin.name, locale) : '') || plugin?.id || '',
+                  id: plugin?.id ?? '',
+                })}
               </AlertDialogDescription>
             </div>
             <div className="modal-footer">
@@ -825,7 +853,7 @@ export function PluginDetailDrawer({
                   disabled={packageOp === 'removing'}
                   onClick={() => setConfirmRemoveOpen(false)}
                 >
-                  Cancel
+                  {t('common.cancel')}
                 </button>
               </AlertDialogCancel>
               <AlertDialogAction asChild>
@@ -835,7 +863,7 @@ export function PluginDetailDrawer({
                   onClick={() => void handleRemovePackage()}
                 >
                   <HelmIcon name="trash-2" size={12} />
-                  <span>{packageOp === 'removing' ? 'Uninstalling…' : 'Confirm uninstall'}</span>
+                  <span>{packageOp === 'removing' ? t('plugins.package.uninstalling') : t('plugins.package.confirmUninstall')}</span>
                 </button>
               </AlertDialogAction>
             </div>

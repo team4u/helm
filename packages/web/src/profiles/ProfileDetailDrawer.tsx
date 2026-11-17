@@ -14,6 +14,7 @@ import {
 } from './profile-center-model.js'
 import { HelmIcon, Checkbox, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, PluginSlot, Select, type SelectOption, Switch } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
 import { ConfirmDialog } from '../ui/AlertDialog.js'
 import { ThinkingLevelControl } from '../ui/ThinkingLevelControl.js'
@@ -97,6 +98,7 @@ export function ProfileDetailDrawer({
   onDeleted,
 }: ProfileDetailDrawerProps): React.JSX.Element {
   const store = useHelmStore()
+  const { t } = useWebLocale()
   const [form, setForm] = useState<FormState>(() => createInitialForm(profile, isNew))
   const [baseline, setBaseline] = useState<FormState>(() => createInitialForm(profile, isNew))
   const [isSaving, setIsSaving] = useState(false)
@@ -207,26 +209,26 @@ export function ProfileDetailDrawer({
 
   // 模型下拉选项列表（过滤为已配置模型）
   const modelOptions = useMemo<SelectOption<string>[]>(() => {
-    return buildProfileModelOptions(store.models ?? [], form.model)
-  }, [store.models, form.model])
+    return buildProfileModelOptions(store.models ?? [], form.model, t)
+  }, [store.models, form.model, t])
 
   // 默认节点下拉选项：未绑定项 + store.nodes 全量；既有值不在节点列表时补「未知节点」回退项
   const nodeOptions = useMemo<SelectOption<string>[]>(() => {
     const list: SelectOption<string>[] = [
-      { value: '', label: 'Unbound (local node)', icon: 'monitor' },
+      { value: '', label: t('profiles.drawer.unboundNode'), icon: 'monitor' },
       ...store.nodes.map((n) => ({
         value: n.id,
-        label: nodeOptionLabel(n),
+        label: nodeOptionLabel(n, t),
         icon: n.id === 'local' || n.kind === 'local' ? 'monitor' : 'network',
-        meta: n.kind === 'local' ? undefined : n.online ? 'Online' : 'Offline',
+        meta: n.kind === 'local' ? undefined : n.online ? t('common.online') : t('common.offline'),
       })),
     ]
     const current = form.nodeId.trim()
     if (current !== '' && !list.some((o) => o.value === current)) {
-      list.push({ value: current, label: `${current} (unknown node)`, icon: 'alert-circle' })
+      list.push({ value: current, label: t('profiles.drawer.unknownNode', { id: current }), icon: 'alert-circle' })
     }
     return list
-  }, [store.nodes, form.nodeId])
+  }, [store.nodes, form.nodeId, t])
 
   // 所选模型支持的思考档位：未绑定模型时无档位（跟随全局缺省）；
   // 目录缺失（模型未配置/外部）时无档位可选，仅保留既有值提示。
@@ -259,18 +261,18 @@ export function ProfileDetailDrawer({
     setError(null)
     const normalizedId = form.id.trim()
     if (!normalizedId) {
-      setError('Enter a profile ID')
+      setError(t('profiles.drawer.error.idRequired'))
       return
     }
 
     if (isNew && !profileIdValid(normalizedId)) {
-      setError('Profile ID must contain only lowercase letters, digits and hyphens (e.g. code-reviewer)')
+      setError(t('profiles.drawer.error.idInvalid'))
       return
     }
 
-    const starterError = validateStarterDrafts(form.starters)
+    const starterError = validateStarterDrafts(form.starters, t)
     if (starterError !== null) {
-      setError(`Starter ${starterError.index + 1}: ${starterError.error}`)
+      setError(t('profiles.drawer.error.starterPrefix', { index: starterError.index + 1, error: starterError.error }))
       return
     }
 
@@ -339,8 +341,8 @@ export function ProfileDetailDrawer({
   }
 
   const titleText = isNew
-    ? 'New agent profile'
-    : form.name || form.id || profile?.name || profile?.id || 'Profile details'
+    ? t('profiles.drawer.newTitle')
+    : form.name || form.id || profile?.name || profile?.id || t('profiles.drawer.titleFallback')
 
   return (
     <Dialog
@@ -366,9 +368,9 @@ export function ProfileDetailDrawer({
                     {titleText}
                   </DialogTitle>
                   {isSystem && (
-                    <span className="badge badge-warn" title="Built-in system profile; protected">
+                    <span className="badge badge-warn" title={t('profiles.drawer.systemPillTitle')}>
                       <HelmIcon name="lock" size={10} />
-                      <span>System</span>
+                      <span>{t('profiles.card.systemPill')}</span>
                     </span>
                   )}
                 </div>
@@ -381,8 +383,8 @@ export function ProfileDetailDrawer({
               <button
                 type="button"
                 className="btn btn-ghost btn-icon-sm"
-                aria-label="Close drawer"
-                title="Close"
+                aria-label={t('profiles.drawer.closeAria')}
+                title={t('common.close')}
                 onClick={handleRequestClose}
               >
                 <HelmIcon name="x" size={14} />
@@ -403,7 +405,7 @@ export function ProfileDetailDrawer({
             <section className="section-flat">
               <div className="form-grid">
                 <label htmlFor="profile-form-id" className="form-grid-label">
-                  Profile ID
+                  {t('profiles.drawer.field.id')}
                 </label>
                 <div className="form-grid-value">
                   {isNew ? (
@@ -411,7 +413,7 @@ export function ProfileDetailDrawer({
                       id="profile-form-id"
                       type="text"
                       className="input mono"
-                      placeholder="Letters, digits and hyphens, e.g. code-reviewer"
+                      placeholder={t('profiles.drawer.field.idPlaceholder')}
                       value={form.id}
                       onChange={(e) =>
                         setForm((prev) => ({
@@ -433,14 +435,14 @@ export function ProfileDetailDrawer({
                 </div>
 
                 <label htmlFor="profile-form-name" className="form-grid-label">
-                  Profile name
+                  {t('profiles.drawer.field.name')}
                 </label>
                 <div className="form-grid-value">
                   <input
                     id="profile-form-name"
                     type="text"
                     className="input"
-                    placeholder="e.g. Code Reviewer, Software Architect"
+                    placeholder={t('profiles.drawer.field.namePlaceholder')}
                     value={form.name}
                     onChange={(e) =>
                       setForm((prev) => ({ ...prev, name: e.target.value }))
@@ -452,14 +454,14 @@ export function ProfileDetailDrawer({
                   htmlFor="profile-form-desc"
                   className="form-grid-label form-grid-align-start"
                 >
-                  Profile description
+                  {t('profiles.drawer.field.description')}
                 </label>
                 <div className="form-grid-value">
                   <textarea
                     id="profile-form-desc"
                     className="input profile-desc-textarea"
                     rows={3}
-                    placeholder="Briefly describe the duties, background and strengths of this profile..."
+                    placeholder={t('profiles.drawer.field.descriptionPlaceholder')}
                     value={form.description}
                     onChange={(e) =>
                       setForm((prev) => ({ ...prev, description: e.target.value }))
@@ -468,7 +470,7 @@ export function ProfileDetailDrawer({
                 </div>
 
                 <label htmlFor="profile-form-model" className="form-grid-label">
-                  Default model
+                  {t('profiles.drawer.field.defaultModel')}
                 </label>
                 <div className="form-grid-value">
                   <Select
@@ -491,17 +493,17 @@ export function ProfileDetailDrawer({
                       })
                     }
                     inline={inline}
-                    placeholder="Follow system default"
+                    placeholder={t('profiles.modelOption.followSystemDefault')}
                   />
                 </div>
 
                 <label className="form-grid-label form-grid-align-start" htmlFor="profile-form-thinking">
-                  Thinking level
+                  {t('profiles.drawer.field.thinkingLevel')}
                 </label>
                 <div className="form-grid-value">
                   {form.model.trim() === '' ? (
                     <span className="text-subtle" id="profile-form-thinking">
-                      Follows the global default thinking level when no model is bound.
+                      {t('profiles.drawer.thinking.unbound')}
                     </span>
                   ) : profileThinkingSupported ? (
                     <ThinkingLevelControl
@@ -515,21 +517,21 @@ export function ProfileDetailDrawer({
                     />
                   ) : (
                     <span className="text-subtle" id="profile-form-thinking">
-                      The selected model does not support thinking levels.
+                      {t('profiles.drawer.thinking.unsupportedModel')}
                     </span>
                   )}
                   {profileThinkingLevelUnsupported && (
                     <div className="callout callout-warn" role="status">
                       <HelmIcon name="alert-triangle" size={13} />
                       <span className="callout-text">
-                        Current level {form.thinkingLevel} is not supported by the selected model; adjust before saving.
+                        {t('profiles.drawer.thinking.unsupportedLevel', { level: form.thinkingLevel })}
                       </span>
                     </div>
                   )}
                 </div>
 
                 <label htmlFor="profile-form-node" className="form-grid-label">
-                  Default node
+                  {t('profiles.drawer.field.defaultNode')}
                 </label>
                 <div className="form-grid-value">
                   <Select
@@ -539,7 +541,7 @@ export function ProfileDetailDrawer({
                     popoverClassName="helm-select-popover-wide"
                     className="w-full mono"
                     inline={inline}
-                    placeholder="Unbound (local node)"
+                    placeholder={t('profiles.drawer.unboundNode')}
                     onChange={(e) =>
                       setForm((prev) => ({ ...prev, nodeId: e.target.value }))
                     }
@@ -547,14 +549,14 @@ export function ProfileDetailDrawer({
                 </div>
 
                 <label htmlFor="profile-form-cwd" className="form-grid-label">
-                  Working directory
+                  {t('profiles.drawer.field.cwd')}
                 </label>
                 <div className="form-grid-value">
                   <input
                     id="profile-form-cwd"
                     type="text"
                     className="input mono"
-                    placeholder="Optional, e.g. /root/code/my-project"
+                    placeholder={t('profiles.drawer.field.cwdPlaceholder')}
                     value={form.cwd}
                     onChange={(e) =>
                       setForm((prev) => ({ ...prev, cwd: e.target.value }))
@@ -567,24 +569,29 @@ export function ProfileDetailDrawer({
             {/* System prompt section */}
             <section className="section-flat">
               <div className="section-flat-header flex-row-between">
-                <span className="section-flat-title">System prompt (SYSTEM.md)</span>
+                <span className="section-flat-title">{t('profiles.drawer.system.title')}</span>
                 <span className="mono profile-editor-meta">
-                  {form.system.length} characters{form.system ? ` · ${form.system.split('\n').length} lines` : ''}
+                  {form.system
+                    ? t('profiles.drawer.system.charsAndLines', {
+                        chars: form.system.length,
+                        lines: form.system.split('\n').length,
+                      })
+                    : t('profiles.drawer.system.chars', { chars: form.system.length })}
                 </span>
               </div>
               <textarea
                 id="profile-form-system"
                 className="input mono profile-editor-textarea"
                 rows={10}
-                placeholder="Enter the system prompt instructions for this profile (Markdown supported)..."
+                placeholder={t('profiles.drawer.system.placeholder')}
                 value={form.system}
                 onChange={(e) =>
                   setForm((prev) => ({ ...prev, system: e.target.value }))
                 }
-                aria-label="System prompt"
+                aria-label={t('profiles.drawer.system.aria')}
               />
               <div className="profile-editor-hint">
-                Tip: the system prompt defines the core duties and ground rules of the profile; saving applies to future conversations immediately.
+                {t('profiles.drawer.system.hint')}
               </div>
             </section>
 
@@ -602,7 +609,7 @@ export function ProfileDetailDrawer({
             {/* Empty-conversation starters (max 6) */}
             <section className="section-flat">
               <div className="section-flat-header profile-starters-header">
-                <span className="section-flat-title">Empty-conversation starters</span>
+                <span className="section-flat-title">{t('profiles.drawer.starters.title')}</span>
                 <span className="mono profile-editor-meta">
                   {form.starters.length}/{PROFILE_STARTERS_MAX_ITEMS}
                 </span>
@@ -610,20 +617,20 @@ export function ProfileDetailDrawer({
               <div className="profile-starters-list">
                 {form.starters.length === 0 ? (
                   <div className="text-subtle text-xs profile-starters-empty">
-                    Falls back to the system default starter prompts when unset.
+                    {t('profiles.drawer.starters.empty')}
                   </div>
                 ) : (
                   form.starters.map((starter, index) => {
-                    const issue = validateStarterDraft(starter)
+                    const issue = validateStarterDraft(starter, t)
                     return (
                       <div key={`starter-${index}`} className="profile-starter-item">
                         <div className="profile-starter-fields">
                           <input
                             type="text"
                             className="input profile-starter-label"
-                            placeholder="Title (max 24 code points)"
+                            placeholder={t('profiles.drawer.starters.labelPlaceholder')}
                             value={starter.label}
-                            aria-label={`Starter ${index + 1} title`}
+                            aria-label={t('profiles.drawer.starters.labelAria', { index: index + 1 })}
                             onChange={(e) =>
                               setForm((prev) => {
                                 const starters = [...prev.starters]
@@ -635,9 +642,9 @@ export function ProfileDetailDrawer({
                           <textarea
                             className="input profile-starter-prompt"
                             rows={2}
-                            placeholder="Prompt filled into the composer on click (max 4000 code points; not sent automatically)"
+                            placeholder={t('profiles.drawer.starters.promptPlaceholder')}
                             value={starter.prompt}
-                            aria-label={`Starter ${index + 1} prompt`}
+                            aria-label={t('profiles.drawer.starters.promptAria', { index: index + 1 })}
                             onChange={(e) =>
                               setForm((prev) => {
                                 const starters = [...prev.starters]
@@ -655,8 +662,8 @@ export function ProfileDetailDrawer({
                         <button
                           type="button"
                           className="btn btn-ghost btn-sm profile-starter-remove"
-                          aria-label={`Delete starter ${index + 1}`}
-                          title="Delete this starter"
+                          aria-label={t('profiles.drawer.starters.deleteAria', { index: index + 1 })}
+                          title={t('profiles.drawer.starters.deleteTitle')}
                           disabled={isSaving || isDeleting}
                           onClick={() =>
                             setForm((prev) => ({
@@ -684,27 +691,27 @@ export function ProfileDetailDrawer({
                 }
               >
                 <HelmIcon name="plus" size={12} />
-                <span>Add starter</span>
+                <span>{t('profiles.drawer.starters.add')}</span>
               </button>
             </section>
 
             {/* Skill allowlist */}
             <section className="section-flat">
               <div className="section-flat-header flex-row-between">
-                <span className="section-flat-title">Available skills allowlist</span>
+                <span className="section-flat-title">{t('profiles.drawer.skills.title')}</span>
                 <Switch
                   id="profile-form-skills-switch"
                   checked={form.useAllSkills}
                   onChange={(val) =>
                     setForm((prev) => ({ ...prev, useAllSkills: val }))
                   }
-                  label="All available skills"
+                  label={t('profiles.card.allSkills')}
                 />
               </div>
 
               {form.useAllSkills ? (
                 <div className="text-subtle">
-                  This profile may use every available skill without restriction.
+                  {t('profiles.drawer.skills.allHint')}
                 </div>
               ) : (
                 <div
@@ -715,7 +722,7 @@ export function ProfileDetailDrawer({
                   }}
                 >
                   {availableSkills.length === 0 ? (
-                    <div className="text-subtle">No skills loaded</div>
+                    <div className="text-subtle">{t('profiles.drawer.skills.empty')}</div>
                   ) : (
                     availableSkills.map((s) => (
                       <Checkbox
@@ -747,7 +754,7 @@ export function ProfileDetailDrawer({
                   onClick={() => setShowDeleteConfirm(true)}
                 >
                   <HelmIcon name="trash" size={13} />
-                  <span>Delete profile</span>
+                  <span>{t('profiles.drawer.delete')}</span>
                 </button>
               )}
             </div>
@@ -759,7 +766,7 @@ export function ProfileDetailDrawer({
                 disabled={isSaving || isDeleting}
                 onClick={handleRequestClose}
               >
-                Cancel
+                {t('common.cancel')}
               </button>
 
               <button
@@ -773,7 +780,7 @@ export function ProfileDetailDrawer({
                 onClick={() => void handleSave()}
               >
                 <HelmIcon name={isSaving ? 'loader' : 'check'} size={13} />
-                <span>{isSaving ? 'Saving…' : 'Save profile'}</span>
+                <span>{isSaving ? t('profiles.drawer.saving') : t('profiles.drawer.save')}</span>
               </button>
             </div>
           </div>
@@ -784,10 +791,10 @@ export function ProfileDetailDrawer({
       <ConfirmDialog
         open={showDeleteConfirm}
         onOpenChange={setShowDeleteConfirm}
-        title="Delete profile"
-        description={`Delete profile "${form.name || form.id}"? This action cannot be undone.`}
-        confirmText={isDeleting ? 'Deleting…' : 'Confirm deletion'}
-        cancelText="Cancel"
+        title={t('profiles.drawer.delete')}
+        description={t('profiles.drawer.deleteConfirm.body', { name: form.name || form.id })}
+        confirmText={isDeleting ? t('profiles.drawer.deleting') : t('profiles.drawer.deleteConfirm.confirm')}
+        cancelText={t('common.cancel')}
         danger
         inline={inline}
         onConfirm={() => void handleConfirmDelete()}
@@ -797,10 +804,10 @@ export function ProfileDetailDrawer({
       <ConfirmDialog
         open={showDiscardConfirm}
         onOpenChange={setShowDiscardConfirm}
-        title="Discard unsaved changes"
-        description="The form has unsaved changes that will be lost on close. Discard them and close?"
-        confirmText="Discard changes"
-        cancelText="Keep editing"
+        title={t('profiles.drawer.discardConfirm.title')}
+        description={t('profiles.drawer.discardConfirm.body')}
+        confirmText={t('profiles.drawer.discardConfirm.confirm')}
+        cancelText={t('profiles.drawer.discardConfirm.cancel')}
         danger
         inline={inline}
         onConfirm={() => {

@@ -13,11 +13,13 @@ import type { PluginSummary } from '@helm/protocol'
 import {
   filterPlugins,
   isPluginFailed,
+  pluginStatusTabLabel,
   summarizePlugins,
   type PluginFilterState,
   type PluginStatusFilter,
   type PluginSummaryStats,
 } from '../src/plugins/plugin-center-model.js'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 
 function makePlugin(overrides: Partial<PluginSummary> & { id: string }): PluginSummary {
   return {
@@ -230,4 +232,17 @@ test('summarizePlugins: 正确统计 failed 数量（status 与 error 双入口�
   assert.equal(stats.enabled, 1)
   assert.equal(stats.disabled, 3)
   assert.equal(stats.failed, 2)
+})
+
+test('pluginStatusTabLabel: en 与 zh-CN 状态筛选标签映射', { timeout: 60_000 }, () => {
+  const en = createWebTranslator('en')
+  const zh = createWebTranslator('zh-CN')
+
+  assert.equal(pluginStatusTabLabel('all'), 'All')
+  assert.equal(pluginStatusTabLabel('enabled', en), 'Enabled')
+  assert.equal(pluginStatusTabLabel('disabled', en), 'Disabled')
+
+  assert.equal(pluginStatusTabLabel('all', zh), '全部')
+  assert.equal(pluginStatusTabLabel('enabled', zh), '已启用')
+  assert.equal(pluginStatusTabLabel('disabled', zh), '已停用')
 })

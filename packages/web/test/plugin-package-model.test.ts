@@ -25,6 +25,7 @@ import {
   pluginSourceDisplayText,
 } from '../src/plugins/plugin-package-model.js'
 import { ApiClientError } from '../src/lib/api.js'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 
 // ---------------------------------------------------------------------------
 // 1. 安装来源识别
@@ -225,4 +226,27 @@ test('extractDoctorReport：形状不合法时返回 null，绝不伪造', { tim
   assert.equal(extractDoctorReport(undefined), null)
   // details.report 为数组或其他非对象值同样拒绝
   assert.equal(extractDoctorReport(new ApiClientError('x', 'x', 422, { report: [1, 2] })), null)
+})
+
+test('plugin-package-model：zh-CN 翻译器生成中文来源标签、doctor 结论与包错误提示', { timeout: 60_000 }, () => {
+  const zh = createWebTranslator('zh-CN')
+
+  assert.deepEqual(detectPluginSourceKind('npm:pkg@1.0.0', zh), { kind: 'npm', label: 'npm 包' })
+  assert.deepEqual(detectPluginSourceKind('git:user/repo', zh), { kind: 'git', label: 'Git 仓库' })
+  assert.deepEqual(detectPluginSourceKind('/abs/path', zh), { kind: 'local', label: '本地路径' })
+  assert.deepEqual(detectPluginSourceKind('bad', zh), { kind: 'unknown', label: '无法识别' })
+  assert.equal(pluginSourceBadgeLabel(localSource, zh), '本地')
+
+  assert.equal(
+    buildDoctorConclusion({ dir: '/plugins/foo', ok: true, checks: [{ id: 'manifest', label: '清单检查' }] }, zh),
+    '安装前自检通过',
+  )
+  const zhFailed = buildDoctorConclusion(doctorReport, zh)
+  assert.match(zhFailed, /安装前自检未通过，共 2 项失败/)
+  assert.match(zhFailed, /entry_missing/)
+
+  const err409 = new ApiClientError('plugin_has_live_tasks', 'Plugin has live tasks', 409)
+  assert.match(pluginPackageErrorText(err409, '卸载', zh), /卸载失败：插件存在在途任务（plugin_has_live_tasks）/)
+  assert.equal(pluginPackageErrorText(new Error('boom'), '更新', zh), '更新失败：boom')
+  assert.equal(pluginPackageErrorText('raw', '安装', zh), '安装失败')
 })

@@ -27,6 +27,7 @@ import { conversationMessages } from '../src/i18n/resources/conversation.js'
 import { modalsMessages } from '../src/i18n/resources/modals.js'
 import { modelsMessages } from '../src/i18n/resources/models.js'
 import { nodesMessages } from '../src/i18n/resources/nodes.js'
+import { pluginsMessages } from '../src/i18n/resources/plugins.js'
 import { profilesMessages } from '../src/i18n/resources/profiles.js'
 import { shellMessages } from '../src/i18n/resources/shell.js'
 import { skillsMessages } from '../src/i18n/resources/skills.js'
@@ -45,6 +46,7 @@ const DOMAIN_TABLES: Array<[name: string, table: MessageTable]> = [
   ['ui', uiMessages],
   ['models', modelsMessages],
   ['nodes', nodesMessages],
+  ['plugins', pluginsMessages],
   ['profiles', profilesMessages],
   ['skills', skillsMessages],
   ['modals', modalsMessages],

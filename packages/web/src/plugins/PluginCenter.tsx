@@ -11,15 +11,12 @@ import { PluginInstallModal } from './PluginInstallModal.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import {
   filterPlugins,
+  pluginStatusTabLabel,
   summarizePlugins,
   type PluginStatusFilter,
 } from './plugin-center-model.js'
 
-const PLUGIN_STATUS_TABS: Array<{ key: PluginStatusFilter; label: string }> = [
-  { key: 'all', label: 'All' },
-  { key: 'enabled', label: 'Enabled' },
-  { key: 'disabled', label: 'Disabled' },
-]
+const PLUGIN_STATUS_TABS: PluginStatusFilter[] = ['all', 'enabled', 'disabled']
 
 export interface PluginCenterProps {
   isSplit?: boolean
@@ -43,7 +40,7 @@ export function PluginCenter({
   inlineDrawer = false,
 }: PluginCenterProps): React.JSX.Element {
   const store = useHelmStore()
-  const { locale } = useWebLocale()
+  const { locale, t } = useWebLocale()
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<PluginStatusFilter>('all')
   const [togglingId, setTogglingId] = useState<string | null>(null)
@@ -118,7 +115,7 @@ export function PluginCenter({
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: 'Plugin installed, but enable failed',
+        title: t('plugins.notice.installEnableFailedTitle'),
         body: `${enableError.code}: ${enableError.message}`,
       })
     }
@@ -137,32 +134,33 @@ export function PluginCenter({
     if (plugin.locked || togglingId === plugin.id) return
     setTogglingId(plugin.id)
     const nextEnabled = targetEnabled !== undefined ? targetEnabled : !plugin.enabled
+    const displayName = resolveLocalizedText(plugin.name, locale) || plugin.id
     try {
       if (nextEnabled) {
         await pluginsApi.enable(plugin.id)
         store.pushNotice({
           type: 'notification',
           level: 'info',
-          title: 'Plugin enabled',
-          body: `${resolveLocalizedText(plugin.name, locale) || plugin.id} enabled successfully`,
+          title: t('plugins.notice.enabledTitle'),
+          body: t('plugins.notice.enabledBody', { name: displayName }),
         })
       } else {
         await pluginsApi.disable(plugin.id, options)
         store.pushNotice({
           type: 'notification',
           level: 'info',
-          title: 'Plugin disabled',
-          body: `${resolveLocalizedText(plugin.name, locale) || plugin.id} disabled successfully`,
+          title: t('plugins.notice.disabledTitle'),
+          body: t('plugins.notice.disabledBody', { name: displayName }),
         })
       }
     } catch (err) {
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: nextEnabled ? 'Failed to enable plugin' : 'Failed to disable plugin',
+        title: nextEnabled ? t('plugins.notice.enableFailedTitle') : t('plugins.notice.disableFailedTitle'),
         body:
           err instanceof ApiClientError && err.status === 409
-            ? `Operation failed: plugin has live tasks (${err.code})`
+            ? t('plugins.notice.liveTasksError', { code: err.code })
             : (err instanceof Error ? err.message : String(err)),
       })
       throw err
@@ -190,7 +188,7 @@ export function PluginCenter({
         <div className="primary-center-title-wrap pane-title-group">
           <div className="primary-center-title">
             <HelmIcon name="puzzle" size={14} />
-            <span>Plugin Center</span>
+            <span>{t('plugins.center.title')}</span>
           </div>
         </div>
 
@@ -198,12 +196,12 @@ export function PluginCenter({
           <button
             type="button"
             className="btn btn-sm"
-            title="Install external plugins from npm, Git or a local path"
-            aria-label="Install plugin"
+            title={t('plugins.center.installTitle')}
+            aria-label={t('plugins.installPlugin')}
             onClick={() => setInstallOpen(true)}
           >
             <HelmIcon name="download" size={12} />
-            <span className="pane-action-label">Install plugin</span>
+            <span className="pane-action-label">{t('plugins.installPlugin')}</span>
           </button>
           {isSplit ? (
             <CloseSplitButton onCloseSplit={onCloseSplit} />
@@ -222,17 +220,17 @@ export function PluginCenter({
           <HelmIcon name="search" size={14} />
           <input
             type="text"
-            placeholder="Search plugin name, ID, tool or action…"
+            placeholder={t('plugins.center.searchPlaceholder')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            aria-label="Search plugins"
+            aria-label={t('plugins.center.searchAria')}
           />
           {query && (
             <button
               type="button"
               className="btn btn-ghost btn-sm plugin-search-clear"
-              title="Clear search"
-              aria-label="Clear search"
+              title={t('plugins.center.clearSearch')}
+              aria-label={t('plugins.center.clearSearch')}
               onClick={() => setQuery('')}
             >
               <HelmIcon name="x" size={12} />
@@ -243,26 +241,26 @@ export function PluginCenter({
         <div
           className="primary-category-pills"
           role="tablist"
-          aria-label="Filter by plugin status"
+          aria-label={t('plugins.center.filterAria')}
         >
-          {PLUGIN_STATUS_TABS.map((tab) => {
+          {PLUGIN_STATUS_TABS.map((statusKey) => {
             const count =
-              tab.key === 'all'
+              statusKey === 'all'
                 ? statusSummary.total
-                : tab.key === 'enabled'
+                : statusKey === 'enabled'
                   ? statusSummary.enabled
                   : statusSummary.disabled
-            const isActive = statusFilter === tab.key
+            const isActive = statusFilter === statusKey
             return (
               <button
-                key={tab.key}
+                key={statusKey}
                 type="button"
                 role="tab"
                 aria-selected={isActive}
                 className={`primary-category-pill${isActive ? ' is-active' : ''}`}
-                onClick={() => setStatusFilter(tab.key)}
+                onClick={() => setStatusFilter(statusKey)}
               >
-                <span>{tab.label}</span>
+                <span>{pluginStatusTabLabel(statusKey, t)}</span>
                 <span className="badge tabular-nums">{count}</span>
               </button>
             )
@@ -290,9 +288,9 @@ export function PluginCenter({
             <div className="plugin-center-empty-icon">
               <HelmIcon name="search" size={28} />
             </div>
-            <div className="plugin-center-empty-text">No matching plugins</div>
+            <div className="plugin-center-empty-text">{t('plugins.center.emptyTitle')}</div>
             <div className="plugin-center-empty-hint text-subtle">
-              Try adjusting the search keywords or switching the status filter.
+              {t('plugins.center.emptyHint')}
             </div>
             {(query || statusFilter !== 'all') && (
               <button
@@ -304,7 +302,7 @@ export function PluginCenter({
                 }}
               >
                 <HelmIcon name="rotate-ccw" size={12} />
-                <span>Reset search</span>
+                <span>{t('plugins.center.resetSearch')}</span>
               </button>
             )}
           </div>
