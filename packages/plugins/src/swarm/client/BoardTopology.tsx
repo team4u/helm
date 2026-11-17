@@ -9,16 +9,16 @@
  */
 import { useId, useMemo } from 'react'
 import type { ReactNode } from 'react'
-import { HelmIcon, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
+import { HelmIcon, StatusLight, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
 import {
   computeOrthogonalTopology,
-  liveStateBadgeClass,
   type BoardViewDoc,
 } from './board-model.ts'
 import {
   SW_TOPO_COORDINATOR_NODE,
   SW_TOPO_GRAPH_ARIA,
   SW_TOPO_NO_MEMBERS,
+  swMemberLiveStateLabel,
   swUnreadCursorBadge,
 } from './copy.ts'
 
@@ -78,11 +78,12 @@ export function BoardTopologySection({
                 className={`sw-role-pill${isHighlighted ? ' is-highlighted' : ''}${member.lifecycle === 'archived' ? ' is-archived' : ''}`}
                 onClick={() => onOpenMemberDrawer(member.name)}
               >
+                <StatusLight
+                  status={member.liveState}
+                  label={swMemberLiveStateLabel(member.liveState, locale)}
+                />
                 <HelmIcon name={member.isolation === 'worktree' ? 'git-branch' : 'bot'} size={11} />
                 <span className="mono">@{member.name}</span>
-                <span className={`badge ${liveStateBadgeClass(member.liveState)}`}>
-                  {member.liveState}
-                </span>
                 {member.access === 'readonly' ? (
                   <span className="badge badge-neutral">ro</span>
                 ) : null}

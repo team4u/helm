@@ -23,6 +23,7 @@ import {
   HelmIcon,
   KvGrid,
   Select,
+  StatusLight,
   useConversations,
   usePluginContext,
   usePluginLocale,
@@ -73,6 +74,7 @@ import {
   SW_WT_SECTION_TITLE,
   swBuildCoordinatorMergeRequest,
   swMemberDrawerAria,
+  swMemberLiveStateLabel,
 } from './copy.ts'
 
 export interface BoardMemberDrawerProps {
@@ -268,6 +270,10 @@ export function BoardMemberDrawer({
               </div>
               <div className="primary-drawer-title-col">
                 <div className="primary-drawer-title-row">
+                  <StatusLight
+                    status={member.liveState}
+                    label={swMemberLiveStateLabel(member.liveState, locale)}
+                  />
                   <DialogTitle className="primary-drawer-title mono">
                     @{member.name}
                   </DialogTitle>

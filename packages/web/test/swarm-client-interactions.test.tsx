@@ -960,6 +960,10 @@ test('SwarmBoardScreen：宽屏渲染正交 SVG 拓扑与连线过滤，频道 T
     assert.ok(split.host.querySelector('[data-topology-mode="svg"]') === null, '分屏不渲染宽幅 SVG')
     const highlighted = split.host.querySelector('.sw-role-pill[data-member="author"]')
     assert.ok(highlighted?.classList.contains('is-highlighted') === true, 'worker 参数高亮对应角色胶囊')
+    const verifierLight = split.host.querySelector('.sw-role-pill[data-member="verifier"] .helm-status-light-working')
+    assert.ok(verifierLight !== null, '紧凑胶囊复用 StatusLight 渲染 working 状态灯')
+    assert.equal(verifierLight.getAttribute('aria-label'), 'Working')
+    assert.ok(verifierLight.querySelector('.status-dot-working') !== null)
   } finally {
     split.unmount()
   }
@@ -1070,6 +1074,10 @@ test('右侧 540px 成员详情抽屉：working 态暴露 abort_worker，空闲�
 
     let drawer = document.body.querySelector('.primary-drawer-content.sw-member-drawer')
     assert.ok(drawer !== null, '打开右侧 540px primary-drawer-content 抽屉')
+    assert.ok(
+      drawer.querySelector('.primary-drawer-title-row .helm-status-light-working .status-dot-working') !== null,
+      '抽屉头部复用 StatusLight 渲染成员态指示灯',
+    )
     const abortBtn = [...drawer.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
       b.textContent?.includes('Abort Current Turn'),
     )
@@ -1530,6 +1538,18 @@ test('纯模型与静态铁律检查：多列正交 SVG 同列外轨连线、严
     assert.equal(/<select[\s>]/.test(content), false, `严禁原生 <select>：${file}`)
     assert.equal(/type=['"]checkbox['"]/i.test(content), false, `严禁原生 checkbox：${file}`)
     assert.equal(/history\.(push|replace)State/.test(content), false, `严禁直接操作 history：${file}`)
+    if (file.endsWith('.css')) {
+      assert.equal(
+        /(^|\n)\.status-dot\b/.test(content),
+        false,
+        `严禁在插件 CSS 重定义或覆盖宿主公共 .status-dot：${file}`,
+      )
+      assert.equal(
+        /(^|\n)\.helm-status-light\b/.test(content),
+        false,
+        `严禁在插件 CSS 覆盖宿主 .helm-status-light：${file}`,
+      )
+    }
     if (file.endsWith('.tsx')) {
       const nonPascal = [
         ...content.matchAll(/^export\s+(?!interface\b|type\b)(?:const|let|var|function|class)\s+([a-z][A-Za-z0-9_]*)/gm),

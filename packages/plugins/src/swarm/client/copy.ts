@@ -8,6 +8,7 @@
  */
 import type { HelmLocale, LocalizedText } from '@helm/plugin-client'
 import { resolveLocalizedText } from '@helm/plugin-client'
+import type { MemberLiveState } from './board-model.ts'
 
 // ---------------------------------------------------------------------------
 // Shared chrome & actions
@@ -289,6 +290,19 @@ export function swUnreadCursorBadge(delta: number, locale: HelmLocale): string {
     { en: `${delta} queued`, 'zh-CN': `待读 ${delta}` },
     locale,
   )
+}
+
+const MEMBER_LIVE_STATE_LABELS: Readonly<Record<MemberLiveState, LocalizedText>> = {
+  idle: { en: 'Idle', 'zh-CN': '空闲' },
+  working: { en: 'Working', 'zh-CN': '执行中' },
+  blocked: { en: 'Blocked', 'zh-CN': '阻塞中' },
+  done: { en: 'Done', 'zh-CN': '已完成' },
+  error: { en: 'Error', 'zh-CN': '错误' },
+  missing: { en: 'Missing', 'zh-CN': '会话缺失' },
+}
+
+export function swMemberLiveStateLabel(state: MemberLiveState, locale: HelmLocale): string {
+  return resolveLocalizedText(MEMBER_LIVE_STATE_LABELS[state], locale)
 }
 
 // Handoff stream & post composer
