@@ -21,7 +21,7 @@ import { KernelRuntime } from '../src/runtime/index.js'
 import { assertSpawnRequestTitle, normalizeSpawnTitle } from '../src/runtime/spawn.js'
 import { buildToolEnv } from '../src/runtime/tools.js'
 import type { ConversationSummary, HelmEventFrame, HelmSnapshot, HelmTransientLiveFrame } from '@helm/protocol'
-import { cleanupDir, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
+import { cleanupDir, deferred, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 
 /**
  * Faux provider binding: KernelRuntime.open lets options.models inject test Models
@@ -1151,6 +1151,32 @@ describe('real PluginHost integration', { timeout: 60_000 }, () => {
     }
   })
 
+  it('turn_settled transform producing invalid payload: settlement chain absorbs error without poisoning close()', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime(join(root, 'p-settle-poison'))
+    try {
+      await kernel.plugins.register({
+        id: 'test:poison',
+        definePlugin(ctx) {
+          ctx.hook.onTurnSettled((payload) => {
+            // Hook validation only inspects required fields: valid payload + extra BigInt passes the transform
+            // chain and throws explicitly only when events.publish performs JSON sanitization.
+            return { action: 'transform', value: { ...payload, poisoned: 10n } } as never
+          })
+        },
+      })
+      kernel.__faux.setResponses([fauxAssistantMessage('answer one'), fauxAssistantMessage('answer two')])
+      await kernel.submitInput(1, 'first turn')
+      await kernel.waitForIdle(1)
+      await kernel.submitInput(1, 'second turn')
+      await kernel.waitForIdle(1)
+      // Both turns complete and settlement chain never rejects: close() awaits settledInflight cleanly
+      await kernel.close()
+      assert.equal(kernel.getConversation(1).completionSeq, 2)
+    } finally {
+      await kernel.close().catch(() => {})
+    }
+  })
+
   it('followUp input while busy settles in subsequent turn: turn_settled inputs include all queued entries', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 'p4'))
     try {
@@ -1992,6 +2018,62 @@ describe('conversation.entry / live event', { timeout: 60_000 }, () => {
       assert.equal(reopened.events.currentSnapshot().conversations.find((c) => c.id === conv.id)?.lastEntryId, latestVisibleId)
     } finally {
       await reopened.close()
+    }
+  })
+})
+
+describe('KernelRuntime start and close concurrency', { timeout: 60_000 }, () => {
+  it('start() clears single-flight promise on failure so retries start a fresh attempt rather than rethrowing stale error', { timeout: 60_000 }, async () => {
+    const dir = join(root, 'start-retry')
+    const kernel = await KernelRuntime.open({ dataDir: dir, cwd: dir, autoResume: false })
+    try {
+      let startCalls = 0
+      // PluginHost.start holds its own single-flight state; replace method to test KernelRuntime retry semantics in isolation.
+      const host = kernel.plugins as unknown as { start: () => Promise<void> }
+      host.start = async () => {
+        startCalls += 1
+        if (startCalls === 1) throw new Error('first startup failure')
+      }
+      await assert.rejects(kernel.start(), /first startup failure/)
+      assert.equal(startCalls, 1)
+      await kernel.start()
+      assert.equal(startCalls, 2, 'retry must invoke pluginHost.start again rather than returning cached rejection')
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('close() awaits in-flight start() convergence: services stop only after start finishes, preventing teardown races', { timeout: 60_000 }, async () => {
+    const dir = join(root, 'close-waits-start')
+    const kernel = await KernelRuntime.open({ dataDir: dir, cwd: dir, autoResume: false })
+    try {
+      const order: string[] = []
+      const startEntered = deferred()
+      const startGate = deferred()
+      await kernel.plugins.register({
+        id: 'test:slow-start',
+        definePlugin(ctx) {
+          ctx.service({
+            id: 'svc',
+            async start() {
+              order.push('start-begin')
+              startEntered.resolve()
+              await startGate.promise
+              order.push('start-end')
+            },
+            stop() { order.push('stop') },
+          })
+        },
+      })
+      const starting = kernel.start()
+      await startEntered.promise
+      // Begin closing while start() is still blocked inside service.start().
+      const closing = kernel.close()
+      startGate.resolve()
+      await Promise.all([starting, closing])
+      assert.deepEqual(order, ['start-begin', 'start-end', 'stop'], 'teardown must wait for start to finish before stopping services')
+    } finally {
+      await kernel.close().catch(() => {})
     }
   })
 })

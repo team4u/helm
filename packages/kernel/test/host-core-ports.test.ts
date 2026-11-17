@@ -25,7 +25,7 @@ import { projectToolPromptSections } from '../src/runtime/runtime-helpers.js'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { createPluginBuildProvider } from '@helm/plugin-build'
-import { MemoryDocStore, makeConversationSummary, makeFauxModels, useTempDir } from './helpers.js'
+import { MemoryDocStore, deferred, makeConversationSummary, makeFauxModels, useTempDir } from './helpers.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { KernelRuntime } from '../src/runtime/index.js'
 
@@ -382,6 +382,31 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
     }
   })
 
+  await t.test('nodeFetch: response body wrapping failure (pre-locked stream) finishes counter without leaking', { timeout: 60_000 }, async () => {
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array(4)) },
+    })
+    const raw = (async () => {
+      const response = new Response(source, { status: 200 })
+      // Pre-lock response.body so wrapper's getReader() throws deterministically
+      void response.body!.getReader()
+      return response
+    }) as typeof fetch
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({ nodeFetch: () => raw }), docs: new MemoryDocStore() })
+    let api!: HelmHostApi
+    await host.register({
+      id: 'p:fetch-wrap-fail',
+      definePlugin: (ctx) => { api = ctx.host },
+    }, { enabled: true })
+    try {
+      await assert.rejects(api.nodeFetch('remote-1')('http://example.test'))
+      // Exception in body wrapper must finish live-task counter so disable succeeds cleanly
+      await host.disable('p:fetch-wrap-fail')
+    } finally {
+      await host.dispose()
+    }
+  })
+
   await t.test('nodeFetch: abandoned Response stays deterministically busy (disable 409) until explicit cancel (no GC fallback)', { timeout: 60_000 }, async () => {
     // Contract removes FinalizationRegistry safety net for deterministic resource ownership: plugins receiving
     // a Response must consume or cancel it; abandoned responses keep in-flight tasks visible (hard blocking
@@ -528,6 +553,38 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       assert.ok(socketClosed >= 1, `host dispose still aborts in-flight requests even after signal:null (closed ${socketClosed})`)
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  })
+
+  await t.test('setConfig: concurrent patches serialize read-modify-write without later writes clobbering earlier ones', { timeout: 60_000 }, async () => {
+    const captured: Record<string, unknown> = {}
+    const firstWriteGate = deferred<void>()
+    let backendCalls = 0
+    const backend: PluginHostBackend = {
+      ...makeBackend({}),
+      setPluginConfig: async (_id, value) => {
+        backendCalls += 1
+        // Pause first write to fabricate the read-modify-write race window
+        if (backendCalls === 1) await firstWriteGate.promise
+        Object.assign(captured, value)
+      },
+    }
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore() })
+    let api!: HelmHostApi
+    await host.register({
+      id: 'p:cfg',
+      definePlugin: (ctx) => { api = ctx.host },
+    }, { enabled: true })
+    try {
+      const w1 = api.setConfig({ a: 1 })
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      const w2 = api.setConfig({ b: 2 })
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      firstWriteGate.resolve()
+      await Promise.all([w1, w2])
+      assert.deepEqual(captured, { a: 1, b: 2 })
+    } finally {
+      await host.dispose()
     }
   })
 
