@@ -33,7 +33,7 @@ import { EMPTY_MANAGED_DOC, PaneRegistry, type ManagedDoc } from '../src/herdr/p
 import {
   assertRejectsCode,
   createGitTemplate,
-  makeFauxModels as createPluginFauxModels,
+  makeFauxProvider as createPluginFauxProvider,
   waitFor,
   type GitTemplate,
 } from './helpers/plugin-test-env.js'
@@ -60,8 +60,8 @@ function makeGitRepo(repoDir: string): string {
   return gitTemplate.cloneTo(repoDir)
 }
 
-function makeFauxModels() {
-  return createPluginFauxModels({
+function makeForkFauxProvider() {
+  return createPluginFauxProvider({
     models: [
       { id: 'faux-1', reasoning: true },
       { id: 'faux-2', reasoning: true },
@@ -118,7 +118,7 @@ describe('subagent fork 与 Git Worktree 集成（createHelm 端到端）', { ti
     const dir = join(rootDir, 'wt-fork-resume')
     const dataDir = join(dir, 'data')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const { models, faux } = makeFauxModels()
+    const faux = makeForkFauxProvider()
 
     let childIdForResume: number | undefined
     const step: FauxResponseFactory = (context) => {
@@ -220,7 +220,7 @@ describe('subagent fork 与 Git Worktree 集成（createHelm 端到端）', { ti
       dataDir,
       cwd: repo,
       model: 'faux/faux-1',
-      models: models as never,
+      providers: [faux.provider],
     })
     const coderStaticCwd = makeGitRepo(join(dir, 'coder-static-cwd'))
     try {
@@ -311,7 +311,7 @@ describe('subagent fork 与 Git Worktree 集成（createHelm 端到端）', { ti
     const dir = join(rootDir, 'wt-herdr-reject')
     const dataDir = join(dir, 'data')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const { models, faux } = makeFauxModels()
+    const faux = makeForkFauxProvider()
 
     const step: FauxResponseFactory = (context) => {
       const msgs = context.messages as Array<{ role?: string; content?: unknown; toolName?: string }>
@@ -351,7 +351,7 @@ describe('subagent fork 与 Git Worktree 集成（createHelm 端到端）', { ti
       dataDir,
       cwd: repo,
       model: 'faux/faux-1',
-      models: models as never,
+      providers: [faux.provider],
     })
     try {
       await app.kernel.services.profiles.save({
@@ -390,7 +390,7 @@ describe('subagent fork 与 Git Worktree 集成（createHelm 端到端）', { ti
     const dir = join(rootDir, 'bg-default-fork')
     const dataDir = join(dir, 'data')
     mkdirSync(dataDir, { recursive: true })
-    const { models, faux } = makeFauxModels()
+    const faux = makeForkFauxProvider()
 
     let bgChildIdForResume: number | undefined
     const step: FauxResponseFactory = (context) => {
@@ -448,7 +448,7 @@ describe('subagent fork 与 Git Worktree 集成（createHelm 端到端）', { ti
       dataDir,
       cwd: dir,
       model: 'faux/faux-1',
-      models: models as never,
+      providers: [faux.provider],
     })
     try {
       await app.kernel.submitInput(1, '记住后台线索 BG_CLUE_99')
@@ -523,7 +523,7 @@ describe('subagent fork 与 Git Worktree 集成（createHelm 端到端）', { ti
     const dir = join(rootDir, 'wt-upstream-transform-reject')
     const dataDir = join(dir, 'data')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const { models, faux } = makeFauxModels()
+    const faux = makeForkFauxProvider()
 
     const step: FauxResponseFactory = (context) => {
       const msgs = context.messages as Array<{ role?: string; content?: unknown; toolName?: string }>
@@ -557,7 +557,7 @@ describe('subagent fork 与 Git Worktree 集成（createHelm 端到端）', { ti
       dataDir,
       cwd: repo,
       model: 'faux/faux-1',
-      models: models as never,
+      providers: [faux.provider],
     })
     try {
       await app.kernel.services.profiles.save({

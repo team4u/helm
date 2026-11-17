@@ -1,20 +1,20 @@
 /**
- * atomic file write and carries boundary error information security read.
- * write path: temp file (random uuid name + 0600)→ fsync → rename, crash do not half truncate content;
- * 0600 ensure credentials etc. secret content will not via temp file leak leak permission.
+ * Atomic file writes and safe reads with contextual error messages.
+ * Write path: temp file (random UUID name + 0600) -> fsync -> rename so crashes never half-truncate;
+ * 0600 ensures credentials and secrets never leak permissions via temp files.
  */
 import fsp from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
-/** Windows on rename replace target by read way (concurrency read/kill toxic/index) short temporary occupy when has boundary backoff parameter. */
+/** Bounded backoff parameters when Windows target rename hits transient file locks (concurrent reads / AV / indexer). */
 const RENAME_BUSY_TOTAL_MS = 1_500
 const RENAME_BUSY_INITIAL_POLL_MS = 5
 const RENAME_BUSY_MAX_POLL_MS = 50
 
 export class FileNotFoundError extends Error {
   constructor(path: string) {
-    super(`file missing: ${path}`)
+    super(`file not found: ${path}`)
     this.name = 'FileNotFoundError'
   }
 }
@@ -24,14 +24,14 @@ export class FileParseError extends Error {
     path: string,
     public readonly cause: unknown,
   ) {
-    super(`JSON failed to parse: ${path}: ${String(cause)}`)
+    super(`failed to parse JSON in ${path}: ${String(cause)}`)
     this.name = 'FileParseError'
   }
 }
 
 /**
- * Windows instantaneous occupy decide: target by read/scan during rename will short temporary EPERM/EACCES/EBUSY,
- * has boundary backoff retry i.e. can commit. other platform these code belongs to real permission/mount error, immediately failed.
+ * Windows transient-busy check: renaming over a file being read/scanned briefly returns EPERM/EACCES/EBUSY,
+ * which succeeds after bounded backoff. On other platforms these codes indicate real permission/mount faults.
  */
 function isTransientRenameBusy(err: unknown): boolean {
   if (process.platform !== 'win32') return false
@@ -40,8 +40,9 @@ function isTransientRenameBusy(err: unknown): boolean {
 }
 
 /**
- * rename atomic replace; only Windows instantaneous occupy when exponential backoff (5→50ms, total window about 1.5s),
- * exhausted still keep original ErrnoException(contains code), only append retry diagnose convenient at zone permission error.
+ * Atomic rename replacement; applies exponential backoff (5 -> 50ms, ~1.5s total) only for Windows
+ * transient busy locks, preserving the original ErrnoException (`code` intact) when exhausted and
+ * appending retry diagnostics to distinguish transient locks from permission failures.
  */
 async function renameAtomically(tmp: string, targetPath: string): Promise<void> {
   const startedAt = Date.now()
@@ -56,9 +57,9 @@ async function renameAtomically(tmp: string, targetPath: string): Promise<void> 
         if (retries > 0 && err instanceof Error) {
           const elapsed = Date.now() - startedAt
           try {
-            err.message = `${err.message}(Windows target file instantaneous occupy, already retry ${retries} time / ${elapsed}ms still failed)`
+            err.message = `${err.message} (Windows target file transiently locked; still failed after ${retries} retries / ${elapsed}ms)`
           } catch {
-            /* message cannot write when keep original error */
+            /* preserve original error if message is read-only */
           }
         }
         throw err
@@ -70,7 +71,7 @@ async function renameAtomically(tmp: string, targetPath: string): Promise<void> 
   }
 }
 
-/** atomic write file:temp(random uuid, 0600) → fsync → rename.exclusive guard against concurrency heavy name. */
+/** Atomic file write: temp (random UUID, 0600) -> fsync -> rename; unique temp names prevent concurrent collisions. */
 export async function atomicWriteFile(
   path: string,
   data: string | Uint8Array,
@@ -97,7 +98,7 @@ export async function atomicWriteFile(
   }
 }
 
-/** atomic write JSON(UTF-8,2 space shrink enter, stable key order convenient at human review and diff). */
+/** Atomic JSON write (UTF-8, 2-space indent, deterministic key formatting for human diffs). */
 export async function atomicWriteJson(
   path: string,
   value: unknown,
@@ -107,7 +108,7 @@ export async function atomicWriteJson(
   await atomicWriteFile(path, text, opts)
 }
 
-/** read UTF-8 text; missing throw FileNotFoundError(contains path, not silently return empty). */
+/** Read UTF-8 text; missing files throw `FileNotFoundError` with path (never returns empty silently). */
 export async function readTextFile(path: string): Promise<string> {
   try {
     return await fsp.readFile(path, 'utf8')
@@ -117,7 +118,7 @@ export async function readTextFile(path: string): Promise<string> {
   }
 }
 
-/** read and parse JSON; missing throw FileNotFoundError, corrupt throw FileParseError(all contains path). */
+/** Read and parse JSON; missing files throw `FileNotFoundError`, corrupt JSON throws `FileParseError` (both include path). */
 export async function readJsonFile(path: string): Promise<unknown> {
   const text = await readTextFile(path)
   try {
@@ -127,7 +128,7 @@ export async function readJsonFile(path: string): Promise<unknown> {
   }
 }
 
-/** read optional JSON: missing return undefined, corrupt still throw FileParseError(honest expose). */
+/** Read optional JSON: missing files return undefined, corrupt JSON still throws `FileParseError` honestly. */
 export async function readJsonFileOptional(path: string): Promise<unknown> {
   try {
     return await readJsonFile(path)
@@ -137,7 +138,7 @@ export async function readJsonFileOptional(path: string): Promise<unknown> {
   }
 }
 
-/** duplicate file (keep target 0600, used to artifacts accept source file). */
+/** Copy file securely (enforces 0600 on destination; used when ingesting artifact source files). */
 export async function copyFilePrivate(src: string, dest: string): Promise<void> {
   await fsp.mkdir(dirname(dest), { recursive: true })
   const tmp = join(dirname(dest), `.${randomUUID()}.tmp`)
@@ -148,7 +149,7 @@ export async function copyFilePrivate(src: string, dest: string): Promise<void> 
     await fsp.rm(tmp, { force: true }).catch(() => {})
     throw err
   }
-  // rename keep source pattern; secret boundary unify converge is 0600(POSIX chmod for Windows without intent meaning, skip).
+  // Rename preserves source file permissions; force 0600 on secret boundaries (POSIX chmod is meaningless on Windows).
   if (process.platform !== 'win32') {
     const handle = await fsp.open(dest, 'r')
     try {
@@ -160,14 +161,14 @@ export async function copyFilePrivate(src: string, dest: string): Promise<void> 
 }
 
 /**
- * decide path when before pattern is otherwise excludes group/other permission (i.e. private).
+ * Determine whether a file's current permissions exclude group/other access (i.e. private).
  *
- * Windows  NTFS/ACL do not bear load POSIX group/other ,Node stat.mode only reverse reflect
- * only read;0600 semantics unavailable, directly treated as private (and node/doctor.ts platform convention consistent).
- * non- Windows still strictly validate: pattern contains group/other i.e. non- private.
+ * Windows NTFS/ACLs do not map POSIX group/other bits (`stat.mode` only reflects read-only, making 0600
+ * checks unavailable), so treat Windows files as private (consistent with `node/doctor.ts`).
+ * Non-Windows platforms enforce strictly: any group/other bits set counts as non-private.
  */
 export async function isPrivateMode(path: string): Promise<boolean> {
-  // even if Windows do not check POSIX mode, also want first stat, avoid file disappear or permission error static default treated as private.
+  // Stat even on Windows before returning, so missing files or permission errors never pass silently as private.
   const s = await fsp.stat(path)
   if (process.platform === 'win32') return true
   return (s.mode & 0o077) === 0

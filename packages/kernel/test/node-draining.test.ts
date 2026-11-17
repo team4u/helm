@@ -1,12 +1,12 @@
 /**
- * node upgrade arrange empty (node_draining) in kernel side consume semantics:
- * - fabric.ipcCall:RpcResult original keep node_draining error code (connect still in,
- *   by caller type, do not swallow into aborted/unknown);
- * - fabric.ipcSubscribe: arrange empty refuse new throw HelmError node_draining(503),
- *   and ipc_subscribe_failed(502) zone, and onClosed exactly call back once;
- * - remote-env exec: node envExec return node_draining when error code runtime pass-through
- *   (do not by archive and is aborted/unknown), immediately failed, does not trigger wait for reconnect
- *  (node online, arrange empty ≠ offline); real cancel still is aborted.
+ * Kernel-side consumption semantics for node upgrade draining (`node_draining`):
+ * - fabric.ipcCall: RpcResult preserves the raw `node_draining` error code (connection remains active
+ *   for the caller to handle, never swallowed as aborted/unknown);
+ * - fabric.ipcSubscribe: rejecting new subscriptions during draining throws HelmError `node_draining`
+ *   (503), distinct from `ipc_subscribe_failed` (502), and invokes `onClosed` exactly once;
+ * - remote-env exec: when the node returns `node_draining` from envExec, the error code passes
+ *   through untouched (never collapsed into aborted/unknown), fails immediately without waiting for
+ *   reconnect (the node is online; draining != offline); genuine cancellations remain `aborted`.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -26,7 +26,7 @@ class FakeSocket extends EventEmitter {
   close() { this.readyState = 3; this.emit('close') }
 }
 
-/** register false node (authentication constant), can inject any env RPC function (ipcSubscribe etc.). */
+/** Registers a fake node (constant auth) with arbitrary injected env RPC handlers (e.g., ipcSubscribe). */
 async function registerFakeNode(registry: NodeRegistry, nodeId: string, rpc: Record<string, unknown>): Promise<FakeSocket> {
   const socket = new FakeSocket()
   const outcome = await registry.register(
@@ -38,7 +38,7 @@ async function registerFakeNode(registry: NodeRegistry, nodeId: string, rpc: Rec
   return socket
 }
 
-test('fabric.ipcCall: arrange empty refuse new RpcResult keep node_draining original code (do not throw do not swallow)', { timeout: 60_000 }, async () => {
+test('fabric.ipcCall: draining rejection preserves raw node_draining code in RpcResult (neither throws nor swallows)', { timeout: 60_000 }, async () => {
   const fabric = createEnvFabric({ authenticate: () => true })
   try {
     const socket = await registerFakeNode(fabric.registry, 'drain-node', {
@@ -58,7 +58,7 @@ test('fabric.ipcCall: arrange empty refuse new RpcResult keep node_draining orig
   }
 })
 
-test('fabric.ipcSubscribe: arrange empty refuse new throw HelmError node_draining(503),onClosed exactly once', { timeout: 60_000 }, async () => {
+test('fabric.ipcSubscribe: draining rejection throws HelmError node_draining (503) and calls onClosed once', { timeout: 60_000 }, async () => {
   const fabric = createEnvFabric({ authenticate: () => true })
   try {
     const socket = await registerFakeNode(fabric.registry, 'drain-sub-node', {
@@ -74,7 +74,7 @@ test('fabric.ipcSubscribe: arrange empty refuse new throw HelmError node_drainin
       (error: unknown) =>
         error instanceof HelmError && error.code === 'node_draining' && error.status === 503 && /draining/.test(error.message),
     )
-    // subscribe not establish:finish already in reject path call back onClosed(without leak leak wait for).
+    // Subscription was never established: the reject path already notified onClosed (no leaked wait).
     await delay(20)
     assert.equal(closed, 1)
     socket.close()
@@ -83,7 +83,7 @@ test('fabric.ipcSubscribe: arrange empty refuse new throw HelmError node_drainin
   }
 })
 
-test('remote-env exec:node_draining runtime pass-through (non- aborted/unknown), without waiting reconnect', { timeout: 60_000 }, async () => {
+test('remote-env exec: node_draining passes through intact (not aborted/unknown) without waiting for reconnect', { timeout: 60_000 }, async () => {
   let waitCalled = 0
   const drainingRpc = {
     envExec: async () => ({
@@ -94,7 +94,7 @@ test('remote-env exec:node_draining runtime pass-through (non- aborted/unknown),
   } as unknown as NodeEnvRpcFunctions
   const resolver: NodeRpcResolver = {
     getNodeEnvRpc: () => drainingRpc,
-    // arrange empty during node online: must not away to wait for reconnect (away to i.e. semantics error).
+    // The node is online while draining: must never branch to waitForNodeOnline (doing so is a semantic bug).
     waitForNodeOnline: () => {
       waitCalled += 1
       return Promise.resolve(drainingRpc)
@@ -107,18 +107,18 @@ test('remote-env exec:node_draining runtime pass-through (non- aborted/unknown),
   const elapsed = Date.now() - startedAt
 
   assert.equal(result.ok, false)
-  // runtime error code original keep: on layer can zone node is now upgrade arrange empty and
-  // aborted(cancel)/unknown(assert connect result unknown), never archive and.
+  // Error code passes through unchanged so callers distinguish upgrade draining from aborted/unknown
+  // rather than collapsing them together.
   assert.equal(!result.ok && result.error.code, 'node_draining')
   assert.match(!result.ok ? result.error.message : '', /draining/)
-  // immediately failed (has boundary return, does not enter reconnect wait for).
-  assert.ok(elapsed < 2_000, `should in has boundary time inside return (actual ${elapsed}ms)`)
-  assert.equal(waitCalled, 0, 'node online during arrange empty reject must not trigger waitForNodeOnline')
+  // Fails immediately within bounded time without entering reconnect wait.
+  assert.ok(elapsed < 2_000, `must return within bounded time (actual ${elapsed}ms)`)
+  assert.equal(waitCalled, 0, 'draining rejection while node is online must not trigger waitForNodeOnline')
 })
 
-test('remote-env exec: real cancel still is aborted(do not because arrange empty code change regression)', { timeout: 60_000 }, async () => {
+test('remote-env exec: genuine cancellation still reports aborted (no regression from draining changes)', { timeout: 60_000 }, async () => {
   const rpc = {
-    // simulated user cancel: node side command by abort,RPC return aborted.
+    // Simulates user cancellation: node aborts the command and returns aborted over RPC.
     envExec: async () => ({ ok: false, error: { code: 'aborted', message: 'Command aborted' } }),
     envAbortExec: async () => undefined,
   } as unknown as NodeEnvRpcFunctions
@@ -128,5 +128,5 @@ test('remote-env exec: real cancel still is aborted(do not because arrange empty
   const context = withAbortSignal(controller.signal, BACKGROUND_CONTEXT)
   const result = await env.exec('sleep 5', undefined, context)
   assert.equal(result.ok, false)
-  assert.equal(!result.ok && result.error.code, 'aborted', 'real cancel must keep aborted')
+  assert.equal(!result.ok && result.error.code, 'aborted', 'genuine cancellation must remain aborted')
 })

@@ -1,10 +1,24 @@
 import { Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helm/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
+import { useConversationDetail, useConversationSummary } from '../lib/store-context.js'
 import { ConversationPane } from './ConversationPane.js'
 
 export interface ConversationDrawerProps {
   conversationId: number
   onClose: () => void
+}
+
+function meaningfulDrawerTitle(title: string | undefined, conversationId: number): string | undefined {
+  const trimmed = title?.trim()
+  if (!trimmed) return undefined
+  if (
+    trimmed.toLowerCase() === `subagent ${conversationId}` ||
+    trimmed === `子代理 ${conversationId}` ||
+    trimmed === `子会话 ${conversationId}`
+  ) {
+    return undefined
+  }
+  return trimmed
 }
 
 /**
@@ -17,7 +31,12 @@ export interface ConversationDrawerProps {
  */
 export function ConversationDrawer({ conversationId, onClose }: ConversationDrawerProps) {
   const { t } = useWebLocale()
-  const title = t('conv.drawer.title', { id: conversationId })
+  const summary = useConversationSummary(conversationId)
+  const detail = useConversationDetail(conversationId)
+  const customTitle = meaningfulDrawerTitle((summary ?? detail)?.title, conversationId)
+  const title = customTitle !== undefined
+    ? t('conv.drawer.titleWithName', { id: conversationId, title: customTitle })
+    : t('conv.drawer.title', { id: conversationId })
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
       <DialogPortal>

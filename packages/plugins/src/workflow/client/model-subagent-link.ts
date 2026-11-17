@@ -172,6 +172,7 @@ export function resolveSubagentExecutionMeta(
 
 /** Lightweight parent tool summary (collapsed header data source). */
 export interface SubagentParentToolSummary {
+  label?: string
   prompt?: string
   startedAt?: number
   durationMs?: number
@@ -218,8 +219,11 @@ export function isLatestSubagentCallForTarget(
 
 /** Build the lightweight parent tool summary from ToolViewProps. */
 export function parentToolSummaryOf(props: ToolViewProps): SubagentParentToolSummary {
+  const label = inputString(props.input, 'label')
+  const prompt = inputString(props.input, 'prompt')
   return {
-    ...(inputString(props.input, 'prompt') !== undefined ? { prompt: inputString(props.input, 'prompt')! } : {}),
+    ...(label !== undefined ? { label } : {}),
+    ...(prompt !== undefined ? { prompt } : {}),
     ...(props.startedAt !== undefined ? { startedAt: props.startedAt } : {}),
     ...(props.durationMs !== undefined ? { durationMs: props.durationMs } : {}),
     ...(typeof props.result === 'string' ? { resultText: props.result } : {}),

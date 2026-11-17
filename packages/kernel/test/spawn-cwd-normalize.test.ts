@@ -1,20 +1,19 @@
 /**
- * original generate subagent cwd consolidate (runNativeSpawn) and resolveSpawnTarget(workflow
- * worktree source directory kernel right threat parse) test:
- * - creates new spawn:cwd chain (request > profile > parent > Hub default) parse result in
- *   SDK createConversation / sub-conversation mirror / onResolved / gate before by target node
- *   platform unify consolidate;
- * - remote node platform only message TrustedNodePlatformSource(NodeRegistry register fact inject):
- *   win32 target on WSL / symbol view determinism convert; broken POSIX cwd explicit failed and do not create
- *   sub-conversation (do not mirror); platform unknown pass-through do not change write;
- * - resume: default strictly along use atomic conversation cwd(semantics do not change); explicit cwd via
- *   updateConversation port (produce is ConversationService the same consolidate chain) should use;
- * - resolveSpawnTarget:sourceCwd by eventually node platform consolidate (builtin:workflow
- *   isolation  worktree source directory entry);parentCwd original return (parent conversation mirror fact).
+ * Native subagent cwd normalization (runNativeSpawn) and resolveSpawnTarget (authoritative kernel resolver
+ * for workflow worktree source directories):
+ * - Fresh spawn: cwd chain (request > profile > parent > Hub default) result is normalized uniformly for target node
+ *   platform across SDK createConversation / child conversation mirror / onResolved / before gate;
+ * - Remote node platform relies solely on TrustedNodePlatformSource (NodeRegistry registered fact injection):
+ *   win32 target converts WSL/mixed separators deterministically; unmappable POSIX cwd fails explicitly without
+ *   creating a child conversation (or mirror); unknown platform passes through unchanged;
+ * - Resume: strictly preserves existing conversation cwd by default (semantics unchanged); explicit cwd routes through
+ *   updateConversation port (same normalization chain as ConversationService);
+ * - resolveSpawnTarget: normalizes sourceCwd per final node platform (entry point for builtin:workflow
+ *   isolated worktree source dirs); returns parentCwd verbatim (raw parent conversation mirror state).
  *
- * real SDK Harness(MemoryStorage + faux provider); host port use process inside Map
- * mirror (and spawn-ask same construct).envFabric use structure stub only provide registry platform
- * fact (target-cwd  TrustedPlatformHost structure), never mock specification itself.
+ * Uses real SDK Harness (MemoryStorage + faux provider); host ports use in-process Maps
+ * for mirrors (matching spawn-ask). envFabric uses a structural stub only to supply registry platform
+ * facts (per TrustedPlatformHost in target-cwd), never mocking normalization itself.
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
@@ -41,7 +40,7 @@ interface SpawnEnv {
   close(): Promise<void>
 }
 
-/** structure envFabric stub: remote take registry,local can inject Hub platform fact. */
+/** Builds an envFabric stub: remote comes from registry; local can inject Hub platform fact. */
 function platformHostOf(platforms: Record<string, string>, hubPlatform?: string): TrustedPlatformHost {
   return {
     registry: {
@@ -80,7 +79,7 @@ async function openSpawnEnv(options: {
     stashEnvFor: (id) => stash.envFor(id),
     redact: (t) => stash.redact(t),
     artifacts: new ArtifactService(dataDir, { get: () => undefined, list: () => [], put: () => {}, deleteByConversation: () => {} } as never),
-    // structure platform fact stub(remote registry;local by explicit Hub platform inject).
+    // Construct platform fact stub (remote registry; local injects Hub platform explicitly).
     envFabric: platformHostOf(options.platforms ?? {}, options.hubPlatform) as unknown as EnvFabric,
     harness,
     getLastAssistantText: (id) => lastTexts.get(id),
@@ -146,11 +145,11 @@ async function openSpawnEnv(options: {
     updateConversation: async (childId, patch) => {
       updates.push({ id: childId, patch: patch as Record<string, unknown> })
       const m = mirrors.get(childId)
-      if (!m) throw new HelmError('not_found', `conversation missing:${childId}`, 404)
+      if (!m) throw new HelmError('not_found', `conversation not found: ${childId}`, 404)
       if (patch.cwd !== undefined) m.cwd = patch.cwd
       if (patch.profileId !== undefined) m.profileId = patch.profileId
       const conv = await harness.conversation(childId as never, BACKGROUND_CONTEXT)
-      if (!conv) throw new HelmError('not_found', `sub-conversation missing:${childId}`, 404)
+      if (!conv) throw new HelmError('not_found', `child conversation not found: ${childId}`, 404)
       if (patch.cwd !== undefined) await conv.configure({ cwd: patch.cwd } as never, BACKGROUND_CONTEXT)
       return deps.getConversation(childId)!
     },
@@ -173,7 +172,7 @@ async function openSpawnEnv(options: {
   }
 }
 
-test('creates new spawn:cwd term method archive one enter SDK create, mirror and onResolved(local platform)', { timeout: 60_000 }, async () => {
+test('fresh spawn: cwd is normalized identically across SDK create, mirror, and onResolved (local platform)', { timeout: 60_000 }, async () => {
   const env = await openSpawnEnv({ hubPlatform: 'linux' })
   try {
     env.faux.setResponses([fauxAssistantMessage('ok')])
@@ -186,15 +185,15 @@ test('creates new spawn:cwd term method archive one enter SDK create, mirror and
         resolved = info as { effectiveCwd?: string }
       },
     } as never)
-    assert.equal(resolved?.effectiveCwd, '/tmp/helm/wt/a/c', 'inject POSIX Hub platform after onResolved back pass specification cwd')
+    assert.equal(resolved?.effectiveCwd, '/tmp/helm/wt/a/c', 'onResolved returns canonical cwd once POSIX Hub platform is injected')
     const mirror = [...env.mirrors.values()].at(-1)!
-    assert.equal(mirror.cwd, '/tmp/helm/wt/a/c', 'sub-conversation mirror register specification cwd')
+    assert.equal(mirror.cwd, '/tmp/helm/wt/a/c', 'child conversation mirror stores canonical cwd')
   } finally {
     await env.close()
   }
 })
 
-test('creates new spawn: remote win32 node (can message platform inject) - -WSL view determinism convert', { timeout: 60_000 }, async () => {
+test('fresh spawn: remote win32 node (registered platform injected) -- deterministic WSL path conversion', { timeout: 60_000 }, async () => {
   const env = await openSpawnEnv({ platforms: { 'win-build': 'win32' }, profiles: { assistant: { nodeId: 'win-build' } } })
   try {
     env.faux.setResponses([fauxAssistantMessage('ok')])
@@ -210,39 +209,39 @@ test('creates new spawn: remote win32 node (can message platform inject) - -WSL 
     assert.equal(resolved?.nodeId, 'win-build')
     assert.equal(resolved?.effectiveCwd, 'C:\\repo\\helm')
     const mirror = [...env.mirrors.values()].at(-1)!
-    assert.equal(mirror.cwd, 'C:\\repo\\helm', 'mirror register Windows canonical path')
+    assert.equal(mirror.cwd, 'C:\\repo\\helm', 'mirror stores Windows canonical path')
     assert.equal(mirror.nodeId, 'win-build')
   } finally {
     await env.close()
   }
 })
 
-test('creates new spawn: remote win32 node on broken POSIX cwd explicit failed and do not create sub-conversation', { timeout: 60_000 }, async () => {
+test('fresh spawn: unmappable POSIX cwd on remote win32 node fails explicitly without creating child conversation', { timeout: 60_000 }, async () => {
   const env = await openSpawnEnv({ platforms: { 'win-build': 'win32' }, profiles: { assistant: { nodeId: 'win-build' } } })
   try {
     await assert.rejects(
       runNativeSpawn(env.deps, { parentConversationId: 1, prompt: 'dry', cwd: '/home/build' } as never),
       (e: unknown) => e instanceof HelmError && e.code === 'unmappable_posix_root',
     )
-    assert.equal(env.mirrors.size, 0, 'broken POSIX cwd do not sub-conversation mirror')
+    assert.equal(env.mirrors.size, 0, 'unmappable POSIX cwd does not create child conversation mirror')
   } finally {
     await env.close()
   }
 })
 
-test('creates new spawn: remote node platform unknown - -cwd pass-through do not change write (do not guess platform)', { timeout: 60_000 }, async () => {
+test('fresh spawn: remote node with unknown platform -- passes cwd through unmodified (never guesses platform)', { timeout: 60_000 }, async () => {
   const env = await openSpawnEnv({ profiles: { assistant: { nodeId: 'mystery-node' } } })
   try {
     env.faux.setResponses([fauxAssistantMessage('ok')])
     await runNativeSpawn(env.deps, { parentConversationId: 1, prompt: 'dry', cwd: '/home/build' } as never)
     const mirror = [...env.mirrors.values()].at(-1)!
-    assert.equal(mirror.cwd, '/home/build', 'platform unknown: original keep')
+    assert.equal(mirror.cwd, '/home/build', 'unknown platform keeps cwd verbatim')
   } finally {
     await env.close()
   }
 })
 
-test('creates new spawn:cwd relative path reject (since has absolute path contract keep)', { timeout: 60_000 }, async () => {
+test('fresh spawn: relative cwd rejects (preserves existing absolute path contract)', { timeout: 60_000 }, async () => {
   const env = await openSpawnEnv()
   try {
     for (const bad of ['relative/ws', 'C:relative']) {
@@ -258,9 +257,9 @@ test('creates new spawn:cwd relative path reject (since has absolute path contra
   }
 })
 
-test('resume: default strictly along use atomic conversation cwd(do not heavy compute, produces no update)', { timeout: 60_000 }, async () => {
-  // inject POSIX Hub platform:fallback chain tail /tmp default cwd in win32 host
-  // local target on cannot mapping, this case assertion is resume semantics while non- platform consolidate.
+test('resume: preserves original conversation cwd by default (no recompute, no update)', { timeout: 60_000 }, async () => {
+  // Inject POSIX Hub platform: /tmp default cwd at end of fallback chain cannot map on win32 hosts,
+  // and this case asserts resume semantics rather than cross-platform normalization.
   const env = await openSpawnEnv({ hubPlatform: 'linux' })
   try {
     env.faux.setResponses([fauxAssistantMessage('first'), fauxAssistantMessage('second')])
@@ -270,14 +269,14 @@ test('resume: default strictly along use atomic conversation cwd(do not heavy co
     env.updates.length = 0
     const second = await runNativeSpawn(env.deps, { parentConversationId: 1, prompt: 'resume', resume: String(childId) } as never)
     assert.equal(second, 'second')
-    assert.equal(env.updates.length, 0, 'resume default does not trigger config update (cwd semantics do not change)')
-    assert.equal(env.mirrors.get(childId)!.cwd, '/tmp/helm-spawn-default', 'default along use atomic conversation cwd')
+    assert.equal(env.updates.length, 0, 'default resume triggers no config update (cwd semantics unchanged)')
+    assert.equal(env.mirrors.get(childId)!.cwd, '/tmp/helm-spawn-default', 'default keeps original conversation cwd')
   } finally {
     await env.close()
   }
 })
 
-test('resume: explicit cwd via updateConversation port should use (produce is the same consolidate chain)', { timeout: 60_000 }, async () => {
+test('resume: explicit cwd is passed through updateConversation port (normalized identically at service layer)', { timeout: 60_000 }, async () => {
   const env = await openSpawnEnv({ hubPlatform: 'linux' })
   try {
     env.faux.setResponses([fauxAssistantMessage('first'), fauxAssistantMessage('second')])
@@ -291,7 +290,7 @@ test('resume: explicit cwd via updateConversation port should use (produce is th
     } as never)
     assert.equal(second, 'second')
     const update = env.updates.at(-1)!
-    assert.equal(update.patch['cwd'], '/tmp/helm/moved/dir', 'explicit cwd away updateConversation port (service layer consolidate)')
+    assert.equal(update.patch['cwd'], '/tmp/helm/moved/dir', 'explicit cwd flows through updateConversation port (service-layer normalization)')
     assert.equal(env.mirrors.get(childId)!.cwd, '/tmp/helm/moved/dir')
   } finally {
     await env.close()
@@ -299,10 +298,10 @@ test('resume: explicit cwd via updateConversation port should use (produce is th
 })
 
 // ---------------------------------------------------------------------------
-// resolveSpawnTarget(builtin:workflow worktree source directory kernel right threat entry)
+// resolveSpawnTarget (authoritative kernel entry point for builtin:workflow worktree source dirs)
 // ---------------------------------------------------------------------------
 
-/** most small RuntimeAgentSpawn install match (only drive resolveSpawnTarget; the rest port throw). */
+/** Minimal RuntimeAgentSpawn fixture (only exercises resolveSpawnTarget; other ports throw). */
 function spawnTargetResolver(options: {
   platforms: Record<string, string>
   hubPlatform?: string
@@ -325,7 +324,7 @@ function spawnTargetResolver(options: {
     hookBridge: {} as never,
     stashService: {} as never,
     updateConversation: (() => {
-      throw new Error('this test does not trigger')
+      throw new Error('unused in this test')
     }) as never,
     markConversationOwnership: () => undefined,
   })
@@ -333,25 +332,25 @@ function spawnTargetResolver(options: {
     spawn.resolveSpawnTarget(input)
 }
 
-test('resolveSpawnTarget:sourceCwd by eventually node platform consolidate (win32 convert / unknown pass-through / posix archive one)', { timeout: 60_000 }, async () => {
-  // remote win32: explicit requestCwd and profile.cwd,parent.cwd fall back all by target platform consolidate.
+test('resolveSpawnTarget: normalizes sourceCwd per resolved node platform (win32 convert / unknown passthrough / posix canonical)', { timeout: 60_000 }, async () => {
+  // Remote win32: explicit requestCwd and profile/parent fallbacks all normalize per target platform.
   const resolve = spawnTargetResolver({ platforms: { 'win-build': 'win32' }, parent: { cwd: '/mnt/c/parent', nodeId: 'win-build' } })
   assert.deepEqual(
     await resolve({ parentConversationId: 1, requestCwd: '/mnt/c/req/helm' }),
     { nodeId: 'win-build', sourceCwd: 'C:\\req\\helm', parentCwd: '/mnt/c/parent' },
   )
-  assert.equal((await resolve({ parentConversationId: 1 })).sourceCwd, 'C:\\parent', 'parent cwd fall back same consolidate')
+  assert.equal((await resolve({ parentConversationId: 1 })).sourceCwd, 'C:\\parent', 'parent cwd fallback normalizes too')
 
-  // platform unknown: pass-through (parent points to not registered remote, avoid back host local platform).
+  // Unknown platform: passes through (parent points to unregistered remote; avoids falling back to Hub local platform).
   const unknown = spawnTargetResolver({ platforms: {}, parent: { cwd: '/home/keep', nodeId: 'mystery-node' } })
   assert.equal((await unknown({ parentConversationId: 1 })).sourceCwd, '/home/keep')
 
-  // local posix: explicit inject Hub platform, across host stable verify term method archive one.
+  // Local POSIX: explicitly inject Hub platform to test path normalization deterministically across hosts.
   const local = spawnTargetResolver({ platforms: {}, hubPlatform: 'linux', parent: {} })
   assert.equal((await local({ parentConversationId: 1, requestCwd: '/tmp/x/./y/../z' })).sourceCwd, '/tmp/x/z')
 })
 
-test('resolveSpawnTarget: remote win32 target on broken POSIX sourceCwd explicit reject (worktree source directory not silently)', { timeout: 60_000 }, async () => {
+test('resolveSpawnTarget: unmappable POSIX sourceCwd on remote win32 target rejects explicitly (no silent worktree dir)', { timeout: 60_000 }, async () => {
   const resolve = spawnTargetResolver({ platforms: { 'win-build': 'win32' }, parent: { nodeId: 'win-build' } })
   await assert.rejects(
     resolve({ parentConversationId: 1, requestCwd: '/home/build' }),

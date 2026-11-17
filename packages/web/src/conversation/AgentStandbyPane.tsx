@@ -12,7 +12,19 @@ import {
 import { errorText, formatBytes } from '../lib/format.js'
 import { HelmIcon, Select, type SelectOption } from '@helm/plugin-client'
 import { isSameResolvedTarget, type ResolvedTarget } from '../lib/types.js'
-import { useHelmStore } from '../lib/store-context.js'
+import {
+  useConversations,
+  useGroupedUi,
+  useLoadError,
+  useLocationTargets,
+  useModels,
+  useNodes,
+  useOptionalDefaultModelInfo,
+  usePlugins,
+  useProfilesSlice,
+  useSkills,
+  useStoreActions,
+} from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useStableCallback } from '../lib/use-stable-callback.js'
 import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
@@ -70,8 +82,16 @@ export interface AgentStandbyPaneProps {
  *   memory, isolated per panel; see standby-model.ts.
  */
 export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit }: AgentStandbyPaneProps) {
-  const store = useHelmStore()
-  const { t } = useWebLocale()
+  const { profiles, assetsLoaded } = useProfilesSlice()
+  const plugins = usePlugins()
+  const conversations = useConversations()
+  const groupedUi = useGroupedUi()
+  const skills = useSkills()
+  const defaultModelInfo = useOptionalDefaultModelInfo()
+  const { primaryTarget, splitTarget } = useLocationTargets()
+  const profilesLoadError = useLoadError('assets:profiles')
+  const { openTarget, closeSplit, pushNotice, invokePluginAction, refreshAssets } = useStoreActions()
+  const { locale, t } = useWebLocale()
   const panel = isSplit ? 'split' : 'primary'
   // Draft identity = the full entry coordinate (panel + Profile + inherited
   // environment): the same Profile at different remote coordinates never shares
@@ -84,20 +104,20 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
-  const profile = useMemo(() => store.profiles.find((p) => p.id === profileId), [store.profiles, profileId])
-  const enabledPluginIds = useMemo(() => collectEnabledPluginIds(store.plugins), [store.plugins])
+  const profile = useMemo(() => profiles.find((p) => p.id === profileId), [profiles, profileId])
+  const enabledPluginIds = useMemo(() => collectEnabledPluginIds(plugins), [plugins])
   const humanSelectable = profile !== undefined && isHumanSelectableProfile(profile, enabledPluginIds)
   const anchoredConversation = useMemo(
-    () => (draft.conversationId !== undefined ? store.conversations.find((c) => c.id === draft.conversationId) : undefined),
-    [draft.conversationId, store.conversations],
+    () => (draft.conversationId !== undefined ? conversations.find((c) => c.id === draft.conversationId) : undefined),
+    [draft.conversationId, conversations],
   )
   const slashPluginCommands = useMemo(
-    () => pluginSlashCommandsFor(store.groupedUi.commands, anchoredConversation),
-    [store.groupedUi.commands, anchoredConversation],
+    () => pluginSlashCommandsFor(groupedUi.commands, anchoredConversation),
+    [groupedUi.commands, anchoredConversation],
   )
   const availableSkills = useMemo(
-    () => (profile !== undefined ? slashMenuSkills(profile, store.skills, enabledPluginIds) : []),
-    [profile, store.skills, enabledPluginIds],
+    () => (profile !== undefined ? slashMenuSkills(profile, skills, enabledPluginIds) : []),
+    [profile, skills, enabledPluginIds],
   )
   const commandPendingRef = useRef(false)
   const [commandPending, setCommandPending] = useState(false)
@@ -112,7 +132,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
   const [fetchedDefaultModelInfo, setFetchedDefaultModelInfo] = useState<{ defaultModel: string; defaultThinkingLevel: string } | null>(null)
   const defaultModelGenRef = useRef(0)
   const refreshDefaultModelInfo = useCallback(async (): Promise<void> => {
-    if (store.defaultModelInfo !== undefined) return
+    if (defaultModelInfo !== undefined) return
     const gen = ++defaultModelGenRef.current
     try {
       const info = await assetsApi.getDefaultModel()
@@ -133,13 +153,13 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
       /* Keep null when the global default cannot be read; fall back to the
        * profile's own model and the "Default model" label. */
     }
-  }, [store.defaultModelInfo])
+  }, [defaultModelInfo])
   useEffect(() => {
-    if (store.defaultModelInfo !== undefined) return
+    if (defaultModelInfo !== undefined) return
     void refreshDefaultModelInfo()
     return () => { defaultModelGenRef.current++ }
-  }, [store.defaultModelInfo, refreshDefaultModelInfo])
-  const effectiveDefaultModelInfo = store.defaultModelInfo !== undefined ? store.defaultModelInfo : fetchedDefaultModelInfo
+  }, [defaultModelInfo, refreshDefaultModelInfo])
+  const effectiveDefaultModelInfo = defaultModelInfo !== undefined ? defaultModelInfo : fetchedDefaultModelInfo
 
   // Target-environment inheritance: after coordinate isolation, each draft
   // adopts this coordinate's environment on first mount (user edits win and
@@ -168,20 +188,21 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
   )
   const viewingRef = useRef(false)
   viewingRef.current = isSplit
-    ? isSameResolvedTarget(store.splitTarget, coordinateTarget)
-    : isSameResolvedTarget(store.primaryTarget, coordinateTarget)
+    ? isSameResolvedTarget(splitTarget, coordinateTarget)
+    : isSameResolvedTarget(primaryTarget, coordinateTarget)
   useEffect(() => {
     viewingRef.current = true
     return () => { viewingRef.current = false }
   }, [])
 
   const send = useCallback((): Promise<StandbySendResult> =>
-    executeStandbySend(draftKey, profileId, {      create: (init) => conversationsApi.create(init),
+    executeStandbySend(draftKey, profileId, {
+      create: (init) => conversationsApi.create(init),
       patchThinkingLevel: (id, thinkingLevel) => conversationsApi.patch(id, { thinkingLevel }).then(() => undefined),
       upload: (id, file) => conversationsApi.uploadArtifact(id, file),
       submit: (id, payload) => conversationsApi.submitInput(id, payload).then(() => undefined),
       notifyError: (title, err, conversationId) => {
-        store.pushNotice({
+        pushNotice({
           type: 'notification',
           level: 'error',
           title,
@@ -190,7 +211,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
         })
       },
       notifySentInBackground: (conversationId) => {
-        store.pushNotice({
+        pushNotice({
           type: 'notification',
           level: 'info',
           title: t('composer.standby.sentInBackgroundTitle'),
@@ -202,38 +223,38 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
         // The panel hosting the standby target is where the new conversation
         // lands: a first send on the right panel replaces only the right one
         // and never hijacks the primary panel.
-        store.openTarget(
+        openTarget(
           { kind: 'conversation', conversationId },
           { history: 'replace', ...(isSplit ? { split: true } : {}) },
         )
       },
       isStillViewing: () => viewingRef.current,
-    }, t), [draftKey, profileId, isSplit, store, t])
+    }, t), [draftKey, profileId, isSplit, openTarget, pushNotice, t])
 
   const addFiles = useCallback((files: ReadonlyArray<File>): void => {
     if (files.length === 0 || getStandbyDraft(draftKey).sending) return
     const { draft: patch, rejected } = admitStandbyFiles(getStandbyDraft(draftKey), files, t)
     updateStandbyDraft(draftKey, patch)
     for (const item of rejected) {
-      store.pushNotice({
+      pushNotice({
         type: 'notification',
         level: 'error',
         title: t('composer.standby.attachmentRejectedTitle', { name: item.file.name || t('composer.standby.unnamedFile') }),
         body: item.reason,
       })
     }
-  }, [draftKey, store, t])
+  }, [draftKey, pushNotice, t])
 
   const applyStarter = useCallback((prompt: string): void => {
     const record = getStandbyDraft(draftKey)
     if (record.sending) return
     if (record.text.trim() !== '' || record.localFiles.length > 0 || record.uploaded.length > 0) {
-      store.pushNotice({ type: 'notification', level: 'warning', title: t('composer.draft.handleBeforeStarter') })
+      pushNotice({ type: 'notification', level: 'warning', title: t('composer.draft.handleBeforeStarter') })
       return
     }
     updateStandbyDraft(draftKey, { text: prompt })
     requestAnimationFrame(() => textareaRef.current?.focus())
-  }, [draftKey, store, t])
+  }, [draftKey, pushNotice, t])
 
   const executeStandbyPluginCommand = useCallback((cmd: QualifiedCommand, mode: 'token' | 'clear'): void => {
     const record = getStandbyDraft(draftKey)
@@ -246,9 +267,9 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     const caret = el?.selectionStart ?? beforeText.length
     const resolved = mode === 'token' ? removeTokenBeforeCaret(beforeText, caret) : { next: '', nextCaret: 0 }
     void executePluginSlashAction(cmd, {
-      invokePluginAction: store.invokePluginAction,
-      pushNotice: store.pushNotice,
-      locale: store.locale,
+      invokePluginAction,
+      pushNotice,
+      locale,
       ...(record.conversationId !== undefined ? { conversationId: record.conversationId } : {}),
     }).then(() => {
       if (epoch !== currentStandbyDraftEpoch()) return
@@ -261,7 +282,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
       commandPendingRef.current = false
       if (mountedRef.current) setCommandPending(false)
     })
-  }, [draftKey, store.invokePluginAction, store.pushNotice])
+  }, [draftKey, invokePluginAction, locale, pushNotice])
   const runPluginCommand = useStableCallback((cmd: QualifiedCommand): void => {
     executeStandbyPluginCommand(cmd, 'token')
   })
@@ -282,9 +303,9 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     if (action !== null) {
       if (action.kind === 'clear-draft') {
         updateStandbyDraft(draftKey, { text: '', localFiles: [], uploaded: [], error: null })
-        store.pushNotice({ type: 'notification', level: 'info', title: t('composer.standby.newDraftStartedTitle'), body: t('composer.standby.newDraftStartedBody') })
+        pushNotice({ type: 'notification', level: 'info', title: t('composer.standby.newDraftStartedTitle'), body: t('composer.standby.newDraftStartedBody') })
       } else {
-        store.pushNotice({
+        pushNotice({
           type: 'notification',
           level: 'warning',
           title: t('composer.standby.needsConversationTitle', { command: action.command }),
@@ -294,7 +315,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
       return
     }
     void send()
-  }, [draftKey, executeStandbyPluginCommand, send, slashPluginCommands, store, t])
+  }, [draftKey, executeStandbyPluginCommand, pushNotice, send, slashPluginCommands, t])
 
   // Restore defaults: clears the inherited/custom environment; when the URL
   // carries inherited coordinates, the sole navigation removes the matching
@@ -310,31 +331,30 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     }
     const moved = resetEnvStandbyDraft(draftKey, toKey)
     if (!moved) {
-      store.pushNotice({
+      pushNotice({
         type: 'notification',
         level: 'warning',
         title: t('composer.standby.defaultEnvHasDraftTitle'),
         body: t('composer.standby.defaultEnvHasDraftBody'),
       })
     }
-    store.openTarget({ kind: 'agent', profileId }, isSplit ? { split: true } : undefined)
-  }, [draft.sending, draft.conversationId, draftKey, isSplit, panel, profileId, store, t])
+    openTarget({ kind: 'agent', profileId }, isSplit ? { split: true } : undefined)
+  }, [draft.sending, draft.conversationId, draftKey, isSplit, openTarget, panel, profileId, pushNotice, t])
 
   const toggleSplit = (): void => {
     if (isSplit) {
       onCloseSplit?.()
       return
     }
-    if (store.splitTarget !== null) {
-      store.closeSplit()
+    if (splitTarget !== null) {
+      closeSplit()
       return
     }
-    store.openTarget({ kind: 'agent', profileId }, { split: true })
+    openTarget({ kind: 'agent', profileId }, { split: true })
   }
 
   const label = profile?.name || profileId
   const envError = standbyEnvError(draft, t)
-  const profilesLoadError = store.loadErrors['assets:profiles']
 
   return (
     <div className="helm-pane agent-standby-pane" data-agent={profileId}>
@@ -349,7 +369,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
           {isSplit && onCloseSplit !== undefined ? (
             <CloseSplitButton onCloseSplit={onCloseSplit} />
           ) : (
-            <SplitToggleButton isSplitActive={store.splitTarget !== null} onToggleSplit={toggleSplit} />
+            <SplitToggleButton isSplitActive={splitTarget !== null} onToggleSplit={toggleSplit} />
           )}
         </div>
       </header>
@@ -359,11 +379,11 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
           <div className="timeline-empty-state" role="alert">
             <HelmIcon name="alert-triangle" size={20} />
             <span>{t('composer.standby.profileLoadFailed', { error: profilesLoadError })}</span>
-            <button type="button" className="btn btn-sm" onClick={() => void store.refreshAssets()}>
+            <button type="button" className="btn btn-sm" onClick={() => void refreshAssets()}>
               {t('common.retry')}
             </button>
           </div>
-        ) : !store.assetsLoaded ? (
+        ) : !assetsLoaded ? (
           <div className="timeline-empty-state" role="status">
             <HelmIcon name="loader" size={20} className="spin-slow" />
             <span>{t('composer.standby.loadingProfile')}</span>
@@ -372,7 +392,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
           <div className="timeline-empty-state" role="alert">
             <HelmIcon name="circle-slash" size={20} />
             <span>{t('composer.standby.profileMissing', { profileId })}</span>
-            <button type="button" className="btn btn-sm" onClick={() => store.openTarget({ kind: 'profiles' })}>
+            <button type="button" className="btn btn-sm" onClick={() => openTarget({ kind: 'profiles' })}>
               {t('composer.standby.goToProfiles')}
             </button>
           </div>
@@ -408,7 +428,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
         )}
       </div>
 
-      {store.assetsLoaded && profile !== undefined && humanSelectable ? (
+      {assetsLoaded && profile !== undefined && humanSelectable ? (
         <StandbyComposer
           draftKey={draftKey}
           draft={draft}
@@ -482,8 +502,10 @@ function StandbyComposer({
   onResetEnvToDefault,
   onCatalogRefreshed,
 }: StandbyComposerProps) {
-  const store = useHelmStore()
-  const { t } = useWebLocale()
+  const models = useModels()
+  const groupedUi = useGroupedUi()
+  const { openTarget } = useStoreActions()
+  const { locale, t } = useWebLocale()
   const composerBoxRef = useRef<HTMLDivElement | null>(null)
   const dragDepthRef = useRef(0)
   const [dragging, setDragging] = useState(false)
@@ -500,7 +522,7 @@ function StandbyComposer({
     defaultModelInfo?.defaultModel,
   )
   const currentModel = effectiveModel !== undefined
-    ? store.models.find((model) => model.id === effectiveModel)
+    ? models.find((model) => model.id === effectiveModel)
     : undefined
   const currentLevels = currentModel?.thinkingLevels ?? ['off']
   const effectiveThinkingLevel = resolveStandbyThinkingLevel(
@@ -539,7 +561,7 @@ function StandbyComposer({
     draftText: draft.text,
     readLiveDraft,
     setDraftState,
-    completers: store.groupedUi.composerCompleters,
+    completers: groupedUi.composerCompleters,
     conversation: anchoredConversation,
     profileId: profile.id,
     resetKey: draftKey,
@@ -547,8 +569,8 @@ function StandbyComposer({
   })
 
   const slashMenuItems = useMemo(
-    () => buildSlashMenuItems(availableSkills, slashPluginCommands, onRunPluginCommand, store.locale),
-    [availableSkills, slashPluginCommands, onRunPluginCommand, store.locale],
+    () => buildSlashMenuItems(availableSkills, slashPluginCommands, onRunPluginCommand, locale),
+    [availableSkills, slashPluginCommands, onRunPluginCommand, locale],
   )
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -613,7 +635,7 @@ function StandbyComposer({
                 className="btn btn-sm"
                 onClick={() => {
                   if (draft.conversationId === undefined) return
-                  store.openTarget(
+                  openTarget(
                     { kind: 'conversation', conversationId: draft.conversationId },
                     isSplit ? { split: true } : undefined,
                   )
@@ -804,7 +826,7 @@ function StandbyModelPicker({
   isSplit?: boolean
   onCatalogRefreshed: () => Promise<void>
 }) {
-  const store = useHelmStore()
+  const models = useModels()
   const { t } = useWebLocale()
   const lockedNote = t('composer.model.lockedNote')
 
@@ -814,7 +836,7 @@ function StandbyModelPicker({
     defaultModelInfo?.defaultModel,
   )
   const currentModel = effectiveModel !== undefined
-    ? store.models.find((model) => model.id === effectiveModel)
+    ? models.find((model) => model.id === effectiveModel)
     : undefined
   const currentLevels = currentModel?.thinkingLevels ?? ['off']
   const supportsThinking = currentLevels.some((level) => level !== 'off')
@@ -879,7 +901,7 @@ function StandbyEnvBar({ draftKey, draft, profile, disabled, onResetToDefault }:
   disabled: boolean
   onResetToDefault: () => void
 }) {
-  const store = useHelmStore()
+  const nodes = useNodes()
   const { t } = useWebLocale()
 
   const startCustomize = (): void => {
@@ -893,17 +915,17 @@ function StandbyEnvBar({ draftKey, draft, profile, disabled, onResetToDefault }:
 
   const nodeOptions = useMemo<SelectOption<string>[]>(() => {
     const nodeId = draft.envNodeId || 'local'
-    const list: SelectOption<string>[] = store.nodes.map((n) => ({
+    const list: SelectOption<string>[] = nodes.map((n) => ({
       value: n.id,
       label: nodeOptionLabel(n),
       icon: n.id === 'local' ? 'monitor' : 'network',
       meta: n.id !== 'local' ? (n.online ? t('common.online') : t('common.offline')) : undefined,
     }))
-    if (!store.nodes.some((n) => n.id === nodeId)) {
+    if (!nodes.some((n) => n.id === nodeId)) {
       list.push({ value: nodeId, label: t('composer.env.nodeUnknownOption', { nodeId }), icon: 'alert-circle' })
     }
     return list
-  }, [store.nodes, draft.envNodeId, t])
+  }, [nodes, draft.envNodeId, t])
 
   if (!draft.envCustomized) {
     return (
@@ -922,7 +944,7 @@ function StandbyEnvBar({ draftKey, draft, profile, disabled, onResetToDefault }:
     )
   }
 
-  const draftNode = store.nodes.find((n) => n.id === (draft.envNodeId || 'local'))
+  const draftNode = nodes.find((n) => n.id === (draft.envNodeId || 'local'))
   return (
     <div className="composer-env-bar agent-standby-env-bar" data-dirty="true">
       <span className="composer-env-item">

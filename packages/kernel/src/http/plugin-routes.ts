@@ -1,10 +1,10 @@
 /**
- * plugin domain routing:/api/plugins(manage side + doctor/rescan/install + config +
- * docs(contains conversation document dedicated use SSE)+ client.mjs + routes/ motion state routing dispatch) and
- * /api/actions(action manifest and invoke).
+ * Plugin HTTP routes: `/api/plugins` (management, doctor/rescan/install, config,
+ * docs including dedicated sessionDoc SSE, `client.mjs`, and dynamic `routes/` dispatch)
+ * and `/api/actions` (action manifest and invocation).
  *
- * deactivate gate double gate: dispatch before by plugin summary now read re- inspect (deactivated 409);handler execute
- * count liveTasks(and action/tool same source tracker,disable gate visible).
+ * Disable double-gate: re-checks plugin enabled status via summary before dispatch (409 if disabled)
+ * and tracks handler execution in `liveTasks` (shared with actions/tools for disable blocking).
  */
 import { HelmError } from '@helm/protocol'
 import type { JsonSchema, PluginConfigFieldSchema, PublicPluginSessionDoc } from '@helm/protocol'
@@ -38,24 +38,24 @@ export async function handlePluginsDomain(
   if (second === undefined && method === 'GET') {
     return jsonOk(redactor, await kernel.plugins.list())
   }
-  // external plugin DX closed ring (without plugin id segment top point routing, first at requireIdParam).
+  // External plugin DX loop (top-level routes without plugin ID segment; matched before requireIdParam).
   if (second === 'doctor' && method === 'POST' && third === undefined) {
     if (kernel.plugins.doctorExternalPlugin === undefined) {
-      return errorResponse(redactor, 501, 'not_supported', 'when before kernel not provide plugin static self inspect capability')
+      return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin static doctor checks')
     }
     const body = await readJsonBody(ctx.request)
     return jsonOk(redactor, await kernel.plugins.doctorExternalPlugin(parseDoctorTarget(body)))
   }
   if (second === 'rescan' && method === 'POST' && third === undefined) {
     if (kernel.plugins.rescanExternalPlugins === undefined) {
-      return errorResponse(redactor, 501, 'not_supported', 'when before kernel not provide plugin heavy scan capability')
+      return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin rescan')
     }
     return jsonOk(redactor, await kernel.plugins.rescanExternalPlugins())
   }
-  // managed plugin package install (POST /api/plugins/install,body { source, enable? }).
+  // Managed plugin package installation (POST /api/plugins/install, body { source, enable? }).
   if (second === 'install' && method === 'POST' && third === undefined) {
     if (kernel.plugins.installPluginPackage === undefined) {
-      return errorResponse(redactor, 501, 'not_supported', 'when before kernel not provide plugin package install capability')
+      return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin package installation')
     }
     const body = await readJsonBody(ctx.request)
     assertBodySchema(PLUGIN_INSTALL_BODY_SCHEMA, body, 'plugins install body')
@@ -63,7 +63,7 @@ export async function handlePluginsDomain(
     return jsonOk(redactor, await kernel.plugins.installPluginPackage(source, body.enable === true ? { enable: true } : {}))
   }
   const pluginId = requireIdParam(second ?? '', 'pluginId')
-  // core manage side fixed in third segment:enable/disable/config; the rest only remain routes/ motion state routing.
+  // Reserved core management segments in position 3: enable/disable/config; dynamic routes live under routes/.
   if (third === 'enable' && method === 'POST' && fourth === undefined) {
     await kernel.plugins.enable(pluginId)
     return jsonOk(redactor, await kernel.plugins.list())
@@ -75,24 +75,24 @@ export async function handlePluginsDomain(
     await kernel.plugins.disable(pluginId, force ? { force: true } : undefined)
     return jsonOk(redactor, await kernel.plugins.list())
   }
-  // external plugin subject to control hot reload (POST /api/plugins/:id/reload): preflight failed old instance keep do not motion.
+  // External plugin controlled hot reload (POST /api/plugins/:id/reload): leaves current instance untouched on preflight failure.
   if (third === 'reload' && method === 'POST' && fourth === undefined) {
     if (kernel.plugins.reloadExternalPlugin === undefined) {
-      return errorResponse(redactor, 501, 'not_supported', 'when before kernel not provide plugin hot reload capability')
+      return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin hot reload')
     }
     return jsonOk(redactor, await kernel.plugins.reloadExternalPlugin(pluginId))
   }
-  // managed plugin package update (POST /api/plugins/:id/update, and CLI stub convention keep POST).
+  // Managed plugin package update (POST /api/plugins/:id/update).
   if (third === 'update' && method === 'POST' && fourth === undefined) {
     if (kernel.plugins.updatePluginPackage === undefined) {
-      return errorResponse(redactor, 501, 'not_supported', 'when before kernel not provide plugin package update capability')
+      return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin package updates')
     }
     return jsonOk(redactor, await kernel.plugins.updatePluginPackage(pluginId))
   }
-  // managed plugin package remove (POST /api/plugins/:id/remove; and CLI stub convention keep POST).
+  // Managed plugin package removal (POST /api/plugins/:id/remove).
   if (third === 'remove' && method === 'POST' && fourth === undefined) {
     if (kernel.plugins.removePluginPackage === undefined) {
-      return errorResponse(redactor, 501, 'not_supported', 'when before kernel not provide plugin package remove capability')
+      return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin package removal')
     }
     return jsonOk(redactor, await kernel.plugins.removePluginPackage(pluginId))
   }
@@ -107,7 +107,7 @@ export async function handlePluginsDomain(
             : undefined,
         ),
       ])
-      // secret field by schema redaction out station: never let plaintext leave server side.
+      // Redact secret fields per schema before leaving the server.
       const values = redactConfigValues(raw, schema)
       return jsonOk(redactor, {
         values,
@@ -122,15 +122,15 @@ export async function handlePluginsDomain(
     }
     return methodNotAllowed(redactor, method)
   }
-  // plugin public document:GET /api/plugins/:pluginId/docs/:name(private/deactivate/missing 404)
-  // ?conversationId=N switch is conversation document read;/events suffix is conversation document dedicated use SSE.
+  // Plugin public document: GET /api/plugins/:pluginId/docs/:name (404 if private, disabled, or missing).
+  // ?conversationId=N selects sessionDoc snapshot; `/events` opens the dedicated sessionDoc SSE stream.
   if (third === 'docs' && method === 'GET') {
-    // dedicated use SSE:GET /api/plugins/:id/docs/:name/events?conversationId=N
-    // path segment total count = plugins(1) + id(2) + docs(3) + name(4) + events(5).
+    // Dedicated SSE: GET /api/plugins/:id/docs/:name/events?conversationId=N
+    // Total segments = plugins(1) + id(2) + docs(3) + name(4) + events(5).
     if (fourth !== undefined && fifth === 'events' && segments.length === 5) {
       return sessionDocEventsResponse(ctx, kernel, redactor, pluginId, decodeSegment(fourth))
     }
-    if (fifth !== undefined) return errorResponse(redactor, 404, 'not_found', 'routing missing')
+    if (fifth !== undefined) return errorResponse(redactor, 404, 'not_found', 'route not found')
     if (fourth === undefined) throw new ValidationError('missing doc name path segment')
     const name = parseDocNameParam(decodeSegment(fourth))
     const conversationId = parseConversationIdQuery(ctx.url)
@@ -142,17 +142,15 @@ export async function handlePluginsDomain(
       await kernel.plugins.getPublicSessionDoc(pluginId, name, conversationId),
     )
   }
-  // plugin client module:GET/HEAD /api/plugins/:pluginId/client.mjs?module=<relative path>&chunk=<chunkName>&hash=<contentHash>
-  // (authentication by hub unify pre-; deactivate/not declaration/failed to compile return structure error JSON, never return half artifact)
+  // Plugin client module: GET/HEAD /api/plugins/:pluginId/client.mjs?module=<relativePath>&chunk=<chunkName>&hash=<contentHash>
   if (third === 'client.mjs' && (method === 'GET' || method === 'HEAD') && fourth === undefined) {
     return serveClientModule(ctx, kernel, pluginId)
   }
-  // plugin self define motion state routing: force naming empty between /api/plugins/:pluginId/routes/...,
-  // disallows override core routing (enable/disable/config already in on side first match).
+  // Plugin dynamic routes: scoped under /api/plugins/:pluginId/routes/... so core management paths cannot be shadowed.
   if (third === 'routes') {
     return dispatchPluginRoute(kernel, redactor, ctx.request, method, segments)
   }
-  return errorResponse(redactor, 404, 'not_found', 'routing missing')
+  return errorResponse(redactor, 404, 'not_found', 'route not found')
 }
 
 // ---------------------------------------------------------------------------
@@ -177,15 +175,14 @@ export async function handleActionsDomain(
     const body = await readJsonBody(ctx.request)
     const { input, conversationId } = parseActionInvokeBody(body)
     const result = await kernel.plugins.invokeAction(pluginId, actionId, input, conversationId !== undefined ? { conversationId } : undefined)
-    // null is legal output original return;undefined is output boundary violate about,jsonOk
-    // explicit throws (fabricate {ok:true} equals mask service defect).
+    // Null is a valid action output; undefined violates the output contract so reject it explicitly.
     return jsonOk(redactor, result)
   }
-  return errorResponse(redactor, 404, 'not_found', 'routing missing')
+  return errorResponse(redactor, 404, 'not_found', 'route not found')
 }
 
 // ---------------------------------------------------------------------------
-// domain inside auxiliary:body validate / document SSE / client.mjs / motion state routing dispatch
+// Internal helpers: body validation / doc SSE / client.mjs / dynamic route dispatch
 // ---------------------------------------------------------------------------
 
 const PLUGIN_INSTALL_BODY_SCHEMA: JsonSchema = {
@@ -209,10 +206,8 @@ function parsePluginDisableBody(body: Record<string, unknown>): { force?: boolea
 }
 
 /**
- * POST /api/plugins/doctor body: target choose one - -path / dir(directory absolute path,dir is
- * path compatibility alias, etc. price) or id(registered plugin, server side parse its source directory).
- * non-empty/unknown field etc. mechanical shape by schema guarantee; absolute path, alias consistency and
- * id mutual exclusion etc. across field semantics manually write. directory store in/entry legal by doctor check chain real decide.
+ * `POST /api/plugins/doctor` body: accepts `path` / `dir` (aliases for an absolute directory path)
+ * or `id` (a registered plugin whose source directory is resolved server-side).
  */
 function parseDoctorTarget(body: Record<string, unknown>): { dir?: string; id?: string } {
   assertBodySchema(
@@ -230,30 +225,29 @@ function parseDoctorTarget(body: Record<string, unknown>): { dir?: string; id?: 
   )
   const dirLike = (v: unknown, field: string): string | undefined => {
     if (typeof v !== 'string') return undefined
-    // absolute path and .. through exceeds segment unify rule (and PluginHost.doctorExternalPlugin the same
-    // implement, see plugins/doctor-target.ts):HTTP boundary early refuse, does not enter doctor check chain.
+    // Validate cross-platform absolute paths without `..` before running doctor checks.
     assertDoctorTargetDir(v, field)
     return v
   }
   const pathDir = dirLike(body.path, 'path')
   const dirDir = dirLike(body.dir, 'dir')
   if (pathDir !== undefined && dirDir !== undefined && pathDir !== dirDir) {
-    throw new ValidationError('path and dir also provide and inconsistent (two is compatibility alias, please only pass its one)')
+    throw new ValidationError('path and dir conflict; provide only one of them (dir is a compatibility alias for path)')
   }
   if (body.id !== undefined) {
     if (pathDir !== undefined || dirDir !== undefined) {
-      throw new ValidationError('id and path/dir mutual exclusion (choose one provide)')
+      throw new ValidationError('id and path/dir are mutually exclusive; provide only one')
     }
     return { id: body.id as string }
   }
   const resolved = pathDir ?? dirDir
   if (resolved === undefined) {
-    throw new ValidationError('must provide target:path/dir(directory absolute path) or id(registered plugin)')
+    throw new ValidationError('must provide either path/dir (absolute directory path) or id (registered plugin)')
   }
   return { dir: resolved }
 }
 
-/** ?conversationId=N query parameter: positive integer conversation ID; non- positive integer/non- number 400. */
+/** Parses `?conversationId=N` query param as a positive safe integer (400 otherwise). */
 function parseConversationIdQuery(url: URL): number | undefined {
   const raw = url.searchParams.get('conversationId')
   if (raw === null) return undefined
@@ -268,14 +262,11 @@ function parseConversationIdQuery(url: URL): number | undefined {
 }
 
 /**
- * conversation document dedicated use SSE:GET /api/plugins/:id/docs/:name/events?conversationId=N.
- * - authentication and GET same source (hub unify pre-, without public exemption; unauthorized return structure JSON 401);
- * - pass to port is sync snapshot provider(while non- pre- first take well snapshot): hub first create buffer subscribe
- *   again tune provider, eliminate first snapshot after subscribe lose frame window;provider inside complete
- *   plugin enable + document public + conversation store in three heavy validate (failed throw 404/400, create connect before i.e. refuse);
- * - plugin deactivate/conversation delete by kernel side event drive closure stream (plugin.changed /
- *   conversation.deleted),HTTP layer do not polling;
- * - kernel not provide sessionDocEvents port when 501(forbid memory fall back).
+ * Dedicated sessionDoc SSE: `GET /api/plugins/:id/docs/:name/events?conversationId=N`.
+ * - Auth shares hub middleware; returns structured JSON 401 when unauthorized;
+ * - Sync snapshot provider runs after registering the buffered subscription to prevent missed frames;
+ * - Stream closes cleanly on `plugin.changed` (`enabled=false`) or `conversation.deleted` events;
+ * - Returns 501 if `sessionDocEvents` port is unavailable (no polling/in-memory fallback).
  */
 async function sessionDocEventsResponse(
   ctx: RouteContext,
@@ -287,20 +278,17 @@ async function sessionDocEventsResponse(
   const name = parseDocNameParam(rawName)
   const conversationId = parseConversationIdQuery(ctx.url)
   if (conversationId === undefined) {
-    throw new ValidationError('conversation document subscribe must carry ?conversationId=<positive integer>')
+    throw new ValidationError('sessionDoc subscription requires ?conversationId=<positive integer>')
   }
   const port = kernel.sessionDocEvents
   if (port === undefined) {
     throw new HelmError(
       'not_implemented',
-      'when before runtime not provide conversation document event stream (sessionDocEvents port missing)',
+      'Current runtime does not support sessionDoc event streams (sessionDocEvents port missing)',
       501,
     )
   }
   const target = { pluginId, name, conversationId }
-  // sync snapshot provider: read also complete three heavy validate (404 semantics), fails sync throw to
-  // on layer (hub rotate structure JSON error, client based on this stop retry); create connect race by
-  // provider in subscribe establish after again validate honor bottom.
   const snapshot = () => {
     const doc = snapshotDocOf(kernel, pluginId, name, conversationId)
     return { seq: port.seq, doc }
@@ -309,7 +297,7 @@ async function sessionDocEventsResponse(
   return port.response(ctx.request, { snapshot, target })
 }
 
-/** snapshot read sync wrap:getPublicSessionDoc sync return when directly use, async when reject. */
+/** Ensures `getPublicSessionDoc` returns synchronously for atomic snapshot-after-subscribe semantics. */
 function snapshotDocOf(
   kernel: KernelRuntimeLike,
   pluginId: string,
@@ -318,18 +306,16 @@ function snapshotDocOf(
 ): PublicPluginSessionDoc {
   const result = kernel.plugins.getPublicSessionDoc(pluginId, name, conversationId)
   if (result instanceof Promise) {
-    // port contract want seek sync snapshot (dedicated use stream subscribe and snapshot the same atomic window); async implement
-    // belongs to contract violate about, explicit reject while is not wait for after fabricate sync.
     throw new HelmError(
       'not_implemented',
-      'when before runtime  getPublicSessionDoc is async implement, cannot provide sync conversation document snapshot',
+      'Current runtime getPublicSessionDoc is async and cannot provide synchronous sessionDoc snapshots',
       501,
     )
   }
   return result
 }
 
-/** GET/HEAD /api/plugins/:id/client.mjs: module reference boundary validate + ETag/304 + gzip. */
+/** GET/HEAD `/api/plugins/:id/client.mjs`: validates module/chunk/hash params and handles ETag/304 + gzip. */
 async function serveClientModule(
   ctx: RouteContext,
   kernel: KernelRuntimeLike,
@@ -338,16 +324,16 @@ async function serveClientModule(
   const { request, method, url } = ctx
   const moduleRef = url.searchParams.get('module')
   if (moduleRef === null || moduleRef.length === 0) {
-    throw new ValidationError('missing module query parameter (each other for clientRoot  .ts/.tsx path)')
+    throw new ValidationError('missing module query parameter (relative .ts/.tsx path under clientRoot)')
   }
   if (moduleRef.length > 256 || moduleRef.includes('..') || moduleRef.startsWith('/') || moduleRef.includes('\\')) {
-    throw new ValidationError('module must be clientRoot inside each other for .ts/.tsx path (forbidden absolute path/..exceeds)')
+    throw new ValidationError('module must be a relative .ts/.tsx path inside clientRoot (absolute paths and .. are disallowed)')
   }
   const chunk = url.searchParams.get('chunk') ?? undefined
   const hash = url.searchParams.get('hash') ?? undefined
   if (chunk !== undefined) {
     if (!/^[A-Za-z0-9._-]+\.js$/.test(chunk) || chunk.includes('..')) {
-      throw new HelmError('invalid_client_module', 'chunk name illegal (must match /^[A-Za-z0-9._-]+\\.js$/ and excludes ..)', 400)
+      throw new HelmError('invalid_client_module', 'Invalid chunk name (must match /^[A-Za-z0-9._-]+\\.js$/ without ..)', 400)
     }
   }
   const compiled = await kernel.plugins.getClientModule(pluginId, moduleRef, {
@@ -419,10 +405,8 @@ async function serveClientModule(
 }
 
 /**
- * plugin routing declaration carry complete path (PluginHost force /api/plugins/<id>/ prefix).
- * this where with complete declaration path and complete request path do the same match than for; and hub.ts 
- * public exemption decide shared use findPluginRoute, semantics do not drift.
- * handler receives original Request/URL(do not decode heavy write pathname, do not break signature semantics).
+ * Dispatches dynamic plugin routes (`/api/plugins/<id>/routes/...`) using `findPluginRoute`.
+ * Re-checks plugin enabled state via summary (409 if disabled) and tracks handler execution in `liveTasks`.
  */
 async function dispatchPluginRoute(
   kernel: KernelRuntimeLike,
@@ -431,43 +415,30 @@ async function dispatchPluginRoute(
   method: string,
   segments: string[],
 ): Promise<Response> {
-  // reference segments already strip 'api' prefix (['plugins', id, 'routes', ...rest]);
-  // findPluginRoute match complete declaration path, patch back prefix segment unify semantics.
   const routes = kernel.plugins.listRoutes()
   const found = findPluginRoute(routes, method, ['api', ...segments])
   if (found === undefined) {
     const rest = segments.slice(4).join('/')
-    return errorResponse(redactor, 404, 'route_not_found', `plugin routing missing: ${method} /${rest}`)
+    return errorResponse(redactor, 404, 'route_not_found', `Plugin route not found: ${method} /${rest}`)
   }
-  // deactivate gate a)- - summary re- inspect:listRoutes only by enabled filter, and snapshot take self dispatch
-  // before, may and deactivate complete hand over wrong; dispatch before by plugin summary now read re-check, deactivated i.e. 409 reject
-  // (does not request dispatch to already split destroy plugin half execute).
   const summary = kernel.plugins.get?.(found.pluginId)
   if (summary !== undefined && summary.enabled !== true) {
-    throw new HelmError('plugin_disabled', `plugin ${found.pluginId} deactivated, routing unavailable`, 409, {
+    throw new HelmError('plugin_disabled', `Plugin ${found.pluginId} is disabled; route unavailable`, 409, {
       pluginId: found.pluginId,
     })
   }
-  // deactivate gate b)- - in-flight trace:handler execute count liveTasks(and action/tool
-  // same source tracker, see capability-registry  invokeAction/executeTool wrap),
-  // make disable  assertNoLiveTasks gate for in-flight route request visible.
-  // leftover remaining window (such as declaration): public summary excludes lifecycle phase,disable enter
-  // teardown after (enabled still true) new to request still will by dispatch - - completely closed together need to
-  // PluginHost public phase aware dispatch gate (lifecycle-helpers 
-  // getActiveEnabledPluginIds do not inspect phase, must across group modify plugins/).
   const invokeHandler = (): Promise<Response> => Promise.resolve(found.route.handler(request))
   const response = await (kernel.plugins.withTask !== undefined
     ? kernel.plugins.withTask(found.pluginId, `route:${found.route.method} ${found.route.path}`, invokeHandler)
     : invokeHandler())
   if (!(response instanceof Response)) {
-    throw new HelmError('invalid_route_handler_output', 'plugin routing handler must return Response', 500)
+    throw new HelmError('invalid_route_handler_output', 'Plugin route handler must return a Response', 500)
   }
   return response
 }
 
 /**
- * plugin config redaction:schema in secret: true field value replace is '******'(already config) or
- * hide (not config); only public Schema declaration config, motion state plugin credentials do not belongs to config interface.
+ * Redacts `secret: true` config fields before leaving the server (`'******'` when set, `''` otherwise).
  */
 function redactConfigValues(
   raw: Record<string, unknown>,

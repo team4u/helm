@@ -1,11 +1,11 @@
 /**
- * RuntimeTriggerDispatcher: station trigger and message seal guard against escape handle orchestration (from KernelRuntime split out).
+ * RuntimeTriggerDispatcher: orchestrates external trigger routing and defanged message envelope handling (extracted from KernelRuntime).
  *
- * responsibility:
- * - defang guard against escape message seal escaping (guard against </external_event> inject);
- * - busy policy: trigger deliveries submit with whenBusy=steer (followUp stays available to explicit callers);
- * - without explicit target trigger default delivery target parse (resolveDefaultTriggerTarget concurrency merge);
- * - external trigger pipeline orchestration (dispatchTrigger validate original explicit target -> trigger hook -> submitInput).
+ * Responsibilities:
+ * - Defang external message envelopes via XML escaping (prevents `</external_event>` tag injection);
+ * - Busy policy: trigger deliveries submit with `whenBusy = 'steer'` (`followUp` remains available to explicit callers);
+ * - Resolve the default delivery target when no explicit target is specified (deduplicating concurrent resolution via `resolveDefaultTriggerTarget`);
+ * - Orchestrate the external trigger pipeline (`dispatchTrigger`: validate original explicit target -> run `trigger` hook -> `submitInput`).
  */
 
 import { HelmError } from '@helm/protocol'
@@ -28,12 +28,12 @@ export interface RuntimeTriggerDispatcherDeps {
 }
 
 export class RuntimeTriggerDispatcher {
-  /** trigger by default entry conversation concurrency on demand create Promise. */
+  /** Coalesced in-flight Promise for creating the default trigger target conversation on demand. */
   private defaultTriggerTargetCreation: Promise<number> | undefined
 
   constructor(private readonly deps: RuntimeTriggerDispatcherDeps) {}
 
-  /** defang guard against escape message seal: all motion state field XML escaping (guard against </external_event> inject). */
+  /** Defang an external message envelope: XML-escape all dynamic fields to prevent `</external_event>` injection. */
   defang(envelope: ExternalTriggerEnvelope): string {
     const id = escapeXml(envelope.id)
     const source = escapeXml(envelope.source)
@@ -42,13 +42,13 @@ export class RuntimeTriggerDispatcher {
   }
 
   /**
-   * without explicit target trigger default delivery target parse:
-   * - without targetConversationId message seal (transform may already change write) enter this method;
-   * - choose assistant Profile under most new without parent chain human-owned conversation;ownership only read right threat
-   *   conversation-ownership document, do not from tags/parent or summary throw shadow push assert;
-   * - no choose when on demand creates new ordinary assistant conversation, and merge same process concurrency create;Promise after completion
-   *   i.e. clean up, do not cache can by delete conversation ID, failed after can retry.
-   * explicit designate target in trigger hook run before already validate store in, will not enter this method.
+   * Resolve the default delivery target for a trigger without an explicit target:
+   * - Entered only when `targetConversationId` is unset on the envelope (post-hook transforms may rewrite it);
+   * - Selects the newest non-child human-owned conversation under the assistant Profile; ownership is read solely
+   *   from the authoritative `conversation-ownership` document rather than inferred from tags/parent or summaries;
+   * - Creates a normal assistant conversation on demand if none matches, coalescing concurrent in-process creations;
+   *   the Promise is cleared immediately upon settlement so deletable IDs are not cached and failures can retry.
+   * Explicitly designated targets are validated before the `trigger` hook runs and never enter this method.
    */
   async resolveDefaultTriggerTarget(): Promise<number> {
     const candidates = this.deps.store
@@ -77,10 +77,10 @@ export class RuntimeTriggerDispatcher {
     }
   }
 
-  /** external trigger: first validate original explicit target, again run can change write routing trigger hook. */
+  /** External trigger delivery: validate any original explicit target before running hooks that may rewrite routing. */
   async dispatchTrigger(envelope: ExternalTriggerEnvelope): Promise<void> {
     if (envelope.targetConversationId !== undefined) {
-      // Hook(including ThreadKey direct throw) must not invalid explicit target change write into valid target come mask error.
+      // Hooks (including ThreadKey mapping) must not mask an invalid explicit target by rewriting it to a valid one.
       this.deps.getConversation(envelope.targetConversationId)
     }
     const initial: ExternalTriggerEnvelope = { ...envelope, text: this.defang(envelope) }
@@ -89,20 +89,20 @@ export class RuntimeTriggerDispatcher {
     let final = initial
     if (outcome?.action === 'transform') {
       final = outcome.value as ExternalTriggerEnvelope
-      // transform after text again guard against once (plugin may replace original text).
+      // Re-defang post-transform text in case a plugin replaced the original payload.
       final = { ...final, text: this.defang({ ...final, text: stripEnvelope(final.text) }) }
     }
     if (final.targetConversationId !== undefined) {
-      // explicit target (contains hook change write): expires deputy target by submitInput  requireConv honor bottom
-      // explicit not_found(honest reject; expires explicit target must not by heavy routing mask).
+      // Explicit target (including hook rewrites): deleted targets fall through to submitInput's requireConv
+      // and throw not_found (honest rejection; an expired explicit target must not be masked by re-routing).
       await this.deps.submitInput(final.targetConversationId, final.text, { origin: 'trigger', whenBusy: 'steer' })
       return
     }
-    // default target:resolve and submitInput between target conversation may by delete (TOCTOU window,
-    // cannot atomic close).submitInput first row requireConv first at any side effect,not_found
-    // reject when for default path heavy parse once again delivery - - this is complete routing decide policy, is not for the same target
-    // delivery retry (do not break cronthis plan point do not retry semantics); again failed such as on throw
-    // (the time trigger payload lose, semantics and fix before consistent).
+    // Default target: the target conversation may be deleted during the TOCTOU window between resolve and
+    // submitInput (cannot be closed atomically). submitInput validates requireConv before any side effect;
+    // on not_found for the default path, resolve and deliver once more — this re-evaluates routing rather than
+    // retrying delivery to the same target (preserving cron fire-once semantics); a second failure propagates
+    // cleanly (dropping that trigger payload, matching pre-fix behavior).
     const target = await this.resolveDefaultTriggerTarget()
     try {
       await this.deps.submitInput(target, final.text, { origin: 'trigger', whenBusy: 'steer' })

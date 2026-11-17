@@ -1,8 +1,8 @@
 /**
- * ProfileService: manage `profiles/<id>/`(profile.json + SYSTEM.md).
- * Profile shape with @helm/protocol is allow (id required,name/model/runtime/tags optional);
- * model is empty string or default means not config, by runtime explicit errors, service layer do not fabricate by default model.
- * MEMORY.md long phase memory by builtin:memory plugin self govern manage, does not enter this service.
+ * ProfileService: manages `profiles/<id>/` (profile.json + SYSTEM.md).
+ * Profile schema conforms to @helm/protocol (id required; name/model/runtime/tags optional).
+ * An empty or omitted model means unconfigured—runtime reports an explicit error rather than fabricating a default model in the service layer.
+ * Long-term MEMORY.md is autonomously managed by the builtin:memory plugin and does not belong here.
  */
 import { lstat, mkdir, readdir, readFile, realpath, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -28,30 +28,30 @@ import { withFileLock } from './file-lock.js'
 export const DEFAULT_PROFILE_ID = 'assistant'
 export const DEFAULT_PROFILE_NAME = 'person assist'
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/
-/** think Profile legal enumeration (and pi-ai ModelThinkingLevel same source;schema without runtime dependency, this where independent declaration). */
+/** Valid thinking level enum values (aligned with pi-ai ModelThinkingLevel; declared independently so schema stays dependency-free). */
 const THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
 
 /**
- * Layer 0 common resident system hint (three layer gradually enter style disclose most top-level): only declaration identity and managed helm
- * CLI environment direct feel; command table, generate style UI component dictionary etc. work detail push down Layer 1/2
- *(skills/helm-cli), detailed manual do not common resident (directory description still has few amount cost).
- * update_memory use refer quote by builtin:memory plugin by Profile switch motion state inject.
+ * Layer 0 resident system prompt (top of the three-tier progressive disclosure): declares only identity and managed helm
+ * CLI awareness; command tables, generative UI component references, and other working details live in Layer 1/2
+ * (skills/helm-cli) instead of remaining permanently resident (skill catalog descriptions still carry minimal cost).
+ * update_memory instructions are dynamically injected by the builtin:memory plugin based on the Profile toggle.
  */
 export const SYSTEM_DEFAULT = [
   '# System Prompt',
   '',
-  'you is run in Helm microkernel on person assist.',
+  'You are a personal assistant running on the Helm microkernel.',
   '',
-  '1. managed bash already provide `helm` CLI and conversation identity `HELM_CONVERSATION_ID`, available `--current` and `--json` invoke.',
-  '2. when before available skill contains helm-cli when, operation Helm or answer host capability issue before, first `load_skill({ skillId: "helm-cli" })` and on demand read references, via command help and actual state verify capability; the skill do not in when before available directory in when skip this step.',
-  '3. ordinary back re- use Markdown; interaction style card, can re- use micro app etc. extend output form with when turn available skill directory is allow: skill description declaration provide this class capability when, first load_skill load its refer quote again output, directory in missing when use ordinary Markdown, do not reference missing manual. generate file supply user in Web view when, use write(..., artifact: true),register_artifact({ path }) or helm artifacts put <path> --current register artifact, and in back re- in use [filename](artifact:<id>) or ![diagram piece](artifact:<id>) directly render. external command generate file when use target node on absolute output path, confirm pre- phase file store in and register after success again deliver or clean up source worktree.',
+  '1. Managed bash provides the `helm` CLI and conversation identity `HELM_CONVERSATION_ID`; invoke commands with `--current` and `--json`.',
+  '2. When `helm-cli` is in the currently available skills directory, call `load_skill({ skillId: "helm-cli" })` and read its references on demand before operating Helm or answering host capability questions, verifying capabilities through command help and live state; skip this step if the skill is not in the currently available directory.',
+  '3. Use Markdown for normal replies; extended output formats such as interactive cards or reusable micro-apps follow the currently available skill directory for this turn: when a skill description declares such a capability, call `load_skill` first to load its guide before outputting, and fall back to normal Markdown without referencing nonexistent guides if missing from the directory. When generating files for users to view on Web, register artifacts via `write(..., artifact: true)`, `register_artifact({ path })`, or `helm artifacts put <path> --current`, and render them directly in your reply using `[filename](artifact:<id>)` or `![image](artifact:<id>)`. When an external command produces files, use an absolute output path on the target node and verify the expected file exists and is registered before delivering or cleaning up the source worktree.',
   '',
 ].join('\n')
 
-/** validate profile id: small write character parent number and hyphen, guard against directory inject and path through exceeds. */
+/** Validate profile id: lowercase alphanumeric and hyphens, preventing directory injection and path traversal. */
 export function assertProfileId(id: string): void {
   if (!NAME_PATTERN.test(id)) {
-    throw new Error(`illegal profile id: ${id}(only allows a-z 0-9 and hyphen)`)
+    throw new Error(`illegal profile id: ${id} (only allows a-z 0-9 and hyphen)`)
   }
 }
 
@@ -67,42 +67,42 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** Unicode code point length (proxy for count 1, and render width direct feel consistent; contract unify opening path). */
+/** Unicode code-point length (surrogate pairs count as 1, matching visual display width; canonical across contract). */
 export function codePointLength(text: string): number {
   let count = 0
   for (const _ of text) count += 1
   return count
 }
 
-/** single quote lead term boundary validate:label specification is trim form,prompt keep original text;
- * unknown field reject (quote lead term is user can edit data, static default lose field will build into UI save after lose content). */
+/** Validate a single starter prompt at the boundary: label is normalized by trimming, prompt preserves original text;
+ * unknown fields are rejected (starters are user-editable data; silently dropping fields causes data loss in UI saves). */
 export function validateProfileStarter(item: unknown, at: string): ProfileStarterPrompt {
   if (!isPlainObject(item)) throw new Error(`${at} must be { label, prompt } object`)
   const label = item['label']
   const prompt = item['prompt']
   if (Object.keys(item).some((key) => key !== 'label' && key !== 'prompt')) {
-    throw new Error(`${at} only accept label and prompt field`)
+    throw new Error(`${at} may only accept label and prompt fields`)
   }
-  if (typeof label !== 'string') throw new Error(`${at}.label must be string`)
+  if (typeof label !== 'string') throw new Error(`${at}.label must be a string`)
   const normalizedLabel = label.trim()
   if (codePointLength(normalizedLabel) === 0) throw new Error(`${at}.label cannot be empty after trimming`)
   if (codePointLength(normalizedLabel) > PROFILE_STARTER_LABEL_MAX_LENGTH) {
-    throw new Error(`${at}.label at most ${PROFILE_STARTER_LABEL_MAX_LENGTH}  Unicode code point`)
+    throw new Error(`${at}.label at most ${PROFILE_STARTER_LABEL_MAX_LENGTH} Unicode code points`)
   }
-  if (typeof prompt !== 'string') throw new Error(`${at}.prompt must be string`)
+  if (typeof prompt !== 'string') throw new Error(`${at}.prompt must be a string`)
   if (prompt.trim() === '') throw new Error(`${at}.prompt cannot be pure whitespace`)
   if (codePointLength(prompt) > PROFILE_STARTER_PROMPT_MAX_LENGTH) {
-    throw new Error(`${at}.prompt at most ${PROFILE_STARTER_PROMPT_MAX_LENGTH}  Unicode code point (keep original text, do not truncate)`)
+    throw new Error(`${at}.prompt at most ${PROFILE_STARTER_PROMPT_MAX_LENGTH} Unicode code points (preserves original text without truncation)`)
   }
   return { label: normalizedLabel, prompt }
 }
 
-/** Profile input boundary validate (new increase/update shared use); return specification after can persist form. */
+/** Validate Profile input at the boundary (shared by create/update); returns the normalized persistable shape. */
 export function validateProfileInput(input: unknown): Profile {
-  if (!isPlainObject(input)) throw new Error('profile must be object')
+  if (!isPlainObject(input)) throw new Error('profile must be an object')
   const id = input['id']
   if (typeof id !== 'string' || !NAME_PATTERN.test(id)) {
-    throw new Error(`illegal profile id: ${String(id)}(only allows a-z 0-9 and hyphen)`)
+    throw new Error(`illegal profile id: ${String(id)} (only allows a-z 0-9 and hyphen)`)
   }
   const profile: Profile = { id }
   const name = input['name']
@@ -114,44 +114,44 @@ export function validateProfileInput(input: unknown): Profile {
   }
   const model = input['model']
   if (model !== undefined) {
-    if (typeof model !== 'string') throw new Error(`profile '${id}' model must be string`)
+    if (typeof model !== 'string') throw new Error(`profile '${id}' model must be a string`)
     profile.model = model
   }
   const thinkingLevel = input['thinkingLevel']
   if (thinkingLevel !== undefined) {
     if (typeof thinkingLevel !== 'string' || !THINKING_LEVELS.has(thinkingLevel)) {
-      throw new Error(`profile '${id}' thinkingLevel illegal (legal value:${[...THINKING_LEVELS].join(' | ')})`)
+      throw new Error(`profile '${id}' thinkingLevel is invalid (valid values: ${[...THINKING_LEVELS].join(' | ')})`)
     }
     profile.thinkingLevel = thinkingLevel
   }
   const nodeId = input['nodeId']
   if (nodeId !== undefined) {
     if (typeof nodeId !== 'string' || nodeId === '') {
-      throw new Error(`profile '${id}' nodeId if store in must be non-empty string (compute node ID)`)
+      throw new Error(`profile '${id}' nodeId must be a non-empty string when present (compute node ID)`)
     }
     profile.nodeId = nodeId
   }
   const cwd = input['cwd']
   if (cwd !== undefined) {
     if (typeof cwd !== 'string' || cwd === '') {
-      throw new Error(`profile '${id}' cwd if store in must be non-empty string (target platform absolute path)`)
+      throw new Error(`profile '${id}' cwd must be a non-empty string when present (target platform absolute path)`)
     }
     profile.cwd = cwd
   }
   const tags = input['tags']
   if (tags !== undefined) {
     if (!Array.isArray(tags) || tags.some((t) => typeof t !== 'string')) {
-      throw new Error(`profile '${id}' tags must be string array`)
+      throw new Error(`profile '${id}' tags must be a string array`)
     }
     profile.tags = [...tags] as string[]
   }
-  // skill blank name single: element must be legal skill id; duplicate items specification dedupe after persist (keep [],
-  // empty array means disable all skill). allows save not yet install id- - skill directory is runtime
-  // state (can after install), config phase do not strong seek store in; runtime by isSkillAvailable unify decide.
+  // Skill allowlist: elements must be valid skill IDs; duplicates are deduplicated before persisting ([] is preserved
+  // to disable all skills). Saving not-yet-installed IDs is permitted since skill directories are runtime state;
+  // runtime checks availability uniformly via isSkillAvailable.
   const skills = input['skills']
   if (skills !== undefined) {
     if (!Array.isArray(skills) || skills.some((s) => typeof s !== 'string')) {
-      throw new Error(`profile '${id}' skills must be string array (skill id blank name single; default all available, empty array disable all)`)
+      throw new Error(`profile '${id}' skills must be a string array (skill ID allowlist; defaults to all enabled, empty array disables all)`)
     }
     const deduped: string[] = []
     for (const skillId of skills) {
@@ -160,13 +160,13 @@ export function validateProfileInput(input: unknown): Profile {
     }
     profile.skills = deduped
   }
-  // whitespace conversation quote lead term: at most six items;label trim after non-empty and ≤24 code point (specification is trim
-  // form persist),prompt non- pure whitespace and keep original text (≤4000 code point, do not truncate).
-  // empty array [] explicit keep (means empty self define, back host by default hint), default do not write field.
+  // Empty-conversation starter prompts: up to 6 items; label is trimmed, non-empty, and <=24 code points (persisted trimmed);
+  // prompt must not be pure whitespace and preserves original text (<=4000 code points, never truncated).
+  // An empty array [] is explicitly persisted (meaning "cleared custom starters, fall back to host defaults"); omitted leaves field unset.
   const starters = input['starters']
   if (starters !== undefined) {
     if (!Array.isArray(starters)) {
-      throw new Error(`profile '${id}' starters must be { label, prompt } object array`)
+      throw new Error(`profile '${id}' starters must be an array of { label, prompt } objects`)
     }
     if (starters.length > PROFILE_STARTERS_MAX_ITEMS) {
       throw new Error(`profile '${id}' starters at most ${PROFILE_STARTERS_MAX_ITEMS} items`)
@@ -176,69 +176,68 @@ export function validateProfileInput(input: unknown): Profile {
   const managedByPlugin = input['managedByPlugin']
   if (managedByPlugin !== undefined) {
     if (typeof managedByPlugin !== 'string' || managedByPlugin.trim() === '') {
-      throw new Error(`profile '${id}' managedByPlugin if store in must be non-empty string (hosting plugin ID)`)
+      throw new Error(`profile '${id}' managedByPlugin must be a non-empty string when present (owning plugin ID)`)
     }
     profile.managedByPlugin = managedByPlugin
   }
   const humanSelectable = input['humanSelectable']
   if (humanSelectable !== undefined) {
     if (typeof humanSelectable !== 'boolean') {
-      throw new Error(`profile '${id}' humanSelectable if store in must be boolean value (common resident single example role placement false, default true)`)
+      throw new Error(`profile '${id}' humanSelectable must be a boolean when present (false for singleton system roles, defaults to true)`)
     }
     profile.humanSelectable = humanSelectable
   }
   const runtime = input['runtime']
   if (runtime !== undefined) {
-    if (!isPlainObject(runtime)) throw new Error(`profile '${id}' runtime must be object`)
+    if (!isPlainObject(runtime)) throw new Error(`profile '${id}' runtime must be an object`)
     const runtimeKeys = new Set(['kind', 'agent', 'args', 'nodeId', 'workspace', 'env'])
     for (const key of Object.keys(runtime)) {
-      if (!runtimeKeys.has(key)) throw new Error(`profile '${id}' runtime contains unknown field '${key}', reject ignore execute target`)
+      if (!runtimeKeys.has(key)) throw new Error(`profile '${id}' runtime contains unknown field '${key}'; refusing to ignore execution target`)
     }
     const kind = runtime['kind']
     const agent = runtime['agent']
-    // kernel zero plugin enumeration hard encode:kind only validate external runtime identifier format (naming empty between small write
-    // identifier symbol, such as 'herdr' / 'docker'), specific runtime is otherwise by plugin take over by
-    // agent_spawn hook pipeline decide, kernel do not point name any plugin.
+    // Zero plugin enum hardcoding in kernel: kind only validates external runtime identifier format (lowercase namespace
+    // identifier, e.g. 'herdr' / 'docker'); whether a plugin handles it is decided by the agent_spawn hook pipeline.
     if (typeof kind !== 'string' || !/^[a-z][a-z0-9_-]{0,31}$/.test(kind)) {
-      throw new Error(`profile '${id}' runtime.kind must be external runtime identifier symbol (small write character parent open head, can contains a-z 0-9 _ -, length 1..32)`)
+      throw new Error(`profile '${id}' runtime.kind must be an external runtime identifier (starts with a-z, may contain a-z 0-9 _ -, length 1..32)`)
     }
     if (typeof agent !== 'string' || agent === '') {
       throw new Error(`profile '${id}' runtime.agent cannot be empty`)
     }
     const args = runtime['args']
     if (args !== undefined && (!Array.isArray(args) || args.some((a) => typeof a !== 'string'))) {
-      throw new Error(`profile '${id}' runtime.args must be string array`)
+      throw new Error(`profile '${id}' runtime.args must be a string array`)
     }
     const nodeId = runtime['nodeId']
     if (nodeId !== undefined && (typeof nodeId !== 'string' || nodeId === '')) {
-      throw new Error(`profile '${id}' runtime.nodeId if store in must be non-empty string (target compute node identifier)`)
+      throw new Error(`profile '${id}' runtime.nodeId must be a non-empty string when present (target compute node ID)`)
     }
     const workspace = runtime['workspace']
     if (workspace !== undefined) {
       if (typeof workspace !== 'string' || workspace === '') {
-        throw new Error(`profile '${id}' runtime.workspace if store in must be non-empty string (absolute path)`)
+        throw new Error(`profile '${id}' runtime.workspace must be a non-empty string when present (absolute path)`)
       }
-      // across platform absolute path (and runtime/tools.ts isAbsoluteTargetPath same semantics):
-      // POSIX `/`,Windows symbol `C:\\` / `C:/`,UNC `\\\\server\\share`.
+      // Cross-platform absolute paths (same semantics as isAbsoluteTargetPath in runtime/tools):
+      // POSIX `/`, Windows drive `C:\\` / `C:/`, UNC `\\\\server\\share`.
       if (!(
         workspace.startsWith('/') ||
         /^[a-zA-Z]:[\\/]/.test(workspace) ||
         /^\\\\[^\\]+\\[^\\]+/.test(workspace)
       )) {
-        throw new Error(`profile '${id}' runtime.workspace must be across platform absolute path (POSIX /,Windows symbol or UNC), when before is '${workspace}'`)
+        throw new Error(`profile '${id}' runtime.workspace must be a cross-platform absolute path (POSIX /, Windows drive, or UNC), got '${workspace}'`)
       }
     }
     const env = runtime['env']
     if (env !== undefined) {
       if (!isPlainObject(env) || Object.keys(env).length === 0) {
-        throw new Error(`profile '${id}' runtime.env if store in must be non-empty object`)
+        throw new Error(`profile '${id}' runtime.env must be a non-empty object when present`)
       }
       for (const [name, value] of Object.entries(env)) {
         if (!isValidEnvName(name)) {
-          throw new Error(`profile '${id}' runtime.env key '${name}' must be legal environment variable name`)
+          throw new Error(`profile '${id}' runtime.env key '${name}' must be a valid environment variable name`)
         }
         if (typeof value !== 'string') {
-          throw new Error(`profile '${id}' runtime.env['${name}'] must be string (such as must secret please use credentials/secret stash, do not profile)`)
+          throw new Error(`profile '${id}' runtime.env['${name}'] must be a string (store secrets in credentials/secret stash, not in profile)`)
         }
       }
     }
@@ -254,14 +253,14 @@ export function validateProfileInput(input: unknown): Profile {
   return profile
 }
 
-/** file asset by when before contract validate, do not push test old format or ignore unknown execute field. */
+/** Validate file asset against the current contract without guessing legacy formats or ignoring unknown execution fields. */
 function normalizeProfile(value: unknown, id: string): Profile {
-  if (!isPlainObject(value)) throw new Error(`profile.json structure illegal: ${id}`)
+  if (!isPlainObject(value)) throw new Error(`profile.json has invalid structure: ${id}`)
   return validateProfileInput({ ...value, id })
 }
 
-/** before deletion bind set re-check dependency:HTTP layer inject conversation side query, service layer honor bottom close
- * routing fast path check → concurrency create/PATCH bind set → delete hand over wrong window. */
+/** Binding re-check dependency before deletion: HTTP layer injects conversation query so the service layer closes
+ * the race window between route fast-path check, concurrent create/PATCH binding, and disk deletion. */
 export interface ProfileDeleteDeps {
   isProfileInUse(profileId: string): boolean | Promise<boolean>
 }
@@ -269,7 +268,7 @@ export interface ProfileDeleteDeps {
 export class ProfileService {
   constructor(private readonly dataDir: string) {}
 
-  /** first time start self raise by default assistant profile(already exists then original return, does not override user change). */
+  /** Bootstrap the default assistant profile on first startup (returns existing profile unchanged without overwriting user edits). */
   async ensureDefault(): Promise<Profile> {
     const existing = await this.get(DEFAULT_PROFILE_ID)
     if (existing !== undefined) return existing
@@ -309,12 +308,12 @@ export class ProfileService {
     return normalizeProfile(value, id)
   }
 
-  /** creates new or whole save profile(if carry system then atomic sync until SYSTEM.md, do not write profile.json). */
+  /** Create or replace a profile (if system is provided, atomically syncs to SYSTEM.md without writing it into profile.json). */
   async save(input: unknown): Promise<Profile> {
-    if (!isPlainObject(input)) throw new Error('profile must be object')
+    if (!isPlainObject(input)) throw new Error('profile must be an object')
     const rawSystem = input['system']
     if (rawSystem !== undefined && typeof rawSystem !== 'string') {
-      throw new Error('profile system must be string')
+      throw new Error('profile system must be a string')
     }
     const profile = validateProfileInput(input)
     const dir = profileDir(this.dataDir, profile.id)
@@ -329,19 +328,18 @@ export class ProfileService {
   }
 
   /**
-   * delete profile; by default assistant subject to protect cannot delete.
-   * deps.isProfileInUse(optional): delete before finally one moment re-check without conversation bind set, has then
-   * 409 profile_in_use- - routing layer fast path check and delete between isolate multiple await, concurrency
-   * create/PATCH bind set can in window inside through; do not inject when only keep by default profile protect
-   * (caller self row guarantee without bind set).
+   * Delete a profile; the default assistant profile is protected and cannot be deleted.
+   * deps.isProfileInUse (optional): re-checks right before deleting on disk that no conversation binds this profile,
+   * throwing 409 profile_in_use if bound (prevents TOCTOU races across awaits between route check and concurrent create/PATCH);
+   * when omitted, only the default profile protection applies (caller is responsible for checking bindings).
    */
   async delete(id: string, deps?: ProfileDeleteDeps): Promise<void> {
     assertProfileId(id)
     if (id === DEFAULT_PROFILE_ID) {
-      throw new Error(`by default profile '${DEFAULT_PROFILE_ID}' cannot delete`)
+      throw new Error(`default profile '${DEFAULT_PROFILE_ID}' cannot be deleted`)
     }
     if (deps !== undefined && (await deps.isProfileInUse(id))) {
-      throw new HelmError('profile_in_use', `profile ${id} still by conversation bind set, first solve bind again delete`, 409, {
+      throw new HelmError('profile_in_use', `profile ${id} is still bound by conversations; unbind before deleting`, 409, {
         profileId: id,
       })
     }
@@ -355,7 +353,7 @@ export class ProfileService {
 
   async updateSystem(id: string, text: string): Promise<string> {
     assertProfileId(id)
-    if (typeof text !== 'string') throw new Error('system text must be string')
+    if (typeof text !== 'string') throw new Error('system text must be a string')
     const path = join(profileDir(this.dataDir, id), 'SYSTEM.md')
     return withFileLock(path, async () => {
       await atomicWriteFile(path, text)
@@ -370,7 +368,7 @@ export class ProfileService {
 
 const SKILL_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/
 
-/** real path contains decide:child === parent or at parent of under (all must already realpath). */
+/** Real-path containment check: child === parent or child sits underneath parent (both must already be realpathed). */
 function isWithin(child: string, parent: string): boolean {
   if (child === parent) return true
   return child.startsWith(parent + sep)
@@ -382,7 +380,7 @@ export function assertSkillId(id: string): void {
   }
 }
 
-/** built-in plugin self raise skill package asset:SKILL.md + references sub- file content. */
+/** Built-in plugin bootstrapped skill bundle asset: SKILL.md + references files. */
 export interface BuiltinSkillAsset {
   id: string
   skillMd: string
@@ -390,8 +388,8 @@ export interface BuiltinSkillAsset {
 }
 
 /**
- * validate skill package inside relative path: forbidden absolute path,`..` segment, backslash, control character and empty segment.
- * allows `SKILL.md` and `references/...` form embed set relative path.
+ * Validate a relative path inside a skill bundle: forbids absolute paths, `..` segments, backslashes, control characters, and empty segments.
+ * Allows nested relative paths like `SKILL.md` and `references/...`.
  */
 export function assertSafeRelativePath(input: string): string {
   if (input.includes('\\')) throw new Error(`illegal path (backslash): ${input}`)
@@ -400,18 +398,17 @@ export function assertSafeRelativePath(input: string): string {
   if (input.startsWith('/')) throw new Error(`forbidden absolute path: ${input}`)
   for (const seg of input.split('/')) {
     if (seg === '' || seg === '.') throw new Error(`illegal path segment: ${input}`)
-    if (seg === '..') throw new Error(`forbidden path through exceeds: ${input}`)
+    if (seg === '..') throw new Error(`forbidden path traversal: ${input}`)
     if (/[\s\/?#]/.test(seg)) throw new Error(`illegal path segment: ${input}`)
   }
   return input
 }
 
-/** recursion collect skill package inside common rule file relative path. skip: with `.` open head hide file/directory
- * (.git/.gitignore etc.), dependency and build artifact directory (node_modules/__pycache__/dist,
- * project type skill package directly scan will the whole dependency tree stuff explode directory) and symlink (eliminate out of bounds entry);
- * only collect can via assertSafeRelativePath validate path - - directory and load_skill shared use
- * the same legal opening path, guarantee column out each reference all real can read (contains space/?/# etc. character
- * path directly do not column, guard against say row do not one). */
+/** Recursively collect relative paths of regular files in a skill bundle. Skips hidden files/dirs starting with `.`
+ * (.git/.gitignore, etc.), dependency/build artifact dirs (node_modules/__pycache__/dist, which would bloat the catalog
+ * on engineering-style skill bundles), and symlinks (closing escape vectors).
+ * Only collects paths passing assertSafeRelativePath—sharing the exact same validity contract with load_skill
+ * so every listed reference is guaranteed readable (paths with spaces/?/# are omitted for consistency). */
 async function collectFiles(root: string, rel = ''): Promise<string[]> {
   const dir = rel === '' ? root : join(root, rel)
   let entries
@@ -432,7 +429,7 @@ async function collectFiles(root: string, rel = ''): Promise<string[]> {
       try {
         out.push(assertSafeRelativePath(relPath))
       } catch {
-        // illegal relative path (space/special character) cannot via load_skill read, does not enter directory.
+        // Invalid relative paths (spaces / special chars) cannot be read via load_skill; exclude from catalog.
       }
     }
   }
@@ -440,18 +437,18 @@ async function collectFiles(root: string, rel = ''): Promise<string[]> {
 }
 
 /**
- * machine level sharing skill (pi generate state skill store,`~/.agents/skills`):SkillService its
- * as external source only read scan and load, do not via this service writeFile/ensureSkill write.
- * this is not file system permission or command tool sandbox;bash/read/write/edit still by OS permission access.
- * and HELM_DATA_DIR independent; by produce kernel group install when inject,SkillService itself default excludes.
+ * Machine-level shared skills root (pi ecosystem skill library, `~/.agents/skills`): SkillService scans and loads
+ * it read-only as an external source and never writes to it via writeFile/ensureSkill.
+ * This is not a filesystem permission or tool sandbox; bash/read/write/edit still follow OS permissions.
+ * Independent of HELM_DATA_DIR; injected by production kernel assembly, excluded from SkillService by default.
  */
 export function defaultExternalSkillRoots(): string[] {
   return [join(homedir(), '.agents', 'skills')]
 }
 
-/** external single item error skip decide: shape/validate class error (ordinary Error, without Node
- * error code) and ENOENT(SKILL.md/directory missing) skip the item; real IO error
- * (EACCES/EIO etc. code non- ENOENT) such as on throw, not silently fall back. */
+/** Determine whether a single-entry error under an external root should be skipped: schema/validation errors (plain Error without Node
+ * errno code) and ENOENT (missing SKILL.md or directory) skip the entry; real IO errors (EACCES/EIO, etc.)
+ * are rethrown rather than silently ignored. */
 function isSkippableExternalEntryError(err: unknown): boolean {
   if (err instanceof FileNotFoundError) return true
   const code = (err as { code?: unknown }).code
@@ -460,27 +457,26 @@ function isSkippableExternalEntryError(err: unknown): boolean {
 }
 
 export class SkillService {
-  /** ensureSkill self raise register managed skill id(process inside; common rule write opening unify 403 reject). */
+  /** Managed skill IDs bootstrapped via ensureSkill (in-process; normal write endpoints return 403). */
   private readonly managedSkillIds = new Set<string>()
 
   private readonly dataDir: string
 
-  /** only supply SkillService scan and load_skill read external source (arrange in dataDir after). */
+  /** External sources scanned and loaded read-only by SkillService and load_skill (ordered after dataDir). */
   private readonly externalRoots: readonly string[]
 
-  /** default excludes external: this service is to set directory pure determinism scan, machine level sharing by
-   * produce kernel group install when via defaultExternalSkillRoots() inject (test day however isolated). */
+  /** External roots are omitted by default: this service deterministically scans the given directories,
+   * and production kernel assembly injects machine-level shared roots via defaultExternalSkillRoots() (tests stay isolated). */
   constructor(dataDir: string, options?: { externalRoots?: readonly string[] }) {
     this.dataDir = dataDir
     this.externalRoots = options?.externalRoots ?? []
   }
 
-  /** all skill summary (dataDir  + external sharing merge, supply load_skill directory inject).
-   * dataDir semantics do not change: illegal id skip, broken frontmatter such as throws. external whole
-   * ENOENT treated as empty; single item broken data (third way content,helm do not own its quality) skip do not
-   * drag collapse the whole directory - - and dataDir strictly throws semantics moment intent different. by id dedupe:
-   * dataDir item absolute takes precedence (managed skill forever do not by external same name obscure; user to dataDir put
-   * same name skill i.e. shape into local override), its after by declaration order take first. by id stable sort. */
+  /** All skill summaries (merged from dataDir root + external shared roots, injected into load_skill catalog).
+   * dataDir root keeps strict semantics: invalid IDs are skipped, broken frontmatter throws. Missing external root
+   * ENOENT is treated as empty; malformed external entries (third-party content Helm does not own) are skipped rather than
+   * breaking the entire catalog. Deduplicated by id: dataDir always wins (managed skills can never be shadowed by external ones,
+   * while placing a same-named skill in dataDir creates a local override); otherwise first declared root wins. Sorted stably by id. */
   async list(): Promise<SkillSummary[]> {
     const byId = new Map<string, SkillSummary>()
     const dataRoot = join(this.dataDir, 'skills')
@@ -492,7 +488,7 @@ export class SkillService {
       else throw err
     }
     if (dataEntries.length > 0) {
-      // readdir succeeded i.e. store in;realpath archive one (macOS /var etc. symlink prefix) supply contains validate.
+      // readdir succeeded so the root exists; normalize via realpath (for macOS /var symlink prefixes) before containment checks.
       const dataRootReal = await realpath(dataRoot)
       for (const entry of dataEntries) {
         try {
@@ -509,14 +505,14 @@ export class SkillService {
       try {
         extEntries = await readdir(extRoot)
       } catch (err) {
-        // sharing missing treated as empty (not installed pi skill store), do not errors.
+        // Missing shared root is treated as empty (pi skill library not installed), not an error.
         if ((err as { code?: string }).code === 'ENOENT') continue
         throw err
       }
       if (extEntries.length === 0) continue
       const extRootReal = await realpath(extRoot)
       for (const entry of extEntries) {
-        if (byId.has(entry)) continue // dataDir(or first order external) item takes precedence
+        if (byId.has(entry)) continue // dataDir (or earlier external root) entry takes precedence
         try {
           assertSkillId(entry)
           const summary = await this.summarizeInRoot(extRootReal, entry, 'agents')
@@ -532,14 +528,13 @@ export class SkillService {
     return skills
   }
 
-  /** security read skill package file: default SKILL.md; strictly intercept absolute path/`..`/symlink out of bounds.
-   * parse order dataDir → each external sharing: skill directory in a certain missing then try under one,
-   * all all without this skill dimension hold FileNotFoundError(HTTP 404 opening path do not change); security validate
-   * reject (symlink/out of bounds/very rule file) in hit immediately on throw, never across fall back. each
-   * validate strong and dataDir policy fully consistent - - three layer guard against defend:① skill directory itself symlink directly
-   * reject;② realpath two-layer contains validate (skillDir real path must in which belong skills 
-   * inside);③ one by one segment reject symlink and confirm target real path still in skillDir inside.
-   */
+  /** Safely read a file inside a skill bundle (defaults to SKILL.md); strictly blocks absolute paths, `..`, and symlink escapes.
+   * Resolution order: dataDir -> each external shared root. If the skill dir is absent in one root, tries the next;
+   * if missing across all roots, preserves FileNotFoundError (HTTP 404). Security check rejections
+   * (symlink/escape/non-regular file) throw immediately from the matching root without falling back across roots.
+   * Every root enforces identical three-layer defense: (1) reject symlinked skill dir itself;
+   * (2) two-layer realpath containment check (skillDir realpath must stay inside its skills root);
+   * (3) per-segment lstat rejecting symlinks and verifying target realpath stays inside skillDir. */
   async readFile(skillId: string, path = 'SKILL.md'): Promise<string> {
     assertSkillId(skillId)
     const rel = assertSafeRelativePath(path)
@@ -550,27 +545,27 @@ export class SkillService {
     throw new FileNotFoundError(join(this.dataDir, 'skills', skillId))
   }
 
-  /** single inside parse read: return file content; skill directory in the missing when return undefined
-   * (continue under one); skill store in but target file missing throw FileNotFoundError(the item
-   * already takes effect, do not across fall back). */
+  /** Resolve and read within a single root: returns file contents, or undefined if the skill directory does not exist in this root
+   * (so lookup continues to the next root); if the skill exists here but the target file is missing, throws FileNotFoundError
+   * (this root owns the skill and never falls back to another root). */
   private async readFileInRoot(skillsRoot: string, skillId: string, rel: string): Promise<string | undefined> {
     const root = join(skillsRoot, skillId)
-    // skill directory itself is symlink i.e. reject (even if parse after still in skills inside, also do not put wide).
+    // Reject if the skill directory itself is a symlink (even if its target resolves inside skillsRoot).
     const rootStat = await lstat(root).catch((err: unknown) => {
       if ((err as { code?: string }).code === 'ENOENT') return undefined
       throw err
     })
     if (rootStat === undefined) return undefined
     if (rootStat.isSymbolicLink()) {
-      throw new Error(`skill directory is symlink, reject read: ${skillId}`)
+      throw new Error(`skill directory is a symlink; refusing to read: ${skillId}`)
     }
-    // two-layer realpath contains validate:skillDir real path must in skills inside (guard against inside in rotate out of bounds).
+    // Two-layer realpath containment check: skillDir realpath must stay within skillsRoot (prevents intermediate symlink escapes).
     const rootReal = await realpath(root)
     if (!isWithin(rootReal, skillsRoot)) {
-      throw new Error(`skill directory out of bounds (symlink points to skills of outside): ${skillId}`)
+      throw new Error(`skill directory out of bounds (symlink points outside skills root): ${skillId}`)
     }
     const target = join(root, rel)
-    // one by one segment lstat: path on any symlink all reject (symlink may points to skill directory of outside).
+    // Per-segment lstat: reject any symlink along the path (symlinks could escape the skill directory).
     let current = root
     for (const seg of rel.split('/')) {
       current = join(current, seg)
@@ -581,22 +576,22 @@ export class SkillService {
         throw err
       })
       if (s.isSymbolicLink()) {
-        throw new Error(`reject read symlink (guard against out of bounds): ${rel}`)
+        throw new Error(`refusing to read symlink (out-of-bounds protection): ${rel}`)
       }
     }
     const finalStat = await lstat(target)
-    if (!finalStat.isFile()) throw new Error(`is not common rule file: ${rel}`)
-    // target real path must still in skillDir inside (resist read in route directory by replace is symlink).
+    if (!finalStat.isFile()) throw new Error(`not a regular file: ${rel}`)
+    // Final target realpath must remain inside skillDir (protects against TOCTOU directory-to-symlink swaps mid-read).
     const targetReal = await realpath(target)
     if (!isWithin(targetReal, rootReal)) {
-      throw new Error(`target exceeds out skill directory (realpath do not in skillDir inside): ${rel}`)
+      throw new Error(`target escapes skill directory (realpath outside skillDir): ${rel}`)
     }
     return readTextFile(target)
   }
 
-  /** can read parse (realpath archive one):dataDir skills in before, its after in order external sharing
-   * ; ENOENT skip (dataDir missing no longer global throws, eventually by readFile unify
-   * FileNotFoundError); dangling symlink etc. other realpath error such as on throw. */
+  /** Resolve readable roots (normalized with realpath): dataDir skills root first, followed by external shared roots;
+   * ENOENT is skipped (missing dataDir skills root no longer throws globally, so readFile uniformly surfaces FileNotFoundError);
+   * dangling symlinks and other realpath errors are rethrown. */
   private async resolveReadableRoots(): Promise<string[]> {
     const roots: string[] = []
     for (const raw of [join(this.dataDir, 'skills'), ...this.externalRoots]) {
@@ -609,11 +604,11 @@ export class SkillService {
     return roots
   }
 
-  /** create/override skill file (program write entry, same do security validate).
-   * managed skill (ensureSkill self raise register inside placement system asset) in service boundary unify reject.
-   * this service only write dataDir : for external sharing same name skill tune writeFile will write dataDir
-   * copy from while obscure external item, shape into local override. this is not file system write permission boundary;
-   * bash/write/edit etc. through use tool still can by OS permission directly write any path. */
+  /** Create or overwrite a skill file (programmatic write entry, enforcing the same security checks).
+   * Managed skills (built-in system assets registered by ensureSkill) are uniformly rejected at the service boundary.
+   * Only writes to dataDir: calling writeFile for a skill name from an external shared root writes a dataDir copy
+   * that shadows the external entry as a local override. This is not a filesystem write permission boundary;
+   * generic tools such as bash/write/edit can still write arbitrary paths per OS permissions. */
   async writeFile(skillId: string, path: string, content: string): Promise<void> {
     assertSkillId(skillId)
     this.assertSkillMutable(skillId)
@@ -622,39 +617,38 @@ export class SkillService {
     const root = join(skillsRoot, skillId)
     const rootReal = await realpath(root).catch(() => undefined)
     if (rootReal !== undefined && !isWithin(rootReal, skillsRoot)) {
-      throw new Error(`skill directory out of bounds (symlink points to skills of outside): ${skillId}`)
+      throw new Error(`skill directory out of bounds (symlink points outside skills root): ${skillId}`)
     }
     const target = join(root, rel)
     const existing = await lstat(target).catch(() => undefined)
     if (existing !== undefined && existing.isSymbolicLink()) {
-      throw new Error(`reject override symlink: ${rel}`)
+      throw new Error(`refusing to overwrite symlink: ${rel}`)
     }
     await atomicWriteFile(target, content)
   }
 
   /**
-   * built-in plugin managed skill self raise:skills/<id>/SKILL.md and references/* is managed system
-   * asset, each time start with source code declaration version is allow one by one file override back write (disk on old file and
-   * manually work modify one rule back to source code version), missing file patch complete; do not delete skill directory in other
-   * file. content consistent file skip write (by byte content compare, do not by mtime, avoid atomic
-   * rename trigger AssetWatcher hot load jitter).
+   * Built-in plugin managed skill bootstrapper: skills/<id>/SKILL.md and references/* are managed system assets;
+   * on every startup they are overwritten file-by-file from the source declarations (reverting stale files and manual
+   * disk edits back to source) and missing files are added, while leaving any other files in the skill directory intact.
+   * Files whose byte contents already match are skipped (by byte comparison, not mtime, avoiding atomic rename
+   * churn in AssetWatcher hot reload).
    *
-   * security boundary do not change:reference path first whole validate (illegal asset produces no part file);
-   * before write one by one layer confirm skills/<id>,references and embed set reference directory all non- symbol
-   * link,skills and readFile same via realpath parse (symlink can accept); already has
-   * target must be common rule file (symlink/directory smoke fill i.e. reject);ENOENT of outside error such as
-   * on throw. register enter managedSkillIds after, common rule write opening unify 403 reject.
+   * Security boundary unchanged: validate all reference paths up front (invalid assets write nothing);
+   * verify every directory segment along skills/<id>, references, and nested reference dirs is not a symlink, resolving
+   * the skills root via realpath just like readFile; existing targets must be regular files (rejecting symlinks/directories);
+   * errors other than ENOENT are rethrown. Once added to managedSkillIds, normal write endpoints reject with 403.
    */
   async ensureSkill(asset: BuiltinSkillAsset): Promise<void> {
     assertSkillId(asset.id)
-    // boundary first row: any illegal reference all in any directory create/file write before whole reject.
+    // Validate boundary up front: reject any invalid reference before creating directories or writing files.
     const references = Object.entries(asset.references).map(([name, content]) => ({
       rel: assertSafeRelativePath(`references/${name}`),
       content,
     }))
     const skillsRoot = join(this.dataDir, 'skills')
-    // skills missing when patch create (first time self raise); dangling symlink realpath obtain ENOENT while
-    // mkdir collide EEXIST, such as on throw, not silently bypass.
+    // Create skills root if missing (initial bootstrap); if it is a dangling symlink, realpath throws ENOENT
+    // and mkdir fails with EEXIST, which propagates honestly without silently bypassing.
     let rootReal: string
     try {
       rootReal = await realpath(skillsRoot)
@@ -664,8 +658,8 @@ export class SkillService {
       rootReal = await realpath(skillsRoot)
     }
     const dir = join(rootReal, asset.id)
-    // create directory before one by one layer confirm skills/<id>,references and embed set directory excludes symlink (guard against to
-    // skills of outside write); segment missing i.e. await create, its under cannot can again has content.
+    // Verify before mkdir that skills/<id>, references, and nested subdirectories contain no symlinks (prevents writing
+    // outside skills root); a missing segment implies nothing exists underneath it yet.
     await assertRealDirs(rootReal, join(dir, 'references'))
     for (const { rel } of references) {
       await assertRealDirs(rootReal, dirname(join(dir, rel)))
@@ -681,31 +675,30 @@ export class SkillService {
     this.managedSkillIds.add(asset.id)
   }
 
-  /** managed skill unify only read protect (403 managed_skill_readonly): content unique right threat is
-   * plugin at startup source code version. process inside register - - each time start ensureSkill rebuild, do not
-   * store (user self create skill do not via ensureSkill, do not subject to affect). */
+  /** Read-only guard for managed skills (403 managed_skill_readonly): source version at plugin startup is the sole
+   * authority. Tracked in memory—rebuilt by ensureSkill on each startup without DB persistence
+   * (user-created skills do not go through ensureSkill and are unaffected). */
   private assertSkillMutable(skillId: string): void {
     if (this.managedSkillIds.has(skillId)) {
       throw new HelmError(
         'managed_skill_readonly',
-        `skill '${skillId}' is built-in plugin managed system asset, forbidden frequently rule interface write or delete (plugin at startup automatically with source code version override sync)`,
+        `skill '${skillId}' is a managed built-in plugin system asset and cannot be written or deleted via normal APIs (synced from source at plugin startup)`,
         403,
         { skillId },
       )
     }
   }
 
-  /** skill asset directory coordinates (host port use, such as plugin self raise patch complete file): always points to
-   * dataDir/skills/<id>, do not parse to external source. caller may via atomicWriteFile
-   * automatically patch complete managed asset; avoid plugin start side effect change write sharing source. this where is not through use command
-   * path permission boundary; host do not mkdir, default path by caller on demand create. */
+  /** Resolve skill asset directory coordinates (for host port, e.g. plugin bootstrap file completion): always points to
+   * dataDir/skills/<id>, never resolving to an external source, preventing plugin startup side effects from modifying shared roots.
+   * This is not a path permission boundary for generic commands; does not mkdir, leaving directory creation to callers. */
   async directory(id: string): Promise<string> {
     try {
       assertSkillId(id)
     } catch (err) {
       throw new HelmError(
         'validation_error',
-        `Skill id illegal:${err instanceof Error ? err.message : String(err)}`,
+        `Invalid skill id: ${err instanceof Error ? err.message : String(err)}`,
         400,
         { skillId: id },
       )
@@ -713,7 +706,7 @@ export class SkillService {
     return join(this.dataDir, 'skills', id)
   }
 
-  /** parse skills real path (missing when throws, never wide put). */
+  /** Resolve the real path of the skills root (throws if missing; never lenient). */
   private async requireSkillsRoot(): Promise<string> {
     const skillsRoot = join(this.dataDir, 'skills')
     try {
@@ -726,11 +719,10 @@ export class SkillService {
     }
   }
 
-  /** single summary: skill directory missing return undefined(directory skip the item);SKILL.md missing
-   * (FileNotFoundError) same return undefined;frontmatter broken data such as on throw
-   * (by caller decide dataDir strictly throws or external skip policy). external force strip
-   * managedByPlugin- - sharing only may is ordinary sharing skill, never allows third way file
-   * disguise into host managed plugin skill. */
+  /** Summarize within a single root: returns undefined if the skill directory is missing (entry skipped in catalog)
+   * or SKILL.md is missing (FileNotFoundError); malformed frontmatter is rethrown (callers decide strict throw for dataDir
+   * vs skip policy for external roots). External roots forcibly strip managedByPlugin—shared roots may only host normal
+   * shared skills and never let third-party files masquerade as host-managed plugin skills. */
   private async summarizeInRoot(skillsRoot: string, id: string, source?: 'agents'): Promise<SkillSummary | undefined> {
     const skillMd = await this.readFileInRoot(skillsRoot, id, 'SKILL.md').catch((err: unknown) => {
       if (err instanceof FileNotFoundError) return undefined
@@ -751,9 +743,9 @@ export class SkillService {
 }
 
 /**
- * one by one layer confirm ancestor of under until dir each already exists segment all is real directory (non- symlink);
- * segment missing i.e. its after cannot can store in, treated as await create and stop. guard against skills/<id> or
- * references(contains embed set subdirectory) is symlink when self raise asset write to skills of outside.
+ * Verify layer-by-layer that every existing segment from ancestor down to dir is a real directory (not a symlink);
+ * a missing segment means nothing can exist under it yet, so stop and treat it as pending creation.
+ * Prevents bootstrapping into targets outside the skills root when skills/<id> or references (including nested subdirs) is a symlink.
  */
 async function assertRealDirs(ancestor: string, dir: string): Promise<void> {
   let current = ancestor
@@ -766,17 +758,17 @@ async function assertRealDirs(ancestor: string, dir: string): Promise<void> {
     })
     if (st === undefined) return
     if (st.isSymbolicLink()) {
-      throw new Error(`reject via symlink directory write: ${current}`)
+      throw new Error(`refusing to write through symlink directory: ${current}`)
     }
     if (!st.isDirectory()) {
-      throw new Error(`path segment is not directory, reject self raise: ${current}`)
+      throw new Error(`path segment is not a directory; refusing bootstrap: ${current}`)
     }
   }
 }
 
-/** managed override write: target missing i.e. atomic write; already exists must be common rule file (symlink/directory all
- * reject), content and declaration consistent when skip write (avoid atomic rename jitter watcher),
- * inconsistent then atomic override is source code version; other IO error such as on throw. */
+/** Managed overwrite write: writes atomically if missing; if present, must be a regular file (symlinks/directories
+ * are rejected). Skips writing when contents match the declaration (avoids atomic rename jitter in AssetWatcher),
+ * otherwise atomically overwrites with the source version; rethrows any other IO errors. */
 async function writeManagedFile(path: string, content: string): Promise<void> {
   const existing = await lstat(path).catch((err: unknown) => {
     if ((err as { code?: string }).code === 'ENOENT') return undefined
@@ -787,7 +779,7 @@ async function writeManagedFile(path: string, content: string): Promise<void> {
     return
   }
   if (!existing.isFile()) {
-    throw new Error(`target already exists and is not common rule file, reject write: ${path}`)
+    throw new Error(`target already exists and is not a regular file; refusing write: ${path}`)
   }
   const current = await readFile(path, 'utf8').catch((err: unknown) => {
     if ((err as { code?: string }).code === 'ENOENT') return undefined
@@ -797,8 +789,8 @@ async function writeManagedFile(path: string, content: string): Promise<void> {
   await atomicWriteFile(path, content)
 }
 
-/** strip YAML single row mark amount first tail for call single/double quotes (double quotes restore \" and \\ escaping,
- * single quotes restore '' escaping; do not for call quotes original keep, do not fabricate parse). */
+/** Strip symmetric leading/trailing single or double quotes from a YAML single-line scalar (unescaping \" and \\
+ * in double quotes and '' in single quotes; asymmetric quotes are kept verbatim without guessing). */
 function stripQuotedScalar(value: string): string {
   if (value.length < 2) return value
   const first = value[0]
@@ -809,13 +801,13 @@ function stripQuotedScalar(value: string): string {
   return inner.replace(/''/g, "'")
 }
 
-/** parse SKILL.md top part YAML frontmatter  name/description/managedByPlugin(missing when fall back id/empty).
- * only accept when before field name managedByPlugin(without history alias compatibility); key store in but value is empty belong illegal shape,
- * explicit errors while non- fabricate without main data (honest failed, not silently fall back).
- * value language method override pi generate state sharing skill store (~/.agents/skills) real data most small collection: single row
- * mark amount (strip first tail for call quotes) and chunk mark amount - - collapse type > / >-(connect continue shrink enter row trim after with
- * space concatenate, fit long description single row) and keep type | / |-(remove public shrink enter after with newline concatenate);
- * the rest high level YAML language method (anchor/list/embed set etc.) unsupported. */
+/** Parse top YAML frontmatter name/description/managedByPlugin from SKILL.md (defaults to id/empty when omitted).
+ * Only accepts the current field name managedByPlugin (no legacy aliases); a present key with an empty value is invalid
+ * and throws explicitly rather than fabricating ownerless data (honest failure, no silent fallback).
+ * Supports the minimal YAML subset used by pi ecosystem shared skills (~/.agents/skills): single-line scalars
+ * (stripping symmetric outer quotes) and block scalars—folded > / >- (trims consecutive indented lines and joins
+ * with spaces for long single-line descriptions) and literal | / |- (strips common indent and joins with newlines);
+ * advanced YAML syntax (anchors/lists/nesting, etc.) is unsupported. */
 export function parseSkillFrontmatter(text: string): {
   name: string
   description: string
@@ -832,7 +824,7 @@ export function parseSkillFrontmatter(text: string): {
     if (m === null || m[1] === undefined) continue
     const key = m[1]
     const inline = (m[2] ?? '').trim()
-    // chunk mark amount:> / >- / | / |- after continue connect continue shrink enter row (shallow at first non-empty row shrink enter i.e. chunk end) is value body.
+    // Block scalar: > / >- / | / |- spans consecutive indented lines until a line indented less than the first non-empty line.
     if (inline === '>' || inline === '>-' || inline === '|' || inline === '|-') {
       const block: string[] = []
       let indent = -1
@@ -859,7 +851,7 @@ export function parseSkillFrontmatter(text: string): {
   }
   const managedRaw = fields.get('managedByPlugin')
   if (managedRaw !== undefined && managedRaw === '') {
-    throw new Error(`SKILL.md frontmatter managedByPlugin value is empty (key store in then must be non-empty plugin ID)`)
+    throw new Error(`SKILL.md frontmatter managedByPlugin value is empty (when present, it must be a non-empty plugin ID)`)
   }
   return {
     name: fields.get('name') ?? '',

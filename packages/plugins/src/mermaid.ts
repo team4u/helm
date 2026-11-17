@@ -9,7 +9,7 @@ import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { HelmError, type PluginDefinition } from '@helm/protocol'
-import { resolvePluginClientRoot } from './asset-paths.js'
+import { resolvePluginClientAssets } from './asset-paths.js'
 
 export const MERMAID_PLUGIN_ID = 'builtin:mermaid'
 
@@ -26,6 +26,7 @@ function resolvePluginsPackageRoot(): string {
 }
 
 export function createMermaidPlugin(): PluginDefinition {
+  const assets = resolvePluginClientAssets(MERMAID_PLUGIN_ID, 'mermaid', 'mermaid_client_missing')
   return {
     id: MERMAID_PLUGIN_ID,
     name: { en: 'Mermaid Diagrams', 'zh-CN': 'Mermaid 图表' },
@@ -35,8 +36,10 @@ export function createMermaidPlugin(): PluginDefinition {
     },
     icon: 'git-branch',
     version: '0.1.0',
-    clientRoot: resolvePluginClientRoot(MERMAID_PLUGIN_ID, 'mermaid', 'mermaid_client_missing'),
-    npmDependencies: { mermaid: resolvePluginsPackageRoot() },
+    ...assets,
+    // Prebuilt dist-client bundles mermaid into static chunks, so runtime node_modules/mermaid is only
+    // needed when running in source-compile mode (dev tsx or build-time precompilation).
+    ...(assets.prebuiltClientDir === undefined ? { npmDependencies: { mermaid: resolvePluginsPackageRoot() } } : {}),
     definePlugin(ctx) {
       ctx.ui.markdownCodeBlock({
         id: 'mermaid-diagram',

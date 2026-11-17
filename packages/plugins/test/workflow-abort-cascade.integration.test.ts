@@ -25,7 +25,7 @@ import type { ConversationSummary } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 import { createHelm } from '../../hub/src/app.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
-import { makeFauxModels } from './helpers/plugin-test-env.js'
+import { makeFauxProvider } from './helpers/plugin-test-env.js'
 
 const ROOT = 1
 
@@ -48,8 +48,8 @@ interface Env {
 
 async function makeEnv(onEmpty: 'hang' | 'end' = 'hang'): Promise<Env> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-cascade-e2e-'))
-  const { models, faux } = makeFauxModels()
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const faux = makeFauxProvider()
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   const settled: TurnSettledRecord[] = []
   // turn.settled 发布在内核事件总线（非宿主内部事件）：经 events.subscribe 观察。
   app.kernel.events.subscribe((frame) => {

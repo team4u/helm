@@ -1,13 +1,9 @@
 /**
- * across platform open machine self start service:macOS launchd / Linux systemd --user / Windows schtasks.
+ * Cross-platform startup service management: macOS `launchd` / Linux `systemd --user` / Windows `schtasks`.
  *
- * only do four piece matter: render service description (renderServiceSpec), write data directory Profile copy,
- * duplicate to platform takes effect location, invoke platform register command. each one step failed all explicit return
- * ok:false + message(contains failed step and reason), never static default swallow wrong or disguise succeeded;
- * system command on failure keep already write config, hand over by user retry or uninstall clean up.
- *
- * command execute via ServiceExec inject (by default is carries timeout async spawn, non-blocking event loop,
- * do not unbounded phase card die); single test inject memory execute do no side effects verify, never real install.
+ * Renders the unit/plist/XML spec, writes a copy in `dataDir/service`, copies it to the OS target
+ * location, and invokes the platform registration command. All failures throw explicitly with step
+ * and command diagnostics while leaving written configs intact for retry or uninstall.
  */
 
 import { spawn } from 'node:child_process';
@@ -16,45 +12,42 @@ import path from 'node:path';
 import os from 'node:os';
 
 export interface ServiceSpecOptions {
-  /** override process.platform(single test render three platform template use). */
+  /** Override `process.platform` (used by unit tests rendering all three platform templates). */
   platform?: NodeJS.Platform;
-  /** node can execute file path (default process.execPath). */
+  /** Node executable path (defaults to `process.execPath`). */
   nodePath?: string;
-  /** helm-node CLI entry (compile artifact cli.js or tsx source entry). */
+  /** `helm-node` CLI entrypoint (compiled `cli.js` or source `cli.ts`). */
   cliEntryPath: string;
   dataDir: string;
   hubUrl?: string;
-  /**
-   * service file directory (default os.homedir()):launchd plist / systemd unit / Windows
-   * task XML takes effect location all in this under. single test inject temp directory, ensure zero host side effect.
-   */
+  /** User home directory under which OS service files live (tests inject a temp directory). */
   serviceHome?: string;
 }
 
 export interface ServiceSpec {
   platform: NodeJS.Platform;
-  /** service unit Profile copy point (data directory inside). */
+  /** Local copy stored inside `dataDir`. */
   configPath: string;
-  /** platform takes effect path (launchd plist / systemd unit / Windows task XML). */
+  /** OS-active service definition path (launchd plist / systemd unit / Windows task XML). */
   targetPath: string;
-  /** service unit content (plist XML / unit / task XML). */
+  /** Rendered service definition contents. */
   content: string;
-  /** platform register command (argv). */
+  /** Platform registration command argv. */
   installCmd: string[];
-  /** platform unload command (argv). */
+  /** Platform deregistration command argv. */
   uninstallCmd: string[];
-  /** supply state probe command (argv). */
+  /** Platform status query command argv. */
   statusCmd: string[];
 }
 
 export interface ServiceExec {
-  /** execute command; return { code, stdout, stderr, timedOut }(spawn semantics;error mapping code:null + stderr). */
+  /** Execute command and return `{ code, stdout, stderr, timedOut }` (`code: null` on spawn/timeout failure). */
   run(command: string, args: readonly string[]): Promise<{ code: number | null; stdout: string; stderr: string; timedOut?: boolean }>;
 }
 
 export const SERVICE_EXEC_TIMEOUT_MS = 30_000;
 
-/** by default ServiceExec: async spawn + total timeout;spawn error(ENOENT etc.) such as return code:null. */
+/** Default `ServiceExec` using async `spawn` with a hard timeout. */
 export const defaultServiceExec: ServiceExec = {
   async run(command, args) {
     return await new Promise((resolve) => {
@@ -95,7 +88,7 @@ export const defaultServiceExec: ServiceExec = {
         finish(null, `cannot execute ${command}: ${error.message}`);
       });
       child.on('close', (code) => {
-        finish(killed ? null : code, killed ? `command timeout (>${SERVICE_EXEC_TIMEOUT_MS}ms) by terminate: ${command}` : undefined);
+        finish(killed ? null : code, killed ? `command timed out (>${SERVICE_EXEC_TIMEOUT_MS}ms) and was killed: ${command}` : undefined);
       });
     });
   },
@@ -120,9 +113,9 @@ function escapeXml(unsafe: string): string {
   });
 }
 
-/** systemd do not via Shell; respectively escaping parameter quotes,specifier(%) and environment expand ($). */
+/** Escape quotes, systemd `%` specifiers, and `$` env expansions for `ExecStart`. */
 function quoteSystemdArg(arg: string): string {
-  if (/[\x00-\x1f\x7f]/.test(arg)) throw new Error('service parameter must not contains control character');
+  if (/[\x00-\x1f\x7f]/.test(arg)) throw new Error('service argument must not contain control characters');
   const literal = arg.replaceAll('%', '%%').replaceAll('$', () => '$$');
   return /^[A-Za-z0-9@:,.+/_=-]+$/.test(literal) && literal !== ''
     ? literal
@@ -130,7 +123,7 @@ function quoteSystemdArg(arg: string): string {
 }
 
 function quoteWindowsArg(arg: string): string {
-  if (/[\x00-\x1f\x7f]/.test(arg)) throw new Error('service parameter must not contains control character');
+  if (/[\x00-\x1f\x7f]/.test(arg)) throw new Error('service argument must not contain control characters');
   return `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, '$1$1')}"`;
 }
 
@@ -138,12 +131,12 @@ const DARWIN_LABEL = 'ai.helm.node';
 const LINUX_UNIT = 'helm-node.service';
 const WIN_TASK = 'HelmNode';
 
-/** CLI start parameter (excludes node and entry itself):start --data-dir <dir> [--hub <url>]. */
+/** CLI arguments for the service unit (`start --data-dir <dir> [--hub <url>]`). */
 function cliArgs(dataDir: string, hubUrl?: string): string[] {
   return ['start', '--data-dir', dataDir, ...(hubUrl !== undefined && hubUrl !== '' ? ['--hub', hubUrl] : [])];
 }
 
-/** render platform service description: do not, do not execute command, pure function convenient at three platform single test. */
+/** Pure template renderer for all three platform service specifications. */
 export function renderServiceSpec(options: ServiceSpecOptions): ServiceSpec {
   const platform = options.platform ?? process.platform;
   const nodePath = options.nodePath ?? process.execPath;
@@ -235,15 +228,15 @@ WantedBy=default.target
     };
   }
 
-  throw new Error(`unsupported platform ${JSON.stringify(platform)}:helm-node service only support darwin / linux / win32`);
+  throw new Error(`unsupported platform ${JSON.stringify(platform)}: helm-node service only supports darwin, linux, and win32`);
 }
 
 export interface ServiceOperationOptions {
   platform?: NodeJS.Platform;
   nodePath?: string;
-  /** inject command execute (single test no side effects verify). */
+  /** Test-only override for running OS service commands without side effects. */
   execCommand?: ServiceExec;
-  /** service file directory (default os.homedir()); single test must inject temp directory. */
+  /** Service target root directory (defaults to `os.homedir()`; tests must inject a temp dir). */
   serviceHome?: string;
 }
 
@@ -257,22 +250,21 @@ export interface ServiceOperationResult {
   message: string;
 }
 
-/** describeFailure: command failed can read diagnose (stderr > timeout > error text). */
+/** Format actionable failure diagnostics from command stdout/stderr/timeout. */
 function describeFailure(command: readonly string[], result: { code: number | null; stdout: string; stderr: string; timedOut?: boolean }): string {
   const argvText = command.join(' ');
   const output = result.stderr.trim() !== '' ? result.stderr.trim() : result.stdout.trim();
-  if (result.timedOut === true) return `${argvText} timeout not return`;
-  if (result.code === null) return `${argvText} cannot execute:${output !== '' ? output : 'unknown error'}`;
-  return `${argvText} exit code ${result.code}${output !== '' ? `:${output}` : ''}`;
+  if (result.timedOut === true) return `${argvText} timed out`;
+  if (result.code === null) return `${argvText} failed to execute: ${output !== '' ? output : 'unknown error'}`;
+  return `${argvText} exited with code ${result.code}${output !== '' ? `: ${output}` : ''}`;
 }
 
-/** validate register command result: non-zero exit, cannot execute or timeout all treated as failed, such as diagnose. */
 function assertCommandOk(command: readonly string[], result: { code: number | null; stdout: string; stderr: string; timedOut?: boolean }, step: string): void {
   if (result.code === 0 && result.timedOut !== true) return;
-  throw new Error(`${step}failed:${describeFailure(command, result)}`);
+  throw new Error(`${step}failed: ${describeFailure(command, result)}`);
 }
 
-/** install service: render → write Profile copy → duplicate to platform takes effect path → daemon-reload(linux)→ platform register. any one step failed explicit errors. */
+/** Install and enable the OS service: render -> write copy -> write active path -> daemon-reload (linux) -> register. */
 export async function installNodeService(
   cliEntryPath: string,
   dataDir: string,
@@ -297,12 +289,12 @@ export async function installNodeService(
   try {
     await fsp.mkdir(path.dirname(desc.configPath), { recursive: true });
   } catch (error) {
-    throw new Error(`create service config directory failed (${path.dirname(desc.configPath)}):${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`failed to create service config directory (${path.dirname(desc.configPath)}): ${error instanceof Error ? error.message : String(error)}`);
   }
   try {
     await fsp.writeFile(desc.configPath, desc.content, 'utf8');
   } catch (error) {
-    throw new Error(`write service config failed (${desc.configPath}):${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`failed to write service config (${desc.configPath}): ${error instanceof Error ? error.message : String(error)}`);
   }
 
   try {
@@ -310,7 +302,7 @@ export async function installNodeService(
     await fsp.writeFile(desc.targetPath, desc.content, 'utf8');
   } catch (error) {
     throw new Error(
-      `write platform service file failed (${desc.targetPath}):${error instanceof Error ? error.message : String(error)}; Profile copy already save at ${desc.configPath}`,
+      `failed to write platform service file (${desc.targetPath}): ${error instanceof Error ? error.message : String(error)}; local copy saved at ${desc.configPath}`,
     );
   }
 
@@ -321,13 +313,13 @@ export async function installNodeService(
   }
 
   const installResult = await exec.run(desc.installCmd[0]!, desc.installCmd.slice(1));
-  assertCommandOk(desc.installCmd, installResult, 'system register ');
+  assertCommandOk(desc.installCmd, installResult, 'service registration ');
   return { ok: true, ...base, installed: true, message: `service installed (${desc.platform})` };
 }
 
 /**
- * unload service: platform deregister → delete platform file and Profile copy.
- * deregister command failed (contains cannot execute/timeout): explicit errors and**do not delete any config**, return installed keep now state.
+ * Uninstall the OS service: deregister first, then delete service files.
+ * Preserves configs and throws explicitly if deregistration fails.
  */
 export async function uninstallNodeService(
   cliEntryPath: string,
@@ -352,7 +344,7 @@ export async function uninstallNodeService(
   const uninstallResult = await exec.run(desc.uninstallCmd[0]!, desc.uninstallCmd.slice(1));
   if (uninstallResult.code !== 0 || uninstallResult.timedOut === true) {
     throw new Error(
-      `platform deregister failed:${describeFailure(desc.uninstallCmd, uninstallResult)}; already keep config (${desc.configPath}), can retry uninstall`,
+      `platform deregistration failed: ${describeFailure(desc.uninstallCmd, uninstallResult)}; retained config (${desc.configPath}) for retry`,
     );
   }
 
@@ -360,7 +352,7 @@ export async function uninstallNodeService(
     try {
       await fsp.rm(file, { force: true });
     } catch (error) {
-      throw new Error(`deregister after clean up config file failed (${file}):${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`failed to remove config file after deregistration (${file}): ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   return { ok: true, ...base, installed: false, message: `service uninstalled (${desc.platform})` };
@@ -369,30 +361,27 @@ export async function uninstallNodeService(
 export type ServiceRunningState = 'running' | 'stopped' | 'unknown';
 
 export interface NodeServiceStatus {
-  /** null means platform query failed, cannot confirm is otherwise registered. */
+  /** `null` indicates the platform query failed so installation state is unknown. */
   installed: boolean | null;
   running: ServiceRunningState;
   platform: NodeJS.Platform;
   configPath: string;
   targetPath: string;
-  /** platform state command output (diagnose use). */
+  /** Raw platform status output and diagnostics. */
   detail?: string;
 }
 
-/** parse platform state command output → running/stopped/unknown. */
+/** Parse OS status command output into `running`, `stopped`, or `unknown`. */
 function parseRunningState(platform: NodeJS.Platform, result: { code: number | null; stdout: string; stderr: string; timedOut?: boolean }): ServiceRunningState {
   if (result.timedOut === true) return 'unknown';
   const text = `${result.stdout}\n${result.stderr}`.trim();
   if (platform === 'linux') {
-    // systemctl is-active:active → running;inactive / failed → stopped; other (unknown etc.)→ unknown
     const state = result.stdout.trim();
     if (result.code === 0 && state === 'active') return 'running';
     if (state === 'inactive' || state === 'failed' || state === 'dead') return 'stopped';
     return 'unknown';
   }
   if (platform === 'darwin') {
-    // launchctl list <label>: table row "PID\tStatus\tLabel";PID is "-" means not run;
-    // "Could not find" means service not load (not run), the rest non-zero exit treated as query failed.
     if (/could not find|no such process/i.test(text)) return 'stopped';
     if (result.code !== 0) return 'unknown';
     if (/"PID"\s*=\s*\d+|pid\s*=\s*\d+|state\s*=\s*running/.test(text)) return 'running';
@@ -408,7 +397,7 @@ function parseRunningState(platform: NodeJS.Platform, result: { code: number | n
     return 'unknown';
   }
   if (platform === 'win32') {
-    // schtasks emits localized status labels; match the original Windows output.
+    // `schtasks` emits localized status labels; match native Windows output.
     if (result.code !== 0) return 'unknown';
     if (/正在运行|Running/i.test(text) && !/Ready|就绪/i.test(text)) return 'running';
     if (/Ready|就绪/i.test(text)) return 'stopped';
@@ -417,7 +406,7 @@ function parseRunningState(platform: NodeJS.Platform, result: { code: number | n
   return 'unknown';
 }
 
-/** query service state:installed with platform takes effect file is allow (Profile copy do not compute install), query command on failure running=unknown + explicit detail. */
+/** Query service installation and running state, surfacing query command failures honestly as `unknown`. */
 export async function getNodeServiceStatus(
   cliEntryPath: string,
   dataDir: string,
@@ -438,7 +427,7 @@ export async function getNodeServiceStatus(
     .then(() => true)
     .catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-      throw new Error(`probe platform service file failed (${desc.targetPath}):${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`failed to stat platform service file (${desc.targetPath}): ${error instanceof Error ? error.message : String(error)}`);
     });
 
   const result = await exec.run(desc.statusCmd[0]!, desc.statusCmd.slice(1));
@@ -450,11 +439,10 @@ export async function getNodeServiceStatus(
     : result.code === 0 ? true : missing ? false : null;
   const diagnostics: string[] = [];
   if (result.code === null || result.timedOut === true || (result.code !== 0 && running === 'unknown')) {
-    diagnostics.push(`state query command failed:${describeFailure(desc.statusCmd, result)}`);
+    diagnostics.push(`status query command failed: ${describeFailure(desc.statusCmd, result)}`);
   }
   if (!targetExists && result.code === 0) {
-    // platform report task store in but takes effect file missing (such as human by same name unit register): such as mark note, do not declare call installed.
-    diagnostics.push(`platform report service store in, but takes effect file missing (${desc.targetPath})`);
+    diagnostics.push(`platform reports service exists, but active unit file is missing (${desc.targetPath})`);
   }
 
   return {

@@ -1,10 +1,10 @@
 /**
- * helm-node upgrade engine test: real function behavior is main.
- * override: version parse/compare/specification,JSON record corrupt and atomic write,upgrade check,
- * double package metadata/complete reject, guard against fall back, cool down phase, arrange empty gate,prepare/commit/abort
- * order, failed rollback, across process lock,stageExtractor path escape.
- * does not real npm network install (stageExtractor inject alternative network path),npm real
- * download link by fetch mock validate request and validate logic.
+ * Tests for helm-node upgrade engine behavior:
+ * semver parsing/comparison/normalization, corrupt JSON handling and atomic writes,
+ * upgrade checks, dual-package metadata/.complete validation rejections, downgrade guard,
+ * failure cooldown, drain gate, prepare/commit/abort ordering, rollback on failure,
+ * cross-process upgrade lock, and stageExtractor path traversal checks.
+ * Uses injected stageExtractor and mocked fetch rather than live npm downloads.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -50,7 +50,7 @@ function makeReplacement(pid: number, opts?: { commitError?: Error; abortError?:
   };
   return { replacement, calls };
 }
-/** stageExtractor: in staging inside fabricate double package install artifact structure. */
+/** stageExtractor: create a fake dual-package layout inside stagingDir. */
 async function fakeExtractor(stagingDir: string, _version: string): Promise<{ entryPath: string; cliBinDir: string }> {
   await fs.mkdir(path.join(stagingDir, 'node_modules', '@helm', 'node', 'dist'), { recursive: true });
   await fs.mkdir(path.join(stagingDir, 'node_modules', '.bin'), { recursive: true });
@@ -64,30 +64,30 @@ async function fakeExtractor(stagingDir: string, _version: string): Promise<{ en
 }
 
 // ---------------------------------------------------------------------------
-// 1. version:compareSemver / normalizeTargetVersion / getNodeVersion
+// 1. Version parsing: compareSemver / normalizeTargetVersion / getNodeVersion
 // ---------------------------------------------------------------------------
 
-test('compareSemver: core number, pre- publish priority and invalid input', { timeout: 60_000 }, () => {
+test('compareSemver: core numbers, pre-release precedence, and invalid inputs', { timeout: 60_000 }, () => {
   assert.equal(compareSemver('1.0.0', '1.0.0'), 0);
   assert.equal(compareSemver('1.2.0', '1.10.0'), -1);
   assert.equal(compareSemver('2.0.0', '1.99.99'), 1);
-  assert.equal(compareSemver('1.0.0', '1.0.0-beta.1'), 1); // formal > pre- publish
-  assert.equal(compareSemver('1.0.0-alpha', '1.0.0-alpha.1'), -1); // pre- publish segment few more small
-  assert.equal(compareSemver('1.0.0-alpha.1', '1.0.0-alpha.beta'), -1); // number < character parent
-  assert.equal(compareSemver('1.0.0-alpha.2', '1.0.0-alpha.11'), -1); // number by count value
+  assert.equal(compareSemver('1.0.0', '1.0.0-beta.1'), 1); // stable > pre-release
+  assert.equal(compareSemver('1.0.0-alpha', '1.0.0-alpha.1'), -1); // fewer pre-release fields < more
+  assert.equal(compareSemver('1.0.0-alpha.1', '1.0.0-alpha.beta'), -1); // numeric < alphanumeric
+  assert.equal(compareSemver('1.0.0-alpha.2', '1.0.0-alpha.11'), -1); // numeric comparison
   assert.equal(compareSemver('1.0.0-rc.1', '1.0.0-beta.9'), 1);
-  // build metadata legal but does not participate compare (SemVer specification 10 )
+  // build metadata is valid but ignored in precedence (SemVer §10)
   assert.equal(compareSemver('1.0.0+build.123', '1.0.0+build.456'), 0);
   assert.equal(compareSemver('1.0.0+sha.a1b2c3', '1.0.0'), 0);
   assert.equal(compareSemver('1.0.0-beta.1+exp.sha.5114f85', '1.0.0-beta.1'), 0);
-  assert.equal(compareSemver('1.0.1+a', '1.0.0+b'), 1); // core number takes precedence at build
-  assert.equal(compareSemver('1.0.0-rc.1+b1', '1.0.0-rc.2+b2'), -1); // pre- publish takes precedence at build
+  assert.equal(compareSemver('1.0.1+a', '1.0.0+b'), 1); // core version takes precedence over build metadata
+  assert.equal(compareSemver('1.0.0-rc.1+b1', '1.0.0-rc.2+b2'), -1); // pre-release takes precedence over build metadata
   for (const bad of ['v1.0.0', '1.0', '1.0.0.0', '01.0.0', 'not-a-version', '', '1.0.0-', '1.0.0+', '1.0.0+a_b', '1.0.0+a..b']) {
     assert.throws(() => compareSemver(bad, '1.0.0'), UpgradeRejectedError, `should reject ${bad}`);
   }
 });
 
-test('normalizeTargetVersion:trim and remove a v prefix after strictly validate', { timeout: 60_000 }, () => {
+test('normalizeTargetVersion: trims whitespace, strips single v prefix, and validates strictly', { timeout: 60_000 }, () => {
   assert.equal(normalizeTargetVersion('  1.2.3  '), '1.2.3');
   assert.equal(normalizeTargetVersion('v1.2.3'), '1.2.3');
   assert.equal(normalizeTargetVersion(' v1.2.3-rc.1 '), '1.2.3-rc.1');
@@ -98,7 +98,7 @@ test('normalizeTargetVersion:trim and remove a v prefix after strictly validate'
   assert.throws(() => normalizeTargetVersion('1.2.3+bad_build'), UpgradeRejectedError);
 });
 
-test('getNodeVersion: read itself package.json,HELM_VERSION_OVERRIDE override', { timeout: 60_000 }, () => {
+test('getNodeVersion: reads package.json and honors HELM_VERSION_OVERRIDE', { timeout: 60_000 }, () => {
   const self = getNodeVersion();
   assert.match(self, /^\d+\.\d+\.\d+/);
   const prev = process.env.HELM_VERSION_OVERRIDE;
@@ -111,7 +111,7 @@ test('getNodeVersion: read itself package.json,HELM_VERSION_OVERRIDE override', 
   }
 });
 
-test('resolveEffectiveNodeVersion:current.json takes precedence, missing fall back itself package version', { timeout: 60_000 }, async () => {
+test('resolveEffectiveNodeVersion: prefers current.json and falls back to own package version', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   assert.equal(await resolveEffectiveNodeVersion(dir), getNodeVersion());
   await writeCurrentRelease(dir, { version: '3.2.1', entryPath: '/x/dist/cli.js', updatedAt: new Date().toISOString() });
@@ -120,10 +120,10 @@ test('resolveEffectiveNodeVersion:current.json takes precedence, missing fall ba
 });
 
 // ---------------------------------------------------------------------------
-// 2. JSON record: only ENOENT is null; corrupt/IO error explicit;0600
+// 2. JSON records: only ENOENT returns null; corrupt/IO errors throw explicitly; mode 0600
 // ---------------------------------------------------------------------------
 
-test('record read write:ENOENT return null,0600 atomic write,delete/clear idempotent', { timeout: 60_000 }, async () => {
+test('record read/write: ENOENT returns null, atomic 0600 writes, idempotent delete/clear', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   assert.equal(await readCurrentRelease(dir), null);
   assert.equal(await readBlockedRelease(dir), null);
@@ -133,7 +133,7 @@ test('record read write:ENOENT return null,0600 atomic write,delete/clear idempo
   assert.equal(current?.version, '1.0.0');
   assert.equal(current?.cliBinDir, '/a/node_modules/.bin');
   const stat = rawFs.statSync(path.join(dir, 'current.json'));
-  // Windows without POSIX mode(NTFS away ACL), skip 0600 pattern assertion.
+  // Windows lacks POSIX mode bits (NTFS uses ACLs), skip 0600 mode assertion.
   if (process.platform !== 'win32') assert.equal(stat.mode & 0o777, 0o600);
 
   await writeBlockedRelease(dir, { version: '2.0.0', reason: 'canary failed', at: '2026-01-02T00:00:00.000Z' });
@@ -150,7 +150,7 @@ test('record read write:ENOENT return null,0600 atomic write,delete/clear idempo
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('record corrupt: non- JSON / missing field explicit errors, do not return null', { timeout: 60_000 }, async () => {
+test('record corruption: non-JSON and missing fields throw explicitly rather than returning null', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, 'current.json'), '{ not json', 'utf8');
@@ -164,10 +164,10 @@ test('record corrupt: non- JSON / missing field explicit errors, do not return n
 });
 
 // ---------------------------------------------------------------------------
-// 3. filterRpcRegistryUrl allows manifest
+// 3. filterRpcRegistryUrl allowlist
 // ---------------------------------------------------------------------------
 
-test('filterRpcRegistryUrl: only official and HELM_NPM_REGISTRY, other source explicit reject', { timeout: 60_000 }, () => {
+test('filterRpcRegistryUrl: allows only official npm and HELM_NPM_REGISTRY, rejecting other origins', { timeout: 60_000 }, () => {
   assert.equal(filterRpcRegistryUrl(undefined), undefined);
   assert.equal(filterRpcRegistryUrl(''), undefined);
   assert.equal(filterRpcRegistryUrl('https://registry.npmjs.org/'), 'https://registry.npmjs.org');
@@ -200,7 +200,7 @@ function makeRegistryFetch(latest: string, exact?: Record<string, unknown>) {
   return { fetchFn, urls };
 }
 
-test('checkNodeUpgrade: query latest, compare version, pass-through blocked', { timeout: 60_000 }, async () => {
+test('checkNodeUpgrade: queries latest version, compares semver, and passes through blocked record', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   await writeBlockedRelease(dir, { version: '1.5.0', reason: 'boom', at: new Date().toISOString() });
   const { fetchFn, urls } = makeRegistryFetch('1.2.0');
@@ -211,22 +211,22 @@ test('checkNodeUpgrade: query latest, compare version, pass-through blocked', { 
   assert.equal(result.blocked?.version, '1.5.0');
   assert.match(urls[0]!, /@helm%2Fnode\/latest|@helm\/node\/latest/);
 
-  // current.json missing and not pass currentVersion when fall back getNodeVersion
+  // Fall back to getNodeVersion when current.json is absent and currentVersion is omitted
   const result2 = await checkNodeUpgrade((await tempDir('helm-node-upgrade-')), { fetchFn: makeRegistryFetch('0.0.1').fetchFn });
   assert.equal(result2.currentVersion, getNodeVersion());
   assert.equal(result2.updateAvailable, false);
 
-  // registry return illegal version → explicit errors
+  // Invalid version returned by registry must fail explicitly
   const bad = makeRegistryFetch('not-semver');
   await assert.rejects(() => checkNodeUpgrade(dir, { currentVersion: '1.0.0', fetchFn: bad.fetchFn }));
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('checkNodeUpgrade:HTTP failed and timeout explicit errors', { timeout: 60_000 }, async () => {
+test('checkNodeUpgrade: HTTP errors and timeouts throw explicitly', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   const fail: typeof fetch = async () => new Response('nope', { status: 404, statusText: 'Not Found' });
   await assert.rejects(() => checkNodeUpgrade(dir, { currentVersion: '1.0.0', fetchFn: fail }), /404/);
-  // fetch immediately with AbortError reject → mapping is explicit"query failed+timeout"error
+  // Fetch rejecting with AbortError must map to explicit query + timeout error
   const timeout_: typeof fetch = async () => {
     const err = new Error('aborted');
     err.name = 'AbortError';
@@ -234,16 +234,16 @@ test('checkNodeUpgrade:HTTP failed and timeout explicit errors', { timeout: 60_0
   };
   await assert.rejects(
     () => checkNodeUpgrade(dir, { currentVersion: '1.0.0', registryUrl: 'http://127.0.0.1:1', fetchFn: timeout_ }),
-    /query .* most new version failed:request timeout/,
+    /failed to query latest version.*request timed out/,
   );
   await fs.rm(dir, { recursive: true, force: true });
 });
 
 // ---------------------------------------------------------------------------
-// 5. stageReleaseFromNpm: cache re- use / stageExtractor / double package validate reject
+// 5. stageReleaseFromNpm: cache reuse / stageExtractor / dual-package validation
 // ---------------------------------------------------------------------------
 
-test('stageReleaseFromNpm:stageExtractor artifact immutable choose directory and write .complete, second invoke re- use', { timeout: 60_000 }, async () => {
+test('stageReleaseFromNpm: stageExtractor builds immutable candidate dir and writes .complete; subsequent call reuses cache', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   const staged = await stageReleaseFromNpm(dir, '1.2.3', { stageExtractor: fakeExtractor });
   assert.equal(staged.version, '1.2.3');
@@ -254,43 +254,43 @@ test('stageReleaseFromNpm:stageExtractor artifact immutable choose directory and
   assert.equal(marker.entryPath, staged.entryPath);
 
   const staged2 = await stageReleaseFromNpm(dir, '1.2.3', { stageExtractor: fakeExtractor });
-  assert.equal(staged2.releaseDir, staged.releaseDir); // re- use, do not creates new choose
+  assert.equal(staged2.releaseDir, staged.releaseDir); // reuses cached candidate without creating a new one
   await assert.rejects(() => stageReleaseFromNpm(dir, 'bad-version', { stageExtractor: fakeExtractor }), UpgradeRejectedError);
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('stageReleaseFromNpm:stageExtractor path escape and absolute path reject, failed do not staging', { timeout: 60_000 }, async () => {
+test('stageReleaseFromNpm: rejects escaping or absolute stageExtractor paths without leaving staging dirs behind', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   await assert.rejects(
     () =>
       stageReleaseFromNpm(dir, '1.0.0', {
         stageExtractor: async (stagingDir) => ({ entryPath: path.join('..', '..', 'escape.js'), cliBinDir: 'node_modules/.bin' }),
       }),
-    /escape/,
+    /escapes/,
   );
   await assert.rejects(
     () =>
       stageReleaseFromNpm(dir, '1.0.0', {
         stageExtractor: async () => ({ entryPath: '/etc/passwd', cliBinDir: 'node_modules/.bin' }),
       }),
-    /relative path/,
+    /expected relative/,
   );
   const entries = await fs.readdir(path.join(dir, 'releases', '1.0.0'));
-  assert.ok(entries.every((e) => e === '.complete' || !e.startsWith('.staging')), 'failed after must not leftover staging directory');
+  assert.ok(entries.every((e) => e === '.complete' || !e.startsWith('.staging')), 'must not leave .staging directories behind on failure');
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('stageReleaseFromNpm: double package metadata/hash/install artifact validation failed all reject', { timeout: 60_000 }, async () => {
+test('stageReleaseFromNpm: rejects dual-package metadata, integrity, and artifact validation failures', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
 
-  // a) metadata package name/version do not symbol
+  // a) Metadata package name mismatch
   const wrongMeta = makeRegistryFetch('1.0.0', { name: '@evil/node', version: '1.0.0', dist: { integrity: 'sha512-abc', tarball: 'https://r/t.tgz' } });
   await assert.rejects(
     () => stageReleaseFromNpm(dir, '1.0.0', { fetchFn: wrongMeta.fetchFn }),
-    /package name do not symbol/,
+    /package name mismatch/,
   );
 
-  // b) tarball sha512 does not match
+  // b) Tarball sha512 mismatch
   const { createHash } = await import('node:crypto');
   const body = Buffer.from('malicious payload');
   const goodIntegrity = `sha512-${createHash('sha512').update(body).digest('base64')}`;
@@ -301,9 +301,9 @@ test('stageReleaseFromNpm: double package metadata/hash/install artifact validat
     const meta = { name: url.includes('%2Fcli') ? '@helm/cli' : '@helm/node', version: '1.0.0', dist: { integrity: goodIntegrity, tarball: `${url.split('/').slice(0, -2).join('/')}/pkg/-/pkg-1.0.0.tgz` } };
     return new Response(JSON.stringify(meta), { status: 200 });
   };
-  await assert.rejects(() => stageReleaseFromNpm(dir, '1.0.0', { fetchFn: tampered }), /complete validation failed/);
+  await assert.rejects(() => stageReleaseFromNpm(dir, '1.0.0', { fetchFn: tampered }), /integrity check failed/);
 
-  // c) missing dist.integrity
+  // c) Missing dist.integrity
   const noIntegrity: typeof fetch = async (input) => {
     const url = typeof input === 'string' ? input : String(input);
     if (url.endsWith('/latest')) return new Response(JSON.stringify({ version: '1.0.0' }), { status: 200 });
@@ -312,14 +312,14 @@ test('stageReleaseFromNpm: double package metadata/hash/install artifact validat
   };
   await assert.rejects(() => stageReleaseFromNpm(dir, '1.0.0', { fetchFn: noIntegrity }), /integrity/);
 
-  // d) version does not match metadata
+  // d) Metadata version mismatch
   const versionMismatch: typeof fetch = async (input) => {
     const url = typeof input === 'string' ? input : String(input);
     if (url.endsWith('/latest')) return new Response(JSON.stringify({ version: '1.0.0' }), { status: 200 });
     const name = url.includes('%2Fcli') ? '@helm/cli' : '@helm/node';
     return new Response(JSON.stringify({ name, version: '1.0.1', dist: { integrity: 'sha512-abc', tarball: 'https://r/t.tgz' } }), { status: 200 });
   };
-  await assert.rejects(() => stageReleaseFromNpm(dir, '1.0.0', { fetchFn: versionMismatch }), /version do not symbol/);
+  await assert.rejects(() => stageReleaseFromNpm(dir, '1.0.0', { fetchFn: versionMismatch }), /version mismatch/);
 
   await fs.rm(dir, { recursive: true, force: true });
 });
@@ -342,13 +342,13 @@ function makeHooks(log: UpgradeLog) {
   };
 }
 
-test('performNodeUpgrade: without prepareReplacement explicit reject (do not fabricate PID)', { timeout: 60_000 }, async () => {
+test('performNodeUpgrade: rejects explicitly when prepareReplacement is omitted (never fabricates a PID)', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   await assert.rejects(() => performNodeUpgrade(dir, {}), /prepareReplacement/);
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('performNodeUpgrade: succeeded path prepare→commit→onScheduleShutdown(pid),current update,blocked clear', { timeout: 60_000 }, async () => {
+test('performNodeUpgrade: success path runs prepare -> commit -> onScheduleShutdown(pid), updates current, clears blocked', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   await writeBlockedRelease(dir, { version: '2.0.0', reason: 'old failed', at: new Date().toISOString() });
   const log: UpgradeLog = { draining: [], execCount: { value: 0 }, shutdownPids: [] };
@@ -369,13 +369,13 @@ test('performNodeUpgrade: succeeded path prepare→commit→onScheduleShutdown(p
   });
 
   assert.deepEqual(result, { ok: true, previousVersion: '1.0.0', targetVersion: '1.2.3', upgraded: true, pid: 4242 });
-  assert.deepEqual(calls, ['commit:4242']); // commit exactly once, succeeded path do not abort
+  assert.deepEqual(calls, ['commit:4242']); // commit exactly once; never abort on success path
   assert.equal(releases[0]?.version, '1.2.3');
   assert.ok(contexts[0]?.attemptId);
   assert.equal(contexts[0]?.previousVersion, '1.0.0');
   assert.equal(contexts[0]?.targetVersion, '1.2.3');
   assert.deepEqual(log.shutdownPids, [4242]);
-  assert.deepEqual(log.draining, [true]); // after success keep draining(old host i.e. exit)
+  assert.deepEqual(log.draining, [true]); // keep draining after success (old host is exiting)
   const current = await readCurrentRelease(dir);
   assert.equal(current?.version, '1.2.3');
   assert.equal(current?.entryPath, releases[0]?.entryPath);
@@ -384,7 +384,7 @@ test('performNodeUpgrade: succeeded path prepare→commit→onScheduleShutdown(p
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('performNodeUpgrade:targetVersion specification (v prefix/whitespace) used to directory and result', { timeout: 60_000 }, async () => {
+test('performNodeUpgrade: normalizes targetVersion (v prefix/whitespace) for directory names and results', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   const { replacement } = makeReplacement(100);
   const result = await performNodeUpgrade(dir, {
@@ -399,7 +399,7 @@ test('performNodeUpgrade:targetVersion specification (v prefix/whitespace) used 
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('performNodeUpgrade: same version non- force without operation, do not stage do not arrange empty', { timeout: 60_000 }, async () => {
+test('performNodeUpgrade: no-op on same version unless force is set (no staging or draining)', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   const log: UpgradeLog = { draining: [], execCount: { value: 0 }, shutdownPids: [] };
   let staged = 0;
@@ -419,7 +419,7 @@ test('performNodeUpgrade: same version non- force without operation, do not stag
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('performNodeUpgrade: guard against fall back reject (force can exceeds)', { timeout: 60_000 }, async () => {
+test('performNodeUpgrade: rejects downgrades unless force=true', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   await assert.rejects(
     () =>
@@ -431,7 +431,7 @@ test('performNodeUpgrade: guard against fall back reject (force can exceeds)', {
       }),
     UpgradeRejectedError,
   );
-  // force allows fall back
+  // force=true permits downgrade
   const result = await performNodeUpgrade(dir, {
     targetVersion: '0.9.0',
     currentVersion: '1.0.0',
@@ -443,7 +443,7 @@ test('performNodeUpgrade: guard against fall back reject (force can exceeds)', {
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('performNodeUpgrade: failed version cool down phase inside reject,force or expired after can retry', { timeout: 60_000 }, async () => {
+test('performNodeUpgrade: rejects failed version during cooldown unless force=true or cooldown expired', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   await writeBlockedRelease(dir, { version: '1.5.0', reason: 'canary crashed', at: new Date().toISOString() });
   await assert.rejects(
@@ -454,9 +454,9 @@ test('performNodeUpgrade: failed version cool down phase inside reject,force or 
         stageExtractor: fakeExtractor,
         prepareReplacement: async () => makeReplacement(1).replacement,
       }),
-    /cool down/,
+    /cooldown/,
   );
-  // force can retry
+  // Retry permitted with force=true
   const result = await performNodeUpgrade(dir, {
     targetVersion: '1.5.0',
     currentVersion: '1.0.0',
@@ -466,7 +466,7 @@ test('performNodeUpgrade: failed version cool down phase inside reject,force or 
   });
   assert.equal(result.upgraded, true);
 
-  // cool down expired (write a 31 minute before record) after no need to force also can retry
+  // Once cooldown expires (record older than 31 minutes), retry succeeds without force
   const dir2 = await tempDir('helm-node-upgrade-');
   await writeBlockedRelease(dir2, {
     version: '1.5.0',
@@ -484,10 +484,10 @@ test('performNodeUpgrade: failed version cool down phase inside reject,force or 
   await fs.rm(dir2, { recursive: true, force: true });
 });
 
-test('performNodeUpgrade: arrange empty gate- -exec in timeout inside reset to zero after let through', { timeout: 60_000 }, async () => {
+test('performNodeUpgrade: drain gate allows upgrade once in-flight exec count drops to zero before timeout', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   const log: UpgradeLog = { draining: [], execCount: { value: 2 }, shutdownPids: [] };
-  // 100ms after exec self however reset to zero
+  // Exec count drops to zero after 100ms
   setTimeout(() => {
     log.execCount.value = 0;
   }, 100).unref();
@@ -505,7 +505,7 @@ test('performNodeUpgrade: arrange empty gate- -exec in timeout inside reset to z
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('performNodeUpgrade: arrange empty timeout - - abandon upgrade, solve except gate, without any change', { timeout: 60_000 }, async () => {
+test('performNodeUpgrade: drain timeout aborts upgrade, releases drain gate, and leaves state untouched', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   await writeCurrentRelease(dir, { version: '1.0.0', entryPath: '/old/dist/cli.js', updatedAt: new Date().toISOString() });
   const log: UpgradeLog = { draining: [], execCount: { value: 3 }, shutdownPids: [] };
@@ -522,16 +522,16 @@ test('performNodeUpgrade: arrange empty timeout - - abandon upgrade, solve excep
         },
         ...makeHooks(log),
       }),
-    /arrange empty timeout/,
+    /timed out draining/,
   );
-  assert.equal(prepared, 0, 'arrange empty failed must not enter prepare');
-  assert.deepEqual(log.draining, [true, false], 'gate must solve except');
+  assert.equal(prepared, 0, 'drain failure must not enter prepare');
+  assert.deepEqual(log.draining, [true, false], 'drain gate must be released');
   assert.deepEqual(log.shutdownPids, []);
   assert.equal((await readCurrentRelease(dir))?.version, '1.0.0');
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('performNodeUpgrade:commit failed - -abort, restore current, write blocked, solve except gate', { timeout: 60_000 }, async () => {
+test('performNodeUpgrade: commit failure aborts replacement, restores current, writes blocked, and releases drain gate', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   const originalCurrent = { version: '1.0.0', entryPath: '/old/dist/cli.js', updatedAt: '2026-01-01T00:00:00.000Z', cliBinDir: '/old/node_modules/.bin' };
   await writeCurrentRelease(dir, originalCurrent);
@@ -547,18 +547,18 @@ test('performNodeUpgrade:commit failed - -abort, restore current, write blocked,
         prepareReplacement: async () => replacement,
         ...makeHooks(log),
       }),
-    /activate handshake timeout[\s\S]*rollback/,
+    /rolled back[\s\S]*activate handshake timeout/,
   );
-  assert.deepEqual(calls, ['commit:321', 'abort:321'], 'commit failed must abort');
+  assert.deepEqual(calls, ['commit:321', 'abort:321'], 'commit failure must abort replacement');
   const current = await readCurrentRelease(dir);
-  assert.deepEqual(current, originalCurrent, 'current must restore');
+  assert.deepEqual(current, originalCurrent, 'current.json must be restored');
   const blocked = await readBlockedRelease(dir);
   assert.equal(blocked?.version, '1.4.0');
   assert.match(blocked?.reason ?? '', /activate handshake timeout/);
-  assert.deepEqual(log.draining, [true, false], 'failed path gate solve except');
+  assert.deepEqual(log.draining, [true, false], 'drain gate must be released on failure');
   assert.deepEqual(log.shutdownPids, []);
 
-  // by cool down version retry by refuse
+  // Immediate retry of blocked version is rejected by cooldown
   await assert.rejects(
     () =>
       performNodeUpgrade(dir, {
@@ -567,12 +567,12 @@ test('performNodeUpgrade:commit failed - -abort, restore current, write blocked,
         stageExtractor: fakeExtractor,
         prepareReplacement: async () => makeReplacement(1).replacement,
       }),
-    /cool down/,
+    /cooldown/,
   );
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('performNodeUpgrade:prepareReplacement throws - -current not change, write blocked, solve except gate', { timeout: 60_000 }, async () => {
+test('performNodeUpgrade: when prepareReplacement throws, current remains unchanged, blocked is written, and drain gate is released', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   await writeCurrentRelease(dir, { version: '1.0.0', entryPath: '/old/dist/cli.js', updatedAt: new Date().toISOString() });
   const log: UpgradeLog = { draining: [], execCount: { value: 0 }, shutdownPids: [] };
@@ -596,7 +596,7 @@ test('performNodeUpgrade:prepareReplacement throws - -current not change, write 
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('performNodeUpgrade: target version take latest(not explicit designate when)', { timeout: 60_000 }, async () => {
+test('performNodeUpgrade: defaults target version to latest when omitted', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   const { fetchFn } = makeRegistryFetch('1.9.0');
   const result = await performNodeUpgrade(dir, {
@@ -610,7 +610,7 @@ test('performNodeUpgrade: target version take latest(not explicit designate when
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('performNodeUpgrade: across process upgrade lock mutual exclusion', { timeout: 60_000 }, async () => {
+test('performNodeUpgrade: enforces cross-process upgrade lock exclusion', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   let unblock: (() => void) | undefined;
   const gate = new Promise<void>((resolve) => {
@@ -623,14 +623,14 @@ test('performNodeUpgrade: across process upgrade lock mutual exclusion', { timeo
     stageExtractor: fakeExtractor,
     prepareReplacement: async () => {
       enteredPrepare += 1;
-      await gate; // hold lock wait for external let through
+      await gate; // hold lock until released externally
       return makeReplacement(11).replacement;
     },
   });
-  // etc. first time upgrade truly enter hold lock phase (prepare already by invoke)
+  // Wait until first upgrade enters lock-protected prepare phase
   const deadline = Date.now() + 5_000;
   while (enteredPrepare === 0 && Date.now() < deadline) await delay(20);
-  assert.equal(enteredPrepare, 1, 'first time upgrade should already enter hold lock phase');
+  assert.equal(enteredPrepare, 1, 'first upgrade should have entered lock-protected prepare phase');
   await assert.rejects(
     () =>
       performNodeUpgrade(dir, {
@@ -639,12 +639,12 @@ test('performNodeUpgrade: across process upgrade lock mutual exclusion', { timeo
         stageExtractor: fakeExtractor,
         prepareReplacement: async () => makeReplacement(1).replacement,
       }),
-    /upgrade already in in progress/,
+    /upgrade already in progress/,
   );
   unblock?.();
   const firstResult = await first;
   assert.equal(firstResult.upgraded, true);
-  // lock already release, can again upgrade
+  // Lock released; second upgrade can proceed
   const second = await performNodeUpgrade(dir, {
     targetVersion: '1.3.0',
     currentVersion: '1.2.0',
@@ -655,21 +655,21 @@ test('performNodeUpgrade: across process upgrade lock mutual exclusion', { timeo
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('performNodeUpgrade: same version directory is now use when do not delete choose (immutable)', { timeout: 60_000 }, async () => {
+test('performNodeUpgrade: leaves existing in-use version directories intact (immutable)', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   const first = await stageReleaseFromNpm(dir, '1.2.3', { stageExtractor: fakeExtractor });
-  // upgrade to other version after again stage same version: old choose still in
+  // Re-staging the same version leaves existing candidate intact
   const again = await stageReleaseFromNpm(dir, '1.2.3', { stageExtractor: fakeExtractor });
   assert.equal(again.releaseDir, first.releaseDir);
-  assert.ok(await fs.access(first.entryPath).then(() => true, () => false), 'old choose entry must keep');
+  assert.ok(await fs.access(first.entryPath).then(() => true, () => false), 'existing candidate entry must remain intact');
   await fs.rm(dir, { recursive: true, force: true });
 });
 
 // ---------------------------------------------------------------------------
-// 7. fix regression: commit point after must not mistakenly report failed / gate unify solve except / force heavy install / cache strictly re-check
+// 7. Regression guards: no false commit failures, unified gate release, forced reinstall, strict cache checks
 // ---------------------------------------------------------------------------
 
-test('performNodeUpgrade:clearBlockedRelease failed occur in commit before - - do not commit, rollback, solve except gate', { timeout: 60_000 }, async () => {
+test('performNodeUpgrade: failure in clearBlockedRelease before commit aborts without calling commit and releases drain gate', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   await writeCurrentRelease(dir, { version: '1.0.0', entryPath: '/old/dist/cli.js', updatedAt: new Date().toISOString() });
   const log: UpgradeLog = { draining: [], execCount: { value: 0 }, shutdownPids: [] };
@@ -682,7 +682,7 @@ test('performNodeUpgrade:clearBlockedRelease failed occur in commit before - - d
         currentVersion: '1.0.0',
         stageExtractor: fakeExtractor,
         prepareReplacement: async () => {
-          // real file fault: update-blocked.json do into directory,rm(force) delete must failed (EISDIR)
+          // Real filesystem fault: make update-blocked.json a directory so rm(force) fails with EISDIR
           await fs.mkdir(path.join(dir, 'update-blocked.json'), { recursive: true });
           return replacement;
         },
@@ -690,25 +690,24 @@ test('performNodeUpgrade:clearBlockedRelease failed occur in commit before - - d
       }),
     (error: unknown) => {
       const msg = error instanceof Error ? error.message : String(error);
-      // failed must source at commit before file operation, while is not commit itself
+      // Failure comes from pre-commit file cleanup rather than commit itself
       assert.match(msg, /commit failed/);
-      assert.match(msg, /update-blocked\.json/, 'error should contain real fault file diagnose');
+      assert.match(msg, /update-blocked\.json/, 'error should report the failing path');
       return true;
     },
   );
-  assert.deepEqual(calls, ['abort:888'], 'commit before failed must not invoke commit, but must abort');
-  assert.equal((await readCurrentRelease(dir))?.version, '1.0.0', 'current must restore');
-  assert.deepEqual(log.draining, [true, false], 'failed path gate must solve except');
-  assert.deepEqual(log.shutdownPids, [], 'must not scheduling closure machine');
+  assert.deepEqual(calls, ['abort:888'], 'pre-commit failure must abort without calling commit');
+  assert.equal((await readCurrentRelease(dir))?.version, '1.0.0', 'current.json must be restored');
+  assert.deepEqual(log.draining, [true, false], 'drain gate must be released on failure');
+  assert.deepEqual(log.shutdownPids, [], 'must not schedule shutdown');
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('performNodeUpgrade:commit after success without fallible file operation - -blocked clean up failed do not mistakenly report failed', { timeout: 60_000 }, async () => {
+test('performNodeUpgrade: no fallible fs operations after commit succeed so blocked cleanup never causes false failures', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   const log: UpgradeLog = { draining: [], execCount: { value: 0 }, shutdownPids: [] };
   const { replacement, calls } = makeReplacement(889);
-  // blocked file is directory (clean up must failed) in commit before then should leads to failed; this test verify commit after success path:
-  // normal scenario (blocked is ordinary file) under clean up succeeded, result ok.
+  // Making blocked file a directory fails before commit; here a normal file cleanup completes before commit.
   const result = await performNodeUpgrade(dir, {
     targetVersion: '1.6.0',
     currentVersion: '1.0.0',
@@ -720,13 +719,13 @@ test('performNodeUpgrade:commit after success without fallible file operation - 
   assert.equal(result.pid, 889);
   assert.deepEqual(calls, ['commit:889']);
   assert.deepEqual(log.shutdownPids, [889]);
-  assert.equal(await readBlockedRelease(dir), null, 'blocked should in commit before by clean up');
+  assert.equal(await readBlockedRelease(dir), null, 'blocked record should be cleared before commit');
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('performNodeUpgrade:drain after current.json corrupt - -gate solve except, explicit errors does not pretend to be succeeded', { timeout: 60_000 }, async () => {
+test('performNodeUpgrade: corrupt current.json throws explicitly and never triggers draining or fakes success', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
-  // current.json in enter drain before can read; read old current snapshot when only then expose corrupt
+  // Reading current.json before setDraining exposes corruption upfront
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, 'current.json'), '{corrupted', 'utf8');
   const log: UpgradeLog = { draining: [], execCount: { value: 0 }, shutdownPids: [] };
@@ -738,14 +737,14 @@ test('performNodeUpgrade:drain after current.json corrupt - -gate solve except, 
         prepareReplacement: async () => makeReplacement(1).replacement,
         ...makeHooks(log),
       }),
-    /current\.json corrupt/,
+    /current\.json is corrupt/,
   );
-  // read snapshot occur in setDraining before, not yet enter arrange empty
-  assert.equal(log.draining.length, 0, 'snapshot read in drain before complete, must not already enter draining');
+  // Snapshot read occurs before setDraining, so draining must never start
+  assert.equal(log.draining.length, 0, 'snapshot read precedes draining; must not enter draining state');
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('performNodeUpgrade:getActiveExecCount throws - - unify finally solve except gate', { timeout: 60_000 }, async () => {
+test('performNodeUpgrade: always releases drain gate in finally even if getActiveExecCount throws', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   const log: UpgradeLog = { draining: [], execCount: { value: 0 }, shutdownPids: [] };
   await assert.rejects(
@@ -765,11 +764,11 @@ test('performNodeUpgrade:getActiveExecCount throws - - unify finally solve excep
       return true;
     },
   );
-  assert.deepEqual(log.draining, [true, false], 'call back throws also must solve except gate');
+  assert.deepEqual(log.draining, [true, false], 'drain gate must be released even when callback throws');
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('performNodeUpgrade:prepare failed and write blocked also failed - - two where failed all such as on report', { timeout: 60_000 }, async () => {
+test('performNodeUpgrade: surfaces both prepare failure and blocked-write failure together', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   const log: UpgradeLog = { draining: [], execCount: { value: 0 }, shutdownPids: [] };
   await assert.rejects(
@@ -779,7 +778,7 @@ test('performNodeUpgrade:prepare failed and write blocked also failed - - two wh
         currentVersion: '1.0.0',
         stageExtractor: fakeExtractor,
         prepareReplacement: async () => {
-          // update-blocked.json do into directory: after continue writeBlockedRelease write file must failed (real file fault)
+          // Make update-blocked.json a directory so writeBlockedRelease fails with a real EISDIR fault
           await fs.mkdir(path.join(dir, 'update-blocked.json'), { recursive: true });
           throw new Error('replacement daemon register failed');
         },
@@ -788,7 +787,7 @@ test('performNodeUpgrade:prepare failed and write blocked also failed - - two wh
     (error: unknown) => {
       const msg = error instanceof Error ? error.message : String(error);
       assert.match(msg, /replacement daemon register failed/);
-      assert.match(msg, /write blocked record failed/, 'blocked failed to write must not by swallow');
+      assert.match(msg, /write blocked record failed/, 'writeBlockedRelease failure must not be swallowed');
       return true;
     },
   );
@@ -796,7 +795,7 @@ test('performNodeUpgrade:prepare failed and write blocked also failed - - two wh
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('stageReleaseFromNpm:force skip cache generate new choose, old choose keep', { timeout: 60_000 }, async () => {
+test('stageReleaseFromNpm: force bypasses cache and creates a new candidate while preserving the previous one', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   const first = await stageReleaseFromNpm(dir, '2.0.0', { stageExtractor: fakeExtractor });
   let extractorRuns = 0;
@@ -804,28 +803,28 @@ test('stageReleaseFromNpm:force skip cache generate new choose, old choose keep'
     extractorRuns += 1;
     return fakeExtractor(stagingDir, version);
   };
-  // non- force: re- use cache, do not re- install
+  // Without force: reuses cache without reinstalling
   const cached = await stageReleaseFromNpm(dir, '2.0.0', { stageExtractor: countingExtractor });
   assert.equal(cached.releaseDir, first.releaseDir);
   assert.equal(extractorRuns, 0);
-  // force: re- install generate new cannot change choose, old choose do not delete
+  // With force: installs into a new candidate dir without deleting the old one
   const forced = await stageReleaseFromNpm(dir, '2.0.0', { stageExtractor: countingExtractor, force: true });
   assert.equal(extractorRuns, 1);
   assert.notEqual(forced.releaseDir, first.releaseDir);
   assert.ok(forced.releaseDir.startsWith(path.join(dir, 'releases', '2.0.0') + path.sep));
-  assert.ok(await fs.access(first.entryPath).then(() => true, () => false), 'old choose must keep');
+  assert.ok(await fs.access(first.entryPath).then(() => true, () => false), 'previous candidate must remain intact');
   assert.ok(await fs.access(forced.entryPath).then(() => true, () => false));
-  // .complete points to new choose
+  // .complete now points to the new candidate
   const marker = JSON.parse(await fs.readFile(path.join(dir, 'releases', '2.0.0', '.complete'), 'utf8'));
   assert.equal(marker.candidateDir, forced.releaseDir);
-  // again non- force re- use new choose
+  // Subsequent non-forced call reuses the new candidate
   const again = await stageReleaseFromNpm(dir, '2.0.0', { stageExtractor: countingExtractor });
   assert.equal(again.releaseDir, forced.releaseDir);
   assert.equal(extractorRuns, 1);
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('performNodeUpgrade:force pass to staging- - same version upgrade also re- install', { timeout: 60_000 }, async () => {
+test('performNodeUpgrade: propagates force to staging so same-version upgrade reinstalls', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   const first = await stageReleaseFromNpm(dir, '1.0.0', { stageExtractor: fakeExtractor });
   let extractorRuns = 0;
@@ -839,48 +838,48 @@ test('performNodeUpgrade:force pass to staging- - same version upgrade also re- 
     },
     prepareReplacement: async () => makeReplacement(66).replacement,
   });
-  assert.equal(result.upgraded, true, 'force same version should re- install and upgrade');
-  assert.equal(extractorRuns, 1, 'force must not re- use .complete cache');
+  assert.equal(result.upgraded, true, 'forced same-version upgrade should reinstall and upgrade');
+  assert.equal(extractorRuns, 1, 'force must bypass .complete cache');
   assert.notEqual(result.targetVersion, first.releaseDir);
   const current = await readCurrentRelease(dir);
   assert.equal(current?.version, '1.0.0');
-  assert.notEqual(current?.entryPath, first.entryPath, 'current should points to new choose entry');
+  assert.notEqual(current?.entryPath, first.entryPath, 'current.json should point to new candidate entry');
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('stageReleaseFromNpm: cache points to version directory outside/choose inside path illegal when explicit reject, do not delete old choose', { timeout: 60_000 }, async () => {
+test('stageReleaseFromNpm: rejects .complete paths escaping version or candidate dir without deleting old candidate', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   const staged = await stageReleaseFromNpm(dir, '3.0.0', { stageExtractor: fakeExtractor });
   const completePath = path.join(dir, 'releases', '3.0.0', '.complete');
-  // a) entryPath points to version directory of outside
+  // a) entryPath points outside the version directory
   const outside = JSON.parse(await fs.readFile(completePath, 'utf8'));
   await fs.writeFile(completePath, JSON.stringify({ ...outside, entryPath: '/etc/passwd' }), 'utf8');
-  await assert.rejects(() => stageReleaseFromNpm(dir, '3.0.0', { stageExtractor: fakeExtractor }), /do not in this version cannot change directory inside/);
-  // b) candidateDir points to version directory of outside
+  await assert.rejects(() => stageReleaseFromNpm(dir, '3.0.0', { stageExtractor: fakeExtractor }), /entryPath lies outside immutable release dir/);
+  // b) candidateDir points outside the version directory
   await fs.writeFile(completePath, JSON.stringify({ ...outside, candidateDir: path.join(dir, 'elsewhere') }), 'utf8');
-  await assert.rejects(() => stageReleaseFromNpm(dir, '3.0.0', { stageExtractor: fakeExtractor }), /cannot change directory inside/);
-  // c) entryPath store in but do not in choose directory inside (version directory inside but choose outside)
+  await assert.rejects(() => stageReleaseFromNpm(dir, '3.0.0', { stageExtractor: fakeExtractor }), /candidateDir lies outside immutable release dir/);
+  // c) entryPath is inside the version directory but outside candidateDir
   await fs.writeFile(
     completePath,
     JSON.stringify({ ...outside, entryPath: path.join(dir, 'releases', '3.0.0', 'other', 'cli.js') }),
     'utf8',
   );
-  await assert.rejects(() => stageReleaseFromNpm(dir, '3.0.0', { stageExtractor: fakeExtractor }), /cannot change directory inside/);
-  // d) entry file by delete (cache expires)→ explicit reject (not silently rebuild, do not delete choose)
+  await assert.rejects(() => stageReleaseFromNpm(dir, '3.0.0', { stageExtractor: fakeExtractor }), /entryPath lies outside immutable release dir/);
+  // d) Missing entry file (stale cache) -> reject explicitly without rebuilding or deleting candidate
   await fs.writeFile(completePath, JSON.stringify(outside), 'utf8');
   await fs.rm(staged.entryPath);
-  await assert.rejects(() => stageReleaseFromNpm(dir, '3.0.0', { stageExtractor: fakeExtractor }), /entry file missing/);
-  // old choose directory still complete store in
+  await assert.rejects(() => stageReleaseFromNpm(dir, '3.0.0', { stageExtractor: fakeExtractor }), /missing entry file/);
+  // Old candidate directory remains intact
   assert.ok(await fs.access(path.dirname(staged.entryPath)).then(() => true, () => false));
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('performNodeUpgrade:commit throw UpgradeCommitUnconfirmedError- - do not abort do not rollback do not write blocked, keep current/gate and let', { timeout: 60_000 }, async () => {
+test('performNodeUpgrade: UpgradeCommitUnconfirmedError skips abort/rollback/blocked and leaves current and drain gate active', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   const oldCurrent = { version: '1.0.0', entryPath: '/old/dist/cli.js', updatedAt: '2026-01-01T00:00:00.000Z' };
   await writeCurrentRelease(dir, oldCurrent);
   const log: UpgradeLog = { draining: [], execCount: { value: 0 }, shutdownPids: [] };
-  const unconfirmed = new UpgradeCommitUnconfirmedError('activate ACK timeout (choose may already to Hub on report commit)');
+  const unconfirmed = new UpgradeCommitUnconfirmedError('activate ACK timeout (candidate may already be committed on Hub)');
   const { replacement, calls } = makeReplacement(990, { commitError: unconfirmed });
 
   await assert.rejects(
@@ -895,26 +894,26 @@ test('performNodeUpgrade:commit throw UpgradeCommitUnconfirmedError- - do not ab
     (error: unknown) => {
       const err = error as Error & { cause?: unknown };
       const msg = err.message;
-      assert.match(msg, /new version already choose, activate result not confirm/);
+      assert.match(msg, /replacement was activated, but confirmation was unconfirmed/);
       assert.doesNotMatch(msg, /rollback to 1\.0\.0|rolled back/);
-      assert.equal(err.cause, unconfirmed, 'original not confirm error as cause keep');
+      assert.equal(err.cause, unconfirmed, 'original unconfirmed error should be preserved as cause');
       return true;
     },
   );
   assert.deepEqual(calls, ['commit:990'], 'must not invoke abort');
-  // new current keep points to target version, do not rollback
+  // New current.json keeps pointing to target version without rollback
   const current = await readCurrentRelease(dir);
   assert.equal(current?.version, '2.5.0');
-  // do not write failed/blocked
+  // Must not record failure in update-blocked.json
   assert.equal(await readBlockedRelease(dir), null);
-  // gate keep draining(old host i.e. exit, new host may already take over)
+  // Drain gate stays active while old host exits and candidate may take over
   assert.deepEqual(log.draining, [true]);
-  // old host let already notify
+  // Old host shutdown already scheduled
   assert.deepEqual(log.shutdownPids, [990]);
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('performNodeUpgrade: ordinary commit error still complete rollback (and not confirm branch compare)', { timeout: 60_000 }, async () => {
+test('performNodeUpgrade: ordinary commit error still performs full rollback (contrast with unconfirmed branch)', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   const oldCurrent = { version: '1.0.0', entryPath: '/old/dist/cli.js', updatedAt: '2026-01-01T00:00:00.000Z' };
   await writeCurrentRelease(dir, oldCurrent);
@@ -930,7 +929,7 @@ test('performNodeUpgrade: ordinary commit error still complete rollback (and not
         prepareReplacement: async () => replacement,
         ...makeHooks(log),
       }),
-    /commit failed, already rollback to 1\.0\.0/,
+    /commit failed and rolled back to 1\.0\.0/,
   );
   assert.deepEqual(calls, ['commit:991', 'abort:991']);
   assert.equal((await readCurrentRelease(dir))?.version, '1.0.0');
@@ -940,9 +939,9 @@ test('performNodeUpgrade: ordinary commit error still complete rollback (and not
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('stageReleaseFromNpm:npm cache re- use when re- core for double package package.json version', { timeout: 60_000 }, async () => {
+test('stageReleaseFromNpm: npm cache revalidation checks package.json versions of both @helm/node and @helm/cli', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
-  // directly construct npm origin cache mark record: choose inside put placement version do not symbol package artifact
+  // Construct an npm-origin .complete cache where @helm/cli package.json has a mismatched version
   const versionRoot = path.join(dir, 'releases', '4.0.0');
   const candidateDir = path.join(versionRoot, '11111111-2222-3333-4444-555555555555');
   const nodePkgDir = path.join(candidateDir, 'node_modules', '@helm', 'node');
@@ -970,26 +969,26 @@ test('stageReleaseFromNpm:npm cache re- use when re- core for double package pac
     }),
     'utf8',
   );
-  // @helm/cli version and target do not symbol → re- use by refuse
+  // @helm/cli version mismatch with target -> reuse rejected
   await assert.rejects(
     () => stageReleaseFromNpm(dir, '4.0.0', { stageExtractor: fakeExtractor }),
-    /install artifact package name\/version do not symbol.*@helm\/cli/,
+    /installed package name\/version mismatch.*@helm\/cli/,
   );
   await fs.rm(dir, { recursive: true, force: true });
 });
 
 // ---------------------------------------------------------------------------
-// runNpm timeout process group semantics:npm lifecycle script descendant process do not orphan child
+// runNpm timeout process-group kill: npm lifecycle descendants must not remain orphaned
 // ---------------------------------------------------------------------------
 
-test('runNpm timeout kill process group:npm run descendant process sync by kill (do not orphan child continue write staging)', { timeout: 60_000 }, async (t) => {
-  if (process.platform === 'win32') return; // POSIX process group semantics;win32 away taskkill /T etc. effect path
+test('runNpm timeout kills entire process group so descendant processes cannot keep writing to staging', { timeout: 60_000 }, async (t) => {
+  if (process.platform === 'win32') return; // POSIX process group semantics; win32 relies on taskkill /T
   const dir = await tempDir('npm-group-kill-');
   const heartbeat = path.join(dir, 'beat.txt');
   const grandPidFile = path.join(dir, 'grand.pid');
   const runnerScript = path.join(dir, 'runner.cjs');
-  // runner(npm run directly child process) again derive descendant process: descendant process continuous write heartbeat file,
-  // simulated install-script in timeout after continue write correct by clean up staging directory.
+  // runner (direct child of npm run) spawns a descendant writing a heartbeat file,
+  // simulating an install script attempting to write to a cleaned staging dir after timeout.
   await fs.writeFile(
     runnerScript,
     [
@@ -1019,7 +1018,7 @@ test('runNpm timeout kill process group:npm run descendant process sync by kill 
       try {
         process.kill(pid, 'SIGKILL');
       } catch {
-        // already die.
+        // already dead
       }
     }
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -1030,7 +1029,7 @@ test('runNpm timeout kill process group:npm run descendant process sync by kill 
 
   const { runNpm } = await import('../src/daemon/upgrader.js');
   const npmPromise = runNpm(['run', 'hold'], dir, 3_000);
-  // etc. npm pull start runner and descendant process (pid file persisted) again let timeout trigger, ensure by test object store in
+  // Wait until npm spawns runner and descendant writes its PID file before timing out
   const deadline = Date.now() + 2_500;
   for (;;) {
     const exists = await fs.readFile(grandPidFile, 'utf8').then(
@@ -1038,14 +1037,14 @@ test('runNpm timeout kill process group:npm run descendant process sync by kill 
       () => false,
     );
     if (exists) break;
-    if (Date.now() > deadline) throw new Error('npm run not can in pre- compute inside pull start descendant process (fixture failed)');
+    if (Date.now() > deadline) throw new Error('npm run did not spawn descendant process before deadline (fixture failed)');
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  await assert.rejects(() => npmPromise, /timeout/);
+  await assert.rejects(() => npmPromise, /timed out/);
 
   const rawPid = await fs.readFile(grandPidFile, 'utf8');
   const grandPid = Number(rawPid.trim());
-  assert.ok(Number.isInteger(grandPid) && grandPid > 0, `descendant process pid illegal:${rawPid}`);
+  assert.ok(Number.isInteger(grandPid) && grandPid > 0, `invalid descendant pid: ${rawPid}`);
   const isAlive = (pid: number): boolean => {
     try {
       process.kill(pid, 0);
@@ -1054,11 +1053,11 @@ test('runNpm timeout kill process group:npm run descendant process sync by kill 
       return false;
     }
   };
-  // process group kill sync takes effect; small window retry absorb scheduling lag
+  // Process-group kill is synchronous, though short polling absorbs scheduling lag
   let alive = isAlive(grandPid);
   for (let i = 0; i < 20 && alive; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 100));
     alive = isAlive(grandPid);
   }
-  assert.equal(alive, false, 'timeout after descendant process must follow process group by kill, do not orphan child');
+  assert.equal(alive, false, 'descendant process must be killed with its process group on timeout without leaving orphans');
 });

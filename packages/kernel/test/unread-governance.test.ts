@@ -1,16 +1,16 @@
 /**
- * conversation not read governance integration test: turn compute unread policy zone person class and background derive sub-conversation.
+ * Conversation unread governance integration tests: turn-settled unread policy distinguishes human vs background spawned sub-conversations.
  *
- * contract (emitSettled):
- * - top-level human direct connect conversation completed -> unread=true / status=done(since has semantics do not change);
- * - background derive sub-conversation (ownedBy=helm/bot and parentConversationId store in, such as managed
- *   subagent / SuperAgent Worker)completed -> unread=false / status=idle,
- *   do not fabricate person class not read noise sound; complete state and turn_settled event semantics consistent;
- * - person class fork(has parent chain but human ownership)completed -> unread=true(do not one blade cut);
- * - failed -> unread=false / status=error;aborted -> unread=false / status=idle
- *   (failed/abort contract lock).
+ * Contract (emitSettled):
+ * - Top-level human direct conversation completed -> unread=true / status=done (existing semantics unchanged);
+ * - Background spawned sub-conversation (ownedBy=helm/bot and parentConversationId present, such as managed
+ *   subagent / SuperAgent Worker) completed -> unread=false / status=idle,
+ *   never fabricating human unread noise; completion state stays consistent with turn_settled event semantics;
+ * - Human fork (has parent chain, human ownership) completed -> unread=true (not treated uniformly as background);
+ * - failed -> unread=false / status=error; aborted -> unread=false / status=idle
+ *   (failure/abort contract locked).
  *
- * all real execute: true pi-durable SDK + SQLite + faux provider + true original generate spawn pipeline.
+ * Full real execution: real pi-durable SDK + SQLite + faux provider + real native spawn pipeline.
  */
 
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
@@ -29,7 +29,7 @@ async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: FauxH
   return Object.assign(runtime, { __faux: faux })
 }
 
-/** register turn_settled collect plugin, return (by compute order) payload array. */
+/** Registers a turn_settled collector plugin and returns the payload array ordered by settlement. */
 async function collectSettled(kernel: KernelRuntime): Promise<TurnSettledPayload[]> {
   const settled: TurnSettledPayload[] = []
   await kernel.plugins.register({
@@ -53,12 +53,12 @@ after(async () => {
   await cleanupDir(root)
 })
 
-describe('turn compute unread governance', { timeout: 60_000 }, () => {
-  it('top-level human conversation completed:unread=true / done(since has semantics do not change)', { timeout: 60_000 }, async () => {
+describe('turn settlement unread governance', { timeout: 60_000 }, () => {
+  it('top-level human conversation completed: unread=true / done (existing semantics unchanged)', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 't1'))
     try {
       kernel.__faux.setResponses([fauxAssistantMessage('top-level answer')])
-      await kernel.submitInput(1, 'top-level issue')
+      await kernel.submitInput(1, 'top-level question')
       await kernel.waitForIdle(1)
       const conv = kernel.getConversation(1)
       assert.equal(conv.unread, true)
@@ -69,112 +69,112 @@ describe('turn compute unread governance', { timeout: 60_000 }, () => {
     }
   })
 
-  it('automatically subagent completed:unread=false / idle, state and event consistent; list filter dimension takes effect', { timeout: 60_000 }, async () => {
+  it('autonomous subagent completed: unread=false / idle, state consistent with events; list filters take effect', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 't2'))
     try {
       const settled = await collectSettled(kernel)
       kernel.__faux.setResponses([fauxAssistantMessage('subagent answer')])
-      const result = await kernel.spawnAgent({ parentConversationId: 1, prompt: 'sub- task' })
+      const result = await kernel.spawnAgent({ parentConversationId: 1, prompt: 'subtask' })
       assert.ok(result !== undefined)
       const child = kernel
         .listConversations()
         .find((c) => c.parentConversationId === 1)
-      assert.ok(child, 'original generate spawn should create sub-conversation')
+      assert.ok(child, 'native spawn should create child conversation')
       await kernel.waitForIdle(child.id)
 
       const fresh = kernel.getConversation(child.id) as ConversationSummary & { ownedBy?: string }
-      assert.equal(fresh.ownedBy, 'helm', 'original generate subagent ownership helm')
+      assert.equal(fresh.ownedBy, 'helm', 'native subagent is owned by helm')
       assert.equal(fresh.parentConversationId, 1)
-      assert.equal(fresh.unread, false, 'background subagent complete must not fabricate person class not read')
-      assert.equal(fresh.status, 'idle', 'unread=false when complete state should be idle(and unread semantics consistent)')
-      assert.equal(fresh.completionSeq, 1, 'complete watermark per common push enter')
+      assert.equal(fresh.unread, false, 'background subagent completion must not fabricate human unread state')
+      assert.equal(fresh.status, 'idle', 'completion status when unread=false should be idle (matching unread semantics)')
+      assert.equal(fresh.completionSeq, 1, 'completion sequence increments as normal')
 
-      // event semantics consistent:turn_settled payload conversation terminal state and read interface same source.
+      // Event semantics stay consistent: turn_settled payload terminal state matches the query interface.
       const childSettled = settled.find((p) => p.conversation.id === child.id)
-      assert.ok(childSettled, 'subagent turn should exactly compute once')
+      assert.ok(childSettled, 'subagent turn should settle once')
       assert.equal(childSettled.outcome, 'completed')
       assert.equal(childSettled.conversation.unread, false)
       assert.equal(childSettled.conversation.status, 'idle')
 
-      // parent conversation not by wave and (this turn not run): still without not read.
+      // Parent conversation is unaffected (no turn executed): remains unread=false.
       const parent = kernel.getConversation(1)
       assert.equal(parent.unread, false)
 
-      // process inside list filter dimension (HTTP drop noise server side implement):
-      assert.ok(kernel.listConversations().some((c) => c.id === child.id), 'process inside without filter default still all amount')
+      // In-process list filtering dimensions (backend implementation for HTTP noise reduction):
+      assert.ok(kernel.listConversations().some((c) => c.id === child.id), 'in-process list without filter returns all conversations')
       assert.ok(
         kernel.listConversations({ topLevelOnly: true }).every((c) => c.parentConversationId === undefined),
-        'topLevelOnly should exclude sub-conversation',
+        'topLevelOnly should exclude child conversations',
       )
       assert.deepEqual(
         kernel.listConversations({ parentConversationId: 1 }).map((c) => c.id),
         [child.id],
-        'parentConversationId precise match directly sub-conversation',
+        'parentConversationId should match direct child conversations exactly',
       )
     } finally {
       await kernel.close()
     }
   })
 
-  it('person class fork(has parent chain,human ownership)completed:unread=true(do not one blade cut)', { timeout: 60_000 }, async () => {
+  it('human fork (has parent chain, human ownership) completed: unread=true (not uniformly suppressed)', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 't3'))
     try {
       kernel.__faux.setResponses([
         fauxAssistantMessage('original conversation answer'),
-        fauxAssistantMessage('fork after answer'),
+        fauxAssistantMessage('post-fork answer'),
       ])
-      await kernel.submitInput(1, 'original conversation issue')
+      await kernel.submitInput(1, 'original conversation question')
       await kernel.waitForIdle(1)
       const detail = await kernel.getConversationDetail(1)
       const entryId = Number(detail.entries[0]!.id)
       const forked = await kernel.forkConversation(1, { entryId })
       assert.equal(forked.parentConversationId, 1, 'fork has parent chain')
 
-      await kernel.submitInput(forked.id, 'fork after issue')
+      await kernel.submitInput(forked.id, 'post-fork question')
       await kernel.waitForIdle(forked.id)
       const fresh = kernel.getConversation(forked.id) as ConversationSummary & { ownedBy?: string }
       assert.notEqual(fresh.ownedBy, 'helm')
       assert.notEqual(fresh.ownedBy, 'bot')
-      assert.equal(fresh.unread, true, 'person class fork complete still mark record not read')
+      assert.equal(fresh.unread, true, 'human fork completion still marks conversation unread')
       assert.equal(fresh.status, 'done')
     } finally {
       await kernel.close()
     }
   })
 
-  it('failed contract:failed -> unread=false / error', { timeout: 60_000 }, async () => {
+  it('failure contract: failed -> unread=false / error', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 't4'))
     try {
       kernel.__faux.setResponses([
         fauxAssistantMessage('x', { errorMessage: 'boom', stopReason: 'error' }),
       ])
-      await kernel.submitInput(1, 'trigger failed')
+      await kernel.submitInput(1, 'trigger failure')
       await kernel.waitForIdle(1).catch(() => {})
       const conv = kernel.getConversation(1)
       assert.equal(conv.status, 'error')
-      assert.equal(conv.unread, false, 'failed turn do not placement not read')
+      assert.equal(conv.unread, false, 'failed turn does not mark unread')
     } finally {
       await kernel.close()
     }
   })
 
-  it('abort contract:aborted -> unread=false / idle', { timeout: 60_000 }, async () => {
+  it('abort contract: aborted -> unread=false / idle', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 't5'))
     try {
       kernel.__faux.setResponses([
         fauxAssistantMessage([fauxToolCall('bash', { command: 'sleep 5 && echo done' })], {
           stopReason: 'toolUse',
         }),
-        fauxAssistantMessage('do not the need to second answer'),
+        fauxAssistantMessage('unneeded second answer'),
       ])
-      void kernel.submitInput(1, 'will by abort issue').catch(() => {})
+      void kernel.submitInput(1, 'question to be aborted').catch(() => {})
       await new Promise((r) => setTimeout(r, 150))
       assert.equal(kernel.getConversation(1).status, 'working')
       await kernel.abortConversation(1)
       await kernel.waitForIdle(1).catch(() => {})
       const conv = kernel.getConversation(1)
       assert.equal(conv.status, 'idle')
-      assert.equal(conv.unread, false, 'abort turn do not placement not read')
+      assert.equal(conv.unread, false, 'aborted turn does not mark unread')
     } finally {
       await kernel.close()
     }

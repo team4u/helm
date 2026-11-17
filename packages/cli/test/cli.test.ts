@@ -1,7 +1,8 @@
 /**
- * CLI all link test: temporary HTTP server simulated Hub contract (real fetch boundary).
- * verify: path/method/request body/--json/--current/motion state action schema/error message seal/credentials file keep key.
- * simulated is HTTP contract, do not declare call real Hub collection into (without model invoke).
+ * End-to-end CLI tests against an in-process HTTP mock Hub (real fetch boundary).
+ * Verifies paths, methods, request bodies, --json, --current, dynamic action schemas,
+ * error envelopes, and private credential file permissions.
+ * Mocks the HTTP contract without spawning a full Hub (no model invocations).
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -23,8 +24,8 @@ import {
 } from './helpers/cli-harness.js'
 
 /**
- * credentials file permission assertion: non- Windows strictly assertion POSIX 0600;Windows without POSIX mode
- * (NTFS away ACL,stat.mode do not express 0600), do not assertion pattern, only confirm file store in.
+ * Asserts private permissions on a credentials file: POSIX enforces 0600; Windows lacks
+ * POSIX modes (NTFS uses ACLs, so stat.mode does not represent 0600) and checks file presence only.
  */
 async function assertPrivateCredentialFile(file: string): Promise<void> {
   if (process.platform === 'win32') {
@@ -35,17 +36,17 @@ async function assertPrivateCredentialFile(file: string): Promise<void> {
   assert.equal(st.mode & 0o777, 0o600)
 }
 
-/** repository inside tsx/cli absolute path (across process child process execute TS entry use), self testDir one by one level to on parse. */
+/** Resolves the absolute path to tsx/cli inside the workspace for cross-process TS child invocations. */
 function resolveTsxCli(): string {
   const require = createRequire(import.meta.url)
   return require.resolve('tsx/cli')
 }
 
-test('setup/login swap token write 0600 cli-token, do not touch providers/pluginSecrets key', { timeout: 60_000 }, async (t) => {
+test('setup/login exchanges token and writes 0600 cli-token without modifying providers/pluginSecrets', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const credFile = path.join(dir, 'credentials.json')
   const tokenFile = path.join(dir, 'cli-token')
-  // pre- placement server side structure + extra unknown key (without old cli key): login must not touch this file
+  // Pre-seed server-side structure + extra unknown keys (no legacy cli key): login must not touch this file
   const legacyBefore = `${JSON.stringify({ providers: { openai: 'sk-x' }, pluginSecrets: { herdr: 's' }, futureKey: 1 }, null, 2)}\n`
   await fsp.writeFile(credFile, legacyBefore)
   const hub = await startMockHub(
@@ -61,18 +62,18 @@ test('setup/login swap token write 0600 cli-token, do not touch providers/plugin
   const r = await runCliCaptured(['login', '--password', 'pw', '--json'], makeCliEnv(hub.url, dir, { HELM_TOKEN: undefined }))
   assert.equal(r.code, 0, r.err)
   assert.equal(JSON.parse(r.out).token, 'tok-1')
-  // login state in independent cli-token(0600),credentials.json original do not motion
+  // Login state lives in standalone cli-token (0600); credentials.json remains untouched
   await assertPrivateCredentialFile(tokenFile)
   const saved = JSON.parse(await fsp.readFile(tokenFile, 'utf8')) as Record<string, unknown>
   assert.deepEqual(saved, { hubUrl: hub.url, token: 'tok-1' })
   assert.equal(await fsp.readFile(credFile, 'utf8'), legacyBefore)
-  // env HELM_TOKEN priority high at credentials file
+  // HELM_TOKEN env var takes precedence over credentials file
   const r2 = await runCliCaptured(['conversations', 'list', '--json'], makeCliEnv(hub.url, dir, { HELM_TOKEN: 'env-tok' }))
   assert.equal(r2.code, 0, r2.err)
   assert.equal(hub.recorded.hits.at(-1)?.authorization, 'Bearer env-tok')
 })
 
-test('conversations list drop noise query contract: default do not carries parameter,--all  all=1,--parent  parent=<id>, illegal combine refuse', { timeout: 60_000 }, async (t) => {
+test('conversations list noise-free query contract: omits default params, --all sets all=1, --parent sets parent=<id>, rejects invalid combinations', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const listBody: unknown[] = []
   const hub = await startMockHub(
@@ -85,36 +86,36 @@ test('conversations list drop noise query contract: default do not carries param
     { autoRegisterCleanup: t },
   )
   const env = makeCliEnv(hub.url, dir)
-  // default: do not carries any query(server side by default only top-level)
+  // Default: sends no query params (server defaults to top-level conversations)
   const top = await runCliCaptured(['conversations', 'list', '--json'], env)
   assert.equal(top.code, 0, top.err)
   assert.equal(hub.hits.at(-1)?.path, '/api/conversations')
-  // --all: all amount
+  // --all: requests all conversations
   const all = await runCliCaptured(['conversations', 'list', '--all', '--json'], env)
   assert.equal(all.code, 0, all.err)
   assert.equal(hub.hits.at(-1)?.path, '/api/conversations?all=1')
-  // --parent: precise directly sub-conversation
+  // --parent: requests direct child conversations
   const parent = await runCliCaptured(['conversations', 'list', '--parent', '3', '--json'], env)
   assert.equal(parent.code, 0, parent.err)
   assert.equal(hub.hits.at(-1)?.path, '/api/conversations?parent=3')
-  // and since has filter dimension stack add (query serialization order:parent first at profileId, and command implement consistent)
+  // Composes with existing filters (query key order: parent before profileId, matching command implementation)
   const combo = await runCliCaptured(['conversations', 'list', '--parent', '3', '--profile', 'worker', '--json'], env)
   assert.equal(combo.code, 0, combo.err)
   assert.equal(hub.hits.at(-1)?.path, '/api/conversations?parent=3&profileId=worker')
-  // illegal --parent: client directly reject, do not start request
+  // Invalid --parent: rejected client-side without sending requests
   for (const bad of ['abc', '0', '-1', '2.5']) {
     const res = await runCliCaptured(['conversations', 'list', '--parent', bad, '--json'], env)
-    assert.equal(res.code, 1, `--parent ${bad} should errors`)
-    assert.ok(res.err.includes('parent'), `errors should mention and parent:${res.err}`)
+    assert.equal(res.code, 1, `--parent ${bad} should fail`)
+    assert.ok(res.err.includes('parent'), `error should mention parent: ${res.err}`)
   }
-  assert.equal(hub.hits.filter((h) => h.path.includes('parent=')).length, 2, 'illegal --parent must not start request')
-  // --all and --parent mutual exclusion: client reject
+  assert.equal(hub.hits.filter((h) => h.path.includes('parent=')).length, 2, 'invalid --parent must not trigger a request')
+  // --all and --parent are mutually exclusive: rejected client-side
   const conflict = await runCliCaptured(['conversations', 'list', '--all', '--parent', '3', '--json'], env)
   assert.equal(conflict.code, 1)
-  assert.ok(conflict.err.includes('mutual exclusion'), `errors should note mutual exclusion:${conflict.err}`)
+  assert.ok(conflict.err.includes('mutually exclusive'), `error should note mutual exclusivity: ${conflict.err}`)
 })
 
-test('think Profile CLI pass-through: global part update, when before conversation override and Profile merge', { timeout: 60_000 }, async (t) => {
+test('thinkingLevel CLI passthrough: global default, current conversation override, and Profile merge', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-thinking-cli-')
   const hub = await startMockHub(
     {
@@ -140,7 +141,7 @@ test('think Profile CLI pass-through: global part update, when before conversati
   assert.deepEqual(JSON.parse(profile.out), { id: 'worker', model: 'faux/model', name: 'Worker', thinkingLevel: 'high' })
 })
 
-test('conversations create/send/abort/update/delete path,body and --current', { timeout: 60_000 }, async (t) => {
+test('conversations create/send/abort/update/delete paths, bodies, and --current', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const hub = await startMockHub(
     {
@@ -149,7 +150,7 @@ test('conversations create/send/abort/update/delete path,body and --current', { 
       'POST /api/conversations/7/abort': () => ({ body: { ok: true } }),
       'PATCH /api/conversations/7': (body) => ({ body: { id: 7, ...(body as object) } }),
       'DELETE /api/conversations/7': () => ({ status: 204 }),
-      'DELETE /api/conversations/1': () => ({ status: 409, body: { error: { code: 'conversation_managed_by_plugin', message: 'conversation by enabled plugin hosting, forbidden delete' } } }),
+      'DELETE /api/conversations/1': () => ({ status: 409, body: { error: { code: 'conversation_managed_by_plugin', message: 'conversation is managed by an enabled plugin and cannot be deleted' } } }),
     },
     { autoRegisterCleanup: t },
   )
@@ -179,14 +180,14 @@ test('conversations create/send/abort/update/delete path,body and --current', { 
   const patchHit = hub.recorded.hits.find((h) => h.method === 'PATCH')!
   assert.deepEqual(patchHit.body, { pinned: true, unread: false })
 
-  // --model empty string = clear model override (PATCH {model:''}); server side already support,CLI must can express
+  // Empty --model clears model override (PATCH { model: '' }); CLI must support both forms
   const cleared = await runCliCaptured(['conversations', 'update', '7', '--model', '', '--json'], env)
   assert.equal(cleared.code, 0, cleared.err)
   assert.deepEqual(hub.recorded.hits.at(-1)?.body, { model: '' })
   const clearedInline = await runCliCaptured(['conversations', 'update', '7', '--model=', '--json'], env)
   assert.equal(clearedInline.code, 0, clearedInline.err)
   assert.deepEqual(hub.recorded.hits.at(-1)?.body, { model: '' })
-  // normal override still original pass-through
+  // Normal overrides pass through verbatim
   const overridden = await runCliCaptured(['conversations', 'update', '7', '--model', 'openai/gpt-4o', '--json'], env)
   assert.equal(overridden.code, 0, overridden.err)
   assert.deepEqual(hub.recorded.hits.at(-1)?.body, { model: 'openai/gpt-4o' })
@@ -194,13 +195,13 @@ test('conversations create/send/abort/update/delete path,body and --current', { 
   const deleted = await runCliCaptured(['conversations', 'delete', '7', '--json'], env)
   assert.equal(deleted.code, 0, deleted.err)
 
-  // through use plugin manage right 409 error message seal -> stderr JSON + non-zero exit
+  // Plugin-managed 409 error envelope -> JSON on stderr + non-zero exit
   const forbidden = await runCliCaptured(['conversations', 'delete', '1', '--json'], env)
   assert.equal(forbidden.code, 1)
   assert.equal(parseCliError(forbidden).code, 'conversation_managed_by_plugin')
 })
 
-test('--current missing/illegal explicit ID all explicit errors', { timeout: 60_000 }, async (t) => {
+test('--current missing/invalid and explicit missing IDs fail explicitly', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const hub = await startMockHub({}, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
@@ -218,7 +219,7 @@ test('--current missing/illegal explicit ID all explicit errors', { timeout: 60_
   assert.equal(parseCliError(none).code, 'missing_conversation_target')
 })
 
-test('asks answer send answers JSON and expectedStateSeq', { timeout: 60_000 }, async (t) => {
+test('asks answer sends answers JSON and expectedStateSeq', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const hub = await startMockHub(
     {
@@ -233,7 +234,7 @@ test('asks answer send answers JSON and expectedStateSeq', { timeout: 60_000 }, 
   assert.deepEqual(hit.body, { answers: { field: 'value' }, expectedStateSeq: 10 })
 })
 
-test('skills read direct out {text}, non- JSON pattern original text', { timeout: 60_000 }, async (t) => {
+test('skills read prints {text} directly as raw text in non-JSON mode', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const hub = await startMockHub(
     {
@@ -254,7 +255,7 @@ test('skills read direct out {text}, non- JSON pattern original text', { timeout
   assert.deepEqual(JSON.parse(sub.out), { text: 'manual content' })
 })
 
-test('providers set send complete array;credentials set/delete use REST path', { timeout: 60_000 }, async (t) => {
+test('providers set sends full array; credentials set/delete use REST paths', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const hub = await startMockHub(
     {
@@ -281,17 +282,17 @@ test('providers set send complete array;credentials set/delete use REST path', {
   assert.equal(del.code, 0, del.err)
 })
 
-test('motion state action:schema rotate flag, type convert,--input mutual exclusion,cli.command path, conflict errors', { timeout: 60_000 }, async (t) => {
+test('dynamic actions: schema-to-flags, type coercion, --input mutual exclusion, cli.command path, conflict error', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const manifests = [
     {
-      pluginId: 'builtin:test', id: 'task.create', description: 'create task',
+      pluginId: 'builtin:test', id: 'task.create', description: 'Create task',
       inputSchema: { type: 'object', properties: { title: { type: 'string' }, maxTokens: { type: 'number' }, tags: { type: 'array' }, dryRun: { type: 'boolean' } }, required: ['title'] },
       outputSchema: { type: 'object' },
       cli: { command: ['tasks', 'create'] },
     },
     {
-      pluginId: 'builtin:triggers', id: 'fire', description: 'trigger',
+      pluginId: 'builtin:triggers', id: 'fire', description: 'Trigger action',
       inputSchema: { type: 'object', properties: {} },
       outputSchema: { type: 'object' },
     },
@@ -305,59 +306,59 @@ test('motion state action:schema rotate flag, type convert,--input mutual exclus
   )
   const env = makeCliEnv(hub.url, dir)
 
-  // cli.command override by default path
+  // cli.command overrides the default path
   const r = await runCliCaptured(['tasks', 'create', '--title', 'T', '--max-tokens', '4096', '--tags', '["a"]', '--dry-run', '--json'], env)
   assert.equal(r.code, 0, r.err)
   assert.deepEqual(JSON.parse(r.out), { created: true })
   const hit = hub.recorded.hits.find((h) => h.path === '/api/actions/builtin%3Atest/task.create')!
   assert.deepEqual(hit.body, { input: { title: 'T', maxTokens: 4096, tags: ['a'], dryRun: true } })
 
-  // by default path stripBuiltin
+  // Default path strips builtin: prefix
   const fire = await runCliCaptured(['triggers', 'fire', '--json'], env)
   assert.equal(fire.code, 0, fire.err)
   assert.equal(hub.recorded.hits.at(-1)?.path, '/api/actions/builtin%3Atriggers/fire')
 
-  // --current attach carries conversationId
+  // --current attaches conversationId
   const cur = await runCliCaptured(['triggers', 'fire', '--current', '--json'], { ...env, HELM_CONVERSATION_ID: '3' })
   assert.equal(cur.code, 0, cur.err)
   assert.deepEqual(hub.recorded.hits.at(-1)?.body, { input: {}, conversationId: 3 })
 
-  // required missing
+  // Missing required flag
   const missing = await runCliCaptured(['tasks', 'create', '--json'], env)
   assert.equal(missing.code, 1)
   assert.equal(parseCliError(missing).code, 'missing_required_flag')
 
-  // unknown flag reject
+  // Rejects unknown flags
   const unknown = await runCliCaptured(['tasks', 'create', '--title', 'T', '--bogus', '--json'], env)
   assert.equal(unknown.code, 1)
   assert.equal(parseCliError(unknown).code, 'unknown_flag')
 
-  // --input and property flag mutual exclusion
+  // --input and property flags are mutually exclusive
   const mixed = await runCliCaptured(['tasks', 'create', '--input', '{"title":"x"}', '--title', 'y', '--json'], env)
   assert.equal(mixed.code, 1)
   assert.equal(parseCliError(mixed).code, 'conflicting_flags')
 
-  // --input whole commit (contains schema outside field, server side validate fall back)
+  // --input passes full payload verbatim (server validates fields outside schema)
   const whole = await runCliCaptured(['tasks', 'create', '--input', '{"title":"x","extra":1}', '--json'], env)
   assert.equal(whole.code, 0, whole.err)
   assert.deepEqual(hub.recorded.hits.at(-1)?.body, { input: { title: 'x', extra: 1 } })
 
-  // help contains motion state command
+  // Help lists dynamic commands
   const help = await runCliCaptured(['--help'], env)
   assert.equal(help.code, 0)
   assert.match(help.out, /tasks create/)
   assert.match(help.out, /triggers fire/)
 })
 
-test('motion state command preempt core path when core still execute; invoke motion state path only then reject', { timeout: 60_000 }, async (t) => {
+test('core commands still execute when dynamic commands attempt to shadow core paths; conflicts only fail dynamic invocations', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const hub = await startMockHub(
     {
       'GET /api/actions': () => ({
         body: [
-          // and core ["conversations","list"] all etc. conflict + and ["asks"] prefix conflict parent path declaration
-          { pluginId: 'builtin:evil', id: 'list', description: 'preempt', inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, cli: { command: ['conversations', 'list'] } },
-          { pluginId: 'builtin:evil', id: 'asks-parent', description: 'preempt parent path', inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, cli: { command: ['asks'] } },
+          // Exact collision with core ["conversations", "list"] + prefix collision with ["asks"] parent path
+          { pluginId: 'builtin:evil', id: 'list', description: 'shadow', inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, cli: { command: ['conversations', 'list'] } },
+          { pluginId: 'builtin:evil', id: 'asks-parent', description: 'shadow parent path', inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, cli: { command: ['asks'] } },
         ],
       }),
       'GET /api/conversations': () => ({ body: [{ id: 9 }] }),
@@ -368,8 +369,8 @@ test('motion state command preempt core path when core still execute; invoke mot
   )
   const env = makeCliEnv(hub.url, dir)
 
-  // core command precise match i.e. execute: broken plugin conflict declaration must not block assert core manage side (fault isolated).
-  // even if motion state declaration preempt parent path ["asks"], core asks list still directly execute, do not pull manifest
+  // Core commands match and execute directly: broken plugins cannot break the core control plane (fault isolation).
+  // Even when a dynamic manifest claims parent path ["asks"], `helm asks list` runs directly without fetching manifests.
   const r = await runCliCaptured(['conversations', 'list', '--json'], env)
   assert.equal(r.code, 0, r.err)
   assert.equal(JSON.parse(r.out)[0]?.id, 9)
@@ -381,23 +382,23 @@ test('motion state command preempt core path when core still execute; invoke mot
   assert.equal(disable.code, 0, disable.err)
   assert.equal(hub.recorded.hits.at(-1)?.path, '/api/plugins/builtin%3Aevil/disable')
 
-  // only truly parse motion state command (non- core precise match) when only then pull manifest and explicit reject conflict
+  // Only dynamic command resolution (non-core paths) fetches manifests and explicitly rejects the conflict
   const dyn = await runCliCaptured(['asks', 'bogus', '--json'], env)
   assert.equal(dyn.code, 1)
   assert.equal(parseCliError(dyn).code, 'command_conflict')
 })
 
-test('workflows inspect/abort: location parameter mapping runId(motion state action command)', { timeout: 60_000 }, async (t) => {
+test('workflows inspect/abort: positional argument maps to runId (dynamic action command)', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const manifests = [
     {
-      pluginId: 'builtin:workflow', id: 'inspect', description: 'view single workflow run detail situation',
+      pluginId: 'builtin:workflow', id: 'inspect', description: 'Inspect a workflow run',
       inputSchema: { type: 'object', properties: { runId: { type: 'string' } }, required: ['runId'], additionalProperties: false },
       outputSchema: { type: 'object', properties: { run: { type: 'object' } }, required: ['run'], additionalProperties: false },
       cli: { command: ['workflows', 'inspect'], positional: [{ field: 'runId', required: true }] },
     },
     {
-      pluginId: 'builtin:workflow', id: 'abort', description: 'abort workflow run',
+      pluginId: 'builtin:workflow', id: 'abort', description: 'Abort a workflow run',
       inputSchema: { type: 'object', properties: { runId: { type: 'string' } }, required: ['runId'], additionalProperties: false },
       outputSchema: { type: 'object', properties: { run: { type: 'object' } }, required: ['run'], additionalProperties: false },
       cli: { command: ['workflows', 'abort'], positional: [{ field: 'runId', required: true }] },
@@ -418,7 +419,7 @@ test('workflows inspect/abort: location parameter mapping runId(motion state act
   assert.deepEqual(inspectHit.body, { input: { runId: 'run-1' } })
   assert.equal((JSON.parse(inspect.out) as { run: { status: string } }).run.status, 'completed')
 
-  // required location parameter missing: explicit missing_positional
+  // Missing required positional: explicit missing_positional
   const missing = await runCliCaptured(['workflows', 'inspect', '--json'], env)
   assert.equal(missing.code, 1)
   assert.equal(parseCliError(missing).code, 'missing_positional')
@@ -429,7 +430,7 @@ test('workflows inspect/abort: location parameter mapping runId(motion state act
   assert.deepEqual(abortHit.body, { input: { runId: 'run-1' } })
 })
 
-test('artifacts: text direct out, two enter system force --output, list away conversation end point', { timeout: 60_000 }, async (t) => {
+test('artifacts: streams text directly, requires --output for binary, lists via conversation endpoint', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const hub = await startMockHub(
     {
@@ -537,14 +538,14 @@ test('search,models,plugins,actions list,status', { timeout: 60_000 }, async (t)
   assert.equal(st.code, 0, st.err)
   assert.deepEqual(JSON.parse(st.out), { configured: true, authenticated: false })
 
-  // person class can read pattern output table (non- JSON)
+  // Human-readable table output (non-JSON)
   const human = await runCliCaptured(['models', 'list'], env)
   assert.equal(human.code, 0, human.err)
   assert.match(human.out, /provider\s+modelId\s+available/)
   assert.match(human.out, /openai\s+gpt\s+true/)
 })
 
-test('models filter: view disable manifest / --disable all amount replace / --clear empty (PUT /api/models/filter)', { timeout: 60_000 }, async (t) => {
+test('models filter: lists disabled models / --disable full-replace / --clear resets (PUT /api/models/filter)', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const catalog = {
     models: [
@@ -562,17 +563,17 @@ test('models filter: view disable manifest / --disable all amount replace / --cl
   )
   const env = makeCliEnv(hub.url, dir)
 
-  // without parameter: render when before directory in disabled model (person class can read group render).
+  // No arguments: shows currently disabled models (human-readable grouped formatting).
   const listHuman = await runCliCaptured(['models', 'filter'], env)
   assert.equal(listHuman.code, 0, listHuman.err)
   assert.match(listHuman.out, /faux\/faux-2/)
 
-  // without parameter --json: output complete catalog.
+  // No arguments with --json: outputs full catalog.
   const listJson = await runCliCaptured(['models', 'filter', '--json'], env)
   assert.equal(listJson.code, 0, listJson.err)
   assert.deepEqual(JSON.parse(listJson.out), catalog)
 
-  // --provider + --disable(can duplicate): all amount replace the provider disable collection.
+  // --provider + --disable (repeatable): replaces disabled models for that provider.
   const disable = await runCliCaptured(
     ['models', 'filter', '--provider', 'faux', '--disable', 'faux-2', '--disable', 'faux-1', '--json'],
     env,
@@ -583,26 +584,26 @@ test('models filter: view disable manifest / --disable all amount replace / --cl
   assert.equal(lastPut?.path, '/api/models/filter')
   assert.deepEqual(lastPut?.body, { provider: 'faux', disabledModels: ['faux-2', 'faux-1'] })
 
-  // --provider + --clear: placement empty the provider disable collection.
+  // --provider + --clear: clears disabled models for that provider.
   const clear = await runCliCaptured(['models', 'filter', '--provider', 'faux', '--clear', '--json'], env)
   assert.equal(clear.code, 0, clear.err)
   assert.deepEqual(hub.recorded.hits.at(-1)?.body, { provider: 'faux', disabledModels: [] })
 
-  // default --clear: empty all (without provider key).
+  // Standalone --clear: clears all disabled models (omits provider key).
   const clearAll = await runCliCaptured(['models', 'filter', '--clear', '--json'], env)
   assert.equal(clearAll.code, 0, clearAll.err)
   assert.deepEqual(hub.recorded.hits.at(-1)?.body, { disabledModels: [] })
 
-  // without --provider carry --disable: explicit reject (server side same 400,CLI pre- intercept).
+  // --disable without --provider: explicitly rejected client-side (server also returns 400).
   const noProvider = await runCliCaptured(['models', 'filter', '--disable', 'faux-1'], env)
   assert.notEqual(noProvider.code, 0)
 
-  // --clear and --disable mutual exclusion.
+  // --clear and --disable are mutually exclusive.
   const mutex = await runCliCaptured(['models', 'filter', '--provider', 'faux', '--clear', '--disable', 'faux-1'], env)
   assert.notEqual(mutex.code, 0)
 })
 
-test('events watch:SSE snapshot + incremental,--json each row output', { timeout: 60_000 }, async (t) => {
+test('events watch: SSE snapshot + deltas, --json emits one line per event', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const snapshot = {
     bootId: '00000000-0000-0000-0000-000000000001',
@@ -615,7 +616,7 @@ test('events watch:SSE snapshot + incremental,--json each row output', { timeout
     {
       'GET /api/events': (_body, _req, res) => {
         res.writeHead(200, { 'content-type': 'text/event-stream' })
-        // across chunk crack frame boundary (\r\n and \n mix use,split boundary) verify parse robust
+        // Split across chunk and CRLF/LF boundaries to verify parser robustness
         res.write(`event: snapshot\r\ndata: ${JSON.stringify(snapshot)}\r\n\r`)
         res.write(`\nevent: conversation.upsert\ndata: ${JSON.stringify({ seq: 6, event: { type: 'conversation.upsert', conversation: { id: 1, title: 'assist', status: 'working' } } })}\n\n`)
         res.write(': keepalive\n\n')
@@ -641,7 +642,7 @@ test('events watch:SSE snapshot + incremental,--json each row output', { timeout
   assert.match(human.out, /notification/)
 })
 
-test('hub cannot reach and 401 hint login', { timeout: 60_000 }, async (t) => {
+test('hub unreachable and 401 suggest login', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const unreachable = await runCliCaptured(['conversations', 'list', '--json'], makeCliEnv('http://127.0.0.1:1', dir, { HELM_TOKEN: 'x' }))
   assert.equal(unreachable.code, 1)
@@ -660,7 +661,7 @@ test('hub cannot reach and 401 hint login', { timeout: 60_000 }, async (t) => {
   assert.match(err.message, /helm login/)
 })
 
-test('without token when explicit errors (not silently bare run);--json error is legal JSON', { timeout: 60_000 }, async (t) => {
+test('fails explicitly without a token (no silent unauthenticated fallback); --json outputs valid error JSON', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const hub = await startMockHub({ 'GET /api/conversations': () => ({ body: [] }) }, { autoRegisterCleanup: t })
   const r = await runCliCaptured(['conversations', 'list', '--json'], makeCliEnv(hub.url, dir, { HELM_TOKEN: undefined }))
@@ -668,7 +669,7 @@ test('without token when explicit errors (not silently bare run);--json error is
   assert.equal(parseCliError(r).code, 'unauthorized')
 })
 
-test('unknown command and missing command error code', { timeout: 60_000 }, async (t) => {
+test('unknown and missing commands return dedicated error codes', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const hub = await startMockHub({}, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
@@ -686,7 +687,7 @@ test('unknown command and missing command error code', { timeout: 60_000 }, asyn
   assert.equal(parseCliError(partial).code, 'unknown_command')
 })
 
-test('setup --password closed ring;--help without Hub also available', { timeout: 60_000 }, async (t) => {
+test('setup --password end-to-end; --help works even when Hub is offline', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const hub = await startMockHub(
     {
@@ -703,13 +704,13 @@ test('setup --password closed ring;--help without Hub also available', { timeout
   const saved = JSON.parse(await fsp.readFile(path.join(dir, 'cli-token'), 'utf8')) as Record<string, unknown>
   assert.deepEqual(saved, { hubUrl: hub.url, token: 'tok-2' })
 
-  // --help without Hub available (Hub cannot reach when help still output, motion state command empty hint)
+  // --help works offline (prints core help when Hub is unreachable, noting empty dynamic commands)
   const help = await runCliCaptured(['--help'], makeCliEnv('http://127.0.0.1:1', dir, { HELM_TOKEN: undefined }))
   assert.equal(help.code, 0)
-  assert.match(help.out, /core command/)
+  assert.match(help.out, /Core commands/)
 })
 
-test('motion state action hidden do not expose command', { timeout: 60_000 }, async (t) => {
+test('hidden dynamic actions do not expose commands', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const hub = await startMockHub(
     {},
@@ -723,7 +724,7 @@ test('motion state action hidden do not expose command', { timeout: 60_000 }, as
   assert.equal(parseCliError(r).code, 'unknown_command')
 })
 
-test('motion state action empty command path and illegal segment explicit errors', { timeout: 60_000 }, async (t) => {
+test('dynamic actions with empty command path or invalid segments fail explicitly', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const hub = await startMockHub(
     {},
@@ -737,7 +738,7 @@ test('motion state action empty command path and illegal segment explicit errors
   assert.equal(parseCliError(r).code, 'invalid_command_path')
 })
 
-test('motion state action property name collide keep flag name when still can invoke (only via --input express)', { timeout: 60_000 }, async (t) => {
+test('dynamic actions whose properties collide with reserved flag names remain invokable via --input', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const hub = await startMockHub(
     {
@@ -746,7 +747,7 @@ test('motion state action property name collide keep flag name when still can in
     {
       defaultActions: [
         {
-          pluginId: 'builtin:test', id: 'odd', description: 'strange property name',
+          pluginId: 'builtin:test', id: 'odd', description: 'odd property names',
           inputSchema: { type: 'object', properties: { input: { type: 'string' }, current: { type: 'string' }, title: { type: 'string' } } },
           outputSchema: { type: 'object' },
         },
@@ -756,31 +757,31 @@ test('motion state action property name collide keep flag name when still can in
   )
   const env = makeCliEnv(hub.url, dir)
 
-  // collide keep name property do not disable the whole action: skip independent flag, via whole --input express
+  // Colliding reserved property names do not disable the action: individual flags are skipped, --input passes them through
   const r = await runCliCaptured(['test', 'odd', '--input', '{"input":"raw","current":"c","title":"t"}', '--json'], env)
   assert.equal(r.code, 0, r.err)
   const hit = hub.recorded.hits.find((h) => h.path === '/api/actions/builtin%3Atest/odd')!
   assert.deepEqual(hit.body, { input: { input: 'raw', current: 'c', title: 't' } })
 
-  // help in note these property only can via --input express
+  // Help notes that these properties are only writable via --input
   const help = await runCliCaptured(['test', 'odd', '--help'], env)
   assert.equal(help.code, 0)
   assert.match(help.out, /--input/)
   assert.match(help.out, /"input"/)
 
-  // without location parameter semantics: extra location parameter explicit reject, never without sound discard.
-  // `--` after token all is literal location parameter (contains --json), reason error is pure text while non- JSON
+  // Without positional semantics: extra positionals fail explicitly rather than being silently dropped.
+  // All tokens after `--` are literal positionals (including `--json`), so the error outputs plain text.
   const extra = await runCliCaptured(['test', 'odd', 'stray', '--input', '{}', '--json'], env)
   assert.equal(extra.code, 1)
   assert.equal(parseCliError(extra).code, 'unexpected_positional')
 
   const extraDash = await runCliCaptured(['test', 'odd', '--', 'stray', '--json'], env)
   assert.equal(extraDash.code, 1)
-  assert.match(extraDash.err, /redundant location parameter/)
+  assert.match(extraDash.err, /unexpected positional argument/)
   assert.match(extraDash.err, /stray --json/)
 })
 
-test('camelCase and kebab collide name property not silently last-wins, normal property still available flag', { timeout: 60_000 }, async (t) => {
+test('camelCase vs kebab-case property collision fails safely instead of last-wins while preserving non-colliding flags', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const hub = await startMockHub(
     {
@@ -789,7 +790,7 @@ test('camelCase and kebab collide name property not silently last-wins, normal p
     {
       defaultActions: [
         {
-          pluginId: 'builtin:test', id: 'dupe', description: 'collide name',
+          pluginId: 'builtin:test', id: 'dupe', description: 'colliding names',
           inputSchema: { type: 'object', properties: { fooBar: { type: 'string' }, 'foo-bar': { type: 'string' }, other: { type: 'string' } } },
           outputSchema: { type: 'object' },
         },
@@ -799,13 +800,13 @@ test('camelCase and kebab collide name property not silently last-wins, normal p
   )
   const env = makeCliEnv(hub.url, dir)
 
-  // collide name property via whole --input express (two key all original send reach, without losing any a)
+  // Colliding properties are still writable via --input (both keys transmitted verbatim)
   const whole = await runCliCaptured(['test', 'dupe', '--input', '{"fooBar":"camel","foo-bar":"kebab","other":"x"}', '--json'], env)
   assert.equal(whole.code, 0, whole.err)
   const hit = hub.recorded.hits.find((h) => h.path === '/api/actions/builtin%3Atest/dupe')!
   assert.deepEqual((hit.body as { input: unknown }).input, { fooBar: 'camel', 'foo-bar': 'kebab', other: 'x' })
 
-  // not collide name other still available independent flag; and collide name after missing ambiguity --foo-bar flag
+  // Non-colliding `other` still gets its own flag, while ambiguous `--foo-bar` is omitted
   const partial = await runCliCaptured(['test', 'dupe', '--other', 'y', '--json'], env)
   assert.equal(partial.code, 0, partial.err)
   assert.deepEqual((hub.recorded.hits.at(-1)?.body as { input: unknown }).input, { other: 'y' })
@@ -820,41 +821,41 @@ test('camelCase and kebab collide name property not silently last-wins, normal p
 })
 
 // ---------------------------------------------------------------------------
-// credentials and fault isolated regression
+// Credentials & fault isolation regressions
 // ---------------------------------------------------------------------------
 
-test('cli-token corrupt must not by static default when without credentials; core command explicit errors,--help fall back and diagnose', { timeout: 60_000 }, async (t) => {
+test('corrupt cli-token does not fall back to unauthenticated; core commands fail explicitly, --help still renders with diagnostic', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
-  // login state file corrupt: read when must errors while non- when empty (lose is login state, but static default will disguise into not login)
+  // Corrupt token file: reads must error instead of pretending the user is simply logged out
   await fsp.writeFile(path.join(dir, 'cli-token'), '{ broken json !!', 'utf8')
   const hub = await startMockHub({ 'GET /api/conversations': () => ({ body: [] }) }, { autoRegisterCleanup: t })
 
-  // without env token: core command read to corrupt file explicit errors (never static default when without credentials continue run)
+  // Without env token: core command reads corrupt file and fails explicitly (never falls back silently)
   const r = await runCliCaptured(['conversations', 'list', '--json'], makeCliEnv(hub.url, dir, { HELM_TOKEN: '' }))
   assert.equal(r.code, 1)
   assert.equal(parseCliError(r).code, 'credentials_unreadable')
 
-  // env token takes precedence short route disk: corrupt file do not by trigger touch, command per common execute
+  // Env token short-circuits disk reads: corrupt file is left untouched and command runs normally
   const bypass = await runCliCaptured(['conversations', 'list', '--json'], makeCliEnv(hub.url, dir))
   assert.equal(bypass.code, 0, bypass.err)
   assert.equal(await fsp.readFile(path.join(dir, 'cli-token'), 'utf8'), '{ broken json !!')
 
-  // --help: core help still available, credentials issue separate diagnose to stderr(without env token when), do not false call Hub no action
+  // --help: core help still prints, credential error goes to stderr (without env token), and avoids misleading "no dynamic actions" text
   const help = await runCliCaptured(['--help'], makeCliEnv(hub.url, dir, { HELM_TOKEN: '' }))
   assert.equal(help.code, 0)
-  assert.match(help.out, /core command/)
-  assert.match(help.err, /CLI credentials file corrupt/)
-  assert.doesNotMatch(help.out, /Hub not provide plugin action command/)
+  assert.match(help.out, /Core commands/)
+  assert.match(help.err, /CLI credentials file is corrupt/)
+  assert.doesNotMatch(help.out, /Hub provided no plugin action commands/)
 
-  // pure text pattern error same explicit
+  // Human mode surfaces the exact credential error
   const human = await runCliCaptured(['conversations', 'list'], makeCliEnv(hub.url, dir, { HELM_TOKEN: '' }))
   assert.equal(human.code, 1)
-  assert.match(human.err, /CLI credentials file corrupt/)
+  assert.match(human.err, /CLI credentials file is corrupt/)
 })
 
-test('status without token also can request, has token attach carries (authenticated reverse reflect real state)', { timeout: 60_000 }, async (t) => {
+test('status works without a token and attaches token when present to report real authentication state', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
-  // without any already store token:status do not because missing token report unauthorized
+  // Without stored token: status must not fail with unauthorized
   const hub = await startMockHub(
     {
       'GET /api/auth/status': (_body, req) => ({ body: { configured: true, authenticated: req.headers['authorization'] !== undefined } }),
@@ -868,7 +869,7 @@ test('status without token also can request, has token attach carries (authentic
   assert.deepEqual(JSON.parse(noToken.out), { configured: true, authenticated: false })
   assert.equal(hub.recorded.hits.at(-1)?.authorization, undefined)
 
-  // already store token(cli-token file):status attach carries Authorization,Hub can back real authenticated
+  // With stored token in cli-token: status attaches Authorization and reports authenticated: true
   await fsp.writeFile(
     path.join(dir, 'cli-token'),
     JSON.stringify({ hubUrl: hub.url, token: 'tok-status' }),
@@ -879,11 +880,11 @@ test('status without token also can request, has token attach carries (authentic
   assert.deepEqual(JSON.parse(withToken.out), { configured: true, authenticated: true })
   assert.equal(hub.recorded.hits.at(-1)?.authorization, 'Bearer tok-status')
 
-  // setup/login still explicit anonymous request (do not carries token)
+  // setup/login always send unauthenticated requests (strip Authorization header)
   const hub2 = await startMockHub(
     {
       'POST /api/auth/setup': (_body, req) => {
-        assert.equal(req.headers['authorization'], undefined, 'setup must anonymous')
+        assert.equal(req.headers['authorization'], undefined, 'setup must be unauthenticated')
         return { body: { token: 'tok-new' } }
       },
     },
@@ -893,28 +894,28 @@ test('status without token also can request, has token attach carries (authentic
   assert.equal(setup.code, 0, setup.err)
 })
 
-test('send respect -- isolate symbol:--json as text send while non- by global strip', { timeout: 60_000 }, async (t) => {
+test('send honors -- separator: --json after -- is sent as message text rather than parsed globally', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const hub = await startMockHub({ 'POST /api/conversations/1/input': () => ({ body: { ok: true } }) }, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
 
-  // -- after --json is await send text one part; mention before appear --json still takes effect is global output switch
+  // --json after -- belongs to the message text; --json before -- enables global JSON output
   const r = await runCliCaptured(['send', '1', '--json', '--', '--json'], env)
   assert.equal(r.code, 0, r.err)
   const hit = hub.recorded.hits.find((h) => h.path === '/api/conversations/1/input')!
   assert.deepEqual((hit.body as { text: string }).text, '--json')
-  // -- before --json takes effect: output is JSON
+  // --json before -- takes effect: outputs JSON
   assert.deepEqual(JSON.parse(r.out), { ok: true })
 
-  // combine flag do not subject to affect
-  const normal = await runCliCaptured(['send', '1', 'ordinary text', '--origin', 'agent', '--json'], env)
+  // Composing flags works normally
+  const normal = await runCliCaptured(['send', '1', 'plain text', '--origin', 'agent', '--json'], env)
   assert.equal(normal.code, 0, normal.err)
-  assert.deepEqual((hub.recorded.hits.at(-1)?.body as { text: string; origin: string }), { text: 'ordinary text', origin: 'agent' })
+  assert.deepEqual((hub.recorded.hits.at(-1)?.body as { text: string; origin: string }), { text: 'plain text', origin: 'agent' })
 })
 
-test('across Hub do not old token:HELM_HUB_URL points to new address when ignore credentials in token', { timeout: 60_000 }, async (t) => {
+test('cross-Hub isolation: ignores stored token when HELM_HUB_URL points to a different Hub', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
-  // old Hub: credentials file record its address and token
+  // Old Hub: credentials file stores its hubUrl and token
   const oldHub = await startMockHub(
     {
       'POST /api/auth/login': () => ({ body: { token: 'tok-old-hub' } }),
@@ -938,51 +939,51 @@ test('across Hub do not old token:HELM_HUB_URL points to new address when ignore
   assert.equal(saved.hubUrl, oldHub.url)
   assert.equal(saved.token, 'tok-old-hub')
 
-  // HELM_HUB_URL change refer new Hub: credentials in old token do not follow row (status anonymous can probe, request indeed out)
+  // When HELM_HUB_URL points to newHub: old token is not sent across Hubs
   const newEnvNoToken = makeCliEnv(newHub.url, dir, { HELM_TOKEN: undefined })
   const probe = await runCliCaptured(['status', '--json'], newEnvNoToken)
   assert.equal(probe.code, 0, probe.err)
-  assert.deepEqual(JSON.parse(probe.out), { configured: true, authenticated: false }, 'new Hub must not receives old Hub  token')
+  assert.deepEqual(JSON.parse(probe.out), { configured: true, authenticated: false }, 'new Hub must not receive old Hub token')
   const leakHit = newHub.recorded.hits.find((h) => h.path === '/api/auth/status')!
-  assert.equal(leakHit.authorization, undefined, 'must not old Hub  token to new Hub')
+  assert.equal(leakHit.authorization, undefined, 'must not leak old Hub token to new Hub')
 
-  // must authentication path without token when explicit unauthorized(not silently bare run, also do not use old token patch)
+  // Authenticated routes fail explicitly with unauthorized (no unauthenticated fallback or stale token reuse)
   const leaked = await runCliCaptured(['conversations', 'list', '--json'], newEnvNoToken)
   assert.equal(leaked.code, 1)
   assert.equal(parseCliError(leaked).code, 'unauthorized')
 
-  // explicit HELM_TOKEN still takes precedence (user itself guarantee it belongs to target Hub)
+  // Explicit HELM_TOKEN still takes precedence
   const explicit = await runCliCaptured(['conversations', 'list', '--json'], makeCliEnv(newHub.url, dir, { HELM_TOKEN: 'tok-new-hub' }))
   assert.equal(explicit.code, 0, explicit.err)
   assert.equal(newHub.recorded.hits.at(-1)?.authorization, 'Bearer tok-new-hub')
 
-  // without env URL when along use credentials file hubUrl + token(same source consistent)
+  // Without env URL: uses credentials file hubUrl + token consistently
   const sameHub = await runCliCaptured(['conversations', 'list', '--json'], { HELM_DATA_DIR: dir })
   assert.equal(sameHub.code, 0, sameHub.err)
   assert.equal(oldHub.recorded.hits.at(-1)?.authorization, 'Bearer tok-old-hub')
 })
 
-test('first time data directory missing when setup still can credentials (directory first create, lock after add)', { timeout: 60_000 }, async (t) => {
+test('setup persists credentials even when data directory does not exist yet (creates dir before acquiring lock)', { timeout: 60_000 }, async (t) => {
   const parentDir = useTempDir(t, 'helm-cli-fresh-')
-  const dir = path.join(parentDir, 'nested-data') // directory missing
+  const dir = path.join(parentDir, 'nested-data') // Directory does not exist yet
   const hub = await startMockHub({ 'POST /api/auth/setup': () => ({ body: { token: 'tok-fresh' } }) }, { autoRegisterCleanup: t })
   const r = await runCliCaptured(['setup', '--password', 'pw', '--json'], makeCliEnv(hub.url, dir, { HELM_TOKEN: undefined }))
   assert.equal(r.code, 0, r.err)
   const saved = JSON.parse(await fsp.readFile(path.join(dir, 'cli-token'), 'utf8')) as { token: string }
   assert.equal(saved.token, 'tok-fresh')
   await assertPrivateCredentialFile(path.join(dir, 'cli-token'))
-  // lock and temp file leaves no residue
+  // No leftover lock or temp files
   const leftovers = (await fsp.readdir(dir)).filter((f) => f.includes('.lock') || f.includes('.tmp'))
   assert.deepEqual(leftovers, [])
 })
 
-test('across process concurrency: real child process CLI write cli-token and Hub CredentialService.set write credentials.json mutual do not interference (connect continue 3 round verify stable)', { timeout: 60_000 }, async (t) => {
+test('cross-process concurrency: child CLI cli-token writes and Hub credentials.json writes do not interfere across 3 consecutive rounds', { timeout: 60_000 }, async (t) => {
   const rootDir = useTempDir(t, 'helm-cli-race-')
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
   const tsxCli = resolveTsxCli()
   const cliEntry = path.join(repoRoot, 'packages', 'cli', 'src', 'index.ts')
 
-  // CLI child process: real independent Node process login write cli-token(Hub swap token)
+  // Child CLI processes: independent Node processes logging in and writing cli-token
   const hub = await startMockHub(
     {
       'POST /api/auth/login': (body) => ({ body: { token: `tok-cli-${(body as { password: string }).password}` } }),
@@ -1000,12 +1001,12 @@ test('across process concurrency: real child process CLI write cli-token and Hub
       child.on('error', reject)
       child.on('close', (code) => resolve({ code, err }))
     })
-  // connect continue many round (each round all new dataDir, directory missing verify first time create): stack add lock competition window, ensure fix after 100% stable
+  // Run consecutive rounds (each with a fresh missing dataDir to exercise directory creation under lock contention)
   const ROUNDS = 3
   const { CredentialService } = await import('../../kernel/src/services/index.js')
   for (let round = 0; round < ROUNDS; round++) {
     const dataDir = path.join(rootDir, `round-${round}`)
-    // pre- placement server side key, then 4 real CLI child process (write cli-token) and 4 time process inside CredentialService.set(write credentials.json) concurrency
+    // Pre-seed server credentials, then race 4 real CLI child processes (writing cli-token) against 4 in-process CredentialService.set calls (writing credentials.json)
     await fsp.mkdir(dataDir, { recursive: true })
     await fsp.writeFile(path.join(dataDir, 'credentials.json'), JSON.stringify({ providers: {}, pluginSecrets: {} }), { mode: 0o600 })
     const svc = new CredentialService(dataDir)
@@ -1016,14 +1017,14 @@ test('across process concurrency: real child process CLI write cli-token and Hub
     const childResults = await Promise.all(children)
     await Promise.all(serverSets)
     for (const r of childResults) {
-      assert.equal(r.code, 0, ` ${round + 1}/${ROUNDS} round CLI child process failed: ${r.err}`)
+      assert.equal(r.code, 0, `round ${round + 1}/${ROUNDS} CLI child failed: ${r.err}`)
     }
 
-    // model secret key all keep (credentials.json no longer bear load CLI login state);cli-token independent (finally once child process write)
+    // Provider secrets stay intact (credentials.json no longer carries CLI login state); cli-token holds the last child's token
     const final = JSON.parse(await fsp.readFile(path.join(dataDir, 'credentials.json'), 'utf8')) as Record<string, unknown> & {
       providers: Record<string, { value: string }>
     }
-    assert.equal(final['cli'], undefined, 'login state must not again write credentials.json')
+    assert.equal(final['cli'], undefined, 'login state must not be written into credentials.json')
     const finalToken = JSON.parse(await fsp.readFile(path.join(dataDir, 'cli-token'), 'utf8')) as { hubUrl: string; token: string }
     assert.equal(finalToken.hubUrl, hub.url)
     assert.match(finalToken.token, /^tok-cli-pw-[0-3]$/)
@@ -1032,7 +1033,7 @@ test('across process concurrency: real child process CLI write cli-token and Hub
     for (let i = 0; i < 4; i++) {
       assert.equal(final.providers[`provider-${i}`]?.value, `sk-value-${i}`)
     }
-    // 0600 and without lock/temp file leftover (two file all verify;Windows without POSIX mode only verify store in)
+    // 0600 permissions and no leftover lock/temp files (Windows has no POSIX mode, verifies existence only)
     await assertPrivateCredentialFile(path.join(dataDir, 'credentials.json'))
     await assertPrivateCredentialFile(path.join(dataDir, 'cli-token'))
     const leftovers = (await fsp.readdir(dataDir)).filter((f) => f.includes('.lock') || f.includes('.tmp'))
@@ -1040,7 +1041,7 @@ test('across process concurrency: real child process CLI write cli-token and Hub
   }
 })
 
-test('origin bind set:cli-token record token only to same source Hub, swap Hub does not carry', { timeout: 60_000 }, async (t) => {
+test('origin binding: cli-token only authenticates the matching Hub and omits token when targeting another Hub', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const hub = await startMockHub(
     {
@@ -1054,12 +1055,12 @@ test('origin bind set:cli-token record token only to same source Hub, swap Hub d
   const tokenFile = JSON.parse(await fsp.readFile(path.join(dir, 'cli-token'), 'utf8')) as Record<string, unknown>
   assert.deepEqual(tokenFile, { hubUrl: hub.url, token: 'tok-origin' })
   await assertPrivateCredentialFile(path.join(dir, 'cli-token'))
-  // same source request carry token
+  // Matching origin carries token
   const same = await runCliCaptured(['conversations', 'list', '--json'], { HELM_DATA_DIR: dir, HELM_TOKEN: '' })
   assert.equal(same.code, 0, same.err)
   assert.equal(hub.recorded.hits.at(-1)?.authorization, 'Bearer tok-origin')
 
-  // origin bind set:HELM_HUB_URL points to another Hub when does not carry record token
+  // Origin binding: omits stored token when HELM_HUB_URL points to a different Hub
   const otherHub = await startMockHub(
     {
       'GET /api/auth/status': (_body, req) => ({ body: { configured: true, authenticated: req.headers['authorization'] !== undefined } }),
@@ -1068,20 +1069,20 @@ test('origin bind set:cli-token record token only to same source Hub, swap Hub d
   )
   const probe = await runCliCaptured(['status', '--json'], makeCliEnv(otherHub.url, dir, { HELM_TOKEN: '' }))
   assert.equal(probe.code, 0, probe.err)
-  assert.deepEqual(JSON.parse(probe.out), { configured: true, authenticated: false }, 'new Hub must not receives old Hub  token')
+  assert.deepEqual(JSON.parse(probe.out), { configured: true, authenticated: false }, 'new Hub must not receive old Hub token')
 })
 
-test('cli-token file corrupt when explicit errors;HELM_TOKEN environment variable takes precedence short route disk do not read corrupt file', { timeout: 60_000 }, async (t) => {
+test('corrupt cli-token errors explicitly; HELM_TOKEN env var bypasses disk reads', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const hub = await startMockHub({ 'GET /api/conversations': () => ({ body: [] }) }, { autoRegisterCleanup: t })
   await fsp.writeFile(path.join(dir, 'cli-token'), '{ broken !!', { mode: 0o600 })
 
-  // without env token: corrupt explicit errors (not silently when without credentials)
+  // Without env token: corrupt file errors explicitly instead of falling back to unauthenticated
   const broken = await runCliCaptured(['conversations', 'list', '--json'], makeCliEnv(hub.url, dir, { HELM_TOKEN: '' }))
   assert.equal(broken.code, 1)
   assert.equal(parseCliError(broken).code, 'credentials_unreadable')
 
-  // env token takes precedence: short route disk, corrupt file do not by trigger touch, command per common execute
+  // Env token takes precedence: skips disk reads so corrupt file is untouched and command runs normally
   const bypass = await runCliCaptured(['conversations', 'list', '--json'], makeCliEnv(hub.url, dir, { HELM_TOKEN: 'env-tok' }))
   assert.equal(bypass.code, 0, bypass.err)
   assert.equal(hub.recorded.hits.at(-1)?.authorization, 'Bearer env-tok')
@@ -1089,15 +1090,15 @@ test('cli-token file corrupt when explicit errors;HELM_TOKEN environment variabl
 })
 
 // ---------------------------------------------------------------------------
-// workflow and core interface align test (original cli-alignment back fill)
+// Workflow & core API alignment tests
 // ---------------------------------------------------------------------------
 
-/** builtin:workflow action manifest(and plugin declaration consistent most small contract shape). */
+/** Action manifest for builtin:workflow (minimal contract matching plugin declaration). */
 const WF_RUN_MANIFESTS = [
   {
     pluginId: 'builtin:workflow',
     id: 'run',
-    description: 'start workflow run',
+    description: 'Start a workflow run',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1120,7 +1121,7 @@ const WF_RUN_MANIFESTS = [
   {
     pluginId: 'builtin:workflow',
     id: 'runs',
-    description: 'column out workflow run record',
+    description: 'List workflow runs',
     inputSchema: {
       type: 'object',
       properties: { conversationId: { type: 'number' } },
@@ -1131,12 +1132,12 @@ const WF_RUN_MANIFESTS = [
   },
 ]
 
-test('conversations entry:[id] <entryId>/--current parse and validate', { timeout: 60_000 }, async (t) => {
+test('conversations entry: parses and validates [id] <entryId> and --current', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const hub = await startMockHub(
     {
       'GET /api/conversations/7/entries/42': () => ({
-        body: { id: '42', kind: 'pi.tool-result', model: [{ role: 'toolResult', content: [{ type: 'text', text: 'all text' }] }] },
+        body: { id: '42', kind: 'pi.tool-result', model: [{ role: 'toolResult', content: [{ type: 'text', text: 'full text' }] }] },
       }),
       'GET /api/conversations/9/entries/42': () => ({ body: { id: '42', kind: 'pi.assistant' } }),
     },
@@ -1158,7 +1159,7 @@ test('conversations entry:[id] <entryId>/--current parse and validate', { timeou
   assert.equal(currentFlag.code, 0, currentFlag.err)
   assert.equal(hub.hits.at(-1)?.path, '/api/conversations/9/entries/42')
 
-  // missing entryId / illegal entryId / missing conversation target: explicit errors (do not request)
+  // Missing entryId / invalid entryId / missing conversation target: fail explicitly without sending a request
   const noEntry = await runCliCaptured(['conversations', 'entry', '7', '--json'], env)
   assert.equal(noEntry.code, 1)
   assert.equal(parseCliError(noEntry).code, 'missing_conversation_target')
@@ -1175,7 +1176,7 @@ test('conversations entry:[id] <entryId>/--current parse and validate', { timeou
   assert.equal(extra.code, 1)
 })
 
-test('conversations get:--limit/--cursor mapping query;--current read env', { timeout: 60_000 }, async (t) => {
+test('conversations get: --limit/--cursor map to query params; --current reads env var', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const hub = await startMockHub(
     {
@@ -1209,13 +1210,13 @@ test('conversations get:--limit/--cursor mapping query;--current read env', { ti
   assert.equal(both.code, 0, both.err)
   assert.equal(hub.hits.at(-1)?.path, '/api/conversations/7?limit=10&cursor=%7B%22a%22%3A1%7D')
 
-  // illegal limit explicit errors (do not request)
+  // Invalid limit fails explicitly without sending request
   const bad = await runCliCaptured(['conversations', 'get', '7', '--limit', '0', '--json'], env)
   assert.equal(bad.code, 1)
   assert.equal(parseCliError(bad).code, 'invalid_flag_value')
 })
 
-test('conversations list:--profile mapping profileId,--status validate enumeration after query', { timeout: 60_000 }, async (t) => {
+test('conversations list: --profile maps to profileId and --status validates against enum', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const hub = await startMockHub(
     {
@@ -1245,7 +1246,7 @@ test('conversations list:--profile mapping profileId,--status validate enumerati
   assert.equal(parseCliError(bad).code, 'invalid_flag_value')
 })
 
-test('send --meta:JSON object body.meta; non- object JSON in CLI layer explicit reject', { timeout: 60_000 }, async (t) => {
+test('send --meta: passes JSON object as body.meta; rejects non-object JSON at CLI boundary', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const hub = await startMockHub(
     {
@@ -1264,15 +1265,14 @@ test('send --meta:JSON object body.meta; non- object JSON in CLI layer explicit 
   assert.equal(asArray.code, 1)
   assert.equal(parseCliError(asArray).code, 'invalid_flag_value')
 
-  // do not provide --meta when body excludes meta key (keep -- isolate symbol text behavior:
-  // global --json in -- before strip, after --json as await send text)
+  // Omits meta key when --meta is not provided (preserving -- separator semantics: --json before -- is stripped, after -- stays in text)
   const noMeta = await runCliCaptured(['send', '7', '--json', '--', '--json'], env)
   assert.equal(noMeta.code, 0, noMeta.err)
   assert.deepEqual((hub.hits.at(-1)?.body as { text: string }).text, '--json')
   assert.ok(!('meta' in (hub.hits.at(-1)?.body as Record<string, unknown>)))
 })
 
-test('send --wait:?wait=1;json output complete result, person class pattern direct out answer text', { timeout: 60_000 }, async (t) => {
+test('send --wait: uses ?wait=1; --json returns full result, human mode prints answer text', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const result = {
     conversationId: 7,
@@ -1281,7 +1281,7 @@ test('send --wait:?wait=1;json output complete result, person class pattern dire
     entry: {
       id: 'e1',
       kind: 'pi.assistant',
-      model: [{ role: 'assistant', content: [{ type: 'text', text: 'answer body text' }] }],
+      model: [{ role: 'assistant', content: [{ type: 'text', text: 'answer body' }] }],
     },
   }
   const hub = await startMockHub(
@@ -1300,14 +1300,14 @@ test('send --wait:?wait=1;json output complete result, person class pattern dire
 
   const human = await runCliCaptured(['send', '7', '你好', '--wait'], env)
   assert.equal(human.code, 0, human.err)
-  assert.equal(human.out, 'answer body text\n')
+  assert.equal(human.out, 'answer body\n')
 
-  // wait failed (input_unanswered 409)→ non-zero exit + error message seal
+  // Wait failure (input_unanswered 409) -> non-zero exit + error envelope
   const hub2 = await startMockHub(
     {
       'POST /api/conversations/7/input?wait=1': () => ({
         status: 409,
-        body: { error: { code: 'input_unanswered', message: 'input not obtain answer (aborted)' } },
+        body: { error: { code: 'input_unanswered', message: 'input did not receive an answer (aborted)' } },
       }),
     },
     { autoRegisterCleanup: t },
@@ -1317,7 +1317,7 @@ test('send --wait:?wait=1;json output complete result, person class pattern dire
   assert.equal(parseCliError(failed).code, 'input_unanswered')
 })
 
-test('workflows runs: column out all;--current filter conversationId; redundant location parameter reject', { timeout: 60_000 }, async (t) => {
+test('workflows runs: lists all runs, --current filters by conversationId, extra positionals rejected', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const hub = await startMockHub(
     {
@@ -1342,8 +1342,8 @@ test('workflows runs: column out all;--current filter conversationId; redundant 
 
   const filtered = await runCliCaptured(['workflows', 'runs', '--current', '--json'], { ...env, HELM_CONVERSATION_ID: '7' })
   assert.equal(filtered.code, 0, filtered.err)
-  // --current inject action conversationId context (body.conversationId);
-  // server side runs action with it as filter (input.conversationId takes precedence).
+  // --current injects conversationId context (body.conversationId);
+  // server runs action uses it as filter (input.conversationId takes precedence).
   const filteredBody = (hub.hits.at(-1) as { body?: { conversationId?: number } }).body
   assert.equal(filteredBody?.conversationId, 7)
 
@@ -1352,7 +1352,7 @@ test('workflows runs: column out all;--current filter conversationId; redundant 
   assert.equal(parseCliError(stray).code, 'unexpected_positional')
 })
 
-test('workflows run --wait: terminal state succeeded output run/result;failed non-zero exit', { timeout: 60_000 }, async (t) => {
+test('workflows run --wait: prints run/result on success and exits non-zero on failure', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const workflowName = `saved-${path.basename(dir)}`
   const doneRun = {
@@ -1391,12 +1391,12 @@ test('workflows run --wait: terminal state succeeded output run/result;failed no
   assert.match(human.out, /wf_w/)
   assert.match(human.out, /42/)
 
-  // do not carries --wait return run in run
+  // Without --wait, returns running run immediately
   const asyncRun = await runCliCaptured(['workflows', 'run', workflowName, '--json'], env)
   assert.equal(asyncRun.code, 0, asyncRun.err)
   assert.equal((JSON.parse(asyncRun.out) as { run: { status: string } }).run.status, 'running')
 
-  // failed terminal state:Hub error message seal → non-zero exit (does not empty result when succeeded)
+  // Failure terminal state: Hub error envelope -> non-zero exit (never mistakes empty result for success)
   const hub2 = await startMockHub(
     {
       'POST /api/actions/builtin%3Aworkflow/run': () => ({
@@ -1411,7 +1411,7 @@ test('workflows run --wait: terminal state succeeded output run/result;failed no
   assert.equal(parseCliError(failed).code, 'workflow_failed')
 })
 
-test('workflows run: file location parameter read script, name write name,--resume-from-run-id and --args pass-through', { timeout: 60_000 }, async (t) => {
+test('workflows run: file positional reads script, name positional sets name, passes --resume-from-run-id and --args', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const workflowName = `saved-${path.basename(dir)}`
   const hub = await startMockHub(
@@ -1424,19 +1424,19 @@ test('workflows run: file location parameter read script, name write name,--resu
   const scriptPath = path.join(dir, 'demo.workflow.js')
   await fsp.writeFile(scriptPath, 'export const meta = { name: "f" }\nreturn 1\n', 'utf8')
 
-  // file location parameter -> readFileInto script
+  // File positional -> readFileInto script
   const byFile = await runCliCaptured(['workflows', 'run', scriptPath, '--json'], env)
   assert.equal(byFile.code, 0, byFile.err)
   let body = (hub.hits.at(-1) as { body?: { input?: Record<string, unknown> } }).body
   assert.match(String(body?.input?.script), /name: "f"/)
   assert.equal(body?.input?.name, undefined)
 
-  // ./ prefix but file missing: explicit errors (do not guess contains meaning)
+  // Missing file with ./ prefix fails explicitly (never falls back to name)
   const missing = await runCliCaptured(['workflows', 'run', './nope.js', '--json'], env)
   assert.equal(missing.code, 1)
   assert.equal(parseCliError(missing).code, 'positional_file_not_found')
 
-  // name (non- path form)-> name field;--resume-from-run-id kebab mapping camelCase
+  // Plain name (non-path) -> name field; kebab-case --resume-from-run-id maps to camelCase
   const byName = await runCliCaptured(
     ['workflows', 'run', workflowName, '--args', JSON.stringify({ x: 1 }), '--resume-from-run-id', 'wf_prev', '--json'],
     env,
@@ -1448,7 +1448,7 @@ test('workflows run: file location parameter read script, name write name,--resu
   assert.deepEqual(body?.input?.args, { x: 1 })
   assert.equal(body?.input?.resumeFromRunId, 'wf_prev')
 
-  // explicit property flag without going through readFileInto, even if value points to real directory also original hand over to Hub validate.
+  // Explicit --name flag bypasses readFileInto even if it matches a real directory, delegating validation to Hub
   const explicitName = await runCliCaptured(['workflows', 'run', '--name', dir, '--json'], env)
   assert.equal(explicitName.code, 0, explicitName.err)
   body = (hub.hits.at(-1) as { body?: { input?: Record<string, unknown> } }).body
@@ -1456,7 +1456,7 @@ test('workflows run: file location parameter read script, name write name,--resu
   assert.equal(body?.input?.script, undefined)
 })
 
-test('plugins doc:GET /api/plugins/:id/docs/:name;json all amount, person class pattern direct out value', { timeout: 60_000 }, async (t) => {
+test('plugins doc: GET /api/plugins/:id/docs/:name; --json returns full envelope, human mode prints value', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-test-')
   const hub = await startMockHub(
     {
@@ -1464,11 +1464,11 @@ test('plugins doc:GET /api/plugins/:id/docs/:name;json all amount, person class 
         body: { pluginId: 'builtin:statusboard', name: 'board', value: { count: 42 } },
       }),
       'GET /api/plugins/builtin%3Astatusboard/docs/notes': () => ({
-        body: { pluginId: 'builtin:statusboard', name: 'notes', value: 'pure text document' },
+        body: { pluginId: 'builtin:statusboard', name: 'notes', value: 'plain text document' },
       }),
       'GET /api/plugins/builtin%3Astatusboard/docs/secret': () => ({
         status: 404,
-        body: { error: { code: 'plugin_doc_not_found', message: 'without public document' } },
+        body: { error: { code: 'plugin_doc_not_found', message: 'document not published' } },
       }),
     },
     { autoRegisterCleanup: t },
@@ -1486,7 +1486,7 @@ test('plugins doc:GET /api/plugins/:id/docs/:name;json all amount, person class 
 
   const textValue = await runCliCaptured(['plugins', 'doc', 'builtin:statusboard', 'notes'], env)
   assert.equal(textValue.code, 0, textValue.err)
-  assert.equal(textValue.out, 'notes\npure text document\n')
+  assert.equal(textValue.out, 'notes\nplain text document\n')
 
   const missing = await runCliCaptured(['plugins', 'doc', 'builtin:statusboard', 'secret', '--json'], env)
   assert.equal(missing.code, 1)
@@ -1498,10 +1498,10 @@ test('plugins doc:GET /api/plugins/:id/docs/:name;json all amount, person class 
 })
 
 // ---------------------------------------------------------------------------
-// credentials lock permission exception (original credentials-lock-errors back fill)
+// Credential lock permission error handling
 // ---------------------------------------------------------------------------
 
-test('read hold has in credentials lock encounters permission error when explicit failed, and keep lock and credentials', { timeout: 60_000 }, async (t) => {
+test('fails explicitly on permission error reading existing credential lock while preserving lock and token files', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-lock-error-')
   const lockPath = path.join(dir, 'cli-token.lock')
   const tokenPath = path.join(dir, 'cli-token')

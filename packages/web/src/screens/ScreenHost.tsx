@@ -8,7 +8,7 @@ import { useMemo } from 'react'
 import { HelmIcon } from '@helm/plugin-client'
 import { resolveLocalizedText, type ScreenSpec } from '@helm/protocol/browser'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { useHelmStore } from '../lib/store-context.js'
+import { useGroupedUi, useLocationTargets, useStoreActions } from '../lib/store-context.js'
 import type { ResolvedTarget } from '../lib/types.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
@@ -21,14 +21,16 @@ export interface ScreenHostProps {
 }
 
 export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: ScreenHostProps): React.JSX.Element {
-  const store = useHelmStore()
+  const groupedUi = useGroupedUi()
+  const { primaryTarget, splitTarget } = useLocationTargets()
+  const { setScreenParams, closeSplit, openTarget } = useStoreActions()
   const { locale, t } = useWebLocale()
-  const matched = store.groupedUi.screens.find(
+  const matched = groupedUi.screens.find(
     (s) => s.pluginId === pluginId && (s.spec as { id?: string }).id === screenId,
   )
 
   // 参数取自当前屏（主/分屏各自独立），setParams 同样绑定到当前屏的 store 方法。
-  const target: ResolvedTarget | null = isSplit ? store.splitTarget : store.primaryTarget
+  const target: ResolvedTarget | null = isSplit ? splitTarget : primaryTarget
   const slotProps = useMemo<Record<string, unknown>>(() => {
     const params =
       target !== null && target.kind === 'screen' && target.pluginId === pluginId && target.screenId === screenId
@@ -40,20 +42,20 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
       isSplit: isSplit === true,
       params,
       setParams: (patch: Record<string, string | undefined>, options?: { push?: boolean }) =>
-        store.setScreenParams(patch, { split: isSplit === true, push: options?.push }),
+        setScreenParams(patch, { split: isSplit === true, push: options?.push }),
     }
-  }, [pluginId, screenId, isSplit, target, store])
+  }, [pluginId, screenId, isSplit, target, setScreenParams])
 
   const toggleSplit = () => {
     if (isSplit) {
       onCloseSplit?.()
       return
     }
-    if (store.splitTarget !== null) {
-      store.closeSplit()
+    if (splitTarget !== null) {
+      closeSplit()
       return
     }
-    store.openTarget(
+    openTarget(
       {
         kind: 'screen',
         pluginId,
@@ -79,7 +81,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
               <CloseSplitButton onCloseSplit={onCloseSplit} />
             ) : (
               <SplitToggleButton
-                isSplitActive={store.splitTarget !== null}
+                isSplitActive={splitTarget !== null}
                 onToggleSplit={toggleSplit}
               />
             )}
@@ -112,7 +114,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
             <CloseSplitButton onCloseSplit={onCloseSplit} />
           ) : (
             <SplitToggleButton
-              isSplitActive={store.splitTarget !== null}
+              isSplitActive={splitTarget !== null}
               onToggleSplit={toggleSplit}
             />
           )}

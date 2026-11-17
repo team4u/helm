@@ -1,21 +1,21 @@
-/** command level parameter parse: strictly flag declaration table drive, reject unknown flag. */
+/** Command-level argument parser: strictly driven by a flag spec table; rejects unknown flags. */
 import { CliError } from './errors.js'
 
 export type FlagType = 'string' | 'number' | 'boolean' | 'json'
 
 export interface FlagSpec {
-  /** kebab-case name, such as 'expected-state-seq'. */
+  /** Flag name in kebab-case, e.g. 'expected-state-seq'. */
   name: string
   type: FlagType
   required?: boolean
-  /** can duplicate flag: each time appear collect a string value, eventually type is string[](such as --set/--field). */
+  /** Repeatable flag: collects each occurrence as a string into a final string[] (e.g. --set/--field). */
   repeated?: boolean
   help?: string
 }
 
 export interface ParsedArgs {
   positionals: string[]
-  /** flag name (excludes --)-> already by declaration type convert value;boolean bare flag is true;repeated flag is string[]. */
+  /** Flag name (without `--`) -> value coerced per spec; bare boolean flags default to true; repeated flags produce string[]. */
   flags: Map<string, unknown>
 }
 
@@ -26,7 +26,7 @@ function coerce(spec: FlagSpec, raw: string): unknown {
     case 'number': {
       const n = Number(raw)
       if (!Number.isFinite(n)) {
-        throw new CliError(`--${spec.name} need to number, got "${raw}"`, 'invalid_flag_value')
+        throw new CliError(`--${spec.name} requires a number, got "${raw}"`, 'invalid_flag_value')
       }
       return n
     }
@@ -35,7 +35,7 @@ function coerce(spec: FlagSpec, raw: string): unknown {
         return JSON.parse(raw)
       } catch (err) {
         throw new CliError(
-          `--${spec.name} need to legal JSON:${err instanceof Error ? err.message : String(err)}`,
+          `--${spec.name} requires valid JSON: ${err instanceof Error ? err.message : String(err)}`,
           'invalid_flag_value',
         )
       }
@@ -43,8 +43,8 @@ function coerce(spec: FlagSpec, raw: string): unknown {
 }
 
 /**
- * parse a command argv(excludes global --json/--help, by dispatch strip).
- * support `--flag value`,`--flag=value`,`--` after all treated as location parameter.
+ * Parse a command's argv (excluding global --json/--help already stripped by the dispatcher).
+ * Supports `--flag value`, `--flag=value`, and treating everything after `--` as positional arguments.
  */
 export function parseFlags(specs: readonly FlagSpec[], argv: readonly string[]): ParsedArgs {
   const byName = new Map(specs.map((s) => [s.name, s] as const))
@@ -63,19 +63,19 @@ export function parseFlags(specs: readonly FlagSpec[], argv: readonly string[]):
       const inline = eq === -1 ? undefined : token.slice(eq + 1)
       const spec = byName.get(name)
       if (!spec) {
-        const known = specs.length > 0 ? specs.map((s) => `--${s.name}`).join(' ') : '(without)'
-        throw new CliError(`unknown option --${name}(available:${known})`, 'unknown_flag')
+        const known = specs.length > 0 ? specs.map((s) => `--${s.name}`).join(' ') : '(none)'
+        throw new CliError(`unknown option --${name} (available: ${known})`, 'unknown_flag')
       }
       if (spec.type === 'boolean') {
         if (inline === undefined || inline === 'true') flags.set(name, true)
         else if (inline === 'false') flags.set(name, false)
-        else throw new CliError(`--${name} need to true/false, got "${inline}"`, 'invalid_flag_value')
+        else throw new CliError(`--${name} requires true/false, got "${inline}"`, 'invalid_flag_value')
       } else if (spec.repeated) {
         let raw = inline
         if (raw === undefined) {
           const next = argv[i + 1]
           if (next === undefined || (next.startsWith('--') && next.length > 2)) {
-            throw new CliError(`--${name} missing value`, 'missing_value')
+            throw new CliError(`--${name} is missing a value`, 'missing_value')
           }
           raw = next
           i += 1
@@ -88,7 +88,7 @@ export function parseFlags(specs: readonly FlagSpec[], argv: readonly string[]):
         if (raw === undefined) {
           const next = argv[i + 1]
           if (next === undefined || (next.startsWith('--') && next.length > 2)) {
-            throw new CliError(`--${name} missing value`, 'missing_value')
+            throw new CliError(`--${name} is missing a value`, 'missing_value')
           }
           raw = next
           i += 1
@@ -108,7 +108,7 @@ export function parseFlags(specs: readonly FlagSpec[], argv: readonly string[]):
   return { positionals, flags }
 }
 
-/** take already type flag value (type by declaration table guarantee). */
+/** Read a typed flag value (type safety guaranteed by the flag spec table). */
 export function flagValue<T>(flags: Map<string, unknown>, name: string): T | undefined {
   return flags.get(name) as T | undefined
 }

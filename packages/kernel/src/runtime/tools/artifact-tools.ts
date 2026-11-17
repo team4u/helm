@@ -1,20 +1,19 @@
 /**
- * conversation artifact tool (register_artifact / read_artifact).
+ * Conversation artifact tools (`register_artifact` / `read_artifact`).
  *
- * register_artifact: conversation target node on real ordinary file duplicate register is when before conversation artifact
- *(via artifacts.writeUploaded  Hub data directory,Web can preview/download), support two enter system,
- * cap 15 MiB. honest contract: remote must via EnvFabric  canonicalPath / fileInfo
- * preflight + openBinaryReader same fd has boundary read; node offline or EnvFabric missing explicit failed
- *(guards.ts), never fall back local mistakenly read Hub local machine disk, also do not fallback
- * readBinaryFile without boundary all amount buffer; only accept ordinary file (stat preflight + O_NONBLOCK
- *(platform support when) seal stat→open race + the same fd fstat right threat re-check);local has boundary
- * loop read to EOF(readArtifactBytesFromHandle). size over limit/in route change text proposal in this
- * constant (preflight/open after/read after shared use, never drift).
+ * `register_artifact`: copies real regular files from the conversation's target node into the current
+ * conversation's artifacts (written via `artifacts.writeUploaded` under Hub `dataDir` for Web preview/download),
+ * preserving binary bytes up to a 15 MiB cap. Honesty contract: remote paths run via `EnvFabric`
+ * `canonicalPath` / `fileInfo` preflight + `openBinaryReader` bounded same-fd reads; offline nodes or missing
+ * `EnvFabric` fail explicitly (`guards.ts`), never falling back to Hub disk or unbounded `readBinaryFile`
+ * buffering; regular files only (`stat` preflight + `O_NONBLOCK` when supported to close `stat -> open` races +
+ * authoritative `fstat` on the same fd); local uses bounded loops to EOF (`readArtifactBytesFromHandle`).
+ * Size/mutation messages are defined once and shared across preflight, post-open, and post-read without drift.
  *
- * read_artifact: page read spill artifact (≤4KiB,UTF-8 boundary align guarantee before enter); only
- * allows when before conversation (contains parent conversation authorization chain) artifact, do not accept any path. honest: only
- *artifact missing (FileNotFoundError) archive is artifact_not_found; store real read
- * failed such as through out original error (artifact_read_failed, via redaction), never swallow into not_found.
+ * `read_artifact`: paginated reads of spilled artifacts (`<= 4 KiB`, guaranteed forward progress on UTF-8 boundaries);
+ * restricted to artifacts authorized for the current conversation (including parent authorization chains) — never
+ * accepts arbitrary file paths. Honesty: only missing artifacts (`FileNotFoundError`) map to `artifact_not_found`;
+ * storage failures surface the redacted underlying error (`artifact_read_failed`) rather than masquerading as missing.
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { JsonValue } from '@earendil-works/chord/json'
@@ -30,21 +29,22 @@ import { requireRemoteEnv } from './guards.js'
 import { basenameForShape } from './file-env.js'
 import type { HelmToolDeps } from '../tool-deps.js'
 
-/** register_artifact shared use classify/over limit text proposal (preflight / open after re-check / read after shared use). */
+/** Shared classification/limit messages for `register_artifact` (shared across preflight, post-open, and post-read).
+ * Note: `'is directory'`, `'15 MiB'`, and `'not ordinary file'` wording are preserved for test compatibility. */
 const registerIsDirectoryText = (path: string): string =>
-  `register_failed: ${path} is directory,register_artifact only support ordinary file`
+  `register_failed: ${path} is directory; register_artifact only supports regular files`
 const artifactTooLargeText = (path: string, size: number): string =>
-  `artifact_too_large: ${path} is ${size} byte, exceeds single artifact ${MAX_ARTIFACT_BYTES} byte (15 MiB) cap`
+  `artifact_too_large: ${path} is ${size} bytes, exceeding the ${MAX_ARTIFACT_BYTES}-byte (15 MiB) per-artifact cap`
 const artifactTooLargeReadText = (path: string, size: number): string =>
-  `artifact_too_large: ${path} read to ${size} byte, exceeds single artifact ${MAX_ARTIFACT_BYTES} byte (15 MiB) cap`
+  `artifact_too_large: ${path} read ${size} bytes, exceeding the ${MAX_ARTIFACT_BYTES}-byte (15 MiB) per-artifact cap`
 
-/** register_artifact local read result: succeeded carry complete byte; failed is machine can read code. */
+/** Local `register_artifact` read outcome: complete bytes on success, or machine-readable failure code. */
 export type ArtifactFileBytes =
   | { ok: true; bytes: Buffer; size: number }
   | { ok: false; code: 'artifact_too_large'; read: number }
   | { ok: false; code: 'file_changed'; detail: string }
 
-/** helper read which must most small handle side (real FileHandle structure satisfy, convenient at test inject short read/change). */
+/** Minimal file-handle interface needed for helper reads (structurally satisfied by real FileHandle; allows short-read/mutation fakes in tests). */
 export interface ArtifactReadHandle {
   stat(): Promise<{ size: number; mtimeMs: number; ctimeMs: number }>
   read(
@@ -55,13 +55,12 @@ export interface ArtifactReadHandle {
   ): Promise<{ bytesRead: number; buffer: Buffer }>
 }
 
-/** single time read chunk large small (has boundary loop read, avoid once occupy 15 MiB buffer). */
+/** Per-iteration chunk size (bounded streaming loop avoids eagerly allocating 15 MiB buffers). */
 const ARTIFACT_READ_CHUNK_BYTES = 256 * 1024
 
-/** local open flag:O_RDONLY + platform support when O_NONBLOCK (+ optional O_NOFOLLOW).stat preflight and open between store in
- *  race window (ordinary file by swap into FIFO/device file will make pure O_RDONLY  open unbounded block),
- *  O_NONBLOCK let open immediately return, by the same fd on fstat right threat reject;Windows
- *  libuv unsupported O_NONBLOCK, only use O_RDONLY(Windows without FIFO, risk side different). */
+/** Local open flags: `O_RDONLY` plus `O_NONBLOCK` (and optional `O_NOFOLLOW`) where supported. Prevents `stat -> open` swap races
+ * (replacing a regular file with a FIFO/device node before open would otherwise block `O_RDONLY` indefinitely)
+ * so `fstat` on the same fd can reject safely; Windows libuv omits `O_NONBLOCK` and has no FIFOs. */
 export function artifactOpenFlags(opts?: { noFollow?: boolean }): number {
   if (process.platform === 'win32') return fsConstants.O_RDONLY
   return (
@@ -72,10 +71,10 @@ export function artifactOpenFlags(opts?: { noFollow?: boolean }): number {
 }
 
 /**
- * the same FileHandle on has boundary read to EOF(register_artifact local path unique implement):
- * one by one chunk loop to EOF(short read only push enter cursor, never when complete file); total pre- compute MAX+1(read to
- * cap+1 i.e. verify over limit); read after same fd stat compare size/mtime/ctime, in route change explicit
- * file_changed, never old prefix register succeeded.
+ * Bounded read to EOF on a single `FileHandle` (sole local implementation for `register_artifact`):
+ * loops across chunks until EOF (short reads advance the offset rather than assuming EOF); caps total budget
+ * at `MAX+1` (triggering explicit overflow at `cap+1`); verifies `size`/`mtime`/`ctime` via post-read `stat` on the
+ * same fd and rejects mid-read mutations explicitly with `file_changed` rather than registering stale prefixes.
  */
 export async function readArtifactBytesFromHandle(handle: ArtifactReadHandle): Promise<ArtifactFileBytes> {
   const before = await handle.stat()
@@ -103,24 +102,23 @@ export async function readArtifactBytesFromHandle(handle: ArtifactReadHandle): P
     return {
       ok: false,
       code: 'file_changed',
-      detail: `read during file occur change (size ${before.size} -> ${after.size},mtime ${before.mtimeMs} -> ${after.mtimeMs},ctime ${before.ctimeMs} -> ${after.ctimeMs}), reject register may do not complete snapshot`,
+      detail: `file changed during read (size ${before.size} -> ${after.size}, mtime ${before.mtimeMs} -> ${after.mtimeMs}, ctime ${before.ctimeMs} -> ${after.ctimeMs}); refusing incomplete snapshot`,
     }
   }
   return { ok: true, bytes: Buffer.concat(chunks, total), size: after.size }
 }
 
 const registerArtifactParameters = obj({
-  path: str({ description: 'want register is conversation artifact source file path (each other for conversation cwd or absolute path, support ../ across directory, and bash same right)' }),
-  name: opt(str({ description: 'artifact render name (default use source file name)' })),
-  mimeType: opt(str({ description: 'MIME type (default by extension probe; text class will redaction after, two enter system byte original keep)' })),
+  path: str({ description: 'Source file path to register as a conversation artifact (relative to conversation cwd or absolute; supports ../ traversal, same boundary as bash)' }),
+  name: opt(str({ description: 'Display name for the artifact (defaults to source filename)' })),
+  mimeType: opt(str({ description: 'MIME type (inferred from extension by default; text is redacted while binary bytes remain verbatim)' })),
 })
 
 /**
- * register_artifact tool: conversation target node on real ordinary file duplicate register is when before
- * conversation artifact (via artifacts.writeUploaded  Hub data directory,Web can preview/download).
- * structure result back visible artifactId, source file absolute path (local is term method absolute path, remote
- * is canonical parse after),nodeId,name,size/mime; two enter system fidelity and text redaction
- * by ArtifactService unify handle; everything exception text via deps.redact redaction.
+ * `register_artifact` tool: copies an existing regular file on the conversation's target node into the current
+ * conversation's artifacts (written via `artifacts.writeUploaded` for Web preview/download).
+ * Returns structured `artifactId`, resolved absolute path (lexical locally, canonical remotely), `nodeId`, `name`,
+ * `size`/`mime`; binary fidelity and text redaction are unified in `ArtifactService`; all errors pass through `deps.redact`.
  */
 export function createRegisterArtifactTool(
   deps: HelmToolDeps,
@@ -128,17 +126,19 @@ export function createRegisterArtifactTool(
   return defineTool({
     name: 'register_artifact',
     description:
-      'conversation target node on real ordinary file register is when before conversation artifact (duplicate enter Hub data directory,Web UI visible/can preview/can download). support two enter system (byte original fidelity) and text (redaction after); single file cap 15 MiB; conversation bind set remote node when in target node read, never fall back local machine. generate new text content when takes precedence use write(..., artifact: true); this tool used to already has file (such as command output, build artifact, diagram piece) hand over to user.',
+      'Register an existing regular file on the conversation\'s target node as a conversation artifact (copied into Hub dataDir for Web preview/download). ' +
+      'Supports binary (verbatim bytes) and text (redacted) up to 15 MiB; reads from the target node when bound remotely without falling back locally. ' +
+      'Prefer write(..., artifact: true) when generating new text; use this tool to hand existing files (command outputs, build artifacts, images) to the user.',
     parameters: registerArtifactParameters,
     structuredOutputSchema: {
       type: 'object',
       properties: {
-        artifactId: { type: 'string', description: 'artifact ID(available [filename](artifact:<id>) render)' },
-        path: { type: 'string', description: 'source file absolute path (remote is canonical parse after)' },
-        nodeId: { type: 'string', description: 'actual read node' },
-        name: { type: 'string', description: 'artifact render name' },
-        size: { type: 'number', description: 'register byte count (text class is redaction after large small)' },
-        mimeType: { type: 'string', description: 'artifact MIME type' },
+        artifactId: { type: 'string', description: 'Artifact ID (renderable via [filename](artifact:<id>))' },
+        path: { type: 'string', description: 'Source file absolute path (canonicalized remotely)' },
+        nodeId: { type: 'string', description: 'Node where file was read' },
+        name: { type: 'string', description: 'Artifact display name' },
+        size: { type: 'number', description: 'Registered byte length (post-redaction size for text)' },
+        mimeType: { type: 'string', description: 'Artifact MIME type' },
       },
       required: ['artifactId', 'path', 'nodeId', 'name', 'size', 'mimeType'],
     },
@@ -146,7 +146,7 @@ export function createRegisterArtifactTool(
       if (deps.artifacts.writeUploaded === undefined) {
         return {
           output: [
-            { type: 'text', text: 'register_failed: artifact service not config writeUploaded, cannot register conversation artifact' },
+            { type: 'text', text: 'register_failed: artifact service does not support writeUploaded; cannot register conversation artifact' },
           ],
           isError: true,
         }
@@ -166,13 +166,13 @@ export function createRegisterArtifactTool(
         let bytes: Uint8Array
         let sourcePath: string
         if (nodeId !== 'local') {
-          // remote: must via EnvFabric(missing/offline explicit failed, never fall back local).
+          // Remote: requires EnvFabric (explicit failure on missing/offline; never falls back locally).
           const remote = requireRemoteEnv(deps.envFabric, nodeId, base, 'read')
           if ('error' in remote) {
             return { output: [{ type: 'text', text: remote.error }], isError: true }
           }
           const env = remote.env
-          // canonicalPath first parse symlink (and read consistent):fileInfo is lstat semantics.
+          // Resolve symlinks via `canonicalPath` first (consistent with `read`): `fileInfo` uses `lstat` semantics.
           const targetRealR = await env.canonicalPath(lexicalAbs, context)
           if (!targetRealR.ok) throw new Error(targetRealR.error.message)
           sourcePath = targetRealR.value
@@ -199,16 +199,14 @@ export function createRegisterArtifactTool(
               isError: true,
             }
           }
-          // has boundary two enter system read:openBinaryReader open after same fd positional read
-          //(node implement O_NONBLOCK open + same fd fstat refuse special file), never away
-          // readBinaryFile without boundary all amount buffer (source file increase long count GB will first whole buffer transfer
-          // after only then reject). failed to open explicit reject, without any fall back.
+          // Bounded binary read: `openBinaryReader` performs positional reads on one fd (daemon uses
+          // `O_NONBLOCK` + `fstat` to reject special files), avoiding unbounded `readBinaryFile` full-file buffering
+          // that would buffer gigabytes before rejecting. Open failures fail loudly with no fallback.
           const readerR = await env.openBinaryReader(sourcePath, { noFollow: true }, context)
           if (!readerR.ok) throw new Error(readerR.error.message)
           const reader = readerR.value
           try {
-            // open after right threat information (same fd, non- path view):kind/size/mtime with reader
-            //  info is allow, preflight size only act fast reject.
+            // Authoritative post-open metadata on the same fd (not path view); preflight size was only fast-reject.
             const openedR = await reader.info(context)
             if (!openedR.ok) throw new Error(openedR.error.message)
             const opened = openedR.value
@@ -217,7 +215,7 @@ export function createRegisterArtifactTool(
                 output: [
                   {
                     type: 'text',
-                    text: `register_failed: ${args.path} in open after is not ordinary file (kind=${opened.kind}), reject read`,
+                    text: `register_failed: ${args.path} is not ordinary file after open (kind=${opened.kind}); read rejected`,
                   },
                 ],
                 isError: true,
@@ -229,8 +227,7 @@ export function createRegisterArtifactTool(
                 isError: true,
               }
             }
-            // request cap+1:SDK contract at most length byte, only EOF where more short, internal
-            // loop short read until length or EOF- - over limit i.e. verify, absolute without first all amount after reject.
+            // Request cap+1: SDK reads up to `length` bytes (stopping only on EOF) — enforces cap cleanly without reading entire multi-GB files.
             const readR = await reader.read(0, MAX_ARTIFACT_BYTES + 1, context)
             if (!readR.ok) throw new Error(readR.error.message)
             const readBytes = readR.value
@@ -240,8 +237,7 @@ export function createRegisterArtifactTool(
                 isError: true,
               }
             }
-            // read after second info(same fd):size/mtime and open when inconsistent or read long short and
-            // stable size inconsistent all reject (read route in increase long/truncate must not truncate when succeeded).
+            // Post-read check on same fd: reject if size/mtime shifted or byte count differs from opened size (never register truncated files as complete).
             const afterR = await reader.info(context)
             if (!afterR.ok) throw new Error(afterR.error.message)
             const after = afterR.value
@@ -251,8 +247,8 @@ export function createRegisterArtifactTool(
                   {
                     type: 'text',
                     text:
-                      `file_changed: ${args.path} read during file occur change` +
-                      `(size ${opened.size} -> ${after.size},mtime ${opened.mtimeMs} -> ${after.mtimeMs}), reject register may do not complete snapshot`,
+                      `file_changed: ${args.path} changed during read ` +
+                      `(size ${opened.size} -> ${after.size}, mtime ${opened.mtimeMs} -> ${after.mtimeMs}); refusing incomplete snapshot`,
                   },
                 ],
                 isError: true,
@@ -263,7 +259,7 @@ export function createRegisterArtifactTool(
                 output: [
                   {
                     type: 'text',
-                    text: `file_changed: ${args.path} read to ${readBytes.byteLength} byte and stable large small ${opened.size} inconsistent, reject truncate when succeeded`,
+                    text: `file_changed: ${args.path} read ${readBytes.byteLength} bytes, mismatching stable size ${opened.size}; refusing truncated snapshot`,
                   },
                 ],
                 isError: true,
@@ -271,17 +267,13 @@ export function createRegisterArtifactTool(
             }
             bytes = readBytes
           } finally {
-            // cancel/failed path same release remote handle (node side reader lifecycle and connect
-            // bind set, explicit close immediately reclaim).
+            // Release remote handle on cancel/error too (node readers tie to connection lifecycle; explicit close frees immediately).
             await reader.close(BACKGROUND_CONTEXT)
           }
         } else {
-          // local: and read tool same construct - - first stat(with follow symlink) preflight classify (directory/special
-          // file/over limit;FIFO etc. special file in without race scenario under preflight i.e. reject); open use
-          // O_NONBLOCK(platform support when) seal stat→open race window (ordinary file by swap into
-          // FIFO after pure O_RDONLY  open will unbounded block); the same fd on fstat right threat re-check
-          // after has boundary loop read to EOF(short read continue, over limit verify, in route change explicit file_changed,
-          // see readArtifactBytesFromHandle).
+          // Local matches `read` semantics: `stat` (follows symlinks) classifies dirs/special files/caps cleanly;
+          // `open` uses `O_NONBLOCK` (when supported) to prevent `stat -> open` FIFO swaps from blocking;
+          // `fstat` re-verifies on the same fd, then reads boundedly to EOF and checks mid-read changes (`file_changed`).
           const preInfo = await stat(lexicalAbs)
           if (preInfo.isDirectory()) {
             return {
@@ -315,7 +307,7 @@ export function createRegisterArtifactTool(
             if (!statInfo.isFile()) {
               return {
                 output: [
-                  { type: 'text', text: `register_failed: ${args.path} in open after is not ordinary file (special file), reject read` },
+                  { type: 'text', text: `register_failed: ${args.path} is not ordinary file after open (special file); read rejected` },
                 ],
                 isError: true,
               }
@@ -358,7 +350,7 @@ export function createRegisterArtifactTool(
               type: 'text',
               text:
                 `[Artifact] id=${meta.id} name=${meta.name}\n` +
-                `register_artifact_ok: source ${sourcePath}(node ${nodeId},${meta.size} byte,${meta.mimeType})`,
+                `register_artifact_ok: source ${sourcePath} (node ${nodeId}, ${meta.size} bytes, ${meta.mimeType})`,
             },
           ],
           structuredOutput: {
@@ -383,20 +375,21 @@ export function createRegisterArtifactTool(
 const ARTIFACT_PAGE_BYTES = 4 * 1024
 
 const readArtifactParameters = obj({
-  id: str({ description: 'artifact ID(artifact metadata  id)' }),
-  offset: opt(int({ minimum: 0, description: 'start byte offset (by default 0)' })),
+  id: str({ description: 'Artifact ID (id from artifact metadata)' }),
+  offset: opt(int({ minimum: 0, description: 'Starting byte offset (default 0)' })),
   limit: opt(
     int({
       minimum: 1,
       maximum: ARTIFACT_PAGE_BYTES,
-      description: `this time read byte count cap (by default ${ARTIFACT_PAGE_BYTES}, most large ${ARTIFACT_PAGE_BYTES})`,
+      description: `Maximum bytes to read this page (default ${ARTIFACT_PAGE_BYTES}, max ${ARTIFACT_PAGE_BYTES})`,
     }),
   ),
 })
 
 /**
- * read_artifact tool: page read spill artifact. only allows when before conversation and its parent chain authorization conversation artifact,
- * do not accept any file path; each page ≤4KiB,UTF-8 boundary align and guarantee nextOffset strictly before enter.
+ * `read_artifact` tool: paginated reads of spilled artifacts. Restricts access to artifacts owned by the
+ * current conversation or its parent chain (never accepts arbitrary paths); <= 4 KiB per page, aligned on
+ * UTF-8 boundaries with guaranteed forward progress on `nextOffset`.
  */
 export function createReadArtifactTool(
   deps: HelmToolDeps,
@@ -404,10 +397,10 @@ export function createReadArtifactTool(
 ): ToolRegistration<typeof readArtifactParameters, never> {
   return defineTool({
     name: 'read_artifact',
-    // pure only read page tool: interrupt heavy open allows security replay.
+    // Pure read-only pagination: safe to replay after interruption.
     replay: 'safe',
     description:
-      'page read artifact (spill all text etc.). each page at most 4KiB, by UTF-8 boundary align return nextOffset; is empty means already read completely.',
+      'Read an artifact (such as spilled long text) page by page. Returns up to 4 KiB per page aligned on UTF-8 boundaries with nextOffset; empty output indicates EOF.',
     parameters: readArtifactParameters,
     structuredOutputSchema: {
       type: 'object',
@@ -424,9 +417,8 @@ export function createReadArtifactTool(
       const offset = args.offset ?? 0
       const limit = args.limit ?? ARTIFACT_PAGE_BYTES
       const conversationId = api.conversationId as number
-      // honest: only artifact missing (FileNotFoundError) is artifact_not_found;
-      // store real failed to read (repository/DB fault etc.) such as through out original error text (via redaction,
-      // and under way readBuffer same code artifact_read_failed), never swallow into not_found.
+      // Honesty: only missing artifacts (`FileNotFoundError`) map to `artifact_not_found`;
+      // genuine storage/DB read failures surface the redacted underlying error (`artifact_read_failed`, matching `readBuffer` below).
       let meta: Awaited<ReturnType<HelmToolDeps['artifacts']['get']>>
       try {
         meta = await deps.artifacts.get(id)
@@ -447,7 +439,7 @@ export function createReadArtifactTool(
           output: [
             {
               type: 'text',
-              text: `artifact_forbidden: artifact ${id} belongs to conversation ${meta.conversationId}, when before conversation ${conversationId} without right read`,
+              text: `artifact_forbidden: artifact ${id} belongs to conversation ${meta.conversationId}; conversation ${conversationId} is not authorized to read it`,
             },
           ],
           isError: true,
@@ -471,29 +463,29 @@ export function createReadArtifactTool(
       if (offset === buffer.length) {
         return {
           output: [
-            { type: 'text', text: `[artifact ${id} bytes ${offset}-${offset}/${buffer.length}]\n(already read completely)` },
+            { type: 'text', text: `[artifact ${id} bytes ${offset}-${offset}/${buffer.length}]\n(EOF reached)` },
           ],
           structuredOutput: { id, offset, chunk: '' } as JsonValue,
         }
       }
-      // UTF-8 boundary align:offset or end in multibyte sequence middle when, start point jump to under a
-      // complete character first token node, final point fall back to character start point (keep before enter and never solve out replace symbol).
+      // UTF-8 boundary alignment: if `offset` or `end` lands inside a multi-byte sequence, advance `start` to the
+      // next valid leading byte and step `safeEnd` back to a leading byte (ensures forward progress without U+FFFD replacement).
       let start = offset
       while (start < buffer.length && (buffer[start]! & 0xc0) === 0x80) start += 1
       const end = Math.min(buffer.length, offset + limit)
       let safeEnd = Math.max(end, start)
       while (safeEnd < buffer.length && (buffer[safeEnd]! & 0xc0) === 0x80) safeEnd -= 1
-      // fall back:limit=1 and start is multibyte first token node when safeEnd may retreat back start; push enter to
-      // under a character first token node, guarantee one page at least complete read out a character.
+      // Fallback: when `limit=1` and `start` is a multi-byte lead byte, `safeEnd` could align back to `start`;
+      // advance past that character so each page reads at least one full character.
       while (safeEnd <= start && safeEnd < buffer.length) {
         safeEnd += 1
         while (safeEnd < buffer.length && (buffer[safeEnd]! & 0xc0) === 0x80) safeEnd += 1
       }
       const chunk = buffer.subarray(start, safeEnd).toString('utf8')
       const hasMore = safeEnd < buffer.length
-      const header = `[artifact ${id} bytes ${offset}-${safeEnd}/${buffer.length}${start > offset ? `(offset ${offset} at multibyte character middle, already from ${start} start read)` : ''}]`
+      const header = `[artifact ${id} bytes ${offset}-${safeEnd}/${buffer.length}${start > offset ? ` (offset ${offset} landed mid-character; started at ${start})` : ''}]`
       const text = hasMore ? `${header}\n${chunk}\n[nextOffset=${safeEnd}]` : `${header}\n${chunk}`
-      // nextOffset only in also has remaining when appear, never output undefined field (JSON-safe).
+      // Emit `nextOffset` only when more bytes remain so no undefined fields leak (JSON-safe).
       const structured: Record<string, unknown> = { id, offset, chunk }
       if (hasMore) structured['nextOffset'] = safeEnd
       return {

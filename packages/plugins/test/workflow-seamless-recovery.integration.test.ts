@@ -34,7 +34,7 @@ import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } fr
 import {
   createGitTemplate,
   deferred,
-  makeFauxModels,
+  makeFauxProvider,
   sanitizedHostEnv,
   useTempDir,
   waitFor,
@@ -44,7 +44,6 @@ const require = createRequire(import.meta.url)
 const KERNEL_DIR = new URL('../../kernel/', import.meta.url).pathname
 const PI_AI_DIR = join(KERNEL_DIR, 'node_modules/@earendil-works/pi-ai')
 const KERNEL_SRC = pathToFileURL(join(KERNEL_DIR, 'src/runtime/index.ts')).href
-const PI_AI_MODELS_URL = pathToFileURL(join(PI_AI_DIR, 'dist/models.js')).href
 const PI_AI_FAUX_URL = pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href
 const WORKFLOW_SRC = pathToFileURL(new URL('../src/workflow.ts', import.meta.url).pathname).href
 const PLUGIN_BUILD_URL = import.meta.resolve('@helm/plugin-build')
@@ -137,7 +136,7 @@ test('T1-A: 原生后台单子代理（isolation:worktree + schema + gate）经 
   mkdirSync(dataDir, { recursive: true })
 
   // 进程 1：阻塞工具卡住子会话回合（监听 context.signal 在 close 时立即随 Harness 中断退回 replay:safe）
-  const { models: m1, faux: f1 } = makeFauxModels()
+  const f1 = makeFauxProvider()
   const enteredHold1 = deferred<void>()
   f1.setResponses([
     fauxAssistantMessage([fauxToolCall('hold_step', {}, { id: 'tc-hold-1' })], { stopReason: 'toolUse' }),
@@ -151,7 +150,7 @@ test('T1-A: 原生后台单子代理（isolation:worktree + schema + gate）经 
       dataDir,
       cwd: repoDir,
       model: 'faux/faux-1',
-      models: m1,
+      providers: [f1.provider],
       autoResume: false,
     })
     await k1.plugins.register(createWorkflowPlugin())
@@ -218,7 +217,7 @@ test('T1-A: 原生后台单子代理（isolation:worktree + schema + gate）经 
     assert.equal('secretNames' in specOnDisk, false, 'subagentSpec 绝不得落盘 secretNames')
 
     // 进程 2：重开恢复，hold_step 重放通过，子会话调 register_structured_output 并通过 gate，向父会话汇报
-    const { models: m2, faux: f2 } = makeFauxModels()
+    const f2 = makeFauxProvider()
     f2.setResponses([
       fauxAssistantMessage(
         [fauxToolCall('register_structured_output', { output: { ok: true, tag: 't1-recovered' } }, { id: 'tc-so-1' })],
@@ -233,7 +232,7 @@ test('T1-A: 原生后台单子代理（isolation:worktree + schema + gate）经 
       dataDir,
       cwd: repoDir,
       model: 'faux/faux-1',
-      models: m2,
+      providers: [f2.provider],
       autoResume: false,
     })
     const parentReports: string[] = []
@@ -302,7 +301,6 @@ test('T1-B: 原生后台单子代理经真实子进程 SIGKILL 强杀后重启�
   const out = await spawnSigkillSeeder(
     seedDir,
     `import { setTimeout as delay } from 'node:timers/promises'
-import { createModels } from ${JSON.stringify(PI_AI_MODELS_URL)}
 import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(PI_AI_FAUX_URL)}
 import { KernelRuntime } from ${JSON.stringify(KERNEL_SRC)}
 import { createPluginBuildProvider } from ${JSON.stringify(PLUGIN_BUILD_URL)}
@@ -310,11 +308,9 @@ import { createWorkflowPlugin } from ${JSON.stringify(WORKFLOW_SRC)}
 
 const dataDir = process.env.HELM_DATA_DIR!
 const repoDir = process.env.HELM_REPO_DIR!
-const models = createModels()
 const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
-models.setProvider(faux.provider)
 faux.setResponses([fauxAssistantMessage('这是一段极慢速流式回复用于在流式中途触发真实SIGKILL强杀现场验证后台子代理原位重挂恢复')])
-const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: repoDir, model: 'faux/faux-1', models, autoResume: false })
+const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: repoDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
 await kernel.plugins.register(createWorkflowPlugin())
 await kernel.start()
 const res = await kernel.plugins.executeTool('subagent', { prompt: '慢任务', isolation: 'worktree' }, { conversationId: 1, callId: 'call-sigkill-t1' })
@@ -336,7 +332,7 @@ process.kill(process.pid, 'SIGKILL')
   const [, runId, childIdRaw] = match
   const childId = Number(childIdRaw)
 
-  const { models: m2, faux: f2 } = makeFauxModels()
+  const f2 = makeFauxProvider()
   f2.setResponses([
     fauxAssistantMessage('SIGKILL恢复后完成的最终子代理输出'),
     fauxAssistantMessage('主会话收到汇报'),
@@ -346,7 +342,7 @@ process.kill(process.pid, 'SIGKILL')
     dataDir,
     cwd: repoDir,
     model: 'faux/faux-1',
-    models: m2,
+    providers: [f2.provider],
     autoResume: false,
   })
   try {
@@ -386,7 +382,7 @@ test('T2-A: DSL 多阶段混合并发工作流经 close() 后按原 runId 原位
   let sideEffectCount = 0
   const enteredHoldB = deferred<void>()
 
-  const { models: m1, faux: f1 } = makeFauxModels()
+  const f1 = makeFauxProvider()
   // 按提示词确定性路由响应（消除 parallel-a 与 parallel-b 并发到达模型的顺序竞争）
   const routePrompt = (ctx: { messages: unknown[] }) => {
     const text = JSON.stringify(ctx.messages)
@@ -443,7 +439,7 @@ test('T2-A: DSL 多阶段混合并发工作流经 close() 后按原 runId 原位
       dataDir,
       cwd: dataDir,
       model: 'faux/faux-1',
-      models: m1,
+      providers: [f1.provider],
       autoResume: false,
     })
     await k1.plugins.register(createWorkflowPlugin())
@@ -481,7 +477,7 @@ return { s1, count: act.count, pa, pb, s3 }
     k1 = undefined
 
     // 进程 2：重开，parallel-b 重挂完成 -> stage-3 执行完成 -> 同一 run.id completed
-    const { models: m2, faux: f2 } = makeFauxModels()
+    const f2 = makeFauxProvider()
     f2.setResponses([
       fauxAssistantMessage('PB_RECOVERED'),
       fauxAssistantMessage('S3_FINAL'),
@@ -492,7 +488,7 @@ return { s1, count: act.count, pa, pb, s3 }
       dataDir,
       cwd: dataDir,
       model: 'faux/faux-1',
-      models: m2,
+      providers: [f2.provider],
       autoResume: false,
     })
     await k2.plugins.register(createWorkflowPlugin())
@@ -543,16 +539,13 @@ test('T2-B: DSL 工作流经真实 SIGKILL 强杀恢复 + 截断 agent_started �
     `import { setTimeout as delay } from 'node:timers/promises'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createModels } from ${JSON.stringify(PI_AI_MODELS_URL)}
 import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(PI_AI_FAUX_URL)}
 import { KernelRuntime } from ${JSON.stringify(KERNEL_SRC)}
 import { createPluginBuildProvider } from ${JSON.stringify(PLUGIN_BUILD_URL)}
 import { createWorkflowPlugin } from ${JSON.stringify(WORKFLOW_SRC)}
 
 const dataDir = process.env.HELM_DATA_DIR!
-const models = createModels()
 const faux = fauxProvider({ tokensPerSecond: 2, tokenSize: { min: 2, max: 2 } })
-models.setProvider(faux.provider)
 let callIdx = 0
 faux.setResponses([
   fauxAssistantMessage('FAST_STAGE_1'),
@@ -562,7 +555,7 @@ faux.setResponses([
     return fauxAssistantMessage('NEVER')
   },
 ])
-const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: false })
+const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
 await kernel.plugins.register(createWorkflowPlugin())
 await kernel.start()
 const script = 'export const meta = { name: "t2-kill", description: "sigkill" }\\nconst a = await agent("s1")\\nconst b = await agent("s2:" + a)\\nreturn a + "|" + b'
@@ -594,14 +587,14 @@ process.kill(process.pid, 'SIGKILL')
   assert.equal(checkTruncated.actionUncertain, false, '截断的 agent_started 尾行不得误判为 actionUncertain')
   assert.equal(checkTruncated.ioErrors, 1, '截断尾行须如实计入 ioErrors')
 
-  const { models: m2, faux: f2 } = makeFauxModels()
+  const f2 = makeFauxProvider()
   f2.setResponses([fauxAssistantMessage('RECOVERED_STAGE_2')])
   const k2 = await KernelRuntime.open({
     buildProvider: createPluginBuildProvider(),
     dataDir,
     cwd: dataDir,
     model: 'faux/faux-1',
-    models: m2,
+    providers: [f2.provider],
     autoResume: false,
   })
   try {
@@ -678,7 +671,7 @@ test('T3: 同步 subagent 与同步 SubagentWorkflow 在父回合 ToolTask 执�
     const dataDir = useTempDir(t, `helm-t3-${mode}-`)
     const enteredChildHold = deferred<void>()
 
-    const { models: m1, faux: f1 } = makeFauxModels()
+    const f1 = makeFauxProvider()
     if (mode === 'subagent') {
       f1.setResponses([
         // 父会话（helm-owned，默认同步）发起 subagent 工具调用
@@ -713,7 +706,7 @@ test('T3: 同步 subagent 与同步 SubagentWorkflow 在父回合 ToolTask 执�
         dataDir,
         cwd: dataDir,
         model: 'faux/faux-1',
-        models: m1,
+        providers: [f1.provider],
         autoResume: false,
       })
       await k1.plugins.register(createWorkflowPlugin())
@@ -757,7 +750,7 @@ test('T3: 同步 subagent 与同步 SubagentWorkflow 在父回合 ToolTask 执�
       k1 = undefined
 
       // 进程 2：重开恢复，子会话先完成，父会话 ToolTask 重放命中原 originalRunId 并顺利结束整个父回合
-      const { models: m2, faux: f2 } = makeFauxModels()
+      const f2 = makeFauxProvider()
       f2.setResponses([
         fauxAssistantMessage(`CHILD_DONE_${mode}`),
         fauxAssistantMessage(`PARENT_FINAL_${mode}`),
@@ -768,7 +761,7 @@ test('T3: 同步 subagent 与同步 SubagentWorkflow 在父回合 ToolTask 执�
         dataDir,
         cwd: dataDir,
         model: 'faux/faux-1',
-        models: m2,
+        providers: [f2.provider],
         autoResume: false,
       })
       await k2.plugins.register(createWorkflowPlugin())
@@ -821,7 +814,7 @@ test('T3: 同步 subagent 与同步 SubagentWorkflow 在父回合 ToolTask 执�
 test('T5: resume_failed 批量恢复（5 失败任务拉起 4 跳过 1、二次调用幂等 0 新拉起）与真 CLI helm workflows resume-failed 端到端', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-t5-batch-')
   const externalResumes: AgentSpawnRequest[] = []
-  const { models, faux } = makeFauxModels()
+  const faux = makeFauxProvider()
   faux.setResponses(Array.from({ length: 20 }, (_, idx) => fauxAssistantMessage(`RESUMED_OK_${idx + 1}`)))
 
   const app = await createHelm({
@@ -829,7 +822,7 @@ test('T5: resume_failed 批量恢复（5 失败任务拉起 4 跳过 1、二次�
     dataDir,
     cwd: dataDir,
     model: 'faux/faux-1',
-    models,
+    providers: [faux.provider],
   })
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   try {
@@ -1183,13 +1176,13 @@ test('安全红线：crashRecoveries > 3 熔断、secret_grant_expired_on_restar
   }
 
   const cfgDir = useTempDir(t, 'helm-cfg-invalid-')
-  const { models } = makeFauxModels()
+  const fauxCfg = makeFauxProvider()
   const kCfg = await KernelRuntime.open({
     buildProvider: createPluginBuildProvider(),
     dataDir: cfgDir,
     cwd: cfgDir,
     model: 'faux/faux-1',
-    models,
+    providers: [fauxCfg.provider],
     autoResume: false,
   })
   t.after(async () => {

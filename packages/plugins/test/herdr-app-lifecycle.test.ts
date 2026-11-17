@@ -7,13 +7,13 @@ import { startHub } from '../../kernel/src/http/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import { runCli } from '../../cli/src/index.js'
 import { herdrServerFixture } from './herdr-server-fixture.js'
-import { makeFauxModels, useTempDir } from './helpers/plugin-test-env.js'
+import { makeFauxProvider, useTempDir } from './helpers/plugin-test-env.js'
 
 // 实际 app/PluginHost/配置落盘；连接经真实临时 UDS（零参 herdr 插件的
 // ctx.host 端口 → 生产 transport → 受控行协议服务器）。
 async function openApp(dataDir: string) {
-  const { models } = makeFauxModels()
-  return createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const faux = makeFauxProvider()
+  return createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
 }
 
 test('createHelm 默认注册停用 Herdr，普通启动及原生回退不依赖终端服务', { timeout: 60_000 }, async (t) => {

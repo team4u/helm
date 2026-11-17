@@ -1,7 +1,6 @@
 /**
  * 模型目录禁用过滤端到端与持久化回归测试（共享主 Hub 实例减少重复冷启动，保留多 provider / 重启 / 损坏配置独立验证）。
  */
-import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
@@ -9,6 +8,7 @@ import { join } from 'node:path'
 import { after, afterEach, before, test } from 'node:test'
 import {
   createHubTestApp,
+  makeFauxModels,
   openHubHttpEnv,
   useTempDir,
   type HubHttpTestEnv,
@@ -37,7 +37,13 @@ test('PUT /api/models/filter 设置与清空、GET /api/models 标注、config.j
   const seenEvents: Array<{ providers: unknown }> = []
   const unsub = env.kernel.events.subscribe((frame) => {
     const event = frame.event as { type: string; payload?: unknown }
-    if (event.type === 'models.changed') seenEvents.push(event.payload as { providers: unknown })
+    if (event.type === 'models.changed') {
+      const payload = event.payload as { providers?: unknown }
+      if (Array.isArray(payload?.providers) && payload.providers.length === 1 && payload.providers[0] === 'magpie') {
+        return
+      }
+      seenEvents.push(event.payload as { providers: unknown })
+    }
   })
 
   try {
@@ -178,10 +184,7 @@ test('多 provider 隔离与清空全部、重启恢复生效及 config.json 坏
   const multiDir = join(useTempDir(t, 'helm-models-multi-'), 'hub')
   const fauxA = fauxProvider({ models: [{ id: 'faux-1' }, { id: 'faux-2' }] })
   const fauxB = fauxProvider({ provider: 'faux-b', models: [{ id: 'other-1' }] })
-  const models = createModels()
-  models.setProvider(fauxA.provider)
-  models.setProvider(fauxB.provider)
-  const multiEnv = await openHubHttpEnv({ dataDir: multiDir, cwd: multiDir, models })
+  const multiEnv = await openHubHttpEnv({ dataDir: multiDir, cwd: multiDir, providers: [fauxA.provider, fauxB.provider] })
   try {
     await multiEnv.call('PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['faux-2'] })
     await multiEnv.call('PUT', '/api/models/filter', { provider: 'faux-b', disabledModels: ['other-1'] })
@@ -223,4 +226,25 @@ test('多 provider 隔离与清空全部、重启恢复生效及 config.json 坏
     { code: 'config_corrupt' },
   )
   assert.equal(existsSync(join(corruptDir, 'config.json')), true)
+})
+
+test('KernelRuntimeOptions.providers coexists with builtin:magpie and rejects simultaneous models', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helm-models-providers-mutex-')
+  const { models, faux } = makeFauxModels()
+  await assert.rejects(
+    () => createHubTestApp({ dataDir: dir, cwd: dir, models, providers: [faux.provider] }),
+    (err: unknown) =>
+      err instanceof Error &&
+      (err as { code?: string; status?: number }).code === 'validation_error' &&
+      (err as { status?: number }).status === 400,
+  )
+
+  const { app } = await createHubTestApp({ dataDir: dir, cwd: dir })
+  try {
+    const ids = app.kernel.listModelProviders().map((p) => p.id)
+    assert.ok(ids.includes('faux'), 'providers option registers faux runtime provider')
+    assert.ok(ids.includes('magpie'), 'default-enabled builtin:magpie coexists with providers option')
+  } finally {
+    await app.close()
+  }
 })

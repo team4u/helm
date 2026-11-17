@@ -42,7 +42,7 @@ import { createWorkflowPlugin } from '../src/workflow.js'
 import { PluginHost, type PluginHostBackend, type PluginSessionDocStore } from '../../kernel/src/plugins/index.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
-import { deferred, makeFauxModels } from './helpers/plugin-test-env.js'
+import { deferred, makeFauxProvider } from './helpers/plugin-test-env.js'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -817,8 +817,8 @@ function runCliChild(args: string[], env: NodeJS.ProcessEnv, timeoutMs = 30_000)
 
 test('CLI: helm workflows runs 在索引损坏时非零退出并显示错误码（真 Hub + 真 CLI 子进程）', timeout, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-cli-int-'))
-  const { models } = makeFauxModels()
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const faux = makeFauxProvider()
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   const plugins = app.kernel.plugins
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   try {

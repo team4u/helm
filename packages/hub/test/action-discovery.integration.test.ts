@@ -417,7 +417,7 @@ test('describe 模式：真实 run_action 返回完整嵌套 Schema 且不执行
     const disabledConv = await env.kernel.createConversation({ title: 'describe-disabled' })
     env.faux.setResponses([toolCallStep('run_action', { actionId: 'demo:describe.nested', describe: true }), capture()])
     await submitAndWait(disabledConv.id, 'disabled query')
-    assert.ok(toolResultTexts((await env.kernel.getConversationDetail(disabledConv.id)).entries).includes('not declaration action'))
+    assert.ok(toolResultTexts((await env.kernel.getConversationDetail(disabledConv.id)).entries).includes('does not declare action'))
   } finally {
     await host.disable('demo:describe').catch(() => {})
   }

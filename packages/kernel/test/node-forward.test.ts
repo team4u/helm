@@ -1,8 +1,8 @@
 /**
- * Hub side foreground port forwarding (NodeForwardService + HTTP routing) integration test:
- * real EnvFabric Hub + real @helm/node daemon + two enter system echo service.
- * override:start/stop lifecycle (stop after listener and tunnel destroy), listen conflict explicit failed,
- * event stream (started/connection),HTTP end point (POST/GET/DELETE/manifest).
+ * Hub-side foreground port forwarding (NodeForwardService + HTTP routes) integration tests:
+ * real EnvFabric Hub + real @helm/node daemon + binary echo server.
+ * Covers: start/stop lifecycle (listeners and tunnels destroyed on stop), explicit listen conflict failure,
+ * event stream (started/connection), and lease/lifecycle behavior.
  */
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
@@ -62,7 +62,7 @@ async function startStack(leaseTimeoutMs?: number) {
   }
 }
 
-/** two enter system echo service. */
+/** Binary echo server. */
 async function startEcho(): Promise<{ port: number; close(): Promise<void> }> {
   const server = net.createServer((socket) => {
     socket.on('error', () => undefined)
@@ -73,7 +73,7 @@ async function startEcho(): Promise<{ port: number; close(): Promise<void> }> {
   return { port: (server.address() as net.AddressInfo).port, close: () => new Promise<void>((resolve) => server.close(() => resolve())) }
 }
 
-/** local TCP client: connect concurrency send, wait for at least minLength back visible. */
+/** Local TCP client: sends payload and waits for at least payload.length echoed bytes. */
 function tcRequest(port: number, payload: Buffer): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const socket = net.connect({ host: '127.0.0.1', port })
@@ -92,7 +92,7 @@ function tcRequest(port: number, payload: Buffer): Promise<Buffer> {
   })
 }
 
-test('port forwarding:start/list/get/event + stop after listener and tunnel destroy', { timeout: 60_000 }, async () => {
+test('port forwarding: start/list/get/event + tears down listeners and tunnels after stop', { timeout: 60_000 }, async () => {
   const echo = await startEcho()
   const stack = await startStack()
   try {
@@ -107,20 +107,20 @@ test('port forwarding:start/list/get/event + stop after listener and tunnel dest
     assert.equal(stack.forward.get(session.forwardId)?.forwardId, session.forwardId)
     assert.deepEqual(stack.forward.list().map((s) => s.forwardId), [session.forwardId])
 
-    // real byte to return: local listen port → Hub forwarding → tunnel → daemon → echo.
-    const payload = Buffer.from('forward-payload-you well')
+    // Real byte echo path: local listen port -> Hub forwarder -> tunnel -> daemon -> echo.
+    const payload = Buffer.from('forward-payload-hello')
     const echoed = await tcRequest(session.listenPort, payload)
-    assert.ok(echoed.equals(payload), 'via forwarding byte to return consistent')
+    assert.ok(echoed.equals(payload), 'echoed bytes must match across forward tunnel')
     await delay(100)
-    assert.ok(events.includes('connection'), 'connection event already on report')
-    assert.equal(stack.forward.get(session.forwardId)?.activeConnections, 0, 'connect close after counter reset to zero')
+    assert.ok(events.includes('connection'), 'connection event emitted')
+    assert.equal(stack.forward.get(session.forwardId)?.activeConnections, 0, 'active counter resets to zero on socket close')
 
     await stack.forward.stop(session.forwardId)
-    assert.equal(stack.forward.get(session.forwardId), undefined, 'stop after conversation excerpt except')
+    assert.equal(stack.forward.get(session.forwardId), undefined, 'session removed after stop')
     await assert.rejects(
       tcRequest(session.listenPort, payload).then(() => undefined, (e) => { throw e }),
       undefined,
-    ).catch(() => undefined) // port already closure: failed to connect (do not validate specific error type).
+    ).catch(() => undefined) // Port closed: connection rejected (error subtype not constrained).
     off()
   } finally {
     await stack.close()
@@ -128,14 +128,14 @@ test('port forwarding:start/list/get/event + stop after listener and tunnel dest
   }
 })
 
-test('port forwarding: listen conflict explicit failed; unknown forwardId stop 404', { timeout: 60_000 }, async () => {
+test('port forwarding: listen conflict fails explicitly; stopping unknown forwardId throws 404', { timeout: 60_000 }, async () => {
   const echo = await startEcho()
   const stack = await startStack()
   const port = await freePort()
   try {
     assert.equal(stack.ready, true)
     await stack.forward.start('fwd-node', { listenHost: '127.0.0.1', listenPort: port, targetPort: echo.port })
-    // same address second listen: explicit failed (not silently swap port).
+    // Second bind on same address fails explicitly (never silently swaps ports).
     await assert.rejects(
       stack.forward.start('fwd-node', { listenHost: '127.0.0.1', listenPort: port, targetPort: echo.port }),
       (error: unknown) => error instanceof Error && (error as { code?: string }).code === 'node_forward_listen_failed',
@@ -150,7 +150,7 @@ test('port forwarding: listen conflict explicit failed; unknown forwardId stop 4
   }
 })
 
-test('port forwarding:close all amount destroy (host closure stop semantics)', { timeout: 60_000 }, async () => {
+test('port forwarding: close() destroys all sessions (host shutdown semantics)', { timeout: 60_000 }, async () => {
   const echo = await startEcho()
   const stack = await startStack()
   try {
@@ -166,14 +166,14 @@ test('port forwarding:close all amount destroy (host closure stop semantics)', {
     await assert.rejects(
       stack.forward.start('fwd-node', { listenHost: '127.0.0.1', listenPort: await freePort(), targetPort: echo.port }),
       undefined,
-    ).catch(() => undefined) // close after reject new forwarding.
+    ).catch(() => undefined) // Rejects new forwards after close().
   } finally {
     await stack.close()
     await echo.close()
   }
 })
 
-test('port forwarding: create connect phase client disconnect - - cancel in-flight establish, late to tunnel do not register do not legacy', { timeout: 60_000 }, async () => {
+test('port forwarding: client disconnect mid-handshake cancels tunnel establishment with zero leaked registrations', { timeout: 60_000 }, async () => {
   const echo = await startEcho()
   const stack = await startStack()
   try {
@@ -183,26 +183,26 @@ test('port forwarding: create connect phase client disconnect - - cancel in-flig
       listenPort: await freePort(),
       targetPort: echo.port,
     })
-    // connect on after immediately disconnect (create connect not yet complete: real daemon link create connect has RTT).
+    // Connect and drop immediately before handshake completes (real daemon tunnel setup has RTT).
     const socket = net.connect({ host: '127.0.0.1', port: session.listenPort })
     await new Promise<void>((resolve) => socket.once('connect', resolve))
     socket.destroy()
-    // wait for create connect window remove: late to tunnel by destroy, do not register activeConnections.
+    // Wait beyond setup window: late-arriving tunnel gets destroyed cleanly without bumping activeConnections.
     await delay(600)
     const current = stack.forward.get(session.forwardId)
     assert.ok(current !== undefined)
-    assert.equal(current.activeConnections, 0, 'create connect phase disconnect must not count activity connect')
-    // after continue connect still available (before once disconnect do not pollute state).
+    assert.equal(current.activeConnections, 0, 'mid-handshake disconnect must not leave lingering activeConnections')
+    // Subsequent connections stay healthy (unaffected by earlier drop).
     const payload = Buffer.from('after-early-close')
     const echoed = await tcRequest(session.listenPort, payload)
-    assert.ok(echoed.equals(payload), 'early after disconnect forwarding still available')
+    assert.ok(echoed.equals(payload), 'forwarding remains operational after early close')
   } finally {
     await stack.close()
     await echo.close()
   }
 })
 
-test('port forwarding:stop terminal state stopped frame, monitor event sequence normal final (do not pending)', { timeout: 60_000 }, async () => {
+test('port forwarding: stop emits terminal stopped frame and resolves event listeners cleanly without hanging', { timeout: 60_000 }, async () => {
   const echo = await startEcho()
   const stack = await startStack()
   try {
@@ -219,18 +219,18 @@ test('port forwarding:stop terminal state stopped frame, monitor event sequence 
     })
     const off = stack.forward.onEvent(session.forwardId, (event) => events.push(event.type))
     const offStopped = stack.forward.onStopped(session.forwardId, () => notifyStopped?.())
-    // first subscribe, again stop:stopped frame after terminate notify reach.
+    // Subscribe first, then stop: terminal stopped frame arrives before stream closes.
     await stack.forward.stop(session.forwardId)
-    await Promise.race([stoppedPromise, delay(5_000).then(() => { throw new Error('onStopped not by invoke') })])
-    assert.deepEqual(events.filter((t) => t === 'stopped'), ['stopped'], 'stop should exactly out a terminal state stopped frame')
+    await Promise.race([stoppedPromise, delay(5_000).then(() => { throw new Error('onStopped was not invoked') })])
+    assert.deepEqual(events.filter((t) => t === 'stopped'), ['stopped'], 'stop should emit exactly one stopped frame')
     off()
     offStopped()
-    // already stop after again subscribe onStopped: immediately call back (race security).
+    // Subscribing onStopped after already stopped invokes callback immediately (race-safe).
     const immediate = new Promise<void>((resolve) => {
       stack.forward.onStopped(session.forwardId, resolve)
     })
-    await Promise.race([immediate, delay(1_000).then(() => { throw new Error('already stop after onStopped should immediately call back') })])
-    // already stop after onEvent 404(conversation already excerpt except).
+    await Promise.race([immediate, delay(1_000).then(() => { throw new Error('onStopped after stop should resolve immediately') })])
+    // Subscribing onEvent after stop throws 404 (session evicted).
     await assert.rejects(
       new Promise(() => stack.forward.onEvent(session.forwardId, () => undefined)),
       (error: unknown) => error instanceof Error && (error as { code?: string }).code === 'not_found',
@@ -241,7 +241,7 @@ test('port forwarding:stop terminal state stopped frame, monitor event sequence 
   }
 })
 
-/** take a idle port (listen 0 after immediately release; store in tiny race but test environment enough). */
+/** Claims an ephemeral free port (brief inherent race acceptable in local tests). */
 async function freePort(): Promise<number> {
   return await new Promise((resolve) => {
     const server = net.createServer()
@@ -252,7 +252,7 @@ async function freePort(): Promise<number> {
   })
 }
 
-/** many concurrency echo client: each write payload and etc. back visible complete. */
+/** Opens concurrent TCP echo clients and collects complete echoed payloads. */
 async function tcConcurrent(port: number, payloads: Buffer[]): Promise<Buffer[]> {
   return await Promise.all(payloads.map(
     (payload) => new Promise<Buffer>((resolve, reject) => {
@@ -273,7 +273,7 @@ async function tcConcurrent(port: number, payloads: Buffer[]): Promise<Buffer[]>
   ))
 }
 
-test('port forwarding: many connect each close does not repeat buckle reduce activity counter (exactly once clean up)', { timeout: 60_000 }, async () => {
+test('port forwarding: closing multiple concurrent connections decrements activeConnections exactly once per connection', { timeout: 60_000 }, async () => {
   const echo = await startEcho()
   const stack = await startStack()
   try {
@@ -283,29 +283,29 @@ test('port forwarding: many connect each close does not repeat buckle reduce act
       listenPort: await freePort(),
       targetPort: echo.port,
     })
-    // 3 concurrency connect: each back visible after close;socket/tunnel any one first closure only clean up once.
+    // Three concurrent connections: echo then close; socket/tunnel closing first only decrements once.
     const payloads = ['one'.repeat(5000), 'two'.repeat(5000), 'three'.repeat(5000)].map((s) => Buffer.from(s))
     const echoed = await tcConcurrent(session.listenPort, payloads)
     for (let i = 0; i < payloads.length; i++) {
-      assert.ok(echoed[i]!.equals(payloads[i]!), ` ${i + 1} connect back visible consistent`)
+      assert.ok(echoed[i]!.equals(payloads[i]!), `echo mismatch on connection ${i + 1}`)
     }
     await delay(150)
     const current = stack.forward.get(session.forwardId)
     assert.ok(current !== undefined)
-    assert.equal(current.activeConnections, 0, 'all connect close after activity counter precise reset to zero (duplicate decrement will change negative/eat other person counter - -Math.max only mask code do not fix correct total account)')
-    assert.equal(current.totalConnections, 3, 'cumulative connect count = 3')
-    // one by one again open two: verify counter in before time concurrency clean up after still accurate.
+    assert.equal(current.activeConnections, 0, 'active counter must settle back to zero without double-decrement skewing other connections')
+    assert.equal(current.totalConnections, 3, 'cumulative connection count = 3')
+    // Open two sequential connections afterwards to confirm counters stayed accurate.
     const again = await tcConcurrent(session.listenPort, [Buffer.from('a'.repeat(3000)), Buffer.from('b'.repeat(3000))])
     assert.equal(again.length, 2)
     await delay(150)
-    assert.equal(stack.forward.get(session.forwardId)?.activeConnections, 0, 'after continue connect counter still accurate')
+    assert.equal(stack.forward.get(session.forwardId)?.activeConnections, 0, 'counters remain exact on subsequent connections')
   } finally {
     await stack.close()
     await echo.close()
   }
 })
 
-test('port forwarding:stop idempotent sharing the same close Promise(concurrency invoke etc. the same result)', { timeout: 60_000 }, async () => {
+test('port forwarding: stop is idempotent and concurrent calls await the same close Promise', { timeout: 60_000 }, async () => {
   const echo = await startEcho()
   const stack = await startStack()
   try {
@@ -315,14 +315,14 @@ test('port forwarding:stop idempotent sharing the same close Promise(concurrency
       listenPort: await freePort(),
       targetPort: echo.port,
     })
-    // concurrency + duplicate stop: all resolve(do not 404- - sharing close, do not immediately return).
+    // Concurrent duplicate stops all resolve cleanly (never 404 mid-shutdown; shares teardown promise).
     await Promise.all([
       stack.forward.stop(session.forwardId),
       stack.forward.stop(session.forwardId),
       stack.forward.stop(session.forwardId),
     ])
-    assert.equal(stack.forward.get(session.forwardId), undefined, 'close after completion excerpt except once')
-    // close after explicit stop: conversation already excerpt except, by not_found reject (and HTTP 404 idempotent opening path consistent).
+    assert.equal(stack.forward.get(session.forwardId), undefined, 'evicted once close finishes')
+    // Explicit stop after close finishes rejects with not_found (HTTP layer turns repeated DELETE into idempotent 404).
     await assert.rejects(
       stack.forward.stop(session.forwardId),
       (error: unknown) => error instanceof Error && (error as { code?: string }).code === 'not_found',
@@ -333,42 +333,42 @@ test('port forwarding:stop idempotent sharing the same close Promise(concurrency
   }
 })
 
-test('port forwarding: foreground lease - - not bind set event stream automatically stop; finally one holder release stop', { timeout: 60_000 }, async () => {
+test('port forwarding: foreground lease expires cleanly if unattached, and holds open until final lease releases', { timeout: 60_000 }, async () => {
   const echo = await startEcho()
-  const stack = await startStack(150) // inject short phase limit:150ms
+  const stack = await startStack(150) // Short 150ms lease timeout
   try {
     assert.equal(stack.ready, true)
-    // 1) after creation not bind set holder: lease expires automatically stop (CLI by kill/DELETE failed leaves no residue).
+    // 1) Never attached by client: expires automatically on lease timeout (avoids leaks if CLI dies/DELETE fails).
     const orphan = await stack.forward.start('fwd-node', {
       listenHost: '127.0.0.1',
       listenPort: await freePort(),
       targetPort: echo.port,
     })
     await delay(400)
-    assert.equal(stack.forward.get(orphan.forwardId), undefined, 'not bind set forwarding start lease expires automatically stop')
+    assert.equal(stack.forward.get(orphan.forwardId), undefined, 'unattached forward stops automatically after lease expires')
     await assert.rejects(
       tcRequest(orphan.listenPort, Buffer.from('x')).then(() => undefined, (e) => { throw e }),
       undefined,
-    ).catch(() => undefined) // listener already closure.
+    ).catch(() => undefined) // Listener already closed.
 
-    // 2) bind set holder after do not automatically stop; two holder one by one release, finally a only then stop.
+    // 2) While leases are held, stays alive beyond timeout; stops once final lease releases.
     const session = await stack.forward.start('fwd-node', {
       listenHost: '127.0.0.1',
       listenPort: await freePort(),
       targetPort: echo.port,
     })
     const release1 = stack.forward.acquireLease(session.forwardId)
-    await delay(400) // exceeds lease phase limit: still store (holder store in).
-    assert.ok(stack.forward.get(session.forwardId) !== undefined, 'holder store in when do not because lease expires stop')
+    await delay(400) // Past lease window, yet holder keeps it alive.
+    assert.ok(stack.forward.get(session.forwardId) !== undefined, 'must not expire while a lease holder remains')
     const payload = Buffer.from('lease-alive')
-    assert.ok((await tcRequest(session.listenPort, payload)).equals(payload), 'hold has during forwarding available')
+    assert.ok((await tcRequest(session.listenPort, payload)).equals(payload), 'forwarding works while lease held')
     const release2 = stack.forward.acquireLease(session.forwardId)
     release1()
     await delay(100)
-    assert.ok(stack.forward.get(session.forwardId) !== undefined, 'still has holder when do not stop')
+    assert.ok(stack.forward.get(session.forwardId) !== undefined, 'still held by second lease')
     release2()
     await delay(200)
-    assert.equal(stack.forward.get(session.forwardId), undefined, 'finally one holder release i.e. stop')
+    assert.equal(stack.forward.get(session.forwardId), undefined, 'stops immediately once final lease releases')
     await assert.rejects(
       stack.forward.stop(session.forwardId),
       (error: unknown) => error instanceof Error && (error as { code?: string }).code === 'not_found',

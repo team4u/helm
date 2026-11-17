@@ -201,6 +201,24 @@ function finalizeSubagentOutcome(
   return effective
 }
 
+function deriveSubagentNameFromPrompt(prompt: string, redact: (text: string) => string): string | undefined {
+  const withoutContract = prompt.replace(/<structured_output_contract>[\s\S]*?<\/structured_output_contract>/g, '')
+  for (const rawLine of withoutContract.split(/\r?\n/)) {
+    const cleaned = rawLine
+      .replace(/[\u0000-\u001F\u007F]/g, ' ')
+      .trim()
+      .replace(/^(?:#+\s*|[-*]+\s+)+/, '')
+      .replace(/^[#\-*]+$/, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (cleaned === '') continue
+    const redacted = redact(cleaned).replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim()
+    if (redacted === '') continue
+    return redacted.length > 60 ? redacted.slice(0, 60).trimEnd() : redacted
+  }
+  return undefined
+}
+
 /** 启动后台或前台同步单子代理。 */
 export async function startBackgroundAgent(
   svc: WorkflowServiceContext,
@@ -247,9 +265,14 @@ export async function startBackgroundAgent(
       : request.parentToolCallId !== undefined && request.parentToolCallId !== ''
         ? request.parentToolCallId
         : undefined
+  const explicitLabel = options?.label !== undefined ? options.label.trim() : ''
+  const resolvedPromptName =
+    explicitLabel !== ''
+      ? svc.redact(explicitLabel)
+      : deriveSubagentNameFromPrompt(request.prompt, svc.redact)
   const name =
-    options?.label !== undefined && options.label.trim() !== ''
-      ? options.label.trim()
+    resolvedPromptName !== undefined && resolvedPromptName !== ''
+      ? resolvedPromptName
       : request.agentType !== undefined && request.agentType !== ''
         ? `subagent:${request.agentType}`
         : 'subagent'
@@ -377,6 +400,9 @@ export async function startBackgroundAgent(
 
   const proto: AgentSpawnRequest = {
     ...request,
+    ...(request.title === undefined && request.resume === undefined && request.reattach === undefined
+      ? { title: name }
+      : {}),
     ...(parentToolCallId !== undefined ? { parentToolCallId } : {}),
     agentId: agentIdForProto,
     requestId: deterministicRequestId,

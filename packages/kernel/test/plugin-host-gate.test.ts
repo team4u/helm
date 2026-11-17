@@ -1,7 +1,7 @@
 /**
- * PluginHostGate read write screen fault and plugin-host-deps dependency topology unit test.
+ * Unit tests for PluginHostGate read/write barrier and plugin-host-deps dependency topology.
  *
- * runner: tsx --test; each test explicit timeout: 60_000 guard against deadlock.
+ * runner: tsx --test; every test requires explicit timeout: 60_000 to guard against deadlocks.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -43,10 +43,10 @@ function makeState(
 }
 
 // ---------------------------------------------------------------------------
-// PluginHostGate:per-plugin queue + write takes precedence read write screen fault
+// PluginHostGate: per-plugin serialization + writer-preferred rw barrier
 // ---------------------------------------------------------------------------
 
-test('enqueue same plugin strictly serial, across plugin can concurrency read', { timeout: 60_000 }, async () => {
+test('enqueue is strictly serialized per plugin while running concurrently across plugins', { timeout: 60_000 }, async () => {
   const gate = new PluginHostGate();
   const events: string[] = [];
   const a1Gate = deferred<void>();
@@ -71,8 +71,8 @@ test('enqueue same plugin strictly serial, across plugin can concurrency read', 
   });
 
   await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.equal(gate.readerCount, 2, 'across plugin read gate concurrency hold has');
-  assert.deepEqual(events, ['a1:start', 'b1:start'], 'same plugin a2 must wait for a1');
+  assert.equal(gate.readerCount, 2, 'read gates across distinct plugins run concurrently');
+  assert.deepEqual(events, ['a1:start', 'b1:start'], 'a2 on same plugin must wait for a1');
 
   b1Gate.resolve();
   assert.equal(await b1, 'b1');
@@ -82,10 +82,10 @@ test('enqueue same plugin strictly serial, across plugin can concurrency read', 
 
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(gate.readerCount, 0);
-  assert.equal(gate.queuedPluginCount, 0, 'after completion automatically clean up queue index');
+  assert.equal(gate.queuedPluginCount, 0, 'queue map entry cleans up automatically upon settling');
 });
 
-test('write takes precedence guard against hungry die: wait for write gate during new read must let at write (contains many write queue up)', { timeout: 60_000 }, async () => {
+test('writer preference prevents starvation: new readers yield to waiting writers (including queued writers)', { timeout: 60_000 }, async () => {
   const gate = new PluginHostGate();
   const order: string[] = [];
   const r1Hold = deferred<void>();
@@ -105,7 +105,7 @@ test('write takes precedence guard against hungry die: wait for write gate durin
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(gate.waitingWriterCount, 1);
 
-  // w1 wait for during queue read r2 must by write takes precedence gate block; also second write w2 also queue
+  // Reader r2 queued while w1 waits is blocked by writer-preferred gate; second writer w2 queues too
   const r2Promise = gate.enqueue('p:r2', async () => {
     order.push('r2:acquired');
   });
@@ -114,21 +114,21 @@ test('write takes precedence guard against hungry die: wait for write gate durin
   });
 
   await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.deepEqual(order, ['r1:acquired'], 'r1 not release before,w1/w2/r2 all wait for');
+  assert.deepEqual(order, ['r1:acquired'], 'w1/w2/r2 all wait before r1 releases');
 
-  // release r1, wake all wait for:w1 takes precedence obtain lock
+  // Release r1, waking waiters: w1 acquires lock first
   gate.releaseGateRead();
   await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.deepEqual(order, ['r1:acquired', 'w1:acquired'], 'w1 must first at r2 obtain lock');
+  assert.deepEqual(order, ['r1:acquired', 'w1:acquired'], 'w1 must acquire lock ahead of r2');
 
-  // release w1: still has w2 in queue up,r2 continue let at w2
+  // Release w1: w2 is still waiting, so r2 continues yielding to w2
   w1Hold.resolve();
   await w1Promise;
   await Promise.all([w2Promise, r2Promise]);
   assert.deepEqual(
     order,
     ['r1:acquired', 'w1:acquired', 'w1:releasing', 'w2:acquired', 'r2:acquired'],
-    'many write queue up during write always takes precedence at after continue read, guard against write hungry die',
+    'queued writers take precedence over subsequent readers to prevent writer starvation',
   );
   assert.equal(gate.readerCount, 0);
   assert.equal(gate.isWriterActive, false);
@@ -137,7 +137,7 @@ test('write takes precedence guard against hungry die: wait for write gate durin
   void r1Hold;
 });
 
-test('exception release do not deadlock:enqueue and withWriteLock throws after gate lock clean return', { timeout: 60_000 }, async () => {
+test('exception release never deadlocks: gate locks recover cleanly after enqueue or withWriteLock throws', { timeout: 60_000 }, async () => {
   const gate = new PluginHostGate();
 
   await assert.rejects(
@@ -146,7 +146,7 @@ test('exception release do not deadlock:enqueue and withWriteLock throws after g
     }),
     /reader-boom/,
   );
-  assert.equal(gate.readerCount, 0, 'read task failed after read counter must reset to zero');
+  assert.equal(gate.readerCount, 0, 'reader count resets to zero after read task failure');
 
   await assert.rejects(
     gate.withWriteLock(async () => {
@@ -155,9 +155,9 @@ test('exception release do not deadlock:enqueue and withWriteLock throws after g
     }),
     /writer-boom/,
   );
-  assert.equal(gate.isWriterActive, false, 'write task failed after write flag must re-');
+  assert.equal(gate.isWriterActive, false, 'writer flag resets after write task failure');
 
-  // exception after queue and read write gate all can normal continue use
+  // Queue and rw gate continue operating normally after exceptions
   const value = await gate.enqueue('p:err', async () => 'recovered');
   assert.equal(value, 'recovered');
   const writeVal = await gate.withWriteLock(async () => 42);
@@ -167,7 +167,7 @@ test('exception release do not deadlock:enqueue and withWriteLock throws after g
   assert.throws(() => gate.releaseGateWrite(), /without active writer/);
 });
 
-test('drain wait for all queue up task converge and empty queue index', { timeout: 60_000 }, async () => {
+test('drain waits for all queued tasks to settle and clears queue map', { timeout: 60_000 }, async () => {
   const gate = new PluginHostGate();
   const hold = deferred<void>();
   let settledCount = 0;
@@ -196,10 +196,10 @@ test('drain wait for all queue up task converge and empty queue index', { timeou
 });
 
 // ---------------------------------------------------------------------------
-// plugin-host-deps: dependency ring route, satisfy, dependency protect, topology order
+// plugin-host-deps: cycle detection, satisfaction checks, reverse dependents protection, topological order
 // ---------------------------------------------------------------------------
 
-test('assertNoDependencyCycle: without ring via, many jump into ring explicit reject', { timeout: 60_000 }, () => {
+test('assertNoDependencyCycle allows acyclic graphs and explicitly rejects multi-hop cycles', { timeout: 60_000 }, () => {
   const plugins = new Map<string, PluginState>([
     ['a', makeState('a', { dependencies: ['b'] })],
     ['b', makeState('b', { dependencies: ['c'] })],
@@ -220,7 +220,7 @@ test('assertNoDependencyCycle: without ring via, many jump into ring explicit re
   );
 });
 
-test('assertDependenciesSatisfied: zone missing, not enabled and transition state', { timeout: 60_000 }, () => {
+test('assertDependenciesSatisfied distinguishes missing, disabled, and transitioning states', { timeout: 60_000 }, () => {
   const plugins = new Map<string, PluginState>([
     ['ok', makeState('ok', { enabled: true, phase: 'idle' })],
     ['off', makeState('off', { enabled: false, phase: 'idle' })],
@@ -245,7 +245,7 @@ test('assertDependenciesSatisfied: zone missing, not enabled and transition stat
   }
 });
 
-test('collectDependents / assertNoEnabledDependents / markDependentsBroken pass dependency behavior', { timeout: 60_000 }, () => {
+test('collectDependents / assertNoEnabledDependents / markDependentsBroken handle transitive dependents', { timeout: 60_000 }, () => {
   const base = makeState('base', { enabled: true, phase: 'idle' });
   const mid = makeState('mid', { dependencies: ['base'], enabled: true, phase: 'idle' });
   const top = makeState('top', { dependencies: ['mid'], enabled: true, phase: 'idle' });
@@ -264,7 +264,7 @@ test('collectDependents / assertNoEnabledDependents / markDependentsBroken pass 
   assert.deepEqual(
     dependents.map((s) => s.definition.id),
     ['mid', 'starting', 'top'],
-    'by BFS collect enabled and defining phase dependency, ignore deactivated',
+    'BFS collects enabled and defining dependents while ignoring disabled ones',
   );
 
   assert.throws(
@@ -274,14 +274,14 @@ test('collectDependents / assertNoEnabledDependents / markDependentsBroken pass 
 
   const changedIds: string[] = [];
   markDependentsBroken(plugins, 'base', (dep) => changedIds.push(dep.definition.id));
-  assert.deepEqual(changedIds, ['mid', 'top'], 'only mark record and broadcast enabled dependency');
+  assert.deepEqual(changedIds, ['mid', 'top'], 'only marks and emits changes for enabled dependents');
   assert.equal(mid.lastError?.code, 'plugin_dependency_not_enabled');
   assert.equal(top.lastError?.code, 'plugin_dependency_not_enabled');
   assert.equal(starting.lastError, undefined);
   assert.equal(disabled.lastError, undefined);
 });
 
-test('enabledStatesInDependencyOrder: filter not enabled plugin and keep topology order and same layer register order', { timeout: 60_000 }, () => {
+test('enabledStatesInDependencyOrder filters disabled plugins and preserves topological + same-tier registration order', { timeout: 60_000 }, () => {
   const plugins = new Map<string, PluginState>([
     ['top', makeState('top', { dependencies: ['mid'], enabled: true })],
     ['peer-1', makeState('peer-1', { enabled: true })],

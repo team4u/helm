@@ -2,15 +2,15 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { systemSectionsOf, withSections } from '../src/runtime/runtime-helpers.js'
 
-test('eventually sections replace clear after continue system patch, deactivate after action refer quote do not via back put re-', { timeout: 60_000 }, () => {
+test('final sections replacement clears trailing system patches so deactivated action references cannot leak back via fallback', { timeout: 60_000 }, () => {
   const history = { role: 'user', content: 'continue' }
   const messages = [
-    { role: 'system', content: 'host', sections: { 'profile.system': 'SYS', 'prompt.actions': 'old directory' } },
+    { role: 'system', content: 'host', sections: { 'profile.system': 'SYS', 'prompt.actions': 'stale catalog' } },
     history,
     {
       role: 'system',
       content: 'plugin message',
-      sections: { 'prompt.actions': 'more late old directory', 'plugin.context': 'keep context' },
+      sections: { 'prompt.actions': 'later stale catalog', 'plugin.context': 'keep context' },
       toolsRemoved: ['old_tool'],
     },
   ]
@@ -21,11 +21,11 @@ test('eventually sections replace clear after continue system patch, deactivate 
   const original = JSON.stringify(messages)
   const cleared = withSections(messages, desired)
   assert.deepEqual(systemSectionsOf(cleared), desired)
-  assert.equal(cleared[1], history, 'user history keep original reference')
+  assert.equal(cleared[1], history, 'user history preserves object reference')
   assert.equal(cleared[2]!['content'], 'plugin message')
-  assert.deepEqual(cleared[2]!['toolsRemoved'], ['old_tool'], 'other system field keep')
-  assert.equal(JSON.stringify(messages), original, 'do not change write original message')
+  assert.deepEqual(cleared[2]!['toolsRemoved'], ['old_tool'], 'other system fields remain preserved')
+  assert.equal(JSON.stringify(messages), original, 'does not mutate original messages')
 
-  const updated = [...desired, { id: 'prompt.actions', text: 'new directory' }]
-  assert.deepEqual(systemSectionsOf(withSections(messages, updated)), updated, 'new directory do not by after continue old patch override')
+  const updated = [...desired, { id: 'prompt.actions', text: 'fresh catalog' }]
+  assert.deepEqual(systemSectionsOf(withSections(messages, updated)), updated, 'new catalog is not overwritten by trailing stale patches')
 })

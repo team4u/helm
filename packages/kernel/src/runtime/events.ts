@@ -1,31 +1,30 @@
 /**
- * EventHub: global persist seq event total line + SSE snapshot/incremental stream.
+ * EventHub: event bus with globally persisted seq + SSE snapshot/incremental streams.
  *
- * semantics (by design document §1.2):
- * - seq single tune pass increase and persist (helm_seq), restart does not fall back; publish strictly by group install redaction -> encode
- *   -> persist nextSeq -> push enter memory watermark ->  ring -> broadcast sort, any one step failed all do not
- *   push enter watermark, do not half into product (never produce without ring record bare seq missing opening);
- * - each instance random generate bootId(event proxy):`?afterSeq`+`?bootId` double credentials all validate via only then
- *   allows short disconnection resume (first frame resumed + ring patch + real-time incremental, strictly without duplicate without omission);
- *   across proxy,seq out of bounds (not come) or ring missing opening one rule fall back snapshot all amount align, never exceeds missing opening
- *   false succeeded; distortion shape query parameter (non- non- negative security integer/length over limit/single credentials) explicit 400;
- * - resume ring: save publish when encode once cannot change SSE byte (subscribe and replay sharing the same,
- *   guard against subscribe tamper replay data; do not duplicate SQLite event store), frame count/byte double cap (by default 256 frame /
- *   1 MiB) over limit from head eliminate; single frame over byte pre- compute i.e. empty ring, forbidden any client across the frame resume;
- *   replay via ReadableStream.pull by consumer rhythm one by one step conflict refresh, never in start inside once stuff full
- *   queue (fast consumer also do not by byte pre- compute mistakenly kill; conflict refresh during new reach frame another row count slow consumer pre- compute);
- * - publish and subscribe same name keep (app use kernel.events.publish(type, payload));
- * - response(request): standard SSE- - first subscribe buffer, again sync sampling (snapshot or ring+headSeq),
- *   first frame `event: snapshot`(HelmSnapshot, contains bootId) or `event: resumed`
- *   (HelmResumedFrame), then one by one frame `event: <type>` + `data: {seq,event}`;
- *   Request.signal abort and ReadableStream.cancel all unsubscribe closure stream; without event when keep connect (pure real-time stream);
- * - sseStream(consume): can edit process consume entry (same snapshot first row semantics), return unsubscribe handle;
- *   consumer return false or throws i.e. isolated the subscribe and clean up, does not affect other subscribe;
- * - payload boundary validate/group install in event-validation.ts(pure function);SSE encode and byte back press
- *   original language in sse-stream.ts(and SessionDocEventHub sharing);
- * - unknown type away CustomHelmEvent {type, payload} original pass-through, does not pretend to be into notification;
- * - back press has boundary: not decide frame count/byte count over cap treated as slow client, explicit closure stream (client rely on snapshot reconnect
- *   align), never static default lose frame; snapshot provider is sync, no need to async snapshot system.
+ * Semantics (per design doc §1.2):
+ * - seq increases monotonically and is persisted (helm_seq), never regressing across restarts; publish strictly orders
+ *   assemble+redact -> encode -> persist nextSeq -> advance in-memory watermark -> append to ring -> broadcast;
+ *   if any step fails, the watermark never advances and no partial state remains (never creates a bare seq gap without a ring entry);
+ * - Each instance generates a random bootId (event epoch): both `?afterSeq` and `?bootId` credentials must validate before
+ *   allowing short-disconnect resumption (initial `resumed` frame + ring replay + live delta, strictly zero duplicates/drops);
+ *   cross-epoch, out-of-range (future) seq, or ring gaps always fall back to full snapshot sync rather than skipping gaps
+ *   under false success; malformed query parameters (non-non-negative safe integer / length out of range / single credential) fail with 400;
+ * - Resume ring: stores immutable SSE bytes encoded once at publish time (shared by live subscribers and replay so subscribers cannot
+ *   tamper with replay data and without duplicating the SQLite event table); bounded by both frame count and bytes
+ *   (default 1024 frames / 4 MiB, evicting oldest from head); a single frame exceeding the byte budget clears the ring so no client can
+ *   resume across it; replay flushes incrementally via ReadableStream.pull at consumer pace instead of stuffing the queue inside start
+ *   (fast consumers are never killed by the pending-byte limit; new frames arriving during flush count separately toward slow-consumer budget);
+ * - Keeps publish and subscribe names (apps call kernel.events.publish(type, payload));
+ * - response(request): standard SSE—subscribe+buffer first, then take synchronous snapshot (or ring+headSeq), emit initial
+ *   `event: snapshot` (HelmSnapshot with bootId) or `event: resumed` (HelmResumedFrame), then frame-by-frame `event: <type>` + `data: {seq,event}`;
+ *   both Request.signal abort and ReadableStream.cancel unsubscribe and close the stream; stays open as a pure live stream when idle;
+ * - sseStream(consume): programmatic consumer API (same snapshot-first semantics), returning an unsubscribe handle;
+ *   if consumer returns false or throws, that subscription is isolated and cleaned up without affecting others;
+ * - Payload boundary validation/assembly lives in event-validation.ts (pure functions); SSE encoding and byte backpressure
+ *   primitives live in sse-stream.ts (shared with SessionDocEventHub);
+ * - Unknown types pass through verbatim as CustomHelmEvent {type, payload} without masquerading as notifications;
+ * - Bounded backpressure: exceeding pending frame/byte caps flags a slow client and closes the stream explicitly (client reconnects
+ *   with snapshot to resync), never dropping frames silently; snapshot providers are synchronous, needing no async snapshot system.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -54,8 +53,8 @@ import {
 import { byteBoundedWrite, closeControllerQuietly, encodeSseChunk, KEEPALIVE_CHUNK, sseResponse } from './sse-stream.js'
 
 /**
- * snapshot content provider: excludes bootId(by EventHub instance inject, single one fact source),
- * seq is provider side known watermark, eventually with hub when before seq take most large is allow.
+ * Snapshot provider: omits bootId (injected by the EventHub instance as single source of truth);
+ * seq is the provider-side known watermark, resolved via max against the hub's current seq.
  */
 export type SnapshotProvider = () => Omit<HelmSnapshot, 'bootId'>
 
@@ -63,20 +62,20 @@ export interface EventSubscription {
   unsubscribe(): void
 }
 
-/** single time publish delivery result. */
+/** Result of a single publish delivery. */
 export interface EventPublishResult {
-  /** this time publish already verify+redaction event frame (SSE ring already queue, broadcast already isolated complete). */
+  /** Validated and redacted event frame for this publish (already in SSE ring and broadcast). */
   readonly frame: HelmEventFrame
-  /** internal host listener delivery (single time; not installed delivery when undefined). publish way on demand await
-   *(public emitEvent contract); do not await i.e. fire-and-forget(kernel automatically event path,
-   * delivery internal one by one listener isolated error, return promise never reject). */
+  /** Internal host listener delivery promise/result (once; undefined if not installed). Callers can await
+   * when needed (public emitEvent contract) or fire-and-forget on kernel auto-events (trackers, etc.,
+   * where errors per listener are isolated internally and the returned promise never rejects). */
   readonly internal: MaybePromise<void> | undefined
 }
 
-/** SSE output frame: first frame snapshot/resumed control frame or incremental {seq, event}. */
+/** SSE output frame: initial snapshot/resumed control frame or incremental {seq, event}. */
 export type SseFrame = HelmSnapshot | HelmEventFrame
 
-/** resume ring item: publish when encode cannot change SSE byte (guard against subscribe modify replay data). */
+/** Resume ring entry: immutable SSE bytes encoded at publish time (prevents subscriber mutation of replay data). */
 interface RingEntry {
   seq: number
   chunk: Uint8Array
@@ -90,24 +89,24 @@ export type HostDispatchedEvent =
 /** Internal host event dispatcher installed by `KernelRuntime`. */
 export type HostEventDispatcher = (event: HostDispatchedEvent) => MaybePromise<void>
 
-/** subscribe establish to snapshot conflict refresh complete between not decide frame count cap (overflow i.e. slow client, closure stream reconnect). */
+/** Max pending frames buffered between subscription setup and snapshot flush (overflow flags slow client and closes stream to reconnect). */
 const MAX_PENDING_EVENTS = 512
 
-/** resume ring by default cap: 1024 frames / 4 MiB bytes (over limit from head trim). */
+/** Default resume ring capacity: 1024 frames / 4 MiB bytes (evicts oldest entries from head when exceeded). */
 const DEFAULT_RING_MAX_FRAMES = 1024
 const DEFAULT_RING_MAX_BYTES = 4 * 1024 * 1024
 
-/** streaming phase not read byte cap (by default 1 MiB, available maxPendingBytes override, test use small value). */
+/** Max unread bytes during streaming phase (default 1 MiB, overridable via maxPendingBytes, e.g. small values in tests). */
 const DEFAULT_MAX_PENDING_BYTES = 1024 * 1024
 
-/** SSE idle heartbeat interval (by default 15s; note release row away unify byte back press path, test available keepaliveMs override). */
+/** SSE idle heartbeat interval (default 15s; comment lines go through unified byte backpressure; overridable via keepaliveMs in tests). */
 const DEFAULT_KEEPALIVE_MS = 15_000
 
 export class EventHub {
   private seqValue: number
-  /** event proxy identifier (instance random generate): resume double credentials of one, same proxy inside seq only then connect continue can than. */
+  /** Event epoch identifier (generated randomly per instance): one of the two resume credentials; seq is contiguous only within the same epoch. */
   readonly bootId: string
-  /** resume ring(seq connect continue zone segment, from head eliminate; single frame over pre- compute i.e. empty forbid across frame resume). */
+  /** Resume ring (contiguous seq range evicted from head; cleared if a single frame exceeds budget so nobody resumes across it). */
   private readonly ring: RingEntry[] = []
   private ringBytes = 0
   private readonly ringMaxFrames: number
@@ -119,15 +118,15 @@ export class EventHub {
   private readonly transientListeners = new Set<(frame: HelmTransientLiveFrame) => void>()
   /** Latest active live views per conversation (reconciled into `HelmResumedFrame.conversationLives`). */
   private readonly latestLives = new Map<number, ConversationLive>()
-  /** internal host event delivery (runtime install; each time publish exactly invoke once, single one delivery boundary). */
+  /** Internal host event dispatcher (installed by runtime; invoked once per publish as the single dispatch boundary). */
   private hostDispatcher: HostEventDispatcher | undefined
   private readonly snapshot: SnapshotProvider
   private readonly persistSeq: (seq: number) => void
   private readonly streamClosers = new Set<() => void>()
   private readonly maxPendingBytes: number
-  /** SSE idle heartbeat interval (non- correct value deactivate); note release row let middle layer/proxy keep-alive and can by client detect card die. */
+  /** SSE idle heartbeat interval (disabled if <= 0); comment lines keep proxies/intermediaries alive and let clients detect stalls. */
   private readonly keepaliveMs: number
-  /** redact(text) -> redaction text (secret plaintext -> marker; re- use redactJsonValue recursion). */
+  /** redact(text) -> redacted text (secret plaintext -> marker; reused recursively by redactJsonValue). */
   redact: (text: string) => string = (t) => t
 
   set redactFn(fn: (text: string) => string) {
@@ -138,15 +137,15 @@ export class EventHub {
     initialSeq: number
     snapshot: SnapshotProvider
     persistSeq?: (seq: number) => void
-    /** streaming phase not read byte cap (slow client decide); by default 1 MiB. */
+    /** Unread byte cap during streaming (slow client threshold); defaults to 1 MiB. */
     maxPendingBytes?: number
-    /** SSE idle heartbeat interval (milli second); by default 15s, non- correct value deactivate (test use small value speed up). */
+    /** SSE idle heartbeat interval (ms); defaults to 15s, <= 0 disables (use small values to speed up tests). */
     keepaliveMs?: number
-    /** event proxy identifier (by default random UUID; test can inject fixed value). */
+    /** Event epoch ID (random UUID by default; injectable in tests). */
     bootId?: string
-    /** resume ring frame count cap; by default 256(test can tune small verify eliminate). */
+    /** Resume ring frame capacity; defaults to 1024 (tunable in tests to verify eviction). */
     ringMaxFrames?: number
-    /** resume ring byte cap; by default 1 MiB(test can tune small verify eliminate). */
+    /** Resume ring byte capacity; defaults to 4 MiB (tunable in tests to verify eviction). */
     ringMaxBytes?: number
   }) {
     this.seqValue = options.initialSeq
@@ -163,12 +162,12 @@ export class EventHub {
     return this.seqValue
   }
 
-  /** when before leap subscribe count (diagnose and test use). */
+  /** Number of currently active subscribers (for diagnostics and tests). */
   get subscriberCount(): number {
     return this.subscribers.size
   }
 
-  /** empty all subscribe (kernel.close when invoke, eliminate subscribe leak leak). */
+  /** Clear all subscriptions (called on kernel.close to eliminate subscriber leaks). */
   close(): void {
     for (const stop of [...this.streamClosers]) stop()
     this.subscribers.clear()
@@ -179,34 +178,32 @@ export class EventHub {
   }
 
   /**
-   * install internal host event delivery (ctx.host.onEvent listen side single one delivery boundary): each time
-   * publish in SSE broadcast after exactly invoke once, parameter is already verify+redaction complete HelmEvent
-   * message seal (protocol onEvent contract shape). delivery must sync return (can return promise),
-   * must not throw (listener error by delivery itself isolated), otherwise will break publish since has
-   * error semantics (broadcast completed after again errors belongs to false failed).
+   * Install the internal host event dispatcher (single dispatch boundary for ctx.host.onEvent listeners):
+   * invoked exactly once after SSE broadcast per publish with the validated+redacted HelmEvent envelope
+   * (matching protocol onEvent contract). Must return synchronously (may return a promise) and never throw
+   * (listener errors are isolated internally), avoiding false errors after broadcast has already succeeded.
    */
   setHostDispatcher(dispatch: HostEventDispatcher): void {
     this.hostDispatcher = dispatch
   }
 
   /**
-   * publish event (strictly order: group install redaction -> encode -> persist -> push enter memory ->  ring -> broadcast
-   * -> internal host delivery).buildEvent/persistSeq failed all throw and do not push enter watermark, do not
-   * ring, do not broadcast - - persist errors never under bare seq(otherwise under once succeeded publish will in ring in
-   * shape into missing opening, resume when false promise). frame only encode once (cannot change byte),ring replay and all
-   * subscribe sharing the same.
+   * Publish an event (strict ordering: assemble+redact -> encode -> persist -> advance memory -> ring -> broadcast
+   * -> internal host dispatch). Failures in buildEvent/persistSeq throw without advancing the watermark, appending to
+   * the ring, or broadcasting—persistence errors never leave a bare seq gap (otherwise the next successful publish would
+   * create a gap in the ring and break resume). Each frame is encoded once (immutable bytes), shared by ring replay and all subscribers.
    *
-   * return this time frame and internal host listener delivery (exactly once): need to wait for async internal listener
-   * publish way (public emitEvent)await internal; kernel automatically event (tracker etc.) ignore
-   * return i.e. fire-and-forget, never block publish point (such as SDK advance sync observe path).
+   * Returns the emitted frame and internal host listener dispatch (exactly once): callers needing to await async internal listeners
+   * (public emitEvent) await `internal`; kernel auto-events (trackers, etc.) ignore the return value (fire-and-forget) so synchronous
+   * observation paths (e.g., SDK callbacks) are never blocked.
    */
   publish(type: string, payload: unknown): EventPublishResult {
     const nextSeq = this.seqValue + 1
     const event = this.buildEvent(type, payload)
     const frame: HelmEventFrame = { seq: nextSeq, event }
-    // V8 cannot freeze non-empty TypedArray view; cannot change by structure guarantee:ring only store this independent
-    // encode byte (do not sharing event object diagram, subscribe change object change fewer than replay data), host inside all consume
-    // path (ring replay / controller.enqueue) all only read, never back write.
+    // V8 cannot freeze non-empty TypedArray views; immutability is guaranteed structurally: the ring only retains these isolated
+    // encoded bytes (never sharing mutable event object graphs with subscribers), and all internal consumers (ring replay /
+    // controller.enqueue) treat them as read-only.
     const chunk = encodeSseChunk(String(event.type), frame)
     this.persistSeq(nextSeq)
     this.seqValue = nextSeq
@@ -216,7 +213,7 @@ export class EventHub {
       try {
         deliver(frame, chunk)
       } catch {
-        // subscribe way call back throws only isolated itself (each subscribe internal self row clean up), does not affect other subscribe.
+        // Isolate errors from individual subscriber callbacks (cleanup is handled per-subscriber) without impacting others.
       }
     }
     return { frame, internal: this.hostDispatcher?.(event) }
@@ -287,9 +284,9 @@ export class EventHub {
     }
   }
 
-  /** ring append: non- connect continue append(guard against defend: any way produce bare seq missing opening) first act abandon old zone segment,
-   * from this frame rebuild; frame count/byte over limit from head eliminate keep connect continue; single frame over byte pre- compute i.e. empty,
-   * forbidden any client across the frame resume (rather can fall back snapshot, do not exceeds missing opening false succeeded). */
+  /** Append to ring: if non-contiguous (defensive guard against any bare seq gap), drop stale segments and rebuild
+   * from this frame; evict oldest entries from head when exceeding frame/byte limits; clear the ring if a single frame exceeds
+   * the byte budget so no client can resume across it (better to fall back to snapshot than silently skip gaps). */
   private pushRing(seq: number, chunk: Uint8Array): void {
     const last = this.ring[this.ring.length - 1]
     if (last !== undefined && last.seq + 1 !== seq) {
@@ -311,15 +308,15 @@ export class EventHub {
     }
   }
 
-  /** when before snapshot (supply HTTP GET and SSE first frame re- use); via prune + recursion redaction after return,
-   * and inject instance bootId(event proxy single one fact source). */
+  /** Return the current snapshot (reused by HTTP GET and SSE initial frame) after pruning undefineds and applying
+   * recursive redaction, injecting this instance's bootId as the single source of truth for the event epoch. */
   currentSnapshot(): HelmSnapshot {
     const snap = this.snapshot()
     const redacted = redactJsonValue(pruneUndefined(snap, new WeakSet()), (t) => this.redact(t)) as HelmSnapshot
     return { ...redacted, seq: Math.max(snap.seq, this.seqValue), bootId: this.bootId }
   }
 
-  /** subscribe incremental frame; return unsubscribe function (HTTP layer only consume response, this entry supply edit process consume and test). */
+  /** Subscribe to incremental frames; returns an unsubscribe function (HTTP layer consumes response(); this entrypoint serves programmatic callers and tests). */
   subscribe(listener: (frame: HelmEventFrame) => void): () => void {
     this.subscribers.add(listener)
     return () => {
@@ -328,8 +325,9 @@ export class EventHub {
   }
 
   /**
-   * SSE stream (can edit process consume): first create buffer subscribe, again take snapshot; first frame snapshot after conflict refresh seq > snapshot.seq
-   * buffer frame. consumer return false or throws, snapshot failed all first unsubscribe again end/heavy throw, never leak leak subscribe.
+   * Programmatic SSE stream: registers a buffered subscription first, then captures a snapshot; after emitting the snapshot,
+   * flushes buffered frames with seq > snapshot.seq. Unsubscribes cleanly before finishing/rethrowing if the consumer returns
+   * false/throws or if snapshot fails, preventing subscriber leaks.
    */
   sseStream(consume: (frame: SseFrame) => boolean | void): EventSubscription {
     const handle = this.openStream((frame) => consume(frame) !== false)
@@ -354,37 +352,36 @@ export class EventHub {
   }
 
   /**
-   * HTTP SSE response: immediately return Response; first frame snapshot(or resume resumed), then by seq incremental.
-   * `?afterSeq`+`?bootId` double credentials validate via then first frame change resumed and by seq patch ring cache frame;
-   * across proxy/not come seq/cache missing opening one rule fall back snapshot; distortion shape credentials explicit 400.
-   * replay byte do not via start once queue (consumer not yet pull will collide on 1 MiB queue up pre- compute, mistakenly kill fast
-   * consumer), but rather unify enter conflict refresh queue by pull by consumer rhythm one by one step conflict refresh; conflict refresh during new reach
-   * real-time frame count independent slow consumer pre- compute (replay reference sharing ring byte, does not repeat counter).
-   * request.signal abort and ReadableStream.cancel all unsubscribe closure stream; without event when keep connect,
-   * never fall back JSON; idle during by keepaliveMs cycle write `: keepalive` note release row (only in conflict refresh
-   * after completion start, conflict refresh phase data itself stream motion; heartbeat away unify write back press path,abort/cancel/close
-   * follow shutdown one and clean up timer).
+   * HTTP SSE response: returns Response immediately; initial frame is `snapshot` (or `resumed`), followed by incremental seq frames.
+   * When `?afterSeq` and `?bootId` both validate, emits `resumed` first and replays ring-cached frames by seq;
+   * cross-epoch, future seq, or cache gaps fall back to snapshot; malformed credentials return 400 explicitly.
+   * Replay bytes are NOT stuffed into start all at once (which would hit the 1 MiB pending cap before pull drains and falsely kill
+   * fast consumers); instead they enter the flush queue drained step-by-step via pull at consumer pace, while live frames arriving
+   * mid-flush count against the slow-consumer budget separately (replay entries reference shared ring bytes with 0 double-counting).
+   * Closes and unsubscribes on request.signal abort or ReadableStream.cancel; stays open when idle without falling back to JSON;
+   * writes `: keepalive` comment lines every keepaliveMs during idle periods (started after flush finishes; heartbeats flow through
+   * unified byte backpressure and stop on abort/cancel/close).
    */
   response(request: Request): Response {
     const query = EventHub.parseResumeQuery(request)
     if (query.error !== undefined) {
-      // boundary strong validate: distortion shape resume credentials explicit 400, never static default ignore or half resume.
+      // Strict boundary check: malformed resume credentials fail with 400 rather than being silently ignored or partially applied.
       return new Response(JSON.stringify({ error: { code: 'invalid_input', message: query.error } }), {
         status: 400,
         headers: { 'content-type': 'application/json; charset=utf-8' },
       })
     }
 
-    /** conflict refresh queue item:replay reference (sharing ring byte) or conflict refresh during new reach frame/heartbeat. */
+    /** Flush queue item: either a replay reference (shared ring bytes) or a live frame/heartbeat arriving mid-flush. */
     interface OutboundEntry {
       chunk: Uint8Array
-      /** count slow consumer pre- compute byte count (replay reference is 0, does not repeat counter ring memory). */
+      /** Bytes counted against slow-consumer budget (0 for replay references to avoid double-counting ring memory). */
       liveBytes: number
     }
 
     let outbound: OutboundEntry[] = []
     let outboundLiveBytes = 0
-    /** replay/accumulate press conflict refresh in: business byte only conflict refresh queue, by pull by consumer rhythm one by one step queue. */
+    /** True while flushing replay/backlog: business bytes go solely through the flush queue drained step-by-step by pull. */
     let flushing = false
     let closed = false
     let unsubscribe: (() => void) | undefined
@@ -394,7 +391,7 @@ export class EventHub {
     const write = (chunk: Uint8Array): boolean =>
       byteBoundedWrite(controllerRef, closed, chunk, this.maxPendingBytes)
 
-    /** conflict refresh during reach frame/heartbeat conflict refresh queue tail (keep strictly byte order; new byte count slow consumer pre- compute). */
+    /** Enqueue a frame/heartbeat arriving during flush onto the tail (preserves strict byte ordering and charges slow-consumer budget). */
     const pushOutbound = (chunk: Uint8Array): boolean => {
       if (outboundLiveBytes + chunk.byteLength > this.maxPendingBytes) return false
       outboundLiveBytes += chunk.byteLength
@@ -425,17 +422,17 @@ export class EventHub {
     }
 
     const startKeepalive = (): void => {
-      // idle heartbeat:SSE note release row (: open head), client parse ignore, never fabricate business event,
-      // do not push enter seq; away unify write back press path (do not read slow consumer heap accumulate over limit same closure stream).
+      // Idle heartbeat: SSE comment line (leading `:`), ignored by parsers, never fabricates business events or advances seq;
+      // goes through unified write backpressure so slow/stalled readers that don't drain are closed cleanly.
       if (keepaliveTimer !== undefined || closed) return
       keepaliveTimer = startKeepaliveInterval(this.keepaliveMs, write, shutdown)
     }
 
-    // first subscribe again sync sampling (same microtask inside complete, buffer do not lose frame); snapshot failed sync throw to HTTP layer.
+    // Subscribe first, then sample synchronously (within the same microtask, buffering prevents missed frames); snapshot errors throw synchronously to HTTP.
     const handle = this.openStream(
       (frame, chunk) => {
         if (closed) return false
-        // conflict refresh during reach frame arrange in replay after (strictly byte order); conflict refresh completely rotate streaming direct write (byte back press take over).
+        // Frames arriving mid-flush queue after replay (strict byte order); once flushed, switch to direct write with byte backpressure.
         if (flushing) return pushOutbound(chunk)
         return write(chunk)
       },
@@ -448,7 +445,7 @@ export class EventHub {
     let handshake: Uint8Array
     let replay: Uint8Array[] = []
     if (resume !== undefined && this.canResume(resume)) {
-      // resume: sampling headSeq + ring cut piece (subscribe already establish, this after publish enter conflict refresh queue/direct write, without window).
+      // Resume: sample headSeq + ring slice (subscription is already live so subsequent publishes enter flush queue or direct write without a gap).
       liveSeq = this.seqValue
       const resumedFrame: HelmResumedFrame = {
         bootId: this.bootId,
@@ -472,10 +469,10 @@ export class EventHub {
 
     return sseResponse({
       start: (controller) => {
-        // without byte policy when runtime must is by default control (original inline construct the same fact).
+        // Without a byte Strategy at construction, controller is always the default controller (preserves original behavior).
         controllerRef = controller as ReadableStreamDefaultController<Uint8Array>
         if (closed) {
-          // close occur in stream establish before (such as snapshot provider sync heavy overflow): immediately closure stream.
+          // Closed before stream initialized (e.g., synchronous overflow in snapshot provider): close immediately.
           closeControllerQuietly(controllerRef)
           return
         }
@@ -484,15 +481,15 @@ export class EventHub {
           return
         }
         request.signal.addEventListener('abort', shutdown)
-        // grasp manually frame directly write (subject to byte pre- compute constraint); replay byte never in this queue - - to pull
-        // by consumer rhythm one by one step conflict refresh, avoid consumer not yet pull then collide full 1 MiB queue up pre- compute.
+        // Write handshake frame immediately (subject to byte budget); replay bytes are held out for pull-driven flushing
+        // at consumer pace so consumers that haven't called pull yet don't hit the 1 MiB pending cap prematurely.
         if (!write(handshake)) {
           shutdown()
           return
         }
         outbound = replay.map((chunk) => ({ chunk, liveBytes: 0 }))
         flushing = outbound.length > 0
-        // conflict refresh subscribe buffer (seq > liveSeq frame): conflict refresh in conflict refresh queue tail, otherwise direct write.
+        // Flush buffered frames from subscription setup (seq > liveSeq): tail-queued during flush, or written directly.
         if (!handle.goLive(liveSeq)) return
         if (!closed) this.transientStreamSenders.add(sendTransientChunk)
         if (!flushing) startKeepalive()
@@ -504,7 +501,7 @@ export class EventHub {
         outboundLiveBytes -= entry.liveBytes
         const controller = controllerRef
         if (controller === undefined) return
-        // pull semantics: consumer already hold has pending read, this time queue directly satisfy read, do not heap accumulate queue up pre- compute.
+        // pull semantics: consumer already has a pending read, so enqueue satisfies it immediately without building unread backlog.
         try {
           controller.enqueue(entry.chunk)
         } catch {
@@ -522,41 +519,41 @@ export class EventHub {
     })
   }
 
-  /** parse `?afterSeq`/`?bootId` resume query: does not carry i.e. ordinary connect; carry then must into for, do not
-   * duplicate and shape legal (non- negative security integer / length 1..64 non-empty string), distortion shape/duplicate explicit 400,
-   * never half resume (URLSearchParams.get will swallow duplicate parameter, duplicate i.e. reject). */
+  /** Parse `?afterSeq`/`?bootId` resume parameters: omitted means normal connection; when present, both must be paired,
+   * unique, and well-formed (non-negative safe integer / 1..64 non-empty string). Malformed or duplicated params fail with 400
+   * rather than partially resuming (URLSearchParams.get would silently ignore duplicate params, so reject explicitly via getAll). */
   private static parseResumeQuery(request: Request): { resume?: { afterSeq: number; bootId: string }; error?: string } {
     let params: URLSearchParams
     try {
       params = new URL(request.url).searchParams
     } catch {
-      return { error: 'cannot parse request URL query parameter' }
+      return { error: 'cannot parse request URL query parameters' }
     }
     const afterSeqAll = params.getAll('afterSeq')
     const bootIdAll = params.getAll('bootId')
     if (afterSeqAll.length > 1 || bootIdAll.length > 1) {
-      return { error: '?afterSeq and ?bootId must not duplicate carry' }
+      return { error: '?afterSeq and ?bootId must not be specified multiple times' }
     }
     if (afterSeqAll.length === 0 && bootIdAll.length === 0) return {}
     if (afterSeqAll.length === 0 || bootIdAll.length === 0) {
-      return { error: '?afterSeq and ?bootId must into for carry only then can resume' }
+      return { error: '?afterSeq and ?bootId must be provided together to resume' }
     }
     const afterSeqRaw = afterSeqAll[0]!
     const bootIdRaw = bootIdAll[0]!
     if (!/^\d{1,16}$/.test(afterSeqRaw) || !Number.isSafeInteger(Number(afterSeqRaw))) {
-      return { error: 'afterSeq must be non- negative security integer' }
+      return { error: 'afterSeq must be a non-negative safe integer' }
     }
     if (bootIdRaw.length === 0 || bootIdRaw.length > 64) {
-      return { error: 'bootId must be length 1..64 non-empty string' }
+      return { error: 'bootId must be a non-empty string of length 1..64' }
     }
     return { resume: { afterSeq: Number(afterSeqRaw), bootId: bootIdRaw } }
   }
 
-  /** resume can row: same proxy, do not exceeds not come, and need to (afterSeq, headSeq] non-empty when must by ring
-   * complete connect continue override (first frame <= afterSeq+1, end frame exactly is when before head, zone segment inside one by one frame +1 connect continue;
-   * ring at most 256 frame line inspect verify enough), any one do not satisfy fall back snapshot- - end frame missing will let client
-   * forever append do not flat headSeq(heartbeat still to, idle watchdog does not trigger), never false resumed promise;
-   * afterSeq == headSeq(already append flat header) zero patch resume, but same must same proxy. */
+  /** Eligibility for resumption: same epoch, not beyond headSeq, and when (afterSeq, headSeq] is non-empty, the ring must cover
+   * the interval contiguously (first frame <= afterSeq+1, last frame === headSeq, consecutive +1 steps; linear scan is cheap over
+   * <=1024 frames). Otherwise fall back to snapshot—a missing tail frame would leave the client stuck behind headSeq indefinitely
+   * while keepalives keep the idle watchdog happy, so never issue a false `resumed`. Equal afterSeq == headSeq resumes with zero
+   * replay frames, still requiring matching bootId. */
   private canResume(resume: { afterSeq: number; bootId: string }): boolean {
     if (resume.bootId !== this.bootId) return false
     const headSeq = this.seqValue
@@ -572,9 +569,9 @@ export class EventHub {
   }
 
   /**
-   * establish carries buffer internal subscribe: subscribe first buffer (frame and pre- encode byte one same queue, conflict refresh when zero heavy encode),
-   * goLive(snapshotSeq) conflict refresh seq update buffer frame after rotate real-time.onFrame return false
-   * (failed to write/overflow/consumer stop) or throws all immediately unsubscribe and call back onStop.
+   * Open an internal buffered subscription: buffers frames first (pairing frames with pre-encoded bytes to avoid re-encoding
+   * on flush), then goLive(snapshotSeq) flushes newer buffered frames and switches to live delivery. If onFrame returns false
+   * (write failure / overflow / consumer stop) or throws, unsubscribes immediately and invokes onStop.
    */
   private openStream(
     onFrame: (frame: HelmEventFrame, chunk: Uint8Array) => boolean,
@@ -603,7 +600,7 @@ export class EventHub {
       if (done) return
       if (!live) {
         if (buffer.length >= MAX_PENDING_EVENTS) {
-          // subscribe establish i.e. buffer phase overflow (provider sync heavy publish only then will trigger): same explicit closure stream.
+          // Overflow while buffering during subscription setup (only possible if snapshot provider bursts synchronously): close explicitly.
           stop()
           return
         }
@@ -630,13 +627,13 @@ export class EventHub {
     }
   }
 
-  /** group install+validate+redaction (delegate event-validation pure function;redact inject instance redaction). */
+  /** Assemble + validate + redact (delegates to pure helpers in event-validation.ts with instance redactor). */
   private buildEvent(type: string, payload: unknown): HelmEvent {
     return assembleHelmEvent(type, payload, (t) => this.redact(t))
   }
 }
 
-/** conversation document subscribe first frame:{seq, doc}; by HTTP layer via sync provider atomic read. */
+/** Initial frame for a session-doc subscription: {seq, doc}; read atomically via synchronous HTTP provider. */
 export interface SessionDocSnapshot {
   seq: number
   doc: PublicPluginSessionDoc
@@ -647,7 +644,7 @@ interface SessionDocStreamEntry {
   stop: () => void
 }
 
-/** buffer phase not decide frame (keep seq, conflict refresh when only seq > snapshot.seq frame). */
+/** Pending frame buffered during snapshot collection (retains seq so flush emits only frames with seq > snapshot.seq). */
 interface SessionDocQueuedFrame {
   seq: number
   chunk: Uint8Array
@@ -681,28 +678,26 @@ function startKeepaliveInterval(
 }
 
 /**
- * SessionDocEventHub: conversation document dedicated use event side.
+ * SessionDocEventHub: dedicated event stream for conversation documents.
  *
- * plugin.session_doc.updated never enter global /api/events(write put large and across conversation leak leak);
- * this hub only (pluginId, name, conversationId) three meta group update dispatch to subscribe the
- * three meta group dedicated use SSE stream. frame shape and global stream consistent (HelmEventFrame {seq, event}),
- * seq only maintain this hub itself single tune counter; first frame snapshot by response sync provider
- * (such as kernel.plugins.getPublicSessionDoc) in subscribe establish after invoke, guarantee
- * first subscribe buffer, after take snapshot atomic window - - snapshot and first frame incremental between do not lose frame, does not repeat.
+ * plugin.session_doc.updated never enters global /api/events (prevents write amplification and cross-conversation leaks);
+ * this hub dispatches updates for a (pluginId, name, conversationId) tuple exclusively to streams subscribed to that tuple.
+ * Frame shape matches the global stream (HelmEventFrame {seq, event}), while seq uses its own monotonic counter;
+ * the initial snapshot frame is fetched via response's synchronous provider (e.g., kernel.plugins.getPublicSessionDoc) right after
+ * subscribing, guaranteeing an atomic window without dropped or duplicated frames between snapshot and first delta.
  *
- * lifecycle:response is each stream register (target, stop);hub.close() truly close all
- * stream (ReadableStream close + unsubscribe);closeForPlugin/closeForConversation by
- * runtime listen core event drive (plugin.changed enabled=false / conversation.deleted),
- * event drive while non- polling, without external invoke when zero overhead.
+ * Lifecycle: response registers each stream as (targets, stop); hub.close() shuts down all streams (closing ReadableStream
+ * and unsubscribing); closeForPlugin / closeForConversation are driven by runtime listeners on core events
+ * (plugin.changed enabled=false / conversation.deleted), purely event-driven with zero polling overhead.
  */
 export class SessionDocEventHub {
   private seqValue = 0
   private readonly subscribers = new Map<string, Set<(frame: HelmEventFrame) => void>>()
-  /** each dedicated use stream close handle (close()/set to close use; the same three meta group many connect each register). */
+  /** Close handles for each dedicated stream (used by close()/set-close; multiple connections to the same tuple register independently). */
   private readonly streams = new Set<SessionDocStreamEntry>()
-  /** subscribe establish to snapshot conflict refresh complete between not decide frame count cap (overflow i.e. slow client, closure stream reconnect). */
+  /** Max pending frames buffered between subscription setup and snapshot flush (overflow closes stream to reconnect). */
   private readonly maxPending = MAX_PENDING_EVENTS
-  /** streaming phase not read byte cap (by default 1 MiB; slow client explicit closure stream, never unbounded queue up). */
+  /** Unread byte cap during streaming (default 1 MiB; slow clients are closed explicitly rather than queued unboundedly). */
   private readonly maxPendingBytes: number
   /** SSE idle heartbeat interval (ms); defaults to 15s, <= 0 disables (for deterministic tests). */
   private readonly keepaliveMs: number
@@ -725,25 +720,25 @@ export class SessionDocEventHub {
     return `${doc.pluginId}\0${doc.name}\0${doc.conversationId}`
   }
 
-  /** when before leap subscribe count (actual listener count, diagnose and test use). */
+  /** Number of currently active subscribers (actual listener count, for diagnostics and tests). */
   get subscriberCount(): number {
     let total = 0
     for (const set of this.subscribers.values()) total += set.size
     return total
   }
 
-  /** truly close all dedicated use stream and empty subscribe (kernel.close when invoke, eliminate leak leak). */
+  /** Truly close all dedicated streams and clear subscribers (called on kernel.close to eliminate leaks). */
   close(): void {
     this.closeStreams(() => true)
     this.subscribers.clear()
   }
 
-  /** close designate plugin all dedicated use stream (plugin deactivate/deregister:plugin.changed enabled=false). */
+  /** Close all dedicated streams for a plugin (plugin disable/uninstall: plugin.changed enabled=false). */
   closeForPlugin(pluginId: string): void {
     this.closeStreams((entry) => entry.targets.some((t) => t.pluginId === pluginId))
   }
 
-  /** close designate conversation all dedicated use stream (conversation delete:conversation.deleted). */
+  /** Close all dedicated streams for a conversation (conversation deleted: conversation.deleted). */
   closeForConversation(conversationId: number): void {
     this.closeStreams((entry) => entry.targets.some((t) => t.conversationId === conversationId))
   }
@@ -755,10 +750,9 @@ export class SessionDocEventHub {
   }
 
   /**
-   * publish a conversation document update: only delivery subscribe the three meta group listener.
-   * payload in boundary do shape validate (event-validation pure function)+ JSON redaction (and
-   * EventHub.buildEvent the same discipline), illegal payload explicit throw HelmError and do not push enter seq,
-   * never static default fall back.
+   * Publish a session document update: dispatches only to listeners subscribed to that tuple.
+   * Validates shape (pure helper in event-validation.ts) + applies JSON redaction at boundary (same discipline as
+   * EventHub.buildEvent); invalid payloads throw HelmError explicitly without advancing seq or falling back silently.
    */
   dispatch(payload: unknown): void {
     const clean = redactJsonValue(assertSessionDocUpdateShape(payload), (t) => this.redactFn(t)) as PublicPluginSessionDoc
@@ -772,14 +766,14 @@ export class SessionDocEventHub {
       try {
         deliver(frame)
       } catch {
-        // subscribe way call back throws only isolated itself (each subscribe internal self row clean up), does not affect other subscribe.
+        // Isolate subscriber callback throws without affecting other subscribers.
       }
     }
   }
 
   /**
-   * subscribe designate three meta group incremental frame; return unsubscribe function.
-   * and EventHub.subscribe same name semantics:HTTP layer first subscribe buffer again sync take snapshot.
+   * Subscribe to incremental frames for a specific tuple; returns an unsubscribe function.
+   * Matches EventHub.subscribe semantics: HTTP layer subscribes+buffers first, then captures a synchronous snapshot.
    */
   subscribe(
     doc: { pluginId: string; name: string; conversationId: number },
@@ -801,28 +795,27 @@ export class SessionDocEventHub {
   }
 
   /**
-   * dedicated use SSE response: first frame `event: snapshot`(PluginSessionDocSnapshot {seq, doc}),
-   * then `event: plugin.session_doc.updated` + HelmEventFrame incremental.
+   * Dedicated SSE response: initial `event: snapshot` (PluginSessionDocSnapshot {seq, doc}),
+   * followed by incremental `event: plugin.session_doc.updated` + HelmEventFrame.
    *
-   * atomic window: first establish buffer subscribe, again sync invoke options.snapshot provider read snapshot
-   * (provider also complete public/conversation store in again validate, failed sync throw to HTTP layer),
-   * send snapshot after only conflict refresh seq > snapshot.seq buffer frame - - do not lose frame, does not repeat.
-   * provider fails or request already abort: sync unsubscribe clean up, do not create stream.
+   * Atomic window: registers buffered subscription first, then invokes synchronous options.snapshot provider
+   * (provider also checks plugin/conversation existence; failures throw synchronously to HTTP), emits snapshot,
+   * and flushes only buffered frames with seq > snapshot.seq—zero dropped or duplicated frames.
+   * If provider fails or request is already aborted, unsubscribes synchronously without creating a stream.
    *
-   * back press and clean up: buffer phase subject to MAX_PENDING_EVENTS restrict, streaming phase with byte cap decide
-   * (sse-stream sharing original language), over limit i.e. slow client, explicit closure stream unsubscribe (never unbounded queue up);
-   * abort / cancel / hub set to close same closure stream. reconnect i.e. re- subscribe and reset snapshot
-   * (without across connect leftover).
+   * Backpressure & cleanup: buffered phase is bounded by MAX_PENDING_EVENTS, streaming phase by byte cap
+   * (shared sse-stream primitive); overflowing closes the stream explicitly and unsubscribes (no unbounded queuing);
+   * abort / cancel / hub close also shut down the stream cleanly. Reconnecting re-subscribes and resets snapshot (no cross-connection state).
    */
   response(
     request: Request,
     options: {
-      /** sync snapshot provider: in subscribe establish after invoke, return {seq, doc}; fails sync throw. */
+      /** Synchronous snapshot provider invoked after subscribing; returns {seq, doc} or throws synchronously. */
       snapshot: () => SessionDocSnapshot
       target: { pluginId: string; name: string; conversationId: number }
     },
   ): Response {
-    /** snapshot conflict refresh complete before not decide frame (this after change use stream inside byte back press). */
+    /** Buffered frames arriving before snapshot flush completes (switches to byte backpressure afterward). */
     let pending: SessionDocQueuedFrame[] = []
     let streaming = false
     let closed = false
@@ -833,7 +826,7 @@ export class SessionDocEventHub {
     const write = (chunk: Uint8Array): boolean =>
       byteBoundedWrite(controllerRef, closed, chunk, this.maxPendingBytes)
 
-    /** shutdown register handle;provider phase (not yet register) is undefined, delete idempotent. */
+    /** Stream handle registered on shutdown; undefined during provider phase (delete is idempotent). */
     let streamEntry: SessionDocStreamEntry | undefined
     const shutdown = (): void => {
       if (closed) return
@@ -856,7 +849,7 @@ export class SessionDocEventHub {
       keepaliveTimer = startKeepaliveInterval(this.keepaliveMs, write, shutdown)
     }
 
-    // first subscribe buffer (and snapshot read the same sync window, do not lose frame; buffer frame keep seq supply conflict refresh filter choose).
+    // Subscribe+buffer first (same sync window as snapshot read so no frames are lost; buffered frames keep seq for deduplication).
     unsubscribe = this.subscribe(options.target, (frame) => {
       if (closed) return
       const chunk = encodeSseChunk('plugin.session_doc.updated', frame)
@@ -865,17 +858,17 @@ export class SessionDocEventHub {
         return
       }
       if (pending.length >= this.maxPending) {
-        // snapshot not yet conflict refresh completely then accumulate press over limit (provider sync heavy publish only then will trigger): explicit closure stream.
+        // Backlog exceeded before snapshot flushed (only possible on synchronous burst in provider): close stream explicitly.
         shutdown()
         return
       }
       pending.push({ seq: frame.seq, chunk })
     })
 
-    // again sync take snapshot (provider failed/already abort: sync unsubscribe, do not create stream, do not fabricate snapshot).
+    // Synchronous snapshot fetch (if provider fails or request aborted: unsubscribe synchronously without creating a stream or faking a snapshot).
     let snap: SessionDocSnapshot
     try {
-      if (request.signal.aborted) throw new HelmError('aborted', 'subscribe establish before request interrupted', 499)
+      if (request.signal.aborted) throw new HelmError('aborted', 'request aborted before subscription was established', 499)
       snap = options.snapshot()
     } catch (error) {
       shutdown()
@@ -887,7 +880,7 @@ export class SessionDocEventHub {
 
     return sseResponse({
       start: (controller) => {
-        // without byte policy when runtime must is by default control (original inline construct the same fact).
+        // Without a byte queuing strategy at construction, controller is always the default controller (preserves original behavior).
         controllerRef = controller as ReadableStreamDefaultController<Uint8Array>
         if (closed) {
           closeControllerQuietly(controllerRef)
@@ -898,8 +891,8 @@ export class SessionDocEventHub {
           return
         }
         request.signal.addEventListener('abort', shutdown)
-        // subscribe buffer already establish and snapshot already take set: first first frame snapshot, again conflict refresh seq update
-        // buffer frame (seq <= snapshot.seq already body now snapshot in, heavy i.e. duplicate).
+        // Buffered subscription and snapshot are ready: emit snapshot first, then flush newer buffered frames
+        // (frames with seq <= snapshot.seq are already reflected in the snapshot and skipped to avoid duplicates).
         if (!write(snapshotChunk)) {
           shutdown()
           return
@@ -1020,7 +1013,7 @@ export class SessionDocEventHub {
     const snapshotChunks: Uint8Array[] = []
     try {
       if (request.signal.aborted) {
-        throw new HelmError('aborted', 'subscribe establish before request interrupted', 499)
+        throw new HelmError('aborted', 'request aborted before subscription was established', 499)
       }
       for (const target of targets) {
         const key = SessionDocEventHub.keyOf(target)

@@ -24,7 +24,7 @@ import { Fragment, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolEditDiff } from '@helm/protocol/browser'
 import { HelmIcon, CopyButton } from '@helm/plugin-client'
-import { useHelmStore } from '../lib/store-context.js'
+import { useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatBytes } from '../lib/format.js'
 import { SyntaxCode } from './SyntaxCode.js'
@@ -277,7 +277,7 @@ function RawToolData({ tool, resultFetch, defaultOpen = false }: { tool: ToolTra
           {inputJson !== undefined ? (
             <div>
               <div className="trace-code-head"><span className="trace-section-label">{t('conv.raw.inputJson')}</span><CopyButton text={inputJson} label={t('conv.raw.copyInputJson')} /></div>
-              <pre className="code-block-pre code-block-pre-flush">{inputJson}</pre>
+              <pre className="code-block-pre">{inputJson}</pre>
             </div>
           ) : null}
           {tool.resultText !== undefined ? (
@@ -286,14 +286,14 @@ function RawToolData({ tool, resultFetch, defaultOpen = false }: { tool: ToolTra
                 <span className="trace-section-label">{t('conv.raw.output')}</span>
                 <ResultCopyGate text={tool.resultText} label={t('conv.raw.copyOutput')} tool={tool} resultFetch={resultFetch} />
               </div>
-              <pre className="code-block-pre code-block-pre-flush">{tool.resultText}</pre>
+              <pre className="code-block-pre">{tool.resultText}</pre>
               {tool.resultTruncation !== undefined ? <TruncatedOutputFooter tool={tool} resultFetch={resultFetch} /> : null}
             </div>
           ) : null}
           {structuredJson !== undefined ? (
             <div>
               <div className="trace-code-head"><span className="trace-section-label">{t('conv.raw.structuredJson')}</span><CopyButton text={structuredJson} label={t('conv.raw.copyStructured')} /></div>
-              <pre className="code-block-pre code-block-pre-flush">{structuredJson}</pre>
+              <pre className="code-block-pre">{structuredJson}</pre>
             </div>
           ) : null}
         </div>
@@ -331,7 +331,7 @@ function EditToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
     return (
       <>
         <div className="trace-section-label">{t('conv.edit.errorLabel', { path: inputPath !== undefined ? ` · ${inputPath}` : '' })}</div>
-        <pre className="code-block-pre code-block-pre-flush trace-error-pre">
+        <pre className="code-block-pre trace-error-pre">
           {tool.resultText !== undefined && tool.resultText !== '' ? tool.resultText : t('conv.edit.noErrorDetails')}
         </pre>
         {tool.resultTruncation !== undefined ? <TruncatedOutputFooter tool={tool} resultFetch={resultFetch} /> : null}
@@ -406,7 +406,7 @@ function WriteToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
       </div>
       {failed ? (
         <>
-          <pre className="code-block-pre code-block-pre-flush trace-error-pre">
+          <pre className="code-block-pre trace-error-pre">
             {tool.resultText !== undefined && tool.resultText !== '' ? tool.resultText : t('conv.edit.noErrorDetails')}
           </pre>
           {tool.resultTruncation !== undefined ? <TruncatedOutputFooter tool={tool} resultFetch={resultFetch} /> : null}
@@ -451,7 +451,7 @@ function ReadToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
     return (
       <>
         <div className="trace-section-label">{t('conv.read.failed')}</div>
-        <pre className="code-block-pre code-block-pre-flush trace-error-pre">
+        <pre className="code-block-pre trace-error-pre">
           {tool.resultText !== undefined && tool.resultText !== '' ? tool.resultText : t('conv.edit.noErrorDetails')}
         </pre>
         {tool.resultTruncation !== undefined ? <TruncatedOutputFooter tool={tool} resultFetch={resultFetch} /> : null}
@@ -476,7 +476,7 @@ function ReadToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
       {data.isSpill ? (
         <>
           <div className="trace-section-label">{t('conv.read.withArtifacts')}</div>
-          <pre className="code-block-pre code-block-pre-flush">{shown}</pre>
+          <pre className="code-block-pre">{shown}</pre>
           {truncated ? (
             <TruncatedOutputFooter
               tool={tool}
@@ -570,7 +570,7 @@ function BashToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
       ) : (
         <>
           <div className="trace-section-label">{tool.status === 'running' ? t('conv.bash.outputExecuting') : t('conv.bash.output')}</div>
-          <pre className="code-block-pre code-block-pre-flush">{expanded ? data.output : slice.visible}</pre>
+          <pre className="code-block-pre">{expanded ? data.output : slice.visible}</pre>
           {tool.resultTruncation !== undefined ? (
             <TruncatedOutputFooter
               tool={tool}
@@ -614,7 +614,7 @@ function GenericToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
               <Fragment key={entry.key}>
                 <span className="kv-key">{entry.key}</span>
                 {entry.block ? (
-                  <pre className="kv-val trace-kv-block code-block-pre code-block-pre-flush">{entry.value}</pre>
+                  <pre className="kv-val trace-kv-block code-block-pre">{entry.value}</pre>
                 ) : (
                   <span className="kv-val">{entry.value}</span>
                 )}
@@ -626,7 +626,7 @@ function GenericToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
       {slice !== undefined ? (
         <>
           <div className="trace-section-label">{t('conv.generic.output')}</div>
-          <pre className="code-block-pre code-block-pre-flush">
+          <pre className="code-block-pre">
             {resultExpanded ? tool.resultText : slice.visible}
           </pre>
           {tool.resultTruncation !== undefined ? (
@@ -653,7 +653,7 @@ function GenericToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
 // ---------------------------------------------------------------------------
 
 function ArtifactEntry({ tool, conversationId }: { tool: ToolTrace; conversationId: number }): ReactNode {
-  const store = useHelmStore()
+  const { setActiveModal } = useStoreActions()
   const { t } = useWebLocale()
   const artifactRef = tool.artifactRef
   if (artifactRef === undefined) return null
@@ -661,7 +661,7 @@ function ArtifactEntry({ tool, conversationId }: { tool: ToolTrace; conversation
     <button
       type="button"
       className="btn btn-sm btn-primary"
-      onClick={() => store.setActiveModal({ kind: 'artifact-preview', artifactId: artifactRef, conversationId })}
+      onClick={() => setActiveModal({ kind: 'artifact-preview', artifactId: artifactRef, conversationId })}
     >
       <HelmIcon name="external-link" size={12} />
       {t('conv.tool.openFullArtifact', { id: artifactRef })}

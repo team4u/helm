@@ -1,7 +1,6 @@
 /**
- * host-api: construct plugin perspective ctx.host gate side.
- * all method explicit forwarding to backend port, and by feature can group wrap:
- * profiles / skills / nodeIpc / secrets / plugins / env / conversations / agents / asks / events / triggers / actions / artifacts / models
+ * host-api: constructs the plugin-facing `ctx.host` facade forwarding explicitly to backend ports:
+ * profiles / skills / nodeIpc / secrets / plugins / env / conversations / agents / asks / events / triggers / actions / artifacts / models.
  */
 import {
   HelmError,
@@ -31,6 +30,7 @@ export interface HostApiDependencies {
   plugins: Map<string, PluginState>;
   getConfig(pluginId: string): Record<string, unknown>;
   setConfig(pluginId: string, value: Record<string, unknown>): Promise<void>;
+  onConfigChanged?: (pluginId: string) => void;
   list(): PluginSummary[];
   listUi(): PluginUiContribution[];
   listActions(): ActionManifest[];
@@ -50,27 +50,14 @@ export interface HostApiDependencies {
 }
 
 /**
- * nodeFetch abandon placement Response determinism asset ownership (without GC security network):
- *
- * plugin gets wrap Response after to body asset unique converge path:
- * - consume: read system body until EOF(stream self however close)→ counter end;
- * - cancel:response.body.cancel() / reader.cancel()(contains Response construct after abandon placement before
- *   explicit cancel)→ counter end;
- * - transfer failed: underlying stream error → wrap stream error → counter end;
- * - host close/dispose: underlying tunnel split destroy make body stream with error final → counter end,
- *   never pending;
- * - abandon placement (since do not consume also do not cancel): counter keep - - plugin therefore 409
- *   plugin_has_live_tasks cannot deactivate/reload, this is abandon placement not close asset real proxy price,
- *   never use FinalizationRegistry of class non- determinism GC fall back leak leak mask decorate into available.
- * header reach do not end counter (SSE long stream all process in-flight), deactivate/reload hard block assert cannot force,
- * also do not with disable automatically abort bypass 409.
+ * Deterministic resource accounting for `nodeFetch` Response bodies (no GC-based fallback):
+ * - Consumed to EOF, canceled via `body.cancel()`/`reader.cancel()`, failed on stream error, or aborted
+ *   on host `dispose()`/`close` -> decrements active task counter;
+ * - Abandoned without consuming or canceling -> keeps counter alive, blocking `disable`/`reload` with
+ *   `409 plugin_has_live_tasks`. Headers alone do not settle the task (SSE streams stay tracked throughout).
  */
 
-/**
- * setConfig read-together-write serial chain (per-plugin):backend.setPluginConfig is whole value
- * write (without atomic read-modify-write port), concurrency patch must in this wrap layer serial,
- * otherwise after write override before write lose update.
- */
+/** Per-plugin read-modify-write chain for `setConfig` (serializes concurrent patches over whole-value `setPluginConfig`). */
 const pluginConfigWriteChains = new Map<string, Promise<unknown>>();
 
 function enqueuePluginConfigWrite(pluginId: string, op: () => Promise<void>): Promise<void> {
@@ -88,9 +75,8 @@ function enqueuePluginConfigWrite(pluginId: string, op: () => Promise<void>): Pr
 }
 
 /**
- * executionEnv subject to control proxy: each method invoke when re- validate cycle (deactivate/re-enable after old
- * env proxy immediately expires), async operation task trace; never bare return backend original env instance.
- * proxy keep SDK ExecutionEnv complete shape (method level wrap, contains optional method).
+ * Controlled `ExecutionEnv` proxy: validates epoch on every method call (invalidated on disable/re-enable)
+ * and tracks async calls via `PluginTaskTracker`, preserving full `ExecutionEnv` method signatures.
  */
 export function createControlledExecutionEnv(
   state: PluginState,
@@ -120,10 +106,9 @@ export function createControlledExecutionEnv(
 }
 
 /**
- * construct plugin perspective ctx.host: all method explicit forwarding to backend port.
- * lifecycle asset (manageConversation / onEvent / registerAskSeqResolver)
- * via acquire wrap:epoch guard + idempotent release + deactivate unify solve except;
- * onEvent each time event call back count in-flight task protect (event type enter task tag).
+ * Constructs `ctx.host`: forwards every method to backend ports, wraps lifecycle resources
+ * (`manageConversation` / `onEvent` / `registerAskSeqResolver`) with epoch guards and idempotent release,
+ * and tracks in-flight event callbacks in `PluginTaskTracker`.
  */
 export function wrapHostApi(
   state: PluginState,
@@ -134,11 +119,9 @@ export function wrapHostApi(
   const backend = deps.backend;
 
   /**
-   * each time invoke cycle guard;what diagnose.
-   * subject to control stop window exception: this cycle, host is now await this plugin service stop chain during, only
-   * STOP_WINDOW_HOST_CALLS(read/cancel/across node clean up/eventually event) let through - - contains
-   * dispose already placement disposed split destroy path (assertNotDisposed one and exceeds); the rest
-   * invoke (everything new work entry) per refuse, window do not because deactivating all open.
+   * Epoch/lifecycle guard per host call.
+   * During `stopWindow`, only `STOP_WINDOW_HOST_CALLS` (reads, cancellations, cleanup IPC, final events)
+   * are allowed through — including during host `dispose`; all new-work entry points are rejected.
    */
   const guard = (what: string): void => {
     if (
@@ -152,7 +135,7 @@ export function wrapHostApi(
     deps.assertContextUsable(state, epoch, what);
   };
 
-  /** async operation unify: first guard again task (deactivate preflight visible, do not blind spot). */
+  /** Wraps async host calls with lifecycle guard + `PluginTaskTracker` tracking. */
   const tracked = <T>(what: string, op: () => Promise<T>): Promise<T> => {
     guard(what);
     return deps.tracker.withTask(pluginId, what, op);
@@ -171,16 +154,15 @@ export function wrapHostApi(
     };
 
   /**
-   * construct ctx.host.plugins(host plugin governance port): read side and PluginHost manifest same source;
-   * write side along use existing lifecycle, task trace and package manage port. self refer update/remove/disable
-   * in enter target plugin queue before reject;doctor/install/update/remove result unify redaction.
+   * Constructs `ctx.host.plugins`: reads share `PluginHost` state, writes share lifecycle/task/package ports,
+   * self-targeted `update`/`remove`/`disable` fail before entering the plugin queue, and results are redacted.
    */
   const assertPluginsPort = (what: string): BackendPluginsLifecyclePort => {
     guard(`host.plugins.${what}`);
     if (backend.plugins === undefined) {
       throw new HelmError(
         'not_supported',
-        `when before host not connect line plugin governance port (host.plugins.${what} unavailable)`,
+        `Current host has not wired the plugin governance port (host.plugins.${what} unavailable)`,
         501,
         { what },
       );
@@ -192,7 +174,7 @@ export function wrapHostApi(
     if (targetPluginId !== pluginId) return;
     throw new HelmError(
       'plugin_self_lifecycle_forbidden',
-      `plugin ${pluginId} must not in itself run task in${op === 'update' ? 'update' : op === 'remove' ? 'unload' : 'deactivate'}itself (will trigger host lifecycle queue self wait for), please change by human HTTP/CLI or other plugin execute`,
+      `Plugin ${pluginId} cannot ${op} itself from its own task (would deadlock the lifecycle queue); trigger from HTTP/CLI or another plugin`,
       409,
       { pluginId, op },
     );
@@ -268,21 +250,20 @@ export function wrapHostApi(
       ensureSkill: (asset) => tracked('host.skills.ensureSkill', () => backend.skills.ensureSkill(asset, pluginId)),
     },
 
-    // 3. nodeIpc(nodePlatform is kernel optional capability:NodeRegistry can message platform on report,
-    // missing seat when plugin side remote platform unknown, do not guess do not change write).
+    // 3. nodeIpc (`nodePlatform` is optional: NodeRegistry reports known platforms, undefined when offline/unreported).
     nodeIpc: backend.nodeIpc === undefined
       ? {
           isOnline: () => {
             guard('host.nodeIpc.isOnline');
-            throw new HelmError('node_ipc_unavailable', 'host not provide node IPC channel (EnvFabric not connect line)', 501);
+            throw new HelmError('node_ipc_unavailable', 'Host does not provide a node IPC channel (EnvFabric not wired)', 501);
           },
           call: () => {
             guard('host.nodeIpc.call');
-            throw new HelmError('node_ipc_unavailable', 'host not provide node IPC channel (EnvFabric not connect line)', 501);
+            throw new HelmError('node_ipc_unavailable', 'Host does not provide a node IPC channel (EnvFabric not wired)', 501);
           },
           subscribe: () => {
             guard('host.nodeIpc.subscribe');
-            throw new HelmError('node_ipc_unavailable', 'host not provide node IPC channel (EnvFabric not connect line)', 501);
+            throw new HelmError('node_ipc_unavailable', 'Host does not provide a node IPC channel (EnvFabric not wired)', 501);
           },
         }
       : {
@@ -347,18 +328,13 @@ export function wrapHostApi(
           },
         },
 
-    // 3.6 openTunnel: any TCP pass-through tunnel - - lifecycle trace and Duplex store phase align:
-    // begin in create connect before (deactivate preflight visible in-flight establish); after success counter keep to Duplex
-    // close/error/destroy(exactly once end) - - plugin hold has activity tunnel during disable
-    // will by 409 plugin_has_live_tasks reject; establish failed/already destroyed immediately end,
-    // never leak leak counter. deactivate/host dispose when duplex itself by registry/node
-    // swap proxy clean up chain destroy, this in only guarantee counter do not pending.
+    // 3.6 openTunnel: tracks active Duplex tunnels until close/error/destroy (`disable` rejects with 409).
     openTunnel: backend.openTunnel === undefined
       ? ((nodeId: string): Promise<never> => {
           guard(`host.openTunnel:${nodeId}`);
           throw new HelmError(
             'node_tunnel_not_supported',
-            `when before host not connect line node tunnel port (host.openTunnel(${nodeId}) unavailable)`,
+            `Current host has not wired the node tunnel port (host.openTunnel(${nodeId}) unavailable)`,
             501,
             { nodeId },
           );
@@ -366,8 +342,7 @@ export function wrapHostApi(
       : (async (nodeId: string, target: { host?: string; port: number }, signal?: AbortSignal) => {
           guard(`host.openTunnel:${nodeId}`);
           const what = `host.openTunnel:${nodeId}`;
-          // begin first at create connect: cannot use withTask package establish Promise(that will in resolve after
-          // immediately end,Duplex store phase counter reset to zero, deactivate gate shape same virtual set).
+          // Begin tracking before dialing rather than around the connect promise so liveTasks covers the Duplex lifetime.
           deps.tracker.begin(pluginId, what);
           let ended = false;
           const end = (): void => {
@@ -401,17 +376,13 @@ export function wrapHostApi(
           }
         }) as HelmHostOpenTunnelPort,
 
-    // 3.5 nodeFetch: subject to control fetch- - each time invoke guard + in-flight task trace override to body
-    // EOF/cancel/error(header reach do not end task); host close determinism ownership via
-    // hostReleases  owned cleanup(only dispose/close trigger;disable because in-flight
-    // task 409 cannot force, never borrow disable abort). cancel signal by standard fetch
-    // semantics together into (init.signal override Request.signal, explicit null clear inherit).
+    // 3.5 nodeFetch: epoch-guarded fetch tracking response body streams until EOF/cancel/error/dispose.
     nodeFetch: backend.nodeFetch === undefined
       ? ((nodeId: string): typeof fetch => {
           guard(`host.nodeFetch:${nodeId}`);
           throw new HelmError(
             'node_tunnel_not_supported',
-            `when before host not connect line node fetch port (host.nodeFetch(${nodeId}) unavailable)`,
+            `Current host has not wired the node fetch port (host.nodeFetch(${nodeId}) unavailable)`,
             501,
             { nodeId },
           );
@@ -443,14 +414,14 @@ export function wrapHostApi(
                   503,
                 ),
               );
-              // abandon placement body fall back compute: directly end task counter and exhaust force cancel underlying reader.
+              // Fallback cleanup for abandoned bodies: immediately close the task counter and best-effort cancel the underlying reader.
               if (reader !== undefined) reader.cancel(hostClose.signal.reason).catch(() => {});
               end();
             };
-            // a await before register (host dispose arrange empty hostReleases when trigger).
+            // Register before the first await so host dispose triggers it while draining `hostReleases`.
             state.hostReleases.add(release);
-            // standard fetch override semantics:init.signal override Request.signal; explicit null
-            // clear inherit signal (by override old Request signal abort must not cancel this time invoke).
+            // Standard fetch override semantics: `init.signal` overrides `Request.signal`, and explicit `null`
+            // clears the inherited signal (aborting the overridden `Request.signal` must not cancel this call).
             const callerSignal: AbortSignal | null | undefined =
               init?.signal !== undefined
                 ? init.signal
@@ -495,7 +466,7 @@ export function wrapHostApi(
                 });
                 return wrapped;
               } catch (error) {
-                // wrap failed (body already lock etc.): exhaust force cancel underlying stream and end counter, never pending leak leak
+                // Stream wrapping failed (e.g. body already locked): best-effort cancel the underlying stream and close the counter so nothing leaks.
                 response.body.cancel().catch(() => {});
                 end();
                 throw error;
@@ -523,6 +494,7 @@ export function wrapHostApi(
       return enqueuePluginConfigWrite(pluginId, async () => {
         const current = deps.getConfig(pluginId);
         await backend.setPluginConfig(pluginId, { ...current, ...patch });
+        deps.onConfigChanged?.(pluginId);
       });
     },
     plugins: pluginsPort,
@@ -587,15 +559,14 @@ export function wrapHostApi(
         Promise.resolve(backend.submitInput(id, text, opts)),
       );
     },
-    // 7.5 guarded change port (automatically hard rule kernel execute layer): not connect line when explicit 501,
-    // never static default fall back ordinary submitInput/abortConversation(that will bypass kernel atomic re-check).
+    // 7.5 Guarded mutation ports (enforced by kernel): return explicit 501 when unwired; never fall back to unguarded variants.
     submitInputGuarded: (id, text, opts, mutationGuard) => {
       guard('host.submitInputGuarded');
       const port = backend.submitInputGuarded;
       if (port === undefined) {
         throw new HelmError(
           'not_supported',
-          'when before host not connect line automatically guarded commit port (host.submitInputGuarded)',
+          'Current host has not wired guarded input submission (host.submitInputGuarded)',
           501,
           { conversationId: id },
         );
@@ -626,7 +597,7 @@ export function wrapHostApi(
       if (port === undefined) {
         throw new HelmError(
           'not_supported',
-          'when before host not connect line automatically guarded abort port (host.abortConversationGuarded)',
+          'Current host has not wired guarded abort (host.abortConversationGuarded)',
           501,
           { conversationId: id },
         );

@@ -1,19 +1,13 @@
 /**
- * zero side effect only read self inspect (helm-node doctor).
+ * Read-only node diagnostics (`helm-node doctor`; zero disk writes, zero side effects).
  *
- * four items check all only read (zero disk write, zero break operation):
- * 1. identity:`<dataDir>/node.json` store in, structure legal (readNodeIdentity) and
- *    non- win32 platform permission is 0600; file missing/corrupt/permission wide all report error and to fix
- *    hint, never output token;
- * 2. privilege: when before account household is root or tool prepare exempt sudo when explicit warn(Agent bash 
- *    own whole machine most high permission, produce/edge environment create protocol subject to limit account household), otherwise ok;
- * 3. hub: to hubUrl start once real /ws/node?nodeId=<id> WebSocket grasp manually, measure
- *    RTT after immediately close connect. only probe to grasp manually layer,**never send register**:Hub register table
- *    by nodeId single connect, same nodeId register will top replace (evict) online guard connect and
- *    mistakenly kill its in-flight command - - diagnose must be pure only read; token valid do not by this check decide,
- *    with daemon itself register/heartbeat result is allow;
- * 4. herdr_ipc: parse local machine Herdr IPC end point and net.connect(1s timeout) probe can reach;
- *    socket missing/not run only mark info(optional capability, do not block assert basis node execute).
+ * Checks:
+ * 1. `identity`: `<dataDir>/node.json` exists, parses cleanly, and has `0600` permissions on POSIX;
+ * 2. `privilege`: warns if running as root or with passwordless `sudo -n true` (Agent bash runs
+ *    with the daemon's privileges);
+ * 3. `hub`: performs a `/ws/node?nodeId=<id>` WebSocket handshake to measure RTT and closes
+ *    immediately **without sending `register`** (which would evict a live daemon session);
+ * 4. `herdr_ipc`: probes the local Herdr IPC socket (`info` when absent, since it is optional).
  */
 
 import net from 'node:net';
@@ -46,18 +40,16 @@ export interface NodeDoctorOptions {
   dataDir?: string;
   hubUrl?: string;
   env?: NodeJS.ProcessEnv;
-  /** test can inject permission probe (default check process.getuid?.() === 0 or `sudo -n true`). */
+  /** Test-only override for privilege checks (defaults to `process.getuid?.() === 0` / `sudo -n true`). */
   checkPrivilege?: () => Promise<{ isRoot: boolean; passwordlessSudo: boolean }>;
-  /** Hub connect through probe timeout (milli second, by default 5000). */
+  /** Hub WebSocket probe timeout in ms (defaults to 5000). */
   connectTimeoutMs?: number;
 }
 
-/** exempt sudo probe timeout. */
 const SUDO_PROBE_TIMEOUT_MS = 1_500;
-/** Herdr IPC probe timeout. */
 const HERDR_IPC_PROBE_TIMEOUT_MS = 1_000;
 
-/** run `sudo -n true`(never interaction wait for password); timeout/failed all by do not tool prepare exempt sudo handle. */
+/** Run `sudo -n true` non-interactively; timeouts and failures report `false`. */
 async function probePasswordlessSudo(env: NodeJS.ProcessEnv): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
     let settled = false;
@@ -82,7 +74,7 @@ async function probePasswordlessSudo(env: NodeJS.ProcessEnv): Promise<boolean> {
       try {
         child.kill('SIGKILL');
       } catch {
-        // already exit.
+        // Already exited.
       }
       finish(false);
     }, SUDO_PROBE_TIMEOUT_MS);
@@ -91,7 +83,7 @@ async function probePasswordlessSudo(env: NodeJS.ProcessEnv): Promise<boolean> {
   });
 }
 
-/** identity check: store in + structure legal (re- use readNodeIdentity)+ non- win32 permission 0600. */
+/** Check `<dataDir>/node.json` existence, validity, and `0600` permissions on POSIX. */
 async function checkIdentity(dataDir: string): Promise<NodeDoctorCheck & { identity: Awaited<ReturnType<typeof readNodeIdentity>> }> {
   const file = path.join(dataDir, 'node.json');
   let identity: Awaited<ReturnType<typeof readNodeIdentity>> = null;
@@ -101,7 +93,7 @@ async function checkIdentity(dataDir: string): Promise<NodeDoctorCheck & { ident
     return {
       id: 'identity',
       status: 'error',
-      message: `node identity file cannot read (${error instanceof Error ? error.message : String(error)}); please human confirm after delete ${file} and re- helm-node connect <hubUrl> --token <token> bind set`,
+      message: `node identity file is unreadable (${error instanceof Error ? error.message : String(error)}); inspect and remove ${file}, then re-bind with helm-node connect <hubUrl> --token <token>`,
       identity,
     };
   }
@@ -109,7 +101,7 @@ async function checkIdentity(dataDir: string): Promise<NodeDoctorCheck & { ident
     return {
       id: 'identity',
       status: 'error',
-      message: `not found node identity file ${file}; please first helm-node connect <hubUrl> --token <token> bind set JOIN token`,
+      message: `node identity file not found at ${file}; bind a JOIN token first with helm-node connect <hubUrl> --token <token>`,
       identity,
     };
   }
@@ -121,7 +113,7 @@ async function checkIdentity(dataDir: string): Promise<NodeDoctorCheck & { ident
       return {
         id: 'identity',
         status: 'error',
-        message: `cannot read identity file permission (${file}):${error instanceof Error ? error.message : String(error)}`,
+        message: `failed to read identity file permissions (${file}): ${error instanceof Error ? error.message : String(error)}`,
         identity,
       };
     }
@@ -129,7 +121,7 @@ async function checkIdentity(dataDir: string): Promise<NodeDoctorCheck & { ident
       return {
         id: 'identity',
         status: 'error',
-        message: `node identity file permission is ${mode.toString(8).padStart(3, '0')}, want seek 0600(contains secret token must not for other user can read); please execute chmod 600 ${file} fix`,
+        message: `node identity file permissions are ${mode.toString(8).padStart(3, '0')}, expected 0600 (contains secret token); fix with chmod 600 ${file}`,
         details: { nodeId: identity.nodeId, mode: mode.toString(8).padStart(3, '0') },
         identity,
       };
@@ -137,7 +129,7 @@ async function checkIdentity(dataDir: string): Promise<NodeDoctorCheck & { ident
     return {
       id: 'identity',
       status: 'ok',
-      message: `node identity valid (nodeId=${identity.nodeId}, permission 0600)`,
+      message: `node identity valid (nodeId=${identity.nodeId}, mode 0600)`,
       details: { nodeId: identity.nodeId, mode: '0600' },
       identity,
     };
@@ -151,7 +143,7 @@ async function checkIdentity(dataDir: string): Promise<NodeDoctorCheck & { ident
   };
 }
 
-/** privilege check:root / exempt sudo i.e. warn(honest notify Agent bash permission boundary). */
+/** Warn if the current user is root or has passwordless sudo. */
 async function checkPrivilege(
   env: NodeJS.ProcessEnv,
   injected?: () => Promise<{ isRoot: boolean; passwordlessSudo: boolean }>,
@@ -169,20 +161,24 @@ async function checkPrivilege(
       id: 'privilege',
       status: 'warn',
       message:
-        'when before account household tool prepare root or exempt sudo permission,Agent execute bash tool own whole machine most high permission; produce/edge environment create protocol use subject to limit account household run',
+        'current account has root or passwordless sudo privileges, granting Agent bash tools full machine access; use an unprivileged account in production or edge environments',
       details: { isRoot: probe.isRoot, passwordlessSudo: probe.passwordlessSudo },
     };
   }
-  return { id: 'privilege', status: 'ok', message: 'when before account household do not tool prepare root or exempt sudo permission (subject to limit permission run)' };
+  return {
+    id: 'privilege',
+    status: 'ok',
+    message: 'current account does not have root or passwordless sudo privileges (least-privilege execution)',
+  };
 }
 
-/** hub check: real /ws/node grasp manually (zero parasitic store, zero top replace), measure RTT after immediately close. */
+/** Probe `/ws/node` handshake reachability and RTT without sending `register` (so live daemons are not evicted). */
 async function checkHub(hubUrl: string, nodeId: string, connectTimeoutMs: number): Promise<NodeDoctorCheck> {
   let parsed: URL;
   try {
     parsed = new URL(hubUrl);
   } catch {
-    return { id: 'hub', status: 'error', message: `Hub address cannot parse:${hubUrl}` };
+    return { id: 'hub', status: 'error', message: `invalid Hub URL: ${hubUrl}` };
   }
   const wsUrl = `${parsed.protocol === 'https:' ? 'wss' : 'ws'}://${parsed.host}${parsed.pathname.replace(/\/+$/, '')}/ws/node?nodeId=${encodeURIComponent(nodeId)}`;
   return await new Promise<NodeDoctorCheck>((resolve) => {
@@ -196,12 +192,12 @@ async function checkHub(hubUrl: string, nodeId: string, connectTimeoutMs: number
       try {
         socket.terminate();
       } catch {
-        // already close.
+        // Already closed.
       }
       resolve(check);
     };
     const timer = setTimeout(
-      () => finish({ id: 'hub', status: 'error', message: `Hub connect through probe timeout (${connectTimeoutMs}ms):${hubUrl}` }),
+      () => finish({ id: 'hub', status: 'error', message: `Hub reachability probe timed out (${connectTimeoutMs}ms): ${hubUrl}` }),
       connectTimeoutMs,
     );
     socket.once('open', () => {
@@ -209,8 +205,7 @@ async function checkHub(hubUrl: string, nodeId: string, connectTimeoutMs: number
       finish({
         id: 'hub',
         status: 'ok',
-        // such as declaration probe boundary: only read grasp manually do not validate token (register will top replace online guard connect).
-        message: `Hub connect through normal (${hubUrl}, grasp manually to return ${rttMs}ms; only read probe not sent register, do not validate token)`,
+        message: `Hub reachable (${hubUrl}, handshake RTT ${rttMs}ms; read-only probe without register — token not validated)`,
         details: { hubUrl, rttMs },
       });
     });
@@ -218,27 +213,27 @@ async function checkHub(hubUrl: string, nodeId: string, connectTimeoutMs: number
       try {
         res.resume();
       } catch {
-        // ignore.
+        // Ignore.
       }
-      finish({ id: 'hub', status: 'error', message: `Hub reject WebSocket grasp manually (HTTP ${res.statusCode}):${hubUrl}`, details: { hubUrl } });
+      finish({ id: 'hub', status: 'error', message: `Hub rejected WebSocket handshake (HTTP ${res.statusCode}): ${hubUrl}`, details: { hubUrl } });
     });
     socket.once('error', (error) => {
       finish({
         id: 'hub',
         status: 'error',
-        message: `Hub failed to connect (${error instanceof Error ? error.message : String(error)}):${hubUrl}`,
+        message: `failed to connect to Hub (${error instanceof Error ? error.message : String(error)}): ${hubUrl}`,
         details: { hubUrl },
       });
     });
     socket.once('close', () => {
       if (!settled) {
-        finish({ id: 'hub', status: 'error', message: `Hub connect in grasp manually complete before close:${hubUrl}`, details: { hubUrl } });
+        finish({ id: 'hub', status: 'error', message: `Hub connection closed before handshake completed: ${hubUrl}`, details: { hubUrl } });
       }
     });
   });
 }
 
-/** herdr_ipc check: parse end point and probe can reach (socket missing only info, optional capability). */
+/** Probe local Herdr IPC socket reachability (`info` when absent, since Herdr is optional). */
 async function checkHerdrIpc(env: NodeJS.ProcessEnv): Promise<NodeDoctorCheck> {
   let endpoint: string;
   try {
@@ -247,7 +242,7 @@ async function checkHerdrIpc(env: NodeJS.ProcessEnv): Promise<NodeDoctorCheck> {
     return {
       id: 'herdr_ipc',
       status: 'info',
-      message: `cannot parse Herdr IPC end point:${error instanceof Error ? error.message : String(error)}`,
+      message: `unable to resolve Herdr IPC endpoint: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
   return await new Promise<NodeDoctorCheck>((resolve) => {
@@ -261,22 +256,21 @@ async function checkHerdrIpc(env: NodeJS.ProcessEnv): Promise<NodeDoctorCheck> {
       resolve(check);
     };
     const timer = setTimeout(
-      () => finish({ id: 'herdr_ipc', status: 'info', message: 'not detect to run in Herdr IPC(optional capability, does not affect basis node execute)', details: { endpoint } }),
+      () => finish({ id: 'herdr_ipc', status: 'info', message: 'running Herdr IPC not detected (optional capability; does not affect core node execution)', details: { endpoint } }),
       HERDR_IPC_PROBE_TIMEOUT_MS,
     );
     socket.once('connect', () => {
-      finish({ id: 'herdr_ipc', status: 'ok', message: `Herdr IPC can reach (${endpoint})`, details: { endpoint } });
+      finish({ id: 'herdr_ipc', status: 'ok', message: `Herdr IPC reachable (${endpoint})`, details: { endpoint } });
     });
     socket.once('error', () => {
-      finish({ id: 'herdr_ipc', status: 'info', message: 'not detect to run in Herdr IPC(optional capability, does not affect basis node execute)', details: { endpoint } });
+      finish({ id: 'herdr_ipc', status: 'info', message: 'running Herdr IPC not detected (optional capability; does not affect core node execution)', details: { endpoint } });
     });
   });
 }
 
 /**
- * execute only read self inspect and return report:ok when and only when no any check.status === 'error'
- * (warn and info do not placement false).hubUrl parse priority: explicit parameter > env.HELM_HUB_URL
- * > identity.hubUrl.
+ * Run read-only diagnostics and return a report (`ok` is true iff no check has status `'error'`).
+ * `hubUrl` precedence: explicit option -> `env.HELM_HUB_URL` -> `identity.hubUrl`.
  */
 export async function runNodeDoctor(options: NodeDoctorOptions = {}): Promise<NodeDoctorReport> {
   const env = options.env ?? process.env;
@@ -285,7 +279,7 @@ export async function runNodeDoctor(options: NodeDoctorOptions = {}): Promise<No
   const checks: NodeDoctorCheck[] = [];
 
   const identityCheck = await checkIdentity(dataDir);
-  // internal identity snapshot (contains token) only used to after continue check, never enter for outside report.
+  // Strip private identity snapshot (contains token) before adding check to report.
   const { identity: _identity, ...identityPublic } = identityCheck;
   void _identity;
   checks.push(identityPublic);
@@ -302,8 +296,8 @@ export async function runNodeDoctor(options: NodeDoctorOptions = {}): Promise<No
       status: 'error',
       message:
         identity === null
-          ? 'identity invalid, cannot enter row Hub connect through probe'
-          : 'not config Hub address (--hub, environment variable HELM_HUB_URL or since bind set identity hubUrl)',
+          ? 'identity invalid; skipping Hub reachability probe'
+          : 'Hub URL not configured (pass --hub, set HELM_HUB_URL, or bind via helm-node connect)',
     });
   } else {
     checks.push(await checkHub(hubUrl, identity.nodeId, connectTimeoutMs));

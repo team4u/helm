@@ -1,14 +1,13 @@
 /**
- * across platform host machine Bash Shell probe (pure orchestration,I/O via ShellProbeIo inject).
+ * Cross-platform host Bash shell detection (pure orchestration; I/O is injected via `ShellProbeIo`).
  *
- * resolve Windows host machine in install WSL after by `C:\Windows\System32\bash.exe` truncate recklessly issue:
- * 1. by common install location in order probe Git Bash(contains ProgramW6432 / ProgramFiles /
- *    ProgramFiles(x86) / LOCALAPPDATA / Scoop), again use `where.exe git.exe`
- *    reverse push non- mark symbol or self define directory in Git Bash;
- * 2. scan `where.exe bash.exe` all row, skip System32 / Sysnative /
- *    WindowsApps etc. WSL start - - never let Windows host machine implicit WSL;
- * 3. if user explicit pass `customShellPath`, still respect explicit config (contains legacy WSL `-s`
- *    stdin transfer pattern).
+ * Solves `C:\Windows\System32\bash.exe` hijacking on Windows hosts with WSL installed:
+ * 1. Probes standard Git Bash install locations (ProgramW6432 / ProgramFiles / ProgramFiles(x86) /
+ *    LOCALAPPDATA / Scoop), then derives non-standard Git Bash paths from `where.exe git.exe`.
+ * 2. Scans `where.exe bash.exe` while skipping WSL launchers under System32 / Sysnative /
+ *    WindowsApps so Windows hosts never silently fall into WSL.
+ * 3. If the caller passes an explicit `customShellPath`, honors it (including legacy WSL `-s`
+ *    stdin transport).
  */
 import { win32 } from 'node:path'
 import { getEnvEntry } from './process-env.js'
@@ -34,7 +33,7 @@ export interface ShellProbeIo {
 
 const SHELL_PROBE_TIMEOUT_MS = 5000
 
-/** decide is otherwise is Windows old edition WSL start (System32/Sysnative under bash.exe, must via stdin pass command). */
+/** Returns true if `path` points to a legacy Windows WSL bash launcher (`System32`/`Sysnative/bash.exe`), which requires stdin transport. */
 export function isLegacyWslBashPath(
   path: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
@@ -47,11 +46,11 @@ export function isLegacyWslBashPath(
       (directory) => normalized === win32.join(systemRoot, directory, 'bash.exe').toLowerCase(),
     )
   }
-  // Windows directory unknown when only by convention start path fall back.
+  // Fall back to conventional launcher paths only when SystemRoot is unknown.
   return /^[a-z]:\\windows\\(?:system32|sysnative)\\bash\.exe$/.test(normalized)
 }
 
-/** decide is otherwise is WSL start or Microsoft Store WSL alias (forbidden host machine implicit choose in). */
+/** Returns true if `path` is a WSL launcher or Microsoft Store WSL alias (excluded from implicit Windows probing). */
 export function isWslBashLauncherPath(
   path: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
@@ -69,7 +68,7 @@ export function isWslBashLauncherPath(
   return normalized.endsWith('\\microsoft\\windowsapps\\bash.exe')
 }
 
-/** construct bash start parameter config:legacy WSL bash.exe away `-s` + stdin, the rest away `-c` + argv. */
+/** Build shell launch args: `-s` via stdin for legacy WSL `bash.exe`, `-c` via argv otherwise. */
 export function getBashShellConfig(
   shell: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
@@ -86,7 +85,7 @@ function pushUniqueWin32Path(list: string[], seen: Set<string>, candidate: strin
   list.push(candidate)
 }
 
-/** from `git.exe` path reverse push the same time install Git Bash choose path (support standard install,mingw64 and Scoop). */
+/** Derive sibling Git Bash candidate paths from a `git.exe` path (standard installs, mingw64, and Scoop). */
 export function gitBashCandidatesFromGitExe(gitExePath: string): string[] {
   const normalized = win32.normalize(gitExePath)
   const dir1 = win32.dirname(normalized)
@@ -140,7 +139,7 @@ async function resolveWindowsWhereCommand(io: ShellProbeIo): Promise<string> {
   return 'where'
 }
 
-/** via inject ShellProbeIo parse host machine available bash config (never static default fall back enter WSL). */
+/** Resolve an available bash shell via injected `ShellProbeIo` (never silently falls back into WSL). */
 export async function resolveShellConfigWithIo(
   customShellPath: string | undefined,
   io: ShellProbeIo,

@@ -9,7 +9,7 @@
  * trailing locale (defaulting to en so existing English assertions stay
  * valid) and resolve via copy.ts against it.
  */
-import type { TimelineRendererProps, ToolViewProps } from '@helm/protocol'
+import type { ConversationSummary, TimelineRendererProps, ToolViewProps } from '@helm/protocol'
 import { DEFAULT_HELM_LOCALE, resolveLocalizedText, type HelmLocale } from '@helm/plugin-client'
 
 import { SA_OUTCOME_UNKNOWN } from './copy.ts'
@@ -126,4 +126,37 @@ export function outcomeTone(outcome: string | undefined): 'ok' | 'err' | 'warn' 
 export function outcomeLabel(outcome: string | undefined, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
   if (outcome === undefined || outcome === '') return resolveLocalizedText(SA_OUTCOME_UNKNOWN, locale)
   return outcome
+}
+
+/** Build a lookup map from conversation id to summary (over live useConversations()). */
+export function buildConversationMap(conversations: ReadonlyArray<ConversationSummary>): Map<number, ConversationSummary> {
+  const map = new Map<number, ConversationSummary>()
+  for (const c of conversations) {
+    map.set(c.id, c)
+  }
+  return map
+}
+
+/**
+ * Resolve a meaningful conversation title from the live summaries map.
+ * Returns undefined when the conversation is missing (deleted/archived), blank,
+ * or only holds a default placeholder (`subagent N` / `子代理 N` / `子会话 N`)
+ * so callers render `#N` honestly without fabricating a name.
+ */
+export function resolveConversationTitle(
+  conversationsById: ReadonlyMap<number, ConversationSummary>,
+  conversationId: number,
+): string | undefined {
+  const conv = conversationsById.get(conversationId)
+  if (conv === undefined) return undefined
+  const trimmed = conv.title.trim()
+  if (trimmed === '') return undefined
+  if (
+    trimmed.toLowerCase() === `subagent ${conversationId}` ||
+    trimmed === `子代理 ${conversationId}` ||
+    trimmed === `子会话 ${conversationId}`
+  ) {
+    return undefined
+  }
+  return trimmed
 }

@@ -7,7 +7,7 @@
 import { DEFAULT_HELM_LOCALE, resolveLocalizedText, type HelmLocale } from '@helm/plugin-client'
 import type { ConversationSummary } from '@helm/protocol'
 import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts.js'
-import { firstLineOf, formatShortModelName, inputString, inspectString } from './model-format.ts'
+import { firstLineOf, formatShortModelName, inputString, inspectString, isPlaceholderRunName } from './model-format.ts'
 import {
   DEFAULT_PHASE_TITLE,
   NODE_QUEUED,
@@ -81,8 +81,23 @@ export function isBackgroundWorkflowResultHandle(
   return record?.['background'] === true
 }
 
+/** Readable display name for a workflow run: non-placeholder name > first line of description > run.id. */
+export function resolveWorkflowRunDisplayName(
+  run: Pick<WorkflowRunSummary, 'id' | 'name' | 'description'>,
+): string {
+  const trimmedName = run.name.trim()
+  if (!isPlaceholderRunName(trimmedName, run.id)) return trimmedName
+  if (run.description !== undefined && run.description.trim() !== '') {
+    const line = firstLineOf(run.description, 60)
+    if (line !== '') return line
+  }
+  return run.id
+}
+
 /** Extract a readable title from the tool input when no run record is linked, avoiding blank space. */
 export function resolveWorkflowToolFallbackLabel(input: unknown, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+  const label = inputString(input, 'label')
+  if (label !== undefined) return firstLineOf(label, 60)
   const name = inputString(input, 'name')
   if (name !== undefined) return firstLineOf(name, 60)
   const scriptPath = inputString(input, 'scriptPath')

@@ -1,14 +1,14 @@
 /**
- * P0-P4 backend extend and conversation document test:
- * - UI new extension point register validate (profileRuntime / micro action three track / slot target /
- *   slash keep term / priority-order security integer / sessionDocs reference);
- * - across plugin kind / slash uniqueness (define phase + commit point final inspect + deactivate probe do not occupy name);
- * - ctx.sessionDoc lifecycle (read write deep copy / flush / after deletion reject orphan child write /
- *   deactivate after handle expires / subject to control stop window / doc and sessionDoc must not heavy name / without store 501);
- * - SessionDocEventHub dedicated use stream (first frame snapshot / incremental / does not enter global stream / abort clean up);
- * - HTTP:GET docs?conversationId, dedicated use SSE,404 stop semantics;
- * - HelmStore conversation document durable layer and conversation delete level join clean up (real sqlite).
- * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
+ * Backend extensions and session document tests (P0-P4):
+ * - UI extension point registration validation (`profileRuntime` / action targets / `slot` target /
+ *   reserved slash commands / safe integer priority & order / `sessionDocs` field removal);
+ * - cross-plugin `kind` and `slash` uniqueness (define phase + commit-point re-check + disabled probes stay non-occupying);
+ * - `ctx.sessionDoc` lifecycle (read/write deep cloning / flush / post-delete rejection against orphan writes /
+ *   handle expiration on disable / controlled stop window / shared doc vs sessionDoc namespace / 501 without store);
+ * - `SessionDocEventHub` dedicated stream (initial snapshot / incremental updates / global stream isolation / abort cleanup);
+ * - HTTP: `GET docs?conversationId`, dedicated SSE, 404 stop semantics;
+ * - `HelmStore` session document persistence and cascade cleanup on conversation deletion (real sqlite).
+ * runner: tsx --test; every test has explicit timeout: 60_000 to guard against deadlocks.
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
@@ -40,14 +40,14 @@ import {
 } from './helpers.js'
 
 // ---------------------------------------------------------------------------
-// test base create
+// Test infrastructure
 // ---------------------------------------------------------------------------
 
 function makeConversation(id: number) {
   return makeConversationSummary({ id, profileId: 'default' })
 }
 
-/** can change conversation table fixture:deleteConversation after getConversation such as throw 404. */
+/** Mutable conversation table fixture: deleting a conversation causes getConversation etc. to throw 404. */
 function makeHostApi(options: { existing: Set<number> } = { existing: new Set([1, 2]) }) {
   const events: Array<{ type: string; payload: unknown }> = []
   const backend: PluginHostBackend = {
@@ -76,7 +76,7 @@ function makeHostApi(options: { existing: Set<number> } = { existing: new Set([1
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     execEnv: async () => {
-      throw new HelmError('unsupported', 'this fixture do not execute node command', 501)
+      throw new HelmError('unsupported', 'this fixture does not execute node commands', 501)
     },
     emitEvent: (type, payload) => {
       events.push({ type, payload })
@@ -130,7 +130,7 @@ function makeHost(opts: { sessionDocs?: MemorySessionDocStore | null } = {}): Pl
 
 function throwsCode(fn: () => unknown, code: string, status?: number): void {
   assert.throws(fn, (err: unknown) => {
-    assert.ok(err instanceof HelmError, `expectation HelmError, actual:${String(err)}`)
+    assert.ok(err instanceof HelmError, `expected HelmError, got: ${String(err)}`)
     assert.equal(err.code, code)
     if (status !== undefined) assert.equal(err.status, status)
     return true
@@ -149,21 +149,21 @@ afterEach(async () => {
 })
 
 // ---------------------------------------------------------------------------
-// UI new extension point register validate
+// UI extension point registration validation
 // ---------------------------------------------------------------------------
 
-test('profileRuntime/micro action/slot register succeeded and enter listUi;priority/order validate security integer', { timeout: 60_000 }, async () => {
+test('profileRuntime/micro-action/slot registration succeeds and validates safe integer priority/order', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await host.register({
     id: 'p:ui',
     definePlugin: (ctx) => {
       ctx.ui.profileRuntime({ id: 'herdr', kind: 'herdr', label: 'Herdr runtime', order: 10 })
       ctx.ui.action({ id: 'a1', target: 'conversation:header', label: 'archive', actionId: 'archive', placement: 'toolbar' })
-      ctx.ui.action({ id: 'a2', target: 'conversation:row', label: 'clean up', actionId: 'cleanup' })
+      ctx.ui.action({ id: 'a2', target: 'conversation:row', label: 'cleanup', actionId: 'cleanup' })
       ctx.ui.action({
         id: 'a3',
         target: 'timeline:entry',
-        label: 'reference',
+        label: 'quote',
         actionId: 'quote',
         kinds: ['user'],
         roles: ['user'],
@@ -183,7 +183,7 @@ test('profileRuntime/micro action/slot register succeeded and enter listUi;prior
   ])
 })
 
-test('illegal shape explicit reject:priority non- integer / slash keep term / slot target many slash / micro action three track all empty', { timeout: 60_000 }, async () => {
+test('invalid shapes reject explicitly: non-integer priority, reserved slash, multi-slash slot target, and empty action tracks', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await assert.rejects(
     host.register({
@@ -198,7 +198,7 @@ test('illegal shape explicit reject:priority non- integer / slash keep term / sl
     host.register({
       id: 'p:x2',
       definePlugin: (ctx) => {
-        ctx.ui.command({ id: 'c', title: 'creates new', slash: 'new' })
+        ctx.ui.command({ id: 'c', title: 'new chat', slash: 'new' })
       },
     }),
     (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec',
@@ -241,9 +241,9 @@ test('illegal shape explicit reject:priority non- integer / slash keep term / sl
   )
 })
 
-test('sessionDocs declaration already follow declaration style track path remove:spec must not again carry the field', { timeout: 60_000 }, async () => {
+test('sessionDocs declaration removed with declarative track: specs no longer carry that field', { timeout: 60_000 }, async () => {
   const host = makeHost()
-  // sessionDoc itself still can declaration (client.tsx component via usePluginSessionDoc subscribe)
+  // sessionDoc itself can still be declared (client.tsx subscribes via usePluginSessionDoc)
   await host.register({
     id: 'p:s3',
     definePlugin: (ctx) => {
@@ -254,10 +254,10 @@ test('sessionDocs declaration already follow declaration style track path remove
   const ui = host.listUi()
   const tool = ui.find((u) => u.surface === 'tool.view')
   assert.ok(tool !== undefined)
-  assert.equal('sessionDocs' in (tool.spec as Record<string, unknown>), false, 'spec without sessionDocs field (JSON track path already remove)')
+  assert.equal('sessionDocs' in (tool.spec as Record<string, unknown>), false, 'spec must omit sessionDocs field (declarative JSON track removed)')
 })
 
-test('across plugin same kind explicit reject (commit point final inspect); deactivate probe enabled:false does not occupy name', { timeout: 60_000 }, async () => {
+test('cross-plugin duplicate kind rejects explicitly at commit point; disabled probes do not occupy names', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await host.register({
     id: 'p:a',
@@ -274,7 +274,7 @@ test('across plugin same kind explicit reject (commit point final inspect); deac
     }),
     (err: unknown) => err instanceof HelmError && err.code === 'duplicate_profile_runtime_kind',
   )
-  // deactivate probe do not occupy name:enabled:false register same kind succeeded, and does not affect enabled plugin.
+  // Disabled probe does not occupy names: enabled:false register with the same kind succeeds without affecting active plugin.
   await host.register(
     {
       id: 'p:c',
@@ -284,13 +284,13 @@ test('across plugin same kind explicit reject (commit point final inspect); deac
     },
     { enabled: false },
   )
-  // enabled plugin still store in; probe plugin UI do not expose out.
+  // Enabled plugin stays intact; disabled probe exposes zero UI.
   const ui = host.listUi().filter((u) => u.surface === 'profile.runtime')
   assert.equal(ui.length, 1)
   assert.equal(ui[0]!.pluginId, 'p:a')
 })
 
-test('deactivate probe do not occupy name:enabled:false after enable when still and enabled plugin conflict by refuse', { timeout: 60_000 }, async () => {
+test('disabled probe does not occupy names: enabling later still rejects conflicts with enabled plugins', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await host.register({
     id: 'p:a',
@@ -311,13 +311,13 @@ test('deactivate probe do not occupy name:enabled:false after enable when still 
     host.enable('p:probe'),
     (err: unknown) => err instanceof HelmError && err.code === 'duplicate_profile_runtime_kind',
   )
-  // deactivate p:a after probe plugin can enable (name already release).
+  // After disabling p:a, probe plugin can enable cleanly (name released).
   await host.disable('p:a')
   await host.enable('p:probe')
   assert.ok(host.listUi().some((u) => u.pluginId === 'p:probe' && u.surface === 'profile.runtime'))
 })
 
-test('across plugin slash conflict:define phase and commit point all reject', { timeout: 60_000 }, async () => {
+test('cross-plugin slash conflict rejects in both define phase and commit point', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await host.register({
     id: 'p:a',
@@ -347,7 +347,7 @@ test('across plugin slash conflict:define phase and commit point all reject', { 
 // ctx.sessionDoc lifecycle
 // ---------------------------------------------------------------------------
 
-test('sessionDoc read write deep copy/initial value fall back/listConversationIds/delete event', { timeout: 60_000 }, async () => {
+test('sessionDoc read/write deep cloning, initial-value fallback, listConversationIds, and delete events', { timeout: 60_000 }, async () => {
   const host = makeHost()
   let handle!: {
     get(id: number): { tokens: number }
@@ -366,23 +366,23 @@ test('sessionDoc read write deep copy/initial value fall back/listConversationId
   handle.set(1, { tokens: 5 })
   const got = handle.get(1)
   got.tokens = 99
-  assert.deepEqual(handle.get(1), { tokens: 5 }, 'get return deep copy, external sudden change do not back write')
+  assert.deepEqual(handle.get(1), { tokens: 5 }, 'get returns deep clone; external mutation never writes back')
   handle.update(1, (c) => ({ tokens: c.tokens + 1 }))
   assert.deepEqual(handle.get(1), { tokens: 6 })
   handle.set(2, { tokens: 100 })
   assert.deepEqual(handle.listConversationIds(), [1, 2])
   handle.delete(1)
-  assert.deepEqual(handle.get(1), { tokens: 0 }, 'after deletion back to initial value')
+  assert.deepEqual(handle.get(1), { tokens: 0 }, 'falls back to initial value after delete')
   assert.deepEqual(handle.listConversationIds(), [2])
   const sessionEvents = hostApi.events.filter((e) => e.type === 'plugin.session_doc.updated')
-  // set(1) + update(1) + set(2) + delete(1) = 4  public event
+  // set(1) + update(1) + set(2) + delete(1) = 4 public events
   assert.equal(sessionEvents.length, 4)
   const deleted = sessionEvents[3]!.payload as { doc: { deleted?: boolean; value: unknown } }
   assert.equal(deleted.doc.deleted, true)
   assert.deepEqual(deleted.doc.value, { tokens: 0 })
 })
 
-test('sessionDoc read write validate: illegal ID / conversation missing', { timeout: 60_000 }, async () => {
+test('sessionDoc read/write validation rejects invalid IDs and missing conversations', { timeout: 60_000 }, async () => {
   const host = makeHost()
   let handle!: { get(id: number): unknown; set(id: number, v: unknown): void }
   await host.register({
@@ -398,7 +398,7 @@ test('sessionDoc read write validate: illegal ID / conversation missing', { time
   assert.deepEqual(handle.get(1), { a: 1 })
 })
 
-test('doc and sessionDoc must not heavy name;sessionDoc missing durable layer when 501', { timeout: 60_000 }, async () => {
+test('doc and sessionDoc share namespace against duplicate names; sessionDoc returns 501 without persistence store', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await assert.rejects(
     host.register({
@@ -422,7 +422,7 @@ test('doc and sessionDoc must not heavy name;sessionDoc missing durable layer wh
   )
 })
 
-test('getPublicSessionDoc:public/private/deactivate/conversation missing semantics + global document name conflict hint', { timeout: 60_000 }, async () => {
+test('getPublicSessionDoc enforces public/private/disabled/missing semantics and global doc mismatch hint', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await host.register({
     id: 'p:pub',
@@ -443,13 +443,13 @@ test('getPublicSessionDoc:public/private/deactivate/conversation missing semanti
   throwsCode(() => host.getPublicSessionDoc('p:pub', 'pub', 999), 'not_found', 404)
   throwsCode(() => host.getPublicSessionDoc('p:pub', 'global', 1), 'global_doc_unexpected_conversation', 400)
   throwsCode(() => host.getPublicSessionDoc('p:pub', 'pub', 0), 'invalid_conversation_id', 400)
-  // global doc routing hit sessionDoc name:session_doc_requires_conversation
+  // Calling getPublicDoc with a sessionDoc name hints session_doc_requires_conversation
   throwsCode(() => host.getPublicDoc('p:pub', 'pub'), 'session_doc_requires_conversation', 400)
   await host.disable('p:pub')
   throwsCode(() => host.getPublicSessionDoc('p:pub', 'pub', 1), 'plugin_doc_not_found', 404)
 })
 
-test('conversation after deletion sessionDoc write by reject (guard against orphan child rebuild)', { timeout: 60_000 }, async () => {
+test('sessionDoc writes reject after conversation deletion to prevent orphan records', { timeout: 60_000 }, async () => {
   const existing = new Set([1, 2])
   hostApi = makeHostApi({ existing })
   const host = makeHost()
@@ -463,12 +463,12 @@ test('conversation after deletion sessionDoc write by reject (guard against orph
   handle.set(2, { a: 2 })
   existing.delete(2)
   throwsCode(() => handle.set(2, { a: 3 }), 'not_found', 404)
-  // conversation 1 still available
+  // Conversation 1 remains writable
   handle.set(1, { a: 1 })
   assert.deepEqual(handle.get(1), { a: 1 })
 })
 
-test('plugin deactivate after sessionDoc handle expires; re- enable after can continue read write (durable layer data keep)', { timeout: 60_000 }, async () => {
+test('disabling plugin expires sessionDoc handle while re-enabling preserves persistent data', { timeout: 60_000 }, async () => {
   const host = makeHost()
   let handle!: { get(id: number): { n: number }; set(id: number, v: { n: number }): void }
   await host.register({
@@ -481,16 +481,15 @@ test('plugin deactivate after sessionDoc handle expires; re- enable after can co
   await host.disable('p:sd')
   throwsCode(() => handle.set(1, { n: 8 }), 'plugin_context_expired')
   await host.enable('p:sd')
-  // enable re- execute definePlugin,handle already by new cycle handle override: read to persist value
-  // {n:7} verify conversation document data across start stop cycle keep (and doc the same persist semantics).
+  // Enable re-runs definePlugin and assigns the new cycle handle: reading { n: 7 } proves persistence across cycles
   assert.deepEqual(handle.get(1), { n: 7 })
 })
 
 // ---------------------------------------------------------------------------
-// SessionDocEventHub dedicated use stream
+// SessionDocEventHub dedicated stream
 // ---------------------------------------------------------------------------
 
-test('SessionDocEventHub:dispatch only delivery subscribe the three meta group listener; illegal payload reject and do not TypeError', { timeout: 60_000 }, () => {
+test('SessionDocEventHub: dispatch only notifies matching triple listeners and rejects invalid payloads without TypeError', { timeout: 60_000 }, () => {
   const hub = new SessionDocEventHub()
   const frames: HelmEventFrame[] = []
   const other: HelmEventFrame[] = []
@@ -501,7 +500,7 @@ test('SessionDocEventHub:dispatch only delivery subscribe the three meta group l
     doc: { pluginId: 'p:a', name: 'm', conversationId: 1, value: { n: 1 } },
   })
   assert.equal(frames.length, 1)
-  assert.equal(other.length, 0, 'other conversation subscribe do not frame')
+  assert.equal(other.length, 0, 'subscriber on another conversation receives no frames')
   assert.equal(frames[0]!.event.type, 'plugin.session_doc.updated')
   throwsCode(
     () =>
@@ -511,22 +510,22 @@ test('SessionDocEventHub:dispatch only delivery subscribe the three meta group l
       }),
     'invalid_event',
   )
-  // doc missing / null / non- object: first shape gate, must not in read field before TypeError.
+  // Missing / null / non-object doc: shape gate must catch before field access causes TypeError.
   throwsCode(() => hub.dispatch({ type: 'plugin.session_doc.updated' }), 'invalid_event')
   throwsCode(() => hub.dispatch({ type: 'plugin.session_doc.updated', doc: null }), 'invalid_event')
   throwsCode(() => hub.dispatch(undefined), 'invalid_event')
   throwsCode(() => hub.dispatch('junk'), 'invalid_event')
-  // illegal event do not push enter seq.
+  // Invalid events do not advance seq.
   const seqBefore = hub.seq
   assert.equal(hub.seq, seqBefore)
-  assert.equal(hub.subscriberCount, 2, 'subscriberCount count actual subscribe count')
+  assert.equal(hub.subscriberCount, 2, 'subscriberCount tracks active subscriptions')
   off()
   offOther()
   hub.close()
   assert.equal(hub.subscriberCount, 0)
 })
 
-test('SessionDocEventHub: the same three meta group many subscribe subscriberCount and close truly closure stream', { timeout: 60_000 }, async () => {
+test('SessionDocEventHub: multiple subscribers on same triple increment subscriberCount and close ends streams cleanly', { timeout: 60_000 }, async () => {
   const hub = new SessionDocEventHub()
   const c1 = new AbortController()
   const target = { pluginId: 'p:a', name: 'm', conversationId: 1 }
@@ -534,15 +533,15 @@ test('SessionDocEventHub: the same three meta group many subscribe subscriberCou
     snapshot: () => ({ seq: 0, doc: { ...target, value: { n: 0 } } }),
     target,
   })
-  // the same three meta group second connect: stream handle each register, mutual does not override.
+  // Second stream on same triple: registered independently without clobbering the first.
   const r2 = hub.response(new Request('http://x'), {
     snapshot: () => ({ seq: 0, doc: { ...target, value: { n: 0 } } }),
     target,
   })
-  assert.equal(hub.subscriberCount, 2, 'two connect each occupy a subscribe')
+  assert.equal(hub.subscriberCount, 2, 'each stream counts as one subscription')
   hub.close()
-  assert.equal(hub.subscriberCount, 0, 'close empty all subscribe')
-  // close after two stream all by server side end (read to done); after continue dispatch no longer delivery.
+  assert.equal(hub.subscriberCount, 0, 'close clears all subscriptions')
+  // After close, both streams end server-side and subsequent dispatches deliver nothing.
   hub.dispatch({ type: 'plugin.session_doc.updated', doc: { ...target, value: { n: 9 } } })
   for (const res of [r1, r2]) {
     const reader = (res.body as ReadableStream<Uint8Array>).getReader()
@@ -551,12 +550,12 @@ test('SessionDocEventHub: the same three meta group many subscribe subscriberCou
       const next = await reader.read()
       done = next.done === true
     }
-    assert.ok(done, 'close() after stream end')
+    assert.ok(done, 'stream terminates after close()')
   }
   c1.abort()
 })
 
-test('SessionDocEventHub:closeForPlugin/closeForConversation only closure match stream', { timeout: 60_000 }, async () => {
+test('SessionDocEventHub: closeForPlugin and closeForConversation only terminate matching streams', { timeout: 60_000 }, async () => {
   const hub = new SessionDocEventHub()
   const t1 = { pluginId: 'p:a', name: 'm', conversationId: 1 }
   const t2 = { pluginId: 'p:b', name: 'm', conversationId: 2 }
@@ -569,9 +568,9 @@ test('SessionDocEventHub:closeForPlugin/closeForConversation only closure match 
   const r2 = mk(t2)
   assert.equal(hub.subscriberCount, 2)
   hub.closeForPlugin('p:a')
-  assert.equal(hub.subscriberCount, 1, 'plugin p:a stream by close')
+  assert.equal(hub.subscriberCount, 1, 'stream for plugin p:a closed')
   hub.closeForConversation(2)
-  assert.equal(hub.subscriberCount, 0, 'conversation 2 stream by close')
+  assert.equal(hub.subscriberCount, 0, 'stream for conversation 2 closed')
   for (const res of [r1, r2]) {
     const reader = (res.body as ReadableStream<Uint8Array>).getReader()
     let done = false
@@ -582,14 +581,14 @@ test('SessionDocEventHub:closeForPlugin/closeForConversation only closure match 
   }
 })
 
-test('SessionDocEventHub.response: snapshot provider heavy publish do not lose frame does not repeat (seq filter choose)', { timeout: 60_000 }, async () => {
+test('SessionDocEventHub.response: re-publishing inside snapshot provider drops covered seqs without dropping or duplicating frames', { timeout: 60_000 }, async () => {
   const hub = new SessionDocEventHub()
   const target = { pluginId: 'p:a', name: 'm', conversationId: 1 }
   let providerSeq = 0
   const response = hub.response(new Request('http://x'), {
-    // provider sync heavy dispatch: simulated subscribe establish after, snapshot return before concurrency update.
-    // n=1 in provider inside publish (seq=1, snapshot watermark take provider return when hub.seq=1),
-    // n=2 in provider return after, stream conflict refresh before publish (seq=2, watermark after must conflict refresh).
+    // Provider synchronously dispatches: simulates concurrent update after subscription but before snapshot returns.
+    // n=1 dispatched inside provider (seq=1, snapshot watermark captured at hub.seq=1),
+    // n=2 dispatched after provider returns -> delta delivered cleanly without duplicating n=1.
     snapshot: () => {
       hub.dispatch({ type: 'plugin.session_doc.updated', doc: { ...target, value: { n: 1 } } })
       providerSeq = hub.seq
@@ -603,15 +602,15 @@ test('SessionDocEventHub.response: snapshot provider heavy publish do not lose f
   const first = await reader.read()
   text += decoder.decode(first.value!, { stream: true })
   assert.match(text, /event: snapshot/)
-  assert.match(text, /"n":1/, 'snapshot is provider when point value')
-  // snapshot conflict refresh phase:seq=1 buffer frame already body now snapshot in (must not duplicate), watermark after without new frame.
-  assert.ok(!text.includes('plugin.session_doc.updated'), 'snapshot inside update does not repeat under')
+  assert.match(text, /"n":1/, 'snapshot carries provider point-in-time value')
+  // Buffered seq=1 update is already included in snapshot and deduped; nothing arrives until post-watermark update.
+  assert.ok(!text.includes('plugin.session_doc.updated'), 'update included in snapshot must not re-deliver')
   hub.dispatch({ type: 'plugin.session_doc.updated', doc: { ...target, value: { n: 2 } } })
   const second = await reader.read()
   text += decoder.decode(second.value!, { stream: true })
   assert.match(text, /event: plugin\.session_doc\.updated/)
-  assert.match(text, /"n":2/, 'watermark after update must reach')
-  // terminal state: each frame exactly once (n=1 only in snapshot,n=2 only in incremental).
+  assert.match(text, /"n":2/, 'update after watermark must arrive')
+  // Final invariant: each frame emitted exactly once (n=1 in snapshot only, n=2 in delta only).
   assert.equal((text.match(/"n":1/g) ?? []).length, 1)
   assert.equal((text.match(/"n":2/g) ?? []).length, 1)
   await reader.cancel().catch(() => {})
@@ -619,23 +618,23 @@ test('SessionDocEventHub.response: snapshot provider heavy publish do not lose f
   assert.equal(hub.subscriberCount, 0)
 })
 
-test('SessionDocEventHub.response: snapshot provider fails sync clean up (do not create stream leaves no residue subscribe)', { timeout: 60_000 }, () => {
+test('SessionDocEventHub.response: synchronous snapshot provider failure cleans up without leaking subscription', { timeout: 60_000 }, () => {
   const hub = new SessionDocEventHub()
   const target = { pluginId: 'p:a', name: 'm', conversationId: 1 }
   assert.throws(
     () =>
       hub.response(new Request('http://x'), {
         snapshot: () => {
-          throw new HelmError('plugin_doc_not_found', 'plugin deactivated', 404)
+          throw new HelmError('plugin_doc_not_found', 'plugin disabled', 404)
         },
         target,
       }),
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
   )
-  assert.equal(hub.subscriberCount, 0, 'provider failed after without subscribe leftover')
+  assert.equal(hub.subscriberCount, 0, 'no leaked subscription after provider failure')
 })
 
-test('SessionDocEventHub.response: snapshot during buffer overflow immediately closure stream, then throws still keep original diagnose', { timeout: 60_000 }, async () => {
+test('SessionDocEventHub.response: buffer overflow during snapshot closes stream cleanly while preserving thrown errors', { timeout: 60_000 }, async () => {
   const target = { pluginId: 'p:overflow', name: 'metrics', conversationId: 1 }
   for (const shouldThrow of [false, true]) {
     const hub = new SessionDocEventHub()
@@ -658,7 +657,7 @@ test('SessionDocEventHub.response: snapshot during buffer overflow immediately c
   }
 })
 
-test('SessionDocEventHub.response: unconsumed stream byte back press over limit actively terminate and unsubscribe (1MiB by default outside explicit small cap)', { timeout: 60_000 }, async () => {
+test('SessionDocEventHub.response: unconsumed stream byte backpressure exceeds cap, terminates stream, and removes subscription', { timeout: 60_000 }, async () => {
   const hub = new SessionDocEventHub({ maxPendingBytes: 1024 })
   const controller = new AbortController()
   const target = { pluginId: 'p:a', name: 'm', conversationId: 1 }
@@ -668,8 +667,8 @@ test('SessionDocEventHub.response: unconsumed stream byte back press over limit 
   })
   const reader = (response.body as ReadableStream<Uint8Array>).getReader()
   const first = await reader.read()
-  assert.ok(first.value, 'first frame snapshot can read')
-  // no longer read: sync heap accumulate large amount large frame, exceeds 1KiB cap after subscribe by remove (slow client closure stream).
+  assert.ok(first.value, 'initial snapshot frame readable')
+  // Stop reading while dispatching large frames until >1KiB pending cap drops slow consumer.
   for (let i = 0; i < 64; i++) {
     hub.dispatch({
       type: 'plugin.session_doc.updated',
@@ -677,8 +676,8 @@ test('SessionDocEventHub.response: unconsumed stream byte back press over limit 
     })
     if (hub.subscriberCount === 0) break
   }
-  assert.equal(hub.subscriberCount, 0, 'byte accumulate press over limit after subscribe by explicit remove')
-  // already queue frame still can read, eventually obtain to done(no longer delivery new frame).
+  assert.equal(hub.subscriberCount, 0, 'subscription evicted once queued bytes exceed cap')
+  // Already-queued frames remain readable until done; new dispatches deliver nothing further.
   let done = false
   while (!done) {
     const next = await reader.read()
@@ -686,11 +685,11 @@ test('SessionDocEventHub.response: unconsumed stream byte back press over limit 
   }
   hub.dispatch({ type: 'plugin.session_doc.updated', doc: { ...target, value: { n: -1 } } })
   const after = await reader.read()
-  assert.ok(after.done, 'closure stream after no longer delivery new frame')
+  assert.ok(after.done, 'no new frames delivered after stream termination')
   controller.abort()
 })
 
-test('SessionDocEventHub.response: first frame snapshot after incremental;abort clean up subscribe', { timeout: 60_000 }, async () => {
+test('SessionDocEventHub.response: emits initial snapshot followed by updates and cleans up on abort', { timeout: 60_000 }, async () => {
   const hub = new SessionDocEventHub()
   const controller = new AbortController()
   const target = { pluginId: 'p:a', name: 'm', conversationId: 1 }
@@ -715,14 +714,14 @@ test('SessionDocEventHub.response: first frame snapshot after incremental;abort 
   assert.match(buffered, /event: plugin\.session_doc\.updated/)
   assert.match(buffered, /"n":2/)
   controller.abort()
-  assert.equal(hub.subscriberCount, 0, 'abort after subscribe clean up')
+  assert.equal(hub.subscriberCount, 0, 'subscription cleaned up after abort')
 })
 
 // ---------------------------------------------------------------------------
 // HelmStore durable layer (real sqlite)
 // ---------------------------------------------------------------------------
 
-test('HelmStore conversation document CRUD + conversation delete level join clean up (real sqlite)', { timeout: 60_000 }, async () => {
+test('HelmStore session document CRUD + cascade cleanup on conversation deletion (real sqlite)', { timeout: 60_000 }, async () => {
   const dir = await makeTempDir('helm-store-sd-')
   try {
     const db = await openHelmDatabase(dir)
@@ -756,7 +755,7 @@ test('HelmStore conversation document CRUD + conversation delete level join clea
     assert.equal(store.getPluginSessionDoc('p:a', 'm', 1), '{"n":3}')
     store.deletePluginSessionDoc('p:a', 'm', 2)
     assert.equal(store.getPluginSessionDoc('p:a', 'm', 2), undefined)
-    // conversation delete: same transaction clean up the conversation all conversation document
+    // Conversation deletion cleans up all session docs for that conversation in the same transaction
     store.deleteConv(1)
     assert.equal(store.getPluginSessionDoc('p:a', 'm', 1), undefined)
     assert.equal(store.getPluginSessionDoc('p:b', 'x', 1), undefined)
@@ -764,8 +763,8 @@ test('HelmStore conversation document CRUD + conversation delete level join clea
     const rows = await db.db.all<{ conversation_id: number }>(
       'SELECT conversation_id FROM helm_plugin_session_docs',
     )
-    assert.equal(rows.length, 0, 'conversation 1 after deletion store in no residue')
-    // illegal JSON reject
+    assert.equal(rows.length, 0, 'no session doc rows remain in store after conversation deletion')
+    // Invalid JSON rejected
     assert.throws(() => store.putPluginSessionDoc('p:a', 'bad', 2, '{oops'))
     await store.close()
     await db.close()
@@ -774,7 +773,7 @@ test('HelmStore conversation document CRUD + conversation delete level join clea
   }
 })
 
-test('HelmStore after restart mirror restore conversation document (real sqlite)', { timeout: 60_000 }, async () => {
+test('HelmStore restores session documents after restart (real sqlite)', { timeout: 60_000 }, async () => {
   const dir = await makeTempDir('helm-store-sd2-')
   try {
     {

@@ -1,10 +1,10 @@
 /**
- * conversation detail situation page, cursor edit decode and FTS index maintain.
+ * Conversation detail pagination, cursor codec, and FTS index maintenance.
  *
- * responsibility:
- * - detail situation page read, by helm.rewind closed zone between filter by override old item, keep metadata item;
- * - page cursor base64url validate and edit decode;
- * - FTS index all amount rebuild (filter rewind override item).
+ * Responsibilities:
+ * - Detail timeline retrieval, filtering out entries covered by closed helm.rewind intervals while preserving marker entries;
+ * - Pagination cursor base64url validation and encoding/decoding;
+ * - Full FTS index rebuild (filtering rewound entries).
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Harness } from '@earendil-works/pi-durable'
@@ -21,7 +21,7 @@ import {
 } from './runtime-helpers.js'
 import type { HelmStore } from './store.js'
 
-/** cursor most large encode length (base64url after; over long reject guard against abuse). */
+/** Maximum encoded pagination cursor length (base64url; rejects oversized cursors to prevent abuse). */
 export const DETAIL_CURSOR_MAX_LENGTH = 2048
 
 export interface ConversationDetailHost {
@@ -42,15 +42,14 @@ export class ConversationDetailService {
   constructor(private readonly host: ConversationDetailHost) {}
 
   /**
-   * conversation detail situation (summary + page timeline):
-   * - server side unify filter by helm.rewind override old item (closed zone between [fromEntryId,
-   *   throughEntryId]), but keep helm.rewind metadata item itself (frontend SSE and
-   *   page filter shared use the same zone between public style);
-   * - each time detail situation read when scan aggregate all rewind zone between (simple implement, do not add new durable table/cache),
-   *   again from SDK raw cursor page read, filter override item until satisfy limit or without more many;
-   * - cursor is base64url(JSON{conversationId,cursor:SDK next}): bind set conversation,
-   *   length/JSON legal validate,limit clamp 1..500; not silently truncate;
-   * - entry keep model message and data, out boundary before via event same source redaction (publish path unify);
+   * Fetch conversation details (summary + paginated timeline):
+   * - Server uniformly filters out historical entries covered by closed helm.rewind intervals ([fromEntryId, throughEntryId])
+   *   while retaining the helm.rewind marker entries themselves (matching frontend SSE interval deduplication);
+   * - Aggregates rewind intervals on each detail read (simple implementation with no extra durable cache/tables),
+   *   then paginates backwards via SDK raw cursors while filtering covered entries until `limit` is filled or no more remain;
+   * - Cursors are base64url(JSON {conversationId, cursor: SDK next}): bound to the conversation, checked for length and
+   *   valid JSON, and `limit` is bounded to 1..500 without silent clamping;
+   * - Entries preserve model messages and data, redacted at boundary with the same secret redactor as events;
    * - contextUsage refresh is decoupled asynchronously so slow usage calculations never block timeline delivery;
    *   when uncached usage finishes computing in the background, `conversation.upsert` pushes it to subscribers.
    */
@@ -71,7 +70,7 @@ export class ConversationDetailService {
     return { ...detail, ...this.host.getConversation(id) }
   }
 
-  /** detail situation body (page + throw shadow + summary initial value; summary then by parallel merge override is right threat value). */
+  /** Assemble detail body (paginated+projected entries + initial summary; updated summary overrides afterwards). */
   private async assembleDetail(
     id: number,
     options?: { limit?: number; cursor?: string },
@@ -79,12 +78,12 @@ export class ConversationDetailService {
     const summary = this.host.getConversation(id)
     const limit = options?.limit ?? 100
     if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
-      throw new HelmError('validation_error', `limit must be 1..500 integer (receives ${limit})`, 400, {
+      throw new HelmError('validation_error', `limit must be an integer between 1 and 500 (received ${limit})`, 400, {
         limit,
       })
     }
     const conversation = await this.host.harness.conversation(id as never, BACKGROUND_CONTEXT)
-    if (!conversation) throw new HelmError('not_found', `conversation missing:${id}`, 404)
+    if (!conversation) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
 
     let sdkCursor: unknown = undefined
     if (options?.cursor !== undefined) {
@@ -93,8 +92,8 @@ export class ConversationDetailService {
     const rewindCuts = await this.host.collectRewindIntervals(conversation)
     const { collected, nextCursor } = await this.pageVisibleEntries(conversation, id, limit, sdkCursor, rewindCuts)
 
-    // HTTP detail situation exit throw shadow:pi.system filter + signature strip + security pure text tool-result
-    // truncate (see entry-projection.ts).SSE/waitForInput do not via this throw shadow.
+    // HTTP detail boundary projection: filter pi.system + strip signatures + truncate safe plain-text tool results
+    // (see entry-projection.ts). SSE / waitForInput never go through this projection.
     const entries: ConversationEntry[] = []
     for (const raw of collected.reverse()) {
       const projected = projectDetailEntry(toConversationEntry(raw as { id: number; kind: string }))
@@ -108,23 +107,22 @@ export class ConversationDetailService {
   }
 
   /**
-   * single timeline item (GET /api/conversations/:id/entries/:entryId):
-   * - precise read (min=max=entryId take 1 , do not via page guess);conversationId and
-   *   entryId all strong validate (routing parseIdParam + service layer security integer re-check);
-   * - rewind visible and detail situation page consistent: by helm.rewind override old item and pi.system
-   *   model side register record one rule 404(helm.rewind mark record itself keep visible, and page behavior same construct);
-   * - not truncate but already redaction: only strip signature payload, do not truncate. database original text do not change.
+   * Single timeline entry (GET /api/conversations/:id/entries/:entryId):
+   * - Exact lookup (min=max=entryId limit 1, never scans pages); validates both conversationId and entryId strictly;
+   * - Same rewind visibility as detail pagination: entries covered by helm.rewind or internal pi.system records
+   *   return 404 (helm.rewind marker entries remain visible, matching pagination);
+   * - Untruncated yet redacted: strips opaque signatures without truncating payload text; original DB data untouched.
    */
   async getConversationEntry(id: number, entryId: number): Promise<ConversationEntry> {
     if (!Number.isSafeInteger(entryId) || entryId <= 0) {
-      throw new HelmError('validation_error', `entryId must be security positive integer (receives ${String(entryId)})`, 400, {
+      throw new HelmError('validation_error', `entryId must be a positive safe integer (received ${String(entryId)})`, 400, {
         conversationId: id,
         entryId,
       })
     }
     this.host.getConversation(id)
     const conversation = await this.host.harness.conversation(id as never, BACKGROUND_CONTEXT)
-    if (!conversation) throw new HelmError('not_found', `conversation missing:${id}`, 404)
+    if (!conversation) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
     const page = await conversation.entries(
       { minEntryId: entryId as never, maxEntryId: entryId as never, order: 'ascending' },
       1,
@@ -133,22 +131,22 @@ export class ConversationDetailService {
     )
     const raw = page.items[0] as { id: number | string; kind: string } | undefined
     if (raw === undefined || Number(raw.id) !== entryId) {
-      throw new HelmError('not_found', `item ${entryId} in conversation ${id} in missing`, 404, {
+      throw new HelmError('not_found', `entry ${entryId} does not exist in conversation ${id}`, 404, {
         conversationId: id,
         entryId,
       })
     }
-    // visible and detail situation page fully consistent:rewind override old item and pi.system model side register record
-    // all invisible (page hide internal item do not because explicit id request re- expose).
+    // Identical visibility to detail pagination: rewound entries and pi.system model records remain invisible
+    // even when queried directly by ID.
     if (raw.kind === 'pi.system') {
-      throw new HelmError('not_found', `item ${entryId} is model side register record (pi.system), invisible`, 404, {
+      throw new HelmError('not_found', `entry ${entryId} is an internal model record (pi.system) and not visible`, 404, {
         conversationId: id,
         entryId,
       })
     }
     const rewindCuts = await this.host.collectRewindIntervals(conversation)
     if (raw.kind !== 'helm.rewind' && coveredByRewind(entryId, rewindCuts)) {
-      throw new HelmError('not_found', `item ${entryId} already by original ground override heavy hide`, 404, {
+      throw new HelmError('not_found', `entry ${entryId} was hidden by in-place overwrite & resend`, 404, {
         conversationId: id,
         entryId,
       })
@@ -156,10 +154,9 @@ export class ConversationDetailService {
     return stripEntrySignatures(toConversationEntry(raw as never))
   }
 
-  /** SDK descending page read + rewind/pi.system filter (detail situation body loop; each page precise take remaining).
-   * pi.system and rewind override item same belong invisible: in loop inside skip and continue take more old
-   * item, guarantee limit semantics = visible count (full after only then filter will let a certain page do not enough limit and
-   * cursor already exceeds by filter item, user page see fewer than etc. amount old content). */
+  /** Descending SDK pagination + rewind/pi.system filtering (detail paging loop fetching remaining count per iteration).
+   * Both pi.system and rewound entries are skipped inside the loop before counting toward `limit`, guaranteeing
+   * `limit` measures visible entries (filtering afterwards would under-fill pages and advance past hidden entries). */
   async pageVisibleEntries(
     conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
     id: number,
@@ -187,8 +184,8 @@ export class ConversationDetailService {
         model?: readonly unknown[]
         data?: unknown
       }>) {
-        // rewind mark record itself keep (SSE consistency and frontend zone between dedupe need to), the rest
-        // override zone between old item all hide;pi.system is model side register record, detail situation invisible.
+        // Keep helm.rewind markers (for SSE consistency and frontend interval deduplication), hide older entries
+        // inside closed rewind intervals, and hide internal pi.system records from detail timelines.
         const numericId = Number(raw.id)
         if (raw.kind === 'pi.system') continue
         if (raw.kind !== 'helm.rewind' && coveredByRewind(numericId, rewindCuts)) continue
@@ -208,22 +205,22 @@ export class ConversationDetailService {
     return { collected, nextCursor }
   }
 
-  /** encode page cursor:base64url(JSON{conversationId,cursor}). */
+  /** Encode pagination cursor: base64url(JSON {conversationId, cursor}). */
   encodeDetailCursor(conversationId: number, sdkCursor: Readonly<Record<string, unknown>>): string {
     const json = JSON.stringify({ conversationId, cursor: sdkCursor })
     return Buffer.from(json, 'utf8').toString('base64url')
   }
 
-  /** decode and validate page cursor: bind set conversation, length and JSON legal (illegal explicit reject). */
+  /** Decode and validate pagination cursor: verifies conversation ownership, max length, and JSON structure. */
   decodeDetailCursor(conversationId: number, encoded: string): unknown {
     if (encoded.length > DETAIL_CURSOR_MAX_LENGTH) {
-      throw new HelmError('validation_error', 'cursor exceeds most large length', 400)
+      throw new HelmError('validation_error', 'cursor exceeds maximum length', 400)
     }
     let decoded: unknown
     try {
       decoded = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'))
     } catch {
-      throw new HelmError('validation_error', 'cursor is not legal base64url JSON', 400)
+      throw new HelmError('validation_error', 'cursor is not valid base64url JSON', 400)
     }
     const shape = decoded as { conversationId?: unknown; cursor?: unknown }
     if (
@@ -235,22 +232,21 @@ export class ConversationDetailService {
     ) {
       throw new HelmError(
         'validation_error',
-        `cursor do not belongs to conversation ${conversationId} or structure illegal`,
+        `cursor does not belong to conversation ${conversationId} or has invalid structure`,
         400,
       )
     }
     return shape.cursor
   }
 
-  /** FTS rebuild (host rebuildFts delegate;rewind override item never re- index). */
+  /** FTS rebuild (delegated by host rebuildFts; entries hidden by rewind are never re-indexed). */
   async rebuildFts(listConversationIds: () => Array<{ id: number; title: string }>): Promise<void> {
     await this.host.store.rebuildFts(async (index) => {
       for (const conv of listConversationIds()) {
         const conversation = await this.host.harness.conversation(conv.id as never, BACKGROUND_CONTEXT)
         if (!conversation) continue
-        // all amount scan after by helm.rewind closed zone between [from, through] filter by override item:
-        // they already no longer leap, rebuild FTS when never re- index; the same zone between public style and
-        // collectRewindIntervals / detail situation throw shadow shared use closed zone between.
+        // Filter covered entries across all closed helm.rewind [from, through] intervals after full scan so superseded
+        // entries are never re-indexed (shares identical interval rules with collectRewindIntervals and detail projection).
         const rewindCuts: RewindInterval[] = []
         const indexed: Array<{ id: number; text: string }> = []
         let cursor: unknown = undefined

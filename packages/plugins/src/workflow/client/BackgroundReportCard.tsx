@@ -21,6 +21,7 @@ import {
   REPORT_KV_DELIVERED_AT,
   REPORT_KV_RUN_ID,
   REPORT_KV_SUBAGENT,
+  REPORT_KV_TASK_NAME,
   REPORT_KV_TASK_TYPE,
   REPORT_KIND_SUBAGENT,
   REPORT_KIND_WORKFLOW,
@@ -35,6 +36,7 @@ import {
   runStatusLabel,
 } from './copy.ts'
 import { Icon } from './WorkflowIcon.tsx'
+import { isPlaceholderRunName } from './model-format.ts'
 import {
   backgroundReportPreview,
   isBackgroundReportDefaultOpen,
@@ -53,6 +55,7 @@ export function BackgroundReportCard(props: TimelineRendererProps): ReactNode {
   const bodyId = useId()
 
   const conversationId = view.invalid ? undefined : view.executionConversationId
+  const reportName = !view.invalid ? view.name : undefined
   const isFailure = !view.invalid && (view.status === 'failed' || view.status === 'aborted')
   const title = view.invalid
     ? t(REPORT_INVALID_TITLE)
@@ -61,7 +64,12 @@ export function BackgroundReportCard(props: TimelineRendererProps): ReactNode {
       : t(REPORT_WORKFLOW_TITLE)
   const statusIcon = view.invalid || isFailure ? 'alert-circle' : view.kind === 'workflow_report' ? 'workflow' : 'bot'
   const preview = view.invalid ? t(REPORT_INVALID_PREVIEW) : backgroundReportPreview(view, PREVIEW_MAX_CHARS, locale)
-  const rowTitle = conversationId !== undefined ? `${title} #${conversationId}` : title
+  const rowTitle =
+    reportName !== undefined
+      ? `${title} · ${reportName}`
+      : conversationId !== undefined
+        ? `${title} #${conversationId}`
+        : title
 
   return (
     <div className="trace-entry">
@@ -76,7 +84,10 @@ export function BackgroundReportCard(props: TimelineRendererProps): ReactNode {
         >
           <Icon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
           <Icon name={statusIcon} size={12} />
-          <span className="trace-tool-name">{rowTitle}</span>
+          <span className="trace-tool-name" title={rowTitle}>{rowTitle}</span>
+          {reportName !== undefined && conversationId !== undefined ? (
+            <span className="workflow-trace-id tabular-nums">{`#${conversationId}`}</span>
+          ) : null}
           {preview !== '' ? (
             <span className={`trace-tool-summary${isFailure || view.invalid ? ' workflow-trace-error' : ''}`} title={preview}>
               {preview}
@@ -149,6 +160,12 @@ function ExpandedBody({
     <>
       <div className="workflow-report-meta-head">
         <div className="kv-grid">
+          {view.name !== undefined ? (
+            <>
+              <span className="kv-key">{t(REPORT_KV_TASK_NAME)}</span>
+              <span className="kv-val">{view.name}</span>
+            </>
+          ) : null}
           <span className="kv-key">{t(REPORT_KV_RUN_ID)}</span>
           <span className="kv-val mono">{view.runId}</span>
           {view.createdAt !== undefined ? (
@@ -165,10 +182,14 @@ function ExpandedBody({
               <span className="kv-val">
                 {onOpenConversation !== undefined ? (
                   <button type="button" className="btn btn-ghost btn-xs" onClick={onOpenConversation}>
-                    {`#${view.executionConversationId}`}
+                    {view.name !== undefined
+                      ? `${view.name} (#${view.executionConversationId})`
+                      : `#${view.executionConversationId}`}
                   </button>
                 ) : (
-                  `#${view.executionConversationId}`
+                  view.name !== undefined
+                    ? `${view.name} (#${view.executionConversationId})`
+                    : `#${view.executionConversationId}`
                 )}
               </span>
             </>
@@ -203,7 +224,7 @@ function ExpandedBody({
           <div className="execution-report-tasks">
             {view.otherRunningTasks.map((task) => (
               <span key={task.runId} className="badge badge-neutral workflow-report-task-item">
-                <span>{task.name}</span>
+                {!isPlaceholderRunName(task.name, task.runId) ? <span>{task.name}</span> : null}
                 <span className="mono">{task.runId}</span>
                 <span>{task.kind === 'subagent' ? t(REPORT_KIND_SUBAGENT) : t(REPORT_KIND_WORKFLOW)}</span>
               </span>

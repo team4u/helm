@@ -154,8 +154,8 @@ test('local relative / root-relative / fragment asset URLs are explicitly reject
       (err: unknown) =>
         err instanceof HelmError &&
         err.code === 'client_compile_failed' &&
-        /reference asset/.test(err.message) &&
-        /by reject/.test(err.message) &&
+        /asset reference/.test(err.message) &&
+        /rejected/.test(err.message) &&
         /data:/.test(err.message),
       `asset form ${label} must be explicitly rejected`,
     )
@@ -168,7 +168,7 @@ test('nested @import in inline CSS also passes through the asset boundary and ca
   await writePluginSource(root, { 'styles.css': `@import "${nested}";\n.local { color: blue }` }, ["'./styles.css'"])
   await assert.rejects(
     () => compilePluginClientModule('test:css-inline-import', root, 'index.tsx', dataDir),
-    (error: unknown) => error instanceof HelmError && error.code === 'client_compile_failed' && /far process @import/.test(error.message),
+    (error: unknown) => error instanceof HelmError && error.code === 'client_compile_failed' && /remote @import/.test(error.message),
   )
 })
 
@@ -227,7 +227,7 @@ test('reserved export conflict: a plugin occupying __helmClientCss itself fails 
     (err: unknown) =>
       err instanceof HelmError &&
       err.code === 'client_compile_failed' &&
-      /occupy compiler keep export name/.test(err.message) &&
+      /reserved compiler export name/.test(err.message) &&
       err.message.includes(PLUGIN_CLIENT_CSS_EXPORT),
   )
 })

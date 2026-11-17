@@ -1,10 +1,9 @@
 /**
- * node:fs/promises  PathUsageIo real adapt (@helm/env-io).
+ * Real `node:fs/promises` adapter implementing `PathUsageIo` (`@helm/env-io`).
  *
- * kernel(Hub local machine scan) and @helm/node(remote node daemon) shared use the same implement,
- * never each duplicate fs semantics. error object carry node:fs  `code` property (ENOENT /
- * EACCES / ESRCH etc.), by path-usage pure orchestration classify (race exit ignore, by refuse
- * record blind spot fail-closed).
+ * Shared by `@helm/kernel` (local Hub scans) and `@helm/node` (remote daemon) so filesystem
+ * semantics are never duplicated. Errors preserve their `node:fs` `code` property (`ENOENT`,
+ * `EACCES`, `ESRCH`, etc.) for fail-closed classification by `path-usage.ts`.
  */
 import { readlink, readdir, stat, readFile, realpath } from 'node:fs/promises'
 import type { PathUsageIo } from './path-usage.js'

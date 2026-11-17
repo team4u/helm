@@ -46,14 +46,17 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .composer-env-select { max-width: 128px; }
   .composer-env-cwd { max-width: 180px; font-size: 11px; }
   .composer-env-cwd-input { width: min(180px, 100%); }
-  .timeline-scroll { padding: 16px 14px 22px; }
+  .helm-pane > *,
+  .timeline-scroll,
+  .composer-shell { --conversation-gutter: 14px; }
+  .timeline-scroll { padding: 16px var(--conversation-gutter) 22px; }
   .timeline-scroll-bottom-btn { right: 14px; bottom: 14px; }
   .msg-human-pill { max-width: 92%; }
   .msg-hover-bar { opacity: 0.85; }
   .trace-diff-row { grid-template-columns: 2.6em 2.6em 1fr; }
   .trace-diff-pending .trace-diff-row { grid-template-columns: minmax(0, 1fr); }
   .trace-kv { grid-template-columns: 1fr; gap: 2px; }
-  .composer-shell { padding-inline: 10px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+  .composer-shell { padding-inline: var(--conversation-gutter); padding-bottom: max(8px, env(safe-area-inset-bottom)); }
   .composer-textarea { max-height: 120px; }
   .composer-picker-root { max-width: 180px; }
   .composer-toolbar .composer-model-button { max-width: 180px; }

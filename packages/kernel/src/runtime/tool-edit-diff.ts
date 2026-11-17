@@ -1,31 +1,27 @@
 /**
- * edit tool real difference compute (unique implement;local and remote two execute path sharing).
+ * Real diff computation for the `edit` tool (sole implementation; shared by local and remote execution paths).
  *
- * contract (and @helm/protocol  EDIT_TOOL_RESULT_SCHEMA align):
- * - input is unique precise replace completed before after all text and replace zone between:original(change before all text),
- *   updated(change after all text, and actual content consistent),matchOffset / replacedLength
- *   (oldText in original in unique match zone between). pre- condition by break when immediately throws
- *   (caller in write before compute, throws i.e. edit_failed, file not by modify);
- * - difference only compute replace involves complete row ±3 row context window (do not diff whole large file);
- *   row number from for original real row scan (accept prefix line scan, do not is O(change)
- *   sacrifice correct);
- * - redaction first row: for original / updated all text respectively redact after again by row number take window row
- *   (first cut piece again redaction will leak leak horizontal across window boundary many row secret in window inside leftover segment);
- * - row number and count always reverse reflect original text:addedLines / removedLines / firstChangedLine
- *   based on not redaction window diffLines row level difference, override complete difference,rows pre- compute truncate do not
- *   affect count;
- * - if all text redaction change row count (secret itself contains newline, replace placeholder excludes newline, row count only can
- *   reduce and as long as each other etc. i.e. boundary not motion), window row cannot again for should real file row number - - directly
- *   rows=[] + truncated=true and keep original text count, never fabricate row number, never leak leak secret;
- * - pre- compute with redaction after text count:rows ≤ TOOL_DIFF_MAX_ROWS, single row text ≤
- *   TOOL_DIFF_MAX_ROW_CHARS(over long row truncate show, count still by complete row), cumulative text ≤
- *   TOOL_DIFF_MAX_TEXT_CHARS; any form truncate all placement truncated=true;
- * - algorithm level pre- compute:diffLines carries maxEditLength(over limit return undefined), large segment
- *   each other different replace never without cap block kernel; over limit when retreat is whole segment replace means - - strip public
- *   before suffix row after remove all old row / add all new row (valid but non- most small difference), count and
- *   the means consistent, and explicit placement truncated=true;
- * - no-op(updated === original, i.e. tool allows oldText === newText):rows=[],
- *   counts=0,firstChangedLine=replace which in row.
+ * Contract (aligned with `@helm/protocol` `EDIT_TOOL_RESULT_SCHEMA`):
+ * - Inputs are the full texts before/after an exact unique replacement and the replaced span: `original`,
+ *   `updated` (must match real updated content), and `matchOffset` / `replacedLength` (the unique matched range
+ *   of `oldText` in `original`). Throws immediately on broken preconditions (`edit_failed` before writing so the file
+ *   is never modified);
+ * - Diff computes only a `+-3` line context window around the modified lines (never diffs whole huge files);
+ *   line numbers come from real newline scans (fast prefix scan without sacrificing correctness for `O(changes)`);
+ * - Redact first: redact full `original` and `updated` before slicing window lines (slicing first then redacting
+ *   could leak multi-line secrets crossing window boundaries);
+ * - Line numbers and counts always reflect the raw text: `addedLines` / `removedLines` / `firstChangedLine` come
+ *   from raw `diffLines` differences across the unredacted window, unaffected by row display truncation;
+ * - If full-text redaction alters line count (e.g. a secret contains newlines replaced by a single-line placeholder),
+ *   window lines no longer align with real file line numbers — falls back to `rows = []`, `truncated = true`, while
+ *   keeping raw line counts; never fabricates line numbers or leaks secrets;
+ * - Display budgets count post-redaction text: `rows <= TOOL_DIFF_MAX_ROWS`, per-row chars <= `TOOL_DIFF_MAX_ROW_CHARS`
+ *   (long rows truncate for display while counts reflect full lines), cumulative chars <= `TOOL_DIFF_MAX_TEXT_CHARS`;
+ *   any truncation sets `truncated = true`;
+ * - Algorithmic diff budget: `diffLines` uses `maxEditLength` (returns `undefined` when exceeded) so huge diffs never
+ *   stall the kernel; falls back to full-span replacement (strip common prefix/suffix lines, remove old, add new —
+ *   valid though non-minimal, with consistent counts and explicit `truncated = true`);
+ * - No-op (`updated === original`, i.e. `oldText === newText`): `rows = []`, counts `0`, `firstChangedLine` = match line.
  */
 
 import { diffLines } from 'diff'
@@ -37,20 +33,20 @@ import {
   type ToolEditDiff,
 } from '@helm/protocol'
 
-/** replace involves row on under each keep context row count. */
+/** Context lines retained before and after edited spans. */
 const EDIT_CONTEXT_LINES = 3
 
 /**
- * diffLines algorithm pre- compute (edit length): row pre- compute TOOL_DIFF_MAX_ROWS ten remaining multiple - -
- * exceeds it most small difference increase delete row count must far over row pre- compute (forever cannot complete render), whole segment replace
- * means do not loss lose can render information, also seal top kernel compute overhead.
+ * Algorithmic edit-length budget for `diffLines`: 10x `TOOL_DIFF_MAX_ROWS` — diffs exceeding this always
+ * produce far more add/remove rows than fit the row budget anyway, so falling back to full-span replacement
+ * preserves all renderable info while bounding kernel CPU cost.
  */
 const EDIT_DIFF_MAX_EDIT_LENGTH = 2_000
 
 const LF = 10
 const CR = 13
 
-/** row count:'' is 0 row; with \n counter, tail not newline patch 1(and splitLineTexts consistent). */
+/** Line count: `''` is 0 lines; counts `\n`, adding 1 when no trailing newline (matches `splitLineTexts`). */
 function countLines(text: string): number {
   if (text === '') return 0
   let newlines = 0
@@ -60,7 +56,7 @@ function countLines(text: string): number {
   return text.charCodeAt(text.length - 1) === LF ? newlines : newlines + 1
 }
 
-/** by row split (strip row tail \n and tight neighbor \r; keep empty row;'' → []). */
+/** Split into lines (strips trailing `\n` and adjacent `\r`; preserves blank lines; `''` -> `[]`). */
 function splitLineTexts(text: string): string[] {
   if (text === '') return []
   const lines: string[] = []
@@ -77,8 +73,8 @@ function splitLineTexts(text: string): string[] {
 }
 
 /**
- * row start point scan:lineStarts[k] is k+1 row start point; tail \n after without content,
- * does not enable empty row (and countLines/splitLineTexts row count opening path consistent); empty string without row.
+ * Scan line start offsets: `lineStarts[k]` is the start offset of line `k+1`; a trailing `\n` with nothing
+ * after it does not open an empty line (consistent with `countLines`/`splitLineTexts`); `''` yields `[]`.
  */
 function scanLineStarts(original: string): number[] {
   if (original === '') return []
@@ -89,7 +85,7 @@ function scanLineStarts(original: string): number[] {
   return lineStarts
 }
 
-/** offset which in row (1 base):lineStarts rise order, two locate finally a start point ≤ offset row. */
+/** Line number containing `offset` (1-based): binary-searches ascending `lineStarts` for last start <= `offset`. */
 function lineAt(lineStarts: number[], offset: number): number {
   let lo = 0
   let hi = lineStarts.length - 1
@@ -101,13 +97,13 @@ function lineAt(lineStarts: number[], offset: number): number {
   return lo + 1
 }
 
-/** diff row skeleton (row number real; text later by row number from redaction window row take). */
+/** Diff skeleton row (exact line numbers; text populated later by line number from redacted window). */
 type SkeletonRow =
   | { kind: 'context'; oldLine: number; newLine: number }
   | { kind: 'remove'; oldLine: number }
   | { kind: 'add'; newLine: number }
 
-/** let row count pre- compute takes precedence to real change, avoid large replace fragment in not change row squeeze after continue change. */
+/** Prioritize actual changes inside the row budget so trailing changes aren't crowded out by long unchanged middle spans. */
 function trimUnchangedContext(skeleton: SkeletonRow[]): SkeletonRow[] {
   const rows: SkeletonRow[] = []
   for (let start = 0; start < skeleton.length;) {
@@ -130,11 +126,11 @@ function trimUnchangedContext(skeleton: SkeletonRow[]): SkeletonRow[] {
 }
 
 /**
- * in unique precise replace before after all text and match zone between on generate ToolEditDiff(pure function, without IO).
+ * Compute `ToolEditDiff` from before/after full texts and matched span (pure, zero IO).
  *
- * redact must satisfy: replace placeholder excludes newline (SecretStash  [REDACTED] system column satisfy);
- * all text redaction after row count do not change i.e. verify no any newline at secret internal, window row and original text row one one for
- * should, row number real. violate reverse when by contract away rows=[] fall back, do not fabricate.
+ * `redact` requirement: placeholders must not introduce newlines (true for `[REDACTED]` in `SecretStash`).
+ * Preserving line count across redaction confirms no secret spanned a newline so redacted window lines correspond
+ * 1:1 with real line numbers; on mismatch, falls back by contract to `rows = []` rather than fabricating.
  */
 export function computeEditDiff(
   original: string,
@@ -151,14 +147,14 @@ export function computeEditDiff(
     matchOffset + replacedLength > original.length
   ) {
     throw new Error(
-      `edit diff pre- condition failed: replace zone between [${matchOffset}, ${matchOffset + replacedLength}) out of bounds (file ${original.length} character)`,
+      `Edit diff precondition failed: replaced range [${matchOffset}, ${matchOffset + replacedLength}) is out of bounds (file has ${original.length} chars)`,
     )
   }
   const lineStarts = scanLineStarts(original)
   const totalLines = lineStarts.length
   const firstLine = lineAt(lineStarts, matchOffset)
   const lastLine = lineAt(lineStarts, matchOffset + replacedLength - 1)
-  // no-op(tool allows oldText === newText): without difference can render, row number points to replace where.
+  // No-op (`oldText === newText`): no diff rows to display; line number points to the matched span.
   if (updated === original) {
     return { rows: [], addedLines: 0, removedLines: 0, firstChangedLine: firstLine, truncated: false }
   }
@@ -174,12 +170,12 @@ export function computeEditDiff(
     updated.slice(matchOffset, matchOffset + insertedLength) +
     original.slice(matchEnd, windowEndOffset)
 
-  // row level difference skeleton and count (original text, not redaction): row number/count reverse reflect real change.
+  // Raw (unredacted) line-level diff skeleton and counts accurately reflect real edits.
   let addedLines = 0
   let removedLines = 0
   let firstChanged = 0
   const skeleton: SkeletonRow[] = []
-  // algorithm pre- compute over limit: retreat whole segment replace means (valid but non- most small), count and the means consistent.
+  // Algorithmic budget exceeded: fall back to full-span replacement (valid though non-minimal; counts match skeleton).
   let editBudgetExceeded = false
   const changes = diffLines(rawOldWindow, rawNewWindow, {
     maxEditLength: EDIT_DIFF_MAX_EDIT_LENGTH,
@@ -241,8 +237,8 @@ export function computeEditDiff(
         }
       } else if (change.removed === true) {
         for (let i = 0; i < lineCount; i++) {
-          // pure delete first change row take delete point new file row (its after first context/new increase row same number;
-          // EOF delete then under row unify clamp to new file end row).
+          // For pure deletions, `firstChanged` targets the new-file line at the deletion point (matching the first
+          // subsequent context/added line, clamped to end-of-file for trailing deletions).
           if (firstChanged === 0) firstChanged = newLine
           skeleton.push({ kind: 'remove', oldLine })
           removedLines += 1
@@ -257,21 +253,20 @@ export function computeEditDiff(
       }
     }
   }
-  // first change row (new file row number): clamp to new file real row count (EOF delete take end row; new file is empty take 1).
+  // Clamp `firstChangedLine` to actual new-file line count (handles EOF deletions; empty files clamp to 1).
   const firstChangedLine =
     firstChanged === 0 ? firstLine : Math.min(firstChanged, Math.max(1, countLines(updated)))
 
-  // redaction first row: for before after all text respectively redact(across window boundary many row secret therefore whole hit).
+  // Redact full texts first so multi-line secrets crossing window boundaries are fully caught.
   const redOriginal = redact(original)
   const redUpdated = redact(updated)
   if (countLines(redOriginal) !== totalLines || countLines(redUpdated) !== countLines(updated)) {
-    // all text redaction change row count (secret contains newline): window row cannot for should real row number. honest fall back:
-    // do not render row (never leak leak), count and first change row keep original text compute result.
+    // Full-text redaction changed line count (secret contained newlines): window lines no longer align with real lines.
+    // Honest fallback: return no rows (never leak), keeping raw counts and firstChangedLine.
     return { rows: [], addedLines, removedLines, firstChangedLine, truncated: true }
   }
-  // row count do not change ⇒ newline not by any secret contains ⇒ redaction before after row boundary one by one row for should;
-  // window row = redaction all text by row number trim (new window occupy new file windowStartLine start
-  // countLines(rawNewWindow) row: window before each row original not motion).
+  // Unchanged line count => no secret spanned a newline => redacted lines correspond 1:1 with raw lines;
+  // slice the window directly from redacted full texts (earlier lines before the window stay aligned).
   const newWindowCount = countLines(rawNewWindow)
   const redOldLines = splitLineTexts(redOriginal).slice(windowStartLine - 1, windowEndLine)
   const redNewLines = splitLineTexts(redUpdated).slice(
@@ -279,7 +274,7 @@ export function computeEditDiff(
     windowStartLine - 1 + newWindowCount,
   )
 
-  // pre- compute (by redaction after text): row count, single row length, cumulative text; any truncate all placement truncated.
+  // Enforce budgets on post-redaction text: rows, per-row chars, cumulative chars; mark `truncated` on any cut.
   const rows: ToolDiffRow[] = []
   let usedChars = 0
   let truncated = editBudgetExceeded
@@ -293,7 +288,7 @@ export function computeEditDiff(
         ? redNewLines[entry.newLine - windowStartLine]!
         : redOldLines[entry.oldLine - windowStartLine]!
     if (text.length > TOOL_DIFF_MAX_ROW_CHARS) {
-      // over long row truncate show (count do not change); retreat one avoid cut cut UTF-16 proxy for.
+      // Truncate oversized row for display (counts unaffected); back up 1 code unit to avoid splitting UTF-16 surrogates.
       let cut = TOOL_DIFF_MAX_ROW_CHARS
       const prev = text.charCodeAt(cut - 1)
       if (prev >= 0xd800 && prev <= 0xdbff) cut -= 1

@@ -1,6 +1,6 @@
 /**
- * CLI itself entry path parse: background spawn and upgrade choose fixed launcherentry locate,
- * and service install must use compile artifact (dist/cli.js) entry parse.
+ * Resolves CLI entrypoints: `cliSelfEntry()` for spawning detached daemons from source or dist,
+ * and `resolveServiceEntry()` for OS startup services (which require compiled `dist/cli.js`).
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,9 +9,7 @@ import { realpathSync } from 'node:fs';
 import { UsageError } from './cli-context.js';
 
 /**
- * CLI itself entry (source code pattern is src/cli.ts; compile after by package structure fall back dist/cli.js).
- * note: cannot reference this module import.meta.url(that is service-entry.ts itself) - -
- * directly by this module at src/ under, and cli.ts same directory package structure locate.
+ * Resolve this package's own CLI entrypoint (`src/cli.ts` in source mode, `dist/cli.js` when built).
  */
 export function cliSelfEntry(): string {
   const self = path.resolve(fileURLToPath(import.meta.url));
@@ -21,10 +19,8 @@ export function cliSelfEntry(): string {
 }
 
 /**
- * service install entry: open machine service without tsx loader, must use compile artifact dist/cli.js.
- * - with compile artifact run: return itself;
- * - with source code entry run: return same package dist/cli.js(must already exists);
- * - source code run and without compile artifact: explicit errors (do not generate cannot start service).
+ * Resolve the compiled entrypoint (`dist/cli.js`) required by OS service managers (which lack tsx).
+ * Throws `missing_build` if running from source without compiled `dist/cli.js`.
  */
 export function resolveServiceEntry(selfPath: string = fileURLToPath(import.meta.url)): string {
   const self = path.resolve(selfPath);
@@ -34,7 +30,7 @@ export function resolveServiceEntry(selfPath: string = fileURLToPath(import.meta
     return realpathSync(distEntry);
   } catch {
     throw new UsageError(
-      `service entry must use compile artifact (expectation ${distEntry}): when before with source code entry run and not found compile artifact; please first in repository execute pnpm build again install service`,
+      `service entrypoint must be the compiled artifact (${distEntry}), which was not found while running from source; run pnpm build in the repository first`,
       'missing_build',
     );
   }

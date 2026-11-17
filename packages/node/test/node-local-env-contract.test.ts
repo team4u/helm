@@ -1,19 +1,19 @@
 /**
- * local-env align contract test: pin and upstream (@earendil-works/pi-durable
- * NodeExecutionEnv / decode.ts / line-scan.ts,pi coding-agent shell.ts)
- * manually work sync key behavior special sign - - assertion output format and exit semantics itself, while non- note release text:
+ * `local-env` contract tests locking key behavioral invariants inherited from
+ * `@earendil-works/pi-durable` (`NodeExecutionEnv`, `StreamDecoder`, `LineScanner`)
+ * and `@helm/env-io` shell probing — asserting observable outputs and exit semantics:
  *
- * - StreamDecoder: any chunk cut under decode result and whole once decode one by one byte consistent,
- *   BOM only in stream first strip once (contains BOM by split across chunk case);
- * - LineScanner:LineScan byte offset and choose zone/first row byte count all by original byte count (contains
- *   BOM, now state opening path), feed granularity do not change, illegal row number zone between RangeError;
- * - shell probe:legacy WSL start (System32/Sysnative) via stdin transfer
- *   command (args ['‑s']), the rest bash away argv(args ['-c']); self define
- *   shell path missing explicit shell_unavailable;
- * - exec exit semantics: normal exit code pass-through, by signal kill die mapping 128+signal edit number,
- *   timeout error message format `timeout:<second>`, pre- abort signal immediately aborted;
- * - spill back press: over threshold complete output keep in overflow write file (contains timeout path), threshold inside
- *   produces no overflow write file.
+ * - `StreamDecoder`: arbitrary chunk boundaries decode identically byte-for-byte to a single
+ *   chunk, and leading UTF-8 BOM is stripped once even when split across chunks;
+ * - `LineScanner`: `LineScan` offsets cover raw bytes including BOM while decoded counts
+ *   exclude leading BOM, results are invariant to chunk size, and invalid ranges throw `RangeError`;
+ * - Shell probing: legacy WSL launchers (`System32`/`Sysnative`) send commands via stdin
+ *   (`args: ['-s']`), standard bash uses argv (`args: ['-c']`), and missing custom shells
+ *   explicitly return `shell_unavailable`;
+ * - `exec` exit semantics: normal exit codes pass through, signal kills map to `128 + signo`,
+ *   timeout errors follow `timeout:<seconds>`, and pre-aborted signals yield `aborted`;
+ * - Spill backpressure: oversized output is preserved in full via `spillPath` (including on
+ *   timeout), whereas within-threshold output creates no spill file.
  */
 
 import { test } from 'node:test';
@@ -24,17 +24,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { useTempDir } from '@helm/test-kit/node';
 
-import type { ShellProbeIo } from '@helm/env-io';
-import { LineScanner, LocalExecutionEnv, StreamDecoder } from '../src/daemon/local-env.js';
-import { getBashShellConfig, getShellConfig, getShellEnv, isLegacyWslBashPath } from '../src/daemon/local-env/shell.js';
+import { getBashShellConfig, isLegacyWslBashPath, type ShellProbeIo } from '@helm/env-io';
+import { LineScanner, LocalExecutionEnv, StreamDecoder, getShellConfig, getShellEnv } from '../src/daemon/local-env.js';
 
 const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 
 // ---------------------------------------------------------------------------
-// StreamDecoder(align pi-durable decode.ts)
+// StreamDecoder (delegated to @earendil-works/pi-durable/env)
 // ---------------------------------------------------------------------------
 
-test('StreamDecoder: any byte cut under and whole once decode one by one byte consistent (contains multibyte character split)', { timeout: 60_000 }, () => {
+test('StreamDecoder matches single-shot UTF-8 decoding across every byte split point', { timeout: 60_000 }, () => {
   const text = 'héllo wörld Chinese 🚀 trailing';
   const bytes = Buffer.from(text, 'utf8');
   const whole = new TextDecoder('utf8').decode(bytes);
@@ -45,42 +44,42 @@ test('StreamDecoder: any byte cut under and whole once decode one by one byte co
   }
 });
 
-test('StreamDecoder: stream first BOM only strip once (contains BOM split across chunk and stream in U+FEFF keep)', { timeout: 60_000 }, () => {
+test('StreamDecoder strips leading BOM once even when split across chunks and preserves mid-stream U+FEFF', { timeout: 60_000 }, () => {
   const body = 'abc';
   const whole = Buffer.concat([BOM, Buffer.from(body, 'utf8')]);
-  // whole chunk
+  // Whole buffer in one chunk
   const one = new StreamDecoder();
   assert.equal(one.decode(whole) + one.decode(), body);
-  // BOM split: first chunk only EF(decode is empty, not mark record started), time chunk patch complete after strip
+  // Split BOM: first chunk holds only 0xEF (decodes empty, not started), second completes BOM and strips it
   const split = new StreamDecoder();
   assert.equal(split.decode(whole.subarray(0, 1)), '');
   assert.equal(split.decode(whole.subarray(1)) + split.decode(), body);
-  // stream in U+FEFF is not BOM: original keep
+  // Mid-stream U+FEFF is not a BOM and must pass through unchanged
   const mid = new StreamDecoder();
   const midBytes = Buffer.from('a\ufeffb', 'utf8');
   assert.equal(mid.decode(midBytes) + mid.decode(), 'a\ufeffb');
 });
 
 // ---------------------------------------------------------------------------
-// LineScanner(align pi-durable line-scan.ts)
+// LineScanner (delegated to @earendil-works/pi-durable/env)
 // ---------------------------------------------------------------------------
 
-test('LineScanner: row zone between scan byte offset opening path (start/end/firstLineEnd/lastLineStart)', { timeout: 60_000 }, () => {
-  // pure ASCII: offset can manually compute. content "L0\nL1\nL2\nL3"(without tail newline).
+test('LineScanner line-range byte offsets (start/end/firstLineEnd/lastLineStart)', { timeout: 60_000 }, () => {
+  // Pure ASCII so byte offsets are straightforward: "L0\nL1\nL2\nL3" without trailing newline.
   const scanner = new LineScanner(1, 3);
   scanner.push(Buffer.from('L0\nL1\nL2\nL3', 'utf8'));
   assert.deepEqual(scanner.finish(), {
     newlines: 3,
-    start: 3, //  1 row start (L1  L)
-    end: 8, //  2 row tail newline symbol offset (excludes newline symbol itself)
-    firstLineEnd: 5, //  1 row tail newline symbol offset
-    lastLineStart: 6, //  2 row start (endLine-1 row)
+    start: 3, // Start of line 1 ('L' in L1)
+    end: 8, // End offset before newline on line 2
+    firstLineEnd: 5, // End offset before newline on line 1
+    lastLineStart: 6, // Start of line 2 (endLine - 1)
     selectedBytes: 5, // "L1\nL2"
     firstLineBytes: 2, // "L1"
   });
 });
 
-test('LineScanner: all zone between scan BOM + multibyte content byte opening path (such as pin now state)', { timeout: 60_000 }, () => {
+test('LineScanner: full-range scan with BOM + multibyte content reports raw byte offsets and decoded byte counts', { timeout: 60_000 }, () => {
   const text = 'héllo\nwörld\nChinese row\n';
   const bytes = Buffer.concat([BOM, Buffer.from(text, 'utf8')]);
   const bomOffset = 3;
@@ -90,32 +89,32 @@ test('LineScanner: all zone between scan BOM + multibyte content byte opening pa
   const secondLineEnd = firstLineEnd + 1 + Buffer.byteLength(line2, 'utf8'); // 16
   const scanner = new LineScanner(0);
   scanner.push(bytes);
-  // now state opening path: offset and choose zone/first row byte count all by original byte count,BOM count
-  // selectedBytes / firstLineBytes(upstream sync when such as semantics change, this assertion explicit report alert).
+  // Offsets are raw file byte positions (including BOM), while decoded sizes (`selectedBytes`,
+  // `firstLineBytes`) exclude the leading BOM to match `new TextDecoder().decode(file)`.
   assert.deepEqual(scanner.finish(), {
     newlines: 3,
     start: 0,
-    end: bytes.length, // not designate endLine: with file tail wrap-up
+    end: bytes.length, // no endLine specified: ends at EOF
     firstLineEnd,
-    lastLineStart: bytes.length, // endLine=∞ and tail has newline: fall back is finally newline after offset (EOF)
-    selectedBytes: bytes.length, // BOM + all text
-    firstLineBytes: bomOffset + Buffer.byteLength(line1, 'utf8'), // BOM + first row
+    lastLineStart: bytes.length, // endLine=∞ with trailing newline: falls back to offset after last newline (EOF)
+    selectedBytes: bytes.length - bomOffset, // decoded text without leading BOM
+    firstLineBytes: Buffer.byteLength(line1, 'utf8'), // decoded first line without leading BOM
   });
-  // sub- zone between (1, ∞):BOM in choose zone of outside, byte count and original across consistent
+  // Sub-range [1, ∞): BOM is outside the selection, so decoded size matches raw span.
   const fromLine1 = new LineScanner(1);
   fromLine1.push(bytes);
   assert.deepEqual(fromLine1.finish(), {
     newlines: 3,
-    start: secondLineEnd - Buffer.byteLength(line2, 'utf8'), //  1 row start = 10
+    start: secondLineEnd - Buffer.byteLength(line2, 'utf8'), // line 1 start = 10
     end: bytes.length,
     firstLineEnd: secondLineEnd,
-    lastLineStart: bytes.length, // same on: fall back is finally newline after offset (EOF)
+    lastLineStart: bytes.length, // same fallback to EOF after trailing newline
     selectedBytes: bytes.length - (secondLineEnd - Buffer.byteLength(line2, 'utf8')),
     firstLineBytes: Buffer.byteLength(line2, 'utf8'),
   });
 });
 
-test('LineScanner: one by one byte feed and whole chunk feed result fully consistent (granularity do not change)', { timeout: 60_000 }, () => {
+test('LineScanner gives identical results for byte-by-byte vs single-chunk input', { timeout: 60_000 }, () => {
   const bytes = Buffer.concat([BOM, Buffer.from('héllo\nwörld\nChinese row\n', 'utf8')]);
   const oneShot = new LineScanner(1);
   oneShot.push(bytes);
@@ -124,15 +123,15 @@ test('LineScanner: one by one byte feed and whole chunk feed result fully consis
   assert.deepEqual(bytewise.finish(), oneShot.finish());
 });
 
-test('LineScanner: illegal row number zone between throw RangeError', { timeout: 60_000 }, () => {
+test('LineScanner throws RangeError on invalid line ranges', { timeout: 60_000 }, () => {
   assert.throws(() => new LineScanner(-1), RangeError);
-  assert.throws(() => new LineScanner(2, 2), RangeError); // endLine must > startLine
+  assert.throws(() => new LineScanner(2, 2), RangeError); // endLine must exceed startLine
   assert.throws(() => new LineScanner(0.5), RangeError);
   assert.throws(() => new LineScanner(0, 1.5), RangeError);
 });
 
 // ---------------------------------------------------------------------------
-// shell probe (align pi coding-agent shell.ts)
+// Shell probing (delegated to @helm/env-io)
 // ---------------------------------------------------------------------------
 
 const withSystemRoot = (value: string | undefined, fn: () => void): void => {
@@ -147,7 +146,7 @@ const withSystemRoot = (value: string | undefined, fn: () => void): void => {
   }
 };
 
-test('shell probe:SystemRoot under System32/Sysnative bash start via stdin transfer command', { timeout: 60_000 }, () => {
+test('shell probe: System32/Sysnative bash launchers under SystemRoot pass commands via stdin', { timeout: 60_000 }, () => {
   withSystemRoot('C:\\Windows', () => {
     for (const legacy of ['C:\\Windows\\System32\\bash.exe', 'C:\\Windows\\Sysnative\\bash.exe']) {
       assert.equal(isLegacyWslBashPath(legacy), true, legacy);
@@ -156,30 +155,30 @@ test('shell probe:SystemRoot under System32/Sysnative bash start via stdin trans
         { shell: legacy, args: ['-s'], commandTransport: 'stdin' },
       );
     }
-    // large small write and isolate symbol archive one after still identify
+    // Still matched after case and separator normalization
     assert.equal(isLegacyWslBashPath('c:\\windows\\SYSTEM32\\bash.exe'), true);
   });
 });
 
-test('shell probe:Git Bash / other path away argv transfer (args [-c])', { timeout: 60_000 }, () => {
+test('shell probe: Git Bash and other paths pass commands via argv (args [-c])', { timeout: 60_000 }, () => {
   withSystemRoot('C:\\Windows', () => {
     const gitBash = 'C:\\Program Files\\Git\\bin\\bash.exe';
     assert.equal(isLegacyWslBashPath(gitBash), false);
     assert.deepEqual(getBashShellConfig(gitBash), { shell: gitBash, args: ['-c'], commandTransport: 'argv' });
-    // non- bash.exe  System32 can execute file do not in start manifest
+    // Non-bash.exe executables under System32 are not treated as legacy WSL bash launchers
     assert.equal(isLegacyWslBashPath('C:\\Windows\\System32\\wsl.exe'), false);
   });
-  // SystemRoot points to other where: original C:\Windows\... path no longer is start
+  // SystemRoot pointing elsewhere: C:\Windows\... is no longer treated as SystemRoot launcher
   withSystemRoot('D:\\Win', () => {
     assert.equal(isLegacyWslBashPath('C:\\Windows\\System32\\bash.exe'), false);
   });
-  // SystemRoot non- symbol form (UNC): explicit does not match, do not guess
+  // Non-drive-letter SystemRoot (UNC): explicitly does not match without guessing
   withSystemRoot('\\\\srv\\share', () => {
     assert.equal(isLegacyWslBashPath('C:\\Windows\\System32\\bash.exe'), false);
   });
 });
 
-test('shell probe:SystemRoot unknown when by convention path regex fall back (small write system32/sysnative)', { timeout: 60_000 }, () => {
+test('shell probe: falls back to conventional regex when SystemRoot is unset', { timeout: 60_000 }, () => {
   withSystemRoot(undefined, () => {
     assert.equal(isLegacyWslBashPath('c:\\windows\\system32\\bash.exe'), true);
     assert.equal(isLegacyWslBashPath('C:\\Windows\\Sysnative\\bash.exe'), true);
@@ -187,7 +186,7 @@ test('shell probe:SystemRoot unknown when by convention path regex fall back (sm
   });
 });
 
-test('shell probe: self define shell path missing explicit shell_unavailable; store in then by argv transfer', { timeout: 60_000 }, async () => {
+test('shell probe: missing custom shell explicitly returns shell_unavailable; existing one uses argv', { timeout: 60_000 }, async () => {
   const missing = '/nonexistent/helm-contract/bash';
   const rejected = await getShellConfig(missing);
   assert.equal(rejected.ok, false);
@@ -203,24 +202,24 @@ test('shell probe: self define shell path missing explicit shell_unavailable; st
   }
 });
 
-test('shell probe: local machine by default probe takes precedence /bin/bash, fall back PATH and sh', { timeout: 60_000 }, async () => {
+test('shell probe: host default prefers /bin/bash and falls back to PATH and sh', { timeout: 60_000 }, async () => {
   const config = await getShellConfig(undefined);
   assert.equal(config.ok, true);
   if (!config.ok) return;
   if (existsSync('/bin/bash')) {
     assert.deepEqual(config.value, { shell: '/bin/bash', args: ['-c'], commandTransport: 'argv' });
   } else {
-    // fall back chain end end is sh -c(argv transfer)
+    // End of fallback chain is sh -c (argv transport)
     assert.ok(config.value.shell.length > 0);
     assert.equal(config.value.commandTransport, 'argv');
   }
 });
 
 // ---------------------------------------------------------------------------
-// exec exit semantics (align pi-durable NodeExecutionEnv)
+// exec exit semantics (delegated to @earendil-works/pi-durable NodeExecutionEnv)
 // ---------------------------------------------------------------------------
 
-test('exec exit semantics: normal exit code pass-through;argv form directly execute do not via shell', { timeout: 60_000 }, async () => {
+test('exec exit semantics: passes through exit codes and executes argv arrays without shell', { timeout: 60_000 }, async () => {
   const env = new LocalExecutionEnv({ cwd: os.tmpdir() });
   const viaShell = await env.exec('exit 42', undefined);
   assert.deepEqual(viaShell, { ok: true, value: { exitCode: 42 } });
@@ -234,14 +233,14 @@ test('exec exit semantics: normal exit code pass-through;argv form directly exec
   }
 });
 
-test('exec exit semantics: by signal kill die process mapping is 128+signal edit number (SIGKILL→137)', { timeout: 60_000 }, async () => {
+test('exec exit semantics: signal-killed processes map to 128 + signal number (SIGKILL -> 137)', { timeout: 60_000 }, async () => {
   const env = new LocalExecutionEnv({ cwd: os.tmpdir() });
   const result = await env.exec('kill -9 $$', undefined);
   assert.ok(result.ok);
   if (result.ok) assert.equal(result.value.exitCode, 137);
 });
 
-test('exec exit semantics: timeout error message format is timeout:<second>; pre- abort signal immediately aborted', { timeout: 60_000 }, async () => {
+test('exec exit semantics: timeout error message matches timeout:<seconds> and pre-aborted signals yield aborted', { timeout: 60_000 }, async () => {
   const env = new LocalExecutionEnv({ cwd: os.tmpdir() });
   const timedOut = await env.exec('sleep 5', { timeout: 1 });
   assert.equal(timedOut.ok, false);
@@ -259,10 +258,10 @@ test('exec exit semantics: timeout error message format is timeout:<second>; pre
 });
 
 // ---------------------------------------------------------------------------
-// spill overflow write (align pi-durable: over threshold complete output keep in overflow write file)
+// Output spill backpressure (delegated to pi-durable: full output preserved past threshold)
 // ---------------------------------------------------------------------------
 
-test('spill: over threshold output complete keep in overflow write file; threshold inside produces no overflow write file', { timeout: 60_000 }, async (t) => {
+test('spill: oversized output is preserved in full via spillPath while small output produces no spill file', { timeout: 60_000 }, async (t) => {
   const workdir = useTempDir(t, 'helm-spill-');
   const env = new LocalExecutionEnv({ cwd: workdir });
   const big = await env.exec("node -e \"process.stdout.write('a'.repeat(200000))\"", {
@@ -271,7 +270,7 @@ test('spill: over threshold output complete keep in overflow write file; thresho
   assert.ok(big.ok);
   if (big.ok) {
     assert.equal(big.value.exitCode, 0);
-    assert.ok(big.value.spillPath !== undefined, 'over threshold must produce overflow write file');
+    assert.ok(big.value.spillPath !== undefined, 'output over threshold must produce a spill file');
     if (big.value.spillPath !== undefined) {
       assert.equal(await fs.readFile(big.value.spillPath, 'utf8'), 'a'.repeat(200000));
     }
@@ -282,7 +281,7 @@ test('spill: over threshold output complete keep in overflow write file; thresho
   assert.deepEqual(small, { ok: true, value: { exitCode: 0 } });
 });
 
-test('spill: timeout by kill command same carry overflow write file and content complete', { timeout: 60_000 }, async (t) => {
+test('spill: timed-out commands still preserve full output in spillPath', { timeout: 60_000 }, async (t) => {
   const workdir = useTempDir(t, 'helm-spill-timeout-');
   const env = new LocalExecutionEnv({ cwd: workdir });
   const result = await env.exec("node -e \"process.stdout.write('x'.repeat(200000))\"; sleep 5", {
@@ -293,7 +292,7 @@ test('spill: timeout by kill command same carry overflow write file and content 
   if (!result.ok) {
     assert.equal(result.error.code, 'timeout');
     assert.equal(result.error.message, 'timeout:1');
-    assert.ok(result.error.spillPath !== undefined, 'timeout compute must carry overflow write file path');
+    assert.ok(result.error.spillPath !== undefined, 'timeout result must carry spillPath');
     if (result.error.spillPath !== undefined) {
       assert.equal(await fs.readFile(result.error.spillPath, 'utf8'), 'x'.repeat(200000));
     }
@@ -301,10 +300,10 @@ test('spill: timeout by kill command same carry overflow write file and content 
 });
 
 // ---------------------------------------------------------------------------
-// Windows host machine guard against WSL hijack and large small write security getShellEnv
+// Windows WSL hijack protection and case-safe getShellEnv
 // ---------------------------------------------------------------------------
 
-test('LocalExecutionEnv: simulated win32 only store in System32\\bash.exe return shell_unavailable; skip WSL after can execute time row shell', { timeout: 60_000 }, async () => {
+test('LocalExecutionEnv: simulated win32 with only System32\\bash.exe returns shell_unavailable and skips WSL to run fallback shell', { timeout: 60_000 }, async () => {
   const wslOnlyIo: ShellProbeIo = {
     platform: 'win32',
     env: {
@@ -346,7 +345,7 @@ test('LocalExecutionEnv: simulated win32 only store in System32\\bash.exe return
   assert.equal(output, 'ok');
 });
 
-test('getShellEnv(win32):baseEnv/extraEnv override when produces no Path/PATH double key and store', { timeout: 60_000 }, () => {
+test('getShellEnv(win32): overriding baseEnv/extraEnv never creates duplicate Path and PATH keys', { timeout: 60_000 }, () => {
   const hasUpper = Object.hasOwn(process.env, 'PATH');
   const savedUpper = process.env['PATH'];
   const hasMixed = Object.hasOwn(process.env, 'Path');

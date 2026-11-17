@@ -34,7 +34,7 @@ import { HelmError, type PluginDefinition } from '@helm/protocol'
 import { createHelm } from '../../hub/src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
-import { makeFauxModels, type FauxProviderHandle } from './helpers/plugin-test-env.js'
+import { makeFauxProvider, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 
 import assert from 'node:assert/strict'
 
@@ -64,8 +64,8 @@ interface WfEnv {
 
 async function makeWfEnv(): Promise<WfEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-e2e-'))
-  const { models, faux } = makeFauxModels()
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const faux = makeFauxProvider()
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
 
   const echoCalls: string[] = []
   await app.kernel.plugins!.register({
@@ -235,8 +235,8 @@ test('工作流2: action() 经 PluginHost 动作总线共享 Schema 校验——
 test('工作流3: turn_settled 钩子收集 completed/failed/aborted 三态各一次，inputs origin 精确记录', { timeout: 60_000 }, async () => {
   // aborted 场景需要真实在途流：慢速 token 流（1 tok/s）确保 abort 时回合仍在流式中。
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-e2e-'))
-  const { models, faux } = makeFauxModels({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const faux = makeFauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   try {
     const settled: Array<{ outcome: string; origins: string[]; conversationId: number; error?: string }> = []
     await app.kernel.plugins!.register({
@@ -354,15 +354,32 @@ test('工作流4: HTTP workflows run/inspect/abort 与 SubagentWorkflow 工具�
         input: {
           conversationId: env.app.kernel.listConversations()[0]!.id,
           script: 'export const meta = { name: "http-pure", description: "t" }\nreturn args.x + 1',
+          label: '  HTTP自定义标签  ',
           args: { x: 41 },
           wait: true,
         },
       }),
     })
     assert.equal(run.status, 200)
-    const final = ((JSON.parse(await run.text()) as { run: { id: string; status: string; result?: unknown } }).run)
+    const final = ((JSON.parse(await run.text()) as { run: { id: string; name: string; status: string; result?: unknown } }).run)
     assert.equal(final.status, 'completed', `HTTP run 应完成：${JSON.stringify(final)}`)
+    assert.equal(final.name, 'HTTP自定义标签', 'HTTP workflows run label 应覆盖 meta.name')
     assert.equal(final.result, 42, 'args.x + 1 经真实 worker 计算为 42')
+
+    // 空白 label：显式 400 validation_error
+    const badLabel = await fetch(`${base}/api/actions/builtin:workflow/run`, {
+      method: 'POST',
+      headers: { ...auth, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        input: {
+          conversationId: env.app.kernel.listConversations()[0]!.id,
+          script: 'export const meta = { name: "http-pure", description: "t" }\nreturn 1',
+          label: '   ',
+        },
+      }),
+    })
+    assert.equal(badLabel.status, 400)
+    assert.equal((JSON.parse(await badLabel.text()) as { error: { code: string } }).error.code, 'validation_error')
 
     // abort Done run：幂等成功（不误报）
     const abort = await fetch(`${base}/api/actions/builtin:workflow/abort`, {

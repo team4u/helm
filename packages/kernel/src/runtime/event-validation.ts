@@ -1,16 +1,17 @@
 /**
- * event payload boundary validate (pure function; self events.ts split out, can independent single test).
+ * Event payload boundary validation (pure functions split out from events.ts for isolated unit testing).
  *
- * discipline (migration before semantics original keep):
- * - publish side unify JSON validate + redaction (string and field name all redact),payload illegal
- *   directly throw HelmError, never static default fall back;core type reference also accept caller directly payload and
- *   complete event message seal (such as PluginHost emitEvent('plugin.changed', {type, plugin})),
- *   message seal only split package do not second embed set; unknown type away CustomHelmEvent {type, payload} original
- *   pass-through, does not pretend to be into notification;
- * - can missing cannot wrong: optional field store in i.e. validate, type do not symbol same throws, not silently fix correct
- *   (such as notification illegal level do not fold back 'info').
+ * Discipline (original semantics preserved):
+ * - Publish side performs unified JSON validation + redaction (both strings and keys are redacted); invalid payloads
+ *   throw HelmError immediately without silent fallbacks. Core types accept either a raw payload or a full event envelope
+ *   (e.g., PluginHost emitEvent('plugin.changed', {type, plugin})), unwrapping envelopes without double-nesting.
+ *   Unknown event types pass through verbatim as CustomHelmEvent {type, payload} without masquerading as notifications.
+ * - "May be omitted, must never be wrong": optional fields are validated whenever present via precompiled TypeBox
+ *   schemas + explicit semantic checks and fail rather than being silently coerced.
  */
-
+import { Type, type Static, type TSchema } from 'typebox'
+import { Compile, type Validator } from 'typebox/compile'
+import type { TLocalizedValidationError } from 'typebox/error'
 import { HelmError } from '@helm/protocol'
 import type {
   AskSpec,
@@ -28,15 +29,16 @@ import type {
 import { redactJsonValue } from '../redact.js'
 import { validateSecretLifetime } from '../services/secret-stash.js'
 
-const CONVERSATION_STATUSES = new Set(['working', 'blocked', 'done', 'idle', 'error'])
-const ASK_STATUSES = new Set(['pending', 'answered', 'cancelled', 'superseded'])
-const ASK_FIELD_TYPES = new Set(['text', 'select', 'confirm'])
+const NonEmptyString = Type.String({ minLength: 1 })
+const SafePositiveInt = Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })
+const SafeNonNegativeInt = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })
 
 /**
- * recursion remove value is undefined optional field.
- * only for plain object / array recursion; the rest value (contains Date/Map etc. illegal JSON value) original return,
- * by redactJsonValue in JSON boundary unify reject, does not static default convert.
- * already in access path on object original return (true loop to redactJsonValue explicit throws, do not in this in unbounded recursion).
+ * Recursively strip optional fields whose value is undefined.
+ * Recurses only into plain objects and arrays; all other values (including non-JSON types like Date/Map) are returned
+ * verbatim so redactJsonValue rejects them explicitly at the JSON boundary without silent conversion.
+ * Objects already on the active traversal path are returned verbatim (true cycles are caught explicitly by redactJsonValue
+ * instead of triggering unbounded recursion here).
  */
 export function pruneUndefined(value: unknown, visiting: WeakSet<object>): unknown {
   if (Array.isArray(value)) {
@@ -64,229 +66,335 @@ export function pruneUndefined(value: unknown, visiting: WeakSet<object>): unkno
   return value
 }
 
-/**
- * conversation.upsert payload validate: event consumer (web live-state / cli / protocol type)
- * actual read ConversationSummary core field; optional field store in i.e. validate, type do not symbol same throws
- *(can missing cannot wrong).
- */
-function assertConversationSummaryShape(value: unknown): void {
-  if (value === null || typeof value !== 'object') {
-    throw new HelmError('invalid_event', 'conversation.upsert need to ConversationSummary shape conversation', 500)
-  }
-  const conv = value as Record<string, unknown>
-  if (
-    !Number.isInteger(conv['id']) ||
-    typeof conv['title'] !== 'string' ||
-    typeof conv['profileId'] !== 'string' ||
-    !Array.isArray(conv['tags']) ||
-    !conv['tags'].every((tag) => typeof tag === 'string') ||
-    typeof conv['cwd'] !== 'string' ||
-    typeof conv['model'] !== 'string' ||
-    typeof conv['thinkingLevel'] !== 'string' ||
-    !CONVERSATION_STATUSES.has(conv['status'] as string) ||
-    !Number.isInteger(conv['stateChangeSeq']) ||
-    !Number.isInteger(conv['completionSeq']) ||
-    typeof conv['unread'] !== 'boolean' ||
-    typeof conv['pinned'] !== 'boolean' ||
-    !Number.isInteger(conv['pendingAskCount']) ||
-    !Number.isFinite(conv['createdAt']) ||
-    !Number.isFinite(conv['updatedAt'])
-  ) {
-    throw new HelmError(
-      'invalid_event',
-      'conversation.upsert need to ConversationSummary shape conversation(id/title/profileId/tags/cwd/model/thinkingLevel/status/stateChangeSeq/completionSeq/unread/pinned/pendingAskCount/createdAt/updatedAt)',
-      500,
-    )
-  }
-  if (
-    (conv['parentConversationId'] !== undefined && !Number.isInteger(conv['parentConversationId'])) ||
-    (conv['parentToolCallId'] !== undefined && typeof conv['parentToolCallId'] !== 'string') ||
-    (conv['ownedBy'] !== undefined &&
-      conv['ownedBy'] !== 'human' &&
-      conv['ownedBy'] !== 'helm' &&
-      conv['ownedBy'] !== 'bot') ||
-    (conv['nodeId'] !== undefined && typeof conv['nodeId'] !== 'string') ||
-    (conv['thinkingLevelOverride'] !== undefined && typeof conv['thinkingLevelOverride'] !== 'string') ||
-    (conv['doing'] !== undefined && typeof conv['doing'] !== 'string') ||
-    (conv['lastError'] !== undefined && typeof conv['lastError'] !== 'string') ||
-    (conv['lastEntryId'] !== undefined &&
-      (typeof conv['lastEntryId'] !== 'number' ||
-        !Number.isSafeInteger(conv['lastEntryId']) ||
-        conv['lastEntryId'] < 0)) ||
-    (conv['contextUsage'] !== undefined && !isContextUsageShape(conv['contextUsage']))
-  ) {
-    throw new HelmError(
-      'invalid_event',
-      'conversation.upsert optional field (parentConversationId/parentToolCallId/ownedBy/nodeId/thinkingLevelOverride/doing/lastError/lastEntryId/contextUsage) store in when type must legal',
-      500,
-    )
-  }
+function formatTypeBoxErrors(errors: readonly TLocalizedValidationError[]): string {
+  if (errors.length === 0) return 'invalid shape'
+  return errors
+    .slice(0, 5)
+    .map((e) => `${e.instancePath || '(root)'} ${e.message}`.trim())
+    .join('; ')
 }
 
-/** contextUsage shape validate (can missing cannot wrong; contract converge is tokens/contextWindow/compacting
- * three field, unknown field reject - - do not die field;tokens is null means context unknown; rate class
- * metric do not follow use amount carry, by optional plugin policy layer self row render). */
-function isContextUsageShape(value: unknown): boolean {
-  if (value === null || typeof value !== 'object') return false
-  const usage = value as Record<string, unknown>
-  if (
-    !Object.keys(usage).every(
-      (key) => key === 'tokens' || key === 'contextWindow' || key === 'compacting',
-    )
-  ) {
-    return false
+function parseEventShape<T extends TSchema>(
+  validator: Validator<Record<string, never>, T>,
+  value: unknown,
+  what: string,
+): Static<T> {
+  if (!validator.Check(value)) {
+    throw new HelmError('invalid_event', `${what}: ${formatTypeBoxErrors(validator.Errors(value))}`, 500)
   }
-  if (
-    usage['tokens'] !== null &&
-    (typeof usage['tokens'] !== 'number' || !Number.isFinite(usage['tokens']) || usage['tokens'] < 0)
-  ) {
-    return false
-  }
-  if (
-    usage['contextWindow'] !== undefined &&
-    (typeof usage['contextWindow'] !== 'number' ||
-      !Number.isFinite(usage['contextWindow']) ||
-      usage['contextWindow'] <= 0)
-  ) {
-    return false
-  }
-  if (usage['compacting'] !== undefined && typeof usage['compacting'] !== 'boolean') {
-    return false
-  }
-  return true
+  return value as Static<T>
 }
 
-/** conversation.live through use streaming generation fact shape (can missing cannot wrong):
- * taskId / attempt positive integer (identity cannot fabricate);message.content is array and only contains
- * subject to limit chunk shape;usage.output correct finite count. illegal i.e. reject, not silently fall back. */
-function isLiveGenerationShape(value: unknown): boolean {
-  if (value === null || typeof value !== 'object') return false
-  const generation = value as Record<string, unknown>
-  if (
-    !Object.keys(generation).every(
-      (key) => key === 'taskId' || key === 'attempt' || key === 'message',
-    )
-  ) {
-    return false
-  }
-  if (
-    typeof generation['taskId'] !== 'number' ||
-    !Number.isInteger(generation['taskId']) ||
-    generation['taskId'] <= 0
-  ) {
-    return false
-  }
-  if (
-    typeof generation['attempt'] !== 'number' ||
-    !Number.isInteger(generation['attempt']) ||
-    generation['attempt'] <= 0
-  ) {
-    return false
-  }
-  const message = generation['message']
-  if (message === undefined) return true
-  if (message === null || typeof message !== 'object') return false
-  const m = message as Record<string, unknown>
-  if (!Object.keys(m).every((key) => key === 'content' || key === 'usage')) return false
-  if (!Array.isArray(m['content'])) return false
-  for (const block of m['content']) {
-    if (block === null || typeof block !== 'object') return false
-    const b = block as Record<string, unknown>
-    if (b['type'] === 'text') {
-      if (typeof b['text'] !== 'string' || !Object.keys(b).every((k) => k === 'type' || k === 'text')) return false
-    } else if (b['type'] === 'thinking') {
-      if (typeof b['thinking'] !== 'string' || !Object.keys(b).every((k) => k === 'type' || k === 'thinking')) return false
-    } else if (b['type'] === 'toolCall') {
-      if (
-        typeof b['name'] !== 'string' ||
-        !Object.keys(b).every((k) => k === 'type' || k === 'name' || k === 'arguments')
-      ) {
-        return false
+// ---------------------------------------------------------------------------
+// Precompiled TypeBox event payload schemas
+// ---------------------------------------------------------------------------
+
+const CONTEXT_USAGE_SCHEMA = Type.Object(
+  {
+    tokens: Type.Union([Type.Number({ minimum: 0 }), Type.Null()]),
+    contextWindow: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
+    compacting: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+)
+
+const CONVERSATION_SUMMARY_SCHEMA = Type.Object({
+  id: Type.Integer(),
+  title: Type.String(),
+  profileId: Type.String(),
+  tags: Type.Array(Type.String()),
+  cwd: Type.String(),
+  model: Type.String(),
+  thinkingLevel: Type.String(),
+  status: Type.Enum(['working', 'blocked', 'done', 'idle', 'error'] as const),
+  stateChangeSeq: Type.Integer(),
+  completionSeq: Type.Integer(),
+  unread: Type.Boolean(),
+  pinned: Type.Boolean(),
+  pendingAskCount: Type.Integer(),
+  createdAt: Type.Number(),
+  updatedAt: Type.Number(),
+  parentConversationId: Type.Optional(Type.Integer()),
+  parentToolCallId: Type.Optional(Type.String()),
+  ownedBy: Type.Optional(Type.Enum(['human', 'helm', 'bot'] as const)),
+  nodeId: Type.Optional(Type.String()),
+  thinkingLevelOverride: Type.Optional(Type.String()),
+  doing: Type.Optional(Type.String()),
+  lastError: Type.Optional(Type.String()),
+  lastEntryId: Type.Optional(SafeNonNegativeInt),
+  contextUsage: Type.Optional(CONTEXT_USAGE_SCHEMA),
+})
+
+const CONVERSATION_SUMMARY_CHECKER = Compile(CONVERSATION_SUMMARY_SCHEMA)
+
+const LIVE_CONTENT_BLOCK_SCHEMA = Type.Union([
+  Type.Object({ type: Type.Literal('text'), text: Type.String() }, { additionalProperties: false }),
+  Type.Object({ type: Type.Literal('thinking'), thinking: Type.String() }, { additionalProperties: false }),
+  Type.Object(
+    { type: Type.Literal('toolCall'), name: Type.String(), arguments: Type.Optional(Type.Unknown()) },
+    { additionalProperties: false },
+  ),
+])
+
+const LIVE_GENERATION_SCHEMA = Type.Object(
+  {
+    taskId: Type.Integer({ minimum: 1 }),
+    attempt: Type.Integer({ minimum: 1 }),
+    message: Type.Optional(
+      Type.Object(
+        {
+          content: Type.Array(LIVE_CONTENT_BLOCK_SCHEMA),
+          usage: Type.Optional(
+            Type.Object({ output: Type.Number({ exclusiveMinimum: 0 }) }, { additionalProperties: false }),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+)
+
+const CONVERSATION_LIVE_CHECKER = Compile(
+  Type.Object({
+    conversationId: SafePositiveInt,
+    text: Type.String(),
+    tools: Type.Array(Type.Unknown()),
+    updatedAt: Type.Number(),
+    thinking: Type.Optional(Type.String()),
+    queuedInputs: Type.Optional(Type.Array(Type.Unknown())),
+    generation: Type.Optional(LIVE_GENERATION_SCHEMA),
+  }),
+)
+
+const ASK_FIELD_SCHEMA = Type.Object({
+  name: Type.String(),
+  label: Type.String(),
+  type: Type.Enum(['text', 'select', 'confirm'] as const),
+  options: Type.Optional(Type.Array(Type.Object({ label: Type.String(), value: Type.String() }))),
+  secret: Type.Optional(Type.Boolean()),
+  required: Type.Optional(Type.Boolean()),
+  secretLifetime: Type.Optional(Type.Unknown()),
+})
+
+const ASK_SPEC_CHECKER = Compile(
+  Type.Object({
+    id: NonEmptyString,
+    conversationId: Type.Integer(),
+    title: NonEmptyString,
+    fields: Type.Array(ASK_FIELD_SCHEMA, { minItems: 1 }),
+    status: Type.Enum(['pending', 'answered', 'cancelled', 'superseded'] as const),
+    createdAt: Type.Number(),
+    ownerPluginId: Type.Optional(Type.String()),
+    description: Type.Optional(Type.String()),
+    expectedStateSeq: Type.Optional(Type.Integer()),
+  }),
+)
+
+function assertAskSpecShape(value: unknown): AskSpec {
+  const ask = parseEventShape(
+    ASK_SPEC_CHECKER,
+    value,
+    'ask.upsert requires an AskSpec-shaped ask (id/conversationId/title/fields/status/createdAt)',
+  )
+  for (const field of ask.fields) {
+    if (field.secretLifetime !== undefined) {
+      if (field.secret !== true) {
+        throw new HelmError('invalid_event', 'ask.upsert secretLifetime is only allowed on secret fields', 500)
       }
-    } else {
-      return false
-    }
-  }
-  const usage = m['usage']
-  if (usage === undefined) return true
-  if (usage === null || typeof usage !== 'object') return false
-  const u = usage as Record<string, unknown>
-  if (!Object.keys(u).every((key) => key === 'output')) return false
-  return typeof u['output'] === 'number' && Number.isFinite(u['output']) && u['output'] > 0
-}
-
-/** ask.upsert payload validate:AskSpec core field shape (business level rule by createAsk  validateAskSpec guard). */
-function assertAskSpecShape(value: unknown): void {
-  if (value === null || typeof value !== 'object') {
-    throw new HelmError('invalid_event', 'ask.upsert need to AskSpec shape ask', 500)
-  }
-  const ask = value as Record<string, unknown>
-  if (
-    typeof ask['id'] !== 'string' ||
-    ask['id'] === '' ||
-    !Number.isInteger(ask['conversationId']) ||
-    typeof ask['title'] !== 'string' ||
-    ask['title'] === '' ||
-    !Array.isArray(ask['fields']) ||
-    ask['fields'].length === 0 ||
-    !ASK_STATUSES.has(ask['status'] as string) ||
-    !Number.isFinite(ask['createdAt'])
-  ) {
-    throw new HelmError(
-      'invalid_event',
-      'ask.upsert need to AskSpec shape ask(id/conversationId/title/fields/status/createdAt)',
-      500,
-    )
-  }
-  for (const field of ask['fields']) {
-    if (
-      field === null ||
-      typeof field !== 'object' ||
-      typeof (field as Record<string, unknown>)['name'] !== 'string' ||
-      typeof (field as Record<string, unknown>)['label'] !== 'string' ||
-      !ASK_FIELD_TYPES.has((field as Record<string, unknown>)['type'] as string)
-    ) {
-      throw new HelmError('invalid_event', 'ask.upsert  field need to { name: string; label: string; type: text|select|confirm } shape', 500)
-    }
-    const f = field as Record<string, unknown>
-    if (f['secretLifetime'] !== undefined) {
-      if (f['secret'] !== true) throw new HelmError('invalid_event', 'ask.upsert  secretLifetime only allows used to secret field', 500)
       try {
-        validateSecretLifetime(f['secretLifetime'] as SecretLifetime, 'ask.upsert field.secretLifetime')
+        validateSecretLifetime(field.secretLifetime as SecretLifetime, 'ask.upsert field.secretLifetime')
       } catch (error) {
-        throw new HelmError('invalid_event', error instanceof Error ? error.message : 'ask.upsert field.secretLifetime format invalid', 500)
+        throw new HelmError(
+          'invalid_event',
+          error instanceof Error ? error.message : 'ask.upsert field.secretLifetime has invalid format',
+          500,
+        )
       }
     }
-    if (f['type'] === 'select' && (!Array.isArray(f['options']) || f['options'].length === 0)) {
-      throw new HelmError('invalid_event', 'ask.upsert  select field need to non-empty options(and createAsk validate consistent)', 500)
-    }
-    if (
-      (f['options'] !== undefined &&
-        (!Array.isArray(f['options']) ||
-          !f['options'].every(
-            (o) => o !== null && typeof o === 'object' && typeof (o as Record<string, unknown>)['label'] === 'string' && typeof (o as Record<string, unknown>)['value'] === 'string',
-          ))) ||
-      (f['secret'] !== undefined && typeof f['secret'] !== 'boolean') ||
-      (f['required'] !== undefined && typeof f['required'] !== 'boolean')
-    ) {
-      throw new HelmError('invalid_event', 'ask.upsert  field optional field (options/secret/required) store in when type must legal', 500)
+    if (field.type === 'select' && (!field.options || field.options.length === 0)) {
+      throw new HelmError(
+        'invalid_event',
+        'ask.upsert select field requires non-empty options (consistent with createAsk validation)',
+        500,
+      )
     }
   }
-  if (
-    (ask['ownerPluginId'] !== undefined && typeof ask['ownerPluginId'] !== 'string') ||
-    (ask['description'] !== undefined && typeof ask['description'] !== 'string') ||
-    (ask['expectedStateSeq'] !== undefined && !Number.isInteger(ask['expectedStateSeq']))
-  ) {
-    throw new HelmError('invalid_event', 'ask.upsert optional field (ownerPluginId/description/expectedStateSeq) store in when type must legal', 500)
-  }
+  return ask as unknown as AskSpec
+}
+
+const CONVERSATION_DELETED_CHECKER = Compile(Type.Object({ conversationId: Type.Integer() }))
+
+const CONVERSATION_ENTRY_CHECKER = Compile(
+  Type.Object({
+    conversationId: Type.Integer(),
+    entry: Type.Object({
+      id: Type.String(),
+      kind: Type.String(),
+      taskId: Type.Optional(Type.Integer({ minimum: 1 })),
+    }),
+  }),
+)
+
+const ASK_RESOLVED_CHECKER = Compile(
+  Type.Object({
+    askId: Type.String(),
+    status: Type.Enum(['answered', 'cancelled', 'superseded'] as const),
+  }),
+)
+
+const PLUGIN_CHANGED_CHECKER = Compile(
+  Type.Object({
+    plugin: Type.Object({ id: Type.String() }),
+    ui: Type.Array(Type.Unknown()),
+  }),
+)
+
+const PLUGIN_DOC_UPDATED_CHECKER = Compile(
+  Type.Object({
+    doc: Type.Object({
+      pluginId: Type.String(),
+      name: Type.String(),
+      value: Type.Unknown(),
+    }),
+  }),
+)
+
+const NODE_CHANGED_CHECKER = Compile(
+  Type.Object({
+    node: Type.Object({
+      id: NonEmptyString,
+      kind: Type.Enum(['local', 'byom'] as const),
+      online: Type.Boolean(),
+    }),
+    removed: Type.Optional(Type.Boolean()),
+  }),
+)
+
+const NOTIFICATION_CHECKER = Compile(
+  Type.Object({
+    level: Type.Enum(['info', 'warning', 'error'] as const),
+    title: NonEmptyString,
+    body: Type.Optional(Type.String()),
+    conversationId: Type.Optional(Type.Integer()),
+  }),
+)
+
+const SESSION_DOC_UPDATE_CHECKER = Compile(
+  Type.Object({
+    pluginId: NonEmptyString,
+    name: NonEmptyString,
+    conversationId: SafePositiveInt,
+    value: Type.Unknown(),
+    deleted: Type.Optional(Type.Literal(true)),
+  }),
+)
+
+type CoreEventAssembler = (source: Record<string, unknown> | undefined) => HelmEvent
+
+/** Table-driven core event assemblers; custom/unknown event types pass through outside this table. */
+const CORE_EVENT_ASSEMBLERS: Readonly<Record<string, CoreEventAssembler>> = {
+  'conversation.upsert': (source) => {
+    const conversation = parseEventShape(
+      CONVERSATION_SUMMARY_CHECKER,
+      source?.['conversation'] ?? source,
+      'conversation.upsert requires a ConversationSummary-shaped conversation',
+    )
+    return { type: 'conversation.upsert', conversation: conversation as unknown as ConversationSummary }
+  },
+  'conversation.deleted': (source) => {
+    const parsed = parseEventShape(
+      CONVERSATION_DELETED_CHECKER,
+      source,
+      'conversation.deleted requires numeric conversationId',
+    )
+    return { type: 'conversation.deleted', conversationId: parsed.conversationId }
+  },
+  'conversation.entry': (source) => {
+    const parsed = parseEventShape(
+      CONVERSATION_ENTRY_CHECKER,
+      source,
+      'conversation.entry requires { conversationId: integer, entry: { id: string, kind: string, taskId?: positive integer } }',
+    )
+    return { type: 'conversation.entry', conversationId: parsed.conversationId, entry: parsed.entry as ConversationEntry }
+  },
+  'conversation.live': () => {
+    // Transient live frames bypass EventHub.publish / seq / replay ring; callers must use publishTransientLive().
+    throw new HelmError(
+      'invalid_event',
+      'conversation.live is transient and cannot enter the durable EventHub.publish stream (use publishTransientLive)',
+      500,
+    )
+  },
+  'ask.upsert': (source) => ({
+    type: 'ask.upsert',
+    ask: assertAskSpecShape(source?.['ask'] ?? source),
+  }),
+  'ask.resolved': (source) => {
+    const parsed = parseEventShape(ASK_RESOLVED_CHECKER, source, 'ask.resolved requires string askId and valid status')
+    return { type: 'ask.resolved', askId: parsed.askId, status: parsed.status }
+  },
+  'plugin.changed': (source) => {
+    const parsed = parseEventShape(
+      PLUGIN_CHANGED_CHECKER,
+      source,
+      'plugin.changed requires { plugin: PluginSummary; ui: PluginUiContribution[] } (ui is [] when disabled/uninstalled)',
+    )
+    return {
+      type: 'plugin.changed',
+      plugin: parsed.plugin as HelmSnapshot['plugins'][number],
+      ui: parsed.ui as HelmSnapshot['ui'],
+    }
+  },
+  'plugin.doc.updated': (source) => {
+    const parsed = parseEventShape(
+      PLUGIN_DOC_UPDATED_CHECKER,
+      source,
+      'plugin.doc.updated requires { pluginId: string; name: string; value }-shaped doc',
+    )
+    return { type: 'plugin.doc.updated', doc: parsed.doc as PublicPluginDoc }
+  },
+  'plugin.session_doc.updated': () => {
+    // Defensive rejection on the global stream: session doc events belong exclusively on SessionDocEventHub.
+    throw new HelmError(
+      'invalid_event',
+      'plugin.session_doc.updated cannot enter the global event stream (dedicated session-doc SSE stream only)',
+      500,
+    )
+  },
+  'node.changed': (source) => {
+    const parsed = parseEventShape(
+      NODE_CHANGED_CHECKER,
+      source,
+      "node.changed requires { node: { id: string; kind: 'local' | 'byom'; online: boolean }; removed?: boolean }",
+    )
+    return {
+      type: 'node.changed',
+      node: parsed.node as NodeInfo,
+      ...(parsed.removed !== undefined ? { removed: parsed.removed } : {}),
+    }
+  },
+  notification: (source) => {
+    const parsed = parseEventShape(
+      NOTIFICATION_CHECKER,
+      source,
+      "notification requires { level: 'info' | 'warning' | 'error'; title: non-empty string; body?: string; conversationId?: integer }",
+    )
+    return {
+      type: 'notification',
+      level: parsed.level,
+      title: parsed.title,
+      ...(parsed.body !== undefined ? { body: parsed.body } : {}),
+      ...(parsed.conversationId !== undefined ? { conversationId: parsed.conversationId } : {}),
+    }
+  },
 }
 
 /**
- *  (type, payload) group install is protocol HelmEvent; first prune optional undefined, again whole recursion
- * JSON redaction (string value and field name all redact).core type accept directly payload or complete
- * event message seal; unknown type away CustomHelmEvent {type, payload} original pass-through (do not fake report into
- * notification); any illegal JSON value (loop,Date,Map etc.) or core type field shape do not symbol
- * all throw HelmError not silently fall back, not silently fix correct.
+ * Assemble (type, payload) into a protocol HelmEvent; prunes optional undefined values first, then applies recursive
+ * JSON redaction across both string values and keys. Core types accept a raw payload or a full event envelope;
+ * unknown types pass through verbatim as CustomHelmEvent {type, payload} (never masquerading as notification);
+ * any invalid JSON value (cycles, Date, Map, etc.) or mismatched core shape throws HelmError with no silent fallback or coercion.
  */
 export function assembleHelmEvent(
   type: string,
@@ -294,226 +402,34 @@ export function assembleHelmEvent(
   redact: (text: string) => string,
 ): HelmEvent {
   if (typeof type !== 'string' || type.length === 0) {
-    throw new HelmError('invalid_event', 'event type must be non-empty string', 500)
+    throw new HelmError('invalid_event', 'event type must be a non-empty string', 500)
   }
   const clean = pruneUndefined(payload, new WeakSet())
   const redacted = redactJsonValue(clean, (t) => redact(t))
   const record =
     redacted !== null && typeof redacted === 'object' ? (redacted as Record<string, unknown>) : undefined
-
-  // complete event message seal (payload self carries same name type field): split package take each type dedicated belong field, do not second embed set.
   const envelope = record !== undefined && record['type'] === type ? record : undefined
 
-  switch (type) {
-    case 'conversation.upsert': {
-      const source = (envelope ?? record) as Record<string, unknown> | undefined
-      const conversation = source?.['conversation'] ?? source
-      assertConversationSummaryShape(conversation)
-      return { type, conversation: conversation as ConversationSummary }
-    }
-    case 'conversation.deleted': {
-      const source = (envelope ?? record) as Record<string, unknown> | undefined
-      const conversationId = Number(source?.['conversationId'])
-      if (!Number.isInteger(conversationId)) {
-        throw new HelmError('invalid_event', 'conversation.deleted need to number conversationId', 500)
-      }
-      return { type, conversationId }
-    }
-    case 'conversation.entry': {
-      const source = (envelope ?? record) as Record<string, unknown> | undefined
-      const conversationId = Number(source?.['conversationId'])
-      const entry = source?.['entry']
-      if (!Number.isInteger(conversationId)) {
-        throw new HelmError('invalid_event', 'conversation.entry need to number conversationId', 500)
-      }
-      if (
-        entry === null ||
-        typeof entry !== 'object' ||
-        typeof (entry as { id?: unknown }).id !== 'string' ||
-        typeof (entry as { kind?: unknown }).kind !== 'string'
-      ) {
-        throw new HelmError(
-          'invalid_event',
-          'conversation.entry need to { id: string; kind: string; ... } shape entry',
-          500,
-        )
-      }
-      const taskId = (entry as { taskId?: unknown }).taskId
-      if (
-        taskId !== undefined &&
-        (typeof taskId !== 'number' || !Number.isInteger(taskId) || taskId <= 0)
-      ) {
-        throw new HelmError('invalid_event', 'conversation.entry  taskId must be positive integer (can missing cannot wrong)', 500)
-      }
-      return { type, conversationId, entry: entry as ConversationEntry }
-    }
-    case 'conversation.live': {
-      // Transient live frames bypass EventHub.publish / seq / replay ring; callers must use publishTransientLive().
-      throw new HelmError(
-        'invalid_event',
-        'conversation.live is transient and disallows entering durable EventHub.publish stream (use publishTransientLive)',
-        500,
-      )
-    }
-    case 'ask.upsert': {
-      const source = (envelope ?? record) as Record<string, unknown> | undefined
-      const ask = source?.['ask'] ?? source
-      assertAskSpecShape(ask)
-      return { type, ask: ask as AskSpec }
-    }
-    case 'ask.resolved': {
-      const source = (envelope ?? record) as Record<string, unknown> | undefined
-      const askId = source?.['askId']
-      const status = source?.['status']
-      if (typeof askId !== 'string' || (status !== 'answered' && status !== 'cancelled' && status !== 'superseded')) {
-        throw new HelmError('invalid_event', 'ask.resolved need to string askId and legal status', 500)
-      }
-      return { type, askId, status }
-    }
-    case 'plugin.changed': {
-      const source = (envelope ?? record) as Record<string, unknown> | undefined
-      const plugin = source?.['plugin']
-      const ui = source?.['ui']
-      if (
-        plugin === null ||
-        typeof plugin !== 'object' ||
-        typeof (plugin as { id?: unknown }).id !== 'string' ||
-        !Array.isArray(ui)
-      ) {
-        throw new HelmError(
-          'invalid_event',
-          'plugin.changed need to { plugin: PluginSummary; ui: PluginUiContribution[] }(deactivate/unload when ui is empty array)',
-          500,
-        )
-      }
-      return { type, plugin: plugin as HelmSnapshot['plugins'][number], ui: ui as HelmSnapshot['ui'] }
-    }
-    case 'plugin.doc.updated': {
-      const source = (envelope ?? record) as Record<string, unknown> | undefined
-      const doc = source?.['doc']
-      if (
-        doc === null ||
-        typeof doc !== 'object' ||
-        typeof (doc as { pluginId?: unknown }).pluginId !== 'string' ||
-        typeof (doc as { name?: unknown }).name !== 'string' ||
-        !('value' in (doc as Record<string, unknown>))
-      ) {
-        throw new HelmError(
-          'invalid_event',
-          'plugin.doc.updated need to { pluginId: string; name: string; value } shape doc',
-          500,
-        )
-      }
-      return { type, doc: doc as PublicPluginDoc }
-    }
-    case 'plugin.session_doc.updated': {
-      // global stream guard against defend reject: conversation document event only allows dedicated use stream (SessionDocEventHub),
-      // mistakenly throw global broadcast belongs to contract violate about, explicit errors while is not fall back pass-through (guard against write put large regression).
-      throw new HelmError(
-        'invalid_event',
-        'plugin.session_doc.updated disallows enter global event stream (only dedicated use conversation document SSE)',
-        500,
-      )
-    }
-    case 'node.changed': {
-      const source = (envelope ?? record) as Record<string, unknown> | undefined
-      const node = source?.['node']
-      const removed = source?.['removed']
-      if (
-        node === null ||
-        typeof node !== 'object' ||
-        typeof (node as { id?: unknown }).id !== 'string' ||
-        (node as { id?: unknown }).id === '' ||
-        ((node as { kind?: unknown }).kind !== 'local' && (node as { kind?: unknown }).kind !== 'byom') ||
-        typeof (node as { online?: unknown }).online !== 'boolean'
-      ) {
-        throw new HelmError(
-          'invalid_event',
-          "node.changed need to { node: { id: string; kind: 'local' | 'byom'; online: boolean; ... } } shape (removed optional)",
-          500,
-        )
-      }
-      if (removed !== undefined && typeof removed !== 'boolean') {
-        throw new HelmError('invalid_event', 'node.changed  removed if has must is boolean', 500)
-      }
-      return {
-        type,
-        node: node as NodeInfo,
-        ...(typeof removed === 'boolean' ? { removed } : {}),
-      }
-    }
-    case 'notification': {
-      const source = (envelope ?? record) as Record<string, unknown> | undefined
-      const level = source?.['level']
-      const title = source?.['title']
-      const body = source?.['body']
-      const conversationId = source?.['conversationId']
-      if (level !== 'info' && level !== 'warning' && level !== 'error') {
-        throw new HelmError('invalid_event', "notification need to level is 'info' | 'warning' | 'error'", 500)
-      }
-      if (typeof title !== 'string' || title === '') {
-        throw new HelmError('invalid_event', 'notification need to title is non-empty string', 500)
-      }
-      if (body !== undefined && typeof body !== 'string') {
-        throw new HelmError('invalid_event', 'notification  body if has must is string', 500)
-      }
-      if (conversationId !== undefined && (typeof conversationId !== 'number' || !Number.isInteger(conversationId))) {
-        throw new HelmError('invalid_event', 'notification  conversationId if has must is integer', 500)
-      }
-      return {
-        type,
-        level,
-        title,
-        ...(body !== undefined ? { body } : {}),
-        ...(conversationId !== undefined ? { conversationId } : {}),
-      }
-    }
-    default: {
-      // CustomHelmEvent: unknown type original pass-through, do not fake report into notification.
-      const custom: CustomHelmEvent = { type: String(type), payload: redacted }
-      return custom
-    }
+  const assembler = Object.hasOwn(CORE_EVENT_ASSEMBLERS, type) ? CORE_EVENT_ASSEMBLERS[type] : undefined
+  if (assembler !== undefined) {
+    return assembler(envelope ?? record)
   }
+  // CustomHelmEvent: pass unknown types through verbatim without masquerading as notifications.
+  const custom: CustomHelmEvent = { type: String(type), payload: redacted }
+  return custom
 }
 
 /**
- * plugin.session_doc.updated payload boundary validate (SessionDocEventHub.dispatch use):
- * first do shape gate (doc is null/non- object when must not enter any field read), again validate three meta group
- * field and deleted constraint; return already verify doc(redaction by caller complete).
+ * Boundary validation for plugin.session_doc.updated payloads (used by SessionDocEventHub.dispatch):
+ * validates the triple key and deleted constraint, returning the doc unchanged (redaction is handled by caller).
  */
 export function assertSessionDocUpdateShape(payload: unknown): PublicPluginSessionDoc {
-  const source = (payload ?? undefined) as { type?: unknown; doc?: unknown } | undefined
-  const doc = source?.['doc']
-  if (doc === null || typeof doc !== 'object') {
-    throw new HelmError(
-      'invalid_event',
-      'plugin.session_doc.updated need to { pluginId: string; name: string; conversationId: number; value } shape doc',
-      500,
-    )
-  }
-  const record = doc as Record<string, unknown>
-  const pluginId = record['pluginId']
-  const name = record['name']
-  const conversationId = record['conversationId']
-  if (
-    typeof pluginId !== 'string' ||
-    pluginId === '' ||
-    typeof name !== 'string' ||
-    name === '' ||
-    typeof conversationId !== 'number' ||
-    !Number.isSafeInteger(conversationId) ||
-    conversationId <= 0 ||
-    !('value' in record)
-  ) {
-    throw new HelmError(
-      'invalid_event',
-      'plugin.session_doc.updated need to { pluginId: string; name: string; conversationId: number; value } shape doc',
-      500,
-    )
-  }
-  if (record['deleted'] !== undefined && record['deleted'] !== true) {
-    throw new HelmError('invalid_event', 'plugin.session_doc.updated  deleted if has must is true', 500)
-  }
+  const source = (payload ?? undefined) as { doc?: unknown } | undefined
+  const doc = parseEventShape(
+    SESSION_DOC_UPDATE_CHECKER,
+    source?.['doc'],
+    'plugin.session_doc.updated requires { pluginId: string; name: string; conversationId: number; value }-shaped doc',
+  )
   return doc as PublicPluginSessionDoc
 }
 
@@ -528,42 +444,10 @@ export function validateAndRedactConversationLive(
 ): ConversationLive {
   const clean = pruneUndefined(payload, new WeakSet())
   const redacted = redactJsonValue(clean, (t) => redact(t))
-  if (redacted === null || typeof redacted !== 'object' || Array.isArray(redacted)) {
-    throw new HelmError(
-      'invalid_event',
-      'conversation.live need to { conversationId, text, tools, updatedAt } shape live',
-      500,
-    )
-  }
-  const live = redacted as Record<string, unknown>
-  if (
-    typeof live['conversationId'] !== 'number' ||
-    !Number.isSafeInteger(live['conversationId']) ||
-    live['conversationId'] <= 0 ||
-    typeof live['text'] !== 'string' ||
-    !Array.isArray(live['tools']) ||
-    typeof live['updatedAt'] !== 'number' ||
-    !Number.isFinite(live['updatedAt'])
-  ) {
-    throw new HelmError(
-      'invalid_event',
-      'conversation.live need to { conversationId, text, tools, updatedAt } shape live',
-      500,
-    )
-  }
-  if (live['thinking'] !== undefined && typeof live['thinking'] !== 'string') {
-    throw new HelmError('invalid_event', 'conversation.live thinking must be string when present', 500)
-  }
-  if (live['queuedInputs'] !== undefined && !Array.isArray(live['queuedInputs'])) {
-    throw new HelmError('invalid_event', 'conversation.live queuedInputs must be array when present', 500)
-  }
-  const generation = live['generation']
-  if (generation !== undefined && !isLiveGenerationShape(generation)) {
-    throw new HelmError(
-      'invalid_event',
-      'conversation.live  generation need to { taskId: positive integer, attempt: positive integer, message?: { content, usage? } } shape',
-      500,
-    )
-  }
-  return redacted as ConversationLive
+  const live = parseEventShape(
+    CONVERSATION_LIVE_CHECKER,
+    redacted,
+    'conversation.live requires a { conversationId, text, tools, updatedAt, generation? }-shaped live payload',
+  )
+  return live as unknown as ConversationLive
 }

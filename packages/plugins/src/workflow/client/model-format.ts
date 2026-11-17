@@ -26,6 +26,47 @@ export function firstLineOf(text: string, maxChars: number): string {
   return line.length > maxChars ? `${line.slice(0, maxChars)}…` : line
 }
 
+/** Structured-output contract boilerplate injected by spawn. */
+const STRUCTURED_OUTPUT_CONTRACT_RE = /<structured_output_contract>[\s\S]*?<\/structured_output_contract>/g
+
+export function stripStructuredOutputContract(text: string): string {
+  return text.replace(STRUCTURED_OUTPUT_CONTRACT_RE, '')
+}
+
+/** Kernel-generated default subagent conversation titles that carry no task meaning. */
+export function isPlaceholderSubagentTitle(title: string, childConversationId: number): boolean {
+  const trimmed = title.trim()
+  if (trimmed === '') return true
+  const lower = trimmed.toLowerCase()
+  return (
+    lower === `subagent ${childConversationId}` ||
+    lower === `subagent #${childConversationId}` ||
+    trimmed === `子代理 ${childConversationId}` ||
+    trimmed === `子代理 #${childConversationId}` ||
+    trimmed === `子会话 ${childConversationId}` ||
+    trimmed === `子会话 #${childConversationId}`
+  )
+}
+
+/** Non-descriptive placeholder run names (`'subagent'`, `'subagent:...'`, or identical to runId). */
+export function isPlaceholderRunName(name: string | undefined, runId?: string): boolean {
+  if (name === undefined) return true
+  const trimmed = name.trim()
+  if (trimmed === '') return true
+  if (runId !== undefined && trimmed === runId) return true
+  const lower = trimmed.toLowerCase()
+  return lower === 'subagent' || lower.startsWith('subagent:')
+}
+
+/** Non-descriptive node label (`'subagent'` / `'subagent:...'` / blank). */
+export function isPlaceholderNodeLabel(label: string | undefined): boolean {
+  if (label === undefined) return true
+  const trimmed = label.trim()
+  if (trimmed === '') return true
+  const lower = trimmed.toLowerCase()
+  return lower === 'subagent' || lower.startsWith('subagent:')
+}
+
 const PURE_HEADING_LABEL_RE = /^(?:汇报|结果|总结|摘要|结论|输出|report|result|results|summary|output)\s*[:：]?$/i
 const CODE_FENCE_OR_HR_RE = /^(?:```.*|~~~.*|[-*_]{3,})$/
 

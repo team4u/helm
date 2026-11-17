@@ -138,6 +138,7 @@ export function createBackgroundReporter(deps: BackgroundReporterDeps): Backgrou
         .map((candidate) => ({ runId: candidate.id, name: candidate.name, kind: candidate.kind ?? 'workflow' }))
       const report = {
         runId: run.id,
+        name: run.name,
         status: run.status,
         otherRunningTasks,
         ...(run.result !== undefined ? { result: run.result } : {}),

@@ -106,7 +106,7 @@ export async function reloadExternalPluginFlow(
   pluginId: string,
   options: { doctor?: boolean } = {},
 ): Promise<PluginReloadResult> {
-  // in-flight task preflight first at doctor: is now run instance subject to protect, does not enter any reload path
+  // Check in-flight tasks before running doctor so the active instance stays untouched.
   assertManagedUpdateIdle(deps, pluginId);
   const skipDoctor = options.doctor === false;
   const result = await reloadExternalPlugin(deps.dataDir, pluginId, deps.host, {
@@ -118,7 +118,7 @@ export async function reloadExternalPluginFlow(
             const first = report.checks.find((c) => c.error !== undefined);
             throw new HelmError(
               'plugin_reload_preflight_failed',
-              `plugin ${pluginId} reload preflight failed (${first ? `${first.label}:${first.error!.message}` : 'unknown check failed'}), old instance keep do not change`,
+              `Plugin ${pluginId} reload preflight failed (${first ? `${first.label}: ${first.error!.message}` : 'unknown check failed'}); keeping existing instance`,
               422,
               { pluginId, dir, report },
             );
@@ -127,7 +127,7 @@ export async function reloadExternalPluginFlow(
   });
   const summary = requireSummary(deps.host, pluginId, {
     code: 'plugin_reload_failed',
-    message: `reload after not in host manifest in discover plugin ${pluginId}(internal state inconsistent)`,
+    message: `Plugin ${pluginId} missing from host summary list after reload (inconsistent internal state)`,
     details: { pluginId },
   });
   return {
@@ -146,7 +146,7 @@ export async function rescanExternalPluginDirs(
   return { registered: result.registered, skipped: result.skipped, plugins: host.list() };
 }
 
-/** PackageManagerHost port adapt:per-plugin queue serial by host register/enable/unregister guarantee. */
+/** PackageManagerHost port adapter: per-plugin queue serialization is enforced by register/enable/unregister. */
 export function createPackageManagerHost(deps: DxCoordinatorDeps): PackageManagerHost {
   return {
     registerManagedPlugin: async (dir, options) => {
@@ -158,7 +158,7 @@ export function createPackageManagerHost(deps: DxCoordinatorDeps): PackageManage
         if (entryPath === undefined) {
           throw new HelmError(
             'plugin_entry_missing',
-            `managed install directory excludes plugin entry (without plugin.json and without convention entry):${dir}`,
+            `Managed install directory contains no plugin entry (missing plugin.json and conventional entrypoints): ${dir}`,
             500,
             { dir },
           );
@@ -170,7 +170,7 @@ export function createPackageManagerHost(deps: DxCoordinatorDeps): PackageManage
         }
         const summary = requireSummary(deps.host, definition.id, {
           code: 'plugin_package_install_failed',
-          message: `managed install register after not in host manifest in discover plugin ${definition.id}`,
+          message: `Plugin ${definition.id} missing from host summary list after managed install registration`,
           details: { pluginId: definition.id, dir },
         });
         return { summary, pluginId: definition.id };
@@ -183,7 +183,7 @@ export function createPackageManagerHost(deps: DxCoordinatorDeps): PackageManage
       await deps.host.enable(pluginId);
       return requireSummary(deps.host, pluginId, {
         code: 'plugin_enable_failed',
-        message: `enable after not in host manifest in discover plugin ${pluginId}`,
+        message: `Plugin ${pluginId} missing from host summary list after enable`,
         details: { pluginId },
       });
     },
@@ -196,7 +196,7 @@ export function createPackageManagerHost(deps: DxCoordinatorDeps): PackageManage
       void options;
       const summary = requireSummary(deps.host, pluginId, {
         code: 'plugin_package_update_failed',
-        message: `update reload after not in host manifest in discover plugin ${pluginId}`,
+        message: `Plugin ${pluginId} missing from host summary list after update reload`,
         details: { pluginId },
       });
       return { summary };
@@ -210,7 +210,7 @@ export function createPackageManagerHost(deps: DxCoordinatorDeps): PackageManage
       return { wasEnabled };
     },
     purgePluginPersistentData: async (pluginId) => {
-      // wait for DELETE real after only then resolve; on failure remove keep directory and install record with convenient retry
+      // Await durable DELETE flush; failures reject so directory/install record stay intact for retry.
       await deps.docRegistry.purgePlugin(pluginId);
     },
     listSummaries: () => deps.host.list(),

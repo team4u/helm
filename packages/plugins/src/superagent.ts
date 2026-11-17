@@ -19,7 +19,7 @@ import {
   type MaybePromise,
   type PluginDefinition,
 } from '@helm/protocol'
-import { resolvePluginClientRoot } from './asset-paths.js'
+import { resolvePluginClientAssets } from './asset-paths.js'
 import { registerSuperAgentWatchdog } from './superagent/watchdog.js'
 import {
   DEFAULT_CONFIG,
@@ -96,7 +96,7 @@ export function createSuperAgentPlugin(): PluginDefinition {
     },
     icon: 'sparkles',
     version: '0.1.0',
-    clientRoot: resolvePluginClientRoot(SUPERAGENT_PLUGIN_ID, 'superagent', 'superagent_plugin_client_missing'),
+    ...resolvePluginClientAssets(SUPERAGENT_PLUGIN_ID, 'superagent', 'superagent_plugin_client_missing'),
     definePlugin(ctx) {
       let active = false
       let shutdown = false

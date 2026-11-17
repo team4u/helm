@@ -1,13 +1,13 @@
 /**
- * conversation role and model inherit chain align module.
+ * Conversation profile and model inheritance chain alignment module.
  *
- * responsibility:
- * - Profile config read and format validate;
- * - takes effect model parse chain (conversation override > Profile.model > global by default);
- * - takes effect think Profile parse chain (conversation override > Profile.thinkingLevel > global by default);
- * - single conversation config change serial (withConversationChange);
- * - SDK conversation model/think Profile config core for and store mirror sync (alignConversationModel);
- * - Profile save after level join batch amount inherit refresh (alignProfileConversations).
+ * Responsibilities:
+ * - Read and validate Profile configurations;
+ * - Resolve effective model chain (conversation override > Profile.model > global default);
+ * - Resolve effective thinking level chain (conversation override > Profile.thinkingLevel > global default);
+ * - Serialize per-conversation configuration updates (withConversationChange);
+ * - Reconcile SDK conversation model/thinkingLevel against store mirror (alignConversationModel);
+ * - Cascade inheritance updates after Profile save (alignProfileConversations).
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { AgentChange, Harness } from '@earendil-works/pi-durable'
@@ -24,23 +24,23 @@ export interface ConversationProfileHost {
   readonly store: HelmStore
   readonly events: EventHub
   readonly profilesSvc: ProfileService
-  /** when before Models set (capability converge use; hot reload after read to most new set). */
+  /** Current Models collection (for capability clamping; reads latest collection after hot reload). */
   readonly models: () => Models
   readonly defaultModel: () => string | undefined
   readonly defaultThinkingLevel: () => string | undefined
   readonly parseModelRefOrThrow: (ref: string) => { provider: string; modelId: string }
   readonly summaryWithOwnership: (id: number) => ConversationSummary
-  /** model/Profile align after trigger context use amount heavy compute (window/threshold may change); default does not trigger. */
+  /** Schedule context usage recalculation after model/thinking alignment (window/threshold may change); omitted skips. */
   readonly scheduleContextUsageRefresh?: (id: number) => void
 }
 
 export class ConversationProfileService {
-  /** the same conversation config change serial commit, avoid inherit refresh and explicit override mutual each other override. */
+  /** Serialize configuration mutations per conversation so inheritance refreshes and explicit overrides do not clobber each other. */
   private readonly conversationChanges = new Map<number, Promise<unknown>>()
 
   constructor(private readonly host: ConversationProfileHost) {}
 
-  /** Profile failed to read and missing open report, avoid corrupt file by when into missing model config. */
+  /** Report Profile read failures separately from missing profiles so corrupt files aren't mistaken for unconfigured models. */
   async readProfile(profileId: string): Promise<Profile | undefined> {
     try {
       assertProfileId(profileId)
@@ -52,33 +52,33 @@ export class ConversationProfileService {
     } catch (error) {
       throw new HelmError(
         'profile_read_failed',
-        `read Profile ${profileId} failed:${error instanceof Error ? error.message : String(error)}`,
+        `failed to read Profile ${profileId}: ${error instanceof Error ? error.message : String(error)}`,
         500,
         { profileId },
       )
     }
   }
 
-  /** conversation override > Profile.model > global;Profile file each time real-time read. */
+  /** Conversation override > Profile.model > global default; Profile files are read live on each lookup. */
   async resolveEffectiveModel(
     override: string | undefined,
     profileId: string,
   ): Promise<string | undefined> {
     const profile = await this.readProfile(profileId)
     if (profile === undefined) {
-      throw new HelmError('profile_not_found', `conversation reference Profile missing:${profileId}`, 404, { profileId })
+      throw new HelmError('profile_not_found', `Profile referenced by conversation does not exist: ${profileId}`, 404, { profileId })
     }
     return override || profile.model || this.host.defaultModel()
   }
 
   /**
-   * think Profile override > Profile.thinkingLevel > global by default; again by takes effect model capability
-   * converge to SDK available Profile (unsupported Profile then near take available Profile).
-   * not config (undefined/empty string) original return, do not mistakenly becomes explicit off.
+   * Thinking level override > Profile.thinkingLevel > global default; then clamped to levels supported by the effective model
+   * (nearest supported level if unsupported).
+   * Unconfigured values (undefined / empty string) are returned unchanged rather than coerced into explicit 'off'.
    */
   async resolveEffectiveThinkingLevel(override: string | undefined, profileId: string, modelRef?: { provider: string; modelId: string }): Promise<string | undefined> {
     const profile = await this.readProfile(profileId)
-    if (!profile) throw new HelmError('profile_not_found', `conversation reference Profile missing:${profileId}`, 404, { profileId })
+    if (!profile) throw new HelmError('profile_not_found', `Profile referenced by conversation does not exist: ${profileId}`, 404, { profileId })
     const inherited = override || profile.thinkingLevel || this.host.defaultThinkingLevel()
     return clampThinkingLevelForModel(this.host.models(), modelRef, inherited)
   }
@@ -94,19 +94,19 @@ export class ConversationProfileService {
     }
   }
 
-  /** model and think Profile respectively inherit; always core for SDK, with fix restart or fork history snapshot. */
+  /** Inherit model and thinking level separately; always reconcile against SDK to heal restarts and historical fork snapshots. */
   async alignConversationModel(id: number, emitEvent = false): Promise<void> {
     await this.withConversationChange(id, async () => {
       const meta = this.host.store.getConv(id)
       if (!meta) return
       const effective = await this.resolveEffectiveModel(meta.modelOverride, meta.profileId)
       const ref = effective ? this.host.parseModelRefOrThrow(effective) : undefined
-      // align same want persist explicit override converge result. otherwise SDK/summary although already converge,
-      // mirror still keep original override value, under once align will again appear takes effect value and override value inconsistent.
+      // Also persist the clamped result of an explicit override; otherwise SDK/summary converge while the mirror keeps
+      // the raw override, causing the next alignment pass to still see "effective != override".
       const clampedOverride = clampThinkingLevelForModel(this.host.models(), ref, meta.thinkingLevelOverride)
       const thinking = await this.resolveEffectiveThinkingLevel(clampedOverride, meta.profileId, ref)
       const conversation = await this.host.harness.conversation(id as never, BACKGROUND_CONTEXT)
-      if (!conversation) throw new HelmError('not_found', `conversation missing:${id}`, 404)
+      if (!conversation) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
       const agent = await conversation.agent(BACKGROUND_CONTEXT)
       const change: AgentChange = {
         ...(agent.model?.provider !== ref?.provider || agent.model?.modelId !== ref?.modelId
@@ -132,14 +132,14 @@ export class ConversationProfileService {
         stateChangeSeq: latest.stateChangeSeq + 1,
         updatedAt: Date.now(),
       })
-      // takes effect model change after context window/threshold follow of change: trigger use amount heavy compute (dedupe;forks
-      // and profile level join refresh all via this align, first time observe path another has adoptInitial honor bottom).
+      // Effective model changes also change context window/thresholds: trigger usage recalculation (deduplicated;
+      // covers forks and profile cascade refreshes, while initial observe uses adoptInitial as backstop).
       this.host.scheduleContextUsageRefresh?.(id)
       if (emitEvent) this.host.events.publish('conversation.upsert', this.host.summaryWithOwnership(id))
     })
   }
 
-  /** Profile save after i.e. when inherit refresh (override value by each parse chain protect). */
+  /** Immediate inheritance cascade after saving a Profile (explicit overrides stay protected by each resolution chain). */
   async alignProfileConversations(profileId: string): Promise<void> {
     for (const meta of this.host.store.listConvs()) {
       if (meta.profileId === profileId) await this.alignConversationModel(meta.id, true)

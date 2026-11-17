@@ -1,55 +1,42 @@
 /**
- * plugin-manifest.ts: external plugin manifest parse layer (plugin.json and package.json helm field).
+ * plugin-manifest.ts: external plugin manifest parser (`plugin.json` and `package.json` `helm` field).
  *
- * responsibility (self external-loader split out, rule one by one character do not change):
- * - plugin.json: must be can parse JSON object; optional field `clientRoot`(frontend source
- *   directory),`clientDependencies`(frontend subject to control npm note symbol array),`dependencies`
- *   (plugin between dependency ID array); illegal value explicit reject, never static default ignore;
- * - package.json `helm` field ({ main?, clientRoot?, clientDependencies?,
- *   dependencies? }):helm.main / top-level main is npm standard entry (relative path;
- *   .js suffix heavy write same name TS source by entry parse layer handle); top-level dependencies keep npm
- *   semantics (runtime dependency), never mistakenly read is plugin between dependency;
- * - without helm field when back package.json main(npm standard entry);
- * - note symbol/dependency ID shape validate and dedupe (illegal items explicit plugin_manifest_invalid);
- * - manifest metadata read (id/name/description/version, supply fault occupy register render;
- *   manifest missing or corrupt when return empty object).
+ * Responsibilities:
+ * - `plugin.json`: JSON object with optional `clientRoot`, `clientDependencies` (managed frontend npm
+ *   specifiers), and `dependencies` (inter-plugin IDs); invalid shapes fail with `plugin_manifest_invalid`;
+ * - `package.json` `helm` field: `{ main?, clientRoot?, clientDependencies?, dependencies? }`, while
+ *   top-level `dependencies` remains standard npm runtime dependencies;
+ * - Specifier/ID validation, deduplication, and lightweight metadata reading (`id/name/description/version`).
  *
- * IO error discipline: only ENOENT / ENOTDIR means file missing;EACCES etc. other IO
- * error explicit throws (plugin_scan_failed / plugin_manifest_invalid), never static default swallow wrong.
+ * IO discipline: only ENOENT/ENOTDIR indicate missing files; EACCES and other IO failures throw explicitly.
  */
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { HelmError } from '@helm/protocol';
 
 /**
- * npm standard entry discover (additive, do not sacrifice existing plugin.json/convention entry format):
- * package.json  `helm` field ({ main?, clientRoot?, clientDependencies?, dependencies? }):
- * - helm.main / package.json.main designate backend entry (relative path, exceeds validate same
- *   plugin.json main;.js suffix automatically heavy write same name .ts source);
- * - helm.clientRoot supply package act declaration frontend source directory, by readHelmClientRoot through out,
- *   normalizeDefinition default still is plugin directory itself;
- * - helm.clientDependencies / plugin.json clientDependencies declaration frontend subject to control npm
- *   dependency note symbol (bare package name/sub- path), archive one mapping to plugin itself directory as parse;
- * - helm.dependencies / plugin.json dependencies declaration plugin between dependency (only plugin ID);
- *   package.json top-level dependencies keep npm semantics (runtime dependency), never mistakenly read;
- * - priority:plugin.json(main / convention entry)> package.json helm.main >
- *   package.json main > convention entry probe; without any hit then is pure data directory.
+ * Metadata extracted from `plugin.json` / `package.json#helm`:
+ * - `clientRoot`: relative frontend source directory (defaults to plugin root);
+ * - `clientDependencies`: managed frontend npm specifiers (bare names/subpaths resolved in plugin dir);
+ * - `dependencies`: inter-plugin IDs (distinct from npm `dependencies`).
  */
 export interface HelmManifest {
-  /** package.json helm.clientRoot declaration (original relative path; not declaration when default). */
+  /** Relative `clientRoot` path declared in manifest (optional). */
   clientRoot?: string;
-  /** frontend subject to control npm dependency note symbol (bare package name or sub- path; already verify dedupe). */
+  /** Relative `clientDist` prebuilt client directory path declared in manifest (optional). */
+  clientDist?: string;
+  /** Managed frontend npm dependency specifiers (bare names or subpaths, deduplicated). */
   clientDependencies?: string[];
-  /** plugin between dependency ID list (already verify dedupe). */
+  /** Inter-plugin dependency IDs (deduplicated). */
   dependencies?: string[];
 }
 
-/** plugin ID character collection (and host plugin id same collection: character parent number : _ -). */
+/** Allowed characters for plugin IDs (`[A-Za-z0-9:_-]+`). */
 export const MANIFEST_PLUGIN_ID_PATTERN = /^[A-Za-z0-9:_-]+$/;
 
 /**
- * subject to control frontend npm note conforms to method: non-empty, non- path form (do not with . or / open head), without backslash,
- * without .. segment, without whitespace; allows @scope/name and sub- path (sub- path must one by one items declaration, does not prefix through match).
+ * Validates managed frontend npm specifiers: non-empty, no leading `.` or `/`, no backslashes,
+ * no `..` segments, and no whitespace (`@scope/name` and explicit subpaths are allowed).
  */
 function isValidClientDependencySpec(spec: string): boolean {
   if (spec.length === 0 || spec.length > 214) return false;
@@ -59,13 +46,13 @@ function isValidClientDependencySpec(spec: string): boolean {
   return /^(@[A-Za-z0-9][A-Za-z0-9._-]*\/)?[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9._~-]+)*$/.test(spec);
 }
 
-/** validate and dedupe manifest declaration frontend npm note symbol (illegal items explicit plugin_manifest_invalid). */
+/** Validates and deduplicates frontend npm dependency specifiers (`plugin_manifest_invalid` on bad entries). */
 function normalizeClientDependencySpecs(dirPath: string, source: string, values: unknown): string[] | undefined {
   if (values === undefined) return undefined;
   if (!Array.isArray(values) || values.some((v) => typeof v !== 'string' || !isValidClientDependencySpec(v))) {
     throw new HelmError(
       'plugin_manifest_invalid',
-      `external plugin ${dirPath}  ${source} must be subject to control npm note symbol string array (bare package name or sub- path, forbidden each other for/absolute path and .. segment)`,
+      `External plugin ${dirPath} ${source} must be an array of npm specifiers (bare package names or subpaths; relative/absolute paths and '..' are disallowed)`,
       400,
       { dirPath, source, values: Array.isArray(values) ? values.map((v) => String(v)) : String(values) },
     );
@@ -80,13 +67,13 @@ function normalizeClientDependencySpecs(dirPath: string, source: string, values:
   return out.length > 0 ? out : undefined;
 }
 
-/** validate and dedupe manifest declaration plugin between dependency ID(illegal items explicit plugin_manifest_invalid). */
+/** Validates and deduplicates inter-plugin dependency IDs (`plugin_manifest_invalid` on bad entries). */
 function normalizeManifestDependencies(dirPath: string, source: string, values: unknown): string[] | undefined {
   if (values === undefined) return undefined;
   if (!Array.isArray(values) || values.some((v) => typeof v !== 'string' || !MANIFEST_PLUGIN_ID_PATTERN.test(v))) {
     throw new HelmError(
       'plugin_manifest_invalid',
-      `external plugin ${dirPath}  ${source} must be plugin ID string array (only allows character parent number : _ -;npm dependency please declaration in package.json dependencies)`,
+      `External plugin ${dirPath} ${source} must be an array of plugin IDs (letters, digits, :, _, - only; declare npm packages in package.json dependencies)`,
       400,
       { dirPath, source, values: Array.isArray(values) ? values.map((v) => String(v)) : String(values) },
     );
@@ -101,14 +88,21 @@ function normalizeManifestDependencies(dirPath: string, source: string, values: 
   return out.length > 0 ? out : undefined;
 }
 
-/** for outside read plugin.json clientRoot or package.json helm.clientRoot(normalizeDefinition increase strong use;plugin.json takes precedence). */
+/** Reads `clientRoot` from `plugin.json` or `package.json#helm` (`plugin.json` takes precedence). */
 export function readHelmClientRoot(dirPath: string): string | undefined {
-  const manifestClientRoot = readManifestClientRoot(dirPath);
+  const manifestClientRoot = readManifestStringField(dirPath, 'clientRoot');
   if (manifestClientRoot !== undefined) return manifestClientRoot;
   return readHelmField(dirPath)?.clientRoot;
 }
 
-/** for outside read manifest declaration frontend subject to control npm note symbol (plugin.json and package.json helm merge dedupe; supply managed install patch install). */
+/** Reads `clientDist` from `plugin.json` or `package.json#helm` (`plugin.json` takes precedence). */
+export function readHelmClientDist(dirPath: string): string | undefined {
+  const manifestClientDist = readManifestStringField(dirPath, 'clientDist');
+  if (manifestClientDist !== undefined) return manifestClientDist;
+  return readHelmField(dirPath)?.clientDist;
+}
+
+/** Reads frontend managed npm dependencies from `plugin.json` and `package.json#helm` (merged & deduplicated). */
 export function readHelmClientDependencies(dirPath: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -124,10 +118,7 @@ export function readHelmClientDependencies(dirPath: string): string[] {
   return out;
 }
 
-/**
- * from plugin.json read optional metadata (id/name/description/version), supply fault occupy
- * register render;manifest missing or corrupt when return empty object.
- */
+/** Reads optional metadata (`id/name/description/version`) from `plugin.json` for failed placeholders (returns `{}` if missing/corrupt). */
 export function readManifestMeta(dirPath: string): Record<string, unknown> {
   try {
     return readManifest(join(dirPath, 'plugin.json'));
@@ -136,7 +127,7 @@ export function readManifestMeta(dirPath: string): Record<string, unknown> {
   }
 }
 
-/** read plugin.json(missing return undefined;IO error explicit throws, not silently when without manifest). */
+/** Reads `plugin.json` if present (returns `undefined` if missing; IO errors throw explicitly). */
 function readManifestIfPresent(dirPath: string): Record<string, unknown> | undefined {
   const manifestPath = join(dirPath, 'plugin.json');
   let exists = true;
@@ -147,7 +138,7 @@ function readManifestIfPresent(dirPath: string): Record<string, unknown> | undef
     if (code === 'ENOENT' || code === 'ENOTDIR') return undefined;
     throw new HelmError(
       'plugin_scan_failed',
-      `external plugin directory cannot read: ${manifestPath}(${err instanceof Error ? err.message : String(err)})`,
+      `Cannot read external plugin directory manifest: ${manifestPath} (${err instanceof Error ? err.message : String(err)})`,
       500,
       { manifestPath, code },
     );
@@ -156,7 +147,7 @@ function readManifestIfPresent(dirPath: string): Record<string, unknown> | undef
   return readManifest(manifestPath);
 }
 
-/** read plugin.json optional extend field (clientDependencies / dependencies; without plugin.json return undefined). */
+/** Reads optional extended fields from `plugin.json` (`clientDependencies` / `dependencies`). */
 export function readManifestOptional(dirPath: string): HelmManifest | undefined {
   const manifest = readManifestIfPresent(dirPath);
   if (manifest === undefined) return undefined;
@@ -168,27 +159,27 @@ export function readManifestOptional(dirPath: string): HelmManifest | undefined 
   };
 }
 
-/** read plugin.json  clientRoot field (without plugin.json return undefined; store in but non- string explicit errors). */
-function readManifestClientRoot(dirPath: string): string | undefined {
+/** Reads a non-empty optional string field from `plugin.json` (returns `undefined` when missing; rejects non-string or empty values). */
+function readManifestStringField(dirPath: string, field: 'clientRoot' | 'clientDist'): string | undefined {
   const manifest = readManifestIfPresent(dirPath);
   if (manifest === undefined) return undefined;
-  const clientRoot = manifest['clientRoot'];
-  if (clientRoot === undefined) return undefined;
-  if (typeof clientRoot !== 'string' || clientRoot.length === 0) {
+  const value = manifest[field];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length === 0) {
     throw new HelmError(
       'plugin_manifest_invalid',
-      `external plugin ${dirPath}  plugin.json clientRoot must be non-empty string`,
+      `External plugin ${dirPath} plugin.json ${field} must be a non-empty string`,
       500,
-      { dirPath, clientRoot: String(clientRoot) },
+      { dirPath, [field]: String(value) },
     );
   }
-  return clientRoot;
+  return value;
 }
 
-/** read package.json  helm field (object shape validate; without package.json return null). */
+/** Reads `package.json#helm` (validates object shape; returns `null` when `package.json` is absent). */
 export function readHelmField(
   dirPath: string,
-): { main?: string; clientRoot?: string; clientDependencies?: string[]; dependencies?: string[] } | null {
+): { main?: string; clientRoot?: string; clientDist?: string; clientDependencies?: string[]; dependencies?: string[] } | null {
   const pkgPath = join(dirPath, 'package.json');
   let raw: string;
   try {
@@ -198,7 +189,7 @@ export function readHelmField(
     if (code === 'ENOENT' || code === 'ENOTDIR') return null;
     throw new HelmError(
       'plugin_scan_failed',
-      `external plugin package.json cannot read: ${pkgPath}(${err instanceof Error ? err.message : String(err)})`,
+      `Cannot read external plugin package.json: ${pkgPath} (${err instanceof Error ? err.message : String(err)})`,
       500,
       { dirPath, code },
     );
@@ -209,7 +200,7 @@ export function readHelmField(
   } catch (err) {
     throw new HelmError(
       'plugin_manifest_invalid',
-      `external plugin package.json is not legal JSON: ${pkgPath}(${err instanceof Error ? err.message : String(err)})`,
+      `External plugin package.json is not valid JSON: ${pkgPath} (${err instanceof Error ? err.message : String(err)})`,
       500,
       { dirPath },
     );
@@ -217,7 +208,7 @@ export function readHelmField(
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
   const helm = (parsed as Record<string, unknown>)['helm'];
   if (helm === undefined) {
-    // without helm field: back package.json main(npm standard entry)
+    // Fallback to standard npm package.json `main` when `helm` is absent.
     const main = (parsed as Record<string, unknown>)['main'];
     if (typeof main === 'string' && main.length > 0) return { main };
     return null;
@@ -225,36 +216,26 @@ export function readHelmField(
   if (typeof helm !== 'object' || helm === null || Array.isArray(helm)) {
     throw new HelmError(
       'plugin_manifest_invalid',
-      `external plugin ${dirPath}  package.json helm field must be object`,
+      `External plugin ${dirPath} package.json helm field must be an object`,
       500,
       { dirPath },
     );
   }
-  const result: { main?: string; clientRoot?: string; clientDependencies?: string[]; dependencies?: string[] } = {};
+  const result: { main?: string; clientRoot?: string; clientDist?: string; clientDependencies?: string[]; dependencies?: string[] } = {};
   const helmObj = helm as Record<string, unknown>;
-  const main = helmObj['main'];
-  if (main !== undefined) {
-    if (typeof main !== 'string' || main.length === 0) {
-      throw new HelmError(
-        'plugin_manifest_invalid',
-        `external plugin ${dirPath}  package.json helm.main must be non-empty string`,
-        500,
-        { dirPath },
-      );
+  for (const field of ['main', 'clientRoot', 'clientDist'] as const) {
+    const val = helmObj[field];
+    if (val !== undefined) {
+      if (typeof val !== 'string' || val.length === 0) {
+        throw new HelmError(
+          'plugin_manifest_invalid',
+          `External plugin ${dirPath} package.json helm.${field} must be a non-empty string`,
+          500,
+          { dirPath },
+        );
+      }
+      result[field] = val;
     }
-    result.main = main;
-  }
-  const clientRoot = helmObj['clientRoot'];
-  if (clientRoot !== undefined) {
-    if (typeof clientRoot !== 'string' || clientRoot.length === 0) {
-      throw new HelmError(
-        'plugin_manifest_invalid',
-        `external plugin ${dirPath}  package.json helm.clientRoot must be non-empty string`,
-        500,
-        { dirPath },
-      );
-    }
-    result.clientRoot = clientRoot;
   }
   const clientDependencies = normalizeClientDependencySpecs(
     dirPath,
@@ -271,6 +252,7 @@ export function readHelmField(
   if (
     result.main === undefined &&
     result.clientRoot === undefined &&
+    result.clientDist === undefined &&
     result.clientDependencies === undefined &&
     result.dependencies === undefined
   ) {
@@ -279,7 +261,7 @@ export function readHelmField(
   return result;
 }
 
-/** read and parse plugin.json; corrupt / non- object one rule explicit plugin_manifest_invalid. */
+/** Reads and parses `plugin.json`; corrupt or non-object files fail explicitly with `plugin_manifest_invalid`. */
 export function readManifest(manifestPath: string): Record<string, unknown> {
   let raw: string;
   try {
@@ -287,7 +269,7 @@ export function readManifest(manifestPath: string): Record<string, unknown> {
   } catch (err) {
     throw new HelmError(
       'plugin_manifest_invalid',
-      `external plugin manifest failed to read: ${manifestPath}(${err instanceof Error ? err.message : String(err)})`,
+      `Failed to read external plugin manifest: ${manifestPath} (${err instanceof Error ? err.message : String(err)})`,
       500,
       { manifestPath },
     );
@@ -298,7 +280,7 @@ export function readManifest(manifestPath: string): Record<string, unknown> {
   } catch (err) {
     throw new HelmError(
       'plugin_manifest_invalid',
-      `external plugin manifest is not legal JSON: ${manifestPath}(${err instanceof Error ? err.message : String(err)})`,
+      `External plugin manifest is not valid JSON: ${manifestPath} (${err instanceof Error ? err.message : String(err)})`,
       500,
       { manifestPath },
     );
@@ -306,7 +288,7 @@ export function readManifest(manifestPath: string): Record<string, unknown> {
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     throw new HelmError(
       'plugin_manifest_invalid',
-      `external plugin manifest must be JSON object: ${manifestPath}`,
+      `External plugin manifest must be a JSON object: ${manifestPath}`,
       500,
       { manifestPath },
     );

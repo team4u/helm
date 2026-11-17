@@ -1,25 +1,15 @@
 /**
- * helm-node upgrade handover IPC(CLI side, run in old daemon process inside).
+ * `helm-node` upgrade handoff over native Node stdio IPC (CLI side, inside the old daemon).
  *
- * protocol (Node original generate stdio IPC, single channel three phase):
- *  1) choose real registered after on report {type:'helm-node.ready', pid, instanceId,
- *     state:'registered'};state is starting one rule treated as not ready (upgrade want seek real
- *     register, disallows carries illness commit);
- *  2) commit() is unique commit point: first atomic write new node.pid(memory backup old record), again
- *     {type:'helm-node.activate', attemptId, version, previousVersion, pid},
- *     etc. choose local machine {type:'helm-node.activated'} confirm only then resolve- -Hub ACK do not act
- *     is local machine IPC succeeded condition (choose side confirmUpgrade local persisted after async retry Hub);
- *  3) activate out after confirm lose two class:
- *     - failed to write (send throws/call back carries wrong) = determine not send reach: choose never may activate or
- *       to Hub commit, throw ordinary error away security rollback (abort kill choose + CAS restore old pid,
- *       old host continue service), do not 10 minute pendingActivation empty window;
- *     - already write but back hold lose (disconnect/timeout/choose exit) = send reach state unknown: only throw
- *       UpgradeCommitUnconfirmedError, never kill choose, never rollback pid- - choose
- *       may already to Hub on report commit, reverse rollback will let already succeeded upgrade by undo.
- *
- * determinism uncommitted (choose explicit activate-rejected,activate failed to write, or activate
- * not yet out any failed) only then allows abort(): kill self has child and by instanceId CAS
- * restore old pid; Profile already by other person take over when do not motion (never mistakenly delete other person node.pid).
+ * Three-phase protocol:
+ * 1) Candidate reports `{ type: 'helm-node.ready', pid, instanceId, state: 'registered' }`;
+ *    `state: 'starting'` is treated as unready (upgrades require live Hub registration).
+ * 2) `commit()` atomically writes `node.pid`, sends `{ type: 'helm-node.activate', ... }`, and
+ *    waits for local `{ type: 'helm-node.activated' }` confirmation (independent of Hub ACK).
+ * 3) Post-send confirmation failures fall into two buckets:
+ *    - Write failure (message definitely never sent): throws regular Error so the caller rolls back safely;
+ *    - Unconfirmed after write (disconnect/timeout/candidate exit): throws `UpgradeCommitUnconfirmedError`
+ *      and **never** kills the candidate or rolls back `node.pid`, since the candidate may already have committed.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import fsp from 'node:fs/promises';
@@ -27,21 +17,19 @@ import process from 'node:process';
 import { randomBytes } from 'node:crypto';
 import { UpgradeCommitUnconfirmedError, type PreparedNodeReplacement, type StagedNodeRelease } from './upgrader.js';
 
-/** choose ready pre- compute: override Hub short temporary cannot reach when count time backoff reconnect (and choose side register wait for same amount level). */
+/** Candidate ready timeout, sized to cover backoff reconnects if the Hub is briefly unreachable. */
 export const CANDIDATE_READY_TIMEOUT_MS = 150_000;
-/** activate out after wait for local machine activated confirm pre- compute. */
+/** Timeout waiting for local `helm-node.activated` ACK after sending `activate`. */
 export const ACTIVATE_ACK_TIMEOUT_MS = 30_000;
-/** choose wait for activate total pre- compute (parent process commit point in arrange empty after, this in take wide headroom cap). */
+/** Maximum time a candidate waits for `helm-node.activate` after reporting ready. */
 export const CANDIDATE_ACTIVATE_WAIT_MS = 10 * 60_000;
 
-/** upgrade handover context (and engine prepareReplacement call back context same source). */
 export interface UpgradeHandoffContext {
   attemptId: string;
   previousVersion: string;
   targetVersion: string;
 }
 
-/** pid Profile content (and cli.ts  PidRecord structure consistent, avoid loop dependency separate declaration). */
 export interface HandoffPidRecord {
   pid: number;
   instanceId: string;
@@ -51,20 +39,17 @@ export interface HandoffPidRecord {
 export interface PrepareNodeReplacementOptions {
   dataDir: string;
   hubUrl: string;
-  /** choose log point (and daemon shared use node.log). */
   logPath: string;
   controlEndpoint(dataDir: string, instanceId: string): string;
   readPidRecord(): Promise<HandoffPidRecord | null>;
   writePidRecord(record: HandoffPidRecord): Promise<void>;
   removePidFile(): Promise<void>;
-  /** choose basis environment (default process.env; test can inject). */
   env?: NodeJS.ProcessEnv;
-  /** node can execute (default process.execPath; test inject). */
   execPath?: string;
   readyTimeoutMs?: number;
   activateAckTimeoutMs?: number;
 }
-/** choose side protocol message (and parent side commit() out ActivateMessage the same contract). */
+
 export interface ActivateMessage {
   type: 'helm-node.activate';
   attemptId: string;
@@ -73,17 +58,13 @@ export interface ActivateMessage {
   pid: number;
 }
 
-/** choose start env inject upgrade context (prepareNodeReplacement write, choose process parse). */
 export interface CandidateUpgradeHandoff {
   attemptId: string;
   previousVersion?: string;
   targetVersion?: string;
 }
 
-/**
- * choose side parse start env inject upgrade context:HELM_NODE_UPGRADE_ATTEMPT missing i.e.
- * non- choose (return undefined);previousVersion/targetVersion optional pass-through.
- */
+/** Parse upgrade context injected into the candidate's environment (`undefined` for normal daemons). */
 export function parseUpgradeHandoffEnv(env: NodeJS.ProcessEnv | undefined): CandidateUpgradeHandoff | undefined {
   const attemptId = env?.['HELM_NODE_UPGRADE_ATTEMPT'];
   if (attemptId === undefined || attemptId === '') return undefined;
@@ -96,7 +77,7 @@ export function parseUpgradeHandoffEnv(env: NodeJS.ProcessEnv | undefined): Cand
   };
 }
 
-/** activate message boundary validate (choose side): complete commit context, field missing/type illegal one rule reject. */
+/** Validate incoming `helm-node.activate` message on the candidate side. */
 export function parseActivateMessage(message: unknown): ActivateMessage | undefined {
   if (typeof message !== 'object' || message === null) return undefined;
   const record = message as Record<string, unknown>;
@@ -114,7 +95,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const asString = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
 
-/** has boundary log tail read: only read file tail at most 64KiB, again take finally maxLines row (log again large also do not all amount read). */
+/** Read at most the last 64 KiB of `logFile` and return up to `maxLines` lines. */
 export async function readLogTailBounded(logFile: string, maxLines: number): Promise<string> {
   const maxBytes = 64 * 1024;
   try {
@@ -134,9 +115,8 @@ export async function readLogTailBounded(logFile: string, maxLines: number): Pro
 }
 
 /**
- * prepare replace daemon: with subject to control background way pull start choose release entry (without tsx loader, all new
- * instanceId/endpoint, do not inherit parent control env, clean HELM_VERSION_OVERRIDE), choose real
- * registered after return {pid, commit, abort}.native stdio IPC keep to local machine commit complete.
+ * Spawn a controlled candidate daemon from the staged release, wait for real Hub registration,
+ * and return `{ pid, commit, abort }`.
  */
 export async function prepareNodeReplacement(
   release: StagedNodeRelease,
@@ -144,15 +124,14 @@ export async function prepareNodeReplacement(
   options: PrepareNodeReplacementOptions,
 ): Promise<PreparedNodeReplacement> {
   if (options.hubUrl === '') {
-    throw new Error('upgrade handover need to Hub address (choose daemon based on this register)');
+    throw new Error('upgrade handoff requires a Hub URL so the candidate daemon can register');
   }
   const readyTimeoutMs = options.readyTimeoutMs ?? CANDIDATE_READY_TIMEOUT_MS;
   const activateAckTimeoutMs = options.activateAckTimeoutMs ?? ACTIVATE_ACK_TIMEOUT_MS;
   const instanceId = randomBytes(16).toString('hex');
   const endpoint = options.controlEndpoint(options.dataDir, instanceId);
   const childEnv: NodeJS.ProcessEnv = { ...(options.env ?? process.env) };
-  // choose own independent control identity: do not re- use parent instanceId/endpoint; clean version override ensure on report
-  // real run version; remove NODE_OPTIONS guard against dev parent process to compile artifact inject tsx loader.
+  // Isolate candidate control/version env vars and strip NODE_OPTIONS so dev tsx loaders don't leak into compiled releases.
   delete childEnv['HELM_NODE_INSTANCE_ID'];
   delete childEnv['HELM_NODE_CONTROL_ENDPOINT'];
   delete childEnv['HELM_NODE_PENDING_ACTIVATION'];
@@ -174,7 +153,7 @@ export async function prepareNodeReplacement(
   try {
     logHandle = await fsp.open(options.logPath, 'a');
   } catch (error) {
-    throw new Error(`open choose log file failed (${options.logPath}):${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`failed to open candidate log file (${options.logPath}): ${error instanceof Error ? error.message : String(error)}`);
   }
 
   let child: ChildProcess;
@@ -186,19 +165,19 @@ export async function prepareNodeReplacement(
     });
   } catch (error) {
     await logHandle.close().catch(() => undefined);
-    throw new Error(`choose daemon spawn failed:${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`failed to spawn candidate daemon: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   const killChild = (): void => {
     try {
       child.kill('SIGKILL');
     } catch {
-      // already exit.
+      // Already exited.
     }
     try {
       if (child.connected) child.disconnect();
     } catch {
-      // disconnected.
+      // Already disconnected.
     }
     child.unref();
   };
@@ -240,32 +219,29 @@ export async function prepareNodeReplacement(
     await logHandle.close().catch(() => undefined);
     const reason =
       ready.kind === 'starting'
-        ? `choose on report starting: upgrade want seek real registered(attemptId ${context.attemptId}), reject carries illness commit`
+        ? `candidate reported state=starting: upgrade requires state=registered (attemptId ${context.attemptId})`
         : ready.kind === 'error'
-          ? `choose daemon failed to start (spawn error):${ready.error.message}`
+          ? `candidate daemon failed to start (spawn error): ${ready.error.message}`
           : ready.kind === 'exit'
-            ? `choose daemon after startup immediately exit (code=${ready.code ?? 'null'})`
-            : `choose ${readyTimeoutMs}ms inside not on report registered ready`;
+            ? `candidate daemon exited immediately after startup (code=${ready.code ?? 'null'})`
+            : `candidate did not report registered readiness within ${readyTimeoutMs}ms`;
     const tail = await readLogTailBounded(options.logPath, 40);
-    throw new Error(`${reason}${tail !== '' ? `\n--- ${options.logPath} finally 40 row ---\n${tail}` : ''}`);
+    throw new Error(`${reason}${tail !== '' ? `\n--- ${options.logPath} last 40 lines ---\n${tail}` : ''}`);
   }
   if (child.pid === undefined) {
     killChild();
     await logHandle.close().catch(() => undefined);
-    throw new Error('choose ready after pid unavailable (internal error)');
+    throw new Error('candidate pid unavailable after reporting ready (internal error)');
   }
   const candidatePid = child.pid;
-  // parent side log fd already dup enter child process: choose store during hold has write end, parent side can close.
   await logHandle.close().catch(() => undefined);
   child.unref();
 
-  // - - activate/ack state machine - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   type Phase = 'ready' | 'activating' | 'activated' | 'rejected' | 'unsent' | 'lost' | 'dead';
   let phase: Phase = 'ready';
   let activateSent = false;
-  /** activate write result:undefined= not out or call back not back;true= already write channel;false= failed to write (determine not send reach). */
+  /** `undefined` = pending callback, `true` = written to IPC channel, `false` = failed before send. */
   let activateWritten: boolean | undefined;
-  /** write call back not back when choose exit: etc. call back set (failed→unsent; succeeded→dead). */
   let exitWhileWritePending = false;
   let pidWritten = false;
   let oldRecord: HandoffPidRecord | null = null;
@@ -297,26 +273,20 @@ export async function prepareNodeReplacement(
   child.on('message', onAckMessage);
   child.once('exit', () => {
     if (phase === 'activating') {
-      // write result not back when do not immediately set: channel close will trigger send call back (failed→unsent
-      // security rollback; succeeded→dead by not confirm handle); already write then directly by choose exit handle.
       if (activateWritten === true) finishAck('dead');
       else exitWhileWritePending = true;
     } else if (phase === 'ready') phase = 'dead';
   });
-  // disconnect do not directly set is lost: channel close will trigger send call back to out determine write result
-  //(failed→unsent; succeeded→etc. activated or timeout by not confirm handle), avoid determine not
-  // send reach mistakenly archive send reach state unknown while abandon fast rollback.
 
   const commit = async (): Promise<void> => {
-    if (phase === 'activated') return; // idempotent
+    if (phase === 'activated') return;
     if (phase !== 'ready') {
-      throw new Error(`choose do not in can commit state (${phase}${phase === 'dead' ? ': choose already exit or IPC channel disconnect' : ''}),activate not out`);
+      throw new Error(`candidate is not ready to commit (${phase}${phase === 'dead' ? ': candidate exited or IPC disconnected' : ''}); activate not sent`);
     }
     if (!child.connected) {
       phase = 'dead';
-      throw new Error('choose IPC channel disconnected (activate not out, security rollback)');
+      throw new Error('candidate IPC channel disconnected before activate was sent; rolling back safely');
     }
-    // commit point before rhythm: backup old Profile and atomic write new record; old record used to abort  CAS restore.
     oldRecord = await options.readPidRecord();
     await options.writePidRecord({ pid: candidatePid, instanceId, endpoint });
     pidWritten = true;
@@ -340,8 +310,6 @@ export async function prepareNodeReplacement(
       activateSent = true;
       try {
         child.send(activate, (error) => {
-          // write result set: failed = determine not send reach (unsent, security rollback); succeeded but choose
-          // already exit = by not confirm handle (may committed after crash).
           if (error !== undefined && error !== null) {
             unsentReason = error.message;
             finishAck('unsent');
@@ -352,45 +320,42 @@ export async function prepareNodeReplacement(
         });
       } catch (error) {
         unsentReason = error instanceof Error ? error.message : String(error);
-        finishAck('unsent'); // sync throws: message not written channel, determine not send reach
+        finishAck('unsent');
       }
     });
     if (outcome === 'activated') {
       try {
         if (child.connected) child.disconnect();
       } catch {
-        // disconnected.
+        // Already disconnected.
       }
       child.unref();
       return;
     }
     if (outcome === 'rejected') {
-      throw new Error(`choose reject activate:${rejectReason}(uncommitted, security rollback)`);
+      throw new Error(`candidate rejected activation: ${rejectReason} (uncommitted; rolling back safely)`);
     }
     if (outcome === 'unsent') {
-      throw new Error(`activate write choose IPC channel failed (${unsentReason}, determine not send reach, choose cannot can committed), security rollback`);
+      throw new Error(`failed to write activate message to candidate IPC (${unsentReason}; guaranteed undelivered); rolling back safely`);
     }
     if (outcome === 'dead') {
-      throw new UpgradeCommitUnconfirmedError(`choose in activate confirm before exit (activate already write, may completed local machine commit), do not rollback`);
+      throw new UpgradeCommitUnconfirmedError('candidate exited before confirming activation (activate was written and may have committed locally); refusing rollback');
     }
     if (outcome === 'timeout') {
-      throw new UpgradeCommitUnconfirmedError(`wait for activated confirm timeout (${activateAckTimeoutMs}ms,activate already write), do not rollback`);
+      throw new UpgradeCommitUnconfirmedError(`timed out waiting for activated confirmation (${activateAckTimeoutMs}ms; activate was written); refusing rollback`);
     }
-    throw new UpgradeCommitUnconfirmedError('activate already write but local machine IPC confirm lose (channel disconnect), do not rollback');
+    throw new UpgradeCommitUnconfirmedError('activate was written, but local IPC confirmation was lost (channel disconnected); refusing rollback');
   };
 
   const abort = async (): Promise<void> => {
     if (phase === 'activated') {
-      throw new Error('choose already activate: reject abort(must not rollback committed replace)');
+      throw new Error('candidate already activated: refusing abort (must not roll back committed replacement)');
     }
-    // activate already write channel (send reach state unknown or already send reach) and not received explicit reject: reject
-    // abort. failed to write (unsent) and explicit reject the same belongs to determine inactive, allows security rollback.
     if (activateSent && activateWritten !== false && phase !== 'rejected') {
-      throw new Error('activate already out and not received explicit reject: reject abort(must not kill choose or rollback pid)');
+      throw new Error('activate was sent without an explicit rejection: refusing abort (must not kill candidate or roll back pid)');
     }
     killChild();
     if (pidWritten) {
-      // instanceId CAS: only Profile still points to this choose when only then restore, already by other person take over then do not motion.
       const current = await options.readPidRecord().catch(() => null);
       if (current !== null && current.instanceId === instanceId) {
         if (oldRecord !== null) await options.writePidRecord(oldRecord);

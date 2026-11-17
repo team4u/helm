@@ -1,6 +1,6 @@
 /**
- * SSE encode:text/event-stream frame write (event: + data:), once flush.
- * keep streaming without buffer semantics: each frame independent encode + enqueue, do not whole stream accumulate batch.
+ * SSE encoder: writes `text/event-stream` frames (`event:` + `data:`) and flushes each immediately.
+ * Unbuffered streaming semantics: each frame is encoded and enqueued independently without whole-stream buffering.
  */
 
 export interface SseSink {
@@ -19,7 +19,7 @@ export function openSse(controller: ReadableStreamDefaultController<Uint8Array>)
       try {
         controller.close()
       } catch {
-        // already close: idempotent.
+        // already closed: idempotent.
       }
     },
   }

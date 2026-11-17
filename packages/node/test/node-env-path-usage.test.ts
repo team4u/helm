@@ -1,19 +1,21 @@
 /**
- * node side envPathUsage RPC and managed environment variable strip except test (real NodeEnvRpcServer).
+ * Node-side `envPathUsage` RPC and managed environment variable stripping tests
+ * against a real `NodeEnvRpcServer`.
  *
- * override:
- * - real /proc: this test process itself spawn child process with target directory is cwd → snapshot hit
- *   (pid/source/cwd path); child process exit after heavy scan clean (root host complete=true);
- * - this test process hold has target tree inside file open fd → fd hit;
- * - fixture procRoot(symlink fabricate cwd/fd)→ hit and boundary (/a does not match /ab);
- * - platform inject non- Linux → explicit not_supported(do not fabricate across platform result);
- * - reference strictly validate: unknown field / relative path / NUL / non- object → invalid;
- * - managed environment variable strip except:daemon host env  HELM_TOKEN / HELM_EXECUTION_SCOPE
- *   never via inherit enter sub- command (envExec and LocalExecutionEnv.exec direct connect two opening path);
- *   caller explicit inject legal value by time takes effect.
+ * Covers:
+ * - Real `/proc`: child process spawned by this test holding target dir as `cwd`
+ *   matches (`pid`/`source`/`cwd` path), and disappears after exit;
+ * - Open `fd` held by this test process pointing into the target tree matches (`fd`);
+ * - Fixture `procRoot` (symlinked `cwd`/`fd`): matches and enforces segment boundaries
+ *   (`/a` does not match `/ab`);
+ * - Non-Linux platform injection returns explicit `not_supported` (no fabricated results);
+ * - Strict input validation: unknown fields / relative paths / NUL / non-objects -> `invalid`;
+ * - Managed env var stripping: `HELM_TOKEN` / `HELM_EXECUTION_SCOPE` from daemon host env
+ *   never leak into child commands via either `envExec` or direct `LocalExecutionEnv.exec`,
+ *   while caller-supplied values take effect per call.
  *
- * honest:EACCES branch cannot in root host real re- now, by env-io inject io single test override
- * (packages/env-io/test/path-usage.test.ts); this where only test real can verify behavior.
+ * Note: `EACCES` cannot be faithfully reproduced under a root host and is covered via
+ * injected I/O unit tests in `packages/env-io/test/path-usage.test.ts`.
  */
 
 import { describe, it, before, after } from 'node:test'
@@ -38,10 +40,10 @@ after(async () => {
   await cleanupDir(rootDir)
 })
 
-/** with target is cwd start long resident child process (real occupy; never use scan target as helper start way with outside purpose). */
+/** Spawn a long-lived child with `target` as cwd (only for real occupancy testing). */
 function holdProcess(target: string): { pid: number; stop: () => Promise<void> } {
   const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)'], { cwd: target, stdio: 'ignore' })
-  assert.ok(child.pid !== undefined, 'child process should has pid')
+  assert.ok(child.pid !== undefined, 'child process should have a pid')
   const pid = child.pid!
   return {
     pid,
@@ -54,11 +56,11 @@ function holdProcess(target: string): { pid: number; stop: () => Promise<void> }
 }
 
 describe('envPathUsage: real /proc', { timeout: 60_000 }, () => {
-  it('child process cwd occupy: hit pid and path; exit after heavy scan clean (complete do not assume root)', { timeout: 60_000 }, async () => {
+  it('child process cwd match: hits pid/path and clears after exit (without assuming root completeness)', { timeout: 60_000 }, async () => {
     const target = join(rootDir, 'wt-a')
     mkdirSync(target, { recursive: true })
     if (process.platform !== 'linux') {
-      // non- Linux: explicit not_supported(do not fabricate result, not silently skip).
+      // Non-Linux: explicitly return not_supported (never fabricate or silently skip).
       const unsupported = await server.envPathUsage!({ path: target })
       assert.equal(unsupported.ok, false)
       if (unsupported.ok) return
@@ -68,32 +70,32 @@ describe('envPathUsage: real /proc', { timeout: 60_000 }, () => {
     const holder = holdProcess(target)
     try {
       const r = await server.envPathUsage!({ path: target })
-      assert.equal(r.ok, true, `scan should succeeded:${r.ok ? '' : r.error.message}`)
+      assert.equal(r.ok, true, `scan should succeed: ${r.ok ? '' : r.error.message}`)
       if (!r.ok) return
       const hit = r.value.processes.find((p) => p.pid === holder.pid)
-      assert.ok(hit, `should hit child process ${holder.pid}:${JSON.stringify(r.value.processes)}`)
+      assert.ok(hit, `should match child process ${holder.pid}: ${JSON.stringify(r.value.processes)}`)
       assert.equal(hit!.source, 'cwd')
       assert.equal(hit!.path, target)
-      assert.equal(typeof hit!.name, 'string', 'should contains process name (comm)')
-      // complete do not assume root: non- complete environment must carry fail-closed diagnose; permission refuse read
-      // (across uid or non-dumpable, such as systemd --user) count unobservable and does not affect complete.
+      assert.equal(typeof hit!.name, 'string', 'should include process name (comm)')
+      // Do not assume root: incomplete scans must include fail-closed diagnostics; permission denials
+      // (cross-uid or non-dumpable processes like systemd --user) count toward unobservable.
       assert.equal(typeof r.value.complete, 'boolean')
-      assert.equal(typeof r.value.unobservable, 'number', 'snapshot must carry blind spot counter')
-      assert.ok(r.value.unobservable >= 0, 'blind spot counter must be non- negative integer')
+      assert.equal(typeof r.value.unobservable, 'number', 'snapshot must include unobservable count')
+      assert.ok(r.value.unobservable >= 0, 'unobservable count must be a non-negative integer')
       if (r.value.complete !== true) {
-        assert.ok(r.value.diagnostics.length > 0, 'complete=false must carry do not complete diagnose')
+        assert.ok(r.value.diagnostics.length > 0, 'complete=false must include incomplete diagnostics')
       }
     } finally {
       await holder.stop()
     }
-    // process exit after: the pid no longer hit (snapshot such as reverse reflect when before fact).
+    // After process exit: that pid must no longer match.
     const after = await server.envPathUsage!({ path: target })
     assert.equal(after.ok, true)
     if (!after.ok) return
-    assert.equal(after.value.processes.some((p) => p.pid === holder.pid), false, 'exit process must not leftover hit')
+    assert.equal(after.value.processes.some((p) => p.pid === holder.pid), false, 'exited process must not linger in results')
   })
 
-  it('this process open fd occupy: target tree inside file open description symbol hit (source=fd)', { timeout: 60_000 }, async () => {
+  it('open fd held by current process matches target tree files (source=fd)', { timeout: 60_000 }, async () => {
     const target = join(rootDir, 'wt-b')
     mkdirSync(target, { recursive: true })
     if (process.platform !== 'linux') {
@@ -111,7 +113,7 @@ describe('envPathUsage: real /proc', { timeout: 60_000 }, () => {
       assert.equal(r.ok, true)
       if (!r.ok) return
       const hit = r.value.processes.find((p) => p.pid === process.pid && p.source === 'fd')
-      assert.ok(hit, `should hit this process fd:${JSON.stringify(r.value.processes.filter((p) => p.pid === process.pid))}`)
+      assert.ok(hit, `should hit current process fd: ${JSON.stringify(r.value.processes.filter((p) => p.pid === process.pid))}`)
       assert.equal(hit!.path, held)
     } finally {
       closeSync(fd)
@@ -119,8 +121,8 @@ describe('envPathUsage: real /proc', { timeout: 60_000 }, () => {
   })
 })
 
-describe('envPathUsage:fixture procRoot and boundary', { timeout: 60_000 }, () => {
-  it('fabricate /proc tree (symlink cwd/fd): hit and path amount boundary (/a does not match /ab)', { timeout: 60_000 }, async () => {
+describe('envPathUsage: fixture procRoot and boundaries', { timeout: 60_000 }, () => {
+  it('synthetic /proc tree (symlink cwd/fd): hits target and enforces path segment boundaries (/a != /ab)', { timeout: 60_000 }, async () => {
     const target = join(rootDir, 'real-wt')
     mkdirSync(target, { recursive: true })
     const fakeProc = join(rootDir, 'fake-proc')
@@ -129,35 +131,35 @@ describe('envPathUsage:fixture procRoot and boundary', { timeout: 60_000 }, () =
     symlinkSync(join(target, 'file.txt'), join(fakeProc, '42', 'fd', '3'))
     writeFileSync(join(target, 'file.txt'), 'x')
     mkdirSync(join(target, 'sub'))
-    // boundary:/real-wt neighbor reside /real-wtb must not hit.
+    // Boundary: sibling /real-wtb next to /real-wt must not match.
     mkdirSync(join(rootDir, 'real-wtb'), { recursive: true })
     const fixtureServer = createNodeEnvRpcServer({ defaultCwd: rootDir, pathUsage: { procRoot: fakeProc } })
     try {
       const r = await fixtureServer.envPathUsage!({ path: target })
       assert.equal(r.ok, true)
       if (!r.ok) return
-      // same PID(42)cwd+fd dedupe: one process one counter, first reference cwd takes precedence.
-      assert.equal(r.value.matchedTotal, 1, 'same PID cwd+fd dedupe after single counter')
+      // Deduplicate cwd+fd for the same PID (42): count once per PID, prioritizing cwd.
+      assert.equal(r.value.matchedTotal, 1, 'same PID with cwd+fd deduplicates to 1')
       assert.equal(r.value.processes.length, 1)
       assert.equal(r.value.processes[0]!.pid, 42)
       assert.equal(r.value.processes[0]!.source, 'cwd')
-      assert.equal(r.value.complete, true, 'fixture inside without permission reject → complete')
+      assert.equal(r.value.complete, true, 'no permission denials in fixture -> complete')
 
       const neighbor = await fixtureServer.envPathUsage!({ path: join(rootDir, 'real-wtb') })
       assert.equal(neighbor.ok, true)
       if (!neighbor.ok) return
-      assert.equal(neighbor.value.matchedTotal, 0, 'prefix each other similar but amount boundary different path must not mistakenly hit')
+      assert.equal(neighbor.value.matchedTotal, 0, 'similar-prefix paths with distinct segments must not false-match')
     } finally {
       await fixtureServer.dispose().catch(() => undefined)
     }
   })
 
-  it('platform inject darwin/win32: explicit not_supported(do not fabricate across platform result)', { timeout: 60_000 }, async () => {
+  it('platform override darwin/win32 explicitly returns not_supported', { timeout: 60_000 }, async () => {
     for (const platform of ['darwin', 'win32']) {
       const s = createNodeEnvRpcServer({ defaultCwd: rootDir, pathUsage: { platform: () => platform } })
       try {
         const r = await s.envPathUsage!({ path: '/wt' })
-        assert.equal(r.ok, false, `${platform} should explicit reject`)
+        assert.equal(r.ok, false, `${platform} should reject explicitly`)
         if (r.ok) continue
         assert.equal(r.error.code, 'not_supported')
         assert.ok(r.error.message.includes(platform))
@@ -167,7 +169,7 @@ describe('envPathUsage:fixture procRoot and boundary', { timeout: 60_000 }, () =
     }
   })
 
-  it('reference strictly validate: unknown field / non- object / relative path / NUL → invalid', { timeout: 60_000 }, async () => {
+  it('strict input validation: unknown fields / non-object / relative path / NUL -> invalid', { timeout: 60_000 }, async () => {
     const cases: unknown[] = [
       null,
       'x',
@@ -180,20 +182,20 @@ describe('envPathUsage:fixture procRoot and boundary', { timeout: 60_000 }, () =
       const r = await server.envPathUsage!(input as never)
       assert.equal(r.ok, false, `should reject ${JSON.stringify(input)}`)
       if (r.ok) continue
-      assert.equal(r.error.code, 'invalid', `${JSON.stringify(input)} → invalid(got ${r.error.code})`)
+      assert.equal(r.error.code, 'invalid', `${JSON.stringify(input)} -> invalid (got ${r.error.code})`)
     }
   })
 })
 
-describe('managed environment variable strip except (HELM_TOKEN / HELM_EXECUTION_SCOPE)', { timeout: 60_000 }, () => {
-  /** use node itself probe child process env(independent of sh, across platform same construct). */
+describe('managed env var stripping (HELM_TOKEN / HELM_EXECUTION_SCOPE)', { timeout: 60_000 }, () => {
+  /** Probe child process env using Node itself (shell-independent, cross-platform). */
   const probeEnvCommand = (): string[] => [
     process.execPath,
     '-e',
     "console.log(JSON.stringify({t: process.env.HELM_TOKEN ?? '', s: process.env.HELM_EXECUTION_SCOPE ?? ''}))",
   ]
 
-  it('envExec:daemon host env managed value does not enter sub- command; caller explicit inject by time takes effect', { timeout: 60_000 }, async () => {
+  it('envExec strips daemon host managed env vars while applying explicit caller injections', { timeout: 60_000 }, async () => {
     const prevToken = process.env.HELM_TOKEN
     const prevScope = process.env.HELM_EXECUTION_SCOPE
     process.env.HELM_TOKEN = 'daemon-own-secret'
@@ -210,10 +212,10 @@ describe('managed environment variable strip except (HELM_TOKEN / HELM_EXECUTION
       })
       assert.equal(r.ok, true, r.ok ? '' : r.error.message)
       const parsed = JSON.parse(chunks.join('').trim()) as { t?: string; s?: string }
-      assert.equal(parsed.t, '', `HELM_TOKEN must not inherit (got ${parsed.t})`)
-      assert.equal(parsed.s, '', `HELM_EXECUTION_SCOPE must not inherit (got ${parsed.s})`)
+      assert.equal(parsed.t, '', `HELM_TOKEN must not be inherited (got ${parsed.t})`)
+      assert.equal(parsed.s, '', `HELM_EXECUTION_SCOPE must not be inherited (got ${parsed.s})`)
 
-      // caller explicit inject (Hub by time together into): by time takes effect.
+      // Caller-supplied explicit overrides (synthesized per call by Hub) apply per call.
       const chunks2: string[] = []
       const echoServer2 = createNodeEnvRpcServer({
         defaultCwd: rootDir,
@@ -227,7 +229,7 @@ describe('managed environment variable strip except (HELM_TOKEN / HELM_EXECUTION
         })
         assert.equal(r2.ok, true)
         const parsed2 = JSON.parse(chunks2.join('').trim()) as { s?: string }
-        assert.equal(parsed2.s, 'worktree:node-x:/wt', 'explicit inject value must by time takes effect')
+        assert.equal(parsed2.s, 'worktree:node-x:/wt', 'explicit injected value must take effect per call')
       } finally {
         await echoServer2.dispose().catch(() => undefined)
       }
@@ -240,7 +242,7 @@ describe('managed environment variable strip except (HELM_TOKEN / HELM_EXECUTION
     }
   })
 
-  it('LocalExecutionEnv.exec direct connect (inheritEnv by default open start): inherit base bottom same strip except managed value', { timeout: 60_000 }, async () => {
+  it('direct LocalExecutionEnv.exec (inheritEnv enabled by default) also strips managed vars from baseline', { timeout: 60_000 }, async () => {
     const prevToken = process.env.HELM_TOKEN
     const prevScope = process.env.HELM_EXECUTION_SCOPE
     process.env.HELM_TOKEN = 'daemon-own-secret'
@@ -251,12 +253,11 @@ describe('managed environment variable strip except (HELM_TOKEN / HELM_EXECUTION
       const r = await env.exec(
         probeEnvCommand(),
         { onOutput: (text) => { out += text } },
-        undefined as never,
       )
       assert.equal(r.ok, true, r.ok ? '' : r.error.message)
       const parsed = JSON.parse(out.trim()) as { t?: string; s?: string }
-      assert.equal(parsed.t, '', `HELM_TOKEN must not inherit (got ${parsed.t})`)
-      assert.equal(parsed.s, '', `HELM_EXECUTION_SCOPE must not inherit (got ${parsed.s})`)
+      assert.equal(parsed.t, '', `HELM_TOKEN must not be inherited (got ${parsed.t})`)
+      assert.equal(parsed.s, '', `HELM_EXECUTION_SCOPE must not be inherited (got ${parsed.s})`)
     } finally {
       if (prevToken === undefined) delete process.env.HELM_TOKEN
       else process.env.HELM_TOKEN = prevToken

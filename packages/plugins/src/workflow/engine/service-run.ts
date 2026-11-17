@@ -7,6 +7,7 @@
  */
 
 import { mkdirSync } from 'node:fs'
+import { basename } from 'node:path'
 import { HelmError, redactJsonValue, type AgentSpawnRequest, type ConversationSummary } from '@helm/protocol'
 import { withWorkflowSpawnMeta, type WorkflowRunRequest, type WorkflowRunSummary } from '../../contracts.js'
 import {
@@ -91,6 +92,11 @@ export async function startWorkflowRun(
       ? context.parentToolCallId
       : undefined
 
+  if (request.label !== undefined && (typeof request.label !== 'string' || request.label.trim() === '')) {
+    throw new HelmError('validation_error', 'label 必须为非空字符串', 400, { label: request.label })
+  }
+  const explicitLabel = request.label !== undefined ? svc.redact(request.label.trim()) : undefined
+
   const sources = [request.name, request.script, request.scriptPath].filter((v) => v !== undefined)
   if (sources.length > 1) {
     throw new HelmError(
@@ -168,7 +174,11 @@ export async function startWorkflowRun(
       }
       const started = await startBackgroundAgent(svc, spawnReq, {
         ...(parentToolCallId !== undefined ? { parentToolCallId } : {}),
-        ...(replayFrom.name !== '' ? { label: replayFrom.name } : {}),
+        ...(explicitLabel !== undefined
+          ? { label: explicitLabel }
+          : replayFrom.name !== ''
+            ? { label: replayFrom.name }
+            : {}),
         foreground: foregroundContext,
         notifyParentOnSettle: foregroundContext ? false : (context?.notifyParentOnSettle ?? true),
         preassigned: {
@@ -302,10 +312,12 @@ export async function startWorkflowRun(
   const createdAt = Date.now()
   const meta = svc.library.peekMeta(script)
   const foregroundContext = context?.foreground === true
+  const scriptBase = scriptPath !== undefined ? basename(scriptPath, '.js') : undefined
+  const fallbackScriptName = scriptBase !== undefined && scriptBase !== '' ? scriptBase : undefined
 
   const record: RunRecord = {
     id: runId,
-    name: meta?.name ?? scriptPath ?? runId,
+    name: explicitLabel ?? meta?.name ?? replayFrom?.name ?? fallbackScriptName ?? runId,
     conversationId,
     ...(parentToolCallId !== undefined ? { parentToolCallId } : {}),
     status: 'running',

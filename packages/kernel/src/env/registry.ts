@@ -1,23 +1,23 @@
 /**
- * across platform compute node connect register table:Hub side /ws/node  WS+birpc connection pool.
+ * Cross-platform compute node connection registry: Hub-side `/ws/node` WS+birpc connection pool.
  *
- * security semantics (each all has real test):
- * - **fail-closed authentication**: not provide authenticate call back when reject everything register (default
- *   reject, never default let through);
- * - **atomic publish**: connect object (contains birpc proxy) fully ready (authentication via + rpc bind set)
- *   after only then register and wake wait for - - wait for never will gets half into product/undefined;
- * - **heartbeat/output bind set when before connect**:noteHeartbeat(nodeId, socket) only refresh the
- *   connect register nodeId;onEnvExecOutput only accept registered connect event - - not registered
- *   connect cannot keep-alive other person node, also cannot fabricate/inject other node output;
- * - **output by node routing**:dispatch by nodeId find the node all env instance sink
- *   (same node many conversation concurrency env mutual do not string disturb, across node event directly discard);
- * - **IPC subscribe by (nodeId, subscribeId) precise routing**: node call back onIpcEvent /
- *   onIpcClosed only dispatch to for should subscribe, subscribe close i.e. excerpt except;
- * - **replace/TTL/close all truly disconnect**: same nodeId new connect top old on connect close old
- *   socket + $close old rpc; heartbeat timeout and registry.close() same close socket,
- *   do not only delete Map(guard against half open connect continue event);
- * - authentication during socket already close → do not publish ghost connect;
- * - disconnect(nodeId):API delete identity when immediately disconnect when before ws+rpc.
+ * Security invariants (each backed by dedicated tests):
+ * - **Fail-closed authentication**: rejects all registrations when no `authenticate` callback is supplied
+ *   (default-deny, never default-allow);
+ * - **Atomic publication**: a connection (with its birpc proxy) is registered and waiters are woken only
+ *   after it is completely ready (auth passed + RPC bound)—waiters never observe partial objects or undefined;
+ * - **Heartbeat/output bound to current connection**: `noteHeartbeat(nodeId, socket)` only refreshes the
+ *   connection registered for that nodeId, and `onEnvExecOutput` only accepts events from the currently
+ *   registered connection—unregistered connections cannot keep another node alive or inject fake output;
+ * - **Output routed per node**: dispatches by `nodeId` to all env sinks registered for that node (concurrent
+ *   conversations on the same node never cross-talk; cross-node events are dropped);
+ * - **IPC subscriptions routed strictly by `(nodeId, subscribeId)`**: node `onIpcEvent` / `onIpcClosed`
+ *   callbacks reach only the matching subscription and remove it on close;
+ * - **Evict/TTL/close truly disconnect**: when a new connection supersedes the same `nodeId`, both the old
+ *   socket and old RPC are closed; heartbeat timeouts and `registry.close()` close sockets too rather than
+ *   only deleting Map entries (preventing half-open connections from emitting events);
+ * - Sockets closing during auth never publish ghost connections;
+ * - `disconnect(nodeId)`: immediately closes the active ws+rpc when API revokes identity.
  */
 
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
@@ -44,8 +44,8 @@ import {
   type UpgradeWaiterHandle,
 } from './upgrade-waiters.js'
 
-/* upgrade wait for and error type already split until upgrade-waiters.ts, tunnel register already split until tunnel-table.ts;
- * via this module again export keep env package public exports (env/index.ts,fabric.ts) do not change. */
+/* Upgrade waiters and error types moved to `upgrade-waiters.ts`; tunnel registry moved to `tunnel-table.ts`;
+ * re-exported here to preserve existing env public exports (`env/index.ts`, `fabric.ts`). */
 export {
   HelmUpgradeBusyError,
   HelmUpgradeTimeoutError,
@@ -53,25 +53,25 @@ export {
   type UpgradeWaiterHandle,
 } from './upgrade-waiters.js'
 
-/** node side supply Hub invoke function collection (env RPC all collection + connect control). */
+/** Functions exposed by the node to Hub (full env RPC suite + connection control). */
 export type NodeSideFunctions = NodeEnvRpcFunctions & {
   register(input: NodeRegisterInput): Promise<{ ok: boolean; heartbeatMs: number; reason?: string }>
   heartbeat(nodeId: string, input?: NodeHeartbeatInput): Promise<boolean>
 }
 
-/** non- negative finite count value validate (NaN/Infinity/negative number/non- count value one rule illegal). */
+/** Non-negative finite number check (NaN/Infinity/negative/non-number are all invalid). */
 const isNonNegativeFinite = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0
 
-/** finite count value validate (allows negative value,loadAvg argument non- negative but by finite count contract validate). */
+/** Finite number check (allows negatives; loadAvg is theoretically non-negative but validated as finite). */
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value)
 
 /**
- * boundary validate: external node on report health snapshot in enter register table before filter.
- * required field (collectedAt / uptimeSec / loadAvg / memFreeBytes / memTotalBytes)
- * any one illegal i.e. whole discard (return undefined, do not throw exception, do not trust not validate dirty field);
- * optional disk field illegal when only ignore the field.
+ * Boundary validation: filter node-reported health snapshots before storing in registry.
+ * If any required field (`collectedAt` / `uptimeSec` / `loadAvg` / `memFreeBytes` / `memTotalBytes`) is invalid,
+ * drop the whole snapshot (returns undefined without throwing, never trusting unvalidated fields);
+ * invalid optional disk fields are simply omitted.
  */
 export function sanitizeNodeHealth(raw: unknown): NodeHealthSnapshot | undefined {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
@@ -102,24 +102,24 @@ export function sanitizeNodeHealth(raw: unknown): NodeHealthSnapshot | undefined
 
 export interface NodeConnection {
   nodeId: string
-  /** invoke node side function proxy (env RPC + register/heartbeat). */
+  /** Proxy for invoking node-side functions (env RPC + register/heartbeat). */
   rpc: BirpcReturn<NodeSideFunctions, HubConnectionLocal>
   socket: WsSocket
   connectedAt: number
   lastSeenAt: number
   hostname: string
   platform: string
-  /** node on report software version (illegal/not provide when do not save). */
+  /** Software version reported by the node (omitted if invalid or unprovided). */
   version?: string
-  /** upgrade choose carry attempt ID(heartbeat commit by it for account). */
+  /** Upgrade attempt ID carried by the candidate (heartbeat commit reconciles against it). */
   upgradeAttemptId?: string
-  /** node end config Hub address (remote managed child process back connect use). */
+  /** Hub URL configured on the node (for remote managed child processes connecting back). */
   hubUrl?: string
-  /** most near once register or heartbeat incidentally health snapshot (boundary validate after can message data). */
+  /** Most recent health snapshot from registration or heartbeat (trusted after boundary validation). */
   health?: NodeHealthSnapshot
 }
 
-/** Hub side local function (each connect a, bind set the connect register identity). */
+/** Hub-side local functions (one instance per connection, bound to that connection's registered identity). */
 export interface HubConnectionLocal {
   onEnvExecOutput(event: EnvExecOutputEvent): void
   onIpcEvent(event: NodeIpcEvent): void
@@ -129,18 +129,18 @@ export interface HubConnectionLocal {
 export interface RegisterOutcome {
   accepted: boolean
   reason?: string
-  /** expectation heartbeat interval (milli second). */
+  /** Expected heartbeat interval (ms). */
   heartbeatMs?: number
 }
 
 export interface NodeRegistryOptions {
-  /** heartbeat timeout (milli second) judge offline; default 45s. */
+  /** Heartbeat timeout (ms) before marking offline; defaults to 45s. */
   heartbeatTimeoutMs?: number
-  /** register reply to node heartbeat interval; default 15s. */
+  /** Heartbeat interval returned to nodes on registration; defaults to 15s. */
   heartbeatIntervalMs?: number
   /**
-   * node token validate (sha256(wholeToken) than for etc.; by external sign table provide).
-   * **default reject everything register (fail-closed)**.
+   * Node token validator (e.g. comparing `sha256(wholeToken)`; provided by external token store).
+   * **Defaults to rejecting all registrations (fail-closed)**.
    */
   authenticate: (nodeId: string, token: string) => boolean | Promise<boolean>
 }
@@ -151,10 +151,10 @@ interface Waiter {
   cancelled: () => void
 }
 
-/* tunnel register (PendingTunnel/ActiveTunnel) and upgrade wait for (UpgradeWaiter,
- * UpgradeWaiterHandle) type and implement respectively split until tunnel-table.ts / upgrade-waiters.ts. */
+/* Tunnel table (`PendingTunnel`/`ActiveTunnel`) and upgrade waiters (`UpgradeWaiter`,
+ * `UpgradeWaiterHandle`) live in `tunnel-table.ts` / `upgrade-waiters.ts`. */
 
-/** IPC subscribe call back collection. */
+/** IPC subscription callback pair. */
 export interface IpcSink {
   onEvent: (line: string) => void
   onClosed: (error?: string) => void
@@ -166,14 +166,14 @@ const safeEqual = (a: string, b: string): boolean => {
   return ba.length === bb.length && timingSafeEqual(ba, bb)
 }
 
-/** tunnel target boundary validate:port 1..65535 security integer;host non-empty,≤255 character, without control character/first tail whitespace (illegal i.e. HelmError validation_error, not silently change write). */
+/** Validate tunnel target at boundary: port must be 1..65535 safe integer; host (if present) must be non-empty, <=255 chars, without control chars or whitespace (invalid fails with HelmError `validation_error`, never silently mutated). */
 export function normalizeTunnelTarget(target: NodeTunnelTarget): { host: string | undefined; port: number } {
   if (target === null || typeof target !== 'object') {
-    throw new HelmError('validation_error', 'tunnel target must be { host?, port } object', 400)
+    throw new HelmError('validation_error', 'tunnel target must be a { host?, port } object', 400)
   }
   const { host, port } = target as Partial<NodeTunnelTarget>
   if (typeof port !== 'number' || !Number.isSafeInteger(port) || port < 1 || port > 65535) {
-    throw new HelmError('validation_error', 'tunnel target port must be 1..65535 security integer', 400, { port })
+    throw new HelmError('validation_error', 'tunnel target port must be an integer between 1 and 65535', 400, { port })
   }
   if (host === undefined) return { host: undefined, port }
   if (
@@ -181,20 +181,20 @@ export function normalizeTunnelTarget(target: NodeTunnelTarget): { host: string 
     host.length === 0 ||
     host.length > 255 ||
     host.trim() !== host ||
-    // control character and any whitespace (contains internal space/Tab) one rule reject: host name disallows whitespace.
+    // Reject control chars and any whitespace (including internal spaces/tabs): hostnames forbid whitespace.
     /\s/.test(host) ||
-    // control character (contains NUL) one rule reject.
+    // Reject all control characters (including NUL).
     [...host].some((ch) => {
       const code = ch.charCodeAt(0)
       return code < 0x20 || code === 0x7f
     })
   ) {
-    throw new HelmError('validation_error', 'tunnel target host must be non-empty, without whitespace/control character string (≤255 character)', 400, { host })
+    throw new HelmError('validation_error', 'tunnel target host must be a non-empty string without whitespace or control characters (<= 255 characters)', 400, { host })
   }
   return { host, port }
 }
 
-/** timing-safe token validate call back (sign table store sha256(wholeToken) ten six enter system). */
+/** Timing-safe token validator callback (token store persists `sha256(wholeToken)` in hex). */
 export function tokenAuthenticator(
   sha256HexOf: (nodeId: string) => string | undefined,
 ): (nodeId: string, token: string) => boolean {
@@ -216,15 +216,15 @@ export class NodeRegistry {
   readonly #heartbeatTimeoutMs: number
   readonly #authenticate: (nodeId: string, token: string) => boolean | Promise<boolean>
   readonly #nodeChangedListeners = new Set<(nodeId: string, online: boolean) => void>()
-  /** each node output sink list (same node many env instance). */
+  /** Output sink list per node (multiple env instances on the same node). */
   readonly #outputSinks = new Map<string, Set<(event: EnvExecOutputEvent) => void>>()
-  /** IPC subscribe routing:nodeId -> subscribeId -> sink. */
+  /** IPC subscription routing: `nodeId -> subscribeId -> sink`. */
   readonly #ipcSinks = new Map<string, Map<string, IpcSink>>()
-  /** node undo epoch: each time evict/disconnect/replace pass increase; in-flight register wake after must validate. */
+  /** Node revocation epoch: incremented on every evict/disconnect/replace; checked after async auth wakes up. */
   readonly #nodeEpoch = new Map<string, number>()
-  /** pass-through tunnel register table (pending/active two spread table and batch amount final; see tunnel-table.ts). */
+  /** Passthrough tunnel table (pending/active maps and bulk finalization; see `tunnel-table.ts`). */
   readonly #tunnels = new TunnelTable()
-  /** upgrade wait for set (register/commit compute/closure stop clean up; see upgrade-waiters.ts). */
+  /** Upgrade waiter set (registration/commit settlement/shutdown cleanup; see `upgrade-waiters.ts`). */
   readonly #upgrades = new UpgradeWaiterSet()
   #sweeper: NodeJS.Timeout | undefined
   #closed = false
@@ -232,7 +232,7 @@ export class NodeRegistry {
   constructor(options: NodeRegistryOptions) {
     this.#heartbeatIntervalMs = options.heartbeatIntervalMs ?? 15_000
     this.#heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? 45_000
-    // fail-closed: without authentication call back → one rule reject.
+    // Fail-closed: reject everything if no auth callback is provided.
     this.#authenticate = options.authenticate ?? (() => false)
   }
 
@@ -249,7 +249,7 @@ export class NodeRegistry {
     return conn === undefined ? undefined : { ...conn }
   }
 
-  /** node on take offline call back (KernelRuntime based on this publish node.changed SSE event). */
+  /** Node online/offline change callback (used by `KernelRuntime` to publish `node.changed` SSE events). */
   onNodeChanged(listener: (nodeId: string, online: boolean) => void): () => void {
     this.#nodeChangedListeners.add(listener)
     return () => {
@@ -257,7 +257,7 @@ export class NodeRegistry {
     }
   }
 
-  /** register output sink(by node;fabric is the node each env instance register). */
+  /** Register an output sink for a node (called by fabric per env instance). */
   addOutputSink(nodeId: string, sink: (event: EnvExecOutputEvent) => void): void {
     let set = this.#outputSinks.get(nodeId)
     if (set === undefined) {
@@ -271,7 +271,7 @@ export class NodeRegistry {
     this.#outputSinks.get(nodeId)?.delete(sink)
   }
 
-  /** register IPC subscribe call back (nodeId + subscribeId precise routing). */
+  /** Register an IPC subscription sink (routed strictly by `nodeId + subscribeId`). */
   addIpcSink(nodeId: string, subscribeId: string, sink: IpcSink): void {
     let map = this.#ipcSinks.get(nodeId)
     if (map === undefined) {
@@ -299,9 +299,10 @@ export class NodeRegistry {
   }
 
   /**
-   * node WS connect register entry (ws-gateway in connect layer invoke;birpc proxy by gateway
-   * establish, via attach parameter pass - - proxy local end i.e. hub side function, output/heartbeat/
-   * IPC event bind set this connect). authentication via and proxy bind set after completion**atomic**publish.
+   * WS node connection registration entrypoint (invoked at the connection layer by `ws-gateway`;
+   * gateway creates the birpc proxy and passes `attach`, binding Hub-side local callbacks for
+   * output/heartbeat/IPC events strictly to this connection). Publishes **atomically** once auth
+   * passes and the proxy is bound.
    */
   async register(
     socket: WsSocket,
@@ -314,16 +315,16 @@ export class NodeRegistry {
       return { accepted: false, reason: 'invalid nodeId' }
     }
     if (typeof token !== 'string' || token.length === 0) return { accepted: false, reason: 'missing token' }
-    // boundary validate:version / upgradeAttemptId want particle default want particle non-empty string;
-    // illegal type/empty string explicit reject register (not silently discard - - that will break upgrade for account identity).
+    // Boundary validation: when present, `version` / `upgradeAttemptId` must be non-empty strings;
+    // reject invalid types or empty strings explicitly (never silently drop, which would break upgrade reconciliation).
     if (version !== undefined && (typeof version !== 'string' || version === '')) {
       return { accepted: false, reason: 'invalid version' }
     }
     if (upgradeAttemptId !== undefined && (typeof upgradeAttemptId !== 'string' || upgradeAttemptId === '')) {
       return { accepted: false, reason: 'invalid upgradeAttemptId' }
     }
-    // undo epoch snapshot: authentication await during removeNode/round swap/top replace all will pass increase,
-    // late to resolve(true) no longer by undo old connect publish online.
+    // Snapshot revocation epoch: any removeNode/token rotation/replacement during async auth increments it,
+    // preventing late `resolve(true)` from publishing an invalidated connection online.
     const epochAtStart = this.#epochOf(nodeId)
     let valid = false
     try {
@@ -332,16 +333,16 @@ export class NodeRegistry {
       valid = false
     }
     if (!valid) return { accepted: false, reason: 'invalid token' }
-    // authentication during connect may already assert: do not publish ghost connect.
+    // Socket may have closed during auth: never publish a ghost connection.
     if (socket.readyState !== socket.OPEN) return { accepted: false, reason: 'connection closed during auth' }
     if (this.#closed) return { accepted: false, reason: 'registry closed' }
-    // undo hard rule: authentication in-flight during occur evict/disconnect(removeNode, token round swap,
-    // new connect top replace)→ this register already expires, reject publish (old connect never heavy enable).
+    // Revocation invariant: if eviction/disconnect occurred while auth was in flight (`removeNode`, token
+    // rotation, or replacement by a newer connection), this registration is stale—refuse to publish.
     if (this.#epochOf(nodeId) !== epochAtStart) {
       return { accepted: false, reason: 'register superseded by revoke/replace' }
     }
 
-    // establish proxy: local function bind set this connect and publish proxy (not publish before/by undo after event all discard).
+    // Build proxy: bind local callbacks to this connection and epoch (discard events before publication or after eviction).
     let publishEpoch = epochAtStart
     let published = false
     const isLive = (): boolean =>
@@ -349,7 +350,7 @@ export class NodeRegistry {
     let rpc!: BirpcReturn<NodeSideFunctions, HubConnectionLocal>
     rpc = attach({
       onEnvExecOutput: (event) => {
-        if (!isLive()) return // undo/top replace after late to output do not pollute new proxy
+        if (!isLive()) return // late output after revocation/replacement must not pollute the new generation
         this.#dispatchOutput(nodeId, event)
       },
       onIpcEvent: (event) => {
@@ -362,8 +363,8 @@ export class NodeRegistry {
       },
     })
 
-    // top old connect: truly close old socket + rpc(do not only delete Map), and push enter epoch
-    //(old proxy late to event from this one rule discard).
+    // Evict previous connection: actually close old socket + rpc (not just Map delete) and bump epoch
+    // (subsequent late events from the old proxy are dropped).
     const prev = this.#connections.get(nodeId)
     if (prev !== undefined) this.#evict(nodeId, prev, 'replaced')
     publishEpoch = this.#epochOf(nodeId)
@@ -389,18 +390,18 @@ export class NodeRegistry {
     socket.once('close', gone)
     socket.once('error', gone)
 
-    this.#wakeWaiters(nodeId) // fully ready after only then wake
+    this.#wakeWaiters(nodeId) // wake waiters only after fully published
     this.#notifyNodeChanged(nodeId, true)
     this.#ensureSweeper()
     return { accepted: true, heartbeatMs: this.#heartbeatIntervalMs }
   }
 
   /**
-   * create upgrade wait for: return result only by match heartbeat upgradeCommit resolve;
-   * timeout / cancel() / registry.close() reject(original socket transfer disconnect do not final
-   * wait for - - upgrade itself then along with choose top replace old connect). same node concurrency upgrade wait for explicit reject.
-   * register do not resolve wait for - - choose register only carry attemptId, truly succeeded
-   * confirm only can from choose itself commit heartbeat.
+   * Create an upgrade waiter: resolves only on a matching heartbeat `upgradeCommit`;
+   * rejects on timeout, `cancel()`, or `registry.close()` (disconnecting the old socket never settles the
+   * waiter because upgrades restart and replace the old connection with the candidate). Concurrent upgrade
+   * waiters on the same node reject explicitly. `register` does not resolve the waiter—the candidate's
+   * registration only carries `attemptId`, and real confirmation comes only from its commit heartbeat.
    */
   beginUpgrade(
     nodeId: string,
@@ -410,14 +411,14 @@ export class NodeRegistry {
     return this.#upgrades.begin(nodeId, params)
   }
 
-  /** test inside omit: node is otherwise store in in-flight upgrade wait for. */
+  /** Test-only helper: whether the node has an in-flight upgrade waiter. */
   hasUpgradeWaiter(nodeId: string): boolean {
     return this.#upgrades.has(nodeId)
   }
 
-  // --- node pass-through tunnel ---------------------------------------------------------
+  // --- Node passthrough tunnels ---------------------------------------------------------
 
-  /** independent gateway authentication delegate: re- use register authentication (tokenAuthenticator / fail-closed). */
+  /** Token authentication delegate for the dedicated tunnel gateway: reuses registry auth (`tokenAuthenticator` / fail-closed). */
   async authenticateToken(nodeId: string, token: string): Promise<boolean> {
     if (this.#closed) return false
     try {
@@ -427,43 +428,42 @@ export class NodeRegistry {
     }
   }
 
-  /** test inside omit: in-flight/already establish tunnel counter. */
+  /** Test-only helper: counts of pending and active tunnels. */
   debugTunnelCounts(): { pending: number; active: number } {
     return this.#tunnels.counts()
   }
 
   /**
-   * establish to remote node target host:port byte pipeline (any TCP;host default
-   * 127.0.0.1, by node parse connect): invoke when before connect nodeTunnelOpen after
-   * **immediately**wait for independent gateway first frame (acceptTunnel),RPC result in background for account - - slow/assert
-   * RPC will not card timeout and abort. failed semantics (all HelmError, never fall back local):
-   * - node offline / register table close:node_offline(409);
-   * - node not implemented nodeTunnelOpen:node_tunnel_not_supported(501);
-   * - gateway back connect timeout (default 10s):node_tunnel_timeout(504);
-   * - node upgrade arrange empty refuse new:node_draining(503, node online but let upgrade,
-   *   must not and node_offline confuse, also must not archive and is aborted);
-   * - RPC explicit failed / assert connect:node_tunnel_connect_failed(502);abort:499.
-   * any failed/cancel path all exhaust force notify node nodeTunnelAbort(catch observe, do not etc.
-   * network back package only then reject),pending/active register sync clean up, do not pending.
+   * Open a byte-stream pipe to `host:port` on a remote node (arbitrary TCP; `host` defaults to `127.0.0.1`,
+   * resolved and connected on the node): calls `nodeTunnelOpen` on the current connection and **immediately**
+   * awaits the dedicated gateway first-frame handshake (`acceptTunnel`), settling the RPC in the background
+   * so slow/closing RPCs don't stall timeouts or aborts. Failure semantics (all HelmError, never falls back to local):
+   * - node offline / registry closed: `node_offline` (409);
+   * - node does not implement `nodeTunnelOpen`: `node_tunnel_not_supported` (501);
+   * - gateway callback timeout (default 10s): `node_tunnel_timeout` (504);
+   * - node draining for upgrade: `node_draining` (503, online but yielding to upgrade; distinct from `node_offline` and `aborted`);
+   * - RPC explicit failure / closed connection: `node_tunnel_connect_failed` (502); abort: 499.
+   * Any failure/cancel path makes a best-effort `nodeTunnelAbort` notification (swallowing errors without
+   * blocking rejection on network replies) and cleans up pending/active entries synchronously without leaking.
    */
   async openTunnel(nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal): Promise<Duplex> {
     const { host, port } = normalizeTunnelTarget(target)
     if (this.#closed) {
-      throw new HelmError('node_offline', `node ${nodeId} offline, cannot establish tunnel`, 409, { nodeId })
+      throw new HelmError('node_offline', `node ${nodeId} is offline; cannot establish tunnel`, 409, { nodeId })
     }
     const conn = this.#connections.get(nodeId)
     if (conn === undefined) {
-      throw new HelmError('node_offline', `node ${nodeId} offline, cannot establish tunnel`, 409, { nodeId })
+      throw new HelmError('node_offline', `node ${nodeId} is offline; cannot establish tunnel`, 409, { nodeId })
     }
     const open = conn.rpc.nodeTunnelOpen
     if (open === undefined) {
-      throw new HelmError('node_tunnel_not_supported', `node ${nodeId} daemon unsupported pass-through tunnel`, 501, { nodeId })
+      throw new HelmError('node_tunnel_not_supported', `node ${nodeId} daemon does not support passthrough tunnels`, 501, { nodeId })
     }
     const tunnelId = randomUUID()
     const epoch = this.#epochOf(nodeId)
     const timeoutMs = 10_000
 
-    /** exhaust force notify node cancel ready listen (must fault tolerance: assert connect/unsupported when non-blocking local clean up). */
+    /** Best-effort notification to node to cancel pending connect (fault-tolerant so broken sockets/unsupported daemons don't block local cleanup). */
     const abortNode = (): void => {
       conn.rpc.nodeTunnelAbort?.(tunnelId).catch(() => undefined)
     }
@@ -485,11 +485,11 @@ export class NodeRegistry {
         if (pending.settled || duplex === undefined) return
         pending.settled = true
         clearTimeout(pending.timer)
-        // excerpt pending, register active and hang close excerpt except hook (see tunnel-table.ts).
+        // Remove pending, register active, and hook close cleanup (see `tunnel-table.ts`).
         this.#tunnels.activate(tunnelId, nodeId, duplex)
         resolve(duplex)
       }
-      // gateway recognize verify via after hand over fine Duplex(see grantTunnel): fill i.e. compute.
+      // Gateway calls `grantTunnel` after auth passes, handing over the ready Duplex and settling pending.
       pending.grant = (duplex) => {
         if (pending.settled) { duplex.destroy(); return }
         granted = duplex
@@ -503,13 +503,13 @@ export class NodeRegistry {
         reject(error)
       }
     })
-    // guard against not handle rejection observer missing (caller await before sync reject path).
+    // Prevent unhandledRejection when a synchronous rejection fires before caller awaits.
     pendingPromise.catch(() => undefined)
     pending.timer = setTimeout(() => {
       abortNode()
       pending.reject(new HelmError(
         'node_tunnel_timeout',
-        `node ${nodeId} tunnel ${tunnelId} not in ${timeoutMs}ms inside back connect`,
+        `node ${nodeId} tunnel ${tunnelId} did not connect back within ${timeoutMs}ms`,
         504,
         { nodeId, tunnelId },
       ))
@@ -519,12 +519,12 @@ export class NodeRegistry {
 
     const onAbort = (): void => {
       abortNode()
-      pending.reject(new HelmError('aborted', 'tunnel establish cancelled', 499, { nodeId, tunnelId }))
+      pending.reject(new HelmError('aborted', 'tunnel establishment cancelled', 499, { nodeId, tunnelId }))
     }
     signal?.addEventListener('abort', onAbort, { once: true })
 
-    // RPC result background for account: do not await(slow/assert RPC do not card timeout and abort); succeeded only used to
-    // mention before set format failed (node explicit reject),rejection also observe(produces no unhandled).
+    // Reconcile RPC result in the background without blocking (`slow`/`closed` RPCs won't stall timeout/abort);
+    // only failures prior to settlement reject early, with rejections observed to prevent unhandled errors.
     void open({ tunnelId, ...(host === undefined ? {} : { host }), port }).then(
       (result) => {
         if (pending.settled) return
@@ -533,7 +533,7 @@ export class NodeRegistry {
         abortNode()
         pending.reject(new HelmError(
           code,
-          `node ${nodeId} establish tunnel failed:${result.error.message}`,
+          `node ${nodeId} failed to establish tunnel: ${result.error.message}`,
           status,
           { nodeId, tunnelId, port },
         ))
@@ -543,7 +543,7 @@ export class NodeRegistry {
         abortNode()
         pending.reject(new HelmError(
           'node_tunnel_connect_failed',
-          `node ${nodeId} tunnel RPC failed:${error instanceof Error ? error.message : String(error)}`,
+          `node ${nodeId} tunnel RPC failed: ${error instanceof Error ? error.message : String(error)}`,
           502,
           { nodeId, tunnelId, port },
         ))
@@ -558,10 +558,10 @@ export class NodeRegistry {
   }
 
   /**
-   * independent gateway first frame consume entry (pure recognize verify/match, do not any frame - - frame archive gateway):
-   * recognize verify + once match + epoch re- inspect all via return true, gateway then hand over fine Duplex
-   *(grantTunnel) and self row ok frame; any one does not match return false(gateway back error frame
-   * after close and self row destroy stream, without leaking).
+   * Dedicated gateway first-frame check (pure auth/matching; framing stays inside the gateway):
+   * returns true only when auth, single-use pending match, and epoch recheck all pass, letting the gateway
+   * emit `{ type: 'ok' }` and hand over the Duplex (`grantTunnel`); on any mismatch returns false (gateway
+   * sends error frame, closes, and destroys the stream without leaking).
    */
   async acceptTunnel(
     nodeId: string,
@@ -577,17 +577,18 @@ export class NodeRegistry {
     return true
   }
 
-  /** gateway hand over fine Duplex: recognize verify already (acceptTunnel true after invoke);pending already set format
-   * failed then destroy hand over come stream (without leaking). */
+  /** Gateway Duplex handoff after `acceptTunnel` returned true; destroys incoming stream without leaking if pending already failed to settle. */
   grantTunnel(tunnelId: string, duplex: Duplex): void {
     this.#tunnels.grant(tunnelId, duplex)
   }
 
-  /** heartbeat: only when nodeId and send connect register identity consistent only then refresh; carry legal health
-   * snapshot when sync override conn.health(illegal snapshot ignore, does not affect lastSeenAt refresh;
-   * birpc default tail reference will serialization is null, same by without payload handle). carry upgradeCommit
-   * when ACK reverse reflect commit real accept result (illegal/does not match → false); ordinary heartbeat
-   * (without commit) constant true. */
+  /**
+   * Heartbeat handler: refreshes only when `nodeId` matches the sending socket's registered identity;
+   * updates `conn.health` when a valid health snapshot is attached (invalid snapshots are ignored without
+   * blocking `lastSeenAt` refresh; birpc serializes trailing undefined as null, treated identically to omitted);
+   * when `upgradeCommit` is present, ACK reflects real commit acceptance (invalid/mismatched -> false);
+   * normal heartbeats (without commit) always return true.
+   */
   noteHeartbeat(nodeId: string, fromSocket: WsSocket, input?: NodeHeartbeatInput): boolean {
     const conn = this.#connections.get(nodeId)
     if (conn === undefined || conn.socket !== fromSocket) return false
@@ -602,22 +603,23 @@ export class NodeRegistry {
     return true
   }
 
-  /** immediately disconnect designate node (API delete identity when invoke). idempotent.
+  /**
+   * Immediately disconnect the specified node (called when API deletes/revokes credentials). Idempotent.
    *
-   * undo hard rule: even if when before without already publish connect, also pass increase undo epoch- - authentication in-flight register
-   * (await authenticate not wake) in wake come after must by refuse, never by undo old connect
-   * publish online (removeNode/token round swap semantics). */
+   * Revocation invariant: even if no published connection exists yet, still increment the revocation epoch so any
+   * in-flight registration (`await authenticate`) is rejected when it resumes, never bringing a revoked connection online.
+   */
   disconnect(nodeId: string): void {
     const conn = this.#connections.get(nodeId)
     if (conn !== undefined) {
       this.#evict(nodeId, conn, 'revoked')
       return
     }
-    // without already publish connect: still push enter epoch make in-flight register expires.
+    // No published connection yet: still bump epoch to invalidate in-flight registrations.
     this.#nodeEpoch.set(nodeId, this.#epochOf(nodeId) + 1)
   }
 
-  /** disconnect alias (semantics: hang deregister identity). */
+  /** Alias for `disconnect` (semantics: revoke identity). */
   revoke(nodeId: string): void {
     this.disconnect(nodeId)
   }
@@ -629,12 +631,12 @@ export class NodeRegistry {
       try {
         sink(event)
       } catch {
-        // single sink fault does not affect other.
+        // One sink's error must not affect other sinks.
       }
     }
   }
 
-  /** when before undo epoch(default 0;evict/disconnect/replace pass increase). */
+  /** Current revocation epoch (starts at 0; incremented on evict/disconnect/replace). */
   #epochOf(nodeId: string): number {
     return this.#nodeEpoch.get(nodeId) ?? 0
   }
@@ -644,7 +646,7 @@ export class NodeRegistry {
       try {
         listener(nodeId, online)
       } catch {
-        // listener fault does not affect register table itself.
+        // Listener errors must not break the registry.
       }
     }
   }
@@ -652,15 +654,15 @@ export class NodeRegistry {
   #evict(nodeId: string, conn: NodeConnection, reason: string): void {
     if (this.#connections.get(nodeId) !== conn) return
     this.#connections.delete(nodeId)
-    // upgrade wait for do not in on disconnect clean up: upgrade process itself then along with old socket close,
-    // choose new connect top replace; succeeded confirm only can from choose commit heartbeat. wait for by
-    // cancel / timeout / registry.close / match commit final, never because disconnect false terminal state.
-    // undo epoch pass increase: in-flight register (authentication await in) and this proxy late to event all expires.
+    // Do NOT clear upgrade waiters on disconnect: upgrades naturally close the old socket when the candidate
+    // replaces it, and only the candidate's commit heartbeat confirms success. Waiters settle only via
+    // cancel / timeout / registry.close / matching commit—never prematurely on disconnect.
+    // Increment revocation epoch so in-flight registrations and late events from this proxy are invalidated.
     this.#nodeEpoch.set(nodeId, this.#epochOf(nodeId) + 1)
     try {
       conn.rpc.$close()
     } catch {
-      // already close.
+      // already closed.
     }
     if (conn.socket.readyState === conn.socket.OPEN || conn.socket.readyState === conn.socket.CONNECTING) {
       try {
@@ -669,7 +671,7 @@ export class NodeRegistry {
         // ignore.
       }
     }
-    // on disconnect final the node all IPC subscribe (connect already lose, subscribe no longer has event source).
+    // Terminate all IPC subscriptions for this node on disconnect (event source is gone).
     const ipcMap = this.#ipcSinks.get(nodeId)
     if (ipcMap !== undefined) {
       const sinks = [...ipcMap.values()]
@@ -678,22 +680,22 @@ export class NodeRegistry {
         try {
           sink.onClosed(`node ${nodeId} disconnected`)
         } catch {
-          // subscribe call back fault does not affect other subscribe.
+          // Subscriber callback error must not affect other subscriptions.
         }
       }
     }
-    // on disconnect reject the node all in-flight tunnel and destroy already establish tunnel duplex:
-    // tunnel semantics bind set when before connect proxy (epoch), swap proxy i.e. unavailable, never pending.
+    // Reject all pending tunnels and destroy all active tunnel duplexes for this node on disconnect:
+    // tunnel lifetime is tied to this connection's generation (epoch), so replacement invalidates it without leaks.
     this.#tunnels.finalize((owner) => owner === nodeId, {
       pending: (owner, tunnelId) => new HelmError(
         'node_offline',
-        `node ${owner} disconnected, tunnel ${tunnelId} establish abort`,
+        `node ${owner} disconnected; tunnel ${tunnelId} establishment aborted`,
         409,
         { nodeId: owner, tunnelId },
       ),
       active: (owner, tunnelId) => new HelmError(
         'node_offline',
-        `node ${owner} disconnected, tunnel ${tunnelId} close`,
+        `node ${owner} disconnected; tunnel ${tunnelId} closed`,
         409,
         { nodeId: owner, tunnelId },
       ),
@@ -711,7 +713,7 @@ export class NodeRegistry {
     }
   }
 
-  /** wait for node re- online;context cancel when return undefined. */
+  /** Wait for a node to come back online; returns `undefined` if `context` is cancelled. */
   async waitForNodeOnline(nodeId: string, context: Context): Promise<NodeEnvRpcFunctions | undefined> {
     if (this.#closed || context.abortSignal?.aborted) return undefined
     const existing = this.#connections.get(nodeId)
@@ -739,7 +741,7 @@ export class NodeRegistry {
     }
   }
 
-  /** supply fabric implement NodeRpcResolver. */
+  /** Exposes RPC lookup for fabric's `NodeRpcResolver`. */
   getNodeEnvRpc(nodeId: string): NodeEnvRpcFunctions | undefined {
     return this.#connections.get(nodeId)?.rpc
   }
@@ -757,24 +759,24 @@ export class NodeRegistry {
     this.#sweeper.unref()
   }
 
-  /** close register table: disconnect all connect (closure socket + rpc), wake wait for, empty sink. */
+  /** Close the registry: disconnect all connections (closing sockets + RPCs), wake waiters, and clear sinks. */
   async close(): Promise<void> {
     this.#closed = true
     if (this.#sweeper !== undefined) {
       clearInterval(this.#sweeper)
       this.#sweeper = undefined
     }
-    // all tunnel final (pending reject;active excerpt except register and destroy duplex, consumer aware disconnect).
+    // Settle all tunnels (reject pending; unregister active and destroy duplexes so consumers see disconnect).
     this.#tunnels.finalize(() => true, {
       pending: (_nodeId, tunnelId) => new HelmError(
         'node_offline',
-        `register table already close, tunnel ${tunnelId} establish abort`,
+        `registry closed; tunnel ${tunnelId} establishment aborted`,
         409,
         { tunnelId },
       ),
       active: (_nodeId, tunnelId) => new HelmError(
         'node_offline',
-        `register table already close, tunnel ${tunnelId} close`,
+        `registry closed; tunnel ${tunnelId} closed`,
         409,
         { tunnelId },
       ),

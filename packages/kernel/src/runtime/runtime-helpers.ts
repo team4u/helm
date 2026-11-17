@@ -1,8 +1,8 @@
 /**
- * runtime sharing file level helpers(without state pure function).
+ * Shared file-level runtime helpers (stateless pure functions).
  *
- * from runtime.ts split out: tool result contract,before_turn sections/messages manually technique,
- * rewind zone between parse,404 conversation validate etc. across module re- use small function.
+ * Extracted from `runtime.ts`: tool result contracts, `before_turn` section/message manipulation,
+ * rewind interval parsing, 404 conversation checks, and other cross-module reusable helpers.
  */
 import { join } from 'node:path'
 import type { JsonValue } from '@earendil-works/chord/json'
@@ -18,10 +18,10 @@ import { requireModelRef } from './models.js'
 import { assertProfileId, assertSkillId } from '../services/index.js'
 
 // ---------------------------------------------------------------------------
-// through use serialization / escaping
+// Common serialization / escaping
 // ---------------------------------------------------------------------------
 
-/** XML property/text escaping (defang guard against escape and ownership mark record shared use). */
+/** XML attribute/text escaping (shared by defang and ownership markers). */
 export function escapeXml(text: string): string {
   return text
     .replaceAll('&', '&amp;')
@@ -30,7 +30,7 @@ export function escapeXml(text: string): string {
     .replaceAll('"', '&quot;')
 }
 
-/** strip already has external_event package wrap (trigger transform after again defang guard against double heavy package wrap; keep package wrap outside append text). */
+/** Strip an existing `<external_event>` wrapper (prevents double wrapping after trigger transforms; preserves trailing appended text). */
 export function stripEnvelope(text: string): string {
   const match = /[\s\S]*?<external_event[^>]*>\n([\s\S]*?)\n<\/external_event>([\s\S]*)/.exec(text)
   if (match === null) return text
@@ -45,26 +45,25 @@ export function stripEnvelope(text: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// conversation store in 404(all text dedupe public helper)
+// Conversation existence 404 (shared across 15+ call sites)
 // ---------------------------------------------------------------------------
 
-/** store.getConv + 404(all text duplicate 15+ where public converge). */
+/** `store.getConv` + 404 check (centralized helper replacing 15+ inline checks). */
 export function requireConv(store: HelmStore, id: number): NonNullable<ReturnType<HelmStore['getConv']>> {
   const meta = store.getConv(id)
-  if (!meta) throw new HelmError('not_found', `conversation missing:${id}`, 404)
+  if (!meta) throw new HelmError('not_found', `Conversation not found: ${id}`, 404)
   return meta
 }
 
 // ---------------------------------------------------------------------------
-// tool result contract helpers(plugin/hook artifact -> SDK ToolExecutionResult)
+// Tool result contract helpers (plugin/hook output -> SDK ToolExecutionResult)
 // ---------------------------------------------------------------------------
 
 /**
- * plugin tool structure result message seal judge other condition (guard against any contains output field business object by mistakenly
- * identify is message seal): must at least contains output(string or array)/ structuredOutput /
- * isError three message seal field of one, and appear message seal field all type legal; any one message seal field
- * type illegal then explicit errors (is not when ordinary object static default away text channel - - tool act intent do not,
- * boundary reject optimal at guess).
+ * Envelope predicate for structured plugin tool results (prevents business objects containing an `output` field
+ * from being misidentified as envelopes): must contain at least one of `output` (string or array),
+ * `structuredOutput`, or `isError`, and every present envelope field must have a valid type; malformed envelope
+ * fields fail explicitly rather than falling back silently through the plain-text path.
  */
 function envelopeProblem(raw: Record<string, unknown>): { isEnvelope: boolean; problem?: string } {
   const hasOutput = raw['output'] !== undefined
@@ -72,22 +71,22 @@ function envelopeProblem(raw: Record<string, unknown>): { isEnvelope: boolean; p
   const hasError = raw['isError'] !== undefined
   if (!hasOutput && !hasStructured && !hasError) return { isEnvelope: false }
   if (hasOutput && typeof raw['output'] !== 'string' && !Array.isArray(raw['output'])) {
-    return { isEnvelope: true, problem: 'output must be string or { type: \'text\', text } array' }
+    return { isEnvelope: true, problem: "output must be a string or an array of { type: 'text', text }" }
   }
   if (hasError && typeof raw['isError'] !== 'boolean') {
-    return { isEnvelope: true, problem: 'isError must be boolean value' }
+    return { isEnvelope: true, problem: 'isError must be a boolean' }
   }
   return { isEnvelope: true }
 }
 
 /**
- * plugin tool original return -> SDK ToolExecutionResult:
- * - structure result message seal { output, structuredOutput?, isError? }: only when appear message seal
- *   field all type legal when by message seal rule whole (text and structuredOutput all redaction;
- *   structuredOutput only in tool declaration structuredOutputSchema when keep);
- * - tool not declaration structuredOutputSchema yet return structuredOutput: explicit reject
- *   (invalid_tool_result, no longer static default discard - - data lose must let plugin act see see);
- * - the rest any value unify package single text chunk content(without schema do not pass structuredOutput).
+ * Normalize raw plugin tool return value -> SDK `ToolExecutionResult`:
+ * - Structured result envelope `{ output, structuredOutput?, isError? }`: formatted per envelope rules only when all
+ *   present envelope fields have valid types (both text and `structuredOutput` are redacted; `structuredOutput` is
+ *   forwarded only when the tool declares `structuredOutputSchema`);
+ * - Returning `structuredOutput` without declaring `structuredOutputSchema` fails explicitly (`invalid_tool_result`,
+ *   never silently dropped so plugin authors see data loss);
+ * - Any other value wraps as a single text block (`structuredOutput` omitted unless schema is declared).
  */
 export function pluginToolResult(
   raw: unknown,
@@ -109,11 +108,11 @@ export function pluginToolResult(
       if (verdict.problem !== undefined) {
         throw new HelmError(
           'invalid_tool_result',
-          `${where} result message seal field type illegal:${verdict.problem}`,
+          `${where} result envelope has invalid field type: ${verdict.problem}`,
           500,
         )
       }
-      // output: string package single text chunk; array original validate after pass-through.
+      // `output`: string wraps into a single text block; array is validated element-by-element.
       let output: Array<{ type: 'text'; text: string }>
       if (typeof env.output === 'string') {
         output = [{ type: 'text', text: redact(env.output) }]
@@ -122,7 +121,7 @@ export function pluginToolResult(
           if (block === null || typeof block !== 'object' || (block as { type?: unknown }).type !== 'text' || typeof (block as { text?: unknown }).text !== 'string') {
             throw new HelmError(
               'invalid_tool_result',
-              `${where} result message seal output array only accept { type: 'text', text } chunk`,
+              `${where} result envelope output array only accepts { type: 'text', text } blocks`,
               500,
             )
           }
@@ -133,7 +132,7 @@ export function pluginToolResult(
       } else {
         throw new HelmError(
           'invalid_tool_result',
-          `${where} result message seal output must be string or { type: 'text', text } array`,
+          `${where} result envelope output must be a string or an array of { type: 'text', text }`,
           500,
         )
       }
@@ -145,12 +144,12 @@ export function pluginToolResult(
       } = {
         output,
       }
-      // structuredOutput only in tool declaration schema when keep (SDK contract); value level redaction.
-      // not declaration schema yet return structuredOutput: explicit reject (not silently lose data).
+      // `structuredOutput` is forwarded only when the tool declares a schema (SDK contract); values are redacted.
+      // Returning `structuredOutput` without a schema fails explicitly instead of silently dropping data.
       if (env.structuredOutput !== undefined && options?.structuredOutputSchema === undefined) {
         throw new HelmError(
           'invalid_tool_result',
-          `${where} not declaration structuredOutputSchema yet return structuredOutput(SDK contract forbidden; please declaration schema or change is pure output text)`,
+          `${where} returned structuredOutput without declaring structuredOutputSchema (forbidden by SDK contract; declare a schema or return plain text in output)`,
           500,
         )
       }
@@ -167,12 +166,11 @@ export function pluginToolResult(
       return result
     }
   }
-  // missed message seal judge other (without any message seal field, or field type all legal but a all not appear):
-  // ordinary business value unify away text channel (without schema do not pass structuredOutput).
+  // Not an envelope (no envelope fields or fails envelope check): serialize as plain text (without structuredOutput).
   return { output: [{ type: 'text', text: safeResultText(raw, redact) }] }
 }
 
-/** tool_call handled take over artifact -> legal ToolExecutionResult(illegal shape explicit error result). */
+/** Convert `tool_call` `handled` takeover payload -> valid `ToolExecutionResult` (invalid shape becomes explicit error result). */
 export function toolResultOf(handled: unknown): {
   output: Array<{ type: 'text'; text: string }>
   isError: boolean
@@ -182,19 +180,19 @@ export function toolResultOf(handled: unknown): {
     return normalized as { output: Array<{ type: 'text'; text: string }>; isError: boolean }
   }
   return {
-    output: [{ type: 'text', text: 'tool_call handled hook return illegal result shape (already by error)' }],
+    output: [{ type: 'text', text: 'tool_call handled hook returned an invalid result shape' }],
     isError: true,
   }
 }
 
-/** tool_result transform artifact rule whole: must shape such as ToolExecutionResult, otherwise undefined(keep original result). */
+/** Normalize `tool_result` transform output: must look like `ToolExecutionResult`, else `undefined` (keeps original). */
 export function normalizeToolResult(value: unknown): ToolExecutionResultShape | undefined {
   if (value === null || typeof value !== 'object') return undefined
   const candidate = value as ToolExecutionResultShape
   if (candidate.output === undefined && candidate.structuredOutput === undefined && candidate.isError === undefined) {
     return undefined
   }
-  // output must be content array (string package into single text chunk;SDK contract only accept array).
+  // `output` must be a content block array (wrap string as single text block; SDK contract only accepts arrays).
   if (typeof candidate.output === 'string') {
     return { ...candidate, output: [{ type: 'text', text: candidate.output }] }
   }
@@ -210,10 +208,10 @@ export interface ToolExecutionResultShape {
 }
 
 // ---------------------------------------------------------------------------
-// before_turn sections / tools manually technique (SDK system before lead message change write)
+// `before_turn` sections / tools manipulation (rewrites SDK leading system message)
 // ---------------------------------------------------------------------------
 
-/** from model message extract when before takes effect system sections(contains before lead declaration and after continue patch back put). */
+/** Extract currently effective system sections from model messages (combining leading declaration and subsequent patches). */
 export function systemSectionsOf(messages: ReadonlyArray<{ role?: string; sections?: unknown }>): Array<{ id: string; text: string }> {
   const sections = new Map<string, string>()
   for (const message of messages) {
@@ -228,11 +226,11 @@ export function systemSectionsOf(messages: ReadonlyArray<{ role?: string; sectio
 }
 
 /**
- *  before_turn final scoped active tools prompt metadata unify throw shoot enter sections:
- * - prompt.tools.<name>: each tool complete segment (promptSnippet);
- * - prompt.tools.guidelines: all promptGuidelines aggregate sharing segment;
- * - old same name segment whole override (deactivate plugin/strip tool do not phantom text); without any metadata
- *   tool collection produce empty throw shoot (clear all old segment);sections not change when original return reference.
+ * Project prompt metadata for final scoped active tools in `before_turn`:
+ * - `prompt.tools.<name>`: full paragraph per tool (`promptSnippet`);
+ * - `prompt.tools.guidelines`: shared section aggregating all `promptGuidelines`;
+ * - Overwrites stale same-named sections cleanly (disabled/stripped tools leave no phantom prompts); empty metadata
+ *   produces empty projection (clears all stale managed sections); returns original reference when unchanged.
  */
 export function projectToolPromptSections(
   sections: ReadonlyArray<{ id: string; text: string }>,
@@ -246,7 +244,7 @@ export function projectToolPromptSections(
   }
   if (guidelines.length > 0) {
     const lines = guidelines.flatMap((tool) => tool.promptGuidelines!.map((item) => `- ${tool.name}: ${item}`))
-    desired.set('prompt.tools.guidelines', `available tool use want point:\n${lines.join('\n')}`)
+    desired.set('prompt.tools.guidelines', `Available tool guidelines:\n${lines.join('\n')}`)
   }
   const projectedIds = new Set([...desired.keys()])
   const isManaged = (id: string) =>
@@ -261,7 +259,7 @@ export function projectToolPromptSections(
         desired.delete(section.id)
         if (next !== section.text) changed = true
       } else {
-        changed = true // remove phantom segment
+        changed = true // remove phantom section
       }
       continue
     }
@@ -275,34 +273,34 @@ export function projectToolPromptSections(
 }
 
 /**
- * before_turn messages whole replace boundary validate (guard against system head corrupt and history fabricate):
- * - must be non-empty array and first is system message (SDK back put dependency before lead system);
- * - before lead system  content base bottom must and original message consistent (sections/toolsRemoved/
- *   toolsAdded etc. declaration field can change, person format body text never can override);
- * - original first non- system message start history must original order original keep (only allows in its after append,
- *   disallows truncate/heavy write/fabricate - - need to truncate clean away rewrite/reset channel).
- * violate rule one rule invalid_hook_result explicit reject, never static default adopt accept break change write.
+ * Boundary validation for full `before_turn` `messages` replacement (prevents system header corruption and history fabrication):
+ * - Must be a non-empty array whose first element is a `system` message (SDK replay relies on leading system message);
+ * - Base content of leading system message must match original (`sections`/`toolsRemoved`/`toolsAdded` declarations
+ *   may change, but base prompt rules and body must not be overwritten);
+ * - History starting at the first non-system message must stay intact in original order (appending after is allowed;
+ *   truncating/rewriting/fabricating history is forbidden — use rewrite/reset channels for truncation).
+ * Violations fail explicitly with `invalid_hook_result` rather than silently accepting broken rewrites.
  */
 export function assertSafeMessageSurgery(
   original: ReadonlyArray<Record<string, unknown>>,
   replacement: unknown,
 ): Array<Record<string, unknown>> {
   const fail = (detail: string): HelmError =>
-    new HelmError('invalid_hook_result', `before_turn messages change write out of bounds:${detail}`, 500)
+    new HelmError('invalid_hook_result', `before_turn messages rewrite out of bounds: ${detail}`, 500)
   if (!Array.isArray(replacement) || replacement.length === 0) {
-    throw fail('must be non-empty message array')
+    throw fail('must be a non-empty message array')
   }
   const lead = replacement[0]!
   if (lead['role'] !== 'system') {
-    throw fail('first message must keep system(SDK back put mechanism dependency before lead system message)')
+    throw fail('first message must remain system (SDK replay mechanism relies on a leading system message)')
   }
   if (original.length === 0 || original[0]!['role'] !== 'system') {
-    throw fail('original request missing before lead system message (kernel state exception, reject change write)')
+    throw fail('original request is missing a leading system message (unexpected kernel state; rewrite rejected)')
   }
   if (contentTextOf(original[0]!) !== contentTextOf(lead)) {
-    throw fail('before lead system message content base bottom by override (person format and history body text cannot change;sections/tools declaration please away declaration field)')
+    throw fail('leading system message base content was overwritten (base formatting and body are immutable; update sections/tools via declarations)')
   }
-  // history keep: original first non- system message start sub- sequence must original appear in replace result in (prefix align).
+  // Preserve history: the subsequence starting at the first non-system message must appear verbatim in replacement (prefix aligned).
   let firstNonSystem = 0
   while (firstNonSystem < original.length && original[firstNonSystem]!['role'] === 'system') firstNonSystem += 1
   const historyLen = original.length - firstNonSystem
@@ -310,14 +308,14 @@ export function assertSafeMessageSurgery(
   if (historyLen > 0) {
     for (let i = 0; i < historyLen; i += 1) {
       if (preservedHistory[i] !== original[firstNonSystem + i]!) {
-        throw fail('history message only allows in its after append, disallows truncate, heavy write or fabricate (truncate please away rewrite/reset channel)')
+        throw fail('historical messages may only be appended after; truncating, rewriting, or fabricating history is not allowed (use rewrite/reset channels for truncation)')
       }
     }
   }
   return replacement as Array<Record<string, unknown>>
 }
 
-/** system message content base bottom text (string or text chunk concatenate; and SDK back put opening path consistent). */
+/** Base text content of a system message (string or concatenated text blocks, matching SDK replay extraction). */
 function contentTextOf(message: Record<string, unknown>): string {
   const content = message['content']
   if (typeof content === 'string') return content
@@ -337,8 +335,8 @@ export function sectionsEqual(a: Array<{ id: string; text: string }>, b: Array<{
 }
 
 /**
- * before lead system message sections whole replace is desired(keep base content).
- * after continue system message sections patch already collapse enter desired, remove old patch avoid back put override.
+ * Replace leading system message `sections` wholesale with `desired` (preserving base content).
+ * Subsequent system message section patches are folded into `desired`, stripping old patches so replay cannot override.
  */
 export function withSections(
   messages: ReadonlyArray<Record<string, unknown>>,
@@ -353,7 +351,7 @@ export function withSections(
     previous !== null && typeof previous === 'object'
       ? Object.keys(previous as Record<string, unknown>)
       : []
-  // new declaration collection; old key do not in new concentrate with null remove (back put semantics).
+  // New declarations; old keys absent from the new set are removed with `null` (replay semantics).
   const next: Record<string, string | null> = {}
   for (const [i, section] of desired.entries()) {
     void i
@@ -373,8 +371,8 @@ export function withSections(
 }
 
 /**
- * tool collection change: in before lead system message append toolsRemoved/toolsAdded declaration.
- * model side by pi-ai back put mechanism parse (getCurrentTools), under one round i.e. takes effect.
+ * Rewrite tool declarations: attach `toolsRemoved`/`toolsAdded` declarations to the leading system message.
+ * Parsed on the model side by pi-ai replay (`getCurrentTools`), taking effect immediately on the next round.
  */
 export function withToolDeclarations(
   messages: ReadonlyArray<Record<string, unknown>>,
@@ -385,12 +383,12 @@ export function withToolDeclarations(
   const added: Array<Record<string, unknown>> = []
   for (const name of declared) {
     const tool = available.get(name)
-    if (!tool) throw new HelmError('unknown_tool', `before_turn choose not registered tool:${name}`, 500)
+    if (!tool) throw new HelmError('unknown_tool', `before_turn selected unregistered tool: ${name}`, 500)
     added.push({ ...tool })
   }
   if (messages.length === 0 || messages[0]!['role'] !== 'system') return [...messages]
   const lead = messages[0]!
-  // complete heavy declaration: remove all old declaration again add new collection (etc. price replay, guard against order drift).
+  // Full redeclaration: remove stale declarations then add new set (equivalent replay, avoids order drift).
   const next: Record<string, unknown> = { ...lead }
   const sections = lead['sections']
   next['sections'] =
@@ -402,7 +400,7 @@ export function withToolDeclarations(
   return [{ ...next }, ...messages.slice(1)]
 }
 
-/** back put message in when before tool name manifest. */
+/** List current tool names from replay messages. */
 export function currentToolNames(messages: ReadonlyArray<Record<string, unknown>>): string[] {
   const names = new Set<string>()
   for (const message of messages) {
@@ -418,7 +416,7 @@ export function currentToolNames(messages: ReadonlyArray<Record<string, unknown>
 }
 
 // ---------------------------------------------------------------------------
-// conversation summary fall back / error archive one
+// Conversation summary fallback / error normalization
 // ---------------------------------------------------------------------------
 
 export function summaryOfFallback(
@@ -452,10 +450,10 @@ export function summaryOfFallback(
 export function normalizeBusyError(error: unknown): unknown {
   const name = (error as { name?: string })?.name
   if (name === 'ConversationBusy') {
-    return new HelmError('conversation_busy', 'conversation correct busy and whenBusy=reject', 409)
+    return new HelmError('conversation_busy', 'Conversation is busy and whenBusy=reject was specified', 409)
   }
   if (name === 'ConversationIdle') {
-    return new HelmError('conversation_idle', 'conversation idle and whenIdle=reject conflict', 409)
+    return new HelmError('conversation_idle', 'Conversation is idle and conflicts with whenIdle=reject', 409)
   }
   return error
 }
@@ -470,7 +468,7 @@ export function entryModelText(entry: { model?: ReadonlyArray<{ content?: unknow
     .join('\n')
 }
 
-/** entry.model message array -> assistant text chunk concatenate (waitForInput extract answer use). */
+/** Concatenate assistant text blocks from an `entry.model` array (used to extract `waitForInput` answers). */
 export function assistantTextOfModel(model: unknown[] | undefined): string {
   if (model === undefined) return ''
   const out: string[] = []
@@ -485,20 +483,20 @@ export function assistantTextOfModel(model: unknown[] | undefined): string {
 }
 
 // ---------------------------------------------------------------------------
-// rewind zone between (original ground override heavy contract)
+// Rewind intervals (in-place edit & overwrite contract)
 // ---------------------------------------------------------------------------
 
-/** helm.rewind truncate mark record declaration override zone between (closed zone between [from, through]).
+/** Overwrite range declared by a `helm.rewind` truncation marker (closed interval `[from, through]`).
  *
- * throughEntryId is new contract: override zone between inside most large old item ID, new input item ID must however
- * more large, never will by self household zone between mistakenly delete. */
+ * `throughEntryId` is a strict boundary: max old entry ID within the overwritten span, so newer
+ * input entries always have strictly larger IDs and are never mistakenly removed across intervals. */
 export interface RewindInterval {
   from: number
   through: number
   marker: number
 }
 
-/** parse a purpose rewind zone between; non- rewind mark record or payload illegal return undefined. */
+/** Parse a single rewind interval; returns `undefined` if not a rewind marker or missing `fromEntryId`. */
 export function rewindIntervalOf(entry: { id: number | string; kind: string; data?: unknown }): RewindInterval | undefined {
   if (entry.kind !== 'helm.rewind') return undefined
   const data = entry.data as { fromEntryId?: unknown; throughEntryId?: unknown } | undefined
@@ -507,17 +505,17 @@ export function rewindIntervalOf(entry: { id: number | string; kind: string; dat
   const marker = Number(entry.id)
   const through = Number(data?.throughEntryId)
   if (!Number.isSafeInteger(marker) || !Number.isSafeInteger(through) || through < from || through >= marker) {
-    throw new HelmError('invalid_rewind_entry', `history override mark record ${entry.id} zone between invalid`, 500)
+    throw new HelmError('invalid_rewind_entry', `History overwrite marker ${entry.id} has an invalid interval`, 500)
   }
   return { from, through, marker }
 }
 
-/** item is otherwise by any one rewind zone between override (detail situation throw shadow / FTS rebuild / lastAssistant clean up shared use). */
+/** Check whether an entry is covered by any rewind interval (shared by detail display / FTS rebuild / lastAssistant cleanup). */
 export function coveredByRewind(entryId: number, intervals: ReadonlyArray<RewindInterval>): boolean {
   return intervals.some((cut) => entryId >= cut.from && entryId <= cut.through)
 }
 
-/** edit target limit set: only allows override person class input item (agent/trigger inject and control item reject). */
+/** Edit target restriction: only human input entries may be overwritten (agent/trigger injections and control entries are rejected). */
 export function assertEditableHumanInput(
   entry: { kind: string; data?: unknown },
   conversationId: number,
@@ -527,7 +525,7 @@ export function assertEditableHumanInput(
   if (entry.kind !== 'helm.input') {
     throw new HelmError(
       'entry_not_editable',
-      `only support edit person class input item (item ${entryId} kind=${entry.kind})`,
+      `Only human input entries can be edited (entry ${entryId} has kind=${entry.kind})`,
       400,
       { conversationId, entryId, kind: entry.kind },
     )
@@ -536,7 +534,7 @@ export function assertEditableHumanInput(
   if (origin !== 'human') {
     throw new HelmError(
       'entry_not_editable',
-      `item ${entryId} source is ${String(origin)}, only person class input can original ground override heavy`,
+      `Entry ${entryId} has origin '${String(origin)}'; only human inputs can be edited in place`,
       409,
       { conversationId, entryId, origin: String(origin) },
     )
@@ -545,21 +543,21 @@ export function assertEditableHumanInput(
 
 export type { ToolExecutionResult }
 
-/** models-store.json start corrupt detect (open phase; semantics same ModelRegistry inside same name logic). */
+/** Startup corruption check for `models-store.json` (open phase; matches `ModelRegistry` logic). */
 export async function assertModelsStoreHealthyAtBoot(models: Models): Promise<void> {
   const result = await models.refresh({ allowNetwork: false })
   for (const [, err] of result.errors) {
     if (err instanceof HelmError && err.code === 'models_store_corrupted') {
       throw new HelmError(
         'models_store_corrupted',
-        `models-store.json corrupt (read when discover):${err.message}`,
+        `models-store.json is corrupted (discovered while reading): ${err.message}`,
         500,
       )
     }
   }
 }
 
-/** text completion underlying implement helper. */
+/** Underlying text-completion helper. */
 export async function completeConversationTextHelper(
   deps: {
     store: HelmStore
@@ -578,19 +576,19 @@ export async function completeConversationTextHelper(
   input.signal?.throwIfAborted()
   const meta = deps.store.getConv(input.conversationId)
   if (meta === undefined) {
-    throw new HelmError('not_found', `conversation missing:${input.conversationId}`, 404, { conversationId: input.conversationId })
+    throw new HelmError('not_found', `Conversation not found: ${input.conversationId}`, 404, { conversationId: input.conversationId })
   }
   const effective = await deps.conversations.resolveEffectiveModel(meta.modelOverride, meta.profileId)
   if (effective === undefined || effective === '') {
-    throw new HelmError('model_not_configured', `conversation ${input.conversationId} not parse out takes effect model, cannot execute text completion`, 409, { conversationId: input.conversationId })
+    throw new HelmError('model_not_configured', `Conversation ${input.conversationId} has no effective model resolved; cannot run text completion`, 409, { conversationId: input.conversationId })
   }
   const ref = requireModelRef(effective)
   const model = deps.modelsRegistry.models.getModel(ref.provider, ref.modelId)
   if (model === undefined) {
-    throw new HelmError('model_not_found', `takes effect model '${effective}' do not in when before model set in (may already hot reload remove)`, 409, { model: effective })
+    throw new HelmError('model_not_found', `Effective model '${effective}' is not in the current model set (may have been removed on hot reload)`, 409, { model: effective })
   }
   if (deps.modelsRegistry.isModelDisabled(ref.provider, ref.modelId)) {
-    throw new HelmError('model_disabled', `model ${ref.provider}/${ref.modelId} already by disable, cannot execute text completion`, 409, { model: effective })
+    throw new HelmError('model_disabled', `Model ${ref.provider}/${ref.modelId} is disabled; cannot run text completion`, 409, { model: effective })
   }
   input.signal?.throwIfAborted()
   const message = await deps.modelsRegistry.models.completeSimple(
@@ -614,7 +612,7 @@ export async function completeConversationTextHelper(
   if (message.stopReason !== 'stop') {
     throw new HelmError(
       'model_completion_unavailable',
-      `text completion not succeeded end (stopReason=${message.stopReason}${message.errorMessage !== undefined ? `:${deps.stash.redact(String(message.errorMessage)).slice(0, 200)}` : ''}), reject return part text`,
+      `Text completion did not finish cleanly (stopReason=${message.stopReason}${message.errorMessage !== undefined ? `: ${deps.stash.redact(String(message.errorMessage)).slice(0, 200)}` : ''}); refusing to return partial text`,
       502,
       { stopReason: message.stopReason },
     )
@@ -627,7 +625,7 @@ export async function completeConversationTextHelper(
 }
 
 /**
- * validate Profile ID is otherwise legal (public interface validate, unify throw 400 validation_error).
+ * Validate whether a Profile ID is valid (shared public API validator; throws `400 validation_error`).
  */
 export function assertProfileIdPublic(id: string): void {
   try {
@@ -635,7 +633,7 @@ export function assertProfileIdPublic(id: string): void {
   } catch (err) {
     throw new HelmError(
       'validation_error',
-      `Profile id illegal:${err instanceof Error ? err.message : String(err)}`,
+      `Invalid Profile ID: ${err instanceof Error ? err.message : String(err)}`,
       400,
       { profileId: id },
     )
@@ -643,7 +641,7 @@ export function assertProfileIdPublic(id: string): void {
 }
 
 /**
- * skill thing directory parse Helper.
+ * Helper to resolve the physical directory of a skill.
  */
 export function skillDirectoryHelper(dataDir: string, id: string): string {
   try {
@@ -651,7 +649,7 @@ export function skillDirectoryHelper(dataDir: string, id: string): string {
   } catch (err) {
     throw new HelmError(
       'validation_error',
-      `Skill id illegal:${err instanceof Error ? err.message : String(err)}`,
+      `Invalid Skill ID: ${err instanceof Error ? err.message : String(err)}`,
       400,
       { skillId: id },
     )
@@ -660,7 +658,7 @@ export function skillDirectoryHelper(dataDir: string, id: string): string {
 }
 
 /**
- * Profile thing directory parse Helper.
+ * Helper to resolve the physical directory of a Profile.
  */
 export function profileDirectoryHelper(dataDir: string, id: string): string {
   assertProfileIdPublic(id)

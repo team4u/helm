@@ -115,6 +115,7 @@ export const CORE_CLI_COMMAND_PATHS = [
   'plugins reload',
   'plugins rescan',
   'plugins init',
+  'plugins build',
   'plugins install',
   'plugins update',
   'plugins remove',

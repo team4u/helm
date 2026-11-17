@@ -1,14 +1,13 @@
 /**
- * command layer public base seat: command context contract and across command small assist manually.
- * only dependency cli-context / launcher / control, do not import any specific command module - -
- * keep command file between zero horizontal dependency.
+ * Shared command-layer context and cross-command helpers.
+ * Depends only on `cli-context`, `control`, and `daemon`, keeping command handlers decoupled.
  */
 import { UsageError, type NodeCliIo } from '../cli-context.js';
 import { readPidRecord } from '../cli-context.js';
 import { readNodeIdentity } from '../daemon/index.js';
 import path from 'node:path';
 
-/** parse after command line (entry parseCli artifact, command layer only read). */
+/** Parsed CLI arguments produced by `parseCli`. */
 export interface ParsedCli {
   command: string;
   positional: string[];
@@ -17,12 +16,12 @@ export interface ParsedCli {
   help: boolean;
 }
 
-/** command context: entry layer build, each command handler consume. */
+/** Command handler execution context. */
 export interface CommandContext {
   io: NodeCliIo;
   parsed: ParsedCli;
   dataDir: string;
-  /** succeeded output (text direct through / JSON serialization + newline). */
+  /** Emit output (raw string or pretty-printed JSON followed by a newline). */
   emit: (value: unknown) => void;
 }
 
@@ -31,37 +30,37 @@ export const flagString = (parsed: ParsedCli, name: string): string | undefined 
   return typeof value === 'string' ? value : undefined;
 };
 
-/** Hub address parse: location/--hub/env HELM_HUB_URL;requireUrl when missing explicit errors. */
+/** Resolve Hub URL from `--hub` or `HELM_HUB_URL`; throws `missing_hub_url` when `requireUrl` is true. */
 export async function resolveHubUrl(io: NodeCliIo, parsed: ParsedCli, requireUrl: boolean): Promise<string> {
   const explicit = flagString(parsed, 'hub');
   if (explicit !== undefined && explicit !== '') return explicit;
   const fromEnv = io.env?.['HELM_HUB_URL'];
   if (fromEnv !== undefined && fromEnv !== '') return fromEnv;
   if (requireUrl) {
-    throw new UsageError('missing Hub address: please provide location parameter <hubUrl>,--hub <url> or environment variable HELM_HUB_URL', 'missing_hub_url');
+    throw new UsageError('missing Hub URL: pass positional <hubUrl>, --hub <url>, or HELM_HUB_URL', 'missing_hub_url');
   }
   return '';
 }
 
-/** read identity; missing explicit errors (background/foreground start shared use). */
+/** Read bound node identity, throwing `missing_identity` if absent. */
 export async function readNodeIdentityStrict(dataDir: string): Promise<{ nodeId: string; token: string; hubUrl?: string }> {
   const identity = await readNodeIdentity(dataDir);
   if (identity === null) {
     throw new UsageError(
-      `not found node identity (${path.join(dataDir, 'node.json')}). please first helm-node connect <hubUrl> --token <token> bind set`,
+      `node identity not found (${path.join(dataDir, 'node.json')}); bind one first with helm-node connect <hubUrl> --token <token>`,
       'missing_identity',
     );
   }
   return identity;
 }
 
-/** query background instance state: control channel OK → real run state; cannot reach → pid store then unknown, otherwise stale. */
+/** Query background instance status via the control channel, falling back to PID liveness / stale state. */
 export async function statusDaemon(io: NodeCliIo, dataDir: string): Promise<{
   pid: number | null;
   pidAlive: boolean;
   state?: import('../control.js').DaemonReadyState | 'unknown';
   pidStale?: boolean;
-  /** daemon real on report run version (only control channel can reach when has). */
+  /** Running version reported by the daemon over the control channel. */
   version?: string;
   detail?: string;
 }> {
@@ -87,16 +86,15 @@ export async function statusDaemon(io: NodeCliIo, dataDir: string): Promise<{
       pid: record.pid,
       pidAlive: true,
       state: 'unknown',
-      detail: `control channel cannot reach (endpoint ${record.endpoint}):pid store but cannot confirm daemon run state`,
+      detail: `control channel unreachable (endpoint ${record.endpoint}): pid is alive but daemon state cannot be verified`,
     };
   }
-  return { pid: record.pid, pidAlive: false, pidStale: true, detail: 'pid file leftover (process already exit) await clean up' };
+  return { pid: record.pid, pidAlive: false, pidStale: true, detail: 'stale pid file (process already exited) awaiting cleanup' };
 }
 
 /**
- * stop background daemon: only for via instanceId verify control end point stop(never to any PID
- * signal/keystroke).stop by accept after etc. process real exit only then delete pid file; channel cannot reach but pid
- * store → explicit failed and keep pid;pid indeed already death → by stale clean up.
+ * Stop the background daemon via the instanceId-verified control endpoint (never sends signals to
+ * unverified PIDs). Cleans up `node.pid` via CAS only after confirming process exit or stale death.
  */
 export async function stopDaemon(io: NodeCliIo, dataDir: string): Promise<{ outcome: 'stopped' | 'stale'; pid: number }> {
   const { controlRequest, CONTROL_STOP_TIMEOUT_MS, STOP_EXIT_TIMEOUT_MS } = await import('../control.js');
@@ -104,7 +102,7 @@ export async function stopDaemon(io: NodeCliIo, dataDir: string): Promise<{ outc
   const isAlive = isAliveOf(io);
   const record = await readPidRecord(dataDir);
   if (record === null) {
-    throw new UsageError(`not found pid file (${pidPath(dataDir)}): background daemon not in run`, 'not_running');
+    throw new UsageError(`pid file not found (${pidPath(dataDir)}): background daemon is not running`, 'not_running');
   }
   const response = await controlRequest(record.endpoint, { type: 'stop', instanceId: record.instanceId }, CONTROL_STOP_TIMEOUT_MS, {
     pid: record.pid,
@@ -113,24 +111,22 @@ export async function stopDaemon(io: NodeCliIo, dataDir: string): Promise<{ outc
   if (response === null || response.ok !== true) {
     const reason =
       response === null
-        ? `control channel cannot reach (endpoint ${record.endpoint})`
-        : `control end point reject stop (${response.error ?? 'unknown'},endpoint ${record.endpoint})`;
+        ? `control channel unreachable (endpoint ${record.endpoint})`
+        : `control endpoint rejected stop (${response.error ?? 'unknown'}, endpoint ${record.endpoint})`;
     if (isAlive(record.pid)) {
       throw new Error(
-        `${reason}, and pid ${record.pid} still store: reject to not via identity verify process send signal;pid file already keep (${pidPath(dataDir)}) supply diagnose`,
+        `${reason}, and pid ${record.pid} is still alive: refusing to signal an unverified process; pid file preserved (${pidPath(dataDir)}) for diagnostics`,
       );
     }
-    // pid indeed already death and Profile not by new instance take over, only then by stale CAS clean up.
+    // Process is confirmed dead and `node.pid` was not taken over; clean up as stale via CAS.
     await removePidFileIfMatch(dataDir, record);
     return { outcome: 'stale', pid: record.pid };
   }
-  // stop already by accept and complete execute environment clean up: etc. process real exit after only then delete pid file.
   if (!(await waitForExit(record.pid, STOP_EXIT_TIMEOUT_MS, isAlive))) {
     throw new Error(
-      `stop already by accept but pid ${record.pid} in ${STOP_EXIT_TIMEOUT_MS}ms inside not exit: keep pid file (${pidPath(dataDir)}) supply diagnose`,
+      `stop was accepted, but pid ${record.pid} did not exit within ${STOP_EXIT_TIMEOUT_MS}ms: preserving pid file (${pidPath(dataDir)}) for diagnostics`,
     );
   }
-  // CAS: only when Profile still points to by stop instance when only then delete (during may already by upgrade/new instance take over).
   await removePidFileIfMatch(dataDir, record);
   return { outcome: 'stopped', pid: record.pid };
 }

@@ -6,6 +6,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { AskSpec, ConversationDetail, ConversationLive, ConversationSummary, UsePluginsResult } from '@helm/protocol/browser'
 import { usePluginClientHost } from './host-port.js'
+import { usePluginContext } from './plugin-context.js'
+
+const EMPTY_PLUGIN_CONFIG: Readonly<Record<string, unknown>> = Object.freeze({})
 
 /** All conversation summaries (live-synced over SSE; same data source as the host left sidebar). */
 export function useConversations(): ConversationSummary[] {
@@ -27,6 +30,19 @@ export function usePlugins(): UsePluginsResult {
     plugins: port.plugins,
     screens: port.screens,
   }
+}
+
+/**
+ * Reactive non-secret public configuration of the current plugin, projected
+ * from `ctx.configSchema` into `PluginSummary.publicConfig` (excludes all
+ * `secret: true` fields; returns a stable frozen `{}` when absent).
+ * Must be called inside `<PluginUiView>`.
+ */
+export function usePluginConfig<T extends Record<string, unknown> = Record<string, unknown>>(): T {
+  const { pluginId } = usePluginContext()
+  const port = usePluginClientHost()
+  const summary = port.plugins.find((p) => p.id === pluginId)
+  return (summary?.publicConfig ?? EMPTY_PLUGIN_CONFIG) as T
 }
 
 /** Live per-conversation view returned by useConversation. */

@@ -158,6 +158,14 @@ export interface PluginPromptFields {
   promptGuidelines?: Array<ExecutionText>
 }
 
+/** Registration options for `ctx.doc` and `ctx.sessionDoc`. */
+export interface PluginDocOptions {
+  /** When true, projects into public snapshots and SSE doc update events; defaults to false (private). */
+  public?: boolean
+  /** When false, stores values only in process memory without SQLite persistence; defaults to true. */
+  durable?: boolean
+}
+
 /** Session docs never enter the global snapshot; they are published only via the dedicated doc subscription stream. delete carries the initial value. */
 export interface PublicPluginSessionDoc {
   pluginId: string
@@ -301,6 +309,11 @@ export interface PluginSummary {
    * cache hits, per-plugin diff invalidation, and `client.mjs?hash=...` immutable caching.
    */
   clientHashes?: Record<string, string>
+  /**
+   * Non-secret effective configuration projected from `configSchema` (excludes
+   * all `secret: true` fields). Read in browser UIs via `usePluginConfig()`.
+   */
+  publicConfig?: Record<string, unknown>
 }
 
 /** Managed plugin package metadata (shape of PluginSummary.managed; additive optional field). */

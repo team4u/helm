@@ -1,29 +1,57 @@
 /**
- * Node test environment dedicated use chunk bridge (test dedicated use entry, produce compile path never change write globalThis).
+ * Test-only Node chunk bridge (never loaded or mutated on production compilation paths).
  *
- * is what store in: produce browser by Web load (web/src/lib/plugin-client.ts) in page side install
- * globalThis.__helm_import_chunk(HTTP pull chunk);Hub produce process only compile, never execute
- * artifact. need to in the same Node process inside compile and execute artifact test (such as plugins/test package
- * and mermaid end-to-end case) explicit invoke installNodeChunkBridge(cacheDirs) install Node edition
- * bridge: by (pluginId, moduleRef, contentHash) from to set cacheDir set push lead staging 
- * path (and compiler the same naming contract), via data: URL motion state import seek value. do not install when artifact in
- * __helm_import_chunk invoke will explicit ReferenceError, never static default fall back.
+ * In the browser, `@helm/web`'s loader installs `globalThis.__helm_import_chunk` to fetch chunks
+ * over HTTP; Hub only compiles artifacts and never executes them. Tests that compile and evaluate
+ * split artifacts in the same Node process call `installNodeChunkBridge(dirs)` to install a Node
+ * bridge that resolves chunks from either `plugin-staging` cache directories or prebuilt `dist-client`
+ * directories (`manifest.json`), evaluating them via `data:` dynamic imports. When omitted, calling
+ * `__helm_import_chunk` fails loudly with `ReferenceError` rather than silently falling back.
  *
- * semantics: duplicate invoke whole replace (contains find path and already seek value cache), test on demand switch cacheDir set.
+ * Repeated calls replace the lookup roots and in-memory chunk cache wholesale.
  */
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { HelmError } from '@helm/protocol';
+import {
+  HelmError,
+  PREBUILT_CLIENT_MANIFEST_FILE,
+  assertPrebuiltClientManifest,
+  prebuiltChunkFileName,
+} from '@helm/protocol';
 import { readCachedChunk, safeDirName, safeFileName } from './client-compiler.js';
 
+function readPrebuiltChunkFromDir(
+  prebuiltDir: string,
+  moduleRef: string,
+  contentHash: string,
+  chunkName: string,
+): string | undefined {
+  const manifestPath = join(prebuiltDir, PREBUILT_CLIENT_MANIFEST_FILE);
+  if (!existsSync(manifestPath)) return undefined;
+  try {
+    const raw = JSON.parse(readFileSync(manifestPath, 'utf8')) as unknown;
+    const manifest = assertPrebuiltClientManifest(raw, prebuiltDir);
+    const entry = Object.hasOwn(manifest.modules, moduleRef) ? manifest.modules[moduleRef] : undefined;
+    if (!entry || entry.contentHash !== contentHash || !(entry.chunks ?? []).includes(chunkName)) {
+      return undefined;
+    }
+    const chunkPath = join(prebuiltDir, prebuiltChunkFileName(entry.entryFile, chunkName));
+    if (!existsSync(chunkPath)) return undefined;
+    return readFileSync(chunkPath, 'utf8');
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * install Node edition chunk bridge:
- * - __helm_node_chunk_lookup: by cacheDirs order find first hit chunk text (Web
- *   load in Node environment fall back channel same this contract);
- * - __helm_import_chunk: compile artifact motion state import runtime entry (preload by order first seek value,
- *   the same chunk seek value dedupe).
+ * Installs the Node chunk bridge on `globalThis`:
+ * - `__helm_node_chunk_lookup`: resolves chunk JS code across `dirs` in order (supports both
+ *   `plugin-staging` cache dirs and prebuilt `dist-client` dirs);
+ * - `__helm_import_chunk`: evaluates prerequisite chunks in topological order before importing
+ *   the requested chunk, deduplicating concurrent/repeated loads.
  */
-export function installNodeChunkBridge(cacheDirs: readonly string[]): void {
-  const dirs = [...cacheDirs];
+export function installNodeChunkBridge(dirs: readonly string[]): void {
+  const roots = [...dirs];
   const g = globalThis as Record<string, unknown>;
   const lookup = (
     pluginId: string,
@@ -31,14 +59,16 @@ export function installNodeChunkBridge(cacheDirs: readonly string[]): void {
     contentHash: string,
     chunkName: string,
   ): string | undefined => {
-    for (const dir of dirs) {
-      const res = readCachedChunk(
+    for (const dir of roots) {
+      const staged = readCachedChunk(
         join(dir, 'plugin-staging', safeDirName(pluginId)),
         safeFileName(moduleRef),
         contentHash,
         chunkName,
       );
-      if (res !== undefined) return res.code;
+      if (staged !== undefined) return staged.code;
+      const prebuilt = readPrebuiltChunkFromDir(dir, moduleRef, contentHash, chunkName);
+      if (prebuilt !== undefined) return prebuilt;
     }
     return undefined;
   };
@@ -72,7 +102,11 @@ async function loadSingleNodeChunk(
   const run = (async () => {
     const code = lookup(pluginId, moduleRef, contentHash, chunkName);
     if (code === undefined) {
-      throw new HelmError('client_chunk_not_found', `Node environment under not found chunk ${chunkName}(plugin ${pluginId})`, 404);
+      throw new HelmError(
+        'client_chunk_not_found',
+        `Chunk ${chunkName} for plugin ${pluginId} was not found in Node lookup directories`,
+        404,
+      );
     }
     const dataUrl = `data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}`;
     return (await import(/* @vite-ignore */ dataUrl)) as Record<string, unknown>;

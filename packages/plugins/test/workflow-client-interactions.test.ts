@@ -829,3 +829,91 @@ test('工作台顶栏「恢复失败 (N)」显隐、防连点、resume_failed �
     unmount()
   }
 })
+
+test('WorkflowActiveTray：展开行主显可读任务名并次显 #id，回退标题不重复 #id', { timeout: 60_000 }, async () => {
+  const namedChild = { ...summary(11, 'working'), parentConversationId: 1, title: '排查构建失败', doing: 'bash: pnpm test', updatedAt: 100 }
+  const plainChild = { ...summary(12, 'working'), parentConversationId: 1, title: 'subagent 12', updatedAt: 50 }
+  setWorkflowClientStub({
+    docValue: { runs: [] },
+    conversations: [namedChild, plainChild],
+    conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
+  })
+  const spy = makeSpyCtx()
+  const mod = await importWorkflowClientModule('index.tsx')
+  const Tray = mod['WorkflowActiveTray'] as React.ComponentType<Record<string, unknown>>
+  const { host, unmount } = await mountClient(spy, e(Tray, { conversation: summary(1, 'working') }))
+  try {
+    const toggle = host.querySelector('button[aria-expanded]') as HTMLButtonElement | null
+    assert.ok(toggle !== null)
+    await act(async () => { toggle.click() })
+    const rows = [...host.querySelectorAll('.workflow-active-tray-row')]
+    assert.equal(rows.length, 2)
+    const namedRow = rows.find((r) => r.textContent?.includes('排查构建失败'))
+    assert.ok(namedRow !== undefined, '具名任务应主显任务名称')
+    assert.equal(namedRow.querySelector('.workflow-active-tray-row-id')?.textContent, '#11', '具名任务行次显 #11')
+    const plainRow = rows.find((r) => r.textContent?.includes('Subagent #12'))
+    assert.ok(plainRow !== undefined, '无名任务回退 Subagent #12')
+    assert.ok(plainRow.querySelector('.workflow-active-tray-row-id') === null, '回退已含 #12 时不得重复渲染 .workflow-active-tray-row-id')
+  } finally {
+    unmount()
+  }
+})
+
+test('SubagentToolView：.trace-tool-name 主显任务名、次显 #id 与 @profile，.trace-tool-summary 不重复标题', { timeout: 60_000 }, async () => {
+  const child11 = { ...summary(11, 'done'), parentConversationId: 1, parentToolCallId: 'call-named', title: '修复测试超时' }
+  const child12 = { ...summary(12, 'done'), parentConversationId: 1, parentToolCallId: 'call-fallback', title: 'subagent 12' }
+  const bgRun = {
+    id: 'wf_node_ctx',
+    name: '修复测试超时',
+    conversationId: 1,
+    kind: 'subagent',
+    status: 'completed',
+    parentToolCallId: 'call-named',
+    createdAt: 1,
+    updatedAt: 2,
+    nodes: [{ id: 'a1', kind: 'agent', status: 'done', conversationId: 11, nodeId: 'remote-node' }],
+  }
+  setWorkflowClientStub({
+    docValue: { runs: [bgRun] },
+    conversations: [child11, child12],
+    conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
+  })
+  const spy = makeSpyCtx()
+  const mod = await importWorkflowClientModule('index.tsx')
+  const SubagentToolView = mod['SubagentToolView'] as React.ComponentType<Record<string, unknown>>
+  const { host, rerender, unmount } = await mountClient(
+    spy,
+    e(SubagentToolView, {
+      callId: 'call-named',
+      toolName: 'subagent',
+      input: { prompt: '修复测试超时' },
+      status: 'done',
+      result: JSON.stringify({ ok: true, execution: { conversationId: 11, nodeId: 'remote-node' } }),
+      conversationId: 1,
+      siblingCalls: [],
+    }),
+  )
+  try {
+    assert.equal(host.querySelector('.trace-tool-name')?.textContent, '修复测试超时', '.trace-tool-name 应主显任务名称')
+    assert.equal(host.querySelector('.workflow-trace-id')?.textContent, '#11', '次级标签展示 #11')
+    assert.ok(host.textContent?.includes('@coder'), '保留 @profileId 徽章')
+    assert.equal(host.querySelector('.trace-tool-summary')?.textContent, 'remote-node', 'summary 只保留 nodeId 附加上下文，不得重复标题')
+
+    await rerender(
+      e(SubagentToolView, {
+        callId: 'call-fallback',
+        toolName: 'subagent',
+        input: {},
+        status: 'done',
+        result: JSON.stringify({ ok: true, execution: { conversationId: 12 } }),
+        conversationId: 1,
+        siblingCalls: [],
+      }),
+    )
+    assert.equal(host.querySelector('.trace-tool-name')?.textContent, 'Subagent #12', '无任何名称来源时回退 Subagent #12')
+    assert.ok(host.querySelector('.workflow-trace-id') === null, '回退已含 #12 时不得重复渲染 #12')
+    assert.ok(host.querySelector('.trace-tool-summary') === null, '无附加上下文时不渲染空 summary')
+  } finally {
+    unmount()
+  }
+})

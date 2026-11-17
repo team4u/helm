@@ -36,6 +36,11 @@ export type FauxProviderOptions = Parameters<typeof fauxProvider>[0]
 export type FauxProviderHandle = ReturnType<typeof fauxProvider>
 export type ModelsRegistry = ReturnType<typeof createModels>
 
+/** 创建并返回官方 faux provider 句柄（`KernelRuntimeOptions.providers`）。 */
+export function makeFauxProvider(options?: FauxProviderOptions): FauxProviderHandle {
+  return fauxProvider(options)
+}
+
 /** 创建并注册官方 faux provider 的 Models 实例。 */
 export function makeFauxModels(options?: FauxProviderOptions): {
   models: ModelsRegistry
@@ -49,27 +54,34 @@ export function makeFauxModels(options?: FauxProviderOptions): {
 
 export type HubTestApp = Awaited<ReturnType<typeof createHelm>>
 
-export interface CreateHubTestAppOptions extends Omit<HelmOptions, 'models'> {
-  models?: HelmOptions['models']
+export interface CreateHubTestAppOptions extends HelmOptions {
   fauxOptions?: FauxProviderOptions
 }
 
-/** 启动挂载 faux provider 的真实 `createHelm` 实例。 */
+/** 启动挂载 faux provider 的真实 `createHelm` 实例（默认使用 `providers`，传 `models` 时回退外部 Models 实例）。 */
 export async function createHubTestApp(options: CreateHubTestAppOptions = {}): Promise<{
   app: HubTestApp
   kernel: HubTestApp['kernel']
   faux: FauxProviderHandle
-  models: ModelsRegistry
+  models?: ModelsRegistry
 }> {
-  const { fauxOptions, models: providedModels, buildProvider, model, ...rest } = options
-  const { models, faux } = makeFauxModels(fauxOptions)
+  const { fauxOptions, models: providedModels, providers: providedProviders, buildProvider, model, ...rest } = options
+  const faux = makeFauxProvider(fauxOptions)
   const app = await createHelm({
     buildProvider: buildProvider ?? createPluginBuildProvider(),
     model: model ?? 'faux/faux-1',
-    models: providedModels ?? models,
+    ...(providedModels !== undefined
+      ? { models: providedModels }
+      : { providers: providedProviders ?? [faux.provider] }),
+    ...(providedModels !== undefined && providedProviders !== undefined ? { providers: providedProviders } : {}),
     ...rest,
   })
-  return { app, kernel: app.kernel, faux, models }
+  return {
+    app,
+    kernel: app.kernel,
+    faux,
+    ...(providedModels !== undefined ? { models: providedModels as ModelsRegistry } : {}),
+  }
 }
 
 export interface HubTestEnv {
@@ -77,7 +89,7 @@ export interface HubTestEnv {
   app: HubTestApp
   kernel: HubTestApp['kernel']
   faux: FauxProviderHandle
-  models: ModelsRegistry
+  models?: ModelsRegistry
   close: () => Promise<void>
 }
 
@@ -113,7 +125,7 @@ export async function openHubTestEnv(options: OpenHubTestEnvOptions = {}): Promi
       app,
       kernel,
       faux,
-      models,
+      ...(models !== undefined ? { models } : {}),
       async close() {
         try {
           if (swallowCloseError) {

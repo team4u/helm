@@ -25,7 +25,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { HelmError, type PluginDefinition, type TurnSettledPayload } from '@helm/protocol'
-import { resolvePluginClientRoot } from './asset-paths.js'
+import { resolvePluginClientAssets } from './asset-paths.js'
 import {
   DEFAULT_MAGPIE_ROOT,
   MAGPIE_PLUGIN_ID,
@@ -173,7 +173,7 @@ export function createMagpiePlugin(): PluginDefinition {
     },
     icon: 'globe',
     version: '0.1.0',
-    clientRoot: resolvePluginClientRoot(MAGPIE_PLUGIN_ID, 'magpie', 'magpie_plugin_client_missing'),
+    ...resolvePluginClientAssets(MAGPIE_PLUGIN_ID, 'magpie', 'magpie_plugin_client_missing'),
     definePlugin(rawCtx) {
       const ctx = rawCtx
 
@@ -233,13 +233,21 @@ export function createMagpiePlugin(): PluginDefinition {
       /** Service stop signal: no doc writes after disable. */
       let stopping = false
       let stopController: AbortController | undefined
+      let startupRefreshController: AbortController | undefined
 
       /** Pre-publish guard: write into the doc only while the snapshot is still the effective config. */
-      const writeStatus = (snapshot: MagpieGatewayRef, patch: Partial<MagpieStatusDoc>): void => {
+      const writeStatus = (
+        snapshot: MagpieGatewayRef,
+        patch: Partial<MagpieStatusDoc>,
+        options?: { clearLastError?: boolean },
+      ): void => {
         if (stopping) return
         const currentGateway = gateway()
         if (!sameGateway(snapshot, currentGateway)) return
         const current = status.get()
+        if (options?.clearLastError && current.gatewayUrl === snapshot.root && current.lastError !== undefined) {
+          delete current.lastError
+        }
         status.set({ ...current, ...patch, gatewayUrl: currentGateway.root })
       }
 
@@ -253,6 +261,7 @@ export function createMagpiePlugin(): PluginDefinition {
        * an unavailable trace (remote refusal / version too old) is a legal state: empty routing section + diagnostics.
        */
       const refreshSidecar = async (snapshot: MagpieGatewayRef, kept: boolean): Promise<void> => {
+        if (stopping) return
         const controller = new AbortController()
         stopController = controller
         try {
@@ -266,7 +275,9 @@ export function createMagpiePlugin(): PluginDefinition {
             quotas = []
             diagnostics.push(`quotas unavailable: ${sanitizeErrorText(error)}`)
           }
+          if (stopping || controller.signal.aborted) return
           const trace = await fetchTrace(snapshot.root, snapshot.token, controller.signal, fetchImpl)
+          if (stopping || controller.signal.aborted) return
           if ('routes' in trace) {
             routes = traceRouteRows(trace.routes)
           } else {
@@ -281,19 +292,21 @@ export function createMagpiePlugin(): PluginDefinition {
 
       /** Status publishing after a catalog refresh (snapshot guard + reachable semantics). */
       const publishCatalogStatus = (snapshot: MagpieGatewayRef, reachable: boolean, error?: unknown): void => {
+        if (stopping) return
         const modelCount = handle.models().filter((m) => m.baseUrl.startsWith(snapshot.root)).length
         if (reachable) {
           // Success clears old errors: the previous round's failure conclusion must not linger as the
           // latest state (jsonClone rejects undefined values; delete keys explicitly instead of assigning undefined)
-          const current = status.get()
-          if (current.gatewayUrl === snapshot.root && current.lastError !== undefined) delete current.lastError
-          status.set(current)
-          writeStatus(snapshot, {
-            reachable: true,
-            modelCount,
-            summaryText: summaryTextOf(true, modelCount),
-            lastRefreshedAt: Date.now(),
-          })
+          writeStatus(
+            snapshot,
+            {
+              reachable: true,
+              modelCount,
+              summaryText: summaryTextOf(true, modelCount),
+              lastRefreshedAt: Date.now(),
+            },
+            { clearLastError: true },
+          )
         } else {
           writeStatus(snapshot, {
             reachable: false,
@@ -309,6 +322,8 @@ export function createMagpiePlugin(): PluginDefinition {
         id: 'magpie-gateway',
         async start() {
           stopping = false
+          const controller = new AbortController()
+          startupRefreshController = controller
           const snapshot = gateway()
           // Initialization: first honestly show the recovered cache (the catalog count restored by
           // refreshModels's first phase), then let the background network refresh advance reachable / lastError.
@@ -326,23 +341,31 @@ export function createMagpiePlugin(): PluginDefinition {
           // ctx.host.refreshModels and do not reject).
           void (async () => {
             try {
+              if (stopping || controller.signal.aborted) return
               const snapshotInner = gateway()
               const result = await ctx.host.refreshModels({ providers: [MAGPIE_PROVIDER_ID], allowNetwork: true, force: true })
+              if (stopping || controller.signal.aborted) return
               const error = result.errors['magpie']
               if (error !== undefined) {
                 publishCatalogStatus(snapshotInner, false, error)
                 return
               }
               publishCatalogStatus(snapshotInner, true)
+              if (stopping || controller.signal.aborted) return
               await refreshSidecar(snapshotInner, true)
             } catch (error) {
+              if (stopping || controller.signal.aborted) return
               // Composition-layer port exception (not a gateway diagnostic): record honestly, do not block startup
               publishCatalogStatus(gateway(), false, error)
+            } finally {
+              if (startupRefreshController === controller) startupRefreshController = undefined
             }
           })()
         },
         async stop() {
           stopping = true
+          startupRefreshController?.abort(new Error('magpie plugin stopping'))
+          startupRefreshController = undefined
           stopController?.abort(new Error('magpie plugin stopping'))
           stopController = undefined
         },

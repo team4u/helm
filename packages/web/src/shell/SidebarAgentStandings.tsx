@@ -7,7 +7,6 @@ import { useWebLocale } from '../i18n/use-web-locale.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { ConfirmDialog } from '../ui/AlertDialog.js'
-import type { HelmStoreValue } from '../lib/types.js'
 import {
   AGENT_SUB_LIST_PREVIEW,
   activeConversationIdsOf,
@@ -21,9 +20,11 @@ import {
   openAgentStandby,
   presenceNavClassSuffix,
   type AgentStanding,
+  type SidebarStoreView,
 } from './sidebar-model.js'
 import {
   resolveStandingStatusIndicator,
+  resolveStatusLight,
   resolveAgentSubListPreview,
   type ConversationBackgroundActivity,
   type ConversationBackgroundIndex,
@@ -88,7 +89,7 @@ function AgentStandingItem({
   onToggleSelect,
 }: {
   agent: AgentStanding
-  store: HelmStoreValue
+  store: SidebarStoreView
   background: ConversationBackgroundIndex
   activeProfileIds: ReadonlySet<string>
   activeConversationIds: ReadonlySet<number>
@@ -128,34 +129,44 @@ function AgentStandingItem({
   const isOpen = batchMode
     ? hasSubList && expanded
     : hasSubList && (searching || activeProfileIds.has(agent.profileId))
+  const hasStandingLight =
+    !isOpen &&
+    standingIndicator !== null &&
+    resolveStatusLight(standingIndicator.representative.status, standingIndicator.backgroundActive).dotClass !== null
 
-  const openPrimary = () => {
+  const openPrimary = (keepDrawerOpen: boolean) => {
     if (batchMode) {
       if (hasSubList) setExpanded((v) => !v)
       return
     }
+    const navigateCallback = keepDrawerOpen ? undefined : onNavigate
     // The name is the stable standby entry: human-selectable agents always
     // enter standby (the conversation is only persisted on first send) and
     // never auto-jump into an old conversation; only managed singletons
     // without create rights open their real conversation.
     if (agent.canCreateConversation) {
-      openAgentStandby(store, agent.profileId, onNavigate)
+      openAgentStandby(store, agent.profileId, navigateCallback)
       return
     }
     const primary = agent.primaryConversation
     if (primary) {
       store.openTarget({ kind: 'conversation', conversationId: primary.id })
-      onNavigate?.()
+      navigateCallback?.()
     }
   }
+
+  // Collapsed standing rows with a conversation sub-list expand in place on first
+  // tap so mobile drawer users can inspect and choose from the revealed topics.
+  const keepDrawerOpenOnExpand = !batchMode && !isOpen && hasSubList
 
   return (
     <div className={`agent-standing${isOpen ? ' agent-standing-open' : ''}`}>
       <div
         className={`nav-item agent-standing-row${presenceNavClassSuffix(standbyPresence)}${isBranchActive ? ' agent-standing-row-branch' : ''}`}
-        onClick={() => {
-          if (batchMode && hasSubList) {
-            setExpanded((v) => !v)
+        onClick={(e) => {
+          if (batchMode) {
+            e.stopPropagation()
+            if (hasSubList) setExpanded((v) => !v)
           }
         }}
       >
@@ -168,13 +179,24 @@ function AgentStandingItem({
               if (hasSubList) setExpanded((v) => !v)
               return
             }
-            openPrimary()
+            if (keepDrawerOpenOnExpand) {
+              e.stopPropagation()
+            }
+            openPrimary(keepDrawerOpenOnExpand)
           }}
           disabled={!batchMode && !agent.primaryConversation && !agent.canCreateConversation}
           aria-current={standbyPresence.active ? 'page' : undefined}
         >
           <span className="nav-status-slot">
-            {!isOpen && standingIndicator !== null && <StandingStatusDot indicator={standingIndicator} />}
+            {hasStandingLight && standingIndicator !== null ? (
+              <StandingStatusDot indicator={standingIndicator} />
+            ) : (
+              <HelmIcon
+                name={isOpen ? 'chevron-down' : hasSubList ? 'chevron-right' : 'bot'}
+                size={12}
+                className="agent-standing-chevron"
+              />
+            )}
           </span>
           <span className="nav-item-label">{agent.label}</span>
         </button>
@@ -183,7 +205,7 @@ function AgentStandingItem({
             <RemoteNodeTag nodeId={agent.primaryConversation.nodeId} />
           )}
           {agent.conversations.length > 1 && (
-            <span className="badge badge-neutral tabular-nums">{agent.conversations.length}</span>
+            <span className="agent-standing-count tabular-nums">{agent.conversations.length}</span>
           )}
           <SidebarPaneTag paneTag={standbyPresence.paneTag} />
           {!batchMode && (
@@ -224,7 +246,7 @@ function AgentConversationsList({
   onToggleSelect,
 }: {
   agent: AgentStanding
-  store: HelmStoreValue
+  store: SidebarStoreView
   background: ConversationBackgroundIndex
   activeConversationIds: ReadonlySet<number>
   searching: boolean
@@ -297,7 +319,7 @@ function AgentConversationRow({
   onToggleSelect,
 }: {
   conv: ConversationSummary
-  store: HelmStoreValue
+  store: SidebarStoreView
   background?: ConversationBackgroundActivity
   batchMode?: boolean
   selected?: boolean
@@ -310,9 +332,10 @@ function AgentConversationRow({
   return (
     <div
       className={`nav-item nav-item-sub${presenceNavClassSuffix(presence)}`}
-      onClick={() => {
-        if (batchMode && deletable) {
-          onToggleSelect?.(conv.id)
+      onClick={(e) => {
+        if (batchMode) {
+          e.stopPropagation()
+          if (deletable) onToggleSelect?.(conv.id)
         }
       }}
     >
@@ -372,7 +395,7 @@ export function AgentStandingsGroup({
   background,
   onNavigate,
 }: {
-  store: HelmStoreValue
+  store: SidebarStoreView
   background: ConversationBackgroundIndex
   onNavigate?: () => void
 }) {

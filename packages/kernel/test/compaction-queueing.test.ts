@@ -1,17 +1,18 @@
 /**
- * manually context streamline during input queue up, empty skip honor complete, failed keep queue, abort clean up and original ground heavy guard integration test.
+ * Integration tests for input queueing during manual compaction, empty-skip reconciliation,
+ * failure queue preservation, abort cleanup, and in-place rewind preemption.
  *
- * override (real KernelRuntime + SQLite + fauxProvider latch control when):
- * 1. manually streamline during submitInput(steer / followUp) enter pi.inbox queue up (live.queuedInputs visible);
- *    whenBusy='reject' report 409 conversation_busy; streamline summary after pi.compaction first at
- *    helm.input written to the database, and assist manually based on streamline after summary context answer;
- * 2. manually streamline during withdrawQueuedInput clean withdraw back queue up input;
- * 3. manually streamline during abortConversation abort streamline task, withdraw back queue up input and do not mistakenly report when before context no need to streamline;
- * 4. empty skip manually streamline (short context < 20000 tokens and beforeCompact decline latch double override):
- *    out when before context no need to streamlineinfo notify; during queue up input via continue automatically connect continue and obtain assist manually answer;
- * 5. manually streamline failed and store in queue up input: out context streamline failederror notify, do not run not streamline context
- *    queue up input, and queuedInputs keep complete;
- * 6. manually streamline during replaceFromEntryId original ground override heavy: abort streamline task and succeeded heavy write commit, do not report 409.
+ * Covers (real KernelRuntime + SQLite + fauxProvider latches):
+ * 1. submitInput (steer / followUp) during manual compaction enters pi.inbox queue (visible in live.queuedInputs);
+ *    whenBusy='reject' returns 409 conversation_busy; post-compaction pi.compaction persists before
+ *    helm.input, and assistant runs against the compacted summary context;
+ * 2. withdrawQueuedInput cleanly withdraws queued input during manual compaction;
+ * 3. abortConversation aborts active compaction, withdraws queued input, and never misreports unnecessary compaction;
+ * 4. Empty-skip manual compaction (both short context <20000 tokens and beforeCompact decline latch):
+ *    emits info notice 'Current context does not need compaction'; queued inputs proceed automatically;
+ * 5. Failed manual compaction with queued inputs: emits 'Context compaction failed' error notice, does not execute
+ *    queued inputs on uncompacted context, and keeps queuedInputs intact;
+ * 6. In-place overwrite (replaceFromEntryId) during manual compaction aborts compaction and succeeds cleanly without 409.
  */
 import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
@@ -104,7 +105,7 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
     return { kernel, faux, dir }
   }
 
-  /** construct exceeds keepRecentTokens(20000) large context (3 round dialog), make manually compress produce real summary. */
+  /** Build a large context exceeding keepRecentTokens (20000) across 3 turns so manual compaction produces a real summary. */
   async function seedLargeContext(kernel: KernelRuntime, faux: FauxHandle): Promise<void> {
     const bigInput = '大规模上下文历史素材。'.repeat(5_000)
     faux.setResponses([
@@ -112,14 +113,14 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       fauxAssistantMessage('large history answer two'),
       fauxAssistantMessage('large history answer three'),
     ])
-    for (const marker of ['one round unique mark record', 'second round unique mark record', 'third round unique mark record']) {
-      await kernel.submitInput(1, `${marker}：${bigInput}`)
+    for (const marker of ['round-1-unique-marker', 'round-2-unique-marker', 'round-3-unique-marker']) {
+      await kernel.submitInput(1, `${marker}: ${bigInput}`)
       await kernel.waitForIdle(1)
     }
     await waitFor(() => (kernel.getConversation(1).contextUsage?.tokens ?? 0) > 30_000, 20_000)
   }
 
-  it('manually streamline during steer/followUp queue,reject report 409; summary after pi.compaction first at helm.input and assist manually run at streamline after context', { timeout: 60_000 }, async () => {
+  it('queues steer/followUp during compaction, rejects 409 when reject, and commits pi.compaction before helm.input', { timeout: 60_000 }, async () => {
     const { kernel, faux } = await openRuntime('queue-and-flush')
     let releaseSummary = () => {}
     try {
@@ -134,11 +135,11 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         async () => {
           summaryEntered()
           await summaryGate
-          return fauxAssistantMessage('this is streamline after history summary content')
+          return fauxAssistantMessage('compacted summary of prior history')
         },
         async (ctx) => {
           seenAssistantPrompts.push(ctx.messages.map((m) => extractText(m.content)))
-          return fauxAssistantMessage('based on streamline summary answer')
+          return fauxAssistantMessage('reply based on compacted summary')
         },
       ])
 
@@ -146,15 +147,15 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       await enteredPromise
       await waitFor(() => kernel.getConversation(1).contextUsage?.compacting === true, 15_000)
 
-      // whenBusy='reject' in streamline during must explicit 409 reject, must not static default queue or start new run.
+      // whenBusy='reject' must explicitly fail with 409 during compaction rather than silently queueing or starting a run.
       await assert.rejects(
-        () => kernel.submitInput(1, 'streamline during by reject input', { whenBusy: 'reject' }),
+        () => kernel.submitInput(1, 'rejected input during compaction', { whenBusy: 'reject' }),
         (err: unknown) => err instanceof HelmError && err.code === 'conversation_busy' && err.status === 409,
       )
 
-      // streamline during commit followUp and steer, must enter pi.inbox queue up and reverse reflect in live.queuedInputs.
-      const subFu = await kernel.submitInput(1, 'streamline after patch fill issue followUp', { whenBusy: 'followUp' })
-      const subSt = await kernel.submitInput(1, 'streamline after insert speech instruction steer', { whenBusy: 'steer' })
+      // followUp and steer submitted during compaction enter pi.inbox and appear in live.queuedInputs.
+      const subFu = await kernel.submitInput(1, 'follow-up question after compaction', { whenBusy: 'followUp' })
+      const subSt = await kernel.submitInput(1, 'steer instruction after compaction', { whenBusy: 'steer' })
       assert.ok(Number(subFu.submissionId) > 0)
       assert.ok(Number(subSt.submissionId) > 0)
 
@@ -163,22 +164,22 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       assert.deepEqual(
         queued.map((q) => ({ text: q.text, mode: q.mode })),
         [
-          { text: 'streamline after insert speech instruction steer', mode: 'steer' },
-          { text: 'streamline after patch fill issue followUp', mode: 'followUp' },
+          { text: 'steer instruction after compaction', mode: 'steer' },
+          { text: 'follow-up question after compaction', mode: 'followUp' },
         ],
       )
 
-      // streamline not complete before, two queue up input all must not mention before written to the database or trigger model request.
+      // Before compaction completes, queued inputs must neither persist nor trigger model calls.
       const midDetail = await kernel.getConversationDetail(1, { limit: 100 })
       assert.equal(midDetail.entries.some((e) => e.kind === 'pi.compaction'), false)
       assert.equal(
         midDetail.entries.some(
-          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'streamline after patch fill issue followUp',
+          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'follow-up question after compaction',
         ),
         false,
       )
 
-      // release summary latch: summary and connect continue queue up input start assist manually turn.
+      // Release summary gate: summary persists and assistant runs the queued turn automatically.
       releaseSummary()
       await kernel.waitForIdle(1)
       await waitFor(() => {
@@ -189,31 +190,31 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       const finalDetail = await kernel.getConversationDetail(1, { limit: 100 })
       const compactionIdx = finalDetail.entries.findIndex((e) => e.kind === 'pi.compaction')
       const steerIdx = finalDetail.entries.findIndex(
-        (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'streamline after insert speech instruction steer',
+        (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'steer instruction after compaction',
       )
       const followUpIdx = finalDetail.entries.findIndex(
-        (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'streamline after patch fill issue followUp',
+        (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'follow-up question after compaction',
       )
-      assert.ok(compactionIdx >= 0, 'pi.compaction item must written to the database')
-      assert.ok(steerIdx > compactionIdx, 'pi.compaction must first at queue up steer helm.input written to the database')
-      assert.ok(followUpIdx > compactionIdx, 'pi.compaction must first at queue up followUp helm.input written to the database')
+      assert.ok(compactionIdx >= 0, 'pi.compaction entry must be persisted')
+      assert.ok(steerIdx > compactionIdx, 'pi.compaction must persist before queued steer helm.input')
+      assert.ok(followUpIdx > compactionIdx, 'pi.compaction must persist before queued followUp helm.input')
       assert.ok(
         finalDetail.entries.some(
-          (e) => e.kind === 'pi.assistant' && extractText(e.model?.[0] && (e.model[0] as { content?: unknown }).content).includes('based on streamline summary answer'),
+          (e) => e.kind === 'pi.assistant' && extractText(e.model?.[0] && (e.model[0] as { content?: unknown }).content).includes('reply based on compacted summary'),
         ),
-        'assist manually must for streamline during queue up input complete back re-',
+        'assistant must complete response to inputs queued during compaction',
       )
-      assert.equal(seenAssistantPrompts.length, 1, 'assist manually only should run once (merge consume queue up input)')
+      assert.equal(seenAssistantPrompts.length, 1, 'assistant should run once consuming merged queued inputs')
       const joinedPrompt = seenAssistantPrompts[0]!.join('\n')
-      assert.ok(joinedPrompt.includes('this is streamline after history summary content'), 'assist manually request must carry streamline summary')
-      assert.equal(joinedPrompt.includes('one round unique mark record'), false, 'already by streamline compress early history must not again inject assist manually context')
+      assert.ok(joinedPrompt.includes('compacted summary of prior history'), 'assistant call must include compacted summary')
+      assert.equal(joinedPrompt.includes('round-1-unique-marker'), false, 'compacted early history must no longer appear in prompt')
     } finally {
       releaseSummary()
       await kernel.close()
     }
   })
 
-  it('manually streamline during withdrawQueuedInput clean withdraw back queue up input', { timeout: 60_000 }, async () => {
+  it('withdrawQueuedInput cleanly withdraws queued input during manual compaction', { timeout: 60_000 }, async () => {
     const { kernel, faux } = await openRuntime('withdraw-during-compact')
     let releaseSummary = () => {}
     try {
@@ -226,14 +227,14 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         async () => {
           summaryEntered()
           await summaryGate
-          return fauxAssistantMessage('streamline summary')
+          return fauxAssistantMessage('compacted summary')
         },
       ])
 
       await kernel.compactConversation(1)
       await enteredPromise
 
-      const { submissionId } = await kernel.submitInput(1, 'streamline during await withdraw back input', { whenBusy: 'followUp' })
+      const { submissionId } = await kernel.submitInput(1, 'input to withdraw during compaction', { whenBusy: 'followUp' })
       await waitFor(() => (findLive(kernel, 1)?.queuedInputs?.length ?? 0) === 1, 10_000)
 
       const withdrawn = await kernel.withdrawQueuedInput(1, { submissionId: Number(submissionId) })
@@ -249,22 +250,22 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       await waitFor(() => kernel.getConversation(1).contextUsage?.compacting === undefined, 15_000)
 
       const detail = await kernel.getConversationDetail(1, { limit: 100 })
-      assert.ok(detail.entries.some((e) => e.kind === 'pi.compaction'), 'compress should normal complete')
+      assert.ok(detail.entries.some((e) => e.kind === 'pi.compaction'), 'compaction should still finish normally')
       assert.equal(
         detail.entries.some(
-          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'streamline during await withdraw back input',
+          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'input to withdraw during compaction',
         ),
         false,
-        'already withdraw back input must not written to the database execute',
+        'withdrawn input must never persist or execute',
       )
-      assert.equal(faux.state.callCount, 4, 'must not many out assist manually answer model invoke (3 round build history + 1 time summary)')
+      assert.equal(faux.state.callCount, 4, 'no extra assistant reply call (3 seed turns + 1 summary call)')
     } finally {
       releaseSummary()
       await kernel.close()
     }
   })
 
-  it('manually streamline during abortConversation abort streamline, withdraw back queue up input and do not mistakenly when before context no need to streamline', { timeout: 60_000 }, async () => {
+  it('abortConversation aborts manual compaction, clears queued input, and never misreports unnecessary compaction', { timeout: 60_000 }, async () => {
     const { kernel, faux } = await openRuntime('abort-during-compact')
     let releaseSummary = () => {}
     const recorder = recordNotifications(kernel, 1)
@@ -278,13 +279,13 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         async (_ctx, opts) => {
           summaryEntered()
           await waitForGateOrAbort(summaryGate, opts?.signal)
-          return fauxAssistantMessage('must not the complete')
+          return fauxAssistantMessage('must not finish')
         },
       ])
 
       await kernel.compactConversation(1)
       await enteredPromise
-      await kernel.submitInput(1, 'abort when one and withdraw back input', { whenBusy: 'steer' })
+      await kernel.submitInput(1, 'input dropped upon abort', { whenBusy: 'steer' })
       await waitFor(() => (findLive(kernel, 1)?.queuedInputs?.length ?? 0) === 1, 10_000)
 
       await kernel.abortConversation(1)
@@ -296,20 +297,20 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       await new Promise((r) => setTimeout(r, 80))
 
       assert.equal(
-        recorder.notices.some((n) => n.title === 'when before context no need to streamline'),
+        recorder.notices.some((n) => n.title === 'Current context does not need compaction'),
         false,
-        'by abort streamline never obtain mistakenly when before context no need to streamline',
+        'aborted compaction must never misreport unnecessary compaction',
       )
       assert.equal(
-        recorder.notices.some((n) => n.title === 'context streamline failed'),
+        recorder.notices.some((n) => n.title === 'Context compaction failed'),
         false,
-        'actively abort must not produce failed notify',
+        'explicit abort must not emit failure notice',
       )
       const detail = await kernel.getConversationDetail(1, { limit: 100 })
       assert.equal(detail.entries.some((e) => e.kind === 'pi.compaction'), false)
       assert.equal(
         detail.entries.some(
-          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'abort when one and withdraw back input',
+          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'input dropped upon abort',
         ),
         false,
       )
@@ -319,8 +320,8 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         }
       }).tracker
       const mirror = tracker.mirrors.get(1)
-      assert.equal(mirror?.trackedInputs.size ?? 0, 0, 'abort after non- run queue up append trace record must empty')
-      assert.equal(mirror?.submissionIndex.size ?? 0, 0, 'abort after queue up submissionIndex must empty')
+      assert.equal(mirror?.trackedInputs.size ?? 0, 0, 'trackedInputs must be empty after abort cleanup')
+      assert.equal(mirror?.submissionIndex.size ?? 0, 0, 'submissionIndex must be empty after abort cleanup')
     } finally {
       recorder.stop()
       releaseSummary()
@@ -328,8 +329,8 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
     }
   })
 
-  it('empty skip manually streamline (< 20000 tokens) out when before context no need to streamline notify; latch during queue up input via continue automatically back re-', { timeout: 60_000 }, async () => {
-    // 4a. real short context (< 20000 tokens):selectCut === undefined skip, info notify
+  it('empty-skip manual compaction (<20000 tokens) emits notice and reconciles queued inputs automatically', { timeout: 60_000 }, async () => {
+    // 4a. Naturally short context (<20000 tokens): selectCut === undefined skips, emits info notice
     {
       const { kernel, faux } = await openRuntime('empty-skip-short')
       const recorder = recordNotifications(kernel, 1)
@@ -339,19 +340,19 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         await kernel.waitForIdle(1)
 
         await kernel.compactConversation(1)
-        await waitFor(() => recorder.notices.some((n) => n.title === 'when before context no need to streamline'), 10_000)
-        const notice = recorder.notices.find((n) => n.title === 'when before context no need to streamline')!
+        await waitFor(() => recorder.notices.some((n) => n.title === 'Current context does not need compaction'), 10_000)
+        const notice = recorder.notices.find((n) => n.title === 'Current context does not need compaction')!
         assert.equal(notice.level, 'info')
         assert.equal(notice.conversationId, 1)
-        assert.match(notice.body ?? '', /not generate new summary/)
+        assert.match(notice.body ?? '', /no new summary was generated/)
       } finally {
         recorder.stop()
         await kernel.close()
       }
     }
 
-    // 4b. latch control when (beforeCompact decline -> and selectCut===undefined same away complete() without summary branch):
-    //     streamline in progress queue up input -> empty skip after end automatically continue and obtain assist manually answer.
+    // 4b. Latched case (beforeCompact decline -> same zero-summary completed() branch as selectCut === undefined):
+    //     queued input during compaction auto-resumes after empty-skip and gets assistant response.
     {
       const { kernel, faux } = await openRuntime('empty-skip-with-queued')
       const recorder = recordNotifications(kernel, 1)
@@ -377,17 +378,17 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
 
         await seedLargeContext(kernel, faux)
 
-        faux.setResponses([fauxAssistantMessage('empty skip after automatically continue answer')])
+        faux.setResponses([fauxAssistantMessage('auto-resumed reply after empty skip')])
         await kernel.compactConversation(1)
         await enteredPromise
         await waitFor(() => kernel.getConversation(1).contextUsage?.compacting === true, 10_000)
 
-        await kernel.submitInput(1, 'empty skip streamline during queue up mention question', { whenBusy: 'followUp' })
+        await kernel.submitInput(1, 'queued question during empty-skip compaction', { whenBusy: 'followUp' })
         await waitFor(() => (findLive(kernel, 1)?.queuedInputs?.length ?? 0) === 1, 10_000)
 
         releaseHook()
 
-        await waitFor(() => recorder.notices.some((n) => n.title === 'when before context no need to streamline'), 15_000)
+        await waitFor(() => recorder.notices.some((n) => n.title === 'Current context does not need compaction'), 15_000)
         await kernel.waitForIdle(1)
         await waitFor(() => {
           const live = findLive(kernel, 1)
@@ -398,15 +399,15 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         assert.equal(detail.entries.some((e) => e.kind === 'pi.compaction'), false, 'empty skip must not write pi.compaction')
         assert.ok(
           detail.entries.some(
-            (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'empty skip streamline during queue up mention question',
+            (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'queued question during empty-skip compaction',
           ),
-          'queue up input should via continue written to the database execute',
+          'queued input should execute and persist via continue',
         )
         assert.ok(
           detail.entries.some(
-            (e) => e.kind === 'pi.assistant' && extractText(e.model?.[0] && (e.model[0] as { content?: unknown }).content).includes('empty skip after automatically continue answer'),
+            (e) => e.kind === 'pi.assistant' && extractText(e.model?.[0] && (e.model[0] as { content?: unknown }).content).includes('auto-resumed reply after empty skip'),
           ),
-          'assist manually must complete for queue up input back re-',
+          'assistant must complete reply for queued input',
         )
       } finally {
         recorder.stop()
@@ -416,7 +417,7 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
     }
   })
 
-  it('manually streamline failed and store in queue up input: context streamline failederror notify, do not run queue up input and keep queuedInputs', { timeout: 60_000 }, async () => {
+  it('failed manual compaction with queued inputs emits error notice, skips running queue, and preserves queuedInputs', { timeout: 60_000 }, async () => {
     const { kernel, faux } = await openRuntime('failed-compact-keeps-queue')
     let releaseSummary = () => {}
     const recorder = recordNotifications(kernel, 1)
@@ -432,42 +433,42 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
           await summaryGate
           return fauxAssistantMessage('summary failed', { stopReason: 'error', errorMessage: 'mock compact error' })
         },
-        fauxAssistantMessage('do not the by execute to answer'),
+        fauxAssistantMessage('reply that must never execute'),
       ])
 
       await kernel.compactConversation(1)
       await enteredPromise
 
-      await kernel.submitInput(1, 'failed after should keep in queue input', { whenBusy: 'followUp' })
+      await kernel.submitInput(1, 'input kept in queue after failure', { whenBusy: 'followUp' })
       await waitFor(() => (findLive(kernel, 1)?.queuedInputs?.length ?? 0) === 1, 10_000)
 
       releaseSummary()
-      await waitFor(() => recorder.notices.some((n) => n.title === 'context streamline failed'), 15_000)
+      await waitFor(() => recorder.notices.some((n) => n.title === 'Context compaction failed'), 15_000)
       await waitFor(() => kernel.getConversation(1).contextUsage?.compacting === undefined, 15_000)
       await new Promise((r) => setTimeout(r, 80))
 
-      const failNotice = recorder.notices.find((n) => n.title === 'context streamline failed')!
+      const failNotice = recorder.notices.find((n) => n.title === 'Context compaction failed')!
       assert.equal(failNotice.level, 'error')
       assert.match(failNotice.body ?? '', /mock compact error/)
       assert.equal(
-        recorder.notices.some((n) => n.title === 'when before context no need to streamline'),
+        recorder.notices.some((n) => n.title === 'Current context does not need compaction'),
         false,
-        'streamline failed must not out no need to streamline notify',
+        'failed compaction must not emit unnecessary-compaction notice',
       )
 
       const live = findLive(kernel, 1)
-      assert.equal(live?.queuedInputs?.length, 1, 'queue up input must completely well keep in queuedInputs in')
-      assert.equal(live?.queuedInputs?.[0]?.text, 'failed after should keep in queue input')
+      assert.equal(live?.queuedInputs?.length, 1, 'queued input must remain intact in queuedInputs')
+      assert.equal(live?.queuedInputs?.[0]?.text, 'input kept in queue after failure')
 
       const detail = await kernel.getConversationDetail(1, { limit: 100 })
       assert.equal(
         detail.entries.some(
-          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'failed after should keep in queue input',
+          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'input kept in queue after failure',
         ),
         false,
-        'failed after must not in not streamline context on without permission run queue up input',
+        'must not execute queued input on uncompacted context after failure',
       )
-      assert.equal(faux.state.callCount, 4, 'must not many out assist manually invoke (3 round build history + 1 time failed summary)')
+      assert.equal(faux.state.callCount, 4, 'must not trigger extra assistant calls (3 seed turns + 1 failed summary)')
     } finally {
       recorder.stop()
       releaseSummary()
@@ -475,7 +476,7 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
     }
   })
 
-  it('manually streamline during replaceFromEntryId original ground override heavy: abort streamline task and succeeded heavy write commit (do not report 409)', { timeout: 60_000 }, async () => {
+  it('replaceFromEntryId in-place overwrite during manual compaction aborts compaction and commits cleanly without 409', { timeout: 60_000 }, async () => {
     const { kernel, faux } = await openRuntime('rewind-during-compact')
     let releaseSummary = () => {}
     const recorder = recordNotifications(kernel, 1)
@@ -484,7 +485,7 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
 
       const preDetail = await kernel.getConversationDetail(1, { limit: 50 })
       const lastHumanEntry = [...preDetail.entries].reverse().find((e) => e.kind === 'helm.input')
-      assert.ok(lastHumanEntry, 'must store in can original ground edit helm.input item')
+      assert.ok(lastHumanEntry, 'must contain editable helm.input entry')
       const targetEntryId = Number(lastHumanEntry!.id)
 
       let summaryEntered!: () => void
@@ -494,38 +495,38 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         async (_ctx, opts) => {
           summaryEntered()
           await waitForGateOrAbort(summaryGate, opts?.signal)
-          return fauxAssistantMessage('must not the complete')
+          return fauxAssistantMessage('must not finish')
         },
-        fauxAssistantMessage('original ground override heavy after new answer'),
+        fauxAssistantMessage('new reply after in-place overwrite'),
       ])
 
       await kernel.compactConversation(1)
       await enteredPromise
       await waitFor(() => kernel.getConversation(1).contextUsage?.compacting === true, 15_000)
 
-      await kernel.submitInput(1, 'streamline during original ground override new issue', { replaceFromEntryId: targetEntryId })
+      await kernel.submitInput(1, 'new issue replacing history during compaction', { replaceFromEntryId: targetEntryId })
       await kernel.waitForIdle(1)
       await new Promise((r) => setTimeout(r, 80))
 
       const finalDetail = await kernel.getConversationDetail(1, { limit: 50 })
-      assert.ok(finalDetail.entries.some((e) => e.kind === 'helm.rewind'), 'must write helm.rewind truncate mark record')
+      assert.ok(finalDetail.entries.some((e) => e.kind === 'helm.rewind'), 'must persist helm.rewind marker')
       assert.ok(
         finalDetail.entries.some(
-          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'streamline during original ground override new issue',
+          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'new issue replacing history during compaction',
         ),
-        'must written to the database override after new input',
+        'must persist replacement input',
       )
       assert.ok(
         finalDetail.entries.some(
-          (e) => e.kind === 'pi.assistant' && extractText(e.model?.[0] && (e.model[0] as { content?: unknown }).content).includes('original ground override heavy after new answer'),
+          (e) => e.kind === 'pi.assistant' && extractText(e.model?.[0] && (e.model[0] as { content?: unknown }).content).includes('new reply after in-place overwrite'),
         ),
-        'must obtain heavy after new answer',
+        'must receive new reply after rewind',
       )
       assert.equal(finalDetail.entries.some((e) => e.kind === 'pi.compaction'), false)
       assert.equal(
-        recorder.notices.some((n) => n.title === 'when before context no need to streamline'),
+        recorder.notices.some((n) => n.title === 'Current context does not need compaction'),
         false,
-        'by rewind abort streamline must not mistakenly report no need to streamline',
+        'compaction aborted by rewind must not misreport unnecessary compaction',
       )
     } finally {
       recorder.stop()

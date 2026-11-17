@@ -1,22 +1,22 @@
 /**
- * shell execute engine (runShell / runGate / bash tool).
+ * Shell execution engine (`runShell` / `runGate` / `bash` tool).
  *
- * - shell execute delegate SDK `NodeExecutionEnv.exec`(`@earendil-works/pi-durable/env/node`):
- *   pre- first aborted  Context never spawn;abort/timeout kill the whole process group and can rely wait for child process
- *   exit (listener/timer all clean up, do not leak process);stdout/stderr each `StreamDecoder` incremental
- *   decode, multibyte character across chunk do not tear;`onOutput` by reach order concatenate (non- first stdout after stderr).
- * - across node execute (EnvFabric): by (nodeId, cwd, conversationId) target in target node execute;
- *   nodeId !== 'local' when via deps.envFabric(offline explicit node_offline, disconnection explicit unknown;
- *   EnvFabric missing when only allows local short lifecycle direct create, remote explicit env_fabric_missing,
- *   see guards.ts), never static default fall back local mistakenly read write Hub local machine disk.
- * - target node platform aware cwd/path specification (unique implement runtime/target-platform.ts,
- *   re- use @helm/protocol normalizeTargetPath/targetPlatformOf original language, business entry
- *   must not each another write rule):SDK NodeExecutionEnv / Remote execute only receive already specification path
- *   (bash / runGate / POST /api/env/exec and WorktreeAllocator execGit all via
- *   runShell converge).
- * - runShell for host inherit HELM_TOKEN do fall back redaction: even if caller not host token register enter
- *   deps.redact, return everything aggregate text also for catch to host token do precise replace redaction.
- * - output exceeds maxOutputBytes explicit failed `output_limit_exceeded`(never truncate when succeeded).
+ * - Delegates shell execution to SDK `NodeExecutionEnv.exec` (`@earendil-works/pi-durable/env/node`):
+ *   never spawns on pre-aborted `Context`; kills entire process groups on abort/timeout and reliably awaits
+ *   process exit (cleans up all listeners/timers, zero orphan leaks); incremental per-stream UTF-8 decoding
+ *   via `StreamDecoder` so multi-byte characters split across chunks stay intact; aggregates `onOutput` in
+ *   arrival order (never stdout-before-stderr).
+ * - Cross-node execution (`EnvFabric`): runs on `(nodeId, cwd, conversationId)`; `nodeId !== 'local'` goes
+ *   through `deps.envFabric` (offline throws `node_offline`, disconnect returns `unknown`; local falls back to
+ *   short-lived direct env creation only when EnvFabric isn't injected, whereas remote explicitly fails
+ *   `env_fabric_missing` via `guards.ts` — never reading/writing Hub's local disk).
+ * - Target-platform-aware cwd/path normalization (sole implementation `runtime/target-platform.ts`, reusing
+ *   `@helm/protocol` `normalizeTargetPath`/`targetPlatformOf` without duplicating rules in entry points):
+ *   SDK `NodeExecutionEnv`/remote exec receive pre-normalized paths (converges `bash` / `runGate` /
+ *   `POST /api/env/exec` and `WorktreeAllocator.execGit` via `runShell`).
+ * - Fallback redaction for inherited host `HELM_TOKEN`: `runShell` can be invoked without the caller
+ *   registering it in `deps.redact`, so any host token is captured and explicitly redacted across returned text.
+ * - Fails explicitly with `output_limit_exceeded` when output exceeds `maxOutputBytes` (never silently truncates).
  */
 import { BACKGROUND_CONTEXT, withAbortSignal, type Context } from '@earendil-works/chord/context'
 import type { JsonValue } from '@earendil-works/chord/json'
@@ -31,13 +31,12 @@ import { remoteShellGuardText, shellEnvFabricMissingText } from './guards.js'
 import { buildToolEnv } from './managed-env.js'
 
 const DEFAULT_TIMEOUT_MS = 120_000
-/** timeoutMs cap: and default value same amount level, guard against over large value change each other unbounded wait for. */
+/** Maximum `timeoutMs`: bounded proportionally to default to prevent unbounded waits. */
 export const MAX_TIMEOUT_MS = 600_000
-/** bash output aggregate cap (UTF-8 byte): exceeds explicit failed, never static default truncate when succeeded. */
+/** `bash` output aggregation cap (UTF-8 bytes): exceeding fails explicitly rather than truncating silently. */
 export const MAX_OUTPUT_BYTES = 1024 * 1024
-/** streaming pattern (onOutputChunk) aggregate pre- compute: one by one chunk push do not subject to affect (one by one chunk output is streaming
- *  client deliver thing),Hub side only terminal state diagnose aggregate; over limit same explicit
- *  output_limit_exceeded(old 64MiB all text duplicate is memory leak leak, see audit). */
+/** Streaming mode (`onOutputChunk`) aggregation budget: per-chunk streaming reaches the client directly, while Hub
+ * keeps only terminal diagnostics; overflows fail explicitly with `output_limit_exceeded` (avoiding 64 MiB duplication leaks). */
 export const STREAM_AGGREGATE_LIMIT_BYTES = 256 * 1024
 
 export interface ShellRunResult {
@@ -46,30 +45,30 @@ export interface ShellRunResult {
   output: string
   timedOut: boolean
   signal: string | null
-  /** actual execute node (explicit/conversation bind set parse result; supply bash structure output back visible, do not protocol response). */
+  /** Actual execution node (resolved from explicit arg/conversation binding; echoed in bash structured output, outside protocol response). */
   nodeId?: string
-  /** actual start work directory (normalizePathForTarget specification after;win32 view already convert). */
+  /** Actual starting working directory (post-`normalizePathForTarget`, with win32 paths converted). */
   cwd?: string
 }
 
-/** timeoutMs validate: correct finite integer and ≤ cap; illegal explicit throws (not silently change by default). */
+/** Validate `timeoutMs`: positive finite integer <= cap; fails loudly without silent coercion. */
 function assertTimeoutMs(timeoutMs: number): void {
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMEOUT_MS) {
     throw new Error(
-      `invalid_timeout: timeoutMs must be (0, ${MAX_TIMEOUT_MS}] integer, receives ${timeoutMs}`,
+      `invalid_timeout: timeoutMs must be an integer in (0, ${MAX_TIMEOUT_MS}], received ${timeoutMs}`,
     )
   }
 }
 
-/** external AbortSignal hang to SDK Context(pre- aborted when exec directly reject spawn). */
+/** Attach an external `AbortSignal` to SDK `Context` (pre-aborted contexts refuse spawning immediately). */
 function contextWithSignal(signal: AbortSignal | undefined): Context {
   return signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(signal, BACKGROUND_CONTEXT)
 }
 
 /**
- * real shell execute (runGate and bash tool shared use). delegate SDK NodeExecutionEnv:
- * process group spawn, timeout/abort kill group, one by one stream incremental UTF-8 decode, reach order aggregate.
- * forever do not fabricate succeeded; over limit explicit output_limit_exceeded.
+ * Real shell execution (shared by `runGate` and `bash` tool). Delegates to SDK `NodeExecutionEnv`:
+ * process-group spawning, timeout/abort group termination, per-stream incremental UTF-8 decoding, arrival-order
+ * aggregation. Never fabricates success; exceeds limits -> `output_limit_exceeded`.
  */
 export async function runShell(
   deps: HelmToolDeps,
@@ -77,19 +76,19 @@ export async function runShell(
   options: {
     cwd?: string
     conversationId?: number
-    /** target compute node (default via conversation bind set parse, again default 'local'). */
+    /** Target compute node (falls back to conversation binding, then `'local'`). */
     nodeId?: string
     timeoutMs?: number
     signal?: AbortSignal
     maxOutputBytes?: number
     /**
-     * one by one chunk streaming call back (stdout/stderr by reach order; aggregate cap still takes effect):
-     * POST /api/env/exec  NDJSON streaming pattern use, does not affect aggregate redaction semantics.
+     * Per-chunk streaming callback (`stdout`/`stderr` in arrival order; aggregation budget still applies):
+     * used by `POST /api/env/exec` NDJSON streaming without altering aggregate redaction semantics.
      */
     onOutputChunk?: (chunk: { stream: 'stdout' | 'stderr'; text: string }) => void
     /**
-     * caller inject environment (such as herdr plugin Profile.runtime.env + manage environment):
-     * override process.env same name items, but managed variable (HELM_* and managed token) still fixed override.
+     * Caller-injected environment (e.g. Herdr plugin `Profile.runtime.env` + managed env): overrides matching
+     * keys from `process.env`, while managed variables (`HELM_*` and managed tokens) remain pinned.
      */
     env?: Record<string, string>
   } = {},
@@ -98,22 +97,20 @@ export async function runShell(
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   assertTimeoutMs(timeoutMs)
   const maxOutputBytes = options.maxOutputBytes ?? MAX_OUTPUT_BYTES
-  // node parse: explicit nodeId > conversation bind set (nodeIdOf) > 'local'.
+  // Node resolution: explicit `nodeId` > conversation binding (`nodeIdOf`) > `'local'`.
   const explicitNodeId = options.nodeId ?? (options.conversationId !== undefined ? deps.nodeIdOf?.(options.conversationId) : undefined)
   const nodeId = explicitNodeId ?? 'local'
-  // host inherit HELM_TOKEN fall back redaction:runShell is public API, caller (such as test)
-  // may not it register enter deps.redact- - self row catch and for everything return text precise replace
-  //(and produce Runtime  addRedaction same effect; do not print secret itself).
+  // Fallback redaction for inherited host `HELM_TOKEN`: `runShell` is a public API whose callers (e.g. tests)
+  // might not register `HELM_TOKEN` in `deps.redact`, so capture and redact it explicitly here as well.
   const hostToken = process.env['HELM_TOKEN']
   const redactAll = (text: string): string => {
     const base = deps.redact(text)
     return hostToken !== undefined && hostToken !== '' ? base.split(hostToken).join('[REDACTED]') : base
   }
-  // target platform aware cwd specification (unique entry normalizePathForTarget, re- use
-  // protocol original language):local use Hub host platform, remote only use EnvFabric register register
-  // platform (unknown then original pass-through, do not guess, do not fallback local);win32 target on WSL /
-  // Git Bash  POSIX view convert is specification Windows path, cannot mapping bare POSIX 
-  // explicit invalid_path(keep original path).
+  // Target-platform-aware cwd normalization (sole entry `normalizePathForTarget` reusing `@helm/protocol`):
+  // `local` uses Hub platform, remote uses only registered platform in `EnvFabric` (passes through verbatim
+  // when unknown without guessing or falling back locally); converts WSL/Git Bash POSIX views to canonical Windows
+  // paths on `win32` targets, rejecting unmappable bare POSIX roots explicitly with `invalid_path`.
   const platformInfo = targetPlatformForNode(deps.envFabric, nodeId)
   const cwdNorm = normalizePathForTarget(requestedCwd, platformInfo)
   if (!cwdNorm.ok) {
@@ -126,20 +123,19 @@ export async function runShell(
     }
   }
   const cwd = cwdNorm.path
-  // execute fact back visible (bash structure output use): parse out real node and specification start directory;
-  // only store in at internal ShellRunResult, does not enter HTTP EnvExecResponse protocol.
+  // Echo execution facts (`nodeId` + normalized starting `cwd`) into bash structured output; internal only,
+  // excluded from the HTTP `EnvExecResponse` protocol payload.
   const withTarget = (r: ShellRunResult): ShellRunResult => ({ ...r, nodeId, cwd })
-  // remote node: via EnvFabric  RemoteExecutionEnv execute (never fall back local);
-  // config missing (envFabric not inject) and node offline respectively explicit failed, never fallthrough local.
+  // Remote nodes run via `EnvFabric` `RemoteExecutionEnv` (never fall back locally);
+  // missing `envFabric` and offline nodes fail explicitly with distinct errors.
   if (nodeId !== 'local') {
     const guardOutput = remoteShellGuardText(deps.envFabric, nodeId)
     if (guardOutput !== undefined) {
       return withTarget({ ok: false, exitCode: null, output: guardOutput, timedOut: false, signal: null })
     }
   }
-  // remote node: must via EnvFabric(without fabric when explicit failed, never fall back local);
-  // local produce same takes precedence via fabric  ScopedExecutionEnv(unify env together into right threat;
-  // test not inject fabric when local allows short lifecycle direct create - - only this fall back, do not involve remote).
+  // Remote nodes require `EnvFabric`; local production also prefers `fabric` `ScopedExecutionEnv` (single source of
+  // truth for env assembly), falling back to ephemeral local execution only in tests without `envFabric`.
   let shell: ExecutionEnv
   let shellEnv: Record<string, string> | undefined = options.env
   let shellInheritEnv: boolean | undefined
@@ -149,18 +145,15 @@ export async function runShell(
       cwd,
       ...(options.conversationId === undefined ? {} : { conversationId: options.conversationId }),
     })
-    // one by one invoke inject env(such as herdr plugin Profile.runtime.env): managed bind set key
-    // still by ScopedExecutionEnv  composer fixed override (see scoped-env.ts);
-    // inheritEnv keep default:local by Scoped together into complete env(copy host PATH/HOME
-    // base bottom, strip except managed HELM_*, managed override) after for base explicit inheritEnv:false
-    //(SDK must not already strip except host HELM_* re- carries back); remote default inheritEnv let
-    // node daemon merge node host base bottom (node real PATH/HOME tool chain) and strip except node
-    // host HELM_TOKEN, managed together into finally override; never together into by default PATH override node tool chain.
+    // Per-call env injection (e.g. `Profile.runtime.env`): managed keys remain pinned by `ScopedExecutionEnv`'s
+    // composer (see `scoped-env.ts`). Uses default `inheritEnv` semantics: locally `Scoped` constructs the full
+    // env (host PATH/HOME minus `HELM_*`, plus managed overrides) with explicit `inheritEnv: false` so SDK doesn't
+    // re-inject stripped host `HELM_*`; remotely default `inheritEnv` lets the node daemon merge its native
+    // PATH/HOME while stripping node host `HELM_TOKEN` and applying managed overrides last (never clobbering remote toolchains).
   } else if (nodeId === 'local') {
     shell = createLocalExecutionEnv({ cwd })
-    // without fabric fall back (test use): still away since has managed together into policy (host base bottom + managed
-    // fixed override + cliBinDir PATH pre-), self carries complete env and explicit inheritEnv:false
-    // (SDK second inherit will already strip except host HELM_TOKEN re- carries back).
+    // Fabric-less local fallback (tests): applies the same managed policy (`process.env` + pinned overrides +
+    // `cliBinDir` on PATH) with explicit `inheritEnv: false` so SDK won't re-inherit stripped host `HELM_TOKEN`.
     shellEnv = buildToolEnv(deps, cwd, options.conversationId, options.env, nodeId)
     shellInheritEnv = false
   } else {
@@ -172,11 +165,10 @@ export async function runShell(
       signal: null,
     })
   }
-  // reach order aggregate (stdout/stderr mix arrange by real reach order, non- first stdout after stderr).
-  // secret redaction in aggregate all text on do: across chunk tear secret in complete concatenate after must however complete match.
-  // streaming pattern (onOutputChunk leap) aggregate pre- compute more small: over limit explicit failed
-  // output_limit_exceeded(never truncate when succeeded) - - streaming client already receives all one by one chunk
-  // output, terminal state output only act diagnose, over limit i.e. abandon aggregate and such as errors.
+  // Arrival-order aggregation (stdout/stderr interleaved by arrival order, never stdout-then-stderr).
+  // Redact across complete concatenated output so secrets split across chunks still match completely.
+  // Streaming mode (`onOutputChunk`) uses a smaller aggregation budget and fails explicitly with `output_limit_exceeded`
+  // on overflow (streaming clients already received all chunks; terminal output is purely diagnostic).
   const aggregateLimit = options.onOutputChunk !== undefined ? STREAM_AGGREGATE_LIMIT_BYTES : maxOutputBytes
   let combined = ''
   let outputBytes = 0
@@ -189,13 +181,12 @@ export async function runShell(
       ...(shellInheritEnv === undefined ? {} : { inheritEnv: shellInheritEnv }),
       timeout: timeoutMs / 1000,
       onOutput: (text, _ctx, info) => {
-        // streaming one by one chunk call back do not subject to aggregate over limit affect (one by one chunk output is streaming client deliver thing;
-        // over limit only abandon Hub side terminal state diagnose aggregate, never interrupt push).
+        // Streaming chunk delivery runs unaffected by hub-side terminal diagnostic aggregation overflow.
         if (options.onOutputChunk !== undefined) {
           try {
             options.onOutputChunk({ stream: info.stream, text })
           } catch {
-            // streaming call back fault does not affect aggregate.
+            // Streaming callback errors do not halt aggregation.
           }
         }
         if (exceeded) return
@@ -211,7 +202,7 @@ export async function runShell(
     contextWithSignal(options.signal),
   )
   if (!result.ok) {
-    // remote disconnection: command already start, result unknown - -error.code is unknown, never retry.
+    // Remote disconnect: command already started and outcome is unknown (`error.code === 'unknown'`); never retry.
     if (result.error.code === 'unknown') {
       return withTarget({
         ok: false,
@@ -226,14 +217,14 @@ export async function runShell(
     const limit = options.onOutputChunk !== undefined ? aggregateLimit : maxOutputBytes
     const streamNote =
       options.onOutputChunk !== undefined
-        ? '(streaming pattern: one by one chunk output already all push, this where only terminal state diagnose aggregate over limit)'
+        ? ' (streaming mode: all chunks were already pushed; only terminal diagnostic aggregation exceeded the cap)'
         : ''
     return withTarget({
       ok: false,
       exitCode: null,
       output: redactAll(
-        `output_limit_exceeded: output exceeds ${limit} byte aggregate cap, already abandon aggregate.${streamNote}` +
-          'please heavy set to to file after use read page read, or narrow command output.',
+        `output_limit_exceeded: output exceeded ${limit}-byte aggregation cap and aggregation was aborted.${streamNote} ` +
+          'Redirect output to a file and read it paginated with read_artifact/read, or narrow the command output.',
       ),
       timedOut: false,
       signal: null,
@@ -264,12 +255,12 @@ export async function runShell(
 }
 
 /**
- * gate gate command execute (independent subagent and Workflow adapter shared use, guarantee only execute once).
- * env make local machine Gate and actual Herdr task environment consistent (plugin pass Profile.runtime.env and
- * manage environment group into spawnEnv, the same CI/tool PATH); managed variable still fixed override.
- * timeoutMs optional (default 120_000): single time gate timeout; timeout by runShell terminate the whole
- * process group (SIGTERM -> SIGKILL) and such as through out underlying result (timedOut=true,exitCode=null).
- * failed forever do not return succeeded; output redaction.
+ * Gate verification command runner (shared by standalone subagents and Workflow adapters; guaranteed single execution).
+ * `env` keeps local Gate consistent with real Herdr task environments (plugins pass `Profile.runtime.env` +
+ * managed env via `spawnEnv`, sharing the same CI/tool PATH); managed variables stay pinned.
+ * Optional `timeoutMs` (default `120_000`) bounds each gate run; `runShell` kills the entire process group
+ * (`SIGTERM` -> `SIGKILL`) on timeout and surfaces `{ timedOut: true, exitCode: null }`.
+ * Failures never report success; outputs are redacted.
  */
 export async function runGate(
   deps: HelmToolDeps,
@@ -278,7 +269,7 @@ export async function runGate(
     cwd?: string
     conversationId?: number
     nodeId?: string
-    /** single time gate timeout milli second count (default 120_000;(0, 600_000] integer by runShell validate). */
+    /** Per-run gate timeout in ms (default `120_000`; integer in `(0, 600_000]` validated by `runShell`). */
     timeoutMs?: number
     signal?: AbortSignal
     env?: Record<string, string>
@@ -292,22 +283,23 @@ export async function runGate(
 }
 
 const bashParameters = obj({
-  command: str({ description: 'want execute shell command' }),
+  command: str({ description: 'Shell command to execute' }),
   timeoutMs: opt(
     int({
       minimum: 1,
       maximum: MAX_TIMEOUT_MS,
-      description: `optional timeout milli second count (by default ${DEFAULT_TIMEOUT_MS}, cap ${MAX_TIMEOUT_MS})`,
+      description: `Optional timeout in milliseconds (default ${DEFAULT_TIMEOUT_MS}, max ${MAX_TIMEOUT_MS})`,
     }),
   ),
 })
 
-/** bash tool (SDK defineTool; output over threshold via services spill). */
+/** `bash` tool (SDK `defineTool`; oversized outputs spill to artifacts via services). */
 export function createBashTool(deps: HelmToolDeps): ToolRegistration<typeof bashParameters> {
   return defineTool({
     name: 'bash',
     description:
-      'in conversation bind set node shell in execute command (local is Hub local machine; remote node in target node execute). work directory is conversation cwd; timeout by default 120 second; output over 32KiB automatically spill is artifact and return preview (use read_artifact read all text); output over 1MiB explicit failed.',
+      'Execute a shell command on the conversation\'s bound node (local runs on Hub; remote runs on the target node). ' +
+      'Working directory is the conversation cwd; default timeout 120s; outputs over 32 KiB spill automatically to an artifact with a preview (use read_artifact to read completely); outputs over 1 MiB fail explicitly.',
     parameters: bashParameters,
     structuredOutputSchema: {
       type: 'object',
@@ -316,8 +308,8 @@ export function createBashTool(deps: HelmToolDeps): ToolRegistration<typeof bash
         exitCode: { type: ['number', 'null'] },
         output: { type: 'string' },
         timedOut: { type: 'boolean' },
-        nodeId: { type: 'string', description: 'actual execute node (conversation bind set parse result)' },
-        cwd: { type: 'string', description: 'actual start work directory (target platform specification after, non- original reference)' },
+        nodeId: { type: 'string', description: 'Actual execution node (resolved from conversation binding)' },
+        cwd: { type: 'string', description: 'Actual starting working directory (normalized per target platform; not raw input)' },
       },
       required: ['ok', 'output'],
     },
@@ -333,22 +325,22 @@ export function createBashTool(deps: HelmToolDeps): ToolRegistration<typeof bash
           signal: context.abortSignal,
         })
       } catch (error) {
-        // invalid_timeout etc. parameter level error: explicit failed, never static default change by default (already abort then on throw).
+        // Argument errors such as `invalid_timeout` fail explicitly without silent defaulting (rethrows if already aborted).
         throwIfToolAborted(context.abortSignal)
         return {
           output: [{ type: 'text', text: deps.redact(String(error)) }],
           isError: true,
         }
       }
-      // closure stop/cancel window forbidden in disk write without intent meaning spill artifact file.
+      // Do not write meaningless spill artifact files during shutdown/cancellation windows.
       throwIfToolAborted(context.abortSignal)
       const spill = await deps.artifacts.spill(
         api.conversationId as number,
         api.callId,
         result.output,
       )
-      // structure back visible actual execute fact (nodeId + specification start cwd); text stdout original
-      // do not motion, never from external succeeded text guess file location.
+      // Structured echo of real execution facts (`nodeId` + normalized starting `cwd`); raw stdout stays verbatim
+      // so callers never have to guess paths from exit text.
       const structured = redactJsonValue(
         {
           ok: result.ok,
@@ -360,8 +352,8 @@ export function createBashTool(deps: HelmToolDeps): ToolRegistration<typeof bash
         },
         (t) => deps.redact(t),
       )
-      // details is persist UI channel (structuredOutput do not written to the database); no longer carry output- -
-      // text channel already has the same content, avoid each bash result double write spill pre- compute inside all text.
+      // `details` is persisted to the UI channel (`structuredOutput` is unpersisted): omit `output` since text channel
+      // already holds `spill.text`, avoiding persisting oversized outputs twice.
       const { output: _uiDropped, ...uiFacts } = structured as Record<string, JsonValue>
       return {
         output: [{ type: 'text', text: spill.text }],

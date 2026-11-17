@@ -1,38 +1,36 @@
 /**
- * target node platform aware path specification (kernel execute chain unique entry).
+ * Target-node platform-aware path normalization (single entrypoint for the kernel execution chain).
  *
- * platform source discipline (honest hard rule):
- * - local by default Hub host process.platform(same process, no need to query), test can inject
- *   Hub platform fact;
- * - remote only take NodeRegistry register register platform (EnvFabric.nodePlatformOf most small
- *   only read port); node offline or daemon not on report platform when platform unknown - - never guess,
- *   never fallback Hub host platform, never access probe choose path;
- * - platform unknown when path keep original (along use since has by shape term method parse semantics),Linux/macOS
- *   and remote POSIX semantics do not change (remote POSIX node never by mistakenly judge into Windows).
+ * Platform source discipline (honesty invariant):
+ * - Local defaults to Hub host `process.platform` (in-process, no query needed; injectable in tests);
+ * - Remote nodes use only the registered platform reported to NodeRegistry (minimal read-only EnvFabric.nodePlatformOf
+ *   port); when a node is offline or didn't report a platform, it stays unknown—never guessed, never falls back to
+ *   Hub host platform, and never probes paths remotely;
+ * - When platform is unknown, paths stay untouched (preserving shape-based syntax parsing), leaving Linux/macOS and
+ *   remote POSIX behavior intact (remote POSIX nodes are never misclassified as Windows).
  *
- * this module do not duplicate path regex: shape decide, term method rule and win32 target on determinism view
- * convert (/mnt/<symbol>,/<symbol>,//server/share) all re- use @helm/protocol 
- * normalizeTargetPath / targetPlatformOf original language; business entry (runShell /
- * resolveExecTarget / read/write/edit) one rule via this module, must not each another write rule.
+ * Avoids duplicating path regexes: delegates syntax checks, formatting, and deterministic win32 view conversion
+ * (`/mnt/<drive>`, `/<drive>`, `//server/share`) to `@helm/protocol` primitives `normalizeTargetPath` / `targetPlatformOf`.
+ * All execution entries (`runShell`, `resolveExecTarget`, `read`/`write`/`edit`) route through here with zero ad-hoc rules.
  */
 import { normalizeTargetPath, targetPlatformOf, type TargetPlatform } from '@helm/protocol'
 
-/** platform read most small port (EnvFabric  Hub/node platform fact shape; test can inject replace body). */
+/** Minimal platform lookup port (implemented by EnvFabric from Hub/node platform facts; stubbed in tests). */
 export interface NodePlatformSource {
-  /** remote node platform fact (NodeRegistry on report);local do not from this port guess. */
+  /** Reported remote node platform (from NodeRegistry); local does not read this port. */
   nodePlatformOf?(nodeId: string): string | undefined
-  /** Hub local machine platform fact; test can inject, produce default fall back process.platform. */
+  /** Hub local platform override for tests; defaults to `process.platform` in production. */
   hubPlatform?(): string | undefined
 }
 
-/** target platform parse result:known carry platform semantics and original on report value;unknown carry explicit reason. */
+/** Platform lookup result: known carries parsed TargetPlatform + raw string; unknown carries explicit reason. */
 export type TargetPlatformInfo =
   | { known: true; platform: TargetPlatform; reported: string }
   | { known: false; reason: string }
 
 /**
- * parse target node platform:local constant process.platform; remote only take register register value
- * (not on report / offline / port missing → unknown, never guess, never fallback Hub host).
+ * Resolve target node platform: local always uses process.platform; remote uses only reported registration metadata
+ * (unreported / offline / missing port -> unknown; never guesses and never falls back to Hub host).
  */
 export function targetPlatformForNode(
   source: NodePlatformSource | undefined,
@@ -46,23 +44,23 @@ export function targetPlatformForNode(
   if (reported === undefined || reported === '') {
     return {
       known: false,
-      reason: `node ${nodeId} platform information unknown (offline or daemon not on report), do not guess platform, does not fall back Hub host platform`,
+      reason: `node ${nodeId} platform is unknown (offline or not reported by daemon); refusing to guess or fall back to Hub host platform`,
     }
   }
   return { known: true, platform: targetPlatformOf(reported), reported }
 }
 
-/** platform aware path specification result: succeeded carry canonical path; failed keep original path (original). */
+/** Platform-aware path normalization result: success yields canonical path; failure preserves original path. */
 export type TargetPathNormalization =
   | { ok: true; path: string; platform: TargetPlatform | undefined; view: string }
   | { ok: false; code: 'invalid_path'; original: string; reason: string }
 
 /**
- * by target platform specification path (cwd / absolute path unify entry):
- * - platform unknown: path original return (do not guess platform,view 'unknown-platform');
- * - platform known:normalizeTargetPath determinism specification - -win32 target on WSL /
- *   Git Bash  POSIX view convert is specification Windows path, cannot mapping bare POSIX
- *   explicit failed and keep original path;posix target only term method archive one (semantics do not change).
+ * Normalize path for target platform (unified entrypoint for cwd / absolute paths):
+ * - Unknown platform: return path untouched (`view: 'unknown-platform'`);
+ * - Known platform: normalizeTargetPath handles deterministic resolution—on win32 targets, converts WSL / Git Bash
+ *   POSIX views to canonical Windows paths, fails explicitly on unmappable bare POSIX paths (keeping original path),
+ *   and normalizes syntax on POSIX targets without changing semantics.
  */
 export function normalizePathForTarget(path: string, info: TargetPlatformInfo): TargetPathNormalization {
   if (!info.known) return { ok: true, path, platform: undefined, view: 'unknown-platform' }
@@ -71,7 +69,7 @@ export function normalizePathForTarget(path: string, info: TargetPlatformInfo): 
   return { ok: false, code: 'invalid_path', original: path, reason: result.reason }
 }
 
-/** invalid_path failed unify can read information (protocol reason already contains original path; each entry must not another piece together). */
+/** Format invalid_path failure consistently (protocol reason already includes original path; callers need not append it). */
 export function invalidPathText(failure: Extract<TargetPathNormalization, { ok: false }>): string {
   return `invalid_path: ${failure.reason}`
 }

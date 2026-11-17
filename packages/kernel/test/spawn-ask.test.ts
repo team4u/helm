@@ -1,16 +1,16 @@
 /**
- * original generate spawn and Ask contract test: real pi-durable SDK(MemoryStorage)+ faux provider.
+ * Native spawn and Ask contract tests: real pi-durable SDK (MemoryStorage) + faux provider.
  *
- * override main proxy locate violate about point:
- * - schema:AJV all amount (enum/nested/many type/ additionalProperties),$async reject,
- *   null/mark amount legal top-level, across row object,StructuredOutput tool self-heal, two time failed explicit errors;
- * - abort: before creation reject, run in conversation.abort, without legacy task;
- * - resume: error ref never creates new, parent ownership validate,agentId mapping,onResolved on report original id;
- * - profile: invalid profile errors,herdr runtime explicit unsupported,effort illegal reject;
- * - gate:cwd use sub-conversation actual cwd;
- * - Ask:CAS conflict 409 / without resolver ask_state_unavailable / seq fall back superseded /
- *   cancel/superseded reject(non-empty answers)/ unknown field / select out of bounds / confirm illegal /
- *   secret name collision reject / empty secret do not stash / missing conversation reject.
+ * Covers main-agent reproduction cases:
+ * - schema: full AJV validation (enum / nested / multiple types / additionalProperties), $async rejection,
+ *   null/scalar legal top-levels, multiline object extraction, StructuredOutput tool self-healing, explicit failure after two retries;
+ * - abort: pre-creation rejection, in-flight conversation.abort, zero orphaned tasks;
+ * - resume: invalid ref never spawns anew, parent ownership validation, agentId mapping, onResolved reporting original ID;
+ * - profile: missing profile error, herdr runtime explicitly unsupported, invalid effort rejection;
+ * - gate: cwd uses child conversation's actual cwd;
+ * - Ask: CAS conflict 409 / missing resolver ask_state_unavailable / seq rollback superseded /
+ *   cancel/superseded rejection (with non-empty answers) / unknown fields / out-of-bounds select / invalid confirm /
+ *   secret name collision rejection / empty secret not stashed / missing conversation rejection.
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
@@ -38,9 +38,9 @@ interface TestHarness {
 }
 
 /**
- * real SDK Harness(MemoryStorage)+ faux provider + complete NativeSpawnDeps stub.
- * registerChildConversation / resolveProfile / getParentOfConversation use process inside
- * Map simulated host (real implement by runtime.ts combine, this where test spawn itself contract).
+ * Real SDK Harness (MemoryStorage) + faux provider + full NativeSpawnDeps fixture.
+ * registerChildConversation / resolveProfile / getParentOfConversation use in-process Maps
+ * to simulate the host (wired by runtime.ts in production; tests spawn's own contract here).
  */
 async function openSpawnHarness(options: { profiles?: Record<string, { model?: string; cwd?: string; runtime?: { kind: string; agent: string } }> } = {}): Promise<TestHarness> {
   const { models, faux } = makeFauxModels()
@@ -57,7 +57,7 @@ async function openSpawnHarness(options: { profiles?: Record<string, { model?: s
   const profiles = new Map<string, { model?: string; cwd?: string; runtime?: { kind: string; agent: string } }>(
     Object.entries(options.profiles ?? { assistant: {} }),
   )
-  // sub-conversation mirror (and produce HelmStore same semantics most small implement:profileId/cwd/model).
+  // Child conversation mirror (minimal replica of HelmStore production semantics: profileId/cwd/model).
   const mirrors = new Map<
     number,
     { profileId: string; cwd: string; model: string; modelOverride?: string; title: string; tags: string[]; createdAt: number }
@@ -87,7 +87,7 @@ async function openSpawnHarness(options: { profiles?: Record<string, { model?: s
       })
       const conv = await harness.conversation(childId as never, BACKGROUND_CONTEXT)
       if (!conv) return
-      // sync observer: and produce tracker same mechanism (advance inside only record, without await).
+      // Synchronous observer: mirrors production tracker mechanism (advance records synchronously without await).
       const observer = {
         advance: (call: { kind: string; value: { entries: Array<{ kind: string; id: number; model?: ReadonlyArray<{ content?: ReadonlyArray<{ type: string; text?: string }> }> }> } }) => {
           if (call.kind !== 'value') return
@@ -140,7 +140,7 @@ async function openSpawnHarness(options: { profiles?: Record<string, { model?: s
     },
     updateConversation: async (childId, patch) => {
       const m = mirrors.get(childId)
-      if (!m) throw new HelmError('not_found', `conversation missing:${childId}`, 404)
+      if (!m) throw new HelmError('not_found', `conversation not found: ${childId}`, 404)
       if (patch.cwd !== undefined) m.cwd = patch.cwd
       if (patch.profileId !== undefined) m.profileId = patch.profileId
       if (patch.model !== undefined) m.modelOverride = patch.model
@@ -150,9 +150,9 @@ async function openSpawnHarness(options: { profiles?: Record<string, { model?: s
       } else {
         m.model = m.modelOverride
       }
-      // and produce same order: real SDK configure first row, mirror after write.
+      // Same ordering as production: configure real SDK first, then update mirror.
       const conv = await harness.conversation(childId as never, BACKGROUND_CONTEXT)
-      if (!conv) throw new HelmError('not_found', `sub-conversation missing:${childId}`, 404)
+      if (!conv) throw new HelmError('not_found', `child conversation not found: ${childId}`, 404)
       const slash = m.model.indexOf('/')
       await conv.configure(
         {
@@ -193,22 +193,22 @@ after(async () => {
 })
 
 // ---------------------------------------------------------------------------
-// spawn:schema validate
+// spawn: schema validation
 // ---------------------------------------------------------------------------
 
-describe('spawn schema:AJV all amount validate', { timeout: 60_000 }, () => {
-  it('enum / nested / additionalProperties violate about all reject (no longer only inspect one layer)', { timeout: 60_000 }, async () => {
+describe('spawn schema: full AJV validation', { timeout: 60_000 }, () => {
+  it('enum / nested / additionalProperties violations all reject (not limited to top-level check)', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
-      // one round:enum violate about + illegal embed set -> tool reject -> second round tool to out legal value.
+      // Round 1: enum violation + extra property -> tool rejects -> round 2 would return valid value.
       th.faux.setResponses([
-        fauxAssistantMessage('I first output a illegal'),
-        fauxAssistantMessage('well'),
+        fauxAssistantMessage('invalid output first'),
+        fauxAssistantMessage('ok'),
       ])
-      // do not via tool, directly text choose also must by all amount validate intercept:
+      // Direct text extraction (without tool call) must also be caught by full schema validation:
       const bad = await runNativeSpawn(th.deps, {
         parentConversationId: 1,
-        prompt: 'return enumeration',
+        prompt: 'return enum',
         schema: {
           type: 'object',
           properties: { level: { type: 'string', enum: ['low', 'high'] } },
@@ -216,7 +216,7 @@ describe('spawn schema:AJV all amount validate', { timeout: 60_000 }, () => {
           additionalProperties: false,
         },
       } as never).then(
-        () => assert.fail('enum violate about must failed'),
+        () => assert.fail('enum violation must fail'),
         (err: unknown) => err as HelmError,
       )
       assert.equal(bad.code, 'schema_validation_failed')
@@ -225,11 +225,11 @@ describe('spawn schema:AJV all amount validate', { timeout: 60_000 }, () => {
     }
   })
 
-  it('null top-level legal:valid null and undefined zone', { timeout: 60_000 }, async () => {
+  it('null top-level allowed: distinguishes valid null from undefined', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       th.faux.setResponses([
-        // model first invoke tool commit null(schema allows null top-level).
+        // Model invokes tool to submit null (schema permits null top-level).
         fauxAssistantMessage(
           [fauxToolCall('register_structured_output', { output: null })],
           { stopReason: 'toolUse' },
@@ -238,7 +238,7 @@ describe('spawn schema:AJV all amount validate', { timeout: 60_000 }, () => {
       ])
       const result = await runNativeSpawn(th.deps, {
         parentConversationId: 1,
-        prompt: 'may without result',
+        prompt: 'may have no result',
         schema: { type: 'null' },
       } as never)
       assert.equal(result, null)
@@ -247,12 +247,12 @@ describe('spawn schema:AJV all amount validate', { timeout: 60_000 }, () => {
     }
   })
 
-  it('across row object text choose (without tool invoke) via all amount validate via', { timeout: 60_000 }, async () => {
+  it('multiline object text extraction (without tool call) passes full schema validation', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       th.faux.setResponses([
-        fauxAssistantMessage('result below:\n{"answer":\n  42,\n "ok": true}'),
-        fauxAssistantMessage('again come once'),
+        fauxAssistantMessage('result follows:\n{"answer":\n  42,\n "ok": true}'),
+        fauxAssistantMessage('one more time'),
       ])
       const result = await runNativeSpawn(th.deps, {
         parentConversationId: 1,
@@ -269,7 +269,7 @@ describe('spawn schema:AJV all amount validate', { timeout: 60_000 }, () => {
     }
   })
 
-  it('$async schema explicit reject', { timeout: 60_000 }, async () => {
+  it('$async schema explicitly rejected', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       await assert.rejects(
@@ -286,11 +286,11 @@ describe('spawn schema:AJV all amount validate', { timeout: 60_000 }, () => {
     }
   })
 
-  it('StructuredOutput tool: error parameter by refuse, same turn retry, eventually via tool return', { timeout: 60_000 }, async () => {
+  it('StructuredOutput tool: invalid args rejected, retried in same turn, succeeds via tool return', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       th.faux.setResponses([
-        // one turn: model first to error enum, tool reject (isError result), same turn retry to for.
+        // Single turn: model passes invalid enum first, tool rejects (isError), retries with valid value in same turn.
         fauxAssistantMessage(
           [fauxToolCall('register_structured_output', { output: { level: 'bogus' } })],
           { stopReason: 'toolUse' },
@@ -298,7 +298,7 @@ describe('spawn schema:AJV all amount validate', { timeout: 60_000 }, () => {
         fauxAssistantMessage([fauxToolCall('register_structured_output', { output: { level: 'high' } })], {
           stopReason: 'toolUse',
         }),
-        fauxAssistantMessage('complete'),
+        fauxAssistantMessage('done'),
       ])
       const result = await runNativeSpawn(th.deps, {
         parentConversationId: 1,
@@ -316,16 +316,16 @@ describe('spawn schema:AJV all amount validate', { timeout: 60_000 }, () => {
     }
   })
 
-  it('StructuredOutput tool: support string form JSON guard against defend parse is object and succeeded validate', { timeout: 60_000 }, async () => {
+  it('StructuredOutput tool: defensively parses stringified JSON into object and validates cleanly', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       th.faux.setResponses([
-        // model because not declaration type structure result encode is JSON string pass
+        // Model encodes structured payload as JSON string because tool declaration omitted type metadata
         fauxAssistantMessage(
           [
             fauxToolCall('register_structured_output', {
               output: JSON.stringify({
-                difficulty: 'in etc.',
+                difficulty: 'medium',
                 intent: 'test intent',
                 question: 'test question',
               }),
@@ -333,15 +333,15 @@ describe('spawn schema:AJV all amount validate', { timeout: 60_000 }, () => {
           ],
           { stopReason: 'toolUse' },
         ),
-        fauxAssistantMessage('completed out subject'),
+        fauxAssistantMessage('generated question'),
       ])
       const result = await runNativeSpawn(th.deps, {
         parentConversationId: 1,
-        prompt: 'out subject',
+        prompt: 'generate question',
         schema: {
           type: 'object',
           properties: {
-            difficulty: { type: 'string', enum: ['easy', 'in etc.', 'difficulty'] },
+            difficulty: { type: 'string', enum: ['easy', 'medium', 'hard'] },
             intent: { type: 'string' },
             question: { type: 'string' },
           },
@@ -350,7 +350,7 @@ describe('spawn schema:AJV all amount validate', { timeout: 60_000 }, () => {
         },
       } as never)
       assert.deepEqual(result, {
-        difficulty: 'in etc.',
+        difficulty: 'medium',
         intent: 'test intent',
         question: 'test question',
       })
@@ -359,19 +359,19 @@ describe('spawn schema:AJV all amount validate', { timeout: 60_000 }, () => {
     }
   })
 
-  it('two time all failed explicit schema_validation_failed(contains conversation diagnose)', { timeout: 60_000 }, async () => {
+  it('failing both attempts throws schema_validation_failed explicitly (with conversation diagnostics)', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       th.faux.setResponses([
-        fauxAssistantMessage('I will not JSON'),
-        fauxAssistantMessage('still will not'),
+        fauxAssistantMessage('not JSON'),
+        fauxAssistantMessage('still not JSON'),
       ])
       const err = await runNativeSpawn(th.deps, {
         parentConversationId: 1,
         prompt: 'return JSON',
         schema: { type: 'object', properties: { a: { type: 'number' } }, required: ['a'] },
       } as never).then(
-        () => assert.fail('must failed'),
+        () => assert.fail('must fail'),
         (e: unknown) => e as HelmError,
       )
       assert.equal(err.code, 'schema_validation_failed')
@@ -383,11 +383,11 @@ describe('spawn schema:AJV all amount validate', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// spawn:abort / signal
+// spawn: abort / signal
 // ---------------------------------------------------------------------------
 
-describe('spawn abort:signal connect to SDK', { timeout: 60_000 }, () => {
-  it('before creation already abort: directly reject, do not create sub-conversation', { timeout: 60_000 }, async () => {
+describe('spawn abort: signal wired to SDK', { timeout: 60_000 }, () => {
+  it('aborted before creation: rejects immediately without creating child conversation', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       const controller = new AbortController()
@@ -408,16 +408,16 @@ describe('spawn abort:signal connect to SDK', { timeout: 60_000 }, () => {
     }
   })
 
-  it('run in abort:conversation.abort takes effect and do not live task', { timeout: 60_000 }, async () => {
+  it('aborted mid-run: conversation.abort takes effect with zero live tasks remaining', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
-      // response work vendor suspended: do not resolve then turn stop in model request in,abort only then truly interrupt in-flight token.
+      // Suspend response provider: until resolved, turn remains inside model request so abort cancels in-flight execution.
       let release!: () => void
       const gate = new Promise<void>((r) => {
         release = r
       })
       th.faux.setResponses([
-        () => gate.then(() => fauxAssistantMessage('latency answer')) as never,
+        () => gate.then(() => fauxAssistantMessage('delayed answer')) as never,
       ])
       const controller = new AbortController()
       const promise = runNativeSpawn(th.deps, {
@@ -426,23 +426,23 @@ describe('spawn abort:signal connect to SDK', { timeout: 60_000 }, () => {
         agentId: 'slow-1',
         signal: controller.signal,
       } as never)
-      // etc. sub-conversation create and enter run in, again trigger abort.
+      // Wait for child conversation to start running, then trigger abort.
       await new Promise((r) => setTimeout(r, 150))
       controller.abort()
       release()
       const err = await promise.then(
-        () => assert.fail('abort after must not succeeded'),
+        () => assert.fail('must not succeed after abort'),
         (e: unknown) => e as HelmError,
       )
       assert.equal(err.code, 'aborted')
-      // do not live task (conversation idle).
+      // Zero leftover live tasks (conversation idle).
       const childId = (th.deps.agentSessions as Map<string, number>).get('slow-1')!
       const conv = await th.harness.conversation(childId as never, BACKGROUND_CONTEXT)
       assert.ok(conv)
       await conv.waitForIdle(BACKGROUND_CONTEXT)
       const inspect = await th.harness.inspect(BACKGROUND_CONTEXT)
       const live = inspect.tasks.filter((t) => t.state.kind === 'running' || t.state.kind === 'waiting')
-      assert.equal(live.length, 0, 'abort after must not legacy live task')
+      assert.equal(live.length, 0, 'no live tasks should remain after abort')
     } finally {
       await th.close()
     }
@@ -450,14 +450,14 @@ describe('spawn abort:signal connect to SDK', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// spawn:resume strictly
+// spawn: strict resume
 // ---------------------------------------------------------------------------
 
-describe('spawn resume: never creates new false resume', { timeout: 60_000 }, () => {
-  it('missing ref reject, do not create new sub-conversation', { timeout: 60_000 }, async () => {
+describe('spawn resume: never creates new conversation on false resume', { timeout: 60_000 }, () => {
+  it('missing ref rejects without creating child conversation', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
-      th.faux.setResponses([fauxAssistantMessage('answer proposal')])
+      th.faux.setResponses([fauxAssistantMessage('answer')])
       await assert.rejects(
         () =>
           runNativeSpawn(th.deps, {
@@ -467,7 +467,7 @@ describe('spawn resume: never creates new false resume', { timeout: 60_000 }, ()
           } as never),
         (err: unknown) => err instanceof HelmError && err.code === 'not_found',
       )
-      // '12abc' this kind of mixed number also reject (no longer parseInt wide contain).
+      // Mixed strings like '12abc' also reject (no lenient parseInt tolerance).
       await assert.rejects(
         () =>
           runNativeSpawn(th.deps, {
@@ -483,20 +483,20 @@ describe('spawn resume: never creates new false resume', { timeout: 60_000 }, ()
     }
   })
 
-  it('agentId mapping resume: re- use original conversation,onResolved on report original id', { timeout: 60_000 }, async () => {
+  it('agentId mapping resume: reuses original conversation; onResolved reports original id', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
-      th.faux.setResponses([fauxAssistantMessage('one segment'), fauxAssistantMessage('resume result')])
+      th.faux.setResponses([fauxAssistantMessage('round 1'), fauxAssistantMessage('resume result')])
       let createdId: number | undefined
       const first = await runNativeSpawn(th.deps, {
         parentConversationId: 1,
-        prompt: 'one segment',
+        prompt: 'round 1',
         agentId: 'agent-a',
         onResolved: (info) => {
           createdId = info.conversationId
         },
       })
-      assert.equal(first, 'one segment')
+      assert.equal(first, 'round 1')
       const resumeResolved: Array<number | undefined> = []
       const second = await runNativeSpawn(th.deps, {
         parentConversationId: 1,
@@ -508,19 +508,19 @@ describe('spawn resume: never creates new false resume', { timeout: 60_000 }, ()
       })
       assert.equal(second, 'resume result')
       assert.equal(resumeResolved.length, 1)
-      assert.equal(resumeResolved[0], createdId, 'resume onResolved on report original convId')
+      assert.equal(resumeResolved[0], createdId, 'resume onResolved reports original convId')
     } finally {
       await th.close()
     }
   })
 
-  it('parent ownership error reject resume(guard against across parent conversation hijack)', { timeout: 60_000 }, async () => {
+  it('wrong parent ownership rejects resume (guards against cross-parent hijacking)', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
-      th.faux.setResponses([fauxAssistantMessage('one segment'), fauxAssistantMessage('do not the reach')])
+      th.faux.setResponses([fauxAssistantMessage('round 1'), fauxAssistantMessage('unreachable')])
       await runNativeSpawn(th.deps, {
         parentConversationId: 1,
-        prompt: 'one segment',
+        prompt: 'round 1',
         agentId: 'agent-p',
       } as never)
       await assert.rejects(
@@ -537,26 +537,26 @@ describe('spawn resume: never creates new false resume', { timeout: 60_000 }, ()
     }
   })
 
-  it('resume carries schema: patch hang StructuredOutput tool and accept result', { timeout: 60_000 }, async () => {
+  it('resume with schema: dynamically attaches StructuredOutput tool and accepts result', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
-      // one segment without schema(pure text); resume carries schema: must patch hang tool and away tool commit.
+      // Round 1 has no schema (plain text); resuming with schema dynamically attaches the tool and receives the structured output.
       th.faux.setResponses([
-        fauxAssistantMessage('one segment pure text'),
+        fauxAssistantMessage('round 1 plain text'),
         fauxAssistantMessage([fauxToolCall('register_structured_output', { output: { n: 1 } })], {
           stopReason: 'toolUse',
         }),
-        fauxAssistantMessage('complete'),
+        fauxAssistantMessage('done'),
       ])
       const first = await runNativeSpawn(th.deps, {
         parentConversationId: 1,
-        prompt: 'one segment',
+        prompt: 'round 1',
         agentId: 'agent-s',
       } as never)
-      assert.equal(first, 'one segment pure text')
+      assert.equal(first, 'round 1 plain text')
       const second = await runNativeSpawn(th.deps, {
         parentConversationId: 1,
-        prompt: 'resume and return structure',
+        prompt: 'resume and return structured output',
         resume: 'agent-s',
         schema: {
           type: 'object',
@@ -573,11 +573,11 @@ describe('spawn resume: never creates new false resume', { timeout: 60_000 }, ()
 })
 
 // ---------------------------------------------------------------------------
-// spawn:profile / effort / runtime / isolation / gate
+// spawn: profile / effort / runtime / isolation / gate
 // ---------------------------------------------------------------------------
 
 describe('spawn profile and runtime declaration', { timeout: 60_000 }, () => {
-  it('invalid profile explicit not_found', { timeout: 60_000 }, async () => {
+  it('invalid profile returns explicit not_found', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       await assert.rejects(
@@ -594,7 +594,7 @@ describe('spawn profile and runtime declaration', { timeout: 60_000 }, () => {
     }
   })
 
-  it('profile declaration herdr runtime: without plugin take over explicit unsupported_runtime', { timeout: 60_000 }, async () => {
+  it('profile declares herdr runtime: explicit unsupported_runtime when no plugin handles it', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness({
       profiles: {
         assistant: {},
@@ -625,7 +625,7 @@ describe('spawn profile and runtime declaration', { timeout: 60_000 }, () => {
     }
   })
 
-  it('effort illegal enumeration reject; legal value via', { timeout: 60_000 }, async () => {
+  it('invalid effort enum rejects; valid value passes', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       await assert.rejects(
@@ -637,19 +637,19 @@ describe('spawn profile and runtime declaration', { timeout: 60_000 }, () => {
           } as never),
         (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
       )
-      th.faux.setResponses([fauxAssistantMessage('carries effort answer')])
+      th.faux.setResponses([fauxAssistantMessage('answer with effort')])
       const result = await runNativeSpawn(th.deps, {
         parentConversationId: 1,
         prompt: 'x',
         effort: 'high',
       } as never)
-      assert.equal(result, 'carries effort answer')
+      assert.equal(result, 'answer with effort')
     } finally {
       await th.close()
     }
   })
 
-  it('isolation explicit unsupported_runtime', { timeout: 60_000 }, async () => {
+  it('isolation returns explicit unsupported_runtime', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       await assert.rejects(
@@ -666,11 +666,11 @@ describe('spawn profile and runtime declaration', { timeout: 60_000 }, () => {
     }
   })
 
-  it('any namespace:kind external runtime (non- herdr) without plugin take over same unsupported_runtime(kernel zero plugin enumeration hard encode)', { timeout: 60_000 }, async () => {
+  it('any namespace:kind external runtime (non-herdr) also yields unsupported_runtime when unclaimed (zero hardcoded plugin list in kernel)', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
-      // kernel do not point name any plugin:docker:devbox,ssh:remote etc. everything naming empty between form
-      // one rule via agent_spawn hook take over; without take over when unify explicit errors.
+      // Kernel hardcodes no plugin names: all namespaced runtimes like docker:devbox or ssh:remote
+      // flow through agent_spawn hooks; unclaimed ones uniformly fail explicitly.
       for (const agentType of ['docker:devbox', 'ssh:remote', 'claude:code']) {
         await assert.rejects(
           () =>
@@ -688,10 +688,10 @@ describe('spawn profile and runtime declaration', { timeout: 60_000 }, () => {
     }
   })
 
-  it('ordinary profileId(without smoke number) do not subject to naming empty between decide affect (continue away profile parse)', { timeout: 60_000 }, async () => {
+  it('plain profileId (without colon) is unaffected by namespace rule (continues normal profile resolution)', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
-      // without smoke number but not registered profile:not_found(is not unsupported_runtime).
+      // Unregistered profile without colon yields not_found (not unsupported_runtime).
       await assert.rejects(
         () =>
           runNativeSpawn(th.deps, {
@@ -706,34 +706,34 @@ describe('spawn profile and runtime declaration', { timeout: 60_000 }, () => {
     }
   })
 
-  it('gate use sub-conversation actual cwd(request.cwd), failed keep diagnose', { timeout: 60_000 }, async () => {
+  it('gate executes in child conversation cwd (request.cwd) and preserves diagnostics on failure', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
-      th.faux.setResponses([fauxAssistantMessage('answer proposal'), fauxAssistantMessage('answer proposal2')])
+      th.faux.setResponses([fauxAssistantMessage('answer 1'), fauxAssistantMessage('answer 2')])
       const marker = join(rootDir, 'gate-marker.txt')
-      // gate in sub-conversation cwd under execute pwd and write file: verify cwd takes effect.
+      // Gate runs pwd in child cwd and writes marker file to confirm cwd took effect.
       const result = await runNativeSpawn(th.deps, {
         parentConversationId: 1,
         prompt: 'x',
         cwd: rootDir,
         gate: `pwd > "${marker}"`,
       } as never)
-      assert.equal(result, 'answer proposal')
+      assert.equal(result, 'answer 1')
       const { readFileSync } = await import('node:fs')
       const pwd = readFileSync(marker, 'utf8').trim()
       assert.equal(pwd, rootDir)
-      // gate failed: explicit gate_failed and diagnose keep.
+      // Gate failure: explicit gate_failed preserving diagnostic output.
       const err = await runNativeSpawn(th.deps, {
         parentConversationId: 1,
         prompt: 'y',
         cwd: rootDir,
         gate: 'echo boom-diagnostic >&2; exit 7',
       } as never).then(
-        () => assert.fail('gate failed must errors'),
+        () => assert.fail('failed gate must throw'),
         (e: unknown) => e as HelmError,
       )
       assert.equal(err.code, 'gate_failed')
-      assert.ok(String(err.message).includes('boom-diagnostic'), 'gate diagnose must not discard')
+      assert.ok(String(err.message).includes('boom-diagnostic'), 'gate diagnostics must not be discarded')
     } finally {
       await th.close()
     }
@@ -741,10 +741,10 @@ describe('spawn profile and runtime declaration', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// Ask:CAS / cancel / validate
+// Ask: CAS / cancellation / validation
 // ---------------------------------------------------------------------------
 
-describe('Ask CAS and compute honest', { timeout: 60_000 }, () => {
+describe('Ask CAS and honest settlement', { timeout: 60_000 }, () => {
   let service: AskService
   let store: HelmStore
   let stash: SecretStash
@@ -767,7 +767,7 @@ describe('Ask CAS and compute honest', { timeout: 60_000 }, () => {
     })
   }
 
-  it('client CAS seq and durable watermark different:409 reject (not silently override)', { timeout: 60_000 }, async () => {
+  it('client CAS seq mismatch against persisted watermark: rejects 409 (never overwrites silently)', { timeout: 60_000 }, async () => {
     await openAskService()
     const askPromise = service.createAsk({
       conversationId: 1,
@@ -785,11 +785,11 @@ describe('Ask CAS and compute honest', { timeout: 60_000 }, () => {
     await store.close()
   })
 
-  it('has CAS but without resolver:ask_state_unavailable, do not install act validate via', { timeout: 60_000 }, async () => {
+  it('CAS expectedStateSeq present without resolver: rejects with ask_state_unavailable instead of faking validation', { timeout: 60_000 }, async () => {
     await openAskService()
     const askPromise = service.createAsk({
       conversationId: 1,
-      title: 'need to seq',
+      title: 'requires seq',
       expectedStateSeq: 5,
       fields: [{ name: 'x', label: 'X', type: 'text' }],
     })
@@ -803,7 +803,7 @@ describe('Ask CAS and compute honest', { timeout: 60_000 }, () => {
     await store.close()
   })
 
-  it('target seq any inconsistent (contains fall back) all superseded; consistent then via', { timeout: 60_000 }, async () => {
+  it('any target seq mismatch (including rollback) resolves superseded; exact match passes', { timeout: 60_000 }, async () => {
     await openAskService()
     const askPromise = service.createAsk({
       conversationId: 1,
@@ -813,15 +813,15 @@ describe('Ask CAS and compute honest', { timeout: 60_000 }, () => {
     })
     void askPromise.catch(() => {})
     const ask = service.listAsks('pending')[0]!
-    // fall back (9 < 10): old code only intercept > , now any inconsistent all deregister single.
+    // Rollback (9 < 10): previously only caught >; now any mismatch supersedes.
     let target = 9
     service.registerSeqResolver(() => target)
     const superseded = await service.answerAsk(ask.id, { x: 'v' })
     assert.equal(superseded.status, 'superseded')
-    // consistent: normal answered.
+    // Matching seq: answers normally.
     const ask2Promise = service.createAsk({
       conversationId: 1,
-      title: 'seq consistent',
+      title: 'seq match',
       expectedStateSeq: 3,
       fields: [{ name: 'x', label: 'X', type: 'text' }],
     })
@@ -833,7 +833,7 @@ describe('Ask CAS and compute honest', { timeout: 60_000 }, () => {
     await store.close()
   })
 
-  it('cancel/superseded:createAsk promise resolve(status zone,answers is empty do not smoke fill batch allow)', { timeout: 60_000 }, async () => {
+  it('cancel/superseded: createAsk resolves cleanly (status distinguished, empty answers never backfill false approvals)', { timeout: 60_000 }, async () => {
     await openAskService()
     const askPromise = service.createAsk({
       conversationId: 1,
@@ -846,10 +846,10 @@ describe('Ask CAS and compute honest', { timeout: 60_000 }, () => {
     const cancelled = await askPromise
     assert.equal(cancelled.status, 'cancelled')
     assert.deepEqual(cancelled.answers, {})
-    // superseded same.
+    // superseded works identically.
     const ask2Promise = service.createAsk({
       conversationId: 1,
-      title: 'deregister single',
+      title: 'supersede',
       fields: [{ name: 'x', label: 'X', type: 'text' }],
     })
     await new Promise((r) => setTimeout(r, 20))
@@ -861,15 +861,15 @@ describe('Ask CAS and compute honest', { timeout: 60_000 }, () => {
     await store.close()
   })
 
-  it('answer proposal validate: unknown field / non- string / select out of bounds / confirm illegal / required missing', { timeout: 60_000 }, async () => {
+  it('answer validation: unknown field / non-string / out-of-bounds select / invalid confirm / missing required', { timeout: 60_000 }, async () => {
     await openAskService()
     const askPromise = service.createAsk({
       conversationId: 1,
-      title: 'table single',
+      title: 'form',
       fields: [
-        { name: 'color', label: 'color', type: 'select', options: [{ label: 'red', value: 'red' }, { label: 'blue', value: 'blue' }] },
-        { name: 'agree', label: 'same intent', type: 'confirm', required: true },
-        { name: 'note', label: 'prepare note', type: 'text' },
+        { name: 'color', label: 'Color', type: 'select', options: [{ label: 'Red', value: 'red' }, { label: 'Blue', value: 'blue' }] },
+        { name: 'agree', label: 'Agree', type: 'confirm', required: true },
+        { name: 'note', label: 'Note', type: 'text' },
       ],
     })
     void askPromise.catch(() => {})
@@ -881,15 +881,15 @@ describe('Ask CAS and compute honest', { timeout: 60_000 }, () => {
     await expectValidation(service.answerAsk(ask.id, { agree: 'true', color: 'green' }))
     await expectValidation(service.answerAsk(ask.id, { agree: 'yes' }))
     await expectValidation(service.answerAsk(ask.id, { color: 'red' }))
-    // legal commit via.
+    // Valid submission passes.
     const ok = await service.answerAsk(ask.id, { agree: 'true', color: 'red', note: '' })
     assert.equal(ok.status, 'answered')
     await store.close()
   })
 
-  it('secret:env name illegal reject, declaration keep original do not rotate large write merge, null value do not stash', { timeout: 60_000 }, async () => {
+  it('secret: rejects invalid env names, preserves case without colliding, skips empty values from stash', { timeout: 60_000 }, async () => {
     await openAskService()
-    // illegal env name (hyphen): create i.e. refuse (stash.put will throw, but now in createAsk boundary).
+    // Invalid env name (hyphen): rejected immediately at createAsk (rather than failing later inside stash.put).
     await assert.rejects(
       () =>
         service.createAsk({
@@ -899,13 +899,13 @@ describe('Ask CAS and compute honest', { timeout: 60_000 }, () => {
         }),
       (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
     )
-    // 'api_key' and 'API_KEY' is two different field name: keep original shared store, do not merge override.
+    // 'api_key' and 'API_KEY' are distinct field names: preserved side-by-side without silent overwriting.
     const askPromise = service.createAsk({
       conversationId: 1,
-      title: 'double secret',
+      title: 'dual secret',
       fields: [
-        { name: 'api_key', label: 'small write', type: 'text', secret: true },
-        { name: 'API_KEY', label: 'large write', type: 'text', secret: true },
+        { name: 'api_key', label: 'lowercase', type: 'text', secret: true },
+        { name: 'API_KEY', label: 'uppercase', type: 'text', secret: true },
       ],
     })
     void askPromise.catch(() => {})
@@ -915,7 +915,7 @@ describe('Ask CAS and compute honest', { timeout: 60_000 }, () => {
     const env = stash.envFor(1)
     assert.equal(env['api_key'], 'lower-secret')
     assert.equal(env['API_KEY'], 'upper-secret')
-    // empty secret do not stash: answer proposal store is empty string, without stash item.
+    // Empty secret is not stashed: answer stores empty string with no stash entry.
     const ask2Promise = service.createAsk({
       conversationId: 1,
       title: 'empty secret',
@@ -930,7 +930,7 @@ describe('Ask CAS and compute honest', { timeout: 60_000 }, () => {
     await store.close()
   })
 
-  it('createAsk boundary: duplicate name / illegal type / conversation missing / missing title', { timeout: 60_000 }, async () => {
+  it('createAsk boundaries: duplicate name / invalid type / missing conversation / missing title', { timeout: 60_000 }, async () => {
     await openAskService({ validateConversation: (id) => id === 1 })
     const expectValidation = (promise: Promise<unknown>) =>
       assert.rejects(promise, (err: unknown) => err instanceof HelmError && err.code === 'validation_error')
@@ -964,11 +964,11 @@ describe('Ask CAS and compute honest', { timeout: 60_000 }, () => {
     await store.close()
   })
 
-  it('restart legacy pending: diagnose notify mention and secret reference expires', { timeout: 60_000 }, async () => {
+  it('pending asks remaining across restart: emits diagnostic notice noting secret references expired', { timeout: 60_000 }, async () => {
     await openAskService()
     const askPromise = service.createAsk({
       conversationId: 1,
-      title: 'legacy',
+      title: 'orphaned',
       fields: [
         { name: 'x', label: 'X', type: 'text' },
         { name: 'TOKEN', label: 'T', type: 'text', secret: true },
@@ -978,12 +978,12 @@ describe('Ask CAS and compute honest', { timeout: 60_000 }, () => {
     await new Promise((r) => setTimeout(r, 20))
     service.reportOrphans()
     const notification = events.find(
-      (e) => e.type === 'notification' && String((e.payload as { title?: string }).title).includes('legacy'),
+      (e) => e.type === 'notification' && String((e.payload as { title?: string }).title).includes('Pending AskDoc remaining after restart'),
     )
-    assert.ok(notification, 'must has diagnose notify')
+    assert.ok(notification, 'must emit diagnostic notification')
     assert.ok(
-      String((notification.payload as { body?: string }).body).includes('expires'),
-      'secret reference across restarts expires must such as note',
+      String((notification.payload as { body?: string }).body).includes('expired'),
+      'must note that secret references expired across restart',
     )
     await service.cancelAsk(service.listAsks('pending')[0]!.id)
     await store.close()
@@ -991,40 +991,40 @@ describe('Ask CAS and compute honest', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// spawn:parentToolCallId run phase real-time related pass-through
+// spawn: real-time parentToolCallId propagation during run
 // ---------------------------------------------------------------------------
 
-describe('spawn parentToolCallId: parent conversation tool invoke ID real-time related sub-conversation', { timeout: 60_000 }, () => {
-  it('creates new derive:request.parentToolCallId original can reach, engine do not swallow field', { timeout: 60_000 }, async () => {
+describe('spawn parentToolCallId: real-time binding between parent tool call ID and child conversation', { timeout: 60_000 }, () => {
+  it('fresh spawn: request.parentToolCallId passes through intact without being dropped by engine', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
-      th.faux.setResponses([fauxAssistantMessage('complete')])
+      th.faux.setResponses([fauxAssistantMessage('done')])
       let registeredChildId: number | undefined
       const originalRegister = th.deps.registerChildConversation
       th.deps.registerChildConversation = async (childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel) => {
         registeredChildId = childId
         return originalRegister(childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel)
       }
-      // host runtime.ts in createSubagentTool in from api.callId inject parentToolCallId;
-      // engine side contract: field original follow request pass, do not swallow do not change (mirror write by host call back complete).
+      // Host runtime.ts injects parentToolCallId from api.callId in createSubagentTool;
+      // engine contract: forward request field verbatim without swallowing or modifying (host callback persists mirror).
       const request = {
         parentConversationId: 1,
         prompt: 'fix build',
         parentToolCallId: 'toolu_01ABC',
       }
       const result = await runNativeSpawn(th.deps, request as never)
-      assert.equal(result, 'complete')
-      assert.ok(registeredChildId !== undefined, 'sub-conversation must already register')
+      assert.equal(result, 'done')
+      assert.ok(registeredChildId !== undefined, 'child conversation must have been registered')
       assert.equal(request.parentToolCallId, 'toolu_01ABC')
     } finally {
       await th.close()
     }
   })
 
-  it('resume resume: host bindChildToolCall receives this time tool invoke ID', { timeout: 60_000 }, async () => {
+  it('resume: host bindChildToolCall receives current tool call ID', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
-      th.faux.setResponses([fauxAssistantMessage('one segment'), fauxAssistantMessage('resume complete')])
+      th.faux.setResponses([fauxAssistantMessage('round 1'), fauxAssistantMessage('resume done')])
       const bound: Array<{ childId: number; parentToolCallId: string }> = []
       th.deps.bindChildToolCall = (childId, parentToolCallId) => {
         bound.push({ childId, parentToolCallId })
@@ -1032,13 +1032,13 @@ describe('spawn parentToolCallId: parent conversation tool invoke ID real-time r
       let createdId: number | undefined
       await runNativeSpawn(th.deps, {
         parentConversationId: 1,
-        prompt: 'one segment',
+        prompt: 'round 1',
         agentId: 'agent-tc',
         onResolved: (info: { conversationId?: number }) => {
           createdId = info.conversationId
         },
       } as never)
-      // creates new path do not invoke bindChildToolCall(by registerChildConversation  parentToolCallId).
+      // Fresh spawn does not call bindChildToolCall (parentToolCallId goes via registerChildConversation).
       assert.equal(bound.length, 0)
       await runNativeSpawn(th.deps, {
         parentConversationId: 1,
@@ -1054,21 +1054,21 @@ describe('spawn parentToolCallId: parent conversation tool invoke ID real-time r
     }
   })
 
-  it('default do not carries parentToolCallId:resume does not trigger bindChildToolCall', { timeout: 60_000 }, async () => {
+  it('omitted parentToolCallId: resume does not invoke bindChildToolCall', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
-      th.faux.setResponses([fauxAssistantMessage('one segment'), fauxAssistantMessage('again continue')])
+      th.faux.setResponses([fauxAssistantMessage('round 1'), fauxAssistantMessage('continue again')])
       let called = 0
       th.deps.bindChildToolCall = () => {
         called += 1
       }
-      await runNativeSpawn(th.deps, { parentConversationId: 1, prompt: 'one segment', agentId: 'agent-nt' } as never)
+      await runNativeSpawn(th.deps, { parentConversationId: 1, prompt: 'round 1', agentId: 'agent-nt' } as never)
       await runNativeSpawn(th.deps, {
         parentConversationId: 1,
         prompt: 'continue',
         resume: 'agent-nt',
       } as never)
-      assert.equal(called, 0, 'without parentToolCallId derive must not trigger bindChildToolCall')
+      assert.equal(called, 0, 'spawn without parentToolCallId must not invoke bindChildToolCall')
     } finally {
       await th.close()
     }

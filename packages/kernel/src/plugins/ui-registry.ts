@@ -1,28 +1,38 @@
 /**
- * ui-registry.ts: negative duty 7 large all UI frontend extension point collect and validate, combine build port (PluginBuildProvider) module validate and artifact manage.
+ * ui-registry.ts: Collects and validates all frontend UI extension point declarations
+ * across plugins, integrating build-port (PluginBuildProvider) module validation and artifact resolution.
  *
- * responsibility:
- * - collect sidebar, screen, timeline, markdown.codeBlock, tool, composer, workbench,
- *   commandPalette, settingsPanel, profile.runtime, UI action (header/row/entry) and
- *   plugin.slot etc. UI declaration (unify client.tsx track path);
- * - declaration boundary static validate (id uniqueness,priority/order security integer, command slash and host keep term,
- *   UI action target archive one and action/client track at least its one,markdown.codeBlock language table shape,
- *   slot target shape,artifact.previewer  MIME/suffix match declaration,composer.completer 
- *   completion source mutual exclusion and disable track,ConversationScope pure object validate,JSON-safe serialization fidelity);
- * - client.tsx motion state component reference shape validate (assertModuleRefShape) and clientRoot ownership validate;
- * - get already compile client module artifact, and strictly validate lifecycle and epoch state (guard against deactivated/already round rotate plugin return dirty artifact);
- * - enable commit point across plugin uniqueness final inspect (profile.runtime kind and commandPalette slash),
- *   by PluginHost in enable commit chunk invoke; by default deactivate probe register does not occupy global name.
+ * Responsibilities:
+ * - Collect UI declarations for sidebar, screen, timeline, markdown.codeBlock, tool, composer,
+ *   workbench, commandPalette, settingsPanel, profile.runtime, UI actions (header/row/entry),
+ *   and plugin.slot (unified client.tsx track);
+ * - Run static declaration-boundary checks (id uniqueness, finite safe integer priority/order,
+ *   command slash prefix & reserved names, mutually exclusive UI action target & required action/client track,
+ *   markdown.codeBlock language table, slot target shape, artifact.previewer MIME/extension matchers,
+ *   composer.completer exclusion, ConversationScope plain-object validation, JSON-safe fidelity);
+ * - Validate client.tsx dynamic component module references (assertModuleRefShape) and clientRoot containment;
+ * - Resolve compiled client module artifacts with strict lifecycle & epoch verification (preventing stale artifacts
+ *   from deactivated or cycled plugins);
+ * - Enforce cross-plugin uniqueness invariants at enable commit time (profile.runtime kind and commandPalette slash),
+ *   called by PluginHost during enable commit so disabled pre-registrations never occupy global names.
  */
+import { lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import {
   HelmError,
+  PREBUILT_CLIENT_MANIFEST_FILE,
   assertModuleRefShape,
+  assertPrebuiltChunkName,
+  assertPrebuiltClientManifest,
   clientNpmRootsOf,
   parseNonEmptyLocalizedText,
+  prebuiltChunkFileName,
   type PluginBuildProvider,
   type PluginClientBundle,
   type PluginClientNpmRoot,
   type PluginUiContribution,
+  type PrebuiltClientManifest,
+  type PrebuiltClientModuleEntry,
 } from '@helm/protocol';
 import { assertConversationScope, isPlainObject, jsonClone } from './shared.js';
 import {
@@ -32,8 +42,285 @@ import {
   type UiSpecContext,
 } from './ui-spec-validators.js';
 
-/** UI action three class target to register surface mapping (plugin-context and validate shared use; define see ui-spec-validators.ts). */
+/** Mapping from the three UI action targets to registry surfaces (shared by plugin-context and validation; defined in ui-spec-validators.ts). */
 export { UI_ACTION_SURFACES } from './ui-spec-validators.js';
+
+/** Result of reading and validating a prebuilt `dist-client/manifest.json`. */
+export interface LoadedPrebuiltClientManifest {
+  rootReal: string;
+  manifest: PrebuiltClientManifest;
+}
+
+function resolvePrebuiltFileSafe(
+  rootReal: string,
+  prebuiltDir: string,
+  relPath: string,
+  label: string,
+  pluginId: string,
+): string {
+  const candidate = resolve(rootReal, relPath);
+  let real: string;
+  try {
+    real = realpathSync(candidate);
+  } catch {
+    let isSymlink = false;
+    try {
+      isSymlink = lstatSync(candidate).isSymbolicLink();
+    } catch {
+      // ENOENT
+    }
+    throw new HelmError(
+      'prebuilt_client_invalid',
+      `Prebuilt client ${label} file ${isSymlink ? 'is a dangling symlink' : 'is missing'} for plugin ${pluginId}: ${relPath}`,
+      400,
+      { pluginId, prebuiltDir, relPath },
+    );
+  }
+  const rel = relative(rootReal, real);
+  if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new HelmError(
+      'client_module_out_of_root',
+      `Prebuilt client ${label} escapes prebuiltClientDir (${prebuiltDir}): ${relPath}`,
+      400,
+      { pluginId, prebuiltDir, relPath },
+    );
+  }
+  let stat;
+  try {
+    stat = statSync(real);
+  } catch {
+    throw new HelmError(
+      'prebuilt_client_invalid',
+      `Prebuilt client ${label} file cannot be read for plugin ${pluginId}: ${relPath}`,
+      400,
+      { pluginId, prebuiltDir, relPath },
+    );
+  }
+  if (!stat.isFile()) {
+    throw new HelmError(
+      'prebuilt_client_invalid',
+      `Prebuilt client ${label} is not a regular file for plugin ${pluginId}: ${relPath}`,
+      400,
+      { pluginId, prebuiltDir, relPath },
+    );
+  }
+  return real;
+}
+
+function resolveOptionalPrebuiltGzipSafe(
+  rootReal: string,
+  prebuiltDir: string,
+  relPath: string,
+  label: string,
+  pluginId: string,
+): string | undefined {
+  const gzRel = `${relPath}.gz`;
+  const gzCandidate = resolve(rootReal, gzRel);
+  try {
+    lstatSync(gzCandidate);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw new HelmError(
+      'prebuilt_client_invalid',
+      `Prebuilt client ${label}.gz stat failed for plugin ${pluginId}: ${err instanceof Error ? err.message : String(err)}`,
+      400,
+      { pluginId, prebuiltDir, relPath: gzRel },
+    );
+  }
+  return resolvePrebuiltFileSafe(rootReal, prebuiltDir, gzRel, `${label}.gz`, pluginId);
+}
+
+/**
+ * Read and strictly validate `manifest.json` inside a plugin's prebuilt `dist-client` directory.
+ * Rejects missing directories, symlink escapes out of `prebuiltDir`, corrupt JSON, and schema violations.
+ */
+export function readPrebuiltClientManifest(
+  prebuiltDir: string,
+  pluginId = 'prebuilt',
+): LoadedPrebuiltClientManifest {
+  let rootStat;
+  try {
+    rootStat = statSync(prebuiltDir);
+  } catch {
+    throw new HelmError(
+      'prebuilt_client_invalid',
+      `Prebuilt client directory does not exist for plugin ${pluginId}: ${prebuiltDir}`,
+      400,
+      { pluginId, prebuiltDir },
+    );
+  }
+  if (!rootStat.isDirectory()) {
+    throw new HelmError(
+      'prebuilt_client_invalid',
+      `Prebuilt client directory is not a directory for plugin ${pluginId}: ${prebuiltDir}`,
+      400,
+      { pluginId, prebuiltDir },
+    );
+  }
+  const rootReal = realpathSync(prebuiltDir);
+  const manifestReal = resolvePrebuiltFileSafe(
+    rootReal,
+    prebuiltDir,
+    PREBUILT_CLIENT_MANIFEST_FILE,
+    PREBUILT_CLIENT_MANIFEST_FILE,
+    pluginId,
+  );
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(manifestReal, 'utf-8'));
+  } catch (err) {
+    throw new HelmError(
+      'prebuilt_client_invalid',
+      `Prebuilt client manifest JSON parse failed in ${prebuiltDir}: ${err instanceof Error ? err.message : String(err)}`,
+      400,
+      { pluginId, prebuiltDir },
+    );
+  }
+  return { rootReal, manifest: assertPrebuiltClientManifest(raw, prebuiltDir) };
+}
+
+interface VerifiedPrebuiltEntry {
+  entry: PrebuiltClientModuleEntry;
+  entryReal: string;
+  entryGzReal?: string;
+  chunkPaths: Map<string, { real: string; gzReal?: string }>;
+}
+
+function assertPrebuiltEntryIntegrity(
+  rootReal: string,
+  prebuiltDir: string,
+  moduleRef: string,
+  manifest: PrebuiltClientManifest,
+  pluginId: string,
+): VerifiedPrebuiltEntry {
+  const entry = manifest.modules[moduleRef];
+  if (!entry) {
+    throw new HelmError(
+      'prebuilt_client_invalid',
+      `Prebuilt client manifest for plugin ${pluginId} does not contain declared module ${moduleRef}`,
+      404,
+      { pluginId, prebuiltDir, module: moduleRef },
+    );
+  }
+  const entryReal = resolvePrebuiltFileSafe(
+    rootReal,
+    prebuiltDir,
+    entry.entryFile,
+    `entryFile(${moduleRef})`,
+    pluginId,
+  );
+  const entryGzReal = resolveOptionalPrebuiltGzipSafe(
+    rootReal,
+    prebuiltDir,
+    entry.entryFile,
+    `entryFile(${moduleRef})`,
+    pluginId,
+  );
+  const chunkPaths = new Map<string, { real: string; gzReal?: string }>();
+  for (const chunkName of entry.chunks ?? []) {
+    const chunkRel = prebuiltChunkFileName(entry.entryFile, chunkName, pluginId);
+    const real = resolvePrebuiltFileSafe(rootReal, prebuiltDir, chunkRel, `chunk(${chunkName})`, pluginId);
+    const gzReal = resolveOptionalPrebuiltGzipSafe(
+      rootReal,
+      prebuiltDir,
+      chunkRel,
+      `chunk(${chunkName})`,
+      pluginId,
+    );
+    chunkPaths.set(chunkName, { real, gzReal });
+  }
+  return { entry, entryReal, entryGzReal, chunkPaths };
+}
+
+function materializePrebuiltBundle(
+  prebuiltDir: string,
+  moduleRef: string,
+  verified: VerifiedPrebuiltEntry,
+  chunk: string | undefined,
+  pluginId: string,
+): PluginClientBundle {
+  const { entry, entryReal, entryGzReal, chunkPaths } = verified;
+  if (chunk !== undefined) {
+    const target = chunkPaths.get(chunk);
+    if (!target) {
+      throw new HelmError(
+        'client_chunk_not_found',
+        `plugin ${pluginId} module ${moduleRef} did not generate chunk: ${chunk}`,
+        404,
+        { pluginId, prebuiltDir, module: moduleRef, chunk },
+      );
+    }
+    return {
+      code: readFileSync(target.real, 'utf-8'),
+      contentHash: entry.contentHash,
+      gzipped: target.gzReal !== undefined ? readFileSync(target.gzReal) : undefined,
+      exports: [],
+    };
+  }
+  let chunks: Record<string, { code: string; gzipped?: Uint8Array }> | undefined;
+  if (chunkPaths.size > 0) {
+    chunks = {};
+    const chunkCache = new Map<string, { code: string; gzipped?: Uint8Array }>();
+    for (const [chunkName, target] of chunkPaths) {
+      Object.defineProperty(chunks, chunkName, {
+        enumerable: true,
+        configurable: true,
+        get: () => {
+          const cached = chunkCache.get(chunkName);
+          if (cached) return cached;
+          const payload: { code: string; gzipped?: Uint8Array } = {
+            code: readFileSync(target.real, 'utf-8'),
+            ...(target.gzReal !== undefined ? { gzipped: readFileSync(target.gzReal) } : {}),
+          };
+          chunkCache.set(chunkName, payload);
+          return payload;
+        },
+      });
+    }
+  }
+  return {
+    code: readFileSync(entryReal, 'utf-8'),
+    contentHash: entry.contentHash,
+    gzipped: entryGzReal !== undefined ? readFileSync(entryGzReal) : undefined,
+    exports: [...entry.exports],
+    ...(chunks ? { chunks } : {}),
+  };
+}
+
+/**
+ * Pure file reader for prebuilt `dist-client` bundles (zero `esbuild` dependency).
+ * Validates `manifest.json` schema, containment inside `prebuiltDir`, and backing file presence.
+ */
+export function readPrebuiltClientBundle(
+  prebuiltDir: string,
+  moduleRef: string,
+  chunk?: string,
+  pluginId = 'prebuilt',
+): PluginClientBundle {
+  assertModuleRefShape(pluginId, moduleRef);
+  if (chunk !== undefined) {
+    assertPrebuiltChunkName(pluginId, chunk);
+  }
+  const { rootReal, manifest } = readPrebuiltClientManifest(prebuiltDir, pluginId);
+  const verified = assertPrebuiltEntryIntegrity(rootReal, prebuiltDir, moduleRef, manifest, pluginId);
+  return materializePrebuiltBundle(prebuiltDir, moduleRef, verified, chunk, pluginId);
+}
+
+/**
+ * Validates `manifest.json` and every declared entry/chunk file inside a prebuilt `dist-client` directory.
+ */
+export function verifyPrebuiltClientDir(prebuiltDir: string, pluginId = 'prebuilt'): LoadedPrebuiltClientManifest {
+  const loaded = readPrebuiltClientManifest(prebuiltDir, pluginId);
+  for (const moduleRef of Object.keys(loaded.manifest.modules)) {
+    assertPrebuiltEntryIntegrity(loaded.rootReal, prebuiltDir, moduleRef, loaded.manifest, pluginId);
+  }
+  return loaded;
+}
+
+export interface PluginClientAssetsLookup {
+  clientRoot?: string;
+  prebuiltClientDir?: string;
+}
 
 export interface ClientModuleOptions {
   chunk?: string;
@@ -44,6 +331,7 @@ export interface ClientModuleOptions {
     phase: string;
     epoch: number;
     clientRoot?: string;
+    prebuiltClientDir?: string;
     npmDependencies?: Readonly<Record<string, string>>;
   } | undefined;
   dataDir: string;
@@ -56,15 +344,24 @@ export class UiRegistry {
   private ui = new Map<string, PluginUiContribution[]>();
   private clientHashes = new Map<string, Map<string, string>>();
 
-  constructor(private readonly buildProvider?: PluginBuildProvider) {}
+  constructor(
+    private readonly buildProvider?: PluginBuildProvider,
+    private readonly getPluginAssets?: (pluginId: string) => PluginClientAssetsLookup | undefined,
+  ) {}
 
-  registerUi(pluginId: string, surface: string, spec: unknown, fnName: string, clientRoot?: string): void {
+  registerUi(
+    pluginId: string,
+    surface: string,
+    spec: unknown,
+    fnName: string,
+    clientAssets?: string | PluginClientAssetsLookup,
+  ): void {
     if (!isPlainObject(spec)) {
-      throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.${fnName}  spec must be pure object`, 400);
+      throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.${fnName} spec must be a plain object`, 400);
     }
     const id = spec.id;
     if (typeof id !== 'string' || id.length === 0) {
-      throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.${fnName} declaration missing id`, 400);
+      throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.${fnName} declaration is missing id`, 400);
     }
 
     let list = this.ui.get(pluginId);
@@ -73,16 +370,16 @@ export class UiRegistry {
       this.ui.set(pluginId, list);
     }
     if (list.some((u) => u.surface === surface && (u.spec as { id?: string }).id === id)) {
-      throw new HelmError('duplicate_ui', `plugin ${pluginId} in ${surface} duplicate declaration id ${id}`, 409);
+      throw new HelmError('duplicate_ui', `plugin ${pluginId} already declared id ${id} in ${surface}`, 409);
     }
 
-    // priority/sort field: if provide must is finite security integer (illegal value will let trim decide order static default lose control).
+    // priority / order: when provided, must be a finite safe integer (invalid values would silently corrupt sort order).
     for (const field of ['priority', 'order'] as const) {
       const value = spec[field];
       if (value !== undefined && (typeof value !== 'number' || !Number.isSafeInteger(value))) {
         throw new HelmError(
           'invalid_ui_spec',
-          `plugin ${pluginId} ui.${fnName}  ${field} must be security integer (actual:${String(value)})`,
+          `plugin ${pluginId} ui.${fnName} ${field} must be a safe integer (actual: ${String(value)})`,
           400,
           { pluginId, id, field },
         );
@@ -105,53 +402,75 @@ export class UiRegistry {
       }
     }
 
-    // surface dedicated belong validate two phase dispatch (see ui-spec-validators.ts document): early chunk
-    // (UI action / commandPalette / profile.runtime / plugin.slot) first at through use
-    // scope and client reference validate, late phase chunk in its after - - and split before one by one chunk order strictly consistent.
+    const lifecycleAssets = this.getPluginAssets?.(pluginId);
+    const clientRoot =
+      typeof clientAssets === 'string'
+        ? clientAssets
+        : (clientAssets?.clientRoot ?? lifecycleAssets?.clientRoot);
+    const prebuiltClientDir =
+      typeof clientAssets === 'object' && clientAssets !== null
+        ? (clientAssets.prebuiltClientDir ?? lifecycleAssets?.prebuiltClientDir)
+        : lifecycleAssets?.prebuiltClientDir;
+
+    // Two-phase surface validation (see ui-spec-validators.ts): early checks
+    // (UI action / commandPalette / profile.runtime / plugin.slot) run before scope
+    // and client-ref validation, while late checks run right after in exact original order.
     const ctx: UiSpecContext = {
       pluginId,
       fnName,
       surface,
-      clientRoot,
-      hasBuildProvider: this.buildProvider !== undefined,
+      clientRoot: clientRoot ?? prebuiltClientDir,
+      hasBuildProvider: this.buildProvider !== undefined || prebuiltClientDir !== undefined,
       siblings: list,
     };
     validateUiSpecEarly(surface, spec, id, ctx);
 
-    // scope in register boundary i.e. validate (illegal scope will let render visible static default lose control)
-    assertConversationScope(pluginId, `plugin ${pluginId} ui.${fnName} declaration`, spec.scope);
+    // Validate scope at registration time so invalid scopes cannot slip into rendering.
+    assertConversationScope(pluginId, `Plugin ${pluginId} ui.${fnName}`, spec.scope);
 
-    // client reference: must plugin define provide clientRoot, and module shape legal (each other for .ts/.tsx);
-    // dangling reference (cannot compile) in register boundary reject, never to render phase at static default whitespace.
+    // Client reference: definition must provide `clientRoot` or `prebuiltClientDir` and a valid relative `.ts/.tsx` module.
     const client = spec.client;
     if (client !== undefined) {
-      if (clientRoot === undefined) {
+      if (clientRoot === undefined && prebuiltClientDir === undefined) {
         throw new HelmError(
           'invalid_ui_spec',
-          `plugin ${pluginId} ui.${fnName} declaration client reference but plugin define not provide clientRoot`,
+          `Plugin ${pluginId} ui.${fnName} declared a client reference, but definition did not provide clientRoot or prebuiltClientDir`,
           400,
           { pluginId },
         );
       }
       if (!isPlainObject(client) || Object.keys(client).some((k) => k !== 'module' && k !== 'export')) {
-        throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.${fnName}  client only allows { module, export }`, 400);
+        throw new HelmError('invalid_ui_spec', `Plugin ${pluginId} ui.${fnName} client may only contain { module, export }`, 400);
       }
-      assertModuleRefShape(pluginId, String(client.module ?? ''));
+      const moduleRef = String(client.module ?? '');
+      assertModuleRefShape(pluginId, moduleRef);
       if (typeof client.export !== 'string' || client.export.length === 0 || !/^[A-Za-z0-9_$]+$/.test(client.export)) {
         throw new HelmError(
           'invalid_ui_spec',
-          `plugin ${pluginId} ui.${fnName}  client.export must be non-empty legal export name`,
+          `Plugin ${pluginId} ui.${fnName} client.export must be a valid non-empty export identifier`,
           400,
         );
       }
-      // build port in register boundary final inspect: without provider host cannot compile client.tsx,
-      // explicit reject the whole declaration (plugin enable failed) while non- static default discard UI contribution.
-      if (this.buildProvider === undefined) {
+      if (prebuiltClientDir !== undefined) {
+        // Prebuilt track: verify manifest integrity, declared module, containment, backing files,
+        // and exported symbol upfront — no buildProvider needed and never falls back to clientRoot.
+        const { rootReal, manifest } = readPrebuiltClientManifest(prebuiltClientDir, pluginId);
+        const { entry } = assertPrebuiltEntryIntegrity(rootReal, prebuiltClientDir, moduleRef, manifest, pluginId);
+        if (!entry.exports.includes(client.export)) {
+          throw new HelmError(
+            'invalid_client_export',
+            `Plugin ${pluginId} ui.${fnName} prebuilt module ${moduleRef} does not export "${client.export}" (exports: ${entry.exports.join(', ') || 'none'})`,
+            422,
+            { pluginId, fnName, module: moduleRef, export: client.export, exports: entry.exports },
+          );
+        }
+      } else if (this.buildProvider === undefined) {
+        // Require build port upfront for source-compiled plugins: fail registration rather than silently discarding client UI.
         throw new HelmError(
           'unsupported_client_build',
-          `plugin ${pluginId} ui.${fnName} declaration client reference, but host not inject plugin build port (PluginHostOptions.buildProvider): cannot compile client.tsx, explicit reject while non- static default discard UI`,
+          `Plugin ${pluginId} ui.${fnName} declared a client reference, but host has no build port (PluginHostOptions.buildProvider) to compile client modules`,
           501,
-          { pluginId, fnName, module: String(client.module ?? '') },
+          { pluginId, fnName, module: moduleRef },
         );
       }
     }
@@ -160,7 +479,7 @@ export class UiRegistry {
 
     // declaration track path only accept can JSON serialization spec(HTTP/SSE directly JSON output);
     // structuredClone accept Map/Set/Date but JSON.stringify will change shape lose data, must explicit reject.
-    // client.tsx track path by web compiler negative duty (this module do not compile).
+    // The client.tsx pipeline is owned by the web compiler (this module does not compile).
     let normalized: unknown;
     try {
       normalized = jsonClone(spec);
@@ -176,9 +495,9 @@ export class UiRegistry {
   }
 
   /**
-   * definePlugin after completion tail unify validate: declaration style docs/sessionDocs track path already whole remove
-   * (JSON Spec migrate out kernel), this method no longer has must validate document reference; keep method supply
-   * PluginHost lifecycle hang point, await badge etc. client track derived validate requirement appear when extend.
+   * Post-`definePlugin` validation hook: declarative `docs`/`sessionDocs` paths have been removed
+   * (JSON Spec migrated out of kernel), so no document references remain to validate here. Retained as a
+   * `PluginHost` lifecycle hook point for future client-track derived validation (such as badges).
    */
   assertUiDocsRegistered(
     _pluginId: string,
@@ -189,16 +508,16 @@ export class UiRegistry {
   }
 
   /**
-   * across plugin uniqueness final inspect: all enabled plugin (contains await commit pending) UI contribution in:
-   * - profile.runtime  kind must not duplicate (many plugin declaration the same kind will let Profile
-   *   runtime table single appear ambiguity, explicit reject while non- by order swallow);
-   * - commandPalette  slash must not duplicate (/completion list trigger term must unique).
+   * Final cross-plugin uniqueness check across all enabled plugins (including `pending`):
+   * - `profile.runtime` `kind` must be unique (duplicate kinds would make the Profile runtime list ambiguous,
+   *   so conflicts reject explicitly instead of being swallowed by registration order);
+   * - `commandPalette` `slash` must be unique (`/completion` triggers must map unambiguously).
    *
-   * by PluginHost in enable commit point (enabled=true the same sync chunk) invoke:define phase
-   * mention before check only than for plugin itself (by default deactivate probe enabled:false does not occupy global name); two
-   * plugin concurrency enable when each define check all may via, but serial commit point final inspect guarantee at most
-   * a expose duplicate items (after to explicit reject and rollback).pending also in activePluginIds in when
-   * skip iterate in it, tail only sweep once, avoid the same plugin self than for mistakenly report.
+   * Called by `PluginHost` at the synchronous enable commit point (`enabled = true`): checks during `define`
+   * only inspect the plugin itself (so default-disabled probes with `enabled: false` do not reserve global
+   * names). Concurrent enables may both pass `define`, but the serialized commit check guarantees at most one
+   * succeeds and subsequent ones reject and roll back. When `pending` is also in `activePluginIds`, skip
+   * iterating it directly so the final sweep checks it once without reporting self-collisions.
    */
   assertCrossPluginUnique(pluginId: string, activePluginIds: Iterable<string>): void {
     const kindOwners = new Map<string, string>();
@@ -306,7 +625,7 @@ export class UiRegistry {
    */
   async precompileClientModules(pluginId: string, options: ClientLifecycleLookup): Promise<void> {
     if (options.isDisposed()) {
-      throw new HelmError('plugin_host_disposed', 'PluginHost already dispose', 409);
+      throw new HelmError('plugin_host_disposed', 'PluginHost has already been disposed', 409);
     }
     const modules = this.getDeclaredClientModules(pluginId);
     if (modules.length === 0) {
@@ -320,7 +639,7 @@ export class UiRegistry {
       }),
     );
     if (options.isDisposed()) {
-      throw new HelmError('plugin_host_disposed', 'PluginHost already dispose', 409);
+      throw new HelmError('plugin_host_disposed', 'PluginHost has already been disposed', 409);
     }
     const hashes = new Map<string, string>();
     for (const [moduleRef, contentHash] of compiled) {
@@ -329,44 +648,56 @@ export class UiRegistry {
     this.clientHashes.set(pluginId, hashes);
   }
 
+  private assertClientLifecyclePhase(
+    pluginId: string,
+    moduleRef: string,
+    options: ClientLifecycleLookup,
+    allowedPhases: 'idle-only' | 'defining-or-idle',
+  ) {
+    if (options.isDisposed()) {
+      throw new HelmError('plugin_host_disposed', 'PluginHost has already been disposed', 409);
+    }
+    const info = options.getPluginLifecycle(pluginId);
+    const phaseOk =
+      info !== undefined &&
+      ((info.enabled && info.phase === 'idle') || (allowedPhases === 'defining-or-idle' && info.phase === 'defining'));
+    if (!phaseOk) {
+      throw new HelmError('plugin_client_unavailable', `Plugin ${pluginId} is not enabled; client module unavailable`, 409, {
+        pluginId,
+        module: moduleRef,
+      });
+    }
+    return info;
+  }
+
   private async compileModuleChecked(
     pluginId: string,
     moduleRef: string,
     options: ClientLifecycleLookup,
     allowedPhases: 'idle-only' | 'defining-or-idle',
   ): Promise<PluginClientBundle> {
-    if (options.isDisposed()) {
-      throw new HelmError('plugin_host_disposed', 'PluginHost already dispose', 409);
-    }
     assertModuleRefShape(pluginId, moduleRef);
-    const info = options.getPluginLifecycle(pluginId);
-    const phaseOk =
-      info !== undefined &&
-      ((info.enabled && info.phase === 'idle') || (allowedPhases === 'defining-or-idle' && info.phase === 'defining'));
-    if (!phaseOk) {
-      throw new HelmError('plugin_client_unavailable', `plugin ${pluginId} not enabled, do not provide client module`, 409, {
-        pluginId,
-        module: moduleRef,
-      });
+    const info = this.assertClientLifecyclePhase(pluginId, moduleRef, options, allowedPhases);
+    if (info.prebuiltClientDir !== undefined) {
+      return readPrebuiltClientBundle(info.prebuiltClientDir, moduleRef, undefined, pluginId);
     }
     const clientRoot = info.clientRoot;
     if (clientRoot === undefined) {
-      throw new HelmError('plugin_client_unavailable', `plugin ${pluginId} not declaration clientRoot`, 404, { pluginId });
+      throw new HelmError('plugin_client_unavailable', `Plugin ${pluginId} did not declare clientRoot`, 404, { pluginId });
     }
     const identity = info.identity;
     const epoch = info.epoch;
-    // build port by PluginHostOptions inject (produce product in hub connect line by default implement); missing when
-    // explicit 501, never static default return empty artifact or fall back inside placement compiler.
+    // Build port is injected via PluginHostOptions; never fabricate empty artifacts when missing.
     const provider = this.buildProvider;
     if (provider === undefined) {
       throw new HelmError(
         'unsupported_client_build',
-        `host not inject plugin build port (PluginHostOptions.buildProvider): cannot provide plugin ${pluginId}  client module ${moduleRef}`,
+        `Host has not wired plugin build port (PluginHostOptions.buildProvider): cannot serve client module ${moduleRef} for plugin ${pluginId}`,
         501,
         { pluginId, module: moduleRef },
       );
     }
-    // subject to control npm dependency: define declaration specifiers -> parse aggregate (and doctor chain the same mapping opening path).
+    // Managed npm dependencies declared in manifest -> resolved relative to plugin directory.
     const npmRoots: PluginClientNpmRoot[] = clientNpmRootsOf(info.npmDependencies);
     const result = await provider.compileClientModule({
       pluginId,
@@ -388,7 +719,7 @@ export class UiRegistry {
     ) {
       throw new HelmError(
         'plugin_client_unavailable',
-        `plugin ${pluginId} in client module compile complete before deactivated or enter new enable cycle, artifact act abandon`,
+        `plugin ${pluginId} was deactivated or entered a new enable cycle before client module compilation completed; discarding artifact`,
         409,
         { pluginId, module: moduleRef },
       );
@@ -404,13 +735,39 @@ export class UiRegistry {
     return result;
   }
 
+  private assertClientModuleHashMatches(
+    pluginId: string,
+    moduleRef: string,
+    actualHash: string,
+    requestedHash: string | undefined,
+    chunk: string | undefined,
+  ): void {
+    if (requestedHash === undefined || (requestedHash.length > 0 && requestedHash === actualHash)) {
+      return;
+    }
+    if (chunk !== undefined) {
+      throw new HelmError(
+        'client_chunk_stale',
+        `plugin ${pluginId} requested chunk hash (${requestedHash}) does not match current artifact hash (${actualHash})`,
+        409,
+        { pluginId, module: moduleRef, chunk, hash: requestedHash, currentHash: actualHash },
+      );
+    }
+    throw new HelmError(
+      'client_module_stale',
+      `plugin ${pluginId} requested client module hash (${requestedHash}) does not match current artifact hash (${actualHash})`,
+      409,
+      { pluginId, module: moduleRef, hash: requestedHash, currentHash: actualHash },
+    );
+  }
+
   async getClientModule(
     pluginId: string,
     moduleRef: string,
     options: ClientModuleOptions,
   ): Promise<PluginClientBundle> {
     if (options.isDisposed()) {
-      throw new HelmError('plugin_host_disposed', 'PluginHost already dispose', 409);
+      throw new HelmError('plugin_host_disposed', 'PluginHost is already disposed', 409);
     }
     assertModuleRefShape(pluginId, moduleRef);
     if (options.chunk !== undefined) {
@@ -421,11 +778,34 @@ export class UiRegistry {
       ) {
         throw new HelmError(
           'invalid_client_module',
-          `plugin ${pluginId}  chunk module name illegal (must match /^[A-Za-z0-9._-]+\\.js$/ and excludes ..):${String(options.chunk)}`,
+          `plugin ${pluginId} invalid chunk module name (must match /^[A-Za-z0-9._-]+\\.js$/ and exclude ..): ${String(options.chunk)}`,
           400,
           { pluginId, chunk: String(options.chunk) },
         );
       }
+    }
+    const info = this.assertClientLifecyclePhase(pluginId, moduleRef, options, 'idle-only');
+    if (info.prebuiltClientDir !== undefined) {
+      const { rootReal, manifest } = readPrebuiltClientManifest(info.prebuiltClientDir, pluginId);
+      const verified = assertPrebuiltEntryIntegrity(
+        rootReal,
+        info.prebuiltClientDir,
+        moduleRef,
+        manifest,
+        pluginId,
+      );
+      const trackedHashes = this.clientHashes.get(pluginId);
+      if (trackedHashes?.has(moduleRef)) {
+        trackedHashes.set(moduleRef, verified.entry.contentHash);
+      }
+      this.assertClientModuleHashMatches(
+        pluginId,
+        moduleRef,
+        verified.entry.contentHash,
+        options.hash,
+        options.chunk,
+      );
+      return materializePrebuiltBundle(info.prebuiltClientDir, moduleRef, verified, options.chunk, pluginId);
     }
     const result = await this.compileModuleChecked(pluginId, moduleRef, options, 'idle-only');
     // Keep precompiled hash map aligned when a declared module is recompiled after source edit.
@@ -434,29 +814,14 @@ export class UiRegistry {
       trackedHashes.set(moduleRef, result.contentHash);
     }
 
-    if (options.hash !== undefined && (options.hash.length === 0 || options.hash !== result.contentHash)) {
-      if (options.chunk !== undefined) {
-        throw new HelmError(
-          'client_chunk_stale',
-          `plugin ${pluginId} request chunk hash (${options.hash}) and when before artifact hash (${result.contentHash}) does not match`,
-          409,
-          { pluginId, module: moduleRef, chunk: options.chunk, hash: options.hash, currentHash: result.contentHash },
-        );
-      }
-      throw new HelmError(
-        'client_module_stale',
-        `plugin ${pluginId} request client module hash (${options.hash}) and current artifact hash (${result.contentHash}) does not match`,
-        409,
-        { pluginId, module: moduleRef, hash: options.hash, currentHash: result.contentHash },
-      );
-    }
+    this.assertClientModuleHashMatches(pluginId, moduleRef, result.contentHash, options.hash, options.chunk);
 
     if (options.chunk !== undefined) {
       const chunkData = result.chunks?.[options.chunk];
       if (!chunkData) {
         throw new HelmError(
           'client_chunk_not_found',
-          `plugin ${pluginId} module ${moduleRef} not generate chunk: ${options.chunk}`,
+          `plugin ${pluginId} module ${moduleRef} did not generate chunk: ${options.chunk}`,
           404,
           { pluginId, module: moduleRef, chunk: options.chunk },
         );

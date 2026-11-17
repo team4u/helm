@@ -132,6 +132,7 @@ export const reportToggleLabel = t2((title: string, open: boolean) =>
 export const reportOpenChildTitle = t1((id: number) => L(`Open subagent #${id}`, `打开子会话 #${id}`))
 export const REPORT_INVALID_CALLOUT = L('Malformed report payload (raw message snapshot below)', '汇报数据格式异常（以下为原始报文快照）')
 export const REPORT_KV_RUN_ID = L('Run ID', '运行 ID')
+export const REPORT_KV_TASK_NAME = L('Task name', '任务名称')
 export const REPORT_KV_DELIVERED_AT = L('Delivered at', '投递时间')
 export const REPORT_KV_TASK_TYPE = L('Task type', '任务类型')
 export const REPORT_KIND_SUBAGENT = L('Background subagent', '后台子代理')
@@ -231,7 +232,7 @@ export const detailsOpenArtifactLabel = t1((artifactId: string) => L(`Open full 
 // External run summary
 // ---------------------------------------------------------------------------
 
-export const EXTERNAL_TITLE = L('External run', '外部执行')
+export const EXTERNAL_TITLE = L('External agent', '外部代理')
 export const ACTION_DETACH_EXTERNAL_TITLE = L(
   'Move this foreground-sync external run to the background: the blocked call immediately returns a background handle, and a follow-up report arrives on completion',
   '把该前台同步外部执行转入后台：阻塞中的调用立即返回后台句柄，完成后自动 followUp 汇报',
@@ -678,3 +679,17 @@ export const workbenchResumeStarted = t2((resumedCount: number, skippedCount: nu
       ),
 )
 export const workbenchResumeFailed = t1((err: string) => L(`Batch resume failed: ${err}`, `批量恢复失败：${err}`))
+export function execFrontlineNamed(
+  name: string,
+  id: number,
+  doing: string | undefined,
+  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+): string {
+  if (doing !== undefined && doing !== '') {
+    return `${name} (#${id}) · ${doing}`
+  }
+  return resolveLocalizedText(L(`${name} (#${id}) running`, `${name} (#${id}) 执行中`), locale)
+}
+export const execApprovalItemNamed = t2((name: string, id: number) =>
+  L(`${name} (#${id}) awaiting approval`, `${name} (#${id}) 等待审批`),
+)

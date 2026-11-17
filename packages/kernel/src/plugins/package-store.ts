@@ -1,17 +1,11 @@
 /**
- * managed plugin package install record durable layer (config.json `pluginPackages` key).
+ * Persistent storage for managed plugin package install records (`config.json` `pluginPackages` key).
  *
- * - structure:`pluginPackages: Record<pluginId, PluginPackageRecord>`(by pluginId
- *   key control, duplicate install the same plugin override update, and contract the same plugin duplicate install re- use
- *   original ID update record consistent - -ID along use since has record id);
- * - read write all via ConfigService lock inside read change write (and pluginEnabled/plugins the same pattern,
- *   across instance serial, never lock outside old snapshot override);
- * - structure corrupt (non- object / record shape illegal / source illegal) explicit config_corrupt reject,
- *   never static default discard or use {} rebuild (honest discipline);
- * - getPluginPackagesSync sync mirror only supply PluginHost.list()/get() mapping
- *   PluginSummary.managed use: write path sync dimension hold mirror, mirror and disk consistent;
- *   independent construct (without load) when mirror is empty - - plugin manifest managed only reverse reflect this process inside
- *   complete install, after restart by runtime start chain load() restore.
+ * - Keyed by `pluginId` (`Record<pluginId, PluginPackageRecord>`); re-installing updates and preserves
+ *   the existing record ID (`id`);
+ * - All reads/writes run under `ConfigService` read-modify-write locking so concurrent updates never clash;
+ * - Structural corruption rejects explicitly with `config_corrupt` (never silently discarded or rebuilt as `{}`);
+ * - `getRecord` reads the in-memory mirror synchronized on write/load for `PluginSummary.managed` decoration.
  */
 import { HelmError, type PluginPackageRecord, type PluginPackageSource } from '@helm/protocol';
 import type { ConfigService } from '../services/config.js';
@@ -20,9 +14,9 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-/** source shape validate (judge other join together most small boundary):kind legal and for should field is non-empty string. */
+/** Validates `source` shape in a stored record (non-empty strings matching discriminated union fields). */
 function assertSourceShape(pluginId: string, v: unknown): PluginPackageSource {
-  if (!isPlainObject(v)) throw corruptSource(pluginId, 'should be object');
+  if (!isPlainObject(v)) throw corruptSource(pluginId, 'must be an object');
   const kind = v['kind'];
   if (kind === 'npm') {
     if (typeof v['spec'] !== 'string' || v['spec'].length === 0) throw corruptSource(pluginId, 'npm source missing spec');
@@ -48,18 +42,18 @@ function assertSourceShape(pluginId: string, v: unknown): PluginPackageSource {
 function corruptSource(pluginId: string, detail: string): HelmError {
   return new HelmError(
     'config_corrupt',
-    `config.json pluginPackages.${pluginId}.source structure illegal (${detail}), reject read write`,
+    `Invalid config.json pluginPackages.${pluginId}.source (${detail})`,
     500,
   );
 }
 
 function corrupt(detail: string): HelmError {
-  return new HelmError('config_corrupt', `config.json pluginPackages field structure illegal (${detail})`, 500);
+  return new HelmError('config_corrupt', `Invalid config.json pluginPackages structure (${detail})`, 500);
 }
 
-/** single record shape validate (rather can reject cannot virtual construct). */
+/** Validates a single stored package record (rejects rather than fabricating defaults). */
 function parseRecord(pluginId: string, v: unknown): PluginPackageRecord {
-  if (!isPlainObject(v)) throw corrupt(`${pluginId} should be PluginPackageRecord object`);
+  if (!isPlainObject(v)) throw corrupt(`${pluginId} must be a PluginPackageRecord object`);
   const requiredStrings = ['id', 'installPath'] as const;
   for (const key of requiredStrings) {
     if (typeof v[key] !== 'string' || (v[key] as string).length === 0) {
@@ -87,19 +81,19 @@ function parseRecord(pluginId: string, v: unknown): PluginPackageRecord {
 
 export class PluginPackageManagerStore {
   private readonly config: ConfigService;
-  /** sync mirror (write path dimension hold; read penetrate disk lock by ConfigService guarantee). */
+  /** Synchronized in-memory mirror updated on write/load. */
   private mirror = new Map<string, PluginPackageRecord>();
 
   constructor(config: ConfigService) {
     this.config = config;
   }
 
-  /** start warm up: read config.json establish mirror; corrupt explicit on throw. */
+  /** Startup warmup: reads `config.json` into the mirror; rejects explicitly on corruption. */
   async load(): Promise<void> {
     const cfg = await this.config.get();
     const packages = cfg['pluginPackages'];
     if (packages === undefined) return;
-    if (!isPlainObject(packages)) throw corrupt(`should be pluginId → record object, actual:${typeof packages}`);
+    if (!isPlainObject(packages)) throw corrupt(`expected pluginId -> record map, got ${typeof packages}`);
     const next = new Map<string, PluginPackageRecord>();
     for (const [pluginId, value] of Object.entries(packages)) {
       next.set(pluginId, parseRecord(pluginId, value));
@@ -107,7 +101,7 @@ export class PluginPackageManagerStore {
     this.mirror = next;
   }
 
-  /** sync mirror read (PluginSummary.managed mapping use). */
+  /** Reads from the synchronized mirror (for `PluginSummary.managed` projection). */
   getRecord(pluginId: string): PluginPackageRecord | undefined {
     return this.mirror.get(pluginId);
   }
@@ -116,19 +110,16 @@ export class PluginPackageManagerStore {
     return [...this.mirror.values()];
   }
 
-  /**
-   * write/override a record: lock inside read change write, only update this plugin key; duplicate install along use since has
-   * record id(idempotent stable identifier). after success sync mirror.
-   */
+  /** Writes/updates a package record under lock, reusing existing record ID when updating; syncs mirror on success. */
   async save(record: Omit<PluginPackageRecord, 'id'> & { id?: string }): Promise<PluginPackageRecord> {
     let stored!: PluginPackageRecord;
     await this.config.updateBy((current) => {
       const existing = current['pluginPackages'];
       if (existing !== undefined && !isPlainObject(existing)) {
-        throw corrupt(`should be pluginId → record object, actual:${typeof existing}`);
+        throw corrupt(`expected pluginId -> record map, got ${typeof existing}`);
       }
       const map = isPlainObject(existing) ? existing : {};
-      // validate since has all record (before write for structure corrupt such as reject, do not use part old value rebuild)
+      // Validate all existing records before mutating so partial corruption never goes unnoticed.
       for (const [pid, v] of Object.entries(map)) parseRecord(pid, v);
       const prevId = isPlainObject(map[record.pluginId])
         ? (map[record.pluginId] as Record<string, unknown>)['id']
@@ -141,24 +132,24 @@ export class PluginPackageManagerStore {
     return stored;
   }
 
-  /** delete record; after success sync mirror. target missing when 404(caller decide semantics). */
+  /** Deletes a package record under lock and updates mirror (404 `unknown_plugin_package` if missing). */
   async delete(pluginId: string): Promise<PluginPackageRecord> {
     let removed: PluginPackageRecord | undefined;
     await this.config.updateBy((current) => {
       const existing = current['pluginPackages'];
       if (existing !== undefined && !isPlainObject(existing)) {
-        throw corrupt(`should be pluginId → record object, actual:${typeof existing}`);
+        throw corrupt(`expected pluginId -> record map, got ${typeof existing}`);
       }
       const map = isPlainObject(existing) ? existing : {};
       const target = map[pluginId];
-      if (!isPlainObject(target)) return current; // without change; by removed decide 404
+      if (!isPlainObject(target)) return current;
       removed = parseRecord(pluginId, target);
       const next = { ...map };
       delete next[pluginId];
       return { ...current, pluginPackages: next };
     });
     if (removed === undefined) {
-      throw new HelmError('unknown_plugin_package', `plugin ${pluginId} no managed install record`, 404, { pluginId });
+      throw new HelmError('unknown_plugin_package', `Plugin ${pluginId} has no managed install record`, 404, { pluginId });
     }
     this.mirror.delete(pluginId);
     return removed;

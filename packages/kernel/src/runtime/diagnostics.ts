@@ -1,10 +1,10 @@
 /**
- * kernel light amount diagnose channel (DiagnosticSink).
+ * Lightweight kernel diagnostic channel (DiagnosticSink).
  *
- * kernel internal non- lead to life/async alert and lead to life fault log unify gather to structure event,
- * in dispatch before force through SecretStash redaction (message and error all redaction),
- * default output until console.error(stderr, do not pollute CLI stdout); single test and host can inject
- * onDiagnostic catch assertion, no longer four where scatter bare console.error.
+ * Non-fatal/async warnings and fatal error logs inside the kernel are funneled into structured events,
+ * forcibly scrubbed through SecretStash redaction before dispatch (redacting both message and error),
+ * and written to console.error by default (stderr, avoiding polluting CLI stdout); unit tests and hosts can inject
+ * onDiagnostic to capture and assert events instead of scattering bare console.error calls.
  */
 
 export type KernelDiagnosticLevel = 'error' | 'warn' | 'info'
@@ -29,7 +29,7 @@ export interface KernelDiagnosticInput {
 
 export type KernelDiagnosticEmitter = (input: KernelDiagnosticInput) => void
 
-/** security format any throw value (compatibility without prototype object etc., never because format itself again throw exception). */
+/** Safely format any thrown value (supports null-prototype objects, etc., and never throws during formatting). */
 export function formatDiagnosticError(error: unknown): string {
   if (error instanceof Error) {
     const header = `${error.name}: ${error.message}`
@@ -56,8 +56,8 @@ export const defaultDiagnosticSink: KernelDiagnosticSink = (event) => {
 }
 
 /**
- * group install redaction after diagnose event and delivery to target sink(default away defaultDiagnosticSink).
- * on report itself exception by then ground isolated, never reverse devour caller or block assert closure stop path.
+ * Assemble a redacted diagnostic event and deliver it to the target sink (defaults to defaultDiagnosticSink).
+ * Reporting exceptions are isolated locally and never thrown back to callers or block abort/shutdown paths.
  */
 export function emitDiagnostic(
   sink: KernelDiagnosticSink | undefined,
@@ -75,11 +75,11 @@ export function emitDiagnostic(
   try {
     ;(sink ?? defaultDiagnosticSink)(event)
   } catch {
-    /* diagnose on report itself must not again throw */
+    /* diagnostic reporting itself must never throw */
   }
 }
 
-/** construct bind set fixed sink and redaction function diagnose shoot. */
+/** Construct a diagnostic emitter bound to a fixed sink and redaction function. */
 export function createDiagnosticEmitter(
   options: {
     sink?: KernelDiagnosticSink

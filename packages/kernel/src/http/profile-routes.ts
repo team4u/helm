@@ -1,9 +1,9 @@
 /**
- * Profile domain routing:/api/profiles CRUD.
+ * Profile domain routes: /api/profiles CRUD.
  *
- * hosting metadata (managedByPlugin) only can by can message plugin self raise via ProfileService direct write:
- * HTTP create do not accept the field,PUT must not remove/change write,DELETE reject delete hosting Profile.
- * bind set disable model in before preflight (409 model_disabled).
+ * Hosting metadata (`managedByPlugin`) may only be written directly by trusted plugin bootstraps via
+ * `ProfileService`: HTTP create rejects the field, PUT forbids removing or modifying it, and DELETE
+ * forbids deleting plugin-managed Profiles. Disabled-model binding is preflighted before saving (`409 model_disabled`).
  */
 import { HelmError, type Profile } from '@helm/protocol'
 import { errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
@@ -28,22 +28,22 @@ export async function handleProfilesDomain(
     if (method === 'POST') {
       const body = await readJsonBody(ctx.request)
       const profile = parseProfileBody(body, { requireId: true })
-      // hosting metadata only can message plugin self raise can declaration (ProfileService direct write);HTTP create
-      // do not accept managedByPlugin, guard against fabricate hosting identity or mention before occupy lock delete.
+      // Hosting metadata may only be declared by trusted plugin bootstraps (direct ProfileService write);
+      // HTTP create rejects `managedByPlugin` to prevent spoofing managed ownership or bypassing deletion locks.
       if (profile.managedByPlugin !== undefined) {
         throw new HelmError(
           'profile_managed_by_plugin',
-          'managedByPlugin by plugin self raise declaration, cannot via HTTP create when settings',
+          'managedByPlugin is declared by plugin bootstrap and cannot be set via HTTP create',
           403,
           { profileId: profile.id },
         )
       }
       const existing = await kernel.profiles.get(profile.id)
       if (existing?.managedByPlugin !== undefined) {
-        throw new HelmError('profile_managed_by_plugin', `cannot override plugin hosting profile ${profile.id}`, 403)
+        throw new HelmError('profile_managed_by_plugin', `cannot overwrite plugin-managed profile ${profile.id}`, 403)
       }
-      // save before reject bind set disable model (409 model_disabled), avoid save after success all
-      // bind set conversation in commit when only then 409; only HTTP boundary, plugin can message self raise direct write ProfileService do not via this.
+      // Reject disabled model before saving so we never persist a binding that fails on the first turn (409);
+      // HTTP boundary only—trusted plugin bootstraps writing ProfileService directly bypass this check.
       assertProfileModelEnabled(kernel, profile)
       const saved = await kernel.profiles.save(profile)
       await kernel.alignProfileConversations?.(saved.id)
@@ -55,54 +55,53 @@ export async function handleProfilesDomain(
   if (third === undefined) {
     if (method === 'GET') {
       const found = await kernel.profiles.get(profileId)
-      if (found === undefined) throw new HelmError('not_found', `profile missing: ${profileId}`, 404)
+      if (found === undefined) throw new HelmError('not_found', `profile not found: ${profileId}`, 404)
       return jsonOk(redactor, await enrichProfile(found))
     }
     if (method === 'PUT') {
       const body = await readJsonBody(ctx.request)
       const profile = parseProfileBody(body, { requireId: false })
       if (profile.id !== undefined && profile.id !== profileId) {
-        throw new ValidationError('body.id(if provide) must and path parameter consistent')
+        throw new ValidationError('body.id (when provided) must match the path parameter')
       }
-      // hosting metadata cannot tamper: since has managedByPlugin  Profile,PUT must not remove or
-      // change write the field (can message plugin self raise away ProfileService direct write do not via HTTP). missing field
-      // treated as remove (PUT whole replace contract), explicit reject while non- static default take over.
+      // Hosting metadata is immutable over HTTP: PUT must not remove or modify `managedByPlugin`
+      // on an existing managed Profile (trusted plugin bootstraps write ProfileService directly).
+      // Omitting the field counts as attempted removal (PUT full-replacement contract) and fails explicitly.
       const existing = await kernel.profiles.get(profileId)
       if (existing === undefined) {
-        throw new HelmError('not_found', `profile missing: ${profileId}`, 404)
+        throw new HelmError('not_found', `profile not found: ${profileId}`, 404)
       }
       if (profile.managedByPlugin !== existing.managedByPlugin) {
         throw new HelmError(
           'profile_managed_by_plugin',
-          `profile ${profileId} hosting metadata only can by plugin declaration, cannot via HTTP settings, modify or remove`,
+          `profile ${profileId} hosting metadata is declared by a plugin and cannot be set, modified, or removed via HTTP`,
           403,
           { profileId, managedByPlugin: existing.managedByPlugin },
         )
       }
-      // and POST same rule: bind set disable model in before reject (PUT whole replace, missing model = clear, does not trigger preflight).
+      // Same rule as POST: reject disabled model before saving (PUT full replacement; omitted model clears override without preflight).
       assertProfileModelEnabled(kernel, profile)
       const saved = await kernel.profiles.save({ ...profile, id: profileId })
       await kernel.alignProfileConversations?.(saved.id)
       return jsonOk(redactor, await enrichProfile(saved))
     }
     if (method === 'DELETE') {
-      // still by any conversation bind set profile reject delete: otherwise under one round before_turn find
-      // fewer than file, conversation carries illness run.assistant by default service same subject to lock protect (403).
-      // this where is fast path; service layer delete internal before honor bottom re-check (the same check),
-      // double to re- verify closed ring: create/PATCH bind set side also verify profile store in
-      // (conversation-service resolveProfileForCreate/updateConfiguration),
-      // leftover remaining window only is re-check await to rm between micro task level hand over wrong, can accept.
+      // Refuse deletion while any conversation still binds the profile: otherwise the next `before_turn`
+      // cannot find the file and the conversation runs degraded. The default `assistant` profile is also locked (403).
+      // This is a fast path; ProfileService.delete repeats the same check right before writing, and creation/PATCH
+      // verify profile existence (`resolveProfileForCreate`/`updateConfiguration`), leaving only a benign microtask
+      // window between re-check and `rm`.
       const inUse = (await kernel.listConversations()).some((c) => c.profileId === profileId)
       if (inUse) {
-        throw new HelmError('profile_in_use', `profile ${profileId} still by conversation bind set, first solve bind again delete`, 409)
+        throw new HelmError('profile_in_use', `profile ${profileId} is still bound by conversations; unbind before deleting`, 409)
       }
-      // plugin hosting Profile(managedByPlugin non-empty) reject delete: guard against bypass UI directly
-      // tune HTTP delete plugin self raise asset; kernel by default profile protect by ProfileService bear bear.
+      // Refuse deleting plugin-managed Profiles (`managedByPlugin` set): prevents bypassing UI to delete
+      // bootstrapped plugin assets over HTTP; the built-in default profile is protected by ProfileService itself.
       const target = await kernel.profiles.get(profileId)
       if (target?.managedByPlugin !== undefined) {
         throw new HelmError(
           'profile_managed_by_plugin',
-          `profile ${profileId} by plugin ${target.managedByPlugin} hosting, cannot delete`,
+          `profile ${profileId} is managed by plugin ${target.managedByPlugin} and cannot be deleted`,
           403,
           { profileId, managedByPlugin: target.managedByPlugin },
         )
@@ -115,10 +114,10 @@ export async function handleProfilesDomain(
     }
     return methodNotAllowed(redactor, method)
   }
-  return errorResponse(redactor, 404, 'not_found', 'routing missing')
+  return errorResponse(redactor, 404, 'not_found', 'route not found')
 }
 
-/** profile.model disable preflight: parse out provider/model after invoke optional port (409 model_disabled). */
+/** Disabled-model preflight for `profile.model`: extracts provider/model and invokes optional port (409 model_disabled). */
 function assertProfileModelEnabled(kernel: KernelRuntimeLike, profile: Profile): void {
   if (profile.model === undefined || kernel.assertModelEnabled === undefined) return
   const slash = profile.model.indexOf('/')

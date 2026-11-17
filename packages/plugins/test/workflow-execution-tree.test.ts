@@ -438,12 +438,12 @@ test('collectExecutionApprovals：收集子树 blocked 会话（#id + 用户标�
   const items = m.collectExecutionApprovals(tree, 3)
   assert.deepEqual(
     items.map((item) => item.text),
-    ['#21 确认删除文件', '#22 awaiting approval'],
+    ['确认删除文件 (#21) awaiting approval', '#22 awaiting approval'],
     'status=blocked 与 pendingAskCount>0（AskDoc 有单）均计为等待审批',
   )
   assert.deepEqual(
     m.collectExecutionApprovals(tree, 3, 'zh-CN').map((item) => item.text),
-    ['#21 确认删除文件', '#22 等待审批'],
+    ['确认删除文件 (#21) 等待审批', '#22 等待审批'],
   )
   assert.equal(items[0]!.conversationId, 21)
   assert.equal(m.collectExecutionApprovals(tree, 1).length, 1, 'limit 生效')
@@ -701,14 +701,48 @@ test('executionNodeTitle：用户标题 > run 节点 label / prompt > 会话与 
   assert.equal(m.executionNodeTitle(labeled), '调研员')
   const action = wf.children.find((c) => c.runNode?.id === 'n3')!
   assert.equal(m.executionNodeTitle(action), '落盘报告')
-
+  // 默认标题「子会话 N」/「subagent N」/「子代理 N」不算自定义标题：优先 run.name / runNode.prompt，无可用名称时才兜底
   const plain = m.buildExecutionTree({
     rootConversationId: 1,
-    conversations: [summary(1, 'idle'), summary(13, 'done', 1)],
-    runs: [subagentRun('wf_13', 1, 13, 'completed', { nodes: [node({ id: 'n13', status: 'done', conversationId: 13 })] })],
+    conversations: [
+      summary(1, 'idle'),
+      summary(13, 'done', 1, { title: 'subagent 13' }),
+      summary(14, 'done', 1, { title: '子代理 #14' }),
+    ],
+    runs: [
+      subagentRun('wf_13', 1, 13, 'completed', { nodes: [node({ id: 'n13', kind: 'agent', status: 'done', conversationId: 13 })] }),
+      subagentRun('wf_sub_named', 1, 14, 'completed', {
+        name: '后台代码审查',
+        nodes: [node({ id: 's1', kind: 'agent', status: 'done', conversationId: 14 })],
+      }),
+    ],
   })
-  assert.equal(m.executionNodeTitle(plain[0]!), 'Subagent #13')
-  assert.equal(m.executionNodeTitle(plain[0]!, 'zh-CN'), '子会话 #13')
+  const node13 = plain.find((n) => n.conversationId === 13)!
+  const node14 = plain.find((n) => n.conversationId === 14)!
+  assert.equal(m.executionNodeTitle(node13), 'Subagent #13')
+  assert.equal(m.executionNodeTitle(node13, 'zh-CN'), '子会话 #13')
+  assert.equal(m.executionNodeTitle(node14), '后台代码审查')
+  // 有可读节点名时，collectExecutionFrontline 携带「名称 (#id) · doing / running」
+  const namedFrontline = m.buildExecutionTree({
+    rootConversationId: 1,
+    conversations: [
+      summary(1, 'idle'),
+      summary(25, 'working', 1, { title: '排查构建失败', doing: 'bash: pnpm test' }),
+      summary(26, 'working', 1, { title: '同步状态' }),
+    ],
+    runs: [
+      subagentRun('wf_25', 1, 25, 'running'),
+      subagentRun('wf_26', 1, 26, 'running'),
+    ],
+  })
+  assert.deepEqual(
+    m.collectExecutionFrontline(namedFrontline, 4).map((item) => item.text),
+    ['排查构建失败 (#25) · bash: pnpm test', '同步状态 (#26) running'],
+  )
+  assert.deepEqual(
+    m.collectExecutionFrontline(namedFrontline, 4, 'zh-CN').map((item) => item.text),
+    ['排查构建失败 (#25) · bash: pnpm test', '同步状态 (#26) 执行中'],
+  )
 })
 
 // ---------------------------------------------------------------------------
@@ -790,16 +824,19 @@ test('工作台父卡渲染子树徽章 / 前线摘要 / 下一级紧凑子项�
     assert.match(host.textContent!, /Subtree 0\/2/, '应渲染子树完成计数徽章')
     const approvalBadge = host.querySelector('.subagent-live-trigger .badge-warn')
     assert.ok(approvalBadge !== null, '后代审批徽章应渲染')
-    assert.match(approvalBadge.getAttribute('title')!, /#21 确认删除文件/, '审批徽章 title 应含后代审批摘要')
+    assert.match(approvalBadge.getAttribute('title')!, /确认删除文件 \(#21\) awaiting approval/, '审批徽章 title 应含后代审批摘要')
+    // 前线活动摘要：深层 #31 working 的 doing 冒泡到父卡
     const frontline = host.querySelector('.execution-frontline')
     assert.ok(frontline !== null, '应渲染前线活动摘要行')
     assert.match(frontline.textContent!, /#31 bash: pnpm test/)
+    // 下一级紧凑子项：#21 单行（blocked 变体 + 等待审批徽章 + 子树计数），名称在前、#21 在后
     const rows = host.querySelectorAll('.execution-child-row')
     assert.equal(rows.length, 1, '仅展示父节点下一级紧凑子项')
     const row = rows[0] as HTMLElement
     assert.ok(row.classList.contains('execution-child-blocked'))
     assert.match(row.textContent!, /#21/)
     assert.match(row.textContent!, /确认删除文件/)
+    assert.ok(row.textContent!.indexOf('确认删除文件') < row.textContent!.indexOf('#21'), '子项名称应排在 #21 之前')
     assert.match(row.textContent!, /Awaiting approval/)
     assert.match(row.textContent!, /0\/2/, '紧凑子项应携带子树完成计数')
     assert.equal(row.getAttribute('aria-label'), 'Open conversation #21 drawer')
@@ -923,7 +960,7 @@ test('主徽章同源有效状态：父 idle + 后代 blocked/working 不显示�
     assert.ok(badgeTexts.includes('Self: Done'), '自身终态应另标清楚')
     assert.ok(!badgeTexts.includes('Done'), '不得以孤立的「Done」作为主徽章假完成')
     const warnBadge = trigger.querySelector('.badge-warn') as HTMLElement
-    assert.match(warnBadge.getAttribute('title') ?? '', /#5 确认删除文件/, '有效状态徽章 title 应含后代审批摘要')
+    assert.match(warnBadge.getAttribute('title') ?? '', /确认删除文件 \(#5\) awaiting approval/, '有效状态徽章 title 应含后代审批摘要')
   } finally {
     unmount()
   }
@@ -1025,6 +1062,28 @@ test('紧凑子项：深层 workflow / external run 行原位展开直系子项�
       '展开后应显示外部 run 直系子项行',
     )
     assert.deepEqual(spy.drawerCalls, [])
+  } finally {
+    unmount()
+  }
+})
+
+test('紧凑子项：无自定义标题时回退 Subagent #N 且不重复渲染 .execution-child-id', { timeout: 60_000 }, async () => {
+  const child11 = summary(11, 'working', 1, { doing: '父任务', updatedAt: 100 })
+  const child22 = summary(22, 'done', 11, { title: 'subagent 22', updatedAt: 50 })
+  setWorkflowClientStub({
+    docValue: { runs: [] },
+    conversations: [child11, child22],
+    conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
+  })
+  const spy = makeSpyCtx()
+  const mod = await importWorkflowClientModule('index.tsx')
+  const Panel = mod['WorkflowWorkbenchPanel'] as (p: Record<string, unknown>) => React.ReactElement
+  const { host, unmount } = await mountClient(spy, e(Panel, { conversation: summary(1, 'working') }))
+  try {
+    const row = host.querySelector('.execution-child-row') as HTMLElement
+    assert.ok(row !== null)
+    assert.equal(row.querySelector('.execution-child-title')?.textContent, 'Subagent #22')
+    assert.ok(row.querySelector('.execution-child-id') === null, '回退标题已含 #22 时不得重复渲染 .execution-child-id')
   } finally {
     unmount()
   }

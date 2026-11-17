@@ -41,7 +41,7 @@ import { type HelmEventFrame, type PluginDefinition } from '@helm/protocol'
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
-import { makeFauxModels } from './helpers/plugin-test-env.js'
+import { makeFauxProvider } from './helpers/plugin-test-env.js'
 
 const require = createRequire(import.meta.url)
 /** 主仓 packages/kernel（测试跨目录显式导入 kernel 源码；tsx loader 直跑源码）。 */
@@ -139,21 +139,18 @@ test('恢复顺序: prepareRecovery 先收集子会话落标记，init 才 abort
 // ---------------------------------------------------------------------------
 
 /** 子进程 seeder 源码（真实 SDK 持久任务；写临时 .mts 由 tsx 直跑）。 */
-function seederSource(kernelSrc: string, piAiModelsSrc: string, piAiFauxSrc: string, pluginBuildSrc: string): string {
+function seederSource(kernelSrc: string, _piAiModelsSrc: string, piAiFauxSrc: string, pluginBuildSrc: string): string {
   return `import { join } from 'node:path'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { setTimeout as delay } from 'node:timers/promises'
-import { createModels } from '${piAiModelsSrc}'
 import { fauxAssistantMessage, fauxProvider } from '${piAiFauxSrc}'
 import { KernelRuntime } from '${kernelSrc}'
 import { createPluginBuildProvider } from '${pluginBuildSrc}'
 
 const dataDir = process.env.HELM_SEED_DIR!
-const models = createModels()
 const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
-models.setProvider(faux.provider)
 faux.setResponses([fauxAssistantMessage('这是一段被慢速流式输出的长文本用于确保 SIGKILL 时模型回合仍在流式中')])
-const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: false })
+const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
 // 真实原生 spawn：创建子会话并提交输入（submission 内部 resume 调度器，回合真实运行）
 let childId = 0
 void kernel.spawnAgent({
@@ -273,8 +270,8 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
     assert.ok(childId > 1, `必须拿到子会话 ID（收到 ${childId}）`)
 
     // ---- 2) 重启进程：KernelRuntime(autoResume:false) + builtin:workflow 插件（app 同款顺序）----
-    const { models, faux } = makeFauxModels()
-    const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: false })
+    const faux = makeFauxProvider()
+    const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
     t.after(async () => {
       await kernel.close().catch(() => {})
       rmSync(dataDir, { recursive: true, force: true })
@@ -427,8 +424,8 @@ test('相位自适应 guarded 中止: paused 时逐会话落持久标记且不 r
     assert.ok(childId > 1, `必须拿到子会话 ID（收到 ${childId}）`)
 
     // 重启（不注册任何插件、autoResume:false：调度器保持 paused，恢复屏障窗口）。
-    const { models, faux } = makeFauxModels()
-    const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: false })
+    const faux = makeFauxProvider()
+    const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
     t.after(async () => {
       await kernel.close().catch(() => {})
       rmSync(dataDir, { recursive: true, force: true })
@@ -479,18 +476,15 @@ test('同步工作流全覆盖收敛：SIGKILL 与 graceful close() 均回收遗
   writeFileSync(
     seederPath,
     `import { setTimeout as delay } from 'node:timers/promises'
-import { createModels } from ${JSON.stringify(pathToFileURL(join(PI_AI_DIR, 'dist/models.js')).href)}
 import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href)}
 import { KernelRuntime } from ${JSON.stringify(KERNEL_SRC)}
 import { createPluginBuildProvider } from ${JSON.stringify(import.meta.resolve('@helm/plugin-build'))}
 import { createWorkflowPlugin } from ${JSON.stringify(workflowSrc)}
 
 const dataDir = process.env.HELM_SEED_DIR!
-const models = createModels()
 const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
-models.setProvider(faux.provider)
 faux.setResponses([fauxAssistantMessage('这是一段慢速同步工作流输出确保在进程被强杀前子会话仍处于工作状态')])
-const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: false })
+const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
 await kernel.plugins.register(createWorkflowPlugin())
 await kernel.start()
 const { run } = await kernel.plugins.invokeAction('builtin:workflow', 'run', {
@@ -562,13 +556,13 @@ process.kill(process.pid, 'SIGKILL')
     ])
     assert.ok(childId > 1 && runId !== '')
 
-    const { models, faux } = makeFauxModels()
+    const faux = makeFauxProvider()
     const kernel = await KernelRuntime.open({
       buildProvider: createPluginBuildProvider(),
       dataDir: sigkillDir,
       cwd: sigkillDir,
       model: 'faux/faux-1',
-      models,
+      providers: [faux.provider],
       autoResume: false,
     })
     kernelAfterKill = kernel
@@ -598,14 +592,14 @@ process.kill(process.pid, 'SIGKILL')
 
   // ---- B) graceful kernel.close() 中断同步工作流 ----
   const closeDir = mkdtempSync(join(tmpdir(), 'helm-sync-close-'))
-  const { models: modelsC1, faux: fauxC1 } = makeFauxModels({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
+  const fauxC1 = makeFauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
   fauxC1.setResponses([fauxAssistantMessage('优雅关停期缓慢输出的同步子会话长回复内容确保仍在执行中')])
   const k1 = await KernelRuntime.open({
     buildProvider: createPluginBuildProvider(),
     dataDir: closeDir,
     cwd: closeDir,
     model: 'faux/faux-1',
-    models: modelsC1,
+    providers: [fauxC1.provider],
     autoResume: false,
   })
   let k2: KernelRuntime | undefined
@@ -639,13 +633,13 @@ process.kill(process.pid, 'SIGKILL')
   assert.equal(recordAfterClose['status'], 'aborted')
   assert.equal(recordAfterClose['pendingChildCleanup'], true, 'host closing 时存在子会话必须写入 pendingChildCleanup')
 
-  const { models: modelsC2, faux: fauxC2 } = makeFauxModels()
+  const fauxC2 = makeFauxProvider()
   k2 = await KernelRuntime.open({
     buildProvider: createPluginBuildProvider(),
     dataDir: closeDir,
     cwd: closeDir,
     model: 'faux/faux-1',
-    models: modelsC2,
+    providers: [fauxC2.provider],
     autoResume: false,
   })
   const rootInputs2: unknown[] = []
@@ -690,7 +684,6 @@ test('原生 isolation:worktree SIGKILL 崩溃租约在重启 runtime.started �
   writeFileSync(
     seederPath,
     `import { setTimeout as delay } from 'node:timers/promises'
-import { createModels } from ${JSON.stringify(pathToFileURL(join(PI_AI_DIR, 'dist/models.js')).href)}
 import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href)}
 import { KernelRuntime } from ${JSON.stringify(KERNEL_SRC)}
 import { createPluginBuildProvider } from ${JSON.stringify(import.meta.resolve('@helm/plugin-build'))}
@@ -698,11 +691,9 @@ import { createWorkflowPlugin } from ${JSON.stringify(workflowSrc)}
 
 const dataDir = process.env.HELM_SEED_DIR!
 const repoDir = process.env.HELM_REPO_DIR!
-const models = createModels()
 const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
-models.setProvider(faux.provider)
 faux.setResponses([fauxAssistantMessage('这是一段慢速工作树隔离子代理流式文本确保进程崩溃时原生租约仍在运行中')])
-const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: repoDir, model: 'faux/faux-1', models, autoResume: false })
+const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: repoDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
 await kernel.plugins.register(createWorkflowPlugin())
 await kernel.start()
 const { run } = await kernel.plugins.invokeAction('builtin:workflow', 'run', {
@@ -774,13 +765,13 @@ process.kill(process.pid, 'SIGKILL')
     ])
     assert.ok(childId > 1)
 
-    const { models, faux } = makeFauxModels()
+    const faux = makeFauxProvider()
     const kernel = await KernelRuntime.open({
       buildProvider: createPluginBuildProvider(),
       dataDir,
       cwd: repoDir,
       model: 'faux/faux-1',
-      models,
+      providers: [faux.provider],
       autoResume: false,
     })
     recoveredKernel = kernel

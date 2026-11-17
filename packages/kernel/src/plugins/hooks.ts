@@ -1,16 +1,12 @@
 /**
- * through use priority Hook pipeline (backend 8 mount point shared use mechanism, zero business special judge).
+ * Priority-ordered hook pipeline shared across the 7 backend hook points (zero business hardcoding).
  *
- * semantics:
- * - priority count value relatively large first execute; same priority by register order (Array.prototype.sort stable).
- * - handle return void / undefined etc. price continue.
- * - transform.value via runtime payload validate after as downstream input continue pass.
- * - handled / block immediately short route, after continue handle no longer execute.
- * - illegal artifact (missing action, unknown action, the hook disallows action,transform missing value,
- *   transform after must want field by break,block missing reason)→ explicit invalid_hook_result,
- *   never static default when continue(honest discipline).
- * - handle throw exception → wrap HelmError(hook_execution_failed, 500) on throw,
- *   by caller decide pipeline failed semantics; forbidden swallow wrong continue run.
+ * Semantics:
+ * - Higher priority runs first; ties preserve registration order (`Array.prototype.sort` is stable);
+ * - Returning `void`/`undefined` is equivalent to `continue`;
+ * - `transform.value` is validated against the hook payload schema before passing downstream;
+ * - `handled`/`block` short-circuits remaining handlers;
+ * - Invalid return shapes throw `invalid_hook_result`; exceptions wrap as `hook_execution_failed`.
  */
 import {
   HelmError,
@@ -28,11 +24,11 @@ import {
 } from '@helm/protocol';
 
 /**
- * each Hook allows combine action (design document):
- * - trigger / input / tool_call can intercept or change write;
- * - before_turn only allows original ground modify;
- * - tool_result can change write result;agent_spawn can take over;
- * - turn_settled bias notify, do not provide block gate control.
+ * Allowed return actions per hook point:
+ * - `trigger` / `input` / `tool_call`: may intercept (`handled`/`block`) or transform;
+ * - `before_turn`: supports `continue` and `transform` (in-place or transformed payload);
+ * - `tool_result` / `agent_spawn`: may transform or take over via `handled`;
+ * - `turn_settled`: notification hook (no `block`).
  */
 export const HOOK_ALLOWED_ACTIONS: Record<HookName, ReadonlySet<string>> = {
   trigger: new Set(['continue', 'transform', 'handled']),
@@ -47,13 +43,13 @@ export const HOOK_ALLOWED_ACTIONS: Record<HookName, ReadonlySet<string>> = {
 export interface RegisteredHook<K extends HookName = HookName> {
   pluginId: string;
   priority: number;
-  /** register ordinal, stable sort time level key. */
+  /** Registration sequence number used as tie-breaker in stable sort. */
   seq: number;
   handler: HookHandler<K>;
 }
 
 // ---------------------------------------------------------------------------
-// payload runtime validate: pipeline entry + each time transform after + runtime by default behavior before can re- use
+// Runtime payload validation (pipeline entry, post-transform, and host defaults)
 // ---------------------------------------------------------------------------
 
 function isObj(v: unknown): v is Record<string, unknown> {
@@ -61,40 +57,40 @@ function isObj(v: unknown): v is Record<string, unknown> {
 }
 
 function reqString(o: Record<string, unknown>, k: string): string | null {
-  return typeof o[k] === 'string' && (o[k] as string).length > 0 ? null : `field ${k} must be non-empty string`;
+  return typeof o[k] === 'string' && (o[k] as string).length > 0 ? null : `field ${k} must be a non-empty string`;
 }
 
-/** string type check but allows empty string:model not config when is legal empty string, by submitInput negative duty model_not_configured. */
+/** String type check permitting empty string (unconfigured models default to `''` before `submitInput`). */
 function strAllowEmpty(o: Record<string, unknown>, k: string): string | null {
-  return typeof o[k] === 'string' ? null : `field ${k} must be string (allows empty string)`;
+  return typeof o[k] === 'string' ? null : `field ${k} must be a string (empty string allowed)`;
 }
 
 function reqPositiveInt(o: Record<string, unknown>, k: string): string | null {
   const v = o[k];
   return typeof v === 'number' && Number.isInteger(v) && (v as number) > 0
     ? null
-    : `field ${k} must be positive integer`;
+    : `field ${k} must be a positive integer`;
 }
 
 function reqNonNegativeInt(o: Record<string, unknown>, k: string): string | null {
   const v = o[k];
   return typeof v === 'number' && Number.isInteger(v) && (v as number) >= 0
     ? null
-    : `field ${k} must be non- negative integer`;
+    : `field ${k} must be a non-negative integer`;
 }
 
 function reqArray(o: Record<string, unknown>, k: string): string | null {
-  return Array.isArray(o[k]) ? null : `field ${k} must be array`;
+  return Array.isArray(o[k]) ? null : `field ${k} must be an array`;
 }
 
 function optString(o: Record<string, unknown>, k: string): string | null {
-  return o[k] === undefined || typeof o[k] === 'string' ? null : `field ${k} if store in must be string`;
+  return o[k] === undefined || typeof o[k] === 'string' ? null : `field ${k} must be a string if present`;
 }
 
 type PayloadCheck = (v: unknown) => string | null;
 
 function checkConversationSummary(v: unknown): string | null {
-  if (!isObj(v)) return 'conversation must be object';
+  if (!isObj(v)) return 'conversation must be an object';
   return (
     reqPositiveInt(v, 'id') ??
     reqString(v, 'title') ??
@@ -104,11 +100,11 @@ function checkConversationSummary(v: unknown): string | null {
     strAllowEmpty(v, 'model') ??
     (['working', 'blocked', 'done', 'idle', 'error'].includes(String(v.status))
       ? null
-      : 'field status must be five state of one') ??
+      : 'field status must be one of working|blocked|done|idle|error') ??
     reqNonNegativeInt(v, 'stateChangeSeq') ??
     reqNonNegativeInt(v, 'completionSeq') ??
-    (typeof v.unread === 'boolean' ? null : 'field unread must be boolean value') ??
-    (typeof v.pinned === 'boolean' ? null : 'field pinned must be boolean value') ??
+    (typeof v.unread === 'boolean' ? null : 'field unread must be a boolean') ??
+    (typeof v.pinned === 'boolean' ? null : 'field pinned must be a boolean') ??
     reqNonNegativeInt(v, 'pendingAskCount') ??
     reqNonNegativeInt(v, 'createdAt') ??
     reqNonNegativeInt(v, 'updatedAt')
@@ -116,21 +112,21 @@ function checkConversationSummary(v: unknown): string | null {
 }
 
 function checkConversationInput(v: unknown): string | null {
-  if (!isObj(v)) return 'inputs each items must be ConversationInput';
+  if (!isObj(v)) return 'each input item must be ConversationInput';
   return (
     reqString(v, 'id') ??
     strAllowEmpty(v, 'text') ??
     (['human', 'agent', 'trigger'].includes(String(v.origin)) ? null : 'field origin must be human|agent|trigger') ??
     (v.whenBusy === undefined || ['steer', 'followUp', 'reject'].includes(String(v.whenBusy))
       ? null
-      : 'field whenBusy if store in must be steer|followUp|reject') ??
+      : 'field whenBusy must be steer|followUp|reject if present') ??
     reqNonNegativeInt(v, 'createdAt')
   );
 }
 
 const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
   trigger: (v) => {
-    if (!isObj(v)) return 'must be ExternalTriggerEnvelope object';
+    if (!isObj(v)) return 'must be an ExternalTriggerEnvelope object';
     return (
       reqString(v, 'id') ??
       reqString(v, 'source') ??
@@ -140,11 +136,11 @@ const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
     );
   },
   input: (v) => {
-    if (!isObj(v)) return 'must be object';
+    if (!isObj(v)) return 'must be an object';
     return reqPositiveInt(v, 'conversationId') ?? checkConversationInput(v.input);
   },
   before_turn: (v) => {
-    if (!isObj(v)) return 'must be object';
+    if (!isObj(v)) return 'must be an object';
     let err =
       checkConversationSummary(v.conversation) ??
       reqArray(v, 'inputs') ??
@@ -155,43 +151,44 @@ const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
     for (const i of v.inputs as unknown[]) if ((err = checkConversationInput(i))) return err;
     for (const t of v.tools as unknown[]) {
       if (!isObj(t) || typeof t.name !== 'string' || typeof t.description !== 'string' || !isObj(t.inputSchema)) {
-        return 'field tools each items must be PluginToolSpec';
+        return 'each item in field tools must be PluginToolSpec';
       }
     }
     for (const s of v.sections as unknown[]) {
       if (!isObj(s) || typeof s.id !== 'string' || typeof s.text !== 'string') {
-        return 'field sections each items must be { id: string; text: string }';
+        return 'each item in field sections must be { id: string; text: string }';
       }
     }
     for (const m of v.messages as unknown[]) {
-      if (!isObj(m)) return 'field messages each items must be object';
+      if (!isObj(m)) return 'each item in field messages must be an object';
     }
     return null;
   },
   tool_call: (v) => {
-    if (!isObj(v)) return 'must be object';
+    if (!isObj(v)) return 'must be an object';
     return (
       reqPositiveInt(v, 'conversationId') ??
       reqString(v, 'callId') ??
       reqString(v, 'toolName') ??
-      (isObj(v.input) ? null : 'field input must be object')
+      (isObj(v.input) ? null : 'field input must be an object')
     );
   },
   tool_result: (v) => {
-    if (!isObj(v)) return 'must be object';
+    if (!isObj(v)) return 'must be an object';
     return (
       reqPositiveInt(v, 'conversationId') ??
       reqString(v, 'callId') ??
       reqString(v, 'toolName') ??
-      (isObj(v.input) ? null : 'field input must be object') ??
-      ('result' in v ? null : 'field result must store in (value can is null)')
+      (isObj(v.input) ? null : 'field input must be an object') ??
+      ('result' in v ? null : 'field result must be present (value may be null)')
     );
   },
   agent_spawn: (v) => {
-    if (!isObj(v)) return 'must be AgentSpawnRequest object';
+    if (!isObj(v)) return 'must be an AgentSpawnRequest object';
     return (
       reqPositiveInt(v, 'parentConversationId') ??
       reqString(v, 'prompt') ??
+      optString(v, 'title') ??
       optString(v, 'agentId') ??
       optString(v, 'agentType') ??
       optString(v, 'model') ??
@@ -200,16 +197,16 @@ const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
       optString(v, 'gate') ??
       optString(v, 'resume') ??
       optString(v, 'requestId') ??
-      (v.fork === undefined || typeof v.fork === 'boolean' ? null : 'field fork if store in must be boolean value') ??
-      (v.reattach === undefined || isObj(v.reattach) ? null : 'field reattach if present must be object') ??
-      (v.isolation === undefined || typeof v.isolation === 'string' ? null : 'field isolation if store in must be string') ??
-      (v.schema === undefined || isObj(v.schema) ? null : 'field schema if store in must be object') ??
-      (v.onCreated === undefined || typeof v.onCreated === 'function' ? null : 'field onCreated if store in must be function') ??
-      (v.signal === undefined || v.signal instanceof AbortSignal ? null : 'field signal if store in must be AbortSignal')
+      (v.fork === undefined || typeof v.fork === 'boolean' ? null : 'field fork must be a boolean if present') ??
+      (v.reattach === undefined || isObj(v.reattach) ? null : 'field reattach must be an object if present') ??
+      (v.isolation === undefined || typeof v.isolation === 'string' ? null : 'field isolation must be a string if present') ??
+      (v.schema === undefined || isObj(v.schema) ? null : 'field schema must be an object if present') ??
+      (v.onCreated === undefined || typeof v.onCreated === 'function' ? null : 'field onCreated must be a function if present') ??
+      (v.signal === undefined || v.signal instanceof AbortSignal ? null : 'field signal must be an AbortSignal if present')
     );
   },
   turn_settled: (v) => {
-    if (!isObj(v)) return 'must be TurnSettledPayload object';
+    if (!isObj(v)) return 'must be a TurnSettledPayload object';
     let err =
       checkConversationSummary(v.conversation) ?? reqArray(v, 'inputs') ?? optString(v, 'error') ?? reqNonNegativeInt(v, 'settledAt');
     if (err) return err;
@@ -221,18 +218,18 @@ const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
   },
 };
 
-/** validate a certain Hook payload must want field (entry / transform after / runtime by default behavior before all can invoke). */
+/** Validates required fields of a hook payload (entry, post-transform, and default path). */
 export function assertHookPayload(name: HookName, value: unknown): void {
   const err = PAYLOAD_CHECKS[name](value);
   if (err) {
-    throw new HelmError('invalid_hook_result', `hook ${name} payload validation failed:${err}`, 500, {
+    throw new HelmError('invalid_hook_result', `Hook ${name} payload validation failed: ${err}`, 500, {
       hook: name,
       violation: err,
     });
   }
 }
 
-/** turn_settled single plugin exception isolated collect result (PluginHost alert use). */
+/** Isolated error captured during `turn_settled` pipeline execution (surfaced as notification by PluginHost). */
 export interface IsolatedHookError {
   pluginId: string;
   error: HelmError;
@@ -260,28 +257,21 @@ export class HookPipeline<K extends HookName> {
 
   entries(): Array<RegisteredHook<K>> {
     this.ensureSorted();
-    // Why: run/runAround iterate during will await any plugin handler, concurrency add() placement
-    // sorted=false after another route runHook trigger original ground sort, will let is now iterate array heavy arrange
-    //(handler skip or duplicate). return snapshot copy isolated;hook amount small, duplicate cost can ignore.
+    // Snapshot-copy before iterating: handlers await arbitrary promises and concurrent add() resets `sorted=false`.
     return [...this.hooks];
   }
 
   private ensureSorted(): void {
     if (!this.sorted) {
-      // V8 sort stable: same priority keep register order.
+      // V8 sort is stable: equal priorities keep registration order.
       this.hooks.sort((a, b) => b.priority - a.priority || a.seq - b.seq);
       this.sorted = true;
     }
   }
 
   /**
-   * execute whole pipeline, return short route result (if has), eventually payload and turn_settled isolated error.
-   * isParticipant is empty when execute all; otherwise only execute return true handle (host use it
-   * isolated not enabled/correct deactivate plugin, never let its handler by invoke).
-   * intercept/change write type hook any one handle exception or artifact violate about all explicit throw, never static default;
-   * turn_settled(compute notify type) change is single plugin exception isolated: single handle throws or artifact
-   * illegal when without interruption loop, does not override on a legal payload, error collect enter isolatedErrors
-   * by host unify alert, after continue plugin per common compute.
+   * Executes the pipeline and returns the final payload, any short-circuit result, and isolated errors (`turn_settled`).
+   * All non-`turn_settled` hooks throw loudly on errors/invalid shapes; `turn_settled` isolates per-plugin failures.
    */
   async run(
     payload: HookPayloadMap[K],
@@ -295,7 +285,6 @@ export class HookPipeline<K extends HookName> {
     const allowed = HOOK_ALLOWED_ACTIONS[this.name];
     const isolate = this.name === 'turn_settled';
     const isolatedErrors: IsolatedHookError[] = [];
-    /** single handle execute and artifact validate;isolate pattern under violate about rotate is collect error while non- throw. */
     const isolateError = (hook: RegisteredHook<K>, err: unknown): void => {
       isolatedErrors.push({
         pluginId: hook.pluginId,
@@ -304,7 +293,7 @@ export class HookPipeline<K extends HookName> {
             ? err
             : new HelmError(
                 'hook_execution_failed',
-                `plugin ${hook.pluginId}  ${this.name} hook execute throw exception:${err instanceof Error ? err.message : String(err)}`,
+                `Plugin ${hook.pluginId} ${this.name} hook threw an error: ${err instanceof Error ? err.message : String(err)}`,
                 500,
                 { pluginId: hook.pluginId, hook: this.name },
               ),
@@ -321,7 +310,7 @@ export class HookPipeline<K extends HookName> {
           if (err instanceof HelmError) throw err;
           throw new HelmError(
             'hook_execution_failed',
-            `plugin ${hook.pluginId}  ${this.name} hook execute throw exception:${err instanceof Error ? err.message : String(err)}`,
+            `Plugin ${hook.pluginId} ${this.name} hook threw an error: ${err instanceof Error ? err.message : String(err)}`,
             500,
             { pluginId: hook.pluginId, hook: this.name },
           );
@@ -329,11 +318,11 @@ export class HookPipeline<K extends HookName> {
         isolateError(hook, err);
         continue;
       }
-      if (result === undefined || result === null) continue; // void etc. price continue
+      if (result === undefined || result === null) continue;
       if (!isObj(result) || typeof result.action !== 'string') {
         const err = new HelmError(
           'invalid_hook_result',
-          `plugin ${hook.pluginId}  ${this.name} hook return illegal result (missing action field)`,
+          `Plugin ${hook.pluginId} ${this.name} hook returned an invalid result (missing action field)`,
           500,
           { pluginId: hook.pluginId, hook: this.name, result },
         );
@@ -344,7 +333,7 @@ export class HookPipeline<K extends HookName> {
       if (!allowed.has(result.action)) {
         const err = new HelmError(
           'invalid_hook_result',
-          `plugin ${hook.pluginId}  ${this.name} hook return unsupported combine action "${result.action}"(allows:${[...allowed].join('|')})`,
+          `Plugin ${hook.pluginId} ${this.name} hook returned unsupported action "${result.action}" (allowed: ${[...allowed].join('|')})`,
           500,
           { pluginId: hook.pluginId, hook: this.name, allowed: [...allowed] },
         );
@@ -357,7 +346,7 @@ export class HookPipeline<K extends HookName> {
         if (result.value === undefined) {
           const err = new HelmError(
             'invalid_hook_result',
-            `plugin ${hook.pluginId}  ${this.name} hook return transform but missing value`,
+            `Plugin ${hook.pluginId} ${this.name} hook returned transform without value`,
             500,
             { pluginId: hook.pluginId, hook: this.name },
           );
@@ -379,7 +368,7 @@ export class HookPipeline<K extends HookName> {
         if (typeof result.reason !== 'string' || result.reason.length === 0) {
           const err = new HelmError(
             'invalid_hook_result',
-            `plugin ${hook.pluginId}  ${this.name} hook return block but missing non-empty reason`,
+            `Plugin ${hook.pluginId} ${this.name} hook returned block without a non-empty reason`,
             500,
             { pluginId: hook.pluginId, hook: this.name },
           );
@@ -397,20 +386,17 @@ export class HookPipeline<K extends HookName> {
     };
   }
 
-  /**
-   * single handle result archive one (run/runAround shared use):void archive continue; illegal artifact explicit throw.
-   * return undefined means let through (continue).
-   */
+  /** Normalizes a single handler result (shared by `run`/`runAround`); throws explicitly on invalid returns. */
   private normalizeResult(
     hook: RegisteredHook<K>,
     result: HookResult<HookPayloadMap[K]> | void,
   ): Extract<HookResult<HookPayloadMap[K]>, { action: 'transform' | 'handled' | 'block' }> | undefined {
-    if (result === undefined || result === null) return undefined; // void etc. price continue
+    if (result === undefined || result === null) return undefined;
     const allowed = HOOK_ALLOWED_ACTIONS[this.name];
     if (!isObj(result) || typeof result.action !== 'string') {
       throw new HelmError(
         'invalid_hook_result',
-        `plugin ${hook.pluginId}  ${this.name} hook return illegal result (missing action field)`,
+        `Plugin ${hook.pluginId} ${this.name} hook returned an invalid result (missing action field)`,
         500,
         { pluginId: hook.pluginId, hook: this.name, result },
       );
@@ -418,7 +404,7 @@ export class HookPipeline<K extends HookName> {
     if (!allowed.has(result.action)) {
       throw new HelmError(
         'invalid_hook_result',
-        `plugin ${hook.pluginId}  ${this.name} hook return unsupported combine action "${result.action}"(allows:${[...allowed].join('|')})`,
+        `Plugin ${hook.pluginId} ${this.name} hook returned unsupported action "${result.action}" (allowed: ${[...allowed].join('|')})`,
         500,
         { pluginId: hook.pluginId, hook: this.name, allowed: [...allowed] },
       );
@@ -428,7 +414,7 @@ export class HookPipeline<K extends HookName> {
       if (result.value === undefined) {
         throw new HelmError(
           'invalid_hook_result',
-          `plugin ${hook.pluginId}  ${this.name} hook return transform but missing value`,
+          `Plugin ${hook.pluginId} ${this.name} hook returned transform without value`,
           500,
           { pluginId: hook.pluginId, hook: this.name },
         );
@@ -440,7 +426,7 @@ export class HookPipeline<K extends HookName> {
       if (typeof result.reason !== 'string' || result.reason.length === 0) {
         throw new HelmError(
           'invalid_hook_result',
-          `plugin ${hook.pluginId}  ${this.name} hook return block but missing non-empty reason`,
+          `Plugin ${hook.pluginId} ${this.name} hook returned block without a non-empty reason`,
           500,
           { pluginId: hook.pluginId, hook: this.name },
         );
@@ -451,20 +437,10 @@ export class HookPipeline<K extends HookName> {
   }
 
   /**
-   * around(continuation) pipeline: only agent_spawn. each handle gets subject to control next;
-   * do not tune next while return handled = fully take over (short route, and run same semantics); tune next then
-   * package wrap after continue pipeline and by default execute (defaultRun exactly once).
-   *
-   * contract (violate reverse explicit reject, never static default):
-   * - next only can invoke once (duplicate invoke immediately explicit reject);
-   * - already tune next handle: its result is exactly next result (host join the same promise,
-   *   never repeat execution after continue chain); must not again stack add transform/handled/continue of outside artifact;
-   * - not await  next(async trigger after mention before return/throws): host still join the same
-   *   nextPromise after return its result (or such as on throw handler error) - - after continue chain exactly
-   *   execute once, without concurrency double execute, without orphan child execute;
-   * - next before throws: after continue pipeline do not execute, error such as on throw;
-   * - handle return void/continue: semantics is do not package wrap,next chain by host automatically pass-through (the
-   *   handle after link per common execute).
+   * Around (continuation) pipeline exclusively for `agent_spawn`.
+   * Each handler receives `next(request)`; omitting `next` with `handled` short-circuits, while invoking
+   * `next` runs the downstream chain + `defaultRun` at most once (duplicate `next()` or returning a second
+   * non-`continue` action after `next()` throws `invalid_hook_result`).
    */
   async runAround(
     payload: HookPayloadMap[K],
@@ -472,29 +448,24 @@ export class HookPipeline<K extends HookName> {
     isParticipant?: (hook: RegisteredHook<K>) => boolean,
   ): Promise<unknown> {
     if (this.name !== 'agent_spawn') {
-      throw new HelmError('invalid_hook_invocation', `runAround only applies to agent_spawn(receives ${this.name})`, 500, {
+      throw new HelmError('invalid_hook_invocation', `runAround only applies to agent_spawn (received ${this.name})`, 500, {
         hook: this.name,
       });
     }
     assertHookPayload(this.name, payload);
     const hooks = this.entries().filter((h) => (isParticipant ? isParticipant(h) : true));
 
-    /**
-     * from index handle start execute: return handled take over artifact or defaultRun eventually
-     * result; handle can via next(finalRequest) enter index+1 start the same chain.
-     */
     const dispatchFrom = async (index: number, current: HookPayloadMap[K]): Promise<unknown> => {
       for (let i = index; i < hooks.length; i += 1) {
         const hook = hooks[i]!;
         let called = false;
-        /** first time next invoke create after continue chain promise(join unique fact, guard against double execute). */
         let nextPromise: Promise<unknown> | undefined;
-        /** subject to control continuation: sync return promise(enter i+1 start after continue chain, contains defaultRun). */
+        /** Controlled continuation: starts downstream chain once from index `i + 1` through `defaultRun`. */
         const next = (request: HookPayloadMap[K]): Promise<unknown> => {
           if (called) {
             throw new HelmError(
               'invalid_hook_result',
-              `plugin ${hook.pluginId}  agent_spawn hook duplicate invoke next(continuation only can enter once)`,
+              `Plugin ${hook.pluginId} agent_spawn hook cannot duplicate invoke next (continuation may run at most once)`,
               500,
               { pluginId: hook.pluginId, hook: this.name },
             );
@@ -512,26 +483,23 @@ export class HookPipeline<K extends HookName> {
             next: (req: HookPayloadMap[K]) => Promise<unknown>,
           ) => unknown)(current, next as never) as HookResult<HookPayloadMap[K]> | void;
         } catch (err) {
-          // handler throws but already trigger next(not await background chain):join the same promise
-          // after such as on throw handler error (after continue chain exactly execute once, result such as discard).
+          // Join background nextPromise before rethrowing handler error so downstream completes cleanly once.
           if (nextPromise !== undefined) await nextPromise.then(() => undefined, () => undefined);
           if (err instanceof HelmError) throw err;
           throw new HelmError(
             'hook_execution_failed',
-            `plugin ${hook.pluginId}  ${this.name} hook execute throw exception:${err instanceof Error ? err.message : String(err)}`,
+            `Plugin ${hook.pluginId} ${this.name} hook threw an error: ${err instanceof Error ? err.message : String(err)}`,
             500,
             { pluginId: hook.pluginId, hook: this.name },
           );
         }
         if (nextPromise !== undefined) {
-          // already trigger continuation:join the same promise and its result as this handle
-          // result return (after continue chain exactly execute once; never continue when before loop). stack add
-          // transform/handled belong contract violate about:join after explicit reject.
+          // Once continuation runs, returning transform/handled conflicts with next()'s ownership; reject after joining.
           if (result !== undefined && result !== null && isObj(result) && result.action !== 'continue') {
             await nextPromise.then(() => undefined, () => undefined);
             throw new HelmError(
               'invalid_hook_result',
-              `plugin ${hook.pluginId}  agent_spawn hook already invoke next, must not again return "${String((result as { action?: unknown }).action)}"(next result i.e. it result)`,
+              `Plugin ${hook.pluginId} agent_spawn hook already invoked next and must not again return "${String((result as { action?: unknown }).action)}"`,
               500,
               { pluginId: hook.pluginId, hook: this.name, result },
             );
@@ -539,16 +507,15 @@ export class HookPipeline<K extends HookName> {
           return nextPromise;
         }
         const normalized = this.normalizeResult(hook, result);
-        if (normalized === undefined) continue; // continue: do not package wrap, pass-through
+        if (normalized === undefined) continue;
         if (normalized.action === 'transform') {
           current = normalized.value as HookPayloadMap[K];
           continue;
         }
-        // handled / block: short route (handled.result i.e. take over artifact).
         if (normalized.action === 'block') {
           throw new HelmError(
             'hook_blocked',
-            `plugin ${hook.pluginId}  agent_spawn hook intercept derive:${normalized.reason}`,
+            `Plugin ${hook.pluginId} agent_spawn hook blocked spawn: ${normalized.reason}`,
             403,
             { pluginId: hook.pluginId, hook: this.name, reason: normalized.reason },
           );
@@ -562,7 +529,7 @@ export class HookPipeline<K extends HookName> {
   }
 }
 
-// supply test and runtime reference specific payload type
+// Re-export concrete hook payload types for runtime and tests
 export type {
   AgentSpawnRequest,
   BeforeTurnHookPayload,

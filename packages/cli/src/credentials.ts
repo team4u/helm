@@ -1,10 +1,12 @@
 /**
- * CLI login state:<dataDir>/cli-token  0600 JSON { hubUrl, token }, this CLI dedicated belong.
- * credentials.json only bear load model/plugin secret key (archive @helm/kernel CredentialService),
- * CLI never read write it. write hold independent lock (cli-token.lock,tmp write full after fs.link atomic publish, first token segment
- * PID, only PID death break except stale; unsupported hard link connect file system retreat back O_EXCL + read side wide limit fall back)
- * + tmp atomic write.HELM_TOKEN environment variable takes precedence when on layer short route, do not trigger touch disk.
- * origin bind set:token only when target baseUrl and record hubUrl consistent when attach carries (see hub-client).
+ * CLI login state: `<dataDir>/cli-token` (0600 JSON `{ hubUrl, token }`), dedicated solely to the CLI.
+ * `credentials.json` holds only model and plugin secrets (managed by `@helm/kernel` CredentialService),
+ * and the CLI never reads or writes it. Writes take an exclusive lock (`cli-token.lock`: written to a
+ * temp file then published atomically via `fs.link`, with PID as the first token, broken as stale only
+ * after the holder PID is confirmed dead; filesystems without hard links fall back to O_EXCL + a
+ * reader-side settle grace window) + atomic temp write. Setting `HELM_TOKEN` short-circuits disk reads.
+ * Origin binding: stored tokens are attached only when the target baseUrl matches the recorded hubUrl
+ * (see hub-client).
  */
 import fsp from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
@@ -20,9 +22,9 @@ export interface CliCredential {
 
 const LOCK_WAIT_MS = 10_000
 const LOCK_POLL_MS = 25
-/** lock content empty/half truncate wide limit window: holder may correct where already create await write instant state, exceeds only then decide corrupt. */
+/** Grace window for empty or half-written lock files: allows a concurrent holder to finish writing before declaring the lock corrupt. */
 const LOCK_SETTLE_GRACE_MS = 2_000
-/** Windows on rename replace target by read way (kill toxic/index scan) short temporary occupy when has boundary backoff window and polling interval. */
+/** Bounded retry window and polling interval when Windows readers (antivirus/indexers) briefly lock the target during rename. */
 const RENAME_BUSY_TOTAL_MS = 1_500
 const RENAME_BUSY_POLL_MS = 25
 
@@ -32,31 +34,31 @@ export function dataDirFor(env: NodeJS.ProcessEnv): string {
   return path.join(os.homedir(), '.helm')
 }
 
-/** CLI login state file (0600 JSON { hubUrl, token }). */
+/** Path to the CLI login state file (`0600` JSON `{ hubUrl, token }`). */
 export function credentialsPath(dataDir: string): string {
   return path.join(dataDir, 'cli-token')
 }
 
-/** validate cli-token JSON shape; illegal/corrupt explicit errors (not silently when without credentials). */
+/** Validate `cli-token` JSON structure; fail explicitly on invalid/corrupt files rather than treating them as unauthenticated. */
 function parseCliTokenFile(text: string, file: string): CliCredential {
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
   } catch (err) {
     throw new CliError(
-      `CLI credentials file corrupt (${file}):${err instanceof Error ? err.message : String(err)}`,
+      `CLI credentials file is corrupt (${file}): ${err instanceof Error ? err.message : String(err)}`,
       'credentials_unreadable',
     )
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new CliError(`CLI credentials file shape illegal (${file}): top-level must be object`, 'credentials_unreadable')
+    throw new CliError(`Invalid CLI credentials file format (${file}): top-level value must be an object`, 'credentials_unreadable')
   }
   const record = parsed as Record<string, unknown>
   if (record['hubUrl'] !== undefined && typeof record['hubUrl'] !== 'string') {
-    throw new CliError('CLI credentials hubUrl shape illegal: must be string', 'credentials_unreadable')
+    throw new CliError('Invalid CLI credentials hubUrl: must be a string', 'credentials_unreadable')
   }
   if (record['token'] !== undefined && typeof record['token'] !== 'string') {
-    throw new CliError('CLI credentials token shape illegal: must be string', 'credentials_unreadable')
+    throw new CliError('Invalid CLI credentials token: must be a string', 'credentials_unreadable')
   }
   return { hubUrl: record['hubUrl'] as string | undefined, token: record['token'] as string | undefined }
 }
@@ -71,16 +73,16 @@ function isProcessAlive(pid: number): boolean {
 }
 
 /**
- * arrange other lock: temp file write full content after fs.link atomic publish is cli-token.lock(first token segment PID).
- * link and open('wx') same tool atomic arrange other, but target one via visible i.e. contains complete content - - concurrency read way
- * absolute without window read to empty file or half truncate JSON. only holder PID confirm death when break except stale;
- * do not by store when long strong split (legal hold lock may only is slow). return release function (only remove itself hold has lock).
+ * Exclusive lock: write full owner metadata to a temp file and atomically publish `cli-token.lock` via `fs.link` (first token is PID).
+ * `link` is as atomic and exclusive as `open('wx')`, while ensuring readers never observe an empty or half-written lock file.
+ * Stale locks are broken only once the owner PID is confirmed dead (never by age alone, since a valid holder may simply be slow).
+ * Returns a release callback that removes only the lock owned by this call.
  */
 async function acquireCliTokenLock(lockFile: string): Promise<() => Promise<void>> {
   const owner = `${process.pid} ${randomUUID()}`
   const deadline = Date.now() + LOCK_WAIT_MS
   const publish = async (): Promise<boolean> => {
-    // tmp write full + flush, again link atomic publish;link failed (EEXIST=other person hold has;EXDEV/ENOSYS etc. by outside layer fall back)
+    // Write and flush temp file first, then publish atomically with link; link failure (EEXIST = held by another process; EXDEV/ENOSYS etc. handled by fallback)
     const tmp = `${lockFile}.${process.pid}.${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`
     try {
       const handle = await fsp.open(tmp, 'w', 0o600)
@@ -96,7 +98,7 @@ async function acquireCliTokenLock(lockFile: string): Promise<() => Promise<void
       const code = (err as NodeJS.ErrnoException).code
       if (code === 'EEXIST') return false
       if (code === 'EXDEV' || code === 'ENOSYS' || code === 'EPERM' || code === 'EINVAL') {
-        // special file system unsupported hard link connect: retreat back open('wx')(empty window by read side wide limit fall back, never static default mistakenly judge)
+        // Filesystems without hard-link support: fall back to open('wx') (empty-window race guarded by reader-side settle grace)
         try {
           await fsp.writeFile(lockFile, `${owner}\n`, { flag: 'wx', mode: 0o600 })
           return true
@@ -116,7 +118,7 @@ async function acquireCliTokenLock(lockFile: string): Promise<() => Promise<void
       held = await publish()
     } catch (err) {
       throw new CliError(
-        `cannot create CLI credentials lock file (${lockFile}):${err instanceof Error ? err.message : String(err)}`,
+        `cannot create CLI credentials lock file (${lockFile}): ${err instanceof Error ? err.message : String(err)}`,
         'credentials_lock_failed',
       )
     }
@@ -126,7 +128,7 @@ async function acquireCliTokenLock(lockFile: string): Promise<() => Promise<void
           const raw = await fsp.readFile(lockFile, 'utf8')
           if (raw.trim() === owner) await fsp.rm(lockFile, { force: true })
         } catch {
-          /* release failed to holder death after stale break except */
+          /* if release fails, stale detection will clean it up after holder exits */
         }
       }
     }
@@ -136,14 +138,14 @@ async function acquireCliTokenLock(lockFile: string): Promise<() => Promise<void
       const raw = await fsp.readFile(lockFile, 'utf8')
       const head = raw.trim().split(/\s+/)[0] ?? ''
       if (!/^\d+$/.test(head)) {
-        // empty content/half truncate: old platform fallback or exception crash leftover. just create do not long treated as holder is now write,
-        // wait for backoff after heavy read; exceeds wide limit window only then such as judge corrupt (not silently, also do not mistakenly kill concurrency).
+        // Empty or truncated lock: legacy fallback or crash remnant. Treat recently created files as mid-write,
+        // wait briefly and re-read; only declare corrupt after the settle grace window expires.
         const stat = await fsp.stat(lockFile)
         if (Date.now() - stat.mtimeMs < LOCK_SETTLE_GRACE_MS) {
           pending = true
         } else {
           throw new CliError(
-            `CLI credentials lock file content corrupt (${lockFile}): cannot decide holder`,
+            `CLI credentials lock file is corrupt (${lockFile}): cannot determine owner`,
             'credentials_lock_broken',
           )
         }
@@ -153,10 +155,10 @@ async function acquireCliTokenLock(lockFile: string): Promise<() => Promise<void
       }
     } catch (err) {
       if (err instanceof CliError) throw err
-      // only ENOENT proxy table lock already release; permission and IO error cannot when act without lock, more cannot delete other person lock.
+      // Only ENOENT means the lock was released; permission/I/O errors must never be treated as unlocked or delete another's lock.
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue
       throw new CliError(
-        `cannot read CLI credentials lock file (${lockFile}):${err instanceof Error ? err.message : String(err)}`,
+        `cannot read CLI credentials lock file (${lockFile}): ${err instanceof Error ? err.message : String(err)}`,
         'credentials_lock_failed',
       )
     }
@@ -165,15 +167,15 @@ async function acquireCliTokenLock(lockFile: string): Promise<() => Promise<void
       continue
     }
     if (Date.now() > deadline) {
-      throw new CliError(`CLI credentials by concurrency write, wait for lock timeout (${lockFile})`, 'credentials_lock_timeout')
+      throw new CliError(`timed out waiting for CLI credentials lock (${lockFile})`, 'credentials_lock_timeout')
     }
     await new Promise((resolve) => setTimeout(resolve, pending ? LOCK_POLL_MS * 4 : LOCK_POLL_MS))
   }
 }
 
 /**
- * Windows instantaneous occupy decide: target by read/scan during rename will short temporary EPERM/EACCES/EBUSY,
- * backoff after retry i.e. can commit. other platform these code is real permission error, immediately failed does not without say wait for.
+ * Windows transient lock detection: readers/scanners can trigger brief EPERM/EACCES/EBUSY during rename;
+ * backing off and retrying succeeds. On other platforms these are real permission errors and fail immediately.
  */
 function isTransientRenameBusy(err: unknown): boolean {
   if (process.platform !== 'win32') return false
@@ -181,7 +183,7 @@ function isTransientRenameBusy(err: unknown): boolean {
   return code === 'EPERM' || code === 'EACCES' || code === 'EBUSY'
 }
 
-/** rename atomic replace; only Windows instantaneous occupy when has boundary backoff (total wait for about 1.5 second), exhausted still throw original error. */
+/** Atomic rename replacement with bounded backoff on Windows transient locks (~1.5s total); rethrows the original error if exhausted. */
 async function renameAtomically(tmp: string, file: string): Promise<void> {
   const deadline = Date.now() + RENAME_BUSY_TOTAL_MS
   for (;;) {
@@ -195,7 +197,7 @@ async function renameAtomically(tmp: string, file: string): Promise<void> {
   }
 }
 
-/** tmp(unique uuid name)+ fsync + rename atomic write, constant 0600;Windows instantaneous occupy backoff after still atomic commit. */
+/** Atomic write with unique temp file, fsync, and 0600 permissions; stays atomic even after Windows busy-lock backoff. */
 async function atomicWrite0600(file: string, text: string): Promise<void> {
   const tmp = `${file}.tmp-${randomUUID()}`
   let handle: fsp.FileHandle | undefined
@@ -210,16 +212,15 @@ async function atomicWrite0600(file: string, text: string): Promise<void> {
     await handle?.close().catch(() => {})
     await fsp.rm(tmp, { force: true }).catch(() => {})
     throw new CliError(
-      `write CLI credentials file failed (${file}):${err instanceof Error ? err.message : String(err)}`,
+      `failed to write CLI credentials file (${file}): ${err instanceof Error ? err.message : String(err)}`,
       'credentials_write_failed',
     )
   }
 }
 
 /**
- * since has file may by external put wide permission: converge back 0600, failed explicit errors.
- * Windows without POSIX mode(NTFS away ACL,stat.mode do not express 0600), do not validate also do not
- * chmod(POSIX chmod in Windows on invalid); only non- Windows platform strictly converge.
+ * Tighten permissions on existing files back to 0600 if widened externally, failing explicitly on error.
+ * Windows lacks POSIX modes (NTFS uses ACLs and stat.mode does not express 0600), so skip on win32.
  */
 async function ensureMode0600(file: string): Promise<void> {
   if (process.platform === 'win32') return
@@ -227,7 +228,7 @@ async function ensureMode0600(file: string): Promise<void> {
   if ((st.mode & 0o777) !== 0o600) {
     await fsp.chmod(file, 0o600).catch((err) => {
       throw new CliError(
-        `CLI credentials file permission fix failed (should 0600):${file}:${err instanceof Error ? err.message : String(err)}`,
+        `failed to fix CLI credentials file permissions (expected 0600) on ${file}: ${err instanceof Error ? err.message : String(err)}`,
         'credentials_write_failed',
       )
     })
@@ -235,8 +236,8 @@ async function ensureMode0600(file: string): Promise<void> {
 }
 
 /**
- * read CLI login state; file missing return empty credentials (not login). caller should first check
- * HELM_TOKEN short route (env takes precedence when do not read disk).
+ * Load CLI login state; returns empty credentials when the file is missing (not logged in).
+ * Callers should check HELM_TOKEN first to short-circuit disk reads when overridden by env.
  */
 export async function loadCliCredential(dataDir: string): Promise<CliCredential> {
   const file = credentialsPath(dataDir)
@@ -248,16 +249,16 @@ export async function loadCliCredential(dataDir: string): Promise<CliCredential>
       return {} as CliCredential
     }
     throw new CliError(
-      `read CLI credentials file failed (${file}):${err instanceof Error ? err.message : String(err)}`,
+      `failed to read CLI credentials file (${file}): ${err instanceof Error ? err.message : String(err)}`,
       'credentials_unreadable',
     )
   }
   return parseCliTokenFile(raw, file)
 }
 
-/** write CLI login state: independent lock + atomic 0600 write.setup/login shared use. */
+/** Write CLI login state under an exclusive lock with atomic 0600 writes (shared by setup and login). */
 export async function updateCliCredentials(dataDir: string, cli: CliCredential): Promise<void> {
-  // first create dataDir again contend lock: first start directory missing when lock file and credentials all without where (ENOENT)
+  // Create dataDir before acquiring the lock so both lock and token files have a parent directory (ENOENT on first run)
   await fsp.mkdir(dataDir, { recursive: true })
   const file = credentialsPath(dataDir)
   const unlock = await acquireCliTokenLock(`${file}.lock`)

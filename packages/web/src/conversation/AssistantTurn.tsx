@@ -1,7 +1,7 @@
 import { useContext, useMemo, useState } from 'react'
 import type { ConversationEntry, ConversationSummary } from '@helm/protocol/browser'
 import { CopyButton, HelmIcon, ToolActivityContext } from '@helm/plugin-client'
-import { useHelmStore } from '../lib/store-context.js'
+import { useGroupedUi } from '../lib/store-context.js'
 import { PluginMicroAction } from '../ui/PluginMicroAction.js'
 import { matchTimelineEntryActions, timelineEntryActionContextOf } from './action-model.js'
 import { MarkdownView } from './MarkdownView.js'
@@ -57,7 +57,7 @@ export function AssistantTurnView(props: AssistantTurnViewProps) {
 }
 
 function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn = false, anchorEntry, processShortcut, onForkFromHere }: AssistantTurnViewProps) {
-  const store = useHelmStore()
+  const groupedUi = useGroupedUi()
   const { t } = useWebLocale()
   const activeToolCallIds = useContext(ToolActivityContext)?.activeToolCallIds
   const [forking, setForking] = useState(false)
@@ -92,7 +92,7 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
   const entryActions =
     !isBusy && anchorEntry !== undefined
       ? matchTimelineEntryActions(
-          store.groupedUi.uiActions,
+          groupedUi.uiActions,
           conversation,
           timelineEntryActionContextOf(anchorEntry),
         )
@@ -156,7 +156,6 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
       })}
       {turn.live ? (
         <span className="msg-origin-tag msg-live-indicator" aria-label={t('conv.timeline.generating')} role="status">
-          <HelmIcon name="loader" size={12.5} className="spin-slow" />
           <span className="msg-live-dots" aria-hidden="true">
             <span />
             <span />

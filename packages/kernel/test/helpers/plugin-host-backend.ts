@@ -1,29 +1,29 @@
 /**
- * PluginHostBackend test fixture bottom seat (new contract:isClosing archive one is zero reference function,
- * profiles/skills/secrets/getConversationDetail etc. port must choose).
+ * Baseline test fixture for PluginHostBackend (current contract: zero-arg `isClosing`,
+ * plus required ports for `profiles`, `skills`, `secrets`, `getConversationDetail`, etc.).
  *
- * convention:
- * - default only provide two class together default:isClosing constant false,redact constant etc. return;
- * - the rest not use host operation one rule explicit throw unsupported(501), never with succeeded empty response cover wrong;
- * - need to profile/skills true file behavior when use profile-file-host override for should port;
- * - class fixture inherit PluginHostBackendFixtureBase(construct must super());
- *   object literal fixture use createPluginHostBackendFixture() field spread after override
- *   (return object all is self has can enumeration property,spread do not lose method).
- * - method signature one rule Parameters/ReturnType derive self PluginHostBackend this body,
- *   sub- class override (contains more specific return type) day however compatibility, does not introduce never narrow.
+ * Conventions:
+ * - Only provides two shared defaults: `isClosing` always returns `false`, and `redact` is identity;
+ * - All unused host operations throw explicit `unsupported` (501) rather than faking empty success;
+ * - Use `profile-file-host` to override ports when real profile/skill filesystem behavior is needed;
+ * - Class fixtures inherit `PluginHostBackendFixtureBase` (constructor must call `super()`);
+ *   object literal fixtures spread `createPluginHostBackendFixture()` and override needed methods
+ *   (all returned members are own enumerable properties so object spread never drops methods).
+ * - Method signatures derive from `Parameters`/`ReturnType` of `PluginHostBackend` directly so
+ *   subclass overrides (including narrower return types) remain compatible without manual narrowing.
  */
 import { HelmError } from '@helm/protocol'
 import type { PluginHostBackend } from '../../src/plugins/index.js'
 
 function unsupported(what: string): never {
-  throw new HelmError('unsupported', `test fixture not implemented host capability:${what}(must in specific fixture override)`, 501)
+  throw new HelmError('unsupported', `test fixture does not implement host capability: ${what} (override in concrete fixture)`, 501)
 }
 
 type Port<K extends keyof PluginHostBackend> = PluginHostBackend[K]
 
 /**
- * class fixture base class: by default implement all away prototype method (sub- class override do not by obscure).
- * not override i.e. by real invoke operation will explicit throw unsupported, test such as failed.
+ * Class fixture base: implements all default methods on the prototype (never shadows subclass overrides).
+ * Any un-overridden operation invoked in tests fails explicitly with `unsupported` (501).
  */
 export class PluginHostBackendFixtureBase implements PluginHostBackend {
   isClosing(): boolean {
@@ -214,7 +214,7 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
 
   execEnv(...args: Parameters<Port<'execEnv'>>): ReturnType<Port<'execEnv'>> {
     void args
-    throw new HelmError('unsupported', 'this fixture do not execute node command', 501)
+    throw new HelmError('unsupported', 'this fixture does not execute node commands', 501)
   }
 
   withFileMutationQueue<T>(
@@ -222,7 +222,7 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
     _fn: () => Promise<T>,
     _opts?: { signal?: AbortSignal },
   ): Promise<T> {
-    throw new HelmError('unsupported', 'this fixture do not bear load file mutual exclusion queue', 501)
+    throw new HelmError('unsupported', 'this fixture does not support file mutation queue', 501)
   }
 
   resolveSpawnTarget(
@@ -280,8 +280,8 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
 }
 
 /**
- * object literal fixture by default backend: and PluginHostBackendFixtureBase the same by default semantics,
- * all member is self has can enumeration property (can directly spread combine after override).
+ * Object-literal default backend fixture: shares the same default semantics as `PluginHostBackendFixtureBase`,
+ * with every member as an own enumerable property so callers can spread and selectively override.
  */
 export function createPluginHostBackendFixture(): PluginHostBackend {
   const d = new PluginHostBackendFixtureBase()

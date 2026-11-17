@@ -1,19 +1,20 @@
 /**
- * plugin build port (PluginBuildProvider) kernel contract test:
- * kernel does not carry esbuild / @helm/plugin-build runtime dependency, all build capability via
- * PluginHostOptions.buildProvider explicit inject. this file lock not inject when explicit reject
- * honest boundary (never static default lose UI, never fall back inside placement compiler) and inject after all chain available.
+ * Kernel contract tests for the plugin build port (PluginBuildProvider):
+ * Kernel does not depend on esbuild / @helm/plugin-build at runtime; all build capabilities are
+ * explicitly injected via PluginHostOptions.buildProvider. This suite locks down the honest failure
+ * boundary when omitted (never silently dropping UI or falling back to a built-in compiler) and
+ * verifies the full pipeline once injected.
  *
- * override:
- * - UiRegistry: without provider when carries client reference UI declaration register reject
- *   (501 unsupported_client_build), inject after the same declaration via;
- * - PluginHost.getClientModule: without provider when service path same code fall back;
- * - backend-ts-loader: without transform when external TS source load reject
- *   (501 unsupported_backend_ts_build), inject real provider after can load;
- * - doctor:client plugin in without provider when client/register check such as failed,
- *   inject after ok;JS-only plugin without provider also can via (does not need build capability);
- * - KernelRuntime: without buildProvider when register client reference plugin in runtime path explicit reject
- *  (produce product by hub composition root by default inject, kernel do not provide by default implement).
+ * Coverage:
+ * - UiRegistry: registering client-referenced UI declarations without provider rejects
+ *   (501 unsupported_client_build); succeeds once injected;
+ * - PluginHost.getClientModule: serving fails with the same error code when provider is absent;
+ * - backend-ts-loader: loading external TS sources without transform rejects
+ *   (501 unsupported_backend_ts_build); loads cleanly once real provider is injected;
+ * - doctor: client plugins fail client/register checks cleanly without provider and pass once
+ *   injected; JS-only plugins pass even without provider (needing no build capability);
+ * - KernelRuntime: registering client-referenced plugins without buildProvider rejects explicitly
+ *   (production injects a default via hub composition root; kernel supplies no built-in default).
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
@@ -47,7 +48,7 @@ function makeHost(buildProvider?: ReturnType<typeof createPluginBuildProvider>):
   })
 }
 
-test('UiRegistry: without provider when client reference declaration register reject unsupported_client_build', { timeout: 60_000 }, () => {
+test('UiRegistry: client-referenced declaration without provider rejects with unsupported_client_build', { timeout: 60_000 }, () => {
   const ui = new UiRegistry()
   const clientRoot = join(dataDir, 'client')
   mkdirSync(clientRoot, { recursive: true })
@@ -62,7 +63,7 @@ test('UiRegistry: without provider when client reference declaration register re
       ),
     (err: unknown) => err instanceof HelmError && err.code === 'unsupported_client_build' && err.status === 501,
   )
-  // inject provider after the same declaration via (not silently lose UI forward side)
+  // Succeeds once provider is injected (never silently drops frontend UI).
   const withProvider = new UiRegistry(createPluginBuildProvider())
   withProvider.registerUi(
     'p:with-provider',
@@ -73,7 +74,7 @@ test('UiRegistry: without provider when client reference declaration register re
   )
 })
 
-test('PluginHost.getClientModule: without provider when service path same code fall back', { timeout: 60_000 }, async () => {
+test('PluginHost.getClientModule: serving without provider fails with identical code', { timeout: 60_000 }, async () => {
   const clientRoot = join(dataDir, 'client2')
   mkdirSync(clientRoot, { recursive: true })
   writeFileSync(join(clientRoot, 'index.tsx'), 'export const X = 1\n')
@@ -87,14 +88,14 @@ test('PluginHost.getClientModule: without provider when service path same code f
   await host.dispose()
 })
 
-test('backend-ts-loader: without transform when TS load reject unsupported_backend_ts_build; inject after can load', { timeout: 60_000 }, async (t) => {
+test('backend-ts-loader: TS load without transform rejects with unsupported_backend_ts_build; succeeds after injection', { timeout: 60_000 }, async (t) => {
   const dirPath = join(dataDir, 'ts-plugin')
   mkdirSync(dirPath, { recursive: true })
   const tsFile = join(dirPath, 'mod.ts')
   writeFileSync(tsFile, 'export const v: number = 7\n')
 
-  // tsx test process self carries TS hook, cannot real row make this load; use pure node child process verify
-  // (and external-plugin-ts / plugin-dx-loop the same pattern).
+  // The tsx test runner already installs a TS loader hook, so we spawn a clean Node child process
+  // (matching external-plugin-ts / plugin-dx-loop pattern).
   const { execFileSync } = await import('node:child_process')
   const loaderUrl = pathToFileURL(fileURLToPath(new URL('../src/plugins/backend-ts-loader.ts', import.meta.url))).href
   const providerUrl = import.meta.resolve('@helm/plugin-build')
@@ -123,7 +124,7 @@ console.log('CHILD_OK')
     try {
       unlinkSync(childPath)
     } catch {
-      /* already follow dataDir clean up */
+      /* cleaned up with dataDir */
     }
   })
   let out = ''
@@ -131,12 +132,12 @@ console.log('CHILD_OK')
     out = execFileSync(process.execPath, [childPath], { encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'pipe'] })
   } catch (e) {
     const errOut = ((e as { stdout?: string }).stdout ?? '') + '\n' + ((e as { stderr?: string }).stderr ?? '')
-    assert.fail(`pure node child process failed:${out}${errOut.slice(0, 800)}`)
+    assert.fail(`pure Node child process failed: ${out}${errOut.slice(0, 800)}`)
   }
-  assert.ok(out.includes('CHILD_OK'), `child process should all contract via, output:${out}`)
+  assert.ok(out.includes('CHILD_OK'), `child process should pass all contracts, output: ${out}`)
 })
 
-test('doctor:client plugin without provider when check such as failed; inject after ok', { timeout: 60_000 }, async () => {
+test('doctor: client plugin check fails as expected without provider; passes once injected', { timeout: 60_000 }, async () => {
   const dirPath = join(dataDir, 'plugins', 'port-client')
   mkdirSync(join(dirPath, 'client'), { recursive: true })
   writeFileSync(join(dirPath, 'plugin.json'), JSON.stringify({ id: 'port-client', clientRoot: './client' }))
@@ -153,15 +154,15 @@ test('doctor:client plugin without provider when check such as failed; inject af
   writeFileSync(join(dirPath, 'client', 'index.tsx'), 'export const X = 1\n')
 
   const noProvider = await doctorPluginDir(dirPath)
-  assert.equal(noProvider.ok, false, 'without provider  doctor must not for client plugin report ok')
+  assert.equal(noProvider.ok, false, 'doctor without provider must not report ok for client plugins')
   const failed = noProvider.checks.find((c) => c.error?.code === 'unsupported_client_build')
-  assert.ok(failed, `should has unsupported_client_build check failed:${JSON.stringify(noProvider.checks)}`)
+  assert.ok(failed, `expected unsupported_client_build check failure: ${JSON.stringify(noProvider.checks)}`)
 
   const withProvider = await doctorPluginDir(dirPath, { buildProvider: createPluginBuildProvider() })
-  assert.equal(withProvider.ok, true, `inject provider after should via:${JSON.stringify(withProvider.checks)}`)
+  assert.equal(withProvider.ok, true, `should pass once provider is injected: ${JSON.stringify(withProvider.checks)}`)
 })
 
-test('doctor:JS-only plugin without provider also can via (do not without difference other pull connect)', { timeout: 60_000 }, async () => {
+test('doctor: JS-only plugins pass even without provider (no gratuitous coupling)', { timeout: 60_000 }, async () => {
   const dirPath = join(dataDir, 'plugins', 'port-js')
   mkdirSync(dirPath, { recursive: true })
   writeFileSync(
@@ -169,10 +170,10 @@ test('doctor:JS-only plugin without provider also can via (do not without differ
     'function definePlugin(ctx) { ctx.action({ id: "a", description: "A", inputSchema: { type: "object" }, outputSchema: { type: "object" }, handler: () => ({}) }) }\nexport default { id: "port-js", name: "Port JS", definePlugin }',
   )
   const report = await doctorPluginDir(dirPath)
-  assert.equal(report.ok, true, `without client reference plugin does not need build port:${JSON.stringify(report.checks)}`)
+  assert.equal(report.ok, true, `plugins without client modules need no build port: ${JSON.stringify(report.checks)}`)
 })
 
-test('KernelRuntime: without buildProvider when register client reference plugin in runtime path explicit reject (produce product by hub by default inject)', { timeout: 60_000 }, async () => {
+test('KernelRuntime: registering client-referenced plugin without buildProvider rejects explicitly (hub provides default in production)', { timeout: 60_000 }, async () => {
   const { KernelRuntime } = await import('../src/runtime/index.js')
   const { fauxProvider } = await import('@earendil-works/pi-ai/providers/faux')
   const { createModels } = await import('@earendil-works/pi-ai/models')
@@ -192,7 +193,7 @@ test('KernelRuntime: without buildProvider when register client reference plugin
         },
       }),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError, `should be HelmError:${String(err)}`)
+        assert.ok(err instanceof HelmError, `expected HelmError: ${String(err)}`)
         assert.equal(err.code, 'unsupported_client_build')
         return true
       },

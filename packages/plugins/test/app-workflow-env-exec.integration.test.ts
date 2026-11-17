@@ -29,7 +29,7 @@ import { createHelm } from '../../hub/src/app.js'
 import { readJournal, type WorkflowJournalEntry } from '../src/workflow/engine/journal.js'
 import { pluginDataDirName } from '../../kernel/src/plugins/plugin-dir-name.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
-import { makeFauxModels, useTempDir } from './helpers/plugin-test-env.js'
+import { makeFauxProvider, useTempDir } from './helpers/plugin-test-env.js'
 
 /** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
 const ROOT_CONVERSATION_ID = 1 as const
@@ -55,8 +55,8 @@ interface Env {
 async function makeEnv(): Promise<Env> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-env-act-'))
   const convCwd = join(dataDir, 'conv-cwd')
-  const { models } = makeFauxModels()
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const faux = makeFauxProvider()
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
 
   // 会话绑定 (nodeId='local', cwd=convCwd)：env.exec 缺省靶点必须继承它。
   const { mkdirSync } = await import('node:fs')
@@ -237,8 +237,8 @@ test('env.exec2: 普通插件动作 preflight invalid input 不锁死 resume；�
 
 test('env.exec3: 插件声明 idempotent: true 的动作在账本生效（resume 失败步安全重跑）', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-wf-idem-')
-  const { models } = makeFauxModels()
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const faux = makeFauxProvider()
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   try {
     let handlerRuns = 0
     let shouldFail = true

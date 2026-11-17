@@ -26,12 +26,27 @@
  * independent language state, no localStorage); backend error messages pass
  * through unchanged.
  */
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import './styles.css'
 import type { ReactNode } from 'react'
-import type { ComposerScopeProps, ScreenProps, TimelineRendererProps, ToolViewProps } from '@helm/protocol'
-import { formatTime, Switch, usePluginContext, usePluginDoc, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
+import type {
+  ComposerScopeProps,
+  ConversationSummary,
+  ScreenProps,
+  TimelineRendererProps,
+  ToolViewProps,
+} from '@helm/protocol'
 import {
+  formatTime,
+  Switch,
+  useConversations,
+  usePluginContext,
+  usePluginDoc,
+  usePluginLocale,
+  usePluginTranslator,
+} from '@helm/plugin-client'
+import {
+  buildConversationMap,
   dispatchedWorkerId,
   dispatchInput,
   outcomeLabel,
@@ -40,6 +55,7 @@ import {
   parseRouterMode,
   parseSubscriptions,
   parseWorkers,
+  resolveConversationTitle,
   workerReportMeta,
   type RecallGraphDoc,
   type RouterModeDoc,
@@ -151,6 +167,28 @@ function RowAction({
   )
 }
 
+/** Conversation cell: live title + subtle #id when available, or honest #id only when missing/placeholder. */
+function ConversationCell({
+  conversationId,
+  conversationsById,
+}: {
+  conversationId: number
+  conversationsById: ReadonlyMap<number, ConversationSummary>
+}): ReactNode {
+  const title = resolveConversationTitle(conversationsById, conversationId)
+  if (title === undefined) {
+    return <td className="tabular-nums">#{conversationId}</td>
+  }
+  return (
+    <td>
+      <span className="sa-conv-cell" title={`${title} (#${conversationId})`}>
+        <span className="sa-conv-name">{title}</span>{' '}
+        <span className="sa-conv-id tabular-nums">#{conversationId}</span>
+      </span>
+    </td>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // composerWidget: hub status
 // ---------------------------------------------------------------------------
@@ -160,6 +198,8 @@ export function SuperAgentComposerWidget(_props: ComposerScopeProps): ReactNode 
   const ctx = usePluginContext()
   const t = usePluginTranslator()
   const locale = usePluginLocale()
+  const conversations = useConversations()
+  const conversationsById = useMemo(() => buildConversationMap(conversations), [conversations])
   const index = usePluginDoc<SuperAgentIndexDoc>('index')
   const subscriptions = usePluginDoc<ThreadSubscriptionDoc>('subscriptions')
   const workers = parseWorkers(index)
@@ -196,7 +236,7 @@ export function SuperAgentComposerWidget(_props: ComposerScopeProps): ReactNode 
                 ) : (
                   workers.map((w) => (
                     <tr key={w.conversationId}>
-                      <td>#{w.conversationId}</td>
+                      <ConversationCell conversationId={w.conversationId} conversationsById={conversationsById} />
                       <td>{w.profileId}</td>
                       <td className="cell-actions">
                         <div className="row-actions-group">
@@ -266,6 +306,8 @@ export function SuperAgentDispatchToolView(props: ToolViewProps): ReactNode {
   const ctx = usePluginContext()
   const t = usePluginTranslator()
   const locale = usePluginLocale()
+  const conversations = useConversations()
+  const conversationsById = useMemo(() => buildConversationMap(conversations), [conversations])
   const index = usePluginDoc<SuperAgentIndexDoc>('index')
   const workers = parseWorkers(index)
   const input = dispatchInput(props)
@@ -332,7 +374,7 @@ export function SuperAgentDispatchToolView(props: ToolViewProps): ReactNode {
               ) : (
                 workers.map((w) => (
                   <tr key={w.conversationId}>
-                    <td>#{w.conversationId}</td>
+                    <ConversationCell conversationId={w.conversationId} conversationsById={conversationsById} />
                     <td>{w.profileId}</td>
                     <td className="cell-actions">
                       {/* While an archive is in flight, disable every row button on this card (uniform re-entry guard). */}
@@ -423,6 +465,8 @@ export function SuperAgentRecallScreen(props: ScreenProps): ReactNode {
   const ctx = usePluginContext()
   const t = usePluginTranslator()
   const locale = usePluginLocale()
+  const conversations = useConversations()
+  const conversationsById = useMemo(() => buildConversationMap(conversations), [conversations])
   const recall = usePluginDoc<RecallGraphDoc>('recall-graph')
   const subscriptions = usePluginDoc<ThreadSubscriptionDoc>('subscriptions')
   const nodes = parseRecallNodes(recall)
@@ -466,7 +510,7 @@ export function SuperAgentRecallScreen(props: ScreenProps): ReactNode {
               ) : (
                 nodes.map((n) => (
                   <tr key={n.id}>
-                    <td>#{n.conversationId}</td>
+                    <ConversationCell conversationId={n.conversationId} conversationsById={conversationsById} />
                     <td>{n.profileId}</td>
                     <td>
                       <span className={`badge badge-${outcomeTone(n.outcome)}`}>
@@ -519,7 +563,7 @@ export function SuperAgentRecallScreen(props: ScreenProps): ReactNode {
                 subs.map((s) => (
                   <tr key={s.threadKey}>
                     <td>{s.threadKey}</td>
-                    <td>#{s.workerConversationId}</td>
+                    <ConversationCell conversationId={s.workerConversationId} conversationsById={conversationsById} />
                     <td>{formatTime(s.createdAt)}</td>
                     <td className="cell-actions">
                       <div className="row-actions-group">

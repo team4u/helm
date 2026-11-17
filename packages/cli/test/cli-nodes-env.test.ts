@@ -1,8 +1,9 @@
 /**
- * new increase core command test:nodes / env exec / api escape generate cabin / conversations --node /
- * profiles semantics flag / plugins config --set / manage side fault isolated.
- * real HTTP server simulated Hub contract (cli.test.ts same style pattern), verify path, method,
- * request body, exit code semantics and --json / person class can read output. each items explicit timeout: 60_000.
+ * Core CLI tests for nodes / env exec / api escape hatch / conversations --node /
+ * profiles semantic flags / plugins config --set / dynamic-action fault isolation.
+ * Uses a real HTTP server mock Hub contract (matching cli.test.ts conventions) to verify
+ * paths, methods, request bodies, exit code semantics, and --json / human-readable output.
+ * Every test specifies an explicit timeout: 60_000.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -57,7 +58,7 @@ const NODE_LIST = [
 // 1. nodes list / issue / remove
 // ---------------------------------------------------------------------------
 
-test('nodes list:GET /api/nodes;--json original array, person class pattern key list format', { timeout: 60_000 }, async (t) => {
+test('nodes list: GET /api/nodes; --json raw array, human-readable tabular output', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub({ 'GET /api/nodes': () => ({ body: NODE_LIST }) }, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
@@ -77,26 +78,26 @@ test('nodes list:GET /api/nodes;--json original array, person class pattern key 
   assert.match(human.out, /platform/)
 })
 
-test('nodes list --json: pass-through node health health snapshot (local and online BYOM; offline node without health key)', { timeout: 60_000 }, async (t) => {
+test('nodes list --json: passes through node health snapshots (local and online BYOM; no health key when offline)', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub({ 'GET /api/nodes': () => ({ body: NODE_LIST }) }, { autoRegisterCleanup: t })
   const r = await runCliCaptured(['nodes', 'list', '--json'], makeCliEnv(hub.url, dir))
   assert.equal(r.code, 0, r.err)
   const nodes = JSON.parse(r.out) as Array<{ id: string; health?: Record<string, unknown> }>
-  // local node: complete health snapshot original pass-through.
+  // Local node: passes through full health snapshot verbatim.
   const local = nodes.find((n) => n.id === 'local')!
-  assert.deepEqual(local.health, LOCAL_HEALTH, 'local health snapshot must original pass-through (contains disk field)')
-  // online BYOM node: heartbeat/register incidentally snapshot original pass-through (missing disk field when must not fabricate).
+  assert.deepEqual(local.health, LOCAL_HEALTH, 'local health snapshot must pass through verbatim (including disk fields)')
+  // Online BYOM node: passes through heartbeat/register snapshot verbatim (must not fabricate missing disk fields).
   const byom = nodes.find((n) => n.id === 'gpu-box')!
-  assert.deepEqual(byom.health, BYOM_HEALTH, 'online BYOM health snapshot must original pass-through')
-  assert.equal('diskFreeBytes' in (byom.health ?? {}), false, 'not on report disk field must not fabricate')
-  // offline node: leaves no residue expired health.
+  assert.deepEqual(byom.health, BYOM_HEALTH, 'online BYOM health snapshot must pass through verbatim')
+  assert.equal('diskFreeBytes' in (byom.health ?? {}), false, 'unreported disk fields must not be fabricated')
+  // Offline node: leaves no stale health field.
   const offline = nodes.find((n) => n.id === 'laptop')!
-  assert.equal(offline.health, undefined, 'offline node must not leftover expired health')
+  assert.equal(offline.health, undefined, 'offline node must not retain stale health')
   assert.equal('health' in offline, false)
 })
 
-test('nodes issue:POST /api/nodes/issue {nodeId};--json all amount, person class pattern sudden out token', { timeout: 60_000 }, async (t) => {
+test('nodes issue: POST /api/nodes/issue {nodeId}; --json prints full object, human mode outputs token', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const issued = { nodeId: 'dev-1', token: 'dev-1:sec-abc', createdAt: 123 }
   const hub = await startMockHub({ 'POST /api/nodes/issue': () => ({ body: issued }) }, { autoRegisterCleanup: t })
@@ -112,13 +113,13 @@ test('nodes issue:POST /api/nodes/issue {nodeId};--json all amount, person class
   assert.match(human.out, /dev-1:sec-abc/)
   assert.match(human.out, /helm-node connect/)
 
-  // missing location parameter explicit errors
+  // Missing positional argument fails explicitly
   const missing = await runCliCaptured(['nodes', 'issue', '--json'], env)
   assert.equal(missing.code, 1)
   assert.equal(parseCliError(missing).code, 'missing_id')
 })
 
-test('nodes remove:DELETE /api/nodes/:id; redundant location parameter reject', { timeout: 60_000 }, async (t) => {
+test('nodes remove: DELETE /api/nodes/:id; rejects extra positional arguments', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub({ 'DELETE /api/nodes/gpu-box': () => ({ status: 204 }) }, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
@@ -138,7 +139,7 @@ test('nodes remove:DELETE /api/nodes/:id; redundant location parameter reject', 
 // 2. env exec
 // ---------------------------------------------------------------------------
 
-test('env exec:--node/--cwd/--timeout/--current all amount mapping body; succeeded exit code 0', { timeout: 60_000 }, async (t) => {
+test('env exec: maps --node/--cwd/--timeout/--current to body; exits 0 on success', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub(
     {
@@ -162,13 +163,13 @@ test('env exec:--node/--cwd/--timeout/--current all amount mapping body; succeed
     conversationId: 9,
   })
 
-  // --json output complete JSON response (--json must in -- before:-- after all is command term items)
+  // --json prints the full JSON response (--json must precede --; tokens after -- belong to the command)
   const json = await runCliCaptured(['env', 'exec', '--json', '--', 'true'], makeCliEnv(hub.url, dir))
   assert.equal(json.code, 0, json.err)
   assert.deepEqual(JSON.parse(json.out), { ok: true, exitCode: 0, output: '3 passed\n', timedOut: false })
 })
 
-test('env exec: failed command (exitCode!==0) non-zero exit code;timeout / ok=false same failed', { timeout: 60_000 }, async (t) => {
+test('env exec: failed command (exitCode !== 0) propagates non-zero exit code; timeout / ok=false also fail', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub(
     {
@@ -201,7 +202,7 @@ test('env exec: failed command (exitCode!==0) non-zero exit code;timeout / ok=fa
   assert.equal(ok.code, 0)
 })
 
-test('env exec: single command string (contains space) original pass-through; missing command/illegal timeout explicit errors', { timeout: 60_000 }, async (t) => {
+test('env exec: passes through single command string (with spaces); rejects missing command or invalid timeout', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub(
     {
@@ -215,7 +216,7 @@ test('env exec: single command string (contains space) original pass-through; mi
   assert.equal(shell.code, 0, shell.err)
   assert.deepEqual(hub.hits.at(-1)?.body, { command: 'echo hello && echo world' })
 
-  // -- after term items (contains --json style token) all is command one part, do not by when act global switch
+  // Tokens after -- (including flag-like ones such as --json) belong to the command, not global flags
   const literal = await runCliCaptured(['env', 'exec', '--', 'echo', '--json'], env)
   assert.equal(literal.code, 0, literal.err)
   assert.deepEqual(hub.hits.at(-1)?.body, { command: ['echo', '--json'] })
@@ -228,21 +229,21 @@ test('env exec: single command string (contains space) original pass-through; mi
   assert.equal(badTimeout.code, 1)
   assert.equal(parseCliError(badTimeout).code, 'invalid_flag_value')
 
-  // exceeds cap 600000(and backend POST /api/env/exec validate align) in CLI side directly reject:validation_error + exit code 2
+  // Values above the 600000 ms cap (aligned with POST /api/env/exec) are rejected client-side with validation_error (exit code 2)
   const overTimeout = await runCliCaptured(['env', 'exec', '--json', '--timeout', '600001', '--', 'true'], env)
   assert.equal(overTimeout.code, 2)
   assert.equal(parseCliError(overTimeout).code, 'validation_error')
   assert.match(overTimeout.err, /600000/)
-  // request not to Hub(CLI side first row intercept)
+  // Request never reaches Hub (caught at the CLI boundary)
   assert.ok(!hub.hits.some((h) => h.path === '/api/env/exec' && (h.body as { timeoutMs?: number } | undefined)?.timeoutMs === 600001))
 
-  // exactly 600000 legal (boundary contains end)
+  // Exactly 600000 is allowed (inclusive upper bound)
   const boundary = await runCliCaptured(['env', 'exec', '--json', '--timeout', '600000', '--', 'true'], env)
   assert.equal(boundary.code, 0, boundary.err)
   assert.equal((hub.hits.filter((h) => h.path === '/api/env/exec').at(-1)?.body as { timeoutMs?: number }).timeoutMs, 600000)
 })
 
-test('env exec --current: not pass --node when request body do not strong stuff nodeId, by Hub by conversation bind set parse', { timeout: 60_000 }, async (t) => {
+test('env exec --current: omits nodeId when --node is unset so Hub resolves the conversation binding', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub(
     {
@@ -252,28 +253,28 @@ test('env exec --current: not pass --node when request body do not strong stuff 
   )
   const envWithConv = makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '12' })
 
-  // --current and without --node:body only contains command and conversationId, absolute without nodeId:'local'(guard against mistakenly run Hub local machine)
+  // With --current and without --node: body includes only command and conversationId (never forces nodeId:'local')
   const r = await runCliCaptured(['env', 'exec', '--current', '--', 'git', 'status'], envWithConv)
   assert.equal(r.code, 0, r.err)
   const hit = hub.hits.find((h) => h.path === '/api/env/exec')!
   assert.deepEqual(hit.body, { command: ['git', 'status'], conversationId: 12 })
-  assert.ok(!('nodeId' in (hit.body as Record<string, unknown>)), 'not pass --node when must not strong stuff nodeId(contains local)')
-  assert.ok(!('cwd' in (hit.body as Record<string, unknown>)), 'not pass --cwd when must not override conversation bind set cwd')
+  assert.ok(!('nodeId' in (hit.body as Record<string, unknown>)), 'must not force nodeId (including local) when --node is omitted')
+  assert.ok(!('cwd' in (hit.body as Record<string, unknown>)), 'must not override conversation cwd when --cwd is omitted')
 
-  // explicit --node still takes precedence (override conversation bind set)
+  // Explicit --node still takes precedence over conversation binding
   const explicit = await runCliCaptured(['env', 'exec', '--current', '--node', 'gpu-box', '--', 'nvidia-smi'], envWithConv)
   assert.equal(explicit.code, 0, explicit.err)
   assert.deepEqual(hub.hits.at(-1)?.body, { command: ['nvidia-smi'], nodeId: 'gpu-box', conversationId: 12 })
 
-  // without --current without --node: same do not strong stuff (Hub default local)
+  // Without --current or --node: omits nodeId (Hub defaults to local)
   const plain = await runCliCaptured(['env', 'exec', '--', 'ls'], makeCliEnv(hub.url, dir))
   assert.equal(plain.code, 0, plain.err)
   assert.deepEqual(hub.hits.at(-1)?.body, { command: ['ls'] })
 })
 
-test('env exec --stream:NDJSON one by one chunk consume (do not buffer all response); failed exitCode pass broadcast', { timeout: 60_000 }, async (t) => {
+test('env exec --stream: consumes NDJSON chunk by chunk without buffering the full response; propagates exitCode on failure', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
-  // one by one chunk write out many frame (multiple chunk write socket, verify CLI do not etc. all response only then start consume)
+  // Stream multiple chunks over the socket to verify the CLI does not wait for the entire response before printing
   const hub = await startMockHub(
     {
       'POST /api/env/exec': (body, _req, res) => {
@@ -297,7 +298,7 @@ test('env exec --stream:NDJSON one by one chunk consume (do not buffer all respo
   assert.deepEqual(hit.body, { command: ['build'], nodeId: 'gpu-box', stream: true })
   await hub.close()
 
-  // failed exitCode via exit frame pass broadcast is non-zero exit code
+  // Propagates non-zero exitCode from the terminal exit frame
   const hub2 = await startMockHub(
     {
       'POST /api/env/exec': (_body, _req, res) => {
@@ -314,7 +315,7 @@ test('env exec --stream:NDJSON one by one chunk consume (do not buffer all respo
   assert.match(failed.err, /exitCode=3/)
 })
 
-test('env exec --stream --json: output frame one by one row JSON, terminal state frame all amount;SIGINT cancel pass broadcast', { timeout: 60_000 }, async (t) => {
+test('env exec --stream --json: emits one JSON line per frame including terminal exit frame', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub(
     {
@@ -332,7 +333,7 @@ test('env exec --stream --json: output frame one by one row JSON, terminal state
   const lines = r.out.trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>)
   assert.deepEqual(lines[0], { type: 'output', stream: 'stdout', text: 'step1\n' })
   assert.deepEqual(lines[1], { type: 'exit', ok: true, exitCode: 0, timedOut: false })
-  // streaming request body carry stream: true
+  // Streaming request carries stream: true in body
   assert.equal((hub.hits.find((h) => h.path === '/api/env/exec')?.body as { stream?: boolean }).stream, true)
 })
 
@@ -340,7 +341,7 @@ test('env exec --stream --json: output frame one by one row JSON, terminal state
 // 3. conversations create/update --node
 // ---------------------------------------------------------------------------
 
-test('conversations create/update:--node mapping body.nodeId; original has flag do not subject to affect', { timeout: 60_000 }, async (t) => {
+test('conversations create/update: --node maps to body.nodeId while preserving existing flags', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub(
     {
@@ -362,7 +363,7 @@ test('conversations create/update:--node mapping body.nodeId; original has flag 
     title: 'train',
   })
 
-  // original flag combine keep original semantics (--tags/--model/--profile-id)
+  // Existing flags preserve their semantics (--tags/--model/--profile-id)
   const full = await runCliCaptured(
     ['conversations', 'create', '--profile-id', 'worker', '--model', 'openai/gpt', '--tags', 'a,b', '--json'],
     env,
@@ -374,50 +375,50 @@ test('conversations create/update:--node mapping body.nodeId; original has flag 
   assert.equal(updated.code, 0, updated.err)
   assert.deepEqual(hub.hits.find((h) => h.method === 'PATCH')?.body, { nodeId: 'gpu-box' })
 
-  // update --node and other field can combine
+  // update --node combines cleanly with other fields
   const combo = await runCliCaptured(['conversations', 'update', '7', '--node', 'laptop', '--cwd', '/x', '--pinned', '--json'], env)
   assert.equal(combo.code, 0, combo.err)
   assert.deepEqual(hub.hits.at(-1)?.body, { nodeId: 'laptop', cwd: '/x', pinned: true })
 })
 
 // ---------------------------------------------------------------------------
-// 4. profiles semantics flag
+// 4. profiles semantic flags
 // ---------------------------------------------------------------------------
 
-test('profiles create: semantics flag(--name/--model/--node/--cwd) directly construct Profile', { timeout: 60_000 }, async (t) => {
+test('profiles create: semantic flags (--name/--model/--node/--cwd) construct Profile directly', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub({ 'POST /api/profiles': (body) => ({ body }) }, { autoRegisterCleanup: t })
   const r = await runCliCaptured(
-    ['profiles', 'create', 'worker', '--name', 'work person', '--model', 'openai/gpt-4o', '--node', 'gpu-box', '--cwd', '/workspace', '--json'],
+    ['profiles', 'create', 'worker', '--name', 'Worker', '--model', 'openai/gpt-4o', '--node', 'gpu-box', '--cwd', '/workspace', '--json'],
     makeCliEnv(hub.url, dir),
   )
   assert.equal(r.code, 0, r.err)
   assert.deepEqual(JSON.parse(r.out), {
     id: 'worker',
-    name: 'work person',
+    name: 'Worker',
     model: 'openai/gpt-4o',
     nodeId: 'gpu-box',
     cwd: '/workspace',
   })
 })
 
-test('profiles create:--system-file all text enter body; semantics flag override --input same name segment', { timeout: 60_000 }, async (t) => {
+test('profiles create: --system-file reads content into body; semantic flags override matching fields in --input', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const systemFile = path.join(dir, 'SYSTEM.md')
-  await fsp.writeFile(systemFile, '# system\nyou is work person.')
+  await fsp.writeFile(systemFile, '# system\nYou are a worker.')
   const hub = await startMockHub({ 'POST /api/profiles': (body) => ({ body }) }, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
 
   const r = await runCliCaptured(['profiles', 'create', 'worker', '--system-file', systemFile, '--json'], env)
   assert.equal(r.code, 0, r.err)
   const body = JSON.parse(r.out) as Record<string, unknown>
-  assert.equal(body['system'], '# system\nyou is work person.')
+  assert.equal(body['system'], '# system\nYou are a worker.')
 
-  // --input is base bottom, semantics flag override for should field (name/model by override,cwd keep)
+  // --input acts as base object; semantic flags override matching fields while preserving others (e.g., cwd)
   const merged = await runCliCaptured(
     [
       'profiles', 'create',
-      '--input', '{"id":"x","name":"base bottom","model":"old/m","cwd":"/base","extra":1}',
+      '--input', '{"id":"x","name":"base","model":"old/m","cwd":"/base","extra":1}',
       '--name', 'override name', '--model', 'new/m',
       '--json',
     ],
@@ -432,15 +433,15 @@ test('profiles create:--system-file all text enter body; semantics flag override
     extra: 1,
   })
 
-  // all missing errors
+  // Missing all fields rejects explicitly
   const none = await runCliCaptured(['profiles', 'create', '--json'], env)
   assert.equal(none.code, 1)
   assert.equal(parseCliError(none).code, 'missing_update_fields')
 })
 
-test('profiles update: semantics flag first GET merge after PUT(whole replace contract guard against lose field)', { timeout: 60_000 }, async (t) => {
+test('profiles update: semantic flags GET existing profile then merge into PUT (prevents dropping fields on full replace)', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
-  // since has complete config: contains nodeId/cwd/tags/runtime etc. bind set field and system/memory all text
+  // Existing profile config: includes nodeId/cwd/tags/runtime bindings plus full system text
   const existing = {
     id: 'worker',
     name: 'old name',
@@ -449,7 +450,7 @@ test('profiles update: semantics flag first GET merge after PUT(whole replace co
     cwd: '/workspace',
     tags: ['a', 'b'],
     runtime: { kind: 'herdr', agent: 'agy' },
-    system: '# system prompt all text',
+    system: '# full system prompt',
   }
   let putBody: unknown
   const hub = await startMockHub(
@@ -464,14 +465,14 @@ test('profiles update: semantics flag first GET merge after PUT(whole replace co
   )
   const env = makeCliEnv(hub.url, dir)
 
-  // only change --model:GET first at PUT, and PUT body keep all bind set field (nodeId/cwd/tags/runtime)
+  // Only updating --model: GET before PUT ensures PUT retains all binding fields (nodeId/cwd/tags/runtime)
   const r = await runCliCaptured(['profiles', 'update', 'worker', '--model', 'anthropic/sonnet', '--json'], env)
   assert.equal(r.code, 0, r.err)
   const getHit = hub.hits.find((h) => h.method === 'GET' && h.path === '/api/profiles/worker')
   const putHit = hub.hits.find((h) => h.method === 'PUT' && h.path === '/api/profiles/worker')
-  assert.ok(getHit, 'semantics flag path must first GET complete Profile')
-  assert.ok(putHit, 'then PUT merge result')
-  assert.ok(hub.hits.indexOf(getHit!) < hub.hits.indexOf(putHit!), 'GET must first at PUT')
+  assert.ok(getHit, 'semantic flag path must GET full profile first')
+  assert.ok(putHit, 'must PUT merged result')
+  assert.ok(hub.hits.indexOf(getHit!) < hub.hits.indexOf(putHit!), 'GET must precede PUT')
   assert.deepEqual(putBody, {
     id: 'worker',
     name: 'old name',
@@ -481,10 +482,10 @@ test('profiles update: semantics flag first GET merge after PUT(whole replace co
     tags: ['a', 'b'],
     runtime: { kind: 'herdr', agent: 'agy' },
   })
-  // GET carries back system all text must not back pass (not explicit to out when)
+  // System prompt returned by GET must not be echoed back when not explicitly modified
   assert.ok(!('system' in (putBody as Record<string, unknown>)))
 
-  // only change --name same do not lose nodeId(guard against conversation mistakenly run local regression key)
+  // Renaming only --name must likewise preserve nodeId (prevents conversations from falling back to local)
   const rename = await runCliCaptured(['profiles', 'update', 'worker', '--name', 'new name', '--json'], env)
   assert.equal(rename.code, 0, rename.err)
   const lastPut = hub.hits.filter((h) => h.method === 'PUT').at(-1)!.body as Record<string, unknown>
@@ -494,11 +495,11 @@ test('profiles update: semantics flag first GET merge after PUT(whole replace co
   assert.ok(!('system' in lastPut))
 })
 
-test('profiles update: explicit --system enter body;--input and semantics flag combine stable merge', { timeout: 60_000 }, async (t) => {
+test('profiles update: explicit --system enters body; --input and semantic flags merge deterministically', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const existing = {
     id: 'worker',
-    name: 'base bottom',
+    name: 'base name',
     model: 'old/m',
     nodeId: 'gpu-box',
     cwd: '/workspace',
@@ -513,7 +514,7 @@ test('profiles update: explicit --system enter body;--input and semantics flag c
   )
   const env = makeCliEnv(hub.url, dir)
 
-  // explicit --system override (MEMORY.md by builtin:memory plugin manage, do not via Profile)
+  // Explicit --system override (MEMORY.md is managed by builtin:memory, not via Profile)
   const r = await runCliCaptured(
     ['profiles', 'update', 'worker', '--system', 'new system prompt', '--node', 'laptop', '--json'],
     env,
@@ -522,13 +523,13 @@ test('profiles update: explicit --system enter body;--input and semantics flag c
   const body = hub.hits.filter((h) => h.method === 'PUT').at(-1)!.body as Record<string, unknown>
   assert.equal(body['system'], 'new system prompt')
   assert.equal(body['nodeId'], 'laptop')
-  assert.equal(body['name'], 'base bottom')
+  assert.equal(body['name'], 'base name')
 
-  // --input + semantics flag combine: with GET base bottom + --input override + flag override, field do not lose
+  // Combining --input + semantic flags: layers GET base -> --input overrides -> semantic flag overrides without dropping fields
   const merged = await runCliCaptured(
     [
       'profiles', 'update', 'worker',
-      '--input', '{"name":"Chinese name","cwd":"/new-cwd"}',
+      '--input', '{"name":"custom name","cwd":"/new-cwd"}',
       '--model', 'new/m',
       '--json',
     ],
@@ -538,39 +539,39 @@ test('profiles update: explicit --system enter body;--input and semantics flag c
   const body2 = hub.hits.filter((h) => h.method === 'PUT').at(-1)!.body as Record<string, unknown>
   assert.deepEqual(body2, {
     id: 'worker',
-    name: 'Chinese name',
+    name: 'custom name',
     model: 'new/m',
-    nodeId: 'gpu-box', // GET base bottom keep, not lose
-    cwd: '/new-cwd', // --input override
+    nodeId: 'gpu-box', // Preserved from GET base
+    cwd: '/new-cwd', // Overridden by --input
   })
 })
 
-test('profiles update --input separate use: all amount replace semantics (without GET);GET 404 such as on throw', { timeout: 60_000 }, async (t) => {
+test('profiles update --input standalone: full-replace semantics (skips GET); rethrows GET 404 verbatim', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub(
     {
       'PUT /api/profiles/worker': (body) => ({ body }),
-      'GET /api/profiles/ghost': () => ({ status: 404, body: { error: { code: 'not_found', message: 'without this Profile' } } }),
+      'GET /api/profiles/ghost': () => ({ status: 404, body: { error: { code: 'not_found', message: 'profile not found' } } }),
     },
     { autoRegisterCleanup: t },
   )
   const env = makeCliEnv(hub.url, dir)
 
-  // --input separate use = explicit all amount replace: do not GET,body i.e. --input + id
+  // Standalone --input = explicit full replace: no GET; body is --input + id
   const whole = await runCliCaptured(
-    ['profiles', 'update', 'worker', '--input', '{"name":"all amount","model":"m"}', '--json'],
+    ['profiles', 'update', 'worker', '--input', '{"name":"full replace","model":"m"}', '--json'],
     env,
   )
   assert.equal(whole.code, 0, whole.err)
-  assert.ok(!hub.hits.some((h) => h.method === 'GET' && h.path === '/api/profiles/worker'), 'pure --input must not GET')
-  assert.deepEqual(hub.hits.at(-1)?.body, { name: 'all amount', model: 'm', id: 'worker' })
+  assert.ok(!hub.hits.some((h) => h.method === 'GET' && h.path === '/api/profiles/worker'), 'standalone --input must not GET')
+  assert.deepEqual(hub.hits.at(-1)?.body, { name: 'full replace', model: 'm', id: 'worker' })
 
-  // semantics flag target missing:GET 404 error message seal such as on throw (do not fabricate base bottom blind change)
+  // Missing target with semantic flags: rethrows GET 404 verbatim without fabricating a base object
   const ghost = await runCliCaptured(['profiles', 'update', 'ghost', '--name', 'x', '--json'], env)
   assert.equal(ghost.code, 1)
   assert.equal(parseCliError(ghost).code, 'not_found')
 
-  // all missing errors
+  // Rejects when no fields are given
   const none = await runCliCaptured(['profiles', 'update', 'worker', '--json'], env)
   assert.equal(none.code, 1)
   assert.equal(parseCliError(none).code, 'missing_update_fields')
@@ -580,7 +581,7 @@ test('profiles update --input separate use: all amount replace semantics (withou
 // 5. plugins config --set
 // ---------------------------------------------------------------------------
 
-test('plugins config --set:key=value can duplicate, mark amount semantics parse; and --input shared store override same key', { timeout: 60_000 }, async (t) => {
+test('plugins config --set: allows repeated key=value pairs with scalar parsing and overrides matching keys in --input', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub(
     {
@@ -601,7 +602,7 @@ test('plugins config --set:key=value can duplicate, mark amount semantics parse;
     values: { retries: 5, verbose: true, label: 'herdr host' },
   })
 
-  // --set override --input same key, keep the rest key
+  // --set overrides matching keys from --input while preserving the rest
   const merged = await runCliCaptured(
     ['plugins', 'config', 'builtin:herdr', '--input', '{"retries":9,"other":"keep"}', '--set', 'retries=1', '--json'],
     env,
@@ -609,23 +610,23 @@ test('plugins config --set:key=value can duplicate, mark amount semantics parse;
   assert.equal(merged.code, 0, merged.err)
   assert.deepEqual(hub.hits.at(-1)?.body, { values: { retries: 1, other: 'keep' } })
 
-  // without --set and without --input: keep GET semantics
+  // Without --set or --input: keeps GET semantics
   const get = await runCliCaptured(['plugins', 'config', 'builtin:herdr', '--json'], env)
   assert.equal(get.code, 0, get.err)
   assert.equal(hub.hits.at(-1)?.method, 'GET')
   assert.deepEqual(JSON.parse(get.out), { values: { retries: 3 }, schema: {} })
 
-  // illegal --set(without =) explicit errors
+  // Invalid --set (missing =) fails explicitly
   const bad = await runCliCaptured(['plugins', 'config', 'builtin:herdr', '--set', 'novalue', '--json'], env)
   assert.equal(bad.code, 1)
   assert.equal(parseCliError(bad).code, 'invalid_flag_value')
 })
 
 // ---------------------------------------------------------------------------
-// 6. api escape generate cabin
+// 6. api escape hatch
 // ---------------------------------------------------------------------------
 
-test('api GET: large small write do not sensitive,path automatically patch complete before lead /;--field construct POST body', { timeout: 60_000 }, async (t) => {
+test('api GET: case-insensitive method, auto-prepends leading / on path, builds POST body from --field', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub(
     {
@@ -636,12 +637,12 @@ test('api GET: large small write do not sensitive,path automatically patch compl
   )
   const env = makeCliEnv(hub.url, dir)
 
-  // method small write + path carries before lead /
+  // Lowercase method + path with leading /
   const list = await runCliCaptured(['api', 'get', '/api/nodes', '--json'], env)
   assert.equal(list.code, 0, list.err)
   assert.deepEqual(JSON.parse(list.out), NODE_LIST)
 
-  // method mixed large small write + path do not carries before lead /
+  // Mixed-case method + path without leading /
   const list2 = await runCliCaptured(['api', 'Get', 'api/nodes', '--json'], env)
   assert.equal(list2.code, 0, list2.err)
   assert.equal(hub.hits.at(-1)?.method, 'GET')
@@ -653,13 +654,13 @@ test('api GET: large small write do not sensitive,path automatically patch compl
   assert.equal(hub.hits.at(-1)?.path, '/api/nodes/issue')
   assert.deepEqual(hub.hits.at(-1)?.body, { nodeId: 'dev-1' })
 
-  // illegal method explicit errors
+  // Invalid HTTP method fails explicitly
   const bad = await runCliCaptured(['api', 'TRACE', '/api/nodes', '--json'], env)
   assert.equal(bad.code, 1)
   assert.equal(parseCliError(bad).code, 'invalid_flag_value')
 })
 
-test('api PUT --field mark amount semantics (number/boolean/string);--input whole body', { timeout: 60_000 }, async (t) => {
+test('api PUT: parses --field scalars (number/boolean/string) and passes through whole --input body', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub(
     {
@@ -671,11 +672,11 @@ test('api PUT --field mark amount semantics (number/boolean/string);--input whol
   const env = makeCliEnv(hub.url, dir)
 
   const fields = await runCliCaptured(
-    ['api', 'put', 'api/profiles/p1', '--field', 'n=42', '--field', 'ok=false', '--field', 's=pure text', '--json'],
+    ['api', 'put', 'api/profiles/p1', '--field', 'n=42', '--field', 'ok=false', '--field', 's=plain text', '--json'],
     env,
   )
   assert.equal(fields.code, 0, fields.err)
-  assert.deepEqual(hub.hits.at(-1)?.body, { n: 42, ok: false, s: 'pure text' })
+  assert.deepEqual(hub.hits.at(-1)?.body, { n: 42, ok: false, s: 'plain text' })
 
   const whole = await runCliCaptured(['api', 'PUT', '/api/providers', '--input', '[{"id":"g"}]', '--json'], env)
   assert.equal(whole.code, 0, whole.err)
@@ -683,14 +684,14 @@ test('api PUT --field mark amount semantics (number/boolean/string);--input whol
 })
 
 // ---------------------------------------------------------------------------
-// 7. manage side fault isolated:/api/actions 500 when core command still 100% available
+// 7. Dynamic-action fault isolation: core commands remain 100% available when /api/actions returns 500
 // ---------------------------------------------------------------------------
 
-test('manage side fault isolated:GET /api/actions 500 when nodes/env/plugins etc. core command per common execute', { timeout: 60_000 }, async (t) => {
+test('dynamic-action fault isolation: core commands (nodes/env/plugins) work normally when GET /api/actions returns 500', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub(
     {
-      // manifest end point blast (simulated broken plugin drag collapse action total line)
+      // Manifest endpoint fails (simulating a broken plugin dragging down all actions)
       'GET /api/actions': () => ({ status: 500, body: { error: { code: 'internal_error', message: 'broken plugin manifest' } } }),
       'GET /api/nodes': () => ({ body: NODE_LIST }),
       'POST /api/env/exec': () => ({ body: { ok: true, exitCode: 0, output: 'ok\n', timedOut: false } }),
@@ -702,7 +703,7 @@ test('manage side fault isolated:GET /api/actions 500 when nodes/env/plugins etc
   )
   const env = makeCliEnv(hub.url, dir)
 
-  // core command precise match i.e. execute: never because /api/actions 500 block assert
+  // Core commands match and execute directly without touching /api/actions
   const nodes = await runCliCaptured(['nodes', 'list', '--json'], env)
   assert.equal(nodes.code, 0, nodes.err)
   assert.deepEqual(JSON.parse(nodes.out), NODE_LIST)
@@ -722,20 +723,20 @@ test('manage side fault isolated:GET /api/actions 500 when nodes/env/plugins etc
   const profiles = await runCliCaptured(['profiles', 'list', '--json'], env)
   assert.equal(profiles.code, 0, profiles.err)
 
-  // api escape generate cabin same do not subject to affect
+  // api escape hatch is likewise unaffected
   const api = await runCliCaptured(['api', 'GET', '/api/nodes', '--json'], env)
   assert.equal(api.code, 0, api.err)
 
-  // only truly motion state command path only then pull /api/actions and explicit errors (error message seal pass-through 500)
+  // Only genuine dynamic command paths fetch /api/actions and pass through the 500 error
   const dynamic = await runCliCaptured(['some', 'plugin', 'action', '--json'], env)
   assert.equal(dynamic.code, 1)
   assert.equal(parseCliError(dynamic).code, 'internal_error')
 })
 
-test('env exec --stream: cancel pass broadcast - - already to frame already consume,aborted non-zero exit, server side immediately aware disconnect', { timeout: 60_000 }, async (t) => {
+test('env exec --stream: abort propagates immediately — arrived frames consumed, non-zero exit, server detects disconnect immediately', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const seenDisconnect = { value: false }
-  // NDJSON end point: first out one frame after suspended; connect disconnect immediately placement (verify CLI cancel i.e. assert stream, do not continue pull)
+  // NDJSON endpoint stalls after sending one frame; triggers close on abort (verifying CLI closes stream immediately without reading further)
   const hub = await startMockHub(
     {
       'POST /api/env/exec': (_body, _req, res) => {
@@ -744,30 +745,30 @@ test('env exec --stream: cancel pass broadcast - - already to frame already cons
         res.on('close', () => {
           seenDisconnect.value = true
         })
-        return null // forever do not actively end: only client cancel only then assert
+        return null // Never closes proactively: only closed when client aborts
       },
     },
     { autoRegisterCleanup: t },
   )
   const ac = new AbortController()
-  // via Io.fetchImpl inject replace body: first frame consume after immediately abort(etc. price SIGINT  aborted error path)
+  // Inject AbortSignal via fetch wrapper and abort immediately after consuming the first frame (equivalent to SIGINT abort path)
   const r = await runCliCaptured(['env', 'exec', '--stream', '--', 'sleep', '10'], makeCliEnv(hub.url, dir), {
     onStdout: (chunk) => {
       if (chunk.includes('frame-1')) queueMicrotask(() => ac.abort())
     },
     fetch: (input, init) => fetch(input, { ...init, signal: ac.signal }),
   })
-  assert.equal(r.code, 130, `exit code must be 130(SIGINT convention), got ${r.code},stderr=${r.err}`)
-  assert.equal(r.out, 'frame-1\n', 'cancel before already to frame must already consume (true one by one chunk, non- buffer)')
+  assert.equal(r.code, 130, `exit code must be 130 (SIGINT convention), got ${r.code}, stderr=${r.err}`)
+  assert.equal(r.out, 'frame-1\n', 'frames received before cancellation must already be consumed (true unbuffered streaming)')
   assert.match(r.err, /cancelled/)
   await waitFor(() => seenDisconnect.value, {
     timeoutMs: 2_000,
     intervalMs: 10,
-    message: 'cancel must immediately assert stream, do not continue pull',
+    message: 'cancellation must close the stream immediately without continuing to read',
   })
 })
 
-test('help text contains nodes/env/api command note;nodes command family do not and motion state command conflict', { timeout: 60_000 }, async (t) => {
+test('help text describes nodes/env/api commands; nodes subcommands do not collide with dynamic commands', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const hub = await startMockHub({ 'GET /api/nodes': () => ({ body: [] }) }, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
@@ -780,39 +781,39 @@ test('help text contains nodes/env/api command note;nodes command family do not 
   assert.match(help.out, /env exec/)
   assert.match(help.out, /api <method> <path>/)
 
-  // nodes list even if has same name motion state declaration (if manifest preempt) also by core execute - - already by fault isolated test override
+  // nodes list executes through core dispatch even if a dynamic manifest shares the same path (also covered by fault isolation test)
   const nodes = await runCliCaptured(['nodes', 'list'], env)
   assert.equal(nodes.code, 0, nodes.err)
   assert.match(nodes.out, /\(empty\)/)
 })
 
 // ---------------------------------------------------------------------------
-// 8. static command table uniqueness assertion (guard against not come new increase command collide path by matchCommand exact[0] static default swallow)
+// 8. Static command table uniqueness assertion (prevents future commands from being shadowed by matchCommand)
 // ---------------------------------------------------------------------------
 
-test('static command table:coreCommands path all etc. unique and mutual do not is prefix conflict', { timeout: 60_000 }, () => {
-  const commands = coreCommands() // internal already validate, duplicate/prefix conflict will throw command_table_conflict
+test('static command table: coreCommands paths are unique and prefix-free', { timeout: 60_000 }, () => {
+  const commands = coreCommands() // Validates internally; duplicates or prefix conflicts throw command_table_conflict
   const paths = commands.map((c) => c.path.join(' '))
-  assert.equal(new Set(paths).size, paths.length, `static command path duplicate:${JSON.stringify(paths)}`)
-  // mutual do not is prefix: relatively short path must not is any relatively long path header sequence
+  assert.equal(new Set(paths).size, paths.length, `duplicate static command path: ${JSON.stringify(paths)}`)
+  // Prefix-free: a shorter path must never be a prefix of any longer path
   for (const cmd of commands) {
     for (const other of commands) {
       if (cmd === other || other.path.length >= cmd.path.length) continue
       const isPrefix = other.path.every((seg, i) => seg === cmd.path[i])
-      assert.equal(isPrefix, false, `command prefix conflict:"${cmd.path.join(' ')}" will obscure "${other.path.join(' ')}"`)
+      assert.equal(isPrefix, false, `command prefix conflict: "${cmd.path.join(' ')}" would shadow "${other.path.join(' ')}"`)
     }
   }
 })
 
 // ---------------------------------------------------------------------------
-// 9. cli-token lock race: empty/half truncate lock file wide limit heavy read, stale leftover such as judge corrupt
+// 9. cli-token lock race: grace window retries empty/truncated lock files; stale leftovers reported as corrupt
 // ---------------------------------------------------------------------------
 
-test('cli-token lock: empty lock file just create do not long treated as holder is now write, wait for after succeeded; stale empty lock such as report credentials_lock_broken', { timeout: 60_000 }, async (t) => {
+test('cli-token lock: freshly created empty lock file waits during grace window instead of falsely reporting corruption; stale empty lock throws credentials_lock_broken', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const lockFile = path.join(dir, 'cli-token.lock')
-  // scenario 1: simulated old platform fallback first create empty file after write content slow holder: occupy empty lock (fresh mtime),
-  // 150ms after holder write full owner row (override at least one round 100ms wide limit backoff),350ms after release. competition way in wide limit window inside wait for heavy read, never mistakenly kill concurrency.
+  // Scenario 1: simulates legacy fallback where a slow holder creates an empty file first and writes content later:
+  // holds empty lock (fresh mtime), writes full owner line at 150ms (spanning at least one 100ms backoff cycle), and releases at 350ms.
   await fsp.writeFile(lockFile, '', { mode: 0o600 })
   const holderOwner = `${process.pid} holder-uuid`
   const fillTimer = setTimeout(() => { void fsp.writeFile(lockFile, `${holderOwner}\n`).catch(() => {}) }, 150)
@@ -825,11 +826,11 @@ test('cli-token lock: empty lock file just create do not long treated as holder 
   }
   const saved = JSON.parse(await fsp.readFile(path.join(dir, 'cli-token'), 'utf8')) as { token: string }
   assert.equal(saved.token, 'tok')
-  // lock and temp file leaves no residue
+  // No leftover lock or temp files remain
   const leftovers = (await fsp.readdir(dir)).filter((f) => f.includes('.lock') || f.includes('.tmp'))
   assert.deepEqual(leftovers, [])
 
-  // scenario 2: stale empty lock (mtime exceeds wide limit window and without person patch write)→ such as throw credentials_lock_broken, never static default when without lock
+  // Scenario 2: stale empty lock (mtime older than grace window with no writer filling it) -> throws credentials_lock_broken rather than pretending lock-free
   await fsp.writeFile(lockFile, '', { mode: 0o600 })
   const old = new Date(Date.now() - 60_000)
   await fsp.utimes(lockFile, old, old)
@@ -839,10 +840,10 @@ test('cli-token lock: empty lock file just create do not long treated as holder 
   )
 })
 
-test('cli-token lock: half truncate lock content same subject to wide limit window protect, wait for holder after completion succeeded', { timeout: 60_000 }, async (t) => {
+test('cli-token lock: truncated lock content is also protected by grace window and succeeds after holder completes', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-nodes-')
   const lockFile = path.join(dir, 'cli-token.lock')
-  // half truncate content (first token non- PID)+ slow holder in wide limit window inside patch write complete owner row then release
+  // Truncated content (first token is non-PID) + slow holder completing full owner line within grace window before releasing
   await fsp.writeFile(lockFile, 'garbage ', { mode: 0o600 })
   const fillTimer = setTimeout(() => { void fsp.writeFile(lockFile, `${process.pid} filler\n`).catch(() => {}) }, 150)
   const releaseTimer = setTimeout(() => { void fsp.rm(lockFile, { force: true }).catch(() => {}) }, 300)

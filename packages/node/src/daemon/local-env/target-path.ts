@@ -1,39 +1,36 @@
 /**
- * unify target path parse original language (local-env sub- module):file API and exec shared use,
- * zero probe, zero guess; behavior contract by test/node-local-env-win32-path.test.ts pin.
+ * Unified target-path resolution primitive (shared by file APIs and exec).
+ * Performs zero filesystem probing or guesswork; behavior contract is pinned by
+ * `test/node-local-env-win32-path.test.ts`.
  */
 
 import { homedir } from 'node:os';
 import { posix, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { FileError, err, ok, type Result as SdkResult } from '@earendil-works/pi-durable/env';
 import { normalizeTargetPath, type TargetPlatform } from '@helm/protocol';
-import { FileError, err, ok, type Result } from './errors.js';
 
-/** item concatenate by target platform term method rule (real host on and node:path host behavior consistent, inject test under keep the same perspective). */
-export function joinTargetPath(platform: TargetPlatform, ...parts: string[]): string {
+function joinTargetPath(platform: TargetPlatform, ...parts: string[]): string {
   return platform === 'win32' ? win32.join(...parts) : posix.join(...parts);
 }
 
-/** parent directory extract by target platform term method rule (input already is this original language parse after canonical path). */
-export function parentTargetPath(platform: TargetPlatform, p: string): string {
-  return platform === 'win32' ? win32.dirname(p) : posix.resolve(p, '..');
-}
-
 /**
- * unify target path parse original language (file API and exec shared use, zero probe, zero guess):
+ * Resolve a target path against `cwd` according to `platform`'s lexical rules:
  *
- * - posix target: by node:path posix rule parse (/mnt/... is real path never reverse convert,
- *   and and host OS without closure - -Windows host inject test under same keep pure POSIX semantics);
- * - win32 target: first do `~` / `file://` expand, again via @helm/protocol 
- *   normalizeTargetPath unify specification - -/mnt/<symbol>/... (WSL mount view) and
- *   /<symbol>/... (Git Bash / MSYS symbol view) determinism convert is <large write symbol>:\...
- *   (while non- host resolve mistakenly anchor out <symbol>:\mnt\<symbol>\...), original generate Windows /
- *   UNC / relative path only do term method archive one, without symbol POSIX (/home,/tmp, bare / etc.)
- *   explicit structure failed (code 'invalid'), never do access choose guess;
- *   relative path anchor set to by the same rule specification after conversation cwd(conversation cwd also may is
- *   /mnt/<symbol>/... view).
+ * - `posix` target: resolves strictly by `node:path/posix` rules (`/mnt/...` is a real path
+ *   and is never rewritten; unaffected by host OS even under injected tests on Windows).
+ * - `win32` target: expands `~` and `file://`, then normalizes via `@helm/protocol`'s
+ *   `normalizeTargetPath` — `/mnt/<drive>/...` (WSL mount view) and `/<drive>/...`
+ *   (Git Bash / MSYS drive view) deterministically map to `<DRIVE>:\...`; native Windows,
+ *   UNC, and relative paths are lexically normalized; driveless POSIX roots (`/home`, `/tmp`,
+ *   bare `/`) fail deterministically with code `'invalid'` without probing the filesystem.
+ *   Relative paths anchor to `cwd` normalized by the same rule.
  */
-export function resolveTargetPath(cwd: string, path: string, platform: TargetPlatform): Result<string> {
+export function resolveTargetPath(
+  cwd: string,
+  path: string,
+  platform: TargetPlatform,
+): SdkResult<string, FileError> {
   let normalized = path;
   if (normalized === '~') {
     normalized = homedir();
@@ -46,18 +43,17 @@ export function resolveTargetPath(cwd: string, path: string, platform: TargetPla
     try {
       normalized = fileURLToPath(normalized, { windows: platform === 'win32' });
     } catch {
-      // distortion shape URL keep original as ordinary path, file method dimension hold do not throw exception contract.
+      // Keep malformed URLs as plain paths so filesystem methods preserve their non-throwing contract.
     }
   }
   if (platform !== 'win32') {
-    // first use protocol pure POSIX rule do term method archive one, again only use posix.resolve do
-    // target cwd anchor set; this Windows host will not symbol/backslash rule carries target path.
-    const normalizedPath = normalizeTargetPath(normalized, 'posix')
-    const normalizedCwd = normalizeTargetPath(cwd, 'posix')
+    // Normalize purely with protocol's POSIX rules, then anchor via posix.resolve so a Windows
+    // host never leaks drive-letter/backslash semantics into POSIX target paths.
+    const normalizedPath = normalizeTargetPath(normalized, 'posix');
+    const normalizedCwd = normalizeTargetPath(cwd, 'posix');
     if (!normalizedPath.ok || !normalizedCwd.ok) {
-      // normalizeTargetPath('posix') when before will not failed; keep explicit branch with guard
-      // protocol contract, avoid not come extend failed type when static default continue.
-      return err(new FileError('invalid', 'Invalid POSIX target path', path))
+      // normalizeTargetPath('posix') never fails today; keep an explicit guard against future error kinds.
+      return err(new FileError('invalid', 'Invalid POSIX target path', path));
     }
     return ok(
       posix.isAbsolute(normalizedPath.path)
@@ -74,7 +70,7 @@ export function resolveTargetPath(cwd: string, path: string, platform: TargetPla
   }
   const base = normalizeTargetPath(cwd, 'win32');
   if (!base.ok) {
-    return err(new FileError('invalid', `conversation cwd cannot parse:${base.reason}`, path));
+    return err(new FileError('invalid', `Failed to resolve session cwd: ${base.reason}`, path));
   }
   return ok(win32.resolve(base.path, normalizedWin.path));
 }

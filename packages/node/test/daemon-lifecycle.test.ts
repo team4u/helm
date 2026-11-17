@@ -1,13 +1,13 @@
 /**
- * daemon/index.ts lifecycle regression test (real HTTP+WS+birpc + real temp directory, do not mock by test module):
- * - first time failed to connect after reconnect succeeded (Hub latency start);
- * - disconnection after waitUntilRegistered do not fabricate succeeded (offline confirm false; reconnect register after can again translate true);
- * - reverse re- register reject during always at most a connect (without parallel connect);
- * - offline backoff reconnect during daemon keep store (event loop do not by unref count when put empty);
- * - close() wait for in-flight era proxy clean up complete (remote envExec child process by kill after only then return);
- * - broken identity/broken token/broken hubUrl explicit reject (not silently fall back since has identity);
- * - concurrency bind set different nodeId exactly a succeeded (process inside mutual exclusion);
- * - shellEnv PATH pre- managed helm bin(remote bash can run helm).
+ * `daemon/index.ts` lifecycle regression tests (real HTTP+WS+birpc and real temp dirs, no mocking):
+ * - Reconnects cleanly after initial connection failure (delayed Hub startup);
+ * - `waitUntilRegistered` never fabricates success while offline (false offline, true after reconnect);
+ * - At most one active connection during repeated `register` rejections;
+ * - Keeps event loop alive across offline backoff reconnects (no unref timer leaks);
+ * - `close()` waits for active generation cleanup (kills remote `envExec` child processes first);
+ * - Rejects invalid identity / token / hubUrl explicitly without falling back to stale identity;
+ * - At most one concurrent `bindIdentityFromJoinToken` succeeds per process (in-process lock);
+ * - `shellEnv` prepends managed `helm` bin dir onto `PATH` (remote bash can run `helm`).
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -64,22 +64,22 @@ interface HubHandle {
   url: string;
   port: number;
   registrations: NodeRegisterInput[];
-  /** cumulative accept connect (upgrade time count). */
+  /** Cumulative accepted WebSocket upgrades. */
   connections: number;
-  /** immediately accept socket count (browser side already establish). */
+  /** Currently open sockets accepted by the Hub. */
   openSockets: Set<WebSocket>;
   nodeRpc(): BirpcReturn<NodeEnvRpcFunctions, object> | undefined;
-  /** actively disconnect all node connect. */
+  /** Force-disconnect all connected node sockets. */
   disconnectAll(): void;
   close(): Promise<void>;
-  /** on demand change write register reply/heartbeat reply. */
+  /** Override register or heartbeat replies dynamically. */
   setBehavior(behavior: {
     registerAck?: (input: NodeRegisterInput) => NodeRegisterResult;
     heartbeat?: (nodeId: string) => boolean;
   }): void;
 }
 
-/** real http.Server + WebSocketServer + birpc  Hub gateway (and formal /ws/node same construct). */
+/** Real http.Server + WebSocketServer + birpc Hub gateway matching `/ws/node`. */
 async function startHub(options: {
   port?: number;
   heartbeatMs?: number;
@@ -140,7 +140,7 @@ async function startHub(options: {
               const parsed = JSON.parse(text) as unknown;
               if (parsed !== null && typeof parsed === 'object') callback(parsed);
             } catch {
-              // Hub fixture contain tolerate occasional noise frame.
+              // Tolerate occasional noisy frames in test Hub fixture.
             }
           });
         },
@@ -148,7 +148,7 @@ async function startHub(options: {
         deserialize: (data) => data as never,
         timeout: 30_000,
       });
-      // connect disconnect: as specification Hub must immediately reject all in-flight invoke (do not pending to timeout).
+      // On socket close, reject all in-flight RPC calls promptly like real Hub.
       ws.once('close', () => nodeRpc?.$close());
       wss.emit('connection', ws, req);
     });
@@ -182,10 +182,10 @@ async function startHub(options: {
 }
 
 // ---------------------------------------------------------------------------
-// 1. first time failed to connect → backoff reconnect succeeded
+// 1. Initial connection failure -> backoff reconnect succeeds
 // ---------------------------------------------------------------------------
 
-test('first time failed to connect (Hub not start) after reconnect succeeded', { timeout: 60_000 }, async () => {
+test('reconnects after initial connection failure when Hub starts late', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-dlc-firstfail-');
   const port = await reservePort();
   const logs: string[] = [];
@@ -199,20 +199,20 @@ test('first time failed to connect (Hub not start) after reconnect succeeded', {
   });
   let hub: HubHandle | undefined;
   try {
-    // Hub not yet listen: first connect and if dry time reconnect all failed,daemon must not exit, must not crash.
+    // Hub not listening yet: initial connect and early retries fail without exiting/crashing daemon.
     await delay(300);
-    assert.equal(daemon.isConnected(), false, 'failed phase should offline');
-    assert.equal(await daemon.waitUntilRegistered(50), false, 'failed phase wait for must not fabricate succeeded');
+    assert.equal(daemon.isConnected(), false, 'should report offline while Hub is down');
+    assert.equal(await daemon.waitUntilRegistered(50), false, 'wait must not fabricate success while offline');
 
-    // start Hub: backoff reconnect after should register succeeded.
+    // Start Hub: backoff retry should register successfully.
     hub = await startHub({ port, heartbeatMs: 15_000 });
     const ok = await waitUntilReconnected(daemon, 15_000);
-    assert.equal(ok, true, `Hub after startup should reconnect register succeeded (log:${logs.join(' | ')})`);
+    assert.equal(ok, true, `should reconnect and register after Hub starts (logs: ${logs.join(' | ')})`);
     assert.equal(daemon.isConnected(), true);
     assert.equal(hub.registrations.length, 1);
     assert.equal(hub.registrations[0]?.nodeId, 'ff-1');
 
-    // after success new wait immediately true(when before online)
+    // Subsequent waits resolve true immediately while online
     assert.equal(await daemon.waitUntilRegistered(1_000), true);
   } finally {
     await daemon.close();
@@ -222,10 +222,10 @@ test('first time failed to connect (Hub not start) after reconnect succeeded', {
 });
 
 // ---------------------------------------------------------------------------
-// 2. disconnection after wait do not fabricate succeeded; reconnect after can again translate true
+// 2. waitUntilRegistered stays false after disconnect, flips true after reconnect
 // ---------------------------------------------------------------------------
 
-test('disconnection after waitUntilRegistered do not fabricate succeeded, reconnect after translate true', { timeout: 60_000 }, async () => {
+test('waitUntilRegistered returns false after disconnect and flips true on reconnect', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-dlc-wait-');
   const hub = await startHub({ heartbeatMs: 15_000 });
   const daemon = await createNodeDaemon({
@@ -239,20 +239,20 @@ test('disconnection after waitUntilRegistered do not fabricate succeeded, reconn
     assert.equal(await daemon.waitUntilRegistered(10_000), true);
     const registrationsBefore = hub.registrations.length;
 
-    // disconnection + reject after continue register: offline window inside wait must explicit false(do not fabricate succeeded).
+    // Disconnect + reject subsequent registrations: wait must explicitly return false while offline.
     hub.setBehavior({ registerAck: () => ({ ok: false, heartbeatMs: 0, reason: 'maintenance' }) });
     hub.disconnectAll();
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline && daemon.isConnected()) await delay(50);
-    assert.equal(daemon.isConnected(), false, 'disconnection after should treated as not connect');
-    assert.equal(await daemon.waitUntilRegistered(300), false, 'offline/by refuse phase wait must not fabricate succeeded');
+    assert.equal(daemon.isConnected(), false, 'should report disconnected after drop');
+    assert.equal(await daemon.waitUntilRegistered(300), false, 'wait must not fabricate success while offline/rejected');
 
-    // server side restore accept: reconnect register after success, new wait translate true(do not cache failed).
+    // Server accepts again: new wait turns true after re-registration (rejection is not cached).
     hub.setBehavior({ registerAck: () => ({ ok: true, heartbeatMs: 15_000 }) });
     const ok = await waitUntilReconnected(daemon, 15_000);
-    assert.equal(ok, true, 'reconnect register after success wait should translate true');
+    assert.equal(ok, true, 'wait should flip true after reconnect registration');
     assert.equal(daemon.isConnected(), true);
-    assert.ok(hub.registrations.length > registrationsBefore, 'shared many time register attempt (initial + reconnect)');
+    assert.ok(hub.registrations.length > registrationsBefore, 'multiple registration attempts recorded (initial + reconnect)');
   } finally {
     await daemon.close();
     await hub.close();
@@ -261,10 +261,10 @@ test('disconnection after waitUntilRegistered do not fabricate succeeded, reconn
 });
 
 // ---------------------------------------------------------------------------
-// 3. reverse re- reject: always at most a connect
+// 3. Repeated rejections: keep at most one concurrent connection
 // ---------------------------------------------------------------------------
 
-test('reverse re- register reject during always at most a parallel connect', { timeout: 60_000 }, async () => {
+test('keeps at most one connection during repeated register rejections', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-dlc-reject-');
   const hub = await startHub({ heartbeatMs: 15_000, rejectAll: true });
   const daemon = await createNodeDaemon({
@@ -275,18 +275,18 @@ test('reverse re- register reject during always at most a parallel connect', { t
     reconnectMaxDelayMs: 100,
   });
   try {
-    assert.equal(await daemon.waitUntilRegistered(400), false, 'authentication reject must wait false');
-    // observe multiple reject cycle: any one moment Hub side at most a node socket(without parallel connect).
+    assert.equal(await daemon.waitUntilRegistered(400), false, 'auth rejection must make wait return false');
+    // Observe across several retry cycles: at most one node socket on Hub side at any point.
     for (let i = 0; i < 6; i += 1) {
       await delay(50);
-      assert.ok(hub.openSockets.size <= 1, ` ${i} time sampling discover ${hub.openSockets.size} parallel connect`);
+      assert.ok(hub.openSockets.size <= 1, `sample ${i} found ${hub.openSockets.size} parallel connections`);
     }
-    assert.ok(hub.registrations.length >= 2, 'backoff retry should many time attempt register');
+    assert.ok(hub.registrations.length >= 2, 'backoff retries should attempt registration multiple times');
     assert.equal(daemon.isConnected(), false);
 
-    // rotate is accept: reject do not cache, restore after register succeeded.
+    // Switch to accepting: rejections are not cached so recovery registers cleanly.
     hub.setBehavior({ registerAck: () => ({ ok: true, heartbeatMs: 15_000 }) });
-    assert.equal(await waitUntilReconnected(daemon, 15_000), true, 'restore accept after should register succeeded');
+    assert.equal(await waitUntilReconnected(daemon, 15_000), true, 'should register once Hub accepts');
   } finally {
     await daemon.close();
     await hub.close();
@@ -295,10 +295,10 @@ test('reverse re- register reject during always at most a parallel connect', { t
 });
 
 // ---------------------------------------------------------------------------
-// 4. offline backoff reconnect during daemon keep store (unref fix regression)
+// 4. Keeps event loop alive across offline backoff reconnects (unref regression)
 // ---------------------------------------------------------------------------
 
-test('offline backoff reconnect during keep store (do not by unref count when put empty)', { timeout: 60_000 }, async () => {
+test('stays alive across offline backoff reconnects without unref draining the event loop', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-dlc-alive-');
   const port = await reservePort();
   const daemon = await createNodeDaemon({
@@ -310,8 +310,8 @@ test('offline backoff reconnect during keep store (do not by unref count when pu
   });
   let hub: HubHandle | undefined;
   try {
-    // the whole 900ms offline window inside daemon should continuous store (if reconnect count when by unref,
-    // test process event loop by put empty, under side delay loop also will follow process exit while abort).
+    // Daemon must remain alive throughout the 900ms offline window (unref'd reconnect timers would
+    // drain the event loop and terminate the delay loop below prematurely).
     const start = Date.now();
     let aliveMs = 0;
     while (Date.now() - start < 900) {
@@ -319,10 +319,10 @@ test('offline backoff reconnect during keep store (do not by unref count when pu
       aliveMs = Date.now() - start;
       assert.equal(daemon.isConnected(), false);
     }
-    assert.ok(aliveMs >= 700, `offline during should stay store (actual store ${aliveMs}ms)`);
+    assert.ok(aliveMs >= 700, `should stay alive while offline (actual ${aliveMs}ms)`);
 
     hub = await startHub({ port, heartbeatMs: 15_000 });
-    assert.equal(await waitUntilReconnected(daemon, 15_000), true, 'store after reconnect succeeded');
+    assert.equal(await waitUntilReconnected(daemon, 15_000), true, 'should reconnect once Hub is up');
   } finally {
     await daemon.close();
     await hub?.close();
@@ -331,10 +331,10 @@ test('offline backoff reconnect during keep store (do not by unref count when pu
 });
 
 // ---------------------------------------------------------------------------
-// 5. close() wait for in-flight era proxy clean up (remote exec child process by kill after only then return)
+// 5. close() awaits active generation cleanup (kills remote exec children)
 // ---------------------------------------------------------------------------
 
-test('close return before wait for era proxy clean up (in-flight envExec child process by kill)', { timeout: 60_000 }, async () => {
+test('close awaits generation cleanup (kills active envExec child processes)', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-dlc-close-');
   const hub = await startHub({ heartbeatMs: 15_000 });
   const daemon = await createNodeDaemon({
@@ -346,15 +346,15 @@ test('close return before wait for era proxy clean up (in-flight envExec child p
     assert.equal(await daemon.waitUntilRegistered(10_000), true);
     const rpc = hub.nodeRpc();
     assert.ok(rpc !== undefined);
-    // remote long command:close() should terminate its child process and make RPC with failed set (do not pending, do not replay).
+    // Long remote command: close() must terminate child processes and settle RPC with failure (no hang, no replay).
     const pending = rpc!
       .envExec({ execId: 'long-1', command: 'sleep 60', timeout: 120 })
       .catch((error: unknown) => ({ ok: false as const, error: { code: 'closed', message: String(error) } }));
-    await delay(250); // etc. child process truly start
+    await delay(250); // Wait for child process to start
     const start = Date.now();
     await daemon.close();
     const closedMs = Date.now() - start;
-    assert.ok(closedMs < 15_000, `close should has boundary wait for clean up (actual ${closedMs}ms)`);
+    assert.ok(closedMs < 15_000, `close should await cleanup within bounded time (actual ${closedMs}ms)`);
     const result = await Promise.race([
       pending,
       new Promise<{ ok: true }>((resolve) => {
@@ -362,8 +362,8 @@ test('close return before wait for era proxy clean up (in-flight envExec child p
         t.unref?.();
       }),
     ]);
-    assert.equal(result.ok, false, 'in-flight envExec must with failed set (do not replay)');
-    // close idempotent
+    assert.equal(result.ok, false, 'in-flight envExec must settle with failure without replaying');
+    // close is idempotent
     await daemon.close();
   } finally {
     await daemon.close();
@@ -373,10 +373,10 @@ test('close return before wait for era proxy clean up (in-flight envExec child p
 });
 
 // ---------------------------------------------------------------------------
-// 6. broken identity/broken token/broken hubUrl explicit reject
+// 6. Rejects invalid identity / token / hubUrl explicitly
 // ---------------------------------------------------------------------------
 
-test('readNodeIdentity strictly validate external object (null/array/broken field all reject)', { timeout: 60_000 }, async () => {
+test('readNodeIdentity strictly validates parsed objects (rejects null/arrays/bad fields)', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-dlc-badid-');
   const file = path.join(dir, 'node.json');
   const cases: unknown[] = [
@@ -400,7 +400,7 @@ test('readNodeIdentity strictly validate external object (null/array/broken fiel
       await fs.writeFile(file, JSON.stringify(value), 'utf8');
       await assert.rejects(readNodeIdentity(dir), { name: 'Error' }, `should reject: ${JSON.stringify(value)}`);
     }
-    // legal identity (contains optional hubUrl) via
+    // Valid identity with optional hubUrl passes
     await fs.writeFile(file, JSON.stringify({ nodeId: 'ok-node', token: 'ok-node:sec', hubUrl: 'http://127.0.0.1:3202' }), 'utf8');
     const ok = await readNodeIdentity(dir);
     assert.equal(ok?.nodeId, 'ok-node');
@@ -409,45 +409,45 @@ test('readNodeIdentity strictly validate external object (null/array/broken fiel
   }
 });
 
-test('parseJoinToken reject local/whitespace/control character etc. illegal token', { timeout: 60_000 }, () => {
-  assert.equal(parseJoinToken('local:secret'), null, 'local ID must not as JOIN nodeId');
-  assert.equal(parseJoinToken(' node-1:secret'), null, 'first whitespace reject');
-  assert.equal(parseJoinToken('node-1:secret '), null, 'tail whitespace reject');
-  assert.equal(parseJoinToken('node-1:\n'), null, 'control character secret reject');
-  assert.equal(parseJoinToken('node-1:sec\x00ret'), null, 'NUL reject');
+test('parseJoinToken rejects local, whitespace, and control-character tokens', { timeout: 60_000 }, () => {
+  assert.equal(parseJoinToken('local:secret'), null, 'local ID must not be used as JOIN nodeId');
+  assert.equal(parseJoinToken(' node-1:secret'), null, 'leading whitespace rejected');
+  assert.equal(parseJoinToken('node-1:secret '), null, 'trailing whitespace rejected');
+  assert.equal(parseJoinToken('node-1:\n'), null, 'control characters in secret rejected');
+  assert.equal(parseJoinToken('node-1:sec\x00ret'), null, 'NUL rejected');
   assert.equal(parseJoinToken('local:'), null);
   assert.deepEqual(parseJoinToken('node.9_x:s3c'), { nodeId: 'node.9_x', secret: 's3c' });
 });
 
-test('bindIdentityFromJoinToken reject broken hubUrl and do not leak token', { timeout: 60_000 }, async () => {
+test('bindIdentityFromJoinToken rejects invalid hubUrl without leaking token', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-dlc-bind-');
   try {
-    await assert.rejects(bindIdentityFromJoinToken(dir, 'n-1:sec', 'ftp://x'), /protocol must is http/);
+    await assert.rejects(bindIdentityFromJoinToken(dir, 'n-1:sec', 'ftp://x'), /protocol must be http/);
     await assert.rejects(bindIdentityFromJoinToken(dir, 'n-1:sec', 'http://u:p@x'), /userinfo/);
-    // illegal token error information must not contains token prefix
+    // Error message for invalid token must not leak token prefix or secret
     const secret = 'supersecretvalue';
     try {
       await bindIdentityFromJoinToken(dir, `bad id:${secret}`, 'http://127.0.0.1:3202');
-      assert.fail('should reject illegal token');
+      assert.fail('should reject invalid token');
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      assert.ok(!message.includes('bad id'.slice(0, 4)), `error must not leak token prefix:${message}`);
-      assert.ok(!message.includes(secret), `error must not leak secret:${message}`);
+      assert.ok(!message.includes('bad id'.slice(0, 4)), `error must not leak token prefix: ${message}`);
+      assert.ok(!message.includes(secret), `error must not leak secret: ${message}`);
     }
-    assert.equal(await readNodeIdentity(dir), null, 'failed bind set must not write identity');
+    assert.equal(await readNodeIdentity(dir), null, 'failed bind must not write identity');
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
 
-test('writeNodeIdentity validate reference (broken identity directly reject)', { timeout: 60_000 }, async () => {
+test('writeNodeIdentity validates inputs and rejects invalid identities', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-dlc-write-');
   try {
-    await assert.rejects(writeNodeIdentity(dir, { nodeId: 'local', token: 'x' }), /identity illegal/);
-    await assert.rejects(writeNodeIdentity(dir, { nodeId: 'n', token: '' }), /identity illegal/);
+    await assert.rejects(writeNodeIdentity(dir, { nodeId: 'local', token: 'x' }), /invalid node identity/);
+    await assert.rejects(writeNodeIdentity(dir, { nodeId: 'n', token: '' }), /invalid node identity/);
     await assert.rejects(
       writeNodeIdentity(dir, { nodeId: 'n', token: 'n:s', hubUrl: 'javascript:alert(1)' }),
-      /identity illegal/,
+      /invalid node identity/,
     );
     assert.equal(await readNodeIdentity(dir), null);
   } finally {
@@ -456,10 +456,10 @@ test('writeNodeIdentity validate reference (broken identity directly reject)', {
 });
 
 // ---------------------------------------------------------------------------
-// 7. concurrency bind set: different nodeId exactly a succeeded
+// 7. Concurrent bind: at most one distinct nodeId succeeds
 // ---------------------------------------------------------------------------
 
-test('concurrency bindIdentityFromJoinToken different nodeId exactly a succeeded', { timeout: 60_000 }, async () => {
+test('concurrent bindIdentityFromJoinToken with distinct nodeIds succeeds for exactly one caller', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-dlc-race-');
   try {
     const results = await Promise.allSettled([
@@ -469,14 +469,14 @@ test('concurrency bindIdentityFromJoinToken different nodeId exactly a succeeded
     ]);
     const fulfilled = results.filter((r) => r.status === 'fulfilled');
     const rejected = results.filter((r) => r.status === 'rejected');
-    assert.equal(fulfilled.length, 1, `exactly a succeeded (actual ${fulfilled.length})`);
-    assert.equal(rejected.length, 2, 'the rest explicit reject');
+    assert.equal(fulfilled.length, 1, `exactly one call should succeed (actual ${fulfilled.length})`);
+    assert.equal(rejected.length, 2, 'remaining calls must fail explicitly');
     for (const r of rejected) {
       assert.equal(r.status, 'rejected');
       const message = r.reason instanceof Error ? r.reason.message : String(r.reason);
-      assert.match(message, /already bind set node|concurrency bind set conflict/, `reject reason should explicit:${message}`);
+      assert.match(message, /already bound to node|concurrent identity bind conflict/, `rejection reason should be explicit: ${message}`);
     }
-    // identity = unique succeeded, and without lock leftover
+    // Persisted identity belongs to the sole winner, with no stale lock left behind
     const identity = await readNodeIdentity(dir);
     assert.ok(identity !== null);
     assert.ok(['race-a', 'race-b', 'race-c'].includes(identity.nodeId));
@@ -485,22 +485,22 @@ test('concurrency bindIdentityFromJoinToken different nodeId exactly a succeeded
       () => true,
       () => false,
     );
-    assert.equal(lockExists, false, 'lock file must clean up');
+    assert.equal(lockExists, false, 'lock file must be cleaned up');
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
 
 // ---------------------------------------------------------------------------
-// 8. createNodeDaemon reference validate + shellEnv PATH pre- managed helm bin
+// 8. createNodeDaemon input validation + shellEnv prepending managed helm bin
 // ---------------------------------------------------------------------------
 
-test('createNodeDaemon reject broken identity / broken hubUrl', { timeout: 60_000 }, async () => {
+test('createNodeDaemon rejects invalid identity or hubUrl', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-dlc-badopts-');
   try {
     await assert.rejects(
       createNodeDaemon({ hubUrl: 'http://127.0.0.1:3202', identity: { nodeId: 'local', token: 'x' }, dataDir: dir }),
-      /identity illegal/,
+      /invalid node identity/,
     );
     await assert.rejects(
       createNodeDaemon({
@@ -508,7 +508,7 @@ test('createNodeDaemon reject broken identity / broken hubUrl', { timeout: 60_00
         identity: { nodeId: 'n-1', token: 'n-1:s', hubUrl: 'http://u:p@h' },
         dataDir: dir,
       }),
-      /identity illegal/,
+      /invalid node identity/,
     );
     await assert.rejects(
       createNodeDaemon({
@@ -516,26 +516,26 @@ test('createNodeDaemon reject broken identity / broken hubUrl', { timeout: 60_00
         identity: { nodeId: 'n-1', token: 'n-1:s' },
         dataDir: dir,
       }),
-      /protocol must is http/,
+      /protocol must be http/,
     );
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
 
-test('resolveManagedHelmBinDir:workspace can locate and contains can execute helm', { timeout: 60_000 }, async () => {
+test('resolveManagedHelmBinDir locates workspace bin dir containing executable helm', { timeout: 60_000 }, async () => {
   const resolved = await resolveManagedHelmBinDir();
-  assert.ok('dir' in resolved, `should can locate managed helm bin(result:${JSON.stringify(resolved)})`);
+  assert.ok('dir' in resolved, `should locate managed helm bin (result: ${JSON.stringify(resolved)})`);
   if ('dir' in resolved) {
     const entry = path.join(resolved.dir, process.platform === 'win32' ? 'helm.cmd' : 'helm');
     await fs.access(entry);
   }
-  // explicit broken directory: explicit diagnose while non- false succeeded
+  // Explicitly bad directory returns explicit diagnostics instead of false success
   const bad = await resolveManagedHelmBinDir(path.join(os.tmpdir(), 'helm-no-such-bin-dir'));
-  assert.ok('error' in bad && bad.error.length > 0, 'broken directory must explicit diagnose');
+  assert.ok('error' in bad && bad.error.length > 0, 'invalid directory must produce explicit diagnostic');
 });
 
-test('daemon shellEnv PATH pre- managed helm bin(remote bash can run helm)', { timeout: 60_000 }, async () => {
+test('daemon shellEnv prepends managed helm bin to PATH (remote bash can run helm)', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-dlc-helmpath-');
   const hub = await startHub({ heartbeatMs: 15_000 });
   const daemon = await createNodeDaemon({
@@ -544,17 +544,17 @@ test('daemon shellEnv PATH pre- managed helm bin(remote bash can run helm)', { t
     dataDir: dir,
   });
   try {
-    assert.equal(await daemon.waitUntilRegistered(10_000), true, 'pre- bin failed to parse will leads to failed to start');
+    assert.equal(await daemon.waitUntilRegistered(10_000), true, 'prepended bin resolution failure prevents startup');
     const rpc = hub.nodeRpc();
     assert.ok(rpc !== undefined);
-    // remote bash directly run helm:PATH pre- managed bin must hit (--help no need to Hub).
+    // Remote bash runs helm directly: prepended managed bin on PATH must resolve (--help needs no Hub).
     const output = await rpc!.envExec({
       execId: 'helm-path-2',
       command: 'command -v helm && helm --help >/dev/null && echo helm-runs',
       timeout: 60,
     });
     assert.equal(output.ok, true, output.ok ? '' : output.error.message);
-    // environment variable carry the node actual hubUrl / dataDir
+    // Environment carries the node's actual hubUrl / dataDir
     const envProbe = await rpc!.envExec({
       execId: 'helm-path-3',
       command: 'echo hub=$HELM_HUB_URL data=$HELM_DATA_DIR',
@@ -568,7 +568,7 @@ test('daemon shellEnv PATH pre- managed helm bin(remote bash can run helm)', { t
   }
 });
 
-test('daemon child process env:HELM_HUB_URL is node actual hubUrl', { timeout: 60_000 }, async () => {
+test('daemon child process env sets HELM_HUB_URL to node actual hubUrl', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-dlc-env-');
   const hub = await startHub({ heartbeatMs: 15_000 });
   const daemon = await createNodeDaemon({

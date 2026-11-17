@@ -1,10 +1,11 @@
 /**
- * Windows rename instantaneous occupy regression: kill toxic/index scan read cli-token during,fs.rename atomic replace
- * target will short temporary EPERM/EACCES/EBUSY(CI real log: concurrency login 3 round rename report EPERM).
- * verify: short temporary failed after backoff retry succeeded commit; continuous on failure backoff has boundary exhausted, old credentials original keep,tmp clean up,
- * still throw credentials_write_failed(do not delete old target, do not change non- atomic write).
- * simulated boundary:t.mock.method by time inject errno(and credentials lock permission test the same style); platform window use
- * Object.defineProperty override process.platform(Node guarantee the property configurable),finally restore.
+ * Regression tests for transient Windows rename contention: while AV/indexer scans `cli-token`,
+ * `fs.rename` fails briefly with EPERM/EACCES/EBUSY (observed on CI round 3 of concurrent logins).
+ * Verifies: transient failures back off and succeed; persistent failures exhaust bounded backoff,
+ * preserve the previous credentials, clean up temp files, and throw `credentials_write_failed`
+ * (never delete the target or drop atomicity).
+ * Mock boundary: `t.mock.method` injects errno per call (same style as credentials lock tests);
+ * `process.platform` is temporarily overridden via `Object.defineProperty` and restored in finally.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -14,31 +15,31 @@ import { updateCliCredentials } from '../src/credentials.js'
 import { CliError } from '../src/errors.js'
 import { useTempDir } from './helpers/cli-harness.js'
 
-/** construct carries errno code error (simulated Windows target by read way occupy when OS return failed). */
+/** Construct an ErrnoException (simulating OS failure when a Windows reader holds the target file). */
 function errnoError(code: string): NodeJS.ErrnoException {
-  return Object.assign(new Error(`simulated Windows instantaneous occupy (${code})`), { code })
+  return Object.assign(new Error(`simulated Windows transient contention (${code})`), { code })
 }
 
-/** override process.platform is win32(trigger produce code Windows backoff branch), return restore function. */
+/** Override process.platform to win32 to exercise the Windows backoff branch; returns a restore callback. */
 function fakeWin32Platform(): () => void {
   const real = process.platform
   Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
   return () => Object.defineProperty(process, 'platform', { value: real, configurable: true })
 }
 
-/** write after completion dataDir must not leftover any tmp / lock artifact (credentials directory only eventually file). */
+/** After writing completes, dataDir must not retain any .tmp or .lock leftovers. */
 async function assertNoWriteLeftovers(dir: string): Promise<void> {
   const leftovers = (await fsp.readdir(dir)).filter((f) => f.includes('.tmp') || f.includes('.lock'))
   assert.deepEqual(leftovers, [])
 }
 
-test('Windows rename instantaneous occupy (EPERM/EACCES hand over replace) after backoff succeeded: commit new value, without tmp leftover', { timeout: 60_000 }, async (t) => {
+test('Windows rename transient contention (alternating EPERM/EACCES) backs off and succeeds without leaving tmp files', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-rename-retry-')
   const restorePlatform = fakeWin32Platform()
   const rename = fsp.rename.bind(fsp)
   let occupied = 0
   const stub = t.mock.method(fsp, 'rename', async (...args: Parameters<typeof fsp.rename>) => {
-    // before two time replace target by read way short temporary occupy (different code simulated different occupy source), third time let route after succeeded
+    // First two attempts hit transient reader locks (distinct errno codes); third attempt succeeds
     if (occupied < 2) {
       occupied += 1
       throw errnoError(occupied === 1 ? 'EPERM' : 'EACCES')
@@ -54,7 +55,7 @@ test('Windows rename instantaneous occupy (EPERM/EACCES hand over replace) after
     await updateCliCredentials(dir, { hubUrl: 'http://127.0.0.1:2', token: 'tok-new' })
     const saved = JSON.parse(await fsp.readFile(path.join(dir, 'cli-token'), 'utf8')) as Record<string, string>
     assert.deepEqual(saved, { hubUrl: 'http://127.0.0.1:2', token: 'tok-new' })
-    assert.equal(stub.mock.callCount(), 3, 'instantaneous occupy should backoff retry to third time commit succeeded')
+    assert.equal(stub.mock.callCount(), 3, 'transient contention should back off and succeed on third attempt')
     await assertNoWriteLeftovers(dir)
   } finally {
     stub.mock.restore()
@@ -62,7 +63,7 @@ test('Windows rename instantaneous occupy (EPERM/EACCES hand over replace) after
   }
 })
 
-test('Windows rename continuous EPERM: backoff has boundary exhausted after still throw credentials_write_failed, old value keep,tmp clean up', { timeout: 60_000 }, async (t) => {
+test('Windows rename persistent EPERM: bounded backoff exhausts, throws credentials_write_failed, preserves old value, cleans tmp', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-rename-busy-')
   const restorePlatform = fakeWin32Platform()
   const stub = t.mock.method(fsp, 'rename', async (...args: Parameters<typeof fsp.rename>) => {
@@ -77,14 +78,14 @@ test('Windows rename continuous EPERM: backoff has boundary exhausted after stil
       updateCliCredentials(dir, { hubUrl: 'http://127.0.0.1:2', token: 'tok-new' }),
       (error: unknown) => error instanceof CliError && error.code === 'credentials_write_failed',
     )
-    // atomicity: target from not by trigger touch (old login state completely well), failed tmp already clean up, lock already release
+    // Atomicity: target remains untouched (old login intact), failed tmp cleaned up, lock released
     assert.equal(await fsp.readFile(path.join(dir, 'cli-token'), 'utf8'), original)
     await assertNoWriteLeftovers(dir)
-    // has boundary backoff: about 1.5 second amount level exhausted after abandon (do not immediately abandon, also do not without boundary suspended)
+    // Bounded backoff: gives up after ~1.5s (neither fails immediately nor hangs indefinitely)
     const waited = Date.now() - startedAt
-    assert.ok(waited >= 1_400, `should backoff about 1.5s again failed, actual ${waited}ms`)
-    assert.ok(waited < 10_000, `backoff must converge in second level, actual ${waited}ms`)
-    assert.ok(stub.mock.callCount() >= 20, `should continuous retry direct until exhausted, actual ${stub.mock.callCount()} time`)
+    assert.ok(waited >= 1_400, `expected ~1.5s backoff before failing, waited ${waited}ms`)
+    assert.ok(waited < 10_000, `backoff must converge within seconds, waited ${waited}ms`)
+    assert.ok(stub.mock.callCount() >= 20, `expected continuous retries until exhausted, got ${stub.mock.callCount()}`)
   } finally {
     stub.mock.restore()
     restorePlatform()

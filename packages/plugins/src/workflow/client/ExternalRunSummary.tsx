@@ -9,6 +9,7 @@ import { formatCompactTimestamp, formatDurationMs, usePluginContext, usePluginLo
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { useElapsedNowMs } from './hooks.ts'
 import { Icon } from './WorkflowIcon.tsx'
+import { isPlaceholderNodeLabel, isPlaceholderRunName } from './model-format.ts'
 import { subagentBadge, runFailureFallbackLabel } from './model-subagent-card.ts'
 import { canDetachForegroundRun, resolveRunElapsedMs, type DetachViewerScope } from './model-run.ts'
 import {
@@ -58,12 +59,21 @@ export function ExternalRunSummary(props: {
   // createdAt → updatedAt when finished; omitted honestly without run data.
   const nowMs = useElapsedNowMs(active && run?.status === 'running')
   const elapsedMs = run !== undefined ? resolveRunElapsedMs(run, nowMs) : undefined
+  const primaryTitle =
+    run !== undefined && !isPlaceholderRunName(run.name, run.id)
+      ? run.name.trim()
+      : !isPlaceholderNodeLabel(nodes[0]?.label)
+        ? nodes[0]!.label!.trim()
+        : undefined
   return (
     <div className="subagent-live-card subagent-external-card">
       <div className="subagent-live-header">
         <Icon name={failedState ? 'x' : active ? 'loader' : 'bot'} size={13} className={active ? SPIN : undefined} />
-        <span className="subagent-live-title">{t(EXTERNAL_TITLE)}</span>
-        {executionId !== undefined ? <span className="badge badge-neutral">{executionId}</span> : null}
+        <span className="subagent-live-title" title={primaryTitle ?? t(EXTERNAL_TITLE)}>
+          <span className="subagent-live-title-text">{primaryTitle ?? t(EXTERNAL_TITLE)}</span>
+          {primaryTitle !== undefined ? <span className="badge badge-neutral">{t(EXTERNAL_TITLE)}</span> : null}
+          {executionId !== undefined ? <span className="badge badge-neutral mono">{executionId}</span> : null}
+        </span>
         {worktree !== undefined ? (
           <span className="badge badge-neutral subagent-worktree-badge" title={worktreeBadgeTitle(worktree.path, locale)}>
             <Icon name="git-branch" size={11} />

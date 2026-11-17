@@ -1,17 +1,20 @@
 /**
- * Hub process restart graceful closure stop keep and tool replay restore real integration test.
+ * Integration tests for graceful Hub restart retention and tool replay recovery.
  *
- * override core invariant:
- * 1. openHelmDatabase sharing connect proxy:storage.close() do not mention before close and HelmStore shared use
- *    underlying db; failed to initialize when catch branch thing close db, avoid FD leak leak;
- * 2. KernelRuntime.close() in person class conversation streaming generate phase graceful closure stop:harness.close() first at
- *    pluginHost/store/database execute,GenerationTask retreat back pending(restarts === undefined,
- *    never by closeAborts strong row abort); after restart no need to re- submitInput automatically complete back re-;
- * 3. runtime.started internal event in pluginHost.start() and harness.resume() after dispatch and do not broadcast;
- * 4. only read tool read and read_artifact declaration replay: 'safe': regardless of is runtime.close()
- *    also is real SIGKILL process crash interrupt in phase: 'execute', restart all automatically replay and return real content;
- * 5. non- security tool bash keep replay: 'unsafe': real SIGKILL crash interrupt after never replay, converge is
- *    interrupted tool error result and hand over by under one model turn continue decide policy.
+ * Core invariants covered:
+ * 1. openHelmDatabase shared connection proxy: storage.close() does not close the underlying db early
+ *    while HelmStore shares it; initialization catch closes the db cleanly to avoid FD leaks;
+ * 2. KernelRuntime.close() during human conversation streaming generation shuts down gracefully:
+ *    harness.close() runs before pluginHost/store/database, returning GenerationTask to pending
+ *    (restarts === undefined, never forcibly aborted by closeAborts); on restart, generation resumes
+ *    automatically without re-submitting submitInput;
+ * 3. Internal runtime.started event dispatches after pluginHost.start() and harness.resume() without
+ *    broadcasting externally;
+ * 4. Read-only tools `read` and `read_artifact` declare `replay: 'safe'`: whether interrupted in
+ *    `phase: 'execute'` by runtime.close() or a real SIGKILL crash, restarting automatically replays
+ *    them and returns real content;
+ * 5. Mutating tool `bash` keeps `replay: 'unsafe'`: after a real SIGKILL crash it never replays,
+ *    converges to an interrupted tool error result, and lets the next model turn decide recovery.
  */
 
 import assert from 'node:assert/strict'
@@ -128,14 +131,14 @@ async function runSeederUntilSigkill(
           resolve()
           return
         }
-        reject(new Error(`seeder exception exit (code=${code}, signal=${signal}, killedByParent=${killedByParent}): ${stdout}${stderr}`.slice(0, 2000)))
+        reject(new Error(`seeder exited unexpectedly (code=${code}, signal=${signal}, killedByParent=${killedByParent}): ${stdout}${stderr}`.slice(0, 2000)))
       })
       child.on('error', reject)
     })
     await Promise.race([
       exited,
       delay(25_000, undefined, { ref: false }).then(() => {
-        throw new Error(`seeder 25s not enter ready state: ${stdout}${stderr}`.slice(0, 2000))
+        throw new Error(`seeder did not reach ready state within 25s: ${stdout}${stderr}`.slice(0, 2000))
       }),
     ])
   } finally {
@@ -144,7 +147,7 @@ async function runSeederUntilSigkill(
         if (process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL')
         else child.kill('SIGKILL')
       } catch {
-        // process group already whole exit
+        // process group already exited
       }
     }
     child.stdout?.destroy()
@@ -152,7 +155,7 @@ async function runSeederUntilSigkill(
   }
 }
 
-test('openHelmDatabase:storage.close() do not mention before closure sharing db; failed to initialize catch thing close db guard against FD leak leak', { timeout: 60_000 }, async (t) => {
+test('openHelmDatabase: storage.close() preserves shared db; init failure closes db in catch to avoid FD leaks', { timeout: 60_000 }, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'helm-sqlite-proxy-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
 
@@ -160,10 +163,10 @@ test('openHelmDatabase:storage.close() do not mention before closure sharing db;
   await db.storage.close(BACKGROUND_CONTEXT)
   const rows = await db.db.all<{ ok: number }>('SELECT 1 AS ok')
   assert.equal(rows.length, 1)
-  assert.equal(rows[0]?.ok, 1, 'storage.close() after underlying thing db still can read write until database.close()')
+  assert.equal(rows[0]?.ok, 1, 'underlying db remains readable and writable after storage.close() until database.close()')
   await db.close()
 
-  // pre- build leftover missing table structure:openNodeSqliteDatabase succeeded, then HELM_SCHEMA create index helm_artifacts(conversation_id) failed
+  // Seed partial broken schema: openNodeSqliteDatabase succeeds, then HELM_SCHEMA index creation on helm_artifacts(conversation_id) fails.
   const failDir = mkdtempSync(join(tmpdir(), 'helm-sqlite-fail-'))
   t.after(() => rmSync(failDir, { recursive: true, force: true }))
   const seeded = await openNodeSqliteDatabase(join(failDir, 'state.sqlite'))
@@ -171,13 +174,13 @@ test('openHelmDatabase:storage.close() do not mention before closure sharing db;
   await seeded.close()
 
   await assert.rejects(() => openHelmDatabase(failDir))
-  // if catch not close db, the same path under clean up and heavy open will leftover FD/lock; verify can without block remove and heavy open
+  // If catch failed to close db, removing and reopening at the same path would fail with stale FD/lock; verify clean reopen.
   rmSync(join(failDir, 'state.sqlite'), { force: true })
   const recovered = await openHelmDatabase(failDir)
   await recovered.close()
 })
 
-test('runtime.close() in streaming generate during without loss keep-alive:GenerationTask retreat back pending and without restarts, after restart automatically complete back re- and by order dispatch runtime.started', { timeout: 60_000 }, async (t) => {
+test('runtime.close() during streaming preserves continuity: GenerationTask returns to pending without restarts, resumes automatically, and dispatches runtime.started in order', { timeout: 60_000 }, async (t) => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-graceful-gen-'))
   t.after(() => rmSync(dataDir, { recursive: true, force: true }))
 
@@ -200,7 +203,7 @@ test('runtime.close() in streaming generate during without loss keep-alive:Gener
   t.after(() => unsubscribe())
   await runtime1.plugins.register({
     id: 'test:lifecycle-order',
-    name: 'lifecycle order probe needle',
+    name: 'lifecycle order probe',
     definePlugin(ctx) {
       ctx.service({
         id: 'order-probe',
@@ -217,30 +220,30 @@ test('runtime.close() in streaming generate during without loss keep-alive:Gener
 
   await runtime1.start()
   assert.deepEqual(lifecycleOrder, ['plugin.start', 'runtime.started'])
-  assert.equal(leakedToEvents.length, 0, 'runtime.started is internal event (broadcast: false), must not broadcast to external SSE')
+  assert.equal(leakedToEvents.length, 0, 'runtime.started is an internal event (broadcast: false) and must not leak to external SSE')
 
-  // slow fast streaming generate: confirm conversation enter working and part token start output after execute graceful closure stop
-  faux1.setResponses([fauxAssistantMessage('this is one segment by graceful closure stop slow fast streaming output long text used to ensure closure stop when turn still in generate in')])
-  void runtime1.submitInput(1, 'please generate long back re-').catch(() => {})
+  // Slow streaming generation: verify conversation enters working and emits partial tokens before graceful close.
+  faux1.setResponses([fauxAssistantMessage('long slow streaming output text used to ensure turn stays mid-generation on graceful shutdown')])
+  void runtime1.submitInput(1, 'please generate a long reply').catch(() => {})
   const deadline = Date.now() + 15_000
   while (runtime1.getConversation(1).status !== 'working' && Date.now() < deadline) {
     await delay(30)
   }
-  assert.equal(runtime1.getConversation(1).status, 'working', '15s inside conversation must enter working state')
+  assert.equal(runtime1.getConversation(1).status, 'working', 'conversation must enter working within 15s')
   await delay(600)
 
   await runtime1.close()
 
   const tasksAfterClose = await inspectHarnessTasks(dataDir)
   const genTask = tasksAfterClose.find((task) => task.kind === 'pi.generation' && task.conversationId === 1)
-  assert.ok(genTask, `graceful closure stop after must keep generation checkpoint(actual:${JSON.stringify(tasksAfterClose)})`)
+  assert.ok(genTask, `generation checkpoint must be preserved after graceful shutdown (actual: ${JSON.stringify(tasksAfterClose)})`)
   assert.equal(genTask.status, 'pending')
   assert.equal(genTask.abortRequested, false)
-  assert.equal(genTask.restarts, undefined, 'graceful close() must not count crash restart time count restarts')
+  assert.equal(genTask.restarts, undefined, 'graceful close() must not increment crash restart counter')
 
-  // restart and start(): no need to re- submitInput, automatically continue run complete
+  // Restart and start(): automatically finishes the pending reply without calling submitInput again.
   const { models: models2, faux: faux2 } = createFaux()
-  faux2.setResponses([fauxAssistantMessage('graceful restart connect continue complete')])
+  faux2.setResponses([fauxAssistantMessage('graceful restart continuation complete')])
   const runtime2 = await KernelRuntime.open({
     dataDir,
     cwd: dataDir,
@@ -254,15 +257,15 @@ test('runtime.close() in streaming generate during without loss keep-alive:Gener
 
   assert.equal(faux2.state.callCount, 1)
   assert.equal(runtime2.getConversation(1).status, 'done')
-  assert.equal(await runtime2.getLastAssistantText(1), 'graceful restart connect continue complete')
+  assert.equal(await runtime2.getLastAssistantText(1), 'graceful restart continuation complete')
 })
 
-test('replay: safe only read tool read and read_artifact in runtime.close() interrupt after automatically replay complete turn', { timeout: 60_000 }, async (t) => {
+test('replay: safe read-only tools read and read_artifact automatically replay to finish turn after runtime.close()', { timeout: 60_000 }, async (t) => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-safe-replay-close-'))
   t.after(() => rmSync(dataDir, { recursive: true, force: true }))
   writeFileSync(join(dataDir, 'note.txt'), 'READ_REPLAY_OK_CONTENT\n', 'utf8')
 
-  // ---- 1) read in phase: 'execute' encounter runtime.close() ----
+  // ---- 1) read hits runtime.close() during phase: 'execute' ----
   const { models: m1, faux: f1 } = createFaux()
   const r1 = await KernelRuntime.open({
     dataDir,
@@ -296,7 +299,7 @@ test('replay: safe only read tool read and read_artifact in runtime.close() inte
   f1.setResponses([fauxAssistantMessage([fauxToolCall('read', { path: 'note.txt' }, { id: 'read-gate-1' })], { stopReason: 'toolUse' })])
   void r1.submitInput(1, 'read note.txt').catch(() => {})
   await waitReadEntered
-  // first start close() make Harness abort when before ToolTask abortSignal, again let through spill return, trigger wrapToolExecute throw AbortError
+  // Start close() so Harness aborts ToolTask's abortSignal first, then release spill to make wrapToolExecute throw AbortError.
   const closePromise1 = r1.close()
   await delay(80)
   allowSpillReturn()
@@ -323,10 +326,10 @@ test('replay: safe only read tool read and read_artifact in runtime.close() inte
   const readToolResults = collectToolResultTexts(capturedReadContext)
   assert.ok(
     readToolResults.some((tr) => !tr.isError && tr.text.includes('READ_REPLAY_OK_CONTENT')),
-    `read should automatically replay and return real file content (actual:${JSON.stringify(readToolResults)})`,
+    `read should replay automatically and return real file content (actual: ${JSON.stringify(readToolResults)})`,
   )
 
-  // ---- 2) read_artifact in phase: 'execute' encounter r2.close() ----
+  // ---- 2) read_artifact hits r2.close() during phase: 'execute' ----
   const origReadBuffer = r2.artifacts.readBuffer.bind(r2.artifacts)
   let artEntered!: () => void
   const waitArtEntered = new Promise<void>((resolve) => {
@@ -372,12 +375,12 @@ test('replay: safe only read tool read and read_artifact in runtime.close() inte
   const artToolResults = collectToolResultTexts(capturedArtContext)
   assert.ok(
     artToolResults.some((tr) => !tr.isError && tr.text.includes('ARTIFACT_REPLAY_OK_CONTENT')),
-    `read_artifact should automatically replay and return real artifact content (actual:${JSON.stringify(artToolResults)})`,
+    `read_artifact should replay automatically and return real artifact content (actual: ${JSON.stringify(artToolResults)})`,
   )
 })
 
-test('SIGKILL real crash:read automatically replay succeeded;bash never replay and converge is interrupted hand over model continue row', { timeout: 60_000 }, async (t) => {
-  // ---- A) read in child process SIGKILL crash after automatically replay ----
+test('real SIGKILL crash: read replays automatically and succeeds; bash never replays and settles as interrupted for model recovery', { timeout: 60_000 }, async (t) => {
+  // ---- A) read replays automatically after SIGKILL crash in child process ----
   const readDir = mkdtempSync(join(tmpdir(), 'helm-sigkill-read-'))
   const readSeedDir = mkdtempSync(join(tmpdir(), 'helm-sigkill-read-seed-'))
   t.after(() => {
@@ -416,7 +419,7 @@ await new Promise(() => {})
   rf.setResponses([
     (ctx) => {
       readCtxAfterKill = ctx
-      return fauxAssistantMessage('crash after only read replay succeeded')
+      return fauxAssistantMessage('read-only replay succeeded after crash')
     },
   ])
   const readRecover = await KernelRuntime.open({
@@ -428,17 +431,17 @@ await new Promise(() => {})
   })
   try {
     await readRecover.waitForIdle(1)
-    assert.equal(await readRecover.getLastAssistantText(1), 'crash after only read replay succeeded')
+    assert.equal(await readRecover.getLastAssistantText(1), 'read-only replay succeeded after crash')
     const results = collectToolResultTexts(readCtxAfterKill)
     assert.ok(
       results.some((tr) => !tr.isError && tr.text.includes('SIGKILL_READ_REPLAY_OK')),
-      `SIGKILL after read must replay return real file (actual:${JSON.stringify(results)})`,
+      `read must replay after SIGKILL and return real file content (actual: ${JSON.stringify(results)})`,
     )
   } finally {
     await readRecover.close()
   }
 
-  // ---- B) bash in child process SIGKILL crash after never replay, converge is interrupted ----
+  // ---- B) bash never replays after SIGKILL crash in child process and converges as interrupted ----
   const bashDir = mkdtempSync(join(tmpdir(), 'helm-sigkill-bash-'))
   const bashSeedDir = mkdtempSync(join(tmpdir(), 'helm-sigkill-bash-seed-'))
   t.after(() => {
@@ -472,14 +475,14 @@ await new Promise(() => {})
     (stdout) => stdout.includes('READY_BASH'),
   )
   assert.equal(existsSync(markerPath), true)
-  assert.equal(readFileSync(markerPath, 'utf8'), 'x', 'crash before bash exactly execute once')
+  assert.equal(readFileSync(markerPath, 'utf8'), 'x', 'bash executed exactly once before crash')
 
   let bashCtxAfterKill: TranscriptContext | undefined
   const { models: bm, faux: bf } = createFaux()
   bf.setResponses([
     (ctx) => {
       bashCtxAfterKill = ctx
-      return fauxAssistantMessage('already confirm command interrupt, not replay')
+      return fauxAssistantMessage('confirmed command interrupted without replay')
     },
   ])
   const bashRecover = await KernelRuntime.open({
@@ -491,12 +494,12 @@ await new Promise(() => {})
   })
   try {
     await bashRecover.waitForIdle(1)
-    assert.equal(readFileSync(markerPath, 'utf8'), 'x', 'non- security tool bash after restart never can replay')
-    assert.equal(await bashRecover.getLastAssistantText(1), 'already confirm command interrupt, not replay')
+    assert.equal(readFileSync(markerPath, 'utf8'), 'x', 'unsafe tool bash must never replay after restart')
+    assert.equal(await bashRecover.getLastAssistantText(1), 'confirmed command interrupted without replay')
     const results = collectToolResultTexts(bashCtxAfterKill)
     assert.ok(
       results.some((tr) => tr.isError && /interrupted/i.test(tr.text)),
-      `bash interrupt after must with interrupted error hand over by model continue row (actual:${JSON.stringify(results)})`,
+      `interrupted bash must hand an interrupted error back to the model to continue (actual: ${JSON.stringify(results)})`,
     )
   } finally {
     await bashRecover.close()

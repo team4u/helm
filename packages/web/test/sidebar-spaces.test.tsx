@@ -1,6 +1,6 @@
 /**
  * 双层导航与话题切换器交互测试（happy-dom + 真实 React 事件）：
- * - Sidebar：对话/Views space切换、搜索过滤智能体、智能体行导航；
+ * - Sidebar：对话/视图空间切换、搜索过滤智能体、智能体行导航；
  * - 双层导航与单展开：仅当前目标所属智能体展开话题子列表（无折叠钮，
  *   点击智能体名称进入待命态并随之展开），切换目标自动收起原智能体。
  */
@@ -95,13 +95,19 @@ function setInputValue(input: HTMLInputElement, text: string): void {
 function MutableStoreSidebar({
   base,
   apiRef,
+  onClose,
 }: {
   base: HelmStoreValue
   apiRef: { current: { update?: (patch: Partial<HelmStoreValue>) => void } }
+  onClose?: () => void
 }): React.ReactElement {
   const [store, setStore] = React.useState<HelmStoreValue>(base)
   apiRef.current.update = (patch) => setStore((current) => ({ ...current, ...patch }))
-  return e(HostStoreProviders, { value: store }, e(Sidebar))
+  return e(
+    HostStoreProviders,
+    { value: store },
+    onClose ? e(Sidebar as React.ComponentType<{ onClose?: () => void }>, { onClose }) : e(Sidebar),
+  )
 }
 
 /** 空间代表目标（模拟真实 Provider 的空间回跳：views 取首个可用 screen，settings 缺省角色中心）。
@@ -143,7 +149,7 @@ function render(store: HelmStoreValue, element: React.ReactElement): void {
 
 
 
-test('Sidebar 空间切换：对话空间默认渲染智能体，Views space渲染 screen 贡献', { timeout: 60_000 }, async () => {
+test('Sidebar 空间切换：对话空间默认渲染智能体，视图空间渲染 screen 贡献', { timeout: 60_000 }, async () => {
   const store = makeStore()
   render(store, e(SpaceAwareSidebar, { base: store }))
   await act(async () => {})
@@ -151,16 +157,16 @@ test('Sidebar 空间切换：对话空间默认渲染智能体，Views space渲�
   const body = document.body
   assert.ok(body.querySelector('.activity-rail'), '应渲染 Activity Rail')
   assert.ok(body.textContent!.includes('个人助理'), '对话空间渲染智能体行')
-  assert.ok(!body.textContent!.includes('Herdr 终端'), '默认不渲染Views space项')
+  assert.ok(!body.textContent!.includes('Herdr 终端'), '默认不渲染视图空间项')
 
-  // 切换到Views space
+  // 切换到视图空间
   const viewsBtn = body.querySelector('button[aria-label="Views space"]') as HTMLButtonElement
-  assert.ok(viewsBtn, 'Views space切换按钮存在')
+  assert.ok(viewsBtn, '视图空间切换按钮存在')
   await act(async () => {
     viewsBtn.click()
   })
-  assert.ok(body.textContent!.includes('Herdr 终端'), 'Views space渲染 screen 贡献')
-  assert.ok(!body.textContent!.includes('个人助理'), 'Views space不渲染智能体分组')
+  assert.ok(body.textContent!.includes('Herdr 终端'), '视图空间渲染 screen 贡献')
+  assert.ok(!body.textContent!.includes('个人助理'), '视图空间不渲染智能体分组')
 })
 
 test('Sidebar 设置空间：点击设置空间按钮切换列表，点击插件中心调用 openTarget', { timeout: 60_000 }, async () => {
@@ -579,4 +585,125 @@ test('CommandPaletteModal 与 ScreenHost 双语本地化及语言循环命令（
   await act(async () => {})
   assert.ok(document.body.textContent?.includes('未找到视图 ext:missing/overview'))
   assert.ok(document.body.textContent?.includes('该视图不存在或所属插件已停用（ext:missing/overview）'))
+})
+
+test('Sidebar 移动端展开未展开智能体时不关闭抽屉，再点已展开行或子会话才关闭', { timeout: 60_000 }, async () => {
+  const store = makeStore()
+  const api: { current: { update?: (patch: Partial<HelmStoreValue>) => void } } = { current: {} }
+  let closeCount = 0
+  let shellBubbleCount = 0
+  const baseOpenTarget = store.openTarget
+  store.openTarget = (target, opts) => {
+    baseOpenTarget(target, opts)
+    if (typeof target !== 'string' && !opts?.split) {
+      api.current.update?.({ primaryTarget: target })
+    }
+  }
+  render(
+    store,
+    e(
+      'div',
+      {
+        onClick: (event: React.MouseEvent<HTMLDivElement>) => {
+          if ((event.target as HTMLElement).closest('.nav-item')) {
+            shellBubbleCount += 1
+          }
+        },
+      },
+      e(MutableStoreSidebar, {
+        base: store,
+        apiRef: api,
+        onClose: () => { closeCount += 1 },
+      }),
+    ),
+  )
+  await act(async () => {})
+
+  // 1) 点击处于收起态且有历史会话的「编码专员」：展开其会话列表，但既不调用 onClose 也不冒泡到外层 .nav-item 关闭抽屉
+  const coderBtn = [...document.body.querySelectorAll<HTMLButtonElement>('.agent-standing-row .nav-item-main')]
+    .find((el) => el.textContent?.includes('编码专员'))!
+  await act(async () => {
+    coderBtn.click()
+  })
+  assert.equal(closeCount, 0, '点击收起智能体展开会话列表时保持移动端抽屉打开')
+  assert.equal(shellBubbleCount, 0, '不冒泡触发外层 .nav-item 关抽屉逻辑')
+  assert.ok(document.body.querySelector('.agent-conversations-list')?.textContent?.includes('重构方案'), '展开后可见其会话列表')
+
+  // 2) 点击已展开智能体下的具体子会话：导航并触发抽屉关闭
+  const subBtn = [...document.body.querySelectorAll<HTMLButtonElement>('.nav-item-sub .nav-item-main')]
+    .find((el) => el.textContent?.includes('重构方案'))!
+  await act(async () => {
+    subBtn.click()
+  })
+  assert.equal(shellBubbleCount, 1, '选择具体会话后冒泡触发外层关闭抽屉')
+  assert.deepEqual(store.openTargetCalls.at(-1)?.target, { kind: 'conversation', conversationId: 40 })
+
+  // 3) 再次点击已展开的「编码专员」本身（进入待命撰写）：触发 onClose 与关闭抽屉
+  const expandedCoderBtn = [...document.body.querySelectorAll<HTMLButtonElement>('.agent-standing-row .nav-item-main')]
+    .find((el) => el.textContent?.includes('编码专员'))!
+  await act(async () => {
+    expandedCoderBtn.click()
+  })
+  assert.equal(closeCount, 1, '再次点击已展开智能体进入待命时关闭抽屉')
+})
+
+test('Sidebar 批量模式 DOM 行为：勾选框仅在会话子项，站位头部行仅切换子列表展开且不关抽屉', { timeout: 60_000 }, async () => {
+  const store = makeStore()
+  let shellBubbleCount = 0
+  render(
+    store,
+    e(
+      'div',
+      {
+        onClick: (event: React.MouseEvent<HTMLDivElement>) => {
+          if ((event.target as HTMLElement).closest('.nav-item')) {
+            shellBubbleCount += 1
+          }
+        },
+      },
+      e(HostStoreProviders, { value: store }, e(Sidebar)),
+    ),
+  )
+  await act(async () => {})
+
+  const bulkBtn = document.body.querySelector<HTMLButtonElement>('button[aria-label="Manage conversations in bulk"]')!
+  assert.ok(bulkBtn, '批量管理开关按钮存在')
+  await act(async () => {
+    bulkBtn.click()
+  })
+
+  const standingRows = [...document.body.querySelectorAll('.agent-standing-row')]
+  assert.equal(standingRows.length, 2, '渲染两个智能体站位行')
+  for (const row of standingRows) {
+    assert.equal(
+      row.querySelectorAll('.sidebar-batch-checkbox, [role="checkbox"], input[type="checkbox"]').length,
+      0,
+      '智能体站位行不得渲染任何勾选框',
+    )
+  }
+
+  const subRows = [...document.body.querySelectorAll('.nav-item-sub')]
+  assert.equal(subRows.length, 4, '批量模式展开全部智能体的会话子行')
+  for (const sub of subRows) {
+    assert.ok(sub.querySelector('.sidebar-batch-checkbox'), '每条会话子行都有批量勾选框')
+  }
+
+  // 点击第二个智能体站位行（编码专员）：仅折叠其子列表，不导航也不冒泡触发外层关抽屉
+  const coderStanding = [...document.body.querySelectorAll('.agent-standing')].find((el) =>
+    el.querySelector('.agent-standing-row')?.textContent?.includes('编码专员'),
+  )!
+  assert.ok(coderStanding.querySelector('.agent-conversations-list'), '点击前编码专员子列表已展开')
+  const coderHeaderBtn = coderStanding.querySelector<HTMLButtonElement>('.agent-standing-row .nav-item-main')!
+  await act(async () => {
+    coderHeaderBtn.click()
+  })
+  assert.ok(coderStanding.querySelector('.agent-conversations-list') === null, '点击站位头部行折叠其会话子列表')
+  assert.equal(store.openTargetCalls.length, 0, '批量模式下点击站位头部不触发路由跳转')
+  assert.equal(shellBubbleCount, 0, '批量模式下点击站位头部不冒泡关闭抽屉')
+
+  // 再次点击重新展开
+  await act(async () => {
+    coderHeaderBtn.click()
+  })
+  assert.ok(coderStanding.querySelector('.agent-conversations-list'), '再次点击站位头部重新展开会话子列表')
 })

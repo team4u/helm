@@ -28,7 +28,7 @@ import { createHubHandler } from '../../kernel/src/http/index.js'
 import { createDeliveryDispatch } from '../src/triggers/delivery.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import {
-  makeFauxModels,
+  makeFauxProvider,
   useTempDir,
   waitFor as baseWaitFor,
   type FauxProviderHandle,
@@ -56,8 +56,8 @@ interface TestEnv {
 
 async function makeEnv(): Promise<TestEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-triggers-'))
-  const { models, faux } = makeFauxModels()
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const faux = makeFauxProvider()
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   faux.setResponses([])
   const handler = createHubHandler(app.kernel)
   const env: TestEnv = {
@@ -588,10 +588,9 @@ test('triggers9: secret 落 credentials.json 0600、不进 docs/SQLite、删除�
 test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复）；GET 配置不泄漏动态 secret', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-triggers-restart-')
   const SECRET = 'whsec_restart_roundtrip'
-  const mkModels = () => makeFauxModels()
   // 第一进程：setup 鉴权 + 启用 + 建 webhook（secret 落 credentials.json）
-  const first = mkModels()
-  const app1 = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: first.models })
+  const first = makeFauxProvider()
+  const app1 = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [first.provider] })
   try {
     const { AuthService } = await import('../../kernel/src/services/index.js')
     const auth = new AuthService(dataDir)
@@ -605,8 +604,8 @@ test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复�
   }
 
   // 第二进程（同 dataDir 重启）：启用沿用，secret 从凭据文件恢复
-  const second = mkModels()
-  const app2 = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: second.models })
+  const second = makeFauxProvider()
+  const app2 = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [second.provider] })
   try {
     const summary = app2.kernel.plugins.list().find((p) => p.id === TRIGGERS)!
     assert.equal(summary.enabled, false, '重启后沿用持久化停用状态')
@@ -644,7 +643,7 @@ test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复�
     // 错误签名拒绝 → 证明验签在用恢复后的 secret
     assert.equal(await post(payload, sign('whsec_wrong_after_restart', payload)), 401)
     // 正确签名接受 → secret 跨重启恢复且事件进入 #1
-    second.faux.setResponses([fauxAssistantMessage('重启后收到')])
+    second.setResponses([fauxAssistantMessage('重启后收到')])
     assert.equal(await post(payload, sign(SECRET, payload)), 202)
     await app2.kernel.waitForIdle(ROOT_CONVERSATION_ID)
     const detail = await app2.kernel.getConversationDetail(ROOT_CONVERSATION_ID, { limit: 20 })

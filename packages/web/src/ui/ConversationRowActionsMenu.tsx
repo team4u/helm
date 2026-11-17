@@ -18,7 +18,7 @@ import type { ReactNode } from 'react'
 import type { ConversationSummary } from '@helm/protocol/browser'
 import { HelmIcon } from '@helm/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { useHelmStore } from '../lib/store-context.js'
+import { useGroupedUi, useStoreActions } from '../lib/store-context.js'
 import { PluginMicroAction } from './PluginMicroAction.js'
 import { matchConversationActions } from '../conversation/action-model.js'
 import { patchConversationArchived } from '../shell/archive-ops.js'
@@ -40,18 +40,19 @@ export function ConversationRowActionsMenu({
 }: {
   conversation: ConversationSummary
 }): ReactNode {
-  const store = useHelmStore()
+  const groupedUi = useGroupedUi()
+  const { pushNotice } = useStoreActions()
   const { t } = useWebLocale()
   const [open, setOpen] = useState(false)
   const [archiving, setArchiving] = useState(false)
 
-  const actions = matchConversationActions(store.groupedUi.uiActions, 'conversation:row', conversation)
+  const actions = matchConversationActions(groupedUi.uiActions, 'conversation:row', conversation)
 
   // 宿主归档动作可达性：人类自有的根会话可归档；已归档会话始终提供恢复
   // （当前会话若已归档，仍须提供恢复入口）。
   const sectionTags = useMemo(
-    () => partitionSidebarUi([], store.groupedUi.sidebarSections).sectionTags,
-    [store.groupedUi.sidebarSections],
+    () => partitionSidebarUi([], groupedUi.sidebarSections).sectionTags,
+    [groupedUi.sidebarSections],
   )
   const archived = isConversationArchived(conversation)
   const hostArchiveAction: 'archive' | 'restore' | null = isConversationArchivable(conversation, sectionTags)
@@ -67,7 +68,7 @@ export function ConversationRowActionsMenu({
     setArchiving(true)
     try {
       await patchConversationArchived(conversation, hostArchiveAction === 'archive')
-      store.pushNotice({
+      pushNotice({
         type: 'notification',
         level: 'info',
         title: hostArchiveAction === 'archive' ? t('conv.pane.archived') : t('conv.pane.restored'),
@@ -78,7 +79,7 @@ export function ConversationRowActionsMenu({
       })
       setOpen(false)
     } catch (err) {
-      store.pushNotice({
+      pushNotice({
         type: 'notification',
         level: 'error',
         title: hostArchiveAction === 'archive' ? t('conv.row.archiveFailed') : t('conv.row.restoreFailed'),

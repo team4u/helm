@@ -1,11 +1,12 @@
 /**
- * write/edit tool and file mutual exclusion queue in new path contract under behavior test.
+ * Behavior tests for `write`/`edit` tools and the file mutation queue under the path contract:
  *
- * path contract (align pi): conversation cwd only act relative path base allow, absolute path and ../ across directory access
- * one rule allows (and bash same right, do not set cwd sandbox);write/edit still via env/file-mutation-queue
- * by canonical path serial same file read-change-write. queue up wait for window inside target by external process (such as bash)
- * replace is symlink when, write with follow symlink to its real target - - this is and bash same right since set semantics,
- * queue only guarantee mutual exclusion, does not path re-check.
+ * Path contract (aligned with pi): conversation cwd serves only as the base for relative paths;
+ * absolute paths and `../` parent traversals are permitted (matching bash privileges, no cwd
+ * sandbox). `write`/`edit` still serialize per-file read-modify-write via `env/file-mutation-queue`
+ * keyed by canonical path. If an external process (such as bash) replaces the target with a
+ * symlink during the queue wait window, writes follow the symlink to its real target — matching
+ * bash semantics by design, since the queue enforces mutual exclusion rather than path policing.
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
@@ -38,15 +39,15 @@ function makeApi(cwd: string, conversationId = 1) {
     commit: async (change: () => unknown) => change(),
     memo: async () => undefined,
     createTask: async () => {
-      throw new Error('test does not use')
+      throw new Error('unused in test')
     },
     getTask: async () => undefined,
     waitForTask: async () => {
-      throw new Error('test does not use')
+      throw new Error('unused in test')
     },
     conversation: async () => undefined,
     executeTool: async () => {
-      throw new Error('test does not use')
+      throw new Error('unused in test')
     },
   } as never
 }
@@ -77,8 +78,9 @@ after(async () => {
 })
 
 /**
- * determinism queue up gate control: first etc. hold enter execute window, again start queuedTask and wait for its truly complete
- * canonical parse and hang queues block in previous on, then execute window action and release hold.
+ * Deterministic queue gate: waits until `hold` enters execution, starts `queuedTask` and waits for
+ * it to finish canonical path resolution and block in the queue behind `hold`, executes the window
+ * callback, then releases `hold`.
  */
 async function runQueuedBehindHold<T>(
   victimPath: string,
@@ -123,8 +125,8 @@ async function runQueuedBehindHold<T>(
   return await queuedTask
 }
 
-describe('write/edit mutual exclusion queue and symlink semantics (new path contract)', { timeout: 60_000 }, () => {
-  it('queue up wait for: same file write in before order hold lock task release after execute succeeded (queue only mutual exclusion, do not refuse path)', { timeout: 60_000 }, async () => {
+describe('write/edit mutual exclusion queue and symlink semantics under path contract', { timeout: 60_000 }, () => {
+  it('queuing waits cleanly and writes succeed after prior lock holder releases (queue only serializes without rejecting paths)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'q1')
     mkdirSync(dir, { recursive: true })
     const victim = join(dir, 'victim.txt')
@@ -140,7 +142,7 @@ describe('write/edit mutual exclusion queue and symlink semantics (new path cont
     assert.equal(readFileSync(victim, 'utf8'), 'QUEUED')
   })
 
-  it('queue up wait for window inside target by replace is points to cwd outside symlink: write with follow symlink to real target (and bash same right)', { timeout: 60_000 }, async () => {
+  it('target replaced with external symlink during wait window: write follows symlink to real target (matching bash privileges)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'w1')
     mkdirSync(dir, { recursive: true })
     const outer = join(rootDir, 'w1-outer')
@@ -154,18 +156,18 @@ describe('write/edit mutual exclusion queue and symlink semantics (new path cont
       victim,
       () => tool.execute({ path: 'victim.txt', content: 'ESCAPED' }, makeApi(dir), BACKGROUND_CONTEXT),
       () => {
-        // wait for window inside: target by concurrency replace is points to cwd outside symlink (queue do not lock external process).
-        // new contract: write with follow symlink, to symlink points to real target.
+        // Inside wait window: target is concurrently replaced with a symlink outside cwd (external processes do not take the queue).
+        // Under current contract: write follows the symlink to its real target.
         rmSync(victim)
         symlinkSync(join(outer, 'stolen.txt'), victim)
       },
     )
-    assert.equal(!!result.isError, false, 'new contract under symlink target write should succeeded')
-    assert.equal(existsSync(join(outer, 'stolen.txt')), true, 'write should with follow symlink to real target')
+    assert.equal(!!result.isError, false, 'write via symlink target should succeed under path contract')
+    assert.equal(existsSync(join(outer, 'stolen.txt')), true, 'write should follow symlink to real target')
     assert.equal(readFileSync(join(outer, 'stolen.txt'), 'utf8'), 'ESCAPED')
   })
 
-  it('same construct scenario edit: wait for window inside by replace is symlink after, read change write via symlink effect at real target', { timeout: 60_000 }, async () => {
+  it('same setup for edit: replaced with symlink during wait window reads/modifies/writes real target via symlink', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'e1')
     mkdirSync(dir, { recursive: true })
     const outer = join(rootDir, 'e1-outer')
@@ -188,11 +190,11 @@ describe('write/edit mutual exclusion queue and symlink semantics (new path cont
         symlinkSync(join(outer, 'stolen-edit.txt'), victim)
       },
     )
-    assert.equal(!!result.isError, false, 'new contract under edit via symlink read change write should succeeded')
+    assert.equal(!!result.isError, false, 'edit via symlink should succeed under path contract')
     assert.equal(readFileSync(join(outer, 'stolen-edit.txt'), 'utf8'), 'hello ESCAPED world')
   })
 
-  it('dangling symlink:write with follow symlink in target where create file (and bash heavy set to same semantics)', { timeout: 60_000 }, async () => {
+  it('dangling symlink: write follows symlink to create file at target (matching bash redirection semantics)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'w2')
     mkdirSync(dir, { recursive: true })
     const outer = join(rootDir, 'w2-outer')
@@ -204,28 +206,28 @@ describe('write/edit mutual exclusion queue and symlink semantics (new path cont
       makeApi(dir),
       BACKGROUND_CONTEXT,
     )
-    assert.equal(!!result.isError, false, 'dangling symlink write should with follow create target file')
+    assert.equal(!!result.isError, false, 'writing a dangling symlink should create the target file')
     assert.equal(readFileSync(join(outer, 'not-yet-created.txt'), 'utf8'), 'CREATED')
   })
 
-  it('cwd inside symlink directory under write new file still available (symlink directory normal penetrate)', { timeout: 60_000 }, async () => {
+  it('writing new file under an in-cwd symlink directory traverses normally', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'w3')
     mkdirSync(join(dir, 'real-sub'), { recursive: true })
     symlinkSync(join(dir, 'real-sub'), join(dir, 'link-sub'))
     const deps = await makeRealDeps(dir)
     const tool = createWriteTool(deps)
     const result = await tool.execute(
-      { path: 'link-sub/inside.txt', content: 'inside refer symlink directory under new file' },
+      { path: 'link-sub/inside.txt', content: 'new file inside symlinked directory' },
       makeApi(dir),
       BACKGROUND_CONTEXT,
     )
     assert.equal(!!result.isError, false)
-    assert.equal(existsSync(join(dir, 'real-sub', 'inside.txt')), true, 'should via inside refer symlink directory write real directory inside')
+    assert.equal(existsSync(join(dir, 'real-sub', 'inside.txt')), true, 'should write inside the real directory via symlinked directory')
     const readBack = await createReadTool(deps).execute({ path: 'real-sub/inside.txt' }, makeApi(dir), BACKGROUND_CONTEXT)
     assert.equal(!!readBack.isError, false)
   })
 
-  it('common rule write/edit do not subject to affect (store in file override and unique match replace)', { timeout: 60_000 }, async () => {
+  it('regular write and edit are unaffected (file overwrite and unique-match replace work normally)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'w4')
     mkdirSync(dir, { recursive: true })
     const deps = await makeRealDeps(dir)
@@ -249,11 +251,11 @@ describe('write/edit mutual exclusion queue and symlink semantics (new path cont
 })
 
 describe('read tool fd read path', { timeout: 60_000 }, () => {
-  it('fd read content consistent; directory and large file reject path still such as', { timeout: 60_000 }, async () => {
+  it('fd read returns expected contents and directory / oversized-file rejection paths remain intact', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'r1')
     mkdirSync(dir, { recursive: true })
     const deps = await makeRealDeps(dir)
-    writeFileSync(join(dir, 'note.md'), '# title\nbody text row')
+    writeFileSync(join(dir, 'note.md'), '# title\nbody line')
     const tool = createReadTool(deps)
     const ok = await tool.execute({ path: 'note.md' }, makeApi(dir), BACKGROUND_CONTEXT)
     assert.equal(!!ok.isError, false)

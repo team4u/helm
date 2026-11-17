@@ -1,8 +1,8 @@
 /**
- * external plugin DX closed ring CLI test:plugins doctor/reload/rescan(HTTP mapping) and
- * plugins init(local foot manually frame, do not access Hub).
- * real runCli + simulated Hub HTTP contract (doctor/reload/rescan away real fetch boundary);
- * init verify local file produce out, illegal name reject, non-empty directory protect and --json output.
+ * External plugin DX loop CLI tests: `plugins doctor/reload/rescan` (HTTP endpoints)
+ * and `plugins init` (local scaffold without contacting Hub).
+ * Uses real `runCli` + mock Hub HTTP contract (real fetch boundary);
+ * `init` verifies generated files, invalid name rejection, non-empty dir guard, and `--json` output.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -24,7 +24,7 @@ const DOCTOR_REPORT = {
   checks: [{ id: 'manifest', label: 'x' }],
 }
 
-test('plugins doctor:POST /api/plugins/doctor,--dir/--path/location parameter/id all can', { timeout: 60_000 }, async (t) => {
+test('plugins doctor: POST /api/plugins/doctor accepts --dir/--path/positional/id', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-cli-dx-')
   const hub = await startMockHub(
     {
@@ -41,22 +41,22 @@ test('plugins doctor:POST /api/plugins/doctor,--dir/--path/location parameter/id
   )
   const env = makeCliEnv(hub.url, dataDir)
 
-  // --dir(compatibility alias)
+  // --dir (compatibility alias)
   const r1 = await runCliCaptured(['plugins', 'doctor', '--dir', '/abs/plugin', '--json'], env)
   assert.equal(r1.code, 0, r1.err)
   assert.deepEqual(JSON.parse(r1.out), DOCTOR_REPORT)
 
-  // --path(approach naming)
+  // --path (canonical option name)
   const r2 = await runCliCaptured(['plugins', 'doctor', '--path', '/abs/plugin', '--json'], env)
   assert.equal(r2.code, 0, r2.err)
   assert.deepEqual(JSON.parse(r2.out), DOCTOR_REPORT)
 
-  // location parameter is absolute path -> path target
+  // Positional absolute path -> path target
   const r3 = await runCliCaptured(['plugins', 'doctor', '/abs/plugin', '--json'], env)
   assert.equal(r3.code, 0, r3.err)
   assert.deepEqual(JSON.parse(r3.out), DOCTOR_REPORT)
 
-  // location parameter is plugin id -> id target (approach doctor [<id>])
+  // Positional plugin ID -> id target (doctor [<id>])
   const r4 = await runCliCaptured(['plugins', 'doctor', 'my-pl', '--json'], env)
   assert.equal(r4.code, 0, r4.err)
   assert.deepEqual(JSON.parse(r4.out), { ...DOCTOR_REPORT, requestedId: 'my-pl' })
@@ -70,42 +70,42 @@ test('plugins doctor:POST /api/plugins/doctor,--dir/--path/location parameter/id
   assert.deepEqual(hub.hits[0]!.body, { path: '/abs/plugin' })
   assert.deepEqual(hub.hits[3]!.body, { id: 'my-pl' })
 
-  // missing target explicit errors (do not request Hub)
+  // Missing target errors explicitly without contacting Hub
   const r6 = await runCliCaptured(['plugins', 'doctor', '--json'], env)
   assert.notEqual(r6.code, 0)
-  assert.equal(hub.hits.length, 5, 'missing reference must not start request')
+  assert.equal(hub.hits.length, 5, 'missing argument must not send request')
 
-  // id and path mutual exclusion
+  // id and path are mutually exclusive
   const r7 = await runCliCaptured(['plugins', 'doctor', 'my-pl', '--path', '/abs/plugin'], env)
   assert.notEqual(r7.code, 0)
   assert.equal(hub.hits.length, 5)
 })
 
-test('plugins doctor: person class pattern one by one items output; preflight failed exit code non-zero', { timeout: 60_000 }, async (t) => {
+test('plugins doctor: human mode prints check results and exits non-zero on failure', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-cli-dx-')
   const failing = {
     dir: '/abs/bad',
     pluginId: 'bad',
     ok: false,
     checks: [
-      { id: 'manifest', label: 'manifest and entry parse' },
+      { id: 'manifest', label: 'Manifest and entrypoint resolution' },
       {
         id: 'backend',
-        label: 'backend module proxy boundary import',
-        error: { code: 'plugin_load_failed', message: 'language method error' },
+        label: 'Backend module generation import',
+        error: { code: 'plugin_load_failed', message: 'syntax error' },
       },
     ],
   }
   const hub = await startMockHub({ 'POST /api/plugins/doctor': () => ({ body: failing }) }, { autoRegisterCleanup: t })
   const r = await runCliCaptured(['plugins', 'doctor', '--dir', '/abs/bad'], makeCliEnv(hub.url, dataDir))
-  assert.notEqual(r.code, 0, 'ok=false should non-zero exit')
+  assert.notEqual(r.code, 0, 'ok=false should exit non-zero')
   assert.ok(r.out.includes('[ok] manifest'))
   assert.ok(r.out.includes('[!!] backend'))
   assert.ok(r.out.includes('plugin_load_failed'))
-  assert.ok(r.out.includes('conclusion: store in failed items'))
+  assert.ok(r.out.includes('Result: failed checks found'))
 })
 
-test('plugins reload:POST /api/plugins/:id/reload(contains URI encode)', { timeout: 60_000 }, async (t) => {
+test('plugins reload: POST /api/plugins/:id/reload (with URI encoding)', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-cli-dx-')
   const hub = await startMockHub(
     {
@@ -150,7 +150,7 @@ test('plugins rescan:POST /api/plugins/rescan', { timeout: 60_000 }, async (t) =
   assert.equal(hub.hits[0]!.path, '/api/plugins/rescan')
 })
 
-test('plugins install:source pass-through,--enable request body, person class pattern output and empty source reject', { timeout: 60_000 }, async (t) => {
+test('plugins install: passes source, sets enable in --enable body, checks human output, rejects empty source', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-cli-dx-')
   const npmSource = 'npm:helm-plugin-foo@^1.2.0'
   const installBody = {
@@ -180,14 +180,14 @@ test('plugins install:source pass-through,--enable request body, person class pa
   )
   const env = makeCliEnv(hub.url, dataDir)
 
-  // --enable: request body carry enable:true, person class pattern back visible enabled
+  // --enable: request body passes enable:true, human output shows enabled
   const r1 = await runCliCaptured(['plugins', 'install', npmSource, '--enable'], env)
   assert.equal(r1.code, 0, r1.err)
   assert.deepEqual(hub.hits[0]!.body, { source: npmSource, enable: true })
   assert.ok(r1.out.includes('helm-plugin-foo 1.2.0'))
   assert.ok(r1.out.includes('enabled'))
 
-  // default: request body only source, back visible deactivate and enable hint
+  // Default: request body contains only source, prints disabled status and enable hint
   const r2 = await runCliCaptured(['plugins', 'install', npmSource, '--json'], env)
   assert.equal(r2.code, 0, r2.err)
   assert.deepEqual(hub.hits[1]!.body, { source: npmSource })
@@ -195,14 +195,14 @@ test('plugins install:source pass-through,--enable request body, person class pa
   assert.equal(install.record.id, 'inst-1')
   assert.equal(install.summary.managed?.installId, 'inst-1')
 
-  // empty source explicit reject (do not request Hub)
+  // Empty source rejected explicitly without contacting Hub
   const empty = await runCliCaptured(['plugins', 'install', '   '], env)
   assert.notEqual(empty.code, 0)
   assert.ok(empty.err.includes('source'))
   assert.equal(hub.hits.length, 2)
 })
 
-test('plugins update:POST /api/plugins/:id/update(contains URI encode) and person class pattern output', { timeout: 60_000 }, async (t) => {
+test('plugins update: POST /api/plugins/:id/update (with URI encoding) and human output', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-cli-dx-')
   const hub = await startMockHub(
     {
@@ -234,7 +234,7 @@ test('plugins update:POST /api/plugins/:id/update(contains URI encode) and perso
   assert.ok(r.out.includes('1.2.0 -> 1.3.0'))
 })
 
-test('plugins remove:--json non- interaction;--yes and non- interaction without --yes confirm behavior', { timeout: 60_000 }, async (t) => {
+test('plugins remove: --json non-interactive, --yes bypass, and non-interactive without --yes confirmation check', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-cli-dx-')
   const hub = await startMockHub(
     {
@@ -246,7 +246,7 @@ test('plugins remove:--json non- interaction;--yes and non- interaction without 
   )
   const env = makeCliEnv(hub.url, dataDir)
 
-  // --json: machine pattern non- interaction (do not by CLI confirm issue), directly request
+  // --json: machine mode is non-interactive (CLI skips prompt) and sends request directly
   const r1 = await runCliCaptured(['plugins', 'remove', 'my:pl', '--json'], env)
   assert.equal(r1.code, 0, r1.err)
   assert.equal(hub.hits[0]!.path, '/api/plugins/my%3Apl/remove')
@@ -254,28 +254,28 @@ test('plugins remove:--json non- interaction;--yes and non- interaction without 
   assert.equal(remove.pluginId, 'my:pl')
   assert.equal(remove.wasEnabled, true)
 
-  // person class pattern --yes: non- interaction let through, output already remove and clean up directory
+  // Human mode with --yes: skips prompt, prints removed message and install directory
   const r2 = await runCliCaptured(['plugins', 'remove', 'my:pl', '--yes'], env)
   assert.equal(r2.code, 0, r2.err)
   assert.equal(hub.hits[1]!.path, '/api/plugins/my%3Apl/remove')
-  assert.ok(r2.out.includes('already remove my:pl'))
+  assert.ok(r2.out.includes('Removed my:pl'))
   assert.ok(r2.out.includes('/data/plugins/my:pl'))
 
-  // person class pattern without --yes: ensure where at non- TTY decide (even if external runner with --test-isolation=none inherit terminal stdin) when explicit reject and do not request Hub
+  // Human mode without --yes: ensure non-TTY rejection (even if external runner inherits TTY stdin under --test-isolation=none)
   const origIsTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY')
   Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true })
   try {
     const r3 = await runCliCaptured(['plugins', 'remove', 'my:pl'], env)
     assert.notEqual(r3.code, 0)
     assert.ok(r3.err.includes('--yes'))
-    assert.ok(r3.err.includes('confirmation_required') || r3.err.includes('remove'))
+    assert.ok(r3.err.includes('confirmation_required') || r3.err.includes('removing'))
   } finally {
     if (origIsTTY) Object.defineProperty(process.stdin, 'isTTY', origIsTTY)
     else delete (process.stdin as { isTTY?: boolean }).isTTY
   }
-  assert.equal(hub.hits.length, 2, 'not confirm before must not request Hub')
+  assert.equal(hub.hits.length, 2, 'must not call Hub without confirmation')
 
-  // missing location parameter and redundant location parameter all reject (do not request Hub)
+  // Missing and extra positional arguments rejected without contacting Hub
   const miss = await runCliCaptured(['plugins', 'remove'], env)
   assert.notEqual(miss.code, 0)
   const extra = await runCliCaptured(['plugins', 'update', 'a', 'b'], env)
@@ -283,7 +283,7 @@ test('plugins remove:--json non- interaction;--yes and non- interaction without 
   assert.equal(hub.hits.length, 2)
 })
 
-test('plugins install/update/remove: four source pass-through and Hub error message seal on throw', { timeout: 60_000 }, async (t) => {
+test('plugins install/update/remove: forwards all 4 source kinds and Hub error envelopes', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-cli-dx-')
   const sources = [
     'npm:helm-plugin-foo@^1.2.0',
@@ -301,7 +301,7 @@ test('plugins install/update/remove: four source pass-through and Hub error mess
       },
       'POST /api/plugins/bad%3Apl/remove': () => ({
         status: 404,
-        body: { error: { code: 'plugin_not_managed', message: 'plugin unmanaged install' } },
+        body: { error: { code: 'plugin_not_managed', message: 'plugin is not a managed installation' } },
       }),
     },
     { autoRegisterCleanup: t },
@@ -313,24 +313,24 @@ test('plugins install/update/remove: four source pass-through and Hub error mess
   }
   assert.deepEqual(seen, sources)
 
-  // Hub structure error original on throw (code/message keep)
+  // Hub structured error propagated verbatim (preserving code/message)
   const err = await runCliCaptured(['plugins', 'remove', 'bad:pl', '--yes', '--json'], env)
   assert.notEqual(err.code, 0)
   assert.equal(parseCliError(err).code, 'plugin_not_managed')
 })
 
-test('plugins init: local generate skeleton (by default full template:plugin.json + index.ts + tsconfig.json + client/index.tsx)', { timeout: 60_000 }, async (t) => {
+test('plugins init: generates local skeleton (default full template: plugin.json + index.ts + tsconfig.json + client/index.tsx)', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-cli-dx-')
   const env = makeCliEnv('http://127.0.0.1:1', dataDir)
-  // without Hub also can execute (local command): use cannot reach Hub address verify do not access
+  // Runs without Hub (local command): unreachable Hub URL proves no network calls are made
   const r = await runCliCaptured(['plugins', 'init', 'my-plugin', '--json'], env)
   assert.equal(r.code, 0, r.err)
   const body = JSON.parse(r.out) as { pluginId: string; dir: string; files: string[]; template: string }
   assert.equal(body.pluginId, 'my-plugin')
-  assert.equal(body.template, 'full', 'by default template is full')
+  assert.equal(body.template, 'full', 'default template is full')
   assert.ok(body.dir.startsWith(dataDir))
   for (const f of ['plugin.json', 'index.ts', 'tsconfig.json', 'client/index.tsx', 'README.md']) {
-    assert.ok(body.files.includes(f), `produce out should contains ${f}:${JSON.stringify(body.files)}`)
+    assert.ok(body.files.includes(f), `output should contain ${f}: ${JSON.stringify(body.files)}`)
   }
 
   const manifest = JSON.parse(await fsp.readFile(path.join(body.dir, 'plugin.json'), 'utf8')) as {
@@ -342,32 +342,32 @@ test('plugins init: local generate skeleton (by default full template:plugin.jso
   assert.equal(manifest.main, 'index.ts')
   assert.equal(manifest.clientRoot, './client')
   const index = await fsp.readFile(path.join(body.dir, 'index.ts'), 'utf8')
-  assert.ok(index.includes(`id: 'my-plugin'`), 'entry id and directory name consistent')
+  assert.ok(index.includes(`id: 'my-plugin'`), 'entrypoint id matches directory name')
   assert.ok(index.includes('definePlugin'))
-  assert.ok(index.includes("module: 'index.tsx'"), 'UI reference client/index.tsx')
+  assert.ok(index.includes("module: 'index.tsx'"), 'UI references client/index.tsx')
   const tsconfig = JSON.parse(await fsp.readFile(path.join(body.dir, 'tsconfig.json'), 'utf8')) as {
     compilerOptions: Record<string, unknown>
   }
   assert.ok(tsconfig.compilerOptions)
   const client = await fsp.readFile(path.join(body.dir, 'client', 'index.tsx'), 'utf8')
   assert.ok(client.includes('export function SamplePanel'))
-  assert.ok(client.includes('@helm/plugin-client'), 'standard template introduce host sharing frontend module')
-  assert.ok(client.includes('usePluginDoc'), 'standard template use sharing Hook')
-  // standard template directly use sharing layout original language, no longer appear fake Tailwind class name
+  assert.ok(client.includes('@helm/plugin-client'), 'standard template imports host shared frontend package')
+  assert.ok(client.includes('usePluginDoc'), 'standard template uses shared hook')
+  // Standard template uses shared layout primitives without pseudo-Tailwind class names
   for (const primitive of ['ScreenSection', 'DataTable', 'KvGrid']) {
-    assert.ok(client.includes(primitive), `standard template should use sharing layout original language ${primitive}`)
+    assert.ok(client.includes(primitive), `standard template should use shared layout primitive ${primitive}`)
   }
-  assert.ok(!/\b(font-medium|text-subtle|text-xs)\b/.test(client), 'standard template must not leftover fake Tailwind class name')
+  assert.ok(!/\b(font-medium|text-subtle|text-xs)\b/.test(client), 'standard template must not retain pseudo-Tailwind class names')
   assert.ok(await fsp.stat(path.join(body.dir, 'README.md')))
 
-  // person class pattern output after continue step
+  // Human mode prints next steps
   const r2 = await runCliCaptured(['plugins', 'init', 'another-one'], env)
   assert.equal(r2.code, 0, r2.err)
-  assert.ok(r2.out.includes('after continue step'))
+  assert.ok(r2.out.includes('Next steps'))
   assert.ok(r2.out.includes('helm plugins enable another-one'))
 })
 
-test('plugins init --template minimal: only backend probe needle action, without client directory', { timeout: 60_000 }, async (t) => {
+test('plugins init --template minimal: backend ping action only, no client directory', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-cli-dx-')
   const env = makeCliEnv('http://127.0.0.1:1', dataDir)
   const r = await runCliCaptured(['plugins', 'init', 'mini-pl', '--template', 'minimal', '--json'], env)
@@ -377,21 +377,21 @@ test('plugins init --template minimal: only backend probe needle action, without
   for (const f of ['plugin.json', 'index.ts', 'tsconfig.json', 'README.md']) {
     assert.ok(body.files.includes(f))
   }
-  assert.ok(!body.files.some((f) => f.startsWith('client/')), 'minimal do not generate frontend file')
+  assert.ok(!body.files.some((f) => f.startsWith('client/')), 'minimal does not generate frontend files')
   await assert.rejects(fsp.stat(path.join(body.dir, 'client')), { code: 'ENOENT' })
   const manifest = JSON.parse(await fsp.readFile(path.join(body.dir, 'plugin.json'), 'utf8')) as {
     clientRoot?: string
   }
-  assert.equal(manifest.clientRoot, undefined, 'minimal do not declaration clientRoot')
+  assert.equal(manifest.clientRoot, undefined, 'minimal does not declare clientRoot')
   const index = await fsp.readFile(path.join(body.dir, 'index.ts'), 'utf8')
-  assert.ok(index.includes("id: 'ping'"), 'minimal contains probe needle action')
+  assert.ok(index.includes("id: 'ping'"), 'minimal includes ping action')
 
-  // illegal template value reject
+  // Rejects invalid template name
   const bad = await runCliCaptured(['plugins', 'init', 'bad-tpl', '--template', 'huge'], env)
   assert.notEqual(bad.code, 0)
 })
 
-test('plugins init: illegal name reject; non-empty directory by default reject,--force continue', { timeout: 60_000 }, async (t) => {
+test('plugins init: rejects invalid names and non-empty directory unless --force is passed', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-cli-dx-')
   const env = makeCliEnv('http://127.0.0.1:1', dataDir)
   const bad = await runCliCaptured(['plugins', 'init', 'builtin:x'], env)
@@ -399,19 +399,129 @@ test('plugins init: illegal name reject; non-empty directory by default reject,-
   const bad2 = await runCliCaptured(['plugins', 'init', 'bad name'], env)
   assert.notEqual(bad2.code, 0)
 
-  // first time generate; then to same directory init same name plugin should reject (non-empty)
+  // First init succeeds; second init into the same non-empty directory rejects
   await runCliCaptured(['plugins', 'init', 'dup-pl'], env)
   const dup = await runCliCaptured(['plugins', 'init', 'dup-pl'], env)
   assert.notEqual(dup.code, 0)
   assert.ok(dup.err.includes('non-empty') || dup.err.includes('conflict'))
-  // --force continue (file override)
+  // --force proceeds by overwriting files
   const forced = await runCliCaptured(['plugins', 'init', 'dup-pl', '--force'], env)
   assert.equal(forced.code, 0, forced.err)
 
-  // --dir self define parent directory
+  // --dir custom parent directory
   const parent = path.join(dataDir, 'custom-parent')
   const r3 = await runCliCaptured(['plugins', 'init', 'x-pl', '--dir', parent, '--json'], env)
   assert.equal(r3.code, 0, r3.err)
   const body3 = JSON.parse(r3.out) as { dir: string }
   assert.ok(body3.dir.startsWith(parent))
+})
+
+test('plugins build: local prebuilt bundle compilation (--json, --out, --module, clientDependencies, and error guards)', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helm-cli-build-')
+  const env = makeCliEnv('http://127.0.0.1:1', dataDir)
+
+  // 1. Scaffold via `plugins init`, then prebuild locally with `plugins build` (no Hub calls).
+  const initRes = await runCliCaptured(['plugins', 'init', 'built-pl', '--json'], env)
+  assert.equal(initRes.code, 0, initRes.err)
+  const { dir: pluginDir } = JSON.parse(initRes.out) as { dir: string }
+
+  const buildRes = await runCliCaptured(['plugins', 'build', pluginDir, '--json'], env)
+  assert.equal(buildRes.code, 0, buildRes.err)
+  const buildBody = JSON.parse(buildRes.out) as {
+    pluginId: string
+    outDir: string
+    manifestPath: string
+    manifest: { version: number; modules: Record<string, { entryFile: string; contentHash: string; exports: string[] }> }
+    totalBytes: number
+  }
+  assert.equal(buildBody.pluginId, 'built-pl')
+  assert.equal(buildBody.outDir, path.join(pluginDir, 'dist-client'))
+  assert.equal(buildBody.manifest.version, 1)
+  const entry = buildBody.manifest.modules['index.tsx']
+  assert.ok(entry && entry.exports.includes('SamplePanel'))
+  assert.ok(await fsp.stat(path.join(buildBody.outDir, entry.entryFile)))
+  assert.ok(await fsp.stat(path.join(buildBody.outDir, `${entry.entryFile}.gz`)))
+
+  // 2. --out override + --module + clientDependencies + human output
+  const depDir = path.join(pluginDir, 'node_modules', 'tiny-cli-dep')
+  await fsp.mkdir(depDir, { recursive: true })
+  await fsp.writeFile(path.join(depDir, 'package.json'), JSON.stringify({ name: 'tiny-cli-dep', main: 'index.js' }))
+  await fsp.writeFile(path.join(depDir, 'index.js'), 'export const tag = "bundled-dep-tag"\n')
+  await fsp.writeFile(
+    path.join(pluginDir, 'plugin.json'),
+    JSON.stringify({ id: 'built-pl', main: 'index.ts', clientRoot: './client', clientDependencies: ['tiny-cli-dep'] }),
+  )
+  await fsp.writeFile(
+    path.join(pluginDir, 'client', 'index.tsx'),
+    "import { tag } from 'tiny-cli-dep'\nexport function SamplePanel() { return tag }\n",
+  )
+  const customOut = path.join(dataDir, 'custom-out')
+  const build2 = await runCliCaptured(['plugins', 'build', '--dir', pluginDir, '--out', customOut, '--module', 'index.tsx'], env)
+  assert.equal(build2.code, 0, build2.err)
+  assert.ok(build2.out.includes('Built 1 client module(s) for built-pl'))
+  const manifest2 = JSON.parse(await fsp.readFile(path.join(customOut, 'manifest.json'), 'utf8')) as {
+    modules: Record<string, { entryFile: string }>
+  }
+  const compiledCode = await fsp.readFile(path.join(customOut, manifest2.modules['index.tsx']!.entryFile), 'utf8')
+  assert.match(compiledCode, /bundled-dep-tag/)
+
+  // 3. Reject missing target directory and escaping clientRoot explicitly
+  const missing = await runCliCaptured(['plugins', 'build', path.join(dataDir, 'does-not-exist'), '--json'], env)
+  assert.notEqual(missing.code, 0)
+  assert.equal(parseCliError(missing).code, 'client_root_invalid')
+
+  const badPlugin = path.join(dataDir, 'escape-pl')
+  await fsp.mkdir(badPlugin, { recursive: true })
+  await fsp.writeFile(path.join(badPlugin, 'plugin.json'), JSON.stringify({ id: 'escape-pl', clientRoot: '../outside' }))
+  const escaping = await runCliCaptured(['plugins', 'build', badPlugin, '--json'], env)
+  assert.notEqual(escaping.code, 0)
+  assert.equal(parseCliError(escaping).code, 'invalid_plugin_definition')
+})
+
+test('plugins build: works when plugin directory traverses a symlinked/alias parent path and still rejects symlink escapes', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helm-cli-build-alias-')
+  const env = makeCliEnv('http://127.0.0.1:1', dataDir)
+  const realParent = path.join(dataDir, 'real-parent')
+  const aliasParent = path.join(dataDir, 'alias-parent')
+  await fsp.mkdir(realParent, { recursive: true })
+  // Junction works without admin privileges on Windows and acts as a directory symlink on POSIX,
+  // reproducing the dir !== realpath(dir) mismatch (e.g. Windows RUNNER~1 or macOS /var -> /private/var).
+  await fsp.symlink(realParent, aliasParent, 'junction')
+
+  const initRes = await runCliCaptured(['plugins', 'init', 'alias-pl', '--dir', aliasParent, '--json'], env)
+  assert.equal(initRes.code, 0, initRes.err)
+  const { dir: aliasPluginDir } = JSON.parse(initRes.out) as { dir: string }
+
+  const pluginManifestPath = path.join(aliasPluginDir, 'plugin.json')
+  await fsp.writeFile(
+    pluginManifestPath,
+    JSON.stringify({ id: 'alias-pl', main: 'index.ts', clientRoot: './client', clientDist: './custom-dist' }),
+  )
+  const buildRes = await runCliCaptured(['plugins', 'build', aliasPluginDir, '--json'], env)
+  assert.equal(buildRes.code, 0, buildRes.err)
+  const buildBody = JSON.parse(buildRes.out) as { outDir: string; manifest: { modules: Record<string, unknown> } }
+  assert.equal(buildBody.outDir, path.join(aliasPluginDir, 'custom-dist'))
+  assert.ok(buildBody.manifest.modules['index.tsx'])
+
+  // Symlink escape through a non-existent nested subdirectory under clientDist must still be caught.
+  const outsideDir = path.join(dataDir, 'outside-target')
+  await fsp.mkdir(outsideDir, { recursive: true })
+  await fsp.symlink(outsideDir, path.join(aliasPluginDir, 'sym-out'), 'junction')
+  await fsp.writeFile(
+    pluginManifestPath,
+    JSON.stringify({ id: 'alias-pl', main: 'index.ts', clientRoot: './client', clientDist: './sym-out/nested' }),
+  )
+  const symEscape = await runCliCaptured(['plugins', 'build', aliasPluginDir, '--json'], env)
+  assert.notEqual(symEscape.code, 0)
+  assert.equal(parseCliError(symEscape).code, 'invalid_plugin_definition')
+
+  // Dangling symlink declared as clientRoot/clientDist must be rejected rather than falling back to parent.
+  await fsp.symlink(path.join(dataDir, 'nonexistent-outside'), path.join(aliasPluginDir, 'dangling-client'), 'junction')
+  await fsp.writeFile(
+    pluginManifestPath,
+    JSON.stringify({ id: 'alias-pl', main: 'index.ts', clientRoot: './dangling-client' }),
+  )
+  const danglingEscape = await runCliCaptured(['plugins', 'build', aliasPluginDir, '--json'], env)
+  assert.notEqual(danglingEscape.code, 0)
+  assert.equal(parseCliError(danglingEscape).code, 'invalid_plugin_definition')
 })

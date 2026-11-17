@@ -20,7 +20,7 @@
  *   is declared in the cron module docs).
  */
 import { HelmError, type PluginDefinition } from '@helm/protocol'
-import { resolvePluginClientRoot } from './asset-paths.js'
+import { resolvePluginClientAssets } from './asset-paths.js'
 import { TRIGGERS_PLUGIN_ID } from './triggers/contracts.js'
 import { createDeliveryDispatch } from './triggers/delivery.js'
 import { registerWebhook } from './triggers/webhook.js'
@@ -39,7 +39,7 @@ export function createTriggersPlugin(): PluginDefinition {
     },
     icon: 'webhook',
     version: '0.1.0',
-    clientRoot: resolvePluginClientRoot(TRIGGERS_PLUGIN_ID, 'triggers', 'triggers_plugin_client_missing'),
+    ...resolvePluginClientAssets(TRIGGERS_PLUGIN_ID, 'triggers', 'triggers_plugin_client_missing'),
     definePlugin(ctx) {
       // Shared delivery helper: cron (targetProfileId as the second argument) and webhook (the envelope
       // carries an already-resolved target) share one implementation; isClosing is checked inside the

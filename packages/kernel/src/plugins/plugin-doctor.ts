@@ -1,24 +1,13 @@
 /**
- * external plugin source code static self inspect (doctor): real load + real register assertion, does not second set approximate validate.
+ * Static doctor diagnostics for external plugin directories: executes real load + real registration
+ * checks rather than a separate approximate validator.
  *
- * check chain (by execute order, after continue check dependency before drive succeeded):
- * 1. manifest/entry parse (resolvePluginEntry:plugin.json legal,main exceeds, entry store in);
- * 2. backend proxy boundary import (importPluginDefinition:TS transpile, module initialize,default export shape);
- * 3. register real register (temporary PluginHost + memory doc store:definePlugin all declaration boundary
- *    validate - -action/tool/ui/doc/service/provider shape, duplicate,scope etc. and real host the same
- *    code path, do not maintain second set approximate validate); register via ctx.ui proxy smooth carries collect client module reference;
- * 4. client compile (for collect to all client.tsx module reference use real compiler compile).
- *
- * honest discipline: any one step failed all produce structure PluginDoctorCheck(code/message/details),
- * never static default fall back is roughly available; succeeded report attach real register obtain to PluginSummary.
- *
- * isolated and side effect:
- * - doctor use independent proxy boundary number import plugin module (?helmgen=N): new proxy count module diagram independent initialize,
- *   does not affect when before registered instance is now use old proxy count module; bare note symbol dependency still and host same instance;
- * - register in temporary PluginHost on enter row (temporary dataDir, memory doc store,doctor dedicated use backend:
- *   ctx.host.* invoke one rule 501 explicit reject) - -definePlugin top-level dependency host invoke plugin in
- *   doctor where such as failed (report to act), is not doctor defect;
- * - temporary host register i.e. dispose(enabled: false, service do not start, no side effects can leak leak).
+ * Pipeline:
+ * 1. Manifest & entry resolution (`resolvePluginEntry`);
+ * 2. Backend isolation import (`importPluginDefinition`);
+ * 3. Temporary `PluginHost` registration (`definePlugin` checks with a `doctorBackend` whose
+ *    runtime ports throw 501 explicitly);
+ * 4. Client module compilation & export check for all captured `ctx.ui.*` client refs.
  */
 import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -39,8 +28,9 @@ import {
   normalizeDefinition,
   resolvePluginEntry,
 } from './external-loader.js';
+import { readPrebuiltClientBundle, verifyPrebuiltClientDir } from './ui-registry.js';
 
-/** doctor real register which must temporary doc store(memory mirror, do not trigger touch host durable layer). */
+/** Ephemeral in-memory doc store used during `doctor` registration checks (touches no durable storage). */
 class DoctorDocStore {
   private values = new Map<string, unknown>();
   get<T>(key: string, initial: T): T {
@@ -59,15 +49,15 @@ class DoctorDocStore {
 }
 
 /**
- * doctor backend:ctx.host.* all real host invoke one rule 501 explicit reject (not silently return fabricate
- * data). only provide PluginHost construct/register chain must must security only read bottom seat:isClosing constant false,
- * text redaction constant etc..definePlugin top-level dependency host invoke plugin in doctor where such as failed.
+ * Doctor backend: every runtime `ctx.host.*` capability throws 501 explicitly (never mocks data).
+ * Only read-only structural primitives required to construct/register (`isClosing`, identity `redact`,
+ * no-op `emitEvent` for registration summary notifications) are provided.
  */
 function doctorBackend(): PluginHostBackend {
   const unavailable = (what: string): never => {
     throw new HelmError(
       'unsupported',
-      `doctor static self inspect do not provide host runtime capability:${what}(plugin must not in definePlugin top-level dependency host invoke)`,
+      `Doctor static check does not provide host runtime capability '${what}' (plugins must not invoke host ports at top level of definePlugin)`,
       501,
     );
   };
@@ -112,8 +102,7 @@ function doctorBackend(): PluginHostBackend {
     cancelAsk: () => unavailable('host.cancelAsk'),
     registerAskSeqResolver: () => unavailable('host.registerAskSeqResolver'),
     onEvent: () => unavailable('host.onEvent'),
-    // event publish in register complete chain on must however occur (plugin.changed):doctor without SSE consumer,
-    // static default discard is security no-op(is not capability missing static default fall back: event itself without return value can fabricate).
+    // Event emission fires at registration completion (plugin.changed): safe no-op with no SSE consumers.
     emitEvent: () => {},
     manageConversation: () => unavailable('host.manageConversation'),
     execEnv: () => unavailable('host.execEnv'),
@@ -123,7 +112,7 @@ function doctorBackend(): PluginHostBackend {
   };
 }
 
-/** HelmError -> can serial diagnose shape. */
+/** Normalizes a thrown error into a serializable doctor diagnostic object. */
 function toErrorInfo(err: unknown): { code: string; message: string; details?: unknown } {
   if (err instanceof HelmError) {
     return {
@@ -139,14 +128,9 @@ function toErrorInfo(err: unknown): { code: string; message: string; details?: u
 }
 
 /**
- * for external plugin directory execute static self inspect (real load + real register + real client compile).
- * dir by caller validate is store in directory; return report object (plugin itself defect with checks present),
- * only doctor base seat fault (temp directory failed to create etc.) only then reject.
- *
- * options.buildProvider by caller (PluginHost.doctorExternalPlugin / reload preflight
- * / managed package install) pass-through: and produce the same build port. missing when TS transpile and client compile
- * related check such as failed (unsupported_backend_ts_build / unsupported_client_build),
- * not silently skip.
+ * Runs static diagnostics on an external plugin directory (real load + registration + client compile).
+ * Only rejects if the doctor harness itself fails (e.g., temp directory creation); plugin defects are
+ * returned inside `checks`.
  */
 export async function doctorPluginDir(
   dir: string,
@@ -160,8 +144,7 @@ export async function doctorPluginDir(
       });
     }
   } catch {
-    // entry check negative duty missing/cannot read directory convert is structure doctor report;
-    // cannot register TS when continue execute, backend check will such as expose real import error.
+    // Directory readability issues are surfaced as structured checks during entry inspection below.
   }
   try {
     return await doctorPluginDirInternal(dir, options);
@@ -188,12 +171,12 @@ async function doctorPluginDirInternal(
     })();
 
   let entryPath: string | undefined;
-  const entryOk = await push('manifest', 'manifest and entry parse', async () => {
+  const entryOk = await push('manifest', 'manifest and entry resolution', async () => {
     entryPath = await resolvePluginEntry(dir);
     if (entryPath === undefined) {
       throw new HelmError(
         'plugin_entry_missing',
-        `directory ${dir} excludes plugin entry mark record (without plugin.json and without convention entry file)`,
+        `Directory ${dir} does not contain a plugin entrypoint (no plugin.json or conventional entrypoint found)`,
         404,
         { dir },
       );
@@ -203,7 +186,7 @@ async function doctorPluginDirInternal(
   let definition: PluginDefinition | undefined;
   if (!entryOk) return report(dir, undefined, checks, undefined);
 
-  const backendOk = await push('backend', 'backend module proxy boundary import', async () => {
+  const backendOk = await push('backend', 'backend module isolated import', async () => {
     const generation = nextPluginGeneration(dir);
     definition = normalizeDefinition(await importPluginDefinition(dir, entryPath!, { generation }), dir);
   });
@@ -212,10 +195,9 @@ async function doctorPluginDirInternal(
   const clientRefs: Array<{ module: string; export: string }> = [];
   const screenIds: string[] = [];
   let summary: PluginSummary | undefined;
-  // real register + client compile shared use a scratch directory (temporary dataDir and compile cache),
-  // doctor after end unify clean up; does not use host produce directory, avoid write competition.
+  // Isolate registration and compilation checks inside a temporary scratch dir to avoid mutating host data.
   const registerOk = await withDoctorScratch(async (scratch) =>
-    push('register', 'real register assertion', async () => {
+    push('register', 'real registration dry-run', async () => {
       let host: PluginHost | undefined;
       try {
         host = new PluginHost({
@@ -230,7 +212,7 @@ async function doctorPluginDirInternal(
         if (!found) {
           throw new HelmError(
             'invalid_plugin_definition',
-            `register after not in host manifest in discover plugin ${definition!.id}(doctor internal state inconsistent)`,
+            `Plugin ${definition!.id} not found in host summary after registration (inconsistent doctor state)`,
             500,
             { dir, pluginId: definition!.id },
           );
@@ -244,20 +226,40 @@ async function doctorPluginDirInternal(
   if (!registerOk) return report(dir, definition.id, checks, undefined);
 
   const clientOk = await withDoctorScratch(async (scratch) =>
-    push('client', 'frontend module real compile and export validate', async () => {
-      // without client reference plugin no need to build port (check empty); has reference but port not inject when
-      // such as failed (and produce register boundary the same reject semantics), never static default skip or fabricate artifact.
+    push('client', 'frontend module compilation and export validation', async () => {
+      if (definition!.prebuiltClientDir !== undefined) {
+        verifyPrebuiltClientDir(definition!.prebuiltClientDir, definition!.id);
+        const seen = new Set<string>();
+        for (const ref of clientRefs) {
+          const key = `${ref.module}#${ref.export}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const prebuilt = readPrebuiltClientBundle(
+            definition!.prebuiltClientDir,
+            ref.module,
+            undefined,
+            definition!.id,
+          );
+          if (!prebuilt.exports.includes(ref.export)) {
+            throw new HelmError(
+              'invalid_client_export',
+              `Plugin ${definition!.id} client reference ${ref.module}#${ref.export} is dangling: module exports [${prebuilt.exports.join(', ') || 'none'}]`,
+              422,
+              { pluginId: definition!.id, module: ref.module, export: ref.export, exports: prebuilt.exports },
+            );
+          }
+        }
+        return;
+      }
       if (clientRefs.length > 0 && options.buildProvider === undefined) {
         throw new HelmError(
           'unsupported_client_build',
-          'plugin declaration client reference but host not inject plugin build port (buildProvider): cannot execute client module compile check',
+          'Plugin declared client module references, but host has no buildProvider wired to compile client modules',
           501,
           { dir },
         );
       }
       if (options.buildProvider === undefined) return;
-      // and produce getClientModule the same subject to control npm mapping: manifest clientDependencies archive one
-      // enter definition.npmDependencies after in this takes effect (doctor/run chain the same compile opening path).
       const npmRoots = clientNpmRootsOf(definition!.npmDependencies);
       const seen = new Set<string>();
       for (const ref of clientRefs) {
@@ -271,12 +273,11 @@ async function doctorPluginDirInternal(
           cacheDir: scratch,
           npmRoots,
         });
-        // dangling export validate: compile artifact real tool name export must contains declaration reference name,
-        // otherwise UI declaration will in run phase render whitespace (dangling reference). such as report, not silently.
+        // Reject missing named exports so dangling UI declarations fail during doctor rather than silently rendering blank.
         if (!compiled.exports.includes(ref.export)) {
           throw new HelmError(
             'invalid_client_export',
-            `plugin ${definition!.id}  client reference ${ref.module}#${ref.export} dangling: module tool name export is [${compiled.exports.join(', ') || 'without'}]`,
+            `Plugin ${definition!.id} client reference ${ref.module}#${ref.export} is dangling: module exports [${compiled.exports.join(', ') || 'none'}]`,
             422,
             { pluginId: definition!.id, module: ref.module, export: ref.export, exports: compiled.exports },
           );
@@ -306,12 +307,7 @@ function report(
   };
 }
 
-/**
- * wrap definePlugin: in real ctx.ui.* register method execute of outside, smooth carries collect client.tsx module
- * reference (supply client compile check) and ctx.ui.screen declaration view id(supply PluginDoctorReport.
- * screens). proxy only read do not change write - - register boundary validate still by real PluginHost original method execute,
- * this in zero approximate, zero second set validate: only catch via real ui.screen invoke declaration, does not static scan.
- */
+/** Captures `client` references and `ui.screen` IDs via a non-mutating proxy around `ctx.ui`. */
 function withClientCapture(
   definition: PluginDefinition,
   sink: Array<{ module: string; export: string }>,
@@ -339,8 +335,6 @@ function withClientCapture(
                 export: (client as { export: string }).export,
               });
             }
-            // only record via real ui.screen invoke and eventually register succeeded (original method not throws) view id;
-            // spec.id shape validate by original registerUi execute, this in only matter after record, do not pre- judge.
             if (prop === 'screen' && spec !== undefined && typeof (spec as { id?: unknown }).id === 'string') {
               screenIds.push((spec as { id: string }).id);
             }
@@ -353,11 +347,7 @@ function withClientCapture(
   };
 }
 
-/**
- * doctor all chain dedicated use temp directory: real register temporary dataDir and client compile cache shared use a
- * scratch directory,doctor return before unify clean up (does not use host cache directory: avoid and produce cache
- * directory write competition; cache hash semantics consistent, does not affect produce compile correct).
- */
+/** Runs `fn` inside a temporary scratch directory and deletes it on exit. */
 async function withDoctorScratch<T>(fn: (scratch: string) => Promise<T>): Promise<T> {
   const scratch = mkdtempSync(join(tmpdir(), 'helm-doctor-'));
   try {

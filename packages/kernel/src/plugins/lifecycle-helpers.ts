@@ -1,5 +1,6 @@
 /**
- * plugin lifecycle auxiliary function: define validate, start stop persist decide, asset clean up and terminal state error aggregate.
+ * Plugin lifecycle helpers: definition validation, enablement persistence, cleanup,
+ * terminal error projection, and PluginSummary construction.
  */
 import {
   HelmError,
@@ -8,11 +9,13 @@ import {
   type PluginDiagnosticError,
   type PluginSummary,
 } from '@helm/protocol';
+import { redactJsonValue } from '../redact.js';
 import type { CapabilityRegistry } from './capability-registry.js';
 import type { PluginTaskTracker } from './tracking.js';
 import type { UiRegistry } from './ui-registry.js';
 import {
   isCrossPlatformAbsolutePath,
+  jsonClone,
   toJsonSafeError,
   type JsonSafeErrorInfo,
 } from './shared.js';
@@ -25,10 +28,10 @@ import { unregisterProviders } from './provider-coordinator.js';
 
 export function assertDefinition(definition: PluginDefinition): void {
   if (!definition || typeof definition.id !== 'string' || definition.id.length === 0) {
-    throw new HelmError('invalid_plugin_definition', 'plugin define missing id', 400);
+    throw new HelmError('invalid_plugin_definition', 'Plugin definition is missing id', 400);
   }
   if (!/^[A-Za-z0-9:_-]+$/.test(definition.id)) {
-    throw new HelmError('invalid_plugin_definition', `plugin id only allows character parent number : _ -:${definition.id}`, 400);
+    throw new HelmError('invalid_plugin_definition', `Plugin id may only contain letters, digits, :, _, or -: ${definition.id}`, 400);
   }
   // Display copy boundary guard: a plain string or a per-locale map with
   // supported locale keys and non-blank copy (same rule for builtin and
@@ -38,7 +41,7 @@ export function assertDefinition(definition: PluginDefinition): void {
     if (value !== undefined && parseNonEmptyLocalizedText(value) === undefined) {
       throw new HelmError(
         'invalid_plugin_definition',
-        `plugin ${definition.id}  ${field} must be display copy (non-empty string or { en, 'zh-CN' } map with non-blank values)`,
+        `Plugin ${definition.id} ${field} must be display copy (non-empty string or { en, 'zh-CN' } map with non-blank values)`,
         400,
         { pluginId: definition.id, field },
       );
@@ -48,28 +51,30 @@ export function assertDefinition(definition: PluginDefinition): void {
     throw new HelmError('invalid_plugin_definition', `plugin ${definition.id} missing definePlugin function`, 400);
   }
   normalizeDependencies(definition);
-  if (
-    definition.clientRoot !== undefined &&
-    (typeof definition.clientRoot !== 'string' ||
-      !isCrossPlatformAbsolutePath(definition.clientRoot) ||
-      definition.clientRoot.split(/[\\/]/).includes('..'))
-  ) {
-    throw new HelmError(
-      'invalid_plugin_definition',
-      `plugin ${definition.id}  clientRoot must be excludes .. segment across platform absolute directory path (POSIX /,Windows symbol or UNC)`,
-      400,
-      { pluginId: definition.id },
-    );
+  for (const field of ['clientRoot', 'prebuiltClientDir'] as const) {
+    const value = definition[field];
+    if (
+      value !== undefined &&
+      (typeof value !== 'string' ||
+        !isCrossPlatformAbsolutePath(value) ||
+        value.split(/[\\/]/).includes('..'))
+    ) {
+      throw new HelmError(
+        'invalid_plugin_definition',
+        `Plugin ${definition.id} ${field} must be a cross-platform absolute directory path without '..' segments (POSIX /, Windows drive, or UNC)`,
+        400,
+        { pluginId: definition.id, field },
+      );
+    }
   }
 }
 
-/** plugin between dependency ID character collection (and plugin id same collection: character parent number : _ -). */
+/** Allowed characters for plugin dependency identifiers (`[A-Za-z0-9:_-]+`). */
 const PLUGIN_DEPENDENCY_ID_PATTERN = /^[A-Za-z0-9:_-]+$/;
 
 /**
- * dependency declaration boundary archive one: optional array, one by one items must be non-empty and match plugin id character collection string;
- * by declaration order dedupe (duplicate is not error, but diagram and manifest only keep a); self dependency is length 1 
- * ring route, in this directly explicit reject. return archive one after list (without dependency when is empty array).
+ * Normalizes and validates plugin `dependencies`: deduplicates in declaration order and rejects
+ * invalid identifiers or self-dependencies (`cycle` of length 1).
  */
 export function normalizeDependencies(definition: PluginDefinition): string[] {
   const deps = definition.dependencies;
@@ -77,7 +82,7 @@ export function normalizeDependencies(definition: PluginDefinition): string[] {
   if (!Array.isArray(deps) || deps.some((d) => typeof d !== 'string' || !PLUGIN_DEPENDENCY_ID_PATTERN.test(d))) {
     throw new HelmError(
       'invalid_plugin_definition',
-      `plugin ${definition.id}  dependencies must be plugin ID string array (only allows character parent number : _ -, unsupported version note symbol)`,
+      `Plugin ${definition.id} dependencies must be an array of plugin IDs (letters, digits, :, _, - only; version specifiers not supported)`,
       400,
       { pluginId: definition.id, dependencies: Array.isArray(deps) ? deps.map((d) => String(d)) : String(deps) },
     );
@@ -88,7 +93,7 @@ export function normalizeDependencies(definition: PluginDefinition): string[] {
     if (dep === definition.id) {
       throw new HelmError(
         'plugin_dependency_cycle',
-        `plugin ${definition.id} declaration self dependency (dependency graph ring route)`,
+        `Plugin ${definition.id} declared a self-dependency cycle`,
         409,
         { pluginId: definition.id, cycle: [definition.id, definition.id] },
       );
@@ -101,10 +106,8 @@ export function normalizeDependencies(definition: PluginDefinition): string[] {
 }
 
 /**
- * dependency graph ring route detect: from start point plugin dependency declaration starting from, along registered plugin dependency edge deep takes precedence,
- * back to start point i.e. into ring. return ring route on plugin ID sequence (do not into ring return undefined). only append trace
- * registered node (start point dependency via startDependencies inject; not registered dependency is enable phase
- * missing error, is not ring).
+ * Detects dependency cycles via DFS along already-registered plugins; returns the cycle path
+ * or `undefined` if acyclic. Unregistered dependencies are ignored here and validated on enable.
  */
 export function findDependencyCycle(
   startPluginId: string,
@@ -136,10 +139,8 @@ export function findDependencyCycle(
 }
 
 /**
- * dependency topology sort (determinism Kahn): input keep register order, only count set inside dependency edge (dependency
- * set outside/not registered plugin edge does not participate sort); same layer point by register order out queue, by dependency first out.
- * input already without ring (register boundary reject ring route); guard against defend honor bottom: if detect to ring, throw
- * plugin_dependency_cycle while is not infinite loop.
+ * Deterministic Kahn topological sort preserving registration order within each layer (dependencies first).
+ * Defensive cycle check throws `plugin_dependency_cycle` instead of spinning forever.
  */
 export function topoSortByDependencies<T>(
   items: T[],
@@ -170,8 +171,6 @@ export function topoSortByDependencies<T>(
       const deps = depsOf.get(dependentId)!;
       deps.delete(id);
       if (deps.size === 0 && !queued.has(dependentId)) {
-        // same layer keep register order: queue items by original register order insert (dependentsOf itself by register order append,
-        // and queued guard against duplicate; many source also unlock when out queue order by unlock order decide, determinism is enough).
         queued.add(dependentId);
         const source = items.find((i) => idOf(i) === dependentId)!;
         pending.push(source);
@@ -182,7 +181,7 @@ export function topoSortByDependencies<T>(
     const stuck = items.filter((i) => !out.includes(i)).map(idOf);
     throw new HelmError(
       'plugin_dependency_cycle',
-      `plugin dependency graph store in ring route, cannot topology sort:${stuck.join(' -> ')}`,
+      `Plugin dependency graph contains a cycle and cannot be sorted: ${stuck.join(' -> ')}`,
       409,
       { pluginIds: stuck },
     );
@@ -192,23 +191,23 @@ export function topoSortByDependencies<T>(
 
 export function assertNotLocked(state: PluginState): void {
   if (state.definition.locked === true) {
-    throw new HelmError('plugin_locked', `plugin ${state.definition.id} already lock, forbidden deactivate/unload`, 403, {
+    throw new HelmError('plugin_locked', `Plugin ${state.definition.id} is locked and cannot be disabled or unregistered`, 403, {
       pluginId: state.definition.id,
     });
   }
 }
 
-/** for outside available = enabled and do not in definePlugin / deactivate transition state. */
+/** Active for external callers = enabled and idle (not in `defining` or `deactivating` transitions). */
 export function assertActive(state: PluginState): void {
   if (!state.enabled || state.phase !== 'idle') {
-    throw new HelmError('plugin_disabled', `plugin ${state.definition.id} not enabled or is now switch enable state`, 409, {
+    throw new HelmError('plugin_disabled', `Plugin ${state.definition.id} is disabled or transitioning`, 409, {
       pluginId: state.definition.id,
       phase: state.phase,
     });
   }
 }
 
-/** cycle inside availability guard: cycle more replace/deactivate in/deactivated one rule expires (doc handle and host asset shared use). */
+/** Guards epoch-bound handles (`doc`, `sessionDoc`, `host` ports) against stale/disabled/disposed cycles. */
 export function assertContextUsable(
   state: PluginState,
   epoch: number,
@@ -217,7 +216,7 @@ export function assertContextUsable(
   isDisposed: boolean,
 ): void {
   if (isDisposed) {
-    throw new HelmError('plugin_host_disposed', 'PluginHost already dispose', 409);
+    throw new HelmError('plugin_host_disposed', 'PluginHost has already been disposed', 409);
   }
   if (
     currentState !== state ||
@@ -227,7 +226,7 @@ export function assertContextUsable(
   ) {
     throw new HelmError(
       'plugin_context_expired',
-      `plugin ${state.definition.id}  ${what} already expires (plugin deactivated or enter new enable cycle)`,
+      `Plugin ${state.definition.id} ${what} has expired (plugin disabled or cycled)`,
       409,
     );
   }
@@ -246,7 +245,7 @@ export function resolveInitialEnabled(
     if (err instanceof HelmError) throw err;
     throw new HelmError(
       'plugin_registration_failed',
-      `plugin ${definition.id} register failed: read durable start stop state when fails:${err instanceof Error ? err.message : String(err)}`,
+      `Plugin ${definition.id} registration failed while reading persisted enablement state: ${err instanceof Error ? err.message : String(err)}`,
       500,
       { pluginId: definition.id },
     );
@@ -254,7 +253,7 @@ export function resolveInitialEnabled(
   if (persisted !== undefined && typeof persisted !== 'boolean') {
     throw new HelmError(
       'plugin_enabled_state_invalid',
-      `plugin ${definition.id} durable start stop state illegal (expectation boolean value, actual:${typeof persisted}), reject register`,
+      `Plugin ${definition.id} has invalid persisted enablement state (expected boolean, got ${typeof persisted})`,
       500,
       { pluginId: definition.id, persisted: String(persisted) },
     );
@@ -263,10 +262,7 @@ export function resolveInitialEnabled(
   return options.enabled !== false;
 }
 
-/**
- * persist start stop state (store not implemented setEnabled when is no side effects memory mechanism).
- * failed explicit reject, by caller decide rollback (enable) or aggregate diagnose (disable).
- */
+/** Persists enablement state when `setEnabled` is wired; rejects on write failure so callers roll back or surface diagnostics. */
 export async function persistEnabled(
   store: PluginConfigStore | undefined,
   state: PluginState,
@@ -278,16 +274,14 @@ export async function persistEnabled(
   } catch (err) {
     throw new HelmError(
       'plugin_enabled_persist_failed',
-      `plugin ${state.definition.id} start stop state persist failed:${err instanceof Error ? err.message : String(err)}`,
+      `Failed to persist enablement state for plugin ${state.definition.id}: ${err instanceof Error ? err.message : String(err)}`,
       500,
       { pluginId: state.definition.id, enabled, persistError: toJsonSafeError(err) },
     );
   }
 }
 
-/**
- * deactivate when clean up service and Provider, release host lifecycle asset, empty capability register table.
- */
+/** Stops services, unregisters providers, releases host handles, and clears registries during disable/cleanup. */
 export async function teardownPlugin(
   state: PluginState,
   opts: { stopServices: boolean },
@@ -323,7 +317,7 @@ export async function teardownPlugin(
   if (stopErrors.length > 0) {
     throw new HelmError(
       'plugin_service_stop_failed',
-      `plugin ${state.definition.id} clean up when service stop failed:${stopErrors.map((e) => e.serviceId).join(', ')}`,
+      `Plugin ${state.definition.id} failed to stop services during cleanup: ${stopErrors.map((e) => e.serviceId).join(', ')}`,
       500,
       {
         pluginId: state.definition.id,
@@ -336,7 +330,7 @@ export async function teardownPlugin(
   if (providerErrors.length > 0) {
     throw new HelmError(
       'plugin_provider_unregister_failed',
-      `plugin ${state.definition.id} clean up when provider failed to uninstall:${providerErrors.map((e) => e.providerId).join(', ')}`,
+      `Plugin ${state.definition.id} failed to unregister providers during cleanup: ${providerErrors.map((e) => e.providerId).join(', ')}`,
       500,
       { pluginId: state.definition.id, providerErrors },
     );
@@ -344,17 +338,14 @@ export async function teardownPlugin(
   if (releaseErrors.length > 0) {
     throw new HelmError(
       'plugin_resource_release_failed',
-      `plugin ${state.definition.id} clean up when host asset release failed (manage protect/listen may leftover, must human core inspect)`,
+      `Plugin ${state.definition.id} failed to release host resources during cleanup (guards/listeners may remain; check kernel logs)`,
       500,
       { pluginId: state.definition.id, releaseErrors },
     );
   }
 }
 
-/**
- * exception archive one is structure plugin diagnose (PluginDiagnosticError):HelmError keep
- * code/status and details, other exception wrap is plugin_execution_failed.
- */
+/** Normalizes any thrown error into a JSON-safe `PluginDiagnosticError` preserving HelmError code/status/details. */
 export function toDiagnosticError(
   err: unknown,
   stage: PluginDiagnosticError['stage'],
@@ -393,7 +384,7 @@ export function wrapRegistrationError(
   }
   return new HelmError(
     'plugin_registration_failed',
-    `plugin ${pluginId} register failed:${err instanceof Error ? err.message : String(err)}`,
+    `Plugin ${pluginId} registration failed: ${err instanceof Error ? err.message : String(err)}`,
     500,
     { pluginId, registerSeq: seq, ...(rollbackError ? { rollbackError } : {}) },
   );
@@ -415,16 +406,38 @@ export function wrapEnableError(
   }
   return new HelmError(
     'plugin_enable_failed',
-    `plugin ${pluginId} enable failed:${err instanceof Error ? err.message : String(err)}`,
+    `Failed to enable plugin ${pluginId}: ${err instanceof Error ? err.message : String(err)}`,
     500,
     { pluginId, ...(rollbackError ? { rollbackError } : {}) },
   );
+}
+
+/** Projects non-secret effective config fields declared in `state.configSchema` (with redaction). */
+export function buildPublicConfig(
+  state: PluginState,
+  rawConfig: Record<string, unknown>,
+  redactText?: (text: string) => string,
+): Record<string, unknown> | undefined {
+  const schema = state.configSchema;
+  if (!schema) return undefined;
+  let hasPublicField = false;
+  const out: Record<string, unknown> = {};
+  for (const [key, field] of Object.entries(schema)) {
+    if (field.secret === true) continue;
+    hasPublicField = true;
+    if (Object.hasOwn(rawConfig, key) && rawConfig[key] !== undefined) {
+      out[key] = jsonClone(rawConfig[key]);
+    }
+  }
+  if (!hasPublicField) return undefined;
+  return redactText ? (redactJsonValue(out, redactText) as Record<string, unknown>) : out;
 }
 
 export function pluginSummaryOf(
   state: PluginState,
   capabilityRegistry: CapabilityRegistry,
   uiRegistry?: UiRegistry,
+  publicConfig?: Record<string, unknown>,
 ): PluginSummary {
   const failed = state.lastError !== undefined;
   const active = state.enabled && state.phase === 'idle';
@@ -444,17 +457,15 @@ export function pluginSummaryOf(
     actions: state.enabled ? capabilityRegistry.getActionIds(state.definition.id) : [],
     tools: state.enabled ? capabilityRegistry.getToolNames(state.definition.id) : [],
     ...(clientHashes !== undefined ? { clientHashes } : {}),
+    ...(publicConfig !== undefined ? { publicConfig } : {}),
   };
 }
 
 export function getActiveEnabledPluginIds(plugins: Map<string, PluginState>): string[] {
   const ids: string[] = [];
   for (const [id, s] of plugins) {
-    // manifest visible want seek enabled+idle: split destroy phase (disable already placement phase=deactivating while
-    // enabled not yet false,teardown until clearRegistrations between) plugin must from
-    // tool/action/routing/UI manifest i.e. when disappear, no longer to already stop service dispatch new request.register and
-    // enable  enabled and idle is sync adjacent placement, missingenabled already placement while phase
-    // not idlestartup phase window, manifest appear when machine do not change.
+    // External catalog visibility requires enabled + idle: during disable teardown (`phase === 'deactivating'`
+    // before `clearRegistrations`), plugins leave tool/action/route/UI lists immediately.
     if (s.enabled && s.phase === 'idle') ids.push(id);
   }
   return ids;
@@ -475,8 +486,7 @@ export async function disposePlugins(
   removeRegistries: (pluginId: string) => void,
 ): Promise<void> {
   const errors: Array<{ pluginId: string; error: JsonSafeErrorInfo }> = [];
-  // inverse dependency topology order split destroy: dependency first dry dependency it plugin stop (dependency it plugin first stop, by dependency
-  // after stop); without dependency closure system plugin keep register order inverse order, and since has behavior consistent.
+  // Tear down in reverse dependency order so dependents stop before their dependencies.
   const ordered = topoSortByDependencies(
     [...plugins.values()],
     (s) => s.definition.id,
@@ -499,7 +509,7 @@ export async function disposePlugins(
   if (errors.length > 0) {
     throw new HelmError(
       'plugin_dispose_failed',
-      `dispose when part plugin clean up failed:${errors.map((e) => e.pluginId).join(', ')}`,
+      `Failed to clean up some plugins during dispose: ${errors.map((e) => e.pluginId).join(', ')}`,
       500,
       { errors },
     );
@@ -507,9 +517,8 @@ export async function disposePlugins(
 }
 
 /**
- * settleLifecycleChanged: start stop persist failed (persistError) and stop error
- * same layer aggregate. three heavy failed (stop + persist + event publish) when with stop diagnose is main chain, the rest
- * JSON-safe archive one after attach details, never static default becomes feature, also never let after error mask first diagnose.
+ * Aggregates stop errors, enablement persistence errors, and `plugin.changed` broadcast errors
+ * without masking primary diagnostics.
  */
 export function settleLifecycleChanged(
   state: PluginState,
@@ -540,7 +549,7 @@ export function settleLifecycleChanged(
   if (persistError && !stopError) {
     throw new HelmError(
       'plugin_enabled_persist_failed',
-      `plugin ${state.definition.id} deactivated, but start stop state persist failed:${persistError.err instanceof Error ? persistError.err.message : String(persistError.err)}`,
+      `Plugin ${state.definition.id} was disabled, but persisting enablement state failed: ${persistError.err instanceof Error ? persistError.err.message : String(persistError.err)}`,
       500,
       {
         pluginId: state.definition.id,
@@ -552,7 +561,7 @@ export function settleLifecycleChanged(
   if (eventError) {
     throw new HelmError(
       'plugin_changed_emit_failed',
-      `plugin ${state.definition.id} completed actual deactivate/remove, but service stop and plugin.changed event publish double double failed`,
+      `Plugin ${state.definition.id} completed disable/removal, but both service stop and plugin.changed emission failed`,
       500,
       { pluginId: state.definition.id, stopError: toJsonSafeError(stopError!.err), ...extras },
     );

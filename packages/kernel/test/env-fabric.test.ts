@@ -1,22 +1,22 @@
 /**
- * across platform node bottom seat (EnvFabric) end-to-end test: real Hub WS gateway + real
- * @helm/node daemon (each connect one proxy independent env RPC server, assert swap proxy i.e. destroy).
+ * Cross-platform node fabric (EnvFabric) end-to-end tests: real Hub WS gateway + real
+ * @helm/node daemon (one isolated env RPC server per connection; destroyed on reconnect/replacement).
  *
- * override:
+ * Covers:
  * 1. NodeRegistry + attachNodeWsGateway + RemoteExecutionEnv + ScopedExecutionEnv:
- *    authentication via and failed (4003),fail-closed without authentication, not registered timeout (4001),
- *    remote file read write (contains envFlushFile real forwarding), remote command streaming output,
- *    cancel pass broadcast kill process, disconnection return unknown(do not retry, does not fall back local),
- *    same node many conversation ScopedExecutionEnv environment isolated (bind set key cannot by one by one invoke env override),
- *    undo hard rule (latency authentication in-flight disconnect after resolve(true) no longer publish old connect),
- *    reader across proxy (assert connect after old readerId do not to new proxy, do not mistakenly read other file).
- * 2. GET /api/nodes,POST /api/nodes/issue(token once return),
- *    DELETE /api/nodes/:id(pinch assert connect + local protect),POST /api/env/exec
- *    (local JSON and stream:true NDJSON frame + offline 409 node_offline + conversation target inherit).
- * 3. conversation bind set remote nodeId after via real model turn invoke bash/read/write/edit in remote takes effect.
+ *    auth approval/rejection (4003), fail-closed without auth callback, registration timeout (4001),
+ *    remote file I/O (including real envFlushFile forwarding), streaming command output,
+ *    cancellation killing remote process trees, mid-command disconnect returning unknown (no retry, no local fallback),
+ *    multi-conversation ScopedExecutionEnv isolation on same node (per-call env cannot spoof bound vars),
+ *    revocation hard barrier (delayed auth disconnect prevents old connection from ever registering),
+ *    cross-generation readers (old readerId never reads from replacement connection).
+ * 2. GET /api/nodes, POST /api/nodes/issue (one-time token return),
+ *    DELETE /api/nodes/:id (cuts connection + local node protection), POST /api/env/exec
+ *    (local JSON & stream:true NDJSON frames + offline 409 node_offline + conversation target inheritance).
+ * 3. Conversation bound to remote nodeId invokes bash/read/write/edit remotely during real model turns.
  */
 
-import { test, describe, it, before, after } from 'node:test'
+import { describe, it, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
 import { mkdtemp, writeFile, readFile } from 'node:fs/promises'
@@ -32,7 +32,6 @@ import {
   attachNodeTunnelGateway,
   createEnvFabric,
   RemoteExecutionEnv,
-  type EnvFabric,
 } from '../src/env/index.js'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { startHub } from '../src/http/index.js'
@@ -47,10 +46,10 @@ import { cleanupDir, makeFauxModels, makeTempDir, sleep as delay } from './helpe
 const bg = BACKGROUND_CONTEXT
 
 // ---------------------------------------------------------------------------
-// base seat
+// Test harness
 // ---------------------------------------------------------------------------
 
-/** pure EnvFabric test base seat (HTTP server + gateway, do not via KernelRuntime). */
+/** Pure EnvFabric test harness (HTTP server + gateways without KernelRuntime). */
 async function startFabricHub(
   authenticate?: (nodeId: string, token: string) => boolean | Promise<boolean>,
   registerTimeoutMs?: number,
@@ -83,7 +82,7 @@ async function startFabricHub(
   }
 }
 
-/** real node daemon (fast reconnect;log static default). */
+/** Real node daemon (fast reconnect; silent logs). */
 async function startNode(opts: {
   url: string
   nodeId: string
@@ -116,31 +115,31 @@ after(async () => {
 // 1. EnvFabric core behavior
 // ---------------------------------------------------------------------------
 
-describe('EnvFabric node connect and remote execute', { timeout: 60_000 }, () => {
-  it('authentication via and reject: correct token register succeeded; error token do not register;fail-closed without authentication reject everything', { timeout: 60_000 }, async () => {
+describe('EnvFabric node connectivity and remote execution', { timeout: 60_000 }, () => {
+  it('auth approval and rejection: valid token registers; invalid token rejected; fail-closed without auth callback', { timeout: 60_000 }, async () => {
     const dir = await mkdtemp(join(rootDir, 'auth-'))
     const TOKEN = 'node-a:secret-a1'
     const hub = await startFabricHub((nodeId, token) => nodeId === 'node-a' && token === TOKEN)
     try {
       const good = await startNode({ url: hub.baseUrl, nodeId: 'node-a', token: TOKEN, dataDir: dir })
-      assert.ok(await good.waitUntilRegistered(), 'correct token should register succeeded')
+      assert.ok(await good.waitUntilRegistered(), 'valid token should register')
       assert.equal(hub.fabric.isOnline('node-a'), true)
       await good.close()
 
       const bad = await startNode({ url: hub.baseUrl, nodeId: 'node-a', token: 'node-a:WRONG', dataDir: dir })
-      assert.equal(await bad.waitUntilRegistered(2_000), false, 'error token must not register')
+      assert.equal(await bad.waitUntilRegistered(2_000), false, 'wrong token must not register')
       assert.equal(hub.fabric.registry.get('node-a'), undefined)
       await bad.close()
     } finally {
       await hub.close()
     }
 
-    // fail-closed: without authentication call back.
+    // Fail-closed: no authenticate callback provided.
     const dir2 = await mkdtemp(join(rootDir, 'noauth-'))
     const hub2 = await startFabricHub()
     try {
       const daemon = await startNode({ url: hub2.baseUrl, nodeId: 'x', token: 'x:t', dataDir: dir2 })
-      assert.equal(await daemon.waitUntilRegistered(2_000), false, 'without authentication call back → reject everything register')
+      assert.equal(await daemon.waitUntilRegistered(2_000), false, 'missing authenticate callback rejects all registrations')
       assert.equal(hub2.fabric.registry.get('x'), undefined)
       await daemon.close()
     } finally {
@@ -148,7 +147,7 @@ describe('EnvFabric node connect and remote execute', { timeout: 60_000 }, () =>
     }
   })
 
-  it('not registered timeout 4001: after connect do not register i.e. by gateway close', { timeout: 60_000 }, async () => {
+  it('unregistered connection times out with 4001 and closes via gateway', { timeout: 60_000 }, async () => {
     const hub = await startFabricHub(() => true, 300)
     try {
       const ws = new WebSocket(`${hub.baseUrl.replace(/^http/, 'ws')}/ws/node`)
@@ -156,13 +155,13 @@ describe('EnvFabric node connect and remote execute', { timeout: 60_000 }, () =>
       await new Promise<void>((resolve) => ws.once('open', () => resolve()))
       ws.on('close', (code) => codes.push(code))
       await delay(900)
-      assert.ok(codes.includes(4001), `not registered connect should with 4001 close (receives ${codes.join(',')})`)
+      assert.ok(codes.includes(4001), `unregistered socket should close with 4001 (got ${codes.join(',')})`)
     } finally {
       await hub.close()
     }
   })
 
-  it('node pass-through tunnel: real HTTP/SSE and POST request body one by one byte via remote loopback', { timeout: 60_000 }, async () => {
+  it('node tunnel: real HTTP/SSE and POST request body byte-for-byte via remote loopback', { timeout: 60_000 }, async () => {
     const nodeData = await mkdtemp(join(rootDir, 'tunnel-node-'))
     const targetBodies: string[] = []
     const target = http.createServer((req, res) => {
@@ -199,7 +198,7 @@ describe('EnvFabric node connect and remote execute', { timeout: 60_000 }, () =>
     }
   })
 
-  it('remote file read write + envFlushFile real forwarding + streaming exec + cancel pass broadcast', { timeout: 60_000 }, async () => {
+  it('remote file I/O + real envFlushFile forwarding + streaming exec + abort propagation', { timeout: 60_000 }, async () => {
     const nodeData = await mkdtemp(join(rootDir, 'rw-node-'))
     const workDir = await mkdtemp(join(rootDir, 'rw-work-'))
     const TOKEN = 'node-rw:secret'
@@ -210,21 +209,21 @@ describe('EnvFabric node connect and remote execute', { timeout: 60_000 }, () =>
       const env = hub.fabric.envFor('node-rw', workDir)
       assert.ok(env instanceof RemoteExecutionEnv)
 
-      // write + flush(real forwarding)+ read back.
+      // Write + flush (real RPC forwarding) + read back.
       const w = await env.writeFile('hello.txt', '你好 helm', bg)
       assert.ok(w.ok, JSON.stringify(w))
       const f = await env.flushFile('hello.txt', bg)
-      assert.ok(f.ok, `envFlushFile should real forwarding succeeded:${JSON.stringify(f)}`)
+      assert.ok(f.ok, `envFlushFile should forward and succeed: ${JSON.stringify(f)}`)
       const r = await env.readTextFile('hello.txt', bg)
       assert.ok(r.ok && r.value === '你好 helm')
 
-      // streaming exec:onOutput by reach order back put.
+      // Streaming exec: onOutput emits in arrival order.
       const chunks: string[] = []
       const exec = await env.exec("printf 'a\\nb\\nc'", { onOutput: (t) => chunks.push(t) }, bg)
       assert.ok(exec.ok && exec.value.exitCode === 0)
       assert.equal(chunks.join(''), 'a\nb\nc')
 
-      // cancel pass broadcast:abort → envAbortExec → node kill the command process tree.
+      // Abort propagation: abort -> envAbortExec -> node kills remote process tree.
       const sentinel = join(workDir, 'cancel-sentinel.txt')
       const controller = new AbortController()
       const running = env.exec(`sleep 30 && touch ${sentinel}`, undefined, withAbortSignal(controller.signal, bg))
@@ -233,8 +232,8 @@ describe('EnvFabric node connect and remote execute', { timeout: 60_000 }, () =>
       const aborted = await running
       assert.ok(!aborted.ok && aborted.error.code === 'aborted')
       await delay(600)
-      assert.ok(!existsSync(sentinel), 'cancel after remote process tree must not store write sentinel')
-      // cancel does not affect after continue command (single command process tree semantics).
+      assert.ok(!existsSync(sentinel), 'aborted remote process tree must not leave sentinel file')
+      // Abort must not break subsequent commands (single-command process tree semantics).
       const after = await env.exec('echo alive', undefined, bg)
       assert.ok(after.ok && after.value.exitCode === 0)
       await daemon.close()
@@ -243,7 +242,7 @@ describe('EnvFabric node connect and remote execute', { timeout: 60_000 }, () =>
     }
   })
 
-  it('disconnection unknown:exec in-flight disconnect explicit report result unknown, never retry, never fall back local', { timeout: 60_000 }, async () => {
+  it('disconnect unknown: in-flight disconnect during exec explicitly reports unknown, never retries or falls back locally', { timeout: 60_000 }, async () => {
     const nodeData = await mkdtemp(join(rootDir, 'disc-node-'))
     const workDir = await mkdtemp(join(rootDir, 'disc-work-'))
     const TOKEN = 'node-disc:secret'
@@ -257,16 +256,16 @@ describe('EnvFabric node connect and remote execute', { timeout: 60_000 }, () =>
       await delay(400)
       await daemon.close()
       const result = await longRun
-      assert.ok(!result.ok, 'disconnection in command must not succeeded')
-      assert.equal(result.error.code, 'unknown', `expectation unknown, obtain to ${JSON.stringify(result)}`)
-      assert.match(result.error.message, /do not automatically retry/)
-      assert.ok(!existsSync(localMarker), 'never fall back local execute')
+      assert.ok(!result.ok, 'command interrupted by disconnect must not succeed')
+      assert.equal(result.error.code, 'unknown', `expected unknown, got ${JSON.stringify(result)}`)
+      assert.match(result.error.message, /not auto-retried/)
+      assert.ok(!existsSync(localMarker), 'must never fall back to local execution')
     } finally {
       await hub.close()
     }
   })
 
-  it('ScopedExecutionEnv: same node many conversation environment isolated; bind set key cannot by one by one invoke env override', { timeout: 60_000 }, async () => {
+  it('ScopedExecutionEnv: per-conversation env isolation on same node; per-call env cannot override bound vars', { timeout: 60_000 }, async () => {
     const nodeData = await mkdtemp(join(rootDir, 'scope-node-'))
     const workDir = await mkdtemp(join(rootDir, 'scope-work-'))
     const TOKEN = 'node-scope:secret'
@@ -276,12 +275,12 @@ describe('EnvFabric node connect and remote execute', { timeout: 60_000 }, () =>
       assert.ok(await daemon.waitUntilRegistered())
       const s1 = hub.fabric.envForTarget({ conversationId: 101, nodeId: 'node-scope', cwd: workDir })
       const s2 = hub.fabric.envForTarget({ conversationId: 202, nodeId: 'node-scope', cwd: workDir })
-      // environment by conversation live together into (fresh).
+      // Env stays isolated per conversation even when sharing a node/cwd.
       await s1.exec('echo "$HELM_CONVERSATION_ID" > who.txt', undefined, bg)
       assert.equal((await readFile(join(workDir, 'who.txt'), 'utf8')).trim(), '101')
       await s2.exec('echo "$HELM_CONVERSATION_ID" > who.txt', undefined, bg)
       assert.equal((await readFile(join(workDir, 'who.txt'), 'utf8')).trim(), '202')
-      // bind set key cannot by one by one invoke env override (guard against fabricate effect domain).
+      // Bound key cannot be spoofed by per-call env overrides.
       await s1.exec('echo "$HELM_CONVERSATION_ID" > who.txt', { env: { HELM_CONVERSATION_ID: '999' } }, bg)
       assert.equal((await readFile(join(workDir, 'who.txt'), 'utf8')).trim(), '101')
       await daemon.close()
@@ -290,7 +289,7 @@ describe('EnvFabric node connect and remote execute', { timeout: 60_000 }, () =>
     }
   })
 
-  it('undo hard rule: latency authentication in-flight disconnect after resolve(true) no longer publish old connect', { timeout: 60_000 }, async () => {
+  it('revocation hard rule: delayed auth resolving true after disconnect never publishes stale connection', { timeout: 60_000 }, async () => {
     const TOKEN = 'node-rev:secret'
     let authDelayMs = 150
     const hub = await startFabricHub(async (nodeId, token) => {
@@ -301,7 +300,7 @@ describe('EnvFabric node connect and remote execute', { timeout: 60_000 }, () =>
       return false
     })
     try {
-      // original WS client manually register(can control when order, without daemon automatically reconnect interference).
+      // Raw WS client registering manually for deterministic timing without daemon auto-reconnect noise.
       const ws = new WebSocket(`${hub.baseUrl.replace(/^http/, 'ws')}/ws/node?nodeId=node-rev`)
       await new Promise<void>((resolve) => ws.once('open', () => resolve()))
       const hubRpc = createBirpc<{
@@ -323,7 +322,7 @@ describe('EnvFabric node connect and remote execute', { timeout: 60_000 }, () =>
               try {
                 cb(JSON.parse(text) as never)
               } catch {
-              /* non- JSON ignore */
+                /* ignore non-JSON */
               }
             })
           },
@@ -338,18 +337,17 @@ describe('EnvFabric node connect and remote execute', { timeout: 60_000 }, () =>
         hostname: 'revoke-probe',
         platform: process.platform,
       })
-      // authentication suspended in (authDelayMs=150): immediately disconnect(simulated removeNode/round swap).
+      // While auth is in flight (authDelayMs=150), immediately revoke/disconnect (simulating removeNode/replacement).
       await delay(50)
       hub.fabric.registry.disconnect('node-rev')
-      // authentication then resolve(true):register must by refuse (register superseded by
-      // revoke/replace), old connect never publish online.
+      // Delayed auth resolves true afterwards: registration must be rejected (superseded), never marking node online.
       const outcome = await registerPromise
-      assert.equal(outcome.ok, false, `late to resolve(true) must not publish:${JSON.stringify(outcome)}`)
+      assert.equal(outcome.ok, false, `delayed auth resolving true must not publish: ${JSON.stringify(outcome)}`)
       assert.match(outcome.reason ?? '', /superseded/)
       await delay(100)
-      assert.equal(hub.fabric.registry.get('node-rev'), undefined, 'register table still offline')
+      assert.equal(hub.fabric.registry.get('node-rev'), undefined, 'registry remains offline')
       assert.equal(hub.fabric.isOnline('node-rev'), false)
-      // undo after completion new register do not subject to affect (epoch already push enter but without in-flight register).
+      // Fresh registration after revocation completes succeeds cleanly (epoch bumped without stuck in-flight auth).
       authDelayMs = 0
       const daemon2 = await startNode({
         url: hub.baseUrl,
@@ -357,24 +355,24 @@ describe('EnvFabric node connect and remote execute', { timeout: 60_000 }, () =>
         token: TOKEN,
         dataDir: await mkdtemp(join(rootDir, 'revoke-d2-')),
       })
-      assert.ok(await daemon2.waitUntilRegistered(), 'undo after completion new register normal')
+      assert.ok(await daemon2.waitUntilRegistered(), 'new registration after revocation succeeds normally')
       await daemon2.close()
       try {
         hubRpc.$close()
       } catch {
-        /* already closure */
+        /* already closed */
       }
       try {
         ws.close()
       } catch {
-        /* already closure */
+        /* already closed */
       }
     } finally {
       await hub.close()
     }
   })
 
-  it('reader across proxy: assert connect after old readerId do not to new proxy (do not mistakenly read other file)', { timeout: 60_000 }, async () => {
+  it('cross-generation reader guard: old readerId after reconnect never reads from replacement connection', { timeout: 60_000 }, async () => {
     const nodeData = await mkdtemp(join(rootDir, 'reader-node-'))
     const workDir = await mkdtemp(join(rootDir, 'reader-work-'))
     await writeFile(join(workDir, 'a.txt'), 'A1\nA2\n')
@@ -386,14 +384,14 @@ describe('EnvFabric node connect and remote execute', { timeout: 60_000 }, () =>
       assert.ok(await daemon.waitUntilRegistered())
       const env = hub.fabric.envFor('node-reader', workDir)
 
-      // one proxy: open a.txt(readerId r1).
+      // Generation 1: open a.txt (readerId r1).
       const opened = await env.openTextLineReader('a.txt', bg)
       assert.ok(opened.ok)
       const line1 = await opened.value.readLine(bg)
       assert.ok(line1.ok && line1.value?.text === 'A1')
 
-      // disconnect (one proxy final, handle r1 destroy)→ new proxy reconnect and open b.txt
-      //(new proxy readerId re- counter,r1 points to b.txt).
+      // Disconnect (generation 1 shuts down, destroying handle r1) -> generation 2 reconnects and opens b.txt
+      // (new generation counter also assigns readerId r1 to b.txt).
       await daemon.close()
       const daemon2 = await startNode({ url: hub.baseUrl, nodeId: 'node-reader', token: TOKEN, dataDir: nodeData })
       assert.ok(await daemon2.waitUntilRegistered())
@@ -401,16 +399,14 @@ describe('EnvFabric node connect and remote execute', { timeout: 60_000 }, () =>
       const openedB = await env2.openTextLineReader('b.txt', bg)
       assert.ok(openedB.ok)
 
-      // old reader again read: must explicit errors, never read to B1(across proxy mistakenly read).
+      // Reading from old reader must fail explicitly and never leak B1 across generations.
       const stale = await opened.value.readLine(bg)
       if (stale.ok) {
-        // other implement under rpc invoke for already close proxy throws (away catch branch) - - that is
-        // explicit failed while non- read to data, same satisfy do not mistakenly read; but read to B1 never allows.
-        assert.notEqual(stale.value?.text, 'B1', 'old proxy reader never read to new proxy file content')
+        assert.notEqual(stale.value?.text, 'B1', 'old generation reader must never read new generation file content')
       } else {
         assert.ok(
           ['unknown', 'invalid', 'not_found', 'aborted'].includes(stale.error.code),
-          `expectation explicit error, obtain to ${JSON.stringify(stale)}`,
+          `expected explicit error, got ${JSON.stringify(stale)}`,
         )
       }
       await daemon2.close()
@@ -419,7 +415,7 @@ describe('EnvFabric node connect and remote execute', { timeout: 60_000 }, () =>
     }
   })
 
-  it('output sink bind set connect proxy: assert connect after old proxy late to output event must not pollute new proxy', { timeout: 60_000 }, async () => {
+  it('output sink bound to generation: late output from old connection never pollutes replacement connection', { timeout: 60_000 }, async () => {
     const nodeData = await mkdtemp(join(rootDir, 'sink-node-'))
     const workDir = await mkdtemp(join(rootDir, 'sink-work-'))
     const TOKEN = 'node-sink:secret'
@@ -427,28 +423,23 @@ describe('EnvFabric node connect and remote execute', { timeout: 60_000 }, () =>
     try {
       const daemon = await startNode({ url: hub.baseUrl, nodeId: 'node-sink', token: TOKEN, dataDir: nodeData })
       assert.ok(await daemon.waitUntilRegistered())
-      // register output sink collect all event.
       const received: Array<{ execId: string; text: string }> = []
       hub.fabric.registry.addOutputSink('node-sink', (event) => received.push({ execId: event.execId, text: event.text }))
       const env = hub.fabric.envFor('node-sink', workDir)
       const r1 = await env.exec('echo old-gen', undefined, bg)
       assert.ok(r1.ok)
       await delay(200)
-      assert.ok(received.some((e) => e.text.includes('old-gen')), 'online when output normal routing')
-      // disconnect: old proxy event channel final.
+      assert.ok(received.some((e) => e.text.includes('old-gen')), 'output routes normally while online')
       await daemon.close()
       await delay(300)
       const countAfterDisconnect = received.length
-      // new proxy reconnect after again execute: event should continue routing (new proxy bind set new sink dispatch path),
-      // and disconnect during without fabricate event reach.
+      // Replacement connection continues routing to registered sink.
       const daemon2 = await startNode({ url: hub.baseUrl, nodeId: 'node-sink', token: TOKEN, dataDir: nodeData })
       assert.ok(await daemon2.waitUntilRegistered())
       const r2 = await env.exec('echo new-gen', undefined, bg)
       assert.ok(r2.ok)
       await delay(300)
-      assert.ok(received.some((e) => e.text.includes('new-gen')), 'new proxy output continue routing to sink')
-      // disconnect during reach event only may is disconnect before late to frame; confirm without old proxy reconnect after fabricate inject
-      //(new-gen before do not add and old-gen without closure execId).
+      assert.ok(received.some((e) => e.text.includes('new-gen')), 'new generation output continues routing to sink')
       void countAfterDisconnect
       await daemon2.close()
     } finally {
@@ -458,10 +449,10 @@ describe('EnvFabric node connect and remote execute', { timeout: 60_000 }, () =>
 })
 
 // ---------------------------------------------------------------------------
-// 2. HTTP routing:/api/nodes and /api/env/exec
+// 2. HTTP routes: /api/nodes and /api/env/exec
 // ---------------------------------------------------------------------------
 
-describe('node manage and env/exec HTTP routing', { timeout: 60_000 }, () => {
+describe('node management and env/exec HTTP routes', { timeout: 60_000 }, () => {
   interface TestApp {
     kernel: KernelRuntime
     hub: Awaited<ReturnType<typeof startHub>>
@@ -514,7 +505,7 @@ describe('node manage and env/exec HTTP routing', { timeout: 60_000 }, () => {
     return { status: res.status, json, text }
   }
 
-  it('GET /api/nodes + issue(token once)+ remove(pinch assert connect,local protect)', { timeout: 60_000 }, async () => {
+  it('GET /api/nodes + issue (one-time token) + remove (disconnects and protects local)', { timeout: 60_000 }, async () => {
     const dir = await mkdtemp(join(rootDir, 'http-nodes-'))
     const app = await openApp(dir)
     try {
@@ -533,21 +524,21 @@ describe('node manage and env/exec HTTP routing', { timeout: 60_000 }, () => {
       const list1 = await call(app, 'GET', '/api/nodes')
       assert.equal(list1.json.length, 2)
       assert.equal(list1.json[1].id, 'http-node')
-      assert.equal(list1.json[1].online, false, 'not on connect offline')
+      assert.equal(list1.json[1].online, false, 'offline before connecting')
 
       const daemon = await startNode({ url: app.hub.url, nodeId: 'http-node', token: issue.json.token, dataDir: dir })
       assert.ok(await daemon.waitUntilRegistered())
       const list2 = await call(app, 'GET', '/api/nodes')
       assert.equal(list2.json[1].online, true)
-      assert.ok(typeof list2.json[1].hostname === 'string' && list2.json[1].hostname.length > 0, 'daemon register on report hostname')
+      assert.ok(typeof list2.json[1].hostname === 'string' && list2.json[1].hostname.length > 0, 'daemon reports hostname upon registration')
 
-      // node.changed event sequence (SSE incremental frame): enable -> remove exactly a contains removed:true;
-      // event is NodeChangedEvent shape ('node' in event), do not fall Custom payload embed set.
+      // node.changed event sequence (SSE incremental frames): connect -> remove emits exactly one removed:true frame;
+      // shaped as NodeChangedEvent ('node' in event), not Custom payload wrapper.
       const nodeEvents: Array<{ node: { id: string }; removed?: boolean; payload?: unknown }> = []
       const releaseEvents = app.kernel.events.subscribe((frame) => {
         const event = frame.event as { type: string; node?: unknown; removed?: unknown; payload?: unknown }
         if (event.type === 'node.changed') {
-          assert.ok('node' in event, `node.changed must be NodeChangedEvent shape, obtain to ${JSON.stringify(event)}`)
+          assert.ok('node' in event, `node.changed must follow NodeChangedEvent shape, got ${JSON.stringify(event)}`)
           nodeEvents.push(event as { node: { id: string }; removed?: boolean })
         }
       })
@@ -561,18 +552,18 @@ describe('node manage and env/exec HTTP routing', { timeout: 60_000 }, () => {
       assert.equal(
         removals.length,
         1,
-        `remove actual node when exactly publish a contains removed:true event (onNodeChanged dedupe after), obtain to ${JSON.stringify(nodeEvents)}`,
+        `removing online node should emit exactly one removed:true event (with onNodeChanged dedupe), got ${JSON.stringify(nodeEvents)}`,
       )
       assert.equal(
         nodeEvents.filter((e) => e.node.id === 'http-node' && e.removed !== true).length,
         0,
-        `remove after must not again publish http-node non- removed event (offline event must by dedupe), obtain to ${JSON.stringify(nodeEvents)}`,
+        `no non-removed offline event should follow remove (deduped), got ${JSON.stringify(nodeEvents)}`,
       )
       for (const e of nodeEvents) {
         assert.equal(e.payload, undefined, 'NodeChangedEvent does not carry payload field')
       }
       const list3 = await call(app, 'GET', '/api/nodes')
-      assert.equal(list3.json.length, 1, 'remove after only remain local')
+      assert.equal(list3.json.length, 1, 'only local node remains after deletion')
 
       const localRemove = await call(app, 'DELETE', '/api/nodes/local')
       assert.equal(localRemove.status, 400)
@@ -584,18 +575,18 @@ describe('node manage and env/exec HTTP routing', { timeout: 60_000 }, () => {
     }
   })
 
-  it('POST /api/env/exec:local JSON, remote stream NDJSON frame, offline 409, conversation target inherit', { timeout: 60_000 }, async () => {
+  it('POST /api/env/exec: local JSON, remote streaming NDJSON frames, offline 409, conversation target inheritance', { timeout: 60_000 }, async () => {
     const dir = await mkdtemp(join(rootDir, 'http-exec-'))
     const app = await openApp(dir)
     try {
-      // local JSON.
+      // Local JSON execution.
       const local = await call(app, 'POST', '/api/env/exec', { command: 'echo hello-env-exec' })
       assert.equal(local.status, 200)
       assert.equal(local.json.ok, true)
       assert.equal(local.json.exitCode, 0)
       assert.ok(local.json.output.includes('hello-env-exec'))
 
-      // offline node:409 node_offline.
+      // Offline node -> 409 node_offline.
       await call(app, 'POST', '/api/nodes/issue', { nodeId: 'offline-node' })
       const offline = await call(app, 'POST', '/api/env/exec', {
         command: 'echo x',
@@ -605,7 +596,7 @@ describe('node manage and env/exec HTTP routing', { timeout: 60_000 }, () => {
       assert.equal(offline.status, 409)
       assert.equal(offline.json.error.code, 'node_offline')
 
-      // remote stream NDJSON:output frame + unique exit final frame (frame protocol output/exit/error).
+      // Remote NDJSON streaming: output frames + single terminal exit frame.
       const nodeData = await mkdtemp(join(rootDir, 'http-exec-node-'))
       const workDir = await mkdtemp(join(rootDir, 'http-exec-work-'))
       const issue = await call(app, 'POST', '/api/nodes/issue', { nodeId: 'stream-node' })
@@ -628,16 +619,15 @@ describe('node manage and env/exec HTTP routing', { timeout: 60_000 }, () => {
         .split('\n')
         .filter((l) => l.length > 0)
         .map((l) => JSON.parse(l))
-      assert.ok(frames.every((f) => ['output', 'exit', 'error'].includes(f.type)), 'frame protocol only output/exit/error')
+      assert.ok(frames.every((f) => ['output', 'exit', 'error'].includes(f.type)), 'frames only use output/exit/error protocol')
       const exits = frames.filter((f) => f.type === 'exit')
-      assert.equal(exits.length, 1, 'exactly a exit final frame')
+      assert.equal(exits.length, 1, 'exactly one exit frame')
       assert.equal(exits[0].ok, true)
       assert.equal(exits[0].exitCode, 0)
       const joined = frames.filter((f) => f.type === 'output').map((f) => f.text).join('')
-      assert.ok(joined.includes('line1') && joined.includes('line2'), `streaming concatenate should contains all output:${joined}`)
+      assert.ok(joined.includes('line1') && joined.includes('line2'), `stream output should include all chunks: ${joined}`)
 
-      // conversation target inherit: create bind set stream-node conversation after, do not carries nodeId/cwd 
-      // exec with conversationId inherit remote target.
+      // Conversation target inheritance: creating a conversation bound to stream-node inherits remote target on exec.
       const conv = await call(app, 'POST', '/api/conversations', {
         nodeId: 'stream-node',
         cwd: workDir,
@@ -651,14 +641,14 @@ describe('node manage and env/exec HTTP routing', { timeout: 60_000 }, () => {
       })
       assert.equal(inherited.status, 200, JSON.stringify(inherited))
       assert.equal(inherited.json.ok, true)
-      assert.ok(inherited.json.output.includes('TARGET'), 'conversation target inherit: remote file in remote read')
+      assert.ok(inherited.json.output.includes('TARGET'), 'conversation target inheritance reads remote file on remote node')
       await daemon.close()
     } finally {
       await app.close()
     }
   })
 
-  it('conversation bind set remote nodeId: real model turn via bash/write/edit/read in remote takes effect', { timeout: 60_000 }, async () => {
+  it('conversation bound to remote nodeId executes bash/write/edit/read on remote node during live model turn', { timeout: 60_000 }, async () => {
     const hubDir = await mkdtemp(join(rootDir, 'conv-hub-'))
     const nodeData = await mkdtemp(join(rootDir, 'conv-node-'))
     const workDir = await mkdtemp(join(rootDir, 'conv-work-'))
@@ -697,7 +687,7 @@ describe('node manage and env/exec HTTP routing', { timeout: 60_000 }, () => {
       const conv = (await convRes.json()) as { id: number; nodeId: string }
       assert.equal(conv.nodeId, 'work-node')
 
-      // remote solely has file: if tool mistakenly run Hub local machine,cat must failed (Hub directory without this file).
+      // File existing only on remote workDir: if executed locally on Hub, cat fails cleanly.
       await writeFile(join(workDir, 'remote-only.txt'), 'REMOTE-ONLY\n')
 
       faux.setResponses([
@@ -713,15 +703,15 @@ describe('node manage and env/exec HTTP routing', { timeout: 60_000 }, () => {
           { stopReason: 'toolUse' },
         ),
         fauxAssistantMessage([fauxToolCall('read', { path: 'written.txt' })], { stopReason: 'toolUse' }),
-        fauxAssistantMessage('all complete'),
+        fauxAssistantMessage('all done'),
       ])
-      await kernel.submitInput(conv.id, 'in remote execute system column tool')
+      await kernel.submitInput(conv.id, 'run remote tools suite')
       await kernel.waitForIdle(conv.id)
 
-      // disk fact assertion (most can rely):write + edit all in remote takes effect.
+      // Disk state assertion: both write and edit ran against the remote target.
       const written = await readFile(join(workDir, 'written.txt'), 'utf8')
-      assert.equal(written, 'written-by-edit-tool-ok', 'write + edit all in remote takes effect')
-      assert.equal(await kernel.getLastAssistantText(conv.id), 'all complete')
+      assert.equal(written, 'written-by-edit-tool-ok', 'write + edit took effect on remote node')
+      assert.equal(await kernel.getLastAssistantText(conv.id), 'all done')
       await daemon.close()
     } finally {
       await hub.close()

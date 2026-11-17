@@ -19,7 +19,12 @@ import type {
   TimelineRendererProps,
   ToolViewProps,
 } from '@helm/protocol'
-import { PluginClientContext, resolveLocalizedText } from '@helm/plugin-client'
+import {
+  PluginClientContext,
+  PluginClientHostContext,
+  resolveLocalizedText,
+  type PluginClientHostPort,
+} from '@helm/plugin-client'
 import { importBuiltinClientModule, mountSharedPluginNamespaces, setBuiltinClientStub } from './helpers/builtin-clients.js'
 
 const e = React.createElement
@@ -98,15 +103,48 @@ function makeSpyCtx(overrides: Partial<SpyCtx> = {}): SpyCtx {
   return Object.assign(base, { screenCalls, splitCalls, actionCalls, artifactCalls, notifyCalls, ...overrides })
 }
 
+function convSummary(id: number, title: string): ConversationSummary {
+  return {
+    id,
+    title,
+    profileId: 'coder',
+    tags: [],
+    cwd: '/tmp',
+    model: '',
+    thinkingLevel: '',
+    status: 'idle',
+    stateChangeSeq: 1,
+    completionSeq: 0,
+    unread: false,
+    pinned: false,
+    pendingAskCount: 0,
+    createdAt: 0,
+    updatedAt: 0,
+  }
+}
+
+const DEFAULT_CONVERSATIONS: ConversationSummary[] = [
+  convSummary(11, '修复构建与单测'),
+  convSummary(12, 'subagent 12'),
+]
+
 async function mount(
   ctx: PluginClientContextType,
   element: React.ReactElement,
+  conversations: ConversationSummary[] = DEFAULT_CONVERSATIONS,
 ): Promise<{ host: HTMLElement; unmount: () => void }> {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
+  const hostPort = { conversations } as unknown as PluginClientHostPort
   await act(async () => {
-    root.render(e(PluginClientContext.Provider, { value: ctx }, element))
+    root.render(
+      e(
+        PluginClientHostContext.Provider,
+        { value: hostPort },
+        e(PluginClientContext.Provider, { value: ctx }, element),
+      ),
+    )
   })
   await act(async () => {})
   return {
@@ -378,5 +416,84 @@ test('zh-CN locale：SuperAgent 组件切换为中文展示文案', { timeout: 6
     assert.match(settingsHost.textContent ?? '', /看门狗会话/)
   } finally {
     unmountSettings()
+  }
+})
+
+test('四处会话表格单元格：有标题时显示 title + #id；占位/缺失时仅显示 #id 不伪造名称', { timeout: 60_000 }, async () => {
+  const spy = makeSpyCtx()
+  const liveConvs = [
+    convSummary(11, '修复构建与单测'),
+    // #12 故意缺失（模拟已删除/归档）
+  ]
+
+  // 1) Hub Status widget active workers table
+  const widget = await mount(spy, e(components.SuperAgentComposerWidget, composerProps()), liveConvs)
+  try {
+    const cells = [...widget.host.querySelectorAll('tbody tr')].map((tr) => tr.querySelector('td'))
+    assert.equal(cells.length, 2)
+    assert.equal(cells[0]?.querySelector('.sa-conv-name')?.textContent, '修复构建与单测', 'widget 展示 #11 标题')
+    assert.equal(cells[0]?.querySelector('.sa-conv-id')?.textContent, '#11', 'widget 展示 #11 ID')
+    assert.equal(cells[1]?.textContent, '#12', 'widget 对缺失会话仅展示 #12')
+    assert.ok(cells[1]?.querySelector('.sa-conv-name') === null, 'widget 对缺失会话不伪造标题')
+  } finally {
+    widget.unmount()
+  }
+
+  // 2) Dispatch Status tool card workers table (含占位标题过滤验证)
+  const placeholderConvs = [
+    convSummary(11, '修复构建与单测'),
+    convSummary(12, '子代理 12'),
+  ]
+  const dispatch = await mount(
+    spy,
+    e(components.SuperAgentDispatchToolView, {
+      callId: 'call-1',
+      toolName: 'dispatch_worker',
+      input: { prompt: '去修构建', profileId: 'coder' },
+      status: 'done',
+      result: { workerConversationId: 11 },
+      structuredOutput: { workerConversationId: 11 },
+      conversationId: 7,
+    }),
+    placeholderConvs,
+  )
+  try {
+    const cells = [...dispatch.host.querySelectorAll('tbody tr')].map((tr) => tr.querySelector('td'))
+    assert.equal(cells.length, 2)
+    assert.equal(cells[0]?.querySelector('.sa-conv-name')?.textContent, '修复构建与单测', 'dispatch 卡展示 #11 标题')
+    assert.equal(cells[0]?.querySelector('.sa-conv-id')?.textContent, '#11', 'dispatch 卡展示 #11 ID')
+    assert.equal(cells[1]?.textContent, '#12', 'dispatch 卡对占位标题仅展示 #12')
+    assert.ok(cells[1]?.querySelector('.sa-conv-name') === null, 'dispatch 卡对占位标题不泄露噪声')
+  } finally {
+    dispatch.unmount()
+  }
+
+  // 3) RecallGraph nodes table & 4) Subscriptions table
+  const screen = await mount(
+    spy,
+    e(components.SuperAgentRecallScreen, {
+      pluginId: 'builtin:superagent',
+      screenId: 'recall-graph',
+      isSplit: false,
+      params: {},
+      setParams: () => {},
+    }),
+    [convSummary(11, '修复构建与单测'), convSummary(12, '子会话 12')],
+  )
+  try {
+    const tables = [...screen.host.querySelectorAll('table')]
+    assert.equal(tables.length, 2, 'RecallGraph 页包含两张表')
+    const recallCells = [...tables[0]!.querySelectorAll('tbody tr')].map((tr) => tr.querySelector('td'))
+    assert.equal(recallCells[0]?.querySelector('.sa-conv-name')?.textContent, '修复构建与单测', 'RecallGraph 表展示 #11 标题')
+    assert.equal(recallCells[0]?.querySelector('.sa-conv-id')?.textContent, '#11', 'RecallGraph 表展示 #11 ID')
+    assert.equal(recallCells[1]?.textContent, '#12', 'RecallGraph 表对子会话占位仅展示 #12')
+
+    const subRows = [...tables[1]!.querySelectorAll('tbody tr')]
+    assert.equal(subRows.length, 1)
+    const workerCell = subRows[0]!.querySelectorAll('td')[1]
+    assert.equal(workerCell?.querySelector('.sa-conv-name')?.textContent, '修复构建与单测', 'Subscriptions 表展示 #11 标题')
+    assert.equal(workerCell?.querySelector('.sa-conv-id')?.textContent, '#11', 'Subscriptions 表展示 #11 ID')
+  } finally {
+    screen.unmount()
   }
 })

@@ -1,5 +1,5 @@
 /**
- * command table: command name → handler. entry cli.ts based on this dispatch; new increase command in this register.
+ * Command registry mapping command names to handlers. New CLI subcommands are registered here.
  */
 import type { CommandContext } from './shared.js';
 import { connectCommand, restartCommand, startCommand, statusCommand, stopCommand } from './lifecycle.js';

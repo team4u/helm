@@ -11,7 +11,13 @@ import { ProfileCard } from './ProfileCard.js'
 import { ProfileDetailDrawer } from './ProfileDetailDrawer.js'
 import { HelmIcon } from '@helm/plugin-client'
 import { assetsApi } from '../lib/api.js'
-import { useHelmStore } from '../lib/store-context.js'
+import {
+  useAuthenticated,
+  useLocationTargets,
+  useOptionalDefaultModelInfo,
+  useProfilesSlice,
+  useStoreActions,
+} from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 
@@ -35,7 +41,11 @@ export function ProfileCenter({
   onCloseSplit,
   inlineDrawer = false,
 }: ProfileCenterProps): React.JSX.Element {
-  const store = useHelmStore()
+  const authenticated = useAuthenticated()
+  const storeDefaultModelInfo = useOptionalDefaultModelInfo()
+  const { profiles } = useProfilesSlice()
+  const { primaryTarget, splitTarget } = useLocationTargets()
+  const { openTarget, closeSplit, refreshAssets, pushNotice } = useStoreActions()
   const { t } = useWebLocale()
   const [query, setQuery] = useState('')
   const [activeTab, setActiveTab] = useState<ProfileCategoryTab>('all')
@@ -46,10 +56,10 @@ export function ProfileCenter({
   } | null>(null)
 
   const effectiveDefaultModelInfo =
-    store.defaultModelInfo !== undefined ? store.defaultModelInfo : fetchedDefaultModel
+    storeDefaultModelInfo !== undefined ? storeDefaultModelInfo : fetchedDefaultModel
 
   useEffect(() => {
-    if (store.defaultModelInfo !== undefined || !store.authenticated) return
+    if (storeDefaultModelInfo !== undefined || !authenticated) return
     let cancelled = false
     void assetsApi
       .getDefaultModel()
@@ -62,9 +72,8 @@ export function ProfileCenter({
     return () => {
       cancelled = true
     }
-  }, [store.authenticated, store.defaultModelInfo])
+  }, [authenticated, storeDefaultModelInfo])
 
-  const profiles = store.profiles ?? []
   const categoryCounts = useMemo(() => buildProfileCategoryCounts(profiles), [profiles])
 
   const filteredProfiles = useMemo(() => {
@@ -74,7 +83,7 @@ export function ProfileCenter({
     })
   }, [profiles, query, activeTab])
 
-  const activeTarget = isSplit ? store.splitTarget : store.primaryTarget
+  const activeTarget = isSplit ? splitTarget : primaryTarget
   const selectedProfileId =
     activeTarget?.kind === 'profiles' ? activeTarget.profileId : undefined
 
@@ -95,9 +104,9 @@ export function ProfileCenter({
         ? { kind: 'profiles' as const, profileId }
         : { kind: 'profiles' as const }
     if (isSplit) {
-      store.openTarget(target, { split: true })
+      openTarget(target, { split: true })
     } else {
-      store.openTarget(target)
+      openTarget(target)
     }
   }
 
@@ -118,8 +127,8 @@ export function ProfileCenter({
 
   const handleProfileSaved = (saved: Profile) => {
     setIsCreatingNew(false)
-    void store.refreshAssets()
-    store.pushNotice({
+    void refreshAssets()
+    pushNotice({
       type: 'notification',
       level: 'info',
       title: t('profiles.notice.savedTitle'),
@@ -130,8 +139,8 @@ export function ProfileCenter({
 
   const handleProfileDeleted = (deletedId: string) => {
     setIsCreatingNew(false)
-    void store.refreshAssets()
-    store.pushNotice({
+    void refreshAssets()
+    pushNotice({
       type: 'notification',
       level: 'info',
       title: t('profiles.notice.deletedTitle'),
@@ -150,11 +159,11 @@ export function ProfileCenter({
       onCloseSplit?.()
       return
     }
-    if (store.splitTarget !== null) {
-      store.closeSplit()
+    if (splitTarget !== null) {
+      closeSplit()
       return
     }
-    store.openTarget({ kind: 'profiles', profileId: selectedProfileId }, { split: true })
+    openTarget({ kind: 'profiles', profileId: selectedProfileId }, { split: true })
   }
 
   return (
@@ -184,7 +193,7 @@ export function ProfileCenter({
             <CloseSplitButton onCloseSplit={onCloseSplit} />
           ) : (
             <SplitToggleButton
-              isSplitActive={store.splitTarget !== null}
+              isSplitActive={splitTarget !== null}
               onToggleSplit={toggleSplit}
             />
           )}

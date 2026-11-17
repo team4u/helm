@@ -1,20 +1,23 @@
 /**
- * pnpm installed dependency closure build-time helper (used only by payload build scripts,
- * never shipped as a runtime artifact).
+ * Build-time helper for pnpm installed dependency closure (shared by payload build and desktop assemble-hub;
+ * used only by build scripts and never included in runtime artifacts).
  *
- * mechanism:pnpm each package parse result (contains peer match for) with symlink hang in package real directory
- * node_modules under - - from any package directory one by one dependency realpath i.e. can restore real dependency graph, no need to heavy compute
- * version choose. all function only read, never write repository.
+ * Mechanism: pnpm attaches each package's resolved dependencies (including peer matches) as symlinks
+ * under the real package directory's node_modules — walking dependency realpaths from any package
+ * directory reconstructs the actual dependency graph without recomputing version resolution.
+ * All functions are read-only and never write to the repository.
  */
 import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 
 /**
- * parse a certain package directory under a dependency real directory and package.json(optional missing return null, must choose missing return error).
+ * Resolve a dependency's real directory and package.json under a package directory
+ * (returns null when optional and missing; returns an error object when required and missing).
  *
- * parse rule and Node consistent: from package real directory one by one layer on trace node_modules- -workspace package dependency in
- * itself node_modules under;.pnpm virtual clap shop inside package dependency is same layer brother symlink
- * (.pnpm/<n>@<v>/node_modules/<sibling>, do not in <n> itself directory in).
+ * Resolution matches Node: walk upward through node_modules from the package's real directory —
+ * workspace package dependencies live under their own node_modules, while dependencies of packages
+ * inside the .pnpm virtual store are sibling symlinks (.pnpm/<n>@<v>/node_modules/<sibling>,
+ * outside <n>'s own directory).
  */
 export function resolveDepRealDir(fromPkgDir, name, optional) {
   try {
@@ -28,22 +31,22 @@ export function resolveDepRealDir(fromPkgDir, name, optional) {
           const realDir = realpathSync(direct);
           return { realDir, pkgJson: JSON.parse(readFileSync(path.join(realDir, 'package.json'), 'utf-8')) };
         }
-      } catch { /* this layer without this dependency, continue on trace */ }
+      } catch { /* dependency not at this level; continue walking upward */ }
       const parent = path.dirname(cur);
       if (parent === cur) break;
       cur = parent;
     }
-    throw new Error('do not in any node_modules parse tier inside');
+    throw new Error('not found in any node_modules resolution level');
   } catch {
     if (optional) return null;
-    return { error: `dependency ${name} not installed at ${fromPkgDir}(first pnpm install)` };
+    return { error: `dependency ${name} is not installed at ${fromPkgDir} (run pnpm install first)` };
   }
 }
 
 /**
- * produce dependency manifest:dependencies(must must)+ optionalDependencies(platform optional)+
- * peerDependencies(peerDependenciesMeta.optional mark record treated as optional, not installed then skip;
- * the rest peer is runtime must must, missing explicit errors).
+ * Build production dependency entries: dependencies (required) + optionalDependencies (platform-optional) +
+ * peerDependencies (marked optional by peerDependenciesMeta.optional and skipped if uninstalled;
+ * remaining peers are required at runtime and fail explicitly if missing).
  */
 export function prodDepEntries(pkgJson) {
   const meta = pkgJson.peerDependenciesMeta ?? {};
@@ -56,12 +59,12 @@ export function prodDepEntries(pkgJson) {
   return out;
 }
 
-/** extreme simple semver satisfies: support precise / ^ / ~ / >= / *(only build phase override decide use, mistakenly judge direction security). */
+/** Minimal semver satisfies check supporting exact / ^ / ~ / >= / <= / * (for build-time override decisions only; safe false-negatives). */
 export function looseSatisfies(version, range) {
   if (range === '*' || range === '' || range === 'latest') return true;
   const clean = (v) => v.replace(/^[=v\s]+/, '');
   if (range.includes(' ')) {
-    // re- together scope (such as ">=1 <2"): all condition also satisfy (ignore || of outside rare form, such as fall back false).
+    // Compound range (e.g. ">=1 <2"): all conditions must hold (rare || forms fall back to false).
     return range.split(/\s+/).every((part) => looseSatisfies(version, part));
   }
   const v = clean(version).split('.').map(Number);
@@ -81,13 +84,14 @@ export function looseSatisfies(version, range) {
 const cmp = (a, b) => (a[0] - b[0]) || (a[1] - b[1]) || ((a[2] ?? 0) - (b[2] ?? 0));
 
 /**
- * scan closed package inside and dependency conflict peer declaration:npm by default strictly peer parse (ERESOLVE),
- * pnpm install yet allows (such as chord peerOptional pin ws@8.21.0 while repository lock 8.22.1).
- * return Map<peerName, rootVersion> - - as dist  package.json  overrides
- * (value constant equals directly dependency precise version, conforms to npmdirectly dependency override must same specrule).
+ * Scan the closure for peer declarations that conflict with root dependencies: npm enforces strict
+ * peer resolution (ERESOLVE) by default, whereas pnpm permits wider peer ranges (e.g. chord pins
+ * peerOptional ws@8.21.0 while the repo locks 8.22.1).
+ * Returns Map<peerName, rootVersion> for dist root package.json overrides
+ * (always equal to the exact version pinned in root dependencies, per npm's rule that direct-dep overrides must match their spec).
  */
 export function scanPeerOverrides(rootEntries) {
-  // rootEntries: [{ name, version, fromPkgDir }](dependency + parse start point).
+  // rootEntries: [{ name, version, fromPkgDir }] (root dependencies + resolution starting points).
   const rootVersion = new Map(rootEntries.map((e) => [e.name, e.version]));
   const overrides = new Map();
   const visited = new Set();
@@ -98,8 +102,8 @@ export function scanPeerOverrides(rootEntries) {
     visited.add(realDir);
     for (const [peerName, spec] of Object.entries(pkgJson.peerDependencies ?? {})) {
       const root = rootVersion.get(peerName);
-      // only handle hold has name: version i.e. eventually override value (npm side all tree unify to version,
-      // and pnpm closed package actual match for consistent - -pnpm correct is use version satisfy these peer).
+      // Only emit overrides for root-pinned packages (unifies the whole npm tree to the exact
+      // version already verified to satisfy these peers in the pnpm closure).
       if (root !== undefined && !looseSatisfies(root, spec)) overrides.set(peerName, root);
     }
     for (const { name: depName, optional } of prodDepEntries(pkgJson)) {

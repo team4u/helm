@@ -1,16 +1,16 @@
 /**
- * plugins init --template app foot manually frame test (unit Profile, do not start real Hub).
+ * Tests for `plugins init --template app` scaffolding (unit tier, no real Hub).
  *
- * override:
- * - template name validate:app subject to support, illegal value reject and column out all legal template;
- * - generate content:plugin.json(clientRoot/should use naming), backend (public doc + double Schema action +
- *   ctx.ui.screen + sidebar entry), frontend (@helm/plugin-client host original language), zero Emoji;
- * - end-to-end (honest: true code, zero mock doctor): for generate directory run real doctorPluginDir
- *   four phase self inspect, and via real PluginHost + createAppsPlugin  validate action (doctor port
- *   direct connect real doctorPluginDir) assertion ok:true; same link assertion full template such as report missing_app_screen.
+ * Covers:
+ * - template name validation: accepts `app`, rejects invalid names while listing valid templates;
+ * - generated artifacts: `plugin.json` (clientRoot/app naming), backend (public doc + dual-schema actions +
+ *   ctx.ui.screen + sidebar shortcut), frontend (@helm/plugin-client host primitives), zero Emoji;
+ * - end-to-end (honesty rule: real code, zero mock doctor): runs real `doctorPluginDir` 4-stage check,
+ *   then validates through real `PluginHost` + `createAppsPlugin` validate action (ok:true),
+ *   and verifies `full` template reports `missing_app_screen`.
  *
- * across package import note: and web test directly import kernel source code same mechanism (tsx source level parse, only test consume),
- * does not introduce @helm/cli for @helm/kernel runtime dependency.
+ * Cross-package imports: matches web tests importing kernel source (tsx source-level resolution in tests only),
+ * adding no runtime dependency from `@helm/cli` to `@helm/kernel`.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -29,16 +29,16 @@ import {
   useTempDir,
 } from './helpers/cli-harness.js'
 
-/** Emoji troubleshoot (contains common use table situation and symbol zone segment; generate text proposal must is zero Emoji). */
+/** Emoji pattern (common emoticon and symbol ranges; generated text must contain zero Emoji). */
 const EMOJI_PATTERN = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}]/u
 
-/** generate directory inside all text file relative path (emoji scan use). */
+/** Relative paths of all generated text files for Emoji scanning. */
 async function scaffoldFiles(dir: string): Promise<string[]> {
   const entries = await fsp.readdir(path.join(dir, 'client'))
   return ['plugin.json', 'index.ts', 'README.md', ...entries.map((e) => `client/${e}`)]
 }
 
-/** memory doc store(and kernel apps-plugin test same contract, only test inside use). */
+/** In-memory doc store (matches kernel apps-plugin test contract; test-only). */
 class MemoryDocStore implements PluginDocStore {
   private values = new Map<string, unknown>()
   get<T>(key: string, initial: T): T {
@@ -64,8 +64,8 @@ interface ValidateResult {
 }
 
 /**
- * real apps validate link: real PluginHost register builtin:apps and enable, its host plugins
- * port doctor direct connect real doctorPluginDir(and Hub produce path the same implement, only exempt start HTTP Hub).
+ * Real apps validate chain: real PluginHost registers and enables builtin:apps, with host
+ * plugins.doctor connected directly to real doctorPluginDir (same implementation as Hub production path, without starting HTTP Hub).
  */
 async function validateViaRealAppsPlugin(dir: string): Promise<ValidateResult> {
   const dataDir = await makeTempDir('helm-cli-scaffold-validate-')
@@ -93,7 +93,7 @@ async function validateViaRealAppsPlugin(dir: string): Promise<ValidateResult> {
   }
 }
 
-test('plugins init --template app: template name validate and produce out manifest', { timeout: 60_000 }, async (t) => {
+test('plugins init --template app: template validation and output file list', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-cli-app-')
   const env = makeCliEnv('http://127.0.0.1:1', dataDir)
   const r = await runCliCaptured(['plugins', 'init', 'desk-app', '--template', 'app', '--json'], env)
@@ -102,19 +102,19 @@ test('plugins init --template app: template name validate and produce out manife
   assert.equal(body.pluginId, 'desk-app')
   assert.equal(body.template, 'app')
   for (const f of ['plugin.json', 'index.ts', 'tsconfig.json', 'client/index.tsx', 'client/styles.css', 'README.md']) {
-    assert.ok(body.files.includes(f), `produce out should contains ${f}:${JSON.stringify(body.files)}`)
+    assert.ok(body.files.includes(f), `output should include ${f}: ${JSON.stringify(body.files)}`)
   }
-  // app template after continue step directly points to apps closed ring (independent of publish to host i.e. can verify)
+  // app template next steps point directly to apps workflow (verifiable locally without publishing)
   assert.ok(body.nextSteps.some((s) => s.startsWith('helm apps validate ')), JSON.stringify(body.nextSteps))
   assert.ok(body.nextSteps.some((s) => s.startsWith('helm apps publish ')))
 
-  // illegal template value reject, and errors column out all legal template
+  // Invalid template rejected while listing all valid templates
   const bad = await runCliCaptured(['plugins', 'init', 'bad-tpl-app', '--template', 'webapp', '--json'], env)
   assert.notEqual(bad.code, 0)
   assert.ok(bad.err.includes('minimal') && bad.err.includes('full') && bad.err.includes('app'))
 })
 
-test('plugins init --template app: backend and frontend content contract', { timeout: 60_000 }, async (t) => {
+test('plugins init --template app: backend and frontend content contracts', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-cli-app-')
   const r = await runCliCaptured(['plugins', 'init', 'desk-app', '--template', 'app', '--json'], makeCliEnv('http://127.0.0.1:1', dataDir))
   assert.equal(r.code, 0, r.err)
@@ -127,66 +127,66 @@ test('plugins init --template app: backend and frontend content contract', { tim
     clientRoot: string
   }
   assert.equal(manifest.id, 'desk-app')
-  assert.equal(manifest.name, 'desk-app should use')
+  assert.equal(manifest.name, 'desk-app App')
   assert.equal(manifest.main, 'index.ts')
   assert.equal(manifest.clientRoot, './client')
 
   const index = await fsp.readFile(path.join(dir, 'index.ts'), 'utf8')
-  // ctx.doc public durable document (public supply frontend subscribe)+ write after flush
-  assert.ok(index.includes('ctx.doc<'), 'should declaration type public doc')
+  // ctx.doc public persistent document (for frontend subscription) + flush after write
+  assert.ok(index.includes('ctx.doc<'), 'should declare typed public doc')
   assert.ok(index.includes('{ public: true }'), 'doc should be public')
-  assert.ok(index.includes('.flush()'), 'write operation after should flush')
-  // double Schema action (input+output missing one will in doctor register phase by refuse)
+  assert.ok(index.includes('.flush()'), 'write handlers should flush')
+  // Dual-schema actions (omitting input/output fails at doctor register)
   assert.ok(index.includes("id: 'add_item'") && index.includes("id: 'set_done'"))
   assert.ok(index.includes('inputSchema') && index.includes('outputSchema'))
   assert.ok(index.includes('exposeAsTool: true'))
-  // full-stack should use hard want seek:screen main view + sidebar direct reach entry
+  // Full-stack app requirement: main screen + sidebar shortcut
   assert.ok(index.includes('ctx.ui.screen('))
   assert.ok(index.includes("client: { module: 'index.tsx', export: 'MainScreen' }"))
   assert.ok(index.includes('ctx.ui.sidebarItem('))
-  assert.ok(index.includes("target: 'screen:desk-app/main'"), 'sidebar entry should points to this plugin screen')
+  assert.ok(index.includes("target: 'screen:desk-app/main'"), 'sidebar entry should target this plugin screen')
 
   const client = await fsp.readFile(path.join(dir, 'client', 'index.tsx'), 'utf8')
   for (const primitive of ['Screen', 'ScreenSection', 'DataTable', 'KvGrid', 'Checkbox', 'usePluginDoc', 'usePluginContext']) {
-    assert.ok(client.includes(primitive), `frontend should use host original language/sharing Hook ${primitive}`)
+    assert.ok(client.includes(primitive), `frontend should use host primitive/hook ${primitive}`)
   }
-  assert.ok(client.includes('export function MainScreen'), 'frontend should export MainScreen and screen declaration consistent')
-  assert.ok(!/\b(font-medium|text-subtle|text-xs)\b/.test(client), 'must not leftover fake Tailwind class name')
-  assert.ok(client.includes("'items'"), 'frontend subscribe same name public doc')
+  assert.ok(client.includes('export function MainScreen'), 'frontend should export MainScreen matching screen declaration')
+  assert.ok(!/\b(font-medium|text-subtle|text-xs)\b/.test(client), 'must not contain pseudo-Tailwind class names')
+  assert.ok(client.includes("'items'"), 'frontend subscribes to matching public doc')
 
   const css = await fsp.readFile(path.join(dir, 'client', 'styles.css'), 'utf8')
-  assert.ok(css.includes('var(--'), 'patch fill style should away host CSS variable')
+  assert.ok(css.includes('var(--'), 'extra styles should use host CSS variables')
 
-  // zero Emoji iron rule (all generate file scan)
+  // Zero-Emoji invariant across all generated files
   for (const f of await scaffoldFiles(dir)) {
     const text = await fsp.readFile(path.join(dir, f), 'utf8')
-    assert.ok(!EMOJI_PATTERN.test(text), `generate file ${f} must not contains Emoji`)
+    assert.ok(!EMOJI_PATTERN.test(text), `generated file ${f} must not contain Emoji`)
   }
 })
 
-test('plugins init --template app end-to-end: real doctor four phase + real apps validate via', { timeout: 60_000 }, async (t) => {
+test('plugins init --template app end-to-end: real 4-stage doctor + real apps validate pass', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-cli-app-')
   const r = await runCliCaptured(['plugins', 'init', 'eval-app', '--template', 'app', '--json'], makeCliEnv('http://127.0.0.1:1', dataDir))
   assert.equal(r.code, 0, r.err)
   const { dir } = JSON.parse(r.out) as { dir: string }
 
-  // real doctor:manifest/backend/register/client four phase + screen catch
+  // Real doctor: manifest/backend/register/client 4 stages + screen capture
   const report = await doctorPluginDir(dir, { buildProvider: createPluginBuildProvider() })
-  assert.ok(report.ok, `doctor should via:${JSON.stringify(report.checks)}`)
+  assert.ok(report.ok, `doctor should pass: ${JSON.stringify(report.checks)}`)
   assert.deepEqual(
     report.checks.map((c) => c.id),
     ['manifest', 'backend', 'register', 'client'],
   )
   assert.deepEqual(report.screens, ['main'])
 
-  // real builtin:apps validate action (doctor port direct connect real implement)
+  // Real builtin:apps validate action (doctor port wired directly to real implementation)
   const validation = await validateViaRealAppsPlugin(dir)
   assert.equal(validation.ok, true, JSON.stringify(validation.checks))
   assert.deepEqual(validation.screenIds, ['main'])
   assert.equal(validation.screenBasis, 'host-doctor')
 })
 
-test('compare:full template doctor via but apps validate such as report missing_app_screen', { timeout: 60_000 }, async (t) => {
+test('comparison: full template passes doctor but apps validate reports missing_app_screen', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-cli-app-')
   const r = await runCliCaptured(['plugins', 'init', 'panel-only', '--template', 'full', '--json'], makeCliEnv('http://127.0.0.1:1', dataDir))
   assert.equal(r.code, 0, r.err)
@@ -194,11 +194,11 @@ test('compare:full template doctor via but apps validate such as report missing_
 
   const report = await doctorPluginDir(dir, { buildProvider: createPluginBuildProvider() })
   assert.ok(report.ok)
-  assert.deepEqual(report.screens, [], 'full template only register workbenchPanel, do not declaration screen')
+  assert.deepEqual(report.screens, [], 'full template registers workbenchPanel only and declares no screen')
 
   const validation = await validateViaRealAppsPlugin(dir)
-  assert.equal(validation.ok, false, 'full template is not full-stack should use,validate should failed')
+  assert.equal(validation.ok, false, 'full template is not a full-stack app, so validate must fail')
   const missing = validation.checks.find((c) => c.id === 'missing_app_screen')
-  assert.ok(missing?.error, 'should contain missing_app_screen failed items')
+  assert.ok(missing?.error, 'should include missing_app_screen failure check')
   assert.equal(missing.error.code, 'missing_app_screen')
 })

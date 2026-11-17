@@ -16,8 +16,33 @@ import { PluginUiView } from '../ui/PluginUiView.js'
 import { collectSlotItems } from '../ui/plugin-slot-model.js'
 import { matchesUiScope, type HelmStoreValue } from './types.js'
 
-/** 从真实 store 构造宿主端口（HelmStoreProvider 每次 store 变化重建，消费方仅依赖稳定具名函数）。 */
-export function createPluginClientHostPort(store: HelmStoreValue): PluginClientHostPort {
+export type PluginClientHostStoreInput = Pick<
+  HelmStoreValue,
+  | 'authenticated'
+  | 'theme'
+  | 'conversations'
+  | 'conversationDetails'
+  | 'conversationLives'
+  | 'pendingAsks'
+  | 'loadErrors'
+  | 'plugins'
+  | 'groupedUi'
+  | 'pluginDocs'
+  | 'ensurePluginDoc'
+  | 'getPluginSessionDoc'
+  | 'subscribeSessionDoc'
+  | 'getSessionDocState'
+  | 'invokePluginAction'
+  | 'openTarget'
+  | 'setActiveModal'
+  | 'setWorkbenchOpen'
+  | 'setWorkbenchTab'
+  | 'pushNotice'
+  | 'loadConversationDetail'
+>
+
+/** 从真实 store 构造宿主端口（仅在端口所依赖的切片变化时重建，消费方仅依赖稳定具名函数）。 */
+export function createPluginClientHostPort(store: PluginClientHostStoreInput): PluginClientHostPort {
   return {
     authenticated: store.authenticated,
     theme: store.theme,

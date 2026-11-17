@@ -1,16 +1,16 @@
 /**
- * RuntimeBootstrap:KernelRuntime start self raise environment (from KernelRuntime split out).
+ * RuntimeBootstrap: startup environment bootstrapping for `KernelRuntime` (extracted from `KernelRuntime`).
  *
- * responsibility:
- * - parse and ensure data directory (dataDir);
- * - open SQLite database (HelmDatabase) and load global metadata (HelmStore);
- * - instantiate ProviderService and CredentialService, warm up API Key cache;
- * - construct motion state model set (Models) and cache store (ModelsStore);
- * - open bottom seat durable execute Harness and connect models/redact motion state insert slot.
+ * Responsibilities:
+ * - Resolve and ensure the data directory (`dataDir`);
+ * - Open the SQLite database (`HelmDatabase`) and load global metadata (`HelmStore`);
+ * - Instantiate `ProviderService` and `CredentialService`, warming the API key cache;
+ * - Construct the dynamic model catalog (`Models`) and cache store (`ModelsStore`);
+ * - Open the underlying durable execution `Harness` and wire dynamic `models`/`redact` slots.
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import type { Models, ModelsStore } from '@earendil-works/pi-ai'
+import type { Models, ModelsStore, Provider } from '@earendil-works/pi-ai'
 import { Harness, createRegistry, type Registry, type SessionEnd } from '@earendil-works/pi-durable'
 import { HelmError } from '@helm/protocol'
 import { CredentialService, ProviderService, ensureDataDir, resolveDataDir } from '../services/index.js'
@@ -28,7 +28,7 @@ import { HelmStore } from './store.js'
 import type { ConversationTracker } from './conversations.js'
 
 export interface KernelBootOptions {
-  /** Hub platform fact inject (test use; default process.platform). */
+  /** Injected Hub platform fact (for tests; defaults to `process.platform`). */
   hubPlatform?: () => string | undefined
   dataDir?: string
   model?: string
@@ -36,17 +36,22 @@ export interface KernelBootOptions {
   hubUrl?: string
   autoResume?: boolean
   models?: Models
+  /**
+   * Initial runtime providers injected alongside built-in providers before plugin activation
+   * (mutually exclusive with `models`).
+   */
+  providers?: ReadonlyArray<Provider>
   nodeUpgradeTimeoutMs?: number
-  /** together skill scan machine level sharing source (default defaultExternalSkillRoots(), i.e.
-   * ~/.agents/skills; pass empty array can fully isolated, test use). */
+  /** Machine-level shared skill roots scanned together (defaults to `defaultExternalSkillRoots()`, i.e.
+   * `~/.agents/skills`; pass `[]` for full test isolation). */
   externalSkillRoots?: readonly string[]
   /**
-   * plugin build port (client.tsx compile + external plugin TS transpile): by produce product composition root (hub)
-   * inject by default implement (@helm/plugin-build); kernel does not carry build tool. missing when related capability
-   * explicit reject (unsupported_client_build / unsupported_backend_ts_build).
+   * Plugin build port (`client.tsx` bundling + external plugin TS transpilation): injected with default
+   * implementation (`@helm/plugin-build`) by the composition root (`hub`); kernel carries no bundler.
+   * Rejects explicitly when missing (`unsupported_client_build` / `unsupported_backend_ts_build`).
    */
   buildProvider?: PluginBuildProvider
-  /** optional diagnose channel sink(receive kernel redaction after internal error/alert; default output to console.error). */
+  /** Optional diagnostic sink (receives redacted internal errors/warnings; defaults to `console.error`). */
   onDiagnostic?: KernelDiagnosticSink
 }
 
@@ -72,11 +77,18 @@ export interface BootstrappedKernelContext {
 }
 
 /**
- * self raise kernel durable store and Harness execute engine.
+ * Bootstrap durable kernel storage and the `Harness` execution engine.
  */
 export async function bootstrapKernelRuntime(
   options: KernelBootOptions = {},
 ): Promise<BootstrappedKernelContext> {
+  if (options.models !== undefined && options.providers !== undefined) {
+    throw new HelmError(
+      'validation_error',
+      'KernelRuntimeOptions.models and KernelRuntimeOptions.providers are mutually exclusive',
+      400,
+    )
+  }
   const dataDir = resolveDataDir(options.dataDir)
   await ensureDataDir(dataDir)
   const database = await openHelmDatabase(dataDir)
@@ -102,7 +114,7 @@ export async function bootstrapKernelRuntime(
     emitDiagnostic({
       level: 'error',
       source,
-      message: source === 'store' ? 'HelmStore persist failed' : 'Harness because lead to life store fault close',
+      message: source === 'store' ? 'HelmStore persistence failed' : 'Harness closed due to fatal storage fault',
       error,
     })
   }
@@ -217,7 +229,8 @@ export async function bootstrapKernelRuntime(
 }
 
 /**
- * ensure initial entry conversation (#1 bear load, person assist) already create and accept manage.
+ * Ensure the initial entry conversation (`#1` host assistant) is created and registered for tracking.
+ * Note: initial title `'person assist'` is preserved for existing integration test compatibility.
  */
 export async function ensureInitialConversation(deps: {
   harness: Harness
@@ -265,7 +278,7 @@ export async function ensureInitialConversation(deps: {
 }
 
 /**
- * restore and align not complete conversation state machine metadata.
+ * Recover and align metadata for incomplete conversations on startup.
  */
 export async function recoverExistingConversations(deps: {
   conversations: {
@@ -303,7 +316,7 @@ export async function recoverExistingConversations(deps: {
 }
 
 /**
- * runtime close asset release and persist refresh stream process.
+ * Shutdown resource cleanup and persistence flush pipeline.
  */
 export async function teardownKernelRuntime(deps: {
   modelsRegistry: {
@@ -346,9 +359,9 @@ export async function teardownKernelRuntime(deps: {
   }
   emitDiagnostic?: KernelDiagnosticEmitter
 }): Promise<void> {
-  // each step independent isolated: any one step failed only record and continue closure stop the rest asset (otherwise harness/store/
-  // database/events  close by skip,SQLite handle leak leak); all execute completely after unify on throw,
-  // never stream report succeeded closure stop.
+  // Each step is isolated: a failure in one step is recorded while teardown continues closing remaining
+  // resources (preventing skipped harness/store/database/events closes and SQLite handle leaks). All failures
+  // surface together at the end so shutdown never silently claims success.
   const emitDiagnostic = deps.emitDiagnostic ?? createDiagnosticEmitter()
   const failures: string[] = []
   const step = async (name: string, run: () => Promise<void>): Promise<void> => {
@@ -359,7 +372,7 @@ export async function teardownKernelRuntime(deps: {
       emitDiagnostic({
         level: 'error',
         source: 'teardown',
-        message: `teardown step ${name} failed (continue closure stop the rest asset)`,
+        message: `Teardown step '${name}' failed (continuing to close remaining resources)`,
         error,
       })
     }
@@ -370,14 +383,14 @@ export async function teardownKernelRuntime(deps: {
   await step('nodes.dispose', () => deps.nodes.dispose())
   await step('assetReloader.waitForInflight', () => deps.assetReloader.waitForInflight())
   await step('modelsRegistry.dispose', () => deps.modelsRegistry.dispose())
-  // first row close Harness: now pluginHost,envFabric,HelmStore and managed token still online,
-  // run in GenerationTask / ToolTask via writeAtClose() retreat back pending(do not write aborted,
-  // do not count restarts), supply under time start original restore.
+  // Close Harness first while pluginHost, envFabric, HelmStore, and managed tokens are still online:
+  // in-flight GenerationTask/ToolTask revert cleanly to pending via writeAtClose() (not marked aborted,
+  // and not counted toward restarts) so they resume cleanly on next startup.
   await step('harness.close', () => deps.harness.close(BACKGROUND_CONTEXT))
   await step('settledInflight', () => deps.settledInflight())
   deps.tracker.close()
   await step('pluginHost.dispose', () => deps.pluginHost?.dispose() ?? Promise.resolve())
-  // arrange empty plugin stop window inside arrange compute call back, guard against write and store.close race.
+  // Drain callbacks scheduled during the pluginHost stop window to avoid racing store.close.
   await step('settledInflight#2', () => deps.settledInflight())
   await step('nodeForward.close', () => deps.nodeForward?.close() ?? Promise.resolve())
   await step('envFabric.dispose', () => deps.envFabric.dispose())
@@ -391,7 +404,7 @@ export async function teardownKernelRuntime(deps: {
     emitDiagnostic({
       level: 'error',
       source: 'teardown',
-      message: 'teardown step store.close failed (continue closure stop the rest asset)',
+      message: `Teardown step 'store.close' failed (continuing to close remaining resources)`,
       error,
     })
   }
@@ -405,12 +418,12 @@ export async function teardownKernelRuntime(deps: {
     if (storeError !== undefined) {
       throw new HelmError(
         'store_flush_failed',
-        `on exit persist failed:${String(storeError)}` + (detail === '' ? '' : `; the rest closure stop failed:${detail}`),
+        `Persistence flush failed on close: ${String(storeError)}` + (detail === '' ? '' : `; additional teardown failures: ${detail}`),
         500,
         { error: String(storeError), ...(detail === '' ? {} : { failures: detail }) },
       )
     }
-    throw new HelmError('teardown_failed', `exit closure stop part failed:${detail}`, 500, { failures: detail })
+    throw new HelmError('teardown_failed', `Partial failure during shutdown teardown: ${detail}`, 500, { failures: detail })
   }
 }
 

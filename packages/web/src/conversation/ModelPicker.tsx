@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ConversationSummary } from '@helm/protocol/browser'
 import { assetsApi, conversationsApi } from '../lib/api.js'
 import { HelmIcon, Popover, PopoverContent, PopoverPortal, PopoverTrigger } from '@helm/plugin-client'
-import { useHelmStore } from '../lib/store-context.js'
+import { useModels, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { ThinkingLevelControl } from '../ui/ThinkingLevelControl.js'
 import { Tooltip } from '../ui/Tooltip.js'
@@ -62,7 +62,8 @@ export function ModelPickerControl({
   onPickThinking,
   onCatalogRefreshed,
 }: ModelPickerControlProps) {
-  const store = useHelmStore()
+  const models = useModels()
+  const { refreshAssets, pushNotice } = useStoreActions()
   const { t } = useWebLocale()
   const [open, setOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
@@ -85,7 +86,7 @@ export function ModelPickerControl({
     fallbackPanel,
   )
 
-  const filteredModels = store.models.filter((model) => model.available && model.disabled !== true && model.id.toLowerCase().includes(query.toLowerCase()))
+  const filteredModels = models.filter((model) => model.available && model.disabled !== true && model.id.toLowerCase().includes(query.toLowerCase()))
   const filteredKeys = filteredModels.map((model) => model.id).join('|')
   const [activeIndex, setActiveIndex] = useState(() => initialModelActiveIndex(filteredModels, effectiveModel))
 
@@ -111,11 +112,11 @@ export function ModelPickerControl({
     setRefreshing(true)
     try {
       const res = await assetsApi.refreshModels()
-      await store.refreshAssets()
+      await refreshAssets()
       await onCatalogRefreshed?.()
       const errors = Object.entries(res.errors ?? {})
       if (errors.length > 0) {
-        store.pushNotice({
+        pushNotice({
           type: 'notification',
           level: 'warning',
           title: t('composer.model.catalogPartialFailure'),
@@ -123,16 +124,16 @@ export function ModelPickerControl({
           ...(conversationId !== undefined ? { conversationId } : {}),
         })
       } else {
-        store.pushNotice({
+        pushNotice({
           type: 'notification',
           level: 'info',
           title: t('composer.model.catalogRefreshed'),
-          body: t('composer.model.catalogCount', { count: store.models.length }),
+          body: t('composer.model.catalogCount', { count: models.length }),
           ...(conversationId !== undefined ? { conversationId } : {}),
         })
       }
     } catch (err) {
-      store.pushNotice({
+      pushNotice({
         type: 'notification',
         level: 'error',
         title: t('composer.model.catalogRefreshFailed'),
@@ -162,7 +163,7 @@ export function ModelPickerControl({
       : ''
   const shortName = rawShortName.trim() !== '' ? rawShortName : t('composer.model.defaultLabel')
   const currentModel = effectiveModel !== undefined && effectiveModel !== ''
-    ? store.models.find((model) => model.id === effectiveModel)
+    ? models.find((model) => model.id === effectiveModel)
     : undefined
   const currentLevels = currentModel?.thinkingLevels ?? ['off']
   const supportsThinking = currentLevels.some((level) => level !== 'off')
@@ -170,7 +171,7 @@ export function ModelPickerControl({
   // not in the model's supported list, fall back to off or the first supported.
   const effectiveLevel = resolveEffectiveThinkingLevel(currentLevels, activeThinkingLevel)
   const showLevel = supportsThinking && effectiveLevel !== '' && effectiveLevel !== 'off'
-  const allUnavailable = store.models.every((model) => !model.available || model.disabled === true)
+  const allUnavailable = models.every((model) => !model.available || model.disabled === true)
 
   return (
     <span className="composer-picker-root" ref={rootRef}>
@@ -329,7 +330,8 @@ export function ModelPickerControl({
 }
 
 export function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
-  const store = useHelmStore()
+  const models = useModels()
+  const { pushNotice } = useStoreActions()
   const { t } = useWebLocale()
   const [pending, setPending] = useState(false)
 
@@ -339,7 +341,7 @@ export function ModelPicker({ conversation }: { conversation: ConversationSummar
     try {
       await conversationsApi.patch(conversation.id, { model })
     } catch (err) {
-      store.pushNotice({
+      pushNotice({
         type: 'notification',
         level: 'error',
         title: t('composer.model.switchFailed'),
@@ -356,7 +358,7 @@ export function ModelPicker({ conversation }: { conversation: ConversationSummar
     try {
       await conversationsApi.patch(conversation.id, { thinkingLevel: level })
     } catch (err) {
-      store.pushNotice({
+      pushNotice({
         type: 'notification',
         level: 'error',
         title: t('composer.model.thinkingSwitchFailed'),
@@ -373,7 +375,7 @@ export function ModelPicker({ conversation }: { conversation: ConversationSummar
     try {
       await conversationsApi.patch(conversation.id, { model: '', thinkingLevel: '' })
     } catch (err) {
-      store.pushNotice({
+      pushNotice({
         type: 'notification',
         level: 'error',
         title: t('composer.model.restoreFailed'),
@@ -385,7 +387,7 @@ export function ModelPicker({ conversation }: { conversation: ConversationSummar
     }
   }
 
-  const currentModel = store.models.find((model) => model.id === conversation.model)
+  const currentModel = models.find((model) => model.id === conversation.model)
   const currentLevels = currentModel?.thinkingLevels ?? ['off']
   const supportsThinking = currentLevels.some((level) => level !== 'off')
   const effectiveLevel = resolveEffectiveThinkingLevel(currentLevels, conversation.thinkingLevel)

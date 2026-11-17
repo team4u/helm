@@ -1,8 +1,8 @@
 /**
- * node port forwarding HTTP routing test:handleApi directly drive (without real daemon- -
- * forwarding service real byte link see node-forward.test.ts).
- * override:POST validate (missing field/broken port/broken host/unknown field), create succeeded,
- * GET manifest/detail situation (404),DELETE stop (idempotent 404),events NDJSON.
+ * HTTP routing tests for node port forwarding: drives `handleApi` directly without a real daemon
+ * (see `node-forward.test.ts` for real end-to-end byte forwarding).
+ * Covers: POST validation (missing fields / bad port / bad host / unknown fields), creation success,
+ * GET list/detail (including 404), DELETE stop (idempotent 404), and events NDJSON.
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -15,7 +15,7 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 function makeKernel(over: {
   sessions: Map<string, NodeForwardSession>
   events: ((event: NodeForwardEvent) => void)[]
-  /** lease record (optional inject:acquire/release counter and finally release call back). */
+  /** Lease telemetry (optional injection: acquire/release counters and last-release callback). */
   lease?: { acquisitions: number; releases: number; onLastRelease?: () => void }
 }): KernelRuntimeLike {
   return {
@@ -53,7 +53,7 @@ function makeKernel(over: {
             over.lease!.acquisitions += 1
             return () => {
               over.lease!.releases += 1
-              // simplify simulated: first holder release i.e. treated as finally holder (single holder test).
+              // Simplified stub: first holder releasing is treated as the last holder (single-holder test).
               over.lease!.onLastRelease?.()
             }
           },
@@ -70,7 +70,7 @@ const post = async (kernel: KernelRuntimeLike, path: string, body?: unknown): Pr
     }), kernel)
     return { status: response.status, json: await response.json().catch(() => undefined) }
   } catch (error) {
-    // ValidationError(HelmError sub- class) directly throw (produce by hub.ts unify mapping 400).
+    // ValidationError (HelmError subclass) is thrown directly (mapped to 400 uniformly by hub.ts).
     if (error instanceof Error && 'status' in error) {
       return { status: (error as { status: number }).status, json: undefined }
     }
@@ -78,12 +78,12 @@ const post = async (kernel: KernelRuntimeLike, path: string, body?: unknown): Pr
   }
 }
 
-test('POST /api/nodes/:id/forward: validate and create', { timeout: 60_000 }, async () => {
+test('POST /api/nodes/:id/forward validates and creates session', { timeout: 60_000 }, async () => {
   const kernel = makeKernel({ sessions: new Map(), events: [] })
-  // legal create.
+  // Valid creation.
   const ok = await post(kernel, '/api/nodes/node-a/forward', { listenHost: '127.0.0.1', listenPort: 18080, targetHost: 'db.internal', targetPort: 5432 })
   assert.equal(ok.status, 201)
-  // missing field.
+  // Missing / invalid fields.
   for (const bad of [
     {},
     { listenHost: '127.0.0.1', listenPort: 18080 },
@@ -96,11 +96,11 @@ test('POST /api/nodes/:id/forward: validate and create', { timeout: 60_000 }, as
   ]) {
     const kernel2 = makeKernel({ sessions: new Map(), events: [] })
     const result = await post(kernel2, '/api/nodes/node-b/forward', bad)
-    assert.equal(result.status, 400, `should 400 reject ${JSON.stringify(bad)}`)
+    assert.equal(result.status, 400, `should reject 400 for ${JSON.stringify(bad)}`)
   }
 })
 
-test('GET manifest/detail situation and DELETE stop (contains 404)', { timeout: 60_000 }, async () => {
+test('GET list/detail and DELETE stop (including 404 cases)', { timeout: 60_000 }, async () => {
   const kernel = makeKernel({ sessions: new Map(), events: [] })
   const created = await post(kernel, '/api/nodes/node-a/forward', { listenHost: '127.0.0.1', listenPort: 18080, targetPort: 8080 })
   assert.equal(created.status, 201)
@@ -116,14 +116,14 @@ test('GET manifest/detail situation and DELETE stop (contains 404)', { timeout: 
   assert.equal(gone.status, 404)
   const delAgain = await handleApi(new Request('http://hub/api/nodes/forward/fwd-11111111-2222-3333-4444-555555555555', { method: 'DELETE' }), kernel)
   assert.equal(delAgain.status, 404)
-  // illegal forwardId form:ValidationError direct throw (hub.ts mapping 400).
+  // Invalid forwardId format: throws ValidationError directly (mapped to 400 by hub.ts).
   await assert.rejects(
     handleApi(new Request('http://hub/api/nodes/forward/not-a-uuid'), kernel),
     (error: unknown) => error instanceof Error && (error as { status?: number }).status === 400,
   )
 })
 
-test('GET events:NDJSON first frame started, disconnect close stream', { timeout: 60_000 }, async () => {
+test('GET events emits NDJSON started frame first and closes stream on disconnect', { timeout: 60_000 }, async () => {
   const kernel = makeKernel({ sessions: new Map(), events: [] })
   const created = await post(kernel, '/api/nodes/node-a/forward', { listenHost: '127.0.0.1', listenPort: 18080, targetPort: 8080 })
   assert.equal(created.status, 201)
@@ -134,7 +134,7 @@ test('GET events:NDJSON first frame started, disconnect close stream', { timeout
   }), kernel)
   assert.equal(eventsResponse.status, 200)
   assert.equal(eventsResponse.headers.get('content-type'), 'application/x-ndjson; charset=utf-8')
-  // streaming read first frame (stream keep open start - - monitor lifecycle by client control; read completely first frame i.e. cancel).
+  // Read first streamed frame (stream stays open while monitoring; cancel immediately after reading first frame).
   assert.ok(eventsResponse.body !== null)
   const reader = eventsResponse.body.getReader()
   const { value } = await reader.read()
@@ -142,18 +142,18 @@ test('GET events:NDJSON first frame started, disconnect close stream', { timeout
   assert.equal(first.type, 'started')
   controller.abort()
   await reader.cancel().catch(() => undefined)
-  // unknown forwardId  events:404.
+  // events on unknown forwardId returns 404.
   const kernel2 = makeKernel({ sessions: new Map(), events: [] })
   const missing = await handleApi(new Request('http://hub/api/nodes/forward/fwd-99999999-2222-3333-4444-555555555555/events'), kernel2)
   assert.equal(missing.status, 404)
 })
 
-test('GET events:stop terminal state stopped frame after stream normal end (monitor do not pending)', { timeout: 60_000 }, async () => {
+test('GET events ends stream cleanly after terminal stopped frame without hanging listeners', { timeout: 60_000 }, async () => {
   const over = { sessions: new Map<string, NodeForwardSession>(), events: [] as ((event: NodeForwardEvent) => void)[] }
   const kernel = makeKernel(over)
   const created = await post(kernel, '/api/nodes/node-a/forward', { listenHost: '127.0.0.1', listenPort: 18080, targetPort: 8080 })
   assert.equal(created.status, 201)
-  // subscribe terminate notify (simulated runtime  onNodeForwardStopped connect line).
+  // Subscribe to termination notifications (simulates runtime onNodeForwardStopped wiring).
   const stopWaiters = new Set<() => void>()
   ;(kernel as { onNodeForwardStopped?: unknown }).onNodeForwardStopped = (_id: string, listener: () => void) => {
     stopWaiters.add(listener)
@@ -170,8 +170,7 @@ test('GET events:stop terminal state stopped frame after stream normal end (moni
   const readFirst = await reader.read()
   const first = JSON.parse(new TextDecoder().decode(readFirst.value).trim()) as { type?: string }
   assert.equal(first.type, 'started')
-  // simulated stop: first via event channel terminal state stopped frame (makeKernel register listener),
-  // again trigger terminate notify - - stream should normal close(done=true), do not pending.
+  // Simulate stop: emit terminal stopped frame on event channel, then fire stop waiters — stream must close cleanly (done=true).
   for (const listener of [...over.events]) listener({ type: 'stopped' })
   for (const waiter of [...stopWaiters]) waiter()
   const drained = await new Promise<boolean>((resolve) => {
@@ -183,17 +182,17 @@ test('GET events:stop terminal state stopped frame after stream normal end (moni
     })().catch(() => resolve(false))
     setTimeout(() => resolve(false), 5_000)
   })
-  assert.equal(drained, true, 'terminate notify after event stream should normal end (done)')
+  assert.equal(drained, true, 'event stream must terminate cleanly (done=true) after stop notification')
 })
 
-test('GET events: event stream i.e. holder - - establish acquire, disconnect/cancel release(without leaking lease)', { timeout: 60_000 }, async () => {
+test('GET events acts as lease holder: acquires on attach and releases on abort/cancel without leaks', { timeout: 60_000 }, async () => {
   const lease = { acquisitions: 0, releases: 0, onLastRelease: undefined as (() => void) | undefined }
   const over = { sessions: new Map<string, NodeForwardSession>(), events: [] as ((event: NodeForwardEvent) => void)[], lease }
   const kernel = makeKernel(over)
   const created = await post(kernel, '/api/nodes/node-a/forward', { listenHost: '127.0.0.1', listenPort: 18080, targetPort: 8080 })
   assert.equal(created.status, 201)
 
-  // 1) abort disconnect:acquire once,release once.
+  // 1) Disconnect via abort: acquire once, release once.
   const controller = new AbortController()
   const response = await handleApi(new Request('http://hub/api/nodes/forward/fwd-11111111-2222-3333-4444-555555555555/events', {
     headers: { accept: 'application/x-ndjson' },
@@ -202,22 +201,22 @@ test('GET events: event stream i.e. holder - - establish acquire, disconnect/can
   assert.equal(response.status, 200)
   assert.ok(response.body !== null)
   const reader = response.body.getReader()
-  await reader.read() // started first frame
+  await reader.read() // initial started frame
   await delay(30)
-  assert.equal(lease.acquisitions, 1, 'event stream establish i.e. acquire lease')
-  assert.equal(lease.releases, 0, 'hold has during not release')
+  assert.equal(lease.acquisitions, 1, 'event stream acquires lease upon attaching')
+  assert.equal(lease.releases, 0, 'lease stays held while connected')
   controller.abort()
   await delay(30)
-  assert.equal(lease.releases, 1, 'after disconnect release lease (finally one holder trigger stop call back chain)')
+  assert.equal(lease.releases, 1, 'lease released on disconnect (last holder triggers stop callback chain)')
 
-  // 2) cancel(body.cancel) disconnect: same release.
+  // 2) Disconnect via body.cancel: releases identically.
   const lease2 = { acquisitions: 0, releases: 0, onLastRelease: undefined as (() => void) | undefined }
   const over2 = { sessions: new Map<string, NodeForwardSession>(), events: [] as ((event: NodeForwardEvent) => void)[], lease: lease2 }
   const kernel2 = makeKernel(over2)
   const created2 = await post(kernel2, '/api/nodes/node-a/forward', { listenHost: '127.0.0.1', listenPort: 18080, targetPort: 8080 })
   assert.equal(created2.status, 201)
   const controller2 = new AbortController()
-  const response2 = await handleApi(new Request('http://hub/api/nodes/forward/fwd-11111111-2222-3333-4444-555555555555/events', {
+  const response2 = await handleApi(new Request('http://hub/api/nodes/node-a/forward/fwd-11111111-2222-3333-4444-555555555555/events'.replace('/nodes/node-a/', '/nodes/'), {
     headers: { accept: 'application/x-ndjson' },
     signal: controller2.signal,
   }), kernel2)
@@ -227,5 +226,5 @@ test('GET events: event stream i.e. holder - - establish acquire, disconnect/can
   await reader2.cancel()
   await delay(30)
   assert.equal(lease2.acquisitions, 1)
-  assert.equal(lease2.releases, 1, 'client actively cancel same release lease')
+  assert.equal(lease2.releases, 1, 'client cancel releases lease identically')
 })

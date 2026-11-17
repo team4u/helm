@@ -386,13 +386,39 @@ test('card: execution.conversationId 才给子会话入口（图标动作打开�
 
   const entry = makeReportEntry({ report: { result: 'ok', execution: { conversationId: 7 } } })
   const { host, unmount } = await mountCard(entry, spy)
-  assert.match(host.querySelector('.trace-row .trace-tool-name')?.textContent ?? '', /Subagent report #7/, '头部显示子会话 ID')
+  assert.match(host.querySelector('.trace-row .trace-tool-name')?.textContent ?? '', /Subagent report #7/, '无 name 历史记录保持 Subagent report #7')
   const nav = host.querySelector<HTMLButtonElement>('button[aria-label="Open subagent #7"]')
   assert.ok(nav, '有真实 execution 时渲染子会话图标入口')
   act(() => nav!.click())
   assert.deepEqual(spy.calls, [7])
   assert.equal(host.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded'), 'false', '导航不得触发折叠开关')
   unmount()
+
+  // 携带 name：收起态主标题显示「Subagent report · <name>」+ 次级 #7；展开态 kv-grid 含 Task name 与 `<name> (#7)` 按钮
+  const namedEntry = makeReportEntry({
+    report: { name: '修复登录超时', result: 'ok', execution: { conversationId: 7 } },
+  })
+  const namedMount = await mountCard(namedEntry, spy)
+  assert.equal(namedMount.host.querySelector('.trace-row .trace-tool-name')?.textContent, 'Subagent report · 修复登录超时')
+  assert.equal(namedMount.host.querySelector('.trace-row .workflow-trace-id')?.textContent, '#7')
+  clickButton(namedMount.host, 'Expand Subagent report · 修复登录超时 details')
+  const expanded = namedMount.host.querySelector('.workflow-report-expanded')
+  assert.ok(expanded !== null)
+  assert.ok(expanded.textContent?.includes('Task name') && expanded.textContent?.includes('修复登录超时'))
+  const subBtn = [...expanded.querySelectorAll('button')].find((b) => b.textContent?.includes('修复登录超时 (#7)'))
+  assert.ok(subBtn !== undefined, '展开态子会话按钮应显示 `<name> (#7)`')
+  act(() => { subBtn.click() })
+  assert.deepEqual(spy.calls, [7, 7])
+  namedMount.unmount()
+
+  // workflow_report 携带 name
+  const namedWfEntry = makeReportEntry({
+    kind: 'workflow_report',
+    report: { name: '发布前检查', result: 'ok' },
+  })
+  const namedWfMount = await mountCard(namedWfEntry, spy)
+  assert.equal(namedWfMount.host.querySelector('.trace-row .trace-tool-name')?.textContent, 'Workflow report · 发布前检查')
+  namedWfMount.unmount()
 })
 
 test('card: 损坏数据显式“汇报数据格式异常”并默认展开，可收起并复制原文（不伪造成功）', { timeout: 60_000 }, async () => {

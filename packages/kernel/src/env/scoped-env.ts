@@ -1,23 +1,23 @@
 /**
- * conversation effect domain execute environment: the same (nodeId, cwd) under multiple conversation concurrency when, each command
- * env by conversationId live together into (fresh), never cache on a conversation snapshot
- * (otherwise managed token / SecretStash secret will across conversation leak leak).
+ * Conversation-scoped execution environment: when multiple conversations share `(nodeId, cwd)`,
+ * each command computes its `env` freshly by `conversationId` instead of caching a previous
+ * conversation's snapshot (preventing cross-conversation leakage of managed tokens / SecretStash secrets).
  *
- * bind set semantics (fail-closed):
- * - composer return key is**bind set identity**(HELM_CONVERSATION_ID / HELM_HUB_URL /
- *   HELM_TOKEN / HELM_SECRET_* etc.): one by one invoke options.env same name key cannot override
- *   (guard against fabricate effect domain), the rest key by one by one invoke env normal patch fill;
- * - without conversationId(envFor two reference path): do not inject any secret - - no can message
- *   effect domain then do not inject (fail-closed), while non- borrow use other conversation;
- * - remote transfer sharing (same nodeId a connection pool + execId routing output fan out),
- *   each command env in exec when isolated together into.
+ * Binding semantics (fail-closed):
+ * - Keys returned by `composer` are **bound identities** (`HELM_CONVERSATION_ID`, `HELM_HUB_URL`,
+ *   `HELM_TOKEN`, `HELM_SECRET_*`, etc.): per-call `options.env` cannot override keys of the same name
+ *   (prevents forging scope), while all other keys are patched normally from per-call `env`;
+ * - Without `conversationId` (`envFor` path): injects no secrets—no trusted scope means fail-closed,
+ *   never borrowing another conversation's credentials;
+ * - Remote transport stays shared (one connection pool per `nodeId` + output fan-out routed by `execId`),
+ *   with each command's `env` composed in isolation at `exec` time.
  *
- * local together into (this file is unique right threat,tools.ts no longer has second set rule):
- * - inherit host process.env(real PATH/HOME tool chain), but managed HELM_* variable
- *   (contains large small write change body) by fail-closed strip except;
- * - cliBinDir(helm CLI wrap directory) with path.delimiter pre- inject PATH;
- * - one by one invoke env and composer bind set key finally together into;composer not provide HELM_TOKEN
- *   when everything source (host inherit/one by one invoke inject) same name change body one and strip except.
+ * Local env composition (this file is the single source of truth; `tools.ts` has no second copy):
+ * - Inherits host `process.env` (real PATH/HOME toolchain), stripping all managed `HELM_*` variables
+ *   (including case variants) fail-closed;
+ * - Prepends `cliBinDir` (helm CLI wrapper dir) to `PATH` using `path.delimiter`;
+ * - Merges per-call `env` and composer-bound keys last; if composer omits `HELM_TOKEN`, every
+ *   case variant from any source (host inheritance or per-call injection) is stripped.
  */
 
 import type { ExecutionEnv, Result, ShellExecOptions, ShellExecResult } from '@earendil-works/pi-durable/env'
@@ -26,7 +26,7 @@ import type { Context } from '@earendil-works/chord/context'
 import { prependEnvPath, setEnvEntry } from '@helm/env-io'
 import type { EnvOptionsComposer } from './fabric.js'
 
-/** execute target: conversation + node + work directory (Profile×node combine after thing point). */
+/** Execution target: conversation + node + working directory (resolved Profile × node product). */
 export interface EnvTarget {
   conversationId?: number
   nodeId: string
@@ -34,20 +34,22 @@ export interface EnvTarget {
 }
 
 export interface ScopedExecutionEnv extends ExecutionEnv {
-  /** this target (cwd can change perspective; bottom seat instance follow target isolated). */
+  /** Target metadata (cwd is mutable per view; underlying instances remain isolated by target). */
   readonly target: { conversationId?: number; nodeId: string; cwd: string }
 }
 
 export interface ScopedExecutionEnvOptions {
-  /** helm CLI wrap directory (local exec pre- inject PATH). */
+  /** helm CLI wrapper directory (prepended to PATH for local exec). */
   cliBinDir?: () => string | undefined
 }
 
-/** managed variable name collection (large small write do not sensitive strip except;Windows env name semantics under helm_token / Helm_Token
- *  etc. same name change body one and strip except, managed value finally fixed override - - policy by composer provide right threat value).
- *  HELM_EXECUTION_SCOPE is execute context effect domain anchor (helm-<sha256 before 24 hex>,
- *  see tools.ts  executionScopeHash): non- secret, only supply tool explicit adopt stable asset
- *  naming hint (non- OS sandbox), and other bind set identity variable same etc. managed. */
+/**
+ * Managed variable names (stripped case-insensitively—Windows env semantics strip `helm_token`, `Helm_Token`,
+ * etc. alike, and the final value is determined strictly by the composer as the single source of truth).
+ * `HELM_EXECUTION_SCOPE` is the execution-context scope anchor (`helm-<first 24 hex of sha256>`, see
+ * `executionScopeHash` in `tools.ts`): non-secret, only provides a stable resource naming hint for tools
+ * that opt in (not an OS sandbox), and is managed alongside other bound identity variables.
+ */
 export const MANAGED_EXEC_ENV_VARS = [
   'HELM_ENV',
   'HELM_HUB_URL',
@@ -61,7 +63,7 @@ export const MANAGED_EXEC_ENV_VARS = [
 
 const MANAGED_ENV_NAMES = new Set<string>(MANAGED_EXEC_ENV_VARS)
 
-/** Scoped environment and local machine directly execute shared use together into mechanism; caller only provide managed policy artifact. */
+/** Shared env composition mechanism for scoped and direct local execution; caller only supplies managed policy output. */
 export function composeExecutionEnv(
   nodeId: string,
   composed: Record<string, string>,
@@ -128,18 +130,18 @@ export function createScopedExecutionEnv(
     )
   }
 
-  // delegate the rest all operation;FS operation without identity env requirement.
+  // Delegate all remaining operations; FS operations do not require identity env injection.
   const scoped: ScopedExecutionEnv = {
     target,
     get id() {
       return base.id
     },
     get cwd(): string {
-      // target perspective: relative path/exec by default cwd all with target.cwd is allow.
+      // Target view: default cwd for relative paths and exec is `target.cwd`.
       return target.cwd
     },
     set cwd(value: string) {
-      // only change this target perspective: bottom seat instance already by target isolated (does not affect other conversation).
+      // Only mutates this target's view: underlying instances are already isolated per target (never affects other conversations).
       target.cwd = value
       base.cwd = value
     },

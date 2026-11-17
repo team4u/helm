@@ -41,6 +41,7 @@ import {
   formatNodeOutputPreview,
   isBackgroundWorkflowResultHandle,
   resolveRunElapsedMs,
+  resolveWorkflowRunDisplayName,
   resolveWorkflowRunForTool,
   resolveWorkflowToolFallbackLabel,
 } from './model-run.ts'
@@ -346,6 +347,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
       ? executionStatusLabel(effectiveStatus, locale)
       : runStatusLabel(run.status, locale)
 
+  const displayName = resolveWorkflowRunDisplayName(run)
   const progressPart = nodes.length > 0 ? traceNodeProgress(doneCount, nodes.length, locale) : undefined
   const activeNode = nodes.find((n) => n.status === 'running')
   const livePart = activeNode !== undefined ? traceActiveNode(activeNode.label ?? activeNode.id, locale) : undefined
@@ -354,14 +356,16 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
   const summaryParts = [progressPart, isError ? errorPart : isRunning ? livePart : undefined].filter(
     (part): part is string => part !== undefined && part !== '',
   )
-  const summaryText = summaryParts.join(' · ') || run.description
+  const summaryText =
+    summaryParts.join(' · ') ||
+    (run.description !== undefined && run.description.trim() !== displayName ? run.description : undefined)
 
   return (
     <div className="trace-entry">
       <button
         type="button"
         className={`trace-row workflow-trace-row-btn${isError ? ' trace-row-error' : ''}`}
-        aria-label={traceWorkflowRowLabel(run.name, summaryText, locale)}
+        aria-label={traceWorkflowRowLabel(displayName, summaryText, locale)}
         onClick={() => {
           requestWorkbenchRunFocus(viewerConversationId ?? run.conversationId, run.id)
           ctx.openWorkbench(`plugin:${ctx.pluginId}/tasks`)
@@ -373,7 +377,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
             size={12}
             className={isRunning ? SPIN : undefined}
           />
-          <span className="trace-tool-name">{run.name}</span>
+          <span className="trace-tool-name">{displayName}</span>
           {summaryText !== undefined && summaryText !== '' ? (
             <span className={`trace-tool-summary${isError ? ' workflow-trace-error' : ''}`} title={summaryText}>
               {summaryText}
@@ -494,14 +498,16 @@ export function WorkflowRunCardBody(props: {
     )
   }
 
+  const displayName = resolveWorkflowRunDisplayName(run)
+
   return (
-    <section className="card workflow-run-card" aria-label={runCardAriaLabel(run.name, locale)}>
+    <section className="card workflow-run-card" aria-label={runCardAriaLabel(displayName, locale)}>
       <div className="stack-row workflow-run-header">
         <button type="button" className="btn btn-ghost btn-sm" onClick={props.onToggleCard} title={resolveLocalizedText(cardOpen ? RUN_CARD_COLLAPSE_TITLE : RUN_CARD_EXPAND_TITLE, locale)}>
           <Icon name={cardOpen ? 'chevron-down' : 'chevron-right'} size={12} />
         </button>
         <Icon name={run.kind === 'subagent' ? 'bot' : 'terminal'} />
-        <strong>{run.name}</strong>
+        <strong>{displayName}</strong>
         {effectiveStatus !== selfRunStatus ? (
           <>
             <span

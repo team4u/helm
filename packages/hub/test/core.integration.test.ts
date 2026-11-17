@@ -328,7 +328,7 @@ test('核心协同 2：load_skill 读取与路径防护、Profile skills 白名�
 
   await rejectsExplicitly(
     () => host.executeTool('load_skill', { skillId: 'deploy-playbook', path: '../profiles/assistant/MEMORY.md' }, { conversationId: defaultConv.id }),
-    { message: /path through exceeds|reference validation failed/ },
+    { message: /forbidden path traversal|reference validation failed/ },
   )
   await rejectsExplicitly(
     () => host.executeTool('load_skill', { skillId: 'deploy-playbook', path: '/etc/passwd' }, { conversationId: defaultConv.id }),

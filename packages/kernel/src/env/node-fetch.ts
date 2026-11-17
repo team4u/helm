@@ -1,20 +1,19 @@
 /**
- * node pass-through tunnel HTTP/HTTPS adapt layer:openTunnel(any TCP Duplex) of on
- * fetch adapt.
+ * Node passthrough tunnel HTTP/HTTPS adapter: adapts `fetch` over `openTunnel` (arbitrary TCP Duplex).
  *
- * - http:  tunnel Duplex directly as node:http.request  createConnection;
- * - https: in the same tunnel Duplex on stack node:tls.connect(servername by target
- *   hostname settings, certificate validate follow Node by default CA/verify chain), again TLS stream
- *   hand over to node:http.request- - never bare Duplex stuff to https.request pretend TLS;
- * - do not aggregate request/response body: request body streaming forwarding, response body with
- *   Readable.toWeb(res) hand over also (SSE/streaming response complete pass-through);
- * - tunnel (Duplex) lifetime bind set Response body:EOF/cancel/error/connect close only then
- *   destroy, response head reach never mention before closure tunnel;HEAD/204/304 body is null and immediately release;
- *   body by abandon placement (do not read do not cancel) when by res close/error and GC fall back destroy;
- * - AbortSignal pass broadcast: request phase cancel destroy req and tunnel (duplex destroy drive
- *   Response body end error/cancel);
- * - 4xx/5xx is not transfer failed: original construct Response(contains error body), only create tunnel
- *   failed,socket exception interrupt, timeout only then throw HelmError.
+ * - http: passes the tunnel Duplex directly as `createConnection` to `node:http.request`;
+ * - https: stacks `node:tls.connect` onto the tunnel Duplex (`servername` set from target hostname,
+ *   certificate validation uses Node's default CA/verify chain), then hands the TLS stream to `node:http.request`
+ *   (never pass a bare Duplex directly to `https.request` pretending to be TLS);
+ * - Never buffers request/response bodies: request body is piped as a stream and response body is returned
+ *   via `Readable.toWeb(res)` (SSE/streaming responses pass through verbatim);
+ * - Tunnel (Duplex) lifetime is tied to the Response body: destroyed only on EOF/cancel/error/connection close,
+ *   never prematurely when response headers arrive; HEAD/204/304 have null bodies and release immediately;
+ *   abandoned bodies (neither read nor cancelled) are cleaned up via `res` close/error and GC fallback;
+ * - AbortSignal propagation: cancelling during request destroys `req` and the tunnel (driving Response body
+ *   termination via error/cancel);
+ * - 4xx/5xx are not transport failures: return the Response as-is; only tunnel establishment failures,
+ *   socket drops, and timeouts throw HelmError.
  */
 
 import http from 'node:http'
@@ -24,29 +23,29 @@ import { Readable } from 'node:stream'
 import type { Duplex } from 'node:stream'
 import { HelmError } from '@helm/protocol'
 
-/** local (local node)TCP direct connect default pre- compute: and remote registry.openTunnel timeout consistent. */
+/** Default local TCP connect timeout: matches remote `registry.openTunnel` timeout. */
 const LOCAL_TUNNEL_CONNECT_TIMEOUT_MS = 10_000
 
 /**
- * abandon placement body fall back: caller gets Response after since do not read also do not cancel(such as only inspect
- * status health probe) when,pull/cancel forever do not occur, tunnel and caller signal on
- * abort listen will lag (local lag localTunnels,remote lag activeTunnels
- * until dispose). connect close path already by res close/error listen determinism destroy; this
- * register table only override upstream connect forever do not disconnect + body by GCleftover remaining scenario - -best-effort,
- * do not guarantee and when (does not introduce will mistakenly kill SSE slow consume idle timeout;Node internal reference chain if block stop
- * body stream reclaim then still lag until connect final).
+ * Fallback cleanup for abandoned bodies: when callers receive a Response and neither read nor cancel it
+ * (e.g. status-only health checks), pull/cancel never runs, keeping the tunnel and caller abort listener
+ * pinned (locally in `localTunnels`, remotely in `activeTunnels` until dispose). Connection-close paths are
+ * already deterministically destroyed by `res` close/error listeners; this registry only covers the corner
+ * case where an upstream server never disconnects and the body is GC'd—best-effort with no timing guarantee
+ * (avoids introducing idle timeouts that would kill slow SSE consumers; if Node internal references pin the
+ * stream, cleanup still waits until connection close).
  */
 const abandonedBodies = new FinalizationRegistry<() => void>((settle) => {
   settle()
 })
 
 /**
- * local node tunnel implement:Hub process inside net.connect direct connect (any host:port).
- * abort/timeout/error explicit throw HelmError and guarantee socket release (never half leak leak).
+ * Local node tunnel implementation: connects directly via `net.connect` inside the Hub process (arbitrary host:port).
+ * Throws HelmError explicitly on abort/timeout/error and guarantees socket release (never leaks half-open sockets).
  */
 export function connectLocalTunnel(host: string, port: number, signal?: AbortSignal): Promise<Duplex> {
   if (signal?.aborted) {
-    return Promise.reject(new HelmError('aborted', 'tunnel establish cancelled', 499, { host, port }))
+    return Promise.reject(new HelmError('aborted', 'tunnel establishment cancelled', 499, { host, port }))
   }
   return new Promise<Duplex>((resolve, reject) => {
     const socket = net.connect({ host, port })
@@ -54,7 +53,7 @@ export function connectLocalTunnel(host: string, port: number, signal?: AbortSig
     const timer = setTimeout(() => {
       finishErr(new HelmError(
         'node_tunnel_timeout',
-        `connect ${host}:${port} timeout (${LOCAL_TUNNEL_CONNECT_TIMEOUT_MS}ms)`,
+        `connect ${host}:${port} timed out (${LOCAL_TUNNEL_CONNECT_TIMEOUT_MS}ms)`,
         504,
         { host, port },
       ))
@@ -76,12 +75,12 @@ export function connectLocalTunnel(host: string, port: number, signal?: AbortSig
       reject(error)
     }
     const onAbort = (): void => {
-      finishErr(new HelmError('aborted', 'tunnel establish cancelled', 499, { host, port }))
+      finishErr(new HelmError('aborted', 'tunnel establishment cancelled', 499, { host, port }))
     }
     signal?.addEventListener('abort', onAbort, { once: true })
     socket.once('connect', () => {
       if (signal?.aborted) {
-        finishErr(new HelmError('aborted', 'tunnel establish cancelled', 499, { host, port }))
+        finishErr(new HelmError('aborted', 'tunnel establishment cancelled', 499, { host, port }))
         return
       }
       finishOk()
@@ -89,7 +88,7 @@ export function connectLocalTunnel(host: string, port: number, signal?: AbortSig
     socket.once('error', (error: Error) => {
       finishErr(new HelmError(
         'node_tunnel_connect_failed',
-        `connect ${host}:${port} failed:${error.message}`,
+        `connect ${host}:${port} failed: ${error.message}`,
         502,
         { host, port },
       ))
@@ -98,16 +97,15 @@ export function connectLocalTunnel(host: string, port: number, signal?: AbortSig
 }
 
 /**
- * https: in already establish tunnel TCP Duplex on stack TLS grasp manually (servername by target
- * hostname drive SNI and certificate validate), return TLSSocket. never bare Duplex hand over to
- * https.request disguise TLS.
+ * HTTPS: stack a TLS handshake on top of an established tunnel TCP Duplex (`servername` from target hostname
+ * drives SNI and certificate verification), returning the `TLSSocket`. Never pass a bare Duplex to `https.request`.
  */
 function tlsOverTunnel(tunnel: Duplex, host: string, signal?: AbortSignal): Promise<Duplex> {
   if (signal?.aborted) {
-    return Promise.reject(new HelmError('aborted', 'TLS grasp manually cancelled', 499, { host }))
+    return Promise.reject(new HelmError('aborted', 'TLS handshake cancelled', 499, { host }))
   }
   return new Promise<Duplex>((resolve, reject) => {
-    // IP reference and certificate identity validate, but cannot put enter only allows DNS name SNI extend.
+    // IP literals participate in certificate SAN checks, but SNI extension only accepts DNS hostnames.
     const secure = tls.connect({ socket: tunnel, host, ...(net.isIP(host) === 0 ? { servername: host } : {}) })
     let settled = false
     const cleanup = (): void => {
@@ -122,11 +120,11 @@ function tlsOverTunnel(tunnel: Duplex, host: string, signal?: AbortSignal): Prom
       reject(error)
     }
     const timer = setTimeout(() => {
-      fail(new HelmError('node_tunnel_timeout', `TLS grasp manually timeout (${host})`, 504, { host }))
+      fail(new HelmError('node_tunnel_timeout', `TLS handshake timed out (${host})`, 504, { host }))
     }, LOCAL_TUNNEL_CONNECT_TIMEOUT_MS)
     timer.unref?.()
     const onAbort = (): void => {
-      fail(new HelmError('aborted', 'TLS grasp manually cancelled', 499, { host }))
+      fail(new HelmError('aborted', 'TLS handshake cancelled', 499, { host }))
     }
     signal?.addEventListener('abort', onAbort, { once: true })
     secure.once('secureConnect', () => {
@@ -138,32 +136,34 @@ function tlsOverTunnel(tunnel: Duplex, host: string, signal?: AbortSignal): Prom
     secure.once('error', (error: Error) => {
       fail(new HelmError(
         'node_tunnel_connect_failed',
-        `TLS grasp manually failed (${host}):${error.message}`,
+        `TLS handshake failed (${host}): ${error.message}`,
         502,
         { host },
       ))
     })
     secure.once('close', () => {
-      fail(new HelmError('node_tunnel_closed', `TLS grasp manually during connect close (${host})`, 502, { host }))
+      fail(new HelmError('node_tunnel_closed', `connection closed during TLS handshake (${host})`, 502, { host }))
     })
     if (signal?.aborted) onAbort()
   })
 }
 
-/** tunnelRequestBody:body directly streaming forwarding (do not aggregate);GET/HEAD/null without body. */
+/** Stream request body directly without buffering; GET/HEAD/null have no body. */
 function pipeRequestBody(request: Request, req: http.ClientRequest): void {
   if (request.body === null) { req.end(); return }
   const nodeStream = Readable.fromWeb(request.body as Parameters<typeof Readable.fromWeb>[0])
   nodeStream.on('error', (error) => {
     req.destroy(error instanceof Error ? error : new Error(String(error)))
   })
-  // upstream mention before response or request by cancel when, stop read invoke upload stream.
+  // Stop reading upload stream if upstream responds early or request is cancelled.
   req.once('close', () => nodeStream.destroy())
   nodeStream.pipe(req)
 }
 
-/** via node pass-through tunnel execute single time HTTP(S) request.openTunnel is any TCP original language, this function
- * only negative duty in its on adapt HTTP(S) semantics; lifecycle:duplex lifetime bind set Response body. */
+/**
+ * Execute a single HTTP(S) request over a node passthrough tunnel. `openTunnel` is an arbitrary TCP
+ * primitive; this function only layers HTTP(S) semantics on top, binding duplex lifetime to the Response body.
+ */
 export async function tunnelFetch(
   openTunnel: (target: { host?: string; port: number }, signal?: AbortSignal) => Promise<Duplex>,
   nodeId: string,
@@ -173,7 +173,7 @@ export async function tunnelFetch(
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new HelmError(
       'node_tunnel_connect_failed',
-      `node fetch only support http/https(receives ${url.protocol})`,
+      `node fetch only supports http/https (got ${url.protocol})`,
       400,
       { nodeId, url: request.url },
     )
@@ -181,7 +181,7 @@ export async function tunnelFetch(
   const isHttps = url.protocol === 'https:'
   const defaultPort = isHttps ? 443 : 80
   const port = url.port === '' ? defaultPort : Number(url.port)
-  const hostname = url.hostname.replace(/^\[|\]$/g, '') // IPv6 text remove parentheses (net.connect accept without parentheses form)
+  const hostname = url.hostname.replace(/^\[|\]$/g, '') // strip IPv6 brackets (`net.connect` expects unbracketed IPv6)
   const signal = request.signal ?? undefined
   signal?.throwIfAborted()
   let tcp: Duplex | undefined
@@ -191,7 +191,7 @@ export async function tunnelFetch(
     if (error instanceof HelmError) throw error
     throw new HelmError(
       'node_tunnel_connect_failed',
-      `node ${nodeId} tunnel establish failed:${error instanceof Error ? error.message : String(error)}`,
+      `node ${nodeId} tunnel establishment failed: ${error instanceof Error ? error.message : String(error)}`,
       502,
       { nodeId, url: request.url },
     )
@@ -201,12 +201,12 @@ export async function tunnelFetch(
     try {
       tunnel = await tlsOverTunnel(tcp, hostname, signal)
     } catch (error) {
-      // tls.connect already destroy secure; underlying tcp must explicit release (guard against half leak leak).
+      // `tls.connect` destroys `secure` on failure, so explicitly destroy underlying `tcp` to prevent socket leaks.
       tcp.destroy()
       if (error instanceof HelmError) throw error
       throw new HelmError(
         'node_tunnel_connect_failed',
-        `node ${nodeId} TLS establish failed:${error instanceof Error ? error.message : String(error)}`,
+        `node ${nodeId} TLS establishment failed: ${error instanceof Error ? error.message : String(error)}`,
         502,
         { nodeId, url: request.url },
       )
@@ -221,20 +221,20 @@ export async function tunnelFetch(
     }
     const headers: Record<string, string> = {}
     request.headers.forEach((value, name) => {
-      // host/connection/content-length by node:http rebuild; the rest single value duplicate.
+      // host/connection/content-length are reconstructed by node:http; copy all other headers verbatim.
       if (name === 'host' || name === 'connection' || name === 'content-length') return
       headers[name] = value
     })
-    // tunnel is single time short lifecycle connect: explicit want seek response after close (guard against upstream keep-alive
-    // let tunnel duplex pending); also disable compress (node:http will not automatically decompress, keep
-    // pass-through semantics, plugin gets is exactly original byte).
+    // Tunnels are single-use short-lived connections: explicitly request close after response (prevents
+    // upstream keep-alive from hanging the duplex), and avoid automatic compression (node:http does not
+    // auto-decompress, preserving passthrough semantics so plugins receive exact upstream bytes).
     headers['connection'] = 'close'
     headers['accept-encoding'] = headers['accept-encoding'] ?? 'identity'
     let responseSettled = false
     const req = http.request(
       {
-        // createConnection and default agent combine directly use this stream; cannot use
-        // agent:false, it will additionally create Agent and want seek stream implement net.Socket method.
+        // Combine createConnection with the default agent to use this stream directly; avoid `agent: false`,
+        // which allocates a new Agent and expects extra `net.Socket` methods on the stream.
         createConnection: () => tunnel,
         agent: undefined,
         protocol: 'http:',
@@ -251,25 +251,24 @@ export async function tunnelFetch(
           if (value === undefined) continue
           for (const v of Array.isArray(value) ? value : [value]) outHeaders.append(name, v)
         }
-        // HEAD/204/304 forbidden body(new Response(stream, {status:204}) will throw).
+        // HEAD/204/304 forbid a response body (`new Response(stream, { status: 204 })` throws).
         const nullBody = request.method === 'HEAD' || status === 204 || status === 304
         if (nullBody) {
-          res.resume() // discard (by RFC this then do not the has body)
+          res.resume() // drain (no body per RFC)
           signal?.removeEventListener('abort', onAbort)
           responseSettled = true
           resolve(new Response(null, { status, headers: outHeaders }))
-          // without body can etc.: immediately release tunnel.
+          // No body to wait on: release the tunnel immediately.
           tunnel.destroy()
           return
         }
-        // use pull adapt keep Web Stream back press, and tunnel lifetime bind set to body:
-        // EOF/cancel/error only then destroy; response head reach never mention before destroy(SSE must
-        // complete pass-through).
+        // Adapt via pull to preserve Web Stream backpressure and tie tunnel lifetime to the body:
+        // destroy only on EOF/cancel/error, never early when headers arrive (SSE must pass through intact).
         const source = Readable.toWeb(res) as unknown as ReadableStream<Uint8Array>
         const reader = source.getReader()
-        // final state independent at bodyStream declaration:FinalizationRegistry  held value
-        //(settle closed package) never can reference bodyStream, otherwise register table will target strong hold in
-        // manually in,GC forever do not occur, fall back forever does not trigger.
+        // Finalization state must remain independent of `bodyStream`: the FinalizationRegistry held value
+        // (`settle` closure) must never reference `bodyStream`, otherwise the registry keeps the target strongly
+        // reachable, preventing GC and ensuring the fallback never fires.
         const state = { ended: false, tunnel, signal, onAbort }
         const settle = (): void => {
           if (state.ended) return
@@ -306,11 +305,11 @@ export async function tunnelFetch(
           },
         })
         abandonedBodies.register(bodyStream, settle, bodyStream)
-        // connect close i.e. final:close when tunnel no longer has new data - -complete=true remaining
-        // byte already all enter res buffer (destroy does not affect after continue read), transfer interrupt then body
-        // again without clean terminal state. not person pull when (such as only inspect status health probe) this is unique
-        // determinism destroy point, no longer etc. forever do not occur pull/cancel.error listen also guard against not handle
-        // 'error' crash process (toWeb listen when order does not assume).
+        // Connection close is terminal: once closed, no more data arrives on the tunnel—if `complete=true`,
+        // remaining bytes are already buffered in `res` (destroying does not hurt reading); if truncated, the
+        // body has no clean completion left. When callers don't pull (e.g. status-only health checks), this is
+        // the sole deterministic cleanup point instead of waiting for pull/cancel. Listening for `error` also
+        // prevents unhandled `'error'` crashes (never assume listener order inside `toWeb`).
         res.once('error', finishBody)
         res.once('close', finishBody)
         responseSettled = true
@@ -321,20 +320,20 @@ export async function tunnelFetch(
       if (responseSettled) return
       failTunnel(
         'node_tunnel_closed',
-        `node ${nodeId} tunnel request failed:${error instanceof Error ? error.message : String(error)}`,
+        `node ${nodeId} tunnel request failed: ${error instanceof Error ? error.message : String(error)}`,
         502,
       )
     })
     const onAbort = (): void => {
       req.destroy()
-      // duplex destroy drive Response body end error/cancel.
+      // Destroying duplex drives Response body error/cancel.
       tunnel.destroy(new HelmError('aborted', 'node fetch cancelled', 499, { nodeId, url: request.url }))
       reject(new HelmError('aborted', 'node fetch cancelled', 499, { nodeId, url: request.url }))
     }
     if (signal?.aborted) { onAbort(); return }
     signal?.addEventListener('abort', onAbort, { once: true })
     req.once('close', () => {
-      // response body may still in consume; its final by finishBody remove abort listen.
+      // Response body may still be consuming; `finishBody` removes the abort listener in that case.
       if (!responseSettled) signal?.removeEventListener('abort', onAbort)
     })
     if (request.method === 'GET' || request.method === 'HEAD' || request.body === null) req.end()

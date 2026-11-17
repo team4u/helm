@@ -1,29 +1,29 @@
 /**
- * ConversationTracker:pi-durable conversation helm view layer.
+ * ConversationTracker: pi-durable conversation view layer for Helm.
  *
- * core mechanism:observeConversation sync observer (advance inside forbidden await, only do record),
- * in snapshot push enter when sync maintain memory mirror and queue up side effect (SSE push in micro task in out).
+ * Core mechanism: observeConversation synchronous observer (never awaits inside advance, only records),
+ * synchronously updating in-memory mirrors on snapshot pushes and queuing side effects (SSE pushes emit in microtasks).
  *
- * state layout (see conversation-mirror.ts / context-usage-refresh.ts):
- * - each conversation run state aggregate is single ConversationMirror(mirrors),stopObserving once
- *   delete whole reclaim; across conversation index (settledRuns dedupe set) and stop observe after still must fidelity
- *   notifiedCompactionFailures in tracker top-level;
- * - contextUsage cache/refresh chain independent into ContextUsageRefresh(in-flight refresh can across exceeds stop observe).
+ * State layout (see conversation-mirror.ts / context-usage-refresh.ts):
+ * - All per-conversation runtime state aggregates into a single ConversationMirror (mirrors), reclaimed cleanly as a whole
+ *   on stopObserving; cross-conversation indexes (settledRuns deduplication set) and compaction failure flags that must
+ *   survive stopObserving (notifiedCompactionFailures) stay at tracker top-level;
+ * - contextUsage caching and refresh chaining are isolated in ContextUsageRefresh (in-flight refreshes can outlive stopObserving).
  *
- * turn_settled precise catch:
- * - input with durable input.id(i.e. SDK requestId) is unique append trace identity:registerInput
- *   before commit register,bindSubmission back fill submissionId→requestId related index;
- *   observe path (helm.input entry / pi.inbox rebuild) directly by requestId and idempotent
- *   merge unique record;entry rebuild only recognize when before run zone between (run.first and after) and when before
- *   inbox, already compute run history helm.input does not resurrect; restart restore leap run when via
- *   live.run.inputs right threat manifest + submission precise query patch complete metadata and index;
- * - each run(taskId) many tool round cumulative consume input (new taskId only then reset);
- * - run disappear (complete/failed) precise compute once (settledRuns guard against double report; failed take
- *   runFailure.inputs precise manifest);
- * - abort by runtime.abortConversation explicit compute (observe path does not repeat report aborted);
- * - run observe to failure after again explicit abort: only patch aborted(does not repeat failed);
- * - run leap during (start / doing semantics change) push real-time summary (emitRunSummary,
- *   semantics refer grain dedupe, do not one by one token; terminal state still by emitSettled exactly once negative duty).
+ * Exact turn_settled tracking:
+ * - Inputs use durable input.id (i.e., SDK requestId) as the unique tracking identity: registerInput registers before submit,
+ *   and bindSubmission backfills the submissionId -> requestId correlation index;
+ * - Observe paths (helm.input entries / pi.inbox reconstruction) idempotently merge into the single record by requestId;
+ *   entry reconstruction only counts the active run window (>= run.first) and current inbox so settled historical helm.input
+ *   never resurrects; on restart recovery of active runs, live.run.inputs authoritative manifest + submission queries backfill
+ *   metadata and indexes;
+ * - Multiple tool rounds within the same run (taskId) accumulate consumed inputs (reset only on a new taskId);
+ * - Run disappearance (complete/fail) settles exactly once (settledRuns prevents duplicate reports; failures use the
+ *   exact runFailure.inputs manifest);
+ * - Explicit abort via runtime.abortConversation settles immediately (observe path does not double-report);
+ * - Explicit abort after observing failure only patches aborted without re-emitting failure;
+ * - While a run is active, live summaries emit on start / semantic doing changes (emitRunSummary, deduplicated at
+ *   semantic granularity rather than per token; emitSettled remains solely responsible for terminal state).
  */
 
 import type {
@@ -67,54 +67,53 @@ export interface TrackerEvents {
   onInputCommitted(conversationId: number, input: ConversationInput): void
   onAssistantText(conversationId: number, entryId: number, text: string): void
   onTurnSettled: TurnSettledListener
-  /** new timeline item written to the database (only new item, each id exactly once; initial observe history do not heavy). */
+  /** New timeline entry persisted to store (new items only, once per ID; omits historical entries from initial observe). */
   onEntryCommitted?(conversationId: number, entry: ConversationEntry): void
-  /** conversation real-time incremental (streaming text cumulative snapshot + tool card; node stream push, terminal state conflict refresh eventually state). */
+  /** Live conversation delta (accumulated streaming text snapshot + tool cards; throttled pushes, flushed at settlement). */
   onLiveChanged?(live: ConversationLive): void
-  /** compress failed etc. async exception once explicit on report (EventHub notification channel). */
+  /** Asynchronous failures such as compaction failure reported once explicitly via EventHub notification channel. */
   onNotification?(payload: { level: 'info' | 'warning' | 'error'; title: string; body?: string; conversationId: number }): void
 }
 
-/** live node stream window (milli second):50-100ms zone between take 75ms, balance SSE frame rate and commit pressure. */
+/** Live throttling window (ms): 75ms inside 50-100ms range balances SSE frame rate against commit load. */
 const LIVE_THROTTLE_MS = 75
 
-/** single conversation settledRunOrder keep cap (guard against 7×24 long run without boundary increase long;runId single tune, eliminate forever do not re- now). */
+/** Max settled runs retained per conversation (prevents unbounded growth in 24/7 operation; runIds are monotonic so oldest are evicted). */
 const SETTLED_RUNS_PER_CONVERSATION = 64
 
 export class ConversationTracker {
   private readonly harness: Harness
   private readonly store: HelmStore
   private readonly events: TrackerEvents
-  /** conversation -> single conversation aggregate mirror (observe establish or first time write when create;stopObserving whole delete). */
+  /** conversation -> per-conversation aggregate mirror (created on observe or first write; deleted wholesale on stopObserving). */
   private readonly mirrors = new Map<number, ConversationMirror>()
-  /** already compute run(guard against done+failure+abort double report). across conversation prefix key (`${id}:${taskId}`)
-   * global dedupe, does not enter mirror (stopObserving by prefix clean up). */
+  /** Already-settled runs (prevents done+failure+abort double reporting). Keyed globally with conversation prefix (`${id}:${taskId}`)
+   * outside mirror so it persists cleanly and is swept by prefix on stopObserving. */
   private readonly settledRuns = new Set<string>()
-  /** conversation -> already compress failed notify taskId(the same failed duplicate snapshot does not repeat notify;
-   * do not follow stopObserving clear - - same runtime inside heavy observe must not again report the same failed). */
+  /** conversation -> taskId of last notified compaction failure (prevents duplicate notifications across snapshots;
+   * intentionally survives stopObserving so re-observing within the same runtime never re-notifies the same failure). */
   private readonly notifiedCompactionFailures = new Map<number, number>()
-  /** contextUsage cache/refresh chain (in-flight refresh can across exceeds stop observe, state does not enter mirror). */
+  /** contextUsage cache/refresh chain (in-flight refreshes can outlive stopObserving, state stays outside mirror). */
   private readonly usage: ContextUsageRefresh
   /** conversation -> latest visible timeline entry ID (`0` when none; excludes `pi.system` and rewound intervals). */
   private readonly lastEntryIds = new Map<number, number>()
-  /** tracker close guard (close() or host isClosed placement after reject late to async for account side effect). */
+  /** Tracker shutdown guard (blocks late async reconciliation side effects after close() or host isClosed becomes true). */
   private closed = false
 
   constructor(options: {
     harness: Harness
     store: HelmStore
     events: TrackerEvents
-    /** error summary for outside redaction (and runtime SecretStash same source); default constant etc. (only test environment). */
+    /** Error summary redactor (shared source with runtime SecretStash); defaults to identity (test environments only). */
     redactError?: (text: string) => string
-    /** conversation ownership right now read (Runtime inject ownership.getOwnership); default treated as human.
-     * only used to turn compute unread policy: background derive sub-conversation do not fabricate person class not read. */
+    /** Current conversation ownership reader (injected by Runtime via ownership.getOwnership); defaults to human.
+     * Used solely for unread policy on turn settlement so background derived sub-conversations never mark fake human unreads. */
     ownershipOf?: (id: number) => 'helm' | 'bot' | 'human'
-    /** when before Models set now read (contextUsage window parse use); default do not parse
-     * (contextWindow omit, never fabricate). */
+    /** Current Models catalog reader (for contextUsage window lookup); if omitted, contextWindow stays unset without fabricating. */
     models?: () => Models
-    /** host close state call back (and tracker.close() double keep risk). */
+    /** Host closing predicate (double protection alongside tracker.close()). */
     isClosed?: () => boolean
-    /** diagnose channel sink(default away defaultDiagnosticSink). */
+    /** Diagnostic channel sink (defaults to defaultDiagnosticSink). */
     onDiagnostic?: KernelDiagnosticSink
   }) {
     this.harness = options.harness
@@ -139,13 +138,13 @@ export class ConversationTracker {
     this.usage = new ContextUsageRefresh(host)
   }
 
-  /** error diagnose summary redaction (Runtime inject stashService.redact; guard against provider error back visible already register secret). */
+  /** Error summary redactor (Runtime injects stashService.redact so provider errors cannot echo registered secrets). */
   private readonly redactError: (text: string) => string
 
-  /** diagnose channel sink(Runtime construct after can inject; default away defaultDiagnosticSink). */
+  /** Diagnostic channel sink (injectable after Runtime construction; defaults to defaultDiagnosticSink). */
   private diagnosticSink: KernelDiagnosticSink | undefined
 
-  /** mount or replace diagnose channel sink(supply KernelRuntime construct phase connect line). */
+  /** Attach or replace the diagnostic sink (wired during KernelRuntime construction). */
   setDiagnosticSink(sink: KernelDiagnosticSink | undefined): void {
     this.diagnosticSink = sink
   }
@@ -154,20 +153,20 @@ export class ConversationTracker {
     emitDiagnostic(this.diagnosticSink, this.redactError, input)
   }
 
-  /** conversation ownership right now read (default constant human); only turn compute unread policy consume. */
+  /** Live conversation ownership reader (defaults to human); consumed solely by unread policy on turn settlement. */
   private readonly ownershipOf: ((id: number) => 'helm' | 'bot' | 'human') | undefined
 
-  /** when before Models set now read (default do not parse: window omit). */
+  /** Live Models catalog reader (if omitted, window stays unset). */
   private readonly modelsOf: (() => Models) | undefined
 
-  /** host close state now read (default constant false; and tracker.closed double keep risk). */
+  /** Host closing state reader (defaults to false; double guard alongside tracker.closed). */
   private readonly isClosedFn: (() => boolean) | undefined
 
   private get isClosing(): boolean {
     return this.closed || (this.isClosedFn?.() ?? false)
   }
 
-  /** take (must want when create) conversation mirror: all write path unique entry. */
+  /** Get (creating if needed) the mirror for a conversation: single entry point for all write paths. */
   private mirrorOf(id: number): ConversationMirror {
     let mirror = this.mirrors.get(id)
     if (mirror === undefined) {
@@ -177,7 +176,7 @@ export class ConversationTracker {
     return mirror
   }
 
-  /** hang connect designate conversation sync observer; leap run restore when first patch right threat input metadata again return. */
+  /** Attach a synchronous observer to the conversation; backfills authoritative input metadata for active runs before returning. */
   async observe(id: number): Promise<void> {
     if (this.mirrors.get(id)?.detach !== undefined) return
     const observer: Observer<ConversationView> = {
@@ -198,21 +197,20 @@ export class ConversationTracker {
     )
     const mirror = this.mirrorOf(id)
     mirror.detach = () => observation.detach()
-    // initial snapshot: window inside already has item do not heavy (first time attach only align watermark line).
-    // proxy count guard:await after if already stopObserving(or heavy observe swap proxy), do not to mirror back write.
+    // Initial snapshot: do not replay existing items in the window (first attach only aligns watermarks).
+    // Generation guard: if stopObserving runs (or re-observe swaps generation) across await, skip writing back to mirror.
     const generation = Symbol('conversation observation')
     mirror.observeGeneration = generation
     await this.adoptInitial(id, observation.value, generation)
   }
 
-  /** first time attach: only register watermark line and internal mirror, do not entry/live event.
+  /** Initial attachment: registers watermarks and internal mirrors without emitting entry/live events.
    *
-   * leap run restore (restart/heavy hang observer) when, this run  helm.input entry may already slide out
-   * observe window (long run many item), sync rebuild will lose input metadata. this where by SDK right threat mapping patch complete:
-   * live.run.inputs is this run already put placement submissionId precise sequence, one by one via
-   * harness.submission() take its entry id, again precise query (minEntryId=maxEntryId)
-   * helm.input entry patch origin/meta/attachments;queued items via pi.inbox patch.
-   * never with expand large observe window or concept rate sort replace right threat mapping. */
+   * When recovering an active run (restart/re-attach), the run's helm.input entry may have slid out of the
+   * observe window on long runs, causing synchronous reconstruction to lose input metadata. We backfill via
+   * SDK authoritative mappings: live.run.inputs gives the exact submissionIds admitted to this run, which we look
+   * up via harness.submission() for entry IDs and fetch precisely (minEntryId=maxEntryId) to restore origin/meta/attachments;
+   * queued items come from pi.inbox. Never rely on widening the observe window or heuristic sorting instead. */
   private async adoptInitial(
     id: number,
     view: ConversationView,
@@ -221,11 +219,11 @@ export class ConversationTracker {
     const mirror = this.mirrorOf(id)
     const live = view.docs['pi.live'] as LiveStateShape | undefined
     mirror.live = live ?? {}
-    // restart/heavy hang i.e. see to legacy failed same not silently (each runtime lifecycle exactly report once).
+    // Report lingering compaction failures even right after restart/re-attach (once per runtime lifecycle).
     this.noteCompactionFailure(id, live)
     let watermark = mirror.lastEmittedEntry
-    // context trigger watermark line and entry event watermark line the same initial value align: initial snapshot inside history mark record
-    // (pi.compaction etc.) does not trigger after continue adopt duplicate refresh (initial refresh see under way scheduling).
+    // Align context trigger watermark with entry event watermark so historical compaction markers in the initial
+    // snapshot do not trigger duplicate refreshes on subsequent adopts (initial refresh is scheduled below).
     let usageWatermark = -1
     let seenEntryId = mirror.lastSeenEntryId
     for (const raw of view.entries as never as ReadonlyArray<EntryRecordLike>) {
@@ -241,14 +239,14 @@ export class ConversationTracker {
     let initialLastEntryId = latestVisibleEntryIdOf(windowEntries)
     this.lastEntryIds.set(id, Math.max(this.lastEntryIds.get(id) ?? 0, initialLastEntryId))
     this.store.setLastEntryId?.(id, this.lastEntryIds.get(id)!)
-    // inbox mirror register first at run decide: restart/stop run but inbox still has queue up input when,
-    // queuedInputs derive and listLiveViews snapshot do not lose queue up fact (do not in web fabricate queue).
+    // Register inbox mirror before checking live.run: even after a restart/stopped run with queued inputs remaining,
+    // queuedInputs derivation and listLiveViews snapshots preserve queued state honestly without fabricating UI queues.
     const inbox = view.docs['pi.inbox'] as { items?: InboxItemShape[] } | undefined
     const inboxItems = inbox?.items ?? []
     mirror.inbox = inboxItems
     this.adoptInputsFromInbox(id, inboxItems)
-    // first time hang connect i.e. fill context use amount cache (restart/fork/creates new conversation initial read path);
-    // idle conversation same need to (otherwise only leap run conversation has initial value, history conversation open after without pill).
+    // Populate context usage cache on initial attach (initial read path for restart/fork/new conversations),
+    // including idle conversations so opening a historical conversation displays its usage pill.
     this.usage.schedule(id)
     if (initialLastEntryId === 0 && (view as { before?: unknown }).before !== undefined) {
       initialLastEntryId = await this.scanLatestVisibleEntryId(id)
@@ -262,22 +260,22 @@ export class ConversationTracker {
     mirror.consumedInputs = new Set<string>()
     const first = live.run.first !== undefined ? Number(live.run.first) : undefined
     if (first !== undefined) mirror.runFirstEntry = first
-    // this run already put placement input:SDK right threat submissionId -> entry precise back read, register
-    // requestId append trace record and submissionId->requestId index (markConsumed can hit).
+    // Admitted inputs for this run: back-read entry via authoritative SDK submissionId -> entry mapping,
+    // registering requestId tracking records and submissionId -> requestId indexes so markConsumed hits.
     const loaded = await this.loadRunInputEntries(id, live.run.inputs as number[])
-    // stop observe swap proxy: async back read result act abandon, never to already clean up mirror re- item.
+    // If stopObserving swapped generation, discard async read results rather than re-populating a cleaned mirror.
     if (this.mirrors.get(id)?.observeGeneration !== generation) return
     this.adoptInputsFromEntries(id, loaded.entries)
     this.indexRestoredSubmissions(id, loaded.pairs)
-    // queued(not put placement) input:inbox entry payload direct read (on side already register mirror, this where only patch input metadata).
+    // Queued (not yet admitted) inputs: read directly from inbox entries (mirror registered above; just backfill input metadata).
     this.adoptInputsFromInbox(id, inboxItems)
     for (const submissionId of live.run.inputs) this.markConsumed(id, submissionId)
-    // restore leap run already body now snapshot summary (listConversations): register semantics refer grain i.e. can,
-    // after continue advance only in real change when push, do not patch redundant working frame.
+    // Active recovered runs already appear in snapshot summaries (listConversations): seed the semantic dedupe key
+    // so subsequent adopts only emit on actual status/doing transitions instead of pushing redundant working frames.
     if (this.store.getConv(id)) mirror.lastSummaryKey = summaryKeyOf(this.summaryOf(id))
   }
 
-  /** back read result:helm.input entry list + (submissionId, requestId) right threat for. */
+  /** Back-read result: helm.input entries + authoritative (submissionId, requestId) pairs. */
   private async loadRunInputEntries(
     id: number,
     submissionIds: number[],
@@ -309,7 +307,7 @@ export class ConversationTracker {
     return { entries: out, pairs }
   }
 
-  /** restore input right threat (submissionId, requestId) for register enter related index. */
+  /** Register restored authoritative (submissionId, requestId) pairs in the correlation index. */
   private indexRestoredSubmissions(
     id: number,
     pairs: ReadonlyArray<{ submissionId: number; requestId: string }>,
@@ -319,20 +317,20 @@ export class ConversationTracker {
     for (const { submissionId, requestId } of pairs) index.set(submissionId, requestId)
   }
 
-  /** inbox queued items rebuild (not put placement input origin/meta/attachments patch complete + index register). */
+  /** Rebuild queued inbox items (backfills origin/meta/attachments and registers indexes for un-admitted inputs). */
   private adoptInputsFromInbox(id: number, items: ReadonlyArray<InboxItemShape>): void {
     for (const item of items) {
       if (item.mode === 'write') continue
       const data = item.entry?.data as HelmInputMeta | undefined
       if (item.entry?.kind !== 'helm.input' || !data) continue
       if (typeof data.id !== 'string' || typeof data.text !== 'string') continue
-      // inbox items id i.e. SDK submissionId: register related index (out queue put placement after markConsumed can hit).
+      // Inbox item id is SDK submissionId: register correlation index so markConsumed matches once dequeued.
       this.mirrorOf(id).submissionIndex.set(item.id, data.id)
       this.upsertTrackedInput(id, data.id, data)
     }
   }
 
-  /** close tracker: stop observe all conversation and block assert in-flight async streamline for account again side effect. */
+  /** Close tracker: stop observing all conversations and block late in-flight async settlement side effects. */
   close(): void {
     this.closed = true
     for (const id of [...this.mirrors.keys()]) {
@@ -343,14 +341,13 @@ export class ConversationTracker {
   stopObserving(id: number): void {
     const mirror = this.mirrors.get(id)
     mirror?.detach?.()
-    // clean timer and discard await snapshot: delete/stop observe after never out ghost event.
+    // Cancel pending timer and discard queued snapshots: never emit ghost events after deletion/unobserve.
     this.clearLiveTimer(id)
-    // context use amount mirror one and clean up: stop observe/after deletion late to refresh via proxy count guard discard, does not resurrect;
-    // refresh chain wait for first row resolve(wake come after self inspect cache/metadata and exit, do not forever long suspended).
+    // Clean up contextUsage mirror together: late async refreshes after unobserve/deletion drop via generation guard;
+    // unblock refresh waiters immediately so they inspect missing mirror/cache and exit without hanging.
     this.usage.clearConversation(id)
-    // completely clean up the conversation all memory mirror: in-flight turn_settled wait for first resolve(guard against forever long
-    // suspended) after whole delete, then clean global settledRuns prefix key. otherwise reverse re- create delete conversation process
-    // (CLI/Web manage side) will follow time unbounded accumulated leftover item.
+    // Purge all in-memory mirrors for this conversation: resolve turn_settled waiters first (preventing hangs),
+    // then clear mirror and global settledRuns prefix keys so repeated create/delete cycles never leak entries.
     const settledWaiters = mirror?.settledWaiters ?? []
     for (const resolve of settledWaiters) resolve()
     this.mirrors.delete(id)
@@ -389,7 +386,7 @@ export class ConversationTracker {
     }
   }
 
-  /** clean up live node stream timer(idempotent). */
+  /** Clear live throttling timer (idempotent). */
   private clearLiveTimer(id: number): void {
     const mirror = this.mirrors.get(id)
     const timer = mirror?.liveTimer
@@ -399,19 +396,18 @@ export class ConversationTracker {
     }
   }
 
-  /** before commit register input metadata (with durable input.id i.e. requestId is append trace identity;
-   * submit return after bindSubmission register submissionId related index). */
+  /** Register input metadata before submission (using durable input.id = requestId as tracking key;
+   * bindSubmission registers the submissionId correlation index once submit returns). */
   registerInput(conversationId: number, input: ConversationInput): void {
     const map = this.mirrorOf(conversationId).trackedInputs
-    // same requestId may already has entry/inbox observe rebuild record (such as rewind transaction commit
-    // first at register): only patch missing (memory in more complete metadata takes precedence), do not creates new duplicate record.
+    // The same requestId may already have a record from entry/inbox observation (e.g., rewind tx commits
+    // before registration finishes): fill only missing fields (richer in-memory metadata wins) without duplicating.
     const existing = map.get(input.id)
     map.set(input.id, existing === undefined ? input : mergeInputMeta(existing, input))
   }
 
-  /** submit return after register submissionId→requestId related index (SDK run.inputs etc.
-   * all with submissionId express, via index mapping back append trace identity;HelmError when dropInput
-   * remove register). */
+  /** Register submissionId -> requestId correlation after submit returns (SDK run.inputs etc. identify inputs
+   * by submissionId; maps back to tracking identity, and dropInput removes on HelmError). */
   bindSubmission(conversationId: number, requestId: string, submissionId: number): void {
     this.mirrorOf(conversationId).submissionIndex.set(submissionId, requestId)
   }
@@ -420,7 +416,7 @@ export class ConversationTracker {
     this.mirrors.get(conversationId)?.trackedInputs.delete(requestId)
   }
 
-  /** withdraw back queue up commit: clean up related index items and requestId append trace record (withdraw use). */
+  /** Clean up correlation entry and requestId tracking record when a queued submission is withdrawn. */
   dropSubmission(conversationId: number, submissionId: number, requestId?: string): void {
     const mirror = this.mirrors.get(conversationId)
     if (mirror === undefined) return
@@ -429,9 +425,9 @@ export class ConversationTracker {
     if (resolved !== undefined) mirror.trackedInputs.delete(resolved)
   }
 
-  /** this turn (when before run) input manifest (before_turn payload use):run.inputs precise
-   * sequence (steer append in inside)+ not yet related submissionId register (submit in-flight),
-   * by input.id dedupe unique. */
+  /** Snapshot of inputs belonging to the current active run (used by before_turn payload): exact run.inputs
+   * sequence (including steered additions) plus any registered submissions still in flight without a submissionId yet,
+   * deduplicated by input.id. */
   currentRunInputs(conversationId: number): ConversationInput[] {
     const mirror = this.mirrors.get(conversationId)
     const run = mirror?.live?.run
@@ -445,13 +441,13 @@ export class ConversationTracker {
       seen.add(input.id)
       out.push(input)
     }
-    // run.inputs is this run already put placement submissionId precise sequence (contains already consume items),
-    // via related index mapping back append trace identity.
+    // run.inputs gives the exact sequence of submissionIds admitted to this run (including already-consumed ones),
+    // mapped back to tracking identity via submissionIndex.
     for (const submissionId of run.inputs) {
       const requestId = index.get(submissionId)
       if (requestId !== undefined) collect(map.get(requestId))
     }
-    // not yet related submissionId register:submit in-flight (busy in followUp input in manual not put placement).
+    // Registered records without a bound submissionId yet: in-flight submits (e.g., queued followUp before placement).
     const bound = new Set(index.values())
     for (const [requestId, input] of map) {
       if (!bound.has(requestId)) collect(input)
@@ -459,7 +455,7 @@ export class ConversationTracker {
     return out
   }
 
-  /** wait for this conversation all in-flight turn_settled call back complete (waitForIdle use, non- global promise). */
+  /** Wait for all in-flight turn_settled callbacks for this conversation to finish (used by waitForIdle; scoped per conversation). */
   async waitTurnSettled(conversationId: number): Promise<void> {
     const mirror = this.mirrors.get(conversationId)
     if (mirror !== undefined && mirror.settledInflight > 0) {
@@ -491,20 +487,20 @@ export class ConversationTracker {
     for (const resolve of waiters) resolve()
   }
 
-  /** conversation is otherwise has in-flight work (close abort compute decide: idle do not fabricate aborted compute). */
+  /** Whether the conversation currently has live work running (checked before abort settlement so idle stays idle). */
   hasLiveWork(conversationId: number): boolean {
     return this.mirrors.get(conversationId)?.live?.run !== undefined
   }
 
-  /** conversation is otherwise has in progress context streamline task (do not count hasLiveWork, avoid fabricate turn_settled). */
+  /** Whether the conversation has an active context compaction task (separate from hasLiveWork so compaction never fabricates turn_settled). */
   isCompacting(conversationId: number): boolean {
     return (this.mirrors.get(conversationId)?.live?.compactions?.length ?? 0) > 0
   }
 
-  /** SSE snapshot use real-time view manifest: only leap run, streaming generation or non-empty queued conversation.
+  /** Live views for SSE snapshot: only conversations with an active run, streaming generation, or non-empty queue.
    *
-   * from live/inbox right threat mirror sync derive (independent of on time push cache): reconnect first frame i.e. restore queue up
-   * pill and streaming text; idle conversation does not resurrect (without content can show). */
+   * Derived synchronously from live/inbox mirrors (independent of throttled push cache) so reconnect initial frames
+   * restore queued pills and streaming text without resurrecting idle conversations that have nothing to show. */
   listLiveViews(): ConversationLive[] {
     const out: ConversationLive[] = []
     for (const [id, mirror] of this.mirrors) {
@@ -515,19 +511,19 @@ export class ConversationTracker {
         live?.generation !== undefined || (live?.tools?.length ?? 0) > 0 || (live?.nestedTools?.length ?? 0) > 0
       if (!hasRun && !hasStream && (inboxItems?.length ?? 0) === 0) continue
       const snapshot = deriveConversationLive(id, live, Date.now(), inboxItems)
-      // idle conversation only in derive out non-empty queued when keep (queue-only); does not resurrect idle empty live.
+      // On idle conversations, keep only when queued inputs exist (queue-only); never emit empty idle live views.
       if (!hasRun && !hasStream && (snapshot.queuedInputs?.length ?? 0) === 0) continue
       out.push(snapshot)
     }
     return out
   }
 
-  /** abort compute (runtime.abortConversation invoke; and observe path guard against double report). */
+  /** Abort settlement (called by runtime.abortConversation; guards against double reporting with the observe path). */
   settleAborted(conversationId: number): void {
     const mirror = this.mirrors.get(conversationId)
     const taskId = mirror?.runTaskId
     if (taskId !== undefined && mirror?.lastSettledRun === taskId) {
-      // observe path already compute the run(aborted/failed/completed): does not repeat.
+      // Observe path already settled this run (aborted/failed/completed): do not duplicate.
       this.resetRunState(conversationId)
       return
     }
@@ -539,9 +535,8 @@ export class ConversationTracker {
     this.emitSettled(conversationId, 'aborted', all, undefined)
   }
 
-  /** non- leap run state under explicit abort after clean up leftover queue up append trace register (conversation.abort()
-   * already withdraw back pi.inbox, will not trigger settleAborted; only in when before without leap live.run when clean up,
-   * never trigger touch concurrency start new run). */
+  /** Clear leftover queued tracking records after an explicit abort while idle (conversation.abort() already withdrew
+   * pi.inbox without triggering settleAborted; clears only when no live.run exists, never interfering with new concurrent runs). */
   clearQueuedTracking(conversationId: number): void {
     const mirror = this.mirrors.get(conversationId)
     if (mirror === undefined || mirror.live?.run !== undefined) return
@@ -551,9 +546,9 @@ export class ConversationTracker {
     }
   }
 
-  /** take when before run all input (abort compute): already put placement (run.inputs via index)+ already consume collection +
-   * not yet related submissionId register, by input.id dedupe; never iterate history run 
-   * append trace record (already compute input no longer re-,origin and duplicate input do not by old history pollute). */
+  /** Collect all inputs of the current run (for abort settlement): admitted inputs (run.inputs via index) + consumed set +
+   * registered submissions without a submissionId yet, deduplicated by input.id; never iterates historical runs'
+   * tracking records (settled inputs never re-appear, keeping origins accurate and avoiding pollution). */
   private takeCurrentRunInputs(conversationId: number): ConversationInput[] {
     const mirror = this.mirrors.get(conversationId)
     const out: ConversationInput[] = []
@@ -590,10 +585,10 @@ export class ConversationTracker {
     // new run at startup (live.run.taskId change) self however override.
   }
 
-  /** register already compute runKey, and by conversation restrict keep capacity (most old eliminate, guard against without boundary increase long).
+  /** Register a settled runKey while enforcing the per-conversation retention cap (evicts oldest to bound growth).
    *
-   * runId(taskId) all store single tune pass increase: by eliminate most old key cannot can again appear, new run start when
-   *  settledRuns.delete(runKey) only effect at most near key (must in capacity inside), semantics do not change. */
+   * runIds (taskIds) increase monotonically across the store: evicted keys can never recur, and settledRuns.delete(runKey)
+   * on new runs only ever touches recent keys within the window, preserving exact semantics. */
   private noteSettledRun(conversationId: number, runKey: string): void {
     this.settledRuns.add(runKey)
     const order = this.mirrorOf(conversationId).settledRunOrder
@@ -604,7 +599,7 @@ export class ConversationTracker {
     }
   }
 
-  /** from capacity order in remove designate runKey(new run start when sync clean settledRuns use). */
+  /** Remove a specific runKey from the retention order list (used when clearing settledRuns on new run start). */
   private dropSettledRunFromOrder(conversationId: number, runKey: string): void {
     const order = this.mirrors.get(conversationId)?.settledRunOrder
     if (order === undefined) return
@@ -618,17 +613,17 @@ export class ConversationTracker {
     const prev = mirror.live
     mirror.live = live ?? {}
 
-    // compress failed must not static default: new compactionFailure exactly once error notification.
+    // Never drop compaction failures silently: emit an error notification once per new compactionFailure.
     this.noteCompactionFailure(id, live)
 
-    // context boundary change (compress/reset/original ground override heavy item persisted, or compress real-time state change):
-    // scheduling async refresh (sync dedupe;observe call back inside forbidden await).
+    // When a context boundary changes (compaction / reset / in-place rewrite persisted, or active compaction changes),
+    // schedule an async refresh (deduplicated synchronously; awaiting inside observe callbacks is forbidden).
     this.usage.noteBoundary(id, view, prev, live)
 
-    // assistant text: window tail part most new pi.assistant entry.
-    // encounter helm.rewind / pi.reset immediately stop back scan: original ground override heavy just write truncate mark record (new
-    // answer not yet generate) when, mark record before old pi.assistant already by override, never can again trigger
-    // onAssistantText old answer re- write FTS5(guard against old answer re- burn).
+    // Assistant text: take the newest pi.assistant entry at the window tail.
+    // Stop scanning backward immediately upon hitting helm.rewind / pi.reset: right after an in-place rewrite
+    // appends a truncation marker (before a new answer exists), older pi.assistant entries are superseded and must
+    // never re-trigger onAssistantText to pollute FTS5 with stale answers.
     for (let i = view.entries.length - 1; i >= 0; i -= 1) {
       const entry = view.entries[i] as
         | { kind: string; id: number; model?: ReadonlyArray<{ content?: ReadonlyArray<{ type: string; text?: string }> }> }
@@ -644,8 +639,8 @@ export class ConversationTracker {
       }
     }
 
-    // helm.input entry observe: only recognize when before run zone between (run.first and after) new item,
-    // history helm.input does not resurrect (already compute run input no longer enter trackedInputs).
+    // Observe helm.input entries: only consider new items inside the current run window (>= run.first);
+    // historical helm.input entries must never resurrect settled inputs into trackedInputs.
     const first = mirror.runFirstEntry
     const candidates: Array<Record<string, unknown>> = []
     for (const raw of view.entries as never as ReadonlyArray<EntryRecordLike>) {
@@ -654,17 +649,17 @@ export class ConversationTracker {
       candidates.push(raw as unknown as Record<string, unknown>)
     }
     this.adoptInputsFromEntries(id, candidates)
-    // inbox queued items same rebuild (busy in followUp/steer input not put placement but must in manual).
+    // Also rebuild queued inbox items (for followUp/steer inputs queued during busy runs before placement).
     const inbox = view.docs['pi.inbox'] as { items?: InboxItemShape[] } | undefined
     const inboxItems = inbox?.items ?? []
     mirror.inbox = inboxItems
     this.adoptInputsFromInbox(id, inboxItems)
 
-    // new written to the database item: by id order for each exactly once (commit order keep,SDK same commit collapse when
-    // window still is all order, one by one push enter watermark line).
+    // Newly persisted entries: advance watermark strictly in ascending ID order once per entry (preserves commit order
+    // even when SDK collapses multiple entries into one snapshot).
     this.emitNewEntries(id, view.entries as never as ReadonlyArray<EntryRecordLike>)
 
-    // detect this snapshot is otherwise new pi.compaction item (independent at onEntryCommitted sink).
+    // Detect whether this snapshot includes a new pi.compaction entry (independent of onEntryCommitted sink).
     const prevSeenEntryId = mirror.lastSeenEntryId
     let nextSeenEntryId = prevSeenEntryId
     let hasNewCompactionEntry = false
@@ -676,8 +671,8 @@ export class ConversationTracker {
     }
     mirror.lastSeenEntryId = nextSeenEntryId
 
-    // streamline task end and not pi.compaction, when before without leap run/the rest streamline task:
-    // scheduling async for account (adopt inside strictly forbidden await), screen empty skip vs abort/failed.
+    // When a compaction task finishes without a pi.compaction entry and no other run/compaction is active,
+    // schedule async reconciliation (awaiting inside adopt is forbidden) to distinguish skipped no-op vs abort/failure.
     const prevCompactions = prev?.compactions ?? []
     const nextCompactions = live?.compactions ?? []
     const nextTaskIds = new Set(nextCompactions.map((c) => c.taskId))
@@ -701,7 +696,7 @@ export class ConversationTracker {
       this.store.setLastEntryId?.(id, nextLastEntryId)
     }
 
-    // first compute already end prev run(contains same snapshot collapse:run1 end + run2 start same commit).
+    // Settle the ended previous run first (including collapsed snapshots where run1 ends and run2 starts together).
     let settledInAdopt = false
     if (prev?.run && (!live?.run || live.run.taskId !== prev.run.taskId)) {
       settledInAdopt = true
@@ -715,7 +710,7 @@ export class ConversationTracker {
           for (const submissionId of failure.inputs) this.markConsumed(id, submissionId)
           const consumed = this.takeConsumed(id)
           if (failure.reason === 'aborted') {
-            // abort terminal state (observe path): once aborted compute, no longer away failed.
+            // Aborted terminal state (observe path): settles as aborted without also reporting failed.
             this.emitSettled(id, 'aborted', consumed, undefined)
           } else {
             this.emitSettled(
@@ -731,8 +726,8 @@ export class ConversationTracker {
         }
       }
       this.resetRunState(id)
-      // input rebuild under boundary single tune push enter to this snapshot tail part: already compute run all item (contains its
-      // helm.input) into is history, after continue snapshot window again scan to also does not resurrect.
+      // Monotonically advance input-rebuild lower bound to snapshot tail so settled run entries (incl. helm.input)
+      // become history and cannot resurrect on later snapshot scans.
       const tail = view.entries.length
         ? Number((view.entries[view.entries.length - 1] as EntryRecordLike).id)
         : undefined
@@ -744,7 +739,7 @@ export class ConversationTracker {
     if (live?.run) {
       const runKey = `${id}:${live.run.taskId}`
       if (mirror.runTaskId !== live.run.taskId) {
-        // new run start: reset this turn consume collection (same run many tool round do not reset).
+        // New run started: reset consumed inputs for this turn (multi-round tool calls in the same run do not reset).
         mirror.runTaskId = live.run.taskId
         mirror.consumedInputs = new Set<string>()
         this.settledRuns.delete(runKey)
@@ -757,12 +752,12 @@ export class ConversationTracker {
       for (const submissionId of live.run.inputs) {
         this.markConsumed(id, submissionId)
       }
-      // complete phase (answered,inputs empty) do not motion consumedInputs- - keep already consume record.
+      // During completion phase (answered, inputs cleared), leave consumedInputs intact so consumed records remain.
     }
 
-    // real-time view: node stream push (terminal state in emitSettled inside force conflict refresh).
+    // Live view: throttled pushes (forced flush on settlement inside emitSettled).
     this.emitLiveThrottled(id, live)
-    // run leap during real-time summary:run start and doing semantics change (first token before i.e. has working).
+    // Live summary while run is active: covers run start (working even before first token) and semantic doing transitions.
     this.emitRunSummary(id)
     // When idle visible entries advance without a run settlement (e.g. compaction, reset, rewind, or write),
     // push conversation.upsert so reconnect SWR watermarks stay current.
@@ -773,7 +768,7 @@ export class ConversationTracker {
     }
   }
 
-  /** new written to the database item: by id order push enter watermark line, each exactly once. */
+  /** Newly persisted entries: advance watermark by ascending ID, emitting each exactly once. */
   private emitNewEntries(id: number, entries: ReadonlyArray<EntryRecordLike>): void {
     const sink = this.events.onEntryCommitted
     if (sink === undefined) return
@@ -783,8 +778,8 @@ export class ConversationTracker {
     for (const raw of entries) {
       const numeric = Number(raw.id)
       if (!Number.isFinite(numeric) || numeric <= watermark) continue
-      // convert failed (non- JSON payload) explicit throw:SDK will with listener_error end observe,
-      // never static default discard or fabricate fall back (honest discipline).
+      // Throw explicitly on conversion failures (non-JSON payload): SDK terminates observation with listener_error
+      // rather than silently dropping or fabricating fallbacks (honesty invariant).
       sink(id, toConversationEntry(raw))
       watermark = numeric
       advanced = true
@@ -792,10 +787,10 @@ export class ConversationTracker {
     if (advanced && mirror !== undefined) mirror.lastEmittedEntry = watermark
   }
 
-  /** node stream push real-time view: window inside only keep most new snapshot, same content does not resend frame.
+  /** Throttled live view emitter: retains only the latest snapshot per window and deduplicates identical content.
    *
-   * queuedInputs change (queue/out queue) bypass 75ms node stream immediately conflict refresh: user commit
-   * steer / followUp after timeline tail part pill as soon as possible visible (subject to observe commit when order affect). */
+   * Changes to queuedInputs (enqueue/dequeue) bypass the 75ms throttle and flush immediately so steer/followUp pills
+   * appear at the timeline tail as soon as observed (subject only to observer commit timing). */
   private emitLiveThrottled(id: number, live: LiveStateShape | undefined): void {
     if (this.events.onLiveChanged === undefined) return
     const mirror = this.mirrors.get(id)
@@ -807,8 +802,8 @@ export class ConversationTracker {
       (live?.nestedTools?.length ?? 0) === 0 &&
       (inboxItems?.length ?? 0) === 0
     if (queuedEmpty) {
-      // idle view do not push (terminal state conflict refresh by emitSettled negative duty); but before queued,
-      // now right threat inbox already empty when cannot short route discard clean up frame (otherwise client pill leftover).
+      // Do not emit idle views (terminal flushes are handled by emitSettled); however, if inputs were previously
+      // queued and the authoritative inbox is now empty, emit a cleanup frame so client pills do not linger.
       const prevQueued = mirror?.lastQueuedLiveKey
       if (prevQueued === undefined || prevQueued === '[]') return
       const cleanup = deriveConversationLive(id, live, Date.now(), inboxItems)
@@ -817,13 +812,13 @@ export class ConversationTracker {
     }
     const snapshot = deriveConversationLive(id, live, Date.now(), inboxItems)
     const key = this.liveKeyOf(snapshot)
-    // on time already queued refer grain unify semantics: not register treated as empty queue '[]'(first time empty queue
-    // do not therefore mistakenly immediately conflict refresh path); only queue change bypass 75ms node stream.
+    // Align previous-queue fingerprint: uninitialized means empty '[]' (so first empty queue never falsely skips throttle);
+    // only actual queue changes bypass the 75ms throttle.
     const queuedKey = JSON.stringify(snapshot.queuedInputs ?? [])
     const prevQueuedKey = mirror?.lastQueuedLiveKey ?? '[]'
     if (key === mirror?.lastLiveKey && queuedKey === prevQueuedKey) return
     if (queuedKey !== prevQueuedKey) {
-      // queue/out queue real-time takes precedence: clean timer sync conflict refresh, do not etc. 75ms node stream.
+      // Immediate priority for queue enqueue/dequeue: cancel timer and flush synchronously without waiting 75ms.
       this.clearLiveTimer(id)
       this.sendLiveNow(id, snapshot)
       return
@@ -839,9 +834,9 @@ export class ConversationTracker {
     m.liveTimer = timer
   }
 
-  /** live frame content refer grain:text/thinking/tools/generation/queuedInputs(send and dedupe two where shared use the same public style).
-   * generation reference and refer grain: pure tool-call parameter streaming during text/thinking constant empty,
-   * do not count generation then parameter increase long fully do not frame. */
+  /** Live frame content fingerprint: text/thinking/tools/generation/queuedInputs (single formula shared by send and dedupe).
+   * generation participates in fingerprinting so pure tool-call argument streaming (while text/thinking remain empty)
+   * is not suppressed by unchanged snapshots. */
   private liveKeyOf(snapshot: ConversationLive): string {
     return JSON.stringify([
       snapshot.text,
@@ -852,7 +847,7 @@ export class ConversationTracker {
     ])
   }
 
-  /** sync send one frame live(terminal state conflict refresh / queued clean up shared use): register two where refer grain. */
+  /** Synchronously send one live frame (shared by terminal flushes / queue cleanup) and record both fingerprints. */
   private sendLiveNow(id: number, snapshot: ConversationLive): void {
     this.clearLiveTimer(id)
     const mirror = this.mirrorOf(id)
@@ -862,7 +857,7 @@ export class ConversationTracker {
     this.events.onLiveChanged?.(snapshot)
   }
 
-  /** conflict refresh window inside await snapshot (timer expires or queuedInputs change immediately conflict refresh). */
+  /** Flush pending snapshot inside throttle window (runs on timer expiry or immediate queue change). */
   private flushPendingLive(id: number): void {
     const mirror = this.mirrors.get(id)
     const snapshot = mirror?.pendingLive
@@ -873,7 +868,7 @@ export class ConversationTracker {
     this.events.onLiveChanged?.(snapshot)
   }
 
-  /** terminal state force conflict refresh: with when before live mirror is allow sync frame (clean timer, discard expired window snapshot). */
+  /** Force terminal flush: emits a synchronous frame from current live mirror (canceling timer and dropping stale pending). */
   private flushLiveFinal(conversationId: number): void {
     this.clearLiveTimer(conversationId)
     const mirror = this.mirrors.get(conversationId)
@@ -894,15 +889,15 @@ export class ConversationTracker {
     this.events.onLiveChanged(snapshot)
   }
 
-  /** from helm.input entry data register input (by input.id i.e. requestId idempotent merge unique record).
+  /** Register inputs from helm.input entry data (idempotent merge into unique record keyed by input.id = requestId).
    *
-   * happy path register/bind already has right threat record:entry observe only back fill metadata missing opening (origin/
-   * meta/attachments), do not creates new duplicate record. */
+   * On happy paths register/bind already holds the authoritative record, so entry observation only fills missing metadata
+   * fields (origin/meta/attachments) without creating duplicates. */
   private adoptInputsFromEntries(id: number, entries: ReadonlyArray<unknown>): void {
     for (const raw of entries) {
       const entry = raw as { kind?: string; data?: unknown }
-      // self define input entry:SDK pickInputEntry  {kind:'helm.input', data} write
-      // entry.data,model only carry UserMessage(do not in model[0].data).
+      // Custom input entry: SDK pickInputEntry writes {kind:'helm.input', data} into entry.data;
+      // model only holds UserMessage (nothing in model[0].data).
       if (entry?.kind !== 'helm.input') continue
       const meta = entry.data as HelmInputMeta | undefined
       if (!meta || typeof meta.id !== 'string' || typeof meta.text !== 'string') continue
@@ -910,8 +905,7 @@ export class ConversationTracker {
     }
   }
 
-  /** single helm.input metadata register/merge (by input.id idempotent, unique record; caller already
-   * validate meta.id/text is string). */
+  /** Register or merge metadata for a single helm.input (idempotent by input.id; caller checked meta.id/text are strings). */
   private upsertTrackedInput(id: number, requestId: string, meta: HelmInputMeta): void {
     const map = this.mirrorOf(id).trackedInputs
     const rebuilt = inputFromMeta(meta)
@@ -919,9 +913,8 @@ export class ConversationTracker {
     map.set(requestId, existing === undefined ? rebuilt : mergeInputMeta(existing, rebuilt))
   }
 
-  /** mark record submissionId already by when before run consume: via related index mapping back requestId after
-   * exactly once register (onInputCommitted exactly once). index missing (bind/back fill not yet occur) when
-   * static default skip, under once snapshot heavy scan run.inputs when patch record. */
+  /** Mark submissionId as consumed by the active run: maps back to requestId via correlation index and registers once
+   * (emitting onInputCommitted once). Silently skips if index is missing (bind/backfill pending) to catch on next scan. */
   private markConsumed(conversationId: number, submissionId: number): void {
     const mirror = this.mirrors.get(conversationId)
     if (mirror === undefined) return
@@ -935,8 +928,8 @@ export class ConversationTracker {
     this.events.onInputCommitted(conversationId, input)
   }
 
-  /** compute take this run already consume input and clean up register:requestId set each items exactly a record,
-   * append trace record and related index one and clear, history does not resurrect. */
+  /** Collect inputs consumed by this run on settlement and purge them: once per requestId, clearing both tracking and index
+   * entries so history never resurrects. */
   private takeConsumed(conversationId: number): ConversationInput[] {
     const mirror = this.mirrors.get(conversationId)
     const consumedSet = mirror?.consumedInputs
@@ -946,7 +939,7 @@ export class ConversationTracker {
         const input = mirror.trackedInputs.get(requestId)
         if (input !== undefined) out.push(input)
       }
-      // already compute input append trace record and index items one and clear.
+      // Purge tracking and correlation index entries for settled inputs together.
       for (const [submissionId, requestId] of mirror.submissionIndex) {
         if (consumedSet.has(requestId)) mirror.submissionIndex.delete(submissionId)
       }
@@ -966,13 +959,13 @@ export class ConversationTracker {
     this.beginSettled(conversationId)
     let completion: Promise<void> | void
     try {
-      // real-time view terminal state conflict refresh: first at turn_settled out (empty tools/text means stream end).
+      // Terminal flush of live view: precedes turn_settled (empty tools/text signals stream completion).
       this.flushLiveFinal(conversationId)
-      // first push enter durable watermark, again construct compute snapshot; plugin and read interface observe the same terminal state.
-      // completionSeq push enter + unread placement (human explicit patch only then clean zero).
-      // background derive sub-conversation (ownedBy non- human and has parent chain, such as managed subagent / SuperAgent
-      // Worker) complete do not fabricate person class not read; person class fork(has parent chain but human ownership) and top-level
-      // direct connect conversation keep unread semantics. failed/abort one rule do not placement unread(since has contract).
+      // Advance durable watermark first, then construct settlement snapshot so plugins and read APIs observe identical state.
+      // Increment completionSeq + set unread (cleared only by explicit human PATCH).
+      // Background derived sub-conversations (non-human ownership with parent chain, e.g. managed subagents / SuperAgent
+      // Workers) never fabricate human unread flags on completion; human forks (parent chain + human ownership) and top-level
+      // direct conversations preserve unread semantics. Failures/aborts never set unread (existing contract).
       const meta = this.store.getConv(conversationId)
       if (meta) {
         const unread = outcome === 'completed' && !this.isBackgroundDerived(conversationId, meta)
@@ -985,9 +978,9 @@ export class ConversationTracker {
         }
         this.store.upsertConv(updated)
         const settledStatus = unread ? 'done' : statusNow(updated, outcome)
-        // failed terminal state diagnose summary and summaryOf same source:emitSettled do not via tracker derive path,
-        // must in this same carry lastError(otherwise first conversation.upsert event leak reason);
-        // contextUsage same from sync cache additional (compute frame after async refresh again new value frame).
+        // Failed terminal diagnostic summary shares single source with summaryOf: emitSettled bypasses tracker derivation,
+        // so it must include lastError here (otherwise the first conversation.upsert drops the error reason);
+        // likewise attach cached contextUsage synchronously (post-settlement async refresh updates later if changed).
         const settledRaw = summaryOf(
           updated,
           settledStatus,
@@ -998,10 +991,10 @@ export class ConversationTracker {
         )
         const cachedUsage = this.usage.peek(conversationId)
         const settledSummary = cachedUsage === undefined ? settledRaw : { ...settledRaw, contextUsage: cachedUsage }
-        // terminal state summary register semantics refer grain: after continue idle snapshot does not repeat push the same terminal state.
+        // Record terminal summary fingerprint so subsequent idle snapshots do not re-emit identical terminal frames.
         this.mirrorOf(conversationId).lastSummaryKey = summaryKeyOf(settledSummary)
         this.events.onSummaryChanged(settledSummary)
-        // turn compute after context already set: async refresh use amount (change only then patch upsert; do not push enter seq).
+        // Context changed after turn settlement: schedule async usage refresh (emits upsert only on change; never bumps seq).
         this.usage.schedule(conversationId, { publishWhenReady: cachedUsage === undefined })
       }
       const payload: TurnSettledPayload = {
@@ -1033,9 +1026,8 @@ export class ConversationTracker {
     }
   }
 
-  /** background derive sub-conversation decide: has parent chain and ownership non- human(managed subagent / Worker etc.).
-   * ownership call back default or failed to read (contains deleted) one rule by human handle - - rather many read do not leak report,
-   * never because ownership do not while swallow person class not read notify. */
+  /** Determine whether a conversation is background-derived: has a parent chain and non-human ownership (managed subagent / Worker, etc.).
+   * If ownership callback is absent or fails (including deleted), default to human—better to over-emit than suppress human unreads. */
   private isBackgroundDerived(conversationId: number, meta: ConvMeta): boolean {
     if (meta.parentConversationId === undefined) return false
     if (this.ownershipOf === undefined) return false
@@ -1046,9 +1038,10 @@ export class ConversationTracker {
     }
   }
 
-  /** by store meta + live mirror derive five state (blocked takes precedence at working derive conflict when). */  summaryOf(conversationId: number, pendingAskOverride?: number | TurnOutcome): ConversationSummary {
+  /** Derive the five-state status from store meta + live mirror (blocked takes priority over working on derivation). */
+  summaryOf(conversationId: number, pendingAskOverride?: number | TurnOutcome): ConversationSummary {
     const meta = this.store.getConv(conversationId)
-    if (!meta) throw new HelmError('not_found', `conversation missing:${conversationId}`, 404)
+    if (!meta) throw new HelmError('not_found', `conversation not found: ${conversationId}`, 404)
     const mirror = this.mirrors.get(conversationId)
     const live = mirror?.live
     const pendingAsks =
@@ -1059,7 +1052,7 @@ export class ConversationTracker {
     if (pendingAskOverride === 'aborted') {
       status = 'idle'
     } else if (pendingAsks > 0) {
-      // await answer approval override run state, directly expose when before person class decide policy point.
+      // Pending approval overrides run status, surfacing the human decision point directly.
       status = 'blocked'
     } else if (live?.run) {
       status = 'working'
@@ -1073,7 +1066,7 @@ export class ConversationTracker {
         ? `${live.tools[live.tools.length - 1]?.name}: ${live.tools[live.tools.length - 1]?.status ?? 'running'}`
         : 'thinking...'
       : undefined
-    // failed diagnose summary only follow error state carry (new run after startup live.runFailure by clear, self however sync disappear).
+    // Error diagnostic summary travels only with error status (live.runFailure clears when a new run starts, vanishing automatically).
     const lastError = status === 'error' ? lastErrorOf(live, this.redactError) : undefined
     const lastEntryId = this.lastEntryIds.get(conversationId) ?? meta.lastEntryId ?? 0
     const summary = summaryOf(meta, status, pendingAsks, doing, lastError, lastEntryId)
@@ -1081,24 +1074,22 @@ export class ConversationTracker {
     return usage === undefined ? summary : { ...summary, contextUsage: usage }
   }
 
-  /** scheduling async context use amount refresh (delegate refresh chain module; for outside port keep to service/ops consumer). */
+  /** Schedule an async context usage refresh (delegates to refresh chain module; public port for service/ops consumers). */
   scheduleContextUsageRefresh(conversationId: number, options?: { publishWhenReady?: boolean }): void {
     this.usage.schedule(conversationId, options)
   }
 
-  /** models.changed after set to force complete context use amount cache.
+  /** Invalidate context usage cache on models.changed.
    *
-   * directory refresh/set rebuild may let the same model window from unknown change known (or reverse, count value change,
-   * provider no longer supply should): already observe/already cache conversation old use amount must append on, otherwise idle conversation
-   * do not new input then forever stop in old window. only scheduling since has refresh chain (in-flight placement dirty force complete,
-   * proxy count guard, refer grain dedupe), no new async mechanism, does not trigger LLM request;usage-only
-   * update do not push enter stateChangeSeq(applyContextUsage since has discipline).
+   * Catalog refreshes/rebuilds can resolve or change a model's context window (or remove providers): previously
+   * observed/cached conversations must recompute rather than remaining stuck with stale windows on idle threads.
+   * Schedules the existing refresh chain (in-flight invalidation, generation guard, fingerprint dedupe) without new
+   * async machinery or LLM calls; usage-only updates never advance stateChangeSeq (existing discipline in applyContextUsage).
    *
-   * - providers non-empty: only refresh takes effect model belongs to these provider conversation (event set to);
-   * - providers empty: directory whole may already swap, all append complete;
-   * - only see already observe (mirror inside has observe proxy count) or already has use amount cache conversation: do not scan all amount history
-   *   conversation (startup phase/large directory under expensive N time scan), not observe and not cache conversation first time
-   *   wave take when self however by new directory compute.
+   * - non-empty providers: refresh only conversations whose effective model belongs to those providers;
+   * - empty providers: entire catalog may have rotated, so refresh all;
+   * - only touches observed or already-cached conversations rather than scanning the entire history store on startup;
+   *   unobserved conversations compute using the updated catalog upon first visit.
    */
   onModelsChanged(providers: readonly string[]): void {
     const wanted = providers.length > 0 ? new Set(providers) : undefined
@@ -1113,7 +1104,7 @@ export class ConversationTracker {
     }
   }
 
-  /** already observe conversation manifest (mirror memory in observe proxy count; and migration before observeGenerations key domain consistent). */
+  /** List currently observed conversation IDs (in-memory mirrors with active observeGeneration). */
   private observedConversationIds(): number[] {
     const out: number[] = []
     for (const [id, mirror] of this.mirrors) {
@@ -1122,14 +1113,14 @@ export class ConversationTracker {
     return out
   }
 
-  /** ensure the conversation contextUsage cache already fill and refresh chain archive silent (first detail situation read etc. sync visible path). */
+  /** Ensure a conversation's contextUsage cache is populated and its refresh chain settled (first detail read, etc.). */
   async ensureContextUsage(conversationId: number): Promise<void> {
     await this.usage.ensure(conversationId)
   }
 
-  /** compress failed must not static default: new compactionFailure(by taskId dedupe, the same failed
-   * duplicate snapshot does not repeat notify) once redaction error notification.SDK only in under once succeeded
-   * compress when clear compactionFailure, after success new failed is all new taskId, self however again report. */
+  /** Never swallow compaction failures silently: emit one redacted error notification per new compactionFailure
+   * (deduplicated by taskId so duplicate snapshots do not re-notify; SDK clears compactionFailure only on the next
+   * successful compaction, and later failures get new taskIds so they report cleanly). */
   private noteCompactionFailure(id: number, live: LiveStateShape | undefined): void {
     const failure = live?.compactionFailure
     if (failure === undefined) return
@@ -1137,21 +1128,19 @@ export class ConversationTracker {
     this.notifiedCompactionFailures.set(id, failure.taskId)
     this.events.onNotification?.({
       level: 'error',
-      title: 'context streamline failed',
+      title: 'Context compaction failed',
       body: compactionFailureNoticeOf(failure, this.redactError),
       conversationId: id,
     })
   }
 
   /**
-   * without pi.compaction streamline end async for account (adopt sync snapshot outside execute):
-   * - one by one task query right threat terminal state, only when store in clean complete (status='terminal' and
-   *   outcome.status='completed', without summary write and non- compactionFailure) when treated as
-   *   empty skip (selectCut === undefined or beforeCompact decline);
-   * - aborted / failed task one rule ignore (never mistakenly report when before context no need to streamline, also never in
-   *   not streamline context on without permission conflict refresh queue up input);
-   * - confirm clean empty skip after: if has manual trigger info notify; if inbox still has steer/followUp
-   *   queue up input and when before idle without compress, via continue automatically start under one turn.
+   * Async reconciliation when compaction ends without a pi.compaction entry (runs outside synchronous adopt):
+   * - inspect each finished task's authoritative terminal state; only treat as clean skip when status='terminal'
+   *   and outcome.status='completed' with no written entry and no compactionFailure (selectCut === undefined or beforeCompact declined);
+   * - ignore aborted / failed tasks (never misreport when compaction wasn't needed, and never flush queued inputs on uncompacted context);
+   * - after confirming clean skip: emit info notification if triggered manually; if inbox still holds steer/followUp
+   *   inputs while idle with no active compaction, auto-start the next turn via continue.
    */
   private async reconcileFinishedCompaction(
     id: number,
@@ -1186,8 +1175,8 @@ export class ConversationTracker {
       if (hasManualEmpty) {
         this.events.onNotification?.({
           level: 'info',
-          title: 'when before context no need to streamline',
-          body: 'history message not exceeds keep window, not generate new summary.',
+          title: 'Current context does not need compaction',
+          body: 'History messages are within the retention window; no new summary was generated.',
           conversationId: id,
         })
       }
@@ -1221,7 +1210,7 @@ export class ConversationTracker {
       this.reportDiagnostic({
         level: 'error',
         source: 'tracker.compaction',
-        message: 'streamline end for account failed',
+        message: 'compaction end reconciliation failed',
         error,
         conversationId: id,
       })
@@ -1233,7 +1222,7 @@ export class ConversationTracker {
     const prev = mirror.pendingAskCount
     if (prev === count) return
     mirror.pendingAskCount = count
-    // seq durable pass increase:pendingAsk change is state change (CAS watermark line dependency).
+    // Advance durable seq: pendingAsk change is a state change (relied upon by CAS watermarks).
     const meta = this.store.getConv(conversationId)
     if (meta) {
       const updated: ConvMeta = {
@@ -1248,14 +1237,14 @@ export class ConversationTracker {
     this.events.onSummaryChanged(summary)
   }
 
-  /** run leap during real-time summary push:run start and doing semantics change when each exactly once.
+  /** Emit live summary during an active run: fires once on run start and on semantic `doing` transitions.
    *
-   * - only when this snapshot store in leap run only then push (only may appear working/blocked two state);
-   *   terminal state one rule by emitSettled negative duty:adopt does not repeat compute, does not resurrect already compute turn;
-   * - with (status, doing, pendingAskCount) semantics refer grain dedupe: pure streaming token push enter
-   *   (doing do not change) do not push, do not one by one token summary;
-   * - stateChangeSeq follow real state change single tune push enter (protocol contract), and setPendingAskCount
-   *   the same mechanism;live node stream window (75ms) do not subject to affect.
+   * - only emits when an active run exists in this snapshot (yielding only working/blocked);
+   *   emitSettled owns terminal state exclusively so adopt never double-settles or resurrects settled turns;
+   * - deduplicates on (status, doing, pendingAskCount) semantic fingerprint so pure streaming token updates
+   *   (which leave `doing` unchanged) never emit redundant per-token summary updates;
+   * - stateChangeSeq advances monotonically with real state transitions (per protocol contract, same mechanism as
+   *   setPendingAskCount); live throttle window (75ms) is unaffected.
    */
   private emitRunSummary(id: number): void {
     const mirror = this.mirrors.get(id)
@@ -1269,7 +1258,7 @@ export class ConversationTracker {
     this.events.onSummaryChanged(summary)
   }
 
-  /** observe to most new assistant text (getLastAssistantText data source). */
+  /** Record latest observed assistant text (data source for getLastAssistantText). */
   recordAssistantText(conversationId: number, entryId: number, text: string): void {
     const mirror = this.mirrorOf(conversationId)
     const prev = mirror.lastAssistant
@@ -1281,11 +1270,10 @@ export class ConversationTracker {
     return this.mirrors.get(conversationId)?.lastAssistant?.text
   }
 
-  /** expires rewind override zone between lastAssistant cache (original ground override heavy after).
+  /** Invalidate lastAssistant cache entries inside a rewound interval (after in-place overwrite & resend).
    *
-   * only when cache points to entry in [from, through] inside only then clear: new answer on failure
-   * getLastAssistantText must not return already by override old answer proposal, while zone between outside (more early turn)
-   * cache still valid.*/
+   * Clears only if the cached entry falls within [from, through] so a failed resend does not expose the overwritten
+   * answer via getLastAssistantText while earlier turns outside the interval stay valid. */
   invalidateLastAssistantWithin(conversationId: number, from: number, through: number): void {
     const mirror = this.mirrors.get(conversationId)
     const cached = mirror?.lastAssistant
@@ -1302,12 +1290,12 @@ function statusNow(meta: ConvMeta, outcome: TurnOutcome): ConversationStatus {
   return meta.unread ? 'done' : 'idle'
 }
 
-/** summary semantics refer grain:status/doing/pendingAskCount/lastError(the rest field does not participate push dedupe). */
+/** Semantic summary fingerprint: status/doing/pendingAskCount/lastError (other fields do not participate in push dedupe). */
 function summaryKeyOf(summary: ConversationSummary): string {
   return `${summary.status}|${summary.doing ?? ''}|${summary.pendingAskCount}|${summary.lastError ?? ''}`
 }
 
-/** from live.runFailure construct can read diagnose summary ('reason: detail';aborted/reset non- failed does not carry). */
+/** Build human-readable diagnostic summary from live.runFailure ('reason: detail'; omitted for non-error aborted/reset). */
 function lastErrorOf(
   live: LiveStateShape | undefined,
   redact: (text: string) => string,
@@ -1321,9 +1309,9 @@ function lastErrorOf(
   return `${failure.reason}${detail}`
 }
 
-// input append trace identity i.e. durable input.id(requestId), no need to temporary key allocate.
+// Inputs use durable input.id (requestId) as tracking identity, requiring no temporary key allocation.
 
-/** extract assistant entry text chunk content. */
+/** Extract assistant entry text block contents. */
 function assistantTextOf(entry: {
   model?: ReadonlyArray<{ content?: ReadonlyArray<{ type: string; text?: string }> }>
 }): string {
@@ -1356,7 +1344,7 @@ function latestVisibleEntryIdOf(entries: ReadonlyArray<EntryRecordLike>): number
   return latest
 }
 
-/** first input title: strip code chunk and newline, take before 36 valid character. */
+/** Title from first input: strip code blocks and newlines, keeping the first 36 meaningful characters. */
 function deriveTitle(text: string): string {
   const stripped = text
     .replace(/```[\s\S]*?```/g, ' ')
@@ -1364,5 +1352,5 @@ function deriveTitle(text: string): string {
     .replace(/[\r\n\t]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-  return stripped.slice(0, 36) || 'new conversation'
+  return stripped.slice(0, 36) || 'New conversation'
 }

@@ -1,5 +1,5 @@
 /**
- * maintain command:upgrade(self upgrade)/ doctor(only read self inspect)/ service(open machine self start manage).
+ * Maintenance commands: `upgrade` (self-upgrade), `doctor` (read-only diagnostics), `service` (OS service management).
  */
 import { UsageError, readPidRecord } from '../cli-context.js';
 import { controlRequest, CONTROL_UPGRADE_TIMEOUT_MS, validateUpgradeResult } from '../control.js';
@@ -12,7 +12,7 @@ export async function upgradeCommand(ctx: CommandContext): Promise<number> {
   const targetVersion = flagString(parsed, 'version');
   const check = parsed.flags.get('check') === true;
   const force = parsed.flags.get('force') === true;
-  // --check pure query: directly read engine, do not start daemon, do not upgrade.
+  // `--check` is read-only and never starts a daemon or mutates state.
   if (check) {
     const { checkNodeUpgrade } = await import('../daemon/upgrader.js');
     const result = await checkNodeUpgrade(dataDir, {
@@ -21,11 +21,11 @@ export async function upgradeCommand(ctx: CommandContext): Promise<number> {
     emit({ ok: true, ...result, dataDir });
     return 0;
   }
-  // execute upgrade: need to since has managed daemon(do not false call offline already upgrade).
+  // Executing an upgrade requires a live managed daemon.
   const record = await readPidRecord(dataDir);
   if (record === null) {
     throw new UsageError(
-      'execute upgrade need to managed daemon in run: please first helm-node start -d(offline state cannot upgrade, do not fabricate succeeded)',
+      'executing an upgrade requires a running managed daemon: run helm-node start -d first (cannot upgrade offline)',
       'not_running',
     );
   }
@@ -42,16 +42,15 @@ export async function upgradeCommand(ctx: CommandContext): Promise<number> {
   );
   if (response === null) {
     throw new Error(
-      `upgrade request failed: control channel cannot reach or response invalid (endpoint ${record.endpoint}, upgrade in daemon may already let; please use helm-node status confirm when before instance after retry)`,
+      `upgrade request failed: control channel unreachable or invalid response (endpoint ${record.endpoint}; daemon may have yielded during upgrade; check helm-node status before retrying)`,
     );
   }
   if (response.ok !== true) {
-    throw new Error(`upgrade by refuse (${response.error ?? 'unknown'}); if is upgrade_in_progress please wait for when before upgrade complete`);
+    throw new Error(`upgrade rejected (${response.error ?? 'unknown'}); if upgrade_in_progress, wait for the current upgrade to finish`);
   }
-  // boundary validate:upgrade response must be legal upgrade result object (ok===true,upgraded
-  // boolean,version field complete), illegal do not output fabricate succeeded (honest discipline).
+  // Validate response schema before emitting success.
   const result = validateUpgradeResult(response.result);
-  const sourcePid = record.pid; // old source pid(only render see, does not override new instance pid)
+  const sourcePid = record.pid;
   emit({
     ok: true,
     ...result,
@@ -73,11 +72,11 @@ export async function doctorCommand(ctx: CommandContext): Promise<number> {
     emit(report);
   } else {
     const label: Record<string, string> = { ok: 'OK  ', warn: 'WARN', error: 'FAIL', info: 'INFO' };
-    io.out(`helm-node doctor(dataDir=${report.dataDir}${report.nodeId !== undefined ? `,nodeId=${report.nodeId}` : ''}${report.hubUrl !== undefined ? `,hub=${report.hubUrl}` : ''})\n`);
+    io.out(`helm-node doctor (dataDir=${report.dataDir}${report.nodeId !== undefined ? `, nodeId=${report.nodeId}` : ''}${report.hubUrl !== undefined ? `, hub=${report.hubUrl}` : ''})\n`);
     for (const check of report.checks) {
       io.out(`  [${label[check.status] ?? check.status}] ${check.id}: ${check.message}\n`);
     }
-    io.out(report.ok ? 'self inspect result: via (without error items)\n' : 'self inspect result: store in error items, please by hint fix after retry\n');
+    io.out(report.ok ? 'doctor result: passed (no errors)\n' : 'doctor result: errors found; fix the reported issues and retry\n');
   }
   return report.ok ? 0 : 1;
 }

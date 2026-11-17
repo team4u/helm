@@ -1,17 +1,17 @@
 /**
- * PluginHostBackend standard stub (each business fixture combine sharing).
+ * Standard PluginHostBackend stub (shared across domain test fixtures).
  *
- * based on `createPluginHostBackendFixture()` derive, only for pure mechanism/without business semantics member
- * provide security empty by default implement; the rest business side member inherit baseline explicit 501 reject (by test plugin mistakenly invoke
- * when test immediately RED, never with succeeded empty response cover wrong).
+ * Derived from `createPluginHostBackendFixture()`, supplying safe empty defaults only for pure
+ * mechanism / non-business members while keeping baseline 501 rejections on domain members so
+ * unintended plugin calls fail RED immediately instead of passing on fake empty responses.
  *
- * use method:hostBackendStub() directly do baseline;completeBackend(partial) business
- * member together into into (Object.assign, business member explicit override stub member).
+ * Usage: `hostBackendStub()` provides the baseline; `completeBackend(partial)` merges domain
+ * overrides (`Object.assign`, so domain members explicitly override stub defaults).
  */
 import type { PluginHostBackend } from '../../src/plugins/index.js'
 import { createPluginHostBackendFixture } from './plugin-host-backend.js'
 
-/** return carries security empty by default implement (pure mechanism port) PluginHostBackend standard stub. */
+/** Returns the standard PluginHostBackend stub with safe empty defaults for mechanism-only ports. */
 export function hostBackendStub(): PluginHostBackend {
   const base = createPluginHostBackendFixture()
   return {
@@ -46,7 +46,7 @@ export function hostBackendStub(): PluginHostBackend {
   }
 }
 
-/** business backend(class instance/part literal)+ stub member together into complete PluginHostBackend. */
+/** Merges a domain backend (class instance or object literal) with stub defaults into a complete PluginHostBackend. */
 export function completeBackend<T extends object>(partial: T): T & PluginHostBackend {
   return Object.assign(hostBackendStub(), partial) as T & PluginHostBackend
 }

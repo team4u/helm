@@ -34,10 +34,10 @@ let observed: {
   modal: ActiveModal
 } | undefined
 
-function summary(id: number, parentConversationId?: number): ConversationSummary {
+function summary(id: number, parentConversationId?: number, title = `会话 ${id}`): ConversationSummary {
   return {
     id,
-    title: `会话 ${id}`,
+    title,
     profileId: 'assistant',
     tags: [],
     ownedBy: 'human',
@@ -59,7 +59,14 @@ function summary(id: number, parentConversationId?: number): ConversationSummary
 // 祖谱：1 ← 11 ← 111（两层派生）；999 为无关根会话。
 const conversations = [summary(1), summary(11, 1), summary(111, 11), summary(999)]
 
-function installFetch(): void {
+interface FetchFixture {
+  list?: ConversationSummary[]
+  detailMap?: Record<number, ConversationSummary>
+}
+
+function installFetch(fixture: FetchFixture = {}): void {
+  const list = fixture.list ?? conversations
+  const detailMap = fixture.detailMap ?? {}
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     if (url === '/api/auth/status') {
@@ -70,7 +77,7 @@ function installFetch(): void {
         send(new TextEncoder().encode(`event: snapshot\ndata: ${JSON.stringify({
           bootId: 'test-boot',
           seq: 1,
-          conversations,
+          conversations: list,
           pendingAsks: [],
           plugins: [],
           ui: [],
@@ -82,7 +89,7 @@ function installFetch(): void {
     const detailMatch = /^\/api\/conversations\/(\d+)/.exec(url)
     if (detailMatch && (init?.method ?? 'GET') === 'GET') {
       const id = Number(detailMatch[1])
-      const found = conversations.find((item) => item.id === id)
+      const found = detailMap[id] ?? list.find((item) => item.id === id)
       return new Response(JSON.stringify({ ...(found ?? summary(id)), entries: [] }), { status: 200 })
     }
     if ((init?.method ?? 'GET') === 'GET') return new Response(JSON.stringify([]), { status: 200 })
@@ -129,11 +136,11 @@ async function settle(): Promise<void> {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)) })
 }
 
-async function mount(hash: string): Promise<void> {
+async function mount(hash: string, fixture?: FetchFixture): Promise<void> {
   window.history.replaceState(null, '', hash)
   host = document.createElement('div')
   document.body.appendChild(host)
-  installFetch()
+  installFetch(fixture)
   await act(async () => {
     root = createRoot(host!)
     root.render(e(HelmStoreProvider, null, e(App)))
@@ -246,4 +253,60 @@ test('浏览器后退可单独关闭抽屉并保留工作台', { timeout: 60_000
   await settle()
   assert.equal(observed?.modal, null, '后退应关闭抽屉')
   assert.ok(observed?.workbenchOpen, '后退应保留工作台')
+})
+
+test('抽屉标题与 aria-label 展示有意义的会话标题，占位标题与空白回退默认文案', { timeout: 60_000 }, async () => {
+  await mount('#/c/1?modal=drawer&id=11', {
+    list: [summary(1), summary(11, 1, '排查构建失败')],
+  })
+  const drawerDialog = document.querySelector('.conversation-drawer')
+  assert.ok(drawerDialog, '应渲染抽屉 dialog')
+  assert.equal(
+    drawerDialog!.getAttribute('aria-label'),
+    'Child conversation #11 · 排查构建失败 drawer',
+    '有意义标题应带入抽屉 aria-label',
+  )
+  assert.equal(
+    drawerDialog!.querySelector('h2')?.textContent,
+    'Child conversation #11 · 排查构建失败 drawer',
+    'DialogTitle 应包含会话标题',
+  )
+
+  reset()
+  for (const [id, placeholder] of [
+    [12, 'subagent 12'],
+    [13, '子代理 13'],
+    [14, '子会话 14'],
+    [15, '   '],
+  ] as const) {
+    await mount(`#/c/1?modal=drawer&id=${id}`, {
+      list: [summary(1), summary(id, 1, placeholder)],
+    })
+    const dlg = document.querySelector('.conversation-drawer')
+    assert.ok(dlg, `应渲染占位测试 #${id} 抽屉`)
+    assert.equal(
+      dlg!.getAttribute('aria-label'),
+      `Child conversation #${id} drawer`,
+      `占位标题 "${placeholder}" 应回退默认抽屉标题`,
+    )
+    assert.equal(
+      dlg!.querySelector('h2')?.textContent,
+      `Child conversation #${id} drawer`,
+      `DialogTitle 对占位标题 "${placeholder}" 应回退默认文案`,
+    )
+    reset()
+  }
+
+  // 不在摘要列表时回退 detail 标题
+  await mount('#/c/1?modal=drawer&id=20', {
+    list: [summary(1)],
+    detailMap: { 20: summary(20, 1, '详情兜底标题') },
+  })
+  const fallbackDlg = document.querySelector('.conversation-drawer')
+  assert.ok(fallbackDlg, '应渲染 detail 回退抽屉')
+  assert.equal(
+    fallbackDlg!.getAttribute('aria-label'),
+    'Child conversation #20 · 详情兜底标题 drawer',
+    '摘要缺失时应使用 detail 标题',
+  )
 })

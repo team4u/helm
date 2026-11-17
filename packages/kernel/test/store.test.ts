@@ -1,9 +1,9 @@
 /**
- * HelmStore durable layer test: real temporary SQLite + real NodeSqliteDatabase adapter.
- * error inject only via wrap adapter  run/exec(fixture only inject error, do not mock data).
- * override:flush failed honest (do not virtual call succeeded, error after reject new write,close wait for in-flight),
- * Ask terminal state restart consistent,FTS dedupe/title update/search pre- flush, delete atomicity and restart does not resurrect,
- * ordinal guard against fall back,JSON corrupt explicit errors.
+ * HelmStore durability tests: real temporary SQLite + real `NodeSqliteDatabase` adapter.
+ * Fault injection via wrapping adapter `run`/`exec` only (fixture injects errors without mocking data).
+ * Covers: honest flush failures (never faking success, rejecting new writes after errors, close awaiting in-flight),
+ * Ask terminal state restart consistency, FTS dedup / title propagation / search pre-flush, atomic delete without
+ * resurrection on restart, sequence monotonicity, JSON corruption errors.
  */
 
 import { HelmError } from '@helm/protocol'
@@ -20,7 +20,7 @@ async function openStore(): Promise<{ store: HelmStore; database: HelmDatabase; 
   return { dir, ...await openStoreAt(dir) }
 }
 
-/** once fault inject hook hang to already open database.db(only inject error, do not build data). */
+/** Single-shot fault injection hook attached to an already-open `database.db` (error injection only, no synthetic data). */
 function attachFaults(database: HelmDatabase): { failNext(substr: string, error?: Error): void } {
   const realDb = database.db as unknown as Record<string, unknown> & { __faultHook?: FaultHook }
   if (!realDb.__faultHook) {
@@ -36,7 +36,7 @@ function attachFaults(database: HelmDatabase): { failNext(substr: string, error?
         return orig.call(realDb, sql, ...params)
       }
     }
-    // transaction transaction handle independent at db: wrap after handle inside run/exec same can inject.
+    // `transaction` allocates handles independently on `db`: wrap `run`/`exec` inside transaction handles too.
     const origTx = database.db.transaction.bind(database.db)
     realDb['transaction'] = <T>(cb: (tx: unknown) => Promise<T>): Promise<T> =>
       origTx((tx: unknown) => {
@@ -99,10 +99,10 @@ function conv(id: number, overrides: Partial<ConvMeta> = {}): ConvMeta {
   }
 }
 
-/** link table test use fixed parent tool invoke ID. */
+/** Fixed parent tool call ID used for link table tests. */
 const parentToolId = 'call-tool-3001'
 
-describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
+describe('HelmStore durability layer (real SQLite)', { timeout: 60_000 }, () => {
   let dir: string
   before(async () => {
     dir = await mkdtemp(join(tmpdir(), 'helm-store-suite-'))
@@ -111,12 +111,12 @@ describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
     await rm(dir, { recursive: true, force: true })
   })
 
-  it('flushPublic wait for real drain: after write immediately can in heavy open store in read to', { timeout: 60_000 }, async () => {
+  it('flushPublic awaits real drain: writes are immediately readable in a reopened store', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'drain-'))
     const { store, database } = await openStoreAt(base)
     store.upsertConv(conv(7, { title: 'drain-me' }))
     store.putPluginDoc('p', 'k', '{"v":1}')
-    await store.flushPublic() // do not early return: right now must already written to the database
+    await store.flushPublic() // Must not return early: persisted on disk right now
     await database.close()
     const reopened = await openStoreAt(base)
     assert.equal(reopened.store.getConv(7)?.title, 'drain-me')
@@ -125,14 +125,14 @@ describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
     await rm(base, { recursive: true, force: true })
   })
 
-  it('deleteGlobalPluginDocs: prefix precise delete (contains smoke number id do not cross, metadata key do not mistakenly delete), restart does not resurrect', { timeout: 60_000 }, async () => {
+  it('deleteGlobalPluginDocs: exact prefix purge (colon-bearing IDs and kernel keys untouched, no restart resurrection)', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'purge-doc-'))
     const { store, database } = await openStoreAt(base)
-    // simulated createGlobalDocumentStore write form: global document hang in __global row,name is `${pluginId}:${doc}`
+    // Simulate createGlobalDocumentStore layout: global docs stored under __global with name = `${pluginId}:${doc}`
     store.putPluginDoc('__global', 'foo:records', '{"n":1}')
     store.putPluginDoc('__global', 'foo:cfg', '{"n":2}')
-    store.putPluginDoc('__global', 'foo:bar:records', '{"n":3}') // plugin foo:bar data, must not by delete foo mistakenly damage
-    store.putPluginDoc('__global', 'conversation-ownership', '{}') // kernel metadata (without smoke number), do not belong any plugin
+    store.putPluginDoc('__global', 'foo:bar:records', '{"n":3}') // Plugin foo:bar's data must not be harmed by deleting foo
+    store.putPluginDoc('__global', 'conversation-ownership', '{}') // Kernel metadata (no colon); belongs to no plugin
     store.putPluginDoc('__global', 'other:records', '{"n":4}')
     await store.flushPublic()
 
@@ -140,11 +140,11 @@ describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
     await store.flushPublic()
     assert.equal(store.getPluginDoc('__global', 'foo:records'), undefined)
     assert.equal(store.getPluginDoc('__global', 'foo:cfg'), undefined)
-    assert.equal(store.getPluginDoc('__global', 'foo:bar:records'), '{"n":3}', 'contains smoke number plugin id data must not cross mistakenly delete')
-    assert.equal(store.getPluginDoc('__global', 'conversation-ownership'), '{}', 'without smoke number kernel metadata key do not subject to affect')
+    assert.equal(store.getPluginDoc('__global', 'foo:bar:records'), '{"n":3}', 'colon-bearing plugin ID data must not be cross-deleted')
+    assert.equal(store.getPluginDoc('__global', 'conversation-ownership'), '{}', 'colonless kernel metadata must stay untouched')
     assert.equal(store.getPluginDoc('__global', 'other:records'), '{"n":4}')
 
-    // again delete contains smoke number id:foo:bar data by clean, other still in
+    // Deleting colon-bearing ID foo:bar cleans its data while leaving others intact
     store.deleteGlobalPluginDocs('foo:bar')
     await store.flushPublic()
     assert.equal(store.getPluginDoc('__global', 'foo:bar:records'), undefined)
@@ -152,20 +152,21 @@ describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
     await database.close()
 
     const reopened = await openStoreAt(base)
-    assert.equal(reopened.store.getPluginDoc('__global', 'foo:records'), undefined, 'after restart must not re-')
+    assert.equal(reopened.store.getPluginDoc('__global', 'foo:records'), undefined, 'must not reappear after restart')
     assert.equal(reopened.store.getPluginDoc('__global', 'foo:bar:records'), undefined)
     assert.equal(reopened.store.getPluginDoc('__global', 'other:records'), '{"n":4}')
     await reopened.database.close()
     await rm(base, { recursive: true, force: true })
   })
 
-  it('deletePluginSessionDocs: by plugin whole delete (other plugin/other conversation keep), restart does not resurrect', { timeout: 60_000 }, async () => {
+  it('deletePluginSessionDocs: deletes all session docs for plugin (others preserved, no resurrection)', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'purge-session-'))
     const { store, database } = await openStoreAt(base)
     store.putPluginSessionDoc('foo', 'runs', 1, '{"a":1}')
     store.putPluginSessionDoc('foo', 'runs', 2, '{"a":2}')
+    store.putPluginDoc('__global', 'unused', '{}') // keep clean
     store.putPluginSessionDoc('foo', 'notes', 1, '{"b":1}')
-    store.putPluginSessionDoc('foobar', 'runs', 1, '{"c":1}') // prefix each other near plugin, must not mistakenly delete
+    store.putPluginSessionDoc('foobar', 'runs', 1, '{"c":1}') // Prefix-adjacent plugin must not be deleted
     await store.flushPublic()
 
     store.deletePluginSessionDocs('foo')
@@ -173,18 +174,18 @@ describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
     assert.equal(store.getPluginSessionDoc('foo', 'runs', 1), undefined)
     assert.equal(store.getPluginSessionDoc('foo', 'runs', 2), undefined)
     assert.equal(store.getPluginSessionDoc('foo', 'notes', 1), undefined)
-    assert.equal(store.getPluginSessionDoc('foobar', 'runs', 1), '{"c":1}', 'prefix each other near other plugin must not mistakenly delete')
+    assert.equal(store.getPluginSessionDoc('foobar', 'runs', 1), '{"c":1}', 'prefix-adjacent plugin must not be deleted')
     assert.deepEqual(store.listPluginSessionDocConversations('foo', 'runs'), [])
     await database.close()
 
     const reopened = await openStoreAt(base)
-    assert.equal(reopened.store.getPluginSessionDoc('foo', 'runs', 1), undefined, 'after restart must not re-')
+    assert.equal(reopened.store.getPluginSessionDoc('foo', 'runs', 1), undefined, 'must not reappear after restart')
     assert.equal(reopened.store.getPluginSessionDoc('foobar', 'runs', 1), '{"c":1}')
     await reopened.database.close()
     await rm(base, { recursive: true, force: true })
   })
 
-  it('SQL failed:flushPublic explicit throws (never virtual call succeeded), error after reject new write', { timeout: 60_000 }, async () => {
+  it('SQL failure: flushPublic throws explicitly (never fakes success) and subsequent writes reject', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'fail-'))
     const { store, database } = await openStoreAt(base)
     const fixture = attachFaults(database)
@@ -195,7 +196,7 @@ describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
       assert.equal(e.code, 'store_flush_failed')
       return true
     })
-    // error after new write must by reject (fail state, cannot continue false succeeded).
+    // New writes after failure must be rejected (failed state cannot keep faking success).
     assert.throws(() => store.upsertConv(conv(9)), (e: unknown) => {
       assert.ok(e instanceof HelmError)
       assert.equal(e.code, 'store_flush_failed')
@@ -205,22 +206,22 @@ describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
       assert.ok(e instanceof HelmError)
       return true
     })
-    // close same report error (runtime based on this throw HelmError on report).
+    // close() also surfaces the error (used by runtime to throw HelmError).
     const closeError = await store.close()
     assert.ok(closeError !== undefined)
     await database.close()
     await rm(base, { recursive: true, force: true })
   })
 
-  it('close wait for in-flight flush completely end (tail chain do not lose in-flight write)', { timeout: 60_000 }, async () => {
+  it('close awaits in-flight flush completion (tail chain drops no writes)', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'close-'))
     const { store, database } = await openStoreAt(base)
     store.upsertConv(conv(10))
     store.indexFts(10, 'entry:1', 't', 'body text')
-    const closing = store.close() // do not await:close and in-flight write concurrency
+    const closing = store.close() // Do not await first: close runs concurrently with in-flight write
     await closing
     await database.close()
-    // close return after heavy open: in-flight write must already written to the database (cannot because close early retreat lose write).
+    // Reopening after close returns must observe the flushed writes (close didn't exit early).
     const reopened = await openStoreAt(base)
     assert.ok(reopened.store.getConv(10))
     const hits = await reopened.store.search('body')
@@ -229,7 +230,7 @@ describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
     await rm(base, { recursive: true, force: true })
   })
 
-  it('Ask terminal state restart consistent: compute after restart status/spec/result does not fall back is pending', { timeout: 60_000 }, async () => {
+  it('Ask terminal state restart consistency: settled status/spec/result never revert to pending', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'ask-'))
     const { store, database } = await openStoreAt(base)
     store.putAsk({
@@ -240,7 +241,7 @@ describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
       createdAt: 100,
     })
     await store.flushPublic()
-    // compute:spec inside contains terminal state status,UPSERT must spec one and written to the database.
+    // Settlement: spec contains terminal status; UPSERT must persist spec back to DB too.
     const settledSpec = JSON.stringify({ id: 'ask-1', title: 't', status: 'answered', fields: [] })
     store.putAsk({
       id: 'ask-1',
@@ -258,7 +259,7 @@ describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
     const row = reopened.store.getAsk('ask-1')
     assert.ok(row)
     assert.equal(row.status, 'answered')
-    assert.equal(row.specJson, settledSpec) // after restart spec still is terminal state, is not pending
+    assert.equal(row.specJson, settledSpec) // Spec remains in terminal state after restart, not pending
     assert.equal(row.resultJson, JSON.stringify({ name: 'v' }))
     assert.equal(row.settledAt, 200)
     const pending = reopened.store.listAsks('pending')
@@ -268,19 +269,19 @@ describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
     await rm(base, { recursive: true, force: true })
   })
 
-  it('FTS: the same entry duplicate index only a; title update refresh all row;search first flush', { timeout: 60_000 }, async () => {
+  it('FTS: repeated entry indexing dedups to one row; title updates refresh all rows; search pre-flushes', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'fts-'))
     const { store, database } = await openStoreAt(base)
     store.upsertConv(conv(5, { title: 'old-title' }))
-    // the same entry reverse re- index (observer replay scenario).
+    // Re-index same entry repeatedly (observer replay scenario).
     store.indexFts(5, 'entry:1', 'old-title', 'hello world alpha')
     store.indexFts(5, 'entry:1', 'old-title', 'hello world alpha')
     store.indexFts(5, 'entry:1', 'old-title', 'hello world alpha')
     store.indexFts(5, 'entry:2', 'old-title', 'beta gamma')
-    let hits = await store.search('hello') // search internal first await flushPublic
-    assert.equal(hits.length, 1, 'the same entry only should has and only has a index row')
+    let hits = await store.search('hello') // search internally awaits flushPublic first
+    assert.equal(hits.length, 1, 'same entry must have at most one index row')
     assert.equal(hits[0]?.entryId, 'entry:1')
-    // change title: the conversation all index row title update (do not only one row).
+    // Title change updates all FTS rows for that conversation (not just one).
     store.upsertConv(conv(5, { title: 'new-title', updatedAt: 2000 }))
     await store.flushPublic()
     const titleRows = await database.db.all<{ title: string; entry_id: string }>(
@@ -296,7 +297,7 @@ describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
     await rm(base, { recursive: true, force: true })
   })
 
-  it('FTS rebuild atomic: failed rollback keep old index (do not false succeeded)', { timeout: 60_000 }, async () => {
+  it('FTS atomic rebuild: failure rolls back preserving previous index (never fakes success)', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'rebuild-'))
     const { store, database } = await openStoreAt(base)
     store.indexFts(6, 'entry:1', 't', 'original content')
@@ -310,7 +311,7 @@ describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
         }),
       /injected/,
     )
-    // rollback after old index still can inspect (derive index not lose).
+    // Rollback preserves previous index (derived index is never dropped on rebuild failure).
     const hits = await store.search('original')
     assert.equal(hits.length, 1)
     await store.close()
@@ -318,7 +319,7 @@ describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
     await rm(base, { recursive: true, force: true })
   })
 
-  it('delete conversation: restart does not resurrect (tombstone + row clean up atomic written to the database),asks/artifacts leaves no residue', {
+  it('delete conversation: does not resurrect on restart (atomic tombstone + row cleanup), no leftover asks/artifacts', {
     timeout: 60_000,
   }, async () => {
     const base = await mkdtemp(join(dir, 'del-'))
@@ -351,7 +352,7 @@ describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
     assert.ok(store.isDeleted(11))
     await store.close()
     await database.close()
-    // restart: does not resurrect.
+    // Restart: does not resurrect.
     const reopened = await openStoreAt(base)
     assert.equal(reopened.store.getConv(11), undefined)
     assert.ok(reopened.store.isDeleted(11))
@@ -362,11 +363,11 @@ describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
     await rm(base, { recursive: true, force: true })
   })
 
-  it('event ordinal guard against fall back: reject negative number/non- integer, low ordinal does not override high watermark', { timeout: 60_000 }, async () => {
+  it('event sequence monotonicity: rejects negative/non-integer values and never regresses high watermark', { timeout: 60_000 }, async () => {
     const { store, database, dir: d } = await openStore()
     try {
       store.setEventSeq(10)
-      store.setEventSeq(9) // fall back: memory does not fall back
+      store.setEventSeq(9) // Regression: in-memory watermark stays at 10
       assert.equal(store.eventSeqNow, 10)
       assert.throws(() => store.setEventSeq(-1), HelmError)
       assert.throws(() => store.setEventSeq(1.5), HelmError)
@@ -382,16 +383,16 @@ describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
     }
   })
 
-  it('return can change object is clone: external sudden change do not pollute mirror and queue up SQL', { timeout: 60_000 }, async () => {
+  it('returned objects are cloned: external mutations do not corrupt mirror or queued SQL', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'clone-'))
     const { store, database } = await openStoreAt(base)
     store.upsertConv(conv(12, { tags: ['orig'] }))
-    // read side clone.
+    // Clone on read.
     const got = store.getConv(12)
     assert.ok(got)
     got.tags.push('mutated')
     assert.deepEqual(store.getConv(12)?.tags, ['orig'])
-    // write side snapshot: queue after caller change original object does not affect written to the database.
+    // Snapshot on write: mutating caller object after enqueuing does not alter SQL persistence.
     const mutated = conv(13, { tags: ['before'] })
     store.upsertConv(mutated)
     mutated.tags.push('after-mutation')
@@ -405,14 +406,14 @@ describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
     await rm(base, { recursive: true, force: true })
   })
 
-  it('putPluginDoc illegal JSON explicit reject;load encounter corrupt JSON explicit errors', { timeout: 60_000 }, async () => {
+  it('putPluginDoc rejects invalid JSON explicitly; load fails explicitly on corrupted JSON', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'json-'))
     const { store, database } = await openStoreAt(base)
     assert.throws(() => store.putPluginDoc('p', 'bad', '{not-json'), HelmError)
     await store.flushPublic()
     await store.close()
     await database.close()
-    // directly write broken data again load: must explicit error, never false null value.
+    // Inject corrupt data directly and reload: must fail explicitly without silent null/empty fallback.
     const db2 = await openHelmDatabase(base)
     await db2.db.run("INSERT INTO helm_plugin_docs (plugin_id, name, value, updated_at) VALUES ('x', 'y', '{broken', 0)")
     await db2.close()
@@ -427,7 +428,7 @@ describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
     await rm(base, { recursive: true, force: true })
   })
 
-  it('convStatusOf:blocked(pending Ask) takes precedence at working', { timeout: 60_000 }, () => {
+  it('convStatusOf: blocked (pending Ask) takes precedence over working', { timeout: 60_000 }, () => {
     const meta = conv(1)
     assert.equal(convStatusOf(meta, { run: { id: 'r' } }, 1), 'blocked')
     assert.equal(convStatusOf(meta, { run: { id: 'r' } }, 0), 'working')
@@ -436,41 +437,40 @@ describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
     assert.equal(convStatusOf({ ...meta, unread: true }, {}, 0), 'done')
   })
 
-  it('database.close idempotent: duplicate close do not throws', { timeout: 60_000 }, async () => {
+  it('database.close is idempotent: repeated close never throws', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'idem-'))
     const { database } = await openStoreAt(base)
     await database.close()
-    await database.close() // do not throw
+    await database.close() // must not throw
     await rm(base, { recursive: true, force: true })
   })
 
-  it('parentToolCallId independent link table: now row original table (without the column) old store automatically create new table, write heavy open can read, null value clean up, delete do not orphan child', {
+  it('parentToolCallId link table: auto-created on legacy schema, read/write/clear/delete leave no orphans', {
     timeout: 60_000,
   }, async () => {
     const base = await mkdtemp(join(dir, 'link-'))
-    // first use now row schema store normal open once, again link table delete and manually work remove - - simulated only
-    // old helm_conversations original table (without parent_tool_call_id column) existing database.
+    // Simulate a legacy database holding only `helm_conversations` (no `parent_tool_call_id`) by dropping the link table.
     const seed = await openHelmDatabase(base)
     await seed.db.exec('DROP TABLE helm_conversation_tool_links')
     await seed.close()
 
-    // openHelmDatabase in do not modify old table before mention under automatically create all new link table: existing record do not use change.
+    // `openHelmDatabase` creates the new link table automatically without altering existing rows.
     const { store, database } = await openStoreAt(base)
-    // has value: mirror and store also write
+    // When set: persisted to both mirror and DB
     store.upsertConv(conv(20, { parentToolCallId: parentToolId }))
     await store.flushPublic()
     const linkRow = await database.db.get<{ parent_tool_call_id: string }>(
       'SELECT parent_tool_call_id FROM helm_conversation_tool_links WHERE conversation_id = 20',
     )
     assert.equal(linkRow?.parent_tool_call_id, parentToolId)
-    // null value clean up: placement empty after link row delete, do not stale related
+    // Cleared value removes the link row without leaving stale correlations
     store.upsertConv(conv(20, { parentToolCallId: undefined }))
     await store.flushPublic()
     const gone = await database.db.get(
       'SELECT 1 AS x FROM helm_conversation_tool_links WHERE conversation_id = 20',
     )
-    assert.equal(gone, undefined, 'null value should clean up link row')
-    // again write back and heavy open: merge read succeeded
+    assert.equal(gone, undefined, 'cleared value must remove the link row')
+    // Re-writing and reopening merges link cleanly
     store.upsertConv(conv(20, { parentToolCallId: parentToolId }))
     store.upsertConv(conv(21))
     await store.flushPublic()
@@ -480,19 +480,19 @@ describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
     const reopened = await openStoreAt(base)
     assert.equal(reopened.store.getConv(20)?.parentToolCallId, parentToolId)
     assert.equal(reopened.store.getConv(21)?.parentToolCallId, undefined)
-    // delete conversation sync delete link: do not orphan child
+    // Deleting conversation deletes link row synchronously (no orphans)
     reopened.store.deleteConv(20)
     await reopened.store.flushPublic()
     const orphan = await reopened.database.db.get(
       'SELECT 1 AS x FROM helm_conversation_tool_links WHERE conversation_id = 20',
     )
-    assert.equal(orphan, undefined, 'delete conversation must sync delete link row')
+    assert.equal(orphan, undefined, 'deleting conversation must delete its link row')
     await reopened.store.close()
     await reopened.database.close()
     await rm(base, { recursive: true, force: true })
   })
 
-  it('helm_artifacts read write and restart restore kind; illegal kind in write/load boundary explicit reject', { timeout: 60_000 }, async () => {
+  it('helm_artifacts persists and restores kinds; invalid kinds fail at write and load boundaries', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'art-kind-'))
     const { store, database } = await openStoreAt(base)
     store.putArtifact({
@@ -554,7 +554,7 @@ describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
     await reopened.store.close()
     await reopened.database.close()
 
-    // store inside corrupt kind:load() must explicit errors store_data_corrupted
+    // Corrupt kind in store: load() must fail explicitly with store_data_corrupted
     const dbCorrupt = await openHelmDatabase(base)
     await dbCorrupt.db.run(
       "INSERT INTO helm_artifacts (id, conversation_id, kind, name, path, mime_type, size, created_at) VALUES ('art-corrupt', 1, 'bad_kind', 'x', 'artifacts/1/x', 'text/plain', 1, 50)",
@@ -572,7 +572,7 @@ describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
   })
 })
 
-// ---- test base seat auxiliary ----
+// ---- test fixture helpers ----
 
 async function openStoreAt(dir: string): Promise<{ store: HelmStore; database: HelmDatabase }> {
   const database = await openHelmDatabase(dir)

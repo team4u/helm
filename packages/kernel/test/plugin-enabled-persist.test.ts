@@ -1,18 +1,18 @@
 /**
- * plugin by default deactivate register / start stop state persist dedicated items test.
+ * Dedicated tests for default-disabled plugin registration and enable/disable state persistence.
  *
- * override (builtin:herdr by default deactivate scenario host mechanism):
- * - register(definition, { enabled: false }): declaration still run (obtain configSchema),
- *   but service never start, without UI,manifest enabled:false, old ctx i.e. moment expires;
- * - deactivate state can first setConfig again enable(configSchema keep do not lose);
- * - enable after success durable true;disable after durable false; across restart (new PluginHost
- *   + the same durable store) switch keep: once persist plugin no longer back to declaration default;
- * - locked plugin constant enable (declaration enabled:false also strong row enable);
- * - stop failed / persist failed double failed explicit JSON-safe diagnose;
- * - service declaration liveTasks keep-alive gate: without tracker task when still block stop disable/unregister,
- *   task empty after can deactivate;liveTasks exception/illegal output explicit errors never when empty.
+ * Covers the host mechanisms behind default-disabled plugins such as `builtin:herdr`:
+ * - `register(definition, { enabled: false })`: declaration phase still runs (preserving `configSchema`),
+ *   but services never start, no UI is exposed, manifest reports `enabled: false`, and old `ctx` expires immediately;
+ * - while disabled, `setConfig` works before `enable` (retaining `configSchema`);
+ * - `enable` persists `true` and `disable` persists `false`; across "restarts" (new `PluginHost`
+ *   with the same persistent store), persisted toggles override the declaration default;
+ * - `locked` plugins remain enabled even if declared with `enabled: false`;
+ * - explicit JSON-safe diagnostics when `stop` and/or persistence fail together;
+ * - service `liveTasks` keep-alive gate: blocks `disable`/`unregister` even without tracker tasks,
+ *   unblocks once empty, and fails explicitly on thrown errors or invalid return values.
  *
- * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
+ * runner: tsx --test; explicit timeout: 60_000 per test to guard against deadlocks.
  */
 import test, { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -40,7 +40,7 @@ import {
 } from './helpers.js';
 
 // ---------------------------------------------------------------------------
-// test base create
+// Test infrastructure
 // ---------------------------------------------------------------------------
 
 function makeConversation(id: number) {
@@ -73,7 +73,7 @@ function makeHostApi(events: string[]): PluginHostBackend & { __payload: Array<{
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    execEnv: async () => { throw new HelmError('unsupported', 'this fixture do not execute node command', 501) },
+    execEnv: async () => { throw new HelmError('unsupported', 'this fixture does not execute node commands', 501) },
     emitEvent: (type: string, p: unknown) => {
       events.push(`event:${type}`);
       payload.push({ type, payload: p });
@@ -82,14 +82,15 @@ function makeHostApi(events: string[]): PluginHostBackend & { __payload: Array<{
   return Object.assign(api, { __payload: payload });
 }
 
-/** event payload record (plugin.changed assertion use). */
+/** Event payload recorder (used for `plugin.changed` assertions). */
 function payloadRecorder(hostApi: PluginHostBackend): Array<{ type: string; payload: unknown }> {
   return (hostApi as PluginHostBackend & { __payload?: Array<{ type: string; payload: unknown }> }).__payload ?? [];
 }
 
 /**
- * memory start stop persist store: simulated KernelRuntime restart (the same store object across host re- use
- * etc. price at config.json after heavy read; another has real file store test override format).
+ * In-memory toggle persistence store: simulates `KernelRuntime` restart (reusing the same store
+ * object across hosts is equivalent to persisting `config.json` and reloading; separate real
+ * file store tests below cover the on-disk format).
  */
 class MemoryToggleStore implements PluginConfigStore {
   enabled = new Map<string, boolean>();
@@ -121,7 +122,7 @@ function makeHost(config?: PluginConfigStore): PluginHost {
   return new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: api, docs, config });
 }
 
-/** declaration service start/stop all record plugin define work vendor. */
+/** Factory for a plugin definition whose service records start and stop calls. */
 function servicePlugin(
   id: string,
   opts: {
@@ -135,8 +136,8 @@ function servicePlugin(
     id,
     ...(opts.locked ? { locked: true } : {}),
     definePlugin: (ctx) => {
-      ctx.configSchema({ endpoint: { type: 'string', label: 'end point' } });
-      ctx.ui.sidebarItem({ id: 'nav', label: 'navigation' });
+      ctx.configSchema({ endpoint: { type: 'string', label: 'Endpoint' } });
+      ctx.ui.sidebarItem({ id: 'nav', label: 'Navigation' });
       ctx.hook.onTrigger(() => ({ action: 'continue' as const }));
       ctx.action({
         id: 'ping',
@@ -173,10 +174,10 @@ afterEach(async () => {
 });
 
 // ---------------------------------------------------------------------------
-// by default deactivate register: do not connect external service, without UI,schema available,ctx i.e. moment expires
+// Default-disabled registration: no external connection, no UI, schema kept, ctx expires immediately
 // ---------------------------------------------------------------------------
 
-test('enabled:false register: declaration run obtain schema, but service do not start, without UI, action reject, old ctx expires', { timeout: 60_000 }, async () => {
+test('enabled:false registration runs declarations for schema without starting services, exposing UI, or keeping old ctx', { timeout: 60_000 }, async () => {
   const store = new MemoryToggleStore();
   const host = makeHost(store);
   const started: string[] = [];
@@ -187,20 +188,20 @@ test('enabled:false register: declaration run obtain schema, but service do not 
     { enabled: false },
   );
 
-  // service never start (by default deactivate = do not connect external Herdr service)
+  // Service never starts (default-disabled does not connect to external Herdr service)
   assert.deepEqual(started, []);
-  // manifest:enabled:false and hooks/actions/tools all empty
+  // Manifest reports enabled:false with empty hooks/actions/tools
   const summary = host.list().find((p) => p.id === 'builtin:herdr')!;
   assert.equal(summary.enabled, false);
   assert.deepEqual(summary.hooks, []);
   assert.deepEqual(summary.actions, []);
   assert.deepEqual(summary.tools, []);
-  // UI contribution is empty (emitPluginChanged  ui:[] and listUi consistent)
+  // UI contributions are empty (aligned between emitPluginChanged ui:[] and listUi)
   assert.deepEqual(host.listUi(), []);
   assert.deepEqual(host.listRoutes(), []);
-  // action/tool in deactivate state reject
+  // Action/tool invocation rejects while disabled
   await assertRejectsCode(() => host.invokeAction('builtin:herdr', 'ping', {}), 'plugin_disabled');
-  // runHook without reference and direct through
+  // runHook passes through unaffected
   const r = await host.runHook('trigger', {
     id: 'e1',
     source: 'test',
@@ -208,13 +209,13 @@ test('enabled:false register: declaration run obtain schema, but service do not 
     createdAt: 1,
   });
   assert.equal(r.action, 'continue');
-  // register i.e. plugin.changed(enabled:false / ui:[])
-  // (recorder and events sharing, see makeHostApi implement)
-  // configSchema keep (deactivate state can read)
+  // Registration emits plugin.changed(enabled:false / ui:[])
+  // (recorder shares storage with events; see makeHostApi)
+  // configSchema stays readable while disabled
   assert.equal(host.getConfigSchema('builtin:herdr').endpoint?.type, 'string');
-  // host lifecycle asset (manageConversation) in deactivate register path already release
+  // Host lifecycle assets (manageConversation) are released on disabled-registration path
   assert.ok(events.includes('release:builtin:herdr:7'));
-  // old definePlugin context already close (epoch pass increase abandon dismiss)
+  // Previous definePlugin context is closed (epoch bumped and retired)
   await host.register(
     {
       id: 'probe:ctx',
@@ -224,7 +225,7 @@ test('enabled:false register: declaration run obtain schema, but service do not 
     },
   );
   void stolen;
-  // directly assertion stolen ctx: re- register a truly stealthily ctx plugin
+  // Direct assertion with captured ctx: register another plugin that saves ctx
   await host.unregister('probe:ctx');
   await host.register(
     {
@@ -241,7 +242,7 @@ test('enabled:false register: declaration run obtain schema, but service do not 
   );
 });
 
-test('deactivate register path plugin.changed event:enabled:false and ui:[]', { timeout: 60_000 }, async () => {
+test('disabled registration emits plugin.changed with enabled:false and ui:[]', { timeout: 60_000 }, async () => {
   const host = makeHost(new MemoryToggleStore());
   const rec = recorder;
   await host.register(servicePlugin('builtin:herdr'), { enabled: false });
@@ -253,10 +254,10 @@ test('deactivate register path plugin.changed event:enabled:false and ui:[]', { 
 });
 
 // ---------------------------------------------------------------------------
-// first config again enable (configSchema do not because disable lose)
+// Configure before enabling (configSchema preserved across disable)
 // ---------------------------------------------------------------------------
 
-test('deactivate state first setConfig again enable: config takes effect,definePlugin getConfig read to, service start', { timeout: 60_000 }, async () => {
+test('setConfig while disabled then enable: config takes effect, definePlugin reads it, and service starts', { timeout: 60_000 }, async () => {
   const store = new MemoryToggleStore();
   const host = makeHost(store);
   const started: string[] = [];
@@ -266,7 +267,7 @@ test('deactivate state first setConfig again enable: config takes effect,defineP
     {
       id: 'builtin:herdr',
       definePlugin: (ctx) => {
-        ctx.configSchema({ endpoint: { type: 'string', required: true, label: 'end point' } });
+        ctx.configSchema({ endpoint: { type: 'string', required: true, label: 'Endpoint' } });
         configSeenInDefine = ctx.getConfig();
         ctx.service({
           id: 'daemon',
@@ -282,26 +283,26 @@ test('deactivate state first setConfig again enable: config takes effect,defineP
     { enabled: false },
   );
 
-  // deactivate state i.e. can config (schema keep is before mention)
+  // Configurable immediately while disabled (schema retained during declaration probe)
   assert.equal(host.getConfigSchema('builtin:herdr').endpoint?.type, 'string');
   await host.setConfig('builtin:herdr', { endpoint: 'unix:///tmp/herdr.sock' });
   assert.equal(store.get('builtin:herdr')['endpoint'], 'unix:///tmp/herdr.sock');
 
-  // enable: service start,definePlugin read to already durable config, durable true
+  // Enable: service starts, definePlugin observes persisted config, enabled=true persisted
   await host.enable('builtin:herdr');
   assert.deepEqual(started, ['start']);
   assert.equal(configSeenInDefine!['endpoint'], 'unix:///tmp/herdr.sock');
   assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, true);
   assert.equal(store.enabled.get('builtin:herdr'), true);
 
-  // disable after schema still keep, can again change config (supply under time enable)
+  // Schema stays available after disable so config can be updated before next enable
   await host.disable('builtin:herdr');
   assert.equal(host.getConfigSchema('builtin:herdr').endpoint?.type, 'string');
   await host.setConfig('builtin:herdr', { endpoint: 'unix:///tmp/other.sock' });
   assert.equal(store.enabled.get('builtin:herdr'), false);
 });
 
-test('disable empty run phase register but keep configSchema: and deactivate register form consistent', { timeout: 60_000 }, async () => {
+test('disable clears active capabilities while retaining configSchema consistently with disabled registration', { timeout: 60_000 }, async () => {
   const host = makeHost(new MemoryToggleStore());
   await host.register(servicePlugin('builtin:herdr'));
   assert.equal(host.listUi().length, 1);
@@ -309,22 +310,22 @@ test('disable empty run phase register but keep configSchema: and deactivate reg
   assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, false);
   assert.deepEqual(host.listUi(), []);
   assert.deepEqual(host.listRoutes(), []);
-  // schema keep
+  // Schema retained
   assert.equal(host.getConfigSchema('builtin:herdr').endpoint?.type, 'string');
 });
 
 // ---------------------------------------------------------------------------
-// across restarts switch keep (memory store simulated + real file store )
+// Toggle state survives across restarts (in-memory store mock + real file store)
 // ---------------------------------------------------------------------------
 
-test('across restarts switch keep (memory store):disable after new host register(default) still deactivate;enable after restart still enable', { timeout: 60_000 }, async () => {
+test('toggle state persists across restarts (in-memory store): enabled overrides disabled default; disabled overrides enabled default', { timeout: 60_000 }, async () => {
   const store = new MemoryToggleStore();
   const h1 = makeHost(store);
   await h1.register(servicePlugin('builtin:herdr'), { enabled: false });
   await h1.enable('builtin:herdr');
   assert.equal(store.enabled.get('builtin:herdr'), true);
 
-  // restart: new PluginHost sharing the same durable store; declaration enabled:false also no longer takes effect
+  // Restart: new PluginHost sharing the persistent store ignores declared enabled:false
   const h2 = makeHost(store);
   const started2: string[] = [];
   await h2.register(
@@ -332,9 +333,9 @@ test('across restarts switch keep (memory store):disable after new host register
     { enabled: false },
   );
   assert.equal(h2.list().find((p) => p.id === 'builtin:herdr')!.enabled, true);
-  assert.deepEqual(started2, ['start'], 'durable true when restart must start service');
+  assert.deepEqual(started2, ['start'], 'service must start on restart when persisted true');
 
-  // disable after restart: declaration default (enabled by default true) also keep deactivate
+  // After disable and restart, remains disabled despite enabled-by-default declaration
   await h2.disable('builtin:herdr');
   const h3 = makeHost(store);
   const started3: string[] = [];
@@ -342,16 +343,16 @@ test('across restarts switch keep (memory store):disable after new host register
     servicePlugin('builtin:herdr', { onStart: () => started3.push('start') }),
   );
   assert.equal(h3.list().find((p) => p.id === 'builtin:herdr')!.enabled, false);
-  assert.deepEqual(started3, [], 'durable false when restart never start service');
+  assert.deepEqual(started3, [], 'service must never start on restart when persisted false');
 });
 
-test('from not persisted when do not write default value:register after store without record, in-memory host behavior do not change', { timeout: 60_000 }, async () => {
+test('unpersisted plugins do not write defaults on register; in-memory host behavior unchanged', { timeout: 60_000 }, async () => {
   const store = new MemoryToggleStore();
   const host = makeHost(store);
   await host.register(servicePlugin('p:fresh'));
   assert.equal(host.list().find((p) => p.id === 'p:fresh')!.enabled, true);
-  assert.equal(store.enabled.has('p:fresh'), false, 'register do not write by default start stop value');
-  // in-memory host(without store): start stop do not persist, semantics keep since has
+  assert.equal(store.enabled.has('p:fresh'), false, 'register does not persist default toggle state');
+  // Host without persistent store preserves existing in-memory enable/disable semantics
   const bare = makeHost();
   await bare.register(servicePlugin('p:bare'), { enabled: false });
   assert.equal(bare.list().find((p) => p.id === 'p:bare')!.enabled, false);
@@ -360,7 +361,7 @@ test('from not persisted when do not write default value:register after store wi
   assert.equal(bare.list().find((p) => p.id === 'p:bare')!.enabled, false);
 });
 
-test('HelmPluginConfigStore:pluginEnabled independent config.json, and plugins config/credentials separate, across instance restart keep', { timeout: 60_000 }, async () => {
+test('HelmPluginConfigStore: pluginEnabled persists to config.json independently of plugins config/credentials across restarts', { timeout: 60_000 }, async () => {
   const credentialsDir = join(dataDir, 'cred');
   mkdirSync(credentialsDir, { recursive: true });
   const config = new ConfigService(dataDir);
@@ -368,18 +369,18 @@ test('HelmPluginConfigStore:pluginEnabled independent config.json, and plugins c
   const store = new HelmPluginConfigStore({ config, credentials });
   await store.load();
 
-  assert.equal(store.getEnabled('builtin:herdr'), undefined, 'from not persisted return undefined');
+  assert.equal(store.getEnabled('builtin:herdr'), undefined, 'unpersisted plugin returns undefined');
 
-  // and since has plugins config,credentials shared store the same config.json: mutual do not interference
+  // Shares config.json with existing plugins config without interfering with each other
   await store.setEnabled('builtin:herdr', false);
   await store.setEnabled('builtin:profile', true);
   await store.set('builtin:herdr', { endpoint: 'unix:///x' }, { endpoint: { type: 'string' } });
 
   const raw = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8')) as Record<string, unknown>;
   assert.deepEqual(raw['pluginEnabled'], { 'builtin:herdr': false, 'builtin:profile': true });
-  assert.deepEqual(raw['plugins'], { 'builtin:herdr': { endpoint: 'unix:///x' } }, 'pluginEnabled and plugins config separate');
+  assert.deepEqual(raw['plugins'], { 'builtin:herdr': { endpoint: 'unix:///x' } }, 'pluginEnabled and plugins config are separate');
 
-  // new instance (simulated restart):load warm up after getEnabled sync can read
+  // New instance (simulated restart): getEnabled can read synchronously after load warmup
   const store2 = new HelmPluginConfigStore({ config: new ConfigService(dataDir), credentials: new CredentialService(credentialsDir) });
   await store2.load();
   assert.equal(store2.getEnabled('builtin:herdr'), false);
@@ -388,7 +389,7 @@ test('HelmPluginConfigStore:pluginEnabled independent config.json, and plugins c
   assert.equal(store2.get('builtin:herdr')['endpoint'], 'unix:///x');
 });
 
-test('HelmPluginConfigStore load:pluginEnabled illegal structure/non- boolean value explicit config_corrupt, never static default ignore', { timeout: 60_000 }, async () => {
+test('HelmPluginConfigStore load: invalid structure or non-boolean pluginEnabled fails explicitly with config_corrupt', { timeout: 60_000 }, async () => {
   const credentialsDir = join(dataDir, 'cred');
   mkdirSync(credentialsDir, { recursive: true });
   const write = (content: unknown) =>
@@ -407,7 +408,7 @@ test('HelmPluginConfigStore load:pluginEnabled illegal structure/non- boolean va
   );
 });
 
-test('HelmPluginConfigStore setEnabled: non- boolean reference 400 validation_error, do not trigger', { timeout: 60_000 }, async () => {
+test('HelmPluginConfigStore setEnabled: non-boolean argument fails 400 validation_error without disk write', { timeout: 60_000 }, async () => {
   const credentialsDir = join(dataDir, 'cred');
   mkdirSync(credentialsDir, { recursive: true });
   const store = new HelmPluginConfigStore({ config: new ConfigService(dataDir), credentials: new CredentialService(credentialsDir) });
@@ -420,10 +421,10 @@ test('HelmPluginConfigStore setEnabled: non- boolean reference 400 validation_er
 });
 
 // ---------------------------------------------------------------------------
-// locked protect
+// locked protection
 // ---------------------------------------------------------------------------
 
-test('locked plugin constant enable: declaration enabled:false also strong row enable,disable 403', { timeout: 60_000 }, async () => {
+test('locked plugin stays enabled even when registered with enabled:false, and disable rejects 403', { timeout: 60_000 }, async () => {
   const store = new MemoryToggleStore();
   const host = makeHost(store);
   const started: string[] = [];
@@ -434,17 +435,17 @@ test('locked plugin constant enable: declaration enabled:false also strong row e
   assert.equal(host.list().find((p) => p.id === 'builtin:profile')!.enabled, true);
   assert.deepEqual(started, ['start']);
   await assertRejectsCode(() => host.disable('builtin:profile'), 'plugin_locked');
-  // locked not persisted any start stop value (disable by refuse produces no write side effect)
+  // locked does not persist any toggle state (rejected disable produces no write side effects)
   assert.equal(store.enabled.has('builtin:profile'), false);
 });
 
 // ---------------------------------------------------------------------------
-// double failed diagnose:stop failed / persist failed
+// Dual failure diagnostics: stop failure / persistence failure
 // ---------------------------------------------------------------------------
 
-test('disable persist failed: actual deactivated still real plugin.changed(enabled:false, ui:[]), diagnose explicit on throw and can JSON serialization', { timeout: 60_000 }, async () => {
+test('disable persistence failure: plugin is still deactivated, emits plugin.changed(enabled:false, ui:[]), and throws JSON-safe error', { timeout: 60_000 }, async () => {
   const store = new MemoryToggleStore();
-  store.failSetEnabled = new Error('disk only read');
+  store.failSetEnabled = new Error('read-only disk');
   const host = makeHost(store);
   await host.register(servicePlugin('builtin:herdr'));
   assert.equal(host.listUi().length, 1);
@@ -453,10 +454,10 @@ test('disable persist failed: actual deactivated still real plugin.changed(enabl
   const before = pluginChangedPayloads(rec).length;
   const err = (await assertRejectsCode(() => host.disable('builtin:herdr'), 'plugin_enabled_persist_failed')) as HelmError;
   assert.equal(err.status, 500);
-  assert.match(err.message, /disk only read/);
+  assert.match(err.message, /read-only disk/);
   assert.doesNotThrow(() => JSON.stringify(err.details));
 
-  // actual state: deactivated,UI empty, event already (real state frame)
+  // Actual state: disabled, UI cleared, real state frame emitted
   assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, false);
   assert.deepEqual(host.listUi(), []);
   const changed = pluginChangedPayloads(rec);
@@ -465,14 +466,14 @@ test('disable persist failed: actual deactivated still real plugin.changed(enabl
   assert.deepEqual(changed.at(-1)!.ui, []);
 });
 
-test('disable stop and persist double failed:stop diagnose is main chain,persistError aggregate enter details', { timeout: 60_000 }, async () => {
+test('disable dual failure (stop + persist): stop error is primary and persistError is aggregated in details', { timeout: 60_000 }, async () => {
   const store = new MemoryToggleStore();
-  store.failSetEnabled = new Error('full');
+  store.failSetEnabled = new Error('disk full');
   const host = makeHost(store);
   await host.register(
     servicePlugin('builtin:herdr', {
       onStop: () => {
-        throw new Error('svc blast');
+        throw new Error('svc crashed');
       },
     }),
   );
@@ -485,35 +486,35 @@ test('disable stop and persist double failed:stop diagnose is main chain,persist
   };
   assert.deepEqual(
     details.stopErrors.map((e) => [e.serviceId, e.error.message]),
-    [['daemon', 'svc blast']],
+    [['daemon', 'svc crashed']],
   );
   assert.doesNotThrow(() => JSON.stringify(err.details));
-  // persist failed original information keep (package in persistError diagnose in)
-  assert.match(JSON.stringify(err.details), /full/);
-  // state deactivated and event already (three heavy wrap-up do not lose real state frame)
+  // Original persistence failure message is preserved inside details.persistError
+  assert.match(JSON.stringify(err.details), /disk full/);
+  // State is disabled and real state frame is still emitted despite dual failures
   assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, false);
   assert.equal(pluginChangedPayloads(rec).length, before + 1);
 });
 
-test('enable persist failed: rollback is deactivate, do not publish enabled event, can again enable, diagnose explicit', { timeout: 60_000 }, async () => {
+test('enable persistence failure: rolls back to disabled, emits no enabled event, and recovers cleanly on retry', { timeout: 60_000 }, async () => {
   const store = new MemoryToggleStore();
   const host = makeHost(store);
   await host.register(servicePlugin('builtin:herdr'), { enabled: false });
 
-  store.failSetEnabled = new Error('network disconnect');
+  store.failSetEnabled = new Error('network disconnected');
   const rec = recorder;
   const before = pluginChangedPayloads(rec).length;
   const err = (await assertRejectsCode(() => host.enable('builtin:herdr'), 'plugin_enabled_persist_failed')) as HelmError;
-  assert.match(err.message, /network disconnect/);
+  assert.match(err.message, /network disconnected/);
   assert.doesNotThrow(() => JSON.stringify(err.details));
 
-  // rollback: deactivate, service already stop, without enabled:true event frame
+  // Rolled back: disabled, service stopped, no enabled:true event emitted
   const summary = host.list().find((p) => p.id === 'builtin:herdr')!;
   assert.equal(summary.enabled, false);
   const changed = pluginChangedPayloads(rec);
-  assert.equal(changed.length, before, 'enable failed do not publish any plugin.changed');
+  assert.equal(changed.length, before, 'failed enable must not publish any plugin.changed');
 
-  // restore after can again enable succeeded
+  // Can re-enable cleanly after store recovers
   store.failSetEnabled = undefined;
   await host.enable('builtin:herdr');
   assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, true);
@@ -521,10 +522,10 @@ test('enable persist failed: rollback is deactivate, do not publish enabled even
 });
 
 // ---------------------------------------------------------------------------
-// service declaration liveTasks keep-alive gate
+// Service liveTasks keep-alive gate
 // ---------------------------------------------------------------------------
 
-test('liveTasks declaration keep-alive task: without tracker in-flight task when still reject disable/unregister, task empty after can deactivate', { timeout: 60_000 }, async () => {
+test('liveTasks keep-alive gate blocks disable/unregister even without tracker tasks and allows disable once drained', { timeout: 60_000 }, async () => {
   const store = new MemoryToggleStore();
   const host = makeHost(store);
   const panes = new Set<string>();
@@ -536,25 +537,25 @@ test('liveTasks declaration keep-alive task: without tracker in-flight task when
   const err = (await assertRejectsCode(() => host.disable('builtin:herdr'), 'plugin_has_live_tasks')) as HelmError;
   assert.equal(err.status, 409);
   assert.deepEqual((err.details as { activeTasks: string[] }).activeTasks, ['pane:win-1']);
-  // reject path produces no side effect: not stop, not persisted, state not change
+  // Rejected disable has no side effects: service stays running and toggle is not persisted
   assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, true);
   assert.equal(store.enabled.has('builtin:herdr'), false);
   const errU = (await assertRejectsCode(() => host.unregister('builtin:herdr'), 'plugin_has_live_tasks')) as HelmError;
   assert.deepEqual((errU.details as { activeTasks: string[] }).activeTasks, ['pane:win-1']);
 
-  // task empty after can deactivate
+  // Can disable once active tasks drain
   panes.clear();
   await host.disable('builtin:herdr');
   assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, false);
   assert.equal(store.enabled.get('builtin:herdr'), false);
 });
 
-test('liveTasks exception or illegal output: explicit plugin_live_tasks_check_failed, never when empty let through', { timeout: 60_000 }, async () => {
+test('liveTasks exception or invalid output fails explicitly with plugin_live_tasks_check_failed rather than passing empty', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register(
     servicePlugin('builtin:herdr', {
       liveTasks: () => {
-        throw new Error('for account crash');
+        throw new Error('tracker callback crashed');
       },
     }),
   );
@@ -562,10 +563,10 @@ test('liveTasks exception or illegal output: explicit plugin_live_tasks_check_fa
   assert.equal(err.status, 500);
   const details = err.details as { serviceId: string; error: { message: string } };
   assert.equal(details.serviceId, 'daemon');
-  assert.equal(details.error.message, 'for account crash');
-  assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, true, 'check failed does not change state');
+  assert.equal(details.error.message, 'tracker callback crashed');
+  assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, true, 'check failure does not mutate enabled state');
 
-  // illegal return type (non- string array): same explicit errors
+  // Invalid return type (non-string array): fails explicitly as well
   const host2 = makeHost();
   await host2.register(
     servicePlugin('builtin:herdr', {
@@ -575,7 +576,7 @@ test('liveTasks exception or illegal output: explicit plugin_live_tasks_check_fa
   await assertRejectsCode(() => host2.disable('builtin:herdr'), 'plugin_live_tasks_check_failed');
 });
 
-test('liveTasks register validate: non- function explicit invalid_service_spec; not declaration/not start service does not participate check', { timeout: 60_000 }, async () => {
+test('liveTasks registration validation rejects non-function with invalid_service_spec; unstarted services skip check', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await assert.rejects(
     host.register({
@@ -591,9 +592,9 @@ test('liveTasks register validate: non- function explicit invalid_service_spec; 
     }),
     (err: unknown) => err instanceof HelmError && err.code === 'invalid_service_spec',
   );
-  assert.equal(host.list().find((p) => p.id === 'p:bad'), undefined, 'illegal declaration register whole failed');
+  assert.equal(host.list().find((p) => p.id === 'p:bad'), undefined, 'invalid declaration fails entire registration');
 
-  // declaration liveTasks but service not started(deactivate register path): does not participate gate, can normal deactivate state
+  // Declaring liveTasks on a non-started service (disabled registration) skips the gate
   const host2 = makeHost();
   await host2.register(
     servicePlugin('builtin:herdr', { liveTasks: () => ['ghost'] }),
@@ -603,10 +604,10 @@ test('liveTasks register validate: non- function explicit invalid_service_spec; 
 });
 
 // ---------------------------------------------------------------------------
-// epoch / old ctx expires (deactivate register and enable rebuild new cycle)
+// Epoch / old ctx expiration (disabled registration and enable rebuild new cycle)
 // ---------------------------------------------------------------------------
 
-test('deactivate register old ctx and enable after old ctx all expires: new cycle rebuild', { timeout: 60_000 }, async () => {
+test('disabled registration and re-enable each retire old ctx and rebuild a new epoch cycle', { timeout: 60_000 }, async () => {
   const host = makeHost(new MemoryToggleStore());
   let stolen: Parameters<NonNullable<PluginDefinition['definePlugin']>>[0] | undefined;
   await host.register(
@@ -623,7 +624,7 @@ test('deactivate register old ctx and enable after old ctx all expires: new cycl
     () => stolen!.configSchema({ a: { type: 'string' } }),
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_context_closed',
   );
-  // enable enter new cycle succeeded; then disable make new cycle ctx also expires
+  // Enable enters a fresh cycle; subsequent disable expires that cycle's ctx as well
   await host.enable('builtin:herdr');
   assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, true);
   await host.disable('builtin:herdr');
@@ -633,7 +634,7 @@ test('deactivate register old ctx and enable after old ctx all expires: new cycl
   );
 });
 
-test('register define throws: regardless of options.enabled and otherwise, register whole rollback remove', { timeout: 60_000 }, async () => {
+test('register rolls back cleanly regardless of options.enabled when definePlugin throws', { timeout: 60_000 }, async () => {
   const host = makeHost(new MemoryToggleStore());
   const bad: PluginDefinition = {
     id: 'p:boom',

@@ -1,9 +1,9 @@
 /**
- * `@earendil-works/pi-durable` brand count value ID boundary convert auxiliary.
+ * Narrowing helpers for `@earendil-works/pi-durable` branded numeric IDs.
  *
- * SDK use name meaning brand type (`ConversationId`,`EntryId`,`SubmissionId`,`TaskId`)
- * zone each durable entity main key; kernel for outside protocol and store layer with ordinary `number` pass and in boundary before do
- * integer validate, concentrate via this module narrow convert enter SDK, take proxy zero scatter `as never`.
+ * The SDK distinguishes durable primary keys via nominal branded types (`ConversationId`, `EntryId`,
+ * `SubmissionId`, `TaskId`); external protocol and store layers pass plain `number` values and validate
+ * integer bounds at boundaries before narrowing here—replacing scattered `as never` casts.
  */
 import type { ConversationId, EntryId, Id, SubmissionId, TaskId } from '@earendil-works/pi-durable'
 

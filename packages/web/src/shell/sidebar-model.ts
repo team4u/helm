@@ -642,8 +642,27 @@ export function activeConversationIdsOf(
   return ids
 }
 
+export type SidebarStoreView = Pick<
+  HelmStoreValue,
+  | 'primaryTarget'
+  | 'splitTarget'
+  | 'focusedPanel'
+  | 'conversations'
+  | 'profiles'
+  | 'plugins'
+  | 'groupedUi'
+  | 'pendingAsks'
+  | 'locale'
+  | 'openTarget'
+  | 'pushNotice'
+>
+
 /** 在指定 Agent 下进入待命页（所有用户新建入口的统一路径；首次发送才创建会话）。 */
-export function openAgentStandby(store: HelmStoreValue, profileId: string, onNavigate?: () => void): void {
+export function openAgentStandby(
+  store: Pick<HelmStoreValue, 'openTarget'>,
+  profileId: string,
+  onNavigate?: () => void,
+): void {
   store.openTarget({ kind: 'agent', profileId })
   onNavigate?.()
 }

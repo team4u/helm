@@ -42,6 +42,8 @@
 
 .execution-child-title {
   flex-shrink: 1;
+  font-weight: 500;
+  color: var(--fg);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

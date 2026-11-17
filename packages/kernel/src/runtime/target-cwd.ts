@@ -1,48 +1,48 @@
 /**
- * conversation / spawn cwd by target node platform unify specification consolidate (kernel inside unique implement).
+ * Unified conversation/spawn `cwd` normalization by target node platform (sole internal kernel implementation).
  *
- * all enter persist (conversation mirror / sub-conversation register) or execute environment (SDK agent cwd /
- * worktree source directory / Herdr pane cwd) cwd, all via normalizeSessionCwd:
- * - relative path (contains Windows symbol each other for C:relative) explicit reject (since has contract);
- * - platform known: re- use @helm/protocol normalizeTargetPath(win32 target on
- *   WSL /mnt/<symbol>,Git Bash /<symbol>,//server/share view determinism convert is
- *   specification Windows path;POSIX target only term method archive one, never reverse change write);
- * - target node platform without can message information (remote not registered / not on report): do not guess, do not change write, original
- *   pass-through (absolute validate still takes effect).
+ * Every `cwd` entering persistence (conversation mirror / sub-conversation registration) or execution
+ * (SDK agent cwd / worktree source directory / Herdr pane cwd) flows through `normalizeSessionCwd`:
+ * - Relative paths (including Windows drive-relative paths like `C:rel`) are explicitly rejected by contract;
+ * - When target platform is known, delegates to `@helm/protocol` `normalizeTargetPath`: on `win32`,
+ *   WSL `/mnt/<drive>`, Git Bash `/<drive>`, and `//server/share` are deterministically converted into
+ *   canonical Windows paths; on POSIX targets only `path.posix.normalize` is applied (never rewritten backward);
+ * - When target platform is unknown (remote unregistered or not yet reported), never guesses or rewrites —
+ *   passes through verbatim (absolute-path validation still applies).
  *
- * platform fact source (honest hard rule):local by default use process.platform, test can via
- * trustedPlatformFromEnvFabric inject Hub platform; remote only use NodeRegistry register when
- * on report can message platform, never probe, never use path shape upside down push target platform.
+ * Authoritative platform source (strict honesty rule): local defaults to `process.platform` and tests may
+ * inject Hub platform via `trustedPlatformFromEnvFabric`; remote uses only the authoritative platform reported
+ * on `NodeRegistry` registration, never probing or inferring platform from path syntax.
  */
 
 import { HelmError, isAbsoluteTargetPath, normalizeTargetPath, targetPlatformOf, type TargetPlatform } from '@helm/protocol'
 import type { EnvFabric } from '../env/index.js'
 
 /**
- * can message node platform source: return node on report original platform string (such as 'linux' /
- * 'win32' / 'darwin');unknown / not on report return undefined.
+ * Authoritative node platform provider: returns the raw `platform` string reported by the node (e.g.
+ * `'linux'` / `'win32'` / `'darwin'`); returns `undefined` if unknown or unreported.
  */
 export type TrustedNodePlatformSource = (nodeId: string) => string | undefined
 
 /**
- * EnvFabric platform fact most small structure (structure dependency: test can inject light amount stub,
- * no need to construct complete NodeRegistry). produce EnvFabric provide nodePlatformOf only read
- * port when takes precedence use (unique fact exit, see env/fabric.ts); only has registry 
- * structure stub retreat back direct read register table, semantics and port consistent.
+ * Minimal structural shape for `EnvFabric` platform facts (structural dependency so tests can pass lightweight
+ * stubs without constructing a full `NodeRegistry`). Uses `EnvFabric.nodePlatformOf` read-only port when provided
+ * (sole fact exit; see `env/fabric.ts`); structural stubs with only `registry` fall back to direct registry lookup
+ * with identical semantics.
  */
 export interface TrustedPlatformHost {
   registry: { get(nodeId: string): { platform: string } | undefined }
-  /** optional Hub platform fact port (test can inject, produce default fall back process.platform). */
+  /** Optional Hub platform fact port (injectable in tests; defaults to `process.platform` in production). */
   hubPlatform?(): string | undefined
-  /** optional most small only read platform port (EnvFabric.nodePlatformOf); remote platform takes precedence use. */
+  /** Optional minimal read-only platform port (`EnvFabric.nodePlatformOf`); preferred for remote platforms. */
   nodePlatformOf?(nodeId: string): string | undefined
 }
 
 /**
- * produce can message source:local takes precedence EnvFabric.hubPlatform(test inject), default fall back
- * process.platform; remote takes precedence EnvFabric.nodePlatformOf only read port (NodeRegistry
- * register on report platform, not registered / not on report = undefined); only has registry structure
- * stub retreat back direct read register table (the same semantics).
+ * Authoritative production source: `local` prefers `EnvFabric.hubPlatform` (test-injected) and defaults to
+ * `process.platform`; remote prefers the read-only `EnvFabric.nodePlatformOf` port (`platform` reported at
+ * `NodeRegistry` registration, `undefined` if unregistered/unreported); structural stubs with only `registry`
+ * fall back to direct registry lookup (same semantics).
  */
 export function trustedPlatformFromEnvFabric(
   envFabric: EnvFabric | TrustedPlatformHost | undefined,
@@ -57,9 +57,9 @@ export function trustedPlatformFromEnvFabric(
 }
 
 /**
- * parse target node platform semantics:undefined means without can message information (caller must not guess).
- * nodeId default / empty string treated as 'local';local by default use process.platform, explicit
- * trustedPlatform source can provide test use Hub platform fact; remote only used to source on report.
+ * Resolve target node platform semantics: `undefined` means no authoritative info (caller must not guess).
+ * Missing/empty `nodeId` is treated as `'local'`; `local` defaults to `process.platform` or an explicit
+ * `trustedPlatform` Hub fact in tests; remote uses only source-reported values.
  */
 export function resolveTargetPlatform(
   nodeId: string | undefined,
@@ -74,28 +74,28 @@ export function resolveTargetPlatform(
   return raw !== undefined && raw !== '' ? targetPlatformOf(raw) : undefined
 }
 
-/** normalizeSessionCwd reference. */
+/** Parameters for `normalizeSessionCwd`. */
 export interface NormalizeSessionCwdOptions {
-  /** target compute node (default / empty string = 'local'). */
+  /** Target compute node (missing / empty string = `'local'`). */
   nodeId?: string
-  /** can message platform source (default only local can parse). */
+  /** Authoritative platform source (defaults to resolving `local` only). */
   trustedPlatform?: TrustedNodePlatformSource
-  /** diagnose use entry name (such as 'conversation.create'). */
+  /** Entry point name for diagnostics (e.g. `'conversation.create'`). */
   entry: string
 }
 
 /**
- * by already parse platform specification cwd(pure term method, zero disk access):
- * - reject relative path (POSIX each other for,Windows symbol each other for), keep since has absolute path contract;
- * - platform undefined(target platform without can message information): pass-through, do not guess do not change write;
- * - platform known:normalizeTargetPath;win32 target on cannot mapping POSIX explicit
- *   failed (unmappable_posix_root, never static default written to the database broken POSIX cwd).
+ * Normalize `cwd` per resolved platform (purely lexical, zero disk access):
+ * - Reject relative paths (POSIX relative, Windows drive-relative), preserving the existing absolute-path contract;
+ * - `platform === undefined` (no authoritative target platform info): pass through without guessing or rewriting;
+ * - Platform known: `normalizeTargetPath`; unmappable POSIX roots on `win32` targets fail explicitly
+ *   (`unmappable_posix_root`, never silently persisting broken POSIX cwds).
  */
 export function normalizeCwdForPlatform(cwd: string, platform: TargetPlatform | undefined, entry: string): string {
   if (!isAbsoluteTargetPath(cwd)) {
     throw new HelmError(
       'validation_error',
-      `${entry}: cwd must be absolute path (POSIX / open head,Windows symbol C:\\ or UNC \\\\server\\share; reject symbol each other for and relative path): receives '${cwd}'`,
+      `${entry}: cwd must be an absolute path (starting with / on POSIX, drive letter C:\\ or UNC \\\\server\\share on Windows; drive-relative and relative paths are rejected): received '${cwd}'`,
       400,
       { cwd, entry },
     )
@@ -109,8 +109,8 @@ export function normalizeCwdForPlatform(cwd: string, platform: TargetPlatform | 
 }
 
 /**
- * cwd consolidate (by target node platform): absolute validate + resolveTargetPlatform +
- * normalizeCwdForPlatform combine (semantics see on way each function).
+ * `cwd` consolidation (by target node platform): composes absolute validation + `resolveTargetPlatform` +
+ * `normalizeCwdForPlatform` (see functions above for exact semantics).
  */
 export function normalizeSessionCwd(cwd: string, options: NormalizeSessionCwdOptions): string {
   const platform = resolveTargetPlatform(options.nodeId, options.trustedPlatform)

@@ -5,8 +5,7 @@ import { HelmIcon } from '@helm/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { Tooltip } from '../ui/Tooltip.js'
-import type { HelmStoreValue } from '../lib/types.js'
-import type { SidebarTargetPresence } from './sidebar-model.js'
+import type { SidebarStoreView, SidebarTargetPresence } from './sidebar-model.js'
 import {
   backgroundAwareStatusTooltip,
   resolveStatusLight,
@@ -162,7 +161,7 @@ export function SidebarPaneTag({ paneTag }: { paneTag: SidebarTargetPresence['pa
 }
 
 /** Global pending-approval amber pill with the quick-approval flyout. */
-export function PendingAsksPanel({ store }: { store: HelmStoreValue }) {
+export function PendingAsksPanel({ store }: { store: SidebarStoreView }) {
   const { t } = useWebLocale()
   const [expanded, setExpanded] = useState(false)
   const [busyAskId, setBusyAskId] = useState<string | null>(null)

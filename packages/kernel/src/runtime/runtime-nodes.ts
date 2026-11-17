@@ -1,10 +1,10 @@
 /**
- * RuntimeNodeOperations: node manage and remote daemon orchestration (from KernelRuntime split out).
+ * RuntimeNodeOperations: node management and remote daemon orchestration (extracted from KernelRuntime).
  *
- * responsibility:
- * - concentrate manage many node operation (listNodes, issueNodeToken, removeNode, checkNodeUpgrade, upgradeNode, execEnv);
- * - maintain node on take offline event delivery and automatically upgrade trigger;
- * - warm up and initialize node bottom seat which must asset (nodeTokens, cliBinDir, localDiskStats).
+ * Responsibilities:
+ * - Centralize node operations (listNodes, issueNodeToken, removeNode, checkNodeUpgrade, upgradeNode, execEnv);
+ * - Emit node online/offline events and trigger eligible auto-upgrades;
+ * - Initialize underlying node prerequisites (nodeTokens, cliBinDir, localDiskStats).
  */
 
 import type {
@@ -30,10 +30,10 @@ export class RuntimeNodeOperations {
   constructor(private readonly deps: RuntimeNodeOperationsDeps) {}
 
   /**
-   * bind set underlying node connect change event:
-   * - node on take offline -> delivery node.changed SSE event (Web/CLI real-time aware);
-   * - removeNode trigger assert connect when because already first delete index, does not resend publish offline event;
-   * - node enable and version after Hub when, if HELM_AUTO_UPGRADE_NODES=1 then async trigger upgrade.
+   * Bind underlying node connection change events:
+   * - Node connects/disconnects -> publish node.changed SSE event (real-time Web/CLI awareness);
+   * - When removeNode severs a connection, it clears the index first so the offline callback is skipped;
+   * - If a newly connected node lags behind Hub version and HELM_AUTO_UPGRADE_NODES=1 is set, trigger auto-upgrade asynchronously.
    */
   bindEvents(): void {
     this.deps.envFabric.registry.onNodeChanged((nodeId, online) => {
@@ -50,10 +50,10 @@ export class RuntimeNodeOperations {
   }
 
   /**
-   * initialize node bottom seat environment:
-   * 1. load config.json node sign table;
-   * 2. generate helm CLI wrap script;
-   * 3. warm up local disk count.
+   * Initialize node substrate prerequisites:
+   * 1. Load config.json node token registry;
+   * 2. Generate helm CLI wrapper script;
+   * 3. Warm up local disk stats cache.
    */
   async initialize(): Promise<void> {
     await this.deps.nodes.loadNodeTokens()

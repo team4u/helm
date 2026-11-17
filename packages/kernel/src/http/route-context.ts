@@ -1,10 +1,10 @@
 /**
- * domain routing sharing request context and small tool (without business semantics).
+ * Shared request context and small helpers for domain routers (no business semantics).
  *
- * RouteContext.segments is already strictly decode path segment ('api' prefix already strip, illegal
- * hundred number encode in enter domain handler before already by routes.ts unify decode is 400). each
- * domain handler only match itself prefix or fewer segment: method + precise path segment match, segment count
- * must fully consistent, redundant segment one rule return domain inside 404, never operation branch.
+ * `RouteContext.segments` holds strictly decoded path segments (the `api` prefix is stripped, and invalid
+ * percent-encoding is rejected upfront with 400 by `routes.ts` before entering domain handlers). Each
+ * domain handler matches only segments at or below its own prefix: exact method + path segment matching,
+ * exact segment count required, and extra segments always return domain-level 404 (never fall through).
  */
 import { HelmError } from '@helm/protocol'
 import { errorResponse, readBinaryBodyWithLimit, readBody, DEFAULT_MAX_BODY_BYTES, type JsonRedactor } from './http-utils.js'
@@ -13,16 +13,16 @@ import { ValidationError } from './validate.js'
 export interface RouteContext {
   request: Request
   method: string
-  /** already decode path segment ('api' prefix already strip). */
+  /** Strictly decoded path segments (with leading `api` prefix stripped). */
   segments: string[]
   url: URL
 }
 
 export function methodNotAllowed(redactor: JsonRedactor | undefined, method: string): Response {
-  return errorResponse(redactor, 405, 'method_not_allowed', `method disallows: ${method}`)
+  return errorResponse(redactor, 405, 'method_not_allowed', `method not allowed: ${method}`)
 }
 
-/** ?flag=1/true/0/false query parameter: other value 400(do not guess true value). */
+/** `?flag=1/true/0/false` query parameter: any other value fails with 400 (never guesses truthiness). */
 export function parseOptionalBooleanFlag(url: URL, param: string): boolean | undefined {
   const raw = url.searchParams.get(param)
   if (raw === null) return undefined
@@ -31,20 +31,20 @@ export function parseOptionalBooleanFlag(url: URL, param: string): boolean | und
   throw new ValidationError(`${param} must be 1/0 or true/false`)
 }
 
-/** read optional JSON body: empty body return undefined(legal not designate), illegal JSON still 400. */
+/** Read optional JSON body: empty body returns undefined (validly omitted); invalid JSON still returns 400. */
 export async function readOptionalJsonBody(request: Request): Promise<unknown> {
   const raw = await readBody(request, DEFAULT_MAX_BODY_BYTES)
   if (raw.length === 0) return undefined
   try {
     return JSON.parse(new TextDecoder('utf8', { fatal: true }).decode(raw))
   } catch {
-    throw new HelmError('invalid_input', 'request body is not legal JSON', 400)
+    throw new HelmError('invalid_input', 'request body is not valid JSON', 400)
   }
 }
 
 /**
- * optional JSON object body: empty body treated as {} away parse(and original implement consistent, by parse
- * decide empty object is otherwise legal); non-empty then must is JSON object (array/mark amount reject) again away parse.
+ * Optional JSON object body: empty body is parsed as `{}` (matching original semantics so `parse`
+ * decides whether `{}` is valid); non-empty bodies must be a JSON object (arrays/scalars rejected).
  */
 export async function parseOptionalJsonObjectBody<T>(
   request: Request,
@@ -56,10 +56,10 @@ export async function parseOptionalJsonObjectBody<T>(
   try {
     parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw))
   } catch {
-    throw new ValidationError('request body is not legal JSON')
+    throw new ValidationError('request body is not valid JSON')
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new ValidationError('request body must be JSON object')
+    throw new ValidationError('request body must be a JSON object')
   }
   return parse(parsed as Record<string, unknown>)
 }

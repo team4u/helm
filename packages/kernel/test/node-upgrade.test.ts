@@ -1,23 +1,24 @@
 /**
- * node upgrade (Hub side orchestrator + registry wait for) end-to-end test:
- * real NodeRegistry + /ws/node gateway + can edit process node fixture(can control nodeUpgrade /
- * nodeCheckUpgrade behavior and register/heartbeat when order), outside add complete Hub HTTP layer
- * (KernelRuntime + startHub) override GET /api/nodes/:id/upgrade/check and
+ * End-to-end tests for node upgrades (Hub-side orchestrator + registry waiters):
+ * Real NodeRegistry + /ws/node gateway + configurable in-process node fixture (controlling
+ * nodeUpgrade / nodeCheckUpgrade behavior and register/heartbeat timing), wrapped with the full
+ * Hub HTTP layer (KernelRuntime + startHub) covering GET /api/nodes/:id/upgrade/check and
  * POST /api/nodes/:id/upgrade.
  *
- * correct core (each items real behavior verify, does not source code regex smoke fill):
- * 1. old nodeUpgrade RPC because choose register top replace old socket while transfer interrupt when, upgrade result
- *    only can by choose connect match commit heartbeat confirm - - never because new connect store in or
- *    catch false succeeded;
- * 2. only register(without commit) do not succeeded; error attemptId / error version / fabricate
- *    connect commit reject; match commit(attemptId + version +
- *    previousVersion + pid positive integer) succeeded;
- * 3. without wait for legal commit(local machine CLI upgrade path) still ACK true;
- * 4. local 400 / unknown 404 / offline 409 / unsupported 501 / structure failed 400/502 /
- *    timeout not confirm 502;
- * 5. HTTP body boundary validate: unknown field / non- http(s) registryUrl / non- boolean force /
- *    attemptId cannot by user provide;
- * 6. automatically upgrade by default close;HELM_AUTO_UPGRADE_NODES=1 and strictly SemVer after when trigger.
+ * Core correctness invariants (verified via real behavior, never source-regex smoke checks):
+ * 1. When an in-flight nodeUpgrade RPC disconnects because the candidate supersedes the old socket,
+ *    the upgrade outcome may only be confirmed by a matching commit heartbeat from the candidate --
+ *    never falsely succeed merely because a new connection appeared or an error was caught;
+ * 2. Registration alone (without commit) never succeeds; mismatched attemptId / mismatched version /
+ *    spoofed connection commit is rejected; a matching commit (attemptId + version +
+ *    previousVersion + positive integer pid) succeeds;
+ * 3. A valid commit without an active waiter (local CLI upgrade path) still ACKs true;
+ * 4. Error mapping: local 400 / unknown 404 / offline 409 / unsupported 501 / structured failure 400/502 /
+ *    unconfirmed timeout 502;
+ * 5. HTTP body boundary validation: rejects unknown fields / non-http(s) registryUrl / non-boolean force /
+ *    user-supplied attemptId;
+ * 6. Auto-upgrade is disabled by default; triggered when HELM_AUTO_UPGRADE_NODES=1 and the node has a
+ *    strictly older SemVer than Hub.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -46,7 +47,7 @@ import { startHub } from '../src/http/index.js'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 
-/** async mkdtemp alias (case inside dir create). */
+/** Async mkdtemp alias (creates per-case directories). */
 const mkdtemp = (prefix: string): Promise<string> => mkdtempAsync(prefix)
 
 void mkdtemp
@@ -61,7 +62,7 @@ test('setup: create temporary directory', { timeout: 60_000 }, () => {
 // version semantics unit
 // ---------------------------------------------------------------------------
 
-test('normalizeExplicitVersion:trim + single v prefix; illegal explicit reject', { timeout: 60_000 }, () => {
+test('normalizeExplicitVersion: trims and strips single v prefix; rejects invalid inputs explicitly', { timeout: 60_000 }, () => {
   assert.equal(normalizeExplicitVersion('1.2.3'), '1.2.3')
   assert.equal(normalizeExplicitVersion(' v1.2.3 '), '1.2.3')
   assert.equal(normalizeExplicitVersion('V2.0.0-rc.1+build.5'), '2.0.0-rc.1+build.5')
@@ -71,7 +72,7 @@ test('normalizeExplicitVersion:trim + single v prefix; illegal explicit reject',
   assert.throws(() => normalizeExplicitVersion('1.2.3.4'), /SemVer/)
 })
 
-test('compareStrictSemVer: main/time/fix subscribe/pre- publish sort', { timeout: 60_000 }, () => {
+test('compareStrictSemVer: sorts major/minor/patch/prerelease versions', { timeout: 60_000 }, () => {
   assert.equal(compareStrictSemVer('1.2.3', '1.2.3'), 0)
   assert.equal(compareStrictSemVer('0.9.9', '1.0.0'), -1)
   assert.equal(compareStrictSemVer('1.10.0', '1.9.0'), 1)
@@ -87,10 +88,10 @@ test('hubVersion: read kernel package.json(strictly SemVer)', { timeout: 60_000 
 })
 
 // ---------------------------------------------------------------------------
-// pure registry layer:beginUpgrade / commit for account
+// Pure registry layer: beginUpgrade / commit accounting
 // ---------------------------------------------------------------------------
 
-/** extreme simple EventEmitter socket replace body (node-health.test.ts same style pattern). */
+/** Minimal EventEmitter socket stub (same style as node-health.test.ts). */
 class EventEmitterShim {
   readonly #listeners = new Map<string, Set<() => void>>()
   on(event: string, listener: () => void): void {
@@ -146,7 +147,7 @@ async function registerRaw(
   return { socket, outcome }
 }
 
-test('registry.register: illegal version / upgradeAttemptId(empty string) explicit reject', { timeout: 60_000 }, async () => {
+test('registry.register: rejects invalid version or empty upgradeAttemptId explicitly', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   try {
     const badVersion = await registerRaw(registry, 'n1', { version: '' })
@@ -160,7 +161,7 @@ test('registry.register: illegal version / upgradeAttemptId(empty string) explic
   }
 })
 
-test('registry: only register(choose without commit) do not resolve wait for; match commit succeeded', { timeout: 60_000 }, async () => {
+test('registry: registration alone (without commit) never resolves waiter; matching commit succeeds', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   try {
     const { socket } = await registerRaw(registry, 'n1', { version: '1.0.0' })
@@ -179,14 +180,14 @@ test('registry: only register(choose without commit) do not resolve wait for; ma
         settled = true
       },
     )
-    // choose register (top replace old socket): never can let wait for succeeded.
+    // Candidate registration (evicts old socket): must not resolve the upgrade waiter.
     const candidate = await registerRaw(registry, 'n1', { version: '1.1.0', upgradeAttemptId: 'a1' })
     assert.equal(candidate.outcome.accepted, true)
     await delay(150)
-    assert.equal(settled, false, 'only choose register (without commit) must not resolve upgrade wait for')
+    assert.equal(settled, false, 'candidate registration alone (without commit) must not resolve the upgrade waiter')
     assert.equal(registry.hasUpgradeWaiter('n1'), true)
 
-    // choose heartbeat commit(fully match)→ succeeded.
+    // Candidate heartbeat commits (exact match) -> succeeds.
     const ack = registry.noteHeartbeat('n1', candidate.socket as unknown as WsLike, {
       upgradeCommit: { attemptId: 'a1', version: '1.1.0', previousVersion: '1.0.0', pid: 4242 },
     })
@@ -200,7 +201,7 @@ test('registry: only register(choose without commit) do not resolve wait for; ma
   }
 })
 
-test('registry: error attemptId / error version / previousVersion inconsistent / pid illegal reject (do not false succeeded)', { timeout: 60_000 }, async () => {
+test('registry: reject wrong attemptId / wrong version / mismatched previousVersion / invalid pid (never false positive)', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   try {
     const { socket } = await registerRaw(registry, 'n1', { version: '1.1.0', upgradeAttemptId: 'a1' })
@@ -220,32 +221,32 @@ test('registry: error attemptId / error version / previousVersion inconsistent /
 
     const conn = registry.get('n1')
     assert.notEqual(conn, undefined)
-    // attemptId error.
+    // Wrong attemptId.
     registry.noteHeartbeat('n1', conn!.socket, {
       upgradeCommit: { attemptId: 'other', version: '1.1.0', previousVersion: '1.0.0', pid: 1 },
     })
-    // version does not match (connect register version 1.1.0,commit sound call 9.9.9).
+    // Mismatched version (connection registered as 1.1.0, commit claims 9.9.9).
     registry.noteHeartbeat('n1', conn!.socket, {
       upgradeCommit: { attemptId: 'a1', version: '9.9.9', previousVersion: '1.0.0', pid: 1 },
     })
-    // previousVersion and wait for inconsistent (do not upside down pour other attempt).
+    // Mismatched previousVersion compared to waiter (prevent cross-contamination from other attempts).
     registry.noteHeartbeat('n1', conn!.socket, {
       upgradeCommit: { attemptId: 'a1', version: '1.1.0', previousVersion: '0.0.1', pid: 1 },
     })
-    // pid non- positive integer.
+    // Non-positive integer pid.
     registry.noteHeartbeat('n1', conn!.socket, {
       upgradeCommit: { attemptId: 'a1', version: '1.1.0', previousVersion: '1.0.0', pid: -3 },
     })
     await delay(100)
-    assert.equal(failed, false, 'all illegal commit must not final wait for')
+    assert.equal(failed, false, 'all invalid commits must not resolve the waiter')
     assert.equal(registry.hasUpgradeWaiter('n1'), true)
 
-    // another node connect fabricate commit(non- when before connect) directly reject.
+    // Forged commit from another node connection (not current connection) must be rejected directly.
     const { socket: stranger } = await registerRaw(registry, 'n2', { version: '1.1.0', upgradeAttemptId: 'a1' })
     const ackStranger = registry.noteHeartbeat('n1', stranger as unknown as WsLike, {
       upgradeCommit: { attemptId: 'a1', version: '1.1.0', previousVersion: '1.0.0', pid: 1 },
     })
-    assert.equal(ackStranger, false, 'non- when before connect heartbeat directly reject')
+    assert.equal(ackStranger, false, 'heartbeat from non-current connection must be rejected directly')
     assert.equal(registry.hasUpgradeWaiter('n1'), true)
 
     handle.cancel()
@@ -257,42 +258,42 @@ test('registry: error attemptId / error version / previousVersion inconsistent /
   }
 })
 
-test('registry: carry commit heartbeat ACK real accept result; ordinary heartbeat constant true', { timeout: 60_000 }, async () => {
+test('registry: heartbeat with commit ACKs actual acceptance result; plain heartbeat always ACKs true', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   try {
-    // without wait for: legal commit(local machine CLI path)ACK true.
+    // No waiter: valid commit (local CLI path) ACKs true.
     const { socket: solo } = await registerRaw(registry, 'n-cli', { version: '2.0.0', upgradeAttemptId: 'cli-1' })
     const ackCli = registry.noteHeartbeat('n-cli', solo as unknown as WsLike, {
       upgradeCommit: { attemptId: 'cli-1', version: '2.0.0', previousVersion: '1.9.0', pid: 11 },
     })
-    assert.equal(ackCli, true, 'without wait for legal commit(local machine CLI upgrade) should ACK true')
+    assert.equal(ackCli, true, 'valid commit without waiter (local CLI upgrade) should ACK true')
 
-    // has wait for: does not match commit ACK false(node must not mistakenly with is Hub already confirm).
+    // With waiter: mismatched commit ACKs false (node must not mistake rejection for Hub confirmation).
     const { socket } = await registerRaw(registry, 'n1', { version: '1.1.0', upgradeAttemptId: 'a1' })
     registry.beginUpgrade('n1', { attemptId: 'a1', targetVersion: '1.1.0', previousVersion: '1.0.0', timeoutMs: 5_000 })
     const badAttempt = registry.noteHeartbeat('n1', socket as unknown as WsLike, {
       upgradeCommit: { attemptId: 'wrong', version: '1.1.0', previousVersion: '1.0.0', pid: 1 },
     })
-    assert.equal(badAttempt, false, 'error attemptId  commit must Nack(ACK false)')
+    assert.equal(badAttempt, false, 'wrong attemptId commit must Nack (ACK false)')
     const badVersion = registry.noteHeartbeat('n1', socket as unknown as WsLike, {
       upgradeCommit: { attemptId: 'a1', version: '9.9.9', previousVersion: '1.0.0', pid: 1 },
     })
-    assert.equal(badVersion, false, 'error version commit must ACK false')
+    assert.equal(badVersion, false, 'wrong version commit must ACK false')
     const badPrevious = registry.noteHeartbeat('n1', socket as unknown as WsLike, {
       upgradeCommit: { attemptId: 'a1', version: '1.1.0', previousVersion: '0.0.1', pid: 1 },
     })
-    assert.equal(badPrevious, false, 'error previousVersion  commit must ACK false')
+    assert.equal(badPrevious, false, 'wrong previousVersion commit must ACK false')
     const malformed = registry.noteHeartbeat('n1', socket as unknown as WsLike, {
       upgradeCommit: { attemptId: 'a1' } as never,
     })
-    assert.equal(malformed, false, 'missing field distortion shape commit must ACK false')
-    assert.equal(registry.hasUpgradeWaiter('n1'), true, 'all by refuse commit does not affect wait for')
+    assert.equal(malformed, false, 'malformed commit with missing fields must ACK false')
+    assert.equal(registry.hasUpgradeWaiter('n1'), true, 'rejected commits must not affect waiter')
 
-    // ordinary heartbeat (without commit) constant true.
+    // Plain heartbeat (without commit) always returns true.
     const plain = registry.noteHeartbeat('n1', socket as unknown as WsLike, {})
     assert.equal(plain, true)
 
-    // match commit ACK true and resolve.
+    // Matching commit ACKs true and resolves waiter.
     const matched = registry.noteHeartbeat('n1', socket as unknown as WsLike, {
       upgradeCommit: { attemptId: 'a1', version: '1.1.0', previousVersion: '1.0.0', pid: 22 },
     })
@@ -303,7 +304,7 @@ test('registry: carry commit heartbeat ACK real accept result; ordinary heartbea
   }
 })
 
-test('registry: same node concurrency beginUpgrade reject; original socket disconnect do not clean up wait for', { timeout: 60_000 }, async () => {
+test('registry: reject concurrent beginUpgrade on same node; original socket disconnect does not clear waiter', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   try {
     const { socket } = await registerRaw(registry, 'n1', { version: '1.0.0' })
@@ -312,16 +313,16 @@ test('registry: same node concurrency beginUpgrade reject; original socket disco
       () => registry.beginUpgrade('n1', { attemptId: 'a2', targetVersion: '1.2.0', previousVersion: '1.0.0', timeoutMs: 1_000 }),
       HelmUpgradeBusyError,
     )
-    // old socket disconnect (upgrade process must however along with): wait for continue etc. choose commit.
+    // Old socket disconnects (expected during upgrade): waiter stays alive waiting for candidate commit.
     socket.close()
     await delay(100)
-    assert.equal(registry.hasUpgradeWaiter('n1'), true, 'original socket disconnect must not final upgrade wait for')
+    assert.equal(registry.hasUpgradeWaiter('n1'), true, 'original socket disconnect must not resolve upgrade waiter')
   } finally {
     await registry.close()
   }
 })
 
-test('registry: disconnect original RPC but choose commit after normal succeeded; timeout explicit failed', { timeout: 60_000 }, async () => {
+test('registry: original RPC disconnect followed by candidate commit still succeeds; timeout fails explicitly', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   try {
     const { socket } = await registerRaw(registry, 'n1', { version: '1.0.0' })
@@ -331,7 +332,7 @@ test('registry: disconnect original RPC but choose commit after normal succeeded
       previousVersion: '1.0.0',
       timeoutMs: 5_000,
     })
-    socket.close() // simulated old RPC transfer close
+    socket.close() // Simulate old RPC transport closing
     const candidate = await registerRaw(registry, 'n1', { version: '1.1.0', upgradeAttemptId: 'a1' })
     registry.noteHeartbeat('n1', candidate.socket as unknown as WsLike, {
       upgradeCommit: { attemptId: 'a1', version: '1.1.0', previousVersion: '1.0.0', pid: 7 },
@@ -344,7 +345,7 @@ test('registry: disconnect original RPC but choose commit after normal succeeded
     await registry.close()
   }
 
-  // timeout path.
+  // Timeout path.
   const registry2 = new NodeRegistry({ authenticate: () => true })
   try {
     await registerRaw(registry2, 'n1', { version: '1.0.0' })
@@ -362,31 +363,31 @@ test('registry: disconnect original RPC but choose commit after normal succeeded
 })
 
 // ---------------------------------------------------------------------------
-// complete Hub(KernelRuntime + startHub)+ can edit process node fixture
+// Full Hub (KernelRuntime + startHub) + programmable node fixture
 // ---------------------------------------------------------------------------
 
 /**
- * can edit process WS node fixture: real connect /ws/node, implement register / heartbeat /
- * nodeCheckUpgrade / nodeUpgrade(behavior can one by one case edit process). upgrade dramatic this:
- * nodeUpgrade return after disconnect old connect, again with choose identity (new version + attemptId)
- * reconnect and by plan (or do not)commit heartbeat.
+ * Programmable WS node fixture: connects via real /ws/node and handles register / heartbeat /
+ * nodeCheckUpgrade / nodeUpgrade (behavior scripted per test case). Typical upgrade scenario:
+ * after nodeUpgrade returns, disconnects the old connection, then reconnects with candidate
+ * identity (new version + attemptId) and either commits via heartbeat per plan or skips commit.
  */
 interface FixturePlan {
-  /** nodeUpgrade RPC structure return. */
+  /** Synthesized return value for nodeUpgrade RPC. */
   rpcResult: RpcResult<NodeUpgradeResult>
-  /** RPC forever do not return (simulated old edition node stiff die; whole still must has boundary). */
+  /** Never return from RPC (simulates legacy node hanging; overall operation must still have a deadline). */
   hang?: boolean
-  /** RPC return after disconnect old connect, with choose identity reconnect (version=plan.candidateVersion). */
+  /** After RPC returns, disconnect old connection and reconnect with candidate identity (version=plan.candidateVersion). */
   reconnect?: { candidateVersion: string }
-  /** choose register after commit(false = do not; default fully match commit). */
+  /** Commit after candidate registration (false = do not commit; defaults to exact matching commit). */
   commit?: false | { attemptId: string; version: string; previousVersion: string; pid: number }
-  /** choose register to commit latency milli second (simulated transfer disconnect first to,commit after to). */
+  /** Delay in ms between candidate registration and commit (simulates transport disconnect landing first, commit arriving later). */
   commitDelayMs?: number
   /**
-   * RPC reply forever do not return:reconnect plan normal execute after (choose top replace old socket)
-   * nodeUpgrade return forever do not resolve  Promise, simulated in-flight RPC by close.
-   * override real link:registry #evict → old rpc $close → birpc reject in-flight
-   * invoke → ws-gateway onGeneralError swallow reject → Hub side resolve undefined.
+   * RPC reply never arrives: after reconnect completes (candidate evicts old socket),
+   * nodeUpgrade returns a never-resolving Promise to simulate in-flight RPC being closed.
+   * Covers real chain: registry #evict -> old rpc $close -> birpc rejects in-flight
+   * call -> ws-gateway onGeneralError swallows rejection -> Hub resolves undefined.
    */
   deferReplyUntilReplaced?: boolean
 }
@@ -439,34 +440,34 @@ async function connectFixtureNode(
       upgradeCalls.push(input)
       const plan = state.plan
       if (plan === undefined) {
-        return { ok: false, error: { code: 'unknown', message: 'fixture not settings upgrade dramatic this' } }
+        return { ok: false, error: { code: 'unknown', message: 'fixture did not configure an upgrade plan' } }
       }
       if (plan.hang === true) {
-        // forever do not return (also do not reconnect): verify Hub whole timeout still has boundary.
+        // Never returns (nor reconnects): verifies Hub overall timeout still has an upper bound.
         return new Promise<RpcResult<NodeUpgradeResult>>(() => undefined)
       }
       if (plan.reconnect !== undefined) {
-        // simulated real upgrade: first reply RPC(old connect still), then async disconnect reconnect is choose.
+        // Simulates real upgrade: reply RPC first (old connection stays open), then disconnect asynchronously and reconnect as candidate.
         const reconnectVersion = plan.reconnect.candidateVersion
         const attemptId = input.attemptId ?? ''
         setTimeout(() => {
           try {
             ws.close()
           } catch {
-            /* already closure */
+            /* already closed */
           }
           void connectCandidate(wsUrl, nodeId, nodeToken, reconnectVersion, attemptId, state, plan)
         }, 30).unref()
       }
       if (plan.deferReplyUntilReplaced === true) {
-        // in-flight RPC by top replace: choose register after old socket  birpc by $close, this side
-        // birpc reply send follow socket disconnect while failed - - forever do not resolve, hand over by Hub
-        // side real link (evict → $close → onGeneralError swallow reject) handle.
+        // In-flight RPC evicted: after candidate registers, old socket birpc closes via $close, so this side's
+        // birpc reply fails to send on the disconnected socket — never resolve, exercising the real Hub
+        // chain (evict -> $close -> onGeneralError swallows rejection).
         return new Promise<RpcResult<NodeUpgradeResult>>(() => undefined)
       }
       return plan.rpcResult
     },
-    // the rest env RPC this test do not trigger and.
+    // Remaining env RPCs are never triggered in this test.
   } as unknown as NodeEnvRpcFunctions & {
     register(input: NodeRegisterInput): Promise<NodeRegisterResult>
     heartbeat(id: string, input?: NodeHeartbeatInput): Promise<boolean>
@@ -488,7 +489,7 @@ async function connectFixtureNode(
         try {
           cb(JSON.parse(text) as never)
         } catch {
-          /* non- JSON frame ignore */
+          /* ignore non-JSON frames */
         }
       })
     },
@@ -497,7 +498,7 @@ async function connectFixtureNode(
     timeout: 10_000,
   })
 
-  // initial register (when before version).
+  // Initial registration (current version).
   const registered = await rpc.register({
     nodeId,
     token: nodeToken,
@@ -534,18 +535,18 @@ async function connectFixtureNode(
       try {
         rpc.$close()
       } catch {
-        /* already closure */
+        /* already closed */
       }
       try {
         ws.close()
       } catch {
-        /* already closure */
+        /* already closed */
       }
     },
   }
 }
 
-/** choose connect: new socket register new version + attemptId, by plan commit. */
+/** Candidate connection: new socket registers new version + attemptId and commits per plan. */
 async function connectCandidate(
   wsUrl: string,
   nodeId: string,
@@ -608,8 +609,8 @@ async function connectCandidate(
     })
     .catch(() => undefined)
   if (outcome === undefined || !outcome.ok) return
-  // choose commit: default fully match;false do not (test only register do not commit);
-  // commitDelayMs push late send (simulated transfer disconnect first to,commit after to).
+  // Candidate commit: defaults to a full match; false skips committing (tests registration without commit);
+  // commitDelayMs delays sending commit (simulating transport disconnect arriving first, commit later).
   const commit = plan.commit
   if (commit === false) return
   const sendCommit = async (): Promise<void> => {
@@ -635,13 +636,13 @@ async function connectCandidate(
   await sendCommit()
 }
 
-/** upgrade dramatic this inside old version record (commit previousVersion must and wait for consistent). */
+/** Tracks previousVersion in the upgrade scenario (commit's previousVersion must match the waiter). */
 const previousVersionByAttempt = new Map<string, string>()
 function previousVersionFor(nodeId: string, attemptId: string): string {
   return previousVersionByAttempt.get(`${nodeId}:${attemptId}`) ?? '1.0.0'
 }
 
-/** open complete Hub(contains /ws/node gateway and authentication). */
+/** Starts a full Hub instance (with /ws/node gateway and authentication). */
 async function openHubApp(dir: string): Promise<{
   kernel: KernelRuntime
   hub: Awaited<ReturnType<typeof startHub>>
@@ -678,7 +679,7 @@ async function openHubApp(dir: string): Promise<{
   }
 }
 
-/** sign node identity and connect fixture node. */
+/** Issues a node credential and connects the fixture node. */
 async function provisionNode(
   hubUrl: string,
   token: string,
@@ -690,7 +691,7 @@ async function provisionNode(
     headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
     body: JSON.stringify({ nodeId }),
   })
-  assert.equal(issue.status, 201, 'sign node token failed')
+  assert.equal(issue.status, 201, 'issuing node token failed')
   const { token: nodeToken } = (await issue.json()) as { token: string }
   const wsUrl = hubUrl.replace(/^http/, 'ws')
   return connectFixtureNode(wsUrl, nodeId, nodeToken, version)
@@ -701,10 +702,10 @@ function authHeaders(token: string): Record<string, string> {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP / RPC collection into:upgrade orchestration (succeeded, false succeeded guard against line, error mapping)
+// HTTP / RPC integration: upgrade orchestration (success, false-success guard, error mapping)
 // ---------------------------------------------------------------------------
 
-test('upgrade: only choose register (without commit) do not succeeded - - explicit not confirm error', { timeout: 60_000 }, async () => {
+test('upgrade: candidate registration alone (without commit) never succeeds -- explicit unconfirmed error', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'no-commit-'))
   const app = await openHubApp(dir)
   try {
@@ -713,14 +714,14 @@ test('upgrade: only choose register (without commit) do not succeeded - - explic
     node.setPlan({
       rpcResult: { ok: true, value: { ok: true, previousVersion: '1.0.0', targetVersion: '1.1.0', upgraded: true } },
       reconnect: { candidateVersion: '1.1.0' },
-      commit: false, // choose register but forever do not commit
+      commit: false, // candidate registers but never commits
     })
     const res = await fetch(`${app.hub.url}/api/nodes/up-no-commit/upgrade`, {
       method: 'POST',
       headers: authHeaders(app.token),
       body: JSON.stringify({ targetVersion: '1.1.0' }),
     })
-    assert.equal(res.status, 502, 'only register without commit must explicit failed (do not false succeeded)')
+    assert.equal(res.status, 502, 'registration without commit must fail explicitly (never false-succeed)')
     const body = (await res.json()) as { error: { code: string } }
     assert.equal(body.error.code, 'node_upgrade_unconfirmed')
     node.close()
@@ -729,7 +730,7 @@ test('upgrade: only choose register (without commit) do not succeeded - - explic
   }
 })
 
-test('upgrade: match commit(disconnect original RPC after) normal succeeded and result confirm', { timeout: 60_000 }, async () => {
+test('upgrade: matching commit (after old RPC disconnects) succeeds and confirms result', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'commit-ok-'))
   const app = await openHubApp(dir)
   try {
@@ -737,7 +738,7 @@ test('upgrade: match commit(disconnect original RPC after) normal succeeded and 
     node.setPlan({
       rpcResult: { ok: true, value: { ok: true, previousVersion: '1.0.0', targetVersion: '1.1.0', upgraded: true } },
       reconnect: { candidateVersion: '1.1.0' },
-      // default commit:attemptId/version by choose real register value push lead,previousVersion 1.0.0.
+      // default commit: attemptId/version taken from candidate's actual registration, previousVersion is 1.0.0.
     })
     const res = await fetch(`${app.hub.url}/api/nodes/up-ok/upgrade`, {
       method: 'POST',
@@ -748,10 +749,10 @@ test('upgrade: match commit(disconnect original RPC after) normal succeeded and 
     const body = (await res.json()) as NodeUpgradeResult
     assert.equal(body.ok, true)
     assert.equal(body.upgraded, true)
-    assert.equal(body.targetVersion, '1.1.0', 'v prefix specification is precise version')
+    assert.equal(body.targetVersion, '1.1.0', 'v prefix normalized to canonical version')
     assert.equal(body.previousVersion, '1.0.0')
     assert.equal(typeof body.pid, 'number')
-    // RPC reference carry specification targetVersion and server side generate attemptId.
+    // RPC arguments carry normalized targetVersion and server-generated attemptId.
     assert.equal(node.upgradeCalls.length, 1)
     assert.equal(node.upgradeCalls[0]!.targetVersion, '1.1.0')
     assert.match(node.upgradeCalls[0]!.attemptId ?? '', /^[0-9a-f]{32}$/)
@@ -761,7 +762,7 @@ test('upgrade: match commit(disconnect original RPC after) normal succeeded and 
   }
 })
 
-test('upgrade: node structure reject → 400/501/502 and do not false succeeded', { timeout: 60_000 }, async () => {
+test('upgrade: structured node rejection maps to 400/501/502 without false success', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'reject-'))
   const app = await openHubApp(dir)
   try {
@@ -786,7 +787,7 @@ test('upgrade: node structure reject → 400/501/502 and do not false succeeded'
   }
 })
 
-test('upgrade: explicit without operation (ok/upgraded:false) legal return, without waiting commit', { timeout: 60_000 }, async () => {
+test('upgrade: explicit no-op (ok: true, upgraded: false) returns normally without waiting for commit', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'noop-'))
   const app = await openHubApp(dir)
   try {
@@ -808,30 +809,30 @@ test('upgrade: explicit without operation (ok/upgraded:false) legal return, with
     const failed = await fetch(`${app.hub.url}/api/nodes/up-noop/upgrade`, {
       method: 'POST', headers: authHeaders(app.token), body: JSON.stringify({ targetVersion: '1.1.0' }),
     })
-    assert.equal(failed.status, 502, 'ok:false cannot disguise into succeeded without operation')
+    assert.equal(failed.status, 502, 'ok: false cannot masquerade as a no-op success')
     node.close()
   } finally {
     await app.close().catch(() => undefined)
   }
 })
 
-test('upgrade error mapping:local 400 / unknown 404 / offline 409 / unsupported 501', { timeout: 60_000 }, async () => {
+test('upgrade error mapping: local 400 / unknown 404 / offline 409 / unsupported 501', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'errors-'))
   const app = await openHubApp(dir)
   try {
-    // local.
+    // local node.
     const local = await fetch(`${app.hub.url}/api/nodes/local/upgrade`, {
       method: 'POST',
       headers: authHeaders(app.token),
       body: '{}',
     })
     assert.equal(local.status, 400)
-    // unknown node (not sign).
+    // unknown node (not provisioned).
     const unknown = await fetch(`${app.hub.url}/api/nodes/ghost/upgrade/check`, {
       headers: authHeaders(app.token),
     })
     assert.equal(unknown.status, 404)
-    // already sign but offline.
+    // provisioned but offline.
     const issue = await fetch(`${app.hub.url}/api/nodes/issue`, {
       method: 'POST',
       headers: authHeaders(app.token),
@@ -851,7 +852,7 @@ test('upgrade error mapping:local 400 / unknown 404 / offline 409 / unsupported 
   }
 })
 
-test('upgrade check: pass-through node result (contains blocked);body/query boundary validate', { timeout: 60_000 }, async () => {
+test('upgrade check: passes through node result (including blocked); validates body/query boundaries', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'check-'))
   const app = await openHubApp(dir)
   try {
@@ -866,19 +867,19 @@ test('upgrade check: pass-through node result (contains blocked);body/query boun
     assert.equal(body.updateAvailable, true)
     node.close()
 
-    // illegal registryUrl(non- http(s)).
+    // Invalid registryUrl (non-http(s)).
     const badUrl = await fetch(`${app.hub.url}/api/nodes/up-check/upgrade/check?registryUrl=ftp://x`, {
       headers: authHeaders(app.token),
     })
     assert.equal(badUrl.status, 400)
 
-    // POST body unknown field reject.
+    // Unknown fields in POST body are rejected.
     const unknownField = await fetch(`${app.hub.url}/api/nodes/up-check/upgrade`, {
       method: 'POST',
       headers: authHeaders(app.token),
       body: JSON.stringify({ attemptId: 'user-controlled' }),
     })
-    assert.equal(unknownField.status, 400, 'attemptId cannot by user control')
+    assert.equal(unknownField.status, 400, 'attemptId cannot be controlled by the user')
     const badForce = await fetch(`${app.hub.url}/api/nodes/up-check/upgrade`, {
       method: 'POST',
       headers: authHeaders(app.token),
@@ -901,23 +902,23 @@ test('upgrade check: pass-through node result (contains blocked);body/query boun
       const nullField = await fetch(`${app.hub.url}/api/nodes/up-check/upgrade`, {
         method: 'POST', headers: authHeaders(app.token), body: JSON.stringify({ [field]: null }),
       })
-      assert.equal(nullField.status, 400, `${field}:null must reject, cannot static default when into default`)
+      assert.equal(nullField.status, 400, `${field}: null must reject rather than silently falling back to default`)
     }
   } finally {
     await app.close().catch(() => undefined)
   }
 })
 
-test('upgrade: offline node in-flight invoke after assert connect - - do not false succeeded (result not confirm 502)', { timeout: 60_000 }, async () => {
+test('upgrade: node disconnects mid-RPC -- never falsely succeeds (unconfirmed 502)', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'rpc-drop-'))
   const app = await openHubApp(dir)
   try {
     const node = await provisionNode(app.hub.url, app.token, 'up-drop', '1.0.0')
     node.setPlan({
-      // RPC succeeded but node directly disappear (do not reconnect, do not commit).
+      // RPC succeeded, but the node disappears without reconnecting or committing.
       rpcResult: { ok: true, value: { ok: true, previousVersion: '1.0.0', targetVersion: '1.1.0', upgraded: true } },
     })
-    // RPC return after immediately disconnect (produces no choose).
+    // Disconnect immediately after RPC returns (produces no candidate).
     const resPromise = fetch(`${app.hub.url}/api/nodes/up-drop/upgrade`, {
       method: 'POST',
       headers: authHeaders(app.token),
@@ -926,7 +927,7 @@ test('upgrade: offline node in-flight invoke after assert connect - - do not fal
     await delay(50)
     node.close()
     const res = await resPromise
-    assert.equal(res.status, 502, 'without choose commit must not succeeded')
+    assert.equal(res.status, 502, 'upgrade must not succeed without a candidate commit')
     const body = (await res.json()) as { error: { code: string } }
     assert.equal(body.error.code, 'node_upgrade_unconfirmed')
   } finally {
@@ -935,24 +936,24 @@ test('upgrade: offline node in-flight invoke after assert connect - - do not fal
 })
 
 // ---------------------------------------------------------------------------
-// automatically upgrade (HELM_AUTO_UPGRADE_NODES)
+// Auto-upgrade (HELM_AUTO_UPGRADE_NODES)
 // ---------------------------------------------------------------------------
 
-test('automatically upgrade by default close: after node enable does not trigger nodeUpgrade', { timeout: 60_000 }, async () => {
+test('auto-upgrade disabled by default: older node connecting does not trigger nodeUpgrade', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'auto-off-'))
   const app = await openHubApp(dir)
   try {
-    // 0.0.1 must however strictly after Hub(kernel 0.1.0+).
+    // 0.0.1 is strictly older than Hub (kernel 0.1.0+).
     const node = await provisionNode(app.hub.url, app.token, 'auto-off-node', '0.0.1')
     await delay(600)
-    assert.equal(node.upgradeCalls.length, 0, 'by default on shutdown never automatically invoke nodeUpgrade')
+    assert.equal(node.upgradeCalls.length, 0, 'never automatically invokes nodeUpgrade when disabled by default')
     node.close()
   } finally {
     await app.close().catch(() => undefined)
   }
 })
 
-test('HELM_AUTO_UPGRADE_NODES=1: strictly after node enable async upgrade to Hub version', { timeout: 60_000 }, async () => {
+test('HELM_AUTO_UPGRADE_NODES=1: strictly older node auto-upgrades async to Hub version', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'auto-on-'))
   process.env['HELM_AUTO_UPGRADE_NODES'] = '1'
   let app: Awaited<ReturnType<typeof openHubApp>> | undefined
@@ -963,12 +964,12 @@ test('HELM_AUTO_UPGRADE_NODES=1: strictly after node enable async upgrade to Hub
       rpcResult: { ok: true, value: { ok: true, previousVersion: '0.0.1', targetVersion: hubVersion(), upgraded: true } },
       reconnect: { candidateVersion: hubVersion() },
     })
-    // wait for onNodeChanged async path trigger upgradeNode(non-blocking register).
+    // Wait for async onNodeChanged path to trigger upgradeNode (non-blocking registration).
     for (let i = 0; i < 50 && node.upgradeCalls.length === 0; i++) {
       await delay(100)
     }
-    assert.equal(node.upgradeCalls.length, 1, 'open start after after node enable should trigger once automatically upgrade')
-    assert.equal(node.upgradeCalls[0]!.targetVersion, hubVersion(), 'automatically upgrade target is Hub version')
+    assert.equal(node.upgradeCalls.length, 1, 'enabling auto-upgrade should trigger one upgrade when older node connects')
+    assert.equal(node.upgradeCalls[0]!.targetVersion, hubVersion(), 'auto-upgrade target must be Hub version')
     node.close()
   } finally {
     delete process.env['HELM_AUTO_UPGRADE_NODES']
@@ -976,7 +977,7 @@ test('HELM_AUTO_UPGRADE_NODES=1: strictly after node enable async upgrade to Hub
   }
 })
 
-test('automatically upgrade dedupe: same node failed after no longer unbounded retry (upgrade invoke exactly once)', { timeout: 60_000 }, async () => {
+test('auto-upgrade deduplication: same failed node is not retried endlessly (invoked once)', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'auto-dedupe-'))
   process.env['HELM_AUTO_UPGRADE_NODES'] = '1'
   let app: Awaited<ReturnType<typeof openHubApp>> | undefined
@@ -990,9 +991,9 @@ test('automatically upgrade dedupe: same node failed after no longer unbounded r
       await delay(100)
     }
     assert.equal(node.upgradeCalls.length, 1)
-    // again etc. one segment time: do not retry (dedupe).
+    // Wait another interval: must not retry (deduplicated).
     await delay(1_200)
-    assert.equal(node.upgradeCalls.length, 1, 'same node automatically upgrade only attempt one round')
+    assert.equal(node.upgradeCalls.length, 1, 'auto-upgrade attempts only once per node')
     node.close()
   } finally {
     delete process.env['HELM_AUTO_UPGRADE_NODES']
@@ -1000,14 +1001,14 @@ test('automatically upgrade dedupe: same node failed after no longer unbounded r
   }
 })
 
-test('upgrade: choose register after latency 50ms only then commit- - transfer disconnect first to when still wait for succeeded', { timeout: 60_000 }, async () => {
+test('upgrade: waits for commit after candidate registers 50ms later even when transport disconnects first', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'late-commit-'))
   const app = await openHubApp(dir)
   try {
     const node = await provisionNode(app.hub.url, app.token, 'up-late', '1.0.0')
-    // upgrade stream process:RPC reply → old socket disconnect (rpcError must first reach Hub)→
-    // choose reconnect register → 50ms after only then commit.Hub must continue etc. commit while is not
-    // disconnect when into terminal state failed (regression: heavy race already settle rpcPromise must reach bug).
+    // Upgrade flow: RPC replies -> old socket disconnects (rpcError must reach Hub first) ->
+    // candidate reconnects and registers -> commits 50ms later. Hub must keep waiting for commit
+    // rather than terminally failing on disconnect (regression: racing resolved rpcPromise).
     node.setPlan({
       rpcResult: { ok: true, value: { ok: true, previousVersion: '1.0.0', targetVersion: '1.1.0', upgraded: true } },
       reconnect: { candidateVersion: '1.1.0' },
@@ -1018,7 +1019,7 @@ test('upgrade: choose register after latency 50ms only then commit- - transfer d
       headers: authHeaders(app.token),
       body: JSON.stringify({ targetVersion: '1.1.0' }),
     })
-    assert.equal(res.status, 200, 'disconnect first to,commit after to: eventually must succeeded')
+    assert.equal(res.status, 200, 'disconnect first, commit later: must ultimately succeed')
     const body = (await res.json()) as NodeUpgradeResult
     assert.equal(body.ok, true)
     assert.equal(body.upgraded, true)
@@ -1029,16 +1030,16 @@ test('upgrade: choose register after latency 50ms only then commit- - transfer d
   }
 })
 
-test('upgrade: in-flight RPC by choose top replace close (reply by swallow into undefined) - - continue etc. real commit succeeded', { timeout: 60_000 }, async () => {
+test('upgrade: in-flight RPC closed by candidate takeover (reply swallowed as undefined) -- waits for real commit and succeeds', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'inflight-close-'))
   const app = await openHubApp(dir)
   try {
     const node = await provisionNode(app.hub.url, app.token, 'up-inflight', '1.0.0')
-    // real link re- now:reconnect plan per common execute (old socket close + choose register),
-    // but old connect on nodeUpgrade reply forever do not resolve- - old socket by $close after
-    // birpc in-flight invoke by reject,ws-gateway.onGeneralError swallow into resolve(undefined).
-    // fix before:race take {kind:'rpc',value:undefined} → invalid shape 502 mention before failed;
-    // fix after: identify is transfer interrupt, continue etc. choose commit(commitDelayMs 50ms).
+    // Real-world restart timing: reconnect runs concurrently (old socket closes + candidate registers)
+    // before the old connection's nodeUpgrade reply ever resolves -- birpc rejects in-flight call on
+    // $close and ws-gateway.onGeneralError swallows it into resolve(undefined).
+    // Previously: race took { kind: 'rpc', value: undefined } -> invalid shape 502 premature failure;
+    // Now: detects transport interruption and continues waiting for candidate commit (commitDelayMs 50ms).
     node.setPlan({
       rpcResult: { ok: true, value: { ok: true, previousVersion: '1.0.0', targetVersion: '1.1.0', upgraded: true } },
       reconnect: { candidateVersion: '1.1.0' },
@@ -1050,28 +1051,28 @@ test('upgrade: in-flight RPC by choose top replace close (reply by swallow into 
       headers: authHeaders(app.token),
       body: JSON.stringify({ targetVersion: '1.1.0' }),
     })
-    assert.equal(res.status, 200, 'in-flight RPC by top replace close after must continue etc. commit, must not mention before 502')
+    assert.equal(res.status, 200, 'must wait for commit after in-flight RPC closes on takeover instead of failing prematurely with 502')
     const body = (await res.json()) as NodeUpgradeResult
     assert.equal(body.ok, true)
     assert.equal(body.upgraded, true)
-    assert.equal(body.targetVersion, '1.1.0', 'target from real commit heartbeat')
-    assert.equal(body.previousVersion, '1.0.0', 'previous from real commit heartbeat')
+    assert.equal(body.targetVersion, '1.1.0', 'target comes from real commit heartbeat')
+    assert.equal(body.previousVersion, '1.0.0', 'previous comes from real commit heartbeat')
     assert.equal(typeof body.pid, 'number')
-    assert.ok(Number.isInteger(body.pid) && body.pid! > 0, 'pid must be real commit carry positive integer')
+    assert.ok(Number.isInteger(body.pid) && body.pid! > 0, 'pid must be the positive integer from the real commit')
     node.close()
   } finally {
     await app.close().catch(() => undefined)
   }
 })
 
-test('upgrade:RPC forever do not return and without choose - - short timeout inside has boundary failed (do not hang 30min)', { timeout: 60_000 }, async () => {
+test('upgrade: RPC never returns and no candidate arrives -- fails within short bounded timeout (no 30min hang)', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'hang-'))
-  const app = await openHubApp(dir) // nodeUpgradeTimeoutMs = 2_500
+  const app = await openHubApp(dir) // nodeUpgradeTimeoutMs = 600
   try {
     const node = await provisionNode(app.hub.url, app.token, 'up-hang', '1.0.0')
     node.setPlan({
       rpcResult: { ok: true, value: { ok: true, previousVersion: '1.0.0', targetVersion: '1.1.0', upgraded: true } },
-      hang: true, // forever do not return, forever do not reconnect
+      hang: true, // never replies and never reconnects
     })
     const startedAt = Date.now()
     const res = await fetch(`${app.hub.url}/api/nodes/up-hang/upgrade`, {
@@ -1080,11 +1081,11 @@ test('upgrade:RPC forever do not return and without choose - - short timeout ins
       body: JSON.stringify({ targetVersion: '1.1.0' }),
     })
     const elapsed = Date.now() - startedAt
-    assert.equal(res.status, 502, 'RPC stiff die when must explicit failed')
+    assert.equal(res.status, 502, 'dead RPC must fail explicitly')
     const body = (await res.json()) as { error: { code: string } }
     assert.equal(body.error.code, 'node_upgrade_unconfirmed')
-    assert.ok(elapsed < 30_000, `upgrade wait for must has boundary (actual ${elapsed}ms, never hang birpc 30min)`)
-    // wait for already clean up: same node can again start (do not forever long busy).
+    assert.ok(elapsed < 30_000, `upgrade waiter must be bounded (actual ${elapsed}ms, never hang birpc 30min)`)
+    // Waiter cleaned up: node can start a new upgrade (never permanently busy).
     assert.equal(app.kernel['envFabric'].registry.hasUpgradeWaiter('up-hang'), false)
     node.close()
   } finally {
@@ -1092,12 +1093,12 @@ test('upgrade:RPC forever do not return and without choose - - short timeout ins
   }
 })
 
-test('upgrade: illegal RpcResult/illegal result body after wait for clean up - - same node can again upgrade (do not forever long busy)', { timeout: 60_000 }, async () => {
+test('upgrade: waiter cleans up after invalid RpcResult/payload -- same node can upgrade again (no permanent busy lock)', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'busy-'))
   const app = await openHubApp(dir)
   try {
     const node = await provisionNode(app.hub.url, app.token, 'up-busy', '1.0.0')
-    // first time: result body illegal (missing targetVersion field).
+    // First attempt: malformed payload (missing targetVersion field).
     node.setPlan({
       rpcResult: { ok: true, value: { ok: true, previousVersion: '1.0.0', upgraded: true } as unknown as NodeUpgradeResult },
     })
@@ -1106,10 +1107,10 @@ test('upgrade: illegal RpcResult/illegal result body after wait for clean up - -
       headers: authHeaders(app.token),
       body: JSON.stringify({ targetVersion: '1.1.0' }),
     })
-    assert.equal(first.status, 502, 'illegal result body must explicit failed')
-    assert.equal(app.kernel['envFabric'].registry.hasUpgradeWaiter('up-busy'), false, 'failed after wait for must clean up')
-    // second time: structure reject after same can again start.
-    node.setPlan({ rpcResult: { ok: false, error: { code: 'not_supported', message: 'inject reject' } } })
+    assert.equal(first.status, 502, 'malformed result payload must fail explicitly')
+    assert.equal(app.kernel['envFabric'].registry.hasUpgradeWaiter('up-busy'), false, 'waiter must be cleaned up after failure')
+    // Second attempt: structured rejection also allows re-entry.
+    node.setPlan({ rpcResult: { ok: false, error: { code: 'not_supported', message: 'injected rejection' } } })
     const second = await fetch(`${app.hub.url}/api/nodes/up-busy/upgrade`, {
       method: 'POST',
       headers: authHeaders(app.token),
@@ -1117,20 +1118,20 @@ test('upgrade: illegal RpcResult/illegal result body after wait for clean up - -
     })
     assert.equal(second.status, 501)
     assert.equal(app.kernel['envFabric'].registry.hasUpgradeWaiter('up-busy'), false)
-    assert.equal(node.upgradeCalls.length, 2, 'two time invoke all should reach node (without busy block)')
+    assert.equal(node.upgradeCalls.length, 2, 'both calls should reach the node without being blocked as busy')
     node.close()
   } finally {
     await app.close().catch(() => undefined)
   }
 })
 
-test('upgrade: node not on report version when first check take real currentVersion act previous(never unknown)', { timeout: 60_000 }, async () => {
+test('upgrade: uses real currentVersion from check as previousVersion when node omits reported version (never unknown)', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'prev-'))
   const app = await openHubApp(dir)
   try {
-    // fixture register when does not carry version:Hub must via check take currentVersion=1.0.0.
+    // When registration omits version, Hub must populate currentVersion=1.0.0 via check.
     const node = await provisionNode(app.hub.url, app.token, 'up-prev', '1.0.0')
-    // directly verify: upgrade succeeded path previousVersion from conn.version(1.0.0).
+    // Verify directly: upgrade success path derives previousVersion from conn.version (1.0.0).
     node.setPlan({
       rpcResult: { ok: true, value: { ok: true, previousVersion: '1.0.0', targetVersion: '1.1.0', upgraded: true } },
       reconnect: { candidateVersion: '1.1.0' },
@@ -1142,7 +1143,7 @@ test('upgrade: node not on report version when first check take real currentVers
     })
     assert.equal(res.status, 200)
     const body = (await res.json()) as NodeUpgradeResult
-    assert.equal(body.previousVersion, '1.0.0', 'previousVersion must be real version, never unknown')
+    assert.equal(body.previousVersion, '1.0.0', 'previousVersion must be the real version, never unknown')
     node.close()
   } finally {
     await app.close().catch(() => undefined)

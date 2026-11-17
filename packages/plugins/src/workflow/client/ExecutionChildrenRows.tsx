@@ -16,6 +16,7 @@ import {
   execApprovalBadge,
   execCollapseChildrenLabel,
   EXEC_COLLAPSE_CHILDREN_TITLE,
+  execConversationTitle,
   execExpandChildrenLabel,
   EXEC_EXPAND_CHILDREN_TITLE,
   execOpenConversationLabel,
@@ -47,6 +48,8 @@ export function ExecutionChildrenRows({ nodes }: { nodes: ExecutionNode[] }): Re
       {nodes.map((node) => {
         const aggregated = node.aggregated
         const title = executionNodeTitle(node, locale)
+        const isFallbackConvTitle =
+          node.conversationId !== undefined && title === execConversationTitle(node.conversationId, locale)
         const openConversation =
           node.conversationId !== undefined ? () => ctx.openConversationDrawer(node.conversationId!) : undefined
         // Conversation-less execution nodes (deep workflow / external runs):
@@ -123,10 +126,10 @@ export function ExecutionChildrenRows({ nodes }: { nodes: ExecutionNode[] }): Re
                   className="execution-child-expand"
                 />
               ) : null}
-              {node.conversationId !== undefined ? (
-                <span className="execution-child-id">{`#${node.conversationId}`}</span>
-              ) : null}
               <span className="execution-child-title">{title}</span>
+              {node.conversationId !== undefined && !isFallbackConvTitle ? (
+                <span className="execution-child-id tabular-nums">{`#${node.conversationId}`}</span>
+              ) : null}
               {doing !== undefined && doing !== '' ? (
                 <span className="execution-child-doing" title={doing}>
                   {doing}

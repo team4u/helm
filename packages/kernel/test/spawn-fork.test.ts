@@ -1,15 +1,17 @@
 /**
- * subagent context fork contract and end-to-end test:
- * - selectCleanForkAnchorEntryId pure function boundary (empty history, only system,reset without/has handoff,
- *   many round complete, parallel part toolCall suspended truncate, illegal ID reject);
- * - KernelRuntime.spawnAgent({ fork: true }) real SDK + faux provider collection into:
- *   1. mid-turn fork and parallel double fork inherit parent completed context, without not closed together toolCall or missing_result;
- *   2. same Profile and across Profile  model / effort / cwd inherit priority and explicit override;
- *   3. structure output extend by subagent explicit declaration isolated (parent has schema while sub- without schema when strip);
- *   4. SecretStash secret do not follow fork leak to subagent history or environment variable;
- *   5. disable model (409 model_disabled), empty parent history (409 fork_empty_history),
- *      fork+resume(400 validation_error),herdr:* and profile.runtime(400 unsupported_runtime)
- *      all in agent_spawn hook before pre- reject.
+ * Subagent context fork contract and end-to-end tests:
+ * - selectCleanForkAnchorEntryId pure boundary cases (empty history, system-only, reset with/without
+ *   handover, multi-turn completion, partial parallel dangling toolCall truncation, invalid ID rejection);
+ * - KernelRuntime.spawnAgent({ fork: true }) integration with real SDK + faux provider:
+ *   1. mid-turn fork and parallel double fork inherit parent's settled context without dangling toolCalls
+ *      or missing_result stubs;
+ *   2. same-profile and cross-profile inheritance precedence and explicit overrides for model / effort / cwd;
+ *   3. structured output is isolated per subagent explicit declaration (stripped when parent has schema
+ *      but child declares none);
+ *   4. SecretStash secrets never leak to forked subagent history or environment variables;
+ *   5. disabled models (409 model_disabled), empty parent history (409 fork_empty_history),
+ *      fork+resume (400 validation_error), herdr:* and profile.runtime (400 unsupported_runtime)
+ *      all reject before entering the agent_spawn hook chain.
  */
 
 import assert from 'node:assert/strict'
@@ -62,7 +64,7 @@ function assertNoDanglingToolCalls(
     }
   }
   for (const id of callIds) {
-    assert.ok(resolvedIds.has(id), `fork context in must not store in not closed together toolCall(${id})`)
+    assert.ok(resolvedIds.has(id), `fork context must never contain an unclosed toolCall (${id})`)
   }
 }
 
@@ -85,8 +87,8 @@ function userMessageTexts(
   return texts
 }
 
-describe('selectCleanForkAnchorEntryId pure function boundary', { timeout: 60_000 }, () => {
-  it('empty history and only contains system message all return undefined', { timeout: 60_000 }, () => {
+describe('selectCleanForkAnchorEntryId pure boundary cases', { timeout: 60_000 }, () => {
+  it('returns undefined for empty history and system-message-only history', { timeout: 60_000 }, () => {
     assert.equal(selectCleanForkAnchorEntryId({ entries: [], contributions: [] }), undefined)
     assert.equal(
       selectCleanForkAnchorEntryId({
@@ -97,7 +99,7 @@ describe('selectCleanForkAnchorEntryId pure function boundary', { timeout: 60_00
     )
   })
 
-  it('reset without handover return undefined;reset contains user handoff return handover entryId', { timeout: 60_000 }, () => {
+  it('reset without handover returns undefined; reset with user handover returns handover entryId', { timeout: 60_000 }, () => {
     assert.equal(
       selectCleanForkAnchorEntryId({
         entries: [{ id: 5 }],
@@ -114,7 +116,7 @@ describe('selectCleanForkAnchorEntryId pure function boundary', { timeout: 60_00
     )
   })
 
-  it('complete many round conversation return tail entryId; already exclude aborted after still by valid anchor return', { timeout: 60_000 }, () => {
+  it('completed multi-turn conversation returns last entryId; trailing omitted aborted entries fall back to valid anchor', { timeout: 60_000 }, () => {
     assert.equal(
       selectCleanForkAnchorEntryId({
         entries: [{ id: '1' }, { id: '2' }, { id: '3' }, { id: '4' }],
@@ -127,7 +129,7 @@ describe('selectCleanForkAnchorEntryId pure function boundary', { timeout: 60_00
       }),
       4,
     )
-    // SDK exclude aborted item after, tail can security truncate to on a completed user item
+    // After SDK excludes aborted entries, trailing empty entry safely falls back to last committed user turn.
     assert.equal(
       selectCleanForkAnchorEntryId({
         entries: [{ id: 10 }, { id: 11 }],
@@ -137,7 +139,7 @@ describe('selectCleanForkAnchorEntryId pure function boundary', { timeout: 60_00
     )
   })
 
-  it('parallel toolCall part complete and still has suspended when fall back to not closed ring assistant before', { timeout: 60_000 }, () => {
+  it('partial parallel toolCalls with dangling calls fall back before the unclosed assistant entry', { timeout: 60_000 }, () => {
     const view = {
       entries: [{ id: 1 }, { id: 2 }, { id: 3 }],
       contributions: [
@@ -156,7 +158,7 @@ describe('selectCleanForkAnchorEntryId pure function boundary', { timeout: 60_00
     }
     assert.equal(selectCleanForkAnchorEntryId(view), 1)
 
-    // all toolCall all has for should toolResult when return finally item
+    // Once all toolCalls have matching toolResults, the final entry is returned.
     const settled = {
       entries: [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }],
       contributions: [
@@ -167,8 +169,8 @@ describe('selectCleanForkAnchorEntryId pure function boundary', { timeout: 60_00
     assert.equal(selectCleanForkAnchorEntryId(settled), 4)
   })
 
-  it('the same contributions[i] inside contains [assistant(toolCall), toolResult] when correct identify already closed ring and not closed ring', { timeout: 60_000 }, () => {
-    // the same item inside complete closed together:[assistant(tc-1), toolResult(tc-1)] should keep when before item
+  it('distinguishes closed vs unclosed [assistant(toolCall), toolResult] within a single contributions[i] item', { timeout: 60_000 }, () => {
+    // Fully closed within a single entry: [assistant(tc-1), toolResult(tc-1)] preserves current entry.
     assert.equal(
       selectCleanForkAnchorEntryId({
         entries: [{ id: 1 }, { id: 2 }],
@@ -183,7 +185,7 @@ describe('selectCleanForkAnchorEntryId pure function boundary', { timeout: 60_00
       2,
     )
 
-    // the same item inside only part closed together: should whole truncate and fall back to before a completed item
+    // Partially closed within a single entry: drops the entire entry and falls back to the prior completed entry.
     assert.equal(
       selectCleanForkAnchorEntryId({
         entries: [{ id: 1 }, { id: 2 }],
@@ -204,7 +206,7 @@ describe('selectCleanForkAnchorEntryId pure function boundary', { timeout: 60_00
       1,
     )
 
-    // before a item same item inside already closed ring, under a item again suspended: truncate to before a item
+    // Prior entry closed in one item, next entry dangling again: truncates to the prior entry.
     assert.equal(
       selectCleanForkAnchorEntryId({
         entries: [{ id: 1 }, { id: 2 }, { id: 3 }],
@@ -221,7 +223,7 @@ describe('selectCleanForkAnchorEntryId pure function boundary', { timeout: 60_00
     )
   })
 
-  it('system message after tight connect not closed ring assistant truncate after without non- system message then return undefined; illegal ID return undefined', { timeout: 60_000 }, () => {
+  it('returns undefined when truncating an unclosed assistant leaves only system messages or on invalid IDs', { timeout: 60_000 }, () => {
     assert.equal(
       selectCleanForkAnchorEntryId({
         entries: [{ id: 1 }, { id: 2 }],
@@ -244,8 +246,8 @@ describe('selectCleanForkAnchorEntryId pure function boundary', { timeout: 60_00
   })
 })
 
-describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { timeout: 60_000 }, () => {
-  it('mid-turn fork and parallel double fork inherit completed context, without not closed together toolCall or missing_result', { timeout: 60_000 }, async () => {
+describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { timeout: 60_000 }, () => {
+  it('mid-turn fork and parallel double fork inherit settled context without unclosed toolCalls or missing_result', { timeout: 60_000 }, async () => {
     const dir = join(tmpRoot, 'mid-turn-parallel')
     const { models, faux } = makeFauxModels({ models: [{ id: 'faux-1', reasoning: true }] })
 
@@ -254,32 +256,32 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
       const msgs = context.messages as Array<{ role?: string; content?: unknown; toolCallId?: string }>
       const users = userMessageTexts(msgs)
       const lastMsg = msgs.at(-1)
-      if (lastMsg?.role === 'user' && users.at(-1) === 'line index one: ALPHA_SEED') {
-        return fauxAssistantMessage('already record ALPHA_SEED')
+      if (lastMsg?.role === 'user' && users.at(-1) === 'turn 1: ALPHA_SEED') {
+        return fauxAssistantMessage('recorded ALPHA_SEED')
       }
-      if (lastMsg?.role === 'user' && users.at(-1) === 'line index two: BETA_SEED') {
+      if (lastMsg?.role === 'user' && users.at(-1) === 'turn 2: BETA_SEED') {
         return fauxAssistantMessage(
           [
-            fauxToolCall('fork_spawn', { prompt: 'sub- A core inspect', fork: true }, { id: 'call-child-a' }),
-            fauxToolCall('fork_spawn', { prompt: 'sub- B core inspect', fork: true }, { id: 'call-child-b' }),
+            fauxToolCall('fork_spawn', { prompt: 'subagent A verify', fork: true }, { id: 'call-child-a' }),
+            fauxToolCall('fork_spawn', { prompt: 'subagent B verify', fork: true }, { id: 'call-child-b' }),
             fauxToolCall('sibling_noop', {}, { id: 'call-sibling' }),
           ],
           { stopReason: 'toolUse' },
         )
       }
-      if (lastMsg?.role === 'user' && (users.at(-1) === 'sub- A core inspect' || users.at(-1) === 'sub- B core inspect')) {
+      if (lastMsg?.role === 'user' && (users.at(-1) === 'subagent A verify' || users.at(-1) === 'subagent B verify')) {
         const tag = users.at(-1)!
         childSnapshots.push({ tag, messages: msgs, users })
         assertNoDanglingToolCalls(msgs)
-        assert.ok(!JSON.stringify(msgs).includes('missing_result'), 'must not appear missing_result together into patch')
-        assert.ok(users.some((t) => t.includes('ALPHA_SEED')), `${tag} must inherit 1 round line index`)
-        assert.ok(users.some((t) => t.includes('BETA_SEED')), `${tag} must inherit when before round user input`)
+        assert.ok(!JSON.stringify(msgs).includes('missing_result'), 'must not inject missing_result stub patches')
+        assert.ok(users.some((t) => t.includes('ALPHA_SEED')), `${tag} must inherit turn 1 context`)
+        assert.ok(users.some((t) => t.includes('BETA_SEED')), `${tag} must inherit current turn user input`)
         return fauxAssistantMessage(`complete:${tag}`)
       }
       if (lastMsg?.role === 'toolResult') {
-        return fauxAssistantMessage('parent conversation aggregate done')
+        return fauxAssistantMessage('parent conversation synthesis complete')
       }
-      throw new Error(`not pre- phase faux invoke: ${JSON.stringify(msgs)}`)
+      throw new Error(`unexpected faux invocation: ${JSON.stringify(msgs)}`)
     }
     faux.setResponses(Array.from({ length: 16 }, () => step))
 
@@ -316,27 +318,27 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
           })
           ctx.tool({
             name: 'sibling_noop',
-            description: 'same round brother occupy tool',
+            description: 'same-turn sibling placeholder tool',
             inputSchema: { type: 'object' },
             execute: () => ({ ok: true }),
           })
         },
       }, { enabled: true })
 
-      await kernel.submitInput(1, 'line index one: ALPHA_SEED')
+      await kernel.submitInput(1, 'turn 1: ALPHA_SEED')
       await kernel.waitForIdle(1)
-      await kernel.submitInput(1, 'line index two: BETA_SEED')
+      await kernel.submitInput(1, 'turn 2: BETA_SEED')
       await kernel.waitForIdle(1)
 
       assert.equal(childSnapshots.length, 2)
-      assert.deepEqual(childSnapshots.map((s) => s.tag).sort(), ['sub- A core inspect', 'sub- B core inspect'])
-      assert.equal(await kernel.getLastAssistantText(1), 'parent conversation aggregate done')
+      assert.deepEqual(childSnapshots.map((s) => s.tag).sort(), ['subagent A verify', 'subagent B verify'])
+      assert.equal(await kernel.getLastAssistantText(1), 'parent conversation synthesis complete')
     } finally {
       await kernel.close()
     }
   })
 
-  it('same Profile and across Profile  model / effort / cwd inherit priority and explicit override', { timeout: 60_000 }, async () => {
+  it('same-profile and cross-profile model / effort / cwd inheritance precedence and explicit overrides', { timeout: 60_000 }, async () => {
     const dir = join(tmpRoot, 'inheritance-priority')
     const profileDir = join(dir, 'profile-cwd')
     const parentDir = join(dir, 'parent-cwd')
@@ -369,14 +371,14 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
       })
       await kernel.services.profiles.save({
         id: 'cross-target',
-        name: 'across role target',
+        name: 'cross role target',
         model: 'faux/faux-profile',
         thinkingLevel: 'low',
         cwd: crossDir,
       })
       await kernel.services.profiles.save({
         id: 'bare-target',
-        name: 'without override target',
+        name: 'no-override target',
       })
 
       const parent = await kernel.createConversation({
@@ -396,11 +398,11 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
         return added[0]!
       }
 
-      // 1. same Profile by default inherit: omit agentType/cwd/model/effort, inherit parent conversation override (optimal at Profile)
+      // 1. Same-profile default inheritance: omit agentType/cwd/model/effort -> inherits parent overrides (above Profile).
       await kernel.spawnAgent({
         parentConversationId: parent.id,
         fork: true,
-        prompt: 'sameProfileinherit',
+        prompt: 'same-profile inherit',
       })
       const sameDefaultChild = pickNewChild()
       assert.equal(sameDefaultChild.profileId, 'custom-same')
@@ -409,11 +411,11 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
       assert.equal(sameDefaultChild.thinkingLevel, 'high')
       assert.equal(sameDefaultChild.thinkingLevelOverride, 'high')
 
-      // 2. same Profile explicit override
+      // 2. Same-profile explicit override.
       await kernel.spawnAgent({
         parentConversationId: parent.id,
         fork: true,
-        prompt: 'sameProfileexplicit override',
+        prompt: 'same-profile explicit override',
         model: 'faux/faux-explicit',
         effort: 'medium',
         cwd: explicitDir,
@@ -425,12 +427,12 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
       assert.equal(sameExplicitChild.thinkingLevel, 'medium')
       assert.equal(sameExplicitChild.thinkingLevelOverride, 'medium')
 
-      // 3. across Profile: target Profile field takes precedence at parent conversation
+      // 3. Cross-profile: target Profile fields take precedence over parent conversation.
       await kernel.spawnAgent({
         parentConversationId: parent.id,
         agentType: 'cross-target',
         fork: true,
-        prompt: 'acrossProfiletakes precedence target',
+        prompt: 'cross-profile target precedence',
       })
       const crossTargetChild = pickNewChild()
       assert.equal(crossTargetChild.profileId, 'cross-target')
@@ -438,12 +440,12 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
       assert.equal(crossTargetChild.model, 'faux/faux-profile')
       assert.equal(crossTargetChild.thinkingLevel, 'low')
 
-      // 4. across Profile and target Profile not config when fall back to parent conversation override
+      // 4. Cross-profile when target Profile leaves fields unset -> falls back to parent overrides.
       await kernel.spawnAgent({
         parentConversationId: parent.id,
         agentType: 'bare-target',
         fork: true,
-        prompt: 'acrossProfilefall back parent conversation',
+        prompt: 'cross-profile fallback to parent',
       })
       const crossFallbackChild = pickNewChild()
       assert.equal(crossFallbackChild.profileId, 'bare-target')
@@ -455,7 +457,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
     }
   })
 
-  it('structure output isolated,SecretStash do not leak and pre- reject (without hook leak leak)', { timeout: 60_000 }, async () => {
+  it('structured output isolation, SecretStash zero-leakage, and pre-hook rejections', { timeout: 60_000 }, async () => {
     const dir = join(tmpRoot, 'isolation-and-rejects')
     const { models, faux } = makeFauxModels({
       models: [
@@ -500,35 +502,35 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
       const lastMsg = [...msgs].reverse().find((m) => m.role !== 'system')
       const hasStructuredToolDecl = replayActiveTools(msgs).has('register_structured_output')
 
-      if (lastMsg?.role === 'user' && lastUser.includes('withoutschemasubagent')) {
+      if (lastMsg?.role === 'user' && lastUser.includes('schema-less subagent')) {
         plainForkDeclaredStructuredTool = hasStructuredToolDecl
         plainForkMessages = msgs
-        // actively attempt invoke not registered register_structured_output, double heavy verify run phase tool list also already strip it.
+        // Intentionally call unregistered register_structured_output to double-check runtime stripping.
         return fauxAssistantMessage(
           [fauxToolCall('register_structured_output', { output: { leak: true } })],
           { stopReason: 'toolUse' },
         )
       }
-      if (lastMsg?.role === 'toolResult' && lastMsg.toolName === 'register_structured_output' && lastUser.includes('withoutschemasubagent')) {
+      if (lastMsg?.role === 'toolResult' && lastMsg.toolName === 'register_structured_output' && lastUser.includes('schema-less subagent')) {
         plainForkToolRejected = lastMsg.isError === true
-        return fauxAssistantMessage('withoutschemaback re-')
+        return fauxAssistantMessage('no-schema fallback reply')
       }
-      if (lastMsg?.role === 'user' && lastUser.includes('hasschemasubagent')) {
+      if (lastMsg?.role === 'user' && lastUser.includes('schema-enabled subagent')) {
         schemaForkDeclaredStructuredTool = hasStructuredToolDecl
         return fauxAssistantMessage(
           [fauxToolCall('register_structured_output', { output: { tag: 'FORK_OK' } })],
           { stopReason: 'toolUse' },
         )
       }
-      if (lastMsg?.role === 'user' && lastUser.includes('parent proxy carriesschematest')) {
+      if (lastMsg?.role === 'user' && lastUser.includes('parent agent with schema test')) {
         assert.equal(hasStructuredToolDecl, true)
         return fauxAssistantMessage(
           [
-            fauxToolCall('fork_spawn', { prompt: 'withoutschemasubagent' }, { id: 'fc-plain' }),
+            fauxToolCall('fork_spawn', { prompt: 'schema-less subagent' }, { id: 'fc-plain' }),
             fauxToolCall(
               'fork_spawn',
               {
-                prompt: 'hasschemasubagent',
+                prompt: 'schema-enabled subagent',
                 schema: {
                   type: 'object',
                   properties: { tag: { const: 'FORK_OK' } },
@@ -543,7 +545,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
         )
       }
       if (lastMsg?.role === 'toolResult' && lastMsg.toolName === 'register_structured_output') {
-        return fauxAssistantMessage('structure wrap-up complete')
+        return fauxAssistantMessage('structured wrap-up complete')
       }
       if (lastMsg?.role === 'toolResult' && lastMsg.toolName === 'fork_spawn') {
         return fauxAssistantMessage(
@@ -551,11 +553,11 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
           { stopReason: 'toolUse' },
         )
       }
-      if (lastMsg?.role === 'user' && lastUser.includes('check secret is otherwise leak')) {
+      if (lastMsg?.role === 'user' && lastUser.includes('check whether secret leaks')) {
         secretForkMessages = msgs
-        return fauxAssistantMessage('without secret')
+        return fauxAssistantMessage('no secret')
       }
-      return fauxAssistantMessage('by default back re-')
+      return fauxAssistantMessage('default fallback reply')
     }
     faux.setResponses(Array.from({ length: 24 }, () => step))
 
@@ -576,7 +578,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
           })
           ctx.tool({
             name: 'fork_spawn',
-            description: 'derive fork sub-conversation',
+            description: 'spawn a forked sub-conversation',
             inputSchema: {
               type: 'object',
               properties: {
@@ -598,10 +600,10 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
         },
       }, { enabled: true })
 
-      // 1. structure output isolated: parent carries schema run phase fork without schema subagent must not inherit register_structured_output
+      // 1. Structured output isolation: schema-less child forked from schema-bearing parent must not inherit register_structured_output.
       const parentRes = await kernel.spawnAgent({
         parentConversationId: 1,
-        prompt: 'parent proxy carriesschematest',
+        prompt: 'parent agent with schema test',
         schema: {
           type: 'object',
           properties: { ok: { const: true } },
@@ -610,12 +612,12 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
         },
       })
       assert.deepEqual(parentRes, { ok: true })
-      assert.equal(plainForkDeclaredStructuredTool, false, 'not declaration schema  fork subagent system message in must not appear register_structured_output')
-      assert.equal(plainForkToolRejected, true, 'not declaration schema  fork subagent runtime invoke register_structured_output should by reject')
-      assert.equal(schemaForkDeclaredStructuredTool, true, 'explicit declaration schema  fork subagent should normal own register_structured_output')
-      assert.ok(plainForkMessages && userMessageTexts(plainForkMessages).some((t) => t.includes('parent proxy carriesschematest')))
+      assert.equal(plainForkDeclaredStructuredTool, false, 'fork subagent without schema must not see register_structured_output in system messages')
+      assert.equal(plainForkToolRejected, true, 'fork subagent without schema must be rejected if calling register_structured_output at runtime')
+      assert.equal(schemaForkDeclaredStructuredTool, true, 'fork subagent with explicit schema retains register_structured_output')
+      assert.ok(plainForkMessages && userMessageTexts(plainForkMessages).some((t) => t.includes('parent agent with schema test')))
 
-      // 2. SecretStash secret do not penetrate to fork subagent
+      // 2. SecretStash secrets never leak into forked subagent.
       const secretParent = await kernel.createConversation({ cwd: dir })
       kernel.stash.put(secretParent.id, 'SECRET_API_KEY', 'sk-fork-secret-998877')
       await kernel.submitInput(secretParent.id, 'record secret sk-fork-secret-998877')
@@ -624,18 +626,18 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
       await kernel.spawnAgent({
         parentConversationId: secretParent.id,
         fork: true,
-        prompt: 'check secret is otherwise leak',
+        prompt: 'check whether secret leaks',
       })
       assert.ok(secretForkMessages)
       const serialized = JSON.stringify(secretForkMessages)
-      assert.ok(!serialized.includes('sk-fork-secret-998877'), 'fork subagent history must not contains plaintext secret')
-      assert.ok(serialized.includes('[REDACTED:stash:'), 'fork subagent history should keep redaction placeholder')
+      assert.ok(!serialized.includes('sk-fork-secret-998877'), 'forked subagent history must not contain plaintext secrets')
+      assert.ok(serialized.includes('[REDACTED:stash:'), 'forked subagent history should retain redaction placeholder')
       const secretChildren = kernel.listConversations({ parentConversationId: secretParent.id })
       assert.equal(secretChildren.length, 1)
       assert.deepEqual(kernel.stash.envFor(secretChildren[0]!.id), {})
       assert.equal(kernel.buildSpawnEnv(secretChildren[0]!.id, dir)['SECRET_API_KEY'], undefined)
 
-      // 3. pre- reject all must in agent_spawn hook before trigger
+      // 3. Pre-hook rejections must fire before the agent_spawn hook chain.
       const hitsBeforeRejects = agentSpawnHookHits
       const emptyParent = await kernel.createConversation({ cwd: dir })
       await assertRejectsCode(
@@ -644,12 +646,12 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
         409,
       )
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: secretParent.id, fork: 'yes' as never, prompt: 'illegalfork' }),
+        () => kernel.spawnAgent({ parentConversationId: secretParent.id, fork: 'yes' as never, prompt: 'invalid fork' }),
         'validation_error',
         400,
       )
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: secretParent.id, fork: true, resume: 'child-1', prompt: 'mutual exclusion' }),
+        () => kernel.spawnAgent({ parentConversationId: secretParent.id, fork: true, resume: 'child-1', prompt: 'mutually exclusive' }),
         'validation_error',
         400,
       )
@@ -660,25 +662,25 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
       )
       await kernel.services.profiles.save({
         id: 'herdr-profile',
-        name: 'external proxy',
+        name: 'external agent',
         runtime: { kind: 'herdr', agent: 'agy' },
       })
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: secretParent.id, agentType: 'herdr-profile', fork: true, prompt: 'externalProfile' }),
+        () => kernel.spawnAgent({ parentConversationId: secretParent.id, agentType: 'herdr-profile', fork: true, prompt: 'external profile' }),
         'unsupported_runtime',
         400,
       )
-      assert.equal(agentSpawnHookHits, hitsBeforeRejects, 'pre- reject never obtain enter agent_spawn hook chain')
+      assert.equal(agentSpawnHookHits, hitsBeforeRejects, 'pre-hook rejections must never enter the agent_spawn hook chain')
 
-      // 4. disable model return 409 model_disabled
+      // 4. Disabled model returns 409 model_disabled.
       await kernel.services.profiles.save({
         id: 'disabled-target',
-        name: 'disable model role',
+        name: 'disabled model role',
         model: 'faux/faux-disabled',
       })
       await kernel.setDisabledModels('faux', ['faux-disabled'])
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: secretParent.id, agentType: 'disabled-target', fork: true, prompt: 'disable model' }),
+        () => kernel.spawnAgent({ parentConversationId: secretParent.id, agentType: 'disabled-target', fork: true, prompt: 'disabled model' }),
         'model_disabled',
         409,
       )
@@ -687,7 +689,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
     }
   })
 
-  it('nodeId inherit priority and resolveSpawnTarget({ fork: true })(real online remote node)', { timeout: 60_000 }, async () => {
+  it('nodeId inheritance precedence and resolveSpawnTarget({ fork: true }) with real online remote nodes', { timeout: 60_000 }, async () => {
     const dir = join(tmpRoot, 'remote-node-priority')
     const parentCwd = join(dir, 'parent-cwd')
     const profileCwd = join(dir, 'profile-cwd')
@@ -699,7 +701,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
     }
 
     const { models, faux } = makeFauxModels({ models: [{ id: 'faux-1', reasoning: true }] })
-    faux.setResponses(Array.from({ length: 6 }, () => fauxAssistantMessage('remote back re-')))
+    faux.setResponses(Array.from({ length: 6 }, () => fauxAssistantMessage('remote reply')))
 
     const kernel = await KernelRuntime.open({
       dataDir: dir,
@@ -731,8 +733,8 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
         reconnectMaxDelayMs: 200,
         log: () => undefined,
       })
-      assert.ok(await daemonParent.waitUntilRegistered(), 'node-parent should succeeded enable')
-      assert.ok(await daemonProfile.waitUntilRegistered(), 'node-profile should succeeded enable')
+      assert.ok(await daemonParent.waitUntilRegistered(), 'node-parent should register successfully')
+      assert.ok(await daemonProfile.waitUntilRegistered(), 'node-profile should register successfully')
 
       let hostApi!: HelmHostApi
       await kernel.plugins.register({
@@ -750,7 +752,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
       })
       await kernel.services.profiles.save({
         id: 'cross-remote',
-        name: 'across role remote',
+        name: 'cross role remote',
         nodeId: 'node-profile',
         cwd: crossCwd,
       })
@@ -763,7 +765,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
       await kernel.submitInput(parent.id, 'establish remote parent conversation context')
       await kernel.waitForIdle(parent.id)
 
-      // 1. same role fork:parentNodeId > profileNodeId,parentCwd > profileCwd
+      // 1. Same-role fork: parentNodeId > profileNodeId, parentCwd > profileCwd.
       const sameTarget = await hostApi.resolveSpawnTarget({
         parentConversationId: parent.id,
         fork: true,
@@ -772,7 +774,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
       assert.equal(sameTarget.sourceCwd, parentCwd)
       assert.equal(sameTarget.parentCwd, parentCwd)
 
-      // 2. across role fork:profileNodeId > parentNodeId,profileCwd > parentCwd
+      // 2. Cross-role fork: profileNodeId > parentNodeId, profileCwd > parentCwd.
       const crossTarget = await hostApi.resolveSpawnTarget({
         parentConversationId: parent.id,
         profileId: 'cross-remote',
@@ -781,7 +783,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
       assert.equal(crossTarget.nodeId, 'node-profile')
       assert.equal(crossTarget.sourceCwd, crossCwd)
 
-      // 3. non- fork: even if same Profile, still takes precedence profileNodeId
+      // 3. Non-fork: even with same Profile, profileNodeId takes precedence.
       const nonForkTarget = await hostApi.resolveSpawnTarget({
         parentConversationId: parent.id,
         profileId: 'same-remote',
@@ -789,7 +791,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
       assert.equal(nonForkTarget.nodeId, 'node-profile')
       assert.equal(nonForkTarget.sourceCwd, profileCwd)
 
-      // 4. real spawnAgent({ fork: true })  nodeId and cwd and on state parse consistent
+      // 4. Real spawnAgent({ fork: true }) nodeId and cwd match target resolution above.
       const beforeIds = new Set(kernel.listConversations({ parentConversationId: parent.id }).map((c) => c.id))
       await kernel.spawnAgent({
         parentConversationId: parent.id,
@@ -805,7 +807,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
         parentConversationId: parent.id,
         agentType: 'cross-remote',
         fork: true,
-        prompt: 'across role remote fork',
+        prompt: 'cross role remote fork',
       })
       const crossChild = kernel.listConversations({ parentConversationId: parent.id }).find((c) => !beforeIds.has(c.id))!
       assert.equal(crossChild.nodeId, 'node-profile')
@@ -818,7 +820,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
     }
   })
 
-  it('helm.rewind (replaceFromEntryId) after fork: only inherit heavy write after clean history, excludes by wipe except turn', { timeout: 60_000 }, async () => {
+  it('fork after helm.rewind (replaceFromEntryId) inherits only rewritten clean history and excludes erased turns', { timeout: 60_000 }, async () => {
     const dir = join(tmpRoot, 'rewind-then-fork')
     const { models, faux } = makeFauxModels({ models: [{ id: 'faux-1', reasoning: true }] })
 
@@ -826,14 +828,14 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
     const step: FauxResponseFactory = (context) => {
       const msgs = context.messages as Array<{ role?: string; content?: unknown }>
       const lastUser = userMessageTexts(msgs).at(-1) ?? ''
-      if (lastUser.includes('KEEP_ME_111')) return fauxAssistantMessage('already record KEEP_ME_111')
-      if (lastUser.includes('ERASE_ME_222')) return fauxAssistantMessage('i.e. wipe except answer ERASE_ME_222')
-      if (lastUser.includes('REWRITTEN_333')) return fauxAssistantMessage('heavy write after answer REWRITTEN_333')
-      if (lastUser.includes('core inspect rewind after fork history')) {
+      if (lastUser.includes('KEEP_ME_111')) return fauxAssistantMessage('recorded KEEP_ME_111')
+      if (lastUser.includes('ERASE_ME_222')) return fauxAssistantMessage('answer to be erased ERASE_ME_222')
+      if (lastUser.includes('REWRITTEN_333')) return fauxAssistantMessage('rewritten answer REWRITTEN_333')
+      if (lastUser.includes('verify post-rewind fork history')) {
         forkedMessages = msgs
-        return fauxAssistantMessage('core inspect done')
+        return fauxAssistantMessage('verify done')
       }
-      throw new Error(`not pre- phase faux request: ${lastUser}`)
+      throw new Error(`unexpected faux request: ${lastUser}`)
     }
     faux.setResponses(Array.from({ length: 8 }, () => step))
 
@@ -844,18 +846,18 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
       model: 'faux/faux-1',
     })
     try {
-      await kernel.submitInput(1, 'one round keep information KEEP_ME_111')
+      await kernel.submitInput(1, 'turn 1 retained message KEEP_ME_111')
       await kernel.waitForIdle(1)
-      await kernel.submitInput(1, 'second round await fall back information ERASE_ME_222')
+      await kernel.submitInput(1, 'turn 2 message pending rollback ERASE_ME_222')
       await kernel.waitForIdle(1)
 
       const detail = await kernel.getConversationDetail(1, { limit: 50 })
       const eraseEntry = detail.entries.find(
         (e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes('ERASE_ME_222'),
       )
-      assert.ok(eraseEntry, 'must found await rewind  helm.input item')
+      assert.ok(eraseEntry, 'must find target helm.input entry to rewind')
 
-      await kernel.submitInput(1, 'second round heavy write after information REWRITTEN_333', {
+      await kernel.submitInput(1, 'turn 2 rewritten message REWRITTEN_333', {
         replaceFromEntryId: Number(eraseEntry!.id),
       })
       await kernel.waitForIdle(1)
@@ -863,19 +865,22 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
       await kernel.spawnAgent({
         parentConversationId: 1,
         fork: true,
-        prompt: 'core inspect rewind after fork history',
+        prompt: 'verify post-rewind fork history',
+        title: '  Post-rewind fork check  ',
       })
+      const forkedChild = kernel.listConversations({ parentConversationId: 1 }).at(-1)
+      assert.equal(forkedChild?.title, 'Post-rewind fork check')
       assert.ok(forkedMessages)
       const serialized = JSON.stringify(forkedMessages)
-      assert.ok(serialized.includes('KEEP_ME_111'), 'rewind before keep round must inherit')
-      assert.ok(serialized.includes('REWRITTEN_333'), 'rewind heavy write after round must inherit')
-      assert.ok(!serialized.includes('ERASE_ME_222'), 'by rewind wipe except question answer never can appear in fork context in')
+      assert.ok(serialized.includes('KEEP_ME_111'), 'retained pre-rewind turn must be inherited')
+      assert.ok(serialized.includes('REWRITTEN_333'), 'rewritten post-rewind turn must be inherited')
+      assert.ok(!serialized.includes('ERASE_ME_222'), 'erased Q&A from rewind must never appear in forked context')
     } finally {
       await kernel.close()
     }
   })
 
-  it('agent_spawn hook transform fall back: illegal fork immediately invalid_hook_result, translate rotate fork:true or swap target in final inspect intercept and without model invoke', { timeout: 60_000 }, async () => {
+  it('agent_spawn hook transform validation: invalid fork returns invalid_hook_result; flip to fork:true or retarget rejects before model call', { timeout: 60_000 }, async () => {
     const dir = join(tmpRoot, 'hook-transform-guard')
     const { models, faux } = makeFauxModels({ models: [{ id: 'faux-1', reasoning: true }] })
     faux.setResponses([fauxAssistantMessage('establish valid parent history')])
@@ -887,7 +892,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
       model: 'faux/faux-1',
     })
     try {
-      await kernel.submitInput(1, 'establish parent conversation valid history')
+      await kernel.submitInput(1, 'establish valid parent conversation history')
       await kernel.waitForIdle(1)
       const emptyConv = await kernel.createConversation({ cwd: dir })
       await kernel.services.profiles.save({
@@ -930,33 +935,33 @@ describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { 
 
       mode = 'bad-type'
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: 1, prompt: 'non- boolean inject' }),
+        () => kernel.spawnAgent({ parentConversationId: 1, prompt: 'non-boolean injection' }),
         'invalid_hook_result',
       )
-      assert.equal(downstreamHits, 0, 'payload validation failed should in hook pipeline inside i.e. moment block assert, do not arrive downstream hook')
+      assert.equal(downstreamHits, 0, 'payload validation failure must abort inside the hook pipeline before reaching downstream hooks')
 
       mode = 'flip-to-empty'
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: emptyConv.id, prompt: 'non-forktranslate rotate' }),
+        () => kernel.spawnAgent({ parentConversationId: emptyConv.id, prompt: 'non-fork flipped to fork' }),
         'fork_empty_history',
         409,
       )
 
       mode = 'flip-to-herdr-prof'
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: 1, prompt: 'non-forkchange write is externalProfile' }),
+        () => kernel.spawnAgent({ parentConversationId: 1, prompt: 'non-fork rewritten to external profile' }),
         'unsupported_runtime',
         400,
       )
 
       mode = 'retarget-empty-parent'
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: 1, fork: true, prompt: 'more swap is empty parent conversation' }),
+        () => kernel.spawnAgent({ parentConversationId: 1, fork: true, prompt: 'retargeted to empty parent conversation' }),
         'fork_empty_history',
         409,
       )
 
-      assert.equal(faux.state.callCount, callsBefore, 'all by final inspect intercept derive all must not start any model invoke')
+      assert.equal(faux.state.callCount, callsBefore, 'spawns rejected by post-hook final checks must never invoke any model')
     } finally {
       await kernel.close()
     }

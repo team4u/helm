@@ -218,7 +218,7 @@
   min-height: 0;
   overflow-y: auto;
   overflow-anchor: auto;
-  padding: 20px 24px 28px;
+  padding: 20px var(--conversation-gutter) 28px;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -226,7 +226,7 @@
 
 .timeline-center-slot {
   width: 100%;
-  max-width: 820px;
+  max-width: var(--conversation-max-width);
   margin: 0 auto;
   display: flex;
   flex-direction: column;
@@ -240,7 +240,7 @@
 
 .timeline-inner {
   width: 100%;
-  max-width: 820px;
+  max-width: var(--conversation-max-width);
   margin: 0 auto;
   display: flex;
   flex-direction: column;
@@ -299,7 +299,7 @@
 
 .timeline-scroll-bottom-btn {
   position: absolute;
-  right: max(20px, calc(50% - 410px + 8px));
+  right: max(20px, calc(50% - var(--conversation-max-width) / 2 + 8px));
   bottom: 18px;
   z-index: 10;
   width: 34px;
@@ -362,7 +362,7 @@
 }
 
 .msg-human-pill {
-  max-width: min(88%, 720px);
+  max-width: min(88%, 840px);
   padding: 9px 14px;
   background: var(--human-pill-bg);
   border: 1px solid var(--human-pill-border);
@@ -1512,6 +1512,27 @@ pre {
   gap: 8px;
 }
 
+/* 工具展开体内的代码块（输入/输出/原始数据/源码预览）统一带框与内边距；
+ * 思考过程内的 Markdown 代码块已有 .code-block-wrap 承载外框，保持原有内嵌样式不变。 */
+.trace-expanded-body .code-block-pre:not(.code-lines-pre),
+.trace-tool-body .code-block-pre:not(.code-lines-pre) {
+  padding: 8px 10px;
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: var(--radius-xs);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.trace-expanded-body .code-block-wrap .code-block-pre:not(.code-lines-pre),
+.trace-tool-body .code-block-wrap .code-block-pre:not(.code-lines-pre) {
+  padding: 12px 14px;
+  border: none;
+  border-radius: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 /* 错误输出（edit/read 失败详情） */
 .trace-error-pre {
   color: var(--err);
@@ -1547,6 +1568,11 @@ pre {
   flex-direction: column;
   gap: 8px;
   padding-top: 2px;
+}
+.trace-raw-body > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 @media (max-width: 680px) {

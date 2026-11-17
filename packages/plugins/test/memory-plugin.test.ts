@@ -23,7 +23,7 @@ import { createProfilePlugin } from '../src/profile.js'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
-import { MemoryDocStore, makeConversationSummary, makeFauxModels, useTempDir } from './helpers/plugin-test-env.js'
+import { MemoryDocStore, makeConversationSummary, makeFauxProvider, useTempDir } from './helpers/plugin-test-env.js'
 
 // ---------------------------------------------------------------------------
 // 基建
@@ -487,8 +487,8 @@ test('memory 单 Profile 开关跨重启持久（真实 createHelm）', { timeou
   const { createHelm } = await import('../../hub/src/app.js')
   const dir = useTempDir(t, 'helm-memory-persist-')
   const build = async () => {
-    const { models } = makeFauxModels()
-    return createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models })
+    const faux = makeFauxProvider()
+    return createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
   }
   const first = await build()
     try {

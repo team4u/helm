@@ -9,7 +9,18 @@ import type {
 } from '@helm/protocol/browser'
 import { artifactsApi } from '../lib/api.js'
 import { HelmIcon, CopyButton } from '@helm/plugin-client'
-import { useHelmStore } from '../lib/store-context.js'
+import {
+  useConversationDetail,
+  useConversationSummary,
+  useGroupedUi,
+  useHighlightedEntryForConversation,
+  useLoadError,
+  useResolvedAsks,
+  useStoreActions,
+  type ResolvedAskEntry,
+} from '../lib/store-context.js'
+
+const EMPTY_RESOLVED_ASKS: ResolvedAskEntry[] = []
 import { useStableCallback } from '../lib/use-stable-callback.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
@@ -85,7 +96,7 @@ export interface ConversationTimelineProps {
 function AttachmentImage({ att, conversationId }: { att: ConversationAttachmentRef; conversationId: number }) {
   const [url, setUrl] = useState<string | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
-  const store = useHelmStore()
+  const { setActiveModal } = useStoreActions()
   const { t } = useWebLocale()
 
   useEffect(() => {
@@ -127,7 +138,7 @@ function AttachmentImage({ att, conversationId }: { att: ConversationAttachmentR
       className="attachment-image-thumb"
       title={t('conv.attachment.clickToEnlarge', { name: att.name })}
       onClick={() =>
-        store.setActiveModal({ kind: 'artifact-preview', artifactId: att.id, conversationId })
+        setActiveModal({ kind: 'artifact-preview', artifactId: att.id, conversationId })
       }
     >
       <img src={url} alt={att.name} loading="lazy" />
@@ -142,7 +153,7 @@ function AttachmentChips({
   attachments: ConversationAttachmentRef[]
   conversationId: number
 }) {
-  const store = useHelmStore()
+  const { setActiveModal } = useStoreActions()
   const { t } = useWebLocale()
   return (
     <span className="msg-attachments-wrap">
@@ -167,7 +178,7 @@ function AttachmentChips({
             className="attachment-chip"
             title={t('conv.attachment.previewName', { name: att.name })}
             onClick={() =>
-              store.setActiveModal({ kind: 'artifact-preview', artifactId: att.id, conversationId })
+              setActiveModal({ kind: 'artifact-preview', artifactId: att.id, conversationId })
             }
           >
             <HelmIcon name="file-text" size={11} />
@@ -218,7 +229,8 @@ function HumanMessage({
   /** Withdraw the queued input and switch to editing (withdrawn -> prefill the text; persisted -> edit in place). */
   onWithdrawQueuedEdit: (subId: string, target: EditRequestTarget) => Promise<void>
 }) {
-  const store = useHelmStore()
+  const groupedUi = useGroupedUi()
+  const { pushNotice } = useStoreActions()
   const { t } = useWebLocale()
   const [forking, setForking] = useState(false)
   const [withdrawing, setWithdrawing] = useState(false)
@@ -227,7 +239,7 @@ function HumanMessage({
   const entryActions =
     anchorEntry !== undefined
       ? matchTimelineEntryActions(
-          store.groupedUi.uiActions,
+          groupedUi.uiActions,
           conversation,
           timelineEntryActionContextOf(anchorEntry),
         )
@@ -255,7 +267,7 @@ function HumanMessage({
       // an invalid anchor never silently degrades into a new message (an "edit" must not be mis-sent as an append).
       const numericId = Number(item.entryId)
       if (!Number.isSafeInteger(numericId) || numericId <= 0) {
-        store.pushNotice({
+        pushNotice({
           type: 'notification',
           level: 'error',
           title: t('conv.human.cannotEditTitle'),
@@ -421,7 +433,7 @@ function ContextDivider({ item }: { item: DividerItem }) {
       {open && expandable !== undefined ? (
         <div className="trace-expanded-body selectable trace-expanded-body-flush">
           <div className="trace-section-label">{expandLabel}</div>
-          <pre className="code-block-pre code-block-pre-flush">
+          <pre className="code-block-pre">
             <code>{expandable}</code>
           </pre>
         </div>
@@ -431,15 +443,15 @@ function ContextDivider({ item }: { item: DividerItem }) {
 }
 
 function PluginCard({ item, conversationId }: { item: PluginCardItem; conversationId: number }) {
-  const store = useHelmStore()
+  const conversation = useConversationSummary(conversationId)
+  const groupedUi = useGroupedUi()
   const { t } = useWebLocale()
-  const conversation = store.conversations.find((c) => c.id === conversationId)
   // timeline.renderer custom entries also consume timeline.entry.action: matched by the real entry kind;
   // custom kinds have no user/assistant role, so actions declaring roles never match.
   const entryActions =
     conversation !== undefined
       ? matchTimelineEntryActions(
-          store.groupedUi.uiActions,
+          groupedUi.uiActions,
           conversation,
           timelineEntryActionContextOf(item.entry),
         )
@@ -509,9 +521,8 @@ function useEntryHighlight(
   conversationId: number,
   localHighlightedEntryId: string | null,
 ): (entryId: string) => string {
-  const store = useHelmStore()
+  const h = useHighlightedEntryForConversation(conversationId)
   return (entryId: string): string => {
-    const h = store.highlightedEntry
     const matchedStore = h !== null && h.conversationId === conversationId && h.entryId === entryId
     const matchedLocal = localHighlightedEntryId === entryId
     return matchedStore || matchedLocal ? ' entry-highlighted' : ''
@@ -522,8 +533,7 @@ function useHighlightScroll(
   conversationId: number,
   armCalibration: (target: HTMLElement, alignment: AnchorAlignment) => void,
 ): (node: HTMLDivElement | null) => void {
-  const store = useHelmStore()
-  const h = store.highlightedEntry
+  const h = useHighlightedEntryForConversation(conversationId)
   // A stable ref avoids re-locating on ordinary rerenders; when StrictMode remounts the ref the
   // calibration must re-arm because the first mount's task was already cancelled by effect cleanup.
   return useCallback((node: HTMLDivElement | null): void => {
@@ -598,7 +608,12 @@ export function ConversationTimeline({
   onRequestStarter,
   starters,
 }: ConversationTimelineProps) {
-  const store = useHelmStore()
+  const groupedUi = useGroupedUi()
+  const resolvedAsks = useResolvedAsks(conversation.id) ?? EMPTY_RESOLVED_ASKS
+  const highlightedEntry = useHighlightedEntryForConversation(conversation.id)
+  const conversationDetail = useConversationDetail(conversation.id)
+  const historyError = useLoadError(`history:${conversation.id}`)
+  const { loadEarlierEntries: fetchEarlierEntries } = useStoreActions()
   const { t } = useWebLocale()
   // Row action service (fork / withdraw-queued-then-edit) instantiated once; row components consume it via props.
   const entryActions = useTimelineEntryActions(conversation, onRequestEdit)
@@ -768,10 +783,10 @@ export function ConversationTimeline({
         ...(live !== undefined ? { live } : {}),
         working: isWorking,
         compacting: isCompacting,
-        timelineRenderers: store.groupedUi.timelineRenderers,
-        toolViews: store.groupedUi.toolViews,
+        timelineRenderers: groupedUi.timelineRenderers,
+        toolViews: groupedUi.toolViews,
       }),
-    [timelineItems, detailEntries, live, isWorking, isCompacting, store.groupedUi.timelineRenderers, store.groupedUi.toolViews],
+    [timelineItems, detailEntries, live, isWorking, isCompacting, groupedUi.timelineRenderers, groupedUi.toolViews],
   )
 
   // timeline.entry.action anchor index: from the detailEntries prop (already rewind-filtered,
@@ -779,7 +794,6 @@ export function ConversationTimeline({
   const activeEntriesById = useMemo(() => buildActiveEntryIndex(detailEntries), [detailEntries])
 
   const hasLiveTurn = items.some((item) => item.kind === 'assistant' && item.live)
-  const resolvedAsks = store.resolvedAsksByConv[conversation.id] ?? []
 
   // Lightweight summaries of all tool calls: collected once, passed through to every tool.view
   // plugin component (siblingCalls let them compute same-target dedupe / resume continuation themselves).
@@ -838,13 +852,13 @@ export function ConversationTimeline({
   // Anchors that must be released: search highlight (store), outline flash highlight (local), and the current locate request target.
   const releasedEntryIds = useMemo(() => {
     const ids = new Set<string>()
-    const h = store.highlightedEntry
+    const h = highlightedEntry
     if (h !== null && h.conversationId === conversation.id && h.entryId !== '') ids.add(h.entryId)
     if (localHighlightEntryId !== null && localHighlightEntryId !== '') ids.add(localHighlightEntryId)
     const requested = outlineScrollRequest?.entryId
     if (requested !== undefined && requested !== '') ids.add(requested)
     return ids
-  }, [store.highlightedEntry, conversation.id, localHighlightEntryId, outlineScrollRequest])
+  }, [highlightedEntry, conversation.id, localHighlightEntryId, outlineScrollRequest])
 
   const cvExclusions = useMemo<ContainmentExclusions>(
     () => ({ releasedEntryIds, latestAssistantKey: lastAssistantKey, charsPerLine }),
@@ -1073,8 +1087,8 @@ export function ConversationTimeline({
   }, [isWorking, hasLiveTurn, syncScrollBottomVisibility])
 
   useEffect(() => {
-    if (store.highlightedEntry?.conversationId === conversation.id) stopFollowingBottom()
-  }, [store.highlightedEntry, conversation.id, stopFollowingBottom])
+    if (highlightedEntry?.conversationId === conversation.id) stopFollowingBottom()
+  }, [highlightedEntry, conversation.id, stopFollowingBottom])
 
   const lastHumanKey = useMemo(() => {
     for (let i = items.length - 1; i >= 0; i--) {
@@ -1095,7 +1109,7 @@ export function ConversationTimeline({
   const contentFingerprint = `${items.length}:${detailEntries.length}:${conversation.status}:${conversation.contextUsage?.compacting === true ? 1 : 0}:${lastTurnSummary}:${live?.updatedAt ?? 0}:${live?.thinking?.length ?? 0}:${live?.text.length ?? 0}:${live?.queuedInputs?.map((q) => `${q.id}:${q.mode}`).join(',') ?? ''}:${resolvedAsks.length}`
   // History ready (conversationDetails exists, including legitimately empty conversations): a blank
   // loading mount does not start the initial bottom-stick window, so the hard deadline is not burned while blank.
-  const detailsReady = store.conversationDetails[conversation.id] !== undefined
+  const detailsReady = conversationDetail !== undefined
 
   // SWR 静默替换保护：已上滑阅读历史（!stickToBottomRef）且非手动翻页加载时，
   // 若同一会话的 detailEntries 引用变化，于 DOM commit 前捕获当前可见行锚点，
@@ -1182,7 +1196,7 @@ export function ConversationTimeline({
     if (scroller === null) return
     const anchor = captureTimelineScrollAnchor(scroller)
     setLoadingOlder(true)
-    void store.loadEarlierEntries(conversation.id).finally(() => {
+    void fetchEarlierEntries(conversation.id).finally(() => {
       setLoadingOlder(false)
       requestAnimationFrame(() => restoreTimelineScrollAnchor(scroller, anchor))
     })
@@ -1190,9 +1204,7 @@ export function ConversationTimeline({
 
   // Starters appear only in a "truly empty" conversation: history fully loaded with no earlier
   // page, no in-flight send/run, no queued input, no pending ask. Any miss suppresses them — no false positives.
-  const conversationDetail = store.conversationDetails[conversation.id]
   const hasOlderCursor = Boolean(conversationDetail?.nextCursor)
-  const historyError = store.loadErrors[`history:${conversation.id}`]
   const showEmptyState =
     !loading && !sendingPending && !isWorking && items.length === 0 && resolvedAsks.length === 0
   const startersVisible =
@@ -1325,7 +1337,6 @@ export function ConversationTimeline({
         {(isWorking && !hasLiveTurn) || (sendingPending && !isWorking) ? (
           <div className="msg-ai-block" role="status" aria-live="polite">
             <span className="msg-origin-tag msg-live-waiting" aria-label={t('conv.timeline.generating')}>
-              <HelmIcon name="loader" size={12.5} className="spin-slow" />
               <span className="msg-live-dots" aria-hidden="true">
                 <span />
                 <span />

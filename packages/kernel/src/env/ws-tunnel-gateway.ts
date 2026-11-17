@@ -1,19 +1,20 @@
 /**
- * node pass-through tunnel independent gateway:/ws/node-tunnel.
+ * Dedicated gateway for node passthrough tunnels: `/ws/node-tunnel`.
  *
- * and /ws/node(birpc control side) different, this gateway only bear load first frame JSON recognize verify → after
- * pure byte pipeline tunnel connect:
- * - first frame must be NodeTunnelHello(without type field) and ≤ 4096 byte; illegal JSON/
- *   structure do not symbol/authentication failed/pending missing or does not match → back NodeTunnelControl error
- *   frame after close (honest reject, not silently hang die);error after never enter data phase;
- * - first frame timeout: never hello connect in when limit (default 10s, compare /ws/node 
- *   registerTimeoutMs) after close(4001), guard against malicious/exception client heap accumulate idle connect;
- * - succeeded path:**first recognize verify + once match + epoch re- inspect all via (acceptTunnel),
- *   again {type:'ok'}, then createWebSocketStream hand over fine grantTunnel**- -
- *   ok frame never early at recognize verify;grantTunnel discover pending already set format on failure destroy hand over come
- *   stream (registry inside guard against leak leak), this gateway also leaves no residue any asset;
- * - hand over fine after stop everything JSON parse: after continue frame only away Duplex byte stream (data phase single frame cap
- *   by wss maxPayload boundary set, far greater than first frame 4096 restrict).
+ * Unlike `/ws/node` (birpc control plane), this gateway only performs first-frame JSON auth
+ * and then switches to a raw byte-stream tunnel:
+ * - The first frame must be a `NodeTunnelHello` (without a `type` field) and `<= 4096` bytes;
+ *   invalid JSON, shape mismatch, auth failure, or missing/mismatched pending entry sends a
+ *   `NodeTunnelControl` error frame then closes (honest rejection, never silently hangs), and
+ *   errors never enter the data phase;
+ * - First-frame timeout: closes connections that never send `hello` within the deadline (default 10s,
+ *   matching `/ws/node`'s `registerTimeoutMs`) with 4001 to prevent idle connection accumulation;
+ * - Success path: **auth + single-use match + epoch recheck must all pass (`acceptTunnel`) before
+ *   sending `{ type: 'ok' }` and handing the `createWebSocketStream` Duplex to `grantTunnel`**—the `ok`
+ *   frame is never sent prior to authentication; if `grantTunnel` sees pending already failed to settle,
+ *   it destroys the incoming stream (no registry leak) and the gateway retains zero leaked resources;
+ * - After handoff, all JSON parsing stops: subsequent frames flow strictly over the Duplex byte stream
+ *   (data-phase single-frame limit is governed by `wss maxPayload`, far larger than the 4096-byte hello cap).
  */
 import type { Server as HttpServer, IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
@@ -24,7 +25,7 @@ import type { NodeRegistry } from './registry.js'
 export interface NodeTunnelGatewayOptions {
   registry: NodeRegistry
   path?: string
-  /** first frame hello timeout (milli second), default 10s(compare /ws/node gateway). */
+  /** First-frame hello timeout (ms), defaults to 10s (matching `/ws/node` gateway). */
   helloTimeoutMs?: number
   log?: (message: string) => void
 }
@@ -35,7 +36,7 @@ export interface NodeTunnelGateway {
 
 const HELLO_MAX_BYTES = 4096
 
-/** first frame hello timeout default (compare ws-gateway  registerTimeoutMs=10s). */
+/** Default first-frame hello timeout (matches `ws-gateway` `registerTimeoutMs = 10s`). */
 const DEFAULT_HELLO_TIMEOUT_MS = 10_000
 
 const isHello = (data: unknown): data is NodeTunnelHello =>
@@ -51,8 +52,8 @@ export function attachNodeTunnelGateway(server: HttpServer, options: NodeTunnelG
     helloTimeoutMs = DEFAULT_HELLO_TIMEOUT_MS,
     log = (message: string) => console.error(`[helm] node tunnel gateway: ${message}`),
   } = options
-  // data phase single frame cap 1MiB(daemon side stream write side HWM self fit should frame);
-  // first frame hello another row independent validate ≤ 4096 byte.
+  // Data-phase frame cap is 1 MiB (daemon stream writer HWM stays aligned with frames);
+  // first-frame hello is independently capped at <= 4096 bytes.
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 })
   let closing: Promise<void> | undefined
 
@@ -62,7 +63,7 @@ export function attachNodeTunnelGateway(server: HttpServer, options: NodeTunnelG
     if (closing) { socket.destroy(); return }
     wss.handleUpgrade(request, socket, head, (ws) => handleConnection(ws))
   }
-  // re- use the same server  upgrade event stream (and /ws/node gateway by pathname stream).
+  // Share the same server `upgrade` event stream (demuxed by pathname with `/ws/node` gateway).
   server.on('upgrade', onUpgrade)
 
   function fail(ws: WebSocket, code: NodeTunnelErrorCode, message: string): void {
@@ -70,20 +71,20 @@ export function attachNodeTunnelGateway(server: HttpServer, options: NodeTunnelG
     try {
       ws.send(JSON.stringify(frame))
     } catch {
-      // failed to send i.e. follow close reclaim.
+      // Send failure is cleaned up on close.
     }
     ws.close(4004, 'tunnel rejected')
   }
 
   function handleConnection(ws: WebSocket): void {
-    // first frame timeout: never hello connect to when close (not silently hang die, also do not unbounded heap accumulate).
+    // First-frame timeout: close connections that never send hello (no silent hang, no unbounded accumulation).
     const helloTimer = setTimeout(() => ws.close(4001, 'tunnel hello timeout'), helloTimeoutMs)
     const onFirstFrame = (raw: unknown): void => {
       clearTimeout(helloTimer)
       const bytes = typeof raw === 'string' ? Buffer.byteLength(raw) : (raw as Buffer).length
       if (bytes > HELLO_MAX_BYTES) {
         ws.removeListener('message', onFirstFrame)
-        fail(ws, 'invalid', `tunnel first frame exceeds ${HELLO_MAX_BYTES} byte cap`)
+        fail(ws, 'invalid', `tunnel first frame exceeds ${HELLO_MAX_BYTES}-byte limit`)
         return
       }
       let data: unknown
@@ -91,26 +92,26 @@ export function attachNodeTunnelGateway(server: HttpServer, options: NodeTunnelG
         data = JSON.parse(typeof raw === 'string' ? raw : Buffer.from(raw as Buffer).toString('utf8'))
       } catch {
         ws.removeListener('message', onFirstFrame)
-        fail(ws, 'invalid', 'tunnel first frame is not legal JSON')
+        fail(ws, 'invalid', 'tunnel first frame is not valid JSON')
         return
       }
       if (!isHello(data)) {
         ws.removeListener('message', onFirstFrame)
-        fail(ws, 'invalid', 'tunnel first frame is not legal hello')
+        fail(ws, 'invalid', 'tunnel first frame is not a valid hello')
         return
       }
       const hello = data
       ws.removeListener('message', onFirstFrame)
       void registry.acceptTunnel(hello.nodeId, hello.token, hello.tunnelId).then((accepted) => {
         if (!accepted) {
-          // recognize verify/once match/epoch re- inspect any one failed:error frame + close (ok from not out,
-          // does not enter data phase; this connect from not create stream, without asset need to reclaim).
-          fail(ws, 'permission_denied', 'tunnel reject:tunnelId invalid, node swap proxy or authentication failed')
+          // Auth / single-use match / epoch recheck failed: error frame + close (never emits ok,
+          // never enters data phase; no stream created so nothing to reclaim).
+          fail(ws, 'permission_denied', 'tunnel rejected: invalid tunnelId, superseded node, or auth failure')
           return
         }
-        // all via: first ok(node side based on this start forwarding byte), again create stream, hand over fine.
-        // grantTunnel discover pending already set format failed (timeout/abort just well insert queue) when will
-        // destroy hand over come stream - - this where again closure ws fall back, two side all without leaking.
+        // Passed: send ok first (signals node to begin forwarding bytes), then create stream and hand off.
+        // If grantTunnel finds pending already failed (race with timeout/abort), it destroys the incoming stream;
+        // ws close/error fallback here ensures zero leaks on both ends.
         const okFrame: NodeTunnelControl = { type: 'ok' }
         try {
           ws.send(JSON.stringify(okFrame))
@@ -121,8 +122,8 @@ export function attachNodeTunnelGateway(server: HttpServer, options: NodeTunnelG
         const stream = createWebSocketStream(ws)
         registry.grantTunnel(hello.tunnelId, stream)
       }).catch((error: unknown) => {
-        log(`tunnel handover failed:${error instanceof Error ? error.message : String(error)}`)
-        fail(ws, 'unknown', 'tunnel handover failed')
+        log(`tunnel handoff failed: ${error instanceof Error ? error.message : String(error)}`)
+        fail(ws, 'unknown', 'tunnel handoff failed')
       })
     }
     ws.on('message', onFirstFrame)
@@ -131,7 +132,7 @@ export function attachNodeTunnelGateway(server: HttpServer, options: NodeTunnelG
       ws.removeListener('message', onFirstFrame)
     })
     ws.once('error', (error) => {
-      log(`tunnel connect error:${error instanceof Error ? error.message : String(error)}`)
+      log(`tunnel connection error: ${error instanceof Error ? error.message : String(error)}`)
       clearTimeout(helloTimer)
       ws.removeListener('message', onFirstFrame)
       ws.terminate()

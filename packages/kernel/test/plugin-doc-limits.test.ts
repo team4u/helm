@@ -1,15 +1,15 @@
 /**
- * plugin document body accumulate guard against line test (doc / sessionDoc  initial / set / update):
- * - JSON serialization result exceeds PLUGIN_DOC_MAX_JSON_BYTES(2 MiB) in write mirror, durable layer
- *   and public event before explicit reject (413 plugin_doc_too_large,details contains
- *   pluginId/name/kind/bytes/maxBytes), old value keep do not change;
- * - boundary value (exactly equals cap) let through;
- * - failed after durable store do not write, public event do not;
- * - PluginDocRegistry construct parameter maxDocJsonBytes can inject more small cap (test friend well,
- *   do not break since has API);
- * - JSON cannot serialization / undefined etc. since has explicit failed behavior keep do not change.
+ * Size guard tests for plugin docs (doc / sessionDoc initial / set / update):
+ * - If serialized JSON exceeds PLUGIN_DOC_MAX_JSON_BYTES (2 MiB), rejects explicitly BEFORE
+ *   updating mirror, durable store, or public events (413 plugin_doc_too_large, details carry
+ *   pluginId/name/kind/bytes/maxBytes) while leaving prior values intact;
+ * - Exact boundary values (equal to cap) succeed;
+ * - Rejected writes never write to durable store or emit public events;
+ * - PluginDocRegistry constructor accepts maxDocJsonBytes for a smaller test cap without breaking
+ *   existing APIs;
+ * - Existing failure semantics (non-JSON-serializable / undefined, etc.) remain unchanged.
  *
- * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
+ * Runner: tsx --test; every test specifies timeout: 60_000 against deadlocks.
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
@@ -26,7 +26,7 @@ import { createPluginBuildProvider } from '@helm/plugin-build'
 import { MemoryDocStore, assertRejectsCode, cleanupDir, makeTempDir } from './helpers.js'
 
 // ---------------------------------------------------------------------------
-// test base create
+// Test fixture setup
 // ---------------------------------------------------------------------------
 
 class MemorySessionDocStore implements PluginSessionDocStore {
@@ -82,7 +82,7 @@ function throwsCode(fn: () => unknown, code: string, status?: number): HelmError
   } catch (err) {
     caught = err
   }
-  assert.ok(caught instanceof HelmError, `expectation HelmError, actual:${String(caught)}`)
+  assert.ok(caught instanceof HelmError, `expected HelmError, got ${String(caught)}`)
   assert.equal(caught.code, code)
   if (status !== undefined) assert.equal(caught.status, status)
   return caught
@@ -100,12 +100,12 @@ afterEach(async () => {
 })
 
 // ---------------------------------------------------------------------------
-// global doc
+// Global doc
 // ---------------------------------------------------------------------------
 
-test('doc initial over limit: register reject plugin_doc_too_large,details complete', { timeout: 60_000 }, async () => {
+test('doc initial exceeds limit: register rejects with plugin_doc_too_large and complete details', { timeout: 60_000 }, async () => {
   const host = makeHost()
-  const big = 'x'.repeat(PLUGIN_DOC_MAX_JSON_BYTES) // serialization = cap + 2 byte (quotes)
+  const big = 'x'.repeat(PLUGIN_DOC_MAX_JSON_BYTES) // serialized = cap + 2 bytes (quotes)
   const err = (await assertRejectsCode(
     () =>
       host.register({
@@ -125,7 +125,7 @@ test('doc initial over limit: register reject plugin_doc_too_large,details compl
   assert.equal(docs.store.size, 0)
 })
 
-test('doc set/update over limit: reject and old value do not change, durable store do not write, public event do not', { timeout: 60_000 }, async () => {
+test('doc set/update exceeds limit: rejects leaving prior value unchanged, skips durable store and public events', { timeout: 60_000 }, async () => {
   let handle: PluginDocHandle<{ keep: string; blob?: string }> | undefined
   const host = makeHost()
   await host.register({
@@ -137,7 +137,7 @@ test('doc set/update over limit: reject and old value do not change, durable sto
   assert.ok(handle)
   const h = handle
   h.set({ keep: 'v1' })
-  // normal write publish plugin.doc.updated; after continue over limit failed no longer any event.
+  // Normal write publishes plugin.doc.updated; subsequent oversized failures must emit no further events.
   assert.ok(events.some((e) => e.type === 'plugin.doc.updated'))
   const baseline = events.length
 
@@ -147,9 +147,9 @@ test('doc set/update over limit: reject and old value do not change, durable sto
     413,
   )
   assert.equal((err.details as { kind: string }).kind, 'doc')
-  assert.equal(h.get().keep, 'v1', 'old value keep do not change')
+  assert.equal(h.get().keep, 'v1', 'prior value stays intact')
   assert.deepEqual(docs.store.get('p:doc:state'), { keep: 'v1' })
-  assert.equal(events.length, baseline, 'over limit write do not publish plugin.doc.updated')
+  assert.equal(events.length, baseline, 'oversized write must not publish plugin.doc.updated')
 
   throwsCode(
     () => h.update((s) => ({ ...s, blob: 'z'.repeat(PLUGIN_DOC_MAX_JSON_BYTES) })),
@@ -161,7 +161,7 @@ test('doc set/update over limit: reject and old value do not change, durable sto
   assert.equal(events.length, baseline)
 })
 
-test('doc boundary: serialization exactly equals cap when let through', { timeout: 60_000 }, async () => {
+test('doc boundary: serialized JSON exactly equal to cap succeeds', { timeout: 60_000 }, async () => {
   let handle: PluginDocHandle<string> | undefined
   const host = makeHost()
   await host.register({
@@ -172,7 +172,7 @@ test('doc boundary: serialization exactly equals cap when let through', { timeou
   })
   assert.ok(handle)
   const h = handle
-  // JSON.stringify("...") = content + 2 quotes; content = cap - 2 when exactly equals cap.
+  // JSON.stringify("...") = content + 2 quotes; content = cap - 2 hits the exact cap.
   h.set('a'.repeat(PLUGIN_DOC_MAX_JSON_BYTES - 2))
   assert.equal(h.get().length, PLUGIN_DOC_MAX_JSON_BYTES - 2)
   h.update(() => 'b'.repeat(PLUGIN_DOC_MAX_JSON_BYTES - 2))
@@ -180,10 +180,10 @@ test('doc boundary: serialization exactly equals cap when let through', { timeou
 })
 
 // ---------------------------------------------------------------------------
-// conversation sessionDoc
+// Conversation sessionDoc
 // ---------------------------------------------------------------------------
 
-test('sessionDoc initial over limit: register reject plugin_doc_too_large', { timeout: 60_000 }, async () => {
+test('sessionDoc initial exceeds limit: register rejects with plugin_doc_too_large', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await assertRejectsCode(
     () =>
@@ -204,14 +204,14 @@ test('sessionDoc initial over limit: register reject plugin_doc_too_large', { ti
   assert.equal(sessionDocs.store.size, 0)
 })
 
-test('sessionDoc set/update over limit: reject and old value do not change, durable layer do not write, event do not', { timeout: 60_000 }, async () => {
+test('sessionDoc set/update exceeds limit: rejects leaving prior value intact, skips durable store and events', { timeout: 60_000 }, async () => {
   let handle: PluginSessionDocHandle<{ n: number; blob?: string }> | undefined
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: {
       ...makeBackend(),
       getConversation: (id: number) => {
-        if (id !== 7) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
+        if (id !== 7) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
         return { id } as never
       },
     },
@@ -239,7 +239,7 @@ test('sessionDoc set/update over limit: reject and old value do not change, dura
   assert.equal(details.conversationId, 7)
   assert.deepEqual(h.get(7), { n: 1 })
   assert.equal(sessionDocs.store.get(`p:sdoc\0runs\0${7}`), JSON.stringify({ n: 1 }))
-  assert.equal(events.length, baseline, 'over limit write do not publish plugin.session_doc.updated')
+  assert.equal(events.length, baseline, 'oversized write must not publish plugin.session_doc.updated')
 
   throwsCode(
     () => h.update(7, (s) => ({ ...s, blob: 'v'.repeat(PLUGIN_DOC_MAX_JSON_BYTES) })),
@@ -250,7 +250,7 @@ test('sessionDoc set/update over limit: reject and old value do not change, dura
   assert.equal(events.length, baseline)
 })
 
-test('sessionDoc boundary: serialization exactly equals cap when let through', { timeout: 60_000 }, async () => {
+test('sessionDoc boundary: serialized JSON exactly equal to cap succeeds', { timeout: 60_000 }, async () => {
   let handle: PluginSessionDocHandle<string> | undefined
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
@@ -274,10 +274,10 @@ test('sessionDoc boundary: serialization exactly equals cap when let through', {
 })
 
 // ---------------------------------------------------------------------------
-// construct parameter inject & since has explicit failed behavior
+// Constructor cap injection & existing explicit failures
 // ---------------------------------------------------------------------------
 
-test('maxDocJsonBytes construct parameter: more small cap takes effect (do not break since has API)', { timeout: 60_000 }, () => {
+test('maxDocJsonBytes constructor parameter enforces smaller cap without breaking existing API', { timeout: 60_000 }, () => {
   const store = new MemoryDocStore()
   const registry = new PluginDocRegistry(
     store,
@@ -293,7 +293,7 @@ test('maxDocJsonBytes construct parameter: more small cap takes effect (do not b
   assert.equal(store.get('p:small:blob', '').length, 61)
 })
 
-test('by default cap constant is 2 MiB; cannot serialization value keep since has explicit failed', { timeout: 60_000 }, async () => {
+test('default cap constant is 2 MiB; unserializable values keep existing explicit failures', { timeout: 60_000 }, async () => {
   assert.equal(PLUGIN_DOC_MAX_JSON_BYTES, 2 * 1024 * 1024)
   let handle: PluginDocHandle<unknown> | undefined
   const host = makeHost()
@@ -305,9 +305,86 @@ test('by default cap constant is 2 MiB; cannot serialization value keep since ha
   })
   assert.ok(handle)
   const h = handle
-  // undefined / loop reference:jsonClone boundary explicit failed (since has behavior), is not body accumulate error.
+  // undefined / cyclic references fail explicitly at the jsonClone boundary (existing behavior), not as size errors.
   throwsCode(() => h.set(undefined), 'invalid_json_value')
   const circular: Record<string, unknown> = {}
   circular.self = circular
   throwsCode(() => h.set(circular), 'invalid_json_value')
+})
+
+test('sessionDoc set/update serializes JSON once and preserves full isolation across transient/durable/emit boundaries', { timeout: 60_000 }, () => {
+  const sStore = new MemorySessionDocStore()
+  const emittedSession: Array<{ value: { nested: { n: number } }; deleted?: boolean }> = []
+  const emittedGlobal: Array<{ nested: { n: number } }> = []
+  const registry = new PluginDocRegistry(
+    new MemoryDocStore(),
+    (_pluginId, _name, value) => {
+      emittedGlobal.push(value as { nested: { n: number } })
+    },
+    {
+      sessionStore: sStore,
+      assertConversationExists: () => {},
+      emitSessionDocUpdated: (doc) => {
+        emittedSession.push({ value: doc.value as { nested: { n: number } }, deleted: doc.deleted })
+      },
+    },
+  )
+
+  const durableSess = registry.registerSessionDoc('p:opt', 'durable', { nested: { n: 0 } }, { public: true }, () => {})
+  const transientSess = registry.registerSessionDoc(
+    'p:opt',
+    'transient',
+    { nested: { n: 0 } },
+    { public: true, durable: false },
+    () => {},
+  )
+  const transientDoc = registry.registerDoc(
+    'p:opt',
+    'tglobal',
+    { nested: { n: 0 } },
+    { public: true, durable: false },
+    () => {},
+  )
+
+  // Single JSON.stringify pass per write (reused for both 2 MiB check and store.put).
+  const origStringify = JSON.stringify
+  let stringifyCalls = 0
+  JSON.stringify = ((...args: Parameters<typeof JSON.stringify>) => {
+    stringifyCalls += 1
+    return origStringify(...args)
+  }) as typeof JSON.stringify
+  try {
+    durableSess.set(1, { nested: { n: 10 } })
+    assert.equal(stringifyCalls, 1, 'sessionDoc.set must serialize JSON only once')
+    durableSess.update(1, (cur) => ({ nested: { n: cur.nested.n + 5 } }))
+    assert.equal(stringifyCalls, 2, 'sessionDoc.update must serialize JSON only once')
+  } finally {
+    JSON.stringify = origStringify
+  }
+  assert.equal(sStore.get('p:opt', 'durable', 1), '{"nested":{"n":15}}')
+  assert.deepEqual(durableSess.get(1), { nested: { n: 15 } })
+
+  // Transient isolation: mutating caller input, get() output, update() argument, and emitted payloads must not corrupt state.
+  const input = { nested: { n: 1 } }
+  transientSess.set(1, input)
+  input.nested.n = 999
+  emittedSession.at(-1)!.value.nested.n = 888
+  const read1 = transientSess.get(1)
+  read1.nested.n = 777
+  assert.deepEqual(transientSess.get(1), { nested: { n: 1 } })
+
+  transientSess.update(1, (cur) => {
+    cur.nested.n = 555
+    return { nested: { n: 2 } }
+  })
+  assert.deepEqual(transientSess.get(1), { nested: { n: 2 } })
+
+  transientSess.delete(1)
+  emittedSession.at(-1)!.value.nested.n = 666
+  assert.deepEqual(transientSess.get(1), { nested: { n: 0 } })
+
+  transientDoc.set({ nested: { n: 3 } })
+  emittedGlobal.at(-1)!.nested.n = 444
+  transientDoc.get().nested.n = 333
+  assert.deepEqual(transientDoc.get(), { nested: { n: 3 } })
 })

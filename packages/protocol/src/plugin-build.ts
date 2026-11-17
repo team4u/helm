@@ -120,3 +120,211 @@ export function clientNpmRootsOf(
   }
   return [...npmByRoot.entries()].map(([packageRoot, specifiers]) => ({ packageRoot, specifiers }));
 }
+
+// ---------------------------------------------------------------------------
+// Prebuilt client bundle contract (browser-safe, zero node:* / esbuild deps)
+// ---------------------------------------------------------------------------
+
+/** Prebuilt manifest schema version. */
+export const PREBUILT_CLIENT_MANIFEST_VERSION = 1 as const;
+
+/** Conventional subdirectory inside a plugin directory containing prebuilt client artifacts. */
+export const PREBUILT_CLIENT_DIR_NAME = 'dist-client';
+
+/** Manifest filename inside a prebuilt client directory. */
+export const PREBUILT_CLIENT_MANIFEST_FILE = 'manifest.json';
+
+/** Valid chunk filename pattern (single relative .js filename; no slashes or '..'). */
+const PREBUILT_CHUNK_NAME_PATTERN = /^[A-Za-z0-9._-]+\.js$/;
+
+/** Valid relative path inside prebuiltClientDir (POSIX segments of safe characters; no empty or '..' segments). */
+const PREBUILT_REL_FILE_PATTERN = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
+
+/** Per-entry metadata recorded inside `dist-client/manifest.json`. */
+export interface PrebuiltClientModuleEntry {
+  /** Entry JS file path relative to the prebuilt client directory (POSIX separators). */
+  entryFile: string;
+  /** Deterministic content hash of the compiled entry module and its dependencies. */
+  contentHash: string;
+  /** Named exports of the entry module (including `__helmClientCss` when CSS was bundled). */
+  exports: string[];
+  /** Async/shared chunk filenames emitted for this entry (when code splitting occurred). */
+  chunks?: string[];
+}
+
+/** Static manifest written into `dist-client/manifest.json` by `buildPluginClientBundleDir`. */
+export interface PrebuiltClientManifest {
+  version: typeof PREBUILT_CLIENT_MANIFEST_VERSION;
+  /** Mapping from declared `ClientComponentRef.module` (e.g. `'index.tsx'`) to its prebuilt entry metadata. */
+  modules: Record<string, PrebuiltClientModuleEntry>;
+}
+
+/** Options accepted by `@helm/plugin-build`'s `buildPluginClientBundleDir`. */
+export interface BuildPluginClientBundleDirOptions {
+  pluginId: string;
+  clientRoot: string;
+  outDir: string;
+  /** Relative `.ts`/`.tsx` entry modules inside `clientRoot`; when omitted, scans non-declaration `.ts`/`.tsx` files. */
+  modules?: ReadonlyArray<string>;
+  /** Controlled npm dependency resolution roots (defaults to `[]`). */
+  npmRoots?: ReadonlyArray<PluginClientNpmRoot>;
+}
+
+/** Output summary returned by `buildPluginClientBundleDir`. */
+export interface BuildPluginClientBundleDirResult {
+  pluginId: string;
+  clientRoot: string;
+  outDir: string;
+  manifestPath: string;
+  manifest: PrebuiltClientManifest;
+  /** Total byte size across all emitted artifact files (`manifest.json`, `.mjs`, `.js`, and `.gz`). */
+  totalBytes: number;
+}
+
+/** Validates an async/shared chunk filename requested or declared by a plugin client module. */
+export function assertPrebuiltChunkName(pluginId: string, chunk: string): void {
+  if (
+    typeof chunk !== 'string' ||
+    !PREBUILT_CHUNK_NAME_PATTERN.test(chunk) ||
+    chunk.includes('..')
+  ) {
+    throw new HelmError(
+      'invalid_client_module',
+      `plugin ${pluginId} invalid chunk module name (must match /^[A-Za-z0-9._-]+\\.js$/ and exclude ..): ${String(chunk)}`,
+      400,
+      { pluginId, chunk: String(chunk) },
+    );
+  }
+}
+
+/** Canonical prebuilt chunk path relative to `prebuiltClientDir` for a given entry file and chunk name. */
+export function prebuiltChunkFileName(entryFile: string, chunkName: string, pluginId = 'prebuilt'): string {
+  assertPrebuiltChunkName(pluginId, chunkName);
+  const stem = entryFile.endsWith('.mjs') ? entryFile.slice(0, -4) : entryFile;
+  return `${stem}.chunk.${chunkName}`;
+}
+
+/** Validates a relative file path inside `prebuiltClientDir` (blocks absolute paths, backslashes, '..', and '.' segments). */
+export function assertPrebuiltRelativeFile(prebuiltDir: string, relPath: unknown, label: string): string {
+  if (
+    typeof relPath !== 'string' ||
+    relPath.length === 0 ||
+    relPath.startsWith('/') ||
+    /^[A-Za-z]:[\\/]/.test(relPath) ||
+    relPath.startsWith('\\') ||
+    relPath.includes('\\') ||
+    !PREBUILT_REL_FILE_PATTERN.test(relPath) ||
+    relPath.split('/').some((seg) => seg === '.' || seg === '..')
+  ) {
+    throw new HelmError(
+      'prebuilt_client_invalid',
+      `Prebuilt client ${label} in ${prebuiltDir} must be a safe relative path without '..' or absolute prefixes: ${String(relPath)}`,
+      400,
+      { prebuiltDir, label, path: String(relPath) },
+    );
+  }
+  return relPath;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Validates and normalizes a parsed `dist-client/manifest.json` structure (pure, zero I/O). */
+export function assertPrebuiltClientManifest(raw: unknown, prebuiltDir: string): PrebuiltClientManifest {
+  if (!isPlainRecord(raw)) {
+    throw new HelmError(
+      'prebuilt_client_invalid',
+      `Prebuilt client manifest in ${prebuiltDir} must be a JSON object`,
+      400,
+      { prebuiltDir },
+    );
+  }
+  if (raw['version'] !== PREBUILT_CLIENT_MANIFEST_VERSION) {
+    throw new HelmError(
+      'prebuilt_client_invalid',
+      `Prebuilt client manifest in ${prebuiltDir} has unsupported version ${String(raw['version'])} (expected ${PREBUILT_CLIENT_MANIFEST_VERSION})`,
+      400,
+      { prebuiltDir, version: raw['version'] },
+    );
+  }
+  const rawModules = raw['modules'];
+  if (!isPlainRecord(rawModules)) {
+    throw new HelmError(
+      'prebuilt_client_invalid',
+      `Prebuilt client manifest in ${prebuiltDir} must declare a modules object`,
+      400,
+      { prebuiltDir },
+    );
+  }
+
+  const modules: Record<string, PrebuiltClientModuleEntry> = {};
+  for (const [moduleRef, rawEntry] of Object.entries(rawModules)) {
+    assertModuleRefShape('prebuilt', moduleRef);
+    if (!isPlainRecord(rawEntry)) {
+      throw new HelmError(
+        'prebuilt_client_invalid',
+        `Prebuilt client manifest entry for ${moduleRef} in ${prebuiltDir} must be an object`,
+        400,
+        { prebuiltDir, module: moduleRef },
+      );
+    }
+    const entryFile = assertPrebuiltRelativeFile(prebuiltDir, rawEntry['entryFile'], `modules[${moduleRef}].entryFile`);
+    const contentHash = rawEntry['contentHash'];
+    if (typeof contentHash !== 'string' || contentHash.trim().length === 0 || /[\s/\\]/.test(contentHash)) {
+      throw new HelmError(
+        'prebuilt_client_invalid',
+        `Prebuilt client manifest entry for ${moduleRef} in ${prebuiltDir} has invalid contentHash`,
+        400,
+        { prebuiltDir, module: moduleRef },
+      );
+    }
+    const rawExports = rawEntry['exports'];
+    if (!Array.isArray(rawExports) || rawExports.some((e) => typeof e !== 'string' || e.length === 0)) {
+      throw new HelmError(
+        'prebuilt_client_invalid',
+        `Prebuilt client manifest entry for ${moduleRef} in ${prebuiltDir} must declare exports as a string array`,
+        400,
+        { prebuiltDir, module: moduleRef },
+      );
+    }
+    const rawChunks = rawEntry['chunks'];
+    let chunks: string[] | undefined;
+    if (rawChunks !== undefined) {
+      if (!Array.isArray(rawChunks)) {
+        throw new HelmError(
+          'prebuilt_client_invalid',
+          `Prebuilt client manifest entry for ${moduleRef} in ${prebuiltDir} must declare chunks as an array`,
+          400,
+          { prebuiltDir, module: moduleRef },
+        );
+      }
+      const seenChunks = new Set<string>();
+      chunks = [];
+      for (const chunkName of rawChunks) {
+        assertPrebuiltChunkName('prebuilt', chunkName as string);
+        if (seenChunks.has(chunkName as string)) {
+          throw new HelmError(
+            'prebuilt_client_invalid',
+            `Prebuilt client manifest entry for ${moduleRef} in ${prebuiltDir} contains duplicate chunk: ${String(chunkName)}`,
+            400,
+            { prebuiltDir, module: moduleRef, chunk: String(chunkName) },
+          );
+        }
+        seenChunks.add(chunkName as string);
+        chunks.push(chunkName as string);
+      }
+    }
+    modules[moduleRef] = {
+      entryFile,
+      contentHash,
+      exports: [...(rawExports as string[])],
+      ...(chunks !== undefined && chunks.length > 0 ? { chunks } : {}),
+    };
+  }
+
+  return {
+    version: PREBUILT_CLIENT_MANIFEST_VERSION,
+    modules,
+  };
+}

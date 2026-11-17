@@ -1,12 +1,12 @@
 /**
- * PluginHost:helm unique strong type plugin host (definePlugin(ctx)).
+ * PluginHost: strongly typed plugin host for `definePlugin(ctx)`.
  *
- * responsibility boundary:
- * - coordinate tune register (register), enable (enable), deactivate (disable), deregister (unregister) lifecycle;
- * - coordinate tune service start screen fault (prepare -> start) and subject to control stop (controlled stop);
- * - coordinate tune model Provider mount and unload (PluginProviderPort),HookPipeline and config persist;
- * - coordinate tune sub- register table (DocRegistry,CapabilityRegistry,UiRegistry) and task trace (PluginTaskTracker);
- * - concurrency gate control, dependency graph, service screen fault, lifecycle transaction, external DX and transition state rollback respectively delegate same directory sub- module implement.
+ * Responsibilities:
+ * - Coordinates plugin `register`, `enable`, `disable`, and `unregister` lifecycle transactions;
+ * - Coordinates the global service startup barrier (`prepare -> start`) and controlled shutdown;
+ * - Coordinates model `Provider` registration (`PluginProviderPort`), hook pipelines, and config persistence;
+ * - Coordinates sub-registries (`DocRegistry`, `CapabilityRegistry`, `UiRegistry`) and in-flight tracking (`PluginTaskTracker`);
+ * - Delegates concurrency gates, dependency graphs, service barriers, transactions, and external DX helpers.
  */
 import {
   HelmError,
@@ -59,6 +59,7 @@ import {
   assertActive,
   assertContextUsable,
   assertDefinition,
+  buildPublicConfig,
   disposePlugins,
   getActiveEnabledPluginIds,
   getIdleActivePluginIds,
@@ -123,10 +124,11 @@ export class PluginHost {
   private gate = new PluginHostGate();
   private packageManager?: PluginPackageManager;
   private packageStore?: PluginPackageManagerStore;
+  private releaseConversationDeletedListener?: () => void;
 
   constructor(private readonly options: PluginHostOptions) {
     this.configStore = options.config;
-    this.uiRegistry = new UiRegistry(options.buildProvider);
+    this.uiRegistry = new UiRegistry(options.buildProvider, (id) => this.getPluginLifecycle(id));
     this.servicesStarted = options.deferServices !== true;
     for (const name of Object.keys(HOOK_ALLOWED_ACTIONS) as HookName[]) {
       this.pipelines.set(name, new HookPipeline(name));
@@ -157,7 +159,7 @@ export class PluginHost {
     assertDefinition(definition);
     const seq = ++this.registerSeq;
     const pluginId = definition.id;
-    // built-in plugin failed one rule block assert, only external plugin explicit want seek when isolated fall back
+    // Built-in plugin failures always abort startup; only external plugins with explicit isolation fall back to registerFailed.
     const isolate = options.isolateFailure === true && !pluginId.startsWith('builtin:');
 
     await this.gate.enqueue(pluginId, async () => {
@@ -237,15 +239,13 @@ export class PluginHost {
 
   list(): PluginSummary[] {
     this.assertNotDisposed();
-    return [...this.plugins.values()].map((s) =>
-      summaryWithManagedPackage(s, this.capabilityRegistry, this.uiRegistry, this.packageStore),
-    );
+    return [...this.plugins.values()].map((s) => this.summaryOf(s));
   }
 
   get(pluginId: string): PluginSummary | undefined {
     this.assertNotDisposed();
     const s = this.plugins.get(pluginId);
-    return s ? summaryWithManagedPackage(s, this.capabilityRegistry, this.uiRegistry, this.packageStore) : undefined;
+    return s ? this.summaryOf(s) : undefined;
   }
 
   assertProviderAvailable(pluginId: string): void {
@@ -309,7 +309,7 @@ export class PluginHost {
     if (this.packageManager === undefined) {
       throw new HelmError(
         'not_supported',
-        'when before kernel not connect line plugin package install (managed install/update/remove unavailable)',
+        'Current kernel has not wired the plugin package manager (managed install/update/remove unavailable)',
         501,
       );
     }
@@ -342,6 +342,7 @@ export class PluginHost {
       phase: s.phase,
       epoch: s.epoch,
       clientRoot: s.definition.clientRoot,
+      prebuiltClientDir: s.definition.prebuiltClientDir,
       npmDependencies: s.definition.npmDependencies,
     };
   };
@@ -469,16 +470,9 @@ export class PluginHost {
   getConfig(pluginId: string): Record<string, unknown> {
     this.assertNotDisposed();
     const state = this.plugins.get(pluginId);
-    // schema.default fill bottom, disk explicit value override (not store field motion state reverse reflect most new default)
     const stored = this.configStore ? this.configStore.get(pluginId) : {};
-    const schema = state?.configSchema ?? {};
-    const merged: Record<string, unknown> = {};
-    for (const [key, field] of Object.entries(schema)) {
-      if (field.default !== undefined) {
-        merged[key] = field.secret === true ? String(field.default) : field.default;
-      }
-    }
-    return { ...merged, ...stored };
+    if (!state) return { ...stored };
+    return this.effectiveConfigOf(state, stored);
   }
 
   getConfigSchema(pluginId: string): Record<string, PluginConfigFieldSchema> {
@@ -519,13 +513,17 @@ export class PluginHost {
       );
     }
     await this.configStore.set(pluginId, value, schema);
+    this.emitPluginChanged(state);
   }
 
-  // --- destroy and in-flight task trace ---------------------------------------------------
+  // --- disposal and in-flight task tracking ---------------------------------------------------
 
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    const releaseConvDeleted = this.releaseConversationDeletedListener;
+    this.releaseConversationDeletedListener = undefined;
+    releaseConvDeleted?.();
     await this.gate.drain();
     await disposePlugins(
       this.plugins,
@@ -564,6 +562,7 @@ export class PluginHost {
       emitPluginChanged: (state) => this.emitPluginChanged(state),
       createPluginContext: (state, epoch) => this.createContext(state, epoch),
       getPluginLifecycle: this.getPluginLifecycle,
+      ensureTransientSessionDocListener: (pluginId) => this.ensureTransientSessionDocCleanupListener(pluginId),
       isDisposed: () => this.disposed,
     };
   }
@@ -596,6 +595,11 @@ export class PluginHost {
         plugins: this.plugins,
         getConfig: (id) => this.getConfig(id),
         setConfig: (id, val) => this.setConfig(id, val),
+        onConfigChanged: (id) => {
+          if (this.disposed) return;
+          const target = this.plugins.get(id);
+          if (target) this.emitPluginChanged(target);
+        },
         list: () => this.list(),
         listUi: () => this.listUi(),
         listActions: () => this.listActions(),
@@ -618,17 +622,65 @@ export class PluginHost {
     this.options.host.emitEvent('plugin.doc.updated', { type: 'plugin.doc.updated', doc });
   }
 
+  private effectiveConfigOf(
+    state: PluginState,
+    stored: Record<string, unknown> = this.configStore ? this.configStore.get(state.definition.id) : {},
+  ): Record<string, unknown> {
+    // Schema defaults act as baseline fallback, overridden by explicit persisted values.
+    const schema = state.configSchema ?? {};
+    const merged: Record<string, unknown> = {};
+    for (const [key, field] of Object.entries(schema)) {
+      if (field.default !== undefined) {
+        merged[key] = field.secret === true ? String(field.default) : field.default;
+      }
+    }
+    return { ...merged, ...stored };
+  }
+
+  private summaryOf(state: PluginState): PluginSummary {
+    const publicConfig = buildPublicConfig(
+      state,
+      this.effectiveConfigOf(state),
+      (text) => {
+        const redactedByHost = this.options.host.redact(text);
+        return this.options.redactText ? this.options.redactText(redactedByHost) : redactedByHost;
+      },
+    );
+    return summaryWithManagedPackage(
+      state,
+      this.capabilityRegistry,
+      this.uiRegistry,
+      this.packageStore,
+      publicConfig,
+    );
+  }
+
+  private ensureTransientSessionDocCleanupListener(pluginId: string): void {
+    if (this.disposed || this.releaseConversationDeletedListener !== undefined) return;
+    if (!this.docRegistry.hasTransientSessionDocs(pluginId)) return;
+    this.releaseConversationDeletedListener = this.options.host.onEvent(
+      'conversation.deleted',
+      (event) => {
+        if (this.disposed) return;
+        const conversationId = (event as { conversationId?: unknown } | undefined)?.conversationId;
+        if (typeof conversationId === 'number' && Number.isSafeInteger(conversationId)) {
+          this.docRegistry.deleteConversation(conversationId);
+        }
+      },
+    );
+  }
+
   private emitPluginChanged(state: PluginState): void {
     this.options.host.emitEvent('plugin.changed', {
       type: 'plugin.changed',
-      plugin: summaryWithManagedPackage(state, this.capabilityRegistry, this.uiRegistry, this.packageStore),
+      plugin: this.summaryOf(state),
       ui: state.enabled && state.phase === 'idle' ? this.uiRegistry.getUiByPlugin(state.definition.id) : [],
     });
   }
 
   private assertNotDisposed(): void {
     if (this.disposed) {
-      throw new HelmError('plugin_host_disposed', 'PluginHost already dispose', 409);
+      throw new HelmError('plugin_host_disposed', 'PluginHost has already been disposed', 409);
     }
   }
 }

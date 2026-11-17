@@ -110,7 +110,7 @@ function renderCard(
 function bgRun(partial: Partial<WorkflowRunSummary> = {}): WorkflowRunSummary {
   return {
     id: 'wf_bg1',
-    name: 'subagent 后台',
+    name: 'subagent',
     conversationId: 1,
     status: 'running',
     createdAt: 1,
@@ -550,9 +550,9 @@ test('同一子会话 #12 被首次派生 + resume 续接：SubagentToolView 收
   assert.equal((html.match(/class="[^"]*\bsubagent-card-clickable\b/g) ?? []).length, 0, '时间线不渲染工作台大卡')
   const rowButtons = html.match(/<button[^>]*workflow-trace-row-btn[\s\S]*?<\/button>/g) ?? []
   assert.equal(rowButtons.length, 2, `两次调用应各占 1 行紧凑轨迹，实际 ${rowButtons.length}`)
-  assert.match(rowButtons[0]!, /Subagent #12[\s\S]*?Resumed below/, '前序行应标注续接标识')
+  assert.match(rowButtons[0]!, /首次派生[\s\S]*?#12[\s\S]*?Resumed below/, '前序行应主显任务名、次显 #12 并标注续接标识')
   assert.doesNotMatch(rowButtons[1]!, /Resumed below/, '最新调用行不得带续接标识')
-  assert.match(rowButtons[1]!, /Subagent #12[\s\S]*?Done/, '最新调用行承载子会话编号与终态')
+  assert.match(rowButtons[1]!, /继续[\s\S]*?#12[\s\S]*?Done/, '最新调用行主显任务名、次显 #12 与终态')
 })
 
 test('工作台独立子会话（runs 驱动）：紧凑卡无实时流，保留副栏且 working 排在 idle 前面', { timeout: 60_000 }, () => {
@@ -607,10 +607,39 @@ test('工作台独立子会话（runs 驱动）：紧凑卡无实时流，保留
 // 纯逻辑：resolveSubagentTaskTitle / formatShortModelName
 // ---------------------------------------------------------------------------
 
-test('resolveSubagentTaskTitle：自定义标题 > 父工具 prompt > 后台 run 首节点，均截断 60 字符', { timeout: 60_000 }, () => {
+test('resolveSubagentTaskTitle：自定义标题 > 非占位 run.name > label > 父工具 prompt > 首节点，过滤默认占位标题并截断 60 字符', { timeout: 60_000 }, () => {
   const child = { ...summary(11, 'done'), title: '修复登录超时' }
   assert.equal(resolveSubagentTaskTitle(child, 11), '修复登录超时')
-  assert.equal(resolveSubagentTaskTitle(summary(11, 'done'), 11, { prompt: '跑全量测试' }), '跑全量测试')
+  // 内核/插件各种默认占位标题均不得短路后续真实任务名提取
+  for (const placeholder of [
+    'subagent 11',
+    'Subagent 11',
+    'SUBAGENT #11',
+    '子代理 11',
+    '子代理 #11',
+    '子会话 11',
+    '子会话 #11',
+    '   ',
+  ]) {
+    assert.equal(
+      resolveSubagentTaskTitle({ ...summary(11, 'done'), title: placeholder }, 11, { prompt: '跑全量测试' }),
+      '跑全量测试',
+      `占位标题 "${placeholder}" 不得短路 prompt 提取`,
+    )
+  }
+  // 非占位 backgroundRun.name 优先于父工具 prompt；占位名（'subagent' / 'subagent:...' / run.id）被忽略
+  assert.equal(
+    resolveSubagentTaskTitle(summary(11, 'done'), 11, { prompt: '父工具提示词' }, bgRun({ name: '排查构建失败' })),
+    '排查构建失败',
+  )
+  for (const placeholderRunName of ['subagent', 'subagent:herdr:pi', 'wf_bg1']) {
+    assert.equal(
+      resolveSubagentTaskTitle(summary(11, 'done'), 11, { prompt: '父工具提示词' }, bgRun({ name: placeholderRunName })),
+      '父工具提示词',
+      `占位 run.name "${placeholderRunName}" 不得短路`,
+    )
+  }
+  // prompt 剥离结构化输出契约样板后取首行，超 60 字符截断
   const longPrompt = `${'修'.repeat(70)}尾`
   assert.equal(resolveSubagentTaskTitle(undefined, 11, { prompt: longPrompt }), `${'修'.repeat(60)}…`)
   const withContract = `安装依赖\n<structured_output_contract>{"type":"object"}</structured_output_contract>`
@@ -1134,4 +1163,43 @@ test('SSR：双层胶囊卡全程无任何 Emoji 或特殊符号字符', { timeo
     assert.ok(!EMOJI_RE.test(html), '渲染输出不得包含 Emoji')
     assert.ok(!html.includes('✓') && !html.includes('✗') && !html.includes('▸') && !html.includes('⎿'), '不得使用勾叉箭头类特殊符号')
   }
+})
+
+test('SubagentLiveCard 与 ExternalRunSummary：任务名称主位展示，#id 与外部代理降级为次级标签且回退不重复 #id', { timeout: 60_000 }, () => {
+  // 有任务名时：名称在前（subagent-live-title-text），#11 在后（subagent-live-id），profileId 徽章保留
+  const namedHtml = renderToString(
+    e(TestStoreProvider, { value: makeStore({ conversations: [{ ...summary(11, 'done'), title: 'subagent 11' }] }) },
+      e(SubagentLiveCard, {
+        childConversationId: 11,
+        toolStatus: 'done',
+        backgroundRun: bgRun({ name: '排查构建失败' }),
+      })),
+  )
+  const titlePos = namedHtml.indexOf('排查构建失败')
+  const idPos = namedHtml.indexOf('subagent-live-id')
+  assert.ok(titlePos !== -1 && idPos !== -1 && titlePos < idPos, '任务名称必须位于 #11 之前')
+  assert.match(namedHtml, /subagent-live-id[^>]*>#<!-- -->11|subagent-live-id[^>]*>#11/)
+  assert.ok(namedHtml.includes('>coder<'), '保留 profileId 徽章')
+
+  // 无任何可读名称且会话标题为内核默认 subagent 11：回退 Subagent #11，不得重复渲染 #11
+  const fallbackHtml = renderToString(
+    e(TestStoreProvider, { value: makeStore({ conversations: [{ ...summary(11, 'done'), title: 'subagent 11' }] }) },
+      e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'done' })),
+  )
+  assert.ok(fallbackHtml.includes('Subagent #<!-- -->11') || fallbackHtml.includes('Subagent #11'))
+  assert.ok(!fallbackHtml.includes('subagent-live-id'), '回退标题已含 #11 时不得重复渲染 .subagent-live-id')
+
+  // ExternalRunSummary：非占位 run.name 主显，External agent + executionId 作次级徽章
+  const extNamed = renderToString(
+    e(TestStoreProvider, { value: makeStore({}) },
+      e(ExternalRunSummary, {
+        run: bgRun({ name: '修复外部测试', status: 'running' }),
+        toolStatus: 'running',
+        executionId: 'pane-9',
+      })),
+  )
+  assert.ok(extNamed.includes('修复外部测试'))
+  assert.ok(extNamed.includes('External agent'))
+  assert.ok(extNamed.includes('pane-9'))
+  assert.ok(extNamed.indexOf('修复外部测试') < extNamed.indexOf('External agent'))
 })

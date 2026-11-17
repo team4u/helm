@@ -1,17 +1,17 @@
 /**
- * Hub side TCP port forwarding (foreground MVP): in Hub host on on demand listen listenHost:listenPort,
- * each station connect via EnvFabric.openTunnel establish to target node targetHost:targetPort 
- * any TCP tunnel and double to pipe.
+ * Hub-side TCP port forwarding (foreground MVP): listens on `listenHost:listenPort` on the Hub host
+ * on demand, opens TCP tunnels via `EnvFabric.openTunnel` to `targetHost:targetPort` on the target node
+ * for each incoming connection, and pipes both directions.
  *
- * lifecycle (foreground lease, and CLI foreground command align):
- * - **holder model**: after creation if not in leaseTimeoutMs inside bind set monitor event stream (acquireLease)
- *   automatically stop (CLI by kill/DELETE on failure listener leaves no residue); bind set after finally a holder
- *   release (releaseLease, monitor stream disconnect/cancel when invoke) i.e. stop; only read list/get
- *   is not holder; explicit stop() / host close same stop;
- * - event (connections/errors/stopped) via call back on report (HTTP layer rotate NDJSON);
- * - the same listen address conflict (EADDRINUSE) explicit failed;stop idempotent (sharing close Promise,
- *   concurrency/duplicate invoke etc. the same result);start  listen and stop concurrency when close return after
- *   never publish new listen conversation.
+ * Lifecycle (foreground lease, aligned with CLI foreground commands):
+ * - **Holder model**: automatically stops if no monitor event stream attaches (`acquireLease`) within
+ *   `leaseTimeoutMs` (no leaked listeners if CLI crashes or is killed); once attached, stops as soon as
+ *   the last holder releases (`releaseLease`, invoked on stream disconnect/cancel); read-only list/get
+ *   calls are not holders; explicit `stop()` or host close also stops forwarding;
+ * - Events (`connections`/`errors`/`stopped`) are emitted via callbacks (converted to NDJSON by HTTP);
+ * - Listen address conflicts (`EADDRINUSE`) fail explicitly; `stop` is idempotent (shares a single close
+ *   Promise so concurrent/duplicate calls wait for the same shutdown); races between `listen` and `stop`
+ *   never publish a new listening session after `close` returns.
  */
 
 import net from 'node:net'
@@ -23,10 +23,10 @@ import type { EnvFabric } from './fabric.js'
 
 export type { NodeForwardEvent, NodeForwardInput, NodeForwardSession } from '@helm/protocol'
 
-/** default foreground lease phase limit: after creation not bind set event stream i.e. automatically stop (CLI only needs once stream request). */
+/** Default foreground lease deadline: stops automatically if no event stream attaches after creation (CLI makes a single stream request). */
 export const NODE_FORWARD_LEASE_TIMEOUT_MS = 15_000
 
-/** validate host: non-empty, without control character/whitespace,≤255(hostname or IP text). */
+/** Validate host: non-empty, no control chars/whitespace, <= 255 characters (hostname or IP literal). */
 function validateHost(raw: unknown, what: string): string {
   if (
     typeof raw !== 'string' ||
@@ -35,12 +35,12 @@ function validateHost(raw: unknown, what: string): string {
     raw.trim() !== raw ||
     /\s/.test(raw)
   ) {
-    throw new HelmError('validation_error', `${what} must be non-empty, without whitespace string (≤255 character)`, 400, { value: raw })
+    throw new HelmError('validation_error', `${what} must be a non-empty string without whitespace (<= 255 characters)`, 400, { value: raw })
   }
   for (const ch of raw) {
     const code = ch.charCodeAt(0)
     if (code < 0x20 || code === 0x7f) {
-      throw new HelmError('validation_error', `${what} must not contains control character`, 400, { value: raw })
+      throw new HelmError('validation_error', `${what} must not contain control characters`, 400, { value: raw })
     }
   }
   return raw
@@ -48,7 +48,7 @@ function validateHost(raw: unknown, what: string): string {
 
 function validatePort(raw: unknown, what: string): number {
   if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw < 1 || raw > 65535) {
-    throw new HelmError('validation_error', `${what} must be 1..65535 security integer`, 400, { value: raw })
+    throw new HelmError('validation_error', `${what} must be a valid integer port in 1..65535`, 400, { value: raw })
   }
   return raw
 }
@@ -64,16 +64,16 @@ export function parseNodeForwardInput(raw: Record<string, unknown>): NodeForward
 interface ActiveForward {
   session: NodeForwardSession
   server: net.Server
-  /** activity tunnel duplex(stop when unify destroy). */
+  /** Active tunnel duplexes (destroyed together on stop). */
   tunnels: Set<Duplex>
   events: EventEmitter
-  /** terminate wait for (monitor stream close use;stop when in terminal state frame after invoke). */
+  /** Stop waiters (used to close monitor streams cleanly after emitting the terminal frame). */
   stopWaiters: Set<() => void>
-  /** holder count (monitor event stream bind set +1 / disconnect -1; reset to zero and once bind set i.e. stop). */
+  /** Holder count (incremented on monitor stream bind, decremented on disconnect; stops once it returns to 0 after having a holder). */
   holders: number
-  /** lease timer: after creation not and when bind set holder i.e. automatically stop. */
+  /** Lease timer: stops automatically if no holder attaches in time after creation. */
   leaseTimer: NodeJS.Timeout | undefined
-  /** idempotent close: concurrency/duplicate stop sharing the same Promise. */
+  /** Idempotent shutdown: concurrent/duplicate stop calls share this Promise. */
   stopPromise: Promise<void> | undefined
   sessionRemoved: boolean
   stopped(): boolean
@@ -92,9 +92,9 @@ export class NodeForwardService {
     this.#fabric = fabric
   }
 
-  /** create forwarding (foreground command lifecycle): listen failed explicit failed; succeeded return conversation. */
+  /** Start forwarding (foreground command lifecycle): fails explicitly if listen fails; returns session on success. */
   async start(nodeId: string, input: NodeForwardInput): Promise<NodeForwardSession> {
-    if (this.#closed) throw new HelmError('node_offline', 'forwarding service already close', 409)
+    if (this.#closed) throw new HelmError('node_offline', 'forwarding service is closed', 409)
     const forwardId = `fwd-${cryptoRandomUUID()}`
     const targetHost = input.targetHost ?? '127.0.0.1'
     const session: NodeForwardSession = {
@@ -108,21 +108,21 @@ export class NodeForwardService {
       totalConnections: 0,
     }
     const tunnels = new Set<Duplex>()
-    /** create connect in-flight abort control (stop when unify cancel, guard against leftover establish). */
+    /** AbortControllers for in-flight tunnel opens (cancelled together on stop so nothing leaks). */
     const pendingOpens = new Set<AbortController>()
     const events = new EventEmitter()
 
-    // listen complete to forward assignment between store in await window: connect call back must judge empty fall back
-    //(not assignment i.e. destroy socket), eliminate for micro task when order implicit dependency (TDZ). assignment after
-    // call back inside one rule use this where catch reference, no longer trigger and outside layer bind set.
+    // There is an await window between `listen` completing and `forward` assignment: connection callbacks
+    // guard against undefined (destroying sockets if not yet assigned), avoiding implicit microtask timing
+    // dependencies (TDZ). Callbacks capture `fwd` locally rather than reading an outer reassigned binding.
     let forward: ActiveForward | undefined
     const server = net.createServer((socket) => {
       const fwd = forward
       if (fwd === undefined || fwd.sessionRemoved) { socket.destroy(); return }
-      socket.on('error', () => undefined) // guard against not handle error crash process; real clean up in cleanup
+      socket.on('error', () => undefined) // prevent unhandled socket errors from crashing the process; real cleanup happens in cleanup()
       session.totalConnections += 1
-      // create connect phase i.e. bind socket lifecycle: client first on disconnect immediately cancel in-flight establish,
-      // late to tunnel directly destroy (do not pipe, do not register).
+      // Bind socket lifetime while opening the tunnel: if client disconnects first, abort the in-flight open
+      // immediately and destroy any late-arriving tunnel without piping or registering it.
       const controller = new AbortController()
       pendingOpens.add(controller)
       let socketGone = false
@@ -149,13 +149,12 @@ export class NodeForwardService {
           socket.removeListener('close', onSocketGone)
           socket.removeListener('error', onSocketGone)
         }
-        // create connect during client disconnected or forwarding already stop: late to tunnel immediately destroy, do not register.
+        // Client disconnected or forward stopped during tunnel open: destroy late tunnel immediately without registering.
         if (socketGone || fwd.sessionRemoved) { tunnel.destroy(); socket.destroy(); return }
         tunnels.add(tunnel)
         session.activeConnections += 1
         events.emit('event', { type: 'connection', count: session.activeConnections } satisfies NodeForwardEvent)
-        // exactly once clean up:socket/tunnel any one close/error all enter the same converge point,
-        // does not repeat decrement(otherwise will eat other activity connect counter).
+        // Exactly-once cleanup: socket and tunnel close/error converge here so activeConnections is never decremented twice.
         let cleaned = false
         const cleanup = (): void => {
           if (cleaned) return
@@ -182,7 +181,7 @@ export class NodeForwardService {
       const onError = (error: Error): void => {
         reject(new HelmError(
           'node_forward_listen_failed',
-          `listen ${input.listenHost}:${input.listenPort} failed:${error.message}`,
+          `failed to listen on ${input.listenHost}:${input.listenPort}: ${error.message}`,
           409,
           { listenHost: input.listenHost, listenPort: input.listenPort },
         ))
@@ -190,7 +189,7 @@ export class NodeForwardService {
       server.once('error', onError)
       server.listen(input.listenPort, input.listenHost, () => {
         server.removeListener('error', onError)
-        // listen after run phase error such as record (do not crash process).
+        // Record runtime errors after listen succeeds (never crash the process).
         server.on('error', (error) => {
           session.lastError = error.message
           events.emit('event', { type: 'error', message: error.message } satisfies NodeForwardEvent)
@@ -199,14 +198,13 @@ export class NodeForwardService {
       })
     })
 
-    // listen after completion and stop concurrency:close/service already closure stop during never publish new listen conversation.
+    // Race between listen completing and service closing: never publish a new session once closed.
     if (this.#closed) {
       await new Promise<void>((resolve) => server.close(() => resolve()))
-      throw new HelmError('node_offline', 'forwarding service already close', 409)
+      throw new HelmError('node_offline', 'forwarding service is closed', 409)
     }
 
-    // self reference closed package (stopped/stop/lease): only in object complete initialize and assignment after only then may by
-    // invoke, without TDZ risk.
+    // Self-referential closures (`stopped`/`stop`/`lease`): only invoked after full object construction and assignment (no TDZ risk).
     const fwd: ActiveForward = {
       session,
       server,
@@ -218,16 +216,15 @@ export class NodeForwardService {
       stopPromise: undefined,
       sessionRemoved: false,
       stopped: () => fwd.stopPromise !== undefined,
-      // arrow function:this i.e. service(closed package catch), supply internal excerpt except register.
+      // Arrow function preserves class `this` via closure so `this.#forwards` can be cleaned up cleanly.
       stop: (reason: string): Promise<void> => {
-        // idempotent: concurrency/duplicate invoke sharing the same close Promise(after continue invoke no longer immediately return,
-        // but rather etc. the same close complete).
+        // Idempotent: concurrent/duplicate stop calls share the same close Promise (subsequent calls wait on the same shutdown).
         if (fwd.stopPromise !== undefined) return fwd.stopPromise
         fwd.sessionRemoved = true
         if (fwd.leaseTimer !== undefined) clearTimeout(fwd.leaseTimer)
         fwd.stopPromise = (async () => {
-          // terminal state frame first row (monitor stream receives after by stopWaiters normal close, do not pending),
-          // again cancel all in-flight create connect (late to tunnel by each connect branch self row destroy, do not register).
+          // Emit terminal frame first (so monitor streams close cleanly via stopWaiters without hanging),
+          // then abort all in-flight tunnel opens (late arrivals self-destroy without registering).
           fwd.events.emit('event', { type: 'stopped' } satisfies NodeForwardEvent)
           for (const waiter of [...fwd.stopWaiters]) waiter()
           fwd.stopWaiters.clear()
@@ -245,7 +242,7 @@ export class NodeForwardService {
     }
     forward = fwd
     this.#forwards.set(forwardId, fwd)
-    // foreground lease: after creation not in phase limit inside bind set holder (acquireLease) i.e. automatically stop.
+    // Foreground lease: stops automatically if no holder binds (`acquireLease`) within the timeout.
     fwd.leaseTimer = setTimeout(() => {
       if (fwd.holders === 0 && !fwd.stopped()) {
         void fwd.stop('lease_timeout').catch(() => undefined)
@@ -256,22 +253,23 @@ export class NodeForwardService {
     return { ...session }
   }
 
-  /** subscribe event (monitor stream use); return unsubscribe function. */
+  /** Subscribe to events (used by monitor streams); returns an unsubscribe function. */
   onEvent(forwardId: string, listener: (event: NodeForwardEvent) => void): () => void {
     const forward = this.#forwards.get(forwardId)
-    if (forward === undefined) throw new HelmError('not_found', `forwarding ${forwardId} missing`, 404, { forwardId })
+    if (forward === undefined) throw new HelmError('not_found', `forwarding session ${forwardId} not found`, 404, { forwardId })
     forward.events.on('event', listener)
     return () => forward.events.removeListener('event', listener)
   }
 
   /**
-   * bind set holder (foreground lease): monitor event stream establish when invoke - - clear create lease timer,
-   * holders +1. return release function (monitor stream disconnect/cancel when invoke):holders -1,
-   * reset to zero i.e. stop forwarding (finally a holder leave i.e. close listener). for already stop forwarding without operation.
+   * Bind a lease holder (foreground lease): called when the monitor event stream opens—clears the creation
+   * lease timer and increments `holders`. Returns a release function (called on stream disconnect/cancel):
+   * decrements `holders` and stops forwarding once it reaches zero (last holder leaves -> close listener).
+   * No-op if forwarding is already stopped.
    */
   acquireLease(forwardId: string): () => void {
     const forward = this.#forwards.get(forwardId)
-    if (forward === undefined) throw new HelmError('not_found', `forwarding ${forwardId} missing`, 404, { forwardId })
+    if (forward === undefined) throw new HelmError('not_found', `forwarding session ${forwardId} not found`, 404, { forwardId })
     if (forward.stopped()) return () => undefined
     if (forward.leaseTimer !== undefined) {
       clearTimeout(forward.leaseTimer)
@@ -288,9 +286,9 @@ export class NodeForwardService {
   }
 
   /**
-   * subscribe terminate notify (monitor stream normal end use; terminal state stopped frame after invoke): forwarding already stop
-   * or already excerpt except when with micro task immediately call back (subscribe race security); return unsubscribe function. forwarding from not
-   * store in when same keep guard immediately call back (monitor stream wrap-up takes precedence;GET detail situation will first 404).
+   * Subscribe to termination notification (used to close monitor streams cleanly after emitting the `stopped` frame):
+   * invokes immediately via microtask if already stopped or evicted (race-safe); returns an unsubscribe function.
+   * Also invokes immediately if the forward does not exist (ensures monitor teardown wins even when GET detail returns 404).
    */
   onStopped(forwardId: string, listener: () => void): () => void {
     const forward = this.#forwards.get(forwardId)
@@ -313,14 +311,14 @@ export class NodeForwardService {
     return [...this.#forwards.values()].map((f) => ({ ...f.session }))
   }
 
-  /** stop forwarding (idempotent: sharing the same close Promise). */
+  /** Stop forwarding (idempotent: shares the same close Promise). */
   async stop(forwardId: string): Promise<void> {
     const forward = this.#forwards.get(forwardId)
-    if (forward === undefined) throw new HelmError('not_found', `forwarding ${forwardId} missing`, 404, { forwardId })
+    if (forward === undefined) throw new HelmError('not_found', `forwarding session ${forwardId} not found`, 404, { forwardId })
     await forward.stop('explicit')
   }
 
-  /** close all forwarding (host close / dispose). */
+  /** Close all forwarding sessions (host shutdown / dispose). */
   async close(): Promise<void> {
     this.#closed = true
     await Promise.allSettled([...this.#forwards.values()].map((f) => f.stop('service_closed')))

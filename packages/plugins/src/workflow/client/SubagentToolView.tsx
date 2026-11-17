@@ -28,6 +28,7 @@ import {
   isLatestSubagentCallForTarget,
   parentToolSummaryOf,
   parseSubagentExecutionInfo,
+  resolveExternalSubagentTaskTitle,
   resolveRunElapsedMs,
   resolveSubagentConversationId,
   resolveSubagentElapsedMs,
@@ -44,7 +45,6 @@ import {
   TRACE_EXPAND_DETAILS,
   TRACE_EXTERNAL_TOOL_NAME,
   TRACE_RESUMED_BELOW,
-  TRACE_SUBAGENT_CALL,
   TRACE_SUBAGENT_TOOL_NAME,
   traceSubagentWithId,
   traceOpenChildLabel,
@@ -184,8 +184,8 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
 
   const taskTitle =
     childId !== undefined
-      ? resolveSubagentTaskTitle(childSummary, childId, parentToolSummary, backgroundRun)
-      : cleanInlineMarkdown(rawPrompt ?? backgroundRun?.name ?? execMeta?.executionId ?? resolveLocalizedText(TRACE_SUBAGENT_CALL, locale))
+      ? resolveSubagentTaskTitle(childSummary, childId, parentToolSummary, backgroundRun, childConv.detail?.entries)
+      : resolveExternalSubagentTaskTitle(parentToolSummary, rawPrompt, backgroundRun)
 
   const fallbackStartedAt = parentToolSummary.startedAt
   const elapsedMs = useMemo(() => {
@@ -233,13 +233,16 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
   const canOpenWorkbenchRun = !canOpenChildDrawer && targetWorkbenchRunId !== undefined
   const hasErrorText = props.status === 'error' && resultText !== undefined && resultText.trim() !== ''
 
-  const baseTitle = taskTitle ?? resolveLocalizedText(TRACE_SUBAGENT_CALL, locale)
-  const displaySummary =
+  const errorFirstLine =
     hasErrorText && resultText !== undefined
-      ? `${baseTitle} · ${cleanInlineMarkdown(resultText.split(/\r?\n/, 1)[0] ?? '')}`
-      : execMeta?.nodeId !== undefined
-        ? `${execMeta.nodeId} · ${baseTitle}`
-        : baseTitle
+      ? cleanInlineMarkdown(resultText.split(/\r?\n/, 1)[0] ?? '')
+      : isError && backgroundRun?.error !== undefined && backgroundRun.error.trim() !== ''
+        ? cleanInlineMarkdown(backgroundRun.error.split(/\r?\n/, 1)[0] ?? '')
+        : undefined
+  const summaryParts = [execMeta?.nodeId, errorFirstLine].filter(
+    (part): part is string => part !== undefined && part !== '',
+  )
+  const displaySummary = summaryParts.length > 0 ? summaryParts.join(' · ') : undefined
 
   const handleActivate = (): void => {
     if (canOpenChildDrawer && childId !== undefined) {
@@ -260,23 +263,37 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
       ? traceOpenWorkbenchRunLabel(targetWorkbenchRunId, locale)
       : resolveLocalizedText(detailsOpen ? TRACE_COLLAPSE_DETAILS : TRACE_EXPAND_DETAILS, locale)
 
-  const toolName = childId !== undefined
-    ? traceSubagentWithId(childId, locale)
-    : execMeta?.executionId !== undefined
-      ? resolveLocalizedText(TRACE_EXTERNAL_TOOL_NAME, locale)
-      : resolveLocalizedText(TRACE_SUBAGENT_TOOL_NAME, locale)
+  const primaryName =
+    childId !== undefined
+      ? (taskTitle ?? traceSubagentWithId(childId, locale))
+      : (taskTitle ??
+          (execMeta?.executionId !== undefined
+            ? resolveLocalizedText(TRACE_EXTERNAL_TOOL_NAME, locale)
+            : resolveLocalizedText(TRACE_SUBAGENT_TOOL_NAME, locale)))
+  const idTag =
+    childId !== undefined
+      ? (taskTitle !== undefined ? `#${childId}` : undefined)
+      : execMeta?.executionId
+  const roleBadge =
+    childId === undefined && taskTitle !== undefined
+      ? resolveLocalizedText(
+          execMeta?.executionId !== undefined ? TRACE_EXTERNAL_TOOL_NAME : TRACE_SUBAGENT_TOOL_NAME,
+          locale,
+        )
+      : undefined
   const profileBadge =
     childId !== undefined && childSummary?.profileId !== undefined && childSummary.profileId !== ''
       ? `@${childSummary.profileId}`
       : undefined
   const worktreeBranch = execMeta?.worktree?.branch
+  const ariaTitle = [primaryName, idTag, displaySummary].filter(Boolean).join(' ')
 
   return (
     <div className="trace-entry">
       <button
         type="button"
         className={`trace-row workflow-trace-row-btn${isError ? ' trace-row-error' : ''}`}
-        aria-label={`${toolName} ${displaySummary} — ${labelTarget}`}
+        aria-label={`${ariaTitle} — ${labelTarget}`}
         aria-expanded={!canOpenChildDrawer && !canOpenWorkbenchRun ? detailsOpen : undefined}
         aria-controls={!canOpenChildDrawer && !canOpenWorkbenchRun ? detailsId : undefined}
         onClick={handleActivate}
@@ -287,13 +304,21 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
             size={12}
             className={isWorking ? SPIN : undefined}
           />
-          <span className="trace-tool-name">{toolName}</span>
+          <span className="trace-tool-name" title={primaryName}>{primaryName}</span>
+          {idTag !== undefined ? (
+            <span className="workflow-trace-id tabular-nums">{idTag}</span>
+          ) : null}
+          {roleBadge !== undefined ? (
+            <span className="badge badge-neutral workflow-trace-badge">{roleBadge}</span>
+          ) : null}
           {profileBadge !== undefined ? (
             <span className="badge badge-neutral workflow-trace-badge">{profileBadge}</span>
           ) : null}
-          <span className={`trace-tool-summary${isError ? ' workflow-trace-error' : ''}`} title={displaySummary}>
-            {displaySummary}
-          </span>
+          {displaySummary !== undefined ? (
+            <span className={`trace-tool-summary${isError ? ' workflow-trace-error' : ''}`} title={displaySummary}>
+              {displaySummary}
+            </span>
+          ) : null}
         </span>
         <span className="trace-row-right workflow-trace-right">
           {!isLatest ? (

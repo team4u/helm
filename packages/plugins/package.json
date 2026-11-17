@@ -83,7 +83,6 @@
     "@earendil-works/pi-durable": "1.5.2",
     "@helm/protocol": "workspace:*",
     "cron-parser": "^5.10.4",
-    "mermaid": "^12.2.0",
     "typebox": "^1.0.0"
   },
   "devDependencies": {
@@ -93,6 +92,7 @@
     "@helm/plugin-client": "workspace:*",
     "@helm/test-kit": "workspace:*",
     "@types/react": "^19.0.0",
-    "lucide-react": "^1.66.0"
+    "lucide-react": "^1.66.0",
+    "mermaid": "^12.2.0"
   }
 }

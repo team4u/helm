@@ -2,13 +2,24 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ConversationSummary } from '@helm/protocol/browser'
 import { resolveLocalizedText } from '@helm/protocol/browser'
 import { HelmIcon } from '@helm/plugin-client'
-import { useHelmStore } from '../lib/store-context.js'
+import {
+  useAuthConnection,
+  useConversations,
+  useGroupedUi,
+  useLocationTargets,
+  usePendingAsks,
+  usePluginDocsState,
+  usePlugins,
+  useProfilesSlice,
+  useStoreActions,
+  useThemePreferencesState,
+} from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { LocaleMenuButton } from '../ui/LocaleMenuButton.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
-import { isSameResolvedTarget, resolveTargetString, CENTER_TARGETS, spaceForTarget, type HelmStoreValue, type SidebarSpace } from '../lib/types.js'
+import { isSameResolvedTarget, resolveTargetString, CENTER_TARGETS, spaceForTarget, type SidebarSpace } from '../lib/types.js'
 import { readBrowserNotificationPermission } from '../lib/browser-notification.js'
 import { formatModShortcut } from './shortcuts-model.js'
 import {
@@ -18,6 +29,7 @@ import {
   isConversationArchived,
   presenceNavClassSuffix,
   resolveSidebarTargetPresence,
+  type SidebarStoreView,
   type SidebarTargetPresence,
 } from './sidebar-model.js'
 import {
@@ -37,7 +49,7 @@ import {
 } from './SidebarPrimitives.js'
 
 /** 插件动态会话分组区（sidebar.section）：filterTag 分组通用渲染，支持 collapsible / defaultCollapsed。 */
-function SidebarSectionGroups({ store, background }: { store: HelmStoreValue; background: ConversationBackgroundIndex }) {
+function SidebarSectionGroups({ store, background }: { store: SidebarStoreView; background: ConversationBackgroundIndex }) {
   const { t } = useWebLocale()
   const sections = store.groupedUi.sidebarSections.filter((s) => s.spec.filterTag)
   // 纯内容型 section（无 filterTag，但声明了 client 内容）：渲染内容本身，
@@ -80,7 +92,7 @@ function ConversationRow({
   const { t } = useWebLocale()
   return (
     <div
-      className={`nav-item${presenceNavClassSuffix(presence)}`}
+      className={`nav-item sidebar-conversation-row${presenceNavClassSuffix(presence)}`}
       style={{ minHeight: 30, opacity: 1 }}
     >
       <button
@@ -111,8 +123,8 @@ function SidebarSectionGroup({
   section,
   background,
 }: {
-  store: HelmStoreValue
-  section: HelmStoreValue['groupedUi']['sidebarSections'][number]
+  store: SidebarStoreView
+  section: SidebarStoreView['groupedUi']['sidebarSections'][number]
   background: ConversationBackgroundIndex
 }) {
   const { locale, t } = useWebLocale()
@@ -174,7 +186,7 @@ function SidebarSectionGroup({
 }
 
 /** 独立「视图」分组：screen: 导航项 + 无导航 target 的自定义客户端侧栏组件。 */
-function ViewNavGroup({ store }: { store: HelmStoreValue }) {
+function ViewNavGroup({ store }: { store: SidebarStoreView }) {
   const { locale, t } = useWebLocale()
   const viewItems = useMemo(
     () => extractSidebarViews(store.groupedUi.sidebarItems, store.conversations, locale),
@@ -277,28 +289,36 @@ const SPACE_LABEL_KEYS: Record<
  * 系统中心入口收敛到「设置」空间内的纵向列表。
  */
 function ActivityRail({
-  store,
+  sseConnected,
+  theme,
+  themePreference,
+  onToggleTheme,
+  onToggleSidebarCollapsed,
   space,
   onOpenSpace,
 }: {
-  store: HelmStoreValue
+  sseConnected: boolean
+  theme: 'dark' | 'light'
+  themePreference: 'system' | 'light' | 'dark'
+  onToggleTheme: () => void
+  onToggleSidebarCollapsed?: () => void
   space: SidebarSpace
   onOpenSpace: (space: SidebarSpace) => void
 }) {
   const { t } = useWebLocale()
   const expandWithShortcut = t('shell.sidebar.expandNavWithShortcut', { shortcut: formatModShortcut('B') })
   const themeTooltip =
-    store.themePreference === 'system'
+    themePreference === 'system'
       ? t('shell.auth.themeSystem', {
-          current: t(store.theme === 'dark' ? 'shell.theme.currentDark' : 'shell.theme.currentLight'),
+          current: t(theme === 'dark' ? 'shell.theme.currentDark' : 'shell.theme.currentLight'),
         })
-      : store.themePreference === 'light'
+      : themePreference === 'light'
         ? t('shell.auth.themeLight')
         : t('shell.auth.themeDark')
   const themeAriaLabel =
-    store.themePreference === 'system'
+    themePreference === 'system'
       ? t('shell.theme.system')
-      : store.themePreference === 'light'
+      : themePreference === 'light'
         ? t('shell.theme.light')
         : t('shell.theme.dark')
 
@@ -306,7 +326,7 @@ function ActivityRail({
     <nav className="activity-rail" aria-label={t('shell.sidebar.mainNavigation')}>
       <div className="activity-rail-brand" title="Helm">
         <HelmIcon name="layers" size={17} />
-        <StatusDot connected={store.sseConnected} />
+        <StatusDot connected={sseConnected} />
       </div>
       <Tooltip content={expandWithShortcut} side="right">
         <button
@@ -314,7 +334,7 @@ function ActivityRail({
           className="rail-btn desktop-sidebar-expand-btn"
           title={expandWithShortcut}
           aria-label={t('shell.sidebar.expandNav')}
-          onClick={() => store.toggleSidebarCollapsed?.()}
+          onClick={() => onToggleSidebarCollapsed?.()}
         >
           <HelmIcon name="chevron-right" size={16} />
         </button>
@@ -346,13 +366,13 @@ function ActivityRail({
             className="btn btn-ghost btn-sm sidebar-theme-toggle"
             title={themeTooltip}
             aria-label={themeAriaLabel}
-            onClick={store.toggleTheme}
+            onClick={onToggleTheme}
           >
             <HelmIcon
               name={
-                store.themePreference === 'system'
+                themePreference === 'system'
                   ? 'monitor'
-                  : store.themePreference === 'light'
+                  : themePreference === 'light'
                     ? 'sun'
                     : 'moon'
               }
@@ -367,7 +387,7 @@ function ActivityRail({
 
 /** 设置空间导航：系统中心纵向列表，行结构与智能体站位行同构
  * （nav-item-main 图标文本），保证两个空间的左缘视觉统一。 */
-function SettingsNavGroup({ store, onNavigate }: { store: HelmStoreValue; onNavigate?: () => void }) {
+function SettingsNavGroup({ store, onNavigate }: { store: SidebarStoreView; onNavigate?: () => void }) {
   const { t } = useWebLocale()
   return (
     <div className="sidebar-group settings-nav">
@@ -400,11 +420,59 @@ function SettingsNavGroup({ store, onNavigate }: { store: HelmStoreValue; onNavi
 }
 
 export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
-  const store = useHelmStore()
+  const { authenticated, sseConnected } = useAuthConnection()
+  const { theme, themePreference, locale, quietNotifyEnabled } = useThemePreferencesState()
+  const { primaryTarget, splitTarget, focusedPanel } = useLocationTargets()
+  const groupedUi = useGroupedUi()
+  const plugins = usePlugins()
+  const conversations = useConversations()
+  const pluginDocs = usePluginDocsState()
+  const pendingAsks = usePendingAsks()
+  const { profiles } = useProfilesSlice()
+  const {
+    openTarget,
+    pushNotice,
+    ensurePluginDoc,
+    openSpace,
+    setQuietNotify,
+    setActiveModal,
+    toggleSidebarCollapsed,
+    toggleTheme,
+  } = useStoreActions()
   const { t } = useWebLocale()
-  // 侧栏空间由主屏目标唯一推导（不进 URL）；Rail 点击经 store.openSpace 直接导航
+
+  const sidebarStore = useMemo<SidebarStoreView>(
+    () => ({
+      primaryTarget,
+      splitTarget,
+      focusedPanel,
+      conversations,
+      profiles,
+      plugins,
+      groupedUi,
+      pendingAsks,
+      locale,
+      openTarget,
+      pushNotice,
+    }),
+    [
+      primaryTarget,
+      splitTarget,
+      focusedPanel,
+      conversations,
+      profiles,
+      plugins,
+      groupedUi,
+      pendingAsks,
+      locale,
+      openTarget,
+      pushNotice,
+    ],
+  )
+
+  // 侧栏空间由主屏目标唯一推导（不进 URL）；Rail 点击经 openSpace 直接导航
   // 该空间最近的主舞台目标，URL 即该空间真实锚点，刷新/前进/后退天然可还原。
-  const space = spaceForTarget(store.primaryTarget)
+  const space = spaceForTarget(primaryTarget)
 
   // 后台在途摘要（纯推导，零插件 ID 特判）：workbench.panel badge 契约 → 按会话
   // 索引；badge doc 的按需加载在下方 effect（纯函数内不做副作用）。插件停用后
@@ -412,17 +480,16 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
   const background = useMemo(
     () =>
       summarizeConversationBackgroundActivity({
-        panels: store.groupedUi.workbenchPanels,
-        conversations: store.conversations,
-        pluginDocs: store.pluginDocs,
+        panels: groupedUi.workbenchPanels,
+        conversations,
+        pluginDocs,
       }),
-    [store.groupedUi.workbenchPanels, store.conversations, store.pluginDocs],
+    [groupedUi.workbenchPanels, conversations, pluginDocs],
   )
   const badgeDocs = useMemo(
-    () => collectBackgroundBadgeDocs(store.groupedUi.workbenchPanels, store.conversations),
-    [store.groupedUi.workbenchPanels, store.conversations],
+    () => collectBackgroundBadgeDocs(groupedUi.workbenchPanels, conversations),
+    [groupedUi.workbenchPanels, conversations],
   )
-  const { authenticated, ensurePluginDoc } = store
   useEffect(() => {
     if (!authenticated) return
     for (const ref of badgeDocs) void ensurePluginDoc(ref.pluginId, ref.doc)
@@ -430,7 +497,7 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
 
   // 后台浏览器通知开关：权限现场读取（浏览器设置可随时收回），
   // 偏好开而权限未授予时如实提示，绝不静默装作已开启。
-  const quietNotifyTooltip = !store.quietNotifyEnabled
+  const quietNotifyTooltip = !quietNotifyEnabled
     ? t('shell.quietNotify.off')
     : readBrowserNotificationPermission() !== 'granted'
       ? t('shell.quietNotify.denied')
@@ -451,10 +518,14 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
           channel); closing here would whisk the user to the first target before they see the menu.
       The desktop sidebar is persistent; behavior unchanged. */}
       <ActivityRail
-        store={store}
+        sseConnected={sseConnected}
+        theme={theme}
+        themePreference={themePreference}
+        onToggleTheme={toggleTheme}
+        onToggleSidebarCollapsed={toggleSidebarCollapsed}
         space={space}
         onOpenSpace={(nextSpace) => {
-          store.openSpace(nextSpace)
+          openSpace(nextSpace)
         }}
       />
       <div className="sidebar-context">
@@ -473,12 +544,12 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
                 className="btn btn-sm btn-icon"
                 title={quietNotifyTooltip}
                 aria-label={quietNotifyTooltip}
-                aria-pressed={store.quietNotifyEnabled}
+                aria-pressed={quietNotifyEnabled}
                 onClick={() => {
-                  void store.setQuietNotify(!store.quietNotifyEnabled)
+                  void setQuietNotify(!quietNotifyEnabled)
                 }}
               >
-                <HelmIcon name={store.quietNotifyEnabled && readBrowserNotificationPermission() === 'granted' ? 'bell' : 'bell-off'} size={13} />
+                <HelmIcon name={quietNotifyEnabled && readBrowserNotificationPermission() === 'granted' ? 'bell' : 'bell-off'} size={13} />
               </button>
             </Tooltip>
             <Tooltip content={t('shell.sidebar.openCommandPalette')} side="bottom">
@@ -487,7 +558,7 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
                 className="btn btn-sm btn-icon"
                 title={t('shell.sidebar.openCommandPalette')}
                 aria-label={t('shell.sidebar.openCommandPalette')}
-                onClick={() => store.setActiveModal({ kind: 'command-palette' })}
+                onClick={() => setActiveModal({ kind: 'command-palette' })}
               >
                 <HelmIcon name="search" size={13} />
               </button>
@@ -498,7 +569,7 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
                 className="btn btn-sm btn-icon desktop-sidebar-collapse-btn"
                 title={collapseWithShortcut}
                 aria-label={t('shell.sidebar.collapseNav')}
-                onClick={() => store.toggleSidebarCollapsed?.()}
+                onClick={() => toggleSidebarCollapsed?.()}
               >
                 <HelmIcon name="chevron-left" size={13} />
               </button>
@@ -522,15 +593,15 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
         <div className="sidebar-scroll">
           {space === 'conversations' ? (
             <>
-              <PendingAsksPanel store={store} />
-              <AgentStandingsGroup store={store} background={background} onNavigate={onClose} />
-              <SidebarSectionGroups store={store} background={background} />
+              <PendingAsksPanel store={sidebarStore} />
+              <AgentStandingsGroup store={sidebarStore} background={background} onNavigate={onClose} />
+              <SidebarSectionGroups store={sidebarStore} background={background} />
               <ArchivedConversationsGroup background={background} onNavigate={onClose} />
             </>
           ) : space === 'views' ? (
-            <ViewNavGroup store={store} />
+            <ViewNavGroup store={sidebarStore} />
           ) : (
-            <SettingsNavGroup store={store} onNavigate={onClose} />
+            <SettingsNavGroup store={sidebarStore} onNavigate={onClose} />
           )}
         </div>
       </div>

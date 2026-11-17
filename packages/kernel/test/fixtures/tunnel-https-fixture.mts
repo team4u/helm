@@ -1,12 +1,11 @@
 /**
- * HTTPS tunnel fixture(two phase child process script):
- * - phase=ca: generate test CA and service certificate, output JSON { caCert, key, cert } path;
- * - phase=request(env HELM_TUNNEL_TLS_KEY/CERT/CA): with NODE_EXTRA_CA_CERTS
- *   inject trust chain (process at startup takes effect) run real HTTPS tunnel request, output
- *   { ok, status, body }.
+ * HTTPS tunnel fixture (two-phase child process script):
+ * - phase=ca: generates a test CA and server certificate, emitting `{ caCert, key, cert }` JSON paths;
+ * - phase=request (env HELM_TUNNEL_TLS_KEY/CERT/CA): runs a real HTTPS tunnel request using `NODE_EXTRA_CA_CERTS`
+ *   to trust the test CA (evaluated at process startup), emitting `{ ok, status, body }`.
  *
- * Node only in process at startup read NODE_EXTRA_CA_CERTS, therefore two phase each start a process;
- * client certificate validate away Node by default trust chain + inject CA, never fabricate skip validate.
+ * Node only reads `NODE_EXTRA_CA_CERTS` at startup, so the two phases run in separate processes;
+ * client verification uses Node's default trust store + injected CA rather than bypassing TLS validation.
  */
 import http from 'node:http'
 import https from 'node:https'

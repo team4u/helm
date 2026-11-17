@@ -12,6 +12,7 @@ import { test, before, after } from 'node:test'
 import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { gunzipSync } from 'node:zlib'
 import {
   AuthService,
@@ -20,13 +21,24 @@ import {
   ProviderService,
   SkillService,
 } from '../../kernel/src/services/index.js'
-import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
+import { PluginHost, doctorPluginDir, loadExternalPlugins, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createMermaidPlugin } from '../src/mermaid.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { createHubHandler } from '../../kernel/src/http/index.js'
 import type { EventHub, KernelRuntimeLike} from '../../kernel/src/http/index.js'
-import { compilePluginClientModule, createPluginBuildProvider, installNodeChunkBridge } from '@helm/plugin-build'
-import { HelmError, type ConversationSummary } from '@helm/protocol'
+import {
+  buildPluginClientBundleDir,
+  compilePluginClientModule,
+  createPluginBuildProvider,
+  installNodeChunkBridge,
+} from '@helm/plugin-build'
+import {
+  HelmError,
+  PREBUILT_CLIENT_DIR_NAME,
+  PREBUILT_CLIENT_MANIFEST_FILE,
+  prebuiltChunkFileName,
+  type ConversationSummary,
+} from '@helm/protocol'
 import { createMermaidLoader } from '../src/mermaid/client/mermaid-loader.js'
 import { MemoryDocStore, deferred, makeConversationSummary, waitFor } from './helpers/plugin-test-env.js'
 
@@ -212,7 +224,7 @@ test('插件 CSS 本地 @import 正常合并（跨文件依赖），远程 @impo
   await writeFile(join(remoteRoot, 'index.tsx'), "import './styles.css'\nexport function Widget() { return 'w' }\n")
   await assert.rejects(
     () => compilePluginClientModule('test:css-remote', remoteRoot, 'index.tsx', dataDir),
-    (err: unknown) => err instanceof HelmError && err.code === 'client_compile_failed' && /far process @import/.test(err.message),
+    (err: unknown) => err instanceof HelmError && err.code === 'client_compile_failed' && /remote @import/.test(err.message),
   )
 })
 
@@ -1582,6 +1594,332 @@ test('主模块缓存命中不预读全部 chunk：磁盘路径惰性读盘，ch
       assert.equal(await mod.loadLazy(), 'lazy-ok', '磁盘缓存路径产物端到端可执行')
     } finally {
       g.__helm_chunk_share = shareBefore
+    }
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
+  }
+})
+
+test('双轨 prebuiltClientDir：PluginHost 无 buildProvider 直接服务预编译主模块、chunk、CSS、gzip 与 stale hash', { timeout: 60_000 }, async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'helm-prebuilt-host-'))
+  try {
+    const srcRoot = join(scratch, 'client-src')
+    const outDir = join(scratch, PREBUILT_CLIENT_DIR_NAME)
+    await mkdir(srcRoot, { recursive: true })
+    await writeFile(join(srcRoot, 'styles.css'), '.prebuilt-badge { font-weight: 600 }\n')
+    await writeFile(join(srcRoot, 'lazy.ts'), 'export const answer = () => "prebuilt-chunk-ok"\n')
+    await writeFile(
+      join(srcRoot, 'index.tsx'),
+      "import './styles.css'\nexport function PrebuiltPanel() { return 'panel' }\nexport const loadChunk = async () => (await import('./lazy')).answer()\n",
+    )
+
+    const built = await buildPluginClientBundleDir({
+      pluginId: 'test:prebuilt-only',
+      clientRoot: srcRoot,
+      outDir,
+      modules: ['index.tsx'],
+    })
+    const expectedHash = built.manifest.modules['index.tsx']!.contentHash
+    const chunkNames = built.manifest.modules['index.tsx']!.chunks ?? []
+    assert.ok(chunkNames.length > 0, 'prebuild must emit lazy chunk')
+
+    // Remove source files completely and spin up a PluginHost with NO buildProvider.
+    await rm(srcRoot, { recursive: true, force: true })
+    const hostDir = join(scratch, 'host-data')
+    await mkdir(hostDir, { recursive: true })
+    const host = new PluginHost({
+      dataDir: hostDir,
+      docs: new MemoryDocStore(),
+      host: makeBackend(),
+      // Intentionally no buildProvider!
+    })
+    try {
+      await host.register({
+        id: 'test:prebuilt-only',
+        name: 'Prebuilt Only',
+        version: '0.1.0',
+        prebuiltClientDir: outDir,
+        definePlugin(ctx) {
+          ctx.ui.screen({
+            id: 'main',
+            label: 'Main',
+            client: { module: 'index.tsx', export: 'PrebuiltPanel' },
+          })
+        },
+      }, { enabled: true })
+
+      const summary = host.list().find((p) => p.id === 'test:prebuilt-only')
+      assert.deepEqual(summary?.clientHashes, { 'index.tsx': expectedHash })
+
+      const mainBundle = await host.getClientModule('test:prebuilt-only', 'index.tsx', { hash: expectedHash })
+      assert.equal(mainBundle.contentHash, expectedHash)
+      assert.match(mainBundle.code, /PrebuiltPanel/)
+      assert.match(mainBundle.code, /prebuilt-badge/)
+      assert.ok(mainBundle.gzipped && mainBundle.gzipped.length > 0)
+      assert.equal(gunzipSync(mainBundle.gzipped!).toString('utf-8'), mainBundle.code)
+
+      const chunkBundle = await host.getClientModule('test:prebuilt-only', 'index.tsx', {
+        chunk: chunkNames[0]!,
+        hash: expectedHash,
+      })
+      assert.match(chunkBundle.code, /prebuilt-chunk-ok/)
+      assert.ok(chunkBundle.gzipped && chunkBundle.gzipped.length > 0)
+
+      await assert.rejects(
+        () => host.getClientModule('test:prebuilt-only', 'index.tsx', { hash: 'stale-hash' }),
+        (err: unknown) => err instanceof HelmError && err.code === 'client_module_stale' && err.status === 409,
+      )
+      await assert.rejects(
+        () => host.getClientModule('test:prebuilt-only', 'index.tsx', { chunk: 'missing.js', hash: 'stale-hash' }),
+        (err: unknown) => err instanceof HelmError && err.code === 'client_chunk_stale' && err.status === 409,
+      )
+      await assert.rejects(
+        () => host.getClientModule('test:prebuilt-only', 'index.tsx', { chunk: 'missing.js', hash: expectedHash }),
+        (err: unknown) => err instanceof HelmError && err.code === 'client_chunk_not_found' && err.status === 404,
+      )
+    } finally {
+      await host.dispose()
+    }
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
+  }
+})
+
+test('损坏/缺失/符号链接逃逸的 dist-client 必须显式报错，绝不静默降级回 clientRoot', { timeout: 60_000 }, async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'helm-prebuilt-strict-'))
+  try {
+    const srcRoot = join(scratch, 'client-src')
+    const outDir = join(scratch, PREBUILT_CLIENT_DIR_NAME)
+    await mkdir(srcRoot, { recursive: true })
+    await writeFile(join(srcRoot, 'lazy.ts'), 'export const val = 1\n')
+    await writeFile(
+      join(srcRoot, 'index.tsx'),
+      'export function GoodExport() { return "ok" }\nexport const load = () => import("./lazy")\n',
+    )
+    const built = await buildPluginClientBundleDir({
+      pluginId: 'test:strict-prebuilt',
+      clientRoot: srcRoot,
+      outDir,
+      modules: ['index.tsx'],
+    })
+
+    const makeHostWithProvider = async (suffix: string) => {
+      const dir = join(scratch, suffix)
+      await mkdir(dir, { recursive: true })
+      return new PluginHost({
+        dataDir: dir,
+        docs: new MemoryDocStore(),
+        host: makeBackend(),
+        buildProvider: createPluginBuildProvider(),
+      })
+    }
+
+    // 1. Export not present in prebuilt manifest -> rejects with invalid_client_export (no fallback to buildProvider).
+    const h1 = await makeHostWithProvider('h1')
+    try {
+      await assert.rejects(
+        () => h1.register({
+          id: 'test:strict-prebuilt',
+          name: 'Strict',
+          version: '0.1.0',
+          clientRoot: srcRoot,
+          prebuiltClientDir: outDir,
+          definePlugin(ctx) {
+            ctx.ui.screen({ id: 's', label: 'S', client: { module: 'index.tsx', export: 'MissingExport' } })
+          },
+        }),
+        (err: unknown) => err instanceof HelmError && err.code === 'invalid_client_export',
+      )
+    } finally {
+      await h1.dispose()
+    }
+
+    // 2. Deleted chunk file -> rejects with prebuilt_client_invalid (no fallback to buildProvider).
+    const entry = built.manifest.modules['index.tsx']!
+    const chunkRel = prebuiltChunkFileName(entry.entryFile, entry.chunks![0]!)
+    await rm(join(outDir, chunkRel))
+    const h2 = await makeHostWithProvider('h2')
+    try {
+      await assert.rejects(
+        () => h2.register({
+          id: 'test:strict-prebuilt',
+          name: 'Strict',
+          version: '0.1.0',
+          clientRoot: srcRoot,
+          prebuiltClientDir: outDir,
+          definePlugin(ctx) {
+            ctx.ui.screen({ id: 's', label: 'S', client: { module: 'index.tsx', export: 'GoodExport' } })
+          },
+        }),
+        (err: unknown) => err instanceof HelmError && err.code === 'prebuilt_client_invalid',
+      )
+    } finally {
+      await h2.dispose()
+    }
+
+    // 3. Symlink escape on entryFile -> rejects with client_module_out_of_root.
+    const outDirSym = join(scratch, 'dist-client-sym')
+    await buildPluginClientBundleDir({
+      pluginId: 'test:strict-sym',
+      clientRoot: srcRoot,
+      outDir: outDirSym,
+      modules: ['index.tsx'],
+    })
+    const outsideFile = join(scratch, 'outside-secret.mjs')
+    await writeFile(outsideFile, 'export function GoodExport() { return "evil" }\n')
+    const symEntry = JSON.parse(await (await import('node:fs/promises')).readFile(join(outDirSym, PREBUILT_CLIENT_MANIFEST_FILE), 'utf8'))
+    const entryRel = symEntry.modules['index.tsx'].entryFile
+    await rm(join(outDirSym, entryRel))
+    await symlink(outsideFile, join(outDirSym, entryRel))
+    const h3 = await makeHostWithProvider('h3')
+    try {
+      await assert.rejects(
+        () => h3.register({
+          id: 'test:strict-sym',
+          name: 'Strict Sym',
+          version: '0.1.0',
+          clientRoot: srcRoot,
+          prebuiltClientDir: outDirSym,
+          definePlugin(ctx) {
+            ctx.ui.screen({ id: 's', label: 'S', client: { module: 'index.tsx', export: 'GoodExport' } })
+          },
+        }),
+        (err: unknown) => err instanceof HelmError && err.code === 'client_module_out_of_root',
+      )
+    } finally {
+      await h3.dispose()
+    }
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
+  }
+})
+
+test('外部插件 dist-client-only 分发：无源码无 node_modules 无 buildProvider 下 doctor/load/enable/serve 全通', { timeout: 60_000 }, async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'helm-ext-prebuilt-'))
+  try {
+    const buildSrc = join(scratch, 'author-client')
+    await mkdir(buildSrc, { recursive: true })
+    await writeFile(
+      join(buildSrc, 'index.tsx'),
+      'export function ExtScreen() { return "ext-prebuilt" }\n',
+    )
+
+    const pluginDir = join(scratch, 'data', 'plugins', 'my-prebuilt-ext')
+    await mkdir(pluginDir, { recursive: true })
+    await writeFile(
+      join(pluginDir, 'plugin.json'),
+      JSON.stringify({ id: 'my-prebuilt-ext', main: 'index.mjs', clientDist: 'custom-dist' }, null, 2),
+    )
+    await writeFile(
+      join(pluginDir, 'index.mjs'),
+      `export default {
+        id: 'my-prebuilt-ext',
+        name: 'My Prebuilt Ext',
+        version: '0.1.0',
+        definePlugin(ctx) {
+          ctx.ui.screen({ id: 'home', label: 'Home', client: { module: 'index.tsx', export: 'ExtScreen' } })
+        },
+      }\n`,
+    )
+    await buildPluginClientBundleDir({
+      pluginId: 'my-prebuilt-ext',
+      clientRoot: buildSrc,
+      outDir: join(pluginDir, 'custom-dist'),
+      modules: ['index.tsx'],
+    })
+
+    // Doctor WITHOUT buildProvider succeeds!
+    const okReport = await doctorPluginDir(pluginDir, {})
+    assert.equal(okReport.ok, true, `expected doctor ok without buildProvider, got: ${JSON.stringify(okReport)}`)
+
+    // Load and enable on PluginHost WITHOUT buildProvider!
+    const hostDataDir = join(scratch, 'data')
+    const host = new PluginHost({
+      dataDir: hostDataDir,
+      docs: new MemoryDocStore(),
+      host: makeBackend(),
+    })
+    try {
+      await loadExternalPlugins(hostDataDir, host)
+      await host.enable('my-prebuilt-ext')
+      const mod = await host.getClientModule('my-prebuilt-ext', 'index.tsx')
+      assert.match(mod.code, /ExtScreen/)
+    } finally {
+      await host.dispose()
+    }
+
+    // Escaping clientDist symlink must fail doctor explicitly.
+    const outsideDist = join(scratch, 'outside-dist')
+    await mkdir(outsideDist, { recursive: true })
+    await writeFile(join(outsideDist, PREBUILT_CLIENT_MANIFEST_FILE), JSON.stringify({ version: 1, modules: {} }))
+    const escapePluginDir = join(scratch, 'escape-ext')
+    await mkdir(escapePluginDir, { recursive: true })
+    await writeFile(join(escapePluginDir, 'index.mjs'), 'export default { id: "escape-ext", name: "E", version: "0.1.0", definePlugin() {} }\n')
+    await symlink(outsideDist, join(escapePluginDir, PREBUILT_CLIENT_DIR_NAME))
+    const escapeReport = await doctorPluginDir(escapePluginDir, {})
+    assert.equal(escapeReport.ok, false)
+    assert.ok(escapeReport.checks.some((c) => c.error?.code === 'invalid_plugin_definition'))
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
+  }
+})
+
+test('builtin:mermaid 构建产物在无 node_modules/mermaid、无 client/、无 buildProvider 的隔离目录可无依赖运行', { timeout: 60_000 }, async () => {
+  // Dev source factory uses clientRoot + npmDependencies (source live-compile track).
+  const devDef = createMermaidPlugin()
+  assert.equal(devDef.prebuiltClientDir, undefined)
+  assert.ok(devDef.clientRoot && devDef.npmDependencies?.mermaid)
+
+  const scratch = await mkdtemp(join(tmpdir(), 'helm-mermaid-dist-iso-'))
+  try {
+    // Stage ONLY dist/mermaid.js + dist/asset-paths.js + dist/mermaid/dist-client (no node_modules/mermaid, no client/).
+    const { cp } = await import('node:fs/promises')
+    const pkgRoot = join(import.meta.dirname, '..')
+    const isoPkg = join(scratch, 'pkg')
+    const isoDist = join(isoPkg, 'dist')
+    await mkdir(join(isoDist, 'mermaid'), { recursive: true })
+    await mkdir(join(isoPkg, 'node_modules', '@helm'), { recursive: true })
+    await symlink(join(pkgRoot, '../protocol'), join(isoPkg, 'node_modules', '@helm', 'protocol'))
+    await writeFile(join(isoPkg, 'package.json'), JSON.stringify({ name: '@helm/plugins', type: 'module' }))
+    await cp(join(pkgRoot, 'dist', 'mermaid.js'), join(isoDist, 'mermaid.js'))
+    await cp(join(pkgRoot, 'dist', 'asset-paths.js'), join(isoDist, 'asset-paths.js'))
+    await cp(
+      join(pkgRoot, 'dist', 'mermaid', PREBUILT_CLIENT_DIR_NAME),
+      join(isoDist, 'mermaid', PREBUILT_CLIENT_DIR_NAME),
+      { recursive: true },
+    )
+
+    const mod = (await import(pathToFileURL(join(isoDist, 'mermaid.js')).href)) as {
+      createMermaidPlugin: typeof createMermaidPlugin
+    }
+    const distDef = mod.createMermaidPlugin()
+    assert.equal(distDef.clientRoot, undefined, 'isolated dist-client-only copy has no clientRoot')
+    assert.equal(distDef.npmDependencies, undefined, 'prebuilt dist-client must not require runtime npmDependencies')
+    assert.ok(distDef.prebuiltClientDir?.endsWith(PREBUILT_CLIENT_DIR_NAME))
+
+    const hostDir = join(scratch, 'host-data')
+    await mkdir(hostDir, { recursive: true })
+    const host = new PluginHost({
+      dataDir: hostDir,
+      docs: new MemoryDocStore(),
+      host: makeBackend(),
+      // No buildProvider!
+    })
+    try {
+      await host.register(distDef, { enabled: true })
+      const mainBundle = await host.getClientModule('builtin:mermaid', 'index.tsx')
+      assert.match(mainBundle.code, /MermaidCodeBlock/)
+      const chunkKeys = Object.keys(mainBundle.chunks ?? {})
+      assert.ok(chunkKeys.length > 0, 'prebuilt mermaid must carry split diagram chunks')
+      const flowChunkName = chunkKeys.find((k) => k.includes('flowDiagram'))
+      assert.ok(flowChunkName, `expected flowDiagram chunk in ${chunkKeys.join(', ')}`)
+      const flowChunk = await host.getClientModule('builtin:mermaid', 'index.tsx', {
+        chunk: flowChunkName,
+        hash: mainBundle.contentHash,
+      })
+      assert.ok(flowChunk.code.length > 0)
+    } finally {
+      await host.dispose()
     }
   } finally {
     await rm(scratch, { recursive: true, force: true })

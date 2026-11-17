@@ -1,5 +1,6 @@
 /**
- * Hook pipeline scheduling coordinate tune: only for snapshot moment enabled and idle plugin dispatch, and record in-flight task and isolated error notify.
+ * Hook pipeline dispatch coordinator: targets only plugins that are enabled and idle at snapshot time,
+ * tracks in-flight tasks, and emits redacted warning notifications for isolated hook failures.
  */
 import {
   HelmError,
@@ -47,7 +48,7 @@ export async function dispatchPluginHook<K extends HookName>(
 ): Promise<HookResult<HookPayloadMap[K]>> {
   const pipeline = deps.pipelines.get(name);
   if (!pipeline) {
-    throw new HelmError('unknown_hook', `unknown hook mount point:${name}`, 400, { hook: name });
+    throw new HelmError('unknown_hook', `Unknown hook mount point: ${name}`, 400, { hook: name });
   }
   const participants = pipeline.entries().filter((h) => isHookActive(deps.plugins, h.pluginId));
   if (participants.length === 0) return { action: 'continue' };
@@ -79,7 +80,7 @@ export async function dispatchPluginHookAround(
 ): Promise<unknown> {
   const pipeline = deps.pipelines.get(name);
   if (!pipeline) {
-    throw new HelmError('unknown_hook', `unknown hook mount point:${name}`, 400, { hook: name });
+    throw new HelmError('unknown_hook', `Unknown hook mount point: ${name}`, 400, { hook: name });
   }
   const participants = pipeline.entries().filter((h) => isHookActive(deps.plugins, h.pluginId));
   const label = `hook:${name}`;

@@ -179,11 +179,12 @@ export const APP_EMPTY_HINT_NO_MATCH: LocalizedText = {
 export const APP_RESET_FILTERS: LocalizedText = { en: 'Reset filters', 'zh-CN': '重置筛选条件' }
 
 /** Description fallbacks when the plugin summary carries no description. */
-export function appDescriptionFromViews(labels: string[], locale: HelmLocale): string {
+export function appDescriptionFromViews(labels: readonly LocalizedText[], locale: HelmLocale): string {
+  const resolved = labels.map((label) => resolveLocalizedText(label, locale))
   return resolveLocalizedText(
     {
-      en: `Provides views: ${labels.join(', ')}.`,
-      'zh-CN': `提供 ${labels.join('、')} 视图。`,
+      en: `Provides views: ${resolved.join(', ')}.`,
+      'zh-CN': `提供 ${resolved.join('、')} 视图。`,
     },
     locale,
   )

@@ -104,6 +104,11 @@ export interface AgentSpawnRequest {
   /** 发起本次派生的父会话工具调用 ID（可选，供原生子会话登记实时关联）。 */
   parentToolCallId?: string
   prompt: string
+  /**
+   * 新建子会话的可选显示标题（经裁剪、脱敏并截断至 120 字符；为空或省略时沿用 `subagent <id>`；
+   * `resume` / `reattach` 场景忽略本字段，保留既有标题）。
+   */
+  title?: string
   /** 编排宿主分配的稳定调用标识，用于续接与取消。 */
   agentId?: string
   /** Profile ID 或 'herdr:<kind>' 外部运行时标识。 */
@@ -958,12 +963,19 @@ export interface PluginDefinition {
   dependencies?: ReadonlyArray<string>
   /**
    * 客户端源根目录（绝对路径，可选）：声明了 client.tsx 组件引用（UiSpecBase.client）
-   * 的插件必须提供。宿主只允许 ClientComponentRef.module 解析到该目录内的相对
-   * .ts/.tsx 源文件，编译产物按源内容（含本地依赖）hash 缓存；未声明时一切
-   * client 引用在注册边界拒绝（不允许无法编译的悬空引用）。由可信插件定义传入，
+   * 的插件在源码即时编译轨提供。宿主只允许 ClientComponentRef.module 解析到该目录内的相对
+   * .ts/.tsx 源文件，编译产物按源内容（含本地依赖）hash 缓存；未声明时且未提供
+   * prebuiltClientDir 时一切 client 引用在注册边界拒绝。由可信插件定义传入，
    * 不属于用户可配置面。
    */
   clientRoot?: string
+  /**
+   * 预编译客户端产物目录（绝对路径，可选，通常为 `<pluginDir>/dist-client`）：
+   * 存在时注册校验与运行时服务直接读取该目录下的 `manifest.json`、预编译入口 `.mjs`
+   * 及异步 chunk（含 `.gz`），零运行时 esbuild 编译、零运行时 `npmDependencies` 依赖，
+   * 即使未注入 `buildProvider` 亦可正常注册启用与提供前端模块。
+   */
+  prebuiltClientDir?: string
   /** 插件自带的受控 npm 依赖（说明符 -> 提供包的解析根）：解析根须为内核包根
    * （含锁定版本的 node_modules，内置插件声明）或外部插件自身目录（由清单
    * helm.clientDependencies / plugin.json clientDependencies 归一映射产生，见

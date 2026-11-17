@@ -29,7 +29,14 @@ import {
   readBrowserNotificationPermission,
   showBrowserNotification,
 } from '../lib/browser-notification.js'
-import { useHelmStore } from '../lib/store-context.js'
+import {
+  useAuthConnection,
+  useConversations,
+  useGroupedUi,
+  usePluginDocsState,
+  useStoreActions,
+  useThemePreferencesState,
+} from '../lib/store-context.js'
 import { collectBackgroundBadgeDocs, summarizeConversationBackgroundActivity } from './background-activity-model.js'
 import {
   COMPLETED_NOTIFICATION_TITLE,
@@ -187,14 +194,18 @@ function hasUnacknowledgedBlocked(
 }
 
 export function useQuietNotifier(): void {
-  const store = useHelmStore()
-  const { conversations, pluginDocs, groupedUi } = store
+  const conversations = useConversations()
+  const pluginDocs = usePluginDocsState()
+  const groupedUi = useGroupedUi()
+  const { authenticated, sseConnected } = useAuthConnection()
+  const { locale, quietNotifyEnabled } = useThemePreferencesState()
+  const { ensurePluginDoc, openTarget } = useStoreActions()
   const panels = groupedUi.workbenchPanels
 
   // 语言切换只更新 locale ref，不进任何回调/effect 依赖：badge doc 发现与订阅
   // 不因切换语言重跑，投递时刻（防抖计时器/重连复核回调）读取当前 locale，
   // 既不重连重新请求，也不让旧闭包投递旧语言。
-  const localeRef = useRef(store.locale)
+  const localeRef = useRef(locale)
   const translate = useCallback((text: LocalizedText) => resolveLocalizedText(text, localeRef.current), [])
 
   const background = useMemo(
@@ -206,7 +217,6 @@ export function useQuietNotifier(): void {
   // badge doc 自洽发现与按需加载（幂等去重由 ensurePluginDoc 保证）。当前启用
   // 面板所需 doc 只要不在 store 快照中就保持未知，包括插件重载清空后的窗口；
   // ensure 失败时 store 已明示 toast，未知持续到后续状态变化重试，绝不误报已完成。
-  const { authenticated, ensurePluginDoc, quietNotifyEnabled, sseConnected } = store
   useEffect(() => {
     if (!authenticated) return
     for (const ref of badgeDocs) void ensurePluginDoc(ref.pluginId, ref.doc)
@@ -230,7 +240,7 @@ export function useQuietNotifier(): void {
   // 放在 layout effect，避免并发 React 放弃 render 时泄漏未提交快照。
   const snapshotRef = useRef(snapshot)
   const conversationsRef = useRef(conversations)
-  const storeRef = useRef(store)
+  const flagsRef = useRef({ authenticated, quietNotifyEnabled, sseConnected })
   const stateRef = useRef<NotifierState>({
     trees: new Map(),
     handledBlockedWatermarks: new Map(),
@@ -243,8 +253,8 @@ export function useQuietNotifier(): void {
   useLayoutEffect(() => {
     snapshotRef.current = snapshot
     conversationsRef.current = conversations
-    storeRef.current = store
-    localeRef.current = store.locale
+    flagsRef.current = { authenticated, quietNotifyEnabled, sseConnected }
+    localeRef.current = locale
 
     const state = stateRef.current
     if (authenticated && quietNotifyEnabled) {
@@ -293,8 +303,8 @@ export function useQuietNotifier(): void {
     }
 
     settleCompletionRef.current = (rootId: number) => {
-      const currentStore = storeRef.current
-      if (!currentStore.authenticated || !currentStore.quietNotifyEnabled) return
+      const currentFlags = flagsRef.current
+      if (!currentFlags.authenticated || !currentFlags.quietNotifyEnabled) return
       const currentState = stateRef.current
       const cycle = currentState.trees.get(rootId)
       if (cycle === undefined || cycle.accumulatedConversationIds.size === 0) return
@@ -305,7 +315,7 @@ export function useQuietNotifier(): void {
         (treeSnap === undefined ||
           (treeSnap.activeConversationIds.size === 0 && treeSnap.blockedConversationIds.size === 0))
       if (!isTreeIdle) return
-      if (!currentStore.sseConnected) {
+      if (!currentFlags.sseConnected) {
         cycle.holdForReconnect = true
         return
       }
@@ -321,10 +331,10 @@ export function useQuietNotifier(): void {
       if (draft === null) return
       if (
         !shouldDeliverQuietNotification({
-          authenticated: currentStore.authenticated,
-          preferenceEnabled: currentStore.quietNotifyEnabled,
+          authenticated: currentFlags.authenticated,
+          preferenceEnabled: currentFlags.quietNotifyEnabled,
           permission: readBrowserNotificationPermission(),
-          connected: currentStore.sseConnected,
+          connected: currentFlags.sseConnected,
           pageActive: isPageActive(),
         })
       ) {
@@ -339,13 +349,13 @@ export function useQuietNotifier(): void {
         onClick:
           primaryConversationId === null
             ? undefined
-            : () => currentStore.openTarget({ kind: 'conversation', conversationId: primaryConversationId }),
+            : () => openTarget({ kind: 'conversation', conversationId: primaryConversationId }),
       })
     }
 
     settleBlockedRef.current = (rootId: number) => {
-      const currentStore = storeRef.current
-      if (!currentStore.authenticated || !currentStore.quietNotifyEnabled) return
+      const currentFlags = flagsRef.current
+      if (!currentFlags.authenticated || !currentFlags.quietNotifyEnabled) return
       const currentState = stateRef.current
       const cycle = currentState.trees.get(rootId)
       const treeSnap = snapshotRef.current.trees.get(rootId)
@@ -355,7 +365,7 @@ export function useQuietNotifier(): void {
         if (cycle !== undefined) cycle.blockedHoldForReconnect = false
         return
       }
-      if (!currentStore.sseConnected) {
+      if (!currentFlags.sseConnected) {
         ensureTreeCycle(currentState.trees, rootId).blockedHoldForReconnect = true
         return
       }
@@ -386,10 +396,10 @@ export function useQuietNotifier(): void {
       if (draft === null) return
       if (
         !shouldDeliverQuietNotification({
-          authenticated: currentStore.authenticated,
-          preferenceEnabled: currentStore.quietNotifyEnabled,
+          authenticated: currentFlags.authenticated,
+          preferenceEnabled: currentFlags.quietNotifyEnabled,
           permission: readBrowserNotificationPermission(),
-          connected: currentStore.sseConnected,
+          connected: currentFlags.sseConnected,
           pageActive: isPageActive(),
         })
       ) {
@@ -404,7 +414,7 @@ export function useQuietNotifier(): void {
         onClick:
           primaryConversationId === null
             ? undefined
-            : () => currentStore.openTarget({ kind: 'conversation', conversationId: primaryConversationId }),
+            : () => openTarget({ kind: 'conversation', conversationId: primaryConversationId }),
       })
     }
   })

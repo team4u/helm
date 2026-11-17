@@ -1,26 +1,27 @@
 #!/usr/bin/env node
 /**
- * Hub payload zero dependency start entry (follow payload directory dispatch,Node >= 24, without any npm dependency).
+ * Zero-dependency Hub payload launcher (ships inside the payload directory; Node >= 24, no npm deps).
  *
- * command:
- *   node start.mjs check   validate manifest/entries/checksums(strictly relative path), and by
- *                          dist  package.json dependencies from hub/kernel/plugins/
- *                          plugin-build/env-io/protocol/cli seven runtime entry one by one dependency do real parse (createRequire
- *                          - - and runtime Node parse semantics consistent;import.meta.resolve 
- *                          parent parameter in when before Node by default by ignore, unavailable at this), then measured
- *                          runtime capability:import node:sqlite, load esbuild and real
- *                          transform one segment JS(override plugin client compile link).check never
- *                          start Hub.
- *   node start.mjs start   dependency verify via after pull start hub entry (hub/dist/main.js), pass-through
- *                          environment variable and signal;web/dist store in and not explicit config when export
- *                          HELM_WEB_DIST_DIR(@helm/kernel via npm install enter
- *                          node_modules after its source code inside by default probe no longer hit payload layout,
- *                          by start explicit declaration, not silently fall back is without static hosting).
+ * Commands:
+ *   node start.mjs check   Validate manifest/entries/checksums (strictly relative paths), resolve
+ *                          all dependencies from dist/package.json across the 7 runtime entry points
+ *                          (hub/kernel/plugins/plugin-build/env-io/protocol/cli) via
+ *                          createRequire — matching Hub runtime Node resolution (import.meta.resolve's
+ *                          parent parameter is ignored by default in current Node, so it cannot be
+ *                          used here) — then exercise runtime capabilities: import node:sqlite and
+ *                          load esbuild to transform a JS snippet (covering plugin client compilation).
+ *                          check never starts the Hub.
+ *   node start.mjs start   Verify dependencies, then spawn the hub entry (hub/dist/main.js), passing
+ *                          through environment variables and signals; sets HELM_WEB_DIST_DIR when
+ *                          web/dist exists and is not explicitly configured (once @helm/kernel is
+ *                          installed under node_modules, its default probe no longer hits the payload
+ *                          layout; start declares it explicitly rather than silently disabling static
+ *                          hosting).
  *
- * exit code (never static default fall back):
- *   0  validate via and dependency can parse, runtime capability measured succeeded (or start child process normal exit)
- *   1  use method error or payload layout/validate and/manifest contract corrupt
- *   3  layout legal but dependency missing or runtime capability measured failed (such as esbuild platform two enter system unavailable)
+ * Exit codes (never falls back silently):
+ *   0  Validation, dependency resolution, and runtime capability checks passed (or child exited 0)
+ *   1  Invalid usage or corrupt payload layout / checksums / manifest contract
+ *   3  Valid layout, but missing dependencies or failed runtime capability check (e.g. missing esbuild native binary)
  */
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -34,35 +35,35 @@ const EXIT_ERROR = 1;
 const EXIT_DEPS_MISSING = 3;
 
 const usage = () => {
-  console.error('use method: node start.mjs <check|start>');
+  console.error('Usage: node start.mjs <check|start>');
   process.exit(EXIT_ERROR);
 };
 
-/** single entry path strictly contract: non-empty, each other for,POSIX isolate, without .. out of bounds. */
+/** Strict contract for a single entry path: non-empty, relative POSIX path with no .. traversal. */
 function assertEntryPath(key, rel) {
   const problems = [];
-  if (typeof rel !== 'string' || rel.length === 0) problems.push(`- ${key}: path must be non-empty string`);
+  if (typeof rel !== 'string' || rel.length === 0) problems.push(`- ${key}: path must be a non-empty string`);
   else {
-    if (path.isAbsolute(rel) || rel.includes('\\')) problems.push(`- ${key} (${rel}): must be each other for POSIX path`);
+    if (path.isAbsolute(rel) || rel.includes('\\')) problems.push(`- ${key} (${rel}): must be a relative POSIX path`);
     const segments = rel.split('/');
-    if (segments.includes('..') || segments.includes('')) problems.push(`- ${key} (${rel}): disallows .. / empty segment`);
+    if (segments.includes('..') || segments.includes('')) problems.push(`- ${key} (${rel}): '..' and empty segments are forbidden`);
     const abs = path.resolve(payloadRoot, rel);
-    if (!abs.startsWith(`${payloadRoot}${path.sep}`)) problems.push(`- ${key} (${rel}): parse exceeds out payload `);
+    if (!abs.startsWith(`${payloadRoot}${path.sep}`)) problems.push(`- ${key} (${rel}): resolves outside payload root`);
   }
   return problems;
 }
 
-/** read and do strictly contract validate (do not assume redundant field; exception explicit errors exit 1). */
+/** Load and strictly validate manifest.json (assumes no extra fields; exits 1 with explicit errors). */
 function loadManifest() {
   let manifest;
   try {
     manifest = JSON.parse(readFileSync(path.join(payloadRoot, 'manifest.json'), 'utf-8'));
   } catch (err) {
-    console.error(`[payload] manifest.json missing or illegal: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`[payload] manifest.json missing or invalid: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(EXIT_ERROR);
   }
   if (manifest.formatVersion !== 1) {
-    console.error(`[payload] manifest.formatVersion unsupported: ${String(manifest.formatVersion)}(expectation 1)`);
+    console.error(`[payload] unsupported manifest.formatVersion: ${String(manifest.formatVersion)} (expected 1)`);
     process.exit(EXIT_ERROR);
   }
   const entries = manifest.entries ?? {};
@@ -70,19 +71,19 @@ function loadManifest() {
   const entryKeys = Object.keys(entries).sort();
   const checksumKeys = Object.keys(checksums).sort();
   if (entryKeys.length === 0 || JSON.stringify(entryKeys) !== JSON.stringify(checksumKeys)) {
-    console.error(`[payload] manifest.entries and entryChecksums key inconsistent or is empty: ${entryKeys} vs ${checksumKeys}`);
+    console.error(`[payload] manifest.entries and entryChecksums keys mismatch or are empty: ${entryKeys} vs ${checksumKeys}`);
     process.exit(EXIT_ERROR);
   }
-  // path strictly validate: all issue once column all after again exit (never carries can doubt path continue do IO).
+  // Strict path validation: report all problems before exiting (never touch suspect paths).
   const pathProblems = Object.entries(entries).flatMap(([key, rel]) => assertEntryPath(key, rel));
   if (pathProblems.length > 0) {
-    console.error(`[payload] manifest.entries path contract failed:\n${pathProblems.join('\n')}`);
+    console.error(`[payload] manifest.entries path check failed:\n${pathProblems.join('\n')}`);
     process.exit(EXIT_ERROR);
   }
   return { manifest, entries, checksums };
 }
 
-/** one by one entry validate store in and sha256; failed column all after once exit 1. */
+/** Verify each entry exists and matches its sha256 checksum; list all failures before exiting 1. */
 function checkLayout(entries, checksums, version) {
   const problems = [];
   for (const [key, rel] of Object.entries(entries)) {
@@ -91,30 +92,30 @@ function checkLayout(entries, checksums, version) {
     try {
       actual = createHash('sha256').update(readFileSync(abs)).digest('hex');
     } catch {
-      problems.push(`- ${key} (${rel}): file missing or cannot read`);
+      problems.push(`- ${key} (${rel}): file missing or unreadable`);
       continue;
     }
-    if (actual !== checksums[key]) problems.push(`- ${key} (${rel}): checksum inconsistent (expectation ${checksums[key]}, actual ${actual})`);
+    if (actual !== checksums[key]) problems.push(`- ${key} (${rel}): checksum mismatch (expected ${checksums[key]}, actual ${actual})`);
   }
   if (problems.length > 0) {
     console.error(`[payload] layout validation failed:\n${problems.join('\n')}`);
     process.exit(EXIT_ERROR);
   }
-  console.log(`[payload] layout validate via: ${Object.keys(entries).length} items entry checksum consistent (version ${String(version)})`);
+  console.log(`[payload] layout validated: ${Object.keys(entries).length} entry checksums match (version ${String(version)})`);
 }
 
 /**
- * dependency parse: with dist  package.json dependencies is contract manifest, from hub / kernel /
- * plugins / plugin-build / env-io / protocol / cli seven runtime entry file starting from use createRequire(entry).resolve
- * do real parse - - and Hub runtime Node parse semantics same source (import.meta.resolve second parameter
- * in Node by default by ignore, before implement will in any host directory under mistakenly judge).
+ * Dependency resolution: resolve every dependency in dist/package.json from all 7 runtime entry
+ * points (hub / kernel / plugins / plugin-build / env-io / protocol / cli) using
+ * createRequire(entry).resolve, matching Hub runtime Node resolution (import.meta.resolve ignores
+ * its second parent argument in current Node, which previously caused false positives).
  */
 function resolveProdDeps(entries) {
   let deps = {};
   try {
     deps = JSON.parse(readFileSync(path.join(payloadRoot, 'package.json'), 'utf-8')).dependencies ?? {};
   } catch (err) {
-    console.error(`[payload]  package.json missing or illegal: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`[payload] root package.json missing or invalid: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(EXIT_ERROR);
   }
   const bases = {
@@ -130,20 +131,20 @@ function resolveProdDeps(entries) {
     Object.entries(bases).map(([name, entry]) => [name, createRequire(entry)]),
   );
   /**
-   * single point parse:require.resolve → <name>/package.json sub- path → node_modules one by one layer on trace.
-   * after two level fall back is not proper coordinate:@earendil-works/* is ESM-only(exports only import item),
-   * require.resolve will report ERR_PACKAGE_PATH_NOT_EXPORTED, but runtime ESM import fully available;
-   * one by one layer on trace re- moment Node parse algorithm store in decide, only verify package installed at can parse location.
+   * Single-point resolution: require.resolve -> <name>/package.json subpath -> upward node_modules walk.
+   * The latter two fallbacks are not compromises: @earendil-works/* packages are ESM-only (exports
+   * define only import), so require.resolve throws ERR_PACKAGE_PATH_NOT_EXPORTED even though runtime
+   * ESM import works; walking parent node_modules mirrors Node's lookup to verify installation.
    */
   const resolvable = (req, entry, name) => {
     try {
       req.resolve(name);
       return true;
-    } catch { /* continue fall back */ }
+    } catch { /* try next fallback */ }
     try {
       req.resolve(`${name}/package.json`);
       return true;
-    } catch { /* continue fall back */ }
+    } catch { /* try next fallback */ }
     let cur = path.dirname(entry);
     for (;;) {
       if (existsSync(path.join(cur, 'node_modules', name, 'package.json'))) return true;
@@ -156,44 +157,44 @@ function resolveProdDeps(entries) {
   const names = Object.keys(deps).sort();
   for (const name of names) {
     for (const [base, req] of Object.entries(requires)) {
-      if (!resolvable(req, bases[base], name)) missing.push(`${name}(self ${base} entry)`);
+      if (!resolvable(req, bases[base], name)) missing.push(`${name} (from ${base} entry)`);
     }
   }
   return { total: names.length, missing };
 }
 
 /**
- * runtime capability measured (only test dependency capability, do not execute Hub):
- * - node:sqlite:kernel durable layer Node inside placement module (Node >= 22.5 and --experimental rotate correct after available);
- * - esbuild: real load + transform one segment JS- - override plugin client compile link, also measured
- *   when before platform esbuild original generate two enter system (--ignore-scripts install under two enter system by optionalDependencies
- *   platform package provide,postinstall validate script unavailable, must measured while non- only see can parse).
+ * Exercise runtime capabilities (dependency capabilities only; never starts the Hub):
+ * - node:sqlite: built-in Node module required by kernel durability (Node >= 22.5);
+ * - esbuild: actually load and transform a JS snippet — exercises the plugin client build chain and
+ *   verifies the native esbuild binary for the current platform (--ignore-scripts installs binaries
+ *   via optionalDependencies, without postinstall checks, so resolving alone is insufficient).
  */
 async function probeRuntimeCapabilities(entries) {
   const failures = [];
   try {
     await import('node:sqlite');
   } catch (err) {
-    failures.push(`node:sqlite unavailable (Node version low or build missing inside placement module): ${err instanceof Error ? err.message : String(err)}`);
+    failures.push(`node:sqlite unavailable (Node version too old or built without sqlite): ${err instanceof Error ? err.message : String(err)}`);
   }
   try {
     const hubEntry = path.resolve(payloadRoot, entries.hub ?? 'hub/dist/main.js');
     const esbuild = createRequire(hubEntry)('esbuild');
     const out = await esbuild.transform('const answer = 42\n', { loader: 'js' });
-    if (typeof out?.code !== 'string' || !out.code.includes('answer')) throw new Error('transform output exception');
+    if (typeof out?.code !== 'string' || !out.code.includes('answer')) throw new Error('unexpected transform output');
   } catch (err) {
-    failures.push(`esbuild measured failed (platform two enter system missing or unavailable): ${err instanceof Error ? err.message : String(err)}`);
+    failures.push(`esbuild check failed (platform native binary missing or unusable): ${err instanceof Error ? err.message : String(err)}`);
   }
   return failures;
 }
 
 function reportDeps(result) {
   if (result.missing.length === 0) {
-    console.log(`[payload] produce dependency all can parse (${result.total}/${result.total},hub/kernel/plugins/plugin-build/env-io/protocol/cli seven entry)`);
+    console.log(`[payload] all production dependencies resolved (${result.total}/${result.total} across 7 entry points: hub/kernel/plugins/plugin-build/env-io/protocol/cli)`);
     return;
   }
-  console.error(`[payload] runtime dependency missing (${result.missing.length} items): ${result.missing.join(', ')}`);
-  console.error('[payload] this directory not carry node_modules; please in payload directory execute npm install --omit=dev --ignore-scripts after retry.');
+  console.error(`[payload] missing runtime dependencies (${result.missing.length}): ${result.missing.join(', ')}`);
+  console.error('[payload] this directory does not bundle node_modules; run `npm install --omit=dev --ignore-scripts` in the payload root and retry.');
 }
 
 const command = process.argv[2];
@@ -208,10 +209,10 @@ if (command === 'check') {
   reportDeps(result);
   const failures = await probeRuntimeCapabilities(entries);
   if (failures.length > 0) {
-    console.error(`[payload] runtime capability measured failed:\n${failures.map((f) => `- ${f}`).join('\n')}`);
+    console.error(`[payload] runtime capability check failed:\n${failures.map((f) => `- ${f}`).join('\n')}`);
     process.exit(EXIT_DEPS_MISSING);
   }
-  console.log('[payload] runtime capability measured via (node:sqlite + esbuild transform)');
+  console.log('[payload] runtime capability check passed (node:sqlite + esbuild transform)');
   process.exit(0);
 } else if (command === 'start') {
   const { manifest, entries, checksums } = loadManifest();
@@ -223,11 +224,11 @@ if (command === 'check') {
   }
   const failures = await probeRuntimeCapabilities(entries);
   if (failures.length > 0) {
-    console.error(`[payload] runtime capability measured failed:\n${failures.map((f) => `- ${f}`).join('\n')}`);
+    console.error(`[payload] runtime capability check failed:\n${failures.map((f) => `- ${f}`).join('\n')}`);
     process.exit(EXIT_DEPS_MISSING);
   }
   const hubEntry = path.resolve(payloadRoot, entries.hub);
-  // web/dist store in and not explicit config when export static hosting directory (see file head note release; never static default fall back).
+  // Export static hosting dir when web/dist exists and HELM_WEB_DIST_DIR is unset (see header; never silently fall back).
   const childEnv = { ...process.env };
   if (childEnv.HELM_WEB_DIST_DIR === undefined && existsSync(path.join(payloadRoot, 'web/dist'))) {
     childEnv.HELM_WEB_DIST_DIR = path.resolve(payloadRoot, 'web/dist');

@@ -1,28 +1,28 @@
 /**
- * asset hot reload coordinate tune: listen static asset change, jitter merge after serial trigger model and config hot reload.
+ * Asset hot-reload coordinator: watches static asset changes and serially triggers debounced model and config reloads.
  *
- * responsibility:
- * 1. only listen static asset path (providers.json / credentials.json / config.json /
- *    profiles/** / skills/**), exclude state.sqlite,artifacts,workflows and temp file;
- * 2. config.json change refresh plugin config mirror (pluginConfig.load), failed explicit notify;
- * 3. providers.json / credentials.json change via 200ms guard against jitter after serial reloadModels;
- * 4. external inject Models(options.externalModels) when empty operation, keep caller ownership;
- * 5. closure stop order keep fault: first stop stop new event and guard against jitter timer, again waitForInflight wait for in-flight reload.
+ * Responsibilities:
+ * 1. Watches only static asset paths (`providers.json` / `credentials.json` / `config.json` /
+ *    `profiles/**` / `skills/**`), excluding `state.sqlite`, artifacts, workflows, and temp files;
+ * 2. On `config.json` changes, refreshes the plugin config mirror (`pluginConfig.load`) and explicitly notifies on failure;
+ * 3. On `providers.json` / `credentials.json` changes, debounces for 200ms then serially runs `reloadModels`;
+ * 4. No-ops model reloads when `Models` is externally injected (`options.externalModels`), preserving caller ownership;
+ * 5. Shutdown ordering guarantee: `stop()` halts new events and clears debounce timers first, then `waitForInflight()` awaits in-flight reloads.
  */
 
 import { AssetWatcher } from '../services/index.js'
 
 export interface AssetReloaderOptions {
   readonly dataDir: string
-  /** external pass Models(test or external own) when is true; now do not replace model,scheduleReloadModels treated as empty operation. */
+  /** True when `Models` is externally supplied (tests or external owners); `scheduleReloadModels` becomes a no-op so models are never replaced. */
   readonly externalModels?: boolean
-  /** trigger model reload (such as invoke modelsRegistry.reloadModels()). */
+  /** Trigger model reload (e.g., `modelsRegistry.reloadModels()`). */
   readonly reloadModels: () => Promise<void>
-  /** trigger plugin config mirror refresh (such as invoke pluginConfig.load()). */
+  /** Trigger plugin config mirror refresh (e.g., `pluginConfig.load()`). */
   readonly reloadPluginConfig: () => Promise<void>
-  /** error notify publish interface (such as publish to events 'notification'). */
+  /** Error notification publisher (e.g., emitted as an event `'notification'`). */
   readonly notifyError: (title: string, error: unknown) => void
-  /** self define watcher work vendor (mainly used to test inject mock watcher). */
+  /** Custom watcher factory (primarily for injecting mock watchers in tests). */
   readonly createWatcher?: (
     dir: string,
     onChange: (paths: string[]) => void,
@@ -32,9 +32,9 @@ export interface AssetReloaderOptions {
 
 export class AssetReloader {
   private watcher: { start(): void; close(): void } | undefined
-  /** reloadModels serial chain + jitter merge (providers/credentials hot reload shared use). */
+  /** Serialized `reloadModels` chain + debounce coalescing (shared by providers/credentials hot reloads). */
   private reloadChain: Promise<void> = Promise.resolve()
-  /** reloadPluginConfig in-flight chain. */
+  /** In-flight `reloadPluginConfig` chain. */
   private reloadConfigChain: Promise<void> = Promise.resolve()
   private reloadTimer: NodeJS.Timeout | undefined
   private closed = false
@@ -42,11 +42,11 @@ export class AssetReloader {
   constructor(private readonly options: AssetReloaderOptions) {}
 
   /**
-   * start asset listen.
-   * only listen static asset path (providers.json / credentials.json / config.json /
-   * profiles/** / skills/**). exclude state.sqlite,artifacts,workflows,
-   * plugins data directory and everything temp file - - they non- config input, listen only increase noise sound.
-   * models inject when (external/test Models) model set archive caller, never rebuild replace.
+   * Start asset watching.
+   * Watches only static asset paths (`providers.json` / `credentials.json` / `config.json` /
+   * `profiles/**` / `skills/**`), excluding `state.sqlite`, artifacts, workflows, plugin data directories,
+   * and temp files — those are not config inputs and watching them only adds noise.
+   * When `models` are injected (external/test `Models`), ownership belongs to the caller and models are never rebuilt.
    */
   start(): void {
     if (this.closed || this.watcher) return
@@ -58,15 +58,15 @@ export class AssetReloader {
       (changed) => this.onAssetsChanged(changed),
       {
         onError: (err) => {
-          // watcher fault explicit notify, not silently swallow (hot reload fall back but main stream process do not subject to affect).
-          this.options.notifyError('asset hot reload listen failed', err)
+          // Watcher failures are explicitly notified rather than silently swallowed (hot reload degrades without affecting main flow).
+          this.options.notifyError('Asset hot-reload watcher failed', err)
         },
       },
     )
     this.watcher.start()
   }
 
-  /** asset change path stream. */
+  /** Dispatch changed asset paths. */
   onAssetsChanged(changedPaths: string[]): void {
     if (this.closed) return
     let providersTouched = false
@@ -82,14 +82,14 @@ export class AssetReloader {
       else continue
       void second
     }
-    // profiles/skills each turn before_turn all fresh read, no need to cache expires.
+    // `profiles` and `skills` are read fresh on every `before_turn`, so no cache invalidation is needed.
     void profilesOrSkills
     if (configTouched) {
-      // plugin config mirror refresh (failed to read explicit notify, do not swallow).
+      // Refresh plugin config mirror (explicitly notify on read failure rather than swallowing).
       this.reloadConfigChain = this.reloadConfigChain
         .then(() => (this.closed ? Promise.resolve() : this.options.reloadPluginConfig()))
         .catch((error) => {
-          this.options.notifyError('plugin config hot reload failed', error)
+          this.options.notifyError('Plugin config hot reload failed', error)
         })
     }
     if (providersTouched || credentialsTouched) {
@@ -97,7 +97,7 @@ export class AssetReloader {
     }
   }
 
-  /** jitter merge + serial reloadModels(external inject Models when empty operation). */
+  /** Debounce + serialize `reloadModels` (no-op when `Models` is externally injected). */
   scheduleReloadModels(): void {
     if (this.closed || this.options.externalModels) return
     if (this.reloadTimer !== undefined) clearTimeout(this.reloadTimer)
@@ -107,13 +107,13 @@ export class AssetReloader {
       this.reloadChain = this.reloadChain
         .then(() => (this.closed ? Promise.resolve() : this.options.reloadModels()))
         .catch((error) => {
-          this.options.notifyError('model config hot reload failed', error)
+          this.options.notifyError('Model config hot reload failed', error)
         })
     }, 200)
   }
 
   /**
-   * closure stop one phase: stop listen and clear await trigger guard against jitter timer, no longer produce new side effect.
+   * Shutdown phase 1: stop watching and clear pending debounce timers so no new side effects are triggered.
    */
   stop(): void {
     this.closed = true
@@ -126,13 +126,13 @@ export class AssetReloader {
   }
 
   /**
-   * closure stop second phase: wait for in-flight reloadModels and reloadPluginConfig chain converge.
+   * Shutdown phase 2: wait for in-flight `reloadModels` and `reloadPluginConfig` chains to settle.
    */
   async waitForInflight(): Promise<void> {
     await Promise.all([this.reloadChain, this.reloadConfigChain])
   }
 
-  /** complete close: first stop block stop new event, again wait for in-flight converge. */
+  /** Full shutdown: `stop()` first to prevent new events, then await in-flight chains. */
   async close(): Promise<void> {
     this.stop()
     await this.waitForInflight()

@@ -1,15 +1,15 @@
 /**
- * timeline item and conversation real-time view pure function means layer.
+ * Pure translation layer for timeline entries and conversation live views.
  *
- * responsibility (mechanism, without policy):
- * - toConversationEntry:SDK EntryRecord -> protocol ConversationEntry unify means
- *   (id rotate string,kind/data/model original keep, boundary JSON available validate reject non- JSON value);
- *   HTTP detail situation and conversation.entry real-time event shared use the same function, guarantee two end shape consistent.
- * - deriveConversationLive:SDK LiveState(pi.live document)-> protocol ConversationLive
- *   (streaming assist manually text cumulative snapshot + tool card state).
+ * Responsibilities (mechanism, zero policy):
+ * - toConversationEntry: unified mapping from SDK EntryRecord -> protocol ConversationEntry
+ *   (converts id to string, preserves kind/data/model verbatim, validates JSON serializability at boundary);
+ *   shared identically between HTTP detail and live conversation.entry events so both ends match.
+ * - deriveConversationLive: SDK LiveState (pi.live document) -> protocol ConversationLive
+ *   (accumulated streaming assistant text snapshot + tool card states).
  *
- * note:model message must keep (assistant text in model in, do not in data),
- * otherwise pi.assistant text in HTTP detail situation and real-time event in lose.
+ * Note: model messages must be preserved (assistant text lives in model, not in data),
+ * otherwise pi.assistant text is lost in both HTTP details and live events.
  */
 
 import {
@@ -21,7 +21,7 @@ import {
   type QueuedConversationInput,
 } from '@helm/protocol'
 
-/** SDK EntryRecord structure sub- collection (avoid dependency SDK specific type, test can construct faux shape). */
+/** Subset of SDK EntryRecord shape (avoids coupling to SDK concrete types; easy to fake in tests). */
 export interface EntryRecordLike {
   readonly id: number | string
   readonly kind: string
@@ -30,21 +30,21 @@ export interface EntryRecordLike {
   readonly byTaskId?: number
 }
 
-/** recursion reject non- JSON value (loop,Date,Map,undefined field etc.), never static default convert. */
+/** Recursively reject non-JSON values (cycles, Date, Map, undefined fields, etc.) without silent conversion. */
 function assertJsonUsable(value: unknown, path: string, seen: WeakSet<object>): void {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) {
-      throw new HelmError('invalid_json_value', `entry.${path} contains non- finite number, cannot as JSON event publish`, 500)
+      throw new HelmError('invalid_json_value', `entry.${path} contains a non-finite number and cannot be published as a JSON event`, 500)
     }
     return
   }
   if (typeof value !== 'object') {
-    throw new HelmError('invalid_json_value', `entry.${path} contains non- JSON value (${typeof value})`, 500)
+    throw new HelmError('invalid_json_value', `entry.${path} contains a non-JSON value (${typeof value})`, 500)
   }
   const obj = value as object
   if (seen.has(obj)) {
-    throw new HelmError('invalid_json_value', `entry.${path} contains loop reference`, 500)
+    throw new HelmError('invalid_json_value', `entry.${path} contains a circular reference`, 500)
   }
   seen.add(obj)
   try {
@@ -54,11 +54,11 @@ function assertJsonUsable(value: unknown, path: string, seen: WeakSet<object>): 
     }
     const proto = Object.getPrototypeOf(obj)
     if (proto !== Object.prototype && proto !== null) {
-      throw new HelmError('invalid_json_value', `entry.${path} contains non- JSON object (${proto.constructor?.name ?? 'unknown'})`, 500)
+      throw new HelmError('invalid_json_value', `entry.${path} contains a non-JSON object (${proto.constructor?.name ?? 'unknown'})`, 500)
     }
     for (const [key, item] of Object.entries(obj)) {
       if (item === undefined) {
-        throw new HelmError('invalid_json_value', `entry.${path}.${key} contains undefined value`, 500)
+        throw new HelmError('invalid_json_value', `entry.${path}.${key} contains undefined`, 500)
       }
       assertJsonUsable(item, `${path}.${key}`, seen)
     }
@@ -69,11 +69,10 @@ function assertJsonUsable(value: unknown, path: string, seen: WeakSet<object>): 
 
 /**
  * SDK EntryRecord -> protocol ConversationEntry.
- * - id unify rotate string(protocol contract);
- * - kind/data/model original keep (model is model context message array,assistant text in among them);
- * - taskId:byTaskId is positive integer when throw shoot (append the entry generate task;scheduler
- *   context etc. without ownership when default, never fabricate);
- * - boundary JSON available validate: non- JSON value explicit throw HelmError, not silently fall back, do not fabricate truncate.
+ * - Normalizes id to string (protocol contract);
+ * - Preserves kind/data/model verbatim (model holds context message arrays including assistant text);
+ * - taskId: mapped from positive integer byTaskId (generating task; omitted when unowned such as scheduler context, never fabricated);
+ * - Boundary JSON validation: throws HelmError on non-JSON values with no silent fallback or truncation.
  */
 export function toConversationEntry(record: EntryRecordLike): ConversationEntry {
   if (typeof record.id !== 'number' && typeof record.id !== 'string') {
@@ -93,19 +92,19 @@ export function toConversationEntry(record: EntryRecordLike): ConversationEntry 
     ...(record.model !== undefined ? { model: [...record.model] } : {}),
     ...(taskId !== undefined ? { taskId } : {}),
   }
-  // boundary validate:kind of outside payload must whole can JSON serialization (HTTP/SSE shared use exit).
+  // Boundary check: entire payload besides kind must be JSON-serializable (shared HTTP/SSE exit).
   assertJsonUsable(entry, 'payload', new WeakSet())
   return entry
 }
 
-/** tool card state mapping:SDK tool slot -> protocol three state. */
+/** Tool card state mapping: SDK tool slot -> protocol status. */
 type LiveToolState = ConversationLive['tools'][number]
 
 function slotStatusOf(status: unknown): LiveToolState['status'] {
   return status === 'done' ? 'done' : 'running'
 }
 
-/** streaming assistant message -> cumulative visible text (text chunk by order concatenate; snapshot semantics, client whole replace). */
+/** Streaming assistant message -> accumulated visible text (concatenates text blocks in order; full-snapshot semantics). */
 function streamedTextOf(message: unknown): string {
   if (message === null || typeof message !== 'object') return ''
   const content = (message as { content?: unknown }).content
@@ -124,7 +123,7 @@ function streamedTextOf(message: unknown): string {
   return text
 }
 
-/** streaming assistant message -> cumulative think text (thinking chunk by order concatenate; snapshot semantics). */
+/** Streaming assistant message -> accumulated thinking text (concatenates thinking blocks in order; snapshot semantics). */
 function streamedThinkingOf(message: unknown): string {
   if (message === null || typeof message !== 'object') return ''
   const content = (message as { content?: unknown }).content
@@ -149,13 +148,13 @@ function toolInputOf(slot: { arguments?: unknown } | { input?: unknown }): unkno
 }
 
 /**
- * SDK generation(pi.live generation field)-> protocol subject to limit throw shadow (through use fact, zero policy).
- * - taskId from same snapshot live.run.taskId(generation actual which belong generate task): missing or
- *   non- positive integer when whole omit generation- - identity cannot fabricate, without identity streaming fact cannot related;
- * - attempt non- positive integer when same whole omit;
- * - message only keep content subject to limit chunk (text/thinking/toolCall name+arguments) and
- *   provider cumulative usage.output(correct finite count); without valid content chunk when message omit;
- * - do not pass-through other field (timestamp/model metadata do not outside leak, rate policy independent of they).
+ * SDK generation (pi.live generation field) -> protocol constrained projection (generic facts, zero policy).
+ * - taskId comes from live.run.taskId in the same snapshot (the generating task): omitted wholesale when missing or
+ *   non-positive integer—identities cannot be fabricated, and streaming facts cannot be correlated without an identity;
+ * - attempt non-positive integer similarly omits generation wholesale;
+ * - message preserves only constrained content blocks (text / thinking / toolCall name+arguments) and provider
+ *   cumulative usage.output (positive finite number); omitted when no valid content blocks exist;
+ * - drops all other fields (never leaks timestamps or model metadata; rate calculation plugins do not depend on them).
  */
 export function liveGenerationOf(
   generation: { attempt?: unknown; message?: unknown } | undefined,
@@ -169,7 +168,7 @@ export function liveGenerationOf(
   return { taskId: runTaskId, attempt, ...(message !== undefined ? { message } : {}) }
 }
 
-/** partial assistant message -> subject to limit JSON-safe throw shadow; without valid content chunk return undefined. */
+/** Partial assistant message -> constrained JSON-safe projection; returns undefined if no valid blocks exist. */
 function liveMessageOf(message: unknown): ConversationLiveMessage | undefined {
   if (message === null || typeof message !== 'object') return undefined
   const content = (message as { content?: unknown }).content
@@ -195,14 +194,14 @@ function liveMessageOf(message: unknown): ConversationLiveMessage | undefined {
   return { content: blocks, ...(usage !== undefined ? { usage } : {}) }
 }
 
-/** pi.inbox queued items structure sub- collection (tracker pass; shape illegal items directly skip, do not fabricate). */
+/** Subset of pi.inbox queued item shape (passed from tracker; malformed items are skipped without fabrication). */
 export interface InboxItemLike {
   readonly id: number | string
   readonly mode?: string
   readonly entry?: { kind?: string; data?: unknown }
 }
 
-/** inbox queued items -> QueuedConversationInput; non- helm.input / illegal payload return undefined. */
+/** Inbox queued item -> QueuedConversationInput; returns undefined for non-helm.input or invalid payloads. */
 function queuedInputOf(item: InboxItemLike, fallbackCreatedAt: number): QueuedConversationInput | undefined {
   if (item.mode !== 'steer' && item.mode !== 'followUp') return undefined
   if (item.entry?.kind !== 'helm.input') return undefined
@@ -225,23 +224,21 @@ function queuedInputOf(item: InboxItemLike, fallbackCreatedAt: number): QueuedCo
   }
 }
 
-/** queue up input sort:steer all arrange in followUp before (same mode keep original order). */
+/** Sort queued inputs: all steer items precede followUp items (preserving original order within each mode). */
 function sortQueuedInputs(items: QueuedConversationInput[]): void {
   const rank = (mode: QueuedConversationInput['mode']): number => (mode === 'steer' ? 0 : 1)
   items.sort((a, b) => rank(a.mode) - rank(b.mode))
 }
 
 /**
- * SDK LiveState(pi.live document value)-> protocol ConversationLive.
- * - text:generation.message.content in text chunk cumulative snapshot (client replace style render);
- * - tools: model start tool round (tools) and embed set invoke (nestedTools) unify mapping;
- *   input take slot run parameter (model start invoke parameter in assistant entry,slot 
- *   arguments/output only embed set invoke carry), result text does not enter live(detail situation away entry);
- * - generation: through use streaming fact (taskId + attempt + subject to limit message throw shadow), supply rate class
- *   plugin policy consume;taskId take same snapshot live.run.taskId(without identity do not throw shadow);
- *   kernel zero rate compute;
- * - queuedInputs: from pi.inbox queue up items derive await takes effect input manifest (steer takes precedence),
- *   without queue up items when omit.
+ * SDK LiveState (pi.live document) -> protocol ConversationLive.
+ * - text: accumulated snapshot of text blocks inside generation.message.content (client replaces whole text);
+ * - tools: unified projection of top-level tool rounds (tools) and nested calls (nestedTools);
+ *   inputs come from slot arguments/input (model call args live in assistant entries; slot arguments/output are set
+ *   only for nested calls), while result texts stay out of live views (details belong in entries);
+ * - generation: generic streaming facts (taskId + attempt + constrained message projection) consumed by rate-display
+ *   plugins; taskId comes from live.run.taskId in the same snapshot (omitted if absent); zero rate calculations in kernel;
+ * - queuedInputs: pending inputs derived from pi.inbox (steer first), omitted when empty.
  */
 export function deriveConversationLive(
   conversationId: number,

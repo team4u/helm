@@ -34,6 +34,25 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
+.sa-conv-cell {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 260px;
+  min-width: 0;
+}
+.sa-conv-name {
+  color: var(--fg);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sa-conv-id {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--fg-subtle);
+}
 
 /* Report timeline card (patrol-specific business structure) */
 .sa-report {

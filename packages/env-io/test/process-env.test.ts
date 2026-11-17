@@ -8,8 +8,8 @@ import {
   setEnvEntry,
 } from '../src/index.js'
 
-describe('process-env: across platform environment variable large small write original language', { timeout: 60_000 }, () => {
-  it('win32: host only Path when prependEnvPath original ground pre- and do not generate conflict PATH key', { timeout: 60_000 }, () => {
+describe('process-env: cross-platform env variable casing primitives', { timeout: 60_000 }, () => {
+  it('win32: preserves existing Path casing on prependEnvPath without creating a conflicting PATH key', { timeout: 60_000 }, () => {
     const env: Record<string, string> = {
       Path: 'C:\\Windows\\System32;C:\\Program Files\\nodejs',
       TEMP: 'C:\\Temp',
@@ -27,7 +27,7 @@ describe('process-env: across platform environment variable large small write or
     assert.equal(env['TEMP'], 'C:\\Temp')
   })
 
-  it('win32: already exists many large small write change body or missing when prependEnvPath converge is single key', { timeout: 60_000 }, () => {
+  it('win32: collapses multiple case variants or creates PATH when missing on prependEnvPath', { timeout: 60_000 }, () => {
     const collided: Record<string, string> = {
       Path: 'C:\\Windows\\System32',
       PATH: 'D:\\Custom\\bin',
@@ -45,7 +45,7 @@ describe('process-env: across platform environment variable large small write or
     assert.deepEqual(empty, { PATH: 'C:\\helm\\bin' })
   })
 
-  it('win32:setEnvEntry / getEnvEntry / findEnvKey / deleteEnvEntry large small write do not sensitive merge', { timeout: 60_000 }, () => {
+  it('win32: setEnvEntry / getEnvEntry / findEnvKey / deleteEnvEntry operate case-insensitively', { timeout: 60_000 }, () => {
     const env: Record<string, string> = { Path: 'C:\\Win', helm_token: 'old' }
     assert.equal(findEnvKey(env, 'PATH', 'win32'), 'Path')
     assert.equal(getEnvEntry(env, 'PATH', 'win32'), 'C:\\Win')
@@ -59,7 +59,7 @@ describe('process-env: across platform environment variable large small write or
     assert.equal('helm_token' in env, false)
   })
 
-  it('linux:Path and PATH mutual do not interference, isolate symbol is smoke number', { timeout: 60_000 }, () => {
+  it('linux: Path and PATH stay distinct and separator is colon', { timeout: 60_000 }, () => {
     const env: Record<string, string> = {
       Path: '/not-system-path',
       PATH: '/usr/bin:/bin',

@@ -17,9 +17,9 @@
  *   kernel/{package.json, dist/}  kernel mechanism output (pure mechanism package, no built-in plugins)
  *   plugins/{package.json, dist/} @helm/plugins output + built-in plugin runtime assets
  *   plugin-build/{package.json, dist/} @helm/plugin-build build implementation (esbuild compilation /
- *                                 TS transform; hub injects it as the kernel build port, file: dependency body)
+ *                                 TS transform; hub injects it as the kernel build port; file: dependency)
  *   env-io/{package.json, dist/} @helm/env-io execution-side shared I/O implementation
- *   protocol/{package.json, dist/} protocol build output (file: dependency body)
+ *   protocol/{package.json, dist/} protocol build output (file: dependency)
  *   cli/{package.json, dist/}      CLI output (package.json kept for locating/auditing; the runtime entry
  *                                  can be pointed at cli/dist/index.js via HELM_CLI_ENTRY)
  *   web/dist/                      Vite output (start.mjs points at it explicitly via HELM_WEB_DIST_DIR)
@@ -32,7 +32,7 @@
  *
  * Honesty boundary: this script does not bundle node_modules (platform-native binaries make
  * self-containment require per-platform vendoring, see README); the dependency-completion contract is
- * consumer-side npm install, and start.mjs check performs the explicit acceptance.
+ * consumer-side npm install, and `start.mjs check` runs the explicit verification.
  */
 import { createHash } from 'node:crypto';
 import { create as createTar } from 'tar';
@@ -213,7 +213,9 @@ for (const component of ['hub', 'kernel', 'plugins', 'plugin-build', 'env-io', '
 // contents on the consumer side; if directory assets landed after packing, skill/assets/client would be
 // silently lost.
 const builtinSrc = path.join(repoRoot, 'packages/plugins/src');
+const builtinDist = path.join(repoRoot, 'packages/plugins/dist');
 const copiedAssets = [];
+const missingPrebuilt = [];
 for (const ent of readdirSync(builtinSrc, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
   if (!ent.isDirectory()) continue;
   for (const sub of RUNTIME_ASSET_SUBDIRS) {
@@ -222,6 +224,20 @@ for (const ent of readdirSync(builtinSrc, { withFileTypes: true }).sort((a, b) =
     cpSync(from, path.join(stagingDir, 'plugins/dist', ent.name, sub), { recursive: true });
     copiedAssets.push(`${ent.name}/${sub}`);
   }
+  if (existsSync(path.join(builtinSrc, ent.name, 'client'))) {
+    const distClientFrom = path.join(builtinDist, ent.name, 'dist-client');
+    const distClientManifest = path.join(distClientFrom, 'manifest.json');
+    if (!existsSync(distClientManifest)) {
+      missingPrebuilt.push(`${ent.name}/dist-client/manifest.json`);
+    } else {
+      cpSync(distClientFrom, path.join(stagingDir, 'plugins/dist', ent.name, 'dist-client'), { recursive: true });
+      copiedAssets.push(`${ent.name}/dist-client`);
+    }
+  }
+}
+if (missingPrebuilt.length > 0) {
+  console.error(`[payload] built-in plugin prebuilt dist-client missing (rebuild @helm/plugins first):\n${missingPrebuilt.map((m) => `- ${m}`).join('\n')}`);
+  process.exit(1);
 }
 
 // Directory-shaped file: dependencies produce junctions pointing into staging on Windows; archive installs are safe to move.

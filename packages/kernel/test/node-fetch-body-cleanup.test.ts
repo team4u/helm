@@ -1,15 +1,16 @@
 /**
- * node-fetch tunnel abandon placement fall back test (env/node-fetch.ts tunnelFetch  Response
+ * Abandoned tunnelFetch Response body reclamation tests (env/node-fetch.ts tunnelFetch Response
  * body lifecycle):
- * - transfer interrupt (response head already to, connect by destroy) and body without person read:res close/error
- *   fall back must determinism destroy tunnel (do not etc. GC, do not etc. forever do not occur pull/cancel);
- * - complete response + server close connect (Connection: close happy path) and body without person
- *   read: connect close i.e. destroy tunnel;
- * - upstream connect forever do not disconnect (keep-alive ignore Connection: close) and body by abandon placement:
- *   FinalizationRegistry in GC when destroy (best-effort, see implement note release);
- * - normal consume / explicit cancel semantics do not change; interrupt after late to read obtain to explicit error.
+ * - Transport interruption (after response headers arrive, connection is destroyed) with unconsumed body:
+ *   res close/error fallback deterministically destroys the tunnel (without waiting for GC or pull/cancel);
+ * - Complete response + server connection close (Connection: close happy path) with unconsumed body:
+ *   connection close immediately destroys the tunnel;
+ * - Upstream never closes connection (keep-alive ignoring Connection: close) and body is abandoned:
+ *   FinalizationRegistry destroys the tunnel on GC (best-effort; see implementation notes);
+ * - Normal consumption / explicit cancel semantics remain unchanged; reading after interruption yields an
+ *   explicit error.
  *
- * all away local direct connect tunnel (connectLocalTunnel), no need to remote daemon.
+ * Uses local direct tunnels (connectLocalTunnel) without needing a remote daemon.
  */
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
@@ -21,13 +22,13 @@ import type { Duplex } from 'node:stream'
 import { setTimeout as delay } from 'node:timers/promises'
 import { tunnelFetch, connectLocalTunnel } from '../src/env/node-fetch.js'
 
-/** force all amount GC(child process not open --expose-gc when standard workaround). */
+/** Triggers a full GC cycle (standard workaround when the child process lacks --expose-gc). */
 function forceGc(): void {
   v8.setFlagsFromString('--expose_gc')
   vm.runInNewContext('gc')()
 }
 
-/** record most near a tunnel openTunnel(tunnelFetch tunnel is exactly the duplex). */
+/** Records the most recently opened tunnel (the duplex handed to tunnelFetch). */
 function recordingOpenTunnel(): { open: (t: { host?: string; port: number }, signal?: AbortSignal) => Promise<Duplex>; last(): Duplex | undefined } {
   let lastTunnel: Duplex | undefined
   return {
@@ -39,7 +40,7 @@ function recordingOpenTunnel(): { open: (t: { host?: string; port: number }, sig
   }
 }
 
-/** polling wait for tunnel by destroy (determinism path pre- compute 2s; failed return false). */
+/** Polls until the tunnel is destroyed (2s budget for deterministic paths; returns false on timeout). */
 async function waitDestroyed(tunnel: Duplex | undefined, budgetMs = 2_000): Promise<boolean> {
   for (let i = 0; i < budgetMs / 25 && tunnel !== undefined; i += 1) {
     if (tunnel.destroyed) return true
@@ -48,12 +49,12 @@ async function waitDestroyed(tunnel: Duplex | undefined, budgetMs = 2_000): Prom
   return tunnel?.destroyed ?? false
 }
 
-describe('tunnelFetch abandon placement body fall back', { timeout: 60_000 }, () => {
-  test('transfer interrupt + body without person read:res close fall back determinism destroy tunnel', { timeout: 60_000 }, async () => {
+describe('tunnelFetch abandoned body reclamation', { timeout: 60_000 }, () => {
+  test('transport interruption + unconsumed body: res close deterministically destroys tunnel', { timeout: 60_000 }, async () => {
     const server = http.createServer((_req, res) => {
       res.writeHead(200, { 'content-type': 'text/plain' })
       res.write('partial')
-      // response head send reach after destroy connect (simulated transfer interrupt).
+      // Destroy connection after response headers arrive (simulating transport interruption).
       setTimeout(() => res.destroy(), 50)
     })
     server.on('clientError', () => undefined)
@@ -63,16 +64,16 @@ describe('tunnelFetch abandon placement body fall back', { timeout: 60_000 }, ()
       const tunnels = recordingOpenTunnel()
       const response = await tunnelFetch(tunnels.open, 'local', new Request(`http://127.0.0.1:${port}/x`))
       assert.equal(response.status, 200)
-      // only inspect status, do not read do not cancel- - tunnel must in interrupt after immediately destroy.
-      assert.ok(await waitDestroyed(tunnels.last()), 'transfer interrupt after tunnel must determinism destroy')
-      // interrupt after late to read obtain to explicit error (not silently fabricate complete body).
+      // Inspect only status without reading or canceling -- tunnel must destroy immediately after abort.
+      assert.ok(await waitDestroyed(tunnels.last()), 'tunnel must deterministically destroy after transport interruption')
+      // Late read after interruption must fail explicitly (never silently synthesize a complete body).
       await assert.rejects(response.text())
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()))
     }
   })
 
-  test('complete response + server closure connect + body without person read: connect close i.e. destroy tunnel', { timeout: 60_000 }, async () => {
+  test('complete response + server closes connection + unconsumed body: connection close destroys tunnel', { timeout: 60_000 }, async () => {
     const server = http.createServer((_req, res) => {
       res.writeHead(200, { 'content-type': 'text/plain' })
       res.end('hello')
@@ -83,14 +84,14 @@ describe('tunnelFetch abandon placement body fall back', { timeout: 60_000 }, ()
       const tunnels = recordingOpenTunnel()
       const response = await tunnelFetch(tunnels.open, 'local', new Request(`http://127.0.0.1:${port}/y`))
       assert.equal(response.status, 200)
-      assert.ok(await waitDestroyed(tunnels.last()), 'server close after tunnel must destroy')
+      assert.ok(await waitDestroyed(tunnels.last()), 'tunnel must destroy after server closes connection')
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()))
     }
   })
 
-  test('upstream connect forever do not disconnect + body by GC:FinalizationRegistry destroy tunnel', { timeout: 60_000 }, async () => {
-    // raw TCP manually write HTTP response:Connection: keep-alive and forever do not closure socket.
+  test('upstream never disconnects + GCed body: FinalizationRegistry destroys tunnel', { timeout: 60_000 }, async () => {
+    // Raw TCP write of HTTP response with Connection: keep-alive, keeping socket open indefinitely.
     const server = net.createServer((socket) => {
       socket.on('error', () => undefined)
       socket.on('data', () => {
@@ -104,8 +105,8 @@ describe('tunnelFetch abandon placement body fall back', { timeout: 60_000 }, ()
       {
         const response = await tunnelFetch(tunnels.open, 'local', new Request(`http://127.0.0.1:${port}/health`))
         assert.equal(response.status, 200)
-        assert.equal(tunnels.last()?.destroyed, false, 'connect not on shutdown tunnel still store (SSE etc. scenario must not mistakenly kill)')
-        // response out effect domain i.e. abandon placement (only inspect status).
+        assert.equal(tunnels.last()?.destroyed, false, 'tunnel must stay open while connection is open (e.g. for SSE streams)')
+        // Abandon response out of scope (only status inspected).
       }
       let destroyed = false
       for (let i = 0; i < 20 && !destroyed; i += 1) {
@@ -113,13 +114,13 @@ describe('tunnelFetch abandon placement body fall back', { timeout: 60_000 }, ()
         forceGc()
         destroyed = tunnels.last()?.destroyed ?? false
       }
-      assert.ok(destroyed, 'abandon placement body by GC after tunnel must destroy (FinalizationRegistry fall back)')
+      assert.ok(destroyed, 'tunnel must destroy via FinalizationRegistry once abandoned body is GCed')
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()))
     }
   })
 
-  test('normal consume and explicit cancel semantics do not change', { timeout: 60_000 }, async () => {
+  test('normal consumption and explicit cancellation semantics remain unchanged', { timeout: 60_000 }, async () => {
     const server = http.createServer((_req, res) => {
       res.writeHead(200, { 'content-type': 'text/plain' })
       res.end('full-body')
@@ -127,19 +128,19 @@ describe('tunnelFetch abandon placement body fall back', { timeout: 60_000 }, ()
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const port = (server.address() as net.AddressInfo).port
     try {
-      // complete consume:body normal send reach, read exhaust after tunnel destroy.
+      // Full consumption: body completes normally and tunnel destroys once drained.
       {
         const tunnels = recordingOpenTunnel()
         const response = await tunnelFetch(tunnels.open, 'local', new Request(`http://127.0.0.1:${port}/a`))
         assert.equal(await response.text(), 'full-body')
-        assert.ok(await waitDestroyed(tunnels.last()), 'read exhaust after tunnel destroy')
+        assert.ok(await waitDestroyed(tunnels.last()), 'tunnel destroys after body is fully read')
       }
-      // explicit cancel: immediately destroy (since has semantics).
+      // Explicit cancellation: immediately destroys (existing semantics).
       {
         const tunnels = recordingOpenTunnel()
         const response = await tunnelFetch(tunnels.open, 'local', new Request(`http://127.0.0.1:${port}/b`))
         await response.body?.cancel()
-        assert.ok(await waitDestroyed(tunnels.last()), 'cancel after tunnel destroy')
+        assert.ok(await waitDestroyed(tunnels.last()), 'tunnel destroys after explicit cancel')
       }
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()))

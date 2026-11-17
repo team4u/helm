@@ -1,8 +1,8 @@
 /**
- * Hub HTTP/SSE transfer layer.
+ * Hub HTTP/SSE transport layer.
  *
- * - createHubHandler(kernel):Web Standard handler(can independent at node:http test).
- * - startHub(options):node:http listen (by default 3202 / 127.0.0.1; test use port: 0).
+ * - createHubHandler(kernel): Web Standard handler (testable independently of node:http).
+ * - startHub(options): node:http listener (defaults to 3202 / 127.0.0.1; tests should pass port: 0).
  */
 export { createHubHandler, isPublicPluginRoute, type HubHandlerOptions } from './hub.js'
 export { startHub, toWebRequest, writeWebResponse, type NodeHubHandle } from './node-server.js'

@@ -4,7 +4,16 @@ import { searchApi } from '../lib/api.js'
 import { commandActionPluginId, commandHint, commandsForConversation } from '../lib/commands-model.js'
 import { resolveLocalizedText } from '@helm/protocol/browser'
 import { HelmIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helm/plugin-client'
-import { useHelmStore } from '../lib/store-context.js'
+import {
+  useConversations,
+  useGroupedUi,
+  useLocationTargets,
+  usePlugins,
+  useSidebarCollapsed,
+  useStoreActions,
+  useThemePreferencesState,
+  useWorkbenchState,
+} from '../lib/store-context.js'
 import { resolveBrowserLocale } from '../lib/theme-preferences.js'
 import type { LocalePreference } from '../lib/types.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -23,7 +32,14 @@ type PaletteRow =
   | { kind: 'search-hit'; id: string; hit: SearchHit }
 
 export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
-  const store = useHelmStore()
+  const conversations = useConversations()
+  const { primaryTarget, splitTarget, focusedPanel } = useLocationTargets()
+  const { workbenchOpen } = useWorkbenchState()
+  const sidebarCollapsed = useSidebarCollapsed()
+  const { themePreference, localePreference: storeLocalePref, quietNotifyEnabled } = useThemePreferencesState()
+  const groupedUi = useGroupedUi()
+  const plugins = usePlugins()
+  const actions = useStoreActions()
   const { locale, t } = useWebLocale()
   const [query, setQuery] = useState('')
   const [hits, setHits] = useState<SearchHit[]>([])
@@ -62,7 +78,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
     const q = query.trim().toLowerCase()
     if (!q) return []
     const numeric = /^\d+$/.test(q) ? Number(q) : null
-    return store.conversations
+    return conversations
       .filter(
         (c) =>
           c.title.toLowerCase().includes(q) ||
@@ -70,25 +86,25 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
           (numeric !== null && c.id === numeric),
       )
       .slice(0, 6)
-  }, [query, store.conversations])
+  }, [query, conversations])
 
   const close = () => onClose()
 
-  const activePanel = resolveFocusedPanel(store.focusedPanel ?? 'primary', store.splitTarget)
-  const activeTarget = activeTargetForPanel(store.primaryTarget, store.splitTarget, activePanel)
+  const activePanel = resolveFocusedPanel(focusedPanel ?? 'primary', splitTarget)
+  const activeTarget = activeTargetForPanel(primaryTarget, splitTarget, activePanel)
 
   // 当前 Profile 上下文：聚焦面板待命页或会话所属角色；无上下文时不猜测默认角色。
   const paletteProfileId = useMemo(() => {
     if (activeTarget.kind === 'agent') return activeTarget.profileId
     if (activeTarget.kind !== 'conversation') return undefined
-    return store.conversations.find((c) => c.id === activeTarget.conversationId)?.profileId
-  }, [activeTarget, store.conversations])
+    return conversations.find((c) => c.id === activeTarget.conversationId)?.profileId
+  }, [activeTarget, conversations])
 
   // ⌘K 面板打开在当前聚焦面板会话上下文：与输入框 '/' 补全同一份作用域过滤，保证同一命令行为一致。
   const paletteConversation = useMemo(() => {
     if (activeTarget.kind !== 'conversation') return undefined
-    return store.conversations.find((c) => c.id === activeTarget.conversationId)
-  }, [activeTarget, store.conversations])
+    return conversations.find((c) => c.id === activeTarget.conversationId)
+  }, [activeTarget, conversations])
 
   const contextCommands = useMemo<Array<PaletteRow>>(() => {
     const rows: Array<PaletteRow> = []
@@ -120,15 +136,15 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
         },
       })
     }
-    if (activeTarget.kind === 'conversation' || store.workbenchOpen) {
+    if (activeTarget.kind === 'conversation' || workbenchOpen) {
       rows.push({
         kind: 'command',
         id: 'builtin:toggle-workbench',
-        title: store.workbenchOpen ? t('modals.palette.cmd.closeWorkbench') : t('modals.palette.cmd.openWorkbench'),
+        title: workbenchOpen ? t('modals.palette.cmd.closeWorkbench') : t('modals.palette.cmd.openWorkbench'),
         shortcut: formatModShortcut('J'),
         icon: 'panel-right',
         keywords: ['workbench', 'drawer', 'Workbench', 'Artifacts', '工作台', '产物'],
-        run: () => store.setWorkbenchOpen(!store.workbenchOpen),
+        run: () => actions.setWorkbenchOpen(!workbenchOpen),
       })
     }
     rows.push({
@@ -141,7 +157,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       run: () => {
         // 有当前 Profile 上下文进入待命态（首次发送才创建）；无上下文去角色中心选角色，
         // 不硬编码默认 assistant。
-        store.openTarget(
+        actions.openTarget(
           paletteProfileId !== undefined
             ? { kind: 'agent', profileId: paletteProfileId }
             : { kind: 'profiles' },
@@ -149,30 +165,30 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
         )
       },
     })
-    if (store.splitTarget) {
+    if (splitTarget) {
       rows.push({
         kind: 'command',
         id: 'builtin:close-split',
         title: t('modals.palette.cmd.closeSplit'),
         icon: 'panel-right',
         keywords: ['split', 'close', '分屏', '关闭'],
-        run: () => store.closeSplit(),
+        run: () => actions.closeSplit(),
       })
     }
     return rows
-  }, [activePanel, activeTarget.kind, paletteProfileId, store, t])
+  }, [activePanel, activeTarget.kind, actions, paletteProfileId, splitTarget, t, workbenchOpen])
 
-  const localePref: LocalePreference = store.localePreference ?? 'auto'
+  const localePref: LocalePreference = storeLocalePref ?? 'auto'
 
   const navCommands = useMemo<Array<PaletteRow>>(() => [
     {
       kind: 'command',
       id: 'builtin:toggle-sidebar',
-      title: store.sidebarCollapsed ? t('modals.palette.cmd.expandSidebar') : t('modals.palette.cmd.collapseSidebar'),
+      title: sidebarCollapsed ? t('modals.palette.cmd.expandSidebar') : t('modals.palette.cmd.collapseSidebar'),
       shortcut: formatModShortcut('B'),
       icon: 'columns',
       keywords: ['sidebar', 'collapse', 'Sidebar', 'Collapse', 'Navigation', '侧栏', '导航', '收起', '展开'],
-      run: () => store.toggleSidebarCollapsed?.(),
+      run: () => actions.toggleSidebarCollapsed?.(),
     },
     {
       kind: 'command',
@@ -181,7 +197,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       hint: 'assistant',
       icon: 'sparkles',
       keywords: ['assistant', 'profile', '个人助理', '角色'],
-      run: () => store.openTarget({ kind: 'agent', profileId: 'assistant' }),
+      run: () => actions.openTarget({ kind: 'agent', profileId: 'assistant' }),
     },
     {
       kind: 'command',
@@ -191,7 +207,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       keywords: ['profile', 'profiles', 'Profile', 'Agents', '角色', '智能体'],
       run: () => {
         close()
-        store.openTarget({ kind: 'profiles' })
+        actions.openTarget({ kind: 'profiles' })
       },
     },
     {
@@ -202,7 +218,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       keywords: ['model', 'models', 'provider', 'providers', 'key', 'Model', 'Credentials', '模型', '凭证', '供应商'],
       run: () => {
         close()
-        store.openTarget({ kind: 'models' })
+        actions.openTarget({ kind: 'models' })
       },
     },
     {
@@ -213,7 +229,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       keywords: ['skill', 'skills', 'Skills', '技能'],
       run: () => {
         close()
-        store.openTarget({ kind: 'skills' })
+        actions.openTarget({ kind: 'skills' })
       },
     },
     {
@@ -224,7 +240,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       keywords: ['node', 'nodes', 'byom', 'helm-node', 'Nodes', '节点', '计算节点'],
       run: () => {
         close()
-        store.openTarget({ kind: 'nodes' })
+        actions.openTarget({ kind: 'nodes' })
       },
     },
     {
@@ -235,26 +251,26 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       keywords: ['plugin', 'plugins', 'settings', 'Plugins', 'Settings', 'Plugin Center', '插件', '设置', '插件中心'],
       run: () => {
         close()
-        store.openTarget({ kind: 'plugins' })
+        actions.openTarget({ kind: 'plugins' })
       },
     },
     {
       kind: 'command',
       id: 'builtin:toggle-theme',
       title:
-        store.themePreference === 'system'
+        themePreference === 'system'
           ? t('modals.palette.cmd.themeToLight')
-          : store.themePreference === 'light'
+          : themePreference === 'light'
             ? t('modals.palette.cmd.themeToDark')
             : t('modals.palette.cmd.themeToSystem'),
       icon:
-        store.themePreference === 'system'
+        themePreference === 'system'
           ? 'monitor'
-          : store.themePreference === 'light'
+          : themePreference === 'light'
             ? 'sun'
             : 'moon',
       keywords: ['theme', 'light', 'dark', 'system', '主题', '浅色', '暗色', '系统'],
-      run: () => store.toggleTheme(),
+      run: () => actions.toggleTheme(),
     },
     {
       kind: 'command',
@@ -271,39 +287,39 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       run: () => {
         const nextPref: LocalePreference =
           localePref === 'auto' ? 'en' : localePref === 'en' ? 'zh-CN' : 'auto'
-        if (store.setLocalePreference) {
-          store.setLocalePreference(nextPref)
+        if (actions.setLocalePreference) {
+          actions.setLocalePreference(nextPref)
         } else {
-          store.setLocale(nextPref === 'auto' ? resolveBrowserLocale() : nextPref)
+          actions.setLocale(nextPref === 'auto' ? resolveBrowserLocale() : nextPref)
         }
       },
     },
     {
       kind: 'command',
       id: 'builtin:toggle-quiet-notify',
-      title: store.quietNotifyEnabled
+      title: quietNotifyEnabled
         ? t('modals.palette.cmd.quietNotifyDisable')
         : t('modals.palette.cmd.quietNotifyEnable'),
-      icon: store.quietNotifyEnabled ? 'bell' : 'bell-off',
+      icon: quietNotifyEnabled ? 'bell' : 'bell-off',
       keywords: ['notify', 'notification', 'background', 'quiet', 'blocked', 'Notifications', 'Alerts', 'Background', 'Completed', 'Approvals', '通知', '后台', '提醒', '审批'],
       run: () => {
-        void store.setQuietNotify(!store.quietNotifyEnabled)
+        void actions.setQuietNotify(!quietNotifyEnabled)
       },
     },
-  ], [localePref, store, t])
+  ], [actions, localePref, quietNotifyEnabled, sidebarCollapsed, t, themePreference])
 
   // 声明了 client 内容的插件命令：作为可选中命令行列出（选中即内联渲染）
   const pluginContentCommands = useMemo(
     () =>
-      store.groupedUi.commands
+      groupedUi.commands
         .filter((cmd) => cmd.spec.client !== undefined)
         .map((cmd) => ({ pluginId: cmd.pluginId, spec: cmd.spec })),
-    [store.groupedUi.commands],
+    [groupedUi.commands],
   )
 
   const pluginCommands = useMemo<Array<PaletteRow>>(
     () =>
-      commandsForConversation(store.groupedUi.commands, paletteConversation).map((cmd) => ({
+      commandsForConversation(groupedUi.commands, paletteConversation).map((cmd) => ({
         kind: 'command' as const,
         id: `plugin:${cmd.pluginId}/${cmd.spec.id}`,
         title: resolveLocalizedText(cmd.spec.title, locale),
@@ -312,10 +328,10 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
         keywords: cmd.spec.keywords,
         run: () => {
           if (!cmd.spec.actionId) return
-          void store
+          void actions
             .invokePluginAction(commandActionPluginId(cmd), cmd.spec.actionId, cmd.spec.input, paletteConversation?.id)
             .then(() =>
-              store.pushNotice({
+              actions.pushNotice({
                 type: 'notification',
                 level: 'info',
                 title: t('modals.palette.cmdExecuted'),
@@ -323,7 +339,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
               }),
             )
             .catch((err: unknown) =>
-              store.pushNotice({
+              actions.pushNotice({
                 type: 'notification',
                 level: 'error',
                 title: t('modals.palette.cmdFailed'),
@@ -332,7 +348,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
             )
         },
       })),
-    [store, paletteConversation, locale, t],
+    [actions, groupedUi.commands, paletteConversation, locale, t],
   )
 
   const conversationRows = useMemo<Array<PaletteRow>>(
@@ -357,7 +373,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
 
   const pluginRows = useMemo<Array<PaletteRow>>(
     () =>
-      (store.plugins ?? []).map((plugin) => ({
+      (plugins ?? []).map((plugin) => ({
         kind: 'command' as const,
         id: `plugin-item:${plugin.id}`,
         title: t('modals.palette.pluginTitle', { name: resolveLocalizedText(plugin.name, locale) || plugin.id }),
@@ -376,15 +392,15 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
         ],
         run: () => {
           close()
-          store.openTarget({ kind: 'plugins', pluginId: plugin.id })
+          actions.openTarget({ kind: 'plugins', pluginId: plugin.id })
         },
       })),
-    [store.plugins, store.openTarget, close, locale, t],
+    [plugins, actions.openTarget, close, locale, t],
   )
 
   const recentConversationRows = useMemo<Array<PaletteRow>>(
     () =>
-      selectRecentConversationsForPalette(store.conversations, paletteConversation?.id, 5).map((conv) => ({
+      selectRecentConversationsForPalette(conversations, paletteConversation?.id, 5).map((conv) => ({
         kind: 'search-hit' as const,
         id: `recent-conv:${conv.id}`,
         hit: {
@@ -394,7 +410,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
           snippet: t('modals.palette.recentSnippet', { id: conv.id, profileId: conv.profileId }),
         },
       })),
-    [store.conversations, paletteConversation?.id, t],
+    [conversations, paletteConversation?.id, t],
   )
 
   const rows = useMemo<Array<PaletteRow>>(() => {
@@ -446,13 +462,13 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       row.run()
     } else if (row.hit.entryId) {
       close()
-      store.openTarget(
+      actions.openTarget(
         { kind: 'conversation', conversationId: row.hit.conversationId },
         { highlightEntryId: String(row.hit.entryId) },
       )
     } else {
       close()
-      store.openTarget({ kind: 'conversation', conversationId: row.hit.conversationId })
+      actions.openTarget({ kind: 'conversation', conversationId: row.hit.conversationId })
     }
   }
 

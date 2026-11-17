@@ -1,22 +1,14 @@
 /**
- * node side remote execute environment RPC server side (group install main dry): complete implement `NodeEnvRpcFunctions`.
+ * Node-side remote execution RPC server implementing `NodeEnvRpcFunctions`.
  *
- * file/shell capability by inside placement zero external dependency `LocalExecutionEnv`(Node.js original generate
- * fs/promises + child_process, see ./local-env.ts) bear load: each cwd a
- * env instance (without across cwd pollute);reader with readerId handle bridge,dispose close
- * all reader;envExec with independent AbortController cancel,envAbortExec(execId)
- * immediately terminate command process tree, streaming output via onExecOutput frame back pass Hub; connect on disconnect
- * dispose: closure reader, kill this connect start command and wait for in-flight promise settle; each
- * connect (generation) a independent server instance, old proxy command/readers never across proxy re- use.
+ * File and shell operations are handled by `LocalExecutionEnv` (our thin adapter over
+ * `@earendil-works/pi-durable/env/node`'s `NodeExecutionEnv`, see `./local-env.ts`), scoped
+ * per `cwd`, with `readerId` handles and per-exec `AbortController`s. Herdr IPC (`ipcCall` /
+ * `ipcSubscribe`) and TCP tunneling (`nodeTunnelOpen` / `nodeTunnelAbort`) are delegated to
+ * `./env-rpc-ipc.ts` and `./env-rpc-tunnel.ts` with centralized admission/draining guards.
  *
- * Herdr IPC bridge (ipcCall/ipcSubscribe) and node side TCP tunnel (nodeTunnelOpen,
- * and daemon inject openTunnelStream double work stream double to pipe, this layer zero credentials) respectively in
- * ./env-rpc-ipc.ts and ./env-rpc-tunnel.ts, via isDisposed()/isDraining()
- * state query collaboration;admit/draining guard and dispose unify arrange empty order in this where.
- *
- * error code semantics (upgrade arrange empty vs cancel):draining refuse new request (envExec / ipcCall /
- * ipcSubscribe / nodeTunnelOpen / envCleanup) one rule return stable code node_draining;
- * user/host cancel, connect proxy final,dispose force compute still is aborted- - never mutual mix.
+ * Error semantics: requests rejected due to upgrade draining return `node_draining`, while
+ * user/host cancellation, generation retirement, and disposal return `aborted`.
  */
 
 import type { Duplex } from 'node:stream';
@@ -47,51 +39,33 @@ export { MAX_IPC_FRAME_BYTES, resolveHerdrIpcEndpoint } from './env-rpc-ipc.js';
 export type { IpcEndpointContext } from './env-rpc-ipc.js';
 
 export interface NodeEnvRpcServerOptions {
-  /** relative path base allow directory (daemon data directory). */
+  /** Base directory for relative paths (daemon data directory). */
   defaultCwd: string;
-  /** shell output streaming call back (forwarding back Hub  onEnvExecOutput). */
+  /** Callback forwarding shell stdout/stderr chunks back to the Hub (`onEnvExecOutput`). */
   onExecOutput?: (event: EnvExecOutputEvent) => void;
-  /**
-   * inject each shell child process environment (daemon build): such as HELM_HUB_URL.
-   * secret and short phase token by Hub side envOptions together into after via envExec.env one by one invoke pass
-   * (node do not persist any secret).
-   */
+  /** Daemon-injected base env vars for shell commands (e.g. `HELM_HUB_URL`). */
   shellEnv?: Record<string, string | undefined>;
-  /** command output single time back pass most large character count (streaming chunked cap, guard against single frame large;≥1). */
+  /** Maximum characters per streamed output chunk (>= 1; defaults to 256 KiB chars). */
   maxOutputChunkChars?: number;
-  /** IPC subscribe event call back (forwarding back Hub  onIpcEvent). */
+  /** Callback forwarding Herdr IPC subscription events back to the Hub (`onIpcEvent`). */
   onIpcEvent?: (event: NodeIpcEvent) => void;
-  /** IPC subscribe close/fails call back (forwarding back Hub  onIpcClosed). */
+  /** Callback forwarding Herdr IPC subscription closures back to the Hub (`onIpcClosed`). */
   onIpcClosed?: (event: NodeIpcClosedEvent) => void;
-  /**
-   * optional IPC wait for pre- compute; not config when by caller timeoutMs, cancel signal and connect proxy control.
-   * Herdr long task wait for cannot by daemon stealthily stealthily apply add a extra fixed die line.
-   */
+  /** Optional idle timeout for `ipcCall`; omitted so long Herdr calls obey caller timeout/abort. */
   ipcCallIdleTimeoutMs?: number;
-  /** optional IPC single frame (single row) byte cap (by default MAX_IPC_FRAME_BYTES = 32 MiB). */
+  /** Optional single-frame byte cap for Herdr IPC (defaults to `MAX_IPC_FRAME_BYTES = 32 MiB`). */
   maxIpcFrameBytes?: number;
-  /**
-   * process occupy scan inject (only test or subject to control host inject; produce do not fabricate):
-   * - procRoot:/proc alternative (default '/proc');
-   * - platform: platform fact alternative (default process.platform; non- linux explicit
-   *   not_supported, never fabricate across platform result).
-   */
+  /** Test/managed-host overrides for `envPathUsage` scanning. */
   pathUsage?: {
     procRoot?: string;
     platform?: () => string;
   };
   /**
-   * cancel/timeout after wait for underlying stdio pipeline arrange empty hard timeout (milli second, by default 500):
-   * when command derive detached descendant process inherit stdout/stderr fd and continuous write when,
-   * SDK exec may because wait for stream close while forever long suspended; exceeds the wide limit phase i.e. force compute,
-   * guarantee envExec / dispose never by orphan child descendant process drag.
+   * Hard grace window (ms, default 500) for stdio to drain after abort/timeout so detached
+   * descendants holding stdout/stderr open cannot hang `envExec` or `dispose()` indefinitely.
    */
   abortDrainGraceMs?: number;
-  /**
-   * open tunnel double work stream (daemon layer inject: connect Hub  /ws/node-tunnel and complete grasp manually).
-   * signal used to cancel in-flight create connect (nodeTunnelAbort / dispose): implement should as soon as possible
-   * reject and destroy underlying asset;env-rpc-tunnel only consume double work stream, zero credentials.
-   */
+  /** Daemon-injected duplex stream opener for `/ws/node-tunnel` (keeps credentials out of this layer). */
   openTunnelStream?: (tunnelId: string, signal?: AbortSignal) => Promise<Duplex>;
 }
 
@@ -100,11 +74,10 @@ const readerNotFound = <T>(readerId: string): RpcResult<T> => ({
   error: { code: 'not_found', message: `Unknown reader: ${readerId}` },
 });
 
-/** two enter system transfer cap (64 MiB):read/write/base64 to return single time payload cap, over limit explicit errors. */
+/** Binary transfer payload limit (64 MiB). */
 const MAX_BINARY_TRANSFER_BYTES = 64 * 1024 * 1024;
 
-/** base64 boundary validate: standard character parent table + fill, forbidden Node loosely parse static default swallow illegal character;
- * decode before validate encode after length cap (decode after ≤ 64 MiB), over limit explicit errors. */
+/** Strict base64 decoder (standard alphabet + padding, rejecting invalid chars and oversized payloads). */
 const decodeBase64 = (content: string, what: string): Uint8Array => {
   if (typeof content !== 'string') {
     throw Object.assign(new Error(`${what} must be a base64 string`), { code: 'invalid' });
@@ -113,7 +86,6 @@ const decodeBase64 = (content: string, what: string): Uint8Array => {
   if (content.length > encodedLimit) {
     throw Object.assign(new Error(`${what} exceeds the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`), { code: 'invalid' });
   }
-  // without embed set duplicate group, avoid large payload trigger regex backtrack stack overflow.
   if (content.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(content)) {
     throw Object.assign(new Error(`${what} is not valid base64 (standard alphabet)`), { code: 'invalid' });
   }
@@ -129,14 +101,12 @@ const decodeBase64 = (content: string, what: string): Uint8Array => {
 };
 
 /**
- * output chunked under a cut point: by codepoint boundary truncate UTF-16 text, never proxy for
- * split into two half (across frame each JSON encode will produce alternative character U+FFFD, break downstream concatenate).
- * even if config cap is 1, also allows a complete proxy for occupy 2 code meta, ensure each round before enter.
+ * Split UTF-16 output chunks on code-point boundaries so surrogate pairs are never torn across
+ * JSON frames (which would introduce U+FFFD replacement characters on reassembly).
  */
 const safeChunkEnd = (text: string, offset: number, limit: number): number => {
   const desired = Math.min(offset + Math.max(limit, 1), text.length);
   if (desired >= text.length) return text.length;
-  // high proxy in cut point on (low proxy in desired where by split): fall back one code meta.
   const code = text.charCodeAt(desired - 1);
   if (code >= 0xd800 && code <= 0xdbff) {
     const backed = desired - 1;
@@ -145,53 +115,24 @@ const safeChunkEnd = (text: string, offset: number, limit: number): number => {
   return desired;
 };
 
-/** NodeEnvRpcFunctions + dispose/inside omit + IPC end point parse (daemon connect line use). */
+/** `NodeEnvRpcFunctions` extended with lifecycle control (`dispose`, `setDraining`) and introspection. */
 export interface NodeEnvRpcServer extends NodeEnvRpcFunctions {
-  /**
-   * open to target host:port(host default 127.0.0.1, by this node parse connect) TCP
-   * tunnel, and openTunnelStream double work stream double to pipe. strictly validate reference (only
-   * tunnelId/host/port/timeoutMs);draining when return node_draining,disposed
-   * when return aborted; local machine failed to connect/grasp manually failed return structure error (never fabricate succeeded).
-   */
   nodeTunnelOpen(input: NodeTunnelOpenInput): Promise<RpcResult<null>>;
-  /** cancel in-flight tunnel (grasp manually in or already establish): destroy the tunnel TCP/WS and immediately return. */
   nodeTunnelAbort(tunnelId: string): Promise<void>;
-  /** close all reader, kill die in-flight command, destroy all IPC socket(connect disconnect or stop machine when invoke). idempotent. */  dispose(): Promise<void>;
-  /**
-   * arrange empty switch:true during new envExec / ipcCall / ipcSubscribe subject to i.e. refuse (upgrade
-   * arrange empty/committed let/choose await activate), does not affect already in-flight command;false restore subject to. idempotent.
-   */
+  /** Close all open readers, abort active commands, and tear down IPC/tunnel sockets. Idempotent. */
+  dispose(): Promise<void>;
+  /** Enable/disable drain mode (rejects new exec/IPC/tunnel calls with `node_draining`; existing work continues). */
   setDraining(value: boolean): void;
-  /** in-flight envExec amount (arrange empty inside omit; contains already subject to not spawn invoke). */
   getActiveExecCount(): number;
-  /** open reader amount (inside omit/test). */
   getOpenReaderCount(): number;
-  /** in-flight ipcCall amount (arrange empty inside omit; contains without callId in-flight invoke, subject to i.e. counter). */
   getActiveIpcCallCount(): number;
-  /** leap ipcSubscribe amount (inside omit/test; long resident subscribe do not count arrange empty wait for). */
   getActiveIpcSubscriptionCount(): number;
-  /** in-flight tunnel amount (arrange empty inside omit; contains TCP already start not complete grasp manually tunnel). */
   getActiveTunnelCount(): number;
 }
 
-/** void return RPC(abort/cleanup/unsubscribe): does not RpcResult boundary wrap;
- * envCleanup because by cwd kill all same cwd conversation in-flight command break semantics, in function inside
- * self carries disposed/draining explicit reject (throws via birpc error message seal such as back refuse). */
+/** Void-returning RPCs that throw directly via birpc instead of wrapping in `RpcResult`. */
 const VOID_RPC_METHODS = new Set(['envAbortExec', 'envCleanup', 'ipcAbortCall', 'ipcUnsubscribe', 'nodeTunnelAbort']);
 
-/**
- * guard subject to policy (and VOID_RPC_METHODS same layer data declaration, default policy is do not refuse new, do not append trace):
- * - envExec: subject to i.e. register - -draining/disposed/object validate and execWaiters counter
- *   all in guard entry sync complete, upgrade arrange empty polling see to counter contains already subject to not
- *   spawninvoke, and already subject to invoke will not because after setDraining by refuse;
- * - nodeTunnelOpen:draining refuse new tunnel; tunnel lifecycle (double end destroy) by
- *   tunnelWaiters append trace,dispose arrange empty when wait for its settle, no longer another row counter;
- * - ipcCall: once call count arrange empty opening path (ipcWaiters), upgrade wait for its converge,
- *   do not by old host exit hard cut assert;
- * - ipcSubscribe: subscribe is long resident semantics, arrange empty without waiting it converge (wait for it equals forbidden
- *   upgrade during subscribe store in), but draining when refuse new - - old host dispose before unify graceful
- *   close since has subscribe and via onIpcClosed notify Hub,Hub side can self row heavy subscribe.
- */
 const ADMIT_POLICIES: Record<string, { drainingWhat?: string; tracked?: 'exec' | 'ipc' }> = {
   envExec: { drainingWhat: 'commands', tracked: 'exec' },
   nodeTunnelOpen: { drainingWhat: 'tunnels' },
@@ -276,7 +217,6 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     isDraining: () => draining,
   });
 
-  /** Result adapt:void → null(JSON serialization friend well); failed keep structure. */
   const unwrap = async <T, R = T extends void ? null : T>(
     promise: Promise<{ ok: true; value: T } | { ok: false; error: unknown }>,
   ): Promise<RpcResult<R>> => {
@@ -284,24 +224,13 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     return result.ok ? { ok: true, value: (result.value ?? null) as R } : rpcFail(result.error);
   };
 
-  /**
-   * group install envExec child process environment (host token isolated):
-   * - base bottom: node host process.env non- secret part (PATH/HOME etc. local machine tool chain);
-   * - strip except host HELM_TOKEN(node itself credentials never enter remote conversation;SDK by default
-   *   inheritEnv:true will process.env re- merge back come, reason must explicit pass
-   *   inheritEnv:false and self carries merge result);
-   * - node daemon shellEnv(HELM_HUB_URL/HELM_DATA_DIR) override base bottom;
-   * - caller input.env(Hub managed inject, can contains legal HELM_TOKEN) finally override.
-   * input.inheritEnv:false semantics: only use shellEnv + input.env, do not carries host base bottom.
-   */
+  /** Build child env while stripping daemon credentials (`HELM_TOKEN` / `HELM_EXECUTION_SCOPE`) unless explicitly supplied in `input.env`. */
   const buildExecEnv = (
     input: { env?: Record<string, string>; inheritEnv?: boolean },
   ): { env: Record<string, string>; inheritEnv: false } => {
     const merged: Record<string, string> = {};
     if (input.inheritEnv !== false) {
       for (const [key, value] of Object.entries(process.env)) {
-        // managed identity variable strip except (HELM_TOKEN / HELM_EXECUTION_SCOPE):daemon host
-        // itself value never static default enter sub- command; legal value only by caller input.env by time inject.
         if (value === undefined || isManagedHelmEnvKey(key)) continue;
         setEnvEntry(merged, key, value);
       }
@@ -315,7 +244,6 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     return { env: merged, inheritEnv: false as const };
   };
 
-  /** in-flight envExec  settle promise(dispose arrange empty use; by invoke append trace, idempotent key cannot rely). */
   const execWaiters = new Set<Promise<unknown>>();
   const trackExec = <T>(promise: Promise<T>): Promise<T> => {
     execWaiters.add(promise);
@@ -328,14 +256,12 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     if (typeof execId !== 'string' || execId.length === 0 || execId.length > 128) {
       return invalidInput(`Invalid execId: ${JSON.stringify(execId)}`);
     }
-    // duplicate execId: in-flight item will by override and lose remove cancel handle - - explicit reject.
     if (running.has(execId)) {
       return invalidInput(`Duplicate execId in flight: ${JSON.stringify(execId)}`);
     }
     const executionEnv = envFor(cwd);
     const controller = new AbortController();
     running.set(execId, { controller });
-    // env output call back exception rotate is callback_error, and negative duty kill process tree and wait for exit.
     const emit = (text: string, stream: 'stdout' | 'stderr', skipped?: EnvExecOutputEvent['skipped']): void => {
       if (!onExecOutput) return;
       for (let offset = 0; offset < text.length;) {
@@ -344,11 +270,6 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
         offset = end;
       }
     };
-    /**
-     * cancel/timeout after stdio arrange empty hard timeout:SDK exec in child process exit after still may by
-     * detached descendant process drag stdout/stderr pipeline hang (idle grace will because continuous
-     * write do not assert reset). wide limit phase inside underlying not settle i.e. force compute, never forever long hang die.
-     */
     let forced: { ok: false; error: { code: 'aborted' | 'timeout'; message: string } } | undefined;
     let execSettled = false;
     let settleForce: (() => void) | undefined;
@@ -359,7 +280,6 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       forced = { ok: false, error: { code, message } };
       settleForce?.();
     };
-    // cancel (envAbortExec / dispose): first to underlying a arrange empty window, past due phase force aborted.
     controller.signal.addEventListener('abort', () => {
       if (execSettled) return;
       const timer = setTimeout(
@@ -368,8 +288,6 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       );
       drainTimers.add(timer);
     }, { once: true });
-    // underlying itself timeout kill tree after same may by descendant process pipeline hang:timeout+wide limit phase to point
-    // first cancel again force timeout compute (no longer extra stack add wide limit).
     if (timeout !== undefined && Number.isFinite(timeout) && timeout > 0) {
       const timer = setTimeout(() => {
         if (execSettled) return;
@@ -425,7 +343,6 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
         if (info.value.size > MAX_BINARY_TRANSFER_BYTES) {
           return invalidInput(`readBinaryFile result exceeds the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`);
         }
-        // use the same file handle has boundary read; check after file increase long also will not trigger without boundary allocate.
         const result = await reader.read(0, MAX_BINARY_TRANSFER_BYTES + 1);
         if (!result.ok) return rpcFail(result.error);
         if (result.value.byteLength > MAX_BINARY_TRANSFER_BYTES) {
@@ -444,7 +361,6 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       } catch (error) {
         return rpcFail(error);
       }
-      // decode after: real byte count re- verify (contains utf8 path and base64 decode result).
       const size = typeof bytes === 'string' ? Buffer.byteLength(bytes, 'utf8') : bytes.byteLength;
       if (size > MAX_BINARY_TRANSFER_BYTES) {
         return invalidInput(
@@ -481,8 +397,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       return unwrap(envFor(cwd).listDir(target));
     },
     async envListFiles() {
-      // LocalExecutionEnv not implemented optional listFiles: such as return not_supported,
-      // caller (pi-durable host) self row fall back iterate.
+      // Optional `listFiles` is not implemented on remote nodes; callers fall back to directory walks.
       return { ok: false, error: { code: 'not_supported', message: 'listFiles is not available on this environment' } };
     },
     async envCanonicalPath({ path: target, cwd }) {
@@ -492,15 +407,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       return unwrap(envFor(cwd).exists(target));
     },
 
-    /**
-     * node local machine process occupy snapshot (before deletion diagnose; only read side, upgrade arrange empty do not reject - - and file
-     * only read operation same opening path). process inside directly scan (zero helper spawn, do not use target cwd start
-     * any child process); only read cwd/fd/comm locate information, never read cmdline/environ.
-     * reference strictly validate (only path field); non- Linux platform explicit not_supported; durable
-     * permission refuse read (EACCES/EPERM, across uid or non-dumpable such as systemd --user)
-     * count is structure blind spot (unobservable counter + diagnose, does not affect complete); non- permission
-     * class read error make complete=false(never pretend complete/clean).
-     */
+    /** Scan `/proc` via `@helm/env-io` to report processes referencing `path` (read-only). */
     async envPathUsage(raw: unknown): Promise<RpcResult<NodePathUsage>> {
       if (!isRecord(raw) || Array.isArray(raw)) {
         return invalidInput('envPathUsage input must be a plain object');
@@ -514,7 +421,6 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
         return invalidInput('envPathUsage path must be a non-empty string without NUL, at most 4096 chars');
       }
       const procRoot = options.pathUsage?.procRoot ?? '/proc';
-      // and Hub side shared use @helm/env-io the same node fs adapt, never each duplicate one set semantics.
       const io = createNodePathUsageIo();
       const result = await scanPathUsage(target, {
         io,
@@ -577,7 +483,6 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     async envBinaryReaderRead({ readerId, offset, length }) {
       const reader = getReader<BinaryReader>(readerId, 'binary');
       if (reader === undefined) return readerNotFound(readerId);
-      // transfer cap: request read length over 64 MiB explicit reject (page read by caller batch enter row).
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 0 || length > MAX_BINARY_TRANSFER_BYTES) {
         return invalidInput(
           `length must be a safe integer no greater than ${MAX_BINARY_TRANSFER_BYTES}`,
@@ -628,13 +533,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       running.get(execId)?.controller.abort(new Error('aborted by hub'));
     },
 
-    /**
-     * by cwd granularity clean up: kill same cwd under**all**in-flight command process tree (envs by same node many
-     * conversation sharing,cwd is not conversation isolated key), will mistakenly kill same cwd other conversation in-flight command;
-     * Hub side remote-env moment intent do not invoke this method (connect level dispose fall back).
-     * draining/disposed when reject: arrange empty phase clean kill break arrange empty do not strong kill transaction semantics
-     * (birpc error message seal such as back refuse, not silently).
-     */
+    /** Kill all running commands for `cwd` (or all cwds); rejected while draining or disposed. */
     async envCleanup(cwd?: string): Promise<void> {
       if (disposed) {
         throw Object.assign(new Error('server disposed, rejecting envCleanup'), { code: 'aborted' });
@@ -658,23 +557,11 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     ipcSubscribe: ipc.ipcSubscribe,
     ipcUnsubscribe: ipc.ipcUnsubscribe,
   };
-  // tunnel RPC attach (protocol NodeEnvRpcFunctions already contains optional two method).
   const rpcFunctions: NodeEnvRpcFunctions = Object.assign(rpc, {
     nodeTunnelOpen: (input: NodeTunnelOpenInput): Promise<RpcResult<null>> => tunnels.nodeTunnelOpen(input),
     nodeTunnelAbort: tunnels.nodeTunnelAbort,
   });
 
-  /**
-   * boundary unify wrap: all RpcResult return RPC- -disposed / sync exception /
-   * null input solve construct error - - one rule rotate is structure RpcResult error message seal, never to
-   * birpc caller throw bare exception.void return abort/cleanup do not change signature.
-   *
-   * method difference only via admit parameter:
-   * - drainingWhat: reference and upgrade arrange empty refuse new method and its refuse new text proposal theme; not config
-   *   method do not refuse new (file only read side and arrange empty without closure), and in latency execute segment re-check disposed
-   *   (subject to and execute between by dispose when with aborted reject, no longer trigger touch original);
-   * - tracker: subject to i.e. count arrange empty inside omit (trackExec / trackIpc).
-   */
   const guardRpcMethod = (
     original: (...args: unknown[]) => Promise<RpcResult<unknown>>,
     admit: { drainingWhat?: string; tracker?: <T>(promise: Promise<T>) => Promise<T> },
@@ -725,7 +612,6 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     disposed = true;
     disposal = (async () => {
       for (const exec of running.values()) exec.controller.abort(new Error('connection closed'));
-      // tunnel/IPC: destroy all TCP, double work stream and socket and empty in-flight register (idempotent).
       tunnels.destroyAllTunnels();
       ipc.destroySockets();
       await Promise.allSettled([...pendingOperations, ...execWaiters, ...tunnels.getTunnelWaiters()]);
@@ -746,7 +632,6 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     setDraining: (value: boolean): void => {
       draining = value === true;
     },
-    // arrange empty inside omit by already subject to counter (execWaiters/ipcWaiters in subject to sync segment register).
     getActiveExecCount: () => execWaiters.size,
     getOpenReaderCount: () => readers.size,
     getActiveIpcCallCount: () => ipc.getActiveCallCount(),

@@ -1,130 +1,184 @@
 /**
- * zero external dependency local machine execute environment: only use Node.js inside placement module implement
- * `NodeEnvRpcFunctions` which must file system and shell capability (local file read write,
- * row scan, command execute), semantics and `@earendil-works/pi-durable` 
- * `NodeExecutionEnv` 1.5.0 align. and upstream manually work sync point by contract test pin
- * (test/node-local-env-contract.test.ts:shell probe result,128+signal edit number
- * exit code, timeout text proposal, overflow write file complete, streaming decode and row scan opening path).
+ * Thin `@helm/node` adapter over `@earendil-works/pi-durable/env/node` (`NodeExecutionEnv`).
  *
- * and SDK version difference (moment intent is of):
- * - cancel signal directly use original generate `AbortSignal`(does not introduce chord  Context);
- * - do not implement `watch` / `listFiles`(NodeEnvRpcFunctions does not include file listen
- *   and recursion column raise interface;envListFiles such as return not_supported).
- *
- * all file system and process error such as mapping is FileError / ExecutionError
- * (code align @helm/protocol  RpcFileErrorCode / RpcExecutionErrorCode),
- * never static default fall back or fabricate result.
- *
- * implement by responsibility split is local-env/ sub- module, this file is composition root (LocalExecutionEnv
- * orchestration each original language) and public API gate side:
- * - local-env/errors.ts:Result message seal,FileError / ExecutionError and error mapping;
- * - local-env/decode.ts:StreamDecoder / LineScanner(align pi-durable
- *   decode.ts / line-scan.ts);
- * - local-env/readers.ts:TextLine / Binary / Dir three class Reader and FileInfo;
- * - local-env/shell.ts:shell locate (contains WSL legacy), process tree terminate,exec
- *   option type and environment group install (align pi coding-agent shell.ts);
- * - local-env/target-path.ts:resolveTargetPath unify target path parse original language.
+ * Delegates file I/O, streaming line/binary/directory readers, `StreamDecoder`, `LineScanner`,
+ * error types, command execution, spill files, and timeout/signal handling to `NodeExecutionEnv`,
+ * while preserving `@helm/node`-specific guarantees:
+ * - `AbortSignal`-based API surface (bridged to `@earendil-works/chord/context`);
+ * - deterministic target-platform path resolution via `resolveTargetPath`;
+ * - host shell probing via `@helm/env-io` (`resolveHostShellConfig`), preventing Windows hosts
+ *   from implicitly falling back into WSL;
+ * - stripping managed identity/scope variables (`HELM_TOKEN`, `HELM_EXECUTION_SCOPE`) and
+ *   case-safe Windows env-key normalization (`getShellEnv`).
  */
 
-import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { constants, createWriteStream } from 'node:fs';
-import {
-  access,
-  appendFile,
-  lstat,
-  mkdir,
-  mkdtemp,
-  opendir,
-  open as openFile,
-  readdir,
-  readFile,
-  realpath,
-  rename,
-  rm,
-  writeFile,
-} from 'node:fs/promises';
-import { constants as osConstants, tmpdir } from 'node:os';
+import { constants } from 'node:fs';
+import { access } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { FileHandle } from 'node:fs/promises';
-import type { ShellProbeIo } from '@helm/env-io';
-import { targetPlatformOf, type TargetPlatform } from '@helm/protocol';
-import { ExecutionError, FileError, abortResult, err, isNodeError, ok, toError, toFileError, type Result } from './local-env/errors.js';
-import { StreamDecoder } from './local-env/decode.js';
+import { BACKGROUND_CONTEXT, withAbortSignal, type Context } from '@earendil-works/chord/context';
 import {
-  LocalBinaryReader,
-  LocalDirReader,
-  LocalTextLineReader,
-  fileInfoFromStats,
-  type BinaryReader,
-  type DirReader,
-  type FileHandleLike,
+  ExecutionError,
+  FileError,
+  LineScanner,
+  StreamDecoder,
+  err as sdkErr,
+  ok as sdkOk,
+  toError,
+  type BinaryReader as SdkBinaryReader,
+  type DirReader as SdkDirReader,
+  type ExecutionErrorCode,
+  type FileErrorCode,
   type FileInfo,
-  type TextLineReader,
-} from './local-env/readers.js';
-import {
-  SPILL_HIGH_WATER_MARK,
-  getShellConfig,
-  getShellEnv,
-  killProcessTree,
-  resolveTimeoutMs,
-  waitForChildProcess,
-  type ChildProcessLike,
-  type ShellExecOptions,
+  type FileKind,
+  type LineScan,
+  type Result as SdkResult,
+  type ShellExecOptions as SdkShellExecOptions,
   type ShellExecResult,
-} from './local-env/shell.js';
-import { joinTargetPath, parentTargetPath, resolveTargetPath } from './local-env/target-path.js';
+  type ShellOutputInfo,
+  type ShellOutputSkip,
+  type ShellSpillOptions,
+  type TextLine,
+  type TextLineReader as SdkTextLineReader,
+} from '@earendil-works/pi-durable/env';
+import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
+import {
+  killProcessTree,
+  resolveHostShellConfig,
+  setEnvEntry,
+  type ResolvedShellConfig,
+  type ShellProbeIo,
+} from '@helm/env-io';
+import { targetPlatformOf, type TargetPlatform } from '@helm/protocol';
+import { resolveTargetPath } from './local-env/target-path.js';
 
-// public API gate side: keep and split before fully consistent export side (consumer unify from this file import).
-export type { Result, FileErrorCode, ExecutionErrorCode } from './local-env/errors.js';
-export { FileError, ExecutionError, ok, err } from './local-env/errors.js';
-export type { LineScan } from './local-env/decode.js';
-export { StreamDecoder, LineScanner } from './local-env/decode.js';
+export type Result<T> = SdkResult<T, FileError | ExecutionError>;
 export type {
+  FileErrorCode,
+  ExecutionErrorCode,
+  LineScan,
   FileKind,
   FileInfo,
   TextLine,
-  TextLineReader,
-  BinaryReader,
-  DirReader,
-  FileHandleLike,
-  DirHandleLike,
-} from './local-env/readers.js';
-export type {
   ShellSpillOptions,
   ShellOutputSkip,
   ShellOutputInfo,
-  ShellExecOptions,
   ShellExecResult,
-} from './local-env/shell.js';
-export { isManagedHelmEnvKey, killProcessTree } from './local-env/shell.js';
-export { resolveTargetPath } from './local-env/target-path.js';
+};
+export { FileError, ExecutionError, StreamDecoder, LineScanner, killProcessTree, resolveTargetPath };
 
-const symlinkRefused = (path: string, cause?: Error) =>
-  new FileError('invalid', 'Refusing to follow a symbolic link', path, cause);
+export const ok = <T>(value: T): Result<T> => sdkOk(value);
+export const err = <T = never>(error: FileError | ExecutionError): Result<T> => sdkErr(error);
+
+export interface TextLineReader {
+  readLine(signal?: AbortSignal): Promise<Result<TextLine | undefined>>;
+  close(): Promise<void>;
+}
+
+export interface BinaryReader {
+  info(signal?: AbortSignal): Promise<Result<FileInfo>>;
+  read(offset: number, length: number, signal?: AbortSignal): Promise<Result<Uint8Array>>;
+  scanLines(options: { startLine: number; endLine?: number }, signal?: AbortSignal): Promise<Result<LineScan>>;
+  close(): Promise<void>;
+}
+
+export interface DirReader {
+  next(maxEntries: number, signal?: AbortSignal): Promise<Result<{ entries: FileInfo[]; done: boolean }>>;
+  close(): Promise<void>;
+}
+
+export type ShellExecOptions = Omit<SdkShellExecOptions, 'onOutput'> & {
+  onOutput?: (text: string, info: ShellOutputInfo) => void;
+};
+
+const toContext = (signal?: AbortSignal): Context =>
+  signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(signal, BACKGROUND_CONTEXT);
+
+const wrapTextLineReader = (reader: SdkTextLineReader): TextLineReader => ({
+  readLine: (signal) => reader.readLine(toContext(signal)),
+  close: () => reader.close(BACKGROUND_CONTEXT),
+});
+
+const wrapBinaryReader = (reader: SdkBinaryReader): BinaryReader => ({
+  info: (signal) => reader.info(toContext(signal)),
+  read: (offset, length, signal) => reader.read(offset, length, toContext(signal)),
+  scanLines: (options, signal) => reader.scanLines(options, toContext(signal)),
+  close: () => reader.close(BACKGROUND_CONTEXT),
+});
+
+const wrapDirReader = (reader: SdkDirReader): DirReader => ({
+  next: (maxEntries, signal) => reader.next(maxEntries, toContext(signal)),
+  close: () => reader.close(BACKGROUND_CONTEXT),
+});
+
+/** Resolve host shell configuration wrapped as an `ExecutionError` Result. */
+export async function getShellConfig(
+  customShellPath: string | undefined,
+  io?: ShellProbeIo,
+): Promise<Result<ResolvedShellConfig>> {
+  const resolved = await resolveHostShellConfig(customShellPath, io);
+  return resolved.ok ? ok(resolved.value) : err(new ExecutionError('shell_unavailable', resolved.message));
+}
+
+/**
+ * Managed identity/scope variables stripped when inheriting host `process.env` into child
+ * commands (`HELM_TOKEN` is the node's own credential; `HELM_EXECUTION_SCOPE` is per-invocation).
+ * Explicit `baseEnv` (`shellEnv`) and caller `extraEnv` still override deliberately.
+ */
+const MANAGED_INHERIT_STRIP_UPPER = new Set(['HELM_TOKEN', 'HELM_EXECUTION_SCOPE']);
+
+/** Returns true for managed identity/scope env keys (case-insensitive). */
+export function isManagedHelmEnvKey(key: string): boolean {
+  return MANAGED_INHERIT_STRIP_UPPER.has(key.toUpperCase());
+}
+
+/** Build the child process environment map, stripping managed host keys and deduplicating Windows casing. */
+export function getShellEnv(
+  baseEnv: NodeJS.ProcessEnv | undefined,
+  extraEnv: Record<string, string> | undefined,
+  inheritEnv = true,
+  platform: NodeJS.Platform = process.platform,
+): Record<string, string> {
+  const merged: Record<string, string> = {};
+  if (inheritEnv) {
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value === undefined || isManagedHelmEnvKey(key)) continue;
+      setEnvEntry(merged, key, value, platform);
+    }
+    for (const [key, value] of Object.entries(baseEnv ?? {})) {
+      if (value === undefined) continue;
+      setEnvEntry(merged, key, value, platform);
+    }
+  }
+  for (const [key, value] of Object.entries(extraEnv ?? {})) {
+    if (value === undefined) continue;
+    setEnvEntry(merged, key, value, platform);
+  }
+  return merged;
+}
 
 export interface LocalExecutionEnvOptions {
   cwd: string;
   shellPath?: string;
   shellEnv?: NodeJS.ProcessEnv;
   /**
-   * target platform identifier (default process.platform):win32 target enable protocol
-   * normalizeTargetPath  POSIX view determinism convert; test inject use, produce do not pass.
+   * Target platform identifier (defaults to `process.platform`): `win32` enables deterministic
+   * POSIX-view normalization via `resolveTargetPath`. For test injection only.
    */
   platform?: string;
-  /** test inject opening: override Shell probe I/O(produce do not pass). */
+  /** Test-only override for host shell probing I/O. */
   shellProbeIo?: ShellProbeIo;
 }
 
 export class LocalExecutionEnv {
-  /** all local machine environment see to identical file. */
+  /** All local host environments share the same file namespace. */
   readonly id = 'node:local';
   cwd: string;
-  #shellPath?: string;
-  #shellEnv?: NodeJS.ProcessEnv;
-  #platform: TargetPlatform;
-  #shellProbeIo?: ShellProbeIo;
-  #activeChildPids = new Set<number>();
+  readonly #shellPath?: string;
+  readonly #shellEnv?: NodeJS.ProcessEnv;
+  readonly #platform: TargetPlatform;
+  readonly #shellProbeIo?: ShellProbeIo;
+  readonly #inner: NodeExecutionEnv;
+  readonly #activeRunners = new Set<NodeExecutionEnv>();
 
   constructor(options: LocalExecutionEnvOptions) {
     this.cwd = options.cwd;
@@ -132,11 +186,23 @@ export class LocalExecutionEnv {
     this.#shellEnv = options.shellEnv;
     this.#platform = targetPlatformOf(options.platform ?? process.platform);
     this.#shellProbeIo = options.shellProbeIo;
+    this.#inner = new NodeExecutionEnv({
+      cwd: options.cwd,
+      ...(options.shellPath === undefined ? {} : { shellPath: options.shellPath }),
+    });
   }
 
-  /** file API and exec shared use target path parse original language (see resolveTargetPath). */
   #resolvePath(path: string): Result<string> {
     return resolveTargetPath(this.cwd, path, this.#platform);
+  }
+
+  async #withResolvedPath<T>(
+    path: string,
+    fn: (resolved: string) => Promise<Result<T>>,
+  ): Promise<Result<T>> {
+    const resolution = this.#resolvePath(path);
+    if (!resolution.ok) return resolution;
+    return fn(resolution.value);
   }
 
   async absolutePath(path: string): Promise<Result<string>> {
@@ -153,12 +219,7 @@ export class LocalExecutionEnv {
     signal?: AbortSignal,
   ): Promise<Result<ShellExecResult>> {
     if (signal?.aborted) return err(new ExecutionError('aborted', 'aborted'));
-    const timeoutMsResult = resolveTimeoutMs(options?.timeout);
-    if (!timeoutMsResult.ok) return timeoutMsResult;
-    const timeoutMs = timeoutMsResult.value;
-    // win32 target:options.cwd and conversation cwd unify via resolveTargetPath parse
-    // (/mnt/<symbol>/... etc. POSIX view determinism convert, without symbol explicit failed);
-    // posix target use node:path.posix semantics, avoid Windows host pollute target path.
+
     let cwd: string;
     let originalCwd: string | undefined;
     if (options?.cwd !== undefined) {
@@ -174,7 +235,6 @@ export class LocalExecutionEnv {
       }
       cwd = resolution.value;
     } else if (this.#platform === 'win32') {
-      // conversation cwd itself may is POSIX view: via the same original language specification after again spawn.
       originalCwd = this.cwd;
       const resolution = this.#resolvePath(this.cwd);
       if (!resolution.ok) {
@@ -189,263 +249,71 @@ export class LocalExecutionEnv {
     } else {
       cwd = this.cwd;
     }
-    // string command via shell execute; parameter array directly execute program, do not via shell parse.
-    let program: string;
-    let args: string[];
-    let stdinCommand: string | undefined;
+
+    let resolvedShellPath = this.#shellPath;
     if (typeof command === 'string') {
-      const shellConfig = await getShellConfig(this.#shellPath, this.#shellProbeIo);
-      if (!shellConfig.ok) return shellConfig;
-      const commandFromStdin = shellConfig.value.commandTransport === 'stdin';
-      program = shellConfig.value.shell;
-      args = commandFromStdin ? shellConfig.value.args : [...shellConfig.value.args, command];
-      stdinCommand = commandFromStdin ? command : undefined;
-    } else {
-      const [first, ...rest] = command;
-      if (first === undefined) return err(new ExecutionError('spawn_error', 'Empty argv: no program to run'));
-      program = first;
-      args = rest;
+      const probePlatform = this.#shellProbeIo?.platform ?? process.platform;
+      if (probePlatform === 'win32' || this.#shellPath !== undefined || this.#shellProbeIo !== undefined) {
+        const shellConfig = await getShellConfig(this.#shellPath, this.#shellProbeIo);
+        if (!shellConfig.ok) return shellConfig;
+        resolvedShellPath = shellConfig.value.shell;
+      }
     }
+
     try {
       await access(cwd, constants.F_OK);
     } catch (error) {
       const cause = toError(error);
-      // win32 target on parse may change write path: diagnose also keep original cwd(options.cwd
-      // or POSIX view conversation cwd) and parse after cwd;posix target message keep original
-      // (non- Windows behavior do not change).
       const origin =
         originalCwd !== undefined && this.#platform === 'win32' && originalCwd !== cwd
           ? ` (resolved from ${originalCwd})`
           : '';
       return err(
-        new ExecutionError('spawn_error', `Working directory does not exist: ${cwd}${origin}\nCannot execute bash commands.`, cause),
+        new ExecutionError(
+          'spawn_error',
+          `Working directory does not exist: ${cwd}${origin}\nCannot execute bash commands.`,
+          cause,
+        ),
       );
     }
-    return await new Promise((resolvePromise) => {
-      let settled = false;
-      let timedOut = false;
-      let callbackError: ExecutionError | undefined;
-      let spillError: ExecutionError | undefined;
-      let child: ChildProcessLike | undefined;
-      let timeoutId: NodeJS.Timeout | undefined;
-      const spillPrefix: Uint8Array[] = [];
-      let spillPath: string | undefined;
-      const spillQueue: Uint8Array[] = [];
-      let spillStart: Promise<void> | undefined;
-      let spillStream: ReturnType<typeof createWriteStream> | undefined;
-      let spillBackpressured = false;
-      const onAbort = () => {
-        if (child?.pid) killProcessTree(child.pid);
-      };
-      const failCallback = (error: unknown) => {
-        if (callbackError !== undefined) return;
-        const cause = toError(error);
-        callbackError = new ExecutionError('callback_error', cause.message, cause);
-        onAbort();
-      };
-      // each stream a decode: across chunk split character in the same stream inside obtain with store.
-      const stdoutDecoder = new StreamDecoder();
-      const stderrDecoder = new StreamDecoder();
-      // exec compute after no longer has output reach caller (e.g. descendant process hold has stdio).
-      const emit = (text: string, stream: 'stdout' | 'stderr') => {
-        if (settled || text === '' || options?.onOutput === undefined || callbackError !== undefined) return;
-        try {
-          options.onOutput(text, { stream });
-        } catch (error) {
-          failCallback(error);
-        }
-      };
-      // spill start before output: count threshold and keep is spill prefix.
-      let seenBytes = 0;
-      let seenNewlines = 0;
-      const settle = (result: Result<ShellExecResult>) => {
-        if (settled) return;
-        settled = true;
-        if (timeoutId) clearTimeout(timeoutId);
-        if (signal) signal.removeEventListener('abort', onAbort);
-        if (child?.pid) this.#activeChildPids.delete(child.pid);
-        resolvePromise(result);
-      };
-      const pauseOutput = () => {
-        child?.stdout?.pause();
-        child?.stderr?.pause();
-      };
-      const resumeOutput = () => {
-        if (callbackError !== undefined || spillError !== undefined || timedOut || signal?.aborted || spillBackpressured) return;
-        child?.stdout?.resume();
-        child?.stderr?.resume();
-      };
-      const failSpill = (error: unknown) => {
-        if (spillError !== undefined) return;
-        const cause = toError(error);
-        spillError = new ExecutionError('unknown', `Failed to preserve complete shell output: ${cause.message}`, cause);
-        spillBackpressured = false;
-        onAbort();
-      };
-      const writeSpill = (chunk: Uint8Array) => {
-        if (spillStream === undefined || chunk.length === 0) return;
-        if (spillStream.write(chunk) || spillBackpressured) return;
-        spillBackpressured = true;
-        pauseOutput();
-        spillStream.once('drain', () => {
-          spillBackpressured = false;
-          resumeOutput();
-        });
-      };
-      const startSpill = (chunk: Uint8Array) => {
-        if (spillStream !== undefined) {
-          writeSpill(chunk);
-          return;
-        }
-        spillQueue.push(chunk);
-        if (spillStart !== undefined) return;
-        pauseOutput();
-        spillStart = (async () => {
-          const created = await this.createTempFile({ prefix: 'pi-output-', suffix: '.log' }, signal);
-          if (!created.ok) throw created.error;
-          spillPath = created.value;
-          spillStream = createWriteStream(spillPath, { flags: 'a', highWaterMark: SPILL_HIGH_WATER_MARK });
-          spillStream.on('error', failSpill);
-          for (const queued of spillQueue) writeSpill(queued);
-          spillQueue.length = 0;
-        })()
-          .then(() => undefined)
-          .catch(failSpill)
-          .finally(resumeOutput);
-      };
-      const finishSpill = async (): Promise<void> => {
-        await spillStart?.catch(() => undefined);
-        const stream = spillStream;
-        if (stream === undefined || spillError !== undefined || stream.destroyed) return;
-        await new Promise<void>((resolveFinish) => {
-          stream.once('error', () => resolveFinish());
-          stream.once('finish', resolveFinish);
-          stream.end();
-        });
-      };
-      try {
-        child = spawn(program, args, {
-          cwd,
-          detached: process.platform !== 'win32',
-          env: getShellEnv(this.#shellEnv, options?.env, options?.inheritEnv),
-          stdio: [stdinCommand === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
-          windowsHide: true,
-        }) as ChildProcessLike;
-        if (child.pid) this.#activeChildPids.add(child.pid);
-        if (stdinCommand !== undefined) {
-          child.stdin?.on('error', () => {});
-          child.stdin?.end(stdinCommand);
-        }
-      } catch (error) {
-        const cause = toError(error);
-        settle(err(new ExecutionError('spawn_error', cause.message, cause)));
-        return;
-      }
-      timeoutId =
-        timeoutMs === undefined
-          ? undefined
-          : setTimeout(() => {
-              timedOut = true;
-              onAbort();
-            }, timeoutMs);
-      if (signal) {
-        if (signal.aborted) onAbort();
-        else signal.addEventListener('abort', onAbort, { once: true });
-      }
-      const feed =
-        (source: 'stdout' | 'stderr', decoder: StreamDecoder) =>
-        (chunk: Buffer) => {
-          emit(decoder.decode(chunk), source);
-          const spill = options?.spill;
-          if (spill === undefined || chunk.length === 0) return;
-          if (spillStart !== undefined) {
-            startSpill(chunk);
-            return;
-          }
-          seenBytes += chunk.length;
-          for (let index = chunk.indexOf(0x0a); index !== -1; index = chunk.indexOf(0x0a, index + 1)) {
-            seenNewlines++;
-          }
-          const lines = seenNewlines + (chunk[chunk.length - 1] === 0x0a ? 0 : 1);
-          if (seenBytes <= spill.afterBytes && lines <= spill.afterLines) {
-            spillPrefix.push(chunk);
-            return;
-          }
-          for (const prefix of spillPrefix) startSpill(prefix);
-          spillPrefix.length = 0;
-          startSpill(chunk);
-        };
-      child.stdout?.on('data', feed('stdout', stdoutDecoder));
-      child.stderr?.on('data', feed('stderr', stderrDecoder));
-      void waitForChildProcess(child, () =>
-        spillError === undefined &&
-        spillStart !== undefined &&
-        (spillStream === undefined || spillBackpressured),
-      ).then(
-        async ({ code, signal: exitSignal }) => {
-          await finishSpill();
-          emit(stdoutDecoder.decode(), 'stdout');
-          emit(stderrDecoder.decode(), 'stderr');
-          if (callbackError !== undefined) {
-            settle(err(callbackError));
-            return;
-          }
-          const interrupted =
-            timedOut
-              ? new ExecutionError('timeout', `timeout:${options?.timeout}`)
-              : signal?.aborted
-                ? new ExecutionError('aborted', 'aborted')
-                : undefined;
-          if (interrupted !== undefined) {
-            if (spillPath !== undefined) interrupted.spillPath = spillPath;
-            settle(err(interrupted));
-            return;
-          }
-          if (spillError !== undefined) {
-            settle(err(spillError));
-            return;
-          }
-          // by signal kill die (such as OOM killer) process without exit code: mapping is convention
-          // 128 + signal edit number, caller will not mistakenly judge is succeeded exit.
-          const exitCode =
-            code ?? (exitSignal !== null ? 128 + ((osConstants.signals as Record<string, number>)[exitSignal] ?? 0) : 1);
-          settle(ok({ exitCode, ...(spillPath === undefined ? {} : { spillPath }) }));
-        },
-        (error: Error) => settle(err(new ExecutionError('spawn_error', error.message, error))),
-      );
+
+    const runner = new NodeExecutionEnv({
+      cwd,
+      ...(resolvedShellPath === undefined ? {} : { shellPath: resolvedShellPath }),
     });
+    const env = getShellEnv(this.#shellEnv, options?.env, options?.inheritEnv);
+    const userOnOutput = options?.onOutput;
+    const sdkOptions: SdkShellExecOptions = {
+      ...(options?.timeout === undefined ? {} : { timeout: options.timeout }),
+      ...(options?.spill === undefined ? {} : { spill: options.spill }),
+      ...(options?.window === undefined ? {} : { window: options.window }),
+      env,
+      inheritEnv: false,
+      ...(userOnOutput === undefined
+        ? {}
+        : {
+            onOutput: (text, _context, info) => {
+              userOnOutput(text, info);
+            },
+          }),
+    };
+    this.#activeRunners.add(runner);
+    try {
+      return await runner.exec(command, sdkOptions, toContext(signal));
+    } finally {
+      this.#activeRunners.delete(runner);
+    }
   }
 
   async openTextLineReader(path: string, signal?: AbortSignal): Promise<Result<TextLineReader>> {
-    const resolution = this.#resolvePath(path);
-    if (!resolution.ok) return resolution;
-    const resolved = resolution.value;
-    const aborted = abortResult(signal, resolved);
-    if (aborted) return aborted;
-    try {
-      const file = await openFile(resolved, 'r');
-      const afterOpenAbort = abortResult(signal, resolved);
-      if (afterOpenAbort) {
-        await file.close().catch(() => undefined);
-        return afterOpenAbort;
-      }
-      return ok(new LocalTextLineReader(file, resolved));
-    } catch (error) {
-      return err(toFileError(error, resolved));
-    }
+    return this.#withResolvedPath(path, async (resolved) => {
+      const result = await this.#inner.openTextLineReader(resolved, toContext(signal));
+      return result.ok ? ok(wrapTextLineReader(result.value)) : result;
+    });
   }
 
   async readTextFile(path: string, signal?: AbortSignal): Promise<Result<string>> {
-    const resolution = this.#resolvePath(path);
-    if (!resolution.ok) return resolution;
-    const resolved = resolution.value;
-    const aborted = abortResult(signal, resolved);
-    if (aborted) return aborted;
-    try {
-      return ok(await readFile(resolved, { encoding: 'utf8', signal }));
-    } catch (error) {
-      return err(toFileError(error, resolved));
-    }
+    return this.#withResolvedPath(path, (resolved) => this.#inner.readTextFile(resolved, toContext(signal)));
   }
 
   async readTextLines(
@@ -454,33 +322,13 @@ export class LocalExecutionEnv {
     signal?: AbortSignal,
   ): Promise<Result<string[]>> {
     if (options?.maxLines !== undefined && options.maxLines <= 0) return ok([]);
-    const opened = await this.openTextLineReader(path, signal);
-    if (!opened.ok) return opened;
-    const lines: string[] = [];
-    try {
-      while (options?.maxLines === undefined || lines.length < options.maxLines) {
-        const line = await opened.value.readLine(signal);
-        if (!line.ok) return line;
-        if (line.value === undefined) break;
-        lines.push(line.value.text);
-      }
-      return ok(lines);
-    } finally {
-      await opened.value.close();
-    }
+    return this.#withResolvedPath(path, (resolved) =>
+      this.#inner.readTextLines(resolved, options, toContext(signal)),
+    );
   }
 
   async readBinaryFile(path: string, signal?: AbortSignal): Promise<Result<Uint8Array>> {
-    const resolution = this.#resolvePath(path);
-    if (!resolution.ok) return resolution;
-    const resolved = resolution.value;
-    const aborted = abortResult(signal, resolved);
-    if (aborted) return aborted;
-    try {
-      return ok(await readFile(resolved, { signal }));
-    } catch (error) {
-      return err(toFileError(error, resolved));
-    }
+    return this.#withResolvedPath(path, (resolved) => this.#inner.readBinaryFile(resolved, toContext(signal)));
   }
 
   async openBinaryReader(
@@ -488,238 +336,73 @@ export class LocalExecutionEnv {
     options: { noFollow?: boolean } | undefined,
     signal?: AbortSignal,
   ): Promise<Result<BinaryReader>> {
-    const resolution = this.#resolvePath(path);
-    if (!resolution.ok) return resolution;
-    const resolved = resolution.value;
-    const aborted = abortResult(signal, resolved);
-    if (aborted) return aborted;
-    const noFollow = options?.noFollow === true;
-    let file: FileHandleLike | undefined;
-    try {
-      let flags = constants.O_RDONLY;
-      if (process.platform === 'win32') {
-        // Windows without O_NOFOLLOW: open before check eventually component (non- race security).
-        if (noFollow && (await lstat(resolved)).isSymbolicLink()) {
-          return err(symlinkRefused(resolved));
-        }
-      } else {
-        // non- block: open FIFO no need to wait for write.
-        flags |= constants.O_NONBLOCK;
-        if (noFollow) flags |= constants.O_NOFOLLOW;
-      }
-      file = await openFile(resolved, flags);
-      const stats = await file.stat();
-      if (!stats.isFile()) {
-        await file.close().catch(() => undefined);
-        return err(
-          stats.isDirectory()
-            ? new FileError('is_directory', 'EISDIR: illegal operation on a directory, read', resolved)
-            : new FileError('invalid', 'Not a regular file', resolved),
-        );
-      }
-      const afterOpenAbort = abortResult(signal, resolved);
-      if (afterOpenAbort) {
-        await file.close().catch(() => undefined);
-        return afterOpenAbort;
-      }
-      return ok(new LocalBinaryReader(file, resolved));
-    } catch (error) {
-      await file?.close().catch(() => undefined);
-      // O_NOFOLLOW eventually component symlink report is ELOOP(part BSD is EMLINK).
-      if (noFollow && isNodeError(error) && (error.code === 'ELOOP' || error.code === 'EMLINK')) {
-        return err(symlinkRefused(resolved, toError(error)));
-      }
-      return err(toFileError(error, resolved));
-    }
+    return this.#withResolvedPath(path, async (resolved) => {
+      const result = await this.#inner.openBinaryReader(resolved, options, toContext(signal));
+      return result.ok ? ok(wrapBinaryReader(result.value)) : result;
+    });
   }
 
   async writeFile(path: string, content: string | Uint8Array, signal?: AbortSignal): Promise<Result<void>> {
-    const resolution = this.#resolvePath(path);
-    if (!resolution.ok) return resolution;
-    const resolved = resolution.value;
-    const aborted = abortResult(signal, resolved);
-    if (aborted) return aborted;
-    try {
-      await mkdir(parentTargetPath(this.#platform, resolved), { recursive: true });
-      const afterMkdirAbort = abortResult(signal, resolved);
-      if (afterMkdirAbort) return afterMkdirAbort;
-      await writeFile(resolved, content, { signal });
-      return ok(undefined);
-    } catch (error) {
-      return err(toFileError(error, resolved));
-    }
+    return this.#withResolvedPath(path, (resolved) =>
+      this.#inner.writeFile(resolved, content, toContext(signal)),
+    );
   }
 
   async appendFile(path: string, content: string | Uint8Array, signal?: AbortSignal): Promise<Result<void>> {
-    const resolution = this.#resolvePath(path);
-    if (!resolution.ok) return resolution;
-    const resolved = resolution.value;
-    const aborted = abortResult(signal, resolved);
-    if (aborted) return aborted;
-    try {
-      await mkdir(parentTargetPath(this.#platform, resolved), { recursive: true });
-      const afterMkdirAbort = abortResult(signal, resolved);
-      if (afterMkdirAbort) return afterMkdirAbort;
-      await appendFile(resolved, content);
-      const afterAppendAbort = abortResult(signal, resolved);
-      return afterAppendAbort ?? ok(undefined);
-    } catch (error) {
-      return err(toFileError(error, resolved));
-    }
+    return this.#withResolvedPath(path, (resolved) =>
+      this.#inner.appendFile(resolved, content, toContext(signal)),
+    );
   }
 
   async truncateFile(path: string, size: number, signal?: AbortSignal): Promise<Result<void>> {
-    const resolution = this.#resolvePath(path);
-    if (!resolution.ok) return resolution;
-    const resolved = resolution.value;
-    const aborted = abortResult(signal, resolved);
-    if (aborted) return aborted;
-    if (!Number.isSafeInteger(size) || size < 0) {
-      return err(new FileError('invalid', 'File size must be a non-negative safe integer', resolved));
-    }
-    let file: FileHandle | undefined;
-    try {
-      file = await openFile(resolved, 'r+');
-      await file.truncate(size);
-      const afterTruncateAbort = abortResult(signal, resolved);
-      return afterTruncateAbort ?? ok(undefined);
-    } catch (error) {
-      return err(toFileError(error, resolved));
-    } finally {
-      await file?.close().catch(() => undefined);
-    }
+    return this.#withResolvedPath(path, (resolved) =>
+      this.#inner.truncateFile(resolved, size, toContext(signal)),
+    );
   }
 
   async flushFile(path: string, signal?: AbortSignal): Promise<Result<void>> {
-    const resolution = this.#resolvePath(path);
-    if (!resolution.ok) return resolution;
-    const resolved = resolution.value;
-    const aborted = abortResult(signal, resolved);
-    if (aborted) return aborted;
-    let file: FileHandle | undefined;
-    try {
-      file = await openFile(resolved, 'r+');
-      // POSIX reject for directory with write way open;Windows can open, must explicit check.
-      if ((await file.stat()).isDirectory()) {
-        return err(new FileError('is_directory', 'Is a directory', resolved));
-      }
-      await file.sync();
-      const afterSyncAbort = abortResult(signal, resolved);
-      return afterSyncAbort ?? ok(undefined);
-    } catch (error) {
-      return err(toFileError(error, resolved));
-    } finally {
-      await file?.close().catch(() => undefined);
-    }
+    return this.#withResolvedPath(path, (resolved) => this.#inner.flushFile(resolved, toContext(signal)));
   }
 
   async renameFile(sourcePath: string, destinationPath: string, signal?: AbortSignal): Promise<Result<void>> {
-    const sourceResolution = this.#resolvePath(sourcePath);
-    if (!sourceResolution.ok) return sourceResolution;
-    const source = sourceResolution.value;
-    const destinationResolution = this.#resolvePath(destinationPath);
-    if (!destinationResolution.ok) return destinationResolution;
-    const destination = destinationResolution.value;
-    const aborted = abortResult(signal, destination);
-    if (aborted) return aborted;
-    try {
-      await rename(source, destination);
-      return ok(undefined);
-    } catch (error) {
-      return err(toFileError(error, source));
-    }
+    const src = this.#resolvePath(sourcePath);
+    if (!src.ok) return src;
+    const dst = this.#resolvePath(destinationPath);
+    if (!dst.ok) return dst;
+    return this.#inner.renameFile(src.value, dst.value, toContext(signal));
   }
 
   async fileInfo(path: string, signal?: AbortSignal): Promise<Result<FileInfo>> {
-    const resolution = this.#resolvePath(path);
-    if (!resolution.ok) return resolution;
-    const resolved = resolution.value;
-    const aborted = abortResult(signal, resolved);
-    if (aborted) return aborted;
-    try {
-      return fileInfoFromStats(resolved, await lstat(resolved));
-    } catch (error) {
-      return err(toFileError(error, resolved));
-    }
+    return this.#withResolvedPath(path, (resolved) => this.#inner.fileInfo(resolved, toContext(signal)));
   }
 
   async listDir(path: string, signal?: AbortSignal): Promise<Result<FileInfo[]>> {
-    const resolution = this.#resolvePath(path);
-    if (!resolution.ok) return resolution;
-    const resolved = resolution.value;
-    const aborted = abortResult(signal, resolved);
-    if (aborted) return aborted;
-    try {
-      const entries = await readdir(resolved, { withFileTypes: true });
-      const infos: FileInfo[] = [];
-      for (const entry of entries) {
-        const loopAbort = abortResult(signal, resolved);
-        if (loopAbort) return loopAbort;
-        const entryPath = joinTargetPath(this.#platform, resolved, entry.name);
-        try {
-          const info = fileInfoFromStats(entryPath, await lstat(entryPath));
-          if (info.ok) infos.push(info.value);
-        } catch (error) {
-          return err(toFileError(error, entryPath));
-        }
-      }
-      return ok(infos);
-    } catch (error) {
-      return err(toFileError(error, resolved));
-    }
+    return this.#withResolvedPath(path, (resolved) => this.#inner.listDir(resolved, toContext(signal)));
   }
 
   async openDirReader(path: string, signal?: AbortSignal): Promise<Result<DirReader>> {
-    const resolution = this.#resolvePath(path);
-    if (!resolution.ok) return resolution;
-    const resolved = resolution.value;
-    const aborted = abortResult(signal, resolved);
-    if (aborted) return aborted;
-    try {
-      const dir = await opendir(resolved);
-      const afterOpenAbort = abortResult(signal, resolved);
-      if (afterOpenAbort) {
-        await dir.close().catch(() => undefined);
-        return afterOpenAbort;
-      }
-      return ok(new LocalDirReader(dir, resolved, this.#platform));
-    } catch (error) {
-      return err(toFileError(error, resolved));
-    }
+    return this.#withResolvedPath(path, async (resolved) => {
+      const result = await this.#inner.openDirReader(resolved, toContext(signal));
+      return result.ok ? ok(wrapDirReader(result.value)) : result;
+    });
   }
 
   async canonicalPath(path: string, signal?: AbortSignal): Promise<Result<string>> {
-    const resolution = this.#resolvePath(path);
-    if (!resolution.ok) return resolution;
-    const resolved = resolution.value;
-    const aborted = abortResult(signal, resolved);
-    if (aborted) return aborted;
-    try {
-      return ok(await realpath(resolved));
-    } catch (error) {
-      return err(toFileError(error, resolved));
-    }
+    return this.#withResolvedPath(path, (resolved) => this.#inner.canonicalPath(resolved, toContext(signal)));
   }
 
   async exists(path: string, signal?: AbortSignal): Promise<Result<boolean>> {
-    const result = await this.fileInfo(path, signal);
-    if (result.ok) return ok(true);
-    if (result.error.code === 'not_found') return ok(false);
-    return err(result.error);
+    return this.#withResolvedPath(path, (resolved) => this.#inner.exists(resolved, toContext(signal)));
   }
 
-  async createDir(path: string, options: { recursive?: boolean } | undefined, signal?: AbortSignal): Promise<Result<void>> {
-    const resolution = this.#resolvePath(path);
-    if (!resolution.ok) return resolution;
-    const resolved = resolution.value;
-    const aborted = abortResult(signal, resolved);
-    if (aborted) return aborted;
-    try {
-      await mkdir(resolved, { recursive: options?.recursive ?? true });
-      return ok(undefined);
-    } catch (error) {
-      return err(toFileError(error, resolved));
-    }
+  async createDir(
+    path: string,
+    options: { recursive?: boolean } | undefined,
+    signal?: AbortSignal,
+  ): Promise<Result<void>> {
+    return this.#withResolvedPath(path, (resolved) =>
+      this.#inner.createDir(resolved, options, toContext(signal)),
+    );
   }
 
   async remove(
@@ -727,48 +410,28 @@ export class LocalExecutionEnv {
     options: { recursive?: boolean; force?: boolean } | undefined,
     signal?: AbortSignal,
   ): Promise<Result<void>> {
-    const resolution = this.#resolvePath(path);
-    if (!resolution.ok) return resolution;
-    const resolved = resolution.value;
-    const aborted = abortResult(signal, resolved);
-    if (aborted) return aborted;
-    try {
-      await rm(resolved, { recursive: options?.recursive ?? false, force: options?.force ?? false });
-      return ok(undefined);
-    } catch (error) {
-      return err(toFileError(error, resolved));
-    }
+    return this.#withResolvedPath(path, (resolved) =>
+      this.#inner.remove(resolved, options, toContext(signal)),
+    );
   }
 
   async createTempDir(prefix: string | undefined, signal?: AbortSignal): Promise<Result<string>> {
-    const aborted = abortResult(signal);
-    if (aborted) return aborted;
-    try {
-      const effectivePrefix = prefix ?? 'tmp-';
-      return ok(await mkdtemp(join(tmpdir(), effectivePrefix)));
-    } catch (error) {
-      return err(toFileError(error));
-    }
+    return this.#inner.createTempDir(prefix, toContext(signal));
   }
 
   async createTempFile(
     options: { prefix?: string; suffix?: string } | undefined,
     signal?: AbortSignal,
   ): Promise<Result<string>> {
-    const dir = await this.createTempDir('tmp-', signal);
-    if (!dir.ok) return dir;
-    const filePath = join(dir.value, `${options?.prefix ?? ''}${randomUUID()}${options?.suffix ?? ''}`);
-    try {
-      await writeFile(filePath, '');
-      return ok(filePath);
-    } catch (error) {
-      return err(toFileError(error, filePath));
-    }
+    return this.#inner.createTempFile(options, toContext(signal));
   }
 
-  /** kill this environment still in run all command (belong main stop machine use, absolute non- single request use). */
+  /** Terminate all commands currently running in this environment (for shutdown only, never per-request). */
   async cleanup(): Promise<void> {
-    for (const pid of this.#activeChildPids) killProcessTree(pid);
-    this.#activeChildPids.clear();
+    const runners = [...this.#activeRunners];
+    await Promise.all([
+      this.#inner.cleanup(BACKGROUND_CONTEXT),
+      ...runners.map((runner) => runner.cleanup(BACKGROUND_CONTEXT)),
+    ]);
   }
 }

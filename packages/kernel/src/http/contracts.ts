@@ -1,8 +1,8 @@
 /**
- * HTTP layer dependency kernel runtime contract (structure type).
+ * Kernel runtime contract consumed by the HTTP layer (structural typing).
  *
- * each service by parallel proxy implement and already then (services/*); this file constraint HTTP consume shape.
- * KernelRuntime instance pass when structure compatibility i.e. can ( structural typing ).
+ * Services are implemented in `services/*`; this file constrains the shape consumed by HTTP routes.
+ * Any structurally compatible `KernelRuntime` instance satisfies it.
  */
 import type {
   ActionManifest,
@@ -74,7 +74,7 @@ export type {
   RealSkillService,
 }
 
-// re- export real service type supply HTTP consumer use
+// Re-export concrete service types for HTTP consumers
 export type AuthService = RealAuthService
 export type ArtifactService = RealArtifactService
 export type CredentialService = RealCredentialService
@@ -87,19 +87,20 @@ export type SkillService = RealSkillService
 // ---------------------------------------------------------------------------
 
 /**
- * global event hub (kernel.events).HTTP layer only consume response(): by runtime
- * provide Web Standard SSE Response(streaming, frame inside self row redaction), client disconnect
- * (request.signal abort) by implement negative duty clean up.HTTP layer does not cache/convert/fall back.
+ * Global event hub (`kernel.events`). The HTTP layer only consumes `response()`: the runtime
+ * provides a streaming Web Standard SSE Response (self-redacted per frame), and client disconnects
+ * (`request.signal` abort) are cleaned up by the implementation. The HTTP layer performs no caching,
+ * transformation, or fallback.
  */
 export interface EventHub {
-  /** SSE response: immediately return Response(streaming), client disconnect automatically clean up. */
+  /** SSE response: returns a streaming Response immediately; automatically cleans up on client disconnect. */
   response(request: Request): Response
 }
 
 export interface PluginRouteInfo {
   pluginId: string
   method: 'GET' | 'POST' | 'PUT' | 'DELETE'
-  /** complete mount path (such as '/api/plugins/<id>/webhook/:t'); declaration when force dedicated belong prefix. */
+  /** Full mount path (e.g. '/api/plugins/<id>/webhook/:t'); enforced to use the plugin's dedicated prefix on registration. */
   path: string
   public?: boolean
   handler(req: Request): Response | Promise<Response>
@@ -116,34 +117,33 @@ export interface PluginHost {
     input: unknown,
     context?: { conversationId?: number },
   ): Promise<unknown> | unknown
-  /** raw config (may contains secret plaintext);HTTP output before must by schema redaction. */
+  /** Raw config (may include plaintext secrets); must be schema-redacted before HTTP output. */
   getConfig(id: string): Record<string, unknown> | Promise<Record<string, unknown>>
-  /** declaration style config schema(contains secret mark record, supply HTTP redaction). */
+  /** Declarative config schema (includes secret markers for HTTP redaction). */
   getConfigSchema(id: string): Record<string, PluginConfigFieldSchema> | Promise<Record<string, PluginConfigFieldSchema>>
-  /** optional: config field source mapping (configured | default | unset). */
+  /** Optional: config field source map (configured | default | unset). */
   getConfigSources?(id: string): Record<string, PluginConfigFieldSource> | Promise<Record<string, PluginConfigFieldSource>>
   setConfig(id: string, values: Record<string, unknown>): Promise<void> | void
-  /** motion state routing manifest (actual mount naming empty between /api/plugins/<encodedId>/routes/...). */
+  /** Dynamic route list (actual mount namespace `/api/plugins/<encodedId>/routes/...`). */
   listRoutes(): PluginRouteInfo[]
   /**
-   * single plugin summary now read: plugin routing dispatch before enable state re- inspect (listRoutes snapshot may
-   * and deactivate complete hand over wrong; not provide when skip re- inspect). note summary excludes lifecycle phase,
-   * teardown during (enabled still true) intercept need to PluginHost public phase aware
-   * gate (across group).
+   * Live read of a single plugin summary: re-checks enabled state before dispatching a plugin route
+   * (`listRoutes` snapshots can race with disable completion; skipped if unprovided). Note that summaries
+   * exclude lifecycle phase—blocking during teardown (while `enabled` is still true) requires PluginHost's
+   * phase-aware gate.
    */
   get?(pluginId: string): PluginSummary | undefined
   /**
-   * in-flight task trace wrap (and action/tool execute same source PluginTaskTracker):
-   * route handler execute during count liveTasks, make disable deactivate gate
-   * assertNoLiveTasks for in-flight route request visible (409 plugin_has_live_tasks
-   * while non- half execute split destroy). not provide when do not wrap.
+   * In-flight task tracking wrapper (shares PluginTaskTracker with action/tool execution):
+   * counts route handler execution toward `liveTasks` so disable's `assertNoLiveTasks` sees in-flight
+   * route requests (`409 plugin_has_live_tasks` rather than tearing down mid-request). No-op if unprovided.
    */
   withTask?<T>(pluginId: string, label: string, fn: () => Promise<T>): Promise<T>
-  /** read plugin public document; private/deactivate/missing one rule 404(authentication cannot bypass visible). */
+  /** Read a plugin public document; private/disabled/missing all map to 404 (auth cannot bypass visibility). */
   getPublicDoc(pluginId: string, name: string): Promise<PublicPluginDoc> | PublicPluginDoc
   /**
-   * read plugin public conversation document (GET /api/plugins/:id/docs/:name?conversationId=N
-   * and dedicated use SSE first frame shared use); deactivate/private/not declaration/conversation missing one rule 404.
+   * Read a plugin public session document (shared by `GET /api/plugins/:id/docs/:name?conversationId=N`
+   * and dedicated SSE initial frames); disabled/private/undeclared/missing conversation all map to 404.
    */
   getPublicSessionDoc(
     pluginId: string,
@@ -151,8 +151,8 @@ export interface PluginHost {
     conversationId: number,
   ): Promise<PublicPluginSessionDoc> | PublicPluginSessionDoc
   /**
-   * get enabled plugin client.tsx compile artifact (GET /api/plugins/:id/client.mjs?module=...).
-   * deactivate/not registered/not declaration clientRoot/exceeds/failed to compile explicit throws (HelmError semantics).
+   * Fetch compiled client.tsx bundle for an enabled plugin (`GET /api/plugins/:id/client.mjs?module=...`).
+   * Disabled/unregistered/missing clientRoot/out-of-bounds/compile errors throw explicitly (`HelmError`).
    */
   getClientModule(
     pluginId: string,
@@ -160,36 +160,36 @@ export interface PluginHost {
     options?: { chunk?: string; hash?: string },
   ): Promise<{ code: string; contentHash: string; gzipped?: Uint8Array; exports?: string[] }>
   /**
-   * external plugin source code static self inspect (POST /api/plugins/doctor,body { path? , dir?, id? } choose one):
-   * real proxy boundary import + temporary host real register + client real compile; result with report return
-   * (plugin defect in checks inside, do not reject).id pattern parse the plugin source directory;
-   * path/dir is directory absolute path (dir is path compatibility alias, etc. price). target missing/cannot
-   * parse when 404 reject(is not plugin defect, is request target error).
+   * Static self-check of external plugin source (`POST /api/plugins/doctor`, body `{ path?, dir?, id? }`):
+   * runs real import in an isolated sandbox, registers against a temporary host, and compiles client code;
+   * plugin defects are returned inside `report.checks` without throwing. `id` resolves an existing plugin's
+   * source directory; `path`/`dir` are absolute directory paths (`dir` is an alias for `path`). Missing or
+   * unresolvable targets reject with 404 (caller request error, not a plugin defect).
    */
   doctorExternalPlugin?(target: { dir?: string; id?: string }): Promise<PluginDoctorReport>
   /**
-   * external plugin subject to control hot reload (POST /api/plugins/:id/reload): preflight failed old instance keep do not motion;
-   * in-flight task 409 reject; built-in plugin 403; enable state keep.
+   * Controlled hot reload of an external plugin (`POST /api/plugins/:id/reload`): keeps the old instance
+   * untouched on preflight failure; rejects with 409 on in-flight tasks; 403 for built-ins; preserves enabled state.
    */
   reloadExternalPlugin?(pluginId: string): Promise<PluginReloadResult>
-  /** incremental heavy scan (POST /api/plugins/rescan): only register new external plugin, by default disabled. */
+  /** Incremental rescan (`POST /api/plugins/rescan`): registers newly discovered external plugins as disabled by default. */
   rescanExternalPlugins?(): Promise<PluginRescanResult>
   /**
-   * managed plugin package install (POST /api/plugins/install,body { source, enable? }):
-   * npm/git/local unify staging copy + doctor all chain + atomic enter managed directory;
-   * npm install forever do not run lifecycle scripts; failed clean up staging do not half artifact.
-   * not connect line when HTTP 501.
+   * Install a managed plugin package (`POST /api/plugins/install`, body `{ source, enable? }`):
+   * stages npm/git/local copy, runs full doctor checks, and atomically installs into the managed directory;
+   * npm install never runs lifecycle scripts; cleans up staging on failure without leaving partial artifacts.
+   * Returns HTTP 501 when unwired.
    */
   installPluginPackage?(source: string, options?: { enable?: boolean }): Promise<PluginInstallResult>
-  /** managed plugin package update (POST /api/plugins/:id/update): heavy take source + doctor + atomic replace + reload semantics. */
+  /** Update a managed plugin package (`POST /api/plugins/:id/update`): re-fetches source, runs doctor, atomically replaces, and reloads. */
   updatePluginPackage?(pluginId: string): Promise<PluginUpdateResult>
-  /** managed plugin package remove (POST /api/plugins/:id/remove): protect builtin/in-flight task/providers;local only delete managed copy. */
+  /** Remove a managed plugin package (`POST /api/plugins/:id/remove`): protects built-ins, live tasks, and providers; only deletes managed local copies. */
   removePluginPackage?(pluginId: string): Promise<PluginRemoveResult>
 }
 
 export type { SearchHit }
 
-/** conversation document event port (kernel side SessionDocEventHub structure shape). */
+/** Session document event port (kernel-side `SessionDocEventHub` structural shape). */
 export interface SessionDocEventPort {
   readonly seq: number
   subscribe(
@@ -199,8 +199,9 @@ export interface SessionDocEventPort {
   response(
     request: Request,
     options: {
-      /** sync snapshot provider: subscribe establish after invoke (avoid first snapshot after subscribe lose frame window),
-       * fails sync throw (HTTP layer rotate structure error); internal again do public/conversation store in validate. */
+      /** Sync snapshot provider: invoked after subscription is registered (avoids missing frames between
+       * initial snapshot and subscribe); failures throw synchronously (mapped to structured error by HTTP);
+       * internally re-validates public visibility and conversation existence. */
       snapshot: () => { seq: number; doc: PublicPluginSessionDoc }
       target: { pluginId: string; name: string; conversationId: number }
     },
@@ -214,12 +215,12 @@ export interface SessionDocEventPort {
   ): Response
 }
 
-/** HTTP consume KernelRuntime shape (real KernelRuntime structure compatibility at it). */
+/** KernelRuntime shape consumed by the HTTP layer (structurally satisfied by KernelRuntime). */
 export interface KernelRuntimeLike {
   readonly dataDir: string
   readonly auth: AuthService
   readonly events: EventHub
-  /** conversation document dedicated use event stream port (not provide when dedicated use SSE 501). */
+  /** Dedicated SSE stream port for session documents (returns 501 if unprovided). */
   readonly sessionDocEvents?: SessionDocEventPort
   readonly profiles: ProfileService
   readonly skills: SkillService
@@ -228,37 +229,37 @@ export interface KernelRuntimeLike {
   readonly artifacts: ArtifactService
   readonly plugins: PluginHost
   /**
-   * secret redaction hook (real kernel  SecretStash). out station JSON string value and
-   * server side error log all first via it erase already register secret, never outside plaintext or restore marker.
+   * Secret redaction hook (`SecretStash` on the real kernel). Outbound JSON string values and
+   * server-side error logs pass through this to scrub registered secrets so plaintext or recovery markers never leak.
    */
   readonly stash?: {
     redact(text: string): string
     createStreamingRedactor?(): { push(text: string): string; flush(): string }
   }
   /**
-   * model hot reload port:providers/credentials change after await, make after continue
-   * listModels reverse reflect new config (only persist JSON while do not reload equals hot config invalid).
-   * optional:runtime not provide when HTTP layer non-blocking write path.
+   * Model catalog hot-reload port: awaited after providers/credentials changes so subsequent
+   * `listModels` reflects the new configuration (persisting JSON without reloading breaks hot config).
+   * Optional: HTTP layer skips if unprovided.
    */
   reloadModels?(): Promise<void>
 
   /**
-   * actual Hub URL hot update port:startHub(port:0) listen after call back, make shell inside
-   * CLI/tool end point points to real address. not provide when HTTP layer non-blocking.
+   * Live Hub URL update port: called back after `startHub` binds (for `port: 0`) so CLI/tool
+   * endpoints in the shell point to the actual listening address. Skipped if unprovided.
    */
   setHubUrl?(url: string): void
 
   listConversations(
     filter?: ConversationListFilter,
   ): Promise<ConversationSummary[]> | ConversationSummary[]
-  /** GET /api/conversations/:id consume: summary + page timeline. */
+  /** Consumed by `GET /api/conversations/:id`: summary + paginated timeline. */
   getConversationDetail(
     id: number,
     opts?: { limit?: number; cursor?: string },
   ): Promise<ConversationDetail> | ConversationDetail
-  /** GET /api/conversations/:id/entries/:entryId consume: single not truncate but already redaction
-   * (signature strip) item;rewind override old item and detail situation visible consistent ground 404.
-   * optional:runtime not provide when HTTP 501(and withdrawQueuedInput same style). */
+  /** Consumed by `GET /api/conversations/:id/entries/:entryId`: full untruncated, redacted entry
+   * (with signatures stripped); entries overwritten by rewind return 404 consistently with detail pagination.
+   * Optional: returns HTTP 501 when unprovided (same style as `withdrawQueuedInput`). */
   getConversationEntry?(
     id: number,
     entryId: number,
@@ -277,34 +278,34 @@ export interface KernelRuntimeLike {
     text: string,
     opts?: {
       origin?: 'human' | 'agent' | 'trigger'
-      /** conversation correct busy policy; omit when kernel by default steer. */
+      /** Policy when conversation is busy; kernel defaults to `'steer'` when omitted. */
       whenBusy?: 'steer' | 'followUp' | 'reject'
       meta?: Record<string, unknown>
       attachments?: string[]
-      /** from designate history item start original ground override heavy (truncate the and after continue context after write new input). */
+      /** Overwrite history in place starting at the specified entry ID (truncates it and subsequent context before appending new input). */
       replaceFromEntryId?: number
     },
   ): Promise<{ submissionId: string }> | { submissionId: string }
-  /** withdraw back queue up in input (POST /api/conversations/:id/withdraw). */
+  /** Withdraw a queued input (`POST /api/conversations/:id/withdraw`). */
   withdrawQueuedInput?(
     id: number,
     opts: { submissionId: number },
   ): Promise<ConversationWithdrawResponse> | ConversationWithdrawResponse
-  /** ?wait=1: wait for single time commit terminal state and return this time input result; failed/abort throw explicit HelmError. */
+  /** `?wait=1`: wait for a single submission to settle and return its result; throws HelmError on failure/abort. */
   waitForInput(
     id: number,
     submissionId: string,
     signal?: AbortSignal,
   ): Promise<ConversationInputResult> | ConversationInputResult
   abortConversation(id: number): Promise<void> | void
-  /** reset conversation context (new context with handoff text start); return update after summary. */
+  /** Reset conversation context (starts a new context with optional handoff text); returns updated summary. */
   resetConversation(id: number, opts?: { handoff?: string }): Promise<ConversationSummary> | ConversationSummary
-  /** manually compress conversation context; return compress task ID and update after summary. */
+  /** Manually compact conversation context; returns compaction task ID and updated summary. */
   compactConversation(
     id: number,
     opts?: { instructions?: string },
   ): Promise<ConversationCompactResponse> | ConversationCompactResponse
-  /** from designate item fork new conversation (inherit profile/cwd/model, parent chain points to source conversation). */
+  /** Fork a new conversation from the specified entry (inherits profile/cwd/model; parent chain points to source). */
   forkConversation(
     id: number,
     opts: { entryId: number; title?: string },
@@ -316,22 +317,22 @@ export interface KernelRuntimeLike {
 
   search(query: string): Promise<SearchHit[]> | SearchHit[]
   listModels(): Promise<ModelCatalog> | ModelCatalog
-  /** settings model disable collection (PUT /api/models/filter); not implemented when HTTP 501. */
+  /** Configure disabled model list (`PUT /api/models/filter`); HTTP 501 if unimplemented. */
   setDisabledModels?(provider: string | undefined, disabledModels: string[]): Promise<ModelCatalog>
   /**
-   * model disable preflight (ModelRegistry.assertModelEnabled):HTTP save profile.model /
-   * global by default model etc. entry in before invoke, disable model reject (409 model_disabled).
-   * optional port:runtime not provide when HTTP layer non-blocking.
+   * Model-disabled preflight (`ModelRegistry.assertModelEnabled`): called before saving `profile.model`,
+   * global default model, etc. to reject disabled models (`409 model_disabled`).
+   * Optional port: HTTP layer skips if unprovided.
    */
   assertModelEnabled?(provider: string, modelId: string): void
-  /** settings global by default model and think Profile (config.json); empty string clear. not implemented when HTTP 501. */
+  /** Configure global default model and thinking level (`config.json`); empty string clears. HTTP 501 if unimplemented. */
   setDefaultModel?(model?: string, thinkingLevel?: string): Promise<void>
-  /** Profile save after sync bind set conversation model and think Profile. */
+  /** Sync bound conversations' models and thinking levels after saving a Profile. */
   alignProfileConversations?(profileId: string): Promise<void>
   listModelProviders(): Promise<ModelProviderSummary[]> | ModelProviderSummary[]
   /**
-   * motion state model directory refresh (POST /api/models/refresh): target motion state provider allowNetwork
-   * pull most new directory and persist models-store.json. optional port:runtime not provide when 501.
+   * Dynamic model catalog refresh (`POST /api/models/refresh`): fetches latest catalogs from enabled providers
+   * when `allowNetwork` is set and persists `models-store.json`. HTTP 501 if unprovided.
    */
   refreshModels?(options?: {
     providers?: string[]
@@ -340,54 +341,53 @@ export interface KernelRuntimeLike {
   }): Promise<ModelProvidersRefreshResult>
 
   // ---------------------------------------------------------------------------
-  // across platform node manage (EnvFabric / nodes / env exec)
+  // Cross-platform node management (EnvFabric / nodes / env exec)
   // ---------------------------------------------------------------------------
 
-  /** node bottom seat (node-server connect WS gateway use); not provide when /ws/node do not hang connect. */
+  /** Node fabric substrate (attached to `/ws/node` gateway by `node-server`); gateway disabled if unprovided. */
   readonly envFabric?: EnvFabric
-  /** column out local + already register BYOM node and real-time online state (GET /api/nodes). */
+  /** List `local` + registered BYOM nodes with live online status (`GET /api/nodes`). */
   listNodes(): Promise<NodeInfo[]> | NodeInfo[]
-  /** sign node access token (plaintext token only this time response return; server side only store sha256). */
+  /** Issue a node access token (plaintext returned once in this response; server stores sha256 only). */
   issueNodeToken(nodeId: string): Promise<NodeIssuedToken> | NodeIssuedToken
-  /** remove node: from sign table delete and immediately pinch assert in-flight connect (DELETE /api/nodes/:id). */
+  /** Remove a node: deletes from token table and immediately closes live connections (`DELETE /api/nodes/:id`). */
   removeNode(nodeId: string): Promise<void> | void
-  /** check node available update (GET /api/nodes/:id/upgrade/check). */
+  /** Check available node updates (`GET /api/nodes/:id/upgrade/check`). */
   checkNodeUpgrade?(nodeId: string, input?: NodeUpgradeCheckInput): Promise<NodeUpgradeCheckResult> | NodeUpgradeCheckResult
-  /** trigger node upgrade and wait for commit confirm (POST /api/nodes/:id/upgrade). */
+  /** Trigger node upgrade and wait for commit confirmation (`POST /api/nodes/:id/upgrade`). */
   upgradeNode?(nodeId: string, input?: NodeUpgradeInput): Promise<NodeUpgradeResult> | NodeUpgradeResult
   /**
-   * start foreground port forwarding (POST /api/nodes/:id/forward):Hub side on demand listen
-   * listenHost:listenPort, each station connect via any TCP tunnel reach target node
-   * targetHost:targetPort; listener only in command lifecycle memory in (monitor stream disconnect /
-   * stop / host close i.e. destroy).
+   * Start foreground port forwarding (`POST /api/nodes/:id/forward`): Hub listens on `listenHost:listenPort`
+   * on demand and bridges each connection through a TCP tunnel to `targetHost:targetPort` on the target node;
+   * the listener exists only in memory for the command's lifetime (torn down on monitor disconnect / stop / host close).
    */
   startNodeForward?(
     nodeId: string,
     input: { listenHost: string; listenPort: number; targetHost?: string; targetPort: number },
   ): Promise<NodeForwardSession> | NodeForwardSession
-  /** stop port forwarding (DELETE /api/nodes/forward/:forwardId); idempotent semantics by 404 express. */
+  /** Stop port forwarding (`DELETE /api/nodes/forward/:forwardId`); returns 404 when idempotently already stopped. */
   stopNodeForward?(forwardId: string): Promise<void> | void
-  /** forwarding conversation now read (GET /api/nodes/forward/:forwardId). */
+  /** Live read of a forwarding session (`GET /api/nodes/forward/:forwardId`). */
   getNodeForward?(forwardId: string): NodeForwardSession | undefined
-  /** activity forwarding manifest (GET /api/nodes/forward). */
+  /** Active forwarding session list (`GET /api/nodes/forward`). */
   listNodeForwards?(): NodeForwardSession[]
-  /** forwarding event subscribe (GET /api/nodes/forward/:forwardId/events,NDJSON);stop terminal state stopped frame after normal close stream (monitor do not pending). */
+  /** Subscribe to forwarding events (`GET /api/nodes/forward/:forwardId/events`, NDJSON); closes cleanly after terminal `stopped` frame. */
   onNodeForwardEvent?(
     forwardId: string,
     listener: (event: NodeForwardEvent) => void,
   ): () => void
-  /** forwarding terminate notify (terminal state stopped frame after invoke; already stop when immediately call back). */
+  /** Notify when forwarding terminates (called after terminal `stopped` frame; invokes immediately if already stopped). */
   onNodeForwardStopped?(forwardId: string, listener: () => void): () => void
   /**
-   * bind set foreground lease holder (events event stream establish when): clear create lease; return release
-   * function (stream disconnect/cancel when invoke) - - finally a holder release i.e. stop forwarding.
-   * only read list/get do not away this port (is not holder).
+   * Bind a foreground lease holder (when the events stream opens): explicitly creates a lease and returns a release
+   * function (called on stream disconnect/cancel)—stopping forwarding when the last holder leaves.
+   * Read-only list/get calls do not use this port (they are not lease holders).
    */
   acquireNodeForwardLease?(forwardId: string): () => void
   /**
-   * across node command execute (POST /api/env/exec): target parse is explicit nodeId/cwd >
-   * conversation bind set > local; remote offline 409 node_offline;onChunk one by one chunk back put
-   * (NDJSON streaming pattern);signal pass broadcast cancel.
+   * Cross-node command execution (`POST /api/env/exec`): target resolves as explicit nodeId/cwd >
+   * conversation binding > local; offline remote fails with `409 node_offline`; `onChunk` streams chunks
+   * (NDJSON mode); `signal` propagates cancellation.
    */
   execEnv(
     req: EnvExecRequest,
@@ -396,17 +396,17 @@ export interface KernelRuntimeLike {
   ): Promise<EnvExecResponse> | EnvExecResponse
 }
 
-/** startHub option and return. */
+/** Options and handle returned by `startHub`. */
 export interface StartHubOptions {
   kernel: KernelRuntimeLike
-  /** by default 3202(HELM_PORT convention; test please use 0). */
+  /** Defaults to 3202 (`HELM_PORT` convention; tests should use 0). */
   port?: number
-  /** by default 127.0.0.1. */
+  /** Defaults to `127.0.0.1`. */
   hostname?: string
   /**
-   * produce static hosting directory (packages/web/dist):false disable; default probe by default location
-   * (store in index.html only then enable); string is explicit directory (expires when start explicit errors).
-   * pass-through to createHubHandler same name option.
+   * Production static hosting directory (`packages/web/dist`): `false` disables it; omitting probes the
+   * default location (enabled only if `index.html` exists); a string sets an explicit directory (fails at startup if invalid).
+   * Passed through to `createHubHandler` under the same option name.
    */
   webDistDir?: string | false
 }
@@ -416,5 +416,5 @@ export interface HubHandle {
   close(): Promise<void>
 }
 
-// export supply test construct complete Profile
+// Export types used by tests to construct complete Profiles
 export type { Profile, ProviderConfig, SkillSummary, ArtifactKind, ArtifactMetadata, AskSpec, ConversationSummary, ConversationDetail, ConversationEntry, ConversationInputResult, PluginSummary, PluginStatus, PluginDiagnosticError, PluginInUseItem, PluginConfigFieldSource, PluginConfigResponse, ActionManifest, PublicPluginDoc, NodeInfo, NodeIssuedToken, NodeUpgradeCheckInput, NodeUpgradeCheckResult, NodeUpgradeInput, NodeUpgradeResult, EnvExecRequest, EnvExecResponse, ModelCatalogEntry, ModelCatalog, ConversationCompactResponse, ConversationWithdrawResponse, PluginDoctorReport, PluginReloadResult, PluginRescanResult, PluginInstallResult, PluginUpdateResult, PluginRemoveResult }

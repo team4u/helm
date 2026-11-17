@@ -1,25 +1,24 @@
 /**
- * createHubHandler:Web Standard request handle (core routing + authentication gate + CORS).
+ * createHubHandler: Web Standard request handler (core routing + authentication gate + CORS).
  *
- * authentication policy:
- * - public end point:/api/auth/setup,/api/auth/login,/api/auth/status,
- *   plugin route({ public: true })(plugin self row signature verification).
- * - the rest one rule Bearer token via kernel.auth.verifyToken; without anonymous initialize loophole.
+ * Authentication policy:
+ * - Public endpoints: /api/auth/setup, /api/auth/login, /api/auth/status,
+ *   and plugin route({ public: true }) (signature verification handled by the plugin itself).
+ * - Everything else requires a Bearer token verified via `kernel.auth.verifyToken` (no anonymous init loophole).
  *
- * public plugin routing exemption and routes.ts dispatch shared use the same complete path match
- * (route-match.ts), two where semantics will not drift; path segment illegal hundred number encode unify 400.
+ * Public plugin route exemption and `routes.ts` dispatch share the exact same full-path matcher
+ * (`route-match.ts`) so semantics never drift; invalid percent-encoding in path segments always returns 400.
  *
- * across source policy: local person assist scenario (local machine/scoped domain network self use, without browser across station protect
- * requirement), has intent does not across station restrict - - carries Origin request one rule reflection its Origin and
- * allows credentials (see http-utils.ts  withCors), real boundary by Bearer token
- * authentication bear bear; do not carries Origin  CLI/server side invoke do not subject to affect.
- * JSON end point also validate content-type application/json(charset optional),
- * reject across station table single/text-simple POST smoke fill JSON; plugin public original routing do not force
- * JSON(webhook payload form by plugin self set).
+ * Cross-origin policy: designed for local personal assistant usage (localhost/LAN, no browser CSRF boundary
+ * needed), so requests carrying `Origin` always reflect `Origin` and allow credentials (see `withCors` in
+ * `http-utils.ts`), with `Bearer` token auth as the real boundary; CLI/server callers without `Origin` are
+ * unaffected. JSON endpoints also require `content-type: application/json` (charset optional), rejecting
+ * cross-site form/text-plain simple POSTs disguised as JSON; public plugin raw routes do not require JSON
+ * (webhook payload formats are defined by plugins).
  *
- * SSE:kernel.events.response() by runtime provide;HTTP layer does not cache/convert,
- * do not compress (gzip only override application/json, see gzip.ts);
- * disconnect (signal abort) by events implement negative duty cancel subscribe.
+ * SSE: `kernel.events.response()` is provided by the runtime; the HTTP layer does not buffer, transform,
+ * or compress it (gzip only applies to `application/json`, see `gzip.ts`); disconnect (`signal` abort) cancels
+ * subscriptions inside the events implementation.
  */
 import {
   errorResponse,
@@ -39,11 +38,11 @@ import type { KernelRuntimeLike } from './contracts.js'
 export interface HubHandlerOptions {
   kernel: KernelRuntimeLike
   /**
-   * produce static hosting directory (produce product policy, by combine layer/hub entry explicit provide):
-   * - string: explicit designate directory; expires when structure web_dist_invalid errors, never static default disable;
-   * - false / default: does not enable static hosting (non- /api one rule JSON 404, pure API form).
-   * kernel does not any by default directory probe (do not hard encode Web package location; embed style Kernel  HTTP
-   * by default behavior do not follow warehouse beside is otherwise store in web dist change).
+   * Production static hosting directory (built by the product/composer layer):
+   * - string: explicit directory; fails with `web_dist_invalid` if invalid rather than silently disabling;
+   * - false / omitted: static hosting disabled (non-`/api` requests return JSON 404, pure API mode).
+   * The kernel performs no default directory probing (never hardcodes the Web package path so embedded
+   * Kernel HTTP behavior does not vary based on adjacent `web/dist` files).
    */
   webDistDir?: string | false
 }
@@ -65,7 +64,7 @@ export function createHubHandler(
   const { kernel } = options
   const redactor: JsonRedactor | undefined = makeRedactor(kernel)
   const webDistDir = options.webDistDir
-  // directory parse cache (handler instance inside, only cache succeeded result):dir → service
+  // Directory resolution cache (per handler instance, caches successful resolutions only): dir -> StaticServe
   let staticServeCache: StaticCacheEntry | null = null
   const resolveStaticServe = async (): Promise<StaticServe | undefined> => {
     if (webDistDir === false || webDistDir === undefined) return undefined
@@ -77,10 +76,10 @@ export function createHubHandler(
     try {
       serve = await createStaticServe(dir)
     } catch (err) {
-      // explicit designate expires directory: structure diagnose, never static default disable (honest discipline)
+      // Explicit invalid directory: throw structured diagnostic rather than silently disabling (honest discipline)
       throw new HelmError(
         'web_dist_invalid',
-        `static hosting directory unavailable: ${dir}(${err instanceof Error ? err.message : String(err)})`,
+        `static hosting directory unavailable: ${dir} (${err instanceof Error ? err.message : String(err)})`,
         500,
         { dir },
       )
@@ -97,33 +96,33 @@ export function createHubHandler(
       const url = new URL(request.url)
 
       if (!url.pathname.startsWith('/api/') && url.pathname !== '/api') {
-        // produce static hosting: non- /api  GET/HEAD away webDistDir(not enabled when back JSON 404)
+        // Production static hosting: non-`/api` GET/HEAD served via `webDistDir` (returns JSON 404 when disabled)
         if (request.method === 'GET' || request.method === 'HEAD') {
           const serve = await resolveStaticServe()
           if (serve !== undefined) {
             return gzipJsonResponse(request, withCors(await serve.serve(request.method, url.pathname, { acceptGzip: acceptsGzip(request) }), origin))
           }
         }
-        return gzipJsonResponse(request, withCors(errorResponse(redactor, 404, 'not_found', 'routing missing'), origin))
+        return gzipJsonResponse(request, withCors(errorResponse(redactor, 404, 'not_found', 'route not found'), origin))
       }
 
-      // remove tail slash archive one (/api/conversations/ etc. price /api/conversations)
+      // Strip trailing slash for consistency (`/api/conversations/` == `/api/conversations`)
       const normalized = url.pathname.length > 1 && url.pathname.endsWith('/') ? url.pathname.slice(0, -1) : url.pathname
 
       const segments = decodeSegments(normalized)
 
       if (PUBLIC_PATHS.has(normalized)) {
-        // auth/setup|login is JSON end point: across station text/plain simple POST smoke fill by refuse.
+        // auth/setup|login are JSON endpoints: reject cross-site text/plain simple POSTs disguised as JSON.
         if (request.method !== 'GET' && request.method !== 'HEAD' && !jsonContentTypeOk(request)) {
-          return gzipJsonResponse(request, withCors(errorResponse(redactor, 415, 'unsupported_media_type', 'JSON end point must content-type: application/json'), origin))
+          return gzipJsonResponse(request, withCors(errorResponse(redactor, 415, 'unsupported_media_type', 'JSON endpoint requires content-type: application/json'), origin))
         }
         return gzipJsonResponse(request, withCors(await handleApi(request, kernel, redactor), origin))
       }
 
-      // plugin public routing exemption (its handler self row signature verification); and dispatch shared use match.
+      // Public plugin route exemption (handler performs its own signature verification); shares matcher with dispatch.
       const isPublic = isPublicPluginRoute(kernel, request.method, segments)
       if (!isPublic && isJsonEndpoint(request.method, normalized) && !jsonContentTypeOk(request)) {
-        return gzipJsonResponse(request, withCors(errorResponse(redactor, 415, 'unsupported_media_type', 'JSON end point must content-type: application/json'), origin))
+        return gzipJsonResponse(request, withCors(errorResponse(redactor, 415, 'unsupported_media_type', 'JSON endpoint requires content-type: application/json'), origin))
       }
       if (isPublic) {
         return gzipJsonResponse(request, withCors(await handleApi(request, kernel, redactor), origin))
@@ -135,12 +134,12 @@ export function createHubHandler(
       }
       const valid = await kernel.auth.verifyToken(token)
       if (valid !== true) {
-        return gzipJsonResponse(request, withCors(errorResponse(redactor, 401, 'unauthorized', 'token invalid or expired'), origin))
+        return gzipJsonResponse(request, withCors(errorResponse(redactor, 401, 'unauthorized', 'invalid or expired token'), origin))
       }
 
       return gzipJsonResponse(request, withCors(await handleApi(request, kernel, redactor), origin))
     } catch (error) {
-      // illegal path encode (contains public match phase) also want to out structure 400, while non- 500.
+      // Invalid path encoding (including during public route matching) must return structured 400 instead of 500.
       if (error instanceof PathDecodeError) {
         return gzipJsonResponse(request, withCors(errorResponse(redactor, 400, 'invalid_path_encoding', error.message), origin))
       }
@@ -161,20 +160,20 @@ function redactText(kernel: KernelRuntimeLike): (text: string) => string {
   return (text: string) => stash.redact(text)
 }
 
-/** is otherwise JSON end point: except plugin public original routing and artifact two enter system upload outside all core end point all is JSON. */
+/** Whether endpoint expects JSON: all core endpoints except public/raw plugin routes and binary artifact uploads. */
 function isJsonEndpoint(method: string, pathname: string): boolean {
   if (method === 'GET' || method === 'HEAD' || method === 'DELETE') return false
   if (!pathname.startsWith('/api/')) return false
-  // plugin motion state routing naming empty between:public webhook payload form by plugin self define.
+  // Plugin dynamic route namespace: public webhook payload formats are plugin-defined.
   const segs = pathname.split('/').filter((s) => s.length > 0)
   if (segs[0] === 'api' && segs[1] === 'plugins' && segs[3] === 'routes') return false
-  // artifact upload:POST /api/conversations/:id/artifacts accept two enter system stream
-  //(application/octet-stream;application/json branch in routing inside self row handle).
+  // Artifact upload: POST /api/conversations/:id/artifacts accepts binary streams
+  // (application/octet-stream; application/json branch is handled inside the route).
   if (segs[0] === 'api' && segs[1] === 'conversations' && segs[3] === 'artifacts' && segs.length === 4) return false
   return true
 }
 
-/** request is otherwise carry body(chunked or content-length > 0). */
+/** Whether the request carries a body (chunked or content-length > 0). */
 function requestHasBody(request: Request): boolean {
   if (request.headers.get('transfer-encoding') !== null) return true
   const cl = request.headers.get('content-length')
@@ -182,9 +181,9 @@ function requestHasBody(request: Request): boolean {
 }
 
 /**
- * content-type validate:application/json(charset parameter optional).
- * without body request (POST abort etc.) allows default content-type; carries body yet missing
- * or non- JSON(across station table single text/plain) one rule reject.
+ * Validate content-type is application/json (charset param optional).
+ * Bodyless requests (e.g. POST abort) may omit content-type; requests with a body but missing or
+ * non-JSON content-type (such as cross-site form text/plain) are always rejected.
  */
 function jsonContentTypeOk(request: Request): boolean {
   const raw = request.headers.get('content-type')
@@ -199,7 +198,7 @@ function bearerToken(request: Request): string | undefined {
   return match?.[1] ?? undefined
 }
 
-/** decide is otherwise hit plugin declaration is public motion state routing (segments already decode). */
+/** Check whether the decoded segments match a plugin route declared as public. */
 export function isPublicPluginRoute(kernel: KernelRuntimeLike, method: string, segments: string[]): boolean {
   if (segments.length === 0 || segments[0] !== 'api') return false
   let routes

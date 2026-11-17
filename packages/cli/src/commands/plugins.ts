@@ -1,19 +1,24 @@
 /**
- * plugin domain:plugins list/enable/disable/config/doc/client and doctor/reload/rescan
- * (DX closed ring),install/update/remove(managed package manage) and actions list.config except
- * --input <json> outside support can duplicate --set key=value(value by JSON boolean/number semantics
- * parse, otherwise string).plugins init is local foot manually frame command (minimal/full through use plugin and
- * app full-stack micro app three Profile template,app artifact directly via helm apps validate preflight).
+ * Plugin commands: plugins list/enable/disable/config/doc/client, doctor/reload/rescan
+ * (DX loop), install/update/remove (managed package management), and actions list.
+ * In addition to --input <json>, config supports repeatable --set key=value (values parsed
+ * as JSON boolean/number when valid, otherwise string). plugins init scaffolds local
+ * plugins using minimal/full/app templates (app artifacts pass helm apps validate directly).
  */
-import type {
-  ActionManifest,
-  PluginDoctorReport,
-  PluginInstallResult,
-  PluginReloadResult,
-  PluginRemoveResult,
-  PluginRescanResult,
-  PluginSummary,
-  PluginUpdateResult,
+import {
+  HelmError,
+  PREBUILT_CLIENT_DIR_NAME,
+  type ActionManifest,
+  type BuildPluginClientBundleDirOptions,
+  type BuildPluginClientBundleDirResult,
+  type PluginClientNpmRoot,
+  type PluginDoctorReport,
+  type PluginInstallResult,
+  type PluginReloadResult,
+  type PluginRemoveResult,
+  type PluginRescanResult,
+  type PluginSummary,
+  type PluginUpdateResult,
 } from '@helm/protocol'
 import { CliError } from '../errors.js'
 import { parseFlags } from '../args.js'
@@ -46,10 +51,10 @@ import {
 } from './shared.js'
 
 /**
- * conversation document subscribe (--watch): consume dedicated use SSE(GET /api/plugins/:id/docs/:name/events?conversationId=N).
- * - --json: each frame NDJSON output (snapshot frame and incremental frame all original);
- * - person class pattern:snapshot print when before value, incremental frame print one row change summary + new value;
- * - create connect 404(plugin deactivate/conversation delete/document non- public) explicit errors and stop (do not retry).
+ * Session document subscription (--watch): consumes dedicated SSE (GET /api/plugins/:id/docs/:name/events?conversationId=N).
+ * - --json: emits NDJSON per frame (both snapshot and incremental frames verbatim);
+ * - human mode: snapshot prints current value; incremental frames print a change summary line + new value;
+ * - 404 on connect (plugin disabled / conversation deleted / document not public) fails explicitly and stops without retrying.
  */
 async function watchSessionDoc(
   ctx: CommandContext,
@@ -63,7 +68,7 @@ async function watchSessionDoc(
   const onSignal = () => controller.abort()
   process.once('SIGINT', onSignal)
   process.once('SIGTERM', onSignal)
-  const label = `${pluginId}/${name}#conversation${conversationId}`
+  const label = `${pluginId}/${name}#conversation-${conversationId}`
   try {
     await hub.streamSse(`${base}/events?conversationId=${conversationId}`, {
       signal: controller.signal,
@@ -72,7 +77,7 @@ async function watchSessionDoc(
         try {
           payload = JSON.parse(data)
         } catch {
-          ctx.io.err(`helm: ignore non- JSON SSE frame (${data.slice(0, 120)})\n`)
+          ctx.io.err(`helm: ignoring non-JSON SSE frame (${data.slice(0, 120)})\n`)
           return
         }
         if (ctx.json) {
@@ -87,7 +92,7 @@ async function watchSessionDoc(
         }
         const frame = payload as { seq?: number; event?: { doc?: { value?: unknown; deleted?: boolean } } }
         const doc = frame.event?.doc
-        ctx.io.out(`[${label}] update seq=${frame.seq ?? '?'}${doc?.deleted === true ? '(deleted)' : ''}\n`)
+        ctx.io.out(`[${label}] update seq=${frame.seq ?? '?'}${doc?.deleted === true ? ' (deleted)' : ''}\n`)
         printValue(ctx.io, doc?.value ?? null, false)
       },
     })
@@ -101,25 +106,25 @@ async function watchSessionDoc(
 }
 
 /**
- * break remove confirm (re- use CLI since has TTY/non- TTY stream convention, and login password same style):
- * --yes and --json non- interaction let through;TTY terminal stdin mention question one row (y/yes confirm);
- * non- TTY without --yes explicit reject - - never in without person value guard pipeline on pending etc. input.
+ * Destructive removal confirmation (reuses CLI TTY/non-TTY convention, matching login password prompt):
+ * --yes and --json proceed non-interactively; TTY prompts one line on stdin (y/yes confirms);
+ * non-TTY without --yes rejects explicitly — never hangs waiting for input on unattended pipes.
  */
 async function confirmRemove(ctx: CommandContext, assumedYes: boolean, pluginId: string): Promise<void> {
   if (ctx.json || assumedYes) return
   if (process.stdin.isTTY !== true) {
     throw new CliError(
-      `remove ${pluginId} is break operation (clean up Hub host install directory, cannot restore): non- interaction environment must --yes confirm`,
+      `removing ${pluginId} is destructive (deletes Hub host install directory irreversibly): pass --yes in non-interactive environments`,
       'confirmation_required',
     )
   }
   const { createInterface } = await import('node:readline/promises')
   const rl = createInterface({ input: process.stdin, output: process.stderr })
   try {
-    const answer = await rl.question(`remove plugin ${pluginId} and its install directory (cannot restore). input yes confirm:`)
+    const answer = await rl.question(`Remove plugin ${pluginId} and its install directory (irreversible)? Type yes to confirm: `)
     const normalized = answer.trim().toLowerCase()
     if (normalized !== 'y' && normalized !== 'yes') {
-      throw new CliError('cancelled: not confirm remove', 'not_confirmed')
+      throw new CliError('cancelled: removal not confirmed', 'not_confirmed')
     }
   } finally {
     rl.close()
@@ -130,7 +135,7 @@ export function pluginsCommands(): CommandSpec[] {
   const cmds: CommandSpec[] = []
   cmds.push({
     path: ['plugins', 'list'],
-    description: 'column out plugin (GET /api/plugins)',
+    description: 'List plugins (GET /api/plugins)',
     async run(ctx: CommandContext) {
       parseNoFlags(ctx)
       const hub = await ctx.hub()
@@ -140,7 +145,7 @@ export function pluginsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['plugins', 'enable'],
-    description: 'enable plugin (POST /api/plugins/:id/enable)',
+    description: 'Enable a plugin (POST /api/plugins/:id/enable)',
     positional: '<id>',
     async run(ctx: CommandContext) {
       const parsed = parseFlags([], ctx.args)
@@ -152,9 +157,9 @@ export function pluginsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['plugins', 'disable'],
-    description: 'deactivate plugin (POST /api/plugins/:id/disable;--force ignore durable asset occupy alert)',
+    description: 'Disable a plugin (POST /api/plugins/:id/disable; --force ignores persistent resource-in-use warnings)',
     flags: [
-      { name: 'force', type: 'boolean', help: 'force deactivate (ignore durable config/asset occupy alert; in-flight run task still cannot skip)' },
+      { name: 'force', type: 'boolean', help: 'force disable (ignore persistent config/resource warnings; live in-flight tasks still cannot be bypassed)' },
     ],
     positional: '<id>',
     async run(ctx: CommandContext) {
@@ -165,8 +170,8 @@ export function pluginsCommands(): CommandSpec[] {
       const hub = await ctx.hub()
       const path = `/api/plugins/${encodeURIComponent(id)}/disable`
       try {
-        // without --force when keep without body invoke: server side encounter durable asset occupy return 409
-        // plugin_in_use, by under way rich is occupy manifest + --force hint.
+        // Without --force, send no body: if persistent resources are in use, the server returns 409
+        // plugin_in_use, which we enrich below with usage details and a --force hint.
         printResult(
           ctx,
           force ? await hub.post<unknown>(path, { force: true }) : await hub.post<unknown>(path),
@@ -182,11 +187,11 @@ export function pluginsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['plugins', 'config'],
-    description: 'view/update plugin config (GET return {values,schema};PUT send {values};--set key=value and --unset key can duplicate)',
+    description: 'View or update plugin config (GET returns {values,schema}; PUT sends {values}; --set key=value and --unset key are repeatable)',
     flags: [
-      { name: 'input', type: 'json', help: 'whole values JSON object (and --set can shared store,--set override for should key)' },
-      { name: 'set', type: 'string', repeated: true, help: 'single items assignment key=value, can duplicate; value by JSON boolean/number parse, otherwise string' },
-      { name: 'unset', type: 'string', repeated: true, help: 'reset designate config key back default value (send null delete explicit override value, can duplicate)' },
+      { name: 'input', type: 'json', help: 'full values JSON object (can be combined with --set; --set overrides matching keys)' },
+      { name: 'set', type: 'string', repeated: true, help: 'set a single key=value (repeatable; values parsed as JSON bool/number when valid, otherwise string)' },
+      { name: 'unset', type: 'string', repeated: true, help: 'reset a config key to its default (sends null to remove explicit override; repeatable)' },
     ],
     positional: '<id>',
     async run(ctx: CommandContext) {
@@ -205,7 +210,7 @@ export function pluginsCommands(): CommandSpec[] {
       const unsets = repeatedValues(parsed.flags, 'unset')
       for (const key of unsets) {
         if (key.length === 0 || key.includes('=')) {
-          throw new CliError(`--unset must be config key name (non-empty, excludes =), got "${key}"`, 'invalid_flag_value')
+          throw new CliError(`--unset must be a config key name (non-empty, without =), got "${key}"`, 'invalid_flag_value')
         }
       }
       const hub = await ctx.hub()
@@ -217,7 +222,7 @@ export function pluginsCommands(): CommandSpec[] {
       const setValues = parseKeyValues(sets, 'set')
       for (const key of unsets) {
         if (key in setValues) {
-          throw new CliError(`--set and --unset cannot also effect at the same field: ${key}`, 'conflicting_flags')
+          throw new CliError(`--set and --unset cannot target the same key: ${key}`, 'conflicting_flags')
         }
       }
       const values: Record<string, unknown> = hasInput ? coerceMetaFlag(parsed.flags.get('input'), 'input') : {}
@@ -230,11 +235,11 @@ export function pluginsCommands(): CommandSpec[] {
   cmds.push({
     path: ['plugins', 'doc'],
     description:
-      'read plugin public document (GET /api/plugins/:id/docs/:name;--conversation/--current read conversation document;--watch subscribe conversation document dedicated use SSE)',
+      'Read a public plugin document (GET /api/plugins/:id/docs/:name; --conversation/--current reads a session doc; --watch subscribes to session doc SSE)',
     flags: [
-      { name: 'conversation', type: 'number', help: 'conversation document target conversation ID(and --current mutual exclusion)' },
-      { name: 'current', type: 'boolean', help: 'use env HELM_CONVERSATION_ID(and --conversation mutual exclusion)' },
-      { name: 'watch', type: 'boolean', help: 'subscribe conversation document dedicated use SSE(must --conversation/--current;Ctrl-C exit)' },
+      { name: 'conversation', type: 'number', help: 'target conversation ID for session document (mutually exclusive with --current)' },
+      { name: 'current', type: 'boolean', help: 'use HELM_CONVERSATION_ID from environment (mutually exclusive with --conversation)' },
+      { name: 'watch', type: 'boolean', help: 'subscribe to dedicated SSE for a session document (requires --conversation/--current; Ctrl-C to exit)' },
     ],
     positional: '<pluginId> <name>',
     async run(ctx: CommandContext) {
@@ -249,13 +254,13 @@ export function pluginsCommands(): CommandSpec[] {
       const pluginId = parsed.positionals[0]
       const name = parsed.positionals[1]
       if (pluginId === undefined || name === undefined) {
-        throw new CliError('missing location parameter:plugins doc <pluginId> <name>', 'missing_id')
+        throw new CliError('missing positional arguments: plugins doc <pluginId> <name>', 'missing_id')
       }
       assertNoExtraPositionals(parsed.positionals, 2)
       const hasConversation = parsed.flags.has('conversation')
       const hasCurrent = parsed.flags.get('current') === true
       if (hasConversation && hasCurrent) {
-        throw new CliError('--conversation and --current mutual exclusion', 'conflicting_flags')
+        throw new CliError('--conversation and --current are mutually exclusive', 'conflicting_flags')
       }
       let conversationId: number | undefined
       if (hasConversation) {
@@ -271,7 +276,7 @@ export function pluginsCommands(): CommandSpec[] {
       const hub = await ctx.hub()
       if (parsed.flags.get('watch') === true) {
         if (conversationId === undefined) {
-          throw new CliError('--watch need to conversation target (--conversation <id> or --current)', 'missing_conversation_target')
+          throw new CliError('--watch requires a target conversation (--conversation <id> or --current)', 'missing_conversation_target')
         }
         await watchSessionDoc(ctx, hub, base, conversationId, pluginId, name)
         return
@@ -289,7 +294,7 @@ export function pluginsCommands(): CommandSpec[] {
         printResult(ctx, doc)
         return
       }
-      // person class pattern: document name + value (JSON fidelity; text value direct out)
+      // Human mode: document name + value (preserve JSON fidelity; print string values verbatim)
       if (typeof doc.value === 'string') {
         ctx.io.out(`${doc.name}\n`)
         printPlainText(ctx, doc.value)
@@ -301,11 +306,11 @@ export function pluginsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['plugins', 'client'],
-    description: 'get plugin client.tsx compile artifact (GET /api/plugins/:id/client.mjs?module=...;--module default client.tsx)',
+    description: 'Fetch compiled plugin client.tsx bundle (GET /api/plugins/:id/client.mjs?module=...; --module defaults to client.tsx)',
     flags: [
-      { name: 'module', type: 'string', help: 'each other for plugin clientRoot module path (default client.tsx)' },
-      { name: 'chunk', type: 'string', help: 'optional chunk filename (such as vendor.js)' },
-      { name: 'output', type: 'string', help: 'write target file path (default stdout;--json when still write file and print meta information)' },
+      { name: 'module', type: 'string', help: 'module path relative to plugin clientRoot (defaults to client.tsx)' },
+      { name: 'chunk', type: 'string', help: 'optional chunk filename (e.g. vendor.js)' },
+      { name: 'output', type: 'string', help: 'write output to file path (defaults to stdout; still writes file and prints metadata with --json)' },
     ],
     positional: '<id>',
     async run(ctx: CommandContext) {
@@ -322,7 +327,7 @@ export function pluginsCommands(): CommandSpec[] {
       const moduleRef = (parsed.flags.get('module') as string | undefined) ?? 'client.tsx'
       const chunk = parsed.flags.get('chunk') as string | undefined
       if (parsed.flags.has('output') && typeof parsed.flags.get('output') !== 'string') {
-        throw new CliError('--output need to file path', 'invalid_flag_value')
+        throw new CliError('--output requires a file path', 'invalid_flag_value')
       }
       const outPath = parsed.flags.get('output') as string | undefined
       const hub = await ctx.hub()
@@ -345,7 +350,7 @@ export function pluginsCommands(): CommandSpec[] {
       if (outPath !== undefined) {
         const { writeFile } = await import('node:fs/promises')
         await writeFile(outPath, code, 'utf8')
-        if (!ctx.json) ctx.io.out(`already write ${outPath}(${code.length} byte,hash ${contentHash})\n`)
+        if (!ctx.json) ctx.io.out(`wrote ${outPath} (${code.length} bytes, hash ${contentHash})\n`)
         return
       }
       if (!ctx.json) ctx.io.out(code)
@@ -354,11 +359,11 @@ export function pluginsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['plugins', 'doctor'],
-    description: 'external plugin source code static self inspect (POST /api/plugins/doctor; real load+real register+client compile)',
+    description: 'Run static self-check on external plugin source (POST /api/plugins/doctor; loads, registers, and compiles client)',
     flags: [
-      { name: 'path', type: 'string', help: 'external plugin source directory absolute path (and --dir etc. price;--id/<id> mutual exclusion)' },
-      { name: 'dir', type: 'string', help: '--path compatibility alias (etc. price)' },
-      { name: 'id', type: 'string', help: 'registered external plugin id(server side parse its source directory; and path mutual exclusion)' },
+      { name: 'path', type: 'string', help: 'absolute path to external plugin source directory (equivalent to --dir; mutually exclusive with --id/<id>)' },
+      { name: 'dir', type: 'string', help: 'compatibility alias for --path' },
+      { name: 'id', type: 'string', help: 'registered external plugin ID (server resolves its source directory; mutually exclusive with path)' },
     ],
     positional: '[<id> | <dir>]',
     async run(ctx: CommandContext) {
@@ -374,7 +379,7 @@ export function pluginsCommands(): CommandSpec[] {
       const dirFlag = parsed.flags.get('dir')
       const idFlag = parsed.flags.get('id')
       const positional = parsed.positionals[0]
-      // location parameter semantics push assert: absolute path -> directory target; otherwise -> plugin id.
+      // Infer positional intent: absolute path -> directory target; otherwise -> plugin ID.
       const positionalIsPath =
         positional !== undefined &&
         (positional.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(positional) || positional.startsWith('\\\\'))
@@ -393,10 +398,10 @@ export function pluginsCommands(): CommandSpec[] {
             ? positional
             : undefined
       if (pathDir === undefined && id === undefined) {
-        throw new CliError('missing target:<id>,--path <dir> or --dir <dir>(choose one)', 'missing_id')
+        throw new CliError('missing target: provide <id>, --path <dir>, or --dir <dir>', 'missing_id')
       }
       if (pathDir !== undefined && id !== undefined) {
-        throw new CliError('id and path target mutual exclusion (choose one provide)', 'conflicting_flags')
+        throw new CliError('id and directory path cannot both be provided', 'conflicting_flags')
       }
       const usedPositionals = positional !== undefined && (positionalIsPath ? pathDir === positional : id === positional) ? 1 : 0
       assertNoExtraPositionals(parsed.positionals, usedPositionals)
@@ -407,21 +412,21 @@ export function pluginsCommands(): CommandSpec[] {
         printResult(ctx, report)
       } else {
         ctx.io.out(
-          `plugin self inspect:${report.dir}${report.pluginId ? `(id: ${report.pluginId})` : ''}${report.requestedId ? `(target id: ${report.requestedId})` : ''}\n`,
+          `Plugin doctor: ${report.dir}${report.pluginId ? ` (id: ${report.pluginId})` : ''}${report.requestedId ? ` (target id: ${report.requestedId})` : ''}\n`,
         )
         for (const check of report.checks) {
           if (check.error === undefined) {
-            ctx.io.out(`  [ok] ${check.id} - ${check.label}\n`)
+            ctx.io.out(`  [ok] ${check.id} — ${check.label}\n`)
           } else {
-            ctx.io.out(`  [!!] ${check.id} - ${check.label}\n        ${check.error.code}: ${check.error.message}\n`)
+            ctx.io.out(`  [!!] ${check.id} — ${check.label}\n        ${check.error.code}: ${check.error.message}\n`)
           }
         }
-        ctx.io.out(report.ok ? 'conclusion: all check via\n' : 'conclusion: store in failed items (see on)\n')
+        ctx.io.out(report.ok ? 'Result: all checks passed\n' : 'Result: failed checks found (see above)\n')
       }
-      // preflight failed: report already complete output (stdout), with non-zero exit code wrap-up supply script consume.
+      // Preflight failed: report is already printed to stdout; exit non-zero for script callers.
       if (!report.ok) {
         throw new CliError(
-          `plugin self inspect store in failed items (${report.checks.filter((c) => c.error !== undefined).length} items)`,
+          `plugin doctor found failures (${report.checks.filter((c) => c.error !== undefined).length} check(s))`,
           'doctor_failed',
         )
       }
@@ -430,7 +435,7 @@ export function pluginsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['plugins', 'reload'],
-    description: 'external plugin subject to control hot reload (POST /api/plugins/:id/reload; preflight failed old instance keep do not motion)',
+    description: 'Hot-reload an external plugin with preflight checks (POST /api/plugins/:id/reload; keeps previous instance if preflight fails)',
     positional: '<id>',
     async run(ctx: CommandContext) {
       const parsed = parseFlags([], ctx.args)
@@ -444,7 +449,7 @@ export function pluginsCommands(): CommandSpec[] {
         return
       }
       ctx.io.out(
-        `already reload ${result.pluginId}(proxy boundary ${result.generation}, enable state keep:${result.wasEnabled ? 'enabled' : 'deactivated'})\n`,
+        `Reloaded ${result.pluginId} (generation ${result.generation}, enabled state preserved: ${result.wasEnabled ? 'enabled' : 'disabled'})\n`,
       )
       printResult(ctx, result.summary)
     },
@@ -452,7 +457,7 @@ export function pluginsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['plugins', 'rescan'],
-    description: 'incremental heavy scan plugin directory (POST /api/plugins/rescan; only register new external plugin, by default deactivate)',
+    description: 'Incrementally rescan the plugins directory (POST /api/plugins/rescan; registers new external plugins as disabled by default)',
     async run(ctx: CommandContext) {
       parseNoFlags(ctx)
       const hub = await ctx.hub()
@@ -462,29 +467,29 @@ export function pluginsCommands(): CommandSpec[] {
         return
       }
       if (result.registered.length === 0) {
-        ctx.io.out('not found new plugin (registered plugin and pure data directory do not reload)\n')
+        ctx.io.out('No new plugins found (already registered plugins and data-only directories are unchanged)\n')
       } else {
-        ctx.io.out(`new register ${result.registered.length} plugin (by default deactivate):\n`)
+        ctx.io.out(`Registered ${result.registered.length} new plugin(s) (disabled by default):\n`)
         for (const id of result.registered) ctx.io.out(`  - ${id}\n`)
-        ctx.io.out('enable:helm plugins enable <id>\n')
+        ctx.io.out('Enable with: helm plugins enable <id>\n')
       }
-      ctx.io.out(`(skip ${result.skipped} directory; when before shared ${result.plugins.length} plugin)\n`)
+      ctx.io.out(`(skipped ${result.skipped} directory(ies); ${result.plugins.length} plugin(s) total)\n`)
     },
   })
 
   cmds.push({
     path: ['plugins', 'init'],
     description:
-      'local foot manually frame: in target directory generate external plugin skeleton (do not access Hub);--template app generate can via helm apps validate full-stack micro app',
+      'Local scaffold: generate an external plugin skeleton in the target directory without contacting Hub; --template app passes helm apps validate',
     flags: [
-      { name: 'dir', type: 'string', help: 'target parent directory (by default <dataDir>/plugins; directory must already exists or can create)' },
-      { name: 'name', type: 'string', help: 'plugin directory name and by default id(character parent number and - _, by default sample-plugin)' },
+      { name: 'dir', type: 'string', help: 'target parent directory (defaults to <dataDir>/plugins; must exist or be creatable)' },
+      { name: 'name', type: 'string', help: 'plugin directory name and default id (alphanumeric plus - _, defaults to sample-plugin)' },
       {
         name: 'template',
         type: 'string',
-        help: 'skeleton template:minimal(only backend probe needle action)| full(contains doc/action/frontend panel)| app(full-stack micro app:doc/double action/screen main view + sidebar entry, artifact directly helm apps validate); by default full',
+        help: 'skeleton template: minimal (backend ping action only) | full (doc/action/workbench panel) | app (full-stack micro-app: doc/actions/screen + sidebar item, passes helm apps validate); defaults to full',
       },
-      { name: 'force', type: 'boolean', help: 'target directory non-empty when continue (by default reject, guard against override)' },
+      { name: 'force', type: 'boolean', help: 'proceed even if target directory is non-empty (rejected by default to prevent overwriting)' },
     ],
     positional: '[name]',
     async run(ctx: CommandContext) {
@@ -493,17 +498,37 @@ export function pluginsCommands(): CommandSpec[] {
   })
 
   cmds.push({
+    path: ['plugins', 'build'],
+    description:
+      'Local build: precompile a plugin directory client modules into static dist-client/ artifacts without contacting Hub',
+    flags: [
+      { name: 'dir', type: 'string', help: 'plugin directory path (defaults to current working directory)' },
+      { name: 'out', type: 'string', help: 'output prebuilt directory (defaults to manifest clientDist or <dir>/dist-client)' },
+      {
+        name: 'module',
+        type: 'string',
+        repeated: true,
+        help: 'explicit relative .ts/.tsx entry module(s) inside clientRoot (repeatable; auto-scans clientRoot when omitted)',
+      },
+    ],
+    positional: '[dir]',
+    async run(ctx: CommandContext) {
+      await runPluginsBuild(ctx)
+    },
+  })
+
+  cmds.push({
     path: ['plugins', 'install'],
     description:
-      'from npm/git/local path install external plugin package and register (POST /api/plugins/install; by default deactivate,--enable install after i.e. enable).source by Hub parse, local path each other for Hub host; install enable i.e. in Hub inside execute can message plugin code, without sandbox',
-    flags: [{ name: 'enable', type: 'boolean', help: 'install after immediately enable (default register is deactivate)' }],
+      'Install and register an external plugin package from npm/git/local path (POST /api/plugins/install; disabled by default unless --enable). source is resolved on the Hub host; enabled plugins run trusted code in-process with no sandbox',
+    flags: [{ name: 'enable', type: 'boolean', help: 'enable immediately after install (registered as disabled by default)' }],
     positional: '<source>',
     async run(ctx: CommandContext) {
       const parsed = parseFlags([{ name: 'enable', type: 'boolean' }], ctx.args)
       const source = requirePositional(parsed.positionals, 0, 'source')
       if (source.trim() === '') {
         throw new CliError(
-          '<source> cannot be empty (npm:<spec> / git:<repo>@<ref> / HTTPS Git URL / local path, language method by Hub parse)',
+          '<source> cannot be empty (npm:<spec> / git:<repo>@<ref> / HTTPS Git URL / local path; parsed by Hub)',
           'invalid_flag_value',
         )
       }
@@ -519,20 +544,20 @@ export function pluginsCommands(): CommandSpec[] {
         return
       }
       ctx.io.out(
-        `installed ${result.summary.id}${result.record.version === '' ? '' : ` ${result.record.version}`}(source ${result.record.source.raw})\n`,
+        `Installed ${result.summary.id}${result.record.version === '' ? '' : ` ${result.record.version}`} (source: ${result.record.source.raw})\n`,
       )
-      ctx.io.out(`install directory (Hub host):${result.record.installPath}\n`)
+      ctx.io.out(`Install directory (Hub host): ${result.record.installPath}\n`)
       ctx.io.out(
         result.summary.enabled
-          ? 'state: enabled\n'
-          : `state: deactivated (enable:helm plugins enable ${result.summary.id})\n`,
+          ? 'Status: enabled\n'
+          : `Status: disabled (enable with: helm plugins enable ${result.summary.id})\n`,
       )
     },
   })
 
   cmds.push({
     path: ['plugins', 'update'],
-    description: 'update installed external plugin package and reload (POST /api/plugins/:id/update; target must is managed install plugin)',
+    description: 'Update an installed external plugin package and reload (POST /api/plugins/:id/update; target must be a managed installation)',
     positional: '<id>',
     async run(ctx: CommandContext) {
       const parsed = parseFlags([], ctx.args)
@@ -548,12 +573,12 @@ export function pluginsCommands(): CommandSpec[] {
       }
       const ver = (v: string): string => (v === '' ? 'unknown version' : v)
       if (result.changed) {
-        ctx.io.out(`already update ${result.record.pluginId}:${ver(result.previousVersion)} -> ${ver(result.record.version)}\n`)
+        ctx.io.out(`Updated ${result.record.pluginId}: ${ver(result.previousVersion)} -> ${ver(result.record.version)}\n`)
       } else {
-        ctx.io.out(`${result.record.pluginId} source not change, without update (when before ${ver(result.record.version)})\n`)
+        ctx.io.out(`${result.record.pluginId} source unchanged; no update (current ${ver(result.record.version)})\n`)
       }
       ctx.io.out(
-        `install directory (Hub host):${result.record.installPath}; state:${result.summary.enabled ? 'enabled' : 'deactivated'}\n`,
+        `Install directory (Hub host): ${result.record.installPath}; status: ${result.summary.enabled ? 'enabled' : 'disabled'}\n`,
       )
     },
   })
@@ -561,8 +586,8 @@ export function pluginsCommands(): CommandSpec[] {
   cmds.push({
     path: ['plugins', 'remove'],
     description:
-      'remove managed install external plugin package (POST /api/plugins/:id/remove; deactivate and clean up Hub host on install directory and record, cannot restore). person class pattern by default confirm (TTY input yes), non- interaction environment use --yes',
-    flags: [{ name: 'yes', type: 'boolean', help: 'skip confirm (non- interaction/script environment)' }],
+      'Remove a managed external plugin package (POST /api/plugins/:id/remove; disables plugin and deletes its Hub install directory and record irreversibly). Prompts for confirmation on TTY; pass --yes non-interactively',
+    flags: [{ name: 'yes', type: 'boolean', help: 'skip confirmation prompt (for non-interactive/scripted usage)' }],
     positional: '<id>',
     async run(ctx: CommandContext) {
       const parsed = parseFlags([{ name: 'yes', type: 'boolean' }], ctx.args)
@@ -577,14 +602,14 @@ export function pluginsCommands(): CommandSpec[] {
         printResult(ctx, result)
         return
       }
-      ctx.io.out(`already remove ${result.pluginId}(install record ${result.installId}; remove before${result.wasEnabled ? 'enable in' : 'deactivated'})\n`)
-      ctx.io.out(`already clean up directory (Hub host):${result.installPath}\n`)
+      ctx.io.out(`Removed ${result.pluginId} (install record ${result.installId}; was ${result.wasEnabled ? 'enabled' : 'disabled'})\n`)
+      ctx.io.out(`Removed directory (Hub host): ${result.installPath}\n`)
     },
   })
 
   cmds.push({
     path: ['actions', 'list'],
-    description: 'column out plugin action manifest (GET /api/actions)',
+    description: 'List registered plugin actions (GET /api/actions)',
     async run(ctx: CommandContext) {
       parseNoFlags(ctx)
       const hub = await ctx.hub()
@@ -596,10 +621,10 @@ export function pluginsCommands(): CommandSpec[] {
 }
 
 // ---------------------------------------------------------------------------
-// 409 plugin_in_use rich: keep code/details, message attach carries occupy manifest and --force hint
+// 409 plugin_in_use enrichment: preserve code/details while appending occupied resources and --force hint
 // ---------------------------------------------------------------------------
 
-/** from error details in extract structure legal occupy list (usages: [{kind,id,label}]). */
+/** Extract valid usage entries (usages: [{kind,id,label}]) from error details. */
 function extractInUseUsages(details: unknown): Array<{ kind: string; id: string; label: string }> {
   if (details === null || typeof details !== 'object') return []
   const usages = (details as { usages?: unknown }).usages
@@ -614,27 +639,27 @@ function extractInUseUsages(details: unknown): Array<{ kind: string; id: string;
   )
 }
 
-/** keep original CliError  code/details/exitCode, only rich person class can read message. */
+/** Preserve original CliError code/details/exitCode while enriching the human-readable message. */
 function enrichPluginInUseError(err: CliError): CliError {
   const usages = extractInUseUsages(err.details)
   if (usages.length === 0) return err
-  const lines = [err.message, 'occupy in durable asset:']
+  const lines = [err.message, 'Occupied persistent resources:']
   for (const usage of usages) {
-    lines.push(`  - [${usage.kind}] ${usage.id}:${usage.label}`)
+    lines.push(`  - [${usage.kind}] ${usage.id}: ${usage.label}`)
   }
-  lines.push('confirm after can use --force force deactivate (in-flight run task still cannot skip).')
+  lines.push('Pass --force to disable anyway (live in-flight tasks still cannot be bypassed).')
   return new CliError(lines.join('\n'), err.code, err.exitCode, err.details)
 }
 
 // ---------------------------------------------------------------------------
-// plugins init: local foot manually frame (do not access Hub; file after use doctor/reload closed ring verify)
-// file content template see scaffold-templates.ts(pure data module)
+// plugins init: local scaffold (no Hub calls; verify generated files with doctor/reload)
+// File templates live in scaffold-templates.ts (pure data module)
 // ---------------------------------------------------------------------------
 
-/** plugin id/directory name: character parent number open head, allows - _(and protocol plugin id rule align, forbid builtin:). */
+/** Plugin ID / directory name: starts with alphanumeric, allows - _ (aligned with protocol plugin ID rules; builtin: forbidden). */
 const PLUGIN_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
 
-/** generate plugin skeleton file (store in preflight + non-empty directory reject + template choose + explicit produce out manifest). */
+/** Generate plugin skeleton files (validates parent dir, rejects non-empty targets, selects template, reports outputs). */
 async function runPluginsInit(ctx: CommandContext): Promise<void> {
   const parsed = parseFlags(
     [
@@ -649,17 +674,17 @@ async function runPluginsInit(ctx: CommandContext): Promise<void> {
   const namePositional = parsed.positionals[0]
   const name = typeof nameFlag === 'string' && nameFlag.length > 0 ? nameFlag : namePositional
   if (typeof name !== 'string' || name.length === 0) {
-    throw new CliError('missing <name>(--name or location parameter)', 'missing_id')
+    throw new CliError('missing <name> (--name or positional argument)', 'missing_id')
   }
   if (!PLUGIN_NAME_PATTERN.test(name) || name.startsWith('builtin:')) {
     throw new CliError(
-      `plugin name illegal:${name}(must match ${PLUGIN_NAME_PATTERN}, and forbidden builtin: prefix)`,
+      `invalid plugin name: ${name} (must match ${PLUGIN_NAME_PATTERN}, and builtin: prefix is forbidden)`,
       'invalid_flag_value',
     )
   }
   const templateRaw = parsed.flags.get('template')
   if (templateRaw !== undefined && !SCAFFOLD_TEMPLATES.includes(templateRaw as ScaffoldTemplate)) {
-    throw new CliError(`--template must be ${SCAFFOLD_TEMPLATES.join(' | ')}`, 'invalid_flag_value')
+    throw new CliError(`--template must be one of ${SCAFFOLD_TEMPLATES.join(' | ')}`, 'invalid_flag_value')
   }
   const template = (templateRaw ?? 'full') as ScaffoldTemplate
   const usedPositionals = name === namePositional ? 1 : 0
@@ -673,34 +698,34 @@ async function runPluginsInit(ctx: CommandContext): Promise<void> {
 
   const fsp = await import('node:fs/promises')
   const path = await import('node:path')
-  // parent directory: missing when create (and plugins directory convention consistent); store in but non- directory explicit errors.
+  // Parent directory: create if missing (matches plugins directory convention); fail explicitly if it exists as a non-directory.
   try {
     const st = await fsp.stat(parentDir)
     if (!st.isDirectory()) {
-      throw new CliError(`--dir is not directory:${parentDir}`, 'invalid_flag_value')
+      throw new CliError(`--dir is not a directory: ${parentDir}`, 'invalid_flag_value')
     }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
       if (err instanceof CliError) throw err
       throw new CliError(
-        `check --dir failed (${parentDir}):${err instanceof Error ? err.message : String(err)}`,
+        `failed to inspect --dir (${parentDir}): ${err instanceof Error ? err.message : String(err)}`,
         'read_failed',
       )
     }
     await fsp.mkdir(parentDir, { recursive: true })
   }
-  // target directory: already exists and non-empty when by default reject (--force continue); already exists is empty when re- use.
+  // Target directory: reject by default if existing and non-empty (--force proceeds); reuse if empty.
   let targetExisted = false
   try {
     const st = await fsp.stat(target)
     if (!st.isDirectory()) {
-      throw new CliError(`target path already exists and is not directory:${target}`, 'conflict')
+      throw new CliError(`target path already exists and is not a directory: ${target}`, 'conflict')
     }
     targetExisted = true
     const existing = await fsp.readdir(target)
     if (existing.length > 0 && !force) {
       throw new CliError(
-        `target directory non-empty:${target}(use --force continue; existing file will not by delete, but same name file by override)`,
+        `target directory is non-empty: ${target} (pass --force to proceed; existing unrelated files are kept, matching filenames will be overwritten)`,
         'conflict',
       )
     }
@@ -708,12 +733,12 @@ async function runPluginsInit(ctx: CommandContext): Promise<void> {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
       if (err instanceof CliError) throw err
       throw new CliError(
-        `check target directory failed (${target}):${err instanceof Error ? err.message : String(err)}`,
+        `failed to inspect target directory (${target}): ${err instanceof Error ? err.message : String(err)}`,
         'read_failed',
       )
     }
   }
-  // target directory missing when create (minimal template without client subdirectory, directory must explicit create).
+  // Create target directory if missing (minimal template has no client subdir, so root must be created explicitly).
   await fsp.mkdir(target, { recursive: true })
   const files: string[] = ['plugin.json', 'index.ts', 'tsconfig.json']
   await fsp.writeFile(path.join(target, 'plugin.json'), SCAFFOLD_PLUGIN_JSON(name, template), 'utf8')
@@ -722,7 +747,7 @@ async function runPluginsInit(ctx: CommandContext): Promise<void> {
     template === 'minimal'
       ? SCAFFOLD_INDEX_TS_MINIMAL(name)
       : template === 'app'
-        ? SCAFFOLD_INDEX_TS_APP(name, `${name} should use`)
+        ? SCAFFOLD_INDEX_TS_APP(name, `${name} App`)
         : SCAFFOLD_INDEX_TS_FULL(name),
     'utf8',
   )
@@ -757,9 +782,271 @@ async function runPluginsInit(ctx: CommandContext): Promise<void> {
     return
   }
   ctx.io.out(
-    `already generate${template === 'app' ? 'full-stack micro app' : 'plugin'}skeleton (template ${template}):${target}${targetExisted ? '(directory already exists, file already write/override)' : ''}\n`,
+    `Generated ${template === 'app' ? 'full-stack micro-app' : 'plugin'} skeleton (template ${template}): ${target}${targetExisted ? ' (directory existed; files written/overwritten)' : ''}\n`,
   )
   for (const file of summary.files) ctx.io.out(`  - ${file}\n`)
-  ctx.io.out('after continue step:\n')
+  ctx.io.out('Next steps:\n')
   for (const step of summary.nextSteps) ctx.io.out(`  ${step}\n`)
+}
+
+// ---------------------------------------------------------------------------
+// plugins build: local prebuilt dist-client generator (no Hub calls)
+// ---------------------------------------------------------------------------
+
+async function readOptionalManifestObject(
+  filePath: string,
+  label: string,
+): Promise<Record<string, unknown> | undefined> {
+  const fsp = await import('node:fs/promises')
+  let text: string
+  try {
+    text = await fsp.readFile(filePath, 'utf8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw new CliError(
+      `failed to read ${label} (${filePath}): ${err instanceof Error ? err.message : String(err)}`,
+      'read_failed',
+    )
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch (err) {
+    throw new CliError(
+      `invalid JSON in ${label} (${filePath}): ${err instanceof Error ? err.message : String(err)}`,
+      'invalid_plugin_manifest',
+    )
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new CliError(`${label} (${filePath}) must be a JSON object`, 'invalid_plugin_manifest')
+  }
+  return parsed as Record<string, unknown>
+}
+
+function isOutsidePluginBase(pathMod: typeof import('node:path'), base: string, target: string): boolean {
+  const rel = pathMod.relative(base, target)
+  return rel === '..' || rel.startsWith(`..${pathMod.sep}`) || pathMod.isAbsolute(rel)
+}
+
+async function resolveNearestRealpath(
+  pathMod: typeof import('node:path'),
+  fsp: typeof import('node:fs/promises'),
+  target: string,
+): Promise<{ kind: 'ok'; real: string } | { kind: 'dangling-symlink' }> {
+  let cur = target
+  for (;;) {
+    try {
+      return { kind: 'ok', real: await fsp.realpath(cur) }
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err
+      // A dangling symlink fails realpath with ENOENT; surface it as a symlink escape rather than masking via parent.
+      try {
+        if ((await fsp.lstat(cur)).isSymbolicLink()) return { kind: 'dangling-symlink' }
+      } catch {
+        // Missing component: walk up to nearest existing ancestor.
+      }
+      const parent = pathMod.dirname(cur)
+      if (parent === cur) throw err
+      cur = parent
+    }
+  }
+}
+
+async function assertPathInsidePluginRoot(
+  pluginDir: string,
+  dirReal: string,
+  rawSubpath: string,
+  resolvedPath: string,
+  field: string,
+): Promise<void> {
+  const path = await import('node:path')
+  const fsp = await import('node:fs/promises')
+  // Compare lexical containment against pluginDir (same base used by path.resolve) so 8.3 short paths
+  // (e.g. Windows RUNNER~1) or symlinked parent dirs (/var -> /private/var) do not falsely mismatch dirReal.
+  const lexicalEscapes = path.isAbsolute(rawSubpath)
+    ? isOutsidePluginBase(path, pluginDir, resolvedPath) && isOutsidePluginBase(path, dirReal, resolvedPath)
+    : isOutsidePluginBase(path, pluginDir, resolvedPath)
+  if (lexicalEscapes) {
+    throw new CliError(
+      `plugin ${pluginDir} ${field} escapes plugin directory: ${rawSubpath}`,
+      'invalid_plugin_definition',
+    )
+  }
+  try {
+    const resolved = await resolveNearestRealpath(path, fsp, resolvedPath)
+    if (resolved.kind === 'dangling-symlink' || isOutsidePluginBase(path, dirReal, resolved.real)) {
+      throw new CliError(
+        `plugin ${pluginDir} ${field} symlink escapes plugin directory: ${rawSubpath}`,
+        'invalid_plugin_definition',
+      )
+    }
+  } catch (err) {
+    if (err instanceof CliError) throw err
+    throw new CliError(
+      `failed to resolve ${field} (${resolvedPath}): ${err instanceof Error ? err.message : String(err)}`,
+      'read_failed',
+    )
+  }
+}
+
+async function runPluginsBuild(ctx: CommandContext): Promise<void> {
+  const parsed = parseFlags(
+    [
+      { name: 'dir', type: 'string' },
+      { name: 'out', type: 'string' },
+      { name: 'module', type: 'string', repeated: true },
+    ],
+    ctx.args,
+  )
+  const path = await import('node:path')
+  const fsp = await import('node:fs/promises')
+
+  const dirFlag = parsed.flags.get('dir')
+  const positionalDir = parsed.positionals[0]
+  if (typeof dirFlag === 'string' && dirFlag.length > 0 && positionalDir !== undefined) {
+    throw new CliError('--dir and positional <dir> are mutually exclusive', 'conflicting_flags')
+  }
+  const usedPositionals = positionalDir !== undefined ? 1 : 0
+  assertNoExtraPositionals(parsed.positionals, usedPositionals)
+
+  const rawDir =
+    typeof dirFlag === 'string' && dirFlag.length > 0
+      ? dirFlag
+      : positionalDir !== undefined
+        ? positionalDir
+        : ctx.cwd
+  const pluginDir = path.resolve(ctx.cwd, rawDir)
+
+  let dirStat
+  try {
+    dirStat = await fsp.stat(pluginDir)
+  } catch (err) {
+    throw new CliError(
+      `plugin directory not accessible (${pluginDir}): ${err instanceof Error ? err.message : String(err)}`,
+      'client_root_invalid',
+    )
+  }
+  if (!dirStat.isDirectory()) {
+    throw new CliError(`plugin target is not a directory: ${pluginDir}`, 'client_root_invalid')
+  }
+  const dirReal = await fsp.realpath(pluginDir)
+
+  const pluginJson = await readOptionalManifestObject(path.join(pluginDir, 'plugin.json'), 'plugin.json')
+  const packageJson = await readOptionalManifestObject(path.join(pluginDir, 'package.json'), 'package.json')
+  const helmFieldRaw = packageJson?.['helm']
+  if (
+    helmFieldRaw !== undefined &&
+    (helmFieldRaw === null || typeof helmFieldRaw !== 'object' || Array.isArray(helmFieldRaw))
+  ) {
+    throw new CliError(`package.json helm field in ${pluginDir} must be an object`, 'invalid_plugin_manifest')
+  }
+  const helmField = helmFieldRaw as Record<string, unknown> | undefined
+
+  const rawId = pluginJson?.['id'] ?? helmField?.['id'] ?? packageJson?.['name']
+  const pluginId = typeof rawId === 'string' && rawId.trim().length > 0 ? rawId.trim() : path.basename(pluginDir)
+
+  const manifestClientRoot =
+    typeof pluginJson?.['clientRoot'] === 'string'
+      ? pluginJson['clientRoot']
+      : typeof helmField?.['clientRoot'] === 'string'
+        ? helmField['clientRoot']
+        : undefined
+  let clientRoot: string
+  if (manifestClientRoot !== undefined && manifestClientRoot.length > 0) {
+    clientRoot = path.resolve(pluginDir, manifestClientRoot)
+    await assertPathInsidePluginRoot(pluginDir, dirReal, manifestClientRoot, clientRoot, 'clientRoot')
+  } else {
+    const defaultClientDir = path.join(pluginDir, 'client')
+    let hasClientDir = false
+    try {
+      hasClientDir = (await fsp.stat(defaultClientDir)).isDirectory()
+    } catch {
+      // ENOENT
+    }
+    clientRoot = hasClientDir ? defaultClientDir : pluginDir
+  }
+
+  const outFlag = parsed.flags.get('out')
+  let outDir: string
+  if (typeof outFlag === 'string' && outFlag.length > 0) {
+    outDir = path.resolve(ctx.cwd, outFlag)
+  } else {
+    const manifestDist =
+      typeof pluginJson?.['clientDist'] === 'string'
+        ? pluginJson['clientDist']
+        : typeof helmField?.['clientDist'] === 'string'
+          ? helmField['clientDist']
+          : undefined
+    if (manifestDist !== undefined && manifestDist.length > 0) {
+      outDir = path.resolve(pluginDir, manifestDist)
+      await assertPathInsidePluginRoot(pluginDir, dirReal, manifestDist, outDir, 'clientDist')
+    } else {
+      outDir = path.join(pluginDir, PREBUILT_CLIENT_DIR_NAME)
+    }
+  }
+
+  const specSet = new Set<string>()
+  for (const list of [pluginJson?.['clientDependencies'], helmField?.['clientDependencies']]) {
+    if (list === undefined) continue
+    if (!Array.isArray(list) || list.some((x) => typeof x !== 'string' || x.trim().length === 0)) {
+      throw new CliError(`clientDependencies in ${pluginDir} must be an array of non-empty strings`, 'invalid_plugin_manifest')
+    }
+    for (const spec of list as string[]) specSet.add(spec.trim())
+  }
+  const npmRoots: PluginClientNpmRoot[] =
+    specSet.size > 0 ? [{ specifiers: [...specSet], packageRoot: pluginDir }] : []
+  const explicitModules = repeatedValues(parsed.flags, 'module')
+
+  // Dynamically load the workspace/runtime build package without creating a static @helm/cli -> @helm/plugin-build dependency edge.
+  const pluginBuildPkg = ['@helm', 'plugin-build'].join('/')
+  let buildMod: {
+    buildPluginClientBundleDir?: (
+      options: BuildPluginClientBundleDirOptions,
+    ) => Promise<BuildPluginClientBundleDirResult>
+  }
+  try {
+    buildMod = (await import(pluginBuildPkg)) as typeof buildMod
+  } catch (err) {
+    throw new CliError(
+      `plugin client compiler unavailable (${pluginBuildPkg} failed to load: ${err instanceof Error ? err.message : String(err)})`,
+      'plugin_build_unavailable',
+    )
+  }
+  if (typeof buildMod.buildPluginClientBundleDir !== 'function') {
+    throw new CliError(
+      `plugin client compiler unavailable (${pluginBuildPkg} does not export buildPluginClientBundleDir)`,
+      'plugin_build_unavailable',
+    )
+  }
+
+  let result: BuildPluginClientBundleDirResult
+  try {
+    result = await buildMod.buildPluginClientBundleDir({
+      pluginId,
+      clientRoot,
+      outDir,
+      ...(explicitModules.length > 0 ? { modules: explicitModules } : {}),
+      ...(npmRoots.length > 0 ? { npmRoots } : {}),
+    })
+  } catch (err) {
+    if (err instanceof HelmError) {
+      throw new CliError(err.message, err.code, 1, err.details)
+    }
+    throw err
+  }
+
+  if (ctx.json) {
+    printResult(ctx, result)
+    return
+  }
+  const moduleKeys = Object.keys(result.manifest.modules).sort()
+  ctx.io.out(
+    `Built ${moduleKeys.length} client module(s) for ${result.pluginId} -> ${result.outDir} (${(result.totalBytes / 1024).toFixed(1)} KiB)\n`,
+  )
+  for (const modRef of moduleKeys) {
+    const entry = result.manifest.modules[modRef]!
+    const chunkSuffix = entry.chunks && entry.chunks.length > 0 ? ` + ${entry.chunks.length} chunk(s)` : ''
+    ctx.io.out(`  - ${modRef} -> ${entry.entryFile} (${entry.contentHash.slice(0, 12)}${chunkSuffix})\n`)
+  }
 }

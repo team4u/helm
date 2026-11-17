@@ -136,7 +136,7 @@ test('background ensureContextUsage failure does not reject getConversationDetai
     const state: HostState = {
       summary: summaryOf(5, false),
       entries: [],
-      refreshError: new HelmError('runtime_closed', 'kernel is now close', 503),
+      refreshError: new HelmError('runtime_closed', 'kernel is closing', 503),
       scheduleCalls: 0,
       ensureCalls: 0,
     }
@@ -151,7 +151,7 @@ test('background ensureContextUsage failure does not reject getConversationDetai
   }
 })
 
-test('detail leg failed: whole reject (404 conversation missing) without triggering usage refresh', { timeout: 60_000 }, async () => {
+test('detail read failure: rejects overall (404 conversation missing) without triggering usage refresh', { timeout: 60_000 }, async () => {
   const state: HostState = {
     summary: summaryOf(5, false),
     entries: [],

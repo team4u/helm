@@ -48,7 +48,7 @@ import {
   MemoryConfigStore,
   MemoryDocStore,
   makeConversationSummary,
-  makeFauxModels,
+  makeFauxProvider,
   useTempDir,
   waitFor,
 } from './helpers/plugin-test-env.js'
@@ -173,13 +173,13 @@ async function openKernelWithHerdr(
   socketPath: string,
   options: { configureFirst?: boolean; prePlugins?: PluginDefinition[]; autoStart?: boolean } = {},
 ): Promise<KernelRuntime> {
-  const { models } = makeFauxModels()
+  const faux = makeFauxProvider()
   const kernel = await KernelRuntime.open({
     buildProvider: createPluginBuildProvider(),
     dataDir,
     cwd,
     model: 'faux/faux-1',
-    models,
+    providers: [faux.provider],
     autoResume: false,
   })
   let closePromise: Promise<void> | undefined
@@ -322,6 +322,10 @@ test('T4 场景 ①：runtime.close() 保活 running 窗格；重启窗口文件
   writeFileSync(outputPath, JSON.stringify({ ok: true, value: 42 }), 'utf8')
   transport.advancePane(capturedPaneId, 'done')
 
+  // 排空关闭前旧 Hub 已写入 UDS 缓冲区但被 abort 的在途请求（如 onPaneEvent 触发的 agent.get），
+  // 避免在重启阶段后才被 serveTransport 读取并计入 callsBeforeRestart 之后。
+  await server.drain()
+
   const callsBeforeRestart = transport.calls.length
   const tabsBeforeRestart = transport.calls.filter((c) => c.method === 'tab.create').length
   const startsBeforeRestart = transport.calls.filter((c) => c.method === 'agent.start').length
@@ -420,6 +424,7 @@ test('T4 场景 ②a：重启后窗格仍 working（含 steer 重定向交接文
   // 重启时窗格仍在 working。
   kernel = await openKernelWithHerdr(defer, dataDir, workDir, socketPath)
 
+  const reportsBefore = transport.metadataReports.length
   let resolved: AgentExecutionInfo | undefined
   const reattachPromise = kernel.spawnAgent({
     parentConversationId: 1,
@@ -433,7 +438,7 @@ test('T4 场景 ②a：重启后窗格仍 working（含 steer 重定向交接文
     },
   })
 
-  await waitFor(() => resolved !== undefined)
+  await waitFor(() => resolved !== undefined && transport.metadataReports.length > reportsBefore)
   assert.equal(resolved!.executionId, paneId)
 
   // 重挂恢复 task 阶段后支持继续 steer 重定向交接文件名。

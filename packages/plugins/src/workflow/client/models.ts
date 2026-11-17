@@ -47,6 +47,7 @@ export {
   subagentBadge,
   compactCardTitle,
   latestTurnStartedAt,
+  resolveExternalSubagentTaskTitle,
   resolveSubagentTaskTitle,
   resolveSubagentElapsedMs,
   extractSubagentResultPreview,
@@ -57,6 +58,7 @@ export type { SubagentCardStatus, SubagentBadge, SubagentHeaderSnippet, Subagent
 
 // Workflow run card pure logic (model-run.ts)
 export {
+  resolveWorkflowRunDisplayName,
   resolveWorkflowRunForTool,
   isBackgroundWorkflowResultHandle,
   resolveWorkflowToolFallbackLabel,

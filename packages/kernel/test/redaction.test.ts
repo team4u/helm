@@ -1,12 +1,12 @@
 /**
- * redaction and streaming redaction regression: structure JSON redaction and SecretStash streaming chunked boundary.
+ * Regression tests for redaction and streaming redaction: structured JSON redaction and SecretStash chunk boundaries.
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { redactJsonValue } from '../src/redact.js'
 import { SecretStash } from '../src/services/secret-stash.js'
 
-test('structure redaction override contains quotes and newline field value and field name, keep already has placeholder', { timeout: 60_000 }, () => {
+test('structured redaction covers values and keys with quotes/newlines while preserving existing placeholders', { timeout: 60_000 }, () => {
   const stash = new SecretStash()
   const secret = ['example"value', 'next line'].join('\n')
   const marker = stash.put(1, 'EXAMPLE', secret)
@@ -15,7 +15,7 @@ test('structure redaction override contains quotes and newline field value and f
   assert.equal(JSON.stringify(result).includes('example'), false)
 })
 
-test('structure output reject loop, non- JSON data and redaction after field conflict', { timeout: 60_000 }, () => {
+test('structured output rejects cycles, non-JSON values, and post-redaction key collisions', { timeout: 60_000 }, () => {
   const cyclic: Record<string, unknown> = {}
   cyclic.self = cyclic
   for (const value of [cyclic, { value: undefined }, [NaN], new Map(), Array(1)]) {
@@ -24,7 +24,7 @@ test('structure output reject loop, non- JSON data and redaction after field con
   assert.throws(() => redactJsonValue({ first: 1, second: 2 }, () => 'same'), /Redacted output fields collide/)
 })
 
-test('stream redaction override secret across chunked, overlap before suffix and old fixed cut point', { timeout: 60_000 }, () => {
+test('streaming redaction covers secrets across chunks, overlapping prefixes, and former cut boundaries', { timeout: 60_000 }, () => {
   for (const secret of ['ababa', '{{SECRET_mvch3tgr}}', '😀private😀', 'A'.repeat(5_000) + 'Z']) {
     const stash = new SecretStash()
     stash.put(1, 'TOKEN', secret)
@@ -41,7 +41,7 @@ test('stream redaction override secret across chunked, overlap before suffix and
   }
 })
 
-test('different secret sharing prefix when keep most long match one by one value redaction semantics', { timeout: 60_000 }, () => {
+test('secrets sharing a prefix preserve longest-match literal redaction semantics', { timeout: 60_000 }, () => {
   const stash = new SecretStash()
   stash.put(1, 'SHORT', 'abc')
   stash.put(1, 'LONG', 'abcdef')
@@ -50,7 +50,7 @@ test('different secret sharing prefix when keep most long match one by one value
   assert.equal(output, stash.redact('abcdef-more'))
 })
 
-test('ordinary stream output do not use wait for fixed4KiBbuffer, managed Token also across chunk redaction', { timeout: 60_000 }, () => {
+test('ordinary streaming output flushes without waiting for fixed 4KiB buffer while redacting managed tokens across chunks', { timeout: 60_000 }, () => {
   const stash = new SecretStash()
   stash.addRedaction('managed-credential')
   const stream = stash.createStreamingRedactor()

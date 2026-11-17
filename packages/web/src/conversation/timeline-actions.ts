@@ -7,7 +7,7 @@
  *   already_placed / settled 以落库 entryId 原地编辑，其余状态警告提示。
  * 本模块只导出 hook 与纯类型（无组件），保持 .ts Fast Refresh 约定。
  */
-import { useHelmStore } from '../lib/store-context.js'
+import { useSplitTarget, useStoreActions } from '../lib/store-context.js'
 import { useStableCallback } from '../lib/use-stable-callback.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { conversationsApi } from '../lib/api.js'
@@ -25,14 +25,15 @@ export function useTimelineEntryActions(
   conversation: ConversationSummary,
   onRequestEdit: (target: EditRequestTarget) => void,
 ): TimelineEntryActions {
-  const store = useHelmStore()
+  const splitTarget = useSplitTarget()
+  const { openTarget, pushNotice } = useStoreActions()
   const { t } = useWebLocale()
 
   const forkFromHere = useStableCallback(async (entryId: string): Promise<void> => {
     try {
       const forked = await conversationsApi.fork(conversation.id, entryId)
-      store.openTarget({ kind: 'conversation', conversationId: forked.id }, { split: store.splitTarget === null })
-      store.pushNotice({
+      openTarget({ kind: 'conversation', conversationId: forked.id }, { split: splitTarget === null })
+      pushNotice({
         type: 'notification',
         level: 'info',
         title: t('conv.fork.createdTitle'),
@@ -40,7 +41,7 @@ export function useTimelineEntryActions(
         conversationId: forked.id,
       })
     } catch (err) {
-      store.pushNotice({
+      pushNotice({
         type: 'notification',
         level: 'error',
         title: t('conv.fork.failedTitle'),
@@ -58,7 +59,7 @@ export function useTimelineEntryActions(
       } else if ((res.status === 'already_placed' || res.status === 'settled') && res.entryId !== undefined) {
         onRequestEdit({ text: target.text, entryId: res.entryId, ...(target.attachments !== undefined ? { attachments: target.attachments } : {}) })
       } else {
-        store.pushNotice({
+        pushNotice({
           type: 'notification',
           level: 'warning',
           title: t('conv.withdraw.cannotTitle'),
@@ -67,7 +68,7 @@ export function useTimelineEntryActions(
         })
       }
     } catch (err) {
-      store.pushNotice({
+      pushNotice({
         type: 'notification',
         level: 'error',
         title: t('conv.withdraw.failedTitle'),

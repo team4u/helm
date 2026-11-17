@@ -1,10 +1,11 @@
 /**
- * model set register table:Models instance lifecycle / runtime provider / motion state directory refresh /
- * global by default model and think Profile.
+ * Model catalog registry: manages `Models` instances, runtime providers, dynamic catalog refreshes,
+ * and global default model / reasoning effort configuration.
  *
- * from runtime.ts split out (on emperor class model all household responsibility cluster). serial constraint:reload /
- * register / unregister / refresh all via modelsChain queue up, avoid concurrency rebuild after
- * old set override new set; external inject Models(test/embed) when set archive caller, empty operation.
+ * Extracted from `runtime.ts` (decomposing god-class model responsibilities). Serialization guarantee:
+ * reload / register / unregister / refresh all queue onto `modelsChain` so stale concurrent rebuilds
+ * cannot overwrite newer sets; when `Models` is externally injected (tests/embedded), ownership stays
+ * with the caller and mutating paths no-op.
  */
 import type { AssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream'
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
@@ -15,20 +16,20 @@ import { HelmError } from '@helm/protocol'
 import type { ConfigService, CredentialService, ProviderService, SecretStash } from '../services/index.js'
 import { listModelCatalog, listModelProviders, buildModels } from './models.js'
 
-/** PI inside placement provider id collection (lazy once build; register conflict preflight use, do not hard encode manifest). */
+/** Built-in PI provider ID set (lazily built once for registration conflict preflight without hardcoding lists). */
 const builtinProviderIds = new Set(builtinProviders().map((p) => p.id))
 
 /**
- * models-store.json file level corrupt detect:SDK refresh  store read write error package enter
- * result.errors(do not reject, avoid single provider failed block assert the rest), but file corrupt is global
- * incident - - static default fall back empty directory equals lose all already cache motion state directory. this where explicit on throw.
+ * File-level corruption detection for `models-store.json`: SDK refresh packages store I/O errors into
+ * `result.errors` (without rejecting so one failing provider doesn't abort others), but file corruption is a
+ * global failure — silently falling back to an empty catalog would drop all cached dynamic catalogs. Rethrows explicitly.
  */
 function assertModelsStoreHealthy(result: { errors: ReadonlyMap<string, Error> }): void {
   for (const [providerId, err] of result.errors) {
     if (err instanceof HelmError && err.code === 'models_store_corrupted') {
       throw new HelmError(
         'models_store_corrupted',
-        `models-store.json corrupt (read ${providerId} when discover):${err.message}`,
+        `models-store.json is corrupted (discovered while reading ${providerId}): ${err.message}`,
         500,
       )
     }
@@ -36,21 +37,21 @@ function assertModelsStoreHealthy(result: { errors: ReadonlyMap<string, Error> }
 }
 
 /**
- * config.json.disabledModels structure parse (providerId -> modelId[]); default empty collection,
- * illegal shape explicit throw config_corrupt(never static default discard).
+ * Parse `config.json.disabledModels` (`providerId -> modelId[]`); defaults to `{}` and throws
+ * `config_corrupt` explicitly on malformed structure (never silently discarded).
  */
 function parseDisabledModelsConfig(raw: unknown): Record<string, string[]> {
   if (raw === undefined || raw === null) return {}
   if (typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new HelmError('config_corrupt', 'config.json.disabledModels must is object (providerId -> modelId[])', 500)
+    throw new HelmError('config_corrupt', 'config.json.disabledModels must be an object (providerId -> modelId[])', 500)
   }
   const result: Record<string, string[]> = {}
   for (const [providerId, ids] of Object.entries(raw as Record<string, unknown>)) {
     if (typeof providerId !== 'string' || providerId === '') {
-      throw new HelmError('config_corrupt', `config.json.disabledModels key must be non-empty provider id:${String(providerId)}`, 500)
+      throw new HelmError('config_corrupt', `config.json.disabledModels key must be a non-empty provider ID: ${String(providerId)}`, 500)
     }
     if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string' && id !== '')) {
-      throw new HelmError('config_corrupt', `config.json.disabledModels['${providerId}'] must is non-empty string array`, 500)
+      throw new HelmError('config_corrupt', `config.json.disabledModels['${providerId}'] must be an array of non-empty strings`, 500)
     }
     result[providerId] = [...(ids as string[])]
   }
@@ -64,14 +65,14 @@ export interface ModelRegistryOptions {
   readonly configSvc: ConfigService
   readonly stash: SecretStash
   readonly modelsStore: ModelsStore
-  /** hot replace slot (Harness models getter via it read to most new set). */
+  /** Hot-swap slot (`Harness` `models` getter reads the latest instance through this). */
   readonly setModels: (m: Models) => void
-  /** external inject Models(test): inject when this register table all change path empty operation/reject. */
+  /** Externally injected `Models` (tests): all mutating registry paths become no-ops or reject. */
   readonly externalModels: boolean
   readonly events: { publish(type: 'models.changed', payload: { providers: string[] }): void }
-  /** pluginHost hot inject (assertProviderAvailable preflight use). */
+  /** Lazily injected `PluginHost` (used for `assertProviderAvailable` preflight). */
   readonly pluginHost: () => { assertProviderAvailable(pluginId: string): void } | undefined
-  /** align all conversation takes effect model (by default model change after; host implement). */
+  /** Align effective models across all conversations after default model changes (host implementation). */
   readonly alignAllConversations: () => Promise<void>
 }
 
@@ -86,29 +87,29 @@ export class ModelRegistry {
   private readonly events: ModelRegistryOptions['events']
   private readonly pluginHost: ModelRegistryOptions['pluginHost']
   private readonly alignAllConversations: ModelRegistryOptions['alignAllConversations']
-  /** runtime motion state register provider (plugin via HostOptions.providers.register inject). */
+  /** Runtime dynamically registered providers (injected by plugins via `HostOptions.providers.register`). */
   private readonly runtimeProviders = new Map<string, Provider>()
-  /** runtime provider ownership (providerId -> register it pluginId; deregister one and clear). */
+  /** Runtime provider ownership (`providerId` -> owning `pluginId`; cleared on unregister). */
   private readonly runtimeProviderOwners = new Map<string, string>()
-  /** models change serial chain:reload / register / unregister shared use, avoid stale replace. */
+  /** Serial chain for `models` mutations (shared by reload/register/unregister to prevent stale overwrites). */
   private modelsChain: Promise<unknown> = Promise.resolve()
   private modelsRefreshAbort: AbortController | undefined
-  /** models set proxy count (each time succeeded publish new set +1; in-flight refresh guard against old set re- publish). */
+  /** Monotonic generation counter (incremented per published set; prevents in-flight refreshes from publishing stale snapshots). */
   private modelsGeneration = 0
-  /** runtime provider in-flight use counter (providerId -> streaming/refresh not compute count;teardown preflight use). */
+  /** In-flight usage counter for runtime providers (`providerId` -> active stream/refresh count; teardown preflight). */
   private readonly runtimeProviderUsage = new Map<string, number>()
-  /** deregister in mark record (only modelsChain serial domain inside short staged in):rebuild  await window inside
-   *  new start stream/refresh acquire explicit failed, consolidate check via→window inside in-flight→
-   *  cannot detect TOCTOU(usage pass increase do not in this serial domain, see wrapRuntimeProvider). */
+  /** Retiring markers (held briefly inside the `modelsChain` critical section): ensures newly started streams/refreshes
+   * during `rebuild`'s await window fail deterministically and eliminates the TOCTOU gap between idle check and ownership
+   * deletion (usage increments occur outside this serial chain — see `wrapRuntimeProvider`). */
   private readonly retiringRuntimeProviders = new Set<string>()
-  /** sync read key cache (start warm up + reload refresh;buildModels closed package consume). */
+  /** Synchronously readable API key cache (warmed on startup, refreshed on reload, consumed by `buildModels` closure). */
   readonly apiKeyCache: Record<string, string> = {}
   private modelsCurrent: Models
   defaultModel: string | undefined
   defaultThinkingLevel: string | undefined
-  /** not config model when hooks payload occupy (commit when requireModelRef explicit errors). */
+  /** Placeholder used in hook payloads when no model is configured (submissions still reject via `requireModelRef`). */
   modelPlaceholder = 'unconfigured'
-  /** user explicit disable model (providerId -> modelId[];config.json.disabledModels). */
+  /** Explicitly disabled models (`providerId -> modelId[]`; from `config.json.disabledModels`). */
   private disabledModels: Record<string, string[]> = {}
 
   constructor(options: ModelRegistryOptions, initialModels: Models, defaults: { model?: string; thinkingLevel?: string }) {
@@ -134,14 +135,14 @@ export class ModelRegistry {
     return this.modelsRefreshAbort
   }
 
-  /** modelsChain tail queue up execute (exception to after pass broadcast, do not block assert after continue queue up). */
+  /** Enqueue work onto `modelsChain` (errors propagate to caller without blocking subsequent queued work). */
   private enqueueModelsChange<T>(fn: () => Promise<T>): Promise<T> {
     const run = this.modelsChain.then(fn, fn)
     this.modelsChain = run.then(() => undefined, () => undefined)
     return run
   }
 
-  /** closure stop before wait for all in-flight model change converge. */
+  /** Wait for all in-flight model changes to settle before shutdown. */
   async dispose(): Promise<void> {
     await this.modelsChain
   }
@@ -158,14 +159,14 @@ export class ModelRegistry {
     return listModelProviders(this.modelsCurrent, this.runtimeProviderOwners)
   }
 
-  /** from config.json read global by default model and think Profile (at startup; format illegal explicit throw). */
+  /** Read global default model and reasoning effort from `config.json` at startup (throws on invalid format). */
   async loadDefaultsFromConfig(): Promise<void> {
     const raw: Record<string, unknown> = (await this.configSvc.get()) as Record<string, unknown>
     if (this.defaultModel === undefined) {
       const configured = raw['model']
       if (configured !== undefined && configured !== '') {
         if (typeof configured !== 'string' || !/^[^/\s]+\/[^\s]+$/.test(configured)) {
-          throw new HelmError('config_corrupt', 'config.json.model must is provider/model form string', 500)
+          throw new HelmError('config_corrupt', 'config.json.model must be a string in provider/model format', 500)
         }
         this.defaultModel = configured
       }
@@ -173,7 +174,7 @@ export class ModelRegistry {
     if (this.defaultThinkingLevel === undefined) {
       const configuredLevel = raw['thinkingLevel'] as string | undefined | null
       if (configuredLevel !== undefined && configuredLevel !== '') {
-        // enumeration validate by host inject validate complete (THINKING_LEVELS belong spawn contract).
+        // Enum validation is injected by host (THINKING_LEVELS belongs to spawn contract).
         await this.configuredThinkingLevelValidated(configuredLevel as string)
         this.defaultThinkingLevel = configuredLevel as string
       }
@@ -182,17 +183,17 @@ export class ModelRegistry {
     this.modelPlaceholder = this.defaultModel ?? 'unconfigured'
   }
 
-  /** think Profile enumeration validate call back (host inject, avoid this module dependency spawn  THINKING_LEVELS). */
+  /** Reasoning effort enum validation callback (host-injected so this module avoids depending on spawn's THINKING_LEVELS). */
   private configuredThinkingLevelValidated = async (_level: string): Promise<void> => {
-    throw new HelmError('config_corrupt', 'internal error:thinkingLevel validate not inject', 500)
+    throw new HelmError('config_corrupt', 'Internal error: thinkingLevel validator was not injected', 500)
   }
 
-  /** inject think Profile enumeration validate (construct after immediately invoke;loadDefaultsFromConfig before takes effect). */
+  /** Inject reasoning effort enum validator (call right after construction, before `loadDefaultsFromConfig`). */
   setThinkingLevelValidator(validate: (level: string) => Promise<void>): void {
     this.configuredThinkingLevelValidated = validate
   }
 
-  /** settings global by default model and think Profile (config.json): format validate after atomic write and i.e. when takes effect; empty string delete key. */
+  /** Set global default model and reasoning effort (`config.json`): validates, writes atomically, takes effect immediately; empty string deletes key. */
   async setDefaultModel(
     model: string | undefined,
     thinkingLevel: string | undefined,
@@ -214,7 +215,7 @@ export class ModelRegistry {
       if (trimmed === '') delete next.model
       else if (trimmed !== undefined) next.model = trimmed
       if (thinkingLevel === undefined) {
-        // not pass then do not motion since has think Profile key.
+        // Leave existing thinkingLevel key untouched when omitted.
       } else if (nextLevel === undefined) {
         delete next.thinkingLevel
       } else {
@@ -225,30 +226,30 @@ export class ModelRegistry {
     if (trimmed !== undefined) this.defaultModel = trimmed === '' ? undefined : trimmed
     if (thinkingLevel !== undefined) this.defaultThinkingLevel = nextLevel
     this.modelPlaceholder = this.defaultModel ?? 'unconfigured'
-    // two override field mutual each other independent, model by override conversation still can inherit global think Profile.
+    // Independent override fields: conversations with a model override still inherit the global reasoning effort.
     await this.alignAllConversations()
   }
 
-  /** validate 'provider/model' reference (create/update shared use). */
+  /** Validate `'provider/model'` reference (shared by create/update). */
   parseModelRefOrThrow(ref: string): { provider: string; modelId: string } {
     const slash = ref.indexOf('/')
     if (slash <= 0 || slash >= ref.length - 1) {
-      throw new HelmError('validation_error', `model reference format should be 'provider/model':${ref}`)
+      throw new HelmError('validation_error', `Model reference must be in 'provider/model' format: ${ref}`)
     }
     return { provider: ref.slice(0, slash), modelId: ref.slice(slash + 1) }
   }
 
-  /** sync query model is otherwise by user explicit disable (conversation parse entry filter use). */
+  /** Synchronously check whether a model is explicitly disabled by the user (used for conversation resolution filtering). */
   isModelDisabled(providerId: string, modelId: string): boolean {
     return this.disabledModels[providerId]?.includes(modelId) === true
   }
 
-  /** model disable when explicit reject (409 model_disabled), supply explicit choose use entry re- use. */
+  /** Reject explicitly when a model is disabled (`409 model_disabled`), reused across explicit selection paths. */
   assertModelEnabled(providerId: string, modelId: string): void {
     if (this.isModelDisabled(providerId, modelId)) {
       throw new HelmError(
         'model_disabled',
-        `model ${providerId}/${modelId} already by disable: please in model and rely on verify center or helm models filter re- enable after choose use`,
+        `Model ${providerId}/${modelId} is disabled; re-enable it in Settings -> Models or via 'helm models filter' before selecting it`,
         409,
         { provider: providerId, modelId },
       )
@@ -256,22 +257,21 @@ export class ModelRegistry {
   }
 
   /**
-   * settings model disable collection (PUT /api/models/filter):provider is undefined when empty all
-   * (now modelIds must is empty array); write config.json atomic persist and return most new directory.
-   * backend do not validate model store in (store self by string; directory mark note only hit directory inside model).
+   * Set disabled model list (`PUT /api/models/filter`): omitting `provider` clears all disabled entries
+   * (`modelIds` must be empty); persists atomically to `config.json` and returns updated catalog.
+   * Backend stores strings verbatim without verifying model existence (catalog flags match catalog entries only).
    */
   async setDisabledModels(provider: string | undefined, modelIds: string[]): Promise<ModelCatalog> {
     if (provider === undefined || provider === '') {
       if (modelIds.length > 0) {
-        throw new HelmError('validation_error', 'not designate provider when only can empty all disable items (disabledModels must is empty array)', 400)
+        throw new HelmError('validation_error', 'Clearing disabled models without specifying a provider requires an empty disabledModels array', 400)
       }
     }
     const unique: string[] = []
     for (const id of modelIds) {
-      // modelId allows contains '/': aggregate gateway (OpenRouter,magpie) model id itself is exactly
-      // 'vendor/model' form, slash is model name one part, do not carries provider prefix.
+      // `modelId` may contain `/` (aggregate gateways like OpenRouter/Magpie name models `'vendor/model'`; the slash belongs to the model ID).
       if (typeof id !== 'string' || id === '') {
-        throw new HelmError('validation_error', `model ID must is non-empty string:${String(id)}`, 400)
+        throw new HelmError('validation_error', `Model ID must be a non-empty string: ${String(id)}`, 400)
       }
       if (!unique.includes(id)) unique.push(id)
     }
@@ -289,16 +289,16 @@ export class ModelRegistry {
       return merged
     })
     this.disabledModels = parseDisabledModelsConfig(next['disabledModels'])
-    // memory snapshot already takes effect: publish models.changed let connected Web client heavy pull directory
-    //(publish side group install/redaction failed will sync throw, not silently swallow).
+    // In-memory snapshot updated: emit models.changed so connected Web clients reload the catalog
+    // (subscriber assembly/redaction failures propagate synchronously instead of being swallowed).
     this.events.publish('models.changed', { providers: provider ? [provider] : [] })
     return this.listModels()
   }
 
   /**
-   * rebuild concurrency publish model collection (providers.json / credentials / runtime provider change shared use).
-   * serial: via modelsChain queue up, avoid concurrency rebuild until after old set override new set;
-   * external inject Models(test/embed scenario) empty operation (model set archive caller).
+   * Rebuild and publish the active model collection (shared across `providers.json`, credentials, and runtime provider changes).
+   * Serialized via `modelsChain` so stale concurrent rebuilds cannot overwrite newer sets;
+   * no-ops when `Models` is externally injected (caller owns the set).
    */
   async reloadModels(): Promise<void> {
     await this.enqueueModelsChange(async () => {
@@ -306,7 +306,7 @@ export class ModelRegistry {
     })
   }
 
-  /** already in modelsChain inside execute rebuild (external inject set empty operation). */
+  /** Perform rebuild while holding `modelsChain` (no-op for externally injected sets). */
   private async rebuildModelsLocked(): Promise<void> {
     if (this.externalModels) return
     const providerConfigs = await this.providersSvc.list()
@@ -317,7 +317,7 @@ export class ModelRegistry {
     }
     const collision = providerConfigs.find((config) => this.runtimeProviders.has(config.id))
     if (collision) {
-      throw new HelmError('runtime_provider_conflict', `gateway ${collision.id} and plugin register provider conflict`, 409)
+      throw new HelmError('runtime_provider_conflict', `Gateway '${collision.id}' conflicts with a plugin-registered provider`, 409)
     }
     const models = buildModels({
       providers: providerConfigs,
@@ -325,11 +325,11 @@ export class ModelRegistry {
       modelsStore: this.modelsStore,
       extraProviders: [...this.runtimeProviders.values()],
     })
-    // offline restore cache directory (allowNetwork:false do not network request).models-store.json corrupt
-    // is file level incident (non- single provider failed):SDK will it package enter result.errors while do not reject,
-    // this in must explicit on throw, never static default fall back empty directory.
+    // Restore cached catalog offline (`allowNetwork: false`). `models-store.json` corruption is a file-level failure
+    // rather than a single-provider error: SDK puts it in `result.errors` without rejecting, so throw explicitly
+    // here instead of silently falling back to an empty catalog.
     await assertModelsStoreHealthy(await models.refresh({ allowNetwork: false }))
-    // complete read after success only then publish; whole replace, ensure delete secret key after old cache also expires.
+    // Publish atomically only after full load succeeds; replace keys in place so deleted secrets also clear from cache.
     for (const id of Object.keys(this.apiKeyCache)) delete this.apiKeyCache[id]
     Object.assign(this.apiKeyCache, nextKeys)
     this.modelsGeneration += 1
@@ -339,24 +339,24 @@ export class ModelRegistry {
   }
 
   /**
-   * runtime register motion state provider (plugin via HostOptions.providers.register inject).
-   * conflict reject (does not override any already has provider): inside placement provider / providers.json self define gateway /
-   * other owner registered same id;providers.json when before not enabled same id gateway same occupy naming empty between.
-   * external inject Models scenario explicit unsupported(set archive caller, register succeeded yet directory do not change i.e. deceive).
-   * return idempotent deregister function: only when map still points to the same provider instance when delete and rebuild.
+   * Register a dynamic runtime provider (injected by plugins via `HostOptions.providers.register`).
+   * Rejects conflicts (never overrides any existing provider): built-in providers, `providers.json` custom gateways,
+   * and providers registered by other owners; disabled `providers.json` entries with the same ID still reserve the namespace.
+   * Explicitly unsupported when `Models` is externally injected (caller owns the set; succeeding silently would lie).
+   * Returns an idempotent unregister callback that deletes and rebuilds only if the map still points to this instance.
    */
   async registerRuntimeProvider(provider: Provider, pluginId?: string): Promise<() => Promise<void>> {
     if (this.externalModels) {
       throw new HelmError(
         'runtime_provider_unsupported',
-        'external inject Models when unsupported runtime provider register (model set archive caller all)',
+        'Runtime provider registration is unsupported when Models is externally injected (caller owns model set)',
         400,
       )
     }
     if (typeof provider?.id !== 'string' || provider.id === '') {
-      throw new HelmError('validation_error', `runtime provider id must be a non-empty string:${String(provider?.id)}`, 400)
+      throw new HelmError('validation_error', `Runtime provider ID must be a non-empty string: ${String(provider?.id)}`, 400)
     }
-    // catch this time register wrap instance; old release handle must not seek address after continue same name register.
+    // Capture this registration's wrapped instance so stale disposers never delete a later same-named registration.
     const registered = await this.enqueueModelsChange(async () => {
       const conflict = await this.findRuntimeProviderConflict(provider.id)
       if (conflict !== undefined) {
@@ -368,7 +368,7 @@ export class ModelRegistry {
       try {
         await this.rebuildModelsLocked()
       } catch (error) {
-        // rollback: register failed do not orphan child map items (under time reload also will not again contains it).
+        // Roll back on failure so an orphaned map entry isn't picked up by subsequent reloads.
         this.runtimeProviders.delete(provider.id)
         this.runtimeProviderOwners.delete(provider.id)
         throw error
@@ -387,38 +387,36 @@ export class ModelRegistry {
     }
   }
 
-  /** conflict detect: return error message (undefined = without conflict). inside placement/self define gateway/other owner mutual exclusion. */
+  /** Conflict detection: returns error message if conflicting (`undefined` = no conflict) across built-in/custom gateways/runtime owners. */
   private async findRuntimeProviderConflict(providerId: string): Promise<string | undefined> {
     const existing = this.runtimeProviders.get(providerId)
     if (existing !== undefined) {
       const owner = this.runtimeProviderOwners.get(providerId)
-      return `provider id '${providerId}' already by runtime register${owner !== undefined ? `(plugin ${owner})` : ''}, must not override`
+      return `Provider ID '${providerId}' is already registered at runtime${owner !== undefined ? ` (plugin ${owner})` : ''}; cannot override`
     }
     const config = await this.providersSvc.get(providerId)
     if (config !== undefined) {
-      return `provider id '${providerId}' and providers.json self define gateway conflict (enabled: ${String(config.enabled)})`
+      return `Provider ID '${providerId}' conflicts with a custom gateway in providers.json (enabled: ${String(config.enabled)})`
     }
     const builtin = builtinProviderIds.has(providerId)
     if (builtin) {
-      return `provider id '${providerId}' and PI inside placement provider conflict, must not override`
+      return `Provider ID '${providerId}' conflicts with a built-in PI provider; cannot override`
     }
     return undefined
   }
 
-  /** deregister: only when map still points to the same instance when delete (idempotent; by override/already delete when does not repeat rebuild). */
+  /** Unregister only when the map still points to the same instance (idempotent; skips rebuild if already overwritten/deleted). */
   private async unregisterRuntimeProvider(provider: Provider): Promise<void> {
     if (this.externalModels) return
     await this.enqueueModelsChange(async () => {
       if (this.runtimeProviders.get(provider.id) !== provider) return
       const owner = this.runtimeProviderOwners.get(provider.id)
       if ((this.runtimeProviderUsage.get(provider.id) ?? 0) > 0) {
-        throw new HelmError('plugin_has_live_tasks', `provider ${provider.id} still has in-flight request`, 409, { providers: [provider.id] })
+        throw new HelmError('plugin_has_live_tasks', `Provider '${provider.id}' still has requests in flight`, 409, { providers: [provider.id] })
       }
-      // usage check and retiring mark record between without await(serial domain inside sync segment): this after
-      // rebuild multiple await window in, old set still may by new turn tune start stream(old
-      // modelsCurrent not yet replace) - - window inside new acquire explicit failed, guarantee deregister return
-      // after no longer appear the provider in-flight stream (otherwise assertRuntimeProvidersIdle because ownership
-      // already delete while detect fewer than, deactivate/teardown will and in-flight model stream concurrency).
+      // No `await` between usage check and retiring mark (synchronous inside the serial chain): ensures any new
+      // stream attempt during `rebuild`'s await window (before `modelsCurrent` swaps) fails explicitly, guaranteeing
+      // no in-flight streams remain once unregister returns (preventing missed detections after ownership deletion).
       this.retiringRuntimeProviders.add(provider.id)
       this.runtimeProviders.delete(provider.id)
       this.runtimeProviderOwners.delete(provider.id)
@@ -435,10 +433,10 @@ export class ModelRegistry {
   }
 
   /**
-   * refresh motion state model directory (POST /api/models/refresh).
-   * target runtime provider in-flight counter override the whole refresh cycle (teardown preflight reject in route reclaim);
-   * catch invoke when set and proxy count: wait for during set by replace when no longer publish old set snapshot event;
-   * error message via stash redaction after return.
+   * Refresh dynamic model catalogs (`POST /api/models/refresh`).
+   * Holds in-flight counters on target runtime providers across the whole cycle (so teardown preflight rejects mid-refresh);
+   * captures instance and generation at start to avoid publishing stale snapshot events if replaced mid-flight;
+   * redacts errors via stash before returning.
    */
   async refreshModels(isClosed: () => boolean, options?: {
     providers?: string[]
@@ -453,11 +451,11 @@ export class ModelRegistry {
     allowNetwork?: boolean
     force?: boolean
   }): Promise<ModelProvidersRefreshResult> {
-    if (isClosed()) throw new HelmError('runtime_closing', 'kernel is now close, cannot refresh model directory', 409)
+    if (isClosed()) throw new HelmError('runtime_closing', 'Kernel is closing; cannot refresh model catalog', 409)
     if (this.externalModels) {
       throw new HelmError(
         'runtime_provider_unsupported',
-        'external inject Models when unsupported motion state directory refresh (model set archive caller all)',
+        'Dynamic catalog refresh is unsupported when Models is externally injected (caller owns model set)',
         400,
       )
     }
@@ -474,8 +472,8 @@ export class ModelRegistry {
     try {
       for (const id of options?.providers ?? []) {
         const provider = instanceAtStart.getProvider(id)
-        if (!provider) throw new HelmError('model_provider_not_found', `provider ${id} not registered`, 404)
-        if (!provider.refreshModels) throw new HelmError('model_provider_static', `provider ${id} use static model directory, unsupported motion state refresh`, 400)
+        if (!provider) throw new HelmError('model_provider_not_found', `Provider '${id}' is not registered`, 404)
+        if (!provider.refreshModels) throw new HelmError('model_provider_static', `Provider '${id}' uses a static model catalog and does not support dynamic refresh`, 400)
       }
       result = await instanceAtStart.refresh({
         signal: controller.signal,
@@ -487,7 +485,7 @@ export class ModelRegistry {
       if (this.modelsRefreshAbort === controller) this.modelsRefreshAbort = undefined
       release()
     }
-    // file level corrupt (models_store_corrupted) is not single provider failed, explicit on throw.
+    // File-level corruption (models_store_corrupted) affects the whole store rather than one provider; propagate explicitly.
     await assertModelsStoreHealthy(result)
     const errors: Record<string, string> = {}
     for (const [providerId, err] of result.errors) {
@@ -507,15 +505,15 @@ export class ModelRegistry {
     }
   }
 
-  /** closure stop when abort in-flight refresh. */
+  /** Abort in-flight refreshes on shutdown. */
   abortRefresh(reason: Error): void {
     this.modelsRefreshAbort?.abort(reason)
   }
 
   /**
-   * teardown preflight: plugin owner runtime provider if has in-flight streaming/refresh then throw
-   * 409 plugin_has_live_tasks(guard against plugin mark is disabled but provider still in directory).
-   * as long as busy then keep now state (model reference keep and under one turn available).
+   * Teardown preflight: throws `409 plugin_has_live_tasks` if any runtime provider owned by `pluginId`
+   * has streams or refreshes in flight (prevents marking a plugin disabled while its provider remains live).
+   * Preserves current state while busy (model references stay available for subsequent turns).
    */
   assertRuntimeProvidersIdle(pluginId: string): void {
     const busy: string[] = []
@@ -525,21 +523,21 @@ export class ModelRegistry {
     if (busy.length > 0) {
       throw new HelmError(
         'plugin_has_live_tasks',
-        `plugin ${pluginId} runtime provider still has in-flight model request:${busy.join(', ')}`,
+        `Plugin '${pluginId}' still has in-flight model requests on runtime providers: ${busy.join(', ')}`,
         409,
         { providers: busy },
       )
     }
   }
 
-  /** in-flight use counter: target provider each +1; return idempotent release function (each -1, reset to zero clear). */
+  /** In-flight usage guard: increments per target provider and returns an idempotent release function. */
   private acquireRuntimeProviders(ids: readonly string[]): () => void {
     for (const id of ids) {
-      // deregister window inside new request explicit failed: let through will into is ownership already delete, detect fewer than in-flight stream
+      // Fail fast during unregistration window so new requests don't slip through after ownership deletion.
       if (this.retiringRuntimeProviders.has(id)) {
         throw new HelmError(
           'runtime_provider_retiring',
-          `provider ${id} is now deregister (plugin deactivate in), reject new model request`,
+          `Provider '${id}' is currently retiring (plugin disabling); rejecting new model request`,
           409,
           { providers: [id] },
         )
@@ -565,14 +563,14 @@ export class ModelRegistry {
   }
 
   /**
-   * runtime provider use counter wrap:stream/streamSimple truly invoke when +1, event stream terminal state
-   * (result() in done/error/end when resolve) after -1; do not consume asyncIterator.
-   * refreshModels same counter (directory refresh in-flight when teardown preflight reject).
+   * Usage-counting wrapper for runtime providers: increments on `stream`/`streamSimple` call and decrements
+   * when `stream.result()` settles (done/error/end) without consuming `asyncIterator`.
+   * Also wraps `refreshModels` so teardown preflight rejects during catalog refreshes.
    */
   private wrapRuntimeProvider(provider: Provider): Provider {
     const acquire = () => this.acquireRuntimeProviders([provider.id])
-    // through use wrap: first take stream after result().finally release (sync throw same release, do not forever long busy);
-    // do not consume asyncIterator, do not change write options(generic parameter only follow specific signature pass).
+    // Pass-through wrapper: acquires before opening stream and releases via `result().then(release, release)`
+    // (synchronous throws release immediately); never consumes `asyncIterator` or mutates `options`.
     const counted = (open: () => AssistantMessageEventStream): AssistantMessageEventStream => {
       const release = acquire()
       let stream: AssistantMessageEventStream

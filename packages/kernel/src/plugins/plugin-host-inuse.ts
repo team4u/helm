@@ -1,5 +1,5 @@
 /**
- * deactivate before durable asset occupy probe: service self declaration + dependency occupy + Profile/conversation reference.
+ * Pre-disable persistent resource usage probe: service self-declared items, dependents, and profile/conversation references.
  */
 import { HelmError } from '@helm/protocol';
 import { collectServiceInUse } from './service-coordinator.js';
@@ -27,15 +27,15 @@ function appendDependentUsages(
     additions.push({
       kind: 'plugin_dependency',
       id: dependent.definition.id,
-      label: `plugin ${dependent.definition.id} dependency ${pluginId}(${dependent.enabled ? 'when before enabled' : 'is now enable'})`,
+      label: `Plugin ${dependent.definition.id} depends on ${pluginId} (${dependent.enabled ? 'enabled' : 'enabling'})`,
     });
   }
   if (additions.length > 0) usages.unshift(...additions);
 }
 
 /**
- * aggregate all durable asset occupy; light amount test host not implemented profiles.list / listConversations
- * when (501 unsupported) skip for should host asset probe, real error per common on throw.
+ * Aggregates persistent resource usages; skips host queries when lightweight test hosts return `501 unsupported`,
+ * while rethrowing all real errors.
  */
 export async function collectPluginInUse(
   pluginId: string,
@@ -67,7 +67,7 @@ export async function collectPluginInUse(
       usages.push({
         kind: 'profile_runtime',
         id: profile.id,
-        label: `role "${profile.name || profile.id}" bind set external runtime ${profile.runtime.kind}`,
+        label: `role "${profile.name || profile.id}" binds external runtime ${profile.runtime.kind}`,
       });
     }
     if (
@@ -78,7 +78,7 @@ export async function collectPluginInUse(
       usages.push({
         kind: 'profile_model',
         id: profile.id,
-        label: `role "${profile.name || profile.id}" by default model use ${profile.model}`,
+        label: `role "${profile.name || profile.id}" uses default model ${profile.model}`,
       });
     }
   }
@@ -99,12 +99,12 @@ export async function collectPluginInUse(
         usages.push({
           kind: 'conversation_model',
           id: String(conv.id),
-          label: `conversation #${conv.id} is now use model ${conv.model}`,
+          label: `conversation #${conv.id} uses model ${conv.model}`,
         });
       }
     }
   }
-  // async reference probe during may has concurrency enable commit, end before consolidate re- inspect dependency guard against TOCTOU
+  // Re-check dependents after async probes to prevent TOCTOU races with concurrent enable commits.
   appendDependentUsages(deps.plugins, pluginId, usages);
   return usages;
 }

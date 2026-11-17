@@ -1,21 +1,21 @@
 /**
- * PluginHost subject to control stop window (stopWindow) dedicated items test:
+ * Dedicated tests for PluginHost's controlled stop window (`stopWindow`):
  *
- * 1. deactivate/destroy real clean up chain succeeded:service.stop inside available STOP_WINDOW_HOST_CALLS
- *    clean up sub- collection (listConversations / getConversation / abortConversation /
- *    cancelAsk / emitEvent / redact / nodeIpc.call / nodeIpc.isOnline) - -
- *    contains await after invoke, contains dispose already placement disposed split destroy path;
- * 2. window do not open new work:stop inside spawnAgent / submitInput / createConversation /
- *    dispatchTrigger / createAsk / execEnv / completeText / withFileLock one rule
- *    409 plugin_context_expired(I/O backend not by trigger reach);
- * 3. stop after completion old ctx all expires (window close, any invoke reject);
- * 4. epoch isolated:reenable after old ctx handle reject, new ctx handle available;
- * 5. I/O error such as on throw: clean up invoke backend failed do not by window swallow;
- * 6. nodeIpc.subscribe stop handle lifecycle: caller return stop i.e. acquire wrap
- *    (deactivate release after manually tune do not second unsubscribe), external signal abort cut subscribe and clean up abort
- *    listener, late to establish by cut (at most once unsubscribe), establish error in return Promise.
+ * 1. Cleanup calls succeed during disable/dispose: within `service.stop`, the `STOP_WINDOW_HOST_CALLS`
+ *    cleanup subset (`listConversations` / `getConversation` / `abortConversation` /
+ *    `cancelAsk` / `emitEvent` / `redact` / `nodeIpc.call` / `nodeIpc.isOnline`) passes through,
+ *    including calls after `await` and during `dispose()` after `disposed` is already flagged;
+ * 2. New work is blocked inside the window: `spawnAgent` / `submitInput` / `createConversation` /
+ *    `dispatchTrigger` / `createAsk` / `execEnv` / `completeText` / `withFileLock` all reject with
+ *    `409 plugin_context_expired` (never reaching the I/O backend);
+ * 3. After `stop()` returns, the window closes and all calls on the old `ctx` reject;
+ * 4. Epoch isolation: after re-enabling, old `ctx` handles reject while new `ctx` handles work;
+ * 5. Backend I/O errors thrown during cleanup propagate directly without being swallowed by the window;
+ * 6. `nodeIpc.subscribe` stop-handle lifecycle: stop wrapper returned to caller is idempotent
+ *    after deactivation, external `AbortSignal` unsubscribes and removes the abort listener,
+ *    late-established subscriptions abort at most once, and establish errors settle on the Promise.
  *
- * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock (do not tune low).
+ * runner: tsx --test; every test requires explicit timeout: 60_000 to guard against deadlocks.
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
@@ -35,12 +35,12 @@ import {
   makeTempDir,
 } from './helpers.js'
 
-/** decidestop window outside old handle reject unify assertion. */
+/** Shared assertion predicate for expired/outside-window plugin handle rejections. */
 function isContextExpired(err: unknown): boolean {
   return err instanceof HelmError && err.code === 'plugin_context_expired'
 }
 
-/** AbortSignal without standard listenerCount: via addEventListener wrap catch counter. */
+/** Captures abort listener counts via `addEventListener` / `removeEventListener` wrappers. */
 class ListenerCountingSignalController {
   readonly controller = new AbortController()
   private added = 0
@@ -64,7 +64,7 @@ class ListenerCountingSignalController {
   get signal(): AbortSignal {
     return this.controller.signal
   }
-  /** still hang abort listener count (added - removed; without leak leak when should be 0). */
+  /** Number of dangling abort listeners (`added - removed`; should be `0` when leak-free). */
   get activeListeners(): number {
     return this.added - this.removed
   }
@@ -75,14 +75,14 @@ function makeConversation(id: number): ConversationSummary {
 }
 
 /**
- * one by one invoke record backend:cleanCalls record STOP_WINDOW_HOST_CALLS by real forwarding to
- * backend moment;rejectAfterFirstCall let first trigger reach record invoke by designate error reject
- * (verify I/O error such as on throw, do not by window swallow).
+ * Call-recording backend: logs calls reaching the real backend (`cleanCalls`) when forwarded
+ * during `STOP_WINDOW_HOST_CALLS`; `failNext` forces the next recorded call to throw the given
+ * error (verifying cleanup I/O errors are not swallowed by the stop window).
  */
 class StopWindowBackend implements PluginHostBackend {
   readonly conversations = new Map<number, ConversationSummary>([[1, makeConversation(1)]])
   readonly cleanCalls: string[] = []
-  /** its one placement after: under once record invoke (while non- guard)reject the error. */
+  /** When set, the next recorded backend call (after the guard passes) throws this error. */
   failNext: unknown
   private listeners = new Map<string, Set<(payload: unknown) => unknown>>()
   private ipcStopCalls = 0
@@ -175,7 +175,7 @@ class StopWindowBackend implements PluginHostBackend {
   markConversationOwnership(): void {}
   async createAsk(): Promise<never> {
     this.record('createAsk')
-    throw new HelmError('ask_unsupported', 'test backend do not provide ask create', 501)
+    throw new HelmError('ask_unsupported', 'test backend does not provide ask creation', 501)
   }
   async cancelAsk(): Promise<void> {
     this.record('cancelAsk')
@@ -238,9 +238,9 @@ class StopWindowBackend implements PluginHostBackend {
   async atomicWriteFile(): Promise<void> {
     this.record('atomicWriteFile')
   }
-  async resolveSpawnTarget(): Promise<never> { throw new HelmError('unsupported', 'fixture do not parse spawn target', 501) }
+  async resolveSpawnTarget(): Promise<never> { throw new HelmError('unsupported', 'fixture does not resolve spawn targets', 501) }
   listActiveSpawnExecutions(): [] { return [] }
-  async inspectNodePathUsage(): Promise<never> { throw new HelmError('unsupported', 'fixture do not scan process occupy', 501) }
+  async inspectNodePathUsage(): Promise<never> { throw new HelmError('unsupported', 'fixture does not inspect process occupancy', 501) }
   redactText(text: string): string {
     return text
   }
@@ -317,7 +317,7 @@ afterEach(async () => {
 })
 
 // ---------------------------------------------------------------------------
-// 1+2. deactivate stop window: clean up sub- collection let through / new work entry per refuse
+// 1+2. Disable stop window: cleanup subset passes through / new work rejected
 // ---------------------------------------------------------------------------
 
 interface ProbeHandles {
@@ -326,10 +326,10 @@ interface ProbeHandles {
 }
 
 /**
- * stop inside one by one items probe ctx.host plugin.probes by each test inject:clean items expectation succeeded
- * (real forwarding to backend);reject items expectation 409 plugin_context_expired and never trigger reach
- * backend. all probe occur in real await after (deactivating + disposed guard this will reject
- * each other).
+ * Runs test-injected `ctx.host` probes inside `service.stop`: allowed cleanup calls should
+ * reach the backend, while disallowed calls should reject with `409 plugin_context_expired`
+ * without reaching the backend. All probes run after a real `await` so `deactivating`/`disposed`
+ * guards would reject otherwise.
  */
 function probePlugin(
   id: string,
@@ -350,7 +350,7 @@ function probePlugin(
             try {
               await probe.run(ctx.host)
             } catch {
-              // each test in probe inside self row await assertion (contains expectation rejection).
+              // Each test asserts inside its own probe (including expected rejections).
             }
           }
           ctx.host.emitEvent('probe.stopped', { by: id })
@@ -360,7 +360,7 @@ function probePlugin(
   }
 }
 
-test('disable  stop window: clean up sub- collection (read/cancel/IPC clean up/eventually event) let through and real forwarding backend', { timeout: 60_000 }, async () => {
+test('disable stop window allows cleanup subset (reads / cancels / IPC cleanup / final events) to forward to backend', { timeout: 60_000 }, async () => {
   const captured: { handles?: ProbeHandles } = {}
   const ok: string[] = []
   const def = probePlugin(
@@ -392,7 +392,7 @@ test('disable  stop window: clean up sub- collection (read/cancel/IPC clean up/e
   ]) {
     assert.ok(
       backend.cleanCalls.includes(call),
-      `stop window inside ${call} should real forwarding backend (actual forwarding:${JSON.stringify(backend.cleanCalls)})`,
+      `${call} inside stop window must forward to backend (actual: ${JSON.stringify(backend.cleanCalls)})`,
     )
   }
   assert.deepEqual(ok, [
@@ -407,20 +407,20 @@ test('disable  stop window: clean up sub- collection (read/cancel/IPC clean up/e
   await host.dispose()
 })
 
-test('dispose  stop window:disposed already placement still let through clean up sub- collection (subject to control split destroy contains eventually event)', { timeout: 60_000 }, async () => {
+test('dispose stop window permits cleanup subset (including final doc writes and events) even after disposed is set', { timeout: 60_000 }, async () => {
   const seen: string[] = []
   const def: PluginDefinition = {
     id: 'test:stop-dispose',
     name: 'stop-dispose',
     definePlugin(ctx) {
-      // and real stop consumer same shape:doc handle in definePlugin declaration,stop inside eventually write.
+      // Matches real stop usage: doc handle created in definePlugin, written at the end of stop.
       const finalDoc = ctx.doc<Record<string, unknown>>('dispose-final', {})
       ctx.service({
         id: 'svc',
         start() {},
         async stop() {
-          // dispose first placement this.disposed = true again enter stop: common rule assertNotDisposed
-          // will all reject; subject to control window must precise exceeds (only clean up sub- collection).
+          // dispose() sets this.disposed = true before calling stop: ordinary assertNotDisposed
+          // guards would reject, so the controlled stop window selectively opens for the cleanup subset.
           await new Promise((resolve) => setTimeout(resolve, 5))
           assert.equal(ctx.host.listConversations().length >= 1, true)
           seen.push('listConversations')
@@ -434,7 +434,7 @@ test('dispose  stop window:disposed already placement still let through clean up
           seen.push('nodeIpc.call')
           finalDoc.set({ phase: 'stopped' })
           seen.push('doc.set')
-          ctx.host.emitEvent('notification', { type: 'notification', level: 'info', title: 'already stop', body: 'bye' })
+          ctx.host.emitEvent('notification', { type: 'notification', level: 'info', title: 'stopped', body: 'bye' })
           seen.push('emitEvent')
         },
       })
@@ -455,7 +455,7 @@ test('dispose  stop window:disposed already placement still let through clean up
   ])
 })
 
-test('stop window do not open new work:spawn/submitInput/createConversation/dispatchTrigger/createAsk/execEnv/completeText/withFileLock all refuse (backend zero trigger reach)', { timeout: 60_000 }, async () => {
+test('stop window blocks new work (spawn/submitInput/createConversation/dispatchTrigger/createAsk/execEnv/completeText/withFileLock) with zero backend calls', { timeout: 60_000 }, async () => {
   const expected: string[] = []
   const def: PluginDefinition = {
     id: 'test:stop-reject',
@@ -480,11 +480,11 @@ test('stop window do not open new work:spawn/submitInput/createConversation/disp
           for (const attempt of attempts) {
             try {
               await attempt.run()
-              assert.fail(`stop window inside ${attempt.label} must not succeeded`)
+              assert.fail(`${attempt.label} inside stop window must not succeed`)
             } catch (err) {
               assert.ok(
                 isContextExpired(err),
-                `stop window inside ${attempt.label} expectation plugin_context_expired, actual:${String(err)}`,
+                `${attempt.label} inside stop window expected plugin_context_expired, got: ${String(err)}`,
               )
               expected.push(attempt.label)
             }
@@ -507,12 +507,12 @@ test('stop window do not open new work:spawn/submitInput/createConversation/disp
     'withFileLock',
     'nodeIpc.subscribe',
   ])
-  // new work entry all in guard layer reject: backend only may see to window before forwarding invoke (this where is zero).
-  assert.deepEqual(backend.cleanCalls.filter((c) => !c.startsWith('emitEvent:')), [], 'new work invoke must not trigger reach backend')
+  // New work entries all reject at the guard layer: backend sees zero calls here.
+  assert.deepEqual(backend.cleanCalls.filter((c) => !c.startsWith('emitEvent:')), [], 'new work calls must never reach backend')
   await host.dispose()
 })
 
-test('stop return after window close: old ctx any invoke (contains clean up sub- collection) one rule reject', { timeout: 60_000 }, async () => {
+test('stop window closes after stop returns: any old ctx call (including cleanup subset) rejects uniformly', { timeout: 60_000 }, async () => {
   const captured: { handles?: ProbeHandles } = {}
   const def = probePlugin('test:stop-after', [], captured)
   const host = makeHost()
@@ -535,27 +535,27 @@ test('stop return after window close: old ctx any invoke (contains clean up sub-
   await host.dispose()
 })
 
-test('epoch isolated:reenable after old ctx reject, new ctx available; old cycle late to closed package do not string new cycle', { timeout: 60_000 }, async () => {
+test('epoch isolation: after re-enable old ctx rejects, new ctx works, and old close never interferes with new cycle', { timeout: 60_000 }, async () => {
   const captured: { handles?: ProbeHandles } = {}
   const def = probePlugin('test:stop-epoch', [], captured)
   const host = makeHost()
   await host.register(def)
   await host.disable('test:stop-epoch')
-  // new enable:definePlugin re- execute,captured update is new cycle handle; first old reference.
+  // Re-enable re-runs definePlugin and updates captured.handles; keep a reference to the old handle first.
   const stale = captured.handles!
   await host.enable('test:stop-epoch')
-  // old handle: window early already close + epoch already pass increase → reject.
+  // Old handle: stop window closed and epoch bumped -> rejects.
   await assert.rejects(async () => stale.host.listConversations(), isContextExpired)
   await assert.rejects(async () => stale.host.cancelAsk('a', 'cancelled'), isContextExpired)
   assert.throws(() => stale.doc.set({ phase: 'stale' }), isContextExpired)
-  // new cycle handle available.
+  // New cycle handle succeeds.
   assert.equal(captured.handles!.host.listConversations().length >= 1, true)
-  // new enable and old ctx reject: new cycle run in old cycle handle same reject.
+  // Old handle continues rejecting even while new cycle runs.
   await assert.rejects(async () => stale.host.listConversations(), isContextExpired)
   await host.dispose()
 })
 
-test('I/O error such as on throw:stop inside clean up invoke backend failed original enter stop diagnose (do not swallow do not change)', { timeout: 60_000 }, async () => {
+test('cleanup I/O failures thrown inside stop preserve original error in stop diagnostics without swallowing', { timeout: 60_000 }, async () => {
   const ioError = new HelmError('node_unreachable', 'node remote-9 failed to connect', 502)
   const def: PluginDefinition = {
     id: 'test:stop-io',
@@ -576,28 +576,28 @@ test('I/O error such as on throw:stop inside clean up invoke backend failed orig
   await assert.rejects(
     host.disable('test:stop-io'),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError, `expectation HelmError, actual:${String(err)}`)
+      assert.ok(err instanceof HelmError, `expected HelmError, got: ${String(err)}`)
       assert.equal(err.code, 'plugin_service_stop_failed')
       const details = err.details as { stopErrors?: Array<{ serviceId: string; error: { code?: string; message?: string } }> }
       const first = details?.stopErrors?.[0]
-      assert.ok(first, 'diagnose should contains stopErrors')
+      assert.ok(first, 'diagnostics must include stopErrors')
       assert.equal(first.serviceId, 'svc')
       assert.equal(first.error?.code, 'node_unreachable')
       assert.equal(first.error?.message, ioError.message)
       return true
     },
   )
-  // failed after state already (enabled=false), do not because stop failed re-.
+  // State is disabled even after stop failure (does not stay enabled because stop threw).
   const summary = host.list().find((p) => p.id === 'test:stop-io')
   assert.equal(summary?.enabled, false)
   await host.dispose()
 })
 
 // ---------------------------------------------------------------------------
-// nodeIpc.subscribe stop handle lifecycle
+// nodeIpc.subscribe stop-handle lifecycle
 // ---------------------------------------------------------------------------
 
-test('subscribe stop handle: return acquire wrap, deactivate release after manually tune do not second unsubscribe', { timeout: 60_000 }, async () => {
+test('subscribe stop handle is tracked and idempotent when manually called after disable', { timeout: 60_000 }, async () => {
   let release: (() => void) | undefined
   const def: PluginDefinition = {
     id: 'test:ipc-acquire',
@@ -613,15 +613,15 @@ test('subscribe stop handle: return acquire wrap, deactivate release after manua
   }
   const host = makeHost()
   await host.register(def)
-  assert.ok(release, 'start after completion should has unsubscribe handle')
-  await host.disable('test:ipc-acquire') // deactivate release cut
-  assert.equal(backend.ipc.stopCalls(), 1, 'deactivate release should trigger backend unsubscribe once')
-  release!() // caller manually tune return stop:acquire wrap idempotent, do not second unsubscribe
-  assert.equal(backend.ipc.stopCalls(), 1, 'idempotent: manually tune must not second unsubscribe')
+  assert.ok(release, 'unsubscribe handle must be present after start')
+  await host.disable('test:ipc-acquire') // disable triggers abort
+  assert.equal(backend.ipc.stopCalls(), 1, 'disable must trigger backend unsubscribe once')
+  release!() // caller manually calls returned stop: wrapper must be idempotent without double-unsubscribing
+  assert.equal(backend.ipc.stopCalls(), 1, 'idempotent: manual call must not double-unsubscribe')
   await host.unregister('test:ipc-acquire').catch(() => {})
 })
 
-test('subscribe external signal abort: cut subscribe and clean up abort listener(without leaking)', { timeout: 60_000 }, async () => {
+test('subscribe external signal abort unsubscribes once and removes abort listener without leaking', { timeout: 60_000 }, async () => {
   const counting = new ListenerCountingSignalController()
   const def: PluginDefinition = {
     id: 'test:ipc-signal',
@@ -637,23 +637,23 @@ test('subscribe external signal abort: cut subscribe and clean up abort listener
   }
   const host = makeHost()
   await host.register(def)
-  await new Promise((resolve) => setTimeout(resolve, 30)) // subscribe establish
-  assert.equal(backend.ipc.stopCalls(), 0, 'establish after not abort before do not unsubscribe')
-  assert.ok(counting.activeListeners >= 1, 'subscribe during external signal on should hang has abort listener')
-  counting.controller.abort('external') // external abort → unique cut point cut
+  await new Promise((resolve) => setTimeout(resolve, 30)) // allow subscribe to establish
+  assert.equal(backend.ipc.stopCalls(), 0, 'must not unsubscribe after establish before abort')
+  assert.ok(counting.activeListeners >= 1, 'abort listener must remain attached on external signal while subscribed')
+  counting.controller.abort('external') // external abort -> single abort point cancels
   await new Promise((resolve) => setTimeout(resolve, 30))
-  assert.equal(backend.ipc.stopCalls(), 1, 'external abort should trigger backend unsubscribe once')
+  assert.equal(backend.ipc.stopCalls(), 1, 'external abort must trigger backend unsubscribe once')
   assert.equal(
     counting.activeListeners,
     0,
-    'cut after external signal on abort listener must by remove (without leaking)',
+    'abort listener on external signal must be removed after cancel (no leaks)',
   )
-  await host.disable('test:ipc-signal') // deactivate release: idempotent, do not second unsubscribe
-  assert.equal(backend.ipc.stopCalls(), 1, 'cut after again deactivate do not stack add unsubscribe')
+  await host.disable('test:ipc-signal') // disable cleanup is idempotent without double-unsubscribing
+  assert.equal(backend.ipc.stopCalls(), 1, 'subsequent disable after cancel must not unsubscribe again')
   await host.unregister('test:ipc-signal').catch(() => {})
 })
 
-test('subscribe establish before deactivate: late to establish by cut (at most once unsubscribe); caller handle idempotent', { timeout: 60_000 }, async () => {
+test('subscribe during stop window is rejected by guard and never reaches backend', { timeout: 60_000 }, async () => {
   backend.ipc.subscribeDelayMs = 40
   let release: (() => void) | undefined
   const def: PluginDefinition = {
@@ -663,15 +663,15 @@ test('subscribe establish before deactivate: late to establish by cut (at most o
         id: 's',
         async start() {},
         async stop() {
-          // stop window inside subscribe belong new entry (do not in STOP_WINDOW_HOST_CALLS):
-          // guard reject, backend zero trigger reach (cleanCalls/subscribeStarted all can verify).
+          // subscribe inside stop window counts as new work (not in STOP_WINDOW_HOST_CALLS):
+          // guard rejects it and backend never sees it (verified via subscribeStarted).
           let guardErr: unknown
           try {
             await ctx.host.nodeIpc.subscribe('remote-1', { line: '{"m":1}' }, () => {}, () => {})
           } catch (err) {
             guardErr = err
           }
-          assert.ok(isContextExpired(guardErr), `stop window inside subscribe expectation plugin_context_expired, actual:${String(guardErr)}`)
+          assert.ok(isContextExpired(guardErr), `subscribe inside stop window expected plugin_context_expired, got: ${String(guardErr)}`)
           await new Promise((resolve) => setTimeout(resolve, 10))
         },
       })
@@ -680,14 +680,14 @@ test('subscribe establish before deactivate: late to establish by cut (at most o
   const host = makeHost()
   await host.register(def)
   await host.disable('test:ipc-late')
-  assert.equal(backend.ipc.subscribeStarted.length, 0, 'stop window inside subscribe guard reject, backend zero trigger reach')
+  assert.equal(backend.ipc.subscribeStarted.length, 0, 'subscribe inside stop window must be rejected before reaching backend')
   await host.unregister('test:ipc-late').catch(() => {})
 })
 
-test('subscribe establish chain later than release: external signal in establish complete before abort → late to subscribe immediately cut once', { timeout: 60_000 }, async () => {
-  // release first at establish complete race (preflight gate outside determinism drive): subscribe establish slow (60ms),
-  // external signal in 10ms abort- - cut point then when backend not yet resolve; establish chain resolve
-  // instant between must by cut (once unsubscribe), caller await handle same is idempotent cut wrap.
+test('late subscribe establishment after external signal aborts immediately cuts once and resolves caller', { timeout: 60_000 }, async () => {
+  // Release before establishment race (driven deterministically without preflight gate): subscribe establish is slow (60ms),
+  // external signal aborts at 10ms before backend resolves; the instant establish resolves it must be cut once,
+  // and the caller Promise receives an idempotent no-op stop wrapper.
   backend.ipc.subscribeDelayMs = 60
   const counting = new ListenerCountingSignalController()
   let established: boolean | undefined
@@ -710,13 +710,13 @@ test('subscribe establish chain later than release: external signal in establish
   }
   const host = makeHost()
   await host.register(def)
-  await new Promise((resolve) => setTimeout(resolve, 10)) // subscribe still in establish in
+  await new Promise((resolve) => setTimeout(resolve, 10)) // subscribe is still establishing
   assert.equal(backend.ipc.stopCalls(), 0)
-  counting.controller.abort('early') // cut point first at establish complete then
-  await new Promise((resolve) => setTimeout(resolve, 120)) // late to establish chain compute
-  assert.equal(backend.ipc.stopCalls(), 1, 'late to subscribe must by immediately cut once')
-  assert.equal(established, true, 'caller await subscribe chain normal settle(do not swallow do not hang)')
-  await host.disable('test:ipc-early') // deactivate release: idempotent do not stack add
+  counting.controller.abort('early') // aborted before establishment finishes
+  await new Promise((resolve) => setTimeout(resolve, 120)) // late establishment settles
+  assert.equal(backend.ipc.stopCalls(), 1, 'late-established subscription must be cut once immediately')
+  assert.equal(established, true, 'caller await on subscribe must still settle normally (never swallowed or hung)')
+  await host.disable('test:ipc-early') // disable cleanup stays idempotent
   assert.equal(backend.ipc.stopCalls(), 1)
   await host.dispose()
 })

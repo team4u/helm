@@ -1,9 +1,9 @@
 /**
- * node manage: token sign / CLI bin install / disk and health count / NodeInfo piece together install /
- * node upgrade state machine / across node command execute.
+ * Node management: token issuance / CLI bin installation / disk and health stats / NodeInfo assembly /
+ * node upgrade state machine / cross-node command execution.
  *
- * from runtime.ts split out (on emperor class one responsibility cluster). mechanism layer: excludes any business role concept;
- * upgrade wait for via EnvFabric registry  beginUpgrade waiter and node RPC race.
+ * Extracted from runtime.ts (splitting an oversized class into a focused responsibility cluster). Mechanism layer:
+ * contains no business role concepts; upgrade waiting relies on EnvFabric registry's beginUpgrade waiter racing node RPC.
  */
 import { randomBytes } from 'node:crypto'
 import { hostname, loadavg, freemem, totalmem, uptime } from 'node:os'
@@ -20,7 +20,7 @@ import { buildPosixHostShim, buildWindowsCmdWrapper, buildWindowsPosixShim, type
 import type { HelmToolDeps } from './tool-deps.js'
 import { compareStrictSemVer, hubVersion, isStrictSemVer, normalizeExplicitVersion, rpcFailureToHelmError, safeJson, unwrapUpgradeCheckRpc, unwrapUpgradeRpc, validateUpgradeCheckResult, validateUpgradeResult } from './semver.js'
 
-/** local disk count background refresh interval (unref timer, do not block exit). */
+/** Background refresh interval for local disk stats (unref timer, never blocks process exit). */
 const LOCAL_DISK_REFRESH_MS = 30_000
 
 export interface NodeManagerOptions {
@@ -30,13 +30,13 @@ export interface NodeManagerOptions {
   readonly stash: SecretStash
   readonly toolDeps: HelmToolDeps
   readonly events: { publish(type: 'notification', payload: unknown): void; publish(type: 'node.changed', payload: unknown): void }
-  /** node upgrade wait for commit confirm timeout (milli second; default 120000). */
+  /** Node upgrade confirmation timeout in milliseconds (default 120000). */
   readonly nodeUpgradeTimeoutMs: number
 }
 
 /**
- * node RpcResult original shape (conn.rpc.nodeCheckUpgrade return type shape reference).
- * validate unify via semver.ts  unwrap* function (illegal shape 502, never pass-through dirty data).
+ * Raw node RpcResult shapes (type reference for conn.rpc.nodeCheckUpgrade returns).
+ * Validated uniformly via unwrap* helpers in semver.ts (invalid shapes yield 502, never passing through dirty data).
  */
 type UpgradeRpcCheck = RpcResult<NodeUpgradeCheckResult>
 type UpgradeRpcResult = RpcResult<NodeUpgradeResult>
@@ -49,20 +49,20 @@ export class NodeManager {
   private readonly toolDeps: HelmToolDeps
   private readonly events: NodeManagerOptions['events']
   readonly NODE_UPGRADE_TIMEOUT_MS: number
-  /** config.json in register node sign record (nodeId -> sha256(token)). */
+  /** Node token index registered in config.json (nodeId -> sha256(token)). */
   private readonly nodeTokenIndex = new Map<string, string>()
-  /** helm CLI wrap script directory (ensureCliBinDir generate after non-empty). */
+  /** helm CLI wrapper script directory (populated after ensureCliBinDir completes). */
   private cliBinDirValue: string | undefined = undefined
-  /** local node disk count cache (fs.statfs async collect; sync snapshot directly re- use). */
+  /** Cached local node disk stats (collected asynchronously via fs.statfs; reused by synchronous snapshots). */
   private localDiskStats: { diskFreeBytes: number; diskTotalBytes: number } | undefined
-  /** local disk count background refresh timer (unref;close when clean up). */
+  /** Background refresh timer for local disk stats (unref'd; cleaned up on close). */
   private localDiskRefreshTimer: NodeJS.Timeout | undefined
-  /** local disk count in-flight refresh (singleflight, guard against heavy stack add). */
+  /** In-flight local disk stats refresh (singleflight to prevent stacking). */
   private localDiskRefreshing: Promise<void> = Promise.resolve()
-  /** automatically upgrade dedupe: same node once process lifecycle only automatically attempt one round. */
+  /** Auto-upgrade deduplication: attempt at most one automatic upgrade round per node per process lifecycle. */
   readonly #autoUpgradeAttempted = new Set<string>()
 
-  /** conversation metadata parse (host inject store.getConv + 404 semantics). */
+  /** Conversation metadata resolver (host injects store.getConv + 404 semantics). */
   private readonly convOf: (conversationId: number) => { nodeId?: string; cwd: string }
 
   constructor(options: NodeManagerOptions & { convOf: (conversationId: number) => { nodeId?: string; cwd: string } }) {
@@ -76,7 +76,7 @@ export class NodeManager {
     this.convOf = options.convOf
   }
 
-  /** HELM_AUTO_UPGRADE_NODES=1 explicit open start only then automatically upgrade (default closure). */
+  /** Auto-upgrade runs only when HELM_AUTO_UPGRADE_NODES=1 is explicitly enabled (disabled by default). */
   private get autoUpgradeEnabled(): boolean {
     return process.env['HELM_AUTO_UPGRADE_NODES'] === '1'
   }
@@ -86,10 +86,10 @@ export class NodeManager {
   }
 
   // ------------------------------------------------------------------
-  // sign table (config.json.nodes)
+  // Token registry (config.json.nodes)
   // ------------------------------------------------------------------
 
-  /** load config.json  nodes sign table (nodeId -> sha256(token)); corrupt explicit on throw. */
+  /** Load config.json nodes token table (nodeId -> sha256(token)); throws explicitly if corrupted. */
   async loadNodeTokens(): Promise<void> {
     const config = await this.configSvc.get()
     const nodes = config['nodes']
@@ -100,13 +100,13 @@ export class NodeManager {
     }
     for (const [nodeId, digest] of Object.entries(nodes as Record<string, unknown>)) {
       if (typeof digest !== 'string' || digest === '') {
-        throw new HelmError('config_corrupt', `config.json.nodes['${nodeId}'] must be a non-empty string summary`, 500)
+        throw new HelmError('config_corrupt', `config.json.nodes['${nodeId}'] must be a non-empty digest string`, 500)
       }
       this.nodeTokenIndex.set(nodeId, digest)
     }
   }
 
-  /** when before sign table write back config.json.nodes. */
+  /** Persist current token table back to config.json.nodes. */
   private async persistNodeTokens(): Promise<void> {
     const nodes: Record<string, string> = {}
     for (const [nodeId, digest] of this.nodeTokenIndex) nodes[nodeId] = digest
@@ -117,21 +117,21 @@ export class NodeManager {
     return this.nodeTokenIndex.has(nodeId)
   }
 
-  /** sign summary now read (EnvFabric fail-closed authentication consume;nodeId -> sha256(token)). */
+  /** Read token digest directly (consumed by EnvFabric fail-closed authentication; nodeId -> sha256(token)). */
   nodeDigestOf(nodeId: string): string | undefined {
     return this.nodeTokenIndex.get(nodeId)
   }
 
-  /** sign node access token: plaintext token only this time return, server side only store sha256. */
+  /** Issue a node access token: plaintext token is returned only this once; the server retains only sha256. */
   async issueNodeToken(nodeId: string): Promise<NodeIssuedToken> {
     if (nodeId === 'local') {
-      throw new HelmError('cannot_issue_local', "local is inside create node, no need to access token", 400, { nodeId })
+      throw new HelmError('cannot_issue_local', 'local is a built-in node and does not need an access token', 400, { nodeId })
     }
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(nodeId)) {
       throw new HelmError(
         'validation_error',
-        'nodeId must match /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/' +
-          '(character parent number open head, can contains . _ -, most long 128 character)',
+        'nodeId must match /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/ ' +
+          '(must start with an alphanumeric character, may contain . _ -, max length 128)',
         400,
         { nodeId },
       )
@@ -140,7 +140,7 @@ export class NodeManager {
     const token = `${nodeId}:${secret}`
     this.nodeTokenIndex.set(nodeId, sha256hex(token))
     await this.persistNodeTokens()
-    // plaintext token out station redaction (never written to the database/enter model context/appear in log).
+    // Outbound secret redaction for plaintext token (never written to DB, injected into model context, or logged).
     this.stash.addRedaction(token)
     this.stash.addRedaction(secret)
     this.events.publish('node.changed', {
@@ -150,18 +150,18 @@ export class NodeManager {
     return { nodeId, token, createdAt: Date.now() }
   }
 
-  /** remove node: from sign table delete and immediately pinch assert in-flight WS connect. */
+  /** Remove a node: deletes from token table and immediately severs any in-flight WS connection. */
   async removeNode(nodeId: string): Promise<void> {
     if (nodeId === 'local') {
-      throw new HelmError('cannot_remove_local_node', 'local is inside create node, cannot remove', 400, { nodeId })
+      throw new HelmError('cannot_remove_local_node', 'local is a built-in node and cannot be removed', 400, { nodeId })
     }
     if (!this.nodeTokenIndex.has(nodeId)) {
-      throw new HelmError('not_found', `node missing:${nodeId}`, 404, { nodeId })
+      throw new HelmError('not_found', `node not found: ${nodeId}`, 404, { nodeId })
     }
     this.nodeTokenIndex.delete(nodeId)
     await this.persistNodeTokens()
-    // first pinch assert in-flight connect (may trigger onNodeChanged offline call back; that when nodeTokenIndex
-    // deleted, call back side will skip), again unify publish carries removed: true remove event.
+    // Sever any in-flight connection first (may fire onNodeChanged offline callback, which skips because
+    // nodeTokenIndex no longer has the entry), then emit the unified removal event with removed: true.
     this.envFabric.registry.disconnect(nodeId)
     this.events.publish('node.changed', {
       type: 'node.changed',
@@ -171,19 +171,18 @@ export class NodeManager {
   }
 
   // ------------------------------------------------------------------
-  // CLI bin wrap script
+  // CLI bin wrapper scripts
   // ------------------------------------------------------------------
 
   /**
-   * in dataDir under generate <dataDir>/bin wrap script directory (make managed child process in PATH in
-   * directly run helm command,--current semantics open box i.e. through):
-   * - POSIX host:helm = `#!/bin/sh` exec direct tune (cli-shim.buildPosixHostShim);
-   * - win32 host:helm.cmd = cmd.exe wrapper(history behavior do not change);helm = for
-   *   WSL / Git Bash  POSIX shim- - runtime via wslpath/cygpath only parse
-   *   node.exe can execute file, entry keep Windows path; failed to parse explicit diagnose and
-   *   127 exit, never fall back Linux node(cli-shim.buildWindowsPosixShim).
-   * idempotent: content change when heavy write, permission constant 0o755.platform/execPath default take when before
-   * process (test inject simulated win32 host; generate logic all in cli-shim.ts pure function).
+   * Generate `<dataDir>/bin` wrapper scripts so managed child processes can run `helm` directly via PATH
+   * with `--current` semantics working out of the box:
+   * - POSIX host: `helm` = `#!/bin/sh` exec shim (cli-shim.buildPosixHostShim);
+   * - win32 host: `helm.cmd` = cmd.exe wrapper (preserves existing behavior); `helm` = POSIX shim for
+   *   WSL / Git Bash—resolves via wslpath/cygpath to a binary runnable by node.exe while keeping the Windows entry path,
+   *   emitting an explicit diagnostic and exiting 127 on resolution failure rather than falling back to Linux node (cli-shim.buildWindowsPosixShim).
+   * Idempotent: overwrites only when contents change, always chmods 0o755. Defaults platform/execPath to current process
+   * (tests inject simulated win32 hosts; generation logic lives in pure helpers in cli-shim.ts).
    */
   async ensureCliBinDir(
     override: { platform?: NodeJS.Platform; execPath?: string } = {},
@@ -193,19 +192,19 @@ export class NodeManager {
     const binDir = join(this.dataDir, 'bin')
     const helmPath = join(binDir, 'helm')
     let plan: CliShimPlan
-    // explicit CLI entry (install package payload layout without packages/cli directory, on trace push lead will empty).
-    // only accept single entry file path.
+    // Explicit CLI entry (packaged payload layouts have no packages/cli directory, so upward lookup would find nothing).
+    // Accepts only a single entry file path.
     const explicitEntry = process.env.HELM_CLI_ENTRY
     if (explicitEntry) {
       plan = { execPath, entryArgs: [explicitEntry] }
     } else {
-      // tsx CLI and repository CLI entry: with when before module location push lead (source code run and dist run same construct).
+      // Dev tsx CLI and repo CLI entry: inferred from current module location (works identically in src and dist runs).
       const kernelDir = dirname(fileURLToPath(import.meta.url))
       const repoRoot = this.resolveRepoRoot(kernelDir)
       const compiledCli = join(repoRoot, 'packages', 'cli', 'dist', 'index.js')
       const sourceCli = join(repoRoot, 'packages', 'cli', 'src', 'index.ts')
       const compiled = await access(compiledCli).then(() => true, () => false)
-      // source code kernel must match set source code CLI, avoid old dist command table and new protocol contract mix use.
+      // Source kernel must pair with source CLI so stale dist command tables never mix with newer protocol contracts.
       const useCompiled = basename(dirname(kernelDir)) !== 'src' && compiled
       plan = {
         execPath,
@@ -228,27 +227,27 @@ export class NodeManager {
       }
       this.cliBinDirValue = binDir
     } catch (error) {
-      // wrap script generate failed do not block assert kernel start (managed child process still available absolute path),
-      // but explicit notify (not silently swallow).
+      // Wrapper generation failure must not block kernel startup (managed child processes can still invoke by absolute path),
+      // but always notify explicitly rather than swallowing silently.
       this.events.publish('notification', {
         level: 'warning',
-        title: 'helm CLI wrap script generate failed',
+        title: 'Failed to generate helm CLI wrapper script',
         body: String(error instanceof Error ? error.message : error),
       })
     }
   }
 
-  /** from kernel module location push lead repository (src/runtime -> on trace two level;dist same construct). */
+  /** Infer repository root from kernel module location (src/runtime or dist/runtime -> up two levels). */
   private resolveRepoRoot(kernelDir: string): string {
-    // src/runtime or dist/runtime → packages/kernel/<x> → repository.
+    // src/runtime or dist/runtime -> packages/kernel/<x> -> repository root.
     return dirname(dirname(dirname(dirname(kernelDir))))
   }
 
   // ------------------------------------------------------------------
-  // local disk / health count
+  // Local disk / health stats
   // ------------------------------------------------------------------
 
-  /** single time fs.statfs(dataDir) collect local disk empty between (on failure keep on time cache, do not block assert list). */
+  /** Collect local disk space once via fs.statfs(dataDir) (retains previous cache on error so list is never blocked). */
   private async refreshLocalDiskStats(): Promise<void> {
     try {
       const st = await statfs(this.dataDir)
@@ -257,12 +256,11 @@ export class NodeManager {
         diskTotalBytes: Number(st.blocks) * Number(st.bsize),
       }
     } catch {
-      // disk count failed does not affect node list body (health disk field default),
-      // keep most near once valid cache.
+      // Disk stat failure does not fail the node list itself (health disk fields stay omitted); keep the last valid cached sample.
     }
   }
 
-  /** async refresh local disk cache (singleflight); first time invoke also after startup stage set when refresh. */
+  /** Asynchronously refresh local disk cache (singleflight); first call also schedules periodic background refreshes. */
   ensureLocalDiskStats(): Promise<void> {
     this.localDiskRefreshing = this.localDiskRefreshing.then(() => this.refreshLocalDiskStats())
     if (this.localDiskRefreshTimer === undefined) {
@@ -275,7 +273,7 @@ export class NodeManager {
     return this.localDiskRefreshing
   }
 
-  /** local node real-time health snapshot (memory/load real-time collect; disk use most near once cache). */
+  /** Live health snapshot for the local node (memory/load sampled live; disk uses the most recent cached sample). */
   private localHealthSnapshot(): NodeHealthSnapshot {
     const [la1, la5, la15] = loadavg()
     const health: NodeHealthSnapshot = {
@@ -294,8 +292,8 @@ export class NodeManager {
   }
 
   /**
-   * register node (byom) NodeInfo piece together install:onNodeChanged event and listNodesSync
-   * shared use the same implement (field expand rule same source, eliminate two where duplicate).
+   * Assemble NodeInfo for a registered (byom) node: shared by onNodeChanged events and listNodesSync
+   * (single source of truth for optional field projection, eliminating duplicate assembly logic).
    */
   byomNodeInfo(nodeId: string, conn: { hostname?: string; platform?: string; version?: string; hubUrl?: string; connectedAt?: number; lastSeenAt?: number; health?: NodeHealthSnapshot } | undefined): NodeInfo {
     return {
@@ -312,7 +310,7 @@ export class NodeManager {
     }
   }
 
-  /** local node NodeInfo(version constant take Hub itself; health is real-time snapshot). */
+  /** Local node NodeInfo (version always comes from Hub itself; health is a live snapshot). */
   localNodeInfo(): NodeInfo {
     return {
       id: 'local',
@@ -325,13 +323,13 @@ export class NodeManager {
     }
   }
 
-  /** node list: first items constant is local; then is config.json register node and real-time online state. */
+  /** List nodes: local is always first, followed by registered nodes from config.json and their live online status. */
   async listNodes(): Promise<NodeInfo[]> {
     await this.ensureLocalDiskStats()
     return this.listNodesSync()
   }
 
-  /** sync edition (SSE snapshot provider use; and listNodes the same data source). */
+  /** Synchronous variant (used by SSE snapshot provider; shares the exact same data source as listNodes). */
   listNodesSync(): NodeInfo[] {
     const out: NodeInfo[] = [this.localNodeInfo()]
     for (const nodeId of this.nodeTokenIndex.keys()) {
@@ -341,34 +339,34 @@ export class NodeManager {
   }
 
   // ------------------------------------------------------------------
-  // node upgrade (check / upgrade state machine)
+  // Node upgrade (check / upgrade state machine)
   // ------------------------------------------------------------------
 
-  /** upgrade pre-:local reject, unknown 404, offline 409; return when before online connect. */
+  /** Upgrade preflight: reject local, 404 unknown, 409 offline; returns current online connection. */
   private requireUpgradableConnection(nodeId: string): { version?: string; rpc: NodeEnvRpcFunctions } {
     if (nodeId === 'local') {
-      throw new HelmError('cannot_upgrade_local', 'local and Hub same process, upgrade Hub i.e. upgrade local', 400, { nodeId })
+      throw new HelmError('cannot_upgrade_local', 'local runs in-process with Hub; upgrade Hub to upgrade local', 400, { nodeId })
     }
     if (!this.nodeTokenIndex.has(nodeId)) {
-      throw new HelmError('not_found', `node missing:${nodeId}`, 404, { nodeId })
+      throw new HelmError('not_found', `node not found: ${nodeId}`, 404, { nodeId })
     }
     const conn = this.envFabric.registry.get(nodeId)
     if (conn === undefined) {
-      throw new HelmError('node_offline', `node offline:${nodeId}`, 409, { nodeId })
+      throw new HelmError('node_offline', `node offline: ${nodeId}`, 409, { nodeId })
     }
     return conn
   }
 
   /**
-   * check node available update (GET /api/nodes/:id/upgrade/check): pass-through node RPC
-   * nodeCheckUpgrade and validate RpcResult and result boundary.
-   * - local:400(unsupported); unknown node:404; offline:409;
-   * - node unsupported upgrade:501;RpcResult structure failed/result illegal:400/502.
+   * Check available updates for a node (GET /api/nodes/:id/upgrade/check): forwards nodeCheckUpgrade RPC
+   * and validates both RpcResult and payload boundaries.
+   * - local: 400 (unsupported); unknown node: 404; offline: 409;
+   * - node does not support upgrades: 501; RPC transport error / invalid result: 400/502.
    */
   async checkNodeUpgrade(nodeId: string, input: NodeUpgradeCheckInput = {}): Promise<NodeUpgradeCheckResult> {
     const conn = this.requireUpgradableConnection(nodeId)
     if (conn.rpc.nodeCheckUpgrade === undefined) {
-      throw new HelmError('node_upgrade_not_supported', `node ${nodeId} unsupported upgrade (old edition @helm/node)`, 501, { nodeId })
+      throw new HelmError('node_upgrade_not_supported', `node ${nodeId} does not support upgrades (outdated @helm/node)`, 501, { nodeId })
     }
     let result: UpgradeRpcCheck
     try {
@@ -376,7 +374,7 @@ export class NodeManager {
     } catch (error) {
       throw new HelmError(
         'node_upgrade_unavailable',
-        `node ${nodeId} upgrade check transfer failed:${error instanceof Error ? error.message : String(error)}`,
+        `node ${nodeId} upgrade check call failed: ${error instanceof Error ? error.message : String(error)}`,
         502,
         { nodeId },
       )
@@ -385,17 +383,17 @@ export class NodeManager {
   }
 
   /**
-   * trigger node upgrade (POST /api/nodes/:id/upgrade):
-   * 1. parse precise targetVersion(explicit version specification; empty target first check take latest);
-   *    previousVersion take self node on report when before version; missing when first check take its real
-   *    currentVersion(never fabricate 'unknown'- - that forever does not match commit);
-   * 2. generate random attemptId, first install register table upgrade wait for, again tune conn.rpc.nodeUpgrade;
-   *    and wait for result/timeout truly race(RPC forever long do not return when whole still has boundary, never hang
-   *    30min birpc pre- compute), late to RPC result produces no unhandled rejection;
-   * 3. node explicit return without operation and legal (ok/upgraded:false)→ cancel wait for and such as return;
-   * 4. node structure failed / result illegal → cancel wait for and errors; original socket transfer disconnect →
-   *    continue etc. commit, never false succeeded; timeout not confirm → 502 explicit result not confirm;
-   * 5. any non- commit terminate path unify finally clean up wait for (never let after continue upgrade forever long busy).
+   * Trigger a node upgrade (POST /api/nodes/:id/upgrade):
+   * 1. Resolve exact targetVersion (normalize explicit version; if omitted, check first and pick latest);
+   *    resolve previousVersion from the node's reported current version (check if missing, never fabricate 'unknown'
+   *    which would never match commit confirmation);
+   * 2. Generate a random attemptId, arm the registry upgrade waiter first, then invoke conn.rpc.nodeUpgrade
+   *    and race it directly against timeout (bounded even if RPC hangs instead of waiting for birpc's 30m default),
+   *    avoiding unhandled rejections if the RPC settles late;
+   * 3. Valid no-op return (ok/upgraded:false) -> cancel waiter and return verbatim;
+   * 4. RPC failure / invalid result -> cancel waiter and fail; underlying socket disconnect -> keep waiting for
+   *    commit confirmation rather than faking success; timeout without confirmation -> 502 unconfirmed error;
+   * 5. All non-commit exit paths clean up the waiter in finally (never leaving future upgrades permanently busy).
    */
   async upgradeNode(
     nodeId: string,
@@ -403,7 +401,7 @@ export class NodeManager {
   ): Promise<NodeUpgradeResult> {
     const conn = this.requireUpgradableConnection(nodeId)
     if (conn.rpc.nodeUpgrade === undefined) {
-      throw new HelmError('node_upgrade_not_supported', `node ${nodeId} unsupported upgrade (old edition @helm/node)`, 501, { nodeId })
+      throw new HelmError('node_upgrade_not_supported', `node ${nodeId} does not support upgrades (outdated @helm/node)`, 501, { nodeId })
     }
     const { targetVersion, previousVersion } = await this.resolveUpgradeVersions(nodeId, conn.version, input)
     const attemptId = randomBytes(16).toString('hex')
@@ -413,9 +411,9 @@ export class NodeManager {
       previousVersion,
       timeoutMs: this.NODE_UPGRADE_TIMEOUT_MS,
     })
-    // all non- commit terminate path unify clean up wait for (otherwise after continue upgrade forever long busy).
+    // Ensure non-commit exit paths always clean up the waiter so future upgrades do not stay locked.
     const finallyCancel = (): void => {
-      waiter.cancel(new HelmError('node_upgrade_cancelled', `node ${nodeId} upgrade wait for already final`, 502))
+      waiter.cancel(new HelmError('node_upgrade_cancelled', `upgrade waiter for node ${nodeId} terminated`, 502))
     }
     try {
       return await this.settleUpgradeAttempt(nodeId, conn, {
@@ -429,14 +427,14 @@ export class NodeManager {
     }
   }
 
-  /** target and base allow version parse: explicit specification; missing via check RPC take real value (never fabricate). */
+  /** Resolve target and baseline versions: normalize explicit target, or fetch missing values via check RPC (never fabricates). */
   private async resolveUpgradeVersions(
     nodeId: string,
     nodeVersion: string | undefined,
     input: { targetVersion?: string; registryUrl?: string },
   ): Promise<{ targetVersion: string; previousVersion: string }> {
-    // explicit target version:trim + remove single v prefix + strictly SemVer; specification after used to
-    // attempt create,RPC invoke and commit for account (three way same source).
+    // Explicit target version: trim + strip single v prefix + strict SemVer; normalized value is used consistently
+    // for attempt creation, RPC call, and commit reconciliation (all three share the same source).
     const explicitTarget =
       input.targetVersion !== undefined && input.targetVersion !== ''
         ? normalizeExplicitVersion(input.targetVersion)
@@ -454,16 +452,15 @@ export class NodeManager {
   }
 
   /**
-   * single time upgrade attempt compute (upgradeNode split out phase function; embed set cap 4 layer).
+   * Settle a single upgrade attempt (extracted from upgradeNode to cap nesting depth at 4 levels).
    *
-   * race semantics constraint:RPC and wait for (commit / timeout) only race once; after continue terminal state one rule
-   * only await commitPromise(wait for self carries timer, has boundary); never duplicate race already
-   * settle  rpcPromise(it instant between replay the same failed value, will disconnect etc. commitmistakenly judge into
-   * terminal state failed).birpc $close will first placement $closed again reject in-flight invoke;ws-gateway
-   *  onGeneralError return true will the reject swallow into resolve(undefined).
-   * therefore only when reply is undefined and this time invoke which use rpc instance already indeed close when only then archive is
-   * transfer interrupt (choose top replace old socket must via chain), rotate is rpcError continue etc. commit;
-   * the rest illegal reply still by invalid shape 502, never let any illegal value unbounded wait for.
+   * Race semantics invariant: RPC and waiter (commit / timeout) race only once; afterward only commitPromise is awaited
+   * (the waiter owns its bounded timer); never re-race an already-settled rpcPromise (which replays the same failure
+   * immediately and would prematurely turn a post-disconnect wait-for-commit into a terminal failure).
+   * birpc $close sets $closed first and rejects in-flight calls; ws-gateway's onGeneralError returning true swallows that
+   * rejection into resolve(undefined). Thus only when reply is undefined AND the rpc instance used for this call is actually
+   * closed do we treat it as transport interruption (e.g. preempted by new connection on old socket) and wait for commit;
+   * any other invalid reply still fails 502 instead of hanging.
    */
   private async settleUpgradeAttempt(
     nodeId: string,
@@ -491,7 +488,7 @@ export class NodeManager {
           return {
             kind: 'rpcError' as const,
             error: new Error(
-              'nodeUpgrade in-flight invoke because old socket by top replace while close (birpc $close  reject by onGeneralError swallow into resolve(undefined))',
+              'in-flight nodeUpgrade call closed because the old socket was preempted (birpc $close rejection was swallowed into undefined by onGeneralError)',
             ),
           }
         }
@@ -503,40 +500,40 @@ export class NodeManager {
       (value) => ({ kind: 'commit' as const, value }),
       (error: unknown) => ({ kind: 'waiterError' as const, error }),
     )
-    // RPC complete but by commit first to mask when, late to branch will not again by read - - already in on way
-    // then inside catch is ordinary value, without unhandled rejection risk.
+    // When RPC finishes after commit wins the race, the losing branch isn't read again, so pre-attaching `.then`
+    // turns any late rejection into a plain value with zero unhandled-rejection risk.
     const first = await Promise.race([commitPromise, rpcPromise])
     if (first.kind === 'commit') {
       return first.value
     }
     if (first.kind === 'waiterError') {
-      // wait for already final (timeout/cancel) while RPC not first back: upgrade result not confirm.
-      throw this.unconfirmedError(nodeId, targetVersion, attemptId, first.error, 'result not confirm')
+      // Waiter terminated (timeout/cancel) before RPC returned: upgrade result unconfirmed.
+      throw this.unconfirmedError(nodeId, targetVersion, attemptId, first.error, 'result unconfirmed')
     }
     if (first.kind === 'rpcError') {
-      // transfer layer disconnect (old socket by choose top replace when must however occur): is not terminal state - - continue
-      // etc. commit(choose register after with attemptId for account).
+      // Transport disconnected (expected when old socket is preempted by reconnecting process): not terminal—keep waiting
+      // for commit (new connection registers with attemptId).
       const failure = first.error instanceof Error ? first.error.message : String(first.error)
       const settled = await commitPromise
       if (settled.kind === 'commit') return settled.value
-      throw this.unconfirmedError(nodeId, targetVersion, attemptId, settled.error, `upgrade trigger failed and not confirm (transfer interrupt):${failure}`)
+      throw this.unconfirmedError(nodeId, targetVersion, attemptId, settled.error, `upgrade trigger failed and unconfirmed (transport disconnected): ${failure}`)
     }
-    // first.kind === 'rpc': node structure reply (validate after by without operation / already start stream).
+    // first.kind === 'rpc': structured reply from node (validate and handle no-op vs started upgrade).
     return this.settleStructuredRpcReply(nodeId, { targetVersion, attemptId, input }, commitPromise, first.value)
   }
 
-  /** result not confirm error unify construct (502; attach attemptId and target version diagnose). */
+  /** Construct unified unconfirmed-result error (502; attaches attemptId and targetVersion diagnostics). */
   private unconfirmedError(nodeId: string, targetVersion: string, attemptId: string, cause: unknown, lead: string): HelmError {
     const message = cause instanceof Error ? cause.message : String(cause)
     return new HelmError(
       'node_upgrade_unconfirmed',
-      `node ${nodeId} upgrade to ${targetVersion} ${lead}:${message}`,
+      `node ${nodeId} upgrade to ${targetVersion} ${lead}: ${message}`,
       502,
       { nodeId, attemptId, targetVersion },
     )
   }
 
-  /** node structure reply compute: illegal shape 502 / structure reject original errors / without operation core for / already start etc. commit. */
+  /** Settle structured RPC reply from node: 502 invalid shape / rethrow structured rejection / verify no-op / wait for commit if started. */
   private async settleStructuredRpcReply(
     nodeId: string,
     plan: { targetVersion: string; attemptId: string; input: { force?: boolean } },
@@ -544,47 +541,47 @@ export class NodeManager {
     rpcResult: unknown,
   ): Promise<NodeUpgradeResult> {
     const { targetVersion, attemptId, input } = plan
-    // first validate RpcResult shape (object / boolean ok / legal value or legal error.code+message), illegal by 502 reject.
+    // Validate RpcResult envelope first (object / boolean ok / valid value or error.code+message); invalid shapes fail with 502.
     if (!isRpcResultEnvelope(rpcResult)) {
       throw new HelmError(
         'node_upgrade_invalid_result',
-        `node ${nodeId} upgrade return illegal RpcResult(non- object or ok/error shape error):${safeJson(rpcResult)}`,
+        `node ${nodeId} upgrade returned invalid RpcResult (non-object or malformed ok/error): ${safeJson(rpcResult)}`,
         502,
         { nodeId, attemptId, targetVersion },
       )
     }
     if (rpcResult.ok !== true) {
-      // node structure reject (not_supported / invalid / ...): explicit errors.
+      // Node returned a structured rejection (not_supported / invalid / ...): fail explicitly.
       throw rpcFailureToHelmError(nodeId, 'upgrade', rpcResult.error as { code: string; message: string })
     }
     const value = validateUpgradeResult(nodeId, rpcResult.value as NodeUpgradeResult)
     if (!value.ok) {
-      throw new HelmError('node_upgrade_failed', `node ${nodeId} return upgrade not complete`, 502, { nodeId, attemptId, targetVersion })
+      throw new HelmError('node_upgrade_failed', `node ${nodeId} reported upgrade incomplete`, 502, { nodeId, attemptId, targetVersion })
     }
     if (value.upgraded === false) {
       return this.settleNoOpReply(nodeId, plan, value)
     }
-    // node report already start upgrade stream process: unique can message terminal state is wait for match commit.
-    // same only await commitPromise(timer has boundary, never heavy race already settle  rpc).
+    // Node reported upgrade workflow started: the only valid terminal confirmation is a matching commit.
+    // Await only commitPromise here (waiter carries its own bounded timer; never re-race an already-settled RPC).
     const settled = await commitPromise
     if (settled.kind === 'commit') return settled.value
-    throw this.unconfirmedError(nodeId, targetVersion, attemptId, settled.error, 'result not confirm')
+    throw this.unconfirmedError(nodeId, targetVersion, attemptId, settled.error, 'result unconfirmed')
   }
 
-  /** without operation reply core for (force semantics under missing legal without operation; version must and fixed target consistent). */
+  /** Verify a no-op reply (no valid no-op under force; reported versions must match the pinned target). */
   private settleNoOpReply(
     nodeId: string,
     plan: { targetVersion: string; attemptId: string; input: { force?: boolean } },
     value: NodeUpgradeResult,
   ): NodeUpgradeResult {
     const { targetVersion, attemptId, input } = plan
-    // node explicit without operation (already is target version etc.): must ok:true and previous/target
-    // all equals this time fixed target (otherwise node lie report, never let through);force semantics under missing
-    // legal without operation (force heavy install must has result), one rule by illegal result 502 reject.
+    // Node explicitly reported no-op (e.g. already at target version): requires ok:true and both previous/target
+    // matching the pinned target (never trust mismatched reports); under force there is no valid no-op
+    // (force reinstall must produce an upgrade), so reject unconditionally with 502.
     if (input.force === true) {
       throw new HelmError(
         'node_upgrade_invalid_result',
-        `node ${nodeId} force upgrade return without operation result (force do not accept without operation):${safeJson(value)}`,
+        `node ${nodeId} returned a no-op result for a forced upgrade (force does not accept no-op): ${safeJson(value)}`,
         502,
         { nodeId, attemptId, targetVersion },
       )
@@ -592,7 +589,7 @@ export class NodeManager {
     if (value.previousVersion !== targetVersion || value.targetVersion !== targetVersion) {
       throw new HelmError(
         'node_upgrade_invalid_result',
-        `node ${nodeId} upgrade without operation result and fixed target inconsistent (expectation previous/target all is ${targetVersion}, got previous=${value.previousVersion},target=${value.targetVersion})`,
+        `node ${nodeId} upgrade no-op result does not match pinned target (expected previous/target=${targetVersion}, got previous=${value.previousVersion}, target=${value.targetVersion})`,
         502,
         { nodeId, attemptId, targetVersion, result: value },
       )
@@ -601,8 +598,8 @@ export class NodeManager {
   }
 
   /**
-   * node enable automatically upgrade (HELM_AUTO_UPGRADE_NODES=1): strictly SemVer after Hub
-   * only then trigger; dedupe (same node once); failed only warning notify, never block register.
+   * Auto-upgrade eligible nodes when HELM_AUTO_UPGRADE_NODES=1: triggers only when strict SemVer lags behind Hub;
+   * deduplicated (once per node); failures emit a warning notification without blocking registration.
    */
   async autoUpgradeIfEligible(nodeId: string, version: string | undefined): Promise<void> {
     if (!this.autoUpgradeEnabled) return
@@ -616,20 +613,20 @@ export class NodeManager {
     } catch (error) {
       this.events.publish('notification', {
         level: 'warning',
-        title: `node ${nodeId} automatically failed to upgrade`,
+        title: `Auto-upgrade failed for node ${nodeId}`,
         body: String(error instanceof Error ? error.message : error),
       })
     }
   }
 
   // ------------------------------------------------------------------
-  // across node command execute (execEnv)
+  // Cross-node command execution (execEnv)
   // ------------------------------------------------------------------
 
   /**
-   * across node command execute (POST /api/env/exec): in target (nodeId, cwd) execute command.
-   * remote node offline when 409 node_offline(never fall back local);onChunk one by one chunk back put
-   * stdout/stderr(NDJSON streaming pattern use);signal pass broadcast cancel (kill remote process tree).
+   * Cross-node command execution (POST /api/env/exec): runs a command on target (nodeId, cwd).
+   * Returns 409 node_offline if remote node is offline (never falls back to local); onChunk streams stdout/stderr
+   * chunks (for NDJSON streaming mode); signal propagates cancellation (killing the remote process tree).
    */
   async execEnv(
     req: EnvExecRequest,
@@ -647,10 +644,10 @@ export class NodeManager {
       ...(req.env === undefined ? {} : { env: req.env }),
       ...(req.timeoutMs === undefined ? {} : { timeoutMs: req.timeoutMs }),
       signal,
-      // streaming pattern: one by one chunk call back pass-through (client self row rate limiting);Hub side aggregate pre- compute by
-      // runShell  STREAM_AGGREGATE_LIMIT_BYTES unify converge (old 64MiB all text
-      // duplicate is memory leak leak) - - streaming client already receives all one by one chunk output, terminal state output
-      // only act diagnose aggregate, over limit explicit output_limit_exceeded(does not change frame protocol).
+      // Streaming mode: forward chunk callbacks (caller handles throttling); Hub-side aggregate cap matches
+      // runShell's STREAM_AGGREGATE_LIMIT_BYTES (avoiding redundant 64 MiB buffering leaks—streaming clients
+      // already receive all chunks, and terminal output only aggregates for diagnostics, throwing output_limit_exceeded
+      // if exceeded without changing the frame protocol).
       ...(onChunk !== undefined ? { onOutputChunk: onChunk } : {}),
     })
     return {
@@ -662,12 +659,12 @@ export class NodeManager {
   }
 
   /**
-   * target parse: explicit nodeId/cwd > conversation bind set (nodeId, cwd) > 'local'/Hub cwd.
-   * default parameter never mistakenly run Hub: carries conversationId when inherit the conversation remote bind set.
-   * cwd absolute by target shape decide (POSIX / and Windows symbol/UNC all legal),
-   * symbol each other for (C:relative) reject; never use Hub host isAbsolute refuse Windows path.
-   * cwd then by target node platform specification (win32 target on POSIX view rotate Windows path;
-   * platform unknown do not guess; cannot mapping bare POSIX  validation_error and keep original cwd).
+   * Target resolution: explicit nodeId/cwd > conversation binding (nodeId, cwd) > 'local'/Hub cwd.
+   * Default arguments never accidentally execute on Hub: when conversationId is provided, inherit its remote binding.
+   * cwd absoluteness follows target rules (POSIX / and Windows drive/UNC are valid), rejecting drive-relative paths
+   * (C:relative) without wrongly using Hub's path.isAbsolute to reject Windows paths.
+   * cwd is then normalized for the target node's platform (POSIX paths on a win32 target convert to Windows paths;
+   * unknown platforms are left untouched without guessing; unmappable bare POSIX roots return validation_error with original cwd).
    */
   resolveExecTarget(req: { nodeId?: string; cwd?: string; conversationId?: number }): { nodeId: string; cwd: string | undefined } {
     let nodeId = req.nodeId
@@ -682,48 +679,47 @@ export class NodeManager {
     if (cwd !== undefined && (typeof cwd !== 'string' || !isAbsoluteTargetPath(cwd))) {
       throw new HelmError(
         'validation_error',
-        `cwd must be absolute path (POSIX / open head or Windows symbol/UNC; reject symbol each other for and relative path. receives ${String(cwd)})`,
+        `cwd must be an absolute path (starting with POSIX / or Windows drive/UNC; drive-relative and relative paths are rejected; got ${String(cwd)})`,
         400,
         { cwd },
       )
     }
-    // target platform aware cwd specification (and runShell the same original language, do not in this another write rule):
-    // local use Hub host platform, remote only use register register platform (offline/not on report → platform
-    // unknown, original pass-through do not guess, by under way online check to out real reason);win32 target on
-    // WSL / Git Bash POSIX view rotate specification Windows path, cannot mapping bare POSIX 
-    // explicit validation_error(keep original cwd).
+    // Target-platform-aware cwd normalization (same primitive as runShell, avoiding duplicate rules):
+    // local uses Hub host platform; remote uses registered platform (offline/unreported yields unknown platform and passes
+    // through without guessing so the subsequent online check surfaces the real cause); on win32 targets, WSL / Git Bash
+    // POSIX paths normalize to Windows paths, while unmappable bare POSIX roots fail with validation_error (preserving original cwd).
     const platformInfo = targetPlatformForNode(this.envFabric, nodeId)
     if (cwd !== undefined) {
       const cwdNorm = normalizePathForTarget(cwd, platformInfo)
       if (!cwdNorm.ok) {
         throw new HelmError(
           'validation_error',
-          `cwd cannot specification to target node platform:${cwdNorm.reason}`,
+          `cwd cannot be normalized for target node platform: ${cwdNorm.reason}`,
           400,
           { cwd, pathCode: cwdNorm.code },
         )
       }
       cwd = cwdNorm.path
     }
-    // remote and not to set cwd: reject blind run (node daemon dataDir is not user intent target;
-    // security target: default parameter never remote conversation command mistakenly run Hub or random directory).
+    // Remote target with unset cwd: forbid blind execution (node daemon dataDir is not the user's intended workspace;
+    // security invariant: default parameters must never silently run on Hub or an arbitrary directory).
     if (nodeId !== 'local' && cwd === undefined) {
       throw new HelmError(
         'validation_error',
-        `remote node ${nodeId} execute must explicit cwd or bind set conversation (reject blind run node by default directory)`,
+        `executing on remote node ${nodeId} requires an explicit cwd or bound conversation (blind execution in node default directory is rejected)`,
         400,
         { nodeId },
       )
     }
     if (nodeId !== 'local' && !this.envFabric.isOnline(nodeId)) {
-      throw new HelmError('node_offline', `node ${nodeId} offline or not access, reject execute (never fall back local machine)`, 409, {
+      throw new HelmError('node_offline', `node ${nodeId} is offline or unreachable; execution rejected (never falls back to local)`, 409, {
         nodeId,
       })
     }
     return { nodeId, cwd }
   }
 
-  /** closure stop: clean up disk count timer and wait for in-flight refresh complete. */
+  /** Dispose: clear disk stats timer and await any in-flight refresh. */
   async dispose(): Promise<void> {
     if (this.localDiskRefreshTimer !== undefined) {
       clearInterval(this.localDiskRefreshTimer)
@@ -733,7 +729,7 @@ export class NodeManager {
   }
 }
 
-/** RpcResult boundary shape decide (upgrade structure reply stream use; detailed validate in unwrap / validate system column). */
+/** RpcResult boundary shape predicate (used by upgrade structured reply flow; detailed checks live in unwrap / validate helpers). */
 function isRpcResultEnvelope(value: unknown): value is { ok: boolean; value?: unknown; error?: unknown } {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
   const v = value as Record<string, unknown>
