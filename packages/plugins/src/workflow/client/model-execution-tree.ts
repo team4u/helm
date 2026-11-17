@@ -1,8 +1,9 @@
 /**
- * builtin:workflow 插件 client 纯逻辑：统一执行树 ExecutionNode 构树——
- * 会话链递归 + runs 整棵投影归位、DSL 认领去重与 Active-First 排序
- * （状态映射与聚合见 model-execution-status，展示摘要见 model-execution-view；
- * 零 React/DOM 依赖）。
+ * Pure logic for the builtin:workflow client: unified execution tree
+ * ExecutionNode building — conversation chain recursion + whole-run
+ * projection placement, DSL claim dedup and Active-First ordering (status
+ * mapping and aggregation live in model-execution-status, presentation
+ * summaries in model-execution-view; zero React/DOM dependencies).
  */
 import type { ConversationSummary } from '@helm/protocol'
 import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts.js'
@@ -14,34 +15,34 @@ import {
   executionRunStatus,
 } from './model-execution-status.ts'
 
-/** 执行树节点种类：原生子会话 / 工作流 run / run 内节点 / 外部执行。 */
+/** Execution tree node kind: native subagent / workflow run / in-run node / external run. */
 export type ExecutionNodeKind = 'conversation' | 'workflow' | 'workflow-node' | 'external'
 
-/** 统一执行树节点：SubagentLiveCard / WorkflowRunCard / WorkflowNodeCard / 外部执行摘要共用同一递归形状。 */
+/** Unified execution tree node: SubagentLiveCard / WorkflowRunCard / WorkflowNodeCard / external run summary share the same recursive shape. */
 export interface ExecutionNode {
   key: string
   kind: ExecutionNodeKind
-  /** 可打开的原生子会话 ID（workflow / workflow-node / 无会话 external 不携带）。 */
+  /** Openable native subagent id (workflow / workflow-node / conversation-less external do not carry one). */
   conversationId?: number
-  /** 关联工作流 run（conversation 节点为认领的后台 run；workflow / external 节点为自身 run）。 */
+  /** Linked workflow run (for conversation nodes: the claimed background run; for workflow / external nodes: their own run). */
   run?: WorkflowRunSummary
-  /** run 内原始节点（workflow 节点的子节点携带）。 */
+  /** Raw in-run node (carried by children of workflow nodes). */
   runNode?: WorkflowNodeState
-  /** 展示标题（仅由真实数据提炼）。 */
+  /** Display title (distilled from real data only). */
   label?: string
-  /** 实时会话摘要（存在时来自会话列表，绝不虚构）。 */
+  /** Live conversation summary (from the conversation list when present, never invented). */
   summary?: ConversationSummary
-  /** 叶子自身状态；整棵子树状态见 aggregated.status。 */
+  /** Leaf's own status; the whole subtree status lives in aggregated.status. */
   status: ExecutionNodeStatus
-  /** 下一级子节点。 */
+  /** Next-level children. */
   children: ExecutionNode[]
-  /** 自底向上聚合（含自身与全部后代）。 */
+  /** Bottom-up aggregate (self plus all descendants). */
   aggregated: ExecutionAggregate
-  /** 排序用最新更新时间（summary / run 的最大值）。 */
+  /** Latest update time for ordering (max of summary / run). */
   updatedAt: number
 }
 
-/** 从认领同一子会话的多个后台 run 中选出当前关联者。 */
+/** Pick the currently linked run among multiple background runs claiming the same subagent. */
 function pickBackgroundRun(
   runs: ReadonlyArray<WorkflowRunSummary>,
   parentToolCallId: string | undefined,
@@ -53,7 +54,7 @@ function pickBackgroundRun(
   return runs.reduce((latest, r) => (r.createdAt > latest.createdAt ? r : latest))
 }
 
-/** 合并一组节点的聚合（用于卡片头部统计直接子树，不含任何“自身”）。 */
+/** Merge the aggregates of a set of nodes (used by card headers aggregating direct subtrees, excluding any "self"). */
 export function aggregateExecutionNodes(nodes: ReadonlyArray<ExecutionNode>): ExecutionAggregate {
   let total = 0
   let done = 0
@@ -74,14 +75,17 @@ export function aggregateExecutionNodes(nodes: ReadonlyArray<ExecutionNode>): Ex
 }
 
 /**
- * 子节点均已聚合的前提下计算自身聚合（含自身，后序遍历）。
+ * Compute a node's own aggregate once all children are aggregated
+ * (post-order; includes self).
  *
- * - 容器（workflow / external run 壳）有子节点时不计自身任务：一次真实执行
- *   只计一次，wrapper 不算独立完成任务；无子节点的空 run 仍计 1（run 本身
- *   即一次真实执行）；
- * - 状态经 aggregateExecutionStatuses 合成自身与后代：后代 active / error /
- *   blocked 未结算时（含后台子任务 running、phase 节点 pending）绝不判成
- *   整体完成。
+ * - Containers (workflow / external run shells) do not count themselves as
+ *   tasks when they have children: one real execution is counted once, a
+ *   wrapper is not an independently completed task; an empty run without
+ *   children still counts 1 (the run itself is one real execution);
+ * - The status synthesizes self and descendants via
+ *   aggregateExecutionStatuses: while descendants are active / error /
+ *   blocked / unsettled (including running background subtasks and pending
+ *   phase nodes) the whole is never marked complete.
  */
 function finalizeExecutionNode(node: Omit<ExecutionNode, 'aggregated'>): ExecutionNode {
   const selfCounts = !(node.children.length > 0 && (node.kind === 'workflow' || node.kind === 'external'))
@@ -109,7 +113,7 @@ function finalizeExecutionNode(node: Omit<ExecutionNode, 'aggregated'>): Executi
   return { ...node, aggregated: { status: aggregateExecutionStatuses(statuses), total, done, running, blocked, error } }
 }
 
-/** 工作台排序：blocked > working > error > done/pending（Active-First），同级 updatedAt 降序。 */
+/** Workbench ordering: blocked > working > error > done/pending (Active-First); same rank by updatedAt descending. */
 const EXECUTION_SORT_ORDER: Record<ExecutionNodeStatus, number> = {
   blocked: 0,
   working: 1,
@@ -126,17 +130,19 @@ function sortExecutionSiblings(nodes: ExecutionNode[]): ExecutionNode[] {
   })
 }
 
-/** 构建执行树入参。 */
+/** Input for building the execution tree. */
 export interface BuildExecutionTreeInput {
   rootConversationId: number
-  /** 全量会话摘要（useConversations）；任意深度经 parentConversationId 递归。 */
+  /** Full conversation summaries (useConversations); recursion at any depth via parentConversationId. */
   conversations: ReadonlyArray<ConversationSummary>
-  /** 根会话的祖先聚合 runs 投影（usePluginSessionDoc('runs')，含全部后代，
-   * 各 run 保留原始 conversationId）；深层会话无 run 数据时仅以会话链递归，不虚构。 */
+  /** Ancestor-aggregated runs projection for the root conversation
+   * (usePluginSessionDoc('runs'), including all descendants; each run keeps
+   * its original conversationId); deep conversations without run data only
+   * recurse via the conversation chain — never invented. */
   runs?: ReadonlyArray<WorkflowRunSummary>
 }
 
-/** run 内无会话节点 / 会话在祖先链上的兜底叶子。 */
+/** Fallback leaf for in-run nodes without a conversation / whose conversation is on the ancestor chain. */
 function executionRunLeafNode(run: WorkflowRunSummary, node: WorkflowNodeState): Omit<ExecutionNode, 'aggregated'> {
   return {
     key: `node:${run.id}:${node.id}`,
@@ -150,8 +156,9 @@ function executionRunLeafNode(run: WorkflowRunSummary, node: WorkflowNodeState):
   }
 }
 
-/** DSL 引用归属：running 的 run 优先（续接后新 run 接管仍在跑的引用），
- * 其次 createdAt 最新，最后 id 稳定排序（与分片顺序无关）。 */
+/** DSL reference ownership: a running run wins (after a resume the new run
+ * takes over still-running references), then the latest createdAt, then a
+ * stable id ordering (independent of shard order). */
 function isStrongerDslConvOwner(candidate: WorkflowRunSummary, current: WorkflowRunSummary): boolean {
   const candidateRunning = candidate.status === 'running'
   const currentRunning = current.status === 'running'
@@ -161,26 +168,33 @@ function isStrongerDslConvOwner(candidate: WorkflowRunSummary, current: Workflow
 }
 
 /**
- * 构建统一执行树：rootConversationId 的下一级执行节点（任意深度递归）。
+ * Build the unified execution tree: the next-level execution nodes of
+ * rootConversationId (recursive at any depth).
  *
- * - 入参 runs 为「本会话 + 全部后代」的整棵投影（各 run 保留原始
- *   conversationId，由后端聚合分片提供）；同一 run id 重复到达时去重，
- *   不缺 run 丢树也不重复挂载；
- * - 会话子节点按 parentConversationId 递归；被 DSL run 认领的会话挂到 run
- *   节点下，不重复出现；同一会话被多个历史/续接 DSL run 引用时仅挂载一次
- *   （归属者见 isStrongerDslConvOwner），其余 run 的引用保留普通叶子行可
- *   显示但不双计；
- * - 后台单子代理 run 认领的直接子会话保持会话节点并携带 run；会话列表
- *   缺失时仅携带 run，不虚构 summary；
- * - 无任何会话关联的后台 run 为外部执行节点（run 内节点为叶子）；
- * - parentConversationId 链成环时按祖先链防御性截断。
+ * - The runs input is the whole projection of "this conversation + all
+ *   descendants" (each run keeps its original conversationId, provided by the
+ *   backend aggregate shard); a run id arriving twice is deduped — no run is
+ *   lost from the tree and none is mounted twice;
+ * - Conversation children recurse via parentConversationId; conversations
+ *   claimed by a DSL run mount under the run node and do not reappear; when
+ *   the same conversation is referenced by multiple historical/resumed DSL
+ *   runs it mounts only once (ownership per isStrongerDslConvOwner);
+ *   references from other runs stay as plain leaf rows — visible but not
+ *   double counted;
+ * - Direct subagent conversations claimed by a background single-subagent run
+ *   stay conversation nodes carrying the run; when the conversation list is
+ *   missing them only the run is carried, no summary invented;
+ * - Background runs without any conversation association become external
+ *   execution nodes (in-run nodes as leaves);
+ * - A parentConversationId cycle is defensively cut along the ancestor chain.
  */
 export function buildExecutionTree(input: BuildExecutionTreeInput): ExecutionNode[] {
   const { rootConversationId, conversations, runs = [] } = input
   const convById = new Map<number, ConversationSummary>()
   for (const conversation of conversations) convById.set(conversation.id, conversation)
 
-  // 聚合分片可能重复携带同一 run（重叠投影/增量事件）：按 id 去重。
+  // Aggregate shards may carry the same run twice (overlapping projections /
+  // incremental events): dedupe by id.
   const uniqueRuns: WorkflowRunSummary[] = []
   const seenRunIds = new Set<string>()
   for (const run of runs) {
@@ -231,7 +245,8 @@ export function buildExecutionTree(input: BuildExecutionTreeInput): ExecutionNod
     const dslClaimed = dslClaimedByParent.get(conversationId)
     const claims = subagentClaimsByParent.get(conversationId)
 
-    // 1) 会话直接子节点：被 DSL run 认领的会话挂到 run 节点下，不在此重复出现。
+    // 1) Direct conversation children: conversations claimed by a DSL run
+    // mount under the run node instead of reappearing here.
     const directIds = new Set<number>()
     for (const conversation of conversations) {
       if (conversation.parentConversationId !== conversationId) continue
@@ -255,7 +270,8 @@ export function buildExecutionTree(input: BuildExecutionTreeInput): ExecutionNod
       )
     }
 
-    // 2) 仅后台 run 可见的会话（会话列表缺失摘要）：如实携带 run，不虚构 summary。
+    // 2) Conversations visible only via background runs (conversation list
+    // missing their summaries): carry the run honestly, never invent a summary.
     if (claims !== undefined) {
       for (const [claimedId, claimedRuns] of claims) {
         if (directIds.has(claimedId) || dslClaimed?.has(claimedId) === true) continue
@@ -275,11 +291,12 @@ export function buildExecutionTree(input: BuildExecutionTreeInput): ExecutionNod
       }
     }
 
-    // 3) 本会话发起的 run：DSL 工作流挂节点子树；无会话关联的后台 run 为外部执行。
+    // 3) Runs started by this conversation: DSL workflows mount their node
+    // subtree; background runs without conversation association are external runs.
     for (const run of runsByParent.get(conversationId) ?? []) {
       const runNodes = run.nodes ?? []
       if (run.kind === 'subagent') {
-        if (runNodes.some((n) => n.conversationId !== undefined)) continue // 会话关联 run 已在 1/2 挂载
+        if (runNodes.some((n) => n.conversationId !== undefined)) continue // conversation-linked runs already mounted in 1/2
         nodes.push(
           finalizeExecutionNode({
             key: `run:${run.id}`,
@@ -293,7 +310,8 @@ export function buildExecutionTree(input: BuildExecutionTreeInput): ExecutionNod
         )
         continue
       }
-      // 同一 run 内重复引用同一会话时也只挂载一次（后续引用保持叶子行）。
+      // A run referencing the same conversation twice also mounts it once
+      // (later references stay as leaf rows).
       const mountedConvIds = new Set<number>()
       nodes.push(
         finalizeExecutionNode({

@@ -1,6 +1,6 @@
 /**
- * 工作流库详情抽屉组件：只读元数据/源码 + 运行（选目标会话）+ 删除；
- * 无任何编辑能力。
+ * Workflow library detail drawer component: read-only metadata/source +
+ * run (pick a target conversation) + delete; no editing capabilities.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -15,8 +15,10 @@ import {
   Select,
   formatBytes,
   formatTime,
+  resolveLocalizedText,
   useConversations,
   usePluginContext,
+  usePluginLocale,
 } from '@helm/plugin-client'
 import { SPIN } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
@@ -27,6 +29,47 @@ import {
   parseWorkflowDetail,
 } from './model-library.ts'
 import type { SavedWorkflowView } from './model-library.ts'
+import {
+  LIB_ARGS_PLACEHOLDER,
+  libArgsAria,
+  LIB_CANCEL,
+  LIB_CLOSE,
+  LIB_COPY_EDIT_REQUEST,
+  LIB_COPY_SOURCE,
+  LIB_DELETE,
+  LIB_DELETE_CONFIRM,
+  LIB_DELETE_TITLE,
+  libDeleted,
+  libDeleteConfirm,
+  libDetailInvalid,
+  libDrawerAria,
+  LIB_EDIT_HINT,
+  LIB_EDIT_HINT_2,
+  LIB_EDIT_SECTION,
+  LIB_KV_DESCRIPTION,
+  LIB_KV_PHASES,
+  LIB_KV_WHEN_TO_USE,
+  libDefinitionFileTitle,
+  libMetadataError,
+  LIB_METADATA_BADGE,
+  LIB_NO_TOP_LEVEL_CONVERSATIONS,
+  LIB_PHASES_UNDECLARED,
+  libPickConversationFirst,
+  LIB_REFRESH,
+  libRunButtonTitle,
+  LIB_RUN,
+  libRunFailed,
+  LIB_RUN_SECTION,
+  libRunStarted,
+  LIB_RUN_SELECT_ARIA,
+  LIB_RUN_SELECT_PLACEHOLDER,
+  LIB_RETRY,
+  LIB_DELETING,
+  libSourceLoadFailed,
+  LIB_SOURCE_LOADING,
+  LIB_SOURCE_RELOAD_TITLE,
+  LIB_SOURCE_SECTION,
+} from './copy.ts'
 
 export function WorkflowLibraryDrawer(props: {
   item: SavedWorkflowView
@@ -35,6 +78,7 @@ export function WorkflowLibraryDrawer(props: {
   onDeleted: () => void
 }): ReactNode {
   const ctx = usePluginContext()
+  const locale = usePluginLocale()
   const { item, onClose } = props
   const [detail, setDetail] = useState<{ script: string; description?: string; whenToUse?: string; phases?: SavedWorkflowView['phases'] } | undefined>(undefined)
   const [detailError, setDetailError] = useState<string | undefined>(undefined)
@@ -58,7 +102,7 @@ export function WorkflowLibraryDrawer(props: {
       if (generation.current !== current) return
       const parsed = parseWorkflowDetail(raw)
       if (parsed === undefined) {
-        setDetailError('定义详情返回结构不合法（动作返回非预期形状，拒绝伪造展示）')
+        setDetailError(libDetailInvalid(locale))
       } else {
         setDetail({ script: parsed.script, description: parsed.description, whenToUse: parsed.whenToUse, phases: parsed.phases })
       }
@@ -83,16 +127,17 @@ export function WorkflowLibraryDrawer(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item.name])
 
-  // 目标会话选项：顶层会话优先（子代理会话不出现在选择器里）。
+  // Target conversation options: top-level conversations first (subagent
+  // conversations never appear in the picker).
   const conversationOptions = useMemo(() => buildWorkflowRunTargetOptions(conversations), [conversations])
 
   const run = (): void => {
     if (running) return
     if (conversationId === '') {
-      setArgsError('请先选择目标会话')
+      setArgsError(libPickConversationFirst(locale))
       return
     }
-    const parsed = parseWorkflowArgsInput(argsDraft)
+    const parsed = parseWorkflowArgsInput(argsDraft, locale)
     if (!parsed.ok) {
       setArgsError(parsed.error)
       return
@@ -105,8 +150,8 @@ export function WorkflowLibraryDrawer(props: {
         conversationId: Number(conversationId),
         ...(parsed.args !== undefined ? { args: parsed.args } : {}),
       })
-      .then(() => ctx.notify(`工作流 ${item.name} 已在会话 #${conversationId} 启动`))
-      .catch((err: unknown) => ctx.notify(`启动工作流失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
+      .then(() => ctx.notify(libRunStarted(item.name, conversationId, locale)))
+      .catch((err: unknown) => ctx.notify(libRunFailed(err instanceof Error ? err.message : String(err), locale), 'error'))
       .finally(() => setRunning(false))
   }
 
@@ -117,7 +162,7 @@ export function WorkflowLibraryDrawer(props: {
     ctx
       .callAction('delete', { name: item.name })
       .then(() => {
-        ctx.notify(`已删除工作流定义 ${item.name}（历史运行记录不受影响）`)
+        ctx.notify(libDeleted(item.name, locale))
         setConfirmDelete(false)
         props.onDeleted()
       })
@@ -126,8 +171,8 @@ export function WorkflowLibraryDrawer(props: {
   }
 
   const editRequestText = useMemo(
-    () => buildWorkflowEditRequest(item.name, { description: detail?.description }),
-    [item.name, detail?.description],
+    () => buildWorkflowEditRequest(item.name, { description: detail?.description }, locale),
+    [item.name, detail?.description, locale],
   )
 
   return (
@@ -137,7 +182,7 @@ export function WorkflowLibraryDrawer(props: {
         <DialogContent
           className="primary-drawer-content workflow-lib-drawer"
           role="dialog"
-          aria-label={`工作流 ${item.name} 详情`}
+          aria-label={libDrawerAria(item.name, locale)}
         >
           <div className="primary-drawer-header">
             <div className="primary-drawer-header-left">
@@ -147,17 +192,17 @@ export function WorkflowLibraryDrawer(props: {
               <div className="primary-drawer-title-col">
                 <div className="primary-drawer-title-row">
                   <DialogTitle className="primary-drawer-title">{item.name}</DialogTitle>
-                  <span className="badge badge-neutral tabular-nums" title={`定义文件：${item.path ?? ''}`}>
+                  <span className="badge badge-neutral tabular-nums" title={libDefinitionFileTitle(item.path ?? '', locale)}>
                     {formatBytes(item.size)}
                   </span>
                   <span className="badge badge-neutral tabular-nums">{formatTime(item.updatedAt)}</span>
-                  {item.metadataError !== undefined ? <span className="badge badge-warn">元数据异常</span> : null}
+                  {item.metadataError !== undefined ? <span className="badge badge-warn">{resolveLocalizedText(LIB_METADATA_BADGE, locale)}</span> : null}
                 </div>
                 <div className="primary-drawer-id mono">{item.path ?? item.name}</div>
               </div>
             </div>
             <DialogClose asChild>
-              <button type="button" className="btn btn-ghost btn-sm" aria-label="关闭" title="关闭">
+              <button type="button" className="btn btn-ghost btn-sm" aria-label={resolveLocalizedText(LIB_CLOSE, locale)} title={resolveLocalizedText(LIB_CLOSE, locale)}>
                 <Icon name="x" size={14} />
               </button>
             </DialogClose>
@@ -165,104 +210,104 @@ export function WorkflowLibraryDrawer(props: {
 
           <div className="primary-drawer-body">
             {item.metadataError !== undefined ? (
-              <div className="callout callout--warning">元数据校验失败：{item.metadataError}</div>
+              <div className="callout callout--warning">{libMetadataError(item.metadataError, locale)}</div>
             ) : null}
 
             <div className="form-grid">
               <div className="form-grid-row">
-                <span className="form-grid-label"><span>描述</span></span>
+                <span className="form-grid-label"><span>{resolveLocalizedText(LIB_KV_DESCRIPTION, locale)}</span></span>
                 <span className="form-grid-value" title={detail?.description ?? item.description ?? ''}>
                   {detail?.description ?? item.description ?? '—'}
                 </span>
               </div>
               {(detail?.whenToUse ?? item.whenToUse) !== undefined ? (
                 <div className="form-grid-row">
-                  <span className="form-grid-label"><span>适用场景</span></span>
+                  <span className="form-grid-label"><span>{resolveLocalizedText(LIB_KV_WHEN_TO_USE, locale)}</span></span>
                   <span className="form-grid-value" title={(detail?.whenToUse ?? item.whenToUse) ?? ''}>
                     {detail?.whenToUse ?? item.whenToUse}
                   </span>
                 </div>
               ) : null}
               <div className="form-grid-row">
-                <span className="form-grid-label"><span>阶段</span></span>
+                <span className="form-grid-label"><span>{resolveLocalizedText(LIB_KV_PHASES, locale)}</span></span>
                 <span className="form-grid-value">
                   {(detail?.phases ?? item.phases) !== undefined
                     ? (detail?.phases ?? item.phases)!.map((p) => p.title).join(' → ')
-                    : '未声明'}
+                    : resolveLocalizedText(LIB_PHASES_UNDECLARED, locale)}
                 </span>
               </div>
             </div>
 
             <div className="workflow-lib-drawer-section">
               <div className="trace-section-label">
-                源码（只读）
-                <button type="button" className="btn btn-ghost btn-xs" disabled={detailLoading} onClick={() => void loadDetail()} title="重新读取源码">
+                {resolveLocalizedText(LIB_SOURCE_SECTION, locale)}
+                <button type="button" className="btn btn-ghost btn-xs" disabled={detailLoading} onClick={() => void loadDetail()} title={resolveLocalizedText(LIB_SOURCE_RELOAD_TITLE, locale)}>
                   <Icon name="rotate-cw" size={11} className={detailLoading ? SPIN : undefined} />
-                  刷新
+                  {resolveLocalizedText(LIB_REFRESH, locale)}
                 </button>
               </div>
-              {detailLoading && detail === undefined ? <div className="workflow-phase-empty">源码读取中…</div> : null}
+              {detailLoading && detail === undefined ? <div className="workflow-phase-empty">{resolveLocalizedText(LIB_SOURCE_LOADING, locale)}</div> : null}
               {detailError !== undefined ? (
                 <div className="callout callout--error">
-                  <div>读取源码失败：{detailError}</div>
-                  <button type="button" className="btn btn-xs" onClick={() => void loadDetail()}>重试</button>
+                  <div>{libSourceLoadFailed(detailError, locale)}</div>
+                  <button type="button" className="btn btn-xs" onClick={() => void loadDetail()}>{resolveLocalizedText(LIB_RETRY, locale)}</button>
                 </div>
               ) : null}
               {detail !== undefined ? (
                 <>
                   <pre className="code-block-pre workflow-lib-source selectable"><code>{detail.script}</code></pre>
-                  <CopyButton text={detail.script} label="复制完整源码" />
+                  <CopyButton text={detail.script} label={resolveLocalizedText(LIB_COPY_SOURCE, locale)} />
                 </>
               ) : null}
               <div className="workflow-lib-hint">
-                工作流的创建与修改由 AI / CLI 调用 save 动作完成，Web 端不提供源码编辑器。
+                {resolveLocalizedText(LIB_EDIT_HINT, locale)}
               </div>
             </div>
 
             <div className="workflow-lib-drawer-section">
-              <div className="trace-section-label">运行（选择目标会话）</div>
+              <div className="trace-section-label">{resolveLocalizedText(LIB_RUN_SECTION, locale)}</div>
               <div className="workflow-lib-run-row">
                 <div className="workflow-lib-run-select">
                   <Select
                     value={conversationId}
                     options={conversationOptions}
                     onChange={(e) => setConversationId(e.target.value)}
-                    placeholder="选择目标会话"
-                    aria-label="选择运行目标会话"
+                    placeholder={resolveLocalizedText(LIB_RUN_SELECT_PLACEHOLDER, locale)}
+                    aria-label={resolveLocalizedText(LIB_RUN_SELECT_ARIA, locale)}
                   />
                 </div>
                 <input
                   className="workflow-library-args"
                   type="text"
-                  placeholder="args JSON（可选，严格解析）"
+                  placeholder={resolveLocalizedText(LIB_ARGS_PLACEHOLDER, locale)}
                   value={argsDraft}
                   onChange={(e) => {
                     setArgsDraft(e.target.value)
                     setArgsError(undefined)
                   }}
-                  aria-label={`工作流 ${item.name} 的 args JSON`}
+                  aria-label={libArgsAria(item.name, locale)}
                 />
                 <button
                   type="button"
                   className="btn btn-sm"
                   disabled={running || conversationOptions.length === 0}
-                  title={conversationOptions.length === 0 ? '无可用顶层会话' : `在选定会话运行工作流 ${item.name}`}
+                  title={conversationOptions.length === 0 ? resolveLocalizedText(LIB_NO_TOP_LEVEL_CONVERSATIONS, locale) : libRunButtonTitle(item.name, locale)}
                   onClick={run}
                 >
                   <Icon name={running ? 'loader' : 'play'} size={11} className={running ? SPIN : undefined} />
-                  运行
+                  {resolveLocalizedText(LIB_RUN, locale)}
                 </button>
               </div>
               {argsError !== undefined ? <div className="callout callout--error">{argsError}</div> : null}
             </div>
 
             <div className="workflow-lib-drawer-section">
-              <div className="trace-section-label">让 AI 修改</div>
+              <div className="trace-section-label">{resolveLocalizedText(LIB_EDIT_SECTION, locale)}</div>
               <div className="workflow-lib-hint">
-                复制以下请求发给任意会话中的 AI，由它读取源码、修改并经 save 动作写回；本页不直接改动文件。
+                {resolveLocalizedText(LIB_EDIT_HINT_2, locale)}
               </div>
               <pre className="code-block-pre workflow-lib-edit-request selectable"><code>{editRequestText}</code></pre>
-              <CopyButton text={editRequestText} label="复制修改请求" />
+              <CopyButton text={editRequestText} label={resolveLocalizedText(LIB_COPY_EDIT_REQUEST, locale)} />
             </div>
           </div>
 
@@ -273,33 +318,33 @@ export function WorkflowLibraryDrawer(props: {
           <div className="primary-drawer-footer">
             {confirmDelete ? (
               <div className="workflow-lib-delete-confirm">
-                <span className="text-subtle">确认删除工作流定义 {item.name}？历史运行记录保留。</span>
+                <span className="text-subtle">{libDeleteConfirm(item.name, locale)}</span>
                 <button
                   type="button"
                   className="btn btn-sm btn-ghost"
                   disabled={deleting}
                   onClick={() => setConfirmDelete(false)}
                 >
-                  取消
+                  {resolveLocalizedText(LIB_CANCEL, locale)}
                 </button>
                 <button type="button" className="btn btn-sm btn-danger" disabled={deleting} onClick={remove}>
                   <Icon name="x" size={12} />
-                  {deleting ? '正在删除…' : '确认删除'}
+                  {deleting ? resolveLocalizedText(LIB_DELETING, locale) : resolveLocalizedText(LIB_DELETE_CONFIRM, locale)}
                 </button>
               </div>
             ) : (
               <>
                 <button type="button" className="btn btn-sm btn-ghost" onClick={onClose}>
-                  关闭
+                  {resolveLocalizedText(LIB_CLOSE, locale)}
                 </button>
                 <button
                   type="button"
                   className="btn btn-sm btn-ghost btn-danger"
-                  title="删除定义文件（历史运行记录不受影响）"
+                  title={resolveLocalizedText(LIB_DELETE_TITLE, locale)}
                   onClick={() => setConfirmDelete(true)}
                 >
                   <Icon name="x" size={12} />
-                  删除
+                  {resolveLocalizedText(LIB_DELETE, locale)}
                 </button>
               </>
             )}

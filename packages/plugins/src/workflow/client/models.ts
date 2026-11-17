@@ -1,15 +1,17 @@
 /**
- * builtin:workflow 插件 client 纯逻辑层公共门面（零 React/DOM 依赖）。
+ * Pure logic layer facade for the builtin:workflow plugin client (zero
+ * React/DOM dependencies).
  *
- * 按域拆分为 model-format / model-subagent-link / model-subagent-stream /
- * model-subagent-card / model-run / model-worktree / model-library /
- * model-execution-status / model-execution-view / model-execution-tree，此处按
- * 原公开 API 显式再导出（内部导出如 inputString / inspectString 不经本门面
- * 暴露）；组件与 hooks 互引时直接引用具体 model-*.ts，勿反向引用本门面
- * （防循环）。
+ * Split by domain into model-format / model-subagent-link /
+ * model-subagent-stream / model-subagent-card / model-run / model-worktree /
+ * model-library / model-execution-status / model-execution-view /
+ * model-execution-tree; this facade explicitly re-exports the original
+ * public API (internal exports such as inputString / inspectString are not
+ * exposed here); components and hooks import the concrete model-*.ts files
+ * directly — never import back from this facade (avoids cycles).
  */
 
-// 共享格式化工具（model-format.ts）
+// Shared formatting helpers (model-format.ts)
 export {
   toolResultPreviewTruncated,
   isScrolledToBottom,
@@ -21,7 +23,7 @@ export {
   stringifyPretty,
 } from './model-format.ts'
 
-// subagent 运行期关联（model-subagent-link.ts）
+// Subagent runtime association (model-subagent-link.ts)
 export {
   parseSubagentExecutionInfo,
   resolveSubagentConversationId,
@@ -31,7 +33,7 @@ export {
 } from './model-subagent-link.ts'
 export type { SubagentExecutionInfo, SubagentExecutionMeta, SubagentParentToolSummary } from './model-subagent-link.ts'
 
-// 工具行语义摘要与子会话实时流（model-subagent-stream.ts）
+// Tool line semantic summaries and the subagent live stream (model-subagent-stream.ts)
 export {
   toolSummaryText,
   formatSemanticToolAction,
@@ -40,7 +42,7 @@ export {
 } from './model-subagent-stream.ts'
 export type { SubagentStreamLine } from './model-subagent-stream.ts'
 
-// 卡片状态徽章与头部摘要（model-subagent-card.ts）
+// Card status badges and header summaries (model-subagent-card.ts)
 export {
   subagentBadge,
   compactCardTitle,
@@ -53,7 +55,7 @@ export {
 } from './model-subagent-card.ts'
 export type { SubagentCardStatus, SubagentBadge, SubagentHeaderSnippet, SubagentRunView } from './model-subagent-card.ts'
 
-// 工作流运行卡纯逻辑（model-run.ts）
+// Workflow run card pure logic (model-run.ts)
 export {
   resolveWorkflowRunForTool,
   isBackgroundWorkflowResultHandle,
@@ -81,11 +83,11 @@ export type {
   ResumeFailedSummaryView,
 } from './model-run.ts'
 
-// 受管工作树只读检视（model-worktree.ts）
+// Managed worktree read-only inspection (model-worktree.ts)
 export { parseWorktreeInspectResult, buildWorktreeSelector, buildWorktreeReviewRequest } from './model-worktree.ts'
 export type { WorktreeInspectView } from './model-worktree.ts'
 
-// 工作流库严格解析与 args 解析（model-library.ts）
+// Workflow library strict parsing and args parsing (model-library.ts)
 export {
   parseSavedWorkflowList,
   parseWorkflowDetail,
@@ -96,7 +98,7 @@ export {
 } from './model-library.ts'
 export type { SavedWorkflowView, SavedWorkflowDetailView } from './model-library.ts'
 
-// 统一执行树（model-execution-status / model-execution-view / model-execution-tree.ts）
+// Unified execution tree (model-execution-status / model-execution-view / model-execution-tree.ts)
 export {
   aggregateExecutionStatuses,
   executionConversationStatus,
@@ -116,7 +118,7 @@ export type { ExecutionAggregate, ExecutionNodeStatus } from './model-execution-
 export type { ExecutionFrontlineItem, ExecutionApprovalItem } from './model-execution-view.ts'
 export type { ExecutionNodeKind, ExecutionNode, BuildExecutionTreeInput } from './model-execution-tree.ts'
 
-// 后台汇报解析 / 底部活动托盘 / 工作台 run 定位总线
+// Background report parsing / bottom activity tray / workbench run focus bus
 export {
   parseBackgroundReportEntry,
   backgroundReportPreview,

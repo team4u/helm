@@ -1,22 +1,25 @@
 /**
- * 内嵌工具入参/输出/产物按钮详情区（插件 client 组件内部使用）。
- * 点击产物按钮调 ctx.openArtifact(artifactId) 打开宿主产物预览弹窗。
+ * Inline tool input/output/artifact button details block (internal use by the
+ * plugin client components). Clicking the artifact button calls
+ * ctx.openArtifact(artifactId) to open the host artifact preview modal.
  */
 import { useMemo, useState } from 'react'
-import { usePluginContext } from '@helm/plugin-client'
+import { resolveLocalizedText, usePluginContext, usePluginLocale } from '@helm/plugin-client'
 import { stringifyPretty } from './model-format.ts'
+import { DETAILS_INPUT, DETAILS_OUTPUT, DETAILS_SUMMARY, detailsOpenArtifactLabel } from './copy.ts'
 
 export interface ToolCallDetailsInlineProps {
-  /** 本次工具调用的原始入参。 */
+  /** Raw input of this tool call. */
   input?: unknown
-  /** 本次工具调用的原始输出文本。 */
+  /** Raw output text of this tool call. */
   result?: unknown
-  /** 输出中检测到的产物引用（内核超长 Spill 标记 / art_ 前缀）。 */
+  /** Artifact reference detected in the output (kernel spill marker / art_ prefix). */
   artifactRef?: string
 }
 
 export function ToolCallDetailsInline({ input, result, artifactRef }: ToolCallDetailsInlineProps) {
   const ctx = usePluginContext()
+  const locale = usePluginLocale()
   const [open, setOpen] = useState(false)
   const inputJson = useMemo(() => stringifyPretty(input), [input])
   const resultText = useMemo(
@@ -32,17 +35,17 @@ export function ToolCallDetailsInline({ input, result, artifactRef }: ToolCallDe
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => e.stopPropagation()}
     >
-      <summary>调用详情</summary>
+      <summary>{resolveLocalizedText(DETAILS_SUMMARY, locale)}</summary>
       <div className="trace-expanded-body selectable">
         {inputJson !== undefined ? (
           <div>
-            <div className="trace-section-label">入参</div>
+            <div className="trace-section-label">{resolveLocalizedText(DETAILS_INPUT, locale)}</div>
             <pre className="code-block-pre"><code>{inputJson}</code></pre>
           </div>
         ) : null}
         {resultText !== undefined ? (
           <div>
-            <div className="trace-section-label">输出</div>
+            <div className="trace-section-label">{resolveLocalizedText(DETAILS_OUTPUT, locale)}</div>
             <pre className="code-block-pre"><code>{resultText}</code></pre>
           </div>
         ) : null}
@@ -52,7 +55,7 @@ export function ToolCallDetailsInline({ input, result, artifactRef }: ToolCallDe
             className="btn btn-xs"
             onClick={() => ctx.openArtifact(artifactRef)}
           >
-            打开完整产物 #{artifactRef}
+            {detailsOpenArtifactLabel(artifactRef, locale)}
           </button>
         ) : null}
       </div>

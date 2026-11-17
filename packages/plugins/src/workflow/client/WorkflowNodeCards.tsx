@@ -1,16 +1,20 @@
 /**
- * builtin:workflow 插件工作流 run 内节点卡族（WorkflowRunCardBody 消费）：
- * - WorkflowNodeCard：单节点分发（子代理节点一体化整卡 / 动作节点扁平双层卡）；
- * - WorkflowSubagentNodeCard：子代理节点直接以一体化整卡直出（无手风琴折叠壳）；
- * - WorkflowExecutionNodeCard：无原生子会话节点（动作 / 外部执行）扁平双层卡；
- * - WorkflowNodeDetail：无会话节点的结构化明细。
+ * builtin:workflow plugin in-run node card family (consumed by
+ * WorkflowRunCardBody):
+ * - WorkflowNodeCard: single-node dispatch (subagent nodes as unified whole
+ *   cards / action nodes as flat two-layer cards);
+ * - WorkflowSubagentNodeCard: subagent node rendered directly as a unified
+ *   whole card (no accordion shell);
+ * - WorkflowExecutionNodeCard: nodes without a native subagent (action /
+ *   external run) as flat two-layer cards;
+ * - WorkflowNodeDetail: structured details of conversation-less nodes.
  */
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { WorkflowNodeState } from '../../contracts.js'
-import { formatCompactTimestamp, formatDurationMs, usePluginContext } from '@helm/plugin-client'
+import { formatCompactTimestamp, formatDurationMs, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helm/plugin-client'
 import { useElapsedNowMs } from './hooks.ts'
-import { SPIN, NODE_LABEL, NODE_BADGE } from './presentation.ts'
+import { SPIN, NODE_BADGE } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { SubagentLiveCard } from './SubagentCard.tsx'
 import { WorktreeInspectSection } from './WorktreeInspectSection.tsx'
@@ -22,12 +26,38 @@ import {
   resolveNodeElapsedMs,
   resolveNodeSummaryText,
 } from './model-run.ts'
+import {
+  ACTION_CLEANUP_WORKTREE,
+  actionCleanupDone,
+  actionCleanupFailed,
+  NODE_BADGE_ACTION,
+  NODE_BADGE_EXTERNAL,
+  NODE_BADGE_SUBAGENT,
+  nodeAttemptBadge,
+  NODE_GATE_FAILED,
+  NODE_GATE_PASSED,
+  NODE_KV_BACKEND,
+  NODE_KV_CWD,
+  NODE_KV_DURATION,
+  NODE_KV_EXTERNAL,
+  NODE_KV_MODEL,
+  NODE_KV_NODE,
+  NODE_KV_STARTED_AT,
+  NODE_KV_TOKENS,
+  NODE_KV_WORKTREE,
+  nodeStatusLabel,
+  NODE_TAG_ERROR,
+  NODE_TAG_OUTPUT,
+  worktreeBadgeTitle,
+} from './copy.ts'
 import type { ExecutionNode } from './model-execution-tree.ts'
 
-/** 工作流子代理节点：直接以一体化整卡直出（无手风琴折叠壳）。 */
+/** Workflow subagent node: rendered directly as a unified whole card (no accordion shell). */
 function WorkflowSubagentNodeCard(props: { node: WorkflowNodeState; runConversationId: number; childNodes?: ExecutionNode[] }): ReactNode {
   const { node, childNodes } = props
   const outputText = typeof node.output === 'string' ? node.output : undefined
+  const locale = usePluginLocale()
+  const t = resolveLocalizedText
   return (
     <div className="workflow-subagent-node-card">
       <SubagentLiveCard
@@ -52,7 +82,7 @@ function WorkflowSubagentNodeCard(props: { node: WorkflowNodeState; runConversat
       {node.gate !== undefined ? (
         <div className="workflow-node-gate-extra">
           <span className={`badge ${node.gate.ok ? 'badge-ok' : 'badge-err'}`}>
-            {node.gate.ok ? 'Gate 通过' : 'Gate 失败'}
+            {t(node.gate.ok ? NODE_GATE_PASSED : NODE_GATE_FAILED, locale)}
           </span>
           {node.gateCommand !== undefined ? <code className="mono workflow-node-gate-cmd">{node.gateCommand}</code> : null}
           {node.gate.output !== '' ? (
@@ -80,14 +110,17 @@ function WorkflowSubagentNodeCard(props: { node: WorkflowNodeState; runConversat
   )
 }
 
-/** 无原生子会话节点：动作与外部执行如实展示，均不伪造可导航的子会话。 */
+/** Nodes without a native subagent: actions and external runs shown honestly, never fabricating a navigable subagent. */
 function WorkflowExecutionNodeCard(props: { node: WorkflowNodeState; runConversationId: number }): ReactNode {
   const { node } = props
-  const summaryText = resolveNodeSummaryText(node)
+  const locale = usePluginLocale()
+  const summaryText = resolveNodeSummaryText(node, undefined, undefined, undefined, locale)
   const nodeStats = useMemo(() => formatWorkflowNodeStats(node), [node])
   const isErr = node.status === 'failed'
-  // 总耗时：running 随秒表从 startedAt 动态推进（SSR 首帧无时钟如实省略），
-  // 结算定格持久化 durationMs；无真实边界不显示虚构值。
+  // Total duration: running advances dynamically from startedAt with the
+  // stopwatch (SSR first frame has no clock, omitted honestly); settled
+  // freezes at the persisted durationMs; no fabricated values without a real
+  // boundary.
   const nowMs = useElapsedNowMs(node.status === 'running')
   const elapsedMs = resolveNodeElapsedMs(node, nowMs)
   return (
@@ -99,26 +132,26 @@ function WorkflowExecutionNodeCard(props: { node: WorkflowNodeState; runConversa
             size={13}
             className={node.status === 'running' ? SPIN : undefined}
           />
-          <span className="badge badge-neutral">{node.kind === 'action' ? '动作' : node.executionId !== undefined ? '外部执行' : '子代理节点'}</span>
+          <span className="badge badge-neutral">{node.kind === 'action' ? resolveLocalizedText(NODE_BADGE_ACTION, locale) : node.executionId !== undefined ? resolveLocalizedText(NODE_BADGE_EXTERNAL, locale) : resolveLocalizedText(NODE_BADGE_SUBAGENT, locale)}</span>
           <span className="subagent-live-title" title={node.label ?? node.id}>
             <span className="subagent-live-title-text">{node.label ?? node.id}</span>
           </span>
           {node.worktree !== undefined ? (
-            <span className="badge badge-neutral subagent-worktree-badge" title={`隔离工作树：${node.worktree.path}`}>
+            <span className="badge badge-neutral subagent-worktree-badge" title={worktreeBadgeTitle(node.worktree.path, locale)}>
               <Icon name="git-branch" size={11} />
               {node.worktree.branch}
             </span>
           ) : null}
           {node.cached === true ? <span className="badge badge-warn">cached</span> : null}
           <span className={`badge ${NODE_BADGE[node.status] ?? 'badge-neutral'}`}>
-            {NODE_LABEL[node.status] ?? node.status}
+            {nodeStatusLabel(node.status, locale)}
           </span>
           {node.attempt !== undefined && node.attempt > 1 ? (
-            <span className="badge badge-neutral">{`第 ${node.attempt} 次`}</span>
+            <span className="badge badge-neutral">{nodeAttemptBadge(node.attempt, locale)}</span>
           ) : null}
           {node.gate !== undefined ? (
             <span className={`badge ${node.gate.ok ? 'badge-ok' : 'badge-err'}`}>
-              {node.gate.ok ? 'Gate 通过' : 'Gate 失败'}
+              {resolveLocalizedText(node.gate.ok ? NODE_GATE_PASSED : NODE_GATE_FAILED, locale)}
             </span>
           ) : null}
           {nodeStats.length > 0 ? (
@@ -132,7 +165,7 @@ function WorkflowExecutionNodeCard(props: { node: WorkflowNodeState; runConversa
       {summaryText.text !== undefined ? (
         <div className={`subagent-live-subline${summaryText.isError ? ' subagent-live-subline-error' : ''}`}>
           <Icon name="corner-down-right" size={11} />
-          <span className="subagent-live-subline-tag">{summaryText.isError ? '错误' : '产出'}</span>
+          <span className="subagent-live-subline-tag">{resolveLocalizedText(summaryText.isError ? NODE_TAG_ERROR : NODE_TAG_OUTPUT, locale)}</span>
           <span className="subagent-live-subline-text" title={summaryText.text}>{summaryText.text}</span>
         </div>
       ) : null}
@@ -154,7 +187,7 @@ function WorkflowExecutionNodeCard(props: { node: WorkflowNodeState; runConversa
   )
 }
 
-/** 单节点卡片：子代理节点直出一体化整卡；动作节点直出扁平双层卡。全程无手风琴折叠。 */
+/** Single node card: subagent nodes render unified whole cards; action nodes render flat two-layer cards. No accordion anywhere. */
 export function WorkflowNodeCard(props: { node: WorkflowNodeState; runConversationId: number; childNodes?: ExecutionNode[] }): ReactNode {
   const { node, childNodes } = props
   if (node.conversationId !== undefined) {
@@ -163,20 +196,21 @@ export function WorkflowNodeCard(props: { node: WorkflowNodeState; runConversati
   return <WorkflowExecutionNodeCard node={node} runConversationId={props.runConversationId} />
 }
 
-/** 无原生子会话节点的结构化明细。 */
+/** Structured details of nodes without a native subagent. */
 function WorkflowNodeDetail({ node }: { node: WorkflowNodeState }): ReactNode {
   const ctx = usePluginContext()
+  const locale = usePluginLocale()
   const [cleaning, setCleaning] = useState(false)
-  const rows: Array<[string, string]> = []
-  if (node.startedAt !== undefined) rows.push(['开始时间', formatCompactTimestamp(node.startedAt)])
-  if (node.agentType !== undefined) rows.push(['执行后端', node.agentType])
-  if (node.executionId !== undefined) rows.push(['外部执行', node.executionId])
-  if (node.nodeId !== undefined) rows.push(['执行节点', node.nodeId])
-  if (node.effectiveCwd !== undefined) rows.push(['工作目录', node.effectiveCwd])
-  if (node.worktree !== undefined) rows.push(['工作树', `${node.worktree.branch} @ ${node.worktree.path}`])
-  if (node.model !== undefined) rows.push(['模型', node.model])
-  if (node.durationMs !== undefined) rows.push(['耗时', formatDurationMs(node.durationMs)])
-  if (node.tokens !== undefined && node.tokens > 0) rows.push(['Token', node.tokens.toLocaleString()])
+  const rows: Array<[string, string, boolean]> = []
+  if (node.startedAt !== undefined) rows.push([resolveLocalizedText(NODE_KV_STARTED_AT, locale), formatCompactTimestamp(node.startedAt), true])
+  if (node.agentType !== undefined) rows.push([resolveLocalizedText(NODE_KV_BACKEND, locale), node.agentType, false])
+  if (node.executionId !== undefined) rows.push([resolveLocalizedText(NODE_KV_EXTERNAL, locale), node.executionId, false])
+  if (node.nodeId !== undefined) rows.push([resolveLocalizedText(NODE_KV_NODE, locale), node.nodeId, false])
+  if (node.effectiveCwd !== undefined) rows.push([resolveLocalizedText(NODE_KV_CWD, locale), node.effectiveCwd, false])
+  if (node.worktree !== undefined) rows.push([resolveLocalizedText(NODE_KV_WORKTREE, locale), `${node.worktree.branch} @ ${node.worktree.path}`, false])
+  if (node.model !== undefined) rows.push([resolveLocalizedText(NODE_KV_MODEL, locale), node.model, false])
+  if (node.durationMs !== undefined) rows.push([resolveLocalizedText(NODE_KV_DURATION, locale), formatDurationMs(node.durationMs), false])
+  if (node.tokens !== undefined && node.tokens > 0) rows.push([resolveLocalizedText(NODE_KV_TOKENS, locale), node.tokens.toLocaleString(), false])
   const outputJson = useMemo(
     () => (typeof node.output === 'string' ? node.output : stringifyPretty(node.output)),
     [node.output],
@@ -185,10 +219,10 @@ function WorkflowNodeDetail({ node }: { node: WorkflowNodeState }): ReactNode {
     <div className="workflow-node-detail">
       {rows.length > 0 ? (
         <div className="kv-grid">
-          {rows.map(([k, v]) => (
+          {rows.map(([k, v, tabular]) => (
             <span key={k} style={{ display: 'contents' }}>
               <span className="kv-key">{k}</span>
-              <span className={`kv-val ${k === '开始时间' ? 'tabular-nums' : 'mono'}`}>{v}</span>
+              <span className={`kv-val ${tabular ? 'tabular-nums' : 'mono'}`}>{v}</span>
             </span>
           ))}
         </div>
@@ -230,15 +264,15 @@ function WorkflowNodeDetail({ node }: { node: WorkflowNodeState }): ReactNode {
             setCleaning(true)
             ctx
               .callAction('cleanup_worktree', buildWorktreeSelector(node.worktree!, node.nodeId))
-              .then(() => ctx.notify(`已清理工作树 ${node.worktree!.branch}`))
+              .then(() => ctx.notify(actionCleanupDone(node.worktree!.branch, locale)))
               .catch((err: unknown) =>
-                ctx.notify(`清理工作树失败：${err instanceof Error ? err.message : String(err)}`, 'error'),
+                ctx.notify(actionCleanupFailed(err instanceof Error ? err.message : String(err), locale), 'error'),
               )
               .finally(() => setCleaning(false))
           }}
         >
           <Icon name="rotate-cw" size={11} className={cleaning ? SPIN : undefined} />
-          清理工作树
+          {resolveLocalizedText(ACTION_CLEANUP_WORKTREE, locale)}
         </button>
       ) : null}
     </div>

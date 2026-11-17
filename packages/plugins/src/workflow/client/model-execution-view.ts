@@ -1,17 +1,29 @@
 /**
- * builtin:workflow 插件 client 纯逻辑：统一执行树的节点展示摘要——标题、
- * 紧凑行总耗时解析、前线活动与后代审批摘要（零 React/DOM 依赖）。
+ * Pure logic for the builtin:workflow client: presentation summaries for
+ * unified execution tree nodes — titles, compact-row total durations,
+ * frontline activity and descendant approval digests (zero React/DOM
+ * dependencies).
  */
+import { DEFAULT_HELM_LOCALE, resolveLocalizedText, type HelmLocale } from '@helm/plugin-client'
 import type { ExecutionNode } from './model-execution-tree.ts'
 import { compactCardTitle } from './model-subagent-card.ts'
 import { firstLineOf } from './model-format.ts'
 import { resolveNodeElapsedMs, resolveRunElapsedMs } from './model-run.ts'
+import {
+  execApprovalItem,
+  execConversationTitle,
+  EXEC_EXTERNAL_FALLBACK,
+  execFrontlineContainer,
+  execFrontlineConversation,
+} from './copy.ts'
 
 /**
- * 执行树紧凑行总耗时：优先 runNode 真实边界（running 用 startedAt + nowMs
- * 动态推进、结算用 durationMs 定格）；无 runNode 的容器行（深层 workflow /
- * external）与会话行携带的后台 run 用 run 边界；纯会话节点无本轮可靠起点
- * （会话 createdAt 不是本轮边界）时返回 undefined，不伪造。
+ * Compact-row total duration of an execution tree node: runNode real
+ * boundaries first (running advances with startedAt + nowMs, settled freezes
+ * at durationMs); container rows without a runNode (deep workflow / external)
+ * and conversation rows carrying a background run use run boundaries; pure
+ * conversation nodes without a reliable turn boundary (the conversation
+ * createdAt is not a turn boundary) return undefined — never fabricated.
  */
 export function resolveExecutionNodeElapsedMs(
   node: Pick<ExecutionNode, 'run' | 'runNode'>,
@@ -22,8 +34,8 @@ export function resolveExecutionNodeElapsedMs(
   return undefined
 }
 
-/** 节点展示标题：用户标题 > run 节点 label / prompt > 会话与 run 兜底描述（不虚构）。 */
-export function executionNodeTitle(node: ExecutionNode): string {
+/** Node display title: user title > run node label / prompt > conversation and run fallbacks (never invented). */
+export function executionNodeTitle(node: ExecutionNode, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
   const label = node.label ?? node.runNode?.label
   if (node.kind === 'conversation') {
     const custom = compactCardTitle(node.summary?.title, node.conversationId ?? 0)
@@ -31,38 +43,48 @@ export function executionNodeTitle(node: ExecutionNode): string {
     if (label !== undefined && label.trim() !== '' && label.trim() !== 'subagent') return firstLineOf(label, 60)
     const prompt = node.runNode?.prompt
     if (prompt !== undefined && prompt.trim() !== '') return firstLineOf(prompt, 60)
-    return `子会话 #${node.conversationId}`
+    return execConversationTitle(node.conversationId ?? 0, locale)
   }
   if (label !== undefined && label.trim() !== '') return firstLineOf(label, 60)
-  return node.run?.name ?? '外部执行'
+  return node.run?.name ?? resolveLocalizedText(EXEC_EXTERNAL_FALLBACK, locale)
 }
 
-/** 前线活动条目：子树内正在执行节点的单行摘要。 */
+/** Frontline activity item: one-line summary of a node currently executing inside the subtree. */
 export interface ExecutionFrontlineItem {
   key: string
   conversationId?: number
   text: string
 }
 
-function executionFrontlineText(node: ExecutionNode, hasDeeper: boolean): string | undefined {
+function executionFrontlineText(node: ExecutionNode, hasDeeper: boolean, locale: HelmLocale): string | undefined {
   if (node.status !== 'working') return undefined
   if (node.kind === 'conversation') {
     const doing = node.summary?.doing?.trim()
     if (doing !== undefined && doing !== '') return `#${node.conversationId} ${doing}`
-    // 无自身 doing 且子树已有更深前线：不再以兑底文案重复占位（父级等待状态不抢占）
-    return hasDeeper ? undefined : `#${node.conversationId} 执行中`
+    // No own doing and the subtree already has a deeper frontline: do not
+    // repeat a placeholder fallback line (parent waiting states yield).
+    return hasDeeper ? undefined : execFrontlineConversation(node.conversationId ?? 0, locale)
   }
-  // 容器（workflow / external run）的自身执行即其子节点：子树已有更深前线时跳过
-  return hasDeeper ? undefined : `${node.runNode?.label ?? node.label ?? node.run?.name ?? node.key} 执行中`
+  // A container's (workflow / external run) own execution is its children:
+  // skip when the subtree already has a deeper frontline.
+  return hasDeeper
+    ? undefined
+    : execFrontlineContainer(
+        node.runNode?.label ?? node.label ?? node.run?.name ?? node.key,
+        locale,
+      )
 }
 
 /**
- * 前线活动摘要：后序深度优先（最深活跃前线优先），至多 limit 条；同一节点
- * key 只收集一次（多历史引用不重复）。自身实际工作（doing）保留在更深前线之后。
+ * Frontline activity digest: post-order depth-first (deepest active frontline
+ * first), at most limit items; the same node key is collected once (multiple
+ * historical references do not repeat). Own real work (doing) stays after the
+ * deeper frontline.
  */
 export function collectExecutionFrontline(
   nodes: ReadonlyArray<ExecutionNode>,
   limit = 2,
+  locale: HelmLocale = DEFAULT_HELM_LOCALE,
 ): ExecutionFrontlineItem[] {
   const items: ExecutionFrontlineItem[] = []
   const seen = new Set<string>()
@@ -73,7 +95,7 @@ export function collectExecutionFrontline(
       visit(node.children)
       if (items.length >= limit) return
       if (seen.has(node.key)) continue
-      const text = executionFrontlineText(node, items.length > before)
+      const text = executionFrontlineText(node, items.length > before, locale)
       if (text !== undefined) {
         seen.add(node.key)
         items.push({
@@ -88,7 +110,7 @@ export function collectExecutionFrontline(
   return items
 }
 
-/** 后代审批条目（pendingAsk 标题不在会话列表数据中，仅以会话标识如实呈现）。 */
+/** Descendant approval item (pendingAsk titles are not in the conversation list data; only the conversation id is shown, honestly). */
 export interface ExecutionApprovalItem {
   key: string
   conversationId?: number
@@ -96,12 +118,14 @@ export interface ExecutionApprovalItem {
 }
 
 /**
- * 后代审批摘要：子树内 blocked 会话节点（pendingAskCount>0 或 status=blocked，
- * 均在构树叶状态中归一为 blocked），至多 limit 条；同一节点 key 不重复。
+ * Descendant approval digest: blocked conversation nodes in the subtree
+ * (pendingAskCount>0 or status=blocked, both normalized to blocked by the
+ * tree builder), at most limit items; the same node key never repeats.
  */
 export function collectExecutionApprovals(
   nodes: ReadonlyArray<ExecutionNode>,
   limit = 3,
+  locale: HelmLocale = DEFAULT_HELM_LOCALE,
 ): ExecutionApprovalItem[] {
   const items: ExecutionApprovalItem[] = []
   const seen = new Set<string>()
@@ -117,7 +141,7 @@ export function collectExecutionApprovals(
         items.push({
           key: node.key,
           conversationId: node.conversationId,
-          text: title !== undefined ? `#${node.conversationId} ${title}` : `#${node.conversationId} 等待审批`,
+          text: title !== undefined ? `#${node.conversationId} ${title}` : execApprovalItem(node.conversationId, locale),
         })
       }
       visit(node.children)

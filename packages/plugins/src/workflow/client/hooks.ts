@@ -1,15 +1,24 @@
 /**
- * builtin:workflow 插件数据 hooks（与宿主共享同一 store，零私有依赖）。
- * models.ts 只保留纯函数；hook 依赖集中在本文件，供 index.tsx 组件消费。
+ * Data hooks for the builtin:workflow plugin (sharing the host store, zero
+ * private dependencies). models.ts keeps pure functions only; hook
+ * dependencies live in this file for index.tsx components to consume.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WorkflowRunSummary } from '../../contracts.js'
-import { useConversation, useConversations, usePluginContext, usePluginDoc, usePluginSessionDoc } from '@helm/plugin-client'
+import {
+  useConversation,
+  useConversations,
+  usePluginContext,
+  usePluginDoc,
+  usePluginLocale,
+  usePluginSessionDoc,
+} from '@helm/plugin-client'
 import { isScrolledToBottom } from './model-format.ts'
 import { parseSavedWorkflowList } from './model-library.ts'
 import type { SavedWorkflowView } from './model-library.ts'
+import { libListInvalid } from './copy.ts'
 
-/** 只在用户仍贴底时跟随流式输出；上滚阅读历史后不抢回滚动位置。 */
+/** Follow streaming output only while the user stays pinned to the bottom; never steal scroll position after scrolling up into history. */
 export function useStreamFollow(content: unknown) {
   const ref = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
@@ -22,18 +31,18 @@ export function useStreamFollow(content: unknown) {
   return { ref, onScroll }
 }
 
-/** 订阅 builtin:workflow 公开文档 runs（会话分片，仅当前会话的 run 列表）。 */
+/** Subscribe to the builtin:workflow public runs doc (conversation shard, only the current conversation's run list). */
 export function useWorkflowRunsDoc<T = { runs: WorkflowRunSummary[] }>(docName: string, conversationId: number | undefined): T | undefined {
   return usePluginSessionDoc<T>(docName, conversationId !== undefined ? { conversationId } : undefined)
 }
 
-/** 运行中秒表：SSR 首帧不启动时钟，仅客户端 useEffect 定时推进（确定性渲染）。 */
+/** Running stopwatch: SSR first frame starts no clock; only the client-side useEffect advances it (deterministic rendering). */
 export function useElapsedNowMs(active: boolean): number | undefined {
   const [nowMs] = useElapsedState(active)
   return nowMs
 }
 
-/** 工作流库加载状态：list 动作 + 代数竞争保护（刷新不串合旧响应）。 */
+/** Workflow library loading state: list action + generation guard (reloads never splice stale responses). */
 export interface WorkflowLibraryState {
   items: SavedWorkflowView[] | undefined
   error: string | undefined
@@ -41,9 +50,10 @@ export interface WorkflowLibraryState {
   reload: () => Promise<void>
 }
 
-/** 加载已保存工作流目录（list 动作；严格解析，结构非法显式报错不伪造）。 */
+/** Load the saved workflow catalog (list action; strict parsing — structurally invalid fails explicitly, never fabricated). */
 export function useWorkflowLibrary(): WorkflowLibraryState {
   const ctx = usePluginContext()
+  const locale = usePluginLocale()
   const [items, setItems] = useState<SavedWorkflowView[] | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   const [loading, setLoading] = useState(true)
@@ -58,7 +68,7 @@ export function useWorkflowLibrary(): WorkflowLibraryState {
       if (generation.current !== current) return
       const parsed = parseSavedWorkflowList(raw)
       if (parsed === undefined) {
-        setError('工作流目录返回结构不合法（动作返回非预期形状）')
+        setError(libListInvalid(locale))
       } else {
         setItems(parsed)
       }
@@ -68,7 +78,7 @@ export function useWorkflowLibrary(): WorkflowLibraryState {
     } finally {
       if (generation.current === current) setLoading(false)
     }
-  }, [ctx])
+  }, [ctx, locale])
 
   useEffect(() => {
     void reload()

@@ -1,22 +1,25 @@
 /**
- * builtin:workflow 插件 client 纯逻辑：工作流库（list/get/save 动作结果的
- * 严格解析、库运行 args 严格解析与「让 AI 修改」请求文案；零 React/DOM 依赖）。
+ * Pure logic for the builtin:workflow client: workflow library (strict
+ * parsing of list/get/save action results, strict args parsing for library
+ * runs and the "let the AI edit" request copy; zero React/DOM dependencies).
  */
+import { DEFAULT_HELM_LOCALE, type HelmLocale } from '@helm/plugin-client'
 import type { ConversationSummary } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { firstLineOf, inspectString } from './model-format.ts'
+import { libArgsInvalidJson, workflowEditDescriptionLine, workflowEditRequestLines } from './copy.ts'
 
 // ---------------------------------------------------------------------------
-// 工作流库（list/get/save 动作结果的严格解析与 args 严格解析）
+// Workflow library (strict parsing of list/get/save action results and args parsing)
 // ---------------------------------------------------------------------------
 
-/** 已保存工作流条目视图（与 SavedWorkflowSummary 同构；严格解析）。 */
+/** Saved workflow entry view (same shape as SavedWorkflowSummary; strictly parsed). */
 export interface SavedWorkflowView {
   name: string
   path?: string
-  /** 定义文件最后修改时间（epoch ms）。 */
+  /** Last modification time of the definition file (epoch ms). */
   updatedAt: number
-  /** 定义文件字节数。 */
+  /** Definition file size in bytes. */
   size: number
   metadataError?: string
   description?: string
@@ -24,17 +27,17 @@ export interface SavedWorkflowView {
   phases?: Array<{ title: string; detail?: string; model?: string }>
 }
 
-/** get 动作返回的完整定义视图（含只读源码）。 */
+/** Full definition view returned by the get action (including the read-only source). */
 export interface SavedWorkflowDetailView extends SavedWorkflowView {
   script: string
 }
 
-/** 非负安全整数校验（文件事实字段类型边界）。 */
+/** Non-negative safe integer guard (type boundary for file fact fields). */
 function nonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
 
-/** 条目解析：条目非对象、缺 name、updatedAt/size 非非负安全整数、phases 非法时 undefined。 */
+/** Entry parsing: non-object entry, missing name, non-safe-integer updatedAt/size, or invalid phases → undefined. */
 function parseSavedWorkflowEntry(item: unknown): SavedWorkflowView | undefined {
   if (item === null || typeof item !== 'object' || Array.isArray(item)) return undefined
   const record = item as Record<string, unknown>
@@ -75,11 +78,14 @@ function parseSavedWorkflowEntry(item: unknown): SavedWorkflowView | undefined {
 }
 
 /**
- * 严格解析 list 动作结果（非法形状返回 undefined，不伪造列表）。
+ * Strictly parse the list action result (invalid shapes return undefined, no
+ * fabricated lists).
  *
- * 边界收紧：条目非对象、缺 name、updatedAt/size 缺失或非非负安全整数、
- * phases 非数组或含非法阶段项时整体返回 undefined——不把异常条目静默丢弃
- * 成看似完整的列表（缺项列表会误导用户以为目录里只有这些工作流）。
+ * Tightened boundaries: a non-object entry, a missing name, missing or
+ * non-safe-integer updatedAt/size, or a phases array with invalid phase items
+ * rejects the whole payload — invalid entries are never silently dropped into
+ * a seemingly complete list (a partial list would mislead users into thinking
+ * the catalog only contains these workflows).
  */
 export function parseSavedWorkflowList(raw: unknown): SavedWorkflowView[] | undefined {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
@@ -95,8 +101,10 @@ export function parseSavedWorkflowList(raw: unknown): SavedWorkflowView[] | unde
 }
 
 /**
- * 严格解析 get 动作结果（结构非法返回 undefined，不猜测）：workflow 必需且
- * 含非空 script（只读源码）；其余字段与列表条目同标准。
+ * Strictly parse the get action result (structurally invalid returns
+ * undefined, never guessed): workflow is required and must contain a
+ * non-empty script (read-only source); other fields follow the list-entry
+ * standard.
  */
 export function parseWorkflowDetail(raw: unknown): SavedWorkflowDetailView | undefined {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
@@ -108,7 +116,7 @@ export function parseWorkflowDetail(raw: unknown): SavedWorkflowDetailView | und
   return { ...entry, script }
 }
 
-/** 严格解析 save 动作结果：created 必需 boolean，workflow 必需合法摘要。 */
+/** Strictly parse the save action result: created requires a boolean, workflow a valid summary. */
 export function parseWorkflowSaveResult(raw: unknown): { created: boolean; workflow: SavedWorkflowView } | undefined {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
   const record = raw as Record<string, unknown>
@@ -118,35 +126,42 @@ export function parseWorkflowSaveResult(raw: unknown): { created: boolean; workf
   return { created: record['created'], workflow }
 }
 
-/** 内联 run 一键保存为工作流定义的可用判定：非 subagent 且未按已保存定义发起。 */
+/** One-click save availability for an inline run: non-subagent and not started from a saved definition. */
 export function canSaveRunAsWorkflow(run: Pick<WorkflowRunSummary, 'kind' | 'savedName'>): boolean {
   return run.kind !== 'subagent' && run.savedName === undefined
 }
 
-/** 「让 AI 修改」请求文案：只描述目标与能力入口，不在 Web 内伪造编辑。 */
-export function buildWorkflowEditRequest(name: string, detail?: { description?: string }): string {
-  const lines = [
-    `请修改已保存工作流 ${name}（跨会话可复用资产）：`,
-    '- 先用 workflow get 动作（或 helm workflows get ' + name + ' --json）读取当前源码与元数据；',
-    '- 按需求修改后用 workflow save 动作（helm workflows save <文件或源码> --name ' + name + ' --overwrite）写回；保存前校验会自动做语法预检，默认拒绝覆盖、需显式 overwrite；',
-    detail?.description !== undefined ? `- 当前描述：${firstLineOf(detail.description, 120)}` : undefined,
-    '- 修改完成后告诉我保存结果与变化点，不要静默改动。',
-  ].filter((line): line is string => line !== undefined)
-  return lines.join('\n')
+/**
+ * "Let the AI edit" request copy: describes the target and capability entry
+ * points only — no fake editing inside the Web UI.
+ */
+export function buildWorkflowEditRequest(
+  name: string,
+  detail?: { description?: string },
+  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+): string {
+  const descriptionLine =
+    detail?.description !== undefined
+      ? workflowEditDescriptionLine(firstLineOf(detail.description, 120), locale)
+      : undefined
+  return workflowEditRequestLines(name, descriptionLine, locale).join('\n')
 }
 
-/** 库运行 args 输入严格解析：空串无 args；非空必须为合法 JSON（绝不静默当字符串透传）。 */
-export function parseWorkflowArgsInput(text: string): { ok: true; args?: unknown } | { ok: false; error: string } {
+/** Strict args parsing for library runs: blank means no args; non-blank must be valid JSON (never silently passed through as a string). */
+export function parseWorkflowArgsInput(
+  text: string,
+  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+): { ok: true; args?: unknown } | { ok: false; error: string } {
   const trimmed = text.trim()
   if (trimmed === '') return { ok: true }
   try {
     return { ok: true, args: JSON.parse(trimmed) as unknown }
   } catch (error) {
-    return { ok: false, error: `args 需为合法 JSON：${error instanceof Error ? error.message : String(error)}` }
+    return { ok: false, error: libArgsInvalidJson(error instanceof Error ? error.message : String(error), locale) }
   }
 }
 
-/** 库全屏视图检索：按名称 / 描述 / 适用场景小写包含匹配（query 为已归一小写词）。 */
+/** Library fullscreen view search: lowercase contains match over name / description / when-to-use (query is a normalized lowercase term). */
 export function filterSavedWorkflows(items: SavedWorkflowView[], query: string): SavedWorkflowView[] {
   if (query === '') return items
   return items.filter(
@@ -157,7 +172,7 @@ export function filterSavedWorkflows(items: SavedWorkflowView[], query: string):
   )
 }
 
-/** 运行目标会话选项：顶层会话优先（子代理会话不出现在选择器里），最近更新前 50 条。 */
+/** Run target conversation options: top-level conversations first (subagent conversations never appear in the picker), 50 most recently updated. */
 export function buildWorkflowRunTargetOptions(
   conversations: ReadonlyArray<Pick<ConversationSummary, 'id' | 'parentConversationId' | 'updatedAt' | 'title' | 'profileId'>>,
 ): Array<{ value: string; label: string }> {

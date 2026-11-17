@@ -1,50 +1,55 @@
 /**
- * builtin:workflow 后台结算汇报（helm.input + meta.renderer 精确接管）纯解析层。
+ * Pure parsing layer for builtin:workflow background settlement reports
+ * (precise takeover of helm.input via meta.renderer).
  *
- * 既有正文契约：单行引导语 + '\n' + report JSON（deliverBackgroundReport 生成）。
- * 本模块按首个换行分离并严格校验实际读取展示/导航的字段（runId 与 meta 一致、
- * 合法终态、execution 正整数会话 ID 等）；result 是业务值——null/false/0/空串
- * 均合法，只按键存在性判别，绝不用 truthy 丢弃。数据损坏时返回 invalid 视图
- * （显式“格式异常”+ 保留原文供展开复制），不伪造成功。
+ * Existing body contract: a single-line lead + '\n' + report JSON (produced
+ * by deliverBackgroundReport). This module splits at the first newline and
+ * strictly validates the fields actually read for display/navigation (runId
+ * consistent with meta, a legal terminal status, positive-integer execution
+ * conversation ids, ...); result is a business value — null/false/0/'' are all
+ * legal, detection is by key presence only, never dropped via truthiness.
+ * Corrupted data returns an invalid view (an explicit "malformed" marker plus
+ * the raw text preserved for expanding/copying) — success is never faked.
  */
 
+import { DEFAULT_HELM_LOCALE, type HelmLocale } from '@helm/plugin-client'
 import type { ConversationEntry } from '@helm/protocol'
 import { extractCleanPreviewLine, summarizeReadableJson } from './model-format.ts'
 
-/** 汇报种类（meta.kind；决定卡片标题）。 */
+/** Report kind (meta.kind; decides the card title). */
 export type BackgroundReportKind = 'subagent_report' | 'workflow_report'
 
-/** 终态（deliverBackgroundReport 仅在 run 终态后投递；running 不属汇报）。 */
+/** Terminal statuses (deliverBackgroundReport only delivers after a run reaches a terminal state; running is not a report). */
 export type BackgroundReportStatus = 'completed' | 'failed' | 'aborted'
 
-/** 投递时其余在途运行快照（仅展示，不驱动任何逻辑）。 */
+/** Snapshot of other in-flight runs at delivery time (display only, drives no logic). */
 export interface BackgroundReportOtherTask {
   runId: string
   name: string
   kind: string
 }
 
-/** 有效汇报视图：entry 自身不变快照，不订阅 runsDoc。 */
+/** Valid report view: an immutable snapshot of the entry itself; does not subscribe to runsDoc. */
 export interface BackgroundReportView {
   invalid: false
   kind: BackgroundReportKind
   runId: string
   status: BackgroundReportStatus
-  /** 投递时间戳（epoch ms，来自 entry.createdAt 或 data.createdAt）。 */
+  /** Delivery timestamp (epoch ms, from entry.createdAt or data.createdAt). */
   createdAt?: number
-  /** report 是否携带 result 键（值可为任何 JSON 值，含 null/false/0/''）。 */
+  /** Whether the report carries a result key (the value may be any JSON value, including null/false/0/''). */
   hasResult: boolean
   result: unknown
-  /** 失败/中止时的错误摘要原文（可能为空串）。 */
+  /** Raw error digest on failure/abort (may be an empty string). */
   error: string | undefined
-  /** execution.conversationId（正整数才给导航入口；无 execution 或非法时 undefined）。 */
+  /** execution.conversationId (navigation entry only for positive integers; undefined without execution or when invalid). */
   executionConversationId: number | undefined
   otherRunningTasks: BackgroundReportOtherTask[]
-  /** 完整正文原文（复制用，不重复进 meta）。 */
+  /** Full raw body text (for copying; not duplicated into meta). */
   rawText: string
 }
 
-/** 损坏汇报视图：仍允许展开查看与复制原文。 */
+/** Corrupted report view: still expandable with the raw text copyable. */
 export interface BackgroundReportInvalidView {
   invalid: true
   createdAt?: number
@@ -71,8 +76,9 @@ function extractEntryCreatedAt(entry: ConversationEntry, data: Record<string, un
 }
 
 /**
- * 解析汇报 entry。校验失败（形状/JSON/runId 不一致/非法终态等）返回 invalid，
- * 调用方不得把 invalid 当成功渲染。
+ * Parse a report entry. Validation failures (shape/JSON/runId
+ * mismatch/illegal terminal status, ...) return invalid; callers must never
+ * render invalid as success.
  */
 export function parseBackgroundReportEntry(entry: ConversationEntry): BackgroundReportParse {
   const data = entry.data
@@ -88,7 +94,8 @@ export function parseBackgroundReportEntry(entry: ConversationEntry): Background
   const backgroundRunId = typeof m.backgroundRunId === 'string' ? m.backgroundRunId : undefined
   if (kind === undefined || backgroundRunId === undefined || backgroundRunId === '') return invalidOf(entry)
 
-  // 正文契约：首行引导语 + 换行 + JSON。无换行即不符合契约。
+  // Body contract: first line is the lead + newline + JSON. No newline means
+  // the contract is violated.
   const newlineIndex = d.text.indexOf('\n')
   if (newlineIndex < 0) return invalidOf(entry)
   let report: unknown
@@ -104,7 +111,8 @@ export function parseBackgroundReportEntry(entry: ConversationEntry): Background
   if (typeof r.status !== 'string' || !TERMINAL_STATUSES.has(r.status)) return invalidOf(entry)
   if (r.error !== undefined && typeof r.error !== 'string') return invalidOf(entry)
 
-  // execution：仅消费导航所需 conversationId（正整数）；其余字段原样保留在原文。
+  // execution: only the navigation-relevant conversationId is consumed
+  // (positive integer); other fields stay preserved in the raw text.
   let executionConversationId: number | undefined
   if (r.execution !== undefined) {
     if (r.execution === null || typeof r.execution !== 'object' || Array.isArray(r.execution)) {
@@ -117,7 +125,8 @@ export function parseBackgroundReportEntry(entry: ConversationEntry): Background
     }
   }
 
-  // otherRunningTasks：投递时快照，逐项严格校验展示字段。
+  // otherRunningTasks: snapshot at delivery time; display fields strictly
+  // validated per item.
   const otherRunningTasks: BackgroundReportOtherTask[] = []
   if (r.otherRunningTasks !== undefined) {
     if (!Array.isArray(r.otherRunningTasks)) return invalidOf(entry)
@@ -162,13 +171,17 @@ function invalidOf(entry: ConversationEntry): BackgroundReportInvalidView {
   }
 }
 
-/** 失败、中止或格式异常汇报默认自动展开，确保异常一眼可见。 */
+/** Failed, aborted or malformed reports default to expanded so anomalies are visible at a glance. */
 export function isBackgroundReportDefaultOpen(view: BackgroundReportParse): boolean {
   return view.invalid || view.status === 'failed' || view.status === 'aborted'
 }
 
-/** 折叠态单行预览：清洗 Markdown 与纯标题行；JSON 提取可读键值摘要；失败优先错误。 */
-export function backgroundReportPreview(view: BackgroundReportView, maxChars: number): string {
+/** Collapsed one-line preview: cleans Markdown and pure heading lines; extracts readable key/value summaries from JSON; errors win on failure. */
+export function backgroundReportPreview(
+  view: BackgroundReportView,
+  maxChars: number,
+  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+): string {
   if ((view.status === 'failed' || view.status === 'aborted') && view.error !== undefined && view.error.trim() !== '') {
     return extractCleanPreviewLine(view.error, maxChars)
   }
@@ -176,5 +189,5 @@ export function backgroundReportPreview(view: BackgroundReportView, maxChars: nu
   if (typeof view.result === 'string') {
     return extractCleanPreviewLine(view.result, maxChars)
   }
-  return summarizeReadableJson(view.result, maxChars)
+  return summarizeReadableJson(view.result, maxChars, locale)
 }

@@ -1,22 +1,41 @@
 /**
- * 工作流库全屏视图组件（screen 扩展点）：一级主舞台卡片网格 + 右侧详情抽屉；
- * 只读浏览 / 查看源码 / 运行 / 删除 / 刷新，无源码编辑。
- * 工作台紧凑运行入口见 WorkflowLibrarySection；卡片 / 详情抽屉见
- * WorkflowLibraryCard / WorkflowLibraryDrawer。
+ * Workflow library fullscreen view component (screen extension point):
+ * first-level main-stage card grid + right detail drawer; read-only browsing
+ * / source viewing / running / deleting / refreshing, no source editing. The
+ * workbench's compact run entry lives in WorkflowLibrarySection; the card /
+ * detail drawer live in WorkflowLibraryCard / WorkflowLibraryDrawer.
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ScreenProps } from '@helm/protocol'
+import { resolveLocalizedText, usePluginLocale } from '@helm/plugin-client'
 import { useWorkflowLibrary } from './hooks.ts'
 import { SPIN } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { WorkflowLibraryCard } from './WorkflowLibraryCard.tsx'
 import { WorkflowLibraryDrawer } from './WorkflowLibraryDrawer.tsx'
 import { filterSavedWorkflows } from './model-library.ts'
+import {
+  LIB_EMPTY,
+  LIB_LOAD_FAILED,
+  LIB_LOADING,
+  LIB_NO_MATCH,
+  LIB_REFRESH,
+  LIB_REFRESH_TITLE,
+  LIB_RETRY,
+  LIB_SCREEN_SUBTITLE,
+  LIB_SCREEN_TITLE,
+  LIB_SEARCH_ARIA,
+  LIB_SEARCH_CLEAR_ARIA,
+  LIB_SEARCH_CLEAR_TITLE,
+  LIB_SEARCH_PLACEHOLDER,
+} from './copy.ts'
 
 /**
- * 选中项与搜索词写入 sp.* 深链参数（setParams 唯一导航机制）；inlineDrawer
- * 供宿主内嵌场景与 SSR/测试环境内联渲染抽屉（与 AppCenterScreen 同款契约）。
+ * Selected item and search term are written into sp.* deep-link params
+ * (setParams as the sole navigation mechanism); inlineDrawer lets host-inline
+ * scenarios and SSR/test environments render the drawer inline (same
+ * contract as AppCenterScreen).
  */
 export interface WorkflowLibraryScreenProps extends ScreenProps {
   inlineDrawer?: boolean
@@ -24,6 +43,7 @@ export interface WorkflowLibraryScreenProps extends ScreenProps {
 
 export function WorkflowLibraryScreen(props: WorkflowLibraryScreenProps): ReactNode {
   const { items, error, loading, reload } = useWorkflowLibrary()
+  const locale = usePluginLocale()
   const queryParam = props.params['q'] ?? ''
   const [queryDraft, setQueryDraft] = useState(queryParam)
   useEffect(() => {
@@ -43,15 +63,15 @@ export function WorkflowLibraryScreen(props: WorkflowLibraryScreenProps): ReactN
       <div className="screen-header">
         <div className="screen-title">
           <Icon name="terminal" size={15} />
-          <span>工作流库</span>
+          <span>{resolveLocalizedText(LIB_SCREEN_TITLE, locale)}</span>
         </div>
         <span className="screen-subtitle">
-          {`跨会话可复用编排资产 ${items?.length ?? 0} 个${props.isSplit ? ' · 分屏' : ''}`}
+          {LIB_SCREEN_SUBTITLE(items?.length ?? 0, props.isSplit, locale)}
         </span>
         <div className="stack-row">
-          <button type="button" className="btn btn-sm" disabled={loading} onClick={() => void reload()} title="重新读取工作流目录">
+          <button type="button" className="btn btn-sm" disabled={loading} onClick={() => void reload()} title={resolveLocalizedText(LIB_REFRESH_TITLE, locale)}>
             <Icon name="rotate-cw" size={12} className={loading ? SPIN : undefined} />
-            刷新
+            {resolveLocalizedText(LIB_REFRESH, locale)}
           </button>
         </div>
       </div>
@@ -63,21 +83,21 @@ export function WorkflowLibraryScreen(props: WorkflowLibraryScreenProps): ReactN
             <input
               type="text"
               className="input"
-              placeholder="搜索名称、描述或适用场景…"
+              placeholder={resolveLocalizedText(LIB_SEARCH_PLACEHOLDER, locale)}
               value={queryDraft}
               onChange={(e) => {
                 const value = e.target.value
                 setQueryDraft(value)
                 props.setParams({ q: value === '' ? undefined : value })
               }}
-              aria-label="搜索工作流"
+              aria-label={resolveLocalizedText(LIB_SEARCH_ARIA, locale)}
             />
             {queryDraft !== '' ? (
               <button
                 type="button"
                 className="btn btn-ghost btn-xs"
-                title="清空搜索"
-                aria-label="清空搜索"
+                title={resolveLocalizedText(LIB_SEARCH_CLEAR_TITLE, locale)}
+                aria-label={resolveLocalizedText(LIB_SEARCH_CLEAR_ARIA, locale)}
                 onClick={() => {
                   setQueryDraft('')
                   props.setParams({ q: undefined })
@@ -89,20 +109,20 @@ export function WorkflowLibraryScreen(props: WorkflowLibraryScreenProps): ReactN
           </div>
         </div>
 
-        {loading && items === undefined ? <div className="workflow-phase-empty">工作流目录读取中…</div> : null}
+        {loading && items === undefined ? <div className="workflow-phase-empty">{resolveLocalizedText(LIB_LOADING, locale)}</div> : null}
         {error !== undefined ? (
           <div className="callout callout--error">
-            <div>读取工作流目录失败：{error}</div>
-            <button type="button" className="btn btn-xs" onClick={() => void reload()}>重试</button>
+            <div>{LIB_LOAD_FAILED(error, locale)}</div>
+            <button type="button" className="btn btn-xs" onClick={() => void reload()}>{resolveLocalizedText(LIB_RETRY, locale)}</button>
           </div>
         ) : null}
         {items !== undefined && items.length === 0 && error === undefined ? (
           <div className="workflow-phase-empty">
-            暂无已保存工作流。在会话中用 SubagentWorkflow 内联运行后点「保存为工作流」，或让 AI / CLI 调用 workflow save 保存定义。
+            {resolveLocalizedText(LIB_EMPTY, locale)}
           </div>
         ) : null}
         {filtered !== undefined && filtered.length === 0 && query !== '' ? (
-          <div className="workflow-phase-empty">未找到匹配「{queryDraft.trim()}」的工作流</div>
+          <div className="workflow-phase-empty">{LIB_NO_MATCH(queryDraft.trim(), locale)}</div>
         ) : null}
 
         {filtered !== undefined && filtered.length > 0 ? (

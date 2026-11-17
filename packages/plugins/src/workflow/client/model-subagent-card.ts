@@ -1,7 +1,9 @@
 /**
- * builtin:workflow 插件 client 纯逻辑：subagent 卡片状态徽章、任务标题、
- * 总耗时与第 2 层动态副栏摘要（原 subagent-live-model.ts；零 React/DOM 依赖）。
+ * Pure logic for the builtin:workflow client: subagent card status badges,
+ * task titles, total duration and the second-layer dynamic subline (formerly
+ * subagent-live-model.ts; zero React/DOM dependencies).
  */
+import { DEFAULT_HELM_LOCALE, resolveLocalizedText, type HelmLocale } from '@helm/plugin-client'
 import type {
   AskSpec,
   ConversationEntry,
@@ -12,8 +14,25 @@ import type { WorkflowRunSummary } from '../../contracts.js'
 import { extractCleanPreviewLine, firstLineOf } from './model-format.ts'
 import { parseSubagentExecutionInfo, type SubagentParentToolSummary } from './model-subagent-link.ts'
 import { buildSubagentStreamLines, formatSemanticToolAction } from './model-subagent-stream.ts'
+import {
+  runFailureFallbackLabel as runFailureFallbackCopy,
+  SNIPPET_AWAITING_APPROVAL,
+  SNIPPET_AWAITING_HUMAN,
+  SNIPPET_ERROR,
+  SNIPPET_FAILED,
+  SNIPPET_GATE_CHECK,
+  SNIPPET_LOAD_FAILED,
+  SNIPPET_OUTPUT,
+  SNIPPET_PARALLEL_MORE,
+  SNIPPET_STARTING,
+  SNIPPET_SUBAGENT_ERROR,
+  SNIPPET_THINKING,
+  snippetParallelTools,
+  subagentBadgeLabel,
+  type SubagentBadgeLabelKey,
+} from './copy.ts'
 
-/** 子会话卡片状态。 */
+/** Subagent card status. */
 export type SubagentCardStatus = 'working' | 'blocked' | 'error' | 'done' | 'pending'
 
 export interface SubagentBadge {
@@ -22,45 +41,52 @@ export interface SubagentBadge {
   badge: string
 }
 
-/** 徽章 / 错误文案判定所需的关联 run 最小视图。 */
+/** Minimal linked-run view needed for badge / failure copy decisions. */
 export type SubagentRunView = Pick<WorkflowRunSummary, 'status' | 'syncForeground' | 'detachedAt'>
 
 /**
- * 真后台 run：background 启动或已 detach（转后台即视为后台 run）；
- * 前台同步（syncForeground 且未 detach）只是父回合工具调用阻塞等待，
- * 与同卡「转入后台」按钮语义一致，文案不得自称「后台」。
+ * True background run: background-started or already detached (detaching to
+ * the background makes it a background run); a foreground-sync run
+ * (syncForeground and not detached) is just the parent turn's tool call
+ * blocking — same semantics as the card's "Move to background" button, so its
+ * copy must never claim to be background.
  */
 function isTrueBackgroundRun(run: SubagentRunView): boolean {
   return !(run.syncForeground === true && run.detachedAt === undefined)
 }
 
 /**
- * 关联 run 失败兜底文案：前台同步（未 detach）显示「执行失败」，
- * 真后台（background 启动或已 detach）保持「后台执行失败」。
+ * Failure fallback copy for a linked run: foreground-sync (not detached) says
+ * plain execution failed, true background (background-started or detached)
+ * keeps the explicit background wording.
  */
-export function runFailureFallbackLabel(run: SubagentRunView): string {
-  return isTrueBackgroundRun(run) ? '后台执行失败' : '执行失败'
+export function runFailureFallbackLabel(run: SubagentRunView, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+  return runFailureFallbackCopy(isTrueBackgroundRun(run), locale)
 }
 
 /**
- * 卡片徽章状态：优先真实 summary.status，无 summary 时才以父工具 toolStatus 兜底；
- * 关联 run 状态必须参与判定——run 仍在 running 时绝不提前显示「已完成」；
- * 仅真后台 run（background 启动或已 detach）自称「后台执行中/后台运行中」，
- * 前台同步 run 一律「执行中」（run running 而子会话 idle/done 的 gate/结算期
- * 亦保持 working，不假完成）。
+ * Card badge status: the real summary.status wins; the parent tool toolStatus
+ * is only a fallback when there is no summary. The linked run status must
+ * take part — while the run is still running, never show "Done" early. Only a
+ * true background run (background-started or detached) may say "background";
+ * a foreground-sync run is always plain running (the gate/settlement window
+ * where the run is running but the subagent is idle/done also stays working —
+ * never fake completion).
  */
 export function subagentBadge(
   summaryStatus: string | undefined,
   toolStatus: 'running' | 'done' | 'error' | 'unknown',
   run?: SubagentRunView,
   options?: { isBackgroundHandle?: boolean; handleStatus?: string },
+  locale: HelmLocale = DEFAULT_HELM_LOCALE,
 ): SubagentBadge {
   const trueBackground = run !== undefined && isTrueBackgroundRun(run)
-  if (summaryStatus === 'blocked') return { status: 'blocked', label: '等待审批', badge: 'badge-warn' }
+  const label = (key: SubagentBadgeLabelKey): string => subagentBadgeLabel(key, locale)
+  if (summaryStatus === 'blocked') return { status: 'blocked', label: label('blocked'), badge: 'badge-warn' }
   if (summaryStatus === 'working') {
     return {
       status: 'working',
-      label: trueBackground ? '后台执行中' : '执行中',
+      label: trueBackground ? label('workingBackground') : label('working'),
       badge: 'badge-accent',
     }
   }
@@ -68,28 +94,32 @@ export function subagentBadge(
     run?.status === 'running' &&
     (summaryStatus === 'idle' || summaryStatus === 'done' || summaryStatus === undefined)
   ) {
-    return { status: 'working', label: trueBackground ? '后台运行中' : '执行中', badge: 'badge-accent' }
+    return { status: 'working', label: trueBackground ? label('workingBackground') : label('working'), badge: 'badge-accent' }
   }
-  if (run?.status === 'failed') return { status: 'error', label: '异常', badge: 'badge-err' }
-  if (run?.status === 'aborted') return { status: 'error', label: '已中止', badge: 'badge-warn' }
-  if (summaryStatus === 'error') return { status: 'error', label: '异常', badge: 'badge-err' }
+  if (run?.status === 'failed') return { status: 'error', label: label('error'), badge: 'badge-err' }
+  if (run?.status === 'aborted') return { status: 'error', label: label('aborted'), badge: 'badge-warn' }
+  if (summaryStatus === 'error') return { status: 'error', label: label('error'), badge: 'badge-err' }
   if (summaryStatus === 'done' || summaryStatus === 'idle') {
-    if (toolStatus === 'running') return { status: 'working', label: '执行中', badge: 'badge-accent' }
-    if (toolStatus === 'error') return { status: 'error', label: '异常', badge: 'badge-err' }
-    return { status: 'done', label: '已完成', badge: 'badge-ok' }
+    if (toolStatus === 'running') return { status: 'working', label: label('working'), badge: 'badge-accent' }
+    if (toolStatus === 'error') return { status: 'error', label: label('error'), badge: 'badge-err' }
+    return { status: 'done', label: label('done'), badge: 'badge-ok' }
   }
   if (summaryStatus === undefined && run === undefined && options?.isBackgroundHandle === true && toolStatus === 'done') {
     return options.handleStatus === 'running'
-      ? { status: 'working', label: '后台运行中', badge: 'badge-accent' }
-      : { status: 'pending', label: '进行中', badge: 'badge-neutral' }
+      ? { status: 'working', label: label('workingBackground'), badge: 'badge-accent' }
+      : { status: 'pending', label: label('pending'), badge: 'badge-neutral' }
   }
-  if (toolStatus === 'running') return { status: 'working', label: '执行中', badge: 'badge-accent' }
-  if (toolStatus === 'error') return { status: 'error', label: '异常', badge: 'badge-err' }
-  if (toolStatus === 'done') return { status: 'done', label: '已完成', badge: 'badge-ok' }
-  return { status: 'pending', label: '进行中', badge: 'badge-neutral' }
+  if (toolStatus === 'running') return { status: 'working', label: label('working'), badge: 'badge-accent' }
+  if (toolStatus === 'error') return { status: 'error', label: label('error'), badge: 'badge-err' }
+  if (toolStatus === 'done') return { status: 'done', label: label('done'), badge: 'badge-ok' }
+  return { status: 'pending', label: label('pending'), badge: 'badge-neutral' }
 }
 
-/** 卡片头部紧凑标题：仅当 summary.title 是有意义的用户标题时返回。 */
+/**
+ * Compact card heading title: only returns when summary.title is a meaningful
+ * user title. Kernel-generated defaults (`子代理 #N` / `子会话 #N`) are
+ * backend output conventions and deliberately stay unmatched here.
+ */
 export function compactCardTitle(title: string | undefined, childConversationId: number): string | undefined {
   if (title === undefined) return undefined
   const trimmed = title.trim()
@@ -98,14 +128,14 @@ export function compactCardTitle(title: string | undefined, childConversationId:
   return trimmed
 }
 
-/** spawn 注入的结构化输出契约样板。 */
+/** Structured-output contract boilerplate injected by spawn. */
 const STRUCTURED_OUTPUT_CONTRACT_RE = /<structured_output_contract>[\s\S]*?<\/structured_output_contract>/g
 
 function stripStructuredOutputContract(text: string): string {
   return text.replace(STRUCTURED_OUTPUT_CONTRACT_RE, '')
 }
 
-/** 文本最后一个非空行（去掉 # / - 引导前缀）。 */
+/** Last non-empty line of a text (dropping # / - leading prefixes). */
 function lastMeaningfulLine(text: string): string | undefined {
   const lines = text.split('\n')
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -116,7 +146,7 @@ function lastMeaningfulLine(text: string): string | undefined {
   return undefined
 }
 
-/** [subagent ...] 尾注行（内核 footer 元数据）。 */
+/** Trailing `[subagent ...]` footer line (kernel footer metadata). */
 const SUBAGENT_FOOTER_TAIL_RE = /\n*\[subagent [^\]]*\]\s*$/
 
 function stripSubagentFooter(text: string): string {
@@ -130,7 +160,7 @@ function inputEntryText(entry: ConversationEntry): string | undefined {
   return typeof text === 'string' && text.trim() !== '' ? text : undefined
 }
 
-/** 提取最近一轮 helm.input 的发起时间戳（仅真实记录值，不伪造）。 */
+/** Extract the started-at timestamp of the latest helm.input turn (recorded values only, never fabricated). */
 export function latestTurnStartedAt(entries: ReadonlyArray<ConversationEntry> | undefined): number | undefined {
   if (entries === undefined) return undefined
   for (let i = entries.length - 1; i >= 0; i--) {
@@ -148,7 +178,7 @@ export function latestTurnStartedAt(entries: ReadonlyArray<ConversationEntry> | 
   return undefined
 }
 
-/** 卡片头部任务标题：用户标题 > 父工具 prompt > 后台 run 首节点 label / prompt > 首条 helm.input。 */
+/** Card heading task title: user title > parent tool prompt > first background run node label / prompt > first helm.input. */
 export function resolveSubagentTaskTitle(
   summary: ConversationSummary | undefined,
   childConversationId: number,
@@ -187,19 +217,22 @@ export function resolveSubagentTaskTitle(
 }
 
 /**
- * 卡片总耗时：仅以真实记录的边界计时——本次父工具调用 startedAt/durationMs、
- * 后台 run createdAt / 首节点 durationMs。自身 working / blocked（在途，含等待
- * 审批）有时钟则随 nowMs 动态推进；其余（含后代仍在跑而自身已结算）定格在
- * 自身持久化 duration，不用会话 createdAt 伪造一次 resume 的总耗时；
- * 当 toolSummary.resultText 仅是后台派发句柄（runId 存在）且 backgroundRun
- * 尚未解析到终态耗时时，严禁回退读取派发工具的 ~34ms durationMs（如实省略）。
+ * Card total duration: only from real recorded boundaries — this parent tool
+ * call's startedAt/durationMs, or the background run's createdAt / first-node
+ * durationMs. While working / blocked (in flight, including awaiting
+ * approval) the clock advances with nowMs; otherwise (including descendants
+ * still running after the card itself settled) it freezes at the persisted
+ * duration — the conversation createdAt never fabricates a resume's total.
+ * When toolSummary.resultText is only a background dispatch handle (runId
+ * present) and the background run has no settled duration yet, never fall
+ * back to the ~34ms dispatch durationMs (omit honestly).
  */
 export function resolveSubagentElapsedMs(input: {
   backgroundRun?: WorkflowRunSummary
   toolSummary?: SubagentParentToolSummary
   startedAt?: number
   nowMs?: number
-  /** 自身有效状态：working / blocked 视为在途动态计时，其余定格。 */
+  /** Effective self status: working / blocked count as in-flight dynamic timing, the rest freeze. */
   status?: SubagentCardStatus
 }): number | undefined {
   if (input.status === 'working' || input.status === 'blocked') {
@@ -218,7 +251,8 @@ export function resolveSubagentElapsedMs(input: {
     const elapsed = nodeDuration ?? input.backgroundRun.updatedAt - input.backgroundRun.createdAt
     return elapsed !== undefined && Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : undefined
   }
-  // 后台运行句柄返回时 toolSummary.durationMs 只是派发确认耗时（~34ms），绝不冒充任务总耗时。
+  // For a background dispatch handle the toolSummary.durationMs is just the
+  // dispatch confirmation (~34ms) — never present it as the task total.
   if (parseSubagentExecutionInfo(input.toolSummary?.resultText)?.runId !== undefined) {
     return undefined
   }
@@ -226,14 +260,14 @@ export function resolveSubagentElapsedMs(input: {
   return elapsed !== undefined && Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : undefined
 }
 
-/** 第 2 层动态副栏。 */
+/** Second-layer dynamic subline. */
 export interface SubagentHeaderSnippet {
   kind: 'tool' | 'thinking' | 'text' | 'doing' | 'blocked' | 'done' | 'error'
   tag?: string
   text: string
 }
 
-/** 从父工具 resultText 提取完成结论预览。 */
+/** Extract the completion conclusion preview from the parent tool resultText. */
 export function extractSubagentResultPreview(resultText: string | undefined): string | undefined {
   if (resultText === undefined) return undefined
   const trimmed = resultText.trim()
@@ -254,7 +288,7 @@ export function extractSubagentResultPreview(resultText: string | undefined): st
         return firstLineOf(JSON.stringify(parsed), 100)
       }
     } catch {
-      // 非 JSON：退回普通文本处理
+      // Not JSON: fall back to plain text handling.
     }
   }
   const stripped = stripSubagentFooter(trimmed)
@@ -263,7 +297,7 @@ export function extractSubagentResultPreview(resultText: string | undefined): st
   return cleaned !== '' ? cleaned : undefined
 }
 
-/** 从父工具 resultText 提取错误文本。 */
+/** Extract the error text from the parent tool resultText. */
 function errorTextFromToolSummary(toolSummary: SubagentParentToolSummary | undefined): string | undefined {
   if (toolSummary === undefined) return undefined
   const raw = toolSummary.resultText?.trim()
@@ -277,7 +311,7 @@ function errorTextFromToolSummary(toolSummary: SubagentParentToolSummary | undef
         }
       }
     } catch {
-      // 非 JSON：按文本处理
+      // Not JSON: treat as plain text.
     }
   }
   if (toolSummary.isError === true && raw !== undefined && raw !== '') {
@@ -287,9 +321,9 @@ function errorTextFromToolSummary(toolSummary: SubagentParentToolSummary | undef
   return undefined
 }
 
-/** 关联 run 失败时的错误文本（前台同步与真后台的兜底文案有别）。 */
-function backgroundRunError(backgroundRun: WorkflowRunSummary): string | undefined {
-  const fallback = runFailureFallbackLabel(backgroundRun)
+/** Error text for a failed linked run (foreground sync and true background have different fallback copy). */
+function backgroundRunError(backgroundRun: WorkflowRunSummary, locale: HelmLocale): string | undefined {
+  const fallback = runFailureFallbackLabel(backgroundRun, locale)
   if (backgroundRun.error !== undefined && backgroundRun.error.trim() !== '') {
     return firstLineOf(backgroundRun.error, 100)
   }
@@ -300,7 +334,7 @@ function backgroundRunError(backgroundRun: WorkflowRunSummary): string | undefin
   return fallback
 }
 
-/** 后台 run 产出的单行预览。 */
+/** One-line preview produced by a background run. */
 function backgroundRunResultPreview(backgroundRun: WorkflowRunSummary | undefined): string | undefined {
   if (backgroundRun === undefined) return undefined
   const nodeOutput = backgroundRun.nodes?.[0]?.output
@@ -310,7 +344,7 @@ function backgroundRunResultPreview(backgroundRun: WorkflowRunSummary | undefine
   return preview
 }
 
-/** entries 中最后一条报错工具输出或消息文本。 */
+/** Last erroring tool output or message text among entries. */
 function lastErrorLine(entries: ReadonlyArray<ConversationEntry> | undefined): string | undefined {
   if (entries === undefined) return undefined
   const latestInputIndex = entries.findLastIndex((entry) => entry.kind === 'helm.input')
@@ -328,7 +362,7 @@ function lastErrorLine(entries: ReadonlyArray<ConversationEntry> | undefined): s
   return undefined
 }
 
-/** entries 中最后一条 assistant 正文（剥离结构化输出契约样板与 Markdown 前缀）。 */
+/** Last assistant text among entries (structured-output contract boilerplate and Markdown prefixes stripped). */
 function lastAssistantText(entries: ReadonlyArray<ConversationEntry> | undefined): string | undefined {
   if (entries === undefined) return undefined
   const latestInputIndex = entries.findLastIndex((entry) => entry.kind === 'helm.input')
@@ -345,66 +379,81 @@ function lastAssistantText(entries: ReadonlyArray<ConversationEntry> | undefined
   return undefined
 }
 
-/** 第 2 层动态副栏推导（badgeStatus 分流；无有效文本时 undefined）。 */
-export function resolveSubagentHeaderSnippet(input: {
-  badgeStatus: SubagentCardStatus
-  summary?: ConversationSummary
-  live?: ConversationLive
-  entries?: ReadonlyArray<ConversationEntry>
-  pendingAsk?: Pick<AskSpec, 'title' | 'description'>
-  backgroundRun?: WorkflowRunSummary
-  toolSummary?: SubagentParentToolSummary
-  detailError?: string
-}): SubagentHeaderSnippet | undefined {
+/** Second-layer dynamic subline derivation (branched by badgeStatus; undefined when no valid text). */
+export function resolveSubagentHeaderSnippet(
+  input: {
+    badgeStatus: SubagentCardStatus
+    summary?: ConversationSummary
+    live?: ConversationLive
+    entries?: ReadonlyArray<ConversationEntry>
+    pendingAsk?: Pick<AskSpec, 'title' | 'description'>
+    backgroundRun?: WorkflowRunSummary
+    toolSummary?: SubagentParentToolSummary
+    detailError?: string
+  },
+  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+): SubagentHeaderSnippet | undefined {
   if (input.detailError !== undefined) {
-    return { kind: 'error', tag: '加载失败', text: firstLineOf(input.detailError, 100) }
+    return { kind: 'error', tag: resolveLocalizedText(SNIPPET_LOAD_FAILED, locale), text: firstLineOf(input.detailError, 100) }
   }
   if (input.badgeStatus === 'blocked') {
-    const text = input.pendingAsk?.title || input.pendingAsk?.description || input.summary?.doing || '等待人工确认'
-    return { kind: 'blocked', tag: '等待审批', text: firstLineOf(text, 100) }
+    const fallback = resolveLocalizedText(SNIPPET_AWAITING_HUMAN, locale)
+    const text = input.pendingAsk?.title || input.pendingAsk?.description || input.summary?.doing || fallback
+    return { kind: 'blocked', tag: resolveLocalizedText(SNIPPET_AWAITING_APPROVAL, locale), text: firstLineOf(text, 100) }
   }
   if (input.badgeStatus === 'error') {
     if (input.backgroundRun?.status === 'failed' || input.backgroundRun?.status === 'aborted') {
-      // 前台同步 run 失败不自称「后台」；真后台保持原文案。
+      // A foreground-sync run failure must not claim "background"; true
+      // background keeps the original copy.
       const failText = input.backgroundRun.status === 'aborted'
-        ? '已中止'
-        : runFailureFallbackLabel(input.backgroundRun)
+        ? subagentBadgeLabel('aborted', locale)
+        : runFailureFallbackLabel(input.backgroundRun, locale)
       return {
         kind: 'error',
         tag: failText,
-        text: backgroundRunError(input.backgroundRun) ?? failText,
+        text: backgroundRunError(input.backgroundRun, locale) ?? failText,
       }
     }
     const toolErr = errorTextFromToolSummary(input.toolSummary)
-    if (toolErr !== undefined) return { kind: 'error', tag: '失败', text: toolErr }
+    if (toolErr !== undefined) return { kind: 'error', tag: resolveLocalizedText(SNIPPET_FAILED, locale), text: toolErr }
     const entryErr = lastErrorLine(input.entries)
-    if (entryErr !== undefined) return { kind: 'error', tag: '异常', text: entryErr }
-    return { kind: 'error', tag: '异常', text: firstLineOf(input.summary?.doing || '子代理执行异常', 100) }
+    if (entryErr !== undefined) return { kind: 'error', tag: resolveLocalizedText(SNIPPET_ERROR, locale), text: entryErr }
+    return {
+      kind: 'error',
+      tag: resolveLocalizedText(SNIPPET_ERROR, locale),
+      text: firstLineOf(input.summary?.doing || resolveLocalizedText(SNIPPET_SUBAGENT_ERROR, locale), 100),
+    }
   }
   if (input.badgeStatus === 'working') {
     const runningTools = (input.live?.tools ?? []).filter((t) => t.status === 'running')
     if (runningTools.length === 1) {
-      const item = formatSemanticToolAction(runningTools[0]!.toolName, runningTools[0]!.input, input.summary?.cwd)
+      const item = formatSemanticToolAction(runningTools[0]!.toolName, runningTools[0]!.input, input.summary?.cwd, locale)
       return { kind: 'tool', tag: item.tag, text: item.text }
     }
     if (runningTools.length > 1) {
-      const items = runningTools.slice(0, 2).map((t) => formatSemanticToolAction(t.toolName, t.input, input.summary?.cwd))
-      const text = items.map((it) => `${it.tag} ${it.text}`).join(' · ') + (runningTools.length > 2 ? ' 等' : '')
-      return { kind: 'tool', tag: `并行 ${runningTools.length} 项`, text }
+      const items = runningTools.slice(0, 2).map((t) => formatSemanticToolAction(t.toolName, t.input, input.summary?.cwd, locale))
+      const more = resolveLocalizedText(SNIPPET_PARALLEL_MORE, locale)
+      const text = items.map((it) => `${it.tag} ${it.text}`).join(' · ') + (runningTools.length > 2 ? more : '')
+      return { kind: 'tool', tag: snippetParallelTools(runningTools.length, locale), text }
     }
     const textLine = input.live?.text !== undefined ? lastMeaningfulLine(input.live.text) : undefined
-    if (textLine !== undefined) return { kind: 'text', tag: '输出', text: firstLineOf(textLine, 100) }
+    if (textLine !== undefined) return { kind: 'text', tag: resolveLocalizedText(SNIPPET_OUTPUT, locale), text: firstLineOf(textLine, 100) }
     const thinkingLine = input.live?.thinking !== undefined ? lastMeaningfulLine(input.live.thinking) : undefined
-    if (thinkingLine !== undefined) return { kind: 'thinking', tag: '思考', text: firstLineOf(thinkingLine, 100) }
+    if (thinkingLine !== undefined) return { kind: 'thinking', tag: resolveLocalizedText(SNIPPET_THINKING, locale), text: firstLineOf(thinkingLine, 100) }
     if (
       input.backgroundRun?.status === 'running' &&
       (input.summary?.status === 'idle' || input.summary?.status === 'done') &&
       input.backgroundRun.nodes?.some((n) => n.gateCommand !== undefined && n.gateCommand !== '')
     ) {
       const gateCommand = input.backgroundRun.nodes.find((n) => n.gateCommand !== undefined && n.gateCommand !== '')?.gateCommand
-      if (gateCommand !== undefined) return { kind: 'doing', tag: 'Gate 验收', text: firstLineOf(gateCommand, 100) }
+      if (gateCommand !== undefined) {
+        return { kind: 'doing', tag: resolveLocalizedText(SNIPPET_GATE_CHECK, locale), text: firstLineOf(gateCommand, 100) }
+      }
     }
-    return { kind: 'doing', text: firstLineOf(input.summary?.doing || '正在启动子代理…', 100) }
+    return {
+      kind: 'doing',
+      text: firstLineOf(input.summary?.doing || resolveLocalizedText(SNIPPET_STARTING, locale), 100),
+    }
   }
   if (input.badgeStatus === 'done') {
     const fromRun = backgroundRunResultPreview(input.backgroundRun)

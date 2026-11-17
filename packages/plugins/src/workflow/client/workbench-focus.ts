@@ -1,9 +1,12 @@
 /**
- * builtin:workflow 插件内工作台运行定位总线（纯内存状态 + 订阅，零 React/DOM 依赖）。
+ * In-plugin workbench run focus bus for the builtin:workflow plugin (pure
+ * in-memory state + subscription, zero React/DOM dependencies).
  *
- * 用于时间线单行轨迹（WorkflowToolView / SubagentToolView 外部执行）或底部活动条
- * 点击后，精准通知 WorkflowWorkbenchPanel 打开并展开指定 run.id 的完整详情视图；
- * 若工作台尚未挂载则先缓存请求，待挂载首帧读取并消费，兼容 React StrictMode。
+ * After a timeline one-line trace (WorkflowToolView / SubagentToolView
+ * external run) or a bottom activity tray click, precisely notifies
+ * WorkflowWorkbenchPanel to open and expand the full detail view of a given
+ * run.id; if the workbench is not mounted yet the request is cached and
+ * consumed on the first mounted frame — compatible with React StrictMode.
  */
 
 export interface WorkbenchRunFocusRequest {
@@ -18,7 +21,7 @@ let pendingFocus: WorkbenchRunFocusRequest | undefined
 let focusSeq = 0
 const listeners = new Set<FocusListener>()
 
-/** 请求右侧工作台聚焦并展开指定会话的某次 run.id。 */
+/** Request the right workbench to focus and expand a run.id of a conversation. */
 export function requestWorkbenchRunFocus(conversationId: number, runId: string): void {
   if (!Number.isSafeInteger(conversationId) || conversationId <= 0 || runId === '') return
   focusSeq += 1
@@ -29,19 +32,19 @@ export function requestWorkbenchRunFocus(conversationId: number, runId: string):
   }
 }
 
-/** 非破坏性读取当前会话是否存在待处理的 run 聚焦请求（SSR 安全）。 */
+/** Non-destructive peek at a pending run focus request for the current conversation (SSR safe). */
 export function peekWorkbenchRunFocus(conversationId: number): WorkbenchRunFocusRequest | undefined {
   return pendingFocus?.conversationId === conversationId ? pendingFocus : undefined
 }
 
-/** 清除当前会话（可选精确匹配 runId）的待处理聚焦请求。 */
+/** Clear the pending focus request of a conversation (optionally matching runId exactly). */
 export function clearWorkbenchRunFocus(conversationId: number, runId?: string): void {
   if (pendingFocus === undefined || pendingFocus.conversationId !== conversationId) return
   if (runId !== undefined && pendingFocus.runId !== runId) return
   pendingFocus = undefined
 }
 
-/** 订阅后续聚焦请求（供已挂载的 WorkflowWorkbenchPanel 实时跳转）。 */
+/** Subscribe to later focus requests (for a mounted WorkflowWorkbenchPanel to jump live). */
 export function subscribeWorkbenchRunFocus(listener: FocusListener): () => void {
   listeners.add(listener)
   return () => {

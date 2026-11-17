@@ -1,10 +1,15 @@
 /**
- * builtin:workflow subagent 工具调用时间线单行渲染器：
- * - 与宿主 TimelineRows.tsx 的 26px `.trace-row` 同构，不在主时间线堆叠大卡片。
- * - 校验 `isLatestSubagentCallForTarget` 续接去重：仅最新调用响应在途状态与 `useToolActivity`，
- *   历史被后续 `resume` 接替的调用保持自身终态并标示「已在下文续接」。
- * - AskDoc 待审批事实优先于 `working`，避免子会话卡在等待授权时误标「执行中」。
- * - 后台子代理派发句柄在途阶段绝不将 ~34ms 派发确认耗时当成子会话总耗时展示。
+ * builtin:workflow subagent tool call timeline one-line renderer:
+ * - structurally identical to the host TimelineRows.tsx 26px `.trace-row`; no
+ *   big cards stacked in the main timeline;
+ * - resume dedup via `isLatestSubagentCallForTarget`: only the latest call
+ *   reacts to in-flight state and `useToolActivity`; historical calls
+ *   superseded by a later `resume` keep their own terminal state and are
+ *   marked "Resumed below";
+ * - AskDoc pending-approval facts take priority over `working`, so a
+ *   subagent blocked on authorization is never mislabeled running;
+ * - the ~34ms dispatch confirmation of an in-flight background subagent
+ *   handle is never presented as the subagent's total duration.
  */
 import { useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -12,9 +17,11 @@ import type { ToolViewProps } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import {
   formatDurationMs,
+  resolveLocalizedText,
   useConversation,
   useConversations,
   usePluginContext,
+  usePluginLocale,
   useToolActivity,
 } from '@helm/plugin-client'
 import { useElapsedNowMs, usePluginSessionDoc } from './hooks.ts'
@@ -36,9 +43,22 @@ import {
 } from './models.ts'
 import type { SubagentBadge } from './models.ts'
 import { requestWorkbenchRunFocus } from './workbench-focus.ts'
+import {
+  SNIPPET_AWAITING_APPROVAL,
+  TRACE_COLLAPSE_DETAILS,
+  TRACE_EXPAND_DETAILS,
+  TRACE_EXTERNAL_TOOL_NAME,
+  TRACE_RESUMED_BELOW,
+  TRACE_SUBAGENT_CALL,
+  TRACE_SUBAGENT_TOOL_NAME,
+  traceSubagentWithId,
+  traceOpenChildLabel,
+  traceOpenWorkbenchRunLabel,
+} from './copy.ts'
 
 export function SubagentToolView(props: ToolViewProps): ReactNode {
   const ctx = usePluginContext()
+  const locale = usePluginLocale()
   const conversations = useConversations()
   const viewerConversationId = props.conversationId ?? ctx.conversationId
   const runsDoc = usePluginSessionDoc<{ runs: WorkflowRunSummary[] }>(
@@ -118,13 +138,13 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
     isLatest && (childConv.pendingAsks.length > 0 || (childSummary?.pendingAskCount ?? 0) > 0)
 
   const badge: SubagentBadge = hasPendingAsk
-    ? { status: 'blocked', label: '等待审批', badge: 'badge-warn' }
+    ? { status: 'blocked', label: resolveLocalizedText(SNIPPET_AWAITING_APPROVAL, locale), badge: 'badge-warn' }
     : isLatest
       ? subagentBadge(childSummary?.status, props.status, backgroundRun, {
           isBackgroundHandle: isBgHandle,
           handleStatus,
-        })
-      : subagentBadge(undefined, props.status)
+        }, locale)
+      : subagentBadge(undefined, props.status, undefined, undefined, locale)
 
   const isWorking =
     isLatest &&
@@ -156,7 +176,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
   const taskTitle =
     childId !== undefined
       ? resolveSubagentTaskTitle(childSummary, childId, parentToolSummary, backgroundRun, childConv.detail?.entries)
-      : cleanInlineMarkdown(rawPrompt ?? backgroundRun?.name ?? execMeta?.executionId ?? '子代理调用')
+      : cleanInlineMarkdown(rawPrompt ?? backgroundRun?.name ?? execMeta?.executionId ?? resolveLocalizedText(TRACE_SUBAGENT_CALL, locale))
 
   const fallbackStartedAt = parentToolSummary.startedAt ?? latestTurnStartedAt(childConv.detail?.entries)
   const elapsedMs = useMemo(() => {
@@ -204,7 +224,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
   const canOpenWorkbenchRun = !canOpenChildDrawer && targetWorkbenchRunId !== undefined
   const hasErrorText = props.status === 'error' && resultText !== undefined && resultText.trim() !== ''
 
-  const baseTitle = taskTitle ?? '子代理调用'
+  const baseTitle = taskTitle ?? resolveLocalizedText(TRACE_SUBAGENT_CALL, locale)
   const displaySummary =
     hasErrorText && resultText !== undefined
       ? `${baseTitle} · ${cleanInlineMarkdown(resultText.split(/\r?\n/, 1)[0] ?? '')}`
@@ -225,15 +245,17 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
     setDetailsOpen((prev) => !prev)
   }
 
-  const labelTarget = canOpenChildDrawer
-    ? `打开子会话 #${childId}`
-    : canOpenWorkbenchRun
-      ? `在工作台查看运行 ${targetWorkbenchRunId}`
-      : detailsOpen
-        ? '收起子代理调用详情'
-        : '展开子代理调用详情'
+  const labelTarget = canOpenChildDrawer && childId !== undefined
+    ? traceOpenChildLabel(childId, locale)
+    : canOpenWorkbenchRun && targetWorkbenchRunId !== undefined
+      ? traceOpenWorkbenchRunLabel(targetWorkbenchRunId, locale)
+      : resolveLocalizedText(detailsOpen ? TRACE_COLLAPSE_DETAILS : TRACE_EXPAND_DETAILS, locale)
 
-  const toolName = childId !== undefined ? `子代理 #${childId}` : execMeta?.executionId !== undefined ? '外部代理' : '子代理'
+  const toolName = childId !== undefined
+    ? traceSubagentWithId(childId, locale)
+    : execMeta?.executionId !== undefined
+      ? resolveLocalizedText(TRACE_EXTERNAL_TOOL_NAME, locale)
+      : resolveLocalizedText(TRACE_SUBAGENT_TOOL_NAME, locale)
   const profileBadge =
     childId !== undefined && childSummary?.profileId !== undefined && childSummary.profileId !== ''
       ? `@${childSummary.profileId}`
@@ -266,7 +288,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
         </span>
         <span className="trace-row-right workflow-trace-right">
           {!isLatest ? (
-            <span className="badge badge-neutral workflow-trace-badge">已在下文续接</span>
+            <span className="badge badge-neutral workflow-trace-badge">{resolveLocalizedText(TRACE_RESUMED_BELOW, locale)}</span>
           ) : null}
           {worktreeBranch !== undefined ? (
             <span className="badge badge-neutral workflow-trace-badge" title={execMeta?.worktree?.path}>

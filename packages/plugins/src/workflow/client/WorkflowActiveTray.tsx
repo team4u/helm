@@ -1,22 +1,38 @@
 /**
- * builtin:workflow 底部在途活动托盘（COMPOSER_DOCK_SLOT 扩展点）：
- * 仅当当前会话或其后代存在在途任务（running / blocked / 后台子代理）时
- * 渲染 32px 紧凑单行 HUD，支持展开并发列表与一键直达工作台/抽屉/中止/转后台；
- * 全部收敛结算后返回 null（0px，绝不占位）。
+ * builtin:workflow bottom in-flight activity tray (COMPOSER_DOCK_SLOT
+ * extension point): renders a compact 32px single-line HUD only when the
+ * current conversation or its descendants have in-flight tasks (running /
+ * blocked / background subagents), with an expandable concurrent list and
+ * one-click access to the workbench / drawer / abort / detach; returns null
+ * once everything settles (0px, never occupying space).
  */
 import { useEffect, useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ComposerScopeProps } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
-import { formatDurationMs, useConversations, usePluginContext } from '@helm/plugin-client'
+import { formatDurationMs, resolveLocalizedText, useConversations, usePluginContext, usePluginLocale } from '@helm/plugin-client'
 import { useElapsedNowMs, usePluginSessionDoc } from './hooks.ts'
 import { SPIN } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { buildActiveTraySummary } from './model-active-tray.ts'
 import { requestWorkbenchRunFocus } from './workbench-focus.ts'
+import {
+  ACTION_ABORT,
+  ACTION_DETACH,
+  actionDetachDone,
+  TRAY_COLLAPSE,
+  TRAY_DETAILS,
+  TRAY_EXPAND,
+  TRAY_REGION_ARIA,
+  TRAY_VIEW,
+  TRAY_WORKBENCH,
+  trayActionFailed,
+  trayCount,
+} from './copy.ts'
 
 export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNode {
   const ctx = usePluginContext()
+  const locale = usePluginLocale()
   const conversationId = props.conversation?.id ?? ctx.conversationId
   const runsDoc = usePluginSessionDoc<{ runs: WorkflowRunSummary[] }>(
     'runs',
@@ -39,13 +55,16 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
     () =>
       conversationId === undefined
         ? undefined
-        : buildActiveTraySummary({
-            rootConversationId: conversationId,
-            conversations,
-            runs: runsDoc?.runs ?? [],
-            viewer: { conversationId, ownedBy },
-          }),
-    [conversationId, conversations, runsDoc, ownedBy],
+        : buildActiveTraySummary(
+            {
+              rootConversationId: conversationId,
+              conversations,
+              runs: runsDoc?.runs ?? [],
+              viewer: { conversationId, ownedBy },
+            },
+            locale,
+          ),
+    [conversationId, conversations, runsDoc, ownedBy, locale],
   )
 
   const hasTimer = summary !== undefined && summary.items.length > 0 && summary.earliestStartedAt !== undefined
@@ -64,19 +83,17 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
         if (successMessage !== undefined) ctx.notify(successMessage)
       })
       .catch((err: unknown) => {
-        ctx.notify(`${actionId === 'abort' ? '中止' : '转入后台'}失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+        ctx.notify(
+          trayActionFailed(actionId === 'abort' ? 'abort' : 'detach', err instanceof Error ? err.message : String(err), locale),
+          'error',
+        )
       })
       .finally(() => {
         setBusyKey(undefined)
       })
   }
 
-  const countText =
-    summary.blockedCount > 0
-      ? summary.runningCount > 0
-        ? `${summary.blockedCount} 项待审批 · ${summary.runningCount} 项运行中`
-        : `${summary.blockedCount} 项待审批`
-      : `${summary.activeCount} 项运行中`
+  const countText = trayCount(summary.blockedCount, summary.runningCount, summary.activeCount, locale)
 
   const singleProgress =
     summary.items.length === 1 ? summary.items[0]!.progress : undefined
@@ -97,7 +114,7 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
     <div
       className={`workflow-active-tray${summary.blockedCount > 0 ? ' workflow-active-tray-warn' : ''}`}
       role="region"
-      aria-label="在途编排任务"
+      aria-label={resolveLocalizedText(TRAY_REGION_ARIA, locale)}
     >
       <div className="workflow-active-tray-bar">
         <div className="workflow-active-tray-left">
@@ -130,7 +147,7 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
             onClick={() => setExpanded((v) => !v)}
           >
             <Icon name={expanded ? 'chevron-down' : 'chevron-up'} size={11} />
-            <span>{expanded ? '收起' : '展开'}</span>
+            <span>{resolveLocalizedText(expanded ? TRAY_COLLAPSE : TRAY_EXPAND, locale)}</span>
           </button>
           <button
             type="button"
@@ -142,7 +159,7 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
             }}
           >
             <Icon name="git-branch" size={11} />
-            <span>工作台</span>
+            <span>{resolveLocalizedText(TRAY_WORKBENCH, locale)}</span>
           </button>
         </div>
       </div>
@@ -185,12 +202,12 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
                           `detach:${item.runId}`,
                           'detach',
                           item.runId!,
-                          `已转入后台（运行 ${item.runId}）：当前调用将收到后台句柄，完成后自动汇报`,
+                          actionDetachDone(item.runId!, locale),
                         )
                       }
                     >
                       <Icon name="arrow-down-to-line" size={11} />
-                      <span>转入后台</span>
+                      <span>{resolveLocalizedText(ACTION_DETACH, locale)}</span>
                     </button>
                   ) : null}
                   {item.canAbort && item.runId !== undefined ? (
@@ -201,7 +218,7 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
                       onClick={() => runAction(`abort:${item.runId}`, 'abort', item.runId!)}
                     >
                       <Icon name="square" size={11} />
-                      <span>中止</span>
+                      <span>{resolveLocalizedText(ACTION_ABORT, locale)}</span>
                     </button>
                   ) : null}
                   {item.conversationId !== undefined ? (
@@ -210,7 +227,7 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
                       className="btn btn-ghost btn-xs"
                       onClick={() => ctx.openConversationDrawer(item.conversationId!)}
                     >
-                      <span>查看</span>
+                      <span>{resolveLocalizedText(TRAY_VIEW, locale)}</span>
                     </button>
                   ) : item.runId !== undefined ? (
                     <button
@@ -221,7 +238,7 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
                         ctx.openWorkbench(`plugin:${ctx.pluginId}/tasks`)
                       }}
                     >
-                      <span>详情</span>
+                      <span>{resolveLocalizedText(TRAY_DETAILS, locale)}</span>
                     </button>
                   ) : null}
                 </div>

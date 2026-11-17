@@ -1,15 +1,26 @@
 /**
- * builtin:workflow 插件 client 纯逻辑：受管工作树只读检视（inspect_worktree
- * 动作结果的宽松解析与视图模型、inspect/cleanup 动作选择器与审阅请求文案；
- * 零 React/DOM 依赖）。
+ * Pure logic for the builtin:workflow client: managed worktree read-only
+ * inspection (lenient parsing of the inspect_worktree action result into a
+ * view model, inspect/cleanup action selectors and the review request copy;
+ * zero React/DOM dependencies).
  */
+import { DEFAULT_HELM_LOCALE, type HelmLocale } from '@helm/plugin-client'
 import { firstLineOf, inspectString } from './model-format.ts'
+import {
+  wtReviewAheadLine,
+  wtReviewBranchChanged,
+  wtReviewDirtyLine,
+  wtReviewInspectMissing,
+  wtReviewTaskLine,
+  worktreeReviewLines,
+} from './copy.ts'
 
 // ---------------------------------------------------------------------------
-// 受管工作树只读检视（inspect_worktree 动作结果的宽松解析与视图模型）
+// Managed worktree read-only inspection (lenient parse of the inspect_worktree
+// action result into a view model)
 // ---------------------------------------------------------------------------
 
-/** inspect_worktree 动作结果的只读视图（非法形状解析为 undefined，不猜测）。 */
+/** Read-only view of the inspect_worktree action result (invalid shapes parse to undefined, never guessed). */
 export interface WorktreeInspectView {
   worktreeId: string
   nodeId: string
@@ -33,20 +44,25 @@ export interface WorktreeInspectView {
   diffBase: string
 }
 
-/** 非负安全整数（计数类字段类型边界）。 */
+/** Non-negative safe integer (type boundary for count-like fields). */
 function inspectCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
 
 /**
- * 宽松解析 inspect_worktree 动作结果（结构非法返回 undefined，不伪造）。
+ * Leniently parse the inspect_worktree action result (structurally invalid
+ * returns undefined, never fabricated).
  *
- * 边界收紧：exists / dirtyFiles（纯 string[]）/ dirtyFileCount（非负安全整数，
- * 不再回退数组长度）/ dirtyFilesTruncated / diffTruncated（boolean）/ diffBase
- * （枚举）与 record 核心字段均为必需且类型正确；可选字段（unavailableReason /
- * status / origin / commitsAhead 等）出现非法取值同样整体拒绝。缺字段或类型
- * 错位的响应绝不降级显示成「已清理 / 无变更」，一律 undefined 拒收。
- * 一致性不变式：未截断时 dirtyFileCount === dirtyFiles.length；截断时计数大于列表长度。
+ * Tightened boundaries: exists / dirtyFiles (plain string[]) /
+ * dirtyFileCount (non-negative safe integer, no longer falls back to the
+ * array length) / dirtyFilesTruncated / diffTruncated (boolean) / diffBase
+ * (enum) and the core record fields are all required and correctly typed;
+ * optional fields (unavailableReason / status / origin / commitsAhead, ...)
+ * with invalid values reject the whole payload too. A response with missing
+ * fields or wrong types never degrades into a "cleaned up / no changes" view
+ * — it is rejected as undefined. Consistency invariant: without truncation
+ * dirtyFileCount === dirtyFiles.length; with truncation the count exceeds the
+ * list length.
  */
 export function parseWorktreeInspectResult(raw: unknown): WorktreeInspectView | undefined {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
@@ -113,9 +129,10 @@ export function parseWorktreeInspectResult(raw: unknown): WorktreeInspectView | 
 }
 
 /**
- * 构建 worktree 动作（inspect_worktree / cleanup_worktree）调用选择器：
- * 优先受管登记 ID（精确）；无 ID 时退化 path（+nodeId 消歧，避免跨节点
- * 同名路径误满）。仅作用于已登记 worktree，绝不携带任意目录。
+ * Build the worktree action (inspect_worktree / cleanup_worktree) call
+ * selector: the managed registration ID wins (precise); without an ID it
+ * degrades to path (+nodeId disambiguation, avoiding cross-node same-path
+ * mismatches). Only acts on registered worktrees, never arbitrary directories.
  */
 export function buildWorktreeSelector(
   worktree: { id?: string; path: string },
@@ -126,31 +143,49 @@ export function buildWorktreeSelector(
   return { path: worktree.path, ...(nodeId !== undefined && nodeId !== '' ? { nodeId } : {}) }
 }
 
-/** 「让主会话审阅并合入」请求文案：只含登记元数据与只读检视统计，不含执行指令伪装。 */
-export function buildWorktreeReviewRequest(input: {
-  path: string
-  branch: string
-  nodeId?: string
-  baseCommit?: string
-  taskLabel?: string
-  inspect?: WorktreeInspectView
-}): string {
-  const lines: string[] = ['请审阅并合入以下受管工作树的改动（数据来自只读检视，实际内容请在目标节点以 git 复核）：']
-  lines.push(`- 工作树：${input.path}${input.nodeId !== undefined && input.nodeId !== '' ? `（节点 ${input.nodeId}）` : ''}`)
-  lines.push(`- 分支：${input.branch}${input.baseCommit !== undefined && input.baseCommit !== '' ? `（基于提交 ${input.baseCommit.slice(0, 12)}）` : ''}`)
-  if (input.taskLabel !== undefined && input.taskLabel.trim() !== '') lines.push(`- 任务：${firstLineOf(input.taskLabel, 80)}`)
+/**
+ * "Ask the main conversation to review and merge" request copy: registration
+ * metadata and read-only inspection stats only — no disguised execution
+ * instructions.
+ */
+export function buildWorktreeReviewRequest(
+  input: {
+    path: string
+    branch: string
+    nodeId?: string
+    baseCommit?: string
+    taskLabel?: string
+    inspect?: WorktreeInspectView
+  },
+  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+): string {
+  const taskLine =
+    input.taskLabel !== undefined && input.taskLabel.trim() !== ''
+      ? wtReviewTaskLine(firstLineOf(input.taskLabel, 80), locale)
+      : undefined
   const inspect = input.inspect
-  if (inspect !== undefined) {
-    if (!inspect.exists) {
-      lines.push(`- 检视：目录${inspect.unavailableReason === 'removed' ? '登记已清理' : '不存在'}，无可检视改动`)
-    } else {
-      lines.push(`- 未提交修改：${inspect.dirtyFileCount} 个文件`)
-      if (inspect.commitsAhead !== undefined) lines.push(`- 领先基线提交：${inspect.commitsAhead} 个`)
-      if (inspect.branchChanged === true && inspect.currentBranch !== undefined) {
-        lines.push(`- 注意：工作树当前分支 ${inspect.currentBranch} 与登记分支不一致，可能已被改签，请先核实归属`)
+  const inspectLine = inspect !== undefined
+    ? (loc: HelmLocale): string[] => {
+        if (!inspect.exists) {
+          return [wtReviewInspectMissing(inspect.unavailableReason === 'removed', loc)]
+        }
+        const lines = [wtReviewDirtyLine(inspect.dirtyFileCount, loc)]
+        if (inspect.commitsAhead !== undefined) lines.push(wtReviewAheadLine(inspect.commitsAhead, loc))
+        if (inspect.branchChanged === true && inspect.currentBranch !== undefined) {
+          lines.push(wtReviewBranchChanged(inspect.currentBranch, loc))
+        }
+        return lines
       }
-    }
-  }
-  lines.push('请先只读复核（git diff / status），确认后合入主工作树；需要丢弃或清理工作树时请明确说明，不要静默 force 清理。')
-  return lines.join('\n')
+    : undefined
+  return worktreeReviewLines(
+    {
+      path: input.path,
+      branch: input.branch,
+      nodeId: input.nodeId,
+      baseCommit: input.baseCommit,
+      ...(taskLine !== undefined ? { taskLine } : {}),
+      ...(inspectLine !== undefined ? { inspectLine } : {}),
+    },
+    locale,
+  ).join('\n')
 }

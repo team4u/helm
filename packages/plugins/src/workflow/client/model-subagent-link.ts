@@ -1,19 +1,20 @@
 /**
- * builtin:workflow 插件 client 纯逻辑：subagent 运行期关联——工具调用 ↔ 子会话 /
- * 后台 run / 工作树 / 外部执行的解析（footer 与 JSON 信封解析、callId / resume
- * 精确关联、siblingCalls 多次 resume 折叠判定；零 React/DOM 依赖）。
+ * Pure logic for the builtin:workflow client: subagent runtime association —
+ * tool call ↔ subagent / background run / worktree / external run resolution
+ * (footer and JSON envelope parsing, precise callId / resume association,
+ * siblingCalls multi-resume folding; zero React/DOM dependencies).
  */
 import type { ConversationSummary, ToolViewProps } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { inputString } from './model-format.ts'
 
-/** 内核 subagentFooter 标准元数据行 `[subagent ...]`（多行中取最后一次：footer 总在末尾，正文伪造行不能抢占）。 */
+/** Standard kernel subagentFooter metadata line `[subagent ...]` (last one wins: the footer is always last, forged body lines cannot take over). */
 const SUBAGENT_FOOTER_LINE_RE = /\[subagent ([^\]]*)\]/g
 
-/** footer 内的 `key=value` token（value 允许含除空白/]/ 外的字符，覆盖 `worktree=PATH@BRANCH`）。 */
+/** `key=value` token inside the footer (values may contain anything but whitespace/]/, covering `worktree=PATH@BRANCH`). */
 const FOOTER_TOKEN_RE = /(\w+)=([^\s\]]+)/g
 
-/** 提取最后一个 footer 行里的指定键值（footer 总在末尾，正文伪造行不能抢占）。 */
+/** Extract the given key from the last footer line (the footer is always last, forged body lines cannot take over). */
 function subagentFooterToken(text: string, key: string): string | undefined {
   let footer: string | undefined
   for (const match of text.matchAll(SUBAGENT_FOOTER_LINE_RE)) {
@@ -34,7 +35,7 @@ function subagentFooterConversationId(text: string): number | undefined {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined
 }
 
-/** subagent 工具输出顶层 JSON 信封的 execution 元数据。 */
+/** Execution metadata of the top-level JSON envelope of a subagent tool output. */
 export interface SubagentExecutionInfo {
   nodeId?: string
   conversationId?: number
@@ -48,7 +49,8 @@ export interface SubagentExecutionInfo {
 
 export function parseSubagentExecutionInfo(text: string | undefined): SubagentExecutionInfo | undefined {
   if (typeof text !== 'string' || text === '') return undefined
-  // 分离末尾 footer：正文才是 JSON 信封（footer 非合法 JSON 成员）。
+  // Split off the trailing footer: the body is the JSON envelope (the footer
+  // is not a legal JSON member).
   const body = text.replace(SUBAGENT_FOOTER_LINE_RE, '').trim()
   if (!body.startsWith('{')) return undefined
   let parsed: unknown
@@ -95,11 +97,14 @@ function subagentJsonConversationId(text: string | undefined): number | undefine
 }
 
 /**
- * 解析 subagent 工具调用关联的子会话 ID：
- * 1) 已完成：优先顶层 JSON 信封 execution.conversationId（结构化读取），
- *    其次内核 subagentFooter 标准末尾元数据行；
- * 2) 运行期：按 callId 与子会话 parentToolCallId 精确关联；
- * 3) resume：入参携带数字续接 ref 时匹配同父会话的该子会话。
+ * Resolve the subagent conversation id linked to a subagent tool call:
+ * 1) settled: the top-level JSON envelope execution.conversationId first
+ *    (structured read), then the kernel subagentFooter standard trailing
+ *    metadata line;
+ * 2) in flight: precise association by callId against the subconversation's
+ *    parentToolCallId;
+ * 3) resume: a numeric resume ref in the input matches that subconversation
+ *    of the same parent conversation.
  */
 export function resolveSubagentConversationId(
   input: {
@@ -128,7 +133,8 @@ export function resolveSubagentConversationId(
     input.input !== null && typeof input.input === 'object' && !Array.isArray(input.input)
       ? (input.input as Record<string, unknown>)['resume']
       : undefined
-  // resume 兼容正整数 number 与纯数字 string 两种入参形态（safe integer，负数/小数不命中）。
+  // Resume accepts both the positive-integer number and the pure-digit
+  // string input forms (safe integers; negatives/decimals never match).
   const resumeId =
     typeof resumeRefRaw === 'number' && Number.isSafeInteger(resumeRefRaw) && resumeRefRaw > 0
       ? resumeRefRaw
@@ -144,7 +150,7 @@ export function resolveSubagentConversationId(
   return undefined
 }
 
-/** footer `worktree=PATH@BRANCH`：内核 PATH@BRANCH 形态；PATH 含空格时不可靠（JSON 优先）。 */
+/** footer `worktree=PATH@BRANCH`: the kernel PATH@BRANCH shape; unreliable when PATH contains spaces (JSON wins). */
 function worktreeFromFooterToken(token: string): { path: string; branch: string } | undefined {
   const at = token.lastIndexOf('@')
   if (at <= 0 || at === token.length - 1) return undefined
@@ -153,17 +159,17 @@ function worktreeFromFooterToken(token: string): { path: string; branch: string 
   return path !== '' && branch !== '' ? { path, branch } : undefined
 }
 
-/** subagent 工具调用的执行元数据（后台 run / 工作树 / 外部执行标识）。 */
+/** Execution metadata of a subagent tool call (background run / worktree / external run identity). */
 export interface SubagentExecutionMeta {
   run?: WorkflowRunSummary
-  /** 受管工作树坐标（run 节点路径携带登记 id/baseCommit 时如实保留，供精确检视/清理）。 */
+  /** Managed worktree coordinates (kept honestly when run nodes carry the registration id/baseCommit, for precise inspection/cleanup). */
   worktree?: { path: string; branch: string; id?: string; baseCommit?: string }
   executionId?: string
   nodeId?: string
   effectiveCwd?: string
 }
 
-/** 解析 subagent 工具调用的执行元数据（后台 run / 工作树 / 外部执行标识）。 */
+/** Resolve a subagent tool call's execution metadata (background run / worktree / external run identity). */
 export function resolveSubagentExecutionMeta(
   input: { callId: string | undefined; result?: unknown },
   parentConversationId: number,
@@ -196,7 +202,7 @@ export function resolveSubagentExecutionMeta(
   }
 }
 
-/** 父工具轻量摘要（折叠态头部数据源）。 */
+/** Lightweight parent tool summary (collapsed header data source). */
 export interface SubagentParentToolSummary {
   prompt?: string
   startedAt?: number
@@ -206,8 +212,10 @@ export interface SubagentParentToolSummary {
 }
 
 /**
- * 判断当前 callId 是否为同一原生/外部执行目标在 siblingCalls 中的最后一次 subagent 调用：
- * 前序被后续 resume 接替的旧调用仅渲染单行摘要胶囊，最新调用挂载实时子会话流。
+ * Whether the current callId is the latest subagent call for the same native /
+ * external execution target among siblingCalls: old calls superseded by a
+ * later resume render a single-line summary capsule only; the latest call
+ * mounts the live subconversation stream.
  */
 export function isLatestSubagentCallForTarget(
   props: Pick<ToolViewProps, 'callId' | 'input' | 'result' | 'siblingCalls' | 'conversationId'>,
@@ -236,7 +244,7 @@ export function isLatestSubagentCallForTarget(
   return true
 }
 
-/** 从 ToolViewProps 构造父工具轻量摘要。 */
+/** Build the lightweight parent tool summary from ToolViewProps. */
 export function parentToolSummaryOf(props: ToolViewProps): SubagentParentToolSummary {
   return {
     ...(inputString(props.input, 'prompt') !== undefined ? { prompt: inputString(props.input, 'prompt')! } : {}),

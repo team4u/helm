@@ -1,23 +1,65 @@
 /**
- * builtin:workflow 插件受管工作树只读改动概览组件（可折叠）：展开时经
- * inspect_worktree 动作在目标节点真实执行 git 只读命令，展示登记元数据、
- * 状态统计与有上限 diff 预览；「让主会话审阅并合入」仅向父会话提交审阅请求
- * 文本（官方 submitInput 能力），Web 端不执行任何 git 写操作、也不重复实现
- * 合入状态机。
+ * builtin:workflow plugin managed worktree read-only change overview
+ * component (collapsible): when expanded it runs real read-only git commands
+ * on the target node via the inspect_worktree action, showing registration
+ * metadata, status stats and a capped diff preview; "Ask the main
+ * conversation to review and merge" only submits a review request text to
+ * the parent conversation (the official submitInput capability) — the Web
+ * side performs no git writes and does not re-implement a merge state
+ * machine.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { CopyButton, usePluginContext } from '@helm/plugin-client'
+import { CopyButton, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helm/plugin-client'
 import { SPIN } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { buildWorktreeReviewRequest, buildWorktreeSelector, parseWorktreeInspectResult } from './model-worktree.ts'
 import type { WorktreeInspectView } from './model-worktree.ts'
+import {
+  WT_BRANCH_MISMATCH,
+  WT_COLLAPSE_TITLE,
+  WT_COPY_REVIEW,
+  WT_DIFF_NOTE,
+  WT_DIFF_PREVIEW_SECTION,
+  WT_DIFF_TRUNCATED,
+  wtDiffStatSection,
+  WT_EXPAND_TITLE,
+  WT_INSPECTING,
+  wtInspectFailed,
+  wtInspectInvalid,
+  WT_KV_AHEAD,
+  WT_KV_BASE,
+  WT_KV_BRANCH,
+  WT_KV_DIRTY,
+  WT_KV_HEAD,
+  wtAheadCount,
+  wtDirtyCount,
+  WT_NO_BASE,
+  WT_NO_DIFF,
+  WT_NO_DIRTY,
+  WT_OVERVIEW,
+  WT_REINSPECT_TITLE,
+  WT_REFRESH,
+  WT_RETRY,
+  WT_REVIEW_BUTTON,
+  WT_REVIEW_TITLE,
+  WT_SUBMITTED,
+  WT_UNAVAILABLE_MISSING,
+  WT_UNAVAILABLE_REMOVED,
+  wtSubmitFailed,
+  wtUnavailableCta,
+  wtBaseValue,
+  wtBranchMismatchBadgeTitle,
+} from './copy.ts'
 
 /**
- * 受管工作树只读改动概览（可折叠）：展开时经 inspect_worktree 动作在目标
- * 节点真实执行 git 只读命令，展示登记元数据、状态统计与有上限 diff 预览；
- * 「让主会话审阅并合入」仅向父会话提交审阅请求文本（官方 submitInput 能力），
- * Web 端不执行任何 git 写操作、也不重复实现合入状态机。
+ * Managed worktree read-only change overview (collapsible): when expanded it
+ * runs real read-only git commands on the target node via the
+ * inspect_worktree action, showing registration metadata, status stats and a
+ * capped diff preview; "Ask the main conversation to review and merge" only
+ * submits a review request text to the parent conversation (the official
+ * submitInput capability) — the Web side performs no git writes and does not
+ * re-implement a merge state machine.
  */
 export function WorktreeInspectSection(props: {
   worktree: { id?: string; path: string; branch: string }
@@ -27,6 +69,7 @@ export function WorktreeInspectSection(props: {
   parentConversationId: number
 }): ReactNode {
   const ctx = usePluginContext()
+  const locale = usePluginLocale()
   const { worktree } = props
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -44,7 +87,7 @@ export function WorktreeInspectSection(props: {
       if (generation.current !== current) return
       const parsed = parseWorktreeInspectResult(raw)
       if (parsed === undefined) {
-        setError('检视结果结构不合法（动作返回非预期形状，拒绝伪造展示）')
+        setError(wtInspectInvalid(locale))
       } else {
         setData(parsed)
       }
@@ -57,38 +100,42 @@ export function WorktreeInspectSection(props: {
   }
 
   useEffect(() => {
-    // 首次展开才拉取；重复展开沿用缓存（手动刷新按钮另路触发）。
+    // Fetch on first expansion only; re-expansions reuse the cache (the
+    // manual refresh button triggers separately).
     if (open && data === undefined && error === undefined && !loading) void load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, worktree.path, worktree.id])
 
   const reviewText = useMemo(
     () =>
-      buildWorktreeReviewRequest({
-        path: worktree.path,
-        branch: data?.branch ?? worktree.branch,
-        nodeId: data?.nodeId ?? props.nodeId,
-        baseCommit: data?.baseCommit || props.baseCommit,
-        taskLabel: props.taskLabel,
-        ...(data !== undefined ? { inspect: data } : {}),
-      }),
-    [worktree.path, worktree.branch, props.nodeId, props.baseCommit, props.taskLabel, data],
+      buildWorktreeReviewRequest(
+        {
+          path: worktree.path,
+          branch: data?.branch ?? worktree.branch,
+          nodeId: data?.nodeId ?? props.nodeId,
+          baseCommit: data?.baseCommit || props.baseCommit,
+          taskLabel: props.taskLabel,
+          ...(data !== undefined ? { inspect: data } : {}),
+        },
+        locale,
+      ),
+    [worktree.path, worktree.branch, props.nodeId, props.baseCommit, props.taskLabel, data, locale],
   )
 
   const sendReview = (): void => {
     setSending(true)
     ctx
       .submitInput(reviewText, { conversationId: props.parentConversationId, whenBusy: 'steer' })
-      .then(() => ctx.notify('已向主会话提交工作树审阅请求'))
-      .catch((err: unknown) => ctx.notify(`提交审阅请求失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
+      .then(() => ctx.notify(resolveLocalizedText(WT_SUBMITTED, locale)))
+      .catch((err: unknown) => ctx.notify(wtSubmitFailed(err instanceof Error ? err.message : String(err), locale), 'error'))
       .finally(() => setSending(false))
   }
 
   const unavailableText =
     data?.unavailableReason === 'removed'
-      ? '登记已清理（工作树已被移除）'
+      ? resolveLocalizedText(WT_UNAVAILABLE_REMOVED, locale)
       : data?.unavailableReason === 'directory_missing'
-        ? '目录已不存在（节点真实探测证实；登记仍保留）'
+        ? resolveLocalizedText(WT_UNAVAILABLE_MISSING, locale)
         : undefined
 
   return (
@@ -98,58 +145,58 @@ export function WorktreeInspectSection(props: {
           type="button"
           className="btn btn-ghost btn-xs"
           onClick={() => setOpen((v) => !v)}
-          title={open ? '收起工作树改动概览' : '展开工作树只读改动概览（目标节点真实 git 检视）'}
+          title={resolveLocalizedText(open ? WT_COLLAPSE_TITLE : WT_EXPAND_TITLE, locale)}
         >
           <Icon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
           <Icon name="git-branch" size={11} />
-          改动概览
+          {resolveLocalizedText(WT_OVERVIEW, locale)}
         </button>
         {open && data !== undefined ? (
-          <button type="button" className="btn btn-ghost btn-xs" disabled={loading} onClick={() => void load()} title="重新检视（只读）">
+          <button type="button" className="btn btn-ghost btn-xs" disabled={loading} onClick={() => void load()} title={resolveLocalizedText(WT_REINSPECT_TITLE, locale)}>
             <Icon name="rotate-cw" size={11} className={loading ? SPIN : undefined} />
-            刷新
+            {resolveLocalizedText(WT_REFRESH, locale)}
           </button>
         ) : null}
       </div>
       {open ? (
         <div className="worktree-inspect-body">
-          {loading && data === undefined ? <div className="workflow-phase-empty">目标节点只读检视中…</div> : null}
+          {loading && data === undefined ? <div className="workflow-phase-empty">{resolveLocalizedText(WT_INSPECTING, locale)}</div> : null}
           {error !== undefined ? (
             <div className="callout callout--error worktree-inspect-error">
-              <div>只读检视失败：{error}</div>
+              <div>{wtInspectFailed(error, locale)}</div>
               <button type="button" className="btn btn-xs" onClick={() => void load()}>
-                重试
+                {resolveLocalizedText(WT_RETRY, locale)}
               </button>
             </div>
           ) : null}
           {data !== undefined ? (
             <>
               {unavailableText !== undefined ? (
-                <div className="callout callout--warning">{unavailableText}，无法执行 git 检视；仅展示登记元数据。</div>
+                <div className="callout callout--warning">{wtUnavailableCta(unavailableText, locale)}</div>
               ) : null}
               <div className="kv-grid">
-                <span className="kv-key">分支</span>
+                <span className="kv-key">{resolveLocalizedText(WT_KV_BRANCH, locale)}</span>
                 <span className="kv-val mono">
                   {data.currentBranch ?? data.branch}
                   {data.branchChanged === true ? (
-                    <span className="badge badge-warn" title={`登记分支 ${data.branch}；工作树可能已被改签`}>与登记不一致</span>
+                    <span className="badge badge-warn" title={wtBranchMismatchBadgeTitle(data.branch, locale)}>{resolveLocalizedText(WT_BRANCH_MISMATCH, locale)}</span>
                   ) : null}
                 </span>
-                <span className="kv-key">基线</span>
+                <span className="kv-key">{resolveLocalizedText(WT_KV_BASE, locale)}</span>
                 <span className="kv-val mono" title={data.baseCommit !== '' ? data.baseCommit : undefined}>
-                  {data.baseCommit !== '' ? `${data.baseCommit.slice(0, 12)}（${data.diffBase === 'HEAD' ? '无基线，按 HEAD' : '登记基线'}）` : '无登记基线（按 HEAD 检视未提交改动）'}
+                  {data.baseCommit !== '' ? wtBaseValue(data.baseCommit, data.diffBase, locale) : resolveLocalizedText(WT_NO_BASE, locale)}
                 </span>
-                <span className="kv-key">未提交修改</span>
-                <span className="kv-val">{`${data.dirtyFileCount} 个文件${data.dirtyFilesTruncated ? '（列表已截断，仅显示前若干项）' : ''}`}</span>
+                <span className="kv-key">{resolveLocalizedText(WT_KV_DIRTY, locale)}</span>
+                <span className="kv-val">{wtDirtyCount(data.dirtyFileCount, data.dirtyFilesTruncated, locale)}</span>
                 {data.commitsAhead !== undefined ? (
                   <>
-                    <span className="kv-key">领先基线提交</span>
-                    <span className="kv-val">{`${data.commitsAhead} 个`}</span>
+                    <span className="kv-key">{resolveLocalizedText(WT_KV_AHEAD, locale)}</span>
+                    <span className="kv-val">{wtAheadCount(data.commitsAhead, locale)}</span>
                   </>
                 ) : null}
                 {data.currentHead !== undefined ? (
                   <>
-                    <span className="kv-key">当前 HEAD</span>
+                    <span className="kv-key">{resolveLocalizedText(WT_KV_HEAD, locale)}</span>
                     <span className="kv-val mono">{data.currentHead.slice(0, 12)}</span>
                   </>
                 ) : null}
@@ -157,36 +204,36 @@ export function WorktreeInspectSection(props: {
               {data.dirtyFiles.length > 0 ? (
                 <pre className="code-block-pre worktree-inspect-files"><code>{data.dirtyFiles.join('\n')}</code></pre>
               ) : data.exists ? (
-                <div className="workflow-phase-empty">工作区无未提交修改</div>
+                <div className="workflow-phase-empty">{resolveLocalizedText(WT_NO_DIRTY, locale)}</div>
               ) : null}
               {data.exists ? (
-                <div className="worktree-inspect-note">Diff 仅包含已跟踪文件；未跟踪文件见状态列表。</div>
+                <div className="worktree-inspect-note">{resolveLocalizedText(WT_DIFF_NOTE, locale)}</div>
               ) : null}
               {data.diffStat !== undefined ? (
                 <div>
-                  <div className="trace-section-label">Diff 统计（相对{data.diffBase === 'HEAD' ? ' HEAD' : '基线'}）</div>
+                  <div className="trace-section-label">{wtDiffStatSection(data.diffBase, locale)}</div>
                   <pre className="code-block-pre workflow-node-pre"><code>{data.diffStat}</code></pre>
                 </div>
               ) : null}
               {data.diffPreview !== undefined ? (
                 <div>
                   <div className="trace-section-label">
-                    Diff 预览（只读，有上限）
-                    {data.diffTruncated ? <span className="badge badge-neutral">已截断</span> : null}
+                    {resolveLocalizedText(WT_DIFF_PREVIEW_SECTION, locale)}
+                    {data.diffTruncated ? <span className="badge badge-neutral">{resolveLocalizedText(WT_DIFF_TRUNCATED, locale)}</span> : null}
                   </div>
                   <pre className="code-block-pre workflow-node-pre worktree-inspect-diff selectable"><code>{data.diffPreview}</code></pre>
                 </div>
               ) : data.exists ? (
-                <div className="workflow-phase-empty">无已跟踪文件 diff</div>
+                <div className="workflow-phase-empty">{resolveLocalizedText(WT_NO_DIFF, locale)}</div>
               ) : null}
             </>
           ) : null}
           <div className="worktree-inspect-actions">
-            <button type="button" className="btn btn-xs" disabled={sending} onClick={sendReview} title="向主会话提交审阅与合入请求（实际检视与合入由主会话执行）">
+            <button type="button" className="btn btn-xs" disabled={sending} onClick={sendReview} title={resolveLocalizedText(WT_REVIEW_TITLE, locale)}>
               <Icon name="git-pull-request" size={11} />
-              让主会话审阅并合入
+              {resolveLocalizedText(WT_REVIEW_BUTTON, locale)}
             </button>
-            <CopyButton text={reviewText} label="复制审阅请求文本" />
+            <CopyButton text={reviewText} label={resolveLocalizedText(WT_COPY_REVIEW, locale)} />
           </div>
         </div>
       ) : null}

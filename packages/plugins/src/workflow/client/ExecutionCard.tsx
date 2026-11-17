@@ -1,39 +1,45 @@
 /**
- * 子代理实时卡与后台汇报卡共用的纯展示框架（插件私有，不进公开导出）。
+ * Shared presentational frame for the subagent live card and the background
+ * report card (plugin-private, not part of public exports).
  *
- * 只负责容器 / 头部 / 动作 / 副栏的 DOM 骨架与既有 .subagent-live-* 样式：
- * 不含任何 hooks、实时状态或业务判定，调用方经插槽注入内容——
- * - activate：整卡点击 / 回车 / 空格导航（子代理实时卡语义，挂 subagent-card-clickable）；
- * - toggle：头部触发区渲染为折叠开关按钮（汇报卡语义，aria-expanded / aria-controls）。
- * 两种语义互斥：开关卡不做整卡导航，正文可选可点不误触折叠。
+ * Only owns the container / header / actions / subline DOM skeleton and the
+ * existing .subagent-live-* styles: no hooks, no live state, no business
+ * decisions — callers inject content via slots:
+ * - activate: whole-card click / Enter / Space navigation (subagent live card
+ *   semantics, mounts subagent-card-clickable);
+ * - toggle: the header trigger renders as a collapse toggle button (report
+ *   card semantics, aria-expanded / aria-controls).
+ * The two semantics are mutually exclusive: a toggle card never navigates on
+ * whole-card clicks, and its body stays selectable without accidental
+ * collapsing.
  */
 import type { KeyboardEvent, ReactNode } from 'react'
 
 export interface ExecutionCardActivate {
-  /** 整卡 aria-label（如「打开子会话 #11 抽屉」）。 */
+  /** Whole-card aria-label (e.g. "Open subagent #11 drawer"). */
   label: string
-  /** 整卡悬浮提示（多行明细）。 */
+  /** Whole-card hover tooltip (multi-line details). */
   tooltip: string
   open: () => void
 }
 
 export interface ExecutionCardToggle {
-  /** 折叠开关 aria-label（展开 / 收起各一句）。 */
+  /** Collapse toggle aria-label (one sentence each for expanded / collapsed). */
   label: string
   expanded: boolean
-  /** 展开区真实 DOM 节点 id（收起时也保持存在，aria-controls 恒指向真实区域）。 */
+  /** Real DOM node id of the expansion area (kept alive when collapsed, aria-controls always points at a real region). */
   controlsId: string
   onToggle: () => void
 }
 
 export function ExecutionCard(props: {
-  /** 状态附加类（warn / error / expanded 等变体）。 */
+  /** Status modifier classes (warn / error / expanded variants). */
   variantClass?: string
-  /** 头部触发区内容（图标 + 标题 + 徽章 + 统计尾注）。 */
+  /** Header trigger content (icon + title + badges + stat suffix). */
   heading: ReactNode
-  /** 头部动作区（已隔离点击，不冒泡触发整卡导航）。 */
+  /** Header actions area (click-isolated, never bubbles into whole-card navigation). */
   actions?: ReactNode
-  /** 单行副栏（subagent-live-subline；不传不渲染占位）。 */
+  /** Single-line subline (subagent-live-subline; no placeholder rendered when absent). */
   snippet?: ReactNode
   children?: ReactNode
 } & (
@@ -53,7 +59,8 @@ export function ExecutionCard(props: {
             title: activate.tooltip,
             onClick: activate.open,
             onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
-              // 内嵌动作、details/summary 的键盘激活属于控件本身，而非卡片导航。
+              // Keyboard activation of nested actions / details-summary
+              // belongs to those controls, not to card navigation.
               if (e.target !== e.currentTarget) return
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault()

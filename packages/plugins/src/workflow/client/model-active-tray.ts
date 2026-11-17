@@ -1,11 +1,15 @@
 /**
- * builtin:workflow 底部在途活动托盘（WorkflowActiveTray）纯推导模型（零 React/DOM 依赖）。
+ * Pure derivation model for the builtin:workflow bottom in-flight activity
+ * tray (WorkflowActiveTray) (zero React/DOM dependencies).
  *
- * 与工作台复用同一套 buildExecutionTree 执行树事实：
- * - 仅提取当前会话或其后代仍在运行或等待审批（working / blocked / running）的节点；
- * - 全部收敛后 items 为空（UI 归零 0px）；
- * - 前线动作摘要复用 collectExecutionFrontline / collectExecutionApprovals。
+ * Reuses the same buildExecutionTree facts as the workbench:
+ * - only nodes of the current conversation or its descendants that are still
+ *   running or awaiting approval (working / blocked / running) are extracted;
+ * - once everything settles items is empty (UI collapses to 0px);
+ * - frontline action digests reuse collectExecutionFrontline /
+ *   collectExecutionApprovals.
  */
+import { DEFAULT_HELM_LOCALE, type HelmLocale } from '@helm/plugin-client'
 import type { ConversationSummary } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import type { ExecutionNodeStatus } from './model-execution-status.ts'
@@ -79,12 +83,15 @@ function nodeProgressOf(node: ExecutionNode): { done: number; total: number } | 
   return undefined
 }
 
-export function buildActiveTraySummary(input: {
-  rootConversationId: number
-  conversations: ReadonlyArray<ConversationSummary>
-  runs: ReadonlyArray<WorkflowRunSummary>
-  viewer?: DetachViewerScope
-}): ActiveTraySummary {
+export function buildActiveTraySummary(
+  input: {
+    rootConversationId: number
+    conversations: ReadonlyArray<ConversationSummary>
+    runs: ReadonlyArray<WorkflowRunSummary>
+    viewer?: DetachViewerScope
+  },
+  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+): ActiveTraySummary {
   const tree = buildExecutionTree({
     rootConversationId: input.rootConversationId,
     conversations: input.conversations,
@@ -119,8 +126,8 @@ export function buildActiveTraySummary(input: {
       earliestStartedAt = startedAt
     }
 
-    const frontlineItem = collectExecutionFrontline([node], 1)[0]
-    const approvalItem = isBlocked ? collectExecutionApprovals([node], 1)[0] : undefined
+    const frontlineItem = collectExecutionFrontline([node], 1, locale)[0]
+    const approvalItem = isBlocked ? collectExecutionApprovals([node], 1, locale)[0] : undefined
     const doing =
       approvalItem?.text ??
       frontlineItem?.text ??
@@ -132,7 +139,7 @@ export function buildActiveTraySummary(input: {
     return {
       key: node.key,
       kind: node.kind === 'workflow' ? 'workflow' : node.kind === 'conversation' ? 'conversation' : 'external',
-      title: executionNodeTitle(node),
+      title: executionNodeTitle(node, locale),
       status: isBlocked ? 'blocked' : node.aggregated.status === 'error' && isWorking ? 'working' : node.aggregated.status,
       isWorking,
       isBlocked,
@@ -151,8 +158,8 @@ export function buildActiveTraySummary(input: {
     activeCount: items.length,
     runningCount,
     blockedCount,
-    frontline: collectExecutionFrontline(activeNodes, 2),
-    approvals: collectExecutionApprovals(activeNodes, 2),
+    frontline: collectExecutionFrontline(activeNodes, 2, locale),
+    approvals: collectExecutionApprovals(activeNodes, 2, locale),
     ...(earliestStartedAt !== undefined ? { earliestStartedAt } : {}),
   }
 }

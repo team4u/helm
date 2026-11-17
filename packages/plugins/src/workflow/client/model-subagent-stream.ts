@@ -1,16 +1,19 @@
 /**
- * builtin:workflow 插件 client 纯逻辑：subagent 工具行语义摘要与子会话实时流
- * 展开（toolCall / toolResult 配对、live 流合并、统计尾注；零 React/DOM 依赖）。
+ * Pure logic for the builtin:workflow client: semantic summaries of subagent
+ * tool lines and expansion of the live subagent stream (toolCall / toolResult
+ * pairing, live stream merging, stat suffix; zero React/DOM dependencies).
  */
 import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helm/protocol'
+import { DEFAULT_HELM_LOCALE, resolveLocalizedText, type HelmLocale } from '@helm/plugin-client'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { firstLineOf, formatShortModelName, inputString } from './model-format.ts'
+import { statToolSteps, TOOL_TAG_EDIT, TOOL_TAG_FIND, TOOL_TAG_READ, TOOL_TAG_SEARCH, TOOL_TAG_WRITE } from './copy.ts'
 
 // ---------------------------------------------------------------------------
-// 工具行语义摘要
+// Semantic tool line summaries
 // ---------------------------------------------------------------------------
 
-/** 仅缩短相对于子会话 cwd 的路径，兼容远端节点与 Windows 路径。 */
+/** Shorten paths relative to the subagent cwd; tolerates remote nodes and Windows paths. */
 function shortenPath(p: string, cwd?: string): string {
   const separator = p.includes('\\') ? '\\' : '/'
   const prefix = cwd?.replace(/[\\/]+$/, '')
@@ -18,7 +21,7 @@ function shortenPath(p: string, cwd?: string): string {
   return relative.length > 48 ? `…${relative.slice(-46)}` : relative
 }
 
-/** 单行轨迹核心入参摘要（工具名 + 入参压缩为一行）。 */
+/** Compact one-line summary of the core input of a trace line (tool name + condensed input). */
 export function toolSummaryText(toolName: string, input: unknown): string {
   void toolName
   let raw = ''
@@ -50,8 +53,13 @@ function summarizeValue(value: unknown): string {
   return raw.length > 24 ? `${raw.slice(0, 24)}…` : raw
 }
 
-/** 活跃工具语义化动作提炼。 */
-export function formatSemanticToolAction(toolName: string, input: unknown, cwd?: string): { tag: string; text: string } {
+/** Distill a semantic action for the currently active tool. */
+export function formatSemanticToolAction(
+  toolName: string,
+  input: unknown,
+  cwd?: string,
+  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+): { tag: string; text: string } {
   switch (toolName) {
     case 'bash': {
       const command = inputString(input, 'command')
@@ -60,26 +68,26 @@ export function formatSemanticToolAction(toolName: string, input: unknown, cwd?:
     case 'read':
     case 'read_file': {
       const path = inputString(input, 'file_path') ?? inputString(input, 'path')
-      return { tag: '读取', text: path !== undefined ? shortenPath(path, cwd) : toolName }
+      return { tag: resolveLocalizedText(TOOL_TAG_READ, locale), text: path !== undefined ? shortenPath(path, cwd) : toolName }
     }
     case 'edit':
     case 'edit_file': {
       const path = inputString(input, 'file_path') ?? inputString(input, 'path')
-      return { tag: '编辑', text: path !== undefined ? shortenPath(path, cwd) : toolName }
+      return { tag: resolveLocalizedText(TOOL_TAG_EDIT, locale), text: path !== undefined ? shortenPath(path, cwd) : toolName }
     }
     case 'write':
     case 'write_file': {
       const path = inputString(input, 'file_path') ?? inputString(input, 'path')
-      return { tag: '写入', text: path !== undefined ? shortenPath(path, cwd) : toolName }
+      return { tag: resolveLocalizedText(TOOL_TAG_WRITE, locale), text: path !== undefined ? shortenPath(path, cwd) : toolName }
     }
     case 'grep': {
       const pattern = inputString(input, 'pattern')
-      return { tag: '搜索', text: pattern !== undefined ? firstLineOf(pattern, 60) : toolName }
+      return { tag: resolveLocalizedText(TOOL_TAG_SEARCH, locale), text: pattern !== undefined ? firstLineOf(pattern, 60) : toolName }
     }
     case 'find':
     case 'ls': {
       const target = inputString(input, 'pattern') ?? inputString(input, 'path')
-      return { tag: '查找', text: target !== undefined ? shortenPath(firstLineOf(target, 80), cwd) : toolName }
+      return { tag: resolveLocalizedText(TOOL_TAG_FIND, locale), text: target !== undefined ? shortenPath(firstLineOf(target, 80), cwd) : toolName }
     }
     default: {
       const text = toolSummaryText(toolName, input)
@@ -89,10 +97,10 @@ export function formatSemanticToolAction(toolName: string, input: unknown, cwd?:
 }
 
 // ---------------------------------------------------------------------------
-// 子会话实时流（detail.entries + ConversationLive 合并展开）
+// Subagent live stream (detail.entries + ConversationLive merged expansion)
 // ---------------------------------------------------------------------------
 
-/** 子会话紧凑活动行。 */
+/** Compact activity line of a subagent. */
 export type SubagentStreamLine =
   | { kind: 'prompt'; key: string; text: string }
   | { kind: 'thinking'; key: string; text: string }
@@ -108,10 +116,10 @@ export type SubagentStreamLine =
     }
   | { kind: 'text'; key: string; text: string }
 
-/** 展示层剥离的 spawn 注入结构化输出契约样板（末尾尾行）。 */
+/** Structured-output contract boilerplate stripped from spawn prompts (trailing tail lines). */
 const STRUCTURED_OUTPUT_CONTRACT_TAIL_RE = /\n*<structured_output_contract>[\s\S]*?<\/structured_output_contract>\s*$/
 
-/** 子会话实时内容流：detail.entries + ConversationLive 合并展开为紧凑活动行。 */
+/** Expand the subagent live content stream: detail.entries + ConversationLive merged into compact activity lines. */
 export function buildSubagentStreamLines(
   entries: ReadonlyArray<ConversationEntry>,
   live?: ConversationLive,
@@ -140,8 +148,9 @@ export function buildSubagentStreamLines(
       const msg = model[mi]
       if (msg === null || typeof msg !== 'object') continue
       const m0 = msg as { role?: unknown; content?: unknown }
-      // 仅展开 assistant 消息的内容块；toolResult 消息（role=toolResult/tool）
-      // 的 content 是结果文本，由下方配对逻辑合并进对应工具行，不另生正文行。
+      // Only expand assistant message content blocks; toolResult messages
+      // (role=toolResult/tool) carry result text, which the pairing logic
+      // below merges into the matching tool line instead of adding text lines.
       if (m0.role !== undefined && m0.role !== 'assistant') continue
       const content = m0.content
       if (!Array.isArray(content)) continue
@@ -172,7 +181,7 @@ export function buildSubagentStreamLines(
         }
       }
     }
-    // pi.tool-result 配对补全（与 toolCall 行同 key 去重）。
+    // pi.tool-result pairing completion (deduped against toolCall lines by key).
     if (entry.kind === 'pi.tool-result') {
       for (let mi = 0; mi < model.length; mi++) {
         const msg = model[mi]
@@ -206,7 +215,7 @@ export function buildSubagentStreamLines(
       }
     }
   }
-  // live 合并：流式思考 / 未配对新工具 / 流式文本。
+  // Live merge: streaming thinking / unpersisted new tools / streaming text.
   if (typeof live?.thinking === 'string' && live.thinking.trim() !== '') {
     lines.push({ kind: 'thinking', key: 'think:live', text: live.thinking })
   }
@@ -254,23 +263,26 @@ function contentTextOf(content: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
-// 头部极简统计尾注
+// Minimal stat suffix for the card header
 // ---------------------------------------------------------------------------
 
 function formatCompactTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`
 }
 
-/** 头部极简统计尾注片段（总耗时已拆至独立展示位，不在此收集）。 */
-export function buildSubagentStatSegments(input: {
-  summary?: ConversationSummary
-  entries?: ReadonlyArray<ConversationEntry>
-  live?: ConversationLive
-  backgroundRun?: WorkflowRunSummary
-  /** 工作流节点的权威模型 / Token 统计；存在时覆盖摘要中的同类字段。 */
-  modelOverride?: string
-  tokensOverride?: number
-}): string[] {
+/** Minimal stat suffix segments for the card header (total duration has its own slot, not collected here). */
+export function buildSubagentStatSegments(
+  input: {
+    summary?: ConversationSummary
+    entries?: ReadonlyArray<ConversationEntry>
+    live?: ConversationLive
+    backgroundRun?: WorkflowRunSummary
+    /** Authoritative model / token stats of a workflow node; override the same-named summary fields when present. */
+    modelOverride?: string
+    tokensOverride?: number
+  },
+  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+): string[] {
   const segments: string[] = []
   const shortModel = formatShortModelName(input.modelOverride || input.summary?.model || input.backgroundRun?.nodes?.[0]?.model)
   if (shortModel !== undefined) segments.push(shortModel)
@@ -278,13 +290,13 @@ export function buildSubagentStatSegments(input: {
     segments.push(input.summary.thinkingLevel)
   }
   const steps = countToolSteps(input.entries, input.live)
-  if (steps !== undefined && steps > 0) segments.push(`已载 ${steps} 次工具`)
+  if (steps !== undefined && steps > 0) segments.push(statToolSteps(steps, locale))
   const tokens = input.tokensOverride ?? input.backgroundRun?.nodes?.[0]?.tokens
   if (tokens !== undefined && tokens > 0) segments.push(formatCompactTokens(tokens))
   return segments
 }
 
-/** 统计 entries 已落库 toolCall 总次数，加上 live.tools 中尚未落库的新 callId。 */
+/** Count persisted toolCall steps in entries plus live.tools callIds not yet persisted. */
 function countToolSteps(entries: ReadonlyArray<ConversationEntry> | undefined, live: ConversationLive | undefined): number | undefined {
   if (entries === undefined) {
     return live !== undefined && live.tools.length > 0 ? live.tools.length : undefined

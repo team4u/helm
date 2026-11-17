@@ -1,14 +1,40 @@
 /**
- * builtin:workflow 后台结算汇报（timeline.renderer 精确接管 helm.input）：
- * - 默认收口为与宿主 `.trace-row` 同构的 26px 单行回执；失败/中止/损坏报文自动默认展开。
- * - 点击标题按钮原地展开无损汇报面板（完整呈现 runId、投递时间、完整 Markdown/JSON 结果、
- *   错误信息与其余在途任务快照），不订阅实时状态、不伪造缺失数据。
+ * builtin:workflow background settlement reports (timeline.renderer precisely
+ * taking over helm.input):
+ * - collapsed by default into a 26px single-line receipt sharing the host's
+ *   `.trace-row` structure; failed/aborted/corrupted payloads default to
+ *   expanded;
+ * - clicking the title button expands the lossless report panel in place
+ *   (full runId, delivered-at, complete Markdown/JSON result, error info and
+ *   the snapshot of other in-flight tasks); no live state subscription, no
+ *   fabricated missing data.
  */
 import { useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { TimelineRendererProps } from '@helm/protocol'
-import { CopyButton, MarkdownText, formatCompactTimestamp, usePluginContext } from '@helm/plugin-client'
-import { RUN_BADGE, RUN_LABEL } from './presentation.ts'
+import { CopyButton, MarkdownText, formatCompactTimestamp, usePluginContext, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
+import type { HelmLocale } from '@helm/plugin-client'
+import { RUN_BADGE } from './presentation.ts'
+import { runStatusLabel } from './copy.ts'
+import {
+  REPORT_INVALID_BADGE,
+  REPORT_INVALID_CALLOUT,
+  REPORT_INVALID_PREVIEW,
+  REPORT_INVALID_TITLE,
+  REPORT_KV_DELIVERED_AT,
+  REPORT_KV_RUN_ID,
+  REPORT_KV_SUBAGENT,
+  REPORT_KV_TASK_TYPE,
+  REPORT_KIND_SUBAGENT,
+  REPORT_KIND_WORKFLOW,
+  REPORT_NO_RESULT,
+  REPORT_OTHER_TASKS_SECTION,
+  REPORT_RESULT_SECTION,
+  REPORT_SUBAGENT_TITLE,
+  REPORT_WORKFLOW_TITLE,
+  reportOpenChildTitle,
+  reportToggleLabel,
+} from './copy.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import {
   backgroundReportPreview,
@@ -21,15 +47,21 @@ const PREVIEW_MAX_CHARS = 120
 
 export function BackgroundReportCard(props: TimelineRendererProps): ReactNode {
   const ctx = usePluginContext()
+  const locale = usePluginLocale()
+  const t = usePluginTranslator()
   const view = useMemo(() => parseBackgroundReportEntry(props.entry), [props.entry])
   const [open, setOpen] = useState(() => isBackgroundReportDefaultOpen(view))
   const bodyId = useId()
 
   const conversationId = view.invalid ? undefined : view.executionConversationId
   const isFailure = !view.invalid && (view.status === 'failed' || view.status === 'aborted')
-  const title = view.invalid ? '后台汇报' : view.kind === 'subagent_report' ? '子代理汇报' : '工作流汇报'
+  const title = view.invalid
+    ? t(REPORT_INVALID_TITLE)
+    : view.kind === 'subagent_report'
+      ? t(REPORT_SUBAGENT_TITLE)
+      : t(REPORT_WORKFLOW_TITLE)
   const statusIcon = view.invalid || isFailure ? 'alert-circle' : view.kind === 'workflow_report' ? 'workflow' : 'bot'
-  const preview = view.invalid ? '汇报数据格式异常，展开查看原始报文' : backgroundReportPreview(view, PREVIEW_MAX_CHARS)
+  const preview = view.invalid ? t(REPORT_INVALID_PREVIEW) : backgroundReportPreview(view, PREVIEW_MAX_CHARS, locale)
   const rowTitle = conversationId !== undefined ? `${title} #${conversationId}` : title
 
   return (
@@ -40,7 +72,7 @@ export function BackgroundReportCard(props: TimelineRendererProps): ReactNode {
           className="trace-row-left workflow-trace-toggle"
           aria-expanded={open}
           aria-controls={bodyId}
-          aria-label={`${open ? '收起' : '展开'}${rowTitle}详情`}
+          aria-label={reportToggleLabel(rowTitle, open, locale)}
           onClick={() => setOpen((v) => !v)}
         >
           <Icon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
@@ -54,10 +86,10 @@ export function BackgroundReportCard(props: TimelineRendererProps): ReactNode {
         </button>
         <span className="trace-row-right workflow-trace-right">
           {view.invalid ? (
-            <span className="badge workflow-trace-badge badge-err">汇报数据格式异常</span>
+            <span className="badge workflow-trace-badge badge-err">{t(REPORT_INVALID_BADGE)}</span>
           ) : (
             <span className={`badge workflow-trace-badge ${RUN_BADGE[view.status] ?? 'badge-neutral'}`}>
-              {RUN_LABEL[view.status] ?? view.status}
+              {runStatusLabel(view.status, locale)}
             </span>
           )}
           {view.createdAt !== undefined ? (
@@ -68,8 +100,8 @@ export function BackgroundReportCard(props: TimelineRendererProps): ReactNode {
             <button
               type="button"
               className="btn btn-ghost btn-xs"
-              title={`打开子会话 #${conversationId}`}
-              aria-label={`打开子会话 #${conversationId}`}
+              title={reportOpenChildTitle(conversationId, locale)}
+              aria-label={reportOpenChildTitle(conversationId, locale)}
               onClick={() => ctx.openConversationDrawer(conversationId)}
             >
               <Icon name="external-link" size={11} />
@@ -78,14 +110,14 @@ export function BackgroundReportCard(props: TimelineRendererProps): ReactNode {
         </span>
       </div>
 
-      {/* 裸 div 承载 hidden，避免 flex 容器样式覆盖 UA [hidden] */}
+      {/* A bare div carries `hidden` so flex container styles cannot override the UA [hidden] rule. */}
       <div id={bodyId} hidden={!open}>
         {open ? (
           <div className="trace-expanded-body workflow-report-expanded selectable">
             {view.invalid ? (
               <>
                 <div className="callout callout--error" role="alert">
-                  汇报数据格式异常（以下为原始报文快照）
+                  {t(REPORT_INVALID_CALLOUT)}
                 </div>
                 <pre className="code-block-pre selectable">
                   <code>{view.rawText}</code>
@@ -104,7 +136,7 @@ export function BackgroundReportCard(props: TimelineRendererProps): ReactNode {
   )
 }
 
-/** 展开态：完整 runId、投递时间、结果正文、错误诊断与在途任务快照。 */
+/** Expanded state: full runId, delivered-at, result body, error diagnostics and the in-flight tasks snapshot. */
 function ExpandedBody({
   view,
   onOpenConversation,
@@ -112,24 +144,25 @@ function ExpandedBody({
   view: BackgroundReportView
   onOpenConversation?: () => void
 }): ReactNode {
+  const t = usePluginTranslator()
   const isFailure = view.status === 'failed' || view.status === 'aborted'
   return (
     <>
       <div className="workflow-report-meta-head">
         <div className="kv-grid">
-          <span className="kv-key">运行 ID</span>
+          <span className="kv-key">{t(REPORT_KV_RUN_ID)}</span>
           <span className="kv-val mono">{view.runId}</span>
           {view.createdAt !== undefined ? (
             <>
-              <span className="kv-key">投递时间</span>
+              <span className="kv-key">{t(REPORT_KV_DELIVERED_AT)}</span>
               <span className="kv-val tabular-nums">{formatCompactTimestamp(view.createdAt)}</span>
             </>
           ) : null}
-          <span className="kv-key">任务类型</span>
-          <span className="kv-val">{view.kind === 'subagent_report' ? '后台子代理' : '工作流'}</span>
+          <span className="kv-key">{t(REPORT_KV_TASK_TYPE)}</span>
+          <span className="kv-val">{view.kind === 'subagent_report' ? t(REPORT_KIND_SUBAGENT) : t(REPORT_KIND_WORKFLOW)}</span>
           {view.executionConversationId !== undefined ? (
             <>
-              <span className="kv-key">子会话</span>
+              <span className="kv-key">{t(REPORT_KV_SUBAGENT)}</span>
               <span className="kv-val">
                 {onOpenConversation !== undefined ? (
                   <button type="button" className="btn btn-ghost btn-xs" onClick={onOpenConversation}>
@@ -152,7 +185,7 @@ function ExpandedBody({
 
       {view.hasResult ? (
         <div>
-          <div className="trace-section-label">结果正文</div>
+          <div className="trace-section-label">{t(REPORT_RESULT_SECTION)}</div>
           {typeof view.result === 'string' ? (
             <MarkdownText text={view.result} />
           ) : (
@@ -162,18 +195,18 @@ function ExpandedBody({
           )}
         </div>
       ) : (
-        <div className="subagent-stream-empty">本次运行未携带结果数据。</div>
+        <div className="subagent-stream-empty">{t(REPORT_NO_RESULT)}</div>
       )}
 
       {view.otherRunningTasks.length > 0 ? (
         <div>
-          <div className="trace-section-label">投递时其余在途任务（快照）</div>
+          <div className="trace-section-label">{t(REPORT_OTHER_TASKS_SECTION)}</div>
           <div className="execution-report-tasks">
             {view.otherRunningTasks.map((task) => (
               <span key={task.runId} className="badge badge-neutral workflow-report-task-item">
                 <span>{task.name}</span>
                 <span className="mono">{task.runId}</span>
-                <span>{task.kind === 'subagent' ? '子代理' : '工作流'}</span>
+                <span>{task.kind === 'subagent' ? t(REPORT_KIND_SUBAGENT) : t(REPORT_KIND_WORKFLOW)}</span>
               </span>
             ))}
           </div>

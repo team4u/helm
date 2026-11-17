@@ -1,12 +1,16 @@
 /**
- * builtin:workflow 插件 client.module 唯一编译入口（薄门面）：
- * 组件按职责拆分在同目录各模块（WorkflowIcon / SubagentCard 与其子视图模块
- * SubagentCardDetails / SubagentToolView / ExecutionChildrenRows /
- * ExternalRunSummary / WorkflowRunCard / WorkflowNodeCards / WorkflowReplayForm /
- * WorkflowLibrary 族 / WorkflowWorkbenchPanel），此处仅保留宿主加载器与
- * workflow.ts 模块引用所需的公开导出与样式挂载（样式按族拆分：执行树
- * styles-execution-tree / 实时流 styles-subagent-stream 等）；
- * 内部模块直接互引具体文件，勿反向引用本门面（防循环）。
+ * Sole compiled entry (thin facade) of the builtin:workflow plugin's
+ * client.module: components are split by responsibility into sibling modules
+ * (WorkflowIcon / SubagentCard with its sub-views SubagentCardDetails /
+ * SubagentToolView / ExecutionChildrenRows / ExternalRunSummary /
+ * WorkflowRunCard / WorkflowNodeCards / WorkflowReplayForm / the
+ * WorkflowLibrary family / WorkflowWorkbenchPanel); only the public exports
+ * needed by the host loader and the workflow.ts module reference remain here,
+ * plus style mounting (styles split by family: execution tree
+ * styles-execution-tree / live stream styles-subagent-stream, ...). Internal
+ * modules import each other's concrete files directly — never import back
+ * from this facade (avoids cycles). Display copy lives in copy.ts and
+ * resolves against the active host locale.
  */
 import './styles.css'
 import './styles-execution-tree.css'

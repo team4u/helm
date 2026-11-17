@@ -1,17 +1,24 @@
 /**
- * builtin:workflow 右侧工作台面板（tasks）：
- * - 按统一执行树 `buildExecutionTree` 渲染当前会话的一级执行节点（workflow / external / conversation），
- *   消除后台原生子代理双卡重复、外部节点误分类、深层后代平铺泄露与统计双计。
- * - 为独立/后台原生子代理保留 `backgroundRun`、`executionToolStatus` 与 `WorktreeInspectSection`
- *   （Git Diff 检视与清理），无损承接时间线 `.trace-row` 收口后移出的全部详情。
- * - 支持从时间线或底部活动托盘点击后经 `workbench-focus` 直接展开并定位到对应 `run.id`。
- * - 已去除重复的工作流定义库列表（保留右上角轻量跳转至独立 `library` 全屏视图）。
+ * builtin:workflow right workbench panel (tasks):
+ * - renders the current conversation's first-level execution nodes (workflow /
+ *   external / conversation) per the unified execution tree
+ *   `buildExecutionTree`, eliminating duplicated background native subagent
+ *   cards, misclassified external nodes, deep-descendant flat-list leaks and
+ *   double counting;
+ * - keeps `backgroundRun`, `executionToolStatus` and `WorktreeInspectSection`
+ *   for standalone/background native subagents (Git Diff inspection and
+ *   cleanup), losslessly absorbing all details moved out of the timeline
+ *   `.trace-row` collapse;
+ * - supports jumping from a timeline or bottom activity tray click straight
+ *   to the matching `run.id` via `workbench-focus`;
+ * - the duplicated workflow definition library list is gone (only a light
+ *   top-right jump to the standalone `library` fullscreen view remains).
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { WorkbenchPanelProps } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
-import { MarkdownText, useConversations, usePluginContext } from '@helm/plugin-client'
+import { MarkdownText, resolveLocalizedText, useConversations, usePluginContext, usePluginLocale } from '@helm/plugin-client'
 import { usePluginSessionDoc } from './hooks.ts'
 import { SPIN } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
@@ -25,6 +32,13 @@ import { executionToolStatus } from './model-execution-status.ts'
 import { stringifyPretty } from './model-format.ts'
 import { listResumableFailedRuns, parseResumeFailedResult } from './model-run.ts'
 import {
+  WORKBENCH_EMPTY_NO_CONVERSATION,
+  WORKBENCH_EMPTY_NO_RUNS,
+  WORKBENCH_HEAD_TITLE,
+  WORKBENCH_LIBRARY,
+  WORKBENCH_RESULT_SECTION,
+} from './copy.ts'
+import {
   clearWorkbenchRunFocus,
   peekWorkbenchRunFocus,
   subscribeWorkbenchRunFocus,
@@ -37,6 +51,7 @@ function nodeMatchesRunId(node: ExecutionNode, targetRunId: string): boolean {
 
 export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): ReactNode {
   const ctx = usePluginContext()
+  const locale = usePluginLocale()
   const conversationId = props?.conversation?.id ?? ctx.conversationId
   const conversations = useConversations()
   const runsDoc = usePluginSessionDoc<{ runs: WorkflowRunSummary[] }>(
@@ -150,7 +165,7 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
       <div className="workflow-workbench-head">
         <span className="workflow-workbench-head-left">
           <Icon name="workflow" size={14} />
-          <span>当前会话任务</span>
+          <span>{resolveLocalizedText(WORKBENCH_HEAD_TITLE, locale)}</span>
           {tree.length > 0 ? (
             <span className="badge badge-neutral tabular-nums">{tree.length}</span>
           ) : null}
@@ -175,15 +190,15 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
             onClick={() => ctx.openScreen(`screen:${ctx.pluginId}/library`)}
           >
             <Icon name="folder" size={11} />
-            工作流库
+            {resolveLocalizedText(WORKBENCH_LIBRARY, locale)}
           </button>
         </div>
       </div>
 
       {conversationId === undefined ? (
-        <div className="workflow-workbench-empty">请先打开一个会话，工作台将展示当前会话的工作流与子代理任务。</div>
+        <div className="workflow-workbench-empty">{resolveLocalizedText(WORKBENCH_EMPTY_NO_CONVERSATION, locale)}</div>
       ) : tree.length === 0 ? (
-        <div className="workflow-workbench-empty">当前会话暂无工作流或子代理运行记录。</div>
+        <div className="workflow-workbench-empty">{resolveLocalizedText(WORKBENCH_EMPTY_NO_RUNS, locale)}</div>
       ) : (
         <div className="workflow-workbench-list">
           {tree.map((node, idx) => {
@@ -290,6 +305,7 @@ function ExternalSubagentWorkbenchCard({
   run: WorkflowRunSummary
   viewer: { conversationId: number; ownedBy?: string } | undefined
 }): ReactNode {
+  const locale = usePluginLocale()
   const worktreeNode = run.nodes?.find((n) => n.worktree !== undefined)
   const execNode = run.nodes?.find((n) => n.executionId !== undefined || n.nodeId !== undefined || n.effectiveCwd !== undefined)
   const worktree = worktreeNode?.worktree
@@ -310,7 +326,7 @@ function ExternalSubagentWorkbenchCard({
       />
       {run.status === 'completed' && run.result !== undefined ? (
         <div className="workflow-result-box">
-          <div className="trace-section-label">运行产出</div>
+          <div className="trace-section-label">{resolveLocalizedText(WORKBENCH_RESULT_SECTION, locale)}</div>
           {typeof run.result === 'string' ? (
             <MarkdownText text={run.result} />
           ) : resultPretty !== undefined ? (

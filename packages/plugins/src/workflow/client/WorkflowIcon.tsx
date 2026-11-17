@@ -1,6 +1,7 @@
 /**
- * builtin:workflow 插件 client 图标组件：委托给 @helm/plugin-client 共享的 HelmIcon，
- * 避免与宿主重复维护 lucide-react 图标映射。
+ * Icon component of the builtin:workflow plugin client: delegates to the
+ * HelmIcon shared by @helm/plugin-client, avoiding a duplicate
+ * lucide-react icon mapping in the host.
  */
 import type { ReactNode } from 'react'
 import { HelmIcon } from '@helm/plugin-client'

@@ -1,16 +1,28 @@
 /**
- * builtin:workflow 插件 client 纯逻辑：SubagentWorkflow 工具调用 ↔ run 精确关联、
- * 工作流运行卡阶段分组 / log 路标 / 节点摘要 / 操作可用判定与节点统计
- * （原 workflow-card-model.ts；零 React/DOM 依赖）。
+ * Pure logic for the builtin:workflow client: SubagentWorkflow tool call ↔
+ * run precise association, workflow run card phase grouping / log beacons /
+ * node summaries / action availability and node stats (formerly
+ * workflow-card-model.ts; zero React/DOM dependencies).
  */
+import { DEFAULT_HELM_LOCALE, resolveLocalizedText, type HelmLocale } from '@helm/plugin-client'
 import type { ConversationSummary } from '@helm/protocol'
 import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts.js'
 import { firstLineOf, formatShortModelName, inputString, inspectString } from './model-format.ts'
+import {
+  DEFAULT_PHASE_TITLE,
+  NODE_QUEUED,
+  NODE_RUNNING_FALLBACK,
+  NODE_SKIPPED,
+  nodeAwaitingApproval,
+  NODE_EXECUTION_FAILED,
+  NODE_GATE_FAILED_FALLBACK,
+  traceResumeFallbackLabel,
+} from './copy.ts'
 
-/** 工具输出 JSON 里的 run id 字段（"id":"wf_xxx"）精确提取（不匹配子串/前缀）。 */
+/** Precisely extract the run id field from tool output JSON (`"id":"wf_xxx"`; no substring/prefix matching). */
 const WORKFLOW_RUN_ID_IN_RESULT_RE = /"id"\s*:\s*"([^"]+)"/
 
-/** 解析 SubagentWorkflow 工具调用关联的工作流 run（精确关联，绝不猜最新）。 */
+/** Resolve the workflow run linked to a SubagentWorkflow tool call (precise association, never guess "latest"). */
 export function resolveWorkflowRunForTool(
   input: { callId: string | undefined; result?: unknown },
   parentConversationId: number,
@@ -34,7 +46,7 @@ export function resolveWorkflowRunForTool(
   return undefined
 }
 
-/** 判定 SubagentWorkflow 工具返回文本是否为后台启动句柄（非最终结算结果）。 */
+/** Whether a SubagentWorkflow tool result text is a background dispatch handle (not the final settlement). */
 export function isBackgroundWorkflowResultHandle(result: unknown): boolean {
   if (typeof result !== 'string') return false
   const trimmed = result.trim()
@@ -49,14 +61,14 @@ export function isBackgroundWorkflowResultHandle(result: unknown): boolean {
   }
 }
 
-/** 无关联 run 记录时从工具入参提取可读标题，避免裸露空白。 */
-export function resolveWorkflowToolFallbackLabel(input: unknown): string {
+/** Extract a readable title from the tool input when no run record is linked, avoiding blank space. */
+export function resolveWorkflowToolFallbackLabel(input: unknown, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
   const name = inputString(input, 'name')
   if (name !== undefined) return firstLineOf(name, 60)
   const scriptPath = inputString(input, 'scriptPath')
   if (scriptPath !== undefined) return firstLineOf(scriptPath, 60)
   const resumeFromRunId = inputString(input, 'resumeFromRunId')
-  if (resumeFromRunId !== undefined) return `恢复 ${resumeFromRunId}`
+  if (resumeFromRunId !== undefined) return traceResumeFallbackLabel(resumeFromRunId, locale)
   const script = inputString(input, 'script')
   if (script !== undefined) {
     const metaName = /name\s*:\s*["']([^"']+)["']/.exec(script)?.[1]
@@ -67,10 +79,10 @@ export function resolveWorkflowToolFallbackLabel(input: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
-// 工作流卡纯逻辑（原 workflow-card-model.ts）
+// Workflow card pure logic (formerly workflow-card-model.ts)
 // ---------------------------------------------------------------------------
 
-/** 节点收起行主信息摘要。 */
+/** Whether the collapsed node row has extra detail worth expanding. */
 export function hasNodeExtraDetail(node: WorkflowNodeState): boolean {
   return node.agentType !== undefined || node.executionId !== undefined || node.nodeId !== undefined ||
     node.effectiveCwd !== undefined || node.gateCommand !== undefined || node.prompt !== undefined
@@ -91,7 +103,7 @@ function firstLine(text: string): string {
   return nl === -1 ? text : text.slice(0, nl)
 }
 
-/** 节点产出紧凑单行预览。 */
+/** Compact one-line preview of a node's output. */
 export function formatNodeOutputPreview(output: unknown, maxChars = 80): string | undefined {
   if (output === undefined || output === null) return undefined
   if (typeof output === 'string') {
@@ -109,19 +121,23 @@ export function formatNodeOutputPreview(output: unknown, maxChars = 80): string 
   return truncateWithEllipsis(serialized, maxChars)
 }
 
-/** 节点收起行主信息摘要（耗时在右侧单独渲染）。 */
+/** Collapsed node row main summary (duration renders separately on the right). */
 export function resolveNodeSummaryText(
   node: WorkflowNodeState,
   childDoing?: string,
   childStatus?: ConversationSummary['status'],
   pendingAskTitle?: string,
+  locale: HelmLocale = DEFAULT_HELM_LOCALE,
 ): NodeSummaryText {
   if (node.status === 'running' && childStatus === 'blocked') {
-    return { text: `等待审批：${pendingAskTitle || childDoing || '等待人工确认'}`, isError: false }
+    return { text: nodeAwaitingApproval(pendingAskTitle ?? childDoing, locale), isError: false }
   }
   if (node.status === 'running') {
     const doing = childDoing?.trim()
-    return { text: doing !== undefined && doing !== '' ? doing : (node.phaseTitle ?? '执行中…'), isError: false }
+    return {
+      text: doing !== undefined && doing !== '' ? doing : (node.phaseTitle ?? resolveLocalizedText(NODE_RUNNING_FALLBACK, locale)),
+      isError: false,
+    }
   }
   if (node.status === 'failed') {
     if (node.error !== undefined && node.error.trim() !== '') {
@@ -129,21 +145,21 @@ export function resolveNodeSummaryText(
     }
     if (node.gate?.ok === false) {
       const gateOutput = node.gate.output.trim()
-      const text = gateOutput !== '' ? truncateWithEllipsis(firstLine(gateOutput), 100) : 'Gate 验收未通过'
+      const text = gateOutput !== '' ? truncateWithEllipsis(firstLine(gateOutput), 100) : resolveLocalizedText(NODE_GATE_FAILED_FALLBACK, locale)
       return { text, isError: true }
     }
-    return { text: '执行失败', isError: true }
+    return { text: resolveLocalizedText(NODE_EXECUTION_FAILED, locale), isError: true }
   }
   if (node.status === 'skipped') {
-    return { text: node.error ?? '已跳过', isError: false }
+    return { text: node.error ?? resolveLocalizedText(NODE_SKIPPED, locale), isError: false }
   }
   if (node.status === 'done') {
     return { text: formatNodeOutputPreview(node.output), isError: false }
   }
-  return { text: '排队等待执行…', isError: false }
+  return { text: resolveLocalizedText(NODE_QUEUED, locale), isError: false }
 }
 
-/** 按阶段分组的节点视图模型。 */
+/** Phase-grouped node view model. */
 export interface WorkflowPhaseSection {
   key: string
   index: number
@@ -156,9 +172,10 @@ export interface WorkflowPhaseSection {
 }
 
 /**
- * 阶段分组状态：running 优先可见；failed 次之；全部结算（done / skipped）
- * 才判 done——存在 pending 未执行节点时，run 仍在跑为进行中，run 已终结
- * 也不得假完成（pending 不被 done 掩盖）。
+ * Phase group status: running wins visibility, then failed; only full
+ * settlement (done / skipped everywhere) counts as done — while pending
+ * (unexecuted) nodes exist the run is still in progress, and a terminated run
+ * must not fake completion either (pending must not be masked by done).
  */
 function sectionStatus(
   nodes: WorkflowNodeState[],
@@ -171,12 +188,11 @@ function sectionStatus(
   return runStatus === 'running' ? 'running' : 'pending'
 }
 
-const DEFAULT_SECTION_TITLE = '默认阶段'
-
-/** 构建按阶段分组的节点视图（不过滤任何节点）。 */
-export function buildWorkflowPhaseSections(run: WorkflowRunSummary): WorkflowPhaseSection[] {
+/** Build the phase-grouped node view (no node is filtered out). */
+export function buildWorkflowPhaseSections(run: WorkflowRunSummary, locale: HelmLocale = DEFAULT_HELM_LOCALE): WorkflowPhaseSection[] {
   const nodes = run.nodes ?? []
   const allNodes = [...nodes]
+  const defaultSectionTitle = resolveLocalizedText(DEFAULT_PHASE_TITLE, locale)
 
   const declared: Array<{ title: string; detail?: string }> = []
   const seen = new Set<string>()
@@ -239,9 +255,9 @@ export function buildWorkflowPhaseSections(run: WorkflowRunSummary): WorkflowPha
   if (defaultNodes.length > 0) {
     const doneCount = defaultNodes.filter((n) => n.status === 'done').length
     sections.push({
-      key: `phase:${declared.length}:${DEFAULT_SECTION_TITLE}`,
+      key: `phase:${declared.length}:${defaultSectionTitle}`,
       index: declared.length,
-      title: DEFAULT_SECTION_TITLE,
+      title: defaultSectionTitle,
       status: sectionStatus(defaultNodes, run.status),
       nodes: defaultNodes,
       doneCount,
@@ -251,21 +267,21 @@ export function buildWorkflowPhaseSections(run: WorkflowRunSummary): WorkflowPha
   return sections
 }
 
-/** 脚本 log() 路标行。 */
+/** Script log() beacon line. */
 export interface WorkflowLogLine {
   key: string
   at: number
   message: string
 }
 
-/** 提取脚本 log() 路标。 */
+/** Extract script log() beacons. */
 export function extractWorkflowLogs(run: WorkflowRunSummary): WorkflowLogLine[] {
   return (run.progress ?? [])
     .filter((p): p is Extract<typeof p, { kind: 'log' }> => p.kind === 'log')
     .map((p, idx) => ({ key: `log:${idx}:${p.at}`, at: p.at, message: p.message }))
 }
 
-/** 断点恢复可用判定：仅 DSL 编排工作流失败或中止、且尚未被新续跑接管时可用。 */
+/** Checkpoint-resume availability: only failed or aborted DSL-orchestrated workflows not yet superseded by a resume run. */
 export function canResumeWorkflowRun(run: WorkflowRunSummary): boolean {
   return (
     run.kind !== 'subagent' &&
@@ -356,10 +372,13 @@ export function parseResumeFailedResult(raw: unknown): ResumeFailedSummaryView |
 }
 
 /**
- * 「转入后台」查看方判定：当前查看会话（时间线即发起会话；工作台为面板会话）
- * 及其归属。ownedBy 缺省按 human（内核缺省值）；bot/helm（automation 会话）
- * 的前台同步 run 不显示按钮——服务端对 automation 归属一律拒绝（防早结算），
- * 前端如实隐藏，不展示注定失败的入口。
+ * "Move to background" viewer scope: the current viewing conversation (the
+ * timeline is the initiating conversation; the workbench is the panel
+ * conversation) plus its ownership. ownedBy defaults to human (the kernel
+ * default); foreground-sync runs of bot/helm (automation) conversations hide
+ * the button — the server refuses automation ownership anyway (prevents early
+ * settlement), so the frontend hides it honestly instead of showing a doomed
+ * entry point.
  */
 export interface DetachViewerScope {
   conversationId?: number
@@ -367,9 +386,12 @@ export interface DetachViewerScope {
 }
 
 /**
- * 前台同步 run「转入后台」可用判定：仅明确 runId 的运行中前台同步 run
- *（syncForeground 标记且尚未 detached），且当前查看会话即发起会话、归属
- * human（或缺省 human）；跨会话/工作台他处不显示，服务端仍会复核授权。
+ * Foreground-sync run "move to background" availability: only running
+ * foreground-sync runs (syncForeground marked and not yet detached) with an
+ * explicit runId, where the current viewing conversation is the initiating
+ * conversation and is human-owned (or defaults to human); hidden across
+ * conversations / elsewhere in the workbench — the server still rechecks
+ * authorization.
  */
 export function canDetachForegroundRun(run: WorkflowRunSummary, viewer: DetachViewerScope | undefined): boolean {
   return (
@@ -383,21 +405,25 @@ export function canDetachForegroundRun(run: WorkflowRunSummary, viewer: DetachVi
 }
 
 /**
- * 已完成 run 重放可用判定：非 subagent 的 completed DSL run（含内联脚本）。
- * resumeFromRunId 对 completed run 同样合法：engine 沿用原脚本源（已保存定义
- * 重读最新文件、内联沿用源码）与原 args（显式 args 可覆盖），新 run 保留原会话。
- * journal 缓存仅复用调用载荷完全相同的前缀节点，首次失配起真实重执行；
- * 不承诺改参必命中缓存，含外部副作用的节点照实重跑。
+ * Completed-run replay availability: non-subagent completed DSL runs
+ * (including inline scripts). resumeFromRunId is also valid for completed
+ * runs: the engine reuses the original script source (saved definitions
+ * re-read the latest file; inline keeps its source) and the original args
+ * (explicit args override), and the new run keeps the original conversation.
+ * The journal cache only reuses prefix nodes whose call payloads are exactly
+ * identical; real re-execution starts at the first mismatch — no promise that
+ * changed args hit the cache, and nodes with external side effects re-run
+ * honestly.
  */
 export function canReplayWorkflowRun(run: WorkflowRunSummary): boolean {
   return run.kind !== 'subagent' && run.status === 'completed'
 }
 
 // ---------------------------------------------------------------------------
-// 工作台节点统计工具
+// Workbench node stats helpers
 // ---------------------------------------------------------------------------
 
-/** 节点统计尾注：模型短名 + 紧凑 token。 */
+/** Node stat suffix: short model name + compact token count. */
 export function formatWorkflowNodeStats(node: WorkflowNodeState): string[] {
   const segments: string[] = []
   const model = formatShortModelName(node.model)
@@ -409,13 +435,15 @@ export function formatWorkflowNodeStats(node: WorkflowNodeState): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// 总耗时解析（仅以真实记录的边界计时，不伪造 0ms / 虚构值）
+// Total duration resolution (real recorded boundaries only, never fabricate 0ms / made-up values)
 // ---------------------------------------------------------------------------
 
 /**
- * run 总耗时：running 且客户端时钟有效（nowMs >= createdAt）时随 nowMs 动态
- * 推进；其余（含 SSR 首帧无时钟）用 updatedAt - createdAt 定格到最近快照，
- * 两者都是真实边界；非法时间差返回 undefined（调用方如实省略）。
+ * Run total duration: while running with a valid client clock (nowMs >=
+ * createdAt) it advances with nowMs; otherwise (including SSR first frame
+ * without a clock) it freezes at updatedAt - createdAt, the latest snapshot —
+ * both are real boundaries; invalid differences return undefined (callers
+ * omit honestly).
  */
 export function resolveRunElapsedMs(
   run: Pick<WorkflowRunSummary, 'status' | 'createdAt' | 'updatedAt'>,
@@ -433,9 +461,11 @@ export function resolveRunElapsedMs(
 }
 
 /**
- * run 内节点耗时：running 用 startedAt + nowMs 动态推进（无时钟或无起点
- * 如实省略，保证 SSR 确定性）；已结算用持久化 durationMs 定格；无真实边界
- * （既无 startedAt 也无 durationMs）省略，绝不显示虚构的 0ms。
+ * In-run node duration: running advances dynamically with startedAt + nowMs
+ * (omitted honestly without a clock or a start point, keeping SSR
+ * deterministic); settled freezes at the persisted durationMs; with no real
+ * boundary (neither startedAt nor durationMs) it is omitted — a made-up 0ms
+ * is never shown.
  */
 export function resolveNodeElapsedMs(
   node: Pick<WorkflowNodeState, 'status' | 'startedAt' | 'durationMs'>,

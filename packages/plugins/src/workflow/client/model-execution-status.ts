@@ -1,20 +1,22 @@
 /**
- * builtin:workflow 插件 client 纯逻辑：统一执行树的状态枚举与聚合——
- * 五值状态映射（会话 / run / run 节点）、自底向上聚合与卡片有效状态合成
- * （零 React/DOM 依赖）。
+ * Pure logic for the builtin:workflow client: status enums and aggregation
+ * for the unified execution tree — five-value status mapping (conversation /
+ * run / run node), bottom-up aggregation and effective card status synthesis
+ * (zero React/DOM dependencies).
  */
 import type { ConversationSummary } from '@helm/protocol'
 import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts.js'
 import { subagentBadge } from './model-subagent-card.ts'
 import type { SubagentCardStatus } from './model-subagent-card.ts'
 
-/** 统一执行节点状态（与子会话卡片状态同一五值枚举）。 */
+/** Unified execution node status (same five-value enum as the subagent card status). */
 export type ExecutionNodeStatus = SubagentCardStatus
 
 /**
- * 状态自底向上聚合：blocked > error > working 优先；「已完成」仅当全部状态
- * 均 done——存在 pending（如未执行的 phase 节点）时不得被 done 掩盖成整体
- * 完成（不以简单最轻值判全完成）；空集返回 pending。
+ * Bottom-up status aggregation: blocked > error > working win; "done" only
+ * when every status is done — while pending exists (e.g. unexecuted phase
+ * nodes) it must not be masked into overall completion (no naive
+ * lightest-value completion); an empty set returns pending.
  */
 export function aggregateExecutionStatuses(statuses: ReadonlyArray<ExecutionNodeStatus>): ExecutionNodeStatus {
   if (statuses.length === 0) return 'pending'
@@ -36,16 +38,19 @@ export function aggregateExecutionStatuses(statuses: ReadonlyArray<ExecutionNode
 }
 
 /**
- * 子树聚合统计（含自身与全部后代）。
+ * Subtree aggregate counts (self plus all descendants).
  *
- * total / done / running / blocked / error 只计真实执行任务：workflow /
- * external 容器壳在有子节点时不计自身（一次真实执行只计一次，wrapper 不算
- * 独立完成任务；无子节点的空 run 仍计 1）；同一会话被多个历史/续接 run
- * 引用时由构树层保证单一挂载，同样不双计。
+ * total / done / running / blocked / error only count real execution tasks:
+ * workflow / external container shells do not count themselves when they have
+ * children (one real execution is counted once, a wrapper is not an
+ * independently completed task; an empty run without children still counts
+ * 1); when the same conversation is referenced by multiple historical/resumed
+ * runs, single mounting is guaranteed by the tree builder — no double
+ * counting either.
  */
 export interface ExecutionAggregate {
   status: ExecutionNodeStatus
-  /** 子树真实执行任务总数（容器壳不双计）。 */
+  /** Total real execution tasks in the subtree (container shells not double counted). */
   total: number
   done: number
   running: number
@@ -53,11 +58,17 @@ export interface ExecutionAggregate {
   error: number
 }
 
-/** 会话节点状态：与卡片徽章同源（subagentBadge 权威），保证树聚合与卡片展示一致；无任何数据时 pending，不假完成。
+/**
+ * Conversation node status: same source as the card badge (subagentBadge is
+ * authoritative) so tree aggregation and card display stay consistent;
+ * pending without any data, never fake completion.
  *
- * 审批事实额外以 pendingAskCount > 0 判定（与 AskDock 同源）：Herdr 外部执行
- * 的 AskDoc 归属原生父会话，此时会话 status 可能仍在 working——有单即 blocked，
- * 避免审批台有单而卡片/树不冒泡。 */
+ * Approval facts additionally resolve via pendingAskCount > 0 (same source as
+ * AskDock): the AskDoc of a Herdr external execution belongs to the native
+ * parent conversation, where the conversation status may still be working —
+ * any open ask means blocked, so an approval ticket never stays invisible in
+ * the card/tree.
+ */
 export function executionConversationStatus(
   summary: ConversationSummary | undefined,
   backgroundRun: WorkflowRunSummary | undefined,
@@ -72,14 +83,14 @@ export function executionConversationStatus(
   ).status
 }
 
-/** 工作流 run 状态映射。 */
+/** Workflow run status mapping. */
 export function executionRunStatus(run: Pick<WorkflowRunSummary, 'status'>): ExecutionNodeStatus {
   if (run.status === 'running') return 'working'
   if (run.status === 'failed' || run.status === 'aborted') return 'error'
   return 'done'
 }
 
-/** run 内节点状态映射（skipped 视为已结算完成）。 */
+/** In-run node status mapping (skipped counts as settled-done). */
 export function executionRunNodeStatus(node: Pick<WorkflowNodeState, 'status'>): ExecutionNodeStatus {
   if (node.status === 'running') return 'working'
   if (node.status === 'failed') return 'error'
@@ -88,9 +99,11 @@ export function executionRunNodeStatus(node: Pick<WorkflowNodeState, 'status'>):
 }
 
 /**
- * run 卡有效状态：与执行树同源合成——自身 run 终态 + 子树聚合（无子树数据
- * 时即自身终态）。后台 / 深层子任务未结算（working / blocked / error /
- * pending）时主徽章不假完成。
+ * Run card effective status: synthesized from the same source as the
+ * execution tree — the run's own terminal status + subtree aggregate (its
+ * own terminal status when there is no subtree data). While background /
+ * deep subtasks are unsettled (working / blocked / error / pending) the main
+ * badge never fakes completion.
  */
 export function effectiveRunNodeStatus(
   run: Pick<WorkflowRunSummary, 'status'>,
@@ -100,7 +113,7 @@ export function effectiveRunNodeStatus(
   return aggregateExecutionStatuses([executionRunStatus(run), subtree.status])
 }
 
-/** 紧凑卡父工具状态推导（Active-First 排序与卡片徽章共用）。 */
+/** Parent tool status derivation for compact cards (shared by Active-First ordering and card badges). */
 export function executionToolStatus(
   summary: ConversationSummary | undefined,
   run: WorkflowRunSummary | undefined,

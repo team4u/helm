@@ -1,11 +1,15 @@
 /**
- * builtin:workflow 插件 client 纯逻辑：共享格式化与宽松字段提取工具
- * （零 React/DOM 依赖）。各 model-*.ts 域模块共用；inputString / inspectString
- * 为域模块间内部导出，不经 models.ts 门面对外暴露。
+ * Pure logic for the builtin:workflow client: shared formatting and lenient
+ * field extraction helpers (zero React/DOM dependencies). Shared by every
+ * model-*.ts domain module; inputString / inspectString are internal exports
+ * between domain modules and are not exposed through the models.ts facade.
  */
+import { DEFAULT_HELM_LOCALE, type HelmLocale } from '@helm/plugin-client'
+import { summarizeJsonMoreSuffix } from './copy.ts'
 
 // ---------------------------------------------------------------------------
-// 格式化工具（时长摘要统一复用宿主 lib/format.ts 经 @helm/plugin-client 共享的实现）
+// Formatting helpers (duration summaries reuse the host lib/format.ts
+// implementation shared via @helm/plugin-client)
 // ---------------------------------------------------------------------------
 
 export function toolResultPreviewTruncated(preview: string | undefined): boolean {
@@ -16,7 +20,7 @@ export function isScrolledToBottom(element: { scrollHeight: number; scrollTop: n
   return element.scrollHeight - element.scrollTop - element.clientHeight <= 36
 }
 
-/** 首行截断（trim 后超长加省略号）。 */
+/** First line, truncated with an ellipsis when it exceeds maxChars after trim. */
 export function firstLineOf(text: string, maxChars: number): string {
   const line = text.trim().split('\n')[0] ?? ''
   return line.length > maxChars ? `${line.slice(0, maxChars)}…` : line
@@ -25,7 +29,7 @@ export function firstLineOf(text: string, maxChars: number): string {
 const PURE_HEADING_LABEL_RE = /^(?:汇报|结果|总结|摘要|结论|输出|report|result|results|summary|output)\s*[:：]?$/i
 const CODE_FENCE_OR_HR_RE = /^(?:```.*|~~~.*|[-*_]{3,})$/
 
-/** 剥离行内 Markdown 语法符号（标题前缀、引用、列表项、加粗/斜体/行内代码/链接）。 */
+/** Strip inline Markdown syntax (heading prefix, quote, list item, bold/italic/code/link). */
 export function cleanInlineMarkdown(line: string): string {
   return line
     .trim()
@@ -51,8 +55,10 @@ function isPureHeadingOrDecoratorLine(rawLine: string): boolean {
 }
 
 /**
- * 单行摘要清洗器：跳过空行与纯标题/分隔符前缀行（如 `## 汇报:` / `# 结果`），
- * 提取首个有实质内容的行并剥离行内 Markdown 符号后截断；若全篇只有标题行则退回首行清洗文本。
+ * Single-line summary cleaner: skip empty lines and pure heading/decorator
+ * prefix lines (e.g. `## 汇报:` / `# 结果`), extract the first line with real
+ * content, strip inline Markdown and truncate; if the text only contains
+ * heading lines, fall back to the first cleaned line.
  */
 export function extractCleanPreviewLine(text: string, maxChars: number): string {
   const lines = text.split('\n')
@@ -81,10 +87,15 @@ function formatReadableScalar(value: unknown): string {
 }
 
 /**
- * 对 JSON 对象/数组提取前序可读键值摘要（避免直接截断裸 `{` 字符）。
- * 优先抽取 summary/result/output/message 等高价值字段，其余按键顺序拼接。
+ * Extract a readable key/value summary from a JSON object/array (avoid
+ * truncating a bare `{` character). High-value fields such as
+ * summary/result/output/message come first; the rest join in key order.
  */
-export function summarizeReadableJson(value: unknown, maxChars: number): string {
+export function summarizeReadableJson(
+  value: unknown,
+  maxChars: number,
+  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+): string {
   if (value === null || typeof value !== 'object') {
     const scalar = formatReadableScalar(value)
     return scalar.length > maxChars ? `${scalar.slice(0, maxChars)}…` : scalar
@@ -92,7 +103,7 @@ export function summarizeReadableJson(value: unknown, maxChars: number): string 
   if (Array.isArray(value)) {
     if (value.length === 0) return '[]'
     const items = value.slice(0, 3).map((item) => formatReadableScalar(item)).filter((s) => s !== '')
-    const suffix = value.length > 3 ? ` 等 ${value.length} 项` : ''
+    const suffix = value.length > 3 ? summarizeJsonMoreSuffix(value.length, locale) : ''
     const joined = `${items.join(', ')}${suffix}`
     return joined.length > maxChars ? `${joined.slice(0, maxChars)}…` : joined
   }
@@ -116,7 +127,7 @@ export function summarizeReadableJson(value: unknown, maxChars: number): string 
   return joined.length > maxChars ? `${joined.slice(0, maxChars)}…` : joined
 }
 
-/** 工具入参字段提取（字符串且非空）。 */
+/** Extract a string input field (non-empty strings only). */
 export function inputString(input: unknown, key: string): string | undefined {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) return undefined
   const v = (input as Record<string, unknown>)[key]
@@ -128,7 +139,7 @@ export function inspectString(source: Record<string, unknown>, key: string): str
   return typeof value === 'string' && value !== '' ? value : undefined
 }
 
-/** 模型短名：剥离 provider/ 前缀，空串返回 undefined。 */
+/** Short model name: strip the provider/ prefix; empty strings return undefined. */
 export function formatShortModelName(model: string | undefined): string | undefined {
   if (model === undefined) return undefined
   const trimmed = model.trim()
@@ -137,7 +148,7 @@ export function formatShortModelName(model: string | undefined): string | undefi
   return slash >= 0 && slash < trimmed.length - 1 ? trimmed.slice(slash + 1) : trimmed
 }
 
-/** 结构化值只读展示序列化（缩进 JSON；无法序列化时回退 String，不伪造）。 */
+/** Read-only serialization of structured values (indented JSON; falls back to String, never fabricates). */
 export function stringifyPretty(value: unknown): string | undefined {
   if (value === undefined) return undefined
   try {

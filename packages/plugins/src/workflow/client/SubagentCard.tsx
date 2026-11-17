@@ -1,17 +1,20 @@
 /**
- * builtin:workflow 插件子代理实时卡：SubagentLiveCard（会话节点卡）。
- * 卡内子视图（头部徽章区 / 动作栏 / 副栏）在同目录 SubagentCardDetails.tsx；
- * tool.view 入口组件 SubagentToolView 在同目录 SubagentToolView.tsx；
- * 执行树紧凑子项行与外部执行摘要在同目录独立模块（ExecutionChildrenRows /
- * ExternalRunSummary），此处按原 client 模块形状再导出（既有消费方经
- * SubagentCard.tsx 引用）。
- * 数据经 @helm/plugin-client 共享 hooks 响应式读取；动作经 ctx.callAction 走
- * POST /api/actions/builtin:workflow/<actionId>，无任何宿主私有依赖。
+ * builtin:workflow plugin subagent live card: SubagentLiveCard (conversation
+ * node card). In-card sub-views (header badge area / action bar / subline)
+ * live in SubagentCardDetails.tsx; the tool.view entry component
+ * SubagentToolView lives in SubagentToolView.tsx; execution tree compact
+ * child rows and the external run summary live in their own sibling modules
+ * (ExecutionChildrenRows / ExternalRunSummary), re-exported here in the
+ * original client module shape (existing consumers import via
+ * SubagentCard.tsx).
+ * Data is read reactively via @helm/plugin-client shared hooks; actions go
+ * through ctx.callAction to POST /api/actions/builtin:workflow/<actionId>,
+ * with no host-private dependencies.
  */
 import { useMemo } from 'react'
 import type { ToolViewProps } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
-import { useConversation, usePluginContext, formatDurationMs } from '@helm/plugin-client'
+import { useConversation, usePluginContext, usePluginLocale, formatDurationMs, resolveLocalizedText } from '@helm/plugin-client'
 import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
 import { ExecutionCard } from './ExecutionCard.tsx'
 import { ExecutionChildrenRows } from './ExecutionChildrenRows.tsx'
@@ -38,13 +41,15 @@ import {
 } from './model-subagent-card.ts'
 import type { DetachViewerScope } from './model-run.ts'
 import type { SubagentBadge } from './model-subagent-card.ts'
+import { cardOpenChildLabel, cardOpenChildTooltip, SNIPPET_AWAITING_APPROVAL } from './copy.ts'
 
-// 既有模块形状再导出（同目录独立组件；见文件头说明）。
+// Re-exports preserving the legacy module shape (sibling components; see the file header).
 export { ExecutionChildrenRows } from './ExecutionChildrenRows.tsx'
 export { ExternalRunSummary } from './ExternalRunSummary.tsx'
 
 // ---------------------------------------------------------------------------
-// 子代理双层胶囊卡（原 SubagentLiveCard 语义；统一为 ExecutionNode 的会话节点卡）
+// Subagent two-layer capsule card (original SubagentLiveCard semantics;
+// unified as the conversation-node card of ExecutionNode)
 // ---------------------------------------------------------------------------
 
 export function SubagentLiveCard(props: {
@@ -53,26 +58,30 @@ export function SubagentLiveCard(props: {
   backgroundRun?: WorkflowRunSummary
   worktree?: { path: string; branch: string; id?: string; baseCommit?: string }
   /**
-   * 工作树只读检视入口（独立子代理卡：单次/后台/工作台子会话）：提供时且存在
-   * 工作树坐标才渲染检视节；workflow 节点卡在外层自渲染检视，不传以避免重复。
-   * nodeId 用于无登记 ID 时的 path 消歧（缺省回退子会话绑定节点）。
+   * Worktree read-only inspection entry (standalone subagent card: one-shot /
+   * background / workbench subagent): when provided and a worktree coordinate
+   * exists, the inspection section renders; workflow node cards render their
+   * own inspection outside, so they do not pass it to avoid duplication.
+   * nodeId disambiguates the path when no registration id exists (defaults to
+   * the subagent's bound node).
    */
   worktreeInspect?: { parentConversationId: number; nodeId?: string }
   toolSummary?: { prompt?: string; startedAt?: number; durationMs?: number; resultText?: string; isError?: boolean }
   startedAt?: number
-  /** 是否为缓存/历史重放任务。 */
+  /** Whether this is a cached/history replayed task. */
   cached?: boolean
-  /** 工作流节点的权威模型 / Token 统计，覆盖摘要中的同类字段，避免重复展示。 */
+  /** Authoritative model / token stats of the workflow node; overrides the same-named summary fields to avoid duplication. */
   statsOverride?: { model?: string; tokens?: number }
-  /** 展开态展示实时流与底部调用详情。 */
+  /** Expanded state shows the live stream and the bottom call details. */
   expanded?: boolean
   callDetails?: Pick<ToolViewProps, 'input' | 'result' | 'artifactRef'>
-  /** 统一执行树下一级子节点（工作台 / 工作流节点卡注入；缺省不渲染深层子树）。 */
+  /** Next-level child nodes of the unified execution tree (injected by the workbench / workflow node cards; no deep subtree rendered by default). */
   childNodes?: ExecutionNode[]
-  /** 查看方作用域（会话 + 归属）：前台同步 run 的「转入后台」可见性判定。 */
+  /** Viewer scope (conversation + ownership): foreground-sync run "Move to background" visibility check. */
   viewer?: DetachViewerScope
 }) {
   const ctx = usePluginContext()
+  const locale = usePluginLocale()
   const { childConversationId, toolStatus, backgroundRun, worktree, toolSummary, startedAt, statsOverride } = props
   const conv = useConversation(childConversationId)
   const summary = conv.summary
@@ -81,61 +90,76 @@ export function SubagentLiveCard(props: {
   const pendingAsk = conv.pendingAsks[0]
   const detailError = conv.loadError
 
-  // 自身徽章：审批事实优先——AskDoc 存在（pendingAsks 或 pendingAskCount > 0）
-  // 即等待审批，与 AskDock 同源；Herdr 外部执行的 AskDoc 归属原生父会话时
-  // 会话 status 可能仍在 working，有单不得仍显示执行中。
+  // Own badge: approval facts win — an AskDoc existing (pendingAsks or
+  // pendingAskCount > 0) means awaiting approval, same source as AskDock;
+  // when the AskDoc of a Herdr external execution belongs to the native
+  // parent conversation, the conversation status may still be working — an
+  // open ask must never keep showing running.
   const selfBadge: SubagentBadge =
     pendingAsk !== undefined || (summary?.pendingAskCount ?? 0) > 0
-      ? { status: 'blocked', label: '等待审批', badge: 'badge-warn' }
-      : subagentBadge(summary?.status, toolStatus, backgroundRun)
+      ? { status: 'blocked', label: resolveLocalizedText(SNIPPET_AWAITING_APPROVAL, locale), badge: 'badge-warn' }
+      : subagentBadge(summary?.status, toolStatus, backgroundRun, undefined, locale)
   const taskTitle = resolveSubagentTaskTitle(summary, childConversationId, toolSummary, backgroundRun, detail?.entries)
   const statSegments = useMemo(
     () =>
-      buildSubagentStatSegments({
-        ...(summary !== undefined ? { summary } : {}),
-        ...(detail?.entries !== undefined ? { entries: detail.entries } : {}),
-        ...(live !== undefined ? { live } : {}),
-        ...(backgroundRun !== undefined ? { backgroundRun } : {}),
-        ...(statsOverride?.model !== undefined ? { modelOverride: statsOverride.model } : {}),
-        ...(statsOverride?.tokens !== undefined ? { tokensOverride: statsOverride.tokens } : {}),
-      }),
-    [summary, detail?.entries, live, backgroundRun, statsOverride?.model, statsOverride?.tokens],
+      buildSubagentStatSegments(
+        {
+          ...(summary !== undefined ? { summary } : {}),
+          ...(detail?.entries !== undefined ? { entries: detail.entries } : {}),
+          ...(live !== undefined ? { live } : {}),
+          ...(backgroundRun !== undefined ? { backgroundRun } : {}),
+          ...(statsOverride?.model !== undefined ? { modelOverride: statsOverride.model } : {}),
+          ...(statsOverride?.tokens !== undefined ? { tokensOverride: statsOverride.tokens } : {}),
+        },
+        locale,
+      ),
+    [summary, detail?.entries, live, backgroundRun, statsOverride?.model, statsOverride?.tokens, locale],
   )
   const snippet = useMemo(
     () =>
-      resolveSubagentHeaderSnippet({
-        badgeStatus: selfBadge.status,
-        ...(summary !== undefined ? { summary } : {}),
-        ...(live !== undefined ? { live } : {}),
-        ...(detail?.entries !== undefined ? { entries: detail.entries } : {}),
-        ...(pendingAsk !== undefined ? { pendingAsk } : {}),
-        ...(backgroundRun !== undefined ? { backgroundRun } : {}),
-        ...(toolSummary !== undefined ? { toolSummary } : {}),
-        ...(detailError !== undefined ? { detailError } : {}),
-      }),
-    [selfBadge.status, summary, live, detail?.entries, pendingAsk, backgroundRun, toolSummary, detailError],
+      resolveSubagentHeaderSnippet(
+        {
+          badgeStatus: selfBadge.status,
+          ...(summary !== undefined ? { summary } : {}),
+          ...(live !== undefined ? { live } : {}),
+          ...(detail?.entries !== undefined ? { entries: detail.entries } : {}),
+          ...(pendingAsk !== undefined ? { pendingAsk } : {}),
+          ...(backgroundRun !== undefined ? { backgroundRun } : {}),
+          ...(toolSummary !== undefined ? { toolSummary } : {}),
+          ...(detailError !== undefined ? { detailError } : {}),
+        },
+        locale,
+      ),
+    [selfBadge.status, summary, live, detail?.entries, pendingAsk, backgroundRun, toolSummary, detailError, locale],
   )
 
-  // 统一执行树：后代子树聚合 / 前线活动 / 后代审批（仅由真实数据提炼）。
+  // Unified execution tree: descendant subtree aggregation / frontline
+  // activity / descendant approvals (distilled from real data only).
   const childNodes = props.childNodes ?? []
   const descendants = useMemo(() => aggregateExecutionNodes(childNodes), [childNodes])
-  const frontline = useMemo(() => collectExecutionFrontline(childNodes, 2), [childNodes])
-  const approvals = useMemo(() => collectExecutionApprovals(childNodes, 3), [childNodes])
-  // 主徽章有效状态：与执行树同源（自身 + 后代聚合）；后台 / 深层子任务未
-  // 结算（blocked / working / error / pending）时绝不显示已完成，自身终态另标清楚。
+  const frontline = useMemo(() => collectExecutionFrontline(childNodes, 2, locale), [childNodes, locale])
+  const approvals = useMemo(() => collectExecutionApprovals(childNodes, 3, locale), [childNodes, locale])
+  // Main badge effective status: same source as the execution tree (self +
+  // descendant aggregate); while background / deep subtasks are unsettled
+  // (blocked / working / error / pending) never show done — the own terminal
+  // status is labeled separately.
   const effectiveStatus: ExecutionNodeStatus =
     descendants.total > 0 ? aggregateExecutionStatuses([selfBadge.status, descendants.status]) : selfBadge.status
 
-  // 任一自身/后代仍在执行或等待审批时，总耗时持续增长。聚合徽章可能因
-  // 另一后代失败而显示 error，因此计时不能只依赖 effectiveStatus。
+  // While any self/descendant is still executing or awaiting approval, the
+  // total duration keeps growing. The aggregate badge may show error because
+  // another descendant failed, so timing must not depend on effectiveStatus
+  // alone.
   const elapsedActive =
     selfBadge.status === 'working' || selfBadge.status === 'blocked' ||
     descendants.running > 0 || descendants.blocked > 0
-  // SSR 首帧不启动时钟，保持确定性渲染。
+  // SSR first frame starts no clock, keeping rendering deterministic.
   const nowMs = useElapsedNowMs(elapsedActive)
-  // 总耗时独立展示位：仅以真实边界解析（本次调用 / 后台 run；运行中随秒表
-  // 动态推进、结算定格持久化 duration；无本轮边界如实省略，不用会话
-  // createdAt 伪造一次 resume 的耗时）。
+  // Total duration has its own display slot: resolved only from real
+  // boundaries (this call / background run; running advances dynamically with
+  // the stopwatch, settled freezes at the persisted duration; omitted
+  // honestly without a current-turn boundary — the conversation createdAt
+  // never fabricates the duration of one resume).
   const fallbackStartedAt = startedAt ?? latestTurnStartedAt(detail?.entries)
   const elapsedMs = resolveSubagentElapsedMs({
     ...(backgroundRun !== undefined ? { backgroundRun } : {}),
@@ -146,9 +170,11 @@ export function SubagentLiveCard(props: {
   })
   const elapsedText = elapsedMs !== undefined ? formatDurationMs(elapsedMs) : undefined
 
-  // 隔离工作树:显式入参优先,其次回退后台 run 首个节点的 worktree。
+  // Isolated worktree: the explicit prop wins, then the first worktree of the
+  // background run's nodes.
   const wt = worktree ?? backgroundRun?.nodes?.find((n) => n.worktree !== undefined)?.worktree
-  // 检视/清理共用消歧坐标：调用方显式 nodeId > 子会话绑定节点。
+  // Disambiguation coordinate shared by inspect/cleanup: caller-explicit
+  // nodeId > the subagent's bound node.
   const inspectNodeId =
     props.worktreeInspect?.nodeId ?? (summary?.nodeId !== undefined && summary.nodeId !== '' ? summary.nodeId : undefined)
   const streamLines = useMemo(
@@ -174,8 +200,8 @@ export function SubagentLiveCard(props: {
     <ExecutionCard
       variantClass={variantClass}
       activate={{
-        label: `打开子会话 #${childConversationId} 抽屉`,
-        tooltip: [taskTitle, summary?.profileId, wt?.branch, [...statSegments, elapsedText].filter(Boolean).join(' · '), '点击打开子会话抽屉'].filter(Boolean).join('\n'),
+        label: cardOpenChildLabel(childConversationId, locale),
+        tooltip: [taskTitle, summary?.profileId, wt?.branch, [...statSegments, elapsedText].filter(Boolean).join(' · '), cardOpenChildTooltip(locale)].filter(Boolean).join('\n'),
         open: openChild,
       }}
       heading={

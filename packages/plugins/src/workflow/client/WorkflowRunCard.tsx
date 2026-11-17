@@ -1,8 +1,10 @@
 /**
- * builtin:workflow 插件工作流运行卡组件：
- * - WorkflowToolView：时间线内 SubagentWorkflow 工具调用（tool.view 扩展点）；
- * - WorkflowRunCardBody：工作流运行卡共用执行树视图（时间线与工作台共用）；
- *   run 内节点卡族见 WorkflowNodeCards，重放表单见 WorkflowReplayForm。
+ * builtin:workflow plugin workflow run card components:
+ * - WorkflowToolView: SubagentWorkflow tool calls in the timeline (tool.view
+ *   extension point);
+ * - WorkflowRunCardBody: the shared execution tree view of workflow run cards
+ *   (timeline and workbench); the in-run node card family lives in
+ *   WorkflowNodeCards, the replay form in WorkflowReplayForm.
  */
 import { useId, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -15,15 +17,17 @@ import {
   PopoverTrigger,
   formatCompactTimestamp,
   formatDurationMs,
+  resolveLocalizedText,
   useConversations,
   usePluginContext,
+  usePluginLocale,
   useToolActivity,
 } from '@helm/plugin-client'
 import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
 import { WorkflowNodeCard } from './WorkflowNodeCards.tsx'
 import { WorkflowReplayForm } from './WorkflowReplayForm.tsx'
 import { useElapsedNowMs, usePluginSessionDoc } from './hooks.ts'
-import { SPIN, RUN_LABEL, RUN_BADGE, PHASE_ICON, EXECUTION_LABEL, EXECUTION_BADGE } from './presentation.ts'
+import { SPIN, RUN_BADGE, PHASE_ICON, EXECUTION_BADGE } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { cleanInlineMarkdown, stringifyPretty } from './model-format.ts'
 import { canSaveRunAsWorkflow, parseWorkflowArgsInput, parseWorkflowSaveResult } from './model-library.ts'
@@ -45,13 +49,71 @@ import type { ExecutionNode } from './model-execution-tree.ts'
 import { collectExecutionApprovals } from './model-execution-view.ts'
 import { effectiveRunNodeStatus, executionRunStatus } from './model-execution-status.ts'
 import { requestWorkbenchRunFocus } from './workbench-focus.ts'
+import {
+  ACTION_ABORT,
+  ACTION_DETACH,
+  actionDetachDone,
+  approvalsBadge,
+  approvalsTitle,
+  executionStatusLabel,
+  externalErrorJoiner,
+  RUN_CARD_ABORT_FAILED,
+  RUN_CARD_CACHED_REPLAY,
+  RUN_CARD_DETACH_FAILED,
+  runCardAriaLabel,
+  RUN_CARD_COLLAPSE_TITLE,
+  RUN_CARD_EXPAND_TITLE,
+  runCardNodesStat,
+  runCardReplayAccepted,
+  RUN_CARD_REPLAY,
+  RUN_CARD_REPLAY_FAILED,
+  runCardReplayBadgeTitle,
+  RUN_CARD_RESUME,
+  RUN_CARD_RESUME_FAILED,
+  RUN_CARD_RESUME_TITLE,
+  runCardSaveCreated,
+  runCardSaveInvalidResult,
+  runCardSaveOverwritten,
+  RUN_CARD_SAVE_AS,
+  RUN_CARD_SAVE_FAILED,
+  runCardSavedBadgeTitle,
+  RUN_CARD_SAVED_BADGE,
+  runCardSelfStateTitle,
+  runCardSelfTitle,
+  runCardSubtreeStat,
+  selfStatusLabel,
+  traceActiveNode,
+  TRACE_BG_DISPATCHED,
+  TRACE_RUN_BACKGROUND,
+  TRACE_RUN_COMPLETED,
+  TRACE_RUN_FAILED,
+  TRACE_RUN_RUNNING,
+  traceNodeProgress,
+  traceToggleDetailsLabel,
+  traceWorkflowRowLabel,
+  RUN_COLLAPSE_RESULT,
+  RUN_EXPAND_RESULT,
+  RUN_KV_CREATED_AT,
+  RUN_KV_RUN_ID,
+  RUN_KV_SAVED_DEF,
+  RUN_KV_SOURCE_RUN,
+  RUN_KV_UPDATED_AT,
+  RUN_NO_NODES,
+  RUN_RESULT_SECTION,
+  RUN_CARD_DETACH_TITLE,
+  RUN_CARD_MORE_ARIA,
+  RUN_CARD_MORE_TITLE,
+  RUN_CARD_WORKBENCH_DETAILS,
+  runStatusLabel,
+} from './copy.ts'
 
 // ---------------------------------------------------------------------------
-// WorkflowToolView：tool.view 扩展点组件（SubagentWorkflow 工具行）
+// WorkflowToolView: tool.view extension point component (SubagentWorkflow tool row)
 // ---------------------------------------------------------------------------
 
 export function WorkflowToolView(props: ToolViewProps): ReactNode {
   const ctx = usePluginContext()
+  const locale = usePluginLocale()
   const viewerConversationId = props.conversationId ?? ctx.conversationId
   const runsDoc = usePluginSessionDoc<{ runs: WorkflowRunSummary[] }>(
     'runs',
@@ -106,15 +168,21 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
   }, [run, nowMs, isBgHandle, props.status, props.startedAt, props.durationMs])
 
   if (run === undefined) {
-    const fallbackLabel = resolveWorkflowToolFallbackLabel(props.input)
+    const fallbackLabel = resolveWorkflowToolFallbackLabel(props.input, locale)
     const isError = props.status === 'error'
     const badgeCls = isError ? 'badge-err' : isBgHandle || props.status === 'running' ? 'badge-accent' : 'badge-ok'
-    const badgeText = isError ? '失败' : isBgHandle ? '后台运行中' : props.status === 'running' ? '运行中' : '已完成'
+    const badgeText = isError
+      ? resolveLocalizedText(TRACE_RUN_FAILED, locale)
+      : isBgHandle
+        ? resolveLocalizedText(TRACE_RUN_BACKGROUND, locale)
+        : props.status === 'running'
+          ? resolveLocalizedText(TRACE_RUN_RUNNING, locale)
+          : resolveLocalizedText(TRACE_RUN_COMPLETED, locale)
     const summaryText =
       isError && resultText !== undefined && resultText.trim() !== ''
         ? cleanInlineMarkdown(resultText.split(/\r?\n/, 1)[0] ?? '')
         : isBgHandle
-          ? '已派发后台运行'
+          ? resolveLocalizedText(TRACE_BG_DISPATCHED, locale)
           : undefined
 
     return (
@@ -124,7 +192,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
           className={`trace-row workflow-trace-row-btn${isError ? ' trace-row-error' : ''}`}
           aria-expanded={detailsOpen}
           aria-controls={detailsId}
-          aria-label={`${fallbackLabel} — ${detailsOpen ? '收起详情' : '展开详情'}`}
+          aria-label={traceToggleDetailsLabel(fallbackLabel, detailsOpen, locale)}
           onClick={() => setDetailsOpen((v) => !v)}
         >
           <span className="trace-row-left">
@@ -163,12 +231,12 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
       : (RUN_BADGE[run.status] ?? 'badge-neutral')
   const statusBadgeText =
     effectiveStatus !== undefined && effectiveStatus !== selfRunStatus
-      ? (EXECUTION_LABEL[effectiveStatus] ?? effectiveStatus)
-      : (RUN_LABEL[run.status] ?? run.status)
+      ? executionStatusLabel(effectiveStatus, locale)
+      : runStatusLabel(run.status, locale)
 
-  const progressPart = nodes.length > 0 ? `${doneCount}/${nodes.length} 节点` : undefined
+  const progressPart = nodes.length > 0 ? traceNodeProgress(doneCount, nodes.length, locale) : undefined
   const activeNode = nodes.find((n) => n.status === 'running')
-  const livePart = activeNode !== undefined ? `进行中: ${activeNode.label ?? activeNode.id}` : undefined
+  const livePart = activeNode !== undefined ? traceActiveNode(activeNode.label ?? activeNode.id, locale) : undefined
   const errorPart =
     run.error !== undefined && run.error.trim() !== '' ? cleanInlineMarkdown(run.error.split(/\r?\n/, 1)[0] ?? '') : undefined
   const summaryParts = [progressPart, isError ? errorPart : isRunning ? livePart : undefined].filter(
@@ -181,7 +249,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
       <button
         type="button"
         className={`trace-row workflow-trace-row-btn${isError ? ' trace-row-error' : ''}`}
-        aria-label={`工作流 ${run.name}${summaryText ? ` · ${summaryText}` : ''} — 在工作台查看详情`}
+        aria-label={traceWorkflowRowLabel(run.name, summaryText, locale)}
         onClick={() => {
           requestWorkbenchRunFocus(viewerConversationId ?? run.conversationId, run.id)
           ctx.openWorkbench(`plugin:${ctx.pluginId}/tasks`)
@@ -210,7 +278,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
   )
 }
 
-/** 工作流运行卡共用执行树视图，在途按钮用同步 ref 防止重复提交。 */
+/** Shared execution tree view of workflow run cards; in-flight buttons use a sync ref to prevent duplicate submissions. */
 export function WorkflowRunCardBody(props: {
   run: WorkflowRunSummary
   cardOpen: boolean
@@ -219,12 +287,13 @@ export function WorkflowRunCardBody(props: {
   onToggleResult: () => void
   toolProps?: { input?: unknown; result?: unknown; artifactRef?: string }
   inWorkbench: boolean
-  /** 查看方作用域（会话 + 归属）：前台同步 run 的「转入后台」可见性判定。 */
+  /** Viewer scope (conversation + ownership): foreground-sync run "Move to background" visibility check. */
   viewer?: DetachViewerScope
-  /** 统一执行树子节点（agent 节点会话的深层后代；缺省仅展示 run 自身节点）。 */
+  /** Unified execution tree children (deep descendants of agent node conversations; by default only the run's own nodes are shown). */
   childNodes?: ExecutionNode[]
 }): ReactNode {
   const ctx = usePluginContext()
+  const locale = usePluginLocale()
   const { run, cardOpen, toolProps, inWorkbench } = props
   const [busy, setBusy] = useState(false)
   const inFlight = useRef(false)
@@ -234,63 +303,71 @@ export function WorkflowRunCardBody(props: {
   const nodes = run.nodes ?? []
   const done = nodes.filter((n) => n.status === 'done').length
   const tokens = nodes.reduce((sum, n) => sum + (n.tokens ?? 0), 0)
-  const sections = useMemo(() => buildWorkflowPhaseSections(run), [run])
+  const sections = useMemo(() => buildWorkflowPhaseSections(run, locale), [run, locale])
   const logs = useMemo(() => extractWorkflowLogs(run), [run])
 
-  // 统一执行树：子树计数与后代审批（存在深层后代时才展示，不虚构）。
+  // Unified execution tree: subtree counts and descendant approvals (shown
+  // only when deep descendants exist, never fabricated).
   const childNodes = props.childNodes ?? []
   const subtree = useMemo(() => aggregateExecutionNodes(childNodes), [childNodes])
   const deeperCount = subtree.total - nodes.length
-  const approvals = useMemo(() => collectExecutionApprovals(childNodes, 3), [childNodes])
+  const approvals = useMemo(() => collectExecutionApprovals(childNodes, 3, locale), [childNodes, locale])
   const descendantApprovals = subtree.blocked
-  // 主徽章有效状态：与执行树同源（自身 run 终态 + 子树聚合）；后台 / 深层
-  // 子任务未结算（working / blocked / error / pending）时不假完成，自身终态
-  // 另标清楚（自身已失败 / 中止时保留更具体的终态文案）。
+  // Main badge effective status: same source as the execution tree (the
+  // run's own terminal status + subtree aggregate); while background / deep
+  // subtasks are unsettled (working / blocked / error / pending) never fake
+  // completion; the own terminal status is labeled separately (a self
+  // failed / aborted run keeps its more specific terminal copy).
   const selfRunStatus = executionRunStatus(run)
   const effectiveStatus = effectiveRunNodeStatus(run, subtree)
 
-  // 运行中秒表（SSR 首帧确定性）：总耗时随秒表动态推进，结束定格在
-  // createdAt → updatedAt 真实边界。
+  // Running stopwatch (deterministic SSR first frame): the total duration
+  // advances with the stopwatch and freezes at the real createdAt →
+  // updatedAt boundary when finished.
   const nowMs = useElapsedNowMs(run.status === 'running')
   const elapsedMs = resolveRunElapsedMs(run, nowMs)
 
-  /** 同步 ref 防重复：渲染尚未刷新时连点也不重复发请求；错误如实通知，不覆盖成功。 */
+  /** Sync ref against duplicates: rapid clicks before a re-render never dispatch twice; errors are notified honestly, never overwriting success. */
   const guarded = (dispatch: () => Promise<unknown>, failMessage: string): void => {
     if (inFlight.current) return
     inFlight.current = true
     setBusy(true)
     dispatch()
-      .catch((err: unknown) => ctx.notify(`${failMessage}：${err instanceof Error ? err.message : String(err)}`, 'error'))
+      .catch((err: unknown) => ctx.notify(`${failMessage}${externalErrorJoiner(locale)}${err instanceof Error ? err.message : String(err)}`, 'error'))
       .finally(() => {
         inFlight.current = false
         setBusy(false)
       })
   }
   const abort = (): void => {
-    guarded(() => ctx.callAction('abort', { runId: run.id }), '中止工作流失败')
+    guarded(() => ctx.callAction('abort', { runId: run.id }), resolveLocalizedText(RUN_CARD_ABORT_FAILED, locale))
   }
-  // 转入后台：仅运行中的前台同步 run（父回合工具调用阻塞等待处可放行）；
-  // Detach releases the current call; settlement reports use steer.
+  // Move to background: only running foreground-sync runs (allowed while the
+  // parent turn's tool call blocks); detach releases the current call and
+  // settlement reports use steer.
   const detach = (): void => {
     guarded(
       () =>
         ctx
           .callAction('detach', { runId: run.id })
-          .then(() => ctx.notify(`已转入后台（运行 ${run.id}）：当前调用将收到后台句柄，完成后自动汇报`)),
-      '转入后台失败',
+          .then(() => ctx.notify(actionDetachDone(run.id, locale))),
+      resolveLocalizedText(RUN_CARD_DETACH_FAILED, locale),
     )
   }
   const resume = (): void => {
     guarded(
       () => ctx.callAction('run', { resumeFromRunId: run.id, conversationId: run.conversationId }),
-      '断点恢复失败',
+      resolveLocalizedText(RUN_CARD_RESUME_FAILED, locale),
     )
   }
-  // 重放：completed DSL run（含内联）经 resumeFromRunId 发起新 run，新 run 保留
-  // 原会话；空白 args 沿用原 args，显式 args 严格解析后覆盖。缓存只复用调用
-  // 载荷相同的前缀节点，首次失配起重执行——不承诺改参必命中缓存。
+  // Replay: a completed DSL run (including inline) starts a new run via
+  // resumeFromRunId, and the new run keeps the original conversation; blank
+  // args keep the original args, explicit args strictly parsed and override.
+  // The cache only reuses prefix nodes with identical call payloads; real
+  // re-execution starts at the first mismatch — no promise that changed args
+  // hit the cache.
   const replay = (): void => {
-    const parsed = parseWorkflowArgsInput(replayArgs)
+    const parsed = parseWorkflowArgsInput(replayArgs, locale)
     if (!parsed.ok) {
       setReplayError(parsed.error)
       return
@@ -304,13 +381,14 @@ export function WorkflowRunCardBody(props: {
             conversationId: run.conversationId,
             ...(parsed.args !== undefined ? { args: parsed.args } : {}),
           })
-          .then(() => ctx.notify(`重放已受理（源 run ${run.id}；新 run 保留原会话与原脚本源）`)),
-      '重放失败',
+          .then(() => ctx.notify(runCardReplayAccepted(run.id, locale))),
+      resolveLocalizedText(RUN_CARD_REPLAY_FAILED, locale),
     )
   }
 
-  // 一键保存内联 run 为工作流定义（save fromRunId：缺省名用 meta.name；重名/
-  // 语法错误等由动作端如实拒绝，绝不伪造成功）。
+  // One-click save of an inline run as a workflow definition (save
+  // fromRunId: the default name comes from meta.name; duplicates / syntax
+  // errors are rejected honestly by the action — success is never faked).
   const saveAsWorkflow = (): void => {
     guarded(
       () =>
@@ -319,24 +397,24 @@ export function WorkflowRunCardBody(props: {
           .then((raw) => {
             const parsed = parseWorkflowSaveResult(raw)
             if (parsed === undefined) {
-              throw new Error('保存返回结构不合法（动作返回非预期形状）')
+              throw new Error(runCardSaveInvalidResult(locale))
             }
             ctx.notify(
               parsed.created
-                ? `已保存为工作流定义 ${parsed.workflow.name}（可在工作流库查看）`
-                : `已覆盖工作流定义 ${parsed.workflow.name}`,
+                ? runCardSaveCreated(parsed.workflow.name, locale)
+                : runCardSaveOverwritten(parsed.workflow.name, locale),
             )
           }),
-      '保存工作流失败',
+      resolveLocalizedText(RUN_CARD_SAVE_FAILED, locale),
     )
   }
 
   const resultJson = useMemo(() => stringifyPretty(run.result), [run.result])
 
   return (
-    <section className="card workflow-run-card" aria-label={`工作流：${run.name}`}>
+    <section className="card workflow-run-card" aria-label={runCardAriaLabel(run.name, locale)}>
       <div className="stack-row workflow-run-header">
-        <button type="button" className="btn btn-ghost btn-sm" onClick={props.onToggleCard} title={cardOpen ? '收起工作流卡' : '展开工作流卡'}>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={props.onToggleCard} title={resolveLocalizedText(cardOpen ? RUN_CARD_COLLAPSE_TITLE : RUN_CARD_EXPAND_TITLE, locale)}>
           <Icon name={cardOpen ? 'chevron-down' : 'chevron-right'} size={12} />
         </button>
         <Icon name={run.kind === 'subagent' ? 'bot' : 'terminal'} />
@@ -345,42 +423,42 @@ export function WorkflowRunCardBody(props: {
           <>
             <span
               className={`badge ${EXECUTION_BADGE[effectiveStatus] ?? 'badge-neutral'}`}
-              title={`run 自身${RUN_LABEL[run.status] ?? run.status}；子树仍有未结算任务（${EXECUTION_LABEL[effectiveStatus] ?? effectiveStatus}）`}
+              title={runCardSelfTitle(runStatusLabel(run.status, locale), executionStatusLabel(effectiveStatus, locale), locale)}
             >
-              {EXECUTION_LABEL[effectiveStatus] ?? effectiveStatus}
+              {executionStatusLabel(effectiveStatus, locale)}
             </span>
-            <span className="badge badge-neutral" title={`run 自身状态：${RUN_LABEL[run.status] ?? run.status}`}>
-              {`自身${RUN_LABEL[run.status] ?? run.status}`}
+            <span className="badge badge-neutral" title={runCardSelfStateTitle(runStatusLabel(run.status, locale), locale)}>
+              {selfStatusLabel(runStatusLabel(run.status, locale), locale)}
             </span>
           </>
         ) : (
-          <span className={`badge ${RUN_BADGE[run.status] ?? 'badge-neutral'}`}>{RUN_LABEL[run.status] ?? run.status}</span>
+          <span className={`badge ${RUN_BADGE[run.status] ?? 'badge-neutral'}`}>{runStatusLabel(run.status, locale)}</span>
         )}
         {run.replayedFrom !== undefined ? (
-          <span className="badge badge-warn" title={`从 journal 前缀重放恢复（源 run ${run.replayedFrom}）`}>cached 重放</span>
+          <span className="badge badge-warn" title={runCardReplayBadgeTitle(run.replayedFrom, locale)}>{resolveLocalizedText(RUN_CARD_CACHED_REPLAY, locale)}</span>
         ) : null}
         {run.savedName !== undefined ? (
-          <span className="badge badge-neutral" title={`已保存工作流：${run.savedName}`}>已保存定义</span>
+          <span className="badge badge-neutral" title={runCardSavedBadgeTitle(run.savedName, locale)}>{resolveLocalizedText(RUN_CARD_SAVED_BADGE, locale)}</span>
         ) : null}
         <span className="workflow-run-header-spacer" />
         <span className="workflow-run-stats tabular-nums">
-          {nodes.length > 0 ? <span>{`节点 ${done}/${nodes.length}`}</span> : null}
-          {deeperCount > 0 ? <span>{`子树 ${subtree.done}/${subtree.total}`}</span> : null}
+          {nodes.length > 0 ? <span>{runCardNodesStat(done, nodes.length, locale)}</span> : null}
+          {deeperCount > 0 ? <span>{runCardSubtreeStat(subtree.done, subtree.total, locale)}</span> : null}
           {tokens > 0 ? <span>{`${tokens.toLocaleString()} Tokens`}</span> : null}
           {elapsedMs !== undefined ? <span>{formatDurationMs(elapsedMs)}</span> : null}
         </span>
         {descendantApprovals > 0 ? (
           <span
             className="badge badge-warn"
-            title={`后代等待审批：${approvals.map((item) => item.text).join('；')}`}
+            title={approvalsTitle(approvals.map((item) => item.text), locale)}
           >
-            {`审批 ${descendantApprovals}`}
+            {approvalsBadge(descendantApprovals, locale)}
           </span>
         ) : null}
         {run.status === 'running' ? (
           <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={abort}>
             <Icon name="square" size={11} />
-            中止
+            {resolveLocalizedText(ACTION_ABORT, locale)}
           </button>
         ) : null}
         {canDetachForegroundRun(run, props.viewer) ? (
@@ -389,16 +467,16 @@ export function WorkflowRunCardBody(props: {
             className="btn btn-sm"
             disabled={busy}
             onClick={detach}
-            title={ctx.translate({ en: 'Move this workflow to the background; the current call returns a handle and the result arrives as an interjection.', 'zh-CN': '将工作流转入后台，当前调用立即返回句柄，完成后自动插话汇报' })}
+            title={resolveLocalizedText(RUN_CARD_DETACH_TITLE, locale)}
           >
             <Icon name="arrow-down-to-line" size={11} />
-            转入后台
+            {resolveLocalizedText(ACTION_DETACH, locale)}
           </button>
         ) : null}
         {canResumeWorkflowRun(run) ? (
-          <button type="button" className="btn btn-sm" disabled={busy} onClick={resume} title="从同 run 的 journal 断点恢复：重放已完成前缀，仅重跑失败/未完成节点（沿用原脚本与 args；不支持改参换目标）">
+          <button type="button" className="btn btn-sm" disabled={busy} onClick={resume} title={resolveLocalizedText(RUN_CARD_RESUME_TITLE, locale)}>
             <Icon name="rotate-cw" size={11} />
-            断点恢复
+            {resolveLocalizedText(RUN_CARD_RESUME, locale)}
           </button>
         ) : null}
         {canReplayWorkflowRun(run) || canSaveRunAsWorkflow(run) ? (
@@ -408,8 +486,8 @@ export function WorkflowRunCardBody(props: {
                 type="button"
                 className="btn btn-ghost btn-sm"
                 disabled={busy}
-                aria-label="更多操作"
-                title="更多工作流操作"
+                aria-label={resolveLocalizedText(RUN_CARD_MORE_ARIA, locale)}
+                title={resolveLocalizedText(RUN_CARD_MORE_TITLE, locale)}
               >
                 <Icon name="more" size={12} />
               </button>
@@ -428,7 +506,7 @@ export function WorkflowRunCardBody(props: {
                       }}
                     >
                       <Icon name="rotate-cw" size={11} />
-                      重放
+                      {resolveLocalizedText(RUN_CARD_REPLAY, locale)}
                     </button>
                   </PopoverClose>
                 ) : null}
@@ -441,7 +519,7 @@ export function WorkflowRunCardBody(props: {
                       onClick={saveAsWorkflow}
                     >
                       <Icon name="check" size={11} />
-                      保存为工作流
+                      {resolveLocalizedText(RUN_CARD_SAVE_AS, locale)}
                     </button>
                   </PopoverClose>
                 ) : null}
@@ -458,7 +536,7 @@ export function WorkflowRunCardBody(props: {
               ctx.openWorkbench(`plugin:${ctx.pluginId}/tasks`)
             }}
           >
-            工作台详情
+            {resolveLocalizedText(RUN_CARD_WORKBENCH_DETAILS, locale)}
           </button>
         ) : null}
       </div>
@@ -479,21 +557,21 @@ export function WorkflowRunCardBody(props: {
       {cardOpen ? (
         <>
           <div className="kv-grid workflow-run-meta">
-            <span className="kv-key">运行 ID</span>
+            <span className="kv-key">{resolveLocalizedText(RUN_KV_RUN_ID, locale)}</span>
             <span className="kv-val mono">{run.id}</span>
-            <span className="kv-key">发起时间</span>
+            <span className="kv-key">{resolveLocalizedText(RUN_KV_CREATED_AT, locale)}</span>
             <span className="kv-val tabular-nums">{formatCompactTimestamp(run.createdAt)}</span>
-            <span className="kv-key">更新时间</span>
+            <span className="kv-key">{resolveLocalizedText(RUN_KV_UPDATED_AT, locale)}</span>
             <span className="kv-val tabular-nums">{formatCompactTimestamp(run.updatedAt)}</span>
             {run.replayedFrom !== undefined ? (
               <>
-                <span className="kv-key">源 run</span>
+                <span className="kv-key">{resolveLocalizedText(RUN_KV_SOURCE_RUN, locale)}</span>
                 <span className="kv-val mono">{run.replayedFrom}</span>
               </>
             ) : null}
             {run.savedName !== undefined ? (
               <>
-                <span className="kv-key">保存定义</span>
+                <span className="kv-key">{resolveLocalizedText(RUN_KV_SAVED_DEF, locale)}</span>
                 <span className="kv-val mono">{run.savedName}</span>
               </>
             ) : null}
@@ -533,15 +611,15 @@ export function WorkflowRunCardBody(props: {
                 ))}
               </div>
             ))}
-            {nodes.length === 0 ? <div className="workflow-phase-empty">暂无节点状态</div> : null}
+            {nodes.length === 0 ? <div className="workflow-phase-empty">{resolveLocalizedText(RUN_NO_NODES, locale)}</div> : null}
           </div>
           {run.status === 'completed' && resultJson !== undefined ? (
             <div className="workflow-result-box">
               <div className="workflow-result-header">
-                <span className="trace-section-label">最终产出</span>
+                <span className="trace-section-label">{resolveLocalizedText(RUN_RESULT_SECTION, locale)}</span>
                 <button type="button" className="btn btn-ghost btn-sm" onClick={props.onToggleResult}>
                   <Icon name={props.resultOpen ? 'chevron-down' : 'chevron-right'} size={11} />
-                  {props.resultOpen ? '收起完整结果' : '展开完整结果'}
+                  {resolveLocalizedText(props.resultOpen ? RUN_COLLAPSE_RESULT : RUN_EXPAND_RESULT, locale)}
                 </button>
               </div>
               {props.resultOpen ? (

@@ -1,23 +1,53 @@
 /**
- * builtin:workflow 子代理卡内部子视图（自 SubagentCard.tsx 拆出）：
- * - SubagentCardHeading：第 1 层头部徽章区（图标 + 标题 + 徽章 + 统计尾注）；
- * - SubagentCardActions：头部动作栏（中止 / 转入后台 / 恢复 / 清理工作树 / 重试）；
- * - SubagentCardSublines：第 2 层动态副栏（当前动作摘要 + 前线活动）。
- * 纯展示组件：数据判定在 model-* 纯逻辑模块，本文件只做插槽排版。
+ * Internal sub-views of the builtin:workflow subagent card (split from
+ * SubagentCard.tsx):
+ * - SubagentCardHeading: first-layer header badge area (icon + title + badges + stat suffix);
+ * - SubagentCardActions: header action bar (abort / move to background / resume / clean up worktree / retry);
+ * - SubagentCardSublines: second-layer dynamic sublines (current action digest + frontline activity).
+ * Pure presentational components: data decisions live in the model-* pure
+ * logic modules; this file only handles slot layout.
  */
 import { useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { formatCompactTimestamp, usePluginContext } from '@helm/plugin-client'
+import { formatCompactTimestamp, resolveLocalizedText, usePluginContext, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
 import type { WorkflowRunSummary } from '../../contracts.js'
-import { SPIN, EXECUTION_BADGE, EXECUTION_LABEL } from './presentation.ts'
+import { SPIN, EXECUTION_BADGE } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { buildWorktreeSelector } from './model-worktree.ts'
 import { canDetachForegroundRun, canResumeSubagentRun, type DetachViewerScope } from './model-run.ts'
 import type { ExecutionAggregate, ExecutionNodeStatus } from './model-execution-status.ts'
 import type { SubagentBadge, SubagentHeaderSnippet } from './model-subagent-card.ts'
 import type { ExecutionApprovalItem, ExecutionFrontlineItem } from './model-execution-view.ts'
+import {
+  ACTION_ABORT,
+  ACTION_ABORT_BG_TITLE,
+  actionAbortFailed,
+  ACTION_CLEANUP_WORKTREE,
+  ACTION_CLEANUP_WORKTREE_ARIA,
+  ACTION_CLEANUP_WORKTREE_TITLE,
+  actionCleanupDone,
+  actionCleanupFailed,
+  ACTION_DETACH,
+  ACTION_DETACH_SUBAGENT_ARIA,
+  ACTION_DETACH_SUBAGENT_TITLE,
+  actionDetachDone,
+  actionDetachFailed,
+  ACTION_RETRY,
+  ACTION_RETRY_TITLE,
+  approvalsBadge,
+  approvalsTitle,
+  cardSubagentHeading,
+  executionStatusLabel,
+  runCardSelfStateTitle,
+  selfAggregateTitle,
+  selfStatusLabel,
+  subtreeBadge,
+  subtreeProgressTitle,
+  SUBLINE_FRONTLINE_TAG,
+  worktreeBadgeTitle,
+} from './copy.ts'
 
-/** 第 1 层头部徽章区：左图标 + 标题 + 徽章 + 子树统计 + 总耗时尾注。 */
+/** First-layer header badge area: left icon + title + badges + subtree stats + total duration suffix. */
 export function SubagentCardHeading(props: {
   childConversationId: number
   profileId: string | undefined
@@ -33,6 +63,7 @@ export function SubagentCardHeading(props: {
   elapsedText: string | undefined
 }): ReactNode {
   const { childConversationId, profileId, taskTitle, worktree, detailError, effectiveStatus, selfBadge, descendants, approvals, statSegments, elapsedText } = props
+  const locale = usePluginLocale()
   return (
     <>
       <Icon
@@ -41,14 +72,14 @@ export function SubagentCardHeading(props: {
         className={effectiveStatus === 'working' && detailError === undefined ? SPIN : undefined}
       />
       <span className="subagent-live-title" title={taskTitle}>
-        <span className="subagent-live-id">子会话 #{childConversationId}</span>
+        <span className="subagent-live-id">{cardSubagentHeading(childConversationId, locale)}</span>
         {profileId !== undefined && profileId !== '' ? (
           <span className="badge badge-neutral">{profileId}</span>
         ) : null}
         {taskTitle !== undefined ? <span className="subagent-live-title-text">{taskTitle}</span> : null}
       </span>
       {worktree !== undefined ? (
-        <span className="badge badge-neutral subagent-worktree-badge" title={`隔离工作树：${worktree.path}`}>
+        <span className="badge badge-neutral subagent-worktree-badge" title={worktreeBadgeTitle(worktree.path, locale)}>
           <Icon name="git-branch" size={11} />
           {worktree.branch}
         </span>
@@ -60,16 +91,16 @@ export function SubagentCardHeading(props: {
             className={`badge ${EXECUTION_BADGE[effectiveStatus] ?? 'badge-neutral'}`}
             title={
               [
-                `自身${selfBadge.label}，子树聚合：${EXECUTION_LABEL[effectiveStatus] ?? effectiveStatus}`,
-                approvals.length > 0 ? `后代等待审批：${approvals.map((item) => item.text).join('；')}` : undefined,
+                selfAggregateTitle(selfBadge.label, executionStatusLabel(effectiveStatus, locale), locale),
+                approvals.length > 0 ? approvalsTitle(approvals.map((item) => item.text), locale) : undefined,
               ]
                 .filter(Boolean)
                 .join('\n')
             }
           >
-            {EXECUTION_LABEL[effectiveStatus] ?? effectiveStatus}
+            {executionStatusLabel(effectiveStatus, locale)}
           </span>
-          <span className="badge badge-neutral" title={`自身状态：${selfBadge.label}`}>{`自身${selfBadge.label}`}</span>
+          <span className="badge badge-neutral" title={runCardSelfStateTitle(selfBadge.label, locale)}>{selfStatusLabel(selfBadge.label, locale)}</span>
         </>
       ) : (
         <span className={`badge ${selfBadge.badge}`}>{selfBadge.label}</span>
@@ -77,17 +108,17 @@ export function SubagentCardHeading(props: {
       {descendants.total > 0 ? (
         <span
           className="badge badge-neutral tabular-nums"
-          title={`子树执行进度：${descendants.done}/${descendants.total} 完成、${descendants.running} 执行中`}
+          title={subtreeProgressTitle(descendants.done, descendants.total, descendants.running, locale)}
         >
-          {`子树 ${descendants.done}/${descendants.total}`}
+          {subtreeBadge(descendants.done, descendants.total, locale)}
         </span>
       ) : null}
       {descendants.blocked > 0 ? (
         <span
           className="badge badge-warn"
-          title={`后代等待审批：${approvals.map((item) => item.text).join('；')}`}
+          title={approvalsTitle(approvals.map((item) => item.text), locale)}
         >
-          {`审批 ${descendants.blocked}`}
+          {approvalsBadge(descendants.blocked, locale)}
         </span>
       ) : null}
       {statSegments.length > 0 ? (
@@ -100,7 +131,7 @@ export function SubagentCardHeading(props: {
   )
 }
 
-/** 头部动作栏：中止后台任务 / 前台同步转后台 / 恢复失败任务 / 清理隔离工作树 / 重载详情（点击不冒泡整卡导航）。 */
+/** Header action bar: abort background task / foreground-sync to background / resume failed task / clean up isolated worktree / reload details (clicks never bubble into whole-card navigation). */
 export function SubagentCardActions(props: {
   backgroundRun: WorkflowRunSummary | undefined
   worktree: { path: string; branch: string; id?: string } | undefined
@@ -111,6 +142,8 @@ export function SubagentCardActions(props: {
   hasExecutionHandle?: boolean
 }): ReactNode {
   const ctx = usePluginContext()
+  const locale = usePluginLocale()
+  const t = usePluginTranslator()
   const { backgroundRun, worktree, inspectNodeId, detailError } = props
   const [cleaning, setCleaning] = useState(false)
   const [resuming, setResuming] = useState(false)
@@ -121,35 +154,35 @@ export function SubagentCardActions(props: {
         <button
           type="button"
           className="btn btn-xs btn-danger"
-          title="中止该后台子代理任务"
-          aria-label="中止该后台子代理任务"
+          title={t(ACTION_ABORT_BG_TITLE)}
+          aria-label={t(ACTION_ABORT_BG_TITLE)}
           onClick={(e) => {
             e.stopPropagation()
             void ctx
               .callAction('abort', { runId: backgroundRun.id })
-              .catch((err: unknown) => ctx.notify(`中止后台子代理失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
+              .catch((err: unknown) => ctx.notify(actionAbortFailed(err instanceof Error ? err.message : String(err), locale), 'error'))
           }}
         >
           <Icon name="square" size={11} />
-          <span className="subagent-action-label">中止</span>
+          <span className="subagent-action-label">{t(ACTION_ABORT)}</span>
         </button>
       ) : null}
       {backgroundRun !== undefined && canDetachForegroundRun(backgroundRun, props.viewer) ? (
         <button
           type="button"
           className="btn btn-xs"
-          title={ctx.translate({ en: 'Move this subagent to the background; the current call returns a handle and the result arrives as an interjection.', 'zh-CN': '将子代理转入后台，当前调用立即返回句柄，完成后自动插话汇报' })}
-          aria-label="把该前台同步子代理转入后台"
+          title={t(ACTION_DETACH_SUBAGENT_TITLE)}
+          aria-label={t(ACTION_DETACH_SUBAGENT_ARIA)}
           onClick={(e) => {
             e.stopPropagation()
             void ctx
               .callAction('detach', { runId: backgroundRun.id })
-              .then(() => ctx.notify(`已转入后台（运行 ${backgroundRun.id}）：当前调用将收到后台句柄，完成后自动汇报`))
-              .catch((err: unknown) => ctx.notify(`转入后台失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
+              .then(() => ctx.notify(actionDetachDone(backgroundRun.id, locale)))
+              .catch((err: unknown) => ctx.notify(actionDetachFailed(err instanceof Error ? err.message : String(err), locale), 'error'))
           }}
         >
           <Icon name="arrow-down-to-line" size={11} />
-          <span className="subagent-action-label">转入后台</span>
+          <span className="subagent-action-label">{t(ACTION_DETACH)}</span>
         </button>
       ) : null}
       {backgroundRun !== undefined && canResumeSubagentRun(backgroundRun, props.hasExecutionHandle ?? true) ? (
@@ -186,43 +219,43 @@ export function SubagentCardActions(props: {
           type="button"
           className="btn btn-xs"
           disabled={cleaning}
-          title="清理隔离工作树（优先登记 ID 精确定位，避免跨节点同名路径歧义）"
-          aria-label="清理隔离工作树"
+          title={t(ACTION_CLEANUP_WORKTREE_TITLE)}
+          aria-label={t(ACTION_CLEANUP_WORKTREE_ARIA)}
           onClick={(e) => {
             e.stopPropagation()
             if (cleaning) return
             setCleaning(true)
             ctx
               .callAction('cleanup_worktree', buildWorktreeSelector(worktree, inspectNodeId))
-              .then(() => ctx.notify(`已清理隔离工作树 ${worktree.branch}`))
-              .catch((err: unknown) => ctx.notify(`清理工作树失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
+              .then(() => ctx.notify(actionCleanupDone(worktree.branch, locale)))
+              .catch((err: unknown) => ctx.notify(actionCleanupFailed(err instanceof Error ? err.message : String(err), locale), 'error'))
               .finally(() => setCleaning(false))
           }}
         >
           <Icon name="rotate-cw" size={11} className={cleaning ? SPIN : undefined} />
-          <span className="subagent-action-label">清理工作树</span>
+          <span className="subagent-action-label">{t(ACTION_CLEANUP_WORKTREE)}</span>
         </button>
       ) : null}
       {detailError !== undefined ? (
         <button
           type="button"
           className="btn btn-xs"
-          title="重新加载子会话详情"
-          aria-label="重新加载子会话详情"
+          title={t(ACTION_RETRY_TITLE)}
+          aria-label={t(ACTION_RETRY_TITLE)}
           onClick={(e) => {
             e.stopPropagation()
             props.onReload()
           }}
         >
           <Icon name="rotate-cw" size={11} />
-          <span className="subagent-action-label">重试</span>
+          <span className="subagent-action-label">{t(ACTION_RETRY)}</span>
         </button>
       ) : null}
     </>
   )
 }
 
-/** 第 2 层动态副栏：当前动作 / 思考 / 结论 / 错误 + 前线活动摘要 + 无损元数据。 */
+/** Second-layer dynamic sublines: current action / thinking / conclusion / error + frontline digest + lossless metadata. */
 export function SubagentCardSublines(props: {
   snippet: SubagentHeaderSnippet | undefined
   frontline: ExecutionFrontlineItem[]
@@ -232,6 +265,7 @@ export function SubagentCardSublines(props: {
   runId?: string
 }): ReactNode {
   const { snippet, frontline, nodeId, cwd, createdAt, runId } = props
+  const locale = usePluginLocale()
   const coord =
     nodeId !== undefined && nodeId !== '' && cwd !== undefined && cwd !== ''
       ? `${nodeId}:${cwd}`
@@ -257,7 +291,7 @@ export function SubagentCardSublines(props: {
           title={frontline.map((item) => item.text).join('\n')}
         >
           <Icon name="corner-down-right" size={11} />
-          <span className="subagent-live-subline-tag">前线</span>
+          <span className="subagent-live-subline-tag">{resolveLocalizedText(SUBLINE_FRONTLINE_TAG, locale)}</span>
           <span className="subagent-live-subline-text">{frontline.map((item) => item.text).join(' · ')}</span>
         </div>
       ) : null}
