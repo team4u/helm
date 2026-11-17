@@ -1,5 +1,6 @@
 import {
   HelmError,
+  assertProfileId,
   type HelmPluginContext,
   type PluginToolContext,
 } from '@helm/protocol'
@@ -54,15 +55,6 @@ function assertWorkerConversationId(value: unknown): number {
     throw new HelmError('validation_error', `workerConversationId 必须是正整数（收到：${String(value)}）`, 400, {})
   }
   return value
-}
-
-/** Profile ID：非空、无空白、无路径分隔符（防目录穿越）；存在性由调用处核验。 */
-export function assertProfileId(value: string): string {
-  const trimmed = value.trim()
-  if (trimmed === '' || trimmed.length > 64 || /\s|[/\\]/.test(trimmed)) {
-    throw new HelmError('validation_error', `profileId 非法（非空 1..64 字符，不含空白与路径分隔符，收到：${value}）`, 400, {})
-  }
-  return trimmed
 }
 
 /** Worker 工作目录：显式给出则必须是跨平台绝对路径（POSIX `/`、
@@ -152,7 +144,8 @@ export function registerSuperAgentActions(
         pluginId: SUPERAGENT_PLUGIN_ID,
       })
     }
-    const targetProfile = input.profileId === undefined ? 'assistant' : assertProfileId(input.profileId)
+    if (input.profileId !== undefined) assertProfileId(input.profileId)
+    const targetProfile = input.profileId ?? 'assistant'
     if (SUPERAGENT_PROFILE_IDS.includes(targetProfile)) {
       throw new HelmError(
         'validation_error',

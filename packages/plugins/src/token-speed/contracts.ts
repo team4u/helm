@@ -8,7 +8,7 @@
  *   subscription), never into global ctx.doc or the conversation summary (the write-amplification red line);
  * - Event payloads get shape guards at the boundary (invalid dropped with diagnostics); never trusted via crude as.
  */
-import type { ConversationLiveMessage } from '@helm/protocol'
+import { isJsonObject, type ConversationLiveMessage } from '@helm/protocol'
 
 export const TOKEN_SPEED_PLUGIN_ID = 'builtin:token-speed'
 
@@ -74,10 +74,6 @@ export interface TokenSpeedStatus {
 // Event-payload boundary guards
 // ---------------------------------------------------------------------------
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
 /**
  * Sum the cumulative generated character count of a model message's content blocks:
  * text + thinking + toolCall(name + arguments JSON)。
@@ -86,7 +82,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 export function contentCharsOfBlocks(content: readonly unknown[]): number {
   let chars = 0
   for (const block of content) {
-    if (!isPlainObject(block)) continue
+    if (!isJsonObject(block)) continue
     const type = block['type']
     if (type === 'text' && typeof block['text'] === 'string') {
       chars += block['text'].length
@@ -126,9 +122,9 @@ interface TokenSpeedLiveFrame {
  * it); never trusted via crude as.
  */
 export function asConversationLiveFrame(payload: unknown): TokenSpeedLiveFrame | undefined {
-  if (!isPlainObject(payload) || payload['type'] !== 'conversation.live') return undefined
+  if (!isJsonObject(payload) || payload['type'] !== 'conversation.live') return undefined
   const live = payload['live']
-  if (!isPlainObject(live)) return undefined
+  if (!isJsonObject(live)) return undefined
   const conversationId = live['conversationId']
   if (typeof conversationId !== 'number' || !Number.isInteger(conversationId) || conversationId <= 0) return undefined
   const updatedAt = live['updatedAt']
@@ -137,16 +133,16 @@ export function asConversationLiveFrame(payload: unknown): TokenSpeedLiveFrame |
   const hasTools = Array.isArray(tools) && tools.length > 0
   const generation = live['generation']
   if (generation === undefined) return { conversationId, hasTools, updatedAt }
-  if (!isPlainObject(generation)) return undefined
+  if (!isJsonObject(generation)) return undefined
   const taskId = generation['taskId']
   if (typeof taskId !== 'number' || !Number.isInteger(taskId) || taskId <= 0) return undefined
   const attempt = generation['attempt']
   if (typeof attempt !== 'number' || !Number.isInteger(attempt) || attempt <= 0) return undefined
   const message = generation['message']
   if (message === undefined) return { conversationId, generation: { taskId, attempt }, hasTools, updatedAt }
-  if (!isPlainObject(message) || !Array.isArray(message['content'])) return undefined
+  if (!isJsonObject(message) || !Array.isArray(message['content'])) return undefined
   const usage = message['usage']
-  if (usage !== undefined && (!isPlainObject(usage) || typeof usage['output'] !== 'number')) return undefined
+  if (usage !== undefined && (!isJsonObject(usage) || typeof usage['output'] !== 'number')) return undefined
   return {
     conversationId,
     generation: { taskId, attempt, message: message as unknown as ConversationLiveMessage },
@@ -160,11 +156,11 @@ export function asConversationLiveFrame(payload: unknown): TokenSpeedLiveFrame |
  * positive integer + entry.{kind non-empty string}. Invalid returns undefined.
  */
 export function asConversationEntryEnvelope(payload: unknown): ConversationEntryEnvelope | undefined {
-  if (!isPlainObject(payload) || payload['type'] !== 'conversation.entry') return undefined
+  if (!isJsonObject(payload) || payload['type'] !== 'conversation.entry') return undefined
   const conversationId = payload['conversationId']
   if (typeof conversationId !== 'number' || !Number.isInteger(conversationId) || conversationId <= 0) return undefined
   const entry = payload['entry']
-  if (!isPlainObject(entry) || typeof entry['kind'] !== 'string' || entry['kind'] === '') return undefined
+  if (!isJsonObject(entry) || typeof entry['kind'] !== 'string' || entry['kind'] === '') return undefined
   return { conversationId, kind: entry['kind'] }
 }
 
@@ -192,25 +188,25 @@ interface AssistantCompletionFacts {
  * ending facts return too); success handling belongs to the policy layer; invalid payload shapes return undefined.
  */
 export function asAssistantCompletion(payload: unknown): AssistantCompletionFacts | undefined {
-  if (!isPlainObject(payload) || payload['type'] !== 'conversation.entry') return undefined
+  if (!isJsonObject(payload) || payload['type'] !== 'conversation.entry') return undefined
   const conversationId = payload['conversationId']
   if (typeof conversationId !== 'number' || !Number.isInteger(conversationId) || conversationId <= 0) return undefined
   const entry = payload['entry']
-  if (!isPlainObject(entry) || entry['kind'] !== 'pi.assistant') return undefined
+  if (!isJsonObject(entry) || entry['kind'] !== 'pi.assistant') return undefined
   const rawTaskId = entry['taskId']
   const taskId =
     typeof rawTaskId === 'number' && Number.isInteger(rawTaskId) && rawTaskId > 0 ? rawTaskId : undefined
   const rawEntryId = entry['id']
   const entryId = typeof rawEntryId === 'string' ? rawEntryId : undefined
   const model = entry['model']
-  if (!Array.isArray(model) || !isPlainObject(model[0])) return undefined
+  if (!Array.isArray(model) || !isJsonObject(model[0])) return undefined
   const first = model[0] as Record<string, unknown>
   if (first['role'] !== 'assistant') return undefined
   const stopReason = first['stopReason']
   if (typeof stopReason !== 'string' || stopReason === '') return undefined
   const usage = first['usage']
   let usageOutput: number | undefined
-  if (isPlainObject(usage)) {
+  if (isJsonObject(usage)) {
     const output = usage['output']
     if (typeof output === 'number' && Number.isFinite(output) && output > 0) usageOutput = output
   }
@@ -228,7 +224,7 @@ export function asAssistantCompletion(payload: unknown): AssistantCompletionFact
 
 /** conversation.deleted event guard: returns the conversation id. */
 export function asConversationDeletedId(payload: unknown): number | undefined {
-  if (!isPlainObject(payload) || payload['type'] !== 'conversation.deleted') return undefined
+  if (!isJsonObject(payload) || payload['type'] !== 'conversation.deleted') return undefined
   const conversationId = payload['conversationId']
   return typeof conversationId === 'number' && Number.isInteger(conversationId) && conversationId > 0
     ? conversationId

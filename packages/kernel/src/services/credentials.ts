@@ -15,6 +15,7 @@ import {
   readTextFile,
 } from './atomic-file.js'
 import { withFileLock, withProcessFileLock } from './file-lock.js'
+import { isJsonObject } from '@helm/protocol'
 
 interface StoredCredential {
   /** Value after SecretStash redaction or raw secret (model API keys are stored directly without stashing). */
@@ -45,10 +46,6 @@ function assertId(kind: string, id: string): void {
   }
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
 /**
  * Validate existing structure of known fields: entries under `providers` must be objects containing a string
  * `value`, and entries under `pluginSecrets` must be `string -> string` maps. Structural errors explicitly
@@ -57,17 +54,17 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  */
 function normalizeStore(raw: unknown, path: string): CredentialStore {
   if (raw === undefined) return { providers: {}, pluginSecrets: {} }
-  if (!isPlainObject(raw)) {
+  if (!isJsonObject(raw)) {
     throw new FileParseError(path, 'invalid credentials.json structure (expected object)')
   }
   const providers: Record<string, StoredCredential> = {}
   const rawProviders = raw['providers']
   if (rawProviders !== undefined) {
-    if (!isPlainObject(rawProviders)) {
+    if (!isJsonObject(rawProviders)) {
       throw new FileParseError(path, 'invalid credentials.json providers field (expected object)')
     }
     for (const [id, value] of Object.entries(rawProviders)) {
-      if (!isPlainObject(value)) {
+      if (!isJsonObject(value)) {
         throw new FileParseError(
           path,
           `invalid credentials.json providers.${id} structure (expected { value, createdAt, updatedAt } object)`,
@@ -86,14 +83,14 @@ function normalizeStore(raw: unknown, path: string): CredentialStore {
   const pluginSecrets: Record<string, Record<string, string>> = {}
   const rawPlugins = raw['pluginSecrets']
   if (rawPlugins !== undefined) {
-    if (!isPlainObject(rawPlugins)) {
+    if (!isJsonObject(rawPlugins)) {
       throw new FileParseError(
         path,
         'invalid credentials.json pluginSecrets field (expected pluginId -> key -> value object)',
       )
     }
     for (const [pluginId, secrets] of Object.entries(rawPlugins)) {
-      if (!isPlainObject(secrets)) {
+      if (!isJsonObject(secrets)) {
         throw new FileParseError(
           path,
           `invalid credentials.json pluginSecrets.${pluginId} structure (expected key -> string object)`,

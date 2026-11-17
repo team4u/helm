@@ -446,7 +446,8 @@ test('自激排除：watchdog 自身 id 与 profileId=watchdog 直聊会话零�
   assert.equal(h.recorded.aborts.length, 0)
   const wakeSubmits = h.recorded.submits.filter((s) => s.conversationId === h.watchdogId)
   assert.equal(wakeSubmits.length, 1)
-  assert.ok(!wakeSubmits[0]!.text.includes('"conversation:777"'), 'profileId=watchdog 直聊不得进入事实')
+  // escapeXml 收紧为 4 实体后，事实 JSON 中的引号以 &quot; 形态出现；断言语义保持「777 事实完全不在投递文本中」。
+  assert.ok(!wakeSubmits[0]!.text.includes('conversation:777'), 'profileId=watchdog 直聊不得进入事实')
   assert.ok(wakeSubmits[0]!.text.includes('conversation:55'))
 
   // watchdog 自身回合 failed：仅通知，不触发任何自动处置。

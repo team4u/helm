@@ -17,7 +17,7 @@ import type {
   ConversationPatch,
   ConversationSummary,
 } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import { HelmError, isValidEnvName } from '@helm/protocol'
 import type { ConversationOwnership } from './runtime-ownership.js'
 import type { Harness, Registry } from '@earendil-works/pi-durable'
 import type { EnvFabric } from '../env/index.js'
@@ -48,7 +48,7 @@ import { validateJsonSchema, type StructuredOutputSession } from './structured-o
 import type { HelmStore } from './store.js'
 import type { HelmToolDeps } from './tool-deps.js'
 import { buildManagedEnv, runGate } from './tools.js'
-import { isValidEnvName, type SecretStash } from '../services/index.js'
+import type { SecretStash } from '../services/index.js'
 
 /**
  * Boundary validation for `secretNames` (shared by spawn requests and `buildSpawnEnv`): string array where

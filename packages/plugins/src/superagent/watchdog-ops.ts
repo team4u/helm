@@ -15,12 +15,12 @@ import {
   HelmError,
   type AskResult,
   type HelmPluginContext,
+  escapeXml,
 } from '@helm/protocol'
 import type { SuperAgentWatchdogRuntime } from './contracts.js'
 import type { WatchdogDedupStore } from './watchdog-dedup.js'
 import {
   describeError,
-  escapeXml,
   EXTERNAL_REFRACTORY_MS,
   guardOf,
   isGuardConflict,

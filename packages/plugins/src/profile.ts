@@ -17,7 +17,7 @@
  * - the left-sidebar assistant Profile standing navigation (conversation:profile:assistant, not
  *   dependent on any particular conversation existing).
  */
-import { HelmError, isSkillAvailable, type HelmHostProfilesPort, type PluginDefinition, type Profile, type SkillSummary } from '@helm/protocol';
+import { HelmError, escapeXml, isSkillAvailable, type HelmHostProfilesPort, type PluginDefinition, type Profile, type SkillSummary } from '@helm/protocol';
 import { HELM_CLI_SKILL_ASSET, PROFILE_MANAGED_BY } from './profile/assets.js';
 import {
   activeRuntimeKinds,
@@ -74,10 +74,6 @@ async function ensureDefaultProfileManaged(profiles: HelmHostProfilesPort): Prom
   if (existing.managedByPlugin !== undefined) return;
   const next: Profile = { ...existing, managedByPlugin: PROFILE_MANAGED_BY };
   await profiles.save(next);
-}
-
-function escapeXml(text: string): string {
-  return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }
 
 /** Catalog injection hook priority: below the default 0, ensuring it runs after the default-priority

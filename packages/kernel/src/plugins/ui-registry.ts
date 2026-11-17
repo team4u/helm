@@ -34,7 +34,8 @@ import {
   type PrebuiltClientManifest,
   type PrebuiltClientModuleEntry,
 } from '@helm/protocol';
-import { assertConversationScope, isPlainObject, jsonClone } from './shared.js';
+import { isPlainObject } from '@helm/protocol'
+import { assertConversationScope, jsonClone } from './shared.js'
 import {
   UI_ACTION_SURFACES,
   validateUiSpecEarly,

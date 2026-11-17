@@ -13,7 +13,7 @@
  * 4. the parent conversation's bound node (injected by the Executor as parentNodeId; defaults to local).
  */
 
-import { HelmError, isAbsoluteTargetPath, normalizeTargetPath, type Profile, type TargetPlatform } from '@helm/protocol'
+import { HelmError, isAbsoluteTargetPath, isValidEnvName, normalizeTargetPath, type Profile, type TargetPlatform } from '@helm/protocol'
 import { isValidNodeId } from './transport.js'
 import { OUTPUT_FILE_PATTERN } from './transport-output.js'
 
@@ -181,10 +181,6 @@ function normalizeCwdForPlatform(cwd: string, platform: TargetPlatform | undefin
     throw new HelmError(result.code, `${entry}: ${result.reason}`, 400, { cwd })
   }
   return result.path
-}
-
-export function isValidEnvName(name: string): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)
 }
 
 /**

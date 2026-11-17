@@ -17,7 +17,7 @@
  *  （外部运行时未被插件接管时原生执行行会显式拒绝，不进入目录误导）。
  */
 
-import type { PluginUiContribution, Profile } from '@helm/protocol'
+import { escapeXml, type PluginUiContribution, type Profile } from '@helm/protocol'
 
 /** 补全摘要上限：100 Unicode 码点（与 PROFILE_STARTER 同口径的展示直觉）。 */
 export const PROFILE_SUMMARY_MAX_CODEPOINTS = 100
@@ -138,11 +138,6 @@ export function truncateCodePoints(text: string, maxCodePoints: number): string 
   return `${chars.slice(0, Math.max(0, maxCodePoints - 1)).join('')}…`
 }
 
-/** XML 文本转义（与 profile.ts 主插件同一实现口径，供目录渲染复用）。 */
-export function escapeXmlText(text: string): string {
-  return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
-}
-
 /**
  * 渲染 profile.catalog 注入段（<available_profiles>）：每条候选一行紧凑
  * XML 条目，全部动态字段经转义。runtime 标注：native=原生 subagent；
@@ -154,15 +149,15 @@ export function renderProfileCatalogSection(
   options: { dispatchToolNames: readonly string[] },
 ): string {
   const lines = entries.map((entry) => {
-    const attrs = [`id="${escapeXmlText(entry.id)}"`, `name="${escapeXmlText(entry.name)}"`, `mention="@${escapeXmlText(entry.id)}"`]
+    const attrs = [`id="${escapeXml(entry.id)}"`, `name="${escapeXml(entry.name)}"`, `mention="@${escapeXml(entry.id)}"`]
     attrs.push(
       entry.runtimeKind === 'native'
         ? 'runtime="native"'
-        : `runtime="external:${escapeXmlText(entry.runtimeKind)}"`,
+        : `runtime="external:${escapeXml(entry.runtimeKind)}"`,
     )
     const position = describePosition(entry)
-    if (position !== undefined) attrs.push(`at="${escapeXmlText(position)}"`)
-    const inner = entry.summary !== undefined ? escapeXmlText(entry.summary) : ''
+    if (position !== undefined) attrs.push(`at="${escapeXml(position)}"`)
+    const inner = entry.summary !== undefined ? escapeXml(entry.summary) : ''
     return `<profile ${attrs.join(' ')}>${inner}</profile>`
   })
   const tools = options.dispatchToolNames.length > 0 ? options.dispatchToolNames.join(' / ') : '（本回合无派工工具）'

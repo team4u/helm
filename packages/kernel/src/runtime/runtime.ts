@@ -66,7 +66,6 @@ import type { RuntimeAgentSpawn } from './runtime-agent-spawn.js'
 import type { NodeManager } from './node-manager.js'
 import type { ModelRegistry } from './model-registry.js'
 import {
-  assertProfileIdPublic,
   completeConversationTextHelper,
   profileDirectoryHelper,
   summaryOfFallback,

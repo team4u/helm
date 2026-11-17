@@ -59,16 +59,12 @@ export const DIAGNOSTICS_COLLECT_EVENT = 'diagnostics.collect'
 // 边界校验：事件入口 / 追加入口 / 终态复验三层同源（诚实性纪律）
 // ---------------------------------------------------------------------------
 
-import { HelmError } from '@helm/protocol'
-
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v)
-}
+import { HelmError, isJsonObject } from '@helm/protocol'
 
 /** 校验单个探针形状；返回错误描述（null = 合法）。与原 hooks.ts watchdog_tick 校验同构。 */
 function probeViolation(p: unknown): string | null {
   if (
-    !isPlainObject(p) ||
+    !isJsonObject(p) ||
     typeof p['targetId'] !== 'string' ||
     p['targetId'].length === 0 ||
     (p['targetKind'] !== undefined && !['conversation', 'external'].includes(String(p['targetKind']))) ||
@@ -83,7 +79,7 @@ function probeViolation(p: unknown): string | null {
       !(typeof p['stalledMs'] === 'number' && Number.isFinite(p['stalledMs']) && (p['stalledMs'] as number) >= 0)) ||
     (p['consecutiveErrors'] !== undefined &&
       !(typeof p['consecutiveErrors'] === 'number' && Number.isFinite(p['consecutiveErrors']) && (p['consecutiveErrors'] as number) >= 0)) ||
-    (p['facts'] !== undefined && !isPlainObject(p['facts']))
+    (p['facts'] !== undefined && !isJsonObject(p['facts']))
   ) {
     return '字段 probes 的每项必须是 WatchdogProbe（targetKind/conversationId/nodeId/stateChangeSeq/stalledMs/consecutiveErrors 若存在必须类型合法且非负）'
   }
@@ -92,14 +88,14 @@ function probeViolation(p: unknown): string | null {
 
 /** 校验 collection 整体形状（事件入口与终态复验共用）；返回错误描述（null = 合法）。 */
 export function collectionViolation(value: unknown): string | null {
-  if (!isPlainObject(value)) return '必须是 DiagnosticsCollection 对象'
+  if (!isJsonObject(value)) return '必须是 DiagnosticsCollection 对象'
   if (!(typeof value['timestamp'] === 'number' && Number.isFinite(value['timestamp']) && (value['timestamp'] as number) >= 0)) {
     return '字段 timestamp 必须是非负有限数'
   }
   const conversations = value['conversations']
   if (!Array.isArray(conversations)) return '字段 conversations 必须是数组'
   for (const ref of conversations) {
-    if (!isPlainObject(ref) || typeof ref['id'] !== 'number' || !Number.isInteger(ref['id']) || (ref['id'] as number) <= 0 || typeof ref['profileId'] !== 'string') {
+    if (!isJsonObject(ref) || typeof ref['id'] !== 'number' || !Number.isInteger(ref['id']) || (ref['id'] as number) <= 0 || typeof ref['profileId'] !== 'string') {
       return '字段 conversations 的每项必须是 { id: 正整数, profileId: string }'
     }
   }

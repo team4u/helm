@@ -13,6 +13,7 @@
  * This file has zero runtime dependencies (only HelmError); the kernel and internal/external plugins use it on equal footing.
  */
 import { HelmError } from './error.js'
+import { isPlainObject } from './utils.js'
 
 /**
  * JSON-safe pure value: a closure that round-trips stably through JSON.stringify
@@ -48,12 +49,6 @@ const MAX_META_KEYS_PER_LEVEL = 64
 const MAX_META_ARRAY_LENGTH = 1024
 const MAX_META_STRING_LENGTH = 65_536
 const MAX_META_TOTAL_NODES = 4096
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
-  const proto = Object.getPrototypeOf(value)
-  return proto === Object.prototype || proto === null
-}
 
 /**
  * Recursively validate a single JSON-safe value (returns a clone, severing later

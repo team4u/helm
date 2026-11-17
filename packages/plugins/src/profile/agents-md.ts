@@ -25,9 +25,9 @@
  *   超 64k 字符上限显式截断并附说明，绝不静默截断。
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { HelmError, pathRulesForShape, targetPathShape } from '@helm/protocol'
+import { HelmError, escapeXml, pathRulesForShape, targetPathShape } from '@helm/protocol'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
-import { escapeXmlText } from './catalog.js'
+
 
 /** 工作区项目约定文件名（跨工具社区约定，逐回合实时重读）。 */
 export const AGENTS_MD_FILENAME = 'AGENTS.md'
@@ -69,7 +69,7 @@ function unavailableSection(agentsPath: string, nodeId: string, body: string): A
   return {
     kind: 'section',
     id: 'profile.agents-unavailable',
-    text: `<project_instructions_unavailable path="${escapeXmlText(agentsPath)}" node="${escapeXmlText(nodeId)}">\n${body}\n</project_instructions_unavailable>`,
+    text: `<project_instructions_unavailable path="${escapeXml(agentsPath)}" node="${escapeXml(nodeId)}">\n${body}\n</project_instructions_unavailable>`,
   }
 }
 
@@ -88,7 +88,7 @@ function readFailureBody(
   message: string,
   redact: (text: string) => string,
 ): string {
-  return `读取工作区 ${escapeXmlText(agentsPath)} 失败（${escapeXmlText(code)}）：${escapeXmlText(redact(message))}`
+  return `读取工作区 ${escapeXml(agentsPath)} 失败（${escapeXml(code)}）：${escapeXml(redact(message))}`
 }
 
 /**
@@ -133,7 +133,7 @@ async function readAgentsMdBounded(
     if (isAbsentFileError(canonical.error)) return { kind: 'absent' }
     return {
       kind: 'refused',
-      reason: `解析工作区 ${escapeXmlText(agentsPath)} 真实路径失败（${escapeXmlText(canonical.error.code)}）：${escapeXmlText(redact(canonical.error.message))}`,
+      reason: `解析工作区 ${escapeXml(agentsPath)} 真实路径失败（${escapeXml(canonical.error.code)}）：${escapeXml(redact(canonical.error.message))}`,
     }
   }
   const realPath = canonical.value
@@ -162,13 +162,13 @@ async function readAgentsMdBounded(
     if (info.kind !== 'file') {
       return {
         kind: 'refused',
-        reason: `工作区 ${escapeXmlText(agentsPath)} 在打开后不是普通文件（kind=${escapeXmlText(info.kind)}），拒绝读取`,
+        reason: `工作区 ${escapeXml(agentsPath)} 在打开后不是普通文件（kind=${escapeXml(info.kind)}），拒绝读取`,
       }
     }
     if (info.size > MAX_AGENTS_MD_BYTES) {
       return {
         kind: 'refused',
-        reason: `工作区 ${escapeXmlText(agentsPath)} 为 ${info.size} 字节，超过 ${MAX_AGENTS_MD_BYTES} 字节读取上限，本回合未读取正文`,
+        reason: `工作区 ${escapeXml(agentsPath)} 为 ${info.size} 字节，超过 ${MAX_AGENTS_MD_BYTES} 字节读取上限，本回合未读取正文`,
       }
     }
 
@@ -184,7 +184,7 @@ async function readAgentsMdBounded(
     if (bytes.byteLength > MAX_AGENTS_MD_BYTES) {
       return {
         kind: 'refused',
-        reason: `工作区 ${escapeXmlText(agentsPath)} 读取到 ${bytes.byteLength} 字节，超过 ${MAX_AGENTS_MD_BYTES} 字节读取上限，本回合不注入正文`,
+        reason: `工作区 ${escapeXml(agentsPath)} 读取到 ${bytes.byteLength} 字节，超过 ${MAX_AGENTS_MD_BYTES} 字节读取上限，本回合不注入正文`,
       }
     }
 
@@ -200,13 +200,13 @@ async function readAgentsMdBounded(
     if (after.size !== info.size || after.mtimeMs !== info.mtimeMs) {
       return {
         kind: 'refused',
-        reason: `工作区 ${escapeXmlText(agentsPath)} 读取期间文件发生变化（size ${info.size} -> ${after.size}，mtime ${info.mtimeMs} -> ${after.mtimeMs}），本回合不注入可能不完整的快照`,
+        reason: `工作区 ${escapeXml(agentsPath)} 读取期间文件发生变化（size ${info.size} -> ${after.size}，mtime ${info.mtimeMs} -> ${after.mtimeMs}），本回合不注入可能不完整的快照`,
       }
     }
     if (bytes.byteLength !== after.size) {
       return {
         kind: 'refused',
-        reason: `工作区 ${escapeXmlText(agentsPath)} 读取到 ${bytes.byteLength} 字节与稳定大小 ${after.size} 不一致，本回合不注入可能不完整的快照`,
+        reason: `工作区 ${escapeXml(agentsPath)} 读取到 ${bytes.byteLength} 字节与稳定大小 ${after.size} 不一致，本回合不注入可能不完整的快照`,
       }
     }
     return { kind: 'content', text: AGENTS_MD_UTF8_DECODER.decode(bytes) }
@@ -241,14 +241,14 @@ export async function computeAgentsMdSection(
         return unavailableSection(
           agentsPath,
           nodeId,
-          `目标节点 ${escapeXmlText(nodeId)} 当前离线，本回合未能读取工作区 ${escapeXmlText(agentsPath)}。`,
+          `目标节点 ${escapeXml(nodeId)} 当前离线，本回合未能读取工作区 ${escapeXml(agentsPath)}。`,
         )
       }
     } catch (err) {
       return unavailableSection(
         agentsPath,
         nodeId,
-        `检查目标节点 ${escapeXmlText(nodeId)} 在线状态失败（${escapeXmlText(errorCodeOf(err))}）：${escapeXmlText(redact(errorMessageOf(err)))}`,
+        `检查目标节点 ${escapeXml(nodeId)} 在线状态失败（${escapeXml(errorCodeOf(err))}）：${escapeXml(redact(errorMessageOf(err)))}`,
       )
     }
   }
@@ -282,7 +282,7 @@ export async function computeAgentsMdSection(
     return {
       kind: 'section',
       id: 'profile.agents',
-      text: `<project_instructions path="${escapeXmlText(agentsPath)}">\n${content}\n</project_instructions>`,
+      text: `<project_instructions path="${escapeXml(agentsPath)}">\n${content}\n</project_instructions>`,
     }
   } catch (err) {
     return unavailableSection(

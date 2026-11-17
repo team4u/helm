@@ -17,7 +17,7 @@ import {
   type PluginUiContribution,
   type UiActionSpec,
 } from '@helm/protocol';
-import { isPlainObject } from './shared.js';
+import { isPlainObject } from '@helm/protocol';
 
 /** Host-reserved command slash triggers (`skill:` prefix is also reserved). */
 const RESERVED_COMMAND_SLASH: ReadonlySet<string> = new Set(RESERVED_SLASH_COMMANDS);

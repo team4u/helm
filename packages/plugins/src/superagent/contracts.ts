@@ -8,6 +8,7 @@ import {
   type MaybePromise,
   type PluginDocHandle,
   type TurnOutcome,
+  isJsonObject,
 } from '@helm/protocol'
 
 /*
@@ -236,10 +237,6 @@ export function resolveSuperAgentConfig(raw: Record<string, unknown>): SuperAgen
   return config
 }
 
-export function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v)
-}
-
 /**
  * conversation.live 事件载荷边界守卫（看门狗活动统计消费）：完整 HelmEvent
  * 信封形状（type + live.{conversationId 正整数, text 字符串, tools 数组,
@@ -248,9 +245,9 @@ export function isPlainObject(v: unknown): v is Record<string, unknown> {
 export function asConversationLiveEvent(
   payload: unknown,
 ): { conversationId: number; text: string; thinking?: string; tools: Array<{ callId: string; status: string }>; updatedAt: number } | undefined {
-  if (!isPlainObject(payload) || payload['type'] !== 'conversation.live') return undefined
+  if (!isJsonObject(payload) || payload['type'] !== 'conversation.live') return undefined
   const live = payload['live']
-  if (!isPlainObject(live)) return undefined
+  if (!isJsonObject(live)) return undefined
   const conversationId = live['conversationId']
   const text = live['text']
   const tools = live['tools']
@@ -259,7 +256,7 @@ export function asConversationLiveEvent(
   if (typeof text !== 'string') return undefined
   if (!Array.isArray(tools)) return undefined
   for (const tool of tools) {
-    if (!isPlainObject(tool)) return undefined
+    if (!isJsonObject(tool)) return undefined
     if (typeof tool['callId'] !== 'string' || typeof tool['status'] !== 'string') return undefined
   }
   if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt) || updatedAt < 0) return undefined
@@ -281,9 +278,9 @@ export function asConversationLiveEvent(
 export function asConversationUpsertEvent(
   payload: unknown,
 ): { id: number; status: string; updatedAt: number } | undefined {
-  if (!isPlainObject(payload) || payload['type'] !== 'conversation.upsert') return undefined
+  if (!isJsonObject(payload) || payload['type'] !== 'conversation.upsert') return undefined
   const conversation = payload['conversation']
-  if (!isPlainObject(conversation)) return undefined
+  if (!isJsonObject(conversation)) return undefined
   const id = conversation['id']
   const status = conversation['status']
   const updatedAt = conversation['updatedAt']
@@ -298,7 +295,7 @@ export function asConversationUpsertEvent(
  * 信封形状（type + conversationId 正整数）。
  */
 export function asConversationDeletedEvent(payload: unknown): number | undefined {
-  if (!isPlainObject(payload) || payload['type'] !== 'conversation.deleted') return undefined
+  if (!isJsonObject(payload) || payload['type'] !== 'conversation.deleted') return undefined
   const conversationId = payload['conversationId']
   return isPosIntId(conversationId) ? conversationId : undefined
 }
@@ -317,7 +314,7 @@ const docCorrupt = (detail: string): HelmError =>
   new HelmError('superagent_doc_corrupt', `插件 doc ${INDEX_DOC_NAME} ${detail}`, 500, { pluginId: SUPERAGENT_PLUGIN_ID })
 
 export function assertIndexDoc(value: unknown): SuperAgentIndexDoc {
-  if (!isPlainObject(value) || value.version !== 1 || !Array.isArray(value.workers)) {
+  if (!isJsonObject(value) || value.version !== 1 || !Array.isArray(value.workers)) {
     throw new HelmError(
       'superagent_doc_corrupt',
       `插件 doc ${INDEX_DOC_NAME} 结构非法（期望 { version: 1, workers: [] }）`,
@@ -338,7 +335,7 @@ export function assertIndexDoc(value: unknown): SuperAgentIndexDoc {
   const seenWorkerIds = new Set<number>()
   for (const w of value.workers) {
     if (
-      !isPlainObject(w) ||
+      !isJsonObject(w) ||
       !isPosIntId(w.conversationId) ||
       !isPosIntId(w.parentConversationId) ||
       typeof w.profileId !== 'string' ||
@@ -363,7 +360,7 @@ export function assertIndexDoc(value: unknown): SuperAgentIndexDoc {
 }
 
 export function assertSubscriptionsDoc(value: unknown): ThreadSubscriptionDoc {
-  if (!isPlainObject(value) || value.version !== 1 || !Array.isArray(value.subscriptions)) {
+  if (!isJsonObject(value) || value.version !== 1 || !Array.isArray(value.subscriptions)) {
     throw new HelmError(
       'superagent_doc_corrupt',
       `插件 doc ${SUBSCRIPTIONS_DOC_NAME} 结构非法（期望 { version: 1, subscriptions: [] }）`,
@@ -374,7 +371,7 @@ export function assertSubscriptionsDoc(value: unknown): ThreadSubscriptionDoc {
   const seenKeys = new Set<string>()
   for (const s of value.subscriptions) {
     if (
-      !isPlainObject(s) ||
+      !isJsonObject(s) ||
       typeof s.threadKey !== 'string' ||
       s.threadKey.trim() === '' ||
       s.threadKey.length > 200 ||

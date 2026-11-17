@@ -7,17 +7,17 @@ import {
   RECALL_DOC_NAME,
   SUPERAGENT_PLUGIN_ID,
   isFiniteTime,
-  isPlainObject,
   isPosIntId,
   type RecallGraphDoc,
 } from './contracts.js'
+import { isJsonObject } from '@helm/protocol'
 
 const SETTLED_OUTCOMES = new Set(['completed', 'failed', 'aborted'])
 
 const RECALL_ARTIFACT_KEYS = ['id', 'conversationId', 'name', 'path', 'mimeType', 'size', 'createdAt'] as const
 
 export function assertRecallDoc(value: unknown): void {
-  if (!isPlainObject(value) || value.version !== 1 || !Array.isArray(value.nodes)) {
+  if (!isJsonObject(value) || value.version !== 1 || !Array.isArray(value.nodes)) {
     throw new HelmError(
       'superagent_doc_corrupt',
       `插件 doc ${RECALL_DOC_NAME} 结构非法（期望 { version: 1, nodes: [] }）`,
@@ -28,7 +28,7 @@ export function assertRecallDoc(value: unknown): void {
   const seenIds = new Set<string>()
   for (const n of value.nodes) {
     if (
-      !isPlainObject(n) ||
+      !isJsonObject(n) ||
       typeof n.id !== 'string' ||
       n.id === '' ||
       !isPosIntId(n.conversationId) ||
@@ -49,7 +49,7 @@ export function assertRecallDoc(value: unknown): void {
       !isFiniteTime(n.createdAt) ||
       !Array.isArray(n.artifacts) ||
       n.artifacts.some((a) => {
-        if (!isPlainObject(a)) return true
+        if (!isJsonObject(a)) return true
         for (const key of RECALL_ARTIFACT_KEYS) {
           if (!Object.hasOwn(a, key)) return true
         }

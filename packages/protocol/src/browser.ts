@@ -25,6 +25,7 @@ export * from './schema.js'
 export * from './ui.js'
 export * from './semver.js'
 export * from './meta.js'
+export * from './utils.js'
 export * from './tool-presentation.js'
 export {
   isAbsoluteAgentPath,

@@ -8,6 +8,8 @@
 
 import {
   HelmError,
+  escapeXml,
+  isJsonObject,
   type GuardedMutationExpectation,
   type HelmHostApi,
 } from '@helm/protocol'
@@ -128,10 +130,6 @@ export type WatchdogNotify = (
 // 纯辅助：探针字段归一 / 键编码 / 文本转义 / 错误描述
 // ---------------------------------------------------------------------------
 
-export function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v)
-}
-
 export function asNonNegativeInt(v: unknown): number | undefined {
   return typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : undefined
 }
@@ -156,11 +154,6 @@ export function parseTargetKey(key: string): { kind: string; nodeId?: string; ta
   } catch {
     return undefined
   }
-}
-
-/** XML 转义：异常事实进入 L2 提示词前防逃逸（不用反引号围栏，杜绝 prompt 注入面）。 */
-export function escapeXml(text: string): string {
-  return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
 }
 
 /** HelmError 附带稳定错误码（内核守卫拒绝的通知可被程序化判别）。 */

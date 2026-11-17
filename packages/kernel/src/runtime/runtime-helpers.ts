@@ -9,26 +9,17 @@ import type { JsonValue } from '@earendil-works/chord/json'
 import type { ToolExecutionResult } from '@earendil-works/pi-durable'
 import type { ConversationSummary } from '@helm/protocol'
 import type { Models } from '@earendil-works/pi-ai'
-import { HelmError, safeResultText } from '@helm/protocol'
+import { HelmError, assertProfileId, escapeXml, safeResultText } from '@helm/protocol'
 import { redactJsonValue } from '../redact.js'
 import type { ConvMeta } from './store.js'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 import type { HelmStore } from './store.js'
 import { requireModelRef } from './models.js'
-import { assertProfileId, assertSkillId } from '../services/index.js'
+import { assertSkillId } from '../services/index.js'
 
 // ---------------------------------------------------------------------------
 // Common serialization / escaping
 // ---------------------------------------------------------------------------
-
-/** XML attribute/text escaping (shared by defang and ownership markers). */
-export function escapeXml(text: string): string {
-  return text
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-}
 
 /** Strip an existing `<external_event>` wrapper (prevents double wrapping after trigger transforms; preserves trailing appended text). */
 export function stripEnvelope(text: string): string {
@@ -625,22 +616,6 @@ export async function completeConversationTextHelper(
 }
 
 /**
- * Validate whether a Profile ID is valid (shared public API validator; throws `400 validation_error`).
- */
-export function assertProfileIdPublic(id: string): void {
-  try {
-    assertProfileId(id)
-  } catch (err) {
-    throw new HelmError(
-      'validation_error',
-      `Invalid Profile ID: ${err instanceof Error ? err.message : String(err)}`,
-      400,
-      { profileId: id },
-    )
-  }
-}
-
-/**
  * Helper to resolve the physical directory of a skill.
  */
 export function skillDirectoryHelper(dataDir: string, id: string): string {
@@ -661,7 +636,7 @@ export function skillDirectoryHelper(dataDir: string, id: string): string {
  * Helper to resolve the physical directory of a Profile.
  */
 export function profileDirectoryHelper(dataDir: string, id: string): string {
-  assertProfileIdPublic(id)
+  assertProfileId(id)
   return join(dataDir, 'profiles', id)
 }
 

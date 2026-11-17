@@ -22,6 +22,8 @@ import {
   type PluginRouteSpec,
   type PluginToolContext,
   type PluginToolSpec,
+  isJsonObject,
+  isPlainObject,
 } from '@helm/protocol';
 import { assertSchemaCompilable, validatePluginInput, validatePluginOutput } from './schema.js';
 import type { PluginTaskTracker } from './tracking.js';
@@ -29,10 +31,8 @@ import {
   assertConversationScope,
   assertValidId,
   decodeSegmentStrict,
-  isJsonObject,
-  isPlainObject,
   jsonClone,
-} from './shared.js';
+} from './shared.js'
 
 export interface DerivedToolSpec {
   name: string;

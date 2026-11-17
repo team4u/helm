@@ -5,7 +5,7 @@ import { HelmError } from '@helm/protocol';
 import type { UiRegistry } from './ui-registry.js';
 import type { CapabilityRegistry } from './capability-registry.js';
 import type { PluginState } from './types.js';
-import { isPlainObject } from './shared.js';
+import { isPlainObject } from '@helm/protocol';
 
 export function assertUiDocsRegistered(
   pluginId: string,

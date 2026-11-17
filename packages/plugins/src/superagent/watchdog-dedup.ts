@@ -14,7 +14,8 @@
 
 import { HelmError, type HelmPluginContext, type PluginDocHandle } from '@helm/protocol'
 import type { WatchdogProbe } from '../diagnostics.js'
-import { isPlainObject, parseTargetKey, targetKey, type WatchdogNotify } from './watchdog-core.js'
+import { parseTargetKey, targetKey, type WatchdogNotify } from './watchdog-core.js'
+import { isJsonObject } from '@helm/protocol'
 
 /** 去重文档允许的动作类别（私有 Doc 只信本模块写出的形状）。 */
 const DEDUP_ACTIONS: ReadonlySet<string> = new Set(['notify', 'wake', 'abort', 'bridge'])
@@ -45,12 +46,12 @@ const EXTERNAL_EVICT_AFTER_MS = 24 * 60 * 60 * 1000
  * → 显式 superagent_doc_corrupt 上抛（tick 失败并通知诊断），绝不静默回空。
  */
 function sanitizeDedupDoc(raw: unknown): WatchdogDedupDoc {
-  if (!isPlainObject(raw) || raw['version'] !== 1 || !isPlainObject(raw['fired'])) {
+  if (!isJsonObject(raw) || raw['version'] !== 1 || !isJsonObject(raw['fired'])) {
     throw corruptDedupDoc('顶层结构非法（需 {version:1, fired:{}}）')
   }
   const fired: WatchdogDedupDoc['fired'] = {}
   for (const [key, actions] of Object.entries(raw['fired'])) {
-    if (key.length === 0 || !isPlainObject(actions)) {
+    if (key.length === 0 || !isJsonObject(actions)) {
       throw corruptDedupDoc(`键 ${JSON.stringify(key)} 的动作表非法`)
     }
     const cleaned: Record<string, DedupMark> = {}
@@ -58,7 +59,7 @@ function sanitizeDedupDoc(raw: unknown): WatchdogDedupDoc {
       if (!DEDUP_ACTIONS.has(action)) {
         throw corruptDedupDoc(`键 ${JSON.stringify(key)} 含未知动作 ${JSON.stringify(action)}`)
       }
-      if (!isPlainObject(mark)) {
+      if (!isJsonObject(mark)) {
         throw corruptDedupDoc(`键 ${JSON.stringify(key)} 动作 ${action} 的标记非法`)
       }
       const seq = mark['seq']

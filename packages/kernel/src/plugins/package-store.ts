@@ -7,16 +7,12 @@
  * - Structural corruption rejects explicitly with `config_corrupt` (never silently discarded or rebuilt as `{}`);
  * - `getRecord` reads the in-memory mirror synchronized on write/load for `PluginSummary.managed` decoration.
  */
-import { HelmError, type PluginPackageRecord, type PluginPackageSource } from '@helm/protocol';
+import { HelmError, isJsonObject, type PluginPackageRecord, type PluginPackageSource } from '@helm/protocol';
 import type { ConfigService } from '../services/config.js';
-
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
 
 /** Validates `source` shape in a stored record (non-empty strings matching discriminated union fields). */
 function assertSourceShape(pluginId: string, v: unknown): PluginPackageSource {
-  if (!isPlainObject(v)) throw corruptSource(pluginId, 'must be an object');
+  if (!isJsonObject(v)) throw corruptSource(pluginId, 'must be an object');
   const kind = v['kind'];
   if (kind === 'npm') {
     if (typeof v['spec'] !== 'string' || v['spec'].length === 0) throw corruptSource(pluginId, 'npm source missing spec');
@@ -53,7 +49,7 @@ function corrupt(detail: string): HelmError {
 
 /** Validates a single stored package record (rejects rather than fabricating defaults). */
 function parseRecord(pluginId: string, v: unknown): PluginPackageRecord {
-  if (!isPlainObject(v)) throw corrupt(`${pluginId} must be a PluginPackageRecord object`);
+  if (!isJsonObject(v)) throw corrupt(`${pluginId} must be a PluginPackageRecord object`);
   const requiredStrings = ['id', 'installPath'] as const;
   for (const key of requiredStrings) {
     if (typeof v[key] !== 'string' || (v[key] as string).length === 0) {
@@ -93,7 +89,7 @@ export class PluginPackageManagerStore {
     const cfg = await this.config.get();
     const packages = cfg['pluginPackages'];
     if (packages === undefined) return;
-    if (!isPlainObject(packages)) throw corrupt(`expected pluginId -> record map, got ${typeof packages}`);
+    if (!isJsonObject(packages)) throw corrupt(`expected pluginId -> record map, got ${typeof packages}`);
     const next = new Map<string, PluginPackageRecord>();
     for (const [pluginId, value] of Object.entries(packages)) {
       next.set(pluginId, parseRecord(pluginId, value));
@@ -115,13 +111,13 @@ export class PluginPackageManagerStore {
     let stored!: PluginPackageRecord;
     await this.config.updateBy((current) => {
       const existing = current['pluginPackages'];
-      if (existing !== undefined && !isPlainObject(existing)) {
+      if (existing !== undefined && !isJsonObject(existing)) {
         throw corrupt(`expected pluginId -> record map, got ${typeof existing}`);
       }
-      const map = isPlainObject(existing) ? existing : {};
+      const map = isJsonObject(existing) ? existing : {};
       // Validate all existing records before mutating so partial corruption never goes unnoticed.
       for (const [pid, v] of Object.entries(map)) parseRecord(pid, v);
-      const prevId = isPlainObject(map[record.pluginId])
+      const prevId = isJsonObject(map[record.pluginId])
         ? (map[record.pluginId] as Record<string, unknown>)['id']
         : undefined;
       const id = record.id ?? (typeof prevId === 'string' && prevId.length > 0 ? prevId : `plugpkg-${record.pluginId}`);
@@ -137,12 +133,12 @@ export class PluginPackageManagerStore {
     let removed: PluginPackageRecord | undefined;
     await this.config.updateBy((current) => {
       const existing = current['pluginPackages'];
-      if (existing !== undefined && !isPlainObject(existing)) {
+      if (existing !== undefined && !isJsonObject(existing)) {
         throw corrupt(`expected pluginId -> record map, got ${typeof existing}`);
       }
-      const map = isPlainObject(existing) ? existing : {};
+      const map = isJsonObject(existing) ? existing : {};
       const target = map[pluginId];
-      if (!isPlainObject(target)) return current;
+      if (!isJsonObject(target)) return current;
       removed = parseRecord(pluginId, target);
       const next = { ...map };
       delete next[pluginId];

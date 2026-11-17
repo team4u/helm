@@ -18,7 +18,8 @@ import {
   type PublicPluginDoc,
   type PublicPluginSessionDoc,
 } from '@helm/protocol';
-import { assertValidId, isPlainObject, jsonClone } from './shared.js';
+import { isPlainObject } from '@helm/protocol'
+import { assertValidId, jsonClone } from './shared.js'
 
 export interface PluginDocStore {
   get<T>(key: string, initial: T): T;

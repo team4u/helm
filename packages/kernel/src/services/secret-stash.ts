@@ -24,7 +24,7 @@
  * process environment variables or memory—that is an inherent privilege of trusted code, and this module does not promise zero leakage.
  */
 import { randomUUID } from 'node:crypto'
-import { HelmError, type SecretLifetime } from '@helm/protocol'
+import { HelmError, isValidEnvName, type SecretLifetime } from '@helm/protocol'
 
 const REDACTED_PREFIX = '[REDACTED:stash:'
 export const REDACTED_MARKER = '[REDACTED]'
@@ -42,11 +42,6 @@ export interface StashedSecret {
   readonly expiresAt?: number
   /** Creation settle sequence for scope 'turn' (settled turns completed when created; undefined = conversation-scoped). */
   readonly bornSettlement?: number
-}
-
-/** Valid environment variable name: starts with an ASCII letter or underscore, contains only alphanumerics and underscores, non-empty and bounded in length. */
-export function isValidEnvName(name: string): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(name)
 }
 
 /**

@@ -16,6 +16,7 @@
 
 import {
   HelmError,
+  isJsonObject,
   type PluginConfigFieldSchema,
 } from '@helm/protocol'
 import type { PluginConfigStore } from '../plugins/plugin-host.js'
@@ -26,10 +27,6 @@ const TYPE_OF: Record<PluginConfigFieldSchema['type'], 'string' | 'number' | 'bo
   string: 'string',
   number: 'number',
   boolean: 'boolean',
-}
-
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
 function invalid(pluginId: string, message: string): HelmError {
@@ -72,16 +69,16 @@ export class HelmPluginConfigStore implements PluginConfigStore {
     const cfg = await this.configService.get()
     const plugins = cfg['plugins']
     if (plugins !== undefined) {
-      if (!isPlainObject(plugins)) {
+      if (!isJsonObject(plugins)) {
         throw new HelmError('config_corrupt', 'config.json field "plugins" has invalid structure (expected object)', 500)
       }
       for (const [id, value] of Object.entries(plugins)) {
-        if (isPlainObject(value)) this.mirror.plain.set(id, { ...value })
+        if (isJsonObject(value)) this.mirror.plain.set(id, { ...value })
       }
     }
     const pluginEnabled = cfg['pluginEnabled']
     if (pluginEnabled !== undefined) {
-      if (!isPlainObject(pluginEnabled)) {
+      if (!isJsonObject(pluginEnabled)) {
         throw new HelmError(
           'config_corrupt',
           'config.json field "pluginEnabled" has invalid structure (expected pluginId -> boolean object)',
@@ -125,7 +122,7 @@ export class HelmPluginConfigStore implements PluginConfigStore {
     value: Record<string, unknown>,
     schema: Record<string, PluginConfigFieldSchema>,
   ): Promise<void> {
-    if (!isPlainObject(value)) throw invalid(pluginId, 'config value must be an object')
+    if (!isJsonObject(value)) throw invalid(pluginId, 'config value must be an object')
 
     const existingPlain = this.mirror.plain.get(pluginId) ?? {}
     const existingSecrets = this.mirror.secrets.get(pluginId) ?? {}
@@ -185,11 +182,11 @@ export class HelmPluginConfigStore implements PluginConfigStore {
     if (plainTouched) {
       await this.configService.updateBy((current) => {
         const plugins = current['plugins']
-        if (plugins !== undefined && !isPlainObject(plugins)) {
+        if (plugins !== undefined && !isJsonObject(plugins)) {
           throw corrupt('plugins', `expected object, got ${typeof plugins}`)
         }
-        const merged = isPlainObject(plugins) ? plugins : {}
-        const bucket = { ...(isPlainObject(merged[pluginId]) ? (merged[pluginId] as Record<string, unknown>) : {}), ...nextPlain }
+        const merged = isJsonObject(plugins) ? plugins : {}
+        const bucket = { ...(isJsonObject(merged[pluginId]) ? (merged[pluginId] as Record<string, unknown>) : {}), ...nextPlain }
         for (const key of removePlain) delete bucket[key]
         if (Object.keys(bucket).length === 0) delete merged[pluginId]
         else merged[pluginId] = bucket
@@ -245,10 +242,10 @@ export class HelmPluginConfigStore implements PluginConfigStore {
     // writes from other modules are not clobbered; corruption fails with config_corrupt rather than rebuilding `{}`.
     await this.configService.updateBy((current) => {
       const existing = current['pluginEnabled']
-      if (existing !== undefined && !isPlainObject(existing)) {
+      if (existing !== undefined && !isJsonObject(existing)) {
         throw corrupt('pluginEnabled', `expected pluginId -> boolean object, got ${typeof existing}`)
       }
-      if (isPlainObject(existing)) {
+      if (isJsonObject(existing)) {
         for (const [id, value] of Object.entries(existing)) {
           if (typeof value !== 'boolean') {
             throw corrupt('pluginEnabled', `'${id}' must be a boolean (got ${typeof value})`)
@@ -257,7 +254,7 @@ export class HelmPluginConfigStore implements PluginConfigStore {
       }
       return {
         ...current,
-        pluginEnabled: { ...(isPlainObject(existing) ? existing : {}), [pluginId]: enabled },
+        pluginEnabled: { ...(isJsonObject(existing) ? existing : {}), [pluginId]: enabled },
       }
     })
     this.mirror.enabled.set(pluginId, enabled)

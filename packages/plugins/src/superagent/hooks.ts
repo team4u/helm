@@ -11,7 +11,8 @@ import {
   type SuperAgentCoordinator,
 } from './contracts.js'
 import { recallHasNode, updateRecallDoc } from './recall.js'
-import { collectWorkerSettlement, escapeXmlAttribute } from './settlement.js'
+import { collectWorkerSettlement } from './settlement.js'
+import { escapeXml } from '@helm/protocol'
 
 export function activeWorkersSection(
   ctx: HelmPluginContext,
@@ -30,8 +31,8 @@ export function activeWorkersSection(
       if (err instanceof HelmError && err.code === 'not_found') status = 'deleted'
       else throw err
     }
-    const detail = doing !== '' ? ` doing="${escapeXmlAttribute(ctx.host.redact(doing))}"` : ''
-    return `<worker id="${w.conversationId}" profile="${escapeXmlAttribute(w.profileId)}" status="${status}"${detail} />`
+    const detail = doing !== '' ? ` doing="${escapeXml(ctx.host.redact(doing))}"` : ''
+    return `<worker id="${w.conversationId}" profile="${escapeXml(w.profileId)}" status="${status}"${detail} />`
   })
   return `<active_workers>\n${lines.join('\n')}\n</active_workers>`
 }

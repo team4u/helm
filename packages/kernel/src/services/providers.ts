@@ -4,17 +4,13 @@
  * credentials.json via CredentialService. Structural validation happens at the boundary, and secret fields are explicitly stripped/rejected.
  * ProviderConfig shape conforms to @helm/protocol.
  */
-import type { ProviderConfig } from '@helm/protocol'
+import { isJsonObject, type ProviderConfig } from '@helm/protocol'
 
 export type { ProviderConfig }
 import { join } from 'node:path'
 import { atomicWriteJson, readJsonFileOptional } from './atomic-file.js'
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
 
 /** Provider ID boundary validation: must start with an alphanumeric character to prevent path traversal across directories. */
 function assertProviderId(id: string): void {
@@ -25,7 +21,7 @@ function assertProviderId(id: string): void {
 
 /** Validate a single provider config at the boundary; immediately reject any secret fields (prevents secrets leaking into JSON). */
 function validateProviderConfig(input: unknown): ProviderConfig {
-  if (!isPlainObject(input)) throw new Error('provider config must be an object')
+  if (!isJsonObject(input)) throw new Error('provider config must be an object')
   for (const banned of ['apiKey', 'api_key', 'secret', 'token', 'password', 'credential']) {
     if (input[banned] !== undefined) {
       throw new Error(
@@ -72,7 +68,7 @@ function validateProviderConfig(input: unknown): ProviderConfig {
 
 function normalize(raw: unknown): ProviderConfig[] {
   if (raw === undefined) return []
-  if (!isPlainObject(raw)) throw new Error('providers.json structure is invalid (expected an object)')
+  if (!isJsonObject(raw)) throw new Error('providers.json structure is invalid (expected an object)')
   const list = raw['providers']
   if (list === undefined) return []
   if (!Array.isArray(list)) throw new Error('providers.json providers field must be an array')

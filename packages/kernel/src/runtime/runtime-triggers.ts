@@ -11,7 +11,8 @@
 import { HelmError } from '@helm/protocol'
 import type { ConversationInit, ConversationSummary, ExternalTriggerEnvelope } from '@helm/protocol'
 import type { HookBridge } from './hook-bridge.js'
-import { escapeXml, stripEnvelope } from './runtime-helpers.js'
+import { escapeXml } from '@helm/protocol'
+import { stripEnvelope } from './runtime-helpers.js'
 import type { HelmStore } from './store.js'
 
 interface RuntimeTriggerDispatcherDeps {

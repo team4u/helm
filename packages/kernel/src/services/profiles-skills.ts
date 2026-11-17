@@ -7,13 +7,21 @@
 import { lstat, mkdir, readdir, readFile, realpath, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, relative, sep } from 'node:path'
-import { HelmError, type Profile, type ProfileStarterPrompt, type SkillSummary } from '@helm/protocol'
+import {
+  HelmError,
+  assertProfileId,
+  isJsonObject,
+  isValidEnvName,
+  isValidProfileId,
+  type Profile,
+  type ProfileStarterPrompt,
+  type SkillSummary,
+} from '@helm/protocol'
 import {
   PROFILE_STARTERS_MAX_ITEMS,
   PROFILE_STARTER_LABEL_MAX_LENGTH,
   PROFILE_STARTER_PROMPT_MAX_LENGTH,
 } from '@helm/protocol'
-import { isValidEnvName } from './secret-stash.js'
 
 export type { Profile, SkillSummary }
 import {
@@ -27,7 +35,6 @@ import { withFileLock } from './file-lock.js'
 
 export const DEFAULT_PROFILE_ID = 'assistant'
 const DEFAULT_PROFILE_NAME = 'person assist'
-const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/
 /** Valid thinking level enum values (aligned with pi-ai ModelThinkingLevel; declared independently so schema stays dependency-free). */
 const THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
 
@@ -48,23 +55,12 @@ export const SYSTEM_DEFAULT = [
   '',
 ].join('\n')
 
-/** Validate profile id: lowercase alphanumeric and hyphens, preventing directory injection and path traversal. */
-export function assertProfileId(id: string): void {
-  if (!NAME_PATTERN.test(id)) {
-    throw new Error(`illegal profile id: ${id} (only allows a-z 0-9 and hyphen)`)
-  }
-}
-
 function nowIso(): string {
   return new Date().toISOString()
 }
 
 function profileDir(dataDir: string, id: string): string {
   return join(dataDir, 'profiles', id)
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /** Unicode code-point length (surrogate pairs count as 1, matching visual display width; canonical across contract). */
@@ -77,7 +73,7 @@ function codePointLength(text: string): number {
 /** Validate a single starter prompt at the boundary: label is normalized by trimming, prompt preserves original text;
  * unknown fields are rejected (starters are user-editable data; silently dropping fields causes data loss in UI saves). */
 function validateProfileStarter(item: unknown, at: string): ProfileStarterPrompt {
-  if (!isPlainObject(item)) throw new Error(`${at} must be { label, prompt } object`)
+  if (!isJsonObject(item)) throw new Error(`${at} must be { label, prompt } object`)
   const label = item['label']
   const prompt = item['prompt']
   if (Object.keys(item).some((key) => key !== 'label' && key !== 'prompt')) {
@@ -99,9 +95,9 @@ function validateProfileStarter(item: unknown, at: string): ProfileStarterPrompt
 
 /** Validate Profile input at the boundary (shared by create/update); returns the normalized persistable shape. */
 export function validateProfileInput(input: unknown): Profile {
-  if (!isPlainObject(input)) throw new Error('profile must be an object')
+  if (!isJsonObject(input)) throw new Error('profile must be an object')
   const id = input['id']
-  if (typeof id !== 'string' || !NAME_PATTERN.test(id)) {
+  if (typeof id !== 'string' || !isValidProfileId(id)) {
     throw new Error(`illegal profile id: ${String(id)} (only allows a-z 0-9 and hyphen)`)
   }
   const profile: Profile = { id }
@@ -189,7 +185,7 @@ export function validateProfileInput(input: unknown): Profile {
   }
   const runtime = input['runtime']
   if (runtime !== undefined) {
-    if (!isPlainObject(runtime)) throw new Error(`profile '${id}' runtime must be an object`)
+    if (!isJsonObject(runtime)) throw new Error(`profile '${id}' runtime must be an object`)
     const runtimeKeys = new Set(['kind', 'agent', 'args', 'nodeId', 'workspace', 'env'])
     for (const key of Object.keys(runtime)) {
       if (!runtimeKeys.has(key)) throw new Error(`profile '${id}' runtime contains unknown field '${key}'; refusing to ignore execution target`)
@@ -229,7 +225,7 @@ export function validateProfileInput(input: unknown): Profile {
     }
     const env = runtime['env']
     if (env !== undefined) {
-      if (!isPlainObject(env) || Object.keys(env).length === 0) {
+      if (!isJsonObject(env) || Object.keys(env).length === 0) {
         throw new Error(`profile '${id}' runtime.env must be a non-empty object when present`)
       }
       for (const [name, value] of Object.entries(env)) {
@@ -255,7 +251,7 @@ export function validateProfileInput(input: unknown): Profile {
 
 /** Validate file asset against the current contract without guessing legacy formats or ignoring unknown execution fields. */
 function normalizeProfile(value: unknown, id: string): Profile {
-  if (!isPlainObject(value)) throw new Error(`profile.json has invalid structure: ${id}`)
+  if (!isJsonObject(value)) throw new Error(`profile.json has invalid structure: ${id}`)
   return validateProfileInput({ ...value, id })
 }
 
@@ -310,7 +306,7 @@ export class ProfileService {
 
   /** Create or replace a profile (if system is provided, atomically syncs to SYSTEM.md without writing it into profile.json). */
   async save(input: unknown): Promise<Profile> {
-    if (!isPlainObject(input)) throw new Error('profile must be an object')
+    if (!isJsonObject(input)) throw new Error('profile must be an object')
     const rawSystem = input['system']
     if (rawSystem !== undefined && typeof rawSystem !== 'string') {
       throw new Error('profile system must be a string')

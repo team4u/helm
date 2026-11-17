@@ -8,26 +8,17 @@
  * - Normalize boundary errors consistently (e.g., `normalizeProfileBoundaryError`, `FileNotFoundError -> 404 not_found`).
  */
 
-import { HelmError } from '@helm/protocol'
+import { HelmError, isValidProfileId } from '@helm/protocol'
 import type { HelmHostOpenTunnelPort } from '@helm/protocol'
-import {
-  FileNotFoundError,
-  assertProfileId,
-  atomicWriteFile,
-  withFileLock,
-} from '../services/index.js'
+import { FileNotFoundError, atomicWriteFile, withFileLock } from '../services/index.js'
 import type { PluginHostBackend, PluginSessionDocStore } from '../plugins/index.js'
 import type { HelmStore } from './store.js'
 import type { KernelRuntime } from './runtime.js'
 
 /** Boundary normalization for `profiles.get/directory`: invalid id -> `400 validation_error`; rethrows all other errors as-is. */
 function normalizeProfileBoundaryError(id: string, err: unknown): unknown {
-  try {
-    assertProfileId(id)
-    return err
-  } catch {
-    return new HelmError('validation_error', `Invalid Profile ID: ${String(id)}`, 400, { profileId: id })
-  }
+  if (isValidProfileId(id)) return err
+  return new HelmError('validation_error', `Invalid Profile ID: ${String(id)}`, 400, { profileId: id })
 }
 
 /**

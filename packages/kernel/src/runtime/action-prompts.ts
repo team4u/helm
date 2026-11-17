@@ -10,7 +10,7 @@
  * via `run_action describe`.
  */
 import type { ActionManifest, JsonSchema } from '@helm/protocol'
-import { escapeXml } from './runtime-helpers.js'
+import { escapeXml } from '@helm/protocol'
 
 /** Host-managed section ID (set-or-clear; removed immediately when catalog is empty, leaving no phantom text). */
 export const ACTIONS_PROMPT_SECTION_ID = 'prompt.actions'

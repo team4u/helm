@@ -1,13 +1,8 @@
 import { join } from 'node:path'
-import { HelmError, type HelmHostApi } from '@helm/protocol'
+import { HelmError, assertProfileId, type HelmHostApi } from '@helm/protocol'
 import { atomicWriteFile, FileNotFoundError } from '../../src/services/atomic-file.js'
 import { withFileLock } from '../../src/services/file-lock.js'
-import {
-  assertProfileId,
-  assertSkillId,
-  ProfileService,
-  SkillService,
-} from '../../src/services/profiles-skills.js'
+import { assertSkillId, ProfileService, SkillService } from '../../src/services/profiles-skills.js'
 
 function validateId(id: string): void {
   try {

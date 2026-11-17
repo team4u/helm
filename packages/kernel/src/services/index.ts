@@ -25,7 +25,6 @@ export { withFileLock, withProcessFileLock } from './file-lock.js'
 
 export {
   SecretStash,
-  isValidEnvName,
   parsePlaceholder,
   validateSecretLifetime,
   MAX_SECRET_TTL_MS,
@@ -37,7 +36,6 @@ export {
   SkillService,
   DEFAULT_PROFILE_ID,
   SYSTEM_DEFAULT,
-  assertProfileId,
   validateProfileInput,
   parseSkillFrontmatter,
   assertSkillId,

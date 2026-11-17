@@ -1,7 +1,7 @@
 /**
  * Shared utilities and validation helpers for the plugin host.
  */
-import { HelmError } from '@helm/protocol';
+import { HelmError, isPlainObject } from '@helm/protocol';
 import { redactJsonValue } from '../redact.js';
 
 /**
@@ -10,17 +10,6 @@ import { redactJsonValue } from '../redact.js';
  */
 export function jsonClone<T>(value: T): T {
   return redactJsonValue(value, (s) => s) as T;
-}
-
-export function isJsonObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
-/** Strictly plain-object check (`Object.prototype` or `null` prototype); rejects `Map` and class instances. */
-export function isPlainObject(v: unknown): v is Record<string, unknown> {
-  if (!isJsonObject(v)) return false;
-  const proto = Object.getPrototypeOf(v);
-  return proto === Object.prototype || proto === null;
 }
 
 /** Validates generic plugin resource identifiers (`[A-Za-z0-9._-]+`). */

@@ -9,7 +9,7 @@
  * - Zero dependency injection at the composition layer: secrets / profiles / isClosing all consume
  *   the ctx.host public ports (HelmHostApi) directly; no injected factory parameters.
  */
-import { HelmError } from '@helm/protocol'
+import { HelmError, isJsonObject } from '@helm/protocol'
 import type { ConversationSummary } from '@helm/protocol'
 
 export const TRIGGERS_PLUGIN_ID = 'builtin:triggers'
@@ -89,10 +89,6 @@ export interface WebhooksDoc {
   webhooks: WebhookMeta[]
 }
 
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v)
-}
-
 function isPosInt(v: unknown): v is number {
   return typeof v === 'number' && Number.isInteger(v) && v > 0
 }
@@ -105,7 +101,7 @@ const docCorrupt = (detail: string): HelmError =>
   new HelmError('triggers_doc_corrupt', `plugin doc webhooks ${detail}`, 500, { pluginId: TRIGGERS_PLUGIN_ID })
 
 function assertWebhookMeta(raw: unknown): void {
-  if (!isPlainObject(raw)) throw docCorrupt('contains a non-object entry')
+  if (!isJsonObject(raw)) throw docCorrupt('contains a non-object entry')
   if (typeof raw.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(raw.id)) {
     throw docCorrupt(`invalid entry id: ${JSON.stringify(raw.id)}`)
   }
@@ -139,7 +135,7 @@ function assertWebhookMeta(raw: unknown): void {
 
 /** webhooks doc read-in boundary validation: corruption errors explicitly; never silently rebuilds. */
 export function assertWebhooksDoc(value: unknown): WebhooksDoc {
-  if (!isPlainObject(value) || !Array.isArray(value.webhooks)) {
+  if (!isJsonObject(value) || !Array.isArray(value.webhooks)) {
     throw docCorrupt('invalid structure (expected { webhooks: [] })')
   }
   const seen = new Set<string>()
