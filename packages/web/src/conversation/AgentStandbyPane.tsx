@@ -13,6 +13,7 @@ import { errorText, formatBytes } from '../lib/format.js'
 import { HelmIcon, Select, type SelectOption } from '@helm/plugin-client'
 import { isSameResolvedTarget, type ResolvedTarget } from '../lib/types.js'
 import { useHelmStore } from '../lib/store-context.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useStableCallback } from '../lib/use-stable-callback.js'
 import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
 import { collectEnabledPluginIds, isHumanSelectableProfile } from '../shell/sidebar-model.js'
@@ -51,7 +52,8 @@ import {
 
 export interface AgentStandbyPaneProps {
   profileId: string
-  /** 目标携带的草稿环境（删除导航/新话题继承；远端坐标不悄悄回落本机）。 */
+  /** Draft environment carried by the target (delete-navigation / new-topic
+   * inheritance; remote coordinates never silently fall back to local). */
   nodeId?: string
   cwd?: string
   isSplit?: boolean
@@ -59,16 +61,22 @@ export interface AgentStandbyPaneProps {
 }
 
 /**
- * 智能体待命页（主舞台/分屏渲染）：
- * - 智能体是稳定入口：进入待命态不创建会话，首次发送才落库；
- * - 缺 Profile / 插件停用 / 人类不可选如实给出不可用状态，不猜测其他角色；
- * - 草稿（正文/附件/模型/思考档位/环境）只在内存并按面板隔离，见 standby-model.ts。
+ * Agent standby pane (rendered on the main stage / split):
+ * - the agent is the stable entry: entering the standby state creates no
+ *   conversation; the first send persists it;
+ * - a missing Profile / disabled plugin / non-human-selectable profile is
+ *   reported as-is; no other role is ever guessed;
+ * - drafts (text / attachments / model / thinking level / environment) live in
+ *   memory, isolated per panel; see standby-model.ts.
  */
 export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit }: AgentStandbyPaneProps) {
   const store = useHelmStore()
+  const { t } = useWebLocale()
   const panel = isSplit ? 'split' : 'primary'
-  // 草稿身份 = 完整入口坐标（面板 + Profile + 继承环境）：同 Profile 不同远端坐标互不串草稿，
-  // 避免上次导航继承的环境被当作用户编辑带入下一次首发。
+  // Draft identity = the full entry coordinate (panel + Profile + inherited
+  // environment): the same Profile at different remote coordinates never shares
+  // a draft, so an environment inherited from an earlier navigation is never
+  // treated as a user edit and carried into the next first send.
   const inheritedNodeId = nodeId !== undefined && nodeId !== '' ? nodeId : undefined
   const inheritedCwd = cwd !== undefined && cwd !== '' ? cwd : undefined
   const draftKey = standbyDraftKey({ panel, profileId, nodeId: inheritedNodeId, cwd: inheritedCwd })
@@ -99,7 +107,8 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     return () => { mountedRef.current = false }
   }, [])
 
-  // store 未携带全局默认模型时，按需读取 /api/models/default 补全模型与思考档位继承链。
+  // When the store carries no global default model, read /api/models/default
+  // on demand to complete the model & thinking-level inheritance chain.
   const [fetchedDefaultModelInfo, setFetchedDefaultModelInfo] = useState<{ defaultModel: string; defaultThinkingLevel: string } | null>(null)
   const defaultModelGenRef = useRef(0)
   const refreshDefaultModelInfo = useCallback(async (): Promise<void> => {
@@ -121,7 +130,8 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
         })
       }
     } catch {
-      /* 全局默认读取失败时保持 null，回退角色自身与「默认模型」文案 */
+      /* Keep null when the global default cannot be read; fall back to the
+       * profile's own model and the "Default model" label. */
     }
   }, [store.defaultModelInfo])
   useEffect(() => {
@@ -131,7 +141,9 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
   }, [store.defaultModelInfo, refreshDefaultModelInfo])
   const effectiveDefaultModelInfo = store.defaultModelInfo !== undefined ? store.defaultModelInfo : fetchedDefaultModelInfo
 
-  // 目标环境继承：按坐标隔离后，每份草稿首次挂载即采纳本坐标环境（用户编辑优先不被覆盖）。
+  // Target-environment inheritance: after coordinate isolation, each draft
+  // adopts this coordinate's environment on first mount (user edits win and
+  // are never overwritten).
   useEffect(() => {
     const record = getStandbyDraft(draftKey)
     if (record.envCustomized) return
@@ -140,8 +152,11 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     updateStandbyDraft(draftKey, { envCustomized: true, envNodeId: env.nodeId, envCwd: env.cwd })
   }, [draftKey, inheritedNodeId, inheritedCwd])
 
-  // 「仍在当前视口」判定：比较同一完整目标（含环境坐标）；首发中切同 Profile 其他环境不抢导航。
-  // 卸载时立即失效，防止已卸载组件的旧 ref 把导航拉回已离开的待命目标。
+  // "Still viewing this target" check: compares the same complete target
+  // (including the environment coordinate); a first send while switched to
+  // another environment of the same Profile never hijacks navigation.
+  // Invalidated immediately on unmount so a stale ref of an unmounted
+  // component cannot pull navigation back to an already-left standby target.
   const coordinateTarget = useMemo<ResolvedTarget>(
     () => ({
       kind: 'agent',
@@ -161,8 +176,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
   }, [])
 
   const send = useCallback((): Promise<StandbySendResult> =>
-    executeStandbySend(draftKey, profileId, {
-      create: (init) => conversationsApi.create(init),
+    executeStandbySend(draftKey, profileId, {      create: (init) => conversationsApi.create(init),
       patchThinkingLevel: (id, thinkingLevel) => conversationsApi.patch(id, { thinkingLevel }).then(() => undefined),
       upload: (id, file) => conversationsApi.uploadArtifact(id, file),
       submit: (id, payload) => conversationsApi.submitInput(id, payload).then(() => undefined),
@@ -179,40 +193,47 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
         store.pushNotice({
           type: 'notification',
           level: 'info',
-          title: 'Sent and conversation created',
-          body: `First message sent to conversation #${conversationId}`,
+          title: t('composer.standby.sentInBackgroundTitle'),
+          body: t('composer.standby.sentInBackgroundBody', { id: conversationId }),
           conversationId,
         })
       },
       navigateToConversation: (conversationId) => {
-        // 待命目标所在面板即新会话落点：右屏首发只替换右屏，不劫持主屏。
+        // The panel hosting the standby target is where the new conversation
+        // lands: a first send on the right panel replaces only the right one
+        // and never hijacks the primary panel.
         store.openTarget(
           { kind: 'conversation', conversationId },
           { history: 'replace', ...(isSplit ? { split: true } : {}) },
         )
       },
       isStillViewing: () => viewingRef.current,
-    }), [draftKey, profileId, isSplit, store])
+    }, t), [draftKey, profileId, isSplit, store, t])
 
   const addFiles = useCallback((files: ReadonlyArray<File>): void => {
     if (files.length === 0 || getStandbyDraft(draftKey).sending) return
-    const { draft: patch, rejected } = admitStandbyFiles(getStandbyDraft(draftKey), files)
+    const { draft: patch, rejected } = admitStandbyFiles(getStandbyDraft(draftKey), files, t)
     updateStandbyDraft(draftKey, patch)
     for (const item of rejected) {
-      store.pushNotice({ type: 'notification', level: 'error', title: `Attachment cannot be staged: ${item.file.name || 'Unnamed file'}`, body: item.reason })
+      store.pushNotice({
+        type: 'notification',
+        level: 'error',
+        title: t('composer.standby.attachmentRejectedTitle', { name: item.file.name || t('composer.standby.unnamedFile') }),
+        body: item.reason,
+      })
     }
-  }, [draftKey, store])
+  }, [draftKey, store, t])
 
   const applyStarter = useCallback((prompt: string): void => {
     const record = getStandbyDraft(draftKey)
     if (record.sending) return
     if (record.text.trim() !== '' || record.localFiles.length > 0 || record.uploaded.length > 0) {
-      store.pushNotice({ type: 'notification', level: 'warning', title: 'Handle the current draft before picking a starter' })
+      store.pushNotice({ type: 'notification', level: 'warning', title: t('composer.draft.handleBeforeStarter') })
       return
     }
     updateStandbyDraft(draftKey, { text: prompt })
     requestAnimationFrame(() => textareaRef.current?.focus())
-  }, [draftKey, store])
+  }, [draftKey, store, t])
 
   const executeStandbyPluginCommand = useCallback((cmd: QualifiedCommand, mode: 'token' | 'clear'): void => {
     const record = getStandbyDraft(draftKey)
@@ -235,7 +256,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
       updateStandbyDraft(draftKey, { text: resolved.next })
       if (mode === 'token' && el !== null && el.isConnected) focusWithCaret(el, resolved.nextCaret)
     }).catch(() => {
-      /* 动作调用已发送明确失败通知，保留原草稿。 */
+      /* The action call already sent an explicit failure notice; keep the draft. */
     }).finally(() => {
       commandPendingRef.current = false
       if (mountedRef.current) setCommandPending(false)
@@ -245,8 +266,10 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     executeStandbyPluginCommand(cmd, 'token')
   })
 
-  // 首发提交入口：先拦截插件斜杠命令与宿主管理命令（无真实会话可绑定，绝不作为普通输入发给模型），
-  // 再进入真实首发编排。
+  // First-send submit entry: intercept plugin slash commands and host
+  // management commands first (no real conversation exists to bind them to;
+  // never sent to the model as plain input), then enter the real first-send
+  // pipeline.
   const submitDraft = useCallback((): void => {
     const record = getStandbyDraft(draftKey)
     if (commandPendingRef.current || record.sending) return
@@ -259,22 +282,25 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     if (action !== null) {
       if (action.kind === 'clear-draft') {
         updateStandbyDraft(draftKey, { text: '', localFiles: [], uploaded: [], error: null })
-        store.pushNotice({ type: 'notification', level: 'info', title: 'New draft started', body: 'Just keep typing the new first message' })
+        store.pushNotice({ type: 'notification', level: 'info', title: t('composer.standby.newDraftStartedTitle'), body: t('composer.standby.newDraftStartedBody') })
       } else {
         store.pushNotice({
           type: 'notification',
           level: 'warning',
-          title: `${action.command} requires an existing conversation`,
-          body: 'Send the first message to create a conversation before using this command',
+          title: t('composer.standby.needsConversationTitle', { command: action.command }),
+          body: t('composer.standby.needsConversationBody'),
         })
       }
       return
     }
     void send()
-  }, [draftKey, executeStandbyPluginCommand, send, slashPluginCommands, store])
+  }, [draftKey, executeStandbyPluginCommand, send, slashPluginCommands, store, t])
 
-  // 恢复默认：清除继承/自定义环境；URL 已携带继承坐标时经唯一导航移除对应参数（刷新不复活），
-  // 草稿正文随坐标转移，目标坐标已有草稿时不覆盖并显式告知。
+  // Restore defaults: clears the inherited/custom environment; when the URL
+  // carries inherited coordinates, the sole navigation removes the matching
+  // parameters (no revival on refresh). The draft text moves with the
+  // coordinate; when the target coordinate already holds a draft it is never
+  // overwritten and the user is told explicitly.
   const resetEnvToDefault = useCallback((): void => {
     if (draft.sending || draft.conversationId !== undefined) return
     const toKey = standbyDraftKey({ panel, profileId })
@@ -287,12 +313,12 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
       store.pushNotice({
         type: 'notification',
         level: 'warning',
-        title: 'The default environment already has another draft',
-        body: 'Draft not overwritten; it stays at its original environment coordinates',
+        title: t('composer.standby.defaultEnvHasDraftTitle'),
+        body: t('composer.standby.defaultEnvHasDraftBody'),
       })
     }
     store.openTarget({ kind: 'agent', profileId }, isSplit ? { split: true } : undefined)
-  }, [draft.sending, draft.conversationId, draftKey, isSplit, panel, profileId, store])
+  }, [draft.sending, draft.conversationId, draftKey, isSplit, panel, profileId, store, t])
 
   const toggleSplit = (): void => {
     if (isSplit) {
@@ -307,7 +333,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
   }
 
   const label = profile?.name || profileId
-  const envError = standbyEnvError(draft)
+  const envError = standbyEnvError(draft, t)
   const profilesLoadError = store.loadErrors['assets:profiles']
 
   return (
@@ -316,7 +342,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
         <div className="pane-title-group">
           <span className="pane-title">{label}</span>
           <span className="pane-cwd-subtitle">
-            <span className="env-subtitle-full">Start new topic</span>
+            <span className="env-subtitle-full">{t('composer.standby.newTopic')}</span>
           </span>
         </div>
         <div className="pane-actions">
@@ -332,34 +358,34 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
         {profilesLoadError !== undefined ? (
           <div className="timeline-empty-state" role="alert">
             <HelmIcon name="alert-triangle" size={20} />
-            <span>Profile info failed to load: {profilesLoadError}</span>
+            <span>{t('composer.standby.profileLoadFailed', { error: profilesLoadError })}</span>
             <button type="button" className="btn btn-sm" onClick={() => void store.refreshAssets()}>
-              Retry
+              {t('common.retry')}
             </button>
           </div>
         ) : !store.assetsLoaded ? (
           <div className="timeline-empty-state" role="status">
             <HelmIcon name="loader" size={20} className="spin-slow" />
-            <span>Loading profile info…</span>
+            <span>{t('composer.standby.loadingProfile')}</span>
           </div>
         ) : profile === undefined ? (
           <div className="timeline-empty-state" role="alert">
             <HelmIcon name="circle-slash" size={20} />
-            <span>Profile {profileId} does not exist or was deleted</span>
+            <span>{t('composer.standby.profileMissing', { profileId })}</span>
             <button type="button" className="btn btn-sm" onClick={() => store.openTarget({ kind: 'profiles' })}>
-              Go to profile center
+              {t('composer.standby.goToProfiles')}
             </button>
           </div>
         ) : !humanSelectable ? (
           <div className="timeline-empty-state" role="alert">
             <HelmIcon name="lock" size={20} />
-            <span>This profile does not support manual new conversations (resident profiles are managed by their owning plugin)</span>
+            <span>{t('composer.standby.notHumanSelectable')}</span>
           </div>
         ) : (
           <>
             <div className="agent-standby-intro">
               <span className="agent-standby-intro-name">{label}</span>
-              <span className="agent-standby-intro-hint">Send the first message to start a new topic; the conversation is created on first send</span>
+              <span className="agent-standby-intro-hint">{t('composer.standby.introHint')}</span>
             </div>
             {profile.starters !== undefined && profile.starters.length > 0 ? (
               <div className="timeline-starters">
@@ -409,7 +435,8 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
 }
 
 // ---------------------------------------------------------------------------
-// 待命输入区（真草稿：正文 + 附件暂存 + 模型/思考档位 + 静态 '/' 技能补全 + 起始环境）
+// Standby input area (a true draft: text + staged attachments + model/thinking
+// level + static '/' skill completion + starting environment)
 // ---------------------------------------------------------------------------
 
 interface StandbyComposerProps {
@@ -418,7 +445,8 @@ interface StandbyComposerProps {
   profile: Profile
   defaultModelInfo: { defaultModel: string; defaultThinkingLevel: string } | null
   envError: string | null
-  /** create 已锁定真实会话：模型/思考/环境随会话固化，不再接受修改。 */
+  /** create has locked a real conversation: model/thinking/environment are
+   * fixed with it and accept no further edits. */
   anchored: boolean
   anchoredConversation: ConversationSummary | undefined
   commandPending: boolean
@@ -455,13 +483,15 @@ function StandbyComposer({
   onCatalogRefreshed,
 }: StandbyComposerProps) {
   const store = useHelmStore()
+  const { t } = useWebLocale()
   const composerBoxRef = useRef<HTMLDivElement | null>(null)
   const dragDepthRef = useRef(0)
   const [dragging, setDragging] = useState(false)
   const isMobile = useIsMobile(680)
   const busy = draft.sending
   const sendDisabled = busy || commandPending || draft.text.trim() === '' || envError !== null
-  // 锚定后锁定一切影响创建的配置：重试跳过 create，新设置不会生效，不可显现可改但不生效。
+  // Once anchored, every creation-affecting configuration locks: retries skip
+  // create, new settings never apply; controls may stay visible but inert.
   const configLocked = busy || anchored
 
   const effectiveModel = resolveStandbyEffectiveModel(
@@ -575,9 +605,9 @@ function StandbyComposer({
           <div className="agent-standby-anchored callout" role="status">
             <HelmIcon name="lock" size={12} />
             <span className="agent-standby-anchored-text">
-              Conversation #{draft.conversationId} created: model and starting environment are locked with it; edit the text or attachments and retry
+              {t('composer.standby.anchoredNotice', { id: draft.conversationId! })}
             </span>
-            <Tooltip content="Open the created conversation in this panel" side="top">
+            <Tooltip content={t('composer.standby.openCreatedInPanel')} side="top">
               <button
                 type="button"
                 className="btn btn-sm"
@@ -589,7 +619,7 @@ function StandbyComposer({
                   )
                 }}
               >
-                View conversation
+                {t('composer.standby.viewConversation')}
               </button>
             </Tooltip>
           </div>
@@ -598,7 +628,7 @@ function StandbyComposer({
           <div className="agent-standby-error callout callout--error" role="alert">
             <span className="agent-standby-error-text">{draft.error}</span>
             <button type="button" className="btn btn-sm" disabled={busy} onClick={onSend}>
-              Retry
+              {t('common.retry')}
             </button>
           </div>
         ) : null}
@@ -626,13 +656,13 @@ function StandbyComposer({
                   <HelmIcon name="file" size={11} />
                   <span>{att.name}</span>
                   <span className="mono tabular-nums">{formatBytes(att.size)}</span>
-                  <span className="badge badge-neutral agent-standby-attachment-state">Pending</span>
-                  <Tooltip content={`Remove attachment ${att.name}`} side="top">
+                  <span className="badge badge-neutral agent-standby-attachment-state">{t('composer.standby.attachmentPending')}</span>
+                  <Tooltip content={t('composer.standby.removeAttachmentTitle', { name: att.name })} side="top">
                     <button
                       type="button"
                       className="btn btn-ghost btn-icon-xs"
-                      title="Remove attachment"
-                      aria-label={`Remove attachment ${att.name}`}
+                      title={t('composer.standby.removeAttachment')}
+                      aria-label={t('composer.standby.removeAttachmentTitle', { name: att.name })}
                       disabled={busy}
                       onClick={() => removeLocalFile(att.key)}
                     >
@@ -646,13 +676,13 @@ function StandbyComposer({
                   <HelmIcon name="paperclip" size={11} />
                   <span>{att.name}</span>
                   <span className="mono tabular-nums">{formatBytes(att.size)}</span>
-                  <span className="badge badge-ok agent-standby-attachment-state">Uploaded</span>
-                  <Tooltip content={`Remove attachment ${att.name}`} side="top">
+                  <span className="badge badge-ok agent-standby-attachment-state">{t('composer.standby.attachmentUploaded')}</span>
+                  <Tooltip content={t('composer.standby.removeAttachmentTitle', { name: att.name })} side="top">
                     <button
                       type="button"
                       className="btn btn-ghost btn-icon-xs"
-                      title="Remove attachment"
-                      aria-label={`Remove attachment ${att.name}`}
+                      title={t('composer.standby.removeAttachment')}
+                      aria-label={t('composer.standby.removeAttachmentTitle', { name: att.name })}
                       disabled={busy}
                       onClick={() => removeUploaded(att.artifactId)}
                     >
@@ -664,13 +694,13 @@ function StandbyComposer({
             </div>
           ) : null}
           <textarea
-            aria-label={`Type the first message to ${profile.name || profile.id}`}
+            aria-label={t('composer.standby.firstMessageAria', { name: profile.name || profile.id })}
             ref={textareaRef}
             className="composer-textarea selectable"
             value={draft.text}
             rows={1}
             readOnly={busy}
-            placeholder={isMobile ? 'Type a message to start a new topic…' : 'Type a message to start a new topic; / commands and skills · @ mentions, ⌘V to paste attachments'}
+            placeholder={isMobile ? t('composer.standby.placeholderMobile') : t('composer.standby.placeholder')}
             onChange={(e) => {
               updateStandbyDraft(draftKey, { text: e.target.value })
               detectPopover(e.target.value, e.target.selectionStart ?? e.target.value.length)
@@ -699,12 +729,12 @@ function StandbyComposer({
           />
           <div className="composer-toolbar">
             <div className="composer-toolbar-left">
-              <Tooltip content="Choose attachments (uploaded on send)" side="top">
+              <Tooltip content={t('composer.standby.chooseAttachments')} side="top">
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm composer-icon-button"
-                  title="Choose attachments (uploaded on send)"
-                  aria-label="Choose attachments (uploaded on send)"
+                  title={t('composer.standby.chooseAttachments')}
+                  aria-label={t('composer.standby.chooseAttachments')}
                   disabled={busy}
                   onClick={() => fileInputRef.current?.click()}
                 >
@@ -739,8 +769,8 @@ function StandbyComposer({
                 className="btn btn-sm btn-primary btn-pill btn-send"
                 disabled={sendDisabled}
                 onClick={onSend}
-                title={envError !== null ? envError : 'Send (Enter); the conversation is created on first send'}
-                aria-label={busy ? 'Sending' : 'Send'}
+                title={envError !== null ? envError : t('composer.standby.sendTitle')}
+                aria-label={busy ? t('composer.standby.sendingAria') : t('composer.sendControls.send')}
               >
                 <HelmIcon name={busy ? 'loader' : 'arrow-up'} size={18} className={busy ? 'spin-slow' : undefined} />
               </button>
@@ -753,7 +783,8 @@ function StandbyComposer({
 }
 
 // ---------------------------------------------------------------------------
-// 模型 / 思考档位选择（模型随 create 提交；思考档位创建后 patch；复用 ModelPickerControl）
+// Model / thinking-level picking (model rides with create; thinking level is
+// patched after creation; reuses ModelPickerControl)
 // ---------------------------------------------------------------------------
 
 function StandbyModelPicker({
@@ -774,7 +805,8 @@ function StandbyModelPicker({
   onCatalogRefreshed: () => Promise<void>
 }) {
   const store = useHelmStore()
-  const lockedNote = 'Locked with the conversation (or sending); retry reuses this configuration'
+  const { t } = useWebLocale()
+  const lockedNote = t('composer.model.lockedNote')
 
   const effectiveModel = resolveStandbyEffectiveModel(
     draft.model,
@@ -795,7 +827,8 @@ function StandbyModelPicker({
   const showThinkingBadge = supportsThinking && effectiveThinkingLevel !== '' && effectiveThinkingLevel !== 'off'
 
   const pickModel = (model: string): void => {
-    // 切换模型后重置思考档位为 undefined，使其按新模型能力重新解析。
+    // Reset the thinking level to undefined after a model switch so it
+    // re-resolves against the new model's capabilities.
     updateStandbyDraft(draftKey, { model, thinkingLevel: undefined })
   }
   const resetToDefault = (): void => {
@@ -805,20 +838,26 @@ function StandbyModelPicker({
     updateStandbyDraft(draftKey, { thinkingLevel: level })
   }
 
+  const thinkingSuffix = showThinkingBadge ? t('composer.model.thinkingSuffix', { level: effectiveThinkingLevel }) : ''
+
   return (
     <ModelPickerControl
       effectiveModel={effectiveModel}
       selectedModel={draft.model}
       activeThinkingLevel={effectiveThinkingLevel}
       fallbackPanel={isSplit ? 'split' : 'primary'}
-      resetLabel={`Follow profile default${profile.model !== undefined && profile.model !== '' ? ` (${profile.model})` : ''}`}
-      resetTitle="No model specified on creation; the server resolves it from the profile/global default"
+      resetLabel={
+        profile.model !== undefined && profile.model !== ''
+          ? t('composer.model.followProfileDefaultModel', { model: profile.model })
+          : t('composer.model.followProfileDefault')
+      }
+      resetTitle={t('composer.model.standbyResetTitle')}
       buttonTitle={
         disabled
           ? lockedNote
           : effectiveModel !== undefined && effectiveModel !== ''
-            ? `Current model: ${effectiveModel}${showThinkingBadge ? ` · thinking ${effectiveThinkingLevel}` : ''} (${COMPOSER_SHORTCUTS.toggleModelPicker})`
-            : `Follows profile/global default model${showThinkingBadge ? ` · thinking ${effectiveThinkingLevel}` : ''} (${COMPOSER_SHORTCUTS.toggleModelPicker})`
+            ? t('composer.model.currentTitle', { model: effectiveModel, thinking: thinkingSuffix, shortcut: COMPOSER_SHORTCUTS.toggleModelPicker })
+            : t('composer.model.followsDefaultTitle', { thinking: thinkingSuffix, shortcut: COMPOSER_SHORTCUTS.toggleModelPicker })
       }
       disabled={disabled}
       onPickModel={pickModel}
@@ -830,7 +869,7 @@ function StandbyModelPicker({
 }
 
 // ---------------------------------------------------------------------------
-// 起始环境条（本地草稿，不 PATCH；发送时随 create 提交）
+// Starting environment bar (local draft, no PATCH; submitted with create on send)
 // ---------------------------------------------------------------------------
 
 function StandbyEnvBar({ draftKey, draft, profile, disabled, onResetToDefault }: {
@@ -841,6 +880,7 @@ function StandbyEnvBar({ draftKey, draft, profile, disabled, onResetToDefault }:
   onResetToDefault: () => void
 }) {
   const store = useHelmStore()
+  const { t } = useWebLocale()
 
   const startCustomize = (): void => {
     if (disabled) return
@@ -857,25 +897,26 @@ function StandbyEnvBar({ draftKey, draft, profile, disabled, onResetToDefault }:
       value: n.id,
       label: nodeOptionLabel(n),
       icon: n.id === 'local' ? 'monitor' : 'network',
-      meta: n.id !== 'local' ? (n.online ? 'Online' : 'Offline') : undefined,
+      meta: n.id !== 'local' ? (n.online ? t('common.online') : t('common.offline')) : undefined,
     }))
     if (!store.nodes.some((n) => n.id === nodeId)) {
-      list.push({ value: nodeId, label: `${nodeId} (unknown)`, icon: 'alert-circle' })
+      list.push({ value: nodeId, label: t('composer.env.nodeUnknownOption', { nodeId }), icon: 'alert-circle' })
     }
     return list
-  }, [store.nodes, draft.envNodeId])
+  }, [store.nodes, draft.envNodeId, t])
 
   if (!draft.envCustomized) {
     return (
       <div className="composer-env-bar agent-standby-env-bar">
         <HelmIcon name="monitor" size={12} />
         <span className="agent-standby-env-hint">
-          Execution environment follows the profile default
-          {profile.nodeId !== undefined && profile.nodeId !== '' ? ` · ${profile.nodeId}` : ''}
-          {profile.cwd ? ` · ${profile.cwd}` : ''}
+          {t('composer.standby.envFollowsProfile', {
+            node: profile.nodeId !== undefined && profile.nodeId !== '' ? t('composer.standby.envSuffix', { value: profile.nodeId }) : '',
+            cwd: profile.cwd ? t('composer.standby.envSuffix', { value: profile.cwd }) : '',
+          })}
         </span>
         <button type="button" className="btn btn-sm" disabled={disabled} onClick={startCustomize}>
-          Custom
+          {t('composer.standby.customEnvButton')}
         </button>
       </div>
     )
@@ -887,7 +928,7 @@ function StandbyEnvBar({ draftKey, draft, profile, disabled, onResetToDefault }:
       <span className="composer-env-item">
         <Select
           className="composer-env-select"
-          aria-label="New conversation execution node"
+          aria-label={t('composer.standby.envNodeAria')}
           disabled={disabled}
           value={draft.envNodeId || 'local'}
           options={nodeOptions}
@@ -901,19 +942,19 @@ function StandbyEnvBar({ draftKey, draft, profile, disabled, onResetToDefault }:
         <HelmIcon name="folder" size={12} className="composer-env-cwd-icon" />
         <input
           className="input mono composer-env-cwd-input"
-          aria-label="New conversation working directory"
+          aria-label={t('composer.standby.envCwdAria')}
           value={draft.envCwd ?? ''}
           disabled={disabled}
-          placeholder="Absolute path on the target node, e.g. /home/user/work"
+          placeholder={t('composer.env.cwdPlaceholder')}
           onChange={(e) => updateStandbyDraft(draftKey, { envCwd: e.target.value })}
         />
       </span>
-      <button type="button" className="btn btn-sm" disabled={disabled} onClick={onResetToDefault} title={disabled ? 'Sending or locked with the conversation' : 'Clear inherited/custom environment and follow the profile default'}>
-        Restore defaults
+      <button type="button" className="btn btn-sm" disabled={disabled} onClick={onResetToDefault} title={disabled ? t('composer.standby.envLockedTitle') : t('composer.standby.clearEnvTitle')}>
+        {t('composer.standby.restoreDefaults')}
       </button>
-      <span className="composer-env-hint">Takes effect on first send</span>
+      <span className="composer-env-hint">{t('composer.standby.envEffectOnSend')}</span>
       {draftNode !== undefined && !draftNode.online && draft.envNodeId !== 'local' ? (
-        <span className="composer-env-warn">Node offline; execution waits until the node comes online</span>
+        <span className="composer-env-warn">{t('composer.standby.nodeOfflineWarn')}</span>
       ) : null}
     </div>
   )

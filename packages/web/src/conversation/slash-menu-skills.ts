@@ -1,20 +1,23 @@
 /**
- * 会话斜杠菜单技能可用性（Composer '/' 补全与 CommandPopover fallback 共用）。
+ * Skill availability for the conversation slash menu (shared by the Composer
+ * '/' completion and the CommandPopover fallback).
  *
- * 规则唯一来源是协议 isSkillAvailable：当前会话 profile.skills 白名单 +
- * 插件启用状态双过滤。缺少当前 Profile 时先不展示技能（宁缺勿放开），
- * 等资产到达后自然出现。
+ * The single rule source is the protocol's isSkillAvailable: a double filter
+ * of the current profile's skills whitelist plus plugin enablement state.
+ * When the current Profile is missing, skills stay hidden (better absent than
+ * overexposed) and appear naturally once assets arrive.
  */
 
 import type { Profile, SkillSummary } from '@helm/protocol/browser'
 import { isSkillAvailable } from '@helm/protocol/browser'
 
 /**
- * 当前会话可出现在 / 斜杠菜单的技能：
- * - profile 缺失（资产未返回 / Profile 已删）-> 空数组，不意外放开全部；
- * - profile.skills 未设置 -> 全部可见技能；
- * - [] -> 无技能；非空 -> 白名单；
- * - 托管插件停用的技能恒不可用。
+ * Skills eligible for the '/' slash menu in the current conversation:
+ * - profile missing (assets not returned / Profile deleted) -> empty array,
+ *   never accidentally exposing everything;
+ * - profile.skills unset -> all visible skills;
+ * - [] -> no skills; non-empty -> whitelist;
+ * - skills of a disabled owning plugin are always unavailable.
  */
 export function slashMenuSkills(
   profile: Profile | undefined,

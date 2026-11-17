@@ -1,15 +1,21 @@
 /**
- * composerCompleter 数据源订阅 hook（始终随 Composer 挂载）：
- * - doc / sessionDoc 源：复用宿主既有公开文档与专用 SSE 订阅通道，按需订阅；
- * - action 源：150ms 防抖 + generation 防竞态；调用前核对 store.actions 真实
- *   manifest（存在且 idempotent:true 才放行）；query 携带真实 conversationId；
- * - 浮层关闭 / 切会话 / 停用源 / 换查询：generation 推进，晚到响应一律丢弃；
- * - 逐源错误显式收集（loading / 空态 / 错误可辨），单源失败不影响其他源。
- * 本模块只导出 hook 与纯类型（无组件），保持 .ts Fast Refresh 约定。
+ * composerCompleter source subscription hook (always mounted with the Composer):
+ * - doc / sessionDoc sources: reuse the host's existing public docs and the
+ *   dedicated SSE subscription channels, subscribing on demand;
+ * - action sources: 150ms debounce + generation race guard; the real manifest
+ *   in store.actions is verified before invoking (present and idempotent:true
+ *   to pass); the query carries the real conversationId;
+ * - popover closed / conversation switched / source disabled / query changed:
+ *   the generation advances and late responses are always discarded;
+ * - per-source errors are collected explicitly (loading / empty / error stay
+ *   distinguishable); one failing source never affects the others.
+ * This module exports only hooks and pure types (no components), honoring the
+ * .ts Fast Refresh rule.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ComposerCompleterSpec, ComposerCompletionItem, ConversationSummary } from '@helm/protocol/browser'
 import { useHelmStore } from '../lib/store-context.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { QualifiedUiSpec } from '../lib/types.js'
 import {
   COMPLETION_QUERY_DEBOUNCE_MS,
@@ -25,21 +31,24 @@ import {
 } from './composer-completion-model.js'
 
 export interface CompletionSourceError {
-  /** 源标识（pluginId/specId），逐源显式诊断。 */
+  /** Source identifier (pluginId/specId) for explicit per-source diagnosis. */
   source: string
   message: string
 }
 
 export interface CompletionSourceSnapshot {
-  /** 当前触发符在会话作用域内是否有注册源（false 时浮层不打开，输入不受拦截）。 */
+  /** Whether the current trigger has registered sources in the conversation
+   * scope (false: the popover stays closed, input is never intercepted). */
   hasSources: boolean
-  /** 查询过滤后的合并候选（已按 priority 源顺序稳定排列并去重）。 */
+  /** Query-filtered merged candidates (stably ordered by source priority and
+   * deduplicated). */
   items: MergedCompletionItem[]
-  /** 过滤后候选总数（不含合并上限截断）。 */
+  /** Filtered candidate total (excluding the merge-cap truncation). */
   total: number
-  /** 命中合并上限被截断（浮层需显式提示）。 */
+  /** Hit the merge cap and was truncated (the popover must say so). */
   truncated: boolean
-  /** 任一源仍在加载（doc 未到 / sessionDoc 未连 / action 防抖或请求在途）。 */
+  /** Any source still loading (doc not arrived / sessionDoc not connected /
+   * action debouncing or request in flight). */
   loading: boolean
   errors: CompletionSourceError[]
 }
@@ -49,7 +58,7 @@ const EMPTY_SNAPSHOT: CompletionSourceSnapshot = { hasSources: false, items: [],
 interface ActionSourceState {
   loading: boolean
   contextKey: string
-  /** `${pluginId}/${specId}` -> 合法候选。 */
+  /** `${pluginId}/${specId}` -> valid candidates. */
   results: Record<string, ComposerCompletionItem[]>
   errors: Record<string, string>
 }
@@ -68,11 +77,13 @@ type SessionDocSource = QualifiedUiSpec<ComposerCompleterSpec> & { spec: Compose
 type ActionSource = QualifiedUiSpec<ComposerCompleterSpec> & { spec: ComposerCompleterSpec & { source: { kind: 'action'; actionId: string; actionPluginId?: string } } }
 
 export interface UseComposerCompletionSourcesInput {
-  /** 当前触发 token（null = 浮层关闭，全部源停订、晚响应作废）。 */
+  /** Current trigger token (null = popover closed: all sources unsubscribed,
+   * late responses void). */
   token: CompletionToken | null
   completers: ReadonlyArray<QualifiedUiSpec<ComposerCompleterSpec>>
   conversation?: ConversationSummary
-  /** 无会话（待命草稿态）时供支持 profileId 参数的 action 补全源使用。 */
+  /** Used by profileId-capable action sources when no conversation exists
+   * (standby draft state). */
   profileId?: string
 }
 
@@ -81,12 +92,15 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
   const conversationId = conversation?.id
   const contextKey = `${conversationId ?? ''}:${profileId ?? ''}`
   const store = useHelmStore()
+  const { t } = useWebLocale()
   const trigger = token === null ? null : token.trigger
   const query = token?.query ?? ''
-  // '/' 走既有斜杠浮层三源逻辑；本 hook 只服务 '@' '#' ':' 的插件补全源。
+  // '/' goes through the existing slash popover's three-source logic; this
+  // hook only serves the '@' '#' ':' plugin completion sources.
   const active = trigger === '@' || trigger === '#' || trigger === ':'
 
-  // ---- 活动源（trigger + scope 过滤，priority 降序稳定）；非活动时恒空数组 ----
+  // ---- Active sources (trigger + scope filter, stable priority desc); a
+  // constant empty array while inactive ----
   const sources = useMemo(
     () => (active && trigger !== null ? completersForTrigger(completers, trigger, conversation) : []),
     [active, trigger, completers, conversation],
@@ -105,7 +119,8 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
     [sources],
   )
 
-  // ---- doc 源：按需触发 ensurePluginDoc（值随 store.pluginDocs 渲染期读取） ----
+  // ---- doc sources: trigger ensurePluginDoc on demand (values are read at
+  // render time from store.pluginDocs) ----
   const { ensurePluginDoc, pluginDocs, loadErrors } = store
   const docKey = useMemo(() => docSources.map((s) => `${s.pluginId}/${(s.spec.source as { name: string }).name}`).join('|'), [docSources])
   useEffect(() => {
@@ -114,11 +129,13 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
       const name = (src.spec.source as { name: string }).name
       if (!Object.hasOwn(pluginDocs, `${src.pluginId}/${name}`)) void ensurePluginDoc(src.pluginId, name)
     }
-    // 仅依赖键集合与稳定回调；pluginDocs 值更新不重复触发（读取走渲染期）。
+    // Only the key set and stable callbacks are deps; pluginDocs value updates
+    // never re-trigger (values are read at render time).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docKey, ensurePluginDoc, pluginDocs])
 
-  // ---- sessionDoc 源：专用 SSE 通道合并订阅（快照引用稳定；无会话时不上订） ----
+  // ---- sessionDoc sources: dedicated SSE channel merged subscription
+  // (stable snapshot identity; never subscribed without a conversation) ----
   const tuplesKey = useMemo(() => JSON.stringify(sessionDocSources.map((s) => ({ pluginId: s.pluginId, docName: s.spec.source.name }))), [sessionDocSources])
   const { subscribeSessionDoc, getSessionDocState } = store
   const subscribeSession = useCallback(
@@ -144,7 +161,7 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
   }, [tuplesKey, conversationId, getSessionDocState, subscribeSession])
   const sessionStates = useSyncExternalStore(subscribeSession, getSnapshot, () => EMPTY_SESSION_STATES)
 
-  // ---- action 源：防抖 + generation 防竞态 ----
+  // ---- action sources: debounce + generation race guard ----
   const [actionState, setActionState] = useState<ActionSourceState>(ACTION_IDLE)
   const actionGeneration = useRef(0)
   const { invokePluginAction } = store
@@ -155,7 +172,9 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
       setActionState(ACTION_IDLE)
       return
     }
-    // 调用前核对真实 manifest 与入参计划（未注册 / 非幂等 / 无会话却强依赖 conversationId 一律显式拒绝）。
+    // Verify the real manifest and the input plan before invoking (unregistered
+    // / non-idempotent / conversation-required without one are all rejected
+    // explicitly).
     const manifestErrors: Record<string, string> = {}
     const runnable: Array<{
       src: ActionSource
@@ -167,15 +186,15 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
     for (const src of actionSources) {
       const target = src.spec.source.actionPluginId ?? src.pluginId
       const key = `${src.pluginId}/${src.spec.id}`
-      const invalid = verifyCompletionActionManifest(actions, target, src.spec.source.actionId)
+      const invalid = verifyCompletionActionManifest(actions, target, src.spec.source.actionId, t)
       if (invalid !== null) {
         manifestErrors[key] = invalid
         continue
       }
       const manifest = actions.find((a) => a.pluginId === target && a.id === src.spec.source.actionId)!
-      const plan = buildCompletionActionCall(manifest, query, { conversationId, profileId })
+      const plan = buildCompletionActionCall(manifest, query, { conversationId, profileId }, t)
       if (plan.input === null) {
-        manifestErrors[key] = plan.error ?? 'The current context does not support this completion action'
+        manifestErrors[key] = plan.error ?? t('composer.completion.fallbackUnsupported')
         continue
       }
       runnable.push({
@@ -211,8 +230,8 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
             errors[item.key] = entry.reason instanceof Error ? entry.reason.message : String(entry.reason)
             return
           }
-          const parsed = parseCompletionActionResult(entry.value)
-          if (parsed.items === null) errors[item.key] = parsed.error ?? 'Completion action returned an invalid result'
+          const parsed = parseCompletionActionResult(entry.value, t)
+          if (parsed.items === null) errors[item.key] = parsed.error ?? t('composer.completion.fallbackInvalidResult')
           else results[item.key] = parsed.items
         })
         setActionState({ loading: false, contextKey, results, errors })
@@ -220,12 +239,13 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
     }, COMPLETION_QUERY_DEBOUNCE_MS)
     return () => {
       clearTimeout(timer)
-      // generation 已由下一次 effect 推进；清理只停本定时器。
+      // The generation has already been advanced by the next effect run; this
+      // cleanup only stops this timer.
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceKey, query, contextKey, conversationId, profileId, invokePluginAction, actions, actionSources])
+  }, [sourceKey, query, contextKey, conversationId, profileId, invokePluginAction, actions, actionSources, t])
 
-  // ---- 合并（渲染期纯计算）：各插件源按 priority 源顺序 ----
+  // ---- Merge (pure render-time computation): plugin sources in priority order ----
   return useMemo(() => {
     if (token === null || !active) return EMPTY_SNAPSHOT
     const groups: Array<{ pluginId: string; items: ComposerCompletionItem[] | null }> = []
@@ -237,12 +257,12 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
       const key = `${src.pluginId}/${source.name}`
       const label = `${src.pluginId}/${src.spec.id}`
       if (Object.hasOwn(pluginDocs, key)) {
-        const extracted = extractCompletionItems(pluginDocs[key], source.itemsField)
+        const extracted = extractCompletionItems(pluginDocs[key], source.itemsField, t)
         if (extracted.error !== undefined) errors.push({ source: label, message: extracted.error })
         if (extracted.items !== null) groups.push({ pluginId: src.pluginId, items: filterByQuery(extracted.items, query) })
       } else {
         const loadError = loadErrors[`doc:${key}`]
-        if (loadError !== undefined) errors.push({ source: label, message: `Failed to load document: ${loadError}` })
+        if (loadError !== undefined) errors.push({ source: label, message: t('composer.completion.docLoadFailed', { error: loadError }) })
         else loading = true
       }
     }
@@ -251,7 +271,7 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
       for (const src of sessionDocSources) {
         errors.push({
           source: `${src.pluginId}/${src.spec.id}`,
-          message: 'Conversation document completion requires an existing conversation (available after the first message creates one)',
+          message: t('composer.completion.sessionDocNeedsConversation'),
         })
       }
     } else {
@@ -266,7 +286,7 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
           loading = true
           continue
         }
-        const extracted = extractCompletionItems(state.value, itemsFieldOf(sessionDocSources, entry.tuple))
+        const extracted = extractCompletionItems(state.value, itemsFieldOf(sessionDocSources, entry.tuple), t)
         if (extracted.error !== undefined) errors.push({ source: label, message: extracted.error })
         if (extracted.items !== null) groups.push({ pluginId: entry.tuple.pluginId, items: filterByQuery(extracted.items, query) })
       }
@@ -281,7 +301,8 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
       }
       const items = actionState.contextKey === contextKey ? actionState.results[key] : undefined
       if (items !== undefined) {
-        // 服务端已按 query 过滤，客户端不重复过滤（保留服务端模糊/拼音匹配语义）。
+        // The server already filtered by query; the client does not filter
+        // again (preserving server-side fuzzy / pinyin matching semantics).
         groups.push({ pluginId: src.pluginId, items })
       } else if (actionState.loading) {
         loading = true
@@ -291,7 +312,7 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
     const merged = mergeCompletionItems(groups)
     return { hasSources: sources.length > 0, items: merged.items, total: merged.total, truncated: merged.truncated, loading, errors }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, active, query, conversationId, contextKey, docSources, sessionDocSources, actionSources, pluginDocs, loadErrors, sessionStates, actionState])
+  }, [token, active, query, conversationId, contextKey, docSources, sessionDocSources, actionSources, pluginDocs, loadErrors, sessionStates, actionState, t])
 }
 
 function itemsFieldOf(

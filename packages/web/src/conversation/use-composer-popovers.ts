@@ -1,9 +1,15 @@
 /**
- * 输入区触发浮层与自动长高共享 hooks（正式会话 Composer 与待命草稿 StandbyComposer 共用）：
- * - '/' 进 CommandPopover（命令与技能）；'@' '#' ':' 进 CompletionPopover（composerCompleter 插件源）；
- * - 统一处理输入、光标移动（方向键 / 点击）触发检测、token 替换、光标恢复、切换/清空/禁用复位与键盘拦截；
- * - 统一处理 ResizeObserver 自适应长高，避免两套输入区各自维护分叉逻辑。
- * 本模块只导出 hooks / 纯函数 / TS 类型（无组件），保持 .ts Fast Refresh 约定。
+ * Shared trigger-popover and auto-grow hooks for the input area (used by both
+ * the conversation Composer and the standby draft StandbyComposer):
+ * - '/' opens the CommandPopover (commands and skills); '@' '#' ':' open the
+ *   CompletionPopover (composerCompleter plugin sources);
+ * - unified handling of input and caret movement (arrows / click) trigger
+ *   detection, token replacement, caret restoration, switch/clear/disable
+ *   resets and keyboard interception;
+ * - unified ResizeObserver auto-growing so the two input areas never maintain
+ *   forked logic.
+ * This module exports only hooks / pure functions / TS types (no components),
+ * honoring the .ts Fast Refresh rule.
  */
 import { useCallback, useEffect, useState } from 'react'
 import type { ComposerCompleterSpec, ConversationSummary } from '@helm/protocol/browser'
@@ -19,14 +25,15 @@ import {
 import { focusWithCaret } from './composer-controller.js'
 import { useComposerCompletionSources, type CompletionSourceSnapshot } from './use-composer-completion.js'
 
-/** 按内容与容器宽度自动调节 textarea 高度。 */
+/** Auto-adjust the textarea height to its content and container width. */
 export function autoGrowTextarea(el: HTMLTextAreaElement | null): void {
   if (el === null) return
   el.style.height = '0px'
   el.style.height = `${el.scrollHeight}px`
 }
 
-/** 当元素宽度变化时触发回调（ResizeObserver），避免拆分视图或窗口变化时 textarea 高度滞后。 */
+/** Invoke the callback when the element's width changes (ResizeObserver), so
+ * the textarea height never lags in split views or on window resizes. */
 export function useElementWidthResize(
   ref: { current: HTMLElement | null },
   onResize: () => void,
@@ -52,13 +59,16 @@ export interface UseComposerPopoversInput {
   readLiveDraft: () => string
   setDraftState: (next: string) => void
   completers: ReadonlyArray<QualifiedUiSpec<ComposerCompleterSpec>>
-  /** 真实会话（或已锚定待命会话）；纯草稿态为 undefined。 */
+  /** A real conversation (or an anchored standby conversation); undefined for
+   * the pure draft state. */
   conversation: ConversationSummary | undefined
-  /** 待命草稿角色 ID（无会话时供支持 profileId 的 action 补全源使用）。 */
+  /** Standby draft profile id (for action completion sources supporting
+   * profileId when no conversation exists). */
   profileId?: string
-  /** 会话或待命坐标切换键：变化时立即关闭全部浮层并取消在途查询。 */
+  /** Switch key for the conversation or standby coordinate: any change closes
+   * all popovers immediately and cancels in-flight queries. */
   resetKey: string | number
-  /** 只读/发送中等禁止弹出浮层的状态。 */
+  /** States that forbid popover opening (read-only / sending). */
   disabled?: boolean
 }
 
@@ -109,7 +119,8 @@ export function useComposerPopovers(input: UseComposerPopoversInput): UseCompose
     if (disabled || draftText === '') resetPopovers()
   }, [disabled, draftText, resetPopovers])
 
-  // 触发检测：'/' 进斜杠命令浮层；'@' '#' ':' 进统一插件补全浮层。
+  // Trigger detection: '/' opens the slash-command popover; '@' '#' ':' open
+  // the unified plugin completion popover.
   const detectPopover = useCallback((value: string, caret: number): void => {
     if (disabled) return
     const token = detectCompletionToken(value.slice(0, caret))
@@ -158,7 +169,8 @@ export function useComposerPopovers(input: UseComposerPopoversInput): UseCompose
     focusWithCaret(el, nextCaret)
   }
 
-  // 浮层 onPick/onClose 进其全局键盘 effect 依赖：稳定出口，调用时取最新实现。
+  // The popover's onPick/onClose feed its global keyboard effect deps: stable
+  // outlets that read the latest implementation when invoked.
   const applySlashPick = useStableCallback(applySlash)
   const closeSlashPopover = useStableCallback((): void => {
     setPopover(null)
@@ -178,7 +190,9 @@ export function useComposerPopovers(input: UseComposerPopoversInput): UseCompose
     profileId,
   })
   const slashOpen = popover !== null
-  // 浮层真正打开 = 触发符激活且当前作用域内有注册源；无源时不弹窗也不拦截输入。
+  // A popover is truly open = trigger active AND registered sources exist in
+  // the current scope; without sources nothing pops up and input is never
+  // intercepted.
   const completionOpen = completionSnapshot.hasSources
   const completionTrigger = completionToken !== null && completionToken.trigger !== '/' ? completionToken.trigger : '@'
 
