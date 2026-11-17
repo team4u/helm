@@ -452,8 +452,9 @@ it('createBackgroundReporter 契约矩阵：kind × 终态（completed/failed/ab
       const call = submits.at(-1)!
       assert.equal(call.opts.meta['backgroundRunId'], runId)
       assert.equal(call.opts.meta['kind'], `${kind}_report`)
-      const report = JSON.parse(call.text.slice(call.text.indexOf('\n') + 1)) as { runId: string; status: string }
+      const report = JSON.parse(call.text.slice(call.text.indexOf('\n') + 1)) as { runId: string; name: string; status: string }
       assert.equal(report.runId, runId)
+      assert.equal(report.name, 'matrix')
       assert.equal(report.status, status)
     }
   }

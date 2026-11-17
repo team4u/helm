@@ -136,6 +136,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
           [
             fauxToolCall('subagent', {
               prompt: '子任务',
+              label: '  调研子任务  ',
               agentType: 'assistant',
               cwd: childCwd,
               model: 'faux/faux-1',
@@ -155,7 +156,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       // 声明：全部新字段进入 inputSchema（模型可见）。
       assert.ok(declared, 'before_turn 应捕获 subagent 声明')
       const props = declared!.inputSchema['properties'] as Record<string, unknown>
-      for (const field of ['agentType', 'cwd', 'isolation', 'resume', 'model', 'effort', 'fork']) {
+      for (const field of ['label', 'agentType', 'cwd', 'isolation', 'resume', 'model', 'effort', 'fork']) {
         assert.ok(props[field], `subagent 声明应含 ${field}`)
       }
       const isolationSchema = props['isolation'] as { enum?: unknown[] }
@@ -165,6 +166,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       assert.equal(spawns.length, 1, 'agent_spawn 钩子应恰好触发一次')
       const payload = spawns[0]!
       assert.equal(payload.prompt, '子任务')
+      assert.equal(payload.title, '调研子任务')
       assert.equal(payload.agentType, 'assistant')
       assert.equal(payload.cwd, childCwd)
       assert.equal(payload.model, 'faux/faux-1')
@@ -178,6 +180,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
         .listConversations()
         .find((c) => c.parentConversationId === 1)
       assert.ok(child, '应派生真子会话')
+      assert.equal(child.title, '调研子任务', '子会话应持久保存 label 作为初始标题')
       assert.ok(
         text.includes(`conversationId=${child.id}`),
         `工具输出应含续接标识 conversationId=${child.id}，实得：${text.slice(-200)}`,
@@ -219,10 +222,10 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       assert.ok(child, '首调应派生子会话')
       assert.equal(spawns.length, 1)
 
-      // 续接：resume = 首调返回的 conversationId。
+      // 续接：resume = 首调返回的 conversationId（传 label 也不得覆写子会话 title）。
       faux.setResponses([
         fauxAssistantMessage(
-          [fauxToolCall('subagent', { prompt: '第二轮', resume: String(child.id), background: false })],
+          [fauxToolCall('subagent', { prompt: '第二轮', label: '续接标签', resume: String(child.id), background: false })],
           { stopReason: 'toolUse' },
         ),
         fauxAssistantMessage('续接回答'),
@@ -233,8 +236,10 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
 
       assert.equal(spawns.length, 2, '续接也应经 agent_spawn 钩子')
       assert.equal(spawns[1]!.resume, String(child.id), 'resume 原样进入钩子载荷')
+      assert.equal(spawns[1]!.title, undefined, 'resume 不得覆写 title')
       const children = kernel.listConversations().filter((c) => c.parentConversationId === 1)
       assert.equal(children.length, 1, '续接不得新建子会话')
+      assert.equal(children[0]!.title, '第一轮', 'resume 应保留原派生子会话标题')
 
       const detail = await kernel.getConversationDetail(1, { limit: 50 })
       const text = toolResultText(detail, 'subagent')
@@ -285,6 +290,21 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
         `拒绝信息应显式指出 isolation 非法：${text.slice(0, 300)}`,
       )
       assert.ok(!text.includes('subagent_failed'), 'SDK 参数校验拒绝（非工具内部失败路径）')
+
+      // 非字符串 label 同样被显式拒绝，绝不进入 agent_spawn 钩子
+      faux.setResponses([
+        fauxAssistantMessage(
+          [fauxToolCall('subagent', { prompt: '坏标签', label: { bad: true } as unknown as string })],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('主回合仍完成2'),
+      ])
+      await kernel.submitInput(1, '坏 label')
+      await kernel.waitForIdle(1)
+      assert.equal(spawns.length, 0, '非法 label 绝不进入 agent_spawn 钩子')
+      const labelDetail = await kernel.getConversationDetail(1, { limit: 50 })
+      const labelText = toolResultText(labelDetail, 'subagent')
+      assert.ok(labelText.includes('label'), `拒绝信息应显式指出 label 非法：${labelText.slice(0, 300)}`)
     } finally {
       await kernel.close()
     }
@@ -379,7 +399,7 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
         'return args.items.map((x) => x * 2)'
       faux.setResponses([
         fauxAssistantMessage(
-          [fauxToolCall('SubagentWorkflow', { script: doubleScript, args: { items: [1, 2, 3] }, background: false })],
+          [fauxToolCall('SubagentWorkflow', { script: doubleScript, label: '  自定义编排  ', args: { items: [1, 2, 3] }, background: false })],
           { stopReason: 'toolUse' },
         ),
         fauxAssistantMessage('编排回合完成'),
@@ -391,10 +411,12 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
       const text = toolResultText(detail, 'SubagentWorkflow')
       const runId = extractRunId(text)
       assert.ok(runId, `工具输出应含 runId：${text.slice(0, 300)}`)
-      const parsedSummary = JSON.parse(text) as { status: string; result?: unknown }
+      const parsedSummary = JSON.parse(text) as { status: string; name?: string; result?: unknown }
       assert.equal(parsedSummary.status, 'completed', 'SubagentWorkflow 工具应等待终态返回')
+      assert.equal(parsedSummary.name, '自定义编排', 'label 应覆盖 meta.name 作为 run.name')
       assert.deepEqual(parsedSummary.result, [2, 4, 6], '工具输出直接携带终态 result')
       const doneRun = (await wfInspect(app, runId)).run
+      assert.equal(doneRun.name, '自定义编排')
       assert.deepEqual(doneRun.result, [2, 4, 6], 'args.items.map 真实计算——args 为对象而非字符串')
 
       // --- scriptPath：文件路径入口 ---
@@ -466,6 +488,28 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
       assert.ok(
         text.includes('workflow_failed') && text.includes('exactly one of'),
         `Expected an explicit failure, not a fabricated run: ${text.slice(0, 300)}`,
+      )
+
+      // 空白 label 必须显式拒绝
+      faux.setResponses([
+        fauxAssistantMessage(
+          [
+            fauxToolCall('SubagentWorkflow', {
+              script: 'export const meta = { name: "x", description: "t" }\nreturn 1',
+              label: '   ',
+            }),
+          ],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('空白 label 回合完成'),
+      ])
+      await app.kernel.submitInput(1, '空白 label')
+      await app.kernel.waitForIdle(1)
+      const detailBlank = await app.kernel.getConversationDetail(1, { limit: 50 })
+      const blankText = toolResultText(detailBlank, 'SubagentWorkflow')
+      assert.ok(
+        blankText.includes('workflow_failed') && blankText.includes('label'),
+        `空白 label 应显式失败：${blankText.slice(0, 300)}`,
       )
     } finally {
       await app.close()

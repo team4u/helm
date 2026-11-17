@@ -67,15 +67,17 @@ export function registerSubagentTool(
     name: 'subagent',
     replay: 'safe',
     promptGuidelines: [
+      'Provide a short descriptive label (about 4-40 characters) summarizing the task so users can identify the subagent in the task list and child conversation title.',
       'After a background task starts, keep responding to the user or work on other things; the completion report arrives in this conversation automatically — do not sleep or poll for the result.',
       'Only pass background:false for synchronous waiting when the very next step depends on the subagent result and there is no other work in between.',
     ],
     description:
-      'Spawn a subagent. Human conversations default to background execution: the call returns a runId as soon as the execution environment is ready, and the completion arrives as a steer follow-up in this conversation; automated conversations (managed subagents/resident workers/trigger sessions, owned by bot/helm) default to waiting synchronously for the final result, and an explicit background=true is rejected — a background report would let the automated caller settle early. An explicit background:false forces synchronous waiting: a synchronous run still has a durable WorkflowRun (it can be moved background by runId via the workflows detach action or the UI "move to background", returning a background handle immediately). agentType is a Profile ID or an external runtime identifier (e.g. herdr:agy); outputs are validated against schema, and gate is accepted in the real node and working directory. Supports cwd, fork (spawn a native sub-conversation forked from the parent conversation\'s currently completed context; the default agentType inherits the parent conversation\'s role and context/directory/model config; mutually exclusive with resume; unsupported for external runtimes), isolation:worktree, model, effort, maxSubagentDepth (explicitly grants the subtree spawn-depth ceiling, 1..5, default inherits the current ceiling of 2); resume continues the same execution context via execution.conversationId/executionId. External runtime panes carry no parent-conversation secrets by default; grant them individually with secretNames. result and execution metadata are separate; after inspecting or merging, cleanup_worktree can clean up the managed worktree.',
+      'Spawn a subagent. Human conversations default to background execution: the call returns a runId as soon as the execution environment is ready, and the completion arrives as a steer follow-up in this conversation; automated conversations (managed subagents/resident workers/trigger sessions, owned by bot/helm) default to waiting synchronously for the final result, and an explicit background=true is rejected — a background report would let the automated caller settle early. An explicit background:false forces synchronous waiting: a synchronous run still has a durable WorkflowRun (it can be moved background by runId via the workflows detach action or the UI "move to background", returning a background handle immediately). agentType is a Profile ID or an external runtime identifier (e.g. herdr:agy); outputs are validated against schema, and gate is accepted in the real node and working directory. Supports label (concise task name), cwd, fork (spawn a native sub-conversation forked from the parent conversation\'s currently completed context; the default agentType inherits the parent conversation\'s role and context/directory/model config; mutually exclusive with resume; unsupported for external runtimes), isolation:worktree, model, effort, maxSubagentDepth (explicitly grants the subtree spawn-depth ceiling, 1..5, default inherits the current ceiling of 2); resume continues the same execution context via execution.conversationId/executionId. External runtime panes carry no parent-conversation secrets by default; grant them individually with secretNames. result and execution metadata are separate; after inspecting or merging, cleanup_worktree can clean up the managed worktree.',
     inputSchema: {
       type: 'object',
       properties: {
         prompt: { type: 'string', description: 'Subagent task instructions' },
+        label: { type: 'string', description: 'Concise descriptive task name (optional; recommended 4-40 characters, used as the run name and initial child conversation title)' },
         agentType: { type: 'string', description: 'Profile ID or external runtime identifier (defaults to assistant unless fork; fork=true inherits the parent conversation Profile)' },
         cwd: { type: 'string', description: 'Subagent working directory (absolute; defaults to the Profile/conversation default)' },
         fork: {
@@ -120,6 +122,14 @@ export function registerSubagentTool(
     structuredOutputSchema: subagentOutputSchema,
     async execute(args, context) {
       const a = args as Record<string, unknown>
+      let label: string | undefined
+      if (a['label'] !== undefined) {
+        if (typeof a['label'] !== 'string') {
+          return envelopeError('subagent_failed: label 必须为 string', 'invalid label: 必须为 string')
+        }
+        const trimmed = a['label'].trim()
+        if (trimmed !== '') label = trimmed
+      }
       if (a['maxSubagentDepth'] !== undefined) {
         const raw = a['maxSubagentDepth']
         if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > HARD_MAX_SUBAGENT_DEPTH) {
@@ -268,6 +278,7 @@ export function registerSubagentTool(
           parentConversationId: context.conversationId,
           ...(context.callId !== undefined ? { parentToolCallId: context.callId } : {}),
           prompt: String(a['prompt']),
+          ...(label !== undefined && a['resume'] === undefined ? { title: label } : {}),
           ...(a['agentType'] !== undefined ? { agentType: String(a['agentType']) } : {}),
           ...(a['cwd'] !== undefined ? { cwd: String(a['cwd']) } : {}),
           ...(a['fork'] === true ? { fork: true } : {}),
@@ -291,6 +302,7 @@ export function registerSubagentTool(
         if (backgroundChoice.background) {
           const started = await workflows.startBackgroundAgent(request, {
             parentToolCallId: context.callId,
+            ...(label !== undefined ? { label } : {}),
             notifyParentOnSettle: true,
           })
           syncRunsDoc()
@@ -303,6 +315,7 @@ export function registerSubagentTool(
         // UI/动作可按 runId detach 转后台）。
         const started = await workflows.startBackgroundAgent(request, {
           parentToolCallId: context.callId,
+          ...(label !== undefined ? { label } : {}),
           notifyParentOnSettle: false,
           foreground: true,
         })

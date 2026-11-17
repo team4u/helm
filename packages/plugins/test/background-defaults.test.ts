@@ -53,13 +53,13 @@ function toolNameOf(model: unknown[] | undefined): string | undefined {
 async function backgroundReports(
   app: App,
   conversationId: number,
-): Promise<Array<{ id: unknown; origin: unknown; kind: unknown; backgroundRunId?: string; renderer?: unknown }>> {
+): Promise<Array<{ id: unknown; origin: unknown; kind: unknown; backgroundRunId?: string; renderer?: unknown; text?: string }>> {
   const detail = await app.kernel.getConversationDetail(conversationId, { limit: 500 })
-  const out: Array<{ id: unknown; origin: unknown; kind: unknown; backgroundRunId?: string; renderer?: unknown }> = []
+  const out: Array<{ id: unknown; origin: unknown; kind: unknown; backgroundRunId?: string; renderer?: unknown; text?: string }> = []
   for (const entry of detail.entries) {
     if (entry.kind !== 'helm.input') continue
     const data = entry.data as
-      | { id?: unknown; origin?: unknown; meta?: { backgroundRunId?: unknown; kind?: unknown; renderer?: unknown } }
+      | { id?: unknown; origin?: unknown; text?: unknown; meta?: { backgroundRunId?: unknown; kind?: unknown; renderer?: unknown } }
       | undefined
     if (data?.meta?.backgroundRunId === undefined) continue
     out.push({
@@ -68,6 +68,7 @@ async function backgroundReports(
       kind: data.meta.kind,
       backgroundRunId: String(data.meta.backgroundRunId),
       renderer: data.meta.renderer,
+      ...(typeof data.text === 'string' ? { text: data.text } : {}),
     })
   }
   return out
@@ -149,6 +150,8 @@ describe('subagent 工具 background 缺省（权威 ownership 判定）', { tim
       assert.equal(reports[0]!.kind, 'subagent_report')
       // 轻量渲染标记（timeline.renderer 精确接管）；payload 契约仍是引导语+换行+JSON。
       assert.equal(reports[0]!.renderer, 'workflow:background-report')
+      const reportJson = JSON.parse(reports[0]!.text!.slice(reports[0]!.text!.indexOf('\n') + 1)) as { name?: string }
+      assert.equal(reportJson.name, '人类后台任务')
       // 宿主侧注册同步锁定：kinds 限定 helm.input + matchMeta 精确匹配 + client 导出名。
       const rendererSpec = app.kernel.plugins
         .listUi()
@@ -297,6 +300,8 @@ describe('SubagentWorkflow 工具 background 缺省', { timeout: 60_000 }, () =>
       assert.equal(reports[0]!.origin, 'agent')
       assert.equal(reports[0]!.kind, 'workflow_report')
       assert.equal(reports[0]!.renderer, 'workflow:background-report')
+      const wfReportJson = JSON.parse(reports[0]!.text!.slice(reports[0]!.text!.indexOf('\n') + 1)) as { name?: string }
+      assert.equal(wfReportJson.name, 'bg-default-wf')
       await app.kernel.waitForIdle(1).catch(() => {})
     } finally {
       await app.close()

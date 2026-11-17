@@ -208,7 +208,8 @@ describe('startBackgroundAgent', () => {
     // 立即返回（不等慢任务）：running + 真实 execution。
     assert.ok(Date.now() - started < 5_000, 'startBackgroundAgent 不得等待慢任务完成')
     assert.equal(run.status, 'running')
-    assert.equal(run.name, 'subagent:researcher')
+    assert.equal(run.name, '慢任务')
+    assert.equal(host.spawns[0]!['title'], '慢任务')
     assert.deepEqual(execution, {
       conversationId: 42,
       effectiveCwd: '/tmp/wt',
@@ -845,6 +846,60 @@ describe('startBackgroundAgent', () => {
         { type: 'action', index: 0, ok: true },
       ],
     )
+    await service.close()
+  })
+
+  it('名称推导与 title 透传：label 优先、prompt 清洗截断脱敏、空 prompt 回退、resume/reattach 不覆写 title', timeout, async () => {
+    const host = makeHost()
+    host.behavior = { kind: 'noOnResolved', result: 'ok' }
+    const service = new WorkflowService({
+      dataDir,
+      host,
+      state: makeStateStore(),
+      redact: (text) => text.replace(/SECRET_TOKEN/g, '[REDACTED]'),
+    })
+
+    // 1. prompt 剥离 structured_output_contract、Markdown 前缀、多空白、脱敏与 60 字符上限
+    const longPrompt = [
+      '<structured_output_contract>{"type":"object"}</structured_output_contract>',
+      '',
+      '---',
+      '##   - *   Investigate   SECRET_TOKEN   build   failure   across   packages/plugins/workflow   right   now   please',
+      'Second line ignored',
+    ].join('\n')
+    const r1 = await service.startBackgroundAgent({ parentConversationId: 1, prompt: longPrompt })
+    await service.wait(r1.run.id)
+    assert.equal(r1.run.name.length <= 60, true, `derived name length <= 60: ${r1.run.name}`)
+    assert.ok(r1.run.name.startsWith('Investigate [REDACTED] build failure'), r1.run.name)
+    assert.equal(r1.run.nodes?.[0]?.label, r1.run.name)
+    assert.equal(host.spawns[0]!['title'], r1.run.name)
+
+    // 2. 空 prompt 回退 subagent:${agentType} / subagent
+    const r2 = await service.startBackgroundAgent({
+      parentConversationId: 1,
+      prompt: '<structured_output_contract>{}</structured_output_contract>\n###\n   ',
+      agentType: 'reviewer',
+    })
+    await service.wait(r2.run.id)
+    assert.equal(r2.run.name, 'subagent:reviewer')
+    assert.equal(host.spawns[1]!['title'], 'subagent:reviewer')
+
+    // 3. 显式 label 优先；resume 与 reattach 不透传 title
+    const r3 = await service.startBackgroundAgent(
+      { parentConversationId: 1, prompt: 'ignored prompt', resume: '42' },
+      { label: '续接子代理' },
+    )
+    await service.wait(r3.run.id)
+    assert.equal(r3.run.name, '续接子代理')
+    assert.equal(host.spawns[2]!['title'], undefined, 'resume 不得设置/覆写 title')
+
+    const r4 = await service.startBackgroundAgent(
+      { parentConversationId: 1, prompt: 'ignored prompt', reattach: { conversationId: 42 } },
+      { label: '重挂子代理' },
+    )
+    await service.wait(r4.run.id)
+    assert.equal(host.spawns[3]!['title'], undefined, 'reattach 不得设置/覆写 title')
+
     await service.close()
   })
 })

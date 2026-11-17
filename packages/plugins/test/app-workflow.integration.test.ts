@@ -354,15 +354,32 @@ test('工作流4: HTTP workflows run/inspect/abort 与 SubagentWorkflow 工具�
         input: {
           conversationId: env.app.kernel.listConversations()[0]!.id,
           script: 'export const meta = { name: "http-pure", description: "t" }\nreturn args.x + 1',
+          label: '  HTTP自定义标签  ',
           args: { x: 41 },
           wait: true,
         },
       }),
     })
     assert.equal(run.status, 200)
-    const final = ((JSON.parse(await run.text()) as { run: { id: string; status: string; result?: unknown } }).run)
+    const final = ((JSON.parse(await run.text()) as { run: { id: string; name: string; status: string; result?: unknown } }).run)
     assert.equal(final.status, 'completed', `HTTP run 应完成：${JSON.stringify(final)}`)
+    assert.equal(final.name, 'HTTP自定义标签', 'HTTP workflows run label 应覆盖 meta.name')
     assert.equal(final.result, 42, 'args.x + 1 经真实 worker 计算为 42')
+
+    // 空白 label：显式 400 validation_error
+    const badLabel = await fetch(`${base}/api/actions/builtin:workflow/run`, {
+      method: 'POST',
+      headers: { ...auth, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        input: {
+          conversationId: env.app.kernel.listConversations()[0]!.id,
+          script: 'export const meta = { name: "http-pure", description: "t" }\nreturn 1',
+          label: '   ',
+        },
+      }),
+    })
+    assert.equal(badLabel.status, 400)
+    assert.equal((JSON.parse(await badLabel.text()) as { error: { code: string } }).error.code, 'validation_error')
 
     // abort Done run：幂等成功（不误报）
     const abort = await fetch(`${base}/api/actions/builtin:workflow/abort`, {

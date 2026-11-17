@@ -29,6 +29,7 @@ export function registerWorkflowRunActions(
         name: { type: 'string', description: 'Saved workflow name (exactly one of name / script / scriptPath)' },
         script: { type: 'string', description: 'Orchestration script source (inline)' },
         scriptPath: { type: 'string', description: 'Absolute path of the orchestration script file' },
+        label: { type: 'string', minLength: 1, description: 'Optional display label for this run (overrides meta.name / scriptPath basename)' },
         args: { description: 'Arbitrary JSON args passed to the script as-is' },
         resumeFromRunId: { type: 'string', description: 'Existing runId to resume from the last checkpoint' },
         conversationId: { type: 'number', minimum: 1, description: 'Target conversation; a new run must specify one, the CLI can use --current' },
@@ -50,6 +51,9 @@ export function registerWorkflowRunActions(
     },
     async handler(input, context) {
       const { wait, ...request } = input as { wait?: boolean } & Record<string, unknown>
+      if (request.label !== undefined && (typeof request.label !== 'string' || request.label.trim() === '')) {
+        throw new HelmError('validation_error', 'label 必须为非空字符串', 400, { label: request.label })
+      }
       // 显式 input.conversationId 与调用上下文（--current / run_action / workflow）
       // 同时存在且不一致时显式拒绝：静默选边等于在调用方不知情下改投目标。
       if (

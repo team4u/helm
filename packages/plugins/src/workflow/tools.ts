@@ -86,6 +86,7 @@ export function registerWorkflowTools(ctx: HelmPluginContext, deps: WorkflowTool
     name: 'SubagentWorkflow',
     replay: 'safe',
     promptGuidelines: [
+      'For inline scripts, set a concise meta.name or pass label (about 4-40 characters) so the run has a readable title in the task list.',
       'After a background workflow starts, keep responding to the user or work on other things; the completion report arrives in this conversation automatically — do not sleep or poll for the result.',
       'A workflow returning a run handle means it has started; wait for the terminal-state report before delivering the final result.',
     ],
@@ -97,6 +98,7 @@ export function registerWorkflowTools(ctx: HelmPluginContext, deps: WorkflowTool
         script: { type: 'string', description: 'Orchestration script source (inline)' },
         scriptPath: { type: 'string', description: 'Orchestration script file path (exactly one of script / scriptPath / name)' },
         name: { type: 'string', description: 'Saved workflow name (exactly one of script / scriptPath / name)' },
+        label: { type: 'string', description: 'Optional display label for this run (overrides meta.name / scriptPath basename; non-empty string)' },
         args: { description: 'Any JSON args passed to the script (object/array/scalar; string-shaped JSON is auto-unwrapped)' },
         resumeFromRunId: { type: 'string', description: 'Existing runId to resume from the last checkpoint (optional)' },
         background: {
@@ -109,6 +111,13 @@ export function registerWorkflowTools(ctx: HelmPluginContext, deps: WorkflowTool
     structuredOutputSchema: workflowOutputSchema,
     async execute(args, context) {
       const a = args as Record<string, unknown>
+      if (a['label'] !== undefined && (typeof a['label'] !== 'string' || a['label'].trim() === '')) {
+        return {
+          output: [{ type: 'text', text: 'workflow_failed: label 必须为非空字符串' }],
+          isError: true,
+          structuredOutput: { ok: false, summary: 'invalid label: 必须为非空字符串' },
+        }
+      }
       if (a['background'] !== undefined && typeof a['background'] !== 'boolean') {
         return {
           output: [{ type: 'text', text: 'workflow_failed: background 必须为 boolean' }],
@@ -192,6 +201,7 @@ export function registerWorkflowTools(ctx: HelmPluginContext, deps: WorkflowTool
         if (a['script'] !== undefined) input['script'] = String(a['script'])
         if (a['scriptPath'] !== undefined) input['scriptPath'] = String(a['scriptPath'])
         if (a['name'] !== undefined) input['name'] = String(a['name'])
+        if (a['label'] !== undefined) input['label'] = (a['label'] as string).trim()
         // 工具 args 归一化（原内核 kernel-tools 行为迁入插件）：模型常把 JSON
         // 对象序列化成字符串传入，这里统一解包（双层/标量原样语义不变）。
         if (a['args'] !== undefined) input['args'] = normalizeWorkflowArgs(a['args'])

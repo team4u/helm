@@ -76,6 +76,8 @@ export interface WorkflowRunRequest {
   name?: string
   script?: string
   scriptPath?: string
+  /** 可选展示名（显式覆盖脚本 meta.name / scriptPath 基名）。 */
+  label?: string
   /** 原样传给脚本 args，不限于对象。 */
   args?: unknown
   resumeFromRunId?: string

@@ -885,3 +885,46 @@ test('startBackgroundAgent 节点 gate.exitCode/timedOut 保留（onGateResult �
   assert.equal(node.gate?.exitCode, 2)
   assert.equal(node.gate?.timedOut, true)
 })
+
+test('startWorkflowRun 命名优先级与 label 边界校验，及 invokeAgentSpawn title 透传（fresh 传、resume 不传）', timeout, async (t) => {
+  const spawns: Array<Record<string, unknown>> = []
+  const env = makeEnv(t, async (proto: unknown) => {
+    const req = proto as Record<string, unknown> & { onResolved?: (info: unknown) => void }
+    spawns.push(req)
+    req.onResolved?.({ conversationId: 61 })
+    return 'agent-out'
+  })
+
+  // 1. label 边界校验：非字符串 / 空白拒绝
+  await assert.rejects(
+    () => env.service.run({ conversationId: 1, script: 'export const meta = { name: "m", description: "d" }\nreturn 1', label: '   ' }),
+    (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+  )
+  await assert.rejects(
+    () => env.service.run({ conversationId: 1, script: 'export const meta = { name: "m", description: "d" }\nreturn 1', label: 123 as unknown as string }),
+    (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+  )
+
+  // 2. 优先级：trimmed request.label > meta.name；fresh agent() 传 title，resume 不传
+  const rLabel = await env.service.run({
+    conversationId: 1,
+    label: '  覆盖标题  ',
+    script:
+      'export const meta = { name: "meta-name", description: "d" }\n' +
+      'const first = await agent("step1", { label: "worker-alpha" })\n' +
+      'const second = await agent("step2", { resume: "worker-alpha" })\n' +
+      'return { first, second }',
+  })
+  assert.equal(rLabel.name, '覆盖标题')
+  await env.service.wait(rLabel.id)
+  assert.equal(spawns.length, 2)
+  assert.equal(spawns[0]!['title'], 'worker-alpha', 'fresh agent() 应透传 label 作为 title')
+  assert.equal(spawns[1]!['title'], undefined, 'resume agent() 不得覆写 title')
+
+  // 3. scriptPath 无可提取 meta.name 时，使用 basename（去 .js）
+  const scriptFile = join(env.dataDir, 'custom-file-name.js')
+  writeFileSync(scriptFile, 'return 99', 'utf8')
+  const rScriptPath = await env.service.run({ conversationId: 1, scriptPath: scriptFile })
+  assert.equal(rScriptPath.name, 'custom-file-name')
+  await env.service.wait(rScriptPath.id)
+})

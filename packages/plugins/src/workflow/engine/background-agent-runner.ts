@@ -33,6 +33,24 @@ import { backgroundChildIds, newRunId, type PersistedSubagentSpec, type RunRecor
 import { redactNodes, redactSummaryNodes, toSummary } from './run-summary.js'
 import type { WorkflowServiceContext } from './service-context.js'
 
+function deriveSubagentNameFromPrompt(prompt: string, redact: (text: string) => string): string | undefined {
+  const withoutContract = prompt.replace(/<structured_output_contract>[\s\S]*?<\/structured_output_contract>/g, '')
+  for (const rawLine of withoutContract.split(/\r?\n/)) {
+    const cleaned = rawLine
+      .replace(/[\u0000-\u001F\u007F]/g, ' ')
+      .trim()
+      .replace(/^(?:#+\s*|[-*]+\s+)+/, '')
+      .replace(/^[#\-*]+$/, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (cleaned === '') continue
+    const redacted = redact(cleaned).replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim()
+    if (redacted === '') continue
+    return redacted.length > 60 ? redacted.slice(0, 60).trimEnd() : redacted
+  }
+  return undefined
+}
+
 /**
  * 启动后台单子代理：
  * 1. durable running 快照与 active 登记**先于** spawnAgent 副作用——onResolved
@@ -105,9 +123,14 @@ export async function startBackgroundAgent(
       : request.parentToolCallId !== undefined && request.parentToolCallId !== ''
         ? request.parentToolCallId
         : undefined
+  const explicitLabel = options?.label !== undefined ? options.label.trim() : ''
+  const resolvedPromptName =
+    explicitLabel !== ''
+      ? svc.redact(explicitLabel)
+      : deriveSubagentNameFromPrompt(request.prompt, svc.redact)
   const name =
-    options?.label !== undefined && options.label.trim() !== ''
-      ? options.label.trim()
+    resolvedPromptName !== undefined && resolvedPromptName !== ''
+      ? resolvedPromptName
       : request.agentType !== undefined && request.agentType !== ''
         ? `subagent:${request.agentType}`
         : 'subagent'
@@ -307,6 +330,9 @@ export async function startBackgroundAgent(
   // --- 组装 proto 并发起 spawn -----------------------------------------
   const proto: AgentSpawnRequest = {
     ...request,
+    ...(request.title === undefined && request.resume === undefined && request.reattach === undefined
+      ? { title: name }
+      : {}),
     ...(parentToolCallId !== undefined ? { parentToolCallId } : {}),
     agentId: agentIdForProto,
     requestId: deterministicRequestId,

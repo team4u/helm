@@ -352,9 +352,15 @@ export async function invokeAgentSpawn(
     '实际执行状态与续接条件以 execution 和执行方诊断为准' +
     (cause === undefined ? '' : `\n${deps.redact(errorMessage(cause))}`)
 
+  const freshTitle =
+    !isResume && !isReattach && typeof request.label === 'string'
+      ? request.label.replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim()
+      : ''
+
   const proto: AgentSpawnRequest = {
     parentConversationId: run.conversationId,
     prompt: request.prompt,
+    ...(freshTitle !== '' ? { title: freshTitle } : {}),
     agentId: nativeAgentId,
     // gate 原样下传：执行权在实际执行环境（native 子会话 cwd / herdr 窗格），
     // 经 onGateResult 回报后引擎免二次执行。
