@@ -166,14 +166,9 @@ button, a, input, select, textarea { touch-action: manipulation; }
     width: 38px;
     height: 38px;
   }
-  /* 移动端抽屉 Rail 重排：品牌标识留顶部，空间切换按钮沉底到拇指易达区；
-     Theme buttons stay bottom-anchored, separated from the space button group by a full-width divider for a clear layout */
-  .activity-rail-spaces {
-    margin-top: auto;
-    padding-bottom: 8px;
-  }
+  /* 移动端抽屉 Rail 保持与桌面端一致：品牌标识与空间切换按钮（对话 / 视图 / 设置）保留在顶部，
+     语言与主题按钮保持底部对齐，顶部用通栏分隔线与上方空间隔离。 */
   .activity-rail-footer {
-    margin-top: 0;
     align-self: stretch;
     border-top: 1px solid var(--border);
     padding-top: 8px;

@@ -437,7 +437,7 @@ test('Sidebar 分屏协同展开与焦点高亮：双不同智能体均展开，
   assert.equal(conv40Split.querySelector('.nav-pane-tag')?.textContent, 'Split')
 })
 
-test('Sidebar 偏好菜单语言选择器：三态选项（auto/en/zh-CN），切换经 setLocalePreference（及 setLocale 兜底）且展示随 locale', { timeout: 60_000 }, async () => {
+test('Sidebar Rail 底部语言按钮紧邻主题按钮：三态菜单（auto/en/zh-CN），切换经 setLocalePreference（及 setLocale 兜底）且展示随 locale', { timeout: 60_000 }, async () => {
   const prefCalls: string[] = []
   const setLocaleCalls: string[] = []
   const base = makeStore()
@@ -452,51 +452,56 @@ test('Sidebar 偏好菜单语言选择器：三态选项（auto/en/zh-CN），�
   render(store, e(MutableStoreSidebar, { base: store, apiRef: api }))
   await act(async () => {})
 
-  // 触发器：SDK Select（Radix 封装，无原生 select），默认 localePreference='auto' + locale='en'
-  const trigger = document.body.querySelector('.sidebar-locale-select .helm-select-trigger') as HTMLElement | null
-  assert.ok(trigger, '偏好菜单应渲染语言 Select 触发器')
+  // 语言按钮位于 .activity-rail-footer 中紧邻 .sidebar-theme-toggle，不再放在 .sidebar-header
+  const railFooter = document.body.querySelector('.activity-rail-footer')
+  assert.ok(railFooter, 'Rail 底部区域应存在')
+  const trigger = railFooter.querySelector('button.sidebar-locale-toggle') as HTMLButtonElement | null
+  const themeBtn = railFooter.querySelector('button.sidebar-theme-toggle') as HTMLButtonElement | null
+  assert.ok(trigger, 'Rail 底部应渲染语言切换按钮')
+  assert.ok(themeBtn, 'Rail 底部应渲染主题切换按钮')
+  assert.ok(document.body.querySelector('.sidebar-header .sidebar-locale-select') === null, '侧栏顶部不再渲染旧的语言 Select')
   assert.equal(trigger.getAttribute('aria-label'), 'Interface language')
-  assert.ok(trigger.textContent?.includes('Auto'), 'auto 模式下英文展示 Auto')
+  assert.equal(trigger.getAttribute('title'), 'Interface language (Auto)')
 
-  // 键盘打开（Radix Select 契约），包含 Auto / English / 简体中文 三个选项
+  // 键盘打开 Radix DropdownMenu，包含 Auto / English / 简体中文 三个选项
   await act(async () => {
     trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
   })
-  const options = Array.from(document.querySelectorAll('[role="option"]')) as HTMLElement[]
-  assert.ok(options.some((el) => el.textContent?.includes('Auto')), '含 Auto 选项')
-  assert.ok(options.some((el) => el.textContent?.includes('English')), '含 English 选项')
-  assert.ok(options.some((el) => el.textContent?.includes('简体中文')), '含 简体中文 选项')
-  const zhOption = options.find((el) => el.textContent?.includes('简体中文'))
-  assert.ok(zhOption, '下拉选项中应包含 简体中文')
+  const items = Array.from(document.querySelectorAll('[role="menuitem"]')) as HTMLElement[]
+  assert.ok(items.some((el) => el.textContent?.includes('Auto')), '含 Auto 选项')
+  assert.ok(items.some((el) => el.textContent?.includes('English')), '含 English 选项')
+  assert.ok(items.some((el) => el.textContent?.includes('简体中文')), '含 简体中文 选项')
+  const zhOption = items.find((el) => el.dataset.localeOption === 'zh-CN')
+  assert.ok(zhOption, '下拉菜单中应包含 简体中文 项')
 
   await act(async () => {
-    zhOption!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    zhOption!.click()
   })
   assert.deepEqual(prefCalls, ['zh-CN'], '切换语言优先走 store.setLocalePreference')
 
-  // store 更新为手动 zh-CN 后，触发器、aria-label 及侧栏文案随 locale 立即切换
+  // store 更新为手动 zh-CN 后，触发器 title、aria-label 及侧栏文案随 locale 立即切换
   act(() => { api.current.update!({ locale: 'zh-CN', localePreference: 'zh-CN' }) })
-  const triggerAfter = document.body.querySelector('.sidebar-locale-select .helm-select-trigger') as HTMLElement | null
+  const triggerAfter = document.body.querySelector('.activity-rail-footer button.sidebar-locale-toggle') as HTMLButtonElement | null
   assert.ok(triggerAfter)
   assert.equal(triggerAfter.getAttribute('aria-label'), '界面语言')
-  assert.ok(triggerAfter.textContent?.includes('简体中文'))
+  assert.equal(triggerAfter.getAttribute('title'), '界面语言 (简体中文)')
   assert.ok(document.body.textContent?.includes('会话'), '侧栏空间标题随 locale 切换为中文')
 
-  // 切回 auto + zh-CN：展示「自动」
+  // 切回 auto + zh-CN：title 展示「界面语言 (自动)」
   act(() => { api.current.update!({ locale: 'zh-CN', localePreference: 'auto' }) })
-  const triggerAutoZh = document.body.querySelector('.sidebar-locale-select .helm-select-trigger') as HTMLElement | null
-  assert.ok(triggerAutoZh?.textContent?.includes('自动'), 'auto + zh-CN 下展示 自动')
+  const triggerAutoZh = document.body.querySelector('.activity-rail-footer button.sidebar-locale-toggle') as HTMLButtonElement | null
+  assert.equal(triggerAutoZh?.getAttribute('title'), '界面语言 (自动)')
 
   // 当 test double 未提供 setLocalePreference 时，回落到 store.setLocale
   act(() => { api.current.update!({ locale: 'en', localePreference: 'en', setLocalePreference: undefined }) })
-  const triggerFallback = document.body.querySelector('.sidebar-locale-select .helm-select-trigger') as HTMLElement | null
-  assert.ok(triggerFallback?.textContent?.includes('English'))
+  const triggerFallback = document.body.querySelector('.activity-rail-footer button.sidebar-locale-toggle') as HTMLButtonElement | null
+  assert.equal(triggerFallback?.getAttribute('title'), 'Interface language (English)')
   await act(async () => {
     triggerFallback!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
   })
-  const zhOpt2 = Array.from(document.querySelectorAll('[role="option"]')).find((el) => el.textContent?.includes('简体中文')) as HTMLElement
+  const zhOpt2 = Array.from(document.querySelectorAll('[role="menuitem"]')).find((el) => (el as HTMLElement).dataset.localeOption === 'zh-CN') as HTMLElement
   await act(async () => {
-    zhOpt2.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    zhOpt2.click()
   })
   assert.deepEqual(setLocaleCalls, ['zh-CN'], '无 setLocalePreference 时回落到 store.setLocale')
 })

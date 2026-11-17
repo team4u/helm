@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ConversationSummary } from '@helm/protocol/browser'
 import { resolveLocalizedText } from '@helm/protocol/browser'
-import { HelmIcon, Select, type SelectOption } from '@helm/plugin-client'
+import { HelmIcon } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { resolveBrowserLocale } from '../lib/theme-preferences.js'
+import { LocaleMenuButton } from '../ui/LocaleMenuButton.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
-import { isSameResolvedTarget, resolveTargetString, CENTER_TARGETS, spaceForTarget, type HelmStoreValue, type LocalePreference, type SidebarSpace } from '../lib/types.js'
+import { isSameResolvedTarget, resolveTargetString, CENTER_TARGETS, spaceForTarget, type HelmStoreValue, type SidebarSpace } from '../lib/types.js'
 import { readBrowserNotificationPermission } from '../lib/browser-notification.js'
 import { formatModShortcut } from './shortcuts-model.js'
 import {
@@ -339,6 +339,7 @@ function ActivityRail({
         })}
       </div>
       <div className="activity-rail-footer">
+        <LocaleMenuButton tooltipSide="right" menuSide="right" menuAlign="end" />
         <Tooltip content={themeTooltip} side="right">
           <button
             type="button"
@@ -405,15 +406,6 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
   // 该空间最近的主舞台目标，URL 即该空间真实锚点，刷新/前进/后退天然可还原。
   const space = spaceForTarget(store.primaryTarget)
 
-  const languageOptions = useMemo<ReadonlyArray<SelectOption<LocalePreference>>>(
-    () => [
-      { value: 'auto', label: t('shell.locale.auto') },
-      { value: 'en', label: 'English' },
-      { value: 'zh-CN', label: '简体中文' },
-    ],
-    [t],
-  )
-
   // 后台在途摘要（纯推导，零插件 ID 特判）：workbench.panel badge 契约 → 按会话
   // 索引；badge doc 的按需加载在下方 effect（纯函数内不做副作用）。插件停用后
   // UI 贡献与 doc 均从 store 消失，摘要自然归零，指示立即消失。
@@ -475,22 +467,6 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
             <span>{spaceHeaderLabel}</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <Select<LocalePreference>
-              className="sidebar-locale-select"
-              size="sm"
-              prefixIcon="globe"
-              value={store.localePreference ?? 'auto'}
-              options={languageOptions}
-              aria-label={t('shell.locale.label')}
-              onChange={(event) => {
-                const next = event.target.value
-                if (store.setLocalePreference) {
-                  store.setLocalePreference(next)
-                } else {
-                  store.setLocale(next === 'auto' ? resolveBrowserLocale() : next)
-                }
-              }}
-            />
             <Tooltip content={t('shell.quietNotify.toggleTooltip')} side="bottom">
               <button
                 type="button"

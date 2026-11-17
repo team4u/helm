@@ -126,6 +126,18 @@
   z-index: 60;
 }
 
+.locale-menu-popover {
+  min-width: 132px;
+}
+
+.locale-menu-item {
+  justify-content: space-between;
+}
+
+.locale-menu-item[data-active='true'] {
+  font-weight: 500;
+}
+
 .helm-dropdown-arrow {
   fill: var(--bg-elevated);
   stroke: var(--border-strong);

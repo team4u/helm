@@ -3,6 +3,7 @@ import { authApi } from '../lib/api.js'
 import { HelmIcon } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
+import { LocaleMenuButton } from '../ui/LocaleMenuButton.js'
 
 export function AuthGate() {
   const store = useHelmStore()
@@ -50,31 +51,40 @@ export function AuthGate() {
             <HelmIcon name="sparkles" size={18} />
             <span className="auth-gate-title">{t('shell.auth.consoleTitle')}</span>
           </div>
-          <button
-            type="button"
-            className="btn btn-ghost btn-icon-sm"
-            onClick={store.toggleTheme}
-            title={
-              store.themePreference === 'system'
-                ? t('shell.auth.themeSystem', {
-                    current: t(store.theme === 'dark' ? 'shell.theme.currentDark' : 'shell.theme.currentLight'),
-                  })
-                : store.themePreference === 'light'
-                  ? t('shell.auth.themeLight')
-                  : t('shell.auth.themeDark')
-            }
-          >
-            <HelmIcon
-              name={
-                store.themePreference === 'system'
-                  ? 'monitor'
-                  : store.themePreference === 'light'
-                    ? 'sun'
-                    : 'moon'
-              }
-              size={14}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <LocaleMenuButton
+              className="btn btn-ghost btn-icon-sm sidebar-locale-toggle"
+              iconSize={14}
+              tooltipSide="top"
+              menuSide="bottom"
+              menuAlign="end"
             />
-          </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-icon-sm"
+              onClick={store.toggleTheme}
+              title={
+                store.themePreference === 'system'
+                  ? t('shell.auth.themeSystem', {
+                      current: t(store.theme === 'dark' ? 'shell.theme.currentDark' : 'shell.theme.currentLight'),
+                    })
+                  : store.themePreference === 'light'
+                    ? t('shell.auth.themeLight')
+                    : t('shell.auth.themeDark')
+              }
+            >
+              <HelmIcon
+                name={
+                  store.themePreference === 'system'
+                    ? 'monitor'
+                    : store.themePreference === 'light'
+                      ? 'sun'
+                      : 'moon'
+                }
+                size={14}
+              />
+            </button>
+          </div>
         </div>
 
         <div className="auth-gate-desc">
