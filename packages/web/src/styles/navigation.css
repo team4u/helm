@@ -447,7 +447,7 @@
   box-shadow: 0 0 0 2px var(--err-bg);
 }
 
-/* Conversation status dots and breathing animation */
+/* Conversation status dots and breathing animation:
    While running, it replaces the idle no-light/done green dot as the only status light of the row;
    hollow with a slow breathing animation, clearly distinct from the solid working pulse of the main turn, never impersonating conversation activity. */
 .status-dot-background {
@@ -696,6 +696,4 @@
   gap: 6px;
   flex-wrap: wrap;
 }
-
- * primitives.css base rules; the visuals match the former inline styles exactly.
 
