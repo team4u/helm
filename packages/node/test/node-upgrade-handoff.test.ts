@@ -1,20 +1,20 @@
 /**
- * helm-node upgrade handover CLI/IPC test (stdio activate/activated protocol verify).
+ * `helm-node` upgrade handoff CLI/IPC tests (`stdio activate/activated` protocol acceptance).
  *
- * all real many process: real choose child process (Node child_process stdio IPC protocol
- * fixture)+ real Hub fixture(http.Server + WebSocketServer + birpc).
- * do not mock by test module; do not edit build install succeeded (stageExtractor only construct can run choose entry,
- * by real spawn pull start verify IPC protocol, do not fabricate npm install).
+ * Uses real multi-process execution: real candidate child process (`child_process` stdio IPC
+ * protocol fixture) + real Hub fixture (`http.Server` + `WebSocketServer` + `birpc`).
+ * No module mocking or fabricated npm install (`stageExtractor` creates a runnable candidate entry
+ * launched via real `spawn` to exercise the IPC protocol).
  *
- * override:
- * 1. prepareNodeReplacement: real IPC ready/activate/activated all link,
- *    commit after pid Profile points to choose,activate context validate;
- * 2. ACK lose do not rollback:activate out after confirm timeout throw UpgradeCommitUnconfirmedError,
- *    never kill choose, never restore old pid;
- * 3. choose failed to start (starting / i.e. retreat) keep old pid;
- * 4. abort(not activate) kill choose and CAS restore old pid;
- * 5. CLI upgrade command:--check offline query, without daemon explicit errors,flag mutual exclusion;
- * 6. upgrade in-flight stop reject and control channel still available.
+ * Covers:
+ * 1. `prepareNodeReplacement`: end-to-end IPC `ready`/`activate`/`activated`, `node.pid` update on
+ *    commit, and `activate` context checks;
+ * 2. Lost ACK never rolls back: timeout waiting for `activated` throws `UpgradeCommitUnconfirmedError`,
+ *    never killing the candidate or restoring the old pid;
+ * 3. Failed candidate startup (`starting` / immediate exit) preserves the old pid;
+ * 4. `abort` before sending `activate` kills the candidate and restores the old pid via CAS;
+ * 5. CLI `upgrade` command: `--check` offline lookup, explicit error without daemon, flag exclusivity;
+ * 6. `stop` during active upgrade rejects while keeping the control channel functional.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -48,8 +48,8 @@ async function runCli(argv: string[], io: Partial<NodeCliIo> = {}): Promise<Capt
   let out = '';
   let err = '';
   const code = await runNodeCli(argv, {
-    // strip except host managed HELM_* variable: host control identity (INSTANCE_ID/CONTROL_ENDPOINT)
-    // store in when foreground start no longer into is launcher,Hub/data directory/credentials same must not hijack.
+    // Strip host-managed HELM_* variables so INSTANCE_ID/CONTROL_ENDPOINT never disable launcher
+    // mode during foreground start, and Hub/dataDir/credentials come strictly from test inputs.
     env: sanitizedHostEnv(),
     out: (t) => (out += t),
     err: (t) => (err += t),
@@ -68,10 +68,10 @@ const realIsAlive = (pid: number): boolean => {
 };
 
 const waitFor = (condition: () => boolean | Promise<boolean>, timeoutMs: number, what: string): Promise<void> =>
-  kitWaitFor(condition, { timeoutMs, intervalMs: 100, message: `wait timed out:${what}` });
+  kitWaitFor(condition, { timeoutMs, intervalMs: 100, message: `wait timed out: ${what}` });
 
 // ---------------------------------------------------------------------------
-// Hub fixture(re- use node-cli-review same style real WS + birpc)
+// Hub fixture (real WS + birpc matching node-cli-review)
 // ---------------------------------------------------------------------------
 
 interface HubFixture {
@@ -112,7 +112,7 @@ async function startHubFixture(options: { expectedToken: string }): Promise<HubF
           return true;
         },
         onEnvExecOutput(_event: EnvExecOutputEvent): void {
-          // this file do not test env forwarding.
+          // Env forwarding is not exercised in this file.
         },
       };
       const rpc = createBirpc(local, {
@@ -126,7 +126,7 @@ async function startHubFixture(options: { expectedToken: string }): Promise<HubF
               const parsed: unknown = JSON.parse(text);
               if (parsed !== null && typeof parsed === 'object') callback(parsed);
             } catch {
-              // non- JSON frame.
+              // Non-JSON frame.
             }
           });
         },
@@ -150,19 +150,19 @@ async function startHubFixture(options: { expectedToken: string }): Promise<HubF
 }
 
 // ---------------------------------------------------------------------------
-// choose fixture: real child process implement stdio IPC protocol (ready / activate / activated)
+// Candidate fixture: real child process implementing stdio IPC protocol (ready / activate / activated)
 // ---------------------------------------------------------------------------
 
 /**
- * choose protocol child process script: register to real Hub(trigger ready=registered), wait for
- * activate; receives legal activate back activated and detach parent IPC store.
- * behavior by env HELM_FIXTURE_MODE control:
- *  - 'candidate'(default): normal protocol implement;
- *  - 'no-ack': receives activate but do not back activated(simulated already send reach but back hold lose);
- *  - 'vanish': real registered after disconnect parent IPC but keep store (simulated activate out
- *    before channel already die - - write must failed, parent side must by determine not send reach security rollback);
- *  - 'starting': on report starting do not register (Hub cannot reach also the same);
- *  - 'exit': on report starting after immediately exit.
+ * Candidate protocol fixture script: registers with real Hub (triggering ready=registered),
+ * awaits `activate`, replies `activated`, and detaches from parent IPC.
+ * Controlled via `HELM_FIXTURE_MODE`:
+ *  - 'candidate' (default): normal protocol behavior;
+ *  - 'no-ack': receives activate without replying activated (simulates lost ACK);
+ *  - 'vanish': closes parent IPC after ready=registered while staying alive (simulates dead IPC
+ *    channel before activate so parent knows write failed and rolls back safely);
+ *  - 'starting': reports `starting` without registering (same as unreachable Hub);
+ *  - 'exit': reports `starting` and exits immediately.
  */
 const CANDIDATE_SCRIPT = `
 const http = require('node:http');
@@ -172,8 +172,8 @@ const instanceId = process.env.HELM_NODE_INSTANCE_ID;
 const hubUrl = process.env.HELM_HUB_URL_FIXTURE;
 const attempt = process.env.HELM_NODE_UPGRADE_ATTEMPT;
 
-// directly to Hub  /ws/node start WS register (do not away complete daemon,fixture only verify protocol layer).
-// birpc v2 compact format: request {t:'q',m:method,a:[args],i:id}, response {t:'s',i:id,r:result}.
+// Connect directly to Hub /ws/node to exercise protocol layer without running full daemon.
+// birpc v2 compact framing: request {t:'q',m:method,a:[args],i:id}, response {t:'s',i:id,r:result}.
 const ws = new WebSocket(hubUrl.replace(/^http/, 'ws') + '/ws/node');
 ws.on('open', () => {
   ws.send(JSON.stringify({ t: 'q', m: 'register', a: [{ nodeId: process.env.HELM_FIXTURE_NODE_ID ?? 'fixture-node', token: process.env.HELM_FIXTURE_TOKEN ?? 'fix:s', hostname: 'fix', platform: process.platform, ...(attempt ? { upgradeAttemptId: attempt } : {}) }], i: 'r1' }));
@@ -194,13 +194,13 @@ ws.on('error', () => {
   else { try { process.send({ type: 'helm-node.ready', pid: process.pid, instanceId, state: 'starting' }); } catch {} }
 });
 if (mode === 'starting' || mode === 'exit') {
-  // directly on report starting: do not establish real register.
+  // Report starting immediately without registering.
   setTimeout(() => {
     try { process.send({ type: 'helm-node.ready', pid: process.pid, instanceId, state: 'starting' }); } catch {}
     if (mode === 'exit') { process.exit(0); }
   }, 30);
   if (mode === 'starting') {
-    // keep store wait for (parent side should by starting reject and kill).
+    // Stay alive waiting for parent to reject 'starting' and terminate candidate.
   }
 }
 process.on('message', (message) => {
@@ -209,14 +209,14 @@ process.on('message', (message) => {
     try { process.send({ type: 'helm-node.activate-rejected', attemptId: message.attemptId, reason: 'context mismatch' }); } catch {}
     return;
   }
-  if (mode === 'no-ack' || mode === 'vanish') return; // must not answer:no-ack simulated back hold lose;vanish simulated channel already die
+  if (mode === 'no-ack' || mode === 'vanish') return; // Drop ACK (no-ack simulates lost receipt; vanish simulates dead IPC)
   try { process.send({ type: 'helm-node.activated', attemptId: message.attemptId }); } catch {}
   try { if (process.connected) process.disconnect(); } catch {}
 });
-// parent disconnect: inactive i.e. exit (protocol convention).
+// Parent disconnect before activation terminates candidate per protocol.
 process.on('disconnect', () => {
-  if (mode === 'no-ack') { /* ACK lose scenario parent may disconnected: continue store verify do not rollback */ }
-  else if (mode === 'vanish') { /* self disconnect keep store: verify parent side security rollback kill choose */ }
+  if (mode === 'no-ack') { /* Lost ACK case: parent may disconnect while candidate stays alive without rollback */ }
+  else if (mode === 'vanish') { /* Self-disconnect staying alive to test parent safe rollback killing candidate */ }
   else process.exit(0);
 });
 `;
@@ -226,20 +226,20 @@ interface CandidateHandle {
   scriptPath: string;
 }
 
-/** write choose fixture script and with designate pattern start (without going through prepareNodeReplacement). */
+/** Write candidate fixture script so it runs directly under node without full stageExtractor. */
 async function writeCandidateScript(dir: string): Promise<string> {
   const scriptPath = path.join(dir, 'candidate-fixture.cjs');
   await fs.writeFile(scriptPath, CANDIDATE_SCRIPT, 'utf8');
   return scriptPath;
 }
 
-/** construct StagedNodeRelease: entry is choose fixture script (node can directly run). */
+/** Build a StagedNodeRelease pointing at the candidate fixture script. */
 function fixtureRelease(scriptPath: string, cliBinDir: string): StagedNodeRelease {
   return { version: '9.9.9', releaseDir: path.dirname(scriptPath), entryPath: scriptPath, cliBinDir };
 }
 
 // ---------------------------------------------------------------------------
-// prepareNodeReplacement direct test (real child process + memory pid Profile)
+// Direct prepareNodeReplacement tests (real child process + in-memory pid store)
 // ---------------------------------------------------------------------------
 
 function memoryPidStore(): {
@@ -293,9 +293,7 @@ async function prepareWithFixture(options: {
         writePidRecord: store.writePidRecord,
         removePidFile: store.removePidFile,
         env: {
-          // base bottom strip except host managed HELM_* variable (choose own independent control identity; produce product side
-          // prepareNodeReplacement also will strip except, this in guarantee test inject base bottom same clean),
-          // test fixture variable in its after explicit override.
+          // Strip host-managed HELM_* variables so test baseline is clean before explicit fixture overrides.
           ...sanitizedHostEnv(),
           HELM_FIXTURE_MODE: options.mode,
           HELM_HUB_URL_FIXTURE: options.hubUrl,
@@ -314,7 +312,7 @@ async function prepareWithFixture(options: {
   }
 }
 
-test('prepareNodeReplacement: real IPC ready→activate→activated,commit write new pid', { timeout: 60_000 }, async (t) => {
+test('prepareNodeReplacement: real IPC ready -> activate -> activated writes new pid on commit', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-ok-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -326,54 +324,54 @@ test('prepareNodeReplacement: real IPC ready→activate→activated,commit write
 
   const oldRecord: HandoffPidRecord = { pid: process.pid, instanceId: 'a'.repeat(32), endpoint: '/tmp/old.sock' };
   const { replacement, store, error } = await prepareWithFixture({ dir, hubUrl: hub.url, mode: 'candidate', oldRecord });
-  assert.ok(replacement !== undefined, `prepare replace failed:${error?.message}`);
+  assert.ok(replacement !== undefined, `prepare replacement failed: ${error?.message}`);
   t.after(async () => {
     if (replacement !== undefined) await replacement.abort().catch(() => undefined);
   });
   assert.ok(replacement.pid > 0);
-  assert.ok(realIsAlive(replacement.pid), 'choose must real store');
+  assert.ok(realIsAlive(replacement.pid), 'candidate must actually be alive');
 
-  // commit before pid Profile still is old record (commit point only then write new record)
+  // Before commit, pid record still points to old instance (commit writes the new record)
   assert.equal(store.get()?.pid, process.pid);
 
   await replacement.commit();
 
-  // commit after Profile points to choose
+  // After commit, pid record points to candidate
   const after = store.get();
   assert.equal(after?.pid, replacement.pid);
   assert.notEqual(after?.instanceId, oldRecord.instanceId);
-  // choose still store (commit do not kill choose)
-  assert.ok(realIsAlive(replacement.pid), 'commit after choose must store take over');
+  // Candidate stays alive (commit never kills candidate)
+  assert.ok(realIsAlive(replacement.pid), 'candidate must stay alive to take over after commit');
 
-  // clean up: kill choose
+  // Cleanup: kill candidate
   process.kill(replacement.pid, 'SIGKILL');
-  await waitFor(() => !realIsAlive(replacement.pid), 5_000, 'choose exit');
+  await waitFor(() => !realIsAlive(replacement.pid), 5_000, 'candidate exits');
 });
 
-test('prepareNodeReplacement: choose on report starting reject, old pid keep', { timeout: 60_000 }, async (t) => {
+test('prepareNodeReplacement rejects candidate reporting starting and keeps old pid', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-starting-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
-  // cannot reach Hub: choose register failed real on report starting(parent side must reject carries illness commit).
+  // Unreachable Hub: candidate truthfully reports starting (parent must reject unready candidate).
   const oldRecord: HandoffPidRecord = { pid: 424242, instanceId: 'b'.repeat(32), endpoint: '/tmp/old2.sock' };
   const { replacement, error } = await prepareWithFixture({ dir, hubUrl: 'http://127.0.0.1:1', mode: 'starting', oldRecord });
-  assert.equal(replacement, undefined, 'starting choose disallows ready');
+  assert.equal(replacement, undefined, 'starting candidate must not be accepted as ready');
   assert.match(error?.message ?? '', /starting|registered/);
 });
 
-test('prepareNodeReplacement: choose i.e. retreat explicit errors', { timeout: 60_000 }, async (t) => {
+test('prepareNodeReplacement errors explicitly on immediate candidate exit', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-exit-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
-  // cannot reach Hub: choose on report starting after i.e. retreat (parent side by exit explicit errors).
+  // Unreachable Hub: candidate reports starting and exits immediately (parent errors on exit).
   const { replacement, error } = await prepareWithFixture({ dir, hubUrl: 'http://127.0.0.1:1', mode: 'exit' });
   assert.equal(replacement, undefined);
   assert.ok(error !== undefined);
 });
 
-test('prepareNodeReplacement:activate ACK lose throw UpgradeCommitUnconfirmedError and do not rollback do not kill choose', { timeout: 60_000 }, async (t) => {
+test('prepareNodeReplacement throws UpgradeCommitUnconfirmedError when activate ACK is lost without rollback or killing candidate', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-noack-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -391,34 +389,34 @@ test('prepareNodeReplacement:activate ACK lose throw UpgradeCommitUnconfirmedErr
     oldRecord,
     activateAckTimeoutMs: 400,
   });
-  assert.ok(replacement !== undefined, `prepare failed:${error?.message}`);
+  assert.ok(replacement !== undefined, `prepare failed: ${error?.message}`);
 
   await assert.rejects(
     () => replacement!.commit(),
     (caught: unknown) => {
-      // engine package wrap layer may wrap message, but because chain must be UpgradeCommitUnconfirmedError
+      // Wrapper layers may alter message, so verify UpgradeCommitUnconfirmedError along the cause chain
       let current: unknown = caught;
       for (let depth = 0; depth < 8 && current !== undefined && current !== null; depth += 1) {
         if (current instanceof UpgradeCommitUnconfirmedError) return true;
         current = (current as { cause?: unknown }).cause;
       }
-      assert.match(caught instanceof Error ? caught.message : String(caught), /do not rollback|not confirm|Unconfirmed/i);
+      assert.match(caught instanceof Error ? caught.message : String(caught), /refusing rollback|confirmation|Unconfirmed/i);
       return false;
     },
   );
 
-  // do not rollback:pid Profile still points to choose (never restore old pid)
-  assert.equal(store.get()?.pid, replacement!.pid, 'ACK lose after must not rollback pid Profile');
-  // do not kill choose: choose continue store (idempotent retry semantics)
-  assert.ok(realIsAlive(replacement!.pid), 'ACK lose never kill choose');
-  // abort also must by reject (activate already out)
-  await assert.rejects(() => replacement!.abort(), /reject abort|already out/);
+  // Never roll back: pid record still points to candidate (never restores old pid)
+  assert.equal(store.get()?.pid, replacement!.pid, 'must not roll back pid record after lost ACK');
+  // Never kill candidate: candidate continues running
+  assert.ok(realIsAlive(replacement!.pid), 'must never kill candidate after lost ACK');
+  // abort must also reject since activate was already sent
+  await assert.rejects(() => replacement!.abort(), /refusing abort|was sent/);
 
   process.kill(replacement!.pid, 'SIGKILL');
-  await waitFor(() => !realIsAlive(replacement!.pid), 5_000, 'choose exit');
+  await waitFor(() => !realIsAlive(replacement!.pid), 5_000, 'candidate exits');
 });
 
-test('prepareNodeReplacement: choose ready after self assert IPC- -activate determine not send reach, security rollback do not 10 minute empty window', { timeout: 60_000 }, async (t) => {
+test('prepareNodeReplacement rolls back safely if candidate disconnects IPC after ready without 10m dead window', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-vanish-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -436,31 +434,30 @@ test('prepareNodeReplacement: choose ready after self assert IPC- -activate dete
     oldRecord,
     activateAckTimeoutMs: 1_500,
   });
-  assert.ok(replacement !== undefined, `prepare failed:${error?.message}`);
-  assert.ok(realIsAlive(replacement.pid), 'disconnect IPC before choose store');
-  // etc. parent side handle completely disconnect event (ready phase disconnect→dead): eliminate commit and
-  // self disconnect timer between competition, lockactivate from not send reach determinism scenario.
+  assert.ok(replacement !== undefined, `prepare failed: ${error?.message}`);
+  assert.ok(realIsAlive(replacement.pid), 'candidate should be alive before disconnecting IPC');
+  // Wait for parent disconnect handler to transition candidate to dead so activate-not-sent is deterministic.
   await new Promise((resolve) => setTimeout(resolve, 200));
 
-  // commit: determine not send reach (failed to write or channel already die)→ ordinary error (non- not confirm),
-  // engine based on this away security rollback; old implement mistakenly by not confirm keep gate + let, node empty window 10 minute.
+  // commit knows activate was never sent (dead IPC) -> raises normal error (not unconfirmed) so
+  // engine safely rolls back instead of keeping draining + yielding for 10 minutes.
   await assert.rejects(
     () => replacement!.commit(),
     (caught: unknown) => {
-      assert.equal(caught instanceof UpgradeCommitUnconfirmedError, false, 'determine not send reach must not by not confirm handle');
-      assert.match(caught instanceof Error ? caught.message : String(caught), /not out|security rollback|do not in can commit state/);
+      assert.equal(caught instanceof UpgradeCommitUnconfirmedError, false, 'guaranteed unsent activate must not be treated as unconfirmed');
+      assert.match(caught instanceof Error ? caught.message : String(caught), /activate not sent|rolling back safely|not ready to commit/);
       return true;
     },
   );
 
-  // abort allows (activate from not send reach): kill choose + instanceId CAS restore old pid Profile
+  // abort allowed (activate was never sent): kills candidate + restores old pid via instanceId CAS
   await replacement.abort();
-  await waitFor(() => !realIsAlive(replacement.pid), 5_000, 'security rollback must kill choose');
-  assert.equal(store.get()?.pid, process.pid, 'pid Profile should restore is old process');
+  await waitFor(() => !realIsAlive(replacement.pid), 5_000, 'safe rollback must kill candidate');
+  assert.equal(store.get()?.pid, process.pid, 'pid record should restore old process');
   assert.equal(store.get()?.instanceId, 'e'.repeat(32));
 });
 
-test('prepareNodeReplacement: not activate when abort kill choose and do not trigger touch Profile', { timeout: 60_000 }, async (t) => {
+test('prepareNodeReplacement: abort before activate kills candidate without touching pid record', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-abort-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -472,35 +469,35 @@ test('prepareNodeReplacement: not activate when abort kill choose and do not tri
 
   const oldRecord: HandoffPidRecord = { pid: process.pid, instanceId: 'd'.repeat(32), endpoint: '/tmp/old4.sock' };
   const { replacement, store, error } = await prepareWithFixture({ dir, hubUrl: hub.url, mode: 'candidate', oldRecord });
-  assert.ok(replacement !== undefined, `prepare failed:${error?.message}`);
-  assert.ok(realIsAlive(replacement.pid), 'abort before choose store');
+  assert.ok(replacement !== undefined, `prepare failed: ${error?.message}`);
+  assert.ok(realIsAlive(replacement.pid), 'candidate should be alive before abort');
 
   await replacement.abort();
 
-  await waitFor(() => !realIsAlive(replacement.pid), 5_000, 'abort must kill self has choose');
-  // abort not activate(pidWritten=false): do not trigger touch Profile, old record keep do not change.
-  assert.equal(store.get()?.pid, process.pid, 'abort must not change write old Profile');
+  await waitFor(() => !realIsAlive(replacement.pid), 5_000, 'abort must kill owned candidate');
+  // abort before activate (pidWritten=false): never touches pid record
+  assert.equal(store.get()?.pid, process.pid, 'abort must not overwrite old pid record');
   assert.equal(store.get()?.instanceId, 'd'.repeat(32));
 });
 
 // ---------------------------------------------------------------------------
-// CLI upgrade command
+// CLI upgrade commands
 // ---------------------------------------------------------------------------
 
-test('upgrade --check: do not start daemon directly query (inject fetch fixture)', { timeout: 60_000 }, async (t) => {
+test('upgrade --check queries offline without starting daemon (injected fetch fixture)', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-check-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
-  // checkNodeUpgrade away fetchFn by default fetch: inject broken registry address explicit failed
+  // checkNodeUpgrade uses fetchFn (default fetch): invalid registry fails explicitly
   const r = await runCli(['upgrade', '--check', '--data-dir', dir, '--registry', 'http://127.0.0.1:1', '--json']);
   assert.equal(r.code, 1);
   assert.match(JSON.parse(r.err).error.message, /query|failed/);
-  // without daemon process by pull start: without pid file produce
+  // No daemon process started: no pid file created
   assert.equal(await fs.stat(path.join(dir, 'node.pid')).then(() => true, () => false), false, '--check must not start daemon');
 });
 
-test('upgrade without managed daemon: explicit want seek first start, do not false call offline already upgrade', { timeout: 60_000 }, async (t) => {
+test('upgrade without managed daemon explicitly tells user to run helm-node start first', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-norun-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -509,26 +506,26 @@ test('upgrade without managed daemon: explicit want seek first start, do not fal
   const r = await runCli(['upgrade', '--data-dir', dir, '--json']);
   assert.equal(r.code, 1);
   const envelope = JSON.parse(r.err) as { error: { message: string } };
-  assert.match(envelope.error.message, /please first helm-node start/);
+  assert.match(envelope.error.message, /run helm-node start/);
 });
 
-test('upgrade flag validate:--check and --version/--force mutual exclusion', { timeout: 60_000 }, async () => {
+test('upgrade flag validation: --check is mutually exclusive with --version and --force', { timeout: 60_000 }, async () => {
   const clash = await runCli(['upgrade', '--check', '--version', '1.2.3', '--data-dir', '/tmp/x', '--json']);
   assert.equal(clash.code, 1);
-  assert.match(JSON.parse(clash.err).error.message, /mutual exclusion/);
+  assert.match(JSON.parse(clash.err).error.message, /mutually exclusive/);
   const clash2 = await runCli(['upgrade', '--check', '--force', '--data-dir', '/tmp/x', '--json']);
   assert.equal(clash2.code, 1);
-  assert.match(JSON.parse(clash2.err).error.message, /mutual exclusion/);
+  assert.match(JSON.parse(clash2.err).error.message, /mutually exclusive/);
   const unknown = await runCli(['upgrade', '--no-such-flag', '--data-dir', '/tmp/x', '--json']);
   assert.equal(unknown.code, 1);
   assert.match(JSON.parse(unknown.err).error.message, /unknown option/);
 });
 
 // ---------------------------------------------------------------------------
-// control channel: upgrade in-flight stop reject and channel still available
+// Control channel: stop rejected while upgrading while channel remains responsive
 // ---------------------------------------------------------------------------
 
-/** start a real subject to control daemon(start -d), return pid record and clean up handle. */
+/** Start a real managed daemon (`start -d`) and return its pid record. */
 async function startManagedDaemon(t: test.TestContext, dir: string, hubUrl: string): Promise<HandoffPidRecord> {
   await bindIdentityFromJoinToken(dir, 'upg-ctl:s', hubUrl);
   const started = await runCli(['start', '-d', '--data-dir', dir, '--json']);
@@ -542,7 +539,7 @@ async function startManagedDaemon(t: test.TestContext, dir: string, hubUrl: stri
   return raw;
 }
 
-test('control channel upgrade request:daemon without upgrade host when explicit reject and stop/status still available', { timeout: 60_000 }, async (t) => {
+test('control channel upgrade request: rejects clearly when unready/invalid and keeps stop/status functional', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-ctl-');
   t.after(async () => {
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
@@ -581,24 +578,23 @@ test('control channel upgrade request:daemon without upgrade host when explicit 
       });
     });
 
-  // status still available
+  // status still works
   const status = await request('status');
-  assert.ok(status !== null && status.ok === true, 'status must available');
+  assert.ok(status !== null && status.ok === true, 'status must be available');
 
-  // upgrade request can reach daemon(subject to control instance inject prepare; this where target version illegal by refuse - -
-  // verify request real enter upgrade path while non- unknown_command)
+  // upgrade reaches daemon (which injects prepare; invalid target version rejects proving path reached handler)
   const upgrade = await request('upgrade', { input: { targetVersion: 'not-semver' } });
-  assert.ok(upgrade !== null, 'upgrade request must obtain to reply');
+  assert.ok(upgrade !== null, 'upgrade request must receive a reply');
   assert.equal(upgrade.ok, false);
-  assert.match(upgrade.error ?? '', /illegal|SemVer|reject/);
+  assert.match(upgrade.error ?? '', /invalid|SemVer|reject/);
 
-  // stop normal work (not in upgrade in)
+  // stop works normally when not upgrading
   const stopped = await runCli(['stop', '--data-dir', dir, '--json']);
   assert.equal(stopped.code, 0, stopped.err);
-  await waitFor(() => !realIsAlive(record.pid), 10_000, 'daemon exit');
+  await waitFor(() => !realIsAlive(record.pid), 10_000, 'daemon exits');
 });
 
-test('start -d: upgrade in-flight stop by upgrade_in_progress reject (isUpgrading real state)', { timeout: 60_000 }, async (t) => {
+test('start -d: stop rejects with upgrade_in_progress while upgrade runs (real isUpgrading state)', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-busy-');
   t.after(async () => {
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
@@ -610,9 +606,8 @@ test('start -d: upgrade in-flight stop by upgrade_in_progress reject (isUpgradin
   });
   const record = await startManagedDaemon(t, dir, hub.url);
 
-  // to real daemon start a will long time enter row upgrade? - - honest discipline: do not fabricate install.
-  // this where verify protocol layer: directly upgrade request (target version illegal immediately failed), confirm request
-  // and stop concurrency when daemon do not crash, control channel still reply.
+  // Exercise the protocol path directly with an invalid target version (fails fast without fabricating install)
+  // and verify daemon does not crash and control channel still answers status.
   const upgradePromise = (async () => {
     return await new Promise<{ ok: boolean; error?: string } | null>((resolve) => {
       let buffer = '';
@@ -643,19 +638,19 @@ test('start -d: upgrade in-flight stop by upgrade_in_progress reject (isUpgradin
     });
   })();
   const upgradeResponse = await upgradePromise;
-  assert.ok(upgradeResponse !== null, 'upgrade reply must store in');
+  assert.ok(upgradeResponse !== null, 'upgrade reply must arrive');
   assert.equal(upgradeResponse.ok, false);
-  // daemon still store and status available
-  assert.ok(realIsAlive(record.pid), 'daemon must not because upgrade request crash');
+  // daemon stays alive and status remains responsive
+  assert.ok(realIsAlive(record.pid), 'daemon must not crash on upgrade error');
   const status = await runCli(['status', '--data-dir', dir, '--json']);
   assert.equal(status.code, 0, status.err);
 });
 
 // ---------------------------------------------------------------------------
-// launcher semantics (start foreground without control env)
+// Launcher semantics (foreground start without control env)
 // ---------------------------------------------------------------------------
 
-test('foreground start(without control env) into is launcher: pull start subject to control daemon and trace', { timeout: 60_000 }, async (t) => {
+test('foreground start without control env acts as launcher: spawns and tracks managed daemon', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-launcher-');
   t.after(async () => {
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
@@ -668,7 +663,7 @@ test('foreground start(without control env) into is launcher: pull start subject
   });
   await bindIdentityFromJoinToken(dir, 'upg-launch:s', hub.url);
 
-  // launcher child process: real tsx source entry run start(foreground)
+  // launcher child runs tsx source entry in foreground
   const cliEntry = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
   let child: ChildProcess | undefined;
   child = spawn(process.execPath, ['--import', import.meta.resolve('tsx'), cliEntry, 'start', '--data-dir', dir], {
@@ -678,28 +673,28 @@ test('foreground start(without control env) into is launcher: pull start subject
   let stdout = '';
   child.stdout?.on('data', (c: Buffer) => (stdout += c.toString('utf8')));
 
-  // launcher pull start subject to control daemon and write pid Profile
+  // launcher spawns managed daemon and writes pid record
   await waitFor(async () => {
     const raw = await fs.readFile(path.join(dir, 'node.pid'), 'utf8').then(() => true, () => false);
     return raw;
-  }, 30_000, 'launcher pull start daemon and write pid Profile');
+  }, 30_000, 'launcher spawns daemon and writes pid record');
   const record = JSON.parse(await fs.readFile(path.join(dir, 'node.pid'), 'utf8')) as HandoffPidRecord;
   assert.ok(record.pid > 0);
   assert.ok(realIsAlive(record.pid));
-  assert.ok(realIsAlive(child.pid ?? 0), 'launcher itself keep store');
+  assert.ok(realIsAlive(child.pid ?? 0), 'launcher itself stays alive');
   assert.match(stdout, /launcher/);
 
-  // SIGTERM launcher: via control channel stop daemon after exit
+  // SIGTERM launcher: stops daemon via control channel before exiting
   child.kill('SIGTERM');
-  await waitFor(() => !realIsAlive(child!.pid ?? 0), 15_000, 'launcher exit');
-  await waitFor(() => !realIsAlive(record.pid), 15_000, 'daemon via control channel stop');
+  await waitFor(() => !realIsAlive(child!.pid ?? 0), 15_000, 'launcher exits');
+  await waitFor(() => !realIsAlive(record.pid), 15_000, 'daemon stops via control channel');
 });
 
 // ---------------------------------------------------------------------------
 // USAGE and status version output
 // ---------------------------------------------------------------------------
 
-test('USAGE contains upgrade command and new flag;status output real run version', { timeout: 60_000 }, async (t) => {
+test('USAGE lists upgrade command and flags; status prints actual running version', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-usage-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -719,13 +714,12 @@ test('USAGE contains upgrade command and new flag;status output real run version
 });
 
 // ---------------------------------------------------------------------------
-// precise allow fix verify:shutdown await / PID does not override / control version takes precedence
+// Regression checks: shutdown await / no PID overwrite / control version precedence
 // ---------------------------------------------------------------------------
 
 /**
- * slow stop control server fixture:stop reply fixed latency slowMs(>200ms),status response carry
- * designate version; used to verify launcher must await close chain set (old implement fire-and-forget
- * only etc. 200ms will early retreat) and status version priority.
+ * Slow-stop control server fixture: delays stop response by `slowMs` (>200ms) and reports a
+ * fixed `version` on status; tests that launcher awaits full shutdown before exiting.
  */
 async function startFixtureControl(options: {
   dataDir: string;
@@ -822,15 +816,14 @@ async function writePidRecordRaw(dir: string, record: HandoffPidRecord): Promise
   await fs.writeFile(path.join(dir, 'node.pid'), `${JSON.stringify(record)}\n`, 'utf8');
 }
 
-test('launcher shutdown:stop slow reply (>200ms) when must await set after only then return', { timeout: 60_000 }, async (t) => {
+test('launcher shutdown awaits slow stop replies (>200ms) before returning', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-slowstop-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
   await bindIdentityFromJoinToken(dir, 'slow-stop:s', 'http://127.0.0.1:1');
-  // slow stop latency must greater than trace polling remaining amount + old implement fixed wait for 200ms: take 700ms, old
-  // fire-and-forget implement most late ~450ms return (must however early retreat), new implement must await to
-  // stop reply (≥700ms) after only then return. polling inject 50ms, verify window sync shrink short.
+  // Delay must exceed poll slack + old hardcoded 200ms timeout: use 700ms so fire-and-forget
+  // would exit early around ~450ms while awaiting shutdown completes after >=700ms.
   const SLOW_MS = 700;
   let control: Awaited<ReturnType<typeof startFixtureControl>> | undefined;
   t.after(async () => {
@@ -839,12 +832,11 @@ test('launcher shutdown:stop slow reply (>200ms) when must await set after only 
 
   let stdout = '';
   const launcherPromise = runNodeCli(['start', '--data-dir', dir], {
-    // strip except host control/identity env: this case before mention is without control env foreground start into is
-    // launcher, host managed variable must not fabricate subject to control identity.
+    // Strip host control/identity env so foreground start runs as launcher without bogus control env.
     env: sanitizedHostEnv(),
     launcherPollMs: 50,
     out: (text) => (stdout += text),
-    // this test process i.e.daemon:pid=itself, store until fixture reply stop after placement stop.
+    // Current test process stands in for the daemon until fixture acknowledges stop.
     isAlive: (pid) => pid === process.pid && !(control?.stopped() ?? false),
     spawnDaemon: async (options) => {
       control = await startFixtureControl({
@@ -857,25 +849,25 @@ test('launcher shutdown:stop slow reply (>200ms) when must await set after only 
     },
   });
 
-  // etc. launcher complete start and register signal listen (non- json pattern print start message after register).
-  await waitFor(() => stdout.includes('launcher'), 15_000, 'launcher start message');
+  // Wait until launcher prints startup banner and registers signal handlers (non-json mode).
+  await waitFor(() => stdout.includes('launcher'), 15_000, 'launcher startup message');
   await new Promise((resolve) => setTimeout(resolve, 50));
   const sigtermAt = Date.now();
   process.kill(process.pid, 'SIGTERM');
   const code = await launcherPromise;
   const returnedAt = Date.now();
 
-  assert.ok(control?.stopped(), 'fixture must already reply stop');
+  assert.ok(control?.stopped(), 'fixture must have replied to stop');
   assert.ok(
     returnedAt - sigtermAt >= SLOW_MS - 200,
-    `launcher in stop slow reply set before early retreat (signal to return only ${returnedAt - sigtermAt}ms < ${SLOW_MS - 200}ms slow stop latency)`,
+    `launcher exited before slow stop settled (${returnedAt - sigtermAt}ms < ${SLOW_MS - 200}ms)`,
   );
   assert.equal(code, 0);
-  // close chain complete CAS clean up:pid Profile already delete.
-  assert.equal(await fs.stat(path.join(dir, 'node.pid')).then(() => true, () => false), false, 'pid Profile should by CAS clean up');
+  // Shutdown chain performs CAS cleanup removing pid file.
+  assert.equal(await fs.stat(path.join(dir, 'node.pid')).then(() => true, () => false), false, 'pid file should be CAS-cleaned');
 });
 
-test('upgrade emit: keep result new instance pid, old source pid with previousPid render', { timeout: 60_000 }, async (t) => {
+test('upgrade output keeps replacement pid from result and renders old pid as previousPid', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-pid-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -889,7 +881,7 @@ test('upgrade emit: keep result new instance pid, old source pid with previousPi
   t.after(async () => {
     await control.close();
   });
-  // Profile points to old daemon(this process):envelope pid=old,result.pid=new 424242.
+  // PID record points to old daemon (current process): envelope pid=old, result.pid=424242.
   await writePidRecordRaw(dir, { pid: process.pid, instanceId, endpoint: control.endpoint });
   t.after(async () => {
     await fs.rm(path.join(dir, 'node.pid'), { force: true }).catch(() => undefined);
@@ -898,13 +890,13 @@ test('upgrade emit: keep result new instance pid, old source pid with previousPi
   const r = await runCli(['upgrade', '--data-dir', dir, '--json'], { isAlive: () => true });
   assert.equal(r.code, 0, r.err);
   const payload = JSON.parse(r.out) as { pid: number; previousPid: number; upgraded: boolean };
-  assert.equal(payload.pid, 424242, 'result new instance pid must not by envelope old pid override');
-  assert.equal(payload.previousPid, process.pid, 'old source pid with previousPid render');
+  assert.equal(payload.pid, 424242, 'replacement pid must not be overwritten by envelope pid');
+  assert.equal(payload.previousPid, process.pid, 'old pid should be exposed as previousPid');
   assert.notEqual(payload.pid, payload.previousPid);
   assert.equal(payload.upgraded, true);
 });
 
-test('upgrade: same version no need to switch when allows no choose pid legal result', { timeout: 60_000 }, async (t) => {
+test('upgrade allows valid no-op result without candidate pid when version already matches', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-noop-');
   const instanceId = 'ef'.repeat(16);
   const control = await startFixtureControl({
@@ -921,11 +913,11 @@ test('upgrade: same version no need to switch when allows no choose pid legal re
   assert.equal(result.code, 0, result.err);
   const payload = JSON.parse(result.out) as { upgraded: boolean; pid?: number; previousPid: number };
   assert.equal(payload.upgraded, false);
-  assert.equal(payload.pid, undefined, 'without operation when do not edit build new process PID');
+  assert.equal(payload.pid, undefined, 'no-op upgrade must not invent a replacement PID');
   assert.equal(payload.previousPid, process.pid);
 });
 
-test('upgrade:result illegal (missing ok/upgraded/pid) when reject fabricate succeeded exit non-zero', { timeout: 60_000 }, async (t) => {
+test('upgrade rejects invalid result envelopes missing ok/upgraded/pid with non-zero exit', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-badres-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -942,13 +934,13 @@ test('upgrade:result illegal (missing ok/upgraded/pid) when reject fabricate suc
 
   const r = await runCli(['upgrade', '--data-dir', dir, '--json'], { isAlive: () => true });
   assert.equal(r.code, 1);
-  assert.equal(r.out, '', 'illegal result must not output succeeded JSON');
+  assert.equal(r.out, '', 'invalid result must not emit success JSON');
   const envelope = JSON.parse(r.err) as { error: { code: string; message: string } };
   assert.equal(envelope.error.code, 'invalid_upgrade_result');
-  assert.match(envelope.error.message, /reject fabricate succeeded/);
+  assert.match(envelope.error.message, /refusing to assume success/);
 });
 
-test('status: control channel on report version takes precedence; without live instance only then use current.json honor bottom', { timeout: 60_000 }, async (t) => {
+test('status prefers live control-channel version and falls back to current.json when offline', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-handoff-ver-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -958,7 +950,7 @@ test('status: control channel on report version takes precedence; without live i
   t.after(async () => {
     await control.close();
   });
-  // local current.json points to another version: only in without live instance when as already choose version honor bottom.
+  // Local current.json points to another version: only used as fallback when no live daemon exists.
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(
     path.join(dir, 'current.json'),
@@ -967,18 +959,18 @@ test('status: control channel on report version takes precedence; without live i
   );
   await writePidRecordRaw(dir, { pid: process.pid, instanceId, endpoint: control.endpoint });
 
-  // live instance via control channel on report 99.9.9: must takes precedence at local current.json.
+  // Live instance reports 99.9.9 over control channel: must override local current.json.
   const live = await runCli(['status', '--data-dir', dir, '--json'], { isAlive: () => true });
   assert.equal(live.code, 0, live.err);
   const livePayload = JSON.parse(live.out) as { version: string; state: string };
-  assert.equal(livePayload.version, '99.9.9', 'control channel on report version must takes precedence');
+  assert.equal(livePayload.version, '99.9.9', 'control channel reported version must win');
   assert.equal(livePayload.state, 'registered');
 
-  // without live instance (pid Profile remove): fall back current.json already choose version.
+  // No live instance (pid file removed): falls back to version in current.json.
   await fs.rm(path.join(dir, 'node.pid'), { force: true });
   const offline = await runCli(['status', '--data-dir', dir, '--json']);
   assert.equal(offline.code, 0, offline.err);
   const offlinePayload = JSON.parse(offline.out) as { version: string; pid: number | null };
-  assert.equal(offlinePayload.version, '0.0.1-current', 'without live instance when current.json as honor bottom');
+  assert.equal(offlinePayload.version, '0.0.1-current', 'current.json provides fallback when no live instance exists');
   assert.equal(offlinePayload.pid, null);
 });

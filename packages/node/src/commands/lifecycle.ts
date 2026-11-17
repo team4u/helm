@@ -1,5 +1,6 @@
 /**
- * lifecycle command:connect(bind set+foreground run)/ start(background or subject to control)/ stop / restart / status.
+ * Lifecycle commands: `connect` (bind + foreground), `start` (detached or controlled/launcher),
+ * `stop`, `restart`, and `status`.
  */
 import { UsageError } from '../cli-context.js';
 import { readPidRecord } from '../cli-context.js';
@@ -22,10 +23,10 @@ export async function connectCommand(ctx: CommandContext): Promise<number> {
       ? parsed.positional[0]!
       : await resolveHubUrl(io, parsed, true);
   const token = flagString(parsed, 'token');
-  if (token === undefined) throw new UsageError('connect need to --token <token>(JOIN token nodeId:secret)', 'missing_token');
+  if (token === undefined) throw new UsageError('connect requires --token <token> (JOIN token nodeId:secret)', 'missing_token');
   await bindIdentityFromJoinToken(dataDir, token, hubUrl);
   const identity = await readNodeIdentity(dataDir);
-  if (identity === null) throw new Error('identity after write failed to read (internal error)');
+  if (identity === null) throw new Error('failed to read identity after writing it (internal error)');
   if (parsed.flags.get('once') === true) {
     const handle = await runNodeDaemonHandle({ hubUrl, token }, { dataDir });
     const ok = await handle.waitUntilRegistered(15_000);
@@ -36,27 +37,27 @@ export async function connectCommand(ctx: CommandContext): Promise<number> {
   return await runDaemonProcess({ io, json: parsed.json, dataDir, hubUrl, token, nodeId: identity.nodeId });
 }
 
-/** start -d: bind set (optional)→ background pull start → pid Profile. */
+/** `start -d`: bind identity (optional) -> spawn detached daemon -> record `node.pid`. */
 async function startDetached(ctx: CommandContext, token: string | undefined, hubUrl: string): Promise<number> {
   const { io, parsed, dataDir, emit } = ctx;
-  const { bindIdentityFromJoinToken, readNodeIdentity } = await import('../daemon/index.js');
+  const { bindIdentityFromJoinToken } = await import('../daemon/index.js');
   if (token !== undefined) {
-    // empty address by bindIdentityFromJoinToken explicit reject (do not edit build fall back Hub).
+    // Empty hubUrl is explicitly rejected by bindIdentityFromJoinToken.
     await bindIdentityFromJoinToken(dataDir, token, hubUrl);
   }
   const identity = await readNodeIdentityStrict(dataDir);
   const effectiveHub = hubUrl !== '' ? hubUrl : identity.hubUrl ?? '';
-  if (effectiveHub === '') throw new UsageError('background start need to Hub address (--hub or since bind set hubUrl)', 'missing_hub_url');
+  if (effectiveHub === '') throw new UsageError('detached start requires a Hub URL (--hub or bound hubUrl)', 'missing_hub_url');
   const { pid, logPath, readyState } = await startDaemon(io, dataDir, effectiveHub);
   const message =
     readyState === 'registered'
-      ? `daemon already start and complete Hub register (pid ${pid})`
-      : `daemon already start (pid ${pid}), not yet complete Hub register:Hub temporary cannot reach when continuous backoff reconnect, diagnose see ${logPath}`;
+      ? `daemon started and registered with Hub (pid ${pid})`
+      : `daemon started (pid ${pid}), registration not yet complete: will keep reconnecting with backoff if Hub is unreachable; check logs at ${logPath}`;
   emit({ ok: true, pid, dataDir, hubUrl: effectiveHub, nodeId: identity.nodeId, logPath, state: readyState, message });
   return 0;
 }
 
-/** start subject to control pattern (start -d / upgrade handover parent process inject control env): directly run daemon this body. */
+/** Controlled `start` invoked by `start -d` or upgrade handoff with control env vars injected. */
 async function startControlled(ctx: CommandContext, control: { instanceId: string; endpoint: string }, token: string | undefined, hubUrl: string): Promise<number> {
   const { io, parsed, dataDir } = ctx;
   const { readNodeIdentity } = await import('../daemon/index.js');
@@ -65,7 +66,7 @@ async function startControlled(ctx: CommandContext, control: { instanceId: strin
   const effectiveHub = hubUrl !== '' ? hubUrl : identity?.hubUrl ?? '';
   if (effectiveToken === undefined || effectiveHub === '') {
     throw new UsageError(
-      'start subject to control run need to since bind set identity or --token + --hub; or use start -d background start',
+      'controlled start requires a bound identity or --token + --hub; or use start -d to run in background',
       'missing_identity',
     );
   }
@@ -88,15 +89,13 @@ export async function startCommand(ctx: CommandContext): Promise<number> {
   if (detached) {
     return await startDetached(ctx, token, hubUrl);
   }
-  // foreground start: subject to control background (by start -d / upgrade handover parent process inject
-  // HELM_NODE_INSTANCE_ID / HELM_NODE_CONTROL_ENDPOINT) directly run daemon;
-  // without control env pure foreground (systemd/launchd main process) into is stable launcher.
+  // Controlled child (spawned with HELM_NODE_INSTANCE_ID / HELM_NODE_CONTROL_ENDPOINT) runs the daemon directly;
+  // plain foreground `start` (systemd/launchd main process) enters the foreground launcher loop.
   const instanceId = io.env?.['HELM_NODE_INSTANCE_ID'];
   const endpoint = io.env?.['HELM_NODE_CONTROL_ENDPOINT'];
   if (instanceId !== undefined && instanceId !== '' && endpoint !== undefined && endpoint !== '') {
     return await startControlled(ctx, { instanceId, endpoint }, token, hubUrl);
   }
-  // stable launcher: pull start subject to control daemon and trace when before instance, upgrade swap pid automatically with follow.
   const { bindIdentityFromJoinToken } = await import('../daemon/index.js');
   const { runForegroundLauncher } = await import('../launcher.js');
   if (token !== undefined && hubUrl !== '') {
@@ -104,7 +103,7 @@ export async function startCommand(ctx: CommandContext): Promise<number> {
   }
   const launcherIdentity = await readNodeIdentityStrict(dataDir);
   const launcherHub = hubUrl !== '' ? hubUrl : launcherIdentity.hubUrl ?? '';
-  if (launcherHub === '') throw new UsageError('launcher start need to Hub address (--hub or since bind set hubUrl)', 'missing_hub_url');
+  if (launcherHub === '') throw new UsageError('launcher start requires a Hub URL (--hub or bound hubUrl)', 'missing_hub_url');
   return await runForegroundLauncher(io, dataDir, launcherHub, parsed.json);
 }
 
@@ -120,12 +119,12 @@ export async function restartCommand(ctx: CommandContext): Promise<number> {
   const hubUrl = await resolveHubUrl(io, parsed, false);
   const identity = await readNodeIdentityStrict(dataDir);
   const effectiveHub = hubUrl !== '' ? hubUrl : identity.hubUrl ?? '';
-  if (effectiveHub === '') throw new UsageError('restart need to since bind set identity (helm-node connect); not found', 'missing_identity');
+  if (effectiveHub === '') throw new UsageError('restart requires a bound Hub URL (run helm-node connect first)', 'missing_identity');
   const previous = await readPidRecord(dataDir);
   let previousPid: number | null = null;
   if (previous !== null) {
     previousPid = previous.pid;
-    // stopDaemon stop failed will throws: never carries old process continue pull new process.
+    // stopDaemon throws on failure so we never spawn a second process alongside a live one.
     await stopDaemon(io, dataDir);
   }
   const { pid, logPath, readyState } = await startDaemon(io, dataDir, effectiveHub);
@@ -147,8 +146,7 @@ export async function statusCommand(ctx: CommandContext): Promise<number> {
   const { readNodeIdentity } = await import('../daemon/index.js');
   const identity = await readNodeIdentity(dataDir);
   const daemon = await statusDaemon(io, dataDir);
-  // real run version priority:daemon control channel on report (real process getNodeVersion)
-  // → local current.json(already choose version)→ itself package version (without live instance when honor bottom).
+  // Version priority: live daemon control-channel report -> staged current.json -> package.json.
   const { resolveEffectiveNodeVersion } = await import('../daemon/upgrader.js');
   const version = daemon.version ?? (await resolveEffectiveNodeVersion(dataDir));
   emit({

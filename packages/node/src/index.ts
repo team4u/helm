@@ -1,8 +1,9 @@
 /**
- * @helm/node - - across platform subject to control node daemon package (helm-node).
+ * `@helm/node`: cross-platform managed node daemon package (`helm-node`).
  *
- * edit process exit:createNodeDaemon / runNodeDaemon / runNodeDaemonHandle(daemon),
- * createNodeEnvRpcServer(each connect one proxy env RPC server) and across platform service manage (service).
+ * Exports daemon lifecycle (`createNodeDaemon`, `runNodeDaemon`, `runNodeDaemonHandle`),
+ * the per-connection environment RPC server (`createNodeEnvRpcServer`), upgrade/doctor/service
+ * primitives, and the CLI runner (`runNodeCli`).
  */
 export {
   createNodeEnvRpcServer,

@@ -1,6 +1,6 @@
 /**
- * env-rpc-server independent review regression test: only re- now real defect, do not duplicate main implement test.
- * each items all for should a by fix real boundary (see each test note release).
+ * Independent review regression tests for `env-rpc-server`: reproduces real edge defects
+ * cleanly without duplicating main unit tests (each test documents the specific bug covered).
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,11 +16,11 @@ import {
   resolveHerdrIpcEndpoint,
 } from '../src/daemon/env-rpc-server.js';
 
-/** polling wait for can observe condition into establish (alternative fixed sleep), timeout explicit failed. */
+/** Poll until observable condition holds (instead of fixed sleeps), failing explicitly on timeout. */
 const waitFor = (condition: () => boolean | Promise<boolean>, timeoutMs: number, what: string): Promise<void> =>
-  kitWaitFor(condition, { timeoutMs, message: `wait timed out:${what}` });
+  kitWaitFor(condition, { timeoutMs, message: `wait timed out: ${what}` });
 
-/** start Unix Socket row server (herdr shape simulated). */
+/** Start a Unix socket JSON-line server (herdr-style test double). */
 function startLineServer(
   dir: string,
   name: string,
@@ -54,7 +54,7 @@ function startLineServer(
   };
 }
 
-/** wait for Unix socket can connect (listen is async). */
+/** Wait until the Unix socket accepts connections (`listen` is asynchronous). */
 async function waitListening(sockPath: string, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -73,10 +73,10 @@ async function waitListening(sockPath: string, timeoutMs = 5_000): Promise<void>
 }
 
 // ---------------------------------------------------------------------------
-// 1. envFlushFile(protocol fb6ffbdb patch complete must must original language): real file / missing / dispose after
+// 1. envFlushFile (required protocol primitive): real file / missing / post-dispose
 // ---------------------------------------------------------------------------
 
-test('envFlushFile: real file ok, missing not_found,dispose after aborted', { timeout: 60_000 }, async () => {
+test('envFlushFile returns ok for real file, not_found when missing, and aborted after dispose', { timeout: 60_000 }, async () => {
   const dir = await tempDir('flush-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir });
   try {
@@ -84,13 +84,13 @@ test('envFlushFile: real file ok, missing not_found,dispose after aborted', { ti
     const ok = await server.envFlushFile({ path: 'f.txt' });
     assert.equal(ok.ok, true);
 
-    // flush directory:is_directory(SDK POSIX semantics,Windows same explicit check)
+    // Flushing a directory returns is_directory (checked on Windows too under SDK POSIX semantics)
     await fs.mkdir(path.join(dir, 'd'));
     const isDir = await server.envFlushFile({ path: 'd' });
     assert.equal(isDir.ok, false);
     assert.equal(!isDir.ok && isDir.error.code, 'is_directory');
 
-    // missing:not_found, does not pretend to be succeeded
+    // Missing path returns not_found instead of pretending success
     const missing = await server.envFlushFile({ path: 'no-such' });
     assert.equal(missing.ok, false);
     assert.equal(!missing.ok && missing.error.code, 'not_found');
@@ -98,14 +98,14 @@ test('envFlushFile: real file ok, missing not_found,dispose after aborted', { ti
     await server.dispose();
   }
 
-  // dispose after: boundary wrap return structure aborted message seal (do not throw bare exception)
+  // Post-dispose wrapper returns structured aborted error envelope without throwing raw errors
   const after = await server.envFlushFile({ path: 'f.txt' });
   assert.equal(after.ok, false);
   assert.equal(!after.ok && after.error.code, 'aborted');
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('dispose terminal state: file RPC return structure aborted, do not rebuild env/reader', { timeout: 60_000 }, async () => {
+test('dispose is terminal: file RPCs return structured aborted without recreating env or readers', { timeout: 60_000 }, async () => {
   const dir = await tempDir('dispose-final-');
   await fs.writeFile(path.join(dir, 'a.txt'), 'x');
   const server = createNodeEnvRpcServer({ defaultCwd: dir });
@@ -114,9 +114,9 @@ test('dispose terminal state: file RPC return structure aborted, do not rebuild 
   await server.dispose();
   assert.equal(server.getOpenReaderCount(), 0);
 
-  // fix before defect:dispose after envReadTextFile will rebuild env and succeeded execute (or bare throw)
+  // Pre-fix bug: envReadTextFile after dispose recreated env and ran (or threw raw error)
   const read = await server.envReadTextFile({ path: 'a.txt' });
-  assert.equal(read.ok, false, 'dispose after file RPC must reject');
+  assert.equal(read.ok, false, 'file RPCs after dispose must reject');
   assert.equal(!read.ok && read.error.code, 'aborted');
   const reader = await server.envOpenTextLineReader({ path: 'a.txt' });
   assert.equal(reader.ok, false);
@@ -124,18 +124,18 @@ test('dispose terminal state: file RPC return structure aborted, do not rebuild 
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('boundary wrap:null input and unknown reader return structure error (do not bare throw)', { timeout: 60_000 }, async () => {
+test('boundary wrapper turns null inputs and unknown readers into structured errors without throwing', { timeout: 60_000 }, async () => {
   const dir = await tempDir('guard-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir });
   try {
-    // null input: fix before solve construct {path} directly TypeError bare throw to birpc layer
+    // Null input previously threw an uncaught TypeError destructuring `{ path }` straight into birpc
     const nullRead = await (server.envReadTextFile as unknown as (input: unknown) => Promise<{ ok: boolean; error?: { code: string } }>)(
       null,
     );
     assert.equal(nullRead.ok, false);
     assert.ok(nullRead.error !== undefined);
 
-    // unknown readerId: structure not_found
+    // Unknown readerId returns structured not_found
     const unknown = await server.envTextReaderRead({ readerId: 'r999' });
     assert.equal(unknown.ok, false);
     assert.equal(!unknown.ok && unknown.error.code, 'not_found');
@@ -146,13 +146,13 @@ test('boundary wrap:null input and unknown reader return structure error (do not
 });
 
 // ---------------------------------------------------------------------------
-// 2. envExec host HELM_TOKEN isolated (do not delete global process.env, real child process verify)
+// 2. envExec strips host HELM_TOKEN without mutating global process.env (verified via real subprocess)
 // ---------------------------------------------------------------------------
 
-test('envExec host HELM_TOKEN without leaking enter child process;input.env managed inject available', { timeout: 60_000 }, async (t) => {
-  // simulated node host hold has token: change write test process process.env(t.after restore).
-  // SDK NodeExecutionEnv.getShellEnv by default inherit process.env - - verify merge result
-  // must in host indeed carries HELM_TOKEN run before mention under into establish, do not rely delete global variable mask.
+test('envExec never leaks host HELM_TOKEN into children while honoring managed input.env injections', { timeout: 60_000 }, async (t) => {
+  // Simulate a daemon host carrying HELM_TOKEN by swapping process.env (restored via t.after).
+  // Upstream NodeExecutionEnv inherits process.env by default, so this proves stripping works
+  // genuinely when HELM_TOKEN is present rather than passing only by deleting global env vars.
   const base = process.env;
   process.env = { ...base, HELM_TOKEN: 'host-secret-token-do-not-leak' } as NodeJS.ProcessEnv;
   t.after(() => {
@@ -169,7 +169,7 @@ test('envExec host HELM_TOKEN without leaking enter child process;input.env mana
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  // 1) by default (inheritEnv default): host token must not appear, basis environment inherit
+  // 1) Default (inheritEnv omitted): host token must be stripped while base env inherits
   await server.envExec({
     execId: 't1-dump',
     command:
@@ -183,13 +183,13 @@ test('envExec host HELM_TOKEN without leaking enter child process;input.env mana
     hasHome: boolean;
     data: string | null;
   };
-  assert.equal(dump1.token, null, 'host HELM_TOKEN must not leak leak (SDK inheritEnv:true by default will merge process.env)');
+  assert.equal(dump1.token, null, 'host HELM_TOKEN must not leak (SDK inheritEnv:true merges process.env by default)');
   assert.equal(dump1.hub, 'http://hub:3202');
   assert.equal(dump1.data, dir);
-  assert.equal(dump1.hasPath, true, 'basis PATH inherit');
-  assert.equal(dump1.hasHome, true, 'basis HOME inherit');
+  assert.equal(dump1.hasPath, true, 'base PATH inherited');
+  assert.equal(dump1.hasHome, true, 'base HOME inherited');
 
-  // 2) input.env explicit HELM_TOKEN(Hub managed inject): must available
+  // 2) Explicit input.env HELM_TOKEN (Hub-managed per-call injection): must pass through
   await server.envExec({
     execId: 't2',
     command: 'node -e \'require("fs").writeFileSync("env-dump2.json", JSON.stringify({token:process.env.HELM_TOKEN??null}))\'',
@@ -199,7 +199,7 @@ test('envExec host HELM_TOKEN without leaking enter child process;input.env mana
   const dump2 = JSON.parse(await fs.readFile(path.join(dir, 'env-dump2.json'), 'utf8')) as { token: string | null };
   assert.equal(dump2.token, 'managed-token-xyz');
 
-  // 3) inheritEnv:false: only use shellEnv + input.env, do not carries host base bottom
+  // 3) inheritEnv:false: passes only shellEnv + input.env without host baseline
   await server.envExec({
     execId: 't3',
     command: 'node -e \'require("fs").writeFileSync("env-dump3.json", JSON.stringify({hasPath:!!process.env.PATH,hub:process.env.HELM_HUB_URL??null,custom:process.env.MY_VAR??null}))\'',
@@ -212,20 +212,20 @@ test('envExec host HELM_TOKEN without leaking enter child process;input.env mana
     hub: string | null;
     custom: string | null;
   };
-  assert.equal(dump3.hasPath, false, 'inheritEnv:false do not carries host PATH');
-  assert.equal(dump3.hub, 'http://hub:3202', 'shellEnv still inject');
-  assert.equal(dump3.custom, 'yes', 'input.env inject');
+  assert.equal(dump3.hasPath, false, 'inheritEnv:false omits host PATH');
+  assert.equal(dump3.hub, 'http://hub:3202', 'shellEnv still injected');
+  assert.equal(dump3.custom, 'yes', 'input.env injected');
 });
 
 // ---------------------------------------------------------------------------
-// 3. output chunked:UTF-16 proxy for (emoji) must not in chunk boundary split; cap 1 do not infinite loop
+// 3. Output chunking: UTF-16 surrogate pairs (emoji) never split across chunks; cap=1 avoids infinite loop
 // ---------------------------------------------------------------------------
 
-test('onExecOutput chunked do not split proxy for: boundary correct emoji high/low proxy between', { timeout: 60_000 }, async (t) => {
+test('onExecOutput chunking preserves surrogate pairs across chunk boundaries', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('surrogate-');
   const chunks: string[] = [];
-  // choose a small cap make chunked real occur; odd count cap + emoji(2 code meta)+ single code meta character
-  // mix arrange must however collide on cut point in high proxy after scenario, by safeChunkEnd fall back one code meta.
+  // Odd small chunk cap + emoji (2 code units) + ASCII forces cuts right between high/low surrogates
+  // so safeChunkEnd backs off by one code unit.
   const CHUNK = 7;
   const server = createNodeEnvRpcServer({
     defaultCwd: dir,
@@ -237,25 +237,25 @@ test('onExecOutput chunked do not split proxy for: boundary correct emoji high/l
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  const emoji = '😀'; // U+1F600: high proxy + low proxy
+  const emoji = '😀'; // U+1F600: high surrogate + low surrogate
   const payload = `AB${emoji}CD${emoji}E${emoji}FG${emoji}H`;
   await fs.writeFile(path.join(dir, 'script.js'), `process.stdout.write(${JSON.stringify(payload)})`);
   const r = await server.envExec({ execId: 's1', command: 'node script.js', timeout: 30 });
   assert.equal(r.ok, true, r.ok ? '' : r.error.message);
 
-  // concatenate must without loss (split will produce U+FFFD)
-  assert.equal(chunks.join(''), payload, 'across chunk concatenate must restore original text');
+  // Concatenation must be lossless (splitting surrogates produces U+FFFD)
+  assert.equal(chunks.join(''), payload, 'rejoined chunks must match original string');
   for (const [i, chunk] of chunks.entries()) {
-    assert.ok(!chunk.includes('\uFFFD'), `chunk ${i} contains alternative character:${JSON.stringify(chunk)}`);
-    assert.ok(chunk.length <= CHUNK, `chunk ${i} over cap`);
+    assert.ok(!chunk.includes('\uFFFD'), `chunk ${i} contains replacement character: ${JSON.stringify(chunk)}`);
+    assert.ok(chunk.length <= CHUNK, `chunk ${i} exceeds cap`);
   }
-  assert.ok(chunks.length > 1, `should produce many chunk (actual ${chunks.length} chunk)`);
-  // at least one chunk with high proxy tail by fall back verify based on: store in length is CHUNK-1 chunk
+  assert.ok(chunks.length > 1, `should split into multiple chunks (got ${chunks.length})`);
+  // Evidence of backing off at a high surrogate: at least one chunk has length CHUNK - 1
   const hasBackoff = chunks.some((c) => c.length === CHUNK - 1);
-  assert.ok(hasBackoff, 'store in because proxy for fall back one code meta chunk (cut point real in high/low proxy between)');
+  assert.ok(hasBackoff, 'at least one chunk backed off by one code unit at surrogate boundary');
 });
 
-test('maxOutputChunkChars=1 encounter emoji do not infinite loop: each round before enter and final scoped', { timeout: 60_000 }, async (t) => {
+test('maxOutputChunkChars=1 with emoji advances every step and finishes without infinite loop', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('chunk1-');
   const chunks: string[] = [];
   const server = createNodeEnvRpcServer({
@@ -268,32 +268,30 @@ test('maxOutputChunkChars=1 encounter emoji do not infinite loop: each round bef
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  // fix before defect:safeChunkEnd(text, offset=0, limit=1) in emoji open head when
-  // fall back to 0 → end === offset → unbounded loop,envExec forever do not return (test timeout).
+  // Pre-fix bug: safeChunkEnd(text, offset=0, limit=1) backed off to 0 at leading emoji -> end===offset infinite loop.
   const emoji = '🚀';
   const payload = `A${emoji}B${emoji}`;
   await fs.writeFile(path.join(dir, 'script.js'), `process.stdout.write(${JSON.stringify(payload)})`);
   const r = await server.envExec({ execId: 'c1', command: 'node script.js', timeout: 20 });
   assert.equal(r.ok, true, r.ok ? '' : r.error.message);
   assert.equal(server.getActiveExecCount(), 0);
-  // cap is1when, complete proxy for allows occupy2code meta; each chunked separateUTF-8encode also must without loss.
+  // With cap=1, an intact surrogate pair is allowed to occupy 2 code units; each chunk is valid UTF-8.
   assert.equal(chunks.map((chunk) => Buffer.from(chunk).toString()).join(''), payload)
-  assert.equal(chunks.join(''), payload, 'chunked concatenate must restore original text');
+  assert.equal(chunks.join(''), payload, 'rejoined chunks must match original string');
   for (const [i, chunk] of chunks.entries()) {
-    assert.ok(chunk.length >= 1 && chunk.length <= 2, `chunk ${i} should be complete code point`);
+    assert.ok(chunk.length >= 1 && chunk.length <= 2, `chunk ${i} should be a complete code point`);
   }
 });
 
 // ---------------------------------------------------------------------------
-// 4. onExecOutput call back exception: immediately cancel process and return callback_error(do not empty run to timeout)
+// 4. onExecOutput callback error: cancels child immediately with callback_error
 // ---------------------------------------------------------------------------
 
-test('onExecOutput call back throw exception: immediately kill tree return callback_error, do not etc. slow command timeout', { timeout: 60_000 }, async (t) => {
+test('onExecOutput callback throwing kills process tree immediately with callback_error', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('cb-err-');
   const server = createNodeEnvRpcServer({
     defaultCwd: dir,
-    // first time call back i.e. throw:echo many row output usually merge in the same data chunk in reach,
-    //  N time semantics cannot rely; first time must throw only then can determinism trigger.
+    // Throw on the first callback because multi-line echo output often coalesces into one chunk.
     onExecOutput: () => {
       throw new Error('sink exploded');
     },
@@ -303,9 +301,8 @@ test('onExecOutput call back throw exception: immediately kill tree return callb
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  // fix before double heavy defect:1) call back exception by static default swallow, process empty run to sleep/timeout;
-  // 2) SDK inshell string command + call back stack inside cancel when promise forever do not settle,
-  // envExec hang die - -race si bottom force compute callback_error.
+  // Pre-fix double bug: 1) swallowed callback exceptions let child run until timeout;
+  // 2) cancelling inside callback left SDK promise unsettled — race fallback forces callback_error.
   const start = Date.now();
   const r = await server.envExec({
     execId: 'c2',
@@ -313,27 +310,26 @@ test('onExecOutput call back throw exception: immediately kill tree return callb
     timeout: 60,
   });
   const elapsed = Date.now() - start;
-  assert.equal(r.ok, false, 'call back failed must not disguise succeeded');
+  assert.equal(r.ok, false, 'callback failure must not pretend to succeed');
   assert.equal(!r.ok && r.error.code, 'callback_error');
   assert.match(!r.ok ? r.error.message : '', /sink exploded/);
-  assert.ok(elapsed < 10_000, `call back failed should immediately kill tree (actual ${elapsed}ms, must not etc. full sleep/timeout)`);
-  assert.equal(server.getActiveExecCount(), 0, 'process by cancel, without in-flight item leftover');
-  // orphan child process verify: brocade set ^sleep 55$ precise match (non- brocade set -f will match to detect command
-  // itself command line, produce mistakenly report). to kill group one point wide limit time.
+  assert.ok(elapsed < 10_000, `callback failure should kill process tree immediately (actual ${elapsed}ms)`);
+  assert.equal(server.getActiveExecCount(), 0, 'cancelled process must leave no active entry');
+  // Orphan guard: exact `^sleep 55$` match (without `-f` self-matching pgrep command lines) after kill grace.
   await delay(300);
   const leftover = await new Promise<number>((resolve) => {
     execCb('pgrep -f "^sleep 55$" | grep -cv pgrep || true', (error, stdout) => {
       resolve(error ? -1 : Number.parseInt((stdout || '0').trim(), 10));
     });
   });
-  assert.equal(leftover, 0, 'kill tree after must not orphan child sleep process');
+  assert.equal(leftover, 0, 'no orphan sleep process should remain after killTree');
 });
 
 // ---------------------------------------------------------------------------
-// 5. base64 boundary validate:Node loosely parse must not static default swallow illegal character
+// 5. base64 boundary validation: reject invalid characters instead of permissive Node parsing
 // ---------------------------------------------------------------------------
 
-test('envWriteFile base64 strictly validate: illegal character parent table explicit invalid', { timeout: 60_000 }, async (t) => {
+test('envWriteFile base64 strict validation rejects illegal characters explicitly as invalid', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('b64-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir });
   t.after(async () => {
@@ -341,33 +337,33 @@ test('envWriteFile base64 strictly validate: illegal character parent table expl
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  // Node Buffer.from(x,'base64') will static default ignore '!' etc. character - - fix after must reject
+  // Node Buffer.from(x, 'base64') silently ignores '!' etc. — must reject explicitly
   const bad = await server.envWriteFile({ path: 'x.bin', content: 'QQ!Q', encoding: 'base64' });
   assert.equal(bad.ok, false);
   assert.equal(!bad.ok && bad.error.code, 'invalid');
-  assert.equal(await fs.stat(path.join(dir, 'x.bin')).then(() => true, () => false), false, 'must not write out error data');
+  assert.equal(await fs.stat(path.join(dir, 'x.bin')).then(() => true, () => false), false, 'must not write invalid payload');
 
-  // contains whitespace base64 same reject (loosely parse will skip whitespace)
+  // Whitespace in base64 also rejected (permissive parsing skips spaces)
   const space = await server.envWriteFile({ path: 'y.bin', content: 'QQ Q', encoding: 'base64' });
   assert.equal(space.ok, false);
   assert.equal(!space.ok && space.error.code, 'invalid');
 
-  // legal base64 normal work
+  // Valid base64 works normally
   const good = await server.envWriteFile({ path: 'z.bin', content: Buffer.from('ok').toString('base64'), encoding: 'base64' });
   assert.equal(good.ok, true);
   assert.equal(await fs.readFile(path.join(dir, 'z.bin'), 'utf8'), 'ok');
 
-  // empty content legal
+  // Empty content is valid
   const empty = await server.envWriteFile({ path: 'e.bin', content: '', encoding: 'base64' });
   assert.equal(empty.ok, true);
 });
 
 // ---------------------------------------------------------------------------
-// 6. envExec duplicate execId: explicit reject (override will lose old cancel handle);
-//    and by reject invoke must not from dispose arrange empty concentrate squeeze real in-flight command
+// 6. envExec duplicate execId: rejected explicitly (overwriting drops prior cancel handle)
+//    and rejected duplicate calls must not evict live commands from dispose wait set
 // ---------------------------------------------------------------------------
 
-test('envExec duplicate execId in-flight when explicit reject', { timeout: 60_000 }, async (t) => {
+test('envExec explicitly rejects duplicate in-flight execId', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('dup-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir });
   t.after(async () => {
@@ -389,7 +385,7 @@ test('envExec duplicate execId in-flight when explicit reject', { timeout: 60_00
   assert.equal(server.getActiveExecCount(), 0);
 });
 
-test('dispose arrange empty by invoke append trace: same execId by refuse invoke do not squeeze real in-flight command', { timeout: 60_000 }, async (t) => {
+test('dispose tracks draining waiters per call so rejected duplicate execId never evicts live commands', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('drain-set-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir });
   t.after(async () => {
@@ -397,27 +393,25 @@ test('dispose arrange empty by invoke append trace: same execId by refuse invoke
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  // fix before defect:execWaiters is Map<execId, Promise>, same execId second time
-  // (by refuse) invoke will override first time promise, and first settle when item delete - -
-  // dispose wait for collection in then no real sleep command. change Set<Promise> after each
-  // invoke independent append trace.
+  // Pre-fix bug: Map<execId, Promise> let rejected second call overwrite first promise and remove it
+  // from dispose wait set upon early settlement. Switching to Set<Promise> tracks each call independently.
   const slow = server.envExec({ execId: 'd', command: 'sleep 3', timeout: 60 });
   await delay(200);
   const dup = await server.envExec({ execId: 'd', command: 'echo x', timeout: 60 });
-  assert.equal(dup.ok, false, 'duplicate execId should by refuse');
+  assert.equal(dup.ok, false, 'duplicate execId should be rejected');
 
   await server.dispose();
-  assert.equal(server.getActiveExecCount(), 0, 'dispose etc. to real in-flight command settle');
+  assert.equal(server.getActiveExecCount(), 0, 'dispose waited for genuine in-flight command to settle');
   const r = await slow;
   assert.equal(r.ok, false);
   assert.equal(!r.ok && r.error.code, 'aborted');
 });
 
 // ---------------------------------------------------------------------------
-// 7. IPC inject boundary: many row/CR/NUL payload reject; illegal callId/timeout reject
+// 7. IPC injection boundaries: multi-line/CR/NUL payloads, bad callId/timeout rejected
 // ---------------------------------------------------------------------------
 
-test('ipcCall payload single row validate: newline inject reject (do not split into many frame request)', { timeout: 60_000 }, async (t) => {
+test('ipcCall enforces single-line payloads and rejects newline injection', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('ipc-inject-');
   const received: string[] = [];
   const srv = startLineServer(dir, 'herdr', (line) => received.push(line));
@@ -429,7 +423,7 @@ test('ipcCall payload single row validate: newline inject reject (do not split i
     await server.dispose();
   });
 
-  // fix before defect:line middle newline will inject second request frame
+  // Pre-fix bug: embedded newline injected a second request frame
   const injected = await server.ipcCall!({
     endpoint: srv.path,
     line: '{"id":"1","method":"a"}\n{"id":"2","method":"evil"}',
@@ -439,27 +433,27 @@ test('ipcCall payload single row validate: newline inject reject (do not split i
   assert.equal(!injected.ok && injected.error.code, 'invalid');
   assert.match(!injected.ok ? injected.error.message : '', /single line/i);
 
-  // CR same reject
+  // CR also rejected
   const cr = await server.ipcCall!({ endpoint: srv.path, line: 'a\rb', timeoutMs: 2_000 });
   assert.equal(cr.ok, false);
   assert.equal(!cr.ok && cr.error.code, 'invalid');
 
-  // NUL reject
+  // NUL rejected
   const nul = await server.ipcCall!({ endpoint: srv.path, line: 'a\u0000b', timeoutMs: 2_000 });
   assert.equal(nul.ok, false);
   assert.equal(!nul.ok && nul.error.code, 'invalid');
 
-  // non-empty validate
+  // Non-empty validation
   const emptyLine = await server.ipcCall!({ endpoint: srv.path, line: '', timeoutMs: 2_000 });
   assert.equal(emptyLine.ok, false);
   assert.equal(!emptyLine.ok && emptyLine.error.code, 'invalid');
 
-  // illegal callId
+  // Invalid callId
   const badId = await server.ipcCall!({ callId: 'x'.repeat(129), endpoint: srv.path, line: 'ok', timeoutMs: 2_000 });
   assert.equal(badId.ok, false);
   assert.equal(!badId.ok && badId.error.code, 'invalid');
 
-  // illegal timeoutMs(negative number/NaN)
+  // Invalid timeoutMs (negative/NaN)
   const negTimeout = await server.ipcCall!({ endpoint: srv.path, line: 'ok', timeoutMs: -5 });
   assert.equal(negTimeout.ok, false);
   assert.equal(!negTimeout.ok && negTimeout.error.code, 'invalid');
@@ -467,7 +461,7 @@ test('ipcCall payload single row validate: newline inject reject (do not split i
   assert.equal(nanTimeout.ok, false);
   assert.equal(!nanTimeout.ok && nanTimeout.error.code, 'invalid');
 
-  // legal single row normal to return
+  // Valid single-line round-trip succeeds
   const respSrv = startLineServer(dir, 'resp', (line, socket) => {
     socket.write(`${JSON.stringify({ id: line, result: 'ok' })}\n`);
   });
@@ -480,12 +474,11 @@ test('ipcCall payload single row validate: newline inject reject (do not split i
   }
 });
 
-test('ipcSubscribe ACK structure decide: sub- string match data frame no longer by mistakenly judge is ACK', { timeout: 60_000 }, async (t) => {
+test('ipcSubscribe parses ACK structurally so substring matches in data frames are rejected as non-ACK', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('ack-strict-');
   const events: string[] = [];
-  // fix before defect:line.includes('"subscription_started"') will contains the sub- string
-  // data frame mistakenly judge is ACK. this server first push a event in embed has ACK sub- string data row,
-  // again push truly ACK - - strictly decide under data frame cannot by eat.
+  // Pre-fix bug: line.includes('"subscription_started"') mistook a data frame containing that substring
+  // for an ACK. Server sends a data frame embedding the substring before the real ACK.
   const srv = startLineServer(dir, 'tricky', (_line, socket) => {
     socket.write(`${JSON.stringify({ event: 'note', detail: 'saw "subscription_started" text' })}\n`);
     socket.write(`${JSON.stringify({ id: 'sub', result: { type: 'subscription_started' } })}\n`);
@@ -502,14 +495,14 @@ test('ipcSubscribe ACK structure decide: sub- string match data frame no longer 
     await server.dispose();
   });
 
-  // first response row is embed ACK sub- string data frame: protocol want seek first row must be ACK- - by
-  // unexpected explicit reject (do not mistakenly judge succeeded, also not silently swallow frame).
+  // First response line is a data frame containing ACK substring: protocol requires first line to be ACK,
+  // so reject explicitly as unexpected instead of falsely succeeding or swallowing a data frame.
   const ack = await server.ipcSubscribe!({ subscribeId: 's1', endpoint: srv.path, line: 'req' });
-  assert.equal(ack.ok, false, 'embed ACK sub- string data frame as first row must by reject');
+  assert.equal(ack.ok, false, 'data frame carrying ACK substring as first line must be rejected');
   assert.match(!ack.ok ? ack.error.message : '', /unexpected/);
-  assert.equal(events.length, 0, 'mistakenly judge ACK must not swallow data frame when ACK');
+  assert.equal(events.length, 0, 'must not swallow misparsed data frame as ACK');
 
-  // compare: truly ACK first row per common succeeded
+  // Control: genuine ACK on first line works as expected
   const goodSrv = startLineServer(dir, 'good', (line, socket) => {
     socket.write(`${JSON.stringify({ id: line, result: { type: 'subscription_started' } })}\n`);
     socket.write(`${JSON.stringify({ event: 'real' })}\n`);
@@ -518,14 +511,14 @@ test('ipcSubscribe ACK structure decide: sub- string match data frame no longer 
     await waitListening(goodSrv.path);
     const good = await server.ipcSubscribe!({ subscribeId: 's1b', endpoint: goodSrv.path, line: 'req' });
     assert.equal(good.ok, true, good.ok ? '' : good.error.message);
-    await waitFor(() => events.some((l) => JSON.parse(l).event === 'real'), 5_000, 'true ACK after event forwarding');
-    assert.ok(events.some((l) => JSON.parse(l).event === 'real'), 'true ACK after event normal forwarding');
+    await waitFor(() => events.some((l) => JSON.parse(l).event === 'real'), 5_000, 'event forwarded after real ACK');
+    assert.ok(events.some((l) => JSON.parse(l).event === 'real'), 'event should forward after genuine ACK');
   } finally {
     await goodSrv.close();
   }
 });
 
-test('ipcSubscribe event frame NUL reject and away onIpcClosed', { timeout: 60_000 }, async (t) => {
+test('ipcSubscribe rejects NUL bytes in event frames and invokes onIpcClosed', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('ev-nul-');
   const closed: { id: string; error?: string }[] = [];
   const srv = startLineServer(dir, 'nul', (_line, socket) => {
@@ -546,41 +539,40 @@ test('ipcSubscribe event frame NUL reject and away onIpcClosed', { timeout: 60_0
 
   const ack = await server.ipcSubscribe!({ subscribeId: 's2', endpoint: srv.path, line: 'req' });
   assert.equal(ack.ok, true);
-  await waitFor(() => server.getActiveIpcSubscriptionCount() === 0, 5_000, 'broken frame after subscribe close');
-  assert.equal(server.getActiveIpcSubscriptionCount(), 0, 'broken frame after subscribe should close');
+  await waitFor(() => server.getActiveIpcSubscriptionCount() === 0, 5_000, 'subscription closes after invalid frame');
+  assert.equal(server.getActiveIpcSubscriptionCount(), 0, 'subscription should close after invalid frame');
   const closedEvent = closed.find((c) => c.id === 's2');
-  assert.ok(closedEvent !== undefined, 'onIpcClosed should notify');
+  assert.ok(closedEvent !== undefined, 'onIpcClosed should be notified');
   assert.match(closedEvent?.error ?? '', /NUL/);
 });
 
 // ---------------------------------------------------------------------------
-// 8. ipcCall idle fall back: static default server (do not back package does not close) real timeout, inject short value verify
+// 8. ipcCall idle timeout fallback: silent server (no reply/close) times out via injected short value
 // ---------------------------------------------------------------------------
 
-test('ipcCall without timeoutMs static default server: idle fall back real timeout (inject 300ms)', { timeout: 60_000 }, async (t) => {
+test('ipcCall without timeoutMs uses idle timeout fallback (injected 300ms)', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('idle-');
   const srv = startLineServer(dir, 'silent', () => undefined);
   t.after(async () => {
     await srv.close();
   });
-  // inject short idle fall back: verify without timeoutMs also must however timeout return real path,
-  // while non- only rely type assertion sound call fall back store in.
+  // Inject a short idle timeout to exercise the real missing-timeoutMs path rather than only asserting types.
   const server = createNodeEnvRpcServer({ defaultCwd: dir, ipcCallIdleTimeoutMs: 300 });
   t.after(async () => {
     await server.dispose();
   });
 
   const start = Date.now();
-  const r = await server.ipcCall!({ endpoint: srv.path, line: 'req' }); // without timeoutMs
+  const r = await server.ipcCall!({ endpoint: srv.path, line: 'req' }); // no timeoutMs
   const elapsed = Date.now() - start;
   assert.equal(r.ok, false);
   assert.equal(!r.ok && r.error.code, 'timeout');
   assert.match(!r.ok ? r.error.message : '', /300ms/);
-  assert.ok(elapsed >= 250 && elapsed < 5_000, `fall back should about 300ms takes effect (actual ${elapsed}ms)`);
+  assert.ok(elapsed >= 250 && elapsed < 5_000, `fallback should fire near 300ms (actual ${elapsed}ms)`);
   assert.equal(server.getActiveIpcCallCount(), 0);
 });
 
-test('ipcCall timeoutMs:0 same away idle fall back and register in-flight socket', { timeout: 60_000 }, async (t) => {
+test('ipcCall timeoutMs:0 also uses idle fallback and tracks active socket', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('idle2-');
   const srv = startLineServer(dir, 'silent2', () => undefined);
   t.after(async () => {
@@ -591,17 +583,17 @@ test('ipcCall timeoutMs:0 same away idle fall back and register in-flight socket
     await server.dispose();
   });
 
-  // timeoutMs:0 fix before do not set any count when (condition timeoutMs > 0 only then set)→ forever long suspended;
-  // fix after 0/default away the same idle fall back.
+  // Pre-fix bug: timeoutMs:0 skipped setting any timer (`timeoutMs > 0`) and hung forever;
+  // now 0 and omitted share the same idle fallback.
   const pending = server.ipcCall!({ callId: 'c0', endpoint: srv.path, line: 'req', timeoutMs: 0 });
   await delay(80);
-  assert.equal(server.getActiveIpcCallCount(), 1, 'timeoutMs:0 also should register in-flight socket');
+  assert.equal(server.getActiveIpcCallCount(), 1, 'timeoutMs:0 must also register active socket');
   const r = await pending;
   assert.equal(r.ok, false);
   assert.equal(!r.ok && r.error.code, 'timeout');
   assert.equal(server.getActiveIpcCallCount(), 0);
 
-  // ipcAbortCall for suspended invoke immediately takes effect
+  // ipcAbortCall cancels pending call immediately
   const pending2 = server.ipcCall!({ callId: 'c1', endpoint: srv.path, line: 'req', timeoutMs: 60_000 });
   await delay(80);
   assert.equal(server.getActiveIpcCallCount(), 1);
@@ -612,12 +604,12 @@ test('ipcCall timeoutMs:0 same away idle fall back and register in-flight socket
 });
 
 // ---------------------------------------------------------------------------
-// 9. end point parse (pure function + platform inject):session blank name single / Windows pipe prefix
+// 9. Endpoint resolution (pure function + injected platform): session allowlist / Windows pipe prefix
 // ---------------------------------------------------------------------------
 
-test('resolveHerdrIpcEndpoint session validate and herdr validate_name same to', { timeout: 60_000 }, () => {
-  // herdr allows: character parent number . _ -(first token symbol unbounded system,≤64 byte, non- ./..)
-  // fix before defect: blank name single missing `.` and want seek character parent open head - - 'a.b-c_d' will by refuse.
+test('resolveHerdrIpcEndpoint session validation matches herdr validate_name', { timeout: 60_000 }, () => {
+  // herdr allows alphanumeric plus . _ - (any leading char, <=64 bytes, not ./..)
+  // Pre-fix bug: allowlist omitted `.` and required a leading letter, rejecting `'a.b-c_d'`.
   const dotted = resolveHerdrIpcEndpoint(
     { session: 'a.b-c_d' },
     { platform: 'linux', homeDir: '/home/u', getEnv: () => undefined },
@@ -629,7 +621,7 @@ test('resolveHerdrIpcEndpoint session validate and herdr validate_name same to',
   );
   assert.match(numeric, /sessions[/]2nd-work[/]herdr\.sock$/);
 
-  // reject: path through exceeds, empty, over long, illegal character,./..
+  // Reject path traversal, empty, overlong, invalid characters, and ./..
   for (const bad of ['../evil', 'a/b', 'a b', '.', '..', 'x'.repeat(65), 'a#b']) {
     assert.throws(
       () => resolveHerdrIpcEndpoint({ session: bad }, { platform: 'linux', homeDir: '/home/u', getEnv: () => undefined }),
@@ -639,11 +631,11 @@ test('resolveHerdrIpcEndpoint session validate and herdr validate_name same to',
   }
 });
 
-test('resolveHerdrIpcEndpoint win32:\\.\pipe\ + config directory path string (smoke number/slash original)', { timeout: 60_000 }, () => {
+test('resolveHerdrIpcEndpoint win32 prepends \\\\.\\pipe\\ preserving colons and backslashes in config dir', { timeout: 60_000 }, () => {
   const noEnv = () => undefined;
 
-  // based on interprocess 2.4.2 map_generic_namespaced_osstr + pathcvt:
-  // pipe name = '\\.\pipe\' + herdr config directory path string, smoke number and backslash all original keep.
+  // Matches interprocess 2.4.2 map_generic_namespaced_osstr + pathcvt:
+  // pipe name = '\\.\pipe\' + herdr config dir path string with colons and backslashes intact.
   const appdata = resolveHerdrIpcEndpoint(
     {},
     { platform: 'win32', getEnv: (n) => (n === 'APPDATA' ? 'C:\\Users\\dev\\AppData\\Roaming' : undefined) },
@@ -656,7 +648,7 @@ test('resolveHerdrIpcEndpoint win32:\\.\pipe\ + config directory path string (sm
   );
   assert.equal(withSession, '\\\\.\\pipe\\C:\\Users\\dev\\AppData\\Roaming\\herdr\\sessions\\work\\herdr.sock');
 
-  // XDG_CONFIG_HOME takes precedence at APPDATA(herdr config_dir same order)
+  // XDG_CONFIG_HOME precedes APPDATA (matching herdr config_dir)
   const xdg = resolveHerdrIpcEndpoint(
     {},
     {
@@ -667,14 +659,14 @@ test('resolveHerdrIpcEndpoint win32:\\.\pipe\ + config directory path string (sm
   );
   assert.equal(xdg, '\\\\.\\pipe\\D:\\xdg\\herdr\\herdr.sock');
 
-  // APPDATA missing → USERPROFILE\AppData\Roaming(herdr platform_config_dir same to)
+  // Missing APPDATA falls back to USERPROFILE\AppData\Roaming (matching herdr platform_config_dir)
   const userProfile = resolveHerdrIpcEndpoint(
     {},
     { platform: 'win32', getEnv: (n) => (n === 'USERPROFILE' ? 'C:\\Users\\dev' : undefined) },
   );
   assert.equal(userProfile, '\\\\.\\pipe\\C:\\Users\\dev\\AppData\\Roaming\\herdr\\herdr.sock');
 
-  // again retreat HOME/.config > temp
+  // Then falls back to HOME/.config > temp
   const homeFallback = resolveHerdrIpcEndpoint(
     {},
     { platform: 'win32', homeDir: '/ignored', tempDir: 'T:\\tmp', getEnv: (n) => (n === 'HOME' ? 'C:\\Users\\dev' : undefined) },
@@ -686,21 +678,21 @@ test('resolveHerdrIpcEndpoint win32:\\.\pipe\ + config directory path string (sm
   );
   assert.equal(tempFallback, '\\\\.\\pipe\\T:\\tmp\\herdr\\herdr.sock');
 
-  // HERDR_SOCKET_PATH override by default push lead (original return, do not add prefix)
+  // HERDR_SOCKET_PATH overrides default derivation verbatim without pipe prefix
   const envOverride = resolveHerdrIpcEndpoint(
     {},
     { platform: 'win32', getEnv: (n) => (n === 'HERDR_SOCKET_PATH' ? 'E:\\custom.sock' : undefined) },
   );
   assert.equal(envOverride, 'E:\\custom.sock');
 
-  // explicit complete pipe endpoint original return
+  // Explicit full pipe endpoint returned verbatim
   const explicit = resolveHerdrIpcEndpoint(
     { endpoint: '\\\\.\\pipe\\my-custom' },
     { platform: 'win32', getEnv: noEnv },
   );
   assert.equal(explicit, '\\\\.\\pipe\\my-custom');
 
-  // unix platform do not subject to Windows prefix affect (the same inject function cross verify)
+  // Unix platforms ignore Windows pipe prefix logic
   const unix = resolveHerdrIpcEndpoint(
     {},
     { platform: 'linux', homeDir: '/home/u', getEnv: noEnv },
@@ -710,10 +702,10 @@ test('resolveHerdrIpcEndpoint win32:\\.\pipe\ + config directory path string (sm
 });
 
 // ---------------------------------------------------------------------------
-// 10. dispose arrange empty: in-flight exec/ipcCall/subscribe in dispose return before all consolidate
+// 10. dispose draining: all active exec/ipcCall/subscriptions settle before dispose returns
 // ---------------------------------------------------------------------------
 
-test('dispose wait for in-flight exec settle: return after without in-flight item', { timeout: 60_000 }, async (t) => {
+test('dispose waits for active exec calls to settle with zero active entries on return', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('drain-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir });
   t.after(async () => {
@@ -725,15 +717,14 @@ test('dispose wait for in-flight exec settle: return after without in-flight ite
   await delay(250);
   assert.equal(server.getActiveExecCount(), 1);
   await server.dispose();
-  // fix before defect:dispose without waiting in-flight promise,running item by finally async delete,
-  // this where may still is 1.
-  assert.equal(server.getActiveExecCount(), 0, 'dispose return when in-flight exec must already settle and clean up');
+  // Pre-fix bug: dispose did not await in-flight promises so active count could still be 1.
+  assert.equal(server.getActiveExecCount(), 0, 'in-flight exec must be settled and cleaned up before dispose returns');
   const r = await slow;
   assert.equal(r.ok, false);
   assert.equal(!r.ok && r.error.code, 'aborted');
 });
 
-test('dispose destroy in-flight ipcCall socket: wait for promise immediately failed', { timeout: 60_000 }, async (t) => {
+test('dispose destroys in-flight ipcCall sockets and rejects waiting promises immediately', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('disp-ipc-');
   const srv = startLineServer(dir, 'hold', () => undefined);
   t.after(async () => {
@@ -749,11 +740,11 @@ test('dispose destroy in-flight ipcCall socket: wait for promise immediately fai
   assert.equal(server.getActiveIpcCallCount(), 1);
   await server.dispose();
   const r = await pending;
-  assert.equal(r.ok, false, 'dispose after in-flight ipcCall must not pending');
+  assert.equal(r.ok, false, 'in-flight ipcCall must not hang after dispose');
   assert.equal(server.getActiveIpcCallCount(), 0);
 });
 
-test('dispose destroy leap subscribe and stop event', { timeout: 60_000 }, async (t) => {
+test('dispose destroys active subscriptions and stops event delivery', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('disp-sub-');
   const events: string[] = [];
   let pushTimer: NodeJS.Timeout | undefined;
@@ -784,24 +775,24 @@ test('dispose destroy leap subscribe and stop event', { timeout: 60_000 }, async
 
   const ack = await server.ipcSubscribe!({ subscribeId: 'sd', endpoint: srv.path, line: 'req' });
   assert.equal(ack.ok, true);
-  await waitFor(() => events.length > 0, 5_000, 'dispose before event reach');
+  await waitFor(() => events.length > 0, 5_000, 'events arrive before dispose');
   const before = events.length;
-  assert.ok(before > 0, 'dispose before should has event');
+  assert.ok(before > 0, 'should receive events before dispose');
   await server.dispose();
   await delay(200);
-  assert.equal(events.length, before, 'dispose after no longer receives event');
+  assert.equal(events.length, before, 'no more events delivered after dispose');
   assert.equal(server.getActiveIpcSubscriptionCount(), 0);
 });
 
 // ---------------------------------------------------------------------------
-// 11. upgrade arrange empty accept IPC:draining refuse new call/subscribe, in-flight call count arrange empty opening path
+// 11. Upgrade draining includes IPC: draining rejects new calls/subscriptions while active calls drain cleanly
 // ---------------------------------------------------------------------------
 
-test('upgrade arrange empty accept IPC:draining refuse new call/subscribe, in-flight call do not strong kill and count arrange empty counter', { timeout: 60_000 }, async (t) => {
+test('upgrade draining covers IPC: rejects new call/subscribe while draining active calls', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('drain-ipc-');
-  // suspended server: receives request do not back (simulated herdr:agy --wait long wait for)
+  // Silent holding server simulates long-waiting `herdr:agy --wait`
   const hold = startLineServer(dir, 'hold', () => undefined);
-  // back sound server: verify solve except draining after restore subject to
+  // Echo server verifies acceptance resumes once draining is lifted
   const echo = startLineServer(dir, 'echo', (line, socket) => socket.write(`${line}-ok\n`));
   t.after(async () => {
     await hold.close();
@@ -815,9 +806,9 @@ test('upgrade arrange empty accept IPC:draining refuse new call/subscribe, in-fl
   await waitListening(hold.path);
   await waitListening(echo.path);
 
-  // in-flight once call(without callId) also count arrange empty opening path: upgrade transaction based on this wait for its converge
+  // One-shot in-flight calls without callId still count toward draining during upgrades.
   const pending = server.ipcCall!({ endpoint: hold.path, line: 'wait-req', timeoutMs: 250 });
-  await waitFor(() => server.getActiveIpcCallCount() === 1, 2_000, 'in-flight IPC call should count arrange empty counter');
+  await waitFor(() => server.getActiveIpcCallCount() === 1, 2_000, 'in-flight IPC call counts toward draining');
 
   server.setDraining(true);
   const rejectedCall = await server.ipcCall!({ endpoint: echo.path, line: 'new-call', timeoutMs: 1_000 });
@@ -830,19 +821,19 @@ test('upgrade arrange empty accept IPC:draining refuse new call/subscribe, in-fl
   assert.equal(!rejectedSub.ok && rejectedSub.error.code, 'node_draining');
   assert.match(!rejectedSub.ok ? rejectedSub.error.message : '', /draining/);
 
-  // draining do not strong kill in-flight: timeout self however compute after counter reset to zero
+  // Draining does not force-kill active calls: natural timeout zeroes the counter
   const settled = await pending;
   assert.equal(settled.ok, false);
   assert.equal(!settled.ok && settled.error.code, 'timeout');
-  assert.equal(server.getActiveIpcCallCount(), 0, 'arrange empty counter should follow in-flight call compute reset to zero');
+  assert.equal(server.getActiveIpcCallCount(), 0, 'drain counter resets to zero when active call settles');
 
-  // restore subject to (failed to upgrade rollback path)
+  // Re-accepts after rollback clears draining
   server.setDraining(false);
   const okAgain = await server.ipcCall!({ endpoint: echo.path, line: 'after', timeoutMs: 2_000 });
   assert.equal(okAgain.ok, true);
 });
 
-test('envCleanup:draining/disposed explicit reject (by cwd kill same cwd all conversation command sharp semantics)', { timeout: 60_000 }, async (t) => {
+test('envCleanup rejects explicitly when draining or disposed (process-tree cwd cleanup)', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('cleanup-guard-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir });
   t.after(async () => {
@@ -862,21 +853,21 @@ test('envCleanup:draining/disposed explicit reject (by cwd kill same cwd all con
   );
 
   server.setDraining(false);
-  await server.envCleanup!(dir); // happy path do not throw
+  await server.envCleanup!(dir); // Normal path succeeds
 
   await server.dispose();
   await assert.rejects(() => server.envCleanup!(dir), /disposed/);
 });
 
 // ---------------------------------------------------------------------------
-// 12. LineAssembler limit long closed together: carries newline complete over long row no longer bypass single frame cap
+// 12. LineAssembler length limit: oversized complete lines never bypass per-frame cap
 // ---------------------------------------------------------------------------
 
-test('ipcCall single frame cap: carries newline complete over long row same reject (no longer whole row enter memory back pass)', { timeout: 60_000 }, async (t) => {
-  assert.equal(MAX_IPC_FRAME_BYTES, 32 * 1024 * 1024, 'by default single frame cap must is 32 MiB');
+test('ipcCall per-frame limit rejects oversized complete newline-terminated lines', { timeout: 60_000 }, async (t) => {
+  assert.equal(MAX_IPC_FRAME_BYTES, 32 * 1024 * 1024, 'default per-frame limit must be 32 MiB');
   const dir = await tempDir('ipc-frame-limit-');
   const frameLimitBytes = 64 * 1024;
-  // back one row over limit content + '\n': fix before complete row never check length, directly via (inject threshold avoid test 32 MiB allocate overhead)
+  // Return an oversized line + '\n' (pre-fix bug never checked complete-line length; uses injected limit to avoid 32 MiB alloc)
   const srv = startLineServer(dir, 'bigline', (_line, socket) => {
     socket.write(Buffer.concat([Buffer.alloc(frameLimitBytes + 1, 0x61), Buffer.from('\n')]));
   });
@@ -890,15 +881,15 @@ test('ipcCall single frame cap: carries newline complete over long row same reje
   });
 
   const result = await server.ipcCall!({ endpoint: srv.path, line: 'q', timeoutMs: 30_000 });
-  assert.equal(result.ok, false, 'over limit complete row must by reject');
+  assert.equal(result.ok, false, 'oversized complete line must be rejected');
   assert.match(!result.ok ? result.error.message : '', /exceeds/);
 });
 
 // ---------------------------------------------------------------------------
-// 13. birpc events adapt:on/off wrap reference match for ($close after listener complete excerpt except)
+// 13. birpc events adapter: on/off pairs wrapper references (cleanly removes listeners on $close)
 // ---------------------------------------------------------------------------
 
-test('birpc events adapt:off excerpt except wrap listen, many route on each independent excerpt except', { timeout: 60_000 }, async () => {
+test('birpc events adapter: off detaches exact wrapped listener independently per route', { timeout: 60_000 }, async () => {
   const { EventEmitter } = await import('node:events');
   const { createSocketBirpcEvents } = await import('../src/daemon/birpc-events.js');
   const socket = new EventEmitter();
@@ -917,7 +908,7 @@ test('birpc events adapt:off excerpt except wrap listen, many route on each inde
   socket.emit('message', Buffer.from(JSON.stringify({ a: 1 })));
   assert.deepEqual(receivedA, [{ a: 1 }]);
 
-  // illegal JSON / non- object frame away onInvalidFrame, does not enter call back
+  // Malformed JSON or non-object frames go to onInvalidFrame without invoking callback
   socket.emit('message', Buffer.from('not-json'));
   socket.emit('message', Buffer.from('[1,2]'));
   assert.equal(invalidFrames.length, 2);
@@ -931,14 +922,14 @@ test('birpc events adapt:off excerpt except wrap listen, many route on each inde
   assert.equal(socket.listenerCount('message'), 2);
 
   events.off(callbackA);
-  assert.equal(socket.listenerCount('message'), 1, 'off must excerpt except actual register wrap listen');
+  assert.equal(socket.listenerCount('message'), 1, 'off must detach the actual wrapped listener');
   socket.emit('message', Buffer.from(JSON.stringify({ b: 2 })));
-  assert.deepEqual(receivedA, [{ a: 1 }], 'already excerpt except call back no longer frame');
+  assert.deepEqual(receivedA, [{ a: 1 }], 'detached callback must stop receiving frames');
   assert.deepEqual(receivedB, [{ b: 2 }]);
 
   events.off(callbackB);
-  assert.equal(socket.listenerCount('message'), 0, 'all excerpt except after without message leftover ($close semantics)');
-  // unknown call back off idempotent without harm
+  assert.equal(socket.listenerCount('message'), 0, 'zero message listeners remain once all detach ($close semantics)');
+  // Detaching unknown callback is a harmless no-op
   events.off(callbackA);
   assert.equal(socket.listenerCount('message'), 0);
 });

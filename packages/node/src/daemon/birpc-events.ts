@@ -1,14 +1,14 @@
 /**
- * birpc events adapt (ws socket 'message'):on register parse JSON + frame validate
- * wrap function,off must excerpt except the same wrap reference - - if directly socket.off(birpc original
- * callback), excerpt do not actual register wrap,$close after listener leftover (reference inconsistent).
+ * Adapter connecting `birpc` events to a WebSocket `'message'` stream: parses incoming JSON frames,
+ * rejects non-objects via `onInvalidFrame`, and keeps wrapper references so `off()` cleanly removes
+ * listeners on `$close`.
  */
 export interface SocketBirpcEvents {
   on(callback: (data: unknown) => void): void;
   off(callback: (data: unknown) => void): void;
 }
 
-/** most small socket side (ws.WebSocket satisfy; test available EventEmitter false body). */
+/** Minimal socket surface satisfied by `ws.WebSocket` and test EventEmitter fakes. */
 export interface MessageListenerSocket {
   on(event: 'message', listener: (raw: unknown, isBinary: boolean) => void): unknown;
   off(event: 'message', listener: (raw: unknown, isBinary: boolean) => void): unknown;
@@ -16,7 +16,7 @@ export interface MessageListenerSocket {
 
 export function createSocketBirpcEvents(
   socket: MessageListenerSocket,
-  /** illegal frame call back (such as terminate connect);message is diagnose description. */
+  /** Called on malformed JSON or non-object RPC frames so the caller can retire the connection. */
   onInvalidFrame: (message: string) => void,
 ): SocketBirpcEvents {
   const wrappers = new Map<(data: unknown) => void, (raw: unknown, isBinary: boolean) => void>();
@@ -28,11 +28,11 @@ export function createSocketBirpcEvents(
         try {
           parsed = JSON.parse(text);
         } catch {
-          onInvalidFrame(`receives illegal JSON frame length=${text.length}`);
+          onInvalidFrame(`received invalid JSON frame (length=${text.length})`);
           return;
         }
         if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) callback(parsed);
-        else onInvalidFrame('receives illegal RPC frame');
+        else onInvalidFrame('received invalid RPC frame');
       };
       wrappers.set(callback, wrapper);
       socket.on('message', wrapper);

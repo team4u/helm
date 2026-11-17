@@ -1,13 +1,13 @@
 /**
- * across platform environment variable object (Record<string, string | undefined>) read write original language.
+ * Cross-platform read/write primitives for environment variable maps (`Record<string, string | undefined>`).
  *
- * Node.js  `process.env` in Windows under is large small write do not sensitive proxy, but copy enter ordinary JS
- * object after by precise key name zone.`child_process.spawn(..., { env })` in Windows on
- * pass to underlying environment chunk when by large small write do not sensitive merge, after insert `'PATH'` will whole segment override first insert
- * `'Path'`(directly empty host machine original has Path). this module provide platform aware unify read write and pre- operation.
+ * Node.js `process.env` is a case-insensitive proxy on Windows, but copying entries into a plain JS
+ * object makes key lookup exact-case. Passing that object to `child_process.spawn(..., { env })` on
+ * Windows merges keys case-insensitively, so appending `'PATH'` alongside `'Path'` overwrites the
+ * host's `Path` entry. These helpers provide platform-aware lookups, writes, deletions, and PATH prepends.
  */
 
-/** in environment variable object in find key name (win32 large small write do not sensitive and take after insert;POSIX precise match). */
+/** Find an existing key in `env` (case-insensitive on win32, returning the last match; exact on POSIX). */
 export function findEnvKey(
   env: Readonly<Record<string, string | undefined>>,
   key: string,
@@ -27,7 +27,7 @@ export function findEnvKey(
   return undefined
 }
 
-/** read environment variable value (win32 first by large small write do not sensitive scan self has key, again fall back directly property with compatibility process.env Proxy). */
+/** Read an env variable (on win32, scans own keys case-insensitively before falling back to direct access for `process.env` proxies). */
 export function getEnvEntry(
   env: Readonly<Record<string, string | undefined>>,
   key: string,
@@ -38,7 +38,7 @@ export function getEnvEntry(
   return found !== undefined ? env[found] : env[key]
 }
 
-/** write environment variable:win32 clean up other large small write change body key, ensure object in the same variable at most a key. */
+/** Set an env variable, removing any other case variants on win32 so at most one key exists per variable. */
 export function setEnvEntry(
   env: Record<string, string | undefined>,
   key: string,
@@ -56,7 +56,7 @@ export function setEnvEntry(
   env[key] = value
 }
 
-/** delete environment variable (win32 delete all large small write change body key;POSIX precise delete). */
+/** Delete an env variable (all case variants on win32; exact key on POSIX). */
 export function deleteEnvEntry(
   env: Record<string, string | undefined>,
   key: string,
@@ -75,8 +75,8 @@ export function deleteEnvEntry(
 }
 
 /**
- *  `prefixDir` pre- to environment variable PATH(win32 keep original has `'Path'` etc. large small write key name and
- * merge clean up the rest change body, avoid after insert `'PATH'` in Windows on override clean zero host `'Path'`).
+ * Prepend `prefixDir` to `PATH` (preserving the host's existing key casing such as `'Path'` on win32
+ * and removing duplicate case variants so a newly inserted `'PATH'` does not clobber `'Path'`).
  */
 export function prependEnvPath(
   env: Record<string, string | undefined>,
