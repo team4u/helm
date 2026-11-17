@@ -787,6 +787,121 @@ pre {
   margin: 6px 0;
 }
 
+/* 不可访问的 file:// 链接降级纯文本样式 */
+.msg-md-disallowed-file {
+  color: var(--fg-muted);
+  text-decoration: underline dotted var(--border-strong);
+  text-underline-offset: 3px;
+}
+
+/* 工作区源码行号与指定行高亮模式 */
+.code-lines-pre {
+  padding: 8px 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.code-line {
+  display: flex;
+  align-items: baseline;
+  min-width: max-content;
+  width: 100%;
+  padding-right: 14px;
+  min-height: 1.6em;
+}
+
+.code-line-num {
+  flex: 0 0 auto;
+  min-width: 44px;
+  padding: 0 10px 0 12px;
+  text-align: right;
+  color: var(--fg-subtle);
+  background: var(--diff-gutter-bg);
+  border-right: 1px solid var(--diff-gutter-border);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.code-line-text {
+  flex: 1 1 auto;
+  padding-left: 12px;
+  white-space: pre;
+}
+
+.code-line-text:empty::after {
+  content: ' ';
+}
+
+.code-line-highlighted {
+  background: var(--accent-bg);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.code-line-highlighted .code-line-num {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* 文件/产物预览弹窗共用布局类 */
+.preview-modal-title-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.preview-modal-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-modal-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.preview-modal-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--fg-muted);
+  font-size: 12px;
+  padding: 24px;
+}
+
+.preview-modal-image {
+  max-width: 100%;
+  max-height: 64vh;
+  object-fit: contain;
+  margin: 0 auto;
+  display: block;
+  border-radius: var(--radius-sm);
+}
+
+.preview-modal-audio {
+  width: 100%;
+}
+
+.preview-modal-video {
+  width: 100%;
+  max-height: 64vh;
+}
+
+.preview-modal-pdf {
+  width: 100%;
+  height: 64vh;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.preview-modal-code {
+  overflow: auto;
+  min-height: 200px;
+}
+
 /* 流式生成 / 等待响应呼吸指示（3 个 4px 圆点错峰脉冲） */
 @keyframes helmDotPulse {
   0%, 80%, 100% {

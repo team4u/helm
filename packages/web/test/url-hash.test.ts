@@ -886,3 +886,55 @@ test('hashHasPrimaryTarget: 空/纯查询/非法路径为 false，显式主屏�
     assert.equal(hashHasPrimaryTarget(raw), true, `${JSON.stringify(raw)} 含显式主屏目标`)
   }
 })
+
+test('workspace-file 模态：往返编解码、行号范围与非法路径拦截', { timeout: 60_000 }, () => {
+  const fileState: WorkspaceLocationState = {
+    ...conversation(7),
+    activeModal: {
+      kind: 'workspace-file',
+      conversationId: 7,
+      path: 'src/conversation/MarkdownView.tsx',
+      startLine: 12,
+      endLine: 34,
+    },
+  }
+  const encoded = formatLocationHash(fileState)
+  assert.equal(
+    encoded,
+    '#/c/7?modal=file&conv=7&path=src%2Fconversation%2FMarkdownView.tsx&line=12-34',
+  )
+  assert.deepEqual(roundtrip(fileState), fileState)
+
+  const singleLine: WorkspaceLocationState = {
+    ...conversation(7),
+    activeModal: { kind: 'workspace-file', conversationId: 7, path: 'README.md', startLine: 5 },
+  }
+  assert.deepEqual(roundtrip(singleLine), singleLine)
+
+  const noLine: WorkspaceLocationState = {
+    ...conversation(7),
+    activeModal: { kind: 'workspace-file', conversationId: 7, path: 'docs/guide.md' },
+  }
+  assert.deepEqual(roundtrip(noLine), noLine)
+
+  // 非法参数：缺 conv、缺 path、路径越界或绝对路径均拒绝（activeModal 为 null）
+  assert.equal(parseLocationHash('#/c/7?modal=file&path=README.md').activeModal, null)
+  assert.equal(parseLocationHash('#/c/7?modal=file&conv=0&path=README.md').activeModal, null)
+  assert.equal(parseLocationHash('#/c/7?modal=file&conv=7').activeModal, null)
+  assert.equal(parseLocationHash('#/c/7?modal=file&conv=7&path=../../etc/passwd').activeModal, null)
+  assert.equal(parseLocationHash('#/c/7?modal=file&conv=7&path=/etc/passwd').activeModal, null)
+  assert.equal(parseLocationHash('#/c/7?modal=file&conv=7&path=.').activeModal, null)
+
+  // 非法 line 忽略但保留文件预览
+  assert.deepEqual(parseLocationHash('#/c/7?modal=file&conv=7&path=README.md&line=abc').activeModal, {
+    kind: 'workspace-file',
+    conversationId: 7,
+    path: 'README.md',
+  })
+
+  // 比较与历史策略：同会话不同文件/行号 push，相同则不 push
+  assert.equal(isSameLocationState(fileState, roundtrip(fileState)), true)
+  assert.equal(isSameLocationState(fileState, singleLine), false)
+  assert.equal(shouldPushLocationHistory(fileState, singleLine), true)
+  assert.equal(shouldPushLocationHistory(fileState, roundtrip(fileState)), false)
+})

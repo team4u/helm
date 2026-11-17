@@ -2,18 +2,18 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ArtifactMetadata, ArtifactPreviewerProps } from '@helm/protocol/browser'
 import { resolveLocalizedText } from '@helm/protocol/browser'
 import { artifactsApi } from '../lib/api.js'
-import { HelmIcon, CopyButton, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Select, SegmentedControl } from '@helm/plugin-client'
+import { HelmIcon, Select, SegmentedControl } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { useIsMobile } from './composer-model.js'
 import { detectLanguage } from './code-language.js'
-import { CodeBlockView, MarkdownView } from './MarkdownView.js'
+import { FilePreviewBody } from './FilePreviewBody.js'
 import { MarkdownOutlinePopover } from './MarkdownOutlinePopover.js'
-import { buildMarkdownOutline, resolveActiveOutlineEntryId } from './outline-model.js'
+import { PreviewModalShell } from './PreviewModalShell.js'
 import { formatBytes } from '../lib/format.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { collectArtifactPreviewers } from './artifact-preview-model.js'
-import { decodePreviewText, isMarkdown, looksLikeText, MAX_PREVIEW_TEXT_BYTES, shouldDecodeText } from './artifact-preview-text.js'
+import { isMarkdown, looksLikeText, MAX_PREVIEW_TEXT_BYTES, shouldDecodeText } from './artifact-preview-text.js'
+import { useFilePreviewText, useMarkdownOutlineSync, type FilePreviewLoadState } from './use-file-preview.js'
 
 export interface ArtifactPreviewModalProps {
   artifactId: string
@@ -22,11 +22,6 @@ export interface ArtifactPreviewModalProps {
   /** 强制内联渲染（跳过 body portal；node 测试环境 Radix portal 不可用时用）。 */
   inline?: boolean
 }
-
-type LoadState =
-  | { phase: 'loading' }
-  | { phase: 'loaded'; blob: Blob; blobUrl: string }
-  | { phase: 'error'; message: string }
 
 /** 插件预览器选择：'default' 为宿主默认渲染。 */
 type PreviewerChoice = 'default' | string
@@ -61,19 +56,11 @@ function buildPreviewerProps(
 export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inline }: ArtifactPreviewModalProps) {
   const store = useHelmStore()
   const { locale, t } = useWebLocale()
-  const [state, setState] = useState<LoadState>({ phase: 'loading' })
+  const [state, setState] = useState<FilePreviewLoadState>({ phase: 'loading' })
   const [view, setView] = useState<'rich' | 'source'>('rich')
-  const [text, setText] = useState<string | null>(null)
-  /** text 为 null 的原因：'idle' 未尝试解码 / 'decoding' 进行中 / 'exceeded' 超 1MiB 上限 / 'binary' 非文本。 */
-  const [textState, setTextState] = useState<'idle' | 'decoding' | 'exceeded' | 'binary'>('idle')
   const [previewer, setPreviewer] = useState<PreviewerChoice | null>(null)
-  const [desktopFullscreen, setDesktopFullscreen] = useState(false)
-  const [activeMarkdownHeading, setActiveMarkdownHeading] = useState<number | undefined>(undefined)
   const modalBodyRef = useRef<HTMLDivElement | null>(null)
   const markdownPreviewRef = useRef<HTMLDivElement | null>(null)
-  // 移动端固定全屏呈现：小窗模式下标题栏按钮拥挤错位，且滚动区域过于局促。
-  const isMobile = useIsMobile(680)
-  const isFullscreen = isMobile || desktopFullscreen
   const loadArtifacts = store.loadConversationArtifacts
   const artifactsLoaded = conversationId !== undefined && store.conversationArtifacts[conversationId] !== undefined
 
@@ -92,25 +79,15 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
     return (store.conversationArtifacts[conversationId] ?? []).find((a) => a.id === artifactId)
   }, [store.conversationArtifacts, conversationId, artifactId])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
   // 产物加载（含代数竞争保护与 ObjectURL 回收）；MIME 回退在渲染时响应式计算，
   // 深链元数据后到不触发重新拉取。
   useEffect(() => {
     let objectUrl: string | null = null
     let cancelled = false
     setState({ phase: 'loading' })
-    setText(null)
-    setTextState('idle')
     void artifactsApi
       .fetchBlob(artifactId)
-      .then(async (blob) => {
+      .then((blob) => {
         if (cancelled) return
         objectUrl = URL.createObjectURL(blob)
         setState({ phase: 'loaded', blob, blobUrl: objectUrl })
@@ -128,36 +105,8 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
 
   // MIME：已加载用真实 Blob.type，否则回退元数据（响应式，深链元数据后到不重新拉取）。
   const mime = state.phase === 'loaded' ? (state.blob.type || meta?.mimeType || '') : (meta?.mimeType ?? '')
-
-  // 文本解码（独立于产物加载；MIME 响应式回退，超限显式说明不截断伪装全文）。
   const loadedBlob = state.phase === 'loaded' ? state.blob : undefined
-  useEffect(() => {
-    if (loadedBlob === undefined) return
-    if (!shouldDecodeText(meta, mime)) {
-      setText(null)
-      setTextState('binary')
-      return
-    }
-    let cancelled = false
-    setText(null)
-    setTextState('decoding')
-    void decodePreviewText(loadedBlob)
-      .then((value) => {
-        if (cancelled) return
-        if (value === null) {
-          setTextState('exceeded')
-        } else {
-          setText(value)
-          setTextState('idle')
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setTextState('binary')
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [loadedBlob, mime, meta])
+  const { text, textState } = useFilePreviewText(loadedBlob, meta, mime)
 
   const conversation = useMemo(
     () => (conversationId !== undefined ? store.conversations.find((c) => c.id === conversationId) : undefined),
@@ -199,225 +148,134 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
   const isAudio = mime.startsWith('audio/')
   const isVideo = mime.startsWith('video/')
   const isPdf = mime === 'application/pdf'
-  const isTextLike = !isImage && !isAudio && !isVideo && !isPdf && (looksLikeText(mime) || isMarkdown(meta?.name, mime))
+  const isTextLike =
+    !isImage &&
+    !isAudio &&
+    !isVideo &&
+    !isPdf &&
+    (looksLikeText(mime) || isMarkdown(meta?.name, mime) || shouldDecodeText(meta, mime))
   const markdown = isMarkdown(meta?.name, mime)
   // Markdown 源码模式固定 markdown 高亮；其他文本产物按后缀 / mimeType 推导语言。
   const language = markdown ? 'markdown' : detectLanguage(meta?.name, mime)
-  const markdownOutline = useMemo(
-    () => markdown && text !== null ? buildMarkdownOutline(text) : [],
-    [markdown, text],
-  )
 
-  useEffect(() => {
-    setActiveMarkdownHeading(undefined)
-  }, [artifactId, text])
-
-  useEffect(() => {
-    if (!markdown || view !== 'rich' || selected !== undefined || markdownOutline.length === 0) return
-    const scrollContainer = modalBodyRef.current
-    const content = markdownPreviewRef.current
-    if (scrollContainer === null || content === null) return
-
-    const syncActiveHeading = (): void => {
-      const containerTop = scrollContainer.getBoundingClientRect().top
-      const offsets: Array<{ entryId: string; top: number }> = []
-      for (const heading of content.querySelectorAll<HTMLElement>('[data-heading-index]')) {
-        const index = heading.dataset.headingIndex
-        if (index !== undefined) {
-          offsets.push({ entryId: index, top: heading.getBoundingClientRect().top - containerTop })
-        }
-      }
-      const active = resolveActiveOutlineEntryId(offsets, 48)
-      setActiveMarkdownHeading(active !== undefined ? Number(active) : undefined)
-    }
-
-    syncActiveHeading()
-    scrollContainer.addEventListener('scroll', syncActiveHeading, { passive: true })
-    return () => scrollContainer.removeEventListener('scroll', syncActiveHeading)
-  }, [markdown, view, selected, markdownOutline.length, text])
-
-  const jumpToMarkdownHeading = (headingIndex: number): void => {
-    const target = markdownPreviewRef.current?.querySelector<HTMLElement>(`[data-heading-index="${headingIndex}"]`)
-    if (target === null || target === undefined) return
-    target.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    setActiveMarkdownHeading(headingIndex)
-  }
+  const { markdownOutline, activeMarkdownHeading, jumpToMarkdownHeading } = useMarkdownOutlineSync({
+    markdown,
+    active: view === 'rich' && selected === undefined,
+    text,
+    modalBodyRef,
+    markdownPreviewRef,
+    resetKey: artifactId,
+  })
 
   const download = (): void => {
     void artifactsApi.downloadToBrowser(artifactId, name).catch((error: unknown) => store.pushNotice({ type: 'notification', level: 'error', title: t('conv.artifact.downloadFailed'), body: error instanceof Error ? error.message : String(error) }))
   }
 
   return (
-    <Dialog open inline={inline} onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogPortal inline={inline}>
-        <DialogOverlay className={`modal-backdrop${isFullscreen ? ' modal-fullscreen-backdrop' : ''}`}>
-          <DialogContent
-            className={`modal${isFullscreen ? ' modal-fullscreen' : ''}`}
-            aria-label={t('conv.artifact.previewAria', { name })}
-            style={isFullscreen ? undefined : { maxWidth: 'min(1100px, 94vw)', maxHeight: '90vh' }}
-          >
-            <div className="modal-header artifact-preview-header">
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                <HelmIcon name="file-text" size={14} />
-                <DialogTitle className="modal-title" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {name}
-                </DialogTitle>
-                {state.phase === 'loaded' ? (
-                  <span className="badge badge-neutral mono tabular-nums">{formatBytes(state.blob.size)}</span>
-                ) : meta !== undefined ? (
-                  <span className="badge badge-neutral mono tabular-nums">{formatBytes(meta.size)}</span>
-                ) : null}
-              </span>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            {matchedPreviewers.length > 0 ? (
-              <Select<PreviewerChoice>
-                size="sm"
-                value={effectivePreviewer}
-                onChange={(e) => setPreviewer(e.target.value)}
-                aria-label={t('conv.artifact.previewModeAria')}
-                className="artifact-previewer-select"
-                options={[
-                  { value: 'default', label: t('conv.artifact.defaultPreview') },
-                  ...matchedPreviewers.map((p) => ({
-                    value: `${p.pluginId}/${p.spec.id}`,
-                    label: resolveLocalizedText(p.spec.label, locale),
-                    meta: p.spec.title !== undefined ? resolveLocalizedText(p.spec.title, locale) : undefined,
-                  })),
-                ]}
-              />
-            ) : null}
-            {markdown && effectivePreviewer === 'default' && view === 'rich' && markdownOutline.length > 0 ? (
-              <MarkdownOutlinePopover
-                text={text ?? ''}
-                activeHeadingIndex={activeMarkdownHeading}
-                onSelectHeading={jumpToMarkdownHeading}
-              />
-            ) : null}
-            {markdown && effectivePreviewer === 'default' ? (
-              <SegmentedControl<'rich' | 'source'>
-                value={view}
-                onValueChange={(v) => setView(v)}
-                aria-label={t('conv.artifact.viewModeAria')}
-                items={[
-                  { value: 'rich', label: t('conv.artifact.viewRich') },
-                  { value: 'source', label: t('conv.artifact.viewSource') },
-                ]}
-              />
-            ) : null}
-            {!isMobile ? (
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={() => setDesktopFullscreen((v) => !v)}
-                title={desktopFullscreen ? t('conv.artifact.windowModeTitle') : t('conv.artifact.fullscreenTitle')}
-              >
-                <HelmIcon name={desktopFullscreen ? 'minimize-2' : 'maximize-2'} size={12} />
-                {desktopFullscreen ? t('conv.artifact.windowLabel') : t('conv.pane.fullscreen')}
-              </button>
-            ) : null}
-            {markdown && text !== null ? (
-              <CopyButton text={text} label={isMobile ? undefined : t('conv.artifact.copy')} className="btn btn-sm" />
-            ) : null}
-            <button type="button" className="btn btn-sm" onClick={download} title={t('common.download')}>
-              <HelmIcon name="download" size={12} />
-              {!isMobile ? t('common.download') : null}
+    <PreviewModalShell
+      title={name}
+      ariaLabel={t('conv.artifact.previewAria', { name })}
+      inline={inline}
+      onClose={onClose}
+      onDownload={download}
+      state={state}
+      fallbackSize={meta?.size}
+      loadingLabel={t('conv.artifact.loading')}
+      errorLabel={state.phase === 'error' ? t('conv.artifact.loadFailed', { message: state.message }) : ''}
+      copyText={markdown ? text : undefined}
+      modalBodyRef={modalBodyRef}
+      headerActions={
+        <>
+          {matchedPreviewers.length > 0 ? (
+            <Select<PreviewerChoice>
+              size="sm"
+              value={effectivePreviewer}
+              onChange={(e) => setPreviewer(e.target.value)}
+              aria-label={t('conv.artifact.previewModeAria')}
+              className="artifact-previewer-select"
+              options={[
+                { value: 'default', label: t('conv.artifact.defaultPreview') },
+                ...matchedPreviewers.map((p) => ({
+                  value: `${p.pluginId}/${p.spec.id}`,
+                  label: resolveLocalizedText(p.spec.label, locale),
+                  meta: p.spec.title !== undefined ? resolveLocalizedText(p.spec.title, locale) : undefined,
+                })),
+              ]}
+            />
+          ) : null}
+          {markdown && effectivePreviewer === 'default' && view === 'rich' && markdownOutline.length > 0 ? (
+            <MarkdownOutlinePopover
+              text={text ?? ''}
+              activeHeadingIndex={activeMarkdownHeading}
+              onSelectHeading={jumpToMarkdownHeading}
+            />
+          ) : null}
+          {markdown && effectivePreviewer === 'default' ? (
+            <SegmentedControl<'rich' | 'source'>
+              value={view}
+              onValueChange={(v) => setView(v)}
+              aria-label={t('conv.artifact.viewModeAria')}
+              items={[
+                { value: 'rich', label: t('conv.artifact.viewRich') },
+                { value: 'source', label: t('conv.artifact.viewSource') },
+              ]}
+            />
+          ) : null}
+        </>
+      }
+    >
+      {state.phase === 'loaded' && selected !== undefined ? (
+        <>
+          <div className="artifact-plugin-view">
+            <PluginUiView
+              pluginId={selected.pluginId}
+              spec={selected.spec}
+              conversationId={conversationId}
+              slotProps={{
+                ...buildPreviewerProps(
+                  artifactId,
+                  conversationId,
+                  meta,
+                  mime,
+                  state.blob.size,
+                  state.blobUrl,
+                  text,
+                ),
+              }}
+              label={t('conv.attachment.previewName', { name: resolveLocalizedText(selected.spec.label, locale) })}
+            />
+          </div>
+          {textState === 'exceeded' ? (
+            <div className="callout">{t('conv.artifact.textExceededPlugin', { limit: formatBytes(MAX_PREVIEW_TEXT_BYTES) })}</div>
+          ) : null}
+          <div>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setPreviewer('default')}
+              title={t('conv.artifact.switchDefaultTitle')}
+            >
+              <HelmIcon name="rotate-ccw" size={12} />
+              {t('conv.artifact.defaultPreview')}
             </button>
-            <DialogClose asChild>
-              <button
-                type="button"
-                className="btn btn-ghost btn-icon-sm"
-                title={t('conv.artifact.closeTitle')}
-                aria-label={t('conv.artifact.closeAria')}
-              >
-                <HelmIcon name="x" size={14} />
-              </button>
-            </DialogClose>
-          </span>
-        </div>
-        <div className="modal-body" ref={modalBodyRef}>
-          {state.phase === 'loading' ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--fg-muted)', fontSize: 12, padding: 24, justifyContent: 'center' }}>
-              <HelmIcon name="loader" size={14} className="spin-slow" />
-              {t('conv.artifact.loading')}
-            </div>
-          ) : null}
-          {state.phase === 'error' ? (
-            <div className="callout callout--error">
-              <HelmIcon name="alert-circle" size={13} />
-              <span style={{ wordBreak: 'break-all' }}>{t('conv.artifact.loadFailed', { message: state.message })}</span>
-            </div>
-          ) : null}
-          {state.phase === 'loaded' && selected !== undefined ? (
-            <>
-              <div className="artifact-plugin-view">
-                <PluginUiView
-                  pluginId={selected.pluginId}
-                  spec={selected.spec}
-                  conversationId={conversationId}
-                  slotProps={{
-                    ...buildPreviewerProps(
-                      artifactId,
-                      conversationId,
-                      meta,
-                      mime,
-                      state.blob.size,
-                      state.blobUrl,
-                      text,
-                    ),
-                  }}
-                  label={t('conv.attachment.previewName', { name: resolveLocalizedText(selected.spec.label, locale) })}
-                />
-              </div>
-              {textState === 'exceeded' ? (
-                <div className="callout">{t('conv.artifact.textExceededPlugin', { limit: formatBytes(MAX_PREVIEW_TEXT_BYTES) })}</div>
-              ) : null}
-              <div>
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  onClick={() => setPreviewer('default')}
-                  title={t('conv.artifact.switchDefaultTitle')}
-                >
-                  <HelmIcon name="rotate-ccw" size={12} />
-                  {t('conv.artifact.defaultPreview')}
-                </button>
-              </div>
-            </>
-          ) : null}
-          {state.phase === 'loaded' && selected === undefined ? (
-            isImage ? (
-              <img
-                src={state.blobUrl}
-                alt={name}
-                style={{ maxWidth: '100%', maxHeight: '64vh', objectFit: 'contain', margin: '0 auto', display: 'block', borderRadius: 'var(--radius-sm)' }}
-              />
-            ) : isAudio ? (
-              // eslint-disable-next-line jsx-a11y/media-has-caption
-              <audio controls src={state.blobUrl} style={{ width: '100%' }} />
-            ) : isVideo ? (
-              <video controls src={state.blobUrl} style={{ width: '100%', maxHeight: '64vh' }} />
-            ) : isPdf ? (
-              <iframe src={state.blobUrl} title={name} style={{ width: '100%', height: '64vh', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }} />
-            ) : !isTextLike ? (
-              <div className="callout">{t('conv.artifact.noInlinePreview')}</div>
-            ) : textState === 'exceeded' ? (
-              <div className="callout">
-                {t('conv.artifact.textExceededDefault', { limit: formatBytes(MAX_PREVIEW_TEXT_BYTES) })}
-              </div>
-            ) : markdown && view === 'rich' && text !== null ? (
-              <div ref={markdownPreviewRef} className="artifact-markdown-preview">
-                <MarkdownView text={text} conversationId={conversationId} />
-              </div>
-            ) : (
-              <div style={{ overflow: 'auto', minHeight: 200 }}>
-                <CodeBlockView code={text ?? t('conv.artifact.readingText')} language={language} />
-              </div>
-            )
-          ) : null}
-        </div>
-          </DialogContent>
-        </DialogOverlay>
-      </DialogPortal>
-    </Dialog>
+          </div>
+        </>
+      ) : null}
+      {state.phase === 'loaded' && selected === undefined ? (
+        <FilePreviewBody
+          name={name}
+          mime={mime}
+          blobUrl={state.blobUrl}
+          text={text}
+          textState={textState}
+          isTextLike={isTextLike}
+          markdown={markdown}
+          view={view}
+          language={language}
+          conversationId={conversationId}
+          markdownPreviewRef={markdownPreviewRef}
+        />
+      ) : null}
+    </PreviewModalShell>
   )
 }

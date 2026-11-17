@@ -16,7 +16,10 @@ export const conversationMessages = {
   'conv.attachment.previewName': { en: 'Preview {name}', 'zh-CN': '预览 {name}' },
   'conv.attachment.clickToPreview': { en: 'Click to preview: {label}', 'zh-CN': '点击预览：{label}' },
   'conv.attachment.clickToPreviewArtifact': { en: 'Click to preview artifact', 'zh-CN': '点击预览产物' },
+  'conv.attachment.clickToPreviewWorkspaceFile': { en: 'Click to preview file: {path}', 'zh-CN': '点击预览文件：{path}' },
   'conv.attachment.fallbackLabel': { en: 'Artifacts', 'zh-CN': '产物' },
+  'conv.attachment.workspaceFileFallback': { en: 'File', 'zh-CN': '文件' },
+  'conv.attachment.disallowedFileLabel': { en: 'Local file (unavailable)', 'zh-CN': '本地文件（不可访问）' },
 
   // --- Input origin / queued-input badges -----------------------------------
   'conv.origin.agentReport': { en: 'From agent report', 'zh-CN': '来自智能体汇报' },
@@ -422,6 +425,13 @@ export const conversationMessages = {
     'zh-CN': '文本内容超过 {limit} 预览上限，已停止解码。请下载文件查看完整内容。',
   },
   'conv.artifact.readingText': { en: 'Reading text…', 'zh-CN': '正在读取文本…' },
+
+  // --- Workspace file preview modal ----------------------------------------------------------------------
+  'conv.workspaceFile.previewAria': { en: 'Workspace file preview: {path}', 'zh-CN': '工作区文件预览：{path}' },
+  'conv.workspaceFile.loading': { en: 'Loading file…', 'zh-CN': '正在加载文件…' },
+  'conv.workspaceFile.loadFailed': { en: 'File failed to load: {message}', 'zh-CN': '文件加载失败：{message}' },
+  'conv.workspaceFile.lineSingle': { en: 'L{line}', 'zh-CN': '第 {line} 行' },
+  'conv.workspaceFile.lineRange': { en: 'L{start}-{end}', 'zh-CN': '第 {start}-{end} 行' },
 
   // --- Workbench drawer & model ---------------------------------------------------------------------------
   'conv.workbench.artifactsTab': { en: 'Artifacts', 'zh-CN': '产物' },

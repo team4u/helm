@@ -17,7 +17,7 @@ import {
   previewerMatchesArtifact,
   type ArtifactPreviewerContribution,
 } from '../src/conversation/artifact-preview-model.js'
-import { decodePreviewText, MAX_PREVIEW_TEXT_BYTES, shouldDecodeText } from '../src/conversation/artifact-preview-text.js'
+import { decodePreviewText, isMarkdown, MAX_PREVIEW_TEXT_BYTES, shouldDecodeText } from '../src/conversation/artifact-preview-text.js'
 
 const contrib = (
   pluginId: string,
@@ -111,13 +111,26 @@ test('collectArtifactPreviewers：scope 过滤与无会话上下文语义', { ti
   assert.equal(byProfile.length, 1, 'profileIds scope 命中')
 })
 
-test('shouldDecodeText：MIME 未知时按已知文本后缀、名称未知不猜', { timeout: 60_000 }, () => {
+test('shouldDecodeText：MIME 未知或 octet-stream 时按已知文本后缀/基名、名称未知不猜', { timeout: 60_000 }, () => {
   assert.equal(shouldDecodeText(undefined, 'application/json'), true, '文本类 MIME 解码')
   assert.equal(shouldDecodeText(undefined, 'image/png'), false, '二进制 MIME 不解码')
   assert.equal(shouldDecodeText(undefined, ''), false, 'MIME 未知且无元数据不猜')
   assert.equal(shouldDecodeText({ id: 'a', name: 'notes.md', mimeType: '', size: 3, createdAt: '', conversationId: 1 } as never, ''), true, 'MIME 未知按文本后缀解码')
+  assert.equal(shouldDecodeText({ name: 'guide.mdx' }, 'application/octet-stream'), true, 'octet-stream 回退 .mdx 文本后缀')
+  assert.equal(shouldDecodeText({ name: 'Dockerfile' }, 'application/octet-stream'), true, 'octet-stream 回退 Dockerfile 基名')
+  assert.equal(shouldDecodeText({ name: 'Makefile' }, ''), true, 'MIME 未知回退 Makefile 基名')
+  assert.equal(shouldDecodeText({ name: 'src/app.ts' }, 'application/octet-stream'), true, 'octet-stream 回退路径中的 .ts 后缀')
+  assert.equal(shouldDecodeText({ name: 'blob.bin' }, 'application/octet-stream'), false, 'octet-stream 未知后缀不解码')
   assert.equal(shouldDecodeText({ id: 'a', name: 'blob.bin', mimeType: '', size: 3, createdAt: '', conversationId: 1 } as never, ''), false, '未知后缀不解码')
   assert.equal(shouldDecodeText({ id: 'a', name: undefined, mimeType: '', size: 3, createdAt: '', conversationId: 1 } as never, ''), false, '名称未知不猜')
+})
+
+test('isMarkdown：支持 .md / .markdown / .mdx 与 text/markdown', { timeout: 60_000 }, () => {
+  assert.equal(isMarkdown('README.md', ''), true)
+  assert.equal(isMarkdown('GUIDE.MARKDOWN', ''), true)
+  assert.equal(isMarkdown('docs/intro.mdx', ''), true)
+  assert.equal(isMarkdown('blob', 'text/markdown; charset=utf-8'), true)
+  assert.equal(isMarkdown('app.ts', 'text/plain'), false)
 })
 
 test('decodePreviewText：超过 1MiB 上限返回 null（不截断伪装全文）', { timeout: 60_000 }, async () => {

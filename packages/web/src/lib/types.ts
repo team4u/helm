@@ -72,6 +72,7 @@ export type ActiveModal =
   | { kind: 'plugin-settings'; pluginId?: string }
   | { kind: 'nodes'; nodeId?: string }
   | { kind: 'artifact-preview'; artifactId: string; conversationId?: number }
+  | { kind: 'workspace-file'; conversationId: number; path: string; startLine?: number; endLine?: number }
   | { kind: 'conversation-drawer'; conversationId: number }
   | null
 

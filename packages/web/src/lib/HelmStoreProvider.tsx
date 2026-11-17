@@ -509,7 +509,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     const nextVisible = new Set<number>()
     if (primaryTarget.kind === 'conversation') nextVisible.add(primaryTarget.conversationId)
     if (splitTarget?.kind === 'conversation') nextVisible.add(splitTarget.conversationId)
-    if (activeModal?.kind === 'conversation-drawer' || activeModal?.kind === 'artifact-preview') {
+    if (activeModal?.kind === 'conversation-drawer' || activeModal?.kind === 'artifact-preview' || activeModal?.kind === 'workspace-file') {
       if (activeModal.conversationId !== undefined) nextVisible.add(activeModal.conversationId)
     }
     for (const prevId of prevVisibleConversationIdsRef.current) {
