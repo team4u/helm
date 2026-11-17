@@ -29,6 +29,7 @@ import {
 import { NodeCard } from '../src/nodes/NodeCard.js'
 import { NodeDetailDrawer } from '../src/nodes/NodeDetailDrawer.js'
 import { NodeCenter } from '../src/nodes/NodeCenter.js'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 
@@ -131,6 +132,16 @@ test('node-center-model: getNodeDisplayName formats display names', { timeout: 6
   assert.equal(getNodeDisplayName({ id: 'local', label: '工作区核心' }), '工作区核心')
   assert.equal(getNodeDisplayName({ id: 'local' }), 'Local kernel')
   assert.equal(getNodeDisplayName({ id: 'node-x' }), 'node-x')
+})
+
+test('node-center-model zh-CN: getNodeDisplayName resolves fallbacks through the zh translator', { timeout: 60_000 }, () => {
+  const zh = createWebTranslator('zh-CN')
+  assert.equal(getNodeDisplayName({ id: 'local' }, zh), '本机内核')
+  assert.equal(getNodeDisplayName({ id: '' }, zh), '未知节点')
+  // Labels always win and are trimmed, regardless of locale
+  assert.equal(getNodeDisplayName({ id: 'x', label: '  GPU 推理集群节点 A  ' }, zh), 'GPU 推理集群节点 A')
+  // The default translator keeps the English bridge behavior
+  assert.equal(getNodeDisplayName({ id: 'local' }), 'Local kernel')
 })
 
 test('node-center-model: formatNodePlatformArch combines platform and architecture', { timeout: 60_000 }, () => {

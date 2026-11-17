@@ -11,8 +11,10 @@ import { ModelCard } from '../src/models/ModelCard.js'
 import { ModelCenter } from '../src/models/ModelCenter.js'
 import {
   buildDefaultModelOptions,
+  buildDefaultProviders,
   buildMergedProviders,
   buildProviderCategoryCounts,
+  buildProviderFilterTabs,
   DEFAULT_PROVIDERS,
   filterProviders,
   sortProvidersConfiguredFirst,
@@ -22,6 +24,7 @@ import {
   type ProviderItem,
 } from '../src/models/model-center-model.js'
 import { ModelDetailDrawer } from '../src/models/ModelDetailDrawer.js'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 
@@ -358,6 +361,60 @@ test('buildDefaultModelOptions: disabled models are not regular options; a disab
   assert.equal(hits.length, 1, 'a disabled model must be retained exactly once (never duplicated across options and annotations)')
   assert.equal(hits[0]?.label, 'faux/faux-2 (disabled)')
   assert.equal(hits[0]?.meta, 'Disabled')
+})
+
+test('model-center-model zh-CN: preset builders resolve descriptions, tags and option annotations through the zh translator', { timeout: 60_000 }, () => {
+  const zh = createWebTranslator('zh-CN')
+
+  // Preset provider descriptions, model tags and the custom preset name
+  const providers = buildDefaultProviders(zh)
+  const anthropic = providers.find((p) => p.id === 'anthropic')
+  assert.equal(anthropic?.description, 'Claude 系列前沿模型，支持超长上下文窗口与深度逻辑推理。')
+  assert.deepEqual(anthropic?.models?.[0]?.tags, ['混合推理', '代码', '200K'])
+  const custom = providers.find((p) => p.id === 'custom')
+  assert.equal(custom?.name, '自定义 OpenAI 兼容接口')
+
+  // Filter pills reuse common.all and the domain configured label
+  assert.deepEqual(
+    buildProviderFilterTabs(zh).map((tab) => tab.label),
+    ['全部', '已配置'],
+  )
+  // The untouched compatibility constants stay English
+  assert.deepEqual(
+    buildProviderFilterTabs().map((tab) => tab.label),
+    ['All', 'Configured'],
+  )
+
+  // Default-model options annotate out-of-catalog entries in zh
+  const stale = buildDefaultModelOptions([], 'zhipu/glm-4.6', zh)
+  assert.equal(stale[stale.length - 1]?.meta, '目录外')
+
+  // Merged runtime tags interpolate the zh context copy after the thinking tag
+  const catalogModels: ModelDescriptor[] = [
+    {
+      id: 'magpie/glm-4.6',
+      provider: 'magpie',
+      modelId: 'glm-4.6',
+      available: true,
+      thinkingLevels: ['off', 'high'],
+      contextWindow: 200_000,
+      label: 'GLM 4.6',
+    },
+  ]
+  const merged = buildMergedProviders(
+    [{ id: 'magpie', name: 'Magpie', configured: false, modelsCount: 0 }],
+    [{ id: 'magpie', configured: true }],
+    [],
+    catalogModels,
+    undefined,
+    zh,
+  )
+  assert.deepEqual(merged.find((p) => p.id === 'magpie')?.models?.[0]?.tags, ['思考模型', '200k 上下文'])
+
+  // Catalog fallback descriptions localize too
+  const catalog: ModelProviderSummary[] = [{ id: 'dyn-x', name: 'DynX', modelCount: 0, dynamic: true }]
+  const mergedDyn = buildMergedProviders([], [], [], [], catalog, zh)
+  assert.equal(mergedDyn.find((p) => p.id === 'dyn-x')?.description, '支持动态模型目录刷新的大语言模型供应商。')
 })
 
 // ---------------------------------------------------------------------------
