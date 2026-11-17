@@ -87,6 +87,8 @@ export class ApprovalBridge {
   private static readonly MAX_ASK_POLL_TRANSIENT_FAILURES = 6
   private static readonly DEFAULT_ASK_POLL_TRANSIENT_BACKOFF_BASE_MS = 500
   private static readonly DEFAULT_ASK_POLL_TRANSIENT_BACKOFF_CAP_MS = 4_000
+  /** 跨重启同 seq AskDoc ID 冲突（ask_id_conflict）推进 :r<N> 的最大重试上限。 */
+  private static readonly MAX_ASK_CONFLICT_RETRIES = 20
 
   /** send_keys CAS capability probe result (frozen per target within the same enable cycle). */
   private readonly sendKeysCasSupport = new Map<string, boolean>()
@@ -169,104 +171,121 @@ export class ApprovalBridge {
     // The snapshot uniformly takes the trailing 1500 characters: the same slice the AI parse relied on, ensuring the human sees
     // the current menu the model based its judgment on (long snapshot heads are usually irrelevant rhythm output).
     const description = `${retryHint}${aiSummaryLine}${aiFallbackLine}Terminal agent (${pane.agentName}) is waiting for a choice in ${pane.effectiveCwd}. Terminal snapshot (redacted):\n\`\`\`\n${snapshot.slice(-1500)}\n\`\`\``
-    const pending = this.port.host.createAsk({
-      id: entry.askId,
-      conversationId,
-      ownerPluginId: 'builtin:herdr',
-      title: `Herdr approval: pane ${pane.paneId}`,
-      description,
-      fields: [
-        {
-          name: 'decision',
-          label: 'How should this block be handled?',
-          type: 'select',
-          required: true,
-          options: plan.options,
-        },
-        {
-          name: 'key',
-          label: 'Custom keystroke sequence (only used when decision=custom; separate multiple keys with spaces or commas, e.g. enter / esc / down, enter)',
-          type: 'text',
-          required: false,
-        },
-      ],
-      expectedStateSeq: entry.seq,
-    })
-    this.port.asks.markPending(entry)
-    // createAsk returns a terminal-state promise; its storage may land later than the event-driven cancellation's 404.
-    // Keep rechecking and cancelling until that promise ends; remote likewise needs no local socket events.
-    const monitor = new AbortController()
-    const result = pending.finally(() => monitor.abort())
-    const polling = (async () => {
-      // Liveness recheck fault tolerance boundary: transient failures (herdr_timeout/node flaps) back off and retry; only
-      // past the limit first cancel the host AskDoc then fail explicitly; never let one jitter pierce the task, and never
-      // leave a forever-pending orphan approval card.
-      let transientFailures = 0
-      let abortCancelAttempts = 0
-      while (!monitor.signal.aborted) {
-        try { await delay(this.port.pollIntervalMs, undefined, { signal: monitor.signal }) }
-        catch (error) { if (monitor.signal.aborted) return; throw error }
-        if (request.signal?.aborted) {
-          // Post-abort cancellation backoff is bounded: when cancel keeps failing non-404, there must be no 100ms
-          // retry+notify storm; past the limit, closePane's paneClosed list takes over the backstop.
-          if (abortCancelAttempts >= ApprovalBridge.MAX_ABORT_CANCEL_ATTEMPTS) return
-          if (abortCancelAttempts > 0) {
+    for (let conflict = 0; ; conflict += 1) {
+      const pending = this.port.host.createAsk({
+        id: entry.askId,
+        conversationId,
+        ownerPluginId: 'builtin:herdr',
+        title: `Herdr approval: pane ${pane.paneId}`,
+        description,
+        fields: [
+          {
+            name: 'decision',
+            label: 'How should this block be handled?',
+            type: 'select',
+            required: true,
+            options: plan.options,
+          },
+          {
+            name: 'key',
+            label: 'Custom keystroke sequence (only used when decision=custom; separate multiple keys with spaces or commas, e.g. enter / esc / down, enter)',
+            type: 'text',
+            required: false,
+          },
+        ],
+        expectedStateSeq: entry.seq,
+      })
+      this.port.asks.markPending(entry)
+      // createAsk returns a terminal-state promise; its storage may land later than the event-driven cancellation's 404.
+      // Keep rechecking and cancelling until that promise ends; remote likewise needs no local socket events.
+      const monitor = new AbortController()
+      const result = pending.finally(() => monitor.abort())
+      const polling = (async () => {
+        // Liveness recheck fault tolerance boundary: transient failures (herdr_timeout/node flaps) back off and retry; only
+        // past the limit first cancel the host AskDoc then fail explicitly; never let one jitter pierce the task, and never
+        // leave a forever-pending orphan approval card.
+        let transientFailures = 0
+        let abortCancelAttempts = 0
+        while (!monitor.signal.aborted) {
+          try { await delay(this.port.pollIntervalMs, undefined, { signal: monitor.signal }) }
+          catch (error) { if (monitor.signal.aborted) return; throw error }
+          if (request.signal?.aborted) {
+            // Post-abort cancellation backoff is bounded: when cancel keeps failing non-404, there must be no 100ms
+            // retry+notify storm; past the limit, closePane's paneClosed list takes over the backstop.
+            if (abortCancelAttempts >= ApprovalBridge.MAX_ABORT_CANCEL_ATTEMPTS) return
+            if (abortCancelAttempts > 0) {
+              try {
+                const abortCancelBackoffCapMs =
+                  this.port.abortCancelBackoffCapMs ?? ApprovalBridge.DEFAULT_ABORT_CANCEL_BACKOFF_CAP_MS
+                await delay(
+                  Math.min(this.port.pollIntervalMs * 2 ** abortCancelAttempts, abortCancelBackoffCapMs),
+                  undefined,
+                  { signal: monitor.signal },
+                )
+              } catch (error) { if (monitor.signal.aborted) return; throw error }
+            }
+            await this.port.cancelAskQuietly(entry.askId, 'cancelled')
+            abortCancelAttempts += 1
+            continue
+          }
+          let current: HerdrAgentInfo
+          try {
+            current = await this.port.agentGet(targetOf(pane), pane.paneId, monitor.signal)
+            transientFailures = 0
+          } catch (error) {
+            if (monitor.signal.aborted) return
+            if ((error as { code?: string }).code === 'herdr_aborted') throw error
+            transientFailures += 1
+            if (transientFailures > ApprovalBridge.MAX_ASK_POLL_TRANSIENT_FAILURES) {
+              // Final failure: cancel the host AskDoc async then immediately rethrow the real error (no await --
+              // awaiting would let the host's cancelled terminal state win Promise.race first, disguising infrastructure failure
+              // as a "human cancelled" abort path closing the failure scene); the backstop cancel is
+              // guaranteed by the task chain catch's synchronous cancellation; never leave a pending orphan approval card.
+              void this.port.cancelAskQuietly(entry.askId, 'cancelled')
+              throw error
+            }
             try {
-              const abortCancelBackoffCapMs =
-                this.port.abortCancelBackoffCapMs ?? ApprovalBridge.DEFAULT_ABORT_CANCEL_BACKOFF_CAP_MS
+              const backoffBaseMs =
+                this.port.askPollTransientBackoffBaseMs ?? ApprovalBridge.DEFAULT_ASK_POLL_TRANSIENT_BACKOFF_BASE_MS
+              const backoffCapMs =
+                this.port.askPollTransientBackoffCapMs ?? ApprovalBridge.DEFAULT_ASK_POLL_TRANSIENT_BACKOFF_CAP_MS
               await delay(
-                Math.min(this.port.pollIntervalMs * 2 ** abortCancelAttempts, abortCancelBackoffCapMs),
+                Math.min(backoffBaseMs * 2 ** (transientFailures - 1), backoffCapMs),
                 undefined,
                 { signal: monitor.signal },
               )
             } catch (error) { if (monitor.signal.aborted) return; throw error }
+            continue
           }
-          await this.port.cancelAskQuietly(entry.askId, 'cancelled')
-          abortCancelAttempts += 1
-          continue
-        }
-        let current: HerdrAgentInfo
-        try {
-          current = await this.port.agentGet(targetOf(pane), pane.paneId, monitor.signal)
-          transientFailures = 0
-        } catch (error) {
-          if (monitor.signal.aborted) return
-          if ((error as { code?: string }).code === 'herdr_aborted') throw error
-          transientFailures += 1
-          if (transientFailures > ApprovalBridge.MAX_ASK_POLL_TRANSIENT_FAILURES) {
-            // Final failure: cancel the host AskDoc async then immediately rethrow the real error (no await --
-            // awaiting would let the host's cancelled terminal state win Promise.race first, disguising infrastructure failure
-            // as a "human cancelled" abort path closing the failure scene); the backstop cancel is
-            // guaranteed by the task chain catch's synchronous cancellation; never leave a pending orphan approval card.
-            void this.port.cancelAskQuietly(entry.askId, 'cancelled')
-            throw error
+          if (current.stateChangeSeq !== entry.seq || current.agentStatus !== 'blocked') {
+            this.port.asks.observeAuthority({ nodeId: nodeIdOf(pane), paneId: pane.paneId, seq: current.stateChangeSeq, status: current.agentStatus })
+            await this.port.cancelAskQuietly(entry.askId, 'superseded')
           }
-          try {
-            const backoffBaseMs =
-              this.port.askPollTransientBackoffBaseMs ?? ApprovalBridge.DEFAULT_ASK_POLL_TRANSIENT_BACKOFF_BASE_MS
-            const backoffCapMs =
-              this.port.askPollTransientBackoffCapMs ?? ApprovalBridge.DEFAULT_ASK_POLL_TRANSIENT_BACKOFF_CAP_MS
-            await delay(
-              Math.min(backoffBaseMs * 2 ** (transientFailures - 1), backoffCapMs),
-              undefined,
-              { signal: monitor.signal },
-            )
-          } catch (error) { if (monitor.signal.aborted) return; throw error }
-          continue
         }
-        if (current.stateChangeSeq !== entry.seq || current.agentStatus !== 'blocked') {
-          this.port.asks.observeAuthority({ nodeId: nodeIdOf(pane), paneId: pane.paneId, seq: current.stateChangeSeq, status: current.agentStatus })
+      })()
+      try {
+        return { outcome: await Promise.race([result, polling.then(() => result)]), plan }
+      } catch (error) {
+        const isIdConflict = error instanceof HelmError && error.code === 'ask_id_conflict'
+        if (!isIdConflict || conflict >= ApprovalBridge.MAX_ASK_CONFLICT_RETRIES) {
+          throw error
+        }
+        const existingStatus = (error.details as { existingStatus?: unknown } | undefined)?.existingStatus
+        if (existingStatus === 'pending') {
           await this.port.cancelAskQuietly(entry.askId, 'superseded')
         }
+        const latest = await this.port.agentGet(targetOf(pane), pane.paneId, request.signal)
+        await this.cancelSuperseded(pane, latest)
+        if (latest.stateChangeSeq !== entry.seq || latest.agentStatus !== 'blocked') {
+          return this.settleSuperseded(entry)
+        }
+        this.port.asks.advanceRetryOnConflict(entry)
+      } finally {
+        monitor.abort()
+        await polling.catch((error: unknown) => {
+          if ((error as { code?: string }).code !== 'herdr_aborted') throw error
+        })
       }
-    })()
-    try {
-      return { outcome: await Promise.race([result, polling.then(() => result)]), plan }
-    } finally {
-      monitor.abort()
-      await polling.catch((error: unknown) => {
-        if ((error as { code?: string }).code !== 'herdr_aborted') throw error
-      })
     }
   }
 

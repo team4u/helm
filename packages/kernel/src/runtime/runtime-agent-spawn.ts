@@ -35,6 +35,7 @@ import {
   resolveForkMode,
   resolveInheritedModelOverride,
 } from './spawn-fork.js'
+import { assertSpawnRequestModes } from './spawn-reattach.js'
 import { resolveSpawnTargetChain, resolveSpawnTargetNodeId } from './spawn-target.js'
 import {
   agentGateResultMissingError,
@@ -164,43 +165,83 @@ export class RuntimeAgentSpawn {
       agentId: request.agentId ?? 'subagent',
       field: 'spawn request meta',
     })
+    assertSpawnRequestModes(request)
     const preResolvedForkAnchor = await this.preflightForkRequest(request)
     const token = randomUUID()
-    if (request.resume !== undefined) {
-      const resumeId = /^\d+$/.test(request.resume) ? Number(request.resume) : this.agentSessions.get(request.resume)
-      const child = resumeId !== undefined ? this.deps.store.getConv(resumeId) : undefined
-      if (resumeId !== undefined && child !== undefined && child.parentConversationId === request.parentConversationId) {
-        // early mutual exclusion reject (hook chain before): sharing in-flight register table (and runNativeSpawn same source;
-        // override direct tune entry and sub-conversation already create but onResolved not back pass empty window)+ this mapping
-        // pre- placement coordinates (override hook chain window inside host side concurrency resume). right threat occupy in original generate execute
-        // row sync claim; this mapping only is execute fact mirror and early check side.
-        if (
-          isSpawnConversationInTurn(this.deps.harness, resumeId) ||
-          [...this.activeSpawnExecutions.values()].some((info) => info.conversationId === resumeId)
-        ) {
-          throw new HelmError('subagent_in_use', `sub-conversation ${resumeId} still has in-flight execute, cannot concurrency resume`, 409)
-        }
-        this.activeSpawnExecutions.set(token, { conversationId: resumeId, nodeId: child.nodeId ?? 'local', effectiveCwd: child.cwd })
-      }
-    }
-    const originalResolved = request.onResolved
-    let execution: AgentExecutionInfo | undefined
-    let gate: ReturnType<typeof sanitizeAgentGateResult> | undefined
-    const observed: AgentSpawnRequest = {
-      ...request,
-      onResolved: (raw) => {
-        const info = sanitizeAgentExecutionInfo(raw, { agentId: request.agentId ?? 'subagent' })
-        info.nodeId ??= info.conversationId !== undefined ? this.deps.store.getConv(info.conversationId)?.nodeId : undefined
-        execution = info
-        this.activeSpawnExecutions.set(token, info)
-        originalResolved?.(info)
-      },
-      onGateResult: (raw) => {
-        gate = sanitizeAgentGateResult(raw, { agentId: request.agentId ?? 'subagent' })
-        request.onGateResult?.(gate)
-      },
-    }
     try {
+      if (request.resume !== undefined) {
+        const resumeId = /^\d+$/.test(request.resume) ? Number(request.resume) : this.agentSessions.get(request.resume)
+        const child = resumeId !== undefined ? this.deps.store.getConv(resumeId) : undefined
+        if (resumeId !== undefined && child !== undefined && child.parentConversationId === request.parentConversationId) {
+          // Early mutual-exclusion guard before the hook chain.
+          if (
+            isSpawnConversationInTurn(this.deps.harness, resumeId) ||
+            [...this.activeSpawnExecutions.values()].some((info) => info.conversationId === resumeId)
+          ) {
+            throw new HelmError('subagent_in_use', `sub-conversation ${resumeId} still has in-flight execute, cannot concurrency resume`, 409)
+          }
+          this.activeSpawnExecutions.set(token, { conversationId: resumeId, nodeId: child.nodeId ?? 'local', effectiveCwd: child.cwd })
+        }
+      } else if (request.reattach !== undefined) {
+        const reattachConvId = request.reattach.conversationId
+        const reattachExecId = request.reattach.executionId
+        if (reattachConvId !== undefined) {
+          const child = this.deps.store.getConv(reattachConvId)
+          if (child === undefined || child.parentConversationId !== request.parentConversationId) {
+            throw new HelmError(
+              'not_found',
+              `reattach 目标子会话 ${reattachConvId} 不存在或不属于父会话 ${request.parentConversationId}；绝不新建会话假冒重挂`,
+              404,
+              { conversationId: reattachConvId, parentConversationId: request.parentConversationId },
+            )
+          }
+          if (
+            isSpawnConversationInTurn(this.deps.harness, reattachConvId) ||
+            [...this.activeSpawnExecutions.values()].some(
+              (info) =>
+                info.conversationId === reattachConvId ||
+                (reattachExecId !== undefined && info.executionId === reattachExecId),
+            )
+          ) {
+            throw new HelmError('subagent_in_use', `子会话 ${reattachConvId} 仍有在途重挂或执行，不能并发重挂`, 409, {
+              conversationId: reattachConvId,
+            })
+          }
+          this.activeSpawnExecutions.set(token, {
+            conversationId: reattachConvId,
+            nodeId: child.nodeId ?? 'local',
+            effectiveCwd: request.reattach.effectiveCwd ?? child.cwd,
+            ...(reattachExecId !== undefined ? { executionId: reattachExecId } : {}),
+          })
+        } else if (reattachExecId !== undefined) {
+          if ([...this.activeSpawnExecutions.values()].some((info) => info.executionId === reattachExecId)) {
+            throw new HelmError('subagent_in_use', `外部执行 ${reattachExecId} 仍有在途重挂或执行，不能并发重挂`, 409, {
+              executionId: reattachExecId,
+            })
+          }
+          this.activeSpawnExecutions.set(token, {
+            executionId: reattachExecId,
+            ...(request.reattach.effectiveCwd !== undefined ? { effectiveCwd: request.reattach.effectiveCwd } : {}),
+          })
+        }
+      }
+      const originalResolved = request.onResolved
+      let execution: AgentExecutionInfo | undefined
+      let gate: ReturnType<typeof sanitizeAgentGateResult> | undefined
+      const observed: AgentSpawnRequest = {
+        ...request,
+        onResolved: (raw) => {
+          const info = sanitizeAgentExecutionInfo(raw, { agentId: request.agentId ?? 'subagent' })
+          info.nodeId ??= info.conversationId !== undefined ? this.deps.store.getConv(info.conversationId)?.nodeId : undefined
+          execution = info
+          this.activeSpawnExecutions.set(token, info)
+          originalResolved?.(info)
+        },
+        onGateResult: (raw) => {
+          gate = sanitizeAgentGateResult(raw, { agentId: request.agentId ?? 'subagent' })
+          request.onGateResult?.(gate)
+        },
+      }
       const result = await this.spawnAgentObserved(observed, preResolvedForkAnchor)
       if (request.schema !== undefined) {
         // across plugin boundary final validate: original generate row internal self breath/tool validate do not because take over (handled) or
@@ -280,7 +321,7 @@ export class RuntimeAgentSpawn {
         agentId: finalRequest.agentId ?? request.agentId ?? 'subagent',
         field: 'spawn request meta',
       })
-      assertSpawnForkFields(finalRequest)
+      assertSpawnRequestModes(finalRequest)
       const forkChanged =
         request.fork !== true ||
         finalRequest.agentType !== request.agentType ||
@@ -378,6 +419,7 @@ export class RuntimeAgentSpawn {
                 updatedAt: now,
               })
               this.deps.markConversationOwnership(childId, 'helm')
+              await this.deps.store.flushPublic()
               await this.deps.tracker.observe(childId)
               if (this.deps.store.getConv(childId) !== undefined && !this.deps.store.isDeleted(childId)) {
                 this.deps.events.publish('conversation.upsert', this.deps.conversations.withOwnership(this.deps.tracker.summaryOf(childId)))

@@ -199,7 +199,9 @@ const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
       optString(v, 'cwd') ??
       optString(v, 'gate') ??
       optString(v, 'resume') ??
+      optString(v, 'requestId') ??
       (v.fork === undefined || typeof v.fork === 'boolean' ? null : 'field fork if store in must be boolean value') ??
+      (v.reattach === undefined || isObj(v.reattach) ? null : 'field reattach if present must be object') ??
       (v.isolation === undefined || typeof v.isolation === 'string' ? null : 'field isolation if store in must be string') ??
       (v.schema === undefined || isObj(v.schema) ? null : 'field schema if store in must be object') ??
       (v.onCreated === undefined || typeof v.onCreated === 'function' ? null : 'field onCreated if store in must be function') ??

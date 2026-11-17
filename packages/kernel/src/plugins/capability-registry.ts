@@ -38,6 +38,8 @@ export interface DerivedToolSpec {
   inputSchema: JsonSchema;
   /** structure output Schema(ctx.tool declaration when pass-through;run_action derive tool without this field). */
   structuredOutputSchema?: JsonSchema;
+  /** Cross-restart tool replay safety (forwarded when declared on ctx.tool; defaults to 'unsafe'). */
+  replay?: 'safe' | 'unsafe';
   /** tool use refer quote complete segment (only activate tool throw shoot; inactive produces no phantom text). */
   promptSnippet?: string;
   /** single row want point (aggregate enter prompt.tools.guidelines sharing section). */
@@ -397,6 +399,13 @@ export class CapabilityRegistry {
       }
       assertSchemaCompilable(spec.structuredOutputSchema);
     }
+    if (spec.replay !== undefined && spec.replay !== 'safe' && spec.replay !== 'unsafe') {
+      throw new HelmError(
+        'invalid_tool_spec',
+        `plugin ${pluginId} tool ${spec.name} replay must be 'safe' | 'unsafe' (received ${String(spec.replay)})`,
+        400,
+      );
+    }
     const prompt = validatedPromptFields(`plugin ${pluginId} tool ${spec.name}`, spec, 'invalid_tool_spec');
     if (typeof spec.execute !== 'function') {
       throw new HelmError('invalid_tool_spec', `plugin ${pluginId} tool ${spec.name} missing execute`, 400);
@@ -517,6 +526,7 @@ export class CapabilityRegistry {
             ...(tool.spec.structuredOutputSchema !== undefined
               ? { structuredOutputSchema: tool.spec.structuredOutputSchema }
               : {}),
+            ...(tool.spec.replay !== undefined ? { replay: tool.spec.replay } : {}),
             ...(tool.spec.promptSnippet !== undefined ? { promptSnippet: tool.spec.promptSnippet } : {}),
             ...(tool.spec.promptGuidelines !== undefined
               ? { promptGuidelines: [...tool.spec.promptGuidelines] }

@@ -9,12 +9,16 @@ import { KernelRuntime } from '../../kernel/src/runtime/runtime.js'
 import { openHelmDatabase } from '../../kernel/src/runtime/sqlite.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
 
-test('真实 SQLite：关闭在途工作流后，未启动插件也能从重开的数据库读回终态与最终投影', { timeout: 60_000 }, async () => {
+async function verifyShutdownPersistence(options: { autoRecover: boolean }): Promise<void> {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-workflow-shutdown-'))
   let app: Awaited<ReturnType<typeof createHelm>> | undefined
   let reopened: KernelRuntime | undefined
+  const expectedStatus = options.autoRecover ? 'running' : 'aborted'
   try {
     app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir })
+    if (!options.autoRecover) {
+      await app.kernel.plugins.setConfig('builtin:workflow', { autoRecoverOnRestart: false })
+    }
     const { run } = await app.kernel.plugins.invokeAction('builtin:workflow', 'run', {
       conversationId: 1,
       script: 'export const meta = { name: "shutdown-persistence", description: "验证在途任务关闭落盘" }; await new Promise(() => {})',
@@ -34,16 +38,19 @@ test('真实 SQLite：关闭在途工作流后，未启动插件也能从重开�
     const index = (records['workflow/runs'] as Array<Partial<WorkflowRunSummary>> | undefined) ?? []
     const entry = index.find((item) => item?.id === run.id)
     assert.ok(entry, `私有 records 索引必须从 SQLite 读回该 run（实际 ${JSON.stringify(index)}）`)
-    assert.equal(entry.status, 'aborted', JSON.stringify(entry))
+    assert.equal(entry.status, expectedStatus, JSON.stringify(entry))
     const persisted = JSON.parse(
       await readFile(join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1', `workflow-${run.id}.record.json`), 'utf-8'),
-    ) as WorkflowRunSummary
-    assert.equal(persisted.status, 'aborted', JSON.stringify(persisted))
+    ) as WorkflowRunSummary & { suspendedCleanly?: boolean }
+    assert.equal(persisted.status, expectedStatus, JSON.stringify(persisted))
+    if (options.autoRecover) {
+      assert.equal(persisted.suspendedCleanly, true, '默认优雅关停必须落盘 suspendedCleanly=true')
+    } else {
+      assert.equal(persisted.suspendedCleanly, undefined)
+    }
     await reopened.close()
     reopened = undefined
 
-    // 直接读 state.sqlite 表：runs 会话分片（helm_plugin_session_docs）与全局
-    // 紧凑角标（helm_plugin_docs）都必须在插件重启前已真实落库。
     const db = await openHelmDatabase(dataDir)
     try {
       const sessionRows = await db.db.all<{ plugin_id: string; name: string; conversation_id: number; value: string }>(
@@ -56,8 +63,8 @@ test('真实 SQLite：关闭在途工作流后，未启动插件也能从重开�
       const projection = JSON.parse(sessionRows[0]!.value) as { runs: Array<{ id: string; status: string }> }
       assert.equal(
         projection.runs.find((item) => item.id === run.id)?.status,
-        'aborted',
-        '最终 runs 会话分片必须含该 run 的 aborted 终态',
+        expectedStatus,
+        `最终 runs 会话分片必须含该 run 的 ${expectedStatus} 状态`,
       )
       const badgeRows = await db.db.all<{ value: string }>(
         'SELECT value FROM helm_plugin_docs WHERE plugin_id = ? AND name = ?',
@@ -67,7 +74,6 @@ test('真实 SQLite：关闭在途工作流后，未启动插件也能从重开�
       assert.equal(badgeRows.length, 1, `run-badges 全局角标已落库（实际 ${JSON.stringify(badgeRows)}）`)
       const badges = JSON.parse(badgeRows[0]!.value) as { byConversation: Record<string, { count: number }> }
       assert.equal(badges.byConversation['1']?.count ?? 0, 1, `角标含会话 1 计数（实际 ${JSON.stringify(badges)}）`)
-      // 全局层不得泄漏完整 run 摘要（badge 只允许导航元数据字段）。
       const badgeEntry = badges.byConversation['1'] as Record<string, unknown>
       for (const key of Object.keys(badgeEntry)) {
         assert.ok(
@@ -89,4 +95,12 @@ test('真实 SQLite：关闭在途工作流后，未启动插件也能从重开�
       }
     }
   }
+}
+
+test('真实 SQLite（默认 autoRecoverOnRestart=true）：关闭在途工作流后走 suspend 挂起落盘 running + suspendedCleanly 与最终投影', { timeout: 60_000 }, async () => {
+  await verifyShutdownPersistence({ autoRecover: true })
+})
+
+test('真实 SQLite（autoRecoverOnRestart=false 回退路径）：关闭在途工作流后落盘 aborted 终态与最终投影', { timeout: 60_000 }, async () => {
+  await verifyShutdownPersistence({ autoRecover: false })
 })

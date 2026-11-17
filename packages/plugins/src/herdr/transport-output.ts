@@ -18,7 +18,7 @@ import { checkAborted, contextOf, HerdrTransportError } from './transport-shared
 
 /** Handoff file read cap; over the limit fails explicitly, never silently truncated and passed off as success. */
 export const MAX_OUTPUT_BYTES = 32 * 1024 * 1024
-const OUTPUT_FILE_PATTERN = /^wf-out-[A-Za-z0-9_.-]{1,64}\.(json|md)$/
+export const OUTPUT_FILE_PATTERN = /^wf-out-[A-Za-z0-9_.-]{1,64}\.(json|md)$/
 
 export function assertSafeOutputName(fileName: string, target: string): void {
   if (!OUTPUT_FILE_PATTERN.test(fileName)) {

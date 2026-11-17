@@ -8,6 +8,8 @@
  * - detach：前台同步 run 转后台（授权与状态纪律见 ./detach.ts）。
  */
 import { HelmError, type HelmPluginContext } from '@helm/protocol'
+import { readJournal } from './engine/journal.js'
+import { isNonRetryableWorkflowError } from './engine/run-store.js'
 import { steerBackgroundSubagent } from './steer.js'
 import { detachForegroundSyncRun } from './detach.js'
 import type { WorkflowActionDeps } from './actions.js'
@@ -227,6 +229,151 @@ export function registerWorkflowRunActions(
       )
       syncRunsDoc()
       return output
+    },
+  })
+
+  // ---- 动作 resume_failed：按会话或全局批量续接可恢复的失败任务 ----
+  ctx.action({
+    id: 'resume_failed',
+    description:
+      '批量续接指定会话或全局下所有可恢复的失败（failed）工作流与后台单子代理；不可恢复项（非 failed、缺少句柄/规格、workflow_action_uncertain、[crash_recovery_limit]、secret_grant_expired_on_restart、已被 resumedByRunId 接管或子会话仍活跃）记录于 skipped，绝不伪造续接。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        conversationId: {
+          type: 'number',
+          minimum: 1,
+          description: '目标会话 ID（CLI 可用 --current 自动注入；与 all 互斥）',
+        },
+        all: {
+          type: 'boolean',
+          description: '全局扫描全部会话下可恢复的失败任务（与 conversationId 互斥）',
+        },
+      },
+      additionalProperties: false,
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        resumed: { type: 'array', items: { type: 'object' } },
+        skipped: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              runId: { type: 'string' },
+              reason: { type: 'string' },
+            },
+            required: ['runId', 'reason'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['resumed', 'skipped'],
+      additionalProperties: false,
+    },
+    cli: {
+      command: ['workflows', 'resume-failed'],
+      description: '批量续接指定会话或全局下可恢复的失败工作流与后台子代理',
+    },
+    async handler(input, context) {
+      const { conversationId: requestedConvId, all } = input as {
+        conversationId?: number
+        all?: boolean
+      }
+      if (requestedConvId !== undefined && (!Number.isInteger(requestedConvId) || requestedConvId < 1)) {
+        throw new HelmError(
+          'validation_error',
+          `conversationId 必须是正整数（收到 ${String(requestedConvId)}）`,
+          400,
+          { conversationId: requestedConvId },
+        )
+      }
+      if (all !== undefined && typeof all !== 'boolean') {
+        throw new HelmError('validation_error', `all 必须为 boolean（收到 ${String(all)}）`, 400, { all })
+      }
+      if (requestedConvId !== undefined && all === true) {
+        throw new HelmError('validation_error', 'conversationId 与 all 互斥，请仅指定其一', 400, {
+          conversationId: requestedConvId,
+          all,
+        })
+      }
+      if (
+        requestedConvId !== undefined &&
+        context.conversationId !== undefined &&
+        requestedConvId !== context.conversationId
+      ) {
+        throw new HelmError(
+          'validation_error',
+          `conversationId 冲突：输入指定 ${requestedConvId} 与调用上下文 ${context.conversationId} 不一致，请显式统一`,
+          400,
+          { conversationId: requestedConvId, contextConversationId: context.conversationId },
+        )
+      }
+      const targetConvId = all === true ? undefined : (requestedConvId ?? context.conversationId)
+      if (all !== true && targetConvId === undefined) {
+        throw new HelmError(
+          'validation_error',
+          '缺少目标范围：需要提供 conversationId、all: true 或在 CLI 使用 --current',
+          400,
+        )
+      }
+
+      const summaries = workflows
+        .listRuns()
+        .filter((item) => item.status === 'failed' && (all === true || item.conversationId === targetConvId))
+        .sort((a, b) => a.createdAt - b.createdAt)
+
+      const resumed: Array<Record<string, unknown>> = []
+      const skipped: Array<{ runId: string; reason: string }> = []
+
+      for (const item of summaries) {
+        const record = workflows.loadRunRecord(item.id)
+        if (record.status !== 'failed') {
+          skipped.push({ runId: record.id, reason: `状态为 ${record.status}（非 failed）` })
+          continue
+        }
+        if (record.resumedByRunId !== undefined && workflows.isTakeoverActive(record.resumedByRunId, record.conversationId)) {
+          skipped.push({ runId: record.id, reason: `已被 ${record.resumedByRunId} 接管续跑` })
+          continue
+        }
+        if (isNonRetryableWorkflowError(record.error)) {
+          skipped.push({ runId: record.id, reason: `不可自动恢复错误：${record.error ?? ''}` })
+          continue
+        }
+        if (record.kind === 'subagent') {
+          const exec = record.subagentMeta?.execution
+          const hasHandle = exec?.conversationId !== undefined || exec?.executionId !== undefined
+          if (record.subagentSpec === undefined || !hasHandle) {
+            skipped.push({ runId: record.id, reason: '缺少可续接执行句柄或持久化规格 subagentSpec' })
+            continue
+          }
+        } else {
+          if (record.script === undefined && record.scriptPath === undefined) {
+            skipped.push({ runId: record.id, reason: '未持久化脚本源' })
+            continue
+          }
+          const journal = readJournal(record.journalPath)
+          if (journal.readFailed !== undefined) {
+            skipped.push({ runId: record.id, reason: `journal_read_failed: ${journal.readFailed.code}` })
+            continue
+          }
+          if (journal.actionUncertain) {
+            skipped.push({ runId: record.id, reason: 'workflow_action_uncertain: 账本存在不确定副作用' })
+            continue
+          }
+        }
+        try {
+          assertCanSpawn(record.conversationId)
+          const runSummary = await workflows.run({ resumeFromRunId: record.id })
+          resumed.push(runSummary as unknown as Record<string, unknown>)
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error)
+          skipped.push({ runId: record.id, reason })
+        }
+      }
+      syncRunsDoc()
+      return { resumed, skipped }
     },
   })
 }

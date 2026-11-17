@@ -51,22 +51,8 @@ export function buildStructuredOutputExtension(sessions: Map<number, StructuredO
       if (session === undefined) {
         return { output: [{ type: 'text', text: 'when before conversation no in-flight structure output task.' }], isError: true }
       }
-      let payload = (args as { output?: unknown }).output
-      let result = validateAgainstSchema(payload, session.schema)
-      // guard against defend deserialization: if initial validate not via and reference is string, attempt JSON.parse after again validate
-      // (compatibility model because without strong type declaration or transfer layer serialization while structure JSON encode is string scenario).
-      if (!result.ok && typeof payload === 'string') {
-        try {
-          const parsed = JSON.parse(payload)
-          const secondResult = validateAgainstSchema(parsed, session.schema)
-          if (secondResult.ok) {
-            payload = parsed
-            result = secondResult
-          }
-        } catch {
-          // non- legal JSON string, keep initial validate errors
-        }
-      }
+      const payload = (args as { output?: unknown }).output
+      const result = validateStructuredOutputPayload(payload, session.schema)
       if (!result.ok) {
         return {
           output: [
@@ -80,7 +66,7 @@ export function buildStructuredOutputExtension(sessions: Map<number, StructuredO
           isError: true,
         }
       }
-      session.accepted = payload
+      session.accepted = result.value
       return {
         output: [{ type: 'text', text: 'structure output already accept.' }],
         structuredOutput: { accepted: true },
@@ -203,6 +189,94 @@ function safeParse(text: string): unknown | undefined {
   } catch {
     return undefined
   }
+}
+
+/**
+ * Validate structured output payload (supporting string-encoded JSON from transport layers),
+ * shared by register_structured_output tool and cross-restart entry recovery scan.
+ */
+export function validateStructuredOutputPayload(
+  payload: unknown,
+  schema: Record<string, unknown>,
+): { ok: true; value: unknown } | { ok: false; errors: string } {
+  const direct = validateAgainstSchema(payload, schema)
+  if (direct.ok) return direct
+  if (typeof payload === 'string') {
+    try {
+      const parsed = JSON.parse(payload)
+      const retried = validateAgainstSchema(parsed, schema)
+      if (retried.ok) return retried
+    } catch {
+      // Invalid JSON string; keep initial validation errors
+    }
+  }
+  return direct
+}
+
+export interface StructuredOutputScanEntry {
+  readonly kind: string
+  readonly model?: ReadonlyArray<unknown>
+}
+
+/**
+ * Scan persisted entries of a child conversation starting from submission.entry and return
+ * the last non-error schema-valid register_structured_output tool call argument across restarts.
+ */
+export function extractAcceptedStructuredOutputFromEntries(
+  entries: ReadonlyArray<StructuredOutputScanEntry>,
+  schema: Record<string, unknown>,
+): { found: true; value: unknown } | { found: false } {
+  const callsById = new Map<string, Record<string, unknown>>()
+  let accepted: { found: true; value: unknown } | undefined
+
+  for (const entry of entries) {
+    if (!Array.isArray(entry.model)) continue
+    if (entry.kind === 'pi.assistant') {
+      for (const msg of entry.model) {
+        if (msg === null || typeof msg !== 'object') continue
+        const m = msg as { role?: unknown; content?: unknown }
+        if (m.role !== 'assistant' || !Array.isArray(m.content)) continue
+        for (const block of m.content) {
+          if (block === null || typeof block !== 'object') continue
+          const b = block as { type?: unknown; id?: unknown; name?: unknown; arguments?: unknown; argumentsError?: unknown }
+          if (
+            b.type === 'toolCall' &&
+            b.name === 'register_structured_output' &&
+            typeof b.id === 'string' &&
+            b.argumentsError === undefined &&
+            b.arguments !== null &&
+            typeof b.arguments === 'object' &&
+            !Array.isArray(b.arguments)
+          ) {
+            callsById.set(b.id, b.arguments as Record<string, unknown>)
+          }
+        }
+      }
+      continue
+    }
+    if (entry.kind === 'pi.tool-result') {
+      for (const msg of entry.model) {
+        if (msg === null || typeof msg !== 'object') continue
+        const m = msg as { role?: unknown; toolName?: unknown; toolCallId?: unknown; isError?: unknown }
+        if (
+          m.role !== 'toolResult' ||
+          m.toolName !== 'register_structured_output' ||
+          typeof m.toolCallId !== 'string' ||
+          m.isError !== false
+        ) {
+          continue
+        }
+        const args = callsById.get(m.toolCallId)
+        if (args === undefined || !Object.hasOwn(args, 'output')) continue
+        const verdict = validateStructuredOutputPayload(args['output'], schema)
+        if (verdict.ok) {
+          accepted = { found: true, value: verdict.value }
+        }
+      }
+    }
+  }
+
+  return accepted ?? { found: false }
 }
 
 /**

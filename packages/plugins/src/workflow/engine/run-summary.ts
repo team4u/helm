@@ -53,6 +53,7 @@ export function toSummary(record: RunRecord): WorkflowRunSummary {
     ...(record.nodes !== undefined ? { nodes: record.nodes } : {}),
     ...(record.progress !== undefined ? { progress: record.progress } : {}),
     ...(record.replayedFrom !== undefined ? { replayedFrom: record.replayedFrom } : {}),
+    ...(record.resumedByRunId !== undefined ? { resumedByRunId: record.resumedByRunId } : {}),
     ...(record.journalIoErrors !== undefined ? { journalIoErrors: record.journalIoErrors } : {}),
     ...(record.syncForeground === true ? { syncForeground: true } : {}),
     ...(record.detachedAt !== undefined ? { detachedAt: record.detachedAt } : {}),

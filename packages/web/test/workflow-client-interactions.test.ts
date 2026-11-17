@@ -52,6 +52,7 @@ interface SpyCtx extends PluginClientContextType {
   splitCalls: string[]
   workbenchCalls: string[]
   actionCalls: Array<{ actionId: string; input: unknown }>
+  notifications: Array<{ message: string; tone?: 'info' | 'warning' | 'error' }>
 }
 
 function makeSpyCtx(): SpyCtx {
@@ -60,6 +61,7 @@ function makeSpyCtx(): SpyCtx {
   const splitCalls: string[] = []
   const workbenchCalls: string[] = []
   const actionCalls: Array<{ actionId: string; input: unknown }> = []
+  const notifications: Array<{ message: string; tone?: 'info' | 'warning' | 'error' }> = []
   return {
     pluginId: 'builtin:workflow',
     callAction: async (actionId, input) => {
@@ -82,7 +84,9 @@ function makeSpyCtx(): SpyCtx {
       workbenchCalls.push(tab ?? '')
     },
     closeWorkbench: () => {},
-    notify: () => {},
+    notify: (message, tone) => {
+      notifications.push({ message, ...(tone !== undefined ? { tone } : {}) })
+    },
     getPluginDoc: async () => undefined,
     conversationId: 1,
     theme: 'dark',
@@ -93,6 +97,7 @@ function makeSpyCtx(): SpyCtx {
     splitCalls,
     workbenchCalls,
     actionCalls,
+    notifications,
   }
 }
 
@@ -504,6 +509,303 @@ test('前台同步运行卡「转入后台」点击调用 detach 动作（工作
     } finally {
       sub.unmount()
     }
+  } finally {
+    unmount()
+  }
+})
+
+test('后台子代理卡单卡「恢复」：点击派发 run 续接参数、防连点、stopPropagation，且 resumedByRunId 接管后隐藏', { timeout: 60_000 }, async () => {
+  const child = { ...summary(11, 'error'), parentConversationId: 1, parentToolCallId: 'call-sub-fail' } as ConversationSummary
+  const failedSubRun = {
+    id: 'wf_sub_fail',
+    name: '子代理任务',
+    conversationId: 1,
+    kind: 'subagent' as const,
+    status: 'failed' as const,
+    error: '上游网关超时',
+    createdAt: 1,
+    updatedAt: 2,
+    parentToolCallId: 'call-sub-fail',
+    nodes: [{ id: 's0', kind: 'agent' as const, status: 'failed' as const, conversationId: 11 }],
+  }
+  setWorkflowClientStub({
+    conversations: [child],
+    conversation: (id) =>
+      id === 11
+        ? { summary: child, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }
+        : { summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} },
+  })
+  let resolveRun: ((value: unknown) => void) | undefined
+  let rejectRun: ((reason?: unknown) => void) | undefined
+  const spy = makeSpyCtx()
+  spy.callAction = async (actionId, input) => {
+    spy.actionCalls.push({ actionId, input })
+    return await new Promise((resolve, reject) => {
+      resolveRun = resolve
+      rejectRun = reject
+    })
+  }
+  const mod = await importWorkflowClientModule('index.tsx')
+  const Card = mod['SubagentLiveCard'] as React.ComponentType<Record<string, unknown>>
+  const { host, rerender, unmount } = await mountClient(
+    spy,
+    e(Card, { childConversationId: 11, toolStatus: 'error', backgroundRun: failedSubRun }),
+  )
+  try {
+    const resumeBtn = host.querySelector('button[aria-label="恢复该后台子代理任务"]') as HTMLButtonElement | null
+    assert.ok(resumeBtn !== null, '失败后台子代理卡应渲染恢复按钮')
+    assert.equal(resumeBtn.textContent, '恢复')
+
+    // 同拍连点只派发一次，按钮进入 disabled 防重。
+    await act(async () => {
+      resumeBtn.click()
+      resumeBtn.click()
+    })
+    assert.deepEqual(
+      spy.actionCalls,
+      [{ actionId: 'run', input: { resumeFromRunId: 'wf_sub_fail', conversationId: 1 } }],
+      '单卡恢复必须调 run({ resumeFromRunId, conversationId }) 且同拍连点只发一次',
+    )
+    assert.deepEqual(spy.drawerCalls, [], '点击恢复按钮不得冒泡触发打开抽屉')
+    assert.equal(resumeBtn.disabled, true, '在途恢复期间按钮应禁用')
+    assert.ok(resumeBtn.querySelector('svg.spin-slow') !== null, '在途恢复期间图标应旋转')
+
+    await act(async () => {
+      resolveRun?.({ run: { id: 'wf_sub_resumed' } })
+    })
+    assert.equal(resumeBtn.disabled, false)
+    assert.equal(spy.notifications.length, 1)
+    assert.match(spy.notifications[0]!.message, /已发起恢复/)
+    assert.equal(spy.notifications[0]!.tone, undefined)
+
+    // aborted 态同样可恢复，失败响应应 notify(..., 'error')。
+    await rerender(
+      e(Card, {
+        childConversationId: 11,
+        toolStatus: 'error',
+        backgroundRun: { ...failedSubRun, status: 'aborted' },
+      }),
+    )
+    const abortedBtn = host.querySelector('button[aria-label="恢复该后台子代理任务"]') as HTMLButtonElement | null
+    assert.ok(abortedBtn !== null, 'aborted 后台子代理卡同样应渲染恢复按钮')
+    await act(async () => {
+      abortedBtn.click()
+    })
+    await act(async () => {
+      rejectRun?.(new Error('服务忙'))
+    })
+    assert.equal(spy.notifications.length, 2)
+    assert.equal(spy.notifications[1]!.tone, 'error')
+    assert.match(spy.notifications[1]!.message, /服务忙/)
+
+    // resumedByRunId 已接管：隐藏恢复按钮。
+    await rerender(
+      e(Card, {
+        childConversationId: 11,
+        toolStatus: 'error',
+        backgroundRun: { ...failedSubRun, resumedByRunId: 'wf_sub_resumed' },
+      }),
+    )
+    assert.ok(
+      host.querySelector('button[aria-label="恢复该后台子代理任务"]') === null,
+      'resumedByRunId 已接管后必须隐藏单卡恢复按钮',
+    )
+  } finally {
+    unmount()
+  }
+})
+
+test('DSL 工作流卡 resumedByRunId 已接管时隐藏「断点恢复」按钮', { timeout: 60_000 }, async () => {
+  const failedDsl = {
+    id: 'wf_dsl_fail',
+    name: '编排流',
+    conversationId: 1,
+    kind: 'workflow' as const,
+    status: 'failed' as const,
+    error: '节点失败',
+    createdAt: 1,
+    updatedAt: 2,
+    nodes: [{ id: 'n1', kind: 'agent' as const, status: 'failed' as const }],
+  }
+  const spy = makeSpyCtx()
+  const mod = await importWorkflowClientModule('WorkflowRunCard.tsx')
+  const Body = mod['WorkflowRunCardBody'] as React.ComponentType<Record<string, unknown>>
+  const { host, rerender, unmount } = await mountClient(
+    spy,
+    e(Body, {
+      run: failedDsl,
+      cardOpen: false,
+      onToggleCard: () => {},
+      resultOpen: false,
+      onToggleResult: () => {},
+      inWorkbench: true,
+    }),
+  )
+  try {
+    assert.ok(
+      [...host.querySelectorAll('button')].some((b) => (b.textContent ?? '').includes('断点恢复')),
+      '未接管的失败 DSL 工作流应渲染断点恢复按钮',
+    )
+    await rerender(
+      e(Body, {
+        run: { ...failedDsl, resumedByRunId: 'wf_dsl_next' },
+        cardOpen: false,
+        onToggleCard: () => {},
+        resultOpen: false,
+        onToggleResult: () => {},
+        inWorkbench: true,
+      }),
+    )
+    assert.ok(
+      ![...host.querySelectorAll('button')].some((b) => (b.textContent ?? '').includes('断点恢复')),
+      'resumedByRunId 已接管后必须隐藏断点恢复按钮',
+    )
+  } finally {
+    unmount()
+  }
+})
+
+test('工作台顶栏「恢复失败 (N)」显隐、防连点、resume_failed 载荷与 skipped 通知反馈', { timeout: 60_000 }, async () => {
+  const child11 = { ...summary(11, 'error'), parentConversationId: 1, parentToolCallId: 'c-sub' } as ConversationSummary
+  const runs = [
+    {
+      id: 'wf_fail_1',
+      name: '工作流 1',
+      conversationId: 1,
+      kind: 'workflow' as const,
+      status: 'failed' as const,
+      error: 'gate exit 1',
+      createdAt: 1,
+      updatedAt: 2,
+      nodes: [{ id: 'a', kind: 'agent' as const, status: 'failed' as const }],
+    },
+    {
+      id: 'wf_fail_2',
+      name: '子代理 2',
+      conversationId: 1,
+      kind: 'subagent' as const,
+      status: 'failed' as const,
+      error: 'timeout',
+      createdAt: 3,
+      updatedAt: 4,
+      parentToolCallId: 'c-sub',
+      nodes: [{ id: 's', kind: 'agent' as const, status: 'failed' as const, conversationId: 11 }],
+    },
+    {
+      id: 'wf_uncertain',
+      name: '不确定工作流',
+      conversationId: 1,
+      kind: 'workflow' as const,
+      status: 'failed' as const,
+      error: 'workflow_action_uncertain: action left dangling',
+      createdAt: 5,
+      updatedAt: 6,
+      nodes: [{ id: 'a', kind: 'action' as const, status: 'failed' as const }],
+    },
+    {
+      id: 'wf_taken',
+      name: '已接管工作流',
+      conversationId: 1,
+      kind: 'workflow' as const,
+      status: 'failed' as const,
+      resumedByRunId: 'wf_new',
+      createdAt: 7,
+      updatedAt: 8,
+      nodes: [{ id: 'a', kind: 'action' as const, status: 'failed' as const }],
+    },
+    {
+      id: 'wf_child_conv',
+      name: '后代会话失败',
+      conversationId: 11,
+      kind: 'workflow' as const,
+      status: 'failed' as const,
+      createdAt: 9,
+      updatedAt: 10,
+      nodes: [{ id: 'a', kind: 'action' as const, status: 'failed' as const }],
+    },
+  ]
+  setWorkflowClientStub({
+    docValue: { runs },
+    conversations: [child11],
+    conversation: (id) =>
+      id === 11
+        ? { summary: child11, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }
+        : { summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} },
+  })
+  let resolveBatch: ((value: unknown) => void) | undefined
+  const spy = makeSpyCtx()
+  spy.callAction = async (actionId, input) => {
+    spy.actionCalls.push({ actionId, input })
+    return await new Promise((resolve) => {
+      resolveBatch = resolve
+    })
+  }
+  const mod = await importWorkflowClientModule('index.tsx')
+  const Panel = mod['WorkflowWorkbenchPanel'] as React.ComponentType<Record<string, unknown>>
+  const { host, rerender, unmount } = await mountClient(
+    spy,
+    e(Panel, { conversation: summary(1, 'idle') }),
+  )
+  try {
+    const batchBtn = host.querySelector('button[aria-label="恢复失败 (2)"]') as HTMLButtonElement | null
+    assert.ok(batchBtn !== null, '工作台顶栏应仅计入当前会话可恢复的 2 条失败任务')
+    assert.equal(batchBtn.textContent, '恢复失败 (2)')
+
+    // 同步双击只发出一次 resume_failed({ conversationId: 1 })。
+    await act(async () => {
+      batchBtn.click()
+      batchBtn.click()
+    })
+    assert.deepEqual(
+      spy.actionCalls,
+      [{ actionId: 'resume_failed', input: { conversationId: 1 } }],
+      '批量恢复必须调用 resume_failed({ conversationId }) 且防连点',
+    )
+    assert.equal(batchBtn.disabled, true, '批量恢复进行中按钮应禁用')
+    assert.ok(batchBtn.querySelector('svg.spin-slow') !== null, '批量恢复进行中图标应旋转')
+
+    await act(async () => {
+      resolveBatch?.({
+        resumed: [{ id: 'wf_r1' }, { id: 'wf_r2' }],
+        skipped: [{ runId: 'wf_uncertain', reason: 'workflow_action_uncertain' }],
+      })
+    })
+    assert.equal(batchBtn.disabled, false)
+    assert.equal(spy.notifications.length, 1)
+    assert.match(spy.notifications[0]!.message, /2/)
+    assert.match(spy.notifications[0]!.message, /跳过 1/)
+
+    // 当剩余可恢复失败任务归零后按钮隐藏；非法返回体触发 error 通知。
+    setWorkflowClientStub({
+      docValue: {
+        runs: runs.map((r) => (r.id === 'wf_fail_1' || r.id === 'wf_fail_2' ? { ...r, resumedByRunId: 'wf_done' } : r)),
+      },
+      conversations: [child11],
+      conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
+    })
+    await rerender(e(Panel, { conversation: summary(1, 'idle') }))
+    assert.ok(
+      ![...host.querySelectorAll('button')].some((b) => (b.textContent ?? '').includes('恢复失败')),
+      '无可恢复失败任务时顶栏恢复失败按钮应隐藏',
+    )
+
+    // 恢复单条可恢复记录并验证非法响应形状显式报错。
+    setWorkflowClientStub({
+      docValue: { runs: [runs[0]!] },
+      conversations: [],
+      conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
+    })
+    await rerender(e(Panel, { conversation: summary(1, 'idle') }))
+    const oneBtn = host.querySelector('button[aria-label="恢复失败 (1)"]') as HTMLButtonElement | null
+    assert.ok(oneBtn !== null)
+    await act(async () => {
+      oneBtn.click()
+    })
+    await act(async () => {
+      resolveBatch?.({ unexpected: true })
+    })
+    assert.equal(spy.notifications.length, 2)
+    assert.equal(spy.notifications[1]!.tone, 'error')
   } finally {
     unmount()
   }

@@ -64,7 +64,13 @@ import {
 } from './contracts.js'
 import { WorkflowService } from './workflow/engine/index.js'
 import { WorktreeIsolation } from './workflow/isolation.js'
-import { registerWorkflowConfigSchema, readMaxConcurrentAgents, readMaxSubagentDepth } from './workflow/config.js'
+import {
+  isEffectiveAutoRecover,
+  readAutoRecoverOnRestart,
+  readMaxConcurrentAgents,
+  readMaxSubagentDepth,
+  registerWorkflowConfigSchema,
+} from './workflow/config.js'
 import { createManagedSubagentRegistry, type ManagedSubagentEntry } from './workflow/depth.js'
 import { createRunsProjection } from './workflow/projection.js'
 import { createBackgroundPolicy, createBackgroundReporter } from './workflow/background.js'
@@ -124,6 +130,7 @@ export function createWorkflowPlugin(): PluginDefinition {
       registerWorkflowConfigSchema(ctx)
       readMaxConcurrentAgents(ctx)
       readMaxSubagentDepth(ctx)
+      readAutoRecoverOnRestart(ctx)
 
       // ---- Depth guard and managed-subagent registry (validating all persisted entries at construction) ----
       const registry = createManagedSubagentRegistry({
@@ -188,6 +195,9 @@ export function createWorkflowPlugin(): PluginDefinition {
           profiles: {
             get: (id) => ctx.host.profiles.get(id),
           },
+          get isClosing() {
+            return ctx.host.isClosing
+          },
         },
         docStore: worktreeDocStore,
       })
@@ -197,6 +207,8 @@ export function createWorkflowPlugin(): PluginDefinition {
         dataDir: ctx.dataDir,
         state: stateStore,
         concurrency: readMaxConcurrentAgents(ctx),
+        autoRecoverOnRestart: () => isEffectiveAutoRecover(ctx),
+        deferExternalReattach: true,
         // Persistent value-level redaction hook (declared by contract, injected by the main app; the
         // actual sole source is the host's unified redact port): run records/ledger passes stash redaction before writes, preventing secrets from landing in storage.
         redact: (text) => ctx.host.redact(text),
@@ -258,7 +270,11 @@ export function createWorkflowPlugin(): PluginDefinition {
           // close/flush failures propagate directly (real persistence failures, not swallowed); the final projection
           // is a derived observation plane: read failures (e.g. persistent-layer corruption) publish an explicit notification diagnostic without blocking teardown -- engine terminal states are already in records, and corruption will explicitly error on any business read path, never silently.
           projection.beginStopping()
-          await workflows.close()
+          if (ctx.host.isClosing && isEffectiveAutoRecover(ctx)) {
+            await workflows.suspend()
+          } else {
+            await workflows.close()
+          }
           try {
             projection.syncFinal()
             await records.flush()

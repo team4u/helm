@@ -141,6 +141,7 @@ export class ResumeCoordinator {
       agentId: request.agentId ?? pane.agentId,
       ...(spawnRunId !== undefined ? { workflowRunId: spawnRunId } : {}),
     })!
+    await this.port.registry.flushDisk()
     request.onResolved?.(this.port.executionInfoOf(updated))
     // A missing request.cwd means keeping the pane's actual cwd (no window reopen, no env tab rebuild).
     // Resume does not re-run agent.start (the pane already has an agent); go straight into the deliver-approve-handoff loop.

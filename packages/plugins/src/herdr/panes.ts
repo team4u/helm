@@ -12,6 +12,7 @@
 
 import { HelmError } from '@helm/protocol'
 import { targetNodeId, type HerdrTarget } from './contracts.js'
+import { OUTPUT_FILE_PATTERN } from './transport-output.js'
 
 export type PaneOutcome = 'running' | 'keepalive' | 'failed' | 'settled'
 
@@ -66,7 +67,10 @@ export interface ManagedDoc {
     parentConversationId: number
     agentId?: string
     workflowRunId?: string
+    /** 当前生命周期形态。 */
     outcome: PaneOutcome
+    /** 持久化交接文件名（成功保活或清理结算后清空）。 */
+    outputFileName?: string
     createdAt: number
     settledAt?: number
     failureNote?: string
@@ -84,6 +88,20 @@ export function nodeIdOf(pane: { target?: HerdrTarget }): string | undefined {
   return targetNodeId(pane.target)
 }
 
+/** 校验持久记录中的交接文件名（必须为 undefined 或匹配 OUTPUT_FILE_PATTERN）。 */
+function assertValidManagedOutputFileName(outputFileName: unknown, paneId: string): string | undefined {
+  if (outputFileName === undefined) return undefined
+  if (typeof outputFileName !== 'string' || !OUTPUT_FILE_PATTERN.test(outputFileName)) {
+    throw new HelmError(
+      'herdr_managed_invalid',
+      `Herdr 受管记录包含非法交接文件名：${String(outputFileName)}`,
+      500,
+      { paneId, outputFileName: typeof outputFileName === 'string' ? outputFileName : typeof outputFileName },
+    )
+  }
+  return outputFileName
+}
+
 /**
  * Pane registry (in-process authoritative state + persistent mirror write port).
  */
@@ -92,15 +110,16 @@ export class PaneRegistry {
   static readonly MAX_RETAINED_SETTLED = 50
   static readonly MAX_RETAINED_FAILED = 20
   private readonly panes = new Map<string, ManagedPane>()
-  private readonly mirror: { get(): ManagedDoc; set(doc: ManagedDoc): void }
+  private readonly mirror: { get(): ManagedDoc; set(doc: ManagedDoc): void; flush?: () => Promise<void> }
 
-  constructor(mirror: { get(): ManagedDoc; set(doc: ManagedDoc): void }, restored?: ManagedDoc) {
+  constructor(mirror: { get(): ManagedDoc; set(doc: ManagedDoc): void; flush?: () => Promise<void> }, restored?: ManagedDoc) {
     this.mirror = mirror
     if (restored) {
       for (const pane of restored.panes) {
         if (!pane.target || !pane.routing || typeof pane.routing.kind !== 'string' || pane.routing.kind === '') {
           throw new HelmError('herdr_managed_invalid', 'Herdr managed record is missing target/routing', 500)
         }
+        const outputFileName = assertValidManagedOutputFileName(pane.outputFileName, pane.paneId)
         this.panes.set(scopeKey(targetNodeId(pane.target), pane.paneId), {
           target: pane.target,
           paneId: pane.paneId,
@@ -114,7 +133,7 @@ export class PaneRegistry {
           agentId: pane.agentId,
           workflowRunId: pane.workflowRunId,
           outcome: pane.outcome,
-          outputFileName: undefined,
+          outputFileName,
           createdAt: pane.createdAt,
           settledAt: pane.settledAt,
           failureNote: pane.failureNote,
@@ -124,7 +143,8 @@ export class PaneRegistry {
   }
 
   add(pane: ManagedPane): void {
-    this.panes.set(scopeKey(nodeIdOf(pane), pane.paneId), pane)
+    const outputFileName = assertValidManagedOutputFileName(pane.outputFileName, pane.paneId)
+    this.panes.set(scopeKey(nodeIdOf(pane), pane.paneId), { ...pane, outputFileName })
     this.flush()
   }
 
@@ -155,7 +175,11 @@ export class PaneRegistry {
     const key = scopeKey(nodeId, paneId)
     const pane = this.panes.get(key)
     if (!pane) return undefined
-    this.panes.set(key, { ...pane, ...patch })
+    const next = { ...pane, ...patch }
+    if ('outputFileName' in patch) {
+      next.outputFileName = assertValidManagedOutputFileName(patch.outputFileName, paneId)
+    }
+    this.panes.set(key, next)
     this.flush()
     return this.panes.get(key)
   }
@@ -195,7 +219,12 @@ export class PaneRegistry {
   markSettledVolatile(nodeId: string | undefined, paneId: string): void {
     const pane = this.panes.get(scopeKey(nodeId, paneId))
     if (pane === undefined) return
-    this.panes.set(scopeKey(nodeId, paneId), { ...pane, outcome: 'settled', settledAt: Date.now() })
+    this.panes.set(scopeKey(nodeId, paneId), {
+      ...pane,
+      outcome: 'settled',
+      settledAt: Date.now(),
+      outputFileName: undefined,
+    })
   }
 
   /** liveTasks label: still running + succeeded keepalive pending settle (failure/settled don't count). */
@@ -225,11 +254,17 @@ export class PaneRegistry {
         ...(p.agentId !== undefined ? { agentId: p.agentId } : {}),
         ...(p.workflowRunId !== undefined ? { workflowRunId: p.workflowRunId } : {}),
         outcome: p.outcome,
+        ...(p.outputFileName !== undefined ? { outputFileName: p.outputFileName } : {}),
         createdAt: p.createdAt,
         ...(p.settledAt !== undefined ? { settledAt: p.settledAt } : {}),
         ...(p.failureNote !== undefined ? { failureNote: p.failureNote } : {}),
       })),
     }
+  }
+
+  /** 将排队中的持久镜像写冲刷落盘（底层 store 未提供 flush 时立即完成）。 */
+  flushDisk(): Promise<void> {
+    return this.mirror.flush ? this.mirror.flush() : Promise.resolve()
   }
 
   private flush(): void {

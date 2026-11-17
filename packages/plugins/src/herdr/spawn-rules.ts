@@ -15,6 +15,7 @@
 
 import { HelmError, isAbsoluteTargetPath, normalizeTargetPath, type Profile, type TargetPlatform } from '@helm/protocol'
 import { isValidNodeId } from './transport.js'
+import { OUTPUT_FILE_PATTERN } from './transport-output.js'
 
 /** Herdr CLI Agent kind identifier (e.g. agy/claude/codex/pi; no hardcoded enumeration -- validated by Herdr). */
 const KIND_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/
@@ -263,7 +264,7 @@ export const HashShort = {
 /** Handoff file name: wf-out-<safeId>.json|.md (aligned with transport's OUTPUT_FILE_PATTERN). */
 export function buildOutputFileName(safeId: string, ext: 'json' | 'md'): string {
   const name = `wf-out-${safeId}.${ext}`
-  if (!/^wf-out-[A-Za-z0-9_.-]{1,64}\.(json|md)$/.test(name)) {
+  if (!OUTPUT_FILE_PATTERN.test(name)) {
     throw new HelmError('validation_error', `invalid handoff file name: ${name}`, 400, { name })
   }
   return name

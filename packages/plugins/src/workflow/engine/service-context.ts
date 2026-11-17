@@ -35,6 +35,16 @@ export interface WorkflowServiceOptions {
    * 传递，不得依赖 resume 还原 secret 原文。
    */
   redact?: (text: string) => string
+  /**
+   * 重启自动恢复开关（缺省 true）：true 时宿主关停走 suspend() 保留 running
+   * 与子会话，启动时原位恢复；false 时回退旧版 close() / failed(interrupted)。
+   */
+  autoRecoverOnRestart?: boolean | (() => boolean)
+  /**
+   * 延迟外部运行时（executionId）重挂至 runtime.started（待 herdr 等插件
+   * 完成 start() 后执行），原生子会话仍于 init() 阶段即完成重挂（早于 harness.resume()）。
+   */
+  deferExternalReattach?: boolean
 }
 
 /** 引擎调度 caps（只含显式提供的项；正整数约束见 resolveCaps）。 */
@@ -110,4 +120,12 @@ export interface WorkflowServiceContext {
   makeEngineHost(run: ActiveRun, parent: ConversationSummary): WorkflowHost
   /** 守卫中止 run 的子会话（human 红线由内核原子复核）。 */
   abortChildConversation(run: ActiveRun, conversationId: number): Promise<void>
+  /** 当前是否开启重启自动恢复（兼顾配置与 HELM_AUTO_RECOVER 逃生阀）。 */
+  isAutoRecoverOnRestart(): boolean
+  /** 判定 run 是否正处于宿主关停优雅挂起路径（非用户取消）。 */
+  isRunSuspending(run: ActiveRun): boolean
+  /** 启动时是否把外部 executionId / pre-resolve 重挂推迟到 runtime.started。 */
+  deferExternalReattach: boolean
+  /** 推迟外部重挂时等待 runtime.started 放行门；非推迟模式下立即 resolved。 */
+  waitExternalRuntimeReady(): Promise<void>
 }

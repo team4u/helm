@@ -30,6 +30,7 @@ import { AskCoordinator, type AskEntry } from './herdr/asks.js'
 import { MetadataProjector } from './herdr/metadata.js'
 import { PaneRegistry, EMPTY_MANAGED_DOC, nodeIdOf, type ManagedDoc } from './herdr/panes.js'
 import { HerdrExecutor } from './herdr/executor.js'
+import { isPaneLostError } from './herdr/executor-reattach.js'
 import { registerHerdrActions } from './herdr/actions.js'
 import { HerdrProbeCollector } from './herdr/probes.js'
 import {
@@ -118,6 +119,7 @@ export function createHerdrPlugin(
       let managedDoc: ReturnType<typeof ctx.doc<ManagedDoc>>
       let asksRelease: (() => void) | undefined
       let workflowRelease: (() => void) | undefined
+      let runtimeStartedRelease: (() => void) | undefined
 
       /** Cache of the pane seq from the last processed socket event (event dedup; agent.get is authoritative). */
       const eventSeqCache = new Map<string, number>()
@@ -131,7 +133,11 @@ export function createHerdrPlugin(
         localTarget: () => frozenLocalTarget,
         signal: () => connectionAbort.signal,
         settleUnmanaged: (pane) => {
-          registryRef.current?.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+          registryRef.current?.update(nodeIdOf(pane), pane.paneId, {
+            outcome: 'settled',
+            settledAt: Date.now(),
+            outputFileName: undefined,
+          })
           executorRef.current?.releasePaneState(pane)
           forgetPaneCaches(nodeIdOf(pane), pane.paneId)
         },
@@ -329,7 +335,11 @@ export function createHerdrPlugin(
             // would retain a copy of HELM_TOKEN until the disable rebuild.
             executorRef.current?.releasePaneState(pane)
             if (pane.outcome !== 'failed' && pane.outcome !== 'settled') {
-              registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+              registry.update(nodeIdOf(pane), pane.paneId, {
+                outcome: 'settled',
+                settledAt: Date.now(),
+                outputFileName: undefined,
+              })
             }
             forgetPaneCaches(nodeIdOf(pane), pane.paneId)
             refreshOverview()
@@ -371,7 +381,15 @@ export function createHerdrPlugin(
         try {
           await ctx.host.cancelAsk(entry.askId, reason)
         } catch (error) {
-          if (error instanceof HelmError && error.status === 404) return
+          if (
+            error instanceof HelmError &&
+            (error.status === 404 ||
+              error.code === 'ask_already_settled' ||
+              error.code === 'plugin_host_disposed' ||
+              error.code === 'plugin_context_expired')
+          ) {
+            return
+          }
           host.notify(
             'Herdr approval cancellation failed',
             `ask ${entry.askId} cancel failed: ${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
@@ -389,18 +407,29 @@ export function createHerdrPlugin(
 
       async function reconcile(): Promise<void> {
         const registry = registryRef.current!
+        const workflowPluginActive = ctx.host
+          .listPlugins()
+          .some((plugin) => plugin.id === 'builtin:workflow' && plugin.enabled)
         const snapshots = new Map<string, ReturnType<typeof parseSessionSnapshot>>([
           [JSON.stringify(frozenLocalTarget), parseSessionSnapshot(await transportOf().call(frozenLocalTarget, 'session.snapshot', {}, { timeoutMs: 5_000 }))],
         ])
         for (const pane of registry.all()) {
-          if (pane.outcome === 'settled') continue
+          if (pane.outcome === 'settled' || pane.outcome === 'failed') continue
+          if (executorRef.current?.isActiveTask(pane)) continue
           const key = JSON.stringify(pane.target)
           if (!snapshots.has(key)) snapshots.set(key, parseSessionSnapshot(await transportOf().call(pane.target, 'session.snapshot', {}, { timeoutMs: 5_000 })))
           const agent = snapshots.get(key)!.agents.find((a) => a.paneId === pane.paneId)
-          if (pane.outcome === 'failed') continue // persistent failed: keep the diagnostic scene
           if (agent === undefined) {
+            if (pane.outcome === 'running' && pane.outputFileName !== undefined) {
+              // Keep running pane record across restart so reattach can inspect .helm/<outputFileName> or report herdr_pane_lost honestly.
+              continue
+            }
             // Pane already gone: register settled (no resources to reclaim) + align the executor side.
-            registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+            registry.update(nodeIdOf(pane), pane.paneId, {
+              outcome: 'settled',
+              settledAt: Date.now(),
+              outputFileName: undefined,
+            })
             executorRef.current?.releasePaneState(pane)
             forgetPaneCaches(nodeIdOf(pane), pane.paneId)
             continue
@@ -408,12 +437,16 @@ export function createHerdrPlugin(
           // Exact ownership verification: agent.name must equal the recorded agentName (no startsWith --
           // helm-wf-abc must not claim helm-wf-abcde). Mismatched identity gives up ownership; no wrong closes.
           if (agent.name !== pane.agentName) {
-            registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+            registry.update(nodeIdOf(pane), pane.paneId, {
+              outcome: 'settled',
+              settledAt: Date.now(),
+              outputFileName: undefined,
+            })
             executorRef.current?.releasePaneState(pane)
             forgetPaneCaches(nodeIdOf(pane), pane.paneId)
             continue
           }
-          // Genuinely still working/blocked: keep and report (never fake completion to auto-reclaim).
+          // Genuinely still working/blocked/unknown: keep and report (never fake completion to auto-reclaim).
           if (agent.agentStatus === 'working' || agent.agentStatus === 'blocked' || agent.agentStatus === 'unknown') {
             host.notify(
               'Herdr startup reconciliation found in-flight panes',
@@ -422,7 +455,15 @@ export function createHerdrPlugin(
             )
             continue
           }
-          // Already finished (idle/done/unknown) with no in-flight spawn (process restart): orphan, reclaimable.
+          // Keep running panes carrying persisted outputFileName so reattach can collect the handoff file or run single self-heal.
+          if (pane.outcome === 'running' && pane.outputFileName !== undefined) {
+            continue
+          }
+          // Keep keepalive panes belonging to an active workflow until workflow.settled (or post-startup orphan cleanup).
+          if (pane.outcome === 'keepalive' && pane.workflowRunId !== undefined && workflowPluginActive) {
+            continue
+          }
+          // Already finished (idle/done) with no in-flight reattach/workflow ownership: orphan, reclaimable.
           if (pane.outcome === 'running' || pane.outcome === 'keepalive') {
             await executorRef.current!.closePane(pane, 'settled').catch((error) => {
               host.notify(
@@ -433,6 +474,91 @@ export function createHerdrPlugin(
             })
           }
         }
+      }
+
+      /**
+       * Post-startup orphan reconciliation (on runtime.started):
+       * reclaim idle/vanished panes whose owning workflow already settled or does not exist.
+       */
+      async function reconcileWorkflowOrphansAfterStartup(): Promise<void> {
+        if (stopping || connectionAbort.signal.aborted) return
+        const registry = registryRef.current
+        const executor = executorRef.current
+        if (!registry || !executor) return
+        const workflowPluginActive = ctx.host
+          .listPlugins()
+          .some((plugin) => plugin.id === 'builtin:workflow' && plugin.enabled)
+        if (!workflowPluginActive) return
+        for (const pane of registry.all()) {
+          if (stopping || connectionAbort.signal.aborted) return
+          if (pane.workflowRunId === undefined) continue
+          if (pane.outcome === 'settled' || pane.outcome === 'failed') continue
+          if (executor.isActiveTask(pane)) continue
+          let runStatus: string | undefined
+          try {
+            const summary = (await ctx.host.invokeAction('builtin:workflow', 'inspect', {
+              runId: pane.workflowRunId,
+            })) as { status?: string } | undefined
+            runStatus = summary?.status
+          } catch (error) {
+            if (error instanceof HelmError && error.code === 'not_found') {
+              runStatus = 'not_found'
+            } else {
+              continue
+            }
+          }
+          if (runStatus === 'running') continue
+          if (pane.outcome === 'keepalive') {
+            await executor.closePane(pane, 'workflow-settled').catch((error) => {
+              host.notify(
+                'Herdr workflow orphan cleanup failed',
+                `pane ${pane.paneId} (workflow ${pane.workflowRunId}) cleanup failed: ${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
+                'error',
+              )
+            })
+            continue
+          }
+          try {
+            const info = parseAgentResult(
+              await transportOf().call(pane.target, 'agent.get', { target: pane.paneId }, {
+                signal: connectionAbort.signal,
+                timeoutMs: 5_000,
+              }),
+              'agent.get',
+              'agent_info',
+            )
+            if (info.name !== pane.agentName || info.tabId !== pane.tabId) {
+              registry.update(nodeIdOf(pane), pane.paneId, {
+                outcome: 'settled',
+                settledAt: Date.now(),
+                outputFileName: undefined,
+              })
+              executor.releasePaneState(pane)
+              forgetPaneCaches(nodeIdOf(pane), pane.paneId)
+              continue
+            }
+            if (info.agentStatus === 'idle' || info.agentStatus === 'done') {
+              await executor.closePane(pane, 'workflow-settled').catch((error) => {
+                host.notify(
+                  'Herdr workflow orphan cleanup failed',
+                  `pane ${pane.paneId} (workflow ${pane.workflowRunId}) cleanup failed: ${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
+                  'error',
+                )
+              })
+            }
+          } catch (error) {
+            if (isPaneLostError(error)) {
+              registry.update(nodeIdOf(pane), pane.paneId, {
+                outcome: 'settled',
+                settledAt: Date.now(),
+                outputFileName: undefined,
+              })
+              executor.releasePaneState(pane)
+              forgetPaneCaches(nodeIdOf(pane), pane.paneId)
+            }
+          }
+        }
+        registry.prune()
       }
 
       // ---- Dual-track cleanup ----
@@ -555,25 +681,23 @@ export function createHerdrPlugin(
         },
       })
 
-      // ---- service: start connects (ack precedes reconciliation), stop cleans everything ----
-      ctx.service({
-        id: 'herdr-connection',
-        liveTasks() {
-          return registryRef.current ? registryRef.current.liveTaskLabels() : []
-        },
-        async start() {
-          stopping = false
-          connectionAbort = new AbortController()
-          const config = ctx.getConfig() as Partial<HerdrConfig>
-          // Port assembly (frozen within the cycle; a missing port capability is explicitly reported by the host port itself).
+      /** Prepare phase (in-memory + persisted doc validation, no network): ensures executor is ready before workflow.start reattach. */
+      function prepareLocalRuntime(): void {
+        stopping = false
+        connectionAbort = new AbortController()
+        const config = ctx.getConfig() as Partial<HerdrConfig>
+        try {
           resolveDeps()
           const deps = depsRef.current!
-          // Freeze the local connection target for this enable cycle (shared by all calls afterwards; hot config no longer applies).
           frozenLocalTarget = resolveLocalTarget(config)
           const startupTimeout = normalizeStartupTimeoutMs(config.startupTimeoutMs)
           const restored = managedDoc.get()
           const registry = new PaneRegistry(
-            { get: () => managedDoc.get(), set: (doc) => managedDoc.set(doc) },
+            {
+              get: () => managedDoc.get(),
+              set: (doc) => managedDoc.set(doc),
+              flush: () => managedDoc.flush(),
+            },
             restored,
           )
           registryRef.current = registry
@@ -590,12 +714,38 @@ export function createHerdrPlugin(
               startupTimeoutMs: () => startupTimeout,
               createAsk: host.createAsk,
               cancelAsk: host.cancelAsk,
+              isClosing: () => hostApi.isClosing,
+              connectionSignal: connectionAbort.signal,
             },
             deps.transport!,
             frozenLocalTarget,
             deps.pollIntervalMs,
           )
           executorRef.current = executor
+        } catch (error) {
+          registryRef.current = undefined
+          executorRef.current = undefined
+          projectorRef.current = undefined
+          depsRef.current = undefined
+          throw error
+        }
+      }
+
+      // ---- service：prepare 本地就位，start 连接（ack 先于对账），stop 按 isClosing 分流 ----
+      ctx.service({
+        id: 'herdr-connection',
+        liveTasks() {
+          return registryRef.current ? registryRef.current.liveTaskLabels() : []
+        },
+        prepare() {
+          prepareLocalRuntime()
+        },
+        async start() {
+          if (registryRef.current === undefined || executorRef.current === undefined) {
+            prepareLocalRuntime()
+          }
+          const deps = depsRef.current!
+          const registry = registryRef.current!
           overviewRef.current = new OverviewProjector(
             { redact: deps.redact, notify: host.notify },
             (doc) => { if (!stopping) overviewDoc.set(doc) },
@@ -635,6 +785,7 @@ export function createHerdrPlugin(
             }),
           )
           workflowRelease = ctx.host.onEvent('workflow.settled', (raw) => settleWorkflow(raw as WorkflowRunSummary))
+          runtimeStartedRelease = ctx.host.onEvent('runtime.started', () => reconcileWorkflowOrphansAfterStartup())
 
           try {
             // subscribe ack first; any step failing releases the resolver, listeners and acquired resources.
@@ -651,7 +802,7 @@ export function createHerdrPlugin(
           }
         },
         async stop() {
-          await stopResources()
+          await stopResources(true)
         },
       })
 
@@ -668,9 +819,14 @@ export function createHerdrPlugin(
         return { socketPath: resolveSocketPath({ ...(session !== undefined ? { session } : {}), ...(socketPath !== undefined ? { socketPath } : {}) }) }
       }
 
-      /** Service resource cleanup: subscriptions/resolver/listeners + reclaimable own panes (failed keeps the scene). */
-      async function stopResources(): Promise<void> {
+      /**
+       * Service resource cleanup: subscriptions/resolver/listeners + pane teardown branched by host shutdown:
+       * - isClosing === true (graceful Hub shutdown): keep running panes (and workflow-owned keepalive panes) alive in Herdr daemon;
+       * - isClosing === false (plugin disable / test dispose): close all non-failed/settled own panes.
+       */
+      async function stopResources(fromStop = false): Promise<void> {
         const errors: unknown[] = []
+        const closingHost = hostApi.isClosing
         stopping = true
         connectionAbort.abort()
         clearSubscriptionRetry()
@@ -705,6 +861,12 @@ export function createHerdrPlugin(
           errors.push(err)
         }
         workflowRelease = undefined
+        try {
+          runtimeStartedRelease?.()
+        } catch (err) {
+          errors.push(err)
+        }
+        runtimeStartedRelease = undefined
         // Cancel all pending Asks; cancellation failures are recorded as-is (not silently swallowed). On the dispose path the host
         // may have disposed first (plugin_host_disposed 409 is an expected terminal state, no longer counted as failure --
         // AskService's own process-level cleanup finishes the job; coordinator entries are all settled with fallbacks).
@@ -714,7 +876,11 @@ export function createHerdrPlugin(
               await ctx.host.cancelAsk(entry.askId, 'cancelled')
             } catch (err) {
               const expected =
-                err instanceof HelmError && (err.status === 404 || err.code === 'plugin_host_disposed' || err.code === 'plugin_context_expired')
+                err instanceof HelmError &&
+                (err.status === 404 ||
+                  err.code === 'ask_already_settled' ||
+                  err.code === 'plugin_host_disposed' ||
+                  err.code === 'plugin_context_expired')
               if (!expected) errors.push(err)
             }
           }
@@ -724,6 +890,10 @@ export function createHerdrPlugin(
         if (registry) {
           for (const pane of registry.all()) {
             if (pane.outcome === 'failed' || pane.outcome === 'settled') continue
+            if (closingHost) {
+              if (pane.outcome === 'running') continue
+              if (pane.outcome === 'keepalive' && pane.workflowRunId !== undefined) continue
+            }
             // Remote reclaimable panes are cleaned too (closePane is idempotent, closes only own resources;
             // the frozen target guarantees we reach the server that created it).
             try {
@@ -731,6 +901,16 @@ export function createHerdrPlugin(
             } catch (err) {
               errors.push(err)
             }
+          }
+        }
+        if (closingHost && fromStop) {
+          try {
+            await managedDoc.flush()
+          } catch (err) {
+            const expected =
+              err instanceof HelmError &&
+              (err.code === 'plugin_host_disposed' || err.code === 'plugin_context_expired')
+            if (!expected) errors.push(err)
           }
         }
         registryRef.current = undefined

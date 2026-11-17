@@ -55,29 +55,37 @@ export interface PaneHandoffPort {
   mdStableRecheckMs?: number
 }
 
+export type HandoffReadAttempt =
+  | { ok: true; value: unknown }
+  | { ok: false; reason: string; recoverable: boolean; kind: 'missing' | 'invalid' }
+
 export class PaneHandoff {
   /** Interval for the md handoff stability recheck (accepted only when two reads agree; json has hard schema validation and needs no such check). */
   private static readonly DEFAULT_MD_STABLE_RECHECK_MS = 300
 
   constructor(private readonly port: PaneHandoffPort) {}
 
-  async readAndValidateOutput(request: AgentSpawnRequest, pane: ManagedPane): Promise<unknown> {
+  /**
+   * 非破坏性地探测并校验一次交接文件（不触发追问自愈，供 reattach 优先检查）；
+   * 非缺失 IO/逃逸错误照常显式上抛。
+   */
+  async tryReadValidOutput(request: AgentSpawnRequest, pane: ManagedPane): Promise<HandoffReadAttempt> {
     const transport = this.port.transport
     const fileName = pane.outputFileName!
     const target = targetOf(pane)
-    const readOnce = async (): Promise<{ ok: true; value: unknown } | { ok: false; reason: string; recoverable: boolean }> => {
+    const readOnce = async (): Promise<HandoffReadAttempt> => {
       let raw: string
       try {
         raw = await transport.readOutput(target, pane.effectiveCwd, fileName, request.signal)
       } catch (error) {
         if (error instanceof HelmError && error.code === 'herdr_output_missing') {
-          return { ok: false, reason: `handoff file missing: ${fileName}`, recoverable: true }
+          return { ok: false, reason: `handoff file missing: ${fileName}`, recoverable: true, kind: 'missing' }
         }
         // Other IO/SSH/permission errors: throw diagnostics as-is; do not self-heal as a missing file.
         throw error
       }
       if (request.schema === undefined) {
-        if (raw.trim() === '') return { ok: false, reason: 'handoff file is empty', recoverable: true }
+        if (raw.trim() === '') return { ok: false, reason: 'handoff file is empty', recoverable: true, kind: 'invalid' }
         return { ok: true, value: this.port.redact(raw) }
       }
       let parsed: unknown
@@ -88,6 +96,7 @@ export class PaneHandoff {
           ok: false,
           reason: `handoff file is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
           recoverable: true,
+          kind: 'invalid',
         }
       }
       try {
@@ -95,7 +104,7 @@ export class PaneHandoff {
         return { ok: true, value: JSON.parse(this.port.redact(JSON.stringify(parsed))) as unknown }
       } catch (err) {
         if (err instanceof HelmError && err.code === 'schema_validation_failed') {
-          return { ok: false, reason: err.message, recoverable: true }
+          return { ok: false, reason: err.message, recoverable: true, kind: 'invalid' }
         }
         throw err
       }
@@ -108,27 +117,32 @@ export class PaneHandoff {
      * path already has parse+schema hard validation and needs no such check; residual risk: a truncated
      * prefix that happens to finish and stop changing between the two reads is still indistinguishable, backstopped by the self-heal follow-up).
      */
-    const readOnceStable = async (): Promise<{ ok: true; value: unknown } | { ok: false; reason: string; recoverable: boolean }> => {
-      const first = await readOnce()
-      if (!first.ok || request.schema !== undefined) return first
-      const recheckMs = this.port.mdStableRecheckMs ?? PaneHandoff.DEFAULT_MD_STABLE_RECHECK_MS
-      await delay(recheckMs, undefined, { signal: request.signal })
-      const second = await readOnce()
-      if (!second.ok) return second
-      if (second.value !== first.value) {
-        return { ok: false, reason: 'handoff file is still being written (interval re-read disagrees)', recoverable: true }
-      }
-      return first
+    const first = await readOnce()
+    if (!first.ok || request.schema !== undefined) return first
+    const recheckMs = this.port.mdStableRecheckMs ?? PaneHandoff.DEFAULT_MD_STABLE_RECHECK_MS
+    await delay(recheckMs, undefined, { signal: request.signal })
+    const second = await readOnce()
+    if (!second.ok) return second
+    if (second.value !== first.value) {
+      return { ok: false, reason: 'handoff file is still being written (interval re-read disagrees)', recoverable: true, kind: 'invalid' }
     }
+    return first
+  }
 
-    let attempt = await readOnceStable()
+  /** 移除已通过校验的交接文件（幂等）。 */
+  async removeValidatedOutput(pane: ManagedPane, signal?: AbortSignal): Promise<void> {
+    await this.port.transport.removeOutput(targetOf(pane), pane.effectiveCwd, pane.outputFileName!, signal)
+  }
+
+  async readAndValidateOutput(request: AgentSpawnRequest, pane: ManagedPane): Promise<unknown> {
+    let attempt = await this.tryReadValidOutput(request, pane)
     if (!attempt.ok) {
       this.port.notify('Herdr handoff self-heal', `pane ${pane.paneId} first handoff failed (${attempt.reason}); following up once`, 'info')
       await this.port.project(pane, `heal:${pane.agentName}`)
       // The self-heal follow-up itself may also get blocked: the same approval bridge waits for real
       // progress before re-reading the file; a missing file must not be judged a failure.
       await this.promptAndWaitHeal(request, pane, attempt.reason)
-      attempt = await readOnceStable()
+      attempt = await this.tryReadValidOutput(request, pane)
     }
     if (!attempt.ok) {
       await this.port.markFailed(pane, attempt.reason)
@@ -140,7 +154,7 @@ export class PaneHandoff {
         { paneId: pane.paneId, reason: attempt.reason, snapshot },
       )
     }
-    await transport.removeOutput(target, pane.effectiveCwd, fileName, request.signal)
+    await this.removeValidatedOutput(pane, request.signal)
     return attempt.value
   }
 

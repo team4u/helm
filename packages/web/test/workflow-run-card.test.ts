@@ -237,12 +237,115 @@ test('extractWorkflowLogs：仅提取 kind=log 条目并保留顺序', { timeout
   )
 })
 
-test('canResumeWorkflowRun：仅非 subagent 的 failed/aborted run 可断点恢复', { timeout: 60_000 }, () => {
+test('canResumeWorkflowRun：仅非 subagent 且未接管的 failed/aborted run 可断点恢复', { timeout: 60_000 }, () => {
   assert.equal(m.canResumeWorkflowRun(run({ status: 'failed' })), true)
   assert.equal(m.canResumeWorkflowRun(run({ status: 'aborted' })), true)
+  assert.equal(m.canResumeWorkflowRun(run({ status: 'failed', resumedByRunId: 'wf_next' })), false)
+  assert.equal(m.canResumeWorkflowRun(run({ status: 'aborted', resumedByRunId: 'wf_next' })), false)
   assert.equal(m.canResumeWorkflowRun(run({ status: 'failed', kind: 'subagent' })), false)
   assert.equal(m.canResumeWorkflowRun(run({ status: 'running' })), false)
   assert.equal(m.canResumeWorkflowRun(run({ status: 'completed' })), false)
+})
+
+test('canResumeSubagentRun：仅未接管、failed/aborted 且具备执行句柄的 subagent 可恢复', { timeout: 60_000 }, () => {
+  assert.equal(m.canResumeSubagentRun(undefined, true), false)
+  assert.equal(m.canResumeSubagentRun(run({ kind: 'workflow', status: 'failed' }), true), false)
+  assert.equal(m.canResumeSubagentRun(run({ status: 'failed' }), true), false)
+  assert.equal(m.canResumeSubagentRun(run({ kind: 'subagent', status: 'running' }), true), false)
+  assert.equal(m.canResumeSubagentRun(run({ kind: 'subagent', status: 'completed' }), true), false)
+  assert.equal(
+    m.canResumeSubagentRun(run({ kind: 'subagent', status: 'failed', resumedByRunId: 'wf_next' }), true),
+    false,
+  )
+  assert.equal(
+    m.canResumeSubagentRun(run({ kind: 'subagent', status: 'failed' }), true),
+    true,
+    '具备关联子会话句柄（hasExecutionHandle=true）时可恢复',
+  )
+  assert.equal(
+    m.canResumeSubagentRun(run({ kind: 'subagent', status: 'aborted' }), true),
+    true,
+    'aborted 后台子代理具备执行句柄时可恢复',
+  )
+  assert.equal(
+    m.canResumeSubagentRun(run({ kind: 'subagent', status: 'failed' }), false),
+    false,
+    '无外部句柄且 nodes 无坐标时不可恢复',
+  )
+  assert.equal(
+    m.canResumeSubagentRun(
+      run({ kind: 'subagent', status: 'failed', nodes: [node({ id: 's0', status: 'failed', conversationId: 11 })] }),
+      false,
+    ),
+    true,
+    'run.nodes 携带 conversationId 时可恢复',
+  )
+  assert.equal(
+    m.canResumeSubagentRun(
+      run({ kind: 'subagent', status: 'aborted', nodes: [node({ id: 's0', status: 'skipped', executionId: 'pane-1' })] }),
+      false,
+    ),
+    true,
+    'run.nodes 携带 executionId 时可恢复',
+  )
+})
+
+test('listResumableFailedRuns：按会话、状态、接管与错误类型过滤可批量恢复候选', { timeout: 60_000 }, () => {
+  const candidates = [
+    run({ id: 'wf_ok', conversationId: 1, kind: 'workflow', status: 'failed', error: 'gate failed' }),
+    run({
+      id: 'wf_plain_valid',
+      conversationId: 1,
+      kind: 'workflow',
+      status: 'failed',
+      error: 'model call failed during validation phase',
+    }),
+    run({
+      id: 'wf_sub_conv',
+      conversationId: 1,
+      kind: 'subagent',
+      status: 'failed',
+      nodes: [node({ id: 's1', status: 'failed', conversationId: 11 })],
+    }),
+    run({
+      id: 'wf_sub_ext',
+      conversationId: 1,
+      kind: 'subagent',
+      status: 'failed',
+      nodes: [node({ id: 's2', status: 'failed', executionId: 'pane-2' })],
+    }),
+    // 排除项
+    run({ id: 'wf_other_conv', conversationId: 2, kind: 'workflow', status: 'failed' }),
+    run({ id: 'wf_aborted', conversationId: 1, kind: 'workflow', status: 'aborted' }),
+    run({ id: 'wf_running', conversationId: 1, kind: 'workflow', status: 'running' }),
+    run({ id: 'wf_taken', conversationId: 1, kind: 'workflow', status: 'failed', resumedByRunId: 'wf_new' }),
+    run({ id: 'wf_uncertain', conversationId: 1, kind: 'workflow', status: 'failed', error: 'workflow_action_uncertain: x' }),
+    run({ id: 'wf_limit', conversationId: 1, kind: 'subagent', status: 'failed', error: '[crash_recovery_limit] exceeded', nodes: [node({ id: 's3', status: 'failed', conversationId: 12 })] }),
+    run({ id: 'wf_secret', conversationId: 1, kind: 'subagent', status: 'failed', error: 'secret_grant_expired_on_restart', nodes: [node({ id: 's4', status: 'failed', executionId: 'pane-4' })] }),
+    run({ id: 'wf_val_err', conversationId: 1, kind: 'workflow', status: 'failed', error: 'HelmError [validation_error] bad arg' }),
+    run({ id: 'wf_syntax', conversationId: 1, kind: 'workflow', status: 'failed', error: 'Workflow script has a syntax error: Unexpected token' }),
+    run({ id: 'wf_sub_nohandle', conversationId: 1, kind: 'subagent', status: 'failed', nodes: [node({ id: 's5', status: 'failed' })] }),
+  ]
+  const list = m.listResumableFailedRuns([...candidates, candidates[0]!], 1)
+  assert.deepEqual(
+    list.map((item) => item.id),
+    ['wf_ok', 'wf_plain_valid', 'wf_sub_conv', 'wf_sub_ext'],
+  )
+})
+
+test('parseResumeFailedResult：严格校验返回结构，非法形状返回 undefined', { timeout: 60_000 }, () => {
+  assert.deepEqual(
+    m.parseResumeFailedResult({
+      resumed: [{ id: 'wf_1' }, { id: 'wf_2' }],
+      skipped: [{ runId: 'wf_3', reason: 'workflow_action_uncertain' }],
+    }),
+    { resumedCount: 2, skippedCount: 1 },
+  )
+  assert.deepEqual(m.parseResumeFailedResult({ resumed: [], skipped: [] }), { resumedCount: 0, skippedCount: 0 })
+  assert.equal(m.parseResumeFailedResult(undefined), undefined)
+  assert.equal(m.parseResumeFailedResult({ resumed: [] }), undefined)
+  assert.equal(m.parseResumeFailedResult({ resumed: [{ name: 'missing-id' }], skipped: [] }), undefined)
+  assert.equal(m.parseResumeFailedResult({ resumed: [], skipped: [{ runId: 'wf_x' }] }), undefined)
 })
 
 test('resolveNodeSummaryText：blocked 子会话优先显示等待审批（pendingAsk 标题优先）', { timeout: 60_000 }, () => {
@@ -820,4 +923,31 @@ test('SSR：WorkflowToolView 渲染输出全程无任何 Emoji 或特殊符号�
     assert.ok(!EMOJI_RE.test(html), `渲染输出不得包含 Emoji：${String(props.callId)}`)
     assert.ok(!html.includes('✓') && !html.includes('✗') && !html.includes('▸'), '不得使用勾叉箭头类特殊符号')
   }
+})
+
+test('SSR：resumedByRunId 已接管隐藏恢复入口；工作台批量恢复按钮显隐与零 Emoji', { timeout: 60_000 }, async () => {
+  const conv11 = summary(11, 'error', 1)
+  const takenDsl = run({
+    id: 'wf_dsl_taken',
+    kind: 'workflow',
+    status: 'failed',
+    resumedByRunId: 'wf_dsl_new',
+    parentToolCallId: 'c1',
+    nodes: [node({ id: 'a', status: 'failed' })],
+  })
+  const takenHtml = await renderWorkflowWorkbench({ runs: [takenDsl] })
+  assert.ok(!takenHtml.includes('断点恢复'), 'resumedByRunId 已接管的 DSL run 不得再显示断点恢复按钮')
+  assert.ok(!takenHtml.includes('恢复失败'), '无未接管可恢复任务时不显示恢复失败按钮')
+
+  const resumableSub = run({
+    id: 'wf_sub_fail',
+    kind: 'subagent',
+    status: 'failed',
+    parentToolCallId: 'c2',
+    nodes: [node({ id: 's', status: 'failed', conversationId: 11 })],
+  })
+  const subHtml = await renderWorkflowWorkbench({ runs: [resumableSub] }, [conv11])
+  assert.ok(subHtml.includes('恢复失败 (1)'), '工作台顶栏应显示恢复失败计数按钮')
+  assert.ok(subHtml.includes('恢复该后台子代理任务'), '子代理卡应显示单卡恢复按钮')
+  assert.ok(!EMOJI_RE.test(subHtml), '恢复入口渲染输出不得包含 Emoji')
 })

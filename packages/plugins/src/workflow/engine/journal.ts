@@ -43,6 +43,7 @@ import {
   isActionEntry,
   isActionStartedEntry,
   isAgentEntry,
+  isAgentStartedEntry,
   type JournalAgentExecution,
   type JournalWriteInput,
   type WorkflowJournalEntry,
@@ -52,6 +53,7 @@ export {
   actionJournalKey,
   agentJournalKey,
   hasValidScopeIdentity,
+  isAgentStartedEntry,
   type AgentJournalKeyInput,
   type JournalAgentExecution,
   type JournalGateResult,
@@ -84,8 +86,8 @@ type LineVerdict =
   /** Type undecidable: conservatively treated as possibly action-related. */
   | { kind: 'uncertain' }
 
-/** Rows written by this engine always have type as the first key; only a complete "type":"agent" prefix counts as a corrupted agent row. */
-const AGENT_LINE_PREFIX = /^\s*\{\s*"type"\s*:\s*"agent"/
+/** Rows written by this engine always have type as the first key; only a complete "type":"agent" or "type":"agent_started" prefix counts as a corrupted agent row. */
+const AGENT_LINE_PREFIX = /^\s*\{\s*"type"\s*:\s*"agent(?:_started)?"/
 
 function classifyLine(line: string): LineVerdict {
   let parsed: unknown
@@ -94,12 +96,15 @@ function classifyLine(line: string): LineVerdict {
   } catch {
     return AGENT_LINE_PREFIX.test(line) ? { kind: 'agentCorrupt' } : { kind: 'uncertain' }
   }
-  if (isAgentEntry(parsed)) return { kind: 'entry', entry: parsed }
+  if (isAgentEntry(parsed) || isAgentStartedEntry(parsed)) return { kind: 'entry', entry: parsed }
   if (isActionStartedEntry(parsed) || isActionEntry(parsed)) return { kind: 'entry', entry: parsed }
-  // Parseable but shape-unknown: when the type field reads as agent, treat it as a corrupted agent row;
+  // Parseable but shape-unknown: when the type field reads as agent/agent_started, treat it as a corrupted agent row;
   // everything else (unknown type / missing type / mangled fields) is conservatively uncertain.
-  if (typeof parsed === 'object' && parsed !== null && (parsed as { type?: unknown }).type === 'agent') {
-    return { kind: 'agentCorrupt' }
+  if (typeof parsed === 'object' && parsed !== null) {
+    const type = (parsed as { type?: unknown }).type
+    if (type === 'agent' || type === 'agent_started') {
+      return { kind: 'agentCorrupt' }
+    }
   }
   return { kind: 'uncertain' }
 }
@@ -205,14 +210,18 @@ export class JournalWriter {
   private handle?: FileHandle
   /** Once set, all appends (incl. agent rows) throw: the run already terminated due to a broken action ledger. */
   private poisoned = false
+  private needsTailNewlineCheck: boolean
   agentIoErrors = 0
 
   constructor(
     private readonly path: string,
     private readonly fsyncActions: boolean = true,
+    initialSeq: number = 0,
   ) {
     // Opening is async but the constructor must be synchronous; deferred to the first append (see ensure()).
     // On open failure, agent rows degrade to counting and action rows throw explicitly, matching the synchronous version.
+    if (Number.isInteger(initialSeq) && initialSeq > 0) this.seq = initialSeq
+    this.needsTailNewlineCheck = this.seq > 0
   }
 
   private opening?: Promise<FileHandle | undefined>
@@ -221,7 +230,18 @@ export class JournalWriter {
     if (this.handle !== undefined) return this.handle
     if (this.opening === undefined) {
       this.opening = open(this.path, 'a')
-        .then((h) => {
+        .then(async (h) => {
+          if (this.needsTailNewlineCheck) {
+            this.needsTailNewlineCheck = false
+            try {
+              const existing = readFileSync(this.path)
+              if (existing.length > 0 && existing[existing.length - 1] !== 0x0a) {
+                await appendFile(h, '\n', 'utf-8')
+              }
+            } catch {
+              // 忽略探测异常，保持原有写路径语义。
+            }
+          }
           this.handle = h
           return h
         })
@@ -319,6 +339,12 @@ export function redactJournalEntry(
   entry: JournalWriteInput,
   redact: (text: string) => string,
 ): JournalWriteInput {
+  if (entry.type === 'agent_started') {
+    return {
+      ...entry,
+      execution: redactValue(entry.execution, redact) as JournalAgentExecution,
+    }
+  }
   if (entry.type !== 'agent') return entry
   const out: JournalWriteInput = { ...entry }
   if (out.text !== undefined) out.text = redact(out.text)

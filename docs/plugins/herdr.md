@@ -23,7 +23,8 @@
 - **窗格环境最小授权**：缺省不携带任何父会话 SecretStash 机密；需要时由 spawn 请求显式 `secretNames` 逐名授予（需在父会话 stash 现存，缺失显式报错），按次授予、resume 不自动沿用。
 - **Gate 恰好一次**：文件成功后若有 `gate` 命令，在窗格实际节点与实际 cwd、以建窗同一 env 执行恰好一次（本机 `runLocalGate`，远端经节点通道）。Herdr 路径不支持 `gateTimeoutMs`（`unsupported_runtime` 拒绝），原生执行行不受影响。
 - **超时安全边界**：无安全 stop/CAS 手段停止底层 CLI——超时只保存诊断并保留 pane（标 failed，不关窗、不发键）；resume 在任何 prompt 发送前经权威 `agent.get` 复核，仅 `idle` / `done` 放行。
-- **归属校验与孤儿回收**：自有资源操作前做精确 `agent.name === 登记值` 验证（不 startsWith）；启动对账按窗格状态分流——working / blocked / unknown 保留并报告（绝不伪装结束），failed 保留现场，已结束孤儿安全回收。
+- **归属校验与孤儿回收**：自有资源操作前做精确 `agent.name === 登记值` 验证（不 startsWith）；启动对账按窗格状态分流——working / blocked / unknown、携带持久 `outputFileName` 待 `reattach` 验收的 `running` 窗格与归属活跃 workflow 的 `keepalive` 窗格均保留（绝不误杀或伪装结束），failed 保留现场，无在途重挂与 workflow 归属的已结束孤儿安全回收；`runtime.started` 后按 workflow 终态二次兜底收敛。
+- **跨 Hub 重启窗格保活与 `reattach` 对账**：`ManagedDoc.panes[i]` 持久化最新 `outputFileName`（含 `steer` 重定向后的文件名；恢复时按 `OUTPUT_FILE_PATTERN` 严格校验，非法值显式抛 `herdr_managed_invalid`；结算/清理后置空）。Hub 进程优雅关停（`ctx.host.isClosing === true`）仅断开本进程 Socket 订阅、停止心跳定时器并取消进程内 pending Ask 协调句柄，不对 `running`（及仍归 workflow 管辖的 `keepalive`）窗格调 `closePane`；重启后 `service.prepare()` 先行就位本地登记与执行器，`executor.handle` 接管归属 Herdr 的 `request.reattach.executionId`（与 `resume` / `fork` 互斥，缺失记录或缺失 `outputFileName` 显式抛 `herdr_reattach_missing`）：先 `onResolved` 回传坐标，再**优先检查 `.helm/<outputFileName>`**（已就绪即过 Schema 与 `gate` 结算）；文件未生成时调 `agent.get`——`working` / `blocked` / `launch_pending` 重新挂载阶段跟踪、事件等待与 CAS 审批桥（冲突 ID 自动推进 `:r<N>`），`idle` / `done` 走既有单次原地追问自愈，窗格已丢失（404）或自愈后仍无效则附尾部 40 行脱敏快照显式抛 `herdr_pane_lost` / `herdr_output_contract_violation` 并将窗格标 `failed`，绝不截取终端屏幕脏文本冒充成功结果。
 
 ### 带 CAS 乐观锁的审批桥
 
@@ -54,18 +55,18 @@ UI 贡献：左栏「Herdr 终端」入口 + `overview` 全屏总览（窗格与
 | `socketPath` | string | 空 | Socket 路径覆盖（缺省 `HERDR_SOCKET_PATH` 或默认会话路径） |
 | `startupTimeoutMs` | number | 30000 | agent 启动超时（3001..300000 毫秒） |
 
-持久文档：公开 `overview`（版本化投影：panes + asks + stale 标记）与私有 `managed`（窗格登记）。启动对账只回收确认自有的资源。
+持久文档：公开 `overview`（版本化投影：panes + asks + stale 标记）与私有 `managed`（窗格登记，含持久 `outputFileName`）。启动对账只回收确认自有的无主资源。
 
 ## 停用与失败语义
 
-停用时清理订阅、定时器、全部 pending Ask 与可回收自有 pane（failed 保留现场供排错）；停用后不再触达任何服务器。在途窗格执行占用会在停用预检中体现（`plugin_has_live_tasks`）。`turn_settled` 与 `workflow.settled` 双轨保活清理：workflow 轨道按 run 结算清理其窗格，单回合轨道按父回合结算清理；清理失败如实通知跳过，不伪装结束。传输 IO / SSH / 权限错误如实抛诊断（`herdr_output_missing` 404 是唯一可自愈边界码），绝不把其它错误当缺文件重投任务。
+停用（`ctx.host.isClosing === false`）时清理订阅、定时器、全部 pending Ask 与全部非 `failed`/`settled` 自有 pane（`failed` 保留现场供排错）；停用后不再触达任何服务器。宿主整体关停（`ctx.host.isClosing === true`）走保活断连路径，保留 `running` 窗格在 Herdr 守护进程中继续运行。在途窗格执行占用会在停用预检中体现（`plugin_has_live_tasks`）。`turn_settled` 与 `workflow.settled` 双轨保活清理：workflow 轨道按 run 结算清理其窗格，单回合轨道按父回合结算清理；清理失败如实通知跳过，不伪装结束。传输 IO / SSH / 权限错误如实抛诊断（`herdr_output_missing` 404 是唯一可自愈边界码），绝不把其它错误当缺文件重投任务。
 
 ## 源码与测试入口
 
 | 内容 | 位置 |
 | :--- | :--- |
 | 插件入口 | `packages/plugins/src/herdr.ts` |
-| 执行行 / 交接 / 续接 / 插话 | `packages/plugins/src/herdr/executor*.ts` |
+| 执行行 / 交接 / 续接 / 重挂 / 插话 | `packages/plugins/src/herdr/executor*.ts` |
 | 审批桥 / 状态投射 / 窗格登记 | `packages/plugins/src/herdr/approval-bridge.ts`、`metadata.ts`、`panes.ts`、`asks.ts` |
 | spawn 规则与 RPC | `packages/plugins/src/herdr/spawn-rules.ts`、`rpc.ts`、`transport*.ts` |
 | 测试 | `packages/plugins/test/herdr*.test.ts`（执行行、CAS 发键、交接、steer、节点路由、Windows 管道等，含 `herdr-server-fixture.ts` / `herdr-node-fixture.ts` 真实服务器夹具） |

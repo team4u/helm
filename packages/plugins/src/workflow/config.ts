@@ -35,7 +35,39 @@ export function registerWorkflowConfigSchema(ctx: HelmPluginContext): void {
       description: `1..${HARD_MAX_SUBAGENT_DEPTH} 的整数，默认 2。主会话为第 0 层；变更影响新派生的任务树，现有任务沿用其上限。`,
       default: DEFAULT_MAX_SUBAGENT_DEPTH,
     },
+    autoRecoverOnRestart: {
+      type: 'boolean',
+      label: '重启自动恢复任务',
+      description: 'Hub 重启后自动原位恢复或挂起在途工作流与后台子代理；设为 false 时回退重启中止收敛模式（也可设环境变量 HELM_AUTO_RECOVER=0 临时关闭）。',
+      default: true,
+    },
   })
+}
+
+/** 是否通过环境变量紧急关闭重启自动恢复（HELM_AUTO_RECOVER=0/false）。 */
+export function isAutoRecoverEnvDisabled(): boolean {
+  const raw = process.env.HELM_AUTO_RECOVER?.trim().toLowerCase()
+  return raw === '0' || raw === 'false'
+}
+
+/** 现读并校验 autoRecoverOnRestart（缺省 true；非法类型显式拒绝）。 */
+export function readAutoRecoverOnRestart(ctx: HelmPluginContext): boolean {
+  const raw = ctx.getConfig().autoRecoverOnRestart
+  if (raw === undefined) return true
+  if (typeof raw !== 'boolean') {
+    throw new HelmError(
+      'validation_error',
+      `builtin:workflow 配置 autoRecoverOnRestart 非法：${JSON.stringify(raw)}（需布尔值）`,
+      500,
+      { configured: raw },
+    )
+  }
+  return raw
+}
+
+/** 综合配置项与 HELM_AUTO_RECOVER 逃生阀判断是否启用重启自动恢复（任一关闭则回退中止收敛）。 */
+export function isEffectiveAutoRecover(ctx: HelmPluginContext): boolean {
+  return readAutoRecoverOnRestart(ctx) && !isAutoRecoverEnvDisabled()
 }
 
 /** 现读并校验 maxConcurrentAgents（缺省按 CPU 并行度；非法显式拒绝）。 */

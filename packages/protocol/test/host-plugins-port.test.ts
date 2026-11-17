@@ -12,6 +12,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type {
+  AgentSpawnRequest,
   BackendPluginsLifecyclePort,
   HelmHostApi,
   HelmHostPluginsPort,
@@ -19,6 +20,7 @@ import type {
   PluginInstallResult,
   PluginRemoveResult,
   PluginSummary,
+  PluginToolSpec,
   PluginUpdateResult,
 } from '@helm/protocol'
 
@@ -90,4 +92,35 @@ test('BackendPluginsLifecyclePort write-side methods correspond one-to-one with 
   for (const m of methods) {
     assert.equal(typeof backend[m], 'function')
   }
+})
+
+test('AgentSpawnRequest reattach/requestId and PluginToolSpec replay contract fields', { timeout: 60_000 }, () => {
+  const spawnWithReattach: AgentSpawnRequest = {
+    parentConversationId: 1,
+    prompt: 'resume work',
+    requestId: 'req-1',
+    reattach: {
+      conversationId: 2,
+      executionId: 'exec-2',
+      effectiveCwd: '/repo',
+    },
+  }
+  assert.equal(spawnWithReattach.requestId, 'req-1')
+  assert.equal(spawnWithReattach.reattach?.conversationId, 2)
+  assert.equal(spawnWithReattach.reattach?.executionId, 'exec-2')
+  assert.equal(spawnWithReattach.reattach?.effectiveCwd, '/repo')
+
+  const safeTool: PluginToolSpec = {
+    name: 'demo_tool',
+    description: 'demo',
+    inputSchema: { type: 'object' },
+    replay: 'safe',
+    execute: () => ({ ok: true }),
+  }
+  const unsafeTool: PluginToolSpec = {
+    ...safeTool,
+    replay: 'unsafe',
+  }
+  assert.equal(safeTool.replay, 'safe')
+  assert.equal(unsafeTool.replay, 'unsafe')
 })

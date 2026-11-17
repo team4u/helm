@@ -36,6 +36,12 @@ export interface ForegroundWaitHooks {
    * 与 subagent 前台模式的引擎解绑（run.unbindForegroundSignal）同语义。
    */
   onDetached?: () => void
+  /**
+   * 可选父调用取消信号：宿主优雅关停挂起时 context.signal 会提前中止，
+   * waitForegroundRun 据此立即脱离等待以便 ToolTask 安全回退 execute/replay:safe，
+   * 绝不反向中止被挂起的 run。detach 发生后立即解绑该监听。
+   */
+  signal?: AbortSignal
 }
 
 /**
@@ -67,8 +73,33 @@ export async function waitForegroundRun(
     return 'detached'
   }
   if (activeRun.record.status !== 'running') return 'settled'
-  const outcome = await new Promise<ForegroundWaitOutcome>((resolve) => {
-    activeRun.foregroundWaiters.add({ resolve, ...(hooks?.onDetached !== undefined ? { onDetached: hooks.onDetached } : {}) })
+  const isClosingSuspend = (): boolean =>
+    svc.isAutoRecoverOnRestart() && svc.host.isHostClosing?.() === true
+  if (hooks?.signal?.aborted && isClosingSuspend()) {
+    throw new HelmError('aborted', `工作流运行 ${runId} 因宿主关停挂起而退出前台等待`, 409)
+  }
+  const outcome = await new Promise<ForegroundWaitOutcome>((resolve, reject) => {
+    let settledWait = false
+    const onSignalAbort = (): void => {
+      if (settledWait || !isClosingSuspend()) return
+      settledWait = true
+      activeRun.foregroundWaiters.delete(waiter)
+      reject(new HelmError('aborted', `工作流运行 ${runId} 因宿主关停挂起而退出前台等待`, 409))
+    }
+    const waiter = {
+      resolve: (value: ForegroundWaitOutcome) => {
+        if (settledWait) return
+        settledWait = true
+        hooks?.signal?.removeEventListener('abort', onSignalAbort)
+        resolve(value)
+      },
+      onDetached: () => {
+        hooks?.signal?.removeEventListener('abort', onSignalAbort)
+        hooks?.onDetached?.()
+      },
+    }
+    activeRun.foregroundWaiters.add(waiter)
+    hooks?.signal?.addEventListener('abort', onSignalAbort, { once: true })
   })
   if (outcome === 'settled' && activeRun.settleError !== undefined) {
     throw activeRun.settleError

@@ -1739,7 +1739,7 @@ describe('WorkflowService', () => {
       { id: 'wf_deadbeef0000', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 },
     ])
     seedRunRecordFile(dataDir, 'wf_deadbeef0000', 1)
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
     await service.init()
     const summary = service.getRun('wf_deadbeef0000')
     assert.equal(summary.status, 'failed')
@@ -1775,7 +1775,7 @@ describe('WorkflowService', () => {
     )
     seedRunRecordFile(dataDir, 'wf_deadbeef0001', 1)
     const host = makeServiceHost()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
     // 首次 init：终态先原子落record file，随后索引 flush 失败——如实抛错，未标 recovered。
     await assert.rejects(() => service.init(), /simulated store flush failure/)
     // 索引标记未提交：store 提交面仍见 running（先文件后索引，索引滞后于文件）。

@@ -18,16 +18,18 @@ import {
   type AgentExecutionInfo,
   type AgentGateResult,
   type AgentSpawnRequest,
+  type JsonSchema,
 } from '@helm/protocol'
 import {
   extractWorkflowExecutionMeta,
+  parseWorkflowSpawnMeta,
   withWorkflowSpawnMeta,
   type WorkflowNodeState,
   type WorkflowRunSummary,
 } from '../../contracts.js'
 import { JournalWriter } from './journal.js'
 import { resolveForegroundWaiters, type ActiveRun } from './active-run.js'
-import { backgroundChildIds, newRunId, type RunRecord } from './run-store.js'
+import { backgroundChildIds, newRunId, type PersistedSubagentSpec, type RunRecord } from './run-store.js'
 import { redactNodes, redactSummaryNodes, toSummary } from './run-summary.js'
 import type { WorkflowServiceContext } from './service-context.js'
 
@@ -61,25 +63,39 @@ export async function startBackgroundAgent(
     notifyParentOnSettle?: boolean
     /** 前台同步模式：record 标记 syncForeground、父 signal 绑定至 detach/终态。 */
     foreground?: boolean
+    /** 由 resumeFromRunId 分配的预分配 run 元数据与接管回调。 */
+    preassigned?: {
+      runId: string
+      replayedFrom: string
+      autoResumeCount: number
+      onPersisted?: () => void
+      onPersistFailed?: () => void
+    }
   },
 ): Promise<{
   run: WorkflowRunSummary
   execution?: AgentExecutionInfo
 }> {
   if (svc.isClosed()) {
+    options?.preassigned?.onPersistFailed?.()
     throw new HelmError('service_closed', 'WorkflowService 已关闭，拒绝启动新后台子代理', 503)
   }
-  await svc.init()
-  if (svc.isClosed()) throw new HelmError('service_closed', 'WorkflowService 已关闭，拒绝启动新后台子代理', 503)
+  try {
+    await svc.init()
+    if (svc.isClosed()) throw new HelmError('service_closed', 'WorkflowService 已关闭，拒绝启动新后台子代理', 503)
 
-  // 父会话不存在时 getConversation 抛 not_found，原样透传给调用方。
-  svc.host.getConversation(request.parentConversationId)
+    // 父会话不存在时 getConversation 抛 not_found，原样透传给调用方。
+    svc.host.getConversation(request.parentConversationId)
 
-  if (request.signal?.aborted) {
-    throw new HelmError('aborted', 'spawn 请求在创建前已取消', 409)
+    if (request.signal?.aborted) {
+      throw new HelmError('aborted', 'spawn 请求在创建前已取消', 409)
+    }
+  } catch (error) {
+    options?.preassigned?.onPersistFailed?.()
+    throw error
   }
 
-  const runId = newRunId()
+  const runId = options?.preassigned?.runId ?? newRunId()
   const createdAt = Date.now()
   const abort = new AbortController()
   const foreground = options?.foreground === true
@@ -98,6 +114,31 @@ export async function startBackgroundAgent(
 
   mkdirSync(svc.runs.artifactsDir(request.parentConversationId), { recursive: true })
   const journalPath = svc.runs.journalPathFor(request.parentConversationId, runId)
+  const agentIdForProto = request.agentId ?? `${runId}:subagent-0`
+  const deterministicRequestId = request.requestId ?? `helm:spawn:${runId}`
+  const hadSecretGrant = Array.isArray(request.secretNames) && request.secretNames.length > 0
+  const spawnMeta = parseWorkflowSpawnMeta(request.meta)
+  const subagentSpec: PersistedSubagentSpec = {
+    agentId: agentIdForProto,
+    requestId: deterministicRequestId,
+    prompt: svc.redact(request.prompt),
+    ...(request.agentType !== undefined && request.agentType !== '' ? { agentType: request.agentType } : {}),
+    ...(request.cwd !== undefined ? { cwd: svc.redact(request.cwd) } : {}),
+    ...(request.isolation === 'worktree' || request.isolation === 'none'
+      ? { isolation: request.isolation }
+      : {}),
+    ...(request.gate !== undefined ? { gate: svc.redact(request.gate) } : {}),
+    ...(request.gateTimeoutMs !== undefined ? { gateTimeoutMs: request.gateTimeoutMs } : {}),
+    ...(request.schema !== undefined ? { schema: redactJsonValue(request.schema, svc.redact) as JsonSchema } : {}),
+    ...(spawnMeta.maxSubagentDepth !== undefined ? { maxSubagentDepth: spawnMeta.maxSubagentDepth } : {}),
+    ...(request.model !== undefined ? { model: svc.redact(request.model) } : {}),
+    ...(request.effort !== undefined ? { effort: request.effort } : {}),
+    ...(request.fork !== undefined ? { fork: request.fork } : {}),
+    ...(request.attachments !== undefined
+      ? { attachments: request.attachments.map((item) => svc.redact(item)) }
+      : {}),
+    ...(hadSecretGrant ? { hadSecretGrant: true } : {}),
+  }
 
   const node: WorkflowNodeState = {
     id: 'subagent-0',
@@ -123,6 +164,13 @@ export async function startBackgroundAgent(
     // 前台同步：缺省不通知（等待 detach 置位或终态）；后台：缺省通知。
     notifyParentOnSettle: options?.notifyParentOnSettle ?? !foreground,
     ...(foreground ? { syncForeground: true } : {}),
+    ...(options?.preassigned !== undefined
+      ? {
+          replayedFrom: options.preassigned.replayedFrom,
+          autoResumeCount: options.preassigned.autoResumeCount,
+        }
+      : {}),
+    subagentSpec,
     journalPath,
     nodes: [node],
   }
@@ -153,35 +201,18 @@ export async function startBackgroundAgent(
   }
   // 取消窗口复查（与 active.set 零 await 间隔）：入口检查后已经过 getConversation
   // 等多个 await 点，父会话可能已进入级联取消边界——在此拒绝，不留漏网 run。
-  svc.cancellation.assertNotCancelling(request.parentConversationId)
+  try {
+    svc.cancellation.assertNotCancelling(request.parentConversationId)
+  } catch (error) {
+    options?.preassigned?.onPersistFailed?.()
+    throw error
+  }
   svc.active.set(runId, run)
 
   // 父 signal 解绑口（下方 parentSignal 段赋值；settle/启动失败路径经此收口，
   // 前台模式下 detach 临界段经 run.unbindForegroundSignal 解绑）。声明先于
   // 首个 await：durable 写失败窗口内触发的 settle 不触碰 TDZ。
   let cleanupParentSignal: (() => void) | undefined
-
-  // abort(runId)/close()/级联取消 → 取消本 run 信号（spawn 信号桥停子会话回合）+
-  // 经 host.abortConversationGuarded 守卫中止已 onResolved 的子会话（human
-  // 红线由内核原子复核；幂等，已结束的子会话静默）。注册进 pendingAborts：
-  // settle 前必等完。
-  const onRunAbort = (): void => {
-    for (const childId of [...run.childConversations]) {
-      svc.abortChildConversation(run, childId)
-    }
-  }
-  abort.signal.addEventListener('abort', onRunAbort, { once: true })
-
-  // --- 后台兜底结算链（唯一终态出口；绝不 reject，避免 unhandled） -------
-  let settled = false
-  let reportedSettleError = false
-  let settleError: unknown
-  const reportSettleError = (error: unknown): void => {
-    if (!reportedSettleError) {
-      reportedSettleError = true
-      settleError = error
-    }
-  }
 
   /** 已 sanitized 执行元数据（onResolved 可能多次回调，幂等取最新）。 */
   let executionInfo: AgentExecutionInfo | undefined
@@ -193,125 +224,28 @@ export async function startBackgroundAgent(
     resolveHorizon = resolve
   })
 
-  const settle = async (
-    outcome: { ok: true; raw: unknown } | { ok: false; error: unknown },
-  ): Promise<void> => {
-    // 同步置位幂等门：abort 快路径与 spawn 迟到终局竞态下二次进入直接
-    // no-op（迟到结果只经 active 删除后的 records 事实可见，不翻终态）。
-    if (settled) return
-    settled = true
-    const hostClosing = svc.host.isHostClosing?.() === true
-    try {
-      const settledAt = Date.now()
-      const aborted =
-        !outcome.ok &&
-        (hostClosing ||
-          abort.signal.aborted ||
-          (outcome.error instanceof HelmError && outcome.error.code === 'aborted'))
-      if (outcome.ok && !abort.signal.aborted) {
-        node.status = 'done'
-        node.settledAt = settledAt
-        node.durationMs = settledAt - createdAt
-        node.output = redactJsonValue(outcome.raw, svc.redact)
-        record.status = 'completed'
-        record.result = redactJsonValue(outcome.raw, svc.redact)
-      } else {
-        node.status = aborted ? 'skipped' : 'failed'
-        node.settledAt = settledAt
-        node.durationMs = settledAt - createdAt
-        const message = outcome.ok
-          ? '宿主正在关停，后台子代理执行已中止'
-          : outcome.error instanceof HelmError
-            ? `[${outcome.error.code}] ${outcome.error.message}`
-            : outcome.error instanceof Error
-              ? outcome.error.message
-              : String(outcome.error)
-        node.error = svc.redact(message)
-        record.status = aborted ? 'aborted' : 'failed'
-        record.error = svc.redact(message)
-      }
-      if (
-        hostClosing &&
-        record.status !== 'completed' &&
-        (run.childConversations.size > 0 || backgroundChildIds(record).length > 0)
-      ) {
-        record.pendingChildCleanup = true
-      }
-      record.updatedAt = settledAt
-      record.nodes = redactNodes(svc.redact, [node])
-      run.summary = toSummary(record)
-      try {
-        svc.writeRecord(record)
-        await svc.state.flush?.()
-      } catch (persistError) {
-        const message = persistError instanceof Error ? persistError.message : String(persistError)
-        process.stderr.write(`workflow ${runId}: terminal state persist failed: ${message}\n`)
-        run.summary = {
-          ...run.summary,
-          error: `${run.summary.error ?? ''}\n[persist failed: ${message}]`.trim(),
-        }
-        reportSettleError(persistError)
-      }
-    } finally {
-      try {
-        await run.writer.close()
-      } catch (closeError) {
-        process.stderr.write(
-          `workflow ${runId}: journal close failed: ${
-            closeError instanceof Error ? closeError.message : String(closeError)
-          }\n`,
-        )
-      }
-      if (run.pendingAborts.size > 0) {
-        await Promise.allSettled([...run.pendingAborts])
-      }
-      if (svc.host.onRunSettled !== undefined) {
-        try {
-          await svc.host.onRunSettled({ ...run.summary })
-        } catch (hookError) {
-          const message = hookError instanceof Error ? hookError.message : String(hookError)
-          process.stderr.write(`workflow ${runId}: onRunSettled failed: ${message}\n`)
-          reportSettleError(hookError)
-        }
-      }
-      if (
-        !svc.isClosed() &&
-        svc.host.isHostClosing?.() !== true &&
-        record.notifyParentOnSettle === true &&
-        record.notifiedAt === undefined &&
-        svc.host.onBackgroundAgentSettled !== undefined
-      ) {
-        try {
-          await svc.host.onBackgroundAgentSettled({ ...run.summary }, {
-            parentConversationId: request.parentConversationId,
-            ...(request.agentType !== undefined && request.agentType !== ''
-              ? { agentType: request.agentType }
-              : {}),
-            // 通知面向父会话输入（可进模型上下文）：与持久面同标准脱敏。
-            ...(executionInfo !== undefined
-              ? { execution: redactJsonValue(executionInfo, svc.redact) as typeof executionInfo }
-              : {}),
-          })
-          record.notifiedAt = Date.now()
-          svc.writeRecord(record)
-          await svc.state.flush?.()
-        } catch (notifyError) {
-          // 通知失败不推翻已落盘终态：notifiedAt 不置位，init() 按 outbox 补发。
-          const message = notifyError instanceof Error ? notifyError.message : String(notifyError)
-          process.stderr.write(`workflow ${runId}: onBackgroundAgentSettled failed: ${message}\n`)
-        }
-      }
-      svc.emitEventSafe('workflow.updated', { run: { ...run.summary } })
-      svc.active.delete(runId)
-      if (settleError !== undefined) run.settleError = settleError
-      cleanupParentSignal?.()
-      run.unbindForegroundSignal = undefined
-      resolveDone()
-      // 前台等待者最后唤醒（settleError 已定稿）：工具侧 waitForegroundRun
-      // 以 'settled' 继续读终态；已 detach 的等待者早已返回（Promise 单次）。
-      resolveForegroundWaiters(run, 'settled')
+  const settler = createSubagentSettler({
+    svc,
+    run,
+    node,
+    parentConversationId: request.parentConversationId,
+    agentType: request.agentType,
+    getExecutionInfo: () => executionInfo,
+    resolveDone,
+    cleanupParentSignal: () => cleanupParentSignal?.(),
+  })
+
+  // abort(runId)/close()/级联取消 → 取消本 run 信号（spawn 信号桥停子会话回合）+
+  // 经 host.abortConversationGuarded 守卫中止已 onResolved 的子会话（human
+  // 红线由内核原子复核；幂等，已结束的子会话静默）。注册进 pendingAborts：
+  // settle 前必等完。
+  const onRunAbort = (): void => {
+    if (svc.isRunSuspending(run)) return
+    for (const childId of [...run.childConversations]) {
+      svc.abortChildConversation(run, childId)
     }
   }
+  abort.signal.addEventListener('abort', onRunAbort, { once: true })
 
   // abort 快路径：取消即结算（不等 spawn 终局）。守卫拒绝（human 接管等
   // 红线事实）时 spawn 可能长期不返回，而 run 的终态绝不能依赖被保护
@@ -319,16 +253,15 @@ export async function startBackgroundAgent(
   abort.signal.addEventListener(
     'abort',
     () => {
-      void settle({ ok: false, error: new HelmError('aborted', '后台子代理执行已取消', 409) }).catch(
+      void settler.settle({ ok: false, error: new HelmError('aborted', '后台子代理执行已取消', 409) }).catch(
         (error: unknown) => {
-          reportSettleError(error)
+          settler.reportSettleError(error)
         },
       )
     },
     { once: true },
   )
 
-  const agentIdForProto = request.agentId ?? `${runId}:subagent-0`
   // spawn 终局透传：guarded 在下方组装后立刻接入（wireBackground），后台链
   // 从创建第一刻起即可等待（含 durable 快照写入前的窗口）。
   let wireBackground: (outcome: { ok: true; raw: unknown } | { ok: false; error: unknown }) => void = () => {}
@@ -337,31 +270,13 @@ export async function startBackgroundAgent(
   })
   const background = (async () => {
     const outcome = await backgroundWait
-    let effective = outcome
-    if (effective.ok && abort.signal.aborted) {
-      effective = { ok: false, error: new HelmError('aborted', '后台子代理执行已取消', 409) }
-    }
-    if (effective.ok && gateResult !== undefined && !gateResult.ok) {
-      effective = { ok: false, error: new HelmError('gate_failed', gateResult.output, 502) }
-    }
-    if (
-      effective.ok &&
-      request.gate !== undefined &&
-      gateResult === undefined &&
-      executionInfo?.executionId !== undefined
-    ) {
-      // 外部执行环境（executionId 存在）必须回报 gate；缺失即显式失败，
-      // 与 invokeSpawn 同款规则，绝不在本机猜远端工作目录补跑。
-      effective = {
-        ok: false,
-        error: gateResultMissingError({
-          agentId: agentIdForProto,
-          executionId: executionInfo.executionId,
-          command: request.gate,
-        }),
-      }
-    }
-    await settle(effective)
+    await settler.settle(finalizeSubagentOutcome(outcome, {
+      aborted: abort.signal.aborted,
+      agentId: agentIdForProto,
+      gateCommand: request.gate,
+      gateResult,
+      executionInfo,
+    }))
   })()
   void background.catch((error: unknown) => {
     process.stderr.write(
@@ -369,15 +284,17 @@ export async function startBackgroundAgent(
         error instanceof Error ? error.message : String(error)
       }\n`,
     )
-    reportSettleError(error)
-    if (!settled) void settle({ ok: false, error }).catch(() => {})
+    settler.reportSettleError(error)
+    if (!settler.isSettled()) void settler.settle({ ok: false, error }).catch(() => {})
   })
 
   // --- durable running 快照（副作用 spawnAgent 之前！）------------------
   try {
     svc.writeRecord(record)
+    options?.preassigned?.onPersisted?.()
     await svc.state.flush?.()
   } catch (persistError) {
+    options?.preassigned?.onPersistFailed?.()
     svc.active.delete(runId)
     await run.writer.close().catch(() => {})
     resolveDone()
@@ -392,6 +309,7 @@ export async function startBackgroundAgent(
     ...request,
     ...(parentToolCallId !== undefined ? { parentToolCallId } : {}),
     agentId: agentIdForProto,
+    requestId: deterministicRequestId,
     meta: withWorkflowSpawnMeta(request.meta, { runId }),
     onResolved: (raw: unknown) => {
       const info = sanitizeExecutionInfo(raw, { agentId: agentIdForProto })
@@ -401,8 +319,10 @@ export async function startBackgroundAgent(
         node.conversationId = info.conversationId
         run.childConversations.add(info.conversationId)
         // 迟到 onResolved 补杀：取消先于执行元数据落地时，onRunAbort 的快照
-        // 看不到该子会话——在登记点立即补守卫中止，绝不因时序漏杀。
-        if (abort.signal.aborted) svc.abortChildConversation(run, info.conversationId)
+        // 看不到该子会话——在登记点立即补守卫中止，绝不因时序漏杀（挂起禁止中止）。
+        if (abort.signal.aborted && !svc.isRunSuspending(run)) {
+          svc.abortChildConversation(run, info.conversationId)
+        }
       }
       if (info.executionId !== undefined) node.executionId = info.executionId
       if (info.effectiveCwd !== undefined) node.effectiveCwd = info.effectiveCwd
@@ -451,7 +371,8 @@ export async function startBackgroundAgent(
   //   run.unbindForegroundSignal 解绑（转后台后父 signal 不再杀 run）。
   const parentSignal = request.signal
   const onParentAbort = (): void => {
-    if (settled) return
+    if (settler.isSettled()) return
+    if (svc.isRunSuspending(run)) return
     if (foreground || !onResolvedFired) abort.abort()
   }
   // 绑定前补检 detach 竞态：durable running 快照的 flush await 窗口内，外部
@@ -527,4 +448,381 @@ export async function startBackgroundAgent(
     run: redactSummaryNodes(svc.redact, { ...run.summary }),
     ...(executionInfo !== undefined ? { execution: executionInfo } : {}),
   }
+}
+
+/** 构建单子代理结算器（startBackgroundAgent 与 reattachBackgroundAgent 共用）。 */
+function createSubagentSettler(params: {
+  svc: WorkflowServiceContext
+  run: ActiveRun
+  node: WorkflowNodeState
+  parentConversationId: number
+  agentType: string | undefined
+  getExecutionInfo: () => AgentExecutionInfo | undefined
+  resolveDone: () => void
+  cleanupParentSignal?: () => void
+}) {
+  const { svc, run, node, parentConversationId, agentType, getExecutionInfo, resolveDone, cleanupParentSignal } = params
+  const record = run.record
+  const runId = run.runId
+  const startedAt = node.startedAt ?? record.createdAt
+  let settled = false
+  let reportedSettleError = false
+  let settleError: unknown
+  const reportSettleError = (error: unknown): void => {
+    if (!reportedSettleError) {
+      reportedSettleError = true
+      settleError = error
+    }
+  }
+  const settle = async (outcome: { ok: true; raw: unknown } | { ok: false; error: unknown }): Promise<void> => {
+    if (settled) return
+    settled = true
+    const hostClosing = svc.host.isHostClosing?.() === true
+    const outcomeCompleted = outcome.ok && !run.abort.signal.aborted && !run.suspended
+    const suspending = !outcomeCompleted && svc.isRunSuspending(run)
+    try {
+      const settledAt = Date.now()
+      const aborted =
+        !outcome.ok &&
+        (hostClosing ||
+          run.abort.signal.aborted ||
+          (outcome.error instanceof HelmError && outcome.error.code === 'aborted'))
+      if (suspending) {
+        record.status = 'running'
+        record.suspendedCleanly = true
+        node.status = 'running'
+      } else if (outcomeCompleted) {
+        node.status = 'done'
+        node.settledAt = settledAt
+        node.durationMs = settledAt - startedAt
+        node.output = redactJsonValue(outcome.raw, svc.redact)
+        record.status = 'completed'
+        record.result = redactJsonValue(outcome.raw, svc.redact)
+      } else {
+        node.status = aborted ? 'skipped' : 'failed'
+        node.settledAt = settledAt
+        node.durationMs = settledAt - startedAt
+        const message = outcome.ok
+          ? '宿主正在关停，后台子代理执行已中止'
+          : outcome.error instanceof HelmError
+            ? `[${outcome.error.code}] ${outcome.error.message}`
+            : outcome.error instanceof Error
+              ? outcome.error.message
+              : String(outcome.error)
+        node.error = svc.redact(message)
+        record.status = aborted ? 'aborted' : 'failed'
+        record.error = svc.redact(message)
+      }
+      if (
+        !suspending &&
+        hostClosing &&
+        record.status !== 'completed' &&
+        (run.childConversations.size > 0 || backgroundChildIds(record).length > 0)
+      ) {
+        record.pendingChildCleanup = true
+      }
+      record.updatedAt = settledAt
+      record.nodes = redactNodes(svc.redact, [node])
+      run.summary = toSummary(record)
+      try {
+        svc.writeRecord(record)
+        await svc.state.flush?.()
+      } catch (persistError) {
+        const message = persistError instanceof Error ? persistError.message : String(persistError)
+        process.stderr.write(`workflow ${runId}: terminal state persist failed: ${message}\n`)
+        run.summary = {
+          ...run.summary,
+          error: `${run.summary.error ?? ''}\n[persist failed: ${message}]`.trim(),
+        }
+        reportSettleError(persistError)
+      }
+    } finally {
+      try {
+        await run.writer.close()
+      } catch (closeError) {
+        process.stderr.write(
+          `workflow ${runId}: journal close failed: ${
+            closeError instanceof Error ? closeError.message : String(closeError)
+          }\n`,
+        )
+      }
+      if (run.pendingAborts.size > 0) {
+        await Promise.allSettled([...run.pendingAborts])
+      }
+      if (!suspending && svc.host.onRunSettled !== undefined) {
+        try {
+          await svc.host.onRunSettled({ ...run.summary })
+        } catch (hookError) {
+          const message = hookError instanceof Error ? hookError.message : String(hookError)
+          process.stderr.write(`workflow ${runId}: onRunSettled failed: ${message}\n`)
+          reportSettleError(hookError)
+        }
+      }
+      const executionInfo = getExecutionInfo()
+      if (
+        !suspending &&
+        !svc.isClosed() &&
+        svc.host.isHostClosing?.() !== true &&
+        record.notifyParentOnSettle === true &&
+        record.notifiedAt === undefined &&
+        svc.host.onBackgroundAgentSettled !== undefined
+      ) {
+        try {
+          await svc.host.onBackgroundAgentSettled({ ...run.summary }, {
+            parentConversationId,
+            ...(agentType !== undefined && agentType !== '' ? { agentType } : {}),
+            ...(executionInfo !== undefined
+              ? { execution: redactJsonValue(executionInfo, svc.redact) as typeof executionInfo }
+              : {}),
+          })
+          record.notifiedAt = Date.now()
+          svc.writeRecord(record)
+          await svc.state.flush?.()
+        } catch (notifyError) {
+          const message = notifyError instanceof Error ? notifyError.message : String(notifyError)
+          process.stderr.write(`workflow ${runId}: onBackgroundAgentSettled failed: ${message}\n`)
+        }
+      }
+      svc.emitEventSafe('workflow.updated', { run: { ...run.summary } })
+      svc.active.delete(runId)
+      if (settleError !== undefined) run.settleError = settleError
+      cleanupParentSignal?.()
+      run.unbindForegroundSignal = undefined
+      resolveDone()
+      resolveForegroundWaiters(run, 'settled')
+    }
+  }
+  return { settle, reportSettleError, isSettled: () => settled }
+}
+
+function finalizeSubagentOutcome(
+  outcome: { ok: true; raw: unknown } | { ok: false; error: unknown },
+  ctx: {
+    aborted: boolean
+    agentId: string
+    gateCommand: string | undefined
+    gateResult: AgentGateResult | undefined
+    executionInfo: AgentExecutionInfo | undefined
+  },
+): { ok: true; raw: unknown } | { ok: false; error: unknown } {
+  let effective = outcome
+  if (effective.ok && ctx.aborted) {
+    effective = { ok: false, error: new HelmError('aborted', '后台子代理执行已取消', 409) }
+  }
+  if (effective.ok && ctx.gateResult !== undefined && !ctx.gateResult.ok) {
+    effective = { ok: false, error: new HelmError('gate_failed', ctx.gateResult.output, 502) }
+  }
+  if (
+    effective.ok &&
+    ctx.gateCommand !== undefined &&
+    ctx.gateResult === undefined &&
+    ctx.executionInfo?.executionId !== undefined
+  ) {
+    effective = {
+      ok: false,
+      error: gateResultMissingError({
+        agentId: ctx.agentId,
+        executionId: ctx.executionInfo.executionId,
+        command: ctx.gateCommand,
+      }),
+    }
+  }
+  return effective
+}
+
+/**
+ * 重启原位恢复后台/同步单子代理（复用既有 runId 与 ActiveRun）：
+ * - 已有 execution.conversationId 或 executionId 时以 requestId + reattach 原位重挂；
+ * - 尚未到达 onResolved 且无 secretNames 授予时凭原 requestId 重新派生；
+ * - 原生 conversationId 重挂时返回 horizonGate 供 init() 在 harness.resume() 前完成登记，
+ *   外部 executionId 与 pre-resolve 派生则在 deferExternalReattach 下延后至 runtime.started。
+ */
+export function reattachBackgroundAgent(
+  svc: WorkflowServiceContext,
+  record: RunRecord,
+): { horizonGate: Promise<void>; isNativeReattach: boolean } {
+  const runId = record.id
+  const spec = record.subagentSpec!
+  const exec = record.subagentMeta?.execution
+  const hasHandle = exec?.conversationId !== undefined || exec?.executionId !== undefined
+  const isNativeReattach = hasHandle && exec?.executionId === undefined && exec?.conversationId !== undefined
+  const abort = new AbortController()
+  const existingNode = record.nodes?.[0]
+  const node: WorkflowNodeState =
+    existingNode !== undefined
+      ? { ...existingNode, status: 'running' }
+      : {
+          id: 'subagent-0',
+          kind: 'agent',
+          label: record.name,
+          status: 'running',
+          startedAt: record.createdAt,
+          ...(spec.agentType !== undefined ? { agentType: spec.agentType } : {}),
+          ...(spec.gate !== undefined ? { gateCommand: spec.gate } : {}),
+        }
+  record.nodes = [node]
+
+  let resolveDone: () => void = () => {}
+  const doneGate = new Promise<void>((resolve) => {
+    resolveDone = resolve
+  })
+  const run: ActiveRun = {
+    runId,
+    conversationId: record.conversationId,
+    abort,
+    record,
+    done: doneGate.then(() => undefined),
+    summary: toSummary(record),
+    journalPath: record.journalPath,
+    writer: new JournalWriter(record.journalPath),
+    progress: [],
+    timeline: [],
+    pendingAborts: new Set(),
+    pendingExecs: new Set(),
+    childConversations: new Set(backgroundChildIds(record)),
+    foregroundWaiters: new Set(),
+    lastPersistAt: Date.now(),
+    lastNodeEventAt: Date.now(),
+  }
+  svc.active.set(runId, run)
+
+  const onRunAbort = (): void => {
+    if (svc.isRunSuspending(run)) return
+    for (const childId of [...run.childConversations]) {
+      svc.abortChildConversation(run, childId)
+    }
+  }
+  abort.signal.addEventListener('abort', onRunAbort, { once: true })
+
+  let executionInfo: AgentExecutionInfo | undefined = exec
+  let gateResult: AgentGateResult | undefined
+  let resolveHorizon: () => void = () => {}
+  const horizonGate = new Promise<void>((resolve) => {
+    resolveHorizon = resolve
+  })
+
+  const settler = createSubagentSettler({
+    svc,
+    run,
+    node,
+    parentConversationId: record.conversationId,
+    agentType: spec.agentType,
+    getExecutionInfo: () => executionInfo,
+    resolveDone,
+  })
+
+  abort.signal.addEventListener(
+    'abort',
+    () => {
+      void settler.settle({ ok: false, error: new HelmError('aborted', '后台子代理执行已取消', 409) }).catch(
+        (error: unknown) => {
+          settler.reportSettleError(error)
+        },
+      )
+    },
+    { once: true },
+  )
+
+  const proto: AgentSpawnRequest = {
+    parentConversationId: record.conversationId,
+    prompt: spec.prompt,
+    agentId: spec.agentId,
+    requestId: spec.requestId,
+    ...(record.parentToolCallId !== undefined ? { parentToolCallId: record.parentToolCallId } : {}),
+    ...(spec.agentType !== undefined ? { agentType: spec.agentType } : {}),
+    ...(spec.isolation !== undefined ? { isolation: spec.isolation } : {}),
+    ...(spec.gate !== undefined ? { gate: spec.gate } : {}),
+    ...(spec.gateTimeoutMs !== undefined ? { gateTimeoutMs: spec.gateTimeoutMs } : {}),
+    ...(spec.schema !== undefined ? { schema: spec.schema } : {}),
+    ...(hasHandle
+      ? {
+          reattach: {
+            ...(exec?.conversationId !== undefined ? { conversationId: exec.conversationId } : {}),
+            ...(exec?.executionId !== undefined ? { executionId: exec.executionId } : {}),
+            ...(exec?.effectiveCwd !== undefined ? { effectiveCwd: exec.effectiveCwd } : {}),
+          },
+        }
+      : {
+          ...(spec.cwd !== undefined ? { cwd: spec.cwd } : {}),
+          ...(spec.model !== undefined ? { model: spec.model } : {}),
+          ...(spec.effort !== undefined ? { effort: spec.effort } : {}),
+          ...(spec.fork !== undefined ? { fork: spec.fork } : {}),
+          ...(spec.attachments !== undefined ? { attachments: spec.attachments } : {}),
+        }),
+    meta: withWorkflowSpawnMeta(undefined, {
+      runId,
+      ...(spec.maxSubagentDepth !== undefined ? { maxSubagentDepth: spec.maxSubagentDepth } : {}),
+    }),
+    onResolved: (raw: unknown) => {
+      const info = sanitizeExecutionInfo(raw, { agentId: spec.agentId })
+      executionInfo = info
+      if (info.nodeId !== undefined) node.nodeId = info.nodeId
+      if (info.conversationId !== undefined) {
+        node.conversationId = info.conversationId
+        run.childConversations.add(info.conversationId)
+        if (abort.signal.aborted && !svc.isRunSuspending(run)) {
+          svc.abortChildConversation(run, info.conversationId)
+        }
+      }
+      if (info.executionId !== undefined) node.executionId = info.executionId
+      if (info.effectiveCwd !== undefined) node.effectiveCwd = info.effectiveCwd
+      const wfExecMeta = extractWorkflowExecutionMeta(info)
+      if (wfExecMeta.worktree !== undefined) node.worktree = wfExecMeta.worktree
+      if (wfExecMeta.controls !== undefined) node.controls = wfExecMeta.controls
+      record.subagentMeta = {
+        ...(spec.agentType !== undefined && spec.agentType !== '' ? { agentType: spec.agentType } : {}),
+        execution: redactJsonValue(info, svc.redact) as typeof info,
+      }
+      record.nodes = redactNodes(svc.redact, [node])
+      run.summary = toSummary(record)
+      svc.writeRecord(record)
+      resolveHorizon()
+    },
+    ...(spec.gate !== undefined
+      ? {
+          onGateResult: (raw: unknown) => {
+            const gate = sanitizeGateResult(raw, { agentId: spec.agentId })
+            gateResult = gate
+            node.gate = {
+              ok: gate.ok,
+              output: svc.redact(gate.output),
+              ...(gate.exitCode !== undefined ? { exitCode: gate.exitCode } : {}),
+              ...(gate.timedOut !== undefined ? { timedOut: gate.timedOut } : {}),
+            }
+          },
+        }
+      : {}),
+    signal: abort.signal,
+  }
+
+  const spawnPromise = (async () => {
+    if (!isNativeReattach && svc.deferExternalReattach) {
+      await svc.waitExternalRuntimeReady()
+    }
+    if (abort.signal.aborted) throw new HelmError('aborted', '后台子代理恢复期间已取消', 409)
+    return svc.host.spawnAgent(proto)
+  })()
+
+  void spawnPromise
+    .then(
+      (raw) => ({ ok: true as const, raw }),
+      (error: unknown) => ({ ok: false as const, error }),
+    )
+    .then(async (outcome) => {
+      resolveHorizon()
+      await settler.settle(finalizeSubagentOutcome(outcome, {
+        aborted: abort.signal.aborted,
+        agentId: spec.agentId,
+        gateCommand: spec.gate,
+        gateResult,
+        executionInfo,
+      }))
+    })
+    .catch((error: unknown) => {
+      resolveHorizon()
+      settler.reportSettleError(error)
+      if (!settler.isSettled()) void settler.settle({ ok: false, error }).catch(() => {})
+    })
+
+  return { horizonGate, isNativeReattach }
 }

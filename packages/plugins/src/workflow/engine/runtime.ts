@@ -115,10 +115,30 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
   /* --- resume state ---------------------------------------------------- */
 
   const journalEntries: readonly WorkflowJournalEntry[] = options.journal?.entries ?? []
+  const inPlaceResume = options.journal?.inPlaceResume === true
   const appendJournal = options.journal?.append
   const redactText = options.redact ?? ((text: string) => text)
   const replay = new JournalReplay(journalEntries)
   const recorder = new AgentJournalRecorder(appendJournal, redactText)
+  const unsettledNativeCoords = new Set<string>(
+    inPlaceResume
+      ? replay
+          .unsettledStartedAgents()
+          .filter((e) => e.execution.conversationId !== undefined && e.execution.executionId === undefined)
+          .map((e) => JSON.stringify([e.scopePath, e.scopeCallIndex, e.attempt ?? 1]))
+      : [],
+  )
+  let reattachHorizonFired = false
+  const fireReattachHorizon = () => {
+    if (reattachHorizonFired) return
+    reattachHorizonFired = true
+    options.onReattachHorizon?.()
+  }
+  const markNativeReattachResolved = (coordKey: string) => {
+    unsettledNativeCoords.delete(coordKey)
+    if (unsettledNativeCoords.size === 0) fireReattachHorizon()
+  }
+  if (unsettledNativeCoords.size === 0) fireReattachHorizon()
 
   const allocateIndex = () => callIndex++
 
@@ -162,14 +182,19 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       worker.postMessage({ type: 'response', callId, ok, value, error, fatal, spent: counters.spentOutputTokens })
     }
 
+    const isSuspended = () => options.isSuspended?.() === true
+
     const finish = (
       result: Omit<WorkflowRunResult, 'meta' | 'progress' | 'agentCount' | 'replayedCount'>,
     ) => {
       if (settled) return
       settled = true
+      fireReattachHorizon()
       options.signal?.removeEventListener('abort', onAbort)
       control.releasePause()
-      for (const agentId of inflight) host.abortAgent(agentId)
+      if (!isSuspended()) {
+        for (const agentId of inflight) host.abortAgent(agentId)
+      }
       inflight.clear()
       semaphore.drain()
       const settle = () =>
@@ -180,7 +205,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
     function onAbort() {
       aborted = true
       // terminate() is why the worker layer exists: it can stop a script even while it spins or is stuck mid-await.
-      finish({ status: 'killed', error: 'Workflow aborted.' })
+      finish({ status: 'killed', error: isSuspended() ? 'Workflow suspended.' : 'Workflow aborted.' })
     }
 
     if (options.signal) {
@@ -191,9 +216,11 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       options.signal.addEventListener('abort', onAbort, { once: true })
     }
 
-    const runState = { isAborted: () => aborted, isSettled: () => settled }
+    const runState = { isAborted: () => aborted, isSettled: () => settled, isSuspended }
 
     const agentCtx: AgentCallContext = {
+      ...(options.runId !== undefined ? { runId: options.runId } : {}),
+      inPlaceResume,
       host,
       agentCap,
       retryFailedCalls: options.journal?.retryFailedCalls === true,
@@ -202,6 +229,8 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       respond,
       allocateIndex,
       recordAgent: (entry) => recorder.record(entry),
+      recordAgentStarted: (entry) => recorder.recordStarted(entry),
+      markNativeReattachResolved,
       inflight,
       semaphore,
       control,
@@ -214,6 +243,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
     const actionCtx: ActionCallContext = {
       host,
       signal: options.signal,
+      inPlaceResume,
       runState,
       emit,
       respond,

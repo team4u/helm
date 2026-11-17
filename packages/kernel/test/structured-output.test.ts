@@ -6,7 +6,11 @@
 
 import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
-import { parseSchemaCandidate, validateJsonSchema } from '../src/runtime/structured-output.js'
+import {
+  extractAcceptedStructuredOutputFromEntries,
+  parseSchemaCandidate,
+  validateJsonSchema,
+} from '../src/runtime/structured-output.js'
 
 const objectSchema = { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] } as Record<string, unknown>
 
@@ -43,5 +47,63 @@ describe('validateJsonSchema', { timeout: 60_000 }, () => {
     const bad = validateJsonSchema({ answer: 3 }, objectSchema)
     assert.equal(bad.ok, false)
     assert.equal(bad.errors.length, 1)
+  })
+})
+
+describe('extractAcceptedStructuredOutputFromEntries', { timeout: 60_000 }, () => {
+  it('忽略错误与未匹配的结果，精确提取最新非错误且通过 Schema 校验的入参', { timeout: 60_000 }, () => {
+    const entries = [
+      {
+        kind: 'pi.assistant',
+        model: [
+          {
+            role: 'assistant',
+            content: [
+              { type: 'toolCall', id: 'c1', name: 'register_structured_output', arguments: { output: { answer: 123 } } },
+              { type: 'toolCall', id: 'c2', name: 'register_structured_output', arguments: { output: '{"answer":"first"}' } },
+              { type: 'toolCall', id: 'c3', name: 'register_structured_output', arguments: { output: { answer: 'interrupted' } } },
+            ],
+          },
+        ],
+      },
+      {
+        kind: 'pi.tool-result',
+        model: [
+          { role: 'toolResult', toolCallId: 'c1', toolName: 'register_structured_output', isError: true },
+          { role: 'toolResult', toolCallId: 'c2', toolName: 'register_structured_output', isError: false },
+          { role: 'toolResult', toolCallId: 'c3', toolName: 'register_structured_output', isError: true },
+        ],
+      },
+    ]
+    assert.deepEqual(extractAcceptedStructuredOutputFromEntries(entries, objectSchema), {
+      found: true,
+      value: { answer: 'first' },
+    })
+  })
+
+  it('支持 null 合法顶层与后续成功覆盖先前回合结果', { timeout: 60_000 }, () => {
+    const nullSchema = { type: 'null' } as Record<string, unknown>
+    assert.deepEqual(
+      extractAcceptedStructuredOutputFromEntries(
+        [
+          {
+            kind: 'pi.assistant',
+            model: [
+              {
+                role: 'assistant',
+                content: [{ type: 'toolCall', id: 'cn', name: 'register_structured_output', arguments: { output: null } }],
+              },
+            ],
+          },
+          {
+            kind: 'pi.tool-result',
+            model: [{ role: 'toolResult', toolCallId: 'cn', toolName: 'register_structured_output', isError: false }],
+          },
+        ],
+        nullSchema,
+      ),
+      { found: true, value: null },
+    )
+    assert.deepEqual(extractAcceptedStructuredOutputFromEntries([], objectSchema), { found: false })
   })
 })

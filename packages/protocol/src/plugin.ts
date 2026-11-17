@@ -146,6 +146,22 @@ export interface AgentSpawnRequest {
   /** 续接既有子代理的标识。 */
   resume?: string
   /**
+   * Optional cross-restart idempotent submission key: passed through by the native execution
+   * runner to pi-durable `conversation.submit({ requestId })`, returning the existing durable
+   * SubmissionHandle on duplicate submission without appending duplicate input messages.
+   */
+  requestId?: string
+  /**
+   * Optional cross-restart in-place reattach target (mutually exclusive with `resume` and
+   * `fork`): references a child conversation or external execution handle created before restart
+   * so the caller can wait for its in-flight turn to settle and run schema/gate verification.
+   */
+  reattach?: {
+    conversationId?: number
+    executionId?: string
+    effectiveCwd?: string
+  }
+  /**
    * 从父会话当前已完成上下文分叉派生原生子会话（可选，缺省 false；与 resume 互斥）。
    * 仅原生 Profile 子会话支持；外部运行时显式拒绝（400 unsupported_runtime）。
    */
@@ -304,6 +320,12 @@ export interface PluginToolSpec<TIn = Record<string, unknown>> extends PluginPro
   structuredOutputSchema?: JsonSchema
   /** 会话作用域：工具可见性与 executeTool 的双重过滤条件。 */
   scope?: ConversationScope
+  /**
+   * Cross-restart replay safety for tool calls (defaults to `'unsafe'`): declare `'safe'`
+   * only when the tool implementation guarantees strict durable idempotency per
+   * `(conversationId, callId)`. Forwarded by RuntimeToolRegistry to pi-durable `defineTool`.
+   */
+  replay?: 'safe' | 'unsafe'
   execute(input: TIn, context: PluginToolContext): MaybePromise<unknown>
 }
 

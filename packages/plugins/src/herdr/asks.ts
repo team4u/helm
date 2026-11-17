@@ -168,6 +168,18 @@ export class AskCoordinator {
     return entry
   }
 
+  /**
+   * When a host AskDoc ID collides (e.g. an existing AskDoc at the same seq across restarts),
+   * advance the retry suffix (:r<N>) and return to creating phase (supported by parseAskId & seqResolver).
+   */
+  advanceRetryOnConflict(entry: AskEntry): void {
+    if (this.entries_map.get(entry.key) !== entry) return
+    entry.attempt += 1
+    entry.askId = `${entry.key}:r${entry.attempt}`
+    entry.phase = 'creating'
+    this.onChange()
+  }
+
   /** Creation failed (IO/host error/cancellation confirmed): entry removed (later retries allowed); the error propagates to the caller. */
   failCreate(entry: AskEntry): void {
     this.removeEntry(entry)

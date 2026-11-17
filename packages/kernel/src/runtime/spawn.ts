@@ -32,11 +32,15 @@ import { parseModelRef } from './models.js'
 import { normalizeSessionCwd, trustedPlatformFromEnvFabric } from './target-cwd.js'
 import { resolveSpawnTargetChain } from './spawn-target.js'
 import {
-  assertSpawnForkFields,
   resolveCleanForkAnchor,
   resolveForkMode,
   resolveInheritedModelAndThinking,
 } from './spawn-fork.js'
+import {
+  assertSpawnRequestModes,
+  readSubmissionAssistantText,
+  recoverAcceptedStructuredOutput,
+} from './spawn-reattach.js'
 import type { HelmToolDeps } from './tool-deps.js'
 import { runGate, MAX_TIMEOUT_MS } from './tools.js'
 import {
@@ -226,20 +230,38 @@ export async function runNativeSpawn(deps: NativeSpawnDeps, request: AgentSpawnR
   // transform after eventually request in this re- inspect; business value by naming empty between all way plugin validate).
   sanitizeAgentNamespacedMeta(request.meta, { agentId: request.agentId ?? 'subagent', field: 'spawn request meta' })
   assertSpawnRequestShape(request)
-  const childId = request.resume === undefined ? undefined : resolveResumeRef(deps, request.resume, request.parentConversationId)
-  if (childId !== undefined) {
+  const resumeChildId =
+    request.resume === undefined ? undefined : resolveResumeRef(deps, request.resume, request.parentConversationId)
+  const reattachChildId =
+    request.reattach?.conversationId === undefined
+      ? undefined
+      : resolveReattachRef(deps, request.reattach.conversationId, request.parentConversationId)
+  if (reattachChildId !== undefined && request.requestId === undefined) {
+    throw new HelmError(
+      'validation_error',
+      'reattach.conversationId requires requestId for idempotent cross-restart reattachment',
+      400,
+      { conversationId: reattachChildId },
+    )
+  }
+  if (resumeChildId !== undefined) {
     // state preflight is and claim mutual patch second path guard against line (override not via this table history in-flight state).
-    const status = deps.getConversation(childId)?.status
+    const status = deps.getConversation(resumeChildId)?.status
     if (status === 'working' || status === 'blocked') {
-      throw new HelmError('subagent_in_use', `sub-conversation ${childId} still in execute, cannot concurrency resume`, 409, { conversationId: childId })
+      throw new HelmError('subagent_in_use', `sub-conversation ${resumeChildId} still in execute, cannot concurrency resume`, 409, {
+        conversationId: resumeChildId,
+      })
     }
-    claimSpawnConversation(deps.harness, childId)
+  }
+  const claimedChildId = resumeChildId ?? reattachChildId
+  if (claimedChildId !== undefined) {
+    claimSpawnConversation(deps.harness, claimedChildId)
   }
   const execution: NativeSpawnExecution = {}
   try {
-    return await runNativeSpawnTurn(deps, request, execution)
+    return await runNativeSpawnTurn(deps, request, execution, reattachChildId)
   } finally {
-    if (childId !== undefined) releaseSpawnConversation(deps.harness, childId)
+    if (claimedChildId !== undefined) releaseSpawnConversation(deps.harness, claimedChildId)
     if (execution.childId !== undefined) releaseSpawnConversation(deps.harness, execution.childId)
   }
 }
@@ -266,7 +288,12 @@ async function runNativeSpawnTurn(
   deps: NativeSpawnDeps,
   request: AgentSpawnRequest,
   execution: NativeSpawnExecution,
+  reattachChildId: number | undefined,
 ): Promise<unknown> {
+  if (reattachChildId !== undefined) {
+    return await runNativeReattachTurn(deps, request, reattachChildId)
+  }
+
   // ---- resume parse: pure number convId or agentId mapping; never guess resume ('12abc' reject).----
   // resume config baseline: atomic conversation mirror (profileId/cwd/model) is unique fact source.
   // default along use; explicit agentType/cwd/model change via the same updateConversation path should use
@@ -349,9 +376,67 @@ async function runNativeSpawnTurn(
   return await runChildTurn(deps, request, conversation, childId as number, structured, gateCwd)
 }
 
+/**
+ * Reattach in-place to an existing child conversation: never create or reconfigure,
+ * register structuredOutputSessions before harness resume, and await the durable SubmissionHandle.
+ */
+async function runNativeReattachTurn(
+  deps: NativeSpawnDeps,
+  request: AgentSpawnRequest,
+  childId: number,
+): Promise<unknown> {
+  const existing = deps.getConversation(childId)
+  const parent = deps.getParentOfConversation(childId)
+  if (existing === undefined || parent === undefined || parent !== request.parentConversationId) {
+    throw new HelmError(
+      'not_found',
+      `reattach target sub-conversation ${childId} missing or does not belong to parent ${request.parentConversationId}`,
+      404,
+      { conversationId: childId, parentConversationId: request.parentConversationId },
+    )
+  }
+  const target: SpawnTarget = {
+    nodeId: existing.nodeId ?? 'local',
+    childCwd: existing.cwd !== '' ? existing.cwd : (request.reattach?.effectiveCwd ?? deps.defaultCwd),
+  }
+  deps.assertNodeAvailable?.(target.nodeId)
+  const structured = prepareStructuredSession(request)
+  if (structured !== undefined && deps.structuredOutputSessions === undefined) {
+    throw new HelmError(
+      'invalid_state',
+      'request carry schema but host not inject structuredOutputSessions(install match defect): structure output result slot without where register',
+      500,
+    )
+  }
+  if (request.agentId) deps.agentSessions.set(request.agentId, childId)
+  notifyResumeResolved(deps, request, childId, target)
+
+  let structuredExtension: Extension | undefined
+  if (structured !== undefined) {
+    deps.structuredOutputSessions!.set(childId, structured)
+    structuredExtension = buildStructuredOutputExtension(deps.structuredOutputSessions!)
+    deps.installChildExtension(structuredExtension)
+  }
+
+  const conversation = await deps.harness.conversation(childId as never, bg)
+  if (!conversation) {
+    if (structured !== undefined && deps.structuredOutputSessions?.get(childId) === structured) {
+      deps.structuredOutputSessions.delete(childId)
+    }
+    throw new HelmError('not_found', `sub-conversation missing:${childId}`, 404, { conversationId: childId })
+  }
+  if (structured !== undefined && structuredExtension !== undefined) {
+    const agent = await conversation.agent(bg)
+    if (!agent.extensions.some((ext) => ext.name === STRUCTURED_OUTPUT_EXTENSION_NAME)) {
+      await conversation.configure({ extensions: { add: [structuredExtension] } }, bg)
+    }
+  }
+  return await runChildTurn(deps, request, conversation, childId, structured, target.childCwd)
+}
+
 /** request shape hard validate (sync segment; all explicit reject, never static default change by default). */
 function assertSpawnRequestShape(request: AgentSpawnRequest): void {
-  assertSpawnForkFields(request)
+  assertSpawnRequestModes(request)
   if (request.isolation !== undefined && request.isolation !== null && request.isolation !== '') {
     // kernel zero business branch: non-empty isolation reach original generate execute row = no plugin via agent_spawn
     // continuation honor (such as builtin:workflow deactivate when worktree isolated).
@@ -372,6 +457,13 @@ function assertSpawnRequestShape(request: AgentSpawnRequest): void {
     throw new HelmError(
       'unsupported_runtime',
       `agentType '${agentType}' is external runtime identifier (namespace:kind form), need to for should plugin via agent_spawn hook take over (when before not registered the runtime)`,
+      400,
+    )
+  }
+  if (request.reattach !== undefined && request.reattach.conversationId === undefined) {
+    throw new HelmError(
+      'unsupported_runtime',
+      `原生 subagent 执行行不支持仅通过 executionId='${request.reattach.executionId ?? ''}' 重挂（需要对应外部运行时插件接管）`,
       400,
     )
   }
@@ -732,29 +824,63 @@ Schema: ${JSON.stringify(structured.schema)}
 </structured_output_contract>`
     : basePrompt
 
-  // Busy mode: steer (unified default); the child is idle here, so this just starts the turn.
+  // Busy mode: steer (unified default); reattach uses followUp as safety net behind requestId dedup.
   const submission = await conversation.submit(
-    { type: 'input', content: promptText, whenBusy: 'steer' },
+    {
+      type: 'input',
+      ...(request.requestId !== undefined ? { requestId: request.requestId } : {}),
+      content: promptText,
+      whenBusy: request.reattach !== undefined ? 'followUp' : 'steer',
+    },
     bg,
   )
   const settled = await submission.wait(bg)
   assertNotUnanswered(settled, childId)
+
+  const resolveTurnText = async (
+    turnSettled: typeof settled,
+  ): Promise<string | undefined> => {
+    if (
+      typeof conversation.entries === 'function' &&
+      turnSettled.type === 'input' &&
+      turnSettled.status === 'done' &&
+      turnSettled.answer !== undefined
+    ) {
+      return await readSubmissionAssistantText(conversation, turnSettled)
+    }
+    return deps.getLastAssistantText(childId)
+  }
 
   if (structured) {
     if (structured.accepted !== undefined) {
       await settleGate(deps, request, gateCwd, childId)
       return structured.accepted
     }
+    if (settled.type === 'input' && settled.entry !== undefined) {
+      const recovered = await recoverAcceptedStructuredOutput(
+        conversation,
+        structured.schema,
+        settled.entry,
+        settled.answer,
+      )
+      if (recovered.found) {
+        structured.accepted = recovered.value
+        await settleGate(deps, request, gateCwd, childId)
+        return structured.accepted
+      }
+    }
     // not away tool: once text self-heal append question (model may directly output JSON text).
-    const text = deps.getLastAssistantText(childId) ?? ''
+    const text = (await resolveTurnText(settled)) ?? ''
     const parsed = parseSchemaCandidate(text, structured.schema)
     if (parsed.ok) {
       await settleGate(deps, request, gateCwd, childId)
       return parsed.value
     }
+    const healRequestId = request.requestId !== undefined ? `${request.requestId}:schema-heal` : undefined
     const heal = await conversation.submit(
       {
         type: 'input',
+        ...(healRequestId !== undefined ? { requestId: healRequestId } : {}),
         content:
           `you on a answer not via register_structured_output tool commit result. please immediately invoke ` +
           `register_structured_output tool,output parameter is satisfy Schema legal JSON.` +
@@ -770,7 +896,20 @@ Schema: ${JSON.stringify(structured.schema)}`,
       await settleGate(deps, request, gateCwd, childId)
       return structured.accepted
     }
-    const lastText = deps.getLastAssistantText(childId) ?? ''
+    if (healSettled.type === 'input' && healSettled.entry !== undefined) {
+      const recoveredHeal = await recoverAcceptedStructuredOutput(
+        conversation,
+        structured.schema,
+        healSettled.entry,
+        healSettled.answer,
+      )
+      if (recoveredHeal.found) {
+        structured.accepted = recoveredHeal.value
+        await settleGate(deps, request, gateCwd, childId)
+        return structured.accepted
+      }
+    }
+    const lastText = (await resolveTurnText(healSettled)) ?? ''
     const retry = parseSchemaCandidate(lastText, structured.schema)
     if (retry.ok) {
       await settleGate(deps, request, gateCwd, childId)
@@ -785,7 +924,7 @@ Schema: ${JSON.stringify(structured.schema)}`,
   }
 
   await settleGate(deps, request, gateCwd, childId)
-  const text = deps.getLastAssistantText(childId)
+  const text = await resolveTurnText(settled)
   if (text === undefined || text === '') {
     throw new HelmError('subagent_failed', `subagent (conversation ${childId}) complete but without text output`, 502, {
       conversationId: childId,
@@ -869,4 +1008,30 @@ function resolveResumeRef(deps: NativeSpawnDeps, ref: string, parentId: number):
   const parent = deps.getParentOfConversation(candidate)
   if (parent === undefined || parent !== parentId) return undefined
   return candidate
+}
+
+/**
+ * reattach.conversationId 严格解析：必须为正安全整数、会话真实存在且父归属匹配，
+ * 否则显式 404/400 拒绝，绝不新建会话假冒重挂。
+ */
+function resolveReattachRef(deps: NativeSpawnDeps, convId: number, parentId: number): number {
+  if (!Number.isSafeInteger(convId) || convId <= 0) {
+    throw new HelmError(
+      'validation_error',
+      `reattach.conversationId 必须是正安全整数（收到 ${String(convId)}）`,
+      400,
+      { conversationId: convId },
+    )
+  }
+  const parent = deps.getParentOfConversation(convId)
+  const existing = deps.getConversation(convId)
+  if (existing === undefined || parent === undefined || parent !== parentId) {
+    throw new HelmError(
+      'not_found',
+      `reattach 目标子会话 ${convId} 不存在或不属于父会话 ${parentId}；绝不新建会话假冒重挂`,
+      404,
+      { conversationId: convId, parentConversationId: parentId },
+    )
+  }
+  return convId
 }

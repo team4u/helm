@@ -197,6 +197,7 @@ export function SubagentLiveCard(props: {
       actions={
         <SubagentCardActions
           backgroundRun={backgroundRun}
+          hasExecutionHandle={Number.isSafeInteger(childConversationId) && childConversationId > 0}
           worktree={wt}
           inspectNodeId={inspectNodeId}
           detailError={detailError}

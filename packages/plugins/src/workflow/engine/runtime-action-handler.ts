@@ -23,7 +23,8 @@ import { RuntimeControl, Semaphore } from './runtime-control.js'
 export interface ActionCallContext {
   host: WorkflowHost
   signal: AbortSignal | undefined
-  runState: { isAborted(): boolean; isSettled(): boolean }
+  inPlaceResume?: boolean
+  runState: { isAborted(): boolean; isSettled(): boolean; isSuspended?(): boolean }
   emit(entries: WorkflowEntry[]): void
   respond(callId: number, ok: boolean, value?: unknown, error?: string, fatal?: boolean): void
   allocateIndex(): number
@@ -105,28 +106,30 @@ export async function handleActionCall(ctx: ActionCallContext, callId: number, p
       // this action's terminal state -- the next resume could not reuse it and might re-execute side effects.
       // An unwritable ledger = unsafely accountable = cannot continue.
       const effectiveReplayedIdempotent = payload.idempotent ?? (replayed.entry.idempotent === true)
-      try {
-        await recordAction({
-          type: 'action',
-          index,
-          key,
-          ok: true,
-          result: redactPlainValue(replayed.entry.result, ctx.redactText),
-          ...(effectiveReplayedIdempotent ? { idempotent: true } : {}),
-        })
-      } catch (error) {
-        const message =
-          error instanceof JournalWriteError
-            ? error.message
-            : `workflow journal append failed: ${error instanceof Error ? error.message : String(error)}`
-        ctx.respond(
-          callId,
-          false,
-          undefined,
-          `workflow journal replay bookkeeping failed; aborting to keep the run resumable: ${message}`,
-          true,
-        )
-        return
+      if (ctx.inPlaceResume !== true) {
+        try {
+          await recordAction({
+            type: 'action',
+            index,
+            key,
+            ok: true,
+            result: redactPlainValue(replayed.entry.result, ctx.redactText),
+            ...(effectiveReplayedIdempotent ? { idempotent: true } : {}),
+          })
+        } catch (error) {
+          const message =
+            error instanceof JournalWriteError
+              ? error.message
+              : `workflow journal append failed: ${error instanceof Error ? error.message : String(error)}`
+          ctx.respond(
+            callId,
+            false,
+            undefined,
+            `workflow journal replay bookkeeping failed; aborting to keep the run resumable: ${message}`,
+            true,
+          )
+          return
+        }
       }
       ctx.replay.consumeAction(replayed.entry)
       ctx.respond(callId, true, replayed.entry.result ?? null)
@@ -251,6 +254,9 @@ export async function handleActionCall(ctx: ActionCallContext, callId: number, p
         ctx.openLaunches.delete(callId)
       }
 
+      if (ctx.runState.isSettled() || (ctx.runState.isSuspended?.() === true && !outcome.ok)) {
+        return
+      }
       const finishedAt = Date.now()
       // respond only after the terminal row is persisted (fsync); a write failure = executed but unaccountable, explicitly uncertain.
       try {

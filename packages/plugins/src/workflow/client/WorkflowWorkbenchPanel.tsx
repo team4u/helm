@@ -13,6 +13,7 @@ import type { WorkbenchPanelProps } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { MarkdownText, useConversations, usePluginContext } from '@helm/plugin-client'
 import { usePluginSessionDoc } from './hooks.ts'
+import { SPIN } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { WorkflowRunCardBody } from './WorkflowRunCard.tsx'
 import { SubagentLiveCard } from './SubagentCard.tsx'
@@ -22,6 +23,7 @@ import { buildExecutionTree } from './model-execution-tree.ts'
 import type { ExecutionNode } from './model-execution-tree.ts'
 import { executionToolStatus } from './model-execution-status.ts'
 import { stringifyPretty } from './model-format.ts'
+import { listResumableFailedRuns, parseResumeFailedResult } from './model-run.ts'
 import {
   clearWorkbenchRunFocus,
   peekWorkbenchRunFocus,
@@ -51,6 +53,8 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
     return initial !== undefined ? { [initial]: true } : {}
   })
   const [resultOpenIds, setResultOpenIds] = useState<Record<string, boolean>>({})
+  const [batchResuming, setBatchResuming] = useState(false)
+  const batchResumeInFlight = useRef(false)
   const nodeRefs = useRef<Record<string, HTMLDivElement | null>>({})
 
   useEffect(() => {
@@ -104,6 +108,43 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
     [conversationId, conversations],
   )
 
+  const resumableRuns = useMemo(
+    () => (conversationId !== undefined ? listResumableFailedRuns(runs, conversationId) : []),
+    [runs, conversationId],
+  )
+
+  const handleResumeFailed = (): void => {
+    if (conversationId === undefined || batchResumeInFlight.current) return
+    batchResumeInFlight.current = true
+    setBatchResuming(true)
+    void ctx
+      .callAction('resume_failed', { conversationId })
+      .then((raw) => {
+        const parsed = parseResumeFailedResult(raw)
+        if (parsed === undefined) {
+          throw new Error('批量恢复返回结构不合法（动作返回非预期形状）')
+        }
+        const { resumedCount, skippedCount } = parsed
+        if (resumedCount === 0 && skippedCount > 0) {
+          ctx.notify(`未拉起新恢复任务（跳过 ${skippedCount} 个不可自动恢复任务）`, 'warning')
+          return
+        }
+        if (resumedCount === 0 && skippedCount === 0) {
+          ctx.notify('当前没有需要恢复的失败任务')
+          return
+        }
+        const skippedSuffix = skippedCount > 0 ? `，跳过 ${skippedCount} 个不可自动恢复任务` : ''
+        ctx.notify(`已发起恢复 ${resumedCount} 个失败任务${skippedSuffix}`)
+      })
+      .catch((err: unknown) => {
+        ctx.notify(`批量恢复失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+      })
+      .finally(() => {
+        batchResumeInFlight.current = false
+        setBatchResuming(false)
+      })
+  }
+
   return (
     <div className="workflow-workbench-panel">
       <div className="workflow-workbench-head">
@@ -114,14 +155,29 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
             <span className="badge badge-neutral tabular-nums">{tree.length}</span>
           ) : null}
         </span>
-        <button
-          type="button"
-          className="btn btn-xs"
-          onClick={() => ctx.openScreen(`screen:${ctx.pluginId}/library`)}
-        >
-          <Icon name="folder" size={11} />
-          工作流库
-        </button>
+        <div className="stack-row">
+          {conversationId !== undefined && resumableRuns.length > 0 ? (
+            <button
+              type="button"
+              className="btn btn-xs"
+              disabled={batchResuming}
+              aria-label={`恢复失败 (${resumableRuns.length})`}
+              title="批量恢复当前会话下可自动续跑的失败任务"
+              onClick={handleResumeFailed}
+            >
+              <Icon name="rotate-cw" size={12} className={batchResuming ? SPIN : undefined} />
+              {`恢复失败 (${resumableRuns.length})`}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="btn btn-xs"
+            onClick={() => ctx.openScreen(`screen:${ctx.pluginId}/library`)}
+          >
+            <Icon name="folder" size={11} />
+            工作流库
+          </button>
+        </div>
       </div>
 
       {conversationId === undefined ? (

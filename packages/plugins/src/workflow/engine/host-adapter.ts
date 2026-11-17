@@ -150,6 +150,10 @@ export interface EngineHostDeps {
   loadWorkflowRef(
     ref: { name?: string; scriptPath?: string },
   ): { ok: true; script: string; path?: string } | { ok: false; message: string }
+  /** 启动重挂阶段等待外部运行时（如 herdr）就绪。 */
+  waitExternalRuntimeReady?(): Promise<void>
+  /** 判定 run 是否正处于宿主关停优雅挂起路径（禁止守卫中止子会话）。 */
+  isSuspending?(run: ActiveRun): boolean
 }
 
 export function createEngineHost(
@@ -263,9 +267,15 @@ export async function invokeAgentSpawn(
   request: WorkflowSpawnRequest,
   isResume: boolean,
 ): Promise<WorkflowSpawnResult> {
+  if (request.reattach?.executionId !== undefined && deps.waitExternalRuntimeReady !== undefined) {
+    await deps.waitExternalRuntimeReady()
+  }
   if (deps.host.isHostClosing?.() === true) {
     run.abort.abort()
-    return { ok: false, error: 'Workflow aborted.' }
+    return {
+      ok: false,
+      error: deps.isSuspending?.(run) === true ? 'Workflow suspended.' : 'Workflow aborted.',
+    }
   }
   if (deps.isClosed() || run.abort.signal.aborted) {
     return { ok: false, error: 'Workflow aborted.' }
@@ -285,7 +295,8 @@ export async function invokeAgentSpawn(
   const knownConvId = conversationByAgent.get(request.agentId)
   // resumeRef 已是 WorkflowSpawnRequest 正式字段（runtime 重放/续接时透传
   // executionId 或 conversationId 字符串），无需再经交集类型强转读取。
-  const resumeRef = isResume ? String(request.resumeRef ?? knownConvId ?? nativeAgentId) : undefined
+  const isReattach = request.reattach !== undefined
+  const resumeRef = !isReattach && isResume ? String(request.resumeRef ?? knownConvId ?? nativeAgentId) : undefined
 
   /** 已 sanitized 的执行元数据（onResolved 可能与 spawn 返回前多次回调——幂等只记最新）。 */
   let executionInfo: AgentExecutionInfo | undefined
@@ -352,7 +363,7 @@ export async function invokeAgentSpawn(
     ...(request.model !== undefined ? { model: request.model } : {}),
     ...(request.effort !== undefined ? { effort: request.effort } : {}),
     ...(request.isolation !== undefined ? { isolation: request.isolation } : {}),
-    ...(!isResume && request.cwd !== undefined ? { cwd: request.cwd } : {}),
+    ...(!isResume && !isReattach && request.cwd !== undefined ? { cwd: request.cwd } : {}),
     ...(request.gateTimeoutMs !== undefined ? { gateTimeoutMs: request.gateTimeoutMs } : {}),
     meta: withWorkflowSpawnMeta(undefined, {
       runId: run.runId,
@@ -360,7 +371,9 @@ export async function invokeAgentSpawn(
     }),
     ...(request.schema !== undefined ? { schema: request.schema.schema } : {}),
     ...(request.attachments !== undefined ? { attachments: request.attachments } : {}),
-    ...(request.secretNames !== undefined ? { secretNames: request.secretNames } : {}),
+    ...(!isReattach && request.secretNames !== undefined ? { secretNames: request.secretNames } : {}),
+    ...(request.requestId !== undefined ? { requestId: request.requestId } : {}),
+    ...(request.reattach !== undefined ? { reattach: request.reattach } : {}),
     ...(resumeRef !== undefined ? { resume: resumeRef } : {}),
     // cwd 不注入：执行行按自身链解析（原生 request>Profile>parent镜像>Hub；
     // herdr request>Profile.workspace>parent>Hub）。引擎层注入会压过 Profile
@@ -373,8 +386,8 @@ export async function invokeAgentSpawn(
         run.childConversations.add(info.conversationId)
         // 迟到 onResolved 补杀：abort/超时先于执行元数据落地时，abortAgent
         // 的映射里还没有该子会话——在登记点立即补守卫中止，绝不因时序漏杀；
-        // 超时路径计入本 attempt 等待面（返回前等完）。
-        if (run.abort.signal.aborted) {
+        // 挂起状态（suspend）严禁守卫中止子会话！超时路径计入本 attempt 等待面（返回前等完）。
+        if (run.abort.signal.aborted && deps.isSuspending?.(run) !== true) {
           abortChildConversation(deps.host, run, info.conversationId)
         } else if (timedOut) {
           timeoutAborts.add(abortChildConversation(deps.host, run, info.conversationId))

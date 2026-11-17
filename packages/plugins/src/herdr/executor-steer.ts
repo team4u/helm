@@ -225,13 +225,14 @@ export class SteerDispatcher {
       if (this.port.activeTaskOf(key) !== origin || origin.signal?.aborted || this.port.isClosingPane(current)) {
         throw new HelmError('herdr_steer_task_ended', `pane ${pane.paneId}'s input was delivered, but the original task was cancelled or closed; inspect the scene, do not resend`, 409)
       }
-      // Redirect the single handoff file after successful delivery; visible when settlement drains in-flight steers.
+      // Redirect the single handoff file after successful delivery and flush persistence; visible when settlement drains in-flight steers.
       this.port.registry.update(nodeIdOf(current), current.paneId, { outputFileName: next })
       const retired = this.steerRetiredFiles.get(key) ?? []
       if (current.outputFileName !== undefined && current.outputFileName !== '') {
         retired.push(current.outputFileName)
       }
       this.steerRetiredFiles.set(key, retired)
+      await this.port.registry.flushDisk()
       return { stateChangeSeq: authority.stateChangeSeq }
     })().finally(() => this.activeSteers.delete(key))
     this.activeSteers.set(key, steer)

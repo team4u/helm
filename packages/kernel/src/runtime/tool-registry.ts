@@ -183,6 +183,7 @@ export class RuntimeToolRegistry {
         ...(spec.structuredOutputSchema !== undefined
           ? { structuredOutputSchema: spec.structuredOutputSchema }
           : {}),
+        ...(spec.replay !== undefined ? { replay: spec.replay } : {}),
         async execute(args: unknown, api: ToolExecutionApi, context: Context): Promise<ToolExecutionResult> {
           const toolApi: PluginToolApi = api
           const result = await host.executeTool(spec.name, args, {

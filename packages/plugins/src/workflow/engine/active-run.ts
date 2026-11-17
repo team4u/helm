@@ -61,6 +61,10 @@ export interface ActiveRun {
    * （父回合结束/中止不再误杀已转后台的 run）。
    */
   unbindForegroundSignal?: () => void
+  /** 宿主关停优雅挂起标记：true 时不中止子会话，不写终态，落盘 suspendedCleanly=true。 */
+  suspended?: boolean
+  /** 显式取消/关停关闭标记：防止误入优雅挂起路径。 */
+  userAborted?: boolean
   /** 本 run 的持久记录引用（同一对象）：子会话事实即时落盘与终态写共用。 */
   record: RunRecord
   /** progress 持久化节流（timeline 非空后定期落盘）。 */
