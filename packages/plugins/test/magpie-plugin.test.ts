@@ -42,6 +42,7 @@ import { compilePluginClientModule, createPluginBuildProvider } from '@helm/plug
 import {
   MemoryConfigStore,
   MemoryDocStore,
+  deferred,
   makeConversationSummary,
   waitFor as baseWaitFor,
 } from './helpers/plugin-test-env.js'
@@ -233,6 +234,7 @@ interface TestEnv {
   cliRuns: Array<readonly string[]>
   host: PluginHost
   config: MemoryConfigStore
+  docs: MemoryDocStore
   setRefreshError(error: string | undefined): void
   close(): Promise<void>
 }
@@ -274,6 +276,7 @@ async function makeEnv(options: { backendAtDefault?: FakeBackend; hostApi?: Part
     refreshCalls: [],
     cliRuns: [],
     config,
+    docs,
     setRefreshError(error) {
       refreshResult.errors = error === undefined ? {} : { magpie: error }
     },
@@ -301,9 +304,9 @@ async function makeEnv(options: { backendAtDefault?: FakeBackend; hostApi?: Part
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: makeHostApi({
-      ...options.hostApi,
       refreshModels: hostRefreshModels as never,
       isClosing: () => false,
+      ...options.hostApi,
     }),
     docs,
     config,
@@ -1012,5 +1015,63 @@ test('magpie21: provider stream 按请求时刻 root 修正 baseUrl（委托产�
     assert.ok(events.length >= 1, 'stream 委托产生事件流')
   } finally {
     await env.close()
+  }
+})
+
+test('magpie22: stop() 取消启动后台刷新任务，停止后不再写 status doc 或触发 sidecar 读取', { timeout: 60_000 }, async () => {
+  // 1) 后台刷新在途期间 dispose/stop，随后 resolve 成功结果：不写 status、不拉 quotas/trace
+  {
+    const refreshGate = deferred<{ providers: string[]; aborted: boolean; errors: Record<string, string>; models: never[]; providerCatalog: never[] }>()
+    const entered = deferred<void>()
+    const env = await makeEnv({
+      hostApi: {
+        refreshModels: (async () => {
+          entered.resolve()
+          return refreshGate.promise
+        }) as never,
+      },
+    })
+    try {
+      await env.host.enable(MAGPIE)
+      await entered.promise
+      const writesAtStop = env.docs.writes.length
+      const fetchCallsAtStop = env.fetchState.calls.length
+
+      await env.host.dispose()
+      refreshGate.resolve({ providers: [MAGPIE_PROVIDER_ID], aborted: false, errors: {}, models: [], providerCatalog: [] })
+      await new Promise((r) => setTimeout(r, 30))
+
+      assert.equal(env.docs.writes.length, writesAtStop, 'stop 后后台刷新返回不得再写 status doc')
+      assert.equal(env.fetchState.calls.length, fetchCallsAtStop, 'stop 后不得再发起 quotas/trace sidecar 读取')
+    } finally {
+      await env.close()
+    }
+  }
+
+  // 2) 后台刷新在途期间 dispose/stop，随后 reject：同样静默退出不写 status doc
+  {
+    const refreshGate = deferred<never>()
+    const entered = deferred<void>()
+    const env = await makeEnv({
+      hostApi: {
+        refreshModels: (async () => {
+          entered.resolve()
+          return refreshGate.promise
+        }) as never,
+      },
+    })
+    try {
+      await env.host.enable(MAGPIE)
+      await entered.promise
+      const writesAtStop = env.docs.writes.length
+
+      await env.host.dispose()
+      refreshGate.reject(new Error('late refresh rejection'))
+      await new Promise((r) => setTimeout(r, 30))
+
+      assert.equal(env.docs.writes.length, writesAtStop, 'stop 后后台刷新异常不得再写 status doc')
+    } finally {
+      await env.close()
+    }
   }
 })
