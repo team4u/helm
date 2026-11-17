@@ -24,6 +24,17 @@ export interface WorktreeDoc {
   records: ManagedWorktreeRecord[]
 }
 
+/** 跨回合持久持有锁（供上层协同插件阻止空闲期 worktree 被误清理）。 */
+export interface ManagedWorktreeHold {
+  /** 持有锁的插件 ID（如 'builtin:superagent'）。 */
+  pluginId: string
+  /** 插件内稳定持有标识（如 '<groupId>:<workerName>'）。 */
+  holdId: string
+  /** 面向拒绝诊断与列表展示的可读说明（写入前经 redact 脱敏）。 */
+  label: string
+  acquiredAt: number
+}
+
 /** 单条受管 worktree 记录。 */
 export interface ManagedWorktreeRecord {
   /** 唯一标识（`${nodeId}:${path}`）。 */
@@ -50,6 +61,48 @@ export interface ManagedWorktreeRecord {
   branchDeleted?: boolean
   /** 分支删除失败的最后诊断（已脱敏；重试成功后清除）。 */
   branchDeleteError?: string
+  /** 可选持久持有锁（活跃期间即便是 force: true 清理也显式拒绝）。 */
+  hold?: ManagedWorktreeHold
+}
+
+const ALLOWED_HOLD_KEYS = new Set(['pluginId', 'holdId', 'label', 'acquiredAt'])
+
+function isNonEmptyNonWhitespaceString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== ''
+}
+
+function assertPersistedHoldValid(raw: unknown, recordId: unknown): asserts raw is ManagedWorktreeHold {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new HelmError(
+      'worktree_doc_corrupted',
+      `受管 worktree 文档 '${DOC_KEY}' 损坏（记录 ${String(recordId)} 的 hold 非对象）`,
+      500,
+    )
+  }
+  const obj = raw as Record<string, unknown>
+  for (const key of Object.keys(obj)) {
+    if (!ALLOWED_HOLD_KEYS.has(key)) {
+      throw new HelmError(
+        'worktree_doc_corrupted',
+        `受管 worktree 文档 '${DOC_KEY}' 损坏（记录 ${String(recordId)} 的 hold 含未知字段 '${key}'）`,
+        500,
+      )
+    }
+  }
+  if (
+    !isNonEmptyNonWhitespaceString(obj['pluginId']) ||
+    !isNonEmptyNonWhitespaceString(obj['holdId']) ||
+    !isNonEmptyNonWhitespaceString(obj['label']) ||
+    typeof obj['acquiredAt'] !== 'number' ||
+    !Number.isFinite(obj['acquiredAt']) ||
+    obj['acquiredAt'] < 0
+  ) {
+    throw new HelmError(
+      'worktree_doc_corrupted',
+      `受管 worktree 文档 '${DOC_KEY}' 损坏（记录 ${String(recordId)} 的 hold 字段非法）`,
+      500,
+    )
+  }
 }
 
 /** 只读记录选择器（worktreeId / conversationId / path[+nodeId]；互斥规则由调用方入口校验）。 */
@@ -73,6 +126,14 @@ export class WorktreeStore {
       // 开发阶段不迁移：损坏文档显式失败，绝不静默当空表（丢失已登记记录
       // 会让 cleanup 误判“未登记”而拒绝清理，或误把人类目录当可清理）。
       throw new HelmError('worktree_doc_corrupted', `受管 worktree 文档 '${DOC_KEY}' 损坏（records 非数组）`, 500)
+    }
+    for (const record of doc.records) {
+      if (record === null || typeof record !== 'object' || Array.isArray(record)) {
+        throw new HelmError('worktree_doc_corrupted', `受管 worktree 文档 '${DOC_KEY}' 损坏（record 非对象）`, 500)
+      }
+      if ((record as { hold?: unknown }).hold !== undefined) {
+        assertPersistedHoldValid((record as { hold: unknown }).hold, (record as { id?: unknown }).id)
+      }
     }
     return doc
   }
@@ -137,6 +198,123 @@ export class WorktreeStore {
         },
       )
     }
+  }
+
+  /**
+   * 边界校验并构造可安全持久化的 ManagedWorktreeHold：
+   * - pluginId / holdId / label 必须为非空非空白字符串，acquiredAt（若传）必须为非负有限数；
+   * - label 落库前经宿主 redact 脱敏；
+   * - pluginId / holdId 属于匹配身份键，不得含已登记机密（经 assertMetadataSecretFree 拦截）。
+   */
+  prepareHold(
+    hold: { pluginId: string; holdId: string; label: string; acquiredAt?: number },
+    identity: Record<string, string | number | undefined> = {},
+  ): ManagedWorktreeHold {
+    if (hold === null || typeof hold !== 'object' || Array.isArray(hold)) {
+      throw new HelmError('validation_error', 'hold 必须为对象', 400)
+    }
+    const raw = hold as Record<string, unknown>
+    for (const key of Object.keys(raw)) {
+      if (!ALLOWED_HOLD_KEYS.has(key)) {
+        throw new HelmError('validation_error', `hold 含未知字段 '${key}'`, 400, { key })
+      }
+    }
+    if (!isNonEmptyNonWhitespaceString(raw['pluginId'])) {
+      throw new HelmError('validation_error', 'hold.pluginId 必须为非空字符串', 400)
+    }
+    if (!isNonEmptyNonWhitespaceString(raw['holdId'])) {
+      throw new HelmError('validation_error', 'hold.holdId 必须为非空字符串', 400)
+    }
+    if (!isNonEmptyNonWhitespaceString(raw['label'])) {
+      throw new HelmError('validation_error', 'hold.label 必须为非空字符串', 400)
+    }
+    const acquiredAt = raw['acquiredAt'] ?? Date.now()
+    if (typeof acquiredAt !== 'number' || !Number.isFinite(acquiredAt) || acquiredAt < 0) {
+      throw new HelmError('validation_error', 'hold.acquiredAt 必须为非负有限数值', 400)
+    }
+    const safeLabel = this.redact(raw['label'].trim())
+    if (!isNonEmptyNonWhitespaceString(safeLabel)) {
+      throw new HelmError('validation_error', 'hold.label 脱敏后为空，拒绝登记', 400)
+    }
+    this.assertMetadataSecretFree(
+      { holdPluginId: raw['pluginId'], holdId: raw['holdId'], holdLabel: safeLabel },
+      identity,
+    )
+    return {
+      pluginId: raw['pluginId'],
+      holdId: raw['holdId'],
+      label: safeLabel,
+      acquiredAt,
+    }
+  }
+
+  /** 对已登记的活跃 worktree 持久化写入 hold（label 经脱敏与机密复核）。 */
+  setHold(
+    id: string,
+    hold: { pluginId: string; holdId: string; label: string; acquiredAt?: number },
+    identity: Record<string, string | number | undefined> = {},
+  ): ManagedWorktreeRecord {
+    if (!isNonEmptyNonWhitespaceString(id)) {
+      throw new HelmError('validation_error', 'worktreeId 必须为非空字符串', 400)
+    }
+    const normalized = this.prepareHold(hold, { worktreeId: id, ...identity })
+    let updated: ManagedWorktreeRecord | undefined
+    this.updateRecord(id, (record) => {
+      if (record.status === 'removed') {
+        throw new HelmError(
+          'worktree_missing',
+          `受管 worktree '${record.path}' 已被清理，无法挂载持久持有锁`,
+          409,
+          { worktreeId: id, path: record.path },
+        )
+      }
+      updated = { ...record, hold: normalized }
+      return updated
+    })
+    return updated!
+  }
+
+  /**
+   * 释放受管 worktree 的持久持有锁：
+   * - 记录不存在或当前无 hold：幂等返回 false；
+   * - pluginId 或 holdId 与现有 hold 不一致：显式抛 409 worktree_hold_mismatch；
+   * - 完全匹配：清除 hold 并写回 docStore，返回 true。
+   */
+  releaseHold(id: string, pluginId: string, holdId: string): boolean {
+    if (!isNonEmptyNonWhitespaceString(id)) {
+      throw new HelmError('validation_error', 'worktreeId 必须为非空字符串', 400)
+    }
+    if (!isNonEmptyNonWhitespaceString(pluginId)) {
+      throw new HelmError('validation_error', 'pluginId 必须为非空字符串', 400)
+    }
+    if (!isNonEmptyNonWhitespaceString(holdId)) {
+      throw new HelmError('validation_error', 'holdId 必须为非空字符串', 400)
+    }
+    const doc = this.loadDoc()
+    const index = doc.records.findIndex((r) => r.id === id)
+    if (index === -1) return false
+    const record = doc.records[index]!
+    if (record.hold === undefined) return false
+    if (record.hold.pluginId !== pluginId || record.hold.holdId !== holdId) {
+      throw new HelmError(
+        'worktree_hold_mismatch',
+        `受管 worktree '${record.path}' 当前持有锁归属不匹配（持有方 ${record.hold.pluginId}:${record.hold.holdId}，请求释放方 ${pluginId}:${holdId}）`,
+        409,
+        {
+          worktreeId: record.id,
+          path: record.path,
+          expectedPluginId: pluginId,
+          expectedHoldId: holdId,
+          actualPluginId: record.hold.pluginId,
+          actualHoldId: record.hold.holdId,
+          label: this.redact(record.hold.label),
+        },
+      )
+    }
+    const { hold: _cleared, ...clean } = record
+    doc.records[index] = clean
+    this.saveDoc(doc)
+    return true
   }
 
   /** 查询会话当前绑定的受管 worktree（最新优先；无绑定返回 undefined）。 */

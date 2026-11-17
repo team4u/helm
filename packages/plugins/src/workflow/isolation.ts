@@ -37,6 +37,27 @@ import {
 /** 持久租约记录（形状与 fail-closed 纪律见 isolation-lease-store.ts）。 */
 export type { WorktreeLeaseRecord } from './isolation-lease-store.js'
 
+export interface AcquireWorktreeInput {
+  conversationId: number
+  parentConversationId: number
+  profileId?: string
+  requestCwd?: string
+  fork?: boolean
+  hold: {
+    pluginId: string
+    holdId: string
+    label: string
+  }
+}
+
+export interface AcquireWorktreeResult {
+  worktreeId: string
+  path: string
+  branch: string
+  baseCommit: string
+  nodeId: string
+}
+
 /** 外部运行时 agentType 命名空间形态：'namespace:kind'（通用约定，零插件点名）。 */
 function isExternalRuntimeAgentType(agentType: string | undefined): boolean {
   return agentType !== undefined && agentType.includes(':')
@@ -302,8 +323,109 @@ export class WorktreeIsolation {
       ...(input.path !== undefined ? { path: input.path } : {}),
       ...(input.nodeId !== undefined ? { nodeId: input.nodeId } : {}),
     })
-    if (record !== undefined) this.leases.assertNoUnknownExecution(record.nodeId, record.path)
+    if (record !== undefined && record.hold === undefined) {
+      this.leases.assertNoUnknownExecution(record.nodeId, record.path)
+    }
     return this.allocator.cleanup({ ...input, signal })
+  }
+
+  /** 查询目标节点路径是否仍被在途 spawn、持久租约或活跃持有锁占用。 */
+  isPathInUse(nodeId: string, path: string): boolean {
+    return this.leases.isPathInUse(nodeId, path)
+  }
+
+  /**
+   * 分配受管隔离工作树并原子挂载跨回合持久持有锁：
+   * resolveSpawnTarget -> openPendingLease -> allocator.allocate ->
+   * bindConversation -> 脱敏/密检写入 hold -> 释放临时 pending 租约并 flush。
+   */
+  async acquireWorktree(input: AcquireWorktreeInput, signal?: AbortSignal): Promise<AcquireWorktreeResult> {
+    if (!Number.isSafeInteger(input.conversationId) || input.conversationId < 1) {
+      throw new HelmError('validation_error', 'conversationId 必须为正整数', 400, {
+        conversationId: input.conversationId,
+      })
+    }
+    if (!Number.isSafeInteger(input.parentConversationId) || input.parentConversationId < 1) {
+      throw new HelmError('validation_error', 'parentConversationId 必须为正整数', 400, {
+        parentConversationId: input.parentConversationId,
+      })
+    }
+    if (input.profileId !== undefined && (typeof input.profileId !== 'string' || input.profileId.trim() === '')) {
+      throw new HelmError('validation_error', 'profileId 必须为非空字符串', 400, { profileId: input.profileId })
+    }
+    if (input.requestCwd !== undefined && (typeof input.requestCwd !== 'string' || input.requestCwd.trim() === '')) {
+      throw new HelmError('validation_error', 'requestCwd 必须为非空字符串', 400, { requestCwd: input.requestCwd })
+    }
+    if (input.fork !== undefined && typeof input.fork !== 'boolean') {
+      throw new HelmError('validation_error', `fork 必须为 boolean（收到 ${typeof input.fork}）`, 400, {
+        fork: input.fork,
+      })
+    }
+    // 在任何远端解析与 git 副作用前先做 hold 形状校验与机密检查，防遗留孤儿工作树。
+    this.allocator.prepareHold(input.hold, {
+      parentConversationId: input.parentConversationId,
+      conversationId: input.conversationId,
+    })
+
+    const target = await this.deps.host.resolveSpawnTarget({
+      parentConversationId: input.parentConversationId,
+      ...(input.profileId !== undefined ? { profileId: input.profileId } : {}),
+      ...(input.requestCwd !== undefined ? { requestCwd: input.requestCwd } : {}),
+      ...(input.fork !== undefined ? { fork: input.fork } : {}),
+    })
+
+    let leaseToken = ''
+    let holdPersisted = false
+    try {
+      const record = await this.allocator.allocate({
+        nodeId: target.nodeId,
+        sourceCwd: target.sourceCwd,
+        parentConversationId: input.parentConversationId,
+        signal,
+        beforeCreate: async (pending) => {
+          leaseToken = await this.leases.openPendingLease(`${pending.nodeId}:${pending.path}`)
+        },
+      })
+      this.allocator.bindConversation(record.path, record.nodeId, input.conversationId)
+      this.allocator.setHold(record.id, input.hold, {
+        parentConversationId: input.parentConversationId,
+        conversationId: input.conversationId,
+      })
+      holdPersisted = true
+      if (leaseToken !== '') {
+        await this.leases.settleLease(leaseToken, false, true)
+      } else {
+        await this.deps.docStore.flush()
+      }
+      return {
+        worktreeId: record.id,
+        path: record.path,
+        branch: record.branch,
+        baseCommit: record.baseCommit,
+        nodeId: record.nodeId,
+      }
+    } catch (error) {
+      if (leaseToken !== '' && !holdPersisted) {
+        await this.leases.settleLease(leaseToken, false, true).catch(() => {})
+      }
+      throw error
+    }
+  }
+
+  /**
+   * 释放受管工作树的持久持有锁：缺失或无锁幂等返回 { released: false }，
+   * pluginId/holdId 不一致显式抛 409 worktree_hold_mismatch，匹配则清除并 flush。
+   */
+  async releaseWorktreeHold(input: {
+    worktreeId: string
+    pluginId: string
+    holdId: string
+  }): Promise<{ released: boolean }> {
+    const released = this.allocator.releaseHold(input.worktreeId, input.pluginId, input.holdId)
+    if (released) {
+      await this.deps.docStore.flush()
+    }
+    return { released }
   }
 
   getForConversation(conversationId: number): ManagedWorktreeRecord | undefined {

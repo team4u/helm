@@ -34,6 +34,53 @@ import type { CleanupInput, CleanupResult, WorktreeAllocatorDeps } from './workt
 /** 允许清理的分支前缀（helm 受管命名空间；绝不碰人类分支）。 */
 const MANAGED_BRANCH_PREFIXES = ['helm/spawn-', 'helm/wf-'] as const
 
+function pathContains(basePath: string, candidatePath: string): boolean {
+  const base = normalizePathValue(basePath).replace(/\/$/, '')
+  const probe = normalizePathValue(candidatePath).replace(/\/$/, '')
+  return probe === base || probe.startsWith(`${base}/`)
+}
+
+/**
+ * 持久持有锁占用拦截（force 不可绕过）：目标记录自身或同节点路径重叠的
+ * active 记录携带 hold 时，显式抛 409 worktree_in_use 并透出脱敏后的 hold.label。
+ */
+function assertWorktreeNotHeld(
+  store: WorktreeStore,
+  redact: (text: string) => string,
+  record: ManagedWorktreeRecord,
+): void {
+  const held =
+    record.status === 'active' && record.hold !== undefined
+      ? record
+      : store
+          .records()
+          .find(
+            (other) =>
+              other.status === 'active' &&
+              other.hold !== undefined &&
+              other.nodeId === record.nodeId &&
+              (pathContains(record.path, other.path) || pathContains(other.path, record.path)),
+          )
+  if (held === undefined || held.hold === undefined) return
+  const safeLabel = redact(held.hold.label)
+  throw new HelmError(
+    'worktree_in_use',
+    `worktree '${record.path}'（节点 ${record.nodeId}）正被持久持有锁占用（${safeLabel}），拒绝清理（force 不可绕过）`,
+    409,
+    {
+      worktreeId: record.id,
+      path: record.path,
+      nodeId: record.nodeId,
+      hold: {
+        pluginId: held.hold.pluginId,
+        holdId: held.hold.holdId,
+        label: safeLabel,
+        acquiredAt: held.hold.acquiredAt,
+      },
+    },
+  )
+}
+
   /**
    * 删除前进程占用快照检查（per-repo 锁内、真实 git worktree remove 前的
    * 最后一道屏障；force 不可绕过）。
@@ -247,6 +294,7 @@ export async function cleanupWorktree(
   }
 
   // 占用检查（锁外快速失败；锁内还会以最新记录复查）。
+  assertWorktreeNotHeld(store, redact, record)
   if (record.conversationId !== undefined && deps.isConversationWorking?.(record.conversationId) === true) {
     throw new HelmError(
       'worktree_in_use',
@@ -298,6 +346,7 @@ export async function cleanupWorktree(
       return
     }
     // 在用复查（锁内最新事实；force 不可越过）。
+    assertWorktreeNotHeld(store, redact, fresh)
     if (fresh.conversationId !== undefined && deps.isConversationWorking?.(fresh.conversationId) === true) {
       throw new HelmError(
         'worktree_in_use',

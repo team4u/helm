@@ -43,8 +43,8 @@ import {
 } from './worktree-inspect.js'
 import { cleanupWorktree } from './worktree-cleanup.js'
 
-/** 单条受管 worktree 记录（登记形状与持久化见 worktree-store.ts）。 */
-export type { ManagedWorktreeRecord } from './worktree-store.js'
+/** 单条受管 worktree 记录与持久持有锁契约（登记形状与持久化见 worktree-store.ts）。 */
+export type { ManagedWorktreeHold, ManagedWorktreeRecord } from './worktree-store.js'
 /** 只读检视契约（受限采集/脱敏/命令白名单纪律见 worktree-inspect.ts）。 */
 export type { WorktreeInspectInput, WorktreeInspectResult } from './worktree-inspect.js'
 
@@ -371,6 +371,28 @@ export class WorktreeAllocator {
       )
     }
     this.store.updateRecord(id, (r) => ({ ...r, conversationId }))
+  }
+
+  /** 预校验 hold 元数据合法性与机密边界（在产生 git 副作用前调用）。 */
+  prepareHold(
+    hold: { pluginId: string; holdId: string; label: string; acquiredAt?: number },
+    identity: Record<string, string | number | undefined> = {},
+  ) {
+    return this.store.prepareHold(hold, identity)
+  }
+
+  /** 对已登记的活跃 worktree 写入持久持有锁（label 经 redact 脱敏与机密复核）。 */
+  setHold(
+    worktreeId: string,
+    hold: { pluginId: string; holdId: string; label: string; acquiredAt?: number },
+    identity: Record<string, string | number | undefined> = {},
+  ): ManagedWorktreeRecord {
+    return this.store.setHold(worktreeId, hold, identity)
+  }
+
+  /** 释放持久持有锁（缺失/无锁幂等返 false；归属不一致抛 409 worktree_hold_mismatch）。 */
+  releaseHold(worktreeId: string, pluginId: string, holdId: string): boolean {
+    return this.store.releaseHold(worktreeId, pluginId, holdId)
   }
 
   /** 外部运行时（如 builtin:herdr）回传 worktree 时统一登记/更新（同 (nodeId,path) 去重）。 */

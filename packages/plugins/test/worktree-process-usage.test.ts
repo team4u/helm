@@ -440,6 +440,58 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
       },
     )
   })
+
+  it('ManagedWorktreeHold 优先拦截：持锁活跃工作树即使传 force:true 也先返 409 worktree_in_use（含 hold.label）；释放锁后进程占用保护继续生效', {
+    timeout: 60_000,
+  }, async () => {
+    const { record, allocator, fabric } = await allocateCleanWorktree('hold-then-proc')
+    allocator.setHold(record.id, {
+      pluginId: 'builtin:superagent',
+      holdId: 'grp-proc:verifier',
+      label: 'superagent group #7 @verifier',
+    })
+    let procScans = 0
+    const origInspect = fabric.inspectPathUsage.bind(fabric)
+    fabric.inspectPathUsage = async (nodeId, path, signal) => {
+      procScans += 1
+      return origInspect(nodeId, path, signal)
+    }
+
+    // 持锁期间 force: true 直接在占用层以 409 worktree_in_use 拒绝并透出 hold.label，无需进入进程扫描。
+    await assert.rejects(
+      () => allocator.cleanup({ worktreeId: record.id, force: true, deleteBranch: true }),
+      (err: unknown) => {
+        assert.ok(err instanceof HelmError)
+        assert.equal(err.code, 'worktree_in_use')
+        assert.equal(err.status, 409)
+        assert.ok(err.message.includes('superagent group #7 @verifier'))
+        return true
+      },
+    )
+    assert.equal(procScans, 0, '持锁拦截应先于进程扫描快速失败')
+    assert.equal(existsSync(record.path), true)
+
+    // 释放持久锁后，进程 cwd 占用检查继续阻断 force 清理；进程退出后可正常移除。
+    assert.equal(allocator.releaseHold(record.id, 'builtin:superagent', 'grp-proc:verifier'), true)
+    if (!PROCESS_SCAN_ON) {
+      await assert.rejects(
+        () => allocator.cleanup({ worktreeId: record.id, force: true }),
+        (err: unknown) => err instanceof HelmError && err.code === 'worktree_process_check_failed',
+      )
+      return
+    }
+    const holder = holdProcess(record.path)
+    try {
+      await assert.rejects(
+        () => allocator.cleanup({ worktreeId: record.id, force: true }),
+        (err: unknown) => err instanceof HelmError && err.code === 'worktree_process_in_use',
+      )
+      assert.ok(procScans >= 1, '释放持久锁后应进入真实进程占用扫描')
+    } finally {
+      await holder.stop()
+    }
+    await expectCleanupOkOrFailClosed(() => allocator.cleanup({ worktreeId: record.id, force: true, deleteBranch: true }))
+  })
 })
 
 void BACKGROUND_CONTEXT
