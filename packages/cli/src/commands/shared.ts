@@ -4,6 +4,7 @@
  * do not import any specific command module - - keep domain file between zero horizontal dependency.
  */
 import type { AuthToken } from '@helm/protocol'
+import path from 'node:path'
 import { CliError } from '../errors.js'
 import type { HubClient } from '../hub-client.js'
 import type { Io } from '../options.js'
@@ -233,4 +234,71 @@ export function validateEnum(raw: unknown, values: readonly string[], flagName: 
 /** without flag command through use parse entry (reject everything flag and location parameter). */
 export function parseNoFlags(ctx: CommandContext): void {
   parseFlags([], ctx.args)
+}
+
+// ---------------------------------------------------------------------------
+// caller cwd local file path helpers (artifacts put/get, conversations file --output)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a path against the CLI caller's cwd (never silently switched to HELM_CWD).
+ * If HELM_ENV=1 and HELM_CWD differs, attach sessionCwd purely as diagnostic context.
+ */
+export function resolveCallerPath(ctx: CommandContext, requested: string): { resolvedPath: string; sessionCwd?: string } {
+  const resolvedPath = path.resolve(ctx.cwd, requested)
+  let sessionCwd: string | undefined
+  if (ctx.env['HELM_ENV'] === '1') {
+    const managed = ctx.env['HELM_CWD']
+    if (managed && managed !== ctx.cwd) sessionCwd = managed
+  }
+  return { resolvedPath, sessionCwd }
+}
+
+export function pathDetails(requested: string, resolvedPath: string, ctx: CommandContext, sessionCwd?: string): Record<string, string> {
+  return {
+    requestedPath: requested,
+    resolvedPath,
+    cliCwd: ctx.cwd,
+    ...(sessionCwd !== undefined ? { sessionCwd } : {}),
+  }
+}
+
+export function pathDiagLines(requested: string, resolvedPath: string, ctx: CommandContext, sessionCwd?: string): string {
+  const hint =
+    sessionCwd !== undefined ? `\n  conversation cwd(HELM_CWD)=${sessionCwd}(directory difference belong legal cd; relative path still by CLI cwd parse)` : ''
+  return `\n  request path=${requested}\n  absolute path=${resolvedPath}\n  CLI cwd=${ctx.cwd}${hint}`
+}
+
+/** Download a binary Response completely into memory before writing to caller's resolved output path. */
+export async function writeDownloadedOutput(
+  ctx: CommandContext,
+  response: Response,
+  output: string,
+  what: string,
+): Promise<void> {
+  const fsp = await import('node:fs/promises')
+  const { resolvedPath, sessionCwd } = resolveCallerPath(ctx, output)
+  let buffer: Buffer
+  try {
+    buffer = Buffer.from(await response.arrayBuffer())
+  } catch (err) {
+    throw new CliError(
+      `download ${what} content failed (${err instanceof Error ? err.message : String(err)})${pathDiagLines(output, resolvedPath, ctx, sessionCwd)}`,
+      'download_failed',
+      1,
+      pathDetails(output, resolvedPath, ctx, sessionCwd),
+    )
+  }
+  try {
+    await fsp.writeFile(resolvedPath, buffer)
+  } catch (err) {
+    throw new CliError(
+      `write ${what} file failed (${err instanceof Error ? err.message : String(err)})${pathDiagLines(output, resolvedPath, ctx, sessionCwd)}`,
+      'write_failed',
+      1,
+      pathDetails(output, resolvedPath, ctx, sessionCwd),
+    )
+  }
+  if (ctx.json) printValue(ctx.io, { written: resolvedPath, bytes: buffer.byteLength }, true)
+  else ctx.io.out(`already write ${resolvedPath}(${buffer.byteLength} byte)\n`)
 }

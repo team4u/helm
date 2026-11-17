@@ -269,3 +269,77 @@ test('get --output: failed to write diagnose contains absolute path and structur
   // download completed (once GET), only failed - - and failed to read zero fetchshape into compare.
   assert.equal(hub.calls.length, 1)
 })
+
+// ---------------------------------------------------------------------------
+// conversations file: workspace file read (text, --json, --current, binary --output)
+// ---------------------------------------------------------------------------
+
+test('conversations file: reads text (--plain / --json / --current), rejects binary without --output, and writes --output to caller cwd', { timeout: 60_000 }, async (t) => {
+  const callerDir = useTempDir(t, 'helm-cli-wsfile-caller-')
+  const sessionDir = useTempDir(t, 'helm-cli-wsfile-session-')
+  const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff])
+  const requestedUrls: string[] = []
+  const fetchImpl = (async (input: unknown) => {
+    const url = new URL(String(input))
+    requestedUrls.push(`${url.pathname}${url.search}`)
+    const filePath = url.searchParams.get('path')
+    if (url.pathname === '/api/conversations/7/files/content' && filePath === 'src/app.ts') {
+      return new Response('export const ok = true\n', {
+        headers: { 'content-type': 'text/plain; charset=utf-8' },
+      })
+    }
+    if (url.pathname === '/api/conversations/9/files/content' && filePath === 'docs/a b.md') {
+      return new Response('# Title\n', {
+        headers: { 'content-type': 'text/markdown; charset=utf-8' },
+      })
+    }
+    if (url.pathname === '/api/conversations/7/files/content' && filePath === 'img/logo.png') {
+      return new Response(pngBytes, {
+        headers: { 'content-type': 'image/png' },
+      })
+    }
+    return errorResponse(404, 'file_not_found', `missing ${filePath}`)
+  }) as unknown as typeof fetch
+
+  const env = makeStubEnv(callerDir, { HELM_ENV: '1', HELM_CWD: sessionDir, HELM_CONVERSATION_ID: '9' })
+
+  // Plain text output
+  const plain = await runCliCaptured(['conversations', 'file', '7', 'src/app.ts'], env, { cwd: callerDir, fetch: fetchImpl })
+  assert.equal(plain.code, 0, plain.err)
+  assert.equal(plain.out, 'export const ok = true\n')
+
+  // JSON output + --current
+  const jsonRes = await runCliCaptured(['conversations', 'file', '--current', 'docs/a b.md', '--json'], env, { cwd: callerDir, fetch: fetchImpl })
+  assert.equal(jsonRes.code, 0, jsonRes.err)
+  assert.deepEqual(JSON.parse(jsonRes.out), {
+    conversationId: 9,
+    path: 'docs/a b.md',
+    contentType: 'text/markdown; charset=utf-8',
+    text: '# Title\n',
+  })
+  assert.equal(requestedUrls.at(-1), '/api/conversations/9/files/content?path=docs%2Fa%20b.md')
+
+  // Binary without --output -> error code binary_content_requires_output
+  const binErr = await runCliCaptured(['conversations', 'file', '7', 'img/logo.png', '--json'], env, { cwd: callerDir, fetch: fetchImpl })
+  assert.equal(binErr.code, 1)
+  assert.equal(parseCliError(binErr).code, 'binary_content_requires_output')
+
+  // Binary with --output -> writes relative to CLI caller cwd (not HELM_CWD)
+  await fsp.mkdir(path.join(callerDir, 'downloads'))
+  const binOut = await runCliCaptured(
+    ['conversations', 'file', '7', 'img/logo.png', '--output', 'downloads/logo.png', '--json'],
+    env,
+    { cwd: callerDir, fetch: fetchImpl },
+  )
+  assert.equal(binOut.code, 0, binOut.err)
+  const expectedDest = path.join(callerDir, 'downloads', 'logo.png')
+  assert.deepEqual(JSON.parse(binOut.out), { written: expectedDest, bytes: pngBytes.length })
+  assert.deepEqual([...(await fsp.readFile(expectedDest))], [...pngBytes])
+
+  // Missing positional / missing --current -> client validation error without calling Hub
+  const hitsBefore = requestedUrls.length
+  const missingTarget = await runCliCaptured(['conversations', 'file', 'src/app.ts', '--json'], makeStubEnv(callerDir), { cwd: callerDir, fetch: fetchImpl })
+  assert.equal(missingTarget.code, 1)
+  assert.equal(parseCliError(missingTarget).code, 'missing_conversation_target')
+  assert.equal(requestedUrls.length, hitsBefore)
+})

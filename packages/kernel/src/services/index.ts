@@ -83,6 +83,13 @@ export {
 } from './providers.js'
 
 export {
+  BINARY_MIME,
+  isTextMime,
+  detectMimeByExtension,
+  detectWorkspaceFileMime,
+} from './file-mime.js'
+
+export {
   ArtifactService,
   InMemoryArtifactRepository,
   MAX_ARTIFACT_BYTES,

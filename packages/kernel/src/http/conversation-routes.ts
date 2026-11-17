@@ -5,7 +5,7 @@
  */
 import type { ConversationListFilter, ConversationStatus } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
-import { errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
+import { buildContentDisposition, errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
 import type { KernelRuntimeLike } from './contracts.js'
 import {
   parseAskAnswerBody,
@@ -108,6 +108,29 @@ export async function handleConversationsDomain(
   }
   if (third === 'artifacts' && method === 'POST' && fourth === undefined) {
     return postConversationArtifact(ctx, kernel, id, redactor)
+  }
+  if (third === 'files' && fourth === 'content' && ctx.segments[4] === undefined) {
+    if (method !== 'GET') return methodNotAllowed(redactor, method)
+    const rawPath = ctx.url.searchParams.get('path')
+    if (rawPath === null || rawPath.trim() === '') {
+      throw new ValidationError('path query parameter cannot be empty')
+    }
+    const inline = parseOptionalBooleanFlag(ctx.url, 'inline') === true
+    if (kernel.readConversationFile === undefined) {
+      throw new HelmError('not_implemented', 'when before runtime not provide conversation workspace file read', 501)
+    }
+    const result = await kernel.readConversationFile(id, rawPath, ctx.request.signal)
+    const headers: Record<string, string> = {
+      'content-type': result.mimeType,
+      'content-length': String(result.bytes.byteLength),
+      'cache-control': 'private, no-store',
+      'x-content-type-options': 'nosniff',
+      'content-disposition': buildContentDisposition(result.name, inline),
+    }
+    if (inline && (result.mimeType.startsWith('text/html') || result.mimeType.startsWith('image/svg+xml'))) {
+      headers['content-security-policy'] = 'sandbox'
+    }
+    return new Response(result.bytes as unknown as BodyInit, { headers })
   }
   return errorResponse(redactor, 404, 'not_found', 'routing missing')
 }

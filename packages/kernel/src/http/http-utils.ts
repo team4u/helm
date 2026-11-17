@@ -208,4 +208,12 @@ export async function readBinaryBodyWithLimit(request: Request, maxBytes: number
   return out
 }
 
+/** RFC 5987 / ASCII fallback content-disposition header for binary/file downloads. */
+export function buildContentDisposition(name: string, inline: boolean): string {
+  const disposition = inline ? 'inline' : 'attachment'
+  const fallbackName = name.replace(/[^\x20-\x7e]|["\\]/g, '_')
+  const encodedName = encodeURIComponent(name).replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
+  return `${disposition}; filename="${fallbackName}"; filename*=UTF-8''${encodedName}`
+}
+
 export { BodyError, readBody }

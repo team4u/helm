@@ -16,6 +16,7 @@ import {
   copyFilePrivate,
   readTextFile,
 } from './atomic-file.js'
+import { BINARY_MIME, detectMimeByExtension, isTextMime } from './file-mime.js'
 
 /** metadata repository contract: by durable layer (state.sqlite artifacts table) implement. */
 export interface ArtifactRepository {
@@ -112,57 +113,8 @@ export interface WriteUploadedDeps {
   conversationExists(conversationId: number): boolean | Promise<boolean>
 }
 
-const BINARY_MIME = 'application/octet-stream'
-
-/** common text extension → mime(default do not guess, unify BINARY_MIME, read way away buffer zone). */
-const TEXT_MIME_BY_EXT: Record<string, string> = {
-  md: 'text/markdown',
-  markdown: 'text/markdown',
-  json: 'application/json',
-  txt: 'text/plain',
-  csv: 'text/csv',
-  yaml: 'text/yaml',
-  yml: 'text/yaml',
-  html: 'text/html',
-  css: 'text/css',
-  js: 'text/javascript',
-  mjs: 'text/javascript',
-  ts: 'text/plain',
-  xml: 'application/xml',
-  log: 'text/plain',
-}
-
-/** common two enter system extension → mime(without third way mime store, only override high frequency format). */
-const BINARY_MIME_BY_EXT: Record<string, string> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  gif: 'image/gif',
-  webp: 'image/webp',
-  svg: 'image/svg+xml',
-  pdf: 'application/pdf',
-  zip: 'application/zip',
-  gz: 'application/gzip',
-  mp3: 'audio/mpeg',
-  wav: 'audio/wav',
-  mp4: 'video/mp4',
-  webm: 'video/webm',
-}
-
 function detectMime(name: string): string {
-  const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : ''
-  return TEXT_MIME_BY_EXT[ext] ?? BINARY_MIME_BY_EXT[ext] ?? BINARY_MIME
-}
-
-/** is otherwise text class mime(register when must redaction,spill/HTTP readContent return text). */
-function isTextMime(mimeType: string): boolean {
-  return (
-    mimeType.startsWith('text/') ||
-    mimeType === 'application/json' ||
-    mimeType === 'application/xml' ||
-    mimeType === 'image/svg+xml' ||
-    mimeType === 'text/yaml'
-  )
+  return detectMimeByExtension(name) ?? BINARY_MIME
 }
 
 /** UTF-8 security truncate: by byte cap cut, never in multibyte character middle disconnect. */
