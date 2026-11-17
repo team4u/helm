@@ -17,13 +17,13 @@
  *   kernel/{package.json, dist/}  kernel mechanism output (pure mechanism package, no built-in plugins)
  *   plugins/{package.json, dist/} @helm/plugins output + built-in plugin runtime assets
  *   plugin-build/{package.json, dist/} @helm/plugin-build build implementation (esbuild compilation /
- *                                 TS transform; hub injects it as the kernel build port, file: dependency body)
+ *                                 TS transform; hub injects it as the kernel build port; file: dependency)
  *   plugin-client/{package.json, src/} @helm/plugin-client browser SDK (exports points at
- *                                 src/index.ts and the source contains .tsx, so the source body is shipped
- *                                 instead of a nonexistent dist; production dependency of plugins, file:
- *                                 dependency body)
+ *                                 src/index.ts and the source contains .tsx, so the source files are shipped
+ *                                 instead of a nonexistent dist; production dependency of plugins; file:
+ *                                 dependency)
  *   env-io/{package.json, dist/} @helm/env-io execution-side shared I/O implementation
- *   protocol/{package.json, dist/} protocol build output (file: dependency body)
+ *   protocol/{package.json, dist/} protocol build output (file: dependency)
  *   cli/{package.json, dist/}      CLI output (package.json kept for locating/auditing; the runtime entry
  *                                  is pointed at cli/dist/index.js by the desktop main agent via
  *                                  HELM_CLI_ENTRY)
@@ -32,7 +32,7 @@
  *
  * Honesty boundary: this script still does not bundle node_modules (platform-native binaries make
  * self-containment require per-platform vendoring, see README); the dependency-completion contract is
- * consumer-side npm install, and start.mjs check performs the explicit acceptance.
+ * consumer-side npm install, and `start.mjs check` runs the explicit verification.
  */
 import { createHash } from 'node:crypto';
 import { create as createTar } from 'tar';

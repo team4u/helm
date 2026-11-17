@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * helm CLI main entry.
- * - runCli(argv, options) is unique test/embed entry; directly runtime (import.meta.url === argv[1]) only then execute.
- * - command dispatch: core static table takes precedence precise match execute; only when without core match when only then pull /api/actions
- *   build motion state command (now only then do conflict validate and explicit errors). core manage side (plugins disable etc.)
- *   forever do not because broken plugin manifest while unavailable - - fault isolated.
- * - --json global takes effect: succeeded stdout JSON, failed stderr JSON + non-zero exit code.
+ * helm CLI main entry point.
+ * - runCli(argv, options) is the sole test/embed entry; direct CLI invocation executes only when import.meta.url === argv[1].
+ * - Command dispatch: core static commands match exactly with top priority; /api/actions is fetched to build
+ *   dynamic commands only when no core command matches (and conflicts are validated and reported there).
+ *   Core management commands (such as `plugins disable`) never break due to a bad plugin manifest — fault-isolated.
+ * - --json applies globally: stdout JSON on success, stderr JSON + non-zero exit code on failure.
  */
 import { realpathSync } from 'node:fs'
 import path from 'node:path'
@@ -40,22 +40,22 @@ function printHelp(
   dynamic: readonly CommandSpec[],
   diagnostics: readonly string[],
 ): void {
-  io.out('helm - extreme simple durable microkernel person assist CLI(and Web API same right)\n\n')
-  io.out('use method: helm <command> [subcommand] [--flags] [--json]\n\n')
-  io.out('global option:\n')
-  io.out('  --json            machine can read JSON output (stdout; error is stderr + non-zero exit code)\n')
+  io.out('helm — minimalist durable microkernel personal assistant CLI (parity with the Web API)\n\n')
+  io.out('Usage: helm <command> [subcommand] [--flags] [--json]\n\n')
+  io.out('Global options:\n')
+  io.out('  --json            machine-readable JSON output (stdout; errors on stderr + non-zero exit code)\n')
   io.out('  --help, -h        show help\n\n')
-  io.out('core command (contains across node execute and original HTTP escape generate cabin):\n')
+  io.out('Core commands (including cross-node execution and raw HTTP escape hatch):\n')
   for (const cmd of core) {
     const positional = cmd.positional ? ` ${cmd.positional}` : ''
     io.out(`  ${cmd.path.join(' ')}${positional}\n    ${cmd.description}\n`)
     for (const flag of cmd.flags ?? []) {
-      const req = flag.required ? '(required)' : ''
+      const req = flag.required ? ' (required)' : ''
       io.out(`    --${flag.name} <${flag.type}>${req}${flag.help ? `  ${flag.help}` : ''}\n`)
     }
   }
   if (dynamic.length > 0) {
-    io.out('\nplugin command (by GET /api/actions motion state generate):\n')
+    io.out('\nPlugin commands (dynamically generated from GET /api/actions):\n')
     for (const cmd of dynamic) {
       const positional = cmd.positional ? ` ${cmd.positional}` : ''
       io.out(`  ${cmd.path.join(' ')}${positional}\n    ${cmd.description}\n`)
@@ -65,16 +65,16 @@ function printHelp(
       }
     }
   } else {
-    io.out('\n(when before not get to plugin action command; not start Hub, not login or without available action when such as this)\n')
+    io.out('\n(No plugin action commands fetched; expected when the Hub is stopped, not logged in, or no actions are available)\n')
   }
-  io.out('\nenvironment variable: HELM_HUB_URL(by default http://127.0.0.1:3202). HELM_TOKEN . HELM_DATA_DIR(by default ~/.helm). HELM_CONVERSATION_ID(--current)\n')
-  io.out('across node: helm nodes list|issue|remove manage compute node;helm env exec --node <id> -- <cmd...> across node direct hold;helm api <method> <path> original HTTP\n')
+  io.out('\nEnvironment variables: HELM_HUB_URL (default http://127.0.0.1:3202) · HELM_TOKEN · HELM_DATA_DIR (default ~/.helm) · HELM_CONVERSATION_ID (--current)\n')
+  io.out('Cross-node: helm nodes list|issue|remove manage compute nodes; helm env exec --node <id> -- <cmd...> run across nodes; helm api <method> <path> raw HTTP\n')
   for (const d of diagnostics) io.err(`helm: ${d}\n`)
 }
 
 /**
- * strip global --json/-h/--help(can appear in any location);`--` after content original keep,
- * by command level parse handle (`send 1 -- --json` should `--json` when text send).
+ * Strip global --json/-h/--help (allowed at any position); anything after `--` is kept verbatim
+ * for command-level parsing (so `send 1 -- --json` sends `--json` as message text).
  */
 function extractGlobals(argv: readonly string[]): { rest: string[]; json: boolean; help: boolean } {
   const rest: string[] = []
@@ -95,24 +95,24 @@ function extractGlobals(argv: readonly string[]): { rest: string[]; json: boolea
 
 const isOptionLike = (token: string): boolean => token.startsWith('-') && token !== '-' && token !== '--'
 
-/** find precise match command; without precise match when return negative consumed means need to more many sub- command. */
+/** Find an exact command match; return negative consumed count when more subcommands are needed. */
 function matchCommand(
   commands: readonly CommandSpec[],
   tokens: readonly string[],
 ): { command: CommandSpec; consumed: number } | undefined {
   const maxDepth = Math.min(tokens.length, Math.max(...commands.map((c) => c.path.length)))
-  // first try most long path (deep command takes precedence, avoid parent path swallow sub- command)
+  // Try longest path first (deep commands take precedence so parent paths do not swallow subcommands)
   for (let depth = maxDepth; depth >= 1; depth--) {
     const prefix = tokens.slice(0, depth)
     const exact = commands.filter((c) => c.path.length === prefix.length && c.path.every((seg, i) => seg === prefix[i]))
     if (exact.length > 0) return { command: exact[0]!, consumed: depth }
   }
-  // without precise match: try most long public prefix do sub- command hint
+  // No exact match: try longest common prefix to hint that a subcommand is missing
   for (let depth = maxDepth; depth >= 1; depth--) {
     const prefix = tokens.slice(0, depth)
     const partial = commands.filter((c) => c.path.length > prefix.length && c.path.slice(0, prefix.length).every((seg, i) => seg === prefix[i]))
     if (partial.length > 0) {
-      return { command: partial[0]!, consumed: -1 } // -1 = need to more many sub- command, only errors use
+      return { command: partial[0]!, consumed: -1 } // -1 = needs more subcommands, used for error reporting only
     }
   }
   return undefined
@@ -121,14 +121,14 @@ function matchCommand(
 function printCommandDetail(io: Io, cmd: CommandSpec): void {
   io.out(`${cmd.path.join(' ')}${cmd.positional ? ` ${cmd.positional}` : ''}\n  ${cmd.description}\n`)
   for (const flag of cmd.flags ?? []) {
-    const req = flag.required ? '(required)' : ''
+    const req = flag.required ? ' (required)' : ''
     io.out(`  --${flag.name} <${flag.type}>${req}${flag.help ? `  ${flag.help}` : ''}\n`)
   }
 }
 
 /**
- * read credentials and build HubClient; credentials corrupt when throws (do not swallow into without credentials).
- * HELM_TOKEN takes precedence: explicit to out when short route disk, do not trigger touch any credentials file.
+ * Load credentials and build a HubClient; throws on corrupt credentials rather than treating them as missing.
+ * HELM_TOKEN takes precedence: when explicitly set, short-circuit disk access without touching credential files.
  */
 async function hubFromEnv(env: NodeJS.ProcessEnv, dataDir: string, io: Io): Promise<HubClient> {
   if (env['HELM_TOKEN']) {
@@ -168,7 +168,7 @@ export async function runCli(argv: readonly string[] = [], options: RunCliOption
     }
   }
 
-  // static command help also only dependency static declaration,Hub or plugin fault must not drag manage side.
+  // Help for static commands depends only on static declarations; Hub/plugin failures must not block management help.
   if (help && rest.length > 0) {
     const matched = matchCommand(core, rest)
     if (matched && matched.consumed > 0) {
@@ -177,7 +177,7 @@ export async function runCli(argv: readonly string[] = [], options: RunCliOption
     }
   }
 
-  // help/without command scenario: core help forever available; motion state command and credentials diagnose exhaust force while is, separate present
+  // Help / bare invocation: core help is always available; dynamic commands and credential diagnostics are best-effort and shown separately
   if (rest.length === 0 || help) {
     const diagnostics: string[] = []
     let dynamic: CommandSpec[] = []
@@ -189,12 +189,12 @@ export async function runCli(argv: readonly string[] = [], options: RunCliOption
     try {
       await loadDynamic()
     } catch (err) {
-      // help must not because Hub/credentials/manifest issue failed: fall back is core help + independent diagnose row (stderr)
-      diagnostics.push(`motion state plugin command unavailable:${describeError(err).message}`)
+      // Help must never fail due to Hub/credential/manifest issues: fall back to core help + separate diagnostic line (stderr)
+      diagnostics.push(`dynamic plugin commands unavailable: ${describeError(err).message}`)
     }
     if (rest.length === 0) {
-      // helm --json separate use belongs to illegal combine (help is pure text, do not fabricate JSON output)
-      if (json) return emitError(describeError(new CliError('missing command (helm --help view use method)', 'missing_command')))
+      // Bare `helm --json` is invalid (help is plain text; never fabricate JSON output)
+      if (json) return emitError(describeError(new CliError('missing command (run helm --help for usage)', 'missing_command')))
       printHelp(io, core, dynamic, diagnostics)
       return 0
     }
@@ -203,14 +203,14 @@ export async function runCli(argv: readonly string[] = [], options: RunCliOption
       const cmd = matched.command
       printCommandDetail(io, cmd)
     } else {
-      // non- core command help: exhaust force pull motion state command render its flag note (contains --input fall back note)
+      // Non-core command help: best-effort fetch of dynamic commands to show flag help (including --input fallback notes)
       let dynamicMatched: CommandSpec | undefined
       try {
         const dyn = await loadDynamic()
         const dm = matchCommand(dyn, rest)
         if (dm && dm.consumed >= 0) dynamicMatched = dm.command
       } catch (err) {
-        diagnostics.push(`motion state plugin command unavailable:${describeError(err).message}`)
+        diagnostics.push(`dynamic plugin commands unavailable: ${describeError(err).message}`)
       }
       if (dynamicMatched !== undefined) printCommandDetail(io, dynamicMatched)
       else printHelp(io, core, dynamic, diagnostics)
@@ -218,10 +218,9 @@ export async function runCli(argv: readonly string[] = [], options: RunCliOption
     return 0
   }
 
-  // core command precise match i.e. directly execute (manage side fault isolated).
-  // note: do not in this mention before reject need to more many sub- command prefix match - - if broken plugin declaration same name parent path
-  // preempt core sub- command (such as motion state ["asks"] obscure core asks list), must in pull manifest after only then can decide,
-  // therefore prefix match continue away motion state path and in that in validate.
+  // Execute exact core command match immediately (management plane fault-isolated).
+  // Note: do not reject partial subcommand prefix matches here — if a broken plugin registers a parent path
+  // shadowing a core subcommand (e.g. dynamic ["asks"] shadowing `asks list`), we must detect and reject it after loading the manifest.
   const coreMatched = matchCommand(core, rest)
   if (coreMatched !== undefined && coreMatched.consumed > 0) {
     const ctx = makeContext()
@@ -234,9 +233,9 @@ export async function runCli(argv: readonly string[] = [], options: RunCliOption
     }
   }
 
-  // without core precise match only then parse motion state command (pull /api/actions + conflict validate, illegal explicit errors).
-  // note: if store in need to more many sub- command core prefix match (such as helm asks list  asks),
-  // motion state parent path declaration may obscure core sub- command - - now must in execute before reject, do not let broken plugin smoke name take over.
+  // No exact core match: resolve dynamic commands (/api/actions + conflict check; invalid cases fail explicitly).
+  // Note: if a core prefix needing more subcommands exists (e.g. `asks` from `helm asks list`),
+  // a dynamic parent-path declaration could shadow the core subcommand — reject before execution.
   const corePartial = coreMatched !== undefined && coreMatched.consumed < 0 ? coreMatched.command.path : undefined
   let dynamicSpecs: CommandSpec[]
   try {
@@ -247,14 +246,14 @@ export async function runCli(argv: readonly string[] = [], options: RunCliOption
   const matched = matchCommand([...core, ...dynamicSpecs], rest)
   if (!matched || matched.consumed < 0) {
     const head = rest.filter((t) => !isOptionLike(t)).slice(0, 2).join(' ')
-    return emitError(describeError(new CliError(`unknown command:helm ${head || '(empty)'}(helm --help list available commands)`, 'unknown_command')))
+    return emitError(describeError(new CliError(`unknown command: helm ${head || '(empty)'} (run helm --help for available commands)`, 'unknown_command')))
   }
-  // motion state command obscure core command (all etc. or prefix): explicit reject, never static default let through smoke name execute
+  // Dynamic command shadowing a core command (exact or prefix): reject explicitly rather than executing under an alias
   const isDynamic = !core.some((c) => c === matched.command)
   if (isDynamic && corePartial !== undefined) {
     const joined = matched.command.path.join(' ')
     return emitError(describeError(new CliError(
-      `plugin action command "helm ${joined}" preempt core command "helm ${corePartial.join(' ')}" path: reject execute (check plugin cli.command declaration)`,
+      `plugin action command "helm ${joined}" shadows core command path "helm ${corePartial.join(' ')}": execution refused (check plugin cli.command declaration)`,
       'command_conflict',
     )))
   }

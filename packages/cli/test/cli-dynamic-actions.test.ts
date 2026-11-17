@@ -1,12 +1,14 @@
 /**
- * motion state plugin command boundary test (zero business special judge):
- * - manifest external input validate:positional field store in,readFileInto target string,
- *   required connect continue, duplicate field/target,timeoutMs shape - -CLI side explicit errors, independent of server side.
- * - readFileInto location parameter: path form across platform identify (POSIX/win32/~/explicit each other for),
- *   directory and permission etc. IO fault explicit diagnose (only ENOENT and non- path form when ordinary value).
- * - location parameter and same name property flag conflict explicit errors;--input and flags/positionals mutual exclusion.
- * - positional by schema type convert (number field rotate number,string keep string).
- * - truly through use virtual plugin (non- workflow):positional + readFileInto + timeoutMs combine re- use.
+ * Dynamic plugin command boundary tests (zero domain-specific special cases):
+ * - External manifest validation: positional field exists, readFileInto targets a string,
+ *   required ordering, duplicate fields/targets, timeoutMs shape — failing explicitly at the
+ *   CLI boundary without touching the server.
+ * - readFileInto positionals: cross-platform path detection (POSIX/win32/~/explicit relative),
+ *   directory and permission I/O diagnostics (explicit failure vs plain string on ENOENT).
+ * - Positional vs matching property flag conflicts fail explicitly; --input vs flags/positionals
+ *   mutual exclusion.
+ * - Positional type coercion per schema (number fields -> number, string -> string).
+ * - Generic virtual plugin reuse (non-workflow): positional + readFileInto + timeoutMs combined.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -25,7 +27,7 @@ import {
   type MockRouteHandler,
 } from './helpers/cli-harness.js'
 
-/** start inject manifests simulated Hub; by default action end point back visible `{ received: body }`. */
+/** Starts a mock Hub with injected manifests; default action endpoints return `{ received: body }`. */
 async function startActionsHub(
   manifests: readonly unknown[],
   extraRoutes: Record<string, MockRouteHandler> = {},
@@ -42,22 +44,22 @@ async function startActionsHub(
 }
 
 // ---------------------------------------------------------------------------
-// manifest validate (external input in CLI boundary explicit errors)
+// Manifest validation (rejects malformed external input at CLI boundary)
 // ---------------------------------------------------------------------------
 
-/** construct most small action manifest(cli can override). */
+/** Constructs a minimal action manifest (with overridable cli metadata). */
 function action(cli: unknown, properties: Record<string, unknown> = {}, required: string[] = []): unknown {
   return {
     pluginId: 'builtin:gadget',
     id: 'deploy',
-    description: 'deploy small tool',
+    description: 'Deploy gadget',
     inputSchema: { type: 'object', properties, required, additionalProperties: false },
     outputSchema: { type: 'object' },
     cli,
   }
 }
 
-test('manifest validate:positional field must store in at inputSchema.properties', { timeout: 60_000 }, async (t) => {
+test('manifest validation: positional field must exist in inputSchema.properties', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
   const hub = await startActionsHub([action({ command: ['gadget', 'deploy'], positional: [{ field: 'ghost' }] })], {}, t)
   const r = await runCliCaptured(['gadget', 'deploy', 'x', '--json'], makeCliEnv(hub.url, dir))
@@ -67,44 +69,44 @@ test('manifest validate:positional field must store in at inputSchema.properties
   assert.match(err.message, /ghost/)
 })
 
-test('manifest validate:readFileInto target must store in and is string type; duplicate field/target reject', { timeout: 60_000 }, async (t) => {
+test('manifest validation: readFileInto target must exist and be type: string; duplicate fields/targets rejected', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
   const cases: Array<{ cli: unknown; properties: Record<string, unknown>; match: RegExp }> = [
     {
-      // target field missing
+      // Missing target field
       cli: { command: ['gadget', 'deploy'], positional: [{ field: 'src', readFileInto: 'missing' }] },
       properties: { src: { type: 'string' } },
-      match: /missing.*do not in inputSchema\.properties/,
+      match: /missing.*does not exist in inputSchema\.properties/,
     },
     {
-      // target field type non- string(object)
+      // Non-string target field (object)
       cli: { command: ['gadget', 'deploy'], positional: [{ field: 'src', readFileInto: 'payload' }] },
       properties: { src: { type: 'string' }, payload: { type: 'object' } },
-      match: /must be type: string property/,
+      match: /must be a type: string property/,
     },
     {
-      // enumeration number form (flagTypeOf will when string):readFileInto target must be true type:'string', enumeration reject
+      // Enum-only property (treated as string by flagTypeOf): readFileInto target requires explicit type: 'string'
       cli: { command: ['gadget', 'deploy'], positional: [{ field: 'src', readFileInto: 'mode' }] },
       properties: { src: { type: 'string' }, mode: { enum: ['a', 'b'] } },
-      match: /must be type: string property/,
+      match: /must be a type: string property/,
     },
     {
-      // field duplicate
+      // Duplicate field
       cli: { command: ['gadget', 'deploy'], positional: [{ field: 'src' }, { field: 'src' }] },
       properties: { src: { type: 'string' } },
-      match: /duplicate write field "src"/,
+      match: /writes duplicate field "src"/,
     },
     {
-      // readFileInto target and another positional field collide
+      // readFileInto target collides with another positional field
       cli: { command: ['gadget', 'deploy'], positional: [{ field: 'src', readFileInto: 'payload' }, { field: 'payload' }] },
       properties: { src: { type: 'string' }, payload: { type: 'string' } },
-      match: /duplicate write field "payload"/,
+      match: /writes duplicate field "payload"/,
     },
     {
-      // two positional read the same target
+      // Two positionals writing the same target
       cli: { command: ['gadget', 'deploy'], positional: [{ field: 'a', readFileInto: 'payload' }, { field: 'b', readFileInto: 'payload' }] },
       properties: { a: { type: 'string' }, b: { type: 'string' }, payload: { type: 'string' } },
-      match: /duplicate write field "payload"/,
+      match: /writes duplicate field "payload"/,
     },
   ]
   for (const c of cases) {
@@ -121,12 +123,12 @@ test('manifest validate:readFileInto target must store in and is string type; du
   }
 })
 
-test('manifest validate:required positional must not appear in optional after;timeoutMs shape', { timeout: 60_000 }, async (t) => {
+test('manifest validation: required positional cannot follow an optional positional; timeoutMs validation', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
   const cases: Array<{ cli: unknown; match: RegExp }> = [
     {
       cli: { command: ['gadget', 'deploy'], positional: [{ field: 'opt' }, { field: 'req', required: true }] },
-      match: /req.*appear in optional after/,
+      match: /req.*cannot appear after an optional positional/,
     },
     { cli: { command: ['gadget', 'deploy'], timeoutMs: -1 }, match: /timeoutMs/ },
     { cli: { command: ['gadget', 'deploy'], timeoutMs: Number.POSITIVE_INFINITY }, match: /timeoutMs/ },
@@ -145,7 +147,7 @@ test('manifest validate:required positional must not appear in optional after;ti
     }
   }
 
-  // legal shape:timeoutMs=0(without timeout) and correct count all accept
+  // Valid shapes: timeoutMs=0 (no timeout) and positive finite integers are accepted
   for (const timeoutMs of [0, 30_000]) {
     const hub = await startActionsHub([action({ command: ['gadget', 'deploy'], timeoutMs }, { note: { type: 'string' } })], {}, t)
     try {
@@ -157,7 +159,7 @@ test('manifest validate:required positional must not appear in optional after;ti
   }
 })
 
-test('manifest validate:positional field collide keep flag name (input/current) reject', { timeout: 60_000 }, async (t) => {
+test('manifest validation: positional field colliding with reserved flag name (input/current) is rejected', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
   const hub = await startActionsHub(
     [action({ command: ['gadget', 'deploy'], positional: [{ field: 'current' }] }, { current: { type: 'string' } })],
@@ -168,12 +170,12 @@ test('manifest validate:positional field collide keep flag name (input/current) 
   assert.equal(r.code, 1)
   const err = parseCliError(r)
   assert.equal(err.code, 'invalid_action_manifest')
-  assert.match(err.message, /collide keep flag name/)
+  assert.match(err.message, /collides with a reserved flag name/)
 })
 
-test('manifest validate: unknown key and prototype pollute field name reject; inherit property do not compute self has', { timeout: 60_000 }, async (t) => {
+test('manifest validation: rejects unknown keys and prototype-polluting names; checks Object.hasOwn instead of prototype chain', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
-  // field declaration is toString:`in` will let through (inherit),hasOwn reject
+  // Field name `toString`: `in` checks pass via prototype chain, whereas Object.hasOwn rejects
   const hubToString = await startActionsHub(
     [action({ command: ['gadget', 'deploy'], positional: [{ field: 'toString' }] }, {})],
     {},
@@ -183,10 +185,10 @@ test('manifest validate: unknown key and prototype pollute field name reject; in
   assert.equal(rToString.code, 1)
   const errToString = parseCliError(rToString)
   assert.equal(errToString.code, 'invalid_action_manifest')
-  assert.match(errToString.message, /toString.*do not in inputSchema\.properties/)
+  assert.match(errToString.message, /toString.*does not exist in inputSchema\.properties/)
   await hubToString.close()
 
-  // JSON text can carry self has __proto__ key: ordinary object assignment will static default lose/change prototype, must reject
+  // JSON payloads can declare own `__proto__` keys: plain object assignment would mutate or lose prototype, so must reject
   for (const bad of ['__proto__', 'constructor', 'prototype']) {
     const hub = await startActionsHub([action({ command: ['gadget', 'deploy'], positional: [{ field: bad }] }, {})], {}, t)
     try {
@@ -194,11 +196,11 @@ test('manifest validate: unknown key and prototype pollute field name reject; in
       assert.equal(r.code, 1, bad)
       const err = parseCliError(r)
       assert.equal(err.code, 'invalid_action_manifest', bad)
-      assert.match(err.message, /prototype pollute key/, bad)
+      assert.match(err.message, /prototype-polluting key/, bad)
     } finally {
       await hub.close()
     }
-    // readFileInto target same reject
+    // Also reject for readFileInto targets
     const hub2 = await startActionsHub(
       [action({ command: ['gadget', 'deploy'], positional: [{ field: 'src', readFileInto: bad }] }, { src: { type: 'string' } })],
       {},
@@ -213,7 +215,7 @@ test('manifest validate: unknown key and prototype pollute field name reject; in
     }
   }
 
-  // unknown key (piece together write error etc.): reject while non- static default ignore
+  // Unknown keys (e.g. typos): rejected rather than silently ignored
   const hubUnknown = await startActionsHub(
     [action({ command: ['gadget', 'deploy'], positional: [{ field: 'src', dest: 'payload' }] }, { src: { type: 'string' } })],
     {},
@@ -226,12 +228,12 @@ test('manifest validate: unknown key and prototype pollute field name reject; in
   assert.match(errUnknown.message, /unknown key .?dest/)
 })
 
-test('positional type convert:boolean strictly true/false,json by type parse,string original', { timeout: 60_000 }, async (t) => {
+test('positional type coercion: strict true/false booleans, JSON parsing by schema type, raw strings', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
   const manifest = {
     pluginId: 'builtin:gadget',
     id: 'deploy',
-    description: 'deploy small tool',
+    description: 'Deploy gadget',
     inputSchema: {
       type: 'object',
       properties: {
@@ -239,7 +241,7 @@ test('positional type convert:boolean strictly true/false,json by type parse,str
         dryRun: { type: 'boolean' },
         labels: { type: 'array', items: { type: 'string' } },
         spec: { type: 'object' },
-        anything: {}, // without type loosely schema -> JSON pass
+        anything: {}, // Un-typed schema -> JSON passthrough
       },
       additionalProperties: false,
     },
@@ -254,7 +256,7 @@ test('positional type convert:boolean strictly true/false,json by type parse,str
   const inputOfLast = (): Record<string, unknown> =>
     ((hub.hits.at(-1) as { body?: { input?: Record<string, unknown> } } | undefined)?.body as { input?: Record<string, unknown> })?.input ?? {}
 
-  // string / boolean / array / object / without type all link convert
+  // Coerces string / boolean / array / object / untyped values together
   const r = await runCliCaptured(['gadget', 'deploy', 'demo', 'true', ' ["a","b"] ', '{"k":1}', '[1,2]'], env)
   assert.equal(r.code, 0, r.err)
   const input = inputOfLast()
@@ -264,35 +266,35 @@ test('positional type convert:boolean strictly true/false,json by type parse,str
   assert.deepEqual(input.spec, { k: 1 })
   assert.deepEqual(input.anything, [1, 2])
 
-  // boolean non- strictly value: local explicit errors
+  // Non-strict boolean: fails locally
   const badBool = await runCliCaptured(['gadget', 'deploy', 'demo', 'yes', '[]', '{}', 'null', '--json'], env)
   assert.equal(badBool.code, 1)
   const badBoolErr = parseCliError(badBool)
   assert.equal(badBoolErr.code, 'invalid_flag_value')
   assert.match(badBoolErr.message, /dryRun.*true\/false/)
 
-  // json location parameter illegal JSON: local explicit errors (do not request)
+  // Invalid JSON in JSON-typed positional: fails locally without sending request
   const badJson = await runCliCaptured(['gadget', 'deploy', 'demo', 'true', 'not-json', '{}', 'null', '--json'], env)
   assert.equal(badJson.code, 1)
   const badJsonErr = parseCliError(badJson)
   assert.equal(badJsonErr.code, 'invalid_flag_value')
   assert.match(badJsonErr.message, /labels.*JSON/)
 
-  // pure text pattern (without --json) same intercept
+  // Human mode (without --json) also rejects cleanly
   const badJsonHuman = await runCliCaptured(['gadget', 'deploy', 'demo', 'true', 'not-json', '{}', 'null'], env)
   assert.equal(badJsonHuman.code, 1)
-  assert.match(badJsonHuman.err, /location parameter/)
+  assert.match(badJsonHuman.err, /positional argument/)
 })
 
 // ---------------------------------------------------------------------------
-// readFileInto location parameter: path identify and IO diagnose
+// readFileInto positionals: path detection and I/O diagnostics
 // ---------------------------------------------------------------------------
 
-/** carries readFileInto  gadget manifest. */
+/** Gadget manifest using readFileInto. */
 const READ_FILE_MANIFEST = {
   pluginId: 'builtin:gadget',
   id: 'deploy',
-  description: 'deploy small tool',
+  description: 'Deploy gadget',
   inputSchema: {
     type: 'object',
     properties: {
@@ -309,14 +311,14 @@ const READ_FILE_MANIFEST = {
   },
 }
 
-test('readFileInto: file read target field; ordinary value by schema type convert write field', { timeout: 60_000 }, async (t) => {
+test('readFileInto: reads files into target field; coerces plain values per schema type', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
   const hub = await startActionsHub([READ_FILE_MANIFEST], {}, t)
   const env = makeCliEnv(hub.url, dir)
   const scriptPath = path.join(dir, 'site.workflow.js')
   await fsp.writeFile(scriptPath, 'export const meta = 1\n', 'utf8')
 
-  // file + number location parameter (replicas is number schema -> rotate number while non- string)
+  // File path + numeric positional (replicas has number schema -> coerced to number instead of string)
   const r = await runCliCaptured(['gadget', 'deploy', scriptPath, '3', '--json'], env)
   assert.equal(r.code, 0, r.err)
   const body = (hub.hits.at(-1) as { body?: { input?: Record<string, unknown> } }).body
@@ -324,7 +326,7 @@ test('readFileInto: file read target field; ordinary value by schema type conver
   assert.equal(body?.input?.replicas, 3)
   assert.equal(body?.input?.src, undefined)
 
-  // non- path form + ~/ expand:~ missing file when (path form) explicit errors
+  // Non-path string passes as plain value, whereas missing ~/ path fails explicitly
   const byValue = await runCliCaptured(['gadget', 'deploy', 'saved-name', '2', '--json'], env)
   assert.equal(byValue.code, 0, byValue.err)
   const valueBody = (hub.hits.at(-1) as { body?: { input?: Record<string, unknown> } }).body
@@ -335,66 +337,65 @@ test('readFileInto: file read target field; ordinary value by schema type conver
   assert.equal(tildeMissing.code, 1)
   assert.equal(parseCliError(tildeMissing).code, 'positional_file_not_found')
 
-  // path form but target missing: explicit errors (not silently when name).
-  // UNC form (\\srv\share\...) only in non- Windows assertion not_found:Windows on stat
-  // will real start network parse, cannot reach sharing return EHOSTUNREACH/ENOENT of outside IO error,
-  // produce logic such as report unreadable(does not pretend to be not_found), this where accept platform real result.
+  // Path-like argument targeting missing file: fails explicitly instead of treating it as a plain name.
+  // UNC paths (\\srv\share\...) are only expected to return not_found on non-Windows: on Windows stat triggers
+  // real network resolution, where unreachable shares yield EHOSTUNREACH/ENOENT-class I/O errors reported as
+  // unreadable rather than pretending to be not_found; accept either real platform result.
   const missing: string[] = ['./nope.js', '/definitely/not/here.js', 'C:\\nope\\f.js']
   if (process.platform !== 'win32') missing.push('\\\\srv\\share\\f.js')
   for (const p of missing) {
     const miss = await runCliCaptured(['gadget', 'deploy', p, '1', '--json'], env)
-    assert.equal(miss.code, 1, `should errors:${p}`)
+    assert.equal(miss.code, 1, `should fail: ${p}`)
     assert.equal(parseCliError(miss).code, 'positional_file_not_found', p)
   }
 
   if (process.platform === 'win32') {
-    // Windows on UNC form still is path shape: must not when ordinary value write field, must be explicit errors
-    // (network cannot reach when is unreadable; local missing \\?\ prefix etc. price verify does not trigger network parse).
+    // On Windows, UNC paths remain path-like and must fail explicitly instead of writing to the string field
+    // (unreadable if share is unreachable, vs not_found for local missing paths like \\?\).
     const unc = await runCliCaptured(['gadget', 'deploy', '\\\\srv\\share\\f.js', '1', '--json'], env)
-    assert.equal(unc.code, 1, 'UNC path form must explicit errors, must not when ordinary value')
+    assert.equal(unc.code, 1, 'UNC path syntax must fail explicitly instead of treating as a literal value')
     const uncCode = parseCliError(unc).code
     assert.ok(
       uncCode === 'positional_file_unreadable' || uncCode === 'positional_file_not_found',
-      `accept platform real IO result:${uncCode}`,
+      `accept real platform I/O error: ${uncCode}`,
     )
   }
 
-  // Windows backslash explicit each other for and ~ form: same is path, missing file must not static default when name
+  // Windows backslash relative and ~ paths: also treated as paths, never falling back silently to a literal name
   for (const p of ['.\\nope.js', '..\\nope.js', '~\\nope.js']) {
     const miss = await runCliCaptured(['gadget', 'deploy', p, '1', '--json'], env)
-    assert.equal(miss.code, 1, `should errors:${p}`)
+    assert.equal(miss.code, 1, `should fail: ${p}`)
     assert.equal(parseCliError(miss).code, 'positional_file_not_found', p)
   }
 
-  // number schema location parameter illegal value: explicit errors
+  // Invalid numeric positional value: fails explicitly
   const badNum = await runCliCaptured(['gadget', 'deploy', 'x', 'NaN-ish', '--json'], env)
   assert.equal(badNum.code, 1)
   assert.equal(parseCliError(badNum).code, 'invalid_flag_value')
 })
 
-test('readFileInto: directory is not ordinary file; permission fault not silently when name', { timeout: 60_000 }, async (t) => {
+test('readFileInto: rejects directories as non-regular files and surfaces permission errors explicitly', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
   const hub = await startActionsHub([READ_FILE_MANIFEST], {}, t)
   const env = makeCliEnv(hub.url, dir)
 
-  // already exists directory (even if do not carries ./ prefix): not silently when workflow name, explicit errors
+  // Existing directory (even without ./ prefix): rejected explicitly instead of passing as workflow name
   const sub = path.join(dir, 'sub')
   await fsp.mkdir(sub)
   const asDir = await runCliCaptured(['gadget', 'deploy', sub, '1', '--json'], env)
   assert.equal(asDir.code, 1)
   const asDirErr = parseCliError(asDir)
   assert.equal(asDirErr.code, 'positional_not_a_file')
-  assert.match(asDirErr.message, /is not ordinary file/)
+  assert.match(asDirErr.message, /does not point to a regular file/)
 
-  // ./ prefix directory same not silently when name: each other for cwd parse after missing -> path form explicit errors
+  // ./ directory also never silently passes as a name: resolves relative to cwd -> missing path error
   const asRelDir = await runCliCaptured(['gadget', 'deploy', './sub', '1', '--json'], env)
   assert.equal(asRelDir.code, 1)
   assert.equal(parseCliError(asRelDir).code, 'positional_file_not_found')
 
-  // ./ prefix and real store in (each other for cwd construct): directory same reject.
-  // directory create in process.cwd() under: across volume environment (Windows CI  repo in D: while tmp in
-  // C:) in path.relative for different volume return absolute path,`./<absolute path>` no longer is legal
-  // each other for form;cwd under temp directory guarantee same volume can each other for.
+  // ./ directory that actually exists relative to cwd: also rejected as not a regular file.
+  // Created under process.cwd() because on cross-volume Windows CI (repo on D:, tmp on C:), path.relative
+  // returns an absolute path and `./<abs>` is not a valid relative path; using cwd guarantees the same drive.
   const relName = `.helm-cli-dyn-rel-${process.pid}-${Date.now()}`
   const relDir = path.join(process.cwd(), relName)
   await fsp.mkdir(relDir)
@@ -406,8 +407,8 @@ test('readFileInto: directory is not ordinary file; permission fault not silentl
     await fsp.rm(relDir, { recursive: true, force: true })
   }
 
-  // without read permission file:EACCES explicit diagnose (not silently when name, not silently skip).
-  // root can bypass file permission (DAC override), now read succeeded belong real kernel behavior, skip assertion.
+  // Unreadable file (EACCES): surfaces diagnostic instead of treating as literal name or skipping silently.
+  // Root bypasses file permissions (DAC override), so kernel allows reads; skip this check when running as uid 0.
   const isRoot = typeof process.getuid === 'function' ? process.getuid() === 0 : false
   if (process.platform !== 'win32' && !isRoot) {
     const locked = path.join(dir, 'locked.js')
@@ -424,32 +425,32 @@ test('readFileInto: directory is not ordinary file; permission fault not silentl
 })
 
 // ---------------------------------------------------------------------------
-// positional and flag conflict / --input mutual exclusion semantics
+// Positional vs flag conflicts / --input mutual exclusion semantics
 // ---------------------------------------------------------------------------
 
-test('positional and same name property flag conflict explicit errors (do not silently override);--input still whole fidelity', { timeout: 60_000 }, async (t) => {
+test('positional conflicts with matching flag explicitly (no silent override); --input stays raw', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
   const hub = await startActionsHub([READ_FILE_MANIFEST], {}, t)
   const env = makeCliEnv(hub.url, dir)
   const scriptPath = path.join(dir, 'a.js')
   await fsp.writeFile(scriptPath, 'A\n', 'utf8')
 
-  // --src flag and location parameter also to src: conflict errors
+  // Passing both --src flag and positional writing src: conflicts explicitly
   const clashField = await runCliCaptured(['gadget', 'deploy', 'saved', '1', '--src', 'x', '--json'], env)
   assert.equal(clashField.code, 1)
   assert.equal(parseCliError(clashField).code, 'conflicting_positional')
 
-  // file location parameter read payload, also again --payload:readFileInto target also conflict errors
+  // File positional writes payload, so passing --payload also conflicts
   const clashTarget = await runCliCaptured(['gadget', 'deploy', scriptPath, '1', '--payload', 'inline', '--json'], env)
   assert.equal(clashTarget.code, 1)
   assert.equal(parseCliError(clashTarget).code, 'conflicting_positional')
 
-  // --input whole and location parameter mutual exclusion (along use unexpected_positional semantics)
+  // --input is mutually exclusive with positionals (using unexpected_positional)
   const mixed = await runCliCaptured(['gadget', 'deploy', 'saved', '1', '--input', '{"src":"x"}', '--json'], env)
   assert.equal(mixed.code, 1)
   assert.equal(parseCliError(mixed).code, 'unexpected_positional')
 
-  // --input original fidelity (do not and any positional/flag combine)
+  // --input passes through verbatim (no merging with flags or positionals)
   const whole = await runCliCaptured(['gadget', 'deploy', '--input', '{"src":"x","replicas":9}', '--json'], env)
   assert.equal(whole.code, 0, whole.err)
   const body = (hub.hits.at(-1) as { body?: { input?: Record<string, unknown> } }).body
@@ -457,16 +458,16 @@ test('positional and same name property flag conflict explicit errors (do not si
 })
 
 // ---------------------------------------------------------------------------
-// through use virtual plugin re- use:positional + readFileInto + timeoutMs combine (non- workflow domain)
+// Generic virtual plugin reuse: positional + readFileInto + timeoutMs combined (non-workflow domain)
 // ---------------------------------------------------------------------------
 
-test('through use virtual plugin motion state command:positional+file+timeoutMs complete link re- use (--current only inject context)', { timeout: 60_000 }, async (t) => {
+test('generic virtual plugin dynamic command: end-to-end positional + file + timeoutMs (--current injects context only)', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
-  // and workflow without closure domain (report table export): verify extension point through use can re- use
+  // Unrelated to workflows (report table export): verifies generic extension points without hardcoding
   const manifest = {
     pluginId: 'builtin:reporter',
     id: 'render',
-    description: 'render report table',
+    description: 'Render report table',
     inputSchema: {
       type: 'object',
       properties: {
@@ -493,7 +494,7 @@ test('through use virtual plugin motion state command:positional+file+timeoutMs 
   const envWithConv = makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '5' })
   const envPlain = makeCliEnv(hub.url, dir)
 
-  // file location parameter + string flag + number positional;--current only inject body.conversationId
+  // File positional + string flag + numeric positional; --current injects body.conversationId only
   const r = await runCliCaptured(['reporter', 'render', tpl, '2', '--format', 'pdf', '--current', '--json'], envWithConv)
   assert.equal(r.code, 0, r.err)
   const body = (hub.hits.at(-1) as { body?: { input?: Record<string, unknown>; conversationId?: number } }).body
@@ -503,23 +504,23 @@ test('through use virtual plugin motion state command:positional+file+timeoutMs 
   assert.equal(body?.input?.page, 2)
   assert.equal(body?.conversationId, 5)
 
-  // person class pattern: through use key-value output (without business identify;received back visible body)
+  // Human mode: generic key-value output (without domain hardcoding; renders `received` key)
   const human = await runCliCaptured(['reporter', 'render', tpl, '2'], envPlain)
   assert.equal(human.code, 0, human.err)
   assert.match(human.out, /received/)
 
-  // do not carries --current: do not fabricate any conversation ID
+  // Without --current: must not fabricate any conversation ID
   const plain = await runCliCaptured(['reporter', 'render', tpl, '1', '--json'], envPlain)
   assert.equal(plain.code, 0, plain.err)
   const plainBody = (hub.hits.at(-1) as { body?: { conversationId?: number } }).body
   assert.equal(plainBody?.conversationId, undefined)
 
-  // required positional missing:missing_positional
+  // Missing required positional: missing_positional
   const missing = await runCliCaptured(['reporter', 'render', '--json'], envPlain)
   assert.equal(missing.code, 1)
   assert.equal(parseCliError(missing).code, 'missing_positional')
 
-  // help from motion state manifest(contains location parameter signature and timeout action without special text proposal)
+  // Help generated from dynamic manifest (includes positional signature without special formatting)
   const help = await runCliCaptured(['reporter', 'render', '--help'], envPlain)
   assert.equal(help.code, 0)
   assert.match(help.out, /<template> \[page\]/)
@@ -527,12 +528,12 @@ test('through use virtual plugin motion state command:positional+file+timeoutMs 
 })
 
 // ---------------------------------------------------------------------------
-// --wait semantics core inspect (timeoutMs=0 pass-through;failed terminal state by server side error message seal drive non-zero exit)
+// --wait semantics core check (timeoutMs=0 passthrough; terminal failures propagate server error envelope)
 // ---------------------------------------------------------------------------
 
-test('--wait failed terminal state: server side workflow_failed message seal -> non-zero exit;--json fidelity error details', { timeout: 60_000 }, async (t) => {
+test('--wait terminal failure: propagates server workflow_failed envelope with non-zero exit; --json preserves details', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
-  // re- use read file manifest but let server side return failed message seal: verify CLI does not HTTP 200/500 semantics disguise into succeeded
+  // Reuses read-file manifest while having server return a failure envelope: verifies CLI does not turn HTTP errors into success
   const hub = await startActionsHub(
     [READ_FILE_MANIFEST],
     {
@@ -551,10 +552,10 @@ test('--wait failed terminal state: server side workflow_failed message seal -> 
 })
 
 // ---------------------------------------------------------------------------
-// cli.timeoutMs pass-through: small timeout override instance by default and real takes effect;0 means do not apply add timeout
+// cli.timeoutMs passthrough: small timeout overrides default; 0 disables timeout
 // ---------------------------------------------------------------------------
 
-test('cli.timeoutMs override real takes effect:300ms slow response by override value timeout and error information contains real milli second', { timeout: 60_000 }, async (t) => {
+test('cli.timeoutMs override takes effect: 300ms slow response times out with actual ms in message', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
   const manifest = {
     pluginId: 'builtin:gadget',
@@ -584,13 +585,13 @@ test('cli.timeoutMs override real takes effect:300ms slow response by override v
   const r = await runCliCaptured(['gadget', 'deploy', '--json'], makeCliEnv(hub.url, dir))
   const elapsed = Date.now() - started
   assert.equal(r.code, 1)
-  assert.ok(elapsed < 3000, `should in override 300ms timeout while non- ${elapsed}ms`)
+  assert.ok(elapsed < 3000, `should time out near 300ms override rather than ${elapsed}ms`)
   const err = parseCliError(r)
   assert.equal(err.code, 'timeout')
-  assert.match(err.message, /300ms/, 'error information must contains real override milli second count while non- instance by default 30000ms')
+  assert.match(err.message, /300ms/, 'error message must state the configured ms override rather than hardcoded 30000ms')
 })
 
-test('cli.timeoutMs=0: slow response do not apply add request timeout (--wait long wait for available)', { timeout: 60_000 }, async (t) => {
+test('cli.timeoutMs=0: does not apply request timeout to slow responses (supports long --wait)', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
   const manifest = {
     pluginId: 'builtin:gadget',
@@ -604,7 +605,7 @@ test('cli.timeoutMs=0: slow response do not apply add request timeout (--wait lo
     [manifest],
     {
       'POST /api/actions/builtin%3Agadget/deploy': async () => {
-        // 400ms already exceeds before one case 300ms timeout threshold, enough with verify timeoutMs=0 do not apply add request timeout.
+        // 400ms already exceeds the previous 300ms timeout, confirming timeoutMs=0 disables the request timeout.
         await sleep(400)
         return { body: { done: true } }
       },

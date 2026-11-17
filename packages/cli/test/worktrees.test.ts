@@ -1,14 +1,15 @@
 /**
- * worktrees cleanup CLI test (builtin:workflow plugin action motion state command).
+ * Worktrees cleanup CLI tests (dynamic plugin action command for builtin:workflow).
  *
- * and cli.test.ts same discipline: temporary HTTP server simulated Hub contract (real fetch boundary +
- * GET /api/actions manifest inject), real CLI command dispatch (runCli). override:
- * choose flag(--worktree-id/--conversation-id/--path[--node-id]),--current
- * conversation context inject,--delete-branch/--force input pass-through,--json output, person class pattern
- * through use key-value output (zero business field identify), unknown flag/redundant location parameter reject, server side
- * error message seal pass-through.
+ * Follows the same contract as cli.test.ts: spins up a temporary HTTP server mock Hub
+ * (real fetch boundary + GET /api/actions manifest injection) and invokes real CLI dispatch
+ * (runCli). Covers mutually exclusive selector flags (--worktree-id / --conversation-id /
+ * --path [--node-id]), --current conversation context injection, --delete-branch / --force
+ * passthrough, --json output, generic key-value human output (without domain-specific field
+ * formatting), rejection of unknown flags / unexpected positionals, and passthrough of server
+ * error messages.
  *
- * runner: tsx --test; each items explicit timeout: 60_000.
+ * Runner: node:test; every test sets an explicit timeout: 60_000.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -26,22 +27,22 @@ import {
 
 const CLEANUP_OK = { worktreeId: 'local:/wt/a', removed: true, path: '/wt/a', branch: 'helm/spawn-x', nodeId: 'local', branchDeleted: false }
 
-/** builtin:workflow cleanup_worktree action manifest(most small contract shape). */
+/** Minimal action manifest for builtin:workflow cleanup_worktree. */
 const WT_MANIFESTS = [
   {
     pluginId: 'builtin:workflow',
     id: 'cleanup_worktree',
-    description: 'clean up managed Git worktree',
+    description: 'Clean up managed Git worktree',
     inputSchema: {
       type: 'object',
       properties: {
-        worktreeId: { type: 'string', description: 'managed worktree register ID(and conversationId/path mutual exclusion)' },
-        conversationId: { type: 'number', description: 'sub-conversation ID(and worktreeId/path mutual exclusion)' },
-        path: { type: 'string', description: 'worktree absolute path (can attach nodeId consume ambiguity)' },
-        nodeId: { type: 'string', description: 'target node ID(only can and path pair)' },
-        deleteBranch: { type: 'boolean', description: 'also delete helm/spawn-* branch (by default keep)' },
-        mergedInto: { type: 'string', description: 'decide not together base allow ref(by default use register baseBranch, again fall back main worktree HEAD)' },
-        force: { type: 'boolean', description: 'force clean up (dirty work zone by default reject)' },
+        worktreeId: { type: 'string', description: 'Managed worktree registry ID (mutually exclusive with conversationId/path)' },
+        conversationId: { type: 'number', description: 'Child conversation ID (mutually exclusive with worktreeId/path)' },
+        path: { type: 'string', description: 'Worktree absolute path (optionally qualified by nodeId)' },
+        nodeId: { type: 'string', description: 'Target node ID (only valid with path)' },
+        deleteBranch: { type: 'boolean', description: 'Also delete helm/spawn-* branch (kept by default)' },
+        mergedInto: { type: 'string', description: 'Target ref for merge check (defaults to registered baseBranch, falling back to main worktree HEAD)' },
+        force: { type: 'boolean', description: 'Force cleanup even with uncommitted changes (rejected by default)' },
       },
       additionalProperties: false,
     },
@@ -58,11 +59,11 @@ const WT_MANIFESTS = [
       required: ['removed', 'worktreeId', 'path', 'branch', 'nodeId', 'branchDeleted'],
       additionalProperties: false,
     },
-    cli: { command: ['worktrees', 'cleanup'], description: 'clean up managed Git worktree' },
+    cli: { command: ['worktrees', 'cleanup'], description: 'Clean up managed Git worktree' },
   },
 ]
 
-/** simulated Hub:GET /api/actions + POST /api/actions/builtin:workflow/cleanup_worktree. */
+/** Mock Hub serving GET /api/actions + POST /api/actions/builtin:workflow/cleanup_worktree. */
 async function startWorktreesHub(
   t: CleanupRegistrar,
   respond: (body: unknown) => MockRouteResult = () => ({ body: CLEANUP_OK }),
@@ -75,7 +76,7 @@ async function startWorktreesHub(
   )
 }
 
-/** action input extract (body = { input, conversationId? }). */
+/** Extracts the action input payload from request body ({ input, conversationId? }). */
 function inputOf(hit: MockHttpHit | undefined): Record<string, unknown> {
   return ((hit?.body as { input?: Record<string, unknown> } | undefined)?.input) ?? {}
 }
@@ -85,7 +86,7 @@ function contextOf(hit: MockHttpHit | undefined): Record<string, unknown> {
   return body !== undefined && body.conversationId !== undefined ? { conversationId: body.conversationId } : {}
 }
 
-test('choose single choose:--worktree-id / --conversation-id / --path(--node-id) each generate correct input', { timeout: 60_000 }, async (t) => {
+test('mutually exclusive selectors: --worktree-id / --conversation-id / --path (--node-id) each produce valid input', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-worktrees-cli-')
   const hub = await startWorktreesHub(t)
   const env = makeCliEnv(hub.url, dir)
@@ -110,7 +111,7 @@ test('choose single choose:--worktree-id / --conversation-id / --path(--node-id)
   assert.deepEqual(inputOf(hub.hits.at(-1)), { path: '/srv/.helm-worktrees/r-1', nodeId: 'build-box' })
 })
 
-test('--current aware HELM_CONVERSATION_ID(inject action conversationId context)', { timeout: 60_000 }, async (t) => {
+test('--current reads HELM_CONVERSATION_ID and injects action conversationId context', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-worktrees-cli-')
   const hub = await startWorktreesHub(t)
   const env = makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '9' })
@@ -120,13 +121,13 @@ test('--current aware HELM_CONVERSATION_ID(inject action conversationId context)
   assert.deepEqual(contextOf(hub.hits.at(-1)), { conversationId: 9 })
   assert.deepEqual(JSON.parse(cur.out), CLEANUP_OK)
 
-  // env not settings:--current cannot parse, explicit current_conversation_missing
+  // Missing env var: --current fails with current_conversation_missing
   const missing = await runCliCaptured(['worktrees', 'cleanup', '--current', '--json'], makeCliEnv(hub.url, dir))
   assert.equal(missing.code, 1)
   assert.equal(parseCliError(missing).code, 'current_conversation_missing')
 })
 
-test('--delete-branch/--force pass-through input;--json original output and person class pattern through use key-value output', { timeout: 60_000 }, async (t) => {
+test('--delete-branch/--force pass through input; --json outputs raw JSON and human mode prints generic key-value pairs', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-worktrees-cli-')
   const hub = await startWorktreesHub(t, () => ({
     body: { worktreeId: 'local:/wt/a', removed: true, path: '/wt/a', branch: 'helm/spawn-x', nodeId: 'local', branchDeleted: true },
@@ -141,14 +142,14 @@ test('--delete-branch/--force pass-through input;--json original output and pers
   assert.deepEqual(inputOf(hub.hits.at(-1)), { conversationId: 7, deleteBranch: true, force: true })
   assert.deepEqual(JSON.parse(r.out), { worktreeId: 'local:/wt/a', removed: true, path: '/wt/a', branch: 'helm/spawn-x', nodeId: 'local', branchDeleted: true })
 
-  // person class pattern: through use key-value output (zero business field identify, all field visible)
+  // Human mode: generic key-value formatting (all fields shown without domain customization)
   const human = await runCliCaptured(['worktrees', 'cleanup', '--conversation-id', '7'], env)
   assert.equal(human.code, 0, human.err)
   assert.match(human.out, /worktreeId\s+local:\/wt\/a/)
   assert.match(human.out, /removed\s+true/)
   assert.match(human.out, /branchDeleted\s+true/)
 
-  // idempotent result (removed:false) same through use output: value faithful visible, does not pretend to be into another text proposal
+  // Idempotent result (removed: false) prints faithfully without rewriting into custom prose
   const idemHub = await startWorktreesHub(t, () => ({
     body: { worktreeId: 'local:/wt/a', removed: false, path: '/wt/a', branch: 'helm/spawn-x', nodeId: 'local', branchDeleted: false },
   }))
@@ -157,7 +158,7 @@ test('--delete-branch/--force pass-through input;--json original output and pers
   assert.match(idem.out, /removed\s+false/)
 })
 
-test('--merged-into pass-through mergedInto base allow ref; not pass when do not inject the key (default away server side baseBranch priority)', { timeout: 60_000 }, async (t) => {
+test('--merged-into passes mergedInto ref; omits key when unset (server uses baseBranch precedence)', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-worktrees-cli-')
   const hub = await startWorktreesHub(t)
   const env = makeCliEnv(hub.url, dir)
@@ -167,38 +168,38 @@ test('--merged-into pass-through mergedInto base allow ref; not pass when do not
   assert.deepEqual(inputOf(hub.hits.at(-1)), { conversationId: 7, mergedInto: 'dev' })
   assert.deepEqual(JSON.parse(r.out), CLEANUP_OK)
 
-  // not pass flag: do not inject mergedInto key (base allow by server side by mergedInto > baseBranch > main warehouse HEAD decide)
+  // Flag omitted: omit mergedInto key (server resolves mergedInto > baseBranch > main worktree HEAD)
   const bare = await runCliCaptured(['worktrees', 'cleanup', '--conversation-id', '7', '--json'], env)
   assert.equal(bare.code, 0, bare.err)
   assert.deepEqual(inputOf(hub.hits.at(-1)), { conversationId: 7 })
 })
 
-test('unknown flag / redundant location parameter / --input mutual exclusion reject; failed do not trigger reach Hub action end point', { timeout: 60_000 }, async (t) => {
+test('unknown flags, unexpected positionals, and --input conflicts reject before contacting Hub', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-worktrees-cli-')
   const hub = await startWorktreesHub(t)
   const env = makeCliEnv(hub.url, dir)
   const expectError = async (argv: string[], code: string): Promise<void> => {
     const r = await runCliCaptured(argv, env)
-    assert.equal(r.code, 1, `${argv.join(' ')} should failed:${r.out}${r.err}`)
+    assert.equal(r.code, 1, `${argv.join(' ')} should fail: ${r.out}${r.err}`)
     assert.equal(parseCliError(r).code, code)
-    // failed occur in request before: only manifest pull trigger reach Hub
+    // Error happens client-side: only GET /api/actions reaches the Hub
     assert.equal(hub.hits.filter((h) => h.path !== '/api/actions').length, 0)
   }
   await expectError(['worktrees', 'cleanup', '--bogus', '--json'], 'unknown_flag')
   await expectError(['worktrees', 'cleanup', 'stray', '--json'], 'unexpected_positional')
   await expectError(['worktrees', 'cleanup', '--input', '{"path":"/p"}', '--force', '--json'], 'conflicting_flags')
-  // number type flag value illegal (conversationId must number)
+  // Invalid numeric flag value (conversationId must be a number)
   await expectError(['worktrees', 'cleanup', '--conversation-id', 'abc', '--json'], 'invalid_flag_value')
 })
 
-test('server side error message seal original pass-through (dirty work zone 409); help column out motion state command', { timeout: 60_000 }, async (t) => {
+test('passes through server error messages (dirty worktree 409) and lists dynamic action in help', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-worktrees-cli-')
   const hub = await startWorktreesHub(t, () => ({
     status: 409,
     body: {
       error: {
         code: 'worktree_dirty',
-        message: "worktree '/wt/a' (branch: helm/spawn-x) contains uncommitted modify or not together commit",
+        message: "worktree '/wt/a' (branch: helm/spawn-x) has uncommitted changes or unmerged commits",
         details: { path: '/wt/a', branch: 'helm/spawn-x', dirtyFiles: ['src/x.ts'], unmergedCommits: 0 },
       },
     },
@@ -209,15 +210,15 @@ test('server side error message seal original pass-through (dirty work zone 409)
   assert.equal(r.code, 1)
   const err = parseCliError(r)
   assert.equal(err.code, 'worktree_dirty')
-  assert.match(err.message, /uncommitted modify/)
+  assert.match(err.message, /uncommitted changes/)
   assert.notEqual(err.details, undefined)
 
-  // person class pattern same is error text + non-zero exit (do not fabricate succeeded)
+  // Human mode prints the error message and exits non-zero (never fabricates success)
   const human = await runCliCaptured(['worktrees', 'cleanup', '--conversation-id', '7'], env)
   assert.equal(human.code, 1)
-  assert.match(human.err, /uncommitted modify/)
+  assert.match(human.err, /uncommitted changes/)
 
-  // help column out motion state command and flag
+  // Help lists the dynamic action command and flags
   const help = await runCliCaptured(['--help'], env)
   assert.equal(help.code, 0)
   assert.match(help.out, /worktrees cleanup/)

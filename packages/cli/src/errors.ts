@@ -1,4 +1,4 @@
-/** CLI unify error:code for --json machine consume;exitCode non-zero i.e. failed. */
+/** Unified CLI error: `code` for `--json` programmatic consumption; non-zero `exitCode` indicates failure. */
 export class CliError extends Error {
   constructor(
     message: string,
@@ -26,7 +26,7 @@ export function describeError(error: unknown): DescribedError {
   return { message: String(error), code: 'internal_error', exitCode: 1 };
 }
 
-/** and Hub HTTP error message seal same construct:{error:{code,message,details?}}. */
+/** Envelope matching Hub HTTP error responses: `{ error: { code, message, details? } }`. */
 export function errorEnvelope(error: DescribedError): { error: { code: string; message: string; details?: unknown } } {
   const inner: { code: string; message: string; details?: unknown } = {
     code: error.code,

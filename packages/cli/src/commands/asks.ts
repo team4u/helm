@@ -1,4 +1,4 @@
-/** AskDoc domain:asks list / answer / cancel. */
+/** AskDoc commands: asks list / answer / cancel. */
 import type { AskSpec } from '@helm/protocol'
 import { CliError } from '../errors.js'
 import { flagValue, parseFlags } from '../args.js'
@@ -10,7 +10,7 @@ export function asksCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['asks', 'list'],
-    description: 'column out await answer mention question (GET /api/asks)',
+    description: 'List pending asks (GET /api/asks)',
     async run(ctx: CommandContext) {
       parseNoFlags(ctx)
       const hub = await ctx.hub()
@@ -20,10 +20,10 @@ export function asksCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['asks', 'answer'],
-    description: 'commit mention question answer proposal (POST /api/asks/:id/answer; support CAS)',
+    description: 'Submit answers to a pending ask (POST /api/asks/:id/answer; supports CAS)',
     flags: [
-      { name: 'answers', type: 'json', required: true, help: 'fieldName -> answer proposal JSON object' },
-      { name: 'expected-state-seq', type: 'number', help: 'CAS watermark line, already push enter then superseded' },
+      { name: 'answers', type: 'json', required: true, help: 'JSON object mapping fieldName to answer value' },
+      { name: 'expected-state-seq', type: 'number', help: 'CAS sequence guard; resolves as superseded if terminal state advanced' },
     ],
     positional: '<id>',
     async run(ctx: CommandContext) {
@@ -38,7 +38,7 @@ export function asksCommands(): CommandSpec[] {
       assertNoExtraPositionals(parsed.positionals, 1)
       const answers = parsed.flags.get('answers')
       if (answers === null || typeof answers !== 'object' || Array.isArray(answers)) {
-        throw new CliError('--answers must be JSON object (fieldName -> answer proposal)', 'invalid_flag_value')
+        throw new CliError('--answers must be a JSON object mapping fieldName to answer value', 'invalid_flag_value')
       }
       const body: Record<string, unknown> = { answers }
       const seq = flagValue<number>(parsed.flags, 'expected-state-seq')
@@ -50,7 +50,7 @@ export function asksCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['asks', 'cancel'],
-    description: 'cancel mention question (POST /api/asks/:id/cancel)',
+    description: 'Cancel a pending ask (POST /api/asks/:id/cancel)',
     positional: '<id>',
     async run(ctx: CommandContext) {
       const parsed = parseFlags([], ctx.args)

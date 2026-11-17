@@ -1,13 +1,15 @@
 /**
- * scripts/check-changed.mjs and scripts/check-test-hygiene.mjs(contains scripts/lib/* store) unit test.
+ * Unit tests for scripts/check-changed.mjs and scripts/check-test-hygiene.mjs (including scripts/lib/*).
  *
- * override: changeset collect (many commit + work zone dirty + untracked + delete + rename + space path + baseline parse
- * priority and without baseline reject), subject to affect package reverse closed package and level all Profile trigger,hygiene AST analyze (by default/tool name/
- * alias/naming empty between import, many row options, sharing const option,describe timeout inherit,skip by,
- * todo exemption,HELM_TEST_SUITE_TIMEOUT_MS assignment),CLI exit code pass-through (contains failed to execute do not swallow code),
- * child process tree signal forwarding do not orphan child, and PACKAGE_TIERS and test-suites.mjs SUITES mirror lock.
+ * Covers changeset collection (multi-commit + dirty worktree + untracked + deletions + renames +
+ * paths with spaces + baseline resolution precedence and missing-baseline rejection), affected package
+ * reverse closure and full-tier triggers, hygiene AST analysis (default/named/aliased/namespace imports,
+ * multiline options, shared const options, describe timeout inheritance, skip reasons, todo exemption,
+ * HELM_TEST_SUITE_TIMEOUT_MS assignment), CLI exit code propagation (including missing executables),
+ * child process-tree signal forwarding without orphan processes, and PACKAGE_TIERS / test-suites.mjs
+ * SUITES mirror synchronization.
  *
- * runner: tsx --test; each items explicit timeout: 60_000.
+ * Runner: node:test; every test sets an explicit timeout: 60_000.
  */
 import test, { after, describe } from 'node:test'
 import assert from 'node:assert/strict'
@@ -71,7 +73,7 @@ function getTemplateRepo(): string {
   git(dir, 'mv', 'src/one.ts', 'src/two renamed.ts')
   git(dir, 'rm', '-q', 'old.txt')
   git(dir, 'commit', '-m', 'c2: rename + delete')
-  // work zone: unstaged modify + staged new increase + untracked, all contains space path.
+  // Worktree: unstaged edit + staged add + untracked, all with spaces in paths.
   write(dir, 'space dir/f.txt', 'v2')
   write(dir, 'staged file.ts', 's')
   git(dir, 'add', 'staged file.ts')
@@ -87,33 +89,33 @@ after(() => {
   }
 })
 
-/** many commit + work zone dirty (staged/unstaged)+ untracked + delete + rename + space path complete fixture (re- use template repository). */
+/** Complete fixture combining multi-commit + dirty worktree + untracked + deletions + renames + space paths (cloned from cached template repo). */
 function makeFixtureRepo(): string {
   const dir = mkdtempSync(path.join(tmpdir(), 'helm-check-changed-'))
   cpSync(getTemplateRepo(), dir, { recursive: true })
   return dir
 }
 
-// ---------------------------------------------------------------- changeset collect
+// ---------------------------------------------------------------- changeset collection
 
-test('changeset: many commit ∪ work zone ∪ untracked,rename double side + delete + space path all accept', { timeout: 60_000 }, () => {
+test('changeset: committed U worktree U untracked, recording both sides of renames + deletions + paths with spaces', { timeout: 60_000 }, () => {
   const dir = makeFixtureRepo()
   try {
     const { baseline, files } = collectChangedFiles({ base: 'HEAD~2', cwd: dir })
     assert.equal(baseline.kind, 'explicit')
     assert.equal(baseline.ref, 'HEAD~2')
     const byPath = new Map(files.map((f) => [f.path, f]))
-    // committed(two commit cumulative): modify,rename new old two side, delete.
+    // Committed (cumulative across two commits): edits, both old and new paths of renames, deletions.
     assert.equal(byPath.get('base.txt')?.origin, 'committed')
-    assert.ok(byPath.has('src/one.ts'), 'rename old path must accept')
-    assert.ok(byPath.has('src/two renamed.ts'), 'rename new path (contains space) must accept')
-    assert.ok(byPath.get('src/two renamed.ts')?.status.startsWith('R'), 'rename state with R open head')
+    assert.ok(byPath.has('src/one.ts'), 'old path of rename must be included')
+    assert.ok(byPath.has('src/two renamed.ts'), 'new path of rename (with spaces) must be included')
+    assert.ok(byPath.get('src/two renamed.ts')?.status.startsWith('R'), 'rename status starts with R')
     assert.equal(byPath.get('old.txt')?.origin, 'committed')
     assert.equal(byPath.get('old.txt')?.status, 'D')
-    // work zone: staged and unstaged same source worktree.
+    // Worktree: both staged and unstaged changes carry origin "worktree".
     assert.equal(byPath.get('space dir/f.txt')?.origin, 'worktree')
     assert.equal(byPath.get('staged file.ts')?.origin, 'worktree')
-    // untracked.
+    // Untracked.
     assert.equal(byPath.get('untracked file.ts')?.origin, 'untracked')
     assert.equal(files.filter((f) => f.origin === 'committed').length, 4)
     assert.equal(files.filter((f) => f.origin === 'untracked').length, 1)
@@ -122,18 +124,18 @@ test('changeset: many commit ∪ work zone ∪ untracked,rename double side + de
   }
 })
 
-test('baseline parse:upstream takes precedence at origin/HEAD; all without when explicit errors while non- static default HEAD~1', { timeout: 60_000 }, () => {
+test('baseline resolution: upstream takes precedence over origin/HEAD; errors explicitly when none exists instead of falling back to HEAD~1', { timeout: 60_000 }, () => {
   const dir = makeFixtureRepo()
   try {
-    // initial without remote: by default baseline cannot obtain → resolveBaseline such as return none,collect explicit errors and refer reference --base.
+    // Initial repo without remotes: no default baseline -> resolveBaseline returns none and collect errors mentioning --base.
     assert.deepEqual(resolveBaseline({ cwd: dir }), { kind: 'none', ref: null, mergeBase: null })
     assert.throws(() => collectChangedFiles({ cwd: dir }), (e: unknown) => {
       assert.ok(e instanceof GitChangeError)
-      assert.ok(e.message.includes('--base'), 'error information must refer reference --base')
+      assert.ok(e.message.includes('--base'), 'error message must mention --base')
       return true
     })
 
-    // config upstream(points to c1) after:merge-base = c1,c1..HEAD  c2 change accept,c1 itself do not compute.
+    // Once upstream points to c1: merge-base = c1, so c1..HEAD includes c2 changes and excludes c1 itself.
     const c1 = spawnSync('git', ['rev-parse', 'HEAD~1'], { cwd: dir, encoding: 'utf8' })
     git(dir, 'update-ref', 'refs/remotes/origin/main', (c1.stdout ?? '').trim())
     git(dir, 'config', 'remote.origin.url', 'https://example.com/probe.git')
@@ -145,14 +147,14 @@ test('baseline parse:upstream takes precedence at origin/HEAD; all without when 
     assert.equal(baseline.ref, 'refs/remotes/origin/main')
     assert.equal(baseline.mergeBase, (c1.stdout ?? '').trim())
     const paths = files.map((f) => f.path)
-    assert.ok(!paths.includes('base.txt'), 'merge-base before commit change do not accept')
-    assert.ok(paths.includes('old.txt'), 'merge-base after delete accept')
+    assert.ok(!paths.includes('base.txt'), 'commits before merge-base must be excluded')
+    assert.ok(paths.includes('old.txt'), 'deletions after merge-base must be included')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
 })
 
-test('parseNameStatusZ:-z stream by NUL cut,rename/copy expand new old double side', { timeout: 60_000 }, () => {
+test('parseNameStatusZ: splits -z stream by NUL and expands both sides of renames/copies', { timeout: 60_000 }, () => {
   const raw = ['M\0a.txt\0', 'R100\0new dir/two.ts\0old dir/one.ts\0', 'D\0gone.ts\0'].join('')
   assert.deepEqual(parseNameStatusZ(raw), [
     { path: 'a.txt', status: 'M' },
@@ -162,9 +164,9 @@ test('parseNameStatusZ:-z stream by NUL cut,rename/copy expand new old double si
   ])
 })
 
-// ---------------------------------------------------------------- subject to affect package choose collection
+// ---------------------------------------------------------------- affected package selection
 
-/** and repository real workspace diagram same construct together into package diagram (contains pass dependency chain). */
+/** Synthetic workspace graph mirroring the real repo topology (including transitive chains). */
 const SYNTH_PKGS = [
   { name: '@helm/protocol', dir: 'protocol', workspaceDeps: [] },
   { name: '@helm/kernel', dir: 'kernel', workspaceDeps: ['@helm/protocol', '@helm/node'] },
@@ -176,7 +178,7 @@ const SYNTH_PKGS = [
   { name: '@helm/payload', dir: 'payload', workspaceDeps: ['@helm/cli', '@helm/kernel', '@helm/plugins', '@helm/hub', '@helm/web'] },
 ]
 
-test('dependency closed package:protocol change expand scatter to all consumer;node change via kernel pass to hub/payload', { timeout: 60_000 }, () => {
+test('dependency closure: protocol changes fan out to all consumers; node changes propagate through kernel to hub/payload', { timeout: 60_000 }, () => {
   const r1 = computeAffectedPackages(['packages/protocol/src/index.ts'], SYNTH_PKGS)
   assert.deepEqual([...r1.affected].sort(), ['cli', 'hub', 'kernel', 'node', 'payload', 'plugins', 'protocol', 'web'])
 
@@ -184,12 +186,12 @@ test('dependency closed package:protocol change expand scatter to all consumer;n
   assert.deepEqual([...r2.affected].sort(), ['hub', 'kernel', 'node', 'payload', 'plugins'])
 })
 
-test('pure test file change only choose this package; package inside non- test file (contains test assist manually) away closed package; level trigger all Profile', { timeout: 60_000 }, () => {
+test('test-only changes select only that package; non-test package files (including test helpers) trigger closure; root configs trigger full tier', { timeout: 60_000 }, () => {
   const t1 = computeAffectedPackages(['packages/kernel/test/foo.test.ts'], SYNTH_PKGS)
   assert.deepEqual([...t1.affected], ['kernel'])
   assert.equal(t1.fullTier, false)
 
-  // test/ under non- *.test.ts assist manually file by source handle (keep guard closed package:kernel → hub → payload,hub dependency kernel).
+  // Non-*.test.ts helper files under test/ are treated as source changes (preserving closure: kernel -> plugins/hub -> payload).
   const t2 = computeAffectedPackages(['packages/kernel/test/helpers.ts'], SYNTH_PKGS)
   assert.deepEqual([...t2.affected].sort(), ['hub', 'kernel', 'payload', 'plugins'])
 
@@ -197,7 +199,7 @@ test('pure test file change only choose this package; package inside non- test f
   assert.equal(t3.fullTier, true)
   assert.equal(t3.affected.size, 8)
 
-  // single change fast gate itself implement (scripts source code) also trigger all Profile, disallows without check via.
+  // Modifying the gate implementation itself (scripts source) also triggers full tier instead of skipping checks.
   const t5 = computeAffectedPackages(['scripts/lib/spawn-checked.mjs'], SYNTH_PKGS)
   assert.equal(t5.fullTier, true)
   assert.equal(t5.affected.size, 8)
@@ -207,7 +209,7 @@ test('pure test file change only choose this package; package inside non- test f
   assert.deepEqual(t4.outside, ['AGENTS.md', 'docs/foo.md'])
 })
 
-test('classifyChange: file classify and boundary (scripts source code all Profile, pure document does not trigger)', { timeout: 60_000 }, () => {
+test('classifyChange: file classification and boundaries (scripts source triggers full tier, docs-only does not trigger)', { timeout: 60_000 }, () => {
   assert.deepEqual(classifyChange('packages/kernel/src/a.ts'), { pkg: 'kernel', kind: 'source' })
   assert.deepEqual(classifyChange('packages/kernel/test/a.test.ts'), { pkg: 'kernel', kind: 'test' })
   assert.deepEqual(classifyChange('packages/web/test/a.test.tsx'), { pkg: 'web', kind: 'test' })
@@ -220,24 +222,24 @@ test('classifyChange: file classify and boundary (scripts source code all Profil
   assert.deepEqual(classifyChange('tsconfig.check.json'), { pkg: null, kind: 'root-trigger' })
 })
 
-test('PACKAGE_TIERS and test-suites.mjs SUITES mirror lock; all warehouse package all has Profile', { timeout: 60_000 }, () => {
+test('PACKAGE_TIERS mirrors test-suites.mjs SUITES; all workspace packages have a tier', { timeout: 60_000 }, () => {
   const src = readFileSync(path.join(scriptsDir, 'test-suites.mjs'), 'utf8')
   const unitMatch = /unit:\s*\[([^\]]*)\]/.exec(src)
   const integrationMatch = /integration:\s*\[([^\]]*)\]/.exec(src)
-  assert.ok(unitMatch && integrationMatch, 'test-suites.mjs SUITES structure change, please sync parse logic')
+  assert.ok(unitMatch && integrationMatch, 'test-suites.mjs SUITES structure changed; update parser')
   const names = (s: string) => [...s.matchAll(/'([^']+)'/g)].map((m) => m[1] ?? '')
   const expected: Record<string, string> = {}
   for (const n of names(unitMatch?.[1] ?? '')) expected[n] = 'unit'
   for (const n of names(integrationMatch?.[1] ?? '')) expected[n] = 'integration'
-  assert.deepEqual(PACKAGE_TIERS, expected, 'change test-suites.mjs Profile must sync workspace-meta.mjs  PACKAGE_TIERS')
+  assert.deepEqual(PACKAGE_TIERS, expected, 'changing test-suites.mjs tiers must keep workspace-meta.mjs PACKAGE_TIERS in sync')
 
   for (const p of loadWorkspacePackages(repoRoot)) {
-    assert.ok(PACKAGE_TIERS[p.dir], `new package ${p.dir} not register Profile, please sync PACKAGE_TIERS and SUITES`)
+    assert.ok(PACKAGE_TIERS[p.dir], `new package ${p.dir} missing tier; update PACKAGE_TIERS and SUITES`)
   }
   assert.ok(testFilesOfPackage(repoRoot, 'cli').some((f) => f.endsWith('.test.ts')))
 })
 
-test('planCheckCommands: has test file when pre- check-hygiene; order fixed; empty choose collection without command', { timeout: 60_000 }, () => {
+test('planCheckCommands: pre-runs check-hygiene when test files exist; preserves fixed order; empty when selection is empty', { timeout: 60_000 }, () => {
   const pm = { cmd: 'node', args: ['/pnpm/bin/pnpm.cjs'] }
   const withTests = planCheckCommands({
     affectedDirs: ['kernel'],
@@ -267,7 +269,7 @@ function rulesOf(source: string): string[] {
   return analyzeTestSource(ts, 'sample.test.ts', source).violations.map((v) => v.rule)
 }
 
-test('hygiene: tool name/by default/alias/naming empty between import timeout decide (contains many row options)', { timeout: 60_000 }, () => {
+test('hygiene: timeout checks for named/default/aliased/namespace imports and multiline options', { timeout: 60_000 }, () => {
   assert.deepEqual(rulesOf(`import test from 'node:test'
 test('a', { timeout: 60_000 }, () => {})
 test('b', () => {})`), ['timeout-missing'])
@@ -275,29 +277,29 @@ test('b', () => {})`), ['timeout-missing'])
   assert.deepEqual(rulesOf(`import { it } from 'node:test'
 it('a', () => {})`), ['timeout-missing'])
 
-  // as alias: source name is test/it only then compute managed invoke.
+  // as alias: still recognizes managed calls when original export name is test/it.
   assert.deepEqual(rulesOf(`import { test as it, describe as d } from 'node:test'
 it('ok', { timeout: 60_000 }, () => {})
 it('bad', () => {})`), ['timeout-missing'])
 
-  // naming empty between import.
+  // Namespace import.
   assert.deepEqual(rulesOf(`import * as nt from 'node:test'
 nt.test('ok', { timeout: 60_000 }, () => {})
 nt.it('bad', () => {})`), ['timeout-missing'])
 
-  // many row options: rely AST while non- row inside regex.
+  // Multiline options: AST handles formatting reliably unlike single-line regexes.
   assert.deepEqual(rulesOf(`import test from 'node:test'
 test('multi', {
   timeout: 60_000,
 }, async () => {})`), [])
 
-  // sharing const option object (contains as const unwrap).
+  // Shared const options object (including `as const` assertion).
   assert.deepEqual(rulesOf(`import test from 'node:test'
 const opts = { timeout: 60_000 } as const
 test('shared', opts, () => {})`), [])
 })
 
-test('hygiene:describe timeout by node:test semantics by sub- test inherit', { timeout: 60_000 }, () => {
+test('hygiene: describe timeout propagates to child tests per node:test semantics', { timeout: 60_000 }, () => {
   assert.deepEqual(rulesOf(`import { describe, it } from 'node:test'
 describe('d', { timeout: 60_000 }, () => {
   it('inherits', () => {})
@@ -308,32 +310,32 @@ describe('d', () => {
 })`), ['timeout-missing'])
 })
 
-test('hygiene:skip must attach by; constant skip exemption timeout; condition skip still must timeout', { timeout: 60_000 }, () => {
-  // { skip: true }: without by violate rule; constant skip no longer stack timeout violate rule.
+test('hygiene: skip requires a reason; unconditional skip exempts timeout; conditional skip still requires timeout', { timeout: 60_000 }, () => {
+  // { skip: true }: missing reason; unconditional skip does not also trigger timeout-missing.
   assert.deepEqual(rulesOf(`import test from 'node:test'
 test('s', { timeout: 60_000, skip: true }, () => {})`), ['skip-without-reason'])
-  // condition skip(by : false): will execute → missing timeout violate rule.
+  // Conditional skip (can evaluate to false): still runs -> missing timeout triggers violation.
   assert.deepEqual(rulesOf(`import test from 'node:test'
-test('c', { skip: process.platform === 'win32' ? 'Windows do not fit use' : false }, () => {})`), [
+test('c', { skip: process.platform === 'win32' ? 'unsupported on Windows' : false }, () => {})`), [
     'timeout-missing',
   ])
-  // condition skip and carries timeout: clean.
+  // Conditional skip with timeout: clean.
   assert.deepEqual(rulesOf(`import test from 'node:test'
-test('c2', { timeout: 60_000, skip: process.env.X !== '1' ? 'must X=1' : false }, () => {})`), [])
-  // constant skip carries by: do not execute, no need to timeout.
+test('c2', { timeout: 60_000, skip: process.env.X !== '1' ? 'requires X=1' : false }, () => {})`), [])
+  // Unconditional skip with reason: never executes, no timeout needed.
   assert.deepEqual(rulesOf(`import test from 'node:test'
-test('s2', { skip: 'environment do not tool prepare' }, () => {})`), [])
-  // test.skip simple write not attach by.
+test('s2', { skip: 'environment not provisioned' }, () => {})`), [])
+  // test.skip shorthand without reason.
   assert.deepEqual(rulesOf(`import test from 'node:test'
 test.skip('s3', () => {})`), ['skip-without-reason'])
   assert.deepEqual(rulesOf(`import test from 'node:test'
-test.skip('s4', { skip: 'by' }, () => {})`), [])
-  // cannot static confirm skip value such as report violate rule.
+test.skip('s4', { skip: 'reason' }, () => {})`), [])
+  // Non-static skip expression cannot be verified -> flagged as violation.
   assert.deepEqual(rulesOf(`import test from 'node:test'
 test('s5', { timeout: 60_000, skip: someFlag }, () => {})`), ['skip-without-reason'])
 })
 
-test('hygiene:todo exemption;t.test sub- test only counter;env assignment violate rule', { timeout: 60_000 }, () => {
+test('hygiene: todo exempts timeout; t.test counts subtests separately; suite timeout env assignment flagged', { timeout: 60_000 }, () => {
   const report = analyzeTestSource(
     ts,
     'sample.test.ts',
@@ -360,8 +362,8 @@ function runScript(script: string, args: string[], opts: { cwd?: string } = {}) 
   })
 }
 
-test('check-test-hygiene CLI: violate rule file exit 1, clean file exit 0, unknown parameter exit 2', { timeout: 60_000 }, () => {
-  // fixture must at repository inside (--files reject repository outside path);node_modules already by gitignore, do not pollute work zone.
+test('check-test-hygiene CLI: exits 1 on violations, 0 on clean files, and 2 on unknown arguments', { timeout: 60_000 }, () => {
+  // Fixture must live inside the repo (--files rejects outside paths); node_modules is gitignored so worktree stays clean.
   const dir = path.join(repoRoot, 'node_modules', '.helm-hygiene-cli-fixtures')
   mkdirSync(dir, { recursive: true })
   try {
@@ -372,7 +374,7 @@ test('check-test-hygiene CLI: violate rule file exit 1, clean file exit 0, unkno
 
     const r1 = runScript('check-test-hygiene.mjs', ['--files', bad])
     assert.equal(r1.status, 1, `stderr: ${r1.stderr}`)
-    assert.ok(r1.stderr.includes('[timeout-missing]'), 'violate rule detail must print rule and location')
+    assert.ok(r1.stderr.includes('[timeout-missing]'), 'violation details must print rule and location')
 
     const r2 = runScript('check-test-hygiene.mjs', ['--files', good])
     assert.equal(r2.status, 0, `stderr: ${r2.stderr}`)
@@ -385,7 +387,7 @@ test('check-test-hygiene CLI: violate rule file exit 1, clean file exit 0, unkno
   }
 })
 
-test('check-changed CLI:--base reference missing exit 2;--list print choose collection do not execute command', { timeout: 60_000 }, () => {
+test('check-changed CLI: exits 2 on missing --base ref; --list prints selection without running commands', { timeout: 60_000 }, () => {
   const r1 = runScript('check-changed.mjs', ['--base', 'no-such-ref', '--list'])
   assert.equal(r1.status, 2, `stderr: ${r1.stderr}`)
   assert.ok(r1.stderr.includes('--base'))
@@ -400,7 +402,7 @@ test('check-changed CLI:--base reference missing exit 2;--list print choose coll
   assert.equal(r3.status, 2)
 })
 
-test('check-test-hygiene CLI: repository outside path and empty --files all reject exit 2, not silently change inspect other repository or all warehouse', { timeout: 60_000 }, () => {
+test('check-test-hygiene CLI: exits 2 for out-of-repo paths and empty --files rather than falling back silently', { timeout: 60_000 }, () => {
   const outside = path.join(tmpdir(), 'helm-outside-' + Date.now(), 'x.test.ts')
   const r1 = runScript('check-test-hygiene.mjs', ['--files', outside])
   assert.equal(r1.status, 2, `stderr: ${r1.stderr}`)
@@ -410,12 +412,12 @@ test('check-test-hygiene CLI: repository outside path and empty --files all reje
   assert.equal(r2.status, 2, `stderr: ${r2.stderr}`)
   assert.ok(r2.stderr.includes('[check-hygiene] --files requires at least one in-repository test path (refusing to scan the whole repository)'), 'empty --files must report a usage error instead of falling back to a whole-repo scan')
 
-  // open head -- isolate symbol (pnpm pass-through form): and explicit repository inside file etc. price.
+  // Leading -- separator (pnpm passthrough style) is equivalent to passing explicit in-repo paths.
   const r3 = runScript('check-test-hygiene.mjs', ['--', '--files', 'packages/cli/test/cli.test.ts'])
   assert.equal(r3.status, 0, `stderr: ${r3.stderr}`)
 })
 
-test('pnpm true invoke:pnpm check:changed -- --base HEAD --list pass-through open head -- isolate symbol', { timeout: 60_000 }, () => {
+test('pnpm real invocation: pnpm check:changed -- --base HEAD --list strips leading -- separator', { timeout: 60_000 }, () => {
   const pm = resolvePackageManagerInvoke(process.env)
   const res = spawnSync(
     pm.cmd,
@@ -423,13 +425,13 @@ test('pnpm true invoke:pnpm check:changed -- --base HEAD --list pass-through ope
     { cwd: repoRoot, encoding: 'utf8', timeout: 120_000 },
   )
   assert.equal(res.status, 0, `stderr: ${res.stderr}`)
-  assert.ok(res.stderr.includes('[check-changed] baseline:'), `must report the baseline:${res.stderr.slice(0, 400)}`)
+  assert.ok(res.stderr.includes('[check-changed] baseline:'), `must report the baseline: ${res.stderr.slice(0, 400)}`)
   assert.ok(res.stderr.includes('[check-changed] --list mode: printed the selection only; no commands executed'), '--list never executes commands')
 })
 
-test('resolvePackageManagerInvoke:npm_execpath validate suffix after use when before Node run; exception value fall back PATH pnpm', { timeout: 60_000 }, () => {
-  // note: real Windows .cmd behavior cannot in this Linux environment verify; this test lock platform without closure argv construct logic,
-  // Windows under actual effect by on state pnpm true invoke smoke same path override (npm_execpath branch).
+test('resolvePackageManagerInvoke: executes via Node after validating npm_execpath suffix; falls back to PATH pnpm otherwise', { timeout: 60_000 }, () => {
+  // Note: real Windows .cmd behavior cannot be tested directly on Linux; this locks the platform-independent argv builder,
+  // while Windows execution is covered by the live pnpm invocation smoke path above (the npm_execpath branch).
   assert.deepEqual(resolvePackageManagerInvoke({}), { cmd: 'pnpm', args: [] })
   assert.deepEqual(resolvePackageManagerInvoke({ npm_execpath: '/x/pnpm/bin/pnpm.cjs' }), {
     cmd: process.execPath,
@@ -441,20 +443,20 @@ test('resolvePackageManagerInvoke:npm_execpath validate suffix after use when be
   assert.deepEqual(resolvePackageManagerInvoke({ npm_execpath: '/x/pnpm/bin/pnpm.js' }).args, [
     '/x/pnpm/bin/pnpm.js',
   ])
-  // pnpm official standalone install (Windows):npm_execpath points to pnpm.exe can execute start.
-  // .exe is real can execute file (non- .cmd script), no need to shell, without inject side, directly spawn; otherwise fall back
-  // bare 'pnpm' in Windows on parse is pnpm.cmd,spawn EINVAL(produce product bug, non- only test issue).
+  // Official standalone pnpm install (Windows): npm_execpath points to pnpm.exe and can be spawned directly.
+  // .exe is a real binary (not a .cmd batch script), requiring no shell and avoiding command-injection vectors,
+  // whereas bare 'pnpm' on Windows resolves to pnpm.cmd and fails spawn with EINVAL.
   assert.deepEqual(resolvePackageManagerInvoke({ npm_execpath: 'C:\\Tools\\pnpm.exe' }), {
     cmd: 'C:\\Tools\\pnpm.exe',
     args: [],
   })
-  // non- script suffix (can execute shim / malicious value) do not blind message, fall back;.cmd is script inject side, never directly spawn.
+  // Non-script suffixes (shims or suspicious paths) are not trusted blindly and fall back; .cmd requires a shell so is never spawned directly.
   assert.deepEqual(resolvePackageManagerInvoke({ npm_execpath: '/x/pnpm.cmd' }), { cmd: 'pnpm', args: [] })
   assert.deepEqual(resolvePackageManagerInvoke({ npm_execpath: '/x/evil.sh' }), { cmd: 'pnpm', args: [] })
   assert.deepEqual(resolvePackageManagerInvoke({ npm_execpath: '' }), { cmd: 'pnpm', args: [] })
 })
 
-test('runManagedCommand: failed exit code original pass-through; command missing report 127', { timeout: 60_000 }, async () => {
+test('runManagedCommand: passes through failure exit codes and returns 127 when command is missing', { timeout: 60_000 }, async () => {
   const code = await runManagedCommand(
     { cmd: process.execPath, args: ['-e', 'process.exit(3)'], label: 't-exit-3' },
     { cwd: repoRoot },
@@ -467,7 +469,7 @@ test('runManagedCommand: failed exit code original pass-through; command missing
   assert.equal(missing, 127)
 })
 
-/** process store decide:ESRCH i.e. stop;Linux under zombie (Z state) treated as already terminate, do not compute store orphan child. */
+/** Liveness check: ESRCH means gone; on Linux, zombie (Z state) is treated as exited so it is not counted as a live orphan. */
 function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0)
@@ -487,9 +489,10 @@ function pidAlive(pid: number): boolean {
 }
 
 /**
- * descendant process install empty SIGTERM/SIGINT handler(what all does not) and write PID marker, verify wrap:
- * leader exit after still continue owned group store polling → wide limit after SIGKILL upgrade → eventually whole group disappear,
- * by signal code exit, duplicate signal idempotent. inject short timings let upgrade in hundred milli second level occur.
+ * Spawns a grandchild that installs no-op SIGTERM/SIGINT handlers and writes a PID marker file, then verifies:
+ * after the leader exits, wrapper continues polling the owned group -> escalates to SIGKILL after grace ->
+ * terminates the entire group, exits with the signal code, and handles duplicate signals idempotently.
+ * Uses short injected timings so escalation occurs in hundreds of milliseconds.
  */
 async function runSignalTreeTest(signal: 'SIGTERM' | 'SIGINT', expectedCode: number): Promise<void> {
   const dir = mkdtempSync(path.join(tmpdir(), 'helm-orphan-'))
@@ -528,20 +531,20 @@ process.exit(code)
   while (!existsSync(marker) && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 50))
   }
-  assert.ok(existsSync(marker), 'descendant process PID marker not appear')
+  assert.ok(existsSync(marker), 'grandchild PID marker did not appear')
   const grandchildPid = Number(readFileSync(marker, 'utf8'))
   assert.ok(Number.isInteger(grandchildPid) && grandchildPid > 0)
 
   wrapper.kill(signal)
-  wrapper.kill(signal) // duplicate signal: idempotent, must not duplicate create timer or duplicate log
+  wrapper.kill(signal) // Duplicate signal: idempotent, must not create duplicate timers or logs
   const wrapperExit = await new Promise<number | null>((resolve) => {
     wrapper.on('exit', (c, s) => resolve(c ?? (s === signal ? expectedCode : -1)))
   })
-  assert.equal(wrapperExit, expectedCode, `by ${signal} terminate must by 128+signal exit;stderr: ${stderr}`)
+  assert.equal(wrapperExit, expectedCode, `terminating with ${signal} must exit with 128+signal; stderr: ${stderr}`)
   const signalLogs = stderr.split(`received ${signal}, terminating the child process tree`).length - 1
-  assert.equal(signalLogs, 1, `duplicate signal only allows a terminate log;stderr: ${stderr}`)
+  assert.equal(signalLogs, 1, `duplicate signal must emit only one termination log; stderr: ${stderr}`)
 
-  // ignore signal descendant process eventually must by SIGKILL upgrade cut: do not any store orphan child.
+  // Grandchildren ignoring the signal must still be reaped via SIGKILL escalation, leaving no orphans.
   const gone = await new Promise<boolean>((resolve) => {
     const start = Date.now()
     const poll = () => {
@@ -551,25 +554,25 @@ process.exit(code)
     }
     poll()
   })
-  assert.ok(gone, `ignore ${signal} descendant process must by whole group cut, do not orphan child`)
+  assert.ok(gone, `grandchild ignoring ${signal} must be reaped with the process group`)
   rmSync(dir, { recursive: true, force: true })
 }
 
-describe('process discipline and watchdog concurrency cut', { concurrency: true }, () => {
-  test('process discipline: descendant process ignore SIGTERM when whole group still by cut, exit 143, duplicate signal idempotent', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX process group signal semantics (128+n exit code / kill(-pid));Windows away taskkill path, do not fit use' : false }, async () => {
+describe('process discipline and concurrent watchdog teardown', { concurrency: true }, () => {
+  test('process discipline: kills entire group (exit 143) when grandchild ignores SIGTERM; duplicate signal is idempotent', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX process group signal semantics (128+n / kill(-pid)); Windows uses taskkill' : false }, async () => {
     await runSignalTreeTest('SIGTERM', 143)
   })
 
-  test('process discipline: descendant process ignore SIGINT when same cut, exit 130', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX process group signal semantics (128+n exit code / kill(-pid));Windows away taskkill path, do not fit use' : false }, async () => {
+  test('process discipline: kills entire group (exit 130) when grandchild ignores SIGINT', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX process group signal semantics (128+n / kill(-pid)); Windows uses taskkill' : false }, async () => {
     await runSignalTreeTest('SIGINT', 130)
   })
 
-  test('regression:runManagedCommand → this warehouse run-tests.mjs → ignore TERM descendant process real topology without orphan child', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX process group signal semantics (128+n exit code / kill(-pid));Windows away taskkill path, do not fit use' : false }, async () => {
-    // complete real link: outside layer managed command = node scripts/run-tests.mjs <holder>;holder is a
-    // forever do not end *.test.ts, its inside spawn ignore SIGTERM descendant process (write PID marker).
-    // cancel outside layer after:run-tests(G1 leader) receives TERM → forwarding its owned G2 → tsx leader exit but
-    // G2 descendant process store → run-tests must not because leader exit i.e. compute, must etc. G2 arrange empty (5s SIGKILL upgrade)
-    // after retreat 143 → outside layer G1 arrange empty after same retreat 143. all use produce by default timings, verify actual topology.
+  test('regression: runManagedCommand -> run-tests.mjs -> SIGTERM-ignoring grandchild leaves no orphans in live topology', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX process group signal semantics (128+n / kill(-pid)); Windows uses taskkill' : false }, async () => {
+    // Full real chain: outer managed command = node scripts/run-tests.mjs <holder>; holder is a
+    // never-ending *.test.ts that spawns a SIGTERM-ignoring grandchild (writing PID marker).
+    // On outer cancel: run-tests (G1 leader) gets SIGTERM -> forwards to owned G2 -> tsx leader exits while
+    // G2 grandchild remains alive -> run-tests must wait until G2 drains (5s SIGKILL escalation)
+    // before exiting 143 -> outer G1 drains and exits 143. Uses production default timings to verify real topology.
     const dir = path.join(repoRoot, 'node_modules', '.helm-runtests-regression')
     rmSync(dir, { recursive: true, force: true })
     mkdirSync(dir, { recursive: true })
@@ -593,7 +596,7 @@ test('hold', { timeout: 60_000 }, () => {
 
     const wrapperCode = `
 const m = await import(${JSON.stringify(pathToFileURL(path.join(scriptsDir, 'lib', 'spawn-checked.mjs')).href)})
-// strip outside layer node:test inject recursion run context, etc. price real developer shell environment.
+// Strip outer node:test recursive context to mirror a real developer shell invocation.
 const env = { ...process.env }
 delete env.NODE_TEST_CONTEXT
 const code = await m.runManagedCommand(
@@ -620,7 +623,7 @@ process.exit(code)
       while (!existsSync(marker) && Date.now() < up) {
         await new Promise((r) => setTimeout(r, 100))
       }
-      assert.ok(existsSync(marker), `descendant process marker not appear;stderr: ${stderr}`)
+      assert.ok(existsSync(marker), `grandchild marker did not appear; stderr: ${stderr}`)
       const grandchildPid = Number(readFileSync(marker, 'utf8'))
       assert.ok(Number.isInteger(grandchildPid) && grandchildPid > 0)
 
@@ -631,11 +634,11 @@ process.exit(code)
       assert.equal(
         wrapperExit,
         143,
-        `outside layer should etc. G1(contains run-tests arrange empty G2) after only then by 143 exit;stderr: ${stderr}`,
+        `outer wrapper must wait for G1 (including run-tests draining G2) before exiting 143; stderr: ${stderr}`,
       )
-      assert.ok(stderr.includes('owned test process group drained'), `run-tests must wait for its G2 to drain;stderr: ${stderr}`)
+      assert.ok(stderr.includes('owned test process group drained'), `run-tests must wait for its G2 to drain; stderr: ${stderr}`)
 
-      // ignore TERM descendant process eventually must by run-tests  SIGKILL upgrade cut (Linux Z state treated as already terminate).
+      // SIGTERM-ignoring grandchild must eventually be reaped via run-tests SIGKILL escalation (Linux Z state treated as exited).
       const gone = await new Promise<boolean>((resolve) => {
         const start = Date.now()
         const poll = () => {
@@ -645,13 +648,13 @@ process.exit(code)
         }
         poll()
       })
-      assert.ok(gone, `ignore TERM descendant process must by real topology whole group cut, do not orphan child`)
+      assert.ok(gone, `SIGTERM-ignoring grandchild must be reaped with its process group in live topology`)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   })
 
-  test('process discipline:run-tests.mjs by SIGKILL strong kill when parent die watchdog automatically cut detached test process group', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX parent die watchdog and process group signal semantics;Windows do not fit use' : false }, async () => {
+  test('process discipline: parent-death watchdog kills detached test process group when run-tests.mjs is killed with SIGKILL', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX parent-death watchdog and process group signal semantics; Windows unsupported' : false }, async () => {
     const dir = path.join(repoRoot, 'node_modules', '.helm-runtests-sigkill')
     rmSync(dir, { recursive: true, force: true })
     mkdirSync(dir, { recursive: true })
@@ -690,10 +693,10 @@ test('hold-sigkill', { timeout: 60_000 }, () => {
       while (!existsSync(marker) && Date.now() < up) {
         await new Promise((r) => setTimeout(r, 100))
       }
-      assert.ok(existsSync(marker), `descendant process PID marker not appear;stderr: ${stderr}`)
+      assert.ok(existsSync(marker), `grandchild PID marker did not appear; stderr: ${stderr}`)
       const grandchildPid = Number(readFileSync(marker, 'utf8'))
       assert.ok(Number.isInteger(grandchildPid) && grandchildPid > 0)
-      assert.ok(pidAlive(grandchildPid), 'strong kill run-tests before descendant process must store')
+      assert.ok(pidAlive(grandchildPid), 'grandchild must still be alive before killing run-tests')
 
       runner.kill('SIGKILL')
       const exitSignal = await new Promise<string | null>((resolve) => {
@@ -701,7 +704,7 @@ test('hold-sigkill', { timeout: 60_000 }, () => {
       })
       assert.equal(exitSignal, 'SIGKILL')
 
-      // parent process expose kill after,detached watchdog should in 1s SIGKILL upgrade inside cut the whole detached test process group
+      // After parent is killed, the detached watchdog should terminate the whole detached test process group within 1s SIGKILL escalation.
       const gone = await new Promise<boolean>((resolve) => {
         const start = Date.now()
         const poll = () => {
@@ -711,7 +714,7 @@ test('hold-sigkill', { timeout: 60_000 }, () => {
         }
         poll()
       })
-      assert.ok(gone, 'run-tests.mjs by SIGKILL after parent die watchdog must cut its detached test process group, do not orphan child')
+      assert.ok(gone, 'after run-tests.mjs receives SIGKILL, parent-death watchdog must terminate its detached test process group')
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -720,8 +723,8 @@ test('hold-sigkill', { timeout: 60_000 }, () => {
 
 // ---------------------------------------------------------------- unsafe-dom-assert / safe-test-assert / SIGKILL watchdog
 
-test('hygiene:unsafe-dom-assert precise hit DOM node assertion and let through text/ordinary body/ok/notEqual null', { timeout: 60_000 }, () => {
-  // correct example (violate rule):querySelector / getElementById / local variable / document.activeElement two side / document.body / tool name import
+test('hygiene: unsafe-dom-assert catches DOM node assertions while allowing text/ordinary body/ok/notEqual null', { timeout: 60_000 }, () => {
+  // Positive cases (violations): querySelector / getElementById / local variable / both sides of document.activeElement / document.body / named import
   assert.deepEqual(
     rulesOf(`import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -743,7 +746,7 @@ test('bad dom', { timeout: 60_000 }, () => {
     ],
   )
 
-  // reverse example (clean):textContent / innerHTML / getAttribute / length / req.body / hit.body / assert.ok / assert.notEqual(el, null)
+  // Negative cases (clean): textContent / innerHTML / getAttribute / length / req.body / hit.body / assert.ok / assert.notEqual(el, null)
   assert.deepEqual(
     rulesOf(`import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -764,12 +767,12 @@ test('clean dom', { timeout: 60_000 }, () => {
   )
 })
 
-test('safe-test-assert: loop __reactFiber$ simulated DOM node assert.equal(el, null) and assert.deepEqual([el], []) in <50ms inside throw summary AssertionError', { timeout: 60_000 }, async () => {
+test('safe-test-assert: throws summary AssertionError in <50ms for assert.equal(el, null) and assert.deepEqual([el], []) on cyclic __reactFiber$ DOM nodes', { timeout: 60_000 }, async () => {
   const preloadUrl = pathToFileURL(path.join(scriptsDir, 'lib', 'safe-test-assert.mjs')).href
   await import(preloadUrl)
   const { equal, deepEqual } = await import('node:assert/strict')
 
-  // construct carries deep loop React Fiber reference simulated DOM element
+  // Construct simulated DOM element with deeply cyclic React Fiber references
   const fiber: Record<string, unknown> = { memoizedProps: {}, return: null, stateNode: null }
   fiber.child = fiber
   fiber.return = fiber
@@ -791,7 +794,7 @@ test('safe-test-assert: loop __reactFiber$ simulated DOM node assert.equal(el, n
     () => assert.equal(el, null),
     (err: unknown) => {
       assert.ok(err instanceof assert.AssertionError)
-      assert.ok(err.message.includes('[DOM <div#card.box.active>]'), `not contains compact summary: ${err.message}`)
+      assert.ok(err.message.includes('[DOM <div#card.box.active>]'), `missing compact summary: ${err.message}`)
       return true
     },
   )
@@ -804,7 +807,7 @@ test('safe-test-assert: loop __reactFiber$ simulated DOM node assert.equal(el, n
     (err: unknown) => {
       assert.ok(err instanceof assert.AssertionError)
       assert.deepEqual(err.actual, ['[DOM <div#card.box.active>]'])
-      assert.ok(err.message.includes('[DOM <div#card.box.active>]'), `array element not contains compact summary: ${err.message}`)
+      assert.ok(err.message.includes('[DOM <div#card.box.active>]'), `array element missing compact summary: ${err.message}`)
       return true
     },
   )
@@ -815,9 +818,9 @@ test('safe-test-assert: loop __reactFiber$ simulated DOM node assert.equal(el, n
       err.message.includes('[DOM <div#card.box.active>]'),
   )
   const elapsedMs = performance.now() - t0
-  assert.ok(elapsedMs < 50, `danger DOM assertion time cost ${elapsedMs.toFixed(1)}ms exceeds 50ms threshold`)
+  assert.ok(elapsedMs < 50, `unsafe DOM assertion took ${elapsedMs.toFixed(1)}ms, exceeding 50ms threshold`)
 
-  // normal object keep original generate diff, do not by error summary
+  // Normal objects still generate standard diffs without mis-summarization
   assert.throws(
     () => assert.deepEqual({ alpha: 1 }, { alpha: 2 }),
     (err: unknown) => err instanceof assert.AssertionError && err.message.includes('alpha'),

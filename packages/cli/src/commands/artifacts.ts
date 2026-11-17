@@ -1,4 +1,4 @@
-/** artifact domain:artifacts list / put / get. */
+/** Artifact commands: artifacts list / put / get. */
 import type { ArtifactMetadata } from '@helm/protocol'
 import path from 'node:path'
 import { CliError } from '../errors.js'
@@ -16,14 +16,14 @@ import {
 } from './shared.js'
 import { printValue } from '../output.js'
 
-const convFlags = [{ name: 'current', type: 'boolean', help: 'use env HELM_CONVERSATION_ID' }] as const
+const convFlags = [{ name: 'current', type: 'boolean', help: 'use HELM_CONVERSATION_ID from environment' }] as const
 
 export function artifactsCommands(): CommandSpec[] {
   const cmds: CommandSpec[] = []
 
   cmds.push({
     path: ['artifacts', 'list'],
-    description: 'column out conversation artifact (GET /api/conversations/:id/artifacts)',
+    description: 'List conversation artifacts (GET /api/conversations/:id/artifacts)',
     flags: [...convFlags],
     positional: '[id]',
     async run(ctx: CommandContext) {
@@ -36,10 +36,10 @@ export function artifactsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['artifacts', 'put'],
-    description: 'upload local file is conversation artifact (POST /api/conversations/:id/artifacts)',
+    description: 'Upload a local file as a conversation artifact (POST /api/conversations/:id/artifacts)',
     flags: [
       ...convFlags,
-      { name: 'name', type: 'string', help: 'self define artifact name (default use local filename)' },
+      { name: 'name', type: 'string', help: 'custom artifact name (defaults to local filename)' },
       { name: 'mime-type', type: 'string', help: 'explicit MIME type' },
     ],
     positional: '<filePath> [id]',
@@ -55,7 +55,7 @@ export function artifactsCommands(): CommandSpec[] {
       const filePath = requirePositional(parsed.positionals, 0, 'filePath', 'missing_file_path')
       const id = resolveConversationTarget(parsed.flags, parsed.positionals[1], ctx.env)
       if (parsed.positionals.length > 2) {
-        throw new CliError(`redundant location parameter:${parsed.positionals.slice(2).join(' ')}`, 'unexpected_positional')
+        throw new CliError(`unexpected positional argument: ${parsed.positionals.slice(2).join(' ')}`, 'unexpected_positional')
       }
       const fsp = await import('node:fs/promises')
       const { resolvedPath, sessionCwd } = resolveCallerPath(ctx, filePath)
@@ -64,7 +64,7 @@ export function artifactsCommands(): CommandSpec[] {
         const st = await fsp.stat(resolvedPath)
         if (!st.isFile()) {
           throw new CliError(
-            `upload source is not common rule file (directory/device)${pathDiagLines(filePath, resolvedPath, ctx, sessionCwd)}`,
+            `upload source is not a regular file (directory/device)${pathDiagLines(filePath, resolvedPath, ctx, sessionCwd)}`,
             'read_failed',
             1,
             pathDetails(filePath, resolvedPath, ctx, sessionCwd),
@@ -75,7 +75,7 @@ export function artifactsCommands(): CommandSpec[] {
       } catch (err) {
         if (err instanceof CliError) throw err
         throw new CliError(
-          `read upload file failed (${err instanceof Error ? err.message : String(err)})${pathDiagLines(filePath, resolvedPath, ctx, sessionCwd)}`,
+          `failed to read upload file (${err instanceof Error ? err.message : String(err)})${pathDiagLines(filePath, resolvedPath, ctx, sessionCwd)}`,
           'read_failed',
           1,
           pathDetails(filePath, resolvedPath, ctx, sessionCwd),
@@ -94,8 +94,8 @@ export function artifactsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['artifacts', 'get'],
-    description: 'read artifact content (GET /api/artifacts/:id/content; text direct out, two enter system must --output)',
-    flags: [{ name: 'output', type: 'string', help: 'two enter system path (by CLI caller cwd parse is absolute path)' }],
+    description: 'Read artifact content (GET /api/artifacts/:id/content; prints text directly, requires --output for binary)',
+    flags: [{ name: 'output', type: 'string', help: 'output file path for binary content (resolved relative to CLI cwd)' }],
     positional: '<id>',
     async run(ctx: CommandContext) {
       const parsed = parseFlags([{ name: 'output', type: 'string' }], ctx.args)
@@ -110,7 +110,7 @@ export function artifactsCommands(): CommandSpec[] {
         return
       }
       if (!isText) {
-        throw new CliError(`artifact is two enter system (${contentType || 'unknown type'}): use --output <path> `, 'binary_content_requires_output')
+        throw new CliError(`artifact is binary (${contentType || 'unknown type'}): use --output <path>`, 'binary_content_requires_output')
       }
       const text = await response.text()
       if (ctx.json) printValue(ctx.io, text, true)

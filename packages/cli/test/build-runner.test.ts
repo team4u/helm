@@ -1,12 +1,13 @@
 /**
- * scripts/lib/prune-dist.mjs and scripts/lib/test-sharding.mjs unit test.
+ * Unit tests for scripts/lib/prune-dist.mjs and scripts/lib/test-sharding.mjs.
  *
- * override: incremental pruneDist artifact keep/isolated file trim/empty directory clean up/plugin client asset mirror and trim/
- * --force and HELM_CLEAN_DIST=1 all amount clean up and tsbuildinfo join motion; and test-sharding 
- * AST pure decide (type import exemption,parenthesized globalThis,process.env[] write,
- * fs alias import, each other for test auxiliary recursion append trace and ring route protect),extraArgs fall back decide and LPT shard all balance.
+ * Covers incremental pruneDist (preserving valid artifacts, trimming stale files and
+ * empty directories, mirroring/trimming plugin client assets), full cleanup on --force /
+ * HELM_CLEAN_DIST=1 with tsbuildinfo removal, AST purity checks (type-import exemption,
+ * parenthesized globalThis, process.env[] writes, aliased fs imports, cycle-safe recursive
+ * helper tracing), extraArgs fallback, and LPT shard balancing.
  *
- * runner: tsx --test; each items explicit timeout: 60_000.
+ * Runner: node:test; every test sets an explicit timeout: 60_000.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -29,7 +30,7 @@ function touch(root: string, rel: string, content = ''): string {
   return abs
 }
 
-test('pruneDist: keep valid compile artifact, precise delete isolated artifact, unknown stale file and empty directory', { timeout: 60_000 }, () => {
+test('pruneDist: preserves valid artifacts and prunes orphaned artifacts, stale files, and empty directories', { timeout: 60_000 }, () => {
   const pkgRoot = mkdtempSync(path.join(tmpdir(), 'helm-prune-dist-'))
   try {
     touch(pkgRoot, 'tsconfig.json', JSON.stringify({
@@ -39,7 +40,7 @@ test('pruneDist: keep valid compile artifact, precise delete isolated artifact, 
     assert.ok(buildInfo?.endsWith(path.join('cache', 'pkg.tsbuildinfo')))
     touch(pkgRoot, 'cache/pkg.tsbuildinfo', '{}')
 
-    // valid source code and complete artifact family (contains .tsx / .mts / .cts)
+    // Valid sources and full artifact sets (including .tsx / .mts / .cts)
     touch(pkgRoot, 'src/index.ts', 'export const a = 1')
     touch(pkgRoot, 'src/ui.tsx', 'export const UI = () => null')
     touch(pkgRoot, 'src/mod.mts', 'export const m = 1')
@@ -62,7 +63,7 @@ test('pruneDist: keep valid compile artifact, precise delete isolated artifact, 
       touch(pkgRoot, rel, 'valid')
     }
 
-    // already delete source code leftover + split package old layout (such as kernel/dist/main.js, app.js, builtin-plugins/*)+ unknown artifact
+    // Leftover artifacts from deleted sources + old split-package layout (e.g., kernel/dist/main.js, app.js, builtin-plugins/*) + unknown artifacts
     for (const stale of [
       'dist/stale-dummy.js',
       'dist/main.js',
@@ -92,7 +93,7 @@ test('pruneDist: keep valid compile artifact, precise delete isolated artifact, 
       'dist/cjs.cjs',
       'dist/cjs.d.cts',
     ]) {
-      assert.ok(existsSync(path.join(pkgRoot, kept)), `valid artifact must not mistakenly delete: ${kept}`)
+      assert.ok(existsSync(path.join(pkgRoot, kept)), `valid artifact must not be deleted: ${kept}`)
     }
     for (const gone of [
       'dist/stale-dummy.js',
@@ -101,15 +102,15 @@ test('pruneDist: keep valid compile artifact, precise delete isolated artifact, 
       'dist/builtin-plugins',
       'dist/random-notes.txt',
     ]) {
-      assert.ok(!existsSync(path.join(pkgRoot, gone)), `stale artifact or empty directory must delete: ${gone}`)
+      assert.ok(!existsSync(path.join(pkgRoot, gone)), `stale artifact or empty directory must be deleted: ${gone}`)
     }
-    assert.ok(existsSync(buildInfo!), 'non- force and valid artifact still in when keep tsbuildinfo dimension hold incremental compile')
+    assert.ok(existsSync(buildInfo!), 'must retain tsbuildinfo to preserve incremental builds when not forced and valid artifacts remain')
   } finally {
     rmSync(pkgRoot, { recursive: true, force: true })
   }
 })
 
-test('pruneDist(preserveClients): mirror keep src/<name>/client/** asset and delete already remove or mistakenly compile client file', { timeout: 60_000 }, () => {
+test('pruneDist(preserveClients): mirrors src/<name>/client/** assets and deletes removed or mistakenly compiled client files', { timeout: 60_000 }, () => {
   const pkgRoot = mkdtempSync(path.join(tmpdir(), 'helm-prune-clients-'))
   try {
     touch(pkgRoot, 'src/index.ts', 'export {}')
@@ -138,7 +139,7 @@ test('pruneDist(preserveClients): mirror keep src/<name>/client/** asset and del
   }
 })
 
-test('pruneDist:--force / HELM_CLEAN_DIST=1 and empty dist all sync clean tsbuildinfo, guard against tsc incremental skip', { timeout: 60_000 }, () => {
+test('pruneDist: --force / HELM_CLEAN_DIST=1 and empty dist always clear tsbuildinfo to prevent tsc incremental skips', { timeout: 60_000 }, () => {
   const pkgRoot = mkdtempSync(path.join(tmpdir(), 'helm-prune-force-'))
   try {
     touch(pkgRoot, 'tsconfig.json', JSON.stringify({
@@ -146,16 +147,16 @@ test('pruneDist:--force / HELM_CLEAN_DIST=1 and empty dist all sync clean tsbuil
     }))
     const buildInfo = resolveTsBuildInfoFile(pkgRoot)!
 
-    // 1. HELM_CLEAN_DIST=1 all amount empty
+    // 1. Full wipe via HELM_CLEAN_DIST=1
     touch(pkgRoot, 'src/a.ts', 'export const a = 1')
     touch(pkgRoot, 'dist/a.js', 'compiled')
     touch(pkgRoot, 'cache/pkg.tsbuildinfo', '{}')
     const rEnv = pruneDist({ pkgRoot, env: { HELM_CLEAN_DIST: '1' } })
     assert.equal(rEnv.mode, 'wiped')
     assert.ok(!existsSync(path.join(pkgRoot, 'dist')))
-    assert.ok(!existsSync(buildInfo), 'force wipe must sync delete tsbuildinfo')
+    assert.ok(!existsSync(buildInfo), 'forced wipe must remove tsbuildinfo')
 
-    // 2. --force CLI flag all amount empty
+    // 2. Full wipe via --force CLI flag
     touch(pkgRoot, 'dist/a.js', 'compiled')
     touch(pkgRoot, 'cache/pkg.tsbuildinfo', '{}')
     const rCli = runCleanDistCli(pkgRoot, ['--force'])
@@ -163,18 +164,18 @@ test('pruneDist:--force / HELM_CLEAN_DIST=1 and empty dist all sync clean tsbuil
     assert.ok(!existsSync(path.join(pkgRoot, 'dist')))
     assert.ok(!existsSync(buildInfo))
 
-    // 3. dist directory already is empty (only remain stale dummy by delete after without any JS artifact) when automatically clean up tsbuildinfo
+    // 3. Automatically clears tsbuildinfo when dist ends up empty (only stale files remained)
     touch(pkgRoot, 'dist/stale.js', 'only stale')
     touch(pkgRoot, 'cache/pkg.tsbuildinfo', '{}')
     const rEmpty = pruneDist({ pkgRoot, env: {} })
     assert.equal(rEmpty.mode, 'pruned')
-    assert.ok(!existsSync(buildInfo), 'trim after without valid JS artifact when must clear tsbuildinfo')
+    assert.ok(!existsSync(buildInfo), 'must clear tsbuildinfo when no valid JS artifacts remain after pruning')
   } finally {
     rmSync(pkgRoot, { recursive: true, force: true })
   }
 })
 
-test('test-sharding:AST pure decide let through in-memory single test, intercept DOM/env/child process/file write/count when override/do not pure assist manually', { timeout: 60_000 }, () => {
+test('test-sharding: AST purity check allows in-memory unit tests and isolates DOM/env/child-process/file-write/timer/mutation patterns', { timeout: 60_000 }, () => {
   const pure = analyzeTestSourcePurity(
     ts,
     'pure.test.ts',
@@ -191,32 +192,32 @@ test('ok', { timeout: 60_000 }, () => {
   void PATH_VAL
 })`,
   )
-  assert.equal(pure.pure, true, `pre- phase pure test via, actual reason: ${pure.reasons.join(', ')}`)
+  assert.equal(pure.pure, true, `expected pure test to pass, actual reasons: ${pure.reasons.join(', ')}`)
 
   const cases: Array<[string, string]> = [
     ['happy-dom import', `import { GlobalRegistrator } from '@happy-dom/global-registrator'\nGlobalRegistrator.register()`],
     ['react-dom/client', `import { createRoot } from 'react-dom/client'\nvoid createRoot`],
-    ['parentheses assertion globalThis', `import * as React from 'react'\n;(globalThis as Record<string, unknown>).React = React`],
+    ['parenthesized globalThis assertion', `import * as React from 'react'\n;(globalThis as Record<string, unknown>).React = React`],
     ['document/window access', `const el = document.createElement('div')\nwindow.history.back()\nvoid el`],
     ['process.env[] write and delete', `process.env['FOO'] = '1'\ndelete process.env['FOO']`],
     ['process.env assignment', `process.env = {} as NodeJS.ProcessEnv`],
     ['process.stdin/chdir', `process.chdir('/tmp')\nprocess.stdin.resume()`],
     ['spawn / child_process', `import { spawn } from 'node:child_process'\nspawn('echo', ['hi'])`],
-    ['fs alias write import', `import { writeFileSync as wf } from 'node:fs'\nwf('a', 'b')`],
+    ['aliased fs write import', `import { writeFileSync as wf } from 'node:fs'\nwf('a', 'b')`],
     ['http createServer / listen', `import http from 'node:http'\nhttp.createServer().listen(0)`],
     ['KernelRuntime / createHelm / DatabaseSync', `import { DatabaseSync } from 'node:sqlite'\nnew DatabaseSync(':memory:')`],
-    ['timer override and t.mock.timers', `test('x', { timeout: 60_000 }, (t) => { t.mock.timers.enable({ apis: ['setTimeout'] }) })`],
-    ['Object.assign change write import object', `import { cfg } from '../src/cfg.js'\nObject.assign(cfg, { a: 1 })`],
+    ['timer overrides and t.mock.timers', `test('x', { timeout: 60_000 }, (t) => { t.mock.timers.enable({ apis: ['setTimeout'] }) })`],
+    ['Object.assign mutating an imported object', `import { cfg } from '../src/cfg.js'\nObject.assign(cfg, { a: 1 })`],
   ]
 
   for (const [label, code] of cases) {
     const r = analyzeTestSourcePurity(ts, 'bad.test.ts', code)
-    assert.equal(r.pure, false, `${label} must decide is non- pure`)
-    assert.ok(r.reasons.length > 0, `${label} must to out non-empty reason`)
+    assert.equal(r.pure, false, `${label} must be classified as impure`)
+    assert.ok(r.reasons.length > 0, `${label} must report a non-empty reason`)
   }
 })
 
-test('test-sharding: disk auxiliary module recursion append trace (contains ring route security), parameter retreat back condition and LPT shard all balance', { timeout: 60_000 }, () => {
+test('test-sharding: recursive helper tracing (with cycle guard), flag fallback conditions, and balanced LPT sharding', { timeout: 60_000 }, () => {
   const root = mkdtempSync(path.join(tmpdir(), 'helm-shard-disk-'))
   try {
     const pureTest = touch(root, 'packages/a/test/pure.test.ts', `import test from 'node:test'\nimport { helper } from './helpers/pure-helper.js'\ntest('p', { timeout: 60_000 }, () => { void helper })`)
@@ -239,7 +240,7 @@ test('test-sharding: disk auxiliary module recursion append trace (contains ring
     assert.equal(shouldDisableSharding(['--test-name-pattern=foo']), true)
     assert.equal(shouldDisableSharding(['-t', 'foo']), true)
 
-    // partitionFilesForSharding LPT all balance allocate and do not heavy do not leak
+    // partitionFilesForSharding distributes files evenly with LPT without duplicates or omissions
     const files = Array.from({ length: 18 }, (_, i) => {
       const rel = `packages/a/test/p${i}.test.ts`
       touch(root, rel, `import test from 'node:test'\ntest('${i}', { timeout: 60_000 }, () => {})`)

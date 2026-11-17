@@ -1,8 +1,8 @@
 /**
- * helm profiles --starters semantics flag test:
- * - create/update carry starters array,update merge do not lose other field;
- * - [] empty semantics (explicit write empty array, non- delete key);
- * - illegal value (non- array/shape error/over limit) in HTTP before local reject (hub without hit).
+ * Tests for `helm profiles --starters` semantic flag:
+ * - create/update sends starters array and update merge preserves untouched fields;
+ * - [] clears starters explicitly (writes empty array rather than deleting key);
+ * - invalid values (non-array / wrong shape / over limit) reject locally before sending HTTP requests.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -13,34 +13,34 @@ import {
   useTempDir,
 } from './helpers/cli-harness.js'
 
-test('profiles create --starters: array enter body;--json same right output', { timeout: 60_000 }, async (t) => {
+test('profiles create --starters: writes array to body and prints JSON', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-starters-')
   const hub = await startMockHub({ 'POST /api/profiles': (body) => ({ body }) }, { autoRegisterCleanup: t })
   const r = await runCliCaptured(
     [
-      'profiles', 'create', 'helper', '--name', 'assist manually',
-      '--starters', '[{"label":"write day report","prompt":"please generate now day day report"}]',
+      'profiles', 'create', 'helper', '--name', 'Assistant',
+      '--starters', '[{"label":"Daily report","prompt":"Please write today\'s daily report"}]',
       '--json',
     ],
     makeCliEnv(hub.url, dir),
   )
   assert.equal(r.code, 0, r.err)
   const posted = hub.hits.find((h) => h.method === 'POST')?.body as Record<string, unknown>
-  assert.deepEqual(posted.starters, [{ label: 'write day report', prompt: 'please generate now day day report' }])
-  assert.equal(posted.name, 'assist manually')
+  assert.deepEqual(posted.starters, [{ label: 'Daily report', prompt: "Please write today's daily report" }])
+  assert.equal(posted.name, 'Assistant')
 })
 
-test('profiles update --starters: first GET merge, not trigger and field (runtime/nodeId/tags) do not lose,[] explicit empty', { timeout: 60_000 }, async (t) => {
+test('profiles update --starters: GET-merges while keeping runtime/nodeId/tags; [] clears explicitly', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-starters-')
   const existing = {
     id: 'worker',
-    name: 'work person',
+    name: 'Worker',
     model: 'openai/gpt-4o',
     nodeId: 'gpu-box',
     cwd: '/workspace',
     tags: ['worker'],
     runtime: { kind: 'herdr', agent: 'agy' },
-    starters: [{ label: 'old quote lead', prompt: 'old hint' }],
+    starters: [{ label: 'Old starter', prompt: 'Old prompt' }],
   }
   const hub = await startMockHub(
     {
@@ -50,19 +50,19 @@ test('profiles update --starters: first GET merge, not trigger and field (runtim
     { autoRegisterCleanup: t },
   )
   const env = makeCliEnv(hub.url, dir)
-  // semantics flag path:GET merge after PUT,starters replace,runtime/nodeId/tags keep
+  // Semantic flag path: GET-merge before PUT, replaces starters and preserves runtime/nodeId/tags
   const r = await runCliCaptured(
-    ['profiles', 'update', 'worker', '--starters', '[{"label":"new quote lead","prompt":"new hint"}]', '--json'],
+    ['profiles', 'update', 'worker', '--starters', '[{"label":"New starter","prompt":"New prompt"}]', '--json'],
     env,
   )
   assert.equal(r.code, 0, r.err)
   const put = hub.hits.find((h) => h.method === 'PUT')?.body as Record<string, unknown>
-  assert.deepEqual(put.starters, [{ label: 'new quote lead', prompt: 'new hint' }])
+  assert.deepEqual(put.starters, [{ label: 'New starter', prompt: 'New prompt' }])
   assert.deepEqual(put.runtime, existing.runtime)
   assert.equal(put.nodeId, 'gpu-box')
   assert.deepEqual(put.tags, ['worker'])
 
-  // [] empty: explicit write empty array (is not delete key, is not restore old value)
+  // [] clears starters: explicitly writes empty array (neither deletes key nor keeps old value)
   hub.hits.length = 0
   const clear = await runCliCaptured(['profiles', 'update', 'worker', '--starters', '[]', '--json'], env)
   assert.equal(clear.code, 0, clear.err)
@@ -70,16 +70,16 @@ test('profiles update --starters: first GET merge, not trigger and field (runtim
   assert.deepEqual(putClear.starters, [])
   assert.deepEqual(putClear.runtime, existing.runtime)
 
-  // other flag do not lose starters:GET base bottom merge keep
+  // Other flags preserve existing starters via GET merge
   hub.hits.length = 0
-  const rename = await runCliCaptured(['profiles', 'update', 'worker', '--name', 'new name', '--json'], env)
+  const rename = await runCliCaptured(['profiles', 'update', 'worker', '--name', 'New Name', '--json'], env)
   assert.equal(rename.code, 0, rename.err)
   const putRename = hub.hits.find((h) => h.method === 'PUT')?.body as Record<string, unknown>
-  assert.deepEqual(putRename.starters, [{ label: 'old quote lead', prompt: 'old hint' }])
-  assert.equal(putRename.name, 'new name')
+  assert.deepEqual(putRename.starters, [{ label: 'Old starter', prompt: 'Old prompt' }])
+  assert.equal(putRename.name, 'New Name')
 })
 
-test('profiles --starters: illegal value in HTTP before reject (without hub hit)', { timeout: 60_000 }, async (t) => {
+test('profiles --starters: invalid values reject locally before any HTTP calls', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-starters-')
   const hub = await startMockHub(
     {
@@ -91,21 +91,21 @@ test('profiles --starters: illegal value in HTTP before reject (without hub hit)
   )
   const env = makeCliEnv(hub.url, dir)
   const bad: Array<[string[], RegExp]> = [
-    [['profiles', 'create', 'w', '--starters', '{"label":"x","prompt":"y"}'], /--starters must be JSON array/],
+    [['profiles', 'create', 'w', '--starters', '{"label":"x","prompt":"y"}'], /--starters must be a JSON array/],
     [['profiles', 'create', 'w', '--starters', '[{"label":"x"}]'], /prompt must be a string/],
     [['profiles', 'create', 'w', '--starters', '[{"label":" ","prompt":"y"}]'], /label cannot be empty after trimming/],
-    [['profiles', 'create', 'w', '--starters', '[{"label":"x","prompt":""}]'], /prompt cannot be pure whitespace/],
+    [['profiles', 'create', 'w', '--starters', '[{"label":"x","prompt":""}]'], /prompt cannot be whitespace-only/],
     [
       ['profiles', 'create', 'w', '--starters', JSON.stringify(Array.from({ length: 7 }, (_, i) => ({ label: `s${i}`, prompt: 'p' })))],
-      /--starters at most 6 items/,
+      /--starters supports at most 6 items/,
     ],
-    [['profiles', 'update', 'w', '--starters', '[{"label":"x","prompt":"y","extra":1}]'], /only accept label and prompt field/],
+    [['profiles', 'update', 'w', '--starters', '[{"label":"x","prompt":"y","extra":1}]'], /only accepts label and prompt fields/],
   ]
   for (const [argv, pattern] of bad) {
     const r = await runCliCaptured(argv, env)
-    assert.notEqual(r.code, 0, `should non-zero exit: ${argv.join(' ')}`)
+    assert.notEqual(r.code, 0, `expected non-zero exit: ${argv.join(' ')}`)
     assert.match(r.err, pattern)
   }
-  // validation failed occur in HTTP before:hub zero hit
-  assert.equal(hub.hits.length, 0, `validate should occur in HTTP before, actual hit ${JSON.stringify(hub.hits)}`)
+  // Validation runs before HTTP requests: zero Hub hits
+  assert.equal(hub.hits.length, 0, `validation should run before HTTP, got ${JSON.stringify(hub.hits)}`)
 })

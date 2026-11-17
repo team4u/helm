@@ -1,11 +1,11 @@
 /**
- * CLI plugin document command test:plugins doc --conversation/--current/--watch.
- * simulated Hub HTTP contract (real fetch boundary + real SSE response), verify:
- * - path/query parameter piece together install and --json same right;
+ * CLI plugin document command tests: `plugins doc --conversation/--current/--watch`.
+ * Simulates Hub HTTP contract (real fetch boundary + real SSE stream) to verify:
+ * - route and query parameter construction with --json parity;
  * - --conversation and --current mutual exclusion;
- * - --current read HELM_CONVERSATION_ID;
- * - --watch consume dedicated use SSE(snapshot + incremental frame);
- * - 404 structure error original through out.
+ * - --current reading HELM_CONVERSATION_ID;
+ * - --watch consuming dedicated session doc SSE (snapshot + delta frames);
+ * - 404 structured error passthrough.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -17,7 +17,7 @@ import {
   useTempDir,
 } from './helpers/cli-harness.js'
 
-test('plugins doc --conversation: piece together install conversationId query string and --json original output', { timeout: 60_000 }, async (t) => {
+test('plugins doc --conversation: appends conversationId query param and prints raw JSON with --json', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-sd-')
   const docBody = { pluginId: 'p:sd', name: 'metrics', conversationId: 7, value: { n: 3 } }
   const hub = await startMockHub(
@@ -34,7 +34,7 @@ test('plugins doc --conversation: piece together install conversationId query st
   assert.equal(hub.hits[0]!.authorization, 'Bearer t-test')
 })
 
-test('plugins doc --current: read HELM_CONVERSATION_ID; and --conversation mutual exclusion errors', { timeout: 60_000 }, async (t) => {
+test('plugins doc --current: reads HELM_CONVERSATION_ID; rejects when combined with --conversation', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-sd-')
   const docBody = { pluginId: 'p:sd', name: 'metrics', conversationId: 42, value: 'text-value' }
   const hub = await startMockHub(
@@ -49,17 +49,17 @@ test('plugins doc --current: read HELM_CONVERSATION_ID; and --conversation mutua
   assert.deepEqual(JSON.parse(res.out), docBody)
   assert.equal(hub.hits[0]!.path, '/api/plugins/p%3Asd/docs/metrics?conversationId=42')
 
-  // mutual exclusion: explicit non-zero exit code
+  // Mutual exclusion: explicit non-zero exit code
   const conflict = await runCliCaptured(
     ['plugins', 'doc', 'p:sd', 'metrics', '--conversation', '7', '--current', '--json'],
     env,
   )
   assert.notEqual(conflict.code, 0)
   assert.equal(parseCliError(conflict).code, 'conflicting_flags')
-  assert.equal(hub.hits.length, 1, 'mutual exclusion failed produces no extra request')
+  assert.equal(hub.hits.length, 1, 'mutual exclusion failure sends no extra request')
 })
 
-test('plugins doc --watch: subscribe dedicated use SSE,snapshot and incremental frame all output (NDJSON)', { timeout: 60_000 }, async (t) => {
+test('plugins doc --watch: subscribes to dedicated SSE and prints snapshot + delta frames (NDJSON)', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-sd-')
   const snapshot = { seq: 1, doc: { pluginId: 'p:sd', name: 'metrics', conversationId: 1, value: { n: 1 } } }
   const delta = { seq: 2, event: { type: 'plugin.session_doc.updated', doc: { pluginId: 'p:sd', name: 'metrics', conversationId: 1, value: { n: 2 } } } }
@@ -82,7 +82,7 @@ test('plugins doc --watch: subscribe dedicated use SSE,snapshot and incremental 
   assert.match(r.out, /"n":2/)
 })
 
-test('plugins doc --watch missing conversation target: explicit errors do not create connect', { timeout: 60_000 }, async (t) => {
+test('plugins doc --watch without conversation target: errors explicitly without connecting', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-sd-')
   const hub = await startMockHub({}, { autoRegisterCleanup: t })
   const r = await runCliCaptured(['plugins', 'doc', 'p:sd', 'metrics', '--watch', '--json'], makeCliEnv(hub.url, dir))
@@ -91,13 +91,13 @@ test('plugins doc --watch missing conversation target: explicit errors do not cr
   assert.equal(hub.hits.length, 0)
 })
 
-test('plugins doc 404 structure error through out (plugin deactivate/conversation delete:CLI stop retry based on)', { timeout: 60_000 }, async (t) => {
+test('plugins doc 404 structured error passthrough (plugin disabled / conversation deleted: signals CLI to stop)', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-sd-')
   const hub = await startMockHub(
     {
       'GET /api/plugins/p%3Asd/docs/metrics?conversationId=9': () => ({
         status: 404,
-        body: { error: { code: 'plugin_doc_not_found', message: 'plugin p:sd without public conversation document metrics' } },
+        body: { error: { code: 'plugin_doc_not_found', message: 'plugin p:sd has no public session document metrics' } },
       }),
     },
     { autoRegisterCleanup: t },

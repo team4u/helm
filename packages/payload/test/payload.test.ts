@@ -201,7 +201,7 @@ test('payload layout: hub/kernel/plugins/protocol/cli/web dist mirrors, assets i
   assertMirrored(path.join(repoRoot, 'packages/web/dist'), path.join(stagingDir, 'web/dist'));
   assertMirrored(path.join(repoRoot, 'packages/plugin-build/dist'), path.join(stagingDir, 'plugin-build/dist'));
   assertMirrored(path.join(repoRoot, 'packages/env-io/dist'), path.join(stagingDir, 'env-io/dist'));
-  // the SDK's public exports point at src/index.ts (no dist): mirror-deliver the source body.
+  // the SDK's public exports point at src/index.ts (no dist): mirror-deliver the source files.
   assertMirrored(path.join(repoRoot, 'packages/plugin-client/src'), path.join(stagingDir, 'plugin-client/src'));
 
   for (const rel of expectedAssetDirs()) {
@@ -244,12 +244,12 @@ test('start.mjs check: missing dependencies exit explicitly with code 3 and list
     timeout: 50_000,
   });
   assert.equal(res.status, 3, `expected exit code 3 (missing dependencies), got ${res.status}\nstdout: ${res.stdout}\nstderr: ${res.stderr}`);
-  assert.match(res.stderr, /runtime dependency missing/, 'must explicitly report the missing dependencies');
-  assert.match(res.stderr, /npm install/, 'must point at npm install to complete the dependencies');
-  assert.match(res.stdout, /layout validate via/, 'the layout check itself should pass first');
+  assert.match(res.stderr, /missing runtime dependencies/, 'must explicitly report missing dependencies');
+  assert.match(res.stderr, /npm install/, 'must point to npm install to complete dependencies');
+  assert.match(res.stdout, /layout validated/, 'the layout check itself should pass first');
 });
 
-test('start.mjs check: a tampered checksum / a manifest path escape exits explicitly with code 1', { timeout: 60_000 }, () => {
+test('start.mjs check: tampered checksum or manifest path escape exits explicitly with code 1', { timeout: 60_000 }, () => {
   const broken = mkdtempSync(path.join(path.dirname(repoRoot), 'helm-payload-broken-'));
   cpSync(stagingDir, broken, { recursive: true });
   try {
@@ -263,7 +263,7 @@ test('start.mjs check: a tampered checksum / a manifest path escape exits explic
       cwd: broken, env, encoding: 'utf8', timeout: 50_000,
     });
     assert.equal(res.status, 1, `expected exit code 1 (broken layout), got ${res.status}\nstderr: ${res.stderr}`);
-    assert.match(res.stderr, /checksum inconsistent/);
+    assert.match(res.stderr, /checksum mismatch/);
 
     // path contract: absolute paths / .. escapes must be rejected (strict validation includes paths,
     // guarding against manifest injection).
@@ -275,7 +275,7 @@ test('start.mjs check: a tampered checksum / a manifest path escape exits explic
       cwd: broken, env, encoding: 'utf8', timeout: 50_000,
     });
     assert.equal(res2.status, 1, `expected exit code 1 (path escape), got ${res2.status}\nstderr: ${res2.stderr}`);
-    assert.match(res2.stderr, /path contract failed/);
+    assert.match(res2.stderr, /path check failed/);
   } finally {
     rmSync(broken, { recursive: true, force: true });
   }
@@ -301,7 +301,7 @@ test('start.mjs without arguments: usage error exits with code 1', { timeout: 60
     timeout: 20_000,
   });
   assert.equal(res.status, 1);
-  assert.match(res.stderr, /use method/);
+  assert.match(res.stderr, /Usage: node start\.mjs/);
 });
 
 /**
@@ -364,7 +364,7 @@ test('end-to-end: npm pack → isolated npm install → check → start really l
       cwd: extractDir, env, encoding: 'utf8', timeout: 120_000,
     });
     assert.equal(check.status, 0, `check expected 0, got ${check.status}\nstdout: ${check.stdout}\nstderr: ${check.stderr}`);
-    assert.match(check.stdout, /eight entry/);
+    assert.match(check.stdout, /8 entry points/);
     assert.match(check.stdout, /node:sqlite \+ esbuild transform/);
 
     // 5. start: really launches the Hub, probes the public /api/auth/status endpoint, and exits cleanly
