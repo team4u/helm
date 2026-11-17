@@ -2,6 +2,8 @@ import { useState } from 'react'
 import type { AskSpec, ConversationSummary } from '@helm/protocol/browser'
 import { asksApi } from '../lib/api.js'
 import { HelmIcon } from '@helm/plugin-client'
+import { useWebLocale } from '../i18n/use-web-locale.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import type { HelmStoreValue } from '../lib/types.js'
 import type { SidebarTargetPresence } from './sidebar-model.js'
@@ -13,10 +15,11 @@ import {
 } from './background-activity-model.js'
 
 export function StatusDot({ connected }: { connected: boolean }) {
+  const { t } = useWebLocale()
   return (
     <span
       className={`status-dot ${connected ? 'status-dot-done status-dot-connected' : 'status-dot-disconnected'}`}
-      title={connected ? 'Live connection healthy' : 'Live connection lost, reconnecting'}
+      title={connected ? t('shell.status.liveHealthy') : t('shell.status.liveLost')}
     />
   )
 }
@@ -48,9 +51,12 @@ export function HoverIconButton({
 }
 
 /**
- * 单灯位状态灯：dotClass 由 resolveStatusLight 纯函数裁决，每行只渲染一个灯，
- * 绝不依顺序叠第二盏（working/blocked/error 状态灯独占；idle/done 让位后台空心环；
- * 无在途保持五态原样）。tooltip 与灯位同源，后台摘要仅在空心环灯位时叠加。
+ * Single-light-slot status light: dotClass is adjudicated by the pure
+ * resolveStatusLight; each row renders exactly one light and never stacks a
+ * second by order (working/blocked/error status lights are exclusive;
+ * idle/done yield to the background hollow ring; with nothing in flight the
+ * five states stay as-is). The tooltip shares the light's source; the
+ * background summary is appended only on the hollow-ring slot.
  */
 function StatusLightDot({
   status,
@@ -65,6 +71,7 @@ function StatusLightDot({
   backgroundActive: boolean
   backgroundSummary?: string
 }) {
+  const { t } = useWebLocale()
   const light = resolveStatusLight(status, backgroundActive)
   if (light.dotClass === null) return null
   const tooltip = backgroundAwareStatusTooltip({
@@ -73,6 +80,7 @@ function StatusLightDot({
     lastError,
     backgroundActive,
     backgroundSummary,
+    t,
   })
   return (
     <Tooltip content={tooltip} side="top">
@@ -81,7 +89,7 @@ function StatusLightDot({
   )
 }
 
-/** 会话行唯一状态灯：主会话状态优先，idle/done 且后台在途时让位空心环。 */
+/** The conversation row's single status light: main status first; idle/done with background work yields to the hollow ring. */
 export function ConversationStatusDot({
   conv,
   background,
@@ -100,8 +108,10 @@ export function ConversationStatusDot({
   )
 }
 
-/** 智能体站位行折叠态唯一状态灯：代表会话状态灯优先（working/blocked/error 独占，
- *  隐藏整个站位的后台环）；代表 idle/done 且名下任一会话后台在途时只显示空心环。 */
+/** The agent standing row's single collapsed-state light: the representative
+ *  conversation's status light first (working/blocked/error exclusive, hiding
+ *  the whole standing's background ring); when the representative is idle/done
+ *  and any conversation under it has background work, only the hollow ring shows. */
 export function StandingStatusDot({ indicator }: { indicator: StandingStatusIndicator }) {
   const rep = indicator.representative
   return (
@@ -115,37 +125,45 @@ export function StandingStatusDot({ indicator }: { indicator: StandingStatusIndi
   )
 }
 
-/** 远端会话紧凑只读标识：一眼区分非本机会话。 */
+/** Compact read-only marker for remote conversations: non-local rows at a glance. */
 export function RemoteNodeTag({ nodeId }: { nodeId: string }) {
+  const { t } = useWebLocale()
   return (
     <span
       className="mono"
       style={{ fontSize: 10.5, color: 'var(--fg-muted)', maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-      title={`Node: ${nodeId}`}
+      title={t('shell.node.title', { id: nodeId })}
     >
       @{nodeId}
     </span>
   )
 }
 
-const PANE_TAG_TITLES: Record<NonNullable<SidebarTargetPresence['paneTag']>, string> = {
-  Main: 'Open in main view',
-  Split: 'Open in split view',
-  'Main·Split': 'Open in both main and split views',
+const PANE_TAG_TITLE_KEYS: Record<NonNullable<SidebarTargetPresence['paneTag']>, 'shell.pane.main' | 'shell.pane.split' | 'shell.pane.both'> = {
+  Main: 'shell.pane.main',
+  Split: 'shell.pane.split',
+  'Main·Split': 'shell.pane.both',
 }
 
-/** 分屏开启时在侧栏行尾展示的面板归属微标（主 / 分 / 主·分）。 */
+/** Resolve a pane tag's tooltip title through the given translator (pure helper). */
+function paneTagTitle(t: WebMessageTranslator, paneTag: NonNullable<SidebarTargetPresence['paneTag']>): string {
+  return t(PANE_TAG_TITLE_KEYS[paneTag])
+}
+
+/** Pane-affinity micro badge shown at sidebar row ends when the split view is open (Main / Split / Main·Split). */
 export function SidebarPaneTag({ paneTag }: { paneTag: SidebarTargetPresence['paneTag'] }) {
+  const { t } = useWebLocale()
   if (paneTag === null) return null
   return (
-    <span className="nav-pane-tag" title={PANE_TAG_TITLES[paneTag]}>
+    <span className="nav-pane-tag" title={paneTagTitle(t, paneTag)}>
       {paneTag}
     </span>
   )
 }
 
-/** 全局待审批琥珀色胶囊与快速审批浮层。 */
+/** Global pending-approval amber pill with the quick-approval flyout. */
 export function PendingAsksPanel({ store }: { store: HelmStoreValue }) {
+  const { t } = useWebLocale()
   const [expanded, setExpanded] = useState(false)
   const [busyAskId, setBusyAskId] = useState<string | null>(null)
   const asks = store.pendingAsks
@@ -164,14 +182,14 @@ export function PendingAsksPanel({ store }: { store: HelmStoreValue }) {
       store.pushNotice({
         type: 'notification',
         level: 'info',
-        title: 'Approval submitted',
+        title: t('shell.asks.submitted'),
         body: `${ask.title} #${ask.conversationId}`,
       })
     } catch (err) {
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: 'Approval submission failed',
+        title: t('shell.asks.submitFailed'),
         body: err instanceof Error ? err.message : String(err),
       })
     } finally {
@@ -183,12 +201,12 @@ export function PendingAsksPanel({ store }: { store: HelmStoreValue }) {
     <div className="sidebar-group pending-asks-group">
       <button
         className={`badge badge-warn pending-asks-toggle${expanded ? ' badge-err' : ''}`}
-        title="Expand pending approval list"
+        title={t('shell.asks.expand')}
         onClick={() => setExpanded((v) => !v)}
       >
         <span className="pending-asks-toggle-label">
           <HelmIcon name="alert-triangle" size={12} />
-          Pending ({asks.length})
+          {t('shell.asks.pending', { count: asks.length })}
         </span>
         <HelmIcon name={expanded ? 'chevron-down' : 'chevron-right'} size={12} />
       </button>
@@ -215,7 +233,7 @@ export function PendingAsksPanel({ store }: { store: HelmStoreValue }) {
                     store.openTarget({ kind: 'conversation', conversationId: ask.conversationId })
                   }}
                 >
-                  Handle in main view
+                  {t('shell.asks.handleInMain')}
                 </button>
                 <button
                   className="btn btn-sm"
@@ -227,7 +245,7 @@ export function PendingAsksPanel({ store }: { store: HelmStoreValue }) {
                     )
                   }}
                 >
-                  Side by side in right split
+                  {t('shell.asks.sideBySide')}
                 </button>
                 {isSimpleConfirm(ask) && (
                   <>
@@ -237,7 +255,7 @@ export function PendingAsksPanel({ store }: { store: HelmStoreValue }) {
                       onClick={() => void answerConfirm(ask, true)}
                     >
                       <HelmIcon name="check" size={12} />
-                      Approve
+                      {t('shell.asks.approve')}
                     </button>
                     <button
                       className="btn btn-sm btn-danger"
@@ -245,7 +263,7 @@ export function PendingAsksPanel({ store }: { store: HelmStoreValue }) {
                       onClick={() => void answerConfirm(ask, false)}
                     >
                       <HelmIcon name="x" size={12} />
-                      Cancel
+                      {t('common.cancel')}
                     </button>
                   </>
                 )}

@@ -1,8 +1,10 @@
 import { HelmIcon } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 
 export function ToastOverlay() {
   const store = useHelmStore()
+  const { t } = useWebLocale()
   if (store.notices.length === 0) return null
 
   return (
@@ -49,7 +51,7 @@ export function ToastOverlay() {
                     store.dismissNotice(n.id)
                   }}
                 >
-                  <span>View conversation #{n.conversationId}</span>
+                  <span>{t('shell.toast.viewConversation', { id: n.conversationId })}</span>
                 </button>
               )}
             </div>

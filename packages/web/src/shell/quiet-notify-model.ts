@@ -1,60 +1,76 @@
 /**
- * 按根会话树独立结算的后台浏览器通知纯函数层（零 React/DOM 依赖，单测直测）。
+ * Pure-function layer for background browser notifications settled
+ * independently per root-conversation tree (zero React/DOM dependencies,
+ * directly unit-testable).
  *
- * 数据源与侧栏后台在途环同一契约，不重复实现任何判定：
- * - 会话五态：working 表示主回合机器在途；blocked 表示等待人类输入/审批——
- *   这是「等待你」，不是机器活动；
- * - 后台在途：summarizeConversationBackgroundActivity 的按会话索引
- *   （workbench 面板角标 tone = 'accent'，如 builtin:workflow 运行中的后台
- *   子代理与 DSL run，以及会话 contextUsage.compacting = true 上下文精简），
- *   插件停用后对应面板贡献与 doc 自然归零；
- * - badge doc 未知：启用面板所需的按会话角标 doc 尚未首次加载时，全局后台在途
- *   事实不可知——badgeUnknown = true，阻止任何根会话树结算「已完成」
- *   （blocked 通知不受此未知门控阻滞，独立及时提醒）。
+ * Data sources share the sidebar background in-flight ring's contract; no
+ * verdict is re-implemented:
+ * - Conversation five-state: working means the main-turn machine work is in
+ *   flight; blocked means waiting for human input/approval — that is "waiting
+ *   for you", not machine activity;
+ * - Background in flight: summarizeConversationBackgroundActivity's
+ *   per-conversation index (workbench panel badges with tone = 'accent', e.g.
+ *   builtin:workflow's running background subagents and DSL runs, plus
+ *   conversation contextUsage.compacting = true); when a plugin is disabled
+ *   its panel contributions and docs naturally zero out;
+ * - Unknown badge docs: while a needed per-conversation badge doc has not yet
+ *   had its first load, global background facts are unknowable —
+ *   badgeUnknown = true blocks any root tree from settling as "completed"
+ *   (blocked notifications are not gated by this unknown and keep firing
+ *   promptly on their own channel).
  *
- * 按根会话树独立结算：
- * - 每个活跃/blocked 会话沿 parentConversationId 归并到当前存活的最高祖先
- *   根会话 rootId（单轨模型，不做 ownedBy 过滤、不硬编码角色名）；
- * - 各根会话树彼此隔离：树 A 仍在运行不阻塞树 B 结算完成通知，也不阻塞树 B
- *   或树 A 自身内的 blocked 立即通知；
- * - 完成通知如实区分成败：累计参与者无 error → 「Helm 会话已完成」（#id 标题），
- *   任一参与者为 error → 「Helm 会话已结束」（#id 标题 · 有失败）；
- * - 等待处理通知：标题为「Helm 等待你的处理」，正文按根去重并如实标注失败，
- *   跳转该树内 updatedAt 最新的 blocked 会话。
+ * Independent settlement per root-conversation tree:
+ * - Every active/blocked conversation merges along parentConversationId to its
+ *   highest surviving ancestor rootId (single-track model; no ownedBy filter,
+ *   no hardcoded role names);
+ * - Root trees are isolated from each other: tree A still running does not
+ *   block tree B's completion notice, nor block blocked notices inside tree B
+ *   or tree A itself;
+ * - Completion notices honestly distinguish outcomes: no accumulated
+ *   participant in error → "Helm conversation completed" (#id title); any
+ *   participant in error → "Helm conversation finished" (#id title · with
+ *   failures);
+ * - Waiting notices: title "Helm is waiting for you", body deduplicated by
+ *   root and honestly flagging failures, clicking jumps to the tree's most
+ *   recently updated blocked conversation.
  */
 
 import type { ConversationSummary } from '@helm/protocol/browser'
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import { MAX_ANCESTRY_DEPTH } from '../conversation/ancestry-model.js'
 import type { ConversationBackgroundIndex } from './background-activity-model.js'
 
-/** 浏览器通知权限：标准三态 + 宿主不支持（happy-dom / 旧环境无 Notification）。 */
+/** Browser notification permission: the standard three states plus host-unsupported (happy-dom / old environments without Notification). */
 export type BrowserNotificationPermission = 'default' | 'granted' | 'denied' | 'unsupported'
 
-/** 单棵根会话树的瞬时活动快照（机器在途 ∪ 等待人类）。 */
+/** Instantaneous activity snapshot of one root tree (machine-active ∪ waiting-on-human). */
 export interface RootTreeActivity {
   rootId: number
-  /** 该树内当前处于机器在途（working、后台 accent 角标或上下文精简中）的会话 ID 集合。 */
+  /** ids of conversations currently machine-active in this tree (working, background accent badge, or context compacting). */
   activeConversationIds: ReadonlySet<number>
-  /** 该树内当前处于 blocked 态（等待人类输入/审批）的会话 ID 集合。 */
+  /** ids of conversations currently blocked in this tree (waiting for human input/approval). */
   blockedConversationIds: ReadonlySet<number>
 }
 
-/** 全局活动快照：按根会话树组织的状态集合 + 全局 badge doc 未知门控。 */
+/** Global activity snapshot: state sets organized per root tree + the global badge-doc unknown gate. */
 export interface ActivitySnapshot {
-  /** 按根会话 ID 索引的活动树（仅包含当前有机器在途或 blocked 会话的树）。 */
+  /** Activity trees indexed by root conversation id (only trees with machine-active or blocked conversations). */
   trees: ReadonlyMap<number, RootTreeActivity>
-  /** 尚未首次加载的 badge doc key：全局后台在途事实未知，不得宣称任何树完成。 */
+  /** Badge-doc keys without a first load yet: global background facts are unknown; no tree may be declared completed. */
   pendingBadgeDocs: ReadonlySet<string>
-  /** 是否存在尚未首次加载的 badge doc。 */
+  /** Whether any badge doc still awaits its first load. */
   badgeUnknown: boolean
 }
 
 /**
- * 派生会话归并：沿 parentConversationId 上溯到「当前存在的最顶层」会话——
- * 父摘要缺失（祖先已删除/未知）时停在当前最高存活节点；环与超深脏数据按
- * ancestry-model 的同一防御上限 MAX_ANCESTRY_DEPTH 截断，有限终止绝不递归
- * 失控。与 buildAncestorChain 的面包屑语义不同：此处只取存活代表，不保留
- * 缺失 ID（通知正文无法为不存在的会话提供标题与跳转目标）。
+ * Derived-conversation merge: walk up parentConversationId to the "highest
+ * currently existing" conversation — when a parent summary is missing (ancestor
+ * deleted/unknown) stop at the current highest surviving node; cycles and
+ * absurdly deep dirty data are truncated by the same defensive cap as
+ * ancestry-model, MAX_ANCESTRY_DEPTH, guaranteeing finite termination and no
+ * runaway recursion. Unlike buildAncestorChain's breadcrumb semantics, only a
+ * surviving representative is taken — missing ids are not kept (a notification
+ * body cannot provide a title or jump target for a non-existent conversation).
  */
 export function resolveNotificationRootId(
   byId: ReadonlyMap<number, ConversationSummary>,
@@ -75,7 +91,7 @@ export function resolveNotificationRootId(
   return currentId
 }
 
-/** 生成 blocked 会话的水位键：stateChangeSeq 或 pendingAskCount 任一推进即视为新/变化待处理。 */
+/** Watermark key for a blocked conversation: any advance of stateChangeSeq or pendingAskCount counts as new/changed pending work. */
 export function getBlockedWatermark(
   conversation: Pick<ConversationSummary, 'stateChangeSeq' | 'pendingAskCount'>,
 ): string {
@@ -85,7 +101,7 @@ export function getBlockedWatermark(
 export function resolveActivitySnapshot(input: {
   conversations: ReadonlyArray<ConversationSummary>
   background: ConversationBackgroundIndex
-  /** 未完成首次加载的 badge doc key（由装配层发现，见 use-quiet-notifier）。 */
+  /** Badge-doc keys without a first load yet (discovered by the assembler; see use-quiet-notifier). */
   pendingBadgeDocs?: ReadonlySet<string>
 }): ActivitySnapshot {
   const byId = new Map<number, ConversationSummary>(
@@ -104,7 +120,7 @@ export function resolveActivitySnapshot(input: {
     return tree
   }
   for (const conversation of input.conversations) {
-    // 后台在途（accent 角标或上下文精简）优先于五态：blocked/idle 父会话名下后台仍在跑就是机器在途。
+    // Background in-flight (accent badge or context compacting) outranks the five states: background work still running under a blocked/idle parent is machine activity.
     const active = conversation.status === 'working' || input.background.get(conversation.id)?.active === true
     const blocked = conversation.status === 'blocked'
     if (!active && !blocked) continue
@@ -121,30 +137,30 @@ export function resolveActivitySnapshot(input: {
   }
 }
 
-/** 根会话树无参与者处于 error 态时的完成通知标题。 */
+/** Completion-notice title when no participant of the root tree is in error (English bridge value; the catalog key is shell.quiet.completedTitle). */
 export const COMPLETED_NOTIFICATION_TITLE = 'Helm conversation completed'
 
-/** 根会话树任一参与者处于 error 态时的结束通知标题（绝不谎称已完成）。 */
+/** Finish-notice title when any participant of the root tree is in error — never claims completion (English bridge value; shell.quiet.endedTitle). */
 export const ENDED_NOTIFICATION_TITLE = 'Helm conversation finished'
 
-/** 等待人类输入/审批（blocked）通知标题。 */
+/** Notice title for waiting on human input/approval (blocked) (English bridge value; shell.quiet.waitingTitle). */
 export const WAITING_NOTIFICATION_TITLE = 'Helm is waiting for you'
 
-/** 正文最多列出的根条目数，超出折叠为「等 N 个 …」。 */
+/** Maximum root entries listed in a body; anything beyond folds into "{count} pending in total". */
 const MAX_LISTED_CONVERSATIONS = 3
 
-/** 通知内容与点击跳转目标。 */
+/** Notice content and click jump target. */
 export interface QuietNotificationDraft {
   title: string
   body: string
-  /** 点击通知直达的会话（无确定跳转目标为 null）。 */
+  /** Conversation the notification click jumps straight to (null when no certain target). */
   primaryConversationId: number | null
 }
 
-/** 通知正文中的会话条目（与会话列表/命令面板一致的「#id 标题」格式）。 */
+/** Conversation entry inside a notice body (the "#id title" format shared with the conversation list and command palette). */
 const conversationLabel = (conversation: ConversationSummary): string => `#${conversation.id} ${conversation.title}`
 
-/** 把会话列表按根归并去重（输入须为仍存在的会话，顺序即通知罗列优先级）。 */
+/** Merge a conversation list to roots, deduplicated (input must be surviving conversations; order is the notice's listing priority). */
 function mergeToRootIds(
   byId: ReadonlyMap<number, ConversationSummary>,
   conversations: ReadonlyArray<ConversationSummary>,
@@ -161,19 +177,25 @@ function mergeToRootIds(
 }
 
 /**
- * 组装单棵根会话树完成周期的通知内容（累计参与者为空返回 null）：
- * - 任一累计参与者（含被归并的子会话）处于 error 态 → 「Helm 会话已结束」，
- *   正文为 `#id 标题 · 有失败`；
- * - 无 error 参与者 → 「Helm 会话已完成」，正文为 `#id 标题`；
- * - 根会话仍存在时跳转 rootId；若根已被删且仍有存活子参与者则跳转存活根；
- *   若整棵树在周期内均被删除，通知仍成立但不编造标题，primary 为 null。
+ * Compose one root tree's completion-cycle notification (null when no
+ * accumulated participants):
+ * - Any accumulated participant (merged child conversations included) in error
+ *   → "Helm conversation finished", body `#id title · with failures`;
+ * - No error participants → "Helm conversation completed", body `#id title`;
+ * - Jump to rootId while the root survives; if the root was deleted but child
+ *   participants survive, jump to the surviving root; if the whole tree was
+ *   deleted during the cycle the notice still stands but fabricates no title —
+ *   primary is null.
  */
 export function composeTreeCompletionNotification(input: {
   rootId: number
-  /** 该树本周期累计参与机器活动的会话 ID（含派生子会话）。 */
+  /** ids of conversations that accumulated machine activity this cycle (spawned children included). */
   accumulatedConversationIds: ReadonlySet<number>
   conversations: ReadonlyArray<ConversationSummary>
+  /** Locale translator for title/body copy; English bridge when omitted (not-yet-migrated callers). */
+  t?: WebMessageTranslator
 }): QuietNotificationDraft | null {
+  const t = input.t ?? englishWebTranslator
   if (input.accumulatedConversationIds.size === 0) return null
   const byId = new Map<number, ConversationSummary>(
     input.conversations.map((conversation) => [conversation.id, conversation] as [number, ConversationSummary]),
@@ -183,7 +205,7 @@ export function composeTreeCompletionNotification(input: {
     .filter((conversation): conversation is ConversationSummary => conversation !== undefined)
     .sort((a, b) => b.updatedAt - a.updatedAt || b.id - a.id)
   const hasFailure = accumulated.some((conversation) => conversation.status === 'error')
-  const title = hasFailure ? ENDED_NOTIFICATION_TITLE : COMPLETED_NOTIFICATION_TITLE
+  const title = hasFailure ? t('shell.quiet.endedTitle') : t('shell.quiet.completedTitle')
 
   const directRoot = byId.get(input.rootId)
   const survivingRootId =
@@ -197,12 +219,12 @@ export function composeTreeCompletionNotification(input: {
   if (rootConv === undefined) {
     return {
       title,
-      body: hasFailure ? 'Conversation finished · with failures' : 'Conversation finished',
+      body: hasFailure ? t('shell.quiet.finishedWithFailures') : t('shell.quiet.finishedBody'),
       primaryConversationId: null,
     }
   }
   const parts = [conversationLabel(rootConv)]
-  if (hasFailure) parts.push('Has failures')
+  if (hasFailure) parts.push(t('shell.quiet.hasFailures'))
   return {
     title,
     body: parts.join(' · '),
@@ -211,20 +233,25 @@ export function composeTreeCompletionNotification(input: {
 }
 
 /**
- * 组装单棵根会话树等待人类处理（blocked）的通知内容：
- * - 无存活 blocked 会话返回 null；
- * - 标题固定 WAITING_NOTIFICATION_TITLE（「Helm 等待你的处理」）；
- * - 正文按根归并去重（多个子 blocked 不重复列），若累计参与者中有 error 则如实标注「有失败」；
- * - primaryConversationId 取该树内 updatedAt 最新的 blocked 会话（直达提问/审批处）。
+ * Compose one root tree's waiting-for-human (blocked) notification:
+ * - null when no blocked conversation survives;
+ * - title fixed to the waiting title ("Helm is waiting for you");
+ * - body deduplicated by root (multiple blocked children listed once), and
+ *   honestly flagging failures when any accumulated participant is in error;
+ * - primaryConversationId is the tree's most recently updated blocked
+ *   conversation (straight to the ask/approval spot).
  */
 export function composeTreeBlockedNotification(input: {
   rootId: number
-  /** 该树当前处于 blocked 态的会话 ID。 */
+  /** ids of conversations currently blocked in this tree. */
   blockedConversationIds: ReadonlySet<number>
-  /** 可选：该树本周期累计参与会话 ID（用于如实检出失败参与者）。 */
+  /** Optional: this tree's accumulated participant ids this cycle (for honest failure detection). */
   accumulatedConversationIds?: ReadonlySet<number>
   conversations: ReadonlyArray<ConversationSummary>
+  /** Locale translator for title/body copy; English bridge when omitted (not-yet-migrated callers). */
+  t?: WebMessageTranslator
 }): QuietNotificationDraft | null {
+  const t = input.t ?? englishWebTranslator
   const byId = new Map<number, ConversationSummary>(
     input.conversations.map((conversation) => [conversation.id, conversation] as [number, ConversationSummary]),
   )
@@ -240,19 +267,19 @@ export function composeTreeBlockedNotification(input: {
 
   const rootIds = mergeToRootIds(byId, blocked)
   const parts = rootIds.slice(0, MAX_LISTED_CONVERSATIONS).map((id) => conversationLabel(byId.get(id)!))
-  if (rootIds.length > parts.length) parts.push(`${rootIds.length} pending in total`)
-  if (hasFailure) parts.push('Has failures')
+  if (rootIds.length > parts.length) parts.push(t('shell.quiet.totalPending', { count: rootIds.length }))
+  if (hasFailure) parts.push(t('shell.quiet.hasFailures'))
   return {
-    title: WAITING_NOTIFICATION_TITLE,
-    body: `Pending input/approvals: ${parts.join(' · ')}`,
+    title: t('shell.quiet.waitingTitle'),
+    body: t('shell.quiet.pendingIntro', { list: parts.join(' · ') }),
     primaryConversationId: blocked[0]!.id,
   }
 }
 
 /**
- * 触发当刻的投递门控（逐项现场复核，不信任任何缓存）：
- * - 已认证、偏好开启、浏览器通知权限已授予、SSE 连接健康；
- * - 页面处于非前台活跃态（!isPageActive()，即页面隐藏或窗口失焦）：用户正看着页面时不弹噪音。
+ * Delivery gating at the trigger instant (re-verified live per item; no cached trust):
+ * - Authenticated, preference enabled, browser notification permission granted, SSE connection healthy;
+ * - The page is NOT actively foregrounded (!isPageActive(), i.e. hidden or unfocused): no noise while the user is watching.
  */
 export function shouldDeliverQuietNotification(input: {
   authenticated: boolean

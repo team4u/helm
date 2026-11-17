@@ -2,9 +2,11 @@ import { useState, type FormEvent } from 'react'
 import { authApi } from '../lib/api.js'
 import { HelmIcon } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 
 export function AuthGate() {
   const store = useHelmStore()
+  const { t } = useWebLocale()
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -16,11 +18,11 @@ export function AuthGate() {
     e.preventDefault()
     setError(null)
     if (isSetup && password.length < 8) {
-      setError('Master password needs at least 8 characters')
+      setError(t('shell.auth.passwordMin'))
       return
     }
     if (isSetup && password !== confirm) {
-      setError('The two passwords do not match')
+      setError(t('shell.auth.passwordMismatch'))
       return
     }
     setSubmitting(true)
@@ -30,7 +32,8 @@ export function AuthGate() {
         : await authApi.login(password)
       await store.onAuthenticated(res.token)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Authentication failed')
+      // err.message stays verbatim (server/execution text); only the generic fallback is locale copy.
+      setError(err instanceof Error ? err.message : t('shell.auth.failed'))
     } finally {
       setSubmitting(false)
     }
@@ -45,7 +48,7 @@ export function AuthGate() {
         <div className="auth-gate-header">
           <div className="auth-gate-brand">
             <HelmIcon name="sparkles" size={18} />
-            <span className="auth-gate-title">Helm Console</span>
+            <span className="auth-gate-title">{t('shell.auth.consoleTitle')}</span>
           </div>
           <button
             type="button"
@@ -53,10 +56,12 @@ export function AuthGate() {
             onClick={store.toggleTheme}
             title={
               store.themePreference === 'system'
-                ? `System theme (currently ${store.theme === 'dark' ? 'Dark' : 'Light'}; click to switch to light mode)`
+                ? t('shell.auth.themeSystem', {
+                    current: t(store.theme === 'dark' ? 'shell.theme.currentDark' : 'shell.theme.currentLight'),
+                  })
                 : store.themePreference === 'light'
-                  ? 'Light mode (click to switch to dark mode)'
-                  : 'Dark mode (click to switch to system theme)'
+                  ? t('shell.auth.themeLight')
+                  : t('shell.auth.themeDark')
             }
           >
             <HelmIcon
@@ -73,9 +78,7 @@ export function AuthGate() {
         </div>
 
         <div className="auth-gate-desc">
-          {isSetup
-            ? 'First start: set the local Helm master password (at least 8 characters) to protect conversations, model credentials and node connections.'
-            : 'Enter the local Helm master password to unlock the console.'}
+          {isSetup ? t('shell.auth.setupDesc') : t('shell.auth.unlockDesc')}
         </div>
 
         {error && (
@@ -87,14 +90,14 @@ export function AuthGate() {
 
         <div className="auth-gate-field">
           <label className="auth-gate-label">
-            {isSetup ? 'Set master password' : 'Master password'}
+            {isSetup ? t('shell.auth.setPasswordLabel') : t('shell.auth.passwordLabel')}
           </label>
           <input
             type="password"
             className="input"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder={isSetup ? 'At least 8 characters' : 'Enter master password'}
+            placeholder={isSetup ? t('shell.auth.setPasswordPlaceholder') : t('shell.auth.passwordPlaceholder')}
             autoFocus
             required
           />
@@ -103,14 +106,14 @@ export function AuthGate() {
         {isSetup && (
           <div className="auth-gate-field">
             <label className="auth-gate-label">
-              Confirm master password
+              {t('shell.auth.confirmLabel')}
             </label>
             <input
               type="password"
               className="input"
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
-              placeholder="Re-enter the password"
+              placeholder={t('shell.auth.confirmPlaceholder')}
               required
             />
           </div>
@@ -118,7 +121,7 @@ export function AuthGate() {
 
         <button type="submit" className="btn btn-primary" disabled={submitting}>
           <HelmIcon name="lock" size={13} />
-          <span>{submitting ? 'Verifying...' : isSetup ? 'Initialize and enter Helm' : 'Unlock console'}</span>
+          <span>{submitting ? t('shell.auth.verifying') : isSetup ? t('shell.auth.initialize') : t('shell.auth.unlock')}</span>
         </button>
       </form>
     </div>

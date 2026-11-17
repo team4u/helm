@@ -1,28 +1,37 @@
 /**
- * Web 前端版本感知与自动刷新纯逻辑（无 React、无 DOM 副作用）：
+ * Pure version-awareness and auto-refresh logic for the Web frontend
+ * (no React, no DOM side effects):
  *
- * - 版本指纹 = 生产构建入口 module script 的 `/assets/<name>` 带 hash 路径。
- *   不改 Vite 配置、不生成 version.json、不改内核 HTTP：静态托管对
- *   index.html 恒回 no-cache，直接以 `cache: 'no-store'` + 唯一化 URL 重新
- *   拉取当前页面入口（/index.html）即可获得最新指纹；
- * - 当前页面指纹只在启动时读取一次 document（`/assets/` module script 唯一
- *   才视为生产入口）；Vite dev 的 `/src/main.tsx`、单测/SSR 无生产入口时
- *   探测器整体休眠（返回 null，永不误判）；
- * - 探测失败（网络错误 / 非 2xx / 非 HTML / 结构无效 / 入口多义）只是本次
- *   无结论，绝不把失败当作版本变更，也不改变既有判定；
- * - bootId 变化只是「快速触发探测」的信号，不等于产物一定更新：是否刷新
- *   一律由入口指纹比对决定（见 use-version-watcher.ts）。
+ * - Version fingerprint = the hashed `/assets/<name>` path of the production
+ *   entry module script. No Vite config change, no version.json, no kernel HTTP
+ *   change: static hosting always serves index.html with no-cache, so
+ *   re-fetching the page entry (/index.html) with `cache: 'no-store'` plus a
+ *   uniquified URL yields the latest fingerprint;
+ * - The current page fingerprint is read from the document exactly once at
+ *   startup (a unique `/assets/` module script counts as a production entry);
+ *   Vite dev's `/src/main.tsx`, unit-test/SSR documents have no production
+ *   entry and the probe sleeps entirely (returns null, never misjudges);
+ * - A failed probe (network error / non-2xx / non-HTML / invalid structure /
+ *   ambiguous entry) is simply inconclusive this round: failure is never
+ *   treated as a version change and never alters the existing verdict;
+ * - A bootId change is only a "probe now" trigger, not proof of an update:
+ *   whether to refresh is always decided by entry-fingerprint comparison
+ *   (see use-version-watcher.ts).
  */
 export const INDEX_PROBE_URL = '/index.html'
 
-/** 生产入口指纹：同源绝对路径 `/assets/<name>.js`（Vite 默认 base '/' 构建形态）。 */
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+
+/** Production-entry fingerprint: same-origin absolute path `/assets/<name>.js` (the default Vite base '/' build shape). */
 const PRODUCTION_ENTRY_PATTERN = /^\/assets\/[A-Za-z0-9_.@-]+\.js$/
 
 /**
- * 收集文档中的生产入口候选：`<script type="module" src="/assets/…">` 去重列表。
- * 严格限定 type=module + 同源 `/assets/` 绝对路径：插件 client 走 Blob URL 动态
- * import（不产生 script 标签）、Vite 预加载只注入 link 标签，真实构建形态中
- * 候选唯一；任何内联主题脚本（无 type=module）天然排除。
+ * Collect production-entry candidates from the document: a deduplicated list of
+ * `<script type="module" src="/assets/…">`. Strictly requires type=module plus a
+ * same-origin `/assets/` absolute path: plugin clients are dynamically imported
+ * from Blob URLs (producing no script tags) and Vite preload only injects link
+ * tags, so real builds have exactly one candidate; inline theme scripts (no
+ * type=module) are excluded naturally.
  */
 export function productionEntryCandidates(doc: Document): string[] {
   const sources: string[] = []
@@ -35,8 +44,9 @@ export function productionEntryCandidates(doc: Document): string[] {
   for (const script of Array.from(scripts)) {
     const src = script.getAttribute('src')
     if (src === null) continue
-    // 指纹只取路径部分：src 上的查询/片段（部署通道附加的防缓存参数等）
-    // 不改变产物身份，否则同一构建会被误判为新版本。
+    // The fingerprint takes only the path: a query/fragment on src (e.g. a
+    // cache-busting parameter appended by the deploy pipeline) does not change
+    // the artifact identity — otherwise one build would be misjudged as new.
     const path = src.split(/[?#]/, 1)[0]!
     if (!PRODUCTION_ENTRY_PATTERN.test(path)) continue
     if (!sources.includes(path)) sources.push(path)
@@ -45,9 +55,10 @@ export function productionEntryCandidates(doc: Document): string[] {
 }
 
 /**
- * 识别当前 document 的生产入口指纹。
- * 候选唯一才返回该指纹；0 个（dev `/src/main.tsx`、单测、SSR）或多个（结构
- * 无法确认宿主入口）一律返回 null——探测器休眠，绝不猜测。
+ * Detect the production-entry fingerprint of the current document.
+ * Returns the fingerprint only when the candidate is unique; 0 candidates
+ * (dev `/src/main.tsx`, unit tests, SSR) or several (structure cannot confirm
+ * the host entry) return null — the probe sleeps and never guesses.
  */
 export function detectDocumentProductionEntry(doc: Document): string | null {
   const candidates = productionEntryCandidates(doc)
@@ -55,9 +66,10 @@ export function detectDocumentProductionEntry(doc: Document): string | null {
 }
 
 /**
- * 解析探测响应正文中的生产入口指纹。
- * 使用结构化 DOMParser（无 DOMParser 的环境如实返回 null，不降级为字符串
- * 猜测）；候选唯一才有效，0 个或多个均视为结构无效。
+ * Parse the production-entry fingerprint out of a probe response body.
+ * Uses the structured DOMParser (environments without DOMParser honestly
+ * return null instead of degrading to string guessing); only a unique
+ * candidate is valid — 0 or several are treated as an invalid structure.
  */
 export function parseIndexHtmlProductionEntry(html: string): string | null {
   if (typeof DOMParser === 'undefined') return null
@@ -70,33 +82,36 @@ export function parseIndexHtmlProductionEntry(html: string): string | null {
   return detectDocumentProductionEntry(doc)
 }
 
-/** 探测依赖（fetch 注入；生产为 window.fetch，测试可替换）。 */
+/** Probe dependencies (injected fetch; production is window.fetch, tests may substitute). */
 export interface IndexEntryProbeDeps {
   fetchHtml: (url: string, init: RequestInit) => Promise<Response>
-  /** 探测 URL 唯一化随机数（缺省时间戳+自增序号；测试可注入固定值）。 */
+  /** Nonce for uniquifying the probe URL (default timestamp+sequence; tests may inject a fixed value). */
   nonce?: () => string
 }
 
-/** 探测 URL 防缓存参数名：部分 WebView 缓存层忽略 `cache: 'no-store'`，
- *  URL 级唯一化让每次探测命中不同的完整 URL——按 URL 键控的缓存通常因此
- *  取回新文档（规范语义上不同 URL 即不同缓存项），但自定义 WebView 壳/
- *  代理仍可能介入，真机行为未验证，残余风险见任务汇报。 */
+/** Probe-URL cache-busting parameter name: some WebView cache layers ignore
+ *  `cache: 'no-store'`, so URL-level uniquification makes every probe hit a
+ *  different full URL — URL-keyed caches usually fetch a fresh document for it
+ *  (per spec a different URL is a different cache entry), but custom WebView
+ *  shells/proxies may still interfere; unverified on real devices, residual
+ *  risk noted in the task report. */
 const INDEX_PROBE_CACHE_PARAM = 'helmv'
 
-/** 缺省随机数：时间戳 + 进程内自增序号，同毫秒内两次探测也必然不同。 */
+/** Default nonce: timestamp + in-process sequence, so even two probes within the same millisecond differ. */
 let probeNonceSeq = 0
 
-/** 构造探测 URL（纯函数导出，测试与诊断可复现）。 */
+/** Build the probe URL (pure exported function, reproducible in tests and diagnostics). */
 export function buildIndexProbeUrl(nonce: string): string {
   const params = new URLSearchParams({ [INDEX_PROBE_CACHE_PARAM]: nonce })
   return `${INDEX_PROBE_URL}?${params.toString()}`
 }
 
 /**
- * 探测最新生产入口指纹：唯一化 URL + `cache: 'no-store'` + `Accept: text/html`
- * 拉取 /index.html，逐层校验响应成功（2xx）、HTML content-type、能解析出唯一
- * 生产入口。
- * 任一环节失败返回 null（本次探测无结论），不抛错、不误判。
+ * Probe the latest production-entry fingerprint: fetch /index.html with a
+ * uniquified URL + `cache: 'no-store'` + `Accept: text/html`, then validate
+ * layer by layer — 2xx response, HTML content-type, and a unique production
+ * entry parsed out.
+ * Any failing layer returns null (inconclusive this round); no throw, no misjudgement.
  */
 export async function probeLatestIndexEntry(deps: IndexEntryProbeDeps): Promise<string | null> {
   let response: Response
@@ -125,10 +140,10 @@ export async function probeLatestIndexEntry(deps: IndexEntryProbeDeps): Promise<
 }
 
 // ---------------------------------------------------------------------------
-// 版本判定状态机
+// Version-verdict state machine
 // ---------------------------------------------------------------------------
 
-/** 版本感知状态：currentEntry 为页面加载时指纹（启用前提），latestEntry 为最近一次成功探测。 */
+/** Version-watch state: currentEntry is the page-load fingerprint (enablement prerequisite), latestEntry the last successful probe. */
 export interface VersionWatchState {
   currentEntry: string
   latestEntry: string | null
@@ -138,65 +153,70 @@ export function initialVersionWatchState(currentEntry: string): VersionWatchStat
   return { currentEntry, latestEntry: currentEntry }
 }
 
-/** 探测结果入状态：失败（null）原样返回，成功则推进 latestEntry（支持部署回滚复原）。 */
+/** Fold a probe result into state: failure (null) returns as-is, success advances latestEntry (deploy rollbacks recover). */
 export function applyProbeResult(state: VersionWatchState, entry: string | null): VersionWatchState {
   if (entry === null) return state
   return { ...state, latestEntry: entry }
 }
 
-/** 是否存在待刷新的新版本（最新入口 ≠ 当前页面入口）。 */
+/** Whether a refreshable new version exists (latest entry ≠ current page entry). */
 export function versionUpdatePending(state: VersionWatchState): boolean {
   return state.latestEntry !== null && state.latestEntry !== state.currentEntry
 }
 
 /**
- * 刷新触发判定：待刷新（指纹比对或 vite:preloadError 资产失效兜底得出）、本地
- * 无未提交现场、尚未触发过刷新三者同时成立。reloadTriggered 防止 reload 循环
- * 与重复触发。
+ * Refresh-trigger verdict: all three must hold — refresh pending (from
+ * fingerprint comparison or the vite:preloadError stale-assets fallback), no
+ * local unsubmitted work, and no refresh triggered yet. reloadTriggered guards
+ * against reload loops and duplicate triggers.
  */
 export function shouldReloadNow(input: { pending: boolean; dirty: boolean; reloadTriggered: boolean }): boolean {
   return input.pending && !input.dirty && !input.reloadTriggered
 }
 
-/** visibilitychange / focus 触发探测的节流判定（now 与上次探测时刻同源时钟）。 */
+/** Throttle verdict for visibilitychange / focus probes (now and lastProbeAt share one clock). */
 export function probeAllowed(now: number, lastProbeAt: number | null, throttleMs: number): boolean {
   if (lastProbeAt === null) return true
   return now - lastProbeAt >= throttleMs
 }
 
-/** 保守表单编辑保护：当前焦点元素是否为文本输入（input/textarea）。 */
+/** Conservative form protection: whether the focused element is a text input (input/textarea). */
 export function isTextInputElement(el: Element | null): boolean {
   return el !== null && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')
 }
 
-/** 自动刷新挂起原因（null = 未挂起；版本横幅文案依据）。 */
+/** Auto-refresh defer reason (null = not deferred; drives the version-banner copy). */
 export type VersionDeferReason = 'draft' | 'modal' | 'draft-and-modal' | null
 
-/** 挂起原因 → 横幅补充文案（「未提交内容」同时覆盖草稿事实与焦点保护）。 */
-export function versionDeferHint(reason: VersionDeferReason): string {
+/** Defer reason → banner hint copy ("unsubmitted input" covers both draft facts and focus protection). */
+export function versionDeferHint(
+  reason: VersionDeferReason,
+  t: WebMessageTranslator = englishWebTranslator,
+): string {
   switch (reason) {
     case 'draft':
-      return 'Unsubmitted input in progress; auto refresh deferred'
+      return t('shell.version.deferDraft')
     case 'modal':
-      return 'A window is open; auto refresh deferred'
+      return t('shell.version.deferModal')
     case 'draft-and-modal':
-      return 'Unsubmitted input and an open window; auto refresh deferred'
+      return t('shell.version.deferBoth')
     default:
       return ''
   }
 }
 
 // ---------------------------------------------------------------------------
-// preloadError 自动刷新防环（跨 reload 一次性名额）
+// preloadError auto-refresh loop guard (one-shot budget across reloads)
 // ---------------------------------------------------------------------------
 
-/** sessionStorage 标记键：本 tab 已用完 preloadError 证据驱动的自动重试名额。 */
+/** sessionStorage marker key: this tab has consumed its preloadError-evidence auto-retry budget. */
 export const PRELOAD_RELOAD_GUARD_KEY = 'helm:version-preload-reload'
 
 /**
- * 尝试占用 preloadError 证据驱动的自动刷新名额（每 tab 一次）。
- * 指纹变化驱动的正常自动刷新不经此守卫。storage 不可用（读写任一抛错）或
- * 名额已用完一律拒绝：保留提示仅允许用户手动刷新，绝不在跨 reload 后循环。
+ * Try to claim the preloadError-evidence auto-refresh budget (once per tab).
+ * Regular fingerprint-driven auto refresh does not pass through this guard.
+ * Unavailable storage (read/write throwing) or an exhausted budget always
+ * denies: keep the notice and allow only manual refresh, never loop across reloads.
  */
 export function claimPreloadAutoReload(storage: Storage | null): boolean {
   if (storage === null) return false
@@ -210,36 +230,43 @@ export function claimPreloadAutoReload(storage: Storage | null): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// WebView-safe 刷新（顶层导航 URL 构造）与指纹自动刷新跨页防环
+// WebView-safe refresh (top-level navigation URL building) and the
+// fingerprint auto-refresh cross-page loop guard
 // ---------------------------------------------------------------------------
 
-/** 刷新 URL 的只读事实源（Location 的结构子集；测试可注入替身）。 */
+/** Read-only location facts for the refresh URL (a structural subset of Location; tests may inject a double). */
 export interface VersionReloadUrlSource {
   readonly pathname: string
   readonly search: string
   readonly hash: string
 }
 
-/** 刷新执行位置：`replace(url)` 顶层导航（生产为 window.location）。 */
+/** Refresh execution location: `replace(url)` top-level navigation (production is window.location). */
 export interface VersionReloadLocation extends VersionReloadUrlSource {
   replace(url: string): void
 }
 
 /**
- * 刷新 URL 防缓存参数名。部分移动 WebView 壳会吞掉 `location.reload()`，
- * 或对同址导航回吐缓存里的旧文档——带唯一参数的 `location.replace()` 走
- * 完整顶层导航管线，且按规范语义命中一个此前不存在的缓存键，通常迫使
- * 缓存层重新取回文档；自定义壳/代理仍可能介入，不承诺必然。参数只放在
- * query（hash 是应用路由，绝不污染），且每次构造先剥掉旧值，绝不累积。
+ * Cache-busting parameter name for the refresh URL. Some mobile WebView shells
+ * swallow `location.reload()` or serve the cached stale document for same-URL
+ * navigation — `location.replace()` with a unique parameter goes through the
+ * full top-level navigation pipeline and, per spec, hits a cache key that did
+ * not exist before, usually forcing the cache layer to refetch the document;
+ * custom shells/proxies may still interfere, so success is not promised. The
+ * parameter lives only in the query (the hash is app routing and stays
+ * untouched), and every build first strips the old value — never accumulating.
  */
 export const RELOAD_CACHE_BUSTER_PARAM = 'helm_reload'
 
 /**
- * 构造刷新导航 URL：保留当前 pathname、既有 query（剥除历史 buster）与 hash。
- * - nonce = null：干净同址导航（真文档 reload 语义；地址不引入任何参数）；
- * - nonce 非空：追加唯一 cache-buster（每次新值替换旧值）。
- * hash 分量相对当前地址恒不变，因此永不构成「仅片段差异」的伪导航
- * （片段差异只滚动不重载文档），始终是真实文档重载。
+ * Build the refresh-navigation URL: keep the current pathname, existing query
+ * (historical busters stripped) and hash.
+ * - nonce = null: clean same-URL navigation (true document-reload semantics;
+ *   no parameter is introduced into the address);
+ * - nonce non-null: append a unique cache-buster (each new value replaces the old).
+ * The hash component is constant relative to the current address, so it never
+ * forms a "fragment-only" pseudo-navigation (fragment deltas only scroll
+ * without reloading the document) — always a real document reload.
  */
 export function buildVersionReloadUrl(loc: VersionReloadUrlSource, nonce: string | null): string {
   const params = new URLSearchParams(loc.search)
@@ -249,19 +276,24 @@ export function buildVersionReloadUrl(loc: VersionReloadUrlSource, nonce: string
   return `${loc.pathname}${search === '' ? '' : `?${search}`}${loc.hash}`
 }
 
-/** sessionStorage 标记键：最近一次指纹驱动自动刷新的目标入口。
- *  必须存 sessionStorage（每 tab 独立名额）：跨 tab 共享的 localStorage 会让
- *  同时打开的多个 tab 互相吃掉防环名额，误伤正常升级。 */
+/** sessionStorage marker key: the target entry of the last fingerprint-driven
+ *  auto refresh. It must be sessionStorage (a per-tab budget): a cross-tab
+ *  shared localStorage would let concurrently open tabs eat each other's loop
+ *  guard and hurt normal upgrades. */
 export const FINGERPRINT_RELOAD_GUARD_KEY = 'helm:version-fingerprint-reload'
 
 /**
- * 指纹驱动的自动刷新跨页防环：同一目标入口在本 tab 只自动发起一次。
- * WebView 对同址导航回吐旧缓存时会出现「reload 落地仍是旧文档 → 探测又见
- * 新入口 → 再 reload」的死循环；同入口第二次起不再自动刷新，保留横幅与
- * 手动动作（手动不受限）。
- * 与 preloadError 名额同纪律 fail-closed：storage 不可用（null / 读 / 写任一
- * 失败）一律拒绝自动刷新——WebView 可能同时禁用 storage 且持续回吐旧缓存，
- * 放行即是跨页无限自动刷新；保留横幅与手动刷新已足够完成升级。
+ * Fingerprint-driven auto-refresh cross-page loop guard: the same target entry
+ * auto-refreshes at most once per tab. When a WebView serves stale cache for
+ * same-URL navigation you get "reload lands on the old document → probe sees
+ * the new entry again → reload again" — from the second time on the same entry
+ * no longer auto-refreshes; the banner and the manual action remain (manual is
+ * unrestricted).
+ * Same fail-closed discipline as the preloadError budget: unavailable storage
+ * (null / read / write failing) always denies auto refresh — a WebView may
+ * disable storage and keep serving stale cache at once, where allowing means
+ * infinite cross-page auto refresh; keeping the banner plus manual refresh is
+ * enough to complete the upgrade.
  */
 export function claimFingerprintAutoReload(storage: Storage | null, latestEntry: string | null): boolean {
   if (latestEntry === null) return true

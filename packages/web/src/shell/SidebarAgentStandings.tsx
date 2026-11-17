@@ -3,6 +3,7 @@ import { conversationsApi } from '../lib/api.js'
 import type { ConversationSummary } from '@helm/protocol/browser'
 import { archiveBatchNotice, patchConversationsArchived } from './archive-ops.js'
 import { HelmIcon, Checkbox } from '@helm/plugin-client'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { ConfirmDialog } from '../ui/AlertDialog.js'
@@ -34,7 +35,8 @@ import {
   StandingStatusDot,
 } from './SidebarPrimitives.js'
 
-/** Agent 站位「+」按钮：进入待命页开始新话题（首次发送才创建会话）；仅人类可选 Agent 渲染。 */
+/** The agent standing's "+" button: enter the standby page to start a new topic
+ * (the conversation is only created on first send); rendered for human-selectable agents only. */
 function AgentNewConversationButton({
   agent,
   onCreate,
@@ -42,14 +44,16 @@ function AgentNewConversationButton({
   agent: AgentStanding
   onCreate: (profileId: string) => void
 }) {
+  const { t } = useWebLocale()
   if (!agent.canCreateConversation) return null
+  const newTopicLabel = t('shell.agents.newTopicUnder', { label: agent.label })
   return (
-    <Tooltip content={`Start a new topic under ${agent.label}`} side="right">
+    <Tooltip content={newTopicLabel} side="right">
       <button
         type="button"
         className="btn btn-ghost btn-icon-xs agent-new-conv-btn"
-        title={`Start a new topic under ${agent.label}`}
-        aria-label={`Start a new topic under ${agent.label}`}
+        title={newTopicLabel}
+        aria-label={newTopicLabel}
         onClick={(e) => {
           e.stopPropagation()
           onCreate(agent.profileId)
@@ -62,9 +66,13 @@ function AgentNewConversationButton({
 }
 
 /**
- * Agent 站位行（一级，按主/分屏及筛选状态自动展开，无折叠钮）：
- * - 普通模式：待命亮父行、进会话仅亮子行（父行呈归属分支弱态），点击名称进入待命态；
- * - 批量模式：点击行或名称切换子列表展开，展开后渲染扁平会话清单供勾选删除。
+ * Agent standing row (level one, auto-expands by main/split target and filter
+ * state, no fold button):
+ * - Normal mode: standby lights the parent row, entering a conversation lights
+ *   only the child row (the parent shows a weak branch-affinity state),
+ *   clicking the name enters standby;
+ * - Batch mode: clicking the row or name toggles the sub-list expansion, which
+ *   renders a flat conversation list for checkbox deletion.
  */
 function AgentStandingItem({
   agent,
@@ -91,8 +99,10 @@ function AgentStandingItem({
   selectedIds?: Set<number>
   onToggleSelect?: (id: number) => void
 }) {
-  // 批量模式下：只要该 Agent 有会话（length > 0），就展开子列表展示会话行供勾选删除；
-  // 机器人的主站位行永远代表角色 Profile，绝不提供勾选框，避免用户误勾选机器人。
+  // Batch mode: whenever the agent has conversations (length > 0), expand the
+  // sub-list to show conversation rows for checkbox deletion; the bot's main
+  // standing row always represents the profile itself and never carries a
+  // checkbox, so users cannot accidentally select a bot.
   const hasSubList = agent.conversations.length > 0
   const [expanded, setExpanded] = useState(true)
   const [showAll, setShowAll] = useState(false)
@@ -102,15 +112,19 @@ function AgentStandingItem({
     const p = getConversationPresence(store, c.id)
     return p.inPrimary || p.inSplit
   })
-  // 归属分支弱态：子会话在主/分屏打开且父站位未进入待命态时仅提亮加粗文字，不抢子行高亮
+  // Weak branch-affinity state: when a child conversation is open in the
+  // main/split view and the parent standing is not in standby, only brighten
+  // the bold text — never steal the child row's highlight.
   const isBranchActive = !standbyPresence.active && !standbyPresence.splitSecondary && hasActiveChild
-  // 折叠态站位指示器：聚合名下全部会话（基础状态优先级 + 后台在途），
-  // 不只看 primaryConversation——后台活跃的非 primary 会话同样透出。
+  // Collapsed standing indicator: aggregates every conversation under the agent
+  // (base-status priority + background in-flight), not just primaryConversation —
+  // non-primary conversations with active background work surface too.
   const standingIndicator = useMemo(
     () => resolveStandingStatusIndicator(agent.conversations, background),
     [agent.conversations, background],
   )
-  // 无折叠钮：展开由筛选态或主/分屏当前目标推导（支持分屏双智能体协同展开）。
+  // No fold button: expansion derives from the filter state or the current
+  // main/split targets (supporting collaborative expansion of two split agents).
   const isOpen = batchMode
     ? hasSubList && expanded
     : hasSubList && (searching || activeProfileIds.has(agent.profileId))
@@ -120,8 +134,10 @@ function AgentStandingItem({
       if (hasSubList) setExpanded((v) => !v)
       return
     }
-    // 名称是稳定待命入口：人类可选 Agent 一律进入待命态（首次发送才落库），
-    // 不自动跳进旧会话；仅不可新建的受管 singleton 打开其真实会话。
+    // The name is the stable standby entry: human-selectable agents always
+    // enter standby (the conversation is only persisted on first send) and
+    // never auto-jump into an old conversation; only managed singletons
+    // without create rights open their real conversation.
     if (agent.canCreateConversation) {
       openAgentStandby(store, agent.profileId, onNavigate)
       return
@@ -193,7 +209,8 @@ function AgentStandingItem({
   )
 }
 
-/** Agent 名下扁平会话清单：默认前 5 条，超出可展开；搜索或分屏在场会话绝不被折叠隐藏。 */
+/** Flat conversation list under an agent: first 5 by default, expandable
+ * beyond that; searched or split-present conversations are never hidden by folding. */
 function AgentConversationsList({
   agent,
   store,
@@ -217,10 +234,13 @@ function AgentConversationsList({
   selectedIds?: Set<number>
   onToggleSelect?: (id: number) => void
 }) {
+  const { t } = useWebLocale()
   const convs = agent.conversations
   const primaryActiveId = convs.find((c) => getConversationPresence(store, c.id).active)?.id ?? null
-  // 折叠预览切片（纯函数）：默认前 5 条，但激活 / 分屏 / working / blocked / 后台在途 /
-  // 搜索命中会话绝不因折叠丢失；归档会话已在 buildAgentStandings 上游过滤，无从进入。
+  // Collapsed-preview slice (pure function): first 5 by default, but active /
+  // split / working / blocked / background in-flight / search-hit conversations
+  // never disappear behind the fold; archived conversations were already
+  // filtered upstream by buildAgentStandings and cannot appear here.
   const { visible, hiddenCount } = resolveAgentSubListPreview({
     conversations: convs,
     showAll: showAll || searching,
@@ -249,7 +269,7 @@ function AgentConversationsList({
           className="btn btn-ghost btn-sm agent-list-toggle"
           onClick={onToggleShowAll}
         >
-          Show more ({hidden} more)
+          {t('shell.agents.showMore', { count: hidden })}
         </button>
       )}
       {hidden === 0 && !searching && showAll && convs.length > AGENT_SUB_LIST_PREVIEW && (
@@ -258,15 +278,16 @@ function AgentConversationsList({
           className="btn btn-ghost btn-sm agent-list-toggle"
           onClick={onToggleShowAll}
         >
-          Collapse
+          {t('common.collapse')}
         </button>
       )}
     </div>
   )
 }
 
-/** Agent 名下单个历史会话行（批量模式缩进渲染 + 勾选）。
- * 状态灯前置行首固定灯位；分屏入口收敛到会话详情顶栏，会话行不携带分屏按钮。 */
+/** One historical conversation row under an agent (indented rendering + checkbox in batch mode).
+ * The status light sits in the fixed leading slot; the split entry converges
+ * into the conversation detail top bar — conversation rows carry no split button. */
 function AgentConversationRow({
   conv,
   store,
@@ -282,6 +303,7 @@ function AgentConversationRow({
   selected?: boolean
   onToggleSelect?: (id: number) => void
 }) {
+  const { t } = useWebLocale()
   const presence = getConversationPresence(store, conv.id)
   const deletable = isConversationDeletable(conv)
 
@@ -300,7 +322,7 @@ function AgentConversationRow({
             className="sidebar-batch-checkbox"
             checked={Boolean(selected)}
             disabled={!deletable}
-            title={deletable ? undefined : 'Protected conversations cannot be deleted'}
+            title={deletable ? undefined : t('shell.agents.protectedTitle')}
             onChange={() => {
               if (deletable) onToggleSelect?.(conv.id)
             }}
@@ -323,7 +345,7 @@ function AgentConversationRow({
         <span className="nav-status-slot">
           <ConversationStatusDot conv={conv} background={background} />
         </span>
-        <span className="nav-item-label">{conv.title || `Conversation #${conv.id}`}</span>
+        <span className="nav-item-label">{conv.title || t('shell.conversationFallback', { id: conv.id })}</span>
       </button>
       <span className="nav-item-meta">
         <span className="tabular-nums">#{conv.id}</span>
@@ -340,9 +362,10 @@ function AgentConversationRow({
 }
 
 /**
- * 「智能体」分组（单展开，无折叠钮）：
- * - 全部可见智能体稳定平铺（仅当前目标所属的那 1 个展开显示话题子列表）；
- * - 批量管理时展开扁平会话清单供勾选删除。
+ * The "Agents" group (single expansion, no fold button):
+ * - All visible agents tile stably (only the one owning the current target
+ *   expands to show its topic sub-list);
+ * - Batch management expands the flat conversation list for checkbox deletion.
  */
 export function AgentStandingsGroup({
   store,
@@ -353,6 +376,7 @@ export function AgentStandingsGroup({
   background: ConversationBackgroundIndex
   onNavigate?: () => void
 }) {
+  const { t } = useWebLocale()
   const [batchMode, setBatchMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [deleting, setDeleting] = useState(false)
@@ -421,9 +445,11 @@ export function AgentStandingsGroup({
   }
 
   /**
-   * 批量归档：逐会话 PATCH 宿主归档 tag + allSettled 汇总（部分失败不掩盖
-   * 成功项）；归档不删除会话，当前目标仍有效，仅依赖 conversation.upsert
-   * 更新列表，与删除的 SSE 回退管道不同，此处不做任何导航。
+   * Batch archive: per-conversation PATCH of the host archive tag + allSettled
+   * aggregation (partial failures never mask successes); archiving does not
+   * delete the conversation and the current target stays valid — the list
+   * updates purely via conversation.upsert. Unlike deletion's SSE fallback
+   * pipeline, no navigation happens here.
    */
   const executeBatchArchive = async () => {
     if (selectedIds.size === 0 || archiving || deleting) return
@@ -433,7 +459,7 @@ export function AgentStandingsGroup({
         .flatMap((agent) => agent.conversations)
         .filter((conversation) => selectedIds.has(conversation.id))
       const outcome = await patchConversationsArchived(convs, true)
-      store.pushNotice(archiveBatchNotice(true, outcome))
+      store.pushNotice(archiveBatchNotice(true, outcome, t))
       setSelectedIds(new Set())
       setBatchMode(false)
     } finally {
@@ -456,27 +482,29 @@ export function AgentStandingsGroup({
         store.pushNotice({
           type: 'notification',
           level: 'info',
-          title: 'Bulk delete completed',
-          body: `Deleted ${fulfilled} conversations`,
+          title: t('shell.agents.bulkDeleteCompleted'),
+          body: t('shell.agents.bulkDeleteCompletedBody', { count: fulfilled }),
         })
       } else if (fulfilled === 0) {
         store.pushNotice({
           type: 'notification',
           level: 'error',
-          title: 'Bulk delete failed',
-          body: `Failed to delete ${rejected} conversations`,
+          title: t('shell.agents.bulkDeleteFailed'),
+          body: t('shell.agents.bulkDeleteFailedBody', { count: rejected }),
         })
       } else {
         store.pushNotice({
           type: 'notification',
           level: 'warning',
-          title: 'Bulk delete partially failed',
-          body: `Deleted ${fulfilled}, failed ${rejected}`,
+          title: t('shell.agents.bulkDeletePartial'),
+          body: t('shell.agents.bulkDeletePartialBody', { fulfilled, rejected }),
         })
       }
 
-      // 导航不在此处做：仅依赖每个成功删除的 conversation.deleted SSE 事件，
-      // 由 Provider 按当前目标条件回退（避免旧快照/selectedIds 二次跳转误伤失败项与新导航）。
+      // No navigation here: rely solely on each successful deletion's
+      // conversation.deleted SSE event; the Provider conditionally falls back
+      // by current targets (avoiding stale-snapshot/selectedIds double jumps
+      // that would hurt failed items and fresh navigations).
 
       setSelectedIds(new Set())
       setBatchMode(false)
@@ -484,7 +512,7 @@ export function AgentStandingsGroup({
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: 'Bulk delete error',
+        title: t('shell.agents.bulkDeleteError'),
         body: err instanceof Error ? err.message : String(err),
       })
     } finally {
@@ -495,17 +523,17 @@ export function AgentStandingsGroup({
   return (
     <div className="sidebar-group agent-standing-group">
       <div className="sidebar-group-header">
-        <span>Agents</span>
+        <span>{t('shell.agents.groupTitle')}</span>
         <div className="sidebar-group-header-actions">
-          <Tooltip content={filterOpen ? 'Collapse filters' : 'Filter agents and topics'} side="top">
+          <Tooltip content={filterOpen ? t('shell.agents.collapseFilters') : t('shell.agents.filter')} side="top">
             <button
               type="button"
               className="btn btn-ghost btn-icon-xs"
               style={{
                 color: filterOpen ? 'var(--accent)' : undefined,
               }}
-              title={filterOpen ? 'Collapse filters' : 'Filter agents and topics'}
-              aria-label="Filter agents and topics"
+              title={filterOpen ? t('shell.agents.collapseFilters') : t('shell.agents.filter')}
+              aria-label={t('shell.agents.filter')}
               aria-pressed={filterOpen}
               onClick={() => {
                 if (filterOpen) {
@@ -519,15 +547,15 @@ export function AgentStandingsGroup({
               <HelmIcon name="list-filter" size={12} />
             </button>
           </Tooltip>
-          <Tooltip content={batchMode ? 'Exit bulk management' : 'Manage conversations in bulk'} side="top">
+          <Tooltip content={batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')} side="top">
             <button
               type="button"
               className="btn btn-ghost btn-icon-xs"
               style={{
                 color: batchMode ? 'var(--accent)' : undefined,
               }}
-              title={batchMode ? 'Exit bulk management' : 'Manage conversations in bulk'}
-              aria-label={batchMode ? 'Exit bulk management' : 'Manage conversations in bulk'}
+              title={batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')}
+              aria-label={batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')}
               onClick={() => {
                 setBatchMode((v) => {
                   if (v) {
@@ -550,8 +578,8 @@ export function AgentStandingsGroup({
             type="text"
             className="sidebar-search-input"
             value={search}
-            placeholder="Filter agents or topics..."
-            aria-label="Filter agents or topics"
+            placeholder={t('shell.agents.filterPlaceholder')}
+            aria-label={t('shell.agents.filter')}
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Escape') {
@@ -565,8 +593,8 @@ export function AgentStandingsGroup({
             <button
               type="button"
               className="btn btn-ghost btn-icon-xs sidebar-search-clear"
-              title="Clear filter"
-              aria-label="Clear filter"
+              title={t('shell.agents.clearFilter')}
+              aria-label={t('shell.agents.clearFilter')}
               onClick={() => {
                 setSearch('')
                 searchInputRef.current?.focus()
@@ -581,7 +609,7 @@ export function AgentStandingsGroup({
         <div className="sidebar-batch-bar">
           <div className="sidebar-batch-bar-header">
             <span style={{ fontWeight: 500, color: 'var(--fg-secondary)' }}>
-              {selectedIds.size} selected
+              {t('shell.batch.selected', { count: selectedIds.size })}
             </span>
             <button
               type="button"
@@ -590,9 +618,9 @@ export function AgentStandingsGroup({
                 setBatchMode(false)
                 setSelectedIds(new Set())
               }}
-              title="Exit bulk management"
+              title={t('shell.agents.exitBulk')}
             >
-              Exit
+              {t('shell.batch.exit')}
             </button>
           </div>
           <div className="sidebar-batch-bar-actions">
@@ -608,7 +636,7 @@ export function AgentStandingsGroup({
                 }
               }}
             >
-              {isAllSelected ? 'Clear' : 'Select all'}
+              {isAllSelected ? t('shell.batch.clear') : t('shell.batch.selectAll')}
             </button>
             <button
               type="button"
@@ -616,7 +644,7 @@ export function AgentStandingsGroup({
               disabled={selectedIds.size === 0 || deleting || archiving}
               onClick={() => void executeBatchArchive()}
             >
-              {archiving ? 'Archiving...' : `Archive (${selectedIds.size})`}
+              {archiving ? t('shell.agents.archiving') : t('shell.agents.archiveCount', { count: selectedIds.size })}
             </button>
             <button
               type="button"
@@ -624,13 +652,13 @@ export function AgentStandingsGroup({
               disabled={selectedIds.size === 0 || deleting || archiving}
               onClick={() => setBatchDeleteConfirmOpen(true)}
             >
-              {deleting ? 'Deleting...' : `Delete (${selectedIds.size})`}
+              {deleting ? t('shell.agents.deleting') : t('shell.agents.deleteCount', { count: selectedIds.size })}
             </button>
           </div>
         </div>
       )}
       {visibleStandings.length === 0 ? (
-        <div className="sidebar-search-empty">No matching agents or topics</div>
+        <div className="sidebar-search-empty">{t('shell.agents.noMatch')}</div>
       ) : (
         visibleStandings.map((agent) => (
           <AgentStandingItem
@@ -652,9 +680,9 @@ export function AgentStandingsGroup({
       <ConfirmDialog
         open={batchDeleteConfirmOpen}
         onOpenChange={setBatchDeleteConfirmOpen}
-        title={`Delete ${selectedIds.size} selected conversations?`}
-        description="This action cannot be undone."
-        confirmText="Delete conversation"
+        title={t('shell.agents.deleteConfirmTitle', { count: selectedIds.size })}
+        description={t('shell.agents.deleteConfirmDesc')}
+        confirmText={t('shell.agents.deleteConfirmButton')}
         danger
         onConfirm={() => {
           void executeBatchDelete()

@@ -1,18 +1,23 @@
 /**
- * 侧栏「已归档」分组（Web 宿主策略，非插件 sidebar.section）：
+ * Sidebar "Archived" group (Web host policy, not a plugin sidebar.section):
  *
- * - 收敛展示带宿主归档 tag 的人类自有根会话（暴露规则与 Agent 站位一致：
- *   有父链 / bot-helm 托管 / 插件 section 接管的会话绝不进入）；
- * - 默认折叠；展开后按归属智能体 + 标题辨识，单行恢复走行内「更多操作」菜单
- *   （菜单对已归档会话自动提供「恢复会话」项），也可进入批量恢复；
- * - 恢复经现有会话 PATCH（archive-ops），失败显式通知，不静默吞错；
- * - 分组为空时整体不渲染，零视觉残留。
+ * - Shows only human-owned root conversations carrying the host archive tag
+ *   (same exposure rule as agent standings: conversations with a parent chain,
+ *   bot/helm ownership, or taken over by a plugin section never enter);
+ * - Collapsed by default; once expanded, rows are identified by owning agent +
+ *   title; single-row restore goes through the inline "more actions" menu
+ *   (which automatically offers restore for archived conversations), or use
+ *   bulk restore;
+ * - Restore uses the existing conversation PATCH (archive-ops); failures
+ *   produce explicit notices and are never silently swallowed;
+ * - An empty group renders nothing at all — zero visual residue.
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Checkbox, HelmIcon } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import type { HelmStoreValue } from '../lib/types.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import {
@@ -26,7 +31,7 @@ import { archiveBatchNotice, patchConversationsArchived } from './archive-ops.js
 import type { ConversationBackgroundIndex } from './background-activity-model.js'
 import { ConversationStatusDot, SidebarPaneTag } from './SidebarPrimitives.js'
 
-/** 已归档分组的单个会话行：状态灯前置行首 + 标题 + 归属智能体徽标 + 动作区菜单。 */
+/** One conversation row in the archived group: leading status light + title + owning-agent badge + actions menu. */
 function ArchivedConversationRow({
   item,
   store,
@@ -44,6 +49,7 @@ function ArchivedConversationRow({
   selected?: boolean
   onToggleSelect?: (id: number) => void
 }): ReactNode {
+  const { t } = useWebLocale()
   const conv = item.conv
   const presence = getConversationPresence(store, conv.id)
 
@@ -80,13 +86,13 @@ function ArchivedConversationRow({
         <span className="nav-status-slot">
           <ConversationStatusDot conv={conv} background={background.get(conv.id)} />
         </span>
-        <span className="nav-item-label">{conv.title || `Conversation #${conv.id}`}</span>
+        <span className="nav-item-label">{conv.title || t('shell.conversationFallback', { id: conv.id })}</span>
       </button>
       <span className="nav-item-meta">
         <SidebarPaneTag paneTag={presence.paneTag} />
         <span
           className="badge badge-neutral archived-profile-label"
-          title={`Owning agent: ${item.profileLabel}`}
+          title={t('shell.archived.owningAgent', { label: item.profileLabel })}
         >
           {item.profileLabel}
         </span>
@@ -99,7 +105,7 @@ function ArchivedConversationRow({
   )
 }
 
-/** 「已归档」分组：默认折叠，展开后逐行恢复或批量恢复。 */
+/** The "Archived" group: collapsed by default; expanded rows restore individually or in bulk. */
 export function ArchivedConversationsGroup({
   background,
   onNavigate,
@@ -108,6 +114,7 @@ export function ArchivedConversationsGroup({
   onNavigate?: () => void
 }): ReactNode {
   const store = useHelmStore()
+  const { t } = useWebLocale()
   const items = useMemo(
     () =>
       buildArchivedConversationList({
@@ -141,8 +148,10 @@ export function ArchivedConversationsGroup({
 
   const isAllSelected = items.length > 0 && items.every((item) => selectedIds.has(item.conv.id))
 
-  /** 批量恢复：逐会话 PATCH + allSettled 汇总（部分失败不掩盖成功项）；
-   *  单行恢复走行内「更多操作」菜单（ConversationRowActionsMenu 对已归档会话自动提供恢复项）。 */
+  /** Bulk restore: per-conversation PATCH + allSettled aggregation (partial
+   *  failures never mask successes); single-row restore goes through the inline
+   *  "more actions" menu (ConversationRowActionsMenu offers restore for
+   *  archived conversations automatically). */
   const executeBatchRestore = async () => {
     if (selectedIds.size === 0 || restoring) return
     setRestoring(true)
@@ -151,7 +160,7 @@ export function ArchivedConversationsGroup({
         .filter((item) => selectedIds.has(item.conv.id))
         .map((item) => item.conv)
       const outcome = await patchConversationsArchived(convs, false)
-      store.pushNotice(archiveBatchNotice(false, outcome))
+      store.pushNotice(archiveBatchNotice(false, outcome, t))
       setSelectedIds(new Set())
       setBatchMode(false)
     } finally {
@@ -167,13 +176,13 @@ export function ArchivedConversationsGroup({
         <button
           type="button"
           className="sidebar-group-header-toggle"
-          title={open ? 'Collapse archived group' : 'Expand archived group'}
+          title={open ? t('shell.archived.collapseGroup') : t('shell.archived.expandGroup')}
           aria-expanded={open}
           onClick={() => setOpen((v) => !v)}
         >
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
             <HelmIcon name="archive" size={12} />
-            <span className="nav-item-label">Archived</span>
+            <span className="nav-item-label">{t('shell.archived.groupTitle')}</span>
           </span>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             <span className="badge badge-neutral tabular-nums">{items.length}</span>
@@ -181,13 +190,13 @@ export function ArchivedConversationsGroup({
           </span>
         </button>
         {open && (
-          <Tooltip content={batchMode ? 'Exit bulk restore' : 'Bulk restore archived conversations'} side="top">
+          <Tooltip content={batchMode ? t('shell.archived.exitBulkRestore') : t('shell.archived.bulkRestore')} side="top">
             <button
               type="button"
               className="btn btn-ghost btn-icon-xs"
               style={{ color: batchMode ? 'var(--accent)' : undefined }}
-              title={batchMode ? 'Exit bulk restore' : 'Bulk restore archived conversations'}
-              aria-label={batchMode ? 'Exit bulk restore' : 'Bulk restore archived conversations'}
+              title={batchMode ? t('shell.archived.exitBulkRestore') : t('shell.archived.bulkRestore')}
+              aria-label={batchMode ? t('shell.archived.exitBulkRestore') : t('shell.archived.bulkRestore')}
               onClick={() => {
                 setBatchMode((v) => {
                   if (v) setSelectedIds(new Set())
@@ -204,7 +213,7 @@ export function ArchivedConversationsGroup({
         <div className="sidebar-batch-bar">
           <div className="sidebar-batch-bar-header">
             <span style={{ fontWeight: 500, color: 'var(--fg-secondary)' }}>
-              {selectedIds.size} selected
+              {t('shell.batch.selected', { count: selectedIds.size })}
             </span>
             <button
               type="button"
@@ -213,9 +222,9 @@ export function ArchivedConversationsGroup({
                 setBatchMode(false)
                 setSelectedIds(new Set())
               }}
-              title="Exit bulk restore"
+              title={t('shell.archived.exitBulkRestore')}
             >
-              Exit
+              {t('shell.batch.exit')}
             </button>
           </div>
           <div className="sidebar-batch-bar-actions">
@@ -227,7 +236,7 @@ export function ArchivedConversationsGroup({
                 setSelectedIds(isAllSelected ? new Set() : new Set(items.map((item) => item.conv.id)))
               }}
             >
-              {isAllSelected ? 'Clear' : 'Select all'}
+              {isAllSelected ? t('shell.batch.clear') : t('shell.batch.selectAll')}
             </button>
             <button
               type="button"
@@ -235,7 +244,7 @@ export function ArchivedConversationsGroup({
               disabled={selectedIds.size === 0 || restoring}
               onClick={() => void executeBatchRestore()}
             >
-              {restoring ? 'Restoring...' : `Restore (${selectedIds.size})`}
+              {restoring ? t('shell.archived.restoring') : t('shell.archived.restoreCount', { count: selectedIds.size })}
             </button>
           </div>
         </div>

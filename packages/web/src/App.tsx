@@ -17,6 +17,7 @@ import { ConversationPane } from './conversation/ConversationPane.js'
 import { AgentStandbyPane } from './conversation/AgentStandbyPane.js'
 import { standbyDraftKey } from './conversation/standby-model.js'
 import { ConversationDrawer } from './conversation/ConversationDrawer.js'
+import { useWebLocale } from './i18n/use-web-locale.js'
 import { HelmStoreProvider } from './lib/HelmStoreProvider.js'
 import { useHelmStore } from './lib/store-context.js'
 import {
@@ -147,24 +148,13 @@ const WorkbenchDrawer = lazyWithRetry(
 
 function HelmShellInner() {
   const store = useHelmStore()
+  const { t } = useWebLocale()
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [showConnectionBanner, setShowConnectionBanner] = useState(false)
-  const [bootLanding] = useState<{ needsHomeLanding: boolean; initialLocation: WorkspaceLocationState | null }>(() => {
-    if (typeof window === 'undefined') {
-      return { needsHomeLanding: false, initialLocation: null }
-    }
-    const rawHash = window.location.hash
-    const parsed = parseLocationHash(rawHash)
-    return {
-      needsHomeLanding: !hashHasPrimaryTarget(rawHash) && parsed.activeModal === null,
-      initialLocation: upgradeLegacyLocationState(parsed),
-    }
-  })
   const [landingSettled, setLandingSettled] = useState(!bootLanding.needsHomeLanding)
 
-  // 后台浏览器通知：全局装配一次（内部自行门控偏好/认证状态）。
+  // Background browser notifications: mounted once globally (gates itself on preference/auth state).
   useQuietNotifier()
-  // 版本感知与自动刷新：全局装配一次（生产入口识别不到时内部休眠）。
+  // Version awareness and auto refresh: mounted once globally (sleeps when no production entry is detected).
   const versionWatch = useVersionWatcher()
   const setActiveModal = store.setActiveModal
   const setFocusedPanel = store.setFocusedPanel
@@ -207,7 +197,7 @@ function HelmShellInner() {
   if (!store.authReady) {
     return (
       <div className="app-loading-screen" style={{ height: '100dvh' }}>
-        Connecting to Helm kernel...
+        {t('shell.loading.connecting')}
       </div>
     )
   }
@@ -215,9 +205,9 @@ function HelmShellInner() {
   if (store.authError) {
     return (
       <div className="connection-screen" role="alert">
-        <strong>Cannot connect to Helm right now</strong>
+        <strong>{t('shell.connection.cannotConnect')}</strong>
         <p>{store.authError}</p>
-        <button className="btn btn-primary" onClick={() => void store.checkAuth()}>Reconnect</button>
+        <button className="btn btn-primary" onClick={() => void store.checkAuth()}>{t('shell.connection.reconnect')}</button>
       </div>
     )
   }
@@ -266,7 +256,7 @@ function HelmShellInner() {
         <button
           type="button"
           className="btn btn-ghost mobile-nav-toggle"
-          aria-label="Toggle navigation bar"
+          aria-label={t('shell.nav.toggleNav')}
           onClick={() => setSidebarOpen((open) => !open)}
         >
           <HelmIcon name="menu" />
@@ -275,7 +265,7 @@ function HelmShellInner() {
           <button
             type="button"
             className="sidebar-backdrop"
-            aria-label="Close navigation bar"
+            aria-label={t('shell.nav.closeNav')}
             onClick={() => setSidebarOpen(false)}
           />
         )}
@@ -284,18 +274,20 @@ function HelmShellInner() {
         <main className="helm-main-stage">
           {showConnectionBanner && !store.sseConnected && (
             <div className="connection-banner" role="status">
-              <span>{store.connectionError ?? 'Syncing conversations…'}</span>
-              <span className="connection-banner-hint">The page refreshes automatically once the connection recovers.</span>
+              <span>{store.connectionError ?? t('shell.connection.syncing')}</span>
+              <span className="connection-banner-hint">{t('shell.connection.autoRefresh')}</span>
             </div>
           )}
           {versionWatch.updateAvailable && (
             <div className="version-banner" role="status">
               <HelmIcon name="refresh-cw" size={13} />
               <span className="version-banner-text">
-                {`A new Helm version is available${versionWatch.deferReason !== null ? ` — ${versionDeferHint(versionWatch.deferReason)}` : ''}`}
+                {versionWatch.deferReason !== null
+                  ? t('shell.version.bannerWithHint', { hint: versionDeferHint(versionWatch.deferReason, t) })
+                  : t('shell.version.banner')}
               </span>
               <button type="button" className="btn btn-sm" onClick={versionWatch.reloadNow}>
-                Refresh now
+                {t('shell.version.refreshNow')}
               </button>
             </div>
           )}

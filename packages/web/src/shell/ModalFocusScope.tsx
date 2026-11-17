@@ -1,9 +1,9 @@
 /**
- * 模态焦点管辖范围：
- * 由于 Radix UI Dialog 原生自带 WAI-ARIA FocusTrap、Esc 监听与 DismissableLayer，
- * 简化 ModalFocusScope 为轻量协同组件，避免与 Radix 原生焦点管理与键盘事件产生冲突。
+ * Modal focus scope:
+ * Radix UI Dialogs already ship WAI-ARIA FocusTrap, Esc handling and
+ * DismissableLayer, so ModalFocusScope stays a lightweight coordination stub to
+ * avoid fighting Radix's native focus management and keyboard events.
  */
 export function ModalFocusScope({ active: _active, onClose: _onClose }: { active: boolean; onClose(): void }) {
   return null
 }
-
