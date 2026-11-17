@@ -427,10 +427,12 @@ class MemorySessionDocStore {
 class EventBackend {
   readonly listeners = new Map<string, Set<(payload: unknown) => unknown>>()
   readonly deletedConversations = new Set<number>()
+  readonly sessionDocEvents: string[] = []
   readonly base: PluginHostBackend
   constructor() {
     const listeners = this.listeners
     const deleted = this.deletedConversations
+    const sessionDocEvents = this.sessionDocEvents
     this.base = {
       ...createPluginHostBackendFixture(),
       onEvent(type: string, listener: (payload: unknown) => unknown): () => void {
@@ -442,8 +444,22 @@ class EventBackend {
         set.add(listener)
         return () => set!.delete(listener)
       },
-      emitEvent(): void {
-        // plugin.changed / 会话文档事件广播与测试无关：空实现（不进任何事件流）。
+      emitEvent(type: string, payload: unknown): void {
+        if (type === 'plugin.session_doc.updated' && payload !== null && typeof payload === 'object') {
+          const wrapper = payload as {
+            doc?: { pluginId?: unknown; name?: unknown; conversationId?: unknown; deleted?: unknown }
+          }
+          const event = wrapper.doc
+          if (
+            event !== undefined &&
+            event.deleted !== true &&
+            typeof event.pluginId === 'string' &&
+            typeof event.name === 'string' &&
+            typeof event.conversationId === 'number'
+          ) {
+            sessionDocEvents.push(`${event.pluginId}:${event.name}:${event.conversationId}`)
+          }
+        }
       },
       getConversation(id: number): ConversationSummary {
         if (deleted.has(id)) throw new HelmError('not_found', `会话不存在：${id}`, 404)
@@ -545,15 +561,17 @@ async function openPlugin(options?: { now?: () => number }): Promise<Harness> {
     host,
     backend,
     sessionDocs,
-    docOf: (conversationId) => {
-      const raw = sessionDocs.get(TOKEN_SPEED_PLUGIN_ID, TOKEN_SPEED_DOC, conversationId)
-      return raw === undefined ? null : (JSON.parse(raw) as TokenSpeedStatus)
-    },
+    docOf: (conversationId) =>
+      (host.getPublicSessionDoc(TOKEN_SPEED_PLUGIN_ID, TOKEN_SPEED_DOC, conversationId)?.value as TokenSpeedStatus | null | undefined) ?? null,
     writesOf: (conversationId) =>
-      sessionDocs.writes.filter((key) => key === `${TOKEN_SPEED_PLUGIN_ID}:${TOKEN_SPEED_DOC}:${conversationId}`).length,
+      backend.sessionDocEvents.filter((key) => key === `${TOKEN_SPEED_PLUGIN_ID}:${TOKEN_SPEED_DOC}:${conversationId}`).length,
     close: async () => {
-      await host.dispose()
-      rmSync(dataDir, { recursive: true, force: true })
+      try {
+        assert.equal(sessionDocs.writes.length, 0, 'durable: false 绝不写持久化会话文档存储')
+      } finally {
+        await host.dispose()
+        rmSync(dataDir, { recursive: true, force: true })
+      }
     },
   }
 }
@@ -672,38 +690,49 @@ test('插件装配：终态对账——entry usage 到达 + turn_settled 结算�
   }
 })
 
-test('插件装配：会话删除彻底清理（内存态清理；会话行已删时文档删除按 not_found 容忍）', { timeout: 60_000 }, async () => {
-  const { backend, sessionDocs, close } = await openPlugin()
+test('插件装配：会话删除彻底清理（瞬态内存态清理；会话行已删时文档删除按 not_found 容忍）', { timeout: 60_000 }, async () => {
+  const { backend, docOf, writesOf, sessionDocs, close } = await openPlugin()
   try {
     const CONV = 3
     await backend.dispatch('conversation.live', liveEvent(CONV, 0, { taskId: 1, attempt: 1 }))
     await backend.dispatch('conversation.live', liveEvent(CONV, 100, { taskId: 1, attempt: 1, message: message([text('a'.repeat(400))]) }))
-    assert.ok(sessionDocs.get('builtin:token-speed', TOKEN_SPEED_DOC, CONV) !== undefined)
-    // 会话行先于事件消失（真实时序）：sessionDoc.delete 被 404 拒绝但不抛出。
+    assert.ok(docOf(CONV) !== null)
+    assert.equal(sessionDocs.writes.length, 0)
+    // 会话行先于事件消失（真实时序）：sessionDoc.delete 容忍 not_found，同时 PluginHost 释放内存条目。
     backend.deletedConversations.add(CONV)
     await backend.dispatch('conversation.deleted', { type: 'conversation.deleted', conversationId: CONV })
+    assert.throws(
+      () => docOf(CONV),
+      (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+      '已删会话读取公共会话文档显式 404',
+    )
     // 删除后事件不再驱动任何写入（状态机已清理；会话也不存在了）。
-    const writesBefore = sessionDocs.writes.length
+    const writesBefore = writesOf(CONV)
     await backend.dispatch('conversation.live', liveEvent(CONV, 200, { taskId: 1, attempt: 1, message: message([text('b'.repeat(400))]) }))
-    assert.equal(sessionDocs.writes.length, writesBefore, '删除后无残留写入')
+    assert.equal(writesOf(CONV), writesBefore, '删除后无残留写入')
   } finally {
     await close()
   }
 })
 
 test('插件装配：UI 插槽注册到 COMPOSER_STATUS_SLOT；停用后监听与写入停止', { timeout: 60_000 }, async () => {
-  const { host, backend, docOf, close } = await openPlugin()
+  const { host, backend, docOf, writesOf, close } = await openPlugin()
   try {
     // 插槽注册：UI registry 的插件贡献包含目标槽位。
     const registry = (host as unknown as { uiRegistry: { getUiByPlugin(id: string): Array<{ spec: { target?: string; id?: string } }> } }).uiRegistry
     const ui = registry.getUiByPlugin(TOKEN_SPEED_PLUGIN_ID)
     const slot = ui.find((item) => item.spec.target === COMPOSER_STATUS_SLOT)
     assert.ok(slot, '必须向 COMPOSER_STATUS_SLOT 注册贡献')
-    // 停用：监听解除，事件不再产生文档写入。
+    // 停用：监听解除，事件不再产生文档写入，公开读取 404。
     await host.disable(TOKEN_SPEED_PLUGIN_ID)
     await backend.dispatch('conversation.live', liveEvent(4, 0, { taskId: 1, attempt: 1 }))
     await backend.dispatch('conversation.live', liveEvent(4, 100, { taskId: 1, attempt: 1, message: message([text('a'.repeat(400))]) }))
-    assert.equal(docOf(4), null, '停用后事件监听解除，无任何写入')
+    assert.equal(writesOf(4), 0, '停用后事件监听解除，无任何写入')
+    assert.throws(
+      () => docOf(4),
+      (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
+      '停用后公共会话文档读取 404',
+    )
   } finally {
     await close()
   }
@@ -783,13 +812,12 @@ test('插件装配：失败 / 中止回合直接清空测量，不冒充正常�
   }
 })
 
-test('插件装配：生命周期——prepare 清上周期 sessionDoc，stop 清内存态，停用重启用无过期实时状态', { timeout: 60_000 }, async () => {
+test('插件装配：生命周期——durable: false 不读写持久化存储，停用立即清空内存态，重启用无过期实时状态', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-token-speed-'))
   const backend = new EventBackend()
   const docs = new MemoryDocStore()
   const sessionDocs = new MemorySessionDocStore()
-  // 预置「上一周期遗留」的持久行：启用周期的 prepare 屏障必须清掉它（宁可
-  // 显示空，绝不把上周期 decoding/tools 态冒充当前实时）。
+  // 预置旧周期持久表遗留行：durable: false 不读写 sessionDocs，绝不读取也不误展示，且零写入持久化存储。
   const stale: TokenSpeedStatus = {
     phase: 'decoding',
     tps: 88.8,
@@ -800,7 +828,7 @@ test('插件装配：生命周期——prepare 清上周期 sessionDoc，stop �
     updatedAt: 1,
   }
   sessionDocs.put(TOKEN_SPEED_PLUGIN_ID, TOKEN_SPEED_DOC, 8, JSON.stringify(stale))
-  sessionDocs.put(TOKEN_SPEED_PLUGIN_ID, TOKEN_SPEED_DOC, 9, JSON.stringify({ ...stale, phase: 'tools' }))
+  const staleWrites = sessionDocs.writes.length
   const host = new PluginHost({
     buildProvider: createPluginBuildProvider(),
     dataDir,
@@ -808,20 +836,28 @@ test('插件装配：生命周期——prepare 清上周期 sessionDoc，stop �
     docs,
     sessionDocs: sessionDocs as never,
   })
+  const readTransient = (conversationId: number) =>
+    (host.getPublicSessionDoc(TOKEN_SPEED_PLUGIN_ID, TOKEN_SPEED_DOC, conversationId)?.value as TokenSpeedStatus | null | undefined) ?? null
   try {
     await host.register(createTokenSpeedPlugin(), { enabled: true })
-    assert.equal(sessionDocs.get(TOKEN_SPEED_PLUGIN_ID, TOKEN_SPEED_DOC, 8), undefined, '注册即启用的 prepare 屏障清掉上周期行')
-    assert.equal(sessionDocs.get(TOKEN_SPEED_PLUGIN_ID, TOKEN_SPEED_DOC, 9), undefined)
-    // 本周期新流量写入实时态。
+    assert.equal(readTransient(8), null, 'durable: false 启动不读取历史持久遗留行')
+    assert.equal(sessionDocs.writes.length, staleWrites, '注册与启用零持久化写入')
+    // 本周期新流量写入内存瞬态文档。
     await backend.dispatch('conversation.live', liveEvent(8, 0, { taskId: 1, attempt: 1 }))
     await backend.dispatch('conversation.live', liveEvent(8, 100, { taskId: 1, attempt: 1, message: message([text('a'.repeat(400))]) }))
-    assert.equal(sessionDocs.get(TOKEN_SPEED_PLUGIN_ID, TOKEN_SPEED_DOC, 8) !== undefined, true, '本周期实时测量已写入')
-    // 停用：stop 清内存态；持久行保留（会话文档承诺跨停用存活），UI 贡献消失。
+    assert.notEqual(readTransient(8), null, '本周期实时测量已写入瞬态内存文档')
+    assert.equal(sessionDocs.writes.length, staleWrites, '实时写入全程零持久化存储写操作')
+    // 停用：stop 清内存态；瞬态 sessionDoc 同步从内存清理，UI 与公开文档均消失。
     await host.disable(TOKEN_SPEED_PLUGIN_ID)
-    assert.notEqual(sessionDocs.get(TOKEN_SPEED_PLUGIN_ID, TOKEN_SPEED_DOC, 8), undefined, '停用不清持久行（清理在下一周期 prepare）')
-    // 重新启用：prepare 清掉上周期的 decoding 态，绝不立即显示成实时。
+    assert.throws(
+      () => readTransient(8),
+      (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
+      '停用后瞬态会话文档立即下线（404）',
+    )
+    assert.equal(sessionDocs.writes.length, staleWrites)
+    // 重新启用：全新空白瞬态文档，无任何上周期残留。
     await host.enable(TOKEN_SPEED_PLUGIN_ID)
-    assert.equal(sessionDocs.get(TOKEN_SPEED_PLUGIN_ID, TOKEN_SPEED_DOC, 8), undefined, '重启用周期 prepare 清理上周期实时态')
+    assert.equal(readTransient(8), null, '重启用后无上周期残留态')
     const registry = (host as unknown as { uiRegistry: { getUiByPlugin(id: string): Array<{ spec: { target?: string; id?: string } }> } }).uiRegistry
     assert.ok(
       registry.getUiByPlugin(TOKEN_SPEED_PLUGIN_ID).some((item) => item.spec.target === COMPOSER_STATUS_SLOT),

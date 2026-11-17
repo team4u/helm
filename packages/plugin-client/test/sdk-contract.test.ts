@@ -522,3 +522,99 @@ test('MarkdownView / CodeBlockView render the host-port injected implementations
   assert.match(html, /data-code="host"/, 'CodeBlockView delegates to the host codeBlock')
   assert.match(html, /data-lang="ts"/)
 })
+
+// ---------------------------------------------------------------------------
+// 6. usePluginConfig contract
+// ---------------------------------------------------------------------------
+
+test('usePluginConfig: returns current plugin publicConfig, falls back to stable empty object when absent, and updates reactively', { timeout: 60_000 }, () => {
+  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
+  const port = makePort(log)
+  port.plugins = [
+    {
+      id: 'p1',
+      name: 'P1',
+      locked: false,
+      enabled: true,
+      hooks: [],
+      actions: [],
+      tools: [],
+      publicConfig: { slidingWindowMs: 1500, mode: 'auto' },
+    },
+    {
+      id: 'p2',
+      name: 'P2',
+      locked: false,
+      enabled: true,
+      hooks: [],
+      actions: [],
+      tools: [],
+    },
+  ]
+
+  const p1Seen: Array<{ slidingWindowMs?: number; mode?: string; apiKey?: string }> = []
+  const p2Seen: Array<Record<string, unknown>> = []
+
+  function P1Probe(): React.ReactNode {
+    const cfg = SDK.usePluginConfig<{ slidingWindowMs?: number; mode?: string; apiKey?: string }>()
+    p1Seen.push(cfg)
+    return e('div', null, `${cfg.slidingWindowMs ?? 'none'}:${cfg.apiKey ?? 'no-secret'}`)
+  }
+
+  function P2Probe(): React.ReactNode {
+    const cfg = SDK.usePluginConfig()
+    p2Seen.push(cfg)
+    return e('div', null, JSON.stringify(cfg))
+  }
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root: Root = createRoot(host)
+  const renderTree = (activePort: SDK.PluginClientHostPort) =>
+    act(() => {
+      root.render(
+        e(SDK.PluginClientHostContext.Provider, { value: activePort },
+          e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(activePort, 'p1', undefined) }, e(P1Probe)),
+          e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(activePort, 'p2', undefined) }, e(P2Probe))),
+      )
+    })
+
+  try {
+    renderTree(port)
+    assert.deepEqual(p1Seen.at(-1), { slidingWindowMs: 1500, mode: 'auto' })
+    assert.equal(p1Seen.at(-1)?.apiKey, undefined)
+    assert.deepEqual(p2Seen.at(-1), {})
+    const firstEmptyRef = p2Seen.at(-1)
+
+    const updatedPort: SDK.PluginClientHostPort = {
+      ...port,
+      plugins: [
+        {
+          ...port.plugins[0]!,
+          publicConfig: { slidingWindowMs: 2500, mode: 'fast' },
+        },
+        port.plugins[1]!,
+      ],
+    }
+    renderTree(updatedPort)
+    assert.deepEqual(p1Seen.at(-1), { slidingWindowMs: 2500, mode: 'fast' })
+    assert.ok(p2Seen.at(-1) === firstEmptyRef, 'absent publicConfig reuses a referentially stable empty object')
+  } finally {
+    act(() => root.unmount())
+    host.remove()
+  }
+})
+
+test('usePluginConfig: throws explicitly when called outside <PluginUiView>', { timeout: 60_000 }, () => {
+  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
+  const port = makePort(log)
+  function OutsideProbe(): React.ReactNode {
+    SDK.usePluginConfig()
+    return e('div', null, 'probe')
+  }
+  assert.throws(
+    () => renderToString(e(SDK.PluginClientHostContext.Provider, { value: port }, e(OutsideProbe))),
+    /usePluginContext/,
+    'usePluginConfig throws outside <PluginUiView>',
+  )
+})

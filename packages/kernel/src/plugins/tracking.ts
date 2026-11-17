@@ -1,12 +1,12 @@
 /**
- * each plugin in-flight task counter:action / tool execute, hook return suspended agent_spawn, self define task.
+ * Per-plugin in-flight task tracking: action/tool execution, pending `agent_spawn` continuations, and host tasks.
  *
- * purpose:disable / unregister encounter any one in-flight task when reject (409 plugin_has_live_tasks),
- * guard against deactivate produce dangling state (execute in handler reference already release register table).
+ * Used to reject `disable` / `unregister` while tasks remain active (`409 plugin_has_live_tasks`),
+ * preventing dangling handlers from referencing torn-down registries.
  */
 
 export class PluginTaskTracker {
-  /** pluginId -> (label -> concurrency counter). */
+  /** `pluginId -> (label -> active count)` */
   private counts = new Map<string, Map<string, number>>();
 
   begin(pluginId: string, label: string): void {
@@ -37,7 +37,7 @@ export class PluginTaskTracker {
     return [...(this.counts.get(pluginId)?.keys() ?? [])];
   }
 
-  /** wrap a async task is subject to trace task. */
+  /** Wraps an async operation as a tracked in-flight task. */
   async withTask<T>(pluginId: string, label: string, fn: () => Promise<T>): Promise<T> {
     this.begin(pluginId, label);
     try {

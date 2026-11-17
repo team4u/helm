@@ -1,49 +1,48 @@
 /**
- * external plugin directory automatically discover and motion state load.
+ * Automatic discovery and dynamic loading of external plugin directories.
  *
- * module split (behavior do not change): manifest parse layer (plugin.json / package.json helm field)
- * see plugin-manifest.ts; start all amount scan and incremental heavy scan public directory access
- * (loadExternalPlugins / rescanExternalPlugins) see scan-visitor.ts;
- * this module keep: entry parse, module import and define boundary validate, define archive one,
- * subject to control hot reload (reload) and source directory locate.
+ * Module layout (behavior unchanged): manifest parsing (plugin.json / package.json `helm` field)
+ * lives in plugin-manifest.ts; startup full scans and incremental rescans
+ * (loadExternalPlugins / rescanExternalPlugins) live in scan-visitor.ts;
+ * this module owns entrypoint resolution, module import & definition boundary validation,
+ * definition normalization, controlled hot reload (`reload`), and source directory lookup.
  *
- * `<dataDir>/plugins/` under mixed two class directory (key background:PluginHost.register will is each
- * registered plugin create `<dataDir>/plugins/<pluginDataDirName(pluginId)>` as its ctx.dataDir):
- * 1. registered plugin pure data directory (such as `builtin%3Aprofile`,`builtin%3Aherdr`;
- *    id in `:` when unify escaping is `%3A`, otherwise Windows will it when into NTFS
- *    hand over replace data stream while cannot create directory, see plugin-dir-name.ts);
- * 2. user put external third way plugin directory (contains plugin.json or convention entry file).
+ * Two kinds of directories coexist under `<dataDir>/plugins/` (note that PluginHost.register creates
+ * `<dataDir>/plugins/<pluginDataDirName(pluginId)>` as `ctx.dataDir` for each registered plugin):
+ * 1. Pure plugin data directories for registered plugins (e.g., `builtin%3Aprofile`, `builtin%3Aherdr`;
+ *    `:` in IDs is uniformly escaped as `%3A` so Windows does not interpret it as an NTFS alternate
+ *    data stream and fail directory creation — see plugin-dir-name.ts);
+ * 2. User-placed external third-party plugin directories (containing plugin.json or a convention entrypoint).
  *
- * decide rule (only recognize plugin entry mark record, never rely directory name guess):
- * - store in `plugin.json` → must be can parse JSON object; by `main`(default back convention
- *   entry probe) parse entry file relative path, strictly validate do not exceeds out plugin directory (guard against path through exceeds,
- *   realpath guarantee real entry do not exceeds root). manifest corrupt / non- object / main illegal /
- *   entry out of bounds / entry missing one rule explicit HelmError, never static default swallow wrong (honest discipline);
- *   plugin.json optional field:`clientRoot`(frontend source directory),`clientDependencies`
- *   (frontend subject to control npm note symbol array, mapping parse = plugin directory),`dependencies`
- *   (plugin between dependency ID array); illegal value explicit reject, never static default ignore.
- * - without `plugin.json` → in order probe `index.ts` / `index.tsx` / `index.mjs` /
- *   `index.js` / `plugin.ts` / `plugin.tsx` / `plugin.mjs` / `plugin.js`;
- *   a all missing → only is ordinary plugin data directory, static default skip.
- * - entry is .ts/.tsx/.mts/.cts when by backend-ts-loader in process inside transpile load
- *   (source code i.e. module URL,import.meta.url points to plugin real source file; each other for .js -> .ts
- *   mapping,Node inside placement / plugin directory npm dependency,@helm/* host the same instance all available).
- * - IO error zone: only ENOENT / ENOTDIR means file missing;EACCES etc. other
- *   IO error explicit throws, never mistakenly judge is pure data directory skip.
+ * Detection rules (only rely on explicit entrypoint markers, never guess from directory names):
+ * - When `plugin.json` exists: must parse as a JSON object; resolves the relative entrypoint from `main`
+ *   (falling back to convention entry probes), strictly bounded inside the plugin directory (guards against
+ *   path traversal, and `realpath` ensures symlinks cannot escape the root). Corrupt manifests, non-objects,
+ *   invalid `main`, out-of-bounds entrypoints, or missing entrypoints throw explicit `HelmError`s rather than
+ *   being silently ignored (honesty invariant). Optional fields on `plugin.json`: `clientRoot` (frontend
+ *   source dir), `clientDependencies` (frontend controlled npm specifier array resolved relative to the
+ *   plugin dir), and `dependencies` (cross-plugin ID array); invalid values are explicitly rejected.
+ * - Without `plugin.json`: probes `index.ts` / `index.tsx` / `index.mjs` / `index.js` / `plugin.ts` /
+ *   `plugin.tsx` / `plugin.mjs` / `plugin.js` in order; if none exist, treats it as an ordinary plugin data
+ *   directory and skips it silently.
+ * - `.ts` / `.tsx` / `.mts` / `.cts` entrypoints are transpiled in-process by `backend-ts-loader` (with
+ *   `import.meta.url` pointing to the real plugin source file; relative `.js -> .ts` imports, node built-ins,
+ *   local `node_modules`, and host `@helm/*` singletons are all available).
+ * - IO errors: only ENOENT / ENOTDIR count as missing files; EACCES and other IO errors throw explicitly
+ *   rather than being mistaken for a pure data directory.
  *
- * security by default:
- * - motion state load via `pathToFileURL` explicit URL import;
- * - external plugin id forbidden `builtin:` prefix (do not smoke fill inside placement), forbidden and registered plugin heavy name;
- * - `locked` declaration one rule strip (external plugin cannot self seal common resident cannot unload);
- * - only accept `definePlugin`(protocol PluginDefinition unique entry; items item explicit
- *   does not compatibility alias,`setup` etc. old form in boundary explicit reject);
- * - register one rule `{ enabled: false }`(most small permission); once persist
- *   `config.json.pluginEnabled[id] = true` by PluginHost.register internal
- *   query persistedEnabled auto-recovery enable;
- * - not explicit settings clientRoot external plugin by default clientRoot = plugin directory itself;
- *   clientRoot must be non-empty string, each other for clientRoot parse is plugin directory inside absolute path
- *   (out of bounds explicit reject). the validate only is path boundary convention (plugin code itself own host permission,
- *   does not construct into security sandbox promise).
+ * Security defaults:
+ * - Dynamic loading uses explicit URL import via `pathToFileURL`;
+ * - External plugin IDs must not use the `builtin:` prefix or collide with already-registered plugins;
+ * - Any `locked` declaration is stripped (external plugins cannot mark themselves permanently resident);
+ * - Only accepts `definePlugin` (the single `PluginDefinition` entrypoint; legacy aliases such as `setup`
+ *   are explicitly rejected at the boundary);
+ * - Registers with `{ enabled: false }` (least privilege); previously persisted `config.json.pluginEnabled[id] = true`
+ *   is restored automatically inside `PluginHost.register`;
+ * - External plugins without an explicit `clientRoot` default `clientRoot` to the plugin directory itself;
+ *   an explicit `clientRoot` must be a non-empty string resolving to an absolute path inside the plugin
+ *   directory (escapes are rejected). This check enforces a path-boundary convention only; plugin code runs
+ *   with full host permissions and is not a security sandbox.
  */
 import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -68,14 +67,14 @@ import {
   readManifestOptional,
 } from './plugin-manifest.js';
 
-/** load which must most small host shape (real PluginHost structure compatibility, convenient at independent test). */
+/** Minimal host surface required for loading (structurally compatible with PluginHost for isolated tests). */
 export interface ExternalPluginHost {
   register(
     definition: PluginDefinition,
     options?: { enabled?: boolean; isolateFailure?: boolean },
   ): Promise<void>;
   list(): PluginSummary[] | Promise<PluginSummary[]>;
-  /** optional:scan / load phase fault occupy register (real PluginHost provide; test stub not implemented when keep old behavior on throw). */
+  /** Optional: register a failed placeholder during scan/load (provided by PluginHost; test stubs without it preserve throw behavior). */
   registerFailed?(spec: {
     id: string;
     name?: LocalizedText;
@@ -84,26 +83,26 @@ export interface ExternalPluginHost {
     error: PluginDiagnosticError;
   }): void;
   /**
-   * optional: host build port through out (real PluginHost provide): external plugin TS transpile function
-   * by this take self PluginHostOptions.buildProvider. not implemented/not inject when TS source load in
-   * transpile phase explicit reject (unsupported_backend_ts_build),JS plugin do not subject to affect.
+   * Optional host build port accessor (provided by PluginHost): obtains the external-plugin TS
+   * transpiler from PluginHostOptions.buildProvider. When missing, loading TS sources rejects explicitly
+   * (`unsupported_backend_ts_build`); plain JS plugins are unaffected.
    */
   getBuildProvider?(): PluginBuildProvider | undefined;
 }
 
-/** from host shape take backend TS transpile function (build port not connect line when undefined;scan-visitor shared use). */
+/** Extract the backend TS transpile function from a host-like object (returns undefined when build port is unwired; shared with scan-visitor). */
 export function tsTransformOf(
   host: { getBuildProvider?(): PluginBuildProvider | undefined },
 ): BackendTsTransformFn | undefined {
   return host.getBuildProvider?.()?.transformBackendTs;
 }
 
-/** reload/rescan which must complete host shape (contains unregister; real PluginHost structure compatibility). */
+/** Full host surface required for reload/rescan (adds unregister; structurally compatible with PluginHost). */
 export interface ReloadablePluginHost extends ExternalPluginHost {
   unregister(pluginId: string): Promise<void>;
 }
 
-/** without plugin.json(or main default) when convention entry probe order (TypeScript takes precedence, same pi habit). */
+/** Convention entrypoint probe order when plugin.json (or `main`) is absent (TypeScript preferred, matching pi conventions). */
 const CONVENTION_ENTRIES = [
   'index.ts',
   'index.tsx',
@@ -115,17 +114,17 @@ const CONVENTION_ENTRIES = [
   'plugin.js',
 ] as const;
 
-// start all amount/incremental scan implement already split until scan-visitor.ts; via this module again export keep since has
-// public exports do not change (hub test and produce product consumer directly from external-loader import).
+// Full/incremental scan implementation lives in scan-visitor.ts; re-exported here to preserve existing public exports
+// (used by hub tests and production consumers).
 export { loadExternalPlugins, rescanExternalPlugins } from './scan-visitor.js';
 
 // ---------------------------------------------------------------------------
-// entry parse
+// Entrypoint resolution
 // ---------------------------------------------------------------------------
 
 /**
- * parse plugin directory entry file:undefined means without any plugin entry mark record (pure data directory).
- * plugin.json store in when away manifest branch (error one rule explicit throw, never static default skip).
+ * Resolve a plugin directory's entrypoint file: undefined indicates no plugin entrypoint marker (pure data dir).
+ * When plugin.json exists, follows the manifest branch (errors always throw explicitly, never silently skipped).
  */
 export async function resolvePluginEntry(dirPath: string): Promise<string | undefined> {
   const manifestPath = join(dirPath, 'plugin.json');
@@ -152,7 +151,7 @@ export async function resolvePluginEntry(dirPath: string): Promise<string | unde
     const helm = readHelmField(dirPath);
     const mainSpec = helm?.main;
     if (mainSpec !== undefined) {
-      // npm artifact habit .js suffix points to transpile before .ts source: same name .ts/.tsx store in when takes precedence
+      // npm packages often point `.js` at transpiled artifacts; prefer matching `.ts`/`.tsx` sources when present.
       const tsCandidate = mainSpec.replace(/\.js$/, '.ts').replace(/\.mjs$/, '.mts').replace(/\.cjs$/, '.cts');
       const tryCandidates = tsCandidate !== mainSpec ? [tsCandidate, mainSpec] : [mainSpec];
       let resolvedSpec: string | undefined;
@@ -168,7 +167,7 @@ export async function resolvePluginEntry(dirPath: string): Promise<string | unde
       if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
         throw new HelmError(
           'plugin_manifest_invalid',
-          `external plugin ${dirPath}  package.json entry exceeds out plugin directory: ${spec}`,
+          `External plugin ${dirPath} package.json entry escapes plugin directory: ${spec}`,
           400,
           { dirPath, main: spec },
         );
@@ -184,7 +183,7 @@ export async function resolvePluginEntry(dirPath: string): Promise<string | unde
     if (probed !== undefined) return probed;
     throw new HelmError(
       'plugin_entry_missing',
-      `external plugin ${dirPath}  plugin.json not declaration main and directory inside without convention entry (${CONVENTION_ENTRIES.join(' / ')})`,
+      `External plugin ${dirPath} plugin.json does not declare main and no conventional entry (${CONVENTION_ENTRIES.join(' / ')}) was found`,
       500,
       { dirPath },
     );
@@ -192,7 +191,7 @@ export async function resolvePluginEntry(dirPath: string): Promise<string | unde
   if (typeof main !== 'string' || main.length === 0) {
     throw new HelmError(
       'plugin_manifest_invalid',
-      `external plugin ${dirPath}  plugin.json main must be non-empty string`,
+      `External plugin ${dirPath} plugin.json main must be a non-empty string`,
       500,
       { dirPath, main: String(main) },
     );
@@ -202,7 +201,7 @@ export async function resolvePluginEntry(dirPath: string): Promise<string | unde
   if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
     throw new HelmError(
       'plugin_manifest_invalid',
-      `external plugin ${dirPath}  plugin.json main exceeds out plugin directory: ${main}`,
+      `External plugin ${dirPath} plugin.json main escapes plugin directory: ${main}`,
       400,
       { dirPath, main },
     );
@@ -210,10 +209,7 @@ export async function resolvePluginEntry(dirPath: string): Promise<string | unde
   return assertEntryFile(dirPath, main, entry);
 }
 
-/**
- * confirm entry is store in ordinary file and return realpath(symlink chain to directory outside when realpath
- * out of bounds explicit reject, guarantee real entry do not exceeds root).
- */
+/** Confirms entrypoint is a regular file inside `dirPath` (symlink escapes fail loudly). */
 function assertEntryFile(dirPath: string, main: string, entry: string): string {
   let real: string;
   let isFile: boolean;
@@ -223,20 +219,20 @@ function assertEntryFile(dirPath: string, main: string, entry: string): string {
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'ENOENT' || code === 'ENOTDIR') {
-      throw new HelmError('plugin_entry_missing', `external plugin ${dirPath} entry file missing: ${main}`, 500, {
+      throw new HelmError('plugin_entry_missing', `External plugin ${dirPath} entry file is missing: ${main}`, 500, {
         dirPath,
         main,
       });
     }
     throw new HelmError(
       'plugin_scan_failed',
-      `external plugin entry cannot read: ${entry}(${err instanceof Error ? err.message : String(err)})`,
+      `External plugin entry cannot be read: ${entry} (${err instanceof Error ? err.message : String(err)})`,
       500,
       { dirPath, main, code },
     );
   }
   if (!isFile) {
-    throw new HelmError('plugin_entry_missing', `external plugin ${dirPath} entry is not ordinary file: ${main}`, 500, {
+    throw new HelmError('plugin_entry_missing', `External plugin ${dirPath} entry is not a regular file: ${main}`, 500, {
       dirPath,
       main,
     });
@@ -245,7 +241,7 @@ function assertEntryFile(dirPath: string, main: string, entry: string): string {
   if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
     throw new HelmError(
       'plugin_manifest_invalid',
-      `external plugin ${dirPath}  plugin.json main(contains symlink) exceeds out plugin directory: ${main}`,
+      `External plugin ${dirPath} plugin.json main (resolved symlink) escapes plugin directory: ${main}`,
       400,
       { dirPath, main },
     );
@@ -275,7 +271,7 @@ function probeConventionEntry(dirPath: string): string | undefined {
   }
   return undefined;
 }
-/** validate external plugin code declaration plugin dependency; illegal shape must explicit failed, cannot in manifest archive one when static default discard. */
+/** Validates plugin dependencies declared in JS definition (invalid shapes fail explicitly). */
 function normalizeCodeDependencies(
   dirPath: string,
   pluginId: string,
@@ -285,7 +281,7 @@ function normalizeCodeDependencies(
   if (!Array.isArray(values) || values.some((value) => typeof value !== 'string' || !MANIFEST_PLUGIN_ID_PATTERN.test(value))) {
     throw new HelmError(
       'invalid_plugin_definition',
-      `external plugin ${dirPath} define ${pluginId}.dependencies must be plugin ID string array (only allows character parent number : _ -)`,
+      `External plugin ${dirPath} definition ${pluginId}.dependencies must be an array of plugin IDs (letters, digits, :, _, - only)`,
       400,
       { dirPath, pluginId, dependencies: Array.isArray(values) ? values.map((value) => String(value)) : String(values) },
     );
@@ -295,10 +291,10 @@ function normalizeCodeDependencies(
 }
 
 // ---------------------------------------------------------------------------
-// module import and define validate
+// Module import & definition validation
 // ---------------------------------------------------------------------------
 
-/** motion state import entry module and extract default / plugin export is plugin define (can carry proxy boundary mark record re- initialize module diagram). */
+/** Dynamically imports plugin entrypoint (with optional generation cache-buster) and extracts `default`/`plugin` export. */
 export async function importPluginDefinition(
   dirPath: string,
   entryPath: string,
@@ -312,10 +308,10 @@ export async function importPluginDefinition(
   try {
     mod = (await import(entryUrl)) as { default?: unknown; plugin?: unknown };
   } catch (err) {
-    if (err instanceof HelmError) throw err; // transpile error already carries locate, original on throw
+    if (err instanceof HelmError) throw err; // Transpilation error already carries file/line diagnostics.
     throw new HelmError(
       'plugin_load_failed',
-      `external plugin module failed to load: ${entryPath}${options.generation !== undefined ? `(proxy boundary ${options.generation})` : ''}(${err instanceof Error ? err.message : String(err)})`,
+      `Failed to load external plugin module: ${entryPath}${options.generation !== undefined ? ` (generation ${options.generation})` : ''} (${err instanceof Error ? err.message : String(err)})`,
       500,
       { dirPath, entryPath, cause: err instanceof Error ? { message: err.message, stack: err.stack } : undefined },
     );
@@ -325,33 +321,27 @@ export async function importPluginDefinition(
 }
 
 /**
- * boundary validate external module export define shape: non-empty string id / name + definePlugin function;
- * id forbidden builtin: prefix and smoke number (smoke number only act builtin: naming empty between isolate symbol; external plugin
- * id contains smoke number will break source directory i.e. ctx.dataDirinvariant, see plugin-dir-name.ts).
- * only accept protocol PluginDefinition  definePlugin,setup etc. compatibility alias one rule reject
- * (items item explicit does not to after compatibility). return specification define.
+ * Validates an external plugin module's exported definition: requires non-empty `id` (no `builtin:` prefix or `:`),
+ * optional localized `name`, and `definePlugin` function.
  */
 export function assertExternalDefinition(candidate: unknown, dirPath: string): PluginDefinition {
   const fail = (detail: string): HelmError =>
-    new HelmError('invalid_plugin_definition', `external plugin ${dirPath} module export illegal:${detail}`, 400, { dirPath });
+    new HelmError('invalid_plugin_definition', `Invalid external plugin export in ${dirPath}: ${detail}`, 400, { dirPath });
   if (typeof candidate !== 'object' || candidate === null || Array.isArray(candidate)) {
-    throw fail('not export default or plugin define object');
+    throw fail('did not export a default or plugin definition object');
   }
   const def = candidate as Record<string, unknown>;
   if (typeof def.id !== 'string' || def.id.length === 0) throw fail('missing non-empty string id');
-  // name optional (same protocol PluginDefinition): not provide when render name by PluginHost
-  // back id; provide when must be display copy (non-empty string or supported-locale map), do not
-  // another add required constraint (and built-in plugin same right)
   if (def.name !== undefined && parseNonEmptyLocalizedText(def.name) === undefined) {
     throw fail(`name provide when must be display copy (non-empty string or { en, 'zh-CN' } map with non-blank values)`);
   }
   if (def.icon !== undefined && (typeof def.icon !== 'string' || def.icon.trim().length === 0)) {
-    throw fail('icon provide when must be non-empty string');
+    throw fail('icon must be a non-empty string when provided');
   }
   if (def.id.startsWith('builtin:')) {
     throw new HelmError(
       'invalid_plugin_definition',
-      `external plugin ${dirPath}  id disallows with builtin: open head (do not smoke fill built-in plugin): ${def.id}`,
+      `External plugin ${dirPath} id cannot start with 'builtin:': ${def.id}`,
       400,
       { dirPath, id: def.id },
     );
@@ -359,40 +349,39 @@ export function assertExternalDefinition(candidate: unknown, dirPath: string): P
   if (def.id.includes(':')) {
     throw new HelmError(
       'invalid_plugin_definition',
-      `external plugin ${dirPath}  id disallows contains smoke number (smoke number only act builtin: naming empty between isolate symbol, and managed plugin package id rule consistent): ${def.id}`,
+      `External plugin ${dirPath} id cannot contain ':' (smoke number; colons are reserved for builtin: namespaces): ${def.id}`,
       400,
       { dirPath, id: def.id },
     );
   }
   if (typeof def.definePlugin !== 'function') {
-    throw fail('missing definePlugin function (external plugin only accept protocol PluginDefinition, without compatibility alias)');
+    throw fail('missing definePlugin function (external plugins must implement PluginDefinition)');
   }
   return def as unknown as PluginDefinition;
 }
 
 /**
  * external plugin define archive one:
- * - strip locked(external plugin cannot self seal common resident cannot unload, start stop right archive user persist state);
- * - plugin between dependency: code declaration and manifest declaration (plugin.json dependencies / package.json
- *   helm.dependencies) merge dedupe enter define; illegal manifest value in read where already explicit reject.
- * - frontend subject to control npm dependency: manifest declaration note symbol (plugin.json clientDependencies /
- *   package.json helm.clientDependencies) unify mapping is npmDependencies, parse
- *   constant is plugin itself directory (subject to control boundary); code inside declaration npmDependencies one rule strip - -
- *   external plugin must not self refer any parse (do not put open any bare dependency).
- * - clientRoot not settings → by default plugin directory itself; must be string (non- string boundary reject);
- *   relative path → parse is plugin directory inside absolute path (exceeds out plugin directory explicit reject, guard against through exceeds);
- *   absolute path original keep. path boundary validate only is convention constraint, is not security sandbox promise.
+ * - Strip `locked` (external plugins cannot mark themselves resident/non-unloadable);
+ * - Cross-plugin dependencies: merge & deduplicate code and manifest (`plugin.json` `dependencies` /
+ *   `package.json#helm.dependencies`); invalid manifest values already fail when read;
+ * - Frontend controlled npm dependencies: normalize manifest specifiers (`plugin.json` `clientDependencies` /
+ *   `package.json#helm.clientDependencies`) into `npmDependencies` anchored at the plugin directory itself
+ *   while stripping code-declared `npmDependencies` so external plugins cannot open arbitrary bare dependencies;
+ * - Default missing `clientRoot` to the plugin directory itself; require a string when provided; resolve
+ *   relative paths inside the plugin directory (escapes reject explicitly); preserve absolute paths.
+ *   Path bounds enforce a convention only and do not constitute a security sandbox.
  */
 export function normalizeDefinition(definition: PluginDefinition, dirPath: string): PluginDefinition {
   const normalized = { ...definition };
   delete normalized.locked;
-  // frontend subject to control npm dependency: external plugin only recognize manifest declaration, parse mapping to plugin itself directory.
+  // Frontend controlled npm dependencies: external plugins honor manifest declarations anchored to dirPath only.
   const clientDeps = readHelmClientDependencies(dirPath);
   delete normalized.npmDependencies;
   if (clientDeps.length > 0) {
     normalized.npmDependencies = Object.fromEntries(clientDeps.map((spec) => [spec, dirPath]));
   }
-  // plugin between dependency: code declaration + manifest declaration (plugin.json and package.json helm merge) merge dedupe
+  // Cross-plugin dependencies: merge & deduplicate code and manifest (`plugin.json` and `package.json#helm`).
   //(self dependency by host register boundary reject).
   const codeDeps = normalizeCodeDependencies(dirPath, definition.id, definition.dependencies);
   const manifestDeps = [
@@ -421,7 +410,7 @@ export function normalizeDefinition(definition: PluginDefinition, dirPath: strin
       if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
         throw new HelmError(
           'invalid_plugin_definition',
-          `external plugin ${dirPath} manifest clientRoot exceeds out plugin directory: ${helmClientRoot}`,
+          `External plugin ${dirPath} manifest clientRoot escapes plugin directory: ${helmClientRoot}`,
           400,
           { dirPath, clientRoot: helmClientRoot },
         );
@@ -435,7 +424,7 @@ export function normalizeDefinition(definition: PluginDefinition, dirPath: strin
   if (typeof clientRoot !== 'string' || clientRoot.length === 0) {
     throw new HelmError(
       'invalid_plugin_definition',
-      `external plugin ${dirPath}  clientRoot must be non-empty string`,
+      `External plugin ${dirPath} clientRoot must be a non-empty string`,
       400,
       { dirPath, clientRoot: String(clientRoot) },
     );
@@ -446,7 +435,7 @@ export function normalizeDefinition(definition: PluginDefinition, dirPath: strin
     if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
       throw new HelmError(
         'invalid_plugin_definition',
-        `external plugin ${dirPath} each other for clientRoot exceeds out plugin directory: ${clientRoot}`,
+        `External plugin ${dirPath} relative clientRoot escapes plugin directory: ${clientRoot}`,
         400,
         { dirPath, clientRoot },
       );
@@ -457,16 +446,17 @@ export function normalizeDefinition(definition: PluginDefinition, dirPath: strin
 }
 
 // ---------------------------------------------------------------------------
-// DX closed ring: subject to control hot reload (reload) and incremental heavy scan (rescan)
+// DX loop: controlled hot reload (reload) and incremental rescan (rescan)
 // ---------------------------------------------------------------------------
 
 /**
- * scan plugin directory, return define id equals target idplugin source directory absolute path.
- * and start scan the same decide chain (resolvePluginEntry + import define read real id); directory name and id
- * inconsistent also can hit. without hit return undefined(multiple hit belongs to directory state exception, explicit throws).
- * note: probe itself will initialize module (without proxy boundary mark record common rule import); and start scan behavior consistent.
- * registered plugin probe import hit ESM cache - - return is old proxy (when before register instance) define object,
- * reload use it as switch failed after rollback define.
+ * Scan plugin directories and return the absolute path of the source directory whose definition id
+ * equals the target `pluginId`. Follows the same resolution chain as startup scan (resolvePluginEntry
+ * + import definition to inspect real id), so directory names differing from plugin id still match.
+ * Returns undefined when absent (multiple hits indicate conflicting directories and throw explicitly).
+ * Note: probing initializes modules (without cache-busting query strings for normal imports, consistent
+ * with startup scan); registered plugins hit ESM cache and yield the old proxy definition object, which
+ * reload keeps for rollback on switch failure.
  */
 export async function findSourceDirByPluginId(
   dataDir: string,
@@ -477,7 +467,7 @@ export async function findSourceDirByPluginId(
   return found?.dir;
 }
 
-/** scan result: source directory + probe import obtain to define (registered plugin hit ESM cache, i.e. old proxy define). */
+/** Scan hit: source directory path plus imported definition (for registered plugins, hits ESM cache with old proxy def). */
 export interface PluginSourceLocation {
   dir: string;
   definition: PluginDefinition;
@@ -501,9 +491,8 @@ async function findPluginSource(
     if (!entry.isDirectory()) continue;
     if (entry.name.startsWith('.') || isBuiltinPluginDataDirName(entry.name)) continue;
     const dirPath = resolve(pluginsDir, entry.name);
-    // other directory corrupt (broken manifest / broken entry) must not blast assert whole directory scan: directory name and target
-    // id inconsistent when i.e. convenient fix also round fewer than it hit, directly skip; same name directory failed to parse when target
-    // source code itself still where at corrupt state, hand over by on layer by not found source directory errors.
+    // Corruption in unrelated directories must not break the whole scan; if the target's own directory
+    // fails to parse, its source itself is broken and the caller receives missing-source error.
     let entryPath: string | undefined;
     const releaseTsRoot = registerPluginTsRoot(dirPath, { transform: options.transform });
     try {
@@ -512,7 +501,7 @@ async function findPluginSource(
       const definition = await importPluginDefinition(dirPath, entryPath);
       if (definition.id === pluginId) hits.push({ dir: dirPath, definition });
     } catch {
-      // directory corrupt or entry cannot import: skip the directory continue scan (fix after target directory still can hit).
+      // Corrupt directory or unimportable entry: skip and continue scanning (valid targets still resolve).
       continue;
     } finally {
       releaseTsRoot();
@@ -521,7 +510,7 @@ async function findPluginSource(
   if (hits.length > 1) {
     throw new HelmError(
       'plugin_reload_ambiguous',
-      `multiple plugin directory declaration id all is ${pluginId}:${hits.map((h) => h.dir).join(',')}, cannot determine reload source`,
+      `multiple plugin directories declare id ${pluginId}: ${hits.map((h) => h.dir).join(', ')}; cannot determine reload source`,
       409,
       { pluginId, dirs: hits.map((h) => h.dir) },
     );
@@ -530,15 +519,14 @@ async function findPluginSource(
 }
 
 /**
- * external plugin subject to control hot reload:
- * 1. only limit external plugin (builtin:* prefix one rule 403);
- * 2. dry-run:doctor all chain preflight (proxy boundary import + temporary host real register + client real compile),
- *    any one failed explicit throws and old instance keep do not motion (broken code preflight failed never interrupt in run plugin);
- * 3. switch:unregister old instance (in-flight task check by PluginHost force:409 reject) after,
- *    with preflight via new proxy boundary define re- register; enable state keep reload before state (via persist
- *    pluginEnabled auto-recovery, eventually state and pre- phase inconsistent when explicit errors, never static default).
+ * Controlled hot reload for external plugins:
+ * 1. Restricted to external plugins (`builtin:*` prefix always rejected with 403);
+ * 2. Dry-run preflight via doctor (cache-busting import + temp-host register + client compile): any failure
+ *    throws explicitly and leaves the live instance untouched;
+ * 3. Atomic swap: unregister old instance (live-task guard rejects with 409 unless ready), then re-register
+ *    with a fresh cache-busting import; enabled state is preserved across reload via persisted `pluginEnabled`.
  *
- * reload for plugin common resident TS transpile produces no extra negative bear (registerPluginTsRoot reference counter).
+ * Reload imposes no persistent overhead on resident TS transpilation (`registerPluginTsRoot` ref-counting).
  */
 export async function reloadExternalPlugin(
   dataDir: string,
@@ -549,38 +537,37 @@ export async function reloadExternalPlugin(
   if (pluginId.startsWith('builtin:')) {
     throw new HelmError(
       'plugin_locked',
-      `built-in plugin ${pluginId} forbidden hot reload (please restart Hub takes effect kernel/built-in plugin change)`,
+      `built-in plugin ${pluginId} cannot be hot-reloaded (restart Hub to apply built-in plugin changes)`,
       403,
       { pluginId },
     );
   }
   const current = (await plugins.list()).find((s) => s.id === pluginId);
   if (!current) {
-    throw new HelmError('unknown_plugin', `not registered plugin:${pluginId}`, 404, { pluginId });
+    throw new HelmError('unknown_plugin', `unregistered plugin: ${pluginId}`, 404, { pluginId });
   }
   const wasEnabled = current.enabled;
   const source = await findPluginSource(dataDir, pluginId, { transform: tsTransformOf(plugins) });
   if (source === undefined) {
     throw new HelmError(
       'plugin_source_missing',
-      `in ${join(dataDir, 'plugins')} under not found id is ${pluginId} external plugin source directory`,
+      `no external plugin source directory with id ${pluginId} found under ${join(dataDir, 'plugins')}`,
       404,
       { pluginId, pluginsDir: join(dataDir, 'plugins') },
     );
   }
   const sourceDir = source.dir;
-  // probe import return old proxy define (registered plugin entry URL hit ESM cache): switch failed after
-  // rollback define. rollback along use old define object (the same definePlugin reference, without duplicate initialize).
+  // Probe import returned the old cached definition object; reuse it to roll back on swap failure.
   const rollbackDefinition = source.definition;
-  // dry-run preflight: on failure old instance original seal do not motion (do not unregister).
+  // Dry-run preflight: keep the old instance untouched on failure.
   await options.doctor?.(sourceDir);
 
-  // preflight via after re- take under one proxy boundary number (doctor already consume one proxy, this in use new proxy import actual register).
+  // Obtain a fresh cache-busting generation for the actual reload import.
   const entryPath = await resolvePluginEntry(sourceDir);
   if (entryPath === undefined) {
     throw new HelmError(
       'plugin_reload_failed',
-      `reload when plugin entry disappear (preflight and switch between source directory by change):${sourceDir}`,
+      `plugin entrypoint disappeared during reload (source changed between preflight and swap): ${sourceDir}`,
       500,
       { pluginId, sourceDir },
     );
@@ -596,7 +583,7 @@ export async function reloadExternalPlugin(
     if (definition.id !== pluginId) {
       throw new HelmError(
         'plugin_reload_failed',
-        `reload when plugin id change (preflight ${pluginId} -> actual ${definition.id}), reject switch`,
+        `plugin id changed during reload (preflight ${pluginId} -> actual ${definition.id}); aborting swap`,
         409,
         { pluginId, actualId: definition.id, sourceDir },
       );
@@ -606,9 +593,7 @@ export async function reloadExternalPlugin(
       await plugins.register(definition, { enabled: wasEnabled });
       committed = true;
     } catch (err) {
-      // switch failed: use old proxy define exhaust force rollback (the same definePlugin reference, without duplicate initialize),
-      // let plugin back to reload before available state. rollback itself on failure do not mask original error, such as on report
-      //(now plugin deregistered, must human fix; persist start stop state not passively).
+      // Swap failed: attempt best-effort rollback to the pre-reload definition without masking the root error.
       let rollbackError: unknown;
       try {
         await plugins.register(normalizeDefinition(rollbackDefinition, sourceDir), {
@@ -619,7 +604,7 @@ export async function reloadExternalPlugin(
       }
       throw new HelmError(
         'plugin_reload_failed',
-        `reload after re- register failed${rollbackError === undefined ? '(already rollback to reload before instance, old define continue available)' : '(rollback also failed, plugin when before deregistered, must human fix after retry)'}:${err instanceof Error ? err.message : String(err)}`,
+        `re-registration failed during reload ${rollbackError === undefined ? '(rolled back to pre-reload instance; previous definition remains active)' : '(rollback also failed; plugin is currently unregistered — fix manually and retry)'}: ${err instanceof Error ? err.message : String(err)}`,
         500,
         {
           pluginId,
@@ -637,7 +622,7 @@ export async function reloadExternalPlugin(
     if (!after) {
       throw new HelmError(
         'plugin_reload_failed',
-        `reload after not in host manifest in discover plugin ${pluginId}(internal state inconsistent)`,
+        `plugin ${pluginId} missing from host list after reload (inconsistent internal state)`,
         500,
         { pluginId },
       );

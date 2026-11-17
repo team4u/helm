@@ -14,7 +14,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
 import { PLUGIN_CLIENT_SHARED_EXPORTS } from '@helm/protocol'
 import { HelmStoreContext } from '../src/lib/store-context.js'
-import { usePlugins } from '@helm/plugin-client'
+import { PluginClientContext, createPluginClientContext, usePluginClientHost, usePluginConfig, usePlugins } from '@helm/plugin-client'
 import * as HelmPluginClient from '@helm/plugin-client'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import { makeTestStore } from './helpers/store.js'
@@ -132,4 +132,65 @@ test('usePlugins 已加入 @helm/plugin-client 共享 SDK 与 protocol 导出锁
     'PLUGIN_CLIENT_SHARED_EXPORTS 必须包含 usePlugins',
   )
   assert.equal(typeof HelmPluginClient.usePlugins, 'function', '共享 SDK 必须真实导出 usePlugins 函数')
+  assert.ok(
+    (PLUGIN_CLIENT_SHARED_EXPORTS as readonly string[]).includes('usePluginConfig'),
+    'PLUGIN_CLIENT_SHARED_EXPORTS 必须包含 usePluginConfig',
+  )
+  assert.equal(typeof HelmPluginClient.usePluginConfig, 'function', '共享 SDK 必须真实导出 usePluginConfig 函数')
+})
+
+test('usePluginConfig：在 PluginClientContext + HostStoreProviders 下实时读取 publicConfig 且不泄漏 secret', { timeout: 60_000 }, () => {
+  const plugins = [
+    {
+      id: 'speed-test',
+      name: 'Speed Test',
+      locked: false,
+      enabled: true,
+      hooks: [],
+      actions: [],
+      tools: [],
+      publicConfig: { slidingWindowMs: 1_500, label: 'fast' },
+    },
+  ]
+  let store = storeWithScreens(plugins, [])
+  const captured: Array<{ slidingWindowMs?: number; label?: string; apiKey?: string }> = []
+  function Probe(): React.ReactNode {
+    captured.push(usePluginConfig<{ slidingWindowMs?: number; label?: string; apiKey?: string }>())
+    return null
+  }
+  function WithPlugin({ pluginId, children }: { pluginId: string; children?: React.ReactNode }): React.ReactNode {
+    const port = usePluginClientHost()
+    const ctx = React.useMemo(() => createPluginClientContext(port, pluginId, undefined), [port, pluginId])
+    return e(PluginClientContext.Provider, { value: ctx }, children)
+  }
+  const host = document.createElement('div')
+  let root: Root | undefined
+  act(() => {
+    root = createRoot(host)
+    root.render(
+      e(
+        HostStoreProviders,
+        { value: store },
+        e(WithPlugin, { pluginId: 'speed-test' }, e(Probe)),
+      ),
+    )
+  })
+  assert.deepEqual(captured[0], { slidingWindowMs: 1_500, label: 'fast' })
+  assert.equal('apiKey' in (captured[0] ?? {}), false)
+
+  store = storeWithScreens(
+    [{ ...plugins[0]!, publicConfig: { slidingWindowMs: 3_000, label: 'turbo' } }],
+    [],
+  )
+  act(() => {
+    root!.render(
+      e(
+        HostStoreProviders,
+        { value: store },
+        e(WithPlugin, { pluginId: 'speed-test' }, e(Probe)),
+      ),
+    )
+  })
+  assert.deepEqual(captured.at(-1), { slidingWindowMs: 3_000, label: 'turbo' })
+  act(() => root?.unmount())
 })

@@ -604,6 +604,7 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'useConversations',
   'useConversation',
   'usePlugins',
+  'usePluginConfig',
   'PluginSlot',
   'Switch',
   'Select',

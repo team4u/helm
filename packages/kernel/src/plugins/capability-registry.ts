@@ -1,11 +1,13 @@
 /**
- * capability-registry.ts: negative duty tool (Tool), action (Action), self define routing (Route) register, find, visible and execute.
+ * capability-registry.ts: manages registration, lookup, visibility, and execution of plugin tools,
+ * actions, and dynamic routes.
  *
- * responsibility:
- * - register boundary Schema pre- compile and parameter strong validate (CLI command and location parameter,provider-safe alias generate, each other for routing naming empty between piece together install);
- * - ConversationScope conversation level visible filter and execute phase second validate (double keep risk guard against bypass);
- * - tool manifest derive (DerivedToolSpec, merge ctx.tool and exposeAsTool action, validate tool name global unique);
- * - action and tool preflight (prepareAction), execute scheduling (invokeAction,executeTool) and PluginTaskTracker collection into.
+ * Responsibilities:
+ * - Pre-compile schemas and strictly validate specs at registration (CLI commands/positionals,
+ *   provider-safe aliases, relative route namespacing);
+ * - Enforce `ConversationScope` visibility filtering and runtime re-validation;
+ * - Derive unified tool specs (`DerivedToolSpec` from `ctx.tool` and `exposeAsTool` actions) with global uniqueness;
+ * - Preflight (`prepareAction`) and execute (`invokeAction`, `executeTool`) tracked via `PluginTaskTracker`.
  */
 import { createHash } from 'node:crypto';
 import {
@@ -36,17 +38,17 @@ export interface DerivedToolSpec {
   name: string;
   description: string;
   inputSchema: JsonSchema;
-  /** structure output Schema(ctx.tool declaration when pass-through;run_action derive tool without this field). */
+  /** Structured output schema (forwarded for `ctx.tool`; omitted for `run_action` derived actions). */
   structuredOutputSchema?: JsonSchema;
   /** Cross-restart tool replay safety (forwarded when declared on ctx.tool; defaults to 'unsafe'). */
   replay?: 'safe' | 'unsafe';
-  /** tool use refer quote complete segment (only activate tool throw shoot; inactive produces no phantom text). */
+  /** Full tool usage guidance paragraph (projected only for active tools). */
   promptSnippet?: string;
-  /** single row want point (aggregate enter prompt.tools.guidelines sharing section). */
+  /** Concise single-line guidelines (aggregated into shared `prompt.tools.guidelines`). */
   promptGuidelines?: string[];
   sourcePluginId: string;
   sourceKind: 'action' | 'tool';
-  /** only sourceKind === 'action':pluginId.actionId all limit set ID. */
+  /** Fully-qualified `pluginId.actionId` when `sourceKind === 'action'`. */
   qualifiedId?: string;
 }
 
@@ -54,13 +56,12 @@ export interface PluginRouteEntry extends PluginRouteSpec {
   pluginId: string;
 }
 
-/** model tool name provider security constraint (OpenAI function name sub- collection, all provider through use). */
+/** Provider-safe tool name constraint (OpenAI function naming subset across providers). */
 export const PROVIDER_SAFE_TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
- * is exposeAsTool action generate stable provider-safe alias: semantics prefix + all limit set ID short hash.
- * pure function, across restarts determine:pi-ai convertTools original send tool.name, contains ':'/'.' 
- * all limit set ID do not by any provider accept, and plain cleanse (replace illegal character) will collision, reason attach hash.
+ * Generates a deterministic provider-safe alias for an `exposeAsTool` action:
+ * semantic prefix + short hash of the qualified ID (avoids illegal `:`/`.`, and hash prevents collisions).
  */
 export function actionToolAlias(pluginId: string, actionId: string): string {
   const semantic = `${pluginId.replace(/^builtin:/, '')}.${actionId}`
@@ -73,13 +74,13 @@ export function actionToolAlias(pluginId: string, actionId: string): string {
 }
 
 /**
- * parse all limit set actionId(pluginId.actionId).pluginId allows contains ':'(builtin:profile),
- * therefore cannot simple split finally a '.' - - with a '.' split.
+ * Parses a qualified `pluginId.actionId` identifier. Since `pluginId` may contain `:`
+ * (e.g. `builtin:profile`), split at the first `.` rather than the last.
  */
 export function parseQualifiedActionId(qualified: string): { pluginId: string; actionId: string } {
   const dot = qualified.indexOf('.');
   if (dot <= 0 || dot >= qualified.length - 1) {
-    throw new HelmError('invalid_action_id', `illegal action all limit set id:${qualified}(expectation pluginId.actionId)`, 400, {
+    throw new HelmError('invalid_action_id', `Invalid qualified action id: ${qualified} (expected pluginId.actionId)`, 400, {
       qualified,
     });
   }
@@ -95,7 +96,7 @@ export interface ActionEntry {
   cli?: PluginActionSpec<unknown, unknown>['cli'];
   exposeAsTool: boolean;
   idempotent?: boolean;
-  /** action use refer quote (via run_action or directly tool can reach when throw shoot; already validate guard against defend copy). */
+  /** Usage guidance paragraph (projected when reachable via `run_action` or direct tool; defensively copied). */
   promptSnippet?: string;
   promptGuidelines?: string[];
   toolAlias: string;
@@ -109,9 +110,8 @@ export interface ToolEntry {
 }
 
 /**
- * scope execute phase validate:scope not declaration or invoke without conversation context (human invoke)
- * directly let through; otherwise via getConversation parse conversation after by matchesConversationScope
- * decide. conversation missing by getConversation such as throws.
+ * Runtime scope enforcement: bypassed when no scope or no conversation context (human call);
+ * otherwise verifies `matchesConversationScope`. Missing conversations fail via `getConversation`.
  */
 export function assertScopeAllows(
   pluginId: string,
@@ -123,7 +123,7 @@ export function assertScopeAllows(
   if (scope === undefined || conversationId === undefined) return;
   const conversation = getConversation(conversationId);
   if (!matchesConversationScope(scope, conversation)) {
-    throw new HelmError('conversation_scope_violation', `${what} disallows in conversation ${conversationId} on execute (scope missed)`, 403, {
+    throw new HelmError('conversation_scope_violation', `${what} is not allowed on conversation ${conversationId} (outside scope)`, 403, {
       pluginId,
       conversationId,
     });
@@ -135,10 +135,8 @@ function pluginRoutePrefix(pluginId: string): string {
 }
 
 /**
- * tool use refer quote field register boundary strong validate (ctx.tool and ctx.action same standard, guard against hint directory
- * by empty text pollute):promptSnippet non-empty non- pure whitespace string;promptGuidelines non-empty
- * array and one by one items non-empty non- pure whitespace. via after return guard against defend copy (array duplicate), declaration register after
- * original ground modify do not back pour already validate data.
+ * Validates and defensively copies `promptSnippet` / `promptGuidelines` at registration so blank strings
+ * cannot pollute prompts and post-registration caller mutations cannot bypass validation.
  */
 function validatedPromptFields(
   what: string,
@@ -149,7 +147,7 @@ function validatedPromptFields(
     fields.promptSnippet !== undefined &&
     (typeof fields.promptSnippet !== 'string' || fields.promptSnippet.trim().length === 0)
   ) {
-    throw new HelmError(code, `${what}  promptSnippet must be non-empty non- pure whitespace string`, 400);
+    throw new HelmError(code, `${what} promptSnippet must be a non-empty non-whitespace string`, 400);
   }
   const guidelines = fields.promptGuidelines;
   if (
@@ -158,7 +156,7 @@ function validatedPromptFields(
       guidelines.length === 0 ||
       Array.from(guidelines).some((item) => typeof item !== 'string' || item.trim().length === 0))
   ) {
-    throw new HelmError(code, `${what}  promptGuidelines must be non-empty string array (each items non-empty non- pure whitespace)`, 400);
+    throw new HelmError(code, `${what} promptGuidelines must be a non-empty array of non-whitespace strings`, 400);
   }
   return {
     ...(typeof fields.promptSnippet === 'string' ? { promptSnippet: fields.promptSnippet } : {}),
@@ -202,22 +200,22 @@ export class CapabilityRegistry {
     if (spec.id.includes('.')) {
       throw new HelmError(
         'invalid_action_spec',
-        `plugin ${pluginId} action id disallows point number (all limit set parse with first '.' split):${spec.id}`,
+        `Plugin ${pluginId} action id cannot contain '.' (qualified names split on first '.'): ${spec.id}`,
         400,
       );
     }
     if (typeof spec.description !== 'string' || spec.description.length === 0) {
-      throw new HelmError('invalid_action_spec', `plugin ${pluginId} action ${spec.id} missing description`, 400);
+      throw new HelmError('invalid_action_spec', `Plugin ${pluginId} action ${spec.id} is missing description`, 400);
     }
     if (!isJsonObject(spec.inputSchema) || !isJsonObject(spec.outputSchema)) {
       throw new HelmError(
         'invalid_action_spec',
-        `plugin ${pluginId} action ${spec.id} must also declaration inputSchema and outputSchema(single point Schema contract)`,
+        `Plugin ${pluginId} action ${spec.id} must declare both inputSchema and outputSchema`,
         400,
       );
     }
     if (typeof spec.handler !== 'function') {
-      throw new HelmError('invalid_action_spec', `plugin ${pluginId} action ${spec.id} missing handler`, 400);
+      throw new HelmError('invalid_action_spec', `Plugin ${pluginId} action ${spec.id} is missing handler`, 400);
     }
     if (
       spec.cli?.command !== undefined &&
@@ -227,7 +225,7 @@ export class CapabilityRegistry {
     ) {
       throw new HelmError(
         'invalid_action_spec',
-        `plugin ${pluginId} action ${spec.id}  cli.command must be non-empty string array (semantics top-level command path)`,
+        `Plugin ${pluginId} action ${spec.id} cli.command must be a non-empty string array`,
         400,
       );
     }
@@ -235,7 +233,7 @@ export class CapabilityRegistry {
       if (!Array.isArray(spec.cli.positional)) {
         throw new HelmError(
           'invalid_action_spec',
-          `plugin ${pluginId} action ${spec.id}  cli.positional must be array`,
+          `Plugin ${pluginId} action ${spec.id} cli.positional must be an array`,
           400,
         );
       }
@@ -246,7 +244,7 @@ export class CapabilityRegistry {
       if (properties === undefined) {
         throw new HelmError(
           'invalid_action_spec',
-          `plugin ${pluginId} action ${spec.id} declaration cli.positional but inputSchema is not carries properties  object`,
+          `Plugin ${pluginId} action ${spec.id} declared cli.positional, but inputSchema is not an object with properties`,
           400,
         );
       }
@@ -256,28 +254,28 @@ export class CapabilityRegistry {
         if (!isPlainObject(pos) || Object.keys(pos).some((k) => k !== 'field' && k !== 'required' && k !== 'readFileInto')) {
           throw new HelmError(
             'invalid_action_spec',
-            `plugin ${pluginId} action ${spec.id}  cli.positional items only allows { field, required?, readFileInto? }`,
+            `Plugin ${pluginId} action ${spec.id} cli.positional entries may only contain { field, required?, readFileInto? }`,
             400,
           );
         }
         if (typeof pos.field !== 'string' || pos.field.length === 0) {
           throw new HelmError(
             'invalid_action_spec',
-            `plugin ${pluginId} action ${spec.id}  cli.positional[].field must be non-empty string`,
+            `Plugin ${pluginId} action ${spec.id} cli.positional[].field must be a non-empty string`,
             400,
           );
         }
         if (pos.required !== undefined && typeof pos.required !== 'boolean') {
           throw new HelmError(
             'invalid_action_spec',
-            `plugin ${pluginId} action ${spec.id}  cli.positional[${pos.field}].required must be boolean`,
+            `Plugin ${pluginId} action ${spec.id} cli.positional[${pos.field}].required must be a boolean`,
             400,
           );
         }
         if (pos.readFileInto !== undefined && (typeof pos.readFileInto !== 'string' || pos.readFileInto.length === 0)) {
           throw new HelmError(
             'invalid_action_spec',
-            `plugin ${pluginId} action ${spec.id}  cli.positional[${pos.field}].readFileInto must be non-empty string field name`,
+            `Plugin ${pluginId} action ${spec.id} cli.positional[${pos.field}].readFileInto must be a non-empty field name`,
             400,
           );
         }
@@ -286,14 +284,14 @@ export class CapabilityRegistry {
           if (name === '__proto__' || name === 'constructor' || name === 'prototype') {
             throw new HelmError(
               'invalid_action_spec',
-              `plugin ${pluginId} action ${spec.id}  cli.positional field name "${name}" unavailable (prototype pollute key)`,
+              `Plugin ${pluginId} action ${spec.id} cli.positional field name "${name}" is forbidden (prototype key)`,
               400,
             );
           }
           if (writeTargets.has(name)) {
             throw new HelmError(
               'invalid_action_spec',
-              `plugin ${pluginId} action ${spec.id}  cli.positional duplicate write field "${name}"(field/readFileInto target must not overlap)`,
+              `Plugin ${pluginId} action ${spec.id} cli.positional duplicates write target "${name}" (field and readFileInto must not overlap)`,
               400,
             );
           }
@@ -301,7 +299,7 @@ export class CapabilityRegistry {
           if (!Object.hasOwn(properties, name)) {
             throw new HelmError(
               'invalid_action_spec',
-              `plugin ${pluginId} action ${spec.id}  cli.positional field "${name}" do not in inputSchema.properties in`,
+              `Plugin ${pluginId} action ${spec.id} cli.positional field "${name}" is not in inputSchema.properties`,
               400,
             );
           }
@@ -311,7 +309,7 @@ export class CapabilityRegistry {
           if (target === null || typeof target !== 'object' || target.type !== 'string') {
             throw new HelmError(
               'invalid_action_spec',
-              `plugin ${pluginId} action ${spec.id}  cli.positional "${pos.field}"  readFileInto target "${pos.readFileInto}" must be type: string property`,
+              `Plugin ${pluginId} action ${spec.id} cli.positional "${pos.field}" readFileInto target "${pos.readFileInto}" must have type: string`,
               400,
             );
           }
@@ -320,7 +318,7 @@ export class CapabilityRegistry {
           if (seenOptional) {
             throw new HelmError(
               'invalid_action_spec',
-              `plugin ${pluginId} action ${spec.id}  cli.positional required field "${pos.field}" appear in optional after (required must connect continue)`,
+              `Plugin ${pluginId} action ${spec.id} cli.positional required field "${pos.field}" appears after an optional positional (required fields must be contiguous)`,
               400,
             );
           }
@@ -335,15 +333,15 @@ export class CapabilityRegistry {
     ) {
       throw new HelmError(
         'invalid_action_spec',
-        `plugin ${pluginId} action ${spec.id}  cli.timeoutMs must be >= 0 finite number (0 means without timeout)`,
+        `Plugin ${pluginId} action ${spec.id} cli.timeoutMs must be a finite number >= 0 (0 disables timeout)`,
         400,
       );
     }
-    assertConversationScope(pluginId, `plugin ${pluginId} action ${spec.id}`, spec.scope);
+    assertConversationScope(pluginId, `Plugin ${pluginId} action ${spec.id}`, spec.scope);
     if (spec.idempotent !== undefined && typeof spec.idempotent !== 'boolean') {
-      throw new HelmError('validation_error', `plugin ${pluginId} action ${spec.id}  idempotent must is boolean`, 400);
+      throw new HelmError('validation_error', `Plugin ${pluginId} action ${spec.id} idempotent must be a boolean`, 400);
     }
-    const prompt = validatedPromptFields(`plugin ${pluginId} action ${spec.id}`, spec, 'invalid_action_spec');
+    const prompt = validatedPromptFields(`Plugin ${pluginId} action ${spec.id}`, spec, 'invalid_action_spec');
 
     let pluginActions = this.actions.get(pluginId);
     if (!pluginActions) {
@@ -351,7 +349,7 @@ export class CapabilityRegistry {
       this.actions.set(pluginId, pluginActions);
     }
     if (pluginActions.has(spec.id)) {
-      throw new HelmError('duplicate_action', `plugin ${pluginId} duplicate declaration action ${spec.id}`, 409);
+      throw new HelmError('duplicate_action', `Plugin ${pluginId} declared duplicate action ${spec.id}`, 409);
     }
 
     assertSchemaCompilable(spec.inputSchema);
@@ -379,21 +377,21 @@ export class CapabilityRegistry {
     if (!PROVIDER_SAFE_TOOL_NAME.test(spec.name)) {
       throw new HelmError(
         'invalid_tool_spec',
-        `plugin ${pluginId} tool name ${spec.name} must match ${PROVIDER_SAFE_TOOL_NAME.source}(provider function name constraint)`,
+        `Plugin ${pluginId} tool name ${spec.name} must match ${PROVIDER_SAFE_TOOL_NAME.source} (provider function naming constraint)`,
         400,
       );
     }
     if (typeof spec.description !== 'string' || spec.description.length === 0) {
-      throw new HelmError('invalid_tool_spec', `plugin ${pluginId} tool ${spec.name} missing description`, 400);
+      throw new HelmError('invalid_tool_spec', `Plugin ${pluginId} tool ${spec.name} is missing description`, 400);
     }
     if (!isJsonObject(spec.inputSchema)) {
-      throw new HelmError('invalid_tool_spec', `plugin ${pluginId} tool ${spec.name} missing inputSchema`, 400);
+      throw new HelmError('invalid_tool_spec', `Plugin ${pluginId} tool ${spec.name} is missing inputSchema`, 400);
     }
     if (spec.structuredOutputSchema !== undefined) {
       if (!isJsonObject(spec.structuredOutputSchema)) {
         throw new HelmError(
           'invalid_tool_spec',
-          `plugin ${pluginId} tool ${spec.name}  structuredOutputSchema must be JSON Schema object`,
+          `Plugin ${pluginId} tool ${spec.name} structuredOutputSchema must be a JSON Schema object`,
           400,
         );
       }
@@ -402,15 +400,15 @@ export class CapabilityRegistry {
     if (spec.replay !== undefined && spec.replay !== 'safe' && spec.replay !== 'unsafe') {
       throw new HelmError(
         'invalid_tool_spec',
-        `plugin ${pluginId} tool ${spec.name} replay must be 'safe' | 'unsafe' (received ${String(spec.replay)})`,
+        `Plugin ${pluginId} tool ${spec.name} replay must be 'safe' | 'unsafe' (received ${String(spec.replay)})`,
         400,
       );
     }
-    const prompt = validatedPromptFields(`plugin ${pluginId} tool ${spec.name}`, spec, 'invalid_tool_spec');
+    const prompt = validatedPromptFields(`Plugin ${pluginId} tool ${spec.name}`, spec, 'invalid_tool_spec');
     if (typeof spec.execute !== 'function') {
-      throw new HelmError('invalid_tool_spec', `plugin ${pluginId} tool ${spec.name} missing execute`, 400);
+      throw new HelmError('invalid_tool_spec', `Plugin ${pluginId} tool ${spec.name} is missing execute`, 400);
     }
-    assertConversationScope(pluginId, `plugin ${pluginId} tool ${spec.name}`, spec.scope);
+    assertConversationScope(pluginId, `Plugin ${pluginId} tool ${spec.name}`, spec.scope);
 
     let pluginTools = this.tools.get(pluginId);
     if (!pluginTools) {
@@ -418,11 +416,11 @@ export class CapabilityRegistry {
       this.tools.set(pluginId, pluginTools);
     }
     if (pluginTools.has(spec.name)) {
-      throw new HelmError('duplicate_tool', `plugin ${pluginId} duplicate declaration tool ${spec.name}`, 409);
+      throw new HelmError('duplicate_tool', `Plugin ${pluginId} declared duplicate tool ${spec.name}`, 409);
     }
     assertSchemaCompilable(spec.inputSchema);
 
-    // save declaration snapshot, avoid register after heavy bind refer quote field or modify array bypass validate.
+    // Save a snapshot copy so caller mutations after registration cannot bypass prompt validation.
     const storedToolSpec: PluginToolSpec<TIn> = { ...spec, ...prompt };
     pluginTools.set(spec.name, { pluginId, spec: storedToolSpec as PluginToolSpec });
   }
@@ -431,24 +429,24 @@ export class CapabilityRegistry {
     if (typeof spec.path !== 'string' || !spec.path.startsWith('/')) {
       throw new HelmError(
         'invalid_route_path',
-        `plugin ${pluginId} routing path must be with / open head relative path (host automatically mount to plugin naming empty between):${String(spec.path)}`,
+        `Plugin ${pluginId} route path must be a relative path starting with '/' (mounted under the plugin namespace): ${String(spec.path)}`,
         400,
       );
     }
     if (spec.path === '/api' || spec.path.startsWith('/api/')) {
       throw new HelmError(
         'invalid_route_path',
-        `plugin ${pluginId} routing ${spec.method} ${spec.path} disallows carry /api prefix (please declaration relative path, host negative duty naming empty between concatenate)`,
+        `Plugin ${pluginId} route ${spec.method} ${spec.path} cannot include the '/api' prefix (declare a relative path; the host handles namespacing)`,
         400,
       );
     }
     if (spec.path === '/') {
-      throw new HelmError('invalid_route_path', `plugin ${pluginId} routing relative path at least need to one segment (disallows only /)`, 400);
+      throw new HelmError('invalid_route_path', `Plugin ${pluginId} route relative path must have at least one segment ('/' alone is disallowed)`, 400);
     }
     if (spec.path.includes('?') || spec.path.includes('#')) {
       throw new HelmError(
         'invalid_route_path',
-        `plugin ${pluginId} routing ${spec.method} ${spec.path} disallows carry query string or fragment`,
+        `Plugin ${pluginId} route ${spec.method} ${spec.path} cannot contain a query string or fragment`,
         400,
       );
     }
@@ -456,7 +454,7 @@ export class CapabilityRegistry {
       if (seg.length === 0) {
         throw new HelmError(
           'invalid_route_path',
-          `plugin ${pluginId} routing ${spec.method} ${spec.path} disallows empty path segment (// or tail slash)`,
+          `Plugin ${pluginId} route ${spec.method} ${spec.path} cannot contain empty path segments ('//' or trailing slash)`,
           400,
         );
       }
@@ -464,13 +462,13 @@ export class CapabilityRegistry {
       if (decoded === '.' || decoded === '..' || decoded.includes('/')) {
         throw new HelmError(
           'invalid_route_path',
-          `plugin ${pluginId} routing ${spec.method} ${spec.path} disallows point segment (. / ..) or encode slash`,
+          `Plugin ${pluginId} route ${spec.method} ${spec.path} cannot contain dot segments ('.' / '..') or encoded slashes`,
           400,
         );
       }
     }
     if (typeof spec.handler !== 'function') {
-      throw new HelmError('invalid_route_handler', `plugin ${pluginId} routing ${spec.path} missing handler`, 400);
+      throw new HelmError('invalid_route_handler', `Plugin ${pluginId} route ${spec.path} is missing handler`, 400);
     }
 
     let pluginRoutes = this.routes.get(pluginId);
@@ -560,7 +558,7 @@ export class CapabilityRegistry {
     if (dups.length > 0) {
       throw new HelmError(
         'duplicate_tool_name',
-        `plugin tool name conflict (provider-safe name must unique):${[...new Set(dups.map((d) => d.name))].join(', ')}`,
+        `Plugin tool name conflict (provider-safe names must be unique): ${[...new Set(dups.map((d) => d.name))].join(', ')}`,
         500,
         { duplicates: [...new Set(dups.map((d) => d.name))] },
       );
@@ -589,9 +587,9 @@ export class CapabilityRegistry {
     const actions = this.actions.get(pluginId);
     const entry = actions?.get(actionId);
     if (!entry) {
-      throw new HelmError('unknown_action', `plugin ${pluginId} not declaration action ${actionId}`, 404, { pluginId, actionId });
+      throw new HelmError('unknown_action', `Plugin ${pluginId} action ${actionId} is not declared (not declaration)`, 404, { pluginId, actionId });
     }
-    assertScopeAllows(pluginId, `action ${pluginId}.${actionId}`, entry.scope, context.conversationId, options.getConversation);
+    assertScopeAllows(pluginId, `Action ${pluginId}.${actionId}`, entry.scope, context.conversationId, options.getConversation);
     validatePluginInput(pluginId, actionId, entry.inputSchema, input);
     return { idempotent: entry.idempotent === true };
   }
@@ -619,11 +617,11 @@ export class CapabilityRegistry {
     options: CapabilityExecutionOptions,
   ): Promise<unknown> {
     const found = this.findToolByName(name, options);
-    if (!found) throw new HelmError('unknown_tool', `not registered tool:${name}`, 404, { name });
+    if (!found) throw new HelmError('unknown_tool', `Tool is not registered: ${name}`, 404, { name });
 
     const { pluginId, spec } = found;
     options.assertActive(pluginId);
-    assertScopeAllows(pluginId, `tool ${name}`, spec.scope, context.conversationId, options.getConversation);
+    assertScopeAllows(pluginId, `Tool ${name}`, spec.scope, context.conversationId, options.getConversation);
     validatePluginInput(pluginId, spec.name, spec.inputSchema, input);
     return options.tracker.withTask(pluginId, `tool:${name}`, () =>
       Promise.resolve(spec.execute(input as never, context)),

@@ -1,22 +1,20 @@
 /**
- * plugin id → disk directory name (across platform consistent mapping).
+ * Maps plugin IDs to cross-platform on-disk directory names.
  *
- * background: plugin id allows `:`(`/^[A-Za-z0-9:_-]+$/`), while Windows filename forbidden `:`- -
- * this kind of name will by explain into NTFS hand over replace data stream (`mkdir builtin:profile` must report ENOENT),
- * plugin register in first carries smoke number plugin where i.e. crash. reason id in `:` one rule escaping is `%3A`,
- * the rest character original keep (excludes `:`  id disk layout and old behavior fully consistent).
+ * Background: plugin IDs allow `:` (`/^[A-Za-z0-9:_-]+$/`), whereas Windows filenames forbid `:`
+ * (interpreted as an NTFS alternate data stream, causing `mkdir builtin:profile` to fail with ENOENT).
+ * Escapes `:` to `%3A` while preserving all other characters so IDs without `:` keep identical layouts.
  *
- * unique right threat point: all `<dataDir>/plugins/<...>` compute and external plugin directory discover all away this in,
- * never in other where each write a escaping rule.
+ * Single source of truth for `<dataDir>/plugins/<...>` paths and external plugin directory discovery.
  */
 const COLON = /:/g
 
-/** plugin id for should data directory name (`<dataDir>/plugins/<this name>`). */
+/** Returns the on-disk directory name under `<dataDir>/plugins/` for `pluginId`. */
 export function pluginDataDirName(pluginId: string): string {
   return pluginId.replace(COLON, '%3A');
 }
 
-/** directory name is otherwise is built-in plugin pure data directory (`builtin:` prefix directly or escaping form). */
+/** Returns whether a directory name belongs to a built-in plugin data directory (`builtin:` or escaped form). */
 export function isBuiltinPluginDataDirName(dirName: string): boolean {
   return dirName.startsWith('builtin:') || dirName.startsWith('builtin%3A');
 }

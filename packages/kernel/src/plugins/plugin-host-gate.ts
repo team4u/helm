@@ -1,10 +1,9 @@
 /**
- * PluginHost concurrency control gate:per-plugin lifecycle serial queue + write takes precedence service screen fault read write lock.
+ * PluginHost concurrency gate: per-plugin serial lifecycle queue + writer-preferring service barrier RWLock.
  *
- * Why: start screen fault (prepare can time cost) must and across plugin lifecycle operation mutual exclusion, otherwise screen fault phase
- * concurrency enable service will leak start, concurrency disable will by re-,stop() will because not placement while empty run.
- * read gate keep across plugin concurrency, write gate guarantee screen fault and all amount stop atomicity; lock order constant isper-plugin
- * queue → read gate, write gate do not via plugin queue, missing deadlock ring.
+ * Why: the startup barrier (`prepare`) can be asynchronous and must exclude concurrent cross-plugin lifecycle
+ * mutations so newly enabled services aren't skipped, disabled services aren't revived, and `stop()` never
+ * no-ops mid-barrier. Lock ordering is always `per-plugin queue -> read gate` so writes never deadlock.
  */
 export class PluginHostGate {
   private lifecycle = new Map<string, Promise<unknown>>();
@@ -29,9 +28,7 @@ export class PluginHostGate {
     return this.lifecycle.size;
   }
 
-  /**
-   * by pluginId serial execute lifecycle operation, and in execute during hold has service screen fault read gate.
-   */
+  /** Executes `op` serially per `pluginId` while holding the service barrier read lock. */
   enqueue<T>(pluginId: string, op: () => Promise<T>): Promise<T> {
     const prev = this.lifecycle.get(pluginId) ?? Promise.resolve();
     const run = prev.then(async () => {
@@ -98,7 +95,7 @@ export class PluginHostGate {
     }
   }
 
-  /** wait for all already queue lifecycle task converge and empty queue index (dispose when invoke). */
+  /** Awaits all queued lifecycle operations and clears queue entries (called on `dispose()`). */
   async drain(): Promise<void> {
     await Promise.allSettled([...this.lifecycle.values()]);
     this.lifecycle.clear();
