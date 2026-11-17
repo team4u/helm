@@ -13,6 +13,7 @@ import {
   type MaybePromise,
   type PluginDefinition,
 } from '@helm/protocol'
+import { resolvePluginClientAssets } from './asset-paths.js'
 import { readSwarmSkillAsset } from './swarm/assets.js'
 import {
   ARCHIVED_WORKER_TAG,
@@ -64,6 +65,7 @@ import {
 import { createCollabGroupRuntime } from './swarm/group-store.js'
 import { registerSwarmActions } from './swarm/actions.js'
 import { registerSwarmHooks } from './swarm/hooks.js'
+import { registerSwarmUi } from './swarm/ui.js'
 
 export function createSwarmPlugin(): PluginDefinition {
   return {
@@ -75,6 +77,7 @@ export function createSwarmPlugin(): PluginDefinition {
     },
     icon: 'network',
     version: '0.1.0',
+    ...resolvePluginClientAssets(SWARM_PLUGIN_ID, 'swarm', 'swarm_plugin_client_missing'),
     definePlugin(ctx) {
       let active = false
       let shutdown = false
@@ -174,6 +177,7 @@ export function createSwarmPlugin(): PluginDefinition {
 
       registerSwarmActions(ctx, coordinator)
       registerSwarmHooks(ctx, coordinator)
+      registerSwarmUi(ctx)
 
       ctx.configSchema({
         maxWorkersPerGroup: {
@@ -320,3 +324,5 @@ export {
   activeSwarmGroupCoordinatorSection,
   activeSwarmGroupWorkerSection,
 } from './swarm/hooks.js'
+
+export { registerSwarmUi } from './swarm/ui.js'
