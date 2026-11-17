@@ -85,8 +85,6 @@
   --nav-active-bg: var(--bg-elevated);
   --nav-active-fg: var(--fg);
   --nav-active-muted: var(--fg-muted);
-  --nav-sub-active-bg: #ebecf6;
-  --nav-sub-active-border: rgba(79, 70, 229, 0.22);
 
   /* 主强调色与语义指示色 */
   --accent: #4f46e5;
@@ -193,8 +191,6 @@
   --nav-active-bg: #3c3c45;
   --nav-active-fg: var(--fg);
   --nav-active-muted: var(--fg-muted);
-  --nav-sub-active-bg: #2b2c3b;
-  --nav-sub-active-border: rgba(165, 180, 252, 0.24);
 
   --accent: #a5b4fc;
   --accent-bg: #2b2c47;

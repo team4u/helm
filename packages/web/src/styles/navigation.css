@@ -178,42 +178,18 @@
   color: var(--nav-active-muted);
 }
 
-/* 二级会话行选中态：脱离浮雕卡片阴影，改用柔和着色底 + 1px 发丝内描边 + 左侧强调锚点 */
+/* 二级会话行选中态：与悬停态保持一致的柔和中性底色，无投影、无边框、无左侧竖线 */
 .sidebar-context .nav-item.nav-item-sub.nav-item-active:hover,
 .sidebar-context .nav-item.nav-item-sub.nav-item-active {
-  --nav-row-bg: var(--nav-sub-active-bg);
+  --nav-row-bg: var(--nav-hover-bg);
   background: var(--nav-row-bg);
-  color: var(--nav-active-fg);
-  box-shadow: inset 0 0 0 1px var(--nav-sub-active-border);
+  color: var(--fg);
+  box-shadow: none;
 }
 
-.sidebar-context .nav-item.nav-item-sub.nav-item-active::before {
-  content: '';
-  position: absolute;
-  left: 2px;
-  top: 6px;
-  bottom: 6px;
-  width: 2px;
-  border-radius: 1px;
-  background: var(--accent);
-  pointer-events: none;
-}
-
-/* 分屏焦点刻度与微标：与主舞台面板顶缘焦点条呼应 */
+/* 分屏焦点标识（仅通过行尾 .nav-pane-tag 着色体现，不渲染左侧竖线） */
 .nav-item-focused {
   position: relative;
-}
-
-.nav-item-focused::before {
-  content: '';
-  position: absolute;
-  left: 2px;
-  top: 6px;
-  bottom: 6px;
-  width: 2px;
-  border-radius: 1px;
-  background: var(--accent);
-  pointer-events: none;
 }
 
 .nav-pane-tag {
@@ -310,10 +286,7 @@
   font-weight: 400;
 }
 
-.nav-item-sub.nav-item-active .nav-item-label {
-  font-weight: 600;
-}
-
+.nav-item-sub.nav-item-active .nav-item-label,
 .nav-item-sub.nav-item-split .nav-item-label {
   font-weight: 500;
 }

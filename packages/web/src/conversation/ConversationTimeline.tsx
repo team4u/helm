@@ -421,7 +421,7 @@ function ContextDivider({ item }: { item: DividerItem }) {
       {open && expandable !== undefined ? (
         <div className="trace-expanded-body selectable trace-expanded-body-flush">
           <div className="trace-section-label">{expandLabel}</div>
-          <pre className="code-block-pre code-block-pre-flush">
+          <pre className="code-block-pre">
             <code>{expandable}</code>
           </pre>
         </div>
