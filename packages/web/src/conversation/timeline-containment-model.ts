@@ -1,32 +1,32 @@
 /**
- * 时间线渲染隔离纯函数层（纯 .ts，零 React/DOM 依赖，单测直测）。
+ * Timeline render-containment pure-function layer (plain .ts, zero React/DOM deps, unit-testable directly).
  *
- * 背景：长会话时间线保留完整 DOM（大纲定位 / 搜索高亮 / 插件 timeline.renderer
- * 契约不裁剪条目），历史已完成行通过 CSS `content-visibility: auto` +
- * `contain-intrinsic-size: auto <px>` 交给浏览器跳过屏外行的渲染工作。
+ * Background: long-conversation timelines keep the full DOM (outline locating / search highlight / plugin
+ * timeline.renderer contracts forbid trimming entries), so finished historical rows are handed to the
+ * browser via CSS `content-visibility: auto` + `contain-intrinsic-size: auto <px>` to skip offscreen rendering.
  *
- * 诚实边界：这不是 DOM 虚拟化（节点始终在文档中，querySelectorAll / 大纲 /
- * 搜索照常工作）；从未渲染过的行只有按文本规模分桶的占位估高，滚动经过时
- * 浏览器按真实高度纠正。滚动容器启用原生滚动锚定以尽量保持视口内容稳定，
- * 但仍不承诺对所有复杂内容零位移。
+ * Honesty boundary: this is not DOM virtualization (nodes stay in the document; querySelectorAll /
+ * outline / search keep working); never-rendered rows only get bucketed placeholder height estimates,
+ * corrected to real heights once scrolled past. The scroll container enables native scroll anchoring
+ * to keep the viewport stable, but zero shift is not promised for all complex content.
  *
- * 本模块同时承载「视口当前阅读锚点」的 IntersectionObserver 决策纯函数：
- * 观察器以「行顶越过容器顶 + OUTLINE_ACTIVE_LINE_PX 基准线」为相交语义，
- * 与 outline-model.resolveActiveOutlineEntryId 的“最后一个越过基准线的锚点、
- * 全部未越过时取首个锚点”语义对齐，屏外行不触发整列 getBoundingClientRect
- * 强制布局。
+ * This module also hosts the IntersectionObserver decision functions for the viewport reading anchor:
+ * intersection means "row top has passed the container top + OUTLINE_ACTIVE_LINE_PX baseline",
+ * aligning with outline-model.resolveActiveOutlineEntryId's "last anchor past the baseline,
+ * first anchor when none has passed" semantics, without forcing layout on the whole list via
+ * getBoundingClientRect for offscreen rows.
  */
 
 import type { TimelineItem } from './timeline-model.js'
 
 // ---------------------------------------------------------------------------
-// 估高分桶
+// Height-estimate buckets
 // ---------------------------------------------------------------------------
 
-/** 历史完成行渲染隔离桶（对应 CSS 类 tl-cv-<bucket>）。 */
+/** Render-containment buckets for finished historical rows (CSS classes tl-cv-<bucket>). */
 export type ContainmentBucket = 'xs' | 'sm' | 'md' | 'lg'
 
-/** 各桶 contain-intrinsic-size 估高起点（px）；`auto` 关键字优先沿用真实高度。 */
+/** contain-intrinsic-size starting estimate per bucket (px); the `auto` keyword keeps the real height once known. */
 export const CONTAINMENT_INTRINSIC_PX: Readonly<Record<ContainmentBucket, number>> = {
   xs: 48,
   sm: 120,
@@ -34,24 +34,24 @@ export const CONTAINMENT_INTRINSIC_PX: Readonly<Record<ContainmentBucket, number
   lg: 900,
 }
 
-/** 行级渲染隔离 CSS 类名。 */
+/** Row-level render-containment CSS class name. */
 export function containmentClassName(bucket: ContainmentBucket): string {
   return `tl-cv-${bucket}`
 }
 
-/** 正文估高参数：桌面 820px 宽下约 55 字符/行（中英混排折中）、每行约 23px。 */
+/** Body height params: ~55 chars per line at 820px desktop width (a CJK/latin compromise), ~23px per line. */
 const DEFAULT_CHARS_PER_LINE = 55
 const MIN_CHARS_PER_LINE = 18
 const AVG_MIXED_CHAR_WIDTH_PX = 14.9
 const MAX_TIMELINE_INNER_PX = 820
 const NARROW_CONTAINER_THRESHOLD_PX = 680
 const LINE_HEIGHT_PX = 23
-/** 单条工具行 / 折叠组摘要行（26px 行高 + 间隙均摊）。 */
+/** One tool row / folded-group summary row (26px row height + amortized gaps). */
 const TOOL_ROW_PX = 30
-/** 人类胶囊内边距 + 底部栏、回合 footer 等固定铬块估高。 */
+/** Human pill padding + bottom bar, turn footer, and other fixed chrome estimates. */
 const HUMAN_CHROME_PX = 42
 const TURN_CHROME_PX = 48
-/** 每个附件芯片（缩略图/芯片行）估高。 */
+/** Estimate per attachment chip (thumbnail/chip row). */
 const ATTACHMENT_PX = 34
 
 export interface ContainmentEstimateOptions {
@@ -81,11 +81,11 @@ function bucketByEstimatedHeight(px: number): ContainmentBucket {
 }
 
 /**
- * 按文本规模为历史完成行选择估高桶：
- * - divider：固定 26px 分割线，给最小桶；
- * - plugin-card：插件 timeline.renderer 卡片高度不可知（可变高内容），给中等桶，
- *   首次渲染后由 contain-intrinsic-size 的 auto 记忆沿用真实高度；
- * - human / assistant：按正文字符量（+附件/工具行数）粗估行数后分桶。
+ * Pick a height-estimate bucket for a finished historical row by text volume:
+ * - divider: a fixed 26px divider, smallest bucket;
+ * - plugin-card: plugin timeline.renderer card heights are unknowable (variable content), medium bucket,
+ *   with the real height remembered afterwards via contain-intrinsic-size auto;
+ * - human / assistant: bucket after a rough line estimate from body chars (+ attachment/tool row counts).
  */
 export function estimateContainmentBucket(
   item: TimelineItem,
@@ -102,8 +102,8 @@ export function estimateContainmentBucket(
     const attachments = item.attachments?.length ?? 0
     return bucketByEstimatedHeight(lines * LINE_HEIGHT_PX + attachments * ATTACHMENT_PX + HUMAN_CHROME_PX)
   }
-  // assistant：正文文本 + 工具行（step-group 折叠后仅占一条摘要行，
-  // 用户展开后由 auto 记忆纠正；live 回合不参与隔离，见 resolveContainmentClass）。
+  // assistant: body text + tool rows (a folded step-group occupies one summary row;
+  // user expansion is corrected by the auto memory; live turns never get contained, see resolveContainmentClass).
   let chars = 0
   let rows = 0
   for (const seg of item.segments) {
@@ -115,21 +115,21 @@ export function estimateContainmentBucket(
 }
 
 // ---------------------------------------------------------------------------
-// 隔离判定
+// Containment decisions
 // ---------------------------------------------------------------------------
 
 /**
- * 时间线行的锚点 id：与渲染层 `data-entry-id` 同口径（人类/分割线/插件卡取
- * entryId，assistant 回合取首个持久化条目 id，无条目时退回 React key）。
+ * Anchor id of a timeline row: same convention as the renderer's `data-entry-id` (human/divider/plugin
+ * cards use the entryId; assistant turns use the first persisted entry id, falling back to the React key).
  */
 export function timelineAnchorId(item: TimelineItem): string {
   return item.kind === 'assistant' ? (item.entryIds[0] ?? item.key) : item.entryId
 }
 
 export interface ContainmentExclusions {
-  /** 必须解除隔离的锚点集合（搜索/大纲高亮与定位目标：内容需真实布局后测量滚动）。 */
+  /** Anchors that must be released from containment (search/outline highlights and locate targets: content needs real layout before measuring/scrolling). */
   releasedEntryIds: ReadonlySet<string>
-  /** 最新 assistant 回合 key：无论会话 busy 与否始终真实渲染（见下）。 */
+  /** Latest assistant turn key: always rendered for real regardless of conversation busy state (see below). */
   latestAssistantKey?: string
   /** 滚动容器宽度（px），用于移动端/窄分屏自适应估高分桶。 */
   containerWidthPx?: number
@@ -138,13 +138,13 @@ export interface ContainmentExclusions {
 }
 
 /**
- * 判定单个时间线行是否可应用渲染隔离 class：
- * - 浏览器不支持或未启用（enabled=false）一律正常渲染；
- * - 仍在变化的内容不可隔离：live 流式回合、排队输入（queuedMode）；
- * - 最新 assistant 回合无论会话 busy 与否一律真实渲染：首次打开的初始贴底与
- *   活跃跟底的估高误差都集中在尾部（尾部长回答的真实高度远大于估高桶，
- *   隔离它会让首次置底落在估算总高上），且该回合是用户当前关注的落点；
- * - 高亮 / 大纲定位目标行必须解除隔离（否则 scrollIntoView 以占位高度定位失真）。
+ * Decide whether a single timeline row may receive the render-containment class:
+ * - unsupported or disabled (enabled=false) always renders normally;
+ * - still-changing content is never contained: live streaming turns, queued inputs (queuedMode);
+ * - the latest assistant turn always renders for real: both the initial bottom-stick on first open and
+ *   active bottom-following concentrate their estimate error at the tail (a long tail answer's real
+ *   height far exceeds its bucket — containing it would land the initial stick on the estimated total), and that turn is the user's current focus;
+ * - highlight / outline locate target rows must be released (otherwise scrollIntoView lands on placeholder heights).
  */
 export function resolveContainmentClass(
   item: TimelineItem,
@@ -167,8 +167,8 @@ export function resolveContainmentClass(
 }
 
 /**
- * 浏览器是否支持 content-visibility 渲染隔离；不支持则整列正常渲染
- * （旧属性声明会被 CSS 忽略，此处仍在 JS 侧短路以避免无意义的类名维护）。
+ * Whether the browser supports content-visibility containment; when unsupported the whole list renders
+ * normally (stale declarations are ignored by CSS; the JS short-circuit just avoids pointless class churn).
  */
 export function supportsTimelineContainment(): boolean {
   if (typeof window === 'undefined' || typeof CSS === 'undefined' || typeof CSS.supports !== 'function') {
@@ -178,22 +178,22 @@ export function supportsTimelineContainment(): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// 视口当前阅读锚点（IntersectionObserver 决策）
+// Viewport reading anchor (IntersectionObserver decisions)
 // ---------------------------------------------------------------------------
 
 /**
- * 大纲激活基准线（px）：与 outline-model.resolveActiveOutlineEntryId 的
- * 默认阈值同源——最后一个行顶越过「容器顶 + 96px」的锚点为当前阅读锚点。
+ * Outline activation baseline (px): same source as outline-model.resolveActiveOutlineEntryId's
+ * default threshold — the last anchor whose row top passed "container top + 96px" is the reading anchor.
  */
 export const OUTLINE_ACTIVE_LINE_PX = 96
 
 /**
- * 由当前相交锚点索引集合推导激活锚点索引（IO 路径决策核心）：
- * - 取 DOM 序（索引序）最后一个相交锚点，对齐 resolveActiveOutlineEntryId
- *   “最后一个越过基准线的锚点”语义（观察器 rootMargin 把相交区域下缘收窄到
- *   基准线，行相交 ⟺ 行顶已越过基准线且行身未远高于视口）；
- * - 空集（全部锚点都在基准线下方，如刚打开或滚动到最顶）回退首个锚点；
- * - 无锚点返回 -1。
+ * Derive the active anchor index from the set of currently intersecting anchor indexes (the IO-path decision core):
+ * - take the last intersecting anchor in DOM (index) order, aligning with resolveActiveOutlineEntryId's
+ *   "last anchor past the baseline" semantics (the observer's rootMargin narrows the intersection zone's
+ *   bottom edge to the baseline; a row intersects iff its top has passed the baseline and its body is not far taller than the viewport);
+ * - an empty set (all anchors below the baseline, e.g. just opened or scrolled to the very top) falls back to the first anchor;
+ * - no anchors returns -1.
  */
 export function resolveActiveAnchorIndex(
   intersecting: ReadonlySet<number>,

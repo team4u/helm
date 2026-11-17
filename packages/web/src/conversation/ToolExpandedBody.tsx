@@ -1,19 +1,24 @@
 /**
- * 宿主内置工具展开体（Quiet Surface 26px 轨迹行展开后的正文）。
+ * Host built-in tool expanded bodies (the content under a Quiet Surface 26px trace row).
  *
- * 契约：
- * - 仅在无插件 tool.view 接管时使用（TraceRow 判定后渲染，本组件不自查）；
- * - 小型 toolName => component 分派表（edit/write/read/bash），其余走通用
- *   键值形态；不做可扩展框架、不注册新 tool.view；
- * - edit 完成态必须先通过 EDIT_TOOL_RESULT_SCHEMA 校验才显示内核真实差异（成功才
- *   承诺“已应用”）；运行态只显示待执行片段（无文件行号），失败态显示“请求的
- *   变更片段（执行失败）”——写盘中途失败/结果管道失败时不能断言文件未变；
- *   缺失或非法元数据显式诊断并保留原始数据入口，绝不伪造已应用差异；
- * - 所有「展开全部」只展开本地已有完整文本；服务端截断（resultTruncation，
- *   随 toolResult 消息的 truncated/totalChars/totalLines 携带）时展开按钮即
- *   「展开全文」取回入口（单一入口）：按 GET /api/conversations/:id/entries/:entryId
- *   取回原文并原位回填，失败显式呈现；复制入口在取回前禁用，绝不把预览冒充全文；
- * - 组件文件只导出组件与类型，纯转换均在 *-model.ts。
+ * Contract:
+ * - Used only when no plugin tool.view took over (TraceRow decides before rendering; this
+ *   component does not re-check);
+ * - A small toolName => component dispatch table (edit/write/read/bash); everything else
+ *   takes the generic key-value shape; no extensible framework, no new tool.view registry;
+ * - The edit completed state must pass EDIT_TOOL_RESULT_SCHEMA validation before showing
+ *   the kernel's real diff (only success promises "applied"); the running state shows
+ *   pending hunks only (no file line numbers), the failure state shows "requested change
+ *   hunks (execution failed)" — a mid-write failure or a result-pipeline failure must not
+ *   assert the file is unchanged; missing or invalid metadata gets an explicit diagnostic
+ *   with the raw-data entry preserved — never fabricate an applied diff;
+ * - Every "expand all" only expands locally complete text; with server truncation
+ *   (resultTruncation, carried on the toolResult message as truncated/totalChars/totalLines)
+ *   the expand button becomes the single "expand full text" fetch entry: fetch the original
+ *   via GET /api/conversations/:id/entries/:entryId and backfill in place, surfacing
+ *   failures explicitly; the copy entry stays disabled until fetched — a preview is never
+ *   passed off as full text;
+ * - The component file exports only components and types; pure transforms live in *-model.ts.
  */
 import { Fragment, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -49,12 +54,12 @@ import {
 export interface ToolBodyProps {
   tool: ToolTrace
   conversationId: number
-  /** 结果文本全文取回状态（服务端截断时驱动取回按钮、错误呈现与复制门禁）。 */
+  /** Full-text fetch state for the result text (drives the fetch button, error display, and the copy gate under server truncation). */
   resultFetch: ToolResultFullTextState
 }
 
 // ---------------------------------------------------------------------------
-// 差异行渲染（已应用：真实行号；待执行片段：无行号）
+// Diff row rendering (applied: real line numbers; pending hunks: no numbers)
 // ---------------------------------------------------------------------------
 
 function DiffRowView({ row, numbered }: { row: AppliedDiffRowView | PendingDiffRow; numbered: boolean }): ReactNode {
@@ -90,7 +95,7 @@ function DiffRowView({ row, numbered }: { row: AppliedDiffRowView | PendingDiffR
   )
 }
 
-/** 较长差异的本地折叠阈值（数据已在客户端，展开可完整还原）。 */
+/** Local fold threshold for long diffs (data already client-side; expanding restores fully). */
 const DIFF_FOLD_ROWS = 32
 
 function DiffFoldButton({ hidden, expanded, onToggle }: { hidden: number; expanded: boolean; onToggle: () => void }): ReactNode {
@@ -160,10 +165,10 @@ function AppliedDiffView({ diff }: { diff: ToolEditDiff }): ReactNode {
 }
 
 // ---------------------------------------------------------------------------
-// 服务端截断：取回全文脚注与复制门禁（预览绝不当全文复制）
+// Server truncation: full-text fetch footer and copy gate (a preview is never copied as full text)
 // ---------------------------------------------------------------------------
 
-/** 截断取回脚注：preview/loading/complete 如实呈现，failed 显式报错并可重试。 */
+/** Truncation fetch footer: preview/loading/complete rendered honestly; failed shows the error with a retry. */
 function TruncatedOutputFooter({
   tool,
   resultFetch,
@@ -171,7 +176,7 @@ function TruncatedOutputFooter({
 }: {
   tool: ToolTrace
   resultFetch: ToolResultFullTextState
-  /** 追加在截断说明前的本地折叠事实（如「已折叠前 N 行」，仅描述预览本身）。 */
+  /** Local folding fact prepended to the truncation note (e.g. "N lines collapsed above"; describes the preview only). */
   hiddenNote?: string
 }): ReactNode {
   const { t } = useWebLocale()
@@ -192,7 +197,7 @@ function TruncatedOutputFooter({
     )
   }
   if (resultFetch.phase === 'complete') {
-    // 回填后标记仍未消失：服务端契约异常，如实说明，不谎称已取得更多内容。
+    // The marker survived the backfill: a server contract anomaly — state it honestly, never claim more content was obtained.
     return <div className="trace-tool-note">{t('conv.trunc.stillTruncated')}</div>
   }
   const total = truncation.totalLines !== undefined ? t('conv.trunc.linesTotalParens', { count: truncation.totalLines }) : ''
@@ -220,7 +225,7 @@ function TruncatedOutputFooter({
   )
 }
 
-/** 结果文本复制门禁：服务端截断且未取回原文前禁用复制，绝不静默复制预览冒充全文。 */
+/** Result-text copy gate: copying stays disabled under server truncation until the original is fetched — never silently copy a preview as full text. */
 function ResultCopyGate({
   text,
   label,
@@ -249,7 +254,7 @@ function ResultCopyGate({
 }
 
 // ---------------------------------------------------------------------------
-// 原始数据（入参 JSON + 原始输出 + 结构化结果，验证/复制兜底，绝不丢参数）
+// Raw data (input JSON + raw output + structured result; verification/copy fallback, never drops arguments)
 // ---------------------------------------------------------------------------
 
 function RawToolData({ tool, resultFetch, defaultOpen = false }: { tool: ToolTrace; resultFetch: ToolResultFullTextState; defaultOpen?: boolean }): ReactNode {
@@ -361,7 +366,7 @@ function EditToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
       </>
     )
   }
-  // unknown：与 running/done/error 明确区分，不虚构执行状态
+  // unknown: clearly distinct from running/done/error — never invent an execution state
   return (
     <>
       <div className="trace-section-label">{t('conv.edit.resultUnknown', { path: inputPath !== undefined ? ` · ${inputPath}` : '' })}</div>
@@ -440,7 +445,7 @@ function ReadToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
   const data = useMemo(() => readBodyData(tool), [tool])
   const [expanded, setExpanded] = useState(false)
   const failed = tool.status === 'error' || tool.isError
-  // 服务端截断只约束原始输出文本通道；structuredOutput.content（details 通道）完整传回，不受影响。
+  // Server truncation constrains only the raw output text channel; structuredOutput.content (details channel) transfers in full and is unaffected.
   const truncated = data.fromResultText && tool.resultTruncation !== undefined
   if (failed) {
     return (
@@ -589,7 +594,7 @@ function BashToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
 }
 
 // ---------------------------------------------------------------------------
-// 通用工具（键值 + 输出预览 + 原始数据兜底）
+// Generic tools (key-value + output preview + raw-data fallback)
 // ---------------------------------------------------------------------------
 
 const GENERIC_RESULT_PREVIEW_LINES = 40
@@ -644,7 +649,7 @@ function GenericToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
 }
 
 // ---------------------------------------------------------------------------
-// 产物入口 + 分派表
+// Artifact entry + dispatch table
 // ---------------------------------------------------------------------------
 
 function ArtifactEntry({ tool, conversationId }: { tool: ToolTrace; conversationId: number }): ReactNode {
@@ -664,7 +669,7 @@ function ArtifactEntry({ tool, conversationId }: { tool: ToolTrace; conversation
   )
 }
 
-/** 小型内置分派表：非扩展框架，未命中的工具走通用键值形态。 */
+/** Small built-in dispatch table: not an extension framework; unmatched tools take the generic key-value shape. */
 const TOOL_BODY_MAP: Record<string, (props: ToolBodyProps) => ReactNode> = {
   edit: EditToolBody,
   write: WriteToolBody,

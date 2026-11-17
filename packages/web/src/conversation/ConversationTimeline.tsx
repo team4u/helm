@@ -53,7 +53,7 @@ import { formatBytes, formatDurationMs, formatFullTimestamp, formatMessageTime }
 export interface OutlineScrollRequest {
   entryId: string
   headingIndex?: number
-  /** 回合内业务卡二级锚：匹配 AssistantTurn 顶层 tool.view 卡 trace 元素的 `data-outline-card-id`（即 tool.key）。 */
+  /** In-turn business-card secondary anchor: matches the `data-outline-card-id` (i.e. tool.key) of an AssistantTurn top-level tool.view card. */
   cardId?: string
   tick: number
 }
@@ -62,24 +62,24 @@ export interface ConversationTimelineProps {
   conversation: ConversationSummary
   detailEntries: ReadonlyArray<ConversationEntry>
   live?: ConversationLive
-  /** 外层已预计算的归一化时间线列表（避免 ConversationPane 与 Timeline 重复计算）。 */
+  /** Precomputed normalized timeline list from the parent (avoids double computation in ConversationPane and Timeline). */
   timelineItems?: ReadonlyArray<TimelineItem>
-  /** 发送请求在途且服务端尚未 working/blocked（轻量等待行，与 working 行互斥）。 */
+  /** Send request in flight while the server is not yet working/blocked (light waiting row, mutually exclusive with the working row). */
   sendingPending?: boolean
-  /** 大纲点击/回车触发的滚动定位请求（每次递增 tick 支持重复点击同一条目）。 */
+  /** Scroll-locate request triggered by outline click/Enter (tick increments each time so the same entry can be re-targeted). */
   outlineScrollRequest?: OutlineScrollRequest | null
-  /** 滚动过程中通知外层当前视口顶部焦点的 entryId（供大纲浮层高亮当前位置）。 */
+  /** Notifies the parent of the current viewport-top focus entryId while scrolling (feeds outline highlight). */
   onActiveEntryChange?: (entryId: string | undefined) => void
-  /** 请求将文本回填 Composer 并聚焦（编辑并重发；可携带历史 entryId 与附件）。 */
+  /** Request to prefill and focus the Composer (edit and resend; may carry a history entryId and attachments). */
   onRequestEdit: (target: EditRequestTarget) => void
-  /** 点击空白会话引导词：仅请求回填草稿，不是历史编辑。 */
+  /** Starter click on an empty conversation: prefill the draft only, not a history edit. */
   onRequestStarter?: (text: string) => void
-  /** 当前会话 Profile 的引导词列表（空列表/未定义不渲染按钮）。 */
+  /** Starter list of the conversation's profile (empty/undefined renders no buttons). */
   starters?: ProfileStarterPrompt[]
 }
 
 // ---------------------------------------------------------------------------
-// 附件渲染（图片缩略图 + 非图片芯片）
+// Attachment rendering (image thumbnails + non-image chips)
 // ---------------------------------------------------------------------------
 
 function AttachmentImage({ att, conversationId }: { att: ConversationAttachmentRef; conversationId: number }) {
@@ -181,10 +181,10 @@ function AttachmentChips({
 }
 
 // ---------------------------------------------------------------------------
-// 人类消息胶囊
+// Human message pill
 // ---------------------------------------------------------------------------
 
-/** 非人类输入来源徽标（agent 汇报 / 触发器注入）；未知来源原样展示标识。 */
+/** Non-human input origin badge (agent report / trigger injection); unknown origins show the raw identifier. */
 function originLabel(origin: string, t: WebMessageTranslator): string {
   if (origin === 'agent') return t('conv.origin.agentReport')
   if (origin === 'trigger') return t('conv.origin.trigger')
@@ -210,20 +210,20 @@ function HumanMessage({
 }: {
   item: HumanInputItem
   conversation: ConversationSummary
-  /** item.entryId 对应的真实持久化条目；queued（无持久锚点）时 undefined。 */
+  /** Real persisted entry for item.entryId; undefined while queued (no persistent anchor). */
   anchorEntry?: ConversationEntry
   onRequestEdit: (target: EditRequestTarget) => void
-  /** 从该消息分叉新会话（ConversationTimeline 统一实例化的动作服务）。 */
+  /** Fork a new conversation from this message (action service instantiated once by ConversationTimeline). */
   onForkFromHere: (entryId: string) => Promise<void>
-  /** 撤回排队输入并转入编辑（withdrawn → 原文本回填；已落库 → 原地编辑）。 */
+  /** Withdraw the queued input and switch to editing (withdrawn -> prefill the text; persisted -> edit in place). */
   onWithdrawQueuedEdit: (subId: string, target: EditRequestTarget) => Promise<void>
 }) {
   const store = useHelmStore()
   const { t } = useWebLocale()
   const [forking, setForking] = useState(false)
   const [withdrawing, setWithdrawing] = useState(false)
-  // 插件微插槽 timeline.entry.action：按当前会话 scope + 真实 entry 的 kind/role 过滤；
-  // queued（无持久锚点）或 id 不在当前详情集合内（分页窗口外）不渲染，绝不编造占位 entry。
+  // Plugin micro-slot timeline.entry.action: filtered by conversation scope + the real entry's kind/role;
+  // not rendered while queued (no persistent anchor) or when the id is outside the loaded detail set (paged window) — never fabricate a placeholder entry.
   const entryActions =
     anchorEntry !== undefined
       ? matchTimelineEntryActions(
@@ -237,7 +237,7 @@ function HumanMessage({
   const humanFullTime = formatFullTimestamp(item.createdAt)
   const hasHumanTime = item.createdAt !== undefined && humanTime !== ''
 
-  // 排队中的非人类长文本（如后台结算汇报原文）：通用可展开收起，不解析业务 payload。
+  // Queued non-human long text (e.g. raw background report): generic expand/collapse, no business payload parsing.
   const [longOpen, setLongOpen] = useState(false)
   const queuedCollapse =
     item.queuedMode !== undefined && item.origin !== 'human'
@@ -246,13 +246,13 @@ function HumanMessage({
   const collapseBodyId = useId()
 
   const editRequest = async (): Promise<void> => {
-    // 仅人类输入可原地编辑：agent 汇报 / trigger 注入不是人类编辑对象（铅笔已收起，双重防御）
+    // Only human inputs are editable in place: agent reports / trigger injections are not (pencil hidden, double defense)
     if (item.origin !== 'human') return
     const attachments =
       item.attachments !== undefined && item.attachments.length > 0 ? { attachments: item.attachments } : {}
     if (item.queuedMode === undefined) {
-      // 已落库历史消息：进入原地编辑；entryId 必须是合法正整数，
-      // 非法锚点绝不静默降级为新消息（否则会把「编辑」错发成普通追加）。
+      // Persisted history message: edit in place; entryId must be a valid positive integer —
+      // an invalid anchor never silently degrades into a new message (an "edit" must not be mis-sent as an append).
       const numericId = Number(item.entryId)
       if (!Number.isSafeInteger(numericId) || numericId <= 0) {
         store.pushNotice({
@@ -267,7 +267,7 @@ function HumanMessage({
       onRequestEdit({ text: item.text, entryId: numericId, ...attachments })
       return
     }
-    // 排队中消息：先撤回（若刚被置入执行则无缝衔接历史编辑）
+    // Queued message: withdraw first (seamlessly continue into a history edit if it just entered execution)
     const subId = item.entryId.startsWith('queued:') ? item.entryId.slice('queued:'.length) : item.entryId
     setWithdrawing(true)
     try {
@@ -372,23 +372,23 @@ function HumanMessage({
 }
 
 // ---------------------------------------------------------------------------
-// 工具行 / 思考组 / Assistant 回合见 TimelineRows.tsx 与 AssistantTurn.tsx
-// （自 ConversationTimeline 拆出的行级渲染单元）。
+// Tool rows / thinking groups / assistant turns live in TimelineRows.tsx and AssistantTurn.tsx
+// (row-level render units split out of ConversationTimeline).
 // ---------------------------------------------------------------------------
 
-/** CSS 属性选择器值转义（双引号与反斜杠）；大纲二级锚定位查询用。 */
+/** Escape a CSS attribute selector value (double quotes and backslashes); used by outline secondary-anchor queries. */
 function escapeAttrSelectorValue(value: string): string {
   return value.replace(/["\\]/g, (ch) => `\\${ch}`)
 }
 
 // ---------------------------------------------------------------------------
-// 分割线 / 插件卡片 / 历史审批
+// Dividers / plugin cards / resolved asks
 // ---------------------------------------------------------------------------
 
 function ContextDivider({ item }: { item: DividerItem }) {
   const { t } = useWebLocale()
   const [open, setOpen] = useState(false)
-  // 可展开文本：reset 的交接摘要与 compaction 的精简摘要（同一展开交互）。
+  // Expandable text: the reset handoff summary or the compaction summary (same expand interaction).
   const expandable = item.divider === 'reset' ? item.handoff : item.summary
   const expandLabel = item.divider === 'reset' ? t('conv.divider.handoffSummary') : t('conv.divider.compactionSummary')
   return (
@@ -434,8 +434,8 @@ function PluginCard({ item, conversationId }: { item: PluginCardItem; conversati
   const store = useHelmStore()
   const { t } = useWebLocale()
   const conversation = store.conversations.find((c) => c.id === conversationId)
-  // timeline.renderer 自定义条目同样消费 timeline.entry.action：真实 entry kind 匹配；
-  // 自定义 kind 无 user/assistant 角色，声明 roles 的动作不命中。
+  // timeline.renderer custom entries also consume timeline.entry.action: matched by the real entry kind;
+  // custom kinds have no user/assistant role, so actions declaring roles never match.
   const entryActions =
     conversation !== undefined
       ? matchTimelineEntryActions(
@@ -471,7 +471,7 @@ function PluginCard({ item, conversationId }: { item: PluginCardItem; conversati
   )
 }
 
-/** 已决审批行状态徽标；未知状态原样展示服务端标识。 */
+/** Resolved-ask row status badge; unknown statuses show the raw server identifier. */
 function resolvedAskLabel(status: string, t: WebMessageTranslator): string {
   if (status === 'answered') return t('conv.ask.approved')
   if (status === 'cancelled') return t('conv.ask.cancelled')
@@ -502,7 +502,7 @@ function ResolvedAskRow({ ask, status }: { ask: AskSpec; status: 'answered' | 'c
 }
 
 // ---------------------------------------------------------------------------
-// 高亮定位
+// Highlight location
 // ---------------------------------------------------------------------------
 
 function useEntryHighlight(
@@ -524,8 +524,8 @@ function useHighlightScroll(
 ): (node: HTMLDivElement | null) => void {
   const store = useHelmStore()
   const h = store.highlightedEntry
-  // 稳定 ref 避免普通 rerender 重复定位；StrictMode 重新挂载 ref 时须重新
-  // 武装校准，因为首次挂载的任务已经由 effect cleanup 取消。
+  // A stable ref avoids re-locating on ordinary rerenders; when StrictMode remounts the ref the
+  // calibration must re-arm because the first mount's task was already cancelled by effect cleanup.
   return useCallback((node: HTMLDivElement | null): void => {
     if (node === null || h?.conversationId !== conversationId) return
     if (node.dataset.entryId !== h.entryId) return
@@ -535,11 +535,11 @@ function useHighlightScroll(
 }
 
 // ---------------------------------------------------------------------------
-// 回合失败诊断（当前未清除失败的内联展示；随下一回合开始自动消失）
+// Turn failure diagnostics (inline display of the uncleared current failure; disappears when the next turn starts)
 // ---------------------------------------------------------------------------
 
-/** 失败回合内联诊断块：内容来自 ConversationSummary.lastError（同一权威状态源），
- * 不新增持久化 timeline item；lastError 空缺时只给明确通用文案，绝不编造详情。 */
+/** Inline diagnostics block for a failed turn: content comes from ConversationSummary.lastError (the same
+ * authoritative state source); no new persisted timeline item — when lastError is empty show a clear generic message, never fabricated details. */
 function TurnErrorNotice({
   conversation,
   detailEntries,
@@ -549,9 +549,9 @@ function TurnErrorNotice({
   detailEntries: ReadonlyArray<ConversationEntry>
   onRequestEdit: (target: EditRequestTarget) => void
 }) {
-  // 最近一条可编辑的人类输入：复用与 Composer ↑ 相同的安全解析（校验 entryId、
-  // 不跨 reset 边界、复用已有 attachments）；无法可靠定位则不提供快捷操作，
-  // 绝不误编辑旧消息。
+  // Latest editable human input: reuse the same safe resolution as Composer ↑ (validates entryId,
+  // never crosses a reset boundary, reuses existing attachments); without a reliable anchor there is
+  // no quick action — never risk editing the wrong old message.
   const { t } = useWebLocale()
   const editTarget = useMemo(() => lastEditableHumanInput(detailEntries), [detailEntries])
   return (
@@ -580,10 +580,10 @@ function TurnErrorNotice({
 }
 
 // ---------------------------------------------------------------------------
-// 主时间线
+// Main timeline
 // ---------------------------------------------------------------------------
 
-/** 滚离底部超过该阈值（px）后显示「回到底部」浮动按钮。 */
+/** Show the "back to bottom" floating button after scrolling up past this threshold (px). */
 const SCROLL_TO_BOTTOM_THRESHOLD_PX = 240
 
 export function ConversationTimeline({
@@ -600,7 +600,7 @@ export function ConversationTimeline({
 }: ConversationTimelineProps) {
   const store = useHelmStore()
   const { t } = useWebLocale()
-  // 行级动作服务（分叉 / 排队撤回转编辑）统一实例化一次，行组件经 props 消费。
+  // Row action service (fork / withdraw-queued-then-edit) instantiated once; row components consume it via props.
   const entryActions = useTimelineEntryActions(conversation, onRequestEdit)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [localHighlightEntryId, setLocalHighlightEntryId] = useState<string | null>(null)
@@ -632,9 +632,9 @@ export function ConversationTimeline({
   const [charsPerLine, setCharsPerLine] = useState<number>(() =>
     resolveCharsPerLine(typeof window !== 'undefined' && window.innerWidth > 0 ? window.innerWidth : undefined),
   )
-  // 一次性初始贴底窗口资格：consumed = 已被用户输入/自然收敛/显式定位取代，
-  // 本会话内不再重启；换会话/StrictMode 重演的 cleanup 只取消（active=false）
-  // 不消费，重挂后可重新启动，避免一次性资格被 effect 重演提前耗尽。
+  // One-shot initial bottom-stick eligibility: consumed = already superseded by user input, natural
+  // settling, or an explicit locate; it never restarts within the conversation. Conversation switch or
+  // StrictMode replay cleanups only cancel (active=false) without consuming, so remounts can restart and replays cannot exhaust the one-shot.
   const initialBottomRef = useRef<{ active: boolean; consumed: boolean }>({ active: false, consumed: false })
 
   const syncScrollBottomVisibility = useCallback((el: HTMLElement): void => {
@@ -681,9 +681,9 @@ export function ConversationTimeline({
     lastScrollTopRef.current = el.scrollTop
   }, [])
 
-  // 启动最终锚点校准并接管在途任务（新定位/搜索高亮互斥，旧的立即 cancel）。
-  // 行 ref 在 commit 阶段可能先于父级 scrollRef 挂载（子先于父），从目标自身
-  // 向上定位滚动容器，不依赖 ref 挂载顺序。
+  // Start the final anchor calibration and take over in-flight tasks (new locate/search highlight are mutually exclusive; the old one cancels immediately).
+  // Row refs may mount before the parent scrollRef during commit (children first); locate the
+  // scroll container by walking up from the target itself instead of relying on ref mount order.
   const armScrollCalibration = useCallback(
     (target: HTMLElement, alignment: AnchorAlignment): void => {
       const scroller = target.closest<HTMLElement>('.timeline-scroll')
@@ -702,17 +702,19 @@ export function ConversationTimeline({
   const highlightScrollRef = useHighlightScroll(conversation.id, armScrollCalibration)
   const highlightClass = useEntryHighlight(conversation.id, localHighlightEntryId)
 
-  // 换会话/卸载：仅作废属于旧会话的在途校准（挂载/换会话时 ref callback 先于
-  // 本 effect 运行，新会话刚启动的校准不能被本轮 cleanup 或 setup 误杀）与高亮
-  // 清除定时器（同一组件实例复用滚动容器）；切换会话重置贴底吸附初态。
-  // 初始贴底窗口同样只取消不消费：StrictMode 的 cleanup→setup 重演后可重启。
+  // Conversation switch/unmount: invalidate only the in-flight calibrations owned by the old
+  // conversation (ref callbacks run before this effect on mount/switch, so the new conversation's
+  // fresh calibration must survive this cleanup/setup) plus the highlight clear timers (the same
+  // component instance reuses the scroll container); switching conversations resets bottom-stick state.
+  // The initial bottom-stick window likewise only cancels without consuming: it can restart
+  // after StrictMode's cleanup-to-setup replay.
   useEffect(() => {
     stickToBottomRef.current = true
     programmaticBottomScrollRef.current = false
     lastScrollTopRef.current = 0
     prevFingerprintRef.current = null
-    // 重置大纲 tick 消费记录：换会话/StrictMode 重挂后，尚在生效的定位请求
-    // 必须重新执行（否则 setup 重置的贴底初态会抢走定位目的地）。
+    // Reset the outline tick consumption log: after a conversation switch or StrictMode remount, a
+    // still-effective locate request must re-run (otherwise the reset initial bottom-stick would steal the destination).
     lastOutlineTickRef.current = null
     initialBottomRef.current.active = false
     initialBottomRef.current.consumed = false
@@ -733,9 +735,9 @@ export function ConversationTimeline({
     }
   }, [conversation.id])
 
-  // 启动一次性初始贴底校准（详见 timeline-scroll-calibration.ts）。仅在：
-  // 未消费、未在途、仍处于贴底吸附态（搜索/大纲定位 effect 已先行释放贴底，
-  // 显式定位优先）且滚动容器就绪时启动；窗口结束后不再因 rerender 复活。
+  // Start the one-shot initial bottom-stick calibration (see timeline-scroll-calibration.ts). Only when:
+  // unconsumed, not in flight, and still bottom-stuck (the search/outline locate effect releases the
+  // stick first — explicit locate wins) and the scroll container is ready; never revived by rerenders once the window is over.
   const beginInitialBottomCalibration = useCallback((): void => {
     const state = initialBottomRef.current
     if (state.consumed || state.active) return
@@ -772,19 +774,19 @@ export function ConversationTimeline({
     [timelineItems, detailEntries, live, isWorking, isCompacting, store.groupedUi.timelineRenderers, store.groupedUi.toolViews],
   )
 
-  // timeline.entry.action 锚点索引：以 props 传入的 detailEntries（经 rewind
-  // 覆盖过滤，与渲染层同口径）定位真实 ConversationEntry。
+  // timeline.entry.action anchor index: from the detailEntries prop (already rewind-filtered,
+  // same view as the renderer) locate real ConversationEntry objects.
   const activeEntriesById = useMemo(() => buildActiveEntryIndex(detailEntries), [detailEntries])
 
   const hasLiveTurn = items.some((item) => item.kind === 'assistant' && item.live)
   const resolvedAsks = store.resolvedAsksByConv[conversation.id] ?? []
 
-  // 全量工具调用轻量摘要：一次性收集，透传给每个 tool.view 插件组件
-  //（siblingCalls 供其自行计算同目标多次调用折叠 / resume 续接关系）。
+  // Lightweight summaries of all tool calls: collected once, passed through to every tool.view
+  // plugin component (siblingCalls let them compute same-target dedupe / resume continuation themselves).
   const siblingCalls = useMemo(() => collectSiblingCalls(items), [items])
 
-  // 实际生成模型边界索引（纯函数一次扫描）：为每个发生模型切换的 assistant
-  // 回合按 key 索引新模型身份，渲染层只查表，不堆业务判断。
+  // Effective-model boundary index (one pure scan): each assistant turn with a model switch gets
+  // its new model identity indexed by key; the renderer only looks the table up.
   const modelBoundaries = useMemo(() => buildAssistantModelBoundaries(items), [items])
 
   const lastAssistantKey = useMemo(() => {
@@ -797,8 +799,8 @@ export function ConversationTimeline({
   const latestProcessTurnKey = useMemo(() => findLatestProcessTurnKey(items), [items])
   latestProcessTurnKeyRef.current = latestProcessTurnKey
 
-  // Ctrl+O 全局快捷键分发：按面板（primary/split）精准切换最新含过程步骤助手回合的折叠态；
-  // 通过查询当下 DOM 真实 aria-expanded 状态决定开合方向，确保与手动点击零打架。
+  // Ctrl+O global shortcut dispatch: toggles the fold state of the latest assistant turn with process
+  // steps per pane (primary/split); direction comes from the live DOM aria-expanded so it never fights manual clicks.
   useEffect(() => {
     const onShortcut = (event: Event): void => {
       if (!(event instanceof CustomEvent)) return
@@ -828,12 +830,12 @@ export function ConversationTimeline({
     return () => window.removeEventListener('helm:shortcut', onShortcut)
   }, [])
 
-  // 历史行渲染隔离（content-visibility）：仅浏览器支持时启用；live 流式回合、
-  // 排队输入、最新 assistant 回合与高亮/大纲定位目标行在 resolveContainmentClass
-  // 内解除隔离，保证测量与滚动定位以真实布局进行。
+  // Historical row render containment (content-visibility): enabled only when the browser supports
+  // it; live streaming turns, queued inputs, the latest assistant turn, and highlight/outline
+  // locate targets are released inside resolveContainmentClass so measurements and scrolling use the real layout.
   const containmentEnabled = useMemo(() => supportsTimelineContainment(), [])
 
-  // 必须解除隔离的锚点：搜索高亮（store）、大纲闪烁高亮（local）与当前定位请求目标。
+  // Anchors that must be released: search highlight (store), outline flash highlight (local), and the current locate request target.
   const releasedEntryIds = useMemo(() => {
     const ids = new Set<string>()
     const h = store.highlightedEntry
@@ -849,24 +851,24 @@ export function ConversationTimeline({
     [releasedEntryIds, lastAssistantKey, charsPerLine],
   )
 
-  // 锚点集合签名：仅当行集合（锚点 id 序列）变化时才重建阅读锚点观察器；
-  // 流式内容增长（items 引用变化但锚点不变）不触发重绑。
+  // Anchor-set signature: rebuild the reading-anchor observer only when the row set (anchor id
+  // sequence) changes; streaming growth (new items reference, same anchors) does not rebind.
   const anchorSignature = useMemo(() => items.map((item) => timelineAnchorId(item)).join('\n'), [items])
-  // 观察器只读取最近一次提交的回调，不因父组件的新闭包反复重绑。
+  // The observer reads only the latest committed callback; parent re-closures never rebind it.
   const notifyActiveEntryChange = useStableCallback((entryId: string | undefined): void => {
     onActiveEntryChange?.(entryId)
   })
   const anchorTrackingEnabled = onActiveEntryChange !== undefined
 
-  // 贴底吸附：主动上滚即刻脱离贴底（解除死区牢笼，无论离底多近均尊重上滚意图）；
-  // 仅在主动向底滚动至近底区或实质触底时才恢复贴底。
-  // 初始贴底窗口期内 scroll 事件的 top 下降可能只是估高转真实布局的位移（浏览器
-  // 对收缩后超界的 scrollTop 下调同样派发 scroll），不据此判定用户意图——窗口期
-  // 的用户接管由校准器的物理输入监听同步取消并释放贴底。
-  // 常驻方向性输入释放：wheel 上滚（deltaY<0）与上滚方向键在事件监听内同步释放
-  // 贴底，不等 scroll 事件（scroll 异步派发，流式增长触发的 ResizeObserver 跟底
-  // 写入可能先于 scroll 到达，仅靠 scroll 判定会把用户已上滚的位置拉回底部）。
-  // 只处理明确向上的输入；点击/触摸/向下输入不阻止 working 正常跟底。
+  // Bottom-stick: an active upward scroll detaches immediately (no dead-zone trap; upward intent is
+  // honored no matter how close to the bottom); re-stick only on an active downward scroll reaching the near-bottom zone or an actual bottom hit.
+  // During the initial bottom-stick window, a falling scroll top may just be the estimated-to-real
+  // layout shift (browsers also fire scroll when clamping an out-of-range scrollTop after shrink);
+  // user intent is not judged from it — during the window, user takeover is cancelled and the stick released synchronously by the calibrator's physical-input listeners.
+  // Standing directional input release: upward wheel (deltaY<0) and upward arrow keys release the
+  // stick synchronously inside the listeners instead of waiting for scroll (scroll fires async; the
+  // ResizeObserver bottom-follow write from streaming growth may arrive before scroll, so a scroll-only check would drag the user's scrolled-up position back down).
+  // Only clearly upward input is handled; clicks/touches/downward input never block working bottom-follow.
   useEffect(() => {
     const el = scrollRef.current
     if (el === null) return
@@ -879,8 +881,8 @@ export function ConversationTimeline({
       }
       const distanceFromBottom = el.scrollHeight - top - el.clientHeight
       if (top < lastScrollTopRef.current) {
-        // 输入框收起或内容收缩会把 scrollTop 夹紧到新底部；保留既有跟随意图，
-        // 既不误判为用户上翻，也不恢复用户已经解除的贴底。
+        // Composer collapse or content shrink clamps scrollTop to the new bottom; keep the existing
+        // follow intent — neither misjudge it as a user scroll-up nor restore a stick the user released.
         if (distanceFromBottom > 1) {
           stickToBottomRef.current = false
           programmaticBottomScrollRef.current = false
@@ -909,11 +911,11 @@ export function ConversationTimeline({
     }
   }, [stopFollowingBottom, syncScrollBottomVisibility])
 
-  // 视口当前阅读锚点追踪（供大纲浮层高亮）：IntersectionObserver 观察区域
-  // 下缘收窄到「容器顶 + OUTLINE_ACTIVE_LINE_PX 基准线」，行相交 ⟺ 行顶已
-  // 越过基准线，最后一个相交索引与 resolveActiveOutlineEntryId 语义对齐
-  //（见 timeline-containment-model），屏外行不被 rect 测量强制布局；锚点集合
-  // 或容器高度变化时重绑，无 IO 环境退化为 rAF 节流整列测量。
+  // Viewport reading-anchor tracking (feeds the outline highlight): the IntersectionObserver
+  // watches a band narrowed to "container top + OUTLINE_ACTIVE_LINE_PX baseline"; a row intersects
+  // iff its top has passed the baseline, so the last intersecting index aligns with
+  // resolveActiveOutlineEntryId (see timeline-containment-model) without forcing layout on
+  // offscreen rows via rect measurement; rebind when the anchor set or container height changes; without IO fall back to rAF-throttled full-list measurement.
   useEffect(() => {
     if (!anchorTrackingEnabled) return
     const scroller = scrollRef.current
@@ -931,7 +933,7 @@ export function ConversationTimeline({
     }
 
     if (typeof IntersectionObserver === 'undefined') {
-      // 退化路径：rAF 节流，每帧至多测量一次（而非每个 scroll 事件一次）。
+      // Fallback path: rAF-throttled, at most one measurement per frame (not per scroll event).
       let frame = 0
       const measure = (): void => {
         frame = 0
@@ -970,7 +972,7 @@ export function ConversationTimeline({
     const buildObserver = (): void => {
       io?.disconnect()
       intersecting.clear()
-      // 基准线随容器高度变化（分屏/缩放）：由 ResizeObserver 触发重绑。
+      // The baseline moves with container height (split/zoom): ResizeObserver triggers rebinding.
       const bottomInset = Math.max(0, scroller.clientHeight - OUTLINE_ACTIVE_LINE_PX)
       io = new IntersectionObserver(onEntries, { root: scroller, rootMargin: `0px 0px -${bottomInset}px 0px` })
       for (const el of anchors) io.observe(el)
@@ -987,11 +989,11 @@ export function ConversationTimeline({
     }
   }, [anchorTrackingEnabled, anchorSignature, notifyActiveEntryChange])
 
-  // 响应大纲面板点击定位：目标行已在同一渲染中解除渲染隔离（releasedEntryIds
-  // 含请求 entryId），本 effect 于 DOM commit 后以真实布局测量定位；heading 按
-  // DOM 顺序取序数（渲染隔离保留完整 DOM，与大纲提取一致）。tick 仅在目标
-  // 真实存在并处理后消费：目标尚未加载（历史分页未及）时不消费也不标记，
-  // 锚点集合变化后重试，绝不把请求静默丢弃。
+  // Outline click locate: the target row is already render-released in the same render
+  // (releasedEntryIds contains the requested entryId); this effect measures and locates with the
+  // real layout after DOM commit; headings use DOM order (containment keeps the full DOM,
+  // matching outline extraction). The tick is consumed only when the target actually exists and is
+  // handled: if the target is not loaded yet (paging window not reached) it is neither consumed nor marked, and retries when the anchor set changes — never silently dropped.
   useEffect(() => {
     if (!outlineScrollRequest || outlineScrollRequest.tick === lastOutlineTickRef.current) return
     const container = innerRef.current
@@ -1023,7 +1025,7 @@ export function ConversationTimeline({
         scrollEl = matchedHeading
       }
     }
-    // 大纲定位：目标对齐到滚动区顶部（而非居中），便于从该条消息开始向下阅读。
+    // Outline locate: align the target to the top of the scroll area (not centered) so reading continues downward from that message.
     scrollEl.scrollIntoView({ behavior: 'smooth', block: 'start' })
     armScrollCalibration(scrollEl, 'start')
     setLocalHighlightEntryId(outlineScrollRequest.entryId)
@@ -1038,9 +1040,9 @@ export function ConversationTimeline({
     }, 2400)
   }, [outlineScrollRequest, anchorTrackingEnabled, notifyActiveEntryChange, anchorSignature, armScrollCalibration])
 
-  // 监听内部容器高度变化（思考流式增长、命令追加、分组自动展开/收起）。
-  // 仅在会话仍有活跃生成（isWorking / hasLiveTurn）且当前处于贴底吸附态时跟随到底部；
-  // 已结算静止会话的历史浏览不因 content-visibility 估高纠正、折叠展开或异步资源加载而误置底。
+  // Watch the inner container height (streaming thinking growth, command appends, group auto expand/collapse).
+  // Follow to the bottom only while the conversation is actively generating (isWorking / hasLiveTurn)
+  // and currently bottom-stuck; settled conversations browsing history are never yanked to the bottom by containment estimate corrections, fold toggles, or async resource loads.
   useEffect(() => {
     const inner = innerRef.current
     const scroller = scrollRef.current
@@ -1065,7 +1067,7 @@ export function ConversationTimeline({
       syncScrollBottomVisibility(el)
     })
     ro.observe(inner)
-    // Composer 高度、移动端键盘等只改变视口，不一定改变 inner 的尺寸。
+    // Composer height or mobile keyboards change only the viewport, not necessarily the inner size.
     ro.observe(scroller)
     return () => ro.disconnect()
   }, [isWorking, hasLiveTurn, syncScrollBottomVisibility])
@@ -1091,8 +1093,8 @@ export function ConversationTimeline({
   }, [items])
 
   const contentFingerprint = `${items.length}:${detailEntries.length}:${conversation.status}:${conversation.contextUsage?.compacting === true ? 1 : 0}:${lastTurnSummary}:${live?.updatedAt ?? 0}:${live?.thinking?.length ?? 0}:${live?.text.length ?? 0}:${live?.queuedInputs?.map((q) => `${q.id}:${q.mode}`).join(',') ?? ''}:${resolvedAsks.length}`
-  // 会话历史就绪（conversationDetails 存在，含合法空会话）：loading 的空白
-  // mount 不启动初始贴底窗口，避免硬上界在空白期被空转耗尽。
+  // History ready (conversationDetails exists, including legitimately empty conversations): a blank
+  // loading mount does not start the initial bottom-stick window, so the hard deadline is not burned while blank.
   const detailsReady = store.conversationDetails[conversation.id] !== undefined
 
   // SWR 静默替换保护：已上滑阅读历史（!stickToBottomRef）且非手动翻页加载时，
@@ -1153,7 +1155,7 @@ export function ConversationTimeline({
       }
       prevFingerprintRef.current = { conversationId: conversation.id, value: contentFingerprint }
       const previous = lastHumanRef.current
-      // 初始化历史只记录锚点；已就绪的空会话随后首次发送仍是新增输入，须贴底。
+      // Initial history only records anchors; a ready empty conversation's first send later is still new input and must stick.
       if (previous?.conversationId === conversation.id && lastHumanKey !== undefined && lastHumanKey !== previous.key) {
         stickToBottomRef.current = true
         programmaticBottomScrollRef.current = false
@@ -1167,8 +1169,8 @@ export function ConversationTimeline({
       lastScrollTopRef.current = el.scrollTop
     }
     if (el !== null) syncScrollBottomVisibility(el)
-    // 历史就绪后启动一次性初始贴底校准（窗口内部自守卫：已消费/在途/已释放
-    // 贴底时不动作）；数据延迟就绪时由 detailsReady 依赖在本 effect 重启时启动。
+    // Start the one-shot initial bottom-stick calibration once history is ready (the window guards
+    // itself: no-op when consumed/in-flight/stick-released); late-ready data restarts it via the detailsReady dependency.
     if (detailsReady) beginInitialBottomCalibration()
   }, [contentFingerprint, detailEntries, lastHumanKey, detailsReady, conversation.id, beginInitialBottomCalibration, syncScrollBottomVisibility])
 
@@ -1186,8 +1188,8 @@ export function ConversationTimeline({
     })
   }
 
-  // 引导词仅出现在「确实空白」的会话：历史已加载完且无更早分页、无在途
-  // 发送/运行、无排队输入与待审批。任一不满足都不渲染，避免误判。
+  // Starters appear only in a "truly empty" conversation: history fully loaded with no earlier
+  // page, no in-flight send/run, no queued input, no pending ask. Any miss suppresses them — no false positives.
   const conversationDetail = store.conversationDetails[conversation.id]
   const hasOlderCursor = Boolean(conversationDetail?.nextCursor)
   const historyError = store.loadErrors[`history:${conversation.id}`]
@@ -1251,8 +1253,8 @@ export function ConversationTimeline({
       ) : null}
       <div ref={innerRef} className="timeline-inner">
         {items.map((item) => {
-          // 渲染隔离类：仅历史完成行获得（live/排队/最新 assistant 回合/解除目标行
-          // 由 resolveContainmentClass 返回空串，正常渲染）。
+          // Containment class: only finished historical rows get it (live/queued/latest assistant
+          // rows/released targets resolve to an empty string and render normally).
           const cvClass = resolveContainmentClass(item, cvExclusions, containmentEnabled)
           if (item.kind === 'human') {
             return (

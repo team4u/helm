@@ -1,20 +1,20 @@
 /**
- * 会话大纲（Outline）纯函数层（零 React/DOM 依赖，单测直测）。
+ * Conversation outline pure-function layer (zero React/DOM deps, unit-testable directly).
  *
- * 职责：
- * - 从已归一化的 `TimelineItem[]` 构建会话回合级导航大纲：
- *   1. 人类回合节点（`human`）：按顺序编号（#1, #2...），提取首行摘要、全文（供搜索）、时间与来源；
- *   2. 助手回合节点（`assistant`）：智能合并——有 Markdown 标题时由标题节点代表本回合，
- *      无标题有正文时输出首行摘要节点；无正文有业务卡时由卡片代表；
- *      无正文无卡片时保留诚实状态摘要（生成中/失败/无正文）；
- *   3. Markdown 标题节点（`heading`）：从助手回复正文中提取 `# ~ ###` 标题（自动跳过代码块围栏）；
- *   4. 业务卡节点（`card`）：AssistantTurn 顶层命中插件 tool.view 的业务卡（通用
- *      toolName + 入参摘要）与 timeline.renderer 接管的 plugin-card 条目（通用
- *      helm.input 文本摘要）；step-group 内普通工具与 thinking 不进大纲；
- *   5. 上下文分割线节点（`divider`）：重置（`/reset`）或精简（`/compact`）边界；
- * - 支持关键词过滤：匹配人类/助手全文、标题与卡片可搜索文本；命中子节点时自动
- *   保留其所属的人类回合父节点以维持上下文层级；
- * - 支持滚动位置激活态计算：根据可视区顶部基准线与各锚点元素偏移量，推导当前阅读所处的激活大纲项。
+ * Responsibilities:
+ * - Build a turn-level navigation outline from normalized `TimelineItem[]`:
+ *   1. Human turn nodes (`human`): numbered in order (#1, #2...), carrying a first-line summary, full text (for search), time, and origin;
+ *   2. Assistant turn nodes (`assistant`): smart merge — when Markdown headings exist they represent the turn;
+ *      otherwise a first-line summary node when body text exists, or the business card when only cards exist;
+ *      with no text and no card an honest status summary remains (generating/failed/no content);
+ *   3. Markdown heading nodes (`heading`): `# ~ ###` headings extracted from assistant body text (code fences skipped);
+ *   4. Business card nodes (`card`): AssistantTurn top-level cards matched by plugin tool.view (generic
+ *      toolName + input summary) plus timeline.renderer plugin-card entries (generic
+ *      helm.input text summary); ordinary tools and thinking inside step-groups never enter the outline;
+ *   5. Context divider nodes (`divider`): reset (`/reset`) or compaction (`/compact`) boundaries;
+ * - Keyword filtering: matches human/assistant full text, headings, and card searchable text; a hit on a child
+ *   automatically keeps its parent human turn so the hierarchy stays contextual;
+ * - Scroll-position activation: derives the currently-read outline item from the viewport-top baseline and anchor offsets.
  */
 
 import type { ConversationEntry, InputOrigin } from '@helm/protocol/browser'
@@ -31,20 +31,20 @@ import {
 } from './timeline-model.js'
 
 // ---------------------------------------------------------------------------
-// 大纲节点类型
+// Outline node types
 // ---------------------------------------------------------------------------
 
 export interface OutlineHumanNode {
   kind: 'human'
-  /** 唯一节点 key（React key 与列表定位用）。 */
+  /** Unique node key (React key and list location). */
   key: string
-  /** 对应 Timeline 包装元素的 `data-entry-id`。 */
+  /** `data-entry-id` of the corresponding Timeline wrapper element. */
   entryId: string
-  /** 会话内第几轮提问（1-indexed）。 */
+  /** Question turn number within the conversation (1-indexed). */
   turnIndex: number
-  /** 单行紧凑摘要。 */
+  /** Compact one-line summary. */
   label: string
-  /** 原始完整文本（供搜索过滤与悬浮提示）。 */
+  /** Original full text (for search filtering and hover tooltips). */
   fullText: string
   origin: InputOrigin
   createdAt?: number
@@ -52,40 +52,40 @@ export interface OutlineHumanNode {
   attachmentCount: number
 }
 
-/** 助手回合无正文无业务卡时的诚实状态摘要（按现有数据能力，不伪造详情）。 */
+/** Honest status summary when an assistant turn has neither body text nor business cards (no fabricated details). */
 export type OutlineAssistantStatus = 'generating' | 'failed' | 'no-content'
 
 export interface OutlineAssistantNode {
   kind: 'assistant'
   key: string
-  /** 所属助手回合在 Timeline 包装元素上的 `data-entry-id`（即 `turn.entryIds[0] ?? turn.key`）。 */
+  /** `data-entry-id` of the owning assistant turn's Timeline wrapper (i.e. `turn.entryIds[0] ?? turn.key`). */
   entryId: string
-  /** 单行紧凑摘要（正文首行；状态节点为固定状态文案）。 */
+  /** Compact one-line summary (body first line; fixed status copy for status nodes). */
   label: string
-  /** 回合正文全文（供搜索过滤与悬浮提示）；状态节点为空串。 */
+  /** Turn body full text (for search and tooltips); empty string for status nodes. */
   fullText: string
-  /** true = 进行中（生成中）回合。 */
+  /** true = in-flight (generating) turn. */
   live: boolean
-  /** 状态摘要标记；有正文的摘要节点省略。 */
+  /** Status summary marker; omitted on summary nodes that have body text. */
   status?: OutlineAssistantStatus
-  /** 回合时间（settledAt ?? startedAt）；未采集时省略。 */
+  /** Turn time (settledAt ?? startedAt); omitted when not captured. */
   createdAt?: number
-  /** 紧邻的上一个人类提问节点 key（搜索命中本节点时保留父提问上下文）。 */
+  /** Key of the nearest preceding human question node (kept as parent context when this node matches a search). */
   parentHumanKey?: string
 }
 
 export interface OutlineHeadingNode {
   kind: 'heading'
   key: string
-  /** 所属助手回合在 Timeline 包装元素上的 `data-entry-id`（即 `turn.entryIds[0] ?? turn.key`）。 */
+  /** `data-entry-id` of the owning assistant turn's Timeline wrapper (i.e. `turn.entryIds[0] ?? turn.key`). */
   entryId: string
-  /** 所属助手回合内第几个 Markdown 标题（0-indexed，配合 DOM 查询精确定位到具体 h1~h3）。 */
+  /** Index of this Markdown heading within its assistant turn (0-indexed; combined with DOM queries it pinpoints the exact h1~h3). */
   headingIndex: number
-  /** 标题层级（1 | 2 | 3）。 */
+  /** Heading level (1 | 2 | 3). */
   level: 1 | 2 | 3
-  /** 清理行内格式后的标题文本。 */
+  /** Heading text with inline formatting stripped. */
   text: string
-  /** 紧邻的上一个人类提问节点 key（搜索命中子标题时保留父提问上下文）。 */
+  /** Key of the nearest preceding human question node (kept as parent context when a child heading matches). */
   parentHumanKey?: string
 }
 
@@ -97,19 +97,19 @@ export interface OutlineDividerNode {
   label: string
 }
 
-/** 业务卡节点：assistant 回合顶层 tool.view 卡或 timeline.renderer 接管的 plugin-card。 */
+/** Business card node: an assistant turn's top-level tool.view card or a timeline.renderer plugin-card. */
 export interface OutlineCardNode {
   kind: 'card'
   key: string
-  /** 一级定位锚：Timeline 包装元素 `data-entry-id`（plugin-card 为其 entryId，tool.view 卡为所属回合锚）。 */
+  /** Primary locate anchor: Timeline wrapper `data-entry-id` (the entryId for plugin-cards, the owning turn's anchor for tool.view cards). */
   entryId: string
-  /** 二级定位锚：回合内 tool.view 业务卡 trace 元素的 `data-outline-card-id`（即 tool.key）；plugin-card 无此字段。 */
+  /** Secondary locate anchor: the tool.view card trace element's `data-outline-card-id` (i.e. tool.key); absent for plugin-cards. */
   cardId?: string
-  /** 单行标题（通用诚实摘要：toolName + 入参摘要 / helm.input 文本首行 / 稳定契约标识兜底）。 */
+  /** One-line title (generic honest summary: toolName + input summary / helm.input first line / stable contract identifier fallback). */
   label: string
-  /** 可搜索文本（标题 + 底层文本摘要）。 */
+  /** Searchable text (title + underlying text summary). */
   searchText: string
-  /** tool.view 业务卡的工具执行状态；plugin-card 省略。 */
+  /** Tool execution status of a tool.view card; omitted for plugin-cards. */
   status?: 'running' | 'done' | 'error' | 'unknown'
   parentHumanKey?: string
 }
@@ -126,7 +126,7 @@ export interface ExtractedHeading {
   text: string
 }
 
-/** 从独立 Markdown 文档构建可复用的大纲标题节点。 */
+/** Build reusable outline heading nodes from a standalone Markdown document. */
 export function buildMarkdownOutline(markdown: string): OutlineHeadingNode[] {
   return extractMarkdownHeadings(markdown).map((heading, headingIndex) => ({
     kind: 'heading',
@@ -138,17 +138,17 @@ export function buildMarkdownOutline(markdown: string): OutlineHeadingNode[] {
   }))
 }
 
-/** 大纲单行摘要默认最大长度（人类提问/助手正文/业务卡标题共用）。 */
+/** Default max length of a one-line outline summary (shared by human questions, assistant bodies, card titles). */
 const OUTLINE_SUMMARY_MAX_CHARS = 72
-/** Markdown 标题单行展示最大长度。 */
+/** Max display length of a Markdown heading on one line. */
 const HEADING_MAX_CHARS = 72
 
 // ---------------------------------------------------------------------------
-// 文本摘要与 Markdown 标题提取
+// Text summaries and Markdown heading extraction
 // ---------------------------------------------------------------------------
 
 /**
- * 清理行内轻量 Markdown 标记（粗体、斜体、行内代码、链接文本），生成干净的单行大纲标签。
+ * Strip lightweight inline Markdown (bold, italic, inline code, link text) to produce a clean one-line outline label.
  */
 export function stripInlineMarkdown(raw: string): string {
   return raw
@@ -168,8 +168,8 @@ function truncateLabel(text: string, maxChars: number): string {
 }
 
 /**
- * 将多行正文浓缩为单行大纲标签（人类输入与助手正文共用）：
- * 取首个非空行并清理标题/引用/列表行首标记与行内格式；若文本为空但有附件，回退为附件数量提示。
+ * Condense a multi-line body into a one-line outline label (shared by human inputs and assistant bodies):
+ * take the first non-empty line, strip heading/quote/list prefixes and inline formatting; fall back to an attachment-count hint when the text is empty but attachments exist.
  */
 export function summarizeOutlineText(text: string, attachmentCount = 0, t?: WebMessageTranslator): string {
   const tt = t ?? englishWebTranslator
@@ -192,9 +192,9 @@ export function summarizeOutlineText(text: string, attachmentCount = 0, t?: WebM
 }
 
 /**
- * 从 Markdown 文本中提取 `#` ~ `###` 标题：
- * - 严格忽略 ``` 或 ~~~ 代码块围栏内部的注释行（如 `# bash comment`）；
- * - 仅提取 H1 ~ H3（H4~H6 粒度过细，不进大纲以免噪音）。
+ * Extract `#` ~ `###` headings from Markdown text:
+ * - strictly ignore comment lines inside ``` or ~~~ code fences (e.g. `# bash comment`);
+ * - extract H1~H3 only (H4~H6 are too fine-grained and would add noise).
  */
 export function extractMarkdownHeadings(markdown: string): ExtractedHeading[] {
   if (typeof markdown !== 'string' || markdown === '') return []
@@ -232,7 +232,7 @@ export function extractMarkdownHeadings(markdown: string): ExtractedHeading[] {
 }
 
 // ---------------------------------------------------------------------------
-// 大纲构建
+// Outline construction
 // ---------------------------------------------------------------------------
 
 function buildHumanNode(item: HumanInputItem, turnIndex: number, tt: WebMessageTranslator): OutlineHumanNode {
@@ -267,10 +267,10 @@ function buildDividerNode(item: DividerItem, tt: WebMessageTranslator): OutlineD
 }
 
 // ---------------------------------------------------------------------------
-// 助手回合智能合并与业务卡节点
+// Assistant turn smart merge and business card nodes
 // ---------------------------------------------------------------------------
 
-/** 状态节点固定文案（按现有数据能力诚实标注，不伪造详情）。 */
+/** Fixed copy for status nodes (honest labels from available data, no fabricated details). */
 function assistantStatusLabel(status: OutlineAssistantStatus, tt: WebMessageTranslator): string {
   switch (status) {
     case 'generating':
@@ -282,7 +282,7 @@ function assistantStatusLabel(status: OutlineAssistantStatus, tt: WebMessageTran
   }
 }
 
-/** AssistantTurn 顶层 tool.view 业务卡节点：通用 toolName + 入参摘要（零插件/工具名特判）。 */
+/** AssistantTurn top-level tool.view card node: generic toolName + input summary (zero plugin/tool-name special-casing). */
 function buildToolCardNode(
   turn: AssistantTurn,
   tool: ToolTrace,
@@ -307,8 +307,8 @@ function buildToolCardNode(
 }
 
 /**
- * plugin-card 通用诚实摘要：优先 entry 的 helm.input 数据文本（与人类提问同源归一化），
- * 兜底稳定契约标识（entry kind）；绝不读取插件私有 React 渲染内容。
+ * Generic honest plugin-card summary: prefer the entry's helm.input data text (normalized from the same
+ * source as human questions), fall back to the stable contract identifier (entry kind); never read plugin-private React content.
  */
 export function summarizePluginCardEntry(entry: ConversationEntry, t?: WebMessageTranslator): { label: string; searchText: string } {
   const tt = t ?? englishWebTranslator
@@ -337,14 +337,14 @@ function buildPluginCardNode(item: PluginCardItem, parentHumanKey: string | unde
 }
 
 /**
- * 助手回合智能合并（正文代表制）：
- * - 有 Markdown 标题：由标题节点代表本回合（首个标题通常与正文首行摘要重复，不重复发 assistant 摘要节点）；
- * - 无标题有正文：assistant 摘要节点（首行摘要，可搜全文）代表正文；
- * - 无正文有业务卡：卡片代表本回合，不产生空 assistant 节点；
- * - 无正文无卡片：保留诚实状态摘要节点（生成中/失败/无正文）。
+ * Assistant turn smart merge (body-representation rules):
+ * - Markdown headings present: heading nodes represent the turn (the first heading usually duplicates the body first line, so no extra assistant summary node);
+ * - no headings but body text: an assistant summary node (first line, full text searchable) represents the body;
+ * - no body but business cards: the cards represent the turn, no empty assistant node;
+ * - neither body nor cards: keep an honest status summary node (generating/failed/no content).
  *
- * 子节点按段落在回合内的真实顺序输出（正文摘要位于首个文本段处，卡片位于各自段处），
- * step-group 内普通工具与 thinking 不进大纲（过程细节非导航目标）。
+ * Children are emitted in the turn's real segment order (the body summary sits at the first text segment, cards at their own segments);
+ * ordinary tools and thinking inside step-groups never enter the outline (process detail is not a navigation target).
  */
 function appendAssistantNodes(
   turn: AssistantTurn,
@@ -374,8 +374,8 @@ function appendAssistantNodes(
   for (const seg of turn.segments) {
     if (seg.kind === 'text') {
       if (headings.length > 0) {
-        // 保持标题节点与正文/业务卡在时间线中的真实顺序。用累计正文重新解析，
-        // 保留跨 segment 的代码围栏状态，同时让 headingIndex 继续对应 DOM 顺序。
+        // Keep heading nodes in true timeline order with body/cards. Re-parse the accumulated
+        // body so fence state carries across segments while headingIndex keeps matching DOM order.
         accumulatedText = accumulatedText === '' ? seg.text : `${accumulatedText}\n\n${seg.text}`
         const parsed = extractMarkdownHeadings(accumulatedText)
         for (; headingCursor < parsed.length; headingCursor++) {
@@ -431,12 +431,12 @@ function appendAssistantNodes(
 }
 
 export interface BuildConversationOutlineOptions {
-  /** 会话最新回合失败（ConversationSummary.status === 'error'）：最新无正文回合状态摘要为「本回合失败」。 */
+  /** Latest turn failed (ConversationSummary.status === 'error'): the latest bodyless turn's status summary reads "This turn failed". */
   latestAssistantTurnFailed?: boolean
 }
 
 /**
- * 从归一化 `TimelineItem[]` 构建完整会话大纲节点列表。
+ * Build the full conversation outline node list from normalized `TimelineItem[]`.
  */
 export function buildConversationOutline(
   items: ReadonlyArray<TimelineItem>,
@@ -448,7 +448,7 @@ export function buildConversationOutline(
   let humanTurnCount = 0
   let lastHumanKey: string | undefined
 
-  // 失败标注只作用于最新 assistant 回合（与 TurnErrorNotice 同一权威状态源）
+  // The failure marker applies only to the latest assistant turn (same authoritative source as TurnErrorNotice)
   let lastAssistantIndex = -1
   if (options.latestAssistantTurnFailed === true) {
     for (let i = items.length - 1; i >= 0; i--) {
@@ -485,7 +485,7 @@ export function buildConversationOutline(
 }
 
 /**
- * 统计会话大纲中的人类提问轮数（用于顶栏胶囊计数展示）。
+ * Count human question turns in the conversation outline (for the top-bar pill count).
  */
 export function countOutlineTurns(nodes: ReadonlyArray<OutlineNode>): number {
   let count = 0
@@ -496,20 +496,20 @@ export function countOutlineTurns(nodes: ReadonlyArray<OutlineNode>): number {
 }
 
 // ---------------------------------------------------------------------------
-// 大纲过滤与滚动激活态计算
+// Outline filtering and scroll activation
 // ---------------------------------------------------------------------------
 
 export type OutlineFilterMode = 'dialogue' | 'questions' | 'all'
 
 export interface FilterOutlineOptions {
-  /** 搜索关键词（大小写不敏感；匹配人类/助手全文、轮次号 `#N`、Markdown 标题与卡片可搜索文本）。 */
+  /** Search keyword (case-insensitive; matches human/assistant full text, turn numbers `#N`, Markdown headings, and card searchable text). */
   query?: string
   /**
-   * 过滤模式（默认 `'all'`；大纲面板在启用切换栏时默认传入 `'dialogue'`）：
-   * - `'dialogue'`：保留人工发起的 `human`（`origin === 'human'`）、`assistant`、`heading` 与 `divider`，
-   *   过滤业务卡 `card` 及 `agent`/`trigger` 发起的输入；
-   * - `'questions'`：仅保留人工发起的 `human`（`origin === 'human'`）与 `divider`；
-   * - `'all'`：保留全部节点。
+   * Filter mode (default `'all'`; the outline panel passes `'dialogue'` by default when the toggle bar is on):
+   * - `'dialogue'`: keep human-initiated `human` (`origin === 'human'`), `assistant`, `heading`, and `divider`,
+   *   filtering out `card` nodes and `agent`/`trigger`-initiated inputs;
+   * - `'questions'`: keep only human-initiated `human` (`origin === 'human'`) and `divider`;
+   * - `'all'`: keep everything.
    */
   mode?: OutlineFilterMode
 }
@@ -524,14 +524,14 @@ function matchesOutlineFilterMode(node: OutlineNode, mode: OutlineFilterMode): b
 }
 
 /**
- * 过滤大纲节点：
- * - 先按 `mode`（`'dialogue' | 'questions' | 'all'`）过滤；
- * - 有搜索词时：
- *   1. `human` 节点匹配 `label`、`fullText` 或 `#turnIndex`；
- *   2. `assistant` 节点匹配 `label` 或 `fullText`；
- *   3. `heading` 节点匹配 `text`；`card` 节点匹配 `label` 或 `searchText`；
- *   4. 任一子节点命中时，其 `parentHumanKey` 对应的人类提问节点一并保留，确保树形归属清晰；
- *   5. `divider` 节点在搜索词匹配其 label 时保留。
+ * Filter outline nodes:
+ * - first by `mode` (`'dialogue' | 'questions' | 'all'`);
+ * - then, when a search term exists:
+ *   1. `human` nodes match `label`, `fullText`, or `#turnIndex`;
+ *   2. `assistant` nodes match `label` or `fullText`;
+ *   3. `heading` nodes match `text`; `card` nodes match `label` or `searchText`;
+ *   4. when any child matches, the human question node for its `parentHumanKey` is kept too so the tree ownership stays clear;
+ *   5. `divider` nodes survive when the search term matches their label.
  */
 export function filterOutlineNodes(
   nodes: ReadonlyArray<OutlineNode>,
@@ -572,12 +572,12 @@ export function filterOutlineNodes(
 }
 
 /**
- * 根据时间线滚动容器中已观测到的 `entryId` 集合（已滑过视口顶部基准线的最后一项），
- * 解析当前处于阅读焦点的激活 `entryId`。
+ * Resolve the active `entryId` at the reading focus from the observed `entryId` set in the timeline
+ * scroll container (the last item whose top has passed the viewport-top baseline).
  *
- * 输入 `anchorOffsets` 为按文档顺序排列的 `{ entryId, top }`（`top` 为相对于滚动容器可视区顶部的偏移 px）：
- * - 取最后一个 `top <= thresholdPx` 的锚点；
- * - 若所有锚点均在基准线下方（刚打开或在最顶部），取第一个锚点。
+ * `anchorOffsets` is a document-ordered array of `{ entryId, top }` (`top` is the offset in px from the scroll container's visible top):
+ * - take the last anchor with `top <= thresholdPx`;
+ * - if every anchor is below the baseline (just opened or at the very top), take the first anchor.
  */
 export function resolveActiveOutlineEntryId(
   anchorOffsets: ReadonlyArray<{ entryId: string; top: number }>,

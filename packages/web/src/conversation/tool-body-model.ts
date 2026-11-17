@@ -1,14 +1,14 @@
 /**
- * 工具展开体纯数据层（纯 .ts，零 React/DOM 依赖，单测直测）。
+ * Tool expanded-body pure data layer (plain .ts, zero React/DOM deps, unit-testable directly).
  *
- * 职责：
- * - write / read / bash 展示数据提取（入参与 structuredOutput 的字段只做类型
- *   收窄，缺失即 undefined，绝不编造字段或伪造文件状态）；
- * - 行切片（head/tail，用于源码预览与输出尾部折叠——均为本地已有完整文本，
- *   展开可还原，与服务端截断语义无关）；
- * - 通用工具入参的键值归一（多行字符串/嵌套值块状展示，原始数据入口兜底）；
- * - 26px 单行摘要的极简统计（edit +N −N / write 行数；运行态只报事实不报成功）；
- * - 折叠步骤组统计（StepGroupSummary：思考/工具/失败/运行中计数与耗时聚合）。
+ * Responsibilities:
+ * - write / read / bash display-data extraction (input and structuredOutput fields are only
+ *   type-narrowed; missing stays undefined — never fabricate fields or fake file state);
+ * - line slicing (head/tail for source previews and output-tail folding — both operate on
+ *   locally complete text, recoverable by expanding, unrelated to server truncation);
+ * - key-value normalization of generic tool inputs (multiline strings/nested values as blocks, raw-data entry as fallback);
+ * - minimal stats for the 26px single-row summary (edit +N −N / write line counts; running state reports facts, never success);
+ * - folded step-group stats (StepGroupSummary: thinking/tool/failure/running counts and duration aggregation).
  */
 
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
@@ -17,7 +17,7 @@ import { languageFromFilename } from './code-language.js'
 import { buildPendingEditDiff, checkEditToolResult } from './edit-diff-model.js'
 
 // ---------------------------------------------------------------------------
-// 通用工具
+// Generic tools
 // ---------------------------------------------------------------------------
 
 export function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -34,7 +34,7 @@ export function inputPathOf(input: unknown): string | undefined {
   return stringField(asRecord(input), 'path')
 }
 
-/** JSON 美化；循环引用等异常退回 String()，绝不抛出打断渲染。 */
+/** Pretty-print JSON; fall back to String() on cyclic references etc. — never throw mid-render. */
 export function prettyJson(value: unknown): string {
   try {
     return JSON.stringify(value, null, 2) ?? String(value)
@@ -47,7 +47,7 @@ export function countLines(text: string): number {
   return splitForLines(text).length
 }
 
-/** 行切分：末尾单个换行产生的空行不计为真实行（与编辑器行号一致）。 */
+/** Line splitting: a single trailing newline does not count as a real line (matches editor line numbers). */
 function splitForLines(text: string): string[] {
   const lines = text.split('\n')
   if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
@@ -55,15 +55,15 @@ function splitForLines(text: string): string[] {
 }
 
 export interface LineSlice {
-  /** 展示文本（head 或 tail 的原文切片）。 */
+  /** Displayed text (the original head or tail slice). */
   visible: string
-  /** 完整文本总行数。 */
+  /** Total lines of the full text. */
   totalLines: number
-  /** 被折叠的行数（head：开头保留后的剩余；tail：开头被折叠的行数）。 */
+  /** Folded line count (head: remainder after the kept prefix; tail: folded leading lines). */
   hiddenLines: number
 }
 
-/** 头部切片：保留前 maxLines 行，hiddenLines = 总行数 - 保留行数。 */
+/** Head slice: keep the first maxLines lines; hiddenLines = total - kept. */
 export function headLines(text: string, maxLines: number): LineSlice {
   const lines = splitForLines(text)
   const keep = Math.min(lines.length, maxLines)
@@ -74,7 +74,7 @@ export function headLines(text: string, maxLines: number): LineSlice {
   }
 }
 
-/** 尾部切片：保留最后 maxLines 行，hiddenLines = 被折叠的前置行数。 */
+/** Tail slice: keep the last maxLines lines; hiddenLines = folded leading lines. */
 export function tailLines(text: string, maxLines: number): LineSlice {
   const lines = splitForLines(text)
   const keep = Math.min(lines.length, maxLines)
@@ -85,11 +85,11 @@ export function tailLines(text: string, maxLines: number): LineSlice {
   }
 }
 
-/** 键值归一：短单行值内联，多行/长字符串与嵌套值标记为块状（原始 JSON 兜底）。 */
+/** Key-value normalization: short single-line values inline; multiline/long strings and nested values marked as blocks (raw JSON fallback). */
 export interface KvEntry {
   key: string
   value: string
-  /** true = 块状展示（等宽块），false = 单行内联。 */
+  /** true = block display (monospace block), false = single-line inline. */
   block: boolean
 }
 
@@ -118,7 +118,7 @@ export function inputKvEntries(input: unknown): KvEntry[] {
 }
 
 // ---------------------------------------------------------------------------
-// 服务端截断预览文案（纯函数：绝不把预览行数冒充全文总量，总量未知不伪造）
+// Server truncation preview copy (pure function: never present preview line counts as the full total; never fabricate unknown totals)
 // ---------------------------------------------------------------------------
 
 /**
@@ -137,7 +137,7 @@ export function truncationPreviewNote(truncation: ToolResultTruncation, t?: WebM
 }
 
 // ---------------------------------------------------------------------------
-// write / read / bash 展示数据
+// write / read / bash display data
 // ---------------------------------------------------------------------------
 
 export interface WriteBodyData {
@@ -145,7 +145,7 @@ export interface WriteBodyData {
   content: string | undefined
   language: string
   lineCount: number | undefined
-  /** 成功结果携带的字节数（structuredOutput.bytesWritten，仅类型收窄）。 */
+  /** Bytes reported by a successful result (structuredOutput.bytesWritten, type-narrowed only). */
   bytesWritten: number | undefined
 }
 
@@ -168,13 +168,13 @@ export function writeBodyData(tool: ToolTrace): WriteBodyData {
 }
 
 export interface ReadBodyData {
-  /** 展示用内容：structuredOutput.content 优先，退回 resultText。 */
+  /** Content to display: structuredOutput.content first, falling back to resultText. */
   content: string | undefined
   language: string
-  /** 输出含内核超长 Spill 标记：预览性质文本，不做源码语法高亮。 */
+  /** Output contains a kernel over-length Spill marker: preview-grade text, no source syntax highlighting. */
   isSpill: boolean
-  /** true = content 取自原始输出文本（resultText），受服务端预览截断约束；
-   * false = structuredOutput.content（details 通道，完整传回，不受结果文本截断影响）。 */
+  /** true = content comes from the raw output text (resultText), subject to server preview truncation;
+   * false = structuredOutput.content (details channel, transferred in full, unaffected by result-text truncation). */
   fromResultText: boolean
 }
 
@@ -195,7 +195,7 @@ export function readBodyData(tool: ToolTrace): ReadBodyData {
 export interface BashBodyData {
   command: string | undefined
   output: string | undefined
-  /** structuredOutput.exitCode：数字为实际值，null 表示无退出码（如启动失败）。 */
+  /** structuredOutput.exitCode: a number is the real value; null means no exit code (e.g. spawn failure). */
   exitCode: number | null | undefined
   timedOut: boolean
 }
@@ -213,21 +213,21 @@ export function bashBodyData(tool: ToolTrace): BashBodyData {
 }
 
 // ---------------------------------------------------------------------------
-// 26px 单行极简统计（只报事实：差异行数 / 内容行数；运行态不伪称成功）
+// Minimal 26px single-row stats (facts only: diff line counts / content line counts; running state never claims success)
 // ---------------------------------------------------------------------------
 
 export interface ToolRowStats {
   addCount?: number
   removeCount?: number
-  /** 纯文本统计（如 write 的 “12 行”）。 */
+  /** Plain-text stat (e.g. "12 lines" for write). */
   text?: string
-  /** 悬浮说明：数字来源（已应用差异 / 待执行片段）。 */
+  /** Hover explanation: where the numbers come from (applied diff / pending hunks). */
   title: string
 }
 
 export function toolRowStats(tool: ToolTrace, t?: WebMessageTranslator): ToolRowStats | undefined {
   const tt = t ?? englishWebTranslator
-  // 插件 tool.view 接管的行由插件自绘，宿主不叠加统计。
+  // Rows taken over by a plugin tool.view are drawn by the plugin; the host adds no stats.
   if (tool.toolView !== undefined) return undefined
   if (tool.toolName === 'edit') {
     if (tool.status === 'done' && !tool.isError) {
@@ -262,7 +262,7 @@ export function toolRowStats(tool: ToolTrace, t?: WebMessageTranslator): ToolRow
 }
 
 // ---------------------------------------------------------------------------
-// 折叠步骤组摘要（StepGroup / MultiStepGroup 纯聚合统计）
+// Folded step-group summary (pure aggregate stats for StepGroup / MultiStepGroup)
 // ---------------------------------------------------------------------------
 
 export interface StepGroupSummary {
@@ -274,7 +274,7 @@ export interface StepGroupSummary {
   totalDurationMs?: number
 }
 
-/** 聚合折叠步骤组内的思考与工具计数、失败/运行态数量及有效正耗时总和（零与非法值不计入）。 */
+/** Aggregate thinking/tool counts, failure/running counts, and the sum of valid positive durations within a folded step group (zeros and invalid values excluded). */
 export function summarizeStepGroup(steps: ReadonlyArray<FoldableStep>): StepGroupSummary {
   let thinkingCount = 0
   let toolCount = 0

@@ -1,15 +1,15 @@
 /**
- * 时间线归一化纯函数层（纯 .ts，零 React/DOM 依赖，单测直测）。
+ * Timeline normalization pure-function layer (plain .ts, zero React/DOM deps, unit-testable directly).
  *
- * 职责：把后端 `ConversationEntry[]` + 实时 `ConversationLive` 转换为结构化渲染项：
- * - `helm.input` 去重归一化：以 helm.input（含 origin/meta/attachments）为准生成输入块，
- *   自动跳过其紧邻覆盖的重复 `pi.user`；裸 `pi.user`（无前置 helm.input）兜底展示。
- * - 插件 `timeline.renderer`（kinds + matchMeta）与 `tool.view`（toolNames）匹配判定。
- * - assistant 消息 thinking / text / toolCall 提取，`pi.tool-result` 按 callId 配对合并。
- * - 连续常规步骤「按回合收拢」：thinking 与常规工具行（含出错）
- *   收拢为 step-group；命中 tool.view 的业务卡永远豁免折叠。
- * - `pi.reset` / `pi.compaction` -> 上下文分割线（reset 可携带 handoff 交接摘要）。
- * - live 合并：实时工具（running）与流式文本并入进行中回合。
+ * Responsibility: convert backend `ConversationEntry[]` + live `ConversationLive` into structured render items:
+ * - `helm.input` dedup normalization: input blocks come from helm.input (origin/meta/attachments),
+ *   automatically skipping the duplicate `pi.user` they cover; bare `pi.user` (no preceding helm.input) is the fallback.
+ * - Plugin `timeline.renderer` (kinds + matchMeta) and `tool.view` (toolNames) match resolution.
+ * - assistant message thinking / text / toolCall extraction; `pi.tool-result` pairing by callId.
+ * - Consecutive ordinary steps collapse into per-turn step groups: thinking and ordinary tool
+ *   rows (including failures) fold into a step-group; tool.view business cards are always exempt.
+ * - `pi.reset` / `pi.compaction` -> context dividers (reset may carry a handoff summary).
+ * - live merge: real-time tools (running) and streaming text fold into the in-flight turn.
  */
 
 import type {
@@ -26,7 +26,7 @@ import type {
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
 // ---------------------------------------------------------------------------
-// 渲染项类型
+// Render item types
 // ---------------------------------------------------------------------------
 
 export interface QualifiedRenderer {
@@ -51,7 +51,7 @@ export interface HelmInputData {
 
 export type ToolTraceStatus = 'running' | 'done' | 'error' | 'unknown'
 
-/** 服务端时间线预览截断标记使用 protocol 中的跨包契约。 */
+/** Server-side timeline preview truncation markers reuse the cross-package contract in protocol. */
 export type { ToolResultTruncation } from '@helm/protocol/browser'
 
 export interface ToolTrace {
@@ -62,24 +62,24 @@ export interface ToolTrace {
   status: ToolTraceStatus
   isError: boolean
   resultText?: string
-  /** 服务端预览截断标记；未截断或 live 实时结果缺省。 */
+  /** Server preview truncation marker; omitted when not truncated or for live results. */
   resultTruncation?: ToolResultTruncation
-  /** 携带该结果的 pi.tool-result entry id（截断时按需取回全文的精确定位键）。 */
+  /** entry id of the pi.tool-result carrying this result (precise key for on-demand full-text fetch when truncated). */
   resultEntryId?: string
-  /** 工具调用所在已持久化条目的时间；流式调用尚无记录时省略。 */
+  /** Time of the persisted entry holding the tool call; omitted while a streaming call has no record yet. */
   startedAt?: number
   durationMs?: number
-  /** 输出中检测到的产物引用（内核超长 Spill 标记 / art_ 前缀），供「打开完整产物」按钮。 */
+  /** Artifact reference detected in the output (kernel Spill marker / art_ prefix), feeding the "open full artifact" button. */
   artifactRef?: string
-  /** 工具结构化结果的持久化视图（toolResult 消息的 details 通道；声明 structuredOutputSchema 的工具在成功结果携带）；未声明或未落库时省略。 */
+  /** Persisted view of the tool structured output (toolResult message details channel; present on success for tools declaring structuredOutputSchema); omitted otherwise. */
   structuredOutput?: unknown
-  /** 命中插件 tool.view（如 dispatch_worker）：豁免折叠，直接渲染业务卡片。 */
+  /** Matched a plugin tool.view (e.g. dispatch_worker): exempt from folding, renders a business card. */
   toolView?: QualifiedToolView
 }
 
-/** toolResult 消息扩展级截断元数据读取：`truncated` 必须显式为 true 才构成截断
- * （缺省或 false = 完整原文）；totalChars/totalLines 仅收窄为有限非负数，非法值
- * 丢弃——未知不伪造。形状不符（非对象）返回 undefined。 */
+/** toolResult message extension-level truncation metadata: `truncated` must be explicitly true
+ * (missing or false = full text); totalChars/totalLines only narrow to finite non-negative
+ * numbers, invalid values dropped — never fabricate the unknown. Non-object shapes return undefined. */
 export function readResultTruncation(message: unknown): ToolResultTruncation | undefined {
   if (message === null || typeof message !== 'object') return undefined
   const m = message as Record<string, unknown>
@@ -108,34 +108,34 @@ export type AssistantSegment =
   | { kind: 'step-group'; key: string; stepCount: number; steps: FoldableStep[]; active?: boolean }
   | { kind: 'tool'; key: string; tool: ToolTrace }
 
-/** pi.assistant entry model[0]（AssistantMessage）携带的实际生成模型身份。
- * provider+model 是模型身份（拆分与边界只比较这两项）；thinkingLevel 只是
- * 展示元数据，且仅在本回合全部 assistant entry 一致时才保留。 */
+/** Effective generation model identity carried by pi.assistant entry model[0] (AssistantMessage).
+ * provider+model is the identity (splitting and boundaries compare only these two); thinkingLevel
+ * is display metadata kept only when consistent across all assistant entries of the turn. */
 export interface AssistantModelIdentity {
   provider: string
   model: string
-  /** 请求的思考档位（off/minimal/low/medium/high/xhigh/max）；legacy 或整块不一致时缺省。 */
+  /** Requested thinking level (off/minimal/low/medium/high/xhigh/max); omitted for legacy or inconsistent data. */
   thinkingLevel?: string
 }
 
 export interface AssistantTurn {
   kind: 'assistant'
   key: string
-  /** 本回合涉及的全部 entry id（悬停分叉 fork 使用最后一个）。 */
+  /** All entry ids involved in this turn (hover fork uses the last one). */
   entryIds: string[]
   segments: AssistantSegment[]
-  /** true = 已与 ConversationLive 合并的进行中回合。 */
+  /** true = in-flight turn merged with ConversationLive. */
   live: boolean
-  /** 本回合实际生成模型（首个 pi.assistant entry 的 model[0] 派生；身份不完整、
-   * 非法或回合内混入不可信 entry 时缺省——未知内容不归因任何已知模型，也绝不
-   * 回退 conversation.model 等当前配置冒充历史事实。thinkingLevel 仅在本回合
-   * 全部条目一致时保留）。 */
+  /** Effective generation model of this turn (derived from the first pi.assistant entry model[0]);
+   * omitted when incomplete, invalid, or an untrusted entry pollutes the turn — unknown content is
+   * never attributed to a known model, and current config like conversation.model is never faked
+   * as history. thinkingLevel is kept only when consistent across the turn). */
   model?: AssistantModelIdentity
-  /** 回合开始时间戳（毫秒）；未采集时省略。 */
+  /** Turn start timestamp (ms); omitted when not captured. */
   startedAt?: number
-  /** 回合结算时间戳（毫秒）；未结算或未采集时省略。 */
+  /** Turn settled timestamp (ms); omitted while unsettled or not captured. */
   settledAt?: number
-  /** 回合总耗时（毫秒）；未采集时省略。 */
+  /** Total turn duration (ms); omitted when not captured. */
   durationMs?: number
 }
 
@@ -147,13 +147,13 @@ export interface HumanInputItem {
   origin: InputOrigin
   meta?: Record<string, unknown>
   attachments?: ConversationAttachmentRef[]
-  /** helm.input 的稳定身份；入队与落库时沿用同一 React key。 */
+  /** Stable identity of the helm.input; queued and persisted states share one React key. */
   inputId?: string
-  /** 非空表示该输入仍在 pi.inbox 排队待生效（尚未落入正式 entries）。 */
+  /** Non-null when the input is still queued in pi.inbox (not yet a formal entry). */
   queuedMode?: 'steer' | 'followUp'
-  /** true = 无前置 helm.input 的裸 pi.user 兜底展示。 */
+  /** true = bare pi.user without a preceding helm.input, shown as fallback. */
   fallback: boolean
-  /** 消息创建/发送时间戳（毫秒）；未知或缺省时省略。 */
+  /** Message creation/send timestamp (ms); omitted when unknown. */
   createdAt?: number
 }
 
@@ -162,11 +162,11 @@ export interface DividerItem {
   key: string
   entryId: string
   divider: 'reset' | 'compaction'
-  /** true = 正在进行中的上下文精简（尚未落库 pi.compaction）。 */
+  /** true = context compaction in progress (pi.compaction not persisted yet). */
   pending?: boolean
-  /** pi.reset 携带的交接摘要（可展开查看）。 */
+  /** Handoff summary carried by pi.reset (expandable). */
   handoff?: string
-  /** pi.compaction 的精简摘要（仅模型层保留，UI 默认不展开）。 */
+  /** Compaction summary of pi.compaction (kept in the model layer; UI keeps it collapsed by default). */
   summary?: string
 }
 
@@ -180,30 +180,30 @@ export interface PluginCardItem {
 
 export type TimelineItem = HumanInputItem | DividerItem | PluginCardItem | AssistantTurn
 
-/** 「编辑并重发」目标：回填 Composer 的文本 + 可选历史 entry 锚点与附件。 */
+/** "Edit and resend" target: text to prefill the Composer + optional history entry anchor and attachments. */
 export interface EditRequestTarget {
   text: string
-  /** 历史已落库条目的正整数 ID；排队消息撤回后仅回填草稿时不传。 */
+  /** Positive integer id of the persisted history entry; omitted when a withdrawn queued message only prefills a draft. */
   entryId?: number
-  /** 原消息携带的附件引用（回填至待发送区）。 */
+  /** Attachment refs carried by the original message (prefilled into the compose area). */
   attachments?: ConversationAttachmentRef[]
 }
 
 // ---------------------------------------------------------------------------
-// rewind 覆盖过滤
+// rewind overlay filtering
 // ---------------------------------------------------------------------------
 
 /**
- * 过滤被 helm.rewind 覆盖的条目。
+ * Filter out entries covered by helm.rewind.
  *
- * 后端原子提交：先落新 input，再追加 rewind marker，同一批保存。
- * rewind.data = { fromEntryId, throughEntryId(提交新 input 前的旧 tail), ... }，
- * 覆盖区间是闭区间 [fromEntryId, throughEntryId]——绝不能按 marker 自身 id 截断，
- * 否则会把同批落库、id 小于 marker 的新 input 一并隐藏。
+ * The backend commits atomically: the new input lands first, then the rewind marker, in one batch.
+ * rewind.data = { fromEntryId, throughEntryId(old tail before the new input), ... }
+ * covering the closed range [fromEntryId, throughEntryId] — never truncate at the marker's own id,
+ * or the new input persisted in the same batch with a smaller id would be hidden too.
  *
- * 区间合法性：from/through 均为 safe positive integer 且 through >= from、
- * through < marker 自身 id；非法 marker 只隐藏自身（保持隐藏控制记录），不覆盖任何条目。
- * 多条 rewind 的区间取并集；SDK 重建的 pi.system 基线不受影响（本就不渲染）。
+ * Range validity: from/through are both safe positive integers with through >= from and
+ * through < the marker's own id; an invalid marker hides only itself (keep the control record hidden) and covers nothing.
+ * Multiple rewind ranges union; the SDK-rebuilt pi.system baseline is unaffected (never rendered anyway).
  */
 export function filterRewoundEntries(entries: ReadonlyArray<ConversationEntry>): ConversationEntry[] {
   const rewindEntryIds = new Set<string>()
@@ -240,10 +240,10 @@ function isSafePositiveInt(value: number): boolean {
 }
 
 /**
- * 最近一条可编辑的人类输入（Composer 空框 ↑ 回填）：
- * - 只认 origin === 'human'：agent 汇报 / trigger 注入不是人类编辑对象，跳过继续向前找；
- * - 不跨 pi.reset / pi.compaction 边界原地编辑（后端最终权威上下文从最新边界起算）；
- * - 优先 helm.input（含附件），兜底裸 pi.user。
+ * Latest editable human input (Composer empty-box ↑ prefill):
+ * - only origin === 'human' counts: agent reports / trigger injections are not human-editable, keep searching backwards;
+ * - never edit in place across a pi.reset / pi.compaction boundary (the backend's authoritative context starts at the latest boundary);
+ * - prefer helm.input (with attachments), fall back to bare pi.user.
  */
 export function lastEditableHumanInput(entries: ReadonlyArray<ConversationEntry>): EditRequestTarget | undefined {
   const active = filterRewoundEntries(entries)
@@ -279,24 +279,24 @@ export function lastEditableHumanInput(entries: ReadonlyArray<ConversationEntry>
 }
 
 export interface BuildTimelineOptions {
-  /** 进行中回合的实时视图（会话 working 时传入；空闲不传）。 */
+  /** Live view of the in-flight turn (passed while the conversation is working; omitted when idle). */
   live?: ConversationLive
-  /** 会话是否处于 working 执行态（首 token 前与工具轮间隙保持当前回合活跃）。 */
+  /** Whether the conversation is in the working state (keeps the current turn active before the first token and between tool rounds). */
   working?: boolean
-  /** 会话是否正在执行上下文精简（在回合之后、排队输入之前插入 pending 分割线）。 */
+  /** Whether a context compaction is running (inserts a pending divider after the turn, before queued inputs). */
   compacting?: boolean
   timelineRenderers?: ReadonlyArray<QualifiedRenderer>
   toolViews?: ReadonlyArray<QualifiedToolView>
 }
 
-/** 单行轨迹入参摘要最大长度。 */
+/** Max length of the single-row trace input summary. */
 const SUMMARY_MAX_CHARS = 60
 
 // ---------------------------------------------------------------------------
-// 输入提取与去重
+// Input extraction and dedup
 // ---------------------------------------------------------------------------
 
-/** 校验并解析 helm.input entry.data；形状非法返回 undefined（绝不伪造）。 */
+/** Validate and parse helm.input entry.data; return undefined on invalid shapes (never fabricate). */
 export function parseHelmInputData(data: unknown): HelmInputData | undefined {
   if (data === null || typeof data !== 'object' || Array.isArray(data)) return undefined
   const d = data as Record<string, unknown>
@@ -325,7 +325,7 @@ function isStringRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-/** 提取 entry.model 中全部 user 消息文本（content 为 string 或 text 块数组）。 */
+/** Extract all user message texts from entry.model (content is a string or an array of text blocks). */
 export function extractUserMessageText(entry: ConversationEntry): string {
   const model = entry.model
   if (!Array.isArray(model)) return ''
@@ -338,7 +338,7 @@ export function extractUserMessageText(entry: ConversationEntry): string {
   return text
 }
 
-/** content（string | Array<{type:'text',text}> | Array<{type:'text',text|thinking,...}>）-> 纯文本。 */
+/** content (string | Array<{type:'text',text}> | Array<{type:'text',text|thinking,...}>) -> plain text. */
 function contentTextOf(content: unknown): string {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
@@ -352,12 +352,12 @@ function contentTextOf(content: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
-// 插件扩展点匹配
+// Plugin extension-point matching
 // ---------------------------------------------------------------------------
 
 /**
- * priority 降序稳定排序：高优先级在前，同优先级（含缺省 0）保持贡献顺序
- * （先注册先命中）。返回新数组，不修改传入的贡献列表（groupedUi 引用稳定）。
+ * Stable sort by priority descending: higher first, equal priorities (including default 0) keep
+ * contribution order (first registered wins). Returns a new array; the input list is untouched (groupedUi stays referentially stable).
  */
 export function sortByPriorityDescStable<T extends { spec: { priority?: number } }>(
   items: ReadonlyArray<T>,
@@ -369,10 +369,10 @@ export function sortByPriorityDescStable<T extends { spec: { priority?: number }
 }
 
 /**
- * timeline.renderer 匹配判定（priority 降序稳定裁决）：
- * - 先按 (spec.priority ?? 0) 降序、同优先级保持插件贡献顺序（先注册先命中）；
- * - kinds 缺省接管全部；提供时须包含 entry.kind；
- * - matchMeta.renderer 须等于 entry.data.meta.renderer 或 entry.data.renderer（与 kinds 取 AND）。
+ * timeline.renderer match resolution (stable priority-descending arbitration):
+ * - sort by (spec.priority ?? 0) descending, equal priorities keep contribution order (first registered wins);
+ * - kinds omitted = take over everything; when provided it must include entry.kind;
+ * - matchMeta.renderer must equal entry.data.meta.renderer or entry.data.renderer (AND with kinds).
  */
 export function matchTimelineRenderer(
   entry: ConversationEntry,
@@ -394,9 +394,9 @@ export function matchTimelineRenderer(
 }
 
 /**
- * tool.view 匹配（priority 降序稳定裁决）：spec.toolNames 包含 toolName。
- * 按 (spec.priority ?? 0) 降序、同优先级保持贡献顺序取首个命中；
- * replaceRow 等渲染语义由消费方按命中 spec 判定，匹配层不做干预。
+ * tool.view match (stable priority-descending arbitration): spec.toolNames contains the toolName.
+ * Take the first hit by (spec.priority ?? 0) descending with contribution order for ties;
+ * rendering semantics like replaceRow are decided by consumers from the matched spec; the matcher stays out of it.
  */
 export function findToolView(
   toolName: string,
@@ -410,7 +410,7 @@ export function findToolView(
 }
 
 // ---------------------------------------------------------------------------
-// 工具轨迹摘要与产物引用检测
+// Tool trace summaries and artifact-reference detection
 // ---------------------------------------------------------------------------
 
 function summarizeValue(value: unknown): string {
@@ -418,7 +418,7 @@ function summarizeValue(value: unknown): string {
   return raw.length > 24 ? `${raw.slice(0, 24)}…` : raw
 }
 
-/** 单行轨迹核心入参摘要：优先命令/文件路径/提示词，取首行并截断 60 字符。 */
+/** Core input summary for a trace row: prefer command/file path/prompt, first line, truncated to 60 chars. */
 export function toolSummaryText(toolName: string, input: unknown): string {
   void toolName
   let raw = ''
@@ -444,24 +444,24 @@ export function toolSummaryText(toolName: string, input: unknown): string {
   return firstLine.length > SUMMARY_MAX_CHARS ? `${firstLine.slice(0, SUMMARY_MAX_CHARS)}…` : firstLine
 }
 
-/** 内核超长 Spill 标记（`[Artifact] id=<uuid>`）或 art_ 前缀产物引用。 */
+/** Kernel over-length Spill marker (`[Artifact] id=<uuid>`) or art_-prefixed artifact reference. */
 const SPILL_ID_RE = /\[Artifact\]\s+id=([A-Za-z0-9][A-Za-z0-9._:-]{0,127})/
 const ART_REF_RE = /\bart_[A-Za-z0-9_-]{1,127}\b/
 
-/** 检测工具输出文本中的产物引用；无则 undefined。 */
+/** Detect an artifact reference in tool output text; undefined when none. */
 export function detectArtifactRef(text: string | undefined): string | undefined {
   if (typeof text !== 'string' || text === '') return undefined
   return SPILL_ID_RE.exec(text)?.[1] ?? ART_REF_RE.exec(text)?.[0]
 }
 
 // ---------------------------------------------------------------------------
-// 实际生成模型身份（pi.assistant model[0] 派生；不读会话当前配置）
+// Effective generation model identity (derived from pi.assistant model[0]; never reads current conversation config)
 // ---------------------------------------------------------------------------
 
 /**
- * 解析 pi.assistant entry 的 model[0]（AssistantMessage）携带的实际生成模型身份。
- * 形状不完整或非法（非 pi.assistant / model 非数组或空 / 首消息非 assistant 角色 /
- * provider|model 缺失或空白）返回 undefined——绝不伪造，也不回退 conversation.model。
+ * Parse the effective generation model identity carried by a pi.assistant entry's model[0] (AssistantMessage).
+ * Incomplete or invalid shapes (not pi.assistant / model not a non-empty array / first message not
+ * assistant / provider|model missing or blank) return undefined — never fabricate, never fall back to conversation.model.
  */
 export function parseAssistantModelIdentity(entry: ConversationEntry): AssistantModelIdentity | undefined {
   if (entry.kind !== 'pi.assistant') return undefined
@@ -482,18 +482,18 @@ export function parseAssistantModelIdentity(entry: ConversationEntry): Assistant
   }
 }
 
-/** 模型身份相等性：只比较 provider + model；thinkingLevel 不参与（档位变化
- * 不构成模型切换，不拆回合、不渲染边界）。 */
+/** Model identity equality: compare provider + model only; thinkingLevel is excluded (a level change
+ * is not a model switch: no turn split, no boundary rendered). */
 export function sameAssistantModelIdentity(a: AssistantModelIdentity, b: AssistantModelIdentity): boolean {
   return a.provider === b.provider && a.model === b.model
 }
 
-/** 短标签：model 段（与 Composer 模型按钮同口径，取 '/' 末段）。 */
+/** Short label: the model segment (same treatment as the Composer model button, last '/' segment). */
 export function assistantModelShortLabel(identity: AssistantModelIdentity): string {
   return identity.model.split('/').pop() ?? identity.model
 }
 
-/** 完整标签：'provider/model'（+ 思考档位），与 conversation.model 同格式。 */
+/** Full label: 'provider/model' (+ thinking level), same format as conversation.model. */
 export function assistantModelFullLabel(identity: AssistantModelIdentity, t?: WebMessageTranslator): string {
   const tt = t ?? englishWebTranslator
   const base = `${identity.provider}/${identity.model}`
@@ -503,15 +503,15 @@ export function assistantModelFullLabel(identity: AssistantModelIdentity, t?: We
 }
 
 /**
- * 扫描整条时间线，为每个「实际生成模型发生切换」的 assistant 回合生成边界身份，
- * 按回合 key 索引（供渲染层在该回合之前画模型边界）。
+ * Scan the whole timeline and produce a boundary identity for each assistant turn where the effective
+ * generation model switched, indexed by turn key (the renderer draws the boundary before that turn).
  *
- * 回看规则：从当前回合向前回看最近一个 assistant 回合，中间的 human 输入、
- * 插件卡片等不阻断（正常对话回合间几乎必有 human 输入）；遇到 reset / compaction
- * 分割线即停止（上下文边界之前的模型历史与当前回合无关）；首个 assistant 回合
- * 无边界。仅当两个回合均有可信 provider+model 且不同才构成边界——任一侧身份
- * 缺失/非法不产生边界（不把未知模型与已知模型比较、不造假）。边界锚定新模型
- * 实际 entry 落库后的回合位置，而非 Composer 切换配置的时刻。
+ * Look-back rule: look back from the current turn to the most recent assistant turn; human inputs
+ * and plugin cards in between do not block (normal dialogue almost always has human input between turns);
+ * stop at a reset / compaction divider (model history before a context boundary is irrelevant); the first
+ * assistant turn gets no boundary. A boundary exists only when both turns have trusted provider+model
+ * identities that differ — a missing/invalid side produces none (never compare unknown to known, never fake).
+ * The boundary anchors to the turn position after the new model's entries land, not the moment Composer switched config.
  */
 export function buildAssistantModelBoundaries(
   items: ReadonlyArray<TimelineItem>,
@@ -519,7 +519,7 @@ export function buildAssistantModelBoundaries(
   const boundaries = new Map<string, AssistantModelIdentity>()
   let prevAssistant: AssistantTurn | undefined
   for (const item of items) {
-    // 上下文分割线（reset / compaction）：不跨边界回看。
+    // Context divider (reset / compaction): never look back across a boundary.
     if (item.kind === 'divider') {
       prevAssistant = undefined
       continue
@@ -539,7 +539,7 @@ export function buildAssistantModelBoundaries(
 }
 
 // ---------------------------------------------------------------------------
-// 回合构建
+// Turn construction
 // ---------------------------------------------------------------------------
 
 interface RawSegment {
@@ -552,17 +552,17 @@ interface RawSegment {
 interface TurnAcc {
   entryIds: string[]
   segments: RawSegment[]
-  /** 回合展示身份核心（provider+model）；回合内混入不可信 entry 时置空
-   * （未知内容绝不归因已知模型，也不回退当前会话配置）。 */
+  /** Display identity core of the turn (provider+model); cleared when an untrusted entry pollutes the turn
+   * (unknown content is never attributed to a known model, and current conversation config is never a fallback). */
   model?: { provider: string; model: string }
-  /** 拆分比较基准：回合内首个可信 entry 的身份核心；与展示标签解耦，
-   * 展示被污染后仍保留，供后续明确不同模型重新开回合。 */
+  /** Split comparison baseline: identity core of the first trusted entry in the turn; decoupled from
+   * the display label so a later provably different model can still start a new turn after pollution. */
   modelReference?: { provider: string; model: string }
-  /** 首个可信 entry 锁定的思考档位（仅展示用）。 */
+  /** Thinking level locked by the first trusted entry (display only). */
   modelThinkingLevel?: string
-  /** 回合内档位不一致时丢弃单一档位展示。 */
+  /** Dropped when thinking levels are inconsistent within the turn. */
   modelThinkingMixed?: boolean
-  /** 已见过 pi.assistant（身份锁定后，仅在新身份可证不同时拆分回合）。 */
+  /** A pi.assistant has been seen (once identity is locked, split only on a provably different identity). */
   modelLocked?: boolean
   startedAt?: number
   settledAt?: number
@@ -596,7 +596,7 @@ function makeToolTrace(
   }
 }
 
-/** 折叠豁免判定：thinking 与常规工具行（含执行中、完成与出错）可收拢；只有命中插件 tool.view 的业务卡独立展示。 */
+/** Fold exemption: thinking and ordinary tool rows (running, done, failed) fold; only tool.view business cards stay standalone. */
 export function isFoldableStep(step: FoldableStep): boolean {
   if (step.kind === 'thinking') return true
   const tool = step.tool
@@ -610,9 +610,9 @@ function foldableOfRaw(seg: RawSegment): FoldableStep {
 }
 
 /**
- * 原始段 -> 渲染段：连续可折叠步骤从第一步起就放入 step-group，避免后续追加步骤时搬移节点。
- * 豁免项（tool.view）与文本块保持独立。
- * 当回合仍在运行（live=true）且该 step-group 之后尚未产出任何 text 正文段时，标记 active=true（前端默认展开）。
+ * Raw segments -> render segments: consecutive foldable steps enter a step-group from the first step, avoiding node moves when steps append.
+ * Exempt items (tool.view) and text blocks stay standalone.
+ * While the turn is still running (live=true) and no text segment follows the step-group yet, mark active=true (frontend expands by default).
  */
 export function foldTurnSegments(raw: ReadonlyArray<RawSegment>, live = false): AssistantSegment[] {
   const out: AssistantSegment[] = []
@@ -637,7 +637,7 @@ export function foldTurnSegments(raw: ReadonlyArray<RawSegment>, live = false): 
         last.text += seg.text ?? ''
         continue
       }
-      // 同一正文从流式快照转为落库条目时仍复用节点，避免卸载代码块与交互状态。
+      // Reuse the node when the same text moves from a streaming snapshot to a persisted entry, avoiding code-block remounts and lost state.
       out.push({ kind: 'text', key: `text:${out.length}`, text: seg.text ?? '' })
       continue
     }
@@ -694,8 +694,8 @@ function flushTurn(acc: TurnAcc | null, items: TimelineItem[], live: boolean): v
         ? acc.settledAt - acc.startedAt
         : undefined
 
-  // 实际生成模型：首个可信 entry 锁定 provider+model 与档位；后续条目档位
-  // 不一致（或身份不可信）时丢弃单一档位展示，provider+model 不受影响。
+  // Effective model: the first trusted entry locks provider+model and the level; later entries
+  // with inconsistent levels (or untrusted identities) drop the single-level display; provider+model stays.
   const turnModel: AssistantModelIdentity | undefined =
     acc.model !== undefined
       ? {
@@ -719,8 +719,8 @@ function flushTurn(acc: TurnAcc | null, items: TimelineItem[], live: boolean): v
   })
 }
 
-/** 提取 assistant 消息内容块（thinking / text / toolCall）；首个 assistant 锁定
- * 回合模型身份，后续条目维持档位一致性标记与未知污染标记。 */
+/** Extract assistant message content blocks (thinking / text / toolCall); the first assistant locks
+ * the turn's model identity; later entries maintain level-consistency and unknown-pollution flags. */
 function appendAssistantEntry(
   acc: TurnAcc,
   entry: ConversationEntry,
@@ -737,15 +737,15 @@ function appendAssistantEntry(
     }
     acc.modelLocked = true
   } else if (modelIdentity === undefined) {
-    // 已知身份之后混入不可信 entry：不拆分、不比较、无边界，但回合整体不再
-    // 归因任何已知模型（不能把未知 entry 内容伪装成 A 的产出）；比较基准
-    // modelReference 保留，供后续明确不同模型 entry 重新开回合。
+    // An untrusted entry after a known identity: no split, no comparison, no boundary, but the turn
+    // is no longer attributed to any known model (never disguise unknown content as A's output); the
+    // modelReference baseline survives so a later provably different model entry can still start a new turn.
     acc.model = undefined
   } else if (
     acc.modelReference !== undefined &&
     modelIdentity.thinkingLevel !== acc.modelThinkingLevel
   ) {
-    // 身份可信但档位与本回合不一致：不伪造单一 thinkingLevel。
+    // Trusted identity but inconsistent level: never fabricate a single thinkingLevel.
     acc.modelThinkingMixed = true
   }
   const model = entry.model
@@ -818,7 +818,7 @@ function appendAssistantEntry(
   }
 }
 
-/** pi.tool-result 按 toolCallId 配对；找不到对应 call 则生成独立工具行。 */
+/** Pair pi.tool-result by toolCallId; an unmatched result becomes a standalone tool row. */
 function appendToolResultEntry(acc: TurnAcc, entry: ConversationEntry, opts: BuildTimelineOptions): void {
   acc.entryIds.push(entry.id)
   const model = entry.model
@@ -833,10 +833,10 @@ function appendToolResultEntry(acc: TurnAcc, entry: ConversationEntry, opts: Bui
     const resultText = contentTextOf(m.content)
     const isError = m.isError === true
     const durationMs = typeof m.durationMs === 'number' && Number.isFinite(m.durationMs) ? m.durationMs : undefined
-    // 服务端截断标记随 toolResult 消息携带（truncated/totalChars/totalLines）。
+    // Server truncation markers ride on the toolResult message (truncated/totalChars/totalLines).
     const truncation = readResultTruncation(m)
-    // 结构化结果的持久化通道是 toolResult 消息的 details（pi-durable 不把
-    // structuredOutput 写入会话条目，它只给嵌套调用方）；非对象值不采纳。
+    // The persisted channel for structured outputs is the toolResult message details (pi-durable
+    // never writes structuredOutput into conversation entries; it only feeds nested callers); non-object values are ignored.
     const details = m.details
     const structuredOutput =
       details !== null && typeof details === 'object' && !Array.isArray(details) ? details : undefined
@@ -884,7 +884,7 @@ function appendToolResultEntry(acc: TurnAcc, entry: ConversationEntry, opts: Bui
   }
 }
 
-/** live 合并：流式思考、同 callId 更新既有工具行（仅补未决字段）、新 call 追加 running 行、流式文本追加为文本段。 */
+/** Live merge: streaming thinking; same callId updates the existing tool row (only pending fields); new calls append a running row; streaming text appends as a text segment. */
 function mergeLiveIntoTurn(acc: TurnAcc, live: ConversationLive, opts: BuildTimelineOptions): void {
   if (typeof live.thinking === 'string' && live.thinking.trim() !== '') {
     const persistedThinking = acc.segments.findLast((segment) => segment.kind === 'thinking')?.text
@@ -936,15 +936,15 @@ function mergeLiveIntoTurn(acc: TurnAcc, live: ConversationLive, opts: BuildTime
 }
 
 /**
- * 时间线归一化主函数。
+ * Main timeline normalization function.
  *
- * 输入约定：entries 为时间正序（旧 -> 新，getConversationDetail 已保证）。
+ * Input contract: entries are in chronological order (old -> new, guaranteed by getConversationDetail).
  */
 export function buildTimelineItems(
   entries: ReadonlyArray<ConversationEntry>,
   options: BuildTimelineOptions = {},
 ): TimelineItem[] {
-  // 先剔除被 helm.rewind 覆盖的条目：初次加载与 SSE 增量收到 rewind 同样生效。
+  // Drop entries covered by helm.rewind first: applies to both initial loads and SSE-increment rewinds.
   const activeEntries = filterRewoundEntries(entries)
   const items: TimelineItem[] = []
   const seenInputIds = new Set<string>()
@@ -975,7 +975,7 @@ export function buildTimelineItems(
   }
 
   for (const entry of activeEntries) {
-    // 插件 timeline.renderer 命中：任何 entry 都可能被接管（豁免折叠，直接渲染卡片）。
+    // Plugin timeline.renderer hit: any entry can be taken over (fold-exempt, renders a card directly).
     const renderer = matchTimelineRenderer(entry, options.timelineRenderers)
     if (renderer !== undefined) {
       if (entry.kind === 'helm.input') {
@@ -1003,17 +1003,17 @@ export function buildTimelineItems(
       case 'pi.user': {
         const text = extractUserMessageText(entry)
         if (text === '') break
-        // helm.input 已覆盖同文本输入：跳过紧随的重复 pi.user。
+        // The helm.input already covers the same text input: skip the duplicate pi.user right after it.
         if (lastHumanInputText !== undefined && lastHumanInputText === text) break
         lastHumanInputText = text
         pushHuman(entry, { text, origin: 'human' }, true)
         break
       }
       case 'pi.assistant': {
-        // 实际生成模型边界：与回合比较基准（首个可信身份，展示被污染后仍保留）
-        // 可信且 provider+model 不同（含同一工具回合 A→B）时，在新模型 entry
-        // 之前拆分回合；任一侧身份不完整/非法不拆分、不造假，也不回退当前会话
-        // 配置；thinkingLevel 不参与比较。
+        // Effective-model boundary: when provably different from the turn's comparison baseline
+        // (first trusted identity, surviving display pollution) — provider+model differing (including
+        // A→B within one tool turn) — split before the new model's entry; an incomplete/invalid side
+        // never splits or fakes, nor falls back to current conversation config; thinkingLevel is excluded.
         const modelIdentity = parseAssistantModelIdentity(entry)
         if (
           turn !== null &&
@@ -1064,17 +1064,17 @@ export function buildTimelineItems(
         break
       }
       case 'pi.system': {
-        // 位置提示与工具声明变更：模型侧簿记，不面向用户渲染。
+        // Position hints and tool-declaration changes: model-side bookkeeping, never user-rendered.
         break
       }
       default: {
-        // 未命中插件 renderer 的自定义 entry（helm.* 簿记等）：无渲染契约，跳过。
+        // Custom entries that hit no plugin renderer (helm.* bookkeeping etc.): no render contract, skip.
         break
       }
     }
   }
 
-  // 终态也可能携带未消费的 queue-only 快照，不能据此复活助手执行态。
+  // A settled state may still carry unconsumed queue-only snapshots; never revive assistant activity from them.
   const isLive = options.working ?? (options.live !== undefined)
   if (options.live !== undefined) {
     if (turn === null) turn = newTurn()
@@ -1092,7 +1092,7 @@ export function buildTimelineItems(
     })
   }
 
-  // 正式 entry 优先于队列快照，避免交接期间同一 input 展示两次。
+  // Formal entries win over queue snapshots so the same input is not shown twice during handover.
   for (const q of options.live?.queuedInputs ?? []) {
     if (typeof q?.id !== 'string' || q.id === '' || typeof q.text !== 'string') continue
     if (q.mode !== 'steer' && q.mode !== 'followUp') continue
@@ -1117,8 +1117,8 @@ export function buildTimelineItems(
 }
 
 /**
- * 从时间线 items 收集全部工具调用的轻量摘要（供 tool.view 插件组件去重/续接计算，
- * 即 ToolViewProps.siblingCalls；按时间线出现顺序排列，无 callId 的调用跳过）。
+ * Collect lightweight summaries of all tool calls from timeline items (for tool.view plugin components
+ * to dedupe/continue, i.e. ToolViewProps.siblingCalls; in timeline order; calls without callId are skipped).
  */
 export function collectSiblingCalls(items: ReadonlyArray<TimelineItem>): ToolViewSiblingCall[] {
   const calls: ToolViewSiblingCall[] = []
@@ -1150,7 +1150,7 @@ function pushSiblingCall(calls: ToolViewSiblingCall[], tool: ToolTrace): void {
   })
 }
 
-/** 最近一条人类输入文本（Composer 上箭头回填用）。 */
+/** Latest human input text (for the Composer up-arrow prefill). */
 export function lastHumanTextOf(items: ReadonlyArray<TimelineItem>): string | undefined {
   for (let i = items.length - 1; i >= 0; i--) {
     const item = items[i]!
@@ -1160,33 +1160,33 @@ export function lastHumanTextOf(items: ReadonlyArray<TimelineItem>): string | un
 }
 
 // ---------------------------------------------------------------------------
-// timeline.entry.action 微插槽条目上下文
+// timeline.entry.action micro-slot entry context
 // ---------------------------------------------------------------------------
 
-/** 人类输入条的源 entry kind：helm.input 归一化优先，兜底展示为 pi.user。 */
+/** Source entry kind of a human input row: helm.input normalization first, pi.user fallback display. */
 export function humanItemEntryKind(item: HumanInputItem): string {
   return item.fallback ? 'pi.user' : 'helm.input'
 }
 
 // ---------------------------------------------------------------------------
-// 排队中的非人类长文本折叠（通用机制，不含插件业务解析）
+// Folding of queued non-human long text (generic mechanism, no plugin payload parsing)
 // ---------------------------------------------------------------------------
 
-/** 排队中非人类输入的长文本阈值：超过 600 字符或 8 行才折叠。 */
+/** Long-text threshold for queued non-human inputs: fold only beyond 600 chars or 8 lines. */
 const QUEUED_AGENT_COLLAPSE_CHARS = 600
 const QUEUED_AGENT_COLLAPSE_LINES = 8
 const QUEUED_AGENT_PREVIEW_CHARS = 240
 
 export interface QueuedAgentTextCollapse {
-  /** 是否应折叠（短文本不折叠，展示不变）。 */
+  /** Whether to fold (short text stays unfolded, display unchanged). */
   collapsed: boolean
-  /** 折叠态预览（保留换行结构，截断加省略号；展开后不使用）。 */
+  /** Collapsed preview (keeps line structure, truncated with an ellipsis; unused when expanded). */
   preview: string
 }
 
 /**
- * 排队中（steer/followUp）且非人类来源的长文本（如后台结算汇报原文）折叠决策。
- * 通用展示策略：不解析任何业务 payload，仅按长度/行数判定；展开后仍可看全文。
+ * Fold decision for long queued (steer/followUp) non-human text (e.g. raw background report text).
+ * Generic display policy: no business payload parsing, length/line-count only; full text remains viewable when expanded.
  */
 export function queuedAgentTextCollapse(text: string): QueuedAgentTextCollapse {
   const lines = text.split('\n')
@@ -1201,22 +1201,22 @@ export function queuedAgentTextCollapse(text: string): QueuedAgentTextCollapse {
 }
 
 // ---------------------------------------------------------------------------
-// assistant 回合在途判定（复制/分叉 hover 条仅在彻底完成时展示）
+// Assistant turn in-flight detection (copy/fork hover bar shows only when fully settled)
 // ---------------------------------------------------------------------------
 
 export interface AssistantTurnBusyOptions {
   isLatestTurn?: boolean
-  /** 插件仅报告调用 ID 的活动；宿主不解释其业务状态。 */
+  /** Activities where the plugin reports only call ids; the host does not interpret their business state. */
   activeToolCallIds?: ReadonlySet<string>
 }
 
 /**
- * 判定 assistant 回合是否仍在响应或执行在途任务中：
- * 1. turn.live 为 true（进行中 / 流式输出 / 思考中）；
- * 2. 最新回合且父会话处于 working 或 blocked 状态；
- * 3. 回合内任一工具状态为 running 或 unknown；
- * 4. step-group 仍处于 active 激活态；
- * 5. 本回合工具调用仍有插件登记的后台活动。
+ * Decide whether an assistant turn is still responding or running in-flight tasks:
+ * 1. turn.live is true (in flight / streaming / thinking);
+ * 2. it is the latest turn and the parent conversation is working or blocked;
+ * 3. any tool in the turn is running or unknown;
+ * 4. a step-group is still active;
+ * 5. any tool call of the turn still has plugin-registered background activity.
  */
 export function isAssistantTurnBusy(
   turn: AssistantTurn,
@@ -1250,10 +1250,10 @@ export function isAssistantTurnBusy(
 }
 
 // ---------------------------------------------------------------------------
-// 视图纯函数（自 ConversationTimeline 组件迁入，单测直测）
+// View pure functions (moved from the ConversationTimeline component, unit-testable directly)
 // ---------------------------------------------------------------------------
 
-/** 工具行状态图标名：运行中 loader / 失败 x / 完成 check / 其他 circle。 */
+/** Tool row status icon name: loader while running / x on failure / check when done / circle otherwise. */
 export function toolStatusIcon(tool: ToolTrace): string {
   if (tool.status === 'running') return 'loader'
   if (tool.isError) return 'x'
@@ -1261,7 +1261,7 @@ export function toolStatusIcon(tool: ToolTrace): string {
   return 'circle'
 }
 
-/** tool.view 完整标准 Props 构造（含 siblingCalls，供插件组件去重/续接计算）。 */
+/** Build the full standard tool.view props (including siblingCalls for plugin dedupe/continuation). */
 export function buildToolViewProps(
   tool: ToolTrace,
   conversationId: number,
@@ -1284,7 +1284,7 @@ export function buildToolViewProps(
   }
 }
 
-/** timeline.entry.action 锚点索引：按 id 索引未被 rewind 覆盖的真实条目。 */
+/** timeline.entry.action anchor index: real entries not covered by rewind, indexed by id. */
 export function buildActiveEntryIndex(entries: ReadonlyArray<ConversationEntry>): Map<string, ConversationEntry> {
   const index = new Map<string, ConversationEntry>()
   for (const entry of filterRewoundEntries(entries)) index.set(entry.id, entry)
@@ -1311,10 +1311,10 @@ function hasAssistantText(entry: ConversationEntry): boolean {
 }
 
 /**
- * assistant 回合 action 锚点：优先取最后一个携带 assistant 正文文本块的
- * pi.assistant 条目（与 hover 条复制语义同载体）；全无则退回最后一个
- * pi.assistant（含纯 toolCall 载体）；回合仅有工具条目（live 起步）时
- * undefined——绝不拿 pi.tool-result 伪造。
+ * Assistant turn action anchor: prefer the last pi.assistant entry carrying an assistant text block
+ * (same carrier as the hover-bar copy); otherwise the last pi.assistant (even toolCall-only);
+ * undefined when the turn only has tool entries so far (live start) —
+ * never fabricate one from pi.tool-result.
  */
 export function resolveAssistantAnchorEntry(
   entryIds: ReadonlyArray<string>,
@@ -1331,13 +1331,13 @@ export function resolveAssistantAnchorEntry(
   return lastTextEntry ?? lastAssistant
 }
 
-/** Ctrl+O 过程步骤折叠切换指令（按最新含过程步骤的助手回合精准同步）。 */
+/** Ctrl+O process-step fold toggle command (precisely synced to the latest assistant turn with process steps). */
 export interface ProcessShortcutCommand {
   open: boolean
   seq: number
 }
 
-/** 查找最新一条包含可折叠过程步骤（step-group）的助手回合 key；无则返回 undefined。 */
+/** Find the key of the latest assistant turn containing foldable process steps (step-group); undefined when none. */
 export function findLatestProcessTurnKey(items: ReadonlyArray<TimelineItem>): string | undefined {
   for (let i = items.length - 1; i >= 0; i--) {
     const item = items[i]!

@@ -1,14 +1,15 @@
 /**
- * UI 动作（ctx.ui.action：conversation:header / conversation:row / timeline:entry
- * 三类微插槽）的纯函数匹配与载荷构造层。
+ * Pure-function matching and payload construction for UI actions (ctx.ui.action:
+ * the conversation:header / conversation:row / timeline:entry micro-slots).
  *
- * 契约要点：
- * - 所有微插槽均按 matchesUiScope(spec.scope, conversation) 过滤；
- * - action-only（仅 actionId，无 client）：宿主渲染标准极简图标按钮 /
- *   菜单项；声明了 client 时内联 <PluginUiView />；
- * - Action 载荷以实际上下文为准：conversationId / entryId 由宿主强制注入并
- *   覆盖 spec.input 同名字段（spec.input 不能伪造目标会话或条目）；
- * - 调用寻址 actionPluginId ?? pluginId。
+ * Contract highlights:
+ * - Every micro-slot is filtered by matchesUiScope(spec.scope, conversation);
+ * - action-only (actionId without client): the host renders the standard minimal
+ *   icon button / menu item; when client is declared an inline <PluginUiView /> renders;
+ * - Action payloads follow the actual context: conversationId / entryId are force-injected
+ *   by the host and override same-named spec.input fields (spec.input cannot forge a target
+ *   conversation or entry);
+ * - Invocation addressing uses actionPluginId ?? pluginId.
  */
 import type {
   ConversationEntry,
@@ -17,12 +18,12 @@ import type {
 } from '@helm/protocol/browser'
 import { matchesUiScope, type QualifiedUiSpec, type QualifiedUiActionSpec } from '../lib/types.js'
 
-/** UI 动作 action-only 判定：未声明 client，仅靠 actionId 执行。 */
+/** action-only check for a UI action: no client declared, executes via actionId alone. */
 export function isActionOnlyActionSpec(spec: UiActionSpec): boolean {
   return spec.actionId !== undefined && spec.client === undefined
 }
 
-/** 会话级 UI 动作过滤：target + scope 命中 + 声明了执行轨（actionId / client 至少其一）。 */
+/** Conversation-level UI action filter: target + scope hit + an execution track declared (at least one of actionId / client). */
 export function matchConversationActions(
   actions: ReadonlyArray<QualifiedUiActionSpec> | undefined,
   target: UiActionSpec['target'],
@@ -37,10 +38,7 @@ export function matchConversationActions(
   )
 }
 
-/**
- * 会话顶栏 placement 分组：'toolbar' 直出按钮组，'menu'（缺省）收纳进
- * 「更多操作」下拉菜单。
- */
+/** Group header actions by placement: 'toolbar' renders directly; 'menu' (default) goes into the "more actions" dropdown. */
 export function splitConversationHeaderActions(
   actions: ReadonlyArray<QualifiedUiActionSpec>,
 ): {
@@ -56,19 +54,19 @@ export function splitConversationHeaderActions(
   return { toolbar, menu }
 }
 
-/** timeline:entry 的条目匹配上下文。 */
+/** Entry matching context for timeline:entry. */
 export interface TimelineEntryActionContext {
-  /** 条目 kind（如 'pi.user'、'pi.assistant'、'helm.input'）。 */
+  /** Entry kind (e.g. 'pi.user', 'pi.assistant', 'helm.input'). */
   kind: string
-  /** 文本消息角色：'user' | 'assistant'；非文本消息条目 undefined。 */
+  /** Text message role: 'user' | 'assistant'; undefined for non-text entries. */
   role?: 'user' | 'assistant'
 }
 
 /**
- * 真实 ConversationEntry -> timeline:entry 匹配上下文：
- * kind 原样采用真实条目 kind；文本消息条目附角色
- * （pi.user / helm.input -> user，pi.assistant -> assistant），
- * 其余条目（自定义 kind、pi.tool-result 等）无角色，声明 roles 的动作不命中。
+ * Real ConversationEntry -> timeline:entry matching context: kind comes verbatim
+ * from the real entry; text message entries carry a role (pi.user / helm.input ->
+ * user, pi.assistant -> assistant); other entries (custom kinds, pi.tool-result,
+ * etc.) have no role, so actions declaring roles never match them.
  */
 export function timelineEntryActionContextOf(entry: ConversationEntry): TimelineEntryActionContext {
   if (entry.kind === 'pi.user' || entry.kind === 'helm.input') return { kind: entry.kind, role: 'user' }
@@ -77,9 +75,10 @@ export function timelineEntryActionContextOf(entry: ConversationEntry): Timeline
 }
 
 /**
- * 单条 timeline:entry 匹配判定：
- * - kinds 提供时须包含 entry.kind（缺省匹配全部条目）；
- * - roles 提供时须包含条目角色（缺省不按角色过滤；无角色条目仅在 roles 缺省时命中）。
+ * Single timeline:entry match decision:
+ * - when kinds is provided it must include entry.kind (default matches all entries);
+ * - when roles is provided it must include the entry role (default does not filter by
+ *   role; role-less entries match only when roles is omitted).
  */
 export function matchesTimelineEntryAction(
   spec: UiActionSpec,
@@ -95,7 +94,7 @@ export function matchesTimelineEntryAction(
   return true
 }
 
-/** timeline:entry 过滤：target + scope + 执行轨 + kinds/roles。 */
+/** timeline:entry filter: target + scope + execution track + kinds/roles. */
 export function matchTimelineEntryActions(
   actions: ReadonlyArray<QualifiedUiActionSpec> | undefined,
   conversation: ConversationSummary | undefined,
@@ -112,10 +111,11 @@ export function matchTimelineEntryActions(
 }
 
 /**
- * 构造 action 调用载荷：实际上下文强制覆盖 spec.input 同名字段。
- * spec.input 可补充任意附加字段，但 conversationId / entryId 永远以宿主实际
- * 上下文为准：插件声明不能伪造目标会话；宿主无 entryId 上下文时会话级动作
- * 载荷也不携带 spec.input 里的伪造 entryId（剔除而非透传）。
+ * Build the action invocation payload: the actual context force-overrides same-named
+ * spec.input fields. spec.input may add arbitrary extra fields, but conversationId /
+ * entryId always come from the host's real context: a plugin declaration cannot forge
+ * the target conversation; without an entryId context the conversation-level payload
+ * also drops (not passes through) any forged entryId from spec.input.
  */
 export function buildMicroActionInput(
   spec: { input?: Record<string, unknown> },
@@ -130,7 +130,7 @@ export function buildMicroActionInput(
   }
 }
 
-/** action 调用目标插件：actionPluginId 覆写，缺省贡献插件自身。 */
+/** Target plugin for an action invocation: actionPluginId override, defaulting to the contributing plugin. */
 export function microActionPluginId(spec: { actionPluginId?: string }, fallbackPluginId: string): string {
   return spec.actionPluginId ?? fallbackPluginId
 }
