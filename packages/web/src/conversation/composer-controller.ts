@@ -1,48 +1,62 @@
 /**
- * ComposerController 实时绑定 hook（协议 ComposerScopeProps.composer 的宿主构造方）。
+ * ComposerController live binding hook (the host-side constructor of the
+ * protocol's ComposerScopeProps.composer).
  *
- * 设计约束：
- * - 单一事实来源是 Composer 的 React state（text/attachments/sending）与 textareaRef；
- *   controller 每次渲染重建（读取全部经 ref 转发最新值，不做过期闭包）；
- * - setDraft / insertText 与用户键入同路径：推进 liveDraftRef、必要时聚焦与恢复光标，
- *   编辑目标（历史编辑锚点）与附件语义原样保留；
- * - submit() 复用宿主真实 send 流程（乐观清空 + 失败按活草稿版本回滚 + whenBusy 策略）；
- *   submit(text) 提交显式文本，不消费草稿 / 编辑锚点 / 附件；
- * - 本模块只导出 hook 与纯类型（无组件），保持 .tsx Fast Refresh 约定。
+ * Design constraints:
+ * - the single source of truth is the Composer's React state
+ *   (text/attachments/sending) plus textareaRef; the controller is rebuilt
+ *   every render (all reads forwarded through refs to the latest values, no
+ *   stale closures);
+ * - setDraft / insertText follow the same path as user typing: they advance
+ *   liveDraftRef, focus and restore the caret when necessary, and preserve
+ *   edit-target (historical edit anchor) and attachment semantics as-is;
+ * - submit() reuses the host's real send flow (optimistic clear + rollback by
+ *   live draft version on failure + whenBusy policy); submit(text) submits
+ *   explicit text, consuming no draft / edit anchor / attachments;
+ * - this module exports only the hook and pure types (no components), keeping
+ *   the .tsx Fast Refresh rule.
  */
 import { useCallback, useMemo, useRef } from 'react'
 import type { ComposerController, WhenBusy } from '@helm/protocol/browser'
 
 export interface ComposerControllerBindings {
-  /** 当前草稿文本（React state，渲染期读取）。 */
+  /** Current draft text (React state, read during render). */
   text: string
-  /** 草稿控制函数可在同一事件中同步改写，立即读取时使用宿主最新镜像。 */
+  /** Draft mutation can rewrite synchronously within the same event; reads
+   * take the host's latest mirror. */
   readDraft?: () => string
-  /** 当前待发送附件（React state）。 */
+  /** Current pending attachments (React state). */
   attachments: ReadonlyArray<{ artifactId: string; name: string; size: number; mimeType: string }>
-  /** 是否有提交在途（React state）。 */
+  /** Whether a submission is in flight (React state). */
   sending: boolean
-  /** textarea 元素引用。 */
+  /** textarea element ref. */
   textareaRef: { current: HTMLTextAreaElement | null }
-  /** 整体替换草稿（与用户键入同路径：推进 liveDraftRef；不触碰编辑锚点与附件）。 */
+  /** Replace the whole draft (same path as user typing: advances
+   * liveDraftRef; never touches the edit anchor or attachments). */
   setDraftState: (text: string) => void
   /**
-   * 光标处插入文本（与 applyPopover 同路径）：默认在当前光标位置插入并后移光标；
-   * focus 为 false 时不抢焦点（如宿主自身在动画帧内移动光标的场景）。
+   * Insert text at the caret (same path as applyPopover): inserts at the
+   * current caret and moves it after the fragment by default; focus=false
+   * skips stealing focus (e.g. when the host itself moves the caret within an
+   * animation frame).
    */
   insertTextState: (fragment: string) => void
-  /** 宿主真实提交流程（复用发送校验 / whenBusy / 附件 / 失败恢复）。 */
+  /** Host's real submission flow (reuses send validation / whenBusy /
+   * attachments / failure recovery). */
   submitDraft: (whenBusy?: WhenBusy) => Promise<void>
-  /** 提交显式文本到当前会话（不消费草稿 / 编辑锚点 / 附件；与 sending 并发保护一致）。 */
+  /** Submit explicit text to the current conversation (consumes no draft /
+   * edit anchor / attachments; same sending concurrency guard). */
   submitExplicitText: (text: string, whenBusy?: WhenBusy) => Promise<void>
 }
 
-/** 聚焦输入框并把光标落到指定位置（立即聚焦并在下一动画帧定位光标，等 DOM 文本更新生效）。 */
+/** Focus the input and place the caret at the given position (focus
+ * immediately and position the caret on the next animation frame, once the DOM
+ * text update has landed). */
 export function focusWithCaret(el: HTMLTextAreaElement, caret: number): void {
   try {
     el.focus()
   } catch {
-    /* 忽略离线或未挂载时的 focus 异常 */
+    /* ignore focus failures when offline or unmounted */
   }
   requestAnimationFrame(() => {
     el.focus()
@@ -51,7 +65,8 @@ export function focusWithCaret(el: HTMLTextAreaElement, caret: number): void {
 }
 
 export function useComposerController(bindings: ComposerControllerBindings): ComposerController {
-  // 提交在途守卫：与宿主 sendingRef 同步 set，防止 setState 异步生效间隙的重复提交。
+  // Submission in-flight guard: a set synchronized with the host's sendingRef,
+  // preventing duplicate submissions in the gap before setState lands.
   const explicitInFlightRef = useRef(false)
   const latest = useRef(bindings)
   latest.current = bindings
@@ -73,7 +88,8 @@ export function useComposerController(bindings: ComposerControllerBindings): Com
     const whenBusy = options?.whenBusy
     if (text === undefined) return b.submitDraft(whenBusy)
     if (explicitInFlightRef.current) {
-      // 与 sending 并发保护一致：在途期间拒绝重复显式提交，不伪报成功。
+      // Same concurrency guard as sending: reject duplicate explicit
+      // submissions while in flight; never fake success.
       return Promise.reject(new Error('composer_busy'))
     }
     explicitInFlightRef.current = true
@@ -102,8 +118,9 @@ export function useComposerController(bindings: ComposerControllerBindings): Com
       insertText,
       submit,
     }
-    // controller 读取走 getter 转发 latest ref，不依赖 bindings 身份；
-    // 三个方法引用稳定（useCallback 空依赖）。
+    // Controller reads go through getters forwarding the latest ref, not the
+    // bindings identity; the three methods are reference-stable (useCallback
+    // with empty deps).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setDraft, insertText, submit])
 }

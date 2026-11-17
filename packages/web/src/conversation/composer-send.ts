@@ -1,17 +1,27 @@
 /**
- * Composer 发送管线 hook（自 Composer.tsx 拆出，业务逻辑原样迁入）：
- * - 草稿三态（文本 / 编辑锚点 / 附件）与活草稿版本（liveDraftRef）唯一所有者；
- * - 发送管线：空态与在途门控、环境未保存阻塞、插件斜杠命令精确命中即执行、
- *   会话管理命令（/new /clear /compact）非编辑态立即执行、乐观清空 + 失败按
- *   冻结草稿版本回滚（用户已改草稿则不回灌旧编辑目标）；
- * - 附件上传：逐文件上传 + 失败显式通知，await 后以活草稿同步（旧渲染快照不回灌）；
- * - 显式文本提交（sendExplicit）：不消费草稿 / 编辑锚点 / 附件，失败如实 reject；
- * - 空会话起始环境阻塞（SessionEnvBar 回传）的门控哨兵与复位。
- * 本模块只导出 hook 与纯类型（无组件），保持 .ts Fast Refresh 约定。
+ * Composer send-pipeline hook (extracted from Composer.tsx; business logic
+ * migrated verbatim):
+ * - single owner of the draft triple (text / edit anchor / attachments) and
+ *   the live draft version (liveDraftRef);
+ * - send pipeline: empty & in-flight gating, unsaved-environment blocking,
+ *   exact plugin slash-command hits executed on the spot, session management
+ *   commands (/new /clear /compact) executed immediately outside edit mode,
+ *   optimistic clear + rollback on failure against the frozen draft version
+ *   (when the user already modified the draft, the old edit target never
+ *   flows back);
+ * - attachment upload: per-file upload + explicit failure notices; after each
+ *   await the live draft is used (stale render snapshots never flow back);
+ * - explicit text submission (sendExplicit): consumes no draft / edit anchor /
+ *   attachments and rejects honestly on failure;
+ * - gating sentinel and reset for the empty-conversation starting-environment
+ *   block (reported by SessionEnvBar).
+ * This module exports only hooks and pure types (no components), honoring the
+ * .ts Fast Refresh rule.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ConversationAttachmentRef, ConversationSummary, QueuedConversationInput, WhenBusy } from '@helm/protocol/browser'
 import { conversationsApi } from '../lib/api.js'
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import {
   executePluginSlashAction,
   insertAtCaret,
@@ -36,33 +46,40 @@ import {
 } from './composer-model.js'
 import type { EditRequestTarget } from './timeline-model.js'
 
-/** 请求回填文本（时间线「编辑并重发」）；每次递增 tick 保证同文本也能再次触发。 */
+/** Prefill request (timeline "edit and resend"); the incrementing tick makes
+ * the same text trigger again. */
 export interface ComposerPrefill {
   text: string
   entryId?: number
   attachments?: ConversationAttachmentRef[]
   tick: number
-  /** true 时仅当草稿完全空闲（无文本/附件/编辑锚点/在途操作）才回填；否则警告并拒绝。 */
+  /** When true, prefill only if the draft is fully idle (no text/attachments/
+   * edit anchor/in-flight operation); otherwise warn and refuse. */
   onlyIfEmpty?: boolean
 }
 
 export interface ComposerSendInput {
   conversation: ConversationSummary
-  /** 编辑并重发回填请求（null 表示无）。 */
+  /** Edit-and-resend prefill request (null means none). */
   prefill: ComposerPrefill | null
-  /** 真实发送请求开始/结束时通知父层（在途反馈；斜杠命令不触发）。 */
+  /** Notify the parent when a real send request starts/ends (in-flight
+   * feedback; slash commands do not trigger it). */
   onSendingChange?: (sending: boolean) => void
-  /** /new 新话题入口（进入本智能体待命页）；未提供时显式提示。 */
+  /** /new new-topic entry (navigates to this agent's standby pane); when not
+   * provided an explicit notice is shown. */
   onNewThread?: () => void
-  /** textarea 引用（回填/插入后聚焦；自动长高由组件负责）。 */
+  /** textarea ref (focus after prefill/insert; auto-grow is the component's job). */
   textareaRef: { current: HTMLTextAreaElement | null }
-  /** 当前会话作用域内可用的插件斜杠命令（首 token 精确命中即执行）。 */
+  /** Plugin slash commands available in the current conversation scope (exact
+   * first-token hits execute). */
   slashPluginCommands: ReadonlyArray<QualifiedCommand>
-  /** 会话是否允许配置起始环境（false 时复位环境阻塞哨兵）。 */
+  /** Whether the conversation still allows configuring the starting
+   * environment (false resets the environment block sentinel). */
   envConfigurable: boolean
-  /** 会话是否正忙（发送 whenBusy 策略附着的唯一依据）。 */
+  /** Whether the conversation is busy (the sole basis for the send's whenBusy policy). */
   working: boolean
-  /** 版本自动刷新挂起判定的本地草稿上报键（组件实例唯一，如 useId()）；缺省不上报。 */
+  /** Reporting key for the version auto-refresh pending check (unique per
+   * component instance, e.g. useId()); omitted means no reporting. */
   dirtyKey?: string
 }
 
@@ -72,39 +89,46 @@ export interface ComposerSendApi {
   editingEntryId: number | null
   sending: boolean
   uploading: number
-  /** 环境阻塞状态（发送按钮禁用与提示）。 */
+  /** Environment block state (send button disable + hint). */
   envBlocker: SessionEnvBlocker
-  /** 发送或上传在途（环境条 sendBlocked 与按钮禁用共用）。 */
+  /** Send or upload in flight (shared by the env bar's sendBlocked and button disable). */
   sendInFlight: boolean
-  /** 整体替换草稿文本（与用户键入同路径推进活草稿版本；锚点/附件不动）。 */
+  /** Replace the whole draft text (advances the live draft version like user
+   * typing; anchor/attachments untouched). */
   setDraftState: (text: string) => void
-  /** 光标处插入片段（focusWithCaret 恢复光标）。 */
+  /** Insert a fragment at the caret (focusWithCaret restores the caret). */
   insertTextState: (fragment: string) => void
-  /** 活草稿文本（供 controller 等渲染期读取）。 */
+  /** Live draft text (for render-time reads such as the controller). */
   readLiveDraft: () => string
-  /** 退出历史编辑态并清空草稿。 */
+  /** Exit history-edit mode and clear the draft. */
   cancelEdit: () => void
-  /** 逐文件上传附件（图片与普通文件同路径；失败显式通知）。 */
+  /** Upload attachments file by file (images and plain files share the path;
+   * failures notify explicitly). */
   uploadFiles: (files: ReadonlyArray<File>) => Promise<void>
-  /** 移除一个待发送附件（同步推进活草稿版本）。 */
+  /** Remove one pending attachment (synchronously advances the live draft version). */
   removeAttachment: (artifactId: string) => void
-  /** ↑ 历史编辑：整体替换文本 / 锚点 / 附件（含空附件清空旧草稿）。 */
+  /** ↑ history edit: wholesale replacement of text / anchor / attachments
+   * (an empty attachment list clears the old draft). */
   applyHistoryEdit: (target: EditRequestTarget) => void
-  /** ↑ 排队撤回重编：撤回 queuedInputs 中的人类排队消息并回填到草稿（不触发历史回滚横幅）。 */
+  /** ↑ queued-withdraw re-edit: withdraws the newest human queued input from
+   * queuedInputs and prefills the draft (no history-rollback banner). */
   withdrawQueuedInput: (queued: QueuedConversationInput) => Promise<void>
-  /** 宿主真实发送流程（乐观清空 + 失败按活草稿版本回滚 + whenBusy 策略）。 */
+  /** Host's real send flow (optimistic clear + rollback by live draft version
+   * on failure + whenBusy policy). */
   send: (busyMode?: WhenBusy, strict?: boolean) => Promise<void>
-  /** 提交显式文本（不消费草稿 / 编辑锚点 / 附件；失败如实 reject）。 */
+  /** Submit explicit text (consumes no draft / edit anchor / attachments;
+   * rejects honestly on failure). */
   sendExplicit: (raw: string, whenBusy?: WhenBusy) => Promise<void>
-  /** 斜杠菜单条目执行插件命令（成功后才消费触发词；稳定身份）。 */
+  /** Execute a plugin command from the slash menu (trigger word consumed only
+   * on success; stable identity). */
   runPluginCommand: (cmd: QualifiedCommand) => void
-  /** SessionEnvBar 阻塞回传（稳定身份，供其 blocker effect 依赖）。 */
+  /** SessionEnvBar block report (stable identity, for its blocker effect deps). */
   handleEnvBlocker: (blocker: SessionEnvBlocker) => void
-  /** 错误通知统一出口（中止回合等组件侧动作共用）。 */
+  /** Unified error-notice outlet (shared by component-side actions like aborting a turn). */
   notifyError: (title: string, err: unknown) => void
 }
 
-export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
+export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslator = englishWebTranslator): ComposerSendApi {
   const { conversation, prefill, onSendingChange, onNewThread, textareaRef, slashPluginCommands, envConfigurable, working, dirtyKey } = input
   const store = useHelmStore()
   const [text, setText] = useState('')
@@ -125,9 +149,12 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
       mountedRef.current = false
     }
   }, [])
-  // 活草稿版本：text / 编辑目标 / 附件任一变化推进，用于发送失败后判断草稿是否已被用户修改
+  // Live draft version: advanced by any change to text / edit target /
+  // attachments; after a send failure it tells whether the user already
+  // modified the draft.
   const liveDraftRef = useRef<ComposerDraftVersion>(draftVersionOf('', null, []))
-  // 只触达实例 ref，无状态闭包：空依赖维持恒定身份，作为下游 useCallback 的稳定依赖。
+  // Instance refs only, no state closures: empty deps keep a constant
+  // identity, serving as the stable dependency of downstream useCallbacks.
   const syncLiveDraft = useCallback((text: string, target: number | null, attachments: ReadonlyArray<PendingAttachment>): void => {
     liveDraftRef.current = draftVersionOf(text, target, attachments)
   }, [])
@@ -136,20 +163,25 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
     envBlockedRef.current = blocker.blocked
     setEnvBlocker(blocker)
   }
-  // SessionEnvBar 的 blocker effect 依赖此回调身份：普通函数会使其每 render 重跑（blocked 态下循环）。
+  // SessionEnvBar's blocker effect depends on this callback's identity: a
+  // plain function would re-run it every render (looping while blocked).
   const handleEnvBlockerStable = useStableCallback(handleEnvBlocker)
-  // 环境条卸载（开聊锁定 / 状态变化）时复位阻塞，避免残留阻止后续发送
+  // Reset the block when the env bar unmounts (locked by the chat starting /
+  // status change), so a leftover never blocks later sends.
   useEffect(() => {
     if (envConfigurable) return
     envBlockedRef.current = false
     setEnvBlocker(ENV_BLOCKER_CLEAR)
   }, [envConfigurable])
 
-  // 回填（编辑并重发）：prefill 引用变化即触发，同文本重复回填也生效。
-  // 每次选择编辑目标都整体替换附件（目标无附件则清空），绝不保留上一个目标的草稿残留。
+  // Prefill (edit and resend): any prefill reference change triggers it, and
+  // repeated prefills of the same text also apply. Each picked edit target
+  // wholly replaces the attachments (cleared when the target has none);
+  // residue from the previous target is never kept.
   useEffect(() => {
     if (prefill === null) return
-    // onlyIfEmpty：草稿非空/编辑中/在途时拒绝回填（经 ref 读取，不新增 effect 依赖）。
+    // onlyIfEmpty: refuse prefill while the draft is non-empty/editing/in
+    // flight (read via ref; no extra effect deps).
     if (prefill.onlyIfEmpty === true) {
       const live = liveDraftRef.current
       if (
@@ -162,7 +194,7 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
         store.pushNotice({
           type: 'notification',
           level: 'warning',
-          title: 'Handle the current draft before picking a starter',
+          title: t('composer.draft.handleBeforeStarter'),
           conversationId: conversation.id,
         })
         return
@@ -176,9 +208,10 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
     setAttachments(nextAttachments)
     syncLiveDraft(prefill.text, nextEditing, nextAttachments)
     textareaRef.current?.focus()
-  }, [prefill, syncLiveDraft])
+  }, [prefill, syncLiveDraft, t, store, conversation.id, textareaRef])
 
-  // 切换会话时退出历史编辑态（浮层复位由组件侧同名 effect 负责）
+  // Leaving history-edit mode when the conversation switches (popover resets
+  // are the component-side effect of the same name).
   useEffect(() => {
     setEditingEntryId(null)
   }, [conversation.id])
@@ -213,22 +246,24 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
           const meta = await conversationsApi.uploadArtifact(conversation.id, file)
           setAttachments((prev) => {
             const next = [...prev, { artifactId: meta.id, name: meta.name, size: meta.size, mimeType: meta.mimeType }]
-            // await 后渲染快照已过期：文本/锚点取活值，只替换附件集。
+            // The render snapshot is stale after the await: take live values
+            // for text/anchor, only replacing the attachment set.
             syncLiveDraft(liveDraftRef.current.text, liveDraftRef.current.targetEntryId, next)
             return next
           })
         } catch (err) {
-          notifyError(`Attachment upload failed: ${file.name}`, err)
+          notifyError(t('composer.attach.uploadFailedTitle', { name: file.name }), err)
         } finally {
           uploadingRef.current--
           setUploading(uploadingRef.current)
         }
       }
     },
-    [conversation.id, notifyError],
+    [conversation.id, notifyError, t],
   )
 
-  // ⌘K 与斜杠菜单复用同一动作寻址；失败必须返回给提交者。
+  // ⌘K and the slash menu share the same action addressing; failures must
+  // reach the submitter.
   const runPluginCommandFrom = useCallback(
     (cmd: QualifiedCommand): Promise<void> =>
       executePluginSlashAction(cmd, {
@@ -240,7 +275,8 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
     [store, conversation.id],
   )
 
-  // 命令成功后才消费触发词；用户已经修改草稿时不得覆盖新内容。
+  // Consume the trigger word only after the command succeeds; when the user
+  // already modified the draft, the new content must not be overwritten.
   const runPluginCommandImpl = useCallback((cmd: QualifiedCommand): void => {
     if (commandPendingRef.current) return
     commandPendingRef.current = true
@@ -255,21 +291,26 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
       if (el !== null) focusWithCaret(el, nextCaret)
     }).catch(() => { /* The action call already sent an explicit failure notice; keep the draft. */ }).finally(() => { commandPendingRef.current = false })
   }, [editingEntryId, attachments, syncLiveDraft, runPluginCommandFrom])
-  // 斜杠菜单条目跨 render 存续：入口经稳定包装取最新实现（替代渲染期写 latest ref）。
+  // Slash menu entries persist across renders: the entry point takes the
+  // latest implementation through a stable wrapper (instead of writing a
+  // latest ref during render).
   const runPluginCommand = useStableCallback(runPluginCommandImpl)
 
   const runSlashCommand = (raw: string): boolean => {
     const cmd = raw.trim()
     if (cmd === '/new') {
-      // /new 是新话题入口：进入本智能体待命页（首次发送才落库），不再重置原会话；
-      // 未提供回调（非会话页宿主）时显式提示，不猜测目标也不伤原会话。
+      // /new is the new-topic entry: navigate to this agent's standby pane
+      // (the conversation is only created on first send) without resetting the
+      // original one; when no callback is provided (a non-conversation host),
+      // notify explicitly — never guess a target or harm the original
+      // conversation.
       if (onNewThread !== undefined) {
         onNewThread()
       } else {
         store.pushNotice({
           type: 'notification',
           level: 'warning',
-          title: 'Start new topics from the New topic action in the conversation top bar',
+          title: t('composer.send.newTopicFromTopBar'),
           conversationId: conversation.id,
         })
       }
@@ -279,9 +320,9 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
       void conversationsApi
         .reset(conversation.id)
         .then(() => {
-          store.pushNotice({ type: 'notification', level: 'info', title: 'Context reset', conversationId: conversation.id })
+          store.pushNotice({ type: 'notification', level: 'info', title: t('composer.compaction.resetDone'), conversationId: conversation.id })
         })
-        .catch((err: unknown) => notifyError('Failed to reset context', err))
+        .catch((err: unknown) => notifyError(t('composer.compaction.resetFailed'), err))
       return true
     }
     const compactCmd = parseCompactSlashCommand(cmd)
@@ -290,7 +331,7 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
         store.pushNotice({
           type: 'notification',
           level: 'info',
-          title: 'Context compaction in progress',
+          title: t('composer.compaction.inProgress'),
           conversationId: conversation.id,
         })
         return true
@@ -298,9 +339,9 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
       void conversationsApi
         .compact(conversation.id, compactCmd.instructions)
         .then(() => {
-          store.pushNotice({ type: 'notification', level: 'info', title: 'Compaction submitted', conversationId: conversation.id })
+          store.pushNotice({ type: 'notification', level: 'info', title: t('composer.compaction.submitted'), conversationId: conversation.id })
         })
-        .catch((err: unknown) => notifyError('Failed to compact context', err))
+        .catch((err: unknown) => notifyError(t('composer.compaction.failed'), err))
       return true
     }
     return false
@@ -335,17 +376,20 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
     })
   }, [text, editingEntryId, syncLiveDraft])
 
-  /** ↑ 历史编辑整体替换：文本 / 锚点 / 附件（目标无附件即清空旧草稿残留）。 */
+  /** ↑ history-edit wholesale replacement: text / anchor / attachments (no
+   * attachments on the target clears the old draft residue). */
   const applyHistoryEdit = useCallback((target: EditRequestTarget): void => {
     setText(target.text)
     setEditingEntryId(target.entryId ?? null)
-    // 进入历史编辑同样整体替换附件（含空附件清空旧草稿）
+    // Entering a history edit also wholly replaces attachments (an empty list
+    // clears the old draft).
     setAttachments(attachmentsOfEditTarget(target))
     syncLiveDraft(target.text, target.entryId ?? null, attachmentsOfEditTarget(target))
     requestAnimationFrame(() => textareaRef.current?.focus())
   }, [syncLiveDraft, textareaRef])
 
-  /** ↑ 排队撤回重编：优先从 pi.inbox 撤回最新人类排队项并回填文本与附件。 */
+  /** ↑ queued-withdraw re-edit: withdraw the newest human queued input from
+   * pi.inbox first, then prefill text and attachments. */
   const withdrawQueuedInput = useCallback(async (queued: QueuedConversationInput): Promise<void> => {
     if (withdrawingRef.current || sendingRef.current || uploadingRef.current > 0) return
     withdrawingRef.current = true
@@ -365,8 +409,8 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
           store.pushNotice({
             type: 'notification',
             level: 'info',
-            title: 'Queued message withdrawn',
-            body: `Current draft not empty; input not overwritten: ${queued.text}`,
+            title: t('composer.send.withdrawnTitle'),
+            body: t('composer.send.withdrawnBody', { text: queued.text }),
             conversationId: conversation.id,
           })
           return
@@ -377,8 +421,8 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
           store.pushNotice({
             type: 'notification',
             level: 'warning',
-            title: 'Message entered execution',
-            body: 'Current draft not empty; not entering history message editing',
+            title: t('composer.send.enteredExecutionTitle'),
+            body: t('composer.send.enteredExecutionBody'),
             conversationId: conversation.id,
           })
           return
@@ -388,19 +432,19 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
         store.pushNotice({
           type: 'notification',
           level: 'warning',
-          title: 'Cannot withdraw queued message',
-          body: `Submission entered execution (status=${res.status})`,
+          title: t('composer.send.cannotWithdrawTitle'),
+          body: t('composer.send.cannotWithdrawBody', { status: res.status }),
           conversationId: conversation.id,
         })
       }
     } catch (err) {
       if (mountedRef.current) {
-        notifyError('Failed to withdraw queued message', err)
+        notifyError(t('composer.send.withdrawFailed'), err)
       }
     } finally {
       withdrawingRef.current = false
     }
-  }, [conversation.id, applyHistoryEdit, notifyError, store])
+  }, [conversation.id, applyHistoryEdit, notifyError, store, t])
 
   const send = useCallback(async (busyMode: WhenBusy = 'steer', strict = false): Promise<void> => {
     const draft = liveDraftRef.current.text
@@ -409,19 +453,21 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
       if (strict) throw new Error('Current draft empty or a composer operation is already in flight')
       return
     }
-    // 未保存环境或环境保存中不允许发送（同时覆盖 Enter 与发送按钮）
+    // Sending is disallowed while the environment is unsaved or still saving
+    // (covers both Enter and the send button).
     if (envBlockedRef.current) {
       store.pushNotice({
         type: 'notification',
         level: 'warning',
-        title: 'Save or cancel the starting environment changes first',
+        title: t('composer.env.saveOrCancelFirst'),
         body: envBlocker.reason ?? undefined,
         conversationId: conversation.id,
       })
       if (strict) throw new Error('Save or cancel the starting environment changes first')
       return
     }
-    // 插件斜杠命令：草稿首 token 精确命中满足作用域的插件命令时执行（仅非编辑态）。
+    // Plugin slash commands: executed when the draft's first token exactly
+    // hits an in-scope plugin command (non-editing mode only).
     const pluginCmd = matchExactPluginSlash(payload, slashPluginCommands)
     const editing = editingEntryId !== null
     if (!editing && pluginCmd !== undefined) {
@@ -440,8 +486,9 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
       }
       return
     }
-    // 编辑态正文中出现 /new 等管理命令只是被编辑消息的文本，不立即执行；
-    // 仅非编辑输入才作为会话管理命令立即执行。
+    // Management commands like /new appearing inside edited text are just the
+    // edited message's text, never executed immediately; only non-editing
+    // input executes them as session management commands.
     const slash = editing ? false : runSlashCommand(payload)
     if (slash) {
       setText('')
@@ -450,15 +497,17 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
     }
     const targetEntryId = editingEntryId
     const sentAttachments = new Set(attachments.map((attachment) => attachment.artifactId))
-    // 冻结发送瞬间草稿：失败时只有 Composer 仍处于乐观清空后的期望状态
-    // （用户未新输入、未选其他目标、未改附件）才回滚，旧 target 不得误绑新输入。
+    // Freeze the draft at the send instant: on failure the rollback only
+    // applies while the Composer is still in the expected post-optimistic-clear
+    // state (no new input, no other target, no attachment change) — an old
+    // target must never bind to new input.
     const frozenDraft = draftVersionOf(draft, targetEntryId, attachments)
     const expectedAfterClear = draftVersionOf('', null, attachments)
     sendingRef.current = true
     setSending(true)
     onSendingChange?.(true)
     setText('')
-    // 乐观退出编辑态；失败时在 catch 中按冻结版本回滚
+    // Optimistically exit edit mode; on failure roll back per the frozen version.
     setEditingEntryId(null)
     syncLiveDraft('', null, attachments)
     try {
@@ -470,30 +519,35 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
       })
       setAttachments((current) => {
         const next = current.filter((attachment) => !sentAttachments.has(attachment.artifactId))
-        // 已发送附件从活版本移除，避免残留误导 onlyIfEmpty 回填与回滚判定。
+        // Sent attachments leave the live version too, so residue cannot
+        // mislead the onlyIfEmpty prefill or the rollback check.
         syncLiveDraft(liveDraftRef.current.text, liveDraftRef.current.targetEntryId, next)
         return next
       })
     } catch (err) {
-      // 仅当 Composer 仍处于乐观清空后的期望状态才恢复文本与编辑目标；
-      // 用户已开始新输入 / 已选择其他编辑目标则保持现状，旧 target 不回灌。
+      // Restore text and edit target only while the Composer is still in the
+      // expected post-clear state; if the user already started new input or
+      // picked another edit target, keep the present state — the old target
+      // never flows back.
       const restore = shouldRestoreEditOnFailure(liveDraftRef.current, expectedAfterClear)
       if (restore) {
         setText(draft)
         if (frozenDraft.targetEntryId !== null) setEditingEntryId(frozenDraft.targetEntryId)
         syncLiveDraft(draft, frozenDraft.targetEntryId, attachments)
       }
-      notifyError(targetEntryId !== null ? 'Failed to update message' : 'Send failed', err)
+      notifyError(targetEntryId !== null ? t('composer.send.updateFailed') : t('composer.send.sendFailed'), err)
       if (strict) throw err
     } finally {
       sendingRef.current = false
       setSending(false)
       onSendingChange?.(false)
     }
-  }, [text, attachments, editingEntryId, working, runSlashCommand, syncLiveDraft, onSendingChange, notifyError, store, conversation.id, uploadingRef, envBlocker, runPluginCommandFrom, slashPluginCommands])
+  }, [text, attachments, editingEntryId, working, runSlashCommand, syncLiveDraft, onSendingChange, notifyError, store, conversation.id, uploadingRef, envBlocker, runPluginCommandFrom, slashPluginCommands, t])
 
-  // 显式文本提交：不消费草稿 / 编辑锚点 / 附件（插件命令结果等非用户键入内容）。
-  // 与 send 共用 sendingRef 并发保护与 onSendingChange 在途反馈；失败如实 reject。
+  // Explicit text submission: consumes no draft / edit anchor / attachments
+  // (content not typed by the user, e.g. plugin command output). Shares the
+  // sendingRef concurrency guard and onSendingChange in-flight feedback with
+  // send; rejects honestly on failure.
   const sendExplicit = useCallback(async (raw: string, whenBusy?: WhenBusy): Promise<void> => {
     const payload = raw.trim()
     if (payload === '' || sendingRef.current || uploadingRef.current > 0) {
@@ -503,7 +557,7 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
       store.pushNotice({
         type: 'notification',
         level: 'warning',
-        title: 'Save or cancel the starting environment changes first',
+        title: t('composer.env.saveOrCancelFirst'),
         body: envBlocker.reason ?? undefined,
         conversationId: conversation.id,
       })
@@ -519,20 +573,21 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
         ...(working ? { whenBusy: whenBusy ?? 'steer' } : {}),
       })
     } catch (err) {
-      notifyError('Send failed', err)
+      notifyError(t('composer.send.sendFailed'), err)
       throw err
     } finally {
       sendingRef.current = false
       setSending(false)
       onSendingChange?.(false)
     }
-  }, [working, onSendingChange, notifyError, store, conversation.id, uploadingRef, envBlocker])
+  }, [working, onSendingChange, notifyError, store, conversation.id, uploadingRef, envBlocker, t])
 
   const readLiveDraft = useCallback((): string => liveDraftRef.current.text, [])
 
-  // 版本自动刷新挂起判定：本地草稿脏状态上报（外部桥接 store 聚合，见
-  // composer-dirty.ts）。状态变化即时同步；卸载按实例键清除（依赖数组仅
-  // dirtyKey，重渲染不重复清除上报）。
+  // Version auto-refresh pending check: report local draft dirtiness (aggregated
+  // by the external bridge store, see composer-dirty.ts). Sync immediately on
+  // change; clear on unmount by the instance key (the dep array holds only
+  // dirtyKey, so re-renders never clear the report twice).
   useEffect(() => {
     if (dirtyKey === undefined) return
     setComposerDirty(dirtyKey, {

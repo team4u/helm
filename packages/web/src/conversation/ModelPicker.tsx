@@ -3,6 +3,7 @@ import type { ConversationSummary } from '@helm/protocol/browser'
 import { assetsApi, conversationsApi } from '../lib/api.js'
 import { HelmIcon, Popover, PopoverContent, PopoverPortal, PopoverTrigger } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { ThinkingLevelControl } from '../ui/ThinkingLevelControl.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import {
@@ -15,27 +16,29 @@ import {
 } from './keybindings-model.js'
 
 // ---------------------------------------------------------------------------
-// ModelPicker（自 Composer.tsx 拆出）：模型与思考档位选择，Radix Popover 浮层。
-// 会话模式与待命页共用 ModelPickerControl，统一键盘导航、Ctrl+L 聚焦与目录刷新。
+// ModelPicker (extracted from Composer.tsx): model and thinking level picking
+// in a Radix Popover. Conversation mode and the standby pane share
+// ModelPickerControl with unified keyboard navigation, Ctrl+L focus and
+// catalog refresh.
 // ---------------------------------------------------------------------------
 
 export interface ModelPickerControlProps {
-  /** 当前生效模型 ID（用于按钮标签、思考能力查询与初始高亮定位）。 */
+  /** Currently effective model id (button label, capability lookup, initial highlight). */
   effectiveModel: string | undefined
-  /** 显式选中的模型 ID（未覆盖/跟随时为 undefined）。 */
+  /** Explicitly selected model id (undefined while following defaults). */
   selectedModel: string | undefined
-  /** 当前思考档位（由模型支持列表收敛后展示）。 */
+  /** Current thinking level (converged against the model's supported list). */
   activeThinkingLevel: string
-  /** DOM 无 `[data-helm-panel]` 祖先时的兜底面板归属。 */
+  /** Panel fallback when no `[data-helm-panel]` ancestor exists. */
   fallbackPanel?: HelmPanel
-  /** 清除显式覆盖按钮文案与标题。 */
+  /** Copy for the clear-override button (label and title). */
   resetLabel: string
   resetTitle: string
-  /** 触发按钮标题与禁用态。 */
+  /** Trigger button title and disabled state. */
   buttonTitle: string
   disabled?: boolean
   pending?: boolean
-  /** 关联会话 ID（刷新目录通知归属；待命页省略）。 */
+  /** Owning conversation id (refresh notices; omitted on the standby pane). */
   conversationId?: number
   onPickModel: (modelId: string) => void | Promise<void>
   onResetDefault: () => void | Promise<void>
@@ -60,6 +63,7 @@ export function ModelPickerControl({
   onCatalogRefreshed,
 }: ModelPickerControlProps) {
   const store = useHelmStore()
+  const { t } = useWebLocale()
   const [open, setOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [query, setQuery] = useState('')
@@ -94,7 +98,7 @@ export function ModelPickerControl({
   useEffect(() => {
     if (!open) return
     setActiveIndex(initialModelActiveIndex(filteredModels, effectiveModel))
-    // filteredKeys 精确表达过滤结果集合变化
+    // filteredKeys precisely expresses changes of the filtered result set
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, query, filteredKeys, effectiveModel])
 
@@ -114,7 +118,7 @@ export function ModelPickerControl({
         store.pushNotice({
           type: 'notification',
           level: 'warning',
-          title: 'Some provider catalog refreshes failed',
+          title: t('composer.model.catalogPartialFailure'),
           body: errors.map(([p, err]) => `${p}: ${err}`).join('; '),
           ...(conversationId !== undefined ? { conversationId } : {}),
         })
@@ -122,8 +126,8 @@ export function ModelPickerControl({
         store.pushNotice({
           type: 'notification',
           level: 'info',
-          title: 'Model catalog refreshed',
-          body: `${store.models.length} models available`,
+          title: t('composer.model.catalogRefreshed'),
+          body: t('composer.model.catalogCount', { count: store.models.length }),
           ...(conversationId !== undefined ? { conversationId } : {}),
         })
       }
@@ -131,7 +135,7 @@ export function ModelPickerControl({
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: 'Failed to refresh model catalog',
+        title: t('composer.model.catalogRefreshFailed'),
         body: err instanceof Error ? err.message : String(err),
         ...(conversationId !== undefined ? { conversationId } : {}),
       })
@@ -156,13 +160,14 @@ export function ModelPickerControl({
     effectiveModel !== undefined && effectiveModel !== ''
       ? effectiveModel.split('/').pop() ?? effectiveModel
       : ''
-  const shortName = rawShortName.trim() !== '' ? rawShortName : 'Default model'
+  const shortName = rawShortName.trim() !== '' ? rawShortName : t('composer.model.defaultLabel')
   const currentModel = effectiveModel !== undefined && effectiveModel !== ''
     ? store.models.find((model) => model.id === effectiveModel)
     : undefined
   const currentLevels = currentModel?.thinkingLevels ?? ['off']
   const supportsThinking = currentLevels.some((level) => level !== 'off')
-  // 生效档位与展示：优先取实际生效档位；若不在当前模型支持列表中，则回退至 off 或首项支持档位。
+  // Effective level display: prefer the actually effective level; when it is
+  // not in the model's supported list, fall back to off or the first supported.
   const effectiveLevel = resolveEffectiveThinkingLevel(currentLevels, activeThinkingLevel)
   const showLevel = supportsThinking && effectiveLevel !== '' && effectiveLevel !== 'off'
   const allUnavailable = store.models.every((model) => !model.available || model.disabled === true)
@@ -176,7 +181,10 @@ export function ModelPickerControl({
             className="btn btn-ghost btn-sm composer-model-button"
             disabled={disabled || pending}
             aria-expanded={open}
-            aria-label={`Model and thinking level: ${shortName}${showLevel ? ` · ${effectiveLevel}` : ''}`}
+            aria-label={t('composer.model.buttonAria', {
+              model: shortName,
+              level: showLevel ? t('composer.model.levelSuffix', { level: effectiveLevel }) : '',
+            })}
             title={buttonTitle}
           >
             {pending ? <HelmIcon name="loader" size={12} className="spin-slow" /> : null}
@@ -212,7 +220,7 @@ export function ModelPickerControl({
               interactedOutsideRef.current = true
             }}
             onEscapeKeyDown={(event) => {
-              // 阻止 Esc 冒泡至全局双 Esc 中断处理器
+              // Stop Esc from bubbling to the global double-Esc abort handler
               event.stopPropagation()
             }}
           >
@@ -230,8 +238,8 @@ export function ModelPickerControl({
                 <HelmIcon name="search" size={13} />
                 <input
                   ref={searchInputRef}
-                  aria-label="Search models"
-                  placeholder="Search models…"
+                  aria-label={t('composer.model.searchAria')}
+                  placeholder={t('composer.model.searchPlaceholder')}
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   onKeyDown={(event) => {
@@ -253,13 +261,13 @@ export function ModelPickerControl({
                   }}
                 />
               </div>
-              <Tooltip content="Refresh dynamic model catalog" side="top">
+              <Tooltip content={t('composer.model.refreshCatalog')} side="top">
                 <button
                   type="button"
                   className="btn btn-ghost btn-icon-sm composer-model-refresh-btn"
                   disabled={refreshing}
-                  title="Refresh dynamic model catalog"
-                  aria-label="Refresh dynamic model catalog"
+                  title={t('composer.model.refreshCatalog')}
+                  aria-label={t('composer.model.refreshCatalog')}
                   onClick={(e) => {
                     e.stopPropagation()
                     void refreshCatalog()
@@ -270,8 +278,8 @@ export function ModelPickerControl({
               </Tooltip>
             </div>
             <div className="popover-header">
-              <span>Model list</span>
-              <span className="kbd-hint popover-kbd-hint">↑↓ select · Enter confirm</span>
+              <span>{t('composer.model.listHeader')}</span>
+              <span className="kbd-hint popover-kbd-hint">{t('composer.kbd.navConfirm')}</span>
             </div>
             {filteredModels.map((m, idx) => (
               <button
@@ -292,15 +300,15 @@ export function ModelPickerControl({
               </button>
             ))}
             {allUnavailable ? (
-              <div className="popover-item composer-model-empty">No models available; configure a provider key in Models & credentials first</div>
+              <div className="popover-item composer-model-empty">{t('composer.model.emptyCatalog')}</div>
             ) : filteredModels.length === 0 ? (
-              <div className="popover-item composer-model-empty">No matching models</div>
+              <div className="popover-item composer-model-empty">{t('composer.model.noMatches')}</div>
             ) : null}
             {supportsThinking ? (
               <>
                 <div className="popover-header">
                   <span>
-                    Thinking level
+                    {t('composer.model.thinkingHeader')}
                     <span className="composer-model-thinking-name"> · {shortName}</span>
                   </span>
                   <span className="kbd-hint popover-kbd-hint">{COMPOSER_SHORTCUTS.cycleThinkingLevel}</span>
@@ -322,6 +330,7 @@ export function ModelPickerControl({
 
 export function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
   const store = useHelmStore()
+  const { t } = useWebLocale()
   const [pending, setPending] = useState(false)
 
   const pick = async (model: string): Promise<void> => {
@@ -333,7 +342,7 @@ export function ModelPicker({ conversation }: { conversation: ConversationSummar
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: 'Failed to switch model',
+        title: t('composer.model.switchFailed'),
         body: err instanceof Error ? err.message : String(err),
         conversationId: conversation.id,
       })
@@ -350,7 +359,7 @@ export function ModelPicker({ conversation }: { conversation: ConversationSummar
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: 'Failed to switch thinking level',
+        title: t('composer.model.thinkingSwitchFailed'),
         body: err instanceof Error ? err.message : String(err),
         conversationId: conversation.id,
       })
@@ -367,7 +376,7 @@ export function ModelPicker({ conversation }: { conversation: ConversationSummar
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: 'Failed to restore default configuration',
+        title: t('composer.model.restoreFailed'),
         body: err instanceof Error ? err.message : String(err),
         conversationId: conversation.id,
       })
@@ -387,9 +396,13 @@ export function ModelPicker({ conversation }: { conversation: ConversationSummar
       effectiveModel={conversation.model}
       selectedModel={conversation.model}
       activeThinkingLevel={conversation.thinkingLevel}
-      resetLabel="Clear the explicit override and recompute the Profile/global inheritance chain"
-      resetTitle="Clear the explicit override and recompute the Profile/global inheritance chain"
-      buttonTitle={`Current model: ${conversation.model}${showLevel ? ` · thinking ${effectiveLevel}` : ''} (${COMPOSER_SHORTCUTS.toggleModelPicker})`}
+      resetLabel={t('composer.model.clearOverride')}
+      resetTitle={t('composer.model.clearOverride')}
+      buttonTitle={t('composer.model.currentTitle', {
+        model: conversation.model,
+        thinking: showLevel ? t('composer.model.thinkingSuffix', { level: effectiveLevel }) : '',
+        shortcut: COMPOSER_SHORTCUTS.toggleModelPicker,
+      })}
       pending={pending}
       conversationId={conversation.id}
       onPickModel={pick}

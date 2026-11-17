@@ -1,19 +1,20 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 
 // ---------------------------------------------------------------------------
-// 斜杠 / 产物引用浮层（自 Composer.tsx 拆出）
+// Slash / artifact-reference popover (extracted from Composer.tsx)
 // ---------------------------------------------------------------------------
 
 export interface PopoverItem {
   id: string
   label: string
   hint?: string
-  /** 回填草稿的触发词（插件命令改用 run 直接执行，不回填）。 */
+  /** Trigger word written back into the draft (plugin commands run instead). */
   apply?: string
-  /** 插件命令：选中即执行（不回填触发词到草稿）。 */
+  /** Plugin command: picked items execute immediately (no draft write-back). */
   run?: () => void
 }
-/** 键盘可见候选上限：↑↓ 循环只在此列表内（显示与键盘索引一致）。 */
+/** Keyboard-visible candidate cap: ↑↓ cycling stays inside this list. */
 const SLASH_VISIBLE_LIMIT = 12
 
 export function CommandPopover({
@@ -23,11 +24,12 @@ export function CommandPopover({
   onClose,
 }: {
   query: string
-  /** 已合并好的斜杠菜单条目（含插件命令）；省略时回退宿主内置三源构建。 */
+  /** Pre-merged slash menu items (incl. plugin commands); omitted falls back to host builtin items. */
   slashItems?: ReadonlyArray<PopoverItem>
   onPick: (apply: string, caretSuffix?: string) => void
   onClose: () => void
 }) {
+  const { t } = useWebLocale()
   const [active, setActive] = useState(0)
 
   const items = useMemo<PopoverItem[]>(() => {
@@ -36,15 +38,17 @@ export function CommandPopover({
       return slashItems.filter((i) => i.id.toLowerCase().includes(q) || i.label.toLowerCase().includes(q))
     }
     const builtin: PopoverItem[] = [
-      { id: '/new', label: '/new', hint: 'Start new topic', apply: '/new' },
-      { id: '/clear', label: '/clear', hint: 'Reset context', apply: '/clear' },
-      { id: '/compact', label: '/compact', hint: 'Compact context', apply: '/compact' },
+      { id: '/new', label: '/new', hint: t('composer.command.newHint'), apply: '/new' },
+      { id: '/clear', label: '/clear', hint: t('composer.command.clearHint'), apply: '/clear' },
+      { id: '/compact', label: '/compact', hint: t('composer.command.compactHint'), apply: '/compact' },
     ]
     return builtin.filter((i) => i.id.toLowerCase().includes(q))
-  }, [query, slashItems])
+  }, [query, slashItems, t])
 
-  // 键盘循环限定可见候选，修复显示截断但索引越界到不可见项的旧问题。
-  // 记忆化保持数组身份稳定：条目集不变时键盘 effect 不重挂全局监听。
+  // Keyboard cycling is limited to the visible candidates, fixing the old bug
+  // where the index could reach past the truncated list. Memoization keeps the
+  // array identity stable so the keyboard effect does not re-bind listeners
+  // while the item set is unchanged.
   const visible = useMemo(() => items.slice(0, SLASH_VISIBLE_LIMIT), [items])
   const visibleKeys = visible.map((item) => item.id).join('|')
 
@@ -54,7 +58,8 @@ export function CommandPopover({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      // IME 组合中不拦截（组合音节可能含触发符，Enter 属确认候选）。
+      // Never intercept while IME is composing (syllables may contain triggers;
+      // Enter belongs to candidate confirmation).
       if (e.isComposing || e.keyCode === 229) return
       if (visible.length === 0) {
         if (e.key === 'Enter' || e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Escape') {
@@ -103,7 +108,7 @@ export function CommandPopover({
     return (
       <div className="composer-popover">
         <div className="popover-item" style={{ color: 'var(--fg-muted)' }}>
-          No matching commands or skills
+          {t('composer.command.noMatches')}
         </div>
       </div>
     )
@@ -112,8 +117,8 @@ export function CommandPopover({
   return (
     <div className="composer-popover">
       <div className="popover-header">
-        Commands and skills
-        <span className="kbd-hint popover-kbd-hint">↑↓ select · Enter confirm · Esc close</span>
+        {t('composer.command.header')}
+        <span className="kbd-hint popover-kbd-hint">{t('composer.kbd.navConfirmClose')}</span>
       </div>
       {visible.map((item, idx) => (
         <button
@@ -136,7 +141,7 @@ export function CommandPopover({
       ))}
       {items.length > visible.length ? (
         <div className="popover-item" style={{ color: 'var(--fg-subtle)', cursor: 'default' }}>
-          Too many candidates; showing the first {SLASH_VISIBLE_LIMIT}; keep typing to filter
+          {t('composer.completion.tooManyTitle', { limit: SLASH_VISIBLE_LIMIT })}
         </div>
       ) : null}
     </div>

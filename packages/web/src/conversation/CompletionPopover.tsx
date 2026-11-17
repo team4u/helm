@@ -1,13 +1,18 @@
 /**
- * composerCompleter 插件源浮层（'@' '#' ':'）：
- * - 定位复用既有 .composer-box 相对定位 + .composer-popover 视觉类（Radix
- *   Popover Anchor 挂载，满足 WAI-ARIA combobox/listbox 契约，非裸 div）；
- * - 键盘：↑↓ 仅在可见候选内循环（修复旧 12 显示/全量索引不一致），Enter 选中、
- *   Escape 关闭，全部事件在浮层内消化并保持 textarea 焦点（IME composing 不误提交）；
- * - 状态可辨：loading（骨架行）/ 空态 / 逐源错误；截断时显式提示候选上限。
- * 组件文件只导出组件与 TS 类型（Fast Refresh 约定）。
+ * composerCompleter plugin-source popover ('@' '#': ':'):
+ * - positioning reuses the existing .composer-box relative container plus the
+ *   .composer-popover visual class (Radix Popover Anchor, honoring the
+ *   WAI-ARIA combobox/listbox contract — not a bare div);
+ * - keyboard: ↑↓ cycles only within the visible candidates (fixing the old
+ *   12-visible/full-index mismatch), Enter picks, Escape closes; all events
+ *   are consumed inside the popover while textarea keeps focus (IME composing
+ *   never submits by accident);
+ * - distinguishable states: loading (skeleton row) / empty / per-source
+ *   errors; truncation states the candidate cap explicitly.
+ * Component files export only components and TS types (Fast Refresh rule).
  */
 import { useEffect, useRef, useState } from 'react'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { MergedCompletionItem } from './composer-completion-model.js'
 import { COMPLETION_VISIBLE_LIMIT } from './composer-completion-model.js'
 import type { CompletionSourceSnapshot } from './use-composer-completion.js'
@@ -15,38 +20,40 @@ import { Popover, PopoverAnchor, PopoverContent } from '@helm/plugin-client'
 
 export interface CompletionPopoverProps {
   open: boolean
-  /** 触发符（标题展示与 aria-label）。 */
+  /** Trigger symbol (title display and aria-label). */
   trigger: '@' | '#' | ':'
   snapshot: CompletionSourceSnapshot
-  /** 选中候选（只替换光标前触发 token 并插入 insertText）。 */
+  /** Picked candidate (replaces only the pre-caret trigger token with insertText). */
   onPick: (item: MergedCompletionItem) => void
   onClose: () => void
-  /** 宿主锚点（.composer-box；Anchor 需始终渲染，open 只控浮层显隐）。 */
+  /** Host anchor (.composer-box; Anchor stays mounted, open toggles visibility). */
   anchorRef: { current: HTMLElement | null }
 }
 
-const TRIGGER_TITLES: Record<'@' | '#' | ':', string> = {
-  '@': 'Mentions and completion',
-  '#': 'Completion',
-  ':': 'Completion',
-}
-
 export function CompletionPopover({ open, trigger, snapshot, onPick, onClose, anchorRef }: CompletionPopoverProps) {
+  const { t } = useWebLocale()
   const [activeIndex, setActiveIndex] = useState(0)
   const listRef = useRef<HTMLDivElement | null>(null)
   const visible = snapshot.items.slice(0, COMPLETION_VISIBLE_LIMIT)
   const itemKeys = visible.map((entry) => entry.key).join('|')
 
-  // 候选集变化（查询/源更新）重置高亮到首项。
+  const triggerTitle = trigger === '@'
+    ? t('composer.completion.triggerMentions')
+    : t('composer.completion.triggerCompletion')
+
+  // Reset the highlight to the first item whenever the candidate set changes
+  // (query/source updates).
   useEffect(() => {
     setActiveIndex(0)
   }, [itemKeys])
 
-  // 键盘导航：捕获期全局监听（与既有斜杠浮层同机制），composing 期间不拦截。
+  // Keyboard navigation: capture-phase global listener (same mechanism as the
+  // existing slash popover); never intercept while composing.
   useEffect(() => {
     if (!open) return
     const onKey = (event: KeyboardEvent): void => {
-      // IME 组合中不拦截任何键（组合音节可能含触发符，Enter 属干确认候选）。
+      // Do not intercept any key during IME composition (syllables may contain
+      // trigger symbols; Enter confirms the composition candidate).
       if (event.isComposing || event.keyCode === 229) return
       if (event.key === 'Escape') {
         event.preventDefault()
@@ -100,16 +107,16 @@ export function CompletionPopover({ open, trigger, snapshot, onPick, onClose, an
         className="composer-popover composer-completion-popover"
         onOpenAutoFocus={(event) => event.preventDefault()}
         onEscapeKeyDown={(event) => event.stopPropagation()}
-        aria-label={`${TRIGGER_TITLES[trigger]} candidates`}
+        aria-label={t('composer.completion.candidatesAria', { title: triggerTitle })}
       >
         <div className="popover-header">
-          {TRIGGER_TITLES[trigger]}
-          <span className="kbd-hint popover-kbd-hint">↑↓ select · Enter confirm · Esc close</span>
+          {triggerTitle}
+          <span className="kbd-hint popover-kbd-hint">{t('composer.kbd.navConfirmClose')}</span>
         </div>
         <div
           ref={listRef}
           role="listbox"
-          aria-label={`${TRIGGER_TITLES[trigger]} candidate list`}
+          aria-label={t('composer.completion.listAria', { title: triggerTitle })}
           className="composer-completion-list"
         >
           {visible.map((entry, index) => (
@@ -129,21 +136,32 @@ export function CompletionPopover({ open, trigger, snapshot, onPick, onClose, an
           ))}
           {visible.length === 0 ? (
             snapshot.loading ? (
-              <div className="popover-item composer-completion-state" role="status">Querying candidates…</div>
+              <div className="popover-item composer-completion-state" role="status">{t('composer.completion.querying')}</div>
             ) : snapshot.errors.length > 0 ? (
               <div className="popover-item composer-completion-state composer-completion-error" role="alert">
                 {snapshot.errors.map((err) => (
-                  <span key={`${err.source}:${err.message}`} title={`${err.source}: ${err.message}`}>Source {err.source}: {err.message}</span>
+                  <span
+                    key={`${err.source}:${err.message}`}
+                    title={`${err.source}: ${err.message}`}
+                  >
+                    {t('composer.completion.sourceError', { source: err.source, message: err.message })}
+                  </span>
                 ))}
               </div>
             ) : (
-              <div className="popover-item composer-completion-state">No matching candidates</div>
+              <div className="popover-item composer-completion-state">{t('composer.completion.noMatches')}</div>
             )
           ) : null}
         </div>
         {snapshot.total > visible.length ? (
-          <div className="popover-item composer-completion-state" role="status" title={`Too many candidates; showing the first ${COMPLETION_VISIBLE_LIMIT}; keep typing to filter`}>
-            Too many candidates; showing the first {COMPLETION_VISIBLE_LIMIT}{snapshot.truncated ? ` (${snapshot.total} in total)` : ''}
+          <div
+            className="popover-item composer-completion-state"
+            role="status"
+            title={t('composer.completion.tooManyTitle', { limit: COMPLETION_VISIBLE_LIMIT })}
+          >
+            {snapshot.truncated
+              ? t('composer.completion.tooManyTotal', { limit: COMPLETION_VISIBLE_LIMIT, total: snapshot.total })
+              : t('composer.completion.tooMany', { limit: COMPLETION_VISIBLE_LIMIT })}
           </div>
         ) : null}
       </PopoverContent>

@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 import type { ConversationStatus } from '@helm/protocol/browser'
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import type { EditRequestTarget } from '../conversation/timeline-model.js'
 
 // ---------------------------------------------------------------------------
-// 历史消息编辑态（纯逻辑，单测直测）
+// Historical message editing state (pure logic, directly unit-tested)
 // ---------------------------------------------------------------------------
 
-/** 待发送附件草稿（上传后尚未随消息提交）。 */
+/** Pending attachment draft (uploaded but not yet submitted with a message). */
 export interface PendingAttachment {
   artifactId: string
   name: string
@@ -14,7 +15,8 @@ export interface PendingAttachment {
   mimeType: string
 }
 
-/** 编辑目标携带的附件引用 -> 待发送草稿（每次选择编辑目标都整体替换，不保留旧草稿残留）。 */
+/** Attachment refs carried by an edit target -> pending-send draft (fully
+ * replaced each time an edit target is picked; no stale draft residue). */
 export function attachmentsOfEditTarget(target: EditRequestTarget): PendingAttachment[] {
   return (target.attachments ?? []).map((a) => ({
     artifactId: a.id,
@@ -24,12 +26,14 @@ export function attachmentsOfEditTarget(target: EditRequestTarget): PendingAttac
   }))
 }
 
-/** 选中的编辑目标是否构成原地编辑（历史锚点存在）；否则仅是草稿回填。 */
+/** Whether the selected edit target constitutes an in-place edit (a
+ * historical anchor exists); otherwise it is only draft prefill. */
 export function isHistoricalEdit(target: EditRequestTarget): boolean {
   return target.entryId !== undefined
 }
 
-/** 发送时冻结的草稿版本：任一维度变化即视为用户已修改，旧编辑目标不得回灌。 */
+/** Draft version frozen at send time: any dimension changing counts as a user
+ * modification; the old edit target must not flow back. */
 export interface ComposerDraftVersion {
   text: string
   targetEntryId: number | null
@@ -46,7 +50,8 @@ export function sameDraftVersion(a: ComposerDraftVersion, b: ComposerDraftVersio
     && a.attachments.every((id, i) => id === b.attachments[i])
 }
 
-/** 解析 `/compact` 与可选压缩指令（`/compact <instructions>`）；非 `/compact` 命令返回 null。 */
+/** Parse `/compact` with optional compaction instructions (`/compact
+ * <instructions>`); non-`/compact` payloads return null. */
 export function parseCompactSlashCommand(payload: string): { instructions?: string } | null {
   const trimmed = payload.trim()
   if (trimmed === '/compact') return {}
@@ -57,13 +62,16 @@ export function parseCompactSlashCommand(payload: string): { instructions?: stri
   return null
 }
 
-/** 会话内管理命令：非编辑输入时立即执行；编辑态正文中只是被编辑消息的文本。 */
+/** In-conversation management commands: executed immediately for non-editing
+ * input; inside edit mode they are just the edited message's text. */
 export function isSessionManageCommand(payload: string): boolean {
   return payload === '/new' || payload === '/clear' || parseCompactSlashCommand(payload) !== null
 }
 
-/** 发送失败后是否恢复编辑态：仅当 Composer 仍处于乐观清空后的期望状态
- * （用户未输入新文本、未选择其他编辑目标、未改动附件）时，旧编辑目标才可回灌。 */
+/** Whether the editing state should be restored after a send failure: only
+ * when the Composer is still in the expected post-optimistic-clear state (the
+ * user typed no new text, picked no other edit target, changed no
+ * attachments) may the old edit target flow back. */
 export function shouldRestoreEditOnFailure(
   live: ComposerDraftVersion,
   expectedAfterClear: ComposerDraftVersion,
@@ -71,11 +79,12 @@ export function shouldRestoreEditOnFailure(
   return sameDraftVersion(live, expectedAfterClear)
 }
 
-/** 发送反馈可见性：仅当发送请求在途且服务端尚未以真实 working/blocked 接管。
+/** Sending-feedback visibility: only while the send request is in flight and
+ * the server has not yet taken over with a real working/blocked status.
  *
- * SSE 状态到达后由真实状态接管，不叠第二条发送等待；不修改持久
- * conversation.status，不引入额外业务枚举。
- */
+ * Once SSE state arrives the real status takes over — no second "sending"
+ * wait is stacked; the persistent conversation.status is never modified and
+ * no extra business enum is introduced. */
 export function sendingPendingVisible(
   sendingInFlight: boolean,
   status: ConversationStatus,
@@ -83,41 +92,47 @@ export function sendingPendingVisible(
   return sendingInFlight && status !== 'working' && status !== 'blocked'
 }
 
-/** 根据是否处于移动端或小屏幕模式生成 Composer 占位符提示文案 */
-export function getComposerPlaceholder(working: boolean, isMobile: boolean): string {
+/** Composer placeholder copy for idle vs busy, desktop vs mobile/small screens. */
+export function getComposerPlaceholder(working: boolean, isMobile: boolean, t: WebMessageTranslator = englishWebTranslator): string {
   if (working) {
-    // 移动端占位符保持极短，避免窄屏折行撑高输入区
-    return isMobile ? 'Add notes or queued instructions…' : 'Add notes or type the next instruction (Enter steers · ⌘/Ctrl+Enter queues)'
+    // Keep the mobile placeholder extremely short to avoid wrapping and
+    // growing the input area on narrow screens.
+    return isMobile ? t('composer.placeholder.workingMobile') : t('composer.placeholder.working')
   }
-  return isMobile ? 'Type a message…' : 'Type a message; / for commands and skills, ⌘V to paste attachments'
+  return isMobile ? t('composer.placeholder.idleMobile') : t('composer.placeholder.idle')
 }
 
-/** 会话正忙时 Enter 的默认 whenBusy 策略（插话引导）。 */
+/** Default whenBusy policy for Enter while the conversation is busy (steer). */
 export const BUSY_ENTER_DEFAULT = 'steer' as const
 
-/** 空会话起始环境条回传 Composer 的发送门控状态（纯类型放 .ts 模块，保 Fast Refresh）。 */
+/** Send-gating state reported back by the starting-environment bar of an empty
+ * conversation (pure types live in a .ts module to keep Fast Refresh). */
 export interface SessionEnvBlocker {
-  /** 环境草稿未保存（或正在保存）时为 true：Composer 必须阻止发送。 */
+  /** True while the environment draft is unsaved (or saving): the Composer
+   * must block sending. */
   blocked: boolean
-  /** 阻塞原因（用于禁用按钮的 title 提示）。 */
+  /** Blocking reason (title hint for the disabled button). */
   reason: string | null
 }
 
-/** 无阻塞哨兵值（引用稳定，供 useState 初始化与重置共用）。 */
+/** No-blocker sentinel (referentially stable, shared by useState init and reset). */
 export const ENV_BLOCKER_CLEAR: SessionEnvBlocker = { blocked: false, reason: null }
 
 /**
- * 键盘事件 -> 正忙时 whenBusy 策略（纯函数，单测直测）：
- * Enter 默认插话引导（steer）；⌘/Ctrl+Enter 显式排队发送（followUp）。
- * 调用方需先行完成 Shift+Enter 换行与 IME composing 保护。
+ * Keyboard event -> whenBusy policy while busy (pure function, directly
+ * unit-tested): Enter defaults to steering; ⌘/Ctrl+Enter explicitly queues
+ * (followUp). Callers must first apply Shift+Enter newline handling and IME
+ * composing protection.
  */
 export function busyEnterMode(modifier: boolean): 'steer' | 'followUp' {
   return modifier ? 'followUp' : BUSY_ENTER_DEFAULT
 }
 
-/** 视为「已开聊」的实质性对话回合 entry 种类（出现任一即锁定起始环境）。
- * SDK 真实 kind 用连字符（pi.tool-result，见 pi-durable README），兼容旧下划线拼写；
- * pi.compaction 属实质上下文：压缩不能变成环境解锁入口。 */
+/** Substantive conversational entry kinds that count as "the chat has
+ * started" (any of them locks the starting environment).
+ * Real SDK kinds use hyphens (pi.tool-result, see the pi-durable README);
+ * legacy underscore spellings stay accepted. pi.compaction is substantive
+ * context: compaction must not become an environment unlock path. */
 const CONVERSATIONAL_ENTRY_KINDS: ReadonlySet<string> = new Set([
   'helm.input',
   'pi.user',
@@ -130,8 +145,10 @@ const CONVERSATIONAL_ENTRY_KINDS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * 判断会话是否处于「尚未开聊」的空状态（或 `/reset` 后未再发消息）。
- * 仅此时允许在 Composer 上方配置起始执行节点与工作目录；开聊即锁定。
+ * Whether the conversation is still in its "chat not started yet" empty state
+ * (or has had no new message since `/reset`). Only then may the starting
+ * execution node and working directory be configured above the Composer;
+ * starting the chat locks them.
  */
 export interface EnvSubtitleEntry {
   kind: string
@@ -139,7 +156,8 @@ export interface EnvSubtitleEntry {
   model?: unknown
 }
 
-/** 复用 timeline-model 的 handoff 提取规则：`data.handoff`（非空字符串）优先，回退 model 内 UserMessage 文本。 */
+/** Reuse timeline-model's handoff extraction rule: `data.handoff` (non-empty
+ * string) first, falling back to UserMessage text inside model. */
 function resetHandoffText(entry: EnvSubtitleEntry): string {
   if (entry.data !== null && typeof entry.data === 'object' && typeof (entry.data as { handoff?: unknown }).handoff === 'string') {
     return (entry.data as { handoff: string }).handoff
@@ -168,9 +186,11 @@ export function canConfigureSessionEnv(
 ): boolean {
   if (status === 'working' || status === 'blocked') return false
   if (entries === undefined) return false
-  // 从最后一条 pi.reset 之后开始检查（无 reset 则从头检查）。
-  // reset 不删除历史、只切换上下文：普通 reset 后重新可配；
-  // 但带 handoff 交接摘要的 reset 说明新上下文已继承旧会话环境叙事，继续锁定。
+  // Check starting from the last pi.reset (or from the beginning when no
+  // reset exists). Reset deletes no history and only switches context: after
+  // a plain reset the environment is configurable again; but a reset with a
+  // handoff summary means the new context inherited the old conversation's
+  // environment narrative — keep it locked.
   let start = 0
   for (let i = entries.length - 1; i >= 0; i--) {
     if (entries[i]!.kind === 'pi.reset') {
@@ -188,29 +208,31 @@ export interface EnvSubtitleInput {
   profileId: string
   nodeId?: string
   cwd: string
-  /** cwd 尾部保留段数，缺省 2。 */
+  /** Number of trailing cwd segments to keep (default 2). */
   segments?: number
-  /** 紧凑模式（窄屏/手机）：只保留节点身份，本机直接隐藏。 */
+  /** Compact mode (narrow screens/phones): node identity only; empty on local. */
   compact?: boolean
 }
 
-/** 路径按两种分隔符拆段：Windows 反斜杠与 POSIX 斜杠等价处理，根路径保留为一段。 */
+/** Split a path into segments on both separators: Windows backslashes and
+ * POSIX slashes are equivalent; a root path stays as one segment. */
 function splitPathSegments(cwd: string): string[] {
   const parts = cwd.split(/[\\/]+/).filter((p) => p !== '')
   return parts.length > 0 ? parts : [cwd]
 }
 
 /**
- * 生成会话顶栏只读环境副标题：`profileId · tail`（本机）或 `profileId · @node:tail`（远端），
- * 附完整悬停提示。compact 模式仅展示 `@node`（本机空串，调用方不渲染）。
+ * Build the read-only environment subtitle for the conversation top bar:
+ * `profileId · tail` (local) or `profileId · @node:tail` (remote), with a full
+ * hover tooltip. Compact mode shows only `@node` (empty on local; callers do
+ * not render it).
  */
-export function formatEnvSubtitle(input: EnvSubtitleInput): { text: string; tooltip: string } {
+export function formatEnvSubtitle(input: EnvSubtitleInput, t: WebMessageTranslator = englishWebTranslator): { text: string; tooltip: string } {
   const nodeId = input.nodeId !== undefined && input.nodeId !== '' ? input.nodeId : 'local'
+  const cwd = input.cwd === '' ? t('composer.env.notSet') : input.cwd
+  const tooltip = t('composer.env.subtitleTooltip', { profileId: input.profileId, nodeId, cwd })
   if (input.compact === true) {
-    return {
-      text: nodeId === 'local' ? '' : `@${nodeId}`,
-      tooltip: `Agent: ${input.profileId} · Node: ${nodeId} · Working directory: ${input.cwd || '(not set)'}`,
-    }
+    return { text: nodeId === 'local' ? '' : `@${nodeId}`, tooltip }
   }
   const parts = splitPathSegments(input.cwd)
   const tail = parts.slice(-(input.segments ?? 2)).join('/')
@@ -218,14 +240,12 @@ export function formatEnvSubtitle(input: EnvSubtitleInput): { text: string; tool
     nodeId === 'local'
       ? tail === '' ? input.profileId : `${input.profileId} · ${tail}`
       : tail === '' ? `${input.profileId} · @${nodeId}` : `${input.profileId} · @${nodeId}:${tail}`
-  return {
-    text,
-    tooltip: `Agent: ${input.profileId} · Node: ${nodeId} · Working directory: ${input.cwd || '(not set)'}`,
-  }
+  return { text, tooltip }
 }
 
 // ---------------------------------------------------------------------------
-// 空会话起始环境草稿（纯逻辑，单测直测）
+// Starting-environment draft for empty conversations (pure logic, directly
+// unit-tested)
 // ---------------------------------------------------------------------------
 
 export interface EnvDraft {
@@ -234,30 +254,34 @@ export interface EnvDraft {
 }
 
 /**
- * 从当前会话坐标与既有草稿推导新草稿：
- * - 未改节点：保留用户已输入的 cwd 草稿；
- * - 跨节点切换：清空 cwd 草稿（协议无节点默认目录，绝不沿用旧节点路径），要求填写目标节点目录。
+ * Derive the next draft from the current conversation coordinates and the
+ * existing draft:
+ * - node unchanged: keep the user's cwd draft;
+ * - switching nodes: clear the cwd draft (the protocol has no per-node default
+ *   directory; old-node paths are never carried over) and require the target
+ *   node's directory.
  */
 export function envDraftOnNodeChange(current: EnvDraft, nextNodeId: string): EnvDraft {
   if (nextNodeId === current.nodeId) return current
   return { nodeId: nextNodeId, cwd: '' }
 }
 
-/** 保存前校验：返回 null 表示可提交，否则返回用户可读错误。 */
-export function envDraftError(draft: EnvDraft): string | null {
-  if (draft.cwd.trim() === '') return 'Enter the working directory on the target node (absolute path)'
+/** Pre-save validation: null means submittable, otherwise a user-readable error. */
+export function envDraftError(draft: EnvDraft, t: WebMessageTranslator = englishWebTranslator): string | null {
+  if (draft.cwd.trim() === '') return t('composer.env.errorRequired')
   if (!draft.cwd.trim().startsWith('/') && !/^[A-Za-z]:[\\/]/.test(draft.cwd.trim())) {
-    return 'Working directory must be an absolute path (POSIX / or Windows drive letter)'
+    return t('composer.env.errorAbsolute')
   }
   return null
 }
 
-/** 草稿是否与当前会话坐标一致（一致则无需提交）；nodeId 缺省视为 local。 */
+/** Whether the draft matches the current conversation coordinates (matching
+ * means nothing to submit); an absent nodeId counts as local. */
 export function envDraftUnchanged(draft: EnvDraft, nodeId: string | undefined, cwd: string): boolean {
   return draft.nodeId === (nodeId || 'local') && draft.cwd === cwd
 }
 
-/** 监听视口宽度是否在移动端阈值内（默认 <= 680px） */
+/** Track whether the viewport width is within the mobile threshold (default <= 680px). */
 export function useIsMobile(maxWidth = 680): boolean {
   const [isMobile, setIsMobile] = useState(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false

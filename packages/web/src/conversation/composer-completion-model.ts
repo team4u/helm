@@ -1,11 +1,18 @@
 /**
- * composerCompleter（协议 ComposerCompleterSpec）前端闭环纯逻辑：
- * - 触发 token 检测/替换：触发符前必须是行首或空白（空格边界）；token 内允许
- *   中文与路径斜杠；邮箱 user@x、URL a.com/@b、时间 12:30 不误触发；
- * - 源过滤排序：trigger + 会话 scope 命中，priority 降序稳定排列（缺省 0）；
- * - 边界校验：doc 顶层字段与 action 返回逐项校验，非法项丢弃并计数诊断（不静默）；
- * - 候选合并：以「插件 + 源」命名空间去重、合并上限截断、空格分词 AND 过滤（中文友好）。
- * 纯函数无 React 依赖，供 Composer / 订阅 hook / 单测共同消费。
+ * Frontend closed-loop pure logic for composerCompleter (the protocol's
+ * ComposerCompleterSpec):
+ * - trigger token detection/replacement: the char before the trigger must be
+ *   start-of-line or whitespace (a space boundary); tokens may contain Chinese
+ *   and path slashes; email user@x, URL a.com/@b and time 12:30 never trigger;
+ * - source filtering/sorting: trigger + conversation-scope hits, stable order
+ *   by descending priority (default 0);
+ * - boundary validation: top-level doc fields and action results are checked
+ *   item by item; invalid items are dropped and counted in diagnostics (never
+ *   silently);
+ * - candidate merging: deduped per "plugin + source" namespace, merged with a
+ *   cap, space-tokenized AND filtering (Chinese friendly).
+ * Pure functions with no React dependency, consumed by Composer, the
+ * subscription hook and unit tests alike.
  */
 import type {
   ActionManifest,
@@ -13,35 +20,43 @@ import type {
   ComposerCompletionItem,
   ConversationSummary,
 } from '@helm/protocol/browser'
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import type { QualifiedUiSpec } from '../lib/types.js'
 import { matchesUiScope } from '../lib/types.js'
 
 export type CompletionTrigger = '@' | '#' | ':'
 
-/** 浮层可见候选上限：键盘循环同样只在此列表内（修复旧 12 显示 / 全量索引不一致）。 */
+/** Visible candidate cap inside the popover: keyboard cycling also stays
+ * within this list (fixes the old 12-shown/full-index mismatch). */
 export const COMPLETION_VISIBLE_LIMIT = 12
 
-/** 合并层候选硬上限：失控源最多贡献到此数量，超出截断并显式提示。 */
+/** Hard cap of the merge layer: a runaway source contributes at most this
+ * many candidates; beyond that it is truncated and reported explicitly. */
 export const COMPLETION_MERGE_LIMIT = 100
 
-/** action 源查询防抖窗口。 */
+/** Debounce window for action-source queries. */
 export const COMPLETION_QUERY_DEBOUNCE_MS = 150
 
-/** 斜杠命令 token：既有三源命令与技能触发词（ASCII），保持原字符集不变。 */
+/** Slash command token: the existing three-source commands plus skill trigger
+ * words (ASCII); the character set stays unchanged. */
 const SLASH_TOKEN_RE = /(?:^|\s)\/([a-zA-Z0-9:_-]*)$/
-/** '@' '#' ':' 补全 token：触发符前须行首或空白；token 内允许非空白字符（中文/斜杠/点号）。 */
+/** '@' '#' ':' completion token: the trigger must be preceded by start-of-line
+ * or whitespace; the token allows non-whitespace chars (Chinese/slashes/dots). */
 const TRIGGER_TOKEN_RE = /(?:^|\s)([@#:])([^\s]*)$/
-/** 选中替换：光标前最近的触发 token（含触发符）整体替换为 insertText。 */
+/** Picked replacement: the nearest trigger token before the caret (including
+ * the trigger symbol) is replaced wholesale by insertText. */
 const REPLACE_TOKEN_RE = /(?:^|\s)([/@#:][^\s]*)$/
 
 export interface CompletionToken {
   trigger: '/' | '@' | '#' | ':'
   query: string
-  /** 触发符在全文中的起始下标（含触发符本身）。 */
+  /** Start index of the trigger symbol within the whole text (inclusive). */
   tokenStart: number
 }
 
-/** 检测光标前最近的补全触发 token；斜杠优先（命令命名空间独立，字符集互斥）。 */
+/** Detect the nearest completion trigger token before the caret; slash wins
+ * first (its command namespace is independent and the character sets are
+ * disjoint). */
 export function detectCompletionToken(beforeCaret: string): CompletionToken | null {
   const slash = SLASH_TOKEN_RE.exec(beforeCaret)
   if (slash !== null) {
@@ -56,7 +71,9 @@ export function detectCompletionToken(beforeCaret: string): CompletionToken | nu
   return null
 }
 
-/** 用 insertText 替换光标前最近的触发 token（含触发符），保留前后文本；无 token 时原地插入。 */
+/** Replace the nearest trigger token before the caret (including the trigger
+ * symbol) with insertText, keeping surrounding text; insert in place when no
+ * token is found. */
 export function replaceTriggerToken(
   text: string,
   caret: number,
@@ -69,7 +86,8 @@ export function replaceTriggerToken(
   return { next, nextCaret: start + insertText.length }
 }
 
-/** 当前会话可用的指定触发符补全源：trigger + scope 命中，priority 降序稳定排列。 */
+/** Completion sources available in the current conversation for a trigger:
+ * trigger + scope hits, stable order by descending priority. */
 export function completersForTrigger(
   completers: ReadonlyArray<QualifiedUiSpec<ComposerCompleterSpec>> | undefined,
   trigger: CompletionTrigger,
@@ -80,7 +98,8 @@ export function completersForTrigger(
     .sort((a, b) => (b.spec.priority ?? 0) - (a.spec.priority ?? 0))
 }
 
-/** 单个候选边界校验：id/label/insertText 必须为非空字符串，hint/icon 可选字符串。 */
+/** Single-candidate boundary validation: id/label/insertText must be
+ * non-empty strings, hint/icon optional strings. */
 export function validateCompletionItem(entry: unknown): ComposerCompletionItem | null {
   if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return null
   const e = entry as Record<string, unknown>
@@ -99,21 +118,27 @@ export function validateCompletionItem(entry: unknown): ComposerCompletionItem |
 }
 
 export interface ExtractedItems {
-  /** 解析出的合法候选；null 表示文档尚未加载（不是错误）。 */
+  /** Valid parsed candidates; null means the document is not loaded yet (not an error). */
   items: ComposerCompletionItem[] | null
-  /** 非法内容诊断（逐源显式暴露，不影响其他源）。 */
+  /** Diagnostics for invalid content (exposed per source; other sources unaffected). */
   error?: string
 }
 
-/** doc / sessionDoc 源提取：只读贡献插件自己公开文档的安全顶层字段，逐项边界校验。 */
-export function extractCompletionItems(docValue: unknown, itemsField: string): ExtractedItems {
+/** doc / sessionDoc source extraction: reads only safe top-level fields of the
+ * contributing plugin's own public document, validating each item at the
+ * boundary. */
+export function extractCompletionItems(
+  docValue: unknown,
+  itemsField: string,
+  t: WebMessageTranslator = englishWebTranslator,
+): ExtractedItems {
   if (docValue === undefined || docValue === null) return { items: null }
   if (typeof docValue !== 'object' || Array.isArray(docValue)) {
-    return { items: null, error: 'Document value is not an object' }
+    return { items: null, error: t('composer.completion.docNotObject') }
   }
   const raw = (docValue as Record<string, unknown>)[itemsField]
-  if (raw === undefined || raw === null) return { items: null, error: `Document missing array field ${itemsField}` }
-  if (!Array.isArray(raw)) return { items: null, error: `Document missing array field ${itemsField}` }
+  if (raw === undefined || raw === null) return { items: null, error: t('composer.completion.docMissingField', { field: itemsField }) }
+  if (!Array.isArray(raw)) return { items: null, error: t('composer.completion.docMissingField', { field: itemsField }) }
   const items: ComposerCompletionItem[] = []
   let dropped = 0
   for (const entry of raw) {
@@ -121,16 +146,20 @@ export function extractCompletionItems(docValue: unknown, itemsField: string): E
     if (item !== null) items.push(item)
     else dropped++
   }
-  return { items, error: dropped > 0 ? `${dropped} invalid candidates dropped` : undefined }
+  return { items, error: dropped > 0 ? t('composer.completion.droppedItems', { count: dropped }) : undefined }
 }
 
-/** action 源返回解析：ComposerCompletionResult { items } 逐项校验。 */
-export function parseCompletionActionResult(result: unknown): ExtractedItems {
+/** action source result parsing: ComposerCompletionResult { items } validated
+ * item by item. */
+export function parseCompletionActionResult(
+  result: unknown,
+  t: WebMessageTranslator = englishWebTranslator,
+): ExtractedItems {
   if (result === null || typeof result !== 'object' || Array.isArray(result)) {
-    return { items: null, error: 'Completion action returned an invalid format' }
+    return { items: null, error: t('composer.completion.invalidActionResult') }
   }
   const items = (result as Record<string, unknown>)['items']
-  if (!Array.isArray(items)) return { items: null, error: 'Completion action response missing the items array' }
+  if (!Array.isArray(items)) return { items: null, error: t('composer.completion.missingItemsArray') }
   const valid: ComposerCompletionItem[] = []
   let dropped = 0
   for (const entry of items) {
@@ -138,41 +167,51 @@ export function parseCompletionActionResult(result: unknown): ExtractedItems {
     if (item !== null) valid.push(item)
     else dropped++
   }
-  return { items: valid, error: dropped > 0 ? `${dropped} invalid candidates dropped` : undefined }
+  return { items: valid, error: dropped > 0 ? t('composer.completion.droppedItems', { count: dropped }) : undefined }
 }
 
-/** action 源调用前置核对：真实 manifest 存在且声明 idempotent:true（幂等只读才可作补全源）。 */
+/** Pre-call verification for action sources: a real manifest must exist and
+ * declare idempotent:true (only idempotent read-only actions may serve as
+ * completion sources). */
 export function verifyCompletionActionManifest(
   actions: ReadonlyArray<ActionManifest> | undefined,
   pluginId: string,
   actionId: string,
+  t: WebMessageTranslator = englishWebTranslator,
 ): string | null {
   const manifest = (actions ?? []).find((a) => a.pluginId === pluginId && a.id === actionId)
-  if (manifest === undefined) return `Action ${pluginId}/${actionId} not registered or plugin disabled`
-  if (manifest.idempotent !== true) return `Action ${pluginId}/${actionId} does not declare idempotent; forbidden as a completion source`
+  if (manifest === undefined) return t('composer.completion.actionNotRegistered', { pluginId, actionId })
+  if (manifest.idempotent !== true) return t('composer.completion.actionNotIdempotent', { pluginId, actionId })
   return null
 }
 
 export interface CompletionActionCallPlan {
-  /** 构建出的 action input；若当前上下文无法满足必需参数则为 null 并附 error。 */
+  /** Built action input; null with an attached error when the current context
+   * cannot satisfy required parameters. */
   input: Record<string, unknown> | null
   conversationId?: number
   error?: string
 }
 
 /**
- * 按当前上下文（真实会话或待命草稿 profileId）与动作 manifest.inputSchema
- * 组装补全查询入参：
- * - 真实会话：{ query, conversationId } 且外层携带真实 conversationId；
- * - 无会话（待命草稿）：
- *   - 若 schema.required 强制要求 conversationId -> 显式报错需要已有会话（不伪造 ID）；
- *   - 若 schema.properties 声明了 profileId（且提供 profileId）-> { query, profileId }；
- *   - 否则 -> { query }（避免向 additionalProperties:false 的外部插件塞入未声明字段）。
+ * Assemble the completion query input from the current context (a real
+ * conversation or the standby draft's profileId) and the action manifest's
+ * inputSchema:
+ * - real conversation: { query, conversationId } and the real conversationId
+ *   rides along at the top level;
+ * - no conversation (standby draft):
+ *   - schema.required forcing conversationId -> explicit error that an
+ *     existing conversation is required (never fake an ID);
+ *   - schema.properties declaring profileId (and a profileId provided) ->
+ *     { query, profileId };
+ *   - otherwise -> { query } (avoid pushing undeclared fields into an external
+ *     plugin with additionalProperties:false).
  */
 export function buildCompletionActionCall(
   manifest: ActionManifest,
   query: string,
   context: { conversationId?: number; profileId?: string },
+  t: WebMessageTranslator = englishWebTranslator,
 ): CompletionActionCallPlan {
   if (context.conversationId !== undefined) {
     return {
@@ -185,7 +224,7 @@ export function buildCompletionActionCall(
   if (required.includes('conversationId')) {
     return {
       input: null,
-      error: `Action ${manifest.pluginId}/${manifest.id} requires an existing conversation (available after the first message creates one)`,
+      error: t('composer.completion.actionNeedsConversation', { pluginId: manifest.pluginId, actionId: manifest.id }),
     }
   }
   const props =
@@ -198,16 +237,19 @@ export function buildCompletionActionCall(
   return { input: { query } }
 }
 
-/** 空格分词 AND 过滤（大小写不敏感，中文 includes 友好）；空查询原样返回。
- * 候选 label 常带触发符前缀（#标签），而查询已剥离触发符（词）；
- * 因此每词同时匹配原串与剥前缀后的串，避免“#词”查不到“#标签”。 */
+/** Space-tokenized AND filtering (case-insensitive, Chinese-includes
+ * friendly); an empty query returns items unchanged.
+ * Candidate labels often carry a trigger prefix (#tag) while the query has it
+ * stripped (the word); therefore every term matches both the raw and the
+ * stripped form, so "#word" queries still hit "#tag".*/
 export function filterByQuery(
   items: ReadonlyArray<ComposerCompletionItem>,
   query: string,
 ): ComposerCompletionItem[] {
   const raw = query.toLowerCase().split(/\s+/).filter((t) => t !== '')
   if (raw.length === 0) return [...items]
-  // 每个词剥去首部触发符（可能随粘贴混入），两形态任一命中即通过。
+  // Strip a leading trigger symbol from each term (it may ride along with
+  // pasted text); either form matching is enough.
   const terms = raw.flatMap((term) => {
     const stripped = term.replace(/^[@#:\/]+/, '')
     return stripped === '' || stripped === term ? [term] : [term, stripped]
@@ -219,12 +261,14 @@ export function filterByQuery(
 }
 
 export interface MergedCompletionItem {
-  /** `${pluginId}\u0000${item.id}`：插件 + 源命名空间内去重的稳定键。 */
+  /** `${pluginId}\u0000${item.id}`: stable key deduped within the plugin + source namespace. */
   key: string
   item: ComposerCompletionItem
 }
 
-/** 按源顺序合并候选：跨插件同 id 不去重（命名空间隔离），超 limit 截断并如实报告。 */
+/** Merge candidates in source order: identical ids across plugins are not
+ * deduped (namespace isolation); truncation past the limit is reported
+ * faithfully. */
 export function mergeCompletionItems(
   groups: ReadonlyArray<{ pluginId: string; items: ReadonlyArray<ComposerCompletionItem> | null }>,
   limit: number = COMPLETION_MERGE_LIMIT,

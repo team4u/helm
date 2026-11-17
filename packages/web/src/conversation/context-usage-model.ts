@@ -1,31 +1,40 @@
 /**
- * 会话上下文用量的纯展示模型（Composer 只读状态文本与测试共用）。
+ * Pure display model for the conversation context usage readout (shared by the
+ * Composer status text and tests).
  *
- * 展示规则严格对齐 pi agent 1.5.2 footer（dist/modes/interactive/components/footer.js）：
- * - formatTokens 分档：<1000 原值；<10000 一位小数 k；<1M 四舍五入 k；
- *   <10M 一位小数 M；之后四舍五入 M；
- * - 窗口已知显示 `${percent.toFixed(1)}%/${formatTokens(window)}`；百分比
- *   >90 红色、>70 黄色、其余默认灰；着色阈值严格大于（>90 / >70）；
- * - 压缩后尚无有效 assistant usage（tokens 为 null）显示 `?/${formatTokens(window)}`；
- * - 窗口未知绝不显示伪百分比或伪分母，有 tokens 只显示紧凑估算量且不着色；
- * - tokens=0（空会话 / 刚 reset）与压缩中以外的空 usage 不渲染。
+ * Display rules mirror the pi agent 1.5.2 footer
+ * (dist/modes/interactive/components/footer.js) exactly:
+ * - formatTokens tiers: <1000 raw; <10000 one decimal k; <1M rounded k;
+ *   <10M one decimal M; beyond that rounded M;
+ * - known window shows `${percent.toFixed(1)}%/${formatTokens(window)}`;
+ *   percentage >90 turns red, >70 yellow, everything else stays default gray;
+ *   coloring thresholds are strictly greater (>90 / >70);
+ * - after a compaction with no valid assistant usage yet (tokens null) shows
+ *   `?/${formatTokens(window)}`;
+ * - an unknown window never shows a fake percentage or fake denominator: with
+ *   tokens present only the compact estimate is shown, uncolored;
+ * - tokens=0 (empty conversation / just reset) and empty usage outside
+ *   compaction render nothing.
  *
- * 契约（内核 ConversationContextUsage）：tokens 恒有（可为 null）；
- * contextWindow 未知时省略（内核不伪造）；compacting 为布尔透传。响应速率
- * 类只读指标不随用量携带（可选插件 builtin:token-speed 的策略职责）。
- * formatTokens 已收敛至 lib/format.ts（与会话用量展示同源的仓内唯一实现）。
+ * Contract (kernel ConversationContextUsage): tokens is always present (may be
+ * null); contextWindow is omitted when unknown (the kernel never fakes it);
+ * compacting passes through as a boolean. Response-speed readouts do not ride
+ * along with usage (policy belongs to the optional builtin:token-speed plugin).
+ * formatTokens lives in lib/format.ts (the repo's single implementation,
+ * shared with the conversation usage display).
  */
 import type { ConversationContextUsage } from '@helm/protocol/browser'
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import { formatTokens } from '../lib/format.js'
 
 export type ContextUsageTone = 'default' | 'warn' | 'high'
 
 export interface ContextUsageLabel {
-  /** 只读文本（pi footer 同款格式）。 */
+  /** Read-only text (pi footer format). */
   text: string
-  /** 语义色调：high 红 / warn 黄 / default 灰；窗口未知恒 default。 */
+  /** Semantic tone: high red / warn yellow / default gray; unknown windows are always default. */
   tone: ContextUsageTone
-  /** 悬停说明（非交互；无障碍与解释窗口/未知语义用）。 */
+  /** Hover explanation (non-interactive; for a11y and explaining the window/unknown semantics). */
   title: string
 }
 
@@ -35,28 +44,29 @@ export interface ContextUsageInput {
   compacting?: boolean
 }
 
-/** 组装只读状态文本（纯函数）；返回 null 表示不渲染任何状态文本。 */
-export function contextUsageLabel(usage: ContextUsageInput): ContextUsageLabel | null {
+/** Assemble the read-only status text (pure function); null renders no status text at all. */
+export function contextUsageLabel(usage: ContextUsageInput, t: WebMessageTranslator = englishWebTranslator): ContextUsageLabel | null {
   if (usage.compacting === true) {
-    return { text: 'Compacting…', tone: 'default', title: 'Context compaction in progress' }
+    return { text: t('composer.context.compactingStatus'), tone: 'default', title: t('composer.compaction.inProgress') }
   }
   if (usage.tokens === null) {
-    // 最近一次精简后尚无新的回答：真实上下文未知，绝不拿摘要估算冒充。
+    // No new reply since the last compaction: the real context is unknown —
+    // never pass a summary estimate off as the truth.
     return usage.contextWindow !== undefined
       ? {
           text: `?/${formatTokens(usage.contextWindow)}`,
           tone: 'default',
-          title: 'No new reply since the last compaction; context usage unknown',
+          title: t('composer.context.unknownAfterCompaction'),
         }
-      : { text: '?', tone: 'default', title: 'Context usage unknown (model window unknown)' }
+      : { text: '?', tone: 'default', title: t('composer.context.unknownNoWindow') }
   }
-  // 空会话 / 刚 reset：无上下文可占，不渲染状态文本。
+  // Empty conversation / just reset: no context to occupy, render no status text.
   if (usage.tokens === 0) return null
   if (usage.contextWindow === undefined) {
     return {
       text: formatTokens(usage.tokens),
       tone: 'default',
-      title: `Context estimate ${formatTokens(usage.tokens)} tokens (model window unknown; no percentage shown)`,
+      title: t('composer.context.estimateTitle', { tokens: formatTokens(usage.tokens) }),
     }
   }
   const percent = (usage.tokens / usage.contextWindow) * 100
@@ -64,6 +74,10 @@ export function contextUsageLabel(usage: ContextUsageInput): ContextUsageLabel |
   return {
     text: `${percent.toFixed(1)}%/${formatTokens(usage.contextWindow)}`,
     tone,
-    title: `Context usage ${percent.toFixed(1)}% (about ${formatTokens(usage.tokens)} / ${formatTokens(usage.contextWindow)} tokens)`,
+    title: t('composer.context.usageTitle', {
+      percent: percent.toFixed(1),
+      used: formatTokens(usage.tokens),
+      window: formatTokens(usage.contextWindow),
+    }),
   }
 }

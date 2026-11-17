@@ -1,5 +1,6 @@
 import type { WhenBusy } from '@helm/protocol/browser'
 import { HelmIcon } from '@helm/plugin-client'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
   DropdownMenuContent,
   DropdownMenuItem,
@@ -11,9 +12,10 @@ import { Tooltip } from '../ui/Tooltip.js'
 import { useIsMobile, type SessionEnvBlocker } from './composer-model.js'
 
 // ---------------------------------------------------------------------------
-// 发送 / 停止控件（自 Composer.tsx 拆出）：空闲发送、正忙停止与插话/排队分流。
-// 桌面端保留分体下拉（带 .kbd-hint 角标）；移动端正忙有输入时直接并排显式
-// 呈现 [插话]（steer）与 [排队]（followUp）两个独立按钮，无需记忆快捷键。
+// Send / stop controls (extracted from Composer.tsx): idle send, busy stop and
+// the steer/queue split. Desktop keeps the split dropdown (with .kbd-hint
+// badges); on mobile with input present while busy, two explicit side-by-side
+// buttons [steer] and [queue] render instead of a shortcut to memorize.
 // ---------------------------------------------------------------------------
 
 export interface ComposerSendControlsProps {
@@ -39,6 +41,7 @@ export function ComposerSendControls({
   send,
   abortTurn,
 }: ComposerSendControlsProps) {
+  const { t } = useWebLocale()
   const detectedMobile = useIsMobile(680)
   const mobile = isMobile ?? detectedMobile
   const busyDisabled = sending || uploading > 0 || envBlocker.blocked
@@ -53,23 +56,23 @@ export function ComposerSendControls({
           onClick={() => void send()}
           title={editingEntryId !== null
             ? working
-              ? 'Update and regenerate (overwrites this message and everything after it and stops the current execution) (Enter)'
-              : 'Update and regenerate (overwrites this message and everything after it) (Enter)'
+              ? t('composer.sendControls.updateWorkingTitle')
+              : t('composer.sendControls.updateTitle')
             : envBlocker.blocked
-              ? envBlocker.reason ?? 'Save or cancel the starting environment changes first'
-              : 'Send (Enter); Shift+Enter for a newline'}
-          aria-label={editingEntryId !== null ? 'Update and regenerate' : uploading > 0 ? `Uploading (${uploading})` : 'Send'}
+              ? envBlocker.reason ?? t('composer.env.saveOrCancelFirst')
+              : t('composer.sendControls.sendTitle')}
+          aria-label={editingEntryId !== null ? t('composer.sendControls.updateShort') : uploading > 0 ? t('composer.sendControls.uploading', { count: uploading }) : t('composer.sendControls.send')}
         >
           <HelmIcon name={sending || uploading > 0 ? 'loader' : 'arrow-up'} size={18} className={sending || uploading > 0 ? 'spin-slow' : undefined} />
         </button>
       ) : text.trim() === '' ? (
-        <Tooltip content="Stop the current execution" side="top">
+        <Tooltip content={t('composer.sendControls.stopExecution')} side="top">
           <button
             type="button"
             className="btn btn-sm btn-danger btn-pill btn-send composer-abort-button"
             onClick={() => void abortTurn()}
-            title="Stop the current execution"
-            aria-label="Stop the current execution"
+            title={t('composer.sendControls.stopExecution')}
+            aria-label={t('composer.sendControls.stopExecution')}
           >
             <HelmIcon name="square" size={14} />
           </button>
@@ -81,26 +84,26 @@ export function ComposerSendControls({
             className="btn btn-sm btn-primary composer-mobile-steer-btn composer-steer-action"
             disabled={busyDisabled}
             onClick={() => void send('steer')}
-            title="Inject at the next step boundary"
-            aria-label={uploading > 0 ? `Uploading (${uploading})` : 'Steer'}
+            title={t('composer.sendControls.steerHint')}
+            aria-label={uploading > 0 ? t('composer.sendControls.uploading', { count: uploading }) : t('composer.sendControls.steer')}
           >
             <HelmIcon
               name={sending || uploading > 0 ? 'loader' : 'corner-down-right'}
               size={13}
               className={sending || uploading > 0 ? 'spin-slow' : undefined}
             />
-            <span>Steer</span>
+            <span>{t('composer.sendControls.steerShort')}</span>
           </button>
           <button
             type="button"
             className="btn btn-sm btn-secondary composer-mobile-queue-btn"
             disabled={busyDisabled}
             onClick={() => void send('followUp')}
-            title="Handle after the current turn ends"
-            aria-label="Queue send"
+            title={t('composer.sendControls.queueHint')}
+            aria-label={t('composer.sendControls.queueSend')}
           >
             <HelmIcon name="clock" size={13} />
-            <span>Queue</span>
+            <span>{t('composer.sendControls.queue')}</span>
           </button>
         </div>
       ) : (
@@ -111,15 +114,15 @@ export function ComposerSendControls({
               className="composer-split-main composer-steer-action"
               disabled={busyDisabled}
               onClick={() => void send('steer')}
-              title="Inject at the next step boundary (Enter)"
-              aria-label={uploading > 0 ? `Uploading (${uploading})` : editingEntryId !== null ? 'Update and regenerate' : 'Steer'}
+              title={t('composer.sendControls.steerHintEnter')}
+              aria-label={uploading > 0 ? t('composer.sendControls.uploading', { count: uploading }) : editingEntryId !== null ? t('composer.sendControls.updateShort') : t('composer.sendControls.steer')}
             >
               <HelmIcon
                 name={sending || uploading > 0 ? 'loader' : 'corner-down-right'}
                 size={14}
                 className={sending || uploading > 0 ? 'spin-slow' : undefined}
               />
-              <span className="composer-action-label">{editingEntryId !== null ? 'Update' : 'Insert'}</span>
+              <span className="composer-action-label">{editingEntryId !== null ? t('composer.sendControls.updateLabel') : t('composer.sendControls.insertLabel')}</span>
             </button>
             <div className="composer-split-divider" />
             <DropdownMenuTrigger asChild>
@@ -127,8 +130,8 @@ export function ComposerSendControls({
                 type="button"
                 className="composer-split-trigger"
                 disabled={busyDisabled}
-                aria-label="Choose a send strategy"
-                title="Choose a send strategy (steer / queue)"
+                aria-label={t('composer.sendControls.chooseStrategy')}
+                title={t('composer.sendControls.chooseStrategyTitle')}
               >
                 <HelmIcon name="chevron-down" size={12} />
               </button>
@@ -141,21 +144,21 @@ export function ComposerSendControls({
             >
               <HelmIcon name="corner-down-right" size={14} className="composer-busy-menu-icon" />
               <div className="composer-busy-menu-text">
-                <div className="composer-busy-menu-title">Steer</div>
-                <div className="composer-busy-menu-desc">Inject at the next step boundary</div>
+                <div className="composer-busy-menu-title">{t('composer.sendControls.steer')}</div>
+                <div className="composer-busy-menu-desc">{t('composer.sendControls.steerHint')}</div>
               </div>
               <span className="composer-busy-menu-kbd kbd-hint">Enter</span>
             </DropdownMenuItem>
             <DropdownMenuItem
               className="composer-busy-menu-item composer-queue-button"
               onClick={() => void send('followUp')}
-              title="Handle after the current turn ends (⌘/Ctrl+Enter)"
-              aria-label="Queue send"
+              title={t('composer.sendControls.queueHintKbd')}
+              aria-label={t('composer.sendControls.queueSend')}
             >
               <HelmIcon name="clock" size={14} className="composer-busy-menu-icon" />
               <div className="composer-busy-menu-text">
-                <div className="composer-busy-menu-title">Queue send</div>
-                <div className="composer-busy-menu-desc">Handle after the current turn ends</div>
+                <div className="composer-busy-menu-title">{t('composer.sendControls.queueSend')}</div>
+                <div className="composer-busy-menu-desc">{t('composer.sendControls.queueHint')}</div>
               </div>
               <span className="composer-busy-menu-kbd kbd-hint">⌘/Ctrl+Enter</span>
             </DropdownMenuItem>
@@ -164,13 +167,13 @@ export function ComposerSendControls({
               danger
               className="composer-busy-menu-item"
               onClick={() => void abortTurn()}
-              title="Stop the current execution"
-              aria-label="Stop the current execution"
+              title={t('composer.sendControls.stopExecution')}
+              aria-label={t('composer.sendControls.stopExecution')}
             >
               <HelmIcon name="square" size={13} className="composer-busy-menu-icon" />
               <div className="composer-busy-menu-text">
-                <div className="composer-busy-menu-title">Stop execution</div>
-                <div className="composer-busy-menu-desc">Abort the current turn immediately</div>
+                <div className="composer-busy-menu-title">{t('composer.sendControls.stopMenuTitle')}</div>
+                <div className="composer-busy-menu-desc">{t('composer.sendControls.abortNow')}</div>
               </div>
             </DropdownMenuItem>
           </DropdownMenuContent>

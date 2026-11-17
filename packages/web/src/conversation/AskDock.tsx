@@ -3,13 +3,15 @@ import type { AskFieldSpec, AskSpec } from '@helm/protocol/browser'
 import { asksApi } from '../lib/api.js'
 import { HelmIcon, Select } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { collectSubtreeIds } from './ancestry-model.js'
 
 export interface AskDockProps {
   conversationId: number
 }
 
-/** 来源会话标注：ask 属于其他会话时展示，点击可打开对应子会话抽屉。 */
+/** Source-conversation badge: shown when the ask belongs to another
+ * conversation; clicking opens that child conversation's drawer. */
 interface AskSourceInfo {
   conversationId: number
   title: string
@@ -20,7 +22,8 @@ interface TerminalSnapshot {
   text: string
 }
 
-/** 从 ask 扩展字段 terminalSnapshot 或 description 提取终端快照（最后 40 行）。 */
+/** Extract the terminal snapshot (last 40 lines) from the ask extension field
+ * terminalSnapshot or from the description. */
 function extractTerminalSnapshot(ask: AskSpec): TerminalSnapshot | undefined {
   const extra = ask as AskSpec & { context?: { terminalSnapshot?: unknown } }
   const fromContext = extra.context?.terminalSnapshot
@@ -54,9 +57,10 @@ function AskFieldInput({
   onChange: (v: string) => void
   disabled: boolean
 }) {
+  const { t } = useWebLocale()
   if (field.type === 'select') {
     const options = [
-      { value: '', label: 'Select…' },
+      { value: '', label: t('composer.ask.selectPlaceholder') },
       ...(field.options ?? []).map((opt) => ({
         value: opt.value,
         label: opt.label,
@@ -82,7 +86,7 @@ function AskFieldInput({
           onClick={() => onChange('true')}
         >
           <HelmIcon name="check" size={12} />
-          Approve
+          {t('composer.ask.approve')}
         </button>
         <button
           type="button"
@@ -91,7 +95,7 @@ function AskFieldInput({
           onClick={() => onChange('false')}
         >
           <HelmIcon name="x" size={12} />
-          Reject
+          {t('composer.ask.reject')}
         </button>
       </span>
     )
@@ -105,14 +109,14 @@ function AskFieldInput({
         type={secret ? 'password' : 'text'}
         value={value}
         disabled={disabled}
-        placeholder={secret ? 'Secret values go to the in-memory SecretStash only' : field.label}
+        placeholder={secret ? t('composer.ask.secretPlaceholder') : field.label}
         onChange={(e) => onChange(e.target.value)}
         autoComplete="off"
       />
       {secret ? (
         <span className="ask-dock-secret-hint">
           <HelmIcon name="lock" size={11} />
-          Secrets stay in the in-memory SecretStash, never stored in the database
+          {t('composer.ask.secretHint')}
         </span>
       ) : null}
     </span>
@@ -121,7 +125,9 @@ function AskFieldInput({
 
 function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
   const store = useHelmStore()
-  // 同一审批可能同时出现在祖先面板与子会话抽屉，表单标签只关联本实例。
+  const { t } = useWebLocale()
+  // The same approval can appear in both an ancestor panel and a child
+  // conversation drawer; form labels associate with this instance only.
   const formId = useId()
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState<'answer' | 'cancel' | null>(null)
@@ -166,7 +172,7 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
           <span className="badge badge-warn">{ask.ownerPluginId}</span>
         ) : null}
         {ask.expectedStateSeq !== undefined ? (
-          <span className="badge badge-neutral mono" title="CAS watermark: auto-cancelled once the terminal handles it">
+          <span className="badge badge-neutral mono" title={t('composer.ask.casTitle')}>
             seq {ask.expectedStateSeq}
           </span>
         ) : null}
@@ -174,12 +180,14 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
           <button
             type="button"
             className="btn btn-ghost btn-sm ask-dock-source-btn"
-            title={source.title !== '' ? `Open child conversation #${source.conversationId} (${source.title})` : `Open child conversation #${source.conversationId} drawer`}
-            aria-label={`Open child conversation #${source.conversationId} drawer`}
+            title={source.title !== ''
+              ? t('composer.ask.openChildTitle', { id: source.conversationId, title: source.title })
+              : t('composer.ask.openChildDrawer', { id: source.conversationId })}
+            aria-label={t('composer.ask.openChildDrawer', { id: source.conversationId })}
             onClick={() => store.setActiveModal({ kind: 'conversation-drawer', conversationId: source.conversationId })}
           >
             <HelmIcon name="corner-down-right" size={11} />
-            From #{source.conversationId}
+            {t('composer.ask.fromSource', { id: source.conversationId })}
           </button>
         ) : null}
       </div>
@@ -201,7 +209,7 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
             onClick={() => setSnapshotOpen((v) => !v)}
           >
             <HelmIcon name={snapshotOpen ? 'chevron-down' : 'chevron-right'} size={12} />
-            Terminal snapshot (last 40 lines)
+            {t('composer.ask.terminalSnapshot')}
           </button>
           {snapshotOpen ? (
             <pre className="code-block-pre selectable ask-dock-snapshot-pre">
@@ -237,7 +245,7 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
       ) : null}
       <div className="ask-dock-actions">
         <button type="button" className="btn" disabled={submitting !== null} onClick={() => void cancel()}>
-          Cancel
+          {t('common.cancel')}
         </button>
         <button
           type="button"
@@ -246,19 +254,22 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
           onClick={() => void submit()}
         >
           <HelmIcon name={submitting === 'answer' ? 'loader' : 'check'} size={12} />
-          Submit
+          {t('composer.ask.submit')}
         </button>
       </div>
     </div>
   )
 }
 
-/** 置底悬停审批坞：当前会话及其全部后代会话的 pending AskDoc 卡片堆叠。
- * AskDoc 是会话级对象：answer/cancel 仍走原 asksApi（含 expectedStateSeq CAS），
- * 此处只聚合展示，不改变审批链路。 */
+/** Bottom-docked approval stack: pending AskDoc cards of the current
+ * conversation and all of its descendants. AskDoc is conversation-scoped:
+ * answer/cancel still go through the original asksApi (with the
+ * expectedStateSeq CAS); this dock only aggregates display and changes nothing
+ * about the approval chain. */
 export function AskDock({ conversationId }: AskDockProps) {
   const store = useHelmStore()
-  // 祖谱仅由 store.conversations 推导；后代会话的 pending asks 一并呈现。
+  // Ancestry derives purely from store.conversations; pending asks of
+  // descendant conversations are surfaced as well.
   const subtreeIds = useMemo(
     () => collectSubtreeIds(store.conversations, conversationId),
     [store.conversations, conversationId],
