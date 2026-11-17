@@ -237,10 +237,13 @@ test('disabled models reject explicit selection and input submission (409 model_
     assert.equal(submitted.status, 409)
     assert.equal(submitted.body.error.code, 'model_disabled')
 
-    // Setting global default to a disabled model is likewise rejected.
+    // Setting global default or global compaction model to a disabled model is likewise rejected.
     const defaultRejected = await call(env, 'PUT', '/api/models/default', { model: 'faux/faux-1' })
     assert.equal(defaultRejected.status, 409)
     assert.equal(defaultRejected.body.error.code, 'model_disabled')
+    const compactionRejected = await call(env, 'PUT', '/api/models/default', { compactionModel: 'faux/faux-1' })
+    assert.equal(compactionRejected.status, 409)
+    assert.equal(compactionRejected.body.error.code, 'model_disabled')
 
     // Re-enabling restores input submission (faux already has a scripted response).
     await call(env, 'PUT', '/api/models/filter', { provider: 'faux', disabledModels: [] })

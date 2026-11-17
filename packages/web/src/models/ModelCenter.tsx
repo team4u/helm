@@ -77,6 +77,7 @@ export function ModelCenter({
   const [defaultModelInfo, setDefaultModelInfo] = useState<{
     defaultModel: string
     defaultThinkingLevel: string
+    defaultCompactionModel?: string
   } | null>(null)
   const [refreshingCatalog, setRefreshingCatalog] = useState(false)
 
@@ -339,6 +340,12 @@ export function ModelCenter({
           </span>
         ) : (
           <span>{t('models.defaults.unsetHint')}</span>
+        )}
+        {defaultModelInfo?.defaultCompactionModel && (
+          <span>
+            {t('models.defaults.compactionCurrentPrefix')}{' '}
+            <strong className="mono">{defaultModelInfo.defaultCompactionModel}</strong>
+          </span>
         )}
         <span className="text-subtle">{t('models.defaults.inheritanceChain')}</span>
       </div>

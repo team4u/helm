@@ -20,7 +20,7 @@ import {
   type KernelDiagnosticEmitter,
   type KernelDiagnosticSink,
 } from './diagnostics.js'
-import { buildModels } from './models.js'
+import { buildModels, wrapModelsForCompaction, type CompactionModelResolution } from './models.js'
 import { createFileModelsStore } from './models-store.js'
 import { assertModelsStoreHealthyAtBoot } from './runtime-helpers.js'
 import { openHelmDatabase, type HelmDatabase } from './sqlite.js'
@@ -69,6 +69,7 @@ export interface BootstrappedKernelContext {
   onDiagnostic?: KernelDiagnosticSink
   emitDiagnostic: KernelDiagnosticEmitter
   setModels(m: Models): void
+  setCompactionModelResolver(fn: () => CompactionModelResolution): void
   redactReport(fn: (text: string) => string): void
   setFatalStorageHandler(
     fn: (source: 'harness' | 'store', error: unknown) => void,
@@ -152,11 +153,20 @@ export async function bootstrapKernelRuntime(
 
   const registry = createRegistry()
   const modelsSlot = { current: modelsInstance }
+  const compactionResolverSlot: { current: () => CompactionModelResolution } = {
+    current: () => ({ model: undefined, isDisabled: () => false }),
+  }
+  const compactionWrappedCache = new WeakMap<Models, Models>()
 
   const harness = await Harness.open(
     database.storage,
     {
-      models: () => modelsSlot.current,
+      models: () =>
+        wrapModelsForCompaction(
+          modelsSlot.current,
+          () => compactionResolverSlot.current(),
+          compactionWrappedCache,
+        ),
       registry,
       settings: {
         followUpMode: 'all',
@@ -213,6 +223,9 @@ export async function bootstrapKernelRuntime(
     emitDiagnostic,
     setModels: (m: Models) => {
       modelsSlot.current = m
+    },
+    setCompactionModelResolver: (fn: () => CompactionModelResolution) => {
+      compactionResolverSlot.current = fn
     },
     redactReport: (fn: (text: string) => string) => {
       redactSlot.current = fn

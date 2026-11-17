@@ -7,9 +7,9 @@ import { buildDefaultModelOptions, UNSET_MODEL_VALUE } from './model-center-mode
 
 export interface GlobalDefaultsPanelProps {
   /** Currently effective global default model info (fetched by ModelCenter). */
-  defaultModelInfo: { defaultModel: string; defaultThinkingLevel: string } | null
+  defaultModelInfo: { defaultModel: string; defaultThinkingLevel: string; defaultCompactionModel?: string } | null
   /** Reports a successful save back to the ModelCenter state. */
-  onSaved: (info: { defaultModel: string; defaultThinkingLevel: string }) => void
+  onSaved: (info: { defaultModel: string; defaultThinkingLevel: string; defaultCompactionModel?: string }) => void
 }
 
 /**
@@ -39,6 +39,9 @@ export function GlobalDefaultsPanel({
       : UNSET_MODEL_VALUE,
   )
   const [formLevel, setFormLevel] = useState(() => defaultModelInfo?.defaultThinkingLevel ?? '')
+  const [formCompactionModel, setFormCompactionModel] = useState(() =>
+    defaultModelInfo?.defaultCompactionModel || UNSET_MODEL_VALUE,
+  )
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveSuccess, setSaveSuccess] = useState(false)
@@ -51,6 +54,7 @@ export function GlobalDefaultsPanel({
       const gen = ++loadGeneration.current
       setFormModel(defaultModelInfo.defaultModel || UNSET_MODEL_VALUE)
       setFormLevel(defaultModelInfo.defaultThinkingLevel ?? '')
+      setFormCompactionModel(defaultModelInfo.defaultCompactionModel || UNSET_MODEL_VALUE)
       return () => {
         loadGeneration.current = Math.max(loadGeneration.current, gen)
       }
@@ -65,6 +69,17 @@ export function GlobalDefaultsPanel({
         t,
       ),
     [catalogModels, formModel, t],
+  )
+
+  const compactionModelOptions = useMemo(
+    () =>
+      buildDefaultModelOptions(
+        catalogModels,
+        formCompactionModel === UNSET_MODEL_VALUE ? '' : formCompactionModel,
+        t,
+        t('models.defaults.compactionOptionUnset'),
+      ),
+    [catalogModels, formCompactionModel, t],
   )
 
   const availableThinkingLevels = useMemo(() => {
@@ -111,19 +126,27 @@ export function GlobalDefaultsPanel({
     try {
       const model = formModel === UNSET_MODEL_VALUE ? '' : formModel
       const level = formLevel === UNSET_MODEL_VALUE ? '' : formLevel
-      const res = await assetsApi.setDefaultModel(model, level)
+      const compactionModel = formCompactionModel === UNSET_MODEL_VALUE ? '' : formCompactionModel
+      const res = await assetsApi.setDefaultModel(model, level, compactionModel)
       if (gen !== loadGeneration.current) return
       if (actions?.refreshAssets) {
         await actions.refreshAssets()
       }
-      onSaved({ defaultModel: res.defaultModel, defaultThinkingLevel: res.defaultThinkingLevel })
+      onSaved({
+        defaultModel: res.defaultModel,
+        defaultThinkingLevel: res.defaultThinkingLevel,
+        defaultCompactionModel: res.defaultCompactionModel,
+      })
+      const noticeBody = res.defaultModel
+        ? t('models.defaults.noticeSetTo', { model: res.defaultModel })
+        : res.defaultCompactionModel
+          ? t('models.defaults.noticeCompactionSetTo', { model: res.defaultCompactionModel })
+          : t('models.defaults.noticeCleared')
       actions?.pushNotice?.({
         type: 'notification',
         level: 'info',
         title: t('models.defaults.noticeUpdated'),
-        body: res.defaultModel
-          ? t('models.defaults.noticeSetTo', { model: res.defaultModel })
-          : t('models.defaults.noticeCleared'),
+        body: noticeBody,
       })
       setSaveSuccess(true)
       setTimeout(() => setSaveSuccess(false), 2400)
@@ -139,9 +162,11 @@ export function GlobalDefaultsPanel({
     if (defaultModelInfo) {
       setFormModel(defaultModelInfo.defaultModel || UNSET_MODEL_VALUE)
       setFormLevel(defaultModelInfo.defaultThinkingLevel || UNSET_MODEL_VALUE)
+      setFormCompactionModel(defaultModelInfo.defaultCompactionModel || UNSET_MODEL_VALUE)
     } else {
       setFormModel(UNSET_MODEL_VALUE)
       setFormLevel(UNSET_MODEL_VALUE)
+      setFormCompactionModel(UNSET_MODEL_VALUE)
     }
     setSaveError(null)
   }
@@ -190,6 +215,23 @@ export function GlobalDefaultsPanel({
             {formModel !== UNSET_MODEL_VALUE && availableThinkingLevels.length === 0 && (
               <span className="text-subtle">{t('models.defaults.levelUnsupported')}</span>
             )}
+          </div>
+
+          <label htmlFor="model-defaults-compaction-model" className="form-grid-label">
+            {t('models.defaults.compactionLabel')}
+          </label>
+          <div className="flex-col-xs">
+            <Select
+              id="model-defaults-compaction-model"
+              value={formCompactionModel}
+              disabled={saving}
+              popoverClassName="helm-select-popover-wide"
+              className="w-full mono"
+              aria-label={t('models.defaults.compactionAria')}
+              options={compactionModelOptions}
+              onChange={(e) => setFormCompactionModel(e.target.value)}
+            />
+            <span className="text-subtle">{t('models.defaults.compactionHint')}</span>
           </div>
         </div>
 

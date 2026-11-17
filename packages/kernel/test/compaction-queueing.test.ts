@@ -534,4 +534,97 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       await kernel.close()
     }
   })
+
+  it('uses global compactionModel when set (clamping reasoning/maxTokens, persisting across restart), and falls back to current model when cleared; never silently falls back when disabled', { timeout: 60_000 }, async () => {
+    const dir = join(root, 'global-compaction-model')
+    const { models, faux } = makeFauxModels({
+      models: [
+        { id: 'faux-1', reasoning: true, maxTokens: 16_384, contextWindow: 128_000 },
+        { id: 'faux-2', reasoning: false, maxTokens: 2_048, contextWindow: 128_000 },
+      ],
+    })
+    let kernel = await KernelRuntime.open({
+      dataDir: dir,
+      cwd: dir,
+      model: 'faux/faux-1',
+      models,
+      externalSkillRoots: [],
+    })
+    const seenSummaryCalls: Array<{ modelId: string; maxTokens?: number; reasoning?: unknown }> = []
+    try {
+      await kernel.setDefaultModel(undefined, 'high', 'faux/faux-2')
+      assert.equal((await kernel.listModels()).defaultCompactionModel, 'faux/faux-2')
+
+      await seedLargeContext(kernel, faux)
+
+      faux.setResponses([
+        async (_ctx, opts, _state, model) => {
+          seenSummaryCalls.push({ modelId: model.id, maxTokens: opts?.maxTokens, reasoning: opts?.reasoning })
+          return fauxAssistantMessage('summary from faux-2')
+        },
+      ])
+
+      await kernel.compactConversation(1)
+      await waitFor(
+        () => seenSummaryCalls.length === 1 && kernel.getConversation(1).contextUsage?.compacting === undefined,
+        20_000,
+      )
+      assert.equal(seenSummaryCalls[0]?.modelId, 'faux-2', 'compaction must use configured compactionModel')
+      assert.equal(seenSummaryCalls[0]?.reasoning, undefined, 'non-reasoning compaction model must not receive reasoning option')
+      assert.ok((seenSummaryCalls[0]?.maxTokens ?? 0) <= 2_048, 'maxTokens must be clamped to compaction model limit')
+
+      // Restart and verify compactionModel persisted in config.json.
+      await kernel.close()
+      const reloaded = makeFauxModels({
+        models: [
+          { id: 'faux-1', reasoning: true, maxTokens: 16_384, contextWindow: 128_000 },
+          { id: 'faux-2', reasoning: false, maxTokens: 2_048, contextWindow: 128_000 },
+        ],
+      })
+      kernel = await KernelRuntime.open({
+        dataDir: dir,
+        cwd: dir,
+        model: 'faux/faux-1',
+        models: reloaded.models,
+        externalSkillRoots: [],
+      })
+      assert.equal((await kernel.listModels()).defaultCompactionModel, 'faux/faux-2')
+
+      // Disabling the configured compactionModel must fail compaction explicitly instead of silently falling back.
+      await kernel.setDisabledModels('faux', ['faux-2'])
+      await seedLargeContext(kernel, reloaded.faux)
+      const recorder = recordNotifications(kernel, 1)
+      try {
+        reloaded.faux.setResponses([fauxAssistantMessage('must not fall back to faux-1')])
+        await kernel.compactConversation(1)
+        await waitFor(
+          () => recorder.notices.some((n) => n.level === 'error' && n.title === 'Context compaction failed'),
+          15_000,
+        )
+        assert.equal(reloaded.faux.getPendingResponseCount(), 1, 'must not invoke faux-1 as a silent fallback')
+      } finally {
+        recorder.stop()
+      }
+
+      // Clearing compactionModel restores using the conversation's current model (faux-1).
+      await kernel.setDisabledModels('faux', [])
+      await kernel.setDefaultModel(undefined, undefined, '')
+      assert.equal((await kernel.listModels()).defaultCompactionModel, undefined)
+      const clearedCalls: string[] = []
+      reloaded.faux.setResponses([
+        async (_ctx, _opts, _state, model) => {
+          clearedCalls.push(model.id)
+          return fauxAssistantMessage('summary from current model faux-1')
+        },
+      ])
+      await kernel.compactConversation(1)
+      await waitFor(
+        () => clearedCalls.length === 1 && kernel.getConversation(1).contextUsage?.compacting === undefined,
+        20_000,
+      )
+      assert.equal(clearedCalls[0], 'faux-1', 'clearing compactionModel must revert to current conversation model')
+    } finally {
+      await kernel.close()
+    }
+  })
 })

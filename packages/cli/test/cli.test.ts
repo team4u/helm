@@ -132,6 +132,14 @@ test('thinkingLevel CLI passthrough: global default, current conversation overri
   assert.equal(defaults.code, 0, defaults.err)
   assert.deepEqual(JSON.parse(defaults.out), { thinkingLevel: 'high' })
 
+  const compaction = await runCliCaptured(['models', 'default', '--compaction', 'faux/compact-model', '--json'], env)
+  assert.equal(compaction.code, 0, compaction.err)
+  assert.deepEqual(JSON.parse(compaction.out), { compactionModel: 'faux/compact-model' })
+
+  const clearCompaction = await runCliCaptured(['models', 'default', '--compaction=', '--json'], env)
+  assert.equal(clearCompaction.code, 0, clearCompaction.err)
+  assert.deepEqual(JSON.parse(clearCompaction.out), { compactionModel: '' })
+
   const conversation = await runCliCaptured(['conversations', 'update', '--current', '--thinking=', '--json'], env)
   assert.equal(conversation.code, 0, conversation.err)
   assert.deepEqual(JSON.parse(conversation.out), { thinkingLevel: '' })

@@ -24,6 +24,7 @@ import {
   getSupportedThinkingLevels,
   type Api,
   type ApiKeyAuth,
+  type AssistantMessage,
   type AuthResult,
   type Model,
   type ModelInputModality,
@@ -218,7 +219,7 @@ export function parseModelRef(ref: string): ModelRefParts {
  */
 export async function listModelCatalog(
   models: Models,
-  defaults?: { model?: string; thinkingLevel?: string; disabledModels?: Readonly<Record<string, readonly string[]>> },
+  defaults?: { model?: string; thinkingLevel?: string; compactionModel?: string; disabledModels?: Readonly<Record<string, readonly string[]>> },
 ): Promise<ModelCatalog> {
   const entries: ModelCatalogEntry[] = []
   const thinkingLevels: Record<string, string[]> = {}
@@ -242,6 +243,7 @@ export async function listModelCatalog(
     thinkingLevels,
     ...(defaults?.model ? { defaultModel: defaults.model } : {}),
     ...(defaults?.thinkingLevel ? { defaultThinkingLevel: defaults.thinkingLevel } : {}),
+    ...(defaults?.compactionModel ? { defaultCompactionModel: defaults.compactionModel } : {}),
   }
 }
 
@@ -291,4 +293,133 @@ export function clampThinkingLevelForModel(
   // never clamp upward to the smallest supported level when the user explicitly disabled reasoning.
   if (level === 'off') return 'off'
   return clampToModelLevels(model, level as ModelThinkingLevel)
+}
+
+export interface CompactionModelResolution {
+  model: string | undefined
+  isDisabled: (providerId: string, modelId: string) => boolean
+}
+
+const COMPACTION_SYSTEM_PROMPT_PREFIX = 'You are a context summarization assistant.'
+
+function isCompactionSummarizationCall(
+  context: Parameters<Models['completeSimple']>[1],
+  options: Parameters<Models['completeSimple']>[2],
+): boolean {
+  if (options?.cacheRetention !== 'none') return false
+  if (!Array.isArray(context.messages) || context.messages.length !== 2) return false
+  const [sys, user] = context.messages
+  if (sys?.role !== 'system' || typeof sys.content !== 'string') return false
+  if (!sys.content.startsWith(COMPACTION_SYSTEM_PROMPT_PREFIX)) return false
+  if (user?.role !== 'user') return false
+  return true
+}
+
+function compactionErrorMessage(
+  fallbackModel: Model<Api>,
+  provider: string,
+  modelId: string,
+  errorMessage: string,
+): AssistantMessage {
+  return {
+    role: 'assistant',
+    content: [],
+    api: fallbackModel.api,
+    provider,
+    model: modelId,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: 'error',
+    errorMessage,
+    timestamp: Date.now(),
+  }
+}
+
+/**
+ * Wrap a `Models` instance for `Harness`: when a global compaction model is configured,
+ * routes `pi.compaction` summarization `completeSimple` calls to that model (clamping
+ * `maxTokens` and `reasoning` to its capabilities, and failing explicitly without silent
+ * fallback if the configured model is disabled or unavailable). When unset, passes through
+ * unchanged to the conversation's current model.
+ */
+export function wrapModelsForCompaction(
+  base: Models,
+  resolveCompaction: () => CompactionModelResolution,
+  cache?: WeakMap<Models, Models>,
+): Models {
+  const cached = cache?.get(base)
+  if (cached !== undefined) return cached
+
+  const wrapped = new Proxy(base, {
+    get(target, prop) {
+      if (prop === 'completeSimple') {
+        return async (
+          model: Model<Api>,
+          context: Parameters<Models['completeSimple']>[1],
+          options?: Parameters<Models['completeSimple']>[2],
+        ): Promise<AssistantMessage> => {
+          const { model: compactionRef, isDisabled } = resolveCompaction()
+          if (!compactionRef || !isCompactionSummarizationCall(context, options)) {
+            return target.completeSimple(model, context, options)
+          }
+          let ref: ModelRefParts
+          try {
+            ref = parseModelRef(compactionRef)
+          } catch (err) {
+            return compactionErrorMessage(
+              model,
+              model.provider,
+              model.id,
+              err instanceof Error ? err.message : String(err),
+            )
+          }
+          if (isDisabled(ref.provider, ref.modelId)) {
+            return compactionErrorMessage(
+              model,
+              ref.provider,
+              ref.modelId,
+              `Compaction model ${ref.provider}/${ref.modelId} is disabled`,
+            )
+          }
+          const compactionModel = target.getModel(ref.provider, ref.modelId)
+          if (compactionModel === undefined) {
+            return compactionErrorMessage(
+              model,
+              ref.provider,
+              ref.modelId,
+              `Compaction model ${ref.provider}/${ref.modelId} is not available`,
+            )
+          }
+          let effectiveOptions = options
+          if (effectiveOptions !== undefined) {
+            const next = { ...effectiveOptions }
+            if (compactionModel.maxTokens > 0 && next.maxTokens !== undefined) {
+              next.maxTokens = Math.min(next.maxTokens, compactionModel.maxTokens)
+            }
+            if (next.reasoning !== undefined) {
+              const clamped = clampToModelLevels(compactionModel, next.reasoning)
+              if (clamped === 'off') {
+                delete next.reasoning
+              } else {
+                next.reasoning = clamped
+              }
+            }
+            effectiveOptions = next
+          }
+          return target.completeSimple(compactionModel, context, effectiveOptions)
+        }
+      }
+      const value = Reflect.get(target, prop, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+
+  cache?.set(base, wrapped)
+  return wrapped
 }

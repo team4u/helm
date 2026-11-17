@@ -104,6 +104,8 @@ export interface ModelCatalog {
   defaultModel?: string
   /** Global default thinking level (config.json.thinkingLevel; omitted when unset). */
   defaultThinkingLevel?: string
+  /** Global compaction model (config.json.compactionModel; omitted when unset). */
+  defaultCompactionModel?: string
 }
 
 /** Public catalog of PI built-in providers, plugin dynamic providers and enabled custom gateways; contains no credentials or private request headers. */

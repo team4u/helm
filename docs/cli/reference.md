@@ -116,7 +116,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 ### 模型与网关
 
-**`helm models list`** — 可用模型目录。**`helm models providers`** — PI 供应商与认证方式。**`helm models default [--set <model>] [--thinking <level>]`** — 查看或设置全局默认（空串清除）。**`helm models refresh [--provider <id>]`** — 刷新动态供应商目录。**`helm models filter [--provider <id> [--disable <modelId>... | --clear]]`** — 查看或设置模型禁用集。
+**`helm models list`** — 可用模型目录。**`helm models providers`** — PI 供应商与认证方式。**`helm models default [--set <model>] [--thinking <level>] [--compaction <model>]`** — 查看或设置全局默认（空串清除）。**`helm models refresh [--provider <id>]`** — 刷新动态供应商目录。**`helm models filter [--provider <id> [--disable <modelId>... | --clear]]`** — 查看或设置模型禁用集。
 
 **`helm providers list` / `helm providers set --input <json>`** — 模型网关列表查看与整体替换（`ProviderConfig[]`，密钥置于环境变量，严禁写入配置体）。
 

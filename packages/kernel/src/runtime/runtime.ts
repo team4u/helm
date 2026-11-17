@@ -245,6 +245,10 @@ export class KernelRuntime {
     this.init.redactReport((t) => this.stashService.redact(t))
     this.svc.tracker.setDiagnosticSink(this.init.onDiagnostic)
     this.svc.conversations.setFatalErrorProvider(() => this.#fatalError)
+    this.init.setCompactionModelResolver(() => ({
+      model: this.modelsRegistry.defaultCompactionModel,
+      isDisabled: (providerId, modelId) => this.modelsRegistry.isModelDisabled(providerId, modelId),
+    }))
     this.init.setFatalStorageHandler(
       (source, error) => this.handleFatalStorageError(source, error),
       () => this.closed,
@@ -889,7 +893,7 @@ export class KernelRuntime {
     this.modelsRegistry.assertModelEnabled(provider, modelId)
   }
 
-  async setDefaultModel(model?: string, thinkingLevel?: string): Promise<void> {
+  async setDefaultModel(model?: string, thinkingLevel?: string, compactionModel?: string): Promise<void> {
     const validateLevel = (level: string) => {
       if (!THINKING_LEVELS.has(level)) {
         throw new HelmError(
@@ -899,7 +903,7 @@ export class KernelRuntime {
         )
       }
     }
-    await this.modelsRegistry.setDefaultModel(model, thinkingLevel, validateLevel)
+    await this.modelsRegistry.setDefaultModel(model, thinkingLevel, validateLevel, compactionModel)
   }
 
   listModelProviders() {

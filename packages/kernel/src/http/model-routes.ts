@@ -15,15 +15,16 @@ import { methodNotAllowed, readOptionalJsonBody, type RouteContext } from './rou
 // /api/models
 // ---------------------------------------------------------------------------
 
-// At least one of model or thinkingLevel is required (anyOf); empty string model clears override.
+// At least one of model, thinkingLevel, or compactionModel is required (anyOf); empty string clears override.
 const MODELS_DEFAULT_BODY_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
     model: { type: 'string' },
     thinkingLevel: { type: 'string' },
+    compactionModel: { type: 'string' },
   },
   additionalProperties: false,
-  anyOf: [{ required: ['model'] }, { required: ['thinkingLevel'] }],
+  anyOf: [{ required: ['model'] }, { required: ['thinkingLevel'] }, { required: ['compactionModel'] }],
 }
 
 const MODELS_FILTER_BODY_SCHEMA: JsonSchema = {
@@ -58,7 +59,11 @@ export async function handleModelsDomain(
   const third = segments[2]
   if (second === 'default' && third === undefined && method === 'GET') {
     const catalog = await kernel.listModels()
-    return jsonOk(redactor, { defaultModel: catalog.defaultModel ?? '', defaultThinkingLevel: catalog.defaultThinkingLevel ?? '' })
+    return jsonOk(redactor, {
+      defaultModel: catalog.defaultModel ?? '',
+      defaultThinkingLevel: catalog.defaultThinkingLevel ?? '',
+      defaultCompactionModel: catalog.defaultCompactionModel ?? '',
+    })
   }
   if (second === 'default' && third === undefined && method === 'PUT') {
     if (kernel.setDefaultModel === undefined) {
@@ -67,12 +72,20 @@ export async function handleModelsDomain(
     const raw = await readOptionalJsonBody(ctx.request)
     assertBodySchema(MODELS_DEFAULT_BODY_SCHEMA, raw ?? {}, 'models default body')
     const body = (raw ?? {}) as Record<string, unknown>
-    await kernel.setDefaultModel(
-      'model' in body ? (body.model as string) : undefined,
-      'thinkingLevel' in body ? (body.thinkingLevel as string) : undefined,
-    )
+    const modelArg = 'model' in body ? (body.model as string) : undefined
+    const levelArg = 'thinkingLevel' in body ? (body.thinkingLevel as string) : undefined
+    if ('compactionModel' in body) {
+      await kernel.setDefaultModel(modelArg, levelArg, body.compactionModel as string)
+    } else {
+      await kernel.setDefaultModel(modelArg, levelArg)
+    }
     const catalog = await kernel.listModels()
-    return jsonOk(redactor, { ok: true, defaultModel: catalog.defaultModel ?? '', defaultThinkingLevel: catalog.defaultThinkingLevel ?? '' })
+    return jsonOk(redactor, {
+      ok: true,
+      defaultModel: catalog.defaultModel ?? '',
+      defaultThinkingLevel: catalog.defaultThinkingLevel ?? '',
+      defaultCompactionModel: catalog.defaultCompactionModel ?? '',
+    })
   }
   if (second === 'filter' && third === undefined && method === 'PUT') {
     if (kernel.setDisabledModels === undefined) {

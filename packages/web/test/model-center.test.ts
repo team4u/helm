@@ -701,8 +701,87 @@ test('ModelCenter SSR: target with tab=defaults inlines the global-default form'
   assert.match(html, /The inheritance chain for new conversations/)
   assert.match(html, /Save global defaults/)
   assert.match(html, /aria-label="Global default model"/)
+  assert.match(html, /aria-label="Global compaction model"/)
+  assert.match(html, /Not set \(use current conversation model\)/)
   assert.doesNotMatch(html, /class="[^"]*primary-drawer-content[^"]*"/)
   assert.equal(EMOJI_REGEX.test(html), false)
+})
+
+test('ModelCenter: GlobalDefaultsPanel saves compactionModel via PUT /api/models/default', { timeout: 60_000 }, async () => {
+  const { act } = await import('react')
+  const { createRoot } = await import('react-dom/client')
+  const store = makeTestStore({
+    primaryTarget: { kind: 'models', tab: 'defaults' },
+    models: [
+      { id: 'anthropic/claude-3-7-sonnet', provider: 'anthropic', modelId: 'claude-3-7-sonnet', available: true, thinkingLevels: ['off', 'low', 'high'] },
+      { id: 'openai/gpt-4o-mini', provider: 'openai', modelId: 'gpt-4o-mini', available: true, thinkingLevels: ['off'] },
+    ],
+  })
+
+  const putBodies: Array<Record<string, unknown>> = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = typeof input === 'string' ? input : (input as URL).toString()
+    if (path === '/api/models/providers') return new Response(JSON.stringify([]), { status: 200 })
+    if (path === '/api/models/default' && init?.method === 'PUT') {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>
+      putBodies.push(body)
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          defaultModel: (body.model as string) ?? '',
+          defaultThinkingLevel: (body.thinkingLevel as string) ?? '',
+          defaultCompactionModel: (body.compactionModel as string) ?? '',
+        }),
+        { status: 200 },
+      )
+    }
+    if (path === '/api/models/default') {
+      return new Response(
+        JSON.stringify({
+          defaultModel: 'anthropic/claude-3-7-sonnet',
+          defaultThinkingLevel: 'high',
+          defaultCompactionModel: 'openai/gpt-4o-mini',
+        }),
+        { status: 200 },
+      )
+    }
+    return new Response(JSON.stringify({ ok: true }), { status: 200 })
+  }) as typeof fetch
+
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+
+  try {
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: store }, e(ModelCenter, { inlineDrawer: true })))
+    })
+
+    // Status row displays the loaded compaction model
+    assert.match(container.textContent ?? '', /Compaction:/)
+    assert.match(container.textContent ?? '', /openai\/gpt-4o-mini/)
+
+    const saveBtn = Array.from(container.querySelectorAll('button')).find(
+      (btn) => (btn.textContent ?? '').includes('Save global defaults'),
+    )!
+    await act(async () => {
+      saveBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+
+    assert.equal(putBodies.length, 1)
+    assert.deepEqual(putBodies[0], {
+      model: 'anthropic/claude-3-7-sonnet',
+      thinkingLevel: 'high',
+      compactionModel: 'openai/gpt-4o-mini',
+    })
+  } finally {
+    globalThis.fetch = originalFetch
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
 })
 
 test('ModelCenter SSR: backend catalog plugin gateways render as dynamic provider cards and drawer', { timeout: 60_000 }, () => {
