@@ -7,7 +7,7 @@ import * as LucideReact from 'lucide-react'
 import * as HelmPluginClient from '@helm/plugin-client'
 import { PluginClientHostContext, usePluginDocValue } from '@helm/plugin-client'
 import type { ActionManifest, ArtifactMetadata, ConversationDetail, ConversationEntry, PluginSummary, Profile, ProviderConfig, SkillSummary } from '@helm/protocol/browser'
-import { createLocaleTranslator } from '@helm/protocol/browser'
+import { createLocaleTranslator, type LocalizedText } from '@helm/protocol/browser'
 import { assetsApi, authApi, conversationsApi, nodesApi, pluginsApi, setStoredToken, type CredentialSummary, type ModelDescriptor, type NodeInfo } from './api.js'
 import { errorText } from './format.js'
 import { applyConversationEntry, emptyLiveState, mergeConversationDetail, sortNodes, type LiveState } from './live-state.js'
@@ -30,6 +30,20 @@ import { getStoredSidebarCollapsed, persistSidebarCollapsed } from '../shell/sho
 function isAbortError(error: unknown): boolean {
   return error !== null && typeof error === 'object' && (error as { name?: string }).name === 'AbortError'
 }
+
+/**
+ * Asset-kind failure notice titles, one per assetsApi/pluginsApi call in
+ * refreshAssets (order-locked); resolved against the active locale at push
+ * time via the stable shell translator.
+ */
+const ASSET_LOAD_FAILURE_TITLES: ReadonlyArray<LocalizedText> = [
+  { en: 'Profiles failed to load', 'zh-CN': '角色加载失败' },
+  { en: 'Models failed to load', 'zh-CN': '模型加载失败' },
+  { en: 'Providers failed to load', 'zh-CN': '网关加载失败' },
+  { en: 'Credentials failed to load', 'zh-CN': '凭据加载失败' },
+  { en: 'Skills failed to load', 'zh-CN': '技能加载失败' },
+  { en: 'Plugin actions failed to load', 'zh-CN': '插件动作加载失败' },
+]
 
 export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const [authReady, setAuthReady] = useState(false)
@@ -165,6 +179,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     themePreference,
     locale,
     quietNotifyEnabled,
+    translate,
     setTheme,
     setThemePreference,
     toggleTheme,
@@ -194,7 +209,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
         reportLoad('assets:profiles', reason)
         profilesLoadedRef.current = true
         setProfilesLoaded(true)
-        pushNotice({ type: 'notification', level: 'error', title: '角色加载失败', body: errorText(reason) })
+        pushNotice({ type: 'notification', level: 'error', title: translate(ASSET_LOAD_FAILURE_TITLES[0]!), body: errorText(reason) })
       },
     )
 
@@ -211,10 +226,9 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
       if (results[2].status === 'fulfilled') setCredentials(results[2].value)
       if (results[3].status === 'fulfilled') setSkills(results[3].value)
       if (results[4].status === 'fulfilled') setActions(results[4].value)
-      const labels = ['模型', '网关', '凭据', '技能', '插件动作']
       results.forEach((result, index) => {
         if (result.status === 'rejected' && !isAbortError(result.reason)) {
-          pushNotice({ type: 'notification', level: 'error', title: `${labels[index]}加载失败`, body: errorText(result.reason) })
+          pushNotice({ type: 'notification', level: 'error', title: translate(ASSET_LOAD_FAILURE_TITLES[index + 1]!), body: errorText(result.reason) })
         }
       })
     })
@@ -225,7 +239,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     // Regardless of per-item outcomes, a completed round distinguishes
     // "loading" from "missing" (per-item failures get their own notices).
     setAssetsLoaded(true)
-  }, [pushNotice, reportLoad])
+  }, [pushNotice, reportLoad, translate])
 
   // Fully recalibrates the plugin list: merges local live state against the
   // server list as the baseline (SSE increments preferred, removed items dropped).
@@ -256,11 +270,11 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
       return liveRef.current.nodes
     } catch (error) {
       if (epoch === session.current) {
-        pushNotice({ type: 'notification', level: 'error', title: '计算节点加载失败', body: errorText(error) })
+        pushNotice({ type: 'notification', level: 'error', title: translate({ en: 'Compute nodes failed to load', 'zh-CN': '计算节点加载失败' }), body: errorText(error) })
       }
       return undefined
     }
-  }, [pushNotice, updateLive])
+  }, [pushNotice, translate, updateLive])
 
   const loadConversationDetail = useCallback(async (
     id: number,
@@ -393,7 +407,13 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
       }
       if (!silent || conversationArtifactsRef.current[id] === undefined) {
         reportLoad(key, error)
-        pushNotice({ type: 'notification', level: 'error', title: '会话产物加载失败', body: errorText(error), conversationId: id })
+        pushNotice({
+          type: 'notification',
+          level: 'error',
+          title: translate({ en: 'Conversation artifacts failed to load', 'zh-CN': '会话产物加载失败' }),
+          body: errorText(error),
+          conversationId: id,
+        })
       }
       return undefined
     }).finally(() => {
@@ -402,7 +422,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     })
     requests.current.set(key, task)
     return task
-  }, [reportLoad, pushNotice])
+  }, [reportLoad, pushNotice, translate])
 
   const ensurePluginDoc = useCallback(async (pluginId: string, name: string): Promise<unknown> => {
     const docKey = `${pluginId}/${name}`, key = `doc:${docKey}`
@@ -422,13 +442,21 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
       if (epoch === session.current && pluginVersion === pluginEpoch.current.get(pluginId)) {
         failedDocs.current.add(key)
         reportLoad(key, error)
-        pushNotice({ type: 'notification', level: 'error', title: '插件状态读取失败', body: `${pluginId}/${name}：${errorText(error)}` })
+        pushNotice({
+          type: 'notification',
+          level: 'error',
+          title: translate({ en: 'Plugin state failed to load', 'zh-CN': '插件状态读取失败' }),
+          body: translate({
+            en: `${pluginId}/${name}: ${errorText(error)}`,
+            'zh-CN': `${pluginId}/${name}：${errorText(error)}`,
+          }),
+        })
       }
       return undefined
     }).finally(() => { if (requests.current.get(key) === task) requests.current.delete(key) })
     requests.current.set(key, task)
     return task
-  }, [pushNotice, reportLoad, updateLive])
+  }, [pushNotice, reportLoad, translate, updateLive])
 
   const {
     primaryTarget,
@@ -534,9 +562,12 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
       setAuthConfigured(status.configured)
       setAuthenticated(status.authenticated)
     } catch (error) {
-      setAuthError(`无法连接 Helm 内核：${errorText(error)}`)
+      setAuthError(translate({
+        en: `Cannot connect to the Helm kernel: ${errorText(error)}`,
+        'zh-CN': `无法连接 Helm 内核：${errorText(error)}`,
+      }))
     } finally { setAuthReady(true) }
-  }, [])
+  }, [translate])
   useEffect(() => { void checkAuth() }, [checkAuth])
 
   const logout = useCallback(() => {
@@ -607,14 +638,22 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const setScreenParams = useCallback((patch: Record<string, string | undefined>, options?: { split?: boolean; push?: boolean }) => {
     const { validEntries, invalidKeys } = partitionScreenParamsPatch(patch)
     for (const key of invalidKeys) {
-      pushNotice({ type: 'notification', level: 'warning', title: '已忽略非法 Screen 参数键', body: `参数 ${key} 必须使用合法键和字符串值` })
+      pushNotice({
+        type: 'notification',
+        level: 'warning',
+        title: translate({ en: 'Ignored invalid Screen parameter key', 'zh-CN': '已忽略非法 Screen 参数键' }),
+        body: translate({
+          en: `Parameter ${key} must use a valid key and a string value`,
+          'zh-CN': `参数 ${key} 必须使用合法键和字符串值`,
+        }),
+      })
     }
     const currentTarget = options?.split ? splitTarget : primaryTarget
     if (validEntries.length === 0 || currentTarget?.kind !== 'screen') return
     if (options?.push) pendingHistoryMode.current = 'push'
     if (options?.split) setSplitTarget((current) => (current === null ? current : applyScreenParamsPatch(current, validEntries)))
     else applyPrimaryTarget(applyScreenParamsPatch(primaryTarget, validEntries))
-  }, [applyPrimaryTarget, pendingHistoryMode, primaryTarget, pushNotice, setSplitTarget, splitTarget])
+  }, [applyPrimaryTarget, pendingHistoryMode, primaryTarget, pushNotice, setSplitTarget, splitTarget, translate])
   const invokePluginAction = useCallback(async (pluginId: string, actionId: string, input: unknown, conversationId?: number) => pluginsApi.invokeAction(pluginId, actionId, input, conversationId), [])
 
   const getPluginSessionDoc = useCallback(async (pluginId: string, docName: string, conversationId: number): Promise<unknown> => {

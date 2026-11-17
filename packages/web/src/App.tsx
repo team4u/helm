@@ -150,6 +150,18 @@ function HelmShellInner() {
   const store = useHelmStore()
   const { t } = useWebLocale()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [showConnectionBanner, setShowConnectionBanner] = useState(false)
+  const [bootLanding] = useState<{ needsHomeLanding: boolean; initialLocation: WorkspaceLocationState | null }>(() => {
+    if (typeof window === 'undefined') {
+      return { needsHomeLanding: false, initialLocation: null }
+    }
+    const rawHash = window.location.hash
+    const parsed = parseLocationHash(rawHash)
+    return {
+      needsHomeLanding: !hashHasPrimaryTarget(rawHash) && parsed.activeModal === null,
+      initialLocation: upgradeLegacyLocationState(parsed),
+    }
+  })
   const [landingSettled, setLandingSettled] = useState(!bootLanding.needsHomeLanding)
 
   // Background browser notifications: mounted once globally (gates itself on preference/auth state).

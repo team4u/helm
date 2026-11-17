@@ -21,8 +21,9 @@
  *   事实复核；偏好关闭 / 未认证即清空全部计时、周期累计与水位基线；
  * - 权限、连接与页面非前台活跃（!isPageActive()）在触发当刻逐项现场复核。
  */
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import type { ConversationSummary } from '@helm/protocol/browser'
+import { resolveLocalizedText, type LocaleTranslator, type LocalizedText } from '@helm/protocol/browser'
 import {
   isPageActive,
   readBrowserNotificationPermission,
@@ -31,6 +32,9 @@ import {
 import { useHelmStore } from '../lib/store-context.js'
 import { collectBackgroundBadgeDocs, summarizeConversationBackgroundActivity } from './background-activity-model.js'
 import {
+  COMPLETED_NOTIFICATION_TITLE,
+  ENDED_NOTIFICATION_TITLE,
+  WAITING_NOTIFICATION_TITLE,
   composeTreeBlockedNotification,
   composeTreeCompletionNotification,
   getBlockedWatermark,
@@ -50,6 +54,63 @@ export const quietNotifyTimings = {
 
 /** 按根会话树去重 tag：同树新状态互相替换不堆积，不同根会话互不覆盖。 */
 const treeNotificationTag = (rootId: number): string => `helm-conv-${rootId}`
+
+// ---------------------------------------------------------------------------
+// 通知展示文案本地化（en/zh-CN）
+//
+// quiet-notify-model 以规范英文常量产出 draft（title 为三个导出常量，body 为
+// ' · ' 连接的会话标签与固定片段）；本层在投递时刻按当前 locale 翻译：
+// - title 与三个常量做恒等匹配，未知标题原样透传（不猜、不误翻会话内容）；
+// - body 仅翻译模型自有的固定片段（前缀/「N pending in total」/「Has failures」
+//   与根会话已删时的两句整句常量）；'#id 标题' 会话标签原样保留。片段与标题
+//   内容恰好同文的极端情形按片段翻译——语义保持，仅语言切换；
+// - 错误协议文本（errorText/HTTP 错误）不经此层，天然不翻译。
+// ---------------------------------------------------------------------------
+
+/** 三个规范标题常量 → 双语文案（恒等匹配，杜绝误翻）。 */
+const NOTIFICATION_TITLE_COPY: ReadonlyMap<string, LocalizedText> = new Map([
+  [COMPLETED_NOTIFICATION_TITLE, { en: COMPLETED_NOTIFICATION_TITLE, 'zh-CN': 'Helm 会话已完成' }],
+  [ENDED_NOTIFICATION_TITLE, { en: ENDED_NOTIFICATION_TITLE, 'zh-CN': 'Helm 会话已结束' }],
+  [WAITING_NOTIFICATION_TITLE, { en: WAITING_NOTIFICATION_TITLE, 'zh-CN': 'Helm 等待你的处理' }],
+])
+
+/** blocked 正文前缀（模型固定输出，position-0 锚定）。 */
+const PENDING_PREFIX = 'Pending input/approvals: '
+/** 失败标注片段（模型作为最末片段追加）。 */
+const FAILURE_PART = 'Has failures'
+/** 折叠计数片段（超出 MAX_LISTED_CONVERSATIONS 时追加；标签恒以 '#id ' 开头，永不与之同形）。 */
+const TOTALS_PART_PATTERN = /^(\d+) pending in total$/
+
+/** 投递时刻把通知标题映射为当前 locale 文案；未知标题原样透传。 */
+export function localizeQuietNotificationTitle(title: string, translate: LocaleTranslator): string {
+  const copy = NOTIFICATION_TITLE_COPY.get(title)
+  return copy === undefined ? title : translate(copy)
+}
+
+/** 投递时刻把模型产出的规范英文正文映射为当前 locale 文案（会话标签原样保留）。 */
+export function localizeQuietNotificationBody(body: string, translate: LocaleTranslator): string {
+  if (body === 'Conversation finished' || body === 'Conversation finished · with failures') {
+    return translate({
+      en: body,
+      'zh-CN': body.endsWith('with failures') ? '会话已结束 · 有失败' : '会话已结束',
+    })
+  }
+  return body
+    .split(' · ')
+    .map((part) => {
+      if (part.startsWith(PENDING_PREFIX)) {
+        return `${translate({ en: 'Pending input/approvals', 'zh-CN': '待处理输入/审批' })}: ${part.slice(PENDING_PREFIX.length)}`
+      }
+      if (part === FAILURE_PART) return translate({ en: FAILURE_PART, 'zh-CN': '有失败' })
+      const totals = TOTALS_PART_PATTERN.exec(part)
+      if (totals !== null) {
+        const count = totals[1]!
+        return translate({ en: `${count} pending in total`, 'zh-CN': `共 ${count} 个待处理` })
+      }
+      return part
+    })
+    .join(' · ')
+}
 
 /** 单棵根会话树的周期与防抖状态。 */
 interface RootTreeCycle {
@@ -130,6 +191,12 @@ export function useQuietNotifier(): void {
   const { conversations, pluginDocs, groupedUi } = store
   const panels = groupedUi.workbenchPanels
 
+  // 语言切换只更新 locale ref，不进任何回调/effect 依赖：badge doc 发现与订阅
+  // 不因切换语言重跑，投递时刻（防抖计时器/重连复核回调）读取当前 locale，
+  // 既不重连重新请求，也不让旧闭包投递旧语言。
+  const localeRef = useRef(store.locale)
+  const translate = useCallback((text: LocalizedText) => resolveLocalizedText(text, localeRef.current), [])
+
   const background = useMemo(
     () => summarizeConversationBackgroundActivity({ panels, conversations, pluginDocs }),
     [panels, conversations, pluginDocs],
@@ -177,6 +244,7 @@ export function useQuietNotifier(): void {
     snapshotRef.current = snapshot
     conversationsRef.current = conversations
     storeRef.current = store
+    localeRef.current = store.locale
 
     const state = stateRef.current
     if (authenticated && quietNotifyEnabled) {
@@ -264,8 +332,8 @@ export function useQuietNotifier(): void {
       }
       const primaryConversationId = draft.primaryConversationId
       showBrowserNotification({
-        title: draft.title,
-        body: draft.body,
+        title: localizeQuietNotificationTitle(draft.title, translate),
+        body: localizeQuietNotificationBody(draft.body, translate),
         tag: treeNotificationTag(rootId),
         url: primaryConversationId === null ? undefined : `/#/c/${primaryConversationId}`,
         onClick:
@@ -329,8 +397,8 @@ export function useQuietNotifier(): void {
       }
       const primaryConversationId = draft.primaryConversationId
       showBrowserNotification({
-        title: draft.title,
-        body: draft.body,
+        title: localizeQuietNotificationTitle(draft.title, translate),
+        body: localizeQuietNotificationBody(draft.body, translate),
         tag: treeNotificationTag(rootId),
         url: primaryConversationId === null ? undefined : `/#/c/${primaryConversationId}`,
         onClick:

@@ -11,14 +11,14 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationSummary, PluginUiContribution } from '@helm/protocol'
 import { groupUiContributions, spaceForTarget, type HelmStoreValue, type ResolvedTarget, type SidebarSpace } from '../src/lib/types.js'
 import { makeTestStore } from './helpers/store.js'
-import { HostStoreProviders } from './helpers/host-store.js'
 GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
-// happy-dom 全局就绪后再加载 react-dom/client（静态导入会捕获注册前的 Node 全局）
+// happy-dom 全局就绪后再加载 react-dom/client 与 SDK Provider 栈（静态导入会捕获注册前的 Node 全局）
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 ;(globalThis as Record<string, unknown>).React = React
 const { Sidebar } = await import('../src/shell/Sidebar.js')
+const { HostStoreProviders } = await import('./helpers/host-store.js')
 
 const e = React.createElement
 
@@ -138,6 +138,8 @@ function render(store: HelmStoreValue, element: React.ReactElement): void {
   root = createRoot(container())
   root.render(e(HostStoreProviders, { value: store }, element))
 }
+
+
 
 test('Sidebar 空间切换：对话空间默认渲染智能体，Views space渲染 screen 贡献', { timeout: 60_000 }, async () => {
   const store = makeStore()
@@ -433,3 +435,39 @@ test('Sidebar 分屏协同展开与焦点高亮：双不同智能体均展开，
   assert.equal(conv40Split.querySelector('.nav-pane-tag')?.textContent, 'Split')
 })
 
+test('Sidebar 偏好菜单语言选择器：双语言选项，切换经 store.setLocale 且展示随 locale', { timeout: 60_000 }, async () => {
+  const setLocaleCalls: string[] = []
+  const base = makeStore()
+  const store: HelmStoreValue = { ...base, setLocale: (locale) => { setLocaleCalls.push(locale) } }
+  const api = { current: {} as { update?: (patch: Partial<HelmStoreValue>) => void } }
+  render(store, e(MutableStoreSidebar, { base: store, apiRef: api }))
+  await act(async () => {})
+
+  // 触发器：SDK Select（Radix 封装，无原生 select），默认 locale=en
+  const trigger = document.body.querySelector('.sidebar-locale-select .helm-select-trigger') as HTMLElement | null
+  assert.ok(trigger, '偏好菜单应渲染语言 Select 触发器')
+  assert.equal(trigger.getAttribute('aria-label'), 'Interface language')
+  assert.ok(trigger.textContent?.includes('English'), '展示当前语言')
+
+  // 键盘打开（Radix Select 契约），双语选项各自以本身语言呈现
+  await act(async () => {
+    trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+  })
+  const options = Array.from(document.querySelectorAll('[role="option"]')) as HTMLElement[]
+  assert.ok(options.some((el) => el.textContent?.includes('English')), '含 English 选项')
+  assert.ok(options.some((el) => el.textContent?.includes('简体中文')), '含 简体中文 选项')
+  const zhOption = options.find((el) => el.textContent?.includes('简体中文'))
+  assert.ok(zhOption, '下拉选项中应包含 简体中文')
+
+  await act(async () => {
+    zhOption!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+  })
+  assert.deepEqual(setLocaleCalls, ['zh-CN'], '切换语言走 store.setLocale')
+
+  // store locale 更新后触发器展示与 aria-label 随 locale
+  act(() => { api.current.update!({ locale: 'zh-CN' }) })
+  const triggerAfter = document.body.querySelector('.sidebar-locale-select .helm-select-trigger') as HTMLElement | null
+  assert.ok(triggerAfter)
+  assert.equal(triggerAfter.getAttribute('aria-label'), '界面语言')
+  assert.ok(triggerAfter.textContent?.includes('简体中文'))
+})

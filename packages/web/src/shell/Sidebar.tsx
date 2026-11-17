@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { ConversationSummary } from '@helm/protocol/browser'
+import type { ConversationSummary, HelmLocale } from '@helm/protocol/browser'
 import { resolveLocalizedText } from '@helm/protocol/browser'
-import { HelmIcon } from '@helm/plugin-client'
+import { HelmIcon, Select, type SelectOption } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { Tooltip } from '../ui/Tooltip.js'
@@ -386,6 +386,12 @@ function SettingsNavGroup({ store, onNavigate }: { store: HelmStoreValue; onNavi
   )
 }
 
+/** 界面语言选项（各自语言的自称，标准惯例）与选择器可访问名称（随当前 locale）。 */
+const INTERFACE_LANGUAGE_OPTIONS: ReadonlyArray<SelectOption<HelmLocale>> = [
+  { value: 'en', label: 'English' },
+  { value: 'zh-CN', label: '简体中文' },
+]
+
 export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
   const store = useHelmStore()
   // 侧栏空间由主屏目标唯一推导（不进 URL）；Rail 点击经 store.openSpace 直接导航
@@ -446,6 +452,15 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
             <span>{space === 'conversations' ? 'Conversation' : space === 'views' ? 'Views' : 'Settings'}</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <Select
+              className="sidebar-locale-select"
+              size="sm"
+              prefixIcon="globe"
+              value={store.locale}
+              options={INTERFACE_LANGUAGE_OPTIONS}
+              aria-label={store.locale === 'zh-CN' ? '界面语言' : 'Interface language'}
+              onChange={(event) => store.setLocale(event.target.value)}
+            />
             <Tooltip content="Background notifications: click to toggle" side="bottom">
               <button
                 type="button"

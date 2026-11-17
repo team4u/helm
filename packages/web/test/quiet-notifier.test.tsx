@@ -19,7 +19,8 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
-import type { ConversationSummary, PluginUiContribution, WorkbenchPanelSpec } from '@helm/protocol'
+import type { ConversationSummary, HelmLocale, PluginUiContribution, WorkbenchPanelSpec } from '@helm/protocol'
+import { createLocaleTranslator } from '@helm/protocol'
 import { ensureHappyDom, waitForCondition } from './helpers/dom-harness.js'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
@@ -28,7 +29,7 @@ import {
   registerBrowserNotificationServiceWorker,
   resetBrowserNotificationServiceWorkerForTest,
 } from '../src/lib/browser-notification.js'
-import { useQuietNotifier, quietNotifyTimings } from '../src/shell/use-quiet-notifier.js'
+import { useQuietNotifier, quietNotifyTimings, localizeQuietNotificationBody, localizeQuietNotificationTitle } from '../src/shell/use-quiet-notifier.js'
 import {
   COMPLETED_NOTIFICATION_TITLE,
   ENDED_NOTIFICATION_TITLE,
@@ -94,6 +95,7 @@ interface HarnessOptions {
   authenticated?: boolean
   quietNotifyEnabled?: boolean
   sseConnected?: boolean
+  locale?: HelmLocale
   conversations: ConversationSummary[]
   pluginDocs?: Record<string, unknown>
 }
@@ -116,6 +118,7 @@ function mountHarness(options: HarnessOptions): Harness {
       authenticated: next.authenticated ?? true,
       quietNotifyEnabled: next.quietNotifyEnabled ?? true,
       sseConnected: next.sseConnected ?? true,
+      locale: next.locale ?? 'en',
       conversations: next.conversations,
       pluginDocs: next.pluginDocs ?? {},
       uiContributions: [PANEL_CONTRIBUTION],
@@ -1055,6 +1058,126 @@ test('SW 激活时 completion 与 blocked 通知透传目标会话 url（/#/c/<i
     } else {
       delete (navigator as unknown as Record<string, unknown>).serviceWorker
     }
+    restoreTimings()
+    restore()
+    focus.restore()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 通知展示文案双语（en/zh-CN）：title/body 投递时刻随当前 locale
+// ---------------------------------------------------------------------------
+
+const zhTranslate = createLocaleTranslator('zh-CN')
+const enTranslate = createLocaleTranslator('en')
+
+test('通知文案纯函数：标题恒等映射双语、未知标题透传；正文片段翻译且会话标签原样保留', { timeout: 60_000 }, () => {
+  // 标题：三个规范常量双语映射，en 原样，未知标题（模型未定义形态）原样透传不猜
+  assert.equal(localizeQuietNotificationTitle(COMPLETED_NOTIFICATION_TITLE, enTranslate), 'Helm conversation completed')
+  assert.equal(localizeQuietNotificationTitle(COMPLETED_NOTIFICATION_TITLE, zhTranslate), 'Helm 会话已完成')
+  assert.equal(localizeQuietNotificationTitle(ENDED_NOTIFICATION_TITLE, zhTranslate), 'Helm 会话已结束')
+  assert.equal(localizeQuietNotificationTitle(WAITING_NOTIFICATION_TITLE, zhTranslate), 'Helm 等待你的处理')
+  assert.equal(localizeQuietNotificationTitle('#5 自定义标题', zhTranslate), '#5 自定义标题')
+
+  // 正文：根会话已删的整句常量
+  assert.equal(localizeQuietNotificationBody('Conversation finished', zhTranslate), '会话已结束')
+  assert.equal(localizeQuietNotificationBody('Conversation finished · with failures', zhTranslate), '会话已结束 · 有失败')
+  assert.equal(localizeQuietNotificationBody('Conversation finished', enTranslate), 'Conversation finished')
+
+  // 正文：会话标签（#id 标题）原样保留，前缀/计数/失败片段随 locale
+  assert.equal(localizeQuietNotificationBody('#5 修复构建失败', zhTranslate), '#5 修复构建失败')
+  assert.equal(localizeQuietNotificationBody('#1 父会话 · Has failures', zhTranslate), '#1 父会话 · 有失败')
+  assert.equal(
+    localizeQuietNotificationBody('Pending input/approvals: #1 部署检查', zhTranslate),
+    '待处理输入/审批: #1 部署检查',
+  )
+  assert.equal(
+    localizeQuietNotificationBody('Pending input/approvals: #1 a · #2 b · #3 c · 5 pending in total · Has failures', zhTranslate),
+    '待处理输入/审批: #1 a · #2 b · #3 c · 共 5 个待处理 · 有失败',
+  )
+  // en：与模型规范输出逐字一致（默认语言零改写）
+  assert.equal(
+    localizeQuietNotificationBody('Pending input/approvals: #1 a · 4 pending in total', enTranslate),
+    'Pending input/approvals: #1 a · 4 pending in total',
+  )
+})
+
+test('通知投递双语：zh-CN locale 下完成/失败/等待处理的 title 与 body 均随 locale', { timeout: 60_000 }, async () => {
+  const focus = setPageFocus(false)
+  const { notifications, restore } = installGrantedNotification()
+  const restoreTimings = shrinkTimings(15, 10)
+  try {
+    // 完成（无失败）
+    const harness = mountHarness({
+      locale: 'zh-CN',
+      conversations: [conv({ id: 5, title: '修复构建失败', status: 'working' })],
+      pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
+    })
+    harness.rerender({
+      locale: 'zh-CN',
+      conversations: [conv({ id: 5, title: '修复构建失败', status: 'done', updatedAt: 9_000 })],
+      pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
+    })
+    await waitForCondition(() => notifications.length === 1)
+    assert.equal(notifications[0]!.title, 'Helm 会话已完成')
+    assert.equal(notifications[0]!.options.body, '#5 修复构建失败')
+
+    // 失败收尾：如实报「已结束」并标注「有失败」
+    harness.rerender({
+      locale: 'zh-CN',
+      conversations: [conv({ id: 6, title: '迁移脚本', status: 'working', updatedAt: 11_000 })],
+      pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
+    })
+    harness.rerender({
+      locale: 'zh-CN',
+      conversations: [conv({ id: 6, title: '迁移脚本', status: 'error', updatedAt: 12_000 })],
+      pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
+    })
+    await waitForCondition(() => notifications.length === 2)
+    assert.equal(notifications[1]!.title, 'Helm 会话已结束')
+    assert.equal(notifications[1]!.options.body, '#6 迁移脚本 · 有失败')
+
+    // 等待处理（blocked）：独立通道同样随 locale
+    harness.rerender({
+      locale: 'zh-CN',
+      conversations: [
+        conv({ id: 6, title: '迁移脚本', status: 'idle', updatedAt: 12_000 }),
+        conv({ id: 7, title: '部署审批', status: 'blocked', pendingAskCount: 1, stateChangeSeq: 2, updatedAt: 13_000 }),
+      ],
+      pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
+    })
+    await waitForCondition(() => notifications.length === 3)
+    assert.equal(notifications[2]!.title, 'Helm 等待你的处理')
+    assert.equal(notifications[2]!.options.body, '待处理输入/审批: #7 部署审批')
+    harness.unmount()
+  } finally {
+    restoreTimings()
+    restore()
+    focus.restore()
+  }
+})
+
+test('通知投递无陈旧闭包：活动开始后切换语言，防抖到期的投递用切换后的 locale', { timeout: 60_000 }, async () => {
+  const focus = setPageFocus(false)
+  const { notifications, restore } = installGrantedNotification()
+  const restoreTimings = shrinkTimings(15, 10)
+  try {
+    const harness = mountHarness({
+      locale: 'en',
+      conversations: [conv({ id: 8, title: '长任务', status: 'working' })],
+      pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
+    })
+    // 活动归零与语言切换同一拍提交：投递时刻读取 localeRef 当前值（zh-CN）
+    harness.rerender({
+      locale: 'zh-CN',
+      conversations: [conv({ id: 8, title: '长任务', status: 'done', updatedAt: 20_000 })],
+      pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
+    })
+    await waitForCondition(() => notifications.length === 1)
+    assert.equal(notifications[0]!.title, 'Helm 会话已完成')
+    assert.equal(notifications[0]!.options.body, '#8 长任务')
+    harness.unmount()
+  } finally {
     restoreTimings()
     restore()
     focus.restore()
