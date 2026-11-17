@@ -511,7 +511,7 @@ test('payload prebuilt mermaid: unpacked plugins.tgz serves mermaid & chunks wit
   try {
     const isoPlugins = path.join(outsideRoot, 'plugins');
     const isoProtocol = path.join(outsideRoot, 'plugins/node_modules/@helm/protocol');
-    const isoAjv = path.join(outsideRoot, 'plugins/node_modules/ajv');
+    const isoTypebox = path.join(outsideRoot, 'plugins/node_modules/typebox');
     const dataDir = path.join(outsideRoot, 'data');
     mkdirSyncRecursive(isoPlugins);
     mkdirSyncRecursive(isoProtocol);
@@ -521,9 +521,9 @@ test('payload prebuilt mermaid: unpacked plugins.tgz serves mermaid & chunks wit
     runCommand('tar', ['-xzf', path.join(stagingDir, 'plugins.tgz'), '-C', isoPlugins, '--strip-components=1'], outsideRoot, 30_000);
     runCommand('tar', ['-xzf', path.join(stagingDir, 'protocol.tgz'), '-C', isoProtocol, '--strip-components=1'], outsideRoot, 30_000);
     assert.ok(existsSync(path.join(isoPlugins, 'dist/mermaid/dist-client/manifest.json')), 'plugins.tgz must carry mermaid dist-client');
-    // Supply protocol's lightweight runtime peer/dep `ajv` only if imported; note mermaid imports only @helm/protocol (`HelmError`).
-    const ajvReal = realpathSync(path.join(repoRoot, 'packages/protocol/node_modules/ajv'));
-    cpSync(ajvReal, isoAjv, { recursive: true });
+    // Supply protocol's lightweight runtime dep `typebox` only if imported; note mermaid imports only @helm/protocol (`HelmError`).
+    const typeboxReal = realpathSync(path.join(repoRoot, 'packages/protocol/node_modules/typebox'));
+    cpSync(typeboxReal, isoTypebox, { recursive: true });
 
     const mod = (await import(pathToFileURL(path.join(isoPlugins, 'dist/mermaid.js')).href)) as {
       createMermaidPlugin: typeof createMermaidPlugin;

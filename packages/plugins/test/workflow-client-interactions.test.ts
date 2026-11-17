@@ -834,7 +834,30 @@ test('WorkflowActiveTray：展开行主显可读任务名并次显 #id，回退�
   const namedChild = { ...summary(11, 'working'), parentConversationId: 1, title: '排查构建失败', doing: 'bash: pnpm test', updatedAt: 100 }
   const plainChild = { ...summary(12, 'working'), parentConversationId: 1, title: 'subagent 12', updatedAt: 50 }
   setWorkflowClientStub({
-    docValue: { runs: [] },
+    docValue: {
+      runs: [
+        {
+          id: 'wf_tray_11',
+          kind: 'subagent',
+          name: '排查构建失败',
+          conversationId: 1,
+          status: 'running',
+          createdAt: 1,
+          updatedAt: 100,
+          nodes: [{ id: 'a11', kind: 'agent', status: 'running', conversationId: 11 }],
+        },
+        {
+          id: 'wf_tray_12',
+          kind: 'subagent',
+          name: 'subagent',
+          conversationId: 1,
+          status: 'running',
+          createdAt: 1,
+          updatedAt: 50,
+          nodes: [{ id: 'a12', kind: 'agent', status: 'running', conversationId: 12 }],
+        },
+      ],
+    },
     conversations: [namedChild, plainChild],
     conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
   })

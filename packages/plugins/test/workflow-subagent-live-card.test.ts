@@ -561,7 +561,7 @@ test('工作台独立子会话（runs 驱动）：紧凑卡无实时流，保留
   const child32 = { ...summary(32, 'working'), parentConversationId: 1, updatedAt: 9, doing: '正在跑测试' }
   const run31: WorkflowRunSummary = {
     id: 'wf_sub31',
-    name: '子会话 31',
+    name: 'subagent',
     conversationId: 1,
     kind: 'subagent',
     status: 'completed',
@@ -571,7 +571,7 @@ test('工作台独立子会话（runs 驱动）：紧凑卡无实时流，保留
   }
   const run32: WorkflowRunSummary = {
     id: 'wf_sub32',
-    name: '子会话 32',
+    name: 'subagent',
     conversationId: 1,
     kind: 'subagent',
     status: 'running',
@@ -1167,13 +1167,15 @@ test('SSR：双层胶囊卡全程无任何 Emoji 或特殊符号字符', { timeo
 
 test('SubagentLiveCard 与 ExternalRunSummary：任务名称主位展示，#id 与外部代理降级为次级标签且回退不重复 #id', { timeout: 60_000 }, () => {
   // 有任务名时：名称在前（subagent-live-title-text），#11 在后（subagent-live-id），profileId 徽章保留
-  const namedHtml = renderToString(
-    e(TestStoreProvider, { value: makeStore({ conversations: [{ ...summary(11, 'done'), title: 'subagent 11' }] }) },
-      e(SubagentLiveCard, {
-        childConversationId: 11,
-        toolStatus: 'done',
-        backgroundRun: bgRun({ name: '排查构建失败' }),
-      })),
+  const namedHtml = createWorkflowHostHarness({
+    conversationId: 1,
+    conversations: [{ ...summary(11, 'done'), title: 'subagent 11' }],
+  }).renderSsr(
+    e(SubagentLiveCard, {
+      childConversationId: 11,
+      toolStatus: 'done',
+      backgroundRun: bgRun({ name: '排查构建失败' }),
+    }),
   )
   const titlePos = namedHtml.indexOf('排查构建失败')
   const idPos = namedHtml.indexOf('subagent-live-id')
@@ -1182,21 +1184,20 @@ test('SubagentLiveCard 与 ExternalRunSummary：任务名称主位展示，#id �
   assert.ok(namedHtml.includes('>coder<'), '保留 profileId 徽章')
 
   // 无任何可读名称且会话标题为内核默认 subagent 11：回退 Subagent #11，不得重复渲染 #11
-  const fallbackHtml = renderToString(
-    e(TestStoreProvider, { value: makeStore({ conversations: [{ ...summary(11, 'done'), title: 'subagent 11' }] }) },
-      e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'done' })),
-  )
+  const fallbackHtml = createWorkflowHostHarness({
+    conversationId: 1,
+    conversations: [{ ...summary(11, 'done'), title: 'subagent 11' }],
+  }).renderSsr(e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'done' }))
   assert.ok(fallbackHtml.includes('Subagent #<!-- -->11') || fallbackHtml.includes('Subagent #11'))
   assert.ok(!fallbackHtml.includes('subagent-live-id'), '回退标题已含 #11 时不得重复渲染 .subagent-live-id')
 
   // ExternalRunSummary：非占位 run.name 主显，External agent + executionId 作次级徽章
-  const extNamed = renderToString(
-    e(TestStoreProvider, { value: makeStore({}) },
-      e(ExternalRunSummary, {
-        run: bgRun({ name: '修复外部测试', status: 'running' }),
-        toolStatus: 'running',
-        executionId: 'pane-9',
-      })),
+  const extNamed = createWorkflowHostHarness({ conversationId: 1 }).renderSsr(
+    e(ExternalRunSummary, {
+      run: bgRun({ name: '修复外部测试', status: 'running' }),
+      toolStatus: 'running',
+      executionId: 'pane-9',
+    }),
   )
   assert.ok(extNamed.includes('修复外部测试'))
   assert.ok(extNamed.includes('External agent'))

@@ -68,7 +68,7 @@ function subagentRun(
   return run({
     id,
     kind: 'subagent',
-    name: `subagent-${childConversationId}`,
+    name: 'subagent',
     conversationId: parentConversationId,
     status,
     nodes: [
@@ -1071,7 +1071,12 @@ test('紧凑子项：无自定义标题时回退 Subagent #N 且不重复渲染 
   const child11 = summary(11, 'working', 1, { doing: '父任务', updatedAt: 100 })
   const child22 = summary(22, 'done', 11, { title: 'subagent 22', updatedAt: 50 })
   setWorkflowClientStub({
-    docValue: { runs: [] },
+    docValue: {
+      runs: [
+        subagentRun('wf_11', 1, 11, 'running'),
+        subagentRun('wf_22', 11, 22, 'completed'),
+      ],
+    },
     conversations: [child11, child22],
     conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
   })

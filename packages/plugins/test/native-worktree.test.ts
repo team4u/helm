@@ -29,7 +29,7 @@ import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/provid
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { MemoryStorage } from '@earendil-works/pi-durable/storage/memory'
-import { HelmError, type AgentExecutionInfo } from '@helm/protocol'
+import { HelmError, type AgentExecutionInfo, type AgentSpawnRequest } from '@helm/protocol'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -40,13 +40,14 @@ import { createEnvFabric } from '../../kernel/src/env/fabric.js'
 import { runNativeSpawn, type NativeSpawnDeps } from '../../kernel/src/runtime/spawn.js'
 import { WorktreeAllocator, type ManagedWorktreeRecord } from '../src/workflow/worktree.js'
 import { extractWorkflowExecutionMeta } from '../src/contracts.js'
-import { WorktreeIsolation } from '../src/workflow/isolation.js'
+import { WorktreeIsolation, type WorktreeIsolationDeps } from '../src/workflow/isolation.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { ArtifactService, SecretStash } from '../../kernel/src/services/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import {
+  assertNoUnhandledRejection,
   createGitTemplate,
   makeConversationSummary,
   makeFauxModels,
@@ -2513,5 +2514,267 @@ describe('allocate 批量 Git 预检与非常规布局诚实拒绝', { timeout: 
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// WorktreeIsolation 并发租约与外部运行时元数据边界回归（确定性 fake 端口）
+// ---------------------------------------------------------------------------
+
+interface FakeIsolationOptions {
+  gatedExistsPath?: string
+  existsValue?: boolean
+  failFlushFirst?: number
+}
+
+interface FakeIsolationHandle {
+  isolation: WorktreeIsolation
+  docStore: WorktreeIsolationDeps['docStore']
+  probeEntered: Promise<void>
+  releaseProbe(): void
+  execCalls: Array<{ command: string | string[]; cwd?: string }>
+}
+
+function makeFakeIsolation(options: FakeIsolationOptions = {}): FakeIsolationHandle {
+  const docs = new Map<string, unknown>()
+  let flushes = 0
+  const docStore: WorktreeIsolationDeps['docStore'] = {
+    get<T>(key: string, initial: T): T {
+      return (docs.get(key) as T | undefined) ?? initial
+    },
+    set<T>(key: string, value: T): void {
+      docs.set(key, value)
+    },
+    async flush() {
+      flushes++
+      if (options.failFlushFirst !== undefined && flushes <= options.failFlushFirst) {
+        throw new Error('simulated doc flush failure')
+      }
+    },
+  }
+  let releaseProbe: () => void = () => {}
+  let probeEnteredNotify: () => void = () => {}
+  const probeEntered = new Promise<void>((resolve) => {
+    probeEnteredNotify = resolve
+  })
+  const gatedPath = options.gatedExistsPath
+  let gateConsumed = false
+  const execCalls: FakeIsolationHandle['execCalls'] = []
+  return {
+    docStore,
+    probeEntered,
+    releaseProbe: () => releaseProbe(),
+    execCalls,
+    isolation: new WorktreeIsolation({
+      host: {
+        resolveSpawnTarget: async (input) => ({
+          nodeId: 'local',
+          sourceCwd: input.requestCwd ?? '/repo',
+          parentCwd: '/repo',
+        }),
+        execEnv: async (req) => {
+          execCalls.push({ command: req.command, cwd: req.cwd })
+          return { ok: true, exitCode: 0, output: 'true\n', timedOut: false }
+        },
+        executionEnv: ((_nodeId: string, _cwd: string) =>
+          ({
+            exists: async (path: string) => {
+              if (gatedPath !== undefined && path === gatedPath && !gateConsumed) {
+                gateConsumed = true
+                probeEnteredNotify()
+                await new Promise<void>((resolve) => {
+                  releaseProbe = resolve
+                })
+              }
+              return { ok: true, value: options.existsValue ?? true } as const
+            },
+            canonicalPath: async (path: string) => ({ ok: true, value: path } as const),
+          }) as never) as WorktreeIsolationDeps['host']['executionEnv'],
+        listActiveSpawnExecutions: () => [],
+        redact: (text) => text,
+        inspectNodePathUsage: async (input: { nodeId: string; path: string }) => ({
+          path: input.path,
+          processes: [],
+          matchedTotal: 0,
+          processesTruncated: false,
+          complete: true,
+          unobservable: 0,
+          diagnostics: [],
+        }),
+        getConversation: () => ({ cwd: gatedPath ?? '/repo', nodeId: 'local', status: 'idle' }),
+      },
+      docStore,
+    }),
+  }
+}
+
+function leaseCount(docStore: WorktreeIsolationDeps['docStore']): number {
+  return Object.keys(docStore.get<Record<string, unknown>>('worktree-leases', {})).length
+}
+
+describe('WorktreeIsolation：外部运行时租约与并发窗口保护', { timeout: 60_000 }, () => {
+  it('外部运行时租约首写 flush 失败：显式诊断、无 unhandledRejection；结算写重试后租约释放', { timeout: 60_000 }, async () => {
+    const stderrLines: string[] = []
+    const originalWrite = process.stderr.write.bind(process.stderr)
+    process.stderr.write = ((chunk: unknown, ...rest: unknown[]) => {
+      stderrLines.push(String(chunk))
+      return (originalWrite as (c: unknown, ...r: unknown[]) => boolean)(chunk, ...rest)
+    }) as typeof process.stderr.write
+    try {
+      const handle = makeFakeIsolation({ failFlushFirst: 1 })
+      await assertNoUnhandledRejection(async () => {
+        let resolved: AgentExecutionInfo | undefined
+        const result = await handle.isolation.aroundSpawn(
+          {
+            parentConversationId: 1,
+            prompt: '外部任务',
+            agentType: 'ext:demo',
+            isolation: 'worktree',
+            onResolved: (info: AgentExecutionInfo) => {
+              resolved = info
+            },
+          } as never,
+          async (final) => {
+            ;(final as AgentSpawnRequest).onResolved?.({
+              nodeId: 'local',
+              meta: { 'builtin:workflow': { worktree: { path: '/wt/ext-1', branch: 'helm/spawn-ext1' } } },
+              conversationId: 7,
+              executionId: 'exec-1',
+            })
+            return 'ext-done'
+          },
+        )
+        assert.equal(result, 'ext-done')
+        assert.ok(
+          resolved !== undefined && extractWorkflowExecutionMeta(resolved).worktree?.id,
+          'enriched worktree 元数据应回传调用方',
+        )
+        assert.equal(leaseCount(handle.docStore), 0, '结算后租约必须释放（settle 写重试整页落盘）')
+      })
+      assert.ok(
+        stderrLines.some((line) => line.includes('租约') && line.includes('落盘失败')),
+        `flush 失败必须 stderr 显式诊断（实际 ${JSON.stringify(stderrLines)}）`,
+      )
+    } finally {
+      process.stderr.write = originalWrite
+    }
+  })
+
+  it('外部运行时 execution meta 合并往返：worktree 增强不丢 other-plugin 命名空间与 controls；租约存 enriched 合并结果', { timeout: 60_000 }, async () => {
+    const handle = makeFakeIsolation()
+    let resolved: AgentExecutionInfo | undefined
+    let midflightLeaseInfo: AgentExecutionInfo | undefined
+    const result = await handle.isolation.aroundSpawn(
+      {
+        parentConversationId: 1,
+        prompt: '外部任务',
+        agentType: 'ext:demo',
+        isolation: 'worktree',
+        onResolved: (info: AgentExecutionInfo) => {
+          resolved = info
+        },
+      } as never,
+      async (final) => {
+        ;(final as AgentSpawnRequest).onResolved?.({
+          nodeId: 'local',
+          conversationId: 7,
+          executionId: 'exec-ns-1',
+          meta: {
+            'builtin:workflow': {
+              worktree: { path: '/wt/ext-ns', branch: 'helm/spawn-extns' },
+              controls: { steer: { pluginId: 'ext:demo', actionId: 'steer' } },
+            },
+            'other-plugin': { keep: ['ns', { roundtrip: true }] },
+          },
+        })
+        const leases = handle.docStore.get<Record<string, { info?: AgentExecutionInfo }>>('worktree-leases', {})
+        midflightLeaseInfo = Object.values(leases)[0]?.info
+        return 'ext-done'
+      },
+    )
+    assert.equal(result, 'ext-done')
+    assert.ok(resolved !== undefined, 'onResolved 应回传 enriched 信息')
+    const wfMeta = extractWorkflowExecutionMeta(resolved)
+    assert.equal(wfMeta.worktree?.id, 'local:/wt/ext-ns', 'worktree 应被统一登记并回填稳定 id')
+    assert.deepEqual(
+      wfMeta.controls,
+      { steer: { pluginId: 'ext:demo', actionId: 'steer' } },
+      'worktree 增强不得丢失同命名空间的 controls（steer 委托引用）',
+    )
+    assert.deepEqual(
+      resolved.meta?.['other-plugin'],
+      { keep: ['ns', { roundtrip: true }] },
+      '其他插件的命名空间必须原样保留（合并而非覆盖）',
+    )
+    assert.ok(midflightLeaseInfo !== undefined, '执行期间应有租约记录')
+    const leaseWf = extractWorkflowExecutionMeta(midflightLeaseInfo)
+    assert.equal(leaseWf.worktree?.id, 'local:/wt/ext-ns')
+    assert.deepEqual(midflightLeaseInfo.meta?.['other-plugin'], { keep: ['ns', { roundtrip: true }] })
+    assert.equal(leaseCount(handle.docStore), 0)
+  })
+
+  it('resumeWithWorktree 租约前置：远端验证窗口内并发 cleanup 被租约 fail-closed 拒绝；resume 正常续接', { timeout: 60_000 }, async () => {
+    const wtPath = '/wt/resume-race'
+    const handle = makeFakeIsolation({ gatedExistsPath: wtPath })
+    const worktreeId = handle.isolation.allocator.registerExternal({
+      nodeId: 'local',
+      path: wtPath,
+      branch: 'helm/spawn-resume1',
+      parentConversationId: 1,
+      conversationId: 42,
+    }).id
+
+    const nextCwds: Array<string | undefined> = []
+    const resumePromise = handle.isolation.aroundSpawn(
+      { parentConversationId: 1, prompt: '续接', resume: '42', onResolved: () => {} } as never,
+      async (final) => {
+        nextCwds.push((final as AgentSpawnRequest).cwd)
+        return 'resumed'
+      },
+    )
+    await handle.probeEntered
+
+    await assert.rejects(
+      () => handle.isolation.cleanup({ worktreeId }),
+      (err: unknown) => {
+        assert.ok(err instanceof HelmError)
+        assert.ok(
+          err.code === 'worktree_execution_unknown' || err.code === 'worktree_in_use',
+          `cleanup 应被租约拒绝（实际 ${err.code}）`,
+        )
+        return true
+      },
+    )
+
+    handle.releaseProbe()
+    assert.equal(await resumePromise, 'resumed')
+    assert.deepEqual(nextCwds, [wtPath], 'resume 必须沿用原 worktree cwd')
+    assert.equal(leaseCount(handle.docStore), 0, '结算后租约释放，不留永久占位')
+    assert.equal(handle.isolation.allocator.findActive({ worktreeId })?.path, wtPath)
+  })
+
+  it('resumeWithWorktree 租约前置：验证失败（目录已消失）释放占位租约，不留永久占位', { timeout: 60_000 }, async () => {
+    const handle = makeFakeIsolation({ existsValue: false })
+    handle.isolation.allocator.registerExternal({
+      nodeId: 'local',
+      path: '/wt/resume-race',
+      branch: 'helm/spawn-resume1',
+      parentConversationId: 1,
+      conversationId: 42,
+    })
+
+    await assert.rejects(
+      () =>
+        handle.isolation.aroundSpawn(
+          { parentConversationId: 1, prompt: '续接', resume: '42', onResolved: () => {} } as never,
+          async () => 'unreachable',
+        ),
+      (err: unknown) => {
+        assert.ok(err instanceof HelmError)
+        assert.equal(err.code, 'worktree_missing')
+        return true
+      },
+    )
+    assert.equal(leaseCount(handle.docStore), 0, 'neverStarted 路径必须释放占位租约')
   })
 })
