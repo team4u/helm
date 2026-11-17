@@ -1,12 +1,12 @@
 /**
- * Hub local machine execute environment wrap (LocalHostExecutionEnv):
+ * Hub local execution environment wrapper (`LocalHostExecutionEnv`):
  *
- * re- use pi-durable `NodeExecutionEnv` file I/O, process tree kill group, streaming incremental decode and
- * overflow write logic (keep `id === 'node:local'`, and `file-env.ts` file mutual exclusion queue same source),
- * also command execute before Shell probe delegate to `@helm/env-io`  `resolveHostShellConfig`:
- * - patch complete Winget / Scoop / non- mark symbol Git Bash probe;
- * - skip System32 / Sysnative / WindowsApps etc. WSL start, never let Windows
- *   host machine implicit across enter WSL; without available original generate bash when explicit return `shell_unavailable`.
+ * Reuses pi-durable `NodeExecutionEnv` for file I/O, process-tree termination, incremental streaming
+ * decoding, and spill-to-disk logic (preserving `id === 'node:local'` so it shares the file mutation queue
+ * with `file-env.ts`), while delegating pre-command shell resolution to `resolveHostShellConfig` in `@helm/env-io`:
+ * - discovers Winget / Scoop / non-standard Git Bash installs;
+ * - skips System32 / Sysnative / WindowsApps WSL launchers so Windows hosts never silently enter WSL;
+ *   returns explicit `shell_unavailable` if no native bash is available.
  */
 import type { Context } from '@earendil-works/chord/context'
 import {
@@ -25,7 +25,7 @@ export interface LocalHostExecutionEnvOptions {
   shellPath?: string
   shellEnv?: NodeJS.ProcessEnv
   watch?: NodeWatchOptions
-  /** test inject opening: override host machine Shell probe I/O(produce do not pass). */
+  /** Test injection hook: override host shell probe I/O (never passed in production). */
   shellProbeIo?: ShellProbeIo
 }
 
@@ -54,12 +54,12 @@ export class LocalHostExecutionEnv extends NodeExecutionEnv implements Execution
     options: ShellExecOptions | undefined,
     context: Context,
   ): Promise<Result<ShellExecResult, ExecutionError>> {
-    // argv array directly execute program, do not via shell parse.
+    // argv array executes the binary directly without shell resolution.
     if (typeof command !== 'string') {
       return super.exec(command, options, context)
     }
     const platform = this.#shellProbeIo?.platform ?? process.platform
-    // POSIX host machine without self define shellPath / inject probe when and SDK original generate behavior fully consistent, zero extra probe overhead.
+    // On POSIX hosts without a custom shellPath or injected probe, behavior matches SDK defaults with zero extra probing.
     if (platform !== 'win32' && this.#explicitShellPath === undefined && this.#shellProbeIo === undefined) {
       return super.exec(command, options, context)
     }

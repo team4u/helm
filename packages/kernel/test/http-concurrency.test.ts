@@ -1,13 +1,15 @@
 /**
- * HTTP layer concurrency defect regression (fix/concurrency-http):
- * - plugin motion state routing dispatch gate:handler execute count liveTasks(disable gate visible,
- *   409 plugin_has_live_tasks while non- half execute); deactivate after dispatch by refuse (404/409);
- * - NDJSON forwarding monitor stream: entry aborted preflight (disconnected do not create stream, do not take lease),
- *   abort/cancel after finish idempotent (late to listener call back does not repeat release);
- * - Profile delete TOCTOU: service layer delete before bind set re-check (routing fast path and
- *   delete between hand over wrong window closed together);
- * - artifact upload TOCTOU:writeUploaded before conversation store in re-check (entry validate and write
- *   between hand over wrong window closed together, do not artifacts/<already delete conversation>/ orphan child directory).
+ * Regressions for HTTP layer concurrency bugs (fix/concurrency-http):
+ * - Plugin dynamic route dispatch guard: handler execution counts toward liveTasks (visible to
+ *   disable gate, returning 409 plugin_has_live_tasks rather than tearing down mid-execution);
+ *   post-disable dispatch rejects (404/409);
+ * - NDJSON forwarding monitor stream: aborted preflight at entry (never opens stream or acquires
+ *   lease if client already disconnected), idempotent cleanup on abort/cancel (late listener
+ *   callbacks never double-release);
+ * - Profile deletion TOCTOU: service layer re-checks bindings before deletion (closing the race
+ *   window between fast route check and delete);
+ * - Artifact upload TOCTOU: writeUploaded re-checks conversation existence before writing (closing the
+ *   race window between entry validation and write without leaving orphan artifacts/<deletedId>/ dirs).
  */
 import assert from 'node:assert/strict'
 import { test, before, after } from 'node:test'
@@ -37,10 +39,10 @@ after(async () => {
 })
 
 // ---------------------------------------------------------------------------
-// 1. plugin motion state routing dispatch gate
+// 1. Plugin dynamic route dispatch guard
 // ---------------------------------------------------------------------------
 
-test('plugin routing handler execute count liveTasks: in-flight when disable 409 plugin_has_live_tasks', { timeout: 60_000 }, async () => {
+test('plugin route handler execution counts as liveTasks: disabling mid-flight returns 409 plugin_has_live_tasks', { timeout: 60_000 }, async () => {
   let releaseHandler: (() => void) | undefined
   await host.register(
     {
@@ -65,18 +67,18 @@ test('plugin routing handler execute count liveTasks: in-flight when disable 409
     kernel,
   )
   await delay(30)
-  // in-flight route request for deactivate gate visible (this before fully lose).
-  assert.equal(host.activeTaskCount('builtin:probe-route'), 1, 'handler execute during count liveTasks')
+  // In-flight route request must be visible to the disable gate (previously missed completely).
+  assert.equal(host.activeTaskCount('builtin:probe-route'), 1, 'liveTasks increments during handler execution')
   await assert.rejects(
     host.disable('builtin:probe-route'),
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_has_live_tasks' && err.status === 409,
-    'deactivate gate should see see in-flight route request and 409, while non- half execute split destroy',
+    'disable gate must observe the in-flight route request and fail 409 rather than tearing down mid-execution',
   )
   releaseHandler!()
   const response = await pending
   assert.equal(response.status, 200)
-  assert.equal(host.activeTaskCount('builtin:probe-route'), 0, 'handler after completion counter reset to zero')
-  // deactivate after success: routing manifest already empty, dispatch 404(do not dispatch to already split destroy plugin).
+  assert.equal(host.activeTaskCount('builtin:probe-route'), 0, 'counter drops to zero after handler finishes')
+  // Once disabled succeeds: route table is empty and dispatch returns 404 (never invokes torn-down plugin).
   await host.disable('builtin:probe-route')
   const rejected = await handleApi(
     new Request('http://hub/api/plugins/builtin:probe-route/routes/slow'),
@@ -87,9 +89,10 @@ test('plugin routing handler execute count liveTasks: in-flight when disable 409
   assert.equal(body.error?.code, 'route_not_found')
 })
 
-test('dispatch before summary re- inspect:listRoutes snapshot contains deactivated plugin when by get summary 409 reject', { timeout: 60_000 }, async () => {
-  // construct listRoutes snapshot and plugin now state hand over wrong host: manifest still return routing (enabled snapshot
-  // stale), summary now read is deactivated - - dispatch must 409 plugin_disabled, does not enter handler.
+test('pre-dispatch summary re-check: rejects 409 when listRoutes snapshot includes a disabled plugin', { timeout: 60_000 }, async () => {
+  // Simulates race between listRoutes snapshot and plugin's current state: manifest still returns route
+  // (stale enabled snapshot), while summary now reports disabled -> dispatch must reject 409 plugin_disabled
+  // without entering handler.
   let handlerCalled = false
   const summary: PluginSummary = {
     id: 'stale-plugin',
@@ -120,12 +123,12 @@ test('dispatch before summary re- inspect:listRoutes snapshot contains deactivat
   await assert.rejects(
     handleApi(new Request('http://hub/api/plugins/stale-plugin/routes/thing'), kernel),
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_disabled' && err.status === 409,
-    'deactivated plugin routing dispatch should 409 reject',
+    'dispatching to disabled plugin route must reject with 409',
   )
-  assert.equal(handlerCalled, false, 'handler must not execute (half execute)')
+  assert.equal(handlerCalled, false, 'handler must not execute mid-teardown')
 })
 
-test('light amount test host not provide get/withTask when dispatch behavior do not change (optional port)', { timeout: 60_000 }, async () => {
+test('lightweight test host omitting get/withTask preserves dispatch behavior (optional port)', { timeout: 60_000 }, async () => {
   const kernel = {
     plugins: {
       listRoutes: () => [
@@ -144,7 +147,7 @@ test('light amount test host not provide get/withTask when dispatch behavior do 
 })
 
 // ---------------------------------------------------------------------------
-// 2. NDJSON forwarding monitor stream:aborted preflight and finish idempotent
+// 2. NDJSON forwarding monitor stream: aborted preflight and finish idempotency
 // ---------------------------------------------------------------------------
 
 interface ForwardFixture {
@@ -189,10 +192,10 @@ function forwardKernel(over: ForwardFixture): KernelRuntimeLike {
 
 const FORWARD_EVENTS_PATH = '/api/nodes/forward/fwd-11111111-2222-3333-4444-555555555555/events'
 
-test('monitor stream entry aborted preflight: client already in authentication during disconnect then do not create stream, do not take lease', { timeout: 60_000 }, async () => {
+test('monitor stream entry aborted preflight: skips stream and lease if client disconnected during auth', { timeout: 60_000 }, async () => {
   const over: ForwardFixture = { sessions: new Map(), events: [], lease: { acquisitions: 0, releases: 0 } }
   const kernel = forwardKernel(over)
-  // simulated hub authentication await during res close already abort signal(AbortSignal.abort i.e. already terminal state).
+  // Simulates res close aborting signal during await on hub auth (AbortSignal.abort() is pre-aborted).
   const response = await handleApi(
     new Request(`http://hub${FORWARD_EVENTS_PATH}`, { signal: AbortSignal.abort() }),
     kernel,
@@ -200,11 +203,11 @@ test('monitor stream entry aborted preflight: client already in authentication d
   assert.equal(response.status, 409)
   const body = (await response.json()) as { error?: { code?: string } }
   assert.equal(body.error?.code, 'client_disconnected')
-  assert.equal(over.lease.acquisitions, 0, 'do not establish stream i.e. do not take lease (for already aborted  signal register listen forever does not trigger)')
+  assert.equal(over.lease.acquisitions, 0, 'never acquires lease without opening stream (listener on pre-aborted signal never fires)')
   assert.equal(over.lease.releases, 0)
 })
 
-test('monitor stream abort disconnect release lease once; late to listener call back does not repeat release', { timeout: 60_000 }, async () => {
+test('monitor stream abort releases lease once; late listener callbacks do not double-release', { timeout: 60_000 }, async () => {
   const over: ForwardFixture = { sessions: new Map(), events: [], lease: { acquisitions: 0, releases: 0 } }
   const kernel = forwardKernel(over)
   const controller = new AbortController()
@@ -222,15 +225,15 @@ test('monitor stream abort disconnect release lease once; late to listener call 
   assert.equal(over.lease.releases, 0)
   controller.abort()
   await delay(20)
-  assert.equal(over.lease.releases, 1, 'disconnect i.e. release (finally holder leave i.e. stop)')
-  // simulated late to event delivery (real host already unsubscribe; this where verify finished guard idempotent):
-  // do not crash, do not second release, does not resurrect stream.
+  assert.equal(over.lease.releases, 1, 'disconnection immediately releases lease (last holder leaving stops session)')
+  // Simulate late event delivery (real host already unsubscribed; verifies finished guard idempotency):
+  // does not crash, double-release, or resurrect stream.
   over.events[0]!({ type: 'stopped' })
   await delay(20)
-  assert.equal(over.lease.releases, 1, 'finish idempotent: late to call back must not duplicate release')
+  assert.equal(over.lease.releases, 1, 'finish idempotency: late callback must not double-release')
 })
 
-test('monitor stream client actively cancel same release lease (finish idempotent)', { timeout: 60_000 }, async () => {
+test('monitor stream explicit client cancel also releases lease idempotently', { timeout: 60_000 }, async () => {
   const over: ForwardFixture = { sessions: new Map(), events: [], lease: { acquisitions: 0, releases: 0 } }
   const kernel = forwardKernel(over)
   const controller = new AbortController()
@@ -244,25 +247,25 @@ test('monitor stream client actively cancel same release lease (finish idempoten
   await reader.cancel()
   await delay(20)
   assert.equal(over.lease.acquisitions, 1)
-  assert.equal(over.lease.releases, 1, 'cancel path same release lease')
+  assert.equal(over.lease.releases, 1, 'cancel path releases lease identically')
 })
 
 // ---------------------------------------------------------------------------
-// 3. Profile delete TOCTOU: service layer before bind set re-check
+// 3. Profile deletion TOCTOU: service layer re-checks bindings first
 // ---------------------------------------------------------------------------
 
-test('ProfileService.delete service layer re-check:isProfileInUse is true when 409 and directory do not delete', { timeout: 60_000 }, async () => {
+test('ProfileService.delete service re-check: returns 409 and preserves directory when isProfileInUse is true', { timeout: 60_000 }, async () => {
   const dir = await makeTempDir('helm-profile-del-')
   try {
     const profiles = new ProfileService(dir)
-    await profiles.save({ id: 'bound-profile', name: 'bind set in' })
+    await profiles.save({ id: 'bound-profile', name: 'bound' })
     await writeFile(join(dir, 'profiles', 'bound-profile', 'SYSTEM.md'), '# sys')
     await assert.rejects(
       profiles.delete('bound-profile', { isProfileInUse: async () => true }),
       (err: unknown) => err instanceof HelmError && err.code === 'profile_in_use' && err.status === 409,
     )
-    assert.notEqual(await profiles.get('bound-profile'), undefined, 'reject delete when profile complete keep')
-    // re-check is false: normal delete.
+    assert.notEqual(await profiles.get('bound-profile'), undefined, 'profile stays intact when deletion is rejected')
+    // Re-check false: deletion proceeds.
     await profiles.delete('bound-profile', { isProfileInUse: async () => false })
     assert.equal(await profiles.get('bound-profile'), undefined)
   } finally {
@@ -270,14 +273,14 @@ test('ProfileService.delete service layer re-check:isProfileInUse is true when 4
   }
 })
 
-test('DELETE /api/profiles/:id TOCTOU: fast path via after concurrency bind set in service layer re-check where by refuse', { timeout: 60_000 }, async () => {
+test('DELETE /api/profiles/:id TOCTOU: concurrent binding after fast path is caught by service re-check', { timeout: 60_000 }, async () => {
   const dir = await makeTempDir('helm-profile-tou-')
   try {
     const profiles = new ProfileService(dir)
     await profiles.save({ id: 'race-profile', name: 'race' })
     const bound = { ...summaryOf(7), profileId: 'race-profile' }
-    // first time listConversations(routing fast path) return empty; second time (service layer before
-    // re-check) return bind set conversation - - simulated check via → concurrency POST bind set → delete.
+    // First listConversations (route fast path) returns empty; second (service re-check) returns bound
+    // conversation -- simulates check-passed -> concurrent POST binding -> delete race.
     let listCalls = 0
     const kernel = {
       dataDir: dir,
@@ -291,20 +294,20 @@ test('DELETE /api/profiles/:id TOCTOU: fast path via after concurrency bind set 
     await assert.rejects(
       handleApi(new Request('http://hub/api/profiles/race-profile', { method: 'DELETE' }), kernel),
       (err: unknown) => err instanceof HelmError && err.code === 'profile_in_use' && err.status === 409,
-      'service layer re-check should intercept window inside through bind set',
+      'service layer re-check must catch bindings added during the race window',
     )
     assert.equal(listCalls, 2, 'fast path and service layer re-check each inspect once')
-    assert.notEqual(await profiles.get('race-profile'), undefined, 'profile not by delete')
+    assert.notEqual(await profiles.get('race-profile'), undefined, 'profile was not deleted')
   } finally {
     await cleanupDir(dir)
   }
 })
 
 // ---------------------------------------------------------------------------
-// 4. artifact upload TOCTOU:writeUploaded before conversation store in re-check
+// 4. Artifact upload TOCTOU: re-check conversation existence before writeUploaded
 // ---------------------------------------------------------------------------
 
-test('writeUploaded service layer re-check: conversation missing when 404 and do not orphan child directory', { timeout: 60_000 }, async () => {
+test('writeUploaded service re-check: returns 404 without orphan dir when conversation is missing', { timeout: 60_000 }, async () => {
   const dir = await makeTempDir('helm-artifact-del-')
   try {
     const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository())
@@ -319,9 +322,9 @@ test('writeUploaded service layer re-check: conversation missing when 404 and do
     await assert.rejects(
       () => stat(join(dir, 'artifacts', '99')),
       (err: unknown) => (err as NodeJS.ErrnoException).code === 'ENOENT',
-      'already delete conversation artifact directory must not by rebuild (orphan child)',
+      'deleted conversation artifact directory must not be recreated as an orphan',
     )
-    // re-check is true: normal.
+    // Re-check true: succeeds normally.
     const meta = await artifacts.writeUploaded(
       99,
       { name: 'ok.bin', bytes: new Uint8Array([4, 5]) },
@@ -334,12 +337,12 @@ test('writeUploaded service layer re-check: conversation missing when 404 and do
   }
 })
 
-test('POST /api/conversations/:id/artifacts TOCTOU: entry validate via after conversation by delete, write before re-check 404', { timeout: 60_000 }, async () => {
+test('POST /api/conversations/:id/artifacts TOCTOU: conversation deleted after entry check is rejected 404 pre-write', { timeout: 60_000 }, async () => {
   const dir = await makeTempDir('helm-artifact-tou-')
   try {
     const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository())
-    // first time getConversationDetail(entry fast path) succeeded; second time (service layer before
-    // re-check)not_found- - simulated validate via → DELETE complete → upload hand over wrong.
+    // First getConversationDetail (route fast path) succeeds; second (service re-check) throws not_found --
+    // simulates entry-validated -> DELETE completes -> upload write race.
     let detailCalls = 0
     const kernel = {
       dataDir: dir,
@@ -348,10 +351,10 @@ test('POST /api/conversations/:id/artifacts TOCTOU: entry validate via after con
       getConversationDetail: async (id: number) => {
         detailCalls += 1
         if (detailCalls === 1) return { ...summaryOf(id), entries: [] }
-        throw new HelmError('not_found', `conversation missing: ${id}`, 404)
+        throw new HelmError('not_found', `conversation not found: ${id}`, 404)
       },
       getConversationEntry: async (id: number, entryId: number) => {
-        throw new HelmError('not_found', `item ${entryId} in conversation ${id} in missing`, 404)
+        throw new HelmError('not_found', `entry ${entryId} not found in conversation ${id}`, 404)
       },
     } as unknown as KernelRuntimeLike
     await assert.rejects(
@@ -364,13 +367,13 @@ test('POST /api/conversations/:id/artifacts TOCTOU: entry validate via after con
         kernel,
       ),
       (err: unknown) => err instanceof HelmError && err.code === 'not_found' && err.status === 404,
-      'write before re-check should intercept already delete conversation upload',
+      'pre-write re-check must block uploads for concurrently deleted conversations',
     )
-    assert.equal(detailCalls, 2, 'entry validate and service layer re-check each inspect once')
+    assert.equal(detailCalls, 2, 'entry validation and service layer re-check each inspect once')
     await assert.rejects(
       () => stat(join(dir, 'artifacts', '5')),
       (err: unknown) => (err as NodeJS.ErrnoException).code === 'ENOENT',
-      'do not artifacts/<already delete conversation>/ orphan child directory',
+      'must not leave orphan artifacts/<deletedId>/ directories',
     )
   } finally {
     await cleanupDir(dir)

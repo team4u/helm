@@ -1,27 +1,27 @@
 /**
- * in-memory SecretStash: secret only store in process memory, never, never enter model context.
- * model and durable layer only see to `[REDACTED:stash:<uuid>]` placeholder.
+ * In-memory SecretStash: secrets live only in process memory and are never persisted to disk or injected into model context.
+ * The model and durability layers only ever see `[REDACTED:stash:<uuid>]` placeholders.
  *
- * lifecycle (stop inject != stop redaction):
- * - put optional SecretLifetime:ttlMs expires or scope 'turn' turn compute after, secret from
- *   active env bucket(envFor/has) remove, but byUuid forever long keep old value used to all output
- *   redaction (contains across chunk streaming); same name override old value same continue redaction; only clear(conversationId)
- *   (conversation delete/all clean) only then reclaim;
- * - TTL lazy decide:put when compute expiresAt, read path (envFor/has/stats) for table clock,
- *   do not set extra timer;clock can inject (test use fake clock);
- * - turn effect domain by out generate compute order precise ownership:put record when when completed turn compute count,
- *   settleTurn first push enter counter again clear out generate order less than new counter secret - -run store continue phase register
- *   belong this turn, compute after register (async approval persisted/late hook) belong under one turn, never mistakenly scan;
- * idle do not clean scan (without timer);
- * - honest boundary:TTL/turn end cannot from already start child process withdraw back already inject environment variable,
- *   only guarantee after continue spawn no longer inject.
+ * Lifecycle (stopping injection != stopping redaction):
+ * - put supports optional SecretLifetime: once ttlMs expires or a scope 'turn' turn settles, the secret is removed from the
+ *   active env bucket (envFor/has), while byUuid permanently retains the old value to keep redacting all outputs
+ *   (including streaming across chunks); overwriting the same name likewise keeps redacting the previous value; only clear(conversationId)
+ *   (conversation deletion or full reset) reclaims them.
+ * - Lazy TTL evaluation: expiresAt is computed on put and checked against clock on read paths (envFor/has/stats),
+ *   with no extra timers; clock is injectable (fake clocks in tests).
+ * - turn scope attribution by creation settle sequence: put records the number of settled turns at that moment,
+ *   and settleTurn advances the counter before clearing secrets created before the new counter—secrets registered during
+ *   the active run belong to the current turn, while those registered after settlement (async approvals / late hooks) belong to the next turn and are never prematurely swept;
+ *   idle never sweeps (no timers).
+ * - Honest boundary: TTL / turn end cannot revoke environment variables already injected into already-started child processes;
+ *   it only guarantees subsequent spawns will no longer inject them.
  *
- * addRedaction register global one by one value redaction (such as kernel managed HELM_TOKEN): non- environment variable,
- * do not count stats, do not follow clear(conversationId) clear; multiple register can stack put the same value,
- * all solve except after only then stop redaction;clear() all clean when one and remove.
+ * addRedaction registers global value-based redaction (e.g. kernel-managed HELM_TOKEN): not an env var,
+ * excluded from stats, and not cleared by clear(conversationId); multiple registrations for the same value stack
+ * and redaction stops only once all handles are disposed; clear() removes everything including global redactions.
  *
- * honest boundary (such as declaration):stash cannot guard against defend same process inside shell command and plugin code
- * read environment variable or process memory - - that is can message code solid has permission, this module does not promise zero leak leak.
+ * Honest boundary (explicitly stated): stash cannot prevent shell commands or in-process plugin code from reading
+ * process environment variables or memory—that is an inherent privilege of trusted code, and this module does not promise zero leakage.
  */
 import { randomUUID } from 'node:crypto'
 import { HelmError, type SecretLifetime } from '@helm/protocol'
@@ -29,7 +29,7 @@ import { HelmError, type SecretLifetime } from '@helm/protocol'
 export const REDACTED_PREFIX = '[REDACTED:stash:'
 export const REDACTED_MARKER = '[REDACTED]'
 
-/** TTL cap:24 small when (security cap, guard against manually slide config into forever however phase amount level). */
+/** TTL cap: 24 hours (safety upper bound to prevent accidental near-permanent TTL values). */
 export const MAX_SECRET_TTL_MS = 24 * 60 * 60 * 1000
 
 export interface StashedSecret {
@@ -38,33 +38,33 @@ export interface StashedSecret {
   readonly placeholder: string
   readonly value: string
   readonly name: string
-  /** TTL expires moment (epoch ms;put when by inject clock compute out, read path lazy decide). */
+  /** TTL expiration timestamp (epoch ms; computed on put using the injected clock and checked lazily on read paths). */
   readonly expiresAt?: number
-  /** scope 'turn' out generate compute order (when when completed turn compute count;undefined = conversation level). */
+  /** Creation settle sequence for scope 'turn' (settled turns completed when created; undefined = conversation-scoped). */
   readonly bornSettlement?: number
 }
 
-/** legal environment variable name: character parent or underscore open head, only character parent number underscore, non-empty and do not too long. */
+/** Valid environment variable name: starts with an ASCII letter or underscore, contains only alphanumerics and underscores, non-empty and bounded in length. */
 export function isValidEnvName(name: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(name)
 }
 
 /**
- * SecretLifetime boundary validate (AskDoc spec and stash.put shared use):
- * flat side object, only allows ttlMs/scope two key (piece together write wrong leak must explicit reject while non- static default without TTL),
- * ttlMs is finite correct safe integer and do not over cap,scope only two kinds of enumeration.
+ * SecretLifetime boundary validation (shared by AskDoc spec and stash.put):
+ * plain object allowing only ttlMs/scope keys (typos must be rejected explicitly rather than silently dropping TTL),
+ * ttlMs must be a finite positive safe integer within the cap, and scope only allows the two enum values.
  */
 export function validateSecretLifetime(lifetime: SecretLifetime, context: string): SecretLifetime {
   if (
     lifetime === null || typeof lifetime !== 'object' || Array.isArray(lifetime) ||
     (Object.getPrototypeOf(lifetime) !== Object.prototype && Object.getPrototypeOf(lifetime) !== null)
   ) {
-    throw new HelmError('validation_error', `${context} must be an object (receives ${typeof lifetime})`, 400)
+    throw new HelmError('validation_error', `${context} must be an object (received ${typeof lifetime})`, 400)
   }
   const keys = Object.keys(lifetime)
   for (const key of keys) {
     if (key !== 'ttlMs' && key !== 'scope') {
-      throw new HelmError('validation_error', `${context} contains unknown key '${key}'(only allows ttlMs / scope)`, 400, { key })
+      throw new HelmError('validation_error', `${context} contains unknown key '${key}' (only allows ttlMs / scope)`, 400, { key })
     }
   }
   const ttlMs = (lifetime as { ttlMs?: unknown }).ttlMs
@@ -77,7 +77,7 @@ export function validateSecretLifetime(lifetime: SecretLifetime, context: string
     ) {
       throw new HelmError(
         'validation_error',
-        `${context}.ttlMs must be do not over ${MAX_SECRET_TTL_MS} correct safe integer(receives ${String(ttlMs)})`,
+        `${context}.ttlMs must be a positive safe integer not exceeding ${MAX_SECRET_TTL_MS} (received ${String(ttlMs)})`,
         400,
         { ttlMs },
       )
@@ -87,7 +87,7 @@ export function validateSecretLifetime(lifetime: SecretLifetime, context: string
   if (scope !== undefined && scope !== 'conversation' && scope !== 'turn') {
     throw new HelmError(
       'validation_error',
-      `${context}.scope only allows 'conversation' | 'turn'(receives ${String(scope)})`,
+      `${context}.scope only allows 'conversation' | 'turn' (received ${String(scope)})`,
       400,
       { scope },
     )
@@ -95,7 +95,7 @@ export function validateSecretLifetime(lifetime: SecretLifetime, context: string
   return { ...(ttlMs !== undefined ? { ttlMs } : {}), ...(scope !== undefined ? { scope } : {}) } as SecretLifetime
 }
 
-/** placeholder ↔ text mutual rotate tool (ArtifactService spill redaction re- use). */
+/** Placeholder <-> text conversion helpers (reused by ArtifactService spill redaction). */
 export function makePlaceholder(uuid: string): string {
   return `${REDACTED_PREFIX}${uuid}]`
 }
@@ -107,13 +107,13 @@ export function parsePlaceholder(text: string): string | null {
 }
 
 export class SecretStash {
-  /** key: conversationId → envName → secret. by conversation isolated, guard against across conversation string use. */
+  /** key: conversationId -> envName -> secret. Isolated per conversation to prevent cross-conversation leakage. */
   private readonly byConversation = new Map<number, Map<string, StashedSecret>>()
-  /** key: uuid → secret(redact fast index; contains already stop inject old value, redaction forever do not stop). */
+  /** key: uuid -> secret (fast redact index; includes old values whose injection stopped—redaction never stops). */
   private readonly byUuid = new Map<string, StashedSecret>()
-  /** conversation → completed turn compute count (turn effect domain out generate order base allow). */
+  /** conversation -> completed turn settlement count (baseline for turn-scoped creation sequence). */
   private readonly turnSettlements = new Map<number, number>()
-  /** global one by one value redaction register:value → reference counter (many register stack put, all solve except only then stop). */
+  /** Global value-based redactions: value -> reference count (multiple registrations stack until all are disposed). */
   private readonly globalRedactions = new Map<string, number>()
   private redactionEpoch = 0
   private readonly now: () => number
@@ -123,15 +123,15 @@ export class SecretStash {
   }
 
   /**
-   * store secret, return `[REDACTED:stash:<uuid>]` placeholder.
-   * the same (conversationId, name) duplicate put will override environment variable, old value still keep used to redaction.
-   * lifetime optional:ttlMs expires / scope 'turn' turn compute after only stop inject, redaction continue.
+   * Store a secret and return a `[REDACTED:stash:<uuid>]` placeholder.
+   * Repeated puts for the same (conversationId, name) overwrite the env var while retaining the old value for redaction.
+   * Optional lifetime: ttlMs expiry / scope 'turn' settlement stops injection only; redaction continues.
    */
   put(conversationId: number, name: string, value: string, lifetime?: SecretLifetime): string {
     if (!isValidEnvName(name)) {
-      throw new Error(`secret name must be legal environment variable name: ${name}`)
+      throw new Error(`secret name must be a valid environment variable name: ${name}`)
     }
-    const normalized = lifetime !== undefined ? validateSecretLifetime(lifetime, `secret '${name}'  lifetime`) : undefined
+    const normalized = lifetime !== undefined ? validateSecretLifetime(lifetime, `lifetime of secret '${name}'`) : undefined
     let bucket = this.byConversation.get(conversationId)
     if (bucket === undefined) {
       bucket = new Map()
@@ -152,16 +152,16 @@ export class SecretStash {
     return secret.placeholder
   }
 
-  /** TTL lazy expires: expires i.e. from active bucket remove (byUuid keep old value used to redaction). */
+  /** Lazy TTL check: removes expired entry from the active bucket (byUuid keeps old values for redaction). */
   private isExpired(secret: StashedSecret): boolean {
     return secret.expiresAt !== undefined && this.now() >= secret.expiresAt
   }
 
   /**
-   * gather out the conversation all leap secret is environment variable (inject child process use); each time invoke only sampling once
-   * clock, all item by the same moment decide (TTL boundary inside will not same batch across boundary).TTL expires in this
-   * lazy reclaim. optional names only take designate name (explicit grant external runtime use; missing seat name static default
-   * skip, store in decide by caller based on actual return key negative duty).
+   * Export all active secrets for the conversation as environment variables (for child process injection);
+   * samples clock once per call so every entry is evaluated against the same instant (no mid-batch TTL drift),
+   * and lazily reclaims expired entries. When names is provided, only those names are included (missing names are
+   * silently skipped; callers decide existence checks from the returned keys).
    */
   envFor(conversationId: number, names?: readonly string[]): Record<string, string> {
     const now = this.now()
@@ -174,16 +174,16 @@ export class SecretStash {
         continue
       }
       if (names !== undefined && !names.includes(name)) continue
-      // environment variable name can legal ground is __proto__; define self has field, avoid trigger Object prototype setter.
+      // An env var name can legitimately be '__proto__'; define an own property instead of triggering Object.prototype setter.
       Object.defineProperty(env, name, { value: secret.value, enumerable: true, writable: true, configurable: true })
     }
     return env
   }
 
   /**
-   * turn compute hook (completed | failed | aborted unify): first push enter compute counter, again reclaim
-   * out generate order early at new counter turn effect domain secret (byUuid keep old value used to redaction). compute after new
-   * register turn secret out generate order = new counter, belong under one turn, do not subject to this time clear affect.
+   * Turn settlement hook (unified for completed | failed | aborted): advances the settle counter first, then reclaims
+   * turn-scoped secrets created before the new counter (byUuid retains old values for redaction). Turn secrets registered
+   * after settlement get bornSettlement = new counter, belonging to the next turn and untouched by this sweep.
    */
   settleTurn(conversationId: number): void {
     const next = (this.turnSettlements.get(conversationId) ?? 0) + 1
@@ -196,12 +196,12 @@ export class SecretStash {
   }
 
   /**
-   * register global one by one value redaction:redact() the value replace is `[REDACTED]`(any conversation context all
-   * takes effect). non- environment variable, does not enter envFor/stats; the same value can duplicate register, return solve except
-   * function reference counter reset to zero after only then stop redaction.
+   * Register a global value-based redaction: redact() replaces this value with `[REDACTED]` (active across all conversations).
+   * Not an env var, excluded from envFor/stats; the same value can be registered multiple times and stops being redacted
+   * only once all returned disposers have been called.
    */
   addRedaction(value: string): () => void {
-    if (typeof value !== 'string' || value === '') throw new Error('addRedaction need to non-empty string')
+    if (typeof value !== 'string' || value === '') throw new Error('addRedaction requires a non-empty string')
     this.globalRedactions.set(value, (this.globalRedactions.get(value) ?? 0) + 1)
     const epoch = this.redactionEpoch
     let removed = false
@@ -214,7 +214,7 @@ export class SecretStash {
     }
   }
 
-  /** is otherwise store in the leap secret (by conversation isolated decide;TTL expires lazy reclaim after is false). */
+  /** Whether an active secret exists (isolated by conversation; false after lazy TTL eviction). */
   has(conversationId: number, name: string): boolean {
     const bucket = this.byConversation.get(conversationId)
     const secret = bucket?.get(name)
@@ -226,10 +226,10 @@ export class SecretStash {
     return true
   }
 
-  /** already register secret replace is placeholder; already has placeholder always keep redaction. */
+  /** Replace registered secrets with placeholders; existing placeholders always stay redacted. */
   redact(text: string, conversationId?: number): string {
     const values = new Map<string, string>()
-    // global one by one value redaction takes precedence at stash placeholder: managed token etc. host secret cannot by any conversation back visible
+    // Global value redactions take precedence over stash placeholders so managed tokens and host secrets cannot be echoed in any conversation.
     for (const value of this.globalRedactions.keys()) {
       values.set(value, REDACTED_MARKER)
     }
@@ -246,7 +246,7 @@ export class SecretStash {
     return text.replace(pattern, (value) => values.get(value) ?? value)
   }
 
-  /** incremental redaction: only keep still may group into secret suffix, do not by fixed length cut open complete match. */
+  /** Streaming redaction: buffers only the longest suffix that could still complete a secret, avoiding splitting full matches on fixed boundaries. */
   createStreamingRedactor(): { push(text: string): string; flush(): string } {
     let pending = ''
     const prefixes = new Map<string, number[]>()
@@ -301,7 +301,7 @@ export class SecretStash {
     }
   }
 
-  /** empty designate conversation all secret (contains redaction old value); omit conversationId then empty the whole stash(contains global redaction register). */
+  /** Clear all secrets for the specified conversation (including old values kept for redaction); if omitted, clear the entire stash (including global redactions). */
   clear(conversationId?: number): void {
     if (conversationId === undefined) {
       this.byConversation.clear()
@@ -318,7 +318,7 @@ export class SecretStash {
     this.turnSettlements.delete(conversationId)
   }
 
-  /** tune try count: conversation count and leap secret total count (single time clock sampling decide; never output value itself). */
+  /** Debug stats: active conversation count and total active secrets (single clock sample; never outputs secret values). */
   stats(): { conversations: number; secrets: number } {
     const now = this.now()
     let secrets = 0

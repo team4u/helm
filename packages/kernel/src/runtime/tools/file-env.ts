@@ -1,19 +1,19 @@
 /**
- * file tool unify execute environment adapt (read/write/edit  local branch and EnvFabric remote
- * branch original is one by one row duplicate, this where converge is the same operation side + single one tool template, behavior etc. price):
+ * Unified execution environment adapters for file tools (`read`/`write`/`edit`). Local (`node:fs`) and remote
+ * (`EnvFabric`) branches used to be duplicated line-by-line and are unified here into common operation interfaces
+ * and a single tool template with identical behavior:
  *
- * - local implement: process inside node:fs/promises(canonicalProbe use realpath; parse
- *   failed (missing/dangling symlink/without right etc.) by missing handle, real error by then
- *   mkdir/writeFile such as on throw); mutual exclusion queue use localWithFileMutationQueue
- *   (key prefix and NodeExecutionEnv.id consistent,local two kinds of entry mutual exclusion);
- * - remote implement:EnvFabric  ExecutionEnv env RPC(via guards.requireRemoteEnv
- *   guard get,EnvFabric missing / node offline explicit failed, never fall back local machine mistakenly read write Hub
- *   disk);Result form in implement inside unwrap, failed one rule throw(outside layer tool template unify rotate
- *   *_failed redaction text); mutual exclusion queue use envWithFileMutationQueue(and plugin API
- *   sharing the same target node canonical path mutual exclusion queue, same file do not lose update; detail see
- *   env/file-mutation-queue.ts contract);
- * - read classify text proposal (directory/special file/over limit) in this constant,local preflight,local
- *   open after re-check and remote fileInfo shared use, never drift.
+ * - Local implementation: uses `node:fs/promises` (`canonicalProbe` uses `realpath`; resolution failures like
+ *   missing/dangling symlink/EACCES are treated as missing so real `mkdir`/`writeFile` errors surface loudly);
+ *   mutex queue uses `localWithFileMutationQueue` (key prefix matches `NodeExecutionEnv.id`, ensuring mutual
+ *   exclusion between both local entry points);
+ * - Remote implementation: delegates to `EnvFabric` `ExecutionEnv` RPC (`guards.requireRemoteEnv` rejects missing
+ *   `EnvFabric` or offline nodes explicitly, never falling back silently to Hub's disk); unwraps `Result` inside the
+ *   adapter and throws on failure (outer template formats redacted `*_failed` text uniformly); mutex queue uses
+ *   `envWithFileMutationQueue` (shares canonical-path mutex queues per target node with plugin APIs so updates to
+ *   the same file never get lost; see `env/file-mutation-queue.ts`);
+ * - Read classification messages (directory/special file/size cap) are defined in one place and shared by local
+ *   preflight, local post-open verification, and remote `fileInfo` without drift.
  */
 import type { Context } from '@earendil-works/chord/context'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
@@ -25,42 +25,43 @@ import { nodePathForShape, resolveTargetPath } from './target-path.js'
 import { requireRemoteEnv, type FileOpAction } from './guards.js'
 import type { HelmToolDeps } from '../tool-deps.js'
 
-/** read tool single file cap: and spill preview link consistent explicit limit quota. */
+/** Single-file byte cap for `read` (explicit cap aligned with spill preview limit). */
 export const READ_FILE_MAX_BYTES = 128 * 1024
 
-/** read tool sharing classify text proposal (local preflight / local open after re-check / remote fileInfo shared use). */
-const readDirectoryText = (raw: string): string => `read_failed: ${raw} is directory,read only support ordinary file`
+/** Shared `read` classification messages (used across local preflight, post-open re-check, and remote `fileInfo`).
+ * Note: `'is directory'` and `'not ordinary file'` wording are preserved for compatibility with existing test checks. */
+const readDirectoryText = (raw: string): string => `read_failed: ${raw} is directory; read only supports regular files`
 const fileTooLargeText = (raw: string, size: number): string =>
-  `file_too_large: ${raw} is ${size} byte, exceeds read tool ${READ_FILE_MAX_BYTES} byte cap.` +
-  'please use bash command output to file after via read_artifact page read, or use head/tail/sed take which must fragment.'
+  `file_too_large: ${raw} is ${size} bytes, exceeding the ${READ_FILE_MAX_BYTES}-byte cap for read. ` +
+  'Redirect command output via bash to a file and read it paginated with read_artifact, or slice with head/tail/sed.'
 
-/** canonical probe result form (and ExecutionEnv.canonicalPath  Result consistent). */
+/** Canonical probe result shape (aligned with `ExecutionEnv.canonicalPath` `Result`). */
 export type CanonicalProbeResult =
   | { ok: true; value: string }
   | { ok: false; error: { code: string; message: string } }
 
 /**
- * write/edit unify execute environment: single one tool template unaware of node location.
- * operation failed one rule throw(Result only in implement inside unwrap), outside layer unify rotate *_failed redaction text.
+ * Unified writable execution environment for `write`/`edit`: node-agnostic single template.
+ * Unwraps `Result` inside and throws on failure; outer template catches and returns redacted `*_failed` text.
  */
 export interface WritableFileEnv {
-  /** canonical probe: target already exists when parse to real path (symlink alias write to real file, and
-   * mutual exclusion queue key align); missing when by caller by term method absolute path fall back. */
+  /** Canonical probe: resolves existing files (and symlinks) to their canonical paths (so symlink writes align with
+   *  their target in mutex queues); falls back to lexical absolute path when missing. */
   canonicalProbe(path: string, context: Context): Promise<CanonicalProbeResult>
-  /** read all text (UTF-8). */
+  /** Read full UTF-8 text. */
   readTextFile(path: string, context: Context): Promise<string>
-  /** write all text (UTF-8). */
+  /** Write full UTF-8 text. */
   writeFile(path: string, content: string, context: Context): Promise<void>
-  /** recursion ensure parent directory store in. */
+  /** Recursively ensure parent directory exists. */
   ensureDir(path: string, context: Context): Promise<void>
-  /** read-change-write mutual exclusion window (local and remote key empty between mutual exclusion, see env/file-mutation-queue.ts). */
+  /** Read-modify-write mutex window (shared local/remote canonical namespace; see `env/file-mutation-queue.ts`). */
   withMutationQueue<T>(path: string, fn: () => Promise<T>, context: Context): Promise<T>
 }
 
 /**
- * read unify execute environment: preflight classify (directory/special file/over limit) return tool level error text,
- * real IO/failed to parse one rule throw(outside layer unify rotate read_failed redaction text).
- * displayPath: remote is canonical parse after path,local is term method absolute path (back visible contract).
+ * Unified readable execution environment for `read`: classification errors (directory/special file/oversized)
+ * return tool-level error text, while genuine IO/resolution failures throw (formatted by outer template as `read_failed`).
+ * `displayPath`: canonicalized path remotely, lexical absolute path locally (preserved contract).
  */
 export interface ReadableFileEnv {
   readText(
@@ -73,11 +74,11 @@ export interface ReadableFileEnv {
   >
 }
 
-/** local write/edit implement: process inside fs, error self however on throw. */
+/** Local write/edit implementation: in-process `node:fs`; errors propagate as-is. */
 function localWritableEnv(): WritableFileEnv {
   return {
-    // canonicalPath directly use realpath; failed to parse (missing/dangling symlink/without right etc.) one rule
-    // by missing handle, real error by then mkdir/writeFile such as on throw.
+    // Use realpath directly for canonicalPath; treat resolution failures (missing/dangling symlink/EACCES)
+    // as missing so real IO errors surface on subsequent mkdir/writeFile.
     canonicalProbe: async (path, _context): Promise<CanonicalProbeResult> => {
       try {
         return { ok: true, value: await realpath(path) }
@@ -102,7 +103,7 @@ function localWritableEnv(): WritableFileEnv {
   }
 }
 
-/** remote write/edit implement:EnvFabric env RPC,Result in this unwrap, failed on throw. */
+/** Remote write/edit implementation: `EnvFabric` RPC; unwraps `Result` and throws on failure. */
 function remoteWritableEnv(env: ExecutionEnv): WritableFileEnv {
   return {
     canonicalProbe: (path, context) => env.canonicalPath(path, context),
@@ -123,26 +124,25 @@ function remoteWritableEnv(env: ExecutionEnv): WritableFileEnv {
   }
 }
 
-/** local read implement:stat preflight + same fd fstat right threat re-check. */
+/** Local read implementation: `stat` preflight + authoritative `fstat` re-check on the same open fd. */
 function localReadableEnv(): ReadableFileEnv {
   return {
     async readText(lexicalAbs, raw, _context) {
-      // process inside fs.stat(with follow symlink) first do ordinary file preflight, to out clear error classify
-      //(directory/special file/over limit); then fd read:fstat and read the same fd, validate i.e.
-      // which read content (open and preflight between target by replace when with fd is allow).
+      // In-process `fs.stat` (follows symlinks) classifies directories/special files/size caps cleanly before opening,
+      // then opens fd once and validates via `fstat` on the exact same fd so a swap between `stat` and `open` is caught.
       const info = await stat(lexicalAbs)
       if (info.isDirectory()) return { ok: false, errorText: readDirectoryText(raw) }
       if (!info.isFile()) {
         return { ok: false, errorText: `read_failed: ${raw} is not ordinary file (special file)` }
       }
       if (info.size > READ_FILE_MAX_BYTES) return { ok: false, errorText: fileTooLargeText(raw, info.size) }
-      // open with follow symlink (and bash same right, symlink points to which in is user file system itself fact);
-      // preflight after, open before target by replace when, with the same fd on fstat re-check is allow.
+      // Follow symlinks on open (same privilege boundary as bash: symlinks are the user's filesystem reality);
+      // re-verify the opened fd with `fstat` in case the target changed after preflight.
       const handle = await open(lexicalAbs, fsConstants.O_RDONLY)
       try {
         const statInfo = await handle.stat()
         if (!statInfo.isFile()) {
-          return { ok: false, errorText: `read_failed: ${raw} in open after is not ordinary file, reject read` }
+          return { ok: false, errorText: `read_failed: ${raw} is not ordinary file after open; read rejected` }
         }
         if (statInfo.size > READ_FILE_MAX_BYTES) {
           return { ok: false, errorText: fileTooLargeText(raw, statInfo.size) }
@@ -159,13 +159,12 @@ function localReadableEnv(): ReadableFileEnv {
   }
 }
 
-/** remote read implement:env RPC  canonicalPath + fileInfo + readTextFile. */
+/** Remote read implementation: `env` RPC `canonicalPath` + `fileInfo` + `readTextFile`. */
 function remoteReadableEnv(env: ExecutionEnv): ReadableFileEnv {
   return {
     async readText(lexicalAbs, raw, context) {
-      // first via canonicalPath parse symlink:fileInfo is lstat semantics (symlink
-      // kind='symlink'), parse to real target after only then can and local with follow semantics consistent;
-      // target missing/dangling symlink in this such as errors (throw by outside layer unify rotate read_failed).
+      // Resolve symlinks via `canonicalPath` first: `fileInfo` has `lstat` semantics (`kind='symlink'`), so
+      // canonicalizing aligns symlink-following semantics with local; missing/dangling targets throw (`read_failed`).
       const targetRealR = await env.canonicalPath(lexicalAbs, context)
       if (!targetRealR.ok) throw new Error(targetRealR.error.message)
       const targetReal = targetRealR.value
@@ -185,7 +184,7 @@ function remoteReadableEnv(env: ExecutionEnv): ReadableFileEnv {
   }
 }
 
-/** construct read execute environment: remote first guard (explicit failed text),local direct connect process inside fs. */
+/** Construct `read` execution environment: guards remote nodes first (explicit error text), local uses `node:fs`. */
 export function readableEnvFor(
   deps: HelmToolDeps,
   nodeId: string,
@@ -199,7 +198,7 @@ export function readableEnvFor(
   return { env: localReadableEnv() }
 }
 
-/** construct write/edit execute environment: remote first guard (explicit failed text),local direct connect process inside fs. */
+/** Construct `write`/`edit` execution environment: guards remote nodes first (explicit error text), local uses `node:fs`. */
 export function writableEnvFor(
   deps: HelmToolDeps,
   nodeId: string,
@@ -215,14 +214,13 @@ export function writableEnvFor(
 }
 
 /**
- * target path parse:cwd(base) only act relative path base allow, absolute path and ../ across directory all
- * allows (and bash same right, do not set cwd sandbox); permission boundary hand over to OS itself.
- * term method parse by target path shape pure posix/win32 rule (never use Hub host path by default
- * rule parse remote path); symbol relative path (C:relative) in this explicit reject. target already exists when
- * via canonicalPath/realpath parse to real path again write - - symlink alias write to real file,
- * and and env/file-mutation-queue  canonical key align; missing (contains dangling symlink,
- * writeFile will with follow it in target where create file, and bash heavy set to semantics consistent) by term method absolute
- * path write; without right probe etc. real error by after continue mkdir/writeFile such as on throw.
+ * Resolve writable target path: `cwd` (`base`) acts only as base for relative paths; absolute paths and `../`
+ * traversals are permitted (same boundary as `bash`, enforced by OS permissions). Lexical resolution follows
+ * target path shape (`posix`/`win32`, never Hub host default), rejecting Windows drive-relative paths (`C:rel`).
+ * Existing targets resolve via `canonicalPath`/`realpath` so symlink writes target the real file and align with
+ * `env/file-mutation-queue` canonical keys; missing targets (including dangling symlinks — `writeFile` creates the
+ * symlink target, matching bash redirection) fall back to lexical absolute path; real permission errors surface
+ * on subsequent `mkdir`/`writeFile`.
  */
 export async function resolveWritableTarget(
   probe: (path: string, context: Context) => Promise<CanonicalProbeResult>,
@@ -239,12 +237,12 @@ export async function resolveWritableTarget(
   return { ok: true, abs: absolute }
 }
 
-/** by target shape take dirname(win32 backslash isolate symbol rule). */
+/** `dirname` using the path shape's rules (`win32` backslash separators). */
 export function dirnameForShape(abs: string): string {
   return nodePathForShape(targetPathShape(abs)).dirname(abs)
 }
 
-/** by target shape take basename. */
+/** `basename` using the path shape's rules. */
 export function basenameForShape(abs: string): string {
   return nodePathForShape(targetPathShape(abs)).basename(abs)
 }

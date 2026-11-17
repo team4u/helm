@@ -1,13 +1,14 @@
 /**
- * HelmStore:helm self has table sync read write mirror + FTS5 derive index.
+ * `HelmStore`: synchronous read/write mirror for helm-owned SQLite tables + FTS5 derived index.
  *
- * everything SQL via the same NodeSqliteDatabase adapter(and pi_ table sharing transaction queue), never another open connect.
- * memory mirror guarantee sync read (listConvs etc.); write path first mirror after queue up persist, queue up via
- * promise tail chain strictly serial (FIFO, without polling). persist error honest contract:
- * - first error by record and on report (not silently swallow wrong, never virtual call persist succeeded);
- * - flushPublic in has any not decide error when explicit throw HelmError(caller can based on this block assert side effect);
- * - fails after new write one rule reject (fail state, no longer false succeeded);
- * - close wait for in-flight flush completely end, and first error return to caller on report.
+ * All SQL runs through the single `NodeSqliteDatabase` adapter (sharing a transaction queue with `pi_` tables);
+ * never open a second connection. The in-memory mirror supports synchronous reads (`listConvs`, etc.); writes
+ * update the mirror first and enqueue persistence onto a strictly FIFO promise tail chain (zero polling).
+ * Persistence honesty contract:
+ * - First persistence error is recorded and reported explicitly (never swallowed or faked as success);
+ * - `flushPublic` throws `HelmError` whenever any unsettled persistence error exists (allowing callers to block downstream side effects);
+ * - Subsequent writes fail closed once in failed state (no fake enqueuing);
+ * - `close()` awaits full drain of in-flight flushes and returns the first persistence error to callers.
  */
 
 import type { ArtifactKind, ConversationStatus, ConversationSummary } from '@helm/protocol'
@@ -22,18 +23,18 @@ export interface ConvMeta {
   profileId: string
   tags: string[]
   parentConversationId?: number
-  /** derive or most near once resume this sub-conversation parent conversation tool invoke ID(run phase real-time related). */
+  /** Parent conversation's tool call ID that spawned or most recently resumed this child (live execution correlation). */
   parentToolCallId?: string
-  /** bind set compute node ID(default 'local'). */
+  /** Bound compute node ID (defaults to `'local'`). */
   nodeId: string
   cwd: string
-  /** takes effect model mirror (parse chain result; without config when is empty string, only render use). */
+  /** Resolved effective model snapshot (empty string when unconfigured; display-only). */
   model: string
-  /** explicit model override ('provider/model');undefined = inherit profile/global. */
+  /** Explicit model override (`'provider/model'`); `undefined` = inherit Profile/global. */
   modelOverride?: string
-  /** think Profile mirror (off/minimal/low/medium/high/xhigh/max; empty string not settings). */
+  /** Reasoning effort snapshot (`off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`; empty string = unset). */
   thinkingLevel: string
-  /** explicit think Profile override;undefined = inherit Profile/global. */
+  /** Explicit reasoning effort override; `undefined` = inherit Profile/global. */
   thinkingLevelOverride?: string
   unread: boolean
   pinned: boolean
@@ -84,11 +85,11 @@ export interface PluginSessionDocRow {
 type Deferred = () => Promise<void>
 
 export interface HelmStoreOptions {
-  /** instance level persist failed call back (such as KernelRuntime mount lead to life store fault closed ring); default away diagnose channel. */
+  /** Instance-level persistence failure callback (e.g., `KernelRuntime` fatal storage closure hook); falls back to diagnostic channel. */
   readonly onError?: (error: unknown) => void
-  /** diagnose channel sink(not provide onError when fall back output; default away console.error). */
+  /** Diagnostic channel sink (fallback when `onError` is unset; defaults to `console.error`). */
   readonly onDiagnostic?: KernelDiagnosticSink
-  /** diagnose redaction function (default re- use ftsRedact). */
+  /** Diagnostic redaction function (defaults to `ftsRedact`). */
   readonly redact?: (text: string) => string
 }
 
@@ -101,20 +102,20 @@ export class HelmStore {
   private readonly asks = new Map<string, AskRow>()
   private readonly artifacts = new Map<string, ArtifactRow>()
   private readonly pluginDocs = new Map<string, string>() // pluginId\0name -> json
-  /** conversation document mirror:pluginId\0name\0conversationId -> json. */
+  /** Per-conversation plugin document mirror: `pluginId\0name\0conversationId -> json`. */
   private readonly pluginSessionDocs = new Map<string, string>()
-  /** logic delete tombstone: after restart do not re- import SDK keep internal history. */
+  /** Logical deletion tombstones: prevents re-importing SDK-retained history after restarts. */
   private readonly tombstones = new Set<number>()
   /**
-   * persist tail chain: all queue up write strictly by queue order serial execute.
-   * chain forever do not fails (error in chain inside catch and record),flushPublic/close only needs to await it.
+   * Persistence tail chain: all enqueued writes execute serially in FIFO order.
+   * The chain itself never rejects (errors are caught and recorded internally), so `flushPublic`/`close` simply await it.
    */
   private tail: Promise<void> = Promise.resolve()
   private closed = false
-  /** first persist error; once placement i.e. enter fail state, reject after continue new write. */
+  /** First persistence error; once set, the store enters failed state and rejects subsequent writes. */
   private firstError: unknown = undefined
   private eventSeq = 0
-  /** FTS queue text redaction hook (runtime inject stash.redactText). */
+  /** Text redaction hook for FTS indexing (runtime injects `stash.redact`). */
   ftsRedact: (text: string) => string = (t) => t
 
   constructor(database: HelmDatabase, options: HelmStoreOptions = {}) {
@@ -124,12 +125,12 @@ export class HelmStore {
     this.redactFn = options.redact
   }
 
-  /** first persist failed error (only read; not fails is undefined). */
+  /** First persistence failure error (read-only; `undefined` when healthy). */
   get error(): unknown {
     return this.firstError
   }
 
-  /** at startup from sqlite load all mirror; durable JSON corrupt when explicit errors (never false null value). */
+  /** Load all mirrors from SQLite at startup; throws explicitly on corrupted persisted JSON (never fabricates empty values). */
   async load(): Promise<void> {
     for (const row of await this.db.all<{
       id: number
@@ -172,8 +173,8 @@ export class HelmStore {
         updatedAt: row.updated_at,
       })
     }
-    // parent tool invoke related independent into table (helm_conversation_tool_links): second read merge enter
-    // mirror, existing helm_conversations row no need to any change.
+    // Parent tool-call correlation is stored in a separate table (`helm_conversation_tool_links`): read second
+    // and merge into the mirror so existing `helm_conversations` schemas require no changes.
     for (const row of await this.db.all<{ conversation_id: number; parent_tool_call_id: string }>(
       'SELECT conversation_id, parent_tool_call_id FROM helm_conversation_tool_links',
     )) {
@@ -220,7 +221,7 @@ export class HelmStore {
       if (!isArtifactKind(row.kind)) {
         throw new HelmError(
           'store_data_corrupted',
-          `persist data corrupt (helm_artifacts#${row.id}.kind): illegal artifact type ${String(row.kind)}`,
+          `Persisted data corrupted (helm_artifacts#${row.id}.kind): invalid artifact kind '${String(row.kind)}'`,
           500,
           { id: row.id, kind: row.kind },
         )
@@ -269,16 +270,16 @@ export class HelmStore {
   }
 
   /**
-   * persist event ordinal: only accept non- negative security integer, and single tune does not fall back (old value does not override more high watermark).
-   * queue up via FIFO tail chain, written to the database order and queue order consistent, will not because old queue write fall back ordinal.
+   * Persist event sequence: accepts non-negative safe integers only and never regresses monotonically.
+   * Enqueued on the FIFO tail chain so DB writes match queue order and stale writes cannot rewind the sequence.
    */
   setEventSeq(seq: number): void {
     if (!Number.isSafeInteger(seq) || seq < 0) {
-      throw new HelmError('invalid_event_seq', `event ordinal must be non- negative security integer, receives:${seq}`, 500, {
+      throw new HelmError('invalid_event_seq', `Event sequence must be a non-negative safe integer, received: ${seq}`, 500, {
         seq,
       })
     }
-    if (seq < this.eventSeq) return // reject fall back: keep more high watermark
+    if (seq < this.eventSeq) return // Reject regression: keep the higher watermark
     this.eventSeq = seq
     this.enqueue(() =>
       this.db.run(
@@ -318,7 +319,7 @@ export class HelmStore {
     this.assertWritable()
     const prev = this.convs.get(meta.id)
     const titleChanged = prev?.title !== meta.title
-    // snapshot deep copy: queue up SQL bind set snapshot value, caller after continue original ground sudden change does not affect already queue write.
+    // Deep-copy snapshot: SQL parameters bind to snapshot values so subsequent caller mutations cannot affect queued writes.
     const snap = cloneConv(meta)
     if (snap.lastEntryId === undefined && prev?.lastEntryId !== undefined) {
       snap.lastEntryId = prev.lastEntryId
@@ -347,7 +348,7 @@ export class HelmStore {
         snap.createdAt,
         snap.updatedAt,
       )
-      // parent tool invoke related independent table: has value upsert, null value delete (do not orphan child/stale link).
+      // Separate table for parent tool-call link: upsert when set, delete when unset (prevents orphaned/stale links).
       if (snap.parentToolCallId !== undefined && snap.parentToolCallId !== '') {
         await this.db.run(
           `INSERT INTO helm_conversation_tool_links (conversation_id, parent_tool_call_id) VALUES (?, ?)
@@ -361,7 +362,7 @@ export class HelmStore {
           snap.id,
         )
       }
-      // title change must update the conversation all FTS row title column (do not only one row).
+      // Title changes must update the title column across every FTS row for this conversation (not just one).
       if (titleChanged) {
         await this.db.run(
           'UPDATE helm_conversation_fts SET title = ? WHERE conversation_id = ?',
@@ -373,9 +374,9 @@ export class HelmStore {
   }
 
   /**
-   * delete conversation:tombstone + row clean up in**the same transaction**inside atomic written to the database (crash will not appear
-   * row already delete while tombstone missing half state leads to restart re-). memory side sync clean asks/artifacts
-   * mirror; terminal state Ask history follow conversation one and clean up (mirror and store stay consistent, never leftover pending).
+   * Delete conversation: tombstone + row cleanup execute atomically in **the same transaction** (prevents crash windows
+   * where rows are deleted without a tombstone, causing resurrection on restart). Synchronously cleans up in-memory
+   * asks/artifacts mirrors; settled Ask history is purged alongside the conversation so mirrors stay consistent.
    */
   deleteConv(id: number): void {
     this.assertWritable()
@@ -387,7 +388,7 @@ export class HelmStore {
     for (const [artifactId, row] of this.artifacts) {
       if (row.conversationId === id) this.artifacts.delete(artifactId)
     }
-    // conversation document mirror sync clean up (store row in the same transaction inside delete, do not orphan child data).
+    // Synchronously purge per-conversation document mirror (DB rows deleted in the same transaction below to avoid orphans).
     for (const key of [...this.pluginSessionDocs.keys()]) {
       const convId = Number(key.split('\0')[2])
       if (convId === id) this.pluginSessionDocs.delete(key)
@@ -424,9 +425,8 @@ export class HelmStore {
   }
 
   /**
-   * UPSERT all amount column (contains spec / expected_state_seq / owner / created_at):
-   * compute write back specJson(inside contains terminal state status) must written to the database, otherwise after restart
-   * spec still is pending,listAsks restore fails.
+   * UPSERT all columns (including `spec` / `expected_state_seq` / `owner` / `created_at`):
+   * settling must write back `specJson` (containing terminal `status`), otherwise `listAsks` restores stale `pending` after restart.
    */
   putAsk(row: AskRow): void {
     this.assertWritable()
@@ -474,7 +474,7 @@ export class HelmStore {
   putArtifact(row: ArtifactRow): void {
     this.assertWritable()
     if (!isArtifactKind(row.kind)) {
-      throw new HelmError('validation_error', `artifact type illegal: ${String(row.kind)}`, 400, { id: row.id, kind: row.kind })
+      throw new HelmError('validation_error', `Invalid artifact kind: ${String(row.kind)}`, 400, { id: row.id, kind: row.kind })
     }
     this.artifacts.set(row.id, { ...row })
     this.enqueue(() =>
@@ -515,7 +515,7 @@ export class HelmStore {
     return this.pluginDocs.get(pluginId + '\0' + name)
   }
 
-  /** valueJson must be legal JSON: explicit reject (never static default a read do not back come data). */
+  /** `valueJson` must be valid JSON: rejects explicitly rather than persisting unreadable data. */
   putPluginDoc(pluginId: string, name: string, valueJson: string): void {
     this.assertWritable()
     parseStoredJson<unknown>(`helm_plugin_docs#${pluginId}:${name}.value`, valueJson)
@@ -533,12 +533,11 @@ export class HelmStore {
   }
 
   /**
-   * delete global document store in a certain plugin all document (unload related clean up).
+   * Delete all global documents belonging to a plugin (unload cleanup).
    *
-   * global document unify hang in `__global` row under,name is `${pluginId}:${docName}`.
-   * plugin id itself allows contains smoke number (such as `foo:bar`), pure prefix match will cross mistakenly delete
-   * (delete `foo` will mistakenly in `foo:bar:doc`), while doc name forbid smoke number (assertValidId),
-   * reason precise decide is: prefix `${pluginId}:` hit and remaining part excludes smoke number.
+   * Global documents live under `__global` with `name = '${pluginId}:${docName}'`. Since `pluginId` itself may
+   * contain colons (e.g. `foo:bar`) while `docName` forbids colons (`assertValidId`), plain prefix matching would
+   * delete across plugins (`foo` matching `foo:bar:doc`); precise matching requires `${pluginId}:` prefix AND no colon in remainder.
    */
   deleteGlobalPluginDocs(pluginId: string): void {
     this.assertWritable()
@@ -562,12 +561,12 @@ export class HelmStore {
 
   // ---------------- plugin session docs ----------------
 
-  /** conversation document mirror read (not write return undefined; caller fall back initial value). */
+  /** Read per-conversation document mirror (returns `undefined` if unwritten; caller falls back to initial value). */
   getPluginSessionDoc(pluginId: string, name: string, conversationId: number): string | undefined {
     return this.pluginSessionDocs.get(`${pluginId}\0${name}\0${conversationId}`)
   }
 
-  /** write conversation document (valueJson must be legal JSON: explicit reject illegal data). */
+  /** Write per-conversation document (`valueJson` must be valid JSON; rejects malformed payloads explicitly). */
   putPluginSessionDoc(pluginId: string, name: string, conversationId: number, valueJson: string): void {
     this.assertWritable()
     parseStoredJson<unknown>(
@@ -602,7 +601,7 @@ export class HelmStore {
     )
   }
 
-  /** delete a certain plugin all conversation document (unload related clean up; table has independent plugin_id column, precise delete). */
+  /** Delete all per-conversation documents belonging to a plugin (unload cleanup; dedicated `plugin_id` column ensures exact match). */
   deletePluginSessionDocs(pluginId: string): void {
     this.assertWritable()
     for (const key of [...this.pluginSessionDocs.keys()]) {
@@ -613,7 +612,7 @@ export class HelmStore {
     )
   }
 
-  /** column out a certain plugin a certain document persisted all conversation ID(rise order). */
+  /** List all conversation IDs (ascending) for which a plugin document has been persisted. */
   listPluginSessionDocConversations(pluginId: string, name: string): number[] {
     const out: number[] = []
     for (const key of this.pluginSessionDocs.keys()) {
@@ -627,9 +626,9 @@ export class HelmStore {
   // ---------------- FTS ----------------
 
   /**
-   * index a conversation text (input/answer/tool summary);body redaction after store.
-   * (conversation_id, entry_id) idempotent: the same entry duplicate index (observer replay etc.)
-   * in the same transaction inside first delete after insert replace, never produce duplicate row (FTS5 without unique constraint).
+   * Index conversation text (input/answer/tool summary); body is redacted before storing.
+   * `(conversation_id, entry_id)` idempotent: repeated indexing of the same entry (e.g., observer replay)
+   * deletes then inserts inside one transaction so FTS5 (which lacks unique constraints) never gets duplicate rows.
    */
   indexFts(conversationId: number, entryId: string, title: string, body: string): void {
     this.assertWritable()
@@ -653,12 +652,12 @@ export class HelmStore {
     )
   }
 
-  /** FTS all text inspect index (can rebuild derive index, do not trigger touch pi_ table semantics). */
+  /** Full-text search index (rebuildable derived index; never touches `pi_` table semantics). */
   async search(
     query: string,
     limit = 20,
   ): Promise<Array<{ conversationId: number; entryId: string; snippet: string }>> {
-    // first wait for queue real arrange empty (contains error i.e. throw): read to is promise persist most new data.
+    // Wait for queued writes to drain completely (throws on errors) so queries observe persisted latest state.
     await this.flushPublic()
     const rows = await this.db.all<{
       conversation_id: number
@@ -670,7 +669,7 @@ export class HelmStore {
       ftsMatchExpr(query),
       limit,
     )
-    // guard against defend dedupe: the same (conversation_id, entry_id) only return a.
+    // Defensive deduplication: return at most one entry per `(conversation_id, entry_id)`.
     const seen = new Set<string>()
     const out: Array<{ conversationId: number; entryId: string; snippet: string }> = []
     for (const r of rows) {
@@ -683,8 +682,8 @@ export class HelmStore {
   }
 
   /**
-   * delete designate conversation in if dry FTS key (original ground override heavy when clean up by truncate purpose derive index).
-   * only motion helm_conversation_fts derive table, do not trigger touch pi_ table semantics; empty list directly return.
+   * Delete specific FTS entries in a conversation (cleans truncated entries' derived index on in-place overwrite).
+   * Touches only `helm_conversation_fts` derived table without affecting `pi_` semantics; no-ops on empty list.
    */
   removeFtsEntries(conversationId: number, entryIds: ReadonlyArray<string>): void {
     if (entryIds.length === 0) return
@@ -704,8 +703,8 @@ export class HelmStore {
   }
 
   /**
-   * FTS is can rebuild derive index: empty + replay all conversation text in**the same transaction**inside complete,
-   * failed whole rollback (old index keep, never because rebuild failed lose derive index after false succeeded).
+   * FTS is a rebuildable derived index: clearing + replaying all conversation text runs inside **the same transaction**,
+   * rolling back atomically on failure (preserving the previous index rather than dropping it and faking success).
    */
   async rebuildFts(
     replay: (
@@ -734,16 +733,16 @@ export class HelmStore {
   // ---------------- flush ----------------
 
   /**
-   * for outside conflict refresh port (documentStore.flush use): wait for tail chain completely arrange empty (real drain,
-   * without polling, do not early return); store in any persist error when throw HelmError- -
-   * caller (such as Workflow state.flush) based on this block assert after continue side effect, never virtual call succeeded.
+   * External flush port (used by `documentStore.flush`): awaits full drain of the tail chain (real drain,
+   * zero polling, no early return); throws `HelmError` if any persistence error occurred so callers (e.g.
+   * Workflow `state.flush`) can halt downstream side effects instead of falsely assuming success.
    */
   async flushPublic(): Promise<void> {
     await this.tail
     if (this.firstError !== undefined) {
       throw new HelmError(
         'store_flush_failed',
-        `persist queue store in failed write, do not guarantee data complete:${String(this.firstError)}`,
+        `Persistence queue contains failed writes; data integrity is not guaranteed: ${String(this.firstError)}`,
         500,
         { error: String(this.firstError) },
       )
@@ -751,16 +750,16 @@ export class HelmStore {
   }
 
   private enqueue(fn: Deferred): void {
-    if (this.closed) throw new HelmError('store_closed', 'HelmStore already close, reject new write', 409)
+    if (this.closed) throw new HelmError('store_closed', 'HelmStore is already closed; rejecting new write', 409)
     if (this.firstError !== undefined) {
       throw new HelmError(
         'store_flush_failed',
-        `persist already failed, reject new write (do not false succeeded):${String(this.firstError)}`,
+        `Persistence already failed; rejecting new write (refusing false success): ${String(this.firstError)}`,
         500,
         { error: String(this.firstError) },
       )
     }
-    // tail chain serial: chain inside error by catch record (chain do not die), order and queue strictly consistent.
+    // Serial tail chain: errors are caught and recorded inside the chain so it stays unbroken and strictly FIFO.
     this.tail = this.tail.then(fn).catch((error: unknown) => {
       const isFirst = this.firstError === undefined
       this.markFailed(error)
@@ -773,7 +772,7 @@ export class HelmStore {
       try {
         this.onError(error)
       } catch {
-        /* on report itself must not again throw */
+        /* reporting itself must not throw */
       }
       return
     }
@@ -785,13 +784,13 @@ export class HelmStore {
     })
   }
 
-  /** write before check:closed / fail state under explicit reject, never pretend queue succeeded. */
+  /** Pre-write check: reject explicitly when closed or failed, never pretending an enqueue succeeded. */
   private assertWritable(): void {
-    if (this.closed) throw new HelmError('store_closed', 'HelmStore already close, reject new write', 409)
+    if (this.closed) throw new HelmError('store_closed', 'HelmStore is already closed; rejecting new write', 409)
     if (this.firstError !== undefined) {
       throw new HelmError(
         'store_flush_failed',
-        `persist already failed, reject new write (do not false succeeded):${String(this.firstError)}`,
+        `Persistence already failed; rejecting new write (refusing false success): ${String(this.firstError)}`,
         500,
         { error: String(this.firstError) },
       )
@@ -802,7 +801,7 @@ export class HelmStore {
     if (this.firstError === undefined) this.firstError = error
   }
 
-  /** exit before wait for in-flight flush completely end; return first persist error (honest on report, do not swallow). */
+  /** Await full completion of in-flight flushes before exit; returns the first persistence error (honest reporting, never swallowed). */
   async close(): Promise<unknown> {
     await this.tail
     this.closed = true
@@ -814,14 +813,14 @@ function cloneConv(meta: ConvMeta): ConvMeta {
   return { ...meta, tags: [...meta.tags] }
 }
 
-/** durable JSON validate: corrupt i.e. explicit error (carries location context), never false null value continue. */
+/** Validate persisted JSON: fails explicitly on corruption (with location context) rather than falling back to empty values. */
 function parseStoredJson<T>(what: string, raw: string): T {
   try {
     return JSON.parse(raw) as T
   } catch (cause) {
     throw new HelmError(
       'store_data_corrupted',
-      `persist data corrupt (${what}):JSON failed to parse:${String(cause)}`,
+      `Persisted data corrupted (${what}): JSON parse failed: ${String(cause)}`,
       500,
       { what, raw: raw.slice(0, 200), cause: String(cause) },
     )
@@ -829,7 +828,7 @@ function parseStoredJson<T>(what: string, raw: string): T {
 }
 
 function ftsMatchExpr(query: string): string {
-  // user input rotate into FTS5 prefix OR query, avoid language method inject (quotes package wrap each token).
+  // Convert user query into an FTS5 prefix OR query, quoting each token to prevent syntax injection.
   const tokens = query
     .split(/\s+/)
     .map((t) => t.replace(/["*]/g, ''))
@@ -843,8 +842,8 @@ export function convStatusOf(
   sdkLive: { run?: unknown; runFailure?: unknown },
   pendingAskCount: number,
 ): ConversationStatus {
-  // blocked(has await answer AskDoc) takes precedence at working:AskDoc is person class decide policy point,
-  // even if model still in run also must wait for person class expose to state machine on.
+  // `blocked` (pending AskDoc) takes precedence over `working`: AskDoc is a human decision point,
+  // so awaiting human input must remain visible in the state machine even if the model is still running.
   if (pendingAskCount > 0) return 'blocked'
   if (sdkLive.run) return 'working'
   if (sdkLive.runFailure) return 'error'

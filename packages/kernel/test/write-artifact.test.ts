@@ -1,5 +1,5 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
@@ -14,7 +14,7 @@ import { createWriteTool } from '../src/runtime/tools.js'
 import type { HelmToolDeps } from '../src/runtime/tool-deps.js'
 import type { EnvFabric } from '../src/env/index.js'
 
-describe('write tool register artifact special', { timeout: 60_000 }, () => {
+describe('write tool artifact registration behavior', { timeout: 60_000 }, () => {
   let rootDir: string
 
   before(() => {
@@ -35,7 +35,7 @@ describe('write tool register artifact special', { timeout: 60_000 }, () => {
     }
   }
 
-  it('local node: by default artifact: undefined/false only write cwd, do not register artifact', { timeout: 60_000 }, async () => {
+  it('local node: when artifact is undefined or false, only writes to cwd without registering artifact', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'local-plain')
     await ensureDataDir(dir)
     const stash = new SecretStash()
@@ -57,21 +57,21 @@ describe('write tool register artifact special', { timeout: 60_000 }, () => {
     assert.equal(res.isError, undefined)
     const noteAbs = join(dir, 'note.txt')
     const outputText = (res.output as Array<{ text: string }>)[0]!.text
-    assert.equal(outputText, `write_ok: ${noteAbs}(node local,11 byte)`)
+    assert.equal(outputText, `write_ok: ${noteAbs} (node local, 11 bytes)`)
     assert.doesNotMatch(outputText, /\[Artifact\]/)
     const structured = res.structuredOutput as { path: string; nodeId: string; bytesWritten: number; artifactId?: string }
-    assert.equal(structured.path, noteAbs, 'structure path back visible real absolute path (non- original reference)')
+    assert.equal(structured.path, noteAbs, 'structured path should return resolved real absolute path')
     assert.equal(structured.nodeId, 'local')
     assert.equal(structured.bytesWritten, 11)
     assert.equal(structured.artifactId, undefined)
-    // details persist UI channel and structuredOutput same value (Web write byte/artifact render read it).
+    // details stays aligned with structuredOutput for UI rendering (bytes written and artifact badges).
     assert.deepEqual(res.details, structured)
     assert.equal(readFileSync(noteAbs, 'utf8'), 'hello world')
     // artifact repository should be empty
     assert.equal((await artifacts.list(1)).length, 0)
   })
 
-  it('local node:artifact: true sync write cwd and register is conversation artifact, return [Artifact] and artifactId', { timeout: 60_000 }, async () => {
+  it('local node: artifact: true writes cwd and synchronously registers conversation artifact, returning [Artifact] and artifactId', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'local-art')
     await ensureDataDir(dir)
     const stash = new SecretStash()
@@ -96,14 +96,14 @@ describe('write tool register artifact special', { timeout: 60_000 }, () => {
     const outputText = (res.output as Array<{ text: string }>)[0]!.text
     assert.equal(
       outputText,
-      `write_ok: ${chartAbs}(node local,17 byte)\n[Artifact] id=${structured.artifactId} name=chart.svg`,
+      `write_ok: ${chartAbs} (node local, 17 bytes)\n[Artifact] id=${structured.artifactId} name=chart.svg`,
     )
-    assert.equal(structured.path, chartAbs, 'structure path back visible real absolute path')
+    assert.equal(structured.path, chartAbs, 'structured path should return resolved real absolute path')
     assert.equal(structured.nodeId, 'local')
     assert.equal(structured.bytesWritten, 17)
     assert.ok(typeof structured.artifactId === 'string')
 
-    // verify file in cwd and artifact service in all store in
+    // verify both the cwd file and the registered artifact metadata exist
     assert.equal(readFileSync(chartAbs, 'utf8'), '<svg>circle</svg>')
     const metaList = await artifacts.list(2)
     assert.equal(metaList.length, 1)
@@ -111,7 +111,7 @@ describe('write tool register artifact special', { timeout: 60_000 }, () => {
     assert.equal(metaList[0]!.name, 'chart.svg')
   })
 
-  it('artifact: true but artifact service not config writeUploaded when explicit errors', { timeout: 60_000 }, async () => {
+  it('artifact: true returns explicit error when artifact service does not support writeUploaded', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'no-write-uploaded')
     await ensureDataDir(dir)
     const stash = new SecretStash()
@@ -138,10 +138,10 @@ describe('write tool register artifact special', { timeout: 60_000 }, () => {
     )
     assert.equal(res.isError, true)
     const outputText = (res.output as Array<{ text: string }>)[0]!.text
-    assert.equal(outputText, 'write_failed: artifact service not config writeUploaded, cannot register conversation artifact')
+    assert.equal(outputText, 'write_failed: artifact service does not support writeUploaded; cannot register conversation artifact')
   })
 
-  it('remote node:artifact: true write remote and sync register conversation artifact', { timeout: 60_000 }, async () => {
+  it('remote node: artifact: true writes remotely and synchronously registers conversation artifact', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'remote-art')
     await ensureDataDir(dir)
     const stash = new SecretStash()
@@ -200,10 +200,10 @@ describe('write tool register artifact special', { timeout: 60_000 }, () => {
     assert.equal(res.isError, undefined)
     const resultAbs = '/remote/workspace/output/result.json'
     const outputText = (res.output as Array<{ text: string }>)[0]!.text
-    assert.ok(outputText.startsWith(`write_ok: ${resultAbs}(node worker-node-1,17 byte)`), `should back visible remote absolute path and node (${outputText})`)
+    assert.ok(outputText.startsWith(`write_ok: ${resultAbs} (node worker-node-1, 17 bytes)`), `should echo remote absolute path and node (${outputText})`)
     assert.match(outputText, /\[Artifact\] id=([A-Za-z0-9-]+) name=result\.json/)
     const structured = res.structuredOutput as { path: string; nodeId: string; bytesWritten: number; artifactId?: string }
-    assert.equal(structured.path, resultAbs, 'remote structure path back visible absolute path')
+    assert.equal(structured.path, resultAbs, 'remote structured path should return remote absolute path')
     assert.equal(structured.nodeId, 'worker-node-1')
     assert.ok(typeof structured.artifactId === 'string')
     assert.equal(remoteFiles.get(resultAbs), '{"status":"done"}')

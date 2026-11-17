@@ -1,25 +1,24 @@
 /**
- * path match sharing module: segment decode + plugin motion state routing complete path match.
+ * Shared path matching: segment decoding + full-path matching for dynamic plugin routes.
  *
- * hub.ts(public exemption decide) and routes.ts(dispatch) must shared use the same match,
- * otherwise two where semantics drift will build into exemption yet dispatch fewer than or reverse dispatch yet not exemption.
+ * `hub.ts` (public exemption check) and `routes.ts` (dispatch) MUST share the same matcher;
+ * otherwise semantic drift could exempt a route without dispatching it, or vice versa.
  *
- * - each segment strictly decodeURIComponent: illegal hundred number encode directly throws (400), never static default
- *   when act literal continue match; encode after '/'(%2F) decode occur in segment after, will not
- *   re- cut path segment.
- * - plugin routing declaration (PluginHost.register(ctx.route)) carry complete mount path
- *   /api/plugins/<encodeURIComponent(id)>/routes/...; declaration segment and request segment all
- *   decode to the same form after precise than for (segment count consistent), do not conjecture build relative path.
+ * - Each segment is strictly decoded with `decodeURIComponent`: invalid percent-encoding throws immediately (400)
+ *   rather than silently matching literals; decoded `/` (`%2F`) stays inside its segment and never re-splits the path.
+ * - Plugin route declarations (`PluginHost.register(ctx.route)`) carry full mount paths
+ *   `/api/plugins/<encodeURIComponent(id)>/routes/...`; declared and request segments are both decoded to the
+ *   same canonical form before exact comparison (identical segment count), avoiding fragile relative-path reconstruction.
  */
 
 export class PathDecodeError extends Error {
   constructor(segment: string) {
-    super(`path segment contains illegal hundred number encode: ${segment}`)
+    super(`path segment contains invalid percent-encoding: ${segment}`)
     this.name = 'PathDecodeError'
   }
 }
 
-/** strictly decode single path segment; illegal encode throw PathDecodeError(by routing layer mapping 400). */
+/** Strictly decode a single path segment; invalid percent-encoding throws PathDecodeError (mapped to 400 by router). */
 export function decodeSegment(segment: string): string {
   if (!segment.includes('%')) return segment
   try {
@@ -29,7 +28,7 @@ export function decodeSegment(segment: string): string {
   }
 }
 
-/** pathname(already contains /api prefix and otherwise all can)→ strictly decode after segment array. */
+/** Split pathname (with or without `/api` prefix) into strictly decoded segments. */
 export function decodeSegments(pathname: string): string[] {
   return pathname
     .split('/')
@@ -38,10 +37,11 @@ export function decodeSegments(pathname: string): string[] {
 }
 
 /**
- * declaration path → segment array.PluginHost force declaration prefix use encodeURIComponent(pluginId)
- * form (such as /api/plugins/builtin%3Atriggers/routes/...), this where same strictly decode
- * each segment, and request segment (already decode) in the same form under than for. declaration ensure legal encode (register when
- * PluginHost already refuse illegal form), this where decode failed by original use (do not put large is request error).
+ * Convert a declared route path into segments. PluginHost enforces `encodeURIComponent(pluginId)`
+ * in the prefix (e.g. `/api/plugins/builtin%3Atriggers/routes/...`), so decoding each segment here
+ * aligns it with the decoded request segments. Declared paths are guaranteed valid at registration time
+ * (`PluginHost` rejects malformed encodings), so decode failures here propagate as internal errors rather
+ * than being masked as caller request errors.
  */
 export function declaredSegments(declared: string): string[] {
   return declared
@@ -51,9 +51,9 @@ export function declaredSegments(declared: string): string[] {
 }
 
 /**
- * complete path match: already decode request segment against declaration segment (support ':param' occupy).
- * segment count must fully consistent;':param' catch any non-empty segment. request segment now already is decode after form
- * (contains decode out '/' also only compute one segment), declaration segment with plugin register when string is allow.
+ * Full-path match: compare decoded request segments against declared segments (supporting `:param` placeholders).
+ * Segment counts must match exactly; `:param` matches any non-empty segment. Request segments are already
+ * decoded (so a decoded `/` still counts as a single segment); declared segments use the literal strings registered.
  */
 export function matchFullPath(declared: string, requestSegments: string[]): boolean {
   const parts = declaredSegments(declared)
@@ -63,15 +63,15 @@ export function matchFullPath(declared: string, requestSegments: string[]): bool
   )
 }
 
-/** plugin dedicated belong routing prefix:/api/plugins/<encodedId>(encodedId must again decode). */
+/** Plugin-dedicated route prefix segments: `/api/plugins/<encodedId>` (encodedId must still be decoded). */
 export function pluginRoutePrefixSegments(): string[] {
   return ['api', 'plugins']
 }
 
 /**
- * in plugin routing manifest in find unique match (method + complete path).
- * return undefined means without match. request segment must shape such as
- * ['api','plugins',<pluginId>,'routes', ...rest...]; plugin id with decode value than for.
+ * Find the unique matching route (method + full path) in the plugin route list, or `undefined`.
+ * Request segments must have the form `['api', 'plugins', <pluginId>, 'routes', ...rest...]`;
+ * `pluginId` is compared using its decoded value.
  */
 export interface RouteCandidate {
   pluginId: string

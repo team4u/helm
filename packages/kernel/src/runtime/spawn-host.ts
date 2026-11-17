@@ -1,10 +1,10 @@
 /**
- * original generate spawn host port (SpawnHost).
+ * Host interface for native spawns (`SpawnHost`).
  *
- * from runtime.ts split out:spawnAgentObserved this before to runNativeSpawn pass 60+ row
- * inline object literal (ten a few closed package call back), broken flavor path review want seek mention refine is explicit naming interface.
- * SpawnHost = NativeSpawnDeps host side implement contract; type on directly inherit
- * NativeSpawnDeps(single one fact source), document in this one by one port note host semantics.
+ * Extracted from `runtime.ts`: `spawnAgentObserved` previously passed a 60+ line inline object literal
+ * (a dozen closure callbacks) to `runNativeSpawn`, which became hard to maintain and was refined into
+ * a named interface. `SpawnHost` is the host-side implementation contract of `NativeSpawnDeps`, aliasing
+ * `NativeSpawnDeps` directly (single source of truth) while documenting host semantics per port here.
  */
 import type { Harness } from '@earendil-works/pi-durable'
 import type { Models } from '@earendil-works/pi-ai'
@@ -17,21 +17,21 @@ import type { NativeSpawnDeps, ResolvedProfile } from './spawn.js'
 import type { StructuredOutputSession } from './structured-output.js'
 
 /**
- * host inject runNativeSpawn complete dependency collection (mirror register,Profile parse, conversation config
- * update, extend install, attachment chunk construct and node availability validate).
+ * Complete dependency bundle injected by the host into `runNativeSpawn` (snapshot registration, Profile resolution,
+ * conversation config updates, extension installation, attachment block construction, and node availability checks).
  *
- * each port Why note release see spawn.ts  NativeSpawnDeps declaration (single one fact source);
- * this interface only is to it a can in runtime.ts and test in by name reference explicit name.
+ * See `NativeSpawnDeps` in `spawn.ts` for per-port rationale (single source of truth);
+ * this alias exists purely so `runtime.ts` and tests can reference it by an explicit name.
  */
 export type SpawnHost = NativeSpawnDeps
 
-/** already authorization attachment (store in + parent chain ownership validate complete;prompt piece together install use). */
+/** Authorized attachments (validated for existence and parent-chain ownership; used for prompt assembly). */
 export interface ResolvedAttachmentRef {
   ref: ConversationAttachmentRef
   absPath: string
 }
 
-/** construct SpawnHost host capability side (KernelRuntime implement inject). */
+/** Host capability provider used to construct `SpawnHost` (implemented and injected by `KernelRuntime`). */
 export interface SpawnHostSource {
   readonly toolDeps: HelmToolDeps
   readonly harness: Harness
@@ -40,31 +40,31 @@ export interface SpawnHostSource {
   }
   readonly defaultModel: string | undefined
   readonly defaultThinkingLevel: string | undefined
-  /** when before Models set (think Profile capability converge use; default do not converge). */
+  /** Current `Models` catalog (used to clamp Profile reasoning effort; no clamping if omitted). */
   readonly models?: () => Models
-  /** model disable preflight (ModelRegistry.assertModelEnabled; create sub-conversation before reject disable model). */
+  /** Disabled-model preflight (`ModelRegistry.assertModelEnabled`; rejects disabled models before creating a child conversation). */
   assertModelEnabled?(provider: string, modelId: string): void
   readonly agentSessions: Map<string, number>
-  /** this Harness sharing structure output result slot (host hold has; concurrency spawn isolated rely conversationId key). */
+  /** Structured-output result slots shared across the Harness (host-owned; concurrent spawns are isolated by `conversationId` key). */
   readonly structuredOutputSessions: Map<number, StructuredOutputSession>
   readonly resolvedAttachments: ResolvedAttachmentRef[] | undefined
   isNodeOnline(nodeId: string): boolean
-  /** [Attached Files] manifest chunk (without body text prefix;spawn task prompt use). */
+  /** `[Attached Files]` manifest block (without body prefix; used in spawn task prompt). */
   buildAttachmentBlock(resolved: ResolvedAttachmentRef[]): string
-  /** read real Profile(missing return undefined; corrupt by host explicit errors). */
+  /** Read raw Profile (returns `undefined` if missing; throws explicitly if corrupted). */
   readProfileForSpawn(profileId: string): Promise<Profile | undefined>
-  /** conversation mirror read (missing return undefined). */
+  /** Read conversation snapshot (returns `undefined` if missing). */
   getConvMeta(childId: number): { modelOverride?: string; parentConversationId?: number } | undefined
-  /** tracker right threat summary (missing return undefined). */
+  /** Authoritative tracker summary (returns `undefined` if missing). */
   getConversationSummary(childId: number): ConversationSummary | undefined
-  /** re- use host updateConversation(SDK configure + mirror + inherit chain). */
+  /** Reuse host `updateConversation` (SDK configuration + snapshot + inheritance chain). */
   updateConversation(childId: number, patch: ConversationPatch): Promise<ConversationSummary>
-  /** per-child SDK extend install (same name heavy install is original ground replace). */
+  /** Install a per-child SDK extension (re-installing under the same name replaces in place). */
   installExtension(extension: NativeSpawnDeps['installChildExtension'] extends (e: infer E) => void ? E : never): void
   /**
-   * sub-conversation register (mirror upsert + helm ownership + observe + create i.e. broadcast).
-   * parentToolCallId by buildSpawnHost from eventually request pass-through (explicit parameter, avoid
-   * closed package in implicit catch transform after request).
+   * Child conversation registration (snapshot upsert + helm ownership + observe + broadcast creation).
+   * `parentToolCallId` is passed through from the final request by `buildSpawnHost` (explicit parameter
+   * to avoid implicitly capturing the post-transform request inside a closure).
    */
   registerChildConversation(
     childId: number,
@@ -76,31 +76,32 @@ export interface SpawnHostSource {
     thinkingLevel: string | undefined,
     nodeId: string | undefined,
     parentToolCallId: string | undefined,
-    /** converge after explicit think Profile override (request.effort not provide when undefined). */
+    /** Clamped explicit reasoning effort override (`undefined` if `request.effort` was not provided). */
     thinkingLevelOverride: string | undefined,
   ): Promise<void>
-  /** resume resume when update sub-conversation parentToolCallId(mirror + broadcast). */
+  /** Update child conversation's `parentToolCallId` on resume (snapshot + broadcast). */
   bindChildToolCall(childId: number, parentToolCallId: string): void
   /**
-   * guard style abort sub-conversation (signal bridge/startup phase cancel hard rule entry): implement now read ownership fact
-   * and via kernel abortConversationGuarded atomic re-check (human-owned one rule reject).
-   * default do not connect line when spawn fall back SDK conversation.abort(original cancel capability).
+   * Guarded child conversation abort (sole mandatory entry for signal bridge / startup cancellation):
+   * reads current ownership fact and re-verifies atomically via kernel `abortConversationGuarded` (always rejects human-owned).
+   * Falls back to SDK `conversation.abort` (raw cancel capability) when unwired.
    */
   abortChildConversationGuarded?(childId: number): Promise<void>
   /**
-   * optional:fork derive when parse parent conversation clean fork anchor item ID(host in hook chain before can pre- lock,
-   * never because concurrency push enter or after continue worktree allocate before window drift; missing seat when fall back resolveCleanForkAnchor).
+   * Optional: resolve a clean fork anchor entry ID in the parent conversation when deriving a fork
+   * (pre-locked by host before the hook chain to prevent drift from concurrent pushes or worktree allocation;
+   * falls back to `resolveCleanForkAnchor` if unset).
    */
   resolveForkAnchor?(parentId: number): Promise<number>
 }
 
 export interface SpawnHostOptions {
   readonly source: SpawnHostSource
-  /** agent_spawn transform after eventually request. */
+  /** Final request after `agent_spawn` transforms. */
   readonly finalRequest: AgentSpawnRequest
 }
 
-/** Profile -> ResolvedProfile field trim (only keep spawn closure center key). */
+/** Trim `Profile` down to the core fields needed by the spawn closure (`ResolvedProfile`). */
 export function toResolvedProfile(profile: Profile): ResolvedProfile {
   return {
     ...(profile.model ? { model: profile.model } : {}),
@@ -111,7 +112,7 @@ export function toResolvedProfile(profile: Profile): ResolvedProfile {
   }
 }
 
-/** by host capability side construct runNativeSpawn dependency collection (original 60+ row inline literal explicit alternative). */
+/** Construct the dependency bundle for `runNativeSpawn` from the host capability provider (replaces the former 60+ line inline literal). */
 export function buildSpawnHost(options: SpawnHostOptions): SpawnHost {
   const { source, finalRequest } = options
   return {
@@ -130,7 +131,7 @@ export function buildSpawnHost(options: SpawnHostOptions): SpawnHost {
     structuredOutputSessions: source.structuredOutputSessions,
     assertNodeAvailable: (nodeId) => {
       if (!source.isNodeOnline(nodeId)) {
-        throw new HelmError('node_offline', `target node ${nodeId} offline, cannot start subagent`, 409, { nodeId })
+        throw new HelmError('node_offline', `Target node '${nodeId}' is offline; cannot start subagent`, 409, { nodeId })
       }
     },
     resolveAttachmentsForPrompt:
@@ -156,8 +157,8 @@ export function buildSpawnHost(options: SpawnHostOptions): SpawnHost {
     },
     getModelOverride: (childId) => source.getConvMeta(childId)?.modelOverride,
     getParentOfConversation: (childId) => source.getConvMeta(childId)?.parentConversationId,
-    // resume config baseline port: mirror read and real update (SDK configure + persist +
-    // model inherit chain, re- use host updateConversation, do not rebuild identity field).
+    // Baseline port for resume config: snapshot read + real update (SDK configuration + persistence +
+    // model inheritance chain, reusing host updateConversation rather than rebuilding identity fields).
     getConversation: (childId) => source.getConversationSummary(childId),
     updateConversation: (childId, patch) => source.updateConversation(childId, patch),
     installChildExtension: (extension) => source.installExtension(extension),

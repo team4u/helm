@@ -1,27 +1,26 @@
 /**
- * environment orchestration (EnvFabric): by target provide pi-durable ExecutionEnv.
+ * Environment orchestration (`EnvFabric`): provides `pi-durable` `ExecutionEnv` instances per target.
  *
- * - `local`: directly re- use pi-durable  NodeExecutionEnv(process inside, without RPC);
- * - remote BYOM node:RemoteExecutionEnv over NodeRegistry(WS+birpc);
- *   remote node offline when wait for reconnect (can cancel),**never back to local**;
- * - environment option inject (managed HELM_TOKEN / HELM_HUB_URL / HELM_CONVERSATION_ID /
- *   SecretStash secret) via envOptions call back together into: secret service in fabric external,
- *   fabric only consume call back result, do not hold has secret;
- * - IPC bridge (ipcCall / ipcSubscribe): supply optional plugin (such as builtin:herdr) via
- *   node channel connect target machine on Unix Socket / Named Pipe, across node same construct.
+ * - `local`: reuses `pi-durable`'s `NodeExecutionEnv` in-process (no RPC);
+ * - Remote BYOM nodes: `RemoteExecutionEnv` over `NodeRegistry` (WS+birpc);
+ *   waits for reconnect when offline (cancellable) and **never falls back to local**;
+ * - Env option injection (managed `HELM_TOKEN` / `HELM_HUB_URL` / `HELM_CONVERSATION_ID` /
+ *   SecretStash secrets) via the `envOptions` callback: the secret service lives outside fabric,
+ *   and fabric only consumes the callback output without holding secrets itself;
+ * - IPC bridge (`ipcCall` / `ipcSubscribe`): lets optional plugins (e.g. `builtin:herdr`) connect
+ *   to Unix Sockets / Named Pipes on the target machine over the node channel, consistently across nodes.
  *
- * cache lifecycle (has boundary, without reference counter/LRU framework):
- * - **has conversation target (envForTarget and carries conversationId)**: by
- *   (conversationId, nodeId, cwd) cache bottom seat; conversation delete (deleteConversation)
- *   or modify nodeId/cwd(updateConversation) when evictConversation release the conversation
- *   all item. drive one by one only remove cache item, never invoke cleanup kill in-flight command - - the conversation
- *   in-flight exec/reader still hold has old instance reference and self however complete (abort path another row precise kill),
- *   instance follow finally a in-flight operation end by GC, cache do not increase long also do not mistakenly kill.
- * - **without conversation target (envFor / envForTarget without conversationId)**: short lifecycle
- *   object - - each time invoke create all new instance, use after i.e. abandon, never enter cache (herdr file handover,
- *   gate, without conversation HTTP exec all is short sequence). remote instance output sink by
- *   RemoteExecutionEnv by exec lifecycle self register/self deregister (see remote-env.ts),
- *   object discard i.e. without register leftover, does not need caller explicit release.
+ * Cache lifecycle (bounded without ref-counting or LRU machinery):
+ * - **Conversation-scoped targets (`envForTarget` with `conversationId`)**: cached per
+ *   `(conversationId, nodeId, cwd)`; `evictConversation` removes all entries for a conversation when
+ *   it is deleted or its `nodeId`/`cwd` changes. Eviction only removes cache entries and never calls
+ *   `cleanup` to kill in-flight commands—active `exec`/readers keep referencing the old instance and
+ *   finish normally (aborts kill explicitly elsewhere), and the instance is GC'd after the last in-flight
+ *   operation finishes (no unbounded growth, no accidental kills);
+ * - **Non-conversation targets (`envFor` / `envForTarget` without `conversationId`)**: short-lived
+ *   objects—created fresh on every call and discarded after use, never cached (herdr file handoffs,
+ *   gates, non-conversation HTTP execs). Remote instances self-register/unregister output sinks per
+ *   `exec` lifecycle (see `remote-env.ts`), leaving nothing in registries when discarded.
  */
 
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
@@ -63,7 +62,7 @@ export type { NodeTunnelGateway, NodeTunnelGatewayOptions } from './ws-tunnel-ga
 export { createScopedExecutionEnv } from './scoped-env.js'
 export type { EnvTarget, ScopedExecutionEnv } from './scoped-env.js'
 
-/** exec when together into environment option (secret and identity inject unique channel). */
+/** Injects environment options at exec time (sole channel for secrets and identity injection). */
 export type EnvOptionsComposer = (input: {
   nodeId: string
   cwd: string
@@ -72,30 +71,29 @@ export type EnvOptionsComposer = (input: {
 
 export interface EnvFabricOptions {
   /**
-   * Hub platform fact (default process.platform). only used to test or subject to control host inject; produce
-   * must not fabricate local machine platform, remote platform still only take node register on report value.
+   * Hub host platform (defaults to `process.platform`). Only injected by tests or controlled hosts;
+   * production never fabricates the local platform, and remote platforms always use values reported at node registration.
    */
   hubPlatform?: () => string | undefined
-  /** node token authentication (by external sign table provide; default reject everything register). */
+  /** Node token authenticator (provided by external token store; defaults to rejecting all registrations). */
   authenticate?: (nodeId: string, token: string) => boolean | Promise<boolean>
-  /** heartbeat interval/timeout (milli second). */
+  /** Heartbeat interval and offline timeout (ms). */
   heartbeatIntervalMs?: number
   heartbeatTimeoutMs?: number
   /**
-   * environment option inject call back:exec before together into additional env(such as HELM_HUB_URL,
-   * HELM_CONVERSATION_ID, managed HELM_TOKEN,SecretStash secret). by external
-   * secret service combine - -fabric do not hold has any secret.
+   * Callback injecting extra env vars before exec (e.g. `HELM_HUB_URL`, `HELM_CONVERSATION_ID`,
+   * managed `HELM_TOKEN`, SecretStash secrets). Wired externally to the secret service—fabric holds no secrets.
    */
   envOptions?: EnvOptionsComposer
-  /** local exec  PATH pre- directory (helm CLI wrap directory; default do not pre-). */
+  /** Directory prepended to PATH for local exec (helm CLI wrapper dir; defaults to none). */
   cliBinDir?: () => string | undefined
-  /** remote file operation parse RPC wait for reconnect cap (milli second); default see remote-env.ts. */
+  /** Cap on waiting for reconnect during remote file RPCs (ms); see `remote-env.ts` for default. */
   remoteRpcWaitTimeoutMs?: number
-  /** asset release failed diagnose log (dispose exhaust force clean up path; default console.error). */
+  /** Diagnostic logger when releasing resources fails during `dispose` fallback cleanup (defaults to `console.error`). */
   logReleaseError?: (message: string) => void
 }
 
-/** for outside only read diagnose opening path (debugBases; does not participate business logic). */
+/** Read-only diagnostic snapshot for external inspection (`debugBases`; never affects business logic). */
 export interface EnvTargetSnapshot {
   key: string
   nodeId: string
@@ -103,42 +101,42 @@ export interface EnvTargetSnapshot {
   conversationId?: number
 }
 
-/** for runtime expose most small port. */
+/** Minimal surface exposed to the runtime. */
 export interface EnvFabric {
-  /** inside create register table (WS gateway connect line use:attachNodeWsGateway(server, { registry })). */
+  /** Internal connection registry (used to wire WS gateway: `attachNodeWsGateway(server, { registry })`). */
   readonly registry: NodeRegistry
   /**
-   * without conversation effect domain execute environment (herdr file handover / gate / without conversation HTTP exec):
-   * **short lifecycle object**- - each time invoke all new instance, use after i.e. abandon, never cache.local
-   * process inside direct create; remote via RPC; unknown node return Remote env(operation when wait for reconnect),
-   * **never back local**.
+   * Unscoped execution environment (herdr file handoffs / gates / unscoped HTTP exec):
+   * **short-lived instance**—created fresh on every call and discarded after use, never cached.
+   * Local runs directly in-process; remote goes over RPC; unknown nodes return a `RemoteExecutionEnv`
+   * (waits for reconnect on use), **never falling back to local**.
    */
   envFor(nodeId: string, cwd: string): ExecutionEnv
   /**
-   * conversation effect domain execute environment (recommend entry): the same (nodeId,cwd) concurrency conversation each gets
-   * independent env option effect domain - - each command envOptions live together into (fresh, contains
-   * bind set managed token / HELM_CONVERSATION_ID / SecretStash secret), never
-   * cache or borrow use on a conversation option snapshot. sharing transfer (same node a connect),
-   * one by one command option isolated. without conversationId when do not inject any secret (fail-closed),
-   * and does not enter cache (short lifecycle). carries conversationId when bottom seat by conversation cache,
-   * conversation delete/target change via evictConversation release.
+   * Conversation-scoped execution environment (preferred entrypoint): concurrent conversations sharing
+   * `(nodeId, cwd)` each get an isolated env-option scope—every command invokes `envOptions` freshly
+   * (bound managed token / `HELM_CONVERSATION_ID` / SecretStash secrets) without caching or borrowing
+   * another conversation's snapshot. Transport stays shared (one connection per node), while per-command
+   * env options stay isolated. When `conversationId` is omitted, no secrets are injected (fail-closed)
+   * and instances are short-lived (not cached); when `conversationId` is present, instances are cached
+   * per conversation and released via `evictConversation` on deletion or target change.
    */
   envForTarget(target: EnvTarget): ScopedExecutionEnv
-  /** remote node is otherwise online (local constant true). */
+  /** Whether a remote node is online (`local` is always true). */
   isOnline(nodeId: string): boolean
-  /** wait for remote node enable (can cancel);local constant is true. */
+  /** Wait for a remote node to come online (cancellable); `local` is always true. */
   waitForOnline(nodeId: string, context: Context): Promise<boolean>
   /**
-   * node local machine single time IPC invoke (across node connect target machine on Unix Socket / Named
-   * Pipe). node unsupported IPC bridge or node offline when explicit errors (fail-fast, not silently fall back);
-   * node upgrade arrange empty refuse new when RpcResult keep original node_draining error code (connect still in,
-   * and offline/cancel can zone, by caller such as builtin:herdr self row type).
+   * Single-shot local-IPC call on a node (connects to a Unix Socket / Named Pipe on the target machine
+   * across nodes). Throws explicitly if IPC bridge is unsupported or node is offline (fail-fast, no silent fallback);
+   * preserves `node_draining` in `RpcResult` when the node is draining for upgrade (connection is still alive
+   * and distinguishable from offline/cancelled so callers like `builtin:herdr` can classify it).
    */
   ipcCall(nodeId: string, input: NodeIpcCallInput, signal?: AbortSignal): Promise<RpcResult<string>>
   /**
-   * node local machine streaming IPC subscribe:onLine one by one row call back;onClosed in end/disconnect/cancel when
-   * exactly call back once; return function used to actively stop subscribe. node unsupported when throws; node
-   * upgrade arrange empty refuse new when throw HelmError node_draining(503).
+   * Streaming local-IPC subscription on a node: `onLine` fires per line; `onClosed` fires exactly once
+   * on end/disconnect/cancel; returns a stop function. Throws if unsupported; throws `HelmError('node_draining', ..., 503)`
+   * if the node is draining for upgrade.
    */
   ipcSubscribe(
     nodeId: string,
@@ -147,25 +145,25 @@ export interface EnvFabric {
     onClosed: (error?: string) => void,
     signal?: AbortSignal,
   ): Promise<() => void>
-  /** node register when on report hubUrl(remote managed child process back connect address guard constant). */
+  /** Hub URL reported by a node at registration (kept current for remote spawned processes connecting back). */
   getNodeHubUrl(nodeId: string): string | undefined
   /**
-   * Hub platform fact most small only read port: default process.platform, test can explicit inject.
-   * target platform specification only via this port read local can test Hub fact; produce must not fabricate.
+   * Minimal read-only port for Hub host platform: defaults to `process.platform` and is injectable in tests.
+   * Target-platform normalization uses this only for local (or test-configured Hub) facts; never fabricated in production.
    */
   readonly hubPlatform?: () => string | undefined
   /**
-   * node platform (process.platform opening path) most small only read port:local constant Hub host;
-   * remote only take register register value (not on report or offline return undefined). caller based on this do target
-   * platform aware path specification - - platform unknown when do not guess, do not fallback Hub host platform.
+   * Minimal read-only port for a node's platform (`process.platform` format): `local` always returns Hub host;
+   * remote returns the value reported at registration (undefined if unreported or offline). Callers use this for
+   * target-platform-aware path normalization—never guessing or falling back to Hub platform when unknown.
    */
   nodePlatformOf(nodeId: string): string | undefined
   /**
-   * file mutual exclusion queue (target node canonical path serial): in (nodeId, cwd) target inside
-   * fn read-change-write window and kernel write/edit tool arrange the same queue (same file do not lose update;
-   * other file/node mutual without waiting; symlink alias same key; new file by canonical parent directory concatenate).
-   * local directly in Hub process queue execute; remote via short lifecycle RemoteExecutionEnv.
-   * is not for bash/external process lock, also cannot heavy; detail see env/file-mutation-queue.ts.
+   * Per-file mutation mutex queue (serialized per canonical path on target node): wraps read-modify-write
+   * windows inside `(nodeId, cwd)` in the exact same queue as kernel `write`/`edit` tools (prevents lost updates
+   * on the same file while leaving other files/nodes unblocked; symlink aliases share one key; new files join
+   * their canonical parent dir). Local runs in-process; remote uses a short-lived `RemoteExecutionEnv`.
+   * Does not lock bash/external processes and is non-reentrant; see `env/file-mutation-queue.ts`.
    */
   withFileMutationQueue<T>(
     target: { nodeId: string; cwd: string; path: string },
@@ -173,81 +171,78 @@ export interface EnvFabric {
     signal?: AbortSignal,
   ): Promise<T>
   /**
-   * one etc. public civilian any TCP tunnel: establish to target node host:port original Duplex.
-   * - local:Hub process inside net.connect direct connect;
-   * - remote: re- use registry.openTunnel(since has WS tunnel gateway, do not another create transfer);
-   * - unknown/offline node explicit HelmError(node_offline 409), never fall back local;
-   * - abort/timeout/error explicit throw and guarantee asset release (duplex without leaking).
-   * host by node parse and connect (omit when target is 127.0.0.1).
+   * First-class arbitrary TCP tunnel primitive: opens a raw Duplex to `host:port` on the target node.
+   * - `local`: direct in-process `net.connect`;
+   * - remote: reuses `registry.openTunnel` (served by the dedicated WS tunnel gateway without a second transport);
+   * - unknown/offline node: throws `HelmError('node_offline', ..., 409)` explicitly, never falling back to local;
+   * - abort/timeout/error: throws explicitly and guarantees resource cleanup (no leaked Duplex).
+   * `host` is resolved and connected on the node (defaults to `127.0.0.1` if omitted).
    */
   openTunnel(nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal): Promise<Duplex>
   /**
-   * node local machine HTTP(S) fetch adapt layer (based on openTunnel):local directly return
-   * globalThis.fetch; remote support any host and http/https- -http via tunnel
-   * Duplex on node:http.request(createConnection),https in tunnel Duplex
-   * on stack node:tls.connect(servername/certificate validate) after hand over to node:http.request;
-   * 4xx/5xx still return Response, establish/transfer/disconnect error mapping HelmError, never fall back
-   * local. supply plugin (ctx.host.nodeFetch) access target node perspective HTTP(S) service.
+   * Node-local HTTP(S) fetch adapter (layered on `openTunnel`): `local` returns `globalThis.fetch` directly;
+   * remote supports arbitrary hosts and http/https—http passes the tunnel Duplex to `node:http.request`
+   * (`createConnection`), while https stacks `node:tls.connect` (SNI + cert verification) onto the tunnel
+   * Duplex before handing it to `node:http.request`. 4xx/5xx return Responses intact; connect/transport/disconnect
+   * errors map to HelmError without ever falling back to local. Exposed to plugins via `ctx.host.nodeFetch`.
    */
   nodeFetch(nodeId: string): typeof fetch
   /**
-   * target node process occupy snapshot (before deletion diagnose side; non- across process mutual exclusion):
-   * - local:Hub process inside real /proc only read scan (zero helper spawn, do not use target cwd
-   *   start any child process); only read cwd/fd/comm locate information, never read cmdline/environ;
-   * - remote: via envPathUsage RPC in target node scan,**never fall back local machine**; node
-   *   offline throw 409 node_offline, old edition daemon without this method throw 501
-   *   path_usage_not_supported, can observability set inside non- permission class exception or cap trigger when return
-   *   complete=false(caller must fail-closed, never when 0 occupy); permission
-   *   cannot observability process (across uid or non-dumpable, such as systemd --user) count
-   *   unobservable and in diagnostics such as present (does not affect complete, and Hub
-   *   same uid ordinary can rotate store process forever can observability);
-   * - non- Linux platform explicit not_supported(HelmError path_usage_not_supported).
+   * Snapshot of processes occupying a path on the target node (pre-deletion diagnostics; not a cross-process mutex):
+   * - `local`: read-only `/proc` scan inside the Hub process (zero helper spawns; never spawns inside target cwd);
+   *   only inspects `cwd`/`fd`/`comm`, never `cmdline`/`environ`;
+   * - remote: scans on the target node via `envPathUsage` RPC, **never falling back to local**; offline nodes throw
+   *   `409 node_offline`, older daemons missing the method throw `501 path_usage_not_supported`, non-permission
+   *   errors or cap hits during observability return `complete=false` (callers must fail-closed rather than treating
+   *   as zero usage); permission-blocked processes (cross-uid or non-dumpable like `systemd --user`) increment
+   *   `unobservable` and appear in `diagnostics` without clearing `complete` (same-uid Hub-managed processes stay observable);
+   * - non-Linux platforms fail explicitly with `not_supported` (`HelmError('path_usage_not_supported')`).
    */
   inspectPathUsage(nodeId: string, path: string, signal?: AbortSignal): Promise<NodePathUsage>
   /**
-   * release a certain conversation all target cache: only remove bases item (never invoke cleanup kill
-   * the conversation in-flight command - - in-flight exec/reader hold old instance self however complete, see file head note release).
-   * conversation delete or modify nodeId/cwd when invoke.
+   * Release all cached target instances for a conversation: deletes entries only (never calls `cleanup` to kill
+   * in-flight commands—active `exec`/readers finish using their held references; see file header comment).
+   * Called on conversation deletion or `nodeId`/`cwd` updates.
    */
   evictConversation(conversationId: number): void
-  /** when before target cache item count (diagnose/test inside omit; does not participate business logic). */
+  /** Current number of cached target entries (diagnostics/tests only; never affects business logic). */
   debugBaseCount(): number
-  /** all bottom seat purpose only read diagnose (test/observability use; does not participate business logic). */
+  /** Read-only snapshot of cached target entries (tests/observability only; never affects business logic). */
   debugBases(): EnvTargetSnapshot[]
-  /** dispose: remote env clean up + register table close; idempotent; single failed such as record not silently. */
+  /** Shut down: clean up remote envs and close registry; idempotent; logs individual failures rather than swallowing them. */
   dispose(): Promise<void>
 }
 
 /**
- * RPC boundary outside node snapshot strictly validate (AGENTS.md boundary schema discipline; illegal shape/
- * and request do not related join/self each other contradiction snapshot explicit reject, never part adopt message - - node return other
- * directory empty snapshot cannot use act this directory clean up based on).
+ * Strict RPC-boundary validation of node path-usage snapshots (`AGENTS.md` boundary schema discipline):
+ * explicitly rejects malformed shapes, mismatched targets, or self-contradictory counts without accepting
+ * partial snapshots (an empty snapshot from another directory must never justify deleting this directory).
  */
 function validatePathUsageSnapshot(nodeId: string, expectedPath: string, value: unknown): NodePathUsage {
   const fail = (reason: string): HelmError =>
-    new HelmError('node_path_usage_failed', `node ${nodeId} return process occupy snapshot illegal (${reason}), reject adopt message`, 502, {
+    new HelmError('node_path_usage_failed', `node ${nodeId} returned an invalid process-usage snapshot (${reason}); refusing to use it`, 502, {
       nodeId,
       expectedPath,
     })
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw fail('non- object')
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw fail('not an object')
   const v = value as Record<string, unknown>
-  // and request related: snapshot must back visible archive one after target path (guard against take wrong snapshot fill when this directory based on).
+  // Request correlation: snapshot must echo the normalized target path (prevents substituting another directory's snapshot).
   if (v['path'] !== expectedPath) {
-    throw fail(`path and request do not symbol (expectation ${JSON.stringify(expectedPath)}, receives ${JSON.stringify(String(v['path']))})`)
+    throw fail(`path does not match request (expected ${JSON.stringify(expectedPath)}, got ${JSON.stringify(String(v['path']))})`)
   }
-  if (!Array.isArray(v['processes'])) throw fail('processes non- array')
-  if (v['processes'].length > 512) throw fail('processes exceeds together cap 512')
+  if (!Array.isArray(v['processes'])) throw fail('processes is not an array')
+  if (v['processes'].length > 512) throw fail('processes exceeds array cap of 512')
   const processes: NodePathUsageProcess[] = []
   const seenPids = new Set<number>()
   for (const raw of v['processes']) {
-    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw fail('processes item non- object')
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw fail('processes item is not an object')
     const p = raw as Record<string, unknown>
-    if (!Number.isSafeInteger(p['pid']) || (p['pid'] as number) <= 0) throw fail('pid non- positive integer')
-    if (seenPids.has(p['pid'] as number)) throw fail(`processes contains duplicate PID ${p['pid']}(same process many reference should dedupe)`)
+    if (!Number.isSafeInteger(p['pid']) || (p['pid'] as number) <= 0) throw fail('pid is not a positive integer')
+    if (seenPids.has(p['pid'] as number)) throw fail(`processes contains duplicate PID ${p['pid']} (multiple references per process must be deduplicated)`)
     seenPids.add(p['pid'] as number)
-    if (p['source'] !== 'cwd' && p['source'] !== 'fd') throw fail('source non- cwd|fd')
-    if (typeof p['path'] !== 'string' || p['path'] === '') throw fail('process path non- non-empty string')
-    if (p['name'] !== undefined && typeof p['name'] !== 'string') throw fail('name non- string')
+    if (p['source'] !== 'cwd' && p['source'] !== 'fd') throw fail('source is not cwd|fd')
+    if (typeof p['path'] !== 'string' || p['path'] === '') throw fail('process path is not a non-empty string')
+    if (p['name'] !== undefined && typeof p['name'] !== 'string') throw fail('name is not a string')
     processes.push({
       pid: p['pid'] as number,
       ...(p['name'] !== undefined ? { name: p['name'] as string } : {}),
@@ -255,30 +250,30 @@ function validatePathUsageSnapshot(nodeId: string, expectedPath: string, value: 
       path: p['path'] as string,
     })
   }
-  if (!Number.isSafeInteger(v['matchedTotal']) || (v['matchedTotal'] as number) < 0) throw fail('matchedTotal non- non- negative integer')
+  if (!Number.isSafeInteger(v['matchedTotal']) || (v['matchedTotal'] as number) < 0) throw fail('matchedTotal is not a non-negative integer')
   const matchedTotal = v['matchedTotal'] as number
-  if (typeof v['processesTruncated'] !== 'boolean') throw fail('processesTruncated non- boolean')
+  if (typeof v['processesTruncated'] !== 'boolean') throw fail('processesTruncated is not a boolean')
   const truncated = v['processesTruncated'] as boolean
-  // counter and manifest self consult: total count must not less than manifest count; truncate means total count greater than manifest count; not truncate
-  // when two must each other etc. (such as truncated=true while matchedTotal=0 is contradiction).
-  if (matchedTotal < processes.length) throw fail(`matchedTotal(${matchedTotal}) less than manifest count(${processes.length})`)
+  // Self-consistency between count and list: total cannot be less than list length; truncated implies total > list;
+  // non-truncated requires exact equality (e.g. truncated=true with matchedTotal=0 is self-contradictory).
+  if (matchedTotal < processes.length) throw fail(`matchedTotal (${matchedTotal}) is less than list length (${processes.length})`)
   if (truncated && matchedTotal <= processes.length) {
-    throw fail(`processesTruncated=true but matchedTotal(${matchedTotal}) not exceeds manifest count(${processes.length})`)
+    throw fail(`processesTruncated=true but matchedTotal (${matchedTotal}) does not exceed list length (${processes.length})`)
   }
   if (!truncated && matchedTotal !== processes.length) {
-    throw fail(`not truncate but matchedTotal(${matchedTotal}) and manifest count(${processes.length})inconsistent`)
+    throw fail(`not truncated, but matchedTotal (${matchedTotal}) disagrees with list length (${processes.length})`)
   }
-  if (typeof v['complete'] !== 'boolean') throw fail('complete non- boolean')
-  // permission cannot observability (across uid or non-dumpable) blind spot counter: store in when must be non- negative
-  // security integer; default by 0 adopt message (old node any durable reject all report complete=false,
-  // default 0 semantics security - - will not blind spot disguise into complete and zero blind spot clean snapshot).
+  if (typeof v['complete'] !== 'boolean') throw fail('complete is not a boolean')
+  // Blind-spot counter for unobservable processes (cross-uid or non-dumpable): must be a non-negative safe integer
+  // when present; defaults to 0 when omitted (older nodes already report complete=false on any denial, so defaulting to 0
+  // never turns blind spots into clean zero-blind-spot complete snapshots).
   if (v['unobservable'] !== undefined && (!Number.isSafeInteger(v['unobservable']) || (v['unobservable'] as number) < 0)) {
-    throw fail('unobservable non- non- negative integer')
+    throw fail('unobservable is not a non-negative integer')
   }
   const unobservable = (v['unobservable'] as number | undefined) ?? 0
-  if (!Array.isArray(v['diagnostics'])) throw fail('diagnostics non- array')
-  if (v['diagnostics'].length > 128) throw fail('diagnostics exceeds together cap 128')
-  if (v['diagnostics'].some((d) => typeof d !== 'string')) throw fail('diagnostics item non- string')
+  if (!Array.isArray(v['diagnostics'])) throw fail('diagnostics is not an array')
+  if (v['diagnostics'].length > 128) throw fail('diagnostics exceeds array cap of 128')
+  if (v['diagnostics'].some((d) => typeof d !== 'string')) throw fail('diagnostics item is not a string')
   return {
     path: v['path'] as string,
     processes,
@@ -293,8 +288,8 @@ function validatePathUsageSnapshot(nodeId: string, expectedPath: string, value: 
 export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
   const { envOptions, cliBinDir } = options
   const logReleaseError = options.logReleaseError ?? ((message: string) => console.error(`[helm] env fabric: ${message}`))
-  // **bottom seat by conversation target cache**: only envForTarget(carries conversationId) use - -
-  // conversation lifecycle has boundary (evictConversation release). without conversation target each time creates new.
+  // **Cache target backends only per conversation**: used solely by `envForTarget` with `conversationId`
+  // (bounded by conversation lifetime via `evictConversation`). Unscoped targets always create fresh instances.
   const bases = new Map<string, ExecutionEnv>()
   const closing = new AbortController()
   const localTunnels = new Set<Duplex>()
@@ -316,13 +311,13 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
   const baseKey = (nodeId: string, cwd: string, conversationId: number): string =>
     `${nodeId}\u0000${cwd}\u0000${conversationId}`
 
-  /** baseKey conversation segment. */
+  /** Extract conversationId segment from `baseKey`. */
   const conversationIdOfKey = (key: string): number | undefined => {
     const part = key.split('\u0000')[2]
     return part !== undefined && part !== '-' && /^\d+$/.test(part) ? Number(part) : undefined
   }
 
-  /** without cache creates new bottom seat:local process inside direct create; remote Remote(sink by exec lifecycle self manage). */
+  /** Create an uncached backend: local runs in-process; remote uses `RemoteExecutionEnv` (manages sinks per exec). */
   const freshBase = (nodeId: string, cwd: string): ExecutionEnv =>
     nodeId === 'local'
       ? createLocalExecutionEnv({ cwd })
@@ -335,7 +330,7 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
           },
         )
 
-  /** take (or create) conversation target dedicated belong bottom seat (only carries conversationId target enter cache). */
+  /** Get or create the dedicated backend for a conversation target (only targets with `conversationId` enter cache). */
   const baseFor = (nodeId: string, cwd: string, conversationId: number): ExecutionEnv => {
     const key = baseKey(nodeId, cwd, conversationId)
     let entry = bases.get(key)
@@ -346,26 +341,26 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
     return entry
   }
 
-  /** wait for node online rpc(IPC bridge shared use; without waiting reconnect, offline i.e. explicit errors). */
+  /** Require an online node's RPC (shared by IPC bridge; fails immediately when offline without waiting for reconnect). */
   const requireRpc = async (nodeId: string, signal?: AbortSignal): Promise<NodeEnvRpcFunctions> => {
-    if (signal?.aborted) throw new HelmError('aborted', 'IPC invoke cancelled', 499)
+    if (signal?.aborted) throw new HelmError('aborted', 'IPC call cancelled', 499)
     const rpc = registry.getNodeEnvRpc(nodeId)
     if (rpc !== undefined) return rpc
-    throw new HelmError('node_offline', `node ${nodeId} offline, cannot establish IPC channel`, 409, { nodeId })
+    throw new HelmError('node_offline', `node ${nodeId} is offline; cannot establish IPC channel`, 409, { nodeId })
   }
 
   return {
     registry,
     hubPlatform,
     envFor(nodeId: string, cwd: string): ExecutionEnv {
-      // without conversation short lifecycle object: never cache (same cwd reverse re- use also do not heap accumulate instance).
+      // Unscoped short-lived object: never cached (repeated calls for the same cwd never accumulate instances).
       return freshBase(nodeId, cwd)
     },
 
     envForTarget(target: EnvTarget): ScopedExecutionEnv {
-      // target dedicated belong bottom seat + conversation option effect domain: the same (nodeId,cwd) two conversation bottom seat
-      // instance independent (cwd mutual do not pollute), option each live together into. without conversationId 
-      // target does not enter cache (short lifecycle;fail-closed do not inject secret).
+      // Target-dedicated backend + conversation option scope: two conversations sharing `(nodeId, cwd)` get
+      // independent backends (cwd mutations stay isolated) and fresh per-call option injection. Unscoped targets
+      // (without `conversationId`) skip the cache (short-lived; fail-closed with no secrets injected).
       const base =
         target.conversationId === undefined
           ? freshBase(target.nodeId, target.cwd)
@@ -388,17 +383,17 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
       const ipcCallFn = rpc.ipcCall
       const ipcAbort = rpc.ipcAbortCall
       if (ipcCallFn === undefined) {
-        throw new HelmError('ipc_not_supported', `node ${nodeId} daemon unsupported local machine IPC invoke`, 501, {
+        throw new HelmError('ipc_not_supported', `node ${nodeId} daemon does not support local IPC calls`, 501, {
           nodeId,
         })
       }
       const callId = input.callId ?? `ipc-${randomUUID()}`
-      // signal abort when exhaust force destroy in-flight invoke (node side immediately close underlying socket).
+      // Best-effort abort of in-flight call when `signal` fires (node closes underlying socket immediately).
       const onAbort = () => {
         void ipcAbort?.(callId).catch(() => undefined)
       }
       signal?.addEventListener('abort', onAbort, { once: true })
-      if (signal?.aborted) { onAbort(); throw new HelmError('aborted', 'IPC invoke cancelled', 499) }
+      if (signal?.aborted) { onAbort(); throw new HelmError('aborted', 'IPC call cancelled', 499) }
       try {
         return await ipcCallFn({ ...input, callId })
       } finally {
@@ -417,7 +412,7 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
       const ipcSubscribeFn = rpc.ipcSubscribe
       const ipcUnsubscribeFn = rpc.ipcUnsubscribe
       if (ipcSubscribeFn === undefined || ipcUnsubscribeFn === undefined) {
-        throw new HelmError('ipc_not_supported', `node ${nodeId} daemon unsupported local machine IPC subscribe`, 501, {
+        throw new HelmError('ipc_not_supported', `node ${nodeId} daemon does not support local IPC subscriptions`, 501, {
           nodeId,
         })
       }
@@ -432,7 +427,7 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
         try {
           onClosed(error)
         } catch {
-          // subscribe call back fault does not affect fabric.
+          // Subscriber callback faults must not break fabric.
         }
       }
       const onAbort = () => {
@@ -456,21 +451,21 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
       let result: Awaited<ReturnType<typeof ipcSubscribeFn>>
       try { result = await ipcSubscribeFn({ ...input, subscribeId }) }
       catch (error) { closed = true; finish('node connection lost'); throw error }
-      if (signal?.aborted) { onAbort(); throw new HelmError('aborted', 'IPC subscribe cancelled', 499) }
+      if (signal?.aborted) { onAbort(); throw new HelmError('aborted', 'IPC subscription cancelled', 499) }
       if (!result.ok) {
         closed = true
         finish(result.error.message)
-        // upgrade arrange empty refuse new: node state condition, throw stable node_draining(503) - - and
-        // ipc_subscribe_failed(node feature can layer failed) zone, do not swallow into ordinary failed.
+        // Node draining for upgrade: throw stable `node_draining` (503) to distinguish from ordinary `ipc_subscribe_failed`
+        // rather than swallowing node state into a generic error.
         if (result.error.code === 'node_draining') {
           throw new HelmError(
             'node_draining',
-            `node ${nodeId} is now upgrade arrange empty, reject new IPC subscribe:${result.error.message}`,
+            `node ${nodeId} is draining for upgrade; rejecting new IPC subscription: ${result.error.message}`,
             503,
             { nodeId },
           )
         }
-        throw new HelmError('ipc_subscribe_failed', `node ${nodeId} IPC failed to subscribe:${result.error.message}`, 502, {
+        throw new HelmError('ipc_subscribe_failed', `node ${nodeId} IPC subscription failed: ${result.error.message}`, 502, {
           nodeId,
           code: result.error.code,
         })
@@ -489,9 +484,8 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
     },
 
     nodePlatformOf(nodeId: string): string | undefined {
-      // local and Hub same process; test inject hubPlatform proxy table subject to control Hub fact.
-      // remote only take register register platform(not on report/offline → undefined, by caller by
-      // platform unknown semantics handle, never proxy guess).
+      // `local` shares the Hub process; tests can inject `hubPlatform` to reflect controlled Hub facts.
+      // Remote takes only the platform registered on connect (unreported/offline -> undefined; callers handle unknown rather than guessing).
       if (nodeId === 'local') return hubPlatform()
       const platform = registry.get(nodeId)?.platform
       return platform === undefined || platform === '' ? undefined : platform
@@ -500,18 +494,18 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
     async openTunnel(nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal): Promise<Duplex> {
       const { host, port } = normalizeTunnelTarget(target)
       if (signal?.aborted) {
-        throw new HelmError('aborted', 'tunnel establish cancelled', 499, { nodeId })
+        throw new HelmError('aborted', 'tunnel establishment cancelled', 499, { nodeId })
       }
       if (closing.signal.aborted) {
-        throw new HelmError('node_offline', 'node tunnel service already close', 409, { nodeId })
+        throw new HelmError('node_offline', 'node tunnel service is closed', 409, { nodeId })
       }
-      // local also must reference and closure stop: including await connect during not yet return socket.
+      // Also track local tunnels for shutdown: including sockets still awaiting connect.
       if (nodeId === 'local') {
         const connectSignal = signal === undefined ? closing.signal : AbortSignal.any([signal, closing.signal])
         const duplex = await connectLocalTunnel(host ?? '127.0.0.1', port, connectSignal)
         if (closing.signal.aborted || signal?.aborted) {
           duplex.destroy()
-          throw new HelmError('aborted', 'tunnel establish cancelled', 499, { nodeId })
+          throw new HelmError('aborted', 'tunnel establishment cancelled', 499, { nodeId })
         }
         localTunnels.add(duplex)
         duplex.once('close', () => localTunnels.delete(duplex))
@@ -533,29 +527,29 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
     },
 
     async inspectPathUsage(nodeId: string, targetPath: string, signal?: AbortSignal): Promise<NodePathUsage> {
-      if (signal?.aborted) throw new HelmError('aborted', 'process occupy scan cancelled', 499, { nodeId })
-      // first confirm actual node platform;Windows legal symbol path cannot by mistakenly report is illegal POSIX
-      // path. unsupported platform explicit reject; remote offline still first report node cannot reach.
+      if (signal?.aborted) throw new HelmError('aborted', 'path usage scan cancelled', 499, { nodeId })
+      // Check actual node platform first so valid Windows drive paths are not misreported as invalid POSIX paths;
+      // unsupported platforms reject explicitly, while offline remote nodes still report unreachable first.
       const rpc = nodeId === 'local' ? undefined : await requireRpc(nodeId, signal)
       const platform = nodeId === 'local' ? hubPlatform() : registry.get(nodeId)?.platform
       if (platform && platform !== 'linux') {
         throw new HelmError(
           'path_usage_not_supported',
-          `node ${nodeId} platform '${platform}' unsupported process occupy scan (when before only Linux /proc), cannot verify target path 0 occupy`,
+          `node ${nodeId} platform '${platform}' does not support process usage scanning (currently Linux /proc only); cannot verify zero usage for target path`,
           501,
           { nodeId, platform },
         )
       }
-      // support platform unify archive one target path, and and RPC snapshot back visible related.
+      // Normalize target path uniformly across supported platforms for matching against the RPC response.
       const normalized = validatePosixScanPath(targetPath)
       if (!normalized.ok) {
-        throw new HelmError('validation_error', `process occupy scan reference illegal:${normalized.message}`, 400, { nodeId })
+        throw new HelmError('validation_error', `invalid path usage scan argument: ${normalized.message}`, 400, { nodeId })
       }
       const expectedPath = normalized.value
       if (nodeId === 'local') {
-        // Hub process inside real scan (platform via hubPlatform port, test can inject;
-        // produce is process.platform, never fabricate).fs adapt and remote daemon shared use
-        // @helm/env-io the same implement, never each duplicate one set fs semantics.
+        // Real in-process scan on Hub (platform via `hubPlatform` port so tests can override while production
+        // uses `process.platform` without fabrication). Shares `@helm/env-io` implementation with remote daemons
+        // rather than duplicating filesystem logic.
         const io = createNodePathUsageIo()
         const result = await scanPathUsage(expectedPath, {
           io,
@@ -564,11 +558,11 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
         })
         if (result.ok) return result.value
         const { code, message } = result.error
-        if (code === 'invalid') throw new HelmError('validation_error', `process occupy scan reference illegal:${message}`, 400, { nodeId })
+        if (code === 'invalid') throw new HelmError('validation_error', `invalid path usage scan argument: ${message}`, 400, { nodeId })
         if (code === 'permission_denied') {
           throw new HelmError(
             'node_path_usage_failed',
-            `local machine process occupy scan failed (permission do not enough):${message}`,
+            `local process usage scan failed (permission denied): ${message}`,
             502,
             { nodeId, code: 'permission_denied' },
           )
@@ -576,66 +570,65 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
         if (code === 'not_supported') {
           throw new HelmError(
             'path_usage_not_supported',
-            `this Hub platform '${hubPlatform()}' unsupported process occupy scan (when before only Linux /proc; do not fabricate across platform result), cannot verify target path 0 occupy`,
+            `Hub platform '${hubPlatform()}' does not support process usage scanning (currently Linux /proc only; refusing to fabricate cross-platform result); cannot verify zero usage for target path`,
             501,
             { nodeId, platform: hubPlatform() },
           )
         }
         if (code === 'aborted') throw new HelmError('aborted', message, 499, { nodeId })
-        throw new HelmError('node_path_usage_failed', `local machine process occupy scan failed:${message}`, 502, { nodeId })
+        throw new HelmError('node_path_usage_failed', `local process usage scan failed: ${message}`, 502, { nodeId })
       }
-      // remote: target node real scan, never fall back local machine.
+      // Remote: scan on the target node directly; never fall back to local.
       const fn = rpc!.envPathUsage
       if (fn === undefined) {
         throw new HelmError(
           'path_usage_not_supported',
-          `node ${nodeId} daemon unsupported envPathUsage(version old?), cannot verify target path 0 occupy; never fall back local machine scan`,
+          `node ${nodeId} daemon does not support envPathUsage (outdated version?); cannot verify zero usage and will not fall back to local scan`,
           501,
           { nodeId },
         )
       }
-      // birpc may with undefined compute (gateway absorb old edition daemon missing method error): type on explicit contains undefined.
+      // birpc may resolve to undefined (gateway absorbs missing-method errors on old daemons): explicitly allow undefined.
       let result: RpcResult<import('@helm/protocol').NodePathUsage> | undefined
       try {
         result = await fn({ path: expectedPath })
       } catch (error) {
-        // birpc proxy make any method access all is function: old edition daemon missing this method when, invoke
-        // withfunction not foundreject - - such as archive class is unsupported (501), never disguise
-        // into scan failed or fall back local machine; transfer/timeout etc. other error still is 502.
+        // birpc proxy exposes every property as a function: calling a missing method on an older daemon rejects
+        // with `function ... not found`—classify this as unsupported (501) rather than scan failure or local fallback;
+        // transport/timeout errors remain 502.
         const message = error instanceof Error ? error.message : String(error)
         if (message.includes('[birpc] function') && message.includes('not found')) {
           throw new HelmError(
             'path_usage_not_supported',
-            `node ${nodeId} daemon unsupported envPathUsage(version old?), cannot verify target path 0 occupy; never fall back local machine scan`,
+            `node ${nodeId} daemon does not support envPathUsage (outdated version?); cannot verify zero usage and will not fall back to local scan`,
             501,
             { nodeId, cause: message },
           )
         }
         throw new HelmError(
           'node_path_usage_failed',
-          `node ${nodeId} process occupy scan failed to invoke:${message}`,
+          `node ${nodeId} path usage scan RPC failed: ${message}`,
           502,
           { nodeId, cause: message },
         )
       }
       if (result === undefined || result === null) {
-        // old edition daemon without envPathUsage:birpc via gateway onGeneralError absorb after
-        // with undefined compute - - such as archive class unsupported (501), never fall back local machine, never when act empty snapshot.
+        // Older daemon without `envPathUsage`: birpc gateway `onGeneralError` absorbed it as undefined—classify
+        // as unsupported (501), never fall back to local and never treat as an empty snapshot.
         throw new HelmError(
           'path_usage_not_supported',
-          `node ${nodeId} daemon unsupported envPathUsage(version old?), cannot verify target path 0 occupy; never fall back local machine scan`,
+          `node ${nodeId} daemon does not support envPathUsage (outdated version?); cannot verify zero usage and will not fall back to local scan`,
           501,
           { nodeId },
         )
       }
-      // RPC message seal strictly validate:ok must strictly boolean; failed branch error must carry legal
-      // code/message- - illegal message seal explicit node_path_usage_failed, never rely after continue
-      // property access TypeError fall back.
+      // Strict RPC envelope validation: `ok` must be strictly boolean; failed envelopes must carry valid
+      // `code`/`message`—invalid envelopes fail explicitly with `node_path_usage_failed` rather than TypeErrors later.
       const envelope = result as { ok?: unknown; value?: unknown; error?: unknown }
       if (typeof envelope.ok !== 'boolean') {
         throw new HelmError(
           'node_path_usage_failed',
-          `node ${nodeId} process occupy scan return illegal message seal (ok non- strictly boolean, protocol violate reverse)`,
+          `node ${nodeId} path usage scan returned an invalid envelope (ok is not a strict boolean; protocol violation)`,
           502,
           { nodeId },
         )
@@ -649,14 +642,14 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
         ) {
           throw new HelmError(
             'node_path_usage_failed',
-            `node ${nodeId} process occupy scan return illegal error message seal (missing legal code/message, protocol violate reverse)`,
+            `node ${nodeId} path usage scan returned an invalid error envelope (missing valid code/message; protocol violation)`,
             502,
             { nodeId },
           )
         }
         throw new HelmError(
           'node_path_usage_failed',
-          `node ${nodeId} process occupy scan failed (${e.code}: ${e.message})`,
+          `node ${nodeId} path usage scan failed (${e.code}: ${e.message})`,
           502,
           { nodeId, code: e.code },
         )
@@ -669,18 +662,17 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
       fn: () => Promise<T>,
       signal?: AbortSignal,
     ): Promise<T> {
-      // short lifecycle bottom seat: queue in process level Map(key contains env.id), independent of instance cache,
-      // and tools.ts remote branch envFor instance sharing the same key empty between.
+      // Short-lived backend: queue lives in a process-wide Map (key includes `env.id`), independent of instance caching,
+      // and shares the exact same key namespace with `tools.ts`'s `envFor` remote branch.
       const env = freshBase(target.nodeId, target.cwd)
       const context: Context = signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(signal, BACKGROUND_CONTEXT)
       return envWithFileMutationQueue(env, target.path, fn, context)
     },
 
     evictConversation(conversationId: number): void {
-      // only remove cache item: never invoke entry.cleanup- -NodeExecutionEnv.cleanup
-      // will kill activeChildPids(the conversation in-flight command by mistakenly kill),Remote by cwd
-      // envCleanup will kill same cwd other conversation command. in-flight operation hold old instance reference self however
-      // complete, instance then can GC; cache do not increase long.
+      // Remove cache entries only: never call `entry.cleanup`—`NodeExecutionEnv.cleanup` kills `activeChildPids`
+      // (killing in-flight commands for the conversation), and `RemoteExecutionEnv`'s `envCleanup` would kill
+      // commands from other conversations sharing the cwd. Active ops retain old references and finish cleanly.
       for (const [key] of [...bases]) {
         if (conversationIdOfKey(key) === conversationId) bases.delete(key)
       }
@@ -703,11 +695,11 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
       closing.abort()
       for (const duplex of localTunnels) duplex.destroy()
       localTunnels.clear()
-      // first close node connect, let in-flight request by unknown terminal state end; offline clean up without waiting reconnect.
+      // Close node connections first so in-flight requests settle as unknown without waiting for reconnect during shutdown.
       await registry.close()
-      // again one by one target hard clean up (dispose is closure stop semantics, kill in-flight command is pre- phase;Remote 
-      // cleanup only deregister itself sink, do not by cwd  envCleanup- - that will mistakenly kill same node
-      // same cwd other conversation command, node side in-flight command by connect level dispose fall back).
+      // Clean up remaining target backends individually (killing in-flight commands happened prior to dispose;
+      // Remote `cleanup` only unregisters its own sinks without calling cwd-wide `envCleanup` that would kill
+      // other conversations on the same node/cwd, while node-side commands fall back to connection-level dispose).
       const entries = [...bases]
       bases.clear()
       for (const [key, entry] of entries) {
@@ -716,11 +708,11 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
           .cleanup(BACKGROUND_CONTEXT)
           .catch((error: unknown) =>
             logReleaseError(
-              `bottom seat clean up failed (node=${nodeId} cwd=${cwd}):${error instanceof Error ? error.message : String(error)}`,
+              `backend cleanup failed (node=${nodeId} cwd=${cwd}): ${error instanceof Error ? error.message : String(error)}`,
             ),
           )
       }
-      // registry.close already in open head execute and idempotent internal converge; does not repeat invoke second time.
+      // `registry.close()` already ran upfront and converges idempotently; no need to call it a second time.
     },
   }
 }

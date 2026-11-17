@@ -17,16 +17,16 @@ function validateId(id: string): void {
   }
 }
 
-/** skill id boundary archive one (mirror kernel skillDirectory: illegal id -> HelmError 400). */
+/** Align skill id validation boundary (mirrors kernel skillDirectory: invalid id -> HelmError 400). */
 function validateSkillId(id: string): void {
   try {
     assertSkillId(id)
   } catch (error) {
-    throw new HelmError('validation_error', `Skill id illegal:${error instanceof Error ? error.message : String(error)}`, 400, { skillId: id })
+    throw new HelmError('validation_error', `Invalid skill id: ${error instanceof Error ? error.message : String(error)}`, 400, { skillId: id })
   }
 }
 
-/** true file service adapt public plugin port; test do not to plugin work vendor inject kernel private object. */
+/** Adapts the real file service to the public plugin port so tests never inject private kernel objects into plugins. */
 export function createProfileFileHost(
   dataDir: string,
   profiles = new ProfileService(dataDir),

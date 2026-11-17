@@ -10,7 +10,7 @@ import { createPluginBuildProvider } from '@helm/plugin-build'
 import { MemoryDocStore, deferred, useTempDir } from './helpers.js'
 
 function createHostBackend(): PluginHostBackend {
-  const unused = (): never => { throw new Error('this test only verify UI enable, must not execute host business operation') }
+  const unused = (): never => { throw new Error('this test only verifies UI activation and must not execute host business operations') }
   return {
     ...createPluginHostBackendFixture(),
     dispatchTrigger: unused, submitInput: unused, createConversation: unused,
@@ -24,8 +24,8 @@ function createHostBackend(): PluginHostBackend {
   }
 }
 
-// two time persist all suspended after again let through, determinism override preflight via → await → eventually publish window.
-test('concurrency enable duplicate slash: only publish a plugin, failed way rollback durable switch and leaves no residue contribution', { timeout: 60_000 }, async (t) => {
+// Suspend both persistence calls before releasing so the preflight -> await -> commit window overlaps deterministically.
+test('concurrent enable with duplicate slash publishes only one plugin, rolls back loser toggle, and leaves zero UI contribution', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-ui-activation-')
   const enabled = new Map<string, boolean>()
   let arrived = 0

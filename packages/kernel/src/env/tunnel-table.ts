@@ -1,31 +1,31 @@
 /**
- * tunnel-table.ts: node pass-through tunnel register table (self env/registry.ts split out).
+ * tunnel-table.ts: node passthrough tunnel registration table (split out of `env/registry.ts`).
  *
- * responsibility: in-flight tunnel (pending,openTunnel start after wait for independent gateway first frame recognize verify) and already establish
- * tunnel (active,Duplex lifecycle and register items sync destroy) two spread table store and final;
- * node swap proxy (evict/replace) and registry.close via finalize batch amount final (pending reject,
- * active excerpt except and destroy duplex). wait for/recognize verify/epoch re- inspect stream process still archive NodeRegistry
- * (openTunnel / acceptTunnel / grantTunnel), this table only manage register and destroy.
- * behavior and split before NodeRegistry inline implement one by one character consistent.
+ * Responsibilities: stores and settles two maps—in-flight tunnels (`pending`, opened by `openTunnel`
+ * awaiting auth hello on the dedicated gateway) and established tunnels (`active`, syncing Duplex
+ * lifetime with entry cleanup); settles matching tunnels in bulk on node eviction/replacement or
+ * `registry.close` (rejecting pending, unregistering and destroying active duplexes). Waiting,
+ * auth, and epoch re-checks remain in `NodeRegistry` (`openTunnel` / `acceptTunnel` / `grantTunnel`),
+ * while this table manages registration and destruction with identical character-by-character behavior.
  */
 import type { Duplex } from 'node:stream'
 import { HelmError } from '@helm/protocol'
 
-/** in-flight tunnel register (openTunnel establish after wait for independent gateway first frame recognize verify). */
+/** In-flight tunnel registration (created by `openTunnel`, awaiting dedicated gateway first-frame auth). */
 export interface PendingTunnel {
   tunnelId: string
   nodeId: string
-  /** start when undo epoch; node swap proxy (evict/replace) after pending immediately expires. */
+  /** Undo epoch at creation; invalidated immediately if the node is evicted or replaced. */
   epoch: number
   timeoutMs: number
   timer: NodeJS.Timeout
-  /** recognize verify via after by gateway hand over fine Duplex(grant fill stream and compute pending). */
+  /** Called by gateway after auth succeeds to hand off the Duplex (fills stream and settles pending). */
   grant: (duplex: Duplex) => void
   reject: (error: HelmError) => void
   settled: boolean
 }
 
-/** already establish tunnel:Duplex by register table hold has and in node swap proxy/closure stop when actively destroy. */
+/** Established tunnel: Duplex held by the registry and actively destroyed on node replacement or shutdown. */
 export interface ActiveTunnel {
   tunnelId: string
   nodeId: string
@@ -33,8 +33,8 @@ export interface ActiveTunnel {
 }
 
 /**
- * node side tunnel RPC explicit failed result error archive one:result.error.code → HelmError 
- * code/status(timeout 504 / aborted 499 / node_draining 503 / the rest 502).
+ * Normalize explicit failure from node-side tunnel RPC: maps `result.error.code` -> HelmError
+ * code/status (`timeout` 504 / `aborted` 499 / `node_draining` 503 / all others 502).
  */
 export function tunnelRpcFailureOf(errorCode: string): { code: string; status: number } {
   switch (errorCode) {
@@ -49,7 +49,7 @@ export function tunnelRpcFailureOf(errorCode: string): { code: string; status: n
   }
 }
 
-/** final batch error work vendor (pending and active wording/field different, by caller to set). */
+/** Factory for bulk-settlement errors (pending and active differ in wording/context, supplied by caller). */
 export interface TunnelFinalizeErrors {
   pending: (nodeId: string, tunnelId: string) => HelmError
   active: (nodeId: string, tunnelId: string) => HelmError
@@ -67,12 +67,12 @@ export class TunnelTable {
     return this.#pending.get(tunnelId)
   }
 
-  /** excerpt except in-flight register (pending set format failed path; without condition delete, same split before semantics). */
+  /** Remove an in-flight entry (pending settlement failure path; unconditional delete matching pre-split semantics). */
   dropPending(tunnelId: string): void {
     this.#pending.delete(tunnelId)
   }
 
-  /** compute succeeded path: excerpt pending, register active, and in duplex on shutdown excerpt except register. */
+  /** Success settlement path: remove from pending, register active, and unregister on duplex close. */
   activate(tunnelId: string, nodeId: string, duplex: Duplex): void {
     this.#pending.delete(tunnelId)
     this.#active.set(tunnelId, { tunnelId, nodeId, duplex })
@@ -83,15 +83,15 @@ export class TunnelTable {
     })
   }
 
-  /** gateway hand over fine Duplex: recognize verify already (acceptTunnel true after invoke);pending already set format failed then destroy hand over come stream (without leaking). */
+  /** Gateway Duplex handoff: auth already succeeded (`acceptTunnel` returned true); if pending already failed to settle, `grant` destroys the incoming stream without leaking. */
   grant(tunnelId: string, duplex: Duplex): void {
     this.#pending.get(tunnelId)?.grant(duplex)
   }
 
   /**
-   * batch amount final: first reject all hit pending, again destroy all hit active duplex.
-   * active  duplex.destroy(error) avoid disconnect disguise into normal EOF(consumer in
-   * error/close in aware disconnect and with node_tunnel_closed wrap-up).
+   * Bulk settle matching entries: reject all matching pending first, then destroy all matching active duplexes.
+   * Calling `duplex.destroy(error)` on active tunnels prevents disconnect from masquerading as clean EOF
+   * (consumers detect disconnect in error/close handlers and wrap with `node_tunnel_closed`).
    */
   finalize(match: (nodeId: string) => boolean, errors: TunnelFinalizeErrors): void {
     for (const [tunnelId, pending] of [...this.#pending]) {
@@ -106,7 +106,7 @@ export class TunnelTable {
     }
   }
 
-  /** test inside omit: in-flight/already establish tunnel counter. */
+  /** Test-only helper: in-flight and active tunnel counts. */
   counts(): { pending: number; active: number } {
     return { pending: this.#pending.size, active: this.#active.size }
   }

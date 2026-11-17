@@ -1,9 +1,9 @@
 /**
- * kernel local machine tool real behavior test (bash / read / read_artifact).
+ * Kernel local tool behavior tests (bash / read / read_artifact).
  *
- * honest principle: all away real child_process, real ArtifactService(InMemory repository +
- * real file), real SDK defineTool execute;faux provider only alternative model decide policy
- * (what when start tool invoke), never use sync false fixture mask service Promise signature.
+ * Honesty principle: executes real child_process commands, real ArtifactService (InMemory repository +
+ * real disk files), and real SDK defineTool handlers; uses fauxProvider only to drive model tool-call decisions,
+ * never synchronous mock stubs masking async service signatures.
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
@@ -49,7 +49,7 @@ async function openRuntime(dir: string) {
   return Object.assign(runtime, { __faux: faux })
 }
 
-/** real service dependency: real ArtifactService(Promise signature)+ real SecretStash. */
+/** Real service dependencies: real ArtifactService (Promise API) + real SecretStash. */
 async function makeRealDeps(dir: string, stash = new SecretStash()): Promise<HelmToolDeps> {
   await ensureDataDir(dir)
   const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository(), stash)
@@ -74,7 +74,7 @@ after(async () => {
 })
 
 describe('runShell real process behavior', { timeout: 60_000 }, () => {
-  it('succeeded and failed such as return exitCode;stdout/stderr by reach order concatenate', { timeout: 60_000 }, async () => {
+  it('returns exitCode faithfully on success and failure; preserves arrival order across stdout/stderr', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rs1'))
     const ok = await runShell(deps, 'echo out; echo err >&2; echo tail')
     assert.equal(ok.ok, true)
@@ -88,12 +88,11 @@ describe('runShell real process behavior', { timeout: 60_000 }, () => {
     assert.ok(fail.output.includes('oops'))
   })
 
-  it('run in abort kill process group:sentinel file forever do not appear, without waiting 120s timeout', { timeout: 60_000 }, async () => {
+  it('abort mid-run kills entire process group promptly without waiting 120s timeout', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rs2'))
     const sentinel = join(rootDir, 'rs2', 'sentinel.txt')
     const controller = new AbortController()
     const started = Date.now()
-    // command sleep after write sentinel;abort takes effect then forever write do not out.
     const p = runShell(deps, `sleep 30 && touch ${sentinel}`, {
       timeoutMs: 120_000,
       signal: controller.signal,
@@ -102,13 +101,12 @@ describe('runShell real process behavior', { timeout: 60_000 }, () => {
     const result = await p
     const elapsed = Date.now() - started
     assert.equal(result.ok, false)
-    assert.ok(elapsed < 10_000, `abort should second kill while non- etc. full timeout (time cost ${elapsed}ms)`)
-    // wait for enough long after confirm sentinel not by write (process group indeed already terminate).
+    assert.ok(elapsed < 10_000, `abort should kill quickly instead of awaiting timeout (took ${elapsed}ms)`)
     await new Promise((r) => setTimeout(r, 700))
-    assert.ok(!existsSyncSafe(sentinel), 'abort after shell must not store write sentinel')
+    assert.ok(!existsSyncSafe(sentinel), 'aborted shell must never create sentinel file')
   })
 
-  it('pre- first aborted  signal never spawn command', { timeout: 60_000 }, async () => {
+  it('pre-aborted signal never spawns command', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rs3'))
     const sentinel = join(rootDir, 'rs3', 'pre.txt')
     const controller = new AbortController()
@@ -117,21 +115,21 @@ describe('runShell real process behavior', { timeout: 60_000 }, () => {
     assert.equal(result.ok, false)
     assert.ok(result.output.includes('aborted'))
     await new Promise((r) => setTimeout(r, 300))
-    assert.ok(!existsSyncSafe(sentinel), 'pre- aborted must not spawn any command')
+    assert.ok(!existsSyncSafe(sentinel), 'pre-aborted signal must not spawn command')
   })
 
-  it('timeoutMs validate: non- correct count / non- integer / Infinity / over cap all explicit reject', { timeout: 60_000 }, async () => {
+  it('timeoutMs validation explicitly rejects non-positive, fractional, Infinity, NaN, and over-cap values', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rs4'))
     for (const bad of [0, -5, 1.5, Number.POSITIVE_INFINITY, Number.NaN, 601_000]) {
       await assert.rejects(
         () => runShell(deps, 'true', { timeoutMs: bad }),
         /invalid_timeout/,
-        `timeoutMs=${bad} should explicit reject`,
+        `timeoutMs=${bad} should explicitly reject`,
       )
     }
   })
 
-  it('timeout kill group and explicit mark note timeout', { timeout: 60_000 }, async () => {
+  it('kills process group on timeout and marks timedOut=true', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rs5'))
     const started = Date.now()
     const result = await runShell(deps, 'sleep 30', { timeoutMs: 500 })
@@ -140,73 +138,69 @@ describe('runShell real process behavior', { timeout: 60_000 }, () => {
     assert.ok(Date.now() - started < 10_000)
   })
 
-  it('env inject:stash value inject child process and from output in redaction disappear', { timeout: 60_000 }, async () => {
+  it('env injection: SecretStash injects vars into child env while scrubbing secret from output', { timeout: 60_000 }, async () => {
     const stash = new SecretStash()
     const secretValue = 'sk-super-secret-abcdef123456'
     stash.put(1, 'MY_TOKEN', secretValue)
     const deps = await makeRealDeps(join(rootDir, 'rs6'), stash)
-    // child process visible secret(honest boundary: can message code solid has permission), but output must redaction.
     const result = await runShell(deps, 'echo "token=$MY_TOKEN"', { conversationId: 1 })
     assert.equal(result.ok, true)
-    assert.ok(!result.output.includes(secretValue), 'secret plaintext never can appear in output')
-    assert.ok(result.output.includes('[REDACTED:stash:'), 'should replace is placeholder')
+    assert.ok(!result.output.includes(secretValue), 'secret plaintext must never appear in output')
+    assert.ok(result.output.includes('[REDACTED:stash:'), 'must be replaced by placeholder')
   })
 
-  it('across chunk tear secret in all text aggregate after still by complete redaction', { timeout: 60_000 }, async () => {
+  it('cross-chunk secret splits are still fully redacted after whole-output aggregation', { timeout: 60_000 }, async () => {
     const stash = new SecretStash()
     const secretValue = 'sk-cross-chunk-secret-ZZZZ9999'
     stash.put(1, 'KEY', secretValue)
     const deps = await makeRealDeps(join(rootDir, 'rs7'), stash)
-    // use dd by 1 byte chunked output, force secret across multiple stdout chunk tear.
     const result = await runShell(deps, `printf '%s' "$KEY" | dd bs=1 2>/dev/null`, {
       conversationId: 1,
     })
     assert.equal(result.ok, true)
-    assert.ok(!result.output.includes(secretValue), 'across chunk tear secret also must not leak leak')
+    assert.ok(!result.output.includes(secretValue), 'secret split across chunks must never leak')
     assert.ok(result.output.includes('[REDACTED:stash:'))
   })
 
-  it('multibyte UTF-8 character across chunk do not tear (without replace symbol)', { timeout: 60_000 }, async () => {
+  it('multibyte UTF-8 chars split across chunks never tear (no replacement characters)', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rs8'))
-    // Chinese character 3 byte;dd bs=1 force one by one byte chunk,StringDecoder semantics under should complete restore.
+    // 3-byte UTF-8 CJK characters emitted byte-by-byte via dd; StringDecoder reassembles them losslessly.
+    const payload = '\u4f60\u597d\u4e16\u754c\u6c49\u5b57 fidelity test'
     const result = await runShell(
       deps,
-      `printf '%s' '你好世界Han characters fidelity test' | dd bs=1 2>/dev/null`,
+      `printf '%s' '${payload}' | dd bs=1 2>/dev/null`,
     )
     assert.equal(result.ok, true)
-    assert.equal(result.output, '你好世界Han characters fidelity test')
-    assert.ok(!result.output.includes('\uFFFD'), 'must not appear UTF-8 replace symbol')
+    assert.equal(result.output, payload)
+    assert.ok(!result.output.includes('\uFFFD'), 'must never emit UTF-8 replacement chars')
   })
 
-  it('output over maxOutputBytes explicit output_limit_exceeded, never truncate when succeeded', { timeout: 60_000 }, async () => {
+  it('output exceeding maxOutputBytes returns output_limit_exceeded instead of silently truncating', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rs9'))
     const result = await runShell(deps, `head -c 200000 /dev/zero | tr '\\0' 'A'`, {
       maxOutputBytes: 100_000,
     })
     assert.equal(result.ok, false)
     assert.ok(result.output.includes('output_limit_exceeded'))
-    assert.ok(!result.output.includes('AAAA'), 'over limit after must not back visible truncate content smoke fill result')
+    assert.ok(!result.output.includes('AAAA'), 'over-limit failure must not return truncated content')
   })
 
-  it('streaming pattern (onOutputChunk): aggregate pre- compute converge is STREAM_AGGREGATE_LIMIT_BYTES, one by one chunk still all push, over limit explicit output_limit_exceeded', { timeout: 60_000 }, async () => {
+  it('streaming mode (onOutputChunk): caps retained buffer at STREAM_AGGREGATE_LIMIT_BYTES while streaming every chunk', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rs-stream'))
     const chunks: Array<{ stream: 'stdout' | 'stderr'; text: string }> = []
-    // explicit to out far greater than streaming pre- compute maxOutputBytes: streaming pattern under also must by
-    // STREAM_AGGREGATE_LIMIT_BYTES override (old 64MiB all text duplicate is memory leak leak).
+    // Requesting larger maxOutputBytes still enforces STREAM_AGGREGATE_LIMIT_BYTES on retained buffer.
     const result = await runShell(deps, `head -c 600000 /dev/zero | tr '\\0' 'B'`, {
       maxOutputBytes: 64 * 1024 * 1024,
       onOutputChunk: (chunk) => chunks.push(chunk),
     })
-    assert.equal(result.ok, false, 'exceeds streaming aggregate pre- compute must explicit failed')
-    assert.ok(result.output.includes('output_limit_exceeded'), 'must explicit output_limit_exceeded')
-    assert.ok(result.output.includes('262144'), `error information must carry real pre- compute (${result.output.slice(0, 120)})`)
-    assert.ok(!result.output.includes('BBBB'), 'terminal state diagnose must not back visible over limit content')
-    // streaming client already receives all one by one chunk output (600000 byte B),Hub side only abandon terminal state aggregate.
+    assert.equal(result.ok, false, 'exceeding stream aggregation cap must fail explicitly')
+    assert.ok(result.output.includes('output_limit_exceeded'), 'must report output_limit_exceeded')
+    assert.ok(result.output.includes('262144'), `error must report real cap (${result.output.slice(0, 120)})`)
+    assert.ok(!result.output.includes('BBBB'), 'terminal diagnostic must not echo overflowing content')
     const streamedBytes = chunks
       .filter((c) => c.stream === 'stdout')
       .reduce((sum, c) => sum + Buffer.byteLength(c.text, 'utf8'), 0)
-    assert.equal(streamedBytes, 600000, 'one by one chunk push do not because aggregate over limit while interrupt')
-    // not over streaming pre- compute command: aggregate result normal return (streaming pre- compute do not mistakenly damage small output).
+    assert.equal(streamedBytes, 600000, 'per-chunk stream callback must receive all 600000 bytes uninterrupted')
     const okResult = await runShell(deps, `printf 'small-stream'`, {
       maxOutputBytes: 64 * 1024 * 1024,
       onOutputChunk: () => undefined,
@@ -215,7 +209,7 @@ describe('runShell real process behavior', { timeout: 60_000 }, () => {
     assert.equal(okResult.output, 'small-stream')
   })
 
-  it('buildToolEnv: host six variable fixed override stash same name inject;HELM_DATA_DIR from deps', { timeout: 60_000 }, () => {
+  it('buildToolEnv: six pinned host vars override colliding stash entries; HELM_DATA_DIR comes from deps', { timeout: 60_000 }, () => {
     const stash = new SecretStash()
     stash.put(7, 'HELM_CWD', '/evil')
     stash.put(7, 'HELM_DATA_DIR', '/evil-data')
@@ -233,13 +227,11 @@ describe('runShell real process behavior', { timeout: 60_000 }, () => {
     assert.equal(env['HELM_CONVERSATION_ID'], '7')
     assert.equal(env['HELM_CWD'], '/work')
     assert.equal(env['HELM_DATA_DIR'], '/d')
-    // without provider: inherit HELM_TOKEN must by strip except (without leaking host token)
     assert.equal(env['HELM_TOKEN'], undefined)
   })
 
-  it('buildToolEnv: without provider when strip except inherit HELM_TOKEN; has provider when managed token takes precedence at stash same name value', { timeout: 60_000 }, () => {
+  it('buildToolEnv: strips inherited HELM_TOKEN without provider; managed processToken overrides stash collisions', { timeout: 60_000 }, () => {
     const stash = new SecretStash()
-    // other conversation stash in same name HELM_TOKEN cannot smoke fill managed token
     stash.put(8, 'HELM_TOKEN', 'stash-spoofed-token')
     const base: HelmToolDeps = {
       dataDir: '/d',
@@ -249,16 +241,13 @@ describe('runShell real process behavior', { timeout: 60_000 }, () => {
       redact: (t) => t,
       artifacts: null as never,
     }
-    // has provider: managed token fixed inject,stash same name inject by override
     const withProvider = buildToolEnv({ ...base, processToken: () => 'managed-tok-1' }, '/work', 8)
     assert.equal(withProvider['HELM_TOKEN'], 'managed-tok-1')
-    // without provider: strip except (do not because stash store in same name value while pass-through other conversation secret)
     const noProvider = buildToolEnv(base, '/work', 8)
     assert.equal(noProvider['HELM_TOKEN'], undefined)
   })
 
-  it('runShell: child process hold managed HELM_TOKEN and output redaction inside outside token; without provider when child process without HELM_TOKEN', { timeout: 60_000 }, async () => {
-    // has provider: child process visible managed token(honest boundary: can message code solid has permission), but output redaction
+  it('runShell: child receives managed HELM_TOKEN while redacting output; omits HELM_TOKEN without provider', { timeout: 60_000 }, async () => {
     const auth = new AuthService(join(rootDir, 'rs10'))
     const managed = auth.createProcessToken()
     const releaseRedaction = (() => {
@@ -273,9 +262,8 @@ describe('runShell real process behavior', { timeout: 60_000 }, () => {
     const echo = await runShell(depsWithToken, 'printf %s "$HELM_TOKEN" | dd bs=1 2>/dev/null', { conversationId: 1 })
     assert.equal(echo.ok, true)
     assert.ok(!echo.output.includes(managed.token), 'managed token plaintext must not appear in output')
-    assert.ok(echo.output.includes('[REDACTED]'), 'should replace is REDACTED mark record')
+    assert.ok(echo.output.includes('[REDACTED]'), 'must show REDACTED marker')
 
-    // also contains inherit host token and managed token output: two all must not leak leak
     const hostEnv = process.env['HELM_TOKEN']
     const both = await runShell(
       depsWithToken,
@@ -283,24 +271,22 @@ describe('runShell real process behavior', { timeout: 60_000 }, () => {
       { conversationId: 1 },
     )
     assert.equal(both.ok, true)
-    assert.ok(!both.output.includes(managed.token), 'managed token must not leak leak')
-    assert.ok(!hostEnv || !both.output.includes(hostEnv), 'inherit host token must not leak leak')
+    assert.ok(!both.output.includes(managed.token), 'managed token must never leak')
+    assert.ok(!hostEnv || !both.output.includes(hostEnv), 'inherited host token must never leak')
 
-    // without provider: child process environment in no HELM_TOKEN(inherit value by strip except)
     const depsPlain = await makeRealDeps(join(rootDir, 'rs12'))
     const absent = await runShell(depsPlain, 'echo "${HELM_TOKEN:-UNSET}"', { conversationId: 1 })
     assert.equal(absent.ok, true)
-    assert.ok(absent.output.includes('UNSET'), 'without provider when child process must not inherit HELM_TOKEN')
+    assert.ok(absent.output.includes('UNSET'), 'child process must not inherit HELM_TOKEN without provider')
 
-    // dispose after managed token expires (process inside lifecycle)
     managed.dispose()
     assert.equal(await new AuthService(join(rootDir, 'rs10')).verifyToken(managed.token), false)
     releaseRedaction.release()
   })
 })
 
-describe('runGate gate real execute', { timeout: 60_000 }, () => {
-  it('through out underlying result:exitCode/timedOut such as (succeeded 0, failed non- 0)', { timeout: 60_000 }, async () => {
+describe('runGate real execution', { timeout: 60_000 }, () => {
+  it('propagates exitCode and timedOut accurately (0 on success, non-zero on failure)', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rg1'))
     const ok = await runGate(deps, 'echo gate-ok')
     assert.equal(ok.ok, true)
@@ -314,31 +300,31 @@ describe('runGate gate real execute', { timeout: 60_000 }, () => {
     assert.ok(fail.output.includes('gate-err'))
   })
 
-  it('timeoutMs can match: short timeout kill process group and return timedOut=true / exitCode=null', { timeout: 60_000 }, async () => {
+  it('kills process group on timeoutMs and returns timedOut=true / exitCode=null', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rg2'))
     const started = Date.now()
     const result = await runGate(deps, 'sleep 30', { timeoutMs: 500 })
     assert.equal(result.ok, false)
     assert.equal(result.timedOut, true)
     assert.equal(result.exitCode, null)
-    assert.ok(Date.now() - started < 10_000, 'timeout should kill group while non- etc. full 30s')
+    assert.ok(Date.now() - started < 10_000, 'timeout should kill group promptly without awaiting 30s')
     assert.ok(result.output.includes('timeout'))
   })
 
-  it('timeoutMs illegal value via runShell explicit reject (not silently change by default)', { timeout: 60_000 }, async () => {
+  it('explicitly rejects invalid timeoutMs via runShell instead of silently defaulting', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rg3'))
     for (const bad of [0, -5, 1.5, Number.NaN, 601_000]) {
       await assert.rejects(
         () => runGate(deps, 'true', { timeoutMs: bad }),
         /invalid_timeout/,
-        `timeoutMs=${bad} should explicit reject`,
+        `timeoutMs=${bad} should explicitly reject`,
       )
     }
   })
 })
 
 describe('read tool real file behavior', { timeout: 60_000 }, () => {
-  it('read cwd inside file succeeded; content via spill return', { timeout: 60_000 }, async () => {
+  it('reads file inside cwd and returns content via spill', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'rd1')
     const deps = await makeRealDeps(dir)
     writeFileSync(join(dir, 'note.md'), '# title\nbody text')
@@ -351,14 +337,14 @@ describe('read tool real file behavior', { timeout: 60_000 }, () => {
     assert.equal(!!result.isError, false)
     const structured = result.structuredOutput as { content: string }
     assert.ok(structured.content.includes('# title'))
-    // details is persist UI channel: only carry fact metadata, do not double write content.
+    // details carries factual metadata only for UI persistence without duplicating content.
     const details = result.details as { path?: string; nodeId?: string; content?: string }
     assert.equal(typeof details.path, 'string')
     assert.equal(details.nodeId, 'local')
     assert.equal('content' in details, false)
   })
 
-  it('../ across directory and cwd outside absolute path read succeeded (and bash same right)', { timeout: 60_000 }, async () => {
+  it('permits ../ traversal and absolute paths outside cwd (parity with bash)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'rd2')
     mkdirSync(join(dir, 'inner'), { recursive: true })
     const deps = await makeRealDeps(join(dir, 'inner'))
@@ -366,15 +352,15 @@ describe('read tool real file behavior', { timeout: 60_000 }, () => {
     const tool = createReadTool(deps)
     for (const p of ['../secret.txt', join(dir, 'secret.txt'), '/etc/hostname']) {
       const result = await tool.execute({ path: p }, makeApi(join(dir, 'inner')), BACKGROUND_CONTEXT)
-      assert.equal(!!result.isError, false, `path ${p} should allows read`)
+      assert.equal(!!result.isError, false, `path ${p} should be readable`)
     }
     const structured = (
       await tool.execute({ path: '../secret.txt' }, makeApi(join(dir, 'inner')), BACKGROUND_CONTEXT)
     ).structuredOutput as { content: string }
-    assert.ok(structured.content.includes('outside'), 'should read to cwd outside file content')
+    assert.ok(structured.content.includes('outside'), 'should read file outside cwd')
   })
 
-  it('symlink with follow read (points to cwd outside target also allows)', { timeout: 60_000 }, async () => {
+  it('follows symlinks including targets outside cwd (parity with bash)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'rd3')
     const outer = join(rootDir, 'rd3-outer')
     mkdirSync(outer, { recursive: true })
@@ -388,12 +374,12 @@ describe('read tool real file behavior', { timeout: 60_000 }, () => {
       makeApi(join(dir, 'inner')),
       BACKGROUND_CONTEXT,
     )
-    assert.equal(!!result.isError, false, 'symlink should with follow read (and bash same right)')
+    assert.equal(!!result.isError, false, 'symlinks should be readable cleanly')
     const structured = result.structuredOutput as { content: string }
     assert.ok(structured.content.includes('via-symlink'))
   })
 
-  it('directory reject; over large file explicit file_too_large and to out alternative refer quote', { timeout: 60_000 }, async () => {
+  it('rejects directories; oversized files return file_too_large pointing to bash + read_artifact', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'rd4')
     const deps = await makeRealDeps(dir)
     const tool = createReadTool(deps)
@@ -405,10 +391,10 @@ describe('read tool real file behavior', { timeout: 60_000 }, () => {
     assert.equal(bigResult.isError, true)
     const text = (bigResult.output as Array<{ type: string; text: string }>)[0]!.text
     assert.ok(text.includes('file_too_large'))
-    assert.ok(text.includes('read_artifact'), 'error information should refer quote page alternative path')
+    assert.ok(text.includes('read_artifact'), 'error message should suggest paginated read_artifact fallback')
   })
 
-  it('read error redaction (secret does not enter error text)', { timeout: 60_000 }, async () => {
+  it('redacts secrets from read failure messages', { timeout: 60_000 }, async () => {
     const stash = new SecretStash()
     const secretValue = 'sk-read-error-secret-777'
     stash.put(1, 'TOK', secretValue)
@@ -421,17 +407,17 @@ describe('read tool real file behavior', { timeout: 60_000 }, () => {
       BACKGROUND_CONTEXT,
     )
     assert.equal(result.isError, true)
-    assert.ok(!JSON.stringify(result).includes(secretValue), 'error text same must redaction')
+    assert.ok(!JSON.stringify(result).includes(secretValue), 'error text must also be redacted')
   })
 })
 
 describe('read_artifact real ArtifactService behavior', { timeout: 60_000 }, () => {
-  it('read succeeded: real spill artifact page before enter until read completely', { timeout: 60_000 }, async () => {
+  it('paginates real spilled artifact cleanly through EOF', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'ra1')
     const deps = await makeRealDeps(dir)
-    const fullText = 'Chinese'.repeat(8000) // 48000 byte > 32KiB trigger real spill
+    const fullText = '\u4e2d\u6587'.repeat(8000) // 48000 UTF-8 bytes > 32KiB triggers spill
     const { artifact } = await deps.artifacts.spill(1, 'call-1', fullText)
-    assert.ok(artifact, 'text >32KiB should produce spill artifact')
+    assert.ok(artifact, 'text >32KiB should generate a spill artifact')
     const tool = createReadArtifactTool(deps, (conv, owner) => conv === owner)
     let offset = 0
     let chunks = ''
@@ -446,21 +432,20 @@ describe('read_artifact real ArtifactService behavior', { timeout: 60_000 }, () 
       const structured = result.structuredOutput as { chunk: string; nextOffset?: number }
       chunks += structured.chunk
       if (structured.nextOffset === undefined) break
-      assert.ok(structured.nextOffset > offset, `nextOffset must strictly before enter (${offset} -> ${structured.nextOffset})`)
+      assert.ok(structured.nextOffset > offset, `nextOffset must advance strictly (${offset} -> ${structured.nextOffset})`)
       offset = structured.nextOffset
-      assert.ok(++guard < 100, 'page loop must terminate')
+      assert.ok(++guard < 100, 'pagination loop must terminate')
     }
-    assert.equal(chunks, fullText, 'page concatenate should restore all text (UTF-8 boundary without loss)')
+    assert.equal(chunks, fullText, 'concatenated pages must match full text losslessly at UTF-8 boundaries')
   })
 
-  it('any offset never produce replace symbol;limit=1 encounter multibyte character still guarantee before enter', { timeout: 60_000 }, async () => {
+  it('never emits replacement chars at any byte offset; limit=1 always advances past multibyte chars', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'ra2')
     const deps = await makeRealDeps(dir)
     const { artifact } = await deps.artifacts.spill(1, 'call-2', '漢字テスト'.repeat(3000))
     const tool = createReadArtifactTool(deps, (conv, owner) => conv === owner)
     const fullText = '漢字テスト'.repeat(3000)
     const buffer = Buffer.from(fullText, 'utf8')
-    // iterate each byte offset:chunk must not contains replace symbol;limit=1 also must can read completely.
     for (let offset = 0; offset < buffer.length; offset += 997) {
       const result = await tool.execute(
         { id: artifact!.id, offset, limit: 1 },
@@ -468,14 +453,14 @@ describe('read_artifact real ArtifactService behavior', { timeout: 60_000 }, () 
         BACKGROUND_CONTEXT,
       )
       const structured = result.structuredOutput as { chunk: string; nextOffset?: number }
-      assert.ok(!structured.chunk.includes('\uFFFD'), `offset=${offset} must not tear out replace symbol`)
+      assert.ok(!structured.chunk.includes('\uFFFD'), `offset=${offset} must never emit replacement chars`)
       assert.ok(
         structured.nextOffset === undefined || structured.nextOffset > offset,
-        `offset=${offset} limit=1 also must before enter`,
+        `offset=${offset} limit=1 must still advance`,
       )
     }
-    // ① limit=1 from character middle offset=1 start connect continue read 15 step, skip leftover missing first token symbol after one by one character restore
-    const midCharOffset = 1 // Han 2 byte
+    // 1) limit=1 starting mid-char at offset=1 reads 15 consecutive steps cleanly after skipping lead partial sequence
+    const midCharOffset = 1 // byte 2 of '漢'
     let headOffset = midCharOffset
     let headTotal = ''
     for (let step = 0; step < 15; step += 1) {
@@ -485,17 +470,17 @@ describe('read_artifact real ArtifactService behavior', { timeout: 60_000 }, () 
         BACKGROUND_CONTEXT,
       )
       const structured = result.structuredOutput as { chunk: string; nextOffset?: number }
-      assert.ok(!structured.chunk.includes('\uFFFD'), `head step=${step} must not tear out replace symbol`)
+      assert.ok(!structured.chunk.includes('\uFFFD'), `head step=${step} must never emit replacement chars`)
       assert.ok(
         structured.nextOffset !== undefined && structured.nextOffset > headOffset,
-        `head step=${step} nextOffset must strictly pass increase (${headOffset} -> ${structured.nextOffset})`,
+        `head step=${step} nextOffset must increase strictly (${headOffset} -> ${structured.nextOffset})`,
       )
       headTotal += structured.chunk
       headOffset = structured.nextOffset
     }
-    assert.equal(headTotal, fullText.slice(1, 16), 'from character middle start read should skip leftover missing first token symbol one by one character restore before 15 character')
+    assert.equal(headTotal, fullText.slice(1, 16), 'reading mid-char skips partial leading sequence and recovers next 15 chars')
 
-    // ② from tail attach near byte (in multibyte character middle) start use limit=1 read until tail, precise restore tail part text and terminate
+    // 2) limit=1 starting mid-char near EOF reads cleanly to EOF
     let tailOffset = buffer.length - 17
     let tailTotal = ''
     let tailGuard = 0
@@ -506,23 +491,23 @@ describe('read_artifact real ArtifactService behavior', { timeout: 60_000 }, () 
         BACKGROUND_CONTEXT,
       )
       const structured = result.structuredOutput as { chunk: string; nextOffset?: number }
-      assert.ok(!structured.chunk.includes('\uFFFD'), `tail offset=${tailOffset} must not tear out replace symbol`)
+      assert.ok(!structured.chunk.includes('\uFFFD'), `tail offset=${tailOffset} must never emit replacement chars`)
       tailTotal += structured.chunk
       if (structured.nextOffset === undefined) break
-      assert.ok(structured.nextOffset > tailOffset, `tail nextOffset must strictly before enter (${tailOffset} -> ${structured.nextOffset})`)
+      assert.ok(structured.nextOffset > tailOffset, `tail nextOffset must advance strictly (${tailOffset} -> ${structured.nextOffset})`)
       tailOffset = structured.nextOffset
-      assert.ok(++tailGuard < 20, 'tail part one by one character page must normal terminate')
+      assert.ok(++tailGuard < 20, 'char-by-char tail pagination must terminate cleanly')
     }
-    assert.equal(tailTotal, fullText.slice(-5), 'from tail multibyte character middle start read should skip leftover missing first token symbol and precise restore tail part')
+    assert.equal(tailTotal, fullText.slice(-5), 'reading mid-char near tail must skip leading fragment and recover trailing 5 chars')
   })
 
-  it('out of bounds conversation reject (authorization only when before conversation/parent chain)', { timeout: 60_000 }, async () => {
+  it('rejects out-of-scope conversations (only authorizes current conversation/ancestor chain)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'ra3')
     const deps = await makeRealDeps(dir)
     const { artifact } = await deps.artifacts.spill(2, 'call-3', 'owner-2-content-'.repeat(3000))
     const tool = createReadArtifactTool(
       deps,
-      (conv, owner) => conv === owner, // simulated runtime conversation/parent chain authorization
+      (conv, owner) => conv === owner,
     )
     const denied = await tool.execute({ id: artifact!.id }, makeApi(dir, 1), BACKGROUND_CONTEXT)
     assert.equal(denied.isError, true)
@@ -530,7 +515,7 @@ describe('read_artifact real ArtifactService behavior', { timeout: 60_000 }, () 
     assert.equal(!!allowed.isError, false)
   })
 
-  it('store failed to read does not pretend to be into artifact_not_found(honest: real error such as through out)', { timeout: 60_000 }, async () => {
+  it('storage read error never masquerades as artifact_not_found (propagates real error)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'ra3b')
     await ensureDataDir(dir)
     const real = new ArtifactService(dir, new InMemoryArtifactRepository(), new SecretStash())
@@ -554,12 +539,12 @@ describe('read_artifact real ArtifactService behavior', { timeout: 60_000 }, () 
     const result = await tool.execute({ id: 'any-id' }, makeApi(dir, 1), BACKGROUND_CONTEXT)
     assert.equal(result.isError, true)
     const text = (result.output as Array<{ text: string }>)[0]!.text
-    assert.ok(text.includes('artifact_read_failed'), `should such as report store failed to read:${text}`)
-    assert.ok(text.includes('disk I/O error'), `real error text must through out:${text}`)
-    assert.ok(!text.includes('artifact_not_found'), `store failed must not disguise into missing:${text}`)
+    assert.ok(text.includes('artifact_read_failed'), `should report storage read failure: ${text}`)
+    assert.ok(text.includes('disk I/O error'), `underlying error must surface: ${text}`)
+    assert.ok(!text.includes('artifact_not_found'), `storage failure must not masquerade as missing: ${text}`)
   })
 
-  it('missing artifact artifact_not_found;offset over scope explicit reject;nextOffset do not output undefined field', { timeout: 60_000 }, async () => {
+  it('missing artifact returns artifact_not_found; out-of-range offset rejects; final page omits nextOffset field', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'ra4')
     const deps = await makeRealDeps(dir)
     const tool = createReadArtifactTool(deps, () => true)
@@ -576,7 +561,6 @@ describe('read_artifact real ArtifactService behavior', { timeout: 60_000 }, () 
     )
     assert.equal(oob.isError, true)
     assert.ok(((oob.output as Array<{ text: string }>)[0]!.text).includes('offset_out_of_range'))
-    // page until finally one page after structuredOutput without nextOffset field (JSON-safe, non- undefined value)
     let lastOffset = 0
     let last: { structuredOutput?: Record<string, unknown> } = {}
     for (let guard = 0; guard < 100; guard++) {
@@ -591,13 +575,13 @@ describe('read_artifact real ArtifactService behavior', { timeout: 60_000 }, () 
       lastOffset = next
     }
     const structured = last.structuredOutput as Record<string, unknown>
-    assert.ok(!('nextOffset' in structured), 'read completely when must not appear undefined  nextOffset field')
+    assert.ok(!('nextOffset' in structured), 'final page must omit undefined nextOffset field')
     assert.equal(JSON.stringify(structured).includes('undefined'), false)
   })
 })
 
-describe('bash tool (SDK execute direct tune, real service dependency)', { timeout: 60_000 }, () => {
-  it('succeeded execute and return structuredOutput(via real spill)', { timeout: 60_000 }, async () => {
+describe('bash tool (direct SDK execute call with real service deps)', { timeout: 60_000 }, () => {
+  it('executes successfully and returns structuredOutput via real spill', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'bt1')
     const deps = await makeRealDeps(dir)
     const tool = createBashTool(deps)
@@ -610,7 +594,6 @@ describe('bash tool (SDK execute direct tune, real service dependency)', { timeo
     const structured = result.structuredOutput as { ok: boolean; output: string }
     assert.equal(structured.ok, true)
     assert.ok(structured.output.includes('hello-tools'))
-    // details persist UI channel: keep execute fact, no longer carry output text.
     const details = result.details as Record<string, unknown>
     assert.equal(details['ok'], true)
     assert.equal(details['exitCode'], 0)
@@ -618,7 +601,7 @@ describe('bash tool (SDK execute direct tune, real service dependency)', { timeo
     assert.equal('output' in details, false)
   })
 
-  it('failed command isError such as;timeoutMs illegal value explicit reject', { timeout: 60_000 }, async () => {
+  it('failed command returns isError; invalid timeoutMs explicitly rejected', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'bt2')
     const deps = await makeRealDeps(dir)
     const tool = createBashTool(deps)
@@ -636,13 +619,13 @@ describe('bash tool (SDK execute direct tune, real service dependency)', { timeo
     assert.equal(bad.isError, true)
     assert.ok(
       ((bad.output as Array<{ text: string }>)[0]!.text).includes('invalid_timeout'),
-      'illegal timeout must not by static default change by default',
+      'invalid timeout must not silently fall back to default',
     )
   })
 })
 
-describe('SDK real link (faux model drive tool invoke)', { timeout: 60_000 }, () => {
-  it('bash tool via harness real execute + spill artifact register + read_artifact page read back', { timeout: 60_000 }, async () => {
+describe('real SDK pipeline (faux model drives tool calls)', { timeout: 60_000 }, () => {
+  it('bash tool executes via harness + spills artifact + read_artifact reads back', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'sdk1')
     const kernel = (await openRuntime(dir)) as never as ReturnType<typeof openRuntime> & {
       __faux: FauxHandle
@@ -660,15 +643,14 @@ describe('SDK real link (faux model drive tool invoke)', { timeout: 60_000 }, ()
         fauxAssistantMessage([fauxToolCall('bash', { command: bigCommand })], {
           stopReason: 'toolUse',
         }),
-        fauxAssistantMessage('complete'),
+        fauxAssistantMessage('done'),
       ])
       await kernel.submitInput(1, 'generate large output')
       await kernel.waitForIdle(1)
-      assert.equal(await kernel.getLastAssistantText(1), 'complete')
+      assert.equal(await kernel.getLastAssistantText(1), 'done')
       const artifacts = await kernel.services.artifacts.list(1)
       const spill = artifacts.find((a) => a.name.startsWith('tool-spill-'))
-      assert.ok(spill, 'should has spill artifact')
-      // real read_artifact link read back (authorization chain allows conversation 1)
+      assert.ok(spill, 'spill artifact should exist')
       const content = await kernel.services.artifacts.readContent(spill!.id)
       assert.ok(content.includes('BBBBB'))
     } finally {
@@ -676,7 +658,7 @@ describe('SDK real link (faux model drive tool invoke)', { timeout: 60_000 }, ()
     }
   })
 
-  it('edit difference via real harness written to the database is toolResult message details(Web difference render persist channel)', { timeout: 60_000 }, async () => {
+  it('edit diff persists via real harness into toolResult details (Web diff rendering persistence channel)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'sdk3')
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'code.ts'), 'alpha\nbeta\n')
@@ -693,7 +675,7 @@ describe('SDK real link (faux model drive tool invoke)', { timeout: 60_000 }, ()
           [fauxToolCall('edit', { path: 'code.ts', oldText: 'beta', newText: 'BETA' })],
           { stopReason: 'toolUse' },
         ),
-        fauxAssistantMessage('complete'),
+        fauxAssistantMessage('done'),
       ])
       await kernel.submitInput(1, 'change file')
       await kernel.waitForIdle(1)
@@ -703,19 +685,18 @@ describe('SDK real link (faux model drive tool invoke)', { timeout: 60_000 }, ()
         .filter((e: { kind: string; model?: unknown[] }) => e.kind === 'pi.tool-result')
         .flatMap((e: { kind: string; model?: unknown[] }) => ((e.model ?? []) as Array<Record<string, unknown>>))
       const editMessage = messages.find((m: Record<string, unknown>) => m['toolName'] === 'edit')
-      assert.ok(editMessage, 'should has edit  toolResult message')
-      // SDK contract:structuredOutput do not write conversation item (only to embed set caller) - - persist
-      // UI channel is details,Web difference render read it (regression: once all read fewer than leads to cannot render difference).
+      assert.ok(editMessage, 'edit toolResult message must exist')
+      // structuredOutput is not persisted by SDK; Web diff rendering reads persisted details.
       assert.equal('structuredOutput' in editMessage!, false)
       const validate = new Ajv({ allErrors: true, strict: false }).compile<EditToolResult>(EDIT_TOOL_RESULT_SCHEMA)
-      assert.ok(validate(editMessage!['details']), `details should conforms to EDIT_TOOL_RESULT_SCHEMA:${JSON.stringify(validate.errors)}`)
+      assert.ok(validate(editMessage!['details']), `details must satisfy EDIT_TOOL_RESULT_SCHEMA: ${JSON.stringify(validate.errors)}`)
       assert.equal((editMessage!['details'] as EditToolResult).diff.addedLines, 1)
     } finally {
       await kernel.close()
     }
   })
 
-  it('run in abortConversation kill bash tool shell(do not etc. 120s)', { timeout: 60_000 }, async () => {
+  it('abortConversation during bash run kills shell cleanly without awaiting 120s', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'sdk2')
     const kernel = (await openRuntime(dir)) as never as ReturnType<typeof openRuntime> & {
       __faux: FauxHandle
@@ -738,7 +719,7 @@ describe('SDK real link (faux model drive tool invoke)', { timeout: 60_000 }, ()
       await kernel.abortConversation(1)
       await kernel.waitForIdle(1).catch(() => {})
       const elapsed = Date.now() - started
-      assert.ok(elapsed < 30_000, `abort should interrupt tool while non- etc. full timeout (${elapsed}ms)`)
+      assert.ok(elapsed < 30_000, `abort should interrupt tool instead of awaiting timeout (${elapsed}ms)`)
       const conv = kernel.getConversation(1)
       assert.ok(['idle', 'error'].includes(conv.status))
     } finally {
@@ -747,8 +728,8 @@ describe('SDK real link (faux model drive tool invoke)', { timeout: 60_000 }, ()
   })
 })
 
-describe('closure stop abort state:spill protect and replay mark record', { timeout: 60_000 }, () => {
-  it('createBashTool in run in by abort when throw abort exception and do not write spill artifact', { timeout: 60_000 }, async () => {
+describe('shutdown abort state: spill protection & replay marker', { timeout: 60_000 }, () => {
+  it('createBashTool throws abort error when aborted mid-run without writing spill artifacts', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'abort-bash')
     const baseDeps = await makeRealDeps(dir)
     let spillCalled = 0
@@ -775,13 +756,13 @@ describe('closure stop abort state:spill protect and replay mark record', { time
           ),
         (err: unknown) => err instanceof Error && err.message === 'kernel closing',
       )
-      assert.equal(spillCalled, 0, 'abort after must not write without intent meaning spill file')
+      assert.equal(spillCalled, 0, 'abort must not leave meaningless spill files')
     } finally {
       clearTimeout(timer)
     }
   })
 
-  it('createReadTool in read during or already abort when throw abort exception and do not invoke spill; only read tool explicit declaration replay: safe', { timeout: 60_000 }, async () => {
+  it('createReadTool throws abort error without calling spill; only read tools declare replay: safe', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'abort-read')
     const baseDeps = await makeRealDeps(dir)
     writeFileSync(join(dir, 'sample.txt'), 'hello abort world\n', 'utf8')
@@ -820,11 +801,11 @@ describe('closure stop abort state:spill protect and replay mark record', { time
         ),
       (err: unknown) => err === abortReason,
     )
-    assert.equal(spillCalled, 0, 'read in abort state must not write spill file')
+    assert.equal(spillCalled, 0, 'aborted read must not write spill files')
   })
 })
 
-/** most small real ToolExecutionApi:conversationId / callId / agent(cwd) all by SDK contract provide. */
+/** Minimal live ToolExecutionApi: conversationId / callId / agent(cwd) provided per SDK contract. */
 function makeApi(cwd: string, conversationId = 1) {
   return {
     taskId: 'test-task',
@@ -843,15 +824,15 @@ function makeApi(cwd: string, conversationId = 1) {
     commit: async (change: () => unknown) => change(),
     memo: async () => undefined,
     createTask: async () => {
-      throw new Error('test does not use')
+      throw new Error('not used in test')
     },
     getTask: async () => undefined,
     waitForTask: async () => {
-      throw new Error('test does not use')
+      throw new Error('not used in test')
     },
     conversation: async () => undefined,
     executeTool: async () => {
-      throw new Error('test does not use')
+      throw new Error('not used in test')
     },
   } as never
 }

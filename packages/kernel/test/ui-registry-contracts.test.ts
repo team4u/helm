@@ -1,21 +1,21 @@
 /**
- * ui-registry-contracts.test.ts: artifact.previewer / composer.completer two new UI contract
- * kernel register, boundary validate and host lifecycle test.
+ * ui-registry-contracts.test.ts: registration, boundary validation, and host lifecycle tests for the
+ * `artifact.previewer` and `composer.completer` UI contracts.
  *
- * override:
- * - UiRegistry direct drive boundary:previewer label/MIME specification (precise or type through match sub- type, refuse all through match,glob,
- *   large write, parameter, path form, duplicate items)/suffix (small write contains point can many segment, refuse large write, without point, path segment, wildcard);
- *   completer disable track (client),trigger blank name single ('/' reject),
- *   source mutual exclusion severe validate (action source forbid doc field,doc source forbid action field, illegal kind),
- *   itemsField security top-level key (refuse __proto__/constructor/prototype),doc name format;
- * - display copy fields: one registerUi guard (parseNonEmptyLocalizedText) covers
+ * Covers:
+ * - Direct `UiRegistry` validation: previewer label/MIME rules (exact or `type/<subtype>` wildcard; rejects global wildcard,
+ *   globs, uppercase, parameters, path forms, duplicates) and extensions (lowercase leading dot with multiple segments;
+ *   rejects uppercase, missing leading dot, path segments, wildcards, duplicates); completer disallows `client` track,
+ *   restricts trigger characters (`/` rejected), enforces mutually exclusive action vs. doc sources, validates
+ *   safe `itemsField` top-level keys (rejects `__proto__`/`constructor`/`prototype`), and doc name format;
+ * - display copy fields: one `registerUi` guard (`parseNonEmptyLocalizedText`) covers
  *   label/title/description on every surface — localized maps accepted and stored raw,
  *   blank copy / unsupported locale keys / non-string values rejected;
- * - assertUiDocsRegistered:completer doc/sessionDoc source want seek this plugin public document;
- * - PluginHost all link: register/enable/disable/snapshot in two surface contribution increase delete,
- *   method amount consumer (PLUGIN_UI_METHOD_NAMES 19 and host ctx.ui key consistent),
- *   this plugin action bind set store in and idempotent(missing action/non- idempotent/async later register all by contract trim decide),
- *   across plugin reference (target enable when validate, target not registered when do not forbidden legal later register).
+ * - `assertUiDocsRegistered`: no longer enforces define-time doc lookups for completer doc/sessionDoc sources;
+ * - `PluginHost` end-to-end: adding/removing contributions across register/enable/disable/snapshot,
+ *   method count consistency (`PLUGIN_UI_METHOD_NAMES` 16 methods matching `ctx.ui`),
+ *   same-plugin action binding checks (`idempotent` / missing action / async later registration),
+ *   and cross-plugin action references (validated on target enable without blocking valid registration order).
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -34,13 +34,13 @@ import { MemoryDocStore, cleanupDir, makeTempDir } from './helpers.js';
 const isHelmError = (code: string) => (err: unknown): boolean => err instanceof HelmError && err.code === code;
 
 // ---------------------------------------------------------------------------
-// UiRegistry boundary:artifact.previewer
+// UiRegistry boundaries: artifact.previewer
 // ---------------------------------------------------------------------------
 
-test('artifactPreviewer: legal MIME/suffix declaration and match list public validate', { timeout: 60_000 }, () => {
+test('artifactPreviewer: valid MIME/extension declarations pass and matcher list validation rejects malformed specs', { timeout: 60_000 }, () => {
   const ui = new UiRegistry(createPluginBuildProvider());
 
-  // client track + precise MIME + many segment suffix + priority all legal
+  // client track + exact MIME + multi-segment extension + priority are all valid
   ui.registerUi(
     'p1',
     'artifact.previewer',
@@ -55,31 +55,31 @@ test('artifactPreviewer: legal MIME/suffix declaration and match list public val
     'artifactPreviewer',
     '/tmp/client-root',
   );
-  // only json track (declaration style fall back) legal
+  // json-only track (declarative fallback) is valid
   ui.registerUi(
     'p1',
     'artifact.previewer',
-    { id: 'img', label: 'diagram piece', json: { component: 'Text', text: 'image' }, mimeTypes: ['image/*'] },
+    { id: 'img', label: 'Image preview', json: { component: 'Text', text: 'image' }, mimeTypes: ['image/*'] },
     'artifactPreviewer',
   );
-  // match field all omit legal (only by not designate field does not match, by frontend trim decide)
+  // Omitting all matcher fields is valid (means never auto-selected by matcher, resolved by frontend)
   ui.registerUi('p1', 'artifact.previewer', { id: 'any', label: 'any' }, 'artifactPreviewer');
   assert.equal(ui.listUi().length, 3);
 
-  // label required non-empty
+  // label required and non-empty
   assert.throws(
     () => ui.registerUi('p1', 'artifact.previewer', { id: 'bad-label', mimeTypes: ['text/plain'] }, 'artifactPreviewer'),
     isHelmError('invalid_ui_spec'),
   );
 
-  // mimeTypes: non- array/empty array/non- string/duplicate
+  // mimeTypes: non-array / empty array / non-string / duplicates
   for (const mimeTypes of [[], ['text/plain', 'text/plain'], ['text/plain', 1], 'text/plain']) {
     assert.throws(
       () => ui.registerUi('p1', 'artifact.previewer', { id: 'bad-mime', label: 'x', mimeTypes }, 'artifactPreviewer'),
       isHelmError('invalid_ui_spec'),
     );
   }
-  // extensions same rule
+  // extensions: same rules
   for (const extensions of [[], ['.md', '.md'], ['.md', 1], '.md']) {
     assert.throws(
       () => ui.registerUi('p1', 'artifact.previewer', { id: 'bad-ext', label: 'x', extensions }, 'artifactPreviewer'),
@@ -87,51 +87,51 @@ test('artifactPreviewer: legal MIME/suffix declaration and match list public val
     );
   }
 
-  // MIME specification: refuse */*, any prefix glob, in suffix through match, parameter, large write, empty segment
+  // MIME validation: rejects */*, prefix globs, wildcards inside subtype, parameters, uppercase, empty segments
   for (const bad of ['*/*', 'text/*x', 'te*t/plain', '*/plain', 'text/plain;charset=utf-8', 'Text/Plain', '/plain', 'text/', 'text']) {
     assert.throws(
       () => ui.registerUi('p1', 'artifact.previewer', { id: 'bad-mime2', label: 'x', mimeTypes: [bad] }, 'artifactPreviewer'),
       isHelmError('invalid_ui_spec'),
-      `MIME "${bad}" should by reject`,
+      `MIME "${bad}" should be rejected`,
     );
   }
-  // suffix specification: refuse large write, without before lead point, path segment, wildcard, empty segment
+  // Extension validation: rejects uppercase, missing leading dot, path segments, wildcards, empty segments
   for (const bad of ['.MD', 'md', '.md/x', '.m*', '.', '..', '.md.', '.*']) {
     assert.throws(
       () => ui.registerUi('p1', 'artifact.previewer', { id: 'bad-ext2', label: 'x', extensions: [bad] }, 'artifactPreviewer'),
       isHelmError('invalid_ui_spec'),
-      `suffix "${bad}" should by reject`,
+      `extension "${bad}" should be rejected`,
     );
   }
 });
 
 // ---------------------------------------------------------------------------
-// UiRegistry boundary:composer.completer
+// UiRegistry boundaries: composer.completer
 // ---------------------------------------------------------------------------
 
-/** register a legal completer declaration most small assist manually. */
+/** Helper to register a minimal valid completer declaration. */
 function registerCompleter(ui: UiRegistry, pluginId: string, id: string, source: Record<string, unknown>): void {
   ui.registerUi(pluginId, 'composer.completer', { id, label: id, trigger: '@', source }, 'composerCompleter');
 }
 
-test('composerCompleter: disable track,trigger blank name single and source shape', { timeout: 60_000 }, () => {
+test('composerCompleter: disallowed client track, trigger allowlist, and source shape validation', { timeout: 60_000 }, () => {
   const ui = new UiRegistry(createPluginBuildProvider());
 
-  // three legal action source (contains across plugin)
+  // Valid action sources (including cross-plugin references)
   registerCompleter(ui, 'p1', 'a1', { kind: 'action', actionId: 'complete' });
   registerCompleter(ui, 'p1', 'a2', { kind: 'action', actionId: 'complete', actionPluginId: 'other' });
-  // doc/sessionDoc source
+  // doc/sessionDoc sources
   registerCompleter(ui, 'p1', 'd1', { kind: 'doc', name: 'items', itemsField: 'entries' });
   registerCompleter(ui, 'p1', 's1', { kind: 'sessionDoc', name: 'ctx', itemsField: 'list' });
   assert.equal(ui.listUi().length, 4);
 
-  // label required non-empty
+  // label required and non-empty
   assert.throws(
     () => ui.registerUi('p1', 'composer.completer', { id: 'bad-label', trigger: '@', source: { kind: 'action', actionId: 'x' } }, 'composerCompleter'),
     isHelmError('invalid_ui_spec'),
   );
 
-  // disable track:client reject (completion by host unify render)
+  // Disallowed track: client rejected (completions render uniformly via host)
   assert.throws(
     () =>
       ui.registerUi('p1', 'composer.completer', {
@@ -142,15 +142,15 @@ test('composerCompleter: disable track,trigger blank name single and source shap
         client: { module: './x.tsx', export: 'X' },
       }, 'composerCompleter'),
     isHelmError('invalid_ui_spec'),
-    'client track should by reject',
+    'client track should be rejected',
   );
 });
 
-test('composerCompleter:doc/sessionDoc source declaration still subject to source shape constraint (reference validate follow JSON track remove)', { timeout: 60_000 }, () => {
+test('composerCompleter: doc/sessionDoc sources still enforce safe source shape without define-time doc reference checks', { timeout: 60_000 }, () => {
   const ui = new UiRegistry(createPluginBuildProvider());
   registerCompleter(ui, 'p1', 'd1', { kind: 'doc', name: 'items', itemsField: 'entries' });
   registerCompleter(ui, 'p1', 's1', { kind: 'sessionDoc', name: 'ctx', itemsField: 'list' });
-  // source shape illegal still reject (such as itemsField prototype pollute key)
+  // Invalid source shapes still reject (e.g., prototype-polluting itemsField keys)
   assert.throws(
     () =>
       ui.registerUi('p1', 'composer.completer', {
@@ -161,12 +161,12 @@ test('composerCompleter:doc/sessionDoc source declaration still subject to sourc
       }, 'composerCompleter'),
     isHelmError('invalid_ui_spec'),
   );
-  // assertUiDocsRegistered is hang point: no longer for completer source do define phase end inspect
+  // assertUiDocsRegistered is a hook stub: no longer checks completer doc sources at end of define phase
   ui.assertUiDocsRegistered('p1', () => false, () => false);
 });
 
 // ---------------------------------------------------------------------------
-// UiRegistry boundary:display copy fields (LocalizedText)
+// UiRegistry boundaries: display copy fields (LocalizedText)
 // ---------------------------------------------------------------------------
 
 test('display copy fields: one registerUi guard covers label/title/description on every surface (maps accepted, blanks rejected)', { timeout: 60_000 }, () => {
@@ -180,7 +180,7 @@ test('display copy fields: one registerUi guard covers label/title/description o
       assert.equal(err.code, 'invalid_ui_spec');
       assert.ok(
         err.message.includes(`${field} must be display copy`),
-        `message should locate display field ${field}:${err.message}`,
+        `message should locate display field ${field}: ${err.message}`,
       );
       return true;
     });
@@ -272,12 +272,12 @@ test('display copy fields: one registerUi guard covers label/title/description o
 });
 
 // ---------------------------------------------------------------------------
-// PluginHost all link
+// PluginHost end-to-end
 // ---------------------------------------------------------------------------
 
 function createHostBackend(): PluginHostBackend {
   const unused = (): never => {
-    throw new Error('this test only verify UI register, must not execute host business operation');
+    throw new Error('this test only verifies UI registration and must not execute host business operations');
   };
   return {
     ...createPluginHostBackendFixture(),
@@ -312,7 +312,7 @@ interface HostFixture {
 async function createHost(): Promise<HostFixture> {
   const dataDir = await makeTempDir('helm-ui-contracts-');
   const events: HostFixture['events'] = [];
-  // conversation shard memory store (sessionDoc declaration want seek durable layer, reject memory fall back is kernel semantics, test patch complete most small implement)
+  // Per-conversation in-memory store (sessionDoc requires a persistence layer; refusing silent fallback is kernel semantics)
   const sessionData = new Map<string, string>();
   const sessionKey = (pluginId: string, name: string, conversationId: number): string =>
     `${pluginId}\u0000${name}\u0000${conversationId}`;
@@ -354,7 +354,7 @@ const noopAction = (id: string, extra: Partial<PluginActionSpec<unknown, unknown
   ...extra,
 });
 
-test('host: new contract register/deactivate/snapshot and method amount consumer align', { timeout: 60_000 }, async () => {
+test('host: new contracts preserve contributions across register/disable/enable and method count matches protocol', { timeout: 60_000 }, async () => {
   const { host, dataDir } = await createHost();
   const plugin: PluginDefinition = {
     id: 'test:contracts',
@@ -364,19 +364,19 @@ test('host: new contract register/deactivate/snapshot and method amount consumer
       ctx.action(noopAction('complete', { idempotent: true }));
       ctx.ui.composerCompleter({
         id: 'at-mentions',
-        label: 'mention and',
+        label: 'Mention',
         trigger: '@',
         source: { kind: 'action', actionId: 'complete' },
       });
       ctx.ui.composerCompleter({
         id: 'hash-docs',
-        label: 'document',
+        label: 'Documents',
         trigger: '#',
         source: { kind: 'doc', name: 'items', itemsField: 'entries' },
       });
       ctx.ui.composerCompleter({
         id: 'colon-session',
-        label: 'context',
+        label: 'Context',
         trigger: ':',
         source: { kind: 'sessionDoc', name: 'ctx-items', itemsField: 'list' },
       });
@@ -399,15 +399,15 @@ test('host: new contract register/deactivate/snapshot and method amount consumer
     const previewer = contributions.find((c) => c.surface === 'artifact.previewer')!;
     assert.equal((previewer.spec as { label?: string }).label, 'Markdown');
 
-    // disable after contribution i.e. when disappear
+    // Contributions disappear immediately on disable
     await host.disable('test:contracts');
     assert.equal(host.listUi().length, 0);
 
-    // enable after restore (contains across enable cycle rebuild)
+    // Restored cleanly on re-enable (re-evaluated across enable cycles)
     await host.enable('test:contracts');
     assert.equal(host.listUi().length, 4);
 
-    // method amount consumer:protocol unique true source 16 method,host ctx.ui provide same name register entry
+    // Method count parity: single source of truth in protocol has 16 methods matching ctx.ui
     assert.equal(PLUGIN_UI_METHOD_NAMES.length, 16);
     assert.ok(PLUGIN_UI_METHOD_NAMES.includes('markdownCodeBlock' as const));
     assert.ok(PLUGIN_UI_METHOD_NAMES.includes('action' as const));
@@ -419,10 +419,10 @@ test('host: new contract register/deactivate/snapshot and method amount consumer
   }
 });
 
-test('host:completer bind set this plugin action - - missing action/non- idempotent in define phase end reject', { timeout: 60_000 }, async () => {
+test('host: completer binding to own action validates missing/non-idempotent actions at end of define phase', { timeout: 60_000 }, async () => {
   const { host, dataDir } = await createHost();
   try {
-    // reference not declaration action: define phase end reject (register failed, do not leftover shadow)
+    // Referencing undeclared action rejects at end of define phase (registration fails cleanly with no leftover UI)
     const missing: PluginDefinition = {
       id: 'test:missing-action',
       definePlugin(ctx) {
@@ -437,7 +437,7 @@ test('host:completer bind set this plugin action - - missing action/non- idempot
     await assert.rejects(() => host.register(missing), isHelmError('invalid_ui_spec'));
     assert.equal(host.listUi().length, 0);
 
-    // non- idempotent action (without idempotent: true): reject
+    // Non-idempotent action (missing idempotent: true): rejected
     const nonIdem: PluginDefinition = {
       id: 'test:non-idem',
       definePlugin(ctx) {
@@ -452,7 +452,7 @@ test('host:completer bind set this plugin action - - missing action/non- idempot
     };
     await assert.rejects(() => host.register(nonIdem), isHelmError('invalid_ui_spec'));
 
-    // action later than UI declaration (async later register): define phase end validate via
+    // Action declared after UI declaration (async order): validated at end of define phase
     const later: PluginDefinition = {
       id: 'test:later-action',
       definePlugin(ctx) {
@@ -473,7 +473,7 @@ test('host:completer bind set this plugin action - - missing action/non- idempot
   }
 });
 
-test('host:completer across plugin action - - target enable when validate, not registered do not forbidden legal later register', { timeout: 60_000 }, async () => {
+test('host: completer cross-plugin actions validate on target enable without blocking valid registration order', { timeout: 60_000 }, async () => {
   const { host, dataDir } = await createHost();
   const consumer = (target?: string): PluginDefinition => ({
     id: 'test:consumer',
@@ -510,21 +510,21 @@ test('host:completer across plugin action - - target enable when validate, not r
     },
   });
   try {
-    // target plugin not yet register: allows (legal later register scenario), register succeeded and contribution visible
+    // Target plugin not yet registered: permitted (supports deferred registration), succeeds with visible contribution
     await host.register(consumer('test:provider'));
     assert.equal(host.listUi().length, 1);
 
-    // target enable but action non- idempotent: target itself register succeeded (kernel do not reverse reject, avoid mistakenly damage without UI target plugin;
-    // non- idempotent fact via listActions manifest expose, by frontend in runtime rely on manifest honor bottom validate)
+    // Target enables with non-idempotent action: target itself registers normally (kernel does not reject
+    // target plugin, avoiding collateral breakage; non-idempotency is exposed via listActions manifest and enforced at runtime)
     await host.register(provider(false));
     const manifest = host.listActions().find((a) => a.pluginId === 'test:provider' && a.id === 'complete')!;
     assert.notEqual(manifest.idempotent, true);
 
-    // new across plugin bind set in enable commit point validate: target enabled and non- idempotent → reject
+    // New cross-plugin binding validates at enable commit point: target enabled & non-idempotent -> rejected
     await host.register(consumer2('test:provider', 'test:consumer2'), { enabled: false });
     await assert.rejects(() => host.enable('test:consumer2'), isHelmError('invalid_ui_spec'));
 
-    // target enabled and idempotent → enable via
+    // Target enabled & idempotent -> enable passes
     await host.register(provider2(), { enabled: false });
     await host.enable('test:provider2');
     await host.register(consumer2('test:provider2', 'test:consumer3'), { enabled: false });

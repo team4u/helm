@@ -1,19 +1,19 @@
 /**
- * AskService lifecycle contract test:AskResult three state,waiter register order and pre- allocate ID.
+ * AskService lifecycle contract tests: three AskResult states, waiter registration order, and pre-allocated IDs.
  *
- * override this round contract change and main proxy real re- now violate about point:
- * - sync deregister single pending bug:ask.upsert subscribe in event call back inside sync cancelAsk(id,'superseded')
- *   after, old implement store already settled but createAsk promise forever do not end (waiter later than publish
- *   register and settle already empty list) - - now must resolve out superseded;
- * - sync answer: event call back inside sync answerAsk must deliver answers;
- * - three state all resolve(cancel/superseded answers is {}, cancel do not smoke fill batch allow),
- *   only verify/IO exception reject;
- * - pre- allocate spec.id do not by UUID override; duplicate ID(any state, contains already compute approval)409 reject,
- *   does not override old approval; illegal id(empty string/whitespace/non- string) validate reject;
- * - CAS semantics keep: client expired watermark 409, without resolver ask_state_unavailable,
- *   target seq inconsistent (contains fall back)superseded;
- * - secret marker do not plaintext: result and durable layer only [REDACTED:stash:*],envFor take back plaintext;
- * - putAsk throws when waiter by reclaim: do not pending wait for,createAsk explicit reject.
+ * Covers contract invariants and main-agent reproduction cases:
+ * - Synchronous superseding race bug: calling cancelAsk(id, 'superseded') synchronously inside an ask.upsert
+ *   event callback previously left the createAsk promise hanging forever (because waiter registered after publish
+ *   while settle saw an empty waiter map) -- must resolve to superseded now;
+ * - Synchronous answer: calling answerAsk synchronously inside an event callback must deliver answers;
+ * - All three terminal states resolve (cancelled/superseded have answers: {}; never backfill false approvals),
+ *   rejecting only on validation or IO faults;
+ * - Pre-allocated spec.id is preserved without UUID replacement; duplicate IDs (any status, including settled
+ *   approvals) reject with 409 without overwriting old records; invalid IDs (empty/whitespace/non-string) reject validation;
+ * - CAS semantics preserved: stale client seq returns 409, missing resolver returns ask_state_unavailable,
+ *   target seq mismatch (including rollback) resolves to superseded;
+ * - Secret field boundary: result and persisted rows keep only [REDACTED:stash:*]; envFor recovers plaintext;
+ * - Waiters are reclaimed if putAsk throws: never hanging, createAsk rejects explicitly.
  */
 
 import { HelmError } from '@helm/protocol'
@@ -33,7 +33,7 @@ interface TestContext {
   stash: SecretStash
   events: Array<{ type: string; payload: unknown }>
   pendingChanged: number[]
-  /** in order close store and underlying db(finally must invoke, otherwise connect leak leak). */
+  /** Closes store and underlying db sequentially (must be called in finally to avoid fd leaks). */
   close(): Promise<void>
 }
 
@@ -86,7 +86,7 @@ async function openService(
   }
 }
 
-/** assertion promise in ms inside already compute (guard against pending regression: pending when timeout failed and to out diagnose). */
+/** Asserts that promise settles within ms (guards against hang regressions with diagnostic failures). */
 async function assertSettlesWithin<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   const sentinel = Symbol('pending')
   const raced = await Promise.race([
@@ -98,7 +98,7 @@ async function assertSettlesWithin<T>(promise: Promise<T>, ms: number, label: st
   ])
   const outcome = raced as { value: unknown; error?: unknown }
   if (outcome.value === sentinel && outcome.error === undefined) {
-    assert.fail(`${label}:promise in ${ms}ms inside not compute (pending regression)`)
+    assert.fail(`${label}: promise did not settle within ${ms}ms (hang regression)`)
   }
   if ('error' in outcome && outcome.error !== undefined) {
     throw outcome.error
@@ -114,12 +114,12 @@ const baseSpec = {
 
 // ---------------------------------------------------------------------------
 
-describe('Ask lifecycle: sync deregister single/act answer do not pending', { timeout: 60_000 }, () => {
-  it('main proxy re- now path:ask.upsert subscribe inside sync cancelAsk(superseded) after promise must resolve superseded', { timeout: 60_000 }, async () => {
+describe('Ask lifecycle: synchronous supersede/answer never hangs', { timeout: 60_000 }, () => {
+  it('main repro path: synchronous cancelAsk(superseded) inside ask.upsert callback resolves promise to superseded', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
-      // subscribe in event call back inside sync deregister single (real plugin via events.subscribe trigger path).
-      // deregister single must away the same instance (waiters is instance inside Map):hook self reference simulated plugin call back.
+      // Cancel synchronously inside event callback (path triggered by real plugins via events.subscribe).
+      // Must operate on the same instance (waiters Map is per-instance): hook references itself to mimic plugin callback.
       let hook: AskService
       hook = new AskService({
         store: ctx.store,
@@ -134,7 +134,7 @@ describe('Ask lifecycle: sync deregister single/act answer do not pending', { ti
       const result = await assertSettlesWithin(
         hook.createAsk(baseSpec),
         2_000,
-        'sync superseded deregister single',
+        'sync superseded',
       )
       assert.equal(result.status, 'superseded')
       assert.deepEqual(result.answers, {})
@@ -144,7 +144,7 @@ describe('Ask lifecycle: sync deregister single/act answer do not pending', { ti
     }
   })
 
-  it('sync answer:ask.upsert subscribe inside sync answerAsk deliver answers', { timeout: 60_000 }, async () => {
+  it('sync answer: synchronous answerAsk inside ask.upsert callback delivers answers', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       let hook: AskService
@@ -153,20 +153,20 @@ describe('Ask lifecycle: sync deregister single/act answer do not pending', { ti
         stash: ctx.stash,
         onEvent: (type, payload) => {
           if (type === 'ask.upsert') {
-            void hook.answerAsk((payload as { id: string }).id, { x: 'sync answer proposal' })
+            void hook.answerAsk((payload as { id: string }).id, { x: 'sync answer' })
           }
         },
         onConvPendingChanged: () => {},
       })
       const result = await assertSettlesWithin(hook.createAsk(baseSpec), 2_000, 'sync answer')
       assert.equal(result.status, 'answered')
-      assert.deepEqual(result.answers, { x: 'sync answer proposal' })
+      assert.deepEqual(result.answers, { x: 'sync answer' })
     } finally {
       await ctx.close()
     }
   })
 
-  it('async cancel/answer path do not subject to affect (common rule await compute)', { timeout: 60_000 }, async () => {
+  it('async cancel/answer path remains unaffected (normally settles on await)', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const p1 = ctx.service.createAsk(baseSpec)
@@ -190,11 +190,11 @@ describe('Ask lifecycle: sync deregister single/act answer do not pending', { ti
 
 // ---------------------------------------------------------------------------
 
-describe('Ask three state final value and exception boundary', { timeout: 60_000 }, () => {
-  it('answered carry answers;cancelled/superseded answers is {}(do not smoke fill batch allow)', { timeout: 60_000 }, async () => {
+describe('Ask three terminal outcomes and error boundaries', { timeout: 60_000 }, () => {
+  it('answered carries answers; cancelled/superseded carry {} (never backfilling false approvals)', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
-      const pa = ctx.service.createAsk({ ...baseSpec, title: 'act answer' })
+      const pa = ctx.service.createAsk({ ...baseSpec, title: 'answer' })
       await new Promise((r) => setTimeout(r, 20))
       await ctx.service.answerAsk(ctx.service.listAsks('pending')[0]!.id, { x: 'ok' })
       const answered = await pa
@@ -209,7 +209,7 @@ describe('Ask three state final value and exception boundary', { timeout: 60_000
       assert.equal(cancelled.status, 'cancelled')
       assert.deepEqual(cancelled.answers, {})
 
-      const ps = ctx.service.createAsk({ ...baseSpec, title: 'deregister single' })
+      const ps = ctx.service.createAsk({ ...baseSpec, title: 'supersede' })
       await new Promise((r) => setTimeout(r, 20))
       await ctx.service.cancelAsk(ctx.service.listAsks('pending')[0]!.id, 'superseded')
       const superseded = await ps
@@ -220,7 +220,7 @@ describe('Ask three state final value and exception boundary', { timeout: 60_000
     }
   })
 
-  it('verify exception reject: illegal spec / conversation missing / answer proposal illegal do not compute ask', { timeout: 60_000 }, async () => {
+  it('validation failures reject: invalid spec / missing conversation / invalid answers do not settle ask', { timeout: 60_000 }, async () => {
     const ctx = await openService({ validateConversation: (id) => id === 1 })
     try {
       await assert.rejects(
@@ -231,7 +231,7 @@ describe('Ask three state final value and exception boundary', { timeout: 60_000
         () => ctx.service.createAsk({ ...baseSpec, conversationId: 424242 }),
         (err: unknown) => err instanceof HelmError && err.code === 'not_found',
       )
-      // illegal answer proposal reject(answerAsk throw),ask keep pending, produces no false result.
+      // Invalid answer rejected (answerAsk throws); ask remains pending without fabricating a result.
       const pa = ctx.service.createAsk(baseSpec)
       void pa.catch(() => {})
       await new Promise((r) => setTimeout(r, 20))
@@ -248,25 +248,25 @@ describe('Ask three state final value and exception boundary', { timeout: 60_000
     }
   })
 
-  it('putAsk sync reject (mirror pre- check):createAsk explicit reject and do not pending waiter', { timeout: 60_000 }, async () => {
+  it('putAsk synchronous rejection (mirror pre-check): createAsk rejects explicitly without leaking waiter', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const raw = ctx.store as unknown as { putAsk: (row: unknown) => void }
       const original = raw.putAsk.bind(ctx.store)
       raw.putAsk = () => {
-        throw new HelmError('store_flush_failed', 'simulated persist failed', 500)
+        throw new HelmError('store_flush_failed', 'simulated persist failure', 500)
       }
       await assert.rejects(
         () => ctx.service.createAsk(baseSpec),
         (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed',
       )
       raw.putAsk = original
-      // waiter already reclaim: after continue same ID create and normal stream process do not subject to pollute.
+      // Waiter was reclaimed: recreating and running normally afterward is unpolluted.
       assert.equal(ctx.service.listAsks('pending').length, 0)
       const ok = ctx.service.createAsk(baseSpec)
       await new Promise((r) => setTimeout(r, 20))
       await ctx.service.answerAsk(ctx.service.listAsks('pending')[0]!.id, { x: 'v' })
-      const result = await assertSettlesWithin(ok, 2_000, 'failed reclaim after rebuild')
+      const result = await assertSettlesWithin(ok, 2_000, 'rebuild after failure reclaim')
       assert.equal(result.status, 'answered')
     } finally {
       await ctx.close()
@@ -276,9 +276,9 @@ describe('Ask three state final value and exception boundary', { timeout: 60_000
 
 // ---------------------------------------------------------------------------
 
-describe('Ask persist failed (SQL tail chain inject): do not return false succeeded', { timeout: 60_000 }, () => {
-  // putAsk only write mirror + queue SQL: real boundary in tail chain, only flushPublic can expose
-  // async SQL failed. inject db.run failed verify create/compute all do not false succeeded.
+describe('Ask persistence failures (SQL tail chain injection): never return false success', { timeout: 60_000 }, () => {
+  // putAsk only writes the mirror and enqueues SQL: the real boundary is at the end of the chain, where flushPublic exposes
+  // async SQL failures. Inject db.run errors to verify both creation and settlement avoid false success.
   let reported: unknown[] = []
 
   function patchRun(
@@ -290,12 +290,12 @@ describe('Ask persist failed (SQL tail chain inject): do not return false succee
     }
     const original = internals.db.run.bind(internals.db)
     internals.db.run = (sql: string, ...params: unknown[]) => {
-      if (shouldFail(sql, params)) return Promise.reject(new Error('inject SQL failed'))
+      if (shouldFail(sql, params)) return Promise.reject(new Error('injected SQL failure'))
       return original(sql, ...params)
     }
   }
 
-  it('create INSERT failed:createAsk reject, do not publish ask.upsert, after continue write explicit reject', { timeout: 60_000 }, async () => {
+  it('creation INSERT fails: createAsk rejects, no ask.upsert emitted, subsequent writes reject explicitly', { timeout: 60_000 }, async () => {
     reported = []
     const ctx = await openService({
       onError: (error) => reported.push(error),
@@ -306,83 +306,83 @@ describe('Ask persist failed (SQL tail chain inject): do not return false succee
         () => ctx.service.createAsk(baseSpec),
         (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed',
       )
-      // not publish any visible system event (side effect by block assert, do not extreme false succeeded).
+      // Emits no visible system event (side effects are gated on commit, never optimistic false success).
       assert.equal(ctx.events.find((e) => e.type === 'ask.upsert'), undefined)
-      // store enter fail semantics: after continue new write explicit reject, no longer pretend queue succeeded.
+      // Store enters broken state: subsequent writes reject explicitly instead of pretending queue success.
       await assert.rejects(
         () => ctx.service.createAsk(baseSpec),
         (err: unknown) => err instanceof HelmError && (err.code === 'store_flush_failed' || err.code === 'store_closed'),
       )
-      // error already on report (not silently swallow).
-      assert.ok(reported.length >= 1, 'persist error must on report')
+      // Error is reported upward (not silently swallowed).
+      assert.ok(reported.length >= 1, 'persistence error must be reported')
     } finally {
       await ctx.close()
     }
   })
 
-  it('compute UPDATE failed: do not return false answered,createAsk same error reject, without ask.resolved', { timeout: 60_000 }, async () => {
+  it('settlement UPDATE fails: never returns false answered; createAsk rejects with same error; no ask.resolved', { timeout: 60_000 }, async () => {
     reported = []
     const ctx = await openService({
       onError: (error) => reported.push(error),
     })
     try {
-      // create INSERT  settled_at bind set is null; compute write back is count value - - only intercept compute.
+      // Creation INSERT binds settled_at as null; settlement writes a timestamp number -- intercept settlement only.
       patchRun(ctx.store, (sql, params) => sql.includes('helm_asks') && typeof params[8] === 'number')
       const askPromise = ctx.service.createAsk(baseSpec)
       await new Promise((r) => setTimeout(r, 20))
       const ask = ctx.service.listAsks('pending')[0]!
       await assert.rejects(
-        () => ctx.service.answerAsk(ask.id, { x: 'real answer proposal' }),
+        () => ctx.service.answerAsk(ask.id, { x: 'real answer' }),
         (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed',
       )
-      // createAsk must not return false answered: the same failed reject(also do not pending).
+      // createAsk must not resolve with a false answer: rejects with the same failure (and does not hang).
       await assert.rejects(
-        () => assertSettlesWithin(askPromise, 2_000, 'compute failed'),
+        () => assertSettlesWithin(askPromise, 2_000, 'settlement failure'),
         (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed',
       )
-      // terminal state event not publish.
+      // Terminal event is not published.
       assert.equal(ctx.events.find((e) => e.type === 'ask.resolved'), undefined)
-      assert.ok(reported.length >= 1, 'persist error must on report')
+      assert.ok(reported.length >= 1, 'persistence error must be reported')
     } finally {
       await ctx.close()
     }
   })
 
-  it('terminal state sync putAsk throws:answer/cancel reject,createAsk waiter same error reject do not pending', { timeout: 60_000 }, async () => {
+  it('terminal synchronous putAsk throws: answer/cancel reject and createAsk waiter rejects with same error without hanging', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const askPromise = ctx.service.createAsk(baseSpec)
       await new Promise((r) => setTimeout(r, 20))
       const ask = ctx.service.listAsks('pending')[0]!
-      // sync mirror write reject (store closed/pre- check throw), occur in flush before.
+      // Synchronous mirror write rejects (store closed/pre-check throw) before flush.
       const raw = ctx.store as unknown as { putAsk: (row: unknown) => void }
       const original = raw.putAsk.bind(ctx.store)
       raw.putAsk = () => {
-        throw new HelmError('store_closed', 'simulated terminal state sync failed to write', 409)
+        throw new HelmError('store_closed', 'simulated terminal sync write failure', 409)
       }
       await assert.rejects(
         () => ctx.service.answerAsk(ask.id, { x: 'v' }),
         (err: unknown) => err instanceof HelmError && err.code === 'store_closed',
       )
-      // createAsk waiter must not pending, must not false terminal state: the same error reject.
+      // createAsk waiter must not hang or receive false terminal outcome: rejects with the same error.
       await assert.rejects(
-        () => assertSettlesWithin(askPromise, 2_000, 'terminal state sync put failed'),
+        () => assertSettlesWithin(askPromise, 2_000, 'terminal sync put failure'),
         (err: unknown) => err instanceof HelmError && err.code === 'store_closed',
       )
       raw.putAsk = original
-      // cancel path same reject do not pending (pre- allocate id precise locate, avoid choose in old pending).
+      // Cancel path also rejects without hanging (pre-allocate ID for exact lookup away from older pending asks).
       const p2 = ctx.service.createAsk({ ...baseSpec, id: 'cancel-put-fail', title: 'cancel' })
       await new Promise((r) => setTimeout(r, 20))
       assert.equal(ctx.service.listAsks('pending').find((a) => a.id === 'cancel-put-fail') !== undefined, true)
       raw.putAsk = () => {
-        throw new HelmError('store_closed', 'simulated terminal state sync failed to write', 409)
+        throw new HelmError('store_closed', 'simulated terminal sync write failure', 409)
       }
       await assert.rejects(
         () => ctx.service.cancelAsk('cancel-put-fail'),
         (err: unknown) => err instanceof HelmError && err.code === 'store_closed',
       )
       await assert.rejects(
-        () => assertSettlesWithin(p2, 2_000, 'cancel sync put failed'),
+        () => assertSettlesWithin(p2, 2_000, 'cancel sync put failure'),
         (err: unknown) => err instanceof HelmError && err.code === 'store_closed',
       )
       raw.putAsk = original
@@ -391,8 +391,8 @@ describe('Ask persist failed (SQL tail chain inject): do not return false succee
     }
   })
 
-  it('ask.resolved publish throws:answer reject,createAsk waiter same error reject do not pending', { timeout: 60_000 }, async () => {
-    // succeeded but event call back throws: also must such as failed, cannot install act already compute.
+  it('ask.resolved publish throws: answer rejects and createAsk waiter rejects with same error without hanging', { timeout: 60_000 }, async () => {
+    // Even if DB persisted, an event callback throw must fail cleanly rather than pretending settlement succeeded.
     const db = await openHelmDatabase(join(rootDir, `ask-${Math.random().toString(36).slice(2)}`))
     const store = new HelmStore(db)
     await store.load()
@@ -415,9 +415,9 @@ describe('Ask persist failed (SQL tail chain inject): do not return false succee
         () => failing.answerAsk(ask.id, { x: 'v' }),
         (err: unknown) => err instanceof Error && String(err.message).includes('event publish fault'),
       )
-      // already succeeded but event failed:waiter with the same error reject(do not pending, do not false answered).
+      // Persistence succeeded yet event failed: waiter rejects with same error (no hang, no false answer).
       await assert.rejects(
-        () => assertSettlesWithin(askPromise, 2_000, 'event failed to publish'),
+        () => assertSettlesWithin(askPromise, 2_000, 'event publish failed'),
         (err: unknown) => err instanceof Error && String(err.message).includes('event publish fault'),
       )
     } finally {
@@ -426,24 +426,24 @@ describe('Ask persist failed (SQL tail chain inject): do not return false succee
     }
   })
 
-  it('cancelByConversation any one failed: such as reject, must not static default succeeded', { timeout: 60_000 }, async () => {
+  it('any failure in cancelByConversation rejects overall rather than succeeding silently', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const p1 = ctx.service.createAsk(baseSpec)
       await new Promise((r) => setTimeout(r, 20))
       const p2 = ctx.service.createAsk({ ...baseSpec, title: 'second' })
       await new Promise((r) => setTimeout(r, 20))
-      // inject compute UPDATE failed (first create INSERT settled_at=null do not intercept).
+      // Inject settlement UPDATE failure (leave creation INSERT with settled_at=null untouched).
       patchRun(ctx.store, (sql, params) => sql.includes('helm_asks') && typeof params[8] === 'number')
       await assert.rejects(
         () => ctx.service.cancelByConversation(1),
         (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed',
       )
-      // failed waiter already by settle with failure compute (do not pending, do not false terminal state).
+      // Failed waiters settle with failure (never left hanging or falsely terminated).
       const outcomes = await Promise.allSettled([p1, p2])
       const rejected = outcomes.filter((o) => o.status === 'rejected').length
-      assert.ok(rejected >= 1, 'at least a subject to affect ask  waiter must explicit failed')
-      // cannot appear any one example level join cancel succeeded resolve into cancelledalso whole yet report succeeded.
+      assert.ok(rejected >= 1, 'at least one affected ask waiter must fail explicitly')
+      // Must never let one cancellation resolve to cancelled while reporting batch success overall.
       patchRun(ctx.store, () => false)
     } finally {
       await ctx.close()
@@ -453,8 +453,8 @@ describe('Ask persist failed (SQL tail chain inject): do not return false succee
 
 // ---------------------------------------------------------------------------
 
-describe('Ask pre- allocate ID', { timeout: 60_000 }, () => {
-  it('spec.id keep do not by UUID override;result.id and store inside consistent', { timeout: 60_000 }, async () => {
+describe('Ask pre-allocated ID', { timeout: 60_000 }, () => {
+  it('spec.id is preserved without UUID replacement; result.id matches store', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const pa = ctx.service.createAsk({ ...baseSpec, id: 'pre-allocated-1' })
@@ -469,22 +469,22 @@ describe('Ask pre- allocate ID', { timeout: 60_000 }, () => {
     }
   })
 
-  it('duplicate ID reject (contains already compute approval):409 ask_id_conflict, does not override old record', { timeout: 60_000 }, async () => {
+  it('duplicate ID rejected (including settled approvals): 409 ask_id_conflict without overwriting old record', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const pa = ctx.service.createAsk({ ...baseSpec, id: 'dup-1' })
       await new Promise((r) => setTimeout(r, 20))
-      await ctx.service.answerAsk('dup-1', { x: 'original answer proposal' })
+      await ctx.service.answerAsk('dup-1', { x: 'original answer' })
       await pa
-      // already compute (answered) ID again use: reject, does not override old approval result.
+      // Reusing an already-settled (answered) ID rejects without overwriting the old decision.
       await assert.rejects(
         () => ctx.service.createAsk({ ...baseSpec, id: 'dup-1' }),
         (err: unknown) => err instanceof HelmError && err.code === 'ask_id_conflict',
       )
       assert.equal(ctx.store.getAsk('dup-1')!.status, 'answered')
-      assert.equal(JSON.parse(ctx.store.getAsk('dup-1')!.resultJson!).x, 'original answer proposal')
+      assert.equal(JSON.parse(ctx.store.getAsk('dup-1')!.resultJson!).x, 'original answer')
 
-      // pending state ID same reject.
+      // Pending IDs also reject.
       const pb = ctx.service.createAsk({ ...baseSpec, id: 'dup-2' })
       void pb.catch(() => {})
       await new Promise((r) => setTimeout(r, 20))
@@ -494,7 +494,7 @@ describe('Ask pre- allocate ID', { timeout: 60_000 }, () => {
       )
       await ctx.service.cancelAsk('dup-2')
       await pb
-      // cancelled state same occupy ID.
+      // Cancelled records still occupy the ID.
       await assert.rejects(
         () => ctx.service.createAsk({ ...baseSpec, id: 'dup-2' }),
         (err: unknown) => err instanceof HelmError && err.code === 'ask_id_conflict',
@@ -504,7 +504,7 @@ describe('Ask pre- allocate ID', { timeout: 60_000 }, () => {
     }
   })
 
-  it('illegal id shape reject: empty string / pure whitespace / non- string', { timeout: 60_000 }, async () => {
+  it('invalid id formats reject: empty string / whitespace only / non-string', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       for (const bad of ['', '   ']) {
@@ -526,8 +526,8 @@ describe('Ask pre- allocate ID', { timeout: 60_000 }, () => {
 
 // ---------------------------------------------------------------------------
 
-describe('Ask CAS semantics keep', { timeout: 60_000 }, () => {
-  it('client expired watermark 409; without resolver ask_state_unavailable;seq inconsistent (contains fall back)superseded resolve', { timeout: 60_000 }, async () => {
+describe('Ask CAS semantics preservation', { timeout: 60_000 }, () => {
+  it('stale client seq 409; missing resolver ask_state_unavailable; mismatched seq (including rollback) resolves superseded', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const pa = ctx.service.createAsk({ ...baseSpec, expectedStateSeq: 10, title: 'CAS' })
@@ -542,22 +542,22 @@ describe('Ask CAS semantics keep', { timeout: 60_000 }, () => {
         () => ctx.service.answerAsk(ask.id, { x: 'v' }),
         (err: unknown) => err instanceof HelmError && err.code === 'ask_state_unavailable',
       )
-      // fall back (9 < 10) and push enter (11 > 10) all superseded, and createAsk resolve.
+      // Both rollback (9 < 10) and advance (11 > 10) resolve to superseded and settle createAsk.
       let target = 9
       ctx.service.registerSeqResolver(() => target)
       const settledBackward = await ctx.service.answerAsk(ask.id, { x: 'v' })
       assert.equal(settledBackward.status, 'superseded')
-      const r1 = await assertSettlesWithin(pa, 2_000, 'seq fall back superseded')
+      const r1 = await assertSettlesWithin(pa, 2_000, 'seq rollback superseded')
       assert.equal(r1.status, 'superseded')
       assert.deepEqual(r1.answers, {})
 
-      const pb = ctx.service.createAsk({ ...baseSpec, expectedStateSeq: 5, title: 'CAS consistent' })
+      const pb = ctx.service.createAsk({ ...baseSpec, expectedStateSeq: 5, title: 'CAS match' })
       await new Promise((r) => setTimeout(r, 20))
       const ask2 = ctx.service.listAsks('pending')[0]!
       target = 5
       const ok = await ctx.service.answerAsk(ask2.id, { x: 'v' })
       assert.equal(ok.status, 'answered')
-      const r2 = await assertSettlesWithin(pb, 2_000, 'seq consistent answer')
+      const r2 = await assertSettlesWithin(pb, 2_000, 'matching seq answer')
       assert.equal(r2.status, 'answered')
     } finally {
       await ctx.close()
@@ -567,8 +567,8 @@ describe('Ask CAS semantics keep', { timeout: 60_000 }, () => {
 
 // ---------------------------------------------------------------------------
 
-describe('Ask secret marker boundary', { timeout: 60_000 }, () => {
-  it('secret answer proposal only stash marker:result/persist/event all without plaintext,envFor can take back', { timeout: 60_000 }, async () => {
+describe('Ask secret redaction boundary', { timeout: 60_000 }, () => {
+  it('secret answers hold only stash markers in result/store/events while envFor recovers plaintext', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const pa = ctx.service.createAsk({
@@ -580,24 +580,24 @@ describe('Ask secret marker boundary', { timeout: 60_000 }, () => {
       await ctx.service.answerAsk(ctx.service.listAsks('pending')[0]!.id, { API_KEY: 'plain-secret-value' })
       const result = await pa
       assert.equal(result.status, 'answered')
-      assert.ok(result.answers['API_KEY']!.startsWith('[REDACTED:stash:'), 'result only contains marker')
-      // durable layer without plaintext.
+      assert.ok(result.answers['API_KEY']!.startsWith('[REDACTED:stash:'), 'result carries only stash marker')
+      // Persisted row contains no plaintext.
       const row = ctx.store.getAsk(result.id)!
       assert.ok(!row.specJson.includes('plain-secret-value'))
       assert.ok(!row.resultJson!.includes('plain-secret-value'))
       assert.ok(row.resultJson!.includes('[REDACTED:stash:'))
-      // event payload without plaintext.
+      // Event payloads contain no plaintext.
       for (const frame of ctx.events) {
-        assert.ok(!JSON.stringify(frame).includes('plain-secret-value'), 'event must not leak leak plaintext')
+        assert.ok(!JSON.stringify(frame).includes('plain-secret-value'), 'event must not leak plaintext')
       }
-      // conversation environment can take back plaintext (process inside can message way).
+      // Conversation environment recovers plaintext (accessible in-process).
       assert.equal(ctx.stash.envFor(1)['API_KEY'], 'plain-secret-value')
     } finally {
       await ctx.close()
     }
   })
 
-  it('empty secret do not stash(store empty string),secret collision declaration still reject', { timeout: 60_000 }, async () => {
+  it('empty secret is not stashed (stores empty string); duplicate secret declarations still reject', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const pa = ctx.service.createAsk({
@@ -610,10 +610,10 @@ describe('Ask secret marker boundary', { timeout: 60_000 }, () => {
       const result = await pa
       assert.equal(result.status, 'answered')
       assert.equal(result.answers['EMPTY_TOKEN'], '')
-      // 'api_key' and 'API_KEY' is two different field name: keep declaration original can shared store (not silently merge).
+      // 'api_key' and 'API_KEY' are distinct field names: valid declarations can coexist (no silent merging).
       const pboth = ctx.service.createAsk({
         conversationId: 1,
-        title: 'double secret shared store',
+        title: 'dual secret coexistence',
         fields: [
           { name: 'api_key', label: 'a', type: 'text', secret: true },
           { name: 'API_KEY', label: 'b', type: 'text', secret: true },
@@ -628,7 +628,7 @@ describe('Ask secret marker boundary', { timeout: 60_000 }, () => {
       assert.equal(both.status, 'answered')
       assert.equal(ctx.stash.envFor(1)['api_key'], 'lower')
       assert.equal(ctx.stash.envFor(1)['API_KEY'], 'upper')
-      // duplicate field.name still reject.
+      // Duplicate field.name still rejects.
       await assert.rejects(
         () =>
           ctx.service.createAsk({

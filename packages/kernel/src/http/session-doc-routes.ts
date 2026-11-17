@@ -22,7 +22,7 @@ export async function handleSessionDocsDomain(
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   if (ctx.method !== 'GET' || ctx.segments[1] !== 'events' || ctx.segments[2] !== undefined) {
-    return errorResponse(redactor, 404, 'not_found', 'routing missing')
+    return errorResponse(redactor, 404, 'not_found', 'route not found')
   }
 
   const rawSubs = ctx.url.searchParams.getAll('sub')

@@ -1,12 +1,15 @@
 /**
- * runtime tool install match: negative duty kernel basis tool (helm-core) and plugin derived tool (helm-plugins) register and hot install.
+ * Runtime tool installer: registers and hot-swaps foundational kernel tools (`helm-core`) and plugin-derived
+ * tools (`helm-plugins`).
  *
- * responsibility:
- * 1. installKernelTools: construct bash/read/write/edit/read_artifact/register_artifact
- *    and run_action meta tool, unify with wrapToolExecute wrap with support tool_call handled take over return;
- * 2. installPluginTools: PluginHost.listTools() return DerivedToolSpec mapping is real SDK
- *    tool extend and install to registry(original ground hot replace old plugin tool extend), out station result via pluginToolResult redaction and format;
- * 3. consume and HookBridge sharing handledToolCalls Map, implement without reverse dependency tool level intercept short route.
+ * Responsibilities:
+ * 1. `installKernelTools`: constructs `bash`/`read`/`write`/`edit`/`read_artifact`/`register_artifact` and the
+ *    `run_action` meta-tool, wrapped uniformly via `wrapToolExecute` to honor `tool_call` `handled` takeovers;
+ * 2. `installPluginTools`: converts `DerivedToolSpec` entries from `PluginHost.listTools()` into SDK tool
+ *    extensions and installs them into the registry (replacing stale `helm-plugins` tools in place), with
+ *    outbound results redacted and formatted via `pluginToolResult`;
+ * 3. Shares the `handledToolCalls` Map with `HookBridge` for tool-level interception short-circuiting without
+ *    circular dependencies.
  */
 
 import type { Context } from '@earendil-works/chord/context'
@@ -44,7 +47,7 @@ export interface RuntimeToolRegistryOptions {
   readonly isArtifactAuthorized: (conversationId: number, artifactConversationId: number) => boolean
   readonly redact: (text: string) => string
   readonly handledToolCalls: Map<string, HandledToolCallEntry>
-  /** conversation summary read (run_action describe pattern scope decide use). */
+  /** Conversation summary lookup (used for `run_action` `describe` scope checks). */
   readonly getConversation: (conversationId: number) => ConversationSummary
 }
 
@@ -53,7 +56,7 @@ type PluginToolApi = Pick<ToolExecutionApi, 'conversationId'> & {
   output?: (chunk: string) => void
 }
 
-/** kernel/plugin tool execute wrap:tool_call handled take over result takes precedence return (do not execute real tool). */
+/** Kernel/plugin tool execution wrapper: returns `tool_call` `handled` takeover results first without running the tool. */
 export function wrapToolExecute<
   TArgs,
   TApi extends { callId?: string },
@@ -71,15 +74,16 @@ export function wrapToolExecute<
       return handled.result
     }
     const result = await execute(args, api, context)
-    // if tool implement swallow or convert abort (such as return { isError: true }), in this unify throw abort
-    // exception, ensure pi-durable ToolTask enter interrupt / writeAtClose() retreat back pending branch.
+    // If a tool implementation swallowed or converted an abort (e.g. returned `{ isError: true }`), rethrow
+    // uniformly here so pi-durable `ToolTask` enters its interrupted / `writeAtClose()` revert-to-pending branch.
     throwIfToolAborted(context?.abortSignal)
     return result
   }
 }
 
 /**
- * unify wrap specific tool register and erase inverse change parameter generic, concentrate consolidate to `Extension.tools` different construct array boundary.
+ * Uniformly wrap typed tool registrations and erase contravariant type params at the heterogeneous
+ * `Extension.tools` array boundary.
  */
 function wrapToolRegistration<TParameters extends object, TDetails extends JsonValue>(
   handledToolCalls: Map<string, HandledToolCallEntry>,
@@ -96,10 +100,9 @@ export class RuntimeToolRegistry {
   constructor(private readonly options: RuntimeToolRegistryOptions) {}
 
   /**
-   * kernel basis tool (bash/read/write/edit/read_artifact/register_artifact +
-   * run_action meta tool) unify register (and plugin tool the same registry mechanism;execute unify
-   * package handled take over).subagent / SubagentWorkflow / cleanup_worktree by
-   * builtin:workflow plugin provide.
+   * Install foundational kernel tools (`bash`/`read`/`write`/`edit`/`read_artifact`/`register_artifact` +
+   * `run_action` meta-tool) under `helm-core` (sharing the same registry and `wrapToolExecute` takeover path as
+   * plugins). `subagent` / `SubagentWorkflow` / `cleanup_worktree` are provided by `builtin:workflow`.
    */
   installKernelTools(): void {
     const { registry, toolDeps, getPluginHost, isArtifactAuthorized, redact, handledToolCalls, getConversation } = this.options
@@ -121,24 +124,24 @@ export class RuntimeToolRegistry {
       ) => {
         const host = getPluginHost()
         if (!host) throw new HelmError('runtime_not_initialized', 'plugin host not initialized', 503)
-        // only read manifest query: never via invokeAction(do not execute handler, does not input validate,
-        // do not create liveTask); enable filter inside create in listActions(activeEnabledPluginIds).
+        // Read-only manifest query: never calls `invokeAction` (never executes handler, validates input, or
+        // creates a `liveTask`); enablement filtering already comes from `listActions(activeEnabledPluginIds)`.
         const manifest = host
           .listActions()
           .find((item) => item.pluginId === pluginId && item.id === actionId)
         if (manifest === undefined) {
           throw new HelmError(
             'unknown_action',
-            `plugin ${pluginId} not declaration action ${actionId}(or not enabled)`,
+            `Plugin '${pluginId}' does not declare action '${actionId}' (or is disabled)`,
             404,
             { pluginId, actionId },
           )
         }
-        // scope outside conversation do not leak Schema: and execute during same code reject (description side and execute side consistent).
+        // Do not leak schemas to out-of-scope conversations: reject with the exact same code as execution.
         if (!matchesConversationScope(manifest.scope, getConversation(context.conversationId))) {
           throw new HelmError(
             'conversation_scope_violation',
-            `action ${pluginId}.${actionId} disallows in conversation ${context.conversationId} on query (scope missed)`,
+            `Action '${pluginId}.${actionId}' cannot be queried in conversation ${context.conversationId} (outside allowed scope)`,
             403,
             { pluginId, actionId, conversationId: context.conversationId },
           )
@@ -165,10 +168,10 @@ export class RuntimeToolRegistry {
   }
 
   /**
-   * based on plugin provide DerivedToolSpec manifest construct helm-plugins extend and install.
-   * same name extend install semantics is original ground replace; empty collection also will install with empty old plugin tool.
-   * onUpdate partial via SDK original generate api.output mechanism enter real-time view (conversation.live
-   * tool card); string/text chunk all unify redaction, compute after invoke static default ignore (SDK contract).
+   * Build and install the `helm-plugins` extension from plugin `DerivedToolSpec` declarations.
+   * Re-installing under the same extension name replaces tools in place; an empty array clears stale tools.
+   * Partial `onUpdate` payloads stream to live tool cards via native `api.output`; text is redacted uniformly,
+   * and post-settlement calls are silently ignored per SDK contract.
    */
   installPluginTools(specs: DerivedToolSpec[]): void {
     const { registry, getPluginHost, redact, handledToolCalls } = this.options
@@ -193,11 +196,11 @@ export class RuntimeToolRegistry {
             ...(typeof toolApi.output === 'function'
               ? {
                   onUpdate: (partial) => {
-                    // SDK contract: compute after output throws (Tool call has settled) - - only
-                    // this one class late to partial static default discard; other exception (host fault etc.) such as
-                    // on throw to plugin act, never swallow disguise succeeded. redaction by complete partial all string
-                    // execute (secret may across chunk concatenate, sync all string redactor override when time
-                    // snapshot; do not sound call eliminate everything process inside leak leak).
+                    // SDK contract: `output()` throws after settlement (`Tool call has settled`) — silently
+                    // drop only that late-update case; propagate other errors (e.g. host faults) to plugin authors
+                    // rather than faking success. Redaction runs on full concatenated partial text (so secrets split
+                    // across chunks still match; synchronous `redact` snapshots current secrets and does not promise
+                    // eliminating all in-process leaks).
                     const text = typeof partial.output === 'string'
                       ? partial.output
                       : partial.output.map((block) => block.text).join('')
@@ -211,7 +214,7 @@ export class RuntimeToolRegistry {
                 }
               : {}),
           })
-          // plugin tool return any value: package into SDK ToolExecutionResult contract (content/text).
+          // Wrap arbitrary plugin return value into the SDK `ToolExecutionResult` contract.
           return pluginToolResult(result, (text) => redact(text), {
             structuredOutputSchema: spec.structuredOutputSchema,
             toolName: spec.name,
@@ -224,7 +227,7 @@ export class RuntimeToolRegistry {
     registry.install(defineExtension({ name: 'helm-plugins', tools }))
   }
 
-  /** plugin start stop after hot update tool collection (app combine layer and enable/disable path invoke). */
+  /** Hot-update plugin tool set after plugins enable/disable (called from app assembly and lifecycle handlers). */
   refreshPluginTools(): void {
     const host = this.options.getPluginHost()
     if (!host) return

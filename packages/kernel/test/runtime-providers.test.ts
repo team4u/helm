@@ -11,7 +11,7 @@ import { CredentialService } from '../src/services/credentials.js'
 import { ProviderService } from '../src/services/providers.js'
 import { HelmError } from '@helm/protocol'
 
-test('external inject model collection in directory and hot reload in keep caller ownership', { timeout: 60_000 }, async () => {
+test('externally injected model catalog retains caller ownership across reloads', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-external-providers-'))
   const models = createModels()
   models.setProvider(fauxProvider({ models: [{ id: 'fixture-external' }] }).provider)
@@ -29,7 +29,7 @@ test('external inject model collection in directory and hot reload in keep calle
   }
 })
 
-test('all amount provider start load, increase delete secret key hot update and failed to read not silently fall back', { timeout: 60_000 }, async () => {
+test('full provider startup load, hot reload on key add/remove, and read failures without silent fallback', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-provider-registry-'))
   const previousEnv = process.env['DEEPSEEK_API_KEY']
   delete process.env['DEEPSEEK_API_KEY']
@@ -42,22 +42,22 @@ test('all amount provider start load, increase delete secret key hot update and 
     const entries = () => kernel!.listModels().then((catalog) => catalog.models.filter((entry) => entry.provider === 'deepseek'))
     const initial = await entries()
     assert.ok(initial.length > 0)
-    assert.ok(initial.every((entry) => entry.available), 'non- OpenAI/Anthropic credentials also must in at startup load')
+    assert.ok(initial.every((entry) => entry.available), 'non-OpenAI/Anthropic credentials must also load at startup')
 
     await credentials.delete('deepseek')
     await kernel.reloadModels()
-    assert.ok((await entries()).every((entry) => !entry.available), 'delete secret key cannot continue re- use old cache')
+    assert.ok((await entries()).every((entry) => !entry.available), 'deleted API key must not continue reusing stale cache')
 
     await credentials.set('deepseek', 'fixture-deepseek-reloaded')
     await kernel.reloadModels()
-    assert.ok((await entries()).every((entry) => entry.available), 'new increase inside placement provider secret key no need to providers.json item')
+    assert.ok((await entries()).every((entry) => entry.available), 'adding a built-in provider key requires no providers.json entry')
 
     const path = join(dataDir, 'credentials.json')
     const validStore = await readFile(path, 'utf8')
     try {
       await writeFile(path, '{invalid-json')
       await assert.rejects(() => kernel!.reloadModels(), /JSON|parse|illegal/)
-      assert.ok((await entries()).every((entry) => entry.available), 'failed to read must not publish half into product or model static default mark recorded as unavailable')
+      assert.ok((await entries()).every((entry) => entry.available), 'read failures must neither publish partial state nor silently mark models unavailable')
     } finally { await writeFile(path, validStore) }
   } finally {
     await kernel?.close()
@@ -67,7 +67,7 @@ test('all amount provider start load, increase delete secret key hot update and 
   }
 })
 
-test('runtime provider register: directory/ownership/conflict reject/idempotent deregister/event publish', { timeout: 60_000 }, async () => {
+test('runtime provider registration: catalog/ownership/conflict rejection/idempotent unregister/event emission', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-runtime-register-'))
   let kernel: KernelRuntime | undefined
   try {
@@ -81,16 +81,16 @@ test('runtime provider register: directory/ownership/conflict reject/idempotent 
     const faux = fauxProvider({ provider: 'plugin-fx', models: [{ id: 'fx-model' }] })
     const unregister = await kernel.registerRuntimeProvider(faux.provider, 'builtin:demo')
 
-    // directory and ownership immediately visible.
+    // Catalog and ownership become immediately visible.
     assert.deepEqual(
       (await kernel.listModels()).models.filter((entry) => entry.provider === 'plugin-fx').map((entry) => entry.modelId),
       ['fx-model'],
     )
     const summary = kernel.listModelProviders().find((provider) => provider.id === 'plugin-fx')
     assert.equal(summary?.pluginId, 'builtin:demo')
-    assert.ok(events.some((event) => event.type === 'models.changed'), 'register after publish models.changed')
+    assert.ok(events.some((event) => event.type === 'models.changed'), 'emits models.changed after registration')
 
-    // conflict reject: other owner / inside placement / providers.json same id(contains not enabled) all 409, does not override.
+    // Conflict rejection: other owner / built-in / duplicate id in providers.json (even disabled) all 409 without overwriting.
     const other = fauxProvider({ provider: 'plugin-fx', models: [{ id: 'other' }] })
     await assert.rejects(
       () => kernel!.registerRuntimeProvider(other.provider, 'builtin:other'),
@@ -108,29 +108,29 @@ test('runtime provider register: directory/ownership/conflict reject/idempotent 
       () => kernel!.registerRuntimeProvider(fauxProvider({ provider: 'gw-x', models: [{ id: 'x' }] }).provider),
       (err: unknown) => err instanceof HelmError && err.code === 'runtime_provider_conflict' && err.status === 409,
     )
-    // conflict reject after directory not by override.
+    // Catalog remains untouched after conflict rejections.
     assert.deepEqual(
       (await kernel.listModels()).models.filter((entry) => entry.provider === 'plugin-fx').map((entry) => entry.modelId),
       ['fx-model'],
     )
 
-    // providers.json hot reload keep runtime provider.
+    // Hot-reloading providers.json preserves runtime providers.
     await kernel.reloadModels()
     assert.ok(kernel.listModelProviders().some((provider) => provider.id === 'plugin-fx'))
 
-    // idempotent deregister: second invoke empty operation; directory remove and event again publish.
+    // Idempotent unregister: second call is a no-op; removes from catalog and re-emits event.
     events.length = 0
     await unregister()
     await unregister()
     assert.equal(kernel.listModelProviders().find((provider) => provider.id === 'plugin-fx'), undefined)
-    assert.ok(events.some((event) => event.type === 'models.changed'), 'deregister after publish models.changed')
+    assert.ok(events.some((event) => event.type === 'models.changed'), 'emits models.changed after unregistration')
   } finally {
     await kernel?.close()
     await rm(dataDir, { recursive: true, force: true })
   }
 })
 
-test('runtime provider in-flight stream counter and teardown preflight (busy 409 / settled after let through)', { timeout: 60_000 }, async () => {
+test('runtime provider in-flight stream counter and teardown preflight (409 when busy, allowed once settled)', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-runtime-busy-'))
   let kernel: KernelRuntime | undefined
   try {
@@ -156,7 +156,7 @@ test('runtime provider in-flight stream counter and teardown preflight (busy 409
       await kernel.waitForIdle(1)
     }
     kernel.assertRuntimeProvidersIdle('builtin:busy')
-    // on once because busy while failed release handle still can retry; old handle cannot delete same name new register.
+    // Unregister handle rejected as busy once remains retryable; stale handle cannot remove a newly registered same-name provider.
     await unregister()
     const replacement = fauxProvider({ provider: 'plugin-busy', models: [{ id: 'replacement' }] })
     const unregisterReplacement = await kernel.registerRuntimeProvider(replacement.provider, 'builtin:busy')
@@ -169,7 +169,7 @@ test('runtime provider in-flight stream counter and teardown preflight (busy 409
   }
 })
 
-test('plugin deactivate enter service stop after reject new model refresh, avoid preflight after unload race', { timeout: 60_000 }, async () => {
+test('disabling plugin rejects new model refreshes once service stop starts, avoiding post-preflight unload race', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-runtime-provider-stop-'))
   const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, autoResume: false })
   let stopEntered!: () => void
@@ -185,9 +185,9 @@ test('plugin deactivate enter service stop after reject new model refresh, avoid
         ctx.service({ id: 'fixture', start() {}, async stop() { stopEntered(); await stopGate } })
       },
     })
-    // runtime self create host is deferServices pattern: explicit start after service only then truly start
-    //(produce path kernel.start in plugin all register after unify invoke), then disable only then will
-    // enter service stop(stop and start match for).
+    // Self-constructed runtime host uses deferServices: services start only after explicit kernel.start()
+    // (production invokes kernel.start after all plugins register), so disable then triggers service stop
+    // cleanly paired with start.
     await kernel.start()
     disabling = kernel.plugins.disable('test:provider-stop')
     await stopping
@@ -203,7 +203,7 @@ test('plugin deactivate enter service stop after reject new model refresh, avoid
   }
 })
 
-test('refreshModels: target filter pass-through,errors redaction,models.changed event and directory snapshot', { timeout: 60_000 }, async () => {
+test('refreshModels: target filtering, error sanitization, models.changed event, and catalog snapshot', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-runtime-refresh-'))
   let kernel: KernelRuntime | undefined
   try {
@@ -214,7 +214,7 @@ test('refreshModels: target filter pass-through,errors redaction,models.changed 
       if (event.type === 'models.changed') events.push(event.payload as Record<string, unknown>)
     })
 
-    // all amount refresh:radius not config credentials -> skip (do not errors); event providers: [].
+    // Full refresh: radius without credentials is skipped silently; event has providers: [].
     const full = await kernel.refreshModels()
     assert.equal(full.aborted, false)
     assert.deepEqual(full.providers, [])
@@ -222,14 +222,14 @@ test('refreshModels: target filter pass-through,errors redaction,models.changed 
     assert.ok(full.providerCatalog.some((provider) => provider.id === 'radius'))
     assert.deepEqual(events.at(-1), { providers: [] })
 
-    // designate providers: pass-through + event carry target manifest; unknown or static provider explicit reject.
+    // Targeted providers: passes through + event carries target list; unknown or static providers reject explicitly.
     const scoped = await kernel.refreshModels({ providers: ['radius'] })
     assert.deepEqual(scoped.providers, ['radius'])
     assert.deepEqual(events.at(-1), { providers: ['radius'] })
     await assert.rejects(kernel.refreshModels({ providers: ['fixture-missing-provider'] }), { code: 'model_provider_not_found' })
     await assert.rejects(kernel.refreshModels({ providers: ['openai'] }), { code: 'model_provider_static' })
 
-    // runtime provider refreshModels error explicit enter errors(message original keep diagnose).
+    // Runtime provider refreshModels failure populates errors map while preserving raw diagnostic message.
     const failing: Provider = {
       ...fauxProvider({ provider: 'plugin-fail', models: [{ id: 'fail-model' }] }).provider,
       refreshModels: async () => {
@@ -246,7 +246,7 @@ test('refreshModels: target filter pass-through,errors redaction,models.changed 
   }
 })
 
-test('models-store.json corrupt when reloadModels explicit failed, not silently fall back empty directory', { timeout: 60_000 }, async () => {
+test('corrupted models-store.json causes reloadModels and startup to fail explicitly instead of resetting to empty catalog', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-runtime-corrupt-store-'))
   let kernel: KernelRuntime | undefined
   try {
@@ -257,7 +257,7 @@ test('models-store.json corrupt when reloadModels explicit failed, not silently 
       () => kernel!.reloadModels(),
       (err: unknown) => err instanceof HelmError && err.code === 'models_store_corrupted',
     )
-    // start path same explicit failed (open inside offline restore read corrupt file).
+    // Startup path fails identically (open reads corrupted store offline).
     await kernel.close()
     kernel = undefined
     await assert.rejects(
@@ -270,7 +270,7 @@ test('models-store.json corrupt when reloadModels explicit failed, not silently 
   }
 })
 
-test('provider deregister rebuild on failure keep register and ownership, fix cache after can retry', { timeout: 60_000 }, async () => {
+test('provider unregister preserves registration and ownership when rebuild fails; retries cleanly once store is repaired', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-runtime-unregister-retry-'))
   const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, autoResume: false })
   try {
@@ -288,7 +288,7 @@ test('provider deregister rebuild on failure keep register and ownership, fix ca
   }
 })
 
-test('external inject model collection: runtime register and refresh explicit unsupported, not silently succeeded', { timeout: 60_000 }, async () => {
+test('externally injected model catalog rejects runtime registration and refresh explicitly rather than succeeding silently', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-external-unsupported-'))
   const models = createModels()
   models.setProvider(fauxProvider({ models: [{ id: 'fixture-external' }] }).provider)

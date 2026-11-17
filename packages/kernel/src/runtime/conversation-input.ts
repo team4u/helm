@@ -1,13 +1,13 @@
 /**
- * conversation input pipeline module: hook scheduling, input redaction, title derive and new commit execute.
+ * Conversation input pipeline: hook scheduling, input redaction, title derivation, and fresh submission execution.
  *
- * responsibility:
- * - input hook should use (support block intercept,handled take over,transform change write);
- * - commit metadata and body text global redaction (SecretStash);
- * - default whenBusy insert speech (steer) valid by default solid;
- * - hook artifact attachment second authorization validate;
- * - conversation first input automatically derive title;
- * - all new input commit to SDK harness and and tracker register bind set.
+ * Responsibilities:
+ * - Run input hooks (supporting block interception, handled takeover, and transform rewriting);
+ * - Globally redact submission metadata and body text (SecretStash);
+ * - Pin default whenBusy to 'steer';
+ * - Re-authorize artifact attachments added/modified by hooks;
+ * - Auto-derive conversation title from first input;
+ * - Submit new inputs to SDK harness and correlate bindings with tracker.
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { copyJson, type JsonRepresentation } from '@earendil-works/chord/json'
@@ -39,7 +39,7 @@ export interface ConversationInputPipelineHost {
     conversationId: number,
     attachmentIds: readonly string[],
   ) => Promise<Array<{ ref: ConversationAttachmentRef; metadata: ArtifactMetadata; absPath: string }>>
-  /** guarded mutation commit point re-check (sync, zero await; host i.e. ConversationService.assertMutationGuard). */
+  /** Commit-point re-check for guarded mutations (synchronous, zero awaits; ConversationService.assertMutationGuard). */
   readonly assertMutationGuard: (id: number, guard: GuardedMutationExpectation) => void
 }
 
@@ -57,8 +57,8 @@ export class ConversationInputPipeline {
   constructor(private readonly host: ConversationInputPipelineHost) {}
 
   /**
-   * input hook should use + eventually input solid:
-   * return handled(take over) or eventually { finalInput, finalWhenBusy, effectiveText, resolvedAttachments }.
+   * Apply input hooks and finalize input shape:
+   * returns either handled (taken over) or finalized { finalInput, finalWhenBusy, effectiveText, resolvedAttachments }.
    */
   async prepareInput(
     id: number,
@@ -68,7 +68,7 @@ export class ConversationInputPipeline {
   ): Promise<PreparedInputResult> {
     const origin = opts?.origin ?? 'human'
     if (opts?.requestId !== undefined && (typeof opts.requestId !== 'string' || opts.requestId.trim() === '')) {
-      throw new HelmError('validation_error', 'internal requestId must is non-empty string', 400)
+      throw new HelmError('validation_error', 'internal requestId must be a non-empty string', 400)
     }
     const inputId = opts?.requestId ?? randomUUID()
     const createdAt = Date.now()
@@ -92,7 +92,7 @@ export class ConversationInputPipeline {
     }
     const hookOutcome = await this.host.runInputHook(payload)
     if (hookOutcome?.action === 'block') {
-      throw new HelmError('input_blocked', hookOutcome.reason ?? 'input by input hook intercept')
+      throw new HelmError('input_blocked', hookOutcome.reason ?? 'input blocked by input hook')
     }
     if (hookOutcome?.action === 'handled') {
       return { kind: 'handled', submissionId: `handled:${randomUUID()}` }
@@ -104,7 +104,7 @@ export class ConversationInputPipeline {
       if (value.conversationId !== id) {
         throw new HelmError(
           'input_identity_changed',
-          `input hook must not change write conversationId(${id} -> ${String(value.conversationId)})`,
+          `input hook must not change conversationId (${id} -> ${String(value.conversationId)})`,
           400,
         )
       }
@@ -138,14 +138,14 @@ export class ConversationInputPipeline {
     return { kind: 'final', finalInput, finalWhenBusy, effectiveText, resolvedAttachments }
   }
 
-  /** first input automatically title (derive self redaction after text;stateChangeSeq sync push enter). */
+  /** Auto-title on first input (derived from redacted text; advances stateChangeSeq synchronously). */
   applyFirstInputTitle(meta: ConvMeta, effectiveText: string): void {
     if (meta.title !== '') return
     const title = deriveTitle(effectiveText)
     this.host.store.upsertConv({ ...meta, title, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() })
   }
 
-  /** new input SDK commit (non- rewind path;tracker register and failed undo). */
+  /** Submit fresh input to SDK (non-rewind path; handles tracker registration and rollback on failure). */
   async submitFreshInput(
     conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
     id: number,
@@ -157,7 +157,7 @@ export class ConversationInputPipeline {
       content: string | Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>
       requestId: string | undefined
       whenIdle?: 'reject'
-      /** guarded mutation: commit point atomic re-check payload (ordinary commit default). */
+      /** Guarded mutation commit-point atomic re-check payload (omitted for normal submissions). */
       mutationGuard?: GuardedMutationExpectation
     },
   ): Promise<{ submissionId: string }> {
@@ -179,9 +179,9 @@ export class ConversationInputPipeline {
     )
     this.host.tracker.registerInput(id, finalInput)
     try {
-      // atomic core for pi.live:SDK admitSubmission only see live.run while do not see live.compactions,
-      // in without leap run but store in in progress compress task when, in this transaction inside input arrange pi.inbox(or reject),
-      // avoid new turn in not streamline old context on grab run.
+      // Atomically check pi.live: SDK admitSubmission inspects live.run but not live.compactions;
+      // when idle with an active compaction task, enqueue into pi.inbox (or reject) inside this transaction
+      // so the new turn does not race ahead on uncompacted context.
       const convId = asConversationId(id)
       const queueResult = await conversation.commit(async (tx) => {
         const live = await tx.doc(LiveDoc, convId)
@@ -197,7 +197,7 @@ export class ConversationInputPipeline {
           if (finalWhenBusy === 'reject') {
             throw new HelmError(
               'conversation_busy',
-              `conversation ${id} is now streamline context, reject commit (whenBusy=reject)`,
+              `conversation ${id} is currently compacting context; rejecting submission (whenBusy=reject)`,
               409,
               { conversationId: id },
             )
@@ -229,8 +229,8 @@ export class ConversationInputPipeline {
         return { submissionId: String(queueResult.submissionId) }
       }
 
-      // commit point eventually re-check: and under way SDK submit invoke (a cannot inverse action) between zero
-      // await- - on way all prepare work window inside ownership translate rotate in this intercept, never produce commit.
+      // Final commit-point re-check: zero awaits before the subsequent SDK submit call,
+      // catching any ownership shift during preparation without producing a submission.
       if (mutationGuard !== undefined) {
         this.host.assertMutationGuard(id, mutationGuard)
       }

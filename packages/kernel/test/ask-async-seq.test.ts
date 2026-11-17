@@ -1,27 +1,27 @@
 /**
- * AskService async seq resolver contract test: real AskService + real SQLite.
+ * AskService async seq resolver contract tests: real AskService + real SQLite.
  *
- * background (herdr Ask CAS): sync cache resolver will in remote poll between gap expired Ask 
- * target seq report into old watermark, leads to answerAsk use expired view do CAS.resolver need to start
- * real async IO(agent.get) take terminal when before watermark, therefore kernel through use mechanism upgrade is
- * MaybePromise<number | undefined>, and in await return after, write any terminal state side effect
- * (supersede/answer/stash) before heavy read durable row, validate wait for during not by concurrency compute.
+ * Background (herdr Ask CAS): a synchronous cache resolver returns a stale target seq between remote
+ * polls, causing answerAsk to run CAS against an outdated view. The resolver needs to issue real
+ * async IO (agent.get) to fetch the current terminal seq, so the kernel generic mechanism accepts
+ * MaybePromise<number | undefined>; after awaiting it and before writing any terminal side effects
+ * (supersede/answer/stash), it re-reads the persisted row to verify it wasn't settled concurrently.
  *
- * contract:
- * - resolver can sync or async; first return legal non- negative safe integer result i.e. right threat seq;
- * - illegal seq(NaN/negative number/decimal/exceeds safe integer/non- count value type) explicit failed,
- *   do not truncate, do not by default 0, not silently skip;resolver throws (contains async reject) such as on throw,
- *   ask keep pending,stash without write;
- * - async return new watermark -> superseded(is not answered),secret do not stash;
- * - async return same watermark -> answered once (a ask.resolved event);
- * - resolver suspended during concurrency cancel / concurrency answer: wait for way return after heavy read row,
- *   already compute -> 409 ask_already_settled, does not override old result, does not repeat event, do not write stash;
- *   row by delete -> 404;
- * - durable CAS spec wait for during change (expectedStateSeq push enter): by new right threat condition reject
- *   old client data (409 ask_state_conflict), do not override;
- * - before a resolver async return undefined after continue attempt under a resolver;
- * - sync resolver and without CAS ask original behavior keep (does not introduce redundant async between gap - - answer proposal
- *   validate in heavy read row after still based on most new durable spec).
+ * Contract:
+ * - Resolver may be sync or async; first non-undefined valid non-negative safe integer wins as authoritative seq;
+ * - Invalid seq (NaN / negative / float / unsafe integer / non-number) fails explicitly without truncating,
+ *   defaulting to 0, or silently skipping; thrown errors (including async rejections) propagate cleanly
+ *   with ask kept pending and zero stash writes;
+ * - Async returning newer seq -> superseded (not answered), secret not stashed;
+ * - Async returning matching seq -> answered once (single ask.resolved event);
+ * - Concurrent cancel / answer while resolver awaits: re-reads row on return; already settled ->
+ *   409 ask_already_settled without overwriting old result, duplicating events, or writing stash;
+ *   deleted row -> 404;
+ * - Persisted CAS spec mutated mid-await (expectedStateSeq bumped): rejects stale client payload
+ *   under new authoritative rule (409 ask_state_conflict) without overwriting;
+ * - Continues to next resolver when a prior resolver asynchronously resolves to undefined;
+ * - Sync resolvers and non-CAS asks keep exact original behavior (no extra async gap; answer validation
+ *   still checks against latest persisted spec after re-read).
  */
 
 import { HelmError } from '@helm/protocol'
@@ -77,7 +77,7 @@ async function openService(): Promise<TestContext> {
   }
 }
 
-/** carries isSettled observe deferred wrap (re- use helpers.deferred). */
+/** Deferred wrapper with isSettled observer (reuses helpers.deferred). */
 function deferred<T>() {
   let settled = false
   const inner = kitDeferred<T>()
@@ -97,7 +97,7 @@ function deferred<T>() {
   }
 }
 
-/** secret field spec: used to assertion stash without leak leak. */
+/** Secret field spec used to assert stash isolation without plaintext leakage. */
 const secretSpec: { conversationId: number; title: string; expectedStateSeq: number; id?: string; fields: Array<{ name: string; label: string; type: 'text'; secret: boolean; required: boolean }> } = {
   conversationId: 1,
   title: 'terminal confirm',
@@ -109,14 +109,14 @@ async function createPending(service: AskService, spec: typeof secretSpec): Prom
   void service.createAsk(spec).catch(() => {})
   await new Promise((r) => setTimeout(r, 20))
   const ask = service.listAsks('pending').find((a) => a.id === spec.id)
-  assert.ok(ask !== undefined, 'ask must already durable is pending')
+  assert.ok(ask !== undefined, 'ask must be persisted as pending')
   return ask.id
 }
 
 // ---------------------------------------------------------------------------
 
-describe('async seq resolver: watermark decide and honest failed', { timeout: 60_000 }, () => {
-  it('async new watermark -> superseded while non- answered,secret do not stash', { timeout: 60_000 }, async () => {
+describe('async seq resolver: watermark evaluation and honest failure', { timeout: 60_000 }, () => {
+  it('async newer watermark -> superseded rather than answered, secret not stashed', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const id = await createPending(ctx.service, { ...secretSpec, id: 'async-new-seq' })
@@ -130,7 +130,7 @@ describe('async seq resolver: watermark decide and honest failed', { timeout: 60
       gate.resolve()
       const result = await answering
       assert.equal(result.status, 'superseded')
-      // superseded never write answer proposal,secret do not stash, event exactly a resolved.
+      // Superseded never persists answers, never stashes secret, emits exactly one ask.resolved.
       const row = ctx.store.getAsk(id)!
       assert.equal(row.status, 'superseded')
       assert.equal(row.resultJson, undefined)
@@ -143,7 +143,7 @@ describe('async seq resolver: watermark decide and honest failed', { timeout: 60
     }
   })
 
-  it('async same watermark -> answered exactly once (single event, durable result contains marker)', { timeout: 60_000 }, async () => {
+  it('async matching watermark -> answered once (single event, persisted result holds marker)', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const id = await createPending(ctx.service, { ...secretSpec, id: 'async-same-seq' })
@@ -166,14 +166,14 @@ describe('async seq resolver: watermark decide and honest failed', { timeout: 60
     }
   })
 
-  it('resolver suspended during concurrency cancel: wait for way 409 ask_already_settled, does not override, do not write stash', { timeout: 60_000 }, async () => {
+  it('concurrent cancel while resolver suspends: returns 409 ask_already_settled without overwriting or stashing', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const id = await createPending(ctx.service, { ...secretSpec, id: 'cancel-race' })
       const gate = deferred<void>()
       ctx.service.registerSeqResolver(() => gate.promise.then(() => 10))
       const answering = ctx.service.answerAsk(id, { TOKEN: 'plain-secret' })
-      // wait for during another path complete deregister single (real scenario: terminal event trigger cancel).
+      // Another path settles while waiting (real scenario: terminal event triggers cancel).
       const cancelled = await ctx.service.cancelAsk(id, 'cancelled')
       assert.equal(cancelled.status, 'cancelled')
       gate.resolve()
@@ -181,7 +181,7 @@ describe('async seq resolver: watermark decide and honest failed', { timeout: 60
         () => answering,
         (err: unknown) => err instanceof HelmError && err.code === 'ask_already_settled',
       )
-      // old result do not by override: still is cancelled, without answer proposal,stash without secret, event without duplicate.
+      // Old outcome preserved: stays cancelled, no answers, no stashed secret, no duplicate events.
       const row = ctx.store.getAsk(id)!
       assert.equal(row.status, 'cancelled')
       assert.equal(row.resultJson, undefined)
@@ -192,7 +192,7 @@ describe('async seq resolver: watermark decide and honest failed', { timeout: 60
     }
   })
 
-  it('two concurrency answer: first compute victory, after to 409(deferred align, without sleep)', { timeout: 60_000 }, async () => {
+  it('two concurrent answers: first to settle wins, second returns 409 (deferred alignment, zero sleeps)', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const id = await createPending(ctx.service, { ...secretSpec, id: 'answer-race' })
@@ -205,7 +205,7 @@ describe('async seq resolver: watermark decide and honest failed', { timeout: 60
       })
       const first = ctx.service.answerAsk(id, { TOKEN: 'first-answer' })
       const second = ctx.service.answerAsk(id, { TOKEN: 'second-answer' })
-      // a answer through resolver after let through second: two all via history complete CAS stream process.
+      // Release first answer through resolver, then release second: both run full CAS flow.
       firstGate.resolve()
       const firstResult = await first
       assert.equal(firstResult.status, 'answered')
@@ -215,7 +215,7 @@ describe('async seq resolver: watermark decide and honest failed', { timeout: 60
         () => second,
         (err: unknown) => err instanceof HelmError && err.code === 'ask_already_settled',
       )
-      // first to result keep: second answer proposal since does not override durable result also do not change write stash.
+      // Winner outcome stays intact: loser neither overwrote persisted result nor corrupted stash.
       assert.equal(ctx.stash.envFor(1).TOKEN, 'first-answer')
       const row = ctx.store.getAsk(id)!
       assert.equal(row.status, 'answered')
@@ -226,7 +226,7 @@ describe('async seq resolver: watermark decide and honest failed', { timeout: 60
     }
   })
 
-  it('wait for during durable CAS spec change (expectedStateSeq push enter): by new right threat condition reject old data', { timeout: 60_000 }, async () => {
+  it('persisted CAS spec mutated mid-await (expectedStateSeq bumped): rejects stale payload under new authoritative rule', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       for (const nextSeq of [20, undefined]) {
@@ -257,7 +257,7 @@ describe('async seq resolver: watermark decide and honest failed', { timeout: 60
     }
   })
 
-  it('resolver failed (sync throws and async reject): such as on throw,ask keep pending, without stash write', { timeout: 60_000 }, async () => {
+  it('resolver failures (sync throw and async reject): propagate as thrown, keep ask pending, zero stash writes', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const id = await createPending(ctx.service, { ...secretSpec, id: 'resolver-sync-fail' })
@@ -282,14 +282,14 @@ describe('async seq resolver: watermark decide and honest failed', { timeout: 60
       )
       assert.equal(ctx.store.getAsk(id2)!.status, 'pending')
       assert.equal(ctx.stash.envFor(1).TOKEN, undefined)
-      // two ask all not produce terminal state event.
+      // Neither ask produced a terminal event.
       assert.equal(ctx.events.filter((e) => e.type === 'ask.resolved').length, 0)
     } finally {
       await ctx.close()
     }
   })
 
-  it('illegal seq(NaN/negative/decimal/unsafe/broken type) explicit failed: do not truncate, do not by default 0, not silently skip', { timeout: 60_000 }, async () => {
+  it('invalid seq (NaN/negative/decimal/unsafe/bad type) fails explicitly without truncating, defaulting to 0, or skipping', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const bads: Array<{ label: string; value: unknown }> = [
@@ -297,9 +297,9 @@ describe('async seq resolver: watermark decide and honest failed', { timeout: 60
         { label: 'Infinity', value: Number.POSITIVE_INFINITY },
         { label: 'BigInt', value: 10n },
         { label: 'Symbol', value: Symbol('invalid-seq') },
-        { label: 'negative number', value: -1 },
+        { label: 'negative', value: -1 },
         { label: 'decimal', value: 10.5 },
-        { label: 'exceeds safe integer', value: Number.MAX_SAFE_INTEGER + 1 },
+        { label: 'exceeds safe int', value: Number.MAX_SAFE_INTEGER + 1 },
         { label: 'string', value: '10' },
         { label: 'null', value: null },
       ]
@@ -308,19 +308,19 @@ describe('async seq resolver: watermark decide and honest failed', { timeout: 60
         await createPending(ctx.service, { ...secretSpec, id })
         const release = ctx.service.registerSeqResolver(() => bad.value as never)
         const error = await ctx.service.answerAsk(id, { TOKEN: 'v' }).then(
-          () => assert.fail(`illegal seq ${bad.label} must explicit failed`),
+          () => assert.fail(`invalid seq ${bad.label} must fail explicitly`),
           (error: unknown) => error,
         )
         assert.ok(error instanceof HelmError)
         assert.equal(error.code, 'ask_seq_resolver_invalid')
         const response = errorToResponse(undefined, (text) => text, error)
         assert.equal(response.status, 500)
-        assert.equal((await response.json()).error.code, 'ask_seq_resolver_invalid', 'illegal value cannot break HTTP error message seal')
-        assert.equal(ctx.store.getAsk(id)!.status, 'pending', `${bad.label} after keep pending`)
+        assert.equal((await response.json()).error.code, 'ask_seq_resolver_invalid', 'invalid values must not break HTTP error envelope')
+        assert.equal(ctx.store.getAsk(id)!.status, 'pending', `stays pending after ${bad.label}`)
         assert.equal(ctx.stash.envFor(1).TOKEN, undefined)
         release()
       }
-      // all keep pending, without terminal state event.
+      // All remain pending with no terminal events.
       assert.equal(ctx.service.listAsks('pending').length, bads.length)
       assert.equal(ctx.events.filter((e) => e.type === 'ask.resolved').length, 0)
     } finally {
@@ -328,7 +328,7 @@ describe('async seq resolver: watermark decide and honest failed', { timeout: 60
     }
   })
 
-  it('before a resolver async undefined after continue seek under a resolver', { timeout: 60_000 }, async () => {
+  it('continues to next resolver when prior resolver asynchronously returns undefined', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const id = await createPending(ctx.service, { ...secretSpec, id: 'chain-resolvers' })
@@ -347,7 +347,7 @@ describe('async seq resolver: watermark decide and honest failed', { timeout: 60
       const answering = ctx.service.answerAsk(id, { TOKEN: 'plain-secret' })
       gate.resolve()
       const result = await answering
-      assert.ok(secondCalled, 'a resolver async undefined after must continue attempt second')
+      assert.ok(secondCalled, 'must continue trying second resolver after first asynchronously returns undefined')
       assert.equal(result.status, 'answered')
       assert.equal(ctx.stash.envFor(1).TOKEN, 'plain-secret')
     } finally {
@@ -355,14 +355,14 @@ describe('async seq resolver: watermark decide and honest failed', { timeout: 60
     }
   })
 
-  it('row in wait for during by delete:404; sync resolver behavior keep original', { timeout: 60_000 }, async () => {
+  it('row deleted while awaiting: 404; sync resolver preserves original behavior', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const id = await createPending(ctx.service, { ...secretSpec, id: 'row-deleted' })
       const gate = deferred<void>()
       const releaseGate = ctx.service.registerSeqResolver(() => gate.promise.then(() => 10))
       const answering = ctx.service.answerAsk(id, { TOKEN: 'v' })
-      // directly from mirror and durable layer delete row (simulated extreme clean up path).
+      // Delete row directly from mirror/store (simulates extreme cleanup race).
       const raw = ctx.store as unknown as { asks: Map<string, unknown> }
       raw.asks.delete(id)
       gate.resolve()
@@ -373,7 +373,7 @@ describe('async seq resolver: watermark decide and honest failed', { timeout: 60
       assert.equal(ctx.events.filter((e) => e.type === 'ask.resolved').length, 0)
       releaseGate()
 
-      // sync resolver: original semantics do not change (same watermark answered, push enter superseded).
+      // Sync resolver: exact original semantics preserved (matching seq answers, advanced seq supersedes).
       const id2 = await createPending(ctx.service, { ...secretSpec, id: 'sync-resolver-kept' })
       const releaseKept = ctx.service.registerSeqResolver(() => 10)
       const ok = await ctx.service.answerAsk(id2, { TOKEN: 'sync-v' })

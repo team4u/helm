@@ -1,7 +1,7 @@
 /**
- * conversation domain routing:/api/conversations(list/create/detail situation/update/delete/input/
- * withdraw/abort/reset/compact/fork/entries/:entryId/artifacts),/api/asks
- * (approval queue),/api/search(all text inspect index).
+ * Conversation domain routes: /api/conversations (list/create/detail/update/delete/input/
+ * withdraw/abort/reset/compact/fork/entries/:entryId/artifacts), /api/asks
+ * (approval queue), and /api/search (full-text index search).
  */
 import type { ConversationListFilter, ConversationStatus } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
@@ -61,7 +61,7 @@ export async function handleConversationsDomain(
   }
   if (third === 'entries' && method === 'GET' && fourth !== undefined && ctx.segments[4] === undefined) {
     if (kernel.getConversationEntry === undefined) {
-      throw new HelmError('not_implemented', 'when before runtime not provide single item read', 501)
+      throw new HelmError('not_implemented', 'current runtime does not support reading a single entry', 501)
     }
     return jsonOk(redactor, await kernel.getConversationEntry(id, parseIdParam(fourth, 'entryId')))
   }
@@ -81,7 +81,7 @@ export async function handleConversationsDomain(
   }
   if (third === 'withdraw' && method === 'POST' && fourth === undefined) {
     if (kernel.withdrawQueuedInput === undefined) {
-      throw new HelmError('not_implemented', 'when before runtime not provide queue up input withdraw back', 501)
+      throw new HelmError('not_implemented', 'current runtime does not support withdrawing queued input', 501)
     }
     const body = await readJsonBody(ctx.request)
     const parsed = parseConversationWithdrawBody(body)
@@ -117,7 +117,7 @@ export async function handleConversationsDomain(
     }
     const inline = parseOptionalBooleanFlag(ctx.url, 'inline') === true
     if (kernel.readConversationFile === undefined) {
-      throw new HelmError('not_implemented', 'when before runtime not provide conversation workspace file read', 501)
+      throw new HelmError('not_implemented', 'current runtime does not support reading conversation workspace files', 501)
     }
     const result = await kernel.readConversationFile(id, rawPath, ctx.request.signal)
     const headers: Record<string, string> = {
@@ -132,11 +132,11 @@ export async function handleConversationsDomain(
     }
     return new Response(result.bytes as unknown as BodyInit, { headers })
   }
-  return errorResponse(redactor, 404, 'not_found', 'routing missing')
+  return errorResponse(redactor, 404, 'not_found', 'route not found')
 }
 
 // ---------------------------------------------------------------------------
-// /api/asks(approval queue, and conversation same belong conversation domain)
+// /api/asks (approval queue, belongs to conversation domain alongside conversations)
 // ---------------------------------------------------------------------------
 
 export async function handleAsksDomain(
@@ -162,7 +162,7 @@ export async function handleAsksDomain(
     await kernel.cancelAsk(askId)
     return jsonOk(redactor, { ok: true })
   }
-  return errorResponse(redactor, 404, 'not_found', 'routing missing')
+  return errorResponse(redactor, 404, 'not_found', 'route not found')
 }
 
 // ---------------------------------------------------------------------------
@@ -175,7 +175,7 @@ export async function handleSearchDomain(
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   if (ctx.method !== 'GET' || ctx.segments[1] !== undefined) {
-    return errorResponse(redactor, 404, 'not_found', 'routing missing')
+    return errorResponse(redactor, 404, 'not_found', 'route not found')
   }
   const q = ctx.url.searchParams.get('q') ?? ''
   if (q.trim().length === 0) throw new ValidationError('q cannot be empty')
@@ -183,7 +183,7 @@ export async function handleSearchDomain(
 }
 
 // ---------------------------------------------------------------------------
-// domain inside auxiliary
+// Domain helpers
 // ---------------------------------------------------------------------------
 
 function parseConversationFilter(url: URL): ConversationListFilter {
@@ -193,12 +193,13 @@ function parseConversationFilter(url: URL): ConversationListFilter {
   if (status !== undefined && !['working', 'blocked', 'done', 'idle', 'error'].includes(status)) {
     throw new ValidationError('status must be working|blocked|done|idle|error')
   }
-  // drop noise default: not explicit designate parent/all when only top-level conversation; sub-conversation via ?parent=<id> precise view
-  // or ?all=1 all amount column out. two mutual exclusion, combine request directly 400(do not guess priority).
+  // Low-noise default: only top-level conversations when neither parent nor all is specified;
+  // child conversations are queried explicitly via ?parent=<id> or listed together via ?all=1.
+  // The two are mutually exclusive—return 400 rather than guessing precedence.
   const parentRaw = url.searchParams.get('parent')
   const all = parseOptionalBooleanFlag(url, 'all')
   if (parentRaw !== null && all === true) {
-    throw new ValidationError('all and parent mutual exclusion: all amount column out and precise at conversation filter cannot also designate')
+    throw new ValidationError('all and parent are mutually exclusive: cannot specify both full listing and parent conversation filter')
   }
   let parentConversationId: number | undefined
   if (parentRaw !== null) {
@@ -216,10 +217,10 @@ function parseConversationFilter(url: URL): ConversationListFilter {
   }
 }
 
-/** ?wait=1 query parameter: only accept literal '1'(true same meaning); other value 400. */
+/** ?wait=1 query parameter: only accepts '1' (or 'true'); any other value fails with 400. */
 function parseWaitFlag(url: URL): boolean {
   const raw = url.searchParams.get('wait')
   if (raw === null) return false
   if (raw === '1' || raw === 'true') return true
-  throw new ValidationError('wait must be 1(such as ?wait=1)')
+  throw new ValidationError('wait must be 1 (e.g. ?wait=1)')
 }

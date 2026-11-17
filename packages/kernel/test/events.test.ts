@@ -1,11 +1,11 @@
 /**
- * EventHub real HTTP integration test: true Response.body reader + AbortController.
+ * EventHub real HTTP integration tests using actual Response.body readers + AbortController.
  *
- * override:SSE first frame snapshot / incremental frame protocol,abort and reader.cancel unsubscribe,close() clean field,
- * slow consumer byte back press closure stream, snapshot race without lose frame, snapshot redaction,publish ordinal when order,
- * plugin.changed message seal/direct pass double shape,CustomHelmEvent pass-through, illegal payload explicit failed,
- * conversation.upsert / ask.upsert / notification one by one field strictly validate (not silently fall back).
- * in-memory fixture(without real model, without real store;persistSeq use callback catch).
+ * Covers: SSE initial snapshot / incremental frame protocol, abort & reader.cancel unsubscription, close() cleanup,
+ * slow-consumer byte backpressure stream closing, race-free snapshot/subscribe ordering, snapshot redaction,
+ * monotonic sequence assignment, dual envelope/unwrapped event shapes, CustomHelmEvent passthrough,
+ * strict rejection of invalid payloads, and field-level validation of conversation.upsert / ask.upsert / notification
+ * using in-memory fixtures (no fake models/stores; persistSeq captured via callback).
  */
 import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
@@ -14,7 +14,7 @@ import { EventHub, type SseFrame, type SnapshotProvider } from '../src/runtime/e
 import { makeConversationSummary, waitFor } from './helpers.js'
 
 // ---------------------------------------------------------------------------
-// fixture
+// Fixture
 // ---------------------------------------------------------------------------
 
 interface Fixture {
@@ -50,7 +50,7 @@ function makeFixture(opts?: { maxPendingBytes?: number; initialSeq?: number; kee
   return fixture
 }
 
-/** parse one segment SSE text is {event, data} list. */
+/** Parse SSE text chunks into { event, data } frames. */
 function parseSse(text: string): Array<{ event: string; data: unknown }> {
   const frames: Array<{ event: string; data: unknown }> = []
   for (const block of text.split('\n\n')) {
@@ -66,12 +66,12 @@ function parseSse(text: string): Array<{ event: string; data: unknown }> {
   return frames
 }
 
-/** read to stream end, return complete text; optional each frame call back. */
+/** Drain response stream until EOF; invokes optional callback per chunk. */
 async function readAll(
   response: Response,
   onChunk?: (text: string) => void,
 ): Promise<string> {
-  assert.ok(response.body !== null, 'SSE response must has body stream')
+  assert.ok(response.body !== null, 'SSE response must have a body stream')
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let all = ''
@@ -85,7 +85,7 @@ async function readAll(
   return all
 }
 
-/** single time read attach carries Deadline: heartbeat not by when reach i.e. explicit failed (do not let test hang to set piece timeout). */
+/** Bounded single read with deadline so missed heartbeats fail promptly instead of stalling tests. */
 async function readWithDeadline(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   ms = 2000,
@@ -95,7 +95,7 @@ async function readWithDeadline(
     return await Promise.race([
       reader.read(),
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`read timeout (${ms}ms): heartbeat not reach`)), ms)
+        timer = setTimeout(() => reject(new Error(`read timed out (${ms}ms): heartbeat did not arrive`)), ms)
       }),
     ])
   } finally {
@@ -104,11 +104,11 @@ async function readWithDeadline(
 }
 
 // ---------------------------------------------------------------------------
-// response(): real HTTP semantics
+// response(): real HTTP SSE semantics
 // ---------------------------------------------------------------------------
 
 describe('EventHub.response SSE protocol', { timeout: 60_000 }, () => {
-  it('first frame event:snapshot carry HelmSnapshot, incremental frame event:<type> carry {seq,event}', { timeout: 60_000 }, async () => {
+  it('emits event:snapshot carrying HelmSnapshot first, then incremental event:<type> carrying {seq, event}', { timeout: 60_000 }, async () => {
     const { hub, snapshotValue } = makeFixture()
     snapshotValue.conversations = [summary(1, 'person assist')]
     const controller = new AbortController()
@@ -144,21 +144,21 @@ describe('EventHub.response SSE protocol', { timeout: 60_000 }, () => {
     })
   })
 
-  it('Request.signal abort unsubscribe and closure stream; reconnect rely on new snapshot align', { timeout: 60_000 }, async () => {
+  it('Request.signal abort unsubscribes and closes stream; reconnect aligns via new snapshot', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture()
     const controller = new AbortController()
     const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
     assert.equal(hub.subscriberCount, 1)
     controller.abort()
-    assert.equal(hub.subscriberCount, 0, 'abort after immediately unsubscribe')
+    assert.equal(hub.subscriberCount, 0, 'abort must unsubscribe immediately')
     const text = await readAll(response, () => {})
-    assert.match(text, /event: snapshot/, 'closure stream before already write first frame still can read')
-    // abort after publish no longer enter the stream (reader already done).
+    assert.match(text, /event: snapshot/, 'initial frame written before close remains readable')
+    // Events published after abort must not reach closed stream.
     hub.publish('notification', { level: 'info', title: 'after' })
     assert.equal(hub.subscriberCount, 0)
   })
 
-  it('ReadableStream.cancel same unsubscribe (client actively disconnect)', { timeout: 60_000 }, async () => {
+  it('ReadableStream.cancel unsubscribes identically on client disconnect', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture()
     const controller = new AbortController()
     const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
@@ -168,12 +168,12 @@ describe('EventHub.response SSE protocol', { timeout: 60_000 }, () => {
     assert.ok(first.done !== true)
     assert.equal(hub.subscriberCount, 1)
     await reader.cancel()
-    assert.equal(hub.subscriberCount, 0, 'cancel after immediately unsubscribe')
-    hub.publish('notification', { level: 'info', title: 'cancel after' })
+    assert.equal(hub.subscriberCount, 0, 'cancel must unsubscribe immediately')
+    hub.publish('notification', { level: 'info', title: 'after cancel' })
     assert.equal(hub.subscriberCount, 0)
   })
 
-  it('close() empty all subscribe (kernel closure deactivate)', { timeout: 60_000 }, async () => {
+  it('close() clears all active subscribers on kernel shutdown', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture()
     const c1 = new AbortController()
     const c2 = new AbortController()
@@ -187,7 +187,7 @@ describe('EventHub.response SSE protocol', { timeout: 60_000 }, () => {
     c2.abort()
   })
 
-  it('without event when keep stream (does not fall back JSON/204), incremental in any moment reach i.e. reach', { timeout: 60_000 }, async () => {
+  it('keeps stream open when idle without falling back to JSON/204, delivering late incremental events', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture()
     const controller = new AbortController()
     const response = hub.response(new Request('http://x', { signal: controller.signal }))
@@ -198,8 +198,8 @@ describe('EventHub.response SSE protocol', { timeout: 60_000 }, () => {
     const reading = readAll(response, (text) => {
       if (text.includes('conversation.upsert')) resolveFrame()
     })
-    // any moment publish (simulated idle after sudden).
-    setTimeout(() => hub.publish('conversation.upsert', summary(2, 'sudden conversation')), 30)
+    // Simulate delayed event arrival after idle connection.
+    setTimeout(() => hub.publish('conversation.upsert', summary(2, 'delayed conversation')), 30)
     await frameCame
     controller.abort()
     await reading
@@ -207,12 +207,12 @@ describe('EventHub.response SSE protocol', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// back press: slow consumer
+// Backpressure: slow consumer
 // ---------------------------------------------------------------------------
 
-describe('EventHub slow consumer back press', { timeout: 60_000 }, () => {
-  it('streaming phase not read byte over limit: explicit closure stream (do not lose frame not silently resume)', { timeout: 60_000 }, async () => {
-    // 1 KiB cap: single frame about 100+ byte, slow read 2 frame inside must trigger.
+describe('EventHub slow-consumer backpressure', { timeout: 60_000 }, () => {
+  it('exceeding buffered bytes during streaming explicitly closes stream rather than dropping frames silently', { timeout: 60_000 }, async () => {
+    // 1 KiB cap: single frame ~100+ bytes, triggers within a few unread frames.
     const { hub } = makeFixture({ maxPendingBytes: 1024 })
     const controller = new AbortController()
     const response = hub.response(new Request('http://x', { signal: controller.signal }))
@@ -220,7 +220,7 @@ describe('EventHub slow consumer back press', { timeout: 60_000 }, () => {
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let text = ''
-    // only read one chunk (snapshot), then do not read - - fabricate accumulate press.
+    // Read only the initial snapshot chunk, then stall reads to build backpressure.
     const first = await reader.read()
     assert.ok(first.value)
     text += decoder.decode(first.value, { stream: true })
@@ -230,22 +230,22 @@ describe('EventHub slow consumer back press', { timeout: 60_000 }, () => {
       hub.publish('notification', { level: 'info', title: `n${i}`, body: 'x'.repeat(64) })
       if (hub.subscriberCount === 0) break
     }
-    assert.equal(hub.subscriberCount, 0, 'byte accumulate press over limit after subscribe by explicit remove')
-    // stream already by server side close; queue inside already queue frame still can read, eventually obtain to done(no longer delivery new frame).
+    assert.equal(hub.subscriberCount, 0, 'subscriber should be evicted once pending bytes exceed limit')
+    // Stream closed server-side; buffered chunks drain to EOF and no subsequent events arrive.
     let done = false
     while (!done) {
       const next = await reader.read()
       done = next.done === true
     }
-    hub.publish('notification', { level: 'info', title: 'closure stream after must not reach' })
+    hub.publish('notification', { level: 'info', title: 'must not arrive after stream close' })
     const after = await reader.read()
-    assert.ok(after.done, 'closure stream after no longer delivery new frame')
+    assert.ok(after.done, 'closed stream must not deliver further frames')
     controller.abort()
   })
 
-  it('normal consumer one by one chunk continuous read do not subject to back press affect', { timeout: 60_000 }, async () => {
-    // 16 KiB pre- compute far greater than single frame, but sync burst will instant between heap accumulate (read is async),
-    // reason one by one chunk hand over replace publish/wait for verify normal consumer water far do not by mistakenly closure.
+  it('normal consumer reading chunk by chunk never trips backpressure', { timeout: 60_000 }, async () => {
+    // 16 KiB budget easily covers individual frames, though synchronous bursts queue before async reads;
+    // interleaving publish/wait verifies normal consumers stay subscribed.
     const { hub } = makeFixture({ maxPendingBytes: 16 * 1024 })
     const controller = new AbortController()
     const response = hub.response(new Request('http://x', { signal: controller.signal }))
@@ -256,19 +256,19 @@ describe('EventHub slow consumer back press', { timeout: 60_000 }, () => {
       hub.publish('notification', { level: 'info', title: `event${i}` })
       await waitFor(() => chunks.join('').includes(`event${i}`))
     }
-    assert.equal(hub.subscriberCount, 1, 'one by one chunk read consumer keep subscribe')
+    assert.equal(hub.subscriberCount, 1, 'consumer reading chunk by chunk stays subscribed')
     controller.abort()
     await reading
   })
 })
 
 // ---------------------------------------------------------------------------
-// snapshot race: subscribe first at snapshot, without lose frame
+// Snapshot race: subscribe before taking snapshot so no frames are lost
 // ---------------------------------------------------------------------------
 
 describe('EventHub snapshot race', { timeout: 60_000 }, () => {
-  it('snapshot take set after, conflict refresh before publish event (seq more large) must reach and does not repeat', { timeout: 60_000 }, async () => {
-    // initialSeq and snapshot.seq align is 5; publish after seq=6 event must appear in stream in.
+  it('events published right after taking snapshot (higher seq) arrive without loss or duplication', { timeout: 60_000 }, async () => {
+    // initialSeq matches snapshot.seq=5; subsequent seq=6 event must arrive in stream.
     const { hub, snapshotValue } = makeFixture({ initialSeq: 5 })
     snapshotValue.conversations = [summary(1, 'race baseline')]
     const controller = new AbortController()
@@ -278,7 +278,6 @@ describe('EventHub snapshot race', { timeout: 60_000 }, () => {
       for (const f of parseSse(text)) frames.push(f)
     })
     await waitFor(() => frames.length >= 1 && frames[0]?.event === 'snapshot')
-    // snapshot.seq=5; publish seq=6 event, must appear in stream in.
     hub.publish('notification', { level: 'warning', title: 'race event' })
     await waitFor(() => frames.some((f) => f.event === 'notification'))
     controller.abort()
@@ -295,8 +294,8 @@ describe('EventHub snapshot race', { timeout: 60_000 }, () => {
     assert.equal((eventFrames[0]?.data.event as { title?: string }).title, 'race event')
   })
 
-  it('snapshot provider sync heavy publish: subscribe buffer phase overflow by explicit closure stream', { timeout: 60_000 }, async () => {
-    // provider first time by invoke sync publish 600 event (>512 buffer cap).
+  it('re-entrant publishing during snapshot() overflowing buffer closes stream explicitly', { timeout: 60_000 }, async () => {
+    // Provider publishes 600 events synchronously during first call (>512 buffer cap).
     let reentrant = false
     const persisted: number[] = []
     const snapValue: HelmSnapshot = { bootId: 'test-boot', seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [], pluginDocs: [] }
@@ -315,7 +314,7 @@ describe('EventHub snapshot race', { timeout: 60_000 }, () => {
     const response = hub.response(new Request('http://x', { signal: controller.signal }))
     assert.ok(response.body)
     const reader = response.body.getReader()
-    // read to stream end: overflow occur in snapshot return before, stream may zero frame i.e. closure (client reconnect take new snapshot).
+    // Read to EOF: overflow before snapshot return closes stream cleanly (client fetches fresh snapshot).
     const decoder = new TextDecoder()
     let text = ''
     for (;;) {
@@ -323,37 +322,37 @@ describe('EventHub snapshot race', { timeout: 60_000 }, () => {
       if (done) break
       text += decoder.decode(value, { stream: true })
     }
-    assert.ok(!text.includes('r599'), 'must not truncate resume (lose frame after disguise complete stream)')
-    assert.equal(hub.subscriberCount, 0, 'buffer overflow after subscribe by explicit remove')
+    assert.ok(!text.includes('r599'), 'must never silently truncate buffer and masquerade as complete stream')
+    assert.equal(hub.subscriberCount, 0, 'subscriber evicted after buffer overflow')
     controller.abort()
   })
 })
 
 // ---------------------------------------------------------------------------
-// redaction: snapshot and event
+// Redaction: snapshots and events
 // ---------------------------------------------------------------------------
 
 describe('EventHub redaction', { timeout: 60_000 }, () => {
-  it('first frame snapshot recursion redaction:secret plaintext (contains field name) never appear', { timeout: 60_000 }, async () => {
+  it('recursively redacts initial snapshot fields: secret plaintext never appears', { timeout: 60_000 }, async () => {
     const { hub, snapshotValue } = makeFixture()
     hub.redactFn = (t) => t.replaceAll('sk-secret', '[REDACTED]')
     snapshotValue.conversations = [
-      { ...summary(1, 'secret key conversation'), doing: 'upload sk-secret-token' },
+      { ...summary(1, 'secret conversation'), doing: 'uploading sk-secret-token' },
     ]
     const controller = new AbortController()
     const response = hub.response(new Request('http://x', { signal: controller.signal }))
-    // not abort first read: server side not closure stream when readAll will suspended, reason use carries timeout finite read verify first frame.
+    // Read single initial snapshot chunk instead of readAll (unclosed SSE stream keeps readAll pending).
     assert.ok(response.body)
     const reader = response.body.getReader()
     const { value } = await reader.read()
     const text = new TextDecoder().decode(value ?? new Uint8Array())
     controller.abort()
     await reader.cancel().catch(() => {})
-    assert.ok(!text.includes('sk-secret'), 'snapshot plaintext secret must redaction')
+    assert.ok(!text.includes('sk-secret'), 'plaintext secret in snapshot must be redacted')
     assert.ok(text.includes('[REDACTED]'))
   })
 
-  it('publish event first string recursion redaction: carries quotes/newline payload do not leak', { timeout: 60_000 }, async () => {
+  it('recursively redacts published event string payloads before JSON serialization (safe with quotes/newlines)', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture()
     hub.redactFn = (t) => t.replaceAll('leak-me', '[REDACTED]')
     const controller = new AbortController()
@@ -378,10 +377,10 @@ describe('EventHub redaction', { timeout: 60_000 }, () => {
     await reading
     const frame = frames[1]?.data as { event: { type: string; payload: Record<string, unknown> } }
     assert.equal(frame.event.type, 'custom.progress')
-    assert.ok(!JSON.stringify(frame).includes('leak-me'), 'event payload must not leak plaintext')
+    assert.ok(!JSON.stringify(frame).includes('leak-me'), 'event payload must not leak plaintext secrets')
   })
 
-  it('snapshot contains illegal JSON value (Date):currentSnapshot explicit throw HelmError not silently convert', { timeout: 60_000 }, () => {
+  it('snapshot containing non-JSON value (Date) throws HelmError explicitly in currentSnapshot', { timeout: 60_000 }, () => {
     const { hub, snapshotValue } = makeFixture()
     snapshotValue.conversations = [
       { ...summary(1, 'x'), createdAt: new Date(0) as unknown as number },
@@ -391,24 +390,24 @@ describe('EventHub redaction', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// publish ordinal when order and event shape
+// Monotonic sequence assignment and event shapes
 // ---------------------------------------------------------------------------
 
-describe('EventHub.publish event shape', { timeout: 60_000 }, () => {
-  it('group install failed do not push enter seq(mirror seq consistent), after success seq connect continue persist', { timeout: 60_000 }, () => {
+describe('EventHub.publish event shapes', { timeout: 60_000 }, () => {
+  it('failed validation does not advance seq (no seq gaps); subsequent valid events stay contiguous', { timeout: 60_000 }, () => {
     const { hub, persistedSeqs } = makeFixture()
     hub.publish('notification', { level: 'info', title: 'a' })
     assert.equal(hub.seq, 1)
     assert.deepEqual(persistedSeqs, [1])
     assert.throws(() => hub.publish('conversation.deleted', { conversationId: 'NaN!' }))
-    assert.equal(hub.seq, 1, 'failed do not push enter ordinal')
-    assert.deepEqual(persistedSeqs, [1], 'failed do not persist ordinal')
+    assert.equal(hub.seq, 1, 'failure must not advance memory seq')
+    assert.deepEqual(persistedSeqs, [1], 'failure must not persist seq')
     hub.publish('conversation.deleted', { conversationId: 7 })
     assert.equal(hub.seq, 2)
     assert.deepEqual(persistedSeqs, [1, 2])
   })
 
-  it('payload contains loop reference:publish explicit throws, not silently fall back', { timeout: 60_000 }, () => {
+  it('cyclic references in payload throw explicitly without silent fallback', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const cyclic: Record<string, unknown> = { self: null }
     cyclic['self'] = cyclic
@@ -416,7 +415,7 @@ describe('EventHub.publish event shape', { timeout: 60_000 }, () => {
     assert.equal(hub.seq, 0)
   })
 
-  it('plugin.changed accept complete message seal {type,plugin,ui} and directly {plugin,ui} double shape; bare summary missing ui explicit reject', { timeout: 60_000 }, () => {
+  it('plugin.changed accepts both enveloped {type,plugin,ui} and unwrapped {plugin,ui}; rejects bare summary missing ui', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const plugin = {
       id: 'builtin:herdr',
@@ -432,31 +431,31 @@ describe('EventHub.publish event shape', { timeout: 60_000 }, () => {
     ]
     const frames: HelmEventFrame[] = []
     const off = hub.subscribe((f) => frames.push(f))
-    // complete message seal shape (PluginHost emitEvent now state:{type, plugin, ui}).
+    // Enveloped form (matching PluginHost emitEvent: {type, plugin, ui}).
     hub.publish('plugin.changed', { type: 'plugin.changed', plugin, ui })
-    // directly {plugin, ui} shape.
+    // Direct unwrapped {plugin, ui} form.
     hub.publish('plugin.changed', { plugin, ui })
     off()
     const e1 = frames[0]?.event as { type: string; plugin: { id: string }; ui: unknown[] }
     const e2 = frames[1]?.event as { type: string; plugin: { id: string }; ui: unknown[] }
     assert.equal(e1.type, 'plugin.changed')
     assert.equal(e1.plugin.id, 'builtin:herdr')
-    assert.deepEqual(e1.ui, ui, 'message seal shape ui complete carry')
-    assert.ok(!('type' in (e1.plugin as Record<string, unknown>)), 'message seal split package:plugin inside must not leftover type embed set')
+    assert.deepEqual(e1.ui, ui, 'enveloped form preserves ui list')
+    assert.ok(!('type' in (e1.plugin as Record<string, unknown>)), 'envelope must not nest extra type under plugin')
     assert.equal(e2.type, 'plugin.changed')
     assert.equal(e2.plugin.id, 'builtin:herdr')
-    assert.deepEqual(e2.ui, ui, 'direct pass shape ui complete carry')
-    // old bare summary(missing ui) no longer accept: new contract without compatibility cushion piece.
+    assert.deepEqual(e2.ui, ui, 'direct form preserves ui list')
+    // Legacy bare summary missing ui is rejected (no compatibility shims).
     assert.throws(() => hub.publish('plugin.changed', plugin), /plugin\.changed|invalid_event/)
-    // deactivate/unload:ui is empty array (client based on this clear the plugin contribution).
+    // Unload/disable emits empty ui list (client clears contributions for that plugin).
     hub.publish('plugin.changed', { plugin, ui: [] })
     const off2 = hub.subscribe(() => {})
     off2()
   })
 
-  it('core other type same accept message seal/direct pass double shape', { timeout: 60_000 }, () => {
+  it('other core event types accept both enveloped and unwrapped shapes', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
-    const conv = summary(3, 'double shape')
+    const conv = summary(3, 'dual shape')
     const frames: HelmEventFrame[] = []
     const off = hub.subscribe((f) => frames.push(f))
     hub.publish('conversation.upsert', conv)
@@ -475,15 +474,12 @@ describe('EventHub.publish event shape', { timeout: 60_000 }, () => {
     assert.equal(del2.conversationId, 10)
   })
 
-  it('conversation.upsert illegal shape explicit reject and do not push enter seq(missing field/wrong type/optional field type do not symbol)', { timeout: 60_000 }, () => {
+  it('conversation.upsert rejects invalid shapes without advancing seq (missing fields / wrong types / wrong optional field types)', { timeout: 60_000 }, () => {
     const { hub, persistedSeqs } = makeFixture()
     hub.publish('notification', { level: 'info', title: 'baseline' })
     assert.equal(hub.seq, 1)
-    // non- object.
     assert.throws(() => hub.publish('conversation.upsert', 'not-a-summary'), /conversation\.upsert|invalid_event/)
-    // missing core field (without title/status/updatedAt etc.).
     assert.throws(() => hub.publish('conversation.upsert', { id: 1, profileId: 'assistant' }), /conversation\.upsert/)
-    // core field type wrong (status non- five state,id non- integer,tags mix non- string).
     assert.throws(
       () => hub.publish('conversation.upsert', { ...summary(1, 'x'), status: 'busy' as never }),
       /conversation\.upsert/,
@@ -496,7 +492,6 @@ describe('EventHub.publish event shape', { timeout: 60_000 }, () => {
       () => hub.publish('conversation.upsert', { ...summary(1, 'x'), tags: ['a', 2 as never] }),
       /conversation\.upsert/,
     )
-    // optional field store in but type wrong (can missing cannot wrong).
     assert.throws(
       () => hub.publish('conversation.upsert', { ...summary(1, 'x'), ownedBy: 'alien' as never }),
       /conversation\.upsert/,
@@ -509,7 +504,7 @@ describe('EventHub.publish event shape', { timeout: 60_000 }, () => {
       () => hub.publish('conversation.upsert', { ...summary(1, 'x'), doing: 42 as never }),
       /conversation\.upsert/,
     )
-    // legal summary (contains optional field) do not subject to affect.
+    // Valid summary with optional fields passes unaffected.
     hub.publish('conversation.upsert', {
       ...summary(4, 'ok'),
       ownedBy: 'bot',
@@ -520,28 +515,23 @@ describe('EventHub.publish event shape', { timeout: 60_000 }, () => {
     assert.deepEqual(persistedSeqs, [1, 2])
   })
 
-  it('ask.upsert illegal shape explicit reject and do not push enter seq(missing field/wrong state/field shape illegal)', { timeout: 60_000 }, () => {
+  it('ask.upsert rejects invalid shapes without advancing seq (missing fields / invalid status / invalid field shapes)', { timeout: 60_000 }, () => {
     const { hub, persistedSeqs } = makeFixture()
     hub.publish('notification', { level: 'info', title: 'baseline' })
     const baseAsk = {
       id: 'ask-1',
       conversationId: 3,
       title: 'deploy approval',
-      fields: [{ name: 'approve', label: 'is otherwise batch allow', type: 'confirm' }],
+      fields: [{ name: 'approve', label: 'allow deployment', type: 'confirm' }],
       status: 'pending',
       createdAt: 1_000,
     }
-    // non- object.
     assert.throws(() => hub.publish('ask.upsert', 'oops'), /ask\.upsert|invalid_event/)
-    // missing core field.
     assert.throws(() => hub.publish('ask.upsert', { id: 'ask-1' }), /ask\.upsert/)
-    // status non- four state.
     assert.throws(() => hub.publish('ask.upsert', { ...baseAsk, status: 'expired' as never }), /ask\.upsert/)
-    // id empty string / conversationId non- integer / fields empty array.
     assert.throws(() => hub.publish('ask.upsert', { ...baseAsk, id: '' }), /ask\.upsert/)
     assert.throws(() => hub.publish('ask.upsert', { ...baseAsk, conversationId: 3.5 }), /ask\.upsert/)
     assert.throws(() => hub.publish('ask.upsert', { ...baseAsk, fields: [] }), /ask\.upsert/)
-    // field shape illegal (type non- three choose one,select missing options).
     assert.throws(
       () => hub.publish('ask.upsert', { ...baseAsk, fields: [{ name: 'x', label: 'X', type: 'radio' as never }] }),
       /ask\.upsert/,
@@ -553,20 +543,18 @@ describe('EventHub.publish event shape', { timeout: 60_000 }, () => {
       }),
       /ask\.upsert/,
     )
-    // optional field type wrong (expectedStateSeq non- integer).
     assert.throws(
       () => hub.publish('ask.upsert', { ...baseAsk, expectedStateSeq: '3' as never }),
       /ask\.upsert/,
     )
-    assert.equal(hub.seq, 1, 'invalid input do not push enter seq')
+    assert.equal(hub.seq, 1, 'invalid input must not advance seq')
     assert.deepEqual(persistedSeqs, [1])
-    // legal AskSpec(contains optional field) do not subject to affect;answered terminal state same can publish.
     hub.publish('ask.upsert', { ...baseAsk, expectedStateSeq: 7, ownerPluginId: 'builtin:herdr' })
     hub.publish('ask.upsert', { ...baseAsk, id: 'ask-2', status: 'answered' as never })
     assert.equal(hub.seq, 3)
   })
 
-  it('ask.upsert sync validate secret lifecycle, illegal metadata does not enter resume cache', { timeout: 60_000 }, () => {
+  it('ask.upsert validates secretLifetime consistently; invalid metadata never enters resume ring', { timeout: 60_000 }, () => {
     const { hub, persistedSeqs } = makeFixture()
     const ask = { id: 'lifetime-ask', conversationId: 1, title: 'secret', status: 'pending', createdAt: 1 }
     for (const secretLifetime of [{ ttlMs: 0 }, { scope: 'unknown' }, { ttl: 100 }, new Date()]) {
@@ -590,20 +578,16 @@ describe('EventHub.publish event shape', { timeout: 60_000 }, () => {
     hub.close()
   })
 
-  it('notification illegal payload explicit reject and do not push enter seq(not silently fix correct level/title)', { timeout: 60_000 }, () => {
+  it('notification rejects invalid payloads without advancing seq (never coerces level/title)', { timeout: 60_000 }, () => {
     const { hub, persistedSeqs } = makeFixture()
     hub.publish('notification', { level: 'info', title: 'baseline' })
     assert.equal(hub.seq, 1)
-    // illegal level: no longer static default fold back 'info'.
     assert.throws(() => hub.publish('notification', { level: 'fatal', title: 'x' }), /notification|invalid_event/)
     assert.throws(() => hub.publish('notification', { title: 'missing level' }), /notification/)
-    // illegal title: no longer static default replace is 'notification'.
     assert.throws(() => hub.publish('notification', { level: 'info' }), /notification/)
     assert.throws(() => hub.publish('notification', { level: 'info', title: '' }), /notification/)
     assert.throws(() => hub.publish('notification', { level: 'info', title: 42 as never }), /notification/)
-    // body store in but non- string.
     assert.throws(() => hub.publish('notification', { level: 'info', title: 'x', body: 1 as never }), /notification/)
-    // conversationId store in but non- integer.
     assert.throws(
       () => hub.publish('notification', { level: 'info', title: 'x', conversationId: 1.5 }),
       /notification/,
@@ -612,16 +596,15 @@ describe('EventHub.publish event shape', { timeout: 60_000 }, () => {
       () => hub.publish('notification', { level: 'info', title: 'x', conversationId: '3' as never }),
       /notification/,
     )
-    assert.equal(hub.seq, 1, 'invalid input do not push enter seq')
-    assert.deepEqual(persistedSeqs, [1], 'invalid input do not persist ordinal')
-    // legal payload (optional field omit/carry) do not subject to affect.
+    assert.equal(hub.seq, 1, 'invalid input must not advance seq')
+    assert.deepEqual(persistedSeqs, [1], 'invalid input must not persist seq')
     hub.publish('notification', { level: 'warning', title: 'only title' })
-    hub.publish('notification', { level: 'error', title: 'all field', body: 'detail situation', conversationId: 9 })
+    hub.publish('notification', { level: 'error', title: 'full fields', body: 'details', conversationId: 9 })
     assert.equal(hub.seq, 3)
     assert.deepEqual(persistedSeqs, [1, 2, 3])
   })
 
-  it('node.changed accept message seal/direct pass double shape, keep complete NodeInfo field;removed pass-through', { timeout: 60_000 }, () => {
+  it('node.changed accepts enveloped and unwrapped shapes, preserving complete NodeInfo including health and removed', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const frames: HelmEventFrame[] = []
     const off = hub.subscribe((f) => frames.push(f))
@@ -644,11 +627,11 @@ describe('EventHub.publish event shape', { timeout: 60_000 }, () => {
         diskTotalBytes: 4,
       },
     }
-    // complete message seal shape (KernelRuntime now state:{type, node}).
+    // Enveloped form (KernelRuntime form: {type, node}).
     hub.publish('node.changed', { type: 'node.changed', node })
-    // directly {node} shape (without message seal type).
+    // Direct {node} form without envelope type.
     hub.publish('node.changed', { node: { ...node, online: false, lastSeenAt: 3_000 } })
-    // removed: true(removeNode unify publish).
+    // removed: true (published by removeNode).
     hub.publish('node.changed', { type: 'node.changed', node: { id: 'gpu-box', kind: 'byom', online: false }, removed: true })
     off()
     assert.equal(frames.length, 3)
@@ -659,8 +642,8 @@ describe('EventHub.publish event shape', { timeout: 60_000 }, () => {
     assert.equal(e1.node.kind, 'byom')
     assert.equal(e1.node.online, true)
     assert.equal(e1.node.hostname, 'gpu')
-    assert.equal(e1.node.health?.diskTotalBytes, 4, 'complete real NodeInfo field keep (contains health)')
-    assert.equal('removed' in e1, false, 'without removed field when does not carry')
+    assert.equal(e1.node.health?.diskTotalBytes, 4, 'full NodeInfo including health is preserved')
+    assert.equal('removed' in e1, false, 'omits removed when unset')
     const e2 = frames[1]?.event
     assert.ok(e2 && 'node' in e2)
     assert.equal(e2.node.online, false)
@@ -668,55 +651,46 @@ describe('EventHub.publish event shape', { timeout: 60_000 }, () => {
     const e3 = frames[2]?.event
     assert.ok(e3 && 'node' in e3)
     assert.equal(e3.node.id, 'gpu-box')
-    assert.equal(e3.removed, true, 'removed: true pass-through (Web based on this from list remove)')
-    // event shape satisfy Web applyEventFrame  'node' in event decide (no longer fall Custom payload embed set).
-    assert.ok(!('payload' in e1), 'must not fall CustomHelmEvent payload embed set')
+    assert.equal(e3.removed, true, 'removed: true passes through for Web list removal')
+    assert.ok(!('payload' in e1), 'must not fall into CustomHelmEvent payload wrapper')
   })
 
-  it('node.changed invalid input explicit reject and do not push enter seq', { timeout: 60_000 }, () => {
+  it('node.changed rejects invalid inputs without advancing seq', { timeout: 60_000 }, () => {
     const { hub, persistedSeqs } = makeFixture()
     hub.publish('notification', { level: 'info', title: 'baseline' })
     assert.equal(hub.seq, 1)
-    // missing node.
     assert.throws(() => hub.publish('node.changed', { type: 'node.changed' }), /node\.changed|invalid_event/)
-    // node missing id / id non- string / empty string.
     assert.throws(() => hub.publish('node.changed', { node: { kind: 'byom', online: true } }), /node\.changed/)
     assert.throws(
       () => hub.publish('node.changed', { node: { id: 42 as unknown as string, kind: 'byom', online: true } }),
       /node\.changed/,
     )
     assert.throws(() => hub.publish('node.changed', { node: { id: '', kind: 'byom', online: true } }), /node\.changed/)
-    // illegal kind.
     assert.throws(
       () => hub.publish('node.changed', { node: { id: 'x', kind: 'ssh' as never, online: true } }),
       /node\.changed/,
     )
-    // online non- boolean.
     assert.throws(
       () => hub.publish('node.changed', { node: { id: 'x', kind: 'byom', online: 'yes' as never } }),
       /node\.changed/,
     )
-    // removed non- boolean(if store in).
     assert.throws(
       () => hub.publish('node.changed', { node: { id: 'x', kind: 'byom', online: false }, removed: 'true' as never }),
       /removed/,
     )
-    // node non- object.
     assert.throws(() => hub.publish('node.changed', 'gpu-box'), /node\.changed/)
-    // all failed do not push enter seq, do not persist.
-    assert.equal(hub.seq, 1, 'invalid input do not push enter seq')
-    assert.deepEqual(persistedSeqs, [1], 'invalid input do not persist ordinal')
-    // legal publish restore normal.
+    assert.equal(hub.seq, 1, 'invalid input must not advance seq')
+    assert.deepEqual(persistedSeqs, [1], 'invalid input must not persist seq')
     hub.publish('node.changed', { node: { id: 'x', kind: 'byom', online: true } })
     assert.equal(hub.seq, 2)
   })
 
-  it('unknown type pass-through CustomHelmEvent {type,payload}, does not pretend to be into notification', { timeout: 60_000 }, () => {
+  it('unknown event types pass through as CustomHelmEvent {type, payload} without posing as notifications', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const frames: HelmEventFrame[] = []
     const off = hub.subscribe((f) => frames.push(f))
     hub.publish('workflow.progress', { step: 3, detail: { done: true } })
-    hub.publish('herdr.pane.update', 'pane-2 additional information')
+    hub.publish('herdr.pane.update', 'pane-2 info')
     hub.publish('notification', { level: 'error', title: 't' })
     off()
     assert.equal(frames.length, 3)
@@ -725,15 +699,14 @@ describe('EventHub.publish event shape', { timeout: 60_000 }, () => {
     assert.deepEqual(e1.payload, { step: 3, detail: { done: true } })
     const e2 = frames[1]?.event as { type: string; payload: unknown }
     assert.equal(e2.type, 'herdr.pane.update')
-    assert.equal(e2.payload, 'pane-2 additional information')
-    // six core type keep strong contract: does not enter Custom branch.
+    assert.equal(e2.payload, 'pane-2 info')
     const core = frames[2]?.event as { type: string; title?: string; payload?: unknown }
     assert.equal(core.type, 'notification')
     assert.equal(core.title, 't')
     assert.equal(core.payload, undefined, 'notification does not carry payload field')
   })
 
-  it('subscribe call back throws only isolated the subscribe, does not affect other subscribe', { timeout: 60_000 }, () => {
+  it('subscriber callback exception isolates failing subscriber without affecting peers', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const good: HelmEventFrame[] = []
     const bad = (): void => {
@@ -748,28 +721,28 @@ describe('EventHub.publish event shape', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// sseStream: can edit process consume (contains unsubscribe)
+// sseStream: programmatic consumer (including unsubscribe)
 // ---------------------------------------------------------------------------
 
-describe('EventHub.sseStream can edit process consume', { timeout: 60_000 }, () => {
-  it('return unsubscribe handle; consume return false i.e. unsubscribe; unsubscribe after publish no longer delivery', { timeout: 60_000 }, () => {
+describe('EventHub.sseStream programmatic consumer', { timeout: 60_000 }, () => {
+  it('returns unsubscribe handle; returning false unsubscribes and halts delivery', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const frames: SseFrame[] = []
     const sub = hub.sseStream((frame) => {
       frames.push(frame)
-      return frames.length < 2 // second frame after return false
+      return frames.length < 2 // return false after second frame
     })
     assert.equal(hub.subscriberCount, 1)
     hub.publish('notification', { level: 'info', title: 'one' })
     hub.publish('notification', { level: 'info', title: 'two' })
-    assert.equal(hub.subscriberCount, 0, 'return false after automatically unsubscribe')
+    assert.equal(hub.subscriberCount, 0, 'returning false auto-unsubscribes')
     hub.publish('notification', { level: 'info', title: 'three' })
     assert.equal(frames.length, 2)
     sub.unsubscribe() // idempotent
     assert.equal(hub.subscriberCount, 0)
   })
 
-  it('consumer throws: unsubscribe clean up and exception do not escape to publish', { timeout: 60_000 }, () => {
+  it('consumer exception cleans up subscription without escaping publish()', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const other: HelmEventFrame[] = []
     hub.subscribe((f) => other.push(f))
@@ -777,14 +750,13 @@ describe('EventHub.sseStream can edit process consume', { timeout: 60_000 }, () 
       throw new Error('boom')
     })
     hub.publish('notification', { level: 'info', title: 'after' })
-    assert.equal(hub.subscriberCount, 1, 'throws subscribe by clean up, only remain normal subscribe')
+    assert.equal(hub.subscriberCount, 1, 'throwing subscriber evicted, leaving healthy subscriber')
     assert.equal(other.length, 1)
   })
 
-  it('sseStream inside snapshot after conflict refresh buffer frame (without lose frame,seq strictly greater than snapshot)', { timeout: 60_000 }, async () => {
+  it('sseStream buffers frames published during snapshot callback without drops and seq > snapshot.seq', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture({ initialSeq: 2 })
     const frames: SseFrame[] = []
-    // subscribe call back in publish (snapshot just take set, conflict refresh before via classic race).
     const sub = hub.sseStream((frame) => {
       frames.push(frame)
       if (frames.length === 1) {
@@ -803,11 +775,11 @@ describe('EventHub.sseStream can edit process consume', { timeout: 60_000 }, () 
 })
 
 // ---------------------------------------------------------------------------
-// idle heartbeat (keepalive): proxy/middle layer keep-alive + client card die detect based on
+// Idle heartbeat (keepalive)
 // ---------------------------------------------------------------------------
 
 describe('EventHub SSE idle heartbeat', { timeout: 60_000 }, () => {
-  it('idle connect cycle receives : keepalive note release row: does not carry event/data, do not fabricate business event, do not push enter seq', { timeout: 60_000 }, async () => {
+  it('emits periodic : keepalive comment lines without event/data, business events, or advancing seq', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture({ keepaliveMs: 20 })
     const controller = new AbortController()
     const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
@@ -817,25 +789,23 @@ describe('EventHub SSE idle heartbeat', { timeout: 60_000 }, () => {
     const first = await reader.read()
     assert.match(decoder.decode(first.value ?? new Uint8Array()), /event: snapshot/)
 
-    // under a chunk should is heartbeat note release row (: open head, without event:/data:, parse do not out any frame).
+    // Next chunk is a heartbeat comment line (`:` prefix, no event:/data:, parses with null data).
     const beat = await readWithDeadline(reader)
     const beatText = decoder.decode(beat.value ?? new Uint8Array())
-    assert.ok(beatText.startsWith(':'), `heartbeat should is SSE note release row, actual: ${beatText}`)
-    assert.ok(!beatText.includes('event:') && !beatText.includes('data:'), 'heartbeat must not fabricate business event')
-    // real client SseParser skip : open head note release row (live-state.test.ts already lock):
-    // heartbeat text parse do not out any carry data frame.
-    assert.ok(parseSse(beatText).every((frame) => frame.data === null), 'heartbeat must not carry data frame')
-    assert.equal(hub.seq, 0, 'heartbeat do not push enter event ordinal')
+    assert.ok(beatText.startsWith(':'), `heartbeat must be an SSE comment line, got: ${beatText}`)
+    assert.ok(!beatText.includes('event:') && !beatText.includes('data:'), 'heartbeat must not fabricate business events')
+    assert.ok(parseSse(beatText).every((frame) => frame.data === null), 'heartbeat must emit zero data frames')
+    assert.equal(hub.seq, 0, 'heartbeat must not advance event sequence')
 
-    // heartbeat do not interference business event: publish after event frame per common reach.
-    hub.publish('notification', { level: 'info', title: 'heartbeat between event' })
+    // Heartbeat does not disrupt real events.
+    hub.publish('notification', { level: 'info', title: 'post-heartbeat event' })
     const eventChunk = await readWithDeadline(reader)
     assert.match(decoder.decode(eventChunk.value ?? new Uint8Array()), /event: notification/)
     controller.abort()
     await reader.cancel().catch(() => {})
   })
 
-  it('abort after heartbeat timer follow shutdown clean up: unsubscribe closure stream, without after continue byte (process do not because leak leak timer suspended)', { timeout: 60_000 }, async () => {
+  it('clears heartbeat timer on abort: unsubscribes, closes stream, stops writing, avoids dangling timers', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture({ keepaliveMs: 20 })
     const controller = new AbortController()
     const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
@@ -843,22 +813,19 @@ describe('EventHub SSE idle heartbeat', { timeout: 60_000 }, () => {
     const reader = response.body.getReader()
     await reader.read() // snapshot
     controller.abort()
-    assert.equal(hub.subscriberCount, 0, 'abort after immediately unsubscribe')
+    assert.equal(hub.subscriberCount, 0, 'abort unsubscribes immediately')
 
-    // server side already closure stream: exhausted already queue byte after read to done.
     let done = false
     while (!done) {
       const next = await reader.read()
       done = next.done === true
     }
-    // wait for multiple heartbeat cycle: leak leak interval will keep event loop store make set piece cannot exit
-    // (this set piece can normal end i.e. question connect verify timer already clean up), and will not again write any byte.
     await new Promise((r) => setTimeout(r, 100))
     const after = await reader.read()
-    assert.ok(after.done, 'closure stream after no longer has heartbeat byte')
+    assert.ok(after.done, 'no heartbeat bytes arrive after stream closes')
   })
 
-  it('ReadableStream.cancel same clean up heartbeat timer(client actively disconnect)', { timeout: 60_000 }, async () => {
+  it('ReadableStream.cancel cleans up heartbeat timer on client disconnect', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture({ keepaliveMs: 20 })
     const controller = new AbortController()
     const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
@@ -866,15 +833,14 @@ describe('EventHub SSE idle heartbeat', { timeout: 60_000 }, () => {
     const reader = response.body.getReader()
     await reader.read() // snapshot
     await reader.cancel()
-    assert.equal(hub.subscriberCount, 0, 'cancel after immediately unsubscribe')
+    assert.equal(hub.subscriberCount, 0, 'cancel unsubscribes immediately')
     await new Promise((r) => setTimeout(r, 100))
     assert.equal(hub.subscriberCount, 0)
     controller.abort()
   })
 
-  it('heartbeat subject to byte back press has boundary constraint: do not read slow consumer heap accumulate over limit by explicit closure stream', { timeout: 60_000 }, async () => {
-    // pre- compute 320B: first frame snapshot(contains bootId, about 150B) can via; single heartbeat about 14B,
-    // heap accumulate 20 remaining time i.e. over limit (keepaliveMs=5 under about hundred remaining milli second inside trigger).
+  it('heartbeat accumulation obeys byte backpressure cap and closes slow unread consumers', { timeout: 60_000 }, async () => {
+    // 320B budget allows initial ~150B snapshot; ~14B heartbeats trip limit within ~20 ticks.
     const { hub } = makeFixture({ keepaliveMs: 5, maxPendingBytes: 320 })
     const controller = new AbortController()
     const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
@@ -882,7 +848,6 @@ describe('EventHub SSE idle heartbeat', { timeout: 60_000 }, () => {
     const reader = response.body.getReader()
     const first = await reader.read()
     assert.match(new TextDecoder().decode(first.value ?? new Uint8Array()), /event: snapshot/)
-    // no longer read: heartbeat byte continuous heap accumulate, over limit i.e. slow client explicit closure stream (never full warehouse unbounded queue up).
     await waitFor(() => hub.subscriberCount === 0)
     let done = false
     while (!done) {
@@ -892,18 +857,17 @@ describe('EventHub SSE idle heartbeat', { timeout: 60_000 }, () => {
     controller.abort()
   })
 
-  it('keepaliveMs non- correct value deactivate heartbeat: idle stream no longer write any byte', { timeout: 60_000 }, async () => {
+  it('non-positive keepaliveMs disables heartbeats: idle stream emits zero extra bytes', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture({ keepaliveMs: 0 })
     const controller = new AbortController()
     const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
     assert.ok(response.body)
     const reader = response.body.getReader()
     await reader.read() // snapshot
-    // wait for start a by default heartbeat cycle still without any write (read continuous pending, use short Deadline reverse verify).
     await new Promise((r) => setTimeout(r, 60))
     const pending = reader.read()
     const won = await Promise.race([pending.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), 80))])
-    assert.equal(won, false, 'deactivate heartbeat after idle stream must not again has byte reach')
+    assert.equal(won, false, 'idle stream with keepalive disabled must emit zero bytes')
     controller.abort()
     await reader.cancel().catch(() => {})
   })

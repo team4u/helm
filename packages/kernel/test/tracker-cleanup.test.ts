@@ -1,31 +1,31 @@
 /**
- * ConversationTracker input append trace uniqueness and compute accurate regression.
+ * ConversationTracker input tracking uniqueness and settlement precision regression tests.
  *
- * defect background (this file lock fix):
- * - old implement rebuildFromEntries for window inside each history helm.input all create req: record,
- *   and each time snapshot scan history re-;run compute (takeConsumed) only clean number key,req: history
- *   key common resident;abort  takeAllInputs iterate the whole map, old history input pollute aborted
- *   payload  origin and input manifest.
- * - old test use `assert.notEqual(reqKey, -2147483648)` this kind of string and number must however
- *   do not etc. weak assertion, test do not out real defect.
+ * Bug background (fixed and locked by this file):
+ * - Previous rebuildFromEntries created `req:` entries for every historical helm.input in the window
+ *   and re-scanned history on every snapshot; turn settlement (takeConsumed) only cleared numeric keys,
+ *   keeping historical `req:` keys resident indefinitely; takeAllInputs on abort scanned the entire map,
+ *   polluting aborted payload origins and input lists with old historical inputs.
+ * - Previous tests only made weak assertions like `assert.notEqual(reqKey, -2147483648)`, which failed
+ *   to catch the bug when strings and numbers coexisted.
  *
- * now contract:
- * 1. trackedInputs with durable input.id(requestId) is unique key: normal register/bind
- *    and entry/inbox observe rebuild merge is a record, never duplicate;submissionId only store at
- *    submissionIndex related index (SDK run.inputs/failure.inputs mapping side);
- * 2. entry rebuild only recognize when before run zone between (run.first and after) and when before inbox, already compute
- *    run history helm.input does not resurrect: many round complete after abort only contains when before run input;
- * 3. same conversation duplicate requestId(SDK dedupe semantics) rebuild correct and does not repeat;
- * 4. restart restore leap run:observe via live.run.inputs right threat mapping + submission
- *    precise query patch complete origin/meta/attachments and related index;
- *    related when order window lock:bindSubmission(submit back package continue extend) must first row at generate task
- *    request phase pi.live.generation write commit, i.e. when complete/failed turn still exactly
- *    once contains input and compute after without leftover index (SDK when order guarantee, detail see case note release);
- * 5. stopObserving after in-flight async adoptInitial do not to maps re- item;
- * 6. settledRuns capacity eliminate (64) and deleteConversation all amount clean up keep do not change.
+ * Current contract:
+ * 1. trackedInputs is keyed solely by durable input.id (requestId): normal register/bind
+ *    and entry/inbox rebuild merge into a single record with no duplicates; submissionId lives only in
+ *    submissionIndex (mapping side for SDK run.inputs/failure.inputs);
+ * 2. Entry rebuild only covers the current run range (run.first and onward) and current inbox, never
+ *    resurrecting settled historical helm.input entries: aborting after prior completed rounds contains only current run inputs;
+ * 3. Repeated requestIds in the same conversation (SDK per-conversation dedup) rebuild cleanly without duplication;
+ * 4. Restart recovery across an active run: observe reconciles missing origin/meta/attachments and index mappings
+ *    using authoritative live.run.inputs + submission queries;
+ *    Timing window lock: bindSubmission (submit promise continuation) runs before generation task's request-phase
+ *    pi.live.generation write commits, so even instantaneously settled/failed turns include the input once
+ *    with zero leftover index entries (guaranteed by SDK ordering; see inline comments);
+ * 5. In-flight async adoptInitial never repopulates maps after stopObserving;
+ * 6. settledRuns capacity eviction (64) and full cleanup on deleteConversation remain intact.
  *
- * via real KernelRuntime(faux provider + real SQLite) drive, internal state via type
- * convert read (test and implement same package, only test inside peek).
+ * Driven through real KernelRuntime (faux provider + real SQLite); internal state inspected via type casts
+ * (test and implementation live in the same package; test-only inspection).
  */
 
 import { strict as assert } from 'node:assert'
@@ -43,7 +43,7 @@ import { cleanupDir, deferred, makeFauxModels, makeTempDir, sleep, waitFor } fro
 
 type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
 
-/** single conversation aggregate mirror can observability sub- collection (and ConversationMirror field same name). */
+/** Subset of per-conversation aggregate mirror exposed for observability (matches ConversationMirror fields). */
 interface MirrorLike {
   trackedInputs: Map<string, ConversationInput>
   submissionIndex: Map<number, string>
@@ -91,7 +91,7 @@ async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: FauxH
   return Object.assign(runtime, { __faux: faux })
 }
 
-/** register collect turn_settled plugin, return payload array (each conversation independent array). */
+/** Registers a plugin collecting turn_settled payloads per conversation. */
 function collectSettled(kernel: KernelRuntime): TurnSettledPayload[] {
   const settled: TurnSettledPayload[] = []
   void kernel.plugins.register({
@@ -105,19 +105,19 @@ function collectSettled(kernel: KernelRuntime): TurnSettledPayload[] {
   return settled
 }
 
-describe('input uniqueness and history does not resurrect', { timeout: 60_000 }, () => {
-  it('many round complete after abort:aborted payload only contains when before run input, excludes history trigger input', timeout, async () => {
+describe('input uniqueness and no resurrection of history', { timeout: 60_000 }, () => {
+  it('abort after completed turns: aborted payload includes only current run input, never historical trigger inputs', timeout, async () => {
     const kernel = await openRuntime(join(root, 'abort-current-only'))
     try {
       const settled = collectSettled(kernel)
-      // two round complete turn: one round trigger source, second round human source.
+      // Two completed turns: turn 1 from trigger origin, turn 2 from human origin.
       kernel.__faux.setResponses([
-        fauxAssistantMessage('one round answer'),
-        fauxAssistantMessage('second round answer'),
+        fauxAssistantMessage('round 1 answer'),
+        fauxAssistantMessage('round 2 answer'),
       ])
-      await kernel.submitInput(1, 'one round task', { origin: 'trigger' })
+      await kernel.submitInput(1, 'round 1 task', { origin: 'trigger' })
       await kernel.waitForIdle(1)
-      await kernel.submitInput(1, 'second round task', { origin: 'human' })
+      await kernel.submitInput(1, 'round 2 task', { origin: 'human' })
       await kernel.waitForIdle(1)
       assert.equal(settled.length, 2)
       assert.equal(settled[0]!.outcome, 'completed')
@@ -125,11 +125,11 @@ describe('input uniqueness and history does not resurrect', { timeout: 60_000 },
       assert.equal(settled[0]!.inputs[0]!.origin, 'trigger')
       assert.equal(settled[1]!.inputs.length, 1)
       assert.equal(settled[1]!.inputs[0]!.origin, 'human')
-      // already compute two round after trackedInputs leaves no residue history req: record.
+      // After two settled turns, trackedInputs holds zero historical req: entries.
       const mapAfter = trackerOf(kernel).mirrors.get(1)?.trackedInputs
-      assert.equal(mapAfter?.size ?? 0, 0, 'already compute input history record leaves no residue')
+      assert.equal(mapAfter?.size ?? 0, 0, 'settled inputs must leave zero historical leftovers')
 
-      // third round in-flight abort: only contains when before input, never pollute old round origin.
+      // Third turn aborted in-flight: must contain only current input without pollution from older turns' origins.
       const started = deferred()
       const gate = deferred()
       kernel.__faux.setResponses([
@@ -141,7 +141,7 @@ describe('input uniqueness and history does not resurrect', { timeout: 60_000 },
         },
       ])
       try {
-        void kernel.submitInput(1, 'will by abort when before issue', { origin: 'human' }).catch(() => {})
+        void kernel.submitInput(1, 'current question to abort', { origin: 'human' }).catch(() => {})
         await started.promise
         await waitFor(() => kernel.getConversation(1).status === 'working')
         assert.equal(kernel.getConversation(1).status, 'working')
@@ -153,10 +153,10 @@ describe('input uniqueness and history does not resurrect', { timeout: 60_000 },
         assert.equal(
           aborted.inputs.length,
           1,
-          `aborted only contains when before run input, actual:${JSON.stringify(aborted.inputs.map((i) => [i.id, i.origin]))}`,
+          `aborted payload must contain only current run input, actual: ${JSON.stringify(aborted.inputs.map((i) => [i.id, i.origin]))}`,
         )
-        assert.equal(aborted.inputs[0]!.text, 'will by abort when before issue')
-        assert.equal(aborted.inputs[0]!.origin, 'human', 'when before input origin do not by history trigger pollute')
+        assert.equal(aborted.inputs[0]!.text, 'current question to abort')
+        assert.equal(aborted.inputs[0]!.origin, 'human', 'current input origin must not be polluted by historical triggers')
       } finally {
         gate.resolve()
       }
@@ -165,7 +165,7 @@ describe('input uniqueness and history does not resurrect', { timeout: 60_000 },
     }
   })
 
-  it('history helm.input no longer each time scan re-: complete if dry round after trackedInputs reset to zero', timeout, async () => {
+  it('historical helm.input never resurrects on subsequent scans: trackedInputs returns to zero after several turns', timeout, async () => {
     const kernel = await openRuntime(join(root, 'no-resurrect'))
     try {
       kernel.__faux.setResponses([
@@ -173,22 +173,22 @@ describe('input uniqueness and history does not resurrect', { timeout: 60_000 },
         fauxAssistantMessage('answer two'),
         fauxAssistantMessage('answer three'),
       ])
-      for (const text of ['issue one', 'issue two', 'issue three']) {
+      for (const text of ['question one', 'question two', 'question three']) {
         await kernel.submitInput(1, text)
         await kernel.waitForIdle(1)
       }
       const tracker = trackerOf(kernel)
       const map = tracker.mirrors.get(1)?.trackedInputs
-      assert.equal(map?.size ?? 0, 0, 'three round complete after without history req: record leftover (does not resurrect)')
-      // slightly etc. observer snapshot push enter after again verify once (old defect in each time window scan when re- history).
+      assert.equal(map?.size ?? 0, 0, 'no historical req: leftovers remain after three completed turns')
+      // Wait briefly for any trailing observer snapshots to verify history is not resurrected.
       await sleep(30)
-      assert.equal(tracker.mirrors.get(1)?.trackedInputs.size ?? 0, 0, 'after continue snapshot does not resurrect history input')
+      assert.equal(tracker.mirrors.get(1)?.trackedInputs.size ?? 0, 0, 'subsequent snapshots must not resurrect history inputs')
     } finally {
       await kernel.close()
     }
   })
 
-  it('busy in followUp queue up: all input exactly once compute, without duplicate without lose', timeout, async () => {
+  it('followUp queued while busy: every input settles exactly once, never duplicated or dropped', timeout, async () => {
     const kernel = await openRuntime(join(root, 'followup-unique'))
     const releaseFirst = deferred()
     try {
@@ -201,24 +201,24 @@ describe('input uniqueness and history does not resurrect', { timeout: 60_000 },
           return fauxAssistantMessage([fauxToolCall('bash', { command: 'true' })], { stopReason: 'toolUse' })
         },
         fauxAssistantMessage('tool round answer'),
-        fauxAssistantMessage('queue up input answer'),
+        fauxAssistantMessage('queued input answer'),
       ])
       await kernel.submitInput(1, 'first input', { origin: 'human' })
       await firstInFlight.promise
-      // busy in followUp queue up:SDK in after continue run consume (middle continue round without input).
-      await kernel.submitInput(1, 'queue up second', { origin: 'agent', whenBusy: 'followUp' })
+      // Queued via followUp while busy: consumed by SDK in subsequent run (no inputs added mid-turn).
+      await kernel.submitInput(1, 'queued second', { origin: 'agent', whenBusy: 'followUp' })
       releaseFirst.resolve()
       await kernel.waitForIdle(1)
       assert.ok(settled.length >= 1)
-      // all compute payload aggregate: two input each exactly once, without duplicate.
+      // Across all settlement payloads: both inputs appear exactly once without duplicates.
       const allInputs = settled.flatMap((s) => s.inputs)
       const texts = allInputs.map((i) => i.text)
       const byText = new Map<string, number>()
       for (const text of texts) byText.set(text, (byText.get(text) ?? 0) + 1)
-      assert.equal(byText.get('first input'), 1, `first exactly once:${JSON.stringify([...byText])}`)
-      assert.equal(byText.get('queue up second'), 1, `queue up input exactly once:${JSON.stringify([...byText])}`)
-      // without history fabricate input (only contains real commit two).
-      assert.equal(allInputs.length, 2, `total input count exactly is commit count:${JSON.stringify(texts)}`)
+      assert.equal(byText.get('first input'), 1, `first settled exactly once: ${JSON.stringify([...byText])}`)
+      assert.equal(byText.get('queued second'), 1, `queued input settled exactly once: ${JSON.stringify([...byText])}`)
+      // Zero fabricated history inputs (only the two genuinely submitted inputs).
+      assert.equal(allInputs.length, 2, `total settled input count matches submitted count: ${JSON.stringify(texts)}`)
     } finally {
       releaseFirst.resolve()
       await kernel.close()
@@ -226,11 +226,11 @@ describe('input uniqueness and history does not resurrect', { timeout: 60_000 },
   })
 })
 
-describe('requestId duplicate commit and restart restore', { timeout: 60_000 }, () => {
-  it('the same requestId second commit (SDK by conversation dedupe): rebuild correct and trackedInputs does not repeat', timeout, async () => {
+describe('duplicate requestId submission and restart recovery', { timeout: 60_000 }, () => {
+  it('second submission with same requestId (SDK per-conversation dedup): rebuilds cleanly with zero duplicates in trackedInputs', timeout, async () => {
     const kernel = await openRuntime(join(root, 'dup-request-id'))
     try {
-      // two requestId only large small write difference (old 32-bit hash for 'Aa'/'BB' same value collision construct for).
+      // Two requestIds differing only in case (guards against legacy 32-bit hash collisions like 'Aa'/'BB').
       kernel.__faux.setResponses([fauxAssistantMessage('answer')])
       await kernel.submitInput(1, 'a')
       await kernel.waitForIdle(1)
@@ -238,24 +238,24 @@ describe('requestId duplicate commit and restart restore', { timeout: 60_000 }, 
       await kernel.submitInput(1, 'second')
       await kernel.waitForIdle(1)
       const tracker = trackerOf(kernel)
-      // compute after history leaves no residue (on one group already verify); this where verify run during key domain:
-      // commit second (run in progress) when map in the input unique and with requestId is key.
+      // History leaves zero residue after settlement (verified above); verify key domain during runs:
+      // entries in trackedInputs must remain unique and keyed by requestId strings.
       const map = tracker.mirrors.get(1)?.trackedInputs
       const keys = [...(map?.keys() ?? [])]
       for (const key of keys) {
-        assert.equal(typeof key, 'string', `append trace key must be requestId string:${String(key)}`)
+        assert.equal(typeof key, 'string', `tracking key must be requestId string: ${String(key)}`)
       }
-      // each in manual input.id unique.
+      // Every tracked input.id is unique.
       const ids = [...(map?.values() ?? [])].map((t) => t.id)
-      assert.equal(new Set(ids).size, ids.length, 'input.id without duplicate record')
+      assert.equal(new Set(ids).size, ids.length, 'input.id must have no duplicate entries')
     } finally {
       await kernel.close()
     }
   })
 
-  it('restart restore leap run:origin/meta via right threat mapping patch complete and compute do not lose', timeout, async () => {
-    // direct drive real Harness + ConversationTracker(do not via KernelRuntime:runtime.close
-    // will explicit abort in-flight conversation, cannot construct"restart when run still in-flight"scenario).
+  it('restart recovery mid-run: reconciles missing origin/meta via authoritative mapping without losing settlement', timeout, async () => {
+    // Drive real Harness + ConversationTracker directly (cannot use KernelRuntime: runtime.close
+    // explicitly aborts in-flight conversations, preventing a crash-mid-run restart setup).
     const dir = join(root, 'restart-active-run')
     const mkHarness = async () => {
       const database = await openHelmDatabase(dir)
@@ -284,7 +284,7 @@ describe('requestId duplicate commit and restart restore', { timeout: 60_000 }, 
         },
       })
 
-    // one segment: commit carries meta  agent input, generate request enter in-flight after directly closure storage(simulated crash).
+    // Phase 1: submit an agent input carrying meta, wait for generator request in-flight, then close storage abruptly (simulated crash).
     let convId = 0
     {
       const { harness, store, database, faux } = await mkHarness()
@@ -317,30 +317,30 @@ describe('requestId duplicate commit and restart restore', { timeout: 60_000 }, 
       faux.setResponses([
         async () => {
           entered.resolve()
-          // keep in-flight enough long (database close after will not immediately complete) with convenient crash before leap run still in-flight.
+          // Stay in-flight long enough that it hasn't settled before closing db (simulates crash while active run is mid-flight).
           await sleep(150)
-          return fauxAssistantMessage('after restart answer')
+          return fauxAssistantMessage('post-restart answer')
         },
       ])
       await conv.submit(
         {
           type: 'input',
-          content: 'restart before in-flight issue',
+          content: 'in-flight question before restart',
           entry: {
             kind: 'helm.input',
-            data: { id: 'restart-1', text: 'restart before in-flight issue', origin: 'agent', createdAt: 5, meta: { from: 'test', seq: 7 } },
+            data: { id: 'restart-1', text: 'in-flight question before restart', origin: 'agent', createdAt: 5, meta: { from: 'test', seq: 7 } },
           },
           requestId: 'restart-1',
         },
         BACKGROUND_CONTEXT,
       )
       await entered.promise
-      // simulated crash: do not via harness.close(its will abort in-flight run), directly assert storage
-      //(SQLite crash security, already commit  pi.live.run state).
+      // Simulated crash: close db directly without harness.close (which would abort in-flight runs)
+      // (SQLite crash-safe; pi.live.run state is already committed).
       await database.close()
     }
 
-    // second segment: heavy open (simulated restart). leap run not complete,observe must via right threat mapping patch complete input.
+    // Phase 2: reopen (simulated restart). Active run is still incomplete; observe must reconcile missing input fields from authoritative mapping.
     {
       const { harness, store, database, faux } = await mkHarness()
       harness.resume()
@@ -351,21 +351,21 @@ describe('requestId duplicate commit and restart restore', { timeout: 60_000 }, 
         const tracker = trackerOfHarness(harness, store)
         await tracker.observe(id)
         const map = (tracker as unknown as TrackerInternals).mirrors.get(id)?.trackedInputs
-        assert.ok(map !== undefined && map.size >= 1, 'restart restore leap run after input in manual')
+        assert.ok(map !== undefined && map.size >= 1, 'tracked input must exist after mid-run restart recovery')
         const tracked = [...map.values()][0]!
-        assert.equal(tracked.text, 'restart before in-flight issue')
-        assert.equal(tracked.origin, 'agent', 'after restart origin right threat patch complete')
-        assert.deepEqual(tracked.meta, { from: 'test', seq: 7 }, 'after restart meta right threat patch complete')
-        // restart restore after related index already register (markConsumed can hit, compute do not lose input).
+        assert.equal(tracked.text, 'in-flight question before restart')
+        assert.equal(tracked.origin, 'agent', 'origin should be reconciled authoritatively after restart')
+        assert.deepEqual(tracked.meta, { from: 'test', seq: 7 }, 'meta should be reconciled authoritatively after restart')
+        // submissionId->requestId index must be registered after restart recovery (so markConsumed hits without dropping inputs).
         const index = (tracker as unknown as TrackerInternals).mirrors.get(id)?.submissionIndex
-        assert.ok(index !== undefined && index.size >= 1, 'after restart submissionId->requestId index in manual')
-        // second segment heavy set response work vendor (run after restart continue run).
-        faux.setResponses([fauxAssistantMessage('restore after answer')])
+        assert.ok(index !== undefined && index.size >= 1, 'submissionId->requestId index must be registered after restart')
+        // Phase 2 sets response provider (run continues executing post-restart).
+        faux.setResponses([fauxAssistantMessage('post-recovery answer')])
         await conv.waitForIdle(BACKGROUND_CONTEXT).catch(() => {})
         await tracker.waitTurnSettled(id)
         await waitFor(() => settled.some((s) => s.conversation.id === id))
         const settledPayload = settled.find((s) => s.conversation.id === id)
-        assert.ok(settledPayload !== undefined, 'after restart run compute reach')
+        assert.ok(settledPayload !== undefined, 'post-restart run settlement arrived')
         assert.equal(settledPayload.inputs.length, 1)
         assert.equal(settledPayload.inputs[0]!.origin, 'agent')
         assert.deepEqual(settledPayload.inputs[0]!.meta, { from: 'test', seq: 7 })
@@ -377,15 +377,14 @@ describe('requestId duplicate commit and restart restore', { timeout: 60_000 }, 
     }
   })
 
-  it('idle commit i.e. when complete/failed:bind later than run start snapshot still exactly once contains input and without leftover index (SDK when order window lock)', timeout, async () => {
-    // window fact (real pi-durable 1.5.0 measured):run start commit observe advance
-    // in submit back package before sync trigger (markConsumed because index not register while skip);
-    // bindSubmission in submit continue extend micro task in first row at scheduler drain after continue commit,
-    // while generate task request phase must first separate commit `pi.live.generation={attempt}`
-    //(generation.js: model invoke and failNoModel before), the advance when run still in
-    //- - heavy scan run.inputs after markConsumed hit. failed compute another in compute snapshot heavy mark
-    // failure.inputs. if not come SDK when order change hit break the guarantee (task commit first at
-    // submit continue extend), this case i.e. red: i.e. when complete turn lose input ownership.
+  it('idle submission settling immediately on completion/failure: binds later than run start snapshot yet still includes input once with no leftover index (SDK ordering lock)', timeout, async () => {
+    // Timing fact (verified in real pi-durable 1.5.0): the run-start observer advance fires synchronously
+    // before submit resolves (so markConsumed skips because index isn't registered yet);
+    // bindSubmission runs in submit continuation microtasks ahead of the generation task committing
+    // `pi.live.generation={attempt}` in its request phase (generation.js: before model call & failNoModel),
+    // so that generation commit triggers another advance while run is still active -- re-scanning run.inputs hits markConsumed.
+    // On instant failure, settlement snapshot also checks failure.inputs. If SDK ordering ever violates this
+    // (task commits before submit continuation), this case turns red immediately instead of dropping input ownership on fast turns.
     const dir = join(root, 'instant-settle-window')
     const mkHarness = async () => {
       const database = await openHelmDatabase(dir)
@@ -445,14 +444,14 @@ describe('requestId duplicate commit and restart restore', { timeout: 60_000 }, 
         await tracker.observe(id)
         const input: ConversationInput = {
           id: `instant-${caseDir}`,
-          text: 'instantaneous turn issue',
+          text: 'instant turn question',
           origin: 'human',
           createdAt: 1,
         }
         faux.setResponses([response])
         tracker.registerInput(id, input)
-        // and ConversationInputPipeline.submitFreshInput same order:bind in submit
-        // back package continue extend in register index (to window with most poor i.e. when compute chance).
+        // Same ordering as ConversationInputPipeline.submitFreshInput: register index in submit's
+        // promise continuation (creates tightest possible race against instantaneous settlement).
         const submitted = conv.submit(
           {
             type: 'input',
@@ -468,20 +467,20 @@ describe('requestId duplicate commit and restart restore', { timeout: 60_000 }, 
         await tracker.waitTurnSettled(id)
 
         const outcomes = settled.filter((s) => s.conversation.id === id)
-        assert.equal(outcomes.length, 1, `${caseDir}: turn exactly compute once`)
+        assert.equal(outcomes.length, 1, `${caseDir}: turn settled exactly once`)
         const payload = outcomes[0]!
-        assert.ok(payload !== undefined, `${caseDir}: compute reach`)
+        assert.ok(payload !== undefined, `${caseDir}: settlement arrived`)
         assert.equal(payload.outcome, expectedOutcome)
         assert.deepEqual(
           payload.inputs.map((i) => i.id),
           [input.id],
-          `${caseDir}: i.e. when${expectedOutcome}turn exactly contains this input (without lose without duplicate)`,
+          `${caseDir}: instantaneous ${expectedOutcome} turn must include this input once (no loss, no duplication)`,
         )
-        // compute after without leftover index/leftover register (late bind must not in takeConsumed after dirty items).
+        // Zero leftover indices or tracking entries after settlement (late bind must not taint takeConsumed).
         const internals = tracker as unknown as TrackerInternals
-        assert.equal(internals.mirrors.get(id)?.trackedInputs.size ?? 0, 0, `${caseDir}: append trace record already clean`)
-        assert.equal(internals.mirrors.get(id)?.submissionIndex.size ?? 0, 0, `${caseDir}: related index already clean`)
-        assert.equal(internals.mirrors.get(id)?.consumedInputs === undefined, true, `${caseDir}: consume collection already clean`)
+        assert.equal(internals.mirrors.get(id)?.trackedInputs.size ?? 0, 0, `${caseDir}: tracking entries cleaned up`)
+        assert.equal(internals.mirrors.get(id)?.submissionIndex.size ?? 0, 0, `${caseDir}: index entries cleaned up`)
+        assert.equal(internals.mirrors.get(id)?.consumedInputs === undefined, true, `${caseDir}: consumed set cleaned up`)
       } finally {
         await harness.close(BACKGROUND_CONTEXT)
         await store.close()
@@ -489,14 +488,13 @@ describe('requestId duplicate commit and restart restore', { timeout: 60_000 }, 
       }
     }
 
-    // i.e. when complete answer (without streaming partial):run start and end commit between only isolate generate task
-    // request phase generation write commit - - correct is window most poor form.
-    await runCase('ok', fauxAssistantMessage('instantaneous answer'), 'completed')
-    // i.e. when failed (failNoModel of outside model error path: compute snapshot heavy mark failure.inputs).
+    // Instant completion (no streaming deltas): only the generator request-phase generation commit happens between run start and end -- worst-case window.
+    await runCase('ok', fauxAssistantMessage('instant answer'), 'completed')
+    // Instant failure (like failNoModel on external model error paths: settled snapshot also checks failure.inputs).
     await runCase('fail', fauxAssistantMessage('x', { errorMessage: 'boom', stopReason: 'error' }), 'failed')
   })
 
-  it('stopObserving after in-flight async adoptInitial do not to maps re- item', timeout, async () => {
+  it('in-flight async adoptInitial never repopulates maps after stopObserving', timeout, async () => {
     const kernel = await openRuntime(join(root, 'stop-no-ghost'))
     const gate = deferred()
     try {
@@ -509,18 +507,18 @@ describe('requestId duplicate commit and restart restore', { timeout: 60_000 }, 
           return fauxAssistantMessage('unused')
         },
       ])
-      void kernel.submitInput(1, 'stop observe before in-flight issue').catch(() => {})
+      void kernel.submitInput(1, 'in-flight question before stopObserving').catch(() => {})
       await started.promise
       await waitFor(() => kernel.getConversation(1).status === 'working')
       assert.equal(kernel.getConversation(1).status, 'working')
-      // delete conversation (internal stopObserving): token delete, in-flight back read act abandon.
+      // Delete conversation (calls stopObserving internally): rotates token so in-flight reads discard results.
       const conv = await kernel.createConversation({})
       await kernel.deleteConversation(conv.id)
       const tracker = trackerOf(kernel)
       assert.equal(tracker.mirrors.has(conv.id), false)
       assert.equal(tracker.mirrors.get(conv.id)?.runFirstEntry === undefined, true)
       assert.equal(tracker.mirrors.has(conv.id), false)
-      // abort must not replace still in observe root conversation token.
+      // Abort must not replace observe token of conversation 1 while still observed.
       const genBefore = tracker.mirrors.get(1)?.observeGeneration
       await kernel.abortConversation(1)
       await kernel.waitForIdle(1).catch(() => {})
@@ -532,8 +530,8 @@ describe('requestId duplicate commit and restart restore', { timeout: 60_000 }, 
   })
 })
 
-describe('settledRuns capacity eliminate and stopObserving clean up', { timeout: 60_000 }, () => {
-  it('stop observe after late to compute failed does not resurrect counter, error or observe token', timeout, async () => {
+describe('settledRuns capacity eviction and stopObserving cleanup', { timeout: 60_000 }, () => {
+  it('late settlement failure after stopObserving does not resurrect counters, errors, or observe tokens', timeout, async () => {
     const kernel = await openRuntime(join(root, 'late-settlement'))
     try {
       const conv = await kernel.createConversation({})
@@ -565,7 +563,7 @@ describe('settledRuns capacity eliminate and stopObserving clean up', { timeout:
     }
   })
 
-  it('single conversation settledRunOrder exceeds 64  runKey when eliminate most old key (settledRuns sync shrink)', timeout, async () => {
+  it('evicts oldest runKeys synchronously from settledRuns when single-conversation settledRunOrder exceeds 64', timeout, async () => {
     const kernel = await openRuntime(join(root, 'cap-1'))
     try {
       const tracker = trackerOf(kernel)
@@ -578,14 +576,14 @@ describe('settledRuns capacity eliminate and stopObserving clean up', { timeout:
       }
       const order = tracker.mirrors.get(conv.id)?.settledRunOrder
       assert.ok(order !== undefined)
-      assert.equal(order.length, 64, 'capacity cap 64')
-      assert.equal(order[0], `${conv.id}:7`, 'most old key (taskId=1..6) by eliminate')
-      assert.equal(order[order.length - 1], `${conv.id}:70`, 'most new key keep')
+      assert.equal(order.length, 64, 'capacity capped at 64')
+      assert.equal(order[0], `${conv.id}:7`, 'oldest keys (taskId=1..6) were evicted')
+      assert.equal(order[order.length - 1], `${conv.id}:70`, 'newest key preserved')
       for (let taskId = 1; taskId <= 6; taskId += 1) {
         assert.equal(
           tracker.settledRuns.has(`${conv.id}:${taskId}`),
           false,
-          `by eliminate key ${taskId} do not in settledRuns`,
+          `evicted key ${taskId} must not remain in settledRuns`,
         )
       }
       assert.equal(tracker.settledRuns.has(`${conv.id}:7`), true)
@@ -595,18 +593,18 @@ describe('settledRuns capacity eliminate and stopObserving clean up', { timeout:
     }
   })
 
-  it('deleteConversation(stopObserving) completely clean up the conversation all memory mirror', timeout, async () => {
+  it('deleteConversation (stopObserving) cleans up all in-memory mirror state for the conversation', timeout, async () => {
     const kernel = await openRuntime(join(root, 'stop-1'))
     try {
       const tracker = trackerOf(kernel)
       const conv = await kernel.createConversation({})
       kernel.__faux.setResponses([fauxAssistantMessage('answer text')])
-      await kernel.submitInput(conv.id, 'issue')
+      await kernel.submitInput(conv.id, 'question')
       await kernel.waitForIdle(conv.id)
-      assert.ok(tracker.settledRuns.size >= 1, 'turn compute after settledRuns should has item')
+      assert.ok(tracker.settledRuns.size >= 1, 'settledRuns should contain entry after turn completes')
       assert.ok(tracker.mirrors.get(conv.id)?.lastSettledRun !== undefined)
       await kernel.deleteConversation(conv.id)
-      assert.equal(tracker.settledRuns.size, 0, 'the conversation settledRuns prefix key all clean up')
+      assert.equal(tracker.settledRuns.size, 0, 'all settledRuns keys for conversation prefix cleaned up')
       assert.equal(tracker.mirrors.has(conv.id), false)
       assert.equal(tracker.mirrors.has(conv.id), false)
       assert.equal(tracker.mirrors.has(conv.id), false)
@@ -620,7 +618,7 @@ describe('settledRuns capacity eliminate and stopObserving clean up', { timeout:
     }
   })
 
-  it('reverse re- create delete 50 conversation after tracker internal each Map leaves no residue any key', timeout, async () => {
+  it('creating and deleting 50 conversations repeatedly leaves zero residual keys across tracker Maps', timeout, async () => {
     const kernel = await openRuntime(join(root, 'stop-50'))
     try {
       const tracker = trackerOf(kernel)
@@ -633,12 +631,12 @@ describe('settledRuns capacity eliminate and stopObserving clean up', { timeout:
         await kernel.deleteConversation(conv.id)
       }
       assert.equal(tracker.settledRuns.size, 0)
-      // all by conversation Map already aggregate is mirrors: only remain still in observe conversation 1, without any leftover key.
+      // All per-conversation Maps are consolidated in mirrors: only observed conversation 1 remains with zero leakage.
       assert.equal(tracker.mirrors.size, 1)
       assert.deepEqual(
         [...tracker.mirrors.keys()],
         [1],
-        'only conversation 1 still in observe, the rest 50 already delete conversation mirror all reclaim',
+        'only conversation 1 remains observed; all 50 deleted conversation mirrors reclaimed',
       )
     } finally {
       await kernel.close()

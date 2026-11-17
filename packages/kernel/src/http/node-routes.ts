@@ -1,6 +1,6 @@
 /**
- * node domain routing:/api/nodes(manifest/sign/remove/upgrade/port forwarding) and
- * POST /api/env/exec(across node command execute,NDJSON streaming or JSON once).
+ * Node domain routes: /api/nodes (list/issue/remove/upgrade/port-forwarding) and
+ * POST /api/env/exec (cross-node command execution, NDJSON streaming or single JSON response).
  */
 import { HelmError, isStrictSemver, stripSemverVPrefix } from '@helm/protocol'
 import type { EnvExecStreamFrame, JsonSchema } from '@helm/protocol'
@@ -31,9 +31,9 @@ export async function handleNodeDomain(
     const body = await readJsonBody(ctx.request)
     assertBodySchema(NODE_ISSUE_BODY_SCHEMA, body, 'nodes issue body')
     const issued = await kernel.issueNodeToken(body.nodeId as string)
-    // plaintext token only this time response once return (this after any JSON output all cannot again see plaintext:
-    // token already out station redaction register). this where cannot via unify redactor(will token swap into
-    // [REDACTED]): manually write response body, only through out contract field.
+    // Plaintext token is returned once in this response (afterward no JSON output ever exposes
+    // it again because the token is registered for outbound redaction). Bypass the standard redactor here
+    // and serialize only the contract fields manually so it isn't masked as [REDACTED].
     return new Response(
       JSON.stringify({ nodeId: issued.nodeId, token: issued.token, createdAt: issued.createdAt }),
       {
@@ -47,29 +47,29 @@ export async function handleNodeDomain(
     await kernel.removeNode(nodeId)
     return jsonOk(redactor, { ok: true })
   }
-  // ---- node upgrade:GET /:id/upgrade/check,POST /:id/upgrade -----------------
+  // ---- Node upgrade: GET /:id/upgrade/check, POST /:id/upgrade -----------------
   if (second !== undefined && third === 'upgrade') {
     const nodeId = requireNodeSegment(second)
     if (fourth === 'check' && method === 'GET') {
-      if (fifth !== undefined) return errorResponse(redactor, 404, 'not_found', 'routing missing')
+      if (fifth !== undefined) return errorResponse(redactor, 404, 'not_found', 'route not found')
       if (kernel.checkNodeUpgrade === undefined) {
-        throw new HelmError('not_implemented', 'when before runtime not provide node upgrade check', 501)
+        throw new HelmError('not_implemented', 'current runtime does not support node upgrade check', 501)
       }
       return jsonOk(redactor, await kernel.checkNodeUpgrade(nodeId, parseNodeUpgradeCheckQuery(ctx.url)))
     }
     if (fourth === undefined && method === 'POST') {
       if (kernel.upgradeNode === undefined) {
-        throw new HelmError('not_implemented', 'when before runtime not provide node upgrade', 501)
+        throw new HelmError('not_implemented', 'current runtime does not support node upgrade', 501)
       }
       const body = await parseOptionalJsonObjectBody(ctx.request, parseNodeUpgradeBody)
       return jsonOk(redactor, await kernel.upgradeNode(nodeId, body))
     }
-    return errorResponse(redactor, 404, 'not_found', 'routing missing')
+    return errorResponse(redactor, 404, 'not_found', 'route not found')
   }
-  // ---- foreground port forwarding:POST /:id/forward,forward manifest/detail situation/event/stop ----------
+  // ---- Foreground port forwarding: POST /:id/forward, forward list/detail/events/stop ----------
   if (second !== undefined && third === 'forward' && fourth === undefined && method === 'POST') {
     if (kernel.startNodeForward === undefined) {
-      throw new HelmError('not_implemented', 'when before runtime not provide node port forwarding', 501)
+      throw new HelmError('not_implemented', 'current runtime does not support node port forwarding', 501)
     }
     const nodeId = requireNodeSegment(second)
     const body = await parseOptionalJsonObjectBody(ctx.request, parseNodeForwardBody)
@@ -78,10 +78,10 @@ export async function handleNodeDomain(
   if (second === 'forward') {
     return handleForwardSubtree(ctx, kernel, redactor)
   }
-  return errorResponse(redactor, 404, 'not_found', 'routing missing')
+  return errorResponse(redactor, 404, 'not_found', 'route not found')
 }
 
-/** GET /api/nodes/forward manifest / :id detail situation / :id/events event stream / DELETE :id stop. */
+/** GET /api/nodes/forward list / :id detail / :id/events stream / DELETE :id stop. */
 async function handleForwardSubtree(
   ctx: RouteContext,
   kernel: KernelRuntimeLike,
@@ -91,41 +91,41 @@ async function handleForwardSubtree(
   const third = segments[2]
   const fourth = segments[3]
   const fifth = segments[4]
-  // GET /api/nodes/forward: activity forwarding manifest.
+  // GET /api/nodes/forward: active forwarding sessions.
   if (third === undefined && method === 'GET') {
     if (kernel.listNodeForwards === undefined) {
-      throw new HelmError('not_implemented', 'when before runtime not provide node port forwarding', 501)
+      throw new HelmError('not_implemented', 'current runtime does not support node port forwarding', 501)
     }
     return jsonOk(redactor, kernel.listNodeForwards())
   }
   const forwardId = third
   if (forwardId !== undefined && fourth === undefined && method === 'GET') {
     if (kernel.getNodeForward === undefined) {
-      throw new HelmError('not_implemented', 'when before runtime not provide node port forwarding', 501)
+      throw new HelmError('not_implemented', 'current runtime does not support node port forwarding', 501)
     }
     const session = kernel.getNodeForward(requireForwardSegment(forwardId))
     if (session === undefined) {
-      return errorResponse(redactor, 404, 'not_found', 'forwarding missing or already stop')
+      return errorResponse(redactor, 404, 'not_found', 'forwarding session not found or already stopped')
     }
     return jsonOk(redactor, session)
   }
-  // GET /api/nodes/forward/:id/events:NDJSON event stream (monitor; disconnect do not automatically stop).
+  // GET /api/nodes/forward/:id/events: NDJSON event stream (monitoring only; disconnect does not auto-stop).
   if (forwardId !== undefined && fourth === 'events' && fifth === undefined && method === 'GET') {
     return getNodeForwardEvents(ctx, kernel, requireForwardSegment(forwardId))
   }
-  // DELETE /api/nodes/forward/:id: stop forwarding (close Hub side listener and all tunnel).
+  // DELETE /api/nodes/forward/:id: stop forwarding (closes Hub listener and all tunnels).
   if (forwardId !== undefined && fourth === undefined && method === 'DELETE') {
     if (kernel.stopNodeForward === undefined) {
-      throw new HelmError('not_implemented', 'when before runtime not provide node port forwarding', 501)
+      throw new HelmError('not_implemented', 'current runtime does not support node port forwarding', 501)
     }
-    // idempotent semantics by 404 express: already missing forwarding stop when report 404(do not damage second exit).
+    // Idempotency expressed via 404: stopping an absent forward returns 404 (prevents duplicate exit errors).
     if (kernel.getNodeForward !== undefined && kernel.getNodeForward(requireForwardSegment(forwardId)) === undefined) {
-      return errorResponse(redactor, 404, 'not_found', 'forwarding missing or already stop')
+      return errorResponse(redactor, 404, 'not_found', 'forwarding session not found or already stopped')
     }
     await kernel.stopNodeForward(requireForwardSegment(forwardId))
     return jsonOk(redactor, { ok: true })
   }
-  return errorResponse(redactor, 404, 'not_found', 'routing missing')
+  return errorResponse(redactor, 404, 'not_found', 'route not found')
 }
 
 // ---------------------------------------------------------------------------
@@ -139,7 +139,8 @@ const NODE_ISSUE_BODY_SCHEMA: JsonSchema = {
   additionalProperties: false,
 }
 
-// version also must strictly SemVer validate (pure ASCII, length opening path consistent),registryUrl must can parse and contains host name.
+// targetVersion also requires strict SemVer validation (pure ASCII, consistent length bounds);
+// registryUrl must be parseable and include a hostname.
 const NODE_UPGRADE_BODY_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
@@ -150,7 +151,7 @@ const NODE_UPGRADE_BODY_SCHEMA: JsonSchema = {
   additionalProperties: false,
 }
 
-// host name forbid whitespace and control character,UTF-16 length cap in parse when verify.
+// Hostnames forbid whitespace and control chars; UTF-16 length cap is verified during parsing.
 const HOST_FIELD = { type: 'string', minLength: 1, pattern: '^[^\\s\\x00-\\x1f\\x7f]+$' } as const
 
 const NODE_FORWARD_BODY_SCHEMA: JsonSchema = {
@@ -170,13 +171,13 @@ const ENV_EXEC_BODY_SCHEMA: JsonSchema = {
   properties: {
     command: {
       anyOf: [
-        // string command must contains at least a non-empty blank character (= trim after non-empty); array must non-empty and one by one items string.
+        // String command must contain at least one non-whitespace char; array must be non-empty string[].
         { type: 'string', pattern: '\\S' },
         { type: 'array', items: { type: 'string' }, minItems: 1 },
       ],
     },
     nodeId: { type: 'string', pattern: NODE_ID_PATTERN_SOURCE },
-    // cwd across platform absolute (POSIX/symbol/UNC) is semantics rule,handler inside manually write validate.
+    // Cross-platform cwd absoluteness (POSIX/drive/UNC) is a semantic rule validated explicitly in the handler.
     cwd: { type: 'string' },
     conversationId: { type: 'integer', minimum: 1 },
     env: {
@@ -191,59 +192,59 @@ const ENV_EXEC_BODY_SCHEMA: JsonSchema = {
   additionalProperties: false,
 }
 
-/** node ID path segment: character parent number open head, can contains . _ -(and issue validate the same rule). */
+/** Node ID path segment: starts with ASCII alphanumeric, may contain . _ - (matches issue validation). */
 function requireNodeSegment(raw: string): string {
   const decoded = decodeSegment(raw)
   if (!new RegExp(`^${NODE_ID_PATTERN_SOURCE}$`).test(decoded)) {
-    throw new ValidationError('nodeId must match /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/(character parent number open head, can contains . _ -)')
+    throw new ValidationError('nodeId must match /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/ (starts with an alphanumeric character, may contain . _ -)')
   }
   return decoded
 }
 
-/** http(s) URL validate: protocol limit set + can parse + contains hostname. */
+/** Validate http(s) URL: restricted scheme, parseable, non-empty hostname. */
 function requireHttpUrl(raw: unknown, field: string): string {
-  if (typeof raw !== 'string') throw new ValidationError(`${field} must be http(s) URL string`)
+  if (typeof raw !== 'string') throw new ValidationError(`${field} must be an http(s) URL string`)
   let parsed: URL
   try {
     parsed = new URL(raw)
   } catch {
-    throw new ValidationError(`${field} must be legal http(s) URL`)
+    throw new ValidationError(`${field} must be a valid http(s) URL`)
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new ValidationError(`${field} must be http(s) URL`)
+    throw new ValidationError(`${field} must be an http(s) URL`)
   }
   if (parsed.hostname === '' || /^\s+$/.test(parsed.hostname)) {
-    throw new ValidationError(`${field} must contains host name`)
+    throw new ValidationError(`${field} must contain a hostname`)
   }
   return raw
 }
 
-/** boundary validate target version:trim after allows single v/V prefix, remaining under must strictly SemVer(parse/decide unique implement:@helm/protocol/semver). */
+/** Boundary validation for targetVersion: optional single v/V prefix after trim, remainder must be strict SemVer (single implementation in @helm/protocol/semver). */
 function requireVersionField(raw: string): string {
   const bare = stripSemverVPrefix(raw)
   if (!isStrictSemver(bare)) {
-    throw new ValidationError('targetVersion must be strictly SemVer(can carries single v prefix, such as 1.2.3 / v1.2.3)')
+    throw new ValidationError('targetVersion must be strict SemVer (optional single v prefix, e.g. 1.2.3 or v1.2.3)')
   }
   return raw
 }
 
-/** GET /api/nodes/:id/upgrade/check query parameter: only registryUrl. */
+/** GET /api/nodes/:id/upgrade/check query params: only registryUrl. */
 function parseNodeUpgradeCheckQuery(url: URL): { registryUrl?: string } {
   const raw = url.searchParams.get('registryUrl')
   return raw === null ? {} : { registryUrl: requireHttpUrl(raw, 'registryUrl') }
 }
 
 /**
- * POST /api/nodes/:id/upgrade body: optional targetVersion / registryUrl / force,
- * strictly refuse unknown field (attemptId belong server side internal, never accept user control);
- * explicit null and default different - - enter field validate and 400, do not when default static default ignore.
+ * POST /api/nodes/:id/upgrade body: optional targetVersion / registryUrl / force;
+ * strictly rejects unknown fields (`attemptId` is server-internal and never caller-controlled);
+ * explicit `null` differs from omitted—validated and rejected with 400 rather than silently ignored.
  */
 function parseNodeUpgradeBody(body: Record<string, unknown>): { targetVersion?: string; registryUrl?: string; force?: boolean } {
   assertBodySchema(NODE_UPGRADE_BODY_SCHEMA, body, 'node upgrade body')
   const out: { targetVersion?: string; registryUrl?: string; force?: boolean } = {}
   if (body.targetVersion !== undefined) {
     const target = body.targetVersion as string
-    if (target.trim() === '') throw new ValidationError('targetVersion must be non-empty version (empty means upgrade to latest)')
+    if (target.trim() === '') throw new ValidationError('targetVersion must be a non-empty version (omit to upgrade to latest)')
     out.targetVersion = requireVersionField(target)
   }
   if (body.registryUrl !== undefined) {
@@ -255,9 +256,11 @@ function parseNodeUpgradeBody(body: Record<string, unknown>): { targetVersion?: 
   return out
 }
 
-/** POST /api/nodes/:id/forward body:listenHost/listenPort/targetPort required,
- * targetHost optional; shape (contains host name without whitespace/control character) already by schema guarantee,
- * length cap (UTF-16 code meta ≤ 255) by guard keep original manually write opening path. */
+/**
+ * POST /api/nodes/:id/forward body: listenHost/listenPort/targetPort required,
+ * targetHost optional; shape (hostname without whitespace/control chars) is enforced by schema,
+ * and UTF-16 length cap (<= 255 code units) is kept hand-written to match existing rules.
+ */
 function parseNodeForwardBody(
   body: Record<string, unknown>,
 ): { listenHost: string; listenPort: number; targetHost?: string; targetPort: number } {
@@ -274,9 +277,9 @@ function parseNodeForwardBody(
 
 /**
  * POST /api/env/exec:
- * - stream=true:application/x-ndjson streaming; each row {"type":"output","stream":...,"text":...}
- *   (text via StreamingRedactor across chunk redaction), end row {"type":"exit",...};
- * - otherwise JSON once return EnvExecResponse(all text aggregate after unify redaction).
+ * - stream=true: application/x-ndjson stream; each line is `{"type":"output","stream":...,"text":...}`
+ *   (text redacted across chunks via StreamingRedactor), followed by `{"type":"exit",...}`;
+ * - otherwise returns JSON EnvExecResponse once (all text redacted after aggregation).
  */
 export async function handleEnvExecDomain(
   ctx: RouteContext,
@@ -284,15 +287,15 @@ export async function handleEnvExecDomain(
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   if (ctx.segments[1] !== 'exec' || ctx.method !== 'POST' || ctx.segments[2] !== undefined) {
-    return errorResponse(redactor, 404, 'not_found', 'routing missing')
+    return errorResponse(redactor, 404, 'not_found', 'route not found')
   }
   const body = await readJsonBody(ctx.request)
   assertBodySchema(ENV_EXEC_BODY_SCHEMA, body, 'env exec body')
-  // cwd absolute by target shape decide:POSIX / and Windows symbol absolute/UNC all legal;
-  // symbol each other for (C:relative) and relative path reject (and CLI string cwd the same rule).
+  // Cross-platform cwd absoluteness: POSIX / and Windows drive-absolute/UNC are valid;
+  // drive-relative (e.g. C:relative) and relative paths are rejected (matches CLI string cwd rules).
   if (body.cwd !== undefined && !isAbsoluteTargetPath(body.cwd as string)) {
     throw new ValidationError(
-      'cwd must be absolute path (POSIX / open head or Windows symbol/UNC; reject symbol each other for and relative path)',
+      'cwd must be an absolute path (POSIX /..., Windows drive, or UNC; drive-relative and relative paths are rejected)',
     )
   }
   const request = {
@@ -308,11 +311,11 @@ export async function handleEnvExecDomain(
     kernel.stash !== undefined ? kernel.stash.redact(text) : text
 
   if (body.stream === true) {
-    // streaming:StreamingRedactor keep tail part guard against across chunk split leak leak; end flush.
-    // frame protocol and @helm/protocol EnvExecStreamFrame align (eventually collection into unify type reference):
-    // - one by one chunk {type:'output',stream,text}(text via across chunk redaction);
-    // - succeeded final frame {type:'exit',ok,exitCode,timedOut}(must in tail part redaction flush after);
-    // - in route exception {type:'error',error:{code,message,details?}}(never fabricate exit).
+    // Streaming: StreamingRedactor retains tail buffer to prevent secrets split across chunk boundaries from leaking; flushed on finish.
+    // Frame protocol aligns with @helm/protocol EnvExecStreamFrame:
+    // - per chunk `{ type: 'output', stream, text }` (redacted across chunks);
+    // - final frame on completion `{ type: 'exit', ok, exitCode, timedOut }` (must follow tail flush);
+    // - mid-stream error `{ type: 'error', error: { code, message, details? } }` (never fabricate exit).
     const encoder = new TextEncoder()
     let buffered = ''
     const streamRedactor = kernel.stash?.createStreamingRedactor?.() ?? {
@@ -321,7 +324,7 @@ export async function handleEnvExecDomain(
     }
     const streamAbort = new AbortController()
     const executionSignal = AbortSignal.any([ctx.request.signal, streamAbort.signal])
-    // naming readableStream: avoid obscure outside layer request body in stream flag.
+    // Named `readableStream` to avoid shadowing the outer `stream` boolean flag in request body.
     const readableStream = new ReadableStream<Uint8Array>({
       start(controller) {
         void (async () => {
@@ -337,7 +340,7 @@ export async function handleEnvExecDomain(
             const safe = streamRedactor.push(chunk.text)
             if (safe !== '') write({ type: 'output', stream: chunk.stream, text: safe })
           }, executionSignal)
-          // final frame must in tail part flush after: concatenate after NDJSON text still without stash/token.
+          // Final frame must come after flushing tail buffer so no stash/token survives concatenation.
           const tail = streamRedactor.flush()
           if (tail !== '') {
             write({ type: 'output', stream: 'stdout' as const, text: tail })
@@ -349,7 +352,7 @@ export async function handleEnvExecDomain(
             timedOut: result.timedOut,
           })
         } catch (error) {
-          // in route exception:error frame such as carry error code and message (via redaction), do not fabricate exit.
+          // Mid-stream exception: emit redacted error frame without fabricating an exit frame.
           if (error instanceof HelmError) {
             write({
               type: 'error',
@@ -367,7 +370,7 @@ export async function handleEnvExecDomain(
           try {
             controller.close()
           } catch {
-            /* already closure */
+            /* already closed */
           }
         }
         })()
@@ -385,51 +388,53 @@ export async function handleEnvExecDomain(
 }
 
 // ---------------------------------------------------------------------------
-// node foreground port forwarding event stream
+// Node foreground port-forwarding event stream
 // ---------------------------------------------------------------------------
 
-/** forwardId path segment:fwd-<uuid>. */
+/** forwardId path segment: `fwd-<uuid>`. */
 function requireForwardSegment(raw: string): string {
   const decoded = decodeSegment(raw)
   if (!/^fwd-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(decoded)) {
-    throw new ValidationError('forwardId must be fwd-<uuid> form')
+    throw new ValidationError('forwardId must be in fwd-<uuid> format')
   }
   return decoded
 }
 
-/** GET /api/nodes/forward/:id/events:NDJSON event stream. event stream i.e. foreground lease holder:
- * establish (start) i.e. acquire, disconnect/cancel (abort/cancel) i.e. release- - finally a
- * holder leave i.e. stop forwarding (Hub leaves no residue listener);stop terminal state stopped frame after normal
- * close stream (monitor do not pending); subscribe when forwarding already stop then first back put stopped frame again end. */
+/**
+ * GET /api/nodes/forward/:id/events: NDJSON event stream, which itself holds a foreground lease:
+ * acquired on start, released on abort/cancel—so forwarding stops when the last holder leaves (Hub
+ * leaves no orphaned listeners). Emits a terminal `stopped` frame then closes cleanly (no hanging monitors);
+ * if already stopped at subscribe time, emits `stopped` and closes immediately.
+ */
 async function getNodeForwardEvents(
   ctx: RouteContext,
   kernel: KernelRuntimeLike,
   forwardId: string,
 ): Promise<Response> {
-  // aborted preflight (compare events.ts two where SSE same style): client may in authentication await
-  //(verifyToken) during disconnected - - for already aborted  signal register abort listen forever do not
-  // trigger, after continue finish do not execute, lease forever do not release. this function body inside without await, entry
-  // preflight after to ReadableStream construct (start sync execute) between without hand over wrong window; this where
-  // not acquire any asset, directly reject i.e. can, no need to clean up.
+  // Abort preflight (mirrors SSE streams in events.ts): the client may have disconnected while awaiting
+  // auth (verifyToken)—adding an abort listener to an already-aborted signal never fires, so `finish`
+  // would never run and the lease would leak. This body has no awaits, so there is no interleaving window
+  // between this preflight and ReadableStream construction (`start` runs synchronously); no resources are
+  // acquired yet, so returning immediately requires no cleanup.
   if (ctx.request.signal.aborted) {
-    return errorResponse(undefined, 409, 'client_disconnected', 'client disconnected, do not establish forwarding monitor stream')
+    return errorResponse(undefined, 409, 'client_disconnected', 'client disconnected; refusing to open forwarding monitor stream')
   }
   if (kernel.getNodeForward === undefined || kernel.onNodeForwardEvent === undefined) {
-    throw new HelmError('not_implemented', 'when before runtime not provide node port forwarding', 501)
+    throw new HelmError('not_implemented', 'current runtime does not support node port forwarding', 501)
   }
   const session = kernel.getNodeForward(forwardId)
   if (session === undefined) {
-    return errorResponse(undefined, 404, 'not_found', 'forwarding missing or already stop')
+    return errorResponse(undefined, 404, 'not_found', 'forwarding session not found or already stopped')
   }
   const encoder = new TextEncoder()
-  // start/cancel sharing release reference (cancel take fewer than start closed package, via this bridge;
-  // each stream instance independent, without concurrency string disturb).
+  // Shared teardown bridge between start and cancel (cancel cannot see variables closed over inside start;
+  // each stream instance is independent so there is no concurrency interference).
   const teardown = { run: (): void => undefined }
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      // finished single one semantics: clean up completed (idempotent terminal state).send failed no longer only placement
-      // flag - - that will let finish short route guard skip clean up, lease/subscribe/terminate notify all
-      // leftover; failed must directly away complete finish clean up path.
+      // Single idempotent `finished` terminal flag: failed sends must NOT merely set a flag
+      // (which would make `finish` short-circuit and leak the lease/subscriptions/stop hooks);
+      // failures must always run the full `finish` cleanup path.
       let finished = false
       let releaseLease: (() => void) | undefined
       let offEvents: (() => void) | undefined
@@ -439,7 +444,7 @@ async function getNodeForwardEvents(
         try {
           controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`))
         } catch {
-          // enqueue failed (stream already by downstream errored): etc. price disconnect, away complete clean up.
+          // Enqueue failed (downstream closed/errored): equivalent to disconnect, run full cleanup.
           finish()
         }
       }
@@ -451,12 +456,12 @@ async function getNodeForwardEvents(
         offEvents?.()
         offEvents = undefined
         for (const stop of offStops.splice(0)) stop()
-        try { controller.close() } catch { /* already close */ }
+        try { controller.close() } catch { /* already closed */ }
       }
       teardown.run = finish
-      // first register terminate notify (contains already stop race: immediately micro task call back), again bind set lease/back put first frame/
-      // subscribe event - - order guarantee stop and subscribe hand over wrong when want particle receives stopped frame, want particle terminate
-      // call back wrap-up, two path all will release lease.
+      // Register stop listener first (handles already-stopped race via immediate microtask callback), then
+      // bind lease / emit initial frame / subscribe—guarantees either the `stopped` frame or stop callback
+      // closes the stream on race, and both paths release the lease.
       if (kernel.onNodeForwardStopped !== undefined) {
         offStops.push(kernel.onNodeForwardStopped(forwardId, () => finish()))
       }
@@ -468,7 +473,7 @@ async function getNodeForwardEvents(
       ctx.request.signal.addEventListener('abort', finish, { once: true })
     },
     cancel() {
-      // client actively cancel (body.cancel()): same release lease (finally one holder i.e. stop).
+      // Client cancelled stream (`body.cancel()`): release lease too (stops forwarding once last holder leaves).
       teardown.run()
     },
   })

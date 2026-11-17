@@ -1,16 +1,16 @@
 /**
- * timeline and real-time view real link test.
+ * Real-pipeline tests for conversation timelines and live views.
  *
- * three layer each use real boundary (do not write mirror implement test):
- * 1. pure function layer:toConversationEntry / deriveConversationLive contract
- *    (id rotate string,model keep,JSON available validate reject non- JSON, not silently truncate).
- * 2. EventHub layer:conversation.entry / conversation.live / plugin.doc.updated /
- *    workflow.updated four core type direct pass and complete message seal double shape, illegal payload explicit
- *    throws, redaction keep;snapshot required ui/pluginDocs.
- * 3. real SDK layer:faux provider drive ConversationTracker - - observe initial history
- *    do not heavy entry, new written to the database entry each id exactly once,live node stream (75ms window) and terminal state
- *    conflict refresh,stopObserving after without ghost event,meta from entry.data rebuild throughout through back
- *    turn_settled payload,getProbeFacts based on real activity change.
+ * Each layer uses its real boundary (never mirror-implementation mocks):
+ * 1. Pure function layer: toConversationEntry / deriveConversationLive contracts
+ *    (stringified id, preserved model, JSON validation rejects non-JSON explicitly without silent truncation);
+ * 2. EventHub layer: conversation.entry / conversation.live / plugin.doc.updated / workflow.updated
+ *    shorthand and full-envelope forms, explicit throws on invalid payloads, redaction preservation,
+ *    and required ui/pluginDocs fields on snapshot;
+ * 3. Real SDK layer: faux provider driving ConversationTracker -- initial observe does not duplicate history,
+ *    new DB entries fire once per id in order, live throttling (75ms window) and terminal flush,
+ *    no ghost events after stopObserving, meta preserved from entry.data into turn_settled payload,
+ *    and getProbeFacts reflects real activity changes.
  */
 import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
@@ -29,7 +29,7 @@ import { HelmStore, summaryOf, type ConvMeta } from '../src/runtime/store.js'
 import { cleanupDir, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 
 // ---------------------------------------------------------------------------
-// tool
+// Helpers
 // ---------------------------------------------------------------------------
 
 function convMeta(id: number): ConvMeta {
@@ -51,7 +51,7 @@ function convMeta(id: number): ConvMeta {
   }
 }
 
-/** test use tracker event collect. */
+/** Test collector for ConversationTracker events. */
 interface Collector {
   entries: Array<{ conversationId: number; entry: ConversationEntry }>
   lives: ConversationLive[]
@@ -72,11 +72,11 @@ function eventsOf(c: Collector): TrackerEvents {
 }
 
 // ---------------------------------------------------------------------------
-// 1. pure function:toConversationEntry
+// 1. Pure function: toConversationEntry
 // ---------------------------------------------------------------------------
 
 describe('toConversationEntry', { timeout: 60_000 }, () => {
-  it('id rotate string,kind/data/model keep (model is assistant text carrier)', () => {
+  it('stringifies id and preserves kind/data/model (model carries assistant text)', () => {
     const entry = toConversationEntry({
       id: 42,
       kind: 'pi.assistant',
@@ -89,14 +89,14 @@ describe('toConversationEntry', { timeout: 60_000 }, () => {
     assert.deepEqual(entry.model, [{ role: 'assistant', content: [{ type: 'text', text: '你好' }] }])
   })
 
-  it('data original keep;id is string when do not change shape', () => {
+  it('preserves data verbatim and keeps string id unchanged', () => {
     const entry = toConversationEntry({ id: '7', kind: 'helm.input', data: { origin: 'human' } })
     assert.equal(entry.id, '7')
     assert.deepEqual(entry.data, { origin: 'human' })
     assert.equal(entry.model, undefined)
   })
 
-  it('non- JSON value explicit throw HelmError:Date/Map/loop/undefined field all not silently convert', () => {
+  it('throws HelmError explicitly for non-JSON values (Date/Map/cyclic/undefined field) without silent conversion', () => {
     assert.throws(
       () => toConversationEntry({ id: 1, kind: 'x', data: { at: new Date(0) } }),
       (e: unknown) => e instanceof HelmError && e.code === 'invalid_json_value',
@@ -117,25 +117,25 @@ describe('toConversationEntry', { timeout: 60_000 }, () => {
     )
   })
 
-  it('illegal id/kind explicit throws (do not fabricate)', () => {
+  it('throws explicitly on invalid id/kind without fabricating defaults', () => {
     assert.throws(() => toConversationEntry({ id: null, kind: 'x' } as never), HelmError)
     assert.throws(() => toConversationEntry({ id: 1, kind: 3 } as never), HelmError)
   })
 })
 
 // ---------------------------------------------------------------------------
-// 2. pure function:deriveConversationLive
+// 2. Pure function: deriveConversationLive
 // ---------------------------------------------------------------------------
 
 describe('deriveConversationLive', { timeout: 60_000 }, () => {
-  it('text is generation.message in text chunk cumulative snapshot (many chunk by order concatenate)', () => {
+  it('concatenates cumulative text blocks in order from generation.message', () => {
     const live = deriveConversationLive(
       5,
       {
         generation: {
           message: {
             content: [
-              { type: 'thinking', thinking: 'push' },
+              { type: 'thinking', thinking: 'reasoning' },
               { type: 'text', text: 'alpha' },
               { type: 'text', text: 'beta' },
             ],
@@ -146,12 +146,12 @@ describe('deriveConversationLive', { timeout: 60_000 }, () => {
     )
     assert.equal(live.conversationId, 5)
     assert.equal(live.text, 'alphabeta')
-    assert.equal(live.thinking, 'push')
+    assert.equal(live.thinking, 'reasoning')
     assert.deepEqual(live.tools, [])
     assert.equal(live.updatedAt, 123)
   })
 
-  it('tools and nestedTools unify generate tool card:running/done mapping,input keep', () => {
+  it('combines tools and nestedTools into uniform tool cards preserving running/done status and input', () => {
     const live = deriveConversationLive(
       1,
       {
@@ -180,7 +180,7 @@ describe('deriveConversationLive', { timeout: 60_000 }, () => {
     })
   })
 
-  it('undefined live view is empty snapshot (do not throws)', () => {
+  it('produces an empty snapshot for undefined live view without throwing', () => {
     const live = deriveConversationLive(1, undefined, 1)
     assert.equal(live.text, '')
     assert.deepEqual(live.tools, [])
@@ -188,10 +188,10 @@ describe('deriveConversationLive', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// 3. EventHub: four new core type
+// 3. EventHub: four core event types
 // ---------------------------------------------------------------------------
 
-describe('EventHub new core event type', { timeout: 60_000 }, () => {
+describe('EventHub core event types', { timeout: 60_000 }, () => {
   function makeHub(snapshot?: Partial<HelmSnapshot>): { hub: EventHub; frames: HelmEventFrame[] } {
     const frames: HelmEventFrame[] = []
     const hub = new EventHub({
@@ -214,7 +214,7 @@ describe('EventHub new core event type', { timeout: 60_000 }, () => {
   const entry: ConversationEntry = { id: '11', kind: 'pi.assistant', model: [{ role: 'assistant' }] }
   const live: ConversationLive = {
     conversationId: 3,
-    text: 'streaming in',
+    text: 'streaming',
     tools: [{ callId: 'c1', toolName: 'bash', status: 'running' }],
     updatedAt: 111,
   }
@@ -228,7 +228,7 @@ describe('EventHub new core event type', { timeout: 60_000 }, () => {
     updatedAt: 2,
   }
 
-  it('conversation.entry: direct pass {conversationId,entry} and complete message seal {type,...} double shape', () => {
+  it('conversation.entry accepts both shorthand {conversationId, entry} and full envelope {type, ...}', () => {
     const { hub, frames } = makeHub()
     hub.publish('conversation.entry', { conversationId: 3, entry })
     hub.publish('conversation.entry', { type: 'conversation.entry', conversationId: 4, entry })
@@ -270,7 +270,7 @@ describe('EventHub new core event type', { timeout: 60_000 }, () => {
     }
   })
 
-  it('plugin.doc.updated: double shape;doc three field complete', () => {
+  it('plugin.doc.updated supports both forms with all three doc fields preserved', () => {
     const { hub, frames } = makeHub()
     hub.publish('plugin.doc.updated', { doc })
     hub.publish('plugin.doc.updated', { type: 'plugin.doc.updated', doc })
@@ -280,7 +280,7 @@ describe('EventHub new core event type', { timeout: 60_000 }, () => {
     assert.deepEqual(e2.doc, doc)
   })
 
-  it('workflow.updated: self define event original pass-through payload(orchestration plugin direct)', () => {
+  it('workflow.updated passes custom event payload through untouched (owned by workflow plugin)', () => {
     const { hub, frames } = makeHub()
     hub.publish('workflow.updated', { run })
     hub.publish('workflow.updated', { type: 'workflow.updated', run })
@@ -290,9 +290,9 @@ describe('EventHub new core event type', { timeout: 60_000 }, () => {
     assert.deepEqual(e2.payload.run, run)
   })
 
-  it('illegal payload explicit throw HelmError and do not push enter seq(not silently fall back)', () => {
+  it('invalid payloads throw HelmError explicitly without advancing seq or falling back silently', () => {
     const { hub, frames } = makeHub()
-    // conversation.entry: missing conversationId / entry shape illegal
+    // conversation.entry: missing conversationId or malformed entry
     assert.throws(() => hub.publish('conversation.entry', { entry }), HelmError)
     assert.throws(
       () => hub.publish('conversation.entry', { conversationId: 1, entry: { id: 1 } }),
@@ -312,13 +312,12 @@ describe('EventHub new core event type', { timeout: 60_000 }, () => {
       () => hub.publish('plugin.doc.updated', { doc: { pluginId: 'p', name: 'n' } }),
       HelmError,
     )
-    // workflow.updated now is self define event (payload any JSON direct pass), no longer do
-    // shape gate; unique boundary is JSON legal (loop reference etc.).
-    assert.equal(hub.seq, 0, 'all failed do not push enter ordinal')
+    // workflow.updated is a custom event (arbitrary JSON payload passes through); only JSON validity (cycles, etc.) is checked.
+    assert.equal(hub.seq, 0, 'failed publishes must not advance seq')
     assert.equal(frames.length, 0)
   })
 
-  it('publish before unify redaction keep:entry/live/doc plaintext secret do not leak', { timeout: 60_000 }, () => {
+  it('unified pre-publish redaction protects entry/live/doc against leaking plaintext secrets', { timeout: 60_000 }, () => {
     const { hub, frames } = makeHub()
     hub.redactFn = (t) => t.replaceAll('sk-plain', '[REDACTED]')
     const liveReceived: HelmTransientLiveFrame[] = []
@@ -330,11 +329,11 @@ describe('EventHub new core event type', { timeout: 60_000 }, () => {
     hub.publish('plugin.doc.updated', { doc: { pluginId: 'p', name: 'n', value: 'token=sk-plain' } })
     hub.publishTransientLive({ conversationId: 1, text: 'secret sk-plain', tools: [], updatedAt: 10 })
     const text = JSON.stringify([...frames.map((f) => f.event), ...liveReceived])
-    assert.ok(!text.includes('sk-plain'), 'event payload must not leak plaintext secret')
+    assert.ok(!text.includes('sk-plain'), 'event payload must not leak plaintext secrets')
     assert.ok(text.includes('[REDACTED]'))
   })
 
-  it('snapshot required ui / pluginDocs field (new contract direct out, without compatibility default)', () => {
+  it('snapshot includes required ui and pluginDocs fields directly without compat defaults', () => {
     const ui = [{ pluginId: 'p', surface: 'sidebar.item', spec: { id: 's1', label: 'X' } }]
     const docs = [{ pluginId: 'builtin:workflow', name: 'runs', value: { runs: [] } }]
     const { hub } = makeHub({ ui, pluginDocs: docs })
@@ -345,10 +344,10 @@ describe('EventHub new core event type', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// 4. real SDK:faux provider drive ConversationTracker
+// 4. Real SDK: faux provider driving ConversationTracker
 // ---------------------------------------------------------------------------
 
-describe('ConversationTracker real SDK timeline and real-time event', { timeout: 60_000 }, () => {
+describe('ConversationTracker real SDK timeline and live events', { timeout: 60_000 }, () => {
   let root = ''
 
   before(async () => {
@@ -359,7 +358,7 @@ describe('ConversationTracker real SDK timeline and real-time event', { timeout:
     await cleanupDir(root)
   })
 
-  /** real Harness + SQLite + faux provider + tracker(do not fabricate KernelRuntime). */
+  /** Real Harness + SQLite + faux provider + tracker (never mocks KernelRuntime). */
   type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
   async function openTracker(): Promise<{
     tracker: ConversationTracker
@@ -400,24 +399,24 @@ describe('ConversationTracker real SDK timeline and real-time event', { timeout:
     }
   }
 
-  it('faux complete path: initial observe do not entry; new written to the database entry by id order exactly once;live reach and terminal state conflict refresh', { timeout: 60_000 }, async () => {
+  it('full faux path: initial observe skips history; new persisted entries emit once in id order; live updates and flushes on settle', { timeout: 60_000 }, async () => {
     const { tracker, harness, collector, faux, close } = await openTracker()
     try {
       const conv = await harness.createConversation({ ownership: { kind: 'ownerless' }, agent: { model: { provider: 'faux', modelId: 'faux-1' } } }, BACKGROUND_CONTEXT)
       const id = conv.id as number
 
-      // pre- placement history (observe before written to the database a write).
+      // Pre-existing history (entry persisted before observe).
       await conv.submit({ type: 'write', entry: { kind: 'helm.note', data: { n: 1 } } }, BACKGROUND_CONTEXT)
       await tracker.observe(id)
-      assert.equal(collector.entries.length, 0, 'initial observe history item do not heavy')
+      assert.equal(collector.entries.length, 0, 'initial observe must not replay historical entries')
 
-      // real run:faux text answer -> helm.input + pi.assistant written to the database.
-      // via real tracker API register (registerInput -> bindSubmission, and runtime same path;
-      // append trace identity i.e. durable input.id = requestId).
-      faux.setResponses([fauxAssistantMessage('real answer')])
+      // Real run: faux text response -> helm.input + pi.assistant persisted.
+      // Register through real tracker API (registerInput -> bindSubmission, same path as runtime;
+      // tracking identity is durable input.id = requestId).
+      faux.setResponses([fauxAssistantMessage('real response')])
       tracker.registerInput(id, {
         id: 'in-1',
-        text: 'real issue',
+        text: 'real prompt',
         origin: 'human',
         createdAt: 1,
       })
@@ -425,10 +424,10 @@ describe('ConversationTracker real SDK timeline and real-time event', { timeout:
         .submit(
           {
             type: 'input',
-            content: 'real issue',
+            content: 'real prompt',
             entry: {
               kind: 'helm.input',
-              data: { id: 'in-1', text: 'real issue', origin: 'human', createdAt: 1 },
+              data: { id: 'in-1', text: 'real prompt', origin: 'human', createdAt: 1 },
             },
             requestId: 'in-1',
           },
@@ -437,59 +436,59 @@ describe('ConversationTracker real SDK timeline and real-time event', { timeout:
         .then((sub) => tracker.bindSubmission(id, 'in-1', sub.id as number))
       await conv.waitForIdle(BACKGROUND_CONTEXT)
 
-      // wait for observer path complete (advance sync, but run compute in micro task inside).
+      // Wait for observer path to finish (runs synchronously up to microtasks).
       await waitFor(() => collector.entries.length >= 2, 5_000)
       const ids = collector.entries.map((e) => e.entry.id)
-      assert.equal(new Set(ids).size, ids.length, 'each entry exactly once')
+      assert.equal(new Set(ids).size, ids.length, 'each entry emitted once')
       assert.ok(ids.length >= 2)
-      // id count value order = commit order keep.
+      // Numeric id ordering matches commit order.
       const numeric = ids.map(Number)
       for (let i = 1; i < numeric.length; i += 1) {
-        assert.ok(numeric[i]! > numeric[i - 1]!, 'entry by commit order (id single tune)')
+        assert.ok(numeric[i]! > numeric[i - 1]!, 'entries must arrive in monotonic commit id order')
       }
       const kinds = collector.entries.map((e) => e.entry.kind)
-      assert.ok(kinds.includes('helm.input'), 'helm.input entry event reach')
-      assert.ok(kinds.some((k) => k.startsWith('pi.')), 'SDK internal entry event reach')
-      // live terminal state conflict refresh: eventually one frame reach and conversationId correct.
-      assert.ok(collector.lives.length >= 1, 'run during/terminal state at least one frame live')
+      assert.ok(kinds.includes('helm.input'), 'helm.input entry event arrives')
+      assert.ok(kinds.some((k) => k.startsWith('pi.')), 'SDK internal entry event arrives')
+      // Live terminal flush: at least one frame arrives with matching conversationId.
+      assert.ok(collector.lives.length >= 1, 'at least one live frame emitted during/after run')
     } finally {
       await close()
     }
   })
 
-  it('live node stream:run during snapshot merge, terminal state after stop; frame interval do not low at node stream window amount level', { timeout: 60_000 }, async () => {
+  it('live throttling: merges snapshots during run and stops on terminal state; interval obeys throttle window', { timeout: 60_000 }, async () => {
     const { tracker, harness, collector, faux, close } = await openTracker()
     try {
       const conv = await harness.createConversation({ ownership: { kind: 'ownerless' }, agent: { model: { provider: 'faux', modelId: 'faux-1' } } }, BACKGROUND_CONTEXT)
       const id = conv.id as number
       await tracker.observe(id)
-      // real run:faux text answer (streaming partial via pi.live.generation drive live derive).
-      faux.setResponses([fauxAssistantMessage('streaming answer content')])
-      await conv.submit({ type: 'input', content: 'run one round' }, BACKGROUND_CONTEXT)
+      // Real run: faux text response (streaming partial via pi.live.generation drives live derivation).
+      faux.setResponses([fauxAssistantMessage('streaming response body')])
+      await conv.submit({ type: 'input', content: 'run one turn' }, BACKGROUND_CONTEXT)
       await conv.waitForIdle(BACKGROUND_CONTEXT)
-      // wait for terminal state conflict refresh (emitSettled sync path) after frame count no longer increase long.
+      // After terminal flush (emitSettled synchronous path), live frames stop growing.
       await new Promise((r) => setTimeout(r, 150))
       const frozen = collector.lives.length
       await new Promise((r) => setTimeout(r, 120))
-      assert.equal(collector.lives.length, frozen, 'run after end without new live frame')
-      // node stream correct: any adjacent two frame updatedAt interval >= 75ms amount level (same window by merge),
-      // or frame count is 0/1(single window). do not fabricate frame count floor (take decide at real streaming rhythm).
+      assert.equal(collector.lives.length, frozen, 'no further live frames after run finishes')
+      // Throttling check: consecutive frames stay >= ~75ms apart (merged within window) or total frames is 0/1
+      // (single window); never asserts an artificial minimum frame count because cadence follows real streaming.
       for (let i = 1; i < collector.lives.length; i += 1) {
         const prev = collector.lives[i - 1]!
         const curr = collector.lives[i]!
         assert.ok(
           curr.updatedAt - prev.updatedAt >= 60,
-          `adjacent live frame interval ${curr.updatedAt - prev.updatedAt}ms low at node stream window (not merge same window snapshot)`,
+          `interval between adjacent live frames (${curr.updatedAt - prev.updatedAt}ms) fell below throttle window (same-window snapshots were not merged)`,
         )
       }
-      // each frame conversationId correct.
+      // Every frame carries the right conversationId.
       for (const frame of collector.lives) assert.equal(frame.conversationId, id)
     } finally {
       await close()
     }
   })
 
-  it('stopObserving clean timer and no longer produce entry/live event (without ghost event)', { timeout: 60_000 }, async () => {
+  it('stopObserving clears timers and emits no more entry/live events (zero ghost events)', { timeout: 60_000 }, async () => {
     const { tracker, harness, collector, close } = await openTracker()
     try {
       const conv = await harness.createConversation({ ownership: { kind: 'ownerless' }, agent: { model: { provider: 'faux', modelId: 'faux-1' } } }, BACKGROUND_CONTEXT)
@@ -497,21 +496,20 @@ describe('ConversationTracker real SDK timeline and real-time event', { timeout:
       await tracker.observe(id)
       await conv.submit({ type: 'write', entry: { kind: 'helm.note', data: { n: 2 } } }, BACKGROUND_CONTEXT)
       await waitFor(() => collector.entries.length === 1, 5_000)
-
       tracker.stopObserving(id)
       const entriesAfter = collector.entries.length
       const livesAfter = collector.lives.length
-      // stop observe after again write: do not event.
+      // Writing again after stopObserving must emit nothing.
       await conv.submit({ type: 'write', entry: { kind: 'helm.note', data: { n: 3 } } }, BACKGROUND_CONTEXT)
       await new Promise((r) => setTimeout(r, 150))
-      assert.equal(collector.entries.length, entriesAfter, 'stop observe after without entry ghost event')
-      assert.equal(collector.lives.length, livesAfter, 'stop observe after without live ghost event')
+      assert.equal(collector.entries.length, entriesAfter, 'no ghost entry events after stopObserving')
+      assert.equal(collector.lives.length, livesAfter, 'no ghost live events after stopObserving')
     } finally {
       await close()
     }
   })
 
-  it('meta from helm.input entry.data rebuild throughout through back turn_settled payload', { timeout: 60_000 }, async () => {
+  it('preserves meta from helm.input entry.data end-to-end into turn_settled payload', { timeout: 60_000 }, async () => {
     const settled: Array<{ inputs: Array<{ meta?: Record<string, unknown> }> }> = []
     const dir = join(root, `meta-${Date.now()}`)
     const database = await openHelmDatabase(dir)
@@ -545,7 +543,7 @@ describe('ConversationTracker real SDK timeline and real-time event', { timeout:
       await tracker.observe(id)
       tracker.registerInput(id, {
         id: 'm-1',
-        text: 'carries meta issue',
+        text: 'prompt carrying meta',
         origin: 'agent',
         createdAt: 2,
         meta: { from: 'superagent', turn: 3 },
@@ -554,12 +552,12 @@ describe('ConversationTracker real SDK timeline and real-time event', { timeout:
         .submit(
           {
             type: 'input',
-            content: 'carries meta issue',
+            content: 'prompt carrying meta',
             entry: {
               kind: 'helm.input',
               data: {
                 id: 'm-1',
-                text: 'carries meta issue',
+                text: 'prompt carrying meta',
                 origin: 'agent',
                 createdAt: 2,
                 meta: { from: 'superagent', turn: 3 },
@@ -574,7 +572,7 @@ describe('ConversationTracker real SDK timeline and real-time event', { timeout:
       await waitFor(() => settled.length >= 1, 5_000)
       const inputs = settled[0]?.inputs ?? []
       const withMeta = inputs.find((i) => i.meta !== undefined)
-      assert.ok(withMeta, 'turn_settled inputs contains meta')
+      assert.ok(withMeta, 'turn_settled inputs should include meta')
       assert.deepEqual(withMeta!.meta, { from: 'superagent', turn: 3 })
     } finally {
       await harness.close(BACKGROUND_CONTEXT)
@@ -583,7 +581,7 @@ describe('ConversationTracker real SDK timeline and real-time event', { timeout:
     }
   })
 
-  it('submissionIndex:bindSubmission after markConsumed can hit; compute after index leaves no residue', { timeout: 60_000 }, async () => {
+  it('submissionIndex: bindSubmission hits on markConsumed and clears index on settle without leaks', { timeout: 60_000 }, async () => {
     const settled: Array<{ inputs: Array<{ id: string; meta?: Record<string, unknown> }> }> = []
     const dir = join(root, `index-${Date.now()}`)
     const database = await openHelmDatabase(dir)
@@ -620,15 +618,15 @@ describe('ConversationTracker real SDK timeline and real-time event', { timeout:
       await tracker.observe(id)
       tracker.registerInput(id, {
         id: 'ix-1',
-        text: 'index verify issue',
+        text: 'index verification prompt',
         origin: 'human',
         createdAt: 3,
       })
       const submission = await conv.submit(
         {
           type: 'input',
-          content: 'index verify issue',
-          entry: { kind: 'helm.input', data: { id: 'ix-1', text: 'index verify issue', origin: 'human', createdAt: 3 } },
+          content: 'index verification prompt',
+          entry: { kind: 'helm.input', data: { id: 'ix-1', text: 'index verification prompt', origin: 'human', createdAt: 3 } },
           requestId: 'ix-1',
         },
         BACKGROUND_CONTEXT,
@@ -636,15 +634,15 @@ describe('ConversationTracker real SDK timeline and real-time event', { timeout:
       tracker.bindSubmission(id, 'ix-1', submission.id as number)
       await conv.waitForIdle(BACKGROUND_CONTEXT)
       await waitFor(() => settled.length >= 1, 5_000)
-      // run.inputs via index mapping hit:onInputCommitted exactly once and is requestId identity.
+      // run.inputs matched via index: onInputCommitted fires once with requestId identity.
       assert.deepEqual(committed, ['ix-1'])
       assert.deepEqual(settled[0]!.inputs.map((i) => i.id), ['ix-1'])
-      // compute after append trace record and related index all leaves no residue.
+      // Tracking records and correlation index are cleared after settle.
       const internals = (tracker as unknown as {
         mirrors: Map<number, { trackedInputs: Map<string, unknown>; submissionIndex: Map<number, string> }>
       })
-      assert.equal(internals.mirrors.get(id)?.trackedInputs.size ?? 0, 0, 'compute after append trace record empty')
-      assert.equal(internals.mirrors.get(id)?.submissionIndex.size ?? 0, 0, 'compute after related index empty')
+      assert.equal(internals.mirrors.get(id)?.trackedInputs.size ?? 0, 0, 'tracking records cleared after settle')
+      assert.equal(internals.mirrors.get(id)?.submissionIndex.size ?? 0, 0, 'correlation index cleared after settle')
     } finally {
       await harness.close(BACKGROUND_CONTEXT)
       await store.close()

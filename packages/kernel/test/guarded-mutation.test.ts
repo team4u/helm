@@ -1,20 +1,19 @@
 /**
- * kernel guarded mutation(automatically human hard rule) determinism race test.
+ * Deterministic race tests for kernel guarded mutations (automated human-ownership hard rule).
  *
- * background:watchdog plugin layer check ownership after, old link invoke ordinary abortConversation /
- * submitInput- - kernel internal first `await harness.conversation(...)` only then produce side effect,
- * the await let out during markOwnership translate rotate is human still will execute action (TOCTOU).
+ * Background: even after watchdog plugins verify ownership, calling plain abortConversation /
+ * submitInput still awaits `harness.conversation(...)` internally before taking effect; during that
+ * await gap markConversationOwnership could switch to human and cause TOCTOU execution.
  *
- * verify way (deferred barrier, determinism while non- polling):
- * - use barrier precise hang in harness.conversation  await window on, in window inside
- *   ownership translate rotate is human, again let through;
- * - compare group verify the same barrier in old implement (ordinary abortConversation) window inside and
- *   old semantics indeed still will abort (test is not empty rotate);
- * - guarded API(abortConversationGuarded / submitInputGuarded) in fully identical
- *   when order under must reject (409 ownership_conflict) and underlying SDK action not by start;
- * - also override succeeded path,stateSeq expired 409, ownership does not match 409, target missing 404,
- *   illegal guard 400, and ordinary person class API(submitInput / abortConversation)
- *   in human ownership under behavior do not change.
+ * Verification strategy (deterministic deferred barrier, zero polling):
+ * - Attach a barrier precisely at the `harness.conversation` await point, switch ownership to human
+ *   inside the await window, and release;
+ * - Control group confirms that the same barrier hits the old window under plain abortConversation,
+ *   which still aborts after switching (proving the barrier tests the real window);
+ * - Guarded APIs (abortConversationGuarded / submitInputGuarded) must reject under the exact same ordering
+ *   (409 ownership_conflict) without starting underlying SDK actions;
+ * - Also covers success paths, stale stateSeq 409, mismatched ownership 409, missing target 404,
+ *   invalid guards 400, and unchanged human behavior on plain APIs (submitInput / abortConversation).
  */
 
 import test from 'node:test'
@@ -44,10 +43,10 @@ async function openRuntime(dir: string): Promise<RuntimeWithFaux> {
 type ConversationFn = (id: never, ctx: unknown) => Promise<unknown>
 
 /**
- * in harness.conversation  await point hang determinism barrier: install after under once (and after continue)
- * conversation() invoke all stop in gate on, until release; release after pass-through real handle.
- * old implement (ordinary abort/submit) in the await after without condition execute action - -barrier during
- * translate rotate ownership i.e. hit old race window.
+ * Installs a one-shot deterministic barrier on `harness.conversation` await points: blocks the next
+ * (and subsequent) conversation() call at a gate until released, then delegates to the real method.
+ * Plain abort/submit used to execute unconditionally after that await -- flipping ownership during the
+ * barrier deterministically hits that exact legacy race window.
  */
 function barrierConversationHandle(kernel: KernelRuntime): { release: () => void } {
   const harness = (kernel as unknown as { harness: { conversation: ConversationFn } }).harness
@@ -68,7 +67,7 @@ function barrierConversationHandle(kernel: KernelRuntime): { release: () => void
   return { release }
 }
 
-/** micro task conflict refresh: let by test Promise before enter to harness.conversation suspended point. */
+/** Flushes microtasks/I-O ticks so the tested Promise suspends cleanly at harness.conversation. */
 async function flushToBarrier(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve))
 }
@@ -88,34 +87,34 @@ test.after(async () => {
 })
 
 // ---------------------------------------------------------------------------
-// 1. race core:await window inside ownership translate rotate
+// 1. Core race: ownership flips inside the await window
 // ---------------------------------------------------------------------------
 
-test('guarded abort:await window inside translate rotate human → 409 ownership_conflict,SDK abort not start', { timeout: 60_000 }, async () => {
+test('guarded abort: flipping ownership to human inside await window -> 409 ownership_conflict, SDK abort untouched', { timeout: 60_000 }, async () => {
   const dir = join(root, 't-guarded-abort-race')
   const kernel = await openRuntime(dir)
   let barrier: { release: () => void } | undefined
   try {
     kernel.markConversationOwnership(1, 'bot')
-kernel.__faux.setResponses([
+    kernel.__faux.setResponses([
       fauxAssistantMessage([fauxToolCall('bash', { command: 'sleep 5 && echo done' })], { stopReason: 'toolUse' }),
-      fauxAssistantMessage('do not the need to second answer'),
+      fauxAssistantMessage('unneeded second answer'),
     ])
-    void kernel.submitInput(1, 'will by guard reject abort issue').catch(() => {})
+    void kernel.submitInput(1, 'question whose abort will be rejected by guard').catch(() => {})
     await waitFor(() => kernel.getConversation(1).status === 'working')
 
     barrier = barrierConversationHandle(kernel)
     const attempt = kernel.abortConversationGuarded(1, { expectedOwnership: 'bot' })
     await flushToBarrier()
-    // old implement await window inside: person class take over.
+    // Simulated takeover inside the legacy await window: human takes over.
     kernel.markConversationOwnership(1, 'human')
     barrier.release()
     await assert.rejects(attempt, isHelmError('ownership_conflict', 409))
 
-    // SDK abort not by start: in-flight turn continue store (if by abort then immediately compute is idle).
-    assert.equal(kernel.getConversation(1).status, 'working', 'guarded reject after turn must not by abort')
+    // SDK abort did not fire: in-flight turn keeps running (abort would have settled to idle immediately).
+    assert.equal(kernel.getConversation(1).status, 'working', 'turn must not abort after guarded rejection')
 
-    // ordinary person class API do not regression:human ownership under human abort per common takes effect.
+    // Normal human API still works: human abort under human ownership settles cleanly.
     await kernel.abortConversation(1)
     await kernel.waitForIdle(1).catch(() => {})
     assert.equal(kernel.getConversation(1).status, 'idle')
@@ -126,17 +125,17 @@ kernel.__faux.setResponses([
   }
 })
 
-test('compare group: the same barrier hit old window, ordinary abortConversation in human translate rotate after still will abort (old semantics keep)', { timeout: 60_000 }, async () => {
+test('control group: same barrier hits legacy window; plain abortConversation still aborts after flip to human (preserves legacy semantics)', { timeout: 60_000 }, async () => {
   const dir = join(root, 't-plain-abort-window')
   const kernel = await openRuntime(dir)
   let barrier: { release: () => void } | undefined
   try {
     kernel.markConversationOwnership(1, 'bot')
-kernel.__faux.setResponses([
+    kernel.__faux.setResponses([
       fauxAssistantMessage([fauxToolCall('bash', { command: 'sleep 5 && echo done' })], { stopReason: 'toolUse' }),
-      fauxAssistantMessage('do not the need to second answer'),
+      fauxAssistantMessage('unneeded second answer'),
     ])
-    void kernel.submitInput(1, 'verify barrier in old window inside').catch(() => {})
+    void kernel.submitInput(1, 'verify barrier lands inside legacy window').catch(() => {})
     await waitFor(() => kernel.getConversation(1).status === 'working')
 
     barrier = barrierConversationHandle(kernel)
@@ -144,7 +143,7 @@ kernel.__faux.setResponses([
     await flushToBarrier()
     kernel.markConversationOwnership(1, 'human')
     barrier.release()
-    // ordinary API without guard: translate rotate after per common abort (this correct is guarded API want close window).
+    // Plain API has no guard: aborts as normal after ownership flip (the exact race guarded API closes).
     await attempt
     await kernel.waitForIdle(1).catch(() => {})
     assert.equal(kernel.getConversation(1).status, 'idle')
@@ -154,29 +153,29 @@ kernel.__faux.setResponses([
   }
 })
 
-test('guarded submit: prepare work window inside translate rotate human → 409, zero commit side effect (without title derive/without input item)', { timeout: 60_000 }, async () => {
+test('guarded submit: flipping to human inside preparation window -> 409, zero commit side effects (no title / no input entry)', { timeout: 60_000 }, async () => {
   const dir = join(root, 't-guarded-submit-race')
   const kernel = await openRuntime(dir)
   let barrier: { release: () => void } | undefined
   try {
     const conv = await kernel.createConversation({})
     kernel.markConversationOwnership(conv.id, 'bot')
-kernel.__faux.setResponses([fauxAssistantMessage('do not the appear')])
+    kernel.__faux.setResponses([fauxAssistantMessage('must never appear')])
 
     barrier = barrierConversationHandle(kernel)
-    const attempt = kernel.submitInputGuarded(conv.id, 'automatically input', { origin: 'agent' }, { expectedOwnership: 'bot' })
+    const attempt = kernel.submitInputGuarded(conv.id, 'automated input', { origin: 'agent' }, { expectedOwnership: 'bot' })
     await flushToBarrier()
     kernel.markConversationOwnership(conv.id, 'human')
     barrier.release()
     await assert.rejects(attempt, isHelmError('ownership_conflict', 409))
 
-    // zero commit side effect: title not derive, without helm.input item, conversation still idle.
+    // Zero commit side effects: title un-derived, no helm.input entry, conversation stays idle.
     const after = kernel.getConversation(conv.id)
     assert.equal(after.status, 'idle')
     assert.equal(after.title, '')
     const detail = await kernel.getConversationDetail(conv.id, { limit: 50 })
-    assert.equal(detail.entries.filter((e) => e.kind === 'helm.input').length, 0, 'must not produce input item')
-    // faux response not by consume (model from not by invoke).
+    assert.equal(detail.entries.filter((e) => e.kind === 'helm.input').length, 0, 'must not insert input entry')
+    // Faux response untouched (model never invoked).
     assert.equal(kernel.__faux.getPendingResponseCount(), 1)
   } finally {
     barrier?.release()
@@ -185,17 +184,17 @@ kernel.__faux.setResponses([fauxAssistantMessage('do not the appear')])
 })
 
 // ---------------------------------------------------------------------------
-// 2. succeeded path and determinism reject
+// 2. Success paths and deterministic rejections
 // ---------------------------------------------------------------------------
 
-test('guarded steer whenIdle=reject: idle conversation atomic reject, do not start new turn or input item', { timeout: 60_000 }, async () => {
+test('guarded steer whenIdle=reject: idle conversation atomically rejects without starting turn or inserting input entry', { timeout: 60_000 }, async () => {
   const kernel = await openRuntime(join(root, 't-guarded-steer-idle'))
   try {
-    const conversation = await kernel.createConversation({ title: 'idle automatically conversation' })
+    const conversation = await kernel.createConversation({ title: 'idle automated conversation' })
     kernel.markConversationOwnership(conversation.id, 'bot')
     kernel.__faux.setResponses([fauxAssistantMessage('must not execute')])
     await assert.rejects(
-      kernel.submitInputGuarded(conversation.id, 'only course-correct in-flight task', {
+      kernel.submitInputGuarded(conversation.id, 'steer only in-flight task', {
         origin: 'agent', whenBusy: 'steer', whenIdle: 'reject',
       }, { expectedOwnership: 'bot', expectedStateSeq: kernel.getConversation(conversation.id).stateChangeSeq }),
       isHelmError('conversation_idle', 409),
@@ -209,48 +208,48 @@ test('guarded steer whenIdle=reject: idle conversation atomic reject, do not sta
   }
 })
 
-test('guarded abort succeeded path:bot conversation in-flight turn by authorization abort', { timeout: 60_000 }, async () => {
+test('guarded abort success path: bot conversation in-flight turn aborts when authorized', { timeout: 60_000 }, async () => {
   const dir = join(root, 't-guarded-abort-ok')
   const kernel = await openRuntime(dir)
   try {
     kernel.markConversationOwnership(1, 'bot')
-kernel.__faux.setResponses([
+    kernel.__faux.setResponses([
       fauxAssistantMessage([fauxToolCall('bash', { command: 'sleep 5 && echo done' })], { stopReason: 'toolUse' }),
     ])
-    void kernel.submitInput(1, 'will by authorization abort issue').catch(() => {})
+    void kernel.submitInput(1, 'question to authorize-abort').catch(() => {})
     await waitFor(() => kernel.getConversation(1).status === 'working')
 
     await kernel.abortConversationGuarded(1, { expectedOwnership: 'bot' })
     await kernel.waitForIdle(1).catch(() => {})
     const conv = kernel.getConversation(1)
     assert.equal(conv.status, 'idle')
-    assert.equal(conv.completionSeq, 1, 'aborted exactly compute once')
+    assert.equal(conv.completionSeq, 1, 'aborted turn settles once')
   } finally {
     await kernel.close().catch(() => {})
   }
 })
 
-test('guarded submit succeeded path:bot conversation agent source commit real column and complete turn', { timeout: 60_000 }, async () => {
+test('guarded submit success path: bot conversation submits agent input and completes turn', { timeout: 60_000 }, async () => {
   const dir = join(root, 't-guarded-submit-ok')
   const kernel = await openRuntime(dir)
   try {
     const conv = await kernel.createConversation({})
     kernel.markConversationOwnership(conv.id, 'bot')
-kernel.__faux.setResponses([fauxAssistantMessage('restore complete')])
-    const { submissionId } = await kernel.submitInputGuarded(conv.id, 'restore hint', { origin: 'agent', whenBusy: 'steer' }, { expectedOwnership: 'bot' })
+    kernel.__faux.setResponses([fauxAssistantMessage('recovery done')])
+    const { submissionId } = await kernel.submitInputGuarded(conv.id, 'recovery prompt', { origin: 'agent', whenBusy: 'steer' }, { expectedOwnership: 'bot' })
     assert.ok(submissionId)
     await kernel.waitForIdle(conv.id)
     assert.equal(kernel.getConversation(conv.id).status, 'done')
     const detail = await kernel.getConversationDetail(conv.id, { limit: 10 })
     const input = detail.entries.find((e) => e.kind === 'helm.input')
-    assert.ok(input, 'helm.input item should store in')
+    assert.ok(input, 'helm.input entry should exist')
     assert.equal(kernel.__faux.getPendingResponseCount(), 0)
   } finally {
     await kernel.close().catch(() => {})
   }
 })
 
-test('guarded reject matrix:human ownership / ownership does not match / watermark expired / target missing / illegal guard', { timeout: 60_000 }, async () => {
+test('guarded rejection matrix: human ownership / ownership mismatch / stale seq / missing target / invalid guard', { timeout: 60_000 }, async () => {
   const dir = join(root, 't-guarded-reject-matrix')
   const kernel = await openRuntime(dir)
   try {
@@ -259,32 +258,32 @@ test('guarded reject matrix:human ownership / ownership does not match / waterma
     await assert.rejects(
       kernel.abortConversationGuarded(conv.id, {}),
       isHelmError('ownership_conflict', 409),
-      'human hard hard rule',
+      'human ownership hard rule',
     )
     await assert.rejects(
       kernel.submitInputGuarded(conv.id, 'x', { origin: 'agent' }, {}),
       isHelmError('ownership_conflict', 409),
-      'human hard hard rule (commit)',
+      'human ownership hard rule (submit)',
     )
 
     kernel.markConversationOwnership(conv.id, 'helm')
     await assert.rejects(
       kernel.abortConversationGuarded(conv.id, { expectedOwnership: 'bot' }),
       isHelmError('ownership_conflict', 409),
-      'ownership precise does not match',
+      'exact ownership mismatch',
     )
 
     const seq = kernel.getConversation(conv.id).stateChangeSeq
     await assert.rejects(
       kernel.abortConversationGuarded(conv.id, { expectedStateSeq: seq + 100 }),
       isHelmError('state_seq_conflict', 409),
-      'watermark expired CAS',
+      'stale watermark CAS',
     )
 
     await assert.rejects(
       kernel.abortConversationGuarded(999_999, {}),
       isHelmError('not_found', 404),
-      'explicit target missing do not by by default routing mask',
+      'missing explicit target must not fall back to default route',
     )
     await assert.rejects(
       kernel.submitInputGuarded(999_999, 'x', { origin: 'agent' }, {}),
@@ -294,7 +293,7 @@ test('guarded reject matrix:human ownership / ownership does not match / waterma
     await assert.rejects(
       kernel.abortConversationGuarded(conv.id, { expectedOwnership: 'human' as never }),
       isHelmError('validation_error', 400),
-      'expectedOwnership strictly forbidden human',
+      'expectedOwnership forbids human',
     )
     await assert.rejects(
       kernel.abortConversationGuarded(conv.id, { expectedStateSeq: -1 }),
@@ -305,7 +304,7 @@ test('guarded reject matrix:human ownership / ownership does not match / waterma
   }
 })
 
-test('guarded submit unsupported replaceFromEntryId(automatically do not heavy write history)', { timeout: 60_000 }, async () => {
+test('guarded submit rejects replaceFromEntryId (automation cannot rewrite history)', { timeout: 60_000 }, async () => {
   const dir = join(root, 't-guarded-no-rewrite')
   const kernel = await openRuntime(dir)
   try {
@@ -321,21 +320,21 @@ test('guarded submit unsupported replaceFromEntryId(automatically do not heavy w
 })
 
 // ---------------------------------------------------------------------------
-// 3. ordinary person class API do not regression
+// 3. Normal human APIs remain unaffected
 // ---------------------------------------------------------------------------
 
-test('ordinary API semantics do not change:human ownership under submitInput / abortConversation per common available', { timeout: 60_000 }, async () => {
+test('normal API semantics unchanged: submitInput / abortConversation operate normally under human ownership', { timeout: 60_000 }, async () => {
   const dir = join(root, 't-plain-api-regression')
   const kernel = await openRuntime(dir)
   try {
     const conv = await kernel.createConversation({})
-    // not mark record ownership (by default human).
-kernel.__faux.setResponses([fauxAssistantMessage('person class answer')])
-    const { submissionId } = await kernel.submitInput(conv.id, 'person class issue', { origin: 'human' })
+    // Unmarked ownership defaults to human.
+    kernel.__faux.setResponses([fauxAssistantMessage('human answer')])
+    const { submissionId } = await kernel.submitInput(conv.id, 'human question', { origin: 'human' })
     assert.ok(submissionId)
     await kernel.waitForIdle(conv.id)
-    assert.equal(await kernel.getLastAssistantText(conv.id), 'person class answer')
-    // idle conversation human abort:no-op do not fabricate terminal state, also do not throw guard error.
+    assert.equal(await kernel.getLastAssistantText(conv.id), 'human answer')
+    // Human abort on idle conversation: no-op without fabricating settlement or throwing guard error.
     await kernel.abortConversation(conv.id)
     assert.equal(kernel.getConversation(conv.id).completionSeq, 1)
   } finally {
@@ -344,18 +343,18 @@ kernel.__faux.setResponses([fauxAssistantMessage('person class answer')])
 })
 
 // ---------------------------------------------------------------------------
-// 4. per-conversation serial gate: same conversation guarded change has order, different conversation mutual non-blocking
+// 4. Per-conversation serial gate: serialized per conversation, non-blocking across conversations
 // ---------------------------------------------------------------------------
 
-test('guarded change serial gate: same conversation queue up has order execute; before order failed do not block assert after continue', { timeout: 60_000 }, async () => {
+test('guarded mutation serial gate: serialized within conversation; early failures never poison subsequent calls', { timeout: 60_000 }, async () => {
   const dir = join(root, 't-guarded-gate')
   const kernel = await openRuntime(dir)
   try {
     const conv = await kernel.createConversation({})
     kernel.markConversationOwnership(conv.id, 'bot')
-kernel.__faux.setResponses([fauxAssistantMessage('one answer'), fauxAssistantMessage('second answer')])
+    kernel.__faux.setResponses([fauxAssistantMessage('answer 1'), fauxAssistantMessage('answer 2')])
 
-    // before order guarded commit failed (watermark expired 400/409) must not toxic serial gate.
+    // Early guarded submit failure (stale watermark 400/409) must never poison the serial gate.
     await assert.rejects(
       kernel.submitInputGuarded(conv.id, 'x', { origin: 'agent' }, { expectedStateSeq: 1_000_000 }),
       isHelmError('state_seq_conflict', 409),
@@ -367,7 +366,7 @@ kernel.__faux.setResponses([fauxAssistantMessage('one answer'), fauxAssistantMes
     await kernel.waitForIdle(conv.id)
     const detail = await kernel.getConversationDetail(conv.id, { limit: 50 })
     const inputs = detail.entries.filter((e) => e.kind === 'helm.input')
-    assert.equal(inputs.length, 2, 'two guarded input all should column')
+    assert.equal(inputs.length, 2, 'both guarded inputs should be queued')
   } finally {
     await kernel.close().catch(() => {})
   }

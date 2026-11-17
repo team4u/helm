@@ -1,51 +1,48 @@
 /**
- * HTTP detail situation exit ConversationEntry throw shadow (pure function, mechanism layer).
+ * HTTP detail boundary ConversationEntry projection (pure functions, mechanism layer).
  *
- * consumer: only detail situation page (ConversationDetailService.getConversationDetail) and
- * single end point (getConversationEntry signature strip).SSE conversation.entry event,
- * SDK rewind/context/settlement and waitForInput result one rule do not via this throw shadow - -
- * toConversationEntry since has semantics keep do not change.
+ * Consumers: only detail pagination (ConversationDetailService.getConversationDetail) and
+ * single-entry endpoint (getConversationEntry signature stripping). SSE `conversation.entry` events,
+ * SDK rewind/context/settlement, and waitForInput results never pass through this projection—preserving
+ * existing semantics of toConversationEntry.
  *
- * policy (detail see @helm/protocol ConversationEntry throw shadow convention note release):
- * - `pi.system`: model side register record (system prompt/tool declaration), detail situation page do not outside;
- * - provider signature payload thinkingSignature / textSignature / thoughtSignature
- *   (pi-ai TextContent / ThinkingContent / ToolCall do not transparent encryption chunk): for
- *   client without semantics and body accumulate can observe, exit unify strip - - only limit assistant message content
- *   chunk,toolResult details etc. business object and entry.data do not trigger touch; database original text do not change;
- * - over limit pure text toolResult explicit truncate: keep head tail, message level carry
- *   truncated/totalChars/totalLines(and each pi.tool-result precise match for, without
- *   many message ambiguity); structure channel details(subagent/SubagentWorkflow etc.) and
- *   can parse JSON text exemption (truncate will break downstream parse); tail part `[Artifact] id=`
- *   tail mark because keep tail part while day however keep.
+ * Policy (see @helm/protocol ConversationEntry projection docs for details):
+ * - `pi.system`: model-side bookkeeping (system prompt / tool declarations), hidden on detail pages;
+ * - Provider signature payloads thinkingSignature / textSignature / thoughtSignature
+ *   (pi-ai TextContent / ThinkingContent / ToolCall opaque encrypted blocks): meaningless to clients and observable
+ *   bloat, uniformly stripped on output—limited strictly to assistant message content blocks, leaving toolResult
+ *   details/business objects and entry.data untouched; database originals stay unchanged;
+ * - Oversized plain-text toolResult gets explicit truncation: preserves head and tail, setting message-level
+ *   truncated/totalChars/totalLines (matching each pi.tool-result 1:1 with no multi-message ambiguity);
+ *   structured channel details (subagent / SubagentWorkflow, etc.) and parseable JSON text are exempted
+ *   (truncating would break downstream parsers); trailing `[Artifact] id=` markers stay intact automatically because the tail is kept.
  */
 
 import type { ConversationEntry } from '@helm/protocol'
 
-/** provider signature payload key (pi-ai content chunk/tool invoke field). */
+/** Provider signature payload keys (pi-ai content block / tool call fields). */
 const SIGNATURE_KEYS: ReadonlySet<string> = new Set([
   'thinkingSignature',
   'textSignature',
   'thoughtSignature',
 ])
 
-/** tool-result pure text truncate threshold (character, throw shadow layer;SDK itself output limit quota of outside finally guard against line).
- * bash spill preview (≈4KiB head + 256B tail) and read_artifact(≤128KiB) is typical
- * large output source: threshold take 1536 character (head 1024 + tail 512 + omit mark record),100 /page
- * detail situation page therefore has determine on boundary. */
+/** Tool-result plain-text truncation threshold (chars, projection layer; outer defense line beyond SDK output cap).
+ * bash spill previews (~4KiB head + 256B tail) and read_artifact (<=128KiB) are typical large output sources:
+ * a 1536-char cap (1024 head + 512 tail + omission marker) keeps 100-entry detail pages deterministically bounded. */
 export const TOOL_RESULT_TRUNCATE_THRESHOLD_CHARS = 1536
-/** truncate after keep header character count. */
+/** Number of leading chars preserved on truncation. */
 export const TOOL_RESULT_HEAD_CHARS = 1024
-/** truncate after keep tail part character count ([Artifact] id= tail mark follow tail part keep). */
+/** Number of trailing chars preserved on truncation (preserves `[Artifact] id=` markers at the tail). */
 export const TOOL_RESULT_TAIL_CHARS = 512
 
 /**
- * single entry through use redaction (detail situation page and single end point shared use):
- * - only for role=assistant message content content chunk strip signature key - - signature is pi-ai
- *   provider for assistant think/text/tool invoke chunk do not transparent payload;
- * - toolResult message (contains details business object) and other role one rule do not trigger touch (details
- *   is plugin structure JSON, may legal carry same name segment);entry.data same do not motion;
- * - copy-on-write: without hit return original object (zero copy), never change write input (SSE/SDK and
- *   database sharing the same record).
+ * Single-entry signature stripping (shared by detail pagination and single-entry endpoint):
+ * - Strips signature keys only inside role=assistant message content blocks (signature holds pi-ai provider
+ *   opaque payloads for thinking/text/toolCall blocks);
+ * - toolResult messages (incl. details business objects) and other roles are never touched (details hold plugin JSON
+ *   which could legitimately carry same-named keys); entry.data is untouched;
+ * - Copy-on-write: returns original object on zero hits (zero copy), never mutating input (shared with SSE/SDK/DB).
  */
 export function stripEntrySignatures(entry: ConversationEntry): ConversationEntry {
   if (entry.model === undefined) return entry
@@ -82,11 +79,10 @@ export function stripEntrySignatures(entry: ConversationEntry): ConversationEntr
 }
 
 // ---------------------------------------------------------------------------
-// tool-result pure text truncate
+// Plain-text tool-result truncation
 // ---------------------------------------------------------------------------
 
-/** pure text content decide: string, or all is {type:'text'} chunk array (and frontend
- * contentTextOf concatenate opening path consistent). */
+/** Check if content is plain text: a string or an array of {type:'text'} blocks (matching frontend contentTextOf concatenation). */
 function isPlainTextContent(content: unknown): content is string | ReadonlyArray<{ type: 'text'; text: string }> {
   if (typeof content === 'string') return true
   if (!Array.isArray(content)) return false
@@ -99,21 +95,20 @@ function isPlainTextContent(content: unknown): content is string | ReadonlyArray
   )
 }
 
-/** content all text (chunk text directly concatenate, and frontend render opening path consistent). */
+/** Combine text content (concatenates block text directly, matching frontend rendering). */
 function combinedTextOf(content: string | ReadonlyArray<{ type: 'text'; text: string }>): string {
   return typeof content === 'string' ? content : content.map((block) => block.text).join('')
 }
 
-/** structure result text exemption:subagent / SubagentWorkflow etc. text is complete JSON
- * message seal (can carries `[subagent ...]` / `[Artifact] ...` style tail part footer row),
- * truncate will break downstream parse. decide: whole can parse JSON, or strip tail part single row way parentheses
- * footer after can parse JSON. */
+/** Exempt structured JSON payloads: subagent / SubagentWorkflow outputs are full JSON envelopes (possibly with
+ * trailing `[subagent ...]` / `[Artifact] ...` footer lines) whose downstream parsing breaks if truncated.
+ * Exempt if parseable directly or after stripping up to 4 trailing single-line bracketed footers. */
 function isStructuredJsonText(text: string): boolean {
   const trimmed = text.trim()
   if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return false
   if (parsable(trimmed)) return true
   const lines = trimmed.split('\n')
-  // self tail row start strip shape such as [ ... ] single row footer(at most 4 row), remaining body can parse i.e. exemption.
+  // Strip up to 4 trailing `[ ... ]` single-line footers and exempt if the remaining body parses as JSON.
   for (let drop = 1; drop <= Math.min(4, lines.length - 1); drop += 1) {
     const candidate = lines.slice(0, lines.length - drop).join('\n').trim()
     if (candidate === '' || (!candidate.startsWith('{') && !candidate.startsWith('['))) break
@@ -132,12 +127,12 @@ function parsable(text: string): boolean {
   }
 }
 
-/** already by artifacts spill layer truncate text (carry [Artifact] id= all text entry):
- * all text in artifact in, item only store preview - - again stack add throw shadow truncate will let frontend mistakenly with is single end point can
- * take back complete output. this layer never duplicate truncate, keep existing artifact entry. */
+/** Text already spilled into an artifact (carries `[Artifact] id=` marker for full text):
+ * full output lives in the artifact while the entry holds only a preview—double-truncating in projection would mislead
+ * the UI into fetching the single-entry endpoint expecting the full output. Leave existing artifact entries untouched. */
 const ARTIFACT_SPILL_MARKER_RE = /\[Artifact\]\s+id=/
 
-/** truncate text: keep head tail + self description omit mark record (contains all text rule mode and take original text refer quote). */
+/** Truncate text: keep head and tail + self-describing omission marker (states full length and single-entry endpoint). */
 function truncatePlainText(text: string): { text: string; totalChars: number; totalLines: number } {
   const totalChars = text.length
   const totalLines = text === '' ? 0 : text.split('\n').length
@@ -145,14 +140,13 @@ function truncatePlainText(text: string): { text: string; totalChars: number; to
   const tail = text.slice(totalChars - TOOL_RESULT_TAIL_CHARS)
   const omitted = totalChars - TOOL_RESULT_HEAD_CHARS - TOOL_RESULT_TAIL_CHARS
   const marker =
-    `\n\n...[helm truncate: omit ${omitted} character (all text ${totalChars} character / ${totalLines} row,` +
-    'GET /api/conversations/<id>/entries/<entryId> take not truncate original text]...\n\n'
+    `\n\n...[helm truncate: omitted ${omitted} characters (${totalChars} chars / ${totalLines} lines; ` +
+    'GET /api/conversations/<id>/entries/<entryId> for untruncated original text)]...\n\n'
   return { text: `${head}${marker}${tail}`, totalChars, totalLines }
 }
 
-/** single model message truncate throw shadow; no need to truncate when original return (sharing reference).
- * truncate when in message object on append truncated/totalChars/totalLines(message level mark record,
- * and each pi.tool-result precise match for, without top-level ambiguity). */
+/** Project truncation onto a single model message; returns original reference if no truncation is needed.
+ * Attaches truncated/totalChars/totalLines on the message object (matching each pi.tool-result 1:1 with no top-level ambiguity). */
 function projectToolResultMessage(message: unknown): unknown {
   if (message === null || typeof message !== 'object' || Array.isArray(message)) return message
   const m = message as Record<string, unknown>
@@ -176,8 +170,8 @@ function projectToolResultMessage(message: unknown): unknown {
 }
 
 /**
- * detail situation page throw shadow:pi.system filter + signature strip + security pure text tool-result truncate.
- * return undefined means the do not outside (pi.system). input do not by change write.
+ * Detail page projection: filter pi.system + strip signatures + safe plain-text tool-result truncation.
+ * Returning undefined hides the entry from detail timelines (pi.system). Does not mutate input.
  */
 export function projectDetailEntry(entry: ConversationEntry): ConversationEntry | undefined {
   if (entry.kind === 'pi.system') return undefined

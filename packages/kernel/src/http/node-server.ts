@@ -1,14 +1,14 @@
 /**
- * Node http adapt:Web Request/Response and node:http convert + startHub.
+ * Node http adapter: Web Request/Response <-> node:http conversion + `startHub`.
  *
- * key semantics:
- * - SSE/persistent connection without buffer pass-through:Response body ReadableStream directly pipe to
- *   node res, do not whole stream buffer.
- * - client disconnect (res close)→ abort for should Fetch Request  signal,
- *   SSE implement based on this cancel subscribe, do not legacy listener/timer.
- * - hub.close(): actively abort all in-flight request signal (contains SSE), destroy all connect
- *   (closeAllConnections/closeIdleConnections), again await server.close();
- *   never dependency after placement kernel.events close,server.close do not pending.
+ * Key semantics:
+ * - Unbuffered SSE / long-lived streams: Response body ReadableStream pipes directly to
+ *   node `res` without buffering the whole stream.
+ * - Client disconnect (`res` close) aborts the corresponding Fetch Request `signal`;
+ *   SSE implementations rely on this to cancel subscriptions with zero leaked listeners or timers.
+ * - `hub.close()`: actively aborts all in-flight request signals (including SSE), destroys all
+ *   connections (`closeAllConnections`/`closeIdleConnections`), then awaits `server.close()`;
+ *   never depends on downstream `kernel.events.close()` so `server.close` never hangs.
  */
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -22,7 +22,7 @@ import type { HubHandle, KernelRuntimeLike, StartHubOptions } from './contracts.
 const DEFAULT_PORT = 3202
 const DEFAULT_HOSTNAME = '127.0.0.1'
 
-/** Node -> Web Request convert (contains body stream). */
+/** Node -> Web Request conversion (including body stream). */
 export function toWebRequest(req: http.IncomingMessage, signal?: AbortSignal): Request {
   const host = req.headers.host ?? 'localhost'
   const url = `http://${host}${req.url ?? '/'}`
@@ -48,7 +48,7 @@ export function toWebRequest(req: http.IncomingMessage, signal?: AbortSignal): R
   })
 }
 
-/** Web Response -> node res write out (streaming, without whole stream buffer). */
+/** Web Response -> node res writer (streaming, without whole-stream buffering). */
 export async function writeWebResponse(webResponse: Response, res: http.ServerResponse): Promise<void> {
   const headers: Record<string, string | string[]> = {}
   webResponse.headers.forEach((value, name) => {
@@ -76,7 +76,7 @@ export async function writeWebResponse(webResponse: Response, res: http.ServerRe
 }
 
 export interface NodeHubHandle extends HubHandle {
-  /** actual listen port (port 0 when is kernel allocate value). */
+  /** Actual listening port (kernel-assigned port when `port: 0`). */
   readonly port: number
   readonly server: http.Server
 }
@@ -84,8 +84,8 @@ export interface NodeHubHandle extends HubHandle {
 export async function startHub(options: StartHubOptions): Promise<NodeHubHandle> {
   const { kernel, webDistDir } = options
   const handler = createHubHandler({ kernel, ...(webDistDir !== undefined ? { webDistDir } : {}) })
-  // explicit designate static directory when start i.e. verify (fail fast): expires directory refuse start and to out structure diagnose
-  //(and handler first request path same construct web_dist_invalid), do not etc. to first request only then expose
+  // Validate explicit static directory eagerly at startup (fail fast): invalid dir refuses to start
+  // with a structured diagnostic (matching `web_dist_invalid` on first-request path) rather than deferring failure.
   if (typeof webDistDir === 'string') {
     try {
       await createStaticServe(webDistDir)
@@ -93,7 +93,7 @@ export async function startHub(options: StartHubOptions): Promise<NodeHubHandle>
       if (err instanceof HelmError) throw err
       throw new HelmError(
         'web_dist_invalid',
-        `static hosting directory unavailable: ${webDistDir}(${err instanceof Error ? err.message : String(err)})`,
+        `static hosting directory unavailable: ${webDistDir} (${err instanceof Error ? err.message : String(err)})`,
         500,
         { dir: webDistDir },
       )
@@ -102,28 +102,28 @@ export async function startHub(options: StartHubOptions): Promise<NodeHubHandle>
   const port = options.port ?? DEFAULT_PORT
   const hostname = options.hostname ?? DEFAULT_HOSTNAME
 
-  // in-flight request register table:close when actively abort(SSE assert subscribe key)
+  // In-flight request registry: actively aborted on `close()` (critical for tearing down SSE subscriptions)
   const inflight = new Set<AbortController>()
 
   const server = http.createServer((req, res) => {
     void (async () => {
       const controller = new AbortController()
       inflight.add(controller)
-      // client disconnect:abort signal(SSE cancel subscribe,body read stop)
+      // Client disconnect: abort signal (cancels SSE subscriptions and body reads)
       res.on('close', () => controller.abort())
       try {
         const webRequest = await toWebRequest(req, controller.signal)
         const webResponse = await handler(webRequest)
         await writeWebResponse(webResponse, res)
       } catch (error) {
-        // connect in-flight break/convert failed: exhaust force to out 500 message seal;res cannot write then static default.
-        // res cannot write when static default only refer cannot again to client pass reach, server side log still such as record.
+        // Mid-connection failure or conversion error: best-effort 500 envelope; ignore writes if `res` is no longer writable,
+        // though still log server-side diagnostics.
         console.error('[hub] node adapter error:', describeError(error))
         if (!res.headersSent) {
           res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' })
         }
         if (!res.writableEnded) {
-          res.end(JSON.stringify({ error: { code: 'internal_error', message: 'server internal error' } }))
+          res.end(JSON.stringify({ error: { code: 'internal_error', message: 'internal server error' } }))
         }
       } finally {
         inflight.delete(controller)
@@ -131,15 +131,15 @@ export async function startHub(options: StartHubOptions): Promise<NodeHubHandle>
     })()
   })
 
-  // across platform node bottom seat store in when hang connect /ws/node gateway (node WS+birpc register/heartbeat/event).
+  // Attach `/ws/node` gateway when cross-platform node fabric is available (node WS + birpc registration/heartbeat/events).
   const envFabric = (kernel as { envFabric?: EnvFabric }).envFabric
   const nodeGateway: NodeWsGateway | undefined = envFabric
     ? attachNodeWsGateway(server, { registry: envFabric.registry })
     : undefined
-  // node pass-through tunnel independent gateway (/ws/node-tunnel; and /ws/node the same upgrade event by path stream).
+  // Separate gateway for node passthrough tunnels (`/ws/node-tunnel`, sharing the upgrade event by path routing with `/ws/node`).
   const tunnelGateway = envFabric ? attachNodeTunnelGateway(server, { registry: envFabric.registry }) : undefined
 
-  // persistent connection keep-alive:SSE explicit do not timeout
+  // Long-lived connection keep-alive: disable requestTimeout explicitly for SSE
   server.requestTimeout = 0
   server.headersTimeout = 60_000
   server.keepAliveTimeout = 65_000
@@ -156,8 +156,8 @@ export async function startHub(options: StartHubOptions): Promise<NodeHubHandle>
   const actualPort = address.port
   const url = `http://${hostname}:${actualPort}`
 
-  // listen after real URL back write runtime(port:0 when tool end point/CLI points to actual allocate address).
-  // not provide port kernel skip; call back throws such as on throw (do not damage install succeeded).
+  // Write the actual listening URL back to runtime (so `port: 0` tool endpoints / CLI point to the real port).
+  // Skipped if runtime omits the port; rethrow callback failures rather than swallowing them.
   kernel.setHubUrl?.(url)
 
   return {
@@ -167,17 +167,17 @@ export async function startHub(options: StartHubOptions): Promise<NodeHubHandle>
     },
     server,
     async close() {
-      // 0) first closure tunnel gateway, again closure /ws/node gateway (no longer accept node connect; disconnect hang in adapt layer before).
+      // 0) Close tunnel gateway first, then `/ws/node` gateway (stop accepting new node connections before tearing down adapter).
       await tunnelGateway?.close().catch(() => undefined)
       await nodeGateway?.close().catch(() => undefined)
-      // 1) actively abort all in-flight request (SSE stream signal abort → cancel subscribe)
+      // 1) Actively abort all in-flight requests (aborts SSE stream signals -> cancels subscriptions)
       for (const controller of inflight) controller.abort()
       inflight.clear()
-      // 2) force destroy all connect (contains keep-alive idle and SSE leap connect)
-      //    Node 18.2+:closeAllConnections;18.2 or fewer retreat closeIdleConnections.
+      // 2) Force-close all sockets (including keep-alive idle and open SSE connections)
+      //    Node 18.2+: closeAllConnections; fall back to closeIdleConnections on older runtimes.
       server.closeAllConnections?.()
       server.closeIdleConnections?.()
-      // 3) stop accept new connect and wait for server.close return (now without suspended connect, must rapid complete)
+      // 3) Stop accepting new connections and await server.close (with no lingering sockets, completes immediately)
       await new Promise<void>((resolve) => {
         server.close(() => resolve())
       })
@@ -185,7 +185,7 @@ export async function startHub(options: StartHubOptions): Promise<NodeHubHandle>
   } satisfies NodeHubHandle
 }
 
-/** error can print form:Error take name+message+stack, other take String(). */
+/** Printable error summary: name + message + stack for Error instances, String() otherwise. */
 function describeError(error: unknown): string {
   if (error instanceof Error) {
     return `${error.name}: ${error.message}\n${error.stack ?? ''}`

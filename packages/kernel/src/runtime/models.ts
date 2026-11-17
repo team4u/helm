@@ -1,18 +1,18 @@
 /**
- * model access:pi-ai all amount inside placement provider + providers.json compatibility gateway.
+ * Model gateway: all built-in pi-ai providers + `providers.json` compatibility gateway.
  *
- * fact based on (@earendil-works/pi-ai 1.5.0 measured source code):
- * - `createProvider({ auth })`  auth i.e. `ProviderAuth`(`apiKey?: ApiKeyAuth` +
- *   `oauth?: OAuthAuth`),ApiKeyAuth.resolve input `{ ctx, credential?, signal }`,
- *   return `AuthResult | undefined`(undefined = the channel not config, is legal state).
- * - `Model` required `provider`(must equals register provider id, request dispatch by it inspect provider)
- *   and `baseUrl`(openai-completions directly for it do string probe);`cost` four cost rate required.
- * - inside placement provider self row handle credentials, environment variable and provider special has config;helm only already store key
- *   inject original generate ApiKeyAuth  credential, do not replace original generate recognize verify decide or oauth policy.
+ * Verified facts (from `@earendil-works/pi-ai` 1.5.0 source):
+ * - `createProvider({ auth })`'s `auth` is `ProviderAuth` (`apiKey?: ApiKeyAuth` +
+ *   `oauth?: OAuthAuth`); `ApiKeyAuth.resolve` receives `{ ctx, credential?, signal }` and
+ *   returns `AuthResult | undefined` (`undefined` = unconfigured channel, a valid state).
+ * - `Model` requires `provider` (must equal the registered provider id for request dispatch)
+ *   and `baseUrl` (passed directly to `openai-completions` string URL building); four `cost` rates are required.
+ * - Built-in providers handle credentials, env vars, and provider-specific config themselves; helm only injects
+ *   already-stored keys as `credential` into native `ApiKeyAuth` without replacing native auth verification or OAuth policy.
  *
- * providers.json  `models: string[]` only static model ID, excludes capability metadata;
- * not probe to capability (contextWindow etc.) with explicit mark record keep guard default to out, never smoke fill real probe value.
- * not config model when explicit throw model_not_configured, never faux fallback pretend answer.
+ * `providers.json`'s `models: string[]` contains only static model IDs without capability metadata;
+ * unprobed capabilities (`contextWindow`, etc.) are explicitly flagged with conservative defaults rather than posing as probed values.
+ * When no model is configured, throws `model_not_configured` explicitly rather than fabricating answers.
  */
 
 import { anthropicMessagesApi } from '@earendil-works/pi-ai/api/anthropic-messages.lazy'
@@ -35,55 +35,54 @@ import {
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
 import { HelmError, type ModelCatalog, type ModelCatalogEntry, type ModelProviderSummary, type ProviderConfig } from '@helm/protocol'
 
-// sharing directory item type unify from @helm/protocol(this where re- export, consumer no need to change import path).
+// Shared catalog entry types re-exported from `@helm/protocol` (preserved here so existing consumer import paths keep working).
 export type { ModelCatalog, ModelCatalogEntry }
 
 export interface ModelGatewayOptions {
-  /** providers.json item. */
+  /** Entries from `providers.json`. */
   providers: ProviderConfig[]
-  /** providerId -> API Key(host credentials parse result). */
+  /** `providerId` -> API key (resolved by host credentials). */
   apiKeys: () => Record<string, string>
-  /** motion state model directory durable cache (models-store.json); default in-memory (do not). */
+  /** Persistent dynamic model catalog cache (`models-store.json`); defaults to in-memory (no persistence). */
   modelsStore?: ModelsStore
-  /** runtime motion state register extra provider (plugin register; credentials inject same inside placement provider). */
+  /** Dynamically registered extra providers at runtime (plugin-registered; credentials injected same as built-in providers). */
   extraProviders?: Provider[]
 }
 
 /**
- * helm additional in pi model object on source metadata (local cross type, does not enter SDK contract).
+ * Helm-specific source metadata attached to pi model objects (internal cross-cutting type; excluded from SDK contract).
  *
- * `helmContextWindowKnown`:contextWindow is otherwise is real known value.pi-ai  Model
- * contract want seek contextWindow required number, static source (providers.json compatibility gateway, upstream
- * directory missing window Magpie item) only can fill keep guard default - - these model explicit mark record false;
- * inside placement provider and explicit model directory window is policy expand data, default (undefined) treated as known.
- * field follow model object via Models.setProvider/getModel original keep (SDK do not trim unknown field).
+ * `helmContextWindowKnown`: whether `contextWindow` is a genuinely known value. pi-ai's `Model` contract
+ * requires `contextWindow` as a number, so static sources (`providers.json` compat gateway or upstream
+ * catalogs missing window sizes for Magpie items) can only supply conservative defaults — these models are
+ * explicitly flagged `false`; built-in providers and explicit catalog windows are curated facts and default
+ * (`undefined`) to known. Fields are preserved on model objects through `Models.setProvider`/`getModel`.
  */
 export interface HelmModelSourceMeta {
   helmContextWindowKnown?: boolean
 }
 
-/** model real known context window: only when window is correct finite count and not by mark recorded as static default when
- * return; unknown (model do not in set / mark record false / window non- correct or non- finite) return undefined,
- * do not fabricate. */
+/** Returns a model's genuinely known context window only when positive, finite, and not flagged as a static default;
+ * returns `undefined` when unknown (missing model / flagged `false` / non-positive or non-finite), never fabricating. */
 export function knownContextWindowOf(model: Model<Api> | undefined): number | undefined {
   if (model === undefined) return undefined
   if ((model as Model<Api> & HelmModelSourceMeta).helmContextWindowKnown === false) return undefined
   return Number.isFinite(model.contextWindow) && model.contextWindow > 0 ? model.contextWindow : undefined
 }
 
-/** compatibility gateway static model keep guard default.providers.json only to model ID(string[]),
- * pi-ai  Model contract want seek contextWindow / maxTokens / cost is required number - -
- * these is let request can out most small default, is not probe to real capability:
- * real capability only can from upstream directory (such as /v1/models probe),helm item before does not probe.
+/** Conservative defaults for static compat-gateway models: `providers.json` supplies only model IDs (`string[]`),
+ * while pi-ai's `Model` contract requires numeric `contextWindow` / `maxTokens` / `cost`.
+ * These are minimal defaults so requests can go out — NOT probed real capabilities (which come only from
+ * upstream catalogs like `/v1/models`).
  */
 const COMPAT_MODEL_DEFAULTS = {
   contextWindow: 128_000,
   maxTokens: 8_192,
-  /** cost rate unknown record 0:pi-ai use it compute usage.cost, unknown cost rate by 0 count price and such as mark note. */
+  /** Unknown cost rates default to 0: pi-ai uses these for `usage.cost`; unknown rates compute as 0 and are noted as such. */
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 } as const
 
-/** compatibility gateway static model (real Model type, without any as assertion). */
+/** Compat-gateway static model (concrete `Model` type, zero `as` casts). */
 function compatModel(
   id: string,
   config: ProviderConfig,
@@ -95,7 +94,7 @@ function compatModel(
     baseUrl: config.baseUrl,
     input: ['text'] as ModelInputModality[],
     ...COMPAT_MODEL_DEFAULTS,
-    // static default window is not probe value: explicit mark record unknown (knownContextWindowOf based on this omit).
+    // Static default window is unprobed: mark explicitly unknown (skipped by knownContextWindowOf).
     helmContextWindowKnown: false,
   }
   return config.protocol === 'anthropic'
@@ -103,7 +102,7 @@ function compatModel(
     : { ...shared, api: 'openai-completions', reasoning: false }
 }
 
-/** compatibility gateway ApiKeyAuth:credential key(host parse inject) takes precedence, not config return undefined. */
+/** Compat-gateway `ApiKeyAuth`: credential key (host-injected) takes precedence; returns `undefined` if unconfigured. */
 function compatApiKeyAuth(providerId: string, apiKey: string | undefined): ApiKeyAuth {
   return {
     name: `${providerId} API key`,
@@ -132,10 +131,10 @@ function buildCompatProvider(config: ProviderConfig, apiKey: string | undefined)
 }
 
 /**
- * build when before Models set.providers.json / credentials change after by host rebuild,
- * via HarnessOptions.models  getter form hot takes effect (no need to heavy open harness).
- * register order: inside placement provider -> runtime motion state register (extraProviders)-> self define compatibility gateway;
- * after register override same id first register (and reloadModels conflict pre- validate match set, this in does not repeat intercept).
+ * Build the current `Models` registry. Rebuilt by host after `providers.json`/credential changes and hot-applied
+ * via `HarnessOptions.models` getter without restarting the harness.
+ * Registration precedence: built-in providers -> runtime dynamic providers (`extraProviders`) -> custom compat
+ * gateways; later registrations override matching IDs from earlier ones (matching `reloadModels` conflict pre-validation).
  */
 export function buildModels(options: ModelGatewayOptions): Models {
   const models = createModels(options.modelsStore ? { modelsStore: options.modelsStore } : undefined)
@@ -156,7 +155,7 @@ export function buildModels(options: ModelGatewayOptions): Models {
   return models
 }
 
-/** keep provider original generate recognize verify logic;OAuth-only provider must not by inject fabricate API Key way. */
+/** Preserve provider's native auth resolution; OAuth-only providers must never receive fabricated API key methods. */
 function withInjectedKey(provider: Provider, injectedKey: string | undefined): Provider {
   const base = provider.auth.apiKey
   if (!injectedKey || !base) return provider
@@ -173,9 +172,9 @@ function withInjectedKey(provider: Provider, injectedKey: string | undefined): P
 }
 
 /**
- * explicit throw shadow public metadata, never serialization SDK provider inside headers or recognize verify call back.
- * dynamic: implement refreshModels provider support remote directory refresh;
- * baseUrl / pluginId: non- secret render and through use plugin ownership mount (runtime register table pass).
+ * Expose only public metadata; never serialize SDK providers' internal headers or auth callbacks.
+ * `dynamic`: provider implements `refreshModels` for remote catalog refreshing;
+ * `baseUrl` / `pluginId`: non-secret display fields and owning plugin provenance (passed from runtime registry).
  */
 export function listModelProviders(
   models: Models,
@@ -203,19 +202,19 @@ export interface ModelRefParts {
 export function parseModelRef(ref: string): ModelRefParts {
   const slash = ref.indexOf('/')
   if (slash <= 0 || slash >= ref.length - 1) {
-    throw new HelmError('validation_error', `model reference format should be 'provider/model':${ref}`)
+    throw new HelmError('validation_error', `Model reference must be in 'provider/model' format: ${ref}`)
   }
   return { provider: ref.slice(0, slash), modelId: ref.slice(slash + 1) }
 }
 
 /**
- * column out all model directory (contains not config key , mark note available) and each model think Profile.
- * checkAuth semantics:undefined = legal not config credentials; only this case record available=false.
- * read error / protocol error (ModelsError code auth etc.) to on throw diagnose, never static default swallow.
- * contextWindow only throw shadow real known window (knownContextWindowOf): static default,
- * upstream not to window or illegal value (non- correct/non- finite) one rule omit, never 128k honor bottom smoke fill fact.
- * disabledSnapshot:providerId -> user explicit disable model ID collection (availability semantics do not change,
- * disable only as directory mark note; filter in conversation model parse entry execute).
+ * List full model catalog (including unconfigured providers, marked `available=false`) and per-model effort levels.
+ * `checkAuth` semantics: `undefined` = validly unconfigured credentials (only case marked `available=false`);
+ * read/protocol errors (`ModelsError` code `auth`, etc.) propagate for diagnostics rather than silently swallowing.
+ * `contextWindow` exposes only genuinely known windows (`knownContextWindowOf`); static defaults, missing upstream
+ * windows, and non-positive/non-finite values are omitted rather than fabricating a 128k fallback.
+ * `disabledModels`: `providerId ->` explicitly disabled model IDs (does not change `available`; marked `disabled` in
+ * catalog and filtered during conversation model resolution).
  */
 export async function listModelCatalog(
   models: Models,
@@ -246,12 +245,12 @@ export async function listModelCatalog(
   }
 }
 
-/** parse by default model reference; any missing all explicit errors (do not false build model). */
+/** Resolve default model reference; missing config fails explicitly instead of fabricating a model. */
 export function requireModelRef(ref: string | undefined): ModelRefParts {
   if (!ref || ref.trim() === '') {
     throw new HelmError(
       'model_not_configured',
-      'not config any model: please in providers.json / profile in config, or settings HELM_MODEL environment variable',
+      'No model configured: configure one in providers.json / Profile or set HELM_MODEL',
       503,
     )
   }
@@ -259,21 +258,21 @@ export function requireModelRef(ref: string | undefined): ModelRefParts {
 }
 
 /**
- * by target model capability converge think Profile (setModel → setThinkingLevel kernel consolidate).
+ * Clamp reasoning effort level to target model capabilities (converged in kernel on `setModel` -> `setThinkingLevel`).
  *
- * fact based on (pi-ai 1.5.0 source code):
- * - `getSupportedThinkingLevels`:reasoning:false → ['off'];reasoning:true without
- *   thinkingLevelMap → ['off'..'high'](xhigh/max must explicit map only then available);
- * - `clampThinkingLevel`: unsupported Profile by SDK available Profile sequence then near converge
- *   (first to on find most near available Profile, again to under find).
+ * Verified facts (pi-ai 1.5.0 source):
+ * - `getSupportedThinkingLevels`: `reasoning: false` -> `['off']`; `reasoning: true` without
+ *   `thinkingLevelMap` -> `['off'..'high']` (`xhigh`/`max` require explicit mapping);
+ * - `clampThinkingLevel`: clamps unsupported levels to the nearest supported level in the SDK list
+ *   (searches upward first for nearest supported level, then downward).
  *
- * pass-through exemption (capability unknown do not break contract):
- * - model do not in when before Models set (faux test model, directory refresh window, external inject set)
- *   when original return - -helm do not virtual construct capability, never because inspect without metadata change write user config;
- * - `reasoning:false` and without `thinkingLevelMap` model do not treated as already declaration capability boundary,
- *   Profile original pass-through, by underlying adapt decide actual parameter behavior.
+ * Pass-through exemptions (missing capabilities must not break contracts):
+ * - Models absent from current `Models` registry (mock test models, catalog refresh windows, externally injected sets)
+ *   pass through unchanged — helm never fabricates capabilities or overwrites user config on missing metadata;
+ * - Models with `reasoning: false` and no `thinkingLevelMap` have no declared boundary and pass levels through
+ *   for the underlying adapter to determine behavior.
  *
- * empty string (not config) original return: does not with follow inherit chain mistakenly becomes explicit off.
+ * Empty strings (unconfigured) pass through unchanged so the inheritance chain is never misread as explicit `'off'`.
  */
 export function clampThinkingLevelForModel(
   models: Models,
@@ -283,13 +282,13 @@ export function clampThinkingLevelForModel(
   if (modelRef === undefined || level === undefined || level === '') return level
   const model = models.getModel(modelRef.provider, modelRef.modelId)
   if (model === undefined) return level
-  // capability declaration decide: explicit thinkingLevelMap is unique can message boundary;reasoning:true and
-  // without map model by pi-ai default Profile (off..high) converge (e.g. max → high).
+  // Capability boundary check: explicit `thinkingLevelMap` is authoritative; `reasoning: true` without
+  // a map clamps against pi-ai's default levels (`off..high`, e.g. `max` -> `high`).
   if (model.reasoning !== true && model.thinkingLevelMap === undefined) return level
   const supported = getSupportedThinkingLevels(model)
   if (supported.includes(level as ModelThinkingLevel)) return level
-  // SDK off semantics (generation: thinkingLevel==='off' do not reasoning parameter) for any
-  // model all can satisfy, do not by clamp lift rise to most small available Profile; user explicit close think intent keep.
+  // SDK `'off'` semantics (`thinkingLevel === 'off'` omits reasoning parameter) work for every model;
+  // never clamp upward to the smallest supported level when the user explicitly disabled reasoning.
   if (level === 'off') return 'off'
   return clampToModelLevels(model, level as ModelThinkingLevel)
 }

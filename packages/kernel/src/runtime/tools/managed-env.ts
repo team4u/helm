@@ -1,19 +1,18 @@
 /**
- * managed environment together into (unique right threat in env/scoped-env.ts  ScopedExecutionEnv of outside
- * tool side group install layer):local inherit process.env(real PATH/HOME) and strip except managed HELM_*
- * variable (large small write do not sensitive), managed variable (HELM_ENV / HELM_HUB_URL /
- * HELM_CONVERSATION_ID / HELM_CWD / HELM_DATA_DIR / HELM_NODE_ID /
- * HELM_EXECUTION_SCOPE / managed HELM_TOKEN) by buildManagedEnv live together into fixed
- * override,deps.cliBinDir pre- inject PATH; remote node never carry Hub host environment, also never
- * together into by default PATH(node daemon itself merge node PATH/HOME and strip except node host
- * HELM_TOKEN); remote HELM_HUB_URL only take node register when on report real hubUrl(not on report
- * then omit the key, never fallback Hub local machine address). this where do not another establish second set together into rule.
+ * Managed environment assembly (outer tool assembly layer atop the sole source of truth `ScopedExecutionEnv` in
+ * `env/scoped-env.ts`): local inherits `process.env` (real PATH/HOME) while stripping all managed `HELM_*`
+ * variables (case-insensitively), applies pinned overrides via `buildManagedEnv` (`HELM_ENV` / `HELM_HUB_URL` /
+ * `HELM_CONVERSATION_ID` / `HELM_CWD` / `HELM_DATA_DIR` / `HELM_NODE_ID` / `HELM_EXECUTION_SCOPE` / managed
+ * `HELM_TOKEN`), and prepends `deps.cliBinDir` to `PATH`. Remote nodes never inherit Hub host env or default PATH
+ * (node daemons merge node PATH/HOME themselves and strip node host `HELM_TOKEN`); remote `HELM_HUB_URL` uses only
+ * the real `hubUrl` reported at node registration (omitted if unreported; never falls back to Hub's local address).
+ * Never introduce a second env assembly path here.
  */
 import { createHash } from 'node:crypto'
 import { composeExecutionEnv, MANAGED_EXEC_ENV_VARS } from '../../env/scoped-env.js'
 import type { HelmToolDeps } from '../tool-deps.js'
 
-/** group install tool environment:process.env < options.env < managed variable (fixed override, see buildManagedEnv). */
+/** Assemble tool env: `process.env < options.env < managed vars` (pinned overrides; see `buildManagedEnv`). */
 export function buildToolEnv(
   deps: HelmToolDeps,
   cwd: string,
@@ -27,12 +26,12 @@ export function buildToolEnv(
 }
 
 /**
- * execute effect domain anchor:HELM_EXECUTION_SCOPE = `helm-<sha256 before 24 hex>`.
- * input only contains non- secret execute fact (Helm instance identifier dataDir, conversation ID, node ID, actual
- * cwd, array JSON serialization guard against isolate symbol ambiguity); same conversation same target many command constant identical, across
- * conversation/node/worktree/Helm instance different. it is supply tool explicit adopt stable asset naming hint
- * (lock file/temp directory/cache prefix etc.), is not OS sandbox, does not promise automatically isolated third way
- * daemon; never contains any secret.
+ * Execution scope anchor: `HELM_EXECUTION_SCOPE = helm-<first 24 hex chars of sha256>`.
+ * Inputs contain only non-secret execution coordinates (Helm instance `dataDir`, conversation ID, node ID,
+ * actual `cwd`; JSON-serialized array avoids delimiter ambiguity). Identical across commands within the same
+ * conversation and target, distinct across conversations/nodes/worktrees/Helm instances. Intended as a stable
+ * naming hint for tools adopting lock files, temp dirs, or cache prefixes — not an OS sandbox or automatic
+ * isolation mechanism for third-party daemons; never contains any secret.
  */
 export function executionScopeHash(
   dataDir: string,
@@ -46,27 +45,24 @@ export function executionScopeHash(
   return `helm-${digest.slice(0, 24)}`
 }
 
-/** managed identity variable name large write collection:stash/profile everything large small write change body all must not provide (Windows
- *  env name large small write do not sensitive,lowercase alias can in child process read when hijack canonical value). */
+/** Uppercase set of managed identity var names: neither stash nor profile may supply them in any casing
+ * (Windows env names are case-insensitive, so lowercase aliases could hijack canonical reads in children). */
 const MANAGED_ENV_UPPER = new Set<string>(MANAGED_EXEC_ENV_VARS.map((name) => name.toUpperCase()))
 
 /**
- * host managed environment variable (excludes process.env): conversation SecretStash inject + fixed override
- * HELM_ENV / HELM_HUB_URL / HELM_CONVERSATION_ID / HELM_CWD / HELM_EXECUTION_SCOPE /
- * (only local)HELM_DATA_DIR, and managed HELM_TOKEN(without managed token when never pass-through same name inherit value).
- * stash key hit managed identity variable (contains large small write change body) when one rule strip except (Windows env name large small write
- * do not sensitive, alias hijack back connect/identity/effect domain variable); managed value only in this together into canonical name.
- * local(inherit process.env) and remote (does not carry host process environment) shared use this construct.
- * options.stashEnv can override by default all leap secret (external spawn most small authorization use:
- * pass {} i.e. does not carry any conversation secret, only keep managed HELM_*).
- * remote dedicated use semantics:
- * - HELM_HUB_URL only take node register when on report real back connect address (guard constant); node not on report
- *   when omit the key (daemon side keep its shellEnv real hubUrl), never fallback
- *   deps.hubUrl(that may is Hub local machine 127.0.0.1, remote cannot reach);
- * - HELM_DATA_DIR is Hub local machine path, do not inject remote (guard against node mistakenly use Hub disk path);
- * - HELM_TOKEN is Hub process managed token: remote child process rely on it via HTTP back connect Hub authentication
- *  (verifyToken recognize process inside summary; honest boundary:token will appear in remote machine memory/environment,
- *   and local machine child process same right, does not promise for remote machine zero leak leak).
+ * Host-managed env vars (excluding `process.env`): conversation `SecretStash` injections + pinned overrides
+ * for `HELM_ENV` / `HELM_HUB_URL` / `HELM_CONVERSATION_ID` / `HELM_CWD` / `HELM_EXECUTION_SCOPE` /
+ * `HELM_DATA_DIR` (local only) / managed `HELM_TOKEN` (omitted when no managed token exists).
+ * Any stash keys matching managed identity vars (case-insensitively) are stripped; managed values are injected
+ * solely under canonical uppercase names. Shared by local and remote assembly.
+ * `options.stashEnv` can override default conversation secrets (used by external spawns for least privilege:
+ * passing `{}` omits all conversation secrets while keeping `HELM_*`).
+ * Remote-specific semantics:
+ * - `HELM_HUB_URL` uses only the node's reported callback URL (omits key when unreported rather than falling
+ *   back to `deps.hubUrl`, which may be local 127.0.0.1 and unreachable remotely);
+ * - `HELM_DATA_DIR` is Hub's local path and is omitted on remote nodes;
+ * - `HELM_TOKEN` is Hub's process-managed token so remote children can authenticate HTTP callbacks to Hub
+ *   (honesty boundary: tokens exist in remote child memory/env just like local children — zero-leakage is not promised).
  */
 export function buildManagedEnv(
   deps: HelmToolDeps,
@@ -81,17 +77,15 @@ export function buildManagedEnv(
       : conversationId === undefined
         ? {}
         : deps.stashEnvFor(conversationId)
-  // stash one rule must not carry managed identity variable (contains large small write change body): managed value only by under way fixed override
-  // together into canonical name;secret hit helm_execution_scope / Helm_Cwd etc. alias when
-  // directly strip except (Windows env name large small write do not sensitive, alias can hijack child process read). copy use
-  // expand semantics (DefineOwnProperty) keep __proto__ etc. self has key, strip except use delete.
+  // Stash must never carry managed identity variables in any casing; strip aliases like `helm_execution_scope`
+  // or `Helm_Cwd` before injecting canonical overrides. Uses object spread (`DefineOwnProperty`) + `delete`
+  // to avoid prototype pollution on `__proto__`.
   const safeStashEnv: Record<string, string> = { ...stashEnv }
   for (const key of Object.keys(stashEnv)) {
     if (MANAGED_ENV_UPPER.has(key.toUpperCase())) delete safeStashEnv[key]
   }
   const managedToken = deps.processToken?.()
-  // remote back connect address guard constant: only use node register when on report real hubUrl; not on report then omit the key,
-  // never fallback deps.hubUrl(Hub local machine address for remote cannot reach).
+  // Guard remote callback URL: use only registered node's reported hubUrl, else omit (never fall back to local Hub URL).
   const nodeHubUrl = nodeId !== 'local' ? deps.envFabric?.getNodeHubUrl(nodeId) : undefined
   const hubUrl = nodeId === 'local' ? deps.hubUrl : nodeHubUrl
   const env: Record<string, string> = {

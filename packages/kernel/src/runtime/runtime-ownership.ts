@@ -1,10 +1,10 @@
 /**
- * RuntimeOwnershipManager: conversation ownership right and plugin conversation manage right maintain (from KernelRuntime split out).
+ * RuntimeOwnershipManager: conversation ownership and plugin management locks (extracted from KernelRuntime).
  *
- * responsibility:
- * - conversation ownership right decide and durable mark record (getOwnership, markOwnership);
- * - plugin conversation manage right hold has and release (manage, release);
- * - ownership change throw shoot conversation.upsert event.
+ * Responsibilities:
+ * - Resolve and persistently record conversation ownership (getOwnership, markOwnership);
+ * - Acquire and release plugin conversation management locks (manage, release);
+ * - Emit conversation.upsert events when ownership changes.
  */
 
 import type { ConversationSummary } from '@helm/protocol'
@@ -25,20 +25,20 @@ export interface RuntimeOwnershipDeps {
 }
 
 export class RuntimeOwnershipManager {
-  /** conversation plugin manage right:conversationId -> hold has pluginId set (delete protect). */
+  /** Plugin management locks per conversation: conversationId -> holding pluginIds (protects against deletion). */
   readonly managedConversations = new Map<number, Set<string>>()
 
   constructor(private readonly deps: RuntimeOwnershipDeps) {}
 
   /**
-   * conversation ownership right now read (Watchdog hard rule decide unique can message source):
-   * - conversation missing (contains deleted tombstone) when throw not_found;
-   * - not mark record/mark record illegal value one rule human(rather leak manage do not exceeds right).
+   * Look up current conversation ownership (single authoritative source for Watchdog invariants):
+   * - Missing or tombstoned conversations throw not_found;
+   * - Unset or unrecognized marks default to 'human' (fail-safe: better to skip automation than act on human conversations).
    */
   getOwnership(conversationId: number): ConversationOwnership {
     const meta = this.deps.store.getConv(conversationId)
     if (meta === undefined || this.deps.store.isDeleted(conversationId)) {
-      throw new HelmError('not_found', `conversation missing:${conversationId}`, 404, { conversationId })
+      throw new HelmError('not_found', `conversation not found: ${conversationId}`, 404, { conversationId })
     }
     const owners = this.deps.documentStore.get<Record<string, string>>('conversation-ownership', {})
     const marked = owners[String(conversationId)]
@@ -46,9 +46,9 @@ export class RuntimeOwnershipManager {
   }
 
   /**
-   * conversation ownership right mark record (Watchdog hard rule decide unique can message source):
-   * - independent of user can change tags/parent push assert; not mark record one rule treated as human;
-   * - persist at global doc('conversation-ownership'), restart keep.
+   * Record conversation ownership (single authoritative source for Watchdog invariants):
+   * - Independent of user-editable tags/parent derivation; unmarked defaults to 'human';
+   * - Persisted in global doc 'conversation-ownership' across restarts.
    */
   markOwnership(conversationId: number, owner: ConversationOwnership): void {
     const key = 'conversation-ownership'
@@ -69,7 +69,8 @@ export class RuntimeOwnershipManager {
   }
 
   /**
-   * plugin conversation manage right (delete protect): only enabled plugin can hold has; return release function.
+   * Acquire a plugin management lock on a conversation (protects against deletion): only enabled plugins should hold
+   * one; returns a release callback.
    */
   manage(conversationId: number, pluginId: string): () => void {
     let owners = this.managedConversations.get(conversationId)

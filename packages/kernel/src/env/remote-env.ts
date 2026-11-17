@@ -1,19 +1,19 @@
 /**
- * remote execute environment: pi-durable `ExecutionEnv`(FileSystem + Shell) each
- * operation translate is for node side `NodeEnvRpcFunctions` invoke.
+ * Remote execution environment: translates each `pi-durable` `ExecutionEnv` (`FileSystem` + `Shell`)
+ * operation into a node-side `NodeEnvRpcFunctions` call.
  *
- * key semantics (honest discipline):
- * - reader with readerId handle bridge;close idempotent and do not because connect expires suspended;
- * - `exec`  onOutput chunked via ExecOutputHub back put (node streaming push, by execId routing),
- *   instance level output sink on demand register/deregister: first carries onOutput  exec before register to
- *   resolver, finally a in-flight exec end (or cleanup) after deregister - - short lifecycle
- *   instance (envFor path) use after i.e. abandon also without register table leftover;
- * - cancel pass broadcast:context abort when immediately rpc.envAbortExec(execId) let node kill die the
- *   command the whole child process tree, do not etc. command self however end;
- * - remote node offline and resolver support while waiting, block wait for reconnect (can cancel);
- *   **never back to local**- - remote (nodeId, cwd) path only in target node on has intent meaning;
- * - connect lose (exec already after start disconnect): command result unknown. with `unknown` error explicit
- *   report (do not automatically retry), never static default replay do not security shell(external side effect cannot replay).
+ * Key semantics (honest discipline):
+ * - Readers are bridged via `readerId`; `close` is idempotent and never hangs when the connection drops;
+ * - `exec` `onOutput` chunks come back via `ExecOutputHub` (node streaming push routed by `execId`),
+ *   with instance-level output sinks registered/unregistered on demand: registered before the first `exec`
+ *   with `onOutput` and unregistered when the last in-flight `exec` (or `cleanup`) finishes—so short-lived
+ *   instances (`envFor` path) leave no leaked references in the registry;
+ * - Cancellation propagation: aborting `context` immediately sends `rpc.envAbortExec(execId)` so the node
+ *   kills the command's whole process tree instead of waiting for it to finish on its own;
+ * - Remote node offline: blocks waiting for reconnect when supported by `resolver` (cancellable),
+ *   **never falling back to local**—remote `(nodeId, cwd)` paths are only meaningful on the target node;
+ * - Connection lost (disconnect after `exec` started): command outcome is unknown. Reports explicitly via
+ *   an `unknown` error (no auto-retry) and never silently replays unsafe shell commands (external side effects cannot be replayed).
  */
 
 import type { Context } from '@earendil-works/chord/context'
@@ -38,16 +38,15 @@ import type { EnvExecOutputEvent, NodeEnvRpcFunctions, RpcEnvError, RpcResult } 
 import { HelmError } from '@helm/protocol'
 import { ExecOutputHub } from './exec-output.js'
 
-/** by nodeId parse node env RPC(by fabric connect register table connect line). */
+/** Resolves a node's env RPC by `nodeId` (wired to fabric's connection registry). */
 export interface NodeRpcResolver {
   getNodeEnvRpc(nodeId: string): NodeEnvRpcFunctions | undefined
   /**
-   * remote offline resilience: node offline when wait for reconnect (respect context cancel); cannot wait for
-   * (not provide) when caller immediately failed. cancel when return undefined.
+   * Offline resilience: waits for node reconnect when offline (respects context abort); fails immediately
+   * when unprovided. Returns `undefined` on cancellation.
    */
   waitForNodeOnline?(nodeId: string, context: Context): Promise<NodeEnvRpcFunctions | undefined>
-  /** instance level output sink register (by exec lifecycle self manage; without then the instance output
-   *  do not routing - - only when without streaming requirement internal construct use). */
+  /** Instance-level output sink registration (self-managed per exec lifecycle; omitted only for internal non-streaming stubs). */
   addOutputSink?(nodeId: string, sink: (event: EnvExecOutputEvent) => void): void
   removeOutputSink?(nodeId: string, sink: (event: EnvExecOutputEvent) => void): void
 }
@@ -56,26 +55,25 @@ export interface RemoteExecutionEnvOptions {
   nodeId: string
   cwd: string
   /**
-   * file operation parse RPC connect wait for cap (milli second), default 30s: file operation may run in
-   * withFileMutationQueue hold lock window inside, unbounded etc. reconnect will freeze the file all queue up
-   *(other conversation/plugin) direct until hold lock turn by abort; timeout throw node_offline release lock.
-   * exec do not subject to limit (long command wait for reconnect by caller context cancel semantics manage).
+   * Cap on waiting for reconnect during file-op RPC resolution (ms), default 30s: file ops may run inside
+   * `withFileMutationQueue`'s lock window, where unbounded waiting would freeze the file queue (for other
+   * conversations/plugins) until the lock holder's turn is aborted; timing out throws `node_offline` and releases the lock.
+   * `exec` is uncapped (long commands manage reconnect waits via caller context cancellation).
    */
   rpcWaitTimeoutMs?: number
 }
 
-/** #call file operation parse RPC default wait for cap. */
+/** Default reconnect wait cap for `#call` file-op RPC resolution. */
 const DEFAULT_RPC_WAIT_TIMEOUT_MS = 30_000
 
 const fileError = (error: RpcEnvError, path?: string): FileError =>
   new FileError(error.code as FileError['code'], error.message, path)
 
-// node upgrade arrange empty refuse new (envExec return node_draining):pi-durable 
-// ExecutionError/FileError join together (external package) cannot bear load node state code, along use since has
-// runtime pass-through policy (and connect_failed same):code original keep in error object on,
-// message carry complete diagnose - - on layer (such as tools.ts  shell tag) can based on this
-// node is now upgrade arrange empty and aborted(cancel)/unknown(assert connect result unknown) zone,
-// never archive and is aborted, also does not trigger without sound retry/wait for reconnect.
+// Node draining for upgrade (`envExec` returns `node_draining`): `pi-durable`'s `ExecutionError`/`FileError`
+// union (external package) cannot encode node-level status codes, so keep the raw code on the error object
+// via runtime passthrough (same as `connect_failed`) and preserve full diagnostics in `message`—upstream layers
+// (e.g. `tools.ts` shell tagging) can distinguish draining from `aborted` (cancelled) and `unknown` (disconnected
+// with unknown result) rather than misreporting it as aborted or triggering blind retries/reconnect waits.
 
 const execErrorFromRpc = (error: RpcEnvError): ExecutionError => {
   const e = new ExecutionError(error.code as ExecutionError['code'], error.message)
@@ -89,7 +87,7 @@ const unwrapFile = <T>(result: RpcResult<T>, path?: string): Result<T, FileError
 const voidOk: Result<void, FileError> = { ok: true, value: undefined }
 
 const lostMessage = (nodeId: string, error: unknown): string =>
-  `node ${nodeId} connect interrupt, operation result unknown (do not automatically retry):${error instanceof Error ? error.message : String(error)}`
+  `node ${nodeId} connection lost; operation outcome unknown (not auto-retried): ${error instanceof Error ? error.message : String(error)}`
 
 let execSeq = 0
 
@@ -112,8 +110,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
     this.#rpcWaitTimeoutMs = options.rpcWaitTimeoutMs ?? DEFAULT_RPC_WAIT_TIMEOUT_MS
   }
 
-  /** sink register/deregister by in-flight exec counter: first carries onOutput  exec register, finally a
-   *  after end deregister - - instance (contains envFor short lifecycle object) leaves no residue register table strong reference. */
+  /** Reference-counted sink registration per in-flight exec: registers on first exec with `onOutput`, unregisters when the last ends (so short-lived `envFor` objects leave no registry refs). */
   #acquireSink(): void {
     this.#liveExecsWithOutput += 1
     if (!this.#sinkRegistered && this.#resolver.addOutputSink !== undefined) {
@@ -130,7 +127,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
     }
   }
 
-  /** node side streaming call back entry (fabric register to register table by node routing). */
+  /** Node streaming callback entrypoint (registered in registry by fabric, routed by node). */
   get onEnvExecOutput(): (event: EnvExecOutputEvent) => void {
     return this.#outputHub.onEnvExecOutput
   }
@@ -139,7 +136,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
     return this.#outputHub
   }
 
-  /** acquire online node RPC; offline and can while waiting first wait for (wait for during context cancel → undefined). */
+  /** Acquire online node RPC; waits when offline if supported (returning `undefined` on context cancellation). */
   async #rpc(context: Context): Promise<NodeEnvRpcFunctions> {
     const rpc = this.#resolver.getNodeEnvRpc(this.#nodeIdValue)
     if (rpc !== undefined) return rpc
@@ -147,38 +144,38 @@ export class RemoteExecutionEnv implements ExecutionEnv {
     if (wait !== undefined) {
       const restored = await wait(this.#nodeIdValue, context)
       if (restored !== undefined) return restored
-      throw new Error(`wait for node ${this.#nodeIdValue} enable already by cancel`)
+      throw new Error(`cancelled while waiting for node ${this.#nodeIdValue} to come online`)
     }
-    throw new Error(`node ${this.#nodeIdValue} offline`)
+    throw new Error(`node ${this.#nodeIdValue} is offline`)
   }
 
   /**
-   * reader across proxy security: handle bind set create when RPC proxy. node reconnect after new proxy may re- use the same
-   * readerId ordinal (such as r1 points to another file) - - never can old handle to new proxy mistakenly read
-   * other file. each time read/info/next/close all validate original proxy rpc still is when before proxy,
-   * expires i.e. report unknown/invalid(do not replay, do not across proxy re- use).
+   * Cross-generation reader safety: handles bind to the RPC proxy active at open time. After a node reconnects,
+   * the new generation may reuse the same `readerId` ordinals (e.g. `r1` pointing to a different file)—old handles
+   * must never read the wrong file on a new generation. Every read/info/next/close checks that the original
+   * proxy is still current, failing expired handles with `unknown` (never replayed or reused across generations).
    */
   #staleReaderError(path: string): FileError {
     return new FileError(
       'unknown',
-      `node ${this.#nodeIdValue} connect already replace,reader handle which belong proxy already final (do not across proxy re- use):${path}`,
+      `node ${this.#nodeIdValue} connection was replaced; reader handle's generation has ended (must not be reused across generations): ${path}`,
       path,
     )
   }
 
-  /** original proxy rpc is otherwise still is when before proxy (false = already by top replace/disconnect, handle all expires). */
+  /** Whether `rpc` is still the active proxy (false = superseded/disconnected, invalidating handles). */
   #isCurrentRpc(rpc: NodeEnvRpcFunctions): boolean {
     return this.#resolver.getNodeEnvRpc(this.#nodeIdValue) === rpc
   }
 
   /**
-   * file operation entry RPC parse (#call dedicated use): wait for reconnect has boundary (rpcWaitTimeoutMs).
-   * without boundary wait for in hold lock window inside will file queue freeze to hold lock turn by abort; timeout throw
-   * node_offline(lock follow exception release), node reconnect after caller can explicit retry.
+   * Bounded RPC resolution for file ops (used only by `#call`): caps reconnect wait to `rpcWaitTimeoutMs`.
+   * Unbounded waits inside a mutation lock would freeze the file queue until the holder's turn is aborted;
+   * timing out throws `node_offline` (releasing the lock) so callers can retry explicitly once the node returns.
    */
   async #rpcBounded(context: Context): Promise<NodeEnvRpcFunctions> {
     const rpcPromise = this.#rpc(context)
-    // timeout first until when rpcPromise still may in etc.:observe guard against not handle rejection.
+    // Observe `rpcPromise` rejection in case the timeout fires first.
     rpcPromise.catch(() => undefined)
     let timer: NodeJS.Timeout | undefined
     try {
@@ -188,7 +185,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
           timer = setTimeout(() => {
             reject(new HelmError(
               'node_offline',
-              `node ${this.#nodeIdValue} offline, wait for reconnect exceeds ${this.#rpcWaitTimeoutMs}ms(file operation do not unbounded wait for)`,
+              `node ${this.#nodeIdValue} is offline; reconnect wait exceeded ${this.#rpcWaitTimeoutMs}ms (file operations do not wait unboundedly)`,
               409,
               { nodeId: this.#nodeIdValue },
             ))
@@ -201,7 +198,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
     }
   }
 
-  /** RPC invoke wrap: node lose join (connect disconnect throws) archive one is result unknown. */
+  /** RPC invocation wrapper: connection drops normalize to an explicit unknown-outcome error. */
   async #call<T>(
     fn: (rpc: NodeEnvRpcFunctions) => Promise<RpcResult<T>>,
     context: Context,
@@ -253,7 +250,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
       ok: true,
       value: {
         readLine: async () => {
-          // across proxy validate: old handle do not to new proxy (new proxy same name readerId is another file).
+          // Cross-generation check: never send old handles to a new proxy (same readerId would hit a different file).
           if (!this.#isCurrentRpc(rpc)) return { ok: false, error: this.#staleReaderError(path) }
           let read: Awaited<ReturnType<typeof rpc.envTextReaderRead>>
           try {
@@ -269,7 +266,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
           try {
             if (this.#isCurrentRpc(rpc)) await rpc.envTextReaderClose({ readerId })
           } catch {
-            // connect already expires: node side reader lifecycle and connect bind set, on disconnect unify reclaim.
+            // Connection already stale: node-side reader lifetime is tied to the connection and reclaimed on disconnect.
           }
         },
       },
@@ -297,7 +294,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
       if (context.abortSignal?.aborted) throw error
       throw new Error(lostMessage(this.#nodeIdValue, error))
     }
-    // across proxy validate: each time invoke before confirm original proxy rpc still is when before proxy (old handle do not to new proxy).
+    // Cross-generation check: verify original RPC is still active before each call (never route old handles to a new generation).
     const guard = (): FileError | undefined =>
       this.#isCurrentRpc(rpc) ? undefined : this.#staleReaderError(path)
     const call = <T>(fn: (r: string) => Promise<RpcResult<T>>): Promise<Result<T, FileError>> => {
@@ -323,7 +320,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
           try {
             if (this.#isCurrentRpc(rpc)) await rpc.envBinaryReaderClose({ readerId })
           } catch {
-            // same on: connect expires when by node side connect level reclaim fall back.
+            // Same as above: stale connections are reclaimed at connection scope on the node.
           }
         },
       },
@@ -360,7 +357,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
   }
 
   async flushFile(path: string, context: Context): Promise<Result<void, FileError>> {
-    // real forwarding node side envFlushFile: remote fsync semantics by node execute (do not fake succeeded).
+    // Forwards directly to node-side `envFlushFile`: remote fsync runs on the node (never faked as success).
     const result = await this.#call((rpc) => rpc.envFlushFile({ path, cwd: this.cwd }), context, path)
     return result.ok ? voidOk : result
   }
@@ -407,7 +404,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
       ok: true,
       value: {
         next: (maxEntries: number) => {
-          // across proxy validate: old handle do not to new proxy (new proxy same name readerId is another directory page cursor).
+          // Cross-generation check: never send old handles to a new proxy (same readerId would be a different dir cursor).
           if (!this.#isCurrentRpc(rpc)) {
             return Promise.resolve({ ok: false, error: this.#staleReaderError(path) })
           }
@@ -422,7 +419,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
           try {
             if (this.#isCurrentRpc(rpc)) await rpc.envDirReaderClose({ readerId })
           } catch {
-            // connect expires: node side connect level reclaim fall back.
+            // Connection stale: reclaimed at connection scope on the node.
           }
         },
       },
@@ -434,8 +431,8 @@ export class RemoteExecutionEnv implements ExecutionEnv {
     _onChange: (change: FileChange) => void,
     _context: Context,
   ): Promise<Result<FileWatcher, FileError>> {
-    // remote watch exceeds protocol scope: explicit errors (not_supported), never return
-    // false watcher(that will let host with is already establish listen while forever fewer than event).
+    // Remote watch is out of protocol scope: fail explicitly (`not_supported`) rather than returning a
+    // dummy watcher (which would make callers assume watches are active when events will never arrive).
     return { ok: false, error: new FileError('not_supported', 'Remote env watch is not supported over RPC') }
   }
 
@@ -485,11 +482,10 @@ export class RemoteExecutionEnv implements ExecutionEnv {
   }
 
   async cleanup(_context: Context): Promise<void> {
-    // instance clean up only deregister itself sink(self manage lifecycle); never send by cwd 
-    // envCleanup- - node side envCleanup will kill same cwd under**other conversation**in-flight
-    // command (cwd is not conversation isolated key). in-flight command terminate by caller context abort
-    // (envAbortExec by execId precise kill) or connect disconnect node side connect level dispose
-    // fall back.
+    // Instance cleanup only unregisters its own sink (self-managed lifecycle); never sends cwd-wide
+    // `envCleanup`—on the node side that would kill in-flight commands from **other conversations**
+    // sharing the cwd (cwd is not a conversation isolation key). In-flight commands terminate via
+    // caller context abort (`envAbortExec` by execId) or connection-level cleanup on disconnect.
     this.#liveExecsWithOutput = 0
     if (this.#sinkRegistered) {
       this.#resolver.removeOutputSink?.(this.#nodeIdValue, this.onEnvExecOutput)
@@ -515,8 +511,8 @@ export class RemoteExecutionEnv implements ExecutionEnv {
         ok: false,
         error:
           context.abortSignal?.aborted
-            ? new ExecutionError('aborted', 'wait for node enable when cancel')
-            : new ExecutionError('unknown', `node ${this.#nodeIdValue} offline`),
+            ? new ExecutionError('aborted', 'cancelled while waiting for node to come online')
+            : new ExecutionError('unknown', `node ${this.#nodeIdValue} is offline`),
       }
     }
     const execId = `exec-${++execSeq}-${Math.random().toString(36).slice(2, 8)}`
@@ -539,7 +535,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
       const result = await rpc.envExec({
         execId,
         command,
-        // one by one invoke cwd takes precedence (pi-durable Shell semantics); default use env itself cwd.
+        // Per-call cwd takes precedence (pi-durable Shell semantics); defaults to this env's cwd.
         cwd: options?.cwd ?? this.cwd,
         ...(options?.env === undefined ? {} : { env: options.env }),
         ...(options?.inheritEnv === undefined ? {} : { inheritEnv: options.inheritEnv }),
@@ -561,9 +557,9 @@ export class RemoteExecutionEnv implements ExecutionEnv {
       }
       return { ok: false, error: execErrorFromRpc(result.error) }
     } catch (error) {
-      // cancel quote connect exception archive one is aborted; otherwise is connect lose - - command already in node
-      // start, result unknown: explicit errors and never automatically retry (do not security shell replay will
-      // for external world duplicate side effect).
+      // Connection exceptions caused by cancellation map to `aborted`; otherwise connection loss while
+      // the command may already have started on the node reports `unknown` explicitly without auto-retry
+      // (unsafe shell replay would duplicate external side effects).
       if (context.abortSignal?.aborted) {
         return { ok: false, error: new ExecutionError('aborted', 'Command aborted') }
       }
@@ -575,7 +571,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
     }
   }
 
-  /** cancel designate run in command (pass-through node side envAbortExec). */
+  /** Cancel a specific running command (forwards directly to node-side `envAbortExec`). */
   async abortExec(execId: string, context: Context): Promise<void> {
     await (await this.#rpc(context)).envAbortExec(execId)
   }

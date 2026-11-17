@@ -1,17 +1,17 @@
 /**
- * kernel tool work vendor:run_action meta tool.
+ * Kernel tool factory: `run_action` meta-tool.
  *
- * subagent / SubagentWorkflow / cleanup_worktree already migration until builtin:workflow
- * plugin (ctx.tool declaration); kernel only keep and plugin without closure basis meta tool.
+ * `subagent` / `SubagentWorkflow` / `cleanup_worktree` have moved to the `builtin:workflow` plugin
+ * (`ctx.tool` declarations); the kernel retains only plugin-agnostic foundational meta-tools.
  */
 import type { Context } from '@earendil-works/chord/context'
 import { defineTool, type ToolExecutionApi, type ToolRegistration } from '@earendil-works/pi-durable'
 import { bool, obj, opt, str, unsafe } from '@earendil-works/pi-schema'
 import { safeResultText, type ActionManifest } from '@helm/protocol'
 
-/** tool work vendor host capability side. */
+/** Host capability port for kernel tools. */
 export interface KernelToolHost {
-  /** plugin action invoke (run_action meta tool). */
+  /** Invoke a plugin action (`run_action` meta-tool). */
   invokePluginAction(
     pluginId: string,
     actionId: string,
@@ -19,43 +19,43 @@ export interface KernelToolHost {
     context: { conversationId: number; signal?: AbortSignal },
   ): Promise<unknown>
   /**
-   * action manifest only read query (run_action describe pattern): by when before enable plugin and invoke conversation
-   * scope filter after return complete ActionManifest(input/outputSchema), never execute
-   * handler, does not input validate, do not create liveTask.
+   * Read-only introspection of an action manifest (`run_action` `describe` mode): returns the full
+   * `ActionManifest` (`inputSchema`/`outputSchema`) after filtering by currently enabled plugins and
+   * conversation scope; never invokes the handler, validates input, or creates a `liveTask`.
    */
   describePluginAction(
     pluginId: string,
     actionId: string,
     context: { conversationId: number },
   ): Promise<ActionManifest>
-  /** out station text redaction (managed token / stash plaintext). */
+  /** Outbound text redaction (managed tokens / stash plaintexts). */
   redact(text: string): string
 }
 
 const runActionParameters = obj({
-  actionId: str({ description: 'pluginId.actionId all limit set action ID' }),
-  input: opt(unsafe<Record<string, unknown>>({ type: 'object', description: 'action input (by action inputSchema)' })),
+  actionId: str({ description: 'Fully-qualified action ID in pluginId.actionId format' }),
+  input: opt(unsafe<Record<string, unknown>>({ type: 'object', description: "Action input matching the action's inputSchema" })),
   describe: opt(
     bool({
-      description: 'true when only return the action complete manifest (input/outputSchema), do not execute action; default false execute',
+      description: 'When true, return only the full action manifest (inputSchema/outputSchema) without executing; defaults to false (execute)',
     }),
   ),
 })
 
-/** run_action meta tool: on demand invoke plugin action (qualifiedId, input output schema boundary validate);describe only inspect manifest do not execute. */
+/** `run_action` meta-tool: invoke plugin actions on demand (qualified ID + boundary schema checks); `describe` inspects manifest read-only. */
 export function createRunActionTool(host: KernelToolHost): ToolRegistration<typeof runActionParameters> {
   return defineTool({
     name: 'run_action',
     description:
-      'invoke plugin declaration action (pluginId.actionId all limit set ID). available action directory by system hint <available_actions> inject.' +
-      'describe: true when only return the action complete manifest (input/outputSchema, do not execute action), used to query embed set or complex parameter structure. input validation failed explicit errors.',
+      'Invoke a plugin-declared action (by qualified ID: pluginId.actionId). Reachable actions are listed in the system <available_actions> catalog. ' +
+      'Set describe: true to read the full action manifest (inputSchema/outputSchema without executing), useful for inspecting nested or complex parameters. Invalid inputs fail explicitly.',
     parameters: runActionParameters,
     async execute(args, api: ToolExecutionApi, context: Context) {
       const qualified = args.actionId
       const dot = qualified.indexOf('.')
       if (dot <= 0) {
         return {
-          output: [{ type: 'text', text: `run_action_failed: illegal action ID(expectation pluginId.actionId):${qualified}` }],
+          output: [{ type: 'text', text: `run_action_failed: invalid action ID (expected pluginId.actionId): ${qualified}` }],
           isError: true,
         }
       }

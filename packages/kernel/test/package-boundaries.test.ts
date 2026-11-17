@@ -82,17 +82,17 @@ function hasPublicExport(manifest: PackageManifest, specifier: string): boolean 
   })
 }
 
-test('produce package keep single to dependency, source code only via already declaration public package entry across boundary', { timeout: 60_000 }, () => {
+test('production packages maintain one-way dependencies and cross boundaries only via declared public exports', { timeout: 60_000 }, () => {
   const packages = workspacePackages()
   const names = new Set(packages.map(({ manifest }) => manifest.name))
   for (const name of ['@helm/kernel', '@helm/plugins', '@helm/hub', '@helm/plugin-client', '@helm/plugin-build', '@helm/env-io']) {
-    assert.ok(names.has(name), `missing independent package ${name}`)
+    assert.ok(names.has(name), `missing standalone package ${name}`)
   }
   const violations: string[] = []
   for (const { root, manifest } of packages) {
     const dependencies = { ...manifest.dependencies, ...manifest.peerDependencies, ...manifest.optionalDependencies }
     if (manifest.name !== '@helm/test-kit' && '@helm/test-kit' in dependencies) {
-      violations.push(`${manifest.name}: produce dependency forbidden contains test tool package @helm/test-kit`)
+      violations.push(`${manifest.name}: production dependencies must not include test-kit package @helm/test-kit`)
     }
     for (const name of forbidden[manifest.name] ?? []) {
       if (name in dependencies) violations.push(`${manifest.name}: forbidden dependency ${name}`)
@@ -101,46 +101,46 @@ test('produce package keep single to dependency, source code only via already de
       for (const { specifier, typeOnly } of imports(file)) {
         const label = `${relative(packagesDir, file)}: ${specifier}`
         if (isAbsolute(specifier) || specifier.startsWith('file:')) {
-          violations.push(`${label} absolute path bypass package entry`)
+          violations.push(`${label} absolute path bypasses package entry`)
           continue
         }
         if (specifier.startsWith('.')) {
           const target = relative(root, resolve(dirname(file), specifier))
-          if (isAbsolute(target) || target === '..' || target.startsWith(`..${sep}`)) violations.push(`${label} relative path across package`)
+          if (isAbsolute(target) || target === '..' || target.startsWith(`..${sep}`)) violations.push(`${label} relative path crosses package boundary`)
           continue
         }
         const target = packageName(specifier)
         if (!target.startsWith('@helm/')) continue
-        if (target === '@helm/test-kit' && manifest.name !== '@helm/test-kit') violations.push(`${label} produce source code forbidden dependency test tool package @helm/test-kit`)
+        if (target === '@helm/test-kit' && manifest.name !== '@helm/test-kit') violations.push(`${label} production source must not import test-kit package @helm/test-kit`)
         if ((forbidden[manifest.name] ?? []).includes(target)) violations.push(`${label} reverse dependency`)
         if (manifest.name === '@helm/test-kit') {
-          if (!typeOnly) violations.push(`${label} @helm/test-kit only allows import type across package reference`)
+          if (!typeOnly) violations.push(`${label} @helm/test-kit only allows import type for cross-package references`)
         } else if (target !== manifest.name && !(target in dependencies)) {
-          violations.push(`${label} not declaration produce dependency`)
+          violations.push(`${label} undeclared production dependency`)
         }
-        if (/\/src(?:\/|$)/.test(specifier)) violations.push(`${label} import private source code`)
+        if (/\/src(?:\/|$)/.test(specifier)) violations.push(`${label} imports private source code`)
         const targetManifest = packages.find(({ manifest: candidate }) => candidate.name === target)?.manifest
-        if (targetManifest && !hasPublicExport(targetManifest, specifier)) violations.push(`${label} not via public exports import`)
+        if (targetManifest && !hasPublicExport(targetManifest, specifier)) violations.push(`${label} not imported via public exports`)
       }
     }
   }
   assert.deepEqual(violations, [], violations.join('\n'))
 })
 
-test('kernel does not carry built-in plugin source code and plugin dedicated belong build dependency', { timeout: 60_000 }, () => {
+test('kernel contains no builtin-plugin sources and no plugin-only dependencies', { timeout: 60_000 }, () => {
   const kernel = workspacePackages().find(({ manifest }) => manifest.name === '@helm/kernel')!
-  assert.ok(!existsSync(join(kernel.root, 'src/builtin-plugins')), 'built-in plugin should belongs to independent package')
+  assert.ok(!existsSync(join(kernel.root, 'src/builtin-plugins')), 'builtin plugins must belong to a separate package')
   for (const dependency of ['mermaid', 'cron-parser', 'esbuild', 'react', 'react-dom', 'lucide-react']) {
-    assert.ok(!(dependency in (kernel.manifest.dependencies ?? {})), `kernel must not dependency ${dependency}`)
+    assert.ok(!(dependency in (kernel.manifest.dependencies ?? {})), `kernel must not depend on ${dependency}`)
   }
 })
 
-test('workspace produce dependency graph without ring', { timeout: 60_000 }, () => {
+test('workspace production dependency graph is acyclic', { timeout: 60_000 }, () => {
   const packages = workspacePackages()
   const graph = new Map(packages.map(({ manifest }) => [manifest.name, Object.keys({ ...manifest.dependencies, ...manifest.peerDependencies, ...manifest.optionalDependencies })]))
   const visited = new Set<string>()
   const visit = (name: string, stack: string[]): void => {
-    assert.ok(!stack.includes(name), `dependency into ring:${[...stack, name].join(' -> ')}`)
+    assert.ok(!stack.includes(name), `dependency cycle: ${[...stack, name].join(' -> ')}`)
     if (visited.has(name)) return
     for (const dependency of graph.get(name) ?? []) {
       if (graph.has(dependency)) visit(dependency, [...stack, name])
@@ -226,14 +226,14 @@ const NODE_BUILTINS = new Set([
 ])
 
 function isForbiddenBrowserRuntimeImport(specifier: string): string | undefined {
-  if (specifier.startsWith('node:')) return `forbidden import Node inside placement module ${specifier}`
+  if (specifier.startsWith('node:')) return `forbidden import of Node builtin module ${specifier}`
   const bare = specifier.split('/')[0]!
-  if (NODE_BUILTINS.has(bare)) return `forbidden import Node inside placement module ${specifier}`
-  if (specifier.startsWith('@earendil-works/pi-')) return `forbidden import backend SDK module ${specifier}`
+  if (NODE_BUILTINS.has(bare)) return `forbidden import of Node builtin module ${specifier}`
+  if (specifier.startsWith('@earendil-works/pi-')) return `forbidden import of backend SDK module ${specifier}`
   return undefined
 }
 
-test('browser side source code and @helm/protocol/browser pass closed package forbidden import node:* / pi-* or back stream entry', { timeout: 60_000 }, () => {
+test('browser sources and @helm/protocol/browser transitive closure never import node:* / pi-* / backend entries', { timeout: 60_000 }, () => {
   const violations: string[] = []
   const browserEntry = join(packagesDir, 'protocol/src/browser.ts')
   assert.ok(existsSync(browserEntry), 'missing @helm/protocol/browser entry file')
@@ -241,7 +241,7 @@ test('browser side source code and @helm/protocol/browser pass closed package fo
   const protocolPluginFile = resolve(packagesDir, 'protocol/src/plugin.ts')
   const browserClosure = collectTransitiveLocalSources(browserEntry)
   if (browserClosure.has(protocolPluginFile)) {
-    violations.push('protocol/src/browser.ts pass closed package must not trigger reach protocol/src/plugin.ts')
+    violations.push('protocol/src/browser.ts transitive closure must not reach protocol/src/plugin.ts')
   }
   for (const file of browserClosure) {
     for (const { specifier } of imports(file)) {
@@ -255,7 +255,7 @@ test('browser side source code and @helm/protocol/browser pass closed package fo
       const problem = isForbiddenBrowserRuntimeImport(specifier)
       if (problem) violations.push(`${relative(packagesDir, file)}: ${problem}`)
       if (specifier === '@helm/protocol') {
-        violations.push(`${relative(packagesDir, file)}: must from @helm/protocol/browser import, forbidden import @helm/protocol entry`)
+        violations.push(`${relative(packagesDir, file)}: must import from @helm/protocol/browser rather than @helm/protocol`)
       }
     }
   }
@@ -266,7 +266,7 @@ test('browser side source code and @helm/protocol/browser pass closed package fo
       const problem = isForbiddenBrowserRuntimeImport(specifier)
       if (problem) violations.push(`${relative(packagesDir, file)}: ${problem}`)
       if (specifier === '@helm/protocol') {
-        violations.push(`${relative(packagesDir, file)}: must from @helm/protocol/browser import, forbidden import @helm/protocol entry`)
+        violations.push(`${relative(packagesDir, file)}: must import from @helm/protocol/browser rather than @helm/protocol`)
       }
     }
   }
@@ -274,7 +274,7 @@ test('browser side source code and @helm/protocol/browser pass closed package fo
   assert.deepEqual(violations, [], violations.join('\n'))
 })
 
-test('all warehouse packages/*/src zero any and zero TS type suppress instruction', { timeout: 60_000 }, () => {
+test('all workspace packages/*/src contain zero any types and zero TS suppression directives', { timeout: 60_000 }, () => {
   const violations: string[] = []
   const suppressionPattern = /@(?:ts-ignore|ts-expect-error|ts-nocheck)\b/
 
@@ -294,7 +294,7 @@ test('all warehouse packages/*/src zero any and zero TS type suppress instructio
           const match = suppressionPattern.exec(snippet)
           if (match) {
             const { line } = source.getLineAndCharacterOfPosition(range.pos)
-            violations.push(`${relative(packagesDir, file)}:${line + 1}: forbidden use ${match[0]}`)
+            violations.push(`${relative(packagesDir, file)}:${line + 1}: forbidden use of ${match[0]}`)
           }
         }
       }
@@ -304,7 +304,7 @@ test('all warehouse packages/*/src zero any and zero TS type suppress instructio
         checkCommentRanges(ts.getTrailingCommentRanges(text, node.getEnd()))
         if (node.kind === ts.SyntaxKind.AnyKeyword) {
           const { line } = source.getLineAndCharacterOfPosition(node.getStart(source))
-          violations.push(`${relative(packagesDir, file)}:${line + 1}: forbidden use any type (as any / : any / <any>)`)
+          violations.push(`${relative(packagesDir, file)}:${line + 1}: forbidden use of explicit any type (as any / : any / <any>)`)
         }
         ts.forEachChild(node, visit)
       }

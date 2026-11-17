@@ -1,7 +1,7 @@
 /**
- * HTTP layer conversation document contract test:GET /api/plugins/:id/docs/:name?conversationId=N,
- * dedicated use SSE(/events?conversationId=N),404 stop semantics, authentication and global stream isolated.
- * real PluginHost + real SessionDocEventHub + real routing layer.
+ * HTTP-layer conversation document contract tests: GET `/api/plugins/:id/docs/:name?conversationId=N`,
+ * dedicated SSE (`/events?conversationId=N`), 404 stop semantics, authentication, and global stream isolation.
+ * Uses real PluginHost + real SessionDocEventHub + real router.
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
@@ -60,7 +60,7 @@ const backend: PluginHostBackend = {
   spawnAgent: async () => ({}),
   runGate: async () => ({ ok: true, output: '' }),
   execEnv: async () => {
-    throw new HelmError('unsupported', 'this fixture do not execute node command', 501)
+    throw new HelmError('unsupported', 'this fixture does not execute node commands', 501)
   },
   emitEvent: (type, payload) => {
     if (type === 'plugin.session_doc.updated') {
@@ -127,7 +127,7 @@ beforeEach(async () => {
     },
     getConversationEntry: async (id, entryId) => {
       if (!existing.has(id)) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
-      throw new HelmError('not_found', `item ${entryId} in conversation ${id} in missing`, 404)
+      throw new HelmError('not_found', `entry ${entryId} missing in conversation ${id}`, 404)
     },
     createConversation: async () => makeConversation(3),
     updateConversation: async (id) => makeConversation(id),
@@ -148,7 +148,7 @@ beforeEach(async () => {
     issueNodeToken: async () => ({ nodeId: 'local', token: 't', createdAt: 0 }),
     removeNode: async () => {},
     execEnv: async () => {
-      throw new HelmError('unsupported', 'this fixture do not execute node command', 501)
+      throw new HelmError('unsupported', 'this fixture does not execute node commands', 501)
     },
   }
   testKernel = kernel
@@ -167,7 +167,7 @@ function authInit(): RequestInit {
   return { headers: { authorization: `Bearer ${token}` } }
 }
 
-test('GET docs?conversationId read conversation document; private/missing/deactivate 404; global document name 400', { timeout: 60_000 }, async () => {
+test('GET docs?conversationId reads session doc; private/missing/disabled return 404; global doc name returns 400', { timeout: 60_000 }, async () => {
   metricsHandle!.set(1, { n: 5 })
   const ok = await fetch(
     `${hubUrl}/api/plugins/p%3Asd/docs/metrics?conversationId=1`,
@@ -185,15 +185,15 @@ test('GET docs?conversationId read conversation document; private/missing/deacti
   assert.equal(convMissing.status, 404)
   const globalDoc = await fetch(`${hubUrl}/api/plugins/p%3Asd/docs/global?conversationId=1`, authInit())
   assert.equal(globalDoc.status, 400)
-  // sessionDoc name do not carries conversationId:400 session_doc_requires_conversation
+  // sessionDoc name without conversationId: 400 session_doc_requires_conversation
   const noConv = await fetch(`${hubUrl}/api/plugins/p%3Asd/docs/metrics`, authInit())
   assert.equal(noConv.status, 400)
-  // illegal conversationId
+  // Invalid conversationId
   const badConv = await fetch(`${hubUrl}/api/plugins/p%3Asd/docs/metrics?conversationId=abc`, authInit())
   assert.equal(badConv.status, 400)
 })
 
-test('dedicated use SSE: first frame snapshot + incremental; authentication failed 401; event does not enter global stream', { timeout: 60_000 }, async () => {
+test('dedicated SSE emits initial snapshot + incremental updates, rejects unauthenticated 401, and never enters global stream', { timeout: 60_000 }, async () => {
   metricsHandle!.set(1, { n: 1 })
   const controller = new AbortController()
   const res = await fetch(
@@ -208,7 +208,7 @@ test('dedicated use SSE: first frame snapshot + incremental; authentication fail
     let out = ''
     for (;;) {
       const { done, value } = await reader.read()
-      assert.ok(!done, 'stream unexpected end')
+      assert.ok(!done, 'stream ended unexpectedly')
       out += decoder.decode(value, { stream: true })
       if (out.includes('\n\n')) return out
     }
@@ -220,11 +220,11 @@ test('dedicated use SSE: first frame snapshot + incremental; authentication fail
   const update = await readFrame()
   assert.match(update, /event: plugin\.session_doc\.updated/)
   assert.match(update, /"n":2/)
-  // global stream zero frame (emitEvent stream verify)
+  // Global stream receives zero frames (verified via emitEvent capture)
   assert.equal(globalFrames.filter((f) => (f.event as { type: string }).type === 'plugin.session_doc.updated').length, 0)
   controller.abort()
 
-  // authentication failed:401(explicit error, do not create stream)
+  // Authentication failure: 401 (explicit error, never establishes stream)
   const unauth = await fetch(`${hubUrl}/api/plugins/p%3Asd/docs/metrics/events?conversationId=1`, {
     headers: { accept: 'text/event-stream' },
   })
@@ -232,7 +232,7 @@ test('dedicated use SSE: first frame snapshot + incremental; authentication fail
   await unauth.arrayBuffer()
 })
 
-test('dedicated use SSE: plugin deactivate/conversation delete return 404(client stop retry based on)', { timeout: 60_000 }, async () => {
+test('dedicated SSE returns 404 when plugin disabled or conversation deleted (basis for client stop-retry)', { timeout: 60_000 }, async () => {
   await pluginHost.disable('p:sd')
   const res = await fetch(
     `${hubUrl}/api/plugins/p%3Asd/docs/metrics/events?conversationId=1`,

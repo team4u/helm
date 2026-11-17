@@ -1,24 +1,24 @@
 /**
- * across node process occupy snapshot RPC integration test (real Hub WS gateway + real @helm/node daemon).
+ * Integration tests for cross-node process usage snapshot RPC (real Hub WS gateway + real @helm/node daemon).
  *
- * override:
- * - real daemon(node-b) register after,fabric.inspectPathUsage via envPathUsage RPC
- *   in node side real scan: local machine child process with target directory is cwd → hit pid(real /ws/node
- *   birpc to return); child process exit after heavy scan clean; tail follow slash reference by archive one path back visible related;
- * - fabricate old edition daemon without envPathUsage method (original WS + createBirpc register,
- *   do not expose the method)→ fabric explicit path_usage_not_supported(501, never fall back
- *   local machine scan, never false call 0 occupy);
- * - not registered node → node_offline(409); reference illegal → validation_error(first at RPC);
- * - snapshot boundary strictly validate (real RPC channel return fabricate payload): wrong path back visible, contradiction
- *   truncated, non- strictly boolean ok, duplicate PID, illegal error message seal all explicit
- *   node_path_usage_failed reject (do not rely TypeError fall back); legal ok:false original
- *   type pass-through.
- *
- * platform contract: real /proc link only Linux; non- Linux platform this file do not whole failed also not silently
- * skip- - explicit assertion path_usage_not_supported(when before across platform behavior restrict such as contract).
- * non- root environment under permission refuse read (across uid or non-dumpable, such as systemd --user):
- * count unobservable(structure blind spot, does not affect complete); occupy hit (same uid
- * child process) assertion do not subject to affect, complete only assertion boolean and fail-closed diagnose.
+ * Coverage:
+ * - Once real daemon (node-b) registers, fabric.inspectPathUsage performs a real node-side scan via
+ *   envPathUsage RPC: a local child process whose cwd is the target directory hits its pid (returned
+ *   over real /ws/node birpc); re-scanning after exit is clean; trailing-slash argument normalizes
+ *   to match echoed path;
+ * - Forged legacy daemon without envPathUsage (raw WS + createBirpc register omitting the method) ->
+ *   fabric throws explicit path_usage_not_supported (501, never falls back to local scan, never falsely
+ *   reports 0 busy processes);
+ * - Unregistered node -> node_offline (409); invalid argument -> validation_error (pre-RPC);
+ * - Strict snapshot boundary validation (malformed payloads returned over real RPC): mismatched echoed
+ *   path, contradictory truncated flag, non-strict-boolean ok, duplicate PID, invalid error envelope all
+ *   reject explicitly with node_path_usage_failed (no fallback TypeError); valid ok:false passes error
+ *   code through;
+ * - Platform contract: real /proc exists only on Linux; on non-Linux platforms this file neither fails
+ *   wholesale nor skips silently -- it explicitly asserts path_usage_not_supported.
+ *   In non-root environments where EACCES occurs (cross-uid or non-dumpable e.g. systemd --user):
+ *   unobservable count increases (structural blind spot, does not make complete=false); usage hits
+ *   (same-uid child process) remain unaffected; complete asserts boolean and fail-closed diagnostics.
  */
 
 import { test, describe, it, before, after } from 'node:test'
@@ -46,15 +46,15 @@ after(() => {
   rmSync(rootDir, { recursive: true, force: true })
 })
 
-/** non- Linux platform assertion scan explicit unsupported (do not fabricate, not silently skip). */
+/** Asserts explicit not-supported rejection on non-Linux platforms (never fakes success or silently skips). */
 function assertNotSupportedOnNonLinux(err: unknown): boolean {
-  assert.ok(err instanceof HelmError, `should throw HelmError(got ${String(err)})`)
-  assert.equal(err.code, 'path_usage_not_supported', 'non- Linux platform must explicit not_supported')
+  assert.ok(err instanceof HelmError, `expected HelmError (got ${String(err)})`)
+  assert.equal(err.code, 'path_usage_not_supported', 'non-Linux platforms must reject explicitly with not_supported')
   assert.equal(err.status, 501)
   return true
 }
 
-/** most small fabric Hub(HTTP + WS gateway; do not via KernelRuntime). */
+/** Minimal fabric Hub (HTTP + WS gateway without KernelRuntime). */
 async function startHub() {
   const fabric = createEnvFabric({
     authenticate: (nodeId, token) => nodeId === 'node-b' && token === 'node-b:secret-b',
@@ -92,7 +92,7 @@ async function startDaemon(url: string, dataDir: string): Promise<NodeDaemon> {
   })
 }
 
-/** with target is cwd long resident child process (occupy way; and daemon same machine visible at /proc). */
+/** Spawns a long-lived child with cwd=target (holds directory busy; visible via /proc on same host). */
 function holdProcess(target: string): { pid: number; stop: () => Promise<void> } {
   const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)'], { cwd: target, stdio: 'ignore' })
   const pid = child.pid!
@@ -106,7 +106,7 @@ function holdProcess(target: string): { pid: number; stop: () => Promise<void> }
   }
 }
 
-test('real daemon:envPathUsage via WS RPC in node side real scan', { timeout: 60_000 }, async () => {
+test('real daemon: envPathUsage scans on the node side via WS RPC', { timeout: 60_000 }, async () => {
   const hub = await startHub()
   const dataDir = join(rootDir, 'node-data')
   mkdirSync(dataDir, { recursive: true })
@@ -114,10 +114,10 @@ test('real daemon:envPathUsage via WS RPC in node side real scan', { timeout: 60
   mkdirSync(target, { recursive: true })
   try {
     const daemon = await startDaemon(hub.baseUrl, dataDir)
-    assert.ok(await daemon.waitUntilRegistered(), 'daemon should register succeeded')
+    assert.ok(await daemon.waitUntilRegistered(), 'daemon should register successfully')
     try {
       if (process.platform !== 'linux') {
-        // non- Linux: node side scan explicit unsupported - - such as assertion, do not whole failed.
+        // Non-Linux: node-side scan reports unsupported explicitly rather than failing the whole suite.
         await assert.rejects(
           () => hub.fabric.inspectPathUsage('node-b', target),
           (err: unknown) => assertNotSupportedOnNonLinux(err),
@@ -127,25 +127,25 @@ test('real daemon:envPathUsage via WS RPC in node side real scan', { timeout: 60
       const holder = holdProcess(target)
       try {
         const usage = await hub.fabric.inspectPathUsage('node-b', target)
-        assert.equal(usage.path, target, 'snapshot should back visible target path')
+        assert.equal(usage.path, target, 'snapshot should echo the target path')
         const hit = usage.processes.find((p) => p.pid === holder.pid)
-        assert.ok(hit, `should via real RPC hit occupy process ${holder.pid}:${JSON.stringify(usage.processes)}`)
+        assert.ok(hit, `should detect busy process ${holder.pid} via real RPC: ${JSON.stringify(usage.processes)}`)
         assert.equal(hit!.source, 'cwd')
         assert.equal(hit!.path, target)
-        assert.ok(!('cmdline' in hit!), 'snapshot must not carry cmdline')
-        // complete do not assume root: non- complete environment must carry fail-closed diagnose.
+        assert.ok(!('cmdline' in hit!), 'snapshot must not include cmdline')
+        // Completeness does not assume root: incomplete scans must include fail-closed diagnostics.
         assert.equal(typeof usage.complete, 'boolean')
         if (usage.complete !== true) {
-          assert.ok(usage.diagnostics.length > 0, 'complete=false must carry do not complete diagnose')
+          assert.ok(usage.diagnostics.length > 0, 'complete=false must carry incompleteness diagnostics')
         }
-        // tail follow slash: reference archive one after still and snapshot back visible related (same directory).
+        // Trailing slash: after normalizing argument, snapshot still echoes matching path (same dir).
         const normalizedEcho = await hub.fabric.inspectPathUsage('node-b', `${target}/`)
         assert.equal(normalizedEcho.path, target.replace(/\/+$/, '') || target)
       } finally {
         await holder.stop()
       }
       const after = await hub.fabric.inspectPathUsage('node-b', target)
-      assert.equal(after.processes.some((p) => p.pid === holder.pid), false, 'exit process leaves no residue')
+      assert.equal(after.processes.some((p) => p.pid === holder.pid), false, 'exited process leaves no stale entry')
     } finally {
       await daemon.close()
     }
@@ -154,7 +154,7 @@ test('real daemon:envPathUsage via WS RPC in node side real scan', { timeout: 60
   }
 })
 
-/** fabricate node (original WS + createBirpc):envPathUsage as local function side inject (undefined = old edition missing the method). */
+/** Fake node (raw WS + createBirpc): injects custom envPathUsage handler (undefined simulates legacy daemon). */
 async function startFakeNode(
   fabric: ReturnType<typeof createEnvFabric>,
   server: http.Server,
@@ -185,7 +185,7 @@ async function startFakeNode(
         try {
           cb(JSON.parse(typeof raw === 'string' ? raw : Buffer.from(raw as ArrayBuffer).toString('utf8')) as never)
         } catch {
-          /* non- JSON ignore */
+          /* ignore non-JSON */
         }
       })
     },
@@ -209,7 +209,7 @@ async function startFakeNode(
   }
 }
 
-/** carry fabricate envPathUsage independent Hub + node (each case creates new, mutual do not pollute). */
+/** Isolated Hub + node with injected envPathUsage (fresh per case to avoid cross-test interference). */
 async function startHubWithFakeNode(envPathUsage: ((input: { path: string }) => Promise<unknown>) | undefined) {
   const fabric = createEnvFabric({
     authenticate: (nodeId, token) => nodeId === 'node-old' && token === 'node-old:secret',
@@ -224,7 +224,7 @@ async function startHubWithFakeNode(envPathUsage: ((input: { path: string }) => 
   const gateway = attachNodeWsGateway(server, { registry: fabric.registry })
   const node = await startFakeNode(fabric, server, envPathUsage)
   const outcome = await node.register()
-  assert.equal(outcome.ok, true, `fabricate node should register succeeded:${JSON.stringify(outcome)}`)
+  assert.equal(outcome.ok, true, `fake node registration should succeed: ${JSON.stringify(outcome)}`)
   return {
     fabric,
     close: async () => {
@@ -236,7 +236,7 @@ async function startHubWithFakeNode(envPathUsage: ((input: { path: string }) => 
   }
 }
 
-/** assertion node_path_usage_failed(illegal snapshot/message seal), return error supply enter one step validate. */
+/** Asserts node_path_usage_failed (invalid snapshot/envelope) and returns the error for extra checks. */
 async function expectSnapshotRejected(
   fabric: ReturnType<typeof createEnvFabric>,
   path = '/wt',
@@ -246,23 +246,23 @@ async function expectSnapshotRejected(
     () => fabric.inspectPathUsage('node-old', path),
     (err: unknown) => {
       caught = err
-      assert.ok(err instanceof HelmError, `should explicit HelmError(got ${String(err)})`)
-      assert.equal((err as HelmError).code, 'node_path_usage_failed', 'illegal snapshot/message seal must explicit reject, do not rely TypeError')
+      assert.ok(err instanceof HelmError, `expected explicit HelmError (got ${String(err)})`)
+      assert.equal((err as HelmError).code, 'node_path_usage_failed', 'invalid snapshot/envelope must fail explicitly without TypeError')
       return true
     },
   )
   return caught as HelmError
 }
 
-describe('old edition daemon / offline node / reference validate (explicit failed, does not fall back local machine)', { timeout: 60_000 }, () => {
-  it('fabricate without envPathUsage old edition daemon:path_usage_not_supported(501)', { timeout: 60_000 }, async () => {
+describe('legacy daemon / offline node / argument validation (fails explicitly without local fallback)', { timeout: 60_000 }, () => {
+  it('legacy daemon lacking envPathUsage returns path_usage_not_supported (501)', { timeout: 60_000 }, async () => {
     const hub = await startHubWithFakeNode(undefined)
     try {
       await assert.rejects(
         () => hub.fabric.inspectPathUsage('node-old', '/wt'),
         (err: unknown) => {
           assert.ok(err instanceof HelmError)
-          assert.equal(err.code, 'path_usage_not_supported', 'old edition daemon without envPathUsage: explicit unsupported, never fall back local machine')
+          assert.equal(err.code, 'path_usage_not_supported', 'legacy daemon without envPathUsage must fail explicitly and never fall back locally')
           assert.equal(err.status, 501)
           return true
         },
@@ -272,7 +272,7 @@ describe('old edition daemon / offline node / reference validate (explicit faile
     }
   })
 
-  it('not registered node:node_offline(409)', { timeout: 60_000 }, async () => {
+  it('unregistered node throws node_offline (409)', { timeout: 60_000 }, async () => {
     const fabric = createEnvFabric({})
     try {
       await assert.rejects(
@@ -288,7 +288,7 @@ describe('old edition daemon / offline node / reference validate (explicit faile
     }
   })
 
-  it('remote reference illegal:validation_error(first at RPC,local/remote same rule)', { timeout: 60_000 }, async () => {
+  it('invalid remote path throws validation_error pre-RPC (same rules for local and remote)', { timeout: 60_000 }, async () => {
     const hub = await startHubWithFakeNode(undefined)
     try {
       for (const bad of ['relative/x', '/a\u0000b', '/a/../b']) {
@@ -296,7 +296,7 @@ describe('old edition daemon / offline node / reference validate (explicit faile
           () => hub.fabric.inspectPathUsage('node-old', bad),
           (err: unknown) => {
             assert.ok(err instanceof HelmError)
-            assert.equal(err.code, 'validation_error', `illegal path first at RPC reject (${bad})`)
+            assert.equal(err.code, 'validation_error', `invalid path must reject pre-RPC (${bad})`)
             return true
           },
         )
@@ -307,21 +307,21 @@ describe('old edition daemon / offline node / reference validate (explicit faile
   })
 })
 
-describe('node snapshot/message seal strictly validate (real RPC channel return fabricate payload)', { timeout: 60_000 }, () => {
-  it('snapshot path and request do not symbol: reject (other directory empty snapshot cannot use act this directory clean up based on)', { timeout: 60_000 }, async () => {
+describe('strict validation of node snapshots/envelopes (malformed payloads over real RPC)', { timeout: 60_000 }, () => {
+  it('snapshot path mismatch rejects (empty snapshot for another directory cannot authorize cleanup)', { timeout: 60_000 }, async () => {
     const hub = await startHubWithFakeNode(async () => ({
       ok: true,
       value: { path: '/other/dir', processes: [], matchedTotal: 0, processesTruncated: false, complete: true, diagnostics: [] },
     }))
     try {
       const err = await expectSnapshotRejected(hub.fabric, '/wt')
-      assert.ok(err.message.includes('path'), `diagnose should refer path do not symbol (got ${err.message})`)
+      assert.ok(err.message.includes('path'), `diagnostic should mention path mismatch (got ${err.message})`)
     } finally {
       await hub.close()
     }
   })
 
-  it('contradiction counter:truncated=true while matchedTotal=0: reject', { timeout: 60_000 }, async () => {
+  it('contradictory counts (truncated=true with matchedTotal=0) rejects', { timeout: 60_000 }, async () => {
     const hub = await startHubWithFakeNode(async (input) => ({
       ok: true,
       value: { path: input.path, processes: [], matchedTotal: 0, processesTruncated: true, complete: true, diagnostics: [] },
@@ -330,14 +330,14 @@ describe('node snapshot/message seal strictly validate (real RPC channel return 
       const err = await expectSnapshotRejected(hub.fabric)
       assert.ok(
         err.message.includes('processesTruncated') || err.message.includes('matchedTotal'),
-        `diagnose should refer contradiction (got ${err.message})`,
+        `diagnostic should mention contradictory fields (got ${err.message})`,
       )
     } finally {
       await hub.close()
     }
   })
 
-  it('unobservable illegal (negative number / non- integer): reject adopt message', { timeout: 60_000 }, async () => {
+  it('invalid unobservable value (negative / non-integer) rejects schema validation', { timeout: 60_000 }, async () => {
     for (const bad of [-1, 1.5, '3']) {
       const hub = await startHubWithFakeNode(async (input) => ({
         ok: true,
@@ -345,21 +345,21 @@ describe('node snapshot/message seal strictly validate (real RPC channel return 
       }))
       try {
         const err = await expectSnapshotRejected(hub.fabric)
-        assert.ok(err.message.includes('unobservable'), `diagnose should refer unobservable illegal (got ${err.message})`)
+        assert.ok(err.message.includes('unobservable'), `diagnostic should mention invalid unobservable (got ${err.message})`)
       } finally {
         await hub.close()
       }
     }
   })
 
-  it('unobservable default: by 0 adopt message (old node any reject all report complete=false, default 0 semantics security); legal value pass-through', { timeout: 60_000 }, async () => {
+  it('omitted unobservable defaults to 0 (legacy nodes rejecting all reads already set complete=false); valid counts pass through', { timeout: 60_000 }, async () => {
     const hub = await startHubWithFakeNode(async (input) => ({
       ok: true,
       value: { path: input.path, processes: [], matchedTotal: 0, processesTruncated: false, complete: true, diagnostics: [] },
     }))
     try {
       const usage = await hub.fabric.inspectPathUsage('node-old', '/wt')
-      assert.equal(usage.unobservable, 0, 'default field by 0 adopt message')
+      assert.equal(usage.unobservable, 0, 'missing field defaults to 0')
       assert.equal(usage.complete, true)
     } finally {
       await hub.close()
@@ -374,20 +374,20 @@ describe('node snapshot/message seal strictly validate (real RPC channel return 
         processesTruncated: false,
         complete: true,
         unobservable: 7,
-        diagnostics: ['pid 1 (uid 0): across user without right read cwd(EACCES), cannot observability (not count complete decide)'],
+        diagnostics: ['pid 1 (uid 0): cross-user read cwd denied (EACCES), unobservable (excluded from completeness check)'],
       },
     }))
     try {
       const usage = await hub2.fabric.inspectPathUsage('node-old', '/wt')
-      assert.equal(usage.unobservable, 7, 'legal blind spot counter pass-through')
+      assert.equal(usage.unobservable, 7, 'valid blind-spot counter passes through')
       assert.equal(usage.complete, true)
-      assert.ok(usage.diagnostics.some((d) => d.includes('cannot observability')))
+      assert.ok(usage.diagnostics.some((d) => d.includes('unobservable')))
     } finally {
       await hub2.close()
     }
   })
 
-  it('non- strictly boolean ok(ok:1 / missing ok): reject is protocol violate reverse, produces no TypeError', { timeout: 60_000 }, async () => {
+  it('non-strict-boolean ok (ok:1 / missing ok) rejects as protocol violation without TypeError', { timeout: 60_000 }, async () => {
     for (const payload of [
       { ok: 1, value: null },
       { value: null },
@@ -396,14 +396,14 @@ describe('node snapshot/message seal strictly validate (real RPC channel return 
       const hub = await startHubWithFakeNode(async () => payload)
       try {
         const err = await expectSnapshotRejected(hub.fabric)
-        assert.ok(err.message.includes('ok') || err.message.includes('message seal'), `diagnose should refer message seal illegal (got ${err.message})`)
+        assert.ok(err.message.includes('ok') || err.message.includes('envelope'), `diagnostic should mention invalid envelope (got ${err.message})`)
       } finally {
         await hub.close()
       }
     }
   })
 
-  it('duplicate PID manifest: reject (same process many reference should dedupe)', { timeout: 60_000 }, async () => {
+  it('duplicate PID entries reject (multiple references from same process must be deduplicated)', { timeout: 60_000 }, async () => {
     const hub = await startHubWithFakeNode(async (input) => ({
       ok: true,
       value: {
@@ -420,25 +420,25 @@ describe('node snapshot/message seal strictly validate (real RPC channel return 
     }))
     try {
       const err = await expectSnapshotRejected(hub.fabric)
-      assert.ok(err.message.includes('duplicate'), `diagnose should refer duplicate PID(got ${err.message})`)
+      assert.ok(err.message.includes('duplicate'), `diagnostic should mention duplicate PID (got ${err.message})`)
     } finally {
       await hub.close()
     }
   })
 
-  it('failed branch missing legal code/message error message seal: reject is protocol violate reverse', { timeout: 60_000 }, async () => {
+  it('failed branch missing valid code/message error envelope rejects as protocol violation', { timeout: 60_000 }, async () => {
     for (const badError of [undefined, { code: 'x' }, { message: 'm' }, 'text']) {
       const hub = await startHubWithFakeNode(async () => ({ ok: false, error: badError }))
       try {
         const err = await expectSnapshotRejected(hub.fabric)
-        assert.ok(err.message.includes('message seal') || err.message.includes('code'), `diagnose should refer error message seal illegal (got ${err.message})`)
+        assert.ok(err.message.includes('envelope') || err.message.includes('code'), `diagnostic should mention invalid error envelope (got ${err.message})`)
       } finally {
         await hub.close()
       }
     }
   })
 
-  it('legal ok:false: type pass-through (node_path_usage_failed carry node original code)', { timeout: 60_000 }, async () => {
+  it('valid ok:false preserves error classification (node_path_usage_failed retains node code)', { timeout: 60_000 }, async () => {
     const hub = await startHubWithFakeNode(async () => ({
       ok: false,
       error: { code: 'permission_denied', message: 'no access to /proc/1/fd' },
@@ -450,7 +450,7 @@ describe('node snapshot/message seal strictly validate (real RPC channel return 
           assert.ok(err instanceof HelmError)
           assert.equal(err.code, 'node_path_usage_failed')
           const details = (err as HelmError).details as { code?: string }
-          assert.equal(details?.code, 'permission_denied', 'node original error code keep')
+          assert.equal(details?.code, 'permission_denied', 'raw node error code is preserved')
           return true
         },
       )

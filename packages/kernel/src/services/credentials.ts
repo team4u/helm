@@ -1,8 +1,8 @@
 /**
- * CredentialService: manage credentials.json(constant 0600) in model API Key
- * and plugin secret.get() only limit process inside can message caller use, never via HTTP expose.
- * read change write by credentials.json real path two-layer serial: process inside sharing queue (withFileLock)
- * + across process lock (credentials.json.lock, and CLI mutual recognize the same protocol), across instance mutual exclusion.
+ * CredentialService: manages model API keys and plugin secrets in `credentials.json` (always 0600).
+ * `get()` is restricted to trusted in-process callers and must never be exposed over HTTP.
+ * Read-modify-write operations serialize via two layers keyed by canonical `credentials.json` path:
+ * in-process queue (`withFileLock`) + cross-process lock (`credentials.json.lock`, matching CLI protocol).
  */
 import { chmod } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -17,31 +17,31 @@ import {
 import { withFileLock, withProcessFileLock } from './file-lock.js'
 
 export interface StoredCredential {
-  /** via SecretStash redaction after value or original value (model API Key do not occupy, directly store value). */
+  /** Value after SecretStash redaction or raw secret (model API keys are stored directly without stashing). */
   value: string
   createdAt: string
   updatedAt: string
 }
 
 /**
- * credentials.json persist form. known key with outside top-level key (such as CLI write
- * `cli: { hubUrl, token }`) original keep: this service only own providers/pluginSecrets
- * two naming empty between, must not in write back when discard other person key.
+ * Persisted shape of `credentials.json`. Unrecognized top-level keys (e.g. `cli: { hubUrl, token }`
+ * written by the CLI) are preserved verbatim: this service only owns the `providers` and
+ * `pluginSecrets` namespaces and must never discard other keys when writing back.
  */
 export interface CredentialStore {
   providers: Record<string, StoredCredential>
   pluginSecrets: Record<string, Record<string, string>>
-  /** unknown top-level key → original JSON value (write back keep do not motion). */
+  /** Unknown top-level keys -> raw JSON values (preserved untouched when writing back). */
   [key: string]: unknown
 }
 
-/** providerId / pluginId boundary validate: guard against path and JSON key inject. */
+/** Boundary validation for `providerId` / `pluginId`: prevents path traversal and JSON key injection. */
 function assertId(kind: string, id: string): void {
   if (typeof id !== 'string' || id === '') {
     throw new Error(`${kind} cannot be empty`)
   }
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(id)) {
-    throw new Error(`illegal ${kind}: ${id}`)
+    throw new Error(`invalid ${kind}: ${id}`)
   }
 }
 
@@ -50,31 +50,31 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * validate known field since has structure:providers under each items must be contains string value object,
- * pluginSecrets under each items must be string→string mapping. structure illegal explicit throw
- * FileParseError(contains path and key name), never static default discard after override - - that will swallow user credentials.
- * unknown top-level key does not shape assume, original keep.
+ * Validate existing structure of known fields: entries under `providers` must be objects containing a string
+ * `value`, and entries under `pluginSecrets` must be `string -> string` maps. Structural errors explicitly
+ * throw `FileParseError` (with path and key name) rather than silently dropping and overwriting user credentials.
+ * Unknown top-level keys make no shape assumptions and are preserved verbatim.
  */
 function normalizeStore(raw: unknown, path: string): CredentialStore {
   if (raw === undefined) return { providers: {}, pluginSecrets: {} }
   if (!isPlainObject(raw)) {
-    throw new FileParseError(path, 'credentials.json structure illegal (should be object)')
+    throw new FileParseError(path, 'invalid credentials.json structure (expected object)')
   }
   const providers: Record<string, StoredCredential> = {}
   const rawProviders = raw['providers']
   if (rawProviders !== undefined) {
     if (!isPlainObject(rawProviders)) {
-      throw new FileParseError(path, 'credentials.json providers field structure illegal (should be object)')
+      throw new FileParseError(path, 'invalid credentials.json providers field (expected object)')
     }
     for (const [id, value] of Object.entries(rawProviders)) {
       if (!isPlainObject(value)) {
         throw new FileParseError(
           path,
-          `credentials.json providers.${id} structure illegal (should be { value, createdAt, updatedAt } object)`,
+          `invalid credentials.json providers.${id} structure (expected { value, createdAt, updatedAt } object)`,
         )
       }
       if (typeof value['value'] !== 'string') {
-        throw new FileParseError(path, `credentials.json providers.${id}.value missing or non- string`)
+        throw new FileParseError(path, `credentials.json providers.${id}.value is missing or not a string`)
       }
       providers[id] = {
         value: value['value'],
@@ -89,14 +89,14 @@ function normalizeStore(raw: unknown, path: string): CredentialStore {
     if (!isPlainObject(rawPlugins)) {
       throw new FileParseError(
         path,
-        'credentials.json pluginSecrets field structure illegal (should be pluginId → key name → value object)',
+        'invalid credentials.json pluginSecrets field (expected pluginId -> key -> value object)',
       )
     }
     for (const [pluginId, secrets] of Object.entries(rawPlugins)) {
       if (!isPlainObject(secrets)) {
         throw new FileParseError(
           path,
-          `credentials.json pluginSecrets.${pluginId} structure illegal (should be key name → string object)`,
+          `invalid credentials.json pluginSecrets.${pluginId} structure (expected key -> string object)`,
         )
       }
       const map: Record<string, string> = {}
@@ -104,7 +104,7 @@ function normalizeStore(raw: unknown, path: string): CredentialStore {
         if (typeof value !== 'string') {
           throw new FileParseError(
             path,
-            `credentials.json pluginSecrets.${pluginId}.${key} must be string`,
+            `credentials.json pluginSecrets.${pluginId}.${key} must be a string`,
           )
         }
         map[key] = value
@@ -126,14 +126,14 @@ export class CredentialService {
     this.path = join(dataDir, 'credentials.json')
   }
 
-  /** column out already config providerId(only ID, never contains value). */
+  /** List configured `providerId`s (IDs only, never secret values). */
   async list(): Promise<string[]> {
     const store = await this.readStore()
     return Object.keys(store.providers).sort()
   }
 
   /**
-   * read provider API Key(only process inside can message caller;HTTP/CLI must not expose).
+   * Read a provider API key (restricted to trusted in-process callers; must never be exposed by HTTP/CLI).
    */
   async get(providerId: string): Promise<string | undefined> {
     assertId('providerId', providerId)
@@ -141,7 +141,7 @@ export class CredentialService {
     return store.providers[providerId]?.value
   }
 
-  /** settings provider API Key(0600 atomic write, never back visible value). */
+  /** Set a provider API key (atomic write with mode 0600; never returns plaintext value). */
   async set(providerId: string, value: string): Promise<void> {
     assertId('providerId', providerId)
     if (typeof value !== 'string' || value === '') {
@@ -172,7 +172,7 @@ export class CredentialService {
     })
   }
 
-  /** read plugin secret(only process inside can message caller). */
+  /** Read a plugin secret (restricted to trusted in-process callers). */
   async getPluginSecret(pluginId: string, key: string): Promise<string | undefined> {
     assertId('pluginId', pluginId)
     if (typeof key !== 'string' || key === '') throw new Error('secret key name cannot be empty')
@@ -180,7 +180,7 @@ export class CredentialService {
     return store.pluginSecrets[pluginId]?.[key]
   }
 
-  /** write plugin secret(configSchema in secret:true field automatically to this in). */
+  /** Write a plugin secret (`secret: true` fields in configSchema route here automatically). */
   async setPluginSecret(pluginId: string, key: string, value: string): Promise<void> {
     assertId('pluginId', pluginId)
     if (typeof key !== 'string' || key === '') throw new Error('secret key name cannot be empty')
@@ -204,8 +204,8 @@ export class CredentialService {
   }
 
   /**
-   * precise delete single plugin secret(missing when static default succeeded: idempotent semantics, caller rollback path
-   * allows duplicate clean up). the rest key and same plugin other secret do not subject to affect.
+   * Delete a single plugin secret (succeeds silently if absent: idempotent for rollback cleanup retries).
+   * Remaining keys and other plugins' secrets are unaffected.
    */
   async deletePluginSecret(pluginId: string, key: string): Promise<void> {
     assertId('pluginId', pluginId)
@@ -220,38 +220,38 @@ export class CredentialService {
     })
   }
 
-  /** all amount read (process inside diagnose/export use; contains plaintext, never outside). */
+  /** Full store read (for internal diagnostics/export; contains plaintext, never exposed externally). */
   async readStore(): Promise<CredentialStore> {
     const raw = await readJsonFileOptional(this.path)
     const store = normalizeStore(raw, this.path)
-    // read path same converge 0600: already has file by put wide permission when immediately fix, while is not etc. to under time write.
-    // fix failed explicit throws, never static default carries illness return.
+    // Enforce 0600 on read too: repair overly permissive existing files immediately rather than waiting for next write.
+    // Throw explicitly if repair fails rather than returning insecurely.
     if (raw !== undefined && !(await isPrivateMode(this.path))) {
       await chmod(this.path, 0o600)
       if (!(await isPrivateMode(this.path))) {
-        throw new Error(`credentials.json permission fix failed (should 0600): ${this.path}`)
+        throw new Error(`failed to repair credentials.json permissions (expected 0600): ${this.path}`)
       }
     }
     return store
   }
 
   private async persist(store: CredentialStore): Promise<void> {
-    // constant 0600: secret file permission hard rule.
+    // Always 0600: hard permission invariant for secret files.
     await atomicWriteJson(this.path, store, { mode: 0o600 })
   }
 
-  /** by real path two-layer serial read change write: process inside queue + across process lock (and CLI mutual recognize). */
+  /** Two-layer serialization keyed by real path: in-process queue + cross-process file lock (shared with CLI). */
   private enqueue<T>(fn: () => Promise<T>): Promise<T> {
     return withFileLock(this.path, () => withProcessFileLock(this.path, fn))
   }
 }
 
-/** expose path constant supply permission assertion (do not read content). */
+/** Expose credentials file path for permission assertions (without reading contents). */
 export function credentialsPath(dataDir: string): string {
   return join(dataDir, 'credentials.json')
 }
 
-/** only read text (test assertion plaintext do not other file when use). */
+/** Read raw text (used by tests to assert plaintext never appears in other files). */
 export async function readRawText(path: string): Promise<string> {
   return readTextFile(path)
 }

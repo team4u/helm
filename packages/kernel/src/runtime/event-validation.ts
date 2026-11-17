@@ -1,14 +1,13 @@
 /**
- * event payload boundary validate (pure function; self events.ts split out, can independent single test).
+ * Event payload boundary validation (pure functions split out from events.ts for isolated unit testing).
  *
- * discipline (migration before semantics original keep):
- * - publish side unify JSON validate + redaction (string and field name all redact),payload illegal
- *   directly throw HelmError, never static default fall back;core type reference also accept caller directly payload and
- *   complete event message seal (such as PluginHost emitEvent('plugin.changed', {type, plugin})),
- *   message seal only split package do not second embed set; unknown type away CustomHelmEvent {type, payload} original
- *   pass-through, does not pretend to be into notification;
- * - can missing cannot wrong: optional field store in i.e. validate, type do not symbol same throws, not silently fix correct
- *   (such as notification illegal level do not fold back 'info').
+ * Discipline (original semantics preserved):
+ * - Publish side performs unified JSON validation + redaction (both strings and keys are redacted); invalid payloads
+ *   throw HelmError immediately without silent fallbacks. Core types accept either a raw payload or a full event envelope
+ *   (e.g., PluginHost emitEvent('plugin.changed', {type, plugin})), unwrapping envelopes without double-nesting.
+ *   Unknown event types pass through verbatim as CustomHelmEvent {type, payload} without masquerading as notifications.
+ * - "May be omitted, must never be wrong": optional fields are validated whenever present and mismatched types
+ *   likewise throw rather than being silently coerced (e.g., an invalid notification level never falls back to 'info').
  */
 
 import { HelmError } from '@helm/protocol'
@@ -33,10 +32,11 @@ const ASK_STATUSES = new Set(['pending', 'answered', 'cancelled', 'superseded'])
 const ASK_FIELD_TYPES = new Set(['text', 'select', 'confirm'])
 
 /**
- * recursion remove value is undefined optional field.
- * only for plain object / array recursion; the rest value (contains Date/Map etc. illegal JSON value) original return,
- * by redactJsonValue in JSON boundary unify reject, does not static default convert.
- * already in access path on object original return (true loop to redactJsonValue explicit throws, do not in this in unbounded recursion).
+ * Recursively strip optional fields whose value is undefined.
+ * Recurses only into plain objects and arrays; all other values (including non-JSON types like Date/Map) are returned
+ * verbatim so redactJsonValue rejects them explicitly at the JSON boundary without silent conversion.
+ * Objects already on the active traversal path are returned verbatim (true cycles are caught explicitly by redactJsonValue
+ * instead of triggering unbounded recursion here).
  */
 export function pruneUndefined(value: unknown, visiting: WeakSet<object>): unknown {
   if (Array.isArray(value)) {
@@ -65,13 +65,12 @@ export function pruneUndefined(value: unknown, visiting: WeakSet<object>): unkno
 }
 
 /**
- * conversation.upsert payload validate: event consumer (web live-state / cli / protocol type)
- * actual read ConversationSummary core field; optional field store in i.e. validate, type do not symbol same throws
- *(can missing cannot wrong).
+ * conversation.upsert payload validation: covers the core ConversationSummary fields read by consumers
+ * (web live-state / cli / protocol types); optional fields are validated whenever present and fail on wrong types.
  */
 function assertConversationSummaryShape(value: unknown): void {
   if (value === null || typeof value !== 'object') {
-    throw new HelmError('invalid_event', 'conversation.upsert need to ConversationSummary shape conversation', 500)
+    throw new HelmError('invalid_event', 'conversation.upsert requires a ConversationSummary-shaped conversation', 500)
   }
   const conv = value as Record<string, unknown>
   if (
@@ -94,7 +93,7 @@ function assertConversationSummaryShape(value: unknown): void {
   ) {
     throw new HelmError(
       'invalid_event',
-      'conversation.upsert need to ConversationSummary shape conversation(id/title/profileId/tags/cwd/model/thinkingLevel/status/stateChangeSeq/completionSeq/unread/pinned/pendingAskCount/createdAt/updatedAt)',
+      'conversation.upsert requires a ConversationSummary-shaped conversation (id/title/profileId/tags/cwd/model/thinkingLevel/status/stateChangeSeq/completionSeq/unread/pinned/pendingAskCount/createdAt/updatedAt)',
       500,
     )
   }
@@ -117,15 +116,14 @@ function assertConversationSummaryShape(value: unknown): void {
   ) {
     throw new HelmError(
       'invalid_event',
-      'conversation.upsert optional field (parentConversationId/parentToolCallId/ownedBy/nodeId/thinkingLevelOverride/doing/lastError/lastEntryId/contextUsage) store in when type must legal',
+      'conversation.upsert optional fields (parentConversationId/parentToolCallId/ownedBy/nodeId/thinkingLevelOverride/doing/lastError/lastEntryId/contextUsage) must have valid types when present',
       500,
     )
   }
 }
 
-/** contextUsage shape validate (can missing cannot wrong; contract converge is tokens/contextWindow/compacting
- * three field, unknown field reject - - do not die field;tokens is null means context unknown; rate class
- * metric do not follow use amount carry, by optional plugin policy layer self row render). */
+/** contextUsage shape validation (optional fields must still be valid; contract narrows to tokens/contextWindow/compacting
+ * with unknown keys rejected—no dead fields; null tokens means context unknown; throughput metrics stay out of usage and belong to optional plugin UI). */
 function isContextUsageShape(value: unknown): boolean {
   if (value === null || typeof value !== 'object') return false
   const usage = value as Record<string, unknown>
@@ -156,9 +154,9 @@ function isContextUsageShape(value: unknown): boolean {
   return true
 }
 
-/** conversation.live through use streaming generation fact shape (can missing cannot wrong):
- * taskId / attempt positive integer (identity cannot fabricate);message.content is array and only contains
- * subject to limit chunk shape;usage.output correct finite count. illegal i.e. reject, not silently fall back. */
+/** Streaming generation shape for conversation.live (must be valid when present):
+ * positive integer taskId / attempt (unforgeable identity); message.content is an array of constrained block shapes;
+ * usage.output is a positive finite number. Invalid shapes are rejected without silent fallback. */
 function isLiveGenerationShape(value: unknown): boolean {
   if (value === null || typeof value !== 'object') return false
   const generation = value as Record<string, unknown>
@@ -215,10 +213,10 @@ function isLiveGenerationShape(value: unknown): boolean {
   return typeof u['output'] === 'number' && Number.isFinite(u['output']) && u['output'] > 0
 }
 
-/** ask.upsert payload validate:AskSpec core field shape (business level rule by createAsk  validateAskSpec guard). */
+/** ask.upsert payload validation: core AskSpec shape (business rules are enforced by validateAskSpec in createAsk). */
 function assertAskSpecShape(value: unknown): void {
   if (value === null || typeof value !== 'object') {
-    throw new HelmError('invalid_event', 'ask.upsert need to AskSpec shape ask', 500)
+    throw new HelmError('invalid_event', 'ask.upsert requires an AskSpec-shaped ask', 500)
   }
   const ask = value as Record<string, unknown>
   if (
@@ -234,7 +232,7 @@ function assertAskSpecShape(value: unknown): void {
   ) {
     throw new HelmError(
       'invalid_event',
-      'ask.upsert need to AskSpec shape ask(id/conversationId/title/fields/status/createdAt)',
+      'ask.upsert requires an AskSpec-shaped ask (id/conversationId/title/fields/status/createdAt)',
       500,
     )
   }
@@ -246,19 +244,19 @@ function assertAskSpecShape(value: unknown): void {
       typeof (field as Record<string, unknown>)['label'] !== 'string' ||
       !ASK_FIELD_TYPES.has((field as Record<string, unknown>)['type'] as string)
     ) {
-      throw new HelmError('invalid_event', 'ask.upsert  field need to { name: string; label: string; type: text|select|confirm } shape', 500)
+      throw new HelmError('invalid_event', 'ask.upsert field requires { name: string; label: string; type: text|select|confirm } shape', 500)
     }
     const f = field as Record<string, unknown>
     if (f['secretLifetime'] !== undefined) {
-      if (f['secret'] !== true) throw new HelmError('invalid_event', 'ask.upsert  secretLifetime only allows used to secret field', 500)
+      if (f['secret'] !== true) throw new HelmError('invalid_event', 'ask.upsert secretLifetime is only allowed on secret fields', 500)
       try {
         validateSecretLifetime(f['secretLifetime'] as SecretLifetime, 'ask.upsert field.secretLifetime')
       } catch (error) {
-        throw new HelmError('invalid_event', error instanceof Error ? error.message : 'ask.upsert field.secretLifetime format invalid', 500)
+        throw new HelmError('invalid_event', error instanceof Error ? error.message : 'ask.upsert field.secretLifetime has invalid format', 500)
       }
     }
     if (f['type'] === 'select' && (!Array.isArray(f['options']) || f['options'].length === 0)) {
-      throw new HelmError('invalid_event', 'ask.upsert  select field need to non-empty options(and createAsk validate consistent)', 500)
+      throw new HelmError('invalid_event', 'ask.upsert select field requires non-empty options (consistent with createAsk validation)', 500)
     }
     if (
       (f['options'] !== undefined &&
@@ -269,7 +267,7 @@ function assertAskSpecShape(value: unknown): void {
       (f['secret'] !== undefined && typeof f['secret'] !== 'boolean') ||
       (f['required'] !== undefined && typeof f['required'] !== 'boolean')
     ) {
-      throw new HelmError('invalid_event', 'ask.upsert  field optional field (options/secret/required) store in when type must legal', 500)
+      throw new HelmError('invalid_event', 'ask.upsert field optional fields (options/secret/required) must have valid types when present', 500)
     }
   }
   if (
@@ -277,16 +275,15 @@ function assertAskSpecShape(value: unknown): void {
     (ask['description'] !== undefined && typeof ask['description'] !== 'string') ||
     (ask['expectedStateSeq'] !== undefined && !Number.isInteger(ask['expectedStateSeq']))
   ) {
-    throw new HelmError('invalid_event', 'ask.upsert optional field (ownerPluginId/description/expectedStateSeq) store in when type must legal', 500)
+    throw new HelmError('invalid_event', 'ask.upsert optional fields (ownerPluginId/description/expectedStateSeq) must have valid types when present', 500)
   }
 }
 
 /**
- *  (type, payload) group install is protocol HelmEvent; first prune optional undefined, again whole recursion
- * JSON redaction (string value and field name all redact).core type accept directly payload or complete
- * event message seal; unknown type away CustomHelmEvent {type, payload} original pass-through (do not fake report into
- * notification); any illegal JSON value (loop,Date,Map etc.) or core type field shape do not symbol
- * all throw HelmError not silently fall back, not silently fix correct.
+ * Assemble (type, payload) into a protocol HelmEvent; prunes optional undefined values first, then applies recursive
+ * JSON redaction across both string values and keys. Core types accept a raw payload or a full event envelope;
+ * unknown types pass through verbatim as CustomHelmEvent {type, payload} (never masquerading as notification);
+ * any invalid JSON value (cycles, Date, Map, etc.) or mismatched core shape throws HelmError with no silent fallback or coercion.
  */
 export function assembleHelmEvent(
   type: string,
@@ -294,14 +291,14 @@ export function assembleHelmEvent(
   redact: (text: string) => string,
 ): HelmEvent {
   if (typeof type !== 'string' || type.length === 0) {
-    throw new HelmError('invalid_event', 'event type must be non-empty string', 500)
+    throw new HelmError('invalid_event', 'event type must be a non-empty string', 500)
   }
   const clean = pruneUndefined(payload, new WeakSet())
   const redacted = redactJsonValue(clean, (t) => redact(t))
   const record =
     redacted !== null && typeof redacted === 'object' ? (redacted as Record<string, unknown>) : undefined
 
-  // complete event message seal (payload self carries same name type field): split package take each type dedicated belong field, do not second embed set.
+  // Full event envelope (payload already carries a matching type field): unwrap type-specific fields without double-nesting.
   const envelope = record !== undefined && record['type'] === type ? record : undefined
 
   switch (type) {
@@ -315,7 +312,7 @@ export function assembleHelmEvent(
       const source = (envelope ?? record) as Record<string, unknown> | undefined
       const conversationId = Number(source?.['conversationId'])
       if (!Number.isInteger(conversationId)) {
-        throw new HelmError('invalid_event', 'conversation.deleted need to number conversationId', 500)
+        throw new HelmError('invalid_event', 'conversation.deleted requires numeric conversationId', 500)
       }
       return { type, conversationId }
     }
@@ -324,7 +321,7 @@ export function assembleHelmEvent(
       const conversationId = Number(source?.['conversationId'])
       const entry = source?.['entry']
       if (!Number.isInteger(conversationId)) {
-        throw new HelmError('invalid_event', 'conversation.entry need to number conversationId', 500)
+        throw new HelmError('invalid_event', 'conversation.entry requires numeric conversationId', 500)
       }
       if (
         entry === null ||
@@ -334,7 +331,7 @@ export function assembleHelmEvent(
       ) {
         throw new HelmError(
           'invalid_event',
-          'conversation.entry need to { id: string; kind: string; ... } shape entry',
+          'conversation.entry requires { id: string; kind: string; ... }-shaped entry',
           500,
         )
       }
@@ -343,7 +340,7 @@ export function assembleHelmEvent(
         taskId !== undefined &&
         (typeof taskId !== 'number' || !Number.isInteger(taskId) || taskId <= 0)
       ) {
-        throw new HelmError('invalid_event', 'conversation.entry  taskId must be positive integer (can missing cannot wrong)', 500)
+        throw new HelmError('invalid_event', 'conversation.entry taskId must be a positive integer when present', 500)
       }
       return { type, conversationId, entry: entry as ConversationEntry }
     }
@@ -351,7 +348,7 @@ export function assembleHelmEvent(
       // Transient live frames bypass EventHub.publish / seq / replay ring; callers must use publishTransientLive().
       throw new HelmError(
         'invalid_event',
-        'conversation.live is transient and disallows entering durable EventHub.publish stream (use publishTransientLive)',
+        'conversation.live is transient and cannot enter the durable EventHub.publish stream (use publishTransientLive)',
         500,
       )
     }
@@ -366,7 +363,7 @@ export function assembleHelmEvent(
       const askId = source?.['askId']
       const status = source?.['status']
       if (typeof askId !== 'string' || (status !== 'answered' && status !== 'cancelled' && status !== 'superseded')) {
-        throw new HelmError('invalid_event', 'ask.resolved need to string askId and legal status', 500)
+        throw new HelmError('invalid_event', 'ask.resolved requires string askId and valid status', 500)
       }
       return { type, askId, status }
     }
@@ -382,7 +379,7 @@ export function assembleHelmEvent(
       ) {
         throw new HelmError(
           'invalid_event',
-          'plugin.changed need to { plugin: PluginSummary; ui: PluginUiContribution[] }(deactivate/unload when ui is empty array)',
+          'plugin.changed requires { plugin: PluginSummary; ui: PluginUiContribution[] } (ui is [] when disabled/uninstalled)',
           500,
         )
       }
@@ -400,18 +397,18 @@ export function assembleHelmEvent(
       ) {
         throw new HelmError(
           'invalid_event',
-          'plugin.doc.updated need to { pluginId: string; name: string; value } shape doc',
+          'plugin.doc.updated requires { pluginId: string; name: string; value }-shaped doc',
           500,
         )
       }
       return { type, doc: doc as PublicPluginDoc }
     }
     case 'plugin.session_doc.updated': {
-      // global stream guard against defend reject: conversation document event only allows dedicated use stream (SessionDocEventHub),
-      // mistakenly throw global broadcast belongs to contract violate about, explicit errors while is not fall back pass-through (guard against write put large regression).
+      // Defensive rejection on the global stream: session doc events belong exclusively on the dedicated SessionDocEventHub stream;
+      // routing them to the global broadcast violates the contract and fails explicitly rather than passing through (prevents write amplification).
       throw new HelmError(
         'invalid_event',
-        'plugin.session_doc.updated disallows enter global event stream (only dedicated use conversation document SSE)',
+        'plugin.session_doc.updated cannot enter the global event stream (dedicated session-doc SSE stream only)',
         500,
       )
     }
@@ -429,12 +426,12 @@ export function assembleHelmEvent(
       ) {
         throw new HelmError(
           'invalid_event',
-          "node.changed need to { node: { id: string; kind: 'local' | 'byom'; online: boolean; ... } } shape (removed optional)",
+          "node.changed requires { node: { id: string; kind: 'local' | 'byom'; online: boolean; ... } } shape (removed optional)",
           500,
         )
       }
       if (removed !== undefined && typeof removed !== 'boolean') {
-        throw new HelmError('invalid_event', 'node.changed  removed if has must is boolean', 500)
+        throw new HelmError('invalid_event', 'node.changed removed must be a boolean when present', 500)
       }
       return {
         type,
@@ -449,16 +446,16 @@ export function assembleHelmEvent(
       const body = source?.['body']
       const conversationId = source?.['conversationId']
       if (level !== 'info' && level !== 'warning' && level !== 'error') {
-        throw new HelmError('invalid_event', "notification need to level is 'info' | 'warning' | 'error'", 500)
+        throw new HelmError('invalid_event', "notification requires level to be 'info' | 'warning' | 'error'", 500)
       }
       if (typeof title !== 'string' || title === '') {
-        throw new HelmError('invalid_event', 'notification need to title is non-empty string', 500)
+        throw new HelmError('invalid_event', 'notification requires a non-empty string title', 500)
       }
       if (body !== undefined && typeof body !== 'string') {
-        throw new HelmError('invalid_event', 'notification  body if has must is string', 500)
+        throw new HelmError('invalid_event', 'notification body must be a string when present', 500)
       }
       if (conversationId !== undefined && (typeof conversationId !== 'number' || !Number.isInteger(conversationId))) {
-        throw new HelmError('invalid_event', 'notification  conversationId if has must is integer', 500)
+        throw new HelmError('invalid_event', 'notification conversationId must be an integer when present', 500)
       }
       return {
         type,
@@ -469,7 +466,7 @@ export function assembleHelmEvent(
       }
     }
     default: {
-      // CustomHelmEvent: unknown type original pass-through, do not fake report into notification.
+      // CustomHelmEvent: pass unknown types through verbatim without masquerading as notifications.
       const custom: CustomHelmEvent = { type: String(type), payload: redacted }
       return custom
     }
@@ -477,9 +474,9 @@ export function assembleHelmEvent(
 }
 
 /**
- * plugin.session_doc.updated payload boundary validate (SessionDocEventHub.dispatch use):
- * first do shape gate (doc is null/non- object when must not enter any field read), again validate three meta group
- * field and deleted constraint; return already verify doc(redaction by caller complete).
+ * Boundary validation for plugin.session_doc.updated payloads (used by SessionDocEventHub.dispatch):
+ * shape gate first (never read fields if doc is null or non-object), then validate the triple
+ * key and deleted constraint; returns the validated doc (redaction is handled by caller).
  */
 export function assertSessionDocUpdateShape(payload: unknown): PublicPluginSessionDoc {
   const source = (payload ?? undefined) as { type?: unknown; doc?: unknown } | undefined
@@ -487,7 +484,7 @@ export function assertSessionDocUpdateShape(payload: unknown): PublicPluginSessi
   if (doc === null || typeof doc !== 'object') {
     throw new HelmError(
       'invalid_event',
-      'plugin.session_doc.updated need to { pluginId: string; name: string; conversationId: number; value } shape doc',
+      'plugin.session_doc.updated requires { pluginId: string; name: string; conversationId: number; value }-shaped doc',
       500,
     )
   }
@@ -507,12 +504,12 @@ export function assertSessionDocUpdateShape(payload: unknown): PublicPluginSessi
   ) {
     throw new HelmError(
       'invalid_event',
-      'plugin.session_doc.updated need to { pluginId: string; name: string; conversationId: number; value } shape doc',
+      'plugin.session_doc.updated requires { pluginId: string; name: string; conversationId: number; value }-shaped doc',
       500,
     )
   }
   if (record['deleted'] !== undefined && record['deleted'] !== true) {
-    throw new HelmError('invalid_event', 'plugin.session_doc.updated  deleted if has must is true', 500)
+    throw new HelmError('invalid_event', 'plugin.session_doc.updated deleted must be true when present', 500)
   }
   return doc as PublicPluginSessionDoc
 }
@@ -531,7 +528,7 @@ export function validateAndRedactConversationLive(
   if (redacted === null || typeof redacted !== 'object' || Array.isArray(redacted)) {
     throw new HelmError(
       'invalid_event',
-      'conversation.live need to { conversationId, text, tools, updatedAt } shape live',
+      'conversation.live requires a { conversationId, text, tools, updatedAt }-shaped live payload',
       500,
     )
   }
@@ -547,21 +544,21 @@ export function validateAndRedactConversationLive(
   ) {
     throw new HelmError(
       'invalid_event',
-      'conversation.live need to { conversationId, text, tools, updatedAt } shape live',
+      'conversation.live requires a { conversationId, text, tools, updatedAt }-shaped live payload',
       500,
     )
   }
   if (live['thinking'] !== undefined && typeof live['thinking'] !== 'string') {
-    throw new HelmError('invalid_event', 'conversation.live thinking must be string when present', 500)
+    throw new HelmError('invalid_event', 'conversation.live thinking must be a string when present', 500)
   }
   if (live['queuedInputs'] !== undefined && !Array.isArray(live['queuedInputs'])) {
-    throw new HelmError('invalid_event', 'conversation.live queuedInputs must be array when present', 500)
+    throw new HelmError('invalid_event', 'conversation.live queuedInputs must be an array when present', 500)
   }
   const generation = live['generation']
   if (generation !== undefined && !isLiveGenerationShape(generation)) {
     throw new HelmError(
       'invalid_event',
-      'conversation.live  generation need to { taskId: positive integer, attempt: positive integer, message?: { content, usage? } } shape',
+      'conversation.live generation requires { taskId: positive integer, attempt: positive integer, message?: { content, usage? } } shape',
       500,
     )
   }

@@ -1,9 +1,10 @@
 /**
- * ctx.provider declaration / mount / unload lifecycle test.
- * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
+ * Lifecycle tests for `ctx.provider` declaration, mounting, and unmounting.
+ * runner: tsx --test; every test uses explicit timeout: 60_000 to guard against deadlocks.
  *
- * all use real PluginHost + fake provider registry(record mount/unload real order and
- * ownership), does not introduce real model gateway - - host mechanism and runtime port implement decouple verify.
+ * Uses a real `PluginHost` + a fake provider registry (recording exact mount/unmount order
+ * and ownership) without bringing up the model gateway, verifying host decoupling from the
+ * runtime port implementation.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -19,7 +20,7 @@ import { createPluginBuildProvider } from '@helm/plugin-build';
 import { MemoryDocStore, cleanupDir, makeConversationSummary, makeTempDir } from './helpers.js';
 
 // ---------------------------------------------------------------------------
-// fake base create
+// Fake test fixtures
 // ---------------------------------------------------------------------------
 
 function makeHostApi(): PluginHostBackend {
@@ -44,13 +45,13 @@ function makeHostApi(): PluginHostBackend {
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    execEnv: async () => { throw new HelmError('unsupported', 'this fixture do not execute node command', 501) },
-    withFileMutationQueue(): Promise<never> { throw new Error('this fixture do not bear load file mutual exclusion queue') },
+    execEnv: async () => { throw new HelmError('unsupported', 'this fixture does not execute node commands', 501) },
+    withFileMutationQueue(): Promise<never> { throw new Error('this fixture does not support file mutation queue') },
     emitEvent: () => {},
   };
 }
 
-/** most small legal provider(shape satisfy pi-ai Provider contract, behavior no need to real). */
+/** Minimal valid provider (matches `pi-ai` `Provider` shape; streaming methods are stubs). */
 function makeProvider(id: string): Provider {
   return {
     id,
@@ -58,10 +59,10 @@ function makeProvider(id: string): Provider {
     auth: { apiKey: { name: `${id} key`, resolve: async () => undefined } },
     getModels: () => [],
     stream: () => {
-      throw new Error('fake provider do not execute stream');
+      throw new Error('fake provider does not implement stream');
     },
     streamSimple: () => {
-      throw new Error('fake provider do not execute streamSimple');
+      throw new Error('fake provider does not implement streamSimple');
     },
   } as unknown as Provider;
 }
@@ -73,28 +74,28 @@ interface RegistryCall {
 }
 
 /**
- * fake provider registry: record real invoke sequence, can inject failed and busy state.
- * ownership (pluginId) by host inject,registry faithful record supply assertion.
+ * Fake provider registry: records actual call order and allows injecting failures and busy states.
+ * Ownership (`pluginId`) is supplied by the host and recorded faithfully for assertions.
  */
 class FakeProviderRegistry implements PluginProviderPort {
   calls: RegistryCall[] = [];
   mounted = new Map<string, string>(); // providerId -> pluginId
-  /** under once register(provider.id === failOn) when throw. */
+  /** Throws on the next register call when `provider.id === failRegisterOn`. */
   failRegisterOn: string | null = null;
-  /** designate providerId unload function throw. */
+  /** Throws inside the unregister callback for the specified providerId. */
   failUnregisterOn: string | null = null;
-  /** assertIdle throw providerId set. */
+  /** Plugin IDs whose `assertIdle` call should throw. */
   busyOwners = new Set<string>();
 
   async register(provider: Provider, pluginId: string): Promise<() => Promise<void>> {
     if (provider.id === this.failRegisterOn) {
-      throw new HelmError('provider_register_conflict', `provider ${provider.id} mount by reject`, 409);
+      throw new HelmError('provider_register_conflict', `provider ${provider.id} rejected on mount`, 409);
     }
     this.calls.push({ op: 'register', providerId: provider.id, pluginId });
     this.mounted.set(provider.id, pluginId);
     return async () => {
       if (provider.id === this.failUnregisterOn) {
-        throw new HelmError('provider_unregister_rejected', `provider ${provider.id} unload by reject (leap stream)`, 409);
+        throw new HelmError('provider_unregister_rejected', `provider ${provider.id} rejected on unmount (active stream)`, 409);
       }
       this.calls.push({ op: 'unregister', providerId: provider.id, pluginId });
       this.mounted.delete(provider.id);
@@ -104,12 +105,12 @@ class FakeProviderRegistry implements PluginProviderPort {
   assertIdle(pluginId: string): void {
     this.calls.push({ op: 'assertIdle', pluginId });
     if (this.busyOwners.has(pluginId)) {
-      throw new HelmError('provider_stream_in_flight', `plugin ${pluginId}  provider still has leap stream/refresh`, 409);
+      throw new HelmError('provider_stream_in_flight', `plugin ${pluginId} providers still have active streams/refreshes`, 409);
     }
   }
 }
 
-/** direct use ctx define work vendor: keep definePlugin inside declaration real execute order. */
+/** Helper factory for inline `definePlugin` test fixtures preserving execution order. */
 function definePluginWith(id: string, fn: (ctx: import('@helm/protocol').HelmPluginContext) => void | Promise<void>): PluginDefinition {
   return { id, name: id, definePlugin: fn };
 }
@@ -134,32 +135,32 @@ async function dispose(host: PluginHost, dir: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// declaration boundary validate
+// Declaration validation boundaries
 // ---------------------------------------------------------------------------
 
-test('provider declaration missing must want shape by explicit reject', { timeout: 60_000 }, async () => {
+test('provider declarations missing required shape are rejected explicitly', { timeout: 60_000 }, async () => {
   const { host, dir } = await makeHost(new FakeProviderRegistry());
   try {
     const bad = (over: Record<string, unknown>) =>
       definePluginWith('test:bad', (ctx) => {
         ctx.provider({ ...makeProvider('bad'), ...over } as unknown as Provider);
       });
-    // missing name
+    // Missing name
     await assert.rejects(() => host.register(bad({ name: undefined })), (err: unknown) => {
-      assert.ok(err instanceof HelmError && err.code === 'invalid_provider_spec', `name validation failed:${String(err)}`);
+      assert.ok(err instanceof HelmError && err.code === 'invalid_provider_spec', `name validation failed: ${String(err)}`);
       return true;
     });
     // auth missing apiKey/oauth
     await assert.rejects(() => host.register(bad({ auth: {} })), (err: unknown) => {
-      assert.ok(err instanceof HelmError && err.code === 'invalid_provider_spec', `auth validation failed:${String(err)}`);
+      assert.ok(err instanceof HelmError && err.code === 'invalid_provider_spec', `auth validation failed: ${String(err)}`);
       return true;
     });
-    // missing streamSimple
+    // Missing streamSimple
     await assert.rejects(() => host.register(bad({ streamSimple: undefined })), (err: unknown) => {
-      assert.ok(err instanceof HelmError && err.code === 'invalid_provider_spec', `streamSimple validation failed:${String(err)}`);
+      assert.ok(err instanceof HelmError && err.code === 'invalid_provider_spec', `streamSimple validation failed: ${String(err)}`);
       return true;
     });
-    // duplicate id
+    // Duplicate id
     const p = makeProvider('dup');
     await assert.rejects(
       () =>
@@ -170,7 +171,7 @@ test('provider declaration missing must want shape by explicit reject', { timeou
           }),
         ),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError && err.code === 'duplicate_provider', `duplicate validation failed:${String(err)}`);
+        assert.ok(err instanceof HelmError && err.code === 'duplicate_provider', `duplicate validation failed: ${String(err)}`);
         return true;
       },
     );
@@ -180,10 +181,10 @@ test('provider declaration missing must want shape by explicit reject', { timeou
 });
 
 // ---------------------------------------------------------------------------
-// enable / deactivate / again enable
+// enable / disable / re-enable
 // ---------------------------------------------------------------------------
 
-test('enable mount, deactivate unload, again enable heavy mount (real ownership and order)', { timeout: 60_000 }, async () => {
+test('enable mounts, disable unmounts, and re-enable remounts with exact ownership and order', { timeout: 60_000 }, async () => {
   const registry = new FakeProviderRegistry();
   const { host, dir } = await makeHost(registry);
   try {
@@ -203,7 +204,7 @@ test('enable mount, deactivate unload, again enable heavy mount (real ownership 
         });
       }),
     );
-    // enable:provider first at service start mount
+    // enable: providers mount before service starts
     assert.deepEqual(events, ['service-start']);
     assert.deepEqual(
       registry.calls.map((c) => `${c.op}:${c.providerId ?? ''}`),
@@ -215,19 +216,19 @@ test('enable mount, deactivate unload, again enable heavy mount (real ownership 
     ]);
 
     await host.disable('test:magpie');
-    // deactivate: service stop after inverse order unload provider
+    // disable: service stops first, then providers unmount in reverse order
     assert.deepEqual(events, ['service-start', 'service-stop']);
-    assert.equal(registry.mounted.size, 0, 'deactivate after provider must all unload');
+    assert.equal(registry.mounted.size, 0, 'all providers must unmount after disable');
     const disableCalls = registry.calls.filter((c) => c.op === 'assertIdle');
-    // deactivate gate double inspect:collectPluginInUse before after each once (TOCTOU consolidate, see disable implement)
-    assert.equal(disableCalls.length, 2, 'deactivate before must preflight provider in-flight state');
+    // disable gate double-check: once before and once after collectPluginInUse (TOCTOU guard)
+    assert.equal(disableCalls.length, 2, 'disable must preflight provider idle state');
 
     await host.enable('test:magpie');
     assert.deepEqual(events, ['service-start', 'service-stop', 'service-start']);
     assert.deepEqual(
       registry.calls.filter((c) => c.op === 'register').map((c) => c.providerId),
       ['magpie-a', 'magpie-b', 'magpie-a', 'magpie-b'],
-      'again enable must re- mount all provider',
+      're-enable must remount all providers',
     );
     assert.deepEqual([...registry.mounted.entries()], [
       ['magpie-a', 'test:magpie'],
@@ -238,7 +239,7 @@ test('enable mount, deactivate unload, again enable heavy mount (real ownership 
   }
 });
 
-test('by default deactivate register only collect declaration do not mount (configSchema per common available)', { timeout: 60_000 }, async () => {
+test('default-disabled registration collects declarations without mounting providers while keeping configSchema', { timeout: 60_000 }, async () => {
   const registry = new FakeProviderRegistry();
   const { host, dir } = await makeHost(registry);
   try {
@@ -249,7 +250,7 @@ test('by default deactivate register only collect declaration do not mount (conf
       }),
       { enabled: false },
     );
-    assert.equal(registry.calls.length, 0, 'by default deactivate probe never can mount provider');
+    assert.equal(registry.calls.length, 0, 'disabled probe must never mount providers');
     assert.equal(registry.mounted.size, 0);
     const summary = host.list().find((p) => p.id === 'test:off');
     assert.ok(summary);
@@ -260,24 +261,24 @@ test('by default deactivate register only collect declaration do not mount (conf
   }
 });
 
-test('by default deactivate and host not provide providers port when register succeeded, enable explicit 501', { timeout: 60_000 }, async () => {
+test('default-disabled plugin succeeds register even without providers port, and enable fails explicitly with 501', { timeout: 60_000 }, async () => {
   const { host, dir } = await makeHost();
   try {
-    // port missing: deactivate probe must succeeded (declaration do not mount), do not subject to port affect
+    // Missing port: disabled probe must succeed (declaration does not mount), unaffected by missing port
     await host.register(
       definePluginWith('test:noport', (ctx) => {
         ctx.provider(makeProvider('nop-a'));
       }),
       { enabled: false },
     );
-    // enable (mount phase): explicit 501, forbid static default
+    // enable (mount phase): explicit 501, never silently skipped
     await assert.rejects(() => host.enable('test:noport'), (err: unknown) => {
-      assert.ok(err instanceof HelmError, `expectation HelmError, actual:${String(err)}`);
+      assert.ok(err instanceof HelmError, `expected HelmError, got: ${String(err)}`);
       assert.equal(err.code, 'provider_port_unavailable');
       assert.equal(err.status, 501);
       return true;
     });
-    // failed after back deactivate state, without leak leak
+    // Returns cleanly to disabled state after failure with no leaks
     const summary = host.list().find((p) => p.id === 'test:noport');
     assert.ok(summary);
     assert.equal(summary.enabled, false);
@@ -286,7 +287,7 @@ test('by default deactivate and host not provide providers port when register su
   }
 });
 
-test('service start before completed provider mount (service can dependency itself provider)', { timeout: 60_000 }, async () => {
+test('service.start runs after provider mounting finishes so services can depend on own providers', { timeout: 60_000 }, async () => {
   const registry = new FakeProviderRegistry();
   const { host, dir } = await makeHost(registry);
   try {
@@ -303,13 +304,13 @@ test('service start before completed provider mount (service can dependency itse
         });
       }),
     );
-    assert.deepEqual(seen, ['first'], 'service start when itself provider must already mount');
+    assert.deepEqual(seen, ['first'], 'own providers must already be mounted when service starts');
   } finally {
     await dispose(host, dir);
   }
 });
 
-test('service start on failure release all already mount provider', { timeout: 60_000 }, async () => {
+test('service.start failure releases all already-mounted providers in reverse order', { timeout: 60_000 }, async () => {
   const registry = new FakeProviderRegistry();
   const { host, dir } = await makeHost(registry);
   try {
@@ -330,24 +331,24 @@ test('service start on failure release all already mount provider', { timeout: 6
         ),
       (err: unknown) => {
         assert.ok(err instanceof HelmError, String(err));
-        // service failed to start path since has error code (provider already in rollback in inverse order release)
+        // Preserves existing service-start failure error code after reverse rollback of providers
         assert.equal(err.code, 'plugin_service_start_failed');
         return true;
       },
     );
-    assert.equal(registry.mounted.size, 0, 'service failed to start must release all already mount provider');
+    assert.equal(registry.mounted.size, 0, 'service start failure must release all mounted providers');
     assert.deepEqual(
       registry.calls.map((c) => `${c.op}:${c.providerId}`),
       ['register:p1', 'register:p2', 'unregister:p2', 'unregister:p1'],
-      'release must inverse order',
+      'rollback release must run in reverse order',
     );
-    assert.equal(host.list().length, 0, 'register failed plugin must whole remove');
+    assert.equal(host.list().length, 0, 'failed registration must remove plugin completely');
   } finally {
     await dispose(host, dir);
   }
 });
 
-test('second provider mount on failure release a', { timeout: 60_000 }, async () => {
+test('second provider mount failure releases the first provider', { timeout: 60_000 }, async () => {
   const registry = new FakeProviderRegistry();
   registry.failRegisterOn = 'second';
   const { host, dir } = await makeHost(registry);
@@ -362,12 +363,12 @@ test('second provider mount on failure release a', { timeout: 60_000 }, async ()
         ),
       (err: unknown) => {
         assert.ok(err instanceof HelmError, String(err));
-        // port reject (provider_register_conflict) original diagnose must keep
+        // Port rejection (provider_register_conflict) diagnostic must be preserved
         assert.equal(err.code, 'provider_register_conflict');
         return true;
       },
     );
-    assert.equal(registry.mounted.size, 0, 'half route failed must not leak leak a provider');
+    assert.equal(registry.mounted.size, 0, 'partial mount failure must not leak first provider');
     assert.deepEqual(
       registry.calls.map((c) => `${c.op}:${c.providerId}`),
       ['register:first', 'unregister:first'],
@@ -378,7 +379,7 @@ test('second provider mount on failure release a', { timeout: 60_000 }, async ()
   }
 });
 
-test('expired ctx(old epoch) can no longer register provider', { timeout: 60_000 }, async () => {
+test('expired ctx (old epoch) can no longer declare providers', { timeout: 60_000 }, async () => {
   const registry = new FakeProviderRegistry();
   const { host, dir } = await makeHost(registry);
   try {
@@ -390,27 +391,27 @@ test('expired ctx(old epoch) can no longer register provider', { timeout: 60_000
       }),
     );
     await host.disable('test:stale');
-    // old ctx in deactivate after invoke provider: sync throw(assertOpen), use try/catch catch
+    // Invoking provider on stale ctx after disable throws synchronously (assertOpen)
     assert.throws(() => stolen!(makeProvider('ghost')), (err: unknown) => {
       assert.ok(err instanceof HelmError && err.code === 'plugin_context_closed', String(err));
       return true;
     });
     assert.equal(registry.mounted.size, 0);
     await host.enable('test:stale');
-    // again deactivate after old handle again expires (new epoch)
+    // Disabling again expires the stale handle once more (new epoch)
     await host.disable('test:stale');
     assert.throws(() => stolen!(makeProvider('ghost2')), (err: unknown) => {
       assert.ok(err instanceof HelmError && err.code === 'plugin_context_closed', String(err));
       return true;
     });
     assert.equal(registry.mounted.size, 0);
-    assert.ok(!registry.calls.some((c) => c.providerId === 'ghost' || c.providerId === 'ghost2'), 'expired declaration never can mount');
+    assert.ok(!registry.calls.some((c) => c.providerId === 'ghost' || c.providerId === 'ghost2'), 'expired declarations must never mount');
   } finally {
     await dispose(host, dir);
   }
 });
 
-test('provider in-flight stream preflight reject deactivate (does not enter service stop half split state)', { timeout: 60_000 }, async () => {
+test('in-flight provider stream preflight rejects disable cleanly without leaving services partially stopped', { timeout: 60_000 }, async () => {
   const registry = new FakeProviderRegistry();
   const { host, dir } = await makeHost(registry);
   try {
@@ -430,19 +431,19 @@ test('provider in-flight stream preflight reject deactivate (does not enter serv
       }),
     );
     assert.deepEqual(events, ['started']);
-    // build busy:assertIdle reject
+    // Simulate active stream so assertIdle rejects
     registry.busyOwners.add('test:busy');
     await assert.rejects(() => host.disable('test:busy'), (err: unknown) => {
       assert.ok(err instanceof HelmError, String(err));
-      assert.equal(err.code, 'provider_stream_in_flight', 'port original diagnose must original pass-through');
+      assert.equal(err.code, 'provider_stream_in_flight', 'original port diagnostic must pass through');
       return true;
     });
-    // preflight reject: service not stop,provider not unload, plugin keep enable
-    assert.deepEqual(events, ['started'], 'preflight reject when never can stop service');
-    assert.equal(registry.mounted.size, 1, 'preflight reject when provider must keep mount');
+    // Preflight rejected: service stays started, provider stays mounted, plugin stays enabled
+    assert.deepEqual(events, ['started'], 'service must never stop when preflight rejects');
+    assert.equal(registry.mounted.size, 1, 'provider must stay mounted when preflight rejects');
     const summary = host.list().find((p) => p.id === 'test:busy');
     assert.ok(summary && summary.enabled === true);
-    // solve busy after deactivate succeeded
+    // Clearing busy state allows disable to succeed
     registry.busyOwners.delete('test:busy');
     await host.disable('test:busy');
     assert.deepEqual(events, ['started', 'stopped']);
@@ -452,7 +453,7 @@ test('provider in-flight stream preflight reject deactivate (does not enter serv
   }
 });
 
-test('unload (unregister) same first preflight again inverse order unload provider', { timeout: 60_000 }, async () => {
+test('unregister also preflights idle state before unmounting providers in reverse order', { timeout: 60_000 }, async () => {
   const registry = new FakeProviderRegistry();
   const { host, dir } = await makeHost(registry);
   try {
@@ -470,7 +471,7 @@ test('unload (unregister) same first preflight again inverse order unload provid
       'assertIdle:',
       'unregister:u2',
       'unregister:u1',
-    ], 'unload before must preflight, unload must inverse order');
+    ], 'unregister must preflight first and unmount in reverse order');
     assert.equal(registry.mounted.size, 0);
     assert.equal(host.list().length, 0);
   } finally {
@@ -478,7 +479,7 @@ test('unload (unregister) same first preflight again inverse order unload provid
   }
 });
 
-test('provider failed to uninstall when diagnose aggregate explicit on throw (not silently)', { timeout: 60_000 }, async () => {
+test('provider unmount failure aggregates diagnostics explicitly instead of swallowing errors', { timeout: 60_000 }, async () => {
   const registry = new FakeProviderRegistry();
   const { host, dir } = await makeHost(registry);
   try {
@@ -491,13 +492,13 @@ test('provider failed to uninstall when diagnose aggregate explicit on throw (no
     await assert.rejects(() => host.disable('test:unreg-fail'), (err: unknown) => {
       assert.ok(err instanceof HelmError, String(err));
       assert.equal(err.code, 'plugin_provider_unregister_failed');
-      // teardown path aggregate key is providerErrors; failed provider must appear in diagnose
+      // Teardown aggregates under providerErrors; failing provider must be present in diagnostics
       const details = err.details as { providerErrors?: Array<{ providerId: string }>; unregisterErrors?: Array<{ providerId: string }> };
       const list = details.providerErrors ?? details.unregisterErrors;
-      assert.ok(list?.some((e) => e.providerId === 'sticky'), `failed provider must appear in diagnose:${JSON.stringify(details)}`);
+      assert.ok(list?.some((e) => e.providerId === 'sticky'), `failed provider must appear in diagnostics: ${JSON.stringify(details)}`);
       return true;
     });
-    // state: deactivated (honest on report),registry side handle by port implement negative duty
+    // State: disabled (honest reporting), registry cleanup responsibility rests with port implementation
     const summary = host.list().find((p) => p.id === 'test:unreg-fail');
     assert.ok(summary && summary.enabled === false);
   } finally {
@@ -505,7 +506,7 @@ test('provider failed to uninstall when diagnose aggregate explicit on throw (no
   }
 });
 
-test('do not declaration provider plugin do not subject to optional port missing affect (since has interface do not relax)', { timeout: 60_000 }, async () => {
+test('plugins declaring no providers are unaffected when optional providers port is omitted', { timeout: 60_000 }, async () => {
   const { host, dir } = await makeHost(); // without providers port
   try {
     await host.register(
@@ -525,7 +526,7 @@ test('do not declaration provider plugin do not subject to optional port missing
   }
 });
 
-test('port store in but not implemented assertIdle when deactivate per common (optional preflight)', { timeout: 60_000 }, async () => {
+test('disable works normally when providers port omits optional assertIdle preflight', { timeout: 60_000 }, async () => {
   const registry = new FakeProviderRegistry();
   const port: PluginProviderPort = { register: registry.register.bind(registry) };
   const { host, dir } = await makeHost(port);

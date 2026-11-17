@@ -1,10 +1,10 @@
 /**
- * any TCP tunnel (openTunnel)Hub+real node daemon integration test:
- * do not stop HTTP- - any host target, two enter system/large payload, half close, cancel,
- * nodeFetch  HTTP/HTTPS adapt (local TLS fixture).
+ * Arbitrary TCP tunnel (openTunnel) integration tests across Hub + real node daemon:
+ * Not limited to HTTP -- arbitrary host targets, binary/large payloads, connection shutdown, cancellation,
+ * and nodeFetch HTTP/HTTPS adaptation (via local TLS fixture).
  *
- * real link:fabric.openTunnel → registry.openTunnel → daemon
- * nodeTunnelOpen(host) → TCP → /ws/node-tunnel byte pipeline.
+ * Real pipeline: fabric.openTunnel -> registry.openTunnel -> daemon
+ * nodeTunnelOpen(host) -> TCP -> /ws/node-tunnel binary byte stream.
  */
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
@@ -36,7 +36,7 @@ after(async () => {
 
 const execFileAsync = promisify(execFile)
 
-/** pure EnvFabric Hub(HTTP server + double gateway + real daemon). */
+/** Minimal EnvFabric Hub (HTTP server + both gateways + real daemon). */
 async function startHub(authenticate: (nodeId: string, token: string) => boolean, nodeId: string) {
   const fabric = createEnvFabric({ authenticate, heartbeatIntervalMs: 60_000, heartbeatTimeoutMs: 60_000 })
   const server = http.createServer((_req, res) => {
@@ -73,7 +73,7 @@ async function startHub(authenticate: (nodeId: string, token: string) => boolean
   }
 }
 
-/** two enter system security echo service (any byte original back visible;socket error swallow guard against test crash). */
+/** Binary-safe echo server (echoes arbitrary bytes verbatim; ignores socket errors to avoid crashing tests). */
 async function startBinaryEchoServer(): Promise<{ port: number; close(): Promise<void> }> {
   const server = net.createServer((socket) => {
     socket.on('error', () => undefined)
@@ -85,15 +85,15 @@ async function startBinaryEchoServer(): Promise<{ port: number; close(): Promise
   return { port, close: () => new Promise<void>((resolve) => server.close(() => resolve())) }
 }
 
-test('any TCP:host pass-through + two enter system large payload double to byte complete to return', { timeout: 60_000 }, async () => {
+test('arbitrary TCP: host pass-through + large binary payload round-trips byte-for-byte', { timeout: 60_000 }, async () => {
   const echo = await startBinaryEchoServer()
   const hub = await startHub((id, token) => id === 'bin-node' && token === 'bin-node:secret', 'bin-node')
   try {
     assert.equal(hub.ready, true)
-    // explicit host=localhost: target host by node parse and connect.
+    // Explicit host=localhost: target host is resolved and connected on the node side.
     const duplex = await hub.fabric.openTunnel('bin-node', { host: 'localhost', port: echo.port })
     const payload = Buffer.alloc(4 * 1024 * 1024)
-    for (let i = 0; i < payload.length; i++) payload[i] = i % 251 // non- UTF-8 friend well byte
+    for (let i = 0; i < payload.length; i++) payload[i] = i % 251 // non-UTF-8-friendly bytes
     const chunks: Buffer[] = []
     let received = 0
     duplex.on('data', (c: Buffer) => {
@@ -108,9 +108,9 @@ test('any TCP:host pass-through + two enter system large payload double to byte 
       })
       duplex.once('error', reject)
     })
-    assert.equal(received, payload.length, '4MiB two enter system payload length consistent')
+    assert.equal(received, payload.length, '4 MiB binary payload length matches')
     const echoed = Buffer.concat(chunks)
-    assert.ok(echoed.equals(payload), 'two enter system content one by one byte consistent')
+    assert.ok(echoed.equals(payload), 'binary contents match byte-for-byte')
     duplex.destroy()
     duplex.on('error', () => undefined)
   } finally {
@@ -119,11 +119,11 @@ test('any TCP:host pass-through + two enter system large payload double to byte 
   }
 })
 
-test('any TCP: request-response-connect close link complete flush(do not pinch assert tail part data)', { timeout: 60_000 }, async () => {
-  // service: receives 'req' after write large response again end.Hub side do not pre- closure tunnel (write side keep),
-  // read to complete response after actively close - - verify connect close link flush complete, tail part do not lose.
-  // (note:WS tunnel without TCP half close - -duplex.end will whole close, reason do not test FIN half closure;
-  // node side pipe chain end-flush semantics by node package node-tunnel.test.ts override.)
+test('arbitrary TCP: request-response-shutdown flushes completely without truncating trailing data', { timeout: 60_000 }, async () => {
+  // Server waits for 'req', writes a large response, then closes. Hub keeps the write side open and
+  // closes only after reading the full response -- verifying shutdown flushes completely without tail loss.
+  // (Note: WS tunnels lack TCP half-close -- duplex.end closes the whole stream, so FIN half-close is not
+  // tested here; node-side pipe end-flush semantics are covered by @helm/node's node-tunnel.test.ts.)
   const response = Buffer.alloc(2 * 1024 * 1024, 0x52)
   const server = net.createServer((socket) => {
     socket.on('error', () => undefined)
@@ -138,17 +138,17 @@ test('any TCP: request-response-connect close link complete flush(do not pinch a
   try {
     assert.equal(hub.ready, true)
     const duplex = await hub.fabric.openTunnel('halfclose-node', { port })
-    duplex.on('error', () => undefined) // close link error by close converge
+    duplex.on('error', () => undefined) // shutdown errors converge on close
     const chunks: Buffer[] = []
     const got = new Promise<Buffer>((resolve) => {
       duplex.on('data', (c: Buffer) => chunks.push(c))
       duplex.on('end', () => resolve(Buffer.concat(chunks)))
       duplex.on('close', () => resolve(Buffer.concat(chunks)))
     })
-    duplex.write('req') // write side keep open start: response complete back pass after again closure
+    duplex.write('req') // keep write side open initially: close only after full response arrives
     const echoed = await Promise.race([got, delay(15_000).then(() => Buffer.alloc(0))])
-    assert.equal(echoed.length, response.length, 'complete response flush back reach (tail part do not lose)')
-    assert.ok(echoed.equals(response), 'response content consistent')
+    assert.equal(echoed.length, response.length, 'full response flushed back without trailing byte loss')
+    assert.ok(echoed.equals(response), 'response contents match')
     duplex.destroy()
   } finally {
     await hub.close()
@@ -156,19 +156,19 @@ test('any TCP: request-response-connect close link complete flush(do not pinch a
   }
 })
 
-test('any TCP: cancel (abort) in create connect phase explicit failed and clean up', { timeout: 60_000 }, async () => {
+test('arbitrary TCP: abort during connection setup fails explicitly and cleans up', { timeout: 60_000 }, async () => {
   const echo = await startBinaryEchoServer()
   const hub = await startHub((id, token) => id === 'abort-node' && token === 'abort-node:secret', 'abort-node')
   try {
     assert.equal(hub.ready, true)
-    // immediately abort: explicit 499 aborted.
+    // Immediate abort: explicit 499 aborted.
     const controller = new AbortController()
     controller.abort()
     await assert.rejects(
       hub.fabric.openTunnel('abort-node', { port: echo.port }, controller.signal),
       (error: unknown) => error instanceof Error && (error as { code?: string }).code === 'aborted',
     )
-    // target validate: illegal port explicit validation_error.
+    // Target validation: invalid port or host fails explicitly with validation_error.
     await assert.rejects(
       hub.fabric.openTunnel('abort-node', { port: 0 }),
       (error: unknown) => error instanceof Error && (error as { code?: string }).code === 'validation_error',
@@ -177,33 +177,33 @@ test('any TCP: cancel (abort) in create connect phase explicit failed and clean 
       hub.fabric.openTunnel('abort-node', { host: 'bad host', port: 80 }),
       (error: unknown) => error instanceof Error && (error as { code?: string }).code === 'validation_error',
     )
-    assert.deepEqual(hub.fabric.registry.debugTunnelCounts(), { pending: 0, active: 0 }, 'no residue register')
+    assert.deepEqual(hub.fabric.registry.debugTunnelCounts(), { pending: 0, active: 0 }, 'no leaked registry entries')
   } finally {
     await hub.close()
     await echo.close()
   }
 })
 
-test('any TCP:daemon after disconnect duplex destroy (consumer aware disconnect)', { timeout: 60_000 }, async () => {
+test('arbitrary TCP: duplex destroys when daemon disconnects so consumers observe teardown', { timeout: 60_000 }, async () => {
   const echo = await startBinaryEchoServer()
   const hub = await startHub((id, token) => id === 'disc-node' && token === 'disc-node:secret', 'disc-node')
   try {
     assert.equal(hub.ready, true)
     const duplex = await hub.fabric.openTunnel('disc-node', { port: echo.port })
-    // disconnect destroy with error drive (node_offline): listen error guard against unhandled.
+    // Teardown emits a node_offline error on destroy: attach error listener to avoid unhandled errors.
     duplex.on('error', () => undefined)
     const closed = new Promise<void>((resolve) => duplex.once('close', resolve))
-    // disconnect daemon → evict → active duplex destroy(consumer aware disconnect, do not pending).
+    // Disconnecting daemon triggers eviction and destroys active duplexes immediately instead of hanging.
     await hub.disconnectDaemon()
     await Promise.race([closed, delay(10_000)])
-    assert.equal(duplex.destroyed, true, 'daemon after disconnect duplex already destroy')
+    assert.equal(duplex.destroyed, true, 'duplex is destroyed after daemon disconnects')
   } finally {
     await hub.close()
     await echo.close()
   }
 })
 
-test('nodeFetch HTTPS: local TLS fixture on via tunnel complete real TLS request (two phase child process inject trust chain)', { timeout: 120_000 }, async () => {
+test('nodeFetch HTTPS: local TLS fixture completes real TLS request over tunnel (two-phase child trust injection)', { timeout: 120_000 }, async () => {
   const fixture = new URL('./fixtures/tunnel-https-fixture.mts', import.meta.url).pathname
   const runFixture = (args: string[], env: NodeJS.ProcessEnv): Promise<{ stdout: string; stderr: string }> =>
     new Promise((resolve, reject) => {
@@ -218,14 +218,14 @@ test('nodeFetch HTTPS: local TLS fixture on via tunnel complete real TLS request
       child.on('error', reject)
       child.on('close', () => resolve({ stdout, stderr }))
     })
-  // phase 1: generate test CA and service certificate.
+  // Phase 1: generate test CA and server certificate.
   const caPhase = await runFixture(['ca'], {})
   const paths = JSON.parse(caPhase.stdout.trim().split('\n').pop() ?? '{}') as {
     caCert?: string; key?: string; cert?: string; error?: string
   }
-  assert.ok(paths.caCert !== undefined && paths.key !== undefined && paths.cert !== undefined, `CA generate failed:${paths.error ?? caPhase.stderr}`)
-  // phase 2:NODE_EXTRA_CA_CERTS follow process start inject (Node only at startup read),
-  // client certificate validate away by default trust chain + test CA, never fabricate skip validate.
+  assert.ok(paths.caCert !== undefined && paths.key !== undefined && paths.cert !== undefined, `CA generation failed: ${paths.error ?? caPhase.stderr}`)
+  // Phase 2: inject NODE_EXTRA_CA_CERTS at child startup (Node reads it only on startup);
+  // client verifies certificates via default trust store + test CA, never skipping TLS verification.
   const reqPhase = await runFixture(['request'], {
     NODE_EXTRA_CA_CERTS: paths.caCert,
     HELM_TUNNEL_TLS_KEY: paths.key,
@@ -235,16 +235,16 @@ test('nodeFetch HTTPS: local TLS fixture on via tunnel complete real TLS request
   try {
     result = JSON.parse(reqPhase.stdout.trim().split('\n').pop() ?? '{}')
   } catch {
-    result = { ok: false, error: reqPhase.stderr || reqPhase.stdout || 'fixture without output' }
+    result = { ok: false, error: reqPhase.stderr || reqPhase.stdout || 'fixture produced no output' }
   }
-  assert.equal(result.ok, true, `HTTPS tunnel fixture failed:${result.error ?? ''} status=${result.status ?? ''} body=${result.body ?? ''}`)
+  assert.equal(result.ok, true, `HTTPS tunnel fixture failed: ${result.error ?? ''} status=${result.status ?? ''} body=${result.body ?? ''}`)
   assert.equal(result.status, 200)
   assert.equal(result.body, 'https-echo:GET:/v1/x?k=v')
-  // clean up certificate directory.
+  // Clean up certificate directory.
   rmSync(join(paths.caCert!, '..'), { recursive: true, force: true })
 })
 
-test('nodeFetch HTTP: any host(non- loopback hostname form)+ HEAD/204 body null', { timeout: 60_000 }, async () => {
+test('nodeFetch HTTP: arbitrary non-loopback hostname + null body for HEAD/204', { timeout: 60_000 }, async () => {
   const server = http.createServer((req, res) => {
     if (req.method === 'HEAD') { res.writeHead(200); res.end(); return }
     if (req.url === '/nocontent') { res.writeHead(204); res.end(); return }
@@ -257,16 +257,16 @@ test('nodeFetch HTTP: any host(non- loopback hostname form)+ HEAD/204 body null'
   try {
     assert.equal(hub.ready, true)
     const fetchRemote = hub.fabric.nodeFetch('host-node')
-    // hostname use localhost(non- bare IP): verify host pass-through and domain parse in node side complete.
+    // Use localhost hostname (non-bare-IP) to verify host pass-through and node-side DNS resolution.
     const response = await fetchRemote(`http://localhost:${port}/v1/y`)
     assert.equal(response.status, 200)
     assert.equal(await response.text(), 'http-echo:GET:/v1/y')
     const head = await fetchRemote(`http://localhost:${port}/v1/y`, { method: 'HEAD' })
     assert.equal(head.status, 200)
-    assert.equal(head.body, null, 'HEAD body is null')
+    assert.equal(head.body, null, 'HEAD body must be null')
     const noContent = await fetchRemote(`http://localhost:${port}/nocontent`)
     assert.equal(noContent.status, 204)
-    assert.equal(noContent.body, null, '204 body is null')
+    assert.equal(noContent.body, null, '204 body must be null')
   } finally {
     await hub.close()
     await new Promise<void>((resolve) => server.close(() => resolve()))

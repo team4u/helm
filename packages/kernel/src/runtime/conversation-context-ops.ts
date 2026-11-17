@@ -1,11 +1,11 @@
 /**
- * conversation context operation module:reset / compact / fork.
+ * Conversation context operations: reset / compact / fork.
  *
- * responsibility:
- * - closure stop guard and context pre- validate;
- * - conversation context reset (reset, support handoff);
- * - conversation history manually compress (compact, support self define instructions);
- * - conversation history checkpoint fork (fork, inherit source conversation metadata and align model).
+ * Responsibilities:
+ * - Shutdown guards and context preflight checks;
+ * - Conversation context reset (with optional handoff);
+ * - Manual conversation compaction (with optional custom instructions);
+ * - Forking a conversation from a historical entry (inheriting source metadata and aligning model).
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Harness } from '@earendil-works/pi-durable'
@@ -31,22 +31,22 @@ export interface ConversationContextOpsHost {
 export class ConversationContextOps {
   constructor(private readonly host: ConversationContextOpsHost) {}
 
-  /** kernel close guard (context operation shared use). */
+  /** Kernel shutdown guard (shared across context operations). */
   assertOpen(): void {
-    if (this.host.isClosed()) throw new HelmError('runtime_closed', 'kernel is now close, reject commit new input', 503)
+    if (this.host.isClosed()) throw new HelmError('runtime_closed', 'kernel is closing; rejecting new input submission', 503)
   }
 
-  /** take already exists conversation metadata and SDK handle (missing unify 404). */
+  /** Fetch existing conversation metadata and SDK handle (throws 404 if missing). */
   async conversationForContextOp(
     id: number,
   ): Promise<{ meta: NonNullable<ReturnType<HelmStore['getConv']>>; conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>> }> {
     const meta = requireConv(this.host.store, id)
     const conversation = await this.host.harness.conversation(id as never, BACKGROUND_CONTEXT)
-    if (!conversation) throw new HelmError('not_found', `conversation missing:${id}`, 404)
+    if (!conversation) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
     return { meta, conversation }
   }
 
-  /** reset conversation context:SDK reset(handoff) after push enter stateChangeSeq and broadcast summary. */
+  /** Reset conversation context: call SDK reset(handoff), increment stateChangeSeq, and broadcast summary. */
   async resetConversation(id: number, opts?: { handoff?: string }): Promise<ConversationSummary> {
     this.assertOpen()
     const { meta, conversation } = await this.conversationForContextOp(id)
@@ -54,14 +54,14 @@ export class ConversationContextOps {
       opts?.handoff !== undefined && opts.handoff !== '' ? this.host.stash.redact(opts.handoff) : undefined
     await conversation.reset(safeHandoff, BACKGROUND_CONTEXT)
     this.host.store.upsertConv({ ...meta, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() })
-    // reset after context from zero start: immediately trigger use amount heavy compute (observe path pi.reset item trigger dedupe honor bottom).
+    // Context resets to zero after reset: trigger usage recalculation immediately (deduplicated alongside pi.reset observe backstop).
     this.host.tracker.scheduleContextUsageRefresh(id)
     const summary = this.host.tracker.summaryOf(id)
     this.host.events.publish('conversation.upsert', this.host.withOwnership(summary))
     return summary
   }
 
-  /** manually compress:SDK compact(instructions) return background task ID; return { taskId, conversation }. */
+  /** Manual compaction: call SDK compact(instructions) returning background task ID and updated conversation summary. */
   async compactConversation(
     id: number,
     opts?: { instructions?: string },
@@ -74,8 +74,8 @@ export class ConversationContextOps {
         : undefined
     const taskId = await conversation.compact(safeInstructions, BACKGROUND_CONTEXT)
     this.host.store.upsertConv({ ...meta, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() })
-    // manually compress already subject to: immediately trigger use amount heavy compute (compacting state and compress after tokens by
-    // observe path live/entry trigger continue force complete; idle conversation do not via live frame short route).
+    // Manual compaction enqueued: trigger usage recalculation immediately (compacting flag and post-compaction tokens
+    // continue updating via live/entry observe triggers; idle conversations don't short-circuit on live frames).
     this.host.tracker.scheduleContextUsageRefresh(id)
     const summary = this.host.tracker.summaryOf(id)
     this.host.events.publish('conversation.upsert', this.host.withOwnership(summary))
@@ -83,18 +83,18 @@ export class ConversationContextOps {
   }
 
   /**
-   * from designate item fork new conversation:SDK fork(entryId) after register helm mirror
-   *(inherit profile/tags/cwd/model/override; parent chain points to source conversation) and align model.
+   * Fork a new conversation from a specified entry: calls SDK fork(entryId), registers helm mirror
+   * (inheriting profile/tags/cwd/model/overrides with parent pointing to source), and aligns model.
    */
   async forkConversation(id: number, opts: { entryId: number; title?: string }): Promise<ConversationSummary> {
     this.assertOpen()
     if (!Number.isSafeInteger(opts.entryId) || opts.entryId <= 0) {
-      throw new HelmError('validation_error', `entryId must be security positive integer (receives ${String(opts.entryId)})`, 400, {
+      throw new HelmError('validation_error', `entryId must be a positive safe integer (received ${String(opts.entryId)})`, 400, {
         entryId: opts.entryId,
       })
     }
     const { meta: sourceMeta, conversation: sourceConv } = await this.conversationForContextOp(id)
-    // item store in precise validate (min=max=entryId take 1 ; missing 404).
+    // Verify exact entry existence (min=max=entryId limit 1; missing yields 404).
     const page = await sourceConv.entries(
       { minEntryId: opts.entryId as never, maxEntryId: opts.entryId as never, order: 'ascending' },
       1,
@@ -102,7 +102,7 @@ export class ConversationContextOps {
       BACKGROUND_CONTEXT,
     )
     if (page.items.length === 0 || (page.items[0] as { id: number }).id !== opts.entryId) {
-      throw new HelmError('not_found', `item ${opts.entryId} in conversation ${id} in missing`, 404, {
+      throw new HelmError('not_found', `entry ${opts.entryId} does not exist in conversation ${id}`, 404, {
         conversationId: id,
         entryId: opts.entryId,
       })

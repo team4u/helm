@@ -1,18 +1,21 @@
 /**
- * plugin lifecycle race regression (determinism, independent of sleep compete fast):
+ * Deterministic regression tests for plugin lifecycle races (independent of sleep timing):
  *
- * 1. enable for hoist hand over point in start stop persist succeeded after: service already start, suspended during
- *    keep defining- -action reject / hook do not execute / UI do not expose out; after success available,
- *    persist on failure without in-flight task, clean rollback (via store setEnabled inject deferred gate control).
- * 2. register durable start stop read first at everything asset get:getEnabled throws (original error keep)
- *    or return non- boolean value (explicit reject) when register table/hook/hosting asset/data directory zero leftover.
- * 3. HelmPluginConfigStore read-change-write all process in ConfigService.update the same file lock inside
- *    with call back complete: only update which belong embed set key, does not override other module in between gap update key (via
- *    InterposingConfigService in update entry determinism insert concurrency write, lock outside without wait for,
- *    lock inside without second getter, without deadlock); write when pluginEnabled corrupt explicit config_corrupt,
- *    never use {} rebuild.
+ * 1. `enable` commit point occurs after toggle persistence succeeds: while pending, the service is
+ *    already started, yet actions reject, hooks never run, and UI stays hidden; once persisted,
+ *    everything becomes available. If persistence fails, there are zero in-flight tasks and rollback
+ *    is clean (controlled via a deferred gate in store `setEnabled`).
+ * 2. Registration parses the persisted enabled state before acquiring any assets: when `getEnabled`
+ *    throws (preserving the original error) or returns a non-boolean value (explicitly rejected),
+ *    registry, hooks, managed assets, and plugin data directory have zero leftover state.
+ * 3. `HelmPluginConfigStore` read-modify-write runs entirely inside the `ConfigService.update`
+ *    file-lock callback: it mutates only its own nested key without clobbering keys updated
+ *    concurrently by other modules (verified deterministically by interposing writes at `updateBy`
+ *    entry — waiting outside the lock and performing no second read inside, avoiding deadlock);
+ *    writing while `pluginEnabled` or `plugins` is corrupt fails explicitly with `config_corrupt`
+ *    and never rebuilds with `{}`.
  *
- * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
+ * runner: tsx --test; explicit timeout: 60_000 per test to guard against deadlocks.
  */
 import test, { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -38,7 +41,7 @@ import {
 } from './helpers.js';
 
 // ---------------------------------------------------------------------------
-// test base create
+// Test infrastructure
 // ---------------------------------------------------------------------------
 
 function makeConversation(id: number) {
@@ -69,8 +72,8 @@ function makeHostApi(events: string[]): PluginHostBackend {
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    execEnv: async () => { throw new HelmError('unsupported', 'this fixture do not execute node command', 501) },
-    withFileMutationQueue(): Promise<never> { throw new Error('this fixture do not bear load file mutual exclusion queue') },
+    execEnv: async () => { throw new HelmError('unsupported', 'this fixture does not execute node commands', 501) },
+    withFileMutationQueue(): Promise<never> { throw new Error('this fixture does not support file mutation queue') },
     emitEvent: (type) => {
       events.push(`event:${type}`);
     },
@@ -78,8 +81,8 @@ function makeHostApi(events: string[]): PluginHostBackend {
 }
 
 /**
- * can gate control start stop persist memory store:onSetEnabled in truly set before by invoke,
- * test use it construct persist suspended window (determinism deferred, without sleep).
+ * Gated toggle persistence store: invokes `onSetEnabled` before committing the toggle,
+ * allowing tests to construct a deterministic persistence suspension window without sleeps.
  */
 class GatedStore implements PluginConfigStore {
   enabled = new Map<string, boolean>();
@@ -100,13 +103,13 @@ class GatedStore implements PluginConfigStore {
   }
 }
 
-/** all amount declaration (UI/action/hook/service/hosting asset) plugin work vendor. */
+/** Factory for a plugin declaring the full surface (UI / action / hook / service / managed asset). */
 function fullPlugin(id: string, marks: string[]): PluginDefinition {
   return {
     id,
     definePlugin: (ctx) => {
-      ctx.configSchema({ endpoint: { type: 'string', label: 'end point' } });
-      ctx.ui.sidebarItem({ id: 'nav', label: 'navigation' });
+      ctx.configSchema({ endpoint: { type: 'string', label: 'Endpoint' } });
+      ctx.ui.sidebarItem({ id: 'nav', label: 'Navigation' });
       ctx.hook.onTrigger(() => {
         marks.push('hook-ran');
         return { action: 'continue' as const };
@@ -155,16 +158,16 @@ afterEach(async () => {
 });
 
 // ---------------------------------------------------------------------------
-// 1. enable commit point in start stop persist succeeded after
+// 1. enable commit point occurs after toggle persistence succeeds
 // ---------------------------------------------------------------------------
 
-test('enable persist suspended window: service already start but action reject/hook do not execute/UI do not expose out; after success available', { timeout: 60_000 }, async () => {
+test('enable persistence window: service already started while actions reject, hooks stay inactive, and UI stays hidden until commit', { timeout: 60_000 }, async () => {
   const store = new GatedStore();
   const host = makeHost(store);
   const marks: string[] = [];
   await host.register(fullPlugin('builtin:herdr', marks), { enabled: false });
 
-  // gate control:setEnabled enter after suspended, until test explicit let through (determinism window)
+  // Gate control: suspend inside setEnabled until test releases it (deterministic window)
   let signalEntered!: () => void;
   const entered = new Promise<void>((res) => (signalEntered = res));
   let release!: () => void;
@@ -177,21 +180,21 @@ test('enable persist suspended window: service already start but action reject/h
   const enabling = host.enable('builtin:herdr');
   await entered;
   try {
-    // window inside: service indeed already start, but plugin for outside fully unavailable (uncommitted)
-    assert.deepEqual(marks, ['svc-start'], 'service already start (persist not yet set)');
+    // Inside window: service has started, but plugin remains completely unavailable externally (uncommitted)
+    assert.deepEqual(marks, ['svc-start'], 'service has started before persistence completes');
     await assertRejectsCode(() => host.invokeAction('builtin:herdr', 'ping', {}), 'plugin_disabled');
     marks.length = 0;
     const r = await host.runHook('trigger', triggerPayload());
     assert.equal(r.action, 'continue');
-    assert.deepEqual(marks, [], 'window inside hook handle never execute');
-    assert.deepEqual(host.listUi(), [], 'window inside UI do not expose out');
+    assert.deepEqual(marks, [], 'hook handlers never run inside the suspension window');
+    assert.deepEqual(host.listUi(), [], 'UI is not exposed inside the suspension window');
     assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, false);
   } finally {
     release();
     await enabling;
   }
 
-  // after commit: action available, hook execute,UI expose out, durable true
+  // After commit: actions work, hooks run, UI is exposed, and state is persisted true
   assert.deepEqual(await host.invokeAction('builtin:herdr', 'ping', {}), { ok: true });
   marks.length = 0;
   const r2 = await host.runHook('trigger', triggerPayload());
@@ -202,7 +205,7 @@ test('enable persist suspended window: service already start but action reject/h
   assert.equal(store.enabled.get('builtin:herdr'), true);
 });
 
-test('enable persist failed: window inside same unavailable, rollback is deactivate and without in-flight task by split,schema keep, can again enable', { timeout: 60_000 }, async () => {
+test('enable persistence failure: stays unavailable in window, rolls back cleanly with zero active tasks, preserves schema, and retries cleanly', { timeout: 60_000 }, async () => {
   const store = new GatedStore();
   const host = makeHost(store);
   const marks: string[] = [];
@@ -230,21 +233,21 @@ test('enable persist failed: window inside same unavailable, rollback is deactiv
     throw err;
   }
   assert.ok(windowHeld);
-  rejectPersist(new Error('network disconnect'));
+  rejectPersist(new Error('network disconnected'));
 
   const err = (await assertRejectsCode(() => enabling, 'plugin_enabled_persist_failed')) as HelmError;
-  assert.match(err.message, /network disconnect/);
+  assert.match(err.message, /network disconnected/);
 
-  // rollback: deactivate, service already stop, hosting release,schema restore, without in-flight task
+  // Rollback: disabled, service stopped, managed asset released, schema retained, zero active tasks
   assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, false);
-  assert.ok(marks.includes('svc-stop'), 'already start service by inverse to stop');
-  assert.ok(events.includes('release:builtin:herdr:7'), 'hosting asset release');
+  assert.ok(marks.includes('svc-stop'), 'started service stopped in reverse order');
+  assert.ok(events.includes('release:builtin:herdr:7'), 'managed asset released');
   assert.equal(host.getConfigSchema('builtin:herdr').endpoint?.type, 'string');
   assert.deepEqual(host.listUi(), []);
-  assert.equal(host.activeTaskCount('builtin:herdr'), 0, 'rollback when zero in-flight task');
-  assert.equal(store.enabled.has('builtin:herdr'), false, 'persist failed do not write value');
+  assert.equal(host.activeTaskCount('builtin:herdr'), 0, 'zero active tasks after rollback');
+  assert.equal(store.enabled.has('builtin:herdr'), false, 'failed persistence writes no toggle value');
 
-  // restore after can again enable succeeded
+  // Re-enables cleanly once store recovers
   store.onSetEnabled = () => {};
   await host.enable('builtin:herdr');
   assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, true);
@@ -252,10 +255,10 @@ test('enable persist failed: window inside same unavailable, rollback is deactiv
 });
 
 // ---------------------------------------------------------------------------
-// 2. register start stop parse first at everything asset get:getter failed zero leftover
+// 2. register resolves persisted toggle before acquiring any assets: zero leftovers if getter fails
 // ---------------------------------------------------------------------------
 
-test('getEnabled throws: register zero leftover (register table/data directory/hook/hosting), original error keep', { timeout: 60_000 }, async () => {
+test('getEnabled throws: register leaves zero leftovers (registry / dataDir / hooks / managed assets) and preserves original error', { timeout: 60_000 }, async () => {
   const host = makeHost({
     get() {
       return {};
@@ -268,41 +271,41 @@ test('getEnabled throws: register zero leftover (register table/data directory/h
   });
   await assertRejectsCode(() => host.register(fullPlugin('p:boom', [])), 'io_broken');
 
-  assert.equal(host.list().length, 0, 'register table zero leftover');
-  assert.equal(existsSync(join(dataDir, 'plugins', pluginDataDirName('p:boom'))), false, 'plugin data directory not create');
-  assert.deepEqual(events.filter((e) => e.startsWith('manage:')), [], 'not get any host asset');
+  assert.equal(host.list().length, 0, 'zero leftovers in plugin registry');
+  assert.equal(existsSync(join(dataDir, 'plugins', pluginDataDirName('p:boom'))), false, 'plugin data directory not created');
+  assert.deepEqual(events.filter((e) => e.startsWith('manage:')), [], 'no host assets acquired');
   const r = await host.runHook('trigger', triggerPayload());
-  assert.equal(r.action, 'continue', 'hook pipeline zero leftover');
+  assert.equal(r.action, 'continue', 'zero leftovers in hook pipeline');
 
-  // non- HelmError original exception: wrap is register failed but keep original message
+  // Non-HelmError exceptions: wrapped as plugin_registration_failed while preserving original message
   const host2 = makeHost({
     get() {
       return {};
     },
     set() {},
     getEnabled() {
-      throw new Error('underlying IO timeout');
+      throw new Error('underlying I/O timeout');
     },
     setEnabled() {},
   });
   const wrapped = (await assertRejectsCode(() => host2.register(fullPlugin('p:boom2', [])), 'plugin_registration_failed')) as HelmError;
-  assert.match(wrapped.message, /underlying IO timeout/);
+  assert.match(wrapped.message, /underlying I\/O timeout/);
   assert.equal(host2.list().length, 0);
 
-  // host still health: after continue register normal
+  // Host stays healthy: subsequent registrations succeed normally
   const ok = makeHost();
   await ok.register(fullPlugin('p:healthy', []), { enabled: false });
   assert.equal(ok.list().find((p) => p.id === 'p:healthy')!.enabled, false);
 });
 
-test('getEnabled return non- boolean value: explicit reject (never truthy guess), register zero leftover', { timeout: 60_000 }, async () => {
+test('getEnabled returns non-boolean value: rejected explicitly (no truthy coercion) with zero leftovers', { timeout: 60_000 }, async () => {
   const host = makeHost({
     get() {
       return {};
     },
     set() {},
     getEnabled() {
-      return 'false' as unknown as boolean; // string 'false' is truthy, never can by when into enable
+      return 'false' as unknown as boolean; // String 'false' is truthy and must never coerce to enabled
     },
     setEnabled() {},
   });
@@ -314,14 +317,15 @@ test('getEnabled return non- boolean value: explicit reject (never truthy guess)
 });
 
 // ---------------------------------------------------------------------------
-// 3. ConfigService call back form + HelmPluginConfigStore lock inside read change write
+// 3. ConfigService callback form + HelmPluginConfigStore in-lock read-modify-write
 // ---------------------------------------------------------------------------
 
 /**
- * in updateBy entry determinism insert once concurrency write (consume after automatically unload under).
- * insert point in truly take lock before: lock outside wait for, lock inside without second getter, without deadlock.
- * new old implement all must via this entry (update object/function form all delegate updateBy): old implement
- * lock outside old snapshot will override between gap write; new implement call back inside based on lock inside most new state only change which belong key.
+ * Deterministically injects one concurrent write at `updateBy` entry (self-disarming after firing).
+ * Injection runs right before acquiring the lock: waits outside the lock and skips second reads inside,
+ * preventing deadlock. Both old and new implementations pass through here (object/function updates both
+ * delegate to `updateBy`): an out-of-lock stale snapshot would overwrite intervening writes, whereas the
+ * callback sees the latest in-lock state and updates only its owned keys.
  */
 class InterposingConfigService extends ConfigService {
   interpose: (() => Promise<void>) | undefined;
@@ -339,17 +343,17 @@ function makeRealStore(config: ConfigService, credentials: CredentialService): H
   return new HelmPluginConfigStore({ config, credentials });
 }
 
-test('ConfigService call back form: read to lock inside most new value, object patch semantics keep', { timeout: 60_000 }, async () => {
+test('ConfigService callback form reads latest in-lock value while preserving object-patch semantics', { timeout: 60_000 }, async () => {
   const a = new ConfigService(dataDir);
   const b = new ConfigService(dataDir);
   await Promise.all([a.update({ k1: 'v1' }), b.update({ k2: 'v2' })]);
   const out = await a.update((current) => ({ ...current, k1Upper: String(current['k1']).toUpperCase() }));
-  assert.equal(out['k1Upper'], 'V1', 'call back see to lock inside most new k1(non-empty file start read)');
+  assert.equal(out['k1Upper'], 'V1', 'callback observes latest k1 inside lock (even from non-empty initial file)');
   const raw = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8')) as Record<string, unknown>;
   assert.deepEqual(raw, { k1: 'v1', k2: 'v2', k1Upper: 'V1' });
 });
 
-test('setEnabled during other module concurrency update auth etc. key do not by old value override (determinism insert)', { timeout: 60_000 }, async () => {
+test('setEnabled during concurrent updates to auth/other keys never overwrites them with stale snapshots (deterministic injection)', { timeout: 60_000 }, async () => {
   const credDir = join(dataDir, 'cred');
   mkdirSync(credDir, { recursive: true });
   const cfg = new InterposingConfigService(dataDir);
@@ -359,7 +363,7 @@ test('setEnabled during other module concurrency update auth etc. key do not by 
   const store = makeRealStore(cfg, new CredentialService(credDir));
   await store.load();
 
-  // in store  update entry insert another module write: old implement will it override back remove
+  // Inject another module's write right at store.update entry: old snapshot logic would clobber it
   cfg.interpose = async () => {
     await other.update({ auth: { passwordHash: 'h1' }, model: 'faux/2' });
   };
@@ -367,12 +371,12 @@ test('setEnabled during other module concurrency update auth etc. key do not by 
 
   const raw = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8')) as Record<string, unknown>;
   assert.deepEqual(raw['pluginEnabled'], { 'builtin:herdr': false });
-  assert.deepEqual(raw['auth'], { passwordHash: 'h1' }, 'between gap write auth do not by old snapshot override');
-  assert.equal(raw['model'], 'faux/2', 'between gap write model do not by old snapshot override');
+  assert.deepEqual(raw['auth'], { passwordHash: 'h1' }, 'intervening auth write must not be overwritten by stale snapshot');
+  assert.equal(raw['model'], 'faux/2', 'intervening model write must not be overwritten by stale snapshot');
   assert.equal(store.getEnabled('builtin:herdr'), false);
 });
 
-test('two store concurrency update different pluginEnabled key all keep (determinism insert)', { timeout: 60_000 }, async () => {
+test('two stores concurrently updating different pluginEnabled keys preserve both writes (deterministic injection)', { timeout: 60_000 }, async () => {
   const credDir = join(dataDir, 'cred');
   mkdirSync(credDir, { recursive: true });
   const cfgA = new InterposingConfigService(dataDir);
@@ -382,19 +386,19 @@ test('two store concurrency update different pluginEnabled key all keep (determi
   await storeA.load();
   await storeB.load();
 
-  // storeB complete write insert in storeA  update entry: two all must under
+  // Interpose storeB's write right at storeA's update entry: both updates must persist
   cfgA.interpose = async () => {
     await storeB.setEnabled('p:b', false);
   };
   await storeA.setEnabled('p:a', true);
 
   const raw = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8')) as Record<string, unknown>;
-  assert.deepEqual(raw['pluginEnabled'], { 'p:a': true, 'p:b': false }, 'two plugin start stop key all keep');
+  assert.deepEqual(raw['pluginEnabled'], { 'p:a': true, 'p:b': false }, 'toggle keys for both plugins preserved');
   assert.equal(storeA.getEnabled('p:a'), true);
   assert.equal(storeB.getEnabled('p:b'), false);
 });
 
-test('plugin config write path same keep between gap external update, and only motion this plugin embed set key', { timeout: 60_000 }, async () => {
+test('plugin config write preserves intervening external updates and updates only this plugin nested key', { timeout: 60_000 }, async () => {
   const credDir = join(dataDir, 'cred');
   mkdirSync(credDir, { recursive: true });
   const cfg = new InterposingConfigService(dataDir);
@@ -410,34 +414,34 @@ test('plugin config write path same keep between gap external update, and only m
   await store.set('p:mine', { retries: 2 }, { retries: { type: 'number' } });
 
   const raw = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8')) as Record<string, unknown>;
-  assert.equal(raw['theme'], 'light', 'between gap write theme do not by old snapshot override');
-  assert.deepEqual(raw['plugins'], { 'p:other': { keep: 1 }, 'p:mine': { retries: 2 } }, 'other plugin config keep, this plugin key update');
+  assert.equal(raw['theme'], 'light', 'intervening theme write must not be overwritten by stale snapshot');
+  assert.deepEqual(raw['plugins'], { 'p:other': { keep: 1 }, 'p:mine': { retries: 2 } }, 'other plugin config preserved while updating target key');
   assert.deepEqual(store.get('p:mine'), { retries: 2 });
   assert.deepEqual(store.get('p:other'), { keep: 1 });
 });
 
-test('write when pluginEnabled corrupt: explicit config_corrupt, never use {} rebuild, mirror do not change', { timeout: 60_000 }, async () => {
+test('writing when pluginEnabled is corrupt throws config_corrupt explicitly, never rebuilds with {}, and keeps cache unchanged', { timeout: 60_000 }, async () => {
   const credDir = join(dataDir, 'cred');
   mkdirSync(credDir, { recursive: true });
   const configPath = join(dataDir, 'config.json');
   const store = makeRealStore(new ConfigService(dataDir), new CredentialService(credDir));
   await store.load();
 
-  // load after success external pluginEnabled break into non- boolean value mapping
+  // After loading cleanly, corrupt pluginEnabled on disk with non-boolean mapping
   writeFileSync(configPath, JSON.stringify({ pluginEnabled: { ghost: 'yes' } }), 'utf8');
   await assertRejectsCode(() => store.setEnabled('p:x', true), 'config_corrupt');
   let raw = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
-  assert.deepEqual(raw['pluginEnabled'], { ghost: 'yes' }, 'corrupt content original keep (not rebuild)');
-  assert.equal(store.getEnabled('p:x'), undefined, 'write failed mirror do not change');
+  assert.deepEqual(raw['pluginEnabled'], { ghost: 'yes' }, 'corrupt content preserved as-is without rebuilding');
+  assert.equal(store.getEnabled('p:x'), undefined, 'in-memory cache unchanged after failed write');
 
-  // whole non- object same explicit reject
+  // Top-level non-object also fails explicitly
   writeFileSync(configPath, JSON.stringify({ pluginEnabled: 'nope' }), 'utf8');
   await assertRejectsCode(() => store.setEnabled('p:x', true), 'config_corrupt');
   raw = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
   assert.equal(raw['pluginEnabled'], 'nope');
 });
 
-test('write when plugins field corrupt: explicit config_corrupt, not silently rebuild', { timeout: 60_000 }, async () => {
+test('writing when plugins field is corrupt throws config_corrupt explicitly without silent rebuild', { timeout: 60_000 }, async () => {
   const credDir = join(dataDir, 'cred');
   mkdirSync(credDir, { recursive: true });
   const configPath = join(dataDir, 'config.json');
@@ -450,5 +454,5 @@ test('write when plugins field corrupt: explicit config_corrupt, not silently re
     'config_corrupt',
   );
   const raw = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
-  assert.equal(raw['plugins'], 'corrupt', 'corrupt content original keep');
+  assert.equal(raw['plugins'], 'corrupt', 'corrupt content preserved as-is');
 });

@@ -1,13 +1,13 @@
 /**
- * module one test: across platform HTTP artifact upload.
- * - ArtifactService.writeUploaded: two enter system byte consistent, text SecretStash redaction,
- *   over 15 MiB 413, illegal filename 400;
+ * Cross-platform HTTP artifact upload unit tests:
+ * - ArtifactService.writeUploaded: binary byte fidelity, SecretStash redaction for text,
+ *   >15 MiB returns 413, invalid filenames return 400;
  * - HTTP POST /api/conversations/:id/artifacts:
- *   - two enter system stream (octet-stream + x-artifact-filename) byte consistent;
+ *   - binary stream (octet-stream + x-artifact-filename) byte fidelity;
  *   - JSON branch (name + contentBase64);
- *   - illegal base64 400; missing filename 400; over limit 413; conversation missing 404;
- *   - text upload trigger stash redaction (secret do not);
- *   - GET list contains new artifact.
+ *   - invalid base64 -> 400; missing filename -> 400; over limit -> 413; missing conversation -> 404;
+ *   - text upload triggers SecretStash redaction (no secret leaks);
+ *   - GET list includes the newly uploaded artifact.
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -28,13 +28,13 @@ import {
 } from '../src/services/index.js'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import { createHubHandler } from '../src/http/index.js'
-import type { EventHub, KernelRuntimeLike} from '../src/http/index.js'
+import type { EventHub, KernelRuntimeLike } from '../src/http/index.js'
 import { HelmError, type ConversationSummary } from '@helm/protocol'
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import { MemoryDocStore, cleanupDir, makeConversationSummary, makeTempDir } from './helpers.js'
 
 // ---------------------------------------------------------------------------
-// base seat
+// Test harness
 // ---------------------------------------------------------------------------
 
 let dataDir: string
@@ -57,10 +57,10 @@ function summary(id: number, title: string): ConversationSummary {
 
 function makeKernel(): KernelRuntimeLike {
   return {
-    listNodes() { throw new Error('this artifact fixture do not provide node manage') },
-    async issueNodeToken() { throw new Error('this artifact fixture do not sign node identity') },
-    async removeNode() { throw new Error('this artifact fixture do not remove node') },
-    async execEnv() { throw new Error('this artifact fixture do not execute node command') },
+    listNodes() { throw new Error('this artifact fixture does not provide node management') },
+    async issueNodeToken() { throw new Error('this artifact fixture does not sign node identities') },
+    async removeNode() { throw new Error('this artifact fixture does not remove nodes') },
+    async execEnv() { throw new Error('this artifact fixture does not execute node commands') },
     dataDir,
     auth: new AuthService(dataDir),
     events: new NoopEventHub(),
@@ -69,7 +69,8 @@ function makeKernel(): KernelRuntimeLike {
     credentials: new CredentialService(dataDir),
     providers: new ProviderService(dataDir),
     artifacts,
-    plugins: new PluginHost({ buildProvider: createPluginBuildProvider(),
+    plugins: new PluginHost({
+      buildProvider: createPluginBuildProvider(),
       dataDir,
       host: undefined as unknown as PluginHostBackend,
       docs: new MemoryDocStore(),
@@ -80,12 +81,12 @@ function makeKernel(): KernelRuntimeLike {
     },
     async getConversationDetail(id: number) {
       const found = conversations.get(id)
-      if (found === undefined) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
+      if (found === undefined) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
       return { ...found, entries: [] }
     },
     async getConversationEntry(id: number, entryId: number) {
-      if (!conversations.has(id)) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
-      throw new HelmError('not_found', `item ${entryId} in conversation ${id} in missing`, 404)
+      if (!conversations.has(id)) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+      throw new HelmError('not_found', `entry ${entryId} not found in conversation ${id}`, 404)
     },
     async createConversation(init) {
       const id = Math.max(0, ...conversations.keys()) + 1
@@ -128,7 +129,6 @@ function makeKernel(): KernelRuntimeLike {
   }
 }
 
-
 async function call(
   method: string,
   path: string,
@@ -160,7 +160,7 @@ test.before(async () => {
   conversations.set(2, summary(2, 'work conversation'))
   const kernel = makeKernel()
   handler = createHubHandler(kernel)
-  // setup take token
+  // Setup and obtain auth token
   const setupReq = new Request('http://127.0.0.1:3202/api/auth/setup', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -176,10 +176,10 @@ test.after(async () => {
 })
 
 // ---------------------------------------------------------------------------
-// sanitizeUploadFilename unit
+// sanitizeUploadFilename unit tests
 // ---------------------------------------------------------------------------
 
-test('sanitizeUploadFilename: legal name via; illegal name 400 validation_error', { timeout: 60_000 }, () => {
+test('sanitizeUploadFilename: valid names pass; invalid names return 400 validation_error', { timeout: 60_000 }, () => {
   assert.equal(sanitizeUploadFilename('  report.md  '), 'report.md')
   assert.equal(sanitizeUploadFilename('data file.json'), 'data file.json')
   for (const bad of ['../etc/passwd', '..', '.', 'a/b', 'a\\b', 'a\0b', 'a\nb', '', '   ']) {
@@ -191,14 +191,14 @@ test('sanitizeUploadFilename: legal name via; illegal name 400 validation_error'
   }
   const tooLong = 'a'.repeat(201)
   assert.throws(() => sanitizeUploadFilename(tooLong), HelmError)
-  assert.equal(sanitizeUploadFilename('a'.repeat(200)), 'a'.repeat(200), 'exactly 200 legal')
+  assert.equal(sanitizeUploadFilename('a'.repeat(200)), 'a'.repeat(200), 'exact 200 chars is valid')
 })
 
 // ---------------------------------------------------------------------------
 // writeUploaded service layer
 // ---------------------------------------------------------------------------
 
-test('writeUploaded: two enter system byte original (does not UTF-8 heavy encode)', { timeout: 60_000 }, async () => {
+test('writeUploaded: preserves binary bytes verbatim (no UTF-8 re-encoding)', { timeout: 60_000 }, async () => {
   const bytes = Uint8Array.from([0, 255, 128, 10, 200, 1, 0xfe])
   const meta = await artifacts.writeUploaded(1, { name: 'blob.bin', bytes })
   assert.equal(meta.conversationId, 1)
@@ -208,7 +208,7 @@ test('writeUploaded: two enter system byte original (does not UTF-8 heavy encode
   assert.deepEqual([...(await artifacts.readBuffer(meta.id))], [...bytes])
 })
 
-test('writeUploaded: text class mime via SecretStash.redact redaction (secret do not)', { timeout: 60_000 }, async () => {
+test('writeUploaded: text MIME types go through SecretStash.redact (secrets do not hit disk)', { timeout: 60_000 }, async () => {
   stash.addRedaction('sk-super-secret-value')
   const text = 'api key is sk-super-secret-value here'
   const meta = await artifacts.writeUploaded(1, {
@@ -217,11 +217,11 @@ test('writeUploaded: text class mime via SecretStash.redact redaction (secret do
   })
   assert.equal(meta.mimeType, 'text/plain')
   const stored = await artifacts.readContent(meta.id)
-  assert.ok(!stored.includes('sk-super-secret-value'), 'content must not contains secret plaintext')
-  assert.ok(stored.includes(stash.redact('sk-super-secret-value')), 'content should contains redaction occupy')
+  assert.ok(!stored.includes('sk-super-secret-value'), 'stored content must not contain plaintext secret')
+  assert.ok(stored.includes(stash.redact('sk-super-secret-value')), 'stored content should include redaction placeholder')
 })
 
-test('writeUploaded: explicit mimeType takes precedence; default by extension push assert', { timeout: 60_000 }, async () => {
+test('writeUploaded: explicit mimeType takes precedence; otherwise inferred from extension', { timeout: 60_000 }, async () => {
   const a = await artifacts.writeUploaded(1, {
     name: 'data.dat',
     bytes: new TextEncoder().encode('{}'),
@@ -240,7 +240,7 @@ test('writeUploaded: explicit mimeType takes precedence; default by extension pu
   assert.equal(c.mimeType, 'application/octet-stream')
 })
 
-test('writeUploaded: exceeds 15 MiB throw 413 artifact_too_large(contains maxBytes/actualBytes)', { timeout: 60_000 }, async () => {
+test('writeUploaded: >15 MiB throws 413 artifact_too_large (with maxBytes/actualBytes)', { timeout: 60_000 }, async () => {
   const oversized = new Uint8Array(MAX_ARTIFACT_BYTES + 1)
   await assert.rejects(
     artifacts.writeUploaded(1, { name: 'big.bin', bytes: oversized }),
@@ -254,7 +254,7 @@ test('writeUploaded: exceeds 15 MiB throw 413 artifact_too_large(contains maxByt
       return true
     },
   )
-  // exactly 15 MiB legal (let through after immediately clean up large file directory avoid drag slow after continue case)
+  // Exact 15 MiB is valid (immediately clean up large artifact dir afterwards to avoid slowing down subsequent cases)
   const exact = new Uint8Array(MAX_ARTIFACT_BYTES)
   const meta = await artifacts.writeUploaded(2, { name: 'exact.bin', bytes: exact })
   assert.equal(meta.size, MAX_ARTIFACT_BYTES)
@@ -262,14 +262,14 @@ test('writeUploaded: exceeds 15 MiB throw 413 artifact_too_large(contains maxByt
   conversations.set(2, summary(2, 'work conversation'))
 })
 
-test('writeUploaded: illegal filename and illegal conversation ID reject', { timeout: 60_000 }, async () => {
+test('writeUploaded: rejects invalid filenames and invalid conversation IDs', { timeout: 60_000 }, async () => {
   await assert.rejects(
     artifacts.writeUploaded(1, { name: '../evil', bytes: new Uint8Array(1) }),
     (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
   )
   await assert.rejects(
     artifacts.writeUploaded(-1, { name: 'ok.txt', bytes: new Uint8Array(1) }),
-    /illegal conversationId/,
+    /invalid conversationId/,
   )
 })
 
@@ -277,25 +277,25 @@ test('writeUploaded: illegal filename and illegal conversation ID reject', { tim
 // HTTP POST /api/conversations/:id/artifacts
 // ---------------------------------------------------------------------------
 
-test('HTTP two enter system stream upload:octet-stream + x-artifact-filename, byte consistent,201', { timeout: 60_000 }, async () => {
+test('HTTP binary stream upload: octet-stream + x-artifact-filename, byte-for-byte identical, 201', { timeout: 60_000 }, async () => {
   const bytes = Uint8Array.from([10, 20, 30, 255, 0, 128])
   const res = await call('POST', '/api/conversations/1/artifacts', {
     headers: {
       'content-type': 'application/octet-stream',
-      'x-artifact-filename': encodeURIComponent('truncate diagram final.png'),
+      'x-artifact-filename': encodeURIComponent('screenshot final.png'),
     },
     body: bytes as unknown as BodyInit,
   })
   assert.equal(res.status, 201)
   assert.equal(res.body.kind, 'upload')
-  assert.equal(res.body.name, 'truncate diagram final.png')
+  assert.equal(res.body.name, 'screenshot final.png')
   assert.equal(res.body.mimeType, 'image/png')
   assert.equal(res.body.size, bytes.byteLength)
   const read = await artifacts.readBuffer(res.body.id as string)
   assert.deepEqual([...read], [...bytes])
 })
 
-test('HTTP two enter system stream upload:?name= query parameter and x-artifact-mime-type', { timeout: 60_000 }, async () => {
+test('HTTP binary stream upload: ?name= query parameter and ?mimeType=', { timeout: 60_000 }, async () => {
   const bytes = new TextEncoder().encode('hello')
   const res = await call('POST', '/api/conversations/1/artifacts?name=hello.md&mimeType=text/markdown', {
     headers: { 'content-type': 'application/octet-stream' },
@@ -306,7 +306,7 @@ test('HTTP two enter system stream upload:?name= query parameter and x-artifact-
   assert.equal(res.body.mimeType, 'text/markdown')
 })
 
-test('HTTP JSON branch:contentBase64 upload (contains two enter system) byte consistent', { timeout: 60_000 }, async () => {
+test('HTTP JSON branch: contentBase64 upload (including binary) is byte-for-byte identical', { timeout: 60_000 }, async () => {
   const bytes = Uint8Array.from([1, 2, 255, 0, 254])
   const res = await call('POST', '/api/conversations/1/artifacts', {
     headers: { 'content-type': 'application/json' },
@@ -320,7 +320,7 @@ test('HTTP JSON branch:contentBase64 upload (contains two enter system) byte con
   assert.deepEqual([...(await artifacts.readBuffer(res.body.id))], [...bytes])
 })
 
-test('HTTP JSON branch: empty contentBase64 = 0 byte artifact (legal)', { timeout: 60_000 }, async () => {
+test('HTTP JSON branch: empty contentBase64 = 0-byte artifact (valid)', { timeout: 60_000 }, async () => {
   const res = await call('POST', '/api/conversations/1/artifacts', {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ name: 'empty.txt', contentBase64: '' }),
@@ -329,7 +329,7 @@ test('HTTP JSON branch: empty contentBase64 = 0 byte artifact (legal)', { timeou
   assert.equal(res.body.size, 0)
 })
 
-test('HTTP illegal base64 400 validation_error', { timeout: 60_000 }, async () => {
+test('HTTP invalid base64 returns 400 validation_error', { timeout: 60_000 }, async () => {
   const res = await call('POST', '/api/conversations/1/artifacts', {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ name: 'x.bin', contentBase64: '!!!not-base64!!!' }),
@@ -338,7 +338,7 @@ test('HTTP illegal base64 400 validation_error', { timeout: 60_000 }, async () =
   assert.equal(res.body.error.code, 'validation_error')
 })
 
-test('HTTP missing filename 400(without head also without ?name=)', { timeout: 60_000 }, async () => {
+test('HTTP missing filename returns 400 (neither header nor ?name=)', { timeout: 60_000 }, async () => {
   const res = await call('POST', '/api/conversations/1/artifacts', {
     headers: { 'content-type': 'application/octet-stream' },
     body: new Uint8Array([1]) as unknown as BodyInit,
@@ -347,7 +347,7 @@ test('HTTP missing filename 400(without head also without ?name=)', { timeout: 6
   assert.equal(res.body.error.code, 'validation_error')
 })
 
-test('HTTP two enter system stream over limit 413 artifact_too_large(content-length preflight)', { timeout: 60_000 }, async () => {
+test('HTTP binary stream over limit returns 413 artifact_too_large (content-length preflight)', { timeout: 60_000 }, async () => {
   const oversized = new Uint8Array(1024)
   const res = await call('POST', '/api/conversations/1/artifacts?name=big.bin', {
     headers: {
@@ -360,7 +360,7 @@ test('HTTP two enter system stream over limit 413 artifact_too_large(content-len
   assert.equal(res.body.error.code, 'artifact_too_large')
 })
 
-test('HTTP conversation missing 404(do not orphan child artifact)', { timeout: 60_000 }, async () => {
+test('HTTP missing conversation returns 404 (without leaving orphan artifact)', { timeout: 60_000 }, async () => {
   const res = await call('POST', '/api/conversations/999/artifacts?name=x.bin', {
     headers: { 'content-type': 'application/octet-stream' },
     body: new Uint8Array([1]) as unknown as BodyInit,
@@ -369,7 +369,7 @@ test('HTTP conversation missing 404(do not orphan child artifact)', { timeout: 6
   assert.equal(res.body.error.code, 'not_found')
 })
 
-test('HTTP illegal filename ../ return 400', { timeout: 60_000 }, async () => {
+test('HTTP invalid filename ../ returns 400', { timeout: 60_000 }, async () => {
   const res = await call('POST', '/api/conversations/1/artifacts?name=../evil', {
     headers: { 'content-type': 'application/octet-stream' },
     body: new Uint8Array([1]) as unknown as BodyInit,
@@ -378,7 +378,7 @@ test('HTTP illegal filename ../ return 400', { timeout: 60_000 }, async () => {
   assert.equal(res.body.error.code, 'validation_error')
 })
 
-test('HTTP text upload trigger redaction (secret do not);GET list contains all artifact', { timeout: 60_000 }, async () => {
+test('HTTP text upload triggers redaction (no secret leaks); GET list includes uploaded artifact', { timeout: 60_000 }, async () => {
   const text = 'token=sk-super-secret-value end'
   const res = await call('POST', '/api/conversations/1/artifacts?name=env.txt', {
     headers: { 'content-type': 'application/octet-stream' },
@@ -386,14 +386,14 @@ test('HTTP text upload trigger redaction (secret do not);GET list contains all a
   })
   assert.equal(res.status, 201)
   const stored = await artifacts.readContent(res.body.id)
-  assert.ok(!stored.includes('sk-super-secret-value'), 'HTTP path same guard redaction')
+  assert.ok(!stored.includes('sk-super-secret-value'), 'HTTP path also enforces redaction')
   const list = await call('GET', '/api/conversations/1/artifacts')
   assert.equal(list.status, 200)
   assert.ok(Array.isArray(list.body) && list.body.length > 0)
   assert.ok(list.body.some((m: { name: string; kind: string }) => m.name === 'env.txt' && m.kind === 'upload'))
 })
 
-test('artifact read reject across conversation metadata and symlink out of bounds, keep two enter system byte', { timeout: 60_000 }, async () => {
+test('artifact reads reject cross-conversation metadata and symlink escapes while preserving raw binary bytes', { timeout: 60_000 }, async () => {
   const root = await makeTempDir('helm-artifact-boundary-')
   try {
     await ensureDataDir(root)
@@ -405,13 +405,13 @@ test('artifact read reject across conversation metadata and symlink out of bound
     const original = await artSvc.register(1, source)
     assert.deepEqual([...await artSvc.readBuffer(original.id)], [...bytes])
     repository.put({ ...original, id: 'other-conversation', conversationId: 2 })
-    await assert.rejects(artSvc.readBuffer('other-conversation'), /reject read/)
+    await assert.rejects(artSvc.readBuffer('other-conversation'), /read rejected/)
     const outside = join(root, 'outside.txt')
     await writeFile(outside, 'outside-boundary-example')
     const linkPath = join(root, 'artifacts', '1', 'outside-link.txt')
     await symlink(outside, linkPath)
     repository.put({ ...original, id: 'link', path: 'artifacts/1/outside-link.txt' })
-    await assert.rejects(artSvc.readContent('link'), /reject read/)
+    await assert.rejects(artSvc.readContent('link'), /read rejected/)
     await assert.rejects(artSvc.spill(-1, 'call', 'text'), /conversationId/)
   } finally {
     await cleanupDir(root)

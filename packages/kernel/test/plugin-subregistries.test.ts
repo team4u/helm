@@ -1,11 +1,11 @@
 /**
  * plugin-subregistries.test.ts
  *
- * for decouple after sub- module:
+ * Focused unit tests for decoupled sub-registries:
  * 1. PluginDocRegistry
  * 2. CapabilityRegistry
  * 3. UiRegistry
- * enter row directly inside gather unit test, verify its independent behavior, boundary check and lifecycle semantics.
+ * Exercises each sub-registry directly to verify independent behavior, boundary checks, and lifecycle semantics.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -30,7 +30,7 @@ class TrackedDocStore extends MemoryDocStore {
   }
 }
 
-/** three meta group key memory implement: value store JSON string, and real durable layer semantics consistent. */
+/** In-memory triple-key store: stores JSON strings matching real persistence-layer semantics. */
 class MemorySessionDocStore implements PluginSessionDocStore {
   data = new Map<string, string>();
   flushed = false;
@@ -65,7 +65,7 @@ class MemorySessionDocStore implements PluginSessionDocStore {
   }
 }
 
-test('PluginDocRegistry: document register, isolated, update notify and lifecycle guard', { timeout: 60_000 }, async () => {
+test('PluginDocRegistry handles document registration, isolation, change notifications, and lifecycle guards', { timeout: 60_000 }, async () => {
   const store = new TrackedDocStore();
   const updates: Array<{ pluginId: string; name: string; value: unknown }> = [];
   const registry = new PluginDocRegistry(store, (pluginId, name, value) => {
@@ -108,13 +108,13 @@ test('PluginDocRegistry: document register, isolated, update notify and lifecycl
   assert.equal(allPub.length, 1);
   assert.deepEqual(allPub[0], pubDoc);
 
-  // deactivate state take public document throw 404
+  // Disabled state rejects reading public docs with 404
   assert.throws(
     () => registry.getPublicDoc('test-plugin', 'myDoc', false),
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
   );
 
-  // guard expires when throw 409
+  // Expired lifecycle guard throws 409
   usable = false;
   assert.throws(
     () => handle.get(),
@@ -122,7 +122,7 @@ test('PluginDocRegistry: document register, isolated, update notify and lifecycl
   );
 });
 
-/** construct carries complete conversation port and guard registry test environment. */
+/** Builds a test fixture with complete conversation ports and guard registry. */
 function createSessionFixture() {
   const store = new MemoryDocStore();
   const sessionStore = new MemorySessionDocStore();
@@ -152,7 +152,7 @@ function createSessionFixture() {
   return { registry, store, sessionStore, sessionEvents, existing, setUsable: (v: boolean) => (usable = v), assertUsable };
 }
 
-test('PluginDocRegistry:sessionDoc read write, conversation isolated and delete event back initial value', { timeout: 60_000 }, async () => {
+test('PluginDocRegistry: sessionDoc read/write, conversation isolation, and delete events emit initial value', { timeout: 60_000 }, async () => {
   const f = createSessionFixture();
   const handle = f.registry.registerSessionDoc(
     'test-plugin',
@@ -165,7 +165,7 @@ test('PluginDocRegistry:sessionDoc read write, conversation isolated and delete 
   assert.equal(f.registry.hasPublicSessionDoc('test-plugin', 'convState'), true);
   assert.equal(f.registry.hasPublicSessionDoc('test-plugin', 'nonExistent'), false);
 
-  // not write when fall back initial value; two conversation mutual each other isolated
+  // Unwritten reads fall back to initial value; separate conversations stay mutually isolated
   assert.deepEqual(handle.get(101), { text: 'init' });
   handle.set(101, { text: 'updated' });
   handle.set(202, { text: 'other' });
@@ -176,7 +176,7 @@ test('PluginDocRegistry:sessionDoc read write, conversation isolated and delete 
   handle.update(101, (prev) => ({ text: `${prev.text}!` }));
   assert.deepEqual(handle.get(101), { text: 'updated!' });
 
-  // public event:set/update all publish
+  // Public events emitted on set/update
   assert.equal(f.sessionEvents.length, 3);
   assert.deepEqual(f.sessionEvents[0], {
     pluginId: 'test-plugin',
@@ -185,7 +185,7 @@ test('PluginDocRegistry:sessionDoc read write, conversation isolated and delete 
     value: { text: 'updated' },
   });
 
-  // delete: durable layer delete, event value constant is initial value and carries deleted: true
+  // Delete removes durable storage and emits initial value with deleted: true
   handle.delete(101);
   assert.deepEqual(handle.get(101), { text: 'init' });
   assert.deepEqual(f.sessionEvents.at(-1), {
@@ -197,7 +197,7 @@ test('PluginDocRegistry:sessionDoc read write, conversation isolated and delete 
   });
   assert.deepEqual(handle.listConversationIds(), [202]);
 
-  // not write conversation delete same publish deleted event
+  // Deleting an unwritten conversation still publishes a deleted event
   f.existing.add(303);
   handle.delete(303);
   assert.deepEqual(f.sessionEvents.at(-1), {
@@ -212,11 +212,11 @@ test('PluginDocRegistry:sessionDoc read write, conversation isolated and delete 
   assert.equal(f.sessionStore.flushed, true);
 });
 
-test('PluginDocRegistry:sessionDoc conversation missing and illegal ID reject, never fall back global key', { timeout: 60_000 }, () => {
+test('PluginDocRegistry: sessionDoc rejects missing conversations and invalid IDs rather than falling back globally', { timeout: 60_000 }, () => {
   const f = createSessionFixture();
   const handle = f.registry.registerSessionDoc('test-plugin', 'convState', { text: 'init' }, undefined, f.assertUsable);
 
-  // conversation missing: host port original on throw conversation_not_found(guard against delete after orphan child back write)
+  // Missing conversation passes through host conversation_not_found (guards against orphan re-creation after delete)
   assert.throws(
     () => handle.get(999),
     (err: unknown) => err instanceof HelmError && err.code === 'conversation_not_found',
@@ -227,7 +227,7 @@ test('PluginDocRegistry:sessionDoc conversation missing and illegal ID reject, n
   );
   assert.equal(f.sessionStore.listConversationIds('test-plugin', 'convState').length, 0);
 
-  // illegal conversation ID: non- correct security integer one rule 400
+  // Invalid conversation IDs: non-positive / non-safe integers always return 400
   for (const bad of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
     assert.throws(
       () => handle.get(bad),
@@ -236,7 +236,7 @@ test('PluginDocRegistry:sessionDoc conversation missing and illegal ID reject, n
     );
   }
 
-  // handle guard expires (deactivate/cycle more replace) after everything operation reject
+  // Once handle guard expires (disabled/epoch rollover), all operations reject
   f.setUsable(false);
   assert.throws(
     () => handle.get(101),
@@ -248,7 +248,7 @@ test('PluginDocRegistry:sessionDoc conversation missing and illegal ID reject, n
   );
 });
 
-test('PluginDocRegistry:doc and sessionDoc forbidden same name sharing naming empty between', { timeout: 60_000 }, () => {
+test('PluginDocRegistry: doc and sessionDoc share namespace and reject same-name collisions', { timeout: 60_000 }, () => {
   const f = createSessionFixture();
   f.registry.registerDoc('test-plugin', 'shared', { a: 1 }, undefined, f.assertUsable);
   assert.throws(
@@ -262,30 +262,30 @@ test('PluginDocRegistry:doc and sessionDoc forbidden same name sharing naming em
     () => f2.registry.registerDoc('test-plugin', 'shared', { a: 1 }, undefined, f2.assertUsable),
     (err: unknown) => err instanceof HelmError && err.code === 'duplicate_doc',
   );
-  // same class duplicate declaration same reject
+  // Same-kind duplicate declaration rejects identically
   assert.throws(
     () => f2.registry.registerSessionDoc('test-plugin', 'shared', {}, undefined, f2.assertUsable),
     (err: unknown) => err instanceof HelmError && err.code === 'duplicate_doc',
   );
 
-  // opts illegal shape reject
+  // Malformed opts rejected
   assert.throws(
     () => f2.registry.registerSessionDoc('test-plugin', 'ok', {}, { extra: 1 } as never, f2.assertUsable),
     (err: unknown) => err instanceof HelmError && err.code === 'invalid_doc_spec',
   );
 });
 
-test('PluginDocRegistry:sessionDoc port missing explicit reject, not silently fall back', { timeout: 60_000 }, () => {
-  // without any conversation port: declaration i.e. 501
+test('PluginDocRegistry: missing sessionDoc ports reject explicitly with 501 without silent fallback', { timeout: 60_000 }, () => {
+  // Without session ports: declaration throws 501 immediately
   const bare = new PluginDocRegistry(new MemoryDocStore(), () => {});
   assert.throws(
     () => bare.registerSessionDoc('p', 'doc1', {}, undefined, () => {}),
     (err: unknown) => err instanceof HelmError && err.code === 'session_doc_store_unavailable' && err.status === 501,
   );
-  // only global doc old use method do not subject to affect
+  // Existing global-doc callers remain unaffected
   bare.registerDoc('p', 'globalOnly', { ok: true }, undefined, () => {});
 
-  // has sessionStore but missing conversation store in validate port: explicit 501, do not pretend verify
+  // sessionStore present without assertConversationExists port: explicit 501 instead of pretending to validate
   const noAssert = new PluginDocRegistry(new MemoryDocStore(), () => {}, {
     sessionStore: new MemorySessionDocStore(),
     emitSessionDocUpdated: () => {},
@@ -295,7 +295,7 @@ test('PluginDocRegistry:sessionDoc port missing explicit reject, not silently fa
     (err: unknown) => err instanceof HelmError && err.code === 'session_doc_port_unavailable' && err.status === 501,
   );
 
-  // public:true but missing event port: explicit 501, not silently lose update
+  // public:true without event emission port: explicit 501 instead of dropping updates silently
   const noEmit = new PluginDocRegistry(new MemoryDocStore(), () => {}, {
     sessionStore: new MemorySessionDocStore(),
     assertConversationExists: () => {},
@@ -304,17 +304,17 @@ test('PluginDocRegistry:sessionDoc port missing explicit reject, not silently fa
     () => noEmit.registerSessionDoc('p', 'doc1', {}, { public: true }, () => {}),
     (err: unknown) => err instanceof HelmError && err.code === 'session_doc_port_unavailable' && err.status === 501,
   );
-  // private sessionDoc without event port can normal declaration
+  // Private sessionDoc declares cleanly without the event port
   noEmit.registerSessionDoc('p', 'privateDoc', {}, undefined, () => {});
 });
 
-test('PluginDocRegistry:getPublicSessionDoc and routing ambiguity hint', { timeout: 60_000 }, () => {
+test('PluginDocRegistry: getPublicSessionDoc and kind mismatch diagnostics', { timeout: 60_000 }, () => {
   const f = createSessionFixture();
   f.registry.registerSessionDoc('test-plugin', 'convState', { text: 'init' }, { public: true }, f.assertUsable);
   f.registry.registerSessionDoc('test-plugin', 'privateConv', { secret: 1 }, undefined, f.assertUsable);
   f.registry.registerDoc('test-plugin', 'globalDoc', { g: 1 }, { public: true }, f.assertUsable);
 
-  // normal read: not write back initial value, write read real value
+  // Normal reads return initial value without writing back, or stored value once persisted
   assert.deepEqual(f.registry.getPublicSessionDoc('test-plugin', 'convState', 101, true), {
     pluginId: 'test-plugin',
     name: 'convState',
@@ -327,7 +327,7 @@ test('PluginDocRegistry:getPublicSessionDoc and routing ambiguity hint', { timeo
     { text: 'real' },
   );
 
-  // deactivate / private / not declaration one rule 404, without leaking private store in
+  // Disabled / private / undeclared all return 404 without leaking private storage
   assert.throws(
     () => f.registry.getPublicSessionDoc('test-plugin', 'convState', 101, false),
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
@@ -341,41 +341,41 @@ test('PluginDocRegistry:getPublicSessionDoc and routing ambiguity hint', { timeo
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
   );
 
-  // conversation missing: original on throw host port error (conversation_not_found)
+  // Missing conversation passes through host port error (conversation_not_found)
   assert.throws(
     () => f.registry.getPublicSessionDoc('test-plugin', 'convState', 999, true),
     (err: unknown) => err instanceof HelmError && err.code === 'conversation_not_found',
   );
 
-  // illegal conversation ID:400
+  // Invalid conversation ID -> 400
   assert.throws(
     () => f.registry.getPublicSessionDoc('test-plugin', 'convState', 0, true),
     (err: unknown) => err instanceof HelmError && err.code === 'invalid_conversation_id',
   );
 
-  // getPublicDoc hit public session name: hint must conversationId
+  // getPublicDoc targeting public session doc hints that conversationId is required
   assert.throws(
     () => f.registry.getPublicDoc('test-plugin', 'convState', true),
     (err: unknown) => err instanceof HelmError && err.code === 'session_doc_requires_conversation',
   );
-  // getPublicDoc hit private session name: and not declaration consistent 404(without leaking store in)
+  // getPublicDoc targeting private session doc returns 404 identically to undeclared (never leaks existence)
   assert.throws(
     () => f.registry.getPublicDoc('test-plugin', 'privateConv', true),
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
   );
-  // getPublicSessionDoc hit public global name: hint do not connect conversationId
+  // getPublicSessionDoc targeting public global doc hints to omit conversationId
   assert.throws(
     () => f.registry.getPublicSessionDoc('test-plugin', 'globalDoc', 101, true),
     (err: unknown) => err instanceof HelmError && err.code === 'global_doc_unexpected_conversation',
   );
-  // getPublicSessionDoc hit private global name: and not declaration consistent 404(without leaking store in)
+  // getPublicSessionDoc targeting private global/undeclared doc returns 404 without leaking existence
   assert.throws(
     () => f.registry.getPublicSessionDoc('test-plugin', 'noGlobal', 101, true),
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
   );
 });
 
-test('PluginDocRegistry: deep copy isolated and clear/removePlugin double register table clean up', { timeout: 60_000 }, () => {
+test('PluginDocRegistry: defensive deep-cloning isolation and clear/removePlugin registry cleanup', { timeout: 60_000 }, () => {
   const f = createSessionFixture();
   const sessionHandle = f.registry.registerSessionDoc(
     'test-plugin',
@@ -392,7 +392,7 @@ test('PluginDocRegistry: deep copy isolated and clear/removePlugin double regist
     f.assertUsable,
   );
 
-  // get return deep copy: original ground sudden change do not pollute durable layer
+  // get returns deep clones: in-place mutation never corrupts persistent storage
   const gotSession = sessionHandle.get(101);
   gotSession.nested.count = 99;
   assert.deepEqual(sessionHandle.get(101), { nested: { count: 0 } });
@@ -405,25 +405,25 @@ test('PluginDocRegistry: deep copy isolated and clear/removePlugin double regist
   gotGlobal.nested.count = 99;
   assert.deepEqual(globalHandle.get(), { nested: { count: 0 } });
 
-  // event payload also is deep copy (consumer sudden change do not back pour)
+  // Event payloads are deep clones too (consumer mutation never leaks back)
   sessionHandle.set(101, { nested: { count: 2 } });
   (f.sessionEvents.at(-1)!.value as { nested: { count: number } }).nested.count = 77;
   assert.deepEqual(sessionHandle.get(101).nested, { count: 2 });
 
-  // clear: two register table handle same clean,hasPublic*/again declaration can row (cycle more replace semantics)
+  // clear wipes both registries and permits fresh re-declaration (epoch rollover semantics)
   f.registry.clear('test-plugin');
   assert.equal(f.registry.hasPublicDoc('test-plugin', 'myDoc'), false);
   assert.equal(f.registry.hasPublicSessionDoc('test-plugin', 'convState'), false);
   f.registry.registerDoc('test-plugin', 'myDoc', { n: 1 }, { public: true }, f.assertUsable);
   f.registry.registerSessionDoc('test-plugin', 'convState', { n: 1 }, { public: true }, f.assertUsable);
 
-  // removePlugin: unload after same all clean
+  // removePlugin clears both registries identically on unregister
   f.registry.removePlugin('test-plugin');
   assert.equal(f.registry.hasPublicDoc('test-plugin', 'myDoc'), false);
   assert.equal(f.registry.hasPublicSessionDoc('test-plugin', 'convState'), false);
 });
 
-test('CapabilityRegistry: tool and action declaration, list derive and effect domain validate', { timeout: 60_000 }, async () => {
+test('CapabilityRegistry: tool/action declaration, list projection, and scope validation', { timeout: 60_000 }, async () => {
   const cap = new CapabilityRegistry();
   const tracker = new PluginTaskTracker();
 
@@ -455,7 +455,7 @@ test('CapabilityRegistry: tool and action declaration, list derive and effect do
     isPluginRegistered: () => true,
   };
 
-  // register action
+  // Register action
   cap.registerAction('p1', {
     id: 'doSomething',
     description: 'test action',
@@ -466,7 +466,7 @@ test('CapabilityRegistry: tool and action declaration, list derive and effect do
     handler: (input: { val: string }) => ({ res: `handled:${input.val}` }),
   });
 
-  // register tool
+  // Register tool
   cap.registerTool('p1', {
     name: 'customTool',
     description: 'test tool',
@@ -480,31 +480,31 @@ test('CapabilityRegistry: tool and action declaration, list derive and effect do
   const actions = cap.listActions(['p1']);
   assert.equal(actions.length, 1);
   assert.equal(actions[0]!.id, 'doSomething');
-  // not declaration hint field manifest does not carry prompt key (no-options behavior do not change)
+  // Manifest omits prompt keys when undeclared (preserves no-options behavior)
   assert.equal('promptSnippet' in actions[0]!, false);
   assert.equal('promptGuidelines' in actions[0]!, false);
 
   const tools = cap.listTools(['p1'], fakeConv);
   assert.equal(tools.length, 2); // 1 direct tool + 1 exposeAsTool action
 
-  // effect domain does not match when filter
+  // Filtered out when scope mismatches
   const mismatchConv = { ...fakeConv, tags: ['other'] };
   const toolsMismatch = cap.listTools(['p1'], mismatchConv);
-  assert.equal(toolsMismatch.length, 1); // exposeAsTool action by filter, only remain without scope  direct tool
+  assert.equal(toolsMismatch.length, 1); // exposeAsTool action omitted; unscoped direct tool remains
 
-  // invokeAction normal execute
+  // invokeAction runs normally
   const actionRes = await cap.invokeAction('p1', 'doSomething', { val: 'hello' }, { conversationId: 1 }, options);
   assert.deepEqual(actionRes, { res: 'handled:hello' });
 
-  // executeTool support all limit set name pluginId.actionId
+  // executeTool supports qualified name pluginId.actionId
   const toolExecRes = await cap.executeTool('p1.doSomething', { val: 'via-tool' }, { conversationId: 1 }, options);
   assert.deepEqual(toolExecRes, { res: 'handled:via-tool' });
 
-  // executeTool directly tool invoke
+  // executeTool invokes direct tool cleanly
   const directRes = await cap.executeTool('customTool', { num: 42 }, { conversationId: 1 }, options);
   assert.equal(directRes, 'tool:42');
 
-  // scope exceeds right throw 403
+  // Out-of-scope invocation throws 403
   await assert.rejects(
     async () => {
       await cap.invokeAction('p1', 'doSomething', { val: 'hello' }, { conversationId: 2 }, {
@@ -516,7 +516,7 @@ test('CapabilityRegistry: tool and action declaration, list derive and effect do
   );
 });
 
-test('UiRegistry: UI extension point collect, parameter validate and dependency validate', { timeout: 60_000 }, async () => {
+test('UiRegistry: extension collection, parameter validation, and dependency checks', { timeout: 60_000 }, async () => {
   const ui = new UiRegistry();
 
   ui.registerUi('p1', 'sidebar.item', {
@@ -525,7 +525,7 @@ test('UiRegistry: UI extension point collect, parameter validate and dependency 
     icon: 'Terminal',
   }, 'sidebarItem');
 
-  // duplicate ID throw 409
+  // Duplicate ID throws 409
   assert.throws(
     () => {
       ui.registerUi('p1', 'sidebar.item', { id: 'p1Sidebar', label: 'Dup' }, 'sidebarItem');
@@ -533,7 +533,7 @@ test('UiRegistry: UI extension point collect, parameter validate and dependency 
     (err: unknown) => err instanceof HelmError && err.code === 'duplicate_ui',
   );
 
-  // docs declaration already follow declaration style JSON track path remove:assertUiDocsRegistered is hang point, no longer validate reference
+  // docs assertion is a stub after declarative JSON track removal: no longer validates doc references
   ui.assertUiDocsRegistered('p1', () => false);
 
   const list = ui.listUi(['p1']);
@@ -542,15 +542,15 @@ test('UiRegistry: UI extension point collect, parameter validate and dependency 
   assert.equal((list[0]!.spec as { id: string }).id, 'p1Sidebar');
 });
 
-test('UiRegistry:listUi by activePluginIds iterate order return, do not pass when by internal insert order', { timeout: 60_000 }, async () => {
+test('UiRegistry: listUi preserves activePluginIds iteration order or internal map insertion order when omitted', { timeout: 60_000 }, async () => {
   const ui = new UiRegistry();
 
-  // B first declaration UI
+  // B declares UI first
   ui.registerUi('B', 'sidebar.item', { id: 'bItem', label: 'B Tab' }, 'sidebarItem');
-  // A after declaration UI
+  // A declares UI second
   ui.registerUi('A', 'sidebar.item', { id: 'aItem', label: 'A Tab' }, 'sidebarItem');
 
-  // pass activePluginIds = ['A', 'B'] when, must by ['A', 'B'] order return, while non- internal map insert order
+  // Passing activePluginIds = ['A', 'B'] must preserve ['A', 'B'] order instead of internal map insertion order
   const orderedList = ui.listUi(['A', 'B']);
   assert.equal(orderedList.length, 2);
   assert.equal(orderedList[0]!.pluginId, 'A');
@@ -558,13 +558,13 @@ test('UiRegistry:listUi by activePluginIds iterate order return, do not pass whe
   assert.equal(orderedList[1]!.pluginId, 'B');
   assert.equal((orderedList[1]!.spec as { id: string }).id, 'bItem');
 
-  // pass activePluginIds = ['B', 'A'] when, by ['B', 'A'] order
+  // Passing activePluginIds = ['B', 'A'] yields ['B', 'A'] order
   const reverseList = ui.listUi(['B', 'A']);
   assert.equal(reverseList.length, 2);
   assert.equal(reverseList[0]!.pluginId, 'B');
   assert.equal(reverseList[1]!.pluginId, 'A');
 
-  // do not pass activePluginIds when, by internal map order (B first,A after)
+  // Without activePluginIds, uses internal map order (B then A)
   const defaultList = ui.listUi();
   assert.equal(defaultList.length, 2);
   assert.equal(defaultList[0]!.pluginId, 'B');

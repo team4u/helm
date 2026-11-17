@@ -12,8 +12,8 @@ function createDeferred<T = void>() {
   return { promise, resolve, reject }
 }
 
-describe('AssetReloader unit test', { timeout: 60_000 }, () => {
-  it('config.json change refresh plugin config mirror, failed explicit on report notify', { timeout: 60_000 }, async () => {
+describe('AssetReloader unit tests', { timeout: 60_000 }, () => {
+  it('refreshes plugin config mirror on config.json change and explicitly reports errors via notifyError', { timeout: 60_000 }, async () => {
     const notifications: Array<{ title: string; error: unknown }> = []
     const errorDeferred = createDeferred<void>()
 
@@ -33,13 +33,13 @@ describe('AssetReloader unit test', { timeout: 60_000 }, () => {
     await errorDeferred.promise
 
     assert.equal(notifications.length, 1)
-    assert.equal(notifications[0]!.title, 'plugin config hot reload failed')
+    assert.equal(notifications[0]!.title, 'Plugin config hot reload failed')
     assert.ok(String(notifications[0]!.error).includes('config syntax error'))
 
     await reloader.close()
   })
 
-  it('providers/credentials change via 200ms guard against jitter merge trigger single time reloadModels', { timeout: 60_000 }, async (t) => {
+  it('debounces providers/credentials changes over 200ms into a single reloadModels call', { timeout: 60_000 }, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] })
     t.after(() => t.mock.timers.reset())
 
@@ -53,27 +53,27 @@ describe('AssetReloader unit test', { timeout: 60_000 }, () => {
       notifyError: () => {},
     })
 
-    // t = 0: first time change trigger guard against jitter count when
+    // t = 0: first change starts the debounce timer
     reloader.onAssetsChanged(['providers.json'])
     t.mock.timers.tick(100)
     await Promise.resolve()
-    assert.equal(reloadCount, 0, '100ms when guard against jitter not yet trigger')
+    assert.equal(reloadCount, 0, 'debounce window must not trigger at 100ms')
 
-    // t = 100: second time change reset 200ms guard against jitter window
+    // t = 100: second change resets the 200ms debounce window
     reloader.onAssetsChanged(['credentials.json'])
     t.mock.timers.tick(150)
     await Promise.resolve()
-    assert.equal(reloadCount, 0, 'distance second time change only 150ms, still must not trigger')
+    assert.equal(reloadCount, 0, 'only 150ms since second change; must not trigger yet')
 
-    // t = 300: reach second time change after 200ms
+    // t = 300: 200ms elapsed since second change
     t.mock.timers.tick(50)
     await reloader.waitForInflight()
-    assert.equal(reloadCount, 1, 'guard against jitter window full after should and only should trigger 1 time reload')
+    assert.equal(reloadCount, 1, 'should trigger exactly one reload after debounce window completes')
 
     await reloader.close()
   })
 
-  it('serial two time reloadModels most large concurrency is 1', { timeout: 60_000 }, async (t) => {
+  it('serializes two reloadModels calls so max concurrency is 1', { timeout: 60_000 }, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] })
     t.after(() => t.mock.timers.reset())
 
@@ -104,7 +104,7 @@ describe('AssetReloader unit test', { timeout: 60_000 }, () => {
       notifyError: () => {},
     })
 
-    // trigger first time reload
+    // Trigger first reload
     reloader.onAssetsChanged(['providers.json'])
     t.mock.timers.tick(200)
     await gate1Started.promise
@@ -112,22 +112,22 @@ describe('AssetReloader unit test', { timeout: 60_000 }, () => {
     assert.equal(concurrency, 1)
     assert.equal(maxConcurrency, 1)
 
-    // in first time reload block during trigger second time reload
+    // Trigger second reload while first reload is blocked
     reloader.onAssetsChanged(['credentials.json'])
     t.mock.timers.tick(200)
-    // timer already trigger and add reloadChain, but because pre- reload block, second time reload not start
+    // Timer fired and queued onto reloadChain, but blocked behind first reload
     assert.equal(startedCount, 1)
     assert.equal(concurrency, 1)
 
-    // let through first time reload
+    // Unblock first reload
     gate1.resolve()
-    // wait for second time reload start and block in gate2
+    // Wait for second reload to start and block on gate2
     await gate2Started.promise
     assert.equal(startedCount, 2)
     assert.equal(concurrency, 1)
-    assert.equal(maxConcurrency, 1, 'two time reload serial execute, most large concurrency must is 1')
+    assert.equal(maxConcurrency, 1, 'two reloads execute serially with max concurrency 1')
 
-    // let through second time reload
+    // Unblock second reload
     gate2.resolve()
     await reloader.waitForInflight()
     assert.equal(concurrency, 0)
@@ -137,7 +137,7 @@ describe('AssetReloader unit test', { timeout: 60_000 }, () => {
     await reloader.close()
   })
 
-  it('externalModels is true when keep external ownership, does not trigger reloadModels', { timeout: 60_000 }, async (t) => {
+  it('respects external ownership when externalModels is true and never triggers reloadModels', { timeout: 60_000 }, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] })
     t.after(() => t.mock.timers.reset())
 
@@ -156,12 +156,12 @@ describe('AssetReloader unit test', { timeout: 60_000 }, () => {
     reloader.onAssetsChanged(['credentials.json'])
     t.mock.timers.tick(500)
 
-    assert.equal(reloadCount, 0, 'external model inject when never automatically trigger reloadModels replace')
+    assert.equal(reloadCount, 0, 'when external models are injected, reloadModels must not overwrite them')
 
     await reloader.close()
   })
 
-  it('profiles and skills etc. non- static config path does not trigger model or config hot reload', { timeout: 60_000 }, async (t) => {
+  it('ignores non-hot-reloadable paths such as profiles and skills', { timeout: 60_000 }, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] })
     t.after(() => t.mock.timers.reset())
 
@@ -193,7 +193,7 @@ describe('AssetReloader unit test', { timeout: 60_000 }, () => {
     await reloader.close()
   })
 
-  it('stop closure stop one phase cancel await trigger guard against jitter (timer by cancel, does not trigger reload)', { timeout: 60_000 }, async (t) => {
+  it('cancels pending debounce timer on stop without triggering reload', { timeout: 60_000 }, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] })
     t.after(() => t.mock.timers.reset())
 
@@ -210,16 +210,16 @@ describe('AssetReloader unit test', { timeout: 60_000 }, () => {
     reloader.onAssetsChanged(['providers.json'])
     t.mock.timers.tick(100)
 
-    // in 200ms guard against jitter expires before stop
+    // Stop before the 200ms debounce expires
     reloader.stop()
     t.mock.timers.tick(500)
 
-    assert.equal(reloadCount, 0, 'stop should cancel await trigger guard against jitter timer, do not occur reload')
+    assert.equal(reloadCount, 0, 'stop should cancel pending debounce timer without reloading')
     await reloader.waitForInflight()
     assert.equal(reloadCount, 0)
   })
 
-  it('stop after do not accept new event', { timeout: 60_000 }, async (t) => {
+  it('ignores new asset events after stop', { timeout: 60_000 }, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] })
     t.after(() => t.mock.timers.reset())
 
@@ -241,13 +241,13 @@ describe('AssetReloader unit test', { timeout: 60_000 }, () => {
     reloader.onAssetsChanged(['providers.json', 'credentials.json', 'config.json'])
     t.mock.timers.tick(500)
 
-    assert.equal(reloadModelsCount, 0, 'stop after static model asset event should by discard')
-    assert.equal(reloadConfigCount, 0, 'stop after config event should by discard')
+    assert.equal(reloadModelsCount, 0, 'model asset events after stop must be discarded')
+    assert.equal(reloadConfigCount, 0, 'config events after stop must be discarded')
 
     await reloader.waitForInflight()
   })
 
-  it('stop after wait for in-flight reload succeeded converge (waitForInflight wait for succeeded)', { timeout: 60_000 }, async (t) => {
+  it('waits for in-flight reload completion after stop via waitForInflight', { timeout: 60_000 }, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] })
     t.after(() => t.mock.timers.reset())
 
@@ -269,16 +269,16 @@ describe('AssetReloader unit test', { timeout: 60_000 }, () => {
     reloader.onAssetsChanged(['providers.json'])
     t.mock.timers.tick(200)
     await gateStarted.promise
-    assert.equal(finished, false, 'reload is now execute in')
+    assert.equal(finished, false, 'reload is currently in progress')
 
     reloader.stop()
     gate.resolve()
     await reloader.waitForInflight()
 
-    assert.equal(finished, true, 'in-flight reload must by waitForInflight fully wait for succeeded converge')
+    assert.equal(finished, true, 'waitForInflight must await full convergence of in-flight reloads')
   })
 
-  it('reload start and block,stop, let through reject,await waitForInflight, core for notify has original error and do not under unhandled', { timeout: 60_000 }, async (t) => {
+  it('notifies original error without unhandled rejections when in-flight reload fails after stop', { timeout: 60_000 }, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] })
     t.after(() => t.mock.timers.reset())
 
@@ -302,22 +302,22 @@ describe('AssetReloader unit test', { timeout: 60_000 }, () => {
     t.mock.timers.tick(200)
     await gateStarted.promise
 
-    // reload already start and in-flight run, now execute stop
+    // Reload has started and is in-flight; call stop now
     reloader.stop()
 
-    // let through reject, simulated hot reload execute phase failed
+    // Unblock rejection, simulating a hot-reload execution failure
     const failure = new Error('simulated reload failure during shutdown')
     gate.reject(failure)
 
-    // waitForInflight wait for in-flight link converge; error by internal catch catch and notify, do not legacy unhandled rejection
+    // waitForInflight awaits in-flight chain convergence; error is caught and reported without leaving unhandled rejections
     await reloader.waitForInflight()
 
-    assert.equal(notifications.length, 1, 'in-flight reload failed must explicit notify, must not because stop static default swallow')
-    assert.equal(notifications[0]!.title, 'model config hot reload failed')
+    assert.equal(notifications.length, 1, 'in-flight reload failure must notify explicitly instead of being swallowed on stop')
+    assert.equal(notifications[0]!.title, 'Model config hot reload failed')
     assert.equal(notifications[0]!.error, failure)
   })
 
-  it('stop after same wait for already start config mirror refresh, avoid persist close after continue write', { timeout: 60_000 }, async () => {
+  it('also awaits already-started plugin config mirror refresh after stop to avoid writes after closing persistence', { timeout: 60_000 }, async () => {
     const started = createDeferred()
     const gate = createDeferred()
     const reloader = new AssetReloader({
@@ -336,14 +336,14 @@ describe('AssetReloader unit test', { timeout: 60_000 }, () => {
     let drained = false
     const waiting = reloader.waitForInflight().then(() => { drained = true })
     await Promise.resolve()
-    assert.equal(drained, false, 'config refresh not yet complete when cannot end closure stop screen fault')
+    assert.equal(drained, false, 'shutdown barrier must not resolve before config refresh finishes')
 
     gate.resolve()
     await waiting
     assert.equal(drained, true)
   })
 
-  it('error notify publish itself on failure, closure stop screen fault explicit reject, do not smoke fill succeeded', { timeout: 60_000 }, async (t) => {
+  it('explicitly rejects shutdown barrier instead of pretending success if notifyError throws', { timeout: 60_000 }, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] })
     t.after(() => t.mock.timers.reset())
     const started = createDeferred()
@@ -358,7 +358,7 @@ describe('AssetReloader unit test', { timeout: 60_000 }, () => {
       },
       reloadPluginConfig: async () => {},
       notifyError: (title, error) => {
-        assert.equal(title, 'model config hot reload failed')
+        assert.equal(title, 'Model config hot reload failed')
         assert.equal(error, reloadFailure)
         throw reportFailure
       },
@@ -373,7 +373,7 @@ describe('AssetReloader unit test', { timeout: 60_000 }, () => {
     await rejected
   })
 
-  it('watcher exception explicit on report notify (not silently fall back)', { timeout: 60_000 }, async () => {
+  it('explicitly reports watcher errors via notifyError rather than failing silently', { timeout: 60_000 }, async () => {
     const notifications: Array<{ title: string; error: unknown }> = []
     let watcherOnError: ((err: Error) => void) | undefined
 
@@ -399,7 +399,7 @@ describe('AssetReloader unit test', { timeout: 60_000 }, () => {
     watcherOnError!(watcherErr)
 
     assert.equal(notifications.length, 1)
-    assert.equal(notifications[0]!.title, 'asset hot reload listen failed')
+    assert.equal(notifications[0]!.title, 'Asset hot-reload watcher failed')
     assert.equal(notifications[0]!.error, watcherErr)
 
     await reloader.close()

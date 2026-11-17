@@ -1,45 +1,42 @@
 /**
- * target path term method parse (read/write/edit/register_artifact shared use).
+ * Target path lexical resolution (shared by `read`/`write`/`edit`/`register_artifact`).
  *
- * across platform path shape: target path one rule by its itself shape (POSIX absolute / Windows symbol absolute /
- * UNC) choose use pure posix/win32 rule do term method parse, never use Hub host node:path by default
- * rule parse remote path (Linux Hub on resolve('C:\\workspace') will obtain to error result,
- * Windows/mac/Linux across platform promise i.e. do not into establish); symbol relative path (C:relative) semantics
- * dependency process when before directory, one rule explicit reject.
+ * Cross-platform path handling: picks pure `posix` or `win32` lexical rules based on target path shape
+ * (POSIX absolute / Windows drive-letter absolute / UNC), never letting the Hub host's `node:path` default
+ * misparse remote paths (resolving `'C:\\workspace'` on a Linux Hub produces corrupt paths, breaking
+ * cross-platform Windows/macOS/Linux invariants); Windows drive-relative paths (`C:rel`) depend on
+ * process-current directory and are always rejected explicitly.
  *
- * shape decide and term method rule sub- collection (normalize/join/dirname/basename) already consolidate
- * @helm/protocol(browser security pure function, kernel and @helm/plugins sharing); dependency
- * node:path complete implement resolve semantics (process cwd / large small write rule) in kernel
- * (Node environment);isAbsoluteTargetPath/targetPathShape by tools.ts again export
- * supply since has relative path reference keep stable.
+ * Shape detection and browser-safe path rules (`normalize`/`join`/`dirname`/`basename`) live in
+ * `@helm/protocol`; full `node:path` `resolve` semantics (requiring Node) live here;
+ * `isAbsoluteTargetPath`/`targetPathShape` are re-exported by `tools.ts` for existing relative imports.
  */
 import { isAbsoluteTargetPath, normalizeTargetPath, targetPathShape, type TargetPlatform } from '@helm/protocol'
 import { posix, win32 } from 'node:path'
 
-/** Windows symbol (does not distinguish large small write):C: / c: etc.. */
+/** Windows drive prefix (case-insensitive): `C:` / `c:`, etc. */
 const WINDOWS_DRIVE = /^[A-Za-z]:/
-/** Windows symbol each other for (C:relative / bare C:): semantics dependency process when before directory, target execute reject. */
+/** Windows drive-relative path (`C:rel` or bare `C:`): depends on per-drive process cwd and is rejected on target. */
 const WINDOWS_DRIVE_RELATIVE = /^[A-Za-z]:($|[^\\/])/
 
 /**
- * by shape choose node:path complete rule (kernel Node environment dedicated use:resolve/relative etc.
- * semantics dependency Node implement; term method sub- collection see @helm/protocol pathRulesForShape).
+ * Pick the full `node:path` rule set matching a path shape (kernel Node-only usage where `resolve`/`relative`
+ * depend on Node implementations; lexical subset lives in `@helm/protocol` `pathRulesForShape`).
  */
 export function nodePathForShape(shape: 'posix' | 'win32' | undefined): typeof posix | typeof win32 {
   return shape === 'win32' ? win32 : posix
 }
 
 /**
- * by target shape parse absolute path:base(conversation cwd) only act relative path base allow, absolute path and
- * ../ across directory all legal; symbol relative path (C:relative / bare C:) one rule reject (dependency process
- * cwd, semantics cannot pre- test).
+ * Resolve an absolute target path per target shape: `base` (conversation `cwd`) serves solely as the base for
+ * relative paths; absolute paths and `../` traversals are valid; Windows drive-relative paths (`C:rel` / bare `C:`)
+ * are always rejected (since process cwd semantics cannot be pre-verified).
  *
- * platform === 'win32'(target node platform known is Windows):base and absolute raw first via
- * protocol normalizeTargetPath do determinism specification (WSL /mnt/<symbol>,Git Bash
- * /<symbol>,//server/share POSIX view rotate specification Windows path; cannot mapping bare
- * POSIX explicit reject and keep original path), again by win32 rule parse each other for segment.platform
- * default (remote platform unknown): along use by shape choose rule since has semantics (do not guess platform),
- * Linux/macOS and remote POSIX semantics do not change.
+ * When `platform === 'win32'` (known Windows target): normalizes `base` and absolute `raw` deterministically via
+ * `@helm/protocol` `normalizeTargetPath` (converting WSL `/mnt/<drive>`, Git Bash `/<drive>`, and `//server/share`
+ * into canonical Windows paths; explicitly rejects unmappable bare POSIX roots while preserving original strings),
+ * then resolves relative segments with `win32` rules. When `platform` is omitted (unknown remote platform), keeps
+ * existing shape-based behavior without guessing (Linux/macOS and POSIX semantics remain unchanged).
  */
 export function resolveTargetPath(
   raw: string,
@@ -47,7 +44,7 @@ export function resolveTargetPath(
   platform?: TargetPlatform,
 ): { ok: true; abs: string } | { ok: false; reason: string } {
   if (WINDOWS_DRIVE.test(raw) && WINDOWS_DRIVE_RELATIVE.test(raw)) {
-    return { ok: false, reason: `symbol relative path dependency process when before directory, reject:${raw}` }
+    return { ok: false, reason: `Drive-relative path depends on per-process cwd and is rejected: ${raw}` }
   }
   if (platform === 'win32') {
     const baseN = normalizeTargetPath(base, 'win32')

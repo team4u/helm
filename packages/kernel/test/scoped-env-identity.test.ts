@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { createEnvFabric } from '../src/env/fabric.js'
 
-test('one by one invoke environment in managed identity large small write change body cannot override composer', { timeout: 60_000 }, async () => {
+test('per-invocation managed identity env vars cannot be overridden by caller case variants', { timeout: 60_000 }, async () => {
   const fabric = createEnvFabric({ envOptions: () => ({ HELM_TOKEN: 'managed', HELM_CONVERSATION_ID: '7' }) })
   try {
     const env = fabric.envForTarget({ nodeId: 'local', cwd: process.cwd(), conversationId: 7 })

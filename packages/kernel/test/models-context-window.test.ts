@@ -1,14 +1,14 @@
 /**
- * model directory contextWindow serialization and models.changed force complete link (real KernelRuntime + HTTP):
+ * Model catalog contextWindow serialization and models.changed backfill pipeline (real KernelRuntime + HTTP):
  *
- * 1. GET /api/models(and kernel.listModels same source): real known window carry contextWindow,
- *    static default (helmContextWindowKnown:false) and illegal window (Infinity) must omit;
- * 2. motion state provider directory change (reloadModels -> rebuild -> models.changed):idle conversation
- *    do not any new input, use amount cache via event set to force complete unknown->known / known->remove,
- *    summary via conversation.upsert can reach SSE and stateChangeSeq do not change;
- * 3. Magpie field parse itself do not in this test (magpie-plugin.test lock official field); this where model
- *    form align builtin:magpie toPiModel artifact: known window without mark record, unknown carry
- *    helmContextWindowKnown:false + keep guard default 128k.
+ * 1. GET /api/models (sharing source with kernel.listModels): includes contextWindow when truly known;
+ *    omits silently defaulted (helmContextWindowKnown: false) and invalid (Infinity) values;
+ * 2. Dynamic provider catalog updates (reloadModels -> rebuild -> models.changed): idle conversations
+ *    receive usage cache backfills via event subscription (unknown -> known / known -> cleared) with
+ *    no new user input; summaries deliver via SSE conversation.upsert without changing stateChangeSeq;
+ * 3. Magpie-specific field parsing is tested separately (magpie-plugin.test locks official fields);
+ *    here models mirror builtin:magpie toPiModel output (known windows carry no marker; unknown windows
+ *    carry helmContextWindowKnown: false + defensive 128k default).
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -18,10 +18,10 @@ import { KernelRuntime } from '../src/runtime/index.js'
 import { startHub } from '../src/http/index.js'
 import { makeFauxModels, useTempDir, waitFor } from './helpers.js'
 
-/** and HelmModelSourceMeta / PiMagpieModel same form: unknown window mark record follow model object pass-through. */
+/** Matches HelmModelSourceMeta / PiMagpieModel: unknown-window marker passes through via model objects. */
 type WindowedModel = Model<string> & { helmContextWindowKnown?: boolean }
 
-/** wait for designate ordinal after appear carry target window conversation.upsert(has boundary polling, never unbounded etc.). */
+/** Polls with bounded timeout until a conversation.upsert carrying expected window appears after afterIndex. */
 async function waitForUpsertWindow(
   upserts: ConversationSummary[],
   conversationId: number,
@@ -42,7 +42,7 @@ async function waitForUpsertWindow(
     }
     if (Date.now() > deadline) {
       throw new Error(
-        `8s inside not observe to conversation ${conversationId} window is ${String(expected)}  conversation.upsert` +
+        `did not observe conversation.upsert with contextWindow=${String(expected)} for conversation ${conversationId} within 8s ` +
           `(upserts=${JSON.stringify(upserts.map((s) => s.contextUsage))})`,
       )
     }
@@ -50,7 +50,7 @@ async function waitForUpsertWindow(
   }
 }
 
-test('directory contextWindow throw shadow and models.changed force complete:unknown→known→remove,stateChangeSeq do not change', { timeout: 60_000 }, async (t) => {
+test('catalog contextWindow projection and models.changed backfill: unknown -> known -> cleared, keeping stateChangeSeq unchanged', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-models-window-')
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   let kernel: KernelRuntime | undefined
@@ -62,7 +62,7 @@ test('directory contextWindow throw shadow and models.changed force complete:unk
       if (event.type === 'conversation.upsert' && event.conversation) upserts.push(event.conversation)
     })
 
-    // motion state provider (form align Magpie toPiModel artifact): directory array can swap = simulated directory refresh.
+    // Dynamic provider (matching Magpie toPiModel output): mutable array simulates catalog refresh.
     const { faux } = makeFauxModels({ provider: 'win', models: [{ id: 'm-ctx' }, { id: 'm-bad' }] })
     const unknownModel: WindowedModel = { ...faux.getModel('m-ctx')!, contextWindow: 128_000, helmContextWindowKnown: false }
     const badModel: WindowedModel = { ...faux.getModel('m-bad')!, contextWindow: Number.POSITIVE_INFINITY }
@@ -75,14 +75,14 @@ test('directory contextWindow throw shadow and models.changed force complete:unk
     } as unknown as Provider
     const unregister = await kernel.registerRuntimeProvider(provider, 'builtin:demo')
 
-    // HTTP directory regression: and kernel.listModels same source. first create authentication (first time start establish token).
+    // HTTP catalog check (sharing source with kernel.listModels). Initialize auth first to obtain token.
     hub = await startHub({ kernel, port: 0 })
     const setup = await fetch(`${hub.url}/api/auth/setup`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ password: 'fixture-window-pass' }),
     })
-    assert.ok(setup.status === 200 || setup.status === 409, `auth setup unexpected state ${setup.status}`)
+    assert.ok(setup.status === 200 || setup.status === 409, `unexpected auth setup status ${setup.status}`)
     let token = setup.status === 200 ? ((await setup.json()) as { token: string }).token : undefined
     if (token === undefined) {
       const login = await fetch(`${hub.url}/api/auth/login`, {
@@ -90,7 +90,7 @@ test('directory contextWindow throw shadow and models.changed force complete:unk
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ password: 'fixture-window-pass' }),
       })
-      assert.equal(login.status, 200, 'setup already config when login must succeeded')
+      assert.equal(login.status, 200, 'login should succeed when auth is already configured')
       token = ((await login.json()) as { token: string }).token
     }
     const httpModels = async (): Promise<Array<Record<string, unknown>>> => {
@@ -101,35 +101,35 @@ test('directory contextWindow throw shadow and models.changed force complete:unk
     const httpEntry = async (modelId: string): Promise<Record<string, unknown> | undefined> =>
       (await httpModels()).find((entry) => entry['provider'] === 'win' && entry['modelId'] === modelId)
 
-    // initial directory: unknown window and illegal window all must omit contextWindow.
-    assert.equal('contextWindow' in ((await httpEntry('m-ctx')) ?? {}), false, 'static default window must not appear in HTTP directory')
-    assert.equal('contextWindow' in ((await httpEntry('m-bad')) ?? {}), false, 'non- finite window must not appear in HTTP directory')
+    // Initial catalog: unknown and invalid contextWindow must both be omitted.
+    assert.equal('contextWindow' in ((await httpEntry('m-ctx')) ?? {}), false, 'silently defaulted window must not appear in HTTP catalog')
+    assert.equal('contextWindow' in ((await httpEntry('m-bad')) ?? {}), false, 'non-finite window must not appear in HTTP catalog')
 
-    // conversation bind set m-ctx; detail read returns non-blockingly and schedules background usage refresh: window unknown (tokens estimate compute still in).
+    // Bind conversation to m-ctx; detail read is non-blocking and triggers async usage refresh (tokens known, window unknown).
     const created = await kernel.createConversation({ model: 'win/m-ctx' })
     const id = created.id
     const initialDetail = await kernel.getConversationDetail(id)
     await waitFor(() => kernel!.getConversation(id).contextUsage !== undefined, 10_000)
     const settledInitialDetail = await kernel.getConversationDetail(id)
-    assert.ok(settledInitialDetail.contextUsage, 'detail situation read must carry use amount estimate compute')
-    assert.equal(settledInitialDetail.contextUsage?.contextWindow, undefined, 'initial directory window unknown')
+    assert.ok(settledInitialDetail.contextUsage, 'detail read should include estimated token usage')
+    assert.equal(settledInitialDetail.contextUsage?.contextWindow, undefined, 'initial catalog window is unknown')
     const seqBefore = initialDetail.stateChangeSeq
 
-    // directory refresh: same model unknown→known.idle conversation do not new input, use amount via models.changed force complete.
+    // Catalog refresh: same model transitions unknown -> known; idle conversation usage is backfilled via models.changed.
     current = [knownModel, badModel]
     await kernel.reloadModels()
     await waitForUpsertWindow(upserts, id, 0, 400_000)
     const knownDetail = await kernel.getConversationDetail(id)
-    assert.equal(knownDetail.contextUsage?.contextWindow, 400_000, 'refresh after window append complete')
-    assert.equal(knownDetail.stateChangeSeq, seqBefore, 'usage-only must not push enter stateChangeSeq')
-    assert.equal((await httpEntry('m-ctx'))!['contextWindow'], 400_000, 'HTTP directory carry real known window')
+    assert.equal(knownDetail.contextUsage?.contextWindow, 400_000, 'window is backfilled after refresh')
+    assert.equal(knownDetail.stateChangeSeq, seqBefore, 'usage-only update must not advance stateChangeSeq')
+    assert.equal((await httpEntry('m-ctx'))!['contextWindow'], 400_000, 'HTTP catalog exposes known window')
 
-    // provider no longer supply should model: window restore unknown and can reach SSE.
+    // Provider stops offering model: window reverts to undefined and broadcasts to SSE.
     const afterKnown = upserts.length
     current = [badModel]
     await kernel.reloadModels()
     await waitForUpsertWindow(upserts, id, afterKnown, undefined)
-    assert.equal((await kernel.getConversationDetail(id)).contextUsage?.contextWindow, undefined, 'model remove after window restore unknown')
+    assert.equal((await kernel.getConversationDetail(id)).contextUsage?.contextWindow, undefined, 'window reverts to unknown after model disappears')
 
     await unregister()
   } finally {

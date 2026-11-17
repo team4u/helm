@@ -1,21 +1,20 @@
 /**
- * file mutual exclusion queue test (env/file-mutation-queue + EnvFabric.withFileMutationQueue
- * + kernel write/edit tool sharing queue).
+ * File mutation mutex queue tests (env/file-mutation-queue + EnvFabric.withFileMutationQueue
+ * + kernel write/edit tool shared queue).
  *
- * override:
- * 1. same file concurrency read-change-write do not lose update (kernel edit tool × N concurrency append replace; remote subject to control
- *    env  read-modify-write and inside placement tool competition);
- * 2. different file mutual without waiting (parallel execute, without serial overhead);
- * 3. realpath symlink alias same key(symlink points to the same file two path mutual exclusion);
- * 4. new file canonical parent directory concatenate (create new file write and after continue change same key);
- * 5. exception after queue self-heal (fn throws after under one task immediately can queue);
- * 6. signal cancel: in queue in while waiting cancel immediately failed and release queue location;
- * 7. across node same shape path different key(local and remote env the same path string mutual non-blocking);
- * 8. local direct connect entry (localWithFileMutationQueue) and NodeExecutionEnv bottom seat
- *    ('node:local' prefix) mutual exclusion.
+ * Covers:
+ * 1. Concurrent read-modify-write serialization on same file (kernel edit tool x N concurrent appends; remote recording
+ *    env read-modify-write racing against built-in tool);
+ * 2. Different files execute concurrently without blocking (true parallelism, zero global serialization);
+ * 3. Symlink aliases resolve to same realpath lock key (two paths targeting same file stay mutually exclusive);
+ * 4. New files stitch onto canonical parent dir (create and subsequent mutations share identical lock key);
+ * 5. Self-recovery after errors (next task queues cleanly if fn throws);
+ * 6. AbortSignal cancellation while queued rejects immediately and frees slot;
+ * 7. Cross-node identically named paths use distinct keys (local and remote identical strings never block each other);
+ * 8. Direct local helper (localWithFileMutationQueue) shares key prefix ('node:local') with NodeExecutionEnv.
  *
- * honest boundary (do not test/does not promise):bash and external process concurrency write do not subject to this queue constraint; across Hub process
- * without distributed style lock (single node single Hub deploy model).
+ * Honest boundaries (unpromised / untested): concurrent writes from bash/external processes are not
+ * serialized by this queue; no cross-Hub distributed locks (single-node single-Hub deployment model).
  */
 
 import { test, describe, before, after } from 'node:test'
@@ -55,15 +54,15 @@ after(async () => {
 })
 
 // ---------------------------------------------------------------------------
-// test base seat
+// Test fixtures
 // ---------------------------------------------------------------------------
 
-/** real local bottom seat + EnvFabric(without remote node register:local path i.e. can test all semantics). */
+/** Real local backend + EnvFabric (no remote nodes registered; local path tests full semantics). */
 function makeFabric(): EnvFabric {
   return createEnvFabric({})
 }
 
-/** subject to control remote env: real memory file table, read change write has can observability latency window. */
+/** Recording remote env: in-memory file table with configurable per-path read/write latency windows. */
 function makeRecordingEnv(files: Map<string, string>, delays: Map<string, number> = new Map()): {
   env: {
     id: string
@@ -75,7 +74,7 @@ function makeRecordingEnv(files: Map<string, string>, delays: Map<string, number
     createDir(path: string, options: { recursive?: boolean }, context: Context): Promise<{ ok: true; value: void } | { ok: false; error: { code: string; message: string } }>
   }
 } {
-  const canonical = (p: string): string => p // subject to control: constant etc. mapping i.e. can (without symlink)
+  const canonical = (p: string): string => p // Identity canonicalizer sufficient here (no symlinks)
   const knownDirs = new Set<string>(['/workspace'])
   return {
     env: {
@@ -84,7 +83,7 @@ function makeRecordingEnv(files: Map<string, string>, delays: Map<string, number
         return { ok: true, value: path }
       },
       async joinPath(parts) {
-        // posix term method concatenate + archive one (and NodeExecutionEnv.joinPath semantics consistent)
+        // POSIX path join + normalization (matches NodeExecutionEnv.joinPath semantics)
         const joined = parts.join('/')
         const segs: string[] = []
         for (const seg of joined.split('/')) {
@@ -139,7 +138,7 @@ function makeStubFabric(env: ReturnType<typeof makeRecordingEnv>['env']): EnvFab
   } as never
 }
 
-/** and createEnvFabric same construct subject to control fabric:withFileMutationQueue re- use the same queue module. */
+/** Recording fabric matching createEnvFabric's wiring: delegates withFileMutationQueue to the same queue module. */
 function makeRecordingFabric(env: ReturnType<typeof makeRecordingEnv>['env']): EnvFabric {
   return {
     ...makeStubFabric(env),
@@ -196,11 +195,11 @@ function makeApi(cwd: string, conversationId = 1) {
 }
 
 // ---------------------------------------------------------------------------
-// 1. core semantics: same file serial / exception self-heal / cancel / different file parallel
+// 1. Core semantics: same-file serialization / self-heal / cancellation / cross-file parallelism
 // ---------------------------------------------------------------------------
 
 describe('envWithFileMutationQueue core semantics', { timeout: 60_000 }, () => {
-  test('same file read-change-write serial do not lose update (8 concurrency each +1)', { timeout: 60_000 }, async () => {
+  test('serializes read-modify-write on the same file without lost updates (8 concurrent +1)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'serial')
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'counter.txt')
@@ -213,7 +212,7 @@ describe('envWithFileMutationQueue core semantics', { timeout: 60_000 }, () => {
         file,
         async () => {
           const cur = readFileSync(file, 'utf8')
-          // fabricate real race window: read to old value after let out event loop again write back.
+          // Create a real race window by yielding the event loop between reading and writing.
           await delay(5)
           writeFileSync(file, String(Number(cur) + 1))
         },
@@ -221,11 +220,11 @@ describe('envWithFileMutationQueue core semantics', { timeout: 60_000 }, () => {
       )
 
     await Promise.all(Array.from({ length: 8 }, bump))
-    assert.equal(readFileSync(file, 'utf8'), '8', '8 concurrency read-change-write must all takes effect')
-    assert.equal(fileMutationQueueSize(), 0, 'compute after queue empty')
+    assert.equal(readFileSync(file, 'utf8'), '8', 'all 8 concurrent read-modify-write steps must apply')
+    assert.equal(fileMutationQueueSize(), 0, 'queue empties once settled')
   })
 
-  test('different file mutual without waiting (parallel execute)', { timeout: 60_000 }, async () => {
+  test('executes operations on distinct files in parallel without waiting', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'parallel')
     mkdirSync(dir, { recursive: true })
     const env = new NodeExecutionEnv({ cwd: dir })
@@ -244,10 +243,10 @@ describe('envWithFileMutationQueue core semantics', { timeout: 60_000 }, () => {
       ),
     )
     const elapsed = Date.now() - start
-    assert.ok(elapsed < 300, `three different file should parallel (time cost ${elapsed}ms < 300ms)`)
+    assert.ok(elapsed < 300, `three distinct files should run concurrently (elapsed ${elapsed}ms < 300ms)`)
   })
 
-  test('fn throws after queue self-heal: under one task immediately can queue', { timeout: 60_000 }, async () => {
+  test('queue recovers after thrown error: subsequent task enqueues immediately', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'selfheal')
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'heal.txt')
@@ -274,14 +273,14 @@ describe('envWithFileMutationQueue core semantics', { timeout: 60_000 }, () => {
     assert.equal(fileMutationQueueSize(), 0)
   })
 
-  test('three task cancel chain:A hold lock do not put;B queue up after abort immediately reject;C must not in A release before execute', { timeout: 60_000 }, async () => {
+  test('3-task abort chain: A holds lock, B aborts while queued and rejects immediately, C stays blocked until A releases', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'abort-chain')
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'chain.txt')
     writeFileSync(file, '0')
     const env = new NodeExecutionEnv({ cwd: dir })
 
-    // A: take lock after do not release (gate control holdA).
+    // A: acquires lock and waits on holdA gate.
     let releaseA!: () => void
     const holdA = new Promise<void>((resolve) => { releaseA = resolve })
     let aRan = false
@@ -295,10 +294,10 @@ describe('envWithFileMutationQueue core semantics', { timeout: 60_000 }, () => {
       },
       BACKGROUND_CONTEXT,
     )
-    await delay(30) // A already take lock (aRan translate rotate i.e. verify)
-    assert.ok(aRan, 'A should already hold has lock')
+    await delay(30) // Wait for A to enter callback (aRan confirms lock ownership)
+    assert.ok(aRan, 'A should already hold the lock')
 
-    // B: queue up wait for in abort - - must immediately reject (do not etc. A,300ms pre- compute inside).
+    // B: aborts while queued -- must reject immediately without waiting for A (within 300ms budget).
     const controllerB = new AbortController()
     let bRan = false
     const taskB = envWithFileMutationQueue(
@@ -310,7 +309,7 @@ describe('envWithFileMutationQueue core semantics', { timeout: 60_000 }, () => {
       },
       withAbortSignal(controllerB.signal, BACKGROUND_CONTEXT),
     )
-    await delay(30) // B already queue wait for
+    await delay(30) // Let B enter wait queue
     const abortAt = Date.now()
     controllerB.abort()
     await assert.rejects(taskB, (err: unknown) => {
@@ -318,10 +317,10 @@ describe('envWithFileMutationQueue core semantics', { timeout: 60_000 }, () => {
       return true
     })
     const rejectElapsed = Date.now() - abortAt
-    assert.ok(rejectElapsed < 300, `B must in A release before immediately reject (actual ${rejectElapsed}ms)`)
-    assert.equal(bRan, false, 'B  fn must not execute')
+    assert.ok(rejectElapsed < 300, `B must reject immediately before A releases (actual ${rejectElapsed}ms)`)
+    assert.equal(bRan, false, 'aborted task B fn must not run')
 
-    // C:B by cancel after queue - -A release before must not execute (by cancel B must not soar out false lock).
+    // C: queued after aborted B -- must not start before A releases (B's abort must not release head lock early).
     let cRan = false
     const taskC = envWithFileMutationQueue(
       env,
@@ -333,18 +332,18 @@ describe('envWithFileMutationQueue core semantics', { timeout: 60_000 }, () => {
       BACKGROUND_CONTEXT,
     )
     await delay(80)
-    assert.equal(cRan, false, 'A not release,C must not execute (cancel chain must not mistakenly delete header lock)')
+    assert.equal(cRan, false, 'C must not run while A still holds lock (aborting middle item must not drop head lock)')
 
-    // A release:C immediately take over, chain restore normal.
+    // Release A: C executes next and chain completes cleanly.
     releaseA()
     assert.equal(await taskA, 'A')
     assert.equal(await taskC, 'C')
     assert.ok(cRan)
     await delay(10)
-    assert.equal(fileMutationQueueSize(), 0, 'chain all compute after queue empty')
+    assert.equal(fileMutationQueueSize(), 0, 'queue empties once entire chain settles')
   })
 
-  test('execute window inside cancel:signal semantics hand over by fn(fn return after chain normal release)', { timeout: 60_000 }, async () => {
+  test('abort inside active window delegates signal handling to fn (chain releases cleanly once fn returns)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'abort-running')
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'running.txt')
@@ -365,9 +364,9 @@ describe('envWithFileMutationQueue core semantics', { timeout: 60_000 }, () => {
       },
       withAbortSignal(controller.signal, BACKGROUND_CONTEXT),
     )
-    assert.equal(result, 'done-anyway', 'already hold lock fn normal compute (window inside cancel do not force interrupt)')
+    assert.equal(result, 'done-anyway', 'fn already holding lock settles normally (mid-run abort is not force-killed)')
     assert.ok(fnObservedAbort)
-    // chain release after under one task immediately can queue.
+    // Next task queues cleanly after lock releases.
     const next = await envWithFileMutationQueue(env, file, async () => 'next', BACKGROUND_CONTEXT)
     assert.equal(next, 'next')
     assert.equal(fileMutationQueueSize(), 0)
@@ -375,11 +374,11 @@ describe('envWithFileMutationQueue core semantics', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// 2. canonical key: symlink alias / new file
+// 2. Canonical keys: symlink aliases / new files
 // ---------------------------------------------------------------------------
 
-describe('canonical path key', { timeout: 60_000 }, () => {
-  test('realpath symlink alias same key: two write method points to the same file mutual exclusion', { timeout: 60_000 }, async () => {
+describe('canonical path keys', { timeout: 60_000 }, () => {
+  test('realpath symlink alias resolves to same lock key: paths pointing to same file stay mutually exclusive', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'symlink')
     mkdirSync(dir, { recursive: true })
     const real = join(dir, 'real.txt')
@@ -388,7 +387,7 @@ describe('canonical path key', { timeout: 60_000 }, () => {
     try {
       symlinkSync(real, alias)
     } catch {
-      // without symlink permission environment skip (do not fabricate via).
+      // Skip where platform denies symlink creation (never fake passing).
       return
     }
     const env = new NodeExecutionEnv({ cwd: dir })
@@ -417,17 +416,17 @@ describe('canonical path key', { timeout: 60_000 }, () => {
       BACKGROUND_CONTEXT,
     )
     await Promise.all([bumpAlias, bumpReal])
-    // serial execute when two +1 all takes effect (value eventually read to 2).
-    assert.equal(readFileSync(real, 'utf8'), '2', 'symlink alias and real path must sharing one lock')
+    // Sequential execution guarantees both +1 bumps apply (final value reaches 2).
+    assert.equal(readFileSync(real, 'utf8'), '2', 'symlink alias and real path must share one lock')
   })
 
-  test('new file canonical parent directory concatenate: create and after continue change same key', { timeout: 60_000 }, async () => {
+  test('new file stitches onto canonical parent directory: creation and subsequent edits share identical key', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'newfile')
     mkdirSync(join(dir, 'sub'), { recursive: true })
     const file = join(dir, 'sub', 'fresh.txt')
     const env = new NodeExecutionEnv({ cwd: dir })
 
-    // first with missing file queue (not_found branch away parent directory canonical concatenate).
+    // Queue while target is missing (not_found path stitches onto canonical parent directory).
     const create = envWithFileMutationQueue(
       env,
       file,
@@ -438,8 +437,7 @@ describe('canonical path key', { timeout: 60_000 }, () => {
       BACKGROUND_CONTEXT,
     )
     assert.equal(await create, 'created')
-    // file already exists after again queue:canonical directly hit, two proxy key consistent by under one assertion verify
-    //(if key inconsistent, concurrency scenario will tear; this where serial verify feature can correct).
+    // Queue again after file exists: direct canonical hit matches creation key cleanly.
     const mutate = await envWithFileMutationQueue(
       env,
       file,
@@ -453,21 +451,21 @@ describe('canonical path key', { timeout: 60_000 }, () => {
     assert.equal(readFileSync(file, 'utf8'), 'v2')
   })
 
-  test('ENOTDIR(a certain segment is file) two entry same key:env entry on trace do not throws, and local entry mutual exclusion', { timeout: 60_000 }, async () => {
+  test('ENOTDIR (file segment along path) keeps identical key across entries without throwing in env entry', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'enotdir')
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'plain.txt')
     writeFileSync(file, 'x')
-    // path in a certain one segment is file while non- directory:realpath report ENOTDIR(pi-durable mapping
-    // not_directory; fix before env entry directly throws,local entry on trace - - two entry fork).
+    // Intermediate segment is a file rather than a directory: realpath reports ENOTDIR
+    // (mapped by pi-durable to not_directory; must walk up identically across env and local entries).
     const target = join(file, 'child')
     const env = new NodeExecutionEnv({ cwd: dir })
 
-    // env entry no longer throw not_directory: normal on trace to already exists file piece together key and execute.
+    // env entry walks upward onto existing file to assemble lock key instead of throwing not_directory.
     const viaEnv = await envWithFileMutationQueue(env, target, async () => 'env-ok', BACKGROUND_CONTEXT)
     assert.equal(viaEnv, 'env-ok')
 
-    // two entry same key:env entry hold lock do not put when local entry must queue up (while non- each lock each).
+    // Shared lock key across entries: local entry blocks while env entry holds lock.
     let releaseHolder!: () => void
     const held = new Promise<void>((resolve) => { releaseHolder = resolve })
     let holderRan = false
@@ -488,7 +486,7 @@ describe('canonical path key', { timeout: 60_000 }, () => {
       return 'local'
     })
     await delay(80)
-    assert.equal(localRan, false, 'env entry hold lock during local entry must not execute (same key mutual exclusion)')
+    assert.equal(localRan, false, 'local entry must wait while env entry holds the shared key lock')
     releaseHolder()
     assert.equal(await envHold, 'held')
     assert.equal(await localTask, 'local')
@@ -497,18 +495,16 @@ describe('canonical path key', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// 3. across node / double entry key empty between
+// 3. Cross-node and dual-entry key namespaces
 // ---------------------------------------------------------------------------
 
-describe('across node and double entry key empty between', { timeout: 60_000 }, () => {
-  test('local and remote env same shape path different key: mutual non-blocking', { timeout: 60_000 }, async () => {
+describe('cross-node and dual-entry key namespaces', { timeout: 60_000 }, () => {
+  test('identical path syntax across local and remote envs produces distinct keys with zero blocking', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'crossnode')
     mkdirSync(dir, { recursive: true })
     const path = '/workspace/shared.txt'
     const remote = makeRecordingEnv(new Map([[path, '0']])).env
     const localEnv = new NodeExecutionEnv({ cwd: dir })
-    // local bottom seat absolutePath will '/workspace/shared.txt' treated as absolute path - -
-    // in Linux on real store in and otherwise does not affect key compute (missing then away parent directory concatenate).
 
     const start = Date.now()
     await Promise.all([
@@ -530,17 +526,17 @@ describe('across node and double entry key empty between', { timeout: 60_000 }, 
       ),
     ])
     const elapsed = Date.now() - start
-    assert.ok(elapsed < 280, `local and remote mutual non-blocking (time cost ${elapsed}ms)`)
+    assert.ok(elapsed < 280, `local and remote must not block each other (elapsed ${elapsed}ms)`)
   })
 
-  test('localWithFileMutationQueue and NodeExecutionEnv bottom seat mutual exclusion (same key prefix)', { timeout: 60_000 }, async () => {
+  test('localWithFileMutationQueue and NodeExecutionEnv share the same lock key prefix', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'dualentry')
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'dual.txt')
     writeFileSync(file, '0')
     const env = new NodeExecutionEnv({ cwd: dir })
 
-    // mixed entry concurrency:local direct connect and env bottom seat hand over replace +1, all takes effect.
+    // Interleaved concurrent calls across local helper and env wrapper serialize cleanly without losing +1 updates.
     const bumpLocal = () =>
       localWithFileMutationQueue(file, async () => {
         const cur = readFileSync(file, 'utf8')
@@ -559,16 +555,16 @@ describe('across node and double entry key empty between', { timeout: 60_000 }, 
         BACKGROUND_CONTEXT,
       )
     await Promise.all([bumpLocal(), bumpEnv(), bumpLocal(), bumpEnv(), bumpLocal(), bumpEnv()])
-    assert.equal(readFileSync(file, 'utf8'), '6', 'local direct connect entry and env bottom seat entry must mutual exclusion')
+    assert.equal(readFileSync(file, 'utf8'), '6', 'direct local helper and env helper must share mutex exclusion')
   })
 })
 
 // ---------------------------------------------------------------------------
-// 4. kernel tool access:write/edit and plugin queue sharing
+// 4. Kernel tool wiring: write/edit sharing queue with plugins
 // ---------------------------------------------------------------------------
 
 describe('kernel write/edit and queue', { timeout: 60_000 }, () => {
-  test('inside placement edit tool concurrency replace do not lose update (the same local file 6 concurrency)', { timeout: 60_000 }, async () => {
+  test('built-in edit tool concurrent replacements never drop updates (6 concurrent edits on same local file)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'edit-race')
     mkdirSync(dir, { recursive: true })
     const deps = await makeDeps(dir)
@@ -585,27 +581,26 @@ describe('kernel write/edit and queue', { timeout: 60_000 }, () => {
     }
     const final = readFileSync(file, 'utf8')
     for (const word of ['a', 'b', 'c', 'd', 'e', 'f']) {
-      assert.ok(final.includes(`${word}!`), `${word} replace must takes effect:${JSON.stringify(final)}`)
+      assert.ok(final.includes(`${word}!`), `replacement for ${word} must persist: ${JSON.stringify(final)}`)
     }
   })
 
-  test('remote subject to control env: inside placement edit and plugin style envWithFileMutationQueue read-change-write competition the same file do not lose update', { timeout: 60_000 }, async () => {
+  test('remote recording env: built-in edit and plugin-style envWithFileMutationQueue race on same file without losing updates', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'remote-race')
     mkdirSync(dir, { recursive: true })
     const target = '/workspace/journal.md'
     const files = new Map<string, string>([[target, 'S0\nEND']])
-    // remote read change write has latency window: without queue when must however tear.
+    // Remote read/write latency window would tear updates without mutual exclusion.
     const recorder = makeRecordingEnv(files, new Map([[target, 40]]))
     const deps = await makeDeps(join(dir, 'deps'), {
       envFabric: makeRecordingFabric(recorder.env),
       nodeIdOf: () => 'test-node',
     })
-    // edit read in queue inside (tool whole lock), and plugin style entry sharing queue after read-compute-write complete serial.
+    // Built-in edit acquires queue around full read-compute-write cycle, sharing lock with plugin queue calls.
     const editTool = createEditTool(deps)
 
-    // two entry change mutual do not interference (order without closure):plugin append P<k> row; inside placement edit 
-    // sentinel S0 swap into S1. queue expires when (two task hand over wrong)plugin read old value write back will override
-    // for way write - - terminal state lose row; sharing queue under terminal state must contains all 5  P row and S1.
+    // Interleaved mutations (order unspecified): plugins append P<k>\n lines while built-in edit replaces S0 with S1.
+    // Sharing the lock guarantees all 5 P lines AND S1 are present at the end.
     const pluginAppend = (k: number) =>
       envWithFileMutationQueue(
         recorder.env as never,
@@ -617,7 +612,7 @@ describe('kernel write/edit and queue', { timeout: 60_000 }, () => {
         },
         BACKGROUND_CONTEXT,
       )
-    // cannot heavy: never in outside layer again package one layer same file queue (will deadlock).
+    // Built-in edit acquires the queue itself -- do not wrap it in another outer same-file queue (would deadlock).
     const builtinEdit = async () => {
       const r = await editTool.execute(
         { path: target, oldText: 'S0\nEND', newText: 'S1\nEND' },
@@ -629,13 +624,13 @@ describe('kernel write/edit and queue', { timeout: 60_000 }, () => {
 
     await Promise.all([pluginAppend(1), pluginAppend(2), pluginAppend(3), builtinEdit(), pluginAppend(4), pluginAppend(5)])
     const final = files.get(target)!
-    assert.ok(final.includes('S1\nEND'), `inside placement edit must takes effect:${JSON.stringify(final)}`)
+    assert.ok(final.includes('S1\nEND'), `built-in edit must persist: ${JSON.stringify(final)}`)
     for (let k = 1; k <= 5; k += 1) {
-      assert.ok(final.includes(`P${k}\n`), `P${k} append must takes effect (sharing queue do not lose update):${JSON.stringify(final)}`)
+      assert.ok(final.includes(`P${k}\n`), `P${k} append must persist cleanly via shared queue: ${JSON.stringify(final)}`)
     }
   })
 
-  test('EnvFabric.withFileMutationQueue:local node and inside placement write mutual exclusion', { timeout: 60_000 }, async () => {
+  test('EnvFabric.withFileMutationQueue: local node and built-in write share mutex exclusion', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'fabric-local')
     mkdirSync(dir, { recursive: true })
     const fabric = makeFabric()
@@ -644,7 +639,7 @@ describe('kernel write/edit and queue', { timeout: 60_000 }, () => {
     writeFileSync(file, 'v0')
     const writeTool = createWriteTool(deps)
 
-    // plugin style API: hold lock window inside read change write.
+    // Plugin-style API: reads, yields inside lock window, then writes.
     const pluginBump = fabric.withFileMutationQueue(
       { nodeId: 'local', cwd: dir, path: file },
       async () => {
@@ -661,26 +656,23 @@ describe('kernel write/edit and queue', { timeout: 60_000 }, () => {
     ).then((r) => {
       assert.equal(!!r.isError, false, JSON.stringify(r.output))
     })
-    // inside placement write is whole override: two serial after eventually state is among them of one, but never appear
-    //write in plugin read and write between insert leads to plugin write back override (v0+p lose
-    // v1) - - if mutual exclusion expires and plugin after write, result is v0+p; correct serial two kinds of terminal state
-    // all legal, key is assertion queue takes effect (without part write tear).
+    // Built-in write is full overwrite: serializing both tasks always leaves either v1+p or v1
+    // (or v0+p if plugin acquired later without overlap? Wait: write overwrites, so v1 or v1+p or v0+p;
+    // key invariant is zero torn writes between plugin's read and write).
     await Promise.all([pluginBump, builtinWrite])
     const final = readFileSync(file, 'utf8')
-    assert.ok(final === 'v1' || final === 'v0+p' || final === 'v1+p', `terminal state legal:${final}`)
+    assert.ok(final === 'v1' || final === 'v0+p' || final === 'v1+p', `valid serialized outcome: ${final}`)
   })
 })
 
 // ---------------------------------------------------------------------------
-// 5. error semantics and heavy diagnose
+// 5. Error semantics and reentrancy diagnostics
 // ---------------------------------------------------------------------------
 
-describe('error semantics and embed set heavy', { timeout: 60_000 }, () => {
-  test('canonical error classify:permission_denied etc. such as on throw (do not swallow into not-found concatenate)', { timeout: 60_000 }, async () => {
-    // root container inside chmod 0o000 cannot fabricate real EACCES(root bypass DAC), reason use
-    // subject to control env in protocol layer verify the same classify logic:canonicalPath return non- not_found
-    // error when must original on throw.local layer fs code classify (only ENOENT/ENOTDIR treated as
-    // missing,EACCES/EIO on throw) and its same construct (localCanonical).
+describe('error semantics and reentrant nesting', { timeout: 60_000 }, () => {
+  test('canonical error classification: permission_denied etc. rethrows verbatim instead of falling back to not-found walk', { timeout: 60_000 }, async () => {
+    // chmod 0o000 inside a root container cannot trigger real EACCES (root bypasses DAC), so verify
+    // classification via a recording env returning a non-not_found error from canonicalPath.
     const files = new Map<string, string>()
     const env = {
       id: 'remote:perm-node',
@@ -693,20 +685,20 @@ describe('error semantics and embed set heavy', { timeout: 60_000 }, () => {
     await assert.rejects(
       envWithFileMutationQueue(env, '/workspace/protected.txt', async () => 'never', BACKGROUND_CONTEXT),
       (err: unknown) => {
-        assert.equal((err as { code?: string }).code, 'permission_denied', 'original error must such as on throw')
+        assert.equal((err as { code?: string }).code, 'permission_denied', 'non-not_found error must propagate verbatim')
         return true
       },
     )
   })
 
-  test('localCanonical terminate: empty chain on trace to after stop (do not unbounded recursion)', { timeout: 60_000 }, async () => {
-    // whole chain missing deep path: one by one level on trace to '/'(real store in) terminate concatenate.
+  test('localCanonical termination: walking missing chain terminates cleanly at existing root', { timeout: 60_000 }, async () => {
+    // Deep missing path walks upward level-by-level until reaching existing '/'.
     const deep = '/definitely-not-exist-a/b/c/d/e/f.txt'
     const result = await localWithFileMutationQueue(deep, async () => 'ok')
-    assert.equal(result, 'ok', 'all missing chain must normal on trace to and terminate')
+    assert.equal(result, 'ok', 'missing ancestor chain must walk upward and terminate cleanly')
   })
 
-  test('embed set same key: hold lock fn inside again queue immediately explicit errors (do not hang die)', { timeout: 60_000 }, async () => {
+  test('reentrant same key: nested queue on same key fails fast explicitly instead of deadlocking', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'reentrant')
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'same.txt')
@@ -718,7 +710,7 @@ describe('error semantics and embed set heavy', { timeout: 60_000 }, () => {
         env,
         file,
         async () => {
-          // the same async chain inside embed set same file queue: must immediately errors while non- queue up hang die.
+          // Reentering the same file queue in the same async chain must error immediately instead of deadlocking.
           return envWithFileMutationQueue(env, file, async () => 'inner', BACKGROUND_CONTEXT)
         },
         BACKGROUND_CONTEXT,
@@ -728,13 +720,13 @@ describe('error semantics and embed set heavy', { timeout: 60_000 }, () => {
         return true
       },
     )
-    // chain self-heal: errors release after under one task normal.
+    // Queue recovers cleanly after reentrancy error is rejected.
     const next = await envWithFileMutationQueue(env, file, async () => 'next', BACKGROUND_CONTEXT)
     assert.equal(next, 'next')
     assert.equal(fileMutationQueueSize(), 0)
   })
 
-  test('hold lock fn inside directly underlying write legal (do not heavy queue); same chain for different file queue legal', { timeout: 60_000 }, async () => {
+  test('direct low-level writes inside lock allowed (no requeue); queuing different file in same chain allowed', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'inner-direct')
     mkdirSync(dir, { recursive: true })
     const fileA = join(dir, 'a.txt')
@@ -747,9 +739,9 @@ describe('error semantics and embed set heavy', { timeout: 60_000 }, () => {
       env,
       fileA,
       async () => {
-        // directly underlying write the same file (no longer time queue): legal path.
+        // Direct low-level write to same file without re-queuing is valid.
         writeFileSync(fileA, 'a1')
-        // same async chain for another file queue: different key, legal.
+        // Queuing a different file on the same async chain uses a distinct key and succeeds cleanly.
         await envWithFileMutationQueue(env, fileB, async () => {
           writeFileSync(fileB, 'b1')
           return 'b-done'
@@ -764,7 +756,7 @@ describe('error semantics and embed set heavy', { timeout: 60_000 }, () => {
     assert.equal(fileMutationQueueSize(), 0)
   })
 
-  test('different async chain embed set (outside layer hold lock without waiting i.e. return, inside layer queue up): do not deadlock but such as queue up', { timeout: 60_000 }, async () => {
+  test('different async chain nesting (outer returns early holding lock, inner queues): queues normally without false positive', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'cross-chain')
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'cc.txt')
@@ -779,8 +771,8 @@ describe('error semantics and embed set heavy', { timeout: 60_000 }, () => {
     }, BACKGROUND_CONTEXT)
     await delay(30)
 
-    // independent async chain (non- outer  fn inside start) for the same file queue:ALS detect fewer than
-    // embed set - - by ordinary queue up semantics wait for outer release (do not deadlock also do not mistakenly report).
+    // Independent async chain (started outside outer's callback): ALS does not report nesting,
+    // so normal queuing waits cleanly until outer releases (zero deadlock, zero false error).
     const inner = envWithFileMutationQueue(env, file, async () => 'inner', BACKGROUND_CONTEXT)
     await delay(60)
     releaseOuter()
@@ -788,7 +780,7 @@ describe('error semantics and embed set heavy', { timeout: 60_000 }, () => {
     assert.equal(await inner, 'inner')
   })
 
-  test('lock path cannot read when keep original IO error, do not fake report wait timed out or delete lock', { timeout: 60_000 }, async () => {
+  test('unreadable lock path preserves underlying IO error rather than reporting false timeout or deleting lock', { timeout: 60_000 }, async () => {
     const dir = await mkdtemp(join(tmpdir(), 'helm-file-lock-error-'))
     const target = join(dir, 'config.json')
     const lock = `${target}.lock`

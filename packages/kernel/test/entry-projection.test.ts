@@ -1,11 +1,12 @@
 /**
- * entry-projection unit test (pure function, without IO):
- * - pi.system filter; signature strip (embed set/array/sharing reference do not change write input);
- * - security pure text tool-result truncate: head tail keep, message level truncated/totalChars/
- *   totalLines mark record,[Artifact] id= tail mark keep,details original pass-through do not exemption truncate;
- * - exemption: can parse JSON message seal (subagent/SubagentWorkflow structure result),
- *   threshold or fewer, non- pure text content;
- * - pageVisibleEntries:pi.system in page loop inside treated as invisible,limit = visible count.
+ * Unit tests for entry-projection (pure functions, zero I/O):
+ * - filters pi.system; strips signatures (nested objects/arrays/shared references never mutate input);
+ * - safe plaintext tool-result truncation: keeps head/tail, adds message-level truncated/totalChars/
+ *   totalLines markers, preserves trailing `[Artifact] id=...` tags, passes `details` through without
+ *   exempting content truncation;
+ * - exemptions: parseable JSON envelopes (subagent/SubagentWorkflow structured results), within
+ *   threshold, or non-plaintext content;
+ * - pageVisibleEntries: treats pi.system as invisible inside paging loop so limit counts visible items.
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -36,14 +37,14 @@ function toolResultEntry(text: string, extra: Record<string, unknown> = {}): Con
   }
 }
 
-test('pi.system filter; the rest kind original through out', { timeout: 60_000 }, () => {
+test('filters pi.system and passes other kinds through intact', { timeout: 60_000 }, () => {
   const system: ConversationEntry = { id: '1', kind: 'pi.system', data: { pos: 1 } }
   assert.equal(projectDetailEntry(system), undefined)
   const input: ConversationEntry = { id: '2', kind: 'helm.input', data: { id: 'i', text: 'hi' } }
   assert.deepEqual(projectDetailEntry(input), input)
 })
 
-test('signature strip:thinkingSignature/textSignature/thoughtSignature deep remove, the rest keep', { timeout: 60_000 }, () => {
+test('signature stripping: deep-removes thinkingSignature/textSignature/thoughtSignature while keeping everything else', { timeout: 60_000 }, () => {
   const entry: ConversationEntry = {
     id: '3',
     kind: 'pi.assistant',
@@ -66,20 +67,20 @@ test('signature strip:thinkingSignature/textSignature/thoughtSignature deep remo
   assert.equal('thinkingSignature' in content[0]!, false)
   assert.equal('textSignature' in content[1]!, false)
   assert.equal('thoughtSignature' in content[2]!, false)
-  // data is plugin/helm business JSON, may legal carry same name segment: signature strip only limit model payload
+  // entry.data carries plugin/helm business JSON that may legitimately reuse those field names: strip only targets model payload.
   assert.deepEqual((projected!.data as any).nested.deep[0], { textSignature: 'sig-4', keep: 1 })
-  // input do not by change write (SSE/database sharing the same record)
+  // Input object must remain unmutated (shared across SSE/DB).
   assert.deepEqual(entry, frozen)
-  // original message the rest field keep
+  // Other fields on original messages remain intact.
   assert.equal((content[2] as { name?: string }).name, 'bash')
 })
 
-test('stripEntrySignatures without signature when zero copy return original object', { timeout: 60_000 }, () => {
+test('stripEntrySignatures returns original object with zero copy when no signatures exist', { timeout: 60_000 }, () => {
   const entry: ConversationEntry = { id: '1', kind: 'pi.assistant', model: [{ role: 'assistant' }] }
   assert.equal(stripEntrySignatures(entry), entry)
 })
 
-test('pure text over limit truncate: head tail keep + message level mark record + tail part content keep', { timeout: 60_000 }, () => {
+test('truncates oversized plaintext: keeps head/tail, adds message-level markers, preserves trailing excerpt', { timeout: 60_000 }, () => {
   const head = 'H'.repeat(TOOL_RESULT_HEAD_CHARS)
   const mid = 'M'.repeat(3000)
   const tail = 'T'.repeat(200)
@@ -91,54 +92,54 @@ test('pure text over limit truncate: head tail keep + message level mark record 
   assert.equal(msg['totalChars'], text.length)
   assert.equal(msg['totalLines'], text.split('\n').length)
   const out = ((msg['content'] as Array<{ type: string; text: string }>)[0]!.text)
-  assert.ok(out.startsWith(head), 'header keep')
-  assert.ok(out.endsWith(tail), 'tail part keep')
-  assert.ok(out.includes('helm truncate'), 'omit mark record self description')
-  assert.ok(out.length < text.length, 'throw shadow after more short')
-  // threshold or fewer do not truncate
+  assert.ok(out.startsWith(head), 'preserves head')
+  assert.ok(out.endsWith(tail), 'preserves tail')
+  assert.ok(out.includes('helm truncate'), 'omission marker describes itself')
+  assert.ok(out.length < text.length, 'projected output is shorter than raw text')
+  // Does not truncate at or below threshold.
   const small = projectDetailEntry(toolResultEntry('x'.repeat(TOOL_RESULT_TRUNCATE_THRESHOLD_CHARS)))
   assert.equal((small!.model![0] as Record<string, unknown>)['truncated'], undefined)
 })
 
-test('spill preview text (contains [Artifact] id= all text entry) exemption: never stack add second truncate', { timeout: 60_000 }, () => {
+test('exempts spill preview text (containing [Artifact] id=): never applies double truncation', { timeout: 60_000 }, () => {
   const spillText =
-    `${'S'.repeat(4200)}\n\n...[output over long, already truncate. complete result 50000 byte already write artifact]...\n\n` +
-    `--- tail part summary ---\n${'E'.repeat(200)}\n\n` +
-    `[Artifact] id=0e4f0c8a-1111 name=tool-spill-x.txt path=a/b(invoke tool read_artifact get all text)`
+    `${'S'.repeat(4200)}\n\n...[output truncated; full result of 50000 bytes written to artifact]...\n\n` +
+    `--- trailing summary ---\n${'E'.repeat(200)}\n\n` +
+    `[Artifact] id=0e4f0c8a-1111 name=tool-spill-x.txt path=a/b (call read_artifact to inspect full text)`
   const projected = projectDetailEntry(toolResultEntry(spillText))!
   const msg = projected.model![0] as Record<string, unknown>
-  assert.equal(msg['truncated'], undefined, 'spill semantics archive artifacts layer, this layer no longer mark record')
-  assert.equal(((msg['content'] as Array<{ text: string }>)[0]!.text), spillText, 'original text original through out')
+  assert.equal(msg['truncated'], undefined, 'spill semantics belong to artifacts layer; projection adds no duplicate marker')
+  assert.equal(((msg['content'] as Array<{ text: string }>)[0]!.text), spillText, 'passes raw spill preview through untouched')
 })
 
-test('details store in still truncate pure text content(details original pass-through)', { timeout: 60_000 }, () => {
+test('still truncates plaintext content even when details exist (passes details through intact)', { timeout: 60_000 }, () => {
   const text = `${'H'.repeat(TOOL_RESULT_HEAD_CHARS)}${'M'.repeat(2000)}${'T'.repeat(TOOL_RESULT_TAIL_CHARS)}`
   const entry = toolResultEntry(text, { details: { ui: 'meta', thinkingSignature: 'business-value' }, durationMs: 12 })
   const projected = projectDetailEntry(entry)!
   const msg = projected.model![0] as Record<string, unknown>
   assert.equal(msg['truncated'], true)
-  // details is plugin structure JSON: even if carry signature same name key also original keep (strip only limit assistant content chunk)
+  // details is structured plugin JSON: matching signature key names are kept intact (stripping applies only to assistant content blocks).
   assert.deepEqual(msg['details'], { ui: 'meta', thinkingSignature: 'business-value' })
   assert.equal(msg['durationMs'], 12)
 })
 
-test('can parse JSON message seal exemption (subagent/SubagentWorkflow structure result)', { timeout: 60_000 }, () => {
+test('exempts parseable JSON envelopes (subagent/SubagentWorkflow structured results)', { timeout: 60_000 }, () => {
   const json = JSON.stringify({ ok: true, runId: 'r1', result: 'x'.repeat(4000) })
   const projected = projectDetailEntry(toolResultEntry(json))!
   const msg = projected.model![0] as Record<string, unknown>
   assert.equal(msg['truncated'], undefined)
   assert.equal(((msg['content'] as Array<{ text: string }>)[0]!.text), json)
-  // JSON + tail part [subagent ...] footer row: same exemption (footer strip after body can parse)
-  const withFooter = `${json}\n[subagent complete: background handle runId=r1 already register]`
+  // JSON + trailing [subagent ...] footer line: also exempt (body parses after stripping footer).
+  const withFooter = `${json}\n[subagent complete: background runId=r1 registered]`
   const footerProjected = projectDetailEntry(toolResultEntry(withFooter))!
   assert.equal((footerProjected.model![0] as Record<string, unknown>)['truncated'], undefined)
-  // non- JSON large text still truncate
-  const plain = `${json}\nafter continue ordinary text output${'z'.repeat(4000)}`
+  // Large non-JSON plaintext is still truncated.
+  const plain = `${json}\nfollowed by regular text output ${'z'.repeat(4000)}`
   const truncated = projectDetailEntry(toolResultEntry(plain))!
   assert.equal((truncated.model![0] as Record<string, unknown>)['truncated'], true)
 })
 
-test('string content and non- pure text content: before truncate, after original', { timeout: 60_000 }, () => {
+test('string content vs non-plaintext content: truncates strings, leaves non-plaintext untouched', { timeout: 60_000 }, () => {
   const entry: ConversationEntry = {
     id: '6',
     kind: 'pi.tool-result',
@@ -165,8 +166,8 @@ test('string content and non- pure text content: before truncate, after original
   assert.equal(projectDetailEntry(binary), binary)
 })
 
-test('pageVisibleEntries:pi.system in loop inside invisible,limit = visible count', { timeout: 60_000 }, async () => {
-  // drop order original item:9=pi.system, 8=visible, 7=pi.system, 6=visible, 5=visible, 4=pi.system, 3=visible
+test('pageVisibleEntries: hides pi.system inside paging loop so limit counts visible entries', { timeout: 60_000 }, async () => {
+  // Descending source entries: 9=pi.system, 8=visible, 7=pi.system, 6=visible, 5=visible, 4=pi.system, 3=visible.
   const items = [
     { id: 9, kind: 'pi.system' },
     { id: 8, kind: 'pi.assistant' },
@@ -209,7 +210,7 @@ test('pageVisibleEntries:pi.system in loop inside invisible,limit = visible coun
   assert.deepEqual(
     collected.map((e) => e.id),
     [8, 6, 5],
-    'collect 3 visible item (skip pi.system, continue take more old page)',
+    'collects 3 visible items (skips pi.system and pulls older pages as needed)',
   )
-  assert.notEqual(nextCursor, undefined, 'still has more old item when return cursor')
+  assert.notEqual(nextCursor, undefined, 'returns cursor when older entries remain')
 })

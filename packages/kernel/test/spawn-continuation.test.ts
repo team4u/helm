@@ -1,20 +1,20 @@
 /**
- * agent_spawn continuation(runAround) contract test.
+ * agent_spawn continuation (runAround) contract tests.
  *
- * override:
- * - basis around: plugin in next before after introduce,defaultRun exactly once, result back pass;
- * - double plugin embed set (outside layer first execute priority high): time order and once execute;
- * - handled short route (do not tune next):defaultRun do not execute (since has semantics do not subject to affect);
- * - duplicate invoke next: explicit reject (invalid_hook_result);
- * - already tune next again return handled/transform: explicit reject;
- * - not await  next(async trigger after mention before return):defaultRun exactly once + result
- *   via host join after back pass (do not because handler mention before return while lose result or double execute);
- * - handler throws but already trigger next: error such as on throw, background chain by join converge (without double execute);
- * - without plugin:defaultRun directly execute;
- * - transform and continuation mixed:transform after payload enter continuation;
- * - next pass change write request: eventually defaultRun receives change write after payload.
+ * Covers:
+ * - Basic around: plugin wraps before/after next, defaultRun executes once, result passes back;
+ * - Nested double plugins (outermost executes first with higher priority): ordered and single execution;
+ * - handled short-circuit (without calling next): defaultRun does not run (preserves existing semantics);
+ * - Calling next twice: explicitly rejected (invalid_hook_result);
+ * - Returning handled/transform after already calling next: explicitly rejected;
+ * - Calling next without await (returns early after async kick-off): defaultRun runs once and host joins
+ *   to propagate the result (never lost or double-executed on early handler return);
+ * - Handler throws after invoking next: error propagates as thrown and host joins background chain (no double execution);
+ * - No plugins: defaultRun runs directly;
+ * - Combined transform and continuation: transformed payload enters continuation;
+ * - Mutating request passed to next: defaultRun receives the mutated payload.
  *
- * runner: tsx --test; each test explicit timeout: 60_000 guard against deadlock.
+ * Runner: tsx --test; every test has explicit timeout: 60_000 to guard against deadlocks.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -29,7 +29,7 @@ function spawnRequest(overrides: Partial<AgentSpawnRequest> = {}): AgentSpawnReq
   }
 }
 
-test('runAround basis: plugin before/after package wrap,defaultRun exactly once and result back pass', { timeout: 60_000 }, async () => {
+test('runAround basic: plugin wraps before/after, defaultRun runs once and returns result', { timeout: 60_000 }, async () => {
   const pipeline = new HookPipeline<'agent_spawn'>('agent_spawn')
   const order: string[] = []
   let defaultRuns = 0
@@ -43,7 +43,7 @@ test('runAround basis: plugin before/after package wrap,defaultRun exactly once 
     spawnRequest(),
     async (final) => {
       defaultRuns += 1
-      assert.equal(final.prompt, 'rewritten', 'defaultRun should receives change write after request')
+      assert.equal(final.prompt, 'rewritten', 'defaultRun should receive the rewritten request')
       return `native:${final.prompt}`
     },
   )
@@ -52,7 +52,7 @@ test('runAround basis: plugin before/after package wrap,defaultRun exactly once 
   assert.deepEqual(order, ['before', 'after'])
 })
 
-test('runAround double plugin embed set:priority high outside layer,defaultRun once, two layer after all execute', { timeout: 60_000 }, async () => {
+test('runAround nested double plugins: higher priority runs outermost, defaultRun runs once, both after hooks run', { timeout: 60_000 }, async () => {
   const pipeline = new HookPipeline<'agent_spawn'>('agent_spawn')
   const order: string[] = []
   let defaultRuns = 0
@@ -81,7 +81,7 @@ test('runAround double plugin embed set:priority high outside layer,defaultRun o
   assert.deepEqual(order, ['outer-before', 'inner-before', 'inner-after', 'outer-after'])
 })
 
-test('runAround handled short route (do not tune next):defaultRun do not execute', { timeout: 60_000 }, async () => {
+test('runAround handled short-circuit (without calling next): defaultRun does not execute', { timeout: 60_000 }, async () => {
   const pipeline = new HookPipeline<'agent_spawn'>('agent_spawn')
   let defaultRuns = 0
   pipeline.add('test:taker', async () => ({ action: 'handled' as const, result: 'taken-over' }))
@@ -96,7 +96,7 @@ test('runAround handled short route (do not tune next):defaultRun do not execute
   assert.equal(defaultRuns, 0)
 })
 
-test('runAround duplicate invoke next explicit reject (invalid_hook_result), first time chain completed do not double execute', { timeout: 60_000 }, async () => {
+test('runAround duplicate next invocation explicitly rejects (invalid_hook_result) while first chain completes once', { timeout: 60_000 }, async () => {
   const pipeline = new HookPipeline<'agent_spawn'>('agent_spawn')
   let defaultRuns = 0
   let secondCallError: unknown
@@ -117,13 +117,13 @@ test('runAround duplicate invoke next explicit reject (invalid_hook_result), fir
     },
   )
   assert.equal(outcome, 'native-once')
-  assert.equal(defaultRuns, 1, 'duplicate next must not build into second defaultRun')
+  assert.equal(defaultRuns, 1, 'duplicate next must not trigger a second defaultRun')
   assert.ok(secondCallError instanceof HelmError)
   assert.equal((secondCallError as HelmError).code, 'invalid_hook_result')
   assert.ok((secondCallError as HelmError).message.includes('duplicate invoke next'))
 })
 
-test('runAround already tune next again return handled explicit reject', { timeout: 60_000 }, async () => {
+test('runAround returning handled after calling next explicitly rejects', { timeout: 60_000 }, async () => {
   const pipeline = new HookPipeline<'agent_spawn'>('agent_spawn')
   pipeline.add('test:mixed', async (request, next) => {
     void next(request).catch(() => {})
@@ -140,36 +140,36 @@ test('runAround already tune next again return handled explicit reject', { timeo
   )
 })
 
-test('runAround not await  next(async trigger after mention before return):defaultRun exactly once + result back pass', { timeout: 60_000 }, async () => {
+test('runAround unawaited next (early return after async trigger): defaultRun runs once and propagates result', { timeout: 60_000 }, async () => {
   const pipeline = new HookPipeline<'agent_spawn'>('agent_spawn')
   let defaultRuns = 0
   const events: string[] = []
   let releaseDefault!: () => void
   const defaultGate = new Promise<void>((resolve) => { releaseDefault = resolve })
   pipeline.add('test:fire-forget', async (request, next) => {
-    // async trigger continuation but do not await: micro task after mention before return (simulated bypass async plugin).
+    // Trigger continuation asynchronously without awaiting: returns early after a microtask (simulates non-blocking plugin).
     void next({ ...request, prompt: 'fire-forget-rewritten' })
     events.push('handler-returning')
-    // mention before return (without waiting): host must join the same promise guard against double execute, do not lose result.
+    // Early return without waiting: host must join the same promise to prevent double execution and preserve the result.
     return
   })
-  // gate in defaultRun enter after release (verify join indeed wait for background chain, while non- mention before return).
+  // Release gate after defaultRun begins (verifies join waits on background chain instead of early return).
   setTimeout(() => releaseDefault(), 20)
   const outcome = await pipeline.runAround(
     spawnRequest(),
     async (final) => {
       defaultRuns += 1
-      assert.equal(final.prompt, 'fire-forget-rewritten', 'continuation change write should take effect')
+      assert.equal(final.prompt, 'fire-forget-rewritten', 'continuation rewrite should take effect')
       await defaultGate
       return 'native-fire-forget'
     },
   )
-  assert.equal(defaultRuns, 1, 'defaultRun exactly once (do not because mention before return while double execute)')
-  assert.equal(outcome, 'native-fire-forget', 'host join after result must back pass (do not lose)')
+  assert.equal(defaultRuns, 1, 'defaultRun runs exactly once (not twice on early return)')
+  assert.equal(outcome, 'native-fire-forget', 'result must still propagate after host join')
   assert.deepEqual(events, ['handler-returning'])
 })
 
-test('runAround handler throws but already trigger next: error such as on throw, background chain by join converge', { timeout: 60_000 }, async () => {
+test('runAround handler throws after triggering next: error propagates as thrown and background chain drains via join', { timeout: 60_000 }, async () => {
   const pipeline = new HookPipeline<'agent_spawn'>('agent_spawn')
   let defaultRuns = 0
   let defaultSettled = false
@@ -192,24 +192,24 @@ test('runAround handler throws but already trigger next: error such as on throw,
       return true
     },
   )
-  assert.equal(defaultRuns, 1, 'already trigger chain exactly execute once')
-  // join semantics: background chain complete (do not pending).
+  assert.equal(defaultRuns, 1, 'already-triggered chain runs exactly once')
+  // Join semantics: background chain settles without staying pending.
   await new Promise((resolve) => setTimeout(resolve, 20))
-  assert.ok(defaultSettled, 'background chain should by join converge complete')
+  assert.ok(defaultSettled, 'background chain should settle cleanly via join')
 })
 
-test('runAround without plugin:defaultRun directly execute', { timeout: 60_000 }, async () => {
+test('runAround without plugins: defaultRun runs directly', { timeout: 60_000 }, async () => {
   const pipeline = new HookPipeline<'agent_spawn'>('agent_spawn')
   const outcome = await pipeline.runAround(spawnRequest(), async (final) => `native:${final.prompt}`)
   assert.equal(outcome, 'native:test spawn')
 })
 
-test('runAround transform and continuation mixed:transform change write in continuation before takes effect', { timeout: 60_000 }, async () => {
+test('runAround mixed transform and continuation: transform rewrite applies before continuation', { timeout: 60_000 }, async () => {
   const pipeline = new HookPipeline<'agent_spawn'>('agent_spawn')
   let defaultRuns = 0
   pipeline.add('test:transformer', async (request) => ({ action: 'transform' as const, value: { ...request, cwd: '/transformed' } }), 300)
   pipeline.add('test:wrapper', async (request, next) => {
-    assert.equal(request.cwd, '/transformed', 'transform change write should first at continuation reach')
+    assert.equal(request.cwd, '/transformed', 'transform rewrite should reach continuation first')
     return next(request)
   }, 200)
   const outcome = await pipeline.runAround(
@@ -224,7 +224,7 @@ test('runAround transform and continuation mixed:transform change write in conti
   assert.equal(defaultRuns, 1)
 })
 
-test('runAround only agent_spawn: other hook explicit reject', { timeout: 60_000 }, async () => {
+test('runAround only supports agent_spawn: other hooks explicitly reject', { timeout: 60_000 }, async () => {
   const pipeline = new HookPipeline<'trigger'>('trigger')
   await assert.rejects(
     () => pipeline.runAround({ id: 'x', source: 's', text: 't', createdAt: 0 } as never, async () => undefined as never),

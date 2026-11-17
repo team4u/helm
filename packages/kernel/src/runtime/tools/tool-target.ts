@@ -1,33 +1,31 @@
 /**
- * conversation target parse (write/edit/register_artifact shared use).
+ * Conversation target resolution (shared by `write`/`edit`/`register_artifact`).
  *
- * parse conversation target (nodeId, cwd, platform). conversation cwd by its itself shape
- * (POSIX/Windows) keep original, never use Hub host resolve pollute (remote node may is
- * Windows target,Hub in Linux on resolve will obtain to error result);platform is target
- * node platform (remote unknown when undefined, by shape choose rule - - and bash/runShell platform
- * source the same original language, do not in this another write rule).
+ * Resolves `(nodeId, cwd, platform)` for the conversation. Preserves the conversation `cwd` in its native
+ * POSIX/Windows form without polluting it with the Hub host's path rules (e.g. a remote node may run Windows
+ * while the Hub runs Linux); `platform` is the target node's platform (`undefined` when unknown remotely,
+ * sharing the exact same platform lookup source as `bash`/`runShell`).
  */
 import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
 import { isAbsoluteTargetPath, type TargetPlatform } from '@helm/protocol'
 import { targetPlatformForNode } from '../target-platform.js'
 import type { HelmToolDeps } from '../tool-deps.js'
 
-/** write/edit/register_artifact for SDK ToolApi most small dependency side (test makeApi
- *  replace body and real SDK api all structure satisfy;agent and tool sharing the same SDK Context,cancel
- *  pass broadcast to remote). */
+/** Minimal SDK `ToolApi` subset needed by `write`/`edit`/`register_artifact` (satisfied structurally by both
+ * test `makeApi` fakes and real SDK APIs; agent and tool share the same SDK `Context` so cancellation propagates). */
 export interface ToolTargetApi {
   agent(context: Context): Promise<{ cwd?: string }>
   conversationId: number | string
 }
 
-/** parse out conversation target. */
+/** Resolved conversation target. */
 export interface ToolTarget {
   nodeId: string
   base: string
   platform: TargetPlatform | undefined
 }
 
-/** parse conversation target; conversation cwd non- absolute path when return error(tool original through out is *_failed). */
+/** Resolve conversation target; returns `{ error }` when `cwd` is not absolute (tools surface this with `*_failed`). */
 export async function resolveToolTarget(
   deps: HelmToolDeps,
   api: ToolTargetApi,
@@ -36,7 +34,7 @@ export async function resolveToolTarget(
   const agent = await api.agent(context)
   const base = agent.cwd ?? deps.defaultCwd
   if (!isAbsoluteTargetPath(base)) {
-    return { error: `conversation cwd non- absolute path (${base}), reject file operation` }
+    return { error: `Conversation cwd is not an absolute path (${base}); file operation rejected` }
   }
   const nodeId = deps.nodeIdOf?.(api.conversationId as number) ?? 'local'
   const platformInfo = targetPlatformForNode(deps.envFabric, nodeId)

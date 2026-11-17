@@ -1,9 +1,9 @@
 /**
- * ui-spec-validators:registerUi split out each surface pure validate most small single test.
- * each surface one combine method declaration (do not throw)+ one group proxy table illegal declaration (error code assertion);
- * error code/message and split before registerUi inline rule one by one character consistent (etc. price heavy construct regression anchor).
+ * ui-spec-validators: minimal unit tests per UI surface extracted from registerUi.
+ * Each surface covers one valid declaration (does not throw) + one representative set of invalid declarations (error code assertions);
+ * error codes and messages stay character-for-character consistent with pre-extraction inline rules in registerUi (equivalence refactor regression anchor).
  *
- * runner: tsx --test; each items explicit timeout: 60_000.
+ * runner: tsx --test; explicit timeout: 60_000 per test.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -32,20 +32,20 @@ function expectThrow(
     if (!(err instanceof HelmError)) return false;
     assert.equal(err.code, code);
     if (messageIncludes !== undefined) {
-      assert.ok(err.message.includes(messageIncludes), `message should contains "${messageIncludes}", actual:${err.message}`);
+      assert.ok(err.message.includes(messageIncludes), `message should include "${messageIncludes}", got: ${err.message}`);
     }
     return true;
   });
 }
 
 // ---------------------------------------------------------------------------
-// early chunk:UI action three surface
+// Early phase: three UI action surfaces
 // ---------------------------------------------------------------------------
 
-test('conversation.header.action: legal declaration via; missing actionId/client reject;placement illegal reject;target field by remove', { timeout: 60_000 }, () => {
+test('conversation.header.action: valid passes; missing actionId/client or invalid placement rejects; strips redundant target field', { timeout: 60_000 }, () => {
   const ok: Record<string, unknown> = { id: 'a1', actionId: 'act', placement: 'toolbar', target: 'conversation:header' };
   validateUiSpecEarly('conversation.header.action', ok, 'a1', makeCtx('conversation.header.action'));
-  assert.equal('target' in ok, false, 'register input side should remove redundant target field');
+  assert.equal('target' in ok, false, 'registered input should strip redundant target field');
 
   expectThrow(
     () => validateUiSpecEarly('conversation.header.action', { id: 'a1' }, 'a1', makeCtx('conversation.header.action')),
@@ -65,7 +65,7 @@ test('conversation.header.action: legal declaration via; missing actionId/client
   );
 });
 
-test('conversation.row.action: disallows placement;actionId contains point number reject', { timeout: 60_000 }, () => {
+test('conversation.row.action: disallows placement; rejects dotted actionId', { timeout: 60_000 }, () => {
   validateUiSpecEarly('conversation.row.action', { id: 'r1', client: { module: 'a.tsx', export: 'X' } }, 'r1', makeCtx('conversation.row.action'));
   expectThrow(
     () =>
@@ -80,7 +80,7 @@ test('conversation.row.action: disallows placement;actionId contains point numbe
   );
 });
 
-test('timeline.entry.action:kinds/roles legal via; illegal roles value reject;row surface disallows kinds', { timeout: 60_000 }, () => {
+test('timeline.entry.action: valid kinds/roles pass; invalid roles and kinds on row surface reject', { timeout: 60_000 }, () => {
   validateUiSpecEarly(
     'timeline.entry.action',
     { id: 'e1', actionId: 'act', kinds: ['bash'], roles: ['user'] },
@@ -101,10 +101,10 @@ test('timeline.entry.action:kinds/roles legal via; illegal roles value reject;ro
 });
 
 // ---------------------------------------------------------------------------
-// early chunk:commandPalette / profile.runtime / plugin.slot
+// Early phase: commandPalette / profile.runtime / plugin.slot
 // ---------------------------------------------------------------------------
 
-test('commandPalette:slash+actionId legal via; keep term and plugin inside duplicate slash reject', { timeout: 60_000 }, () => {
+test('commandPalette: slash+actionId passes; reserved words and intra-plugin duplicate slash reject', { timeout: 60_000 }, () => {
   const ctx = makeCtx('commandPalette', [
     { pluginId: 'p1', surface: 'commandPalette', spec: { id: 'c0', slash: 'chart' } },
   ]);
@@ -122,7 +122,7 @@ test('commandPalette:slash+actionId legal via; keep term and plugin inside dupli
   );
 });
 
-test('profile.runtime:kind/label legal via;kind format and plugin inside duplicate reject', { timeout: 60_000 }, () => {
+test('profile.runtime: valid kind/label passes; invalid kind format and intra-plugin duplicate reject', { timeout: 60_000 }, () => {
   const ctx = makeCtx('profile.runtime', [
     { pluginId: 'p1', surface: 'profile.runtime', spec: { id: 'k0', kind: 'python' } },
   ]);
@@ -138,7 +138,7 @@ test('profile.runtime:kind/label legal via;kind format and plugin inside duplica
   );
 });
 
-test('plugin.slot: legal target via; redundant slash and illegal segment identifier reject', { timeout: 60_000 }, () => {
+test('plugin.slot: valid target passes; extra slashes and invalid segment identifiers reject', { timeout: 60_000 }, () => {
   validateUiSpecEarly('plugin.slot', { id: 's1', target: 'owner/panel' }, 's1', makeCtx('plugin.slot'));
   expectThrow(
     () => validateUiSpecEarly('plugin.slot', { id: 's1', target: 'a/b/c' }, 's1', makeCtx('plugin.slot')),
@@ -153,10 +153,10 @@ test('plugin.slot: legal target via; redundant slash and illegal segment identif
 });
 
 // ---------------------------------------------------------------------------
-// late phase chunk
+// Late phase
 // ---------------------------------------------------------------------------
 
-test('timeline.renderer:matchMeta legal via; illegal key reject', { timeout: 60_000 }, () => {
+test('timeline.renderer: valid matchMeta passes; extra keys reject', { timeout: 60_000 }, () => {
   validateUiSpecLate('timeline.renderer', { id: 't1', matchMeta: { renderer: 'bash' } }, 't1', makeCtx('timeline.renderer'));
   expectThrow(
     () => validateUiSpecLate('timeline.renderer', { id: 't1', matchMeta: { renderer: 'bash', extra: 1 } }, 't1', makeCtx('timeline.renderer')),
@@ -165,7 +165,7 @@ test('timeline.renderer:matchMeta legal via; illegal key reject', { timeout: 60_
   );
 });
 
-test('markdown.codeBlock:languages+client legal via; duplicate language and missing client reject', { timeout: 60_000 }, () => {
+test('markdown.codeBlock: valid languages+client passes; duplicate languages and missing client reject', { timeout: 60_000 }, () => {
   validateUiSpecLate(
     'markdown.codeBlock',
     { id: 'm1', languages: ['mermaid'], client: { module: 'a.tsx', export: 'X' } },
@@ -184,7 +184,7 @@ test('markdown.codeBlock:languages+client legal via; duplicate language and miss
   );
 });
 
-test('tool.view:toolNames+replaceRow legal via; non- boolean replaceRow reject', { timeout: 60_000 }, () => {
+test('tool.view: valid toolNames+replaceRow passes; non-boolean replaceRow rejects', { timeout: 60_000 }, () => {
   validateUiSpecLate('tool.view', { id: 'v1', toolNames: ['bash'], replaceRow: true }, 'v1', makeCtx('tool.view'));
   expectThrow(
     () => validateUiSpecLate('tool.view', { id: 'v1', toolNames: ['bash'], replaceRow: 'yes' }, 'v1', makeCtx('tool.view')),
@@ -193,7 +193,7 @@ test('tool.view:toolNames+replaceRow legal via; non- boolean replaceRow reject',
   );
 });
 
-test('artifact.previewer:MIME/suffix match declaration legal via;*/*, parameter form and duplicate items reject', { timeout: 60_000 }, () => {
+test('artifact.previewer: valid MIME/extension patterns pass; */*, parameterized patterns, and duplicates reject', { timeout: 60_000 }, () => {
   validateUiSpecLate(
     'artifact.previewer',
     { id: 'pr1', label: 'L', mimeTypes: ['text/markdown', 'image/*'], extensions: ['.md', '.tar.gz'] },
@@ -212,7 +212,7 @@ test('artifact.previewer:MIME/suffix match declaration legal via;*/*, parameter 
   );
 });
 
-test('composer.completer:action/doc source legal via; illegal trigger,client track and __proto__ itemsField reject', { timeout: 60_000 }, () => {
+test('composer.completer: valid action/doc sources pass; invalid trigger, client track, and __proto__ itemsField reject', { timeout: 60_000 }, () => {
   validateUiSpecLate(
     'composer.completer',
     { id: 'cp1', label: 'L', trigger: '@', source: { kind: 'action', actionId: 'list' } },
@@ -254,7 +254,7 @@ test('composer.completer:action/doc source legal via; illegal trigger,client tra
   );
 });
 
-test('workbench.panel:badge declaration style shape legal via; unknown badge key reject', { timeout: 60_000 }, () => {
+test('workbench.panel: valid badge shape passes; unknown badge keys reject', { timeout: 60_000 }, () => {
   validateUiSpecLate(
     'workbench.panel',
     { id: 'w1', badge: { doc: 'stats', countField: 'count', toneField: 'tone' } },

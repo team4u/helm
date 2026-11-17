@@ -1,6 +1,6 @@
 /**
- * new edition plugin core contract test: conversation effect domain, public document, host lifecycle port, each other for routing.
- * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
+ * Core plugin contract tests: conversation scopes, public documents, host lifecycle ports, and relative routes.
+ * runner: tsx --test; every test has explicit timeout: 60_000 to guard against deadlocks.
  */
 import test, { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,18 +17,18 @@ import {
 } from './helpers.js';
 
 // ---------------------------------------------------------------------------
-// test base create
+// Test infrastructure
 // ---------------------------------------------------------------------------
 
 function makeConversation(id: number, over: Partial<ConversationSummary> = {}): ConversationSummary {
   return makeConversationSummary({ id, ...over });
 }
 
-/** can edit process conversation side:scope execute phase validate via host.getConversation now take real summary. */
+/** Programmable conversation store: execution-phase scope validation reads live summaries via `host.getConversation`. */
 class FakeBackend extends PluginHostBackendFixtureBase {
   conversations = new Map<number, ConversationSummary>();
   events: Array<{ type: string; payload: unknown }> = [];
-  /** conversation manage protect record:(conversationId, pluginId) → still takes effect i.e. store in. */
+  /** Conversation management lock records: `(conversationId, pluginId)` present while active. */
   managed = new Map<string, { conversationId: number; pluginId: string }>();
   askSeqResolvers = new Set<(askId: string) => MaybePromise<number | undefined>>();
   workflowListeners = new Set<(run: unknown) => void | Promise<void>>();
@@ -82,9 +82,9 @@ class FakeBackend extends PluginHostBackendFixtureBase {
     return { idempotent: false };
   }
   execEnv(): Promise<EnvExecResponse> {
-    return Promise.reject(new HelmError('unsupported', 'this fixture do not execute node command', 501));
+    return Promise.reject(new HelmError('unsupported', 'this fixture does not execute node commands', 501));
   }
-  withFileMutationQueue(): Promise<never> { throw new Error('this fixture do not bear load file mutual exclusion queue') }
+  withFileMutationQueue(): Promise<never> { throw new Error('this fixture does not support file mutation queue') }
   listActions(): [] {
     return [];
   }
@@ -133,13 +133,13 @@ function makeHost(): PluginHost {
 
 function throwsCode(fn: () => unknown, code: string): void {
   assert.throws(fn, (err: unknown) => {
-    assert.ok(err instanceof HelmError, `expectation HelmError, actual:${String(err)}`);
+    assert.ok(err instanceof HelmError, `expected HelmError, got: ${String(err)}`);
     assert.equal(err.code, code);
     return true;
   });
 }
 
-/** construct a declaration tool and action plugin (scope can match; name carries id suffix avoid across plugin heavy name). */
+/** Builds a plugin declaring one tool and one action (optional scope; name includes id suffix to prevent cross-plugin collisions). */
 function scopedPlugin(
   id: string,
   scope: { tool?: unknown; action?: unknown },
@@ -168,7 +168,7 @@ function scopedPlugin(
 }
 
 
-/** scopedPlugin tool register name (and implement keep the same derive rule). */
+/** Registered tool name for `scopedPlugin` (kept in sync with derivation rule). */
 function scopedToolName(pluginId: string): string {
   return `scoped_tool_${pluginId.replaceAll(/[^A-Za-z0-9]/g, '_')}`;
 }
@@ -184,10 +184,10 @@ afterEach(async () => {
 });
 
 // ---------------------------------------------------------------------------
-// 1. ConversationScope: register boundary validate
+// 1. ConversationScope: registration boundary validation
 // ---------------------------------------------------------------------------
 
-test('scope register boundary: non- pure object/unknown field/illegal element one rule invalid_plugin_scope and whole rollback', { timeout: 60_000 }, async () => {
+test('scope registration boundary: non-plain objects, unknown fields, and invalid elements reject with invalid_plugin_scope and roll back', { timeout: 60_000 }, async () => {
   const host = makeHost();
   const badScopes: unknown[] = [
     'not-object',
@@ -214,21 +214,21 @@ test('scope register boundary: non- pure object/unknown field/illegal element on
       400,
     );
   }
-  // all rollback: without plugin register
+  // Full rollback: zero registered plugins remain
   assert.equal(host.list().length, 0);
-  // action scope same in register boundary reject
+  // action scope also rejects at registration boundary
   await assertRejectsCode(
     () => host.register(scopedPlugin('p:bad-action', { action: { tags: [new Date()] } })),
     'invalid_plugin_scope',
   );
 
-  // legal scope(positive integer ID / non-empty string / empty array semantics another test) normal register
+  // Valid scopes (positive integer IDs / non-empty strings / empty arrays tested separately) register cleanly
   const ok = makeHost();
   await ok.register(scopedPlugin('p:ok', { tool: { conversationIds: [1, 2], tags: ['worker'] } }));
   assert.equal(ok.list().length, 1);
 });
 
-test('model provider scope follow conversation switch takes effect, execute boundary re-check tool and action', { timeout: 60_000 }, async () => {
+test('modelProvider scope tracks live model switches and re-checks both tools and actions at execution', { timeout: 60_000 }, async () => {
   const host = makeHost();
   const scope = { modelProviders: ['example'] };
   await host.register(scopedPlugin('p:model-provider', { tool: scope, action: scope }));
@@ -242,7 +242,7 @@ test('model provider scope follow conversation switch takes effect, execute boun
   await assertRejectsCode(() => host.invokeAction('p:model-provider', 'scoped_action', {}, { conversationId: 1 }), 'conversation_scope_violation', 403);
 });
 
-test('ui scope also in register boundary validate: illegal ui spec scope reject', { timeout: 60_000 }, async () => {
+test('ui scope validates at registration boundary and enters manifest when valid', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await assertRejectsCode(
     () =>
@@ -254,7 +254,7 @@ test('ui scope also in register boundary validate: illegal ui spec scope reject'
       }),
     'invalid_plugin_scope',
   );
-  // legal ui scope register succeeded and enter manifest
+  // Valid ui scope registers cleanly and appears in UI manifest
   await host.register({
     id: 'p:ui-scope-ok',
     definePlugin: (ctx) => {
@@ -297,14 +297,14 @@ test('timeline.renderer matchMeta only allows { renderer: non-empty string }', {
 });
 
 // ---------------------------------------------------------------------------
-// 2. listTools(conversation) by conversation filter choose + executeTool / invokeAction double heavy validate
+// 2. listTools(conversation) scope filtering + executeTool / invokeAction double validation
 // ---------------------------------------------------------------------------
 
-test('listTools without reference all amount (runtime hot register); has reference by scope filter choose (profileIds is main example,tags through use)', { timeout: 60_000 }, async () => {
+test('listTools returns all tools when omitted or filters by scope (profileIds and tags) when conversation provided', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register(
     scopedPlugin('p:superagent-tools', {
-      // new role example: router hub scope use profileIds express
+      // Role scoping uses profileIds explicitly
       tool: { profileIds: ['superagent', 'watchdog'] },
       action: { profileIds: ['superagent', 'watchdog'] },
     }),
@@ -325,28 +325,28 @@ test('listTools without reference all amount (runtime hot register); has referen
   });
   await host.register(scopedPlugin('p:unscoped', {}));
 
-  // without reference: all tool (contains without scope and hit scope )
+  // No conversation passed: full list (both scoped and unscoped tools)
   const all = host.listTools();
   assert.equal(all.length, 3); // scoped_tool(superagent) + archive(worker) + scoped_tool(unscoped)
 
-  // superagent conversation: visible profileIds hit two + without scope a
+  // superagent conversation: matches two profileIds + unscoped tool
   const routerView = host.listTools(backend.conversations.get(2)!);
   const routerNames = routerView.map((t) => t.sourcePluginId).sort();
   assert.deepEqual(routerNames, ['p:superagent-tools', 'p:unscoped']);
 
-  // worker conversation (tags hit)+ without scope
+  // worker conversation (tags match) + unscoped tool
   const workerView = host.listTools(backend.conversations.get(5)!);
   assert.deepEqual(
     workerView.map((t) => t.sourcePluginId).sort(),
     ['p:unscoped', 'p:worker-tools'],
   );
 
-  // assistant conversation: only remain without scope 
+  // assistant conversation: only unscoped tool remains
   const assistantView = host.listTools(backend.conversations.get(1)!);
   assert.deepEqual(assistantView.map((t) => t.sourcePluginId), ['p:unscoped']);
 });
 
-test('explicit empty array scope match fewer than any conversation (non- do not limit); default field do not limit', { timeout: 60_000 }, async () => {
+test('explicit empty scope arrays match zero conversations rather than unconstrained; undefined fields stay unconstrained', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register(scopedPlugin('p:none', { tool: { conversationIds: [] } }));
   await host.register(scopedPlugin('p:partial', { tool: { profileIds: ['superagent'], tags: [] } }));
@@ -354,12 +354,12 @@ test('explicit empty array scope match fewer than any conversation (non- do not 
 
   const conv = backend.conversations.get(2)!;
   const names = host.listTools(conv).map((t) => t.sourcePluginId);
-  // p:none empty conversationIds do not hit;p:partial profileIds hit but tags empty array AND do not hit;
-  // p:open without quality constraint hit
+  // p:none fails empty conversationIds; p:partial matches profileIds yet fails empty tags AND clause;
+  // p:open has no active constraints so it matches
   assert.deepEqual(names, ['p:open']);
 });
 
-test('executeTool double heavy validate:scope missed 403, hit let through; without scope keep old behavior', { timeout: 60_000 }, async () => {
+test('executeTool re-validates scope (403 on mismatch, allowed on match/no conversation; unscoped unchanged)', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register(
     scopedPlugin('p:guard', {
@@ -368,32 +368,32 @@ test('executeTool double heavy validate:scope missed 403, hit let through; witho
     }),
   );
 
-  // conversation 1(assistant) do not in scope: visible of outside directly execute also by refuse
+  // Conversation 1 (assistant) out of scope: direct calls outside visibility still reject 403
   await assertRejectsCode(() => host.executeTool(scopedToolName('p:guard'), {}, { conversationId: 1 }), 'conversation_scope_violation', 403);
   await assertRejectsCode(
     () => host.invokeAction('p:guard', 'scoped_action', {}, { conversationId: 1 }),
     'conversation_scope_violation',
     403,
   );
-  // conversation 2(superagent) hit: let through
+  // Conversation 2 (superagent) matches: allowed
   assert.deepEqual(await host.executeTool(scopedToolName('p:guard'), {}, { conversationId: 2 }), { ok: true });
   assert.deepEqual(await host.invokeAction('p:guard', 'scoped_action', {}, { conversationId: 2 }), { ok: true });
 
-  // without conversationId human invoke (HTTP/CLI without conversation context): let through (scope is conversation policy non- user authentication)
+  // Call without conversationId (human HTTP/CLI outside conversation context): allowed (scope is conversation policy, not user auth)
   assert.deepEqual(await host.invokeAction('p:guard', 'scoped_action', {}), { ok: true });
 
-  // without scope plugin: any conversation and without conversation context all let through (old behavior)
+  // Unscoped plugin: allowed everywhere regardless of conversation context
   await host.register(scopedPlugin('p:free', {}));
   assert.deepEqual(await host.executeTool(scopedToolName('p:free'), {}, { conversationId: 1 }), { ok: true });
 });
 
-test('scope conversation summary via host.getConversation now take: conversation missing such as throw not_found', { timeout: 60_000 }, async () => {
+test('scope reads live conversation summary via host.getConversation and throws not_found if missing', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register(
     scopedPlugin('p:gone', { tool: { conversationIds: [999] }, action: { conversationIds: [999] } }),
   );
   await assertRejectsCode(() => host.executeTool(scopedToolName('p:gone'), {}, { conversationId: 999 }), 'not_found', 404);
-  // private change conversations panel does not affect:getConversation now take real data
+  // Deleting conversation directly affects getConversation immediately
   backend.conversations.delete(1);
   await assertRejectsCode(
     () => host.invokeAction('p:gone', 'scoped_action', {}, { conversationId: 1 }),
@@ -401,14 +401,14 @@ test('scope conversation summary via host.getConversation now take: conversation
   );
 });
 
-test('exposeAsTool action derive tool inherit scope:executeTool via invokeAction second validate', { timeout: 60_000 }, async () => {
+test('exposeAsTool derived tool inherits scope and re-validates via invokeAction when executed', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'p:derived',
     definePlugin: (ctx) => {
       ctx.action({
         id: 'patrol',
-        description: 'inspection',
+        description: 'patrol check',
         inputSchema: { type: 'object' },
         outputSchema: { type: 'object' },
         scope: { profileIds: ['watchdog'] },
@@ -417,23 +417,23 @@ test('exposeAsTool action derive tool inherit scope:executeTool via invokeAction
       });
     },
   });
-  const tools = host.listTools(backend.conversations.get(3)!); // watchdog conversation visible
+  const tools = host.listTools(backend.conversations.get(3)!); // visible in watchdog conversation
   assert.equal(tools.length, 1);
   const alias = tools[0]!.name;
   assert.deepEqual(await host.executeTool(alias, {}, { conversationId: 3 }), { patrolled: true });
-  // other conversation invisible and execute by refuse (double heavy validate)
+  // Hidden and rejected in other conversations (double validation)
   assert.equal(host.listTools(backend.conversations.get(1)!).length, 0);
   await assertRejectsCode(() => host.executeTool(alias, {}, { conversationId: 1 }), 'conversation_scope_violation');
-  // listActions manifest carry scope(run_action manifest inject use)
+  // listActions manifest preserves scope (for run_action injection)
   const manifest = host.listActions().find((a) => a.id === 'patrol')!;
   assert.deepEqual(manifest.scope, { profileIds: ['watchdog'] });
 });
 
 // ---------------------------------------------------------------------------
-// 3. public document:public third reference / getPublicDoc / plugin.doc.updated
+// 3. Public documents: third `public` argument / getPublicDoc / plugin.doc.updated
 // ---------------------------------------------------------------------------
 
-test('ctx.doc third reference public: private by default; public change plugin.doc.updated(value JSON-safe)', { timeout: 60_000 }, async () => {
+test('ctx.doc public flag defaults to private; public writes emit JSON-safe plugin.doc.updated events', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let publicHandle!: { set: (v: { n: number }) => void; update: (fn: (c: { n: number }) => { n: number }) => void };
   let privateHandle!: { set: (v: { n: number }) => void };
@@ -450,7 +450,7 @@ test('ctx.doc third reference public: private by default; public change plugin.d
       .filter((e) => e.type === 'plugin.doc.updated')
       .map((e) => (e.payload as { doc: { pluginId: string; name: string; value: { n: number } } }).doc);
 
-  // set / update all event, payload is PublicPluginDoc
+  // Both set and update emit PublicPluginDoc payloads
   publicHandle.set({ n: 1 });
   publicHandle.update((c) => ({ n: c.n + 1 }));
   const emitted = docEvents();
@@ -459,51 +459,51 @@ test('ctx.doc third reference public: private by default; public change plugin.d
   assert.equal(emitted[0]!.pluginId, 'p:docs');
   assert.equal(emitted[0]!.name, 'pub');
 
-  // private doc write do not event
+  // Private document writes emit zero events
   privateHandle.set({ n: 9 });
   assert.equal(docEvents().length, 2);
 });
 
-test('getPublicDoc:public can read (contains not write initial value);private/missing/deactivate/not registered unify 404', { timeout: 60_000 }, async () => {
+test('getPublicDoc reads public initial/written docs and returns unified 404 for private/missing/disabled/unregistered', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let publicHandle!: { set: (v: { n: number }) => void };
   await host.register({
     id: 'p:pub',
     definePlugin: (ctx) => {
-      ctx.doc('fresh', { n: 7 }, { public: true }); // from not set
+      ctx.doc('fresh', { n: 7 }, { public: true }); // never written
       ctx.doc('written', { n: 0 }, { public: true });
       ctx.doc('secret', { n: 0 });
       publicHandle = ctx.doc('written', { n: 0 }, { public: true }) as never;
     },
   }).catch(() => {
-    // written duplicate declaration will duplicate_doc - - swap clean write method
+    // Duplicate declaration of 'written' rejects with duplicate_doc; re-register cleanly below
   });
 
-  // on side deliberately register failed (duplicate_doc), swap clean plugin verify
+  // Confirm failed registration rolled back, then register clean plugin
   assert.equal(host.list().length, 0);
   await host.register({
     id: 'p:pub',
     definePlugin: (ctx) => {
-      ctx.doc('fresh', { n: 7 }, { public: true }); // from not set: initial value can read
+      ctx.doc('fresh', { n: 7 }, { public: true }); // never written: readable via initial value
       ctx.doc('written', { n: 0 }, { public: true });
       ctx.doc('secret', { n: 0 });
     },
   });
 
-  // initial value in not write when i.e. can read
+  // Initial values are readable even before any write
   assert.deepEqual(host.getPublicDoc('p:pub', 'fresh'), { pluginId: 'p:pub', name: 'fresh', value: { n: 7 } });
   assert.deepEqual(host.getPublicDoc('p:pub', 'written'), { pluginId: 'p:pub', name: 'written', value: { n: 0 } });
 
-  // private / not declaration: unify 404(external without from probe private doc store in)
+  // Private / undeclared docs both return 404 (never leak existence of private docs)
   throwsCode(() => host.getPublicDoc('p:pub', 'secret'), 'plugin_doc_not_found');
   throwsCode(() => host.getPublicDoc('p:pub', 'missing'), 'plugin_doc_not_found');
 
-  // deactivate after unify 404; not registered plugin 404
+  // Disabled / unregistered plugins return 404 uniformly
   await host.disable('p:pub');
   throwsCode(() => host.getPublicDoc('p:pub', 'fresh'), 'plugin_doc_not_found');
   throwsCode(() => host.getPublicDoc('p:none', 'any'), 'plugin_doc_not_found');
 
-  // public doc illegal value (non- JSON):set boundary reject and do not event
+  // Non-JSON value in public doc rejects at set boundary without emitting event
   const h2 = makeHost();
   let handle2!: ReturnType<Parameters<NonNullable<PluginDefinition['definePlugin']>>[0]['doc']>;
   await h2.register({
@@ -520,7 +520,7 @@ test('getPublicDoc:public can read (contains not write initial value);private/mi
   void publicHandle;
 });
 
-test('doc opts only allows { public?: boolean }: unknown field reject', { timeout: 60_000 }, async () => {
+test('doc opts only allows { public?: boolean } and rejects unknown fields', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await assertRejectsCode(
     () =>
@@ -545,10 +545,10 @@ test('doc opts only allows { public?: boolean }: unknown field reject', { timeou
 });
 
 // ---------------------------------------------------------------------------
-// 4. host lifecycle port:manageConversation / onWorkflowSettled / askSeq solve except
+// 4. Host lifecycle ports: manageConversation / onEvent / registerAskSeqResolver
 // ---------------------------------------------------------------------------
 
-test('ctx.host.manageConversation automatically carry this plugin pluginId; release handle idempotent', { timeout: 60_000 }, async () => {
+test('ctx.host.manageConversation automatically injects caller pluginId and returns idempotent release handle', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let release!: () => void;
   await host.register({
@@ -557,15 +557,15 @@ test('ctx.host.manageConversation automatically carry this plugin pluginId; rele
       release = ctx.host.manageConversation(2);
     },
   });
-  // backend receives is (2, 'p:manager')- - plugin side only single reference, identity by host wrap inject
+  // Backend receives (2, 'p:manager') while plugin passes only conversationId (identity injected by host)
   assert.ok(backend.managed.has('2:p:manager'));
 
-  // manually release idempotent: many time invoke only solve except once
+  // Manual release is idempotent: repeated calls release once
   release();
   release();
   assert.ok(!backend.managed.has('2:p:manager'));
 
-  // deactivate automatically release: re- manage after disable, no longer need to plugin manually release
+  // Disabling automatically releases remaining locks without manual cleanup
   await host.register({
     id: 'p:manager2',
     definePlugin: (ctx) => {
@@ -577,7 +577,7 @@ test('ctx.host.manageConversation automatically carry this plugin pluginId; rele
   assert.ok(!backend.managed.has('3:p:manager2'));
 });
 
-test('register/enable failed without leaking host lifecycle asset (definePlugin throws i.e. rollback release)', { timeout: 60_000 }, async () => {
+test('register/enable failure leaks zero host lifecycle assets (definePlugin throws rolls back)', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await assertRejectsCode(
     () =>
@@ -592,13 +592,12 @@ test('register/enable failed without leaking host lifecycle asset (definePlugin 
       }),
     'plugin_registration_failed',
   );
-  // three class asset all rollback release
+  // All three lifecycle asset categories rolled back cleanly
   assert.equal(backend.managed.size, 0);
   assert.equal(backend.workflowListeners.size, 0);
   assert.equal(backend.askSeqResolvers.size, 0);
 
-  // enable failed same rollback: first register succeeded again change broken definePlugin cannot row (define cannot change),
-  // use service start failed drive enable rollback path
+  // Enable failure rolls back identically (driven via service.start failure after register+disable)
   let failStart = false;
   await host.register({
     id: 'p:leak2',
@@ -619,15 +618,14 @@ test('register/enable failed without leaking host lifecycle asset (definePlugin 
   assert.equal(backend.managed.size, 0);
 });
 
-test('onEvent(workflow.settled) listen: deactivate automatically solve except; call back count in-flight task protect; each run only trigger once', { timeout: 60_000 }, async () => {
+test('onEvent(workflow.settled): auto-unsubscribes on disable and counts in-flight callbacks as active tasks', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let settledRuns: string[] = [];
   await host.register({
     id: 'p:wf',
     definePlugin: (ctx) => {
       void ctx.host.onEvent('workflow.settled', async (raw) => {
-        // through use event channel:payload for kernel is do not transparent unknown(workflow.settled 
-        // business shape by @helm/plugins contract explain,kernel independent of plugin business contract).
+        // Generic event bus: payload stays opaque to kernel (workflow.settled schema belongs to @helm/plugins).
         const run = raw as { id: string };
         await new Promise((r) => setTimeout(r, 10));
         settledRuns.push(run.id);
@@ -640,11 +638,11 @@ test('onEvent(workflow.settled) listen: deactivate automatically solve except; c
     id,
   });
 
-  // normal trigger (listen is backend set: directly invoke i.e. can)
+  // Normal dispatch (backend holds listener set and triggers directly)
   for (const listener of backend.workflowListeners) await listener(makeRun('wf_a'));
   assert.deepEqual(settledRuns, ['wf_a']);
 
-  // call back in-flight during disable by refuse (plugin_has_live_tasks)
+  // In-flight callback protects plugin from disable with plugin_has_live_tasks
   const firing = (async () => {
     for (const listener of backend.workflowListeners) await listener(makeRun('wf_b'));
   })();
@@ -653,13 +651,13 @@ test('onEvent(workflow.settled) listen: deactivate automatically solve except; c
   await firing;
   assert.deepEqual(settledRuns, ['wf_a', 'wf_b']);
 
-  // deactivate automatically solve except listen
+  // Disabling automatically removes listener
   await host.disable('p:wf');
   assert.equal(backend.workflowListeners.size, 0);
   settledRuns = [];
 });
 
-test('registerAskSeqResolver deactivate automatically solve except; old cycle ctx host asset get by epoch guard reject', { timeout: 60_000 }, async () => {
+test('registerAskSeqResolver unsubscribes on disable; stale-epoch ctx rejects host lifecycle acquisitions', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let stolenHost: Parameters<NonNullable<PluginDefinition['definePlugin']>>[0]['host'] | undefined;
   await host.register({
@@ -673,13 +671,13 @@ test('registerAskSeqResolver deactivate automatically solve except; old cycle ct
   await host.disable('p:seq');
   assert.equal(backend.askSeqResolvers.size, 0);
 
-  // old cycle handle: get host lifecycle asset i.e. moment expires (409 plugin_context_expired)
+  // Stale handle immediately expired on disable (409 plugin_context_expired)
   throwsCode(() => stolenHost!.manageConversation(1), 'plugin_context_expired');
   throwsCode(() => stolenHost!.onEvent('workflow.settled', () => {}), 'plugin_context_expired');
   throwsCode(() => stolenHost!.registerAskSeqResolver(() => undefined), 'plugin_context_expired');
 });
 
-test('ctx.host wrap layer forwarding new port:updateConversation / markConversationOwnership / createAsk three state', { timeout: 60_000 }, async () => {
+test('ctx.host wrapper forwards updateConversation / markConversationOwnership / createAsk cleanly', { timeout: 60_000 }, async () => {
   const host = makeHost();
   const marked: Array<{ id: number; owner: string }> = [];
   const origMark = backend.markConversationOwnership.bind(backend);
@@ -704,10 +702,10 @@ test('ctx.host wrap layer forwarding new port:updateConversation / markConversat
 });
 
 // ---------------------------------------------------------------------------
-// 5. each other for routing contract (new: only relative path)
+// 5. Relative route contracts (only relative paths permitted)
 // ---------------------------------------------------------------------------
 
-test('each other for routing: host concatenate naming empty between,listRoutes output complete mount path', { timeout: 60_000 }, async () => {
+test('relative routing: host prepends plugin namespace and listRoutes returns full mounted path', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'builtin:triggers',
@@ -720,7 +718,7 @@ test('each other for routing: host concatenate naming empty between,listRoutes o
   assert.equal(routes[0]!.path, '/api/plugins/builtin%3Atriggers/routes/webhook/:id');
   assert.equal(routes[0]!.public, true);
 
-  // complete /api prefix, point segment escape, encode escape one rule reject
+  // Full /api prefixes, dot-segment escapes, and encoded escapes reject uniformly
   await assertRejectsCode(
     () =>
       host.register({
@@ -741,7 +739,7 @@ test('each other for routing: host concatenate naming empty between,listRoutes o
       }),
     'invalid_route_path',
   );
-  // illegal hundred number encode (%zz) register boundary i.e. refuse
+  // Malformed percent encoding (%zz) rejects at registration boundary
   await assertRejectsCode(
     () =>
       host.register({

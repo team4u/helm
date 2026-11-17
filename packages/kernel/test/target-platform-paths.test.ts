@@ -1,20 +1,20 @@
 /**
- * target node platform aware cwd/path specification test (kernel execute chain).
+ * Target-node platform-aware cwd/path normalization tests (kernel execution path).
  *
- * override (align task verify side):
- * 1. platform choose:local constant process.platform; remote only take NodeRegistry register register
- *    platform (EnvFabric.nodePlatformOf most small only read port, real WS register chain verify);
- *    offline / not on report platform → platform unknown, never guess, never fallback Hub host.
- * 2. win32 target view convert:/mnt/<symbol>(WSL mount) and /<symbol>(Git Bash)
- *    rotate specification Windows path;/home etc. bare POSIX explicit invalid_path(keep original
- *    path, never guess).
- * 3. read and bash consistent: the same conversation target under file tool and runShell use the same platform source
- *    and the same protocol original language specification (receives identical base allow derive path).
- * 4. remote POSIX node never by mistakenly judge into Windows:/mnt/d in POSIX target on is real
- *    path, original pass-through (only term method archive one).
- * 5. POST /api/env/exec target parse (NodeManager.resolveExecTarget):win32
- *    target specification, bare POSIX  validation_error(contains original cwd), offline 409,
- *    platform unknown original pass-through.
+ * Covers (aligned with task verification criteria):
+ * 1. Platform selection: local always uses process.platform; remote uses only NodeRegistry reported
+ *    platform (EnvFabric.nodePlatformOf minimal read-only port, verified with live WS registration);
+ *    when offline or unreported -> unknown platform, never guess, never fall back to Hub host.
+ * 2. win32 target path conversion: `/mnt/<drive>` (WSL mount) and `/<drive>` (Git Bash)
+ *    normalize to Windows paths; bare POSIX paths like `/home` return explicit `invalid_path`
+ *    (preserving original path, never guessing).
+ * 3. read and bash parity: under the same conversation target, file tools and runShell share the same
+ *    platform source and normalization primitive (receiving identical normalized base directory paths).
+ * 4. Remote POSIX nodes are never misclassified as Windows: `/mnt/d` on a POSIX target is a real path,
+ *    passed through verbatim (only path normalization differs).
+ * 5. POST /api/env/exec target resolution (NodeManager.resolveExecTarget): normalizes win32 targets,
+ *    returns `validation_error` (preserving original cwd) for bare POSIX paths, 409 when offline,
+ *    and passes through verbatim when platform is unknown.
  */
 
 import { before, after, describe, it } from 'node:test'
@@ -56,10 +56,10 @@ after(async () => {
 })
 
 // ---------------------------------------------------------------------------
-// subject to control replace body
+// Recording test doubles
 // ---------------------------------------------------------------------------
 
-/** runShell use subject to control shell env: only implement exec, record real receives cwd. */
+/** Controlled shell env for runShell: implements only exec and records received cwds. */
 function makeRecordingShellEnv(): {
   env: {
     id: string
@@ -84,7 +84,7 @@ function makeRecordingShellEnv(): {
   }
 }
 
-/** read/write/edit use subject to control file env(contains mutual exclusion queue which must most small side). */
+/** Controlled file env for read/write/edit (includes the minimal set required by the file mutation queue). */
 function makeRecordingFileEnv(files: Map<string, string>): {
   env: Record<string, unknown>
   calls: Array<{ method: string; path: string }>
@@ -135,7 +135,7 @@ function makeRecordingFileEnv(files: Map<string, string>): {
   }
 }
 
-/** platform can control EnvFabric replace body:nodePlatformOf / isOnline / env* by parameter return. */
+/** Platform-controllable EnvFabric double: returns parameterized nodePlatformOf / isOnline / env*. */
 function makePlatformFabric(options: {
   platform?: string
   hubPlatform?: string
@@ -156,10 +156,10 @@ function makePlatformFabric(options: {
     debugBaseCount: () => 0,
     debugBases: () => [],
     ipcCall: () => {
-      throw new Error('test does not use')
+      throw new Error('not used in test')
     },
     ipcSubscribe: () => {
-      throw new Error('test does not use')
+      throw new Error('not used in test')
     },
     dispose: () => Promise.resolve(),
   } as never
@@ -199,31 +199,31 @@ function makeApi(cwd: string, conversationId = 1) {
     commit: async (change: () => unknown) => change(),
     memo: async () => undefined,
     createTask: async () => {
-      throw new Error('test does not use')
+      throw new Error('not used in test')
     },
     getTask: async () => undefined,
     waitForTask: async () => {
-      throw new Error('test does not use')
+      throw new Error('not used in test')
     },
     conversation: async () => undefined,
     executeTool: async () => {
-      throw new Error('test does not use')
+      throw new Error('not used in test')
     },
   } as never
 }
 
 // ---------------------------------------------------------------------------
-// 1. platform choose original language
+// 1. Platform selection primitives
 // ---------------------------------------------------------------------------
-describe('targetPlatformForNode: platform choose (local host / remote register value / unknown do not guess)', { timeout: 60_000 }, () => {
-  it('local constant process.platform(no need to any port)', { timeout: 60_000 }, () => {
+describe('targetPlatformForNode: platform selection (local host / remote registered value / unknown refuses to guess)', { timeout: 60_000 }, () => {
+  it('local always uses process.platform without any extra port', { timeout: 60_000 }, () => {
     const info = targetPlatformForNode(undefined, 'local')
-    assert.ok(info.known, 'local platform constant known')
+    assert.ok(info.known, 'local platform is always known')
     assert.equal(info.platform, process.platform === 'win32' ? 'win32' : 'posix')
     assert.equal(info.reported, process.platform)
   })
 
-  it('local: can inject Hub platform fact; default still fall back host platform', { timeout: 60_000 }, () => {
+  it('local accepts injected Hub platform fact and defaults to host platform', { timeout: 60_000 }, () => {
     const injected = targetPlatformForNode({ hubPlatform: () => 'linux' }, 'local')
     assert.equal(injected.known, true)
     if (injected.known) {
@@ -235,7 +235,7 @@ describe('targetPlatformForNode: platform choose (local host / remote register v
     if (fallback.known) assert.equal(fallback.reported, process.platform)
   })
 
-  it('remote: only take register register platform;win32 → win32,linux/darwin → posix', { timeout: 60_000 }, () => {
+  it('remote uses only registered platform: win32 -> win32, linux/darwin -> posix', { timeout: 60_000 }, () => {
     const win = targetPlatformForNode({ nodePlatformOf: () => 'win32' }, 'n1')
     assert.ok(win.known && win.platform === 'win32')
     const linux = targetPlatformForNode({ nodePlatformOf: () => 'linux' }, 'n1')
@@ -244,26 +244,26 @@ describe('targetPlatformForNode: platform choose (local host / remote register v
     assert.ok(darwin.known && darwin.platform === 'posix')
   })
 
-  it('remote platform unknown (not on report / offline / port missing): explicit unknown, never fallback local', { timeout: 60_000 }, () => {
-    // in win32 host simulated on also must not Hub platform set to remote: use inject reported verify.
+  it('remote platform unknown (unreported / offline / missing port): explicitly unknown, never falls back to local', { timeout: 60_000 }, () => {
+    // Even on a win32 host simulation, Hub platform must not leak to remote: verified via injected reporter.
     for (const source of [undefined, { nodePlatformOf: () => undefined }, { nodePlatformOf: () => '' }, {}]) {
       const info = targetPlatformForNode(source as never, 'n1')
-      assert.ok(!info.known, `platform unknown must explicit unknown:${JSON.stringify(source)}`)
-      assert.match(info.reason, /do not guess platform/)
+      assert.ok(!info.known, `unknown platform must explicitly report unknown: ${JSON.stringify(source)}`)
+      assert.match(info.reason, /refusing to guess or fall back/)
     }
   })
 
-  it('normalizePathForTarget: platform unknown when path original return (do not guess platform)', { timeout: 60_000 }, () => {
+  it('normalizePathForTarget returns path verbatim when platform is unknown without guessing', { timeout: 60_000 }, () => {
     const n = normalizePathForTarget('/mnt/d/proj', { known: false, reason: 'unknown' })
     assert.ok(n.ok && n.path === '/mnt/d/proj')
   })
 })
 
 // ---------------------------------------------------------------------------
-// 2. runShell:bash / runGate / execEnv all amount converge point cwd specification
+// 2. runShell: single cwd normalization choke point for bash / runGate / execEnv
 // ---------------------------------------------------------------------------
-describe('runShell: target platform aware cwd specification', { timeout: 60_000 }, () => {
-  it('remote win32 node:/mnt/d/proj(WSL mount view)→ exec receives D:\\proj', { timeout: 60_000 }, async () => {
+describe('runShell: target-platform-aware cwd normalization', { timeout: 60_000 }, () => {
+  it('remote win32 node: /mnt/d/proj (WSL mount view) -> exec receives D:\\proj', { timeout: 60_000 }, async () => {
     const shell = makeRecordingShellEnv()
     const deps = await makeDeps(
       join(rootDir, 'rs1'),
@@ -274,11 +274,11 @@ describe('runShell: target platform aware cwd specification', { timeout: 60_000 
     assert.deepEqual(
       shell.execCalls.map((c) => c.cwd),
       ['D:\\proj'],
-      'SDK NodeExecutionEnv / Remote execute only receive already specification path',
+      'SDK NodeExecutionEnv / remote exec receives only already-normalized paths',
     )
   })
 
-  it('remote win32 node:/d/proj(Git Bash symbol view)→ D:\\proj', { timeout: 60_000 }, async () => {
+  it('remote win32 node: /d/proj (Git Bash drive view) -> D:\\proj', { timeout: 60_000 }, async () => {
     const shell = makeRecordingShellEnv()
     const deps = await makeDeps(
       join(rootDir, 'rs2'),
@@ -289,7 +289,7 @@ describe('runShell: target platform aware cwd specification', { timeout: 60_000 
     assert.deepEqual(shell.execCalls.map((c) => c.cwd), ['D:\\proj'])
   })
 
-  it('win32 target bare POSIX (/home/x): explicit invalid_path and keep original path, never execute', { timeout: 60_000 }, async () => {
+  it('win32 target with bare POSIX path (/home/x): explicit invalid_path preserving original path, never executes', { timeout: 60_000 }, async () => {
     const shell = makeRecordingShellEnv()
     const deps = await makeDeps(
       join(rootDir, 'rs3'),
@@ -298,11 +298,11 @@ describe('runShell: target platform aware cwd specification', { timeout: 60_000 
     const result = await runShell(deps, 'pwd', { nodeId: 'win-node', cwd: '/home/user/x' })
     assert.equal(result.ok, false)
     assert.match(result.output, /invalid_path/)
-    assert.match(result.output, /\/home\/user\/x/, 'failed information must keep original path')
-    assert.equal(shell.execCalls.length, 0, 'path cannot mapping never start execute')
+    assert.match(result.output, /\/home\/user\/x/, 'failure message must preserve original path')
+    assert.equal(shell.execCalls.length, 0, 'unmappable path must never reach execution')
   })
 
-  it('remote POSIX node:/mnt/d/proj is real path, never by mistakenly judge into Windows do convert', { timeout: 60_000 }, async () => {
+  it('remote POSIX node: /mnt/d/proj is a real POSIX path and is never misclassified as Windows', { timeout: 60_000 }, async () => {
     const shell = makeRecordingShellEnv()
     const deps = await makeDeps(
       join(rootDir, 'rs4'),
@@ -313,7 +313,7 @@ describe('runShell: target platform aware cwd specification', { timeout: 60_000 
     assert.deepEqual(shell.execCalls.map((c) => c.cwd), ['/mnt/d/proj'])
   })
 
-  it('remote platform unknown (online but not on report):cwd original pass-through (do not guess, do not fallback Hub host)', { timeout: 60_000 }, async () => {
+  it('remote platform unknown (online but unreported): cwd passes through verbatim without guessing or Hub fallback', { timeout: 60_000 }, async () => {
     const shell = makeRecordingShellEnv()
     const deps = await makeDeps(
       join(rootDir, 'rs5'),
@@ -324,7 +324,7 @@ describe('runShell: target platform aware cwd specification', { timeout: 60_000 
     assert.deepEqual(shell.execCalls.map((c) => c.cwd), ['/mnt/d/proj'])
   })
 
-  it('remote node offline:node_offline explicit failed (do not guess platform, does not fall back local machine execute)', { timeout: 60_000 }, async () => {
+  it('remote node offline: node_offline explicit failure (no platform guessing, no local fallback)', { timeout: 60_000 }, async () => {
     const shell = makeRecordingShellEnv()
     const deps = await makeDeps(
       join(rootDir, 'rs6'),
@@ -336,7 +336,7 @@ describe('runShell: target platform aware cwd specification', { timeout: 60_000 
     assert.equal(shell.execCalls.length, 0)
   })
 
-  it('local(POSIX Hub):cwd original (term method archive one) reach exec', { timeout: 60_000 }, async () => {
+  it('local (POSIX Hub): cwd passes through unchanged to exec (separator normalized)', { timeout: 60_000 }, async () => {
     const shell = makeRecordingShellEnv()
     const deps = await makeDeps(
       join(rootDir, 'rs7'),
@@ -350,10 +350,10 @@ describe('runShell: target platform aware cwd specification', { timeout: 60_000 
 })
 
 // ---------------------------------------------------------------------------
-// 3. read / write / edit: and bash the same platform source and the same original language
+// 3. read / write / edit: identical platform source and primitives as bash
 // ---------------------------------------------------------------------------
-describe('read/write/edit:win32 target POSIX view specification (and bash consistent)', { timeout: 60_000 }, () => {
-  it('read: conversation cwd /mnt/d/proj under each other for and absolute path all rotate specification Windows path reach remote env', { timeout: 60_000 }, async () => {
+describe('read/write/edit: win32 target POSIX-view normalization (parity with bash)', { timeout: 60_000 }, () => {
+  it('read: relative and absolute paths under conversation cwd /mnt/d/proj normalize to Windows paths on remote env', { timeout: 60_000 }, async () => {
     const files = new Map<string, string>([
       ['D:\\proj\\note.md', '# win'],
       ['D:\\other\\abs.md', '# abs'],
@@ -368,24 +368,24 @@ describe('read/write/edit:win32 target POSIX view specification (and bash consis
     const rel = await tool.execute({ path: 'note.md' }, makeApi('/mnt/d/proj'), BACKGROUND_CONTEXT)
     assert.equal(!!rel.isError, false)
     assert.ok(recorder.calls.some((c) => c.method === 'readTextFile' && c.path === 'D:\\proj\\note.md'))
-    // absolute POSIX view path (across): same determinism convert.
+    // Absolute POSIX-view path (cross-drive): normalized deterministically as well.
     const abs = await tool.execute({ path: '/mnt/d/other/abs.md' }, makeApi('/mnt/d/proj'), BACKGROUND_CONTEXT)
     assert.equal(!!abs.isError, false)
     assert.ok(recorder.calls.some((c) => c.method === 'readTextFile' && c.path === 'D:\\other\\abs.md'))
   })
 
-  it('read and bash consistent: the same conversation cwd derive the same base allow (D:\\proj)', { timeout: 60_000 }, async () => {
+  it('read and bash parity: same conversation cwd derives identical normalized base directory (D:\\proj)', { timeout: 60_000 }, async () => {
     const files = new Map<string, string>([['D:\\proj\\note.md', '# win']])
     const recorder = makeRecordingFileEnv(files)
     const shell = makeRecordingShellEnv()
-    // the same target env:bash away exec, file tool away canonicalPath/readTextFile etc..
+    // Same target env: bash uses exec; file tools use canonicalPath/readTextFile, etc.
     const combinedEnv = { ...recorder.env, exec: shell.env.exec }
     const fabric = makePlatformFabric({ platform: 'win32', env: combinedEnv })
     const deps = await makeDeps(join(rootDir, 'rw2'), fabric, () => 'win-node')
-    // bash(runShell) and read in the same cwd '/mnt/d/proj' under execute.
+    // Execute both bash (runShell) and read under the same cwd '/mnt/d/proj'.
     const bashResult = await runShell(deps, 'pwd', { nodeId: 'win-node', cwd: '/mnt/d/proj', conversationId: 1 })
     assert.equal(bashResult.ok, true)
-    assert.deepEqual(shell.execCalls.map((c) => c.cwd), ['D:\\proj'], 'bash exec receives specification cwd')
+    assert.deepEqual(shell.execCalls.map((c) => c.cwd), ['D:\\proj'], 'bash exec receives normalized cwd')
     const read = await createReadTool(deps).execute(
       { path: 'note.md' },
       makeApi('/mnt/d/proj'),
@@ -396,11 +396,11 @@ describe('read/write/edit:win32 target POSIX view specification (and bash consis
     const readPath = recorder.calls.find((c) => c.method === 'readTextFile')!.path
     assert.ok(
       readPath.startsWith(`${bashBase}\\`),
-      `read must parse to bash the same specification base allow under:bash=${bashBase} read=${readPath}`,
+      `read must resolve under the same normalized base directory as bash: bash=${bashBase} read=${readPath}`,
     )
   })
 
-  it('write/edit: new file and unique replace all specification Windows path', { timeout: 60_000 }, async () => {
+  it('write/edit: new files and in-place edits both normalize to Windows paths', { timeout: 60_000 }, async () => {
     const files = new Map<string, string>([['D:\\proj\\config.ts', 'timeout = 1000']])
     const recorder = makeRecordingFileEnv(files)
     const deps = await makeDeps(
@@ -425,14 +425,14 @@ describe('read/write/edit:win32 target POSIX view specification (and bash consis
     assert.equal(files.get('D:\\proj\\config.ts'), 'timeout = 2000')
   })
 
-  it('win32 target /home reject:read/write/edit consistent invalid_path(keep original path, zero remote invoke)', { timeout: 60_000 }, async () => {
+  it('win32 target /home rejection: read/write/edit consistently return invalid_path (preserving original path, zero remote calls)', { timeout: 60_000 }, async () => {
     const recorder = makeRecordingFileEnv(new Map())
     const deps = await makeDeps(
       join(rootDir, 'rw4'),
       makePlatformFabric({ platform: 'win32', env: recorder.env }),
       () => 'win-node',
     )
-    // conversation cwd itself cannot mapping: reject.
+    // Conversation cwd itself is unmappable -> rejected.
     const readBadCwd = await createReadTool(deps).execute(
       { path: 'file.txt' },
       makeApi('/home/user/proj'),
@@ -441,7 +441,7 @@ describe('read/write/edit:win32 target POSIX view specification (and bash consis
     assert.equal(readBadCwd.isError, true)
     assert.match((readBadCwd.output as Array<{ text: string }>)[0]!.text, /invalid_path/)
     assert.match((readBadCwd.output as Array<{ text: string }>)[0]!.text, /\/home\/user\/proj/)
-    // legal cwd under absolute bare POSIX same reject.
+    // Under a valid cwd, an absolute bare POSIX path is likewise rejected.
     const readAbs = await createReadTool(deps).execute(
       { path: '/home/user/secret.txt' },
       makeApi('/mnt/d/proj'),
@@ -464,10 +464,10 @@ describe('read/write/edit:win32 target POSIX view specification (and bash consis
     )
     assert.equal(editAbs.isError, true)
     assert.match((editAbs.output as Array<{ text: string }>)[0]!.text, /invalid_path/)
-    assert.equal(recorder.calls.length, before, 'cannot mapping path never trigger reach remote env')
+    assert.equal(recorder.calls.length, before, 'unmappable path must never reach remote env')
   })
 
-  it('remote POSIX node:POSIX semantics original (read and since has parse consistent, never do reverse convert)', { timeout: 60_000 }, async () => {
+  it('remote POSIX node preserves POSIX semantics verbatim (parity with existing path resolution, never reverse-converted)', { timeout: 60_000 }, async () => {
     const files = new Map<string, string>([['/mnt/d/proj/note.md', '# posix']])
     const recorder = makeRecordingFileEnv(files)
     const deps = await makeDeps(
@@ -484,7 +484,7 @@ describe('read/write/edit:win32 target POSIX view specification (and bash consis
     assert.ok(recorder.calls.some((c) => c.method === 'readTextFile' && c.path === '/mnt/d/proj/note.md'))
   })
 
-  it('remote platform unknown: along use by shape parse since has semantics (win32 shape path original reach)', { timeout: 60_000 }, async () => {
+  it('remote platform unknown falls back to existing shape-based resolution (win32-shaped paths pass straight through)', { timeout: 60_000 }, async () => {
     const files = new Map<string, string>([['C:\\workspace\\note.md', '# shape']])
     const recorder = makeRecordingFileEnv(files)
     const deps = await makeDeps(
@@ -503,10 +503,10 @@ describe('read/write/edit:win32 target POSIX view specification (and bash consis
 })
 
 // ---------------------------------------------------------------------------
-// 4. resolveTargetPath:win32 platform branch term method semantics
+// 4. resolveTargetPath: win32 platform branch unit semantics
 // ---------------------------------------------------------------------------
-describe('resolveTargetPath:platform=win32 branch', { timeout: 60_000 }, () => {
-  it('POSIX view base and each other for raw: first convert after by win32 rule parse', { timeout: 60_000 }, () => {
+describe('resolveTargetPath: platform=win32 branch', { timeout: 60_000 }, () => {
+  it('POSIX-view base with relative inputs: normalize first, then resolve using win32 rules', { timeout: 60_000 }, () => {
     const r = resolveTargetPath('src\\main.ts', '/mnt/d/proj', 'win32')
     assert.ok(r.ok)
     assert.equal(r.abs, 'D:\\proj\\src\\main.ts')
@@ -515,35 +515,35 @@ describe('resolveTargetPath:platform=win32 branch', { timeout: 60_000 }, () => {
     assert.equal(dotdot.abs, 'D:\\secret.txt')
   })
 
-  it('absolute POSIX view raw:/mnt/c and /e view determinism convert', { timeout: 60_000 }, () => {
+  it('absolute POSIX-view inputs: /mnt/c and /e views convert deterministically', { timeout: 60_000 }, () => {
     const a = resolveTargetPath('/mnt/c/x/y.txt', 'D:\\proj', 'win32')
     assert.ok(a.ok && a.abs === 'C:\\x\\y.txt')
     const b = resolveTargetPath('/e/z.txt', 'D:\\proj', 'win32')
     assert.ok(b.ok && b.abs === 'E:\\z.txt')
   })
 
-  it('bare POSIX reject (keep original path); symbol each other for reject do not change', { timeout: 60_000 }, () => {
+  it('rejects bare POSIX paths while preserving original path; drive-relative rejections remain unchanged', { timeout: 60_000 }, () => {
     const home = resolveTargetPath('/home/u/f.txt', 'D:\\proj', 'win32')
     assert.ok(!home.ok)
     assert.match(home.reason, /\/home\/u\/f\.txt/)
     const mntBad = resolveTargetPath('/mnt/cd/rom', 'D:\\proj', 'win32')
-    assert.ok(!mntBad.ok, '/mnt/<non- single character parent> is not symbol view')
+    assert.ok(!mntBad.ok, '/mnt/<multi-char> is not a drive-letter view')
     const driveRel = resolveTargetPath('C:relative\\f.txt', 'D:\\proj', 'win32')
     assert.ok(!driveRel.ok)
   })
 
-  it('platform default (remote platform unknown): by shape choose rule since has semantics do not change', { timeout: 60_000 }, () => {
+  it('omitted platform (unknown remote platform): selects rule by path shape, preserving existing semantics', { timeout: 60_000 }, () => {
     const r = resolveTargetPath('note.md', 'C:\\workspace')
     assert.ok(r.ok && r.abs === 'C:\\workspace\\note.md')
     const p = resolveTargetPath('note.md', '/mnt/d/proj')
-    assert.ok(p.ok && p.abs === '/mnt/d/proj/note.md', 'platform unknown when POSIX view do not convert')
+    assert.ok(p.ok && p.abs === '/mnt/d/proj/note.md', 'POSIX view is not converted when platform is unknown')
   })
 })
 
 // ---------------------------------------------------------------------------
-// 5. NodeManager.resolveExecTarget:POST /api/env/exec target parse
+// 5. NodeManager.resolveExecTarget: POST /api/env/exec target resolution
 // ---------------------------------------------------------------------------
-describe('resolveExecTarget: platform aware cwd specification (HTTP exec target)', { timeout: 60_000 }, () => {
+describe('resolveExecTarget: platform-aware cwd normalization (HTTP exec target)', { timeout: 60_000 }, () => {
   function makeManager(fabric: EnvFabric, convOf: () => { cwd: string; nodeId?: string } = () => ({ cwd: '/conv/cwd' })): NodeManager {
     return new NodeManager({
       dataDir: join(rootDir, 'nm'),
@@ -557,13 +557,13 @@ describe('resolveExecTarget: platform aware cwd specification (HTTP exec target)
     })
   }
 
-  it('remote win32 node:/mnt/d/proj → D:\\proj(return value i.e. specification cwd)', { timeout: 60_000 }, () => {
+  it('remote win32 node: /mnt/d/proj -> D:\\proj (return value is normalized cwd)', { timeout: 60_000 }, () => {
     const manager = makeManager(makePlatformFabric({ platform: 'win32' }))
     const t = manager.resolveExecTarget({ nodeId: 'win-node', cwd: '/mnt/d/proj' })
     assert.deepEqual(t, { nodeId: 'win-node', cwd: 'D:\\proj' })
   })
 
-  it('win32 node bare POSIX :validation_error(contains invalid_path and original cwd)', { timeout: 60_000 }, () => {
+  it('win32 node with bare POSIX path: validation_error (includes invalid_path and original cwd)', { timeout: 60_000 }, () => {
     const manager = makeManager(makePlatformFabric({ platform: 'win32' }))
     assert.throws(
       () => manager.resolveExecTarget({ nodeId: 'win-node', cwd: '/home/user/x' }),
@@ -571,16 +571,16 @@ describe('resolveExecTarget: platform aware cwd specification (HTTP exec target)
         assert.ok(error instanceof HelmError)
         assert.equal(error.code, 'validation_error')
         assert.equal(error.status, 400)
-        assert.match(error.message, /\/home\/user\/x/, 'error information keep original path')
+        assert.match(error.message, /\/home\/user\/x/, 'error message preserves original path')
         const details = error.details as { cwd?: string; pathCode?: string }
-        assert.equal(details.cwd, '/home/user/x', 'details keep original cwd')
+        assert.equal(details.cwd, '/home/user/x', 'details preserves original cwd')
         assert.equal(details.pathCode, 'invalid_path')
         return true
       },
     )
   })
 
-  it('conversation bind set inherit: conversation cwd same by target platform specification', { timeout: 60_000 }, () => {
+  it('conversation binding inheritance: conversation cwd also normalizes according to target platform', { timeout: 60_000 }, () => {
     const manager = makeManager(makePlatformFabric({ platform: 'win32' }), () => ({
       cwd: '/mnt/c/conv',
       nodeId: 'win-node',
@@ -589,7 +589,7 @@ describe('resolveExecTarget: platform aware cwd specification (HTTP exec target)
     assert.deepEqual(t, { nodeId: 'win-node', cwd: 'C:\\conv' })
   })
 
-  it('remote offline:node_offline 409(platform unknown do not guess, does not fall back local machine)', { timeout: 60_000 }, () => {
+  it('remote offline: node_offline 409 (refuses to guess unknown platform or fall back to local machine)', { timeout: 60_000 }, () => {
     const manager = makeManager(makePlatformFabric({ platform: undefined, online: false }))
     assert.throws(
       () => manager.resolveExecTarget({ nodeId: 'off-node', cwd: '/mnt/d/proj' }),
@@ -602,19 +602,19 @@ describe('resolveExecTarget: platform aware cwd specification (HTTP exec target)
     )
   })
 
-  it('remote platform unknown (online not on report):cwd original pass-through (do not guess, do not convert, do not errors)', { timeout: 60_000 }, () => {
+  it('remote platform unknown (online, unreported): cwd passes through verbatim without guessing, converting, or throwing', { timeout: 60_000 }, () => {
     const manager = makeManager(makePlatformFabric({ platform: undefined }))
     const t = manager.resolveExecTarget({ nodeId: 'mystery-node', cwd: '/mnt/d/proj' })
     assert.deepEqual(t, { nodeId: 'mystery-node', cwd: '/mnt/d/proj' })
   })
 
-  it('remote POSIX node:/mnt/d original (Linux/macOS and remote POSIX semantics do not change)', { timeout: 60_000 }, () => {
+  it('remote POSIX node preserves /mnt/d verbatim (Linux/macOS and remote POSIX semantics unchanged)', { timeout: 60_000 }, () => {
     const manager = makeManager(makePlatformFabric({ platform: 'linux' }))
     const t = manager.resolveExecTarget({ nodeId: 'posix-node', cwd: '/mnt/d/proj' })
     assert.deepEqual(t, { nodeId: 'posix-node', cwd: '/mnt/d/proj' })
   })
 
-  it('local: default cwd original (inject POSIX Hub term method archive one)', { timeout: 60_000 }, () => {
+  it('local preserves default cwd verbatim (with injected POSIX Hub path normalization)', { timeout: 60_000 }, () => {
     const manager = makeManager(makePlatformFabric({ hubPlatform: 'linux' }))
     const t = manager.resolveExecTarget({})
     assert.deepEqual(t, { nodeId: 'local', cwd: '/hub/cwd' })
@@ -622,9 +622,9 @@ describe('resolveExecTarget: platform aware cwd specification (HTTP exec target)
 })
 
 // ---------------------------------------------------------------------------
-// 6. EnvFabric.nodePlatformOf: real register chain (WS gateway + NodeRegistry)
+// 6. EnvFabric.nodePlatformOf: live registration chain (WS gateway + NodeRegistry)
 // ---------------------------------------------------------------------------
-describe('EnvFabric.nodePlatformOf: register register platform most small only read port (real WS register chain)', { timeout: 60_000 }, () => {
+describe('EnvFabric.nodePlatformOf: minimal read-only port for registered platform (live WS registration chain)', { timeout: 60_000 }, () => {
   async function startHub(): Promise<{
     fabric: EnvFabric
     baseUrl: string
@@ -655,7 +655,7 @@ describe('EnvFabric.nodePlatformOf: register register platform most small only r
     }
   }
 
-  /** original WS client manually register(can control platform on report; return ws supply disconnect). */
+  /** Raw WS client registering directly (controllable reported platform; returns ws for disconnect testing). */
   async function registerFakeNode(
     baseUrl: string,
     input: NodeRegisterInput,
@@ -677,7 +677,7 @@ describe('EnvFabric.nodePlatformOf: register register platform most small only r
             try {
               cb(JSON.parse(text) as never)
             } catch {
-              /* non- JSON ignore */
+              /* ignore non-JSON */
             }
           })
         },
@@ -687,11 +687,11 @@ describe('EnvFabric.nodePlatformOf: register register platform most small only r
       },
     )
     const outcome = await rpc.register(input)
-    assert.equal(outcome.ok, true, `register should succeeded:${JSON.stringify(outcome)}`)
+    assert.equal(outcome.ok, true, `register should succeed: ${JSON.stringify(outcome)}`)
     return ws
   }
 
-  it('win32 / linux register platform such as expose; disconnect i.e. undefined;local constant host platform', { timeout: 60_000 }, async () => {
+  it('win32 / linux registered platforms exposed directly; undefined after disconnect; local always uses host platform', { timeout: 60_000 }, async () => {
     const TOKEN = 'fake:secret'
     const hub = await startHub()
     try {
@@ -711,23 +711,23 @@ describe('EnvFabric.nodePlatformOf: register register platform most small only r
         assert.equal(hub.fabric.nodePlatformOf('fake-win'), 'win32')
         assert.equal(hub.fabric.nodePlatformOf('fake-posix'), 'linux')
         assert.equal(hub.fabric.nodePlatformOf('local'), process.platform)
-        // not registered node:undefined(do not guess).
+        // Unregistered node: undefined (no guessing).
         assert.equal(hub.fabric.nodePlatformOf('never-registered'), undefined)
-        // platform choose original language consume the same port:win32 → win32,linux → posix.
+        // Platform selection primitive consumes the same port: win32 -> win32, linux -> posix.
         const win = targetPlatformForNode(hub.fabric, 'fake-win')
         assert.ok(win.known && win.platform === 'win32')
         const posix = targetPlatformForNode(hub.fabric, 'fake-posix')
-        assert.ok(posix.known && posix.platform === 'posix', 'remote POSIX node never mistakenly judge into Windows')
+        assert.ok(posix.known && posix.platform === 'posix', 'remote POSIX node is never misclassified as Windows')
       } finally {
         winWs.close()
         posixWs.close()
       }
-      // after disconnect (wait for register table evict): platform cannot know → unknown, never leftover old value. wait for gateway handle disconnect.
+      // After disconnect (await registry eviction): platform becomes unknown again with no stale cache.
       await new Promise((resolve) => setTimeout(resolve, 200))
       assert.equal(hub.fabric.isOnline('fake-win'), false)
       assert.equal(hub.fabric.nodePlatformOf('fake-win'), undefined)
       const gone = targetPlatformForNode(hub.fabric, 'fake-win')
-      assert.ok(!gone.known, 'after disconnect platform unknown, do not guess')
+      assert.ok(!gone.known, 'platform becomes unknown after disconnect without guessing')
     } finally {
       await hub.close()
     }

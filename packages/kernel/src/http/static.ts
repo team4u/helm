@@ -1,34 +1,33 @@
 /**
- * produce static hosting:packages/web/dist(Vite artifact).
+ * Production static asset hosting for `packages/web/dist` (Vite build output).
  *
- * mechanism (only do file mapping and cache policy, zero business logic):
- * - path mapping:decodeURIComponent decode pathname → resolve to root inside,
- *   double heavy validate (term method prefix + realpath containment) guard against path through exceeds and symlink
- *   escape, out of bounds 404;containment use isAbsolute(relative()) decide, across
- *   (Windows symbol different) also judge out of bounds, independent of `..` prefix;
- * - hit real file: by extension back Content-Type;/assets/*(Vite carries hash artifact)
- *   back immutable long cache,index.html constant no-cache, the rest file keep guard no-cache;
- * - without extension path (SPA frontend routing such as /conversations/42): target missing and root inside
- *   store in index.html when fall back index.html(200 text/html); target out of bounds reject
- *   (contains symlink escape) one rule 404, never with SPA fall back disguise succeeded; carries extension missing 404;
- * - realpath/stat/readFile only ENOENT/ENOTDIR treated as missing;EACCES/ELOOP etc.
- *   other IO error such as throw (hub layer rotate 500 message seal), never disguise 404 mask fault
- *   (honest discipline:missing and cannot read must can zone).
+ * Mechanism (only file mapping and cache policy; zero business logic):
+ * - Path mapping: decodeURIComponent(pathname) -> resolve inside root with two-layer validation
+ *   (lexical relative check + realpath containment) to block path traversal and symlink escapes (404);
+ *   containment uses `isAbsolute(relative())`, treating cross-drive paths (Windows) as out of bounds too.
+ * - Real file hits: maps extension to Content-Type; `/assets/*` (Vite hashed assets) get immutable
+ *   long-lived caching, `index.html` is always `no-cache`, and all other files stay conservative `no-cache`.
+ * - Extensionless paths (SPA frontend routes like `/conversations/42`): fall back to `index.html`
+ *   (200 text/html) when the target is missing and `index.html` exists under root; out-of-bounds targets
+ *   (including symlink escapes) always return 404 rather than masking with SPA fallback; missing files
+ *   with extensions always return 404.
+ * - `realpath`/`stat`/`readFile` only treat `ENOENT`/`ENOTDIR` as missing; real I/O errors (`EACCES`/`ELOOP`,
+ *   etc.) propagate as-is (wrapped into 500 by the Hub layer) instead of being disguised as 404 (honest
+ *   discipline: missing and unreadable must be distinguishable).
  *
- * HEAD semantics: status code and response head (contains content-length) same GET, in Web Standard
- * Response layer side body placement empty - - independent of node layer discard.
+ * HEAD semantics: identical status and headers (including `content-length`) to GET, with an empty body
+ * at the Web Standard Response layer independent of Node adapter stripping.
  *
- * gzip(on demand, carries cache): text class extension (js/css/html/svg/json/map/txt/md/
- * xml/webmanifest) in client Accept-Encoding contains gzip and file reach threshold when compress,
- * Vary merge Accept-Encoding,content-length is compress after byte count; compress artifact by
- * file real path + mtimeMs + size cache (rebuild/change automatically expires), item cap finite
- * guard against without boundary increase long. already compress format (png/woff2 etc.) and two enter system one rule do not compress.
+ * On-demand cached gzip: compresses text extensions (js/css/html/svg/json/map/txt/md/xml/webmanifest)
+ * when client `Accept-Encoding` accepts gzip and size meets the threshold, merges `Vary: Accept-Encoding`,
+ * sets `content-length` to compressed byte length, and caches by `realpath + mtimeMs + size` (bounded LRU/FIFO
+ * to avoid unbounded growth). Pre-compressed and binary formats (png/woff2, etc.) are never recompressed.
  */
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { gzipSync } from 'node:zlib';
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
-/** extension → Content-Type(charset by text type additional). */
+/** Extension -> Content-Type (with UTF-8 charset for text types). */
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.htm': 'text/html; charset=utf-8',
@@ -59,24 +58,24 @@ const CONTENT_TYPES: Record<string, string> = {
 
 const INDEX_HTML = 'index.html';
 
-/** static gzip threshold (byte): low at this value compress benefit do not arrive overhead. */
+/** Static gzip threshold (bytes): below this, compression gains do not outweigh overhead. */
 const STATIC_GZIP_MIN_BYTES = 1024;
 
-/** static gzip cache item cap (guard against without boundary increase long; by insert order eliminate most old). */
+/** Maximum cached gzip artifacts (prevents unbounded growth; evicts oldest by insertion order). */
 const STATIC_GZIP_CACHE_MAX = 32;
 
-/** can compress text class extension (the rest extension one rule identity). */
+/** Compressible text extensions (all others stay identity-encoded). */
 const COMPRESSIBLE_EXTENSIONS: ReadonlySet<string> = new Set([
   '.js', '.mjs', '.css', '.html', '.htm', '.svg', '.json', '.map', '.txt', '.md', '.xml', '.webmanifest',
 ]);
 
-/** only this two class errno means target missing; the rest (EACCES/ELOOP/EIO etc.) is real IO fault. */
+/** Only these two errnos mean the target does not exist; all others (EACCES/ELOOP/EIO, etc.) are real I/O faults. */
 export function isMissingError(err: unknown): boolean {
   const code = (err as NodeJS.ErrnoException)?.code;
   return code === 'ENOENT' || code === 'ENOTDIR';
 }
 
-/** file parse result:file=can service (carry stat refer grain,gzip cache expires judge based on);missing=missing (SPA can fall back);rejected=out of bounds/non- file (404 does not fall back). */
+/** File resolution outcome: `file` = servable (with stat fingerprint for gzip cache invalidation); `missing` = absent (SPA fallback eligible); `rejected` = out of bounds / non-file (404, no fallback). */
 interface FileStatFingerprint {
   mtimeMs: number
   size: number
@@ -87,21 +86,21 @@ type FileResolution =
   | { kind: 'rejected' };
 
 /**
- * create static file service handle. directory missing (ENOENT/ENOTDIR) or store in but non- directory when throw
- * (by caller decide not enabled also is explicit diagnose);root realpath after success lock
- * real path (after continue request all with real root is base allow); other IO error such as throw.
+ * Create a static file server handle. Throws if the directory is missing (`ENOENT`/`ENOTDIR`) or not a
+ * directory (lets callers that explicitly enabled it surface a clear diagnostic); pins the canonical
+ * `realpath` of the root for all subsequent containment checks. Rethrows all other I/O errors verbatim.
  */
 export async function createStaticServe(webDistDir: string): Promise<StaticServe> {
-  const root = await realpath(webDistDir); // missing/cannot reach/non- directory: such as throw
+  const root = await realpath(webDistDir); // missing / inaccessible / non-directory: rethrow verbatim
   if (!(await stat(root)).isDirectory()) {
-    throw new Error(`static hosting directory is not directory: ${webDistDir}`);
+    throw new Error(`static hosting path is not a directory: ${webDistDir}`);
   }
   return new StaticServe(root);
 }
 
 export class StaticServe {
   private readonly root: string;
-  /** real file path -> gzip artifact cache (mtime+size refer grain validate, expires heavy press). */
+  /** Real file path -> cached gzip artifact (validated via mtime + size fingerprint; recompressed on change). */
   private readonly gzipCache = new Map<string, { mtimeMs: number; size: number; gz: Uint8Array }>();
 
   constructor(root: string) {
@@ -109,11 +108,10 @@ export class StaticServe {
   }
 
   /**
-   * handle non- /api static request (GET hit file;HEAD same head remove body).
-   * @param method GET or HEAD(other method by caller block in static hosting of outside).
-   * @param options.acceptGzip client Accept-Encoding is otherwise accept gzip(by
-   *   hub layer parse pass; default do not compress).
-   * @returns Response; cannot service (contains path through exceeds/symlink out of bounds reject) return 404/400.
+   * Handle non-`/api` static requests (GET serves body; HEAD returns identical headers with empty body).
+   * @param method GET or HEAD (other methods are blocked by the caller outside static hosting).
+   * @param options.acceptGzip Whether client `Accept-Encoding` accepts gzip (parsed by Hub; defaults to false).
+   * @returns Response; unservable paths (including path traversal / symlink escapes) return 404/400.
    */
   async serve(method: string, pathname: string, options?: { acceptGzip?: boolean }): Promise<Response> {
     const acceptGzip = options?.acceptGzip === true;
@@ -128,7 +126,7 @@ export class StaticServe {
     }
     const target = resolve(this.root, `.${decoded.startsWith('/') ? decoded : `/${decoded}`}`);
     const rel = relative(this.root, target);
-    // parse after exceeds out (.. through exceeds) directly 404, does not give probe feedback
+    // Out-of-bounds lexical resolution (`..` traversal): fail immediately with 404 without probing hints
     if (isOutside(rel)) {
       return new Response('Not Found', { status: 404 });
     }
@@ -136,12 +134,12 @@ export class StaticServe {
     if (hit.kind === 'file') {
       return this.respondFile(method, hit.real, hit.stat, { acceptGzip });
     }
-    // out of bounds/non- file (contains symlink escape): directly 404, never with SPA fall back disguise succeeded
+    // Out-of-bounds or non-file (including symlink escapes): return 404 immediately, never mask with SPA fallback
     if (hit.kind === 'rejected') {
       return new Response('Not Found', { status: 404 });
     }
-    // target missing: without extension (SPA routing) and root memory in index.html when fall back;
-    // carries extension (/missing.js) or without index.html one rule 404(HTML fall back will mask true missing)
+    // Missing target: fall back to `index.html` only for extensionless paths (SPA routes) when `index.html` exists;
+    // missing paths with extensions (`/missing.js`) or missing `index.html` return 404 (HTML fallback would mask missing assets).
     if (extname(decoded) === '') {
       const index = await this.resolveFile(join(this.root, INDEX_HTML));
       if (index.kind === 'file') {
@@ -151,15 +149,15 @@ export class StaticServe {
     return new Response('Not Found', { status: 404 });
   }
 
-  /** root inside is otherwise store in can service index.html(default probe store in only then enable judge based on). */
+  /** Whether a servable `index.html` exists under root (used to decide auto-enabling). */
   async hasSpaEntry(): Promise<boolean> {
     return (await this.resolveFile(join(this.root, INDEX_HTML))).kind === 'file';
   }
 
   /**
-   * realpath double inspect: target must parse is root inside real file (guard against symlink escape).
-   * missing=missing;rejected=out of bounds or non- file;file=can service.
-   * EACCES etc. real IO error on throw.
+   * Double check via `realpath`: target must resolve to a regular file inside `root` (prevents symlink escapes).
+   * `missing` = absent; `rejected` = out of bounds or non-regular file; `file` = servable.
+   * Real I/O errors such as `EACCES` are rethrown verbatim.
    */
   private async resolveFile(target: string): Promise<FileResolution> {
     let real: string;
@@ -170,7 +168,7 @@ export class StaticServe {
       throw err;
     }
     const rel = relative(this.root, real);
-    // directory itself (path /):missing → by SPA fall back take over (without index.html then 404)
+    // The root directory itself (path `/`): treat as missing so SPA fallback handles it (404 if no index.html)
     if (rel.length === 0) return { kind: 'missing' };
     if (isOutside(rel) || rel.split(sep).includes('..')) {
       return { kind: 'rejected' };
@@ -186,7 +184,7 @@ export class StaticServe {
     return { kind: 'file', real, stat: { mtimeMs: info.mtimeMs, size: info.size } };
   }
 
-  /** text class file gzip(carries refer grain cache): cannot compress/low at threshold return undefined. */
+  /** Gzip-compress text files (with fingerprint cache): returns undefined if incompressible or below threshold. */
   private gzipMaybe(fileReal: string, fingerprint: FileStatFingerprint, body: Buffer): Uint8Array | undefined {
     if (!COMPRESSIBLE_EXTENSIONS.has(extname(fileReal).toLowerCase())) return undefined;
     if (body.byteLength < STATIC_GZIP_MIN_BYTES) return undefined;
@@ -227,9 +225,9 @@ export class StaticServe {
       ? 'public, max-age=31536000, immutable'
       : 'no-cache';
     const gz = opts.acceptGzip === true ? this.gzipMaybe(fileReal, fingerprint, body) : undefined;
-    // can compress text even if this time identity(client do not accept gzip / low at threshold) also carries
-    // Vary: Accept-Encoding- - the same URL store in two kinds of encode means, missing Vary 
-    // identity response may by proxy cache across encode re- use. cannot compress format do not carries.
+    // Compressible text files always carry `Vary: Accept-Encoding` even when served as identity (e.g. client
+    // didn't accept gzip or payload was below threshold)—the URL has two representations, and omitting Vary
+    // could let proxies reuse an identity response across encodings. Incompressible formats omit Vary.
     const compressible = COMPRESSIBLE_EXTENSIONS.has(extname(fileReal).toLowerCase());
     const headers: Record<string, string> = {
       'content-type': type,
@@ -239,7 +237,7 @@ export class StaticServe {
       ...(gz !== undefined ? { 'content-encoding': 'gzip' } : {}),
       ...(opts.spaFallback ? { 'x-helm-spa-fallback': '1' } : {}),
     };
-    // HEAD: same status code and response head (contains compress semantics),body in Response layer side placement empty
+    // HEAD: identical status and response headers (including compression headers), empty body on Response
     if (method === 'HEAD') {
       return new Response(null, { status: 200, headers });
     }
@@ -247,7 +245,7 @@ export class StaticServe {
   }
 }
 
-/** relative result exceeds out root:`..` prefix or across (different symbol / UNC prefix) absolute path. */
+/** Whether a `relative()` result escapes root: `..` prefix or cross-drive absolute path (different drive letter / UNC prefix). */
 function isOutside(rel: string): boolean {
   return rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel);
 }

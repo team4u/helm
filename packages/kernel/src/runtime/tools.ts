@@ -1,33 +1,32 @@
 /**
- * kernel self carries local machine tool (combine exit): implement by responsibility split in this directory sub- module, this file only
- * again export, supply runtime.ts / spawn.ts / tool-registry.ts and test since has
- * `./tools.js` import path keep stable.
+ * Built-in kernel tools (barrel re-export): implementations are split by responsibility into submodules under
+ * `./tools/`, while this file preserves stable `./tools.js` imports for `runtime.ts`, `spawn.ts`, `tool-registry.ts`,
+ * and existing tests.
  *
- * - shell execute engine (runShell / runGate / bash tool):tools/shell-exec.ts- -
- *   real process group, timeout,abort, across chunk UTF-8 fidelity, output limit quota explicit errors;
- * - managed env together into (buildToolEnv / buildManagedEnv / executionScopeHash):
- *   tools/managed-env.ts- - managed HELM_* variable fixed override, together into right threat in
- *   env/scoped-env.ts  ScopedExecutionEnv;
- * - path term method parse (resolveTargetPath):tools/target-path.ts- - by target path
- *   shape choose pure posix/win32 rule, never use Hub host node:path by default rule parse
- *   remote path;isAbsoluteTargetPath/targetPathShape again export self @helm/protocol;
- * - remote guard (env_fabric_missing / node_offline):tools/guards.ts- -
- *   EnvFabric missing and node offline explicit failed, never static default fall back local;
- * - read/write/edit file tool:tools/file-ops.ts + tools/file-env.ts- -
- *   local(process inside fs) and EnvFabric remote branch converge is unify execute environment adapt +
- *   single one template; read-change-write via env/file-mutation-queue mutual exclusion;edit row level difference in
- *   runtime/tool-edit-diff.ts unique implement;
- * - register_artifact / read_artifact:tools/artifact-tools.ts- - real ordinary
- *   file duplicate register (cap 15 MiB, same fd has boundary read, in route change explicit reject) and
- *   spill artifact page read (UTF-8 boundary align guarantee before enter);read_artifact zone
- * artifact missing and store failed to read, after such as through out original error.
+ * - Shell execution engine (`runShell` / `runGate` / `bash` tool): `tools/shell-exec.ts` —
+ *   real process groups, timeout/abort handling, cross-chunk UTF-8 fidelity, explicit errors on output limit overflow;
+ * - Managed env assembly (`buildToolEnv` / `buildManagedEnv` / `executionScopeHash`): `tools/managed-env.ts` —
+ *   pinned `HELM_*` variable overrides, assembled coherently under `env/scoped-env.ts` `ScopedExecutionEnv`;
+ * - Lexical path resolution (`resolveTargetPath`): `tools/target-path.ts` — picks pure posix/win32 rules based on
+ *   target path shape rather than Hub host's `node:path` default; `isAbsoluteTargetPath`/`targetPathShape`
+ *   re-exported from `@helm/protocol`;
+ * - Remote guards (`env_fabric_missing` / `node_offline`): `tools/guards.ts` — fails explicitly when
+ *   `EnvFabric` is missing or nodes are offline, never falling back silently to local;
+ * - File tools (`read` / `write` / `edit`): `tools/file-ops.ts` + `tools/file-env.ts` —
+ *   local (in-process fs) and remote `EnvFabric` paths share one execution-environment adapter and
+ *   template; read-modify-write serializes via `env/file-mutation-queue`; edit line-level diffs live
+ *   solely in `runtime/tool-edit-diff.ts`;
+ * - `register_artifact` / `read_artifact`: `tools/artifact-tools.ts` — real regular-file copy
+ *   registration (15 MiB cap, bounded single-fd read, explicit rejection on concurrent mutation) and
+ *   paginated spill artifact reading (UTF-8 boundary alignment guarantees progress); `read_artifact`
+ *   distinguishes missing artifacts from storage read failures, propagating original errors on the latter.
  *
- * file path contract (read/write/edit, align pi): conversation cwd only as relative path parse
- * base allow, absolute path and ../ across directory access one rule allows - -bash this then without file boundary, file tool
- * and bash same right, do not set cwd sandbox; permission boundary hand over to OS itself.timeoutMs must is
- * correct finite integer and ≤ cap, illegal value explicit invalid_timeout.SecretStash redaction in aggregate
- * complete all text on execute (first complete concatenate again redact, across chunk tear secret also must however complete
- * match), never reverse restore.
+ * File path contract (`read` / `write` / `edit`, aligned with `pi`): conversation `cwd` is only used as
+ * the base for relative paths; absolute paths and `../` parent traversals are always permitted (matching
+ * `bash` privileges, without a cwd sandbox — permissions are enforced by the OS). `timeoutMs` must be
+ * a positive finite integer `<= MAX_TIMEOUT_MS`; invalid values reject explicitly with `invalid_timeout`.
+ * `SecretStash` redaction runs across the full aggregated text (concatenate first, then redact so split
+ * secrets across chunks still match completely) and never reverses redaction.
  */
 export { resolveTargetPath } from './tools/target-path.js'
 export {
@@ -49,6 +48,6 @@ export {
   type ArtifactFileBytes,
   type ArtifactReadHandle,
 } from './tools/artifact-tools.js'
-// shape decide and term method rule sub- collection consolidate @helm/protocol(browser security pure function, kernel and
-// @helm/plugins sharing); this where again export supply since has relative path reference keep stable.
+// Shape detection and pure lexical helpers live in `@helm/protocol` (browser-safe, shared by kernel and
+// `@helm/plugins`); re-exported here to preserve existing relative-path imports.
 export { isAbsoluteTargetPath, targetPathShape } from '@helm/protocol'

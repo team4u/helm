@@ -1,23 +1,23 @@
 /**
- * plugin concurrency defect fix dedicated items regression (fix/concurrency-plugins).
+ * Regression suite for plugin concurrency fixes (fix/concurrency-plugins).
  *
- * override (and fix one one for should):
- * 1. disable gate TOCTOU:collectPluginInUse async window inside enter in-flight task must by
- *    second gate 409 intercept (do not and teardown concurrency split register table);plugin_in_use reject after
- *    state keep enabled+idle can continue service.
- * 2. start screen fault read write gate: screen fault phase concurrency register(enable) service do not by leak start; concurrency
- *    disable does not resurrect (stop after at start);stop() etc. screen fault after completion again stop (do not empty run).
- * 3. HookPipeline iterate isolated:run iterate during concurrency add + trigger sort do not heavy arrange correct by iterate
- *    array (do not skip, does not repeat execute).
- * 4. nodeFetch wrap failed without leaking counter (body lock exception path).
- * 5. setConfig read-together-write serial: concurrency patch do not lose update.
- * 6. register commit point after placement:provider mount complete before list do not expose capability (manifest and
- *    can execute do not tear).
- * 7. package manage rollback honest:update restore reload failed no longer lie report rolledBack;
- *    install store.save failed and rollback deregister 409 when never rm instance directory;
- *    install register failed encounter concurrency same name registered instance when keep directory.
+ * Covers each fix 1-to-1:
+ * 1. Disable gate TOCTOU: in-flight tasks entering during collectPluginInUse async gap are caught by
+ *    a second gate returning 409 (never concurrently tearing down registry); plugin_in_use leaves
+ *    state enabled+idle and ready to keep serving;
+ * 2. Startup barrier RW gate: concurrent register(enable) during barrier starts its service cleanly;
+ *    concurrent disable never resurrects (stop runs after barrier start); stop() waits for barrier;
+ * 3. HookPipeline iteration isolation: concurrent add + sort during run() never re-sorts active
+ *    iteration array (no skipped or repeated hooks);
+ * 4. nodeFetch wrapper failure never leaks live-task count (locked body exception path);
+ * 5. setConfig read-modify-write serialization: concurrent patches never drop updates;
+ * 6. Register commit point happens after provider mount: capabilities never appear in listings
+ *    before mounting finishes (manifest and executability stay in sync);
+ * 7. Honest package manager rollback: failed restore reload during update never falsely reports
+ *    rolledBack; failed store.save + 409 deregister on install never deletes instance directory;
+ *    install registration collision with concurrent instance preserves directory.
  *
- * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
+ * Runner: tsx --test; every test specifies timeout: 60_000 against deadlocks.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -38,7 +38,7 @@ import { createPluginBuildProvider } from '@helm/plugin-build'
 import { MemoryDocStore, assertRejectsCode, deferred } from './helpers.js'
 
 // ---------------------------------------------------------------------------
-// base create
+// Fixture setup
 // ---------------------------------------------------------------------------
 
 function makeHost(overrides: { deferServices?: boolean; backend?: PluginHostBackend; providers?: PluginProviderPort } = {}) {
@@ -47,7 +47,7 @@ function makeHost(overrides: { deferServices?: boolean; backend?: PluginHostBack
     dataDir,
     host: {
       ...createPluginHostBackendFixture(),
-      // plugin lifecycle event collect (fixture bottom seat for emitEvent explicit unsupported)
+      // Lifecycle event stub (fixture base leaves emitEvent unsupported)
       emitEvent: () => {},
       ...(overrides.backend ? overrides.backend : {}),
     },
@@ -69,10 +69,10 @@ function makeHost(overrides: { deferServices?: boolean; backend?: PluginHostBack
 }
 
 // ---------------------------------------------------------------------------
-// 1. disable gate TOCTOU
+// 1. Disable gate TOCTOU
 // ---------------------------------------------------------------------------
 
-test('disable gate TOCTOU:inUse collect window inside enter in-flight task by second gate 409 intercept', { timeout: 60_000 }, async () => {
+test('disable gate TOCTOU: task entering during inUse collection window is caught 409 by second gate', { timeout: 60_000 }, async () => {
   const { host, close } = makeHost()
   try {
     let releaseInUse!: () => void
@@ -85,8 +85,8 @@ test('disable gate TOCTOU:inUse collect window inside enter in-flight task by se
           id: 'svc',
           start() {},
           stop() {},
-          // inUse async suspended once (fabricate collectPluginInUse  await window);
-          // release after after continue invoke immediately return empty, avoid test tail part again deactivate by gate hang die
+          // Pause inUse once (fabricates await window in collectPluginInUse); return empty afterward so
+          // final test teardown disable does not block forever.
           inUse: () => {
             if (!inUsePending) return []
             return new Promise<void>((resolve) => {
@@ -96,7 +96,7 @@ test('disable gate TOCTOU:inUse collect window inside enter in-flight task by se
         })
         ctx.action({
           id: 'hang',
-          description: 'suspended action',
+          description: 'hanging action',
           inputSchema: { type: 'object', additionalProperties: false },
           outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false },
           handler: () => actionGate.promise.then(() => ({ ok: true })),
@@ -104,24 +104,24 @@ test('disable gate TOCTOU:inUse collect window inside enter in-flight task by se
       },
     }, { enabled: true })
 
-    // first start disable(suspended in inUse collect), again in window inside put a in-flight action
+    // Start disable first (pauses inside inUse), then start an in-flight action inside that window
     const disabling = host.disable('p:toctou')
-    // let disable first push enter to inUse await: micro task arrange empty
+    // Let disable advance to the inUse await via microtasks
     await new Promise<void>((resolve) => setImmediate(resolve))
-    // window inside enter action:tracker counter in proposal (handler suspended do not return)
+    // Start action inside window: tracker records count immediately (handler blocks pending)
     const invoking = host.invokeAction('p:toctou', 'hang', {})
     await new Promise<void>((resolve) => setImmediate(resolve))
-    assert.equal(host.activeTaskCount('p:toctou') >= 1, true, 'window inside action should count in-flight task')
+    assert.equal(host.activeTaskCount('p:toctou') >= 1, true, 'action started in window must count as live task')
 
-    // release inUse(return empty occupy): second gate must grab window inside enter action → 409
+    // Release inUse returning empty: second gate must catch the action entered during window -> 409
     releaseInUse()
     await assertRejectsCode(() => disabling, 'plugin_has_live_tasks', 409)
-    // state not by break: still enable and idle,action normal converge
+    // State remains uncorrupted: still enabled and idle, action settles normally
     const summary = host.get('p:toctou')
     assert.equal(summary?.enabled, true)
     actionGate.resolve()
     await invoking
-    // converge after deactivate succeeded
+    // Succeeds once action settles
     await host.disable('p:toctou')
     assert.equal(host.get('p:toctou')?.enabled, false)
   } finally {
@@ -129,7 +129,7 @@ test('disable gate TOCTOU:inUse collect window inside enter in-flight task by se
   }
 })
 
-test('disable gate plugin_in_use reject after state keep enabled+idle, after continue invoke do not subject to affect', { timeout: 60_000 }, async () => {
+test('disable gate plugin_in_use rejection leaves state enabled+idle so subsequent calls work', { timeout: 60_000 }, async () => {
   const { host, close } = makeHost()
   try {
     await host.register({
@@ -139,11 +139,11 @@ test('disable gate plugin_in_use reject after state keep enabled+idle, after con
           id: 'svc',
           start() {},
           stop() {},
-          inUse: () => [{ kind: 'job', id: 'j1', label: 'occupy in' }],
+          inUse: () => [{ kind: 'job', id: 'j1', label: 'busy' }],
         })
         ctx.action({
           id: 'ping',
-          description: 'probe needle',
+          description: 'probe action',
           inputSchema: { type: 'object', additionalProperties: false },
           outputSchema: { type: 'object', properties: { pong: { type: 'boolean' } }, required: ['pong'], additionalProperties: false },
           handler: () => ({ pong: true }),
@@ -153,7 +153,7 @@ test('disable gate plugin_in_use reject after state keep enabled+idle, after con
 
     await assertRejectsCode(() => host.disable('p:inuse'), 'plugin_in_use', 409)
     assert.equal(host.get('p:inuse')?.enabled, true)
-    // gate reject is not terminal state: plugin continue available
+    // Gate rejection is not terminal: plugin keeps serving
     const out = await host.invokeAction('p:inuse', 'ping', {})
     assert.deepEqual(out, { pong: true })
     await host.disable('p:inuse', { force: true })
@@ -164,10 +164,10 @@ test('disable gate plugin_in_use reject after state keep enabled+idle, after con
 })
 
 // ---------------------------------------------------------------------------
-// 2. start screen fault read write gate
+// 2. Startup barrier RW gate
 // ---------------------------------------------------------------------------
 
-test('screen fault phase concurrency register(enabled): service do not by leak start (read gate wait for screen fault complete)', { timeout: 60_000 }, async () => {
+test('concurrent register(enabled) during barrier starts its service without being skipped (gate waits for barrier)', { timeout: 60_000 }, async () => {
   const { host, close } = makeHost({ deferServices: true })
   try {
     const events: string[] = []
@@ -186,7 +186,7 @@ test('screen fault phase concurrency register(enabled): service do not by leak s
 
     const starting = host.start()
     await new Promise<void>((resolve) => setImmediate(resolve))
-    // screen fault in progress (A  prepare suspended): concurrency register and enable B
+    // Barrier in flight (A's prepare paused): concurrently register and enable B
     const registeringB = host.register({
       id: 'p:b',
       definePlugin: (ctx) => {
@@ -201,8 +201,7 @@ test('screen fault phase concurrency register(enabled): service do not by leak s
     prepareGate.resolve()
     await starting
     await registeringB
-    // B service must already start (old defect:activateServices see servicesStarted=false skip
-    // and B do not in screen fault snapshot → forever do not start)
+    // B's service must start (old bug: activateServices saw servicesStarted=false and skipped, while B wasn't in barrier snapshot)
     assert.deepEqual(events, ['a-start', 'b-start'])
     assert.equal(host.get('p:b')?.enabled, true)
   } finally {
@@ -210,7 +209,7 @@ test('screen fault phase concurrency register(enabled): service do not by leak s
   }
 })
 
-test('screen fault phase concurrency disable: does not resurrect (stop after at screen fault start execute)', { timeout: 60_000 }, async () => {
+test('concurrent disable during barrier never resurrects service (stop runs after barrier start)', { timeout: 60_000 }, async () => {
   const { host, close } = makeHost({ deferServices: true })
   try {
     const events: string[] = []
@@ -233,8 +232,7 @@ test('screen fault phase concurrency disable: does not resurrect (stop after at 
     prepareGate.resolve()
     await starting
     await disabling
-    // old defect:disable in screen fault prepare phase first complete (svc.started=false skip stop),
-    // screen fault then start already stop plugin service → events only ['start'] and re-
+    // Old bug: disable completed first during prepare (svc.started=false skipped stop), then barrier started the disabled plugin -> ['start'] only
     assert.deepEqual(events, ['start', 'stop'])
     assert.equal(host.get('p:revive')?.enabled, false)
   } finally {
@@ -242,7 +240,7 @@ test('screen fault phase concurrency disable: does not resurrect (stop after at 
   }
 })
 
-test('screen fault phase stop(): wait for screen fault after completion again stop (do not empty run return)', { timeout: 60_000 }, async () => {
+test('stop() during barrier waits for barrier completion before stopping instead of returning early', { timeout: 60_000 }, async () => {
   const { host, close } = makeHost({ deferServices: true })
   try {
     const events: string[] = []
@@ -262,11 +260,11 @@ test('screen fault phase stop(): wait for screen fault after completion again st
     const starting = host.start()
     await new Promise<void>((resolve) => setImmediate(resolve))
     const stopping = host.stop()
-    // stop not yet return (wait for screen fault); release screen fault after stop truly stop
+    // stop waits for barrier before actually stopping
     prepareGate.resolve()
     await starting
     await stopping
-    // old defect:stop see servicesStarted=false directly return, screen fault then pull start service
+    // Old bug: stop saw servicesStarted=false and returned immediately while barrier kept starting services
     assert.deepEqual(events, ['start', 'stop'])
   } finally {
     await close()
@@ -274,10 +272,10 @@ test('screen fault phase stop(): wait for screen fault after completion again st
 })
 
 // ---------------------------------------------------------------------------
-// 3. HookPipeline iterate isolated (iterate in original ground sort)
+// 3. HookPipeline iteration isolation (no in-place re-sort during iteration)
 // ---------------------------------------------------------------------------
 
-test('HookPipeline:run iterate during concurrency add+sort do not heavy arrange correct by iterate array (do not skip does not repeat)', { timeout: 60_000 }, async () => {
+test('HookPipeline: concurrent add+sort during run() never re-orders active iteration array (no skip/duplicate)', { timeout: 60_000 }, async () => {
   const pipeline = new HookPipeline('input')
   const calls: string[] = []
   const payload = {
@@ -287,7 +285,7 @@ test('HookPipeline:run iterate during concurrency add+sort do not heavy arrange 
 
   pipeline.add('p:a', async () => {
     calls.push('a')
-    // iterate in concurrency register high priority hook and trigger sort path (another route runHook  entries())
+    // Register a higher-priority hook mid-iteration and trigger sort path (simulates another runHook calling entries())
     pipeline.add('p:c', () => { calls.push('c') }, 10)
     pipeline.entries()
     return { action: 'continue' as const }
@@ -298,25 +296,25 @@ test('HookPipeline:run iterate during concurrency add+sort do not heavy arrange 
   })
 
   await pipeline.run(payload)
-  // old defect:entries() return array, original ground sort make this round a repeat execution / order wrong chaotic
+  // Old bug: entries() returned shared array; sorting in place duplicated/scrambled current round
   assert.deepEqual(calls, ['a', 'b'])
 
-  // under one round: high priority c first execute
+  // Next round: high-priority hook c runs first
   await pipeline.run(payload)
   assert.deepEqual(calls, ['a', 'b', 'c', 'a', 'b'])
 })
 
 // ---------------------------------------------------------------------------
-// 4. nodeFetch wrap failed without leaking counter
+// 4. nodeFetch wrapper failure never leaks live-task count
 // ---------------------------------------------------------------------------
 
-test('nodeFetch: response body wrap failed (already lock stream) end counter do not pending leak leak', { timeout: 60_000 }, async () => {
+test('nodeFetch: response body wrapping failure (pre-locked stream) finishes counter without leaking', { timeout: 60_000 }, async () => {
   const source = new ReadableStream<Uint8Array>({
     start(controller) { controller.enqueue(new Uint8Array(4)) },
   })
   const raw = (async () => {
     const response = new Response(source, { status: 200 })
-    // pre- lock response.body: wrap layer getReader() must throw (determinism trigger wrap failed path)
+    // Pre-lock response.body so wrapper's getReader() throws deterministically
     void response.body!.getReader()
     return response
   }) as typeof fetch
@@ -333,7 +331,7 @@ test('nodeFetch: response body wrap failed (already lock stream) end counter do 
   }, { enabled: true })
   try {
     await assert.rejects(api.nodeFetch('remote-1')('http://example.test'))
-    // old defect: wrap exception path do not end counter → deactivate forever long 409 pending
+    // Old bug: exception skipped decrement -> disable stuck returning 409 forever
     await host.disable('p:fetch-wrap-fail')
   } finally {
     await close()
@@ -341,10 +339,10 @@ test('nodeFetch: response body wrap failed (already lock stream) end counter do 
 })
 
 // ---------------------------------------------------------------------------
-// 5. setConfig read-together-write serial
+// 5. setConfig read-modify-write serialization
 // ---------------------------------------------------------------------------
 
-test('setConfig: concurrency patch serial read together write, after write does not override before write', { timeout: 60_000 }, async () => {
+test('setConfig: concurrent patches serialize read-modify-write without later writes clobbering earlier ones', { timeout: 60_000 }, async () => {
   const captured: Record<string, unknown> = {}
   const firstWriteGate = deferred<void>()
   let backendCalls = 0
@@ -353,7 +351,7 @@ test('setConfig: concurrency patch serial read together write, after write does 
     emitEvent: () => {},
     setPluginConfig: async (_id, value) => {
       backendCalls += 1
-      // first time write suspended: fabricate read-together-write hand over stack window (old defect under two time concurrency read together write hand over stack)
+      // Pause first write to fabricate the read-modify-write race window
       if (backendCalls === 1) await firstWriteGate.promise
       Object.assign(captured, value)
     },
@@ -371,7 +369,7 @@ test('setConfig: concurrency patch serial read together write, after write does 
     await new Promise<void>((resolve) => setImmediate(resolve))
     firstWriteGate.resolve()
     await Promise.all([w1, w2])
-    // old defect:w2 read to w1 before snapshot {}, whole value write override lose a
+    // Old bug: w2 read snapshot {} before w1 settled and dropped key `a` on writeback
     assert.deepEqual(captured, { a: 1, b: 2 })
   } finally {
     await close()
@@ -379,10 +377,10 @@ test('setConfig: concurrency patch serial read together write, after write does 
 })
 
 // ---------------------------------------------------------------------------
-// 6. register commit point after placement (manifest and can execute do not tear)
+// 6. Register commit happens after provider mount (listing stays in sync with executability)
 // ---------------------------------------------------------------------------
 
-test('register:provider mount complete before list do not expose capability (enabled and idle sync commit)', { timeout: 60_000 }, async () => {
+test('register: capabilities stay hidden from listings until provider mount finishes (enabled+idle atomic commit)', { timeout: 60_000 }, async () => {
   const mountGate = deferred<void>()
   const port: PluginProviderPort = {
     register: async () => {
@@ -405,7 +403,7 @@ test('register:provider mount complete before list do not expose capability (ena
         } as unknown as Provider)
         ctx.action({
           id: 'ping',
-          description: 'probe needle',
+          description: 'probe action',
           inputSchema: { type: 'object', additionalProperties: false },
           outputSchema: { type: 'object', properties: { pong: { type: 'boolean' } }, required: ['pong'], additionalProperties: false },
           handler: () => ({ pong: true }),
@@ -413,7 +411,7 @@ test('register:provider mount complete before list do not expose capability (ena
       },
     }, { enabled: true })
     await new Promise<void>((resolve) => setImmediate(resolve))
-    // mount not complete: manifest must not expose (old defect:enabled first placement → manifest has while execute 409)
+    // Before mount finishes: capabilities must not be exposed yet (old bug: enabled early -> listed while execution failed 409)
     assert.deepEqual(host.listActions().filter((a) => a.pluginId === 'p:late-mount'), [])
     assert.equal(host.get('p:late-mount')?.enabled, false)
     mountGate.resolve()
@@ -427,7 +425,7 @@ test('register:provider mount complete before list do not expose capability (ena
 })
 
 // ---------------------------------------------------------------------------
-// 7. package manage rollback honest
+// 7. Honest package manager rollback
 // ---------------------------------------------------------------------------
 
 const PLUGIN_SRC = (id: string, version: string) => `export default {
@@ -436,7 +434,7 @@ const PLUGIN_SRC = (id: string, version: string) => `export default {
   definePlugin(ctx) {
     ctx.action({
       id: 'ping',
-      description: 'probe needle',
+      description: 'probe action',
       inputSchema: { type: 'object', additionalProperties: false },
       outputSchema: { type: 'object', properties: { pong: { type: 'boolean' } }, required: ['pong'], additionalProperties: false },
       handler: () => ({ pong: true }),
@@ -460,17 +458,13 @@ interface MiniPkgEnv {
   close(): void
 }
 
-/**
- * most small package manage environment: real local copy + doctor + directory transaction;host port and store
- * inject fault (on demand override). failed inject by caller in after creation directly change write hostStub method.
- */
-/** real store(config.json persist)+ can inject save failed switch. */
+/** Minimal package manager store backed by real config.json with toggleable save failure injection. */
 class FaultInjectingStore extends PluginPackageManagerStore {
   failNextSave = false
   override async save(
     record: Omit<PluginPackageRecord, 'id'> & { id?: string },
   ): Promise<PluginPackageRecord> {
-    if (this.failNextSave) throw new Error('simulated disk write failed')
+    if (this.failNextSave) throw new Error('simulated disk write failure')
     return super.save(record)
   }
 }
@@ -498,7 +492,7 @@ function makePkgEnv(
     },
     assertManagedPluginUpdateSafe() {},
     async updateManagedPlugin(pluginId: string) {
-      if (!registered.has(pluginId)) throw new HelmError('unknown_plugin', `not registered plugin:${pluginId}`, 404, { pluginId })
+      if (!registered.has(pluginId)) throw new HelmError('unknown_plugin', `unregistered plugin: ${pluginId}`, 404, { pluginId })
       return { summary: summaryOf(summaries, pluginId) }
     },
     async removeManagedPlugin(pluginId: string) {
@@ -538,12 +532,12 @@ function summaryOf(summaries: Map<string, { id: string; enabled: boolean }>, id:
   }
 }
 
-test('update rollback honest: restore reload failed no longer lie report already rollback old version continue available', { timeout: 60_000 }, async () => {
+test('honest update rollback: failed restore reload no longer falsely reports old version active', { timeout: 60_000 }, async () => {
   let updateCalls = 0
   const env = makePkgEnv((hostStub) => {
     hostStub.updateManagedPlugin = async (pluginId: string) => {
       updateCalls += 1
-      // two time reload all failed: first time switch failed + restore reload also failed (instance deregistered)
+      // Both reloads fail: new version switch fails + restore reload fails (instance left unregistered)
       throw new HelmError('plugin_reload_failed_simulated', `simulated reload failed #${updateCalls}`, 500, { pluginId })
     }
   })
@@ -555,10 +549,10 @@ test('update rollback honest: restore reload failed no longer lie report already
 
     const err = (await assertRejectsCode(() => env.manager.update('honest-rollback'), 'plugin_package_update_failed', 500)) as HelmError
     const details = err.details as { rolledBack?: boolean; rollbackError?: { message: string } }
-    assert.equal(details.rolledBack, false, 'restore reload failed must such as rolledBack:false')
-    assert.match(err.message, /old directory already restore, but old instance reload failed/, 'error information must note directory already restore but instance not restore')
-    assert.equal(updateCalls, 2, 'rollback path must real attempt restore reload')
-    // directory indeed already restore to old version (rename chain complete)
+    assert.equal(details.rolledBack, false, 'failed restore reload must report rolledBack:false')
+    assert.match(err.message, /old directory already restore, but old instance reload failed/, 'error message must clarify directory restored while instance did not')
+    assert.equal(updateCalls, 2, 'rollback path must genuinely attempt restore reload')
+    // Directory on disk was actually restored to the prior version
     const manifest = JSON.parse(readFileSync(join(env.dataDir, 'plugins', 'honest-rollback', 'plugin.json'), 'utf8')) as { version: string }
     assert.equal(manifest.version, '1.0.0')
   } finally {
@@ -566,13 +560,13 @@ test('update rollback honest: restore reload failed no longer lie report already
   }
 })
 
-test('update rollback succeeded path: restore reload on success still such as rolledBack:true', { timeout: 60_000 }, async () => {
+test('successful update rollback path: restore reload success still reports rolledBack:true', { timeout: 60_000 }, async () => {
   const env = makePkgEnv((hostStub) => {
     const original = hostStub.updateManagedPlugin
     let calls = 0
     hostStub.updateManagedPlugin = async (pluginId: string, dir: string, options: { keepEnabled: boolean }) => {
       calls += 1
-      if (calls === 1) throw new HelmError('plugin_reload_failed_simulated', 'first time reload failed', 500, { pluginId })
+      if (calls === 1) throw new HelmError('plugin_reload_failed_simulated', 'first reload failed', 500, { pluginId })
       return original(pluginId, dir, options)
     }
   })
@@ -589,11 +583,11 @@ test('update rollback succeeded path: restore reload on success still such as ro
   }
 })
 
-test('install record persist failed and rollback deregister failed: directory and instance keep,rolledBack:false(all chain)', { timeout: 60_000 }, async () => {
+test('install record save fails and rollback deregister fails: keeps directory and instance, rolledBack:false', { timeout: 60_000 }, async () => {
   const env = makePkgEnv((hostStub) => {
     hostStub.removeManagedPlugin = async () => {
-      // simulated in-flight task leads to deregister by 409 reject: instance still register run
-      throw new HelmError('plugin_has_live_tasks', 'simulated in-flight task reject unload', 409, { pluginId: 'keep-dir' })
+      // Simulate live task blocking unregister with 409: instance stays registered and running
+      throw new HelmError('plugin_has_live_tasks', 'simulated live task blocks removal', 409, { pluginId: 'keep-dir' })
     }
   })
   try {
@@ -601,10 +595,10 @@ test('install record persist failed and rollback deregister failed: directory an
     env.store.failNextSave = true
     const err = (await assertRejectsCode(() => env.manager.install(userSrc, { enable: true }), 'plugin_package_install_failed', 500)) as HelmError
     const details = err.details as { rolledBack?: boolean; rollbackError?: { message: string } }
-    assert.equal(details.rolledBack, false, 'rollback deregister failed must such as rolledBack:false')
-    assert.match(err.message, /directory and instance already keep/, 'error information must note keep now state await human handle')
+    assert.equal(details.rolledBack, false, 'failed rollback deregister must report rolledBack:false')
+    assert.match(err.message, /directory and instance already keep/, 'error message must warn that state remains preserved for manual handling')
     const target = join(env.dataDir, 'plugins', 'keep-dir')
-    assert.ok(existsSync(join(target, 'index.mjs')), 'must not rm still register instance source directory (old defect: directory by hollow out)')
+    assert.ok(existsSync(join(target, 'index.mjs')), 'must not rm directory backing a live registered instance (old bug wiped directory)')
     assert.ok(env.manager !== undefined)
     assert.ok(!env.store.getRecord('keep-dir'), 'install record not persisted')
   } finally {
@@ -612,15 +606,14 @@ test('install record persist failed and rollback deregister failed: directory an
   }
 })
 
-test('install register failed encounter concurrency same name registered instance: directory keep to the instance,rolledBack:false', { timeout: 60_000 }, async () => {
+test('install register fails due to concurrent same-name instance: preserves directory for that instance, rolledBack:false', { timeout: 60_000 }, async () => {
   const env = makePkgEnv((hostStub) => {
     let registerAttempted = false
     hostStub.registerManagedPlugin = async (dir: string) => {
       const manifest = JSON.parse(readFileSync(join(dir, 'plugin.json'), 'utf8')) as { id: string }
-      // simulated concurrency rescan already from same directory grab first register:register  409. this after listSummaries
-      // report the instance (when order on and real race consistent:register attempt before manifest in no it)
+      // Simulate concurrent rescan winning registration from the same directory (409), after which listSummaries sees it
       registerAttempted = true
-      throw new HelmError('plugin_already_registered', `plugin registered:${manifest.id}`, 409, { pluginId: manifest.id })
+      throw new HelmError('plugin_already_registered', `plugin already registered: ${manifest.id}`, 409, { pluginId: manifest.id })
     }
     const original = hostStub.listSummaries.bind(hostStub)
     hostStub.listSummaries = () => {
@@ -637,34 +630,34 @@ test('install register failed encounter concurrency same name registered instanc
     assert.equal(details.rolledBack, false)
     assert.match(err.message, /same name plugin registered/)
     const target = join(env.dataDir, 'plugins', 'raced-plugin')
-    assert.ok(existsSync(join(target, 'index.mjs')), 'directory must keep to concurrency register instance (old defect:rm hollow out source directory)')
+    assert.ok(existsSync(join(target, 'index.mjs')), 'directory must remain intact for concurrently registered instance (old bug wiped source dir)')
   } finally {
     env.close()
   }
 })
 
-test('install register failed and without same name instance: still delete directory rollback (since has semantics does not fall back)', { timeout: 60_000 }, async () => {
+test('install register fails without same-name instance: still deletes directory on rollback (existing behavior preserved)', { timeout: 60_000 }, async () => {
   const env = makePkgEnv((hostStub) => {
     hostStub.registerManagedPlugin = async (dir: string) => {
       const manifest = JSON.parse(readFileSync(join(dir, 'plugin.json'), 'utf8')) as { id: string }
-      throw new HelmError('plugin_register_failed_simulated', `simulated register failed:${manifest.id}`, 500)
+      throw new HelmError('plugin_register_failed_simulated', `simulated register failure: ${manifest.id}`, 500)
     }
   })
   try {
     const userSrc = writeLocalPlugin(env.cwd, 'plain-fail', '1.0.0')
     const err = (await assertRejectsCode(() => env.manager.install(userSrc), 'plugin_package_install_failed', 500)) as HelmError
     assert.equal((err.details as { rolledBack?: boolean }).rolledBack, true)
-    assert.ok(!existsSync(join(env.dataDir, 'plugins', 'plain-fail')), 'without concurrency instance when by original semantics delete directory rollback')
+    assert.ok(!existsSync(join(env.dataDir, 'plugins', 'plain-fail')), 'deletes directory on rollback when no concurrent instance exists')
   } finally {
     env.close()
   }
 })
 
 // ---------------------------------------------------------------------------
-// 10. start() single fly failed leaves no residue (identity-guarded clean cache: failed after can retry)
+// 10. start() single-flight failure leaves no stale cached rejection (retries cleanly)
 // ---------------------------------------------------------------------------
 
-test('start() single fly failed leaves no residue stale reject: failed clean cache after retry can succeeded', { timeout: 60_000 }, async () => {
+test('start() single-flight failure clears cached rejection so retries succeed', { timeout: 60_000 }, async () => {
   const { host, close } = makeHost({ deferServices: true })
   try {
     const events: string[] = []
@@ -677,7 +670,7 @@ test('start() single fly failed leaves no residue stale reject: failed clean cac
           start: () => {
             if (failNextStart) {
               failNextStart = false
-              throw new Error('first time failed to start')
+              throw new Error('first startup failed')
             }
             events.push('start')
           },
@@ -686,8 +679,8 @@ test('start() single fly failed leaves no residue stale reject: failed clean cac
       },
     }, { enabled: true })
 
-    await assert.rejects(host.start(), /first time failed to start/)
-    // failed after retry: must not receives cache stale reject (identity-guarded clean cache allows retry)
+    await assert.rejects(host.start(), /first startup failed/)
+    // Retry after failure must not return cached stale rejection (identity-guarded cleanup permits retry)
     await host.start()
     assert.deepEqual(events, ['start'])
     await host.stop()
@@ -698,10 +691,10 @@ test('start() single fly failed leaves no residue stale reject: failed clean cac
 })
 
 // ---------------------------------------------------------------------------
-// 11. split destroy phase plugin from manifest i.e. when disappear (getActiveEnabledPluginIds tight is enabled+idle)
+// 11. Teardown phase hides plugin from active listings immediately (enabled+idle only)
 // ---------------------------------------------------------------------------
 
-test('split destroy phase plugin from action manifest i.e. when disappear:teardown window inside enabled still true also no longer expose', { timeout: 60_000 }, async () => {
+test('teardown phase hides plugin from action listings immediately even while enabled remains true', { timeout: 60_000 }, async () => {
   const { host, close } = makeHost()
   try {
     const stopGate = deferred<void>()
@@ -711,12 +704,12 @@ test('split destroy phase plugin from action manifest i.e. when disappear:teardo
         ctx.service({
           id: 'svc',
           start() {},
-          // stop suspended: fabricate teardown split destroy window (enabled still true,phase=deactivating)
+          // Pause stop to hold open the teardown window (enabled still true, phase=deactivating)
           stop: () => stopGate.promise,
         })
         ctx.action({
           id: 'ping',
-          description: 'probe needle',
+          description: 'probe action',
           inputSchema: { type: 'object', additionalProperties: false },
           outputSchema: { type: 'object', properties: { pong: { type: 'boolean' } }, required: ['pong'], additionalProperties: false },
           handler: () => ({ pong: true }),
@@ -727,10 +720,9 @@ test('split destroy phase plugin from action manifest i.e. when disappear:teardo
     assert.equal(host.listActions().filter((a) => a.pluginId === 'p:tearing-down').length, 1)
     const disabling = host.disable('p:tearing-down', { force: true })
     await new Promise<void>((resolve) => setImmediate(resolve))
-    // split destroy window:enabled not yet false(disable still in stop in), but manifest must already disappear,
-    // no longer to already stop service dispatch new request
-    assert.equal(host.get('p:tearing-down')?.enabled, true, 'window inside enabled still true(split destroy phase semantics)')
-    assert.deepEqual(host.listActions().filter((a) => a.pluginId === 'p:tearing-down'), [], 'split destroy phase manifest must i.e. when disappear')
+    // Inside teardown window: enabled stays true while stop finishes, yet listings clear immediately so stopping services receive no new calls
+    assert.equal(host.get('p:tearing-down')?.enabled, true, 'enabled stays true during teardown window')
+    assert.deepEqual(host.listActions().filter((a) => a.pluginId === 'p:tearing-down'), [], 'listings clear immediately on teardown entry')
     stopGate.resolve()
     await disabling
     assert.equal(host.get('p:tearing-down')?.enabled, false)
