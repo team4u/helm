@@ -1,16 +1,23 @@
 /**
- * 侧栏「会话后台在途」模型与渲染测试（单灯语义）：
- * - 纯函数层 summarizeConversationBackgroundActivity / collectBackgroundBadgeDocs /
- *   resolveStandingStatusIndicator / resolveStatusLight / backgroundAwareStatusTooltip
- *   的契约（tone=accent 才在途、neutral 历史计数与 warn 失败不误报、全局角标
- *   不参与、scope 过滤、插件贡献/doc 缺失归零、非 primary 会话后台活跃透出到
- *   一级站位行、error > blocked > working > done > idle 优先级）；
- * - 单灯优先级：working/blocked/error 主会话状态灯独占（不渲染后台空心环、
- *   tooltip 不叠加后台摘要）；idle/done + 后台在途仅渲染空心环（done 绿点让位）；
- *   无后台在途保持五态原样；
- * - Sidebar SSR 渲染：会话行/折叠站位行/sidebar.section 分组行均只有一个灯，
- *   展开态站位行不重复显示、子会话行各自一个灯；
- * - 挂载路径：badge doc 经 Sidebar effect 按需 ensurePluginDoc（纯函数零副作用）。
+ * Sidebar "conversation background in-flight" model and rendering tests
+ * (single-light semantics):
+ * - pure-layer contracts of summarizeConversationBackgroundActivity /
+ *   collectBackgroundBadgeDocs / resolveStandingStatusIndicator /
+ *   resolveStatusLight / backgroundAwareStatusTooltip (only tone=accent counts
+ *   as in flight; neutral history counts and warn failure summaries never
+ *   misreport; global badges do not participate; scope filtering; plugin
+ *   contribution/doc absence zeroes out; non-primary conversations' background
+ *   activity surfaces onto the level-one standing row; error > blocked >
+ *   working > done > idle priority);
+ * - single-light priority: working/blocked/error keep the main status light
+ *   exclusive (no background hollow ring, no summary appended to the tooltip);
+ *   idle/done with background in flight render only the hollow ring (the done
+ *   green dot yields); with no background work the five states stay as-is;
+ * - Sidebar SSR rendering: conversation rows / collapsed standing rows /
+ *   sidebar.section group rows each carry exactly one light; the expanded
+ *   standing row does not duplicate it and each child row keeps its own light;
+ * - mount path: badge docs are loaded on demand via the Sidebar effect calling
+ *   ensurePluginDoc (the pure functions have zero side effects).
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -18,7 +25,7 @@ import * as React from 'react'
 import { renderToString } from 'react-dom/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import type { ConversationSummary, PluginUiContribution, WorkbenchPanelSpec } from '@helm/protocol'
+import type { ConversationSummary, HelmLocale, PluginUiContribution, WorkbenchPanelSpec } from '@helm/protocol'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import { ARCHIVED_TAG, conversationStatusDotClass, conversationStatusTooltip } from '../src/shell/sidebar-model.js'
@@ -41,6 +48,7 @@ GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 const { Sidebar } = await import('../src/shell/Sidebar.js')
+const { AgentStandingsGroup } = await import('../src/shell/SidebarAgentStandings.js')
 
 function conv(partial: Partial<ConversationSummary> & { id: number }): ConversationSummary {
   return {
@@ -97,10 +105,10 @@ function summarize(input: {
 }
 
 // ---------------------------------------------------------------------------
-// 纯函数层：在途判定契约
+// Pure layer: in-flight verdict contracts
 // ---------------------------------------------------------------------------
 
-test('tone=accent 的按会话角标判定在途并汇入 footerText；缺 footerText 仍为在途', { timeout: 60_000 }, () => {
+test('per-conversation badges with tone=accent count as in flight and merge footerText; missing footerText still in flight', { timeout: 60_000 }, () => {
   const conversations = [conv({ id: 1, status: 'idle' }), conv({ id: 2, status: 'done' })]
   const index = summarize({
     conversations,
@@ -115,7 +123,7 @@ test('tone=accent 的按会话角标判定在途并汇入 footerText；缺 foote
   assert.deepEqual(index.get(2), { active: true, summary: '' })
 })
 
-test('neutral 历史计数与 warn 失败汇总都不误报为在途', { timeout: 60_000 }, () => {
+test('neutral history counts and warn failure summaries never misreport as in flight', { timeout: 60_000 }, () => {
   const conversations = [conv({ id: 1 }), conv({ id: 2 }), conv({ id: 3 })]
   const index = summarize({
     conversations,
@@ -126,10 +134,10 @@ test('neutral 历史计数与 warn 失败汇总都不误报为在途', { timeout
       }),
     },
   })
-  assert.equal(index.size, 0, 'neutral/warn 条目不得点亮任何会话在途')
+  assert.equal(index.size, 0, 'neutral/warn entries must not light any conversation as in flight')
 })
 
-test('tone=accent 且 count=0 仍按色调判在途（count 含历史，不参与判定）', { timeout: 60_000 }, () => {
+test('tone=accent with count=0 is still in flight by tone alone (count includes history and never participates)', { timeout: 60_000 }, () => {
   const index = summarize({
     conversations: [conv({ id: 1 })],
     pluginDocs: { 'builtin:workflow/run-badges': badgesDoc({ '1': { count: 0, tone: 'accent' } }) },
@@ -137,7 +145,7 @@ test('tone=accent 且 count=0 仍按色调判在途（count 含历史，不参�
   assert.deepEqual(index.get(1), { active: true, summary: '' })
 })
 
-test('全局角标（无 byConversationField）不参与会话在途，也不触发 doc 加载', { timeout: 60_000 }, () => {
+test('global badges (no byConversationField) drive no per-conversation in-flight state and load no docs', { timeout: 60_000 }, () => {
   const conversations = [conv({ id: 1 })]
   const contributions = [
     panelContribution({ spec: { badge: { doc: 'global-count', countField: 'total', toneField: 'tone' } } }),
@@ -147,23 +155,23 @@ test('全局角标（无 byConversationField）不参与会话在途，也不触
     conversations,
     pluginDocs: { 'builtin:workflow/global-count': { total: 5, tone: 'accent' } },
   })
-  assert.equal(index.size, 0, '全局 accent 角标无法归属会话，不得点亮任何会话行')
+  assert.equal(index.size, 0, 'a global accent badge cannot be attributed to a conversation and must light no row')
   const docs = collectBackgroundBadgeDocs(groupUiContributions(contributions).workbenchPanels, conversations)
   assert.deepEqual(docs, [])
 })
 
-test('插件贡献缺失（停用）或 doc 未加载时摘要归零', { timeout: 60_000 }, () => {
+test('missing plugin contribution (disabled) or unloaded doc zeroes the summary', { timeout: 60_000 }, () => {
   const conversations = [conv({ id: 1 })]
   assert.equal(summarize({ contributions: [], conversations }).size, 0)
   assert.equal(summarize({ conversations, pluginDocs: {} }).size, 0)
-  // doc 已加载但缺该会话条目：同样无在途
+  // doc loaded but missing this conversation's entry: equally no in-flight state
   assert.equal(
     summarize({ conversations, pluginDocs: { 'builtin:workflow/run-badges': badgesDoc({ '9': { count: 1, tone: 'accent' } }) } }).size,
     0,
   )
 })
 
-test('scope 未命中的会话不参与摘要，对应面板也不收集 doc 引用', { timeout: 60_000 }, () => {
+test('conversations missing the scope join no summary and their panels collect no doc references', { timeout: 60_000 }, () => {
   const conversations = [conv({ id: 1, profileId: 'assistant' })]
   const contributions = [
     panelContribution({ spec: { scope: { profileIds: ['superagent'] } } }),
@@ -171,13 +179,13 @@ test('scope 未命中的会话不参与摘要，对应面板也不收集 doc 引
   const panels = groupUiContributions(contributions).workbenchPanels
   assert.equal(summarize({ contributions, conversations, pluginDocs: { 'builtin:workflow/run-badges': badgesDoc({ '1': { count: 1, tone: 'accent' } }) } }).size, 0)
   assert.deepEqual(collectBackgroundBadgeDocs(panels, conversations), [])
-  // scope 命中（无 scope = 不限）时收集去重后的 doc 引用
+  // with the scope hit (no scope = unrestricted), collect the deduplicated doc references
   assert.deepEqual(collectBackgroundBadgeDocs(groupUiContributions([panelContribution()]).workbenchPanels, conversations), [
     { pluginId: 'builtin:workflow', doc: 'run-badges' },
   ])
 })
 
-test('多面板聚合：footerText 去重后拼接，在途取并集', { timeout: 60_000 }, () => {
+test('multi-panel aggregation: footerText joined after dedup, in-flight unioned', { timeout: 60_000 }, () => {
   const conversations = [conv({ id: 1 })]
   const index = summarize({
     contributions: [panelContribution(), panelContribution({ pluginId: 'builtin:other', spec: { id: 'jobs' } })],
@@ -192,7 +200,7 @@ test('多面板聚合：footerText 去重后拼接，在途取并集', { timeout
   assert.deepEqual(index.get(1), { active: true, summary: '2 Running' })
 })
 
-test('contextUsage.compacting=true 判定会话后台在途并合并「上下文精简中」（支持与面板角标去重拼接）', { timeout: 60_000 }, () => {
+test('contextUsage.compacting=true marks background in flight and merges the compaction summary (dedup-joined with panel badges)', { timeout: 60_000 }, () => {
   const conversations = [
     conv({ id: 1, status: 'idle', contextUsage: { tokens: 1200, compacting: true } }),
     conv({ id: 2, status: 'done', contextUsage: { tokens: null, compacting: true } }),
@@ -205,8 +213,8 @@ test('contextUsage.compacting=true 判定会话后台在途并合并「上下文
   })
   assert.deepEqual(index.get(1), { active: true, summary: 'Compacting context' })
   assert.deepEqual(index.get(2), { active: true, summary: 'Compacting context' })
-  assert.equal(index.get(3), undefined, 'compacting=false 不得标为在途')
-  assert.equal(index.get(4), undefined, '无 compacting 字段不得标为在途')
+  assert.equal(index.get(3), undefined, 'compacting=false must not mark in flight')
+  assert.equal(index.get(4), undefined, 'a missing compacting field must not mark in flight')
 
   const combined = summarize({
     conversations: [
@@ -225,10 +233,10 @@ test('contextUsage.compacting=true 判定会话后台在途并合并「上下文
 })
 
 // ---------------------------------------------------------------------------
-// 纯函数层：一级站位聚合、单灯优先级与 tooltip 组合
+// Pure layer: level-one standing aggregation, single-light priority and tooltip composition
 // ---------------------------------------------------------------------------
 
-test('Agent 子列表折叠预览始终保留当前会话与在途会话', { timeout: 60_000 }, () => {
+test('agent sub-list collapsed preview always retains the current and in-flight conversations', { timeout: 60_000 }, () => {
   const conversations = Array.from({ length: 8 }, (_, index) => conv({ id: index + 1 }))
   conversations[5] = conv({ id: 6, status: 'working' })
   conversations[6] = conv({ id: 7, status: 'idle' })
@@ -248,7 +256,7 @@ test('Agent 子列表折叠预览始终保留当前会话与在途会话', { tim
     activeId: 8,
     background: new Map(),
   })
-  assert.equal(activePreview.visible.length, conversations.length, '既有行为：激活会话超出预览时展开整组')
+  assert.equal(activePreview.visible.length, conversations.length, 'existing behavior: an active conversation beyond the preview expands the whole group')
 
   const idlePreview = resolveAgentSubListPreview({
     conversations,
@@ -260,7 +268,7 @@ test('Agent 子列表折叠预览始终保留当前会话与在途会话', { tim
   assert.equal(idlePreview.hiddenCount, 2)
   assert.equal(resolveAgentSubListPreview({ conversations, showAll: true, activeId: null, background: new Map() }).hiddenCount, 0)
 
-  // 折叠预览保留正在上下文精简的会话（即使处于闲置态且位于第 6 条之后）
+  // the collapsed preview retains a compacting conversation (even idle and positioned after the 5th row)
   const compactingConvs = Array.from({ length: 8 }, (_, index) => conv({ id: index + 1 }))
   compactingConvs[6] = conv({ id: 7, status: 'idle', contextUsage: { tokens: 1500, compacting: true } })
   const compactingBg = summarize({ contributions: [], conversations: compactingConvs })
@@ -274,10 +282,10 @@ test('Agent 子列表折叠预览始终保留当前会话与在途会话', { tim
   assert.equal(compactingPreview.hiddenCount, 2)
 })
 
-test('resolveAgentSubListPreview：activeIds 中任一会话超出预览条数时整组展开（分屏保护）', { timeout: 60_000 }, () => {
+test('resolveAgentSubListPreview: any conversation in activeIds beyond the preview count expands the whole group (split protection)', { timeout: 60_000 }, () => {
   const conversations = Array.from({ length: 8 }, (_, index) => conv({ id: index + 1 }))
 
-  // 主屏活跃在前 5 条内（id=1），分屏活跃在深度位置（id=7，index=6）：整组展开不隐藏分屏会话
+  // primary active within the first 5 (id=1), split active deep down (id=7, index=6): the whole group expands so the split conversation is never hidden
   const splitDeep = resolveAgentSubListPreview({
     conversations,
     showAll: false,
@@ -288,7 +296,7 @@ test('resolveAgentSubListPreview：activeIds 中任一会话超出预览条数�
   assert.deepEqual(splitDeep.visible.map((item) => item.id), [1, 2, 3, 4, 5, 6, 7, 8])
   assert.equal(splitDeep.hiddenCount, 0)
 
-  // 仅传 activeIds（activeId=null）命中深度会话（id=8）同样整组展开
+  // passing only activeIds (activeId=null) hitting a deep conversation (id=8) likewise expands the whole group
   const onlySetDeep = resolveAgentSubListPreview({
     conversations,
     showAll: false,
@@ -299,7 +307,7 @@ test('resolveAgentSubListPreview：activeIds 中任一会话超出预览条数�
   assert.deepEqual(onlySetDeep.visible.map((item) => item.id), [1, 2, 3, 4, 5, 6, 7, 8])
   assert.equal(onlySetDeep.hiddenCount, 0)
 
-  // activeIds 全部位于前 5 条内时正常折叠
+  // with every activeIds entry inside the first 5, folding behaves normally
   const bothShallow = resolveAgentSubListPreview({
     conversations,
     showAll: false,
@@ -311,7 +319,7 @@ test('resolveAgentSubListPreview：activeIds 中任一会话超出预览条数�
   assert.equal(bothShallow.hiddenCount, 3)
 })
 
-test('站位聚合优先级 error > blocked > working > done > idle；并列取列表首个（primary 置顶序）', { timeout: 60_000 }, () => {
+test('standing aggregation priority error > blocked > working > done > idle; ties keep the list head (pinned-first order)', { timeout: 60_000 }, () => {
   const conversations = [
     conv({ id: 1, status: 'working', updatedAt: 9000 }),
     conv({ id: 2, status: 'blocked' }),
@@ -327,20 +335,20 @@ test('站位聚合优先级 error > blocked > working > done > idle；并列取�
   const tie = [conv({ id: 1, status: 'working', updatedAt: 9000 }), conv({ id: 2, status: 'working' })]
   assert.equal(resolveStandingStatusIndicator(tie, new Map())?.representative.id, 1)
 
-  // 非首条会话未读已完成（done）优先于 idle，确保折叠态能透出绿点；若存在后台在途则单灯语义仍让位空心环
+  // a later unread finished (done) conversation outranks idle so the collapsed state surfaces the green dot; with background in flight the single-light semantics still yield to the hollow ring
   const idleWithDone = [conv({ id: 1, updatedAt: 9000 }), conv({ id: 2, status: 'done' })]
   const doneIndicator = resolveStandingStatusIndicator(idleWithDone, new Map())
   assert.equal(doneIndicator?.representative.id, 2)
   assert.equal(doneIndicator?.representative.status, 'done')
 
-  // 纯 idle 时保持列表首个（与旧「看 primary」行为兼容）
+  // an all-idle list keeps its head (compatible with the old "watch primary" behavior)
   const pureIdle = [conv({ id: 1, status: 'idle', updatedAt: 9000 }), conv({ id: 2, status: 'idle' })]
   assert.equal(resolveStandingStatusIndicator(pureIdle, new Map())?.representative.id, 1)
 
   assert.equal(resolveStandingStatusIndicator([], new Map()), null)
 })
 
-test('后台在途来自非 primary 会话也能透出，摘要跨会话去重', { timeout: 60_000 }, () => {
+test('background in flight from a non-primary conversation still surfaces; summaries dedupe across conversations', { timeout: 60_000 }, () => {
   const conversations = [
     conv({ id: 1, status: 'idle', updatedAt: 9000 }),
     conv({ id: 2, status: 'idle' }),
@@ -351,30 +359,30 @@ test('后台在途来自非 primary 会话也能透出，摘要跨会话去重',
     [3, { active: true, summary: '1 Running' }],
   ])
   const indicator = resolveStandingStatusIndicator(conversations, background)
-  assert.equal(indicator?.representative.id, 1, '代表会话仍为 primary')
-  assert.equal(indicator?.backgroundActive, true, '非 primary 会话的后台在途必须透出')
-  assert.equal(indicator?.backgroundSummary, '1 Running', '相同 footerText 跨会话去重')
+  assert.equal(indicator?.representative.id, 1, 'the representative stays the primary')
+  assert.equal(indicator?.backgroundActive, true, 'background in flight from a non-primary conversation must surface')
+  assert.equal(indicator?.backgroundSummary, '1 Running', 'identical footerText dedupes across conversations')
 })
 
-test('resolveStatusLight 单灯优先级：主状态独占灯位，idle/done 让位后台空心环', { timeout: 60_000 }, () => {
-  // working/blocked/error：主会话状态灯独占，后台在途完全不参与灯位
+test('resolveStatusLight single-light priority: main status is exclusive; idle/done yield to the background hollow ring', { timeout: 60_000 }, () => {
+  // working/blocked/error: the main status light is exclusive; background work never joins the light slot
   for (const status of ['working', 'blocked', 'error'] as const) {
     assert.deepEqual(
       resolveStatusLight(status, true),
       { dotClass: conversationStatusDotClass(status), background: false },
-      `${status} 状态灯必须独占，不渲染后台空心环`,
+      `${status} status light must be exclusive with no background hollow ring`,
     )
   }
-  // idle/done + 后台在途：仅空心环（idle 的无灯与 done 的绿点让位）
+  // idle/done with background in flight: hollow ring only (idle's no-light and done's green dot yield)
   assert.deepEqual(resolveStatusLight('idle', true), { dotClass: 'status-dot status-dot-background', background: true })
   assert.deepEqual(resolveStatusLight('done', true), { dotClass: 'status-dot status-dot-background', background: true })
-  // 无后台在途：保持五态原样
+  // no background work: the five states stay as-is
   assert.deepEqual(resolveStatusLight('working', false), { dotClass: 'status-dot status-dot-working', background: false })
   assert.deepEqual(resolveStatusLight('done', false), { dotClass: 'status-dot status-dot-done', background: false })
   assert.deepEqual(resolveStatusLight('idle', false), { dotClass: null, background: false })
 })
 
-test('tooltip 组合：状态灯独占时只陈述主回合；空心环灯位叠加基础状态 + 后台摘要', { timeout: 60_000 }, () => {
+test('tooltip composition: an exclusive status light states only the main turn; the hollow-ring slot appends base status + background summary', { timeout: 60_000 }, () => {
   assert.equal(
     backgroundAwareStatusTooltip({ status: 'idle', backgroundActive: false }),
     conversationStatusTooltip('idle'),
@@ -387,7 +395,7 @@ test('tooltip 组合：状态灯独占时只陈述主回合；空心环灯位叠
     backgroundAwareStatusTooltip({ status: 'done', backgroundActive: true, backgroundSummary: '' }),
     'Completed · background task running',
   )
-  // working/blocked/error：即使后台在途，tooltip 也只显示主会话状态/doing/lastError
+  // working/blocked/error: even with background in flight, the tooltip shows only the main status/doing/lastError
   assert.equal(
     backgroundAwareStatusTooltip({ status: 'working', doing: '正在思考方案', backgroundActive: true, backgroundSummary: '2 Running' }),
     'Running: 正在思考方案',
@@ -407,7 +415,7 @@ test('tooltip 组合：状态灯独占时只陈述主回合；空心环灯位叠
 })
 
 // ---------------------------------------------------------------------------
-// Sidebar 渲染：会话行与折叠站位行的单灯位
+// Sidebar rendering: single light slots on conversation rows and collapsed standings
 // ---------------------------------------------------------------------------
 
 const BASE_PROFILES = [
@@ -426,14 +434,14 @@ function renderSidebar(store: HelmStoreValue): string {
   return renderToString(e(HelmStoreContext.Provider, { value: store }, e(Sidebar)))
 }
 
-/** 统计会话状态灯数量（排除 ActivityRail 的 SSE 连接点 status-dot-connected）。 */
+/** Count conversation status lights (excluding the ActivityRail SSE status-dot-connected dot). */
 function countStatusLights(html: string): number {
   return (
     html.match(/class="status-dot(?: status-dot-(?:working|blocked|done|error|background))?"/g) ?? []
   ).length
 }
 
-test('working/blocked/error 会话 + 后台在途：只渲染主会话状态灯，无 background class', { timeout: 60_000 }, () => {
+test('working/blocked/error conversations + background in flight: only the main status light renders, no background class', { timeout: 60_000 }, () => {
   for (const [status, dotClass] of [
     ['working', 'status-dot-working'],
     ['blocked', 'status-dot-blocked'],
@@ -460,14 +468,14 @@ test('working/blocked/error 会话 + 后台在途：只渲染主会话状态灯�
       },
     })
     const html = renderSidebar(store)
-    assert.ok(html.includes(`class="status-dot ${dotClass}"`), `${status} 主会话状态灯保留`)
-    assert.ok(!html.includes('status-dot-background'), `${status} 状态灯独占，不渲染后台空心环`)
-    assert.ok(!html.includes('后台任务'), `${status} tooltip 不叠加后台摘要`)
-    assert.equal(countStatusLights(html), 1, `${status} 折叠站位行只有一个灯`)
+    assert.ok(html.includes(`class="status-dot ${dotClass}"`), `${status} keeps the main status light`)
+    assert.ok(!html.includes('status-dot-background'), `${status} status light is exclusive with no background hollow ring`)
+    assert.ok(!html.includes('background task'), `${status} tooltip appends no background summary`)
+    assert.equal(countStatusLights(html), 1, `${status} collapsed standing row carries exactly one light`)
   }
 })
 
-test('idle 会话 + 后台在途：仅渲染后台空心环，tooltip 陈述空闲 + 后台摘要', { timeout: 60_000 }, () => {
+test('idle conversation + background in flight: only the background hollow ring renders; the tooltip states idle + background summary', { timeout: 60_000 }, () => {
   const store = sidebarStore({
     conversations: [
       conv({ id: 1, title: '主会话', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
@@ -480,13 +488,13 @@ test('idle 会话 + 后台在途：仅渲染后台空心环，tooltip 陈述空�
     },
   })
   const html = renderSidebar(store)
-  assert.ok(html.includes('class="status-dot status-dot-background"'), '应渲染后台在途空心环')
-  assert.ok(html.includes('title="Idle · background task: 2 Running"'), 'tooltip 同时陈述基础状态与后台摘要')
-  assert.ok(!html.includes('status-dot-working'), 'idle + 后台在途不得冒充会话自身 working')
-  assert.equal(countStatusLights(html), 1, '折叠站位行只有一个灯')
+  assert.ok(html.includes('class="status-dot status-dot-background"'), 'the background in-flight hollow ring must render')
+  assert.ok(html.includes('title="Idle · background task: 2 Running"'), 'the tooltip states both the base status and the background summary')
+  assert.ok(!html.includes('status-dot-working'), 'idle + background in flight must not masquerade as the conversation itself working')
+  assert.equal(countStatusLights(html), 1, 'the collapsed standing row carries exactly one light')
 })
 
-test('done 会话 + 后台在途：绿点让位，仅渲染后台空心环', { timeout: 60_000 }, () => {
+test('done conversation + background in flight: the green dot yields and only the background hollow ring renders', { timeout: 60_000 }, () => {
   const store = sidebarStore({
     conversations: [
       conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'done', createdAt: 9000, updatedAt: 9000 }),
@@ -499,13 +507,13 @@ test('done 会话 + 后台在途：绿点让位，仅渲染后台空心环', { t
     },
   })
   const html = renderSidebar(store)
-  assert.ok(html.includes('class="status-dot status-dot-background"'), '后台在途空心环为唯一灯位')
-  assert.ok(!html.includes('class="status-dot status-dot-done"'), 'done 绿点必须让位，不得与空心环并列')
-  assert.ok(html.includes('title="Completed · background task: 1 Running"'), 'tooltip 陈述已完成 + 后台摘要')
-  assert.equal(countStatusLights(html), 1, '折叠站位行只有一个灯')
+  assert.ok(html.includes('class="status-dot status-dot-background"'), 'the background in-flight hollow ring is the sole light')
+  assert.ok(!html.includes('class="status-dot status-dot-done"'), 'the done green dot must yield, never side by side with the hollow ring')
+  assert.ok(html.includes('title="Completed · background task: 1 Running"'), 'the tooltip states completed + background summary')
+  assert.equal(countStatusLights(html), 1, 'the collapsed standing row carries exactly one light')
 })
 
-test('无后台在途：保持五态原样（done 绿点、idle 无灯）', { timeout: 60_000 }, () => {
+test('no background work: the five states stay as-is (done green dot, idle no light)', { timeout: 60_000 }, () => {
   const store = sidebarStore({
     conversations: [
       conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'done', createdAt: 9000, updatedAt: 9000 }),
@@ -519,12 +527,12 @@ test('无后台在途：保持五态原样（done 绿点、idle 无灯）', { ti
     },
   })
   const html = renderSidebar(store)
-  assert.ok(html.includes('class="status-dot status-dot-done"'), '无在途时 done 保持绿点')
-  assert.ok(!html.includes('status-dot-background'), 'neutral 历史计数不得点亮空心环')
-  assert.equal(countStatusLights(html), 1, 'done 会话一个灯，idle 会话无灯')
+  assert.ok(html.includes('class="status-dot status-dot-done"'), 'done keeps its green dot with nothing in flight')
+  assert.ok(!html.includes('status-dot-background'), 'neutral history counts must not light the hollow ring')
+  assert.equal(countStatusLights(html), 1, 'one light for the done conversation, none for idle')
 })
 
-test('展开态：站位行不重复显示指示，每个子会话行各自一个灯', { timeout: 60_000 }, () => {
+test('expanded state: the standing row does not duplicate the indicator; each child conversation row keeps its own light', { timeout: 60_000 }, () => {
   const store = sidebarStore({
     conversations: [
       conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'done', createdAt: 9000, updatedAt: 9000 }),
@@ -538,21 +546,21 @@ test('展开态：站位行不重复显示指示，每个子会话行各自一�
     },
   })
   const html = renderSidebar(store)
-  assert.ok(html.includes('agent-conversations-list'), '当前智能体展开话题子列表')
-  assert.ok(html.includes('title="Idle · background task: 1 Running"'), 'idle 子会话行展示后台空心环')
-  assert.ok(html.includes('class="status-dot status-dot-error"'), 'error 子会话行展示自身状态灯')
-  assert.ok(html.includes('class="status-dot status-dot-done"'), 'done 子会话行保持绿点')
-  // 三个子会话行各一个灯（done 绿点 / 后台空心环 / error 状态灯），站位行不重复
-  assert.equal(countStatusLights(html), 3, '展开态每个子会话行恰好一个灯，站位行不显示')
+  assert.ok(html.includes('agent-conversations-list'), 'the current agent expands its topic sub-list')
+  assert.ok(html.includes('title="Idle · background task: 1 Running"'), 'the idle child row shows the background hollow ring')
+  assert.ok(html.includes('class="status-dot status-dot-error"'), 'the error child row shows its own status light')
+  assert.ok(html.includes('class="status-dot status-dot-done"'), 'the done child row keeps its green dot')
+  // each of the three child rows carries one light (done green dot / background hollow ring / error status light); the standing row duplicates none
+  assert.equal(countStatusLights(html), 3, 'expanded state: exactly one light per child row, none on the standing row')
   assert.equal(
     (html.match(/status-dot-background/g) ?? []).length,
     1,
-    '后台空心环只在对应子会话行显示一次',
+    'the background hollow ring appears exactly once on its own child row',
   )
 })
 
-test('折叠站位行：非 primary 后台在途 + 代表会话 working/blocked/error 时隐藏后台环', { timeout: 60_000 }, () => {
-  // primary idle + 次会话 error：站位行透出 error（代表会话 = 次会话）
+test('collapsed standing row: non-primary background in flight + representative working/blocked/error hides the background ring', { timeout: 60_000 }, () => {
+  // primary idle + secondary in error: the standing row surfaces error (representative = the secondary)
   const errorStore = sidebarStore({
     conversations: [
       conv({ id: 1, title: '主会话', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
@@ -562,11 +570,11 @@ test('折叠站位行：非 primary 后台在途 + 代表会话 working/blocked/
     primaryTarget: { kind: 'conversation', conversationId: 50 },
   })
   const errorHtml = renderSidebar(errorStore)
-  assert.ok(errorHtml.includes('class="status-dot status-dot-error"'), '次要会话 error 必须透出')
+  assert.ok(errorHtml.includes('class="status-dot status-dot-error"'), 'a secondary conversation in error must surface')
   assert.ok(errorHtml.includes('title="Error: model_error: boom"'))
-  assert.ok(!errorHtml.includes('status-dot-background'), '无在途徽章时不渲染空心环')
+  assert.ok(!errorHtml.includes('status-dot-background'), 'no in-flight badge means no hollow ring')
 
-  // primary idle + 次会话后台在途 + 另一次会话 blocked：状态灯独占，隐藏整个站位的后台环
+  // primary idle + secondary background in flight + another secondary blocked: the status light is exclusive, hiding the whole standing's background ring
   const blockedStore = sidebarStore({
     conversations: [
       conv({ id: 1, title: '主会话', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
@@ -581,13 +589,13 @@ test('折叠站位行：非 primary 后台在途 + 代表会话 working/blocked/
     },
   })
   const blockedHtml = renderSidebar(blockedStore)
-  assert.ok(blockedHtml.includes('class="status-dot status-dot-blocked"'), '代表会话 blocked 状态灯透出')
-  assert.ok(!blockedHtml.includes('status-dot-background'), '代表状态 blocked 时隐藏整个站位的后台环')
-  assert.ok(!blockedHtml.includes('后台任务'), 'tooltip 只显示代表会话状态')
+  assert.ok(blockedHtml.includes('class="status-dot status-dot-blocked"'), 'the representative blocked status light surfaces')
+  assert.ok(!blockedHtml.includes('status-dot-background'), 'with the representative blocked, the whole standing background ring hides')
+  assert.ok(!blockedHtml.includes('background task'), 'the tooltip shows only the representative status')
 })
 
-test('折叠站位行：代表会话 idle/done 时仅渲染一个后台空心环（非 primary 后台透出）', { timeout: 60_000 }, () => {
-  // primary idle + 次会话后台在途：站位行仅一个空心环（代表会话仍为 primary）
+test('collapsed standing row: representative idle/done renders exactly one background hollow ring (non-primary background surfaced)', { timeout: 60_000 }, () => {
+  // primary idle + secondary background in flight: the standing row shows a single hollow ring (the representative stays the primary)
   const idleStore = sidebarStore({
     conversations: [
       conv({ id: 1, title: '主会话', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
@@ -601,11 +609,11 @@ test('折叠站位行：代表会话 idle/done 时仅渲染一个后台空心环
     },
   })
   const idleHtml = renderSidebar(idleStore)
-  assert.ok(idleHtml.includes('class="status-dot status-dot-background"'), '非 primary 会话的后台在途透出到站位行')
+  assert.ok(idleHtml.includes('class="status-dot status-dot-background"'), 'a non-primary conversation background in flight surfaces onto the standing row')
   assert.ok(idleHtml.includes('title="Idle · background task: 4 Running"'))
-  assert.equal(countStatusLights(idleHtml), 1, '站位行只有一个后台空心环，无并列基础圆点')
+  assert.equal(countStatusLights(idleHtml), 1, 'the standing row shows a single background hollow ring with no parallel base dot')
 
-  // primary done + 次会话后台在途：done 绿点让位，同样仅一个空心环
+  // primary done + secondary background in flight: the done green dot yields; likewise a single hollow ring
   const doneStore = sidebarStore({
     conversations: [
       conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'done', createdAt: 9000, updatedAt: 9000 }),
@@ -619,14 +627,14 @@ test('折叠站位行：代表会话 idle/done 时仅渲染一个后台空心环
     },
   })
   const doneHtml = renderSidebar(doneStore)
-  assert.ok(!doneHtml.includes('class="status-dot status-dot-done"'), '代表 done 绿点让位')
-  assert.ok(doneHtml.includes('class="status-dot status-dot-background"'), '仅渲染后台空心环')
+  assert.ok(!doneHtml.includes('class="status-dot status-dot-done"'), 'the representative done green dot yields')
+  assert.ok(doneHtml.includes('class="status-dot status-dot-background"'), 'only the background hollow ring renders')
   assert.ok(doneHtml.includes('title="Completed · background task: 2 Running"'))
-  assert.equal(countStatusLights(doneHtml), 1, '站位行只有一个后台空心环')
+  assert.equal(countStatusLights(doneHtml), 1, 'the standing row shows a single background hollow ring')
 })
 
-test('sidebar.section 分组会话行同样遵守单灯语义', { timeout: 60_000 }, () => {
-  // idle + 后台在途：仅空心环
+test('sidebar.section group conversation rows obey the same single-light semantics', { timeout: 60_000 }, () => {
+  // idle + background in flight: hollow ring only
   const idleStore = sidebarStore({
     conversations: [
       conv({ id: 20, title: 'Worker A', profileId: 'coder', tags: ['worker'], status: 'idle' }),
@@ -642,10 +650,10 @@ test('sidebar.section 分组会话行同样遵守单灯语义', { timeout: 60_00
     },
   })
   const idleHtml = renderSidebar(idleStore)
-  assert.ok(idleHtml.includes('后台 Worker'), '分组渲染')
-  assert.ok(idleHtml.includes('title="Idle · background task: 1 Running"'), '分组会话行空心环 + 摘要')
+  assert.ok(idleHtml.includes('后台 Worker'), 'the group renders')
+  assert.ok(idleHtml.includes('title="Idle · background task: 1 Running"'), 'group conversation row: hollow ring + summary')
 
-  // working + 后台在途：仅主状态灯，无 background class
+  // working + background in flight: main status light only, no background class
   const workingStore = sidebarStore({
     conversations: [
       conv({ id: 20, title: 'Worker A', profileId: 'coder', tags: ['worker'], status: 'working', doing: '执行任务' }),
@@ -661,19 +669,19 @@ test('sidebar.section 分组会话行同样遵守单灯语义', { timeout: 60_00
     },
   })
   const workingHtml = renderSidebar(workingStore)
-  assert.ok(workingHtml.includes('class="status-dot status-dot-working"'), '分组会话行主状态灯保留')
-  assert.ok(!workingHtml.includes('status-dot-background'), '分组会话行不与后台空心环并列')
-  assert.ok(!workingHtml.includes('后台任务'), 'tooltip 不叠加后台摘要')
+  assert.ok(workingHtml.includes('class="status-dot status-dot-working"'), 'group conversation rows keep the main status light')
+  assert.ok(!workingHtml.includes('status-dot-background'), 'group conversation rows never pair with the background hollow ring')
+  assert.ok(!workingHtml.includes('background task'), 'the tooltip appends no background summary')
 })
 
-test('插件停用（贡献消失）或仅剩 neutral 历史计数时无任何在途指示', { timeout: 60_000 }, () => {
+test('plugin disabled (contributions gone) or only neutral history counts left: no in-flight indicator at all', { timeout: 60_000 }, () => {
   const conversations = [
     conv({ id: 1, title: '主会话', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
     conv({ id: 50, title: '别处', profileId: 'coder' }),
   ]
   const common = { conversations, primaryTarget: { kind: 'conversation' as const, conversationId: 50 } }
   const disabled = renderSidebar(sidebarStore({ ...common, groupedUi: groupUiContributions([]), pluginDocs: {} }))
-  assert.ok(!disabled.includes('status-dot-background'), '贡献消失（停用）后指示立即消失')
+  assert.ok(!disabled.includes('status-dot-background'), 'with the contribution gone (disabled), the indicator disappears immediately')
   const neutral = renderSidebar(
     sidebarStore({
       ...common,
@@ -681,14 +689,14 @@ test('插件停用（贡献消失）或仅剩 neutral 历史计数时无任何�
       pluginDocs: { 'builtin:workflow/run-badges': badgesDoc({ '1': { count: 9, tone: 'neutral', footerText: '9 条历史' } }) },
     }),
   )
-  assert.ok(!neutral.includes('status-dot-background'), 'neutral 历史计数不得误报在途')
+  assert.ok(!neutral.includes('status-dot-background'), 'neutral history counts must not misreport as in flight')
 })
 
 // ---------------------------------------------------------------------------
-// 状态灯前置行首固定灯位（nav-status-slot）：各行灯垂直对齐的结构契约
+// Leading fixed light slot (nav-status-slot): the structural contract keeping every row's light vertically aligned
 // ---------------------------------------------------------------------------
 
-/** 断言行标题之前的行首段包含 nav-status-slot 内的状态灯（灯在 nav-item-label 之前）。 */
+/** Assert that the row's leading segment before the title contains the status light inside nav-status-slot (the light precedes nav-item-label). */
 function dotBeforeLabel(html: string, title: string): boolean {
   const labelIdx = html.indexOf(`>${title}</span>`)
   if (labelIdx < 0) return false
@@ -696,7 +704,7 @@ function dotBeforeLabel(html: string, title: string): boolean {
   return /<span class="nav-status-slot"><span class="status-dot /.test(html.slice(rowStart, labelIdx))
 }
 
-test('状态灯前置行首：working/done/idle+后台在途的灯均在标题之前的固定灯位内', { timeout: 60_000 }, () => {
+test('leading fixed light slot: working/done/idle+background lights all sit before the title inside nav-status-slot', { timeout: 60_000 }, () => {
   const store = sidebarStore({
     conversations: [
       conv({ id: 1, title: '当前在跑', profileId: 'assistant', status: 'working', doing: '正在思考方案' }),
@@ -711,23 +719,23 @@ test('状态灯前置行首：working/done/idle+后台在途的灯均在标题�
     },
   })
   const html = renderSidebar(store)
-  assert.ok(dotBeforeLabel(html, '当前在跑'), 'working 状态灯在标题之前')
-  assert.ok(dotBeforeLabel(html, 'Completed'), 'done 状态灯在标题之前')
-  assert.ok(dotBeforeLabel(html, '后台在跑'), '后台空心环灯在标题之前')
-  // idle 空槽：灯不渲染但槽保留，续行标题保持对齐
+  assert.ok(dotBeforeLabel(html, '当前在跑'), 'the working status light precedes the title')
+  assert.ok(dotBeforeLabel(html, 'Completed'), 'the done status light precedes the title')
+  assert.ok(dotBeforeLabel(html, '后台在跑'), 'the background hollow-ring light precedes the title')
+  // idle empty slot: no light renders but the slot stays so wrapped titles keep alignment
   assert.ok(
     html.includes('<span class="nav-status-slot"></span><span class="nav-item-label">纯空闲</span>'),
-    'idle 行空槽保留（灯不渲染槽仍在）',
+    'the idle row keeps its empty slot (no light renders, the slot remains)',
   )
-  // 槽位数量与行数一致：每条会话行（nav-item-sub）与每个站位行各恰好一个 nav-status-slot
+  // slot count matches row count: every conversation row (nav-item-sub) and every standing row carries exactly one nav-status-slot
   const subRows = (html.match(/class="nav-item nav-item-sub/g) ?? []).length
   const standingRows = (html.match(/class="nav-item agent-standing-row/g) ?? []).length
   const slots = (html.match(/class="nav-status-slot"/g) ?? []).length
-  assert.equal(subRows, 4, '四条会话子行全部渲染')
-  assert.equal(slots, subRows + standingRows, '会话行行行有灯槽（idle 空槽也计入），站位行同样有槽')
+  assert.equal(subRows, 4, 'all four conversation child rows render')
+  assert.equal(slots, subRows + standingRows, 'every conversation row has a light slot (idle empty slots count too); standing rows have slots as well')
 })
 
-test('折叠站位行状态灯前置：standing indicator 渲染在 nav-status-slot 内且位于名称之前', { timeout: 60_000 }, () => {
+test('collapsed standing light leads the row: the standing indicator renders inside nav-status-slot before the name', { timeout: 60_000 }, () => {
   const store = sidebarStore({
     conversations: [
       conv({ id: 1, title: '在跑', profileId: 'coder', status: 'working', doing: '重构中' }),
@@ -736,20 +744,20 @@ test('折叠站位行状态灯前置：standing indicator 渲染在 nav-status-s
     primaryTarget: { kind: 'conversation', conversationId: 50 },
   })
   const html = renderSidebar(store)
-  // 折叠站位行：名称之前有 nav-status-slot 且其内含代表会话状态灯
+  // collapsed standing row: a nav-status-slot precedes the name and holds the representative's status light
   const labelIdx = html.indexOf('>编码专员</span>')
-  assert.ok(labelIdx > 0, '折叠站位行渲染')
+  assert.ok(labelIdx > 0, 'the collapsed standing row renders')
   const rowStart = html.lastIndexOf('<div class="nav-item agent-standing-row', labelIdx)
   const head = html.slice(rowStart, labelIdx)
-  assert.match(head, /<span class="nav-status-slot"><span class="status-dot status-dot-working"/, '站位指示灯在名称之前的固定灯位内')
+  assert.match(head, /<span class="nav-status-slot"><span class="status-dot status-dot-working"/, 'the standing indicator sits in the fixed light slot before the name')
 })
 
 
 // ---------------------------------------------------------------------------
-// 挂载路径：badge doc 经 Sidebar effect 按需加载（纯函数零副作用）
+// Mount path: badge docs load on demand via the Sidebar effect (pure functions have zero side effects)
 // ---------------------------------------------------------------------------
 
-test('Sidebar 挂载后按需 ensurePluginDoc 加载命中面板的 badge doc', { timeout: 60_000 }, async () => {
+test('after Sidebar mounts, ensurePluginDoc loads the badge docs of hit panels on demand', { timeout: 60_000 }, async () => {
   const loaded: Array<{ pluginId: string; doc: string }> = []
   const store = sidebarStore({
     conversations: [
@@ -778,11 +786,11 @@ test('Sidebar 挂载后按需 ensurePluginDoc 加载命中面板的 badge doc', 
 })
 
 // ---------------------------------------------------------------------------
-// Sidebar 渲染与 DOM 更新：contextUsage.compacting 后台空心环与单灯语义
+// Sidebar rendering and DOM updates: the contextUsage.compacting background hollow ring and single-light semantics
 // ---------------------------------------------------------------------------
 
-test('Sidebar 渲染：idle/done 会话 compacting=true 渲染后台空心环，working 保持主灯独占，叠加 workflow 角标去重拼接', { timeout: 60_000 }, () => {
-  // idle + compacting=true -> 空心环 + 上下文精简中
+test('Sidebar render: idle/done conversations with compacting=true render the background hollow ring, working keeps the main light exclusive, workflow badges dedupe-join', { timeout: 60_000 }, () => {
+  // idle + compacting=true -> hollow ring + compaction summary
   const idleHtml = renderSidebar(
     sidebarStore({
       conversations: [
@@ -800,11 +808,11 @@ test('Sidebar 渲染：idle/done 会话 compacting=true 渲染后台空心环，
       primaryTarget: { kind: 'conversation', conversationId: 50 },
     }),
   )
-  assert.ok(idleHtml.includes('class="status-dot status-dot-background"'), 'idle + compacting 应渲染后台空心环')
-  assert.ok(idleHtml.includes('title="Idle · background task: Compacting context"'), 'tooltip 应包含 上下文精简中')
+  assert.ok(idleHtml.includes('class="status-dot status-dot-background"'), 'idle + compacting must render the background hollow ring')
+  assert.ok(idleHtml.includes('title="Idle · background task: Compacting context"'), 'the tooltip must include the compaction summary')
   assert.equal(countStatusLights(idleHtml), 1)
 
-  // done + compacting=true -> 绿点让位空心环
+  // done + compacting=true -> green dot yields to the hollow ring
   const doneHtml = renderSidebar(
     sidebarStore({
       conversations: [
@@ -822,12 +830,12 @@ test('Sidebar 渲染：idle/done 会话 compacting=true 渲染后台空心环，
       primaryTarget: { kind: 'conversation', conversationId: 50 },
     }),
   )
-  assert.ok(doneHtml.includes('class="status-dot status-dot-background"'), 'done + compacting 应渲染后台空心环')
-  assert.ok(!doneHtml.includes('class="status-dot status-dot-done"'), 'done 绿点必须让位')
+  assert.ok(doneHtml.includes('class="status-dot status-dot-background"'), 'done + compacting must render the background hollow ring')
+  assert.ok(!doneHtml.includes('class="status-dot status-dot-done"'), 'the done green dot must yield')
   assert.ok(doneHtml.includes('title="Completed · background task: Compacting context"'))
   assert.equal(countStatusLights(doneHtml), 1)
 
-  // working + compacting=true -> 实心 working 灯独占（单灯不变式）
+  // working + compacting=true -> the solid working light stays exclusive (single-light invariant)
   const workingHtml = renderSidebar(
     sidebarStore({
       conversations: [
@@ -846,12 +854,12 @@ test('Sidebar 渲染：idle/done 会话 compacting=true 渲染后台空心环，
       primaryTarget: { kind: 'conversation', conversationId: 50 },
     }),
   )
-  assert.ok(workingHtml.includes('class="status-dot status-dot-working"'), 'working 主状态灯必须独占')
-  assert.ok(!workingHtml.includes('status-dot-background'), 'working 时不得渲染后台空心环')
-  assert.ok(!workingHtml.includes('Compacting context'), 'working 时 tooltip 不叠加后台摘要')
+  assert.ok(workingHtml.includes('class="status-dot status-dot-working"'), 'the working main status light must be exclusive')
+  assert.ok(!workingHtml.includes('status-dot-background'), 'no background hollow ring while working')
+  assert.ok(!workingHtml.includes('Compacting context'), 'no background summary appended to the tooltip while working')
   assert.equal(countStatusLights(workingHtml), 1)
 
-  // idle + compacting=true + workflow accent badge -> 组合摘要「2 运行中 · 上下文精简中」
+  // idle + compacting=true + workflow accent badge -> combined summary "2 Running · Compacting context"
   const combinedHtml = renderSidebar(
     sidebarStore({
       conversations: [
@@ -878,7 +886,7 @@ test('Sidebar 渲染：idle/done 会话 compacting=true 渲染后台空心环，
   assert.equal(countStatusLights(combinedHtml), 1)
 })
 
-test('Sidebar DOM 更新：conversations 的 compacting 从 false 变为 true 时即时点亮空心环（无陈旧闭包）', { timeout: 60_000 }, async () => {
+test('Sidebar DOM update: flipping a conversation compacting false -> true lights the hollow ring immediately (no stale closure)', { timeout: 60_000 }, async () => {
   const basePanels = groupUiContributions([])
   const initialStore = sidebarStore({
     conversations: [
@@ -914,13 +922,13 @@ test('Sidebar DOM 更新：conversations 的 compacting 从 false 变为 true �
     root = createRoot(container)
     root.render(e(HelmStoreContext.Provider, { value: initialStore }, e(Sidebar)))
   })
-  assert.ok(container.querySelector('.status-dot-background') === null, '初始无 compacting 不渲染空心环')
+  assert.ok(container.querySelector('.status-dot-background') === null, 'no hollow ring initially without compacting')
 
   await act(async () => {
     root?.render(e(HelmStoreContext.Provider, { value: nextStore }, e(Sidebar)))
   })
   const ring = container.querySelector('.status-dot-background')
-  assert.ok(ring !== null, 'conversations 更新 compacting=true 后应即时点亮空心环')
+  assert.ok(ring !== null, 'after the conversations update with compacting=true, the hollow ring lights immediately')
   assert.equal(ring.getAttribute('title'), 'Idle · background task: Compacting context')
 
   await act(async () => {
@@ -930,7 +938,7 @@ test('Sidebar DOM 更新：conversations 的 compacting 从 false 变为 true �
 })
 
 // ---------------------------------------------------------------------------
-// 侧栏动态分组、视图/设置空间导航与已归档分组：分屏在场、焦点刻度与微标 SSR 回归
+// Sidebar dynamic groups, views/settings space navigation and the archived group: split presence, focus ticks and micro-badge SSR regressions
 // ---------------------------------------------------------------------------
 
 function findNavRow(html: string, label: string): Element {
@@ -939,11 +947,11 @@ function findNavRow(html: string, label: string): Element {
   const match = [...host.querySelectorAll('.nav-item')].find(
     (row) => row.querySelector('.nav-item-label')?.textContent === label,
   )
-  assert.ok(match, `未找到标题为「${label}」的侧栏行`)
+  assert.ok(match, `sidebar row titled "${label}" not found`)
   return match
 }
 
-test('sidebar.section 会话行分屏在场：splitTarget 命中渲染 .nav-item-split 与 分 微标，聚焦 split 切换 .nav-item-active.nav-item-focused', { timeout: 60_000 }, () => {
+test('sidebar.section conversation rows in split presence: a splitTarget hit renders .nav-item-split and the Split micro badge; focusing split switches .nav-item-active.nav-item-focused', { timeout: 60_000 }, () => {
   const contributions: PluginUiContribution[] = [
     {
       pluginId: 'builtin:superagent',
@@ -971,9 +979,9 @@ test('sidebar.section 会话行分屏在场：splitTarget 命中渲染 .nav-item
   assert.equal(workerSecondary.classList.contains('nav-item-focused'), false)
   assert.equal(workerSecondary.querySelector('.nav-item-main')?.getAttribute('aria-current'), null)
   const secondaryMeta = workerSecondary.querySelector('.nav-item-meta')
-  assert.ok(secondaryMeta, 'Worker A 应渲染 .nav-item-meta')
+  assert.ok(secondaryMeta, 'Worker A must render .nav-item-meta')
   const secondaryTag = secondaryMeta.children[0]
-  assert.equal(secondaryTag?.className, 'nav-pane-tag', 'paneTag 应前置在 .nav-item-meta 首位')
+  assert.equal(secondaryTag?.className, 'nav-pane-tag', 'the paneTag must lead .nav-item-meta')
   assert.equal(secondaryTag?.textContent, 'Split')
   assert.equal(secondaryTag?.getAttribute('title'), 'Open in split view')
   assert.equal(secondaryMeta.children[1]?.textContent, '#20')
@@ -1001,7 +1009,7 @@ test('sidebar.section 会话行分屏在场：splitTarget 命中渲染 .nav-item
   assert.equal(workerFocused.querySelector('.nav-pane-tag')?.getAttribute('title'), 'Open in split view')
 })
 
-test('ViewNavGroup 与 SettingsNavGroup 分屏双开：主/分高亮、焦点刻度与 .nav-pane-tag（单屏不增设 Settings meta）', { timeout: 60_000 }, () => {
+test('ViewNavGroup and SettingsNavGroup split double-open: main/split highlights, focus ticks and .nav-pane-tag (single screen adds no Settings meta)', { timeout: 60_000 }, () => {
   const viewContributions: PluginUiContribution[] = [
     {
       pluginId: 'builtin:herdr',
@@ -1061,7 +1069,7 @@ test('ViewNavGroup 与 SettingsNavGroup 分屏双开：主/分高亮、焦点刻
   assert.equal(singleProfiles.classList.contains('settings-nav-item'), true)
   assert.equal(singleProfiles.classList.contains('nav-item-active'), true)
   assert.equal(singleProfiles.classList.contains('nav-item-focused'), false)
-  assert.ok(singleProfiles.querySelector('.nav-item-meta') === null, '单屏 SettingsNavGroup 不渲染 .nav-item-meta')
+  assert.ok(singleProfiles.querySelector('.nav-item-meta') === null, 'single-screen SettingsNavGroup renders no .nav-item-meta')
 
   const splitSettingsHtml = renderSidebar(
     sidebarStore({
@@ -1089,7 +1097,7 @@ test('ViewNavGroup 与 SettingsNavGroup 分屏双开：主/分高亮、焦点刻
   assert.equal(modelsRow.querySelector('.nav-item-meta .nav-pane-tag')?.getAttribute('title'), 'Open in split view')
 
   const skillsRow = findNavRow(splitSettingsHtml, 'Skills')
-  assert.ok(skillsRow.querySelector('.nav-item-meta') === null, '未命中的设置项不渲染 .nav-item-meta')
+  assert.ok(skillsRow.querySelector('.nav-item-meta') === null, 'unhit settings entries render no .nav-item-meta')
 
   const sameSettingsHtml = renderSidebar(
     sidebarStore({
@@ -1105,7 +1113,7 @@ test('ViewNavGroup 与 SettingsNavGroup 分屏双开：主/分高亮、焦点刻
   assert.equal(profilesBothRow.querySelector('.nav-pane-tag')?.getAttribute('title'), 'Open in both main and split views')
 })
 
-test('ArchivedConversationsGroup 分屏命中归档会话：自动展开并渲染 .nav-item-split / .nav-item-active.nav-item-focused 与 .nav-pane-tag', { timeout: 60_000 }, () => {
+test('ArchivedConversationsGroup split hit on an archived conversation: auto-expands and renders .nav-item-split / .nav-item-active.nav-item-focused and .nav-pane-tag', { timeout: 60_000 }, () => {
   const conversations = [
     conv({ id: 1, title: '活跃会话', profileId: 'assistant' }),
     conv({ id: 77, title: '已归档历史', profileId: 'assistant', tags: [ARCHIVED_TAG] }),
@@ -1123,7 +1131,7 @@ test('ArchivedConversationsGroup 分屏命中归档会话：自动展开并渲�
   assert.equal(
     secondaryHost.querySelector('.archived-conversations-group .sidebar-group-header-toggle')?.getAttribute('aria-expanded'),
     'true',
-    'splitTarget 指向Archive conversation时分组应自动展开',
+    'the group auto-expands when splitTarget points at an archived conversation',
   )
   const archivedSecondary = findNavRow(splitSecondaryHtml, '已归档历史')
   assert.equal(archivedSecondary.classList.contains('nav-item-sub'), true)
@@ -1132,7 +1140,7 @@ test('ArchivedConversationsGroup 分屏命中归档会话：自动展开并渲�
   assert.equal(archivedSecondary.classList.contains('nav-item-focused'), false)
   assert.equal(archivedSecondary.querySelector('.nav-item-main')?.getAttribute('aria-current'), null)
   const metaChildren = [...(archivedSecondary.querySelector('.nav-item-meta')?.children ?? [])]
-  assert.equal(metaChildren[0]?.className, 'nav-pane-tag', 'paneTag 应前置在 archived-profile-label 之前')
+  assert.equal(metaChildren[0]?.className, 'nav-pane-tag', 'the paneTag must precede the archived-profile-label')
   assert.equal(metaChildren[0]?.textContent, 'Split')
   assert.equal(metaChildren[0]?.getAttribute('title'), 'Open in split view')
   assert.equal(metaChildren[1]?.classList.contains('archived-profile-label'), true)
@@ -1165,4 +1173,60 @@ test('ArchivedConversationsGroup 分屏命中归档会话：自动展开并渲�
   assert.equal(archivedBoth.classList.contains('nav-item-focused'), true)
   assert.equal(archivedBoth.querySelector('.nav-pane-tag')?.textContent, 'Main·Split')
   assert.equal(archivedBoth.querySelector('.nav-pane-tag')?.getAttribute('title'), 'Open in both main and split views')
+})
+
+// ---------------------------------------------------------------------------
+// Locale wiring: shell chrome copy follows the active store locale
+// ---------------------------------------------------------------------------
+
+test('zh-CN sidebar render: agents group shows Chinese chrome copy', { timeout: 60_000 }, () => {
+  const store = sidebarStore({ locale: 'zh-CN' })
+  const html = renderSidebar(store)
+  assert.ok(html.includes('<span>智能体</span>'), 'agents group title renders the zh-CN catalog copy')
+  assert.ok(html.includes('筛选智能体与话题'), 'filter tooltip/aria-label renders zh-CN')
+  assert.ok(html.includes('批量管理会话'), 'bulk-manage title renders zh-CN')
+  assert.ok(!html.includes('<span>Agents</span>'), 'no leftover English group title under zh-CN')
+})
+
+test('AgentStandingsGroup switches copy immediately on setLocale (en -> zh-CN -> en)', { timeout: 60_000 }, async () => {
+  let committedLocale: HelmLocale = 'en'
+  function Harness(): React.JSX.Element {
+    const [locale, setLocale] = React.useState<HelmLocale>('en')
+    committedLocale = locale
+    const store = React.useMemo(
+      () => sidebarStore({ locale, setLocale: (next: HelmLocale) => setLocale(next) }),
+      [locale],
+    )
+    return e(
+      HelmStoreContext.Provider,
+      { value: store },
+      e(AgentStandingsGroup, { store, background: new Map() }),
+      e('button', { type: 'button', onClick: () => setLocale(locale === 'en' ? 'zh-CN' : 'en') }, 'switch-locale'),
+    )
+  }
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root: Root = createRoot(host)
+  try {
+    await act(async () => { root.render(e(Harness)) })
+    const groupTitle = host.querySelector('.sidebar-group-header > span')
+    assert.ok(groupTitle !== null, 'agents group header renders')
+    assert.equal(groupTitle.textContent, 'Agents', 'renders the en catalog copy by default')
+
+    const switchBtn = [...host.querySelectorAll('button')].find((b) => b.textContent === 'switch-locale')
+    assert.ok(switchBtn !== undefined, 'locale switch harness button must exist')
+    await act(async () => { (switchBtn as HTMLButtonElement).click() })
+    assert.equal(committedLocale, 'zh-CN')
+    const groupTitleZh = host.querySelector('.sidebar-group-header > span')
+    assert.ok(groupTitleZh !== null)
+    assert.equal(groupTitleZh.textContent, '智能体', 'locale switch re-renders shell chrome in place')
+
+    await act(async () => { (switchBtn as HTMLButtonElement).click() })
+    assert.equal(committedLocale, 'en')
+    assert.equal(host.querySelector('.sidebar-group-header > span')?.textContent, 'Agents', 'switching back to en restores English immediately')
+  } finally {
+    await act(async () => { root.unmount() })
+    host.remove()
+  }
 })

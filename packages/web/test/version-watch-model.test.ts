@@ -1,8 +1,10 @@
 /**
- * 版本感知纯逻辑测试（version-watch-model.ts + 脏状态桥接）：
- * 生产/dev 入口识别、合法 HTML 解析、探测失败不误报、版本变化判定、节流判定、
- * WebView-safe 刷新 URL 构造与防环名额、待命草稿与 Composer 脏状态聚合
- * （自动刷新挂起条件的纯事实源）。
+ * Version-awareness pure-logic tests (version-watch-model.ts + the dirty-state
+ * bridges): production/dev entry detection, valid-HTML parsing, probe failures
+ * never misreport, version-change verdicts, throttle verdicts, WebView-safe
+ * refresh-URL construction and loop-guard budgets, standby-draft and Composer
+ * dirty-state aggregation (the pure fact sources of the auto-refresh defer
+ * conditions).
  */
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
@@ -52,14 +54,14 @@ afterEach(() => {
   usedComposerKeys.length = 0
 })
 
-/** 测试隔离：记录本文件注册过的 Composer 上报键，afterEach 统一清除。 */
+/** Test isolation: record the Composer report keys registered by this file; afterEach clears them all. */
 const usedComposerKeys: string[] = []
 function reportComposerDirty(key: string, snapshot: ComposerDirtySnapshot): void {
   if (!usedComposerKeys.includes(key)) usedComposerKeys.push(key)
   setComposerDirty(key, snapshot)
 }
 
-/** 真实 Vite 构建形态的 index.html（head 内唯一 module script + 内联主题脚本 + css link）。 */
+/** An index.html in the real Vite build shape (a unique module script in head + an inline theme script + a css link). */
 const builtIndexHtml = (src: string): string =>
   `<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8" /><title>Helm</title>` +
   `<script>(function () { try { localStorage.getItem('x') } catch (_) {} })()</script>` +
@@ -72,39 +74,39 @@ const docOf = (html: string): Document => new DOMParser().parseFromString(html, 
 const CLEAN_COMPOSER: ComposerDirtySnapshot = { hasDraftText: false, editingEntry: false, hasAttachments: false, busy: false }
 
 // ---------------------------------------------------------------------------
-// 入口识别（当前 document）
+// Entry detection (current document)
 // ---------------------------------------------------------------------------
 
-test('生产入口识别：唯一 /assets/ module script（含 crossorigin 构建形态）即指纹', { timeout: 60_000 }, () => {
+test('production entry detection: a unique /assets/ module script (crossorigin build shape included) is the fingerprint', { timeout: 60_000 }, () => {
   const doc = docOf(builtIndexHtml('/assets/index-BE2B9fA8.js'))
   assert.equal(detectDocumentProductionEntry(doc), '/assets/index-BE2B9fA8.js')
 })
 
-test('入口指纹忽略 src 查询/片段参数：部署通道附加的防缓存参数不改变指纹', { timeout: 60_000 }, () => {
+test('the entry fingerprint ignores src query/fragment params: deploy-pipeline cache-busters never change the fingerprint', { timeout: 60_000 }, () => {
   const doc = docOf(builtIndexHtml('/assets/index-Q.js?v=2&x=1#frag'))
-  assert.equal(detectDocumentProductionEntry(doc), '/assets/index-Q.js', '指纹只取路径部分')
-  // 同一路径带不带参数是同一构建：不产生第二个候选（多义即休眠）
+  assert.equal(detectDocumentProductionEntry(doc), '/assets/index-Q.js', 'the fingerprint takes only the path part')
+  // the same path with or without params is the same build: no second candidate (ambiguity sleeps)
   const two = docOf(
     '<html><head>' +
       '<script type="module" src="/assets/index-Q.js?v=1"></script>' +
       '<script type="module" src="/assets/index-Q.js?v=2"></script>' +
       '</head></html>',
   )
-  assert.equal(detectDocumentProductionEntry(two), '/assets/index-Q.js', '查询参数不同的同路径脚本去重为唯一候选')
+  assert.equal(detectDocumentProductionEntry(two), '/assets/index-Q.js', 'same-path scripts differing only in query params dedupe into one candidate')
 })
 
-test('Vite dev 入口（/src/main.tsx）休眠：返回 null，不猜测', { timeout: 60_000 }, () => {
+test('a Vite dev entry (/src/main.tsx) sleeps: returns null, never guesses', { timeout: 60_000 }, () => {
   const dev = docOf(
     '<!doctype html><html><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>',
   )
   assert.equal(detectDocumentProductionEntry(dev), null)
 })
 
-test('无 module script（单测/SSR 形态）与空白文档返回 null', { timeout: 60_000 }, () => {
+test('no module script (unit-test/SSR shapes) and blank documents return null', { timeout: 60_000 }, () => {
   assert.equal(detectDocumentProductionEntry(docOf('<!doctype html><html><body><div id="root"></div></body></html>')), null)
 })
 
-test('入口候选多义不猜：两个不同 /assets/ module script 返回 null', { timeout: 60_000 }, () => {
+test('ambiguous entry candidates are never guessed: two distinct /assets/ module scripts return null', { timeout: 60_000 }, () => {
   const ambiguous = docOf(
     '<html><head>' +
       '<script type="module" src="/assets/index-one.js"></script>' +
@@ -115,7 +117,7 @@ test('入口候选多义不猜：两个不同 /assets/ module script 返回 null
   assert.equal(parseIndexHtmlProductionEntry(builtIndexHtml('/assets/a.js').replace('</head>', '<script type="module" src="/assets/b.js"></script></head>')), null)
 })
 
-test('非 /assets/ 同源路径（CDN 绝对地址、相对路径）与内联脚本不计入候选', { timeout: 60_000 }, () => {
+test('non-/assets/ same-origin paths (CDN absolute URLs, relative paths) and inline scripts never count as candidates', { timeout: 60_000 }, () => {
   const doc = docOf(
     '<html><head>' +
       '<script>inline()</script>' +
@@ -128,7 +130,7 @@ test('非 /assets/ 同源路径（CDN 绝对地址、相对路径）与内联脚
 })
 
 // ---------------------------------------------------------------------------
-// 探测（/index.html no-store 拉取与边界校验）
+// Probing (no-store /index.html fetch and boundary validation)
 // ---------------------------------------------------------------------------
 
 interface ProbeStub {
@@ -157,26 +159,26 @@ function makeProbeStub(initial: () => Response | Promise<Response>): ProbeStub {
 const htmlResponse = (html: string, contentType = 'text/html; charset=utf-8'): Response =>
   new Response(html, { status: 200, headers: { 'content-type': contentType } })
 
-test('探测成功：唯一化 URL 拉取 /index.html，no-store + Accept: text/html + 唯一生产入口', { timeout: 60_000 }, async () => {
+test('probe success: fetches /index.html with a uniquified URL, no-store + Accept: text/html + a unique production entry', { timeout: 60_000 }, async () => {
   const stub = makeProbeStub(() => htmlResponse(builtIndexHtml('/assets/index-NEW.js')))
   const entry = await probeLatestIndexEntry({ ...stub.deps, nonce: () => 'n-1' })
   assert.equal(entry, '/assets/index-NEW.js')
   assert.equal(stub.calls.length, 1)
-  assert.equal(stub.calls[0]!.url, '/index.html?helmv=n-1', 'URL 携带防缓存唯一参数（应对可能忽略 no-store 的缓存层）')
+  assert.equal(stub.calls[0]!.url, '/index.html?helmv=n-1', 'the URL carries a cache-busting unique param (for cache layers that may ignore no-store)')
   assert.equal(stub.calls[0]!.init.cache, 'no-store')
   assert.deepEqual(stub.calls[0]!.init.headers, { accept: 'text/html' })
   assert.equal(buildIndexProbeUrl('zzz'), '/index.html?helmv=zzz')
 })
 
-test('探测 URL 随机数默认自增：同毫秒内两次探测的 URL 也互不相同', { timeout: 60_000 }, async () => {
+test('the default probe nonce auto-increments: two probes within the same millisecond still differ', { timeout: 60_000 }, async () => {
   const stub = makeProbeStub(() => htmlResponse(builtIndexHtml('/assets/index-A.js')))
   await probeLatestIndexEntry(stub.deps)
   await probeLatestIndexEntry(stub.deps)
   assert.equal(stub.calls.length, 2)
-  assert.notEqual(stub.calls[0]!.url, stub.calls[1]!.url, '缺省随机数含自增序号，必然唯一')
+  assert.notEqual(stub.calls[0]!.url, stub.calls[1]!.url, 'the default nonce includes a sequence number and is necessarily unique')
 })
 
-test('探测失败矩阵：网络错误 / 非 2xx / 非 HTML / 结构无效 / dev 形态均返回 null 且不抛错', { timeout: 60_000 }, async () => {
+test('probe failure matrix: network error / non-2xx / non-HTML / invalid structure / dev shape all return null without throwing', { timeout: 60_000 }, async () => {
   const networkError = makeProbeStub(() => {
     throw new TypeError('network down')
   })
@@ -201,10 +203,10 @@ test('探测失败矩阵：网络错误 / 非 2xx / 非 HTML / 结构无效 / de
 })
 
 // ---------------------------------------------------------------------------
-// 版本判定状态机与节流
+// Version verdict state machine and throttling
 // ---------------------------------------------------------------------------
 
-test('版本判定：初始不 pending；变化 pending；部署回滚复原；探测失败保持原判定', { timeout: 60_000 }, () => {
+test('version verdict: initially not pending; a change pends; a deploy rollback restores; a probe failure keeps the verdict', { timeout: 60_000 }, () => {
   let state = initialVersionWatchState('/assets/index-A.js')
   assert.equal(versionUpdatePending(state), false)
 
@@ -214,16 +216,16 @@ test('版本判定：初始不 pending；变化 pending；部署回滚复原；�
   state = applyProbeResult(state, '/assets/index-B.js')
   assert.equal(versionUpdatePending(state), true)
 
-  // 探测失败：维持 B 的判定，不误判也不回退
+  // probe failure: keeps the B verdict — no misjudge, no rollback
   state = applyProbeResult(state, null)
   assert.equal(versionUpdatePending(state), true)
 
-  // 部署回滚（B 又回到 A）：待刷新状态解除
+  // deploy rollback (B back to A): the pending-refresh state clears
   state = applyProbeResult(state, '/assets/index-A.js')
   assert.equal(versionUpdatePending(state), false)
 })
 
-test('刷新触发判定：pending + clean + 未触发才 reload；dirty / 已触发 / 未 pending 均不触发', { timeout: 60_000 }, () => {
+test('refresh trigger verdict: reloads only when pending + clean + not yet triggered; dirty / already triggered / not pending never trigger', { timeout: 60_000 }, () => {
   const base = initialVersionWatchState('/assets/index-A.js')
   const pending = applyProbeResult(base, '/assets/index-B.js')
   assert.equal(versionUpdatePending(pending), true)
@@ -234,14 +236,14 @@ test('刷新触发判定：pending + clean + 未触发才 reload；dirty / 已�
   assert.equal(versionUpdatePending(base), false)
 })
 
-test('节流判定：无历史立即放行；窗口内拒绝；窗口过后放行', { timeout: 60_000 }, () => {
+test('throttle verdict: no history passes immediately; inside the window denies; after the window passes', { timeout: 60_000 }, () => {
   const now = 1_000_000
   assert.equal(probeAllowed(now, null, 5_000), true)
   assert.equal(probeAllowed(now, now - 4_999, 5_000), false)
   assert.equal(probeAllowed(now, now - 5_000, 5_000), true)
 })
 
-test('焦点保护判定：仅 input/textarea 视为文本输入', { timeout: 60_000 }, () => {
+test('focus-protection verdict: only input/textarea count as text input', { timeout: 60_000 }, () => {
   const input = docOf('<html><body><input id="a" /></body></html>').querySelector('input')
   const textarea = docOf('<html><body><textarea></textarea></body></html>').querySelector('textarea')
   const div = docOf('<html><body><div></div></body></html>').querySelector('div')
@@ -251,11 +253,11 @@ test('焦点保护判定：仅 input/textarea 视为文本输入', { timeout: 60
   assert.equal(isTextInputElement(null), false)
 })
 
-test('挂起原因文案：draft/modal/组合各有准确描述，null 无文案', { timeout: 60_000 }, () => {
+test('defer-reason copy: draft/modal/combination each describe accurately; null has no copy', { timeout: 60_000 }, () => {
   assert.ok(versionDeferHint('draft').includes('Unsubmitted input'))
-  assert.ok(!versionDeferHint('draft').includes('窗口'), '纯草稿不提窗口')
+  assert.ok(!versionDeferHint('draft').includes('window'), 'a pure draft never mentions a window')
   assert.ok(versionDeferHint('modal').includes('window is open'))
-  assert.ok(!versionDeferHint('modal').includes('输入内容'), '纯弹窗不提输入内容')
+  assert.ok(!versionDeferHint('modal').includes('input'), 'a pure modal never mentions input')
   assert.ok(versionDeferHint('draft-and-modal').includes('Unsubmitted input'))
   assert.ok(versionDeferHint('draft-and-modal').includes('an open window'))
   assert.equal(versionDeferHint(null), '')
@@ -264,7 +266,7 @@ test('挂起原因文案：draft/modal/组合各有准确描述，null 无文案
   }
 })
 
-/** 内存 Storage 替身（可注入故障）。 */
+/** In-memory Storage stand-in (faults injectable). */
 function memoryStorage(failures: { getItem?: boolean; setItem?: boolean } = {}): Storage {
   const map = new Map<string, string>()
   return {
@@ -287,75 +289,75 @@ function memoryStorage(failures: { getItem?: boolean; setItem?: boolean } = {}):
   }
 }
 
-test('preloadError 自动重试名额：首次占用成功并落标记，之后拒绝；storage 不可用一律拒绝', { timeout: 60_000 }, () => {
+test('preloadError auto-retry budget: the first claim succeeds and writes the marker, later ones are denied; unavailable storage always denies', { timeout: 60_000 }, () => {
   const storage = memoryStorage()
-  assert.equal(claimPreloadAutoReload(storage), true, '首次占用成功')
-  assert.equal(storage.getItem(PRELOAD_RELOAD_GUARD_KEY), '1', '跨 reload 标记已写入')
-  assert.equal(claimPreloadAutoReload(storage), false, '名额已用完拒绝')
-  assert.equal(claimPreloadAutoReload(null), false, '无 storage 拒绝')
-  assert.equal(claimPreloadAutoReload(memoryStorage({ getItem: true })), false, '读取抛错拒绝')
-  assert.equal(claimPreloadAutoReload(memoryStorage({ setItem: true })), false, '写入抛错拒绝（不误允自动刷新）')
+  assert.equal(claimPreloadAutoReload(storage), true, 'the first claim succeeds')
+  assert.equal(storage.getItem(PRELOAD_RELOAD_GUARD_KEY), '1', 'the cross-reload marker is written')
+  assert.equal(claimPreloadAutoReload(storage), false, 'an exhausted budget is denied')
+  assert.equal(claimPreloadAutoReload(null), false, 'no storage denies')
+  assert.equal(claimPreloadAutoReload(memoryStorage({ getItem: true })), false, 'a throwing read denies')
+  assert.equal(claimPreloadAutoReload(memoryStorage({ setItem: true })), false, 'a throwing write denies (never mistakenly allows auto refresh)')
 })
 
 // ---------------------------------------------------------------------------
-// WebView-safe 刷新 URL 构造
+// WebView-safe refresh URL construction
 // ---------------------------------------------------------------------------
 
-test('刷新 URL：nonce=null 保留 pathname/query/hash 的干净同址导航，不引入任何参数', { timeout: 60_000 }, () => {
+test('refresh URL: nonce=null keeps pathname/query/hash for a clean same-URL navigation, introducing no parameters', { timeout: 60_000 }, () => {
   assert.equal(buildVersionReloadUrl({ pathname: '/', search: '', hash: '' }, null), '/')
   assert.equal(buildVersionReloadUrl({ pathname: '/', search: '', hash: '#/c/7' }, null), '/#/c/7')
   assert.equal(buildVersionReloadUrl({ pathname: '/', search: '?x=1&y=2', hash: '#/a/p1' }, null), '/?x=1&y=2#/a/p1')
 })
 
-test('刷新 URL cache-buster：追加唯一参数且每次替换旧值，绝不累积；hash 原样保留在末尾', { timeout: 60_000 }, () => {
+test('refresh URL cache-buster: appends a unique param replacing the old value each time, never accumulating; the hash stays untouched at the end', { timeout: 60_000 }, () => {
   const loc = { pathname: '/', search: '', hash: '#/a/p1' }
   assert.equal(buildVersionReloadUrl(loc, 'aaa'), `/?${RELOAD_CACHE_BUSTER_PARAM}=aaa#/a/p1`)
-  // 已带旧 buster 的地址再次构造：替换而非叠加
+  // building again on an address already carrying an old buster: replaced, not stacked
   assert.equal(
     buildVersionReloadUrl({ ...loc, search: `?${RELOAD_CACHE_BUSTER_PARAM}=aaa` }, 'bbb'),
     `/?${RELOAD_CACHE_BUSTER_PARAM}=bbb#/a/p1`,
-    '旧 buster 被替换，不累积',
+    'the old buster is replaced, not accumulated',
   )
-  // nonce=null 清理历史 buster，其余既有参数原样保留
+  // nonce=null strips historical busters; all other existing params stay untouched
   assert.equal(
     buildVersionReloadUrl({ ...loc, search: `?x=1&${RELOAD_CACHE_BUSTER_PARAM}=aaa&y=2` }, null),
     '/?x=1&y=2#/a/p1',
   )
-  // 连续升级多次也只存在一个 buster 参数
+  // even after multiple consecutive upgrades, at most one buster param exists
   const first = buildVersionReloadUrl(loc, 'n1')
   const second = buildVersionReloadUrl({ ...loc, search: first.slice(first.indexOf('?')) }, 'n2')
-  assert.equal(second.match(new RegExp(`${RELOAD_CACHE_BUSTER_PARAM}=`, 'g'))?.length, 1, '地址中至多一个 buster')
+  assert.equal(second.match(new RegExp(`${RELOAD_CACHE_BUSTER_PARAM}=`, 'g'))?.length, 1, 'at most one buster in the address')
 })
 
 // ---------------------------------------------------------------------------
-// 指纹自动刷新跨页防环
+// Fingerprint auto-refresh cross-page loop guard
 // ---------------------------------------------------------------------------
 
-test('指纹自动刷新跨页防环：同一目标入口只自动发起一次；不同入口放行', { timeout: 60_000 }, () => {
+test('fingerprint auto-refresh cross-page loop guard: the same target entry auto-fires once; different entries pass', { timeout: 60_000 }, () => {
   const storage = memoryStorage()
-  assert.equal(claimFingerprintAutoReload(storage, '/assets/index-B.js'), true, '首次对 B 发起：允许并记录')
+  assert.equal(claimFingerprintAutoReload(storage, '/assets/index-B.js'), true, 'first attempt at B: allowed and recorded')
   assert.equal(storage.getItem(FINGERPRINT_RELOAD_GUARD_KEY), '/assets/index-B.js')
-  assert.equal(claimFingerprintAutoReload(storage, '/assets/index-B.js'), false, '同入口再次自动发起：拒绝（上次未落地，防环）')
-  assert.equal(claimFingerprintAutoReload(storage, '/assets/index-C.js'), true, '新部署（不同入口）：正常允许')
-  assert.equal(claimFingerprintAutoReload(storage, null), true, '无指纹证据（不可达防御分支）：放行')
+  assert.equal(claimFingerprintAutoReload(storage, '/assets/index-B.js'), false, 'auto-firing again at the same entry: denied (the last one never landed; loop guard)')
+  assert.equal(claimFingerprintAutoReload(storage, '/assets/index-C.js'), true, 'a new deploy (different entry): normally allowed')
+  assert.equal(claimFingerprintAutoReload(storage, null), true, 'no fingerprint evidence (unreachable defensive branch): passes')
 })
 
-test('指纹自动刷新防环 fail-closed：storage 不可用一律拒绝自动刷新（禁 storage 的 WebView + 回吐旧缓存 = 无限循环）', { timeout: 60_000 }, () => {
-  assert.equal(claimFingerprintAutoReload(null, '/assets/index-B.js'), false, '无 storage 拒绝')
-  assert.equal(claimFingerprintAutoReload(memoryStorage({ getItem: true }), '/assets/index-B.js'), false, '读取抛错拒绝')
-  assert.equal(claimFingerprintAutoReload(memoryStorage({ setItem: true }), '/assets/index-D.js'), false, '写入抛错拒绝（未落标记不放行）')
+test('fingerprint loop guard fail-closed: unavailable storage always denies auto refresh (a storage-disabled WebView + stale cache = infinite loop)', { timeout: 60_000 }, () => {
+  assert.equal(claimFingerprintAutoReload(null, '/assets/index-B.js'), false, 'no storage denies')
+  assert.equal(claimFingerprintAutoReload(memoryStorage({ getItem: true }), '/assets/index-B.js'), false, 'a throwing read denies')
+  assert.equal(claimFingerprintAutoReload(memoryStorage({ setItem: true }), '/assets/index-D.js'), false, 'a throwing write denies (never passes without landing the marker)')
 })
 
 // ---------------------------------------------------------------------------
-// 待命草稿脏状态（版本刷新挂起条件之一）
+// Standby-draft dirtiness (defer condition one of version refresh)
 // ---------------------------------------------------------------------------
 
-test('待命草稿脏状态：空草稿干净；text/localFiles/uploaded/sending 任一即脏', { timeout: 60_000 }, () => {
+test('standby-draft dirtiness: an empty draft is clean; any of text/localFiles/uploaded/sending makes it dirty', { timeout: 60_000 }, () => {
   const key = standbyDraftKey({ panel: 'primary', profileId: 'p1' })
   assert.equal(standbyDraftsDirty(), false)
 
   updateStandbyDraft(key, { text: '  ' })
-  assert.equal(standbyDraftsDirty(), false, '纯空白正文不算未提交内容')
+  assert.equal(standbyDraftsDirty(), false, 'a purely blank body is no unsubmitted content')
 
   updateStandbyDraft(key, { text: 'hello' })
   assert.equal(standbyDraftsDirty(), true)
@@ -374,7 +376,7 @@ test('待命草稿脏状态：空草稿干净；text/localFiles/uploaded/sending
   assert.equal(standbyDraftsDirty(), true)
 })
 
-test('待命草稿订阅：聚合脏状态翻转时收到通知', { timeout: 60_000 }, () => {
+test('standby-draft subscription: notified when the aggregate dirty flag flips', { timeout: 60_000 }, () => {
   const key = standbyDraftKey({ panel: 'split', profileId: 'p2' })
   let notified = 0
   const off = subscribeStandbyDrafts(() => {
@@ -387,10 +389,10 @@ test('待命草稿订阅：聚合脏状态翻转时收到通知', { timeout: 60_
 })
 
 // ---------------------------------------------------------------------------
-// Composer 脏状态桥接（版本刷新挂起条件之二）
+// Composer dirty-state bridge (defer condition two of version refresh)
 // ---------------------------------------------------------------------------
 
-test('Composer 脏状态桥接：实例键隔离、聚合、卸载清除与订阅', { timeout: 60_000 }, () => {
+test('Composer dirty-state bridge: instance-key isolation, aggregation, unmount clearing and subscription', { timeout: 60_000 }, () => {
   assert.equal(composerDirty(), false)
   assert.equal(isComposerDirtySnapshot(CLEAN_COMPOSER), false)
   assert.equal(isComposerDirtySnapshot({ ...CLEAN_COMPOSER, hasDraftText: true }), true)
@@ -403,16 +405,16 @@ test('Composer 脏状态桥接：实例键隔离、聚合、卸载清除与订�
     notified += 1
   })
 
-  // 主屏与分屏同屏渲染同一会话：两个实例键互不覆盖
+  // the same conversation rendered on main and split screens simultaneously: two instance keys never overwrite each other
   reportComposerDirty('composer-primary', { ...CLEAN_COMPOSER, hasDraftText: true })
   reportComposerDirty('composer-split', CLEAN_COMPOSER)
-  assert.equal(composerDirty(), true, '任一实例脏即聚合脏')
+  assert.equal(composerDirty(), true, 'any dirty instance makes the aggregate dirty')
 
   clearComposerDirty('composer-primary')
-  assert.equal(composerDirty(), false, '脏实例卸载后聚合复原')
-  assert.ok(notified >= 2, '聚合布尔翻转触发订阅')
+  assert.equal(composerDirty(), false, 'after the dirty instance unmounts, the aggregate restores')
+  assert.ok(notified >= 2, 'aggregate boolean flips trigger the subscription')
 
-  // clean 快照重复上报不触发订阅（聚合值未变）
+  // repeated clean-snapshot reports do not trigger the subscription (aggregate unchanged)
   const before = notified
   reportComposerDirty('composer-split', CLEAN_COMPOSER)
   assert.equal(notified, before)
@@ -421,7 +423,7 @@ test('Composer 脏状态桥接：实例键隔离、聚合、卸载清除与订�
   off()
 })
 
-test('Composer 脏状态桥接：busy（发送/上传在途）也构成未提交现场', { timeout: 60_000 }, () => {
+test('Composer dirty-state bridge: busy (in-flight send/upload) also constitutes an unsubmitted scene', { timeout: 60_000 }, () => {
   reportComposerDirty('composer-busy', { ...CLEAN_COMPOSER, busy: true })
   assert.equal(composerDirty(), true)
 })

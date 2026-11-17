@@ -1,14 +1,22 @@
 /**
- * 按根会话树独立结算的后台浏览器通知纯函数层测试：
- * - resolveActivitySnapshot：按根归并机器活动（working ∪ 后台 accent 角标 ∪
- *   上下文精简）与等待人类（blocked），多根树互相隔离，badgeUnknown 为全局未知门控；
- * - composeTreeCompletionNotification：单根树完成与结束（error → 「Helm 会话已结束」
- *   并附「有失败」），派生子会话归并到当前存活最高祖先（环/缺失父摘要有限终止），
- *   累计为空不产生通知；
- * - composeTreeBlockedNotification：等待处理通知（「Helm 等待你的处理」），同树多
- *   blocked 按根去重并跳转 updatedAt 最新会话，累计有 error 时如实标注「有失败」；
- * - getBlockedWatermark：seq 与 pendingAskCount 任一推进即产生新水位；
- * - shouldDeliverQuietNotification：认证/偏好/权限/连接/页面非前台活跃（!pageActive）门控矩阵。
+ * Pure-layer tests for background browser notifications settled independently
+ * per root-conversation tree:
+ * - resolveActivitySnapshot: machine activity merged by root (working ∪
+ *   background accent badges ∪ context compaction) and waiting-on-human
+ *   (blocked); multiple root trees isolated from each other; badgeUnknown as
+ *   the global unknown gate;
+ * - composeTreeCompletionNotification: single-tree completion and finish (any
+ *   error → "Helm conversation finished" plus "Has failures"); spawned child
+ *   conversations merge to the highest surviving ancestor (cycles / missing
+ *   parent summaries terminate finitely); an empty accumulation produces no
+ *   notice;
+ * - composeTreeBlockedNotification: waiting notices ("Helm is waiting for
+ *   you"); multiple blocked conversations in one tree dedupe by root and jump
+ *   to the most recently updated one; accumulated errors flagged honestly;
+ * - getBlockedWatermark: any advance of seq or pendingAskCount yields a new
+ *   watermark;
+ * - shouldDeliverQuietNotification: the auth/preference/permission/connection/
+ *   page-not-foreground-active (!pageActive) gate matrix.
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -52,10 +60,10 @@ const NO_BACKGROUND: ConversationBackgroundIndex = new Map()
 const NO_PENDING = new Set<string>()
 
 // ---------------------------------------------------------------------------
-// resolveActivitySnapshot：按根会话树隔离 / 机器活动 / blocked / badgeUnknown
+// resolveActivitySnapshot: root-tree isolation / machine activity / blocked / badgeUnknown
 // ---------------------------------------------------------------------------
 
-test('全 idle/done 且无后台在途 → 活动树集合为空且 badgeUnknown=false', { timeout: 60_000 }, () => {
+test('all idle/done with no background in flight -> empty activity-tree set and badgeUnknown=false', { timeout: 60_000 }, () => {
   const snap = resolveActivitySnapshot({
     conversations: [conv({ id: 1 }), conv({ id: 2, status: 'done' })],
     background: NO_BACKGROUND,
@@ -64,7 +72,7 @@ test('全 idle/done 且无后台在途 → 活动树集合为空且 badgeUnknown
   assert.equal(snap.badgeUnknown, false)
 })
 
-test('多根树隔离：working 与 blocked 分别归并到各自根树；blocked 不计入机器活动', { timeout: 60_000 }, () => {
+test('multi-root isolation: working and blocked merge into their own root trees; blocked never counts as machine activity', { timeout: 60_000 }, () => {
   const snap = resolveActivitySnapshot({
     conversations: [
       conv({ id: 1, status: 'working' }),
@@ -88,7 +96,7 @@ test('多根树隔离：working 与 blocked 分别归并到各自根树；blocke
   assert.equal(snap.trees.has(3), false)
 })
 
-test('父会话 idle 但名下存在后台在途（accent 角标）归并为该根树机器活动', { timeout: 60_000 }, () => {
+test('an idle parent with background in flight (accent badge) under it merges as that root tree machine activity', { timeout: 60_000 }, () => {
   const background: ConversationBackgroundIndex = new Map([[7, { active: true, summary: '2 运行中' }]])
   const snap = resolveActivitySnapshot({ conversations: [conv({ id: 7, status: 'idle' })], background })
   const tree7 = snap.trees.get(7)
@@ -97,7 +105,7 @@ test('父会话 idle 但名下存在后台在途（accent 角标）归并为该�
   assert.deepEqual([...tree7.blockedConversationIds], [])
 })
 
-test('blocked 会话名下后台仍在跑（accent）：同树同时记录 active 与 blocked', { timeout: 60_000 }, () => {
+test('background still running under a blocked conversation (accent): the same tree records both active and blocked', { timeout: 60_000 }, () => {
   const background: ConversationBackgroundIndex = new Map([[4, { active: true, summary: '1 运行中' }]])
   const snap = resolveActivitySnapshot({ conversations: [conv({ id: 4, status: 'blocked' })], background })
   const tree4 = snap.trees.get(4)
@@ -106,7 +114,7 @@ test('blocked 会话名下后台仍在跑（accent）：同树同时记录 activ
   assert.deepEqual([...tree4.blockedConversationIds], [4])
 })
 
-test('error / done 会话不计入机器活动；后台索引 active=false（历史计数/失败汇总）不构成在途', { timeout: 60_000 }, () => {
+test('error / done conversations never count as machine activity; background index active=false (history counts/failure summaries) is not in flight', { timeout: 60_000 }, () => {
   const background: ConversationBackgroundIndex = new Map([[3, { active: false, summary: '3 失败' }]])
   const snap = resolveActivitySnapshot({
     conversations: [conv({ id: 1, status: 'error', lastError: 'model_error' }), conv({ id: 2, status: 'done' }), conv({ id: 3 })],
@@ -115,7 +123,7 @@ test('error / done 会话不计入机器活动；后台索引 active=false（历
   assert.equal(snap.trees.size, 0)
 })
 
-test('badge doc 未完成首次加载时 badgeUnknown=true（trees 仍如实反映已观测事实）', { timeout: 60_000 }, () => {
+test('with a badge doc still awaiting its first load, badgeUnknown=true (trees still honestly reflect the observed facts)', { timeout: 60_000 }, () => {
   const snap = resolveActivitySnapshot({
     conversations: [conv({ id: 1 })],
     background: NO_BACKGROUND,
@@ -141,7 +149,7 @@ test('badge doc 未完成首次加载时 badgeUnknown=true（trees 仍如实反�
   assert.deepEqual([...(workingWithUnknown.trees.get(1)?.activeConversationIds ?? [])], [1])
 })
 
-test('contextUsage.compacting=true 计入该根树机器活动，精简完成后移出活动树并可组装完成通知', { timeout: 60_000 }, () => {
+test('contextUsage.compacting=true counts as that root tree machine activity; once compaction ends it leaves the activity tree and a completion notice can be composed', { timeout: 60_000 }, () => {
   const compactingConvs = [
     conv({ id: 7, title: '长会话', status: 'idle', contextUsage: { tokens: 4000, compacting: true }, updatedAt: 1000 }),
   ]
@@ -194,10 +202,10 @@ test('contextUsage.compacting=true 计入该根树机器活动，精简完成后
 })
 
 // ---------------------------------------------------------------------------
-// composeTreeCompletionNotification：单根树完成 / 失败如实区分
+// composeTreeCompletionNotification: single-tree completion / honest failure distinction
 // ---------------------------------------------------------------------------
 
-test('累计参与者为空（机器从未活动）不产生完成通知', { timeout: 60_000 }, () => {
+test('an empty accumulated participant set (machine never active) produces no completion notice', { timeout: 60_000 }, () => {
   const draft = composeTreeCompletionNotification({
     rootId: 1,
     accumulatedConversationIds: new Set(),
@@ -206,7 +214,7 @@ test('累计参与者为空（机器从未活动）不产生完成通知', { tim
   assert.equal(draft, null)
 })
 
-test('单根树成功完成：标题「Helm 会话已完成」，正文「#id 标题」，跳转根会话', { timeout: 60_000 }, () => {
+test('single-tree successful completion: title "Helm conversation completed", body "#id title", jumps to the root conversation', { timeout: 60_000 }, () => {
   const conversations = [
     conv({ id: 2, title: '重构侧栏', updatedAt: 9_000, status: 'done' }),
     conv({ id: 1, title: '并行中的另一棵树', updatedAt: 5_000, status: 'working' }),
@@ -223,7 +231,7 @@ test('单根树成功完成：标题「Helm 会话已完成」，正文「#id �
   assert.equal(draft.primaryConversationId, 2)
 })
 
-test('纯后台在途结束（父会话全程 idle）同样产生完成通知并罗列根会话', { timeout: 60_000 }, () => {
+test('a purely-background cycle ending (parent idle throughout) still produces a completion notice listing the root conversation', { timeout: 60_000 }, () => {
   const draft = composeTreeCompletionNotification({
     rootId: 7,
     accumulatedConversationIds: new Set([7]),
@@ -235,7 +243,7 @@ test('纯后台在途结束（父会话全程 idle）同样产生完成通知并
   assert.equal(draft.primaryConversationId, 7)
 })
 
-test('派生子会话归并到根会话：子会话不单独列出也不抢主要跳转', { timeout: 60_000 }, () => {
+test('spawned child conversations merge into the root: children are neither listed separately nor steal the primary jump', { timeout: 60_000 }, () => {
   const conversations = [
     conv({ id: 5, title: '大规模重构', updatedAt: 100 }),
     conv({ id: 12, parentConversationId: 5, updatedAt: 900, title: '子代理 12', status: 'done' }),
@@ -253,7 +261,7 @@ test('派生子会话归并到根会话：子会话不单独列出也不抢主�
   assert.equal(draft.primaryConversationId, 5)
 })
 
-test('任一累计参与者（根或子会话）处于 error 态：标题改为「Helm 会话已结束」并标注「有失败」', { timeout: 60_000 }, () => {
+test('any accumulated participant (root or child) in error: the title becomes "Helm conversation finished" flagged "Has failures"', { timeout: 60_000 }, () => {
   const childFailed = composeTreeCompletionNotification({
     rootId: 1,
     accumulatedConversationIds: new Set([1, 12]),
@@ -278,7 +286,7 @@ test('任一累计参与者（根或子会话）处于 error 态：标题改为�
   assert.equal(rootFailed.body, '#2 失败主会话 · Has failures')
 })
 
-test('父链中途被删除与父链环：沿存活祖先有限归并；整树均被删除则 primary 为空', { timeout: 60_000 }, () => {
+test('mid-chain deleted parents and parent cycles: finite merging along surviving ancestors; a fully deleted tree leaves primary null', { timeout: 60_000 }, () => {
   const partial = [
     conv({ id: 11, title: '中间层', updatedAt: 50 }),
     conv({ id: 111, parentConversationId: 11, title: '孤儿链', updatedAt: 60 }),
@@ -304,7 +312,7 @@ test('父链中途被删除与父链环：沿存活祖先有限归并；整树�
     conv({ id: 3, parentConversationId: 2, title: '环外会话', status: 'working' }),
   ]
   const cyclicSnap = resolveActivitySnapshot({ conversations: cyclic, background: NO_BACKGROUND })
-  assert.ok(cyclicSnap.trees.size > 0, '环链必须有限终止并返回活动树')
+  assert.ok(cyclicSnap.trees.size > 0, 'a cyclic chain must terminate finitely and return activity trees')
 
   const deletedDraft = composeTreeCompletionNotification({
     rootId: 9,
@@ -318,17 +326,17 @@ test('父链中途被删除与父链环：沿存活祖先有限归并；整树�
 })
 
 // ---------------------------------------------------------------------------
-// getBlockedWatermark 与 composeTreeBlockedNotification
+// getBlockedWatermark and composeTreeBlockedNotification
 // ---------------------------------------------------------------------------
 
-test('getBlockedWatermark：stateChangeSeq 或 pendingAskCount 任一推进即生成新水位', { timeout: 60_000 }, () => {
+test('getBlockedWatermark: any advance of stateChangeSeq or pendingAskCount yields a new watermark', { timeout: 60_000 }, () => {
   const base = getBlockedWatermark({ stateChangeSeq: 3, pendingAskCount: 1 })
   assert.equal(base, '3:1')
   assert.notEqual(getBlockedWatermark({ stateChangeSeq: 4, pendingAskCount: 1 }), base)
   assert.notEqual(getBlockedWatermark({ stateChangeSeq: 3, pendingAskCount: 2 }), base)
 })
 
-test('树内单个 blocked 会话：标题「Helm 等待你的处理」，跳转该会话', { timeout: 60_000 }, () => {
+test('one blocked conversation in a tree: title "Helm is waiting for you", jumps to that conversation', { timeout: 60_000 }, () => {
   const conversations = [
     conv({ id: 1, title: '部署检查', status: 'blocked', pendingAskCount: 1, updatedAt: 500 }),
   ]
@@ -343,7 +351,7 @@ test('树内单个 blocked 会话：标题「Helm 等待你的处理」，跳转
   assert.equal(draft.primaryConversationId, 1)
 })
 
-test('blocked 子代理会话：正文列根会话标题，跳转直达子代理会话本身', { timeout: 60_000 }, () => {
+test('a blocked child agent conversation: the body lists the root title while the jump goes straight to the child itself', { timeout: 60_000 }, () => {
   const conversations = [
     conv({ id: 5, title: '大规模重构', status: 'idle', updatedAt: 100 }),
     conv({ id: 12, parentConversationId: 5, title: '审批子代理', status: 'blocked', pendingAskCount: 1, updatedAt: 900 }),
@@ -360,7 +368,7 @@ test('blocked 子代理会话：正文列根会话标题，跳转直达子代理
   assert.equal(draft.primaryConversationId, 12)
 })
 
-test('同树内多个 blocked 会话按根去重；跳转 updatedAt 最新的 blocked 会话；累计 error 时如实标注', { timeout: 60_000 }, () => {
+test('multiple blocked conversations in one tree dedupe by root; jump to the most recently updated blocked one; accumulated errors flagged honestly', { timeout: 60_000 }, () => {
   const conversations = [
     conv({ id: 5, title: '大规模重构', status: 'idle', updatedAt: 100 }),
     conv({ id: 51, parentConversationId: 5, title: '子代理甲', status: 'blocked', pendingAskCount: 1, updatedAt: 800 }),
@@ -379,7 +387,7 @@ test('同树内多个 blocked 会话按根去重；跳转 updatedAt 最新的 bl
   assert.equal(draft.primaryConversationId, 52)
 })
 
-test('blocked 会话均已被删除时返回 null', { timeout: 60_000 }, () => {
+test('returns null when every blocked conversation was already deleted', { timeout: 60_000 }, () => {
   const draft = composeTreeBlockedNotification({
     rootId: 1,
     blockedConversationIds: new Set([2]),
@@ -389,7 +397,7 @@ test('blocked 会话均已被删除时返回 null', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// shouldDeliverQuietNotification：投递门控
+// shouldDeliverQuietNotification: delivery gating
 // ---------------------------------------------------------------------------
 
 const GRANTED_INPUT = {
@@ -400,7 +408,7 @@ const GRANTED_INPUT = {
   pageActive: false,
 }
 
-test('门控矩阵：认证/偏好/权限/连接任一缺失即拒绝', { timeout: 60_000 }, () => {
+test('gate matrix: any missing auth/preference/permission/connection denies delivery', { timeout: 60_000 }, () => {
   assert.equal(shouldDeliverQuietNotification(GRANTED_INPUT), true)
   assert.equal(shouldDeliverQuietNotification({ ...GRANTED_INPUT, authenticated: false }), false)
   assert.equal(shouldDeliverQuietNotification({ ...GRANTED_INPUT, preferenceEnabled: false }), false)
@@ -410,7 +418,7 @@ test('门控矩阵：认证/偏好/权限/连接任一缺失即拒绝', { timeou
   assert.equal(shouldDeliverQuietNotification({ ...GRANTED_INPUT, connected: false }), false)
 })
 
-test('页面前台活跃聚焦（pageActive=true）不投递；离开前台或失焦（pageActive=false）即投递', { timeout: 60_000 }, () => {
+test('page foreground-active and focused (pageActive=true) delivers nothing; leaving the foreground or losing focus (pageActive=false) delivers', { timeout: 60_000 }, () => {
   assert.equal(shouldDeliverQuietNotification({ ...GRANTED_INPUT, pageActive: true }), false)
   assert.equal(shouldDeliverQuietNotification({ ...GRANTED_INPUT, pageActive: false }), true)
 })
