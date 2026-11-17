@@ -45,23 +45,6 @@ import type {
   WhenBusy,
 } from '@helm/protocol/browser'
 
-// HTTP 请求/响应形状以 @helm/protocol 为唯一事实源；下列别名仅兼容既有导入。
-export type {
-  AuthStatus,
-  AuthToken,
-  CredentialSummary,
-  ModelCatalogEntry,
-  SearchHit,
-  ConversationForkRequest,
-  ConversationCompactResponse,
-  ConversationWithdrawRequest,
-  ConversationWithdrawResponse,
-}
-export type AuthStatusResponse = AuthStatus
-export type AuthTokenResponse = AuthToken
-export type CredentialStatus = CredentialSummary
-export type { NodeInfo, NodeIssuedToken, NodeHealthSnapshot, NodeBlockedRelease, NodeUpgradeCheckInput, NodeUpgradeCheckResult, NodeUpgradeInput, NodeUpgradeResult }
-
 export interface SubmitInputPayload {
   text: string
   origin?: InputOrigin

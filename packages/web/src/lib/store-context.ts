@@ -6,12 +6,14 @@ import type {
   ConversationDetail,
   ConversationLive,
   ConversationSummary,
+  CredentialSummary,
   HelmLocale,
+  NodeInfo,
   PluginSummary,
   ProviderConfig,
   SkillSummary,
 } from '@helm/protocol/browser'
-import type { CredentialSummary, ModelDescriptor, NodeInfo } from './api.js'
+import type { ModelDescriptor } from './api.js'
 import type {
   AuthSlice,
   CatalogSlice,

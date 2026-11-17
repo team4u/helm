@@ -12,8 +12,10 @@ import type {
   ConversationEntry,
   ConversationLive,
   ConversationSummary,
+  CredentialSummary,
   HelmLocale,
   LocalizedText,
+  NodeInfo,
   PluginSummary,
   PluginUiContribution,
   Profile,
@@ -28,9 +30,7 @@ import {
   nodesApi,
   pluginsApi,
   setStoredToken,
-  type CredentialSummary,
   type ModelDescriptor,
-  type NodeInfo,
 } from './api.js'
 import { requestBrowserNotificationPermission } from './browser-notification.js'
 import { errorText } from './format.js'

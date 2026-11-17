@@ -1,5 +1,5 @@
-import type { ModelProviderSummary, ProviderConfig } from '@helm/protocol/browser'
-import type { CredentialStatus, ModelDescriptor } from '../lib/api.js'
+import type { CredentialSummary, ModelProviderSummary, ProviderConfig } from '@helm/protocol/browser'
+import type { ModelDescriptor } from '../lib/api.js'
 
 /** Provider list entry: passes through catalog metadata like dynamic/baseUrl verbatim; never re-attributes providers to plugins. */
 export interface ProviderEntry extends ModelProviderSummary {
@@ -14,7 +14,7 @@ export type ProviderFilter = 'all' | 'configured' | 'unconfigured'
 export function buildProviderEntries(
   catalog: ModelProviderSummary[],
   gateways: ProviderConfig[],
-  credentials: CredentialStatus[],
+  credentials: CredentialSummary[],
   models: ModelDescriptor[],
 ): ProviderEntry[] {
   const configured = new Set(credentials.filter((item) => item.configured).map((item) => item.id))

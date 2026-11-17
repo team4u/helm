@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { copyToClipboard, CopyButton, HelmIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, PluginSlot } from '@helm/plugin-client'
-import { nodesApi, type NodeUpgradeCheckResult } from '../lib/api.js'
+import { nodesApi } from '../lib/api.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
   buildNodeConnectGuide,
@@ -16,7 +16,7 @@ import {
   isNodeOnline,
   type NodeInfo,
 } from './node-center-model.js'
-import { NODE_DETAIL_SECTION_SLOT } from '@helm/protocol/browser'
+import { NODE_DETAIL_SECTION_SLOT, type NodeUpgradeCheckResult } from '@helm/protocol/browser'
 
 export interface NodeDetailDrawerProps {
   node: NodeInfo | null
