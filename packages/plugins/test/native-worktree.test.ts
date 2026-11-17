@@ -39,6 +39,7 @@ import assert from 'node:assert/strict'
 import { createEnvFabric } from '../../kernel/src/env/fabric.js'
 import { runNativeSpawn, type NativeSpawnDeps } from '../../kernel/src/runtime/spawn.js'
 import { WorktreeAllocator, type ManagedWorktreeRecord } from '../src/workflow/worktree.js'
+import type { ManagedWorktreeHold } from '../src/workflow/worktree-store.js'
 import { extractWorkflowExecutionMeta } from '../src/contracts.js'
 import { WorktreeIsolation } from '../src/workflow/isolation.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
@@ -2303,6 +2304,471 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
       }
     } finally {
       await th.close()
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ManagedWorktreeHold + acquire_worktree / release_worktree_hold + inUse
+// ---------------------------------------------------------------------------
+
+/** 构造完整挂载 builtin:workflow 的真实 PluginHost，用于测试隐藏动作与 inUse 门禁。 */
+async function openWorkflowPluginHost(options: {
+  repoDir: string
+  dataDir: string
+  docs: Map<string, unknown>
+  stash?: SecretStash
+  onResolveSpawnTarget?: (input: {
+    parentConversationId: number
+    profileId?: string
+    requestCwd?: string
+    fork?: boolean
+  }) => void
+  onFlush?: () => void
+}): Promise<{
+  host: PluginHost
+  close(): Promise<void>
+}> {
+  const stash = options.stash ?? new SecretStash()
+  const localExec = async (
+    command: string | readonly string[],
+    execOpts: { cwd?: string; timeout?: number },
+  ): Promise<{ ok: boolean; exitCode: number | null; output: string; timedOut: boolean }> => {
+    const env = new NodeExecutionEnv({ cwd: execOpts.cwd ?? options.repoDir })
+    let combined = ''
+    const r = await env.exec(
+      command,
+      {
+        ...(execOpts.cwd !== undefined ? { cwd: execOpts.cwd } : {}),
+        ...(execOpts.timeout !== undefined ? { timeout: execOpts.timeout } : {}),
+        onOutput: (t: string) => {
+          combined += t
+        },
+      },
+      BACKGROUND_CONTEXT,
+    )
+    if (!r.ok) {
+      return { ok: false, exitCode: null, output: combined, timedOut: r.error.code === 'timeout' }
+    }
+    return { ok: true, exitCode: r.value.exitCode, output: combined, timedOut: false }
+  }
+  const backend: PluginHostBackend = {
+    ...createPluginHostBackendFixture(),
+    dispatchTrigger: async () => {},
+    submitInput: async () => {},
+    createConversation: async () => ({}) as never,
+    listConversations: () => [],
+    getConversation: (id: number) =>
+      makeConversationSummary({ id, cwd: options.repoDir, model: '', createdAt: 1, updatedAt: 1 }),
+    updateConversation: async () => ({}) as never,
+    abortConversation: async () => {},
+    getConversationOwnership: (id: number) => (id === 1 ? 'human' : 'helm'),
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    resolveSpawnTarget: async (input) => {
+      options.onResolveSpawnTarget?.(input)
+      return {
+        nodeId: 'local',
+        sourceCwd: input.requestCwd ?? options.repoDir,
+        parentCwd: options.repoDir,
+      }
+    },
+    listActiveSpawnExecutions: () => [],
+    inspectNodePathUsage: (input) =>
+      bareFabricOf().inspectPathUsage(input.nodeId, input.path, input.signal),
+    executionEnv: (_nodeId: string, cwd: string) => new NodeExecutionEnv({ cwd }),
+    redact: (t: string) => stash.redact(t),
+    execEnv: async (req: { command: string | string[]; cwd?: string; timeoutMs?: number }) =>
+      localExec(req.command, {
+        ...(req.cwd !== undefined ? { cwd: req.cwd } : {}),
+        ...(req.timeoutMs !== undefined ? { timeout: req.timeoutMs / 1000 } : {}),
+      }),
+    withFileMutationQueue(): Promise<never> {
+      throw new Error('本 fixture 不承载文件互斥队列')
+    },
+    manageConversation: () => () => {},
+    markConversationOwnership: () => {},
+    createAsk: async () => ({}) as never,
+    cancelAsk: async () => {},
+    registerAskSeqResolver: () => () => {},
+    onEvent: () => () => {},
+    emitEvent: () => {},
+  }
+  const host = new PluginHost({
+    buildProvider: createPluginBuildProvider(),
+    dataDir: options.dataDir,
+    host: backend,
+    docs: {
+      get: <T>(key: string, initial: T): T => {
+        const val = options.docs.get(key)
+        return val === undefined ? initial : (structuredClone(val) as T)
+      },
+      set: (key: string, value: unknown) => {
+        options.docs.set(key, structuredClone(value))
+      },
+      deletePlugin: () => {},
+      flush: async () => {
+        options.onFlush?.()
+      },
+    },
+    sessionDocs: {
+      get: () => undefined,
+      put: () => {},
+      delete: () => {},
+      deletePlugin: () => {},
+      listConversationIds: () => [],
+      flush: async () => {},
+    },
+  })
+  await host.register(createWorkflowPlugin())
+  return {
+    host,
+    close: async () => {
+      await host.dispose().catch(() => {})
+    },
+  }
+}
+
+describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_worktree_hold', { timeout: 60_000 }, () => {
+  it('动作元数据与边界校验：cli.hidden=true、exposeAsTool=false，非法入参显式 400 validation_error', {
+    timeout: 60_000,
+  }, async () => {
+    const dir = join(rootDir, 't22-meta')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const docs = new Map<string, unknown>()
+    const { host, close } = await openWorkflowPluginHost({ repoDir: repo, dataDir: join(dir, 'data'), docs })
+    try {
+      const actions = host.listActions().filter((a) => a.pluginId === 'builtin:workflow')
+      const acquireManifest = actions.find((a) => a.id === 'acquire_worktree')
+      const releaseManifest = actions.find((a) => a.id === 'release_worktree_hold')
+      assert.ok(acquireManifest, '应注册 acquire_worktree 动作')
+      assert.ok(releaseManifest, '应注册 release_worktree_hold 动作')
+      assert.equal(acquireManifest!.cli?.hidden, true, 'acquire_worktree 必须隐藏 CLI 映射')
+      assert.equal(releaseManifest!.cli?.hidden, true, 'release_worktree_hold 必须隐藏 CLI 映射')
+      assert.ok(!acquireManifest!.exposeAsTool, 'acquire_worktree 不得暴露为独立模型工具')
+      assert.ok(!releaseManifest!.exposeAsTool, 'release_worktree_hold 不得暴露为独立模型工具')
+
+      const toolNames = host.listTools().map((t) => t.name)
+      assert.ok(!toolNames.includes('acquire_worktree'))
+      assert.ok(!toolNames.includes('release_worktree_hold'))
+
+      // Schema 强校验：缺失必填、未知字段、空白字符串、非正整数会话 ID 均返 400 validation_error。
+      for (const badAcquire of [
+        {},
+        { conversationId: 0, parentConversationId: 1, hold: { pluginId: 'p', holdId: 'h', label: 'l' } },
+        { conversationId: 2, parentConversationId: 1, hold: { pluginId: '   ', holdId: 'h', label: 'l' } },
+        { conversationId: 2, parentConversationId: 1, hold: { pluginId: 'p', holdId: 'h', label: 'l', extra: 1 } },
+        { conversationId: 2, parentConversationId: 1, bogus: true, hold: { pluginId: 'p', holdId: 'h', label: 'l' } },
+      ]) {
+        await assert.rejects(
+          () => host.invokeAction('builtin:workflow', 'acquire_worktree', badAcquire),
+          (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+        )
+      }
+      for (const badRelease of [
+        {},
+        { worktreeId: 'local:/wt', pluginId: 'p' },
+        { worktreeId: '   ', pluginId: 'p', holdId: 'h' },
+        { worktreeId: 'local:/wt', pluginId: 'p', holdId: 'h', extra: true },
+      ]) {
+        await assert.rejects(
+          () => host.invokeAction('builtin:workflow', 'release_worktree_hold', badRelease),
+          (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+        )
+      }
+    } finally {
+      await close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('全闭环：acquire_worktree 绑定会话与持久锁 -> isPathInUse / cleanup(force:true) / disable(plugin_in_use) 硬拦截 -> release_worktree_hold 幂等与 mismatch 校验 -> 释放后恢复清理与停用', {
+    timeout: 60_000,
+  }, async () => {
+    const dir = join(rootDir, 't22-lifecycle')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const docs = new Map<string, unknown>()
+    const resolvedTargets: Array<Record<string, unknown>> = []
+    let flushes = 0
+    const { host, close } = await openWorkflowPluginHost({
+      repoDir: repo,
+      dataDir: join(dir, 'data'),
+      docs,
+      onResolveSpawnTarget: (input) => {
+        resolvedTargets.push({ ...input })
+      },
+      onFlush: () => {
+        flushes += 1
+      },
+    })
+    try {
+      const headCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim()
+      const acquired = (await host.invokeAction('builtin:workflow', 'acquire_worktree', {
+        conversationId: 12,
+        parentConversationId: 1,
+        profileId: 'coder',
+        fork: true,
+        hold: {
+          pluginId: 'builtin:superagent',
+          holdId: 'grp-alpha:author',
+          label: 'collab group "Alpha" worker @author',
+        },
+      })) as {
+        worktreeId: string
+        path: string
+        branch: string
+        baseCommit: string
+        nodeId: string
+      }
+
+      assert.deepEqual(resolvedTargets, [{ parentConversationId: 1, profileId: 'coder', fork: true }])
+      assert.equal(acquired.nodeId, 'local')
+      assert.equal(acquired.baseCommit, headCommit)
+      assert.ok(acquired.branch.startsWith('helm/spawn-'))
+      assert.equal(acquired.worktreeId, `local:${acquired.path}`)
+      assert.ok(existsSync(acquired.path), '真实 Git worktree 目录应创建')
+      assert.ok(flushes >= 2, 'openPendingLease 与最终释放落盘均应 flush')
+
+      // 临时 pending 租约已释放，持久化记录携带 conversationId 与 hold。
+      assert.equal(Object.keys(leasesOf(docs)).length, 0, '临时 pending 租约必须在 acquire 返回前清除')
+      const persisted = rawRecords(docs).find((r) => r.id === acquired.worktreeId)
+      assert.ok(persisted)
+      assert.equal(persisted!.conversationId, 12)
+      const hold: ManagedWorktreeHold | undefined = persisted!.hold
+      assert.ok(hold, '持久化记录应携带 hold')
+      assert.equal(hold!.pluginId, 'builtin:superagent')
+      assert.equal(hold!.holdId, 'grp-alpha:author')
+      assert.equal(hold!.label, 'collab group "Alpha" worker @author')
+      assert.ok(Number.isFinite(hold!.acquiredAt) && hold!.acquiredAt > 0)
+
+      // 写入脏文件，验证即便传 force: true / deleteBranch: true，cleanup 动作与模型工具均以 409 worktree_in_use 拦截并透出 hold.label。
+      writeFileSync(join(acquired.path, 'draft.ts'), 'export const x = 1\n')
+      for (const selector of [
+        { worktreeId: acquired.worktreeId, force: true, deleteBranch: true },
+        { conversationId: 12, force: true, deleteBranch: true },
+        { path: acquired.path, force: true },
+      ]) {
+        await assert.rejects(
+          () => host.invokeAction('builtin:workflow', 'cleanup_worktree', selector),
+          (err: unknown) => {
+            assert.ok(err instanceof HelmError)
+            assert.equal(err.code, 'worktree_in_use')
+            assert.equal(err.status, 409)
+            assert.ok(
+              err.message.includes('collab group "Alpha" worker @author'),
+              `错误信息必须透出 hold.label（实得：${err.message}）`,
+            )
+            const details = err.details as { hold?: ManagedWorktreeHold }
+            assert.equal(details?.hold?.label, 'collab group "Alpha" worker @author')
+            return true
+          },
+        )
+      }
+      const toolAttempt = await executeCleanupTool(docs, { worktreeId: acquired.worktreeId, force: true })
+      assert.equal(toolAttempt.isError, true)
+      assert.ok(
+        String((toolAttempt.structuredOutput as { error?: string })?.error ?? '').includes(
+          'collab group "Alpha" worker @author',
+        ),
+        'cleanup_worktree 工具错误输出同样应透出 hold.label',
+      )
+      assert.ok(existsSync(acquired.path), '持锁期间目录绝不可被移除')
+
+      // builtin:workflow 的 inUse() 上报持锁活跃工作树，非 force 停用显式返 409 plugin_in_use。
+      await assert.rejects(
+        () => host.disable('builtin:workflow'),
+        (err: unknown) => {
+          assert.ok(err instanceof HelmError)
+          assert.equal(err.code, 'plugin_in_use')
+          assert.equal(err.status, 409)
+          const usages = (err.details as { usages?: Array<{ kind: string; id: string; label: string }> })?.usages ?? []
+          const hit = usages.find((u) => u.kind === 'worktree_hold' && u.id === acquired.worktreeId)
+          assert.ok(hit, `plugin_in_use.details.usages 应包含持锁 worktreeId（实得：${JSON.stringify(usages)}）`)
+          assert.ok(hit!.label.includes('collab group "Alpha" worker @author'), 'plugin_in_use 应透出 hold.label')
+          return true
+        },
+      )
+
+      // release_worktree_hold：未知 worktreeId 幂等返 { released: false }。
+      const missingRelease = (await host.invokeAction('builtin:workflow', 'release_worktree_hold', {
+        worktreeId: 'local:/nonexistent-wt',
+        pluginId: 'builtin:superagent',
+        holdId: 'grp-alpha:author',
+      })) as { released: boolean }
+      assert.deepEqual(missingRelease, { released: false })
+
+      // release_worktree_hold：pluginId 或 holdId 不一致显式抛 409 worktree_hold_mismatch，锁不丢失。
+      for (const mismatch of [
+        { worktreeId: acquired.worktreeId, pluginId: 'other:plugin', holdId: 'grp-alpha:author' },
+        { worktreeId: acquired.worktreeId, pluginId: 'builtin:superagent', holdId: 'grp-alpha:verifier' },
+      ]) {
+        await assert.rejects(
+          () => host.invokeAction('builtin:workflow', 'release_worktree_hold', mismatch),
+          (err: unknown) =>
+            err instanceof HelmError && err.code === 'worktree_hold_mismatch' && err.status === 409,
+        )
+      }
+      assert.ok(rawRecords(docs).find((r) => r.id === acquired.worktreeId)?.hold, 'mismatch 拒绝后 hold 必须保留')
+
+      // release_worktree_hold：精确匹配清除 hold 并 flush；重复调用幂等返 { released: false }。
+      const flushesBeforeRelease = flushes
+      const released = (await host.invokeAction('builtin:workflow', 'release_worktree_hold', {
+        worktreeId: acquired.worktreeId,
+        pluginId: 'builtin:superagent',
+        holdId: 'grp-alpha:author',
+      })) as { released: boolean }
+      assert.deepEqual(released, { released: true })
+      assert.ok(flushes > flushesBeforeRelease, '释放 hold 必须触发 docStore.flush')
+      assert.equal(rawRecords(docs).find((r) => r.id === acquired.worktreeId)?.hold, undefined)
+
+      const releasedAgain = (await host.invokeAction('builtin:workflow', 'release_worktree_hold', {
+        worktreeId: acquired.worktreeId,
+        pluginId: 'builtin:superagent',
+        holdId: 'grp-alpha:author',
+      })) as { released: boolean }
+      assert.deepEqual(releasedAgain, { released: false })
+
+      // 释放后：非 force 仍受脏文件保护（worktree_dirty），传 force: true 可正常清理（Linux）且插件可正常停用。
+      if (PROCESS_SCAN_ON) {
+        await assert.rejects(
+          () => host.invokeAction('builtin:workflow', 'cleanup_worktree', { worktreeId: acquired.worktreeId }),
+          (err: unknown) => err instanceof HelmError && err.code === 'worktree_dirty' && err.status === 409,
+        )
+        try {
+          const cleaned = (await host.invokeAction('builtin:workflow', 'cleanup_worktree', {
+            worktreeId: acquired.worktreeId,
+            force: true,
+            deleteBranch: true,
+          })) as { removed: boolean; branchDeleted: boolean }
+          assert.equal(cleaned.removed, true)
+          assert.equal(cleaned.branchDeleted, true)
+          assert.equal(existsSync(acquired.path), false)
+        } catch (error) {
+          assert.ok(
+            error instanceof HelmError && error.code === 'worktree_process_check_failed',
+            `释放锁后只允许环境 /proc 限制，实得：${error instanceof HelmError ? error.code : String(error)}`,
+          )
+        }
+      }
+      await host.disable('builtin:workflow')
+      const summary = host.list().find((p) => p.id === 'builtin:workflow')
+      assert.equal(summary?.enabled, false, '锁释放后无 force 停用 builtin:workflow 应放行')
+    } finally {
+      await close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('WorktreeLeaseStore.isPathInUse 纳入活跃 hold 记录；释放或置 removed 后解除占用', {
+    timeout: 60_000,
+  }, async () => {
+    const dir = join(rootDir, 't22-inuse')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const th = await openSpawnHarness(repo, join(dir, 'data'))
+    try {
+      const acquired = await th.isolation.acquireWorktree({
+        conversationId: 20,
+        parentConversationId: 1,
+        hold: {
+          pluginId: 'builtin:superagent',
+          holdId: 'grp-2:worker-1',
+          label: 'worker-1 hold',
+        },
+      })
+      assert.equal(th.isolation.isPathInUse('local', acquired.path), true, '持锁活跃工作树必须计入 isPathInUse')
+      assert.equal(
+        th.isolation.isPathInUse('local', join(acquired.path, 'sub')),
+        true,
+        '持锁工作树子路径同样视为占用',
+      )
+      assert.equal(th.isolation.isPathInUse('other-node', acquired.path), false, '不同节点同路径不误伤')
+
+      const rel = await th.isolation.releaseWorktreeHold({
+        worktreeId: acquired.worktreeId,
+        pluginId: 'builtin:superagent',
+        holdId: 'grp-2:worker-1',
+      })
+      assert.equal(rel.released, true)
+      assert.equal(th.isolation.isPathInUse('local', acquired.path), false, '释放锁后不再占用')
+    } finally {
+      await th.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('机密与损坏防护：hold.label 自动脱敏落库；pluginId/holdId 含已登记机密前置拒绝不建孤儿树；损坏 hold 文档显式 worktree_doc_corrupted', {
+    timeout: 60_000,
+  }, async () => {
+    const dir = join(rootDir, 't22-secrets')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const docs = new Map<string, unknown>()
+    const stash = new SecretStash()
+    const secretVal = 'sk-super-secret-hold-token-999'
+    const placeholder = stash.put(1, 'SA_TOKEN', secretVal)
+    const { host, close } = await openWorkflowPluginHost({
+      repoDir: repo,
+      dataDir: join(dir, 'data'),
+      docs,
+      stash,
+    })
+    try {
+      // 1) pluginId 或 holdId 含机密：在 git worktree add 之前显式抛 400 worktree_metadata_secret，不产生任何目录或记录。
+      for (const badHold of [
+        { pluginId: `plugin-${secretVal}`, holdId: 'h1', label: 'clean' },
+        { pluginId: 'builtin:superagent', holdId: `grp:${secretVal}`, label: 'clean' },
+      ]) {
+        await assert.rejects(
+          () =>
+            host.invokeAction('builtin:workflow', 'acquire_worktree', {
+              conversationId: 30,
+              parentConversationId: 1,
+              hold: badHold,
+            }),
+          (err: unknown) => {
+            assert.ok(err instanceof HelmError)
+            assert.equal(err.code, 'worktree_metadata_secret')
+            assert.equal(err.status, 400)
+            assert.ok(!err.message.includes(secretVal), '错误诊断绝不可含明文机密')
+            return true
+          },
+        )
+      }
+      assert.equal(rawRecords(docs).length, 0, '机密前置拦截不得产生任何登记记录')
+      assert.equal(existsSync(join(dir, '.helm-worktrees')), false, '机密前置拦截不得创建孤儿 worktree 目录')
+
+      // 2) hold.label 含机密：写入前经 redact 脱敏，落盘原始 JSON 零明文泄漏。
+      const acquired = (await host.invokeAction('builtin:workflow', 'acquire_worktree', {
+        conversationId: 31,
+        parentConversationId: 1,
+        hold: {
+          pluginId: 'builtin:superagent',
+          holdId: 'grp-sec:author',
+          label: `group ${secretVal} author`,
+        },
+      })) as { worktreeId: string; path: string }
+      const rawJson = JSON.stringify(docs.get('builtin:workflow:worktree-state'))
+      assert.ok(!rawJson.includes(secretVal), 'worktree-state 原始落库 JSON 不得含明文机密')
+      const storedRecord = rawRecords(docs).find((r) => r.id === acquired.worktreeId)!
+      assert.equal(storedRecord.hold?.label, `group ${placeholder} author`)
+
+      // 3) 持久化文档中 hold 结构损坏：读取/停用检查显式报错（worktree_doc_corrupted -> plugin_in_use_check_failed），绝不静默放行。
+      const corruptedState = structuredClone(docs.get('builtin:workflow:worktree-state')) as {
+        'runtime/worktrees': { version: 1; records: Array<Record<string, unknown>> }
+      }
+      corruptedState['runtime/worktrees'].records[0]!['hold'] = { pluginId: '', holdId: 'x', label: 'y', acquiredAt: -1 }
+      docs.set('builtin:workflow:worktree-state', corruptedState)
+
+      await assert.rejects(
+        () => host.invokeAction('builtin:workflow', 'list_worktrees', {}),
+        (err: unknown) => err instanceof HelmError && err.code === 'worktree_doc_corrupted' && err.status === 500,
+      )
+      await assert.rejects(
+        () => host.disable('builtin:workflow'),
+        (err: unknown) => err instanceof HelmError && err.code === 'plugin_in_use_check_failed' && err.status === 500,
+      )
+    } finally {
+      await close()
+      rmSync(dir, { recursive: true, force: true })
     }
   })
 })
