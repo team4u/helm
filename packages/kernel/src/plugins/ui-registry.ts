@@ -306,6 +306,17 @@ export function readPrebuiltClientBundle(
   return materializePrebuiltBundle(prebuiltDir, moduleRef, verified, chunk, pluginId);
 }
 
+/**
+ * Validates `manifest.json` and every declared entry/chunk file inside a prebuilt `dist-client` directory.
+ */
+export function verifyPrebuiltClientDir(prebuiltDir: string, pluginId = 'prebuilt'): LoadedPrebuiltClientManifest {
+  const loaded = readPrebuiltClientManifest(prebuiltDir, pluginId);
+  for (const moduleRef of Object.keys(loaded.manifest.modules)) {
+    assertPrebuiltEntryIntegrity(loaded.rootReal, prebuiltDir, moduleRef, loaded.manifest, pluginId);
+  }
+  return loaded;
+}
+
 export interface PluginClientAssetsLookup {
   clientRoot?: string;
   prebuiltClientDir?: string;

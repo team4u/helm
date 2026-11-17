@@ -28,7 +28,7 @@ import {
   normalizeDefinition,
   resolvePluginEntry,
 } from './external-loader.js';
-import { readPrebuiltClientBundle, readPrebuiltClientManifest } from './ui-registry.js';
+import { readPrebuiltClientBundle, verifyPrebuiltClientDir } from './ui-registry.js';
 
 /** Ephemeral in-memory doc store used during `doctor` registration checks (touches no durable storage). */
 class DoctorDocStore {
@@ -228,10 +228,7 @@ async function doctorPluginDirInternal(
   const clientOk = await withDoctorScratch(async (scratch) =>
     push('client', 'frontend module compilation and export validation', async () => {
       if (definition!.prebuiltClientDir !== undefined) {
-        const { rootReal, manifest } = readPrebuiltClientManifest(definition!.prebuiltClientDir, definition!.id);
-        for (const moduleRef of Object.keys(manifest.modules)) {
-          readPrebuiltClientBundle(rootReal, moduleRef, undefined, definition!.id);
-        }
+        verifyPrebuiltClientDir(definition!.prebuiltClientDir, definition!.id);
         const seen = new Set<string>();
         for (const ref of clientRefs) {
           const key = `${ref.module}#${ref.export}`;

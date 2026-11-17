@@ -22,7 +22,12 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { HelmError, clientNpmRootsOf } from '@helm/protocol'
-import { clearClientCompilerMemoryCache, compilePluginClientModule, createPluginBuildProvider } from '@helm/plugin-build'
+import {
+  buildPluginClientBundleDir,
+  clearClientCompilerMemoryCache,
+  compilePluginClientModule,
+  createPluginBuildProvider,
+} from '@helm/plugin-build'
 import {
   assertExternalDefinition,
   importPluginDefinition,
@@ -349,6 +354,32 @@ interface NpmCall {
   cwd: string
 }
 
+function makeTestPackageManager(dataDir: string, pluginId: string, runner: PackageRunner): PluginPackageManager {
+  return new PluginPackageManager({
+    dataDir,
+    cwd: workDir,
+    store: new PluginPackageManagerStore(new ConfigService(dataDir)),
+    host: {
+      async registerManagedPlugin() {
+        return { summary: makePluginSummary({ id: pluginId, name: 'x', enabled: false }), pluginId }
+      },
+      async enableManagedPlugin() {
+        throw new HelmError('unused', 'this test does not enable', 500)
+      },
+      assertManagedPluginUpdateSafe() {},
+      async updateManagedPlugin() {
+        return { summary: makePluginSummary({ id: pluginId, name: 'x', enabled: false }) }
+      },
+      async removeManagedPlugin() {
+        return { wasEnabled: false }
+      },
+      async purgePluginPersistentData() {},
+      listSummaries: () => [],
+    },
+    runner,
+  })
+}
+
 test('managed install installs declared frontend deps with --no-save using package.json ranges; preserves default cmd otherwise', { timeout: 60_000 }, async (t) => {
   const calls: NpmCall[] = []
   const runner: PackageRunner = async (cmd, args, opts) => {
@@ -373,29 +404,7 @@ test('managed install installs declared frontend deps with --no-save using packa
     helm: { clientDependencies: ['client-chart', 'client-extra/subpath'] },
   })
 
-  const manager = new PluginPackageManager({
-    dataDir,
-    cwd: workDir,
-    store: new PluginPackageManagerStore(new ConfigService(dataDir)),
-    host: {
-      async registerManagedPlugin() {
-        return { summary: makePluginSummary({ id: 'managed-client-dep', name: 'x', enabled: false }), pluginId: 'managed-client-dep' }
-      },
-      async enableManagedPlugin() {
-        throw new HelmError('unused', 'this test does not enable', 500)
-      },
-      assertManagedPluginUpdateSafe() {},
-      async updateManagedPlugin() {
-        return { summary: makePluginSummary({ id: 'managed-client-dep', name: 'x', enabled: false }) }
-      },
-      async removeManagedPlugin() {
-        return { wasEnabled: false }
-      },
-      async purgePluginPersistentData() {},
-      listSummaries: () => [],
-    },
-    runner,
-  })
+  const manager = makeTestPackageManager(dataDir, 'managed-client-dep', runner)
   const result = await manager.install(srcDir)
   assert.equal(result.record.pluginId, 'managed-client-dep')
   const installCall = calls.find((c) => c.args[0] === 'install')
@@ -418,33 +427,106 @@ test('without frontend dependency declaration, install keeps original command (-
   writeFileSync(join(srcDir, 'index.ts'), `export default { id: 'plain-plugin', definePlugin() {} }\n`, 'utf8')
   writeJson(join(srcDir, 'package.json'), { name: 'plain-plugin', dependencies: { leftmost: '^1.0.0' } })
 
-  const manager = new PluginPackageManager({
-    dataDir,
-    cwd: workDir,
-    store: new PluginPackageManagerStore(new ConfigService(dataDir)),
-    host: {
-      async registerManagedPlugin() {
-        return { summary: makePluginSummary({ id: 'plain-plugin', name: 'x', enabled: false }), pluginId: 'plain-plugin' }
-      },
-      async enableManagedPlugin() {
-        throw new HelmError('unused', 'this test does not enable', 500)
-      },
-      assertManagedPluginUpdateSafe() {},
-      async updateManagedPlugin() {
-        return { summary: makePluginSummary({ id: 'plain-plugin', name: 'x', enabled: false }) }
-      },
-      async removeManagedPlugin() {
-        return { wasEnabled: false }
-      },
-      async purgePluginPersistentData() {},
-      listSummaries: () => [],
-    },
-    runner,
-  })
+  const manager = makeTestPackageManager(dataDir, 'plain-plugin', runner)
   await manager.install(srcDir)
   const installCall = calls.find((c) => c.args[0] === 'install')
   assert.ok(installCall)
   assert.ok(installCall.args.includes('--omit=dev'))
   assert.equal(installCall.args.includes('--no-save'), false)
   assert.equal(installCall.args.some((a) => a.startsWith('leftmost')), false)
+})
+
+test('managed install with valid prebuilt dist-client skips clientDependencies (both without and with backend dependencies)', { timeout: 60_000 }, async (t) => {
+  const buildPluginWithPrebuilt = async (name: string, backendDeps?: Record<string, string>): Promise<string> => {
+    const srcDir = join(workDir, name)
+    mkdirSync(join(srcDir, 'client'), { recursive: true })
+    writeJson(join(srcDir, 'plugin.json'), {
+      id: name,
+      main: 'index.ts',
+      clientDependencies: ['heavy-chart', 'extra-widget/subpath'],
+    })
+    writeJson(join(srcDir, 'package.json'), {
+      name,
+      version: '1.0.0',
+      ...(backendDeps ? { dependencies: backendDeps } : {}),
+      devDependencies: { 'heavy-chart': '^12.0.0' },
+      helm: { clientDependencies: ['heavy-chart', 'extra-widget/subpath'] },
+    })
+    writeFileSync(
+      join(srcDir, 'index.ts'),
+      `export default {
+  id: '${name}',
+  definePlugin(ctx) {
+    ctx.ui.screen({ id: 'home', title: 'Home', client: { module: 'index.tsx', export: 'HomeScreen' } })
+  },
+}
+`,
+      'utf8',
+    )
+    writeFileSync(join(srcDir, 'client', 'index.tsx'), `export function HomeScreen() { return null }\n`, 'utf8')
+    await buildPluginClientBundleDir({
+      pluginId: name,
+      clientRoot: join(srcDir, 'client'),
+      outDir: join(srcDir, 'dist-client'),
+    })
+    return srcDir
+  }
+
+  // 1. Prebuilt + devDependencies/clientDependencies only (no backend runtime dependencies): skips npm install completely.
+  {
+    const calls: NpmCall[] = []
+    const runner: PackageRunner = async (cmd, args, opts) => {
+      calls.push({ cmd, args, cwd: opts.cwd })
+      return { code: 0, stdout: '', stderr: '' }
+    }
+    const dataDir = useTempDir(t, 'helm-pkg-prebuilt-only-')
+    const srcDir = await buildPluginWithPrebuilt('prebuilt-frontend-only')
+    const manager = makeTestPackageManager(dataDir, 'prebuilt-frontend-only', runner)
+    const result = await manager.install(srcDir)
+    assert.equal(result.record.pluginId, 'prebuilt-frontend-only')
+    assert.equal(calls.length, 0, 'prebuilt plugin with no backend runtime deps must not invoke npm install')
+  }
+
+  // 2. Prebuilt + backend dependencies: runs npm --omit=dev only, skipping clientDependencies (--no-save / specifiers).
+  {
+    const calls: NpmCall[] = []
+    const runner: PackageRunner = async (cmd, args, opts) => {
+      calls.push({ cmd, args, cwd: opts.cwd })
+      return { code: 0, stdout: '', stderr: '' }
+    }
+    const dataDir = useTempDir(t, 'helm-pkg-prebuilt-backend-')
+    const srcDir = await buildPluginWithPrebuilt('prebuilt-with-backend-deps', { 'backend-sdk': '^2.0.0' })
+    const manager = makeTestPackageManager(dataDir, 'prebuilt-with-backend-deps', runner)
+    const result = await manager.install(srcDir)
+    assert.equal(result.record.pluginId, 'prebuilt-with-backend-deps')
+    assert.equal(calls.length, 1, 'should invoke npm install once for backend runtime dependencies')
+    assert.ok(calls[0]!.args.includes('--omit=dev'))
+    assert.equal(calls[0]!.args.includes('--no-save'), false)
+    assert.equal(calls[0]!.args.some((a) => a.includes('heavy-chart') || a.includes('extra-widget')), false)
+  }
+})
+
+test('managed install rejects corrupt prebuilt dist-client explicitly without silently falling back to clientDependencies', { timeout: 60_000 }, async (t) => {
+  const calls: NpmCall[] = []
+  const runner: PackageRunner = async (cmd, args, opts) => {
+    calls.push({ cmd, args, cwd: opts.cwd })
+    return { code: 0, stdout: '', stderr: '' }
+  }
+  const dataDir = useTempDir(t, 'helm-pkg-prebuilt-corrupt-')
+  const srcDir = join(workDir, 'corrupt-prebuilt-plugin')
+  mkdirSync(join(srcDir, 'dist-client'), { recursive: true })
+  writeJson(join(srcDir, 'plugin.json'), {
+    id: 'corrupt-prebuilt-plugin',
+    main: 'index.ts',
+    clientDependencies: ['heavy-chart'],
+  })
+  writeFileSync(join(srcDir, 'index.ts'), `export default { id: 'corrupt-prebuilt-plugin', definePlugin() {} }\n`, 'utf8')
+  // Intentionally leave dist-client/ without manifest.json
+
+  const manager = makeTestPackageManager(dataDir, 'corrupt-prebuilt-plugin', runner)
+  await assert.rejects(
+    manager.install(srcDir),
+    (err: unknown) => err instanceof HelmError && err.code === 'prebuilt_client_invalid',
+  )
+  assert.equal(calls.length, 0, 'corrupt prebuilt bundle must reject before invoking npm install')
 })

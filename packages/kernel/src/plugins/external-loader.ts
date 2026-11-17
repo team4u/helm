@@ -68,7 +68,7 @@ import {
   readManifest,
   readManifestOptional,
 } from './plugin-manifest.js';
-import { readPrebuiltClientManifest } from './ui-registry.js';
+import { readPrebuiltClientManifest, verifyPrebuiltClientDir } from './ui-registry.js';
 
 /** Minimal host surface required for loading (structurally compatible with PluginHost for isolated tests). */
 export interface ExternalPluginHost {
@@ -457,6 +457,18 @@ function resolveExternalPrebuiltClientDir(
   assertContainedInPluginDir(dirPath, dirReal, PREBUILT_CLIENT_DIR_NAME, defaultDist, PREBUILT_CLIENT_DIR_NAME);
   const { rootReal } = readPrebuiltClientManifest(defaultDist, pluginId);
   return rootReal;
+}
+
+/**
+ * Checks whether `dirPath` contains a valid manifest-declared or conventional prebuilt frontend
+ * bundle (`clientDist` / `dist-client/`). Throws explicitly on invalid/escaping bundles; returns
+ * `undefined` only when no prebuilt client directory is declared or present on disk.
+ */
+export function verifyDeclaredPrebuiltDir(dirPath: string): string | undefined {
+  const dirReal = realpathSync(dirPath);
+  const prebuiltRoot = resolveExternalPrebuiltClientDir(dirPath, dirReal, dirPath, undefined);
+  if (prebuiltRoot === undefined) return undefined;
+  return verifyPrebuiltClientDir(prebuiltRoot, dirPath).rootReal;
 }
 
 export function normalizeDefinition(definition: PluginDefinition, dirPath: string): PluginDefinition {

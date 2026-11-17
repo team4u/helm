@@ -22,10 +22,11 @@
  *   full host permissions; this manager enforces managed path boundaries only, never claiming sandboxing.
  */
 import { spawn } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readdir, rename, rm, stat } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { HelmError, type PluginBuildProvider, type PluginInstallResult, type PluginPackageRecord, type PluginRemoveResult, type PluginPackageSource, type PluginSummary, type PluginUpdateResult } from '@helm/protocol';
+import { verifyDeclaredPrebuiltDir } from './external-loader.js';
 import { parsePluginSource } from './package-source.js';
 import { doctorPluginDir } from './plugin-doctor.js';
 import { readHelmClientDependencies } from './plugin-manifest.js';
@@ -627,31 +628,43 @@ export class PluginPackageManager {
 
   /**
    * Install runtime dependencies inside staging (`--omit=dev`, lifecycle scripts always disabled).
-   * Also installs manifest `clientDependencies` with `--no-save` so doctor and client compilation find them
-   * in `node_modules` without mutating `package.json`.
+   * When a valid prebuilt frontend bundle (`clientDist` or `dist-client/`) is present, frontend
+   * `clientDependencies` are skipped and only backend `package.json` runtime dependencies (if any)
+   * are installed. Otherwise installs `clientDependencies` with `--no-save` so doctor and client
+   * compilation find them in `node_modules` without mutating `package.json`.
    */
   private async installRuntimeDeps(dir: string): Promise<void> {
     const pkgJson = join(dir, 'package.json');
     const hasPkg = await stat(pkgJson).then(() => true).catch(() => false);
-    const clientSpecs = readHelmClientDependencies(dir);
-    if (!hasPkg && clientSpecs.length === 0) return;
+    const declaredClientSpecs = readHelmClientDependencies(dir);
+    const prebuiltDir = verifyDeclaredPrebuiltDir(dir);
+    const clientSpecs = prebuiltDir !== undefined ? [] : declaredClientSpecs;
+    const ranges = new Map<string, string>();
+    let hasBackendRuntimeDeps = false;
+    if (hasPkg) {
+      const pkg = JSON.parse(await readFile(pkgJson, 'utf8')) as Record<string, unknown>;
+      for (const group of ['dependencies', 'optionalDependencies', 'peerDependencies'] as const) {
+        const declared = pkg[group];
+        if (typeof declared === 'object' && declared !== null && Object.keys(declared).length > 0) {
+          hasBackendRuntimeDeps = true;
+        }
+      }
+      if (clientSpecs.length > 0) {
+        for (const group of ['dependencies', 'devDependencies'] as const) {
+          const declared = pkg[group];
+          if (typeof declared !== 'object' || declared === null) continue;
+          for (const [name, range] of Object.entries(declared as Record<string, unknown>)) {
+            if (typeof range === 'string' && range.length > 0) ranges.set(name, range);
+          }
+        }
+      }
+    }
+    if ((!hasPkg || !hasBackendRuntimeDeps) && clientSpecs.length === 0) return;
     if (clientSpecs.length === 0) {
       const args = ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--foreground-scripts', '--no-package-lock-only'];
       const result = await this.run('npm', args, dir);
       if (result.code !== 0) throw commandError('install', 'npm', args, result);
       return;
-    }
-    const ranges = new Map<string, string>();
-    if (hasPkg) {
-      const { readFile } = await import('node:fs/promises');
-      const pkg = JSON.parse(await readFile(pkgJson, 'utf8')) as Record<string, unknown>;
-      for (const group of ['dependencies', 'devDependencies'] as const) {
-        const declared = pkg[group];
-        if (typeof declared !== 'object' || declared === null) continue;
-        for (const [name, range] of Object.entries(declared as Record<string, unknown>)) {
-          if (typeof range === 'string' && range.length > 0) ranges.set(name, range);
-        }
-      }
     }
     // Extract package names from specifiers (subpath specifiers like pkg/sub.js resolve version range from pkg).
     const installSpecs = clientSpecs.map((spec) => {
