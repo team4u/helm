@@ -614,7 +614,7 @@ test('describe pattern: real run_action invoke return complete Schema and do not
     await env.submitAndWait(env.initialConvId, 'deactivate after query')
     const disabledDetail = await env.app.kernel.getConversationDetail(env.initialConvId)
     const disabledText = env.toolResultTexts(disabledDetail.entries)
-    assert.ok(disabledText.includes('not declaration action'), 'deactivate after describe should explicit reject (unknown_action)')
+    assert.ok(disabledText.includes('does not declare action'), 'disabled plugin describe should reject explicitly (unknown_action)')
   } finally {
     await env.close()
   }

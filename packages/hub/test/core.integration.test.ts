@@ -443,7 +443,7 @@ test('collection into2: load_skill read SKILL.md and references/ sub- file, path
 
     await rejectsExplicitly(
       () => host.executeTool('load_skill', { skillId: 'deploy-playbook', path: '../profiles/assistant/MEMORY.md' }, { conversationId: env.initialConvId }),
-      { message: /path through exceeds|reference validation failed/ },
+      { message: /forbidden path traversal|reference validation failed/ },
     )
     await rejectsExplicitly(
       () => host.executeTool('load_skill', { skillId: 'deploy-playbook', path: '/etc/passwd' }, { conversationId: env.initialConvId }),
