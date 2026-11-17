@@ -3,7 +3,7 @@ import type { PluginSummary } from '@helm/protocol/browser'
 import { resolveLocalizedText } from '@helm/protocol/browser'
 import { ApiClientError, pluginsApi } from '../lib/api.js'
 import { HelmIcon } from '@helm/plugin-client'
-import { useHelmStore } from '../lib/store-context.js'
+import { useLocationTargets, usePlugins, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { PluginCard } from './PluginCard.js'
 import { PluginDetailDrawer } from './PluginDetailDrawer.js'
@@ -39,7 +39,9 @@ export function PluginCenter({
   onCloseSplit,
   inlineDrawer = false,
 }: PluginCenterProps): React.JSX.Element {
-  const store = useHelmStore()
+  const plugins = usePlugins() ?? []
+  const { primaryTarget, splitTarget } = useLocationTargets()
+  const { syncPlugins, openTarget, closeSplit, pushNotice } = useStoreActions()
   const { locale, t } = useWebLocale()
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<PluginStatusFilter>('all')
@@ -49,14 +51,13 @@ export function PluginCenter({
   const [refreshTick, setRefreshTick] = useState(0)
   const refreshGeneration = React.useRef(0)
 
-  const plugins = store.plugins ?? []
   const statusSummary = useMemo(() => summarizePlugins(plugins), [plugins])
 
   const filteredPlugins = useMemo(() => {
     return filterPlugins(plugins, { query, status: statusFilter }, locale)
   }, [plugins, query, statusFilter, locale])
 
-  const currentTarget = isSplit ? store.splitTarget : store.primaryTarget
+  const currentTarget = isSplit ? splitTarget : primaryTarget
   const selectedPluginId =
     currentTarget?.kind === 'plugins' ? currentTarget.pluginId : undefined
 
@@ -74,7 +75,7 @@ export function PluginCenter({
       const list = await pluginsApi.list()
       // 迟到的旧响应不得覆盖新状态（代数竞争保护）
       if (generation !== refreshGeneration.current) return
-      store.syncPlugins?.(list)
+      syncPlugins?.(list)
     } catch {
       // 静默失败：SSE 快照仍是权威数据源，无需打断用户
     }
@@ -92,7 +93,7 @@ export function PluginCenter({
   }, [refreshTick])
 
   const openPluginTarget = (pluginId?: string) => {
-    store.openTarget(
+    openTarget(
       pluginId !== undefined ? { kind: 'plugins', pluginId } : { kind: 'plugins' },
       isSplit ? { split: true } : undefined,
     )
@@ -112,7 +113,7 @@ export function PluginCenter({
     openPluginTarget(pluginId)
     handlePackageChanged()
     if (enableError !== undefined) {
-      store.pushNotice({
+      pushNotice({
         type: 'notification',
         level: 'error',
         title: t('plugins.notice.installEnableFailedTitle'),
@@ -138,7 +139,7 @@ export function PluginCenter({
     try {
       if (nextEnabled) {
         await pluginsApi.enable(plugin.id)
-        store.pushNotice({
+        pushNotice({
           type: 'notification',
           level: 'info',
           title: t('plugins.notice.enabledTitle'),
@@ -146,7 +147,7 @@ export function PluginCenter({
         })
       } else {
         await pluginsApi.disable(plugin.id, options)
-        store.pushNotice({
+        pushNotice({
           type: 'notification',
           level: 'info',
           title: t('plugins.notice.disabledTitle'),
@@ -154,7 +155,7 @@ export function PluginCenter({
         })
       }
     } catch (err) {
-      store.pushNotice({
+      pushNotice({
         type: 'notification',
         level: 'error',
         title: nextEnabled ? t('plugins.notice.enableFailedTitle') : t('plugins.notice.disableFailedTitle'),
@@ -174,11 +175,11 @@ export function PluginCenter({
       onCloseSplit?.()
       return
     }
-    if (store.splitTarget !== null) {
-      store.closeSplit()
+    if (splitTarget !== null) {
+      closeSplit()
       return
     }
-    store.openTarget({ kind: 'plugins', pluginId: selectedPluginId }, { split: true })
+    openTarget({ kind: 'plugins', pluginId: selectedPluginId }, { split: true })
   }
 
   return (
@@ -207,7 +208,7 @@ export function PluginCenter({
             <CloseSplitButton onCloseSplit={onCloseSplit} />
           ) : (
             <SplitToggleButton
-              isSplitActive={store.splitTarget !== null}
+              isSplitActive={splitTarget !== null}
               onToggleSplit={toggleSplit}
             />
           )}

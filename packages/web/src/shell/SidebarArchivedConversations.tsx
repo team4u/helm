@@ -15,8 +15,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Checkbox, HelmIcon } from '@helm/plugin-client'
-import { useHelmStore } from '../lib/store-context.js'
-import type { HelmStoreValue } from '../lib/types.js'
+import {
+  useConversations,
+  useGroupedUi,
+  useLocationTargets,
+  usePlugins,
+  useProfilesSlice,
+  useStoreActions,
+} from '../lib/store-context.js'
+import type { ResolvedTarget } from '../lib/types.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
@@ -34,7 +41,8 @@ import { ConversationStatusDot, SidebarPaneTag } from './SidebarPrimitives.js'
 /** One conversation row in the archived group: leading status light + title + owning-agent badge + actions menu. */
 function ArchivedConversationRow({
   item,
-  store,
+  locationTargets,
+  onOpenConversation,
   background,
   onNavigate,
   batchMode,
@@ -42,7 +50,8 @@ function ArchivedConversationRow({
   onToggleSelect,
 }: {
   item: ArchivedConversationListItem
-  store: HelmStoreValue
+  locationTargets: { primaryTarget: ResolvedTarget; splitTarget: ResolvedTarget | null }
+  onOpenConversation: (conversationId: number) => void
   background: ConversationBackgroundIndex
   onNavigate?: () => void
   batchMode?: boolean
@@ -51,7 +60,7 @@ function ArchivedConversationRow({
 }): ReactNode {
   const { t } = useWebLocale()
   const conv = item.conv
-  const presence = getConversationPresence(store, conv.id)
+  const presence = getConversationPresence(locationTargets, conv.id)
 
   return (
     <div
@@ -78,7 +87,7 @@ function ArchivedConversationRow({
             onToggleSelect?.(conv.id)
             return
           }
-          store.openTarget({ kind: 'conversation', conversationId: conv.id })
+          onOpenConversation(conv.id)
           onNavigate?.()
         }}
         aria-current={presence.active ? 'page' : undefined}
@@ -113,20 +122,25 @@ export function ArchivedConversationsGroup({
   background: ConversationBackgroundIndex
   onNavigate?: () => void
 }): ReactNode {
-  const store = useHelmStore()
+  const conversations = useConversations()
+  const { profiles } = useProfilesSlice()
+  const plugins = usePlugins()
+  const groupedUi = useGroupedUi()
+  const locationTargets = useLocationTargets()
+  const { openTarget, pushNotice } = useStoreActions()
   const { t } = useWebLocale()
   const items = useMemo(
     () =>
       buildArchivedConversationList({
-        conversations: store.conversations,
-        profiles: store.profiles,
-        plugins: store.plugins,
-        sidebarSections: store.groupedUi.sidebarSections,
+        conversations,
+        profiles,
+        plugins,
+        sidebarSections: groupedUi.sidebarSections,
       }),
-    [store.conversations, store.profiles, store.plugins, store.groupedUi.sidebarSections],
+    [conversations, profiles, plugins, groupedUi.sidebarSections],
   )
 
-  const activeConversationIds = activeConversationIdsOf(store)
+  const activeConversationIds = activeConversationIdsOf(locationTargets)
   const hasActiveArchived = items.some((item) => activeConversationIds.has(item.conv.id))
   const [open, setOpen] = useState(hasActiveArchived)
   const [batchMode, setBatchMode] = useState(false)
@@ -135,7 +149,7 @@ export function ArchivedConversationsGroup({
 
   useEffect(() => {
     if (hasActiveArchived) setOpen(true)
-  }, [hasActiveArchived, store.primaryTarget, store.splitTarget])
+  }, [hasActiveArchived, locationTargets.primaryTarget, locationTargets.splitTarget])
 
   const toggleSelect = (id: number) => {
     setSelectedIds((prev) => {
@@ -160,7 +174,7 @@ export function ArchivedConversationsGroup({
         .filter((item) => selectedIds.has(item.conv.id))
         .map((item) => item.conv)
       const outcome = await patchConversationsArchived(convs, false)
-      store.pushNotice(archiveBatchNotice(false, outcome, t))
+      pushNotice(archiveBatchNotice(false, outcome, t))
       setSelectedIds(new Set())
       setBatchMode(false)
     } finally {
@@ -254,7 +268,8 @@ export function ArchivedConversationsGroup({
           <ArchivedConversationRow
             key={item.conv.id}
             item={item}
-            store={store}
+            locationTargets={locationTargets}
+            onOpenConversation={(conversationId) => openTarget({ kind: 'conversation', conversationId })}
             background={background}
             onNavigate={onNavigate}
             batchMode={batchMode}

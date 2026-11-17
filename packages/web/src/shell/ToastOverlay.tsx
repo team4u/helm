@@ -1,15 +1,16 @@
 import { HelmIcon } from '@helm/plugin-client'
-import { useHelmStore } from '../lib/store-context.js'
+import { useNotices, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 
 export function ToastOverlay() {
-  const store = useHelmStore()
+  const notices = useNotices()
+  const { openTarget, dismissNotice } = useStoreActions()
   const { t } = useWebLocale()
-  if (store.notices.length === 0) return null
+  if (notices.length === 0) return null
 
   return (
     <div className="toast-overlay">
-      {store.notices.map((n) => {
+      {notices.map((n) => {
         const toneClass =
           n.level === 'error'
             ? 'callout-error'
@@ -47,8 +48,8 @@ export function ToastOverlay() {
                   type="button"
                   className="btn btn-ghost btn-sm toast-action-btn"
                   onClick={() => {
-                    store.openTarget({ kind: 'conversation', conversationId: n.conversationId! })
-                    store.dismissNotice(n.id)
+                    openTarget({ kind: 'conversation', conversationId: n.conversationId! })
+                    dismissNotice(n.id)
                   }}
                 >
                   <span>{t('shell.toast.viewConversation', { id: n.conversationId })}</span>
@@ -58,7 +59,7 @@ export function ToastOverlay() {
             <button
               type="button"
               className="btn btn-ghost btn-sm btn-icon-xs"
-              onClick={() => store.dismissNotice(n.id)}
+              onClick={() => dismissNotice(n.id)}
             >
               <HelmIcon name="x" size={12} />
             </button>

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ConversationSummary } from '@helm/protocol/browser'
 import { conversationsApi } from '../lib/api.js'
 import { HelmIcon, Select, type SelectOption } from '@helm/plugin-client'
-import { useHelmStore } from '../lib/store-context.js'
+import { useNodes, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
 import {
@@ -34,7 +34,8 @@ export function SessionEnvBar({
   sendBlocked: boolean
   onBlockerChange: (blocker: SessionEnvBlocker) => void
 }) {
-  const store = useHelmStore()
+  const nodes = useNodes()
+  const { pushNotice } = useStoreActions()
   const { t } = useWebLocale()
   const [draft, setDraft] = useState<EnvDraft>(() => ({
     nodeId: conversation.nodeId || 'local',
@@ -43,9 +44,9 @@ export function SessionEnvBar({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const currentNodeId = conversation.nodeId || 'local'
-  const nodeKnown = store.nodes.some((n) => n.id === currentNodeId)
-  const draftNode = store.nodes.find((n) => n.id === draft.nodeId)
-  const draftNodeKnown = draft.nodeId === currentNodeId ? nodeKnown : store.nodes.some((n) => n.id === draft.nodeId)
+  const nodeKnown = nodes.some((n) => n.id === currentNodeId)
+  const draftNode = nodes.find((n) => n.id === draft.nodeId)
+  const draftNodeKnown = draft.nodeId === currentNodeId ? nodeKnown : nodes.some((n) => n.id === draft.nodeId)
   // Confirmed coordinate anchor: a successful save trusts the PATCH return
   // value (the SSE summary may lag; never depend on its timing).
   const [confirmed, setConfirmed] = useState<EnvDraft>(() => ({ nodeId: currentNodeId, cwd: conversation.cwd }))
@@ -92,7 +93,7 @@ export function SessionEnvBar({
       const nextConfirmed: EnvDraft = { nodeId: saved.nodeId || 'local', cwd: saved.cwd }
       setConfirmed(nextConfirmed)
       setDraft(nextConfirmed)
-      store.pushNotice({
+      pushNotice({
         type: 'notification',
         level: 'info',
         title: t('composer.env.savedTitle'),
@@ -104,7 +105,7 @@ export function SessionEnvBar({
       // roll back silently.
       const message = e instanceof Error ? e.message : String(e)
       setError(message)
-      store.pushNotice({
+      pushNotice({
         type: 'notification',
         level: 'error',
         title: t('composer.env.saveFailed'),
@@ -125,7 +126,7 @@ export function SessionEnvBar({
   }
 
   const nodeOptions = useMemo<SelectOption<string>[]>(() => {
-    const list: SelectOption<string>[] = store.nodes.map((n) => ({
+    const list: SelectOption<string>[] = nodes.map((n) => ({
       value: n.id,
       label: nodeOptionLabel(n),
       icon: n.id === 'local' ? 'monitor' : 'network',
@@ -139,7 +140,7 @@ export function SessionEnvBar({
       })
     }
     return list
-  }, [store.nodes, draftNodeKnown, draft.nodeId, t])
+  }, [nodes, draftNodeKnown, draft.nodeId, t])
 
   return (
     <div className="composer-env-bar" data-dirty={dirty ? 'true' : undefined}>

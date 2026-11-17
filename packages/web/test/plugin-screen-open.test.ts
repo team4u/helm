@@ -18,6 +18,7 @@ import * as ReactDOMClient from 'react-dom/client'
 import type { PluginSummary } from '@helm/protocol'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 import { PluginCard } from '../src/plugins/PluginCard.js'
+import { PluginDetailDrawer } from '../src/plugins/PluginDetailDrawer.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 import type { HelmStoreValue, ResolvedTarget } from '../src/lib/types.js'
@@ -154,16 +155,67 @@ test('PluginCard：停用或无 Screen 时不渲染打开按钮（无 Provider �
 })
 
 // ---------------------------------------------------------------------------
-// PluginDetailDrawer 源码契约：Screen 快捷打开经 store.openTarget 唯一导航
+// PluginDetailDrawer DOM 行为契约：enabled 插件经 openTarget 打开主视图并支持 split（零 history 直操作）
 // ---------------------------------------------------------------------------
 
-test('PluginDetailDrawer 契约：enabled 插件经 store.openTarget 打开主视图并支持 split（零 history 直操作）', { timeout: 60_000 }, () => {
-  const src = readFileSync(new URL('src/plugins/PluginDetailDrawer.tsx', PKG_ROOT), 'utf-8')
-  // 从 grouped UI 左连接 Screen（PluginSummary 不携带 screens，不虚构）
-  assert.match(src, /listPluginScreens\(store\.groupedUi, plugin\.id\)/)
-  // 主屏与右屏分别以 openTarget / split: true 调用（唯一导航机制，不直接操作 history）
-  assert.match(src, /store\.openTarget\(\{\s*kind: 'screen',\s*pluginId: primaryScreen\.pluginId,\s*screenId: primaryScreen\.screenId,?\s*\}\)/)
-  assert.match(src, /store\.openTarget\(\s*\{\s*kind: 'screen',\s*pluginId: primaryScreen\.pluginId,\s*screenId: primaryScreen\.screenId,?\s*\},\s*\{ split: true \},?\s*\)/)
-  assert.doesNotMatch(src, /history\.(push|replace)State/, '不得直接操作浏览器历史')
+test('PluginDetailDrawer 契约：enabled 插件经 store.openTarget 打开主视图并支持 split（零 history 直操作）', { timeout: 60_000 }, async () => {
+  const calls: OpenCall[] = []
+  const store = screenStore([APP_PLUGIN], SCREEN_UI, (target, opts) => {
+    calls.push({ target: target as ResolvedTarget, split: opts?.split === true })
+  })
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ pluginId: 'todo-app', schema: {}, values: {} }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })) as typeof fetch
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = ReactDOMClient.createRoot(host)
+  try {
+    await act(async () => {
+      root.render(
+        e(HostStoreProviders, { value: store },
+          e(PluginDetailDrawer, {
+            plugin: APP_PLUGIN,
+            open: true,
+            inline: true,
+            onClose: () => {},
+            onToggleEnabled: async () => {},
+            toggling: false,
+          })),
+      )
+    })
+
+    const actionsBar = host.querySelector('.plugin-drawer-screen-actions')
+    assert.ok(actionsBar, '应渲染插件视图操作区')
+    const splitBtn = actionsBar.querySelector<HTMLButtonElement>('.plugin-drawer-split-btn')
+    const primaryBtn = Array.from(actionsBar.querySelectorAll<HTMLButtonElement>('button')).find((b) => b !== splitBtn)
+    assert.ok(primaryBtn && splitBtn, '应渲染打开主视图与分屏打开两个按钮')
+
+    await act(async () => {
+      primaryBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {
+      splitBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    assert.deepEqual(
+      calls,
+      [
+        { target: { kind: 'screen', pluginId: 'todo-app', screenId: 'main' }, split: false },
+        { target: { kind: 'screen', pluginId: 'todo-app', screenId: 'main' }, split: true },
+      ],
+      '主屏与分屏按钮应通过 store.openTarget 触发导航',
+    )
+
+    const src = readFileSync(new URL('src/plugins/PluginDetailDrawer.tsx', PKG_ROOT), 'utf-8')
+    assert.doesNotMatch(src, /history\.(push|replace)State/, '不得直接操作浏览器历史')
+  } finally {
+    act(() => root.unmount())
+    host.remove()
+    globalThis.fetch = originalFetch
+  }
 })
 

@@ -1,4 +1,4 @@
-import React, { useContext } from 'react'
+import React from 'react'
 import type { Profile } from './profile-center-model.js'
 import {
   formatProfileLocation,
@@ -9,7 +9,12 @@ import {
   summarizeProfileActivity,
 } from './profile-center-model.js'
 import { HelmIcon } from '@helm/plugin-client'
-import { HelmStoreContext } from '../lib/store-context.js'
+import {
+  useOptionalConversations,
+  useOptionalDefaultModelInfo,
+  useOptionalPlugins,
+  useOptionalStoreActions,
+} from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 
 export interface ProfileCardProps {
@@ -47,19 +52,22 @@ export function ProfileCard({
   defaultModelInfo,
   onStartChat,
 }: ProfileCardProps): React.JSX.Element {
-  const store = useContext(HelmStoreContext)
+  const storeDefaultModelInfo = useOptionalDefaultModelInfo()
+  const storeConversations = useOptionalConversations()
+  const storePlugins = useOptionalPlugins()
+  const actions = useOptionalStoreActions()
   const { t } = useWebLocale()
   const isSystem = isSystemProfile(profile)
   const isHerdr = isHerdrProfile(profile)
   const effectiveModel = resolveEffectiveProfileModel(
     profile,
-    defaultModelInfo !== undefined ? defaultModelInfo : store?.defaultModelInfo,
+    defaultModelInfo !== undefined ? defaultModelInfo : storeDefaultModelInfo,
   )
   const location = formatProfileLocation(profile)
   const activity = summarizeProfileActivity(
     profile,
-    store?.conversations ?? [],
-    store?.plugins ?? [],
+    storeConversations ?? [],
+    storePlugins ?? [],
     t,
   )
   const displayName = profile.name || profile.id
@@ -83,7 +91,7 @@ export function ProfileCard({
       onStartChat()
       return
     }
-    store?.openTarget({ kind: 'agent', profileId: profile.id })
+    actions?.openTarget({ kind: 'agent', profileId: profile.id })
   }
 
   const shortModelName = formatShortModelName(effectiveModel.model)

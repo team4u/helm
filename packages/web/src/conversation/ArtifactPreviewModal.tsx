@@ -3,7 +3,12 @@ import type { ArtifactMetadata, ArtifactPreviewerProps } from '@helm/protocol/br
 import { resolveLocalizedText } from '@helm/protocol/browser'
 import { artifactsApi } from '../lib/api.js'
 import { HelmIcon, Select, SegmentedControl } from '@helm/plugin-client'
-import { useHelmStore } from '../lib/store-context.js'
+import {
+  useConversationArtifacts,
+  useConversationSummary,
+  useGroupedUi,
+  useStoreActions,
+} from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { detectLanguage } from './code-language.js'
 import { FilePreviewBody } from './FilePreviewBody.js'
@@ -54,20 +59,22 @@ function buildPreviewerProps(
  *   有效回退，ObjectURL 及时回收，绝不让旧 blob/text/name 混入新产物。
  */
 export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inline }: ArtifactPreviewModalProps) {
-  const store = useHelmStore()
+  const convArtifacts = useConversationArtifacts(conversationId)
+  const conversation = useConversationSummary(conversationId)
+  const groupedUi = useGroupedUi()
+  const { loadConversationArtifacts, pushNotice } = useStoreActions()
   const { locale, t } = useWebLocale()
   const [state, setState] = useState<FilePreviewLoadState>({ phase: 'loading' })
   const [view, setView] = useState<'rich' | 'source'>('rich')
   const [previewer, setPreviewer] = useState<PreviewerChoice | null>(null)
   const modalBodyRef = useRef<HTMLDivElement | null>(null)
   const markdownPreviewRef = useRef<HTMLDivElement | null>(null)
-  const loadArtifacts = store.loadConversationArtifacts
-  const artifactsLoaded = conversationId !== undefined && store.conversationArtifacts[conversationId] !== undefined
+  const artifactsLoaded = conversationId !== undefined && convArtifacts !== undefined
 
   // store 可能以浅拷贝对象传入（如测试 rerender），loadArtifacts 引用会每次变化；
   // 经由 ref 调用，避免 effect 因此重触发导致重复加载。
-  const loadArtifactsRef = useRef(loadArtifacts)
-  loadArtifactsRef.current = loadArtifacts
+  const loadArtifactsRef = useRef(loadConversationArtifacts)
+  loadArtifactsRef.current = loadConversationArtifacts
 
   // 深链预览所属会话不一定在主屏或分屏中，不能依赖会话面板预先加载元数据。
   useEffect(() => {
@@ -76,8 +83,8 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
 
   const meta = useMemo(() => {
     if (conversationId === undefined) return undefined
-    return (store.conversationArtifacts[conversationId] ?? []).find((a) => a.id === artifactId)
-  }, [store.conversationArtifacts, conversationId, artifactId])
+    return (convArtifacts ?? []).find((a) => a.id === artifactId)
+  }, [convArtifacts, conversationId, artifactId])
 
   // 产物加载（含代数竞争保护与 ObjectURL 回收）；MIME 回退在渲染时响应式计算，
   // 深链元数据后到不触发重新拉取。
@@ -108,11 +115,6 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
   const loadedBlob = state.phase === 'loaded' ? state.blob : undefined
   const { text, textState } = useFilePreviewText(loadedBlob, meta, mime)
 
-  const conversation = useMemo(
-    () => (conversationId !== undefined ? store.conversations.find((c) => c.id === conversationId) : undefined),
-    [store.conversations, conversationId],
-  )
-
   // 插件命中判定用已加载的真实元数据（名称未知不猜）；加载中/失败不给插件命中。
   const pluginMatchInput = useMemo(
     () =>
@@ -126,8 +128,8 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
     () =>
       pluginMatchInput === undefined
         ? []
-        : collectArtifactPreviewers(store.groupedUi.artifactPreviewers, pluginMatchInput, conversation),
-    [store.groupedUi.artifactPreviewers, pluginMatchInput, conversation],
+        : collectArtifactPreviewers(groupedUi.artifactPreviewers, pluginMatchInput, conversation),
+    [groupedUi.artifactPreviewers, pluginMatchInput, conversation],
   )
 
   // 选择回退：未手动选择时默认取命中首位（priority 最高）；已选择项不在命中列表
@@ -168,7 +170,7 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
   })
 
   const download = (): void => {
-    void artifactsApi.downloadToBrowser(artifactId, name).catch((error: unknown) => store.pushNotice({ type: 'notification', level: 'error', title: t('conv.artifact.downloadFailed'), body: error instanceof Error ? error.message : String(error) }))
+    void artifactsApi.downloadToBrowser(artifactId, name).catch((error: unknown) => pushNotice({ type: 'notification', level: 'error', title: t('conv.artifact.downloadFailed'), body: error instanceof Error ? error.message : String(error) }))
   }
 
   return (

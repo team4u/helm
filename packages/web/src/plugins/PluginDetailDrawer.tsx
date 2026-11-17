@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   extractPluginUsages,
   getPluginDescription,
@@ -10,7 +10,7 @@ import { DEFAULT_HELM_LOCALE, resolveLocalizedText } from '@helm/protocol/browse
 import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../lib/api.js'
 import { HelmIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Switch } from '@helm/plugin-client'
 import { createWebTranslator } from '../i18n/catalog.js'
-import { HelmStoreContext } from '../lib/store-context.js'
+import { useOptionalGroupedUi, useOptionalLocale, useOptionalStoreActions } from '../lib/store-context.js'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -265,10 +265,12 @@ export function PluginDetailDrawer({
   onRemoved,
   inline = false,
 }: PluginDetailDrawerProps): React.JSX.Element {
-  const store = useContext(HelmStoreContext)
+  const storeLocale = useOptionalLocale()
+  const groupedUi = useOptionalGroupedUi()
+  const actions = useOptionalStoreActions()
   // LocalizedText 显示元数据（插件名 / 配置字段 label / 设置面板 label）按
   // store 权威 locale 解析；保留无 Provider 的 SSR 渲染容忍（缺省英文桥接）。
-  const locale = store?.locale ?? DEFAULT_HELM_LOCALE
+  const locale = storeLocale ?? DEFAULT_HELM_LOCALE
   const t = useMemo(() => createWebTranslator(locale), [locale])
   const [config, setConfig] = useState<(PluginConfigResponse & { pluginId: string }) | null>(null)
   const [loadingConfig, setLoadingConfig] = useState(false)
@@ -353,7 +355,7 @@ export function PluginDetailDrawer({
             previous: result.previousVersion || t('plugins.package.unknownVersion'),
           })
         : t('plugins.package.unchangedBody', { version: versionLabel })
-      store?.pushNotice({
+      actions?.pushNotice({
         type: 'notification',
         level: 'info',
         title: t('plugins.package.updateNoticeTitle'),
@@ -377,7 +379,7 @@ export function PluginDetailDrawer({
     setActionError(null)
     try {
       await pluginsApi.remove(plugin.id)
-      store?.pushNotice({
+      actions?.pushNotice({
         type: 'notification',
         level: 'info',
         title: t('plugins.package.removeNoticeTitle'),
@@ -406,11 +408,11 @@ export function PluginDetailDrawer({
 
   const versionLabel = plugin?.version ? `v${plugin.version.replace(/^v/, '')}` : null
   const settingsPanels =
-    store?.groupedUi?.settingsPanels?.filter((p) => p.pluginId === plugin?.id) ?? []
-  // 已启用且有 Screen 贡献时提供快捷打开（主屏/右屏）；唯一导航机制 store.openTarget。
+    groupedUi?.settingsPanels?.filter((p) => p.pluginId === plugin?.id) ?? []
+  // 已启用且有 Screen 贡献时提供快捷打开（主屏/右屏）；唯一导航机制 openTarget。
   const pluginScreens =
-    plugin !== null && store !== null && plugin.enabled
-      ? listPluginScreens(store.groupedUi, plugin.id)
+    plugin !== null && groupedUi !== undefined && plugin.enabled
+      ? listPluginScreens(groupedUi, plugin.id)
       : []
   const primaryScreen = pluginScreens[0] ?? null
 
@@ -522,7 +524,7 @@ export function PluginDetailDrawer({
                     )}
                   </div>
                   <div className="plugin-drawer-screen-actions">
-                    {primaryScreen !== null && store !== null && (
+                    {primaryScreen !== null && actions !== null && (
                       <>
                         <button
                           type="button"
@@ -536,7 +538,7 @@ export function PluginDetailDrawer({
                               : t('plugins.drawer.openMainViewTitle')
                           }
                           onClick={() =>
-                            store.openTarget({
+                            actions.openTarget({
                               kind: 'screen',
                               pluginId: primaryScreen.pluginId,
                               screenId: primaryScreen.screenId,
@@ -551,7 +553,7 @@ export function PluginDetailDrawer({
                           className="btn btn-sm split-toggle-btn plugin-drawer-split-btn"
                           title={t('plugins.drawer.openSplitTitle')}
                           onClick={() =>
-                            store.openTarget(
+                            actions.openTarget(
                               {
                                 kind: 'screen',
                                 pluginId: primaryScreen.pluginId,

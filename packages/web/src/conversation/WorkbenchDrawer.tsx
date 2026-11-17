@@ -1,7 +1,15 @@
 import { useEffect, useId, useMemo, useState } from 'react'
 import type { ArtifactMetadata, ConversationSummary } from '@helm/protocol/browser'
 import { HelmIcon, Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Tabs, TabsList, TabsTrigger } from '@helm/plugin-client'
-import { useHelmStore } from '../lib/store-context.js'
+import {
+  useConversationArtifacts,
+  useConversationDetail,
+  useConversationSummary,
+  useLocationTargets,
+  useSseConnected,
+  useStoreActions,
+  useWorkbenchState,
+} from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { Tooltip } from '../ui/Tooltip.js'
@@ -135,9 +143,9 @@ function ArtifactCard({
 }
 
 function ArtifactsTab({ conversationId }: { conversationId: number }) {
-  const store = useHelmStore()
+  const rawArtifacts = useConversationArtifacts(conversationId)
+  const { setActiveModal, pushNotice } = useStoreActions()
   const { t } = useWebLocale()
-  const rawArtifacts = store.conversationArtifacts[conversationId]
   const artifacts = useMemo(() => (Array.isArray(rawArtifacts) ? rawArtifacts : []), [rawArtifacts])
   const { deliverables, spills } = useMemo(() => partitionArtifactsByKind(artifacts), [artifacts])
   const [spillExpanded, setSpillExpanded] = useState(false)
@@ -145,14 +153,14 @@ function ArtifactsTab({ conversationId }: { conversationId: number }) {
   const spillPanelId = useId()
 
   const handlePreview = (artifact: ArtifactMetadata) => {
-    store.setActiveModal({ kind: 'artifact-preview', artifactId: artifact.id, conversationId })
+    setActiveModal({ kind: 'artifact-preview', artifactId: artifact.id, conversationId })
   }
 
   const handleDownload = (artifact: ArtifactMetadata) => {
     setDownloadingId(artifact.id)
     void artifactsApi.downloadToBrowser(artifact.id, artifact.name)
       .catch((err) => {
-        store.pushNotice({
+        pushNotice({
           type: 'notification',
           level: 'error',
           title: t('conv.workbench.downloadFailed'),
@@ -241,28 +249,26 @@ export interface WorkbenchDrawerProps {
 /** 右侧工作台抽屉：内置产物页签 + 插件 workbench.panel（动态排序与角标）。 */
 export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
   const inline = props.inline ?? false
-  const store = useHelmStore()
+  const { primaryTarget, splitTarget } = useLocationTargets()
+  const sseConnected = useSseConnected()
+  const { workbenchTab } = useWorkbenchState()
+  const { setWorkbenchTab, setWorkbenchOpen } = useStoreActions()
   const { t } = useWebLocale()
   const conversationId =
     props.conversation?.id ??
     props.conversationId ??
-    (store.primaryTarget.kind === 'conversation'
-      ? store.primaryTarget.conversationId
-      : store.splitTarget?.kind === 'conversation'
-        ? store.splitTarget.conversationId
+    (primaryTarget.kind === 'conversation'
+      ? primaryTarget.conversationId
+      : splitTarget?.kind === 'conversation'
+        ? splitTarget.conversationId
         : undefined)
-  const conversation = useMemo(() => {
-    if (props.conversation !== undefined) return props.conversation
-    if (conversationId === undefined) return undefined
-    return (
-      store.conversations.find((c) => c.id === conversationId) ?? store.conversationDetails[conversationId]
-    )
-  }, [props.conversation, conversationId, store.conversations, store.conversationDetails])
+  const summary = useConversationSummary(props.conversation === undefined ? conversationId : undefined)
+  const detail = useConversationDetail(props.conversation === undefined ? conversationId : undefined)
+  const conversation = props.conversation ?? summary ?? detail
   const tabs = useWorkbenchTabs(conversationId, conversation)
-  const activeTab = resolveActiveWorkbenchTab(store.workbenchTab, tabs)
+  const activeTab = resolveActiveWorkbenchTab(workbenchTab, tabs)
   const activePanel = tabs.find((tab) => tab.id === activeTab && tab.pluginId !== undefined)
   const footerParts = buildWorkbenchFooter(tabs)
-  const { sseConnected, workbenchTab, setWorkbenchTab, setWorkbenchOpen } = store
   useEffect(() => {
     // 首帧 UI 贡献和会话尚未返回时保留深链；确认不可用后才规范化 URL。
     if (sseConnected && conversation !== undefined && activeTab !== workbenchTab) setWorkbenchTab(activeTab)
@@ -276,7 +282,7 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
             <DialogTitle style={{ display: 'none' }}>{t('conv.pane.workbench')}</DialogTitle>
             <Tabs
         value={activeTab}
-        onValueChange={(val) => store.setWorkbenchTab(val)}
+        onValueChange={(val) => setWorkbenchTab(val)}
         variant="underline"
         style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}
       >
@@ -304,7 +310,7 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
                 className="btn btn-ghost btn-icon-sm workbench-close-btn"
                 aria-label={t('conv.workbench.close')}
                 title={t('conv.workbench.close')}
-                onClick={() => store.setWorkbenchOpen(false)}
+                onClick={() => setWorkbenchOpen(false)}
               >
                 <HelmIcon name="x" size={14} />
               </button>

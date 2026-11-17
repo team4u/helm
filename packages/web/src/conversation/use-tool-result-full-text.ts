@@ -12,7 +12,7 @@
  */
 import { useCallback, useRef, useState } from 'react'
 import { conversationsApi } from '../lib/api.js'
-import { useHelmStore } from '../lib/store-context.js'
+import { useStoreActions } from '../lib/store-context.js'
 import type { ToolTrace } from './timeline-model.js'
 
 export type ToolResultFullTextPhase = 'preview' | 'loading' | 'failed' | 'complete'
@@ -41,7 +41,7 @@ function canonicalEntryId(value: string): number | undefined {
 }
 
 export function useToolResultFullText(tool: ToolTrace, conversationId: number): ToolResultFullTextState {
-  const store = useHelmStore()
+  const { backfillConversationEntry } = useStoreActions()
   const [phase, setPhase] = useState<ToolResultFullTextPhase>('preview')
   const [error, setError] = useState<string | undefined>(undefined)
   const inFlight = useRef(false)
@@ -51,7 +51,7 @@ export function useToolResultFullText(tool: ToolTrace, conversationId: number): 
     const truncation = tool.resultTruncation
     if (truncation === undefined) return
     const entryId = tool.resultEntryId
-    const backfill = store.backfillConversationEntry
+    const backfill = backfillConversationEntry
     if (entryId === undefined) {
       setPhase('failed')
       setError('Truncation marker missing entry location (resultEntryId); cannot fetch full text')
@@ -87,7 +87,7 @@ export function useToolResultFullText(tool: ToolTrace, conversationId: number): 
       .finally(() => {
         inFlight.current = false
       })
-  }, [conversationId, store, tool.resultTruncation, tool.resultEntryId])
+  }, [backfillConversationEntry, conversationId, tool.resultTruncation, tool.resultEntryId])
 
   return { phase, ...(error !== undefined ? { error } : {}), load }
 }

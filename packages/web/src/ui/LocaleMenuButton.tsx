@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { HelmIcon } from '@helm/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { useHelmStore } from '../lib/store-context.js'
+import { useStoreActions, useThemePreferencesState } from '../lib/store-context.js'
 import { resolveBrowserLocale } from '../lib/theme-preferences.js'
 import type { LocalePreference } from '../lib/types.js'
 import {
@@ -32,10 +32,11 @@ export function LocaleMenuButton({
   menuSide = 'right',
   menuAlign = 'end',
 }: LocaleMenuButtonProps): ReactNode {
-  const store = useHelmStore()
+  const { localePreference } = useThemePreferencesState()
+  const { setLocalePreference, setLocale } = useStoreActions()
   const { t } = useWebLocale()
   const [open, setOpen] = useState(false)
-  const pref = store.localePreference ?? 'auto'
+  const pref = localePreference ?? 'auto'
 
   const options: ReadonlyArray<{ value: LocalePreference; label: string }> = [
     { value: 'auto', label: t('shell.locale.auto') },
@@ -48,10 +49,10 @@ export function LocaleMenuButton({
   const tooltipText = `${triggerLabel} (${currentLabel})`
 
   const selectPreference = (next: LocalePreference): void => {
-    if (store.setLocalePreference) {
-      store.setLocalePreference(next)
+    if (setLocalePreference) {
+      setLocalePreference(next)
     } else {
-      store.setLocale(next === 'auto' ? resolveBrowserLocale() : next)
+      setLocale(next === 'auto' ? resolveBrowserLocale() : next)
     }
     setOpen(false)
   }

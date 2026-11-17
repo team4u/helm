@@ -6,7 +6,7 @@ import { SyntaxCode } from './SyntaxCode.js'
 import type { CodeLineRange } from './syntax-code-model.js'
 import { CopyButton, HelmIcon, markdownUrlTransform, parseArtifactUrl } from '@helm/plugin-client'
 import type { MarkdownViewProps } from '@helm/plugin-client'
-import { useHelmStore } from '../lib/store-context.js'
+import { useConversationSummary, useStoreActions } from '../lib/store-context.js'
 import { LazyMount } from '../ui/LazyMount.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { CodeBlockRenderer } from './CodeBlockRenderer.js'
@@ -152,14 +152,14 @@ interface ArtifactInlineMediaProps {
 }
 
 function ArtifactInlineMedia({ artifactId, conversationId, alt, title }: ArtifactInlineMediaProps): ReactNode {
-  const store = useHelmStore()
+  const { setActiveModal } = useStoreActions()
   const { t } = useWebLocale()
   const [media, setMedia] = useState<{ url: string; mime: string } | null>(null)
   const [loading, setLoading] = useState(true)
   const label = alt || title || t('conv.attachment.fallbackLabel')
 
   const openPreview = () => {
-    store.setActiveModal({
+    setActiveModal({
       kind: 'artifact-preview',
       artifactId,
       ...(conversationId !== undefined ? { conversationId } : {}),
@@ -210,14 +210,14 @@ interface WorkspaceInlineMediaProps {
 }
 
 function WorkspaceInlineMedia({ conversationId, fileRef, alt, title }: WorkspaceInlineMediaProps): ReactNode {
-  const store = useHelmStore()
+  const { setActiveModal } = useStoreActions()
   const { t } = useWebLocale()
   const [media, setMedia] = useState<{ url: string; mime: string } | null>(null)
   const [loading, setLoading] = useState(true)
   const label = alt || title || fileRef.path.split('/').pop() || t('conv.attachment.workspaceFileFallback')
 
   const openPreview = () => {
-    store.setActiveModal({
+    setActiveModal({
       kind: 'workspace-file',
       conversationId,
       path: fileRef.path,
@@ -338,13 +338,10 @@ export const MarkdownView = memo(function MarkdownView({
   streaming,
   workspaceBaseDir,
 }: MarkdownViewProps): ReactNode {
-  const store = useHelmStore()
-  const { setActiveModal } = store
+  const { setActiveModal } = useStoreActions()
+  const summary = useConversationSummary(conversationId)
   const { t } = useWebLocale()
-  const conversationCwd =
-    conversationId !== undefined
-      ? store.conversations?.find((c) => c.id === conversationId)?.cwd
-      : undefined
+  const conversationCwd = summary?.cwd
 
   // 渲染器函数身份必须稳定，否则每次流式文本更新都会重挂载既有代码块。
   const components = useMemo<Components>(() => ({

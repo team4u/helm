@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react'
 import { HelmIcon } from '@helm/plugin-client'
-import { useHelmStore } from '../lib/store-context.js'
+import { useLocationTargets, useNodes, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { WebMessageKey } from '../i18n/catalog.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
@@ -50,13 +50,14 @@ export function NodeCenter({
   onCloseSplit,
   inlineDrawer = false,
 }: NodeCenterProps): React.JSX.Element {
-  const store = useHelmStore()
+  const nodes = (useNodes() as NodeInfo[]) ?? []
+  const { primaryTarget, splitTarget } = useLocationTargets()
+  const { openTarget, closeSplit, refreshNodes } = useStoreActions()
   const { t } = useWebLocale()
   const [query, setQuery] = useState('')
   const [activeTab, setActiveTab] = useState<NodeCategoryTab>('all')
   const [isAddingNew, setIsAddingNew] = useState(false)
 
-  const nodes: NodeInfo[] = (store.nodes as NodeInfo[]) ?? []
   const categoryCounts = useMemo(() => buildNodeCategoryCounts(nodes), [nodes])
 
   const filteredNodes = useMemo(() => {
@@ -66,7 +67,7 @@ export function NodeCenter({
     })
   }, [nodes, query, activeTab])
 
-  const currentTarget = isSplit ? store.splitTarget : store.primaryTarget
+  const currentTarget = isSplit ? splitTarget : primaryTarget
   const selectedNodeId =
     currentTarget?.kind === 'nodes' ? currentTarget.nodeId : undefined
 
@@ -79,12 +80,12 @@ export function NodeCenter({
 
   const handleSelectNode = (nodeId: string) => {
     setIsAddingNew(false)
-    store.openTarget({ kind: 'nodes', nodeId }, isSplit ? { split: true } : undefined)
+    openTarget({ kind: 'nodes', nodeId }, isSplit ? { split: true } : undefined)
   }
 
   const handleCloseDrawer = () => {
     setIsAddingNew(false)
-    store.openTarget({ kind: 'nodes' }, isSplit ? { split: true } : undefined)
+    openTarget({ kind: 'nodes' }, isSplit ? { split: true } : undefined)
   }
 
   const handleOpenAddNew = () => {
@@ -96,11 +97,11 @@ export function NodeCenter({
       onCloseSplit?.()
       return
     }
-    if (store.splitTarget !== null) {
-      store.closeSplit()
+    if (splitTarget !== null) {
+      closeSplit()
       return
     }
-    store.openTarget({ kind: 'nodes', nodeId: selectedNodeId }, { split: true })
+    openTarget({ kind: 'nodes', nodeId: selectedNodeId }, { split: true })
   }
 
   return (
@@ -128,7 +129,7 @@ export function NodeCenter({
             <CloseSplitButton onCloseSplit={onCloseSplit} />
           ) : (
             <SplitToggleButton
-              isSplitActive={store.splitTarget !== null}
+              isSplitActive={splitTarget !== null}
               onToggleSplit={toggleSplit}
             />
           )}
@@ -225,7 +226,7 @@ export function NodeCenter({
         open={isDrawerOpen}
         isNew={isAddingNew}
         onClose={handleCloseDrawer}
-        onRefresh={store.refreshNodes}
+        onRefresh={refreshNodes}
         inline={inlineDrawer}
       />
     </div>

@@ -1,19 +1,21 @@
 import { useState, type FormEvent } from 'react'
 import { authApi } from '../lib/api.js'
 import { HelmIcon } from '@helm/plugin-client'
-import { useHelmStore } from '../lib/store-context.js'
+import { useAuthConnection, useStoreActions, useThemePreferencesState } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { LocaleMenuButton } from '../ui/LocaleMenuButton.js'
 
 export function AuthGate() {
-  const store = useHelmStore()
+  const { authConfigured } = useAuthConnection()
+  const { theme, themePreference } = useThemePreferencesState()
+  const { onAuthenticated, toggleTheme } = useStoreActions()
   const { t } = useWebLocale()
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const isSetup = !store.authConfigured
+  const isSetup = !authConfigured
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -31,7 +33,7 @@ export function AuthGate() {
       const res = isSetup
         ? await authApi.setup(password)
         : await authApi.login(password)
-      await store.onAuthenticated(res.token)
+      await onAuthenticated(res.token)
     } catch (err) {
       // err.message stays verbatim (server/execution text); only the generic fallback is locale copy.
       setError(err instanceof Error ? err.message : t('shell.auth.failed'))
@@ -62,22 +64,22 @@ export function AuthGate() {
             <button
               type="button"
               className="btn btn-ghost btn-icon-sm"
-              onClick={store.toggleTheme}
+              onClick={toggleTheme}
               title={
-                store.themePreference === 'system'
+                themePreference === 'system'
                   ? t('shell.auth.themeSystem', {
-                      current: t(store.theme === 'dark' ? 'shell.theme.currentDark' : 'shell.theme.currentLight'),
+                      current: t(theme === 'dark' ? 'shell.theme.currentDark' : 'shell.theme.currentLight'),
                     })
-                  : store.themePreference === 'light'
+                  : themePreference === 'light'
                     ? t('shell.auth.themeLight')
                     : t('shell.auth.themeDark')
               }
             >
               <HelmIcon
                 name={
-                  store.themePreference === 'system'
+                  themePreference === 'system'
                     ? 'monitor'
-                    : store.themePreference === 'light'
+                    : themePreference === 'light'
                       ? 'sun'
                       : 'moon'
                 }

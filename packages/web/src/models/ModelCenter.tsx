@@ -2,7 +2,13 @@ import React, { useEffect, useMemo, useState } from 'react'
 import type { ModelProviderSummary } from '@helm/protocol/browser'
 import { assetsApi } from '../lib/api.js'
 import { HelmIcon, Tabs, TabsContent, TabsList, TabsTrigger } from '@helm/plugin-client'
-import { useHelmStore } from '../lib/store-context.js'
+import {
+  useCredentials,
+  useLocationTargets,
+  useModels,
+  useProviders,
+  useStoreActions,
+} from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { ModelsCenterTab } from '../lib/types.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
@@ -57,7 +63,11 @@ export function ModelCenter({
   onSaveProvider,
   onTestConnection,
 }: ModelCenterProps): React.JSX.Element {
-  const store = useHelmStore()
+  const models = useModels()
+  const storeProviders = useProviders()
+  const credentials = useCredentials()
+  const { primaryTarget, splitTarget } = useLocationTargets()
+  const { openTarget, closeSplit, refreshAssets, pushNotice } = useStoreActions()
   const { t } = useWebLocale()
   const [query, setQuery] = useState('')
   const [statusTab, setStatusTab] = useState<ProviderFilterTab>('all')
@@ -95,7 +105,7 @@ export function ModelCenter({
     return () => {
       generation.cancelled = true
     }
-  }, [store.models, store.credentials])
+  }, [models, credentials])
 
   // Merge the mainstream presets with store credentials, gateways, the model
   // catalog and the full backend catalog (labels follow the active locale).
@@ -103,13 +113,13 @@ export function ModelCenter({
     if (customProviders) return sortProvidersConfiguredFirst(customProviders)
     return buildMergedProviders(
       buildDefaultProviders(t),
-      store.credentials,
-      store.providers,
-      store.models,
+      credentials,
+      storeProviders,
+      models,
       catalog,
       t,
     )
-  }, [customProviders, store.credentials, store.providers, store.models, catalog, t])
+  }, [customProviders, credentials, storeProviders, models, catalog, t])
 
   const statusCounts = useMemo(() => buildProviderCategoryCounts(providers), [providers])
 
@@ -120,9 +130,9 @@ export function ModelCenter({
 
   // Routing <-> drawer wiring: providerId and tab in both primary and split panes
   const currentTarget =
-    isSplit && store.splitTarget?.kind === 'models'
-      ? store.splitTarget
-      : store.primaryTarget
+    isSplit && splitTarget?.kind === 'models'
+      ? splitTarget
+      : primaryTarget
   const selectedProviderId =
     currentTarget.kind === 'models' ? currentTarget.providerId : undefined
   const centerTab: ModelsCenterTab = currentTarget.kind === 'models' ? currentTarget.tab ?? 'providers' : 'providers'
@@ -135,11 +145,11 @@ export function ModelCenter({
   const isDrawerOpen = Boolean(selectedProviderId && selectedProvider)
 
   const handleSelectProvider = (providerId: string) => {
-    store.openTarget({ kind: 'models', providerId }, isSplit ? { split: true } : undefined)
+    openTarget({ kind: 'models', providerId }, isSplit ? { split: true } : undefined)
   }
 
   const handleCloseDrawer = () => {
-    store.openTarget({ kind: 'models' }, isSplit ? { split: true } : undefined)
+    openTarget({ kind: 'models' }, isSplit ? { split: true } : undefined)
   }
 
   // Tab changes write back to the URL: entering "Global default" clears the
@@ -147,9 +157,9 @@ export function ModelCenter({
   const handleTabChange = (tab: string) => {
     if (tab === centerTab) return
     if (tab === 'defaults') {
-      store.openTarget({ kind: 'models', tab: 'defaults' }, isSplit ? { split: true } : undefined)
+      openTarget({ kind: 'models', tab: 'defaults' }, isSplit ? { split: true } : undefined)
     } else {
-      store.openTarget({ kind: 'models' }, isSplit ? { split: true } : undefined)
+      openTarget({ kind: 'models' }, isSplit ? { split: true } : undefined)
     }
   }
 
@@ -164,17 +174,17 @@ export function ModelCenter({
       ])
       if (Array.isArray(cat)) setCatalog(cat)
       if (def && typeof def === 'object') setDefaultModelInfo(def)
-      if (store.refreshAssets) {
-        await store.refreshAssets()
+      if (refreshAssets) {
+        await refreshAssets()
       }
-      store.pushNotice?.({
+      pushNotice?.({
         type: 'notification',
         level: 'info',
         title: t('models.notice.catalogRefreshed'),
         body: t('models.notice.catalogRefreshedBody'),
       })
     } catch (err) {
-      store.pushNotice?.({
+      pushNotice?.({
         type: 'notification',
         level: 'error',
         title: t('models.notice.catalogRefreshFailed'),
@@ -211,7 +221,7 @@ export function ModelCenter({
       // the plugin configuration, never written here — and never pretend to
       // have been saved.
       if (provider?.custom === true && data.baseUrl !== undefined && data.baseUrl !== '') {
-        const gateways = store.providers ?? []
+        const gateways = storeProviders ?? []
         const gateway = gateways.find((g) => g.id === providerId)
         if (gateway === undefined) {
           throw new Error(`Custom gateway ${providerId} not found in providers.json; cannot update the endpoint`)
@@ -228,17 +238,17 @@ export function ModelCenter({
         const disabledModels = data.models.filter((m) => !m.enabled).map((m) => m.id)
         await assetsApi.setModelFilter({ provider: providerId, disabledModels })
       }
-      store.pushNotice?.({
+      pushNotice?.({
         type: 'notification',
         level: 'info',
         title: t('models.notice.providerUpdated'),
         body: t('models.notice.providerUpdatedBody', { providerId }),
       })
-      if (store.refreshAssets) {
-        await store.refreshAssets()
+      if (refreshAssets) {
+        await refreshAssets()
       }
     } catch (err) {
-      store.pushNotice?.({
+      pushNotice?.({
         type: 'notification',
         level: 'error',
         title: t('models.notice.saveFailed'),
@@ -253,11 +263,11 @@ export function ModelCenter({
       onCloseSplit?.()
       return
     }
-    if (store.splitTarget !== null) {
-      store.closeSplit()
+    if (splitTarget !== null) {
+      closeSplit()
       return
     }
-    store.openTarget(
+    openTarget(
       { kind: 'models', providerId: selectedProviderId, tab: centerTab },
       { split: true },
     )
@@ -291,7 +301,7 @@ export function ModelCenter({
             <CloseSplitButton onCloseSplit={onCloseSplit} />
           ) : (
             <SplitToggleButton
-              isSplitActive={store.splitTarget !== null}
+              isSplitActive={splitTarget !== null}
               onToggleSplit={toggleSplit}
             />
           )}

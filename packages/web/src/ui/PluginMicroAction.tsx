@@ -14,7 +14,7 @@ import type { ReactNode } from 'react'
 import type { UiActionSpec } from '@helm/protocol/browser'
 import { resolveLocalizedText } from '@helm/protocol/browser'
 import { HelmIcon } from '@helm/plugin-client'
-import { useHelmStore } from '../lib/store-context.js'
+import { useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { QualifiedUiSpec } from '../lib/types.js'
 import { PluginUiView } from './PluginUiView.js'
@@ -46,7 +46,7 @@ export function PluginMicroAction({
   slotProps,
   onInvoked,
 }: PluginMicroActionProps): ReactNode {
-  const store = useHelmStore()
+  const { invokePluginAction, pushNotice } = useStoreActions()
   const { locale, t } = useWebLocale()
   const [pending, setPending] = useState(false)
   const spec = action.spec
@@ -70,21 +70,21 @@ export function PluginMicroAction({
     if (pending || spec.actionId === undefined) return
     setPending(true)
     try {
-      await store.invokePluginAction(
+      await invokePluginAction(
         microActionPluginId(spec, action.pluginId),
         spec.actionId,
         buildMicroActionInput(spec, { conversationId, entryId }),
         conversationId,
       )
       onInvoked?.()
-      store.pushNotice({
+      pushNotice({
         type: 'notification',
         level: 'info',
         title: t('conv.microAction.executed', { label }),
         conversationId,
       })
     } catch (err) {
-      store.pushNotice({
+      pushNotice({
         type: 'notification',
         level: 'error',
         title: t('conv.microAction.executionFailed', { label }),

@@ -109,7 +109,7 @@ const sidebarItems: Array<{ pluginId: string; spec: SidebarItemSpec }> = [
   },
 ]
 
-/** superagent 插件声明的分组（后台 Worker + 可折叠Archived）。 */
+/** superagent 插件声明的分组（后台 Worker + 可折叠归档）。 */
 const sidebarSections: Array<{ pluginId: string; spec: SidebarSectionSpec }> = [
   {
     pluginId: 'builtin:superagent',
@@ -1222,14 +1222,14 @@ test('Sidebar 双层导航：Activity Rail 空间切换与系统中心直达（S
   // Rail 结构：三空间切换 + 主题按钮均带 aria-label；系统中心入口收敛到设置空间列表
   assert.ok(html.includes('activity-rail'), '应渲染 Activity Rail 容器')
   assert.ok(html.includes('aria-label="Conversations space"'), '对话空间按钮')
-  assert.ok(html.includes('aria-label="Views space"'), 'Views space按钮')
+  assert.ok(html.includes('aria-label="Views space"'), '视图空间按钮')
   assert.ok(html.includes('aria-label="Settings space"'), '设置空间按钮')
   assert.ok(!html.includes('activity-rail-centers'), 'Rail 不再直接渲染系统中心图标')
   assert.ok(html.includes('aria-label="System"'), '主题按钮')
 
   // 默认对话空间：智能体分组在 Context Sidebar 内；视图/设置空间内容不渲染
   assert.ok(html.includes('agent-standing-group'), '对话空间渲染智能体分组')
-  assert.ok(!html.includes('>视图</div>'), '默认不渲染Views space分组')
+  assert.ok(!html.includes('>视图</div>'), '默认不渲染视图空间分组')
   assert.ok(!html.includes('settings-nav'), '默认不渲染设置空间分组')
 
   // 默认收起筛选栏：渲染筛选切换按钮与 Cmd-K 按钮，无多余常驻搜索输入
