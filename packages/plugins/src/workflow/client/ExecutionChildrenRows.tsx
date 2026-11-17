@@ -7,12 +7,10 @@
  */
 import { Fragment, useState } from 'react'
 import type { ReactNode } from 'react'
-import { formatDurationMs, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helm/plugin-client'
+import { StatusLight, formatDurationMs, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helm/plugin-client'
 import { useElapsedNowMs } from './hooks.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import {
-  EXECUTION_BADGE,
-  EXECUTION_ICON,
   execApprovalBadge,
   execCollapseChildrenLabel,
   EXEC_COLLAPSE_CHILDREN_TITLE,
@@ -22,7 +20,6 @@ import {
   execOpenConversationLabel,
   execOpenConversationTitle,
   executionStatusLabel,
-  SPIN,
 } from './copy.ts'
 import type { ExecutionNode } from './model-execution-tree.ts'
 import { executionNodeTitle, resolveExecutionNodeElapsedMs } from './model-execution-view.ts'
@@ -78,11 +75,15 @@ export function ExecutionChildrenRows({ nodes }: { nodes: ExecutionNode[] }): Re
                 ? {
                     role: 'button' as const,
                     tabIndex: 0,
-                    'aria-label': openConversation !== undefined
-                      ? execOpenConversationLabel(node.conversationId!, locale)
-                      : expanded
-                        ? execCollapseChildrenLabel(title, locale)
-                        : execExpandChildrenLabel(title, locale),
+                    'aria-label': [
+                      title,
+                      executionStatusLabel(aggregated.status, locale),
+                      openConversation !== undefined
+                        ? execOpenConversationLabel(node.conversationId!, locale)
+                        : expanded
+                          ? execCollapseChildrenLabel(title, locale)
+                          : execExpandChildrenLabel(title, locale),
+                    ].join(' — '),
                     ...(expandable ? { 'aria-expanded': expanded } : {}),
                   }
                 : {})}
@@ -114,11 +115,6 @@ export function ExecutionChildrenRows({ nodes }: { nodes: ExecutionNode[] }): Re
                   : undefined
               }
             >
-              <Icon
-                name={EXECUTION_ICON[aggregated.status] ?? 'circle'}
-                size={11}
-                className={aggregated.status === 'working' ? SPIN : undefined}
-              />
               {expandable ? (
                 <Icon
                   name={expanded ? 'chevron-down' : 'chevron-right'}
@@ -145,9 +141,7 @@ export function ExecutionChildrenRows({ nodes }: { nodes: ExecutionNode[] }): Re
                 {node.children.length > 0 ? (
                   <span className="execution-child-count tabular-nums">{`${aggregated.done}/${aggregated.total}`}</span>
                 ) : null}
-                <span className={`badge ${EXECUTION_BADGE[aggregated.status] ?? 'badge-neutral'}`}>
-                  {executionStatusLabel(aggregated.status, locale)}
-                </span>
+                <StatusLight status={aggregated.status} label={executionStatusLabel(aggregated.status, locale)} />
               </span>
             </div>
             {expanded ? <ExecutionChildrenRows nodes={node.children} /> : null}

@@ -165,6 +165,58 @@
   color: var(--err);
 }
 
+/* 统一状态灯（dot + 单条可见文字）：执行/状态卡主状态位。
+   复用 .status-dot 视觉词汇（navigation.css 定义 working/blocked/done/error/background），
+   这里补充 aborted 菱形（非灰色、与 blocked 实心圆区分）与 pending 空心中性环；
+   语义除颜色外还有形状（呼吸/空心/菱形）与可见文字，绝不只靠颜色表达。 */
+.helm-status-light {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  flex-shrink: 0;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--fg-secondary);
+  vertical-align: middle;
+}
+.helm-status-light .status-dot {
+  width: 8px;
+  height: 8px;
+}
+.helm-status-light-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.helm-status-light-working .helm-status-light-label { color: var(--accent); }
+.helm-status-light-blocked .helm-status-light-label { color: var(--warn); }
+.helm-status-light-done .helm-status-light-label { color: var(--ok); }
+.helm-status-light-failed .helm-status-light-label { color: var(--err); }
+.helm-status-light-aborted .helm-status-light-label { color: var(--warn); }
+
+/* 已中止：空心菱形（warn 描边），不是普通灰点 */
+.status-dot-aborted {
+  background: transparent;
+  border: 1.5px solid var(--warn);
+  box-sizing: border-box;
+  border-radius: 1.5px;
+  transform: rotate(45deg);
+  box-shadow: none;
+}
+
+/* 未开始/跳过/未知：空心中性环（诚实的中性，不伪造结论） */
+.status-dot-pending {
+  background: transparent;
+  border: 1.5px solid var(--fg-muted);
+  box-sizing: border-box;
+  box-shadow: none;
+}
+
 /* 1px 发丝分隔列表 */
 .list {
   border: 1px solid var(--border);

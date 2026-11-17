@@ -671,13 +671,13 @@ test('SSR：run 主徽章同源有效状态——run 已完成但子任务仍在
     doc,
     [conv11, conv21],
   )
-  assert.match(toolHtml, /badge-accent[^>]*>Running/, '时间线单行主徽章同源不得假完成')
+  assert.match(toolHtml, /helm-status-light-working[\s\S]*?status-dot-working[\s\S]*?Running/, '时间线单行主状态灯同源不得假完成')
   assert.ok(!toolHtml.includes('>Completed<'), '时间线单行不得假完成')
 
   const html = await renderWorkflowWorkbench(doc, [conv11, conv21])
   assert.ok(html.includes('Self: Completed'), '工作台卡自身终态应另标清楚')
   assert.ok(!/>Completed</.test(html), '不得以孤立的「Completed」作为主徽章假完成')
-  assert.match(html, /badge-accent[^>]*>Running/, '主徽章应为同源有效状态（子任务仍在执行）')
+  assert.match(html, /helm-status-light-working[\s\S]*?Running/, '主状态灯应为同源有效状态（子任务仍在执行）')
   assert.ok(html.includes('Subtree 0/2'), '子树计数如实展示未完成（深层后台子任务计入）')
 })
 

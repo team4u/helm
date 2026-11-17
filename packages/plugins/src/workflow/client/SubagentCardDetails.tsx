@@ -9,7 +9,7 @@
  */
 import { useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { formatCompactTimestamp, resolveLocalizedText, usePluginContext, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
+import { StatusLight, formatCompactTimestamp, resolveLocalizedText, usePluginContext, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { Icon } from './WorkflowIcon.tsx'
 import { buildWorktreeSelector } from './model-worktree.ts'
@@ -42,10 +42,8 @@ import {
   approvalsTitle,
   BADGE_CACHED,
   cardSubagentHeading,
-  EXECUTION_BADGE,
   executionStatusLabel,
   runCardSelfStateTitle,
-  selfAggregateTitle,
   selfStatusLabel,
   SPIN,
   subtreeBadge,
@@ -69,16 +67,12 @@ export function SubagentCardHeading(props: {
   statSegments: string[]
   elapsedText: string | undefined
 }): ReactNode {
-  const { childConversationId, profileId, taskTitle, worktree, detailError, effectiveStatus, selfBadge, descendants, approvals, statSegments, elapsedText } = props
+  const { childConversationId, profileId, taskTitle, worktree, effectiveStatus, selfBadge, descendants, approvals, statSegments, elapsedText } = props
   const locale = usePluginLocale()
   const primaryTitle = taskTitle ?? cardSubagentHeading(childConversationId, locale)
   return (
     <>
-      <Icon
-        name={detailError !== undefined ? 'x' : effectiveStatus === 'working' ? 'loader' : effectiveStatus === 'error' ? 'x' : 'bot'}
-        size={13}
-        className={effectiveStatus === 'working' && detailError === undefined ? SPIN : undefined}
-      />
+      <Icon name="bot" size={13} />
       <span className="subagent-live-title" title={primaryTitle}>
         <span className="subagent-live-title-text">{primaryTitle}</span>
         {taskTitle !== undefined ? (
@@ -97,23 +91,14 @@ export function SubagentCardHeading(props: {
       {props.cached === true ? <span className="badge badge-warn">{resolveLocalizedText(BADGE_CACHED, locale)}</span> : null}
       {effectiveStatus !== selfBadge.status ? (
         <>
-          <span
-            className={`badge ${EXECUTION_BADGE[effectiveStatus] ?? 'badge-neutral'}`}
-            title={
-              [
-                selfAggregateTitle(selfBadge.label, executionStatusLabel(effectiveStatus, locale), locale),
-                approvals.length > 0 ? approvalsTitle(approvals.map((item) => item.text), locale) : undefined,
-              ]
-                .filter(Boolean)
-                .join('\n')
-            }
-          >
-            {executionStatusLabel(effectiveStatus, locale)}
-          </span>
+          <StatusLight
+            status={effectiveStatus}
+            label={executionStatusLabel(effectiveStatus, locale)}
+          />
           <span className="badge badge-neutral" title={runCardSelfStateTitle(selfBadge.label, locale)}>{selfStatusLabel(selfBadge.label, locale)}</span>
         </>
       ) : (
-        <span className={`badge ${selfBadge.badge}`}>{selfBadge.label}</span>
+        <StatusLight status={selfBadge.status} label={selfBadge.label} />
       )}
       {descendants.total > 0 ? (
         <span

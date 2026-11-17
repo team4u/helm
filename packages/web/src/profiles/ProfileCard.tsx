@@ -8,7 +8,7 @@ import {
   resolveEffectiveProfileModel,
   summarizeProfileActivity,
 } from './profile-center-model.js'
-import { HelmIcon } from '@helm/plugin-client'
+import { HelmIcon, StatusLight } from '@helm/plugin-client'
 import {
   useOptionalConversations,
   useOptionalDefaultModelInfo,
@@ -27,14 +27,18 @@ export interface ProfileCardProps {
   onStartChat?: () => void
 }
 
-const ACTIVITY_BADGE_CLASS = {
-  working: 'badge badge-ok',
-  blocked: 'badge badge-warn',
-  error: 'badge badge-err',
-  'plugin-disabled': 'badge badge-warn',
-  active: 'badge badge-accent',
-  idle: 'badge badge-neutral',
-} as const
+/** Activity state → StatusLight status word (tone shapes + visible label carry the semantics). */
+const ACTIVITY_LIGHT_STATUS: Record<
+  'working' | 'blocked' | 'error' | 'plugin-disabled' | 'active' | 'idle',
+  string
+> = {
+  working: 'working',
+  blocked: 'blocked',
+  error: 'failed',
+  'plugin-disabled': 'blocked',
+  active: 'active',
+  idle: 'idle',
+}
 
 /**
  * Agent profile card:
@@ -131,12 +135,11 @@ export function ProfileCard({
                 <span>{t('profiles.card.systemPill')}</span>
               </span>
             )}
-            <span
-              className={`${ACTIVITY_BADGE_CLASS[activity.stateKind]} tabular-nums`}
-              title={t('profiles.card.activityTitle', { label: activity.stateLabel })}
-            >
-              {activity.stateLabel}
-            </span>
+            <StatusLight
+              status={ACTIVITY_LIGHT_STATUS[activity.stateKind]}
+              label={activity.stateLabel}
+              className="primary-card-activity tabular-nums"
+            />
           </div>
           <span className="mono text-subtle break-word">{profile.id}</span>
         </div>

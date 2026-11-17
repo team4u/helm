@@ -65,6 +65,10 @@ export { Popover, PopoverPortal, PopoverRoot, PopoverTrigger, PopoverAnchor, Pop
 export { OverlayLayerContext, useOverlayChildStyle, useOverlayLayer } from './ui/overlay-stack.js'
 export type { OverlayLayer } from './ui/overlay-stack.js'
 export { ViewBoundary } from './ui/ViewBoundary.js'
+export { StatusLight } from './ui/StatusLight.js'
+export type { StatusLightProps } from './ui/StatusLight.js'
+export { normalizeStatusLightTone, statusLightDotClass } from './ui/status-light-model.js'
+export type { StatusLightTone } from './ui/status-light-model.js'
 
 // ---- Lightweight layout primitives and hints ----
 export { Screen, ScreenSection, DataTable, KvGrid } from './primitives.js'

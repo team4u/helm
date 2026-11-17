@@ -20,20 +20,8 @@ const t3 = <A, B, C>(fn: (a: A, b: B, c: C) => LocalizedText) => (a: A, b: B, c:
 // ---------------------------------------------------------------------------
 
 export const SPIN = 'spin-slow'
-export const RUN_BADGE: Record<string, string> = {
-  running: 'badge-accent', completed: 'badge-ok', failed: 'badge-err', aborted: 'badge-warn',
-}
-export const NODE_BADGE: Record<string, string> = {
-  pending: 'badge-neutral', running: 'badge-accent', done: 'badge-ok', failed: 'badge-err', skipped: 'badge-neutral',
-}
 export const PHASE_ICON: Record<WorkflowPhaseSection['status'], string> = {
   pending: 'circle', running: 'loader', done: 'check', failed: 'x',
-}
-export const EXECUTION_BADGE: Record<string, string> = {
-  blocked: 'badge-warn', error: 'badge-err', working: 'badge-accent', done: 'badge-ok', pending: 'badge-neutral',
-}
-export const EXECUTION_ICON: Record<string, string> = {
-  blocked: 'clock', error: 'x', working: 'loader', done: 'check', pending: 'circle',
 }
 
 // ---------------------------------------------------------------------------
@@ -409,7 +397,6 @@ export const libMetadataError = t1((error: string) => L(`Metadata validation fai
 export const LIB_CARD_NO_DESCRIPTION = L('No description', '无描述')
 export const libPhases = t2((count: number, titles: string) => L(`${count} phases: ${titles}`, `${count} 阶段：${titles}`))
 export const libDefinitionFileTitle = t1((path: string) => L(`Definition file: ${path}`, `定义文件：${path}`))
-export const LIB_CARD_VIEW_DETAILS = L('View details', '查看详情')
 export const LIB_METADATA_BADGE = L('Metadata error', '元数据异常')
 export const LIB_KV_DESCRIPTION = L('Description', '描述')
 export const LIB_KV_WHEN_TO_USE = L('When to use', '适用场景')
@@ -615,10 +602,22 @@ export function trayCount(blocked: number, running: number, active: number, loca
 export const TRAY_REGION_ARIA = L('In-flight orchestration tasks', '在途编排任务')
 export const TRAY_COLLAPSE = L('Collapse', '收起')
 export const TRAY_EXPAND = L('Expand', '展开')
+export function trayToggleLabel(expanded: boolean, countText: string, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+  return resolveLocalizedText(
+    L(
+      `${expanded ? 'Collapse' : 'Expand'} in-flight tasks — ${countText}`,
+      `${expanded ? '收起' : '展开'}在途任务 — ${countText}`,
+    ),
+    locale,
+  )
+}
 export const TRAY_WORKBENCH = L('Workbench', '工作台')
-export const TRAY_VIEW = L('View', '查看')
-export const TRAY_DETAILS = L('Details', '详情')
-export const TRAY_ABORT = L('Abort', '中止')
+export function trayRowOpenConversationLabel(id: number, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+  return resolveLocalizedText(L(`Open conversation #${id} drawer`, `打开会话 #${id} 抽屉`), locale)
+}
+export function trayRowOpenRunLabel(runId: string, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+  return resolveLocalizedText(L(`Open run ${runId} in workbench`, `在工作台打开运行 ${runId}`), locale)
+}
 export function trayActionFailed(action: 'abort' | 'detach', err: string, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
   const label = resolveLocalizedText(action === 'abort' ? ACTION_ABORT : ACTION_DETACH, locale)
   return resolveLocalizedText(L(`${label} failed: ${err}`, `${label}失败：${err}`), locale)

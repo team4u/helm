@@ -20,6 +20,8 @@ import { renderToString } from 'react-dom/server'
 import { PLUGIN_CLIENT_SHARED_EXPORTS } from '@helm/protocol'
 import * as HelmPluginClient from '../src/index.js'
 import { Screen, ScreenSection, DataTable, KvGrid } from '../src/primitives.js'
+import { StatusLight } from '../src/ui/StatusLight.js'
+import { normalizeStatusLightTone, statusLightDotClass } from '../src/ui/status-light-model.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -194,4 +196,49 @@ test('KvGrid: items render as paired kv-grid direct children by key/value', { ti
   assert.match(html, /kv-val/)
   assert.match(html, /Cron jobs/)
   assert.match(html, /Webhook endpoints/)
+})
+
+// ---------------------------------------------------------------------------
+// StatusLight: unified status light (dot + one visible label)
+// ---------------------------------------------------------------------------
+
+test('StatusLight: renders one dot + one visible label, tone classes follow the raw status word', { timeout: 60_000 }, () => {
+  const html = renderToString(e(StatusLight, { status: 'running', label: 'Running' }))
+  assert.match(html, /helm-status-light helm-status-light-working/)
+  assert.match(html, /status-dot status-dot-working/)
+  assert.match(html, /helm-status-light-label/)
+  assert.match(html, /Running/)
+  // Exactly one dot, exactly one label (no duplicated status text).
+  assert.equal((html.match(/status-dot /g) ?? []).length, 1)
+  assert.equal((html.match(/helm-status-light-label/g) ?? []).length, 1)
+})
+
+test('StatusLight: settled and neutral tones map honestly (completed/aborted/skipped/offline/unknown)', { timeout: 60_000 }, () => {
+  assert.match(renderToString(e(StatusLight, { status: 'completed' })), /helm-status-light-done/)
+  assert.match(renderToString(e(StatusLight, { status: 'error' })), /status-dot-error/)
+  // Aborted is NOT the plain gray idle dot: it keeps the dedicated diamond class.
+  const aborted = renderToString(e(StatusLight, { status: 'aborted', label: 'Aborted' }))
+  assert.match(aborted, /status-dot-aborted/)
+  assert.doesNotMatch(aborted, /helm-status-light-idle/)
+  assert.match(renderToString(e(StatusLight, { status: 'skipped' })), /status-dot-pending/)
+  assert.match(renderToString(e(StatusLight, { status: 'offline' })), /helm-status-light-idle/)
+  // Unknown statuses never fabricate a done/failed verdict.
+  assert.match(renderToString(e(StatusLight, { status: 'weird-state' })), /helm-status-light-pending/)
+})
+
+test('StatusLight: dot-only renders without a label node; extra className is appended', { timeout: 60_000 }, () => {
+  const html = renderToString(e(StatusLight, { status: 'blocked', className: 'tray-status' }))
+  assert.match(html, /helm-status-light helm-status-light-blocked tray-status/)
+  assert.match(html, /status-dot status-dot-blocked/)
+  assert.doesNotMatch(html, /helm-status-light-label/)
+  assert.equal(typeof normalizeStatusLightTone, 'function')
+  assert.equal(statusLightDotClass('failed'), 'status-dot status-dot-error')
+})
+
+test('normalizeStatusLightTone: alias families collapse into the seven honest tones', { timeout: 60_000 }, () => {
+  assert.equal(normalizeStatusLightTone('RUNNING'), 'working')
+  assert.equal(normalizeStatusLightTone('superseded'), 'aborted')
+  assert.equal(normalizeStatusLightTone('queued'), 'pending')
+  assert.equal(normalizeStatusLightTone(undefined), 'pending')
+  assert.equal(normalizeStatusLightTone(''), 'pending')
 })

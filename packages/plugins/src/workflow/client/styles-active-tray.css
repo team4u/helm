@@ -26,6 +26,26 @@
   color: var(--fg-secondary);
 }
 
+/* 整条横栏即展开/收起开关（无独立展开按钮）：悬停与键盘焦点给出行级可点击暗示 */
+.workflow-active-tray-bar-toggle {
+  cursor: pointer;
+  user-select: none;
+}
+
+.workflow-active-tray-bar-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.workflow-active-tray-bar-toggle:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: -1.5px;
+}
+
+.workflow-active-tray-chevron {
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
 .workflow-active-tray-left {
   display: flex;
   align-items: center;
@@ -36,14 +56,6 @@
 
 .workflow-active-tray-left > svg {
   flex-shrink: 0;
-}
-
-.workflow-tray-icon-accent {
-  color: var(--accent);
-}
-
-.workflow-tray-icon-warn {
-  color: var(--warn);
 }
 
 .workflow-active-tray-frontline {
@@ -87,6 +99,19 @@
   font-size: 12px;
   border-bottom: 1px solid var(--border);
   min-width: 0;
+}
+
+.workflow-active-tray-row-clickable {
+  cursor: pointer;
+}
+
+.workflow-active-tray-row-clickable:hover {
+  background: var(--bg-hover);
+}
+
+.workflow-active-tray-row-clickable:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: -1.5px;
 }
 
 .workflow-active-tray-row:last-child {

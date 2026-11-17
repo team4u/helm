@@ -501,7 +501,8 @@ test('resume 正在运行时：历史失败调用保留异常状态，只有最�
   assert.equal(historicalRow.includes('spin-slow'), false, '历史失败行不能随后续 resume 转圈')
   const activeRows = html.match(/<button[^>]*class="trace-row workflow-trace-row-btn"[\s\S]*?<\/button>/g) ?? []
   assert.equal(activeRows.length, 1, '最新调用单行不应标错')
-  assert.match(activeRows[0]!, /spin-slow[\s\S]*?Running/)
+  assert.match(activeRows[0]!, /helm-status-light-working[\s\S]*?status-dot-working[\s\S]*?Running/)
+  assert.equal(activeRows[0]!.includes('spin-slow'), false, '主状态不再用 spinner')
   assert.equal(activeRows[0]!.includes('Resumed below'), false)
 })
 

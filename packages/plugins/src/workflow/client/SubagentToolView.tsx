@@ -12,6 +12,7 @@ import type { ReactNode } from 'react'
 import type { ToolViewProps } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import {
+  StatusLight,
   formatDurationMs,
   resolveLocalizedText,
   useConversation,
@@ -40,7 +41,6 @@ import type { SubagentBadge } from './models.ts'
 import { requestWorkbenchRunFocus } from './workbench-focus.ts'
 import {
   SNIPPET_AWAITING_APPROVAL,
-  SPIN,
   TRACE_COLLAPSE_DETAILS,
   TRACE_EXPAND_DETAILS,
   TRACE_EXTERNAL_TOOL_NAME,
@@ -299,11 +299,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
         onClick={handleActivate}
       >
         <span className="trace-row-left">
-          <Icon
-            name={isError ? 'alert-circle' : hasPendingAsk ? 'clock' : isWorking ? 'loader' : 'bot'}
-            size={12}
-            className={isWorking ? SPIN : undefined}
-          />
+          <Icon name="bot" size={12} />
           <span className="trace-tool-name" title={primaryName}>{primaryName}</span>
           {idTag !== undefined ? (
             <span className="workflow-trace-id tabular-nums">{idTag}</span>
@@ -330,7 +326,10 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
               {worktreeBranch}
             </span>
           ) : null}
-          <span className={`badge workflow-trace-badge ${badge.badge}`}>{badge.label}</span>
+          <StatusLight
+            status={badge.status}
+            label={badge.label}
+          />
           {elapsedMs !== undefined ? <span className="trace-duration tabular-nums">{formatDurationMs(elapsedMs)}</span> : null}
           <Icon
             name={canOpenChildDrawer ? 'external-link' : canOpenWorkbenchRun ? 'chevron-right' : detailsOpen ? 'chevron-down' : 'chevron-right'}

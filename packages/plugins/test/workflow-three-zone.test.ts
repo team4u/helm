@@ -314,17 +314,18 @@ describe('Workflow 三区零重复与无损呈现', () => {
     try {
       // 1. 存在 subagent WorkflowRun 时展示 32px HUD 且可打开子会话抽屉；无 WorkflowRun 的人类分叉 #99 绝不混入
       assert.ok(mounted.container.querySelector('.workflow-active-tray-bar') !== null, '有在途子会话时应渲染 32px HUD')
-      const initToggle = mounted.container.querySelector('button[aria-expanded]') as HTMLButtonElement
+      const initToggle = mounted.container.querySelector('.workflow-active-tray-bar[aria-expanded]') as HTMLElement
       act(() => {
         initToggle.click()
       })
       assert.equal(mounted.container.textContent?.includes('人类分叉分支'), false, '无 WorkflowRun 的分叉会话不得混入活动托盘')
-      const viewChildBtn = [...mounted.container.querySelectorAll('.workflow-active-tray-list button')].find((b) =>
-        b.textContent?.includes('View'),
-      )
-      assert.ok(viewChildBtn !== undefined, '独立在途子会话行应有查看按钮')
+      const childRow = [...mounted.container.querySelectorAll('.workflow-active-tray-row')].find((r) =>
+        (r.textContent ?? '').includes('执行测试子会话'),
+      ) as HTMLElement | undefined
+      assert.ok(childRow !== undefined, '独立在途子会话应渲染为行')
+      assert.equal(childRow.getAttribute('role'), 'button', '整行即详情入口（不再有独立查看按钮）')
       act(() => {
-        ;(viewChildBtn as HTMLButtonElement).click()
+        childRow.click()
       })
       assert.equal(harness.log.drawers.at(-1), 11)
       act(() => {
@@ -344,9 +345,10 @@ describe('Workflow 三区零重复与无损呈现', () => {
       assert.ok(trayBar !== null, '运行中工作流应显示托盘栏')
       assert.ok(mounted.container.textContent?.includes('1/2'), '应展示进度计数 1/2')
 
-      // 点击展开托盘列表
-      const toggleBtn = mounted.container.querySelector('button[aria-expanded]') as HTMLButtonElement | null
-      assert.ok(toggleBtn !== null, '应有展开托盘列表按钮')
+      // 整条横栏点击展开托盘列表（无独立展开按钮）
+      const toggleBtn = mounted.container.querySelector('.workflow-active-tray-bar[aria-expanded]') as HTMLElement | null
+      assert.ok(toggleBtn !== null, '横栏本身即展开开关')
+      assert.equal(toggleBtn.getAttribute('role'), 'button')
       assert.equal(toggleBtn.getAttribute('aria-expanded'), 'false')
       act(() => {
         toggleBtn.click()
@@ -375,10 +377,13 @@ describe('Workflow 三区零重复与无损呈现', () => {
       assert.ok(harness.log.workbenchTabs.includes('plugin:builtin:workflow/tasks'))
       assert.equal(harness.log.workbenchOpens.at(-1), true)
 
-      const detailBtn = [...list.querySelectorAll('button')].find((b) => b.textContent?.includes('Details'))
-      assert.ok(detailBtn !== undefined, '工作流在途行应有详情定位按钮')
+      // 工作流在途行整行点击定位工作台（不再有独立 Details 按钮）
+      const wfRow = [...list.querySelectorAll('.workflow-active-tray-row')].find((r) =>
+        (r.textContent ?? '').includes('构建与测试流水线'),
+      ) as HTMLElement | undefined
+      assert.ok(wfRow !== undefined, '工作流在途行存在')
       act(() => {
-        detailBtn.click()
+        wfRow!.click()
       })
       assert.equal(harness.log.workbenchTabs.at(-1), 'plugin:builtin:workflow/tasks')
 

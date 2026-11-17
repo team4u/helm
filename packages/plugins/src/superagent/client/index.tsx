@@ -37,6 +37,7 @@ import type {
   ToolViewProps,
 } from '@helm/protocol'
 import {
+  StatusLight,
   formatTime,
   Switch,
   useConversations,
@@ -50,7 +51,6 @@ import {
   dispatchedWorkerId,
   dispatchInput,
   outcomeLabel,
-  outcomeTone,
   parseRecallNodes,
   parseRouterMode,
   parseSubscriptions,
@@ -336,17 +336,21 @@ export function SuperAgentDispatchToolView(props: ToolViewProps): ReactNode {
         <span>{t(SA_DISPATCH_TITLE)}</span>
       </div>
       {props.status === 'running' ? (
-        <div className="loading-state" role="status">
-          <Loader2 size={12} className="spin-slow" />
-          <span>{t(SA_DISPATCHING)}</span>
+        <div className="sa-widget-muted">
+          <StatusLight status="running" label={t(SA_DISPATCHING)} />
         </div>
       ) : (
         <div className="sa-widget-muted">
-          {resultWorkerId !== undefined
-            ? saDispatchedWorker(resultWorkerId, locale)
-            : props.status === 'error'
-              ? t(SA_DISPATCH_FAILED)
-              : t(SA_DISPATCH_DONE)}
+          <StatusLight
+            status={resultWorkerId !== undefined ? 'done' : props.status === 'error' ? 'failed' : 'done'}
+            label={
+              resultWorkerId !== undefined
+                ? saDispatchedWorker(resultWorkerId, locale)
+                : props.status === 'error'
+                  ? t(SA_DISPATCH_FAILED)
+                  : t(SA_DISPATCH_DONE)
+            }
+          />
           {input.profileId !== undefined ? ` · Profile ${input.profileId}` : ''}
           {input.threadKey !== undefined ? ` · threadKey ${input.threadKey}` : ''}
         </div>
@@ -410,20 +414,17 @@ export function SuperAgentWorkerReportCard(props: TimelineRendererProps): ReactN
   const t = usePluginTranslator()
   const locale = usePluginLocale()
   const meta = workerReportMeta(props)
-  const tone = outcomeTone(meta.outcome)
 
   return (
     <div className="sa-report">
       <div className="sa-report-header">
-        <span className={`badge badge-${tone === 'neutral' ? 'accent' : tone}`}>
+        <span className="badge badge-neutral">
           <Bot size={11} strokeWidth={1.75} />
           <span>{t(SA_WORKER_REPORT)}</span>
         </span>
         {meta.profileId !== undefined ? <span className="badge badge-neutral">{meta.profileId}</span> : null}
         {meta.outcome !== undefined ? (
-          <span className={`badge badge-${tone}`}>
-            <span>{outcomeLabel(meta.outcome, locale)}</span>
-          </span>
+          <StatusLight status={meta.outcome} label={outcomeLabel(meta.outcome, locale)} />
         ) : null}
       </div>
       <div className="sa-report-summary">{meta.summary ?? ''}</div>
@@ -513,9 +514,7 @@ export function SuperAgentRecallScreen(props: ScreenProps): ReactNode {
                     <ConversationCell conversationId={n.conversationId} conversationsById={conversationsById} />
                     <td>{n.profileId}</td>
                     <td>
-                      <span className={`badge badge-${outcomeTone(n.outcome)}`}>
-                        <span>{outcomeLabel(n.outcome, locale)}</span>
-                      </span>
+                      <StatusLight status={n.outcome ?? 'unknown'} label={outcomeLabel(n.outcome, locale)} />
                     </td>
                     <td className="sa-summary-cell">{n.summary}</td>
                     <td className="cell-actions">

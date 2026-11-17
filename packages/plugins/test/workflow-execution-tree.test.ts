@@ -839,7 +839,7 @@ test('工作台父卡渲染子树徽章 / 前线摘要 / 下一级紧凑子项�
     assert.ok(row.textContent!.indexOf('确认删除文件') < row.textContent!.indexOf('#21'), '子项名称应排在 #21 之前')
     assert.match(row.textContent!, /Awaiting approval/)
     assert.match(row.textContent!, /0\/2/, '紧凑子项应携带子树完成计数')
-    assert.equal(row.getAttribute('aria-label'), 'Open conversation #21 drawer')
+    assert.equal(row.getAttribute('aria-label')?.endsWith('Open conversation #21 drawer'), true, '行 aria-label 含真实抽屉入口语义')
     act(() => {
       row.click()
     })
@@ -956,11 +956,14 @@ test('主徽章同源有效状态：父 idle + 后代 blocked/working 不显示�
     const trigger = host.querySelector('.subagent-live-trigger')!
     assert.ok(trigger !== null)
     const badgeTexts = Array.from(trigger.querySelectorAll('.badge')).map((b) => b.textContent ?? '')
-    assert.ok(badgeTexts.includes('Awaiting approval'), `主徽章应为同源有效状态（Awaiting approval），实际：${badgeTexts.join('|')}`)
+    const lightTexts = Array.from(trigger.querySelectorAll('.helm-status-light')).map((l) => l.textContent ?? '')
+    const allTexts = [...badgeTexts, ...lightTexts]
+    assert.ok(lightTexts.includes('Awaiting approval'), `主状态灯应为同源有效状态（Awaiting approval），实际：${allTexts.join('|')}`)
     assert.ok(badgeTexts.includes('Self: Done'), '自身终态应另标清楚')
-    assert.ok(!badgeTexts.includes('Done'), '不得以孤立的「Done」作为主徽章假完成')
+    assert.ok(!badgeTexts.includes('Done'), '不得以孤立的「Done」徽章假完成')
+    assert.ok(trigger.querySelector('.helm-status-light-blocked .status-dot-blocked') !== null, 'blocked 为实心 warn 灯')
     const warnBadge = trigger.querySelector('.badge-warn') as HTMLElement
-    assert.match(warnBadge.getAttribute('title') ?? '', /确认删除文件 \(#5\) awaiting approval/, '有效状态徽章 title 应含后代审批摘要')
+    assert.match(warnBadge.getAttribute('title') ?? '', /确认删除文件 \(#5\) awaiting approval/, '后代审批徽章 title 应含审批摘要')
   } finally {
     unmount()
   }
@@ -983,8 +986,9 @@ test('自身 AskDoc 有单即等待审批（pendingAskCount>0，status 仍 worki
   try {
     const trigger = host.querySelector('.subagent-live-trigger')!
     const badgeTexts = Array.from(trigger.querySelectorAll('.badge')).map((b) => b.textContent ?? '')
-    assert.ok(badgeTexts.includes('Awaiting approval'), `AskDoc 有单即等待审批，实际：${badgeTexts.join('|')}`)
-    assert.ok(!badgeTexts.includes('Running'), '有单不得仍显示执行中')
+    const lightTexts = Array.from(trigger.querySelectorAll('.helm-status-light')).map((l) => l.textContent ?? '')
+    assert.ok(lightTexts.includes('Awaiting approval'), `AskDoc 有单即等待审批，实际：${[...badgeTexts, ...lightTexts].join('|')}`)
+    assert.ok(!lightTexts.includes('Running'), '有单不得仍显示执行中')
   } finally {
     unmount()
   }
@@ -1033,8 +1037,9 @@ test('紧凑子项：深层 workflow / external run 行原位展开直系子项�
     assert.ok(dslRow !== undefined && extRow !== undefined)
     for (const row of [dslRow, extRow]) {
       assert.ok(row.querySelector('.execution-child-id') === null, '无会话 run 行不得伪造 #id 前缀')
-      assert.match(row.getAttribute('aria-label') ?? '', /^Expand /, '应提供展开直系子项入口')
+      assert.match(row.getAttribute('aria-label') ?? '', /Expand direct children/, '应提供展开直系子项入口')
       assert.match(row.textContent ?? '', /Running/, 'run 真实状态保留')
+      assert.ok(row.querySelector('.helm-status-light .status-dot-working') !== null, '主状态为统一状态灯')
     }
     assert.equal(host.querySelectorAll('.execution-child-row').length, 2, '初始仅两个 run 行')
     act(() => {
@@ -1046,7 +1051,7 @@ test('紧凑子项：深层 workflow / external run 行原位展开直系子项�
       Array.from(expandedRows).some((r) => (r.textContent ?? '').includes('落盘动作')),
       '展开后应显示直系子项行',
     )
-    assert.match(dslRow.getAttribute('aria-label') ?? '', /^Collapse /, '展开后 aria 切换为收起')
+    assert.match(dslRow.getAttribute('aria-label') ?? '', /Collapse direct children/, '展开后 aria 切换为收起')
     act(() => {
       dslRow.click()
     })

@@ -12,7 +12,7 @@
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { WorkflowNodeState } from '../../contracts.js'
-import { formatCompactTimestamp, formatDurationMs, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helm/plugin-client'
+import { StatusLight, formatCompactTimestamp, formatDurationMs, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helm/plugin-client'
 import { useElapsedNowMs } from './hooks.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { SubagentLiveCard } from './SubagentCard.tsx'
@@ -30,7 +30,6 @@ import {
   actionCleanupDone,
   actionCleanupFailed,
   BADGE_CACHED,
-  NODE_BADGE,
   NODE_BADGE_ACTION,
   NODE_BADGE_EXTERNAL,
   NODE_BADGE_SUBAGENT,
@@ -131,11 +130,6 @@ function WorkflowExecutionNodeCard(props: { node: WorkflowNodeState; runConversa
     <div className={`subagent-live-card ${node.kind === 'action' ? 'workflow-action-card' : 'workflow-agent-card'}${isErr ? ' subagent-live-card-error' : ''}`}>
       <div className="subagent-live-header">
         <div className="subagent-live-trigger" style={{ cursor: 'default' }}>
-          <Icon
-            name={node.status === 'running' ? 'loader' : node.status === 'failed' ? 'x' : node.status === 'done' ? 'check' : node.status === 'skipped' ? 'chevron-right' : 'clock'}
-            size={13}
-            className={node.status === 'running' ? SPIN : undefined}
-          />
           <span className="badge badge-neutral">{node.kind === 'action' ? resolveLocalizedText(NODE_BADGE_ACTION, locale) : node.executionId !== undefined ? resolveLocalizedText(NODE_BADGE_EXTERNAL, locale) : resolveLocalizedText(NODE_BADGE_SUBAGENT, locale)}</span>
           <span className="subagent-live-title" title={node.label ?? node.id}>
             <span className="subagent-live-title-text">{node.label ?? node.id}</span>
@@ -147,9 +141,6 @@ function WorkflowExecutionNodeCard(props: { node: WorkflowNodeState; runConversa
             </span>
           ) : null}
           {node.cached === true ? <span className="badge badge-warn">{resolveLocalizedText(BADGE_CACHED, locale)}</span> : null}
-          <span className={`badge ${NODE_BADGE[node.status] ?? 'badge-neutral'}`}>
-            {nodeStatusLabel(node.status, locale)}
-          </span>
           {node.attempt !== undefined && node.attempt > 1 ? (
             <span className="badge badge-neutral">{nodeAttemptBadge(node.attempt, locale)}</span>
           ) : null}
@@ -164,6 +155,7 @@ function WorkflowExecutionNodeCard(props: { node: WorkflowNodeState; runConversa
           {elapsedMs !== undefined ? (
             <span className="subagent-live-elapsed tabular-nums">{formatDurationMs(elapsedMs)}</span>
           ) : null}
+          <StatusLight status={node.status} label={nodeStatusLabel(node.status, locale)} />
         </div>
       </div>
       {summaryText.text !== undefined ? (

@@ -5,7 +5,7 @@
  * action (detach).
  */
 import type { ReactNode } from 'react'
-import { formatCompactTimestamp, formatDurationMs, usePluginContext, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
+import { StatusLight, formatCompactTimestamp, formatDurationMs, usePluginContext, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { useElapsedNowMs } from './hooks.ts'
 import { Icon } from './WorkflowIcon.tsx'
@@ -24,7 +24,6 @@ import {
   externalIdleLine,
   externalNodeFailedLabel,
   externalRunningNodes,
-  SPIN,
   worktreeBadgeTitle,
 } from './copy.ts'
 
@@ -68,7 +67,7 @@ export function ExternalRunSummary(props: {
   return (
     <div className="subagent-live-card subagent-external-card">
       <div className="subagent-live-header">
-        <Icon name={failedState ? 'x' : active ? 'loader' : 'bot'} size={13} className={active ? SPIN : undefined} />
+        <Icon name="bot" size={13} />
         <span className="subagent-live-title" title={primaryTitle ?? t(EXTERNAL_TITLE)}>
           <span className="subagent-live-title-text">{primaryTitle ?? t(EXTERNAL_TITLE)}</span>
           {primaryTitle !== undefined ? <span className="badge badge-neutral">{t(EXTERNAL_TITLE)}</span> : null}
@@ -80,7 +79,10 @@ export function ExternalRunSummary(props: {
             {worktree.branch}
           </span>
         ) : null}
-        <span className={`badge ${badge.badge}`}>{badge.label}</span>
+        <StatusLight
+          status={badge.status}
+          label={badge.label}
+        />
         {elapsedMs !== undefined ? (
           <span className="subagent-live-elapsed tabular-nums">{formatDurationMs(elapsedMs)}</span>
         ) : null}
@@ -123,7 +125,7 @@ export function ExternalRunSummary(props: {
           <div className="workflow-node-list">
             {nodes.map((n) => (
               <div key={n.id} className="workflow-node-line">
-                <Icon name={n.status === 'running' ? 'loader' : n.status === 'failed' ? 'x' : n.status === 'done' ? 'check' : 'circle'} size={11} className={n.status === 'running' ? SPIN : undefined} />
+                <StatusLight status={n.status} />
                 <span className="workflow-node-label">{n.label ?? n.id}</span>
                 {n.executionId !== undefined ? <span className="subagent-external-exec">{n.executionId}</span> : null}
               </div>

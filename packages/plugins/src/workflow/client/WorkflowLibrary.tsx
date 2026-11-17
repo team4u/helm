@@ -14,7 +14,6 @@ import { firstLineOf } from './model-format.ts'
 import { filterSavedWorkflows, type SavedWorkflowView } from './model-library.ts'
 import {
   LIB_CARD_NO_DESCRIPTION,
-  LIB_CARD_VIEW_DETAILS,
   libCardAria,
   libDefinitionFileTitle,
   LIB_EMPTY,
@@ -81,7 +80,7 @@ function WorkflowLibraryCard(props: { item: SavedWorkflowView; onShowDetail: () 
         <span className="workflow-lib-card-facts tabular-nums" title={libDefinitionFileTitle(`${item.path ?? item.name}.js`, locale)}>
           {formatTime(item.updatedAt)} · {formatBytes(item.size)}
         </span>
-        <span className="badge badge-neutral">{resolveLocalizedText(LIB_CARD_VIEW_DETAILS, locale)}</span>
+        <Icon name="chevron-right" size={12} className="workflow-lib-card-entry" />
       </div>
     </div>
   )

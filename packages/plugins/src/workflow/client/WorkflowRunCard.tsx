@@ -17,6 +17,7 @@ import {
   PopoverContent,
   PopoverRoot,
   PopoverTrigger,
+  StatusLight,
   formatCompactTimestamp,
   formatDurationMs,
   resolveLocalizedText,
@@ -57,7 +58,6 @@ import {
   actionDetachDone,
   approvalsBadge,
   approvalsTitle,
-  EXECUTION_BADGE,
   executionStatusLabel,
   externalErrorJoiner,
   PHASE_ICON,
@@ -68,7 +68,6 @@ import {
   REPLAY_SUBMIT,
   REPLAY_SUBMIT_ARIA,
   REPLAY_SUBMIT_TITLE,
-  RUN_BADGE,
   RUN_CARD_ABORT_FAILED,
   RUN_CARD_CACHED_REPLAY,
   RUN_CARD_DETACH_FAILED,
@@ -91,7 +90,6 @@ import {
   runCardSavedBadgeTitle,
   RUN_CARD_SAVED_BADGE,
   runCardSelfStateTitle,
-  runCardSelfTitle,
   runCardSubtreeStat,
   runCardTokensStat,
   selfStatusLabel,
@@ -283,7 +281,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
   if (run === undefined) {
     const fallbackLabel = resolveWorkflowToolFallbackLabel(props.input, locale)
     const isError = props.status === 'error'
-    const badgeCls = isError ? 'badge-err' : isBgHandle || props.status === 'running' ? 'badge-accent' : 'badge-ok'
+    const lightStatus = isError ? 'failed' : isBgHandle || props.status === 'running' ? 'running' : 'completed'
     const badgeText = isError
       ? resolveLocalizedText(TRACE_RUN_FAILED, locale)
       : isBgHandle
@@ -309,7 +307,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
           onClick={() => setDetailsOpen((v) => !v)}
         >
           <span className="trace-row-left">
-            <Icon name={isError ? 'alert-circle' : isRunning ? 'loader' : 'workflow'} size={12} className={isRunning ? SPIN : undefined} />
+            <Icon name="workflow" size={12} />
             <span className="trace-tool-name">{fallbackLabel}</span>
             {summaryText !== undefined ? (
               <span className={`trace-tool-summary${isError ? ' workflow-trace-error' : ''}`} title={summaryText}>
@@ -318,7 +316,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
             ) : null}
           </span>
           <span className="trace-row-right workflow-trace-right">
-            <span className={`badge workflow-trace-badge ${badgeCls}`}>{badgeText}</span>
+            <StatusLight status={lightStatus} label={badgeText} />
             {elapsedMs !== undefined ? <span className="trace-duration tabular-nums">{formatDurationMs(elapsedMs)}</span> : null}
             <Icon name={detailsOpen ? 'chevron-down' : 'chevron-right'} size={11} />
           </span>
@@ -337,11 +335,6 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
   const selfRunStatus = executionRunStatus(run)
   const displayStatus = effectiveStatus ?? selfRunStatus
   const isError = run.status === 'failed' || run.status === 'aborted' || displayStatus === 'error'
-  const isBlocked = displayStatus === 'blocked'
-  const statusBadgeCls =
-    effectiveStatus !== undefined && effectiveStatus !== selfRunStatus
-      ? (EXECUTION_BADGE[effectiveStatus] ?? 'badge-neutral')
-      : (RUN_BADGE[run.status] ?? 'badge-neutral')
   const statusBadgeText =
     effectiveStatus !== undefined && effectiveStatus !== selfRunStatus
       ? executionStatusLabel(effectiveStatus, locale)
@@ -372,11 +365,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
         }}
       >
         <span className="trace-row-left">
-          <Icon
-            name={isError ? 'alert-circle' : isBlocked ? 'alert-triangle' : isRunning ? 'loader' : 'workflow'}
-            size={12}
-            className={isRunning ? SPIN : undefined}
-          />
+          <Icon name="workflow" size={12} />
           <span className="trace-tool-name">{displayName}</span>
           {summaryText !== undefined && summaryText !== '' ? (
             <span className={`trace-tool-summary${isError ? ' workflow-trace-error' : ''}`} title={summaryText}>
@@ -385,7 +374,12 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
           ) : null}
         </span>
         <span className="trace-row-right workflow-trace-right">
-          <span className={`badge workflow-trace-badge ${statusBadgeCls}`}>{statusBadgeText}</span>
+          <StatusLight
+            status={
+              effectiveStatus !== undefined && effectiveStatus !== selfRunStatus ? effectiveStatus : run.status
+            }
+            label={statusBadgeText}
+          />
           {elapsedMs !== undefined ? <span className="trace-duration tabular-nums">{formatDurationMs(elapsedMs)}</span> : null}
           <Icon name="chevron-right" size={11} />
         </span>
@@ -510,18 +504,13 @@ export function WorkflowRunCardBody(props: {
         <strong>{displayName}</strong>
         {effectiveStatus !== selfRunStatus ? (
           <>
-            <span
-              className={`badge ${EXECUTION_BADGE[effectiveStatus] ?? 'badge-neutral'}`}
-              title={runCardSelfTitle(runStatusLabel(run.status, locale), executionStatusLabel(effectiveStatus, locale), locale)}
-            >
-              {executionStatusLabel(effectiveStatus, locale)}
-            </span>
+            <StatusLight status={effectiveStatus} label={executionStatusLabel(effectiveStatus, locale)} />
             <span className="badge badge-neutral" title={runCardSelfStateTitle(runStatusLabel(run.status, locale), locale)}>
               {selfStatusLabel(runStatusLabel(run.status, locale), locale)}
             </span>
           </>
         ) : (
-          <span className={`badge ${RUN_BADGE[run.status] ?? 'badge-neutral'}`}>{runStatusLabel(run.status, locale)}</span>
+          <StatusLight status={run.status} label={runStatusLabel(run.status, locale)} />
         )}
         {run.replayedFrom !== undefined ? (
           <span className="badge badge-warn" title={runCardReplayBadgeTitle(run.replayedFrom, locale)}>{resolveLocalizedText(RUN_CARD_CACHED_REPLAY, locale)}</span>

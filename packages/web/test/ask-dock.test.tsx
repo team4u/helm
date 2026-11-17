@@ -144,6 +144,13 @@ test('AskDock aggregates pending asks of the current conversation and all descen
   await renderAskDock(makeStore(), 1)
   assert.deepEqual(cardTitles(), ['审批 ask-root', '审批 ask-child', '审批 ask-grand'], 'shows own + child + grandchild asks')
   assert.equal(cardTitles().includes('审批 ask-other'), false, 'the ask of unrelated conversation #9 must not show')
+  // Card main status: one blocked status light with a visible label (no icon-only hover dependency)
+  const lights = [...document.querySelectorAll('.ask-dock-header .helm-status-light')]
+  assert.equal(lights.length, 3, 'each ask card renders exactly one status light')
+  for (const light of lights) {
+    assert.equal(light.getAttribute('data-tone'), 'blocked')
+    assert.equal((light.textContent ?? '').length > 0, true, 'status light carries a visible label')
+  }
   // Grandchild (#111) viewpoint: itself only, no propagation to parents/siblings
   await renderAskDock(makeStore(), 111)
   assert.deepEqual(cardTitles(), ['审批 ask-grand'], 'a descendant viewpoint aggregates only its own subtree')

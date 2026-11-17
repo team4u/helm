@@ -535,6 +535,8 @@ export interface PluginClientContext {
  *   useToolActivity / useConversations / useConversation / usePlugins;
  * - accessibility base components: Switch / Select / MultiSelect / Checkbox / Tabs family /
  *   SegmentedControl / HelmIcon / ViewBoundary / Callout;
+ * - StatusLight: unified status light (dot + one visible label) for card main
+ *   status slots, reusing the host .status-dot design-system vocabulary;
  * - lightweight layout primitives: Screen (page container + header) / ScreenSection (sectioning) /
  *   DataTable (composable table with unified loading/empty) / KvGrid (key-value overview);
  * - content display: MarkdownView (standard markdown rendering) / CodeBlockView
@@ -621,6 +623,8 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'CopyButton',
   'ViewBoundary',
   'Callout',
+  'StatusLight',
+  'normalizeStatusLightTone',
   'Dialog',
   'DialogPortal',
   'DialogOverlay',

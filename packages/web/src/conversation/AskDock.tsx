@@ -1,7 +1,7 @@
 import { useId, useMemo, useState } from 'react'
 import type { AskFieldSpec, AskSpec } from '@helm/protocol/browser'
 import { asksApi } from '../lib/api.js'
-import { HelmIcon, Select } from '@helm/plugin-client'
+import { HelmIcon, Select, StatusLight } from '@helm/plugin-client'
 import { useConversations, usePendingAsks, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { collectSubtreeIds } from './ancestry-model.js'
@@ -166,7 +166,7 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
   return (
     <div className="ask-dock">
       <div className="ask-dock-header">
-        <HelmIcon name="shield-alert" size={15} />
+        <StatusLight status="blocked" label={t('composer.ask.awaitingApproval')} />
         <span className="ask-dock-title">{ask.title}</span>
         {ask.ownerPluginId !== undefined ? (
           <span className="badge badge-warn">{ask.ownerPluginId}</span>
