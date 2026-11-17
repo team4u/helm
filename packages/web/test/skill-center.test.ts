@@ -33,11 +33,12 @@ import {
 } from '../src/skills/skill-reader-model.js'
 import { makeTestStore } from './helpers/store.js'
 
-// 抽屉与技能中心携带 @radix-ui/react-select 依赖图，须在 happy-dom
-// GlobalRegistrator.register() 之后动态加载（与 select.test.ts 同一约定），
-// 否则 Radix Select 下拉浮层在预注册环境中无法展开。
+// The drawer and skill center carry the @radix-ui/react-select dependency
+// graph and must be dynamically loaded after happy-dom
+// GlobalRegistrator.register() (same convention as select.test.ts);
+// otherwise Radix Select popovers cannot open in a pre-registered environment.
 const { HostStoreProviders } = await import('./helpers/host-store.js')
-// SkillCard 经 @helm/plugin-client（Radix 依赖图）静态引用 HelmIcon：同约定 register 后动态加载
+// SkillCard statically imports HelmIcon via @helm/plugin-client (Radix dependency graph): dynamically loaded after register, same convention
 const { SkillCard } = await import('../src/skills/SkillCard.js')
 const { SkillDetailDrawer } = await import('../src/skills/SkillDetailDrawer.js')
 const { SkillCenter } = await import('../src/skills/SkillCenter.js')
@@ -49,27 +50,27 @@ const typeIntoInput = typeIntoControl
 function makeSkill(partial: Partial<SkillSummary> & { id: string }): SkillSummary {
   return {
     name: partial.name ?? partial.id,
-    description: partial.description ?? '测试技能描述',
+    description: partial.description ?? '测试技能描述', // zh fixture data
     references: partial.references ?? [],
     ...partial,
   }
 }
 
-/** 在真实宿主 store 上下文内渲染抽屉（MarkdownView 依赖 useHelmStore）。 */
+/** Render the drawer inside a real host store context (MarkdownView depends on useHelmStore). */
 function renderDrawerElement(props: React.ReactElement): React.ReactElement {
   return e(HelmStoreContext.Provider, { value: makeTestStore() }, props)
 }
 
-/** 通过键盘交互打开文件选择器并选中指定选项（Radix Select 无原生 select）。 */
+/** Open the file picker via keyboard interaction and pick the given option (Radix Select has no native select). */
 async function chooseFileOption(host: HTMLElement, optionText: string): Promise<void> {
   const trigger = host.querySelector('.skill-file-select .helm-select-trigger') as HTMLElement | null
-  assert.ok(trigger, '应渲染文件选择器触发器')
+  assert.ok(trigger, 'the file picker trigger must render')
   await act(async () => {
     trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
   })
   const options = Array.from(host.querySelectorAll('[role="option"]')) as HTMLElement[]
   const target = options.find((el) => el.textContent?.includes(optionText))
-  assert.ok(target, `下拉选项中应包含 ${optionText}`)
+  assert.ok(target, `the dropdown options must include ${optionText}`)
   await act(async () => {
     target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
   })
@@ -119,50 +120,50 @@ const mockSkills: [SkillSummary, SkillSummary, SkillSummary, SkillSummary, Skill
 ]
 
 // ---------------------------------------------------------------------------
-// 1. 纯函数模型测试 (skill-center-model.ts)
+// 1. Pure model tests (skill-center-model.ts)
 // ---------------------------------------------------------------------------
 
-test('skill-center-model: 技能类别判定纯函数（内置 / 插件 / 共享 / 工作区）', { timeout: 60_000 }, () => {
+test('skill-center-model: skill category pure functions (builtin / plugin / shared / workspace)', { timeout: 60_000 }, () => {
   const builtinAssistant = makeSkill({ id: 'assistant-helper', managedByPlugin: 'builtin:profile' })
   const builtinCli = makeSkill({ id: 'helm-cli', managedByPlugin: 'builtin:profile' })
   const pluginManaged = makeSkill({ id: 'custom-skill', managedByPlugin: 'vendor:tools' })
   const workspacePrivate = makeSkill({ id: 'my-private-skill' })
   const agentsShared = makeSkill({ id: 'git-commit', source: 'agents' })
 
-  // 内置判定
+  // Builtin classification
   assert.equal(isSkillBuiltin(builtinAssistant), true)
   assert.equal(isSkillBuiltin(builtinCli), true)
   assert.equal(isSkillBuiltin(pluginManaged), false)
   assert.equal(isSkillBuiltin(workspacePrivate), false)
   assert.equal(isSkillBuiltin(agentsShared), false)
 
-  // 插件托管判定
+  // Plugin-managed classification
   assert.equal(isSkillPlugin(pluginManaged), true)
   assert.equal(isSkillPlugin(builtinAssistant), false)
   assert.equal(isSkillPlugin(builtinCli), false)
   assert.equal(isSkillPlugin(workspacePrivate), false)
   assert.equal(isSkillPlugin(agentsShared), false)
 
-  // 机器级共享根判定
+  // Machine-level shared root classification
   assert.equal(isSkillAgents(agentsShared), true)
   assert.equal(isSkillAgents(workspacePrivate), false)
   assert.equal(isSkillAgents(builtinCli), false)
   assert.equal(isSkillAgents(pluginManaged), false)
 
-  // 本地工作区私有技能判定（不含共享根来源）
+  // Local workspace-private classification (excluding shared-root sources)
   assert.equal(isSkillWorkspace(workspacePrivate), true)
   assert.equal(isSkillWorkspace(builtinAssistant), false)
   assert.equal(isSkillWorkspace(builtinCli), false)
   assert.equal(isSkillWorkspace(pluginManaged), false)
-  assert.equal(isSkillWorkspace(agentsShared), false, '共享根技能不得归入工作区')
+  assert.equal(isSkillWorkspace(agentsShared), false, 'shared-root skills must not be classified as workspace')
 })
 
-test('skill-center-model: buildSkillCategoryCounts 准确统计各分类数量', { timeout: 60_000 }, () => {
+test('skill-center-model: buildSkillCategoryCounts counts each category accurately', { timeout: 60_000 }, () => {
   const counts = buildSkillCategoryCounts(mockSkills)
-  // mockSkills 包含：
+  // mockSkills contains:
   // 1. helm-cli (builtin:profile) -> builtin
-  // 2. code-review (无 managedByPlugin) -> workspace
-  // 3. database-migration (无 managedByPlugin) -> workspace
+  // 2. code-review (no managedByPlugin) -> workspace
+  // 3. database-migration (no managedByPlugin) -> workspace
   // 4. herdr-deploy (builtin:herdr) -> builtin
   // 5. community-linter (community:linter) -> plugins
   // 6. git-commit (source: agents) -> agents
@@ -176,7 +177,7 @@ test('skill-center-model: buildSkillCategoryCounts 准确统计各分类数量',
   assert.deepEqual(emptyCounts, { all: 0, builtin: 0, workspace: 0, plugins: 0, agents: 0 })
 })
 
-test('skill-center-model: summarizeSkills 指标汇总', { timeout: 60_000 }, () => {
+test('skill-center-model: summarizeSkills metric summary', { timeout: 60_000 }, () => {
   const summary = summarizeSkills(mockSkills)
   assert.deepEqual(summary, {
     total: 6,
@@ -187,8 +188,8 @@ test('skill-center-model: summarizeSkills 指标汇总', { timeout: 60_000 }, ()
   })
 })
 
-test('skill-center-model: filterSkills 分类筛选与多维搜索（ID / 名称 / 描述 / 参考文件）', { timeout: 60_000 }, () => {
-  // 分类筛选
+test('skill-center-model: filterSkills category filtering and multi-dimension search (ID / name / description / references)', { timeout: 60_000 }, () => {
+  // Category filter
   const builtinSkills = filterSkills(mockSkills, { query: '', categoryTab: 'builtin' })
   assert.equal(builtinSkills.length, 2)
   assert.ok(builtinSkills.every((s) => isSkillBuiltin(s)))
@@ -201,33 +202,33 @@ test('skill-center-model: filterSkills 分类筛选与多维搜索（ID / 名称
   assert.equal(pluginSkills.length, 1)
   assert.equal(pluginSkills[0]!.id, 'community-linter')
 
-  // 机器级共享根分类筛选
+  // Machine-level shared root category filter
   const agentsSkills = filterSkills(mockSkills, { query: '', categoryTab: 'agents' })
   assert.equal(agentsSkills.length, 1)
   assert.equal(agentsSkills[0]!.id, 'git-commit')
   assert.ok(agentsSkills.every((s) => isSkillAgents(s)))
 
-  // 关键字按名称搜索
+  // Keyword search by name
   const nameSearch = filterSkills(mockSkills, { query: '代码审查', categoryTab: 'all' })
   assert.equal(nameSearch.length, 1)
   assert.equal(nameSearch[0]!.id, 'code-review')
 
-  // 关键字按 ID 搜索
+  // Keyword search by ID
   const idSearch = filterSkills(mockSkills, { query: 'helm-cli', categoryTab: 'all' })
   assert.equal(idSearch.length, 1)
   assert.equal(idSearch[0]!.id, 'helm-cli')
 
-  // 关键字按描述搜索
+  // Keyword search by description
   const descSearch = filterSkills(mockSkills, { query: 'PostgreSQL', categoryTab: 'all' })
   assert.equal(descSearch.length, 1)
   assert.equal(descSearch[0]!.id, 'database-migration')
 
-  // 关键字按参考文件搜索
+  // Keyword search by reference files
   const refSearch = filterSkills(mockSkills, { query: 'generative-ui.md', categoryTab: 'all' })
   assert.equal(refSearch.length, 1)
   assert.equal(refSearch[0]!.id, 'helm-cli')
 
-  // 组合过滤：分类 + 搜索
+  // Combined filter: category + search
   const comboMatch = filterSkills(mockSkills, { query: '多节点', categoryTab: 'builtin' })
   assert.equal(comboMatch.length, 1)
   assert.equal(comboMatch[0]!.id, 'herdr-deploy')
@@ -236,7 +237,7 @@ test('skill-center-model: filterSkills 分类筛选与多维搜索（ID / 名称
   assert.equal(comboMismatch.length, 0)
 })
 
-test('skill-center-model: getSkillSourceBadge 映射正确', { timeout: 60_000 }, () => {
+test('skill-center-model: getSkillSourceBadge mapping', { timeout: 60_000 }, () => {
   const cliSkill = makeSkill({ id: 'helm-cli', managedByPlugin: 'builtin:profile' })
   const codeSkill = makeSkill({ id: 'code-review' })
   const sharedSkill = makeSkill({ id: 'git-commit', source: 'agents' })
@@ -253,17 +254,17 @@ test('skill-center-model: getSkillSourceBadge 映射正确', { timeout: 60_000 }
   assert.equal(badgeWs.label, 'Workspace')
   assert.equal(badgeWs.variant, 'workspace')
 
-  // 共享根技能优先归入 agents 徽章（即使无 managedByPlugin，也不冒充工作区）
+  // Shared-root skills resolve to the agents badge first (no managedByPlugin, never posing as workspace)
   const badgeAgents = getSkillSourceBadge(sharedSkill)
   assert.equal(badgeAgents.label, 'Shared')
   assert.equal(badgeAgents.variant, 'agents')
 })
 
-test('skill-reader-model: buildSkillFileList 主规程置顶 + 参考文件短名与目录辅助信息', { timeout: 60_000 }, () => {
+test('skill-reader-model: buildSkillFileList main file first + reference short names and directory hints', { timeout: 60_000 }, () => {
   const files = buildSkillFileList(['references/cli-reference.md', 'scripts/deploy.py'])
   assert.equal(files.length, 3)
 
-  // 主规程置顶：读取路径为空串，展示名固定 SKILL.md
+  // Main file first: read path is the empty string, display name fixed to SKILL.md
   assert.deepEqual(files[0], {
     path: '',
     fileName: 'SKILL.md',
@@ -271,7 +272,7 @@ test('skill-reader-model: buildSkillFileList 主规程置顶 + 参考文件短�
     displayPath: 'SKILL.md',
   })
 
-  // 参考文件：短文件名 + 目录辅助信息 + 完整路径
+  // Reference files: short file name + directory hint + full path
   assert.deepEqual(files[1], {
     path: 'references/cli-reference.md',
     fileName: 'cli-reference.md',
@@ -285,7 +286,7 @@ test('skill-reader-model: buildSkillFileList 主规程置顶 + 参考文件短�
     displayPath: 'scripts/deploy.py',
   })
 
-  // 根目录文件目录信息回退 ./；空与非法项被过滤；空清单仅剩主规程
+  // Root-level files fall back to ./ for the directory hint; empty and invalid entries are filtered; an empty list keeps only the main file
   assert.deepEqual(buildSkillFileList(['notes.md']), [
     { path: '', fileName: 'SKILL.md', meta: 'Main file', displayPath: 'SKILL.md' },
     { path: 'notes.md', fileName: 'notes.md', meta: './', displayPath: 'notes.md' },
@@ -295,13 +296,13 @@ test('skill-reader-model: buildSkillFileList 主规程置顶 + 参考文件短�
   assert.equal(buildSkillFileList(null).length, 1)
 })
 
-test('skill-reader-model: skillFileBasename 与 isSkillMarkdownFile 判定', { timeout: 60_000 }, () => {
+test('skill-reader-model: skillFileBasename and isSkillMarkdownFile classification', { timeout: 60_000 }, () => {
   assert.equal(skillFileBasename('references/cli-reference.md'), 'cli-reference.md')
   assert.equal(skillFileBasename('SKILL.md'), 'SKILL.md')
   assert.equal(skillFileBasename('deploy.py?v=2'), 'deploy.py')
   assert.equal(skillFileBasename(''), '')
 
-  // 空串视为主规程 SKILL.md，按 Markdown 渲染
+  // The empty string means the main SKILL.md, rendered as Markdown
   assert.equal(isSkillMarkdownFile(''), true)
   assert.equal(isSkillMarkdownFile('SKILL.md'), true)
   assert.equal(isSkillMarkdownFile('references/guide.MARKDOWN'), true)
@@ -309,8 +310,8 @@ test('skill-reader-model: skillFileBasename 与 isSkillMarkdownFile 判定', { t
   assert.equal(isSkillMarkdownFile('config.json'), false)
 })
 
-test('skill-reader-model: extractSkillFrontmatter 解析字段序列与正文（单行标量 / 块标量 / 引号）', { timeout: 60_000 }, () => {
-  // 常规 frontmatter：字段按原 YAML 顺序保留，正文剥离围栏与后续空行
+test('skill-reader-model: extractSkillFrontmatter parses fields and body (single-line scalars / block scalars / quotes)', { timeout: 60_000 }, () => {
+  // Regular frontmatter: fields keep their original YAML order; the body strips the fence and trailing blank line
   const doc = extractSkillFrontmatter(
     '---\nname: helm-cli\ndescription: 手册\nmanagedByPlugin: builtin:profile\n---\n\n# 正文\n\n段落。',
   )
@@ -323,19 +324,19 @@ test('skill-reader-model: extractSkillFrontmatter 解析字段序列与正文（
     body: '# 正文\n\n段落。',
   })
 
-  // ... 围栏结束同样支持
+  // The ... fence terminator is supported too
   assert.deepEqual(extractSkillFrontmatter('---\nname: x\n...\n# 标题'), {
     fields: [{ key: 'name', value: 'x' }],
     body: '# 标题',
   })
 
-  // 未闭合 / 无围栏 / 非围栏分隔线：返回 null，调用方原文回退
+  // Unclosed / missing fence / non-fence divider: returns null and callers fall back to the raw text
   assert.equal(extractSkillFrontmatter('---\nname: x\n# 正文'), null)
   assert.equal(extractSkillFrontmatter('# 标题\n\n正文'), null)
   assert.equal(extractSkillFrontmatter('----\nname: x\n----\n# 正文'), null)
   assert.equal(extractSkillFrontmatter(''), null)
 
-  // 块标量：折叠型 > / >- 空格拼接，保留型 | / |- 换行拼接（语义对齐 kernel parser）
+  // Block scalars: folded > / >- join with spaces, literal | / |- keep newlines (semantics aligned with the kernel parser)
   assert.deepEqual(
     extractSkillFrontmatter('---\ndescription: >\n  第一行\n  第二行\n---\n正文')?.fields,
     [{ key: 'description', value: '第一行 第二行' }],
@@ -359,7 +360,7 @@ test('skill-reader-model: extractSkillFrontmatter 解析字段序列与正文（
     ],
   )
 
-  // 单行值剥首尾对称引号与转义还原；不对称引号原样保留
+  // Single-line values strip symmetric quotes and restore escapes; asymmetric quotes stay verbatim
   assert.deepEqual(
     extractSkillFrontmatter('---\nname: "quoted name"\ndescription: \'It\'\'s fine\'\n---\n正文')?.fields,
     [
@@ -372,13 +373,13 @@ test('skill-reader-model: extractSkillFrontmatter 解析字段序列与正文（
     [{ key: 'name', value: 'a"b' }],
   )
 
-  // 注释与空行不匹配键模式，跳过不进字段序列
+  // Comments and blank lines never match the key pattern and are skipped
   assert.deepEqual(
     extractSkillFrontmatter('---\n# 注释\nname: x\n\nlicense: MIT\n---\n正文')?.fields.map((f) => f.key),
     ['name', 'license'],
   )
 
-  // 全部为 frontmatter 时正文为空串；空 frontmatter 字段序列为空
+  // Frontmatter-only documents yield an empty body; an empty frontmatter yields no fields
   assert.deepEqual(extractSkillFrontmatter('---\nname: x\n---\n'), {
     fields: [{ key: 'name', value: 'x' }],
     body: '',
@@ -386,8 +387,8 @@ test('skill-reader-model: extractSkillFrontmatter 解析字段序列与正文（
   assert.deepEqual(extractSkillFrontmatter('---\n---\n# 正文'), { fields: [], body: '# 正文' })
 })
 
-test('skill-reader-model: renderSkillFrontmatterTable 字段按序转为元数据表格且特殊字符安全', { timeout: 60_000 }, () => {
-  // 常规转换：标题 + 表头 + 字段行，顺序保留
+test('skill-reader-model: renderSkillFrontmatterTable converts fields in order into a metadata table with safe escaping', { timeout: 60_000 }, () => {
+  // Regular conversion: heading + header row + field rows, order preserved
   assert.equal(
     renderSkillFrontmatterTable([
       { key: 'name', value: 'agent-browser' },
@@ -405,10 +406,10 @@ test('skill-reader-model: renderSkillFrontmatterTable 字段按序转为元数�
     ].join('\n'),
   )
 
-  // 空字段序列返回空串（无可渲染内容，不注入空表）
+  // An empty field sequence returns '' (nothing to render; no empty table injected)
   assert.equal(renderSkillFrontmatterTable([]), '')
 
-  // 特殊字符安全转义：竖线 / 换行 / 尖括号 / 与号 / 反斜杠均不破坏表格列结构
+  // Safe escaping: pipes / newlines / angle brackets / ampersands / backslashes never break the table column structure
   const escaped = renderSkillFrontmatterTable([
     { key: 'description', value: 'a | b\nsecond <hr> & "x" \\y' },
   ])
@@ -416,13 +417,13 @@ test('skill-reader-model: renderSkillFrontmatterTable 字段按序转为元数�
     escaped.includes('| description | a \\| b second &lt;hr> &amp; "x" \\\\y |'),
     '竖线转义、换行折空格、< 转字符引用、& 转义、反斜杠加倍',
   )
-  // 转义后单元格仍为单行（换行折叠为空格，不破坏 GFM 表格行结构）
+  // Escaped cells stay single-line (newlines fold into spaces, preserving the GFM table row structure)
   const cell = escaped.split('\n').find((l) => l.startsWith('| description |'))
-  assert.ok(cell !== undefined && !/\r|\n/.test(cell), '元数据单元格必须单行')
+  assert.ok(cell !== undefined && !/\r|\n/.test(cell), 'metadata cells must stay single-line')
 })
 
-test('skill-reader-model: renderSkillDocMarkdown 统一文档视图（表格 + 正文同流，未闭合回退）', { timeout: 60_000 }, () => {
-  // 带 frontmatter：元数据表格在前，正文紧随其后
+test('skill-reader-model: renderSkillDocMarkdown unified doc view (table + body in one flow, unclosed fallback)', { timeout: 60_000 }, () => {
+  // With frontmatter: the metadata table comes first, the body follows
   assert.equal(
     renderSkillDocMarkdown('---\nname: helm-cli\ndescription: 手册\n---\n\n# 正文\n\n段落。'),
     [
@@ -439,113 +440,126 @@ test('skill-reader-model: renderSkillDocMarkdown 统一文档视图（表格 + �
     ].join('\n'),
   )
 
-  // 无 frontmatter：正文原样返回
+  // Without frontmatter: the body returns verbatim
   assert.equal(renderSkillDocMarkdown('# 标题\n\n正文'), '# 标题\n\n正文')
 
-  // 未闭合 frontmatter：原文回退，绝不截断正文
+  // Unclosed frontmatter: fall back to the raw text, never truncate the body
   const unclosed = '---\nname: x\n# 正文'
   assert.equal(renderSkillDocMarkdown(unclosed), unclosed)
 
-  // 非围栏分隔线开头：不误伤，原文返回
+  // Starting with a non-fence divider: no false positives, raw text returned
   const dashes = '----\nname: x\n----\n# 正文'
   assert.equal(renderSkillDocMarkdown(dashes), dashes)
 
-  // 只有 frontmatter：仅元数据表格
+  // Frontmatter only: just the metadata table
   assert.equal(
     renderSkillDocMarkdown('---\nname: x\n---\n'),
     '## Skill metadata\n\n| Field | Value |\n| --- | --- |\n| name | x |',
   )
 
-  // 空 frontmatter（无字段）：正文原样，不注入空表
+  // Empty frontmatter (no fields): body verbatim, no empty table injected
   assert.equal(renderSkillDocMarkdown('---\n---\n# 正文'), '# 正文')
 })
 
-test('skill-reader-model: skillFileLanguage 按后缀推导语法语言', { timeout: 60_000 }, () => {
+test('skill-reader-model: skillFileLanguage derives the syntax language from the file suffix', { timeout: 60_000 }, () => {
   assert.equal(skillFileLanguage(''), 'markdown')
   assert.equal(skillFileLanguage('references/guide.md'), 'markdown')
   assert.equal(skillFileLanguage('scripts/deploy.py'), 'python')
   assert.equal(skillFileLanguage('configs/setup.json'), 'json')
   assert.equal(skillFileLanguage('bin/run.sh'), 'bash')
-  // 无法识别返回空串（回退普通等宽样式，不猜造语言）
+  // Unrecognized suffixes return '' (plain monospace fallback, never a fabricated language)
   assert.equal(skillFileLanguage('assets/unknown.custom'), '')
 })
 
 // ---------------------------------------------------------------------------
-// 2. SkillCard 组件测试
+// 2. SkillCard component tests
 // ---------------------------------------------------------------------------
 
-test('SkillCard: SSR 渲染结构、来源徽章、参考文件胶囊与零 Emoji 铁律', { timeout: 60_000 }, () => {
+/** Render a card inside a real host store context (useWebLocale needs the store). */
+function renderCardElement(props: React.ReactElement): React.ReactElement {
+  return e(HostStoreProviders, { value: makeTestStore() }, props)
+}
+
+test('SkillCard: SSR structure, source badge, reference pills and the zero-emoji rule', { timeout: 60_000 }, () => {
   const skill = mockSkills[0] // helm-cli, 2 references
   const html = renderToString(
-    e(SkillCard, {
-      skill,
-      selected: false,
-      onSelect: () => {},
-    }),
+    renderCardElement(
+      e(SkillCard, {
+        skill,
+        selected: false,
+        onSelect: () => {},
+      }),
+    ),
   )
 
-  // 结构断言
-  assert.ok(html.includes('primary-card'), '应包含 primary-card 类名')
-  assert.ok(html.includes('skill-card'), '应包含 skill-card 类名')
-  assert.ok(html.includes('Helm 命令行操作手册'), '应展示技能名称')
-  assert.ok(html.includes('helm-cli'), '应展示技能 ID')
-  assert.ok(html.includes('指导大模型通过 helm 命令行控制 Hub'), '应展示描述')
-  assert.ok(html.includes('Built-in'), '系统内建技能应展示「内置」来源徽章')
-  assert.ok(html.includes('2 reference files'), '应展示 2 个参考文件胶囊')
+  // Structure assertions
+  assert.ok(html.includes('primary-card'), 'must include the primary-card class')
+  assert.ok(html.includes('skill-card'), 'must include the skill-card class')
+  assert.ok(html.includes('Helm 命令行操作手册'), 'must show the skill name (zh fixture)')
+  assert.ok(html.includes('helm-cli'), 'must show the skill ID')
+  assert.ok(html.includes('指导大模型通过 helm 命令行控制 Hub'), 'must show the description (zh fixture)')
+  assert.ok(html.includes('Built-in'), 'built-in skills must show the built-in source badge')
+  assert.ok(html.includes('2 reference files'), 'must show the 2-reference-files pill')
 
-  // 零 Emoji 断言
-  assert.doesNotMatch(html, emojiRegex, 'SkillCard 渲染输出严禁包含 Emoji 表情')
+  // Zero-emoji assertion
+  assert.doesNotMatch(html, emojiRegex, 'SkillCard output must contain no emoji')
 })
 
-test('SkillCard: 选中状态与工作区来源徽章', { timeout: 60_000 }, () => {
+test('SkillCard: selected state and the workspace source badge', { timeout: 60_000 }, () => {
   const wsSkill = mockSkills[1] // code-review, workspace, 1 reference
   const html = renderToString(
-    e(SkillCard, {
-      skill: wsSkill,
-      selected: true,
-      onSelect: () => {},
-    }),
+    renderCardElement(
+      e(SkillCard, {
+        skill: wsSkill,
+        selected: true,
+        onSelect: () => {},
+      }),
+    ),
   )
 
-  assert.ok(html.includes('is-selected'), '选中时应具有 is-selected 类')
-  assert.ok(html.includes('aria-selected="true"'), '选中时应具备 aria-selected 属性')
-  assert.ok(html.includes('Workspace'), '私有技能应展示「工作区」来源徽章')
-  assert.ok(html.includes('1 reference files'), '应展示 1 个参考文件胶囊')
-  assert.doesNotMatch(html, emojiRegex, 'SkillCard 渲染输出严禁包含 Emoji')
+  assert.ok(html.includes('is-selected'), 'selected cards must carry the is-selected class')
+  assert.ok(html.includes('aria-selected="true"'), 'selected cards must carry aria-selected')
+  assert.ok(html.includes('Workspace'), 'workspace-private skills must show the workspace source badge')
+  assert.ok(html.includes('1 reference files'), 'must show the 1-reference-file pill')
+  assert.doesNotMatch(html, emojiRegex, 'SkillCard output must contain no emoji')
 })
 
-test('SkillCard: 共享根技能展示「共享」徽章与强调色样式', { timeout: 60_000 }, () => {
+test('SkillCard: shared-root skills show the shared badge with the accent style', { timeout: 60_000 }, () => {
   const sharedSkill = mockSkills[5] // git-commit, source: agents
   const html = renderToString(
-    e(SkillCard, {
-      skill: sharedSkill,
-      selected: false,
-      onSelect: () => {},
-    }),
+    renderCardElement(
+      e(SkillCard, {
+        skill: sharedSkill,
+        selected: false,
+        onSelect: () => {},
+      }),
+    ),
   )
 
-  assert.ok(html.includes('badge-accent'), '共享根技能应使用 badge-accent 徽章样式')
-  assert.ok(html.includes('Shared'), '共享根技能应展示「共享」来源徽章')
-  assert.ok(!html.includes('Workspace'), '共享根技能不得展示「工作区」徽章')
-  assert.doesNotMatch(html, /badge-ghost|badge-subtle/, '不得使用未定义的 badge-ghost / badge-subtle 类')
-  assert.doesNotMatch(html, emojiRegex, 'SkillCard 渲染输出严禁包含 Emoji')
+  assert.ok(html.includes('badge-accent'), 'shared-root skills must use the badge-accent style')
+  assert.ok(html.includes('Shared'), 'shared-root skills must show the shared source badge')
+  assert.ok(!html.includes('Workspace'), 'shared-root skills must not show the workspace badge')
+  assert.doesNotMatch(html, /badge-ghost|badge-subtle/, 'undefined badge-ghost / badge-subtle classes must not appear')
+  assert.doesNotMatch(html, emojiRegex, 'SkillCard output must contain no emoji')
 })
 
-test('SkillCard: 无参考文件时省略「0 个参考文件」，提供可复制 /skill:<id> 命令胶囊且阻止冒泡', { timeout: 60_000 }, async () => {
+test('SkillCard: omits the 0-references pill without references; the /skill:<id> command pill copies and stops propagation', { timeout: 60_000 }, async () => {
   const { act } = await import('react')
   const ReactDOMClient = await import('react-dom/client')
-  const noRefSkill = mockSkills[2] // database-migration，无参考文件
+  const noRefSkill = mockSkills[2] // database-migration, no references
   let selectedCount = 0
 
   const html = renderToString(
-    e(SkillCard, {
-      skill: noRefSkill,
-      selected: false,
-      onSelect: () => {},
-    }),
+    renderCardElement(
+      e(SkillCard, {
+        skill: noRefSkill,
+        selected: false,
+        onSelect: () => {},
+      }),
+    ),
   )
-  assert.ok(!html.includes('0 个参考文件'), '无参考文件时不得渲染「0 个参考文件」')
-  assert.ok(html.includes('/skill:database-migration'), '应展示可复制的 /skill:<id> 命令胶囊')
+  assert.ok(!html.includes('0 reference files'), 'the 0-references pill must not render without references')
+  assert.ok(html.includes('/skill:database-migration'), 'the copyable /skill:<id> command pill must render')
 
   const host = document.createElement('div')
   document.body.appendChild(host)
@@ -567,22 +581,24 @@ test('SkillCard: 无参考文件时省略「0 个参考文件」，提供可复�
   try {
     await act(async () => {
       root.render(
-        e(SkillCard, {
-          skill: noRefSkill,
-          selected: false,
-          onSelect: () => {
-            selectedCount++
-          },
-        }),
+        renderCardElement(
+          e(SkillCard, {
+            skill: noRefSkill,
+            selected: false,
+            onSelect: () => {
+              selectedCount++
+            },
+          }),
+        ),
       )
     })
 
     const copyBtn = host.querySelector('button[aria-label="Copy slash command /skill:database-migration"]')
-    assert.ok(copyBtn, '应渲染可点击复制的 /skill:<id> 按钮')
+    assert.ok(copyBtn, 'the clickable /skill:<id> copy button must render')
     await act(async () => {
       copyBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
-    assert.equal(selectedCount, 0, '点击复制命令胶囊必须 stopPropagation，不触发展开详情抽屉')
+    assert.equal(selectedCount, 0, 'clicking the command pill must stopPropagation instead of opening the detail drawer')
     assert.deepEqual(copied, ['/skill:database-migration'])
   } finally {
     if (origClipboard !== undefined) {
@@ -595,7 +611,7 @@ test('SkillCard: 无参考文件时省略「0 个参考文件」，提供可复�
   }
 })
 
-test('SkillCard: 鼠标点击与键盘无障碍交互激活', { timeout: 60_000 }, async () => {
+test('SkillCard: mouse click and keyboard accessibility activation', { timeout: 60_000 }, async () => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = ReactDOMClient.createRoot(host)
@@ -607,34 +623,36 @@ test('SkillCard: 鼠标点击与键盘无障碍交互激活', { timeout: 60_000 
 
   await act(async () => {
     root.render(
-      e(SkillCard, {
-        skill: mockSkills[0],
-        selected: false,
-        onSelect,
-      }),
+      renderCardElement(
+        e(SkillCard, {
+          skill: mockSkills[0],
+          selected: false,
+          onSelect,
+        }),
+      ),
     )
   })
 
   const card = host.querySelector('.skill-card') as HTMLElement
-  assert.ok(card, '应能找到卡片 DOM 节点')
+  assert.ok(card, 'the card DOM node must be found')
 
-  // 点击激活
+  // Click activation
   await act(async () => {
     card.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
-  assert.equal(selectedCount, 1, '点击应触发 onSelect')
+  assert.equal(selectedCount, 1, 'clicking must trigger onSelect')
 
-  // Enter 键激活
+  // Enter activation
   await act(async () => {
     card.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
   })
-  assert.equal(selectedCount, 2, 'Enter 键应触发 onSelect')
+  assert.equal(selectedCount, 2, 'Enter must trigger onSelect')
 
-  // Space 键激活
+  // Space activation
   await act(async () => {
     card.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }))
   })
-  assert.equal(selectedCount, 3, 'Space 键应触发 onSelect')
+  assert.equal(selectedCount, 3, 'Space must trigger onSelect')
 
   await act(async () => {
     root.unmount()
@@ -643,10 +661,10 @@ test('SkillCard: 鼠标点击与键盘无障碍交互激活', { timeout: 60_000 
 })
 
 // ---------------------------------------------------------------------------
-// 4. SkillDetailDrawer 组件测试（紧凑文件阅读器）
+// 4. SkillDetailDrawer component tests (compact file reader)
 // ---------------------------------------------------------------------------
 
-test('SkillDetailDrawer: SSR 渲染单行文件工具条与富文本阅读区（不再渲染标签墙，零 Emoji）', { timeout: 60_000 }, () => {
+test('SkillDetailDrawer: SSR renders the single-row file toolbar and rich reader area (no tab wall, zero emoji)', { timeout: 60_000 }, () => {
   const skill = mockSkills[0]
   const initialContent = '# Helm CLI 技能规范\n\n这是测试用 Markdown 文档正文。'
 
@@ -662,40 +680,40 @@ test('SkillDetailDrawer: SSR 渲染单行文件工具条与富文本阅读区（
     ),
   )
 
-  // 抽屉结构断言
-  assert.ok(html.includes('primary-drawer-content'), '应包含 primary-drawer-content')
-  assert.ok(html.includes('primary-drawer-title'), '应包含抽屉标题')
-  assert.ok(html.includes('Helm 命令行操作手册'), '应展示技能名称')
-  assert.ok(html.includes('helm-cli'), '应展示技能 ID')
-  assert.ok(html.includes('Built-in'), '应展示内置来源徽章')
+  // Drawer structure assertions
+  assert.ok(html.includes('primary-drawer-content'), 'must include primary-drawer-content')
+  assert.ok(html.includes('primary-drawer-title'), 'must include the drawer title')
+  assert.ok(html.includes('Helm 命令行操作手册'), 'must show the skill name (zh fixture)')
+  assert.ok(html.includes('helm-cli'), 'must show the skill ID')
+  assert.ok(html.includes('Built-in'), 'must show the built-in source badge')
 
-  // 单行文件工具条：公共 Select 触发器 + 阅读模式切换 + 文件序号与行数
-  assert.ok(html.includes('skill-reader-toolbar'), '应包含 skill-reader-toolbar 工具条')
-  assert.ok(html.includes('helm-select-trigger'), '多文件时应使用公共 Select 下拉选择器')
-  assert.ok(html.includes('aria-label="Choose a skill file"'), '文件选择器应具备无障碍标签')
-  assert.ok(html.includes('SKILL.md'), '触发器应展示当前文件短名 SKILL.md')
-  assert.ok(html.includes('Rich text'), '应提供富文本阅读模式按钮')
-  assert.ok(html.includes('Source'), '应提供源码阅读模式按钮')
-  assert.ok(html.includes('1/3'), '应展示文件序号 1/3')
-  assert.ok(html.includes('3 lines'), '应展示当前文件行数')
-  assert.ok(html.includes('aria-label="Copy"'), '工具条应提供复制按钮')
+  // Single-row file toolbar: shared Select trigger + reading mode toggle + file index and line count
+  assert.ok(html.includes('skill-reader-toolbar'), 'must include the skill-reader-toolbar')
+  assert.ok(html.includes('helm-select-trigger'), 'multi-file readers must use the shared Select dropdown')
+  assert.ok(html.includes('aria-label="Choose a skill file"'), 'the file picker must carry an accessibility label')
+  assert.ok(html.includes('SKILL.md'), 'the trigger must show the current file short name SKILL.md')
+  assert.ok(html.includes('Rich text'), 'the rich reading mode button must be offered')
+  assert.ok(html.includes('Source'), 'the source reading mode button must be offered')
+  assert.ok(html.includes('1/3'), 'must show the file index 1/3')
+  assert.ok(html.includes('3 lines'), 'must show the current file line count')
+  assert.ok(html.includes('aria-label="Copy"'), 'the toolbar must offer a copy button')
 
-  // 标签墙已移除：不再渲染任何 role=tab 文件按钮与文件清单区块
-  assert.ok(!html.includes('role="tab"'), '不得再渲染多文件标签墙（role=tab）')
-  assert.ok(!html.includes('技能文件清单'), '不得再渲染文件清单区块')
+  // The tab wall is gone: no role=tab file buttons and no file list block
+  assert.ok(!html.includes('role="tab"'), 'the multi-file tab wall (role=tab) must not render')
+  assert.ok(!html.includes('skill file list'), 'no file list block may render')
 
-  // 富文本阅读区：MarkdownView 渲染标题与正文，默认不出现原始 Markdown 井号标记
-  assert.ok(html.includes('skill-reader-doc'), '应包含 skill-reader-doc 富文本阅读区')
-  assert.ok(html.includes('msg-ai-body'), '富文本模式应复用 MarkdownView 渲染')
-  assert.ok(html.includes('Helm CLI 技能规范</h1>'), '应渲染 Markdown 标题')
-  assert.ok(html.includes('这是测试用 Markdown 文档正文。'), '应渲染正文段落')
-  assert.ok(!html.includes('# Helm CLI 技能规范'), '富文本模式不应展示原始 Markdown 井号标记')
+  // Rich reader area: MarkdownView renders the heading and body; raw Markdown hashes never show by default
+  assert.ok(html.includes('skill-reader-doc'), 'must include the skill-reader-doc rich reader area')
+  assert.ok(html.includes('msg-ai-body'), 'rich mode must reuse MarkdownView')
+  assert.ok(html.includes('Helm CLI 技能规范</h1>'), 'must render the Markdown heading (zh fixture)')
+  assert.ok(html.includes('这是测试用 Markdown 文档正文。'), 'must render the body paragraph (zh fixture)')
+  assert.ok(!html.includes('# Helm CLI 技能规范'), 'rich mode must not show raw Markdown hashes')
 
-  // 零 Emoji 断言
-  assert.doesNotMatch(html, emojiRegex, 'SkillDetailDrawer 渲染输出严禁包含 Emoji 表情')
+  // Zero-emoji assertion
+  assert.doesNotMatch(html, emojiRegex, 'SkillDetailDrawer output must contain no emoji')
 })
 
-test('SkillDetailDrawer: 富文本模式把 frontmatter 转为元数据表格与正文同流，源码模式保留原文', { timeout: 60_000 }, async () => {
+test('SkillDetailDrawer: rich mode converts frontmatter into a metadata table flowing with the body; source mode keeps the raw text', { timeout: 60_000 }, async () => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = ReactDOMClient.createRoot(host)
@@ -718,18 +736,18 @@ test('SkillDetailDrawer: 富文本模式把 frontmatter 转为元数据表格与
     )
   })
 
-  // 默认富文本：.skill-reader-doc 同一内容流同时包含元数据表格与正文
+  // Rich by default: .skill-reader-doc holds both the metadata table and the body in one content flow
   const readerBody = host.querySelector('.skill-reader-body') as HTMLElement
-  assert.equal(readerBody.getAttribute('data-mode'), 'rich', 'Markdown 文件默认富文本模式')
+  assert.equal(readerBody.getAttribute('data-mode'), 'rich', 'Markdown files default to rich mode')
   const doc = host.querySelector('.skill-reader-doc') as HTMLElement
-  assert.ok(doc, '富文本模式应渲染 MarkdownView 阅读区')
+  assert.ok(doc, 'rich mode must render the MarkdownView reader area')
 
-  // 元数据表格：标题 + 表头 + 字段行按原 YAML 顺序保留
-  assert.ok(doc.textContent?.includes('Skill metadata'), '应渲染「技能元数据」标题')
+  // Metadata table: heading + header row + field rows in original YAML order
+  assert.ok(doc.textContent?.includes('Skill metadata'), 'must render the skill metadata heading')
   const table = doc.querySelector('table') as HTMLTableElement
-  assert.ok(table, 'frontmatter 应转换为 Markdown 表格渲染')
+  assert.ok(table, 'frontmatter must convert into a rendered Markdown table')
   const headerCells = Array.from(table.querySelectorAll('thead th')).map((c) => c.textContent)
-  assert.deepEqual(headerCells, ['Field', 'Value'], '表头应为字段/内容两列')
+  assert.deepEqual(headerCells, ['Field', 'Value'], 'the header must be the field/value columns')
   const rows = Array.from(table.querySelectorAll('tbody tr')).map(
     (tr) => Array.from(tr.querySelectorAll('td')).map((td) => td.textContent),
   )
@@ -737,40 +755,40 @@ test('SkillDetailDrawer: 富文本模式把 frontmatter 转为元数据表格与
     ['name', 'helm-cli'],
     ['description', '头部元信息'],
     ['managedByPlugin', 'builtin:profile'],
-  ], '字段按原 YAML 顺序保留')
+  ], 'fields keep their original YAML order')
 
-  // 正文紧随其后，同一内容流；原始 YAML 键值语法不泄漏
-  assert.ok(doc.textContent?.includes('正文标题'), 'frontmatter 后的正文应保留')
-  assert.ok(doc.textContent?.includes('内容段落。'), '正文段落应保留')
-  assert.ok(!doc.textContent?.includes('name: helm-cli'), '不得以 YAML 原文形式展示 frontmatter')
-  assert.ok(!doc.textContent?.includes('description: 头部元信息'), 'frontmatter 键值均不得泄漏')
-  assert.ok(!doc.textContent?.includes('---'), '富文本模式不得残留围栏分隔线')
+  // The body follows in the same content flow; raw YAML key/value syntax never leaks
+  assert.ok(doc.textContent?.includes('正文标题'), 'the body after the frontmatter must survive (zh fixture)')
+  assert.ok(doc.textContent?.includes('内容段落。'), 'the body paragraph must survive (zh fixture)')
+  assert.ok(!doc.textContent?.includes('name: helm-cli'), 'frontmatter must not render as raw YAML')
+  assert.ok(!doc.textContent?.includes('description: 头部元信息'), 'no frontmatter key/value pair may leak')
+  assert.ok(!doc.textContent?.includes('---'), 'rich mode must not leave fence dividers behind')
 
-  // 切换源码模式：完整原文（含 frontmatter 的 --- 围栏）以等宽代码呈现
+  // Switch to source mode: the complete raw text (including the --- frontmatter fence) renders as monospace code
   const sourceBtn = Array.from(host.querySelectorAll('button')).find(
     (b) => b.textContent?.includes('Source'),
   ) as HTMLButtonElement
-  assert.ok(sourceBtn, '应能找到源码模式按钮')
+  assert.ok(sourceBtn, 'the source mode button must be found')
   await act(async () => {
     sourceBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
 
-  assert.equal(readerBody.getAttribute('data-mode'), 'source', '点击后应进入源码模式')
+  assert.equal(readerBody.getAttribute('data-mode'), 'source', 'clicking must enter source mode')
   const codeWrap = host.querySelector('.skill-reader-code .code-block-wrap') as HTMLElement
-  assert.ok(codeWrap, '源码模式应使用 CodeBlockView 代码块')
-  assert.ok(codeWrap.textContent?.includes('---'), '源码模式应保留 YAML frontmatter 的 --- 围栏')
-  assert.ok(codeWrap.textContent?.includes('name: helm-cli'), '源码模式应保留 YAML frontmatter 原文')
-  assert.ok(codeWrap.textContent?.includes('# 正文标题'), '源码模式应保留正文原文')
+  assert.ok(codeWrap, 'source mode must use the CodeBlockView code block')
+  assert.ok(codeWrap.textContent?.includes('---'), 'source mode must keep the YAML frontmatter --- fence')
+  assert.ok(codeWrap.textContent?.includes('name: helm-cli'), 'source mode must keep the raw YAML frontmatter')
+  assert.ok(codeWrap.textContent?.includes('# 正文标题'), 'source mode must keep the raw body (zh fixture)')
 
-  // 切回富文本：表格 + 正文恢复，仍无原始 YAML
+  // Switch back to rich: table + body restored, still no raw YAML
   const richBtn = Array.from(host.querySelectorAll('button')).find(
     (b) => b.textContent?.includes('Rich text'),
   ) as HTMLButtonElement
   await act(async () => {
     richBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
-  assert.equal(readerBody.getAttribute('data-mode'), 'rich', '可切回富文本模式')
-  assert.ok(host.querySelector('.skill-reader-doc table'), '富文本阅读区恢复元数据表格')
+  assert.equal(readerBody.getAttribute('data-mode'), 'rich', 'switching back to rich mode works')
+  assert.ok(host.querySelector('.skill-reader-doc table'), 'the rich reader area restores the metadata table')
 
   await act(async () => {
     root.unmount()
@@ -778,7 +796,7 @@ test('SkillDetailDrawer: 富文本模式把 frontmatter 转为元数据表格与
   host.remove()
 })
 
-test('SkillDetailDrawer: 文件下拉选择器切换参考文件与序号/行数联动', { timeout: 60_000 }, async () => {
+test('SkillDetailDrawer: file dropdown switches reference files with index/line-count sync', { timeout: 60_000 }, async () => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = ReactDOMClient.createRoot(host)
@@ -808,26 +826,26 @@ test('SkillDetailDrawer: 文件下拉选择器切换参考文件与序号/行数
     )
   })
 
-  // 初始加载主规程 SKILL.md，工具条展示序号 1/3 与行数
+  // Initially loads the main SKILL.md; the toolbar shows index 1/3 and the line count
   assert.equal(readCalls.length, 1)
   assert.equal(readCalls[0]!.id, 'helm-cli')
   assert.equal(readCalls[0]!.path, undefined)
-  assert.ok(host.querySelector('.skill-reader-doc')?.textContent?.includes('Main file'), '应加载根文件正文')
+  assert.ok(host.querySelector('.skill-reader-doc')?.textContent?.includes('Main file'), 'the root file body must load')
   assert.ok(host.querySelector('.skill-reader-index')?.textContent?.includes('1/3'))
   assert.ok(host.querySelector('.skill-reader-lines')?.textContent?.includes('3 lines'))
 
-  // 通过下拉选择器切换到 references/cli-reference.md
+  // Switch to references/cli-reference.md via the dropdown
   await chooseFileOption(host, 'cli-reference.md')
   assert.equal(readCalls.length, 2)
   assert.equal(readCalls[1]!.path, 'references/cli-reference.md')
   assert.ok(
     host.querySelector('.skill-reader-doc')?.textContent?.includes('CLI 参考'),
-    '应更新展示参考文件正文',
+    'the reference file body must update (zh fixture)',
   )
   assert.ok(host.querySelector('.skill-reader-index')?.textContent?.includes('2/3'))
   assert.ok(host.querySelector('.skill-reader-lines')?.textContent?.includes('5 lines'))
 
-  // 切换到末尾参考文件 generative-ui.md，序号推进到 3/3
+  // Switch to the last reference generative-ui.md; the index advances to 3/3
   await chooseFileOption(host, 'generative-ui.md')
   assert.equal(readCalls.length, 3)
   assert.equal(readCalls[2]!.path, 'references/generative-ui.md')
@@ -839,7 +857,7 @@ test('SkillDetailDrawer: 文件下拉选择器切换参考文件与序号/行数
   host.remove()
 })
 
-test('SkillDetailDrawer: 非 Markdown 文件用 CodeBlockView 按后缀推导语言，单文件不渲染下拉', { timeout: 60_000 }, async () => {
+test('SkillDetailDrawer: non-Markdown files use CodeBlockView with suffix-derived language; single-file skills render no dropdown', { timeout: 60_000 }, async () => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = ReactDOMClient.createRoot(host)
@@ -867,23 +885,23 @@ test('SkillDetailDrawer: 非 Markdown 文件用 CodeBlockView 按后缀推导语
     )
   })
 
-  // 非 Markdown 文件：无富文本/源码切换，直接代码块呈现并按后缀推导语言
+  // Non-Markdown files: no rich/source toggle, rendered directly as a code block with the suffix-derived language
   await chooseFileOption(host, 'deploy.py')
   const body = host.querySelector('.skill-reader-body') as HTMLElement
-  assert.equal(body.getAttribute('data-mode'), 'source', '非 Markdown 文件固定源码模式')
+  assert.equal(body.getAttribute('data-mode'), 'source', 'non-Markdown files stay in source mode')
   const codeWrap = host.querySelector('.skill-reader-code .code-block-wrap') as HTMLElement
-  assert.ok(codeWrap, '应使用 CodeBlockView 展示代码文件')
-  assert.ok(codeWrap.querySelector('.code-block-header')?.textContent?.includes('python'), '语言应推导为 python')
-  assert.ok(codeWrap.textContent?.includes('print("deploy")'), '应展示代码正文')
+  assert.ok(codeWrap, 'code files must render through CodeBlockView')
+  assert.ok(codeWrap.querySelector('.code-block-header')?.textContent?.includes('python'), 'the language must derive as python')
+  assert.ok(codeWrap.textContent?.includes('print("deploy")'), 'the code body must render')
   const modeToggle = host.querySelector('.skill-reader-mode')
-  assert.ok(modeToggle === null, '非 Markdown 文件不提供阅读模式切换')
+  assert.ok(modeToggle === null, 'non-Markdown files offer no reading mode toggle')
 
   await act(async () => {
     root.unmount()
   })
   host.remove()
 
-  // 单文件技能：不渲染下拉选择器，直接展示文件名与序号 1/1
+  // Single-file skill: no dropdown, the file name and index 1/1 render directly
   const host2 = document.createElement('div')
   document.body.appendChild(host2)
   const root2 = ReactDOMClient.createRoot(host2)
@@ -891,22 +909,22 @@ test('SkillDetailDrawer: 非 Markdown 文件用 CodeBlockView 按后缀推导语
     root2.render(
       renderDrawerElement(
         e(SkillDetailDrawer, {
-          skill: mockSkills[2], // database-migration 无参考文件
+          skill: mockSkills[2], // database-migration, no references
           open: true,
           inline: true,
-          readSkill: async () => ({ text: '# 迁移演练' }),
+          readSkill: async () => ({ text: '# 迁移演练' }), // zh fixture content
           onClose: () => {},
         }),
       ),
     )
   })
 
-  assert.ok(host2.querySelector('.skill-file-select') === null, '单文件时不渲染下拉选择器')
-  assert.ok(host2.querySelector('.helm-select-trigger') === null, '单文件时无 Select 触发器')
+  assert.ok(host2.querySelector('.skill-file-select') === null, 'single-file readers render no dropdown')
+  assert.ok(host2.querySelector('.helm-select-trigger') === null, 'single-file readers have no Select trigger')
   const fileLabel = host2.querySelector('.skill-reader-file-label') as HTMLElement
-  assert.ok(fileLabel.textContent?.includes('SKILL.md'), '单文件时直接展示文件名')
-  assert.ok(host2.querySelector('.skill-reader-index')?.textContent?.includes('1/1'), '序号应为 1/1')
-  assert.ok(host2.querySelector('.skill-reader-doc'), '单文件 Markdown 默认富文本')
+  assert.ok(fileLabel.textContent?.includes('SKILL.md'), 'single-file readers show the file name directly')
+  assert.ok(host2.querySelector('.skill-reader-index')?.textContent?.includes('1/1'), 'the index must be 1/1')
+  assert.ok(host2.querySelector('.skill-reader-doc'), 'single-file Markdown defaults to rich mode')
 
   await act(async () => {
     root2.unmount()
@@ -914,13 +932,13 @@ test('SkillDetailDrawer: 非 Markdown 文件用 CodeBlockView 按后缀推导语
   host2.remove()
 })
 
-test('SkillDetailDrawer: Failed to read显式报错与空文件占位，不静默降级', { timeout: 60_000 }, async () => {
+test('SkillDetailDrawer: Failed to read errors explicitly and empty files show a placeholder, never a silent degradation', { timeout: 60_000 }, async () => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = ReactDOMClient.createRoot(host)
 
   const failingReader = async () => {
-    throw new Error('节点离线')
+    throw new Error('节点离线') // raw backend error text stays verbatim (zh fixture)
   }
   await act(async () => {
     root.render(
@@ -937,16 +955,16 @@ test('SkillDetailDrawer: Failed to read显式报错与空文件占位，不静�
   })
 
   const callout = host.querySelector('.callout-error') as HTMLElement
-  assert.ok(callout, 'Failed to read应渲染统一 .callout-error 错误提示')
-  assert.ok(callout.textContent?.includes('Failed to read'), '错误提示应包含失败前缀')
-  assert.ok(callout.textContent?.includes('节点离线'), '错误提示应包含原始错误信息')
+  assert.ok(callout, 'Failed to read must render the unified .callout-error hint')
+  assert.ok(callout.textContent?.includes('Failed to read'), 'the error hint must include the failure prefix')
+  assert.ok(callout.textContent?.includes('节点离线'), 'the error hint must include the raw error text (zh fixture)')
 
   await act(async () => {
     root.unmount()
   })
   host.remove()
 
-  // 空文件：占位提示而非空白区域
+  // Empty file: a placeholder hint instead of a blank area
   const host2 = document.createElement('div')
   document.body.appendChild(host2)
   const root2 = ReactDOMClient.createRoot(host2)
@@ -964,8 +982,8 @@ test('SkillDetailDrawer: Failed to read显式报错与空文件占位，不静�
     )
   })
   const placeholder = host2.querySelector('.skill-reader-placeholder') as HTMLElement
-  assert.ok(placeholder, '空文件应渲染占位提示')
-  assert.ok(placeholder.textContent?.includes('The file is empty'), '占位文案应为文件内容为空')
+  assert.ok(placeholder, 'empty files must render the placeholder hint')
+  assert.ok(placeholder.textContent?.includes('The file is empty'), 'the placeholder copy must be the empty-file message')
 
   await act(async () => {
     root2.unmount()
@@ -973,7 +991,7 @@ test('SkillDetailDrawer: Failed to read显式报错与空文件占位，不静�
   host2.remove()
 })
 
-test('SkillDetailDrawer: 共享根技能标注来源且不提供编辑入口', { timeout: 60_000 }, () => {
+test('SkillDetailDrawer: shared-root skills annotate their source with no edit entry', { timeout: 60_000 }, () => {
   const sharedSkill = mockSkills[5] // git-commit, source: agents
   const html = renderToString(
     renderDrawerElement(
@@ -987,14 +1005,14 @@ test('SkillDetailDrawer: 共享根技能标注来源且不提供编辑入口', {
     ),
   )
 
-  assert.ok(html.includes('Shared'), '共享根技能应展示「共享」徽章')
-  assert.ok(html.includes('badge-accent'), '共享根技能应使用 badge-accent 徽章样式')
-  assert.ok(html.includes('Machine-level shared root'), '共享根技能应标注来源')
-  assert.ok(!html.includes('Workspace'), '共享根技能不得标注工作区来源')
-  assert.doesNotMatch(html, emojiRegex, 'SkillDetailDrawer 渲染输出严禁包含 Emoji 表情')
+  assert.ok(html.includes('Shared'), 'shared-root skills must show the shared badge')
+  assert.ok(html.includes('badge-accent'), 'shared-root skills must use the badge-accent style')
+  assert.ok(html.includes('Machine-level shared root'), 'shared-root skills must annotate the source')
+  assert.ok(!html.includes('Workspace'), 'shared-root skills must not be labeled workspace')
+  assert.doesNotMatch(html, emojiRegex, 'SkillDetailDrawer output must contain no emoji')
 })
 
-test('SkillDetailDrawer: 未选中技能时渲染空状态', { timeout: 60_000 }, () => {
+test('SkillDetailDrawer: renders the empty state when no skill is selected', { timeout: 60_000 }, () => {
   const html = renderToString(
     renderDrawerElement(
       e(SkillDetailDrawer, {
@@ -1006,11 +1024,11 @@ test('SkillDetailDrawer: 未选中技能时渲染空状态', { timeout: 60_000 }
     ),
   )
 
-  assert.ok(html.includes('No skill selected'), '应渲染未选择技能空状态')
-  assert.doesNotMatch(html, emojiRegex, '空状态严禁包含 Emoji')
+  assert.ok(html.includes('No skill selected'), 'the no-skill-selected empty state must render')
+  assert.doesNotMatch(html, emojiRegex, 'the empty state must contain no emoji')
 })
 
-test('SkillDetailDrawer: 异步读取文件正文与代数防竞态 (loadGenerationRef)', { timeout: 60_000 }, async () => {
+test('SkillDetailDrawer: async body reads with algebraic race protection (loadGenerationRef)', { timeout: 60_000 }, async () => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = ReactDOMClient.createRoot(host)
@@ -1034,7 +1052,7 @@ test('SkillDetailDrawer: 异步读取文件正文与代数防竞态 (loadGenerat
     root.render(
       renderDrawerElement(
         e(SkillDetailDrawer, {
-          skill: mockSkills[1], // code-review: 1 个参考文件
+          skill: mockSkills[1], // code-review: 1 reference
           open: true,
           inline: true,
           readSkill: racingReader,
@@ -1044,26 +1062,26 @@ test('SkillDetailDrawer: 异步读取文件正文与代数防竞态 (loadGenerat
     )
   })
 
-  // 通过下拉选择器切换文件触发第二个请求
+  // Switching files via the dropdown triggers a second request
   await chooseFileOption(host, 'checklist.md')
-  assert.equal(callCount, 2, '切换文件应发起第二次读取')
+  assert.equal(callCount, 2, 'switching files must issue a second read')
 
-  // 先完成第二个（快速）请求
+  // The second (fast) request completes first
   await act(async () => {
     fastResolve({ text: '快速新请求内容' })
   })
   assert.ok(
     host.querySelector('.skill-reader-body')?.textContent?.includes('快速新请求内容'),
-    '新请求结果已显示',
+    'the new request result is displayed (zh fixture)',
   )
 
-  // 后完成第一个（慢速）请求，验证不会倒退覆盖
+  // The first (slow) request completes later; verify it cannot overwrite backwards
   await act(async () => {
     slowResolve({ text: '过期的慢请求内容' })
   })
   assert.ok(
     !host.querySelector('.skill-reader-body')?.textContent?.includes('过期的慢请求内容'),
-    '旧请求即便稍后返回也不得覆盖新请求结果',
+    'a stale request returning later must never overwrite the newer result (zh fixture)',
   )
 
   await act(async () => {
@@ -1072,7 +1090,7 @@ test('SkillDetailDrawer: 异步读取文件正文与代数防竞态 (loadGenerat
   host.remove()
 })
 
-test('SkillDetailDrawer: skill.description 不再作为独立区块渲染，描述仅来自 frontmatter 表格', { timeout: 60_000 }, async () => {
+test('SkillDetailDrawer: skill.description no longer renders as a standalone block; descriptions come only from the frontmatter table', { timeout: 60_000 }, async () => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = ReactDOMClient.createRoot(host)
@@ -1096,21 +1114,21 @@ test('SkillDetailDrawer: skill.description 不再作为独立区块渲染，描�
     )
   })
 
-  // 模型级 skill.description 不再进入阅读区：无独立描述块、无展开/收起按钮
-  assert.ok(host.querySelector('.skill-reader-desc') === null, '不得渲染独立描述区块')
-  assert.ok(host.querySelector('.skill-reader-desc-text') === null, '不得渲染独立描述文本节点')
-  assert.ok(host.querySelector('.skill-reader-desc-toggle') === null, '不得渲染展开/收起按钮')
+  // The model-level skill.description never enters the reader: no standalone description block, no expand/collapse button
+  assert.ok(host.querySelector('.skill-reader-desc') === null, 'no standalone description block may render')
+  assert.ok(host.querySelector('.skill-reader-desc-text') === null, 'no standalone description text node may render')
+  assert.ok(host.querySelector('.skill-reader-desc-toggle') === null, 'no expand/collapse button may render')
   const readerEl = host.querySelector('.skill-reader') as HTMLElement
-  assert.ok(readerEl, '应渲染 skill-reader 阅读器')
-  assert.ok(!readerEl.textContent?.includes(longDesc), '模型字段 description 不得直接进入阅读区')
+  assert.ok(readerEl, 'the skill-reader must render')
+  assert.ok(!readerEl.textContent?.includes(longDesc), 'the model description field must not enter the reader directly')
 
-  // 描述信息仅来自 frontmatter 转换的元数据表格，与正文同处同一内容流
+  // Description info comes only from the frontmatter-converted metadata table, in the same content flow as the body
   const doc = host.querySelector('.skill-reader-doc') as HTMLElement
-  assert.ok(doc, '应渲染统一文档内容流')
+  assert.ok(doc, 'the unified document content flow must render')
   const cells = Array.from(doc.querySelectorAll('table td')).map((td) => td.textContent)
-  assert.ok(cells.includes('description'), '元数据表格应包含 description 字段行')
-  assert.ok(cells.includes('文件内描述'), '描述值应来自文件内 frontmatter 而非模型字段')
-  assert.ok(doc.textContent?.includes('规程正文'), '正文与元数据表格同流展示')
+  assert.ok(cells.includes('description'), 'the metadata table must include the description field row')
+  assert.ok(cells.includes('文件内描述'), 'the description value must come from the in-file frontmatter, not the model field (zh fixture)')
+  assert.ok(doc.textContent?.includes('规程正文'), 'the body renders in the same flow as the metadata table (zh fixture)')
 
   await act(async () => {
     root.unmount()
@@ -1118,7 +1136,7 @@ test('SkillDetailDrawer: skill.description 不再作为独立区块渲染，描�
   host.remove()
 })
 
-test('SkillDetailDrawer: 布局契约——工具条紧贴 Header，元数据与正文同处单一滚动区', { timeout: 60_000 }, async () => {
+test('SkillDetailDrawer: layout contract — the toolbar hugs the header; metadata and body share one scroll area', { timeout: 60_000 }, async () => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = ReactDOMClient.createRoot(host)
@@ -1138,23 +1156,23 @@ test('SkillDetailDrawer: 布局契约——工具条紧贴 Header，元数据与
   })
 
   const reader = host.querySelector('.skill-reader') as HTMLElement
-  assert.ok(reader, '应渲染 skill-reader 阅读器')
+  assert.ok(reader, 'the skill-reader must render')
   const children = Array.from(reader.children) as HTMLElement[]
 
-  // 工具条是阅读器第一个子节点：紧贴抽屉 Header，中间不夹描述等独立区块
-  assert.equal(children.length, 2, '阅读器仅含工具条与滚动阅读区两个子节点')
-  assert.ok(children[0]?.classList.contains('skill-reader-toolbar'), '工具条应为首子节点')
-  assert.ok(children[1]?.classList.contains('skill-reader-scroll'), '第二子节点应为单一滚动阅读区')
+  // The toolbar is the reader's first child: hugging the drawer header with no standalone blocks in between
+  assert.equal(children.length, 2, 'the reader holds exactly the toolbar and the scroll area')
+  assert.ok(children[0]?.classList.contains('skill-reader-toolbar'), 'the toolbar must be the first child')
+  assert.ok(children[1]?.classList.contains('skill-reader-scroll'), 'the second child must be the single scroll area')
 
-  // 滚动区内仅正文阅读区；元数据表格与正文同在 .skill-reader-doc 内容流内
+  // Inside the scroll area only the body reader; the metadata table and body share the .skill-reader-doc flow
   const scroll = children[1]!
   const scrollChildren = Array.from(scroll.children) as HTMLElement[]
-  assert.equal(scrollChildren.length, 1, '滚动区仅含正文阅读区一个子节点')
-  assert.ok(scrollChildren[0]?.classList.contains('skill-reader-body'), '正文阅读区应为唯一子节点')
-  assert.ok(scroll.querySelector('.skill-reader-body'), '正文阅读区应位于滚动区内部')
-  assert.ok(host.querySelector('.skill-reader-desc') === null, '不得存在工具条与正文之间的独立描述块')
-  // 复制按钮携带 skill-reader-copy 类（移动端隐藏文字只留图标的新增样式钩子）
-  assert.ok(host.querySelector('.skill-reader-copy'), '复制按钮应携带 skill-reader-copy 类')
+  assert.equal(scrollChildren.length, 1, 'the scroll area holds only the body reader')
+  assert.ok(scrollChildren[0]?.classList.contains('skill-reader-body'), 'the body reader must be the only child')
+  assert.ok(scroll.querySelector('.skill-reader-body'), 'the body reader must live inside the scroll area')
+  assert.ok(host.querySelector('.skill-reader-desc') === null, 'no standalone description block may sit between toolbar and body')
+  // The copy button carries the skill-reader-copy class (the style hook for mobile hiding text and keeping the icon)
+  assert.ok(host.querySelector('.skill-reader-copy'), 'the copy button must carry the skill-reader-copy class')
 
   await act(async () => {
     root.unmount()
@@ -1163,10 +1181,10 @@ test('SkillDetailDrawer: 布局契约——工具条紧贴 Header，元数据与
 })
 
 // ---------------------------------------------------------------------------
-// 5. SkillCenter 组件测试
+// 5. SkillCenter component tests
 // ---------------------------------------------------------------------------
 
-test('SkillCenter: SSR 渲染顶栏、检索栏、网格流与零 Emoji 铁律', { timeout: 60_000 }, () => {
+test('SkillCenter: SSR renders the top bar, search bar, grid flow and zero-emoji rule', { timeout: 60_000 }, () => {
   const store = makeTestStore({
     skills: mockSkills,
     primaryTarget: { kind: 'skills' },
@@ -1180,31 +1198,31 @@ test('SkillCenter: SSR 渲染顶栏、检索栏、网格流与零 Emoji 铁律',
     ),
   )
 
-  // 顶栏断言（副标题与统计摘要已按极简顶栏契约移除）
-  assert.ok(html.includes('primary-center-topbar'), '应包含 primary-center-topbar 顶栏')
-  assert.ok(html.includes('Skills Center'), '应展示技能中心标题')
-  assert.ok(!html.includes('primary-center-subtitle'), '不应再渲染副标题')
+  // Top bar assertions (subtitle and stats summary removed per the minimal top-bar contract)
+  assert.ok(html.includes('primary-center-topbar'), 'must include the primary-center-topbar')
+  assert.ok(html.includes('Skills Center'), 'must show the Skills Center title')
+  assert.ok(!html.includes('primary-center-subtitle'), 'the subtitle must no longer render')
 
-  // 检索栏与分类标签
-  assert.ok(html.includes('primary-center-toolbar'), '应包含 primary-center-toolbar 工具栏')
-  assert.ok(html.includes('Search skill name, ID, description or reference files'), '应包含搜索框占位符')
-  assert.ok(html.includes('primary-category-pill'), '应包含分类筛选标签')
-  assert.ok(html.includes('All'), '应包含全部标签')
-  assert.ok(html.includes('Built-in'), '应包含内置标签')
-  assert.ok(html.includes('Shared'), '应包含共享标签')
-  assert.ok(html.includes('Workspace'), '应包含工作区标签')
-  assert.ok(html.includes('Plugins'), '应包含插件标签')
+  // Search bar and category tabs
+  assert.ok(html.includes('primary-center-toolbar'), 'must include the primary-center-toolbar')
+  assert.ok(html.includes('Search skill name, ID, description or reference files'), 'must include the search placeholder')
+  assert.ok(html.includes('primary-category-pill'), 'must include the category filter pills')
+  assert.ok(html.includes('All'), 'must include the All tab')
+  assert.ok(html.includes('Built-in'), 'must include the Built-in tab')
+  assert.ok(html.includes('Shared'), 'must include the Shared tab')
+  assert.ok(html.includes('Workspace'), 'must include the Workspace tab')
+  assert.ok(html.includes('Plugins'), 'must include the Plugins tab')
 
-  // 卡片网格
-  assert.ok(html.includes('primary-center-grid'), '应包含 primary-center-grid 卡片网格')
-  assert.ok(html.includes('Helm 命令行操作手册'), '网格中应渲染 mock 技能卡片')
-  assert.ok(html.includes('工程代码审查规范'), '网格中应渲染 mock 技能卡片')
+  // Card grid
+  assert.ok(html.includes('primary-center-grid'), 'must include the primary-center-grid')
+  assert.ok(html.includes('Helm 命令行操作手册'), 'the grid must render mock skill cards (zh fixture)')
+  assert.ok(html.includes('工程代码审查规范'), 'the grid must render mock skill cards (zh fixture)')
 
-  // 零 Emoji 断言
-  assert.doesNotMatch(html, emojiRegex, 'SkillCenter 全界面渲染输出严禁包含 Emoji 表情')
+  // Zero-emoji assertion
+  assert.doesNotMatch(html, emojiRegex, 'SkillCenter output must contain no emoji anywhere')
 })
 
-test('SkillCenter: 当无匹配项时渲染空状态且零 Emoji', { timeout: 60_000 }, () => {
+test('SkillCenter: renders the empty state with zero emoji when nothing matches', { timeout: 60_000 }, () => {
   const store = makeTestStore({
     skills: [],
     primaryTarget: { kind: 'skills' },
@@ -1218,12 +1236,62 @@ test('SkillCenter: 当无匹配项时渲染空状态且零 Emoji', { timeout: 60
     ),
   )
 
-  assert.ok(html.includes('primary-center-empty'), '无数据时应渲染 primary-center-empty')
-  assert.ok(html.includes('No matching skills'), '应提示未找到匹配技能')
-  assert.doesNotMatch(html, emojiRegex, '空状态严禁包含 Emoji')
+  assert.ok(html.includes('primary-center-empty'), 'primary-center-empty must render without data')
+  assert.ok(html.includes('No matching skills'), 'must hint that no skills match')
+  assert.doesNotMatch(html, emojiRegex, 'the empty state must contain no emoji')
 })
 
-test('SkillCenter: 交互过滤、搜索与抽屉联动 (openTarget)', { timeout: 60_000 }, async () => {
+test('SkillCenter: zh-CN locale renders the localized center copy', { timeout: 60_000 }, () => {
+  const store = makeTestStore({
+    locale: 'zh-CN',
+    skills: mockSkills,
+    primaryTarget: { kind: 'skills' },
+  })
+
+  const html = renderToString(
+    e(
+      HostStoreProviders,
+      { value: store },
+      e(SkillCenter, { inlineDrawer: true }),
+    ),
+  )
+
+  assert.ok(html.includes('技能中心'), 'must render the localized title')
+  assert.ok(html.includes('刷新技能清单'), 'must render the localized refresh title')
+  assert.ok(html.includes('搜索技能名称、ID、描述或参考文件…'), 'must render the localized search placeholder')
+  assert.ok(html.includes('aria-label="技能分类筛选"'), 'must render the localized filter aria-label')
+  assert.ok(html.includes('全部'), 'must render the localized All tab')
+  assert.ok(html.includes('内置'), 'must render the localized Built-in tab')
+  assert.ok(html.includes('插件'), 'must render the localized Plugins tab')
+  assert.ok(html.includes('共享'), 'must render the localized Shared tab')
+  assert.ok(html.includes('工作区'), 'must render the localized Workspace tab')
+  assert.ok(html.includes('暂无描述') === false, 'skills with descriptions never show the no-description fallback')
+  assert.ok(!html.includes('Skills Center'), 'the English title must not render in zh-CN')
+  assert.doesNotMatch(html, emojiRegex, 'zh-CN SkillCenter output must contain no emoji')
+})
+
+test('SkillCard: zh-CN locale renders localized card copy via the store translator', { timeout: 60_000 }, () => {
+  const noDescSkill: SkillSummary = { ...mockSkills[2], description: '' }
+  const store = makeTestStore({
+    locale: 'zh-CN',
+    skills: mockSkills,
+    primaryTarget: { kind: 'skills' },
+  })
+
+  const html = renderToString(
+    e(
+      HostStoreProviders,
+      { value: store },
+      e(SkillCard, { skill: noDescSkill, selected: false, onSelect: () => {} }),
+    ),
+  )
+
+  assert.ok(html.includes('暂无描述'), 'a missing description must fall back to the localized no-description copy')
+  assert.ok(html.includes('title="来源：工作区"'), 'the source badge title must render the localized copy')
+  assert.ok(!html.includes('No description'), 'the English fallback must not render in zh-CN')
+})
+
+test('SkillCenter: interactive filtering, search and drawer wiring (openTarget)', { timeout: 60_000 }, async () => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = ReactDOMClient.createRoot(host)
@@ -1247,62 +1315,62 @@ test('SkillCenter: 交互过滤、搜索与抽屉联动 (openTarget)', { timeout
     )
   })
 
-  // 1. 搜索过滤联动
+  // 1. Search filtering
   const searchInput = host.querySelector('.primary-search-box input') as HTMLInputElement
-  assert.ok(searchInput, '应找到搜索框')
+  assert.ok(searchInput, 'the search input must be found')
 
   await act(async () => {
     typeIntoInput(searchInput, 'PostgreSQL')
   })
 
   let cards = host.querySelectorAll('.skill-card')
-  assert.equal(cards.length, 1, '搜索 PostgreSQL 应仅过滤出一张卡片')
+  assert.equal(cards.length, 1, 'searching PostgreSQL must filter down to one card')
   assert.ok(cards[0]!.textContent?.includes('数据库迁移演练'))
 
-  // 2. 清空搜索
+  // 2. Clear the search
   const clearBtn = host.querySelector('.primary-search-clear') as HTMLButtonElement
-  assert.ok(clearBtn, '应出现清空搜索按钮')
+  assert.ok(clearBtn, 'the clear-search button must appear')
   await act(async () => {
     clearBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
   cards = host.querySelectorAll('.skill-card')
-  assert.equal(cards.length, 6, '清空搜索后恢复全量卡片')
+  assert.equal(cards.length, 6, 'clearing the search restores all cards')
 
-  // 3. 点击分类药丸标签过滤
+  // 3. Category pill filtering
   const pills = Array.from(host.querySelectorAll('.primary-category-pill')) as HTMLButtonElement[]
   const builtinPill = pills.find((p) => p.textContent?.includes('Built-in'))
-  assert.ok(builtinPill, '应找到内置分类标签')
+  assert.ok(builtinPill, 'the Built-in pill must be found')
 
   await act(async () => {
     builtinPill.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
   cards = host.querySelectorAll('.skill-card')
-  assert.equal(cards.length, 2, '内置分类下应仅展示 2 个内置技能')
+  assert.equal(cards.length, 2, 'the Built-in tab must show exactly the 2 built-in skills')
 
-  // 3.5 共享分类药丸：仅展示 source=agents 的技能
+  // 3.5 Shared category pill: only source=agents skills
   const agentsPill = pills.find((p) => p.textContent?.includes('Shared'))
-  assert.ok(agentsPill, '应找到共享分类标签')
+  assert.ok(agentsPill, 'the Shared pill must be found')
   await act(async () => {
     agentsPill.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
   cards = host.querySelectorAll('.skill-card')
-  assert.equal(cards.length, 1, '共享分类下应仅展示 1 个共享根技能')
-  assert.ok(cards[0]!.textContent?.includes('git-commit'), '共享分类卡片应为 git-commit')
+  assert.equal(cards.length, 1, 'the Shared tab must show exactly the 1 shared-root skill')
+  assert.ok(cards[0]!.textContent?.includes('git-commit'), 'the shared card must be git-commit')
 
-  // 恢复全部后点击卡片触发 openTarget
+  // Restore All, then click a card to trigger openTarget
   const allPill = pills.find((p) => p.textContent?.includes('All'))
   assert.ok(allPill)
   await act(async () => {
     allPill.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
   cards = host.querySelectorAll('.skill-card')
-  assert.equal(cards.length, 6, '恢复全部后应回到全量卡片')
+  assert.equal(cards.length, 6, 'restoring All returns to the full card set')
 
-  // 4. 点击卡片触发 openTarget 打开抽屉
+  // 4. Clicking a card triggers openTarget to open the drawer
   await act(async () => {
     cards[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
-  assert.ok(openTargetCalls.length > 0, '点击卡片应调用 openTarget')
+  assert.ok(openTargetCalls.length > 0, 'clicking a card must call openTarget')
   const lastCall = openTargetCalls[openTargetCalls.length - 1]
   assert.ok(lastCall)
   assert.deepEqual(lastCall.target, { kind: 'skills', skillId: 'helm-cli' })
