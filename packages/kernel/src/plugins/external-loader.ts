@@ -45,7 +45,7 @@
  *   with full host permissions and is not a security sandbox.
  */
 import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   HelmError,
@@ -165,17 +165,7 @@ export async function resolvePluginEntry(dirPath: string): Promise<string | unde
         }
       }
       const spec = resolvedSpec ?? mainSpec;
-      const entry = resolve(dirPath, spec);
-      const rel = relative(realpathSync(dirPath), entry);
-      if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-        throw new HelmError(
-          'plugin_manifest_invalid',
-          `External plugin ${dirPath} package.json entry escapes plugin directory: ${spec}`,
-          400,
-          { dirPath, main: spec },
-        );
-      }
-      return assertEntryFile(dirPath, spec, entry);
+      return resolveManifestEntryFile(dirPath, spec, 'package.json entry');
     }
     return undefined;
   }
@@ -199,21 +189,26 @@ export async function resolvePluginEntry(dirPath: string): Promise<string | unde
       { dirPath, main: String(main) },
     );
   }
-  const entry = resolve(dirPath, main);
-  const rel = relative(realpathSync(dirPath), entry);
-  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+  return resolveManifestEntryFile(dirPath, main, 'plugin.json main');
+}
+
+function resolveManifestEntryFile(dirPath: string, rawMain: string, fieldLabel: string): string {
+  const dirAbs = resolve(dirPath);
+  const dirReal = realpathSync(dirAbs);
+  const entry = resolve(dirAbs, rawMain);
+  if (isLexicallyOutsidePluginDir(dirAbs, dirReal, rawMain, entry)) {
     throw new HelmError(
       'plugin_manifest_invalid',
-      `External plugin ${dirPath} plugin.json main escapes plugin directory: ${main}`,
+      `External plugin ${dirPath} ${fieldLabel} escapes plugin directory: ${rawMain}`,
       400,
-      { dirPath, main },
+      { dirPath, main: rawMain },
     );
   }
-  return assertEntryFile(dirPath, main, entry);
+  return assertEntryFile(dirPath, rawMain, entry, dirReal);
 }
 
 /** Confirms entrypoint is a regular file inside `dirPath` (symlink escapes fail loudly). */
-function assertEntryFile(dirPath: string, main: string, entry: string): string {
+function assertEntryFile(dirPath: string, main: string, entry: string, dirReal = realpathSync(dirPath)): string {
   let real: string;
   let isFile: boolean;
   try {
@@ -240,8 +235,7 @@ function assertEntryFile(dirPath: string, main: string, entry: string): string {
       main,
     });
   }
-  const rel = relative(realpathSync(dirPath), real);
-  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+  if (isOutsideBase(dirReal, real)) {
     throw new HelmError(
       'plugin_manifest_invalid',
       `External plugin ${dirPath} plugin.json main (resolved symlink) escapes plugin directory: ${main}`,
@@ -375,6 +369,48 @@ export function assertExternalDefinition(candidate: unknown, dirPath: string): P
  *   relative paths inside the plugin directory (escapes reject explicitly); preserve absolute paths.
  *   Path bounds enforce a convention only and do not constitute a security sandbox.
  */
+function isOutsideBase(base: string, target: string): boolean {
+  const rel = relative(base, target);
+  return rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+}
+
+/**
+ * Checks lexical containment against `resolve(dirPath)` (and `dirReal` when `rawPath` is absolute) so
+ * Windows 8.3 short paths (`RUNNER~1`) or symlinked parent dirs (`/var` -> `/private/var`) do not fail spuriously.
+ */
+function isLexicallyOutsidePluginDir(
+  dirAbs: string,
+  dirReal: string | undefined,
+  rawPath: string,
+  resolvedPath: string,
+): boolean {
+  if (!isAbsolute(rawPath)) {
+    return isOutsideBase(dirAbs, resolvedPath);
+  }
+  return isOutsideBase(dirAbs, resolvedPath) && (dirReal === undefined || isOutsideBase(dirReal, resolvedPath));
+}
+
+function resolveNearestRealpathSync(target: string): { kind: 'ok'; real: string } | { kind: 'dangling-symlink' } {
+  let cur = target;
+  for (;;) {
+    try {
+      return { kind: 'ok', real: realpathSync(cur) };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err;
+      // A dangling symlink fails realpathSync with ENOENT; surface it as a symlink escape rather than skipping to parent.
+      try {
+        if (lstatSync(cur).isSymbolicLink()) return { kind: 'dangling-symlink' };
+      } catch {
+        // Missing component: walk up to nearest existing ancestor.
+      }
+      const parent = dirname(cur);
+      if (parent === cur) throw err;
+      cur = parent;
+    }
+  }
+}
+
 function assertContainedInPluginDir(
   dirPath: string,
   dirReal: string,
@@ -382,8 +418,8 @@ function assertContainedInPluginDir(
   resolvedPath: string,
   fieldLabel: string,
 ): void {
-  const relLexical = relative(dirReal, resolvedPath);
-  if (relLexical === '..' || relLexical.startsWith(`..${sep}`) || isAbsolute(relLexical)) {
+  const dirAbs = resolve(dirPath);
+  if (isLexicallyOutsidePluginDir(dirAbs, dirReal, rawPath, resolvedPath)) {
     throw new HelmError(
       'invalid_plugin_definition',
       `External plugin ${dirPath} ${fieldLabel} escapes plugin directory: ${rawPath}`,
@@ -392,9 +428,8 @@ function assertContainedInPluginDir(
     );
   }
   try {
-    const targetReal = realpathSync(resolvedPath);
-    const relReal = relative(dirReal, targetReal);
-    if (relReal === '..' || relReal.startsWith(`..${sep}`) || isAbsolute(relReal)) {
+    const resolved = resolveNearestRealpathSync(resolvedPath);
+    if (resolved.kind === 'dangling-symlink' || isOutsideBase(dirReal, resolved.real)) {
       throw new HelmError(
         'invalid_plugin_definition',
         `External plugin ${dirPath} ${fieldLabel} symlink escapes plugin directory: ${rawPath}`,
@@ -404,14 +439,12 @@ function assertContainedInPluginDir(
     }
   } catch (err) {
     if (err instanceof HelmError) throw err;
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw new HelmError(
-        'invalid_plugin_definition',
-        `External plugin ${dirPath} ${fieldLabel} cannot be accessed: ${err instanceof Error ? err.message : String(err)}`,
-        400,
-        { dirPath, [fieldLabel]: rawPath },
-      );
-    }
+    throw new HelmError(
+      'invalid_plugin_definition',
+      `External plugin ${dirPath} ${fieldLabel} cannot be accessed: ${err instanceof Error ? err.message : String(err)}`,
+      400,
+      { dirPath, [fieldLabel]: rawPath },
+    );
   }
 }
 

@@ -19,7 +19,7 @@
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { HelmError, clientNpmRootsOf } from '@helm/protocol'
 import {
@@ -33,6 +33,7 @@ import {
   importPluginDefinition,
   normalizeDefinition,
   resolvePluginEntry,
+  verifyDeclaredPrebuiltDir,
 } from '../src/plugins/external-loader.js'
 import { readHelmClientDependencies } from '../src/plugins/plugin-manifest.js'
 import { doctorPluginDir } from '../src/plugins/plugin-doctor.js'
@@ -529,4 +530,71 @@ test('managed install rejects corrupt prebuilt dist-client explicitly without si
     (err: unknown) => err instanceof HelmError && err.code === 'prebuilt_client_invalid',
   )
   assert.equal(calls.length, 0, 'corrupt prebuilt bundle must reject before invoking npm install')
+})
+
+test('external-loader allows alias/symlinked plugin parent paths (e.g. Windows 8.3 short paths) while rejecting nested symlink escapes', { timeout: 60_000 }, async (t) => {
+  const realRoot = join(workDir, 'real-root')
+  const aliasRoot = join(workDir, 'alias-root')
+  mkdirSync(realRoot, { recursive: true })
+  symlinkSync(realRoot, aliasRoot, 'junction')
+
+  // 1. plugin.json main + clientRoot + dist-client accessed via aliasRoot
+  const aliasPluginDir = join(aliasRoot, 'alias-prebuilt-plugin')
+  mkdirSync(join(aliasPluginDir, 'client'), { recursive: true })
+  writeJson(join(aliasPluginDir, 'plugin.json'), {
+    id: 'alias-prebuilt-plugin',
+    main: 'index.ts',
+    clientRoot: './client',
+    clientDependencies: ['heavy-chart'],
+  })
+  writeFileSync(
+    join(aliasPluginDir, 'index.ts'),
+    `export default {
+  id: 'alias-prebuilt-plugin',
+  definePlugin(ctx) {
+    ctx.ui.screen({ id: 'home', title: 'Home', client: { module: 'index.tsx', export: 'Home' } })
+  },
+}
+`,
+    'utf8',
+  )
+  writeFileSync(join(aliasPluginDir, 'client', 'index.tsx'), 'export function Home() { return null }\n', 'utf8')
+  await buildPluginClientBundleDir({
+    pluginId: 'alias-prebuilt-plugin',
+    clientRoot: join(aliasPluginDir, 'client'),
+    outDir: join(aliasPluginDir, 'dist-client'),
+  })
+
+  const entry = await resolvePluginEntry(aliasPluginDir)
+  assert.ok(entry)
+  assert.equal(verifyDeclaredPrebuiltDir(aliasPluginDir), realpathSync(join(aliasPluginDir, 'dist-client')))
+  const normalized = normalizeDefinition(await importPluginDefinition(aliasPluginDir, entry), aliasPluginDir)
+  assert.equal(normalized.clientRoot, join(aliasPluginDir, 'client'))
+  assert.equal(normalized.prebuiltClientDir, realpathSync(join(aliasPluginDir, 'dist-client')))
+
+  // 2. Managed install when dataDir itself traverses a symlinked/alias parent path
+  const aliasDataDir = join(aliasRoot, 'alias-data-dir')
+  mkdirSync(aliasDataDir, { recursive: true })
+  const calls: NpmCall[] = []
+  const runner: PackageRunner = async (cmd, args, opts) => {
+    calls.push({ cmd, args, cwd: opts.cwd })
+    return { code: 0, stdout: '', stderr: '' }
+  }
+  const manager = makeTestPackageManager(aliasDataDir, 'alias-prebuilt-plugin', runner)
+  const installed = await manager.install(aliasPluginDir)
+  assert.equal(installed.record.pluginId, 'alias-prebuilt-plugin')
+  assert.equal(calls.length, 0)
+
+  // 3. Nested symlink escape under a non-existent clientRoot segment still rejects
+  const outsideDir = useTempDir(t, 'helm-ext-outside-')
+  symlinkSync(outsideDir, join(aliasPluginDir, 'sym-out'), 'junction')
+  writeJson(join(aliasPluginDir, 'plugin.json'), {
+    id: 'alias-prebuilt-plugin',
+    main: 'index.ts',
+    clientRoot: './sym-out/missing-subdir',
+  })
+  assert.throws(
+    () => normalizeDefinition({ id: 'alias-prebuilt-plugin', definePlugin() {} }, aliasPluginDir),
+    (err: unknown) => err instanceof HelmError && err.code === 'invalid_plugin_definition',
+  )
 })

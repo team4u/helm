@@ -823,6 +823,36 @@ async function readOptionalManifestObject(
   return parsed as Record<string, unknown>
 }
 
+function isOutsidePluginBase(pathMod: typeof import('node:path'), base: string, target: string): boolean {
+  const rel = pathMod.relative(base, target)
+  return rel === '..' || rel.startsWith(`..${pathMod.sep}`) || pathMod.isAbsolute(rel)
+}
+
+async function resolveNearestRealpath(
+  pathMod: typeof import('node:path'),
+  fsp: typeof import('node:fs/promises'),
+  target: string,
+): Promise<{ kind: 'ok'; real: string } | { kind: 'dangling-symlink' }> {
+  let cur = target
+  for (;;) {
+    try {
+      return { kind: 'ok', real: await fsp.realpath(cur) }
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err
+      // A dangling symlink fails realpath with ENOENT; surface it as a symlink escape rather than masking via parent.
+      try {
+        if ((await fsp.lstat(cur)).isSymbolicLink()) return { kind: 'dangling-symlink' }
+      } catch {
+        // Missing component: walk up to nearest existing ancestor.
+      }
+      const parent = pathMod.dirname(cur)
+      if (parent === cur) throw err
+      cur = parent
+    }
+  }
+}
+
 async function assertPathInsidePluginRoot(
   pluginDir: string,
   dirReal: string,
@@ -832,17 +862,20 @@ async function assertPathInsidePluginRoot(
 ): Promise<void> {
   const path = await import('node:path')
   const fsp = await import('node:fs/promises')
-  const relLexical = path.relative(dirReal, resolvedPath)
-  if (relLexical === '..' || relLexical.startsWith(`..${path.sep}`) || path.isAbsolute(relLexical)) {
+  // Compare lexical containment against pluginDir (same base used by path.resolve) so 8.3 short paths
+  // (e.g. Windows RUNNER~1) or symlinked parent dirs (/var -> /private/var) do not falsely mismatch dirReal.
+  const lexicalEscapes = path.isAbsolute(rawSubpath)
+    ? isOutsidePluginBase(path, pluginDir, resolvedPath) && isOutsidePluginBase(path, dirReal, resolvedPath)
+    : isOutsidePluginBase(path, pluginDir, resolvedPath)
+  if (lexicalEscapes) {
     throw new CliError(
       `plugin ${pluginDir} ${field} escapes plugin directory: ${rawSubpath}`,
       'invalid_plugin_definition',
     )
   }
   try {
-    const targetReal = await fsp.realpath(resolvedPath)
-    const relReal = path.relative(dirReal, targetReal)
-    if (relReal === '..' || relReal.startsWith(`..${path.sep}`) || path.isAbsolute(relReal)) {
+    const resolved = await resolveNearestRealpath(path, fsp, resolvedPath)
+    if (resolved.kind === 'dangling-symlink' || isOutsidePluginBase(path, dirReal, resolved.real)) {
       throw new CliError(
         `plugin ${pluginDir} ${field} symlink escapes plugin directory: ${rawSubpath}`,
         'invalid_plugin_definition',
@@ -850,12 +883,10 @@ async function assertPathInsidePluginRoot(
     }
   } catch (err) {
     if (err instanceof CliError) throw err
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw new CliError(
-        `failed to resolve ${field} (${resolvedPath}): ${err instanceof Error ? err.message : String(err)}`,
-        'read_failed',
-      )
-    }
+    throw new CliError(
+      `failed to resolve ${field} (${resolvedPath}): ${err instanceof Error ? err.message : String(err)}`,
+      'read_failed',
+    )
   }
 }
 

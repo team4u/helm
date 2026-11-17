@@ -477,3 +477,51 @@ test('plugins build: local prebuilt bundle compilation (--json, --out, --module,
   assert.notEqual(escaping.code, 0)
   assert.equal(parseCliError(escaping).code, 'invalid_plugin_definition')
 })
+
+test('plugins build: works when plugin directory traverses a symlinked/alias parent path and still rejects symlink escapes', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helm-cli-build-alias-')
+  const env = makeCliEnv('http://127.0.0.1:1', dataDir)
+  const realParent = path.join(dataDir, 'real-parent')
+  const aliasParent = path.join(dataDir, 'alias-parent')
+  await fsp.mkdir(realParent, { recursive: true })
+  // Junction works without admin privileges on Windows and acts as a directory symlink on POSIX,
+  // reproducing the dir !== realpath(dir) mismatch (e.g. Windows RUNNER~1 or macOS /var -> /private/var).
+  await fsp.symlink(realParent, aliasParent, 'junction')
+
+  const initRes = await runCliCaptured(['plugins', 'init', 'alias-pl', '--dir', aliasParent, '--json'], env)
+  assert.equal(initRes.code, 0, initRes.err)
+  const { dir: aliasPluginDir } = JSON.parse(initRes.out) as { dir: string }
+
+  const pluginManifestPath = path.join(aliasPluginDir, 'plugin.json')
+  await fsp.writeFile(
+    pluginManifestPath,
+    JSON.stringify({ id: 'alias-pl', main: 'index.ts', clientRoot: './client', clientDist: './custom-dist' }),
+  )
+  const buildRes = await runCliCaptured(['plugins', 'build', aliasPluginDir, '--json'], env)
+  assert.equal(buildRes.code, 0, buildRes.err)
+  const buildBody = JSON.parse(buildRes.out) as { outDir: string; manifest: { modules: Record<string, unknown> } }
+  assert.equal(buildBody.outDir, path.join(aliasPluginDir, 'custom-dist'))
+  assert.ok(buildBody.manifest.modules['index.tsx'])
+
+  // Symlink escape through a non-existent nested subdirectory under clientDist must still be caught.
+  const outsideDir = path.join(dataDir, 'outside-target')
+  await fsp.mkdir(outsideDir, { recursive: true })
+  await fsp.symlink(outsideDir, path.join(aliasPluginDir, 'sym-out'), 'junction')
+  await fsp.writeFile(
+    pluginManifestPath,
+    JSON.stringify({ id: 'alias-pl', main: 'index.ts', clientRoot: './client', clientDist: './sym-out/nested' }),
+  )
+  const symEscape = await runCliCaptured(['plugins', 'build', aliasPluginDir, '--json'], env)
+  assert.notEqual(symEscape.code, 0)
+  assert.equal(parseCliError(symEscape).code, 'invalid_plugin_definition')
+
+  // Dangling symlink declared as clientRoot/clientDist must be rejected rather than falling back to parent.
+  await fsp.symlink(path.join(dataDir, 'nonexistent-outside'), path.join(aliasPluginDir, 'dangling-client'), 'junction')
+  await fsp.writeFile(
+    pluginManifestPath,
+    JSON.stringify({ id: 'alias-pl', main: 'index.ts', clientRoot: './dangling-client' }),
+  )
+  const danglingEscape = await runCliCaptured(['plugins', 'build', aliasPluginDir, '--json'], env)
+  assert.notEqual(danglingEscape.code, 0)
+  assert.equal(parseCliError(danglingEscape).code, 'invalid_plugin_definition')
+})
