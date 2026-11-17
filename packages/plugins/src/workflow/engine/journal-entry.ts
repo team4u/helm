@@ -39,8 +39,6 @@ export type JournalWriteInput = JournalScope & (
       /** The owning call's first index within this run, for auditing and progress folding. */
       invocationIndex?: number
       prompt?: string
-      /** The current failure was retried manually. Auto retries follow maxAttempts. */
-      retryKind?: 'manual'
       skipped?: boolean
       /** The failure reason (already redacted). */
       error?: string
@@ -127,7 +125,6 @@ export type WorkflowJournalEntry = JournalScope & (
       attempt?: number
       invocationIndex?: number
       prompt?: string
-      retryKind?: 'manual'
       skipped?: boolean
       error?: string
       timedOut?: boolean
@@ -292,7 +289,6 @@ export function isAgentEntry(value: unknown): value is Extract<WorkflowJournalEn
     (e['attempt'] === undefined || (Number.isInteger(e['attempt']) && (e['attempt'] as number) >= 1)) &&
     (e['invocationIndex'] === undefined || (Number.isInteger(e['invocationIndex']) && (e['invocationIndex'] as number) >= 0 && (e['invocationIndex'] as number) <= (e['index'] as number))) &&
     (e['prompt'] === undefined || typeof e['prompt'] === 'string') &&
-    (e['retryKind'] === undefined || e['retryKind'] === 'manual') &&
     (e['skipped'] === undefined || typeof e['skipped'] === 'boolean') &&
     (e['error'] === undefined || typeof e['error'] === 'string') &&
     (e['timedOut'] === undefined || typeof e['timedOut'] === 'boolean') &&

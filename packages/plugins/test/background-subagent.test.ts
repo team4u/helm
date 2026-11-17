@@ -19,7 +19,7 @@
 
 import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HelmError, type AgentExecutionInfo } from '@helm/protocol'
@@ -235,10 +235,11 @@ describe('startBackgroundAgent', () => {
     assert.equal(host.settledCalls[0]!.agentType, 'researcher')
     assert.equal(host.settledCalls[0]!.execution?.conversationId, 42)
 
-    // notifiedAt 已持久化（重开服务 init 不再补发）。
+    // notifiedAt 已持久化（重开服务 init 不再补发），且单子代理绝不创建空 .jsonl 幻影账本文件。
     const record = readRecord(dataDir, run.id)
     assert.equal(record['kind'], 'subagent')
     assert.ok(typeof record['notifiedAt'] === 'number')
+    assert.equal(existsSync(String(record['journalPath'])), false, '单子代理不得打开/创建空 .jsonl 账本文件')
     await service.close()
     const reopened = new WorkflowService({ dataDir, host, state })
     await reopened.init()

@@ -24,7 +24,9 @@ import {
 } from '@helm/protocol'
 import { PluginHost } from '../../kernel/src/plugins/index.js'
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
+import type { WorkflowRunBadgesDocState, WorkflowRunSessionDocState, WorkflowRunSummary } from '../src/contracts.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
+import { createRunsProjection, MAX_PROJECTED_RUNS_PER_CONVERSATION } from '../src/workflow/projection.js'
 import { createHelm } from '../../hub/src/app.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import { MemoryDocStore, makeConversationSummary } from './helpers/plugin-test-env.js'
@@ -319,12 +321,13 @@ test('sessionDoc 声明与 docs 命名空间隔离：runs 为会话文档，reco
   const host = makeHost()
   await host.register(createWorkflowPlugin())
   // UI 声明合法性（sessionDocs 引用 public sessionDoc）在注册边界已通过（未抛）。
-  // 全局层只应存在 records（私有）与 run-badges（public）。
+  // 全局层只应存在私有存储与 run-badges（public），绝无全局 runs 文档。
   const globalKeys = [...docs.store.keys()].filter((k) => k.startsWith('builtin:workflow:'))
+  assert.equal(globalKeys.includes('builtin:workflow:runs'), false)
   assert.deepEqual(
-    globalKeys.filter((k) => !k.endsWith(':records')).sort(),
+    globalKeys.filter((k) => !k.endsWith(':records') && !k.endsWith(':subagent-conversations') && !k.endsWith(':worktree-state')).sort(),
     ['builtin:workflow:run-badges'],
-    `全局命名空间只留 records 与 run-badges（实际 ${JSON.stringify(globalKeys)}）`,
+    `全局命名空间只留私有记录与 run-badges（实际 ${JSON.stringify(globalKeys)}）`,
   )
   await host.dispose()
 })
@@ -439,5 +442,147 @@ test('conversation.upsert 树未变不重写（无写放大）；树变化（新
   await host.invokeAction('builtin:workflow', 'run', { conversationId: 11, script: `${META('upsert-child')}return 2` }, { conversationId: 11 })
   assert.equal(readShard(1)?.runs.length, 2, '新增后代会话发起的 run 进入根分片')
   assert.equal(readShard(11)?.runs.length, 1)
+  await host.dispose()
+})
+
+test('分片瘦身：runs 会话分片剥离大体积 result 并保留 hasResult/resultPreview，inspect 与 runs 动作仍返回完整 result', { timeout: 60_000 }, async () => {
+  const host = makeHost()
+  await host.register(createWorkflowPlugin())
+  const bigLine = `first-line-${'x'.repeat(260)}\nsecond-line-hidden`
+  const started = (await host.invokeAction(
+    'builtin:workflow',
+    'run',
+    { conversationId: 1, script: `${META('slim-str')}return ${JSON.stringify(bigLine)}`, wait: true },
+    { conversationId: 1 },
+  )) as { run: WorkflowRunSummary }
+
+  const shard = sessionDocs.get('builtin:workflow', 'runs', 1)
+  assert.ok(shard)
+  const projected = (JSON.parse(shard) as { runs: WorkflowRunSummary[] }).runs.find((r) => r.id === started.run.id)
+  assert.ok(projected)
+  assert.equal('result' in projected, false, 'runs 分片必须剥离原始 result')
+  assert.equal(projected.hasResult, true)
+  assert.equal(projected.resultPreview?.includes('\n'), false, 'resultPreview 必须单行')
+  assert.equal(projected.resultPreview?.length, 200, '超长预览截断至 200 字符')
+  assert.equal(projected.resultPreview?.includes('second-line-hidden'), false)
+
+  const inspected = (await host.invokeAction('builtin:workflow', 'inspect', { runId: started.run.id })) as { run: WorkflowRunSummary }
+  assert.equal(inspected.run.result, bigLine, 'inspect 仍返回完整原始 result')
+  const listed = (await host.invokeAction('builtin:workflow', 'runs', { conversationId: 1 })) as { runs: WorkflowRunSummary[] }
+  assert.equal(listed.runs.find((r) => r.id === started.run.id)?.result, bigLine, 'runs 动作仍返回完整原始 result')
+  await host.dispose()
+})
+
+test('增量投影与 100 条滑窗：upsertRun 零 listRuns 磁盘读，超出 100 条时保留全部 running + 最新终态且角标计数精确', { timeout: 60_000 }, () => {
+  let listRunsCalls = 0
+  const initialRuns: WorkflowRunSummary[] = [
+    {
+      id: 'wf_old_running_1',
+      name: 'old-running-1',
+      conversationId: 1,
+      status: 'running',
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    {
+      id: 'wf_old_running_2',
+      name: 'old-running-2',
+      conversationId: 1,
+      status: 'running',
+      createdAt: 2,
+      updatedAt: 2,
+    },
+  ]
+  for (let i = 1; i <= 108; i++) {
+    initialRuns.push({
+      id: `wf_done_${i}`,
+      name: `done-${i}`,
+      conversationId: 1,
+      status: i === 108 ? 'failed' : 'completed',
+      createdAt: 10 + i,
+      updatedAt: 10 + i,
+      result: { idx: i },
+      ...(i === 108 ? { error: 'boom', errorCode: 'workflow_failed', resumable: true } : {}),
+    })
+  }
+
+  let latestSessionDoc: WorkflowRunSessionDocState | undefined
+  let latestBadges: WorkflowRunBadgesDocState = { byConversation: {} }
+  const runsDoc = {
+    set(_convId: number, value: WorkflowRunSessionDocState) {
+      latestSessionDoc = value
+    },
+    get: () => latestSessionDoc ?? { runs: [] },
+    update: () => {},
+    delete: () => {},
+    listConversationIds: () => [],
+    flush: async () => {},
+  } as unknown as PluginSessionDocHandle<WorkflowRunSessionDocState>
+
+  const projection = createRunsProjection({
+    runsDoc,
+    badgesDoc: {
+      get: () => latestBadges,
+      set: (value: WorkflowRunBadgesDocState) => { latestBadges = value },
+      update: () => {},
+      flush: async () => {},
+    },
+    listRuns: () => {
+      listRunsCalls += 1
+      return initialRuns
+    },
+    listConversations: () => [{ id: 1 }],
+  })
+
+  projection.sync()
+  assert.equal(listRunsCalls, 1)
+  assert.ok(latestSessionDoc)
+  assert.equal(latestSessionDoc.runs.length, MAX_PROJECTED_RUNS_PER_CONVERSATION)
+  // 2 条最旧的 running 必须被保留在 100 条分片内
+  assert.equal(latestSessionDoc.runs.some((r) => r.id === 'wf_old_running_1'), true)
+  assert.equal(latestSessionDoc.runs.some((r) => r.id === 'wf_old_running_2'), true)
+  // 最旧的 10 条 completed（done_1..done_10）滑出窗口，最新的 done_108 仍在窗口首位
+  assert.equal(latestSessionDoc.runs[0]?.id, 'wf_done_108')
+  assert.equal(latestSessionDoc.runs.some((r) => r.id === 'wf_done_1'), false)
+  assert.equal(latestSessionDoc.runs.some((r) => r.id === 'wf_done_10'), false)
+  assert.equal(latestSessionDoc.runs.some((r) => r.id === 'wf_done_11'), true)
+  // 角标基于全量会话聚合计算，不受 100 条分片截断影响
+  assert.equal(latestBadges.byConversation['1']?.count, 110)
+  assert.equal(latestBadges.byConversation['1']?.footerText, '2 运行中 · 1 失败')
+
+  // 运行期 upsertRun 单条增量更新：零 listRuns 调用
+  projection.upsertRun({
+    id: 'wf_old_running_1',
+    name: 'old-running-1',
+    conversationId: 1,
+    status: 'completed',
+    createdAt: 1,
+    updatedAt: 999,
+    result: 'now-settled',
+  })
+  assert.equal(listRunsCalls, 1, 'upsertRun 绝不得触发 listRuns 全量磁盘重读')
+  assert.equal(latestBadges.byConversation['1']?.footerText, '1 运行中 · 1 失败')
+  // wf_old_running_1 变为 createdAt=1 的终态后自然滑出 100 窗口，done_10 补位进入
+  assert.equal(latestSessionDoc.runs.length, MAX_PROJECTED_RUNS_PER_CONVERSATION)
+  assert.equal(latestSessionDoc.runs.some((r) => r.id === 'wf_old_running_1'), false)
+  assert.equal(latestSessionDoc.runs.some((r) => r.id === 'wf_done_10'), true)
+})
+
+test('conversation.deleted 清理受管子代理登记表（subagent-conversations GC）', { timeout: 60_000 }, async () => {
+  backend.conversations.set(21, makeConversation(21, 1))
+  docs.set('builtin:workflow:subagent-conversations', {
+    '21': { depth: 1, parentConversationId: 1, maxSubagentDepth: 2, createdAt: 1 },
+  })
+  const host = makeHost()
+  await host.register(createWorkflowPlugin())
+  const beforeGc = docs.get<Record<string, unknown>>('builtin:workflow:subagent-conversations', {})
+  assert.ok('21' in beforeGc, '派生子会话 21 已存在于 subagent-conversations')
+
+  backend.conversations.delete(21)
+  backend.emit('conversation.deleted', { type: 'conversation.deleted', conversationId: 21 })
+  await tick()
+
+  const afterGc = docs.get<Record<string, unknown>>('builtin:workflow:subagent-conversations', {})
+  assert.equal('21' in afterGc, false, '会话删除后必须回收 subagent-conversations 中的孤儿条目')
   await host.dispose()
 })

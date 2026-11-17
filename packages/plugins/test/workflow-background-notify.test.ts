@@ -427,7 +427,7 @@ it('createBackgroundReporter 契约矩阵：kind × 终态（completed/failed/ab
       submits.push({ conversationId, text, opts })
     },
     isConversationCancelling: () => false,
-    listRuns: () => [],
+    listActiveRuns: () => [],
   }
   const reporter = createBackgroundReporter(deps)
 
@@ -455,6 +455,7 @@ it('createBackgroundReporter 契约矩阵：kind × 终态（completed/failed/ab
       const report = JSON.parse(call.text.slice(call.text.indexOf('\n') + 1)) as { runId: string; status: string }
       assert.equal(report.runId, runId)
       assert.equal(report.status, status)
+      assert.deepEqual(call.opts.meta['report'], report)
     }
   }
 

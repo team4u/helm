@@ -80,8 +80,8 @@ export interface BackgroundReporterDeps {
   ): Promise<void>
   /** 引擎取消窗口判定（run done 之前的投递决策口径）。 */
   isConversationCancelling(conversationId: number): boolean
-  /** 投递时其余在途运行快照（report.otherRunningTasks 数据源）。 */
-  listRuns(): WorkflowRunSummary[]
+  /** 投递时其余在途运行快照（report.otherRunningTasks 数据源，零磁盘 I/O）。 */
+  listActiveRuns(): WorkflowRunSummary[]
 }
 
 export interface BackgroundReporter {
@@ -133,7 +133,7 @@ export function createBackgroundReporter(deps: BackgroundReporterDeps): Backgrou
       const isSubagent = run.kind === 'subagent'
       const requestId = `helm:${isSubagent ? 'subagent' : 'workflow'}-report:${run.id}`
       const otherRunningTasks = deps
-        .listRuns()
+        .listActiveRuns()
         .filter((candidate) => candidate.id !== run.id && candidate.conversationId === info.parentConversationId && candidate.status === 'running')
         .map((candidate) => ({ runId: candidate.id, name: candidate.name, kind: candidate.kind ?? 'workflow' }))
       const report = {
@@ -154,8 +154,9 @@ export function createBackgroundReporter(deps: BackgroundReporterDeps): Backgrou
           meta: {
             backgroundRunId: run.id,
             kind: isSubagent ? 'subagent_report' : 'workflow_report',
-            // 轻量渲染标记：宿主按 matchMeta 精确派发给本插件折叠卡；不影响 payload。
+            // 轻量渲染标记：宿主按 matchMeta 精确派发给本插件折叠卡；结构化 report 直供前端读取免正则解析。
             renderer: BACKGROUND_REPORT_RENDERER,
+            report,
           },
         },
       )

@@ -26,6 +26,15 @@ export interface WorkflowHookDeps {
   projection: RunsProjection
 }
 
+function extractDeletedConversationId(payload: unknown): number | undefined {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return undefined
+  const record = payload as Record<string, unknown>
+  const candidate = record['conversationId'] ?? record['id']
+  return typeof candidate === 'number' && Number.isSafeInteger(candidate) && candidate >= 1
+    ? candidate
+    : undefined
+}
+
 export function registerWorkflowHooks(ctx: HelmPluginContext, deps: WorkflowHookDeps): void {
   const { registry, isolation, workflows, projection } = deps
 
@@ -138,7 +147,11 @@ export function registerWorkflowHooks(ctx: HelmPluginContext, deps: WorkflowHook
   ctx.host.onEvent('conversation.upsert', () => {
     projection.reprojectOnConversationTreeChange()
   })
-  ctx.host.onEvent('conversation.deleted', () => {
+  ctx.host.onEvent('conversation.deleted', (raw) => {
+    if (!projection.isStopping()) {
+      const deletedId = extractDeletedConversationId(raw)
+      if (deletedId !== undefined) registry.pruneConversation(deletedId)
+    }
     projection.reprojectOnConversationDeleted()
   })
 
