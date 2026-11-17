@@ -1159,22 +1159,30 @@ pre {
   color: var(--fg-secondary);
 }
 
-.trace-group-summary-error,
+/* 有异常的折叠标题保留语义类，但维持静音中性色，仅通过右侧轻量徽标提醒 */
+.trace-group-summary-error {
+  color: var(--fg-muted);
+}
+
 .trace-group-summary-error:hover {
-  color: var(--err);
+  color: var(--fg-secondary);
 }
 
 .trace-group-badge-error {
   display: inline-flex;
   align-items: center;
   height: 17px;
-  padding: 0 5px;
+  padding: 0 6px;
   border-radius: var(--radius-xs);
   font-size: 10.5px;
   font-weight: 500;
-  background: var(--err-bg);
-  border: 1px solid var(--err-border);
-  color: var(--err);
+  background: color-mix(in srgb, var(--err) 7%, transparent);
+  color: color-mix(in srgb, var(--err) 72%, var(--fg-muted));
+}
+
+.trace-group-summary-error:hover .trace-group-badge-error {
+  background: color-mix(in srgb, var(--err) 11%, transparent);
+  color: color-mix(in srgb, var(--err) 84%, var(--fg-secondary));
 }
 
 .trace-group-meta {
