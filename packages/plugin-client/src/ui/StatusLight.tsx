@@ -35,7 +35,10 @@ export function StatusLight(props: StatusLightProps): ReactNode {
   const classes = ['helm-status-light', `helm-status-light-${tone}`]
   if (props.className !== undefined && props.className !== '') classes.push(props.className)
   const hasLabel = props.label !== undefined && props.label !== null && props.label !== ''
-  const ariaLabel = labelToText(props.label)
+  // role="img" must never end up without an accessible name: when no localized
+  // label is provided the raw status word becomes the fallback (call sites keep
+  // passing localized labels; this only guards the nameless case).
+  const ariaLabel = labelToText(props.label) ?? (props.status !== '' ? props.status : undefined)
   return (
     <span
       className={classes.join(' ')}

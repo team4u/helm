@@ -227,11 +227,12 @@ test('StatusLight: settled and neutral tones map honestly (completed/aborted/ski
   assert.match(renderToString(e(StatusLight, { status: 'weird-state' })), /helm-status-light-pending/)
 })
 
-test('StatusLight: without a label no sr-only node renders; extra className is appended; non-string labels keep the sr-only text', { timeout: 60_000 }, () => {
+test('StatusLight: without a label the raw status word becomes the accessible-name fallback; extra className is appended; non-string labels keep the sr-only text', { timeout: 60_000 }, () => {
   const html = renderToString(e(StatusLight, { status: 'blocked', className: 'tray-status' }))
   assert.match(html, /helm-status-light helm-status-light-blocked tray-status/)
   assert.match(html, /status-dot status-dot-blocked/)
-  assert.doesNotMatch(html, /helm-sr-only/)
+  assert.match(html, /aria-label="blocked"/, 'role=img never ends up nameless: raw status fallback')
+  assert.doesNotMatch(html, /helm-sr-only/, 'no sr-only node without an explicit label')
   const richLabel = renderToString(e(StatusLight, { status: 'done', label: e('em', undefined, 'Done') }))
   assert.match(richLabel, /helm-sr-only"><em[^>]*>Done<\/em>/, 'ReactNode labels render as sr-only content')
   assert.equal(typeof normalizeStatusLightTone, 'function')
