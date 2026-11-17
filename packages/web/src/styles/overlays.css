@@ -89,8 +89,10 @@
  * 视觉规范：1px 发丝边框、--bg-elevated 背景、var(--radius-sm, 7px) 微圆角、极简低饱和
  * ========================================================================== */
 
+/* 高于移动端侧边栏抽屉（.helm-sidebar: 72 / .sidebar-backdrop: 71）与连接横幅（65），
+ * 低于 Toast（90）与 Modal（100），确保从侧栏触发的下拉菜单/气泡/提示不被抽屉遮挡。 */
 [data-radix-popper-content-wrapper] {
-  z-index: 60;
+  z-index: 80;
 }
 
 /* Popover Content */
@@ -123,7 +125,7 @@
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  z-index: 60;
+  z-index: 80;
 }
 
 .locale-menu-popover {
