@@ -34,8 +34,14 @@ import {
   actionDetachFailed,
   ACTION_RETRY,
   ACTION_RETRY_TITLE,
+  ACTION_RESUME_SUBAGENT,
+  ACTION_RESUME_SUBAGENT_ARIA,
+  ACTION_RESUME_SUBAGENT_TITLE,
+  actionResumeSubagentFailed,
+  actionResumeSubagentStarted,
   approvalsBadge,
   approvalsTitle,
+  BADGE_CACHED,
   cardSubagentHeading,
   executionStatusLabel,
   runCardSelfStateTitle,
@@ -84,7 +90,7 @@ export function SubagentCardHeading(props: {
           {worktree.branch}
         </span>
       ) : null}
-      {props.cached === true ? <span className="badge badge-warn">cached</span> : null}
+      {props.cached === true ? <span className="badge badge-warn">{resolveLocalizedText(BADGE_CACHED, locale)}</span> : null}
       {effectiveStatus !== selfBadge.status ? (
         <>
           <span
@@ -190,8 +196,8 @@ export function SubagentCardActions(props: {
           type="button"
           className="btn btn-xs"
           disabled={resuming}
-          title="恢复该失败或中止的后台子代理任务"
-          aria-label="恢复该后台子代理任务"
+          title={t(ACTION_RESUME_SUBAGENT_TITLE)}
+          aria-label={t(ACTION_RESUME_SUBAGENT_ARIA)}
           onClick={(e) => {
             e.stopPropagation()
             if (resumeInFlight.current) return
@@ -202,8 +208,10 @@ export function SubagentCardActions(props: {
                 resumeFromRunId: backgroundRun.id,
                 conversationId: backgroundRun.conversationId,
               })
-              .then(() => ctx.notify(`已发起恢复（源运行 ${backgroundRun.id}）`))
-              .catch((err: unknown) => ctx.notify(`恢复后台子代理失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
+              .then(() => ctx.notify(actionResumeSubagentStarted(backgroundRun.id, locale)))
+              .catch((err: unknown) =>
+                ctx.notify(actionResumeSubagentFailed(err instanceof Error ? err.message : String(err), locale), 'error'),
+              )
               .finally(() => {
                 resumeInFlight.current = false
                 setResuming(false)
@@ -211,7 +219,7 @@ export function SubagentCardActions(props: {
           }}
         >
           <Icon name="rotate-cw" size={11} className={resuming ? SPIN : undefined} />
-          <span className="subagent-action-label">恢复</span>
+          <span className="subagent-action-label">{t(ACTION_RESUME_SUBAGENT)}</span>
         </button>
       ) : null}
       {worktree !== undefined ? (

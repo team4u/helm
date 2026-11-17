@@ -13,6 +13,7 @@ import {
   resolveKeyValueItems,
 } from '../src/json-render/client/spec-normalize.js'
 import { parseSendTarget, resolveSpecAction } from '../src/json-render/client/spec-action.js'
+import { jsonRenderTabFallbackTitle } from '../src/json-render/client/copy.js'
 
 // ---------------------------------------------------------------------------
 // 双形态归一化
@@ -399,6 +400,11 @@ test('evaluator 回归: 原型链逃逸被阻断（只读 own property）', { ti
   // own property 上同名键仍可读（只读 own 语义不误伤合法数据）
   const withOwn = evaluateSpecValue('{$docs.constructor}', { $docs: { constructor: 'safe' } })
   assert.equal(withOwn, 'safe')
+})
+
+test('copy: Tabs 缺省标题跟随宿主 locale', { timeout: 60_000 }, () => {
+  assert.equal(jsonRenderTabFallbackTitle(1, 'en'), 'Tab 1')
+  assert.equal(jsonRenderTabFallbackTitle(2, 'zh-CN'), '标签页 2')
 })
 
 // ---------------------------------------------------------------------------

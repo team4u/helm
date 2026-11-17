@@ -35,6 +35,9 @@ export const MAGPIE_DIAGNOSTICS_SECTION: LocalizedText = { en: 'Diagnostics', 'z
 export const MAGPIE_DIAGNOSTICS_COL: LocalizedText = { en: 'Unavailable items', 'zh-CN': '不可用项' }
 export const MAGPIE_DIAGNOSTICS_EMPTY: LocalizedText = { en: 'No diagnostics', 'zh-CN': '无诊断信息' }
 
+/** Quota & route tables shared column. */
+export const MAGPIE_COL_PROVIDER: LocalizedText = { en: 'Provider', 'zh-CN': '供应商' }
+
 /** Quota table. */
 export const MAGPIE_QUOTA_SECTION: LocalizedText = { en: 'Quotas', 'zh-CN': '配额' }
 export const MAGPIE_QUOTA_COL_ACCOUNT: LocalizedText = { en: 'Account', 'zh-CN': '账号' }

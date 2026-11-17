@@ -10,6 +10,8 @@ import { resolveDesktopConfig } from './config.js';
 import { createPayloadUpdater } from './updater.js';
 import { HostNpmInstaller } from './npm-installer.js';
 import { getElectron, type BrowserWindowLike, type ElectronApi, type TrayLike } from './electron-api.js';
+import type { MenuItemConstructorOptions } from 'electron';
+import type { PayloadUpdateStatus } from './updater.js';
 import { TRAY_ICON_DATA_URL } from './tray-icon.js';
 import { restoreShellPath } from './shell-env.js';
 import { installLinuxExitChildSweep } from './linux-exit-children.js';
@@ -85,7 +87,122 @@ async function runHeadless(): Promise<void> {
   process.once('SIGTERM', () => void stop());
 }
 
-const splash = 'data:text/html;charset=utf-8,' + encodeURIComponent(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><title>Helm</title><style>html{color-scheme:dark light;font:14px system-ui}body{margin:0;min-height:100vh;display:grid;place-content:center;text-align:center}h1{font-size:24px;font-weight:600}p{opacity:.65}</style><h1>Helm</h1><p>is now start...</p></html>`);
+export type DesktopLocale = 'en' | 'zh-CN';
+export type DesktopLocalizedText = string | Readonly<Partial<Record<DesktopLocale, string>>>;
+
+const DESKTOP_LOCALES: readonly DesktopLocale[] = ['en', 'zh-CN'];
+
+export function normalizeDesktopLocaleTag(tag: string | null | undefined): DesktopLocale {
+  if (typeof tag !== 'string') return 'en';
+  // Strip POSIX encoding/modifier suffixes (e.g. zh_CN.UTF-8@euro) and normalize '_' to '-'.
+  const base = tag.trim().split(/[.@]/, 1)[0] ?? '';
+  const normalized = base.replaceAll('_', '-').toLowerCase();
+  if (normalized === 'zh' || normalized.startsWith('zh-')) return 'zh-CN';
+  return 'en';
+}
+
+export function resolveDesktopLocale(
+  app?: { getLocale?: () => string },
+  env: NodeJS.ProcessEnv = process.env,
+): DesktopLocale {
+  let raw: string | undefined;
+  try {
+    const appLocale = typeof app?.getLocale === 'function' ? app.getLocale() : undefined;
+    if (typeof appLocale === 'string' && appLocale.trim() !== '') raw = appLocale;
+  } catch {
+    // app.getLocale() may be unavailable before ready or on partial mocks; fall back to env.
+  }
+  if (raw === undefined) {
+    raw = env.LC_ALL || env.LC_MESSAGES || env.LANG;
+  }
+  return normalizeDesktopLocaleTag(raw);
+}
+
+export function resolveDesktopText(text: DesktopLocalizedText, locale: DesktopLocale): string {
+  if (typeof text === 'string') return text;
+  const direct = text[locale];
+  if (typeof direct === 'string') return direct;
+  const fallback = text['en'];
+  if (typeof fallback === 'string') return fallback;
+  for (const candidate of DESKTOP_LOCALES) {
+    const value = text[candidate];
+    if (typeof value === 'string') return value;
+  }
+  return '';
+}
+
+export const DESKTOP_TRAY_OPEN: DesktopLocalizedText = { en: 'Open Helm', 'zh-CN': '打开 Helm' };
+export const DESKTOP_TRAY_CHECK_UPDATE: DesktopLocalizedText = { en: 'Check for updates', 'zh-CN': '检查更新' };
+export const DESKTOP_TRAY_DOWNLOAD: DesktopLocalizedText = {
+  en: 'Download latest desktop release',
+  'zh-CN': '下载桌面端新版',
+};
+export const DESKTOP_TRAY_QUIT: DesktopLocalizedText = { en: 'Quit', 'zh-CN': '退出' };
+export const DESKTOP_TRAY_CHECK_FAILED: DesktopLocalizedText = {
+  en: 'Update check failed — click to retry',
+  'zh-CN': '检查更新失败，点击重试',
+};
+export const DESKTOP_START_FAILED_TITLE: DesktopLocalizedText = {
+  en: 'Helm failed to start',
+  'zh-CN': 'Helm 启动失败',
+};
+
+export function resolveUpdateStatusLabel(status: PayloadUpdateStatus, locale: DesktopLocale): string {
+  if (status.updateAvailable) {
+    const version = status.latest?.version ?? '';
+    return resolveDesktopText(
+      {
+        en: `Update ${version} ready (installs on next launch)`,
+        'zh-CN': `新版本 ${version} 已就绪，下次启动安装`,
+      },
+      locale,
+    );
+  }
+  if (status.reason === 'updater_not_configured') {
+    return resolveDesktopText(
+      { en: 'Update source not configured', 'zh-CN': '尚未配置更新源' },
+      locale,
+    );
+  }
+  if (status.reason === 'latest_blocked') {
+    return resolveDesktopText(
+      {
+        en: 'Latest update unavailable; staying on current version',
+        'zh-CN': '最新更新不可用，已保持当前版本',
+      },
+      locale,
+    );
+  }
+  return resolveDesktopText({ en: 'Up to date', 'zh-CN': '当前已是最新版本' }, locale);
+}
+
+export function buildTrayMenuTemplate(options: {
+  locale: DesktopLocale;
+  updateLabel?: string;
+  updateEnabled: boolean;
+  onOpen: () => void;
+  onCheckUpdates: () => void;
+  onDownload: () => void;
+  onQuit: () => void;
+}): MenuItemConstructorOptions[] {
+  const { locale, updateLabel, updateEnabled, onOpen, onCheckUpdates, onDownload, onQuit } = options;
+  return [
+    { label: resolveDesktopText(DESKTOP_TRAY_OPEN, locale), click: onOpen },
+    {
+      label: updateLabel ?? resolveDesktopText(DESKTOP_TRAY_CHECK_UPDATE, locale),
+      click: onCheckUpdates,
+      enabled: updateEnabled,
+    },
+    { label: resolveDesktopText(DESKTOP_TRAY_DOWNLOAD, locale), click: onDownload },
+    { type: 'separator' },
+    { label: resolveDesktopText(DESKTOP_TRAY_QUIT, locale), click: onQuit },
+  ];
+}
+
+export function buildSplashHtml(locale: DesktopLocale): string {
+  const starting = resolveDesktopText({ en: 'Starting…', 'zh-CN': '正在启动…' }, locale);
+  return 'data:text/html;charset=utf-8,' + encodeURIComponent(`<!doctype html><html lang="${locale}"><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><title>Helm</title><style>html{color-scheme:dark light;font:14px system-ui}body{margin:0;min-height:100vh;display:grid;place-content:center;text-align:center}h1{font-size:24px;font-weight:600}p{opacity:.65}</style><h1>Helm</h1><p>${starting}</p></html>`);
+}
 
 async function waitForReact(win: BrowserWindowLike): Promise<void> {
   const deadline = Date.now() + 20_000;
@@ -108,6 +225,7 @@ async function runElectron(electron: ElectronApi): Promise<void> {
   applyLinuxDesktopName(app, process.platform);
   if (!app.requestSingleInstanceLock()) { app.quit(); return; }
   await app.whenReady();
+  const locale = resolveDesktopLocale(app);
   if (!smoke) {
     try { await restoreShellPath(); } catch (error) { log(`login shell PATH restore failed, continue use when before environment:${describe(error)}`); }
   }
@@ -176,26 +294,26 @@ async function runElectron(electron: ElectronApi): Promise<void> {
   const checkUpdates = () => {
     if (updateTask !== null) return;
     updateTask = boot.checkForUpdate().then((status) => {
-      const label = status.updateAvailable ? `update ${status.latest?.version} ready, under time start install`
-        : status.reason === 'updater_not_configured' ? 'not yet config update source'
-        : status.reason === 'latest_blocked' ? 'most new update unavailable, already keep when before version' : 'when before already is most new version';
+      const label = resolveUpdateStatusLabel(status, locale);
       log(label); updateMenu(label);
     }).catch((error) => {
       log(`check update failed:${describe(error)}`);
-      updateMenu('check update failed, point strike retry');
+      updateMenu(resolveDesktopText(DESKTOP_TRAY_CHECK_FAILED, locale));
     }).finally(() => { updateTask = null; });
   };
-  const updateMenu = (label = 'check update') => {
-    tray?.setContextMenu(Menu.buildFromTemplate([
-      { label: 'open Helm', click: show },
-      { label, click: checkUpdates, enabled: boot.supervisor.owned },
-      { label: 'download desktop new edition', click: () => external('https://github.com/team4u/helm/releases/latest') },
-      { type: 'separator' },
-      { label: 'exit', click: () => void quit() },
-    ]));
+  const updateMenu = (label = resolveDesktopText(DESKTOP_TRAY_CHECK_UPDATE, locale)) => {
+    tray?.setContextMenu(Menu.buildFromTemplate(buildTrayMenuTemplate({
+      locale,
+      updateLabel: label,
+      updateEnabled: boot.supervisor.owned,
+      onOpen: show,
+      onCheckUpdates: checkUpdates,
+      onDownload: () => external('https://github.com/team4u/helm/releases/latest'),
+      onQuit: () => void quit(),
+    })));
   };
   try {
-    await win.loadURL(splash);
+    await win.loadURL(buildSplashHtml(locale));
     let result = await boot.start();
     if (smoke && result.mode !== 'owned') throw new Error('smoke test reject attach external Hub, please release test port');
     try {
@@ -249,7 +367,7 @@ async function runElectron(electron: ElectronApi): Promise<void> {
       mkdirSync(smokeDir, { recursive: true });
       writeFileSync(join(smokeDir, 'smoke.json'), JSON.stringify({ ok: false, error: message }));
     }
-    if (!smoke) dialog.showErrorBox('Helm failed to start', message);
+    if (!smoke) dialog.showErrorBox(resolveDesktopText(DESKTOP_START_FAILED_TITLE, locale), message);
     await quit(1);
   }
 }
@@ -260,11 +378,16 @@ async function main(): Promise<void> {
   if (electron === null) throw new Error('use pnpm --filter @helm/desktop exec electron . start, or settings HELM_DESKTOP_HEADLESS=1');
   await runElectron(electron);
 }
-void main().catch((error) => {
-  process.stderr.write(`${describe(error)}\n`);
-  const electron = getElectron();
-  if (electron !== null) {
-    if (!smoke) electron.dialog.showErrorBox('Helm failed to start', describe(error));
-    electron.app.exit(1);
-  } else process.exitCode = 1;
-});
+if (process.env.HELM_DESKTOP_NO_AUTOBOOT !== '1') {
+  void main().catch((error) => {
+    process.stderr.write(`${describe(error)}\n`);
+    const electron = getElectron();
+    if (electron !== null) {
+      if (!smoke) {
+        const locale = resolveDesktopLocale(electron.app);
+        electron.dialog.showErrorBox(resolveDesktopText(DESKTOP_START_FAILED_TITLE, locale), describe(error));
+      }
+      electron.app.exit(1);
+    } else process.exitCode = 1;
+  });
+}

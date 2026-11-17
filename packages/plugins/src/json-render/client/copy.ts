@@ -265,6 +265,11 @@ export function jsonRenderStepFallbackTitle(index: number, locale: HelmLocale): 
   return resolveLocalizedText({ en: `Step ${index}`, 'zh-CN': `步骤 ${index}` }, locale)
 }
 
+/** Fallback title of a Tabs item without a declared label/title. */
+export function jsonRenderTabFallbackTitle(index: number, locale: HelmLocale): string {
+  return resolveLocalizedText({ en: `Tab ${index}`, 'zh-CN': `标签页 ${index}` }, locale)
+}
+
 /** Notice for a spec node whose component name has no registered primitive. */
 export function jsonRenderUnknownComponent(component: string, locale: HelmLocale): string {
   return resolveLocalizedText(
