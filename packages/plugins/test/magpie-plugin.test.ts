@@ -29,7 +29,8 @@ import { fileURLToPath } from 'node:url'
 
 import { createModels } from '@earendil-works/pi-ai/models'
 import type { Provider } from '@earendil-works/pi-ai'
-import { HelmError, type ConversationSummary } from '@helm/protocol'
+import { HelmError, resolveLocalizedText, type ConversationSummary } from '@helm/protocol'
+import { MAGPIE_COL_PROVIDER } from '../src/magpie/client/copy.js'
 import {
   PluginHost,
   type PluginHostBackend,
@@ -949,6 +950,8 @@ test('magpie19: UI spec 无 Emoji、scope 绑定 magpie、client 轨道组件导
     const command = ui.find((u) => u.surface === 'commandPalette')!.spec as { title: { en?: unknown; 'zh-CN'?: unknown }; actionId: string }
     assert.deepEqual(command.title, { en: 'Refresh the Magpie model catalog', 'zh-CN': '刷新 Magpie 模型目录' }, 'command title 为 en+zh-CN 双语资源')
     assert.equal(command.actionId, 'refresh')
+    assert.equal(resolveLocalizedText(MAGPIE_COL_PROVIDER, 'en'), 'Provider')
+    assert.equal(resolveLocalizedText(MAGPIE_COL_PROVIDER, 'zh-CN'), '供应商')
 
     // 无模型目录时非 magpie 会话 settled 不触网（保持原行为回归）
     const callsBefore = env.fetchState.calls.length

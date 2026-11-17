@@ -24,6 +24,7 @@ import {
   type MagpieStatusView,
 } from './models.ts'
 import {
+  MAGPIE_COL_PROVIDER,
   MAGPIE_DIAGNOSTICS_COL,
   MAGPIE_DIAGNOSTICS_EMPTY,
   MAGPIE_DIAGNOSTICS_SECTION,
@@ -141,7 +142,7 @@ function QuotaTable({ quotas }: { quotas: MagpieStatusView['quotas'] }): ReactNo
       <table className="helm-table">
         <thead>
           <tr>
-            <th>Provider</th>
+            <th>{t(MAGPIE_COL_PROVIDER)}</th>
             <th>{t(MAGPIE_QUOTA_COL_ACCOUNT)}</th>
             <th>{t(MAGPIE_QUOTA_COL_WINDOW)}</th>
             <th>{t(MAGPIE_QUOTA_COL_REMAINING)}</th>
@@ -186,7 +187,7 @@ function RouteTable({ routes }: { routes: MagpieStatusView['routes'] }): ReactNo
           <tr>
             <th>{t(MAGPIE_ROUTES_COL_GROUP)}</th>
             <th>{t(MAGPIE_ROUTES_COL_STRATEGY)}</th>
-            <th>Provider</th>
+            <th>{t(MAGPIE_COL_PROVIDER)}</th>
             <th>{t(MAGPIE_ROUTES_COL_MODEL)}</th>
             <th>{t(MAGPIE_ROUTES_COL_TIME)}</th>
           </tr>

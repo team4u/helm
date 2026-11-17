@@ -297,6 +297,28 @@ export function actionCleanupFailed(err: string, locale: HelmLocale = DEFAULT_HE
     locale,
   )
 }
+export const BADGE_CACHED: LocalizedText = { en: 'Cached', 'zh-CN': '已缓存' }
+export const ACTION_RESUME_SUBAGENT: LocalizedText = { en: 'Resume', 'zh-CN': '恢复' }
+export const ACTION_RESUME_SUBAGENT_TITLE: LocalizedText = {
+  en: 'Resume this failed or aborted background subagent task',
+  'zh-CN': '恢复该失败或中止的后台子代理任务',
+}
+export const ACTION_RESUME_SUBAGENT_ARIA: LocalizedText = {
+  en: 'Resume this background subagent task',
+  'zh-CN': '恢复该后台子代理任务',
+}
+export function actionResumeSubagentStarted(runId: string, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+  return resolveLocalizedText(
+    { en: `Resume initiated (source run ${runId})`, 'zh-CN': `已发起恢复（源运行 ${runId}）` },
+    locale,
+  )
+}
+export function actionResumeSubagentFailed(err: string, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+  return resolveLocalizedText(
+    { en: `Failed to resume background subagent: ${err}`, 'zh-CN': `恢复后台子代理失败：${err}` },
+    locale,
+  )
+}
 export const ACTION_RETRY: LocalizedText = { en: 'Retry', 'zh-CN': '重试' }
 export const ACTION_RETRY_TITLE: LocalizedText = { en: 'Reload subagent details', 'zh-CN': '重新加载子会话详情' }
 export const SUBLINE_FRONTLINE_TAG: LocalizedText = { en: 'Frontline', 'zh-CN': '前线' }
@@ -440,6 +462,12 @@ export function runCardNodesStat(done: number, total: number, locale: HelmLocale
 export function runCardSubtreeStat(done: number, total: number, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
   return resolveLocalizedText({ en: `Subtree ${done}/${total}`, 'zh-CN': `子树 ${done}/${total}` }, locale)
 }
+export function runCardTokensStat(tokens: number, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+  return resolveLocalizedText(
+    { en: `${tokens.toLocaleString()} Tokens`, 'zh-CN': `${tokens.toLocaleString()} Token` },
+    locale,
+  )
+}
 export const RUN_CARD_MORE_ARIA: LocalizedText = { en: 'More actions', 'zh-CN': '更多操作' }
 export const RUN_CARD_MORE_TITLE: LocalizedText = { en: 'More workflow actions', 'zh-CN': '更多工作流操作' }
 export const RUN_CARD_REPLAY: LocalizedText = { en: 'Replay', 'zh-CN': '重放' }
@@ -502,6 +530,7 @@ export function nodeAttemptBadge(attempt: number, locale: HelmLocale = DEFAULT_H
 }
 export const NODE_TAG_ERROR: LocalizedText = { en: 'Error', 'zh-CN': '错误' }
 export const NODE_TAG_OUTPUT: LocalizedText = { en: 'Output', 'zh-CN': '产出' }
+export const NODE_SECTION_PROMPT: LocalizedText = { en: 'Prompt', 'zh-CN': '指令' }
 export const NODE_KV_STARTED_AT: LocalizedText = { en: 'Started at', 'zh-CN': '开始时间' }
 export const NODE_KV_BACKEND: LocalizedText = { en: 'Backend', 'zh-CN': '执行后端' }
 export const NODE_KV_EXTERNAL: LocalizedText = { en: 'External run', 'zh-CN': '外部执行' }
@@ -1044,3 +1073,57 @@ export const WORKBENCH_EMPTY_NO_RUNS: LocalizedText = {
   'zh-CN': '当前会话暂无工作流或子代理运行记录。',
 }
 export const WORKBENCH_RESULT_SECTION: LocalizedText = { en: 'Run output', 'zh-CN': '运行产出' }
+export const WORKBENCH_RESUME_FAILED_TITLE: LocalizedText = {
+  en: 'Batch-resume auto-resumable failed tasks in the current conversation',
+  'zh-CN': '批量恢复当前会话下可自动续跑的失败任务',
+}
+export function workbenchResumeFailedButton(count: number, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+  return resolveLocalizedText({ en: `Resume failed (${count})`, 'zh-CN': `恢复失败 (${count})` }, locale)
+}
+export function workbenchResumeInvalidResult(locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+  return resolveLocalizedText(
+    {
+      en: 'Batch resume returned an invalid shape (unexpected action payload)',
+      'zh-CN': '批量恢复返回结构不合法（动作返回非预期形状）',
+    },
+    locale,
+  )
+}
+export function workbenchResumeAllSkipped(skippedCount: number, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+  return resolveLocalizedText(
+    {
+      en: `No new resume tasks started (skipped ${skippedCount} non-auto-resumable task${skippedCount === 1 ? '' : 's'})`,
+      'zh-CN': `未拉起新恢复任务（跳过 ${skippedCount} 个不可自动恢复任务）`,
+    },
+    locale,
+  )
+}
+export const WORKBENCH_RESUME_NONE_NEEDED: LocalizedText = {
+  en: 'No failed tasks need resuming',
+  'zh-CN': '当前没有需要恢复的失败任务',
+}
+export function workbenchResumeStarted(
+  resumedCount: number,
+  skippedCount: number,
+  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+): string {
+  if (skippedCount > 0) {
+    return resolveLocalizedText(
+      {
+        en: `Initiated resume for ${resumedCount} failed task${resumedCount === 1 ? '' : 's'} (skipped ${skippedCount} non-auto-resumable)`,
+        'zh-CN': `已发起恢复 ${resumedCount} 个失败任务，跳过 ${skippedCount} 个不可自动恢复任务`,
+      },
+      locale,
+    )
+  }
+  return resolveLocalizedText(
+    {
+      en: `Initiated resume for ${resumedCount} failed task${resumedCount === 1 ? '' : 's'}`,
+      'zh-CN': `已发起恢复 ${resumedCount} 个失败任务`,
+    },
+    locale,
+  )
+}
+export function workbenchResumeFailed(err: string, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+  return resolveLocalizedText({ en: `Batch resume failed: ${err}`, 'zh-CN': `批量恢复失败：${err}` }, locale)
+}

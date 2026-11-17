@@ -37,6 +37,13 @@ import {
   WORKBENCH_HEAD_TITLE,
   WORKBENCH_LIBRARY,
   WORKBENCH_RESULT_SECTION,
+  WORKBENCH_RESUME_FAILED_TITLE,
+  WORKBENCH_RESUME_NONE_NEEDED,
+  workbenchResumeAllSkipped,
+  workbenchResumeFailed,
+  workbenchResumeFailedButton,
+  workbenchResumeInvalidResult,
+  workbenchResumeStarted,
 } from './copy.ts'
 import {
   clearWorkbenchRunFocus,
@@ -137,22 +144,21 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
       .then((raw) => {
         const parsed = parseResumeFailedResult(raw)
         if (parsed === undefined) {
-          throw new Error('批量恢复返回结构不合法（动作返回非预期形状）')
+          throw new Error(workbenchResumeInvalidResult(locale))
         }
         const { resumedCount, skippedCount } = parsed
         if (resumedCount === 0 && skippedCount > 0) {
-          ctx.notify(`未拉起新恢复任务（跳过 ${skippedCount} 个不可自动恢复任务）`, 'warning')
+          ctx.notify(workbenchResumeAllSkipped(skippedCount, locale), 'warning')
           return
         }
         if (resumedCount === 0 && skippedCount === 0) {
-          ctx.notify('当前没有需要恢复的失败任务')
+          ctx.notify(resolveLocalizedText(WORKBENCH_RESUME_NONE_NEEDED, locale))
           return
         }
-        const skippedSuffix = skippedCount > 0 ? `，跳过 ${skippedCount} 个不可自动恢复任务` : ''
-        ctx.notify(`已发起恢复 ${resumedCount} 个失败任务${skippedSuffix}`)
+        ctx.notify(workbenchResumeStarted(resumedCount, skippedCount, locale))
       })
       .catch((err: unknown) => {
-        ctx.notify(`批量恢复失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+        ctx.notify(workbenchResumeFailed(err instanceof Error ? err.message : String(err), locale), 'error')
       })
       .finally(() => {
         batchResumeInFlight.current = false
@@ -176,12 +182,12 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
               type="button"
               className="btn btn-xs"
               disabled={batchResuming}
-              aria-label={`恢复失败 (${resumableRuns.length})`}
-              title="批量恢复当前会话下可自动续跑的失败任务"
+              aria-label={workbenchResumeFailedButton(resumableRuns.length, locale)}
+              title={resolveLocalizedText(WORKBENCH_RESUME_FAILED_TITLE, locale)}
               onClick={handleResumeFailed}
             >
               <Icon name="rotate-cw" size={12} className={batchResuming ? SPIN : undefined} />
-              {`恢复失败 (${resumableRuns.length})`}
+              {workbenchResumeFailedButton(resumableRuns.length, locale)}
             </button>
           ) : null}
           <button

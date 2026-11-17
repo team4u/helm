@@ -30,6 +30,7 @@ import {
   ACTION_CLEANUP_WORKTREE,
   actionCleanupDone,
   actionCleanupFailed,
+  BADGE_CACHED,
   NODE_BADGE_ACTION,
   NODE_BADGE_EXTERNAL,
   NODE_BADGE_SUBAGENT,
@@ -45,6 +46,7 @@ import {
   NODE_KV_STARTED_AT,
   NODE_KV_TOKENS,
   NODE_KV_WORKTREE,
+  NODE_SECTION_PROMPT,
   nodeStatusLabel,
   NODE_TAG_ERROR,
   NODE_TAG_OUTPUT,
@@ -142,7 +144,7 @@ function WorkflowExecutionNodeCard(props: { node: WorkflowNodeState; runConversa
               {node.worktree.branch}
             </span>
           ) : null}
-          {node.cached === true ? <span className="badge badge-warn">cached</span> : null}
+          {node.cached === true ? <span className="badge badge-warn">{resolveLocalizedText(BADGE_CACHED, locale)}</span> : null}
           <span className={`badge ${NODE_BADGE[node.status] ?? 'badge-neutral'}`}>
             {nodeStatusLabel(node.status, locale)}
           </span>
@@ -238,19 +240,19 @@ function WorkflowNodeDetail({ node }: { node: WorkflowNodeState }): ReactNode {
       ) : null}
       {node.prompt !== undefined ? (
         <div>
-          <div className="trace-section-label">Prompt</div>
+          <div className="trace-section-label">{resolveLocalizedText(NODE_SECTION_PROMPT, locale)}</div>
           <pre className="code-block-pre workflow-node-pre"><code>{node.prompt}</code></pre>
         </div>
       ) : null}
       {outputJson !== undefined ? (
         <div>
-          <div className="trace-section-label">Output</div>
+          <div className="trace-section-label">{resolveLocalizedText(NODE_TAG_OUTPUT, locale)}</div>
           <pre className="code-block-pre workflow-node-pre"><code>{outputJson}</code></pre>
         </div>
       ) : null}
       {node.error !== undefined ? (
         <div>
-          <div className="trace-section-label">Error</div>
+          <div className="trace-section-label">{resolveLocalizedText(NODE_TAG_ERROR, locale)}</div>
           <pre className="code-block-pre workflow-node-pre workflow-node-pre-err"><code>{node.error}</code></pre>
         </div>
       ) : null}

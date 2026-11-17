@@ -33,6 +33,7 @@ import {
   JSON_RENDER_TABLE_ACTIONS_HEADER,
   JSON_RENDER_TABLE_EMPTY,
   jsonRenderStepFallbackTitle,
+  jsonRenderTabFallbackTitle,
   jsonRenderUnknownComponent,
 } from './copy.ts'
 import { formatSpecText, normalizeSpec, resolveKeyValueItems, type NormalizedSpecNode } from './spec-normalize.ts'
@@ -777,7 +778,7 @@ function TabsImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCont
   const tabs = Array.isArray(rawTabs)
     ? (rawTabs as Array<Record<string, unknown>>).map((t, i) => ({
         id: str(t['id'], `tab-${i}`),
-        label: str(t['label'] ?? t['title'], `Tab ${i + 1}`),
+        label: str(t['label'] ?? t['title'], jsonRenderTabFallbackTitle(i + 1, ctx.locale)),
         childrenRaw: t['children'],
       }))
     : []

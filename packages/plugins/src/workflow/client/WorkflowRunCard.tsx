@@ -81,6 +81,7 @@ import {
   runCardSelfStateTitle,
   runCardSelfTitle,
   runCardSubtreeStat,
+  runCardTokensStat,
   selfStatusLabel,
   traceActiveNode,
   TRACE_BG_DISPATCHED,
@@ -444,7 +445,7 @@ export function WorkflowRunCardBody(props: {
         <span className="workflow-run-stats tabular-nums">
           {nodes.length > 0 ? <span>{runCardNodesStat(done, nodes.length, locale)}</span> : null}
           {deeperCount > 0 ? <span>{runCardSubtreeStat(subtree.done, subtree.total, locale)}</span> : null}
-          {tokens > 0 ? <span>{`${tokens.toLocaleString()} Tokens`}</span> : null}
+          {tokens > 0 ? <span>{runCardTokensStat(tokens, locale)}</span> : null}
           {elapsedMs !== undefined ? <span>{formatDurationMs(elapsedMs)}</span> : null}
         </span>
         {descendantApprovals > 0 ? (

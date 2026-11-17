@@ -128,6 +128,7 @@ function createHostHarness(init: {
   runsByConversation?: Record<number, WorkflowRunSummary[]>
   pluginDocs?: Record<string, unknown>
   locale?: import('../../plugin-client/src/index.js').HelmLocale
+  onAction?: (pluginId: string, actionId: string, input: unknown) => Promise<unknown> | unknown
 }) {
   const activeToolCallIds = new Set<string>()
   const log: HostStubLog = {
@@ -182,6 +183,9 @@ function createHostHarness(init: {
     getSessionDocState: getState,
     invokePluginAction: async (pluginId, actionId, input) => {
       log.actions.push({ pluginId, actionId, input })
+      if (init.onAction !== undefined) {
+        return await init.onAction(pluginId, actionId, input)
+      }
       if (actionId === 'save') {
         const fromRunId = (input as { fromRunId?: string })?.fromRunId ?? 'wf_x'
         return {
@@ -1125,6 +1129,195 @@ describe('Workflow 三区零重复与无损呈现', () => {
       assert.ok(zhRow.container.textContent?.includes('已完成'), 'zh-CN 轨迹行应渲染中文终态徽章')
     } finally {
       zhRow.unmount()
+    }
+  })
+
+  test('locale 联动：SubagentLiveCard 恢复/缓存、WorkflowWorkbenchPanel 批量恢复与 WorkflowNodeCards 细节文案双语', { timeout: 60_000 }, async () => {
+    const failedSubagentRun: WorkflowRunSummary = {
+      id: 'run_sub_fail_1',
+      name: '后台子代理任务',
+      conversationId: 1,
+      status: 'failed',
+      kind: 'subagent',
+      createdAt: 1_700_000_100_000,
+      updatedAt: 1_700_000_105_000,
+      error: 'subagent crashed',
+      nodes: [{ id: 'sub', label: '子代理执行', kind: 'agent', status: 'failed', conversationId: 71 }],
+    }
+    const failedWorkflowRun: WorkflowRunSummary = {
+      id: 'wf_fail_node_1',
+      name: '失败工作流',
+      conversationId: 1,
+      status: 'failed',
+      kind: 'workflow',
+      createdAt: 1_700_000_110_000,
+      updatedAt: 1_700_000_120_000,
+      nodes: [
+        {
+          id: 'step-a',
+          label: '生成步骤',
+          kind: 'agent',
+          status: 'failed',
+          cached: true,
+          prompt: 'do work',
+          output: { summary: 'partial' },
+          error: 'boom',
+          tokens: 1200,
+        },
+      ],
+    }
+
+    const cases = [
+      {
+        locale: 'en' as const,
+        expected: {
+          cached: 'Cached',
+          resume: 'Resume',
+          resumeTitle: 'Resume this failed or aborted background subagent task',
+          resumeAria: 'Resume this background subagent task',
+          resumeNotify: 'Resume initiated (source run run_sub_fail_1)',
+          resumeFailPrefix: 'Failed to resume background subagent: ',
+          batchBtn: 'Resume failed (2)',
+          batchTitle: 'Batch-resume auto-resumable failed tasks in the current conversation',
+          batchStarted: 'Initiated resume for 1 failed task (skipped 1 non-auto-resumable)',
+          batchAllSkipped: 'No new resume tasks started (skipped 2 non-auto-resumable tasks)',
+          batchNone: 'No failed tasks need resuming',
+          batchInvalid: 'Batch resume failed: Batch resume returned an invalid shape (unexpected action payload)',
+          prompt: 'Prompt',
+          output: 'Output',
+          error: 'Error',
+          tokens: '1,200 Tokens',
+        },
+      },
+      {
+        locale: 'zh-CN' as const,
+        expected: {
+          cached: '已缓存',
+          resume: '恢复',
+          resumeTitle: '恢复该失败或中止的后台子代理任务',
+          resumeAria: '恢复该后台子代理任务',
+          resumeNotify: '已发起恢复（源运行 run_sub_fail_1）',
+          resumeFailPrefix: '恢复后台子代理失败：',
+          batchBtn: '恢复失败 (2)',
+          batchTitle: '批量恢复当前会话下可自动续跑的失败任务',
+          batchStarted: '已发起恢复 1 个失败任务，跳过 1 个不可自动恢复任务',
+          batchAllSkipped: '未拉起新恢复任务（跳过 2 个不可自动恢复任务）',
+          batchNone: '当前没有需要恢复的失败任务',
+          batchInvalid: '批量恢复失败：批量恢复返回结构不合法（动作返回非预期形状）',
+          prompt: '指令',
+          output: '产出',
+          error: '错误',
+          tokens: '1,200 Token',
+        },
+      },
+    ] as const
+
+    for (const { locale, expected } of cases) {
+      // 1. SubagentLiveCard: cached 徽章 + 单卡恢复按钮与成功/失败通知
+      let failRunAction = false
+      const subHarness = createHostHarness({
+        conversationId: 1,
+        locale,
+        conversations: [
+          createConv({ id: 1, ownedBy: 'human' }),
+          createConv({ id: 71, parentConversationId: 1, status: 'error', title: '子代理 71' }),
+        ],
+        runsByConversation: { 1: [failedSubagentRun] },
+        onAction: async (_p, actionId) => {
+          if (actionId === 'run' && failRunAction) throw new Error('rpc_down')
+          return { ok: true }
+        },
+      })
+      const subMount = subHarness.mountNode(
+        e(mod.SubagentLiveCard, {
+          childConversationId: 71,
+          toolStatus: 'error',
+          backgroundRun: failedSubagentRun,
+          cached: true,
+        }),
+      )
+      try {
+        assert.ok(subMount.container.textContent?.includes(expected.cached), `${locale}: cached 徽章应本地化`)
+        const resumeBtn = subMount.container.querySelector(`button[aria-label="${expected.resumeAria}"]`) as HTMLButtonElement | null
+        assert.ok(resumeBtn !== null, `${locale}: 应存在本地化 aria-label 的恢复按钮`)
+        assert.equal(resumeBtn.getAttribute('title'), expected.resumeTitle)
+        assert.ok(resumeBtn.textContent?.includes(expected.resume))
+        await act(async () => {
+          resumeBtn.click()
+        })
+        assert.equal(subHarness.log.notices.at(-1)?.message, expected.resumeNotify)
+
+        failRunAction = true
+        await act(async () => {
+          resumeBtn.click()
+        })
+        assert.equal(subHarness.log.notices.at(-1)?.message, `${expected.resumeFailPrefix}rpc_down`)
+        assert.equal(subHarness.log.notices.at(-1)?.tone, 'error')
+      } finally {
+        subMount.unmount()
+      }
+
+      // 2. WorkflowWorkbenchPanel: 批量恢复按钮 + 各类返回分支通知 + 节点 cached / Prompt / Output / Error / Tokens
+      let batchResponse: unknown = { resumed: [{ id: 'r_new' }], skipped: [{ runId: 'run_skip', reason: 'uncertain' }] }
+      const wbHarness = createHostHarness({
+        conversationId: 1,
+        locale,
+        conversations: [
+          createConv({ id: 1, ownedBy: 'human' }),
+          createConv({ id: 71, parentConversationId: 1, status: 'error', title: '子代理 71' }),
+        ],
+        runsByConversation: { 1: [failedWorkflowRun, failedSubagentRun] },
+        onAction: async (_p, actionId) => {
+          if (actionId === 'resume_failed') return batchResponse
+          return { ok: true }
+        },
+      })
+      const wbMount = wbHarness.mountNode(e(mod.WorkflowWorkbenchPanel))
+      try {
+        const batchBtn = wbMount.container.querySelector(`button[aria-label="${expected.batchBtn}"]`) as HTMLButtonElement | null
+        assert.ok(batchBtn !== null, `${locale}: 工作台应渲染本地化批量恢复按钮`)
+        assert.equal(batchBtn.getAttribute('title'), expected.batchTitle)
+        assert.ok(batchBtn.textContent?.includes(expected.batchBtn))
+
+        // 2a. 部分恢复 + 部分跳过
+        await act(async () => {
+          batchBtn.click()
+        })
+        assert.equal(wbHarness.log.notices.at(-1)?.message, expected.batchStarted)
+
+        // 2b. 全部跳过
+        batchResponse = { resumed: [], skipped: [{ runId: 's1', reason: 'x' }, { runId: 's2', reason: 'y' }] }
+        await act(async () => {
+          batchBtn.click()
+        })
+        assert.equal(wbHarness.log.notices.at(-1)?.message, expected.batchAllSkipped)
+        assert.equal(wbHarness.log.notices.at(-1)?.tone, 'warning')
+
+        // 2c. 无需恢复
+        batchResponse = { resumed: [], skipped: [] }
+        await act(async () => {
+          batchBtn.click()
+        })
+        assert.equal(wbHarness.log.notices.at(-1)?.message, expected.batchNone)
+
+        // 2d. 返回结构非法
+        batchResponse = { bad: true }
+        await act(async () => {
+          batchBtn.click()
+        })
+        assert.equal(wbHarness.log.notices.at(-1)?.message, expected.batchInvalid)
+        assert.equal(wbHarness.log.notices.at(-1)?.tone, 'error')
+
+        // 3. WorkflowNodeCards & WorkflowRunCardBody 本地化标签
+        const wfText = wbMount.container.querySelector('[data-run-id="wf_fail_node_1"]')?.textContent ?? ''
+        assert.ok(wfText.includes(expected.cached), `${locale}: 节点卡 cached 徽章`)
+        assert.ok(wfText.includes(expected.prompt), `${locale}: 节点明细 Prompt 标签`)
+        assert.ok(wfText.includes(expected.output), `${locale}: 节点明细 Output 标签`)
+        assert.ok(wfText.includes(expected.error), `${locale}: 节点明细 Error 标签`)
+        assert.ok(wfText.includes(expected.tokens), `${locale}: 汇总 Tokens 标签`)
+      } finally {
+        wbMount.unmount()
+      }
     }
   })
 })
