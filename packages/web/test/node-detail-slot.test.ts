@@ -26,6 +26,7 @@ import { NodeDetailDrawer } from '../src/nodes/NodeDetailDrawer.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import { seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { makeTestStore } from './helpers/store.js'
+import type { HelmExternalStore } from '../src/lib/helm-store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 
 GlobalRegistrator.register()
@@ -67,14 +68,14 @@ const slotContribution = (
   spec: { id, target: NODE_DETAIL_SECTION_SLOT, ...extra },
 })
 
-function storeWith(contributions: PluginUiContribution[], overrides: Partial<HelmStoreValue> = {}): HelmStoreValue {
+function storeWith(contributions: PluginUiContribution[], overrides: Partial<HelmStoreValue> = {}): HelmExternalStore {
   return makeTestStore({
-    groupedUi: groupUiContributions(contributions),
+    uiContributions: contributions,
     ...overrides,
   })
 }
 
-function renderDrawer(store: HelmStoreValue, props: { node: NodeInfo | null; isNew?: boolean }): string {
+function renderDrawer(store: HelmExternalStore, props: { node: NodeInfo | null; isNew?: boolean }): string {
   return renderToStaticMarkup(
     e(
       HostStoreProviders,

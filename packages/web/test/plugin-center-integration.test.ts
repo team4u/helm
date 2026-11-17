@@ -103,6 +103,16 @@ const mockPluginsWithFailure: PluginSummary[] = [
 // 1. PluginCenter SSR 与主体结构渲染
 // ---------------------------------------------------------------------------
 
+/** 记录真实 openTarget 调用序列（委托真实导航动作）。 */
+function spyOpenTarget(store: import('../src/lib/helm-store.js').HelmExternalStore, opened: unknown[]): void {
+  ;(store.actions as unknown as { openTarget: (target: unknown) => void }).openTarget = (target) => {
+    opened.push(target)
+    store.applyPrimaryTarget(
+      typeof target === 'string' ? { kind: 'plugins' } : target as import('../src/lib/types.js').ResolvedTarget,
+    )
+  }
+}
+
 test('PluginCenter SSR：渲染搜索框、统计徽章与卡片网格', { timeout: 60_000 }, async () => {
   const { PluginCenter } = await import('../src/plugins/PluginCenter.js')
   const store = makeTestStore({
@@ -162,14 +172,12 @@ test('PluginCenter DOM 交互：搜索过滤实时联动', { timeout: 60_000 }, 
   document.body.appendChild(host)
   const root = ReactDOMClient.createRoot(host)
 
-  let openedTarget: unknown = null
+  const openedTarget: unknown[] = []
   const store = makeTestStore({
     plugins: mockPlugins,
     primaryTarget: { kind: 'plugins' },
-    openTarget: (target) => {
-      openedTarget = target
-    },
   })
+  spyOpenTarget(store, openedTarget)
 
   await act(async () => {
     root.render(e(HostStoreProviders, { value: store }, e(PluginCenter, { inlineDrawer: true })))
@@ -196,7 +204,7 @@ test('PluginCenter DOM 交互：搜索过滤实时联动', { timeout: 60_000 }, 
     cards[0]?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
 
-  assert.deepEqual(openedTarget, { kind: 'plugins', pluginId: 'builtin:workflow' })
+  assert.deepEqual(openedTarget.at(-1), { kind: 'plugins', pluginId: 'builtin:workflow' })
 
   root.unmount()
   host.remove()
@@ -254,14 +262,12 @@ test('PluginCenter DOM 交互：抽屉根据 primaryTarget.pluginId 展开，关
   document.body.appendChild(host)
   const root = ReactDOMClient.createRoot(host)
 
-  let closedTarget: unknown = null
+  const closedTarget: unknown[] = []
   const store = makeTestStore({
     plugins: mockPlugins,
     primaryTarget: { kind: 'plugins', pluginId: 'builtin:workflow' },
-    openTarget: (target) => {
-      closedTarget = target
-    },
   })
+  spyOpenTarget(store, closedTarget)
 
   await act(async () => {
     root.render(e(HostStoreProviders, { value: store }, e(PluginCenter, { inlineDrawer: true })))
@@ -283,7 +289,7 @@ test('PluginCenter DOM 交互：抽屉根据 primaryTarget.pluginId 展开，关
     closeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
 
-  assert.deepEqual(closedTarget, { kind: 'plugins' }, '关闭抽屉应导航回基础插件中心')
+  assert.deepEqual(closedTarget.at(-1), { kind: 'plugins' }, '关闭抽屉应导航回基础插件中心')
 
   await act(async () => {
     root.unmount()
@@ -303,8 +309,8 @@ test('全局入口收敛：CommandPaletteModal 点击「打开插件中心」导
   const root = ReactDOMClient.createRoot(host)
   const store = makeTestStore({
     activeModal: { kind: 'command-palette' },
-    openTarget: (target) => opened.push(target),
   })
+  spyOpenTarget(store, opened)
   try {
     await act(async () => {
       root.render(e(HostStoreProviders, { value: store }, e(CommandPaletteModal, { onClose: () => { closed = true } })))

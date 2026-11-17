@@ -3,11 +3,13 @@ import test, { describe } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
 import { parseArtifactUrl, markdownUrlTransform } from '@helm/plugin-client'
-import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
+import { groupUiContributions } from '../src/lib/types.js'
 
 ;(globalThis as Record<string, unknown>).React = React
 const { MarkdownView } = await import('../src/conversation/MarkdownView.js')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
+const { makeTestStore } = await import('./helpers/store.js')
+type HelmExternalStore = import('../src/lib/helm-store.js').HelmExternalStore
 
 describe('artifact-link 纯函数解析与 URL 转换', { timeout: 60_000 }, () => {
   test('parseArtifactUrl：识别 artifact:<id> 合法形态', () => {
@@ -50,19 +52,12 @@ describe('artifact-link 纯函数解析与 URL 转换', { timeout: 60_000 }, () 
 })
 
 describe('MarkdownView 产物内联渲染', { timeout: 60_000 }, () => {
-  function makeMockStore(activeModalFn?: (modal: unknown) => void): HelmStoreValue {
-    return {
-      theme: 'dark',
-      themePreference: 'system',
-      locale: 'en',
-      activeModal: null,
-      setActiveModal: activeModalFn ?? (() => {}),
-      groupedUi: groupUiContributions([]),
-      conversationArtifacts: {},
-      loadConversationArtifacts: async () => {},
-      pushNotice: () => {},
-      openTarget: () => {},
-    } as unknown as HelmStoreValue
+  function makeMockStore(activeModalFn?: (modal: unknown) => void): HelmExternalStore {
+    const store = makeTestStore({})
+    if (activeModalFn !== undefined) {
+      ;(store.actions as unknown as { setActiveModal: (modal: unknown) => void }).setActiveModal = activeModalFn
+    }
+    return store
   }
 
   test('MarkdownView：[文件名](artifact:<id>) 渲染为 attachment-chip 按钮', () => {

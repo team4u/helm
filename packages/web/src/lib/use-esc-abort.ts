@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import type { ConversationDetail, ConversationSummary } from '@helm/protocol/browser'
 import { conversationsApi } from './api.js'
-import { errorText } from './format.js'
+import { errorText } from './error-text.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import type { FocusedPanel, ResolvedTarget, ToastNotice } from './types.js'
 import {

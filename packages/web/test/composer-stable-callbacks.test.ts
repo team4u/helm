@@ -17,6 +17,7 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { HostStoreProviders } from './helpers/host-store.js'
+import { makeTestStore } from './helpers/store.js'
 
 GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
@@ -25,7 +26,8 @@ const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 import type { ArtifactMetadata, ConversationSummary } from '@helm/protocol'
 import { conversationsApi } from '../src/lib/api.js'
-import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
+import type { HelmExternalStore } from '../src/lib/helm-store.js'
+import type { ToastNotice } from '../src/lib/types.js'
 
 const { Composer } = await import('../src/conversation/Composer.js')
 
@@ -37,39 +39,15 @@ const conv = (id: number): ConversationSummary => ({
 const convA = conv(1)
 const convB = conv(2)
 
-function makeStore(opts?: { detail?: boolean }): { store: HelmStoreValue; notices: Array<Record<string, unknown>> } {
-  const noop = () => {}
-  const asyncNoop = async () => undefined
-  const notices: Array<Record<string, unknown>> = []
-  const store = {
-    authReady: true, authConfigured: true, authenticated: true, authError: null,
-    connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark' as const,
-    themePreference: 'system' as const, locale: 'en' as const,
+function makeStore(opts?: { detail?: boolean }): { store: HelmExternalStore; notices: () => ToastNotice[] } {
+  const store = makeTestStore({
     conversations: [convA, convB],
     // Empty entries + idle: the empty conversation shows the starting-environment bar (SessionEnvBar)
     conversationDetails: opts?.detail === true ? { 1: { ...convA, entries: [] } } : {},
-    conversationLives: {},
-    conversationArtifacts: { 1: [], 2: [] }, pendingAsks: [], resolvedAsksByConv: {},
-    plugins: [], uiContributions: [], groupedUi: groupUiContributions([]), pluginDocs: {},
-    nodes: [], profiles: [], profilesLoaded: true, assetsLoaded: true, models: [], providers: [], credentials: [],
-    skills: [], actions: [],
-    primaryTarget: { kind: 'conversation' as const, conversationId: 1 }, splitTarget: null,
-    workbenchOpen: false, workbenchTab: 'artifacts' as const, activeModal: null,
-    highlightedEntry: null, notices,
-    setTheme: noop, setThemePreference: noop, toggleTheme: noop, checkAuth: asyncNoop,
-    onAuthenticated: asyncNoop, logout: noop, refreshAssets: asyncNoop, syncPlugins: noop,
-    refreshNodes: asyncNoop, loadConversationDetail: asyncNoop, loadEarlierEntries: asyncNoop,
-    loadConversationArtifacts: asyncNoop, ensurePluginDoc: asyncNoop, openTarget: noop,
-    closeSplit: noop, setScreenParams: noop, setWorkbenchOpen: noop, setWorkbenchTab: noop,
-    openSpace: noop, setActiveModal: noop, dismissNotice: noop,
-    pushNotice: (n: Record<string, unknown>) => { notices.push(n) },
-    invokePluginAction: asyncNoop,
-    subscribeSessionDoc: () => () => {},
-    getSessionDocState: () => ({ hasValue: false, deleted: false, connected: false }),
-    getPluginSessionDoc: asyncNoop,
-    retrySessionDoc: noop,
-  } as unknown as HelmStoreValue
-  return { store, notices }
+    conversationArtifacts: { 1: [], 2: [] },
+    primaryTarget: { kind: 'conversation', conversationId: 1 },
+  })
+  return { store, notices: () => store.getNotices() }
 }
 
 type Prefill = NonNullable<React.ComponentProps<typeof Composer>['prefill']>
@@ -83,7 +61,7 @@ interface Harness {
   unmount: () => void
 }
 
-function mountComposer(store: HelmStoreValue, onSendingChange?: (sending: boolean) => void): Harness {
+function mountComposer(store: HelmExternalStore, onSendingChange?: (sending: boolean) => void): Harness {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
@@ -285,7 +263,7 @@ test('switching A -> B mid-send: the submit lands on A only; B draft stays unpol
 
 test('after switching A -> B the B draft is fresh: prefill lands normally; onlyIfEmpty refusals never leak A residue', { timeout: 60_000 }, async () => {
   const api = stubApi()
-  const { store, notices } = makeStore()
+  const { store, notices: readNotices } = makeStore()
   const app = mountComposer(store)
   try {
     app.show('composer-1', convA)
@@ -301,6 +279,7 @@ test('after switching A -> B the B draft is fresh: prefill lands normally; onlyI
     app.show('composer-2', convB, { text: '另一个引导词', tick: 2, onlyIfEmpty: true })
     await flush()
     assert.equal(app.ta().value, 'B 引导词', 'the non-empty draft is not overwritten')
+    const notices = readNotices()
     assert.equal(notices.length, 1)
     assert.equal(notices[0]!.conversationId, 2, 'the refusal warning belongs to the current conversation B')
     assert.match(String(notices[0]!.title), /Handle the current draft before picking a starter/)

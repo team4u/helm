@@ -1,5 +1,5 @@
 /**
- * @helm/plugin-client 标准共享 hooks 测试（真实 React SSR 渲染 + HelmStoreContext）：
+ * @helm/plugin-client 标准共享 hooks 测试（真实 React SSR 渲染 + HelmExternalStore）：
  * - useConversations：返回宿主 store.conversations 同一引用（SSE 实时同步数据源）；
  * - useConversation：详情缺失且无失败时自动加载（loadConversationDetail 被真实调用）、
  *   已加载 / 加载失败 / undefined 三态不发请求；pendingAsks 按会话过滤；
@@ -14,15 +14,16 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
 import type { AskSpec, ConversationSummary, LocalizedText } from '@helm/protocol'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { createPluginClientHostPort } from '../src/lib/plugin-client-host.js'
+import { makeTestStore, type TestStoreOverrides } from './helpers/store.js'
 import {
   createPluginClientContext,
   PluginClientContext,
   useConversation,
   useConversations,
 } from '@helm/plugin-client'
-import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
+import type { HelmStoreValue } from '../src/lib/types.js'
+import type { HelmExternalStore, HelmStoreActions } from '../src/lib/helm-store.js'
 import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 
@@ -70,77 +71,14 @@ interface LoadCall {
   force: boolean
 }
 
-function makeStore(overrides: Partial<HelmStoreValue> = {}): HelmStoreValue {
-  const noop = () => {}
-  const asyncNoop = async () => undefined
-  return {
-    authReady: true,
-    authConfigured: true,
-    authenticated: true,
-    authError: null,
-    connectionError: null,
-    loadErrors: {},
-    sseConnected: true,
-    theme: 'dark',
-    themePreference: 'system',
-    locale: 'en',
-    quietNotifyEnabled: false,
-    conversations: [],
-    conversationDetails: {},
-    conversationLives: {},
-    conversationArtifacts: {},
-    pendingAsks: [],
-    resolvedAsksByConv: {},
-    plugins: [],
-    uiContributions: [],
-    groupedUi: groupUiContributions([]),
-    pluginDocs: {},
-    nodes: [],
-    profiles: [],
-    profilesLoaded: true,
-    assetsLoaded: true,
-    models: [],
-    providers: [],
-    credentials: [],
-    skills: [],
-    actions: [],
-    primaryTarget: { kind: 'conversation', conversationId: 1 },
-    splitTarget: null,
-    workbenchOpen: false,
-    workbenchTab: 'artifacts',
-    activeModal: null,
-    highlightedEntry: null,
-    notices: [],
-    setScreenParams: noop,
-    setTheme: noop,
-    setThemePreference: noop,
-    toggleTheme: noop,
-    setLocale: noop,
-    setQuietNotify: asyncNoop,
-    checkAuth: asyncNoop,
-    onAuthenticated: asyncNoop,
-    logout: noop,
-    refreshAssets: asyncNoop,
-    refreshNodes: async () => undefined,
-    loadConversationDetail: asyncNoop,
-    loadEarlierEntries: asyncNoop,
-    loadConversationArtifacts: async () => undefined,
-    ensurePluginDoc: asyncNoop,
-    openTarget: noop,
-    closeSplit: noop,
-    setWorkbenchOpen: noop,
-    setWorkbenchTab: noop,
-    openSpace: noop,
-    setActiveModal: noop,
-    dismissNotice: noop,
-    pushNotice: noop,
-    invokePluginAction: asyncNoop,
-    subscribeSessionDoc: subscribeSessionDoc,
-    getSessionDocState,
-    getPluginSessionDoc: asyncNoop,
-    retrySessionDoc: noop,
-    ...overrides,
-  }
+/** 构造真实 external store（状态覆写沿用历史字段名）。 */
+function makeStore(overrides: TestStoreOverrides = {}): HelmExternalStore {
+  return makeTestStore(overrides)
+}
+
+/** 在 actions 包上替换具名动作（挂载前替换；SDK hooks 的调用契约断言需要捕获入参）。 */
+function spyAction<K extends keyof HelmStoreActions>(store: HelmExternalStore, key: K, impl: HelmStoreActions[K]): void {
+  ;(store.actions as unknown as Record<K, HelmStoreActions[K]>)[key] = impl
 }
 
 const stubCtx = {
@@ -162,7 +100,7 @@ const stubCtx = {
 }
 
 /** 在 PluginClientContext.Provider 内渲染消费 hooks 的探针组件，回传渲染结果 JSON。 */
-function renderProbe<T>(store: HelmStoreValue, use: () => T): { html: string; result: T | undefined } {
+function renderProbe<T>(store: HelmExternalStore, use: () => T): { html: string; result: T | undefined } {
   let captured: T | undefined
   function Probe(): React.ReactNode {
     captured = use()
@@ -175,7 +113,7 @@ function renderProbe<T>(store: HelmStoreValue, use: () => T): { html: string; re
 }
 
 /** 在 Provider 内真实挂载（createRoot + act，effects 真实执行）并捕获 hooks 结果。 */
-function mountProbe<T>(store: HelmStoreValue, use: () => T): { result: () => T | undefined; unmount: () => void } {
+function mountProbe<T>(store: HelmExternalStore, use: () => T): { result: () => T | undefined; unmount: () => void } {
   let captured: T | undefined
   function Probe(): React.ReactNode {
     captured = use()
@@ -204,12 +142,10 @@ test('useConversations：返回宿主 store.conversations（同一引用，实�
 
 test('useConversation：详情缺失且无失败时自动加载一次（客户端 effects 真实执行）', { timeout: 60_000 }, () => {
   const calls: LoadCall[] = []
-  const store = makeStore({
-    conversations: [summary(11, 'working')],
-    loadConversationDetail: async (id, force) => {
-      calls.push({ id, force: force === true })
-      return undefined
-    },
+  const store = makeStore({ conversations: [summary(11, 'working')] })
+  spyAction(store, 'loadConversationDetail', async (id, force) => {
+    calls.push({ id, force: force === true })
+    return undefined
   })
   const probe = mountProbe(store, () => useConversation(11))
   assert.deepEqual(calls, [{ id: 11, force: false }], '详情缺失时自动调用 loadConversationDetail（非 force）')
@@ -223,12 +159,10 @@ test('useConversation：详情缺失且无失败时自动加载一次（客户�
 test('useConversation：详情已加载或加载失败时不重复发请求', { timeout: 60_000 }, () => {
   const calls: LoadCall[] = []
   const detail = { ...summary(11, 'idle'), entries: [], nextCursor: undefined }
-  const loaded = makeStore({
-    conversationDetails: { 11: detail },
-    loadConversationDetail: async (id, force) => {
-      calls.push({ id, force: force === true })
-      return undefined
-    },
+  const loaded = makeStore({ conversationDetails: { 11: detail } })
+  spyAction(loaded, 'loadConversationDetail', async (id, force) => {
+    calls.push({ id, force: force === true })
+    return undefined
   })
   const p1 = mountProbe(loaded, () => useConversation(11))
   const r1 = p1.result()
@@ -236,12 +170,10 @@ test('useConversation：详情已加载或加载失败时不重复发请求', { 
   assert.equal(r1!.detail, detail)
   p1.unmount()
 
-  const failed = makeStore({
-    loadErrors: { 'conversation:12': '网络中断' },
-    loadConversationDetail: async (id, force) => {
-      calls.push({ id, force: force === true })
-      return undefined
-    },
+  const failed = makeStore({ loadErrors: { 'conversation:12': '网络中断' } })
+  spyAction(failed, 'loadConversationDetail', async (id, force) => {
+    calls.push({ id, force: force === true })
+    return undefined
   })
   const p2 = mountProbe(failed, () => useConversation(12))
   const r2 = p2.result()
@@ -267,11 +199,10 @@ test('useConversation：pendingAsks 按会话过滤，live/summary 如实透传'
 
 test('useConversation：conversationId 为 undefined 时返回空视图且不发请求', { timeout: 60_000 }, () => {
   const calls: LoadCall[] = []
-  const store = makeStore({
-    loadConversationDetail: async (id, force) => {
-      calls.push({ id, force: force === true })
-      return undefined
-    },
+  const store = makeStore({})
+  spyAction(store, 'loadConversationDetail', async (id, force) => {
+    calls.push({ id, force: force === true })
+    return undefined
   })
   const probe = mountProbe(store, () => useConversation(undefined))
   const r = probe.result()
@@ -285,12 +216,10 @@ test('useConversation：conversationId 为 undefined 时返回空视图且不发
 
 test('useConversation：reload 调用 loadConversationDetail(id, true) 强制刷新', { timeout: 60_000 }, () => {
   const calls: LoadCall[] = []
-  const store = makeStore({
-    conversationDetails: { 11: { ...summary(11, 'idle'), entries: [] } },
-    loadConversationDetail: async (id, force) => {
-      calls.push({ id, force: force === true })
-      return undefined
-    },
+  const store = makeStore({ conversationDetails: { 11: { ...summary(11, 'idle'), entries: [] } } })
+  spyAction(store, 'loadConversationDetail', async (id, force) => {
+    calls.push({ id, force: force === true })
+    return undefined
   })
   const probe = mountProbe(store, () => useConversation(11))
   const r = probe.result()
@@ -307,37 +236,17 @@ test('useConversation：reload 调用 loadConversationDetail(id, true) 强制刷
 // ---------------------------------------------------------------------------
 
 test('createPluginClientContext.openConversationDrawer：打开 conversation-drawer 模态且不触碰工作台开关', { timeout: 60_000 }, () => {
-  const modals: unknown[] = []
-  const workbenchCalls: boolean[] = []
-  const store = makeStore({
-    workbenchOpen: true,
-    setActiveModal: (modal) => {
-      modals.push(modal)
-    },
-    setWorkbenchOpen: (open) => {
-      workbenchCalls.push(open)
-    },
-  })
-  const ctx = createPluginClientContext(createPluginClientHostPort(store), 'test:plugin', 1)
+  const store = makeStore({ workbenchOpen: true })
+  const ctx = createPluginClientContext(createPluginClientHostPort(store.getSnapshot()), 'test:plugin', 1)
   ctx.openConversationDrawer(42)
-  assert.deepEqual(modals, [{ kind: 'conversation-drawer', conversationId: 42 }], '必须设置 conversation-drawer 模态')
-  assert.deepEqual(workbenchCalls, [], '不得调用 setWorkbenchOpen（工作台保持原状）')
+  assert.deepEqual(store.getActiveModal(), { kind: 'conversation-drawer', conversationId: 42 }, '必须设置 conversation-drawer 模态')
+  assert.equal(store.getWorkbenchSlice().workbenchOpen, true, '不得触碰工作台开关（保持原状）')
 })
 
 test('createPluginClientContext.openConversationDrawer：工作台关闭时同样只开抽屉，不强制打开工作台', { timeout: 60_000 }, () => {
-  const modals: unknown[] = []
-  const workbenchCalls: boolean[] = []
-  const store = makeStore({
-    workbenchOpen: false,
-    setActiveModal: (modal) => {
-      modals.push(modal)
-    },
-    setWorkbenchOpen: (open) => {
-      workbenchCalls.push(open)
-    },
-  })
-  const ctx = createPluginClientContext(createPluginClientHostPort(store), 'test:plugin', undefined)
+  const store = makeStore({ workbenchOpen: false })
+  const ctx = createPluginClientContext(createPluginClientHostPort(store.getSnapshot()), 'test:plugin', undefined)
   ctx.openConversationDrawer(7)
-  assert.deepEqual(modals, [{ kind: 'conversation-drawer', conversationId: 7 }])
-  assert.deepEqual(workbenchCalls, [], '抽屉入口不得强制展开工作台')
+  assert.deepEqual(store.getActiveModal(), { kind: 'conversation-drawer', conversationId: 7 })
+  assert.equal(store.getWorkbenchSlice().workbenchOpen, false, '抽屉入口不得强制展开工作台')
 })

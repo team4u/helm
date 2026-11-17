@@ -41,21 +41,16 @@ import type {
 } from './types.js'
 import type { WorkspaceLocationState } from './url-hash-model.js'
 
-export const HelmStoreContext = createContext<HelmStoreValue | null>(null)
 export const HelmExternalStoreContext = createContext<HelmExternalStore | null>(null)
 
 const UNSET = Symbol('helm-store-unset')
 const NOOP_UNSUBSCRIBE = () => {}
-const NOOP_SUBSCRIBE = () => NOOP_UNSUBSCRIBE
 
 function subscribeLiveById(store: HelmExternalStore, id: number, listener: () => void): () => void {
   return store.subscribeConversationLive(id, listener)
 }
 function readLiveById(store: HelmExternalStore, id: number): ConversationLive | undefined {
   return store.getConversationLive(id)
-}
-function readLegacyLiveById(legacy: HelmStoreValue, id: number): ConversationLive | undefined {
-  return legacy.conversationLives?.[id]
 }
 
 function subscribeDetailById(store: HelmExternalStore, id: number, listener: () => void): () => void {
@@ -64,18 +59,12 @@ function subscribeDetailById(store: HelmExternalStore, id: number, listener: () 
 function readDetailById(store: HelmExternalStore, id: number): ConversationDetail | undefined {
   return store.getConversationDetail(id)
 }
-function readLegacyDetailById(legacy: HelmStoreValue, id: number): ConversationDetail | undefined {
-  return legacy.conversationDetails?.[id]
-}
 
 function subscribeSummaryById(store: HelmExternalStore, id: number, listener: () => void): () => void {
   return store.subscribeConversationSummary(id, listener)
 }
 function readSummaryById(store: HelmExternalStore, id: number): ConversationSummary | undefined {
   return store.getConversationSummary(id)
-}
-function readLegacySummaryById(legacy: HelmStoreValue, id: number): ConversationSummary | undefined {
-  return legacy.conversations?.find((c) => c.id === id)
 }
 
 function subscribeArtifactsById(store: HelmExternalStore, id: number, listener: () => void): () => void {
@@ -84,18 +73,12 @@ function subscribeArtifactsById(store: HelmExternalStore, id: number, listener: 
 function readArtifactsById(store: HelmExternalStore, id: number): ArtifactMetadata[] | undefined {
   return store.getConversationArtifacts(id)
 }
-function readLegacyArtifactsById(legacy: HelmStoreValue, id: number): ArtifactMetadata[] | undefined {
-  return legacy.conversationArtifacts?.[id]
-}
 
 function subscribeResolvedAsksById(store: HelmExternalStore, id: number, listener: () => void): () => void {
   return store.subscribeResolvedAsks(id, listener)
 }
 function readResolvedAsksById(store: HelmExternalStore, id: number): ResolvedAskEntry[] | undefined {
   return store.getResolvedAsks(id)
-}
-function readLegacyResolvedAsksById(legacy: HelmStoreValue, id: number): ResolvedAskEntry[] | undefined {
-  return legacy.resolvedAsksByConv?.[id]
 }
 
 function subscribeHighlightById(store: HelmExternalStore, id: number, listener: () => void): () => void {
@@ -104,18 +87,12 @@ function subscribeHighlightById(store: HelmExternalStore, id: number, listener: 
 function readHighlightById(store: HelmExternalStore, id: number): { conversationId: number; entryId: string } | null {
   return store.getHighlightedEntryForConversation(id)
 }
-function readLegacyHighlightById(legacy: HelmStoreValue, id: number): { conversationId: number; entryId: string } | null {
-  return legacy.highlightedEntry?.conversationId === id ? legacy.highlightedEntry : null
-}
 
 function subscribeLoadErrorKey(store: HelmExternalStore, key: string, listener: () => void): () => void {
   return store.subscribeLoadError(key, listener)
 }
 function readLoadErrorKey(store: HelmExternalStore, key: string): string | undefined {
   return store.getLoadError(key)
-}
-function readLegacyLoadErrorKey(legacy: HelmStoreValue, key: string): string | undefined {
-  return legacy.loadErrors?.[key]
 }
 
 function subscribePluginDocKey(store: HelmExternalStore, docKey: string, listener: () => void): () => void {
@@ -124,28 +101,20 @@ function subscribePluginDocKey(store: HelmExternalStore, docKey: string, listene
 function readPluginDocKey(store: HelmExternalStore, docKey: string): unknown {
   return store.getPluginDoc(docKey)
 }
-function readLegacyPluginDocKey(legacy: HelmStoreValue, docKey: string): unknown {
-  return legacy.pluginDocs !== undefined && legacy.pluginDocs !== null && Object.hasOwn(legacy.pluginDocs, docKey)
-    ? legacy.pluginDocs[docKey]
-    : undefined
-}
 
 function useDomainSlice<T>(
   domain: StoreDomainKey,
   fromExternal: (store: HelmExternalStore) => T,
-  fromLegacy: (legacy: HelmStoreValue) => T,
   fallback?: () => T,
 ): T {
   const external = useContext(HelmExternalStoreContext)
-  const legacy = useContext(HelmStoreContext)
   const subscribe = useCallback(
     (listener: () => void) => (external !== null ? external.subscribeDomain(domain, listener) : NOOP_UNSUBSCRIBE),
     [external, domain],
   )
   const getSnapshot = (): T | typeof UNSET => (external !== null ? fromExternal(external) : UNSET)
-  const extValue = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-  if (extValue !== UNSET) return extValue
-  if (legacy !== null) return fromLegacy(legacy)
+  const value = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  if (value !== UNSET) return value
   if (fallback !== undefined) return fallback()
   throw new Error('useHelmStore must be called inside <HelmStoreProvider>')
 }
@@ -153,12 +122,10 @@ function useDomainSlice<T>(
 function useKeyedSlice<K, T>(
   subscribeForKey: (store: HelmExternalStore, key: K, listener: () => void) => () => void,
   fromExternal: (store: HelmExternalStore, key: K) => T,
-  fromLegacy: (legacy: HelmStoreValue, key: K) => T,
   key: K | undefined,
   emptyValue: T,
 ): T {
   const external = useContext(HelmExternalStoreContext)
-  const legacy = useContext(HelmStoreContext)
   const subscribe = useCallback(
     (listener: () => void) =>
       external !== null && key !== undefined ? subscribeForKey(external, key, listener) : NOOP_UNSUBSCRIBE,
@@ -166,39 +133,28 @@ function useKeyedSlice<K, T>(
   )
   const getSnapshot = (): T | typeof UNSET =>
     external !== null ? (key !== undefined ? fromExternal(external, key) : emptyValue) : UNSET
-  const extValue = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-  if (extValue !== UNSET) return extValue
-  if (legacy !== null) return key !== undefined ? fromLegacy(legacy, key) : emptyValue
+  const value = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  if (value !== UNSET) return value
   throw new Error('useHelmStore must be called inside <HelmStoreProvider>')
 }
 
 /**
- * Full store snapshot hook (backwards-compatible with test doubles and coarse
- * consumers; subscribes to all domains, so production components should prefer
- * sliced hooks below).
+ * Full store snapshot hook (coarse consumers; subscribes to all domains, so
+ * production components should prefer sliced hooks below).
  */
 export function useHelmStore(): HelmStoreValue {
-  return useDomainSlice(
-    'all',
-    (s) => s.getSnapshot(),
-    (l) => l,
-  )
+  return useDomainSlice('all', (s) => s.getSnapshot())
 }
 
 /** Stable store action bundle (never triggers re-renders inside <HelmStoreProvider>). */
 export function useStoreActions(): HelmStoreActions {
   const external = useContext(HelmExternalStoreContext)
-  const legacy = useContext(HelmStoreContext)
   if (external !== null) return external.actions
-  if (legacy !== null) return legacy
   throw new Error('useStoreActions must be called inside <HelmStoreProvider>')
 }
 
 export function useOptionalStoreActions(): HelmStoreActions | null {
-  const external = useContext(HelmExternalStoreContext)
-  const legacy = useContext(HelmStoreContext)
-  if (external !== null) return external.actions
-  return legacy
+  return useContext(HelmExternalStoreContext)?.actions ?? null
 }
 
 /** Direct imperative reference to external store (for event handlers that read without subscribing). */
@@ -209,425 +165,196 @@ export function useHelmExternalStore(): HelmExternalStore | null {
 // ---- Narrow Domain Hooks --------------------------------------------------
 
 export function useAuthConnection(): AuthSlice {
-  const external = useContext(HelmExternalStoreContext)
-  const legacy = useContext(HelmStoreContext)
-  const subscribe = useCallback(
-    (listener: () => void) => (external !== null ? external.subscribeDomain('auth', listener) : NOOP_UNSUBSCRIBE),
-    [external],
-  )
-  const getSnapshot = (): AuthSlice | typeof UNSET => (external !== null ? external.getAuthSlice() : UNSET)
-  const extValue = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-  const legacySlice = useMemo<AuthSlice | null>(
-    () =>
-      legacy === null
-        ? null
-        : {
-            authReady: legacy.authReady,
-            authConfigured: legacy.authConfigured,
-            authenticated: legacy.authenticated,
-            authError: legacy.authError,
-            sseConnected: legacy.sseConnected,
-            connectionError: legacy.connectionError,
-            kernelBootId: legacy.kernelBootId ?? null,
-          },
-    [legacy],
-  )
-  if (extValue !== UNSET) return extValue
-  if (legacySlice !== null) return legacySlice
-  throw new Error('useHelmStore must be called inside <HelmStoreProvider>')
+  return useDomainSlice('auth', (s) => s.getAuthSlice())
 }
 
 export function useAuthenticated(): boolean {
-  return useDomainSlice('authenticated', (s) => s.getAuthenticated(), (l) => l.authenticated)
+  return useDomainSlice('authenticated', (s) => s.getAuthenticated())
 }
 
 export function useSseConnected(): boolean {
-  return useDomainSlice('sseConnected', (s) => s.getSseConnected(), (l) => l.sseConnected)
+  return useDomainSlice('sseConnected', (s) => s.getSseConnected())
 }
 
 export function useThemePreferencesState(): PrefsSlice {
-  const external = useContext(HelmExternalStoreContext)
-  const legacy = useContext(HelmStoreContext)
-  const subscribe = useCallback(
-    (listener: () => void) => (external !== null ? external.subscribeDomain('prefs', listener) : NOOP_UNSUBSCRIBE),
-    [external],
-  )
-  const getSnapshot = (): PrefsSlice | typeof UNSET => (external !== null ? external.getPrefsSlice() : UNSET)
-  const extValue = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-  const legacySlice = useMemo<PrefsSlice | null>(
-    () =>
-      legacy === null
-        ? null
-        : {
-            theme: legacy.theme,
-            themePreference: legacy.themePreference,
-            locale: legacy.locale,
-            localePreference: legacy.localePreference ?? legacy.locale,
-            quietNotifyEnabled: legacy.quietNotifyEnabled,
-          },
-    [legacy],
-  )
-  if (extValue !== UNSET) return extValue
-  if (legacySlice !== null) return legacySlice
-  throw new Error('useHelmStore must be called inside <HelmStoreProvider>')
+  return useDomainSlice('prefs', (s) => s.getPrefsSlice())
 }
 
 export function useOptionalLocale(): HelmLocale | undefined {
-  return useDomainSlice(
-    'locale',
-    (s) => s.getLocale(),
-    (l) => l.locale,
-    () => undefined,
-  )
+  return useDomainSlice('locale', (s) => s.getLocale(), () => undefined)
 }
 
 export function useThemeMode(): ThemeMode {
-  return useDomainSlice('theme', (s) => s.getPrefsSlice().theme, (l) => l.theme)
+  return useDomainSlice('theme', (s) => s.getPrefsSlice().theme)
 }
 
 export function useQuietNotifyEnabled(): boolean {
-  return useDomainSlice('quietNotify', (s) => s.getPrefsSlice().quietNotifyEnabled, (l) => l.quietNotifyEnabled)
+  return useDomainSlice('quietNotify', (s) => s.getPrefsSlice().quietNotifyEnabled)
 }
 
 export function useProfilesSlice(): ProfilesSlice {
-  const external = useContext(HelmExternalStoreContext)
-  const legacy = useContext(HelmStoreContext)
-  const subscribe = useCallback(
-    (listener: () => void) => (external !== null ? external.subscribeDomain('profiles', listener) : NOOP_UNSUBSCRIBE),
-    [external],
-  )
-  const getSnapshot = (): ProfilesSlice | typeof UNSET => (external !== null ? external.getProfilesSlice() : UNSET)
-  const extValue = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-  const legacySlice = useMemo<ProfilesSlice | null>(
-    () =>
-      legacy === null
-        ? null
-        : {
-            profiles: legacy.profiles,
-            profilesLoaded: legacy.profilesLoaded,
-            assetsLoaded: legacy.assetsLoaded,
-          },
-    [legacy],
-  )
-  if (extValue !== UNSET) return extValue
-  if (legacySlice !== null) return legacySlice
-  throw new Error('useHelmStore must be called inside <HelmStoreProvider>')
+  return useDomainSlice('profiles', (s) => s.getProfilesSlice())
 }
 
 export function useCatalogAssets(): CatalogSlice {
-  const external = useContext(HelmExternalStoreContext)
-  const legacy = useContext(HelmStoreContext)
-  const subscribe = useCallback(
-    (listener: () => void) => (external !== null ? external.subscribeDomain('catalog', listener) : NOOP_UNSUBSCRIBE),
-    [external],
-  )
-  const getSnapshot = (): CatalogSlice | typeof UNSET => (external !== null ? external.getCatalogSlice() : UNSET)
-  const extValue = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-  const legacySlice = useMemo<CatalogSlice | null>(
-    () =>
-      legacy === null
-        ? null
-        : {
-            profiles: legacy.profiles,
-            profilesLoaded: legacy.profilesLoaded,
-            assetsLoaded: legacy.assetsLoaded,
-            models: legacy.models,
-            providers: legacy.providers,
-            credentials: legacy.credentials,
-            skills: legacy.skills,
-            actions: legacy.actions,
-          },
-    [legacy],
-  )
-  if (extValue !== UNSET) return extValue
-  if (legacySlice !== null) return legacySlice
-  throw new Error('useHelmStore must be called inside <HelmStoreProvider>')
+  return useDomainSlice('catalog', (s) => s.getCatalogSlice())
 }
 
 export function useModels(): ModelDescriptor[] {
-  return useDomainSlice('models', (s) => s.getModels(), (l) => l.models)
+  return useDomainSlice('models', (s) => s.getModels())
 }
 
 export function useOptionalModels(): ModelDescriptor[] | undefined {
-  return useDomainSlice('models', (s) => s.getModels(), (l) => l.models, () => undefined)
-}
-
-export function useOptionalDefaultModelInfo(): HelmStoreValue['defaultModelInfo'] {
-  return useDomainSlice(
-    'models',
-    () => undefined,
-    (l) => l.defaultModelInfo,
-    () => undefined,
-  )
+  return useDomainSlice('models', (s) => s.getModels(), () => undefined)
 }
 
 export function useProviders(): ProviderConfig[] {
-  return useDomainSlice('providers', (s) => s.getProviders(), (l) => l.providers)
+  return useDomainSlice('providers', (s) => s.getProviders())
 }
 
 export function useCredentials(): CredentialSummary[] {
-  return useDomainSlice('credentials', (s) => s.getCredentials(), (l) => l.credentials)
+  return useDomainSlice('credentials', (s) => s.getCredentials())
 }
 
 export function useSkills(): SkillSummary[] {
-  return useDomainSlice('skills', (s) => s.getSkills(), (l) => l.skills)
+  return useDomainSlice('skills', (s) => s.getSkills())
 }
 
 export function useCatalogActions(): ActionManifest[] {
-  return useDomainSlice('actions', (s) => s.getActionsList(), (l) => l.actions)
+  return useDomainSlice('actions', (s) => s.getActionsList())
 }
 
 export function useConversations(): ConversationSummary[] {
-  return useDomainSlice('conversations', (s) => s.getConversations(), (l) => l.conversations)
+  return useDomainSlice('conversations', (s) => s.getConversations())
 }
 
 export function useOptionalConversations(): ConversationSummary[] | undefined {
-  return useDomainSlice('conversations', (s) => s.getConversations(), (l) => l.conversations, () => undefined)
+  return useDomainSlice('conversations', (s) => s.getConversations(), () => undefined)
 }
 
 export function usePendingAsks(): AskSpec[] {
-  return useDomainSlice('pendingAsks', (s) => s.getPendingAsks(), (l) => l.pendingAsks)
+  return useDomainSlice('pendingAsks', (s) => s.getPendingAsks())
 }
 
 export function usePlugins(): PluginSummary[] {
-  return useDomainSlice('plugins', (s) => s.getPlugins(), (l) => l.plugins)
+  return useDomainSlice('plugins', (s) => s.getPlugins())
 }
 
 export function useOptionalPlugins(): PluginSummary[] | undefined {
-  return useDomainSlice('plugins', (s) => s.getPlugins(), (l) => l.plugins, () => undefined)
+  return useDomainSlice('plugins', (s) => s.getPlugins(), () => undefined)
 }
 
 export function useGroupedUi(): GroupedUiSpecs {
-  return useDomainSlice('groupedUi', (s) => s.getGroupedUi(), (l) => l.groupedUi)
+  return useDomainSlice('groupedUi', (s) => s.getGroupedUi())
 }
 
 export function useOptionalGroupedUi(): GroupedUiSpecs | undefined {
-  return useDomainSlice('groupedUi', (s) => s.getGroupedUi(), (l) => l.groupedUi, () => undefined)
+  return useDomainSlice('groupedUi', (s) => s.getGroupedUi(), () => undefined)
 }
 
 export function usePluginsUi(): PluginsUiSlice {
-  const external = useContext(HelmExternalStoreContext)
-  const legacy = useContext(HelmStoreContext)
-  const subscribe = useCallback(
-    (listener: () => void) => (external !== null ? external.subscribeDomain('pluginsUi', listener) : NOOP_UNSUBSCRIBE),
-    [external],
-  )
-  const getSnapshot = (): PluginsUiSlice | typeof UNSET => (external !== null ? external.getPluginsUiSlice() : UNSET)
-  const extValue = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-  const legacySlice = useMemo<PluginsUiSlice | null>(
-    () =>
-      legacy === null
-        ? null
-        : {
-            plugins: legacy.plugins,
-            uiContributions: legacy.uiContributions,
-            groupedUi: legacy.groupedUi,
-          },
-    [legacy],
-  )
-  if (extValue !== UNSET) return extValue
-  if (legacySlice !== null) return legacySlice
-  throw new Error('useHelmStore must be called inside <HelmStoreProvider>')
+  return useDomainSlice('pluginsUi', (s) => s.getPluginsUiSlice())
 }
 
 export function useNodes(): NodeInfo[] {
-  return useDomainSlice('nodes', (s) => s.getNodes(), (l) => l.nodes)
+  return useDomainSlice('nodes', (s) => s.getNodes())
 }
 
 export function useLoadErrorsMap(): Record<string, string> {
-  return useDomainSlice('loadErrorsMap', (s) => s.getLoadErrorsMap(), (l) => l.loadErrors)
+  return useDomainSlice('loadErrorsMap', (s) => s.getLoadErrorsMap())
 }
 
 export function usePluginDocsState(): Record<string, unknown> {
-  return useDomainSlice('pluginDocsMap', (s) => s.getPluginDocsMap(), (l) => l.pluginDocs)
+  return useDomainSlice('pluginDocsMap', (s) => s.getPluginDocsMap())
 }
 
 export function useConversationDetailsMap(): Record<number, ConversationDetail> {
-  return useDomainSlice('conversationDetailsMap', (s) => s.getConversationDetailsMap(), (l) => l.conversationDetails)
+  return useDomainSlice('conversationDetailsMap', (s) => s.getConversationDetailsMap())
 }
 
 export function useLocationTargets(): LocationTargetsSlice {
-  const external = useContext(HelmExternalStoreContext)
-  const legacy = useContext(HelmStoreContext)
-  const subscribe = useCallback(
-    (listener: () => void) =>
-      external !== null ? external.subscribeDomain('locationTargets', listener) : NOOP_UNSUBSCRIBE,
-    [external],
-  )
-  const getSnapshot = (): LocationTargetsSlice | typeof UNSET =>
-    external !== null ? external.getLocationTargetsSlice() : UNSET
-  const extValue = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-  const legacySlice = useMemo<LocationTargetsSlice | null>(
-    () =>
-      legacy === null
-        ? null
-        : {
-            primaryTarget: legacy.primaryTarget,
-            splitTarget: legacy.splitTarget,
-            focusedPanel: legacy.focusedPanel ?? 'primary',
-          },
-    [legacy],
-  )
-  if (extValue !== UNSET) return extValue
-  if (legacySlice !== null) return legacySlice
-  throw new Error('useHelmStore must be called inside <HelmStoreProvider>')
+  return useDomainSlice('locationTargets', (s) => s.getLocationTargetsSlice())
 }
 
 export function usePrimaryTarget(): ResolvedTarget {
-  return useDomainSlice('primaryTarget', (s) => s.getPrimaryTarget(), (l) => l.primaryTarget)
+  return useDomainSlice('primaryTarget', (s) => s.getPrimaryTarget())
 }
 
 export function useSplitTarget(): ResolvedTarget | null {
-  return useDomainSlice('splitTarget', (s) => s.getSplitTarget(), (l) => l.splitTarget)
+  return useDomainSlice('splitTarget', (s) => s.getSplitTarget())
 }
 
 export function useFocusedPanel(): FocusedPanel {
-  return useDomainSlice('focusedPanel', (s) => s.getFocusedPanel(), (l) => l.focusedPanel ?? 'primary')
+  return useDomainSlice('focusedPanel', (s) => s.getFocusedPanel())
 }
 
 export function useSidebarCollapsed(): boolean {
-  return useDomainSlice('sidebarCollapsed', (s) => s.getSidebarCollapsed(), (l) => Boolean(l.sidebarCollapsed))
+  return useDomainSlice('sidebarCollapsed', (s) => s.getSidebarCollapsed())
 }
 
 export function useWorkbenchState(): WorkbenchSlice {
-  const external = useContext(HelmExternalStoreContext)
-  const legacy = useContext(HelmStoreContext)
-  const subscribe = useCallback(
-    (listener: () => void) => (external !== null ? external.subscribeDomain('workbench', listener) : NOOP_UNSUBSCRIBE),
-    [external],
-  )
-  const getSnapshot = (): WorkbenchSlice | typeof UNSET => (external !== null ? external.getWorkbenchSlice() : UNSET)
-  const extValue = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-  const legacySlice = useMemo<WorkbenchSlice | null>(
-    () =>
-      legacy === null
-        ? null
-        : {
-            workbenchOpen: legacy.workbenchOpen,
-            workbenchTab: legacy.workbenchTab,
-          },
-    [legacy],
-  )
-  if (extValue !== UNSET) return extValue
-  if (legacySlice !== null) return legacySlice
-  throw new Error('useHelmStore must be called inside <HelmStoreProvider>')
+  return useDomainSlice('workbench', (s) => s.getWorkbenchSlice())
 }
 
 export function useActiveModal(): ActiveModal {
-  return useDomainSlice('activeModal', (s) => s.getActiveModal(), (l) => l.activeModal)
+  return useDomainSlice('activeModal', (s) => s.getActiveModal())
 }
 
 export function useLocationState(): WorkspaceLocationState {
-  const external = useContext(HelmExternalStoreContext)
-  const legacy = useContext(HelmStoreContext)
-  const subscribe = useCallback(
-    (listener: () => void) =>
-      external !== null ? external.subscribeDomain('locationState', listener) : NOOP_UNSUBSCRIBE,
-    [external],
-  )
-  const getSnapshot = (): WorkspaceLocationState | typeof UNSET =>
-    external !== null ? external.getLocationState() : UNSET
-  const extValue = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-  const legacySlice = useMemo<WorkspaceLocationState | null>(
-    () =>
-      legacy === null
-        ? null
-        : {
-            primaryTarget: legacy.primaryTarget,
-            splitTarget: legacy.splitTarget,
-            workbenchOpen: legacy.workbenchOpen,
-            workbenchTab: legacy.workbenchTab,
-            activeModal: legacy.activeModal,
-          },
-    [legacy],
-  )
-  if (extValue !== UNSET) return extValue
-  if (legacySlice !== null) return legacySlice
-  throw new Error('useHelmStore must be called inside <HelmStoreProvider>')
+  return useDomainSlice('locationState', (s) => s.getLocationState())
 }
 
 export function useHighlightedEntry(): { conversationId: number; entryId: string } | null {
-  return useDomainSlice('highlightedEntry', (s) => s.getHighlightedEntry(), (l) => l.highlightedEntry)
+  return useDomainSlice('highlightedEntry', (s) => s.getHighlightedEntry())
 }
 
 export function useNotices(): ToastNotice[] {
-  return useDomainSlice('notices', (s) => s.getNotices(), (l) => l.notices)
+  return useDomainSlice('notices', (s) => s.getNotices())
 }
 
 export function useNavSlice(): NavSlice {
-  const external = useContext(HelmExternalStoreContext)
-  const legacy = useContext(HelmStoreContext)
-  const subscribe = useCallback(
-    (listener: () => void) => (external !== null ? external.subscribeDomain('nav', listener) : NOOP_UNSUBSCRIBE),
-    [external],
-  )
-  const getSnapshot = (): NavSlice | typeof UNSET => (external !== null ? external.getNavSlice() : UNSET)
-  const extValue = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-  const legacySlice = useMemo<NavSlice | null>(
-    () =>
-      legacy === null
-        ? null
-        : {
-            primaryTarget: legacy.primaryTarget,
-            splitTarget: legacy.splitTarget,
-            focusedPanel: legacy.focusedPanel ?? 'primary',
-            sidebarCollapsed: Boolean(legacy.sidebarCollapsed),
-            pendingEscAbortConversationId: legacy.pendingEscAbortConversationId ?? null,
-            workbenchOpen: legacy.workbenchOpen,
-            workbenchTab: legacy.workbenchTab,
-            activeModal: legacy.activeModal,
-            highlightedEntry: legacy.highlightedEntry,
-          },
-    [legacy],
-  )
-  if (extValue !== UNSET) return extValue
-  if (legacySlice !== null) return legacySlice
-  throw new Error('useHelmStore must be called inside <HelmStoreProvider>')
+  return useDomainSlice('nav', (s) => s.getNavSlice())
 }
 
 export function usePluginHostPortSlice(): PluginHostPortSlice {
-  return useDomainSlice(
-    'pluginHostPort',
-    (s) => s.getPluginHostPortSlice(),
-    (l) => l,
-  )
+  return useDomainSlice('pluginHostPort', (s) => s.getPluginHostPortSlice())
 }
 
 // ---- Per-Key / Per-Conversation Hooks -------------------------------------
 
 export function useConversationLive(conversationId: number | undefined): ConversationLive | undefined {
-  return useKeyedSlice(subscribeLiveById, readLiveById, readLegacyLiveById, conversationId, undefined)
+  return useKeyedSlice(subscribeLiveById, readLiveById, conversationId, undefined)
 }
 
 export function useConversationDetail(conversationId: number | undefined): ConversationDetail | undefined {
-  return useKeyedSlice(subscribeDetailById, readDetailById, readLegacyDetailById, conversationId, undefined)
+  return useKeyedSlice(subscribeDetailById, readDetailById, conversationId, undefined)
 }
 
 export function useConversationSummary(conversationId: number | undefined): ConversationSummary | undefined {
-  return useKeyedSlice(subscribeSummaryById, readSummaryById, readLegacySummaryById, conversationId, undefined)
+  return useKeyedSlice(subscribeSummaryById, readSummaryById, conversationId, undefined)
 }
 
 export function useConversationArtifacts(conversationId: number | undefined): ArtifactMetadata[] | undefined {
-  return useKeyedSlice(subscribeArtifactsById, readArtifactsById, readLegacyArtifactsById, conversationId, undefined)
+  return useKeyedSlice(subscribeArtifactsById, readArtifactsById, conversationId, undefined)
 }
 
 export function useResolvedAsks(conversationId: number | undefined): ResolvedAskEntry[] | undefined {
-  return useKeyedSlice(subscribeResolvedAsksById, readResolvedAsksById, readLegacyResolvedAsksById, conversationId, undefined)
+  return useKeyedSlice(subscribeResolvedAsksById, readResolvedAsksById, conversationId, undefined)
 }
 
 export function useHighlightedEntryForConversation(
   conversationId: number | undefined,
 ): { conversationId: number; entryId: string } | null {
-  return useKeyedSlice(subscribeHighlightById, readHighlightById, readLegacyHighlightById, conversationId, null)
+  return useKeyedSlice(subscribeHighlightById, readHighlightById, conversationId, null)
 }
 
 export function useLoadError(key: string | undefined): string | undefined {
-  return useKeyedSlice(subscribeLoadErrorKey, readLoadErrorKey, readLegacyLoadErrorKey, key, undefined)
+  return useKeyedSlice(subscribeLoadErrorKey, readLoadErrorKey, key, undefined)
 }
 
 export function usePluginDoc(pluginId: string | undefined, docName: string | undefined): unknown {
   const docKey = pluginId && docName ? `${pluginId}/${docName}` : undefined
-  return useKeyedSlice(subscribePluginDocKey, readPluginDocKey, readLegacyPluginDocKey, docKey, undefined)
+  return useKeyedSlice(subscribePluginDocKey, readPluginDocKey, docKey, undefined)
 }
 
 // ---------------------------------------------------------------------------

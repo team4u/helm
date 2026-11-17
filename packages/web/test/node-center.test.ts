@@ -642,28 +642,10 @@ test('NodeCenter zh-CN: renders center chrome, category pills and NodeDetailDraw
 })
 
 test('NodeCenter locale switch: setLocale re-renders en -> zh-CN -> en in place', { timeout: 60_000 }, async () => {
+  // 真实 store.setLocale 驱动 prefs 领域订阅：消费方原位切换（与生产同链路）。
+  const store = makeTestStore({ locale: 'en', nodes: mockNodes() as any, primaryTarget: { kind: 'nodes' } })
   function LocaleSwitchHarness(): React.JSX.Element {
-    const [locale, setLocale] = React.useState<HelmLocale>('en')
-    const store = React.useMemo(
-      () =>
-        makeTestStore({
-          locale,
-          setLocale: (next: HelmLocale) => setLocale(next),
-          nodes: mockNodes() as any,
-          primaryTarget: { kind: 'nodes' },
-        }),
-      [locale],
-    )
-    return e(
-      HostStoreProviders,
-      { value: store },
-      e(NodeCenter, { inlineDrawer: true }),
-      e(
-        'button',
-        { type: 'button', onClick: () => setLocale(locale === 'en' ? 'zh-CN' : 'en') },
-        'switch-locale',
-      ),
-    )
+    return e(HostStoreProviders, { value: store }, e(NodeCenter, { inlineDrawer: true }))
   }
 
   const container = document.createElement('div')
@@ -677,19 +659,14 @@ test('NodeCenter locale switch: setLocale re-renders en -> zh-CN -> en in place'
     assert.match(container.textContent ?? '', /Compute Nodes Center/)
     assert.match(container.textContent ?? '', /Remote/, 'en category pill label')
 
-    const switchBtn = Array.from(container.querySelectorAll('button')).find(
-      (b) => b.textContent === 'switch-locale',
-    ) as HTMLButtonElement
-    assert.ok(switchBtn !== undefined, 'locale switch harness button must exist')
-
     await act(async () => {
-      switchBtn.click()
+      store.setLocale('zh-CN')
     })
     assert.match(container.textContent ?? '', /计算节点中心/, 'consumers re-render in Chinese immediately')
     assert.match(container.textContent ?? '', /远端/, 'zh category pill label')
 
     await act(async () => {
-      switchBtn.click()
+      store.setLocale('en')
     })
     assert.match(container.textContent ?? '', /Compute Nodes Center/, 'switching back to en restores English immediately')
     assert.match(container.textContent ?? '', /Remote/)

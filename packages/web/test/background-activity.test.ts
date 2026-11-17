@@ -26,8 +26,7 @@ import { renderToString } from 'react-dom/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { ConversationSummary, HelmLocale, PluginUiContribution, WorkbenchPanelSpec } from '@helm/protocol'
-import { HelmStoreContext } from '../src/lib/store-context.js'
-import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
+import { groupUiContributions } from '../src/lib/types.js'
 import { ARCHIVED_TAG, conversationStatusDotClass, conversationStatusTooltip } from '../src/shell/sidebar-model.js'
 import {
   backgroundAwareStatusTooltip,
@@ -38,7 +37,9 @@ import {
   summarizeConversationBackgroundActivity,
   type ConversationBackgroundIndex,
 } from '../src/shell/background-activity-model.js'
-import { makeTestStore } from './helpers/store.js'
+import { makeTestStore, HelmExternalStoreContext, type TestStoreOverrides } from './helpers/store.js'
+import { useHelmStore } from '../src/lib/store-context.js'
+import type { HelmExternalStore } from '../src/lib/helm-store.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -423,15 +424,15 @@ const BASE_PROFILES = [
   { id: 'coder', name: '编码专员' },
 ]
 
-function sidebarStore(overrides: Partial<HelmStoreValue> = {}): HelmStoreValue {
+function sidebarStore(overrides: TestStoreOverrides = {}): HelmExternalStore {
   return makeTestStore({
     profiles: BASE_PROFILES,
     ...overrides,
   })
 }
 
-function renderSidebar(store: HelmStoreValue): string {
-  return renderToString(e(HelmStoreContext.Provider, { value: store }, e(Sidebar)))
+function renderSidebar(store: HelmExternalStore): string {
+  return renderToString(e(HelmExternalStoreContext.Provider, { value: store }, e(Sidebar)))
 }
 
 /** Count conversation status lights (excluding the ActivityRail SSE status-dot-connected dot). */
@@ -462,7 +463,7 @@ test('working/blocked/error conversations + background in flight: only the main 
         conv({ id: 50, title: '别处', profileId: 'coder' }),
       ],
       primaryTarget: { kind: 'conversation', conversationId: 50 },
-      groupedUi: groupUiContributions([panelContribution()]),
+      uiContributions: [panelContribution()],
       pluginDocs: {
         'builtin:workflow/run-badges': badgesDoc({ '1': { count: 3, tone: 'accent', footerText: '3 Running' } }),
       },
@@ -482,7 +483,7 @@ test('idle conversation + background in flight: only the background hollow ring 
       conv({ id: 50, title: '别处', profileId: 'coder' }),
     ],
     primaryTarget: { kind: 'conversation', conversationId: 50 },
-    groupedUi: groupUiContributions([panelContribution()]),
+    uiContributions: [panelContribution()],
     pluginDocs: {
       'builtin:workflow/run-badges': badgesDoc({ '1': { count: 2, tone: 'accent', footerText: '2 Running' } }),
     },
@@ -501,7 +502,7 @@ test('done conversation + background in flight: the green dot yields and only th
       conv({ id: 50, title: '别处', profileId: 'coder' }),
     ],
     primaryTarget: { kind: 'conversation', conversationId: 50 },
-    groupedUi: groupUiContributions([panelContribution()]),
+    uiContributions: [panelContribution()],
     pluginDocs: {
       'builtin:workflow/run-badges': badgesDoc({ '1': { count: 1, tone: 'accent', footerText: '1 Running' } }),
     },
@@ -521,7 +522,7 @@ test('no background work: the five states stay as-is (done green dot, idle no li
       conv({ id: 50, title: '别处', profileId: 'coder' }),
     ],
     primaryTarget: { kind: 'conversation', conversationId: 50 },
-    groupedUi: groupUiContributions([panelContribution()]),
+    uiContributions: [panelContribution()],
     pluginDocs: {
       'builtin:workflow/run-badges': badgesDoc({ '1': { count: 5, tone: 'neutral', footerText: '5 条历史' } }),
     },
@@ -540,7 +541,7 @@ test('expanded state: the standing row does not duplicate the indicator; each ch
       conv({ id: 3, title: '失败话题', profileId: 'assistant', status: 'error', lastError: 'model_error: boom' }),
     ],
     primaryTarget: { kind: 'conversation', conversationId: 1 },
-    groupedUi: groupUiContributions([panelContribution()]),
+    uiContributions: [panelContribution()],
     pluginDocs: {
       'builtin:workflow/run-badges': badgesDoc({ '2': { count: 1, tone: 'accent', footerText: '1 Running' } }),
     },
@@ -583,7 +584,7 @@ test('collapsed standing row: non-primary background in flight + representative 
       conv({ id: 50, title: '别处', profileId: 'coder' }),
     ],
     primaryTarget: { kind: 'conversation', conversationId: 50 },
-    groupedUi: groupUiContributions([panelContribution()]),
+    uiContributions: [panelContribution()],
     pluginDocs: {
       'builtin:workflow/run-badges': badgesDoc({ '2': { count: 4, tone: 'accent', footerText: '4 Running' } }),
     },
@@ -603,7 +604,7 @@ test('collapsed standing row: representative idle/done renders exactly one backg
       conv({ id: 50, title: '别处', profileId: 'coder' }),
     ],
     primaryTarget: { kind: 'conversation', conversationId: 50 },
-    groupedUi: groupUiContributions([panelContribution()]),
+    uiContributions: [panelContribution()],
     pluginDocs: {
       'builtin:workflow/run-badges': badgesDoc({ '2': { count: 4, tone: 'accent', footerText: '4 Running' } }),
     },
@@ -621,7 +622,7 @@ test('collapsed standing row: representative idle/done renders exactly one backg
       conv({ id: 50, title: '别处', profileId: 'coder' }),
     ],
     primaryTarget: { kind: 'conversation', conversationId: 50 },
-    groupedUi: groupUiContributions([panelContribution()]),
+    uiContributions: [panelContribution()],
     pluginDocs: {
       'builtin:workflow/run-badges': badgesDoc({ '2': { count: 2, tone: 'accent', footerText: '2 Running' } }),
     },
@@ -641,10 +642,10 @@ test('sidebar.section group conversation rows obey the same single-light semanti
       conv({ id: 50, title: '别处', profileId: 'assistant' }),
     ],
     primaryTarget: { kind: 'conversation', conversationId: 50 },
-    groupedUi: groupUiContributions([
+    uiContributions: [
       panelContribution(),
       { pluginId: 'builtin:superagent', surface: 'sidebar.section', spec: { id: 'workers', label: '后台 Worker', filterTag: 'worker' } },
-    ]),
+    ],
     pluginDocs: {
       'builtin:workflow/run-badges': badgesDoc({ '20': { count: 1, tone: 'accent', footerText: '1 Running' } }),
     },
@@ -660,10 +661,10 @@ test('sidebar.section group conversation rows obey the same single-light semanti
       conv({ id: 50, title: '别处', profileId: 'assistant' }),
     ],
     primaryTarget: { kind: 'conversation', conversationId: 50 },
-    groupedUi: groupUiContributions([
+    uiContributions: [
       panelContribution(),
       { pluginId: 'builtin:superagent', surface: 'sidebar.section', spec: { id: 'workers', label: '后台 Worker', filterTag: 'worker' } },
-    ]),
+    ],
     pluginDocs: {
       'builtin:workflow/run-badges': badgesDoc({ '20': { count: 1, tone: 'accent', footerText: '1 Running' } }),
     },
@@ -680,12 +681,12 @@ test('plugin disabled (contributions gone) or only neutral history counts left: 
     conv({ id: 50, title: '别处', profileId: 'coder' }),
   ]
   const common = { conversations, primaryTarget: { kind: 'conversation' as const, conversationId: 50 } }
-  const disabled = renderSidebar(sidebarStore({ ...common, groupedUi: groupUiContributions([]), pluginDocs: {} }))
+  const disabled = renderSidebar(sidebarStore({ ...common, uiContributions: [], pluginDocs: {} }))
   assert.ok(!disabled.includes('status-dot-background'), 'with the contribution gone (disabled), the indicator disappears immediately')
   const neutral = renderSidebar(
     sidebarStore({
       ...common,
-      groupedUi: groupUiContributions([panelContribution()]),
+      uiContributions: [panelContribution()],
       pluginDocs: { 'builtin:workflow/run-badges': badgesDoc({ '1': { count: 9, tone: 'neutral', footerText: '9 条历史' } }) },
     }),
   )
@@ -713,7 +714,7 @@ test('leading fixed light slot: working/done/idle+background lights all sit befo
       conv({ id: 4, title: '后台在跑', profileId: 'assistant' }),
     ],
     primaryTarget: { kind: 'conversation', conversationId: 1 },
-    groupedUi: groupUiContributions([panelContribution()]),
+    uiContributions: [panelContribution()],
     pluginDocs: {
       'builtin:workflow/run-badges': badgesDoc({ '4': { count: 2, tone: 'accent', footerText: '2 Running' } }),
     },
@@ -758,31 +759,39 @@ test('collapsed standing light leads the row: the standing indicator renders ins
 // ---------------------------------------------------------------------------
 
 test('after Sidebar mounts, ensurePluginDoc loads the badge docs of hit panels on demand', { timeout: 60_000 }, async () => {
-  const loaded: Array<{ pluginId: string; doc: string }> = []
+  // 真实 ensurePluginDoc 经 pluginsApi.getPublicDoc 拉取；以拦截到的请求 URL 断言按需加载目标。
+  const docUrls: string[] = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input)
+    docUrls.push(url)
+    return new Response(JSON.stringify({ key: 'stub', value: {} }), { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as typeof fetch
   const store = sidebarStore({
+    plugins: [{ id: 'builtin:workflow', name: 'Workflow', version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
     conversations: [
       conv({ id: 1, title: '主会话', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
       conv({ id: 50, title: '别处', profileId: 'coder' }),
     ],
     primaryTarget: { kind: 'conversation', conversationId: 50 },
-    groupedUi: groupUiContributions([panelContribution()]),
-    ensurePluginDoc: async (pluginId: string, docName: string) => {
-      loaded.push({ pluginId, doc: docName })
-      return undefined
-    },
+    uiContributions: [panelContribution()],
   })
   const container = document.createElement('div')
   document.body.appendChild(container)
   let root: Root | undefined
-  await act(async () => {
-    root = createRoot(container)
-    root.render(e(HelmStoreContext.Provider, { value: store }, e(Sidebar)))
-  })
-  assert.deepEqual(loaded, [{ pluginId: 'builtin:workflow', doc: 'run-badges' }])
-  await act(async () => {
-    root?.unmount()
-  })
-  container.remove()
+  try {
+    await act(async () => {
+      root = createRoot(container)
+      root.render(e(HelmExternalStoreContext.Provider, { value: store }, e(Sidebar)))
+    })
+    assert.deepEqual(docUrls, ['/api/plugins/builtin%3Aworkflow/docs/run-badges'])
+  } finally {
+    globalThis.fetch = originalFetch
+    await act(async () => {
+      root?.unmount()
+    })
+    container.remove()
+  }
 })
 
 // ---------------------------------------------------------------------------
@@ -875,7 +884,7 @@ test('Sidebar render: idle/done conversations with compacting=true render the ba
         conv({ id: 50, title: '别处', profileId: 'coder' }),
       ],
       primaryTarget: { kind: 'conversation', conversationId: 50 },
-      groupedUi: groupUiContributions([panelContribution()]),
+      uiContributions: [panelContribution()],
       pluginDocs: {
         'builtin:workflow/run-badges': badgesDoc({ '1': { count: 2, tone: 'accent', footerText: '2 Running' } }),
       },
@@ -887,32 +896,11 @@ test('Sidebar render: idle/done conversations with compacting=true render the ba
 })
 
 test('Sidebar DOM update: flipping a conversation compacting false -> true lights the hollow ring immediately (no stale closure)', { timeout: 60_000 }, async () => {
-  const basePanels = groupUiContributions([])
-  const initialStore = sidebarStore({
-    conversations: [
-      conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'idle', createdAt: 9000, updatedAt: 9000 }),
-      conv({ id: 50, title: '别处', profileId: 'coder' }),
-    ],
+  const convIdle = conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'idle', createdAt: 9000, updatedAt: 9000 })
+  const store = sidebarStore({
+    conversations: [convIdle, conv({ id: 50, title: '别处', profileId: 'coder' })],
     primaryTarget: { kind: 'conversation', conversationId: 50 },
-    groupedUi: basePanels,
     pluginDocs: {},
-  })
-  const nextStore = sidebarStore({
-    conversations: [
-      conv({
-        id: 1,
-        title: '主会话',
-        profileId: 'assistant',
-        status: 'idle',
-        contextUsage: { tokens: 3000, compacting: true },
-        createdAt: 9000,
-        updatedAt: 9000,
-      }),
-      conv({ id: 50, title: '别处', profileId: 'coder' }),
-    ],
-    primaryTarget: { kind: 'conversation', conversationId: 50 },
-    groupedUi: basePanels,
-    pluginDocs: initialStore.pluginDocs,
   })
 
   const container = document.createElement('div')
@@ -920,12 +908,19 @@ test('Sidebar DOM update: flipping a conversation compacting false -> true light
   let root: Root | undefined
   await act(async () => {
     root = createRoot(container)
-    root.render(e(HelmStoreContext.Provider, { value: initialStore }, e(Sidebar)))
+    root.render(e(HelmExternalStoreContext.Provider, { value: store }, e(Sidebar)))
   })
   assert.ok(container.querySelector('.status-dot-background') === null, 'no hollow ring initially without compacting')
 
+  // conversations 领域原位推进（与 SSE conversation.updated 同一链路），验证无过期闭包
   await act(async () => {
-    root?.render(e(HelmStoreContext.Provider, { value: nextStore }, e(Sidebar)))
+    store.updateLive((prev) => ({
+      ...prev,
+      conversations: [
+        { ...convIdle, contextUsage: { tokens: 3000, compacting: true } },
+        ...prev.conversations.filter((c) => c.id !== 1),
+      ],
+    }))
   })
   const ring = container.querySelector('.status-dot-background')
   assert.ok(ring !== null, 'after the conversations update with compacting=true, the hollow ring lights immediately')
@@ -970,7 +965,7 @@ test('sidebar.section conversation rows in split presence: a splitTarget hit ren
       conversations,
       primaryTarget: { kind: 'conversation', conversationId: 50 },
       splitTarget: { kind: 'conversation', conversationId: 20 },
-      groupedUi: groupUiContributions(contributions),
+      uiContributions: contributions,
     }),
   )
   const workerSecondary = findNavRow(splitSecondaryHtml, 'Worker A')
@@ -997,7 +992,7 @@ test('sidebar.section conversation rows in split presence: a splitTarget hit ren
       primaryTarget: { kind: 'conversation', conversationId: 50 },
       splitTarget: { kind: 'conversation', conversationId: 20 },
       focusedPanel: 'split',
-      groupedUi: groupUiContributions(contributions),
+      uiContributions: contributions,
     }),
   )
   const workerFocused = findNavRow(splitFocusedHtml, 'Worker A')
@@ -1024,7 +1019,7 @@ test('ViewNavGroup and SettingsNavGroup split double-open: main/split highlights
   ]
   const viewSplitHtml = renderSidebar(
     sidebarStore({
-      groupedUi: groupUiContributions(viewContributions),
+      uiContributions: viewContributions,
       primaryTarget: { kind: 'screen', pluginId: 'builtin:herdr', screenId: 'overview' },
       splitTarget: { kind: 'screen', pluginId: 'builtin:workflow', screenId: 'runs' },
       focusedPanel: 'split',
@@ -1048,7 +1043,7 @@ test('ViewNavGroup and SettingsNavGroup split double-open: main/split highlights
 
   const viewSameHtml = renderSidebar(
     sidebarStore({
-      groupedUi: groupUiContributions(viewContributions),
+      uiContributions: viewContributions,
       primaryTarget: { kind: 'screen', pluginId: 'builtin:herdr', screenId: 'overview' },
       splitTarget: { kind: 'screen', pluginId: 'builtin:herdr', screenId: 'overview' },
     }),
@@ -1189,20 +1184,14 @@ test('zh-CN sidebar render: agents group shows Chinese chrome copy', { timeout: 
 })
 
 test('AgentStandingsGroup switches copy immediately on setLocale (en -> zh-CN -> en)', { timeout: 60_000 }, async () => {
-  let committedLocale: HelmLocale = 'en'
+  // 真实 store.setLocale 驱动 prefs 领域订阅：Shell 铨印文案原位切换（与生产同一链路）。
+  const store = sidebarStore({ locale: 'en' })
+  function StandingsView(): React.JSX.Element {
+    const view = useHelmStore()
+    return e(AgentStandingsGroup, { store: view, background: new Map() })
+  }
   function Harness(): React.JSX.Element {
-    const [locale, setLocale] = React.useState<HelmLocale>('en')
-    committedLocale = locale
-    const store = React.useMemo(
-      () => sidebarStore({ locale, setLocale: (next: HelmLocale) => setLocale(next) }),
-      [locale],
-    )
-    return e(
-      HelmStoreContext.Provider,
-      { value: store },
-      e(AgentStandingsGroup, { store, background: new Map() }),
-      e('button', { type: 'button', onClick: () => setLocale(locale === 'en' ? 'zh-CN' : 'en') }, 'switch-locale'),
-    )
+    return e(HelmExternalStoreContext.Provider, { value: store }, e(StandingsView))
   }
 
   const host = document.createElement('div')
@@ -1214,16 +1203,14 @@ test('AgentStandingsGroup switches copy immediately on setLocale (en -> zh-CN ->
     assert.ok(groupTitle !== null, 'agents group header renders')
     assert.equal(groupTitle.textContent, 'Agents', 'renders the en catalog copy by default')
 
-    const switchBtn = [...host.querySelectorAll('button')].find((b) => b.textContent === 'switch-locale')
-    assert.ok(switchBtn !== undefined, 'locale switch harness button must exist')
-    await act(async () => { (switchBtn as HTMLButtonElement).click() })
-    assert.equal(committedLocale, 'zh-CN')
+    await act(async () => { store.setLocale('zh-CN') })
+    assert.equal(store.getPrefsSlice().locale, 'zh-CN')
     const groupTitleZh = host.querySelector('.sidebar-group-header > span')
     assert.ok(groupTitleZh !== null)
     assert.equal(groupTitleZh.textContent, '智能体', 'locale switch re-renders shell chrome in place')
 
-    await act(async () => { (switchBtn as HTMLButtonElement).click() })
-    assert.equal(committedLocale, 'en')
+    await act(async () => { store.setLocale('en') })
+    assert.equal(store.getPrefsSlice().locale, 'en')
     assert.equal(host.querySelector('.sidebar-group-header > span')?.textContent, 'Agents', 'switching back to en restores English immediately')
   } finally {
     await act(async () => { root.unmount() })

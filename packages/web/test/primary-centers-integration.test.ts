@@ -56,6 +56,16 @@ const e = React.createElement
 // 1. Sidebar/footer five primary entries and highlight-state contract
 // ---------------------------------------------------------------------------
 
+/** 记录真实 openTarget 调用序列（委托真实导航动作）。 */
+function spyOpenTarget(store: import('../src/lib/helm-store.js').HelmExternalStore, opened: unknown[]): void {
+  ;(store.actions as unknown as { openTarget: (target: unknown) => void }).openTarget = (target) => {
+    opened.push(target)
+    if (typeof target !== 'string') {
+      store.applyPrimaryTarget(target as import('../src/lib/types.js').ResolvedTarget)
+    }
+  }
+}
+
 test('Sidebar: the five settings-space entries navigate to primary targets uniformly, active state aligned with routing', { timeout: 60_000 }, async () => {
   const targets = [
     { kind: 'profiles' as const, label: 'Profile' },
@@ -79,10 +89,8 @@ test('Sidebar: the five settings-space entries navigate to primary targets unifo
   const root = ReactDOMClient.createRoot(host)
   const store = makeTestStore({
     primaryTarget: { kind: 'profiles' },
-    openTarget: (target) => {
-      if (typeof target !== 'string') opened.push({ kind: target.kind })
-    },
   })
+  spyOpenTarget(store, opened)
   try {
     await act(async () => {
       root.render(e(HostStoreProviders, { value: store }, e(Sidebar)))
@@ -127,8 +135,8 @@ test('CommandPaletteModal: the four quick items dispatch primary routes uniforml
     const root = ReactDOMClient.createRoot(host)
     const store = makeTestStore({
       activeModal: { kind: 'command-palette' },
-      openTarget: (target) => opened.push(target),
     })
+    spyOpenTarget(store, opened)
     try {
       await act(async () => {
         root.render(e(HostStoreProviders, { value: store }, e(CommandPaletteModal, { onClose: () => { closed = true } })))

@@ -22,8 +22,8 @@ import {
   usePlugins,
   useProfilesSlice,
   useStoreActions,
+  type LocationTargetsSlice,
 } from '../lib/store-context.js'
-import type { ResolvedTarget } from '../lib/types.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
@@ -50,7 +50,7 @@ function ArchivedConversationRow({
   onToggleSelect,
 }: {
   item: ArchivedConversationListItem
-  locationTargets: { primaryTarget: ResolvedTarget; splitTarget: ResolvedTarget | null }
+  locationTargets: LocationTargetsSlice
   onOpenConversation: (conversationId: number) => void
   background: ConversationBackgroundIndex
   onNavigate?: () => void

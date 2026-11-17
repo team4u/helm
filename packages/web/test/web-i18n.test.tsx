@@ -32,8 +32,7 @@ import { profilesMessages } from '../src/i18n/resources/profiles.js'
 import { shellMessages } from '../src/i18n/resources/shell.js'
 import { skillsMessages } from '../src/i18n/resources/skills.js'
 import { uiMessages } from '../src/i18n/resources/ui.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
-import { makeTestStore } from './helpers/store.js'
+import { makeTestStore, HelmExternalStoreContext } from './helpers/store.js'
 
 GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
@@ -96,23 +95,13 @@ test('translator: locale resolution, memoized identity, interpolation, missing-k
 test('useWebLocale consumers switch en -> zh-CN -> en immediately via setLocale', { timeout: 60_000 }, async () => {
   const { SplitToggleButton } = await import('../src/ui/SplitControls.js')
 
-  let committedLocale: HelmLocale = 'en'
+  // 真实 store.setLocale 驱动 prefs 领域订阅：useWebLocale 消费方原位切换（与生产同链路）。
+  const store = makeTestStore({ locale: 'en' })
   function Harness(): React.JSX.Element {
-    const [locale, setLocale] = React.useState<HelmLocale>('en')
-    committedLocale = locale
-    const store = React.useMemo(
-      () => makeTestStore({ locale, setLocale: (next: HelmLocale) => setLocale(next) }),
-      [locale],
-    )
     return React.createElement(
-      HelmStoreContext.Provider,
+      HelmExternalStoreContext.Provider,
       { value: store },
       React.createElement(SplitToggleButton, { isSplitActive: false, onToggleSplit: () => {} }),
-      React.createElement(
-        'button',
-        { type: 'button', onClick: () => setLocale(locale === 'en' ? 'zh-CN' : 'en') },
-        'switch-locale',
-      ),
     )
   }
 
@@ -126,19 +115,16 @@ test('useWebLocale consumers switch en -> zh-CN -> en immediately via setLocale'
     assert.equal(toggle.getAttribute('aria-label'), 'Side-by-side split', 'renders the en catalog copy by default')
     assert.equal(toggle.getAttribute('title'), 'Open / close the split view on the right')
 
-    const switchButton = [...host.querySelectorAll('button')].find((b) => b.textContent === 'switch-locale')
-    assert.ok(switchButton !== undefined, 'locale switch harness button must exist')
-    const switchBtn = switchButton as HTMLButtonElement
-    await act(async () => { switchBtn.click() })
-    assert.equal(committedLocale, 'zh-CN')
+    await act(async () => { store.setLocale('zh-CN') })
+    assert.equal(store.getPrefsSlice().locale, 'zh-CN')
     const toggleZh = host.querySelector<HTMLButtonElement>('.split-toggle-btn')
     assert.ok(toggleZh !== null)
     const toggleZhBtn: HTMLButtonElement = toggleZh
     assert.equal(toggleZhBtn.getAttribute('aria-label'), '并排分屏', 'locale switch re-renders consumers in place')
     assert.equal(toggleZhBtn.getAttribute('title'), '在右屏并排打开 / 关闭分屏')
 
-    await act(async () => { switchBtn.click() })
-    assert.equal(committedLocale, 'en')
+    await act(async () => { store.setLocale('en') })
+    assert.equal(store.getPrefsSlice().locale, 'en')
     assert.equal(host.querySelector('.split-toggle-btn')!.getAttribute('aria-label'), 'Side-by-side split', 'switching back to en restores English immediately')
   } finally {
     await act(async () => { root.unmount() })

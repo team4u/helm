@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { ensureHappyDom, typeIntoControl } from './helpers/dom-harness.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 
 ensureHappyDom()
 
@@ -31,7 +30,7 @@ import {
   skillFileBasename,
   skillFileLanguage,
 } from '../src/skills/skill-reader-model.js'
-import { makeTestStore } from './helpers/store.js'
+import { makeTestStore, HelmExternalStoreContext } from './helpers/store.js'
 
 // The drawer and skill center carry the @radix-ui/react-select dependency
 // graph and must be dynamically loaded after happy-dom
@@ -58,7 +57,7 @@ function makeSkill(partial: Partial<SkillSummary> & { id: string }): SkillSummar
 
 /** Render the drawer inside a real host store context (MarkdownView depends on useHelmStore). */
 function renderDrawerElement(props: React.ReactElement): React.ReactElement {
-  return e(HelmStoreContext.Provider, { value: makeTestStore() }, props)
+  return e(HelmExternalStoreContext.Provider, { value: makeTestStore() }, props)
 }
 
 /** Open the file picker via keyboard interaction and pick the given option (Radix Select has no native select). */
@@ -1296,13 +1295,9 @@ test('SkillCenter: interactive filtering, search and drawer wiring (openTarget)'
   document.body.appendChild(host)
   const root = ReactDOMClient.createRoot(host)
 
-  const openTargetCalls: Array<{ target: unknown; opts?: unknown }> = []
   const store = makeTestStore({
     skills: mockSkills,
     primaryTarget: { kind: 'skills' },
-    openTarget: (target, opts) => {
-      openTargetCalls.push({ target, opts })
-    },
   })
 
   await act(async () => {
@@ -1366,14 +1361,11 @@ test('SkillCenter: interactive filtering, search and drawer wiring (openTarget)'
   cards = host.querySelectorAll('.skill-card')
   assert.equal(cards.length, 6, 'restoring All returns to the full card set')
 
-  // 4. Clicking a card triggers openTarget to open the drawer
+  // 4. Clicking a card triggers openTarget to open the drawer（经真实导航目标断言）
   await act(async () => {
     cards[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
-  assert.ok(openTargetCalls.length > 0, 'clicking a card must call openTarget')
-  const lastCall = openTargetCalls[openTargetCalls.length - 1]
-  assert.ok(lastCall)
-  assert.deepEqual(lastCall.target, { kind: 'skills', skillId: 'helm-cli' })
+  assert.deepEqual(store.getPrimaryTarget(), { kind: 'skills', skillId: 'helm-cli' })
 
   await act(async () => {
     root.unmount()

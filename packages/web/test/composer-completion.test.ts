@@ -14,6 +14,7 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { HostStoreProviders } from './helpers/host-store.js'
+import { makeTestStore } from './helpers/store.js'
 
 GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
@@ -26,7 +27,8 @@ import type {
   PluginUiContribution,
 } from '@helm/protocol'
 import { conversationsApi } from '../src/lib/api.js'
-import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
+import { groupUiContributions } from '../src/lib/types.js'
+import type { ArtifactMetadata } from '@helm/protocol'
 import {
   COMPLETION_VISIBLE_LIMIT,
   buildCompletionActionCall,
@@ -192,46 +194,47 @@ const conv = (id: number, tags: string[] = []): ConversationSummary => ({
   unread: false, pinned: false, pendingAskCount: 0, createdAt: 0, updatedAt: 0,
 })
 
-interface TestStoreOverrides {
+interface LocalMountOptions {
   ui?: PluginUiContribution[]
   actions?: ActionManifest[]
-  artifacts?: Array<{ id: string; name: string; mimeType: string; size: number }>
+  artifacts?: ArtifactMetadata[]
   docs?: Record<string, unknown>
   invokePluginAction?: (pluginId: string, actionId: string, input: unknown, conversationId?: number) => Promise<unknown>
 }
 
-function makeStore(conversation: ConversationSummary, opts: TestStoreOverrides = {}) {
-  const noop = () => {}
-  const asyncNoop = async () => undefined
-  const notices: Array<Record<string, unknown>> = []
+const artFixture = (id: string, name: string, mimeType: string, size: number): ArtifactMetadata => ({
+  id,
+  conversationId: 0,
+  kind: 'upload',
+  name,
+  path: `artifacts/0/${name}`,
+  mimeType,
+  size,
+  createdAt: 1,
+})
+
+function makeStore(conversation: ConversationSummary, opts: LocalMountOptions = {}) {
   const actionCalls: Array<{ pluginId: string; actionId: string; input: unknown; conversationId?: number }> = []
-  const store = {
-    authReady: true, authConfigured: true, authenticated: true, authError: null,
-    connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark' as const, themePreference: 'system' as const,
-    locale: 'en' as const,
-    conversations: [conversation], conversationDetails: {}, conversationLives: {},
+  const store = makeTestStore({
+    conversations: [conversation],
     conversationArtifacts: { [conversation.id]: opts.artifacts ?? [] },
-    pendingAsks: [], resolvedAsksByConv: {}, plugins: [], uiContributions: opts.ui ?? [],
-    groupedUi: groupUiContributions(opts.ui ?? []), pluginDocs: opts.docs ?? {}, nodes: [],
-    profiles: [], profilesLoaded: true, assetsLoaded: true, models: [], providers: [], credentials: [], skills: [], actions: opts.actions ?? [],
-    primaryTarget: { kind: 'conversation', conversationId: conversation.id }, splitTarget: null,
-    workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null, highlightedEntry: null, notices,
-    setTheme: noop, setThemePreference: noop, toggleTheme: noop, checkAuth: asyncNoop,
-    onAuthenticated: asyncNoop, logout: noop, refreshAssets: asyncNoop, refreshNodes: asyncNoop,
-    loadConversationDetail: asyncNoop, loadEarlierEntries: asyncNoop, loadConversationArtifacts: asyncNoop,
-    ensurePluginDoc: asyncNoop, openTarget: noop, closeSplit: noop, setScreenParams: noop,
-    setWorkbenchOpen: noop, setWorkbenchTab: noop, setActiveModal: noop, dismissNotice: noop,
-    pushNotice: (n: Record<string, unknown>) => { notices.push(n) },
-    invokePluginAction: opts.invokePluginAction ?? (async (pluginId: string, actionId: string, input: unknown, conversationId?: number) => {
+    uiContributions: opts.ui ?? [],
+    pluginDocs: opts.docs ?? {},
+    actions: opts.actions ?? [],
+    primaryTarget: { kind: 'conversation', conversationId: conversation.id },
+  })
+  ;(store.actions as unknown as { invokePluginAction: (pluginId: string, actionId: string, input: unknown, conversationId?: number) => Promise<unknown> }).invokePluginAction =
+    opts.invokePluginAction ?? (async (pluginId: string, actionId: string, input: unknown, conversationId?: number) => {
       actionCalls.push({ pluginId, actionId, input, conversationId })
       return { items: [] }
-    }),
-    subscribeSessionDoc: () => () => {},
-    getSessionDocState: () => ({ hasValue: false, deleted: false, connected: false }),
-    getPluginSessionDoc: asyncNoop,
-    retrySessionDoc: noop,
-  } as unknown as HelmStoreValue
-  return { store, notices, actionCalls }
+    })
+  return {
+    store,
+    get notices() {
+      return store.getNotices()
+    },
+    actionCalls,
+  }
 }
 
 function typeInto(ta: HTMLTextAreaElement, text: string): void {
@@ -243,7 +246,7 @@ function typeInto(ta: HTMLTextAreaElement, text: string): void {
   ta.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
-async function mount(conversation: ConversationSummary, opts: TestStoreOverrides) {
+async function mount(conversation: ConversationSummary, opts: LocalMountOptions) {
   const made = makeStore(conversation, opts)
   const host = document.createElement('div')
   document.body.appendChild(host)
@@ -275,7 +278,11 @@ async function mount(conversation: ConversationSummary, opts: TestStoreOverrides
   const completionPopover = (): HTMLElement | null => host.querySelector('.composer-completion-popover')
   const completionItems = (): HTMLElement[] => Array.from(host.querySelectorAll('.composer-completion-popover [role="option"]'))
   return {
-    ...made,
+    store: made.store,
+    get notices() {
+      return made.notices
+    },
+    actionCalls: made.actionCalls,
     host,
     type,
     key,
@@ -307,7 +314,7 @@ test('interaction: @ shows only plugin doc-source candidates, never host artifac
   const app = await mount(conv(1), {
     ui: [docCompleter('p1', '@', 'catalog')],
     docs: { 'p1/catalog': { items: [{ id: 'memory', label: '@记忆库', insertText: '@记忆库 ' }] } },
-    artifacts: [{ id: 'art-1', name: '报告.pdf', mimeType: 'application/pdf', size: 1024 }],
+    artifacts: [artFixture('art-1', '报告.pdf', 'application/pdf', 1024)],
   })
   try {
     await app.type('请看 @')
@@ -378,7 +385,7 @@ test('interaction: Enter with the @ popover open only picks the profile and keep
 
 test('regression: with conversation artifacts but no registered @ sources, no popover opens and Enter is not swallowed', { timeout: 60_000 }, async () => {
   const app = await mount(conv(10), {
-    artifacts: [{ id: 'art-1', name: '报告.pdf', mimeType: 'application/pdf', size: 1024 }],
+    artifacts: [artFixture('art-1', '报告.pdf', 'application/pdf', 1024)],
   })
   try {
     await app.type('@')

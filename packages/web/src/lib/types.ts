@@ -427,8 +427,8 @@ export interface HelmStoreValue {
   themePreference: ThemePreference
   /** Current UI locale (resolved from localePreference; browser-derived default zh-* -> zh-CN, others -> en). */
   locale: HelmLocale
-  /** Stored UI locale preference ('auto' follows navigator.languages; manual value overrides). Test doubles may omit it. */
-  localePreference?: LocalePreference
+  /** Stored UI locale preference ('auto' follows navigator.languages; manual value overrides). */
+  localePreference: LocalePreference
   /** Background browser notification preference (localStorage persisted; delivered only when permission is granted). */
   quietNotifyEnabled: boolean
 
@@ -444,11 +444,11 @@ export interface HelmStoreValue {
   groupedUi: GroupedUiSpecs
   pluginDocs: Record<string, unknown> // key: `${pluginId}/${docName}`
   nodes: NodeInfo[]
-  /** Current kernel boot generation (bootId of the SSE snapshot; null/absent =
-   * no snapshot received yet). Changes after a kernel restart; read-only
+  /** Current kernel boot generation (bootId of the SSE snapshot; null = no
+   * snapshot received yet). Changes after a kernel restart; read-only
    * consumers such as version watching use it as a "re-probe" signal — it does
-   * not imply the web assets were updated. Test doubles may omit it. */
-  kernelBootId?: string | null
+   * not imply the web assets were updated. */
+  kernelBootId: string | null
 
   // Static config assets
   profiles: Profile[]
@@ -457,13 +457,6 @@ export interface HelmStoreValue {
   /** Whether static assets (profiles/models/skills/...) finished their first load this session (standby page distinguishes loading from non-existent). */
   assetsLoaded: boolean
   models: ModelDescriptor[]
-  defaultModelInfo?: {
-    defaultModel: string
-    defaultThinkingLevel: string
-    modelThinkingLevels?: Record<string, string>
-    defaultCompactionModel?: string
-    defaultCompactionThinkingLevel?: string
-  } | null
   providers: ProviderConfig[]
   credentials: CredentialSummary[]
   skills: SkillSummary[]
@@ -472,12 +465,12 @@ export interface HelmStoreValue {
   // View routing & workbench state
   primaryTarget: ResolvedTarget
   splitTarget: ResolvedTarget | null
-  /** Currently focused panel (memory only, not in the URL; reset to 'primary' when the split closes). Test doubles may omit it. */
-  focusedPanel?: FocusedPanel
-  /** Desktop left secondary navigation collapsed state (localStorage persisted; not in the URL). Test doubles may omit it. */
-  sidebarCollapsed?: boolean
-  /** Conversation ID inside the 1.5s double-Esc abort confirmation window (null = not armed). Test doubles may omit it. */
-  pendingEscAbortConversationId?: number | null
+  /** Currently focused panel (memory only, not in the URL; reset to 'primary' when the split closes). */
+  focusedPanel: FocusedPanel
+  /** Desktop left secondary navigation collapsed state (localStorage persisted; not in the URL). */
+  sidebarCollapsed: boolean
+  /** Conversation ID inside the 1.5s double-Esc abort confirmation window (null = not armed). */
+  pendingEscAbortConversationId: number | null
   workbenchOpen: boolean
   workbenchTab: string // 'artifacts' | `plugin:${pluginId}/${panelId}` (dynamic tab, falls back in WorkbenchDrawer)
   activeModal: ActiveModal
@@ -490,16 +483,16 @@ export interface HelmStoreValue {
   toggleTheme(): void
   /** Sets the UI locale and persists the preference. */
   setLocale(locale: HelmLocale): void
-  /** Sets the UI locale preference ('auto' clears storage override and follows the browser). Test doubles may omit it. */
-  setLocalePreference?(pref: LocalePreference): void
+  /** Sets the UI locale preference ('auto' clears storage override and follows the browser). */
+  setLocalePreference(pref: LocalePreference): void
   /** When enabling, requests browser notification permission first; on denial stays disabled with a toast notice; disabling takes effect immediately. */
   setQuietNotify(on: boolean): Promise<void>
   checkAuth(): Promise<void>
   onAuthenticated(token: string): Promise<void>
   logout(): void
   refreshAssets(): Promise<void>
-  /** Fully recalibrates the plugin list (after package install/update/remove; SSE plugin.changed remains the incremental truth, merged idempotently). Test doubles may omit it. */
-  syncPlugins?(plugins: PluginSummary[]): void
+  /** Fully recalibrates the plugin list (after package install/update/remove; SSE plugin.changed remains the incremental truth, merged idempotently). */
+  syncPlugins(plugins: PluginSummary[]): void
   refreshNodes(): Promise<NodeInfo[] | undefined>
   loadConversationDetail(
     conversationId: number,
@@ -510,10 +503,8 @@ export interface HelmStoreValue {
   /** Backfills a single entry's full text (fetched on demand after server-side
    * timeline preview truncation): same upsert semantics as the
    * conversation.entry event (same id replaced in place, order preserved), no
-   * network triggered, pagination cursor untouched. The production provider
-   * always provides it; test doubles may omit it (the truncation-fetch hook
-   * then errors explicitly instead of degrading silently). */
-  backfillConversationEntry?(conversationId: number, entry: ConversationEntry): void
+   * network triggered, pagination cursor untouched). */
+  backfillConversationEntry(conversationId: number, entry: ConversationEntry): void
   loadConversationArtifacts(conversationId: number, opts?: { silent?: boolean }): Promise<ArtifactMetadata[] | undefined>
   ensurePluginDoc(pluginId: string, docName: string): Promise<unknown>
   /** Subscribes to a conversation-scoped doc tuple (ref-counted dedicated SSE stream; see lib/session-docs.ts). */
@@ -529,12 +520,12 @@ export interface HelmStoreValue {
     opts?: { split?: boolean; highlightEntryId?: string; history?: 'push' | 'replace' },
   ): void
   closeSplit(): void
-  /** Updates the currently focused panel; switching to 'split' is ignored while splitTarget is empty. Test doubles may omit it. */
-  setFocusedPanel?(panel: FocusedPanel): void
-  /** Sets the desktop sidebar collapsed state and persists it. Test doubles may omit it. */
-  setSidebarCollapsed?(collapsed: boolean): void
-  /** Toggles the desktop sidebar collapsed state and persists it. Test doubles may omit it. */
-  toggleSidebarCollapsed?(): void
+  /** Updates the currently focused panel; switching to 'split' is ignored while splitTarget is empty. */
+  setFocusedPanel(panel: FocusedPanel): void
+  /** Sets the desktop sidebar collapsed state and persists it. */
+  setSidebarCollapsed(collapsed: boolean): void
+  /** Toggles the desktop sidebar collapsed state and persists it. */
+  toggleSidebarCollapsed(): void
   /** Updates the current screen route params (undefined deletes the key); applies to the primary pane when split is omitted. */
   setScreenParams(patch: Record<string, string | undefined>, options?: { split?: boolean; push?: boolean }): void
   setWorkbenchOpen(open: boolean): void

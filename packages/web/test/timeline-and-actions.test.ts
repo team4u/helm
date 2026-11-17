@@ -42,6 +42,8 @@ const {
   sortByPriorityDescStable,
 } = await import('../src/conversation/timeline-model.js')
 const { makeTestStore } = await import('./helpers/store.js')
+type HelmExternalStoreT = import('../src/lib/helm-store.js').HelmExternalStore
+type HelmStoreActionsT = HelmExternalStoreT['actions']
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 const { seedPluginClientModule } = await import('../src/lib/plugin-client.js')
 const { pluginsApi } = await import('../src/lib/api.js')
@@ -106,6 +108,11 @@ const entryBadgeAction = (id: string, label: string, extra: Record<string, unkno
   },
 })
 
+/** 在 actions 包上替换具名动作（挂载前替换；调用契约断言需要捕获入参/受控失败）。 */
+function spyAction<K extends keyof HelmStoreActionsT>(store: HelmExternalStoreT, key: K, impl: HelmStoreActionsT[K]): void {
+  ;(store.actions as unknown as Record<K, HelmStoreActionsT[K]>)[key] = impl
+}
+
 const headerActionContribution = (spec: Omit<UiActionSpec, 'target'>): PluginUiContribution => ({
   pluginId: 'builtin:superagent',
   surface: 'conversation.header.action',
@@ -120,7 +127,7 @@ function renderTimelineHtml(
 ): string {
   const store = makeTestStore({
     conversations: [conversation],
-    groupedUi: groupUiContributions(contributions),
+    uiContributions: contributions,
   })
   return renderToString(
     e(
@@ -317,7 +324,7 @@ test('groupedUi.settingsPanels 排序与 PluginDetailDrawer 多面板全量渲�
     actions: [],
     tools: [],
   }
-  const store = makeTestStore({ groupedUi: grouped })
+  const store = makeTestStore({ uiContributions: contributions })
   try {
     await act(async () => {
       root.render(
@@ -354,13 +361,10 @@ test('groupedUi.settingsPanels 排序与 PluginDetailDrawer 多面板全量渲�
 
 test('PluginMicroAction action-only：渲染图标按钮，点击调用 actionPluginId 并强制实际上下文载荷', { timeout: 60_000 }, async () => {
   const calls: Array<{ pluginId: string; actionId: string; input: unknown; conversationId?: number }> = []
-  const notices: Array<{ level: string; title: string }> = []
-  const store = makeTestStore({
-    invokePluginAction: async (pluginId, actionId, input, conversationId) => {
-      calls.push({ pluginId, actionId, input, conversationId })
-      return { ok: true }
-    },
-    pushNotice: (n) => notices.push({ level: n.level, title: n.title }),
+  const store = makeTestStore({})
+  spyAction(store, 'invokePluginAction', async (pluginId, actionId, input, conversationId) => {
+    calls.push({ pluginId, actionId, input, conversationId })
+    return { ok: true }
   })
   const action = {
     pluginId: 'contributor',
@@ -409,7 +413,7 @@ test('PluginMicroAction action-only：渲染图标按钮，点击调用 actionPl
     assert.equal(calls[0]!.actionId, 'archive_worker')
     assert.deepEqual(calls[0]!.input, { reason: 'done', conversationId: 42 })
     assert.equal(calls[0]!.conversationId, 42)
-    assert.deepEqual(notices.map((n) => n.level), ['info'])
+    assert.deepEqual(store.getNotices().map((n) => n.level), ['info'])
   } finally {
     act(() => root.unmount())
     host.remove()
@@ -419,14 +423,11 @@ test('PluginMicroAction action-only：渲染图标按钮，点击调用 actionPl
 test('PluginMicroAction：pending 期间禁用防重复提交，失败显式通知不吞', { timeout: 60_000 }, async () => {
   let release: (() => void) | undefined
   const calls: number[] = []
-  const notices: Array<{ level: string; title: string; body?: string }> = []
-  const store = makeTestStore({
-    invokePluginAction: async () => {
-      calls.push(calls.length)
-      await new Promise<void>((resolve) => { release = resolve })
-      throw new Error('后端拒绝：worker 仍在运行')
-    },
-    pushNotice: (n) => notices.push({ level: n.level, title: n.title, body: n.body }),
+  const store = makeTestStore({})
+  spyAction(store, 'invokePluginAction', async () => {
+    calls.push(calls.length)
+    await new Promise<void>((resolve) => { release = resolve })
+    throw new Error('后端拒绝：worker 仍在运行')
   })
   const action = {
     pluginId: 'p',
@@ -447,10 +448,11 @@ test('PluginMicroAction：pending 期间禁用防重复提交，失败显式通�
     assert.equal(calls.length, 1)
     await act(async () => { release?.() })
     assert.equal(calls.length, 1)
-    assert.equal(notices.length, 1)
-    assert.equal(notices[0]!.level, 'error')
-    assert.match(notices[0]!.title, /Execution failed: 中止/)
-    assert.match(notices[0]!.body!, /后端拒绝/)
+    const failureNotices = store.getNotices()
+    assert.equal(failureNotices.length, 1)
+    assert.equal(failureNotices[0]!.level, 'error')
+    assert.match(failureNotices[0]!.title, /Execution failed: 中止/)
+    assert.match(failureNotices[0]!.body!, /后端拒绝/)
     assert.equal(btn.disabled, false)
   } finally {
     act(() => root.unmount())
@@ -460,7 +462,8 @@ test('PluginMicroAction：pending 期间禁用防重复提交，失败显式通�
 
 test('PluginMicroAction menu 形态：popover-item 菜单项 + onInvoked 关闭菜单回调', { timeout: 60_000 }, async () => {
   let invoked = 0
-  const store = makeTestStore({ invokePluginAction: async () => undefined })
+  const store = makeTestStore({})
+  spyAction(store, 'invokePluginAction', async () => undefined)
   const action = {
     pluginId: 'p',
     spec: { target: 'conversation:header', id: 'm', label: '菜单动作', actionId: 'act' } satisfies UiActionSpec,
@@ -547,19 +550,19 @@ test('ConversationRowActionsMenu：仅在该会话 scope 命中或人类自有�
   const contributions: PluginUiContribution[] = [
     { pluginId: 'p', surface: 'conversation.row.action', spec: { id: 'row', label: '归档该会话', actionId: 'archive', scope: { tags: ['worker'] } } },
   ]
-  const scopedStore = makeTestStore({ conversations: [workerConv], groupedUi: groupUiContributions(contributions) })
+  const scopedStore = makeTestStore({ conversations: [workerConv], uiContributions: contributions })
   const html = renderToString(
     e(HostStoreProviders, { value: scopedStore }, e(ConversationRowActionsMenu, { conversation: workerConv })),
   )
   assert.match(html, /Plugin conversation actions/)
 
-  const humanStore = makeTestStore({ conversations: [humanConv], groupedUi: groupUiContributions(contributions) })
+  const humanStore = makeTestStore({ conversations: [humanConv], uiContributions: contributions })
   const humanHtml = renderToString(
     e(HostStoreProviders, { value: humanStore }, e(ConversationRowActionsMenu, { conversation: humanConv })),
   )
   assert.match(humanHtml, /Conversation actions/)
 
-  const botStore = makeTestStore({ conversations: [botConv], groupedUi: groupUiContributions(contributions) })
+  const botStore = makeTestStore({ conversations: [botConv], uiContributions: contributions })
   const emptyHtml = renderToString(
     e(HostStoreProviders, { value: botStore }, e(ConversationRowActionsMenu, { conversation: botConv })),
   )
@@ -575,7 +578,7 @@ test('ConversationPane SSR：placement=toolbar 直出顶栏，menu 动作不占�
   const store = makeTestStore({
     conversations: [humanConv],
     conversationDetails: { 10: { ...humanConv, entries: [] } },
-    groupedUi: groupUiContributions(contributions),
+    uiContributions: contributions,
   })
   const html = renderToString(
     e(HostStoreProviders, { value: store }, e(ConversationPane, { conversationId: 10 })),
@@ -756,7 +759,7 @@ test('action-only entry action 点击：载荷 entryId 为真实 entry.id，kind
   const calls: Array<{ pluginId: string; actionId: string; input: Record<string, unknown>; conversationId?: number }> = []
   const store = makeTestStore({
     conversations: [humanConv],
-    groupedUi: groupUiContributions([
+    uiContributions: [
       {
         pluginId: 'p',
         surface: 'timeline.entry.action',
@@ -767,11 +770,11 @@ test('action-only entry action 点击：载荷 entryId 为真实 entry.id，kind
         surface: 'timeline.entry.action',
         spec: { target: 'timeline:entry', id: 'wrong-kind', label: '错误kind动作', actionId: 'x', kinds: ['pi.assistant'] } satisfies UiActionSpec,
       },
-    ]),
-    invokePluginAction: async (pluginId, actionId, input, conversationId) => {
-      calls.push({ pluginId, actionId, input: input as Record<string, unknown>, conversationId })
-      return { ok: true }
-    },
+    ],
+  })
+  spyAction(store, 'invokePluginAction', async (pluginId, actionId, input, conversationId) => {
+    calls.push({ pluginId, actionId, input: input as Record<string, unknown>, conversationId })
+    return { ok: true }
   })
 
   const host = document.createElement('div')
@@ -824,13 +827,11 @@ test('rewind 覆盖的人类条目不渲染 entry action（不复活已覆盖锚
 })
 
 test('ConversationRowActionsMenu and PluginMicroAction localize copy in zh-CN', { timeout: 60_000 }, async () => {
-  const notices: Array<{ level: string; title: string }> = []
   const storeZh = makeTestStore({
     locale: 'zh-CN',
     conversations: [humanConv],
-    invokePluginAction: async () => ({ ok: true }),
-    pushNotice: (n) => notices.push({ level: n.level, title: n.title }),
   })
+  spyAction(storeZh, 'invokePluginAction', async () => ({ ok: true }))
   const rowHtmlZh = renderToString(
     e(HostStoreProviders, { value: storeZh }, e(ConversationRowActionsMenu, { conversation: humanConv })),
   )
@@ -857,7 +858,7 @@ test('ConversationRowActionsMenu and PluginMicroAction localize copy in zh-CN', 
     const btn = host.querySelector('button') as HTMLButtonElement
     assert.equal(btn.getAttribute('title'), '同步')
     await act(async () => { btn.click() })
-    assert.equal(notices[0]?.title, '已执行：同步')
+    assert.equal(storeZh.getNotices()[0]?.title, '已执行：同步')
   } finally {
     act(() => root.unmount())
     host.remove()

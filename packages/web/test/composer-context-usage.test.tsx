@@ -22,6 +22,7 @@ import type { ComposerScopeProps, ConversationSummary } from '@helm/protocol'
 import { COMPOSER_STATUS_SLOT } from '@helm/protocol'
 import { applySnapshot, emptyLiveState, mergeConversationDetail } from '../src/lib/live-state.js'
 import { makeTestStore } from './helpers/store.js'
+import type { HelmExternalStore } from '../src/lib/helm-store.js'
 import { seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { groupUiContributions } from '../src/lib/types.js'
 import type { HelmStoreValue } from '../src/lib/types.js'
@@ -44,7 +45,7 @@ function conv(contextUsage: ConversationSummary['contextUsage']): ConversationSu
   }
 }
 
-function storeOf(conversation: ConversationSummary): HelmStoreValue {
+function storeOf(conversation: ConversationSummary): HelmExternalStore {
   return makeTestStore({ conversations: [conversation] })
 }
 
@@ -236,7 +237,7 @@ test('composer/status host slot: PluginSlot mounts in the status area; contribut
   })
   const store = makeTestStore({
     conversations: [conversation],
-    groupedUi: groupUiContributions([
+    uiContributions: [
       {
         pluginId: 'builtin:demo',
         surface: 'plugin.slot',
@@ -246,7 +247,7 @@ test('composer/status host slot: PluginSlot mounts in the status area; contribut
           client: { module: 'index.tsx', export: 'ComposerStatusProbe' },
         },
       },
-    ]),
+    ],
   })
   const html = renderToStaticMarkup(
     e(HostStoreProviders, { value: store }, e(Composer, { conversation, prefill: null })),
@@ -290,7 +291,8 @@ test('Composer localizes input aria, upload button, placeholder and compacting s
     assert.equal(statusSpan(host)?.textContent, '精简中…')
 
     await act(async () => {
-      root.render(e(HostStoreProviders, { value: { ...storeZh, locale: 'en' } }, e(Composer, { conversation, prefill: null })))
+      storeZh.setLocale('en')
+      root.render(e(HostStoreProviders, { value: storeZh }, e(Composer, { conversation, prefill: null })))
     })
     assert.ok(host.querySelector('textarea[aria-label="Type a message"]') !== null)
     assert.ok(host.querySelector('button[aria-label="Uploaded attachment"]') !== null)

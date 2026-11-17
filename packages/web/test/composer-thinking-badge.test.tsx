@@ -14,10 +14,11 @@ import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
 import type { ConversationSummary } from '@helm/protocol'
-import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
+import type { HelmExternalStore } from '../src/lib/helm-store.js'
 
 GlobalRegistrator.register()
 const { HostStoreProviders } = await import('./helpers/host-store.js')
+const { makeTestStore } = await import('./helpers/store.js')
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { Composer } = await import('../src/conversation/Composer.js')
@@ -33,33 +34,15 @@ function conv(partial: Partial<ConversationSummary>): ConversationSummary {
   }
 }
 
-function makeStore(conversation: ConversationSummary): HelmStoreValue {
-  const noop = () => {}
-  const asyncNoop = async () => undefined
-  return {
-    authReady: true, authConfigured: true, authenticated: true, authError: null,
-    connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark' as const, themePreference: 'system' as const,
-    locale: 'en' as const,
-    conversations: [conversation], conversationDetails: {}, conversationLives: {}, conversationArtifacts: {},
-    pendingAsks: [], resolvedAsksByConv: {}, plugins: [], uiContributions: [],
-    groupedUi: groupUiContributions([]), pluginDocs: {}, nodes: [], profiles: [], profilesLoaded: true, assetsLoaded: true,
+function makeStore(conversation: ConversationSummary): HelmExternalStore {
+  return makeTestStore({
+    conversations: [conversation],
     models: [
       // The catalog explicitly caps B at high (aligned with the kernel's convergence).
       { id: 'faux-cap-b/model-b', provider: 'faux-cap-b', modelId: 'model-b', available: true, thinkingLevels: ['minimal', 'low', 'medium', 'high'] },
     ],
-    providers: [], credentials: [], skills: [], actions: [],
-    primaryTarget: { kind: 'conversation', conversationId: conversation.id }, splitTarget: null,
-    workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null, highlightedEntry: null,
-    setTheme: noop, setThemePreference: noop, toggleTheme: noop, checkAuth: asyncNoop,
-    onAuthenticated: asyncNoop, logout: noop, refreshAssets: asyncNoop, refreshNodes: asyncNoop,
-    loadConversationDetail: asyncNoop, loadEarlierEntries: asyncNoop, loadConversationArtifacts: asyncNoop,
-    ensurePluginDoc: asyncNoop, openTarget: noop, closeSplit: noop, setScreenParams: noop,
-    setWorkbenchOpen: noop, setWorkbenchTab: noop, setActiveModal: noop, dismissNotice: noop,
-    pushNotice: noop, invokePluginAction: asyncNoop,
-    subscribeSessionDoc: () => () => {},
-    getSessionDocState: () => ({ hasValue: false, deleted: false, connected: false }),
-    getPluginSessionDoc: asyncNoop, retrySessionDoc: noop,
-  } as unknown as HelmStoreValue
+    primaryTarget: { kind: 'conversation', conversationId: conversation.id },
+  })
 }
 
 async function mountComposer(conversation: ConversationSummary): Promise<{ host: HTMLElement; unmount: () => void }> {

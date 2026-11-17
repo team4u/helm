@@ -14,9 +14,6 @@ import { readFileSync } from 'node:fs'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
 import type { ConversationEntry } from '@helm/protocol'
-import { emptyLiveState } from '../src/lib/live-state.js'
-import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
-import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
 import {
   attachmentsOfEditTarget,
   draftVersionOf,
@@ -27,6 +24,7 @@ import {
   type PendingAttachment,
 } from '../src/conversation/composer-model.js'
 import { HostStoreProviders } from './helpers/host-store.js'
+import { makeTestStore } from './helpers/store.js'
 
 const composerSource = readFileSync(new URL('../src/conversation/Composer.tsx', import.meta.url), 'utf8')
 // 发送管线拆至 composer-send.ts 后，发送相关源码断言指向该实现文件（断言本身不变）。
@@ -47,26 +45,15 @@ function renderTimelineHtml(entries: ConversationEntry[]): string {
   }
   const noop = () => {}
   const asyncNoop = async () => undefined
-  const store: HelmStoreValue = {
-    ...emptyLiveState(),
-    conversations: [conversation], conversationDetails: { 1: { ...conversation, entries } },
-    conversationArtifacts: {}, groupedUi: groupUiContributions([]),
+  const store = makeTestStore({
+conversations: [conversation], conversationDetails: { 1: { ...conversation, entries } },
+    conversationArtifacts: {}, uiContributions: [],
     authReady: true, authConfigured: true, authenticated: true, authError: null,
     connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark', themePreference: 'dark', locale: 'en', quietNotifyEnabled: false,
     profiles: [], profilesLoaded: true, assetsLoaded: true, models: [], providers: [], credentials: [], skills: [], actions: [],
     primaryTarget: { kind: 'conversation', conversationId: 1 }, splitTarget: null,
-    workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null, highlightedEntry: null, notices: [],
-    setTheme: noop, setThemePreference: noop, toggleTheme: noop, setLocale: noop, setQuietNotify: asyncNoop, checkAuth: asyncNoop,
-    onAuthenticated: asyncNoop, logout: noop, refreshAssets: asyncNoop, refreshNodes: async () => undefined,
-    loadConversationDetail: async () => undefined, loadEarlierEntries: asyncNoop, loadConversationArtifacts: async () => undefined,
-    ensurePluginDoc: asyncNoop, openTarget: noop, closeSplit: noop, setScreenParams: noop, setWorkbenchOpen: noop,
-    setWorkbenchTab: noop, openSpace: noop, setActiveModal: noop, dismissNotice: noop, pushNotice: noop,
-    invokePluginAction: asyncNoop,
-    subscribeSessionDoc: subscribeSessionDoc,
-    getSessionDocState,
-    getPluginSessionDoc: asyncNoop,
-    retrySessionDoc: noop,
-  }
+    workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null, highlightedEntry: null, notices: []
+  })
   return renderToString(React.createElement(HostStoreProviders, { value: store },
     React.createElement(ConversationTimeline, {
       conversation, detailEntries: entries, onRequestEdit: noop,

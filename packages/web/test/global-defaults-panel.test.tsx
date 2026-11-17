@@ -119,6 +119,13 @@ async function mountDefaultsPanel(savedMap: Record<string, string>): Promise<Pan
         { status: 200 },
       )
     }
+    // 真实 refreshAssets 会重拉资产端点：数组响应保持目录切片形状合法
+    if (
+      path === '/api/credentials' || path === '/api/skills' || path === '/api/profiles' ||
+      path === '/api/models' || path === '/api/providers' || path === '/api/actions'
+    ) {
+      return new Response(JSON.stringify([]), { status: 200 })
+    }
     return new Response(JSON.stringify({ ok: true }), { status: 200 })
   }) as typeof fetch
 

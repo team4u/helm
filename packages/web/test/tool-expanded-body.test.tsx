@@ -62,9 +62,9 @@ function createMount(): Mount {
 
 const store = makeTestStore()
 const modalCalls: Array<{ kind: string; artifactId?: string }> = []
-store.setActiveModal = ((modal: { kind: string; artifactId?: string }) => {
+;(store.actions as unknown as { setActiveModal: (modal: { kind: string; artifactId?: string }) => void }).setActiveModal = (modal) => {
   modalCalls.push({ kind: modal.kind, artifactId: modal.artifactId })
-}) as typeof store.setActiveModal
+}
 
 function bodyUi(tool: ToolTrace): React.ReactElement {
   return e(HostStoreProviders, { value: store }, e(ToolExpandedBody, { tool, conversationId: 1 }))

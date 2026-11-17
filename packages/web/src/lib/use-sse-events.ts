@@ -15,7 +15,7 @@ import type {
   PluginSummary,
 } from '@helm/protocol/browser'
 import { getStoredToken } from './api.js'
-import { errorText } from './format.js'
+import { errorText } from './error-text.js'
 import {
   applyEventFrame,
   applyResumedFrame,

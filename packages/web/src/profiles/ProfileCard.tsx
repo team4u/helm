@@ -11,7 +11,6 @@ import {
 import { HelmIcon, StatusLight } from '@helm/plugin-client'
 import {
   useOptionalConversations,
-  useOptionalDefaultModelInfo,
   useOptionalPlugins,
   useOptionalStoreActions,
 } from '../lib/store-context.js'
@@ -21,7 +20,7 @@ export interface ProfileCardProps {
   profile: Profile
   selected?: boolean
   onSelect: () => void
-  /** Optional: global default model info (defaults to store.defaultModelInfo). */
+  /** Optional: global default model info (parent supplies the fetched /api/models/default result). */
   defaultModelInfo?: { defaultModel: string; defaultThinkingLevel: string } | null
   /** Optional: bottom-right "Conversation" direct action (defaults to store.openTarget -> #/a/<profileId>). */
   onStartChat?: () => void
@@ -56,17 +55,13 @@ export function ProfileCard({
   defaultModelInfo,
   onStartChat,
 }: ProfileCardProps): React.JSX.Element {
-  const storeDefaultModelInfo = useOptionalDefaultModelInfo()
   const storeConversations = useOptionalConversations()
   const storePlugins = useOptionalPlugins()
   const actions = useOptionalStoreActions()
   const { t } = useWebLocale()
   const isSystem = isSystemProfile(profile)
   const isHerdr = isHerdrProfile(profile)
-  const effectiveModel = resolveEffectiveProfileModel(
-    profile,
-    defaultModelInfo !== undefined ? defaultModelInfo : storeDefaultModelInfo,
-  )
+  const effectiveModel = resolveEffectiveProfileModel(profile, defaultModelInfo)
   const location = formatProfileLocation(profile)
   const activity = summarizeProfileActivity(
     profile,

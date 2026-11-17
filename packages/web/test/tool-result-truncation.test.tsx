@@ -133,8 +133,10 @@ function fullEntries(): ConversationEntry[] {
 
 function makeStore(backfill?: (conversationId: number, entry: ConversationEntry) => void) {
   const store = makeTestStore()
-  if (backfill !== undefined) store.backfillConversationEntry = backfill
-  else delete store.backfillConversationEntry
+  if (backfill !== undefined) {
+    // 真实 store 恒有回填动作；此处仅替换 actions 包字段以捕获回填调用
+    ;(store.actions as unknown as { backfillConversationEntry: (conversationId: number, entry: ConversationEntry) => void }).backfillConversationEntry = backfill
+  }
   return store
 }
 
@@ -316,18 +318,6 @@ test('响应条目 id 与请求不一致：拒绝回填并显式报错', { timeo
   await act(async () => { await Promise.resolve() })
   assert.equal(backfilled.length, 0)
   assert.match(m.host.textContent ?? '', /shape or id mismatching the request/)
-})
-
-test('宿主 store 缺少回填方法：显式失败，不静默降级', { timeout: 60_000 }, async (t) => {
-  const store = makeStore()
-  delete store.backfillConversationEntry
-  const m = createMount()
-  t.after(() => { m.unmount(); restoreFetch() })
-  await m.render(bodyUi(store, truncTrace()))
-  await act(async () => { findButton(m.host, 'Expand full text')?.click() })
-  await act(async () => { await Promise.resolve() })
-  await act(async () => { await Promise.resolve() })
-  assert.match(m.host.textContent ?? '', /Current host does not support entry backfill/)
 })
 
 test('canonical entry id：请求 042 与返回 42 视为同一条目，不误判失败', { timeout: 60_000 }, async (t) => {

@@ -15,7 +15,6 @@ import { HelmStoreProvider } from '../src/lib/HelmStoreProvider.js'
 import { HelmExternalStore } from '../src/lib/helm-store.js'
 import { StoreRequestManager } from '../src/lib/request-manager.js'
 import {
-  HelmStoreContext,
   useCatalogAssets,
   useConversationArtifacts,
   useConversationDetail,
@@ -539,7 +538,7 @@ test('StoreRequestManager 并发去重、epoch 取消、不可见会话中止与
   assert.equal(timerFired, false, 'dispose() 应清理所有挂起 delay 定时器')
 })
 
-test('HelmExternalStore 领域隔离、reportLoad 幂等空操作与 HelmStoreContext.Provider 向后兼容契约', { timeout: 60_000 }, async () => {
+test('HelmExternalStore 领域隔离、reportLoad 幂等空操作与缺 Provider 显式抛错契约', { timeout: 60_000 }, async () => {
   const store = new HelmExternalStore({
     primaryTarget: { kind: 'conversation', conversationId: 1 },
     splitTarget: null,
@@ -583,86 +582,7 @@ test('HelmExternalStore 领域隔离、reportLoad 幂等空操作与 HelmStoreCo
   unsubErr()
   store.dispose()
 
-  // 遗留 HelmStoreContext.Provider 测试桩向后兼容性验证
-  const legacyStub = {
-    authenticated: true,
-    connectionError: null,
-    sseConnected: true,
-    theme: 'dark',
-    themePreference: 'dark',
-    locale: 'zh-CN',
-    localePreference: 'zh-CN',
-    quietNotifyEnabled: false,
-    profiles: [],
-    assetsLoaded: true,
-    models: [{ id: 'openai/gpt-5', provider: 'openai', modelId: 'gpt-5', available: true, thinkingLevels: ['off'] }],
-    providers: [],
-    credentials: [],
-    skills: [],
-    actions: [],
-    ...emptyLiveState(),
-    conversationLives: {
-      1: { conversationId: 1, text: 'legacy stub stream', tools: [], updatedAt: 777 },
-    },
-    conversationArtifacts: {},
-    pluginsUi: [],
-    groupedUi: {
-      sidebarItems: [],
-      sidebarSections: [],
-      screens: [],
-      timelineRenderers: [],
-      markdownCodeBlocks: [],
-      toolViews: [],
-      composerPills: [],
-      composerWidgets: [],
-      composerCompleters: [],
-      artifactPreviewers: [],
-      workbenchPanels: [],
-      commands: [],
-      settingsPanels: [],
-      profileRuntimes: [],
-      actions: [],
-      slots: [],
-    },
-    loadErrors: {},
-    primaryTarget: { kind: 'conversation', conversationId: 1 },
-    splitTarget: null,
-    focusedPanel: 'primary',
-    sidebarCollapsed: false,
-    pendingEscAbort: null,
-    workbenchOpen: false,
-    workbenchTab: 'artifacts',
-    activeModal: null,
-    locationState: {
-      primary: { kind: 'conversation', conversationId: 1 },
-      split: null,
-      focusedPanel: 'primary',
-      workbenchOpen: false,
-      workbenchTab: 'artifacts',
-      sidebarCollapsed: false,
-    },
-    highlightedEntry: null,
-    notices: [],
-  } as unknown as HelmStoreValue
-
-  let observedStubLive: string | undefined
-  let observedStubModelCount = -1
-  let observedStubLocale = ''
-  let observedPrimaryKind = ''
-
-  const LegacyConsumer = (): React.ReactNode => {
-    const live = useConversationLive(1)
-    const catalog = useCatalogAssets()
-    const models = useModels()
-    const targets = useLocationTargets()
-    const { locale } = useWebLocale()
-    observedStubLive = live?.text
-    observedStubModelCount = models.length + (catalog.assetsLoaded ? 0 : 100)
-    observedStubLocale = locale
-    observedPrimaryKind = targets.primaryTarget.kind
-    return null
-  }
-
+  // 单轨供给契约：不在 HelmExternalStoreContext.Provider 内时切片 hooks 显式抛错（绝不静默回退）
   const host = document.createElement('div')
   document.body.appendChild(host)
   let root: Root | undefined
@@ -672,17 +592,35 @@ test('HelmExternalStore 领域隔离、reportLoad 幂等空操作与 HelmStoreCo
     host.remove()
   })
 
+  // Hook 无条件调用、渲染路径恒定；错误经错误边界如实捕获（Rules of Hooks 友好）
+  let observedError: unknown = null
+  class CaptureBoundary extends React.Component<
+    { children: React.ReactNode },
+    { hasError: boolean }
+  > {
+    override state = { hasError: false }
+    static getDerivedStateFromError(): { hasError: boolean } {
+      return { hasError: true }
+    }
+    override componentDidCatch(error: unknown): void {
+      observedError = error
+    }
+    override render(): React.ReactNode {
+      return this.state.hasError ? null : this.props.children
+    }
+  }
+  const OutsideProviderProbe = (): React.ReactNode => {
+    const live = useConversationLive(1)
+    return live === undefined ? null : React.createElement('div', null, live.text)
+  }
   await act(async () => {
     root = createRoot(host)
     root.render(
-      <HelmStoreContext.Provider value={legacyStub}>
-        <LegacyConsumer />
-      </HelmStoreContext.Provider>,
+      <CaptureBoundary>
+        <OutsideProviderProbe />
+      </CaptureBoundary>,
     )
   })
-
-  assert.equal(observedStubLive, 'legacy stub stream')
-  assert.equal(observedStubModelCount, 1)
-  assert.equal(observedStubLocale, 'zh-CN')
-  assert.equal(observedPrimaryKind, 'conversation')
+  assert.ok(observedError instanceof Error, '缺 Provider 时 keyed 切片 hook 必须显式抛错')
+  assert.match(observedError.message, /must be called inside/)
 })

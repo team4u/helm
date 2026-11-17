@@ -37,7 +37,6 @@ try {
 }
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
-const { HelmStoreContext } = await import('../src/lib/store-context.js')
 const e = React.createElement
 
 let root: Root | undefined

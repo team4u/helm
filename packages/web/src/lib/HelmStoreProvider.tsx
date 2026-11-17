@@ -5,10 +5,9 @@ import * as ReactDomClient from 'react-dom/client'
 import * as ReactJsxRuntime from 'react/jsx-runtime'
 import * as LucideReact from 'lucide-react'
 import * as HelmPluginClient from '@helm/plugin-client'
-import { PluginClientHostContext, usePluginDocValue, type PluginClientHostPort } from '@helm/plugin-client'
-import { createLocaleTranslator } from '@helm/protocol/browser'
+import { usePluginDocValue } from '@helm/plugin-client'
 import { HelmExternalStore, type StoreBootLocation } from './helm-store.js'
-import { createPluginClientHostPort } from './plugin-client-host.js'
+import { PluginClientHostBridge } from './plugin-host-bridge.js'
 import {
   HelmExternalStoreContext,
   useActiveModal,
@@ -28,42 +27,6 @@ import { formatLocationHash, hashHasPrimaryTarget, isSameLocationState, parseLoc
 import { useGlobalShortcuts } from './use-global-shortcuts.js'
 import { useSseEvents } from './use-sse-events.js'
 import { useUnreadSync } from './use-unread-sync.js'
-
-function PluginClientHostBridge({ store, children }: { store: HelmExternalStore; children: React.ReactNode }) {
-  const subscribe = useCallback((listener: () => void) => store.subscribeDomain('pluginHostPort', listener), [store])
-  const slice = useSyncExternalStore(subscribe, store.getPluginHostPortSlice, store.getPluginHostPortSlice)
-  const port = useMemo<PluginClientHostPort>(
-    () => ({
-      ...createPluginClientHostPort({
-        authenticated: slice.authenticated,
-        theme: slice.theme,
-        conversations: slice.conversations,
-        conversationDetails: slice.conversationDetails,
-        conversationLives: slice.conversationLives,
-        pendingAsks: slice.pendingAsks,
-        loadErrors: slice.loadErrors,
-        plugins: slice.plugins,
-        groupedUi: slice.groupedUi,
-        pluginDocs: slice.pluginDocs,
-        ensurePluginDoc: store.actions.ensurePluginDoc,
-        getPluginSessionDoc: store.actions.getPluginSessionDoc,
-        subscribeSessionDoc: store.actions.subscribeSessionDoc,
-        getSessionDocState: store.actions.getSessionDocState,
-        invokePluginAction: store.actions.invokePluginAction,
-        openTarget: store.actions.openTarget,
-        setActiveModal: store.actions.setActiveModal,
-        setWorkbenchOpen: store.actions.setWorkbenchOpen,
-        setWorkbenchTab: store.actions.setWorkbenchTab,
-        pushNotice: store.actions.pushNotice,
-        loadConversationDetail: store.actions.loadConversationDetail,
-      }),
-      locale: slice.locale,
-      translate: createLocaleTranslator(slice.locale),
-    }),
-    [slice, store],
-  )
-  return <PluginClientHostContext.Provider value={port}>{children}</PluginClientHostContext.Provider>
-}
 
 function HomeLandingWatcher({ store, boot }: { store: HelmExternalStore; boot: StoreBootLocation }) {
   const pendingRef = useRef(boot.needsHomeLanding)

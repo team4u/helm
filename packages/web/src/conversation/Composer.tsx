@@ -1,4 +1,4 @@
-import { useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ComposerScopeProps, ConversationSummary } from '@helm/protocol/browser'
 import { COMPOSER_DOCK_SLOT, COMPOSER_STATUS_SLOT, resolveLocalizedText } from '@helm/protocol/browser'
 import { conversationsApi } from '../lib/api.js'
@@ -6,7 +6,6 @@ import { buildSlashMenuItems, pluginSlashCommandsFor } from '../lib/commands-mod
 import { HelmIcon, PluginSlot } from '@helm/plugin-client'
 import { matchesUiScope } from '../lib/types.js'
 import {
-  HelmStoreContext,
   useConversationDetail,
   useGroupedUi,
   useHelmExternalStore,
@@ -83,7 +82,6 @@ function ContextUsageStatus({ conversation }: { conversation: ConversationSummar
 
 export function Composer({ conversation, prefill, onSendingChange, onNewThread }: ComposerProps) {
   const externalStore = useHelmExternalStore()
-  const legacyStore = useContext(HelmStoreContext)
   const detail = useConversationDetail(conversation.id)
   const groupedUi = useGroupedUi()
   const plugins = usePlugins()
@@ -339,10 +337,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
       editingEntryId === null &&
       canRecallOnArrowUp(e.currentTarget.value, e.currentTarget.selectionStart)
     ) {
-      const liveQueued =
-        externalStore !== null
-          ? externalStore.getConversationLive(conversation.id)?.queuedInputs
-          : legacyStore?.conversationLives[conversation.id]?.queuedInputs
+      const liveQueued = externalStore?.getConversationLive(conversation.id)?.queuedInputs
       const queued = latestHumanQueuedInput(liveQueued)
       if (queued !== undefined) {
         e.preventDefault()

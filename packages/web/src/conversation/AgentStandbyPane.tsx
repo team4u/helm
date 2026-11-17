@@ -9,7 +9,8 @@ import {
   removeTokenBeforeCaret,
   type QualifiedCommand,
 } from '../lib/commands-model.js'
-import { errorText, formatBytes } from '../lib/format.js'
+import { formatBytes } from '../lib/format.js'
+import { errorText } from '../lib/error-text.js'
 import { HelmIcon, Select, type SelectOption } from '@helm/plugin-client'
 import { isSameResolvedTarget, type ResolvedTarget } from '../lib/types.js'
 import {
@@ -19,7 +20,6 @@ import {
   useLocationTargets,
   useModels,
   useNodes,
-  useOptionalDefaultModelInfo,
   usePlugins,
   useProfilesSlice,
   useSkills,
@@ -87,7 +87,6 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
   const conversations = useConversations()
   const groupedUi = useGroupedUi()
   const skills = useSkills()
-  const defaultModelInfo = useOptionalDefaultModelInfo()
   const { primaryTarget, splitTarget } = useLocationTargets()
   const profilesLoadError = useLoadError('assets:profiles')
   const { openTarget, closeSplit, pushNotice, invokePluginAction, refreshAssets } = useStoreActions()
@@ -136,7 +135,6 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
   } | null>(null)
   const defaultModelGenRef = useRef(0)
   const refreshDefaultModelInfo = useCallback(async (): Promise<void> => {
-    if (defaultModelInfo !== undefined) return
     const gen = ++defaultModelGenRef.current
     try {
       const info = await assetsApi.getDefaultModel()
@@ -158,13 +156,12 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
       /* Keep null when the global default cannot be read; fall back to the
        * profile's own model and the "Default model" label. */
     }
-  }, [defaultModelInfo])
+  }, [])
   useEffect(() => {
-    if (defaultModelInfo !== undefined) return
     void refreshDefaultModelInfo()
     return () => { defaultModelGenRef.current++ }
-  }, [defaultModelInfo, refreshDefaultModelInfo])
-  const effectiveDefaultModelInfo = defaultModelInfo !== undefined ? defaultModelInfo : fetchedDefaultModelInfo
+  }, [refreshDefaultModelInfo])
+  const effectiveDefaultModelInfo = fetchedDefaultModelInfo
 
   // Target-environment inheritance: after coordinate isolation, each draft
   // adopts this coordinate's environment on first mount (user edits win and

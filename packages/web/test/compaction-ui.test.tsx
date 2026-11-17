@@ -21,6 +21,8 @@ import type { Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helm/protocol'
 import { makeTestStore } from './helpers/store.js'
+import type { HelmExternalStore } from '../src/lib/helm-store.js'
+import type { ToastNotice } from '../src/lib/types.js'
 import { hangingEventStream } from './helpers/sse-stream.js'
 import type { HelmStoreValue } from '../src/lib/types.js'
 import {
@@ -94,17 +96,12 @@ function makeConversation(overrides: Partial<ConversationSummary> = {}): Convers
 function makeNoticeStore(
   conversation: ConversationSummary,
   extra: Partial<HelmStoreValue> = {},
-): HelmStoreValue & { notices: Array<{ type: string; level: string; title: string; body?: string; conversationId?: number }> } {
-  const notices: Array<{ type: string; level: string; title: string; body?: string; conversationId?: number }> = []
-  const store = makeTestStore({
+): HelmExternalStore {
+  return makeTestStore({
     conversations: [conversation],
     conversationDetails: { [conversation.id]: { ...conversation, entries: [] } },
-    pushNotice: (n) => {
-      notices.push(n)
-    },
     ...extra,
   })
-  return Object.assign(store, { notices })
 }
 
 function typeInto(ta: HTMLTextAreaElement, text: string): void {
@@ -367,7 +364,7 @@ test('Composer: /compact <instructions> forwards instructions; a repeat submit a
   assert.equal(captured[0]!.path, '/api/conversations/1/compact')
   assert.deepEqual(captured[0]!.body, { instructions: '保留测试与错误日志' })
   assert.equal(ta.value, '')
-  assert.ok(store.notices.some((n) => n.title === 'Compaction submitted'))
+  assert.ok(store.getNotices().some((n: ToastNotice) => n.title === 'Compaction submitted'))
 
   // 2) /compact + whitespace only: no instructions carried
   await act(async () => {
@@ -397,7 +394,7 @@ test('Composer: /compact <instructions> forwards instructions; a repeat submit a
   assert.equal(captured.length, 2, 'no duplicate /compact or /input request may be sent at compacting=true')
   assert.equal(ta.value, '', 'the draft must be cleared')
   assert.ok(
-    store.notices.some((n) => n.level === 'info' && n.title === 'Context compaction in progress' && n.conversationId === 1),
+    store.getNotices().some((n) => n.level === 'info' && n.title === 'Context compaction in progress' && n.conversationId === 1),
     'an info notice "Context compaction in progress" must be pushed',
   )
 })

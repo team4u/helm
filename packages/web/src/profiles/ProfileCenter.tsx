@@ -14,7 +14,6 @@ import { assetsApi } from '../lib/api.js'
 import {
   useAuthenticated,
   useLocationTargets,
-  useOptionalDefaultModelInfo,
   useProfilesSlice,
   useStoreActions,
 } from '../lib/store-context.js'
@@ -42,7 +41,6 @@ export function ProfileCenter({
   inlineDrawer = false,
 }: ProfileCenterProps): React.JSX.Element {
   const authenticated = useAuthenticated()
-  const storeDefaultModelInfo = useOptionalDefaultModelInfo()
   const { profiles } = useProfilesSlice()
   const { primaryTarget, splitTarget } = useLocationTargets()
   const { openTarget, closeSplit, refreshAssets, pushNotice } = useStoreActions()
@@ -55,11 +53,10 @@ export function ProfileCenter({
     defaultThinkingLevel: string
   } | null>(null)
 
-  const effectiveDefaultModelInfo =
-    storeDefaultModelInfo !== undefined ? storeDefaultModelInfo : fetchedDefaultModel
+  const effectiveDefaultModelInfo = fetchedDefaultModel
 
   useEffect(() => {
-    if (storeDefaultModelInfo !== undefined || !authenticated) return
+    if (!authenticated) return
     let cancelled = false
     void assetsApi
       .getDefaultModel()
@@ -72,7 +69,7 @@ export function ProfileCenter({
     return () => {
       cancelled = true
     }
-  }, [authenticated, storeDefaultModelInfo])
+  }, [authenticated])
 
   const categoryCounts = useMemo(() => buildProfileCategoryCounts(profiles), [profiles])
 

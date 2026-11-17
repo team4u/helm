@@ -263,12 +263,12 @@ test('CodeBlockRenderer 从 store.plugins 读取 clientHashes：命中 O(1) 缓�
     assert.equal(requestedUrls.length, 0, 'expectedHash 命中时不得发网络请求')
 
     // 未命中新 hash 时，发起请求必须附带 &hash=cb-hash-2
-    const storeMiss = {
-      ...storeHit,
-      plugins: [{ ...storeHit.plugins[0]!, clientHashes: { 'index.tsx': 'cb-hash-2' } }],
-    }
+    storeHit.updateLive((prev) => ({
+      ...prev,
+      plugins: prev.plugins.map((plug) => (plug.id === 'cb-hash-plugin' ? { ...plug, clientHashes: { 'index.tsx': 'cb-hash-2' } } : plug)),
+    }))
     await act(async () => {
-      root!.render(e(HostStoreProviders, { value: storeMiss }, e(CodeBlockRenderer, { language: 'customlang', code: 'ok' })))
+      root!.render(e(HostStoreProviders, { value: storeHit }, e(CodeBlockRenderer, { language: 'customlang', code: 'ok' })))
     })
     await new Promise((r) => setTimeout(r, 30))
     assert.ok(requestedUrls.some((u) => u.includes('module=index.tsx&hash=cb-hash-2')), `未命中应携带 &hash=：${JSON.stringify(requestedUrls)}`)

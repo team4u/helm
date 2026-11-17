@@ -33,7 +33,7 @@ import {
   type ModelDescriptor,
 } from './api.js'
 import { requestBrowserNotificationPermission } from './browser-notification.js'
-import { errorText } from './format.js'
+import { errorText } from './error-text.js'
 import {
   applyConversationEntry,
   emptyLiveState,

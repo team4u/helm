@@ -17,7 +17,9 @@ import {
   partitionArtifactsByKind,
 } from '../src/conversation/workbench-model.js'
 import { createWebTranslator } from '../src/i18n/catalog.js'
-import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
+import { groupUiContributions } from '../src/lib/types.js'
+import type { HelmExternalStore } from '../src/lib/helm-store.js'
+import { jsonResponse, waitForCondition } from './helpers/dom-harness.js'
 import { seedPluginClientModule, resetPluginClientCache } from '../src/lib/plugin-client.js'
 import { resetSessionDocSubscriptions } from '../src/lib/session-docs.js'
 import { makeTestStore } from './helpers/store.js'
@@ -65,7 +67,7 @@ function mountNode() {
   roots.push({ root, host })
   return {
     host,
-    render: async (store: HelmStoreValue, node: React.ReactNode) => {
+    render: async (store: HelmExternalStore, node: React.ReactNode) => {
       await act(async () => {
         root.render(e(HostStoreProviders, { value: store }, node))
       })
@@ -370,8 +372,11 @@ test('ConversationPane 顶栏类名、分屏隐藏容器、标题 Popover 与抽
   assert.match(popover.textContent ?? '', /helm/)
 
   // 2) 分屏激活态：分屏关闭按钮不被 .pane-split-btn 隐藏
+  await act(async () => {
+    baseStore.setSplitTarget({ kind: 'conversation', conversationId: 99 })
+  })
   await ui.render(
-    { ...baseStore, splitTarget: { kind: 'conversation', conversationId: 99 } },
+    baseStore,
     e(ConversationPane, { conversationId: 42 }),
   )
   assert.ok(ui.host.querySelector('.pane-split-btn') === null, '已激活分屏时关闭分屏按钮不受 .pane-split-btn 隐藏')
@@ -460,8 +465,6 @@ test('workbench-model 与 ArtifactsTab 严格分离正式产物与 spill、去�
   URL.revokeObjectURL = (() => {}) as typeof URL.revokeObjectURL
 
   const conv = makeConversation(1)
-  const modals: unknown[] = []
-  const notices: unknown[] = []
   const plugin: PluginSummary = {
     id: 'builtin:workflow',
     name: '工作流',
@@ -486,12 +489,10 @@ test('workbench-model 与 ArtifactsTab 严格分离正式产物与 spill、去�
   const storeMixed = makeTestStore({
     conversations: [conv],
     plugins: [plugin],
-    groupedUi: groupUiContributions([wfPanel]),
+    uiContributions: [wfPanel],
     workbenchOpen: true,
     workbenchTab: 'artifacts',
     conversationArtifacts: { 1: [registered, uploaded, spill1, spill2] },
-    setActiveModal: (modal) => { modals.push(modal) },
-    pushNotice: (notice) => { notices.push(notice) },
   })
 
   const ui = mountNode()
@@ -547,7 +548,7 @@ test('workbench-model 与 ArtifactsTab 严格分离正式产物与 spill、去�
   await act(async () => {
     previewSpillBtn.click()
   })
-  assert.deepEqual(modals[0], { kind: 'artifact-preview', artifactId: 'art-spill-1', conversationId: 1 })
+  assert.deepEqual(storeMixed.getActiveModal(), { kind: 'artifact-preview', artifactId: 'art-spill-1', conversationId: 1 })
 
   // 触发下载报错时推送错误通知而不崩溃，恢复正常后可触发下载请求
   failDownload = true
@@ -556,7 +557,7 @@ test('workbench-model 与 ArtifactsTab 严格分离正式产物与 spill、去�
     downloadRegBtn.click()
     await new Promise((r) => setTimeout(r, 20))
   })
-  assert.equal(notices.length, 1)
+  assert.equal(storeMixed.getNotices().length, 1)
   assert.ok(fetchedUrls.includes('/api/artifacts/art-up/content?inline=1'), '图片产物应懒加载缩略图')
   assert.ok(fetchedUrls.includes('/api/artifacts/art-reg/content'))
 
@@ -565,7 +566,7 @@ test('workbench-model 与 ArtifactsTab 严格分离正式产物与 spill、去�
     downloadRegBtn.click()
     await new Promise((r) => setTimeout(r, 20))
   })
-  assert.equal(notices.length, 1, '下载成功不应新增错误通知')
+  assert.equal(storeMixed.getNotices().length, 1, '下载成功不应新增错误通知')
 
   // 仅存在 spill（无正式产物）的另一会话（id=2）时：页签不展示虚假交付计数徽章，
   // 交付区提示空态，且切换会话后 spill 折叠态自动重置为默认折叠
@@ -583,7 +584,14 @@ test('workbench-model 与 ArtifactsTab 严格分离正式产物与 spill、去�
   assert.equal(ui.host.querySelector('.artifact-spill-toggle')?.getAttribute('aria-expanded'), 'false')
 
   // 验证指定插件工作台页签（workflow tasks 等）可正常渲染，且在非 artifacts 页签下“产物”页签计数仍唯一清晰
-  const wfTabStore = { ...storeMixed, workbenchTab: 'plugin:builtin:workflow/tasks' }
+  const wfTabStore = makeTestStore({
+    conversations: [conv],
+    plugins: [plugin],
+    uiContributions: [wfPanel],
+    workbenchOpen: true,
+    workbenchTab: 'plugin:builtin:workflow/tasks',
+    conversationArtifacts: { 1: [registered, uploaded, spill1, spill2] },
+  })
   seedPluginClientModule('builtin:workflow', 'index.tsx', {
     TasksPanel: ({ conversation }: { conversation?: { id?: number } }) =>
       e('div', null, `工作流任务树面板 #${conversation?.id ?? 0}`),
@@ -650,7 +658,10 @@ test('WorkbenchDrawer and workbench-model support en and zh-CN localization', { 
   assert.match(ui.host.textContent ?? '', /预览/)
   assert.match(ui.host.textContent ?? '', /下载/)
 
-  await ui.render({ ...storeZh, locale: 'en' }, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
+  await act(async () => {
+    storeZh.setLocale('en')
+  })
+  await ui.render(storeZh, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
   assert.ok(ui.host.querySelector('[aria-label="Workbench drawer"]') !== null)
   assert.ok(ui.host.querySelector('[aria-label="Close workbench"]') !== null)
   assert.match(ui.host.textContent ?? '', /Artifacts1/)
@@ -697,33 +708,49 @@ test('动态工作台按 scope/order/public-doc badge 渲染，首帧前保留�
     { pluginId: 'sample', surface: 'workbench.panel', spec: { id: 'hidden', label: '其他档案', order: 0, scope: { profileIds: ['other'] }, badge: { doc: 'hidden', countField: 'count' }, json: {} } },
     { pluginId: 'sample', surface: 'workbench.panel', spec: { id: 'queue', label: '动态队列', order: 10, badge: { doc: 'stats', byConversationField: 'byConversation' }, json: { root: 'text', elements: { text: { type: 'Text', props: { text: '队列内容' } } } } } },
   ]
-  let store = makeTestStore({
+  // 单一真实 store：SSE/面板/页签状态经同步 setter 推进；角标文档经真实
+  // ensurePluginDoc 拉取（拦截 URL 断言不可见面板不加载）。
+  const originalFetch = globalThis.fetch
+  const docFetchUrls: string[] = []
+  const convForDetail = makeConversation(1, { profileId: 'coder' })
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input)
+    docFetchUrls.push(url)
+    if (url === '/api/plugins/sample/docs/stats') {
+      return jsonResponse({ key: 'stub', value: { byConversation: { '1': { count: 3, tone: 'warn', footerText: '3 项待处理' } } } })
+    }
+    if (url.startsWith('/api/conversations/1') && !url.includes('/input')) {
+      return jsonResponse({ ...convForDetail, entries: [] })
+    }
+    return jsonResponse({})
+  }) as typeof fetch
+  const store = makeTestStore({
     sseConnected: false,
     workbenchTab: requested,
-    setWorkbenchTab: (tab) => { selections.push(tab) },
-    ensurePluginDoc: async (id, doc) => { docs.push([id, doc]); return undefined },
+    plugins: [{ id: 'sample', name: 'Sample', version: '1.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
   })
+  const setTab = store.actions.setWorkbenchTab
+  const realSetTab: (tab: string) => void = (tab) => setTab(tab)
+  ;(store.actions as unknown as { setWorkbenchTab: (tab: string) => void }).setWorkbenchTab = (tab) => {
+    selections.push(tab)
+    realSetTab(tab)
+  }
   const ui = mountNode()
   await ui.render(store, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
   assert.deepEqual(selections, [], '初始快照前不能覆盖请求的合法深链')
   const conv = makeConversation(1, { profileId: 'coder' })
-  store = {
-    ...store,
-    sseConnected: true,
-    conversations: [conv],
-    groupedUi: groupUiContributions(panels),
-    pluginDocs: {
-      'sample/stats': { byConversation: { '1': { count: 3, tone: 'warn', footerText: '3 项待处理' } } },
-      'sample/hidden': { count: 100 },
-    },
-  }
+  await act(async () => {
+    store.setSseConnected(true)
+    store.updateLive((prev) => ({ ...prev, conversations: [conv], uiContributions: panels }))
+  })
   await ui.render(store, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
   assert.deepEqual(selections, [], '快照到达后有效深链仍然有效')
+  await waitForCondition(() => (ui.host.querySelector('.tab-btn')?.textContent ?? '').includes('动态队列3'))
   const labels = [...ui.host.querySelectorAll('.tab-btn')].map((button) => button.textContent)
   assert.deepEqual(labels, ['动态队列3', 'Artifacts', '后置面板'])
   assert.match(ui.host.textContent!, /3 项待处理/)
   assert.doesNotMatch(ui.host.textContent!, /其他档案/)
-  assert.ok(!docs.some(([, doc]) => doc === 'hidden'), '不可见面板不应加载角标文档')
+  assert.ok(!docFetchUrls.some((url) => url.includes('/docs/hidden')), '不可见面板不应加载角标文档')
 
   await ui.render(store, e(ConversationPane, { conversationId: 1 }))
   const workbench = [...ui.host.querySelectorAll('button')].find((button) => button.textContent?.includes('Workbench'))
@@ -731,12 +758,13 @@ test('动态工作台按 scope/order/public-doc badge 渲染，首帧前保留�
   assert.match(workbench.textContent!, /3/)
   assert.doesNotMatch(workbench.textContent!, /103/, '顶栏必须与抽屉使用同一 scope')
 
-  store = { ...store, workbenchTab: 'plugin:sample/removed' }
+  realSetTab('plugin:sample/removed')
   await ui.render(store, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
   assert.deepEqual(selections, [requested], '不可用页签应回退排序后的首个可用页签，而非硬编码 artifacts')
   assert.match(ui.host.querySelector('.tab-btn-active')?.textContent ?? '', /动态队列/)
-  store = { ...store, groupedUi: groupUiContributions([]) }
+  store.updateLive((prev) => ({ ...prev, uiContributions: [] }))
   await ui.render(store, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
   assert.deepEqual(selections, [requested, 'artifacts'])
   assert.doesNotMatch(ui.host.textContent!, /动态队列|3 项待处理/)
+  globalThis.fetch = originalFetch
 })

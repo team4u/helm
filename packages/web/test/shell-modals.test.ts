@@ -10,8 +10,7 @@ import type {
   SidebarSectionSpec,
   SkillSummary,
 } from '@helm/protocol'
-import { groupUiContributions, resolveTargetString, type HelmStoreValue } from '../src/lib/types.js'
-import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
+import { resolveTargetString } from '../src/lib/types.js'
 import {
   type AgentStanding,
   ARCHIVED_TAG,
@@ -46,9 +45,9 @@ import {
   resolveSidebarTargetPresence,
 } from '../src/shell/sidebar-model.js'
 import { HostStoreProviders } from './helpers/host-store.js'
+import { makeTestStore as makeHostTestStore, type TestStoreOverrides } from './helpers/store.js'
+import type { HelmExternalStore } from '../src/lib/helm-store.js'
 
-const noop = () => {}
-const asyncNoop = async () => undefined
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -699,7 +698,7 @@ test('resolveSidebarTargetPresence / getConversationPresence / getAgentStandbyPr
   const singleStore = {
     primaryTarget: { kind: 'conversation' as const, conversationId: 1 },
     splitTarget: null,
-    focusedPanel: undefined,
+    focusedPanel: 'primary' as const,
   }
   assert.deepEqual(getConversationPresence(singleStore, 1), {
     inPrimary: true,
@@ -723,6 +722,7 @@ test('resolveSidebarTargetPresence / getConversationPresence / getAgentStandbyPr
   const singleStandbyStore = {
     primaryTarget: { kind: 'agent' as const, profileId: 'assistant' },
     splitTarget: null,
+    focusedPanel: 'primary' as const,
   }
   assert.deepEqual(getAgentStandbyPresence(singleStandbyStore, 'assistant'), {
     inPrimary: true,
@@ -738,7 +738,7 @@ test('resolveSidebarTargetPresence / getConversationPresence / getAgentStandbyPr
   const splitPrimaryFocus = {
     primaryTarget: { kind: 'conversation' as const, conversationId: 1 },
     splitTarget: { kind: 'conversation' as const, conversationId: 10 },
-    focusedPanel: undefined,
+    focusedPanel: 'primary' as const,
   }
   assert.deepEqual(getConversationPresence(splitPrimaryFocus, 1), {
     inPrimary: true,
@@ -921,37 +921,16 @@ test('activeProfileIdsOf / activeProfileIdOf / activeConversationIdsOf 收集主
 // 侧边栏批量管理与批量删除逻辑
 // ---------------------------------------------------------------------------
 
-function makeTestStore(partial: Partial<HelmStoreValue> = {}): HelmStoreValue {
-  const store: HelmStoreValue = {
-    authReady: true,
-    authConfigured: true,
-    authenticated: true,
-    authError: null,
-    connectionError: null,
-    loadErrors: {},
-    sseConnected: true,
-    theme: 'dark',
-    themePreference: 'system',
-    locale: 'en',
-    quietNotifyEnabled: false,
+/** 批量管理用宿主 store（真实 external store；沿用本文件历史默认数据）。 */
+function makeTestStore(partial: TestStoreOverrides = {}): HelmExternalStore {
+  return makeHostTestStore({
     conversations: [
       conv({ id: 1, title: '个人助理', profileId: 'assistant' }),
       conv({ id: 10, title: '用户会话1', profileId: 'assistant' }),
       conv({ id: 11, title: '用户会话2', profileId: 'assistant' }),
     ],
-    conversationDetails: {},
-    conversationLives: {},
-    conversationArtifacts: {},
-    pendingAsks: [],
-    resolvedAsksByConv: {},
     plugins: [{ id: 'builtin:profile', name: '个人助理', locked: true, enabled: true, hooks: [], actions: [], tools: [] }],
-    uiContributions: [],
-    groupedUi: groupUiContributions([]),
-    pluginDocs: {},
-    nodes: [],
     profiles: [{ id: 'assistant', name: '个人助理' }],
-    profilesLoaded: true,
-    assetsLoaded: true,
     models: [
       {
         id: 'zhipu/glm-4.6',
@@ -961,48 +940,8 @@ function makeTestStore(partial: Partial<HelmStoreValue> = {}): HelmStoreValue {
         thinkingLevels: ['off', 'low', 'high'],
       },
     ],
-    providers: [],
-    credentials: [],
-    skills: [],
-    actions: [],
-    primaryTarget: { kind: 'conversation', conversationId: 1 },
-    splitTarget: null,
-    workbenchOpen: false,
-    workbenchTab: 'artifacts',
-    activeModal: null,
-    highlightedEntry: null,
-    notices: [],
-    setTheme: () => {},
-    setThemePreference: () => {},
-    toggleTheme: () => {},
-    setLocale: () => {},
-    setQuietNotify: async () => {},
-    checkAuth: async () => {},
-    onAuthenticated: async () => {},
-    logout: () => {},
-    refreshAssets: async () => {},
-    refreshNodes: async () => undefined,
-    loadConversationDetail: async () => undefined,
-    loadEarlierEntries: async () => {},
-    loadConversationArtifacts: async () => undefined,
-    ensurePluginDoc: async () => undefined,
-    openTarget: () => {},
-    closeSplit: () => {},
-    setScreenParams: () => {},
-    setWorkbenchOpen: () => {},
-    setWorkbenchTab: () => {},
-    openSpace: () => {},
-    setActiveModal: () => {},
-    dismissNotice: () => {},
-    pushNotice: () => {},
-    invokePluginAction: async () => undefined,
-    subscribeSessionDoc: subscribeSessionDoc,
-    getSessionDocState,
-    getPluginSessionDoc: asyncNoop,
-    retrySessionDoc: noop,
     ...partial,
-  }
-  return store
+  })
 }
 
 test('批量选择状态计算：全选、反选与单选切换', { timeout: 60_000 }, () => {
@@ -1178,12 +1117,16 @@ test('Sidebar 状态圆点渲染验证：五态圆点与单会话站位行', { t
     ],
   })
   // 单会话 Agent 各自渲染一种状态圆点：working / blocked / error / done
-  store.conversations.push(
-    conv({ id: 20, title: '代码重构', profileId: 'coder', status: 'working', doing: '重构中' }),
-    conv({ id: 21, title: '审批 B', profileId: 'reviewer', status: 'blocked' }),
-    conv({ id: 22, title: '异常 C', profileId: 'auditor', status: 'error' }),
-    conv({ id: 23, title: '完成 D', profileId: 'reporter', status: 'done' }),
-  )
+  store.updateLive((prev) => ({
+    ...prev,
+    conversations: [
+      ...prev.conversations,
+      conv({ id: 20, title: '代码重构', profileId: 'coder', status: 'working', doing: '重构中' }),
+      conv({ id: 21, title: '审批 B', profileId: 'reviewer', status: 'blocked' }),
+      conv({ id: 22, title: '异常 C', profileId: 'auditor', status: 'error' }),
+      conv({ id: 23, title: '完成 D', profileId: 'reporter', status: 'done' }),
+    ],
+  }))
   const html = renderToString(e(HostStoreProviders, { value: store }, e(Sidebar)))
 
   // 1) idle 不产生任何圆点（conversationStatusDotClass 对 idle 返回 null）

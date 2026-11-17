@@ -697,53 +697,34 @@ test('ProfileCard: locale switches en -> zh-CN -> en immediately via setLocale',
   const { act } = await import('react')
   const ReactDOMClient = await import('react-dom/client')
 
-  function Harness(): React.JSX.Element {
-    const [locale, setLocale] = React.useState<'en' | 'zh-CN'>('en')
-    const store = React.useMemo(
-      () =>
-        makeTestStore({
-          locale,
-          setLocale: (next: 'en' | 'zh-CN') => setLocale(next),
-        }),
-      [locale],
-    )
-    return React.createElement(
-      HostStoreProviders,
-      { value: store },
-      React.createElement(ProfileCard, { profile: mockProfiles[0], onSelect: () => {} }),
-      React.createElement(
-        'button',
-        { type: 'button', onClick: () => setLocale(locale === 'en' ? 'zh-CN' : 'en') },
-        'switch-locale',
-      ),
-    )
-  }
+  // 真实 store.setLocale 驱动 prefs 领域订阅：消费方原位切换（与生产同链路）。
+  const store = makeTestStore({ locale: 'en' })
 
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = ReactDOMClient.createRoot(host)
   try {
     await act(async () => {
-      root.render(React.createElement(Harness))
+      root.render(
+        React.createElement(
+          HostStoreProviders,
+          { value: store },
+          React.createElement(ProfileCard, { profile: mockProfiles[0], onSelect: () => {} }),
+        ),
+      )
     })
     assert.match(host.textContent ?? '', /2 skills/)
     assert.match(host.textContent ?? '', /System/)
 
-    const switchButton = (): HTMLButtonElement => {
-      const found = Array.from(host.querySelectorAll('button')).find((b) => b.textContent === 'switch-locale')
-      assert.ok(found, 'the switch-locale button must be present')
-      return found as HTMLButtonElement
-    }
-
     await act(async () => {
-      switchButton().dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      store.setLocale('zh-CN')
     })
     assert.match(host.textContent ?? '', /2 个技能/)
     assert.match(host.textContent ?? '', /系统/)
     assert.doesNotMatch(host.textContent ?? '', /System/)
 
     await act(async () => {
-      switchButton().dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      store.setLocale('en')
     })
     assert.match(host.textContent ?? '', /2 skills/)
     assert.match(host.textContent ?? '', /System/)
@@ -773,7 +754,7 @@ test('ProfileDetailDrawer: renders the builtin:memory injected section through P
   const store = makeTestStore({
     models: mockModels,
     skills: mockSkills,
-    groupedUi: groupUiContributions([
+    uiContributions: [
       {
         pluginId: 'builtin:memory',
         surface: 'plugin.slot',
@@ -783,7 +764,7 @@ test('ProfileDetailDrawer: renders the builtin:memory injected section through P
           client: { module: 'index.tsx', export: 'ProfileMemorySection' },
         },
       },
-    ]),
+    ],
   })
 
   const html = renderToStaticMarkup(
@@ -912,7 +893,6 @@ test('ProfileCard: inherited model, node and cwd, conversation count, bottom-rig
   }
 
   const store = makeTestStore({
-    defaultModelInfo: { defaultModel: 'anthropic/claude-3-7-sonnet', defaultThinkingLevel: 'high' },
     conversations: [
       {
         id: 11,
@@ -932,9 +912,6 @@ test('ProfileCard: inherited model, node and cwd, conversation count, bottom-rig
         updatedAt: 1,
       },
     ],
-    openTarget: (target) => {
-      openedTargets.push(target)
-    },
   })
 
   const host = document.createElement('div')
@@ -949,6 +926,8 @@ test('ProfileCard: inherited model, node and cwd, conversation count, bottom-rig
           { value: store },
           e(ProfileCard, {
             profile: profileWithNode,
+            // 按生产接线显式传入全局默认模型（ProfileCenter 经 /api/models/default 获取后下发）
+            defaultModelInfo: { defaultModel: 'anthropic/claude-3-7-sonnet', defaultThinkingLevel: 'high' },
             onSelect: () => {
               selectCalls++
             },
@@ -982,7 +961,7 @@ test('ProfileCard: inherited model, node and cwd, conversation count, bottom-rig
       chatBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
     assert.equal(selectCalls, 0, 'clicking the conversation button must stopPropagation without selecting the card')
-    assert.deepEqual(openedTargets, [{ kind: 'agent', profileId: 'remote-dev' }])
+    assert.deepEqual(store.getPrimaryTarget(), { kind: 'agent', profileId: 'remote-dev' })
   } finally {
     await act(async () => {
       root.unmount()

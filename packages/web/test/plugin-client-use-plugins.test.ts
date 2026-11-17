@@ -1,5 +1,5 @@
 /**
- * usePlugins 共享 Hook 测试（真实 React 渲染路径 + HelmStoreContext）：
+ * usePlugins 共享 Hook 测试（真实 React 渲染路径 + HelmExternalStore）：
  * - plugins 返回 store.plugins 同一引用（SSE 实时数据源，非拷贝非轮询）；
  * - screens 返回 store.groupedUi.screens 同一引用（已启用插件贡献，停用即时移除）；
  * - 无 PluginClientContext 时可用（应用中心类全屏视图无会话上下文）；
@@ -13,10 +13,10 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
 import { PLUGIN_CLIENT_SHARED_EXPORTS } from '@helm/protocol'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { PluginClientContext, createPluginClientContext, usePluginClientHost, usePluginConfig, usePlugins } from '@helm/plugin-client'
 import * as HelmPluginClient from '@helm/plugin-client'
-import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
+import type { HelmStoreValue } from '../src/lib/types.js'
+import type { HelmExternalStore } from '../src/lib/helm-store.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 
@@ -33,11 +33,10 @@ interface UiContributionLike {
   spec: Record<string, unknown>
 }
 
-function storeWithScreens(plugins: HelmStoreValue['plugins'], ui: UiContributionLike[]): HelmStoreValue {
+function storeWithScreens(plugins: HelmStoreValue['plugins'], ui: UiContributionLike[]): HelmExternalStore {
   return makeTestStore({
     plugins,
     uiContributions: ui as HelmStoreValue['uiContributions'],
-    groupedUi: groupUiContributions(ui as HelmStoreValue['uiContributions']),
   })
 }
 
@@ -78,7 +77,7 @@ test('usePlugins：screens 返回 groupedUi.screens 同一引用（含 pluginId 
     return null
   }
   renderToString(e(HostStoreProviders, { value: store }, e(Probe)))
-  assert.equal(captured!.screens, store.groupedUi.screens, '必须返回 groupedUi.screens 的同一引用')
+  assert.equal(captured!.screens, store.getGroupedUi().screens, '必须返回 groupedUi.screens 的同一引用')
   assert.equal(captured!.screens.length, 2, '仅 screen surface 计入')
   assert.deepEqual(
     captured!.screens.map((s) => `${s.pluginId}/${s.spec.id}`),

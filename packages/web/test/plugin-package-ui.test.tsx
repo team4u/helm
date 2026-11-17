@@ -376,8 +376,8 @@ test('PluginDetailDrawer：更新操作调用 update 并回调刷新，changed=f
     }
   }
 
-  const notices: Array<{ title: string; body?: string }> = []
-  const store = makeTestStore({ pushNotice: (n) => notices.push(n) })
+  const store = makeTestStore({})
+  const notices = store.getNotices()
 
   try {
     await act(async () => {
@@ -400,8 +400,8 @@ test('PluginDetailDrawer：更新操作调用 update 并回调刷新，changed=f
 
     assert.equal(updatedId, 'my-plugin')
     assert.equal(packageChangedCount, 1, '更新成功后必须请求列表刷新')
-    assert.equal(notices.length, 1)
-    assert.match(notices[0]?.body ?? '', /Source unchanged/, 'changed=false 时如实回显未变更')
+    assert.equal(store.getNotices().length, 1)
+    assert.match(store.getNotices()[0]?.body ?? '', /Source unchanged/, 'changed=false 时如实回显未变更')
   } finally {
     pluginsApi.getConfig = originalGetConfig
     pluginsApi.update = originalUpdate
@@ -556,9 +556,16 @@ test('PluginCenter 集成：安装成功后 syncPlugins 刷新列表并导航至
   const store = makeTestStore({
     plugins: [builtinPlugin],
     primaryTarget: { kind: 'plugins' },
-    openTarget: (target) => { openedTargets.push(target) },
-    syncPlugins: (list) => { syncedLists.push(list); store.plugins = list },
   })
+  const realSyncPlugins = store.actions.syncPlugins
+  ;(store.actions as unknown as { syncPlugins: (list: PluginSummary[]) => void }).syncPlugins = (list) => {
+    syncedLists.push(list)
+    realSyncPlugins(list)
+  }
+  ;(store.actions as unknown as { openTarget: (target: unknown) => void }).openTarget = (target) => {
+    openedTargets.push(target)
+    store.applyPrimaryTarget(typeof target === 'string' ? { kind: 'plugins' } : target as import('../src/lib/types.js').ResolvedTarget)
+  }
 
   try {
     await act(async () => {

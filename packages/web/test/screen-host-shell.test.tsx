@@ -119,23 +119,22 @@ test('ScreenHost 双重头部去重容器、ScreenProps 注入与缺失视图 wa
   }) as typeof fetch
 
   const paramCalls: Array<{ patch: Record<string, string | undefined>; options?: { split?: boolean; push?: boolean } }> = []
-  const baseStore = makeTestStore({})
   const activeStore = makeTestStore({
     primaryTarget: { kind: 'screen', pluginId: 'ext-demo', screenId: 'board', params: { view: 'main' } },
     splitTarget: { kind: 'screen', pluginId: 'ext-demo', screenId: 'board', params: { view: 'right' } },
-    setScreenParams: (patch, options) => {
-      paramCalls.push({ patch, options })
-    },
-    groupedUi: {
-      ...baseStore.groupedUi,
-      screens: [
-        {
-          pluginId: 'ext-demo',
-          spec: { id: 'board', label: '插件看板', client: { module: 'index.tsx', export: 'Board' } },
-        },
-      ],
-    },
+    uiContributions: [
+      {
+        pluginId: 'ext-demo',
+        surface: 'screen',
+        spec: { id: 'board', label: '插件看板', client: { module: 'index.tsx', export: 'Board' } },
+      },
+    ],
   })
+  const realSetScreenParams = activeStore.actions.setScreenParams
+  ;(activeStore.actions as unknown as { setScreenParams: (patch: Record<string, string | undefined>, options?: { split?: boolean; push?: boolean }) => void }).setScreenParams = (patch, options) => {
+    paramCalls.push({ patch, options })
+    realSetScreenParams(patch, options)
+  }
 
   mount(
     <HostStoreProviders value={activeStore}>
@@ -285,10 +284,11 @@ test('AuthGate / ToastOverlay / Sidebar 原语与折叠按钮及零 Emoji / 零�
   let toggleCount = 0
   const expandedStore = makeTestStore({
     sidebarCollapsed: false,
-    toggleSidebarCollapsed: () => {
-      toggleCount += 1
-    },
   })
+  ;(expandedStore.actions as unknown as { toggleSidebarCollapsed: () => void }).toggleSidebarCollapsed = () => {
+    toggleCount += 1
+    expandedStore.setSidebarCollapsed(true)
+  }
   mount(
     <HostStoreProviders value={expandedStore}>
       <Sidebar />
@@ -303,10 +303,11 @@ test('AuthGate / ToastOverlay / Sidebar 原语与折叠按钮及零 Emoji / 零�
 
   const collapsedStore = makeTestStore({
     sidebarCollapsed: true,
-    toggleSidebarCollapsed: () => {
-      toggleCount += 1
-    },
   })
+  ;(collapsedStore.actions as unknown as { toggleSidebarCollapsed: () => void }).toggleSidebarCollapsed = () => {
+    toggleCount += 1
+    collapsedStore.setSidebarCollapsed(false)
+  }
   mount(
     <HostStoreProviders value={collapsedStore}>
       <Sidebar />

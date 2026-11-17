@@ -17,7 +17,6 @@ import {
 } from '../src/conversation/outline-model.js'
 import { buildTimelineItems } from '../src/conversation/timeline-model.js'
 import { makeTestStore } from './helpers/store.js'
-import { groupUiContributions } from '../src/lib/types.js'
 import { seedPluginClientModule } from '../src/lib/plugin-client.js'
 
 try {
@@ -350,18 +349,14 @@ test('ConversationPane 大纲业务卡节点：tool.view 卡经 cardId 二级锚
   const store = makeTestStore({
     conversations: [conv],
     conversationDetails: { 11: { ...conv, entries } },
-    groupedUi: {
-      ...groupUiContributions([]),
-      toolViews: [
-        { pluginId: 'builtin:workflow', spec: { id: 'subagent-card', toolNames: ['subagent'], replaceRow: true, client: { module: 'index.tsx', export: 'SubagentToolView' } } },
-      ],
-      timelineRenderers: [
-        {
-          pluginId: 'builtin:workflow',
-          spec: { id: 'background-report', kinds: ['helm.input'], matchMeta: { renderer: 'workflow:background-report' }, client: { module: 'index.tsx', export: 'BackgroundReportCard' } },
-        },
-      ],
-    },
+    uiContributions: [
+      { pluginId: 'builtin:workflow', surface: 'tool.view', spec: { id: 'subagent-card', toolNames: ['subagent'], replaceRow: true, client: { module: 'index.tsx', export: 'SubagentToolView' } } },
+      {
+        pluginId: 'builtin:workflow',
+        surface: 'timeline.renderer',
+        spec: { id: 'background-report', kinds: ['helm.input'], matchMeta: { renderer: 'workflow:background-report' }, client: { module: 'index.tsx', export: 'BackgroundReportCard' } },
+      },
+    ],
   })
 
   host = document.createElement('div')
@@ -483,7 +478,7 @@ test('ConversationOutlinePopover 三态切换：默认「对话」过滤非人�
   await act(async () => {
     root!.render(
       e(
-        (await import('../src/lib/store-context.js')).HelmStoreContext.Provider,
+        (await import('./helpers/store.js')).HelmExternalStoreContext.Provider,
         { value: store },
         e(ConversationOutlinePopover, {
           nodes,
@@ -533,7 +528,7 @@ test('ConversationOutlinePopover 三态切换：默认「对话」过滤非人�
   await act(async () => {
     root!.render(
       e(
-        (await import('../src/lib/store-context.js')).HelmStoreContext.Provider,
+        (await import('./helpers/store.js')).HelmExternalStoreContext.Provider,
         { value: store },
         e(ConversationOutlinePopover, {
           nodes,

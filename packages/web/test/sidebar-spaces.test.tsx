@@ -9,8 +9,10 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationSummary, PluginUiContribution } from '@helm/protocol'
-import { groupUiContributions, spaceForTarget, type HelmStoreValue, type ResolvedTarget, type SidebarSpace } from '../src/lib/types.js'
+import { spaceForTarget, type LocalePreference, type ResolvedTarget, type SidebarSpace } from '../src/lib/types.js'
+import type { LiveState } from '../src/lib/live-state.js'
 import { makeTestStore } from './helpers/store.js'
+import type { HelmExternalStore, HelmStoreActions } from '../src/lib/helm-store.js'
 GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 // happy-dom 全局就绪后再加载 react-dom/client 与 SDK Provider 栈（静态导入会捕获注册前的 Node 全局）
@@ -50,13 +52,9 @@ const HERDR_VIEW = {
   spec: { id: 'herdr', label: 'Herdr 终端', icon: 'terminal', target: 'screen:builtin:herdr/overview' },
 } as const satisfies PluginUiContribution
 
-interface NavSpyStore extends HelmStoreValue {
-  openTargetCalls: Array<{ target: ResolvedTarget; split?: boolean }>
-}
 
-function makeStore(): NavSpyStore {
-  const openTargetCalls: NavSpyStore['openTargetCalls'] = []
-  const store = makeTestStore({
+function makeStore(): HelmExternalStore {
+  return makeTestStore({
     conversations: [
       conv({ id: 1, title: '个人助理' }),
       conv({ id: 10, title: '周末计划', updatedAt: 9000 }),
@@ -68,14 +66,8 @@ function makeStore(): NavSpyStore {
       { id: 'coder', name: '编码专员' },
     ],
     uiContributions: [HERDR_VIEW],
-    groupedUi: groupUiContributions([HERDR_VIEW]),
     primaryTarget: { kind: 'conversation', conversationId: 1 },
-    openTarget: (target, opts) => {
-      const resolved = typeof target === 'string' ? null : target
-      if (resolved) openTargetCalls.push({ target: resolved, split: opts?.split })
-    },
   })
-  return { ...store, openTargetCalls }
 }
 
 let root: ReturnType<typeof createRoot> | null = null
@@ -91,23 +83,9 @@ function setInputValue(input: HTMLInputElement, text: string): void {
   input.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
-/** 可变 store 挂具：同一挂载内模拟 Provider 在 SSE/导航后产出新 store 引用。 */
-function MutableStoreSidebar({
-  base,
-  apiRef,
-  onClose,
-}: {
-  base: HelmStoreValue
-  apiRef: { current: { update?: (patch: Partial<HelmStoreValue>) => void } }
-  onClose?: () => void
-}): React.ReactElement {
-  const [store, setStore] = React.useState<HelmStoreValue>(base)
-  apiRef.current.update = (patch) => setStore((current) => ({ ...current, ...patch }))
-  return e(
-    HostStoreProviders,
-    { value: store },
-    onClose ? e(Sidebar as React.ComponentType<{ onClose?: () => void }>, { onClose }) : e(Sidebar),
-  )
+/** 真实 store 订阅挂具：状态推进经 store 同步 setter（与生产 SSE/导航同一链路）。 */
+function LiveSidebar({ onClose }: { onClose?: () => void }): React.ReactElement {
+  return onClose ? e(Sidebar as React.ComponentType<{ onClose?: () => void }>, { onClose }) : e(Sidebar)
 }
 
 /** 空间代表目标（模拟真实 Provider 的空间回跳：views 取首个可用 screen，settings 缺省角色中心）。
@@ -118,23 +96,10 @@ const SPACE_REPRESENTATIVE: Record<SidebarSpace, ResolvedTarget> = {
   settings: { kind: 'profiles' },
 }
 
-/** 侧栏空间挂具：真实 Sidebar 经 store.openSpace（唯一导航机制）切换空间——主屏目标
- * 直接切到该空间代表目标，空间高亮由 primaryTarget 推导，验证 Rail 点击到空间
- * 切换的完整链路（与真实 Provider 的 openSpace 行为一致）。 */
-function SpaceAwareSidebar({ base }: { base: HelmStoreValue }): React.ReactElement {
-  const [primary, setPrimary] = React.useState<ResolvedTarget>(base.primaryTarget)
-  const store = React.useMemo<HelmStoreValue>(() => ({
-    ...base,
-    primaryTarget: primary,
-    openSpace: (space: SidebarSpace) => {
-      if (spaceForTarget(primary) === space) return
-      setPrimary(SPACE_REPRESENTATIVE[space])
-    },
-  }), [base, primary])
-  return e(HostStoreProviders, { value: store }, e(Sidebar))
-}
+// 侧栏空间切换直接走真实 store.openSpace（唯一导航机制）：空间高亮由 primaryTarget 推导，
+// Rail 点击到空间切换的完整链路与生产 Provider 一致。
 
-function render(store: HelmStoreValue, element: React.ReactElement): void {
+function render(store: HelmExternalStore, element: React.ReactElement): void {
   // 先卸载上一棵树：Popover Portal 挂在 body 上，直接重置 innerHTML 会让卸载阶段找不到节点
   if (root) {
     act(() => {
@@ -151,7 +116,7 @@ function render(store: HelmStoreValue, element: React.ReactElement): void {
 
 test('Sidebar 空间切换：对话空间默认渲染智能体，视图空间渲染 screen 贡献', { timeout: 60_000 }, async () => {
   const store = makeStore()
-  render(store, e(SpaceAwareSidebar, { base: store }))
+  render(store, e(Sidebar))
   await act(async () => {})
 
   const body = document.body
@@ -171,7 +136,7 @@ test('Sidebar 空间切换：对话空间默认渲染智能体，视图空间渲
 
 test('Sidebar 设置空间：点击设置空间按钮切换列表，点击插件中心调用 openTarget', { timeout: 60_000 }, async () => {
   const store = makeStore()
-  render(store, e(SpaceAwareSidebar, { base: store }))
+  render(store, e(Sidebar))
   await act(async () => {})
 
   // 切到设置空间
@@ -189,7 +154,8 @@ test('Sidebar 设置空间：点击设置空间按钮切换列表，点击插件
   await act(async () => {
     pluginsItem!.click()
   })
-  assert.deepEqual(store.openTargetCalls, [{ target: { kind: 'plugins' }, split: undefined }])
+  assert.deepEqual(store.getPrimaryTarget(), { kind: 'plugins' })
+  assert.equal(store.getSplitTarget(), null)
 })
 
 test('Sidebar 智能体搜索：默认收起筛选栏，点击开启后支持过滤智能体与话题，清空或 Esc 收起', { timeout: 60_000 }, async () => {
@@ -228,7 +194,7 @@ test('Sidebar 智能体搜索：默认收起筛选栏，点击开启后支持过
   await act(async () => {
     row.click()
   })
-  assert.deepEqual(store.openTargetCalls[0]?.target, { kind: 'agent', profileId: 'coder' })
+  assert.deepEqual(store.getPrimaryTarget(), { kind: 'agent', profileId: 'coder' })
 
   // 2) 按会话标题关键词过滤：自动展开所属智能体并仅渲染命中子会话
   await act(async () => {
@@ -308,16 +274,12 @@ test('Sidebar 手风琴单展开：仅当前会话所属智能体展开话题子
   await act(async () => {
     coderRow.click()
   })
-  assert.deepEqual(
-    store.openTargetCalls.map((c) => c.target),
-    [{ kind: 'agent', profileId: 'coder' }],
-  )
+  assert.deepEqual(store.getPrimaryTarget(), { kind: 'agent', profileId: 'coder' })
 })
 
 test('Sidebar 智能体行无折叠按钮：展开由当前目标唯一推导，待命亮父行/进会话亮子行', { timeout: 60_000 }, async () => {
   const store = makeStore()
-  const api: { current: { update?: (patch: Partial<HelmStoreValue>) => void } } = { current: {} }
-  render(store, e(MutableStoreSidebar, { base: store, apiRef: api }))
+  render(store, e(LiveSidebar))
   await act(async () => {})
 
   // 折叠展开按钮已移除：展开只跟随当前目标，点击名称是唯一入口
@@ -338,7 +300,7 @@ test('Sidebar 智能体行无折叠按钮：展开由当前目标唯一推导，
 
   // 待命态：仅父站位行 nav-item-active，子行均不点亮
   await act(async () => {
-    api.current.update!({ primaryTarget: { kind: 'agent', profileId: 'assistant' } })
+    store.applyPrimaryTarget({ kind: 'agent', profileId: 'assistant' })
   })
   const standbyHeader = [...document.body.querySelectorAll('.agent-standing-row')]
     .find((r) => r.textContent!.includes('个人助理'))!
@@ -350,22 +312,21 @@ test('Sidebar 智能体行无折叠按钮：展开由当前目标唯一推导，
 
 test('Sidebar 话题列表展开随目标切换：切换后自动收起原智能体，无关更新不扰动', { timeout: 60_000 }, async () => {
   const store = makeStore()
-  const api: { current: { update?: (patch: Partial<HelmStoreValue>) => void } } = { current: {} }
-  render(store, e(MutableStoreSidebar, { base: store, apiRef: api }))
+  render(store, e(LiveSidebar))
   await act(async () => {})
 
   // 主屏切到另一智能体的会话：其话题列表自动展开，原智能体收起
   await act(async () => {
-    api.current.update!({ primaryTarget: { kind: 'conversation', conversationId: 40 } })
+    store.applyPrimaryTarget({ kind: 'conversation', conversationId: 40 })
   })
   let lists = document.body.querySelectorAll('.agent-conversations-list')
   assert.equal(lists.length, 1, '仅新目标所属智能体展开')
   assert.ok(lists[0]!.textContent!.includes('重构方案'), '展开的是编码专员的话题')
   assert.ok(!lists[0]!.textContent!.includes('周末计划'), '原智能体话题已收起')
 
-  // 模拟 SSE 常规更新（store 引用变化、目标未变）：展开保持稳定
+  // 模拟 SSE 常规更新（conversations 引用变化、目标未变）：展开保持稳定
   await act(async () => {
-    api.current.update!({ conversations: store.conversations.map((c) => ({ ...c })) })
+    store.updateLive((prev: LiveState) => ({ ...prev, conversations: prev.conversations.map((c) => ({ ...c })) }))
   })
   lists = document.body.querySelectorAll('.agent-conversations-list')
   assert.equal(lists.length, 1, '展开不随无关 store 更新变化')
@@ -391,15 +352,23 @@ test('Sidebar 智能体平铺：0 会话智能体直接平铺可见，不收进�
 })
 
 test('Sidebar 分屏协同展开与焦点高亮：双不同智能体均展开，主/分屏焦点切换同步高亮与主/分微标', { timeout: 60_000 }, async () => {
-  const base = makeStore()
-  const store: HelmStoreValue = {
-    ...base,
+  const store = makeTestStore({
+    conversations: [
+      conv({ id: 1, title: '个人助理' }),
+      conv({ id: 10, title: '周末计划', updatedAt: 9000 }),
+      conv({ id: 11, title: '代码审查', updatedAt: 8000 }),
+      conv({ id: 40, title: '重构方案', profileId: 'coder', updatedAt: 7000 }),
+    ],
+    profiles: [
+      { id: 'assistant', name: '个人助理' },
+      { id: 'coder', name: '编码专员' },
+    ],
+    uiContributions: [HERDR_VIEW],
     primaryTarget: { kind: 'conversation', conversationId: 1 },
     splitTarget: { kind: 'conversation', conversationId: 40 },
     focusedPanel: 'primary',
-  }
-  const api: { current: { update?: (patch: Partial<HelmStoreValue>) => void } } = { current: {} }
-  render(store, e(MutableStoreSidebar, { base: store, apiRef: api }))
+  })
+  render(store, e(LiveSidebar))
   await act(async () => {})
 
   // 双不同智能体（assistant 与 coder）均展开话题列表，且站位父行均为分支弱态
@@ -429,7 +398,7 @@ test('Sidebar 分屏协同展开与焦点高亮：双不同智能体均展开，
 
   // 2) 焦点切到分屏：会话 40 切换为 .nav-item-active.nav-item-focused，会话 1 切换为 .nav-item-split；「主」「分」微标位置不变
   await act(async () => {
-    api.current.update!({ focusedPanel: 'split' })
+    store.setFocusedPanel('split')
   })
   const conv1Split = findConvRow('个人助理')
   const conv40Split = findConvRow('重构方案')
@@ -443,19 +412,30 @@ test('Sidebar 分屏协同展开与焦点高亮：双不同智能体均展开，
   assert.equal(conv40Split.querySelector('.nav-pane-tag')?.textContent, 'Split')
 })
 
-test('Sidebar Rail 底部语言按钮紧邻主题按钮：三态菜单（auto/en/zh-CN），切换经 setLocalePreference（及 setLocale 兜底）且展示随 locale', { timeout: 60_000 }, async () => {
-  const prefCalls: string[] = []
-  const setLocaleCalls: string[] = []
-  const base = makeStore()
-  const store: HelmStoreValue = {
-    ...base,
+test('Sidebar Rail 底部语言按钮紧邻主题按钮：三态菜单（auto/en/zh-CN），切换经真实 setLocalePreference 且展示随 locale', { timeout: 60_000 }, async () => {
+  const prefCalls: Array<Parameters<HelmStoreActions['setLocalePreference']>[0]> = []
+  const store = makeTestStore({
+    conversations: [
+      conv({ id: 1, title: '个人助理' }),
+      conv({ id: 10, title: '周末计划', updatedAt: 9000 }),
+      conv({ id: 11, title: '代码审查', updatedAt: 8000 }),
+      conv({ id: 40, title: '重构方案', profileId: 'coder', updatedAt: 7000 }),
+    ],
+    profiles: [
+      { id: 'assistant', name: '个人助理' },
+      { id: 'coder', name: '编码专员' },
+    ],
+    uiContributions: [HERDR_VIEW],
+    primaryTarget: { kind: 'conversation', conversationId: 1 },
     locale: 'en',
     localePreference: 'auto',
-    setLocalePreference: (pref) => { prefCalls.push(pref) },
-    setLocale: (locale) => { setLocaleCalls.push(locale) },
+  })
+  const realSetLocalePreference = store.actions.setLocalePreference
+  ;(store.actions as unknown as { setLocalePreference: (pref: LocalePreference) => void }).setLocalePreference = (pref) => {
+    prefCalls.push(pref)
+    realSetLocalePreference(pref)
   }
-  const api = { current: {} as { update?: (patch: Partial<HelmStoreValue>) => void } }
-  render(store, e(MutableStoreSidebar, { base: store, apiRef: api }))
+  render(store, e(LiveSidebar))
   await act(async () => {})
 
   // 语言按钮位于 .activity-rail-footer 中紧邻 .sidebar-theme-toggle，不再放在 .sidebar-header
@@ -483,43 +463,49 @@ test('Sidebar Rail 底部语言按钮紧邻主题按钮：三态菜单（auto/en
   await act(async () => {
     zhOption!.click()
   })
-  assert.deepEqual(prefCalls, ['zh-CN'], '切换语言优先走 store.setLocalePreference')
+  assert.deepEqual(prefCalls, ['zh-CN'], '切换语言走真实 store.setLocalePreference')
 
-  // store 更新为手动 zh-CN 后，触发器 title、aria-label 及侧栏文案随 locale 立即切换
-  act(() => { api.current.update!({ locale: 'zh-CN', localePreference: 'zh-CN' }) })
+  // 手动 zh-CN 生效后，触发器 title、aria-label 及侧栏文案随 locale 立即切换
+  await act(async () => {
+    store.setLocalePreference('zh-CN')
+  })
   const triggerAfter = document.body.querySelector('.activity-rail-footer button.sidebar-locale-toggle') as HTMLButtonElement | null
   assert.ok(triggerAfter)
   assert.equal(triggerAfter.getAttribute('aria-label'), '界面语言')
   assert.equal(triggerAfter.getAttribute('title'), '界面语言 (简体中文)')
   assert.ok(document.body.textContent?.includes('会话'), '侧栏空间标题随 locale 切换为中文')
 
-  // 切回 auto + zh-CN：title 展示「界面语言 (自动)」
-  act(() => { api.current.update!({ locale: 'zh-CN', localePreference: 'auto' }) })
+  // 切回 auto（浏览器 zh-CN 环境）：title 展示「界面语言 (自动)」——auto 经真实 resolveLocale 跟随浏览器
+  const navDesc = Object.getOwnPropertyDescriptor(Navigator.prototype, 'languages') ?? Object.getOwnPropertyDescriptor(navigator, 'languages')
+  Object.defineProperty(navigator, 'languages', { value: ['zh-CN'], configurable: true })
+  try {
+    await act(async () => {
+      store.setLocalePreference('auto')
+    })
+  } finally {
+    if (navDesc !== undefined) Object.defineProperty(navigator, 'languages', navDesc)
+    else delete (navigator as unknown as Record<string, unknown>).languages
+  }
   const triggerAutoZh = document.body.querySelector('.activity-rail-footer button.sidebar-locale-toggle') as HTMLButtonElement | null
   assert.equal(triggerAutoZh?.getAttribute('title'), '界面语言 (自动)')
-
-  // 当 test double 未提供 setLocalePreference 时，回落到 store.setLocale
-  act(() => { api.current.update!({ locale: 'en', localePreference: 'en', setLocalePreference: undefined }) })
-  const triggerFallback = document.body.querySelector('.activity-rail-footer button.sidebar-locale-toggle') as HTMLButtonElement | null
-  assert.equal(triggerFallback?.getAttribute('title'), 'Interface language (English)')
-  await act(async () => {
-    triggerFallback!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
-  })
-  const zhOpt2 = Array.from(document.querySelectorAll('[role="menuitem"]')).find((el) => (el as HTMLElement).dataset.localeOption === 'zh-CN') as HTMLElement
-  await act(async () => {
-    zhOpt2.click()
-  })
-  assert.deepEqual(setLocaleCalls, ['zh-CN'], '无 setLocalePreference 时回落到 store.setLocale')
+  assert.equal(store.getPrefsSlice().localePreference, 'auto')
 })
 
 test('CommandPaletteModal 与 ScreenHost 双语本地化及语言循环命令（Auto -> English -> 简体中文）', { timeout: 60_000 }, async () => {
   const prefCalls: string[] = []
+  const spyLocalePreference = (store: HelmExternalStore): void => {
+    const real = store.actions.setLocalePreference
+    ;(store.actions as unknown as { setLocalePreference: (pref: LocalePreference) => void }).setLocalePreference = (pref) => {
+      prefCalls.push(pref)
+      real(pref)
+    }
+  }
   const store = makeTestStore({
     locale: 'zh-CN',
     localePreference: 'auto',
     activeModal: { kind: 'command-palette' },
-    setLocalePreference: (pref) => { prefCalls.push(pref) },
   })
+  spyLocalePreference(store)
   render(store, e(CommandPaletteModal, { onClose: () => {} }))
   await act(async () => {})
 
@@ -539,13 +525,14 @@ test('CommandPaletteModal 与 ScreenHost 双语本地化及语言循环命令（
   assert.deepEqual(prefCalls, ['en'])
 
   // en -> zh-CN
+  const storeEn = makeTestStore({
+    locale: 'en',
+    localePreference: 'en',
+    activeModal: { kind: 'command-palette' },
+  })
+  spyLocalePreference(storeEn)
   render(
-    makeTestStore({
-      locale: 'en',
-      localePreference: 'en',
-      activeModal: { kind: 'command-palette' },
-      setLocalePreference: (pref) => { prefCalls.push(pref) },
-    }),
+    storeEn,
     e(CommandPaletteModal, { onClose: () => {} }),
   )
   await act(async () => {})
@@ -557,13 +544,14 @@ test('CommandPaletteModal 与 ScreenHost 双语本地化及语言循环命令（
   assert.deepEqual(prefCalls, ['en', 'zh-CN'])
 
   // zh-CN -> auto
+  const storeZh = makeTestStore({
+    locale: 'zh-CN',
+    localePreference: 'zh-CN',
+    activeModal: { kind: 'command-palette' },
+  })
+  spyLocalePreference(storeZh)
   render(
-    makeTestStore({
-      locale: 'zh-CN',
-      localePreference: 'zh-CN',
-      activeModal: { kind: 'command-palette' },
-      setLocalePreference: (pref) => { prefCalls.push(pref) },
-    }),
+    storeZh,
     e(CommandPaletteModal, { onClose: () => {} }),
   )
   await act(async () => {})
@@ -588,17 +576,10 @@ test('CommandPaletteModal 与 ScreenHost 双语本地化及语言循环命令（
 })
 
 test('Sidebar 移动端展开未展开智能体时不关闭抽屉，再点已展开行或子会话才关闭', { timeout: 60_000 }, async () => {
+  // 真实 store.openTarget 本身推进导航目标（展开/待命/进会话的真实链路）
   const store = makeStore()
-  const api: { current: { update?: (patch: Partial<HelmStoreValue>) => void } } = { current: {} }
   let closeCount = 0
   let shellBubbleCount = 0
-  const baseOpenTarget = store.openTarget
-  store.openTarget = (target, opts) => {
-    baseOpenTarget(target, opts)
-    if (typeof target !== 'string' && !opts?.split) {
-      api.current.update?.({ primaryTarget: target })
-    }
-  }
   render(
     store,
     e(
@@ -610,9 +591,7 @@ test('Sidebar 移动端展开未展开智能体时不关闭抽屉，再点已展
           }
         },
       },
-      e(MutableStoreSidebar, {
-        base: store,
-        apiRef: api,
+      e(LiveSidebar, {
         onClose: () => { closeCount += 1 },
       }),
     ),
@@ -636,7 +615,7 @@ test('Sidebar 移动端展开未展开智能体时不关闭抽屉，再点已展
     subBtn.click()
   })
   assert.equal(shellBubbleCount, 1, '选择具体会话后冒泡触发外层关闭抽屉')
-  assert.deepEqual(store.openTargetCalls.at(-1)?.target, { kind: 'conversation', conversationId: 40 })
+  assert.deepEqual(store.getPrimaryTarget(), { kind: 'conversation', conversationId: 40 })
 
   // 3) 再次点击已展开的「编码专员」本身（进入待命撰写）：触发 onClose 与关闭抽屉
   const expandedCoderBtn = [...document.body.querySelectorAll<HTMLButtonElement>('.agent-standing-row .nav-item-main')]
@@ -698,7 +677,7 @@ test('Sidebar 批量模式 DOM 行为：勾选框仅在会话子项，站位头�
     coderHeaderBtn.click()
   })
   assert.ok(coderStanding.querySelector('.agent-conversations-list') === null, '点击站位头部行折叠其会话子列表')
-  assert.equal(store.openTargetCalls.length, 0, '批量模式下点击站位头部不触发路由跳转')
+  assert.deepEqual(store.getPrimaryTarget(), { kind: 'conversation', conversationId: 1 }, '批量模式下点击站位头部不触发路由跳转')
   assert.equal(shellBubbleCount, 0, '批量模式下点击站位头部不冒泡关闭抽屉')
 
   // 再次点击重新展开

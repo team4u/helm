@@ -21,10 +21,11 @@ import {
 ensureHappyDom()
 const { createRoot } = await import('react-dom/client')
 
-import { makeTestStore, HelmStoreContext } from './helpers/store.js'
+import { makeTestStore, HelmExternalStoreContext } from './helpers/store.js'
 import { hangingEventStream } from './helpers/sse-stream.js'
 import { sseClientTimings } from '../src/lib/live-state.js'
 import type { HelmStoreValue } from '../src/lib/types.js'
+import type { HelmExternalStore } from '../src/lib/helm-store.js'
 import {
   useVersionWatcher,
   versionWatchTimings,
@@ -76,7 +77,8 @@ function dispatchVisibility(visible: boolean): void {
 const CLEAN_COMPOSER: ComposerDirtySnapshot = { hasDraftText: false, editingEntry: false, hasAttachments: false, busy: false }
 
 interface Harness {
-  renderStore: (bootId: string | null, overrides?: Partial<HelmStoreValue>) => void
+  renderStore: (bootId: string | null, overrides?: { activeModal?: HelmStoreValue['activeModal'] }) => void
+  store: () => HelmExternalStore
   view: () => VersionWatcherView
   fetchCalls: Array<{ url: string; init: RequestInit }>
   reloads: () => number
@@ -140,23 +142,28 @@ function mountWatcher(initialHtml = builtIndexHtml(CURRENT_ENTRY), nav: { locati
     )
     return null
   }
-  const StoreHost = ({ store }: { store: HelmStoreValue }): React.ReactNode => (
-    <HelmStoreContext.Provider value={store}>
-      <WatcherProbe />
-    </HelmStoreContext.Provider>
-  )
-
+  const store = makeTestStore({ kernelBootId: null })
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root: Root = createRoot(host)
-  const renderStore = (bootId: string | null, overrides: Partial<HelmStoreValue> = {}): void => {
+  act(() => {
+    root.render(
+      <HelmExternalStoreContext.Provider value={store}>
+        <WatcherProbe />
+      </HelmExternalStoreContext.Provider>,
+    )
+  })
+  // kernelBootId 经真实 setter 推进（auth 领域订阅通知）；其余覆写按用例一次性水合。
+  const renderStore = (bootId: string | null, overrides: { activeModal?: HelmStoreValue['activeModal'] } = {}): void => {
+    const { activeModal } = overrides
     act(() => {
-      root.render(<StoreHost store={makeTestStore({ kernelBootId: bootId, ...overrides })} />)
+      store.setKernelBootId(bootId)
+      if (activeModal !== undefined) store.setActiveModal(activeModal)
     })
   }
-  renderStore(null)
   return {
     renderStore,
+    store: () => store,
     view: () => currentView!,
     fetchCalls,
     reloads: () => (wrappedLocation !== undefined ? replaceCalls.length : reloadCount),
@@ -548,9 +555,9 @@ test('Composer 实例上报与卸载清报：旧实例残留不阻塞刷新', { 
   const composerRoot = createRoot(composerHost)
   act(() => {
     composerRoot.render(
-      <HelmStoreContext.Provider value={makeTestStore({})}>
+      <HelmExternalStoreContext.Provider value={makeTestStore({})}>
         <ComposerSendHost />
-      </HelmStoreContext.Provider>,
+      </HelmExternalStoreContext.Provider>,
     )
   })
   assert.equal(h.view().deferReason, null, '空草稿不挂起')
@@ -643,10 +650,9 @@ test('visible 期间按周期轮询；hidden 暂停；恢复 visible 后继续',
 
 test('vite:preloadError：/index.html 指纹未变时不强刷整页，暴露可恢复 preloadError 状态并推送通知', { timeout: 60_000 }, async () => {
   entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  const notices: Array<{ level?: string; title?: string }> = []
   harness = mountWatcher(builtIndexHtml(CURRENT_ENTRY))
   const h = harness
-  h.renderStore('boot-1', { pushNotice: (notice) => notices.push(notice) })
+  h.renderStore('boot-1')
   await flush()
 
   const event = new Event('vite:preloadError', { cancelable: true })
@@ -660,6 +666,7 @@ test('vite:preloadError：/index.html 指纹未变时不强刷整页，暴露可
   assert.equal(h.reloads(), 0, '指纹未变时绝不强刷整页导致会话/草稿丢失')
   assert.equal(h.view().updateAvailable, false, '指纹未变时不误报新版本')
   assert.equal(h.view().preloadError, true, '暴露可恢复 preloadError 状态供重试')
+  const notices = h.store().getNotices()
   assert.equal(notices.length, 1)
   assert.equal(notices[0]?.level, 'warning')
 

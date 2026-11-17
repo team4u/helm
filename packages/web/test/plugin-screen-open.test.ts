@@ -16,12 +16,12 @@ import * as React from 'react'
 import { act } from 'react'
 import * as ReactDOMClient from 'react-dom/client'
 import type { PluginSummary } from '@helm/protocol'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { PluginCard } from '../src/plugins/PluginCard.js'
 import { PluginDetailDrawer } from '../src/plugins/PluginDetailDrawer.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
-import type { HelmStoreValue, ResolvedTarget } from '../src/lib/types.js'
+import type { HelmStoreValue } from '../src/lib/types.js'
+import type { HelmExternalStore } from '../src/lib/helm-store.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -62,24 +62,12 @@ const SCREEN_UI = [
 function screenStore(
   plugins: PluginSummary[],
   ui: Array<{ pluginId: string; surface: string; spec: Record<string, unknown> }>,
-  openTarget?: HelmStoreValue['openTarget'],
-): HelmStoreValue {
+): HelmExternalStore {
+  // 真实 store 从 uiContributions 派生 groupedUi（screens 即 surface='screen' 的贡献，与生产同链路）。
   return makeTestStore({
     plugins,
     uiContributions: ui as HelmStoreValue['uiContributions'],
-    groupedUi: {
-      ...makeTestStore().groupedUi,
-      screens: ui
-        .filter((item) => item.surface === 'screen')
-        .map((item) => ({ pluginId: item.pluginId, spec: item.spec as never })),
-    },
-    ...(openTarget !== undefined ? { openTarget } : {}),
   })
-}
-
-interface OpenCall {
-  target: ResolvedTarget
-  split: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -87,11 +75,8 @@ interface OpenCall {
 // ---------------------------------------------------------------------------
 
 test('PluginCard：enabled 且有 Screen 时底栏渲染打开视图，点击阻止冒泡并以主屏 target 导航', { timeout: 60_000 }, async () => {
-  const calls: OpenCall[] = []
   const selections: string[] = []
-  const store = screenStore([APP_PLUGIN], SCREEN_UI, (target, opts) => {
-    calls.push({ target: target as ResolvedTarget, split: opts?.split === true })
-  })
+  const store = screenStore([APP_PLUGIN], SCREEN_UI)
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = ReactDOMClient.createRoot(host)
@@ -115,9 +100,9 @@ test('PluginCard：enabled 且有 Screen 时底栏渲染打开视图，点击阻
     openBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
   assert.deepEqual(
-    calls,
+    [{ target: store.getPrimaryTarget(), split: store.getSplitTarget() !== null }],
     [{ target: { kind: 'screen', pluginId: 'todo-app', screenId: 'main' }, split: false }],
-    '点击打开视图以主屏 screen target 调用 openTarget（首个 Screen 为主视图）',
+    '点击打开视图以主屏 screen target 导航（首个 Screen 为主视图，不开分屏）',
   )
   assert.deepEqual(selections, [], '点击打开按钮不得触发卡片 onSelect 冒泡')
 
@@ -142,7 +127,7 @@ test('PluginCard：停用或无 Screen 时不渲染打开按钮（无 Provider �
     host.remove()
   }
 
-  // 无 Provider（HelmStoreContext 为 null）：卡片可渲染且不出现打开按钮
+  // 无 Provider（HelmExternalStoreContext 为 null）：卡片可渲染且不出现打开按钮
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = ReactDOMClient.createRoot(host)
@@ -159,10 +144,7 @@ test('PluginCard：停用或无 Screen 时不渲染打开按钮（无 Provider �
 // ---------------------------------------------------------------------------
 
 test('PluginDetailDrawer 契约：enabled 插件经 store.openTarget 打开主视图并支持 split（零 history 直操作）', { timeout: 60_000 }, async () => {
-  const calls: OpenCall[] = []
-  const store = screenStore([APP_PLUGIN], SCREEN_UI, (target, opts) => {
-    calls.push({ target: target as ResolvedTarget, split: opts?.split === true })
-  })
+  const store = screenStore([APP_PLUGIN], SCREEN_UI)
   const originalFetch = globalThis.fetch
   globalThis.fetch = (async () =>
     new Response(JSON.stringify({ pluginId: 'todo-app', schema: {}, values: {} }), {
@@ -202,12 +184,15 @@ test('PluginDetailDrawer 契约：enabled 插件经 store.openTarget 打开主�
     })
 
     assert.deepEqual(
-      calls,
+      [
+        { target: store.getPrimaryTarget(), split: false },
+        { target: store.getSplitTarget(), split: true },
+      ],
       [
         { target: { kind: 'screen', pluginId: 'todo-app', screenId: 'main' }, split: false },
         { target: { kind: 'screen', pluginId: 'todo-app', screenId: 'main' }, split: true },
       ],
-      '主屏与分屏按钮应通过 store.openTarget 触发导航',
+      '主屏与分屏按钮应经真实 openTarget 推进导航目标（主屏 target + splitTarget）',
     )
 
     const src = readFileSync(new URL('src/plugins/PluginDetailDrawer.tsx', PKG_ROOT), 'utf-8')

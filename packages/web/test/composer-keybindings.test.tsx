@@ -23,7 +23,7 @@
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import * as React from 'react'
-import { ensureHappyDom, jsonResponse } from './helpers/dom-harness.js'
+import { ensureHappyDom, jsonResponse, waitForCondition } from './helpers/dom-harness.js'
 import type {
   ComposerScopeProps,
   ConversationDetail,
@@ -61,7 +61,7 @@ const { conversationsApi, assetsApi } = await import('../src/lib/api.js')
 const { seedPluginClientModule } = await import('../src/lib/plugin-client.js')
 const { usePluginContext } = await import('@helm/plugin-client')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
-const { makeTestStore, HelmStoreContext } = await import('./helpers/store.js')
+const { makeTestStore, HelmExternalStoreContext } = await import('./helpers/store.js')
 const { Composer } = await import('../src/conversation/Composer.js')
 const { ComposerSendControls } = await import('../src/conversation/ComposerSendControls.js')
 const { AgentStandbyPane } = await import('../src/conversation/AgentStandbyPane.js')
@@ -598,7 +598,7 @@ test('COMPOSER_DOCK_SLOT: renders directly above AskDock receiving ComposerScope
         createdAt: 1,
       },
     ],
-    groupedUi: groupUiContributions([
+    uiContributions: [
       {
         pluginId: 'builtin:workflow',
         surface: 'plugin.slot',
@@ -608,7 +608,7 @@ test('COMPOSER_DOCK_SLOT: renders directly above AskDock receiving ComposerScope
           client: { module: 'tray.tsx', export: 'DockProbe' },
         },
       },
-    ]),
+    ],
   })
 
   const html = renderToStaticMarkup(
@@ -639,7 +639,7 @@ test('ComposerSendControls: mobile busy with input explicitly renders independen
   // split trigger. ComposerSendControls reads the locale via useWebLocale, so it mounts inside a
   // store provider.
   const mobileHost = mountTree(
-    e(HelmStoreContext.Provider, { value: makeTestStore() }, e(ComposerSendControls, {
+    e(HelmExternalStoreContext.Provider, { value: makeTestStore() }, e(ComposerSendControls, {
       working: true,
       editingEntryId: null,
       sending: false,
@@ -665,7 +665,7 @@ test('ComposerSendControls: mobile busy with input explicitly renders independen
 
   // Desktop: renders the split dropdown; menu-item badges carry the .kbd-hint class
   const desktopHost = mountTree(
-    e(HelmStoreContext.Provider, { value: makeTestStore() }, e(ComposerSendControls, {
+    e(HelmExternalStoreContext.Provider, { value: makeTestStore() }, e(ComposerSendControls, {
       working: true,
       editingEntryId: null,
       sending: false,
@@ -701,6 +701,14 @@ test('Standby pane: inherits the global default model glm-5.3·max; supports Shi
     { id: 'review', name: '代码审查', references: [] },
     { id: 'herdr-only', name: '终端工具', references: [], managedByPlugin: 'builtin:herdr' },
   ]
+  // 全局默认模型改经真实 /api/models/default 按需读取（store 不再携带 defaultModelInfo 字段）
+  const originalFetchA = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input) === '/api/models/default') {
+      return jsonResponse({ defaultModel: 'magpie/auto/glm-5.3', defaultThinkingLevel: 'max', modelThinkingLevels: {} })
+    }
+    return jsonResponse({})
+  }) as typeof fetch
   const store = makeTestStore({
     profiles: [profile],
     skills,
@@ -717,7 +725,6 @@ test('Standby pane: inherits the global default model glm-5.3·max; supports Shi
         thinkingLevels: ['off', 'low', 'medium', 'high', 'max'],
       },
     ],
-    defaultModelInfo: { defaultModel: 'magpie/auto/glm-5.3', defaultThinkingLevel: 'max' },
     uiContributions: [
       {
         pluginId: 'builtin:memory',
@@ -725,13 +732,6 @@ test('Standby pane: inherits the global default model glm-5.3·max; supports Shi
         spec: { id: 'mem', label: '记忆', trigger: '@', source: { kind: 'doc', name: 'refs', itemsField: 'items' } },
       },
     ],
-    groupedUi: groupUiContributions([
-      {
-        pluginId: 'builtin:memory',
-        surface: 'composer.completer',
-        spec: { id: 'mem', label: '记忆', trigger: '@', source: { kind: 'doc', name: 'refs', itemsField: 'items' } },
-      },
-    ]),
     pluginDocs: {
       'builtin:memory/refs': { items: [{ id: 'm-1', label: '@memory', insertText: '@memory ' }] },
     },
@@ -741,6 +741,7 @@ test('Standby pane: inherits the global default model glm-5.3·max; supports Shi
     e(HostStoreProviders, { value: store }, e(AgentStandbyPane, { profileId: 'assistant', isSplit: true })),
     'split',
   )
+  await waitForCondition(() => /glm-5\.3/.test(host.querySelector<HTMLButtonElement>('button.composer-model-button')?.textContent ?? ''))
 
   const modelBtn = host.querySelector<HTMLButtonElement>('button.composer-model-button')!
   assert.match(modelBtn.textContent ?? '', /glm-5\.3/, 'first paint inherits the global default model short name')
@@ -804,6 +805,7 @@ test('Standby pane: inherits the global default model glm-5.3·max; supports Shi
     ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
   })
   assert.equal(ta.value, '/skill:review @memory ', 'Enter picking an @ candidate completes only the trigger text; no conversation created')
+  globalThis.fetch = originalFetchA
 })
 
 test('Composer submit keys: Enter steer, Ctrl/Cmd+Enter followUp, Shift+Enter newline, Alt+Enter alias forbidden', { timeout: 60_000 }, async () => {
@@ -858,13 +860,6 @@ test('CompletionPopover: Esc closes the completion popover and stopPropagation k
         spec: { id: 'c1', label: '记忆', trigger: '@', source: { kind: 'doc', name: 'cat', itemsField: 'items' } },
       },
     ],
-    groupedUi: groupUiContributions([
-      {
-        pluginId: 'p1',
-        surface: 'composer.completer',
-        spec: { id: 'c1', label: '记忆', trigger: '@', source: { kind: 'doc', name: 'cat', itemsField: 'items' } },
-      },
-    ]),
     pluginDocs: { 'p1/cat': { items: [{ id: 'm1', label: '@记忆', insertText: '@记忆 ' }] } },
   })
   const host = mountTree(e(HostStoreProviders, { value: store }, e(Composer, { conversation: conv, prefill: null })))
@@ -891,12 +886,16 @@ test('ModelPickerControl filters unavailable and disabled models at runtime; the
   const { ModelPickerControl } = await import('../src/conversation/ModelPicker.js')
   const originalFetch = globalThis.fetch
   let refreshPostCount = 0
-  let refreshAssetsCount = 0
-  const notices: Array<{ level: string; title: string }> = []
+  let modelsRefCount = 0
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input) === '/api/models/refresh' && init?.method === 'POST') {
       refreshPostCount += 1
       return jsonResponse({ errors: {} })
+    }
+    // 真实 refreshAssets 会重拉 /api/models：以此观察刷新后的目录重建
+    if (String(input) === '/api/models') {
+      modelsRefCount += 1
+      return jsonResponse({ models: [] })
     }
     return jsonResponse({})
   }) as typeof fetch
@@ -907,10 +906,6 @@ test('ModelPickerControl filters unavailable and disabled models at runtime; the
       { id: 'faux/disabled-model', provider: 'faux', modelId: 'disabled-model', available: true, disabled: true, thinkingLevels: ['off'] },
       { id: 'faux/unavailable-model', provider: 'faux', modelId: 'unavailable-model', available: false, thinkingLevels: ['off'] },
     ],
-    refreshAssets: async () => {
-      refreshAssetsCount += 1
-    },
-    pushNotice: (n) => notices.push({ level: n.level, title: n.title }),
   })
 
   try {
@@ -948,14 +943,22 @@ test('ModelPickerControl filters unavailable and disabled models at runtime; the
       refreshBtn.click()
     })
     assert.equal(refreshPostCount, 1, 'clicking refresh triggers POST /api/models/refresh')
-    assert.equal(refreshAssetsCount, 1, 'refreshAssets follows the completed refresh')
-    assert.equal(notices.some((n) => n.title === 'Model catalog refreshed'), true)
+    await waitForCondition(() => modelsRefCount > 0)
+    assert.equal(modelsRefCount > 0, true, 'refreshAssets follows the completed refresh (catalog re-listed via /api/models)')
+    assert.equal(store.getNotices().some((n) => n.title === 'Model catalog refreshed'), true)
   } finally {
     globalThis.fetch = originalFetch
   }
 })
 
 test('zh-CN locale: AgentStandbyPane renders the Chinese catalog copy', { timeout: 60_000 }, async () => {
+  const originalFetchC = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input) === '/api/models/default') {
+      return jsonResponse({ defaultModel: 'magpie/auto/glm-5.3', defaultThinkingLevel: 'max', modelThinkingLevels: {} })
+    }
+    return jsonResponse({})
+  }) as typeof fetch
   const store = makeTestStore({
     locale: 'zh-CN',
     profiles: [{ id: 'assistant', name: '个人助理' }],
@@ -968,11 +971,11 @@ test('zh-CN locale: AgentStandbyPane renders the Chinese catalog copy', { timeou
         thinkingLevels: ['off', 'low', 'medium', 'high', 'max'],
       },
     ],
-    defaultModelInfo: { defaultModel: 'magpie/auto/glm-5.3', defaultThinkingLevel: 'max' },
   })
   const host = mountTree(
     e(HostStoreProviders, { value: store }, e(AgentStandbyPane, { profileId: 'assistant' })),
   )
+  await waitForCondition(() => host.querySelector<HTMLButtonElement>('button.composer-model-button')?.getAttribute('title')?.includes('magpie/auto/glm-5.3') === true)
   assert.ok(
     host.textContent?.includes('发送第一条消息开始新话题；会话将在首次发送时创建'),
     'the intro hint renders the zh-CN copy',
@@ -1009,6 +1012,7 @@ test('zh-CN locale: AgentStandbyPane renders the Chinese catalog copy', { timeou
     '发送 (Enter)；会话将在首次发送时创建',
     'the send title renders the zh-CN copy',
   )
+  globalThis.fetch = originalFetchC
 })
 
 test('zh-CN locale: ComposerSendControls mobile busy buttons render the Chinese copy', { timeout: 60_000 }, async () => {
@@ -1016,7 +1020,7 @@ test('zh-CN locale: ComposerSendControls mobile busy buttons render the Chinese 
   const send = async (mode?: 'steer' | 'followUp' | 'reject') => { sent.push(mode) }
   const blocker = { blocked: false, reason: null }
   const mobileHost = mountTree(
-    e(HelmStoreContext.Provider, { value: makeTestStore({ locale: 'zh-CN' }) }, e(ComposerSendControls, {
+    e(HelmExternalStoreContext.Provider, { value: makeTestStore({ locale: 'zh-CN' }) }, e(ComposerSendControls, {
       working: true,
       editingEntryId: null,
       sending: false,

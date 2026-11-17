@@ -22,9 +22,9 @@ import type { Root } from 'react-dom/client'
 import type { ConversationSummary, HelmLocale, PluginUiContribution, WorkbenchPanelSpec } from '@helm/protocol'
 import { createLocaleTranslator } from '@helm/protocol'
 import { ensureHappyDom, waitForCondition } from './helpers/dom-harness.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
-import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
-import { makeTestStore } from './helpers/store.js'
+import type { HelmExternalStore } from '../src/lib/helm-store.js'
+import type { ResolvedTarget } from '../src/lib/types.js'
+import { makeTestStore, HelmExternalStoreContext } from './helpers/store.js'
 import {
   registerBrowserNotificationServiceWorker,
   resetBrowserNotificationServiceWorkerForTest,
@@ -103,7 +103,7 @@ interface HarnessOptions {
 interface Harness {
   rerender: (options: HarnessOptions) => void
   unmount: () => void
-  openTargetCalls: Array<{ kind: string; conversationId?: number }>
+  store: () => HelmExternalStore
 }
 
 function Probe(): React.ReactNode {
@@ -112,8 +112,7 @@ function Probe(): React.ReactNode {
 }
 
 function mountHarness(options: HarnessOptions): Harness {
-  const calls: Array<{ kind: string; conversationId?: number }> = []
-  const buildStore = (next: HarnessOptions): HelmStoreValue =>
+  const buildStore = (next: HarnessOptions): HelmExternalStore =>
     makeTestStore({
       authenticated: next.authenticated ?? true,
       quietNotifyEnabled: next.quietNotifyEnabled ?? true,
@@ -122,21 +121,12 @@ function mountHarness(options: HarnessOptions): Harness {
       conversations: next.conversations,
       pluginDocs: next.pluginDocs ?? {},
       uiContributions: [PANEL_CONTRIBUTION],
-      groupedUi: groupUiContributions([PANEL_CONTRIBUTION]),
-      ensurePluginDoc: async (pluginId: string, name: string) => (next.pluginDocs ?? {})[`${pluginId}/${name}`],
-      openTarget: (target) => {
-        calls.push(
-          typeof target === 'string'
-            ? { kind: target }
-            : { kind: target.kind, conversationId: 'conversationId' in target ? target.conversationId : undefined },
-        )
-      },
     })
   let currentStore = buildStore(options)
   const host = document.createElement('div')
   document.body.appendChild(host)
   let root: Root | undefined
-  const renderTree = (): React.ReactElement => e(HelmStoreContext.Provider, { value: currentStore }, e(Probe))
+  const renderTree = (): React.ReactElement => e(HelmExternalStoreContext.Provider, { value: currentStore }, e(Probe))
   act(() => {
     root = createRoot(host)
     root.render(renderTree())
@@ -154,7 +144,7 @@ function mountHarness(options: HarnessOptions): Harness {
       })
       host.remove()
     },
-    openTargetCalls: calls,
+    store: () => currentStore,
   }
 }
 
@@ -189,6 +179,9 @@ function installGrantedNotification(): { notifications: CapturedNotification[]; 
   ;(globalThis as Record<string, unknown>).Notification = FakeNotification
   return { notifications, restore: () => delete (globalThis as Record<string, unknown>).Notification }
 }
+
+/** 点击通知后的主屏导航落点（经真实 openTarget 推进）。 */
+const primaryTargetOf = (store: HelmExternalStore): ResolvedTarget => store.getPrimaryTarget()
 
 /** 缩短完成/blocked 防抖窗口（真实计时器）：返回恢复函数。 */
 function shrinkTimings(settleMs: number, blockedSettleMs = settleMs): () => void {
@@ -225,7 +218,7 @@ test('主回合忙碌 → 完成：防抖满窗投递一次（tag=helm-conv-5）
     assert.equal(notifications[0]!.options.tag, 'helm-conv-5')
     notifications[0]!.onclick?.({} as Event)
     assert.deepEqual(focusedSpy, [true])
-    assert.deepEqual(harness.openTargetCalls, [{ kind: 'conversation', conversationId: 5 }])
+    assert.deepEqual(primaryTargetOf(harness.store()), { kind: 'conversation', conversationId: 5 })
     harness.unmount()
   } finally {
     window.focus = originalFocus
@@ -428,7 +421,7 @@ test('派生子会话归并：子会话活动不污染正文、不抢跳转，�
     assert.equal(notifications[0]!.options.body, '#5 大规模重构', '两个子代理归并为唯一根会话条目')
     assert.equal(notifications[0]!.options.tag, 'helm-conv-5')
     notifications[0]!.onclick?.({} as Event)
-    assert.deepEqual(harness.openTargetCalls, [{ kind: 'conversation', conversationId: 5 }], '跳转根会话而非子代理会话')
+    assert.deepEqual(primaryTargetOf(harness.store()), { kind: 'conversation', conversationId: 5 }, '跳转根会话而非子代理会话')
     harness.unmount()
   } finally {
     restoreTimings()
@@ -456,7 +449,7 @@ test('新进入 blocked：经 blockedSettleMs 投递「等待你的处理」（t
     assert.equal(notifications[0]!.options.body, 'Pending input/approvals: #3 部署检查')
     assert.equal(notifications[0]!.options.tag, 'helm-conv-3')
     notifications[0]!.onclick?.({} as Event)
-    assert.deepEqual(harness.openTargetCalls, [{ kind: 'conversation', conversationId: 3 }])
+    assert.deepEqual(primaryTargetOf(harness.store()), { kind: 'conversation', conversationId: 3 })
     harness.unmount()
   } finally {
     restoreTimings()
@@ -492,7 +485,7 @@ test('同树仍有并行后台任务且 badge doc 未知时，子会话 blocked 
     assert.equal(notifications[0]!.options.body, 'Pending input/approvals: #5 多代理工作流')
     assert.equal(notifications[0]!.options.tag, 'helm-conv-5')
     notifications[0]!.onclick?.({} as Event)
-    assert.deepEqual(harness.openTargetCalls, [{ kind: 'conversation', conversationId: 51 }], '点击跳转具体的 blocked 子会话')
+    assert.deepEqual(primaryTargetOf(harness.store()), { kind: 'conversation', conversationId: 51 }, '点击跳转具体的 blocked 子会话')
     harness.unmount()
   } finally {
     restoreTimings()
@@ -1031,7 +1024,7 @@ test('SW 激活时 completion 与 blocked 通知透传目标会话 url（/#/c/<i
     for (const fn of listeners) {
       fn({ data: { type: 'helm:notification-click', url: '/#/c/51', clickId: shown[0]!.options.data?.clickId } } as MessageEvent)
     }
-    assert.deepEqual(harness.openTargetCalls, [{ kind: 'conversation', conversationId: 51 }])
+    assert.deepEqual(primaryTargetOf(harness.store()), { kind: 'conversation', conversationId: 51 })
 
     // 2) 全部完成：通知 url 应指向根会话 #/c/5
     harness.rerender({
@@ -1046,10 +1039,8 @@ test('SW 激活时 completion 与 blocked 通知透传目标会话 url（/#/c/<i
     for (const fn of listeners) {
       fn({ data: { type: 'helm:notification-click', url: '/#/c/5', clickId: shown[1]!.options.data?.clickId } } as MessageEvent)
     }
-    assert.deepEqual(harness.openTargetCalls, [
-      { kind: 'conversation', conversationId: 51 },
-      { kind: 'conversation', conversationId: 5 },
-    ])
+    // 两次点击都经 openTarget 主屏导航：51 后被根会话 5 原位取代（同一导航机制，无分屏副作用）
+    assert.deepEqual(primaryTargetOf(harness.store()), { kind: 'conversation', conversationId: 5 })
     harness.unmount()
   } finally {
     resetBrowserNotificationServiceWorkerForTest()

@@ -13,7 +13,7 @@ import { ToolActivityProvider } from '../src/conversation/ToolActivityProvider.j
 import { ToolActivityContext } from '@helm/plugin-client'
 import { PluginUiView } from '../src/ui/PluginUiView.js'
 import { ConversationTimeline } from '../src/conversation/ConversationTimeline.js'
-import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
+import type { HelmExternalStore } from '../src/lib/helm-store.js'
 import { resetPluginClientCache, seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
@@ -61,7 +61,7 @@ function mount() {
   const root = createRoot(host)
   return {
     host,
-    render: async (content: React.ReactNode, store: HelmStoreValue = makeTestStore()) => {
+    render: async (content: React.ReactNode, store: HelmExternalStore = makeTestStore()) => {
       await act(async () => root.render(e(HostStoreProviders, { value: store }, content)))
     },
     close: async () => { await act(async () => root.unmount()); host.remove() },
@@ -163,12 +163,12 @@ function entries(callId: string, start: number): ConversationEntry[] {
 test('非 workflow 插件真实编译产物报告活动：done 工具仍隐藏本回合复制/分叉，重复 SSE 不循环，终态/停用释放', { timeout: 60_000 }, async () => {
   seed()
   const ui = mount()
-  const groupedUi = groupUiContributions([{ pluginId: 'sample:background', surface: 'tool.view', spec: {
+  const toolViewContribution = { pluginId: 'sample:background', surface: 'tool.view', spec: {
     id: 'background', toolNames: ['background_job'], replaceRow: true, client: { module: 'client.tsx', export: 'ToolPanel' },
-  } }])
+  } } as const
   const timeline = e(ConversationTimeline, { conversation, detailEntries: [...entries('call-a', 1), ...entries('call-b', 5)], onRequestEdit: () => {} })
   const store = (activity: Record<string, boolean>, enabled = true) => makeTestStore({
-    conversations: [conversation], groupedUi: enabled ? groupedUi : groupUiContributions([]),
+    conversations: [conversation], uiContributions: enabled ? [toolViewContribution] : [],
     pluginDocs: { 'sample:background/activity': activity },
   })
   const bars = () => [...ui.host.querySelectorAll('.msg-ai-block')].map((turn) => turn.querySelector('.msg-hover-bar') !== null)

@@ -5,7 +5,7 @@ import { renderToStaticMarkup, renderToString } from 'react-dom/server'
 import type { ProviderConfig } from '@helm/protocol'
 import type { ModelProviderSummary } from '@helm/protocol'
 import type { HelmLocale } from '@helm/protocol/browser'
-import { ensureHappyDom } from './helpers/dom-harness.js'
+import { ensureHappyDom, typeIntoControl, waitForCondition } from './helpers/dom-harness.js'
 import type { ModelDescriptor } from '../src/lib/api.js'
 import { ModelCard } from '../src/models/ModelCard.js'
 import { ModelCenter } from '../src/models/ModelCenter.js'
@@ -725,6 +725,14 @@ test('ModelCenter: GlobalDefaultsPanel reuses ModelPickerControl (model · level
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = typeof input === 'string' ? input : (input as URL).toString()
     if (path === '/api/models/providers') return new Response(JSON.stringify([]), { status: 200 })
+    // 真实 refreshAssets 会重拉资产端点：数组响应保持目录切片形状合法
+    if (
+      path === '/api/credentials' || path === '/api/skills' || path === '/api/profiles' ||
+      path === '/api/models' || path === '/api/providers' || path === '/api/actions'
+    ) {
+      return new Response(JSON.stringify([]), { status: 200 })
+    }
+    if (path === '/api/actions') return new Response(JSON.stringify([]), { status: 200 })
     if (path === '/api/models/default' && init?.method === 'PUT') {
       const body = JSON.parse(String(init.body)) as Record<string, unknown>
       putBodies.push(body)
@@ -879,13 +887,26 @@ test('ModelCenter: custom gateway endpoint save goes through PUT /api/providers 
   })
 
   const putBodies: Array<unknown> = []
+  const mountFetches = new Set<string>()
   const originalFetch = globalThis.fetch
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = typeof input === 'string' ? input : (input as URL).toString()
     if (init?.method === 'PUT' && path === '/api/providers') {
       putBodies.push(JSON.parse(String(init.body)))
     }
-    if (path === '/api/models/providers') return new Response(JSON.stringify([]), { status: 200 })
+    if (path === '/api/models/providers') {
+      mountFetches.add(path)
+      return new Response(JSON.stringify([]), { status: 200 })
+    }
+    if (path === '/api/models/default' && init?.method !== 'PUT') mountFetches.add(path)
+    // 真实 refreshAssets 会重拉资产端点：数组响应保持目录切片形状合法
+    if (
+      path === '/api/credentials' || path === '/api/skills' || path === '/api/profiles' ||
+      path === '/api/models' || path === '/api/providers' || path === '/api/actions'
+    ) {
+      return new Response(JSON.stringify([]), { status: 200 })
+    }
+    if (path === '/api/actions') return new Response(JSON.stringify([]), { status: 200 })
     if (path === '/api/models/default') return new Response(JSON.stringify({}), { status: 200 })
     return new Response(JSON.stringify({ ok: true }), { status: 200 })
   }) as typeof fetch
@@ -899,15 +920,16 @@ test('ModelCenter: custom gateway endpoint save goes through PUT /api/providers 
       root.render(e(HostStoreProviders, { value: store }, e(ModelCenter, { inlineDrawer: true })))
     })
 
+    // 挂载期的远端目录/默认模型请求先行落地，避免其迟到回包在编辑后重置抽屉草稿
+    await waitForCondition(() => mountFetches.has('/api/models/providers') && mountFetches.has('/api/models/default'))
+    await act(async () => {})
     // Custom gateway merged from store.providers: endpoint editable
     const endpointInput = container.querySelector('input#model-drawer-base-url') as HTMLInputElement
     assert.ok(endpointInput, 'custom gateway must render an editable endpoint input')
     assert.equal(endpointInput.value, 'http://10.0.0.8:8000/v1')
 
     // Change the endpoint and save: goes through the real ModelCenter.handleSave -> assetsApi.saveProviders
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
-    setter?.call(endpointInput, 'http://192.168.1.5:9000/v1')
-    endpointInput.dispatchEvent(new Event('input', { bubbles: true }))
+    typeIntoControl(endpointInput, 'http://192.168.1.5:9000/v1')
     const saveBtn = Array.from(container.querySelectorAll('button')).find(
       (btn) => (btn.textContent ?? '').includes('Save configuration'),
     )!
@@ -1151,27 +1173,10 @@ test('ModelCenter locale switch: setLocale re-renders en -> zh-CN -> en in place
   const { act } = await import('react')
   const { createRoot } = await import('react-dom/client')
 
+  // 真实 store.setLocale 驱动 prefs 领域订阅：消费方原位切换（与生产同链路）。
+  const store = makeTestStore({ locale: 'en', primaryTarget: { kind: 'models' } })
   function LocaleSwitchHarness(): React.JSX.Element {
-    const [locale, setLocale] = React.useState<HelmLocale>('en')
-    const store = React.useMemo(
-      () =>
-        makeTestStore({
-          locale,
-          setLocale: (next: HelmLocale) => setLocale(next),
-          primaryTarget: { kind: 'models' },
-        }),
-      [locale],
-    )
-    return e(
-      HostStoreProviders,
-      { value: store },
-      e(ModelCenter, { inlineDrawer: true }),
-      e(
-        'button',
-        { type: 'button', onClick: () => setLocale(locale === 'en' ? 'zh-CN' : 'en') },
-        'switch-locale',
-      ),
-    )
+    return e(HostStoreProviders, { value: store }, e(ModelCenter, { inlineDrawer: true }))
   }
 
   const originalFetch = globalThis.fetch
@@ -1187,19 +1192,14 @@ test('ModelCenter locale switch: setLocale re-renders en -> zh-CN -> en in place
     assert.match(container.textContent ?? '', /Models & Credentials Center/)
     assert.match(container.textContent ?? '', /Global default/)
 
-    const switchBtn = Array.from(container.querySelectorAll('button')).find(
-      (b) => b.textContent === 'switch-locale',
-    ) as HTMLButtonElement
-    assert.ok(switchBtn !== undefined, 'locale switch harness button must exist')
-
     await act(async () => {
-      switchBtn.click()
+      store.setLocale('zh-CN')
     })
     assert.match(container.textContent ?? '', /模型与凭证中心/, 'consumers re-render in Chinese immediately')
     assert.match(container.textContent ?? '', /全局默认/)
 
     await act(async () => {
-      switchBtn.click()
+      store.setLocale('en')
     })
     assert.match(container.textContent ?? '', /Models & Credentials Center/, 'switching back to en restores English immediately')
   } finally {

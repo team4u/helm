@@ -148,7 +148,7 @@ function renderTimeline(opts: {
         detailEntries: opts.entries ?? [],
         starters: opts.starters,
         sendingPending: opts.sendingPending ?? false,
-        ...(opts.live !== undefined ? { live: store.conversationLives[conversation.id] } : {}),
+        ...(opts.live !== undefined ? { live: store.getConversationLive(conversation.id) } : {}),
         onRequestEdit: () => {},
         onRequestStarter: (text) => { clicks.push(text) },
       }),

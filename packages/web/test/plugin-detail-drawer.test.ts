@@ -482,7 +482,7 @@ test('PluginDetailDrawer：当 store 中存在 settingsPanels 扩展时正确挂
     const plugin = makePlugin({ id: 'builtin:workflow' })
 
     const store = makeTestStore({
-      groupedUi: groupUiContributions([
+      uiContributions: [
         {
           pluginId: 'builtin:workflow',
           surface: 'settings.panel',
@@ -496,7 +496,7 @@ test('PluginDetailDrawer：当 store 中存在 settingsPanels 扩展时正确挂
             },
           },
         },
-      ]),
+      ],
     })
 
     await act(async () => {
@@ -911,24 +911,9 @@ test('PluginDetailDrawer：标题与 ID 靠左对齐，零图标渲染，右上�
 
 test('PluginDetailDrawer：「右屏打开」按钮具备窄屏隐藏类且不使用旧 callout--* 类', { timeout: 60_000 }, () => {
   const store = makeTestStore({
-    groupedUi: {
-      sidebarItems: [],
-      sidebarSections: [],
-      screens: [{ pluginId: 'custom:demo', spec: { id: 'main', label: '主视图', title: '主视图', client: { module: 'index.tsx', export: 'Main' } } }],
-      timelineRenderers: [],
-      markdownCodeBlocks: [],
-      toolViews: [],
-      composerPills: [],
-      composerWidgets: [],
-      composerCompleters: [],
-      artifactPreviewers: [],
-      workbenchPanels: [],
-      commands: [],
-      settingsPanels: [],
-      profileRuntimes: [],
-      uiActions: [],
-      pluginSlots: [],
-    },
+    uiContributions: [
+      { pluginId: 'custom:demo', surface: 'screen', spec: { id: 'main', label: '主视图', title: '主视图', client: { module: 'index.tsx', export: 'Main' } } },
+    ],
   })
   const html = renderToString(
     e(

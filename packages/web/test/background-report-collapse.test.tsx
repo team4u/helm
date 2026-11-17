@@ -15,11 +15,11 @@ import type {
   ConversationSummary,
   PluginUiContribution,
 } from '@helm/protocol'
-import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
-import { emptyLiveState } from '../src/lib/live-state.js'
-import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
+import { groupUiContributions } from '../src/lib/types.js'
 import { buildTimelineItems, queuedAgentTextCollapse } from '../src/conversation/timeline-model.js'
 import { HostStoreProviders } from './helpers/host-store.js'
+import { makeTestStore } from './helpers/store.js'
+import type { HelmExternalStore } from '../src/lib/helm-store.js'
 import { readHostStyles } from './helpers/host-styles.js'
 
 const e = React.createElement
@@ -86,35 +86,16 @@ test('queuedAgentTextCollapse: 阈值判定与预览截断', { timeout: 60_000 }
   assert.equal(manyLines.collapsed, true, '超过 8 行即折叠')
 })
 
-function makeStore(live: ConversationLive | undefined, entries: ConversationEntry[]): HelmStoreValue {
+function makeStore(live: ConversationLive | undefined, entries: ConversationEntry[]): HelmExternalStore {
   const conversation: ConversationSummary = {
     id: 1, title: '测试会话', profileId: 'assistant', tags: [], cwd: '/tmp',
     model: 'faux/faux-1', thinkingLevel: 'off', status: live !== undefined ? 'working' : 'idle',
     stateChangeSeq: 1, completionSeq: 0, unread: false, pinned: false, pendingAskCount: 0,
     createdAt: 1, updatedAt: 1,
   }
-  const noop = () => {}
-  const asyncNoop = async () => undefined
-  return {
-    ...emptyLiveState(),
+  return makeTestStore({
     conversations: [conversation], conversationDetails: { 1: { ...conversation, entries } },
-    conversationArtifacts: {}, groupedUi: groupUiContributions([]),
-    authReady: true, authConfigured: true, authenticated: true, authError: null,
-    connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark', themePreference: 'dark', locale: 'en', quietNotifyEnabled: false,
-    profiles: [], profilesLoaded: true, assetsLoaded: true, models: [], providers: [], credentials: [], skills: [], actions: [],
-    primaryTarget: { kind: 'conversation', conversationId: 1 }, splitTarget: null,
-    workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null, highlightedEntry: null, notices: [],
-    setTheme: noop, setThemePreference: noop, toggleTheme: noop, setLocale: noop, setQuietNotify: asyncNoop, checkAuth: asyncNoop,
-    onAuthenticated: asyncNoop, logout: noop, refreshAssets: asyncNoop, refreshNodes: async () => undefined,
-    loadConversationDetail: async () => undefined, loadEarlierEntries: asyncNoop, loadConversationArtifacts: async () => undefined,
-    ensurePluginDoc: asyncNoop, openTarget: noop, closeSplit: noop, setScreenParams: noop, setWorkbenchOpen: noop,
-    setWorkbenchTab: noop, openSpace: noop, setActiveModal: noop, dismissNotice: noop, pushNotice: noop,
-    invokePluginAction: asyncNoop,
-    subscribeSessionDoc,
-    getSessionDocState,
-    getPluginSessionDoc: asyncNoop,
-    retrySessionDoc: noop,
-  }
+  })
 }
 
 async function mountTimeline(
@@ -131,7 +112,7 @@ async function mountTimeline(
       e(
         HostStoreProviders,
         { value: store },
-        e(ConversationTimeline, { conversation: store.conversations[0]!, detailEntries: entries, ...(live ? { live } : {}), onRequestEdit: () => {} }),
+        e(ConversationTimeline, { conversation: store.getConversations()[0]!, detailEntries: entries, ...(live ? { live } : {}), onRequestEdit: () => {} }),
       ),
     )
   })

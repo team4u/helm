@@ -24,6 +24,7 @@ import { usePluginSessionDocsMap } from '../src/lib/store-context.js'
 import { usePluginSessionDocValue, usePluginSessionDocState } from '@helm/plugin-client'
 import { createPluginClientHostPort } from '../src/lib/plugin-client-host.js'
 import { makeTestStore } from './helpers/store.js'
+import type { HelmExternalStore } from '../src/lib/helm-store.js'
 import { TestStoreProvider } from './helpers/host-store.js'
 import type { HelmStoreValue } from '../src/lib/types.js'
 
@@ -57,21 +58,19 @@ const multiplexFrame = (
 type ProbeResult = { value: unknown; diagnostics: { error?: string; connected: boolean; deleted: boolean; hasValue: boolean } }
 
 interface Harness {
-  rerenderStore: (store: HelmStoreValue) => void
+  rerenderStore: (store: HelmExternalStore) => void
   unmount: () => void
 }
 
-/** 与宿主 Provider 一致：sessionDoc 具名函数跨 store 更新保持同一引用。 */
-const stableSessionDocStore = (overrides: Partial<HelmStoreValue> = {}): HelmStoreValue =>
+/** 真实 store 的 actions 即携带 session-docs 具名函数（与生产一致）。 */
+const stableSessionDocStore = (overrides: Partial<HelmStoreValue> = {}): HelmExternalStore =>
   makeTestStore({
-    subscribeSessionDoc,
-    getSessionDocState,
     ...overrides,
   })
 
 /** 挂载双探针组件（单值 hook + 诊断 hook + map hook），Flaps 收集最新结果。 */
 function mountProbes(
-  initialStore: HelmStoreValue,
+  initialStore: HelmExternalStore,
   opts: { strict?: boolean; docNames?: string[] } = {},
 ): { reads: () => ProbeResult; mapReads: () => Record<string, unknown>; harness: Harness } {
   const reads: ProbeResult[] = []
@@ -91,7 +90,7 @@ function mountProbes(
     e(TestStoreProvider, { value: currentStore }, e(Probes))
   let root: Root | undefined
   const harness: Harness = {
-    rerenderStore: (store: HelmStoreValue) => {
+    rerenderStore: (store: HelmExternalStore) => {
       currentStore = store
       act(() => { root!.render(renderTree()) })
     },
@@ -113,8 +112,8 @@ function mountProbes(
 
 test('宿主端口在快照更新后保留订阅与加载函数身份', { timeout: 60_000 }, () => {
   const store = stableSessionDocStore()
-  const initial = createPluginClientHostPort(store)
-  const updated = createPluginClientHostPort({ ...store, conversations: [] })
+  const initial = createPluginClientHostPort(store.getSnapshot())
+  const updated = createPluginClientHostPort({ ...store.getSnapshot(), conversations: [] })
   for (const key of ['subscribeSessionDoc', 'getSessionDocState', 'ensurePluginDoc', 'getPluginSessionDoc', 'loadConversationDetail', 'invokePluginAction'] as const) {
     assert.equal(updated[key], initial[key], key)
   }

@@ -17,6 +17,7 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { HostStoreProviders } from './helpers/host-store.js'
+import { makeTestStore } from './helpers/store.js'
 
 GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
@@ -24,7 +25,7 @@ Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 import type { ConversationSummary, PluginSummary, Profile, SkillSummary } from '@helm/protocol'
-import type { HelmStoreValue } from '../src/lib/types.js'
+import type { HelmExternalStore } from '../src/lib/helm-store.js'
 import { slashMenuSkills } from '../src/conversation/slash-menu-skills.js'
 
 /** Real user typing path: native setter assignment + value tracker reset + input dispatch. */
@@ -104,37 +105,17 @@ interface MountOptions {
   plugins?: PluginSummary[]
 }
 
-function makeStore(conversation: ConversationSummary, opts: MountOptions): HelmStoreValue {
-  const noop = () => {}
-  const asyncNoop = async () => undefined
-  return {
-    authReady: true, authConfigured: true, authenticated: true, authError: null,
-    connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark' as const, themePreference: 'system' as const,
-    locale: 'en' as const,
-    conversations: [conversation], conversationDetails: {}, conversationLives: {}, conversationArtifacts: {},
-    pendingAsks: [], resolvedAsksByConv: {},
+function makeStore(conversation: ConversationSummary, opts: MountOptions): HelmExternalStore {
+  return makeTestStore({
+    conversations: [conversation],
     plugins: opts.plugins ?? [
       { id: 'builtin:profile', name: 'assistant', locked: true, enabled: true, hooks: [], actions: [], tools: [] },
       { id: 'builtin:herdr', name: 'herdr', locked: false, enabled: true, hooks: [], actions: [], tools: [] },
     ],
-    uiContributions: [],
-    groupedUi: {
-      sidebarItems: [], sidebarSections: [], screens: [], timelineRenderers: [], toolViews: [],
-      composerPills: [], composerWidgets: [], workbenchPanels: [], commands: [], settingsPanels: [],
-      profileRuntimes: [], conversationHeaderActions: [], conversationRowActions: [], timelineEntryActions: [], pluginSlots: [],
-    },
-    pluginDocs: {}, nodes: [], profiles: opts.profiles, profilesLoaded: true, assetsLoaded: true, models: [], providers: [], credentials: [],
-    skills: opts.skills ?? CATALOG, actions: [],
-    primaryTarget: { kind: 'conversation', conversationId: conversation.id }, splitTarget: null,
-    workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null, highlightedEntry: null,
-    setTheme: noop, setThemePreference: noop, toggleTheme: noop, checkAuth: asyncNoop,
-    onAuthenticated: asyncNoop, logout: noop, refreshAssets: asyncNoop, refreshNodes: asyncNoop,
-    loadConversationDetail: asyncNoop, loadEarlierEntries: asyncNoop, loadConversationArtifacts: asyncNoop,
-    ensurePluginDoc: asyncNoop, openTarget: noop, closeSplit: noop, setWorkbenchOpen: noop,
-    setWorkbenchTab: noop, setActiveModal: noop, dismissNotice: noop, pushNotice: noop,
-    invokePluginAction: async () => undefined,
-    notices: [],
-  } as unknown as HelmStoreValue
+    profiles: opts.profiles,
+    skills: opts.skills ?? CATALOG,
+    primaryTarget: { kind: 'conversation', conversationId: conversation.id },
+  })
 }
 
 async function mountComposer(

@@ -5,7 +5,8 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationSummary } from '@helm/protocol'
-import type { ActiveModal, HelmStoreValue } from '../src/lib/types.js'
+import type { ActiveModal } from '../src/lib/types.js'
+import type { HelmExternalStore } from '../src/lib/helm-store.js'
 import { setStoredToken } from '../src/lib/api.js'
 
 GlobalRegistrator.register()
@@ -92,13 +93,22 @@ function mount(element: React.ReactElement): { host: HTMLElement; root: Root; un
   }
 }
 
+/** 记录真实 setActiveModal 调用序列（委托真实动作）。 */
+function spyActiveModal(store: HelmExternalStore, opened: ActiveModal[]): void {
+  const real = store.actions.setActiveModal
+  ;(store.actions as unknown as { setActiveModal: (modal: ActiveModal) => void }).setActiveModal = (modal) => {
+    opened.push(modal)
+    real(modal)
+  }
+}
+
 describe('MarkdownView workspace file links and inline images', { timeout: 60_000 }, () => {
   test('clicking a relative workspace link opens workspace-file modal with line range', { timeout: 60_000 }, async () => {
     const opened: ActiveModal[] = []
     const store = makeTestStore({
       conversations: [conv(12, '/repo')],
-      setActiveModal: (modal) => opened.push(modal),
     })
+    spyActiveModal(store, opened)
 
     resetBody()
     const mounted = mount(
@@ -144,8 +154,8 @@ describe('MarkdownView workspace file links and inline images', { timeout: 60_00
     const opened: ActiveModal[] = []
     const store = makeTestStore({
       conversations: [conv(15, '/root/code/helm')],
-      setActiveModal: (modal) => opened.push(modal),
     })
+    spyActiveModal(store, opened)
 
     resetBody()
     const mounted = mount(
@@ -206,8 +216,8 @@ describe('MarkdownView workspace file links and inline images', { timeout: 60_00
     const opened: ActiveModal[] = []
     const store = makeTestStore({
       conversations: [conv(9, '/repo')],
-      setActiveModal: (modal) => opened.push(modal),
     })
+    spyActiveModal(store, opened)
 
     resetBody()
     const mounted = mount(
@@ -338,8 +348,8 @@ describe('WorkspaceFilePreviewModal', { timeout: 60_000 }, () => {
 
     const store = makeTestStore({
       conversations: [conv(3, '/repo')],
-      setActiveModal: (modal) => opened.push(modal),
     })
+    spyActiveModal(store, opened)
 
     resetBody()
     const mounted = mount(
@@ -391,7 +401,7 @@ describe('WorkspaceFilePreviewModal', { timeout: 60_000 }, () => {
         { status: 200 },
       )) as typeof fetch
 
-    const store: HelmStoreValue = makeTestStore({ conversations: [conv(8, '/repo')] })
+    const store = makeTestStore({ conversations: [conv(8, '/repo')] })
     resetBody()
     const mounted = mount(
       e(

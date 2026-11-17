@@ -16,6 +16,7 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { HostStoreProviders } from './helpers/host-store.js'
+import { makeTestStore } from './helpers/store.js'
 
 // Critical ordering constraint: synthetic event delegation with happy-dom + react-dom 19
 // requires the happy-dom globals to be registered before importing react-dom/client; otherwise
@@ -32,7 +33,8 @@ const { createRoot } = await import('react-dom/client')
 import type { ComposerController, ConversationSummary, PluginUiContribution } from '@helm/protocol'
 import { seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { usePluginContext } from '@helm/plugin-client'
-import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
+import { groupUiContributions } from '../src/lib/types.js'
+import type { HelmExternalStore } from '../src/lib/helm-store.js'
 import {
   buildSlashMenuItems,
   commandActionPluginId,
@@ -253,34 +255,23 @@ interface CapturedRequest {
   body: Record<string, unknown>
 }
 
-function makeStore(conversation: ConversationSummary, ui: PluginUiContribution[] = []): HelmStoreValue & { notices: Array<Record<string, unknown>>; actionCalls: Array<{ pluginId: string; actionId: string; input: unknown; conversationId?: number }> } {
-  const noop = () => {}
-  const asyncNoop = async () => undefined
-  const notices: Array<Record<string, unknown>> = []
+/** 真实 external store + 动作捕获（invokePluginAction 换 spy、notices 经可观察状态读取）。 */
+function makeStore(
+  conversation: ConversationSummary,
+  ui: PluginUiContribution[] = [],
+): HelmExternalStore & { actionCalls: Array<{ pluginId: string; actionId: string; input: unknown; conversationId?: number }> } {
   const actionCalls: Array<{ pluginId: string; actionId: string; input: unknown; conversationId?: number }> = []
-  return {
-    authReady: true, authConfigured: true, authenticated: true, authError: null,
-    connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark' as const, themePreference: 'system' as const,
-    locale: 'en' as const,
-    conversations: [conversation], conversationDetails: {}, conversationLives: {}, conversationArtifacts: {},
-    pendingAsks: [], resolvedAsksByConv: {}, plugins: [], uiContributions: ui,
-    groupedUi: groupUiContributions(ui), pluginDocs: {}, nodes: [], profiles: [], profilesLoaded: true, assetsLoaded: true, models: [],
-    providers: [], credentials: [], skills: [], actions: [],
-    primaryTarget: { kind: 'conversation', conversationId: conversation.id }, splitTarget: null,
-    workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null, highlightedEntry: null,
-    setTheme: noop, setThemePreference: noop, toggleTheme: noop, checkAuth: asyncNoop,
-    onAuthenticated: asyncNoop, logout: noop, refreshAssets: asyncNoop, refreshNodes: asyncNoop,
-    loadConversationDetail: asyncNoop, loadEarlierEntries: asyncNoop, loadConversationArtifacts: asyncNoop,
-    ensurePluginDoc: asyncNoop, openTarget: noop, closeSplit: noop, setWorkbenchOpen: noop,
-    setWorkbenchTab: noop, setActiveModal: noop, dismissNotice: noop,
-    pushNotice: (n: Record<string, unknown>) => notices.push(n),
-    invokePluginAction: async (pluginId: string, actionId: string, input: unknown, conversationId?: number) => {
+  const store = makeTestStore({
+    conversations: [conversation],
+    uiContributions: ui,
+    primaryTarget: { kind: 'conversation', conversationId: conversation.id },
+  })
+  ;(store.actions as unknown as { invokePluginAction: (pluginId: string, actionId: string, input: unknown, conversationId?: number) => Promise<unknown> }).invokePluginAction =
+    async (pluginId: string, actionId: string, input: unknown, conversationId?: number) => {
       actionCalls.push({ pluginId, actionId, input, conversationId })
       return { ok: true }
-    },
-    notices,
-    actionCalls,
-  } as unknown as HelmStoreValue & { notices: Array<Record<string, unknown>>; actionCalls: Array<{ pluginId: string; actionId: string; input: unknown; conversationId?: number }> }
+    }
+  return Object.assign(store, { actionCalls })
 }
 
 /** Intercept global fetch to capture /api/conversations/:id/input bodies; reply controls success/failure. */
@@ -551,13 +542,12 @@ test('interaction: a draft whose first token hits a plugin command executes the 
 
 test('action routing: actionPluginId cross-plugin routing + conversationId as the fourth argument', { timeout: 60_000 }, async () => {
   const store = makeStore(summary(7, 'idle'), archiveCommandUi)
-  const commands = store.groupedUi.commands
-  const cross = commands.find((c) => c.spec.id === 'cross')!
-  await store.invokePluginAction(commandActionPluginId(cross), cross.spec.actionId!, cross.spec.input, 7)
-  const spy = store as unknown as { actionCalls: Array<{ pluginId: string; actionId: string; conversationId?: number }> }
-  assert.equal(spy.actionCalls[0]!.pluginId, 'p9')
-  assert.equal(spy.actionCalls[0]!.actionId, 'target-action')
-  assert.equal(spy.actionCalls[0]!.conversationId, 7)
+  const commands = store.getGroupedUi().commands
+  const cross = commands.find((c: { spec: { id: string } }) => c.spec.id === 'cross')!
+  await store.actions.invokePluginAction(commandActionPluginId(cross), cross.spec.actionId!, cross.spec.input, 7)
+  assert.equal(store.actionCalls[0]!.pluginId, 'p9')
+  assert.equal(store.actionCalls[0]!.actionId, 'target-action')
+  assert.equal(store.actionCalls[0]!.conversationId, 7)
 })
 
 test('the slash popover merges plugin commands: typing /ar pops /archive; picking runs without write-back', { timeout: 60_000 }, async () => {
@@ -645,13 +635,13 @@ test('a failing plugin slash keeps the original draft and diagnoses explicitly',
   const app = mountComposer(summary(33), [{ pluginId: 'test:slash', surface: 'commandPalette', spec: {
     id: 'archive', title: '归档', slash: 'archive', actionId: 'archive',
   } }])
-  app.store.invokePluginAction = async () => { throw new Error('action unavailable') }
+  ;(app.store.actions as unknown as { invokePluginAction: () => Promise<unknown> }).invokePluginAction = async () => { throw new Error('action unavailable') }
   try {
     await act(async () => { typeInto(textareaOf(app.host), '/archive') })
     await act(async () => {
       textareaOf(app.host).dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
     })
     assert.equal(textareaOf(app.host).value, '/archive')
-    assert.ok(app.store.notices.some((notice) => String(notice.title).includes('Command failed')))
+    assert.ok(app.store.getNotices().some((notice: { title: string }) => String(notice.title).includes('Command failed')))
   } finally { app.unmount(); restore() }
 })

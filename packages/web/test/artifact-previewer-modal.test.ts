@@ -12,10 +12,11 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { ArtifactPreviewerProps, ArtifactMetadata, ConversationSummary, PluginUiContribution } from '@helm/protocol'
-import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
+import { groupUiContributions } from '../src/lib/types.js'
 import { ArtifactPreviewModal } from '../src/conversation/ArtifactPreviewModal.js'
 import { seedPluginClientModule, resetPluginClientCache } from '../src/lib/plugin-client.js'
 import { makeTestStore } from './helpers/store.js'
+import type { HelmExternalStore } from '../src/lib/helm-store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 import { readHostStyles } from './helpers/host-styles.js'
 
@@ -125,21 +126,19 @@ function buildStore(over: {
   artifacts?: TestArtifact[]
   conversationId?: number
   asyncMeta?: boolean
-}): HelmStoreValue {
+}): HelmExternalStore {
   const conversationId = over.conversationId ?? 7
   const metas = (over.artifacts ?? []).map((a) => artifactMeta(a, conversationId))
   const store = makeTestStore({
-    groupedUi: groupUiContributions(over.contributions ?? []),
     uiContributions: over.contributions ?? [],
     conversations: over.conversations ?? [convSummary(conversationId)],
     // asyncMeta：模拟深链元数据尚未到达（load 为空操作，由测试稍后注入元数据）。
     conversationArtifacts: over.asyncMeta === true ? {} : { [conversationId]: metas },
-    loadConversationArtifacts: async () => undefined,
   })
   return store
 }
 
-function mount(host: HTMLElement, store: HelmStoreValue, artifactId: string, conversationId?: number): Root {
+function mount(host: HTMLElement, store: HelmExternalStore, artifactId: string, conversationId?: number): Root {
   let root: Root | undefined
   act(() => {
     root = createRoot(host)
@@ -167,7 +166,7 @@ async function flush(): Promise<void> {
 }
 
 /** 再渲染一次（触发 client 组件缓存快路径等渲染批次）。 */
-async function rerender(root: Root, store: HelmStoreValue, artifactId: string, conversationId?: number): Promise<void> {
+async function rerender(root: Root, store: HelmExternalStore, artifactId: string, conversationId?: number): Promise<void> {
   await act(async () => {
     root.render(e(
       HostStoreProviders, { value: store },
@@ -295,7 +294,7 @@ test('scope 贡献：无会话上下文不可泛命中；会话元数据命中�
 
   // 无会话上下文（conversationId undefined 且 store 无该会话）
   const storeNoCtx = buildStore({ contributions: [contribution], artifacts: [artifact], conversationId: 999 })
-  storeNoCtx.conversations = []
+  storeNoCtx.updateLive((prev) => ({ ...prev, conversations: [] }))
   resetBody()
   const host = document.createElement('div')
   document.body.appendChild(host)
@@ -343,8 +342,8 @@ test('插件停用（贡献移除）：选择状态有效回退默认渲染', { 
   assert.notEqual(previewPanel(), null, '命中插件贡献提供选择')
 
   // 模拟插件停用：uiContributions 移除 → groupedUi 重建
-  const stopped = { ...store, groupedUi: groupUiContributions([]), uiContributions: [] }
-  await rerender(root, stopped, 'art-mv', 7)
+  store.updateLive((prev) => ({ ...prev, uiContributions: [] }))
+  await rerender(root, store, 'art-mv', 7)
   await flush()
   assert.ok(previewPanel() === null, '贡献移除后插件视图即时消失')
   assert.ok(document.querySelector('.modal-body') !== null, '宿主默认渲染仍在')
@@ -435,10 +434,10 @@ test('深链元数据异步到达：加载完成后按扩展名命中（名称�
   assert.ok(previewPanel() === null, '元数据未到不按扩展名命中')
 
   // 元数据异步到达（name 仍未知：该产物无名称）→ 依旧不命中（不伪造名称）
-  ;(store as { conversationArtifacts: Record<number, ArtifactMetadata[]> }).conversationArtifacts = {
+  store.setConversationArtifacts({
     7: [artifactMeta(svg, 7)],
-  }
-  await rerender(root, { ...store }, 'art-svg', 7)
+  })
+  await rerender(root, store, 'art-svg', 7)
   await flush()
   assert.ok(previewPanel() === null, '名称未知不以 artifactId 猜后缀')
 
@@ -462,10 +461,10 @@ test('深链元数据异步到达：命名元数据后到 → 扩展名命中插
   await flush()
   assert.ok(previewPanel() === null, '元数据未到不命中')
 
-  ;(store as { conversationArtifacts: Record<number, ArtifactMetadata[]> }).conversationArtifacts = {
+  store.setConversationArtifacts({
     7: [artifactMeta(svg, 7)],
-  }
-  await rerender(root, { ...store }, 'art-svg2', 7)
+  })
+  await rerender(root, store, 'art-svg2', 7)
   await flush()
   const panel = previewPanel()
   assert.ok(panel !== null, '命名元数据到达后扩展名命中')
@@ -485,7 +484,8 @@ test('ArtifactPreviewModal switches UI copy between en and zh-CN', { timeout: 60
   resetBody()
   const host = document.createElement('div')
   document.body.appendChild(host)
-  const root = mount(host, { ...baseStore, locale: 'zh-CN' }, 'art-i18n', 7)
+  baseStore.setLocale('zh-CN')
+  const root = mount(host, baseStore, 'art-i18n', 7)
   await flush()
 
   const dialog = document.querySelector('[role="dialog"]')
@@ -496,7 +496,10 @@ test('ArtifactPreviewModal switches UI copy between en and zh-CN', { timeout: 60
   assert.match(document.body.textContent ?? '', /源码/)
   assert.match(document.body.textContent ?? '', /下载/)
 
-  await rerender(root, { ...baseStore, locale: 'en' }, 'art-i18n', 7)
+  await act(async () => {
+    baseStore.setLocale('en')
+  })
+  await rerender(root, baseStore, 'art-i18n', 7)
   await flush()
   assert.equal(document.querySelector('[role="dialog"]')?.getAttribute('aria-label'), 'Artifact preview: notes.md')
   assert.ok(document.querySelector('button[aria-label="Close preview"]') !== null, 'close button localized back to en')
@@ -532,13 +535,10 @@ test('Markdown 产物预览期间元数据对象引用刷新时不卸载 Markdow
   assert.equal(modalBody.scrollTop, 240)
 
   // 模拟后台重拉 /artifacts 返回新数组与新 meta 对象引用（含新增其他产物）
-  const refreshedStore = {
-    ...store,
-    conversationArtifacts: {
-      7: [artifactMeta(markdown, 7), artifactMeta(extra, 7)],
-    },
-  }
-  await rerender(root, refreshedStore, 'art-stable-scroll', 7)
+  store.setConversationArtifacts({
+    7: [artifactMeta(markdown, 7), artifactMeta(extra, 7)],
+  })
+  await rerender(root, store, 'art-stable-scroll', 7)
   await flush()
 
   const previewAfter = document.querySelector<HTMLElement>('.artifact-markdown-preview')
@@ -564,11 +564,8 @@ test('Markdown 产物预览期间元数据对象引用刷新时不卸载 Markdow
   await flush()
   assert.ok(document.querySelector('.artifact-markdown-preview') === null, '元数据未到时 octet-stream 不按 Markdown 解码')
 
-  const hydratedStore = {
-    ...lateStore,
-    conversationArtifacts: { 7: [artifactMeta(lateMd, 7)] },
-  }
-  await rerender(lateRoot, hydratedStore, 'art-late-md', 7)
+  lateStore.setConversationArtifacts({ 7: [artifactMeta(lateMd, 7)] })
+  await rerender(lateRoot, lateStore, 'art-late-md', 7)
   await flush()
   const latePreview = document.querySelector('.artifact-markdown-preview')
   assert.ok(latePreview !== null, '命名元数据到达后应正常解码并渲染 Markdown')

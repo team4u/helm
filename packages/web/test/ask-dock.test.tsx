@@ -21,6 +21,7 @@ Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { AskDock } = await import('../src/conversation/AskDock.js')
 const { makeTestStore } = await import('./helpers/store.js')
+type HelmExternalStore = import('../src/lib/helm-store.js').HelmExternalStore
 const { TestStoreProvider } = await import('./helpers/host-store.js')
 const e = React.createElement
 const originalFetch = globalThis.fetch
@@ -73,13 +74,14 @@ const pendingAsks = [
   ask('ask-other', 9),
 ]
 
-function makeStore(overrides: Partial<HelmStoreValue> = {}): HelmStoreValue {
-  return makeTestStore({
+function makeStore(overrides: Partial<HelmStoreValue> = {}): HelmExternalStore {
+  const store = makeTestStore({
     conversations,
     pendingAsks,
-    setActiveModal: (modal: ActiveModal) => { activeModal = modal },
     ...overrides,
   })
+  ;(store.actions as unknown as { setActiveModal: (modal: ActiveModal) => void }).setActiveModal = (modal) => { activeModal = modal }
+  return store
 }
 
 function installFetch(status = 200): void {
@@ -96,7 +98,7 @@ function installFetch(status = 200): void {
   }) as typeof fetch
 }
 
-async function renderAskDock(store: HelmStoreValue, conversationId: number): Promise<void> {
+async function renderAskDock(store: HelmExternalStore, conversationId: number): Promise<void> {
   // When rendering multiple times in one test (switching viewpoints), tear down the
   // previous tree first so no stale card DOM lingers.
   if (root !== undefined) act(() => root?.unmount())
@@ -171,7 +173,7 @@ test('清亮化：seq / owner 插件不再是常驻徽章，改为 info 入口 +
   const ownerAsks = [
     { ...ask('ask-meta', 1, 7), ownerPluginId: 'builtin:triggers' },
   ]
-  await renderAskDock(makeTestStore({ conversations, pendingAsks: ownerAsks, setActiveModal: (m: ActiveModal) => { activeModal = m } }), 1)
+  await renderAskDock(makeStore({ pendingAsks: ownerAsks }), 1)
   const header = document.querySelector('.ask-dock-header') as HTMLElement | null
   assert.ok(header !== null)
   // 常驻徽章移除：头部不再出现 seq N 文本与 owner 插件徽章。

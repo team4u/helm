@@ -8,12 +8,6 @@ export {
   formatTime,
 } from '@helm/plugin-client'
 
-/** Error to readable text (shared by notices / inline errors / connection-failure hints). */
-export function errorText(err: unknown): string {
-  if (err instanceof Error) return err.message
-  return String(err)
-}
-
 /**
  * Compact human-readable token counts (strictly mirrors the pi agent footer formatTokens tiers,
  * same source as the conversation usage display):

@@ -21,7 +21,7 @@ try {
 }
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
-const { HelmStoreContext } = await import('../src/lib/store-context.js')
+const { HelmExternalStoreContext } = await import('./helpers/store.js')
 const e = React.createElement
 
 const savedResizeObserver = globalThis.ResizeObserver
@@ -65,7 +65,7 @@ async function renderTimeline(entries: ConversationEntry[]): Promise<HTMLElement
   await act(async () => {
     root!.render(
       e(
-        HelmStoreContext.Provider,
+        HelmExternalStoreContext.Provider,
         { value: store },
         e(ConversationTimeline, {
           conversation: conv,

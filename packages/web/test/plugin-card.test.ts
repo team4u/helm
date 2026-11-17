@@ -18,7 +18,7 @@ const {
   DEFAULT_PLUGIN_ICON,
 } = await import('../src/plugins/plugin-card-model.js')
 const { createWebTranslator } = await import('../src/i18n/catalog.js')
-const { HelmStoreContext, makeTestStore } = await import('./helpers/store.js')
+const { HelmExternalStoreContext, makeTestStore } = await import('./helpers/store.js')
 
 // ---------------------------------------------------------------------------
 // 辅助 Mock 插件数据
@@ -527,48 +527,37 @@ test('PluginCard：插件名与描述按 store locale 解析，切换 en -> zh-C
     description: { en: 'Bilingual glossary cards.', 'zh-CN': '双语术语卡片。' },
   })
 
-  let committedLocale: 'en' | 'zh-CN' = 'en'
-  function LocaleHarness(): React.JSX.Element {
-    const [locale, setLocale] = React.useState<'en' | 'zh-CN'>('en')
-    committedLocale = locale
-    const store = React.useMemo(
-      () => makeTestStore({ locale, setLocale: (next) => setLocale(next) }),
-      [locale],
-    )
-    return e(
-      HelmStoreContext.Provider,
-      { value: store },
-      e(PluginCard, { plugin, selected: false, onSelect: () => {}, onToggle: () => {} }),
-      e('button', { type: 'button', onClick: () => setLocale(locale === 'en' ? 'zh-CN' : 'en') }, 'switch-locale'),
-    )
-  }
-
+  // 真实 store.setLocale 驱动 prefs 领域订阅：消费方原位切换（与生产同链路）。
+  const store = makeTestStore({ locale: 'en' })
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = ReactDOMClient.createRoot(container)
   try {
     act(() => {
-      root.render(e(LocaleHarness))
+      root.render(
+        e(
+          HelmExternalStoreContext.Provider,
+          { value: store },
+          e(PluginCard, { plugin, selected: false, onSelect: () => {}, onToggle: () => {} }),
+        ),
+      )
     })
     assert.match(container.textContent, /Glossary/)
     assert.match(container.textContent, /Bilingual glossary cards\./)
     assert.ok(!container.textContent!.includes('术语表'), 'en 下不得渲染 zh-CN 文案')
 
-    const switchBtn = [...container.querySelectorAll('button')].find(
-      (b) => b.textContent === 'switch-locale',
-    ) as HTMLButtonElement
     act(() => {
-      switchBtn.click()
+      store.setLocale('zh-CN')
     })
-    assert.equal(committedLocale, 'zh-CN')
+    assert.equal(store.getPrefsSlice().locale, 'zh-CN')
     assert.match(container.textContent, /术语表/)
     assert.match(container.textContent, /双语术语卡片。/)
     assert.ok(!container.textContent!.includes('Glossary'), 'zh-CN 下不得残留 en 文案')
 
     act(() => {
-      switchBtn.click()
+      store.setLocale('en')
     })
-    assert.equal(committedLocale, 'en')
+    assert.equal(store.getPrefsSlice().locale, 'en')
     assert.match(container.textContent, /Glossary/, '切回 en 立即恢复英文展示名')
   } finally {
     act(() => {
@@ -614,7 +603,7 @@ test('plugin-card-model & PluginCard：en / zh-CN 双语描述、故障阶段标
 
   const zhStore = makeTestStore({ locale: 'zh-CN' })
   const zhHtml = renderToString(
-    e(HelmStoreContext.Provider, { value: zhStore },
+    e(HelmExternalStoreContext.Provider, { value: zhStore },
       e(PluginCard, { plugin, selected: false, onSelect: () => {}, onToggle: () => {} }),
     ),
   )
