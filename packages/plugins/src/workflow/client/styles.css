@@ -187,23 +187,29 @@
   min-width: 0;
 }
 
-.subagent-live-id,
+.subagent-live-id {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--fg-subtle);
+}
+
 .subagent-live-title > .badge,
 .subagent-live-trigger > svg,
 .subagent-live-trigger > .badge {
   flex-shrink: 0;
 }
 
-/* Meaningful user title: restrained mono layout, long titles ellipsize instead of blowing up the header */
+/* Primary task title: prominent weight and foreground color, ellipsizes cleanly when space is tight */
 .subagent-live-title-text {
-  font-size: 11px;
-  font-weight: 400;
-  color: var(--fg-muted);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
-  max-width: 220px;
 }
 
 .subagent-live-doing {

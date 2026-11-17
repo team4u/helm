@@ -20,6 +20,7 @@ import {
   ACTION_ABORT,
   ACTION_DETACH,
   actionDetachDone,
+  execConversationTitle,
   TRAY_COLLAPSE,
   TRAY_DETAILS,
   TRAY_EXPAND,
@@ -170,6 +171,8 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
               nowMs !== undefined && item.startedAt !== undefined && nowMs >= item.startedAt
                 ? formatDurationMs(nowMs - item.startedAt)
                 : undefined
+            const isFallbackConvTitle =
+              item.conversationId !== undefined && item.title === execConversationTitle(item.conversationId, locale)
             return (
               <div key={item.key} className="workflow-active-tray-row">
                 <div className="workflow-active-tray-row-main">
@@ -179,6 +182,9 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
                     className={item.isBlocked ? 'workflow-tray-icon-warn' : `${SPIN} workflow-tray-icon-accent`}
                   />
                   <span className="workflow-active-tray-row-title">{item.title}</span>
+                  {item.conversationId !== undefined && !isFallbackConvTitle ? (
+                    <span className="workflow-active-tray-row-id tabular-nums">{`#${item.conversationId}`}</span>
+                  ) : null}
                   {item.progress !== undefined ? (
                     <span className="badge badge-neutral workflow-trace-badge tabular-nums">
                       {`${item.progress.done}/${item.progress.total}`}

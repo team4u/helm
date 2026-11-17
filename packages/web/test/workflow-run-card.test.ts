@@ -965,3 +965,35 @@ test('SSR：resumedByRunId 已接管隐藏恢复入口；工作台批量恢复�
   assert.ok(subHtml.includes('Resume this background subagent task'), '子代理卡应显示单卡恢复按钮')
   assert.ok(!EMOJI_RE.test(subHtml), '恢复入口渲染输出不得包含 Emoji')
 })
+
+test('resolveWorkflowRunDisplayName 与 SSR：run.name 为占位/runId 时优先取 description 首行，kv-grid 保留 run.id', { timeout: 60_000 }, async () => {
+  assert.equal(m.resolveWorkflowRunDisplayName(run({ id: 'wf_1', name: '发布流水线', description: '详细说明' })), '发布流水线')
+  assert.equal(
+    m.resolveWorkflowRunDisplayName(run({ id: 'wf_2', name: 'wf_2', description: '每日构建与回归检查\n第二行' })),
+    '每日构建与回归检查',
+  )
+  assert.equal(
+    m.resolveWorkflowRunDisplayName(run({ id: 'wf_3', name: 'subagent:herdr:pi', description: '修复 lint 错误' })),
+    '修复 lint 错误',
+  )
+  assert.equal(m.resolveWorkflowRunDisplayName(run({ id: 'wf_4', name: 'wf_4' })), 'wf_4')
+
+  const unnamedRun = run({
+    id: 'wf_fallback_desc',
+    name: 'wf_fallback_desc',
+    description: '端到端冒烟验收\n第二行详情',
+    status: 'completed',
+    parentToolCallId: 'call_fallback',
+    nodes: [node({ id: 'a', kind: 'action', status: 'done', label: '步骤一' })],
+  })
+  const toolHtml = await renderWorkflowToolView(
+    { callId: 'call_fallback', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1, siblingCalls: [] },
+    { runs: [unnamedRun] },
+  )
+  assert.ok(toolHtml.includes('端到端冒烟验收'), 'WorkflowToolView 应主显 description 首行')
+  assert.ok(!toolHtml.includes('wf_fallback_desc'), 'WorkflowToolView 不应回退暴露 runId 充当标题')
+
+  const wbHtml = await renderWorkflowWorkbench({ runs: [unnamedRun] })
+  assert.match(wbHtml, /<strong>端到端冒烟验收<\/strong>/, 'WorkflowRunCardBody 头部应主显 description 首行')
+  assert.ok(wbHtml.includes('wf_fallback_desc'), '展开卡片 kv-grid 元数据保留 run.id')
+})

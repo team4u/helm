@@ -14,7 +14,7 @@
 
 import { DEFAULT_HELM_LOCALE, type HelmLocale } from '@helm/plugin-client'
 import type { ConversationEntry } from '@helm/protocol'
-import { extractCleanPreviewLine, summarizeReadableJson } from './model-format.ts'
+import { extractCleanPreviewLine, isPlaceholderRunName, summarizeReadableJson } from './model-format.ts'
 
 /** Report kind (meta.kind; decides the card title). */
 export type BackgroundReportKind = 'subagent_report' | 'workflow_report'
@@ -34,6 +34,8 @@ export interface BackgroundReportView {
   invalid: false
   kind: BackgroundReportKind
   runId: string
+  /** Task display name from report payload (never invented when absent or placeholder). */
+  name?: string
   status: BackgroundReportStatus
   /** Delivery timestamp (epoch ms, from entry.createdAt or data.createdAt). */
   createdAt?: number
@@ -109,7 +111,10 @@ export function parseBackgroundReportEntry(entry: ConversationEntry): Background
 
   if (typeof r.runId !== 'string' || r.runId !== backgroundRunId) return invalidOf(entry)
   if (typeof r.status !== 'string' || !TERMINAL_STATUSES.has(r.status)) return invalidOf(entry)
+  if (r.name !== undefined && typeof r.name !== 'string') return invalidOf(entry)
   if (r.error !== undefined && typeof r.error !== 'string') return invalidOf(entry)
+  const rawName = typeof r.name === 'string' ? r.name.trim() : ''
+  const name = rawName !== '' && !isPlaceholderRunName(rawName, r.runId) ? rawName : undefined
 
   // execution: only the navigation-relevant conversationId is consumed
   // (positive integer); other fields stay preserved in the raw text.
@@ -144,6 +149,7 @@ export function parseBackgroundReportEntry(entry: ConversationEntry): Background
     invalid: false,
     kind,
     runId: r.runId,
+    ...(name !== undefined ? { name } : {}),
     status: r.status as BackgroundReportStatus,
     ...(createdAt !== undefined ? { createdAt } : {}),
     hasResult: Object.hasOwn(r, 'result'),

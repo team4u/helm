@@ -30,7 +30,7 @@ import { buildExecutionTree } from './model-execution-tree.ts'
 import type { ExecutionNode } from './model-execution-tree.ts'
 import { executionToolStatus } from './model-execution-status.ts'
 import { stringifyPretty } from './model-format.ts'
-import { listResumableFailedRuns, parseResumeFailedResult } from './model-run.ts'
+import { listResumableFailedRuns, parseResumeFailedResult, resolveWorkflowRunDisplayName } from './model-run.ts'
 import {
   WORKBENCH_EMPTY_NO_CONVERSATION,
   WORKBENCH_EMPTY_NO_RUNS,
@@ -351,7 +351,7 @@ function ExternalSubagentWorkbenchCard({
           }}
           nodeId={worktreeNode?.nodeId}
           baseCommit={worktree.baseCommit}
-          taskLabel={run.name}
+          taskLabel={resolveWorkflowRunDisplayName(run)}
           parentConversationId={run.conversationId}
         />
       ) : null}

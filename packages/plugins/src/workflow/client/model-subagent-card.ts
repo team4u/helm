@@ -11,7 +11,14 @@ import type {
   ConversationSummary,
 } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
-import { extractCleanPreviewLine, firstLineOf } from './model-format.ts'
+import {
+  extractCleanPreviewLine,
+  firstLineOf,
+  isPlaceholderNodeLabel,
+  isPlaceholderRunName,
+  isPlaceholderSubagentTitle,
+  stripStructuredOutputContract,
+} from './model-format.ts'
 import { parseSubagentExecutionInfo, type SubagentParentToolSummary } from './model-subagent-link.ts'
 import { buildSubagentStreamLines, formatSemanticToolAction } from './model-subagent-stream.ts'
 import {
@@ -117,22 +124,15 @@ export function subagentBadge(
 
 /**
  * Compact card heading title: only returns when summary.title is a meaningful
- * user title. Kernel-generated defaults (`子代理 #N` / `子会话 #N`) are
- * backend output conventions and deliberately stay unmatched here.
+ * user title. Kernel-generated defaults (`subagent N`, `Subagent #N`,
+ * `子代理 N`, `子代理 #N`, `子会话 N`, `子会话 #N`) are filtered so they
+ * never short-circuit downstream fallbacks.
  */
 export function compactCardTitle(title: string | undefined, childConversationId: number): string | undefined {
   if (title === undefined) return undefined
   const trimmed = title.trim()
-  if (trimmed === '') return undefined
-  if (trimmed === `子代理 ${childConversationId}` || trimmed === `子会话 ${childConversationId}`) return undefined
+  if (isPlaceholderSubagentTitle(trimmed, childConversationId)) return undefined
   return trimmed
-}
-
-/** Structured-output contract boilerplate injected by spawn. */
-const STRUCTURED_OUTPUT_CONTRACT_RE = /<structured_output_contract>[\s\S]*?<\/structured_output_contract>/g
-
-function stripStructuredOutputContract(text: string): string {
-  return text.replace(STRUCTURED_OUTPUT_CONTRACT_RE, '')
 }
 
 /** Last non-empty line of a text (dropping # / - leading prefixes). */
@@ -178,7 +178,7 @@ export function latestTurnStartedAt(entries: ReadonlyArray<ConversationEntry> | 
   return undefined
 }
 
-/** Card heading task title: user title > parent tool prompt > first background run node label / prompt > first helm.input. */
+/** Card heading task title: user title > non-placeholder backgroundRun.name > tool label / prompt > first background run node label / prompt > first helm.input. */
 export function resolveSubagentTaskTitle(
   summary: ConversationSummary | undefined,
   childConversationId: number,
@@ -188,6 +188,15 @@ export function resolveSubagentTaskTitle(
 ): string | undefined {
   const custom = compactCardTitle(summary?.title, childConversationId)
   if (custom !== undefined) return custom
+  if (backgroundRun !== undefined && !isPlaceholderRunName(backgroundRun.name, backgroundRun.id)) {
+    const cleaned = extractCleanPreviewLine(backgroundRun.name, 60)
+    if (cleaned !== '') return cleaned
+  }
+  const toolLabel = toolSummary?.label
+  if (!isPlaceholderNodeLabel(toolLabel)) {
+    const cleaned = extractCleanPreviewLine(toolLabel!, 60)
+    if (cleaned !== '') return cleaned
+  }
   const prompt = toolSummary?.prompt
   if (prompt !== undefined && prompt.trim() !== '') {
     const cleaned = extractCleanPreviewLine(stripStructuredOutputContract(prompt), 60)
@@ -195,8 +204,8 @@ export function resolveSubagentTaskTitle(
   }
   const firstNode = backgroundRun?.nodes?.[0]
   const label = firstNode?.label
-  if (label !== undefined && label.trim() !== '' && label.trim() !== 'subagent') {
-    const cleaned = extractCleanPreviewLine(label, 60)
+  if (!isPlaceholderNodeLabel(label)) {
+    const cleaned = extractCleanPreviewLine(label!, 60)
     if (cleaned !== '') return cleaned
   }
   const nodePrompt = firstNode?.prompt
@@ -212,6 +221,28 @@ export function resolveSubagentTaskTitle(
         if (cleaned !== '') return cleaned
       }
     }
+  }
+  return undefined
+}
+
+/** Task title for external / pre-spawn subagent trace rows without a native child conversationId. */
+export function resolveExternalSubagentTaskTitle(
+  toolSummary?: SubagentParentToolSummary,
+  rawPrompt?: string,
+  backgroundRun?: WorkflowRunSummary,
+): string | undefined {
+  if (backgroundRun !== undefined && !isPlaceholderRunName(backgroundRun.name, backgroundRun.id)) {
+    const cleaned = extractCleanPreviewLine(backgroundRun.name, 60)
+    if (cleaned !== '') return cleaned
+  }
+  if (!isPlaceholderNodeLabel(toolSummary?.label)) {
+    const cleaned = extractCleanPreviewLine(toolSummary!.label!, 60)
+    if (cleaned !== '') return cleaned
+  }
+  const prompt = rawPrompt ?? toolSummary?.prompt
+  if (prompt !== undefined && prompt.trim() !== '') {
+    const cleaned = extractCleanPreviewLine(stripStructuredOutputContract(prompt), 60)
+    if (cleaned !== '') return cleaned
   }
   return undefined
 }

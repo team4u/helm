@@ -114,6 +114,13 @@
   min-width: 0;
 }
 
+.workflow-active-tray-row-id {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-subtle);
+}
+
 .workflow-active-tray-row-doing {
   color: var(--fg-muted);
   font-size: 11px;
@@ -131,6 +138,13 @@
 }
 
 /* Timeline single-row trace helper styles (same structure as the host .trace-row 26px) */
+.workflow-trace-id {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-subtle);
+}
+
 .workflow-trace-badge {
   height: 18px;
   line-height: 16px;

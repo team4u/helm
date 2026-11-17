@@ -7,14 +7,22 @@
 import { DEFAULT_HELM_LOCALE, resolveLocalizedText, type HelmLocale } from '@helm/plugin-client'
 import type { ExecutionNode } from './model-execution-tree.ts'
 import { compactCardTitle } from './model-subagent-card.ts'
-import { firstLineOf } from './model-format.ts'
-import { resolveNodeElapsedMs, resolveRunElapsedMs } from './model-run.ts'
+import {
+  extractCleanPreviewLine,
+  firstLineOf,
+  isPlaceholderNodeLabel,
+  isPlaceholderRunName,
+  stripStructuredOutputContract,
+} from './model-format.ts'
+import { resolveNodeElapsedMs, resolveRunElapsedMs, resolveWorkflowRunDisplayName } from './model-run.ts'
 import {
   execApprovalItem,
+  execApprovalItemNamed,
   execConversationTitle,
   EXEC_EXTERNAL_FALLBACK,
   execFrontlineContainer,
   execFrontlineConversation,
+  execFrontlineNamed,
 } from './copy.ts'
 
 /**
@@ -34,19 +42,71 @@ export function resolveExecutionNodeElapsedMs(
   return undefined
 }
 
-/** Node display title: user title > run node label / prompt > conversation and run fallbacks (never invented). */
-export function executionNodeTitle(node: ExecutionNode, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+/** Extract a meaningful human-readable node name when available (undefined when only placeholder/id exists). */
+export function readableExecutionNodeName(node: ExecutionNode): string | undefined {
   const label = node.label ?? node.runNode?.label
   if (node.kind === 'conversation') {
     const custom = compactCardTitle(node.summary?.title, node.conversationId ?? 0)
     if (custom !== undefined) return custom
-    if (label !== undefined && label.trim() !== '' && label.trim() !== 'subagent') return firstLineOf(label, 60)
-    const prompt = node.runNode?.prompt
-    if (prompt !== undefined && prompt.trim() !== '') return firstLineOf(prompt, 60)
+    if (!isPlaceholderNodeLabel(label)) return firstLineOf(label!, 60)
+    if (node.run?.kind === 'subagent' && !isPlaceholderRunName(node.run.name, node.run.id)) {
+      return firstLineOf(node.run.name, 60)
+    }
+    const prompt = node.runNode?.prompt ?? (node.run?.kind === 'subagent' ? node.run.nodes?.[0]?.prompt : undefined)
+    if (prompt !== undefined && prompt.trim() !== '') {
+      const cleaned = extractCleanPreviewLine(stripStructuredOutputContract(prompt), 60)
+      if (cleaned !== '') return cleaned
+    }
+    return undefined
+  }
+  if (node.kind === 'workflow') {
+    if (!isPlaceholderNodeLabel(node.label) && (node.run === undefined || node.label?.trim() !== node.run.id)) {
+      return firstLineOf(node.label!, 60)
+    }
+    if (node.run !== undefined) {
+      const resolved = resolveWorkflowRunDisplayName(node.run)
+      if (resolved !== node.run.id) return resolved
+    }
+    return undefined
+  }
+  if (node.kind === 'external') {
+    if (!isPlaceholderNodeLabel(node.label) && (node.run === undefined || node.label?.trim() !== node.run.id)) {
+      return firstLineOf(node.label!, 60)
+    }
+    if (node.run !== undefined && !isPlaceholderRunName(node.run.name, node.run.id)) {
+      return firstLineOf(node.run.name, 60)
+    }
+    const firstNode = node.run?.nodes?.[0]
+    if (!isPlaceholderNodeLabel(firstNode?.label)) return firstLineOf(firstNode!.label!, 60)
+    if (firstNode?.prompt !== undefined && firstNode.prompt.trim() !== '') {
+      const cleaned = extractCleanPreviewLine(stripStructuredOutputContract(firstNode.prompt), 60)
+      if (cleaned !== '') return cleaned
+    }
+    return undefined
+  }
+  // workflow-node
+  if (!isPlaceholderNodeLabel(label)) return firstLineOf(label!, 60)
+  if (node.runNode?.prompt !== undefined && node.runNode.prompt.trim() !== '') {
+    const cleaned = extractCleanPreviewLine(stripStructuredOutputContract(node.runNode.prompt), 60)
+    if (cleaned !== '') return cleaned
+  }
+  return undefined
+}
+
+/** Node display title: user title > run name / run node label / prompt > conversation and run fallbacks (never invented). */
+export function executionNodeTitle(node: ExecutionNode, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+  const readable = readableExecutionNodeName(node)
+  if (readable !== undefined) return readable
+  if (node.kind === 'conversation') {
     return execConversationTitle(node.conversationId ?? 0, locale)
   }
-  if (label !== undefined && label.trim() !== '') return firstLineOf(label, 60)
-  return node.run?.name ?? resolveLocalizedText(EXEC_EXTERNAL_FALLBACK, locale)
+  if (node.kind === 'workflow' && node.run !== undefined) {
+    return resolveWorkflowRunDisplayName(node.run)
+  }
+  if (node.kind === 'workflow-node' && node.runNode !== undefined) {
+    return node.runNode.id
+  }
+  return resolveLocalizedText(EXEC_EXTERNAL_FALLBACK, locale)
 }
 
 /** Frontline activity item: one-line summary of a node currently executing inside the subtree. */
@@ -59,18 +119,25 @@ export interface ExecutionFrontlineItem {
 function executionFrontlineText(node: ExecutionNode, hasDeeper: boolean, locale: HelmLocale): string | undefined {
   if (node.status !== 'working') return undefined
   if (node.kind === 'conversation') {
+    const name = readableExecutionNodeName(node)
+    const convId = node.conversationId ?? 0
     const doing = node.summary?.doing?.trim()
-    if (doing !== undefined && doing !== '') return `#${node.conversationId} ${doing}`
+    if (doing !== undefined && doing !== '') {
+      return name !== undefined ? execFrontlineNamed(name, convId, doing, locale) : `#${convId} ${doing}`
+    }
     // No own doing and the subtree already has a deeper frontline: do not
     // repeat a placeholder fallback line (parent waiting states yield).
-    return hasDeeper ? undefined : execFrontlineConversation(node.conversationId ?? 0, locale)
+    if (hasDeeper) return undefined
+    return name !== undefined
+      ? execFrontlineNamed(name, convId, undefined, locale)
+      : execFrontlineConversation(convId, locale)
   }
   // A container's (workflow / external run) own execution is its children:
   // skip when the subtree already has a deeper frontline.
   return hasDeeper
     ? undefined
     : execFrontlineContainer(
-        node.runNode?.label ?? node.label ?? node.run?.name ?? node.key,
+        readableExecutionNodeName(node) ?? node.run?.id ?? node.key,
         locale,
       )
 }
@@ -137,11 +204,14 @@ export function collectExecutionApprovals(
         !seen.has(node.key)
       ) {
         seen.add(node.key)
-        const title = compactCardTitle(node.summary?.title, node.conversationId)
+        const title = readableExecutionNodeName(node)
         items.push({
           key: node.key,
           conversationId: node.conversationId,
-          text: title !== undefined ? `#${node.conversationId} ${title}` : execApprovalItem(node.conversationId, locale),
+          text:
+            title !== undefined
+              ? execApprovalItemNamed(title, node.conversationId, locale)
+              : execApprovalItem(node.conversationId, locale),
         })
       }
       visit(node.children)

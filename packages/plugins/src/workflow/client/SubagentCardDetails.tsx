@@ -70,6 +70,7 @@ export function SubagentCardHeading(props: {
 }): ReactNode {
   const { childConversationId, profileId, taskTitle, worktree, detailError, effectiveStatus, selfBadge, descendants, approvals, statSegments, elapsedText } = props
   const locale = usePluginLocale()
+  const primaryTitle = taskTitle ?? cardSubagentHeading(childConversationId, locale)
   return (
     <>
       <Icon
@@ -77,12 +78,14 @@ export function SubagentCardHeading(props: {
         size={13}
         className={effectiveStatus === 'working' && detailError === undefined ? SPIN : undefined}
       />
-      <span className="subagent-live-title" title={taskTitle}>
-        <span className="subagent-live-id">{cardSubagentHeading(childConversationId, locale)}</span>
+      <span className="subagent-live-title" title={primaryTitle}>
+        <span className="subagent-live-title-text">{primaryTitle}</span>
+        {taskTitle !== undefined ? (
+          <span className="subagent-live-id tabular-nums">{`#${childConversationId}`}</span>
+        ) : null}
         {profileId !== undefined && profileId !== '' ? (
           <span className="badge badge-neutral">{profileId}</span>
         ) : null}
-        {taskTitle !== undefined ? <span className="subagent-live-title-text">{taskTitle}</span> : null}
       </span>
       {worktree !== undefined ? (
         <span className="badge badge-neutral subagent-worktree-badge" title={worktreeBadgeTitle(worktree.path, locale)}>

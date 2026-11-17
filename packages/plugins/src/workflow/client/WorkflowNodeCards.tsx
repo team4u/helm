@@ -19,7 +19,7 @@ import { Icon } from './WorkflowIcon.tsx'
 import { SubagentLiveCard } from './SubagentCard.tsx'
 import { WorktreeInspectSection } from './WorktreeInspectSection.tsx'
 import { buildWorktreeSelector } from './model-worktree.ts'
-import { stringifyPretty } from './model-format.ts'
+import { isPlaceholderNodeLabel, stringifyPretty } from './model-format.ts'
 import {
   formatWorkflowNodeStats,
   hasNodeExtraDetail,
@@ -73,7 +73,8 @@ function WorkflowSubagentNodeCard(props: { node: WorkflowNodeState; runConversat
           ...(node.tokens !== undefined ? { tokens: node.tokens } : {}),
         }}
         toolSummary={{
-          prompt: node.label,
+          ...(!isPlaceholderNodeLabel(node.label) ? { label: node.label } : {}),
+          ...(node.prompt !== undefined ? { prompt: node.prompt } : {}),
           durationMs: node.durationMs,
           isError: node.status === 'failed',
           resultText: outputText,
@@ -104,7 +105,7 @@ function WorkflowSubagentNodeCard(props: { node: WorkflowNodeState; runConversat
           }}
           nodeId={node.nodeId}
           baseCommit={node.worktree.baseCommit}
-          taskLabel={node.label}
+          taskLabel={!isPlaceholderNodeLabel(node.label) ? node.label : undefined}
           parentConversationId={props.runConversationId}
         />
       ) : null}
@@ -181,7 +182,7 @@ function WorkflowExecutionNodeCard(props: { node: WorkflowNodeState; runConversa
           }}
           nodeId={node.nodeId}
           baseCommit={node.worktree.baseCommit}
-          taskLabel={node.label}
+          taskLabel={!isPlaceholderNodeLabel(node.label) ? node.label : undefined}
           parentConversationId={props.runConversationId}
         />
       ) : null}
