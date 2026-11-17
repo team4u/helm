@@ -38,6 +38,10 @@
       "types": "./dist/superagent.d.ts",
       "import": "./dist/superagent.js"
     },
+    "./swarm": {
+      "types": "./dist/swarm.d.ts",
+      "import": "./dist/swarm.js"
+    },
     "./triggers": {
       "types": "./dist/triggers.d.ts",
       "import": "./dist/triggers.js"

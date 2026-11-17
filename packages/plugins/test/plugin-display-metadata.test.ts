@@ -16,6 +16,7 @@ import { parseNonEmptyLocalizedText, type LocalizedText, type PluginDefinition }
 
 import { createProfilePlugin } from '../src/profile.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
+import { createSwarmPlugin } from '../src/swarm.js'
 import { createMemoryPlugin } from '../src/memory.js'
 import { createAppsPlugin } from '../src/apps.js'
 import { createJsonRenderPlugin } from '../src/json-render.js'
@@ -32,6 +33,7 @@ const timeout = { timeout: 60_000 } as const
 const FACTORIES: ReadonlyArray<() => PluginDefinition> = [
   createProfilePlugin,
   createWorkflowPlugin,
+  createSwarmPlugin,
   createMemoryPlugin,
   createAppsPlugin,
   createJsonRenderPlugin,
@@ -151,7 +153,7 @@ function assertEnglishSchemaDescriptions(where: string, node: unknown): void {
 
 test('显示元数据：全部内置插件 name/description 与 UI/configSchema 文案为 en+zh-CN 双语资源', timeout, () => {
   const registrations = recordAllPlugins()
-  assert.equal(registrations.length, 11, '内置插件工厂数量')
+  assert.equal(registrations.length, 12, '内置插件工厂数量')
   for (const { definition, ui, configSchema } of registrations) {
     assertFullyLocalized(`${definition.id} definition.name`, definition.name)
     assertFullyLocalized(`${definition.id} definition.description`, definition.description)
