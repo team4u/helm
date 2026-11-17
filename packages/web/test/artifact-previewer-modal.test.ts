@@ -504,3 +504,75 @@ test('ArtifactPreviewModal switches UI copy between en and zh-CN', { timeout: 60
   act(() => { root.unmount() })
   resetBody()
 })
+
+test('Markdown 产物预览期间元数据对象引用刷新时不卸载 MarkdownView 且保留滚动位置；深链命名后到仍正常解码', { timeout: 60_000 }, async () => {
+  installObjectUrlShim()
+  const markdown = makeArtifact(
+    'art-stable-scroll',
+    new TextEncoder().encode('# 标题一\n\n第一段\n\n## 标题二\n\n第二段'),
+    'doc.md',
+    'text/markdown',
+  )
+  const extra = makeArtifact('art-extra', new TextEncoder().encode('other'), 'other.txt', 'text/plain')
+  installArtifactFetch([markdown, extra])
+  const store = buildStore({ artifacts: [markdown] })
+
+  resetBody()
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = mount(host, store, 'art-stable-scroll', 7)
+  await flush()
+
+  const modalBody = document.querySelector<HTMLElement>('.modal-body')
+  const previewBefore = document.querySelector<HTMLElement>('.artifact-markdown-preview')
+  assert.ok(modalBody !== null && previewBefore !== null, 'Markdown 富文本预览已挂载')
+
+  modalBody.scrollTop = 240
+  assert.equal(modalBody.scrollTop, 240)
+
+  // 模拟后台重拉 /artifacts 返回新数组与新 meta 对象引用（含新增其他产物）
+  const refreshedStore = {
+    ...store,
+    conversationArtifacts: {
+      7: [artifactMeta(markdown, 7), artifactMeta(extra, 7)],
+    },
+  }
+  await rerender(root, refreshedStore, 'art-stable-scroll', 7)
+  await flush()
+
+  const previewAfter = document.querySelector<HTMLElement>('.artifact-markdown-preview')
+  assert.ok(previewAfter === previewBefore, '元数据对象引用刷新时不得卸载重建 MarkdownView')
+  assert.equal(modalBody.scrollTop, 240, '滚动位置不得被重置到首行')
+  assert.ok(document.querySelector('.preview-modal-code') === null, '不得短暂回退到源码/加载占位视图')
+
+  act(() => { root.unmount() })
+  resetBody()
+
+  // 深链场景：Blob 返回 application/octet-stream，异步命名元数据到达后应从 binary 切到解码并渲染 Markdown
+  const lateMd = makeArtifact(
+    'art-late-md',
+    new TextEncoder().encode('# 延迟识别\n\n内容'),
+    'late.md',
+    'application/octet-stream',
+  )
+  installArtifactFetch([lateMd])
+  const lateStore = buildStore({ artifacts: [lateMd], asyncMeta: true })
+  const lateHost = document.createElement('div')
+  document.body.appendChild(lateHost)
+  const lateRoot = mount(lateHost, lateStore, 'art-late-md', 7)
+  await flush()
+  assert.ok(document.querySelector('.artifact-markdown-preview') === null, '元数据未到时 octet-stream 不按 Markdown 解码')
+
+  const hydratedStore = {
+    ...lateStore,
+    conversationArtifacts: { 7: [artifactMeta(lateMd, 7)] },
+  }
+  await rerender(lateRoot, hydratedStore, 'art-late-md', 7)
+  await flush()
+  const latePreview = document.querySelector('.artifact-markdown-preview')
+  assert.ok(latePreview !== null, '命名元数据到达后应正常解码并渲染 Markdown')
+  assert.match(latePreview.textContent ?? '', /延迟识别/)
+
+  act(() => { lateRoot.unmount() })
+  resetBody()
+})

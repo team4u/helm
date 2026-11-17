@@ -896,3 +896,240 @@ test('切回已缓存会话且 (stateChangeSeq, lastEntryId) 未变时跳过重�
     await h.close()
   }
 })
+
+test('conversation.upsert 在同水位或 blocked/working 态不重复请求 listArtifacts，列表未变时复用缓存数组引用', { timeout: 60_000 }, async (t) => {
+  const page = setVisibilityAndFocus({ hidden: false, focused: true })
+  t.after(() => page.restore())
+
+  let artifacts1Calls = 0
+  const fixedArtifact = {
+    id: 'art-1',
+    conversationId: 1,
+    kind: 'registered',
+    name: 'report.md',
+    path: 'artifacts/1/report.md',
+    mimeType: 'text/markdown',
+    size: 128,
+    createdAt: 1000,
+  }
+
+  const h = await mountProvider({
+    hash: '#/c/1',
+    onGet: (path) => {
+      if (path === '/api/conversations/1/artifacts') {
+        artifacts1Calls += 1
+        return new Response(JSON.stringify([{ ...fixedArtifact }]), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (path.startsWith('/api/conversations/1?') || path === '/api/conversations/1') {
+        return new Response(
+          JSON.stringify({
+            ...makeConv({ id: 1, status: 'idle', stateChangeSeq: 2, lastEntryId: 5 }),
+            entries: [],
+            nextCursor: null,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      return undefined
+    },
+  })
+
+  try {
+    let stream!: ControlledStream
+    h.nextEvents((_url, signal) => {
+      stream = controlledStream(signal)
+      stream.send(
+        snapshotFrame({
+          bootId: 'boot-1',
+          seq: 1,
+          conversations: [makeConv({ id: 1, status: 'idle', stateChangeSeq: 2, lastEntryId: 5 })],
+          pendingAsks: [],
+          plugins: [],
+          ui: [],
+        }),
+      )
+      return stream
+    })
+
+    await h.waitFor(
+      (s) => s.sseConnected && s.conversationDetails[1] !== undefined && s.conversationArtifacts[1] !== undefined,
+    )
+    assert.equal(artifacts1Calls, 1)
+    const initialListRef = h.store().conversationArtifacts[1]
+    assert.ok(initialListRef !== undefined)
+
+    // 1. 同水位 conversation.upsert（如异步 contextUsage 回填）不得重复拉取 artifacts
+    await act(async () => {
+      stream.send(
+        eventFrame(2, {
+          type: 'conversation.upsert',
+          conversation: makeConv({ id: 1, status: 'idle', stateChangeSeq: 2, lastEntryId: 5 }),
+        }),
+      )
+    })
+    await h.flush(40)
+    assert.equal(artifacts1Calls, 1, '同水位 conversation.upsert 应被水位拦截，不重复请求 listArtifacts')
+
+    // 2. blocked / working 活跃态 conversation.upsert 不得拉取 artifacts
+    await act(async () => {
+      stream.send(
+        eventFrame(3, {
+          type: 'conversation.upsert',
+          conversation: makeConv({ id: 1, status: 'blocked', pendingAskCount: 1, stateChangeSeq: 3, lastEntryId: 5 }),
+        }),
+      )
+      stream.send(
+        eventFrame(4, {
+          type: 'conversation.upsert',
+          conversation: makeConv({ id: 1, status: 'working', stateChangeSeq: 4, lastEntryId: 5 }),
+        }),
+      )
+    })
+    await h.flush(40)
+    assert.equal(artifacts1Calls, 1, 'blocked/working 活跃态不得触发 listArtifacts')
+
+    // 3. 回合结算推进水位 → 拉取一次；若返回列表内容未变，必须复用原数组与对象引用并更新水位
+    await act(async () => {
+      stream.send(
+        eventFrame(5, {
+          type: 'conversation.upsert',
+          conversation: makeConv({ id: 1, status: 'idle', stateChangeSeq: 5, lastEntryId: 6 }),
+        }),
+      )
+    })
+    await h.waitFor(() => artifacts1Calls === 2)
+    await h.flush(40)
+    assert.equal(h.store().conversationArtifacts[1] === initialListRef, true, '内容未变时应复用原产物数组引用')
+
+    // 4. 随后同水位（seq=5, lastEntryId=6）再次推送 upsert 仍应命中新水位跳过请求
+    await act(async () => {
+      stream.send(
+        eventFrame(6, {
+          type: 'conversation.upsert',
+          conversation: makeConv({ id: 1, status: 'idle', stateChangeSeq: 5, lastEntryId: 6 }),
+        }),
+      )
+    })
+    await h.flush(40)
+    assert.equal(artifacts1Calls, 2, '列表内容一致时也必须更新水位，防止后续同水位反复重拉')
+  } finally {
+    await h.close()
+  }
+})
+
+test('在途 listArtifacts 跨越回合结算时通过 dirty 标记补刷，不漏掉新落盘产物', { timeout: 60_000 }, async (t) => {
+  const page = setVisibilityAndFocus({ hidden: false, focused: true })
+  t.after(() => page.restore())
+
+  let artifacts1Calls = 0
+  let gateNextArtifacts = false
+  let releaseGatedArtifacts: (() => void) | undefined
+  let gatedArtifactsPromise: Promise<void> | undefined
+  let serverArtifacts: Array<Record<string, unknown>> = []
+
+  const h = await mountProvider({
+    hash: '#/c/1',
+    onGet: async (path) => {
+      if (path === '/api/conversations/1/artifacts') {
+        artifacts1Calls += 1
+        if (gateNextArtifacts) {
+          gateNextArtifacts = false
+          gatedArtifactsPromise = new Promise<void>((resolve) => { releaseGatedArtifacts = resolve })
+          await gatedArtifactsPromise
+        }
+        return new Response(JSON.stringify(serverArtifacts), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (path.startsWith('/api/conversations/1?') || path === '/api/conversations/1') {
+        return new Response(
+          JSON.stringify({
+            ...makeConv({ id: 1, status: 'idle', stateChangeSeq: 1, lastEntryId: 1 }),
+            entries: [],
+            nextCursor: null,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      return undefined
+    },
+  })
+
+  try {
+    let stream1!: ControlledStream
+    h.nextEvents((_url, signal) => {
+      stream1 = controlledStream(signal)
+      stream1.send(
+        snapshotFrame({
+          bootId: 'boot-1',
+          seq: 1,
+          conversations: [makeConv({ id: 1, status: 'idle', stateChangeSeq: 1, lastEntryId: 1 })],
+          pendingAsks: [],
+          plugins: [],
+          ui: [],
+        }),
+      )
+      return stream1
+    })
+
+    await h.waitFor(
+      (s) => s.sseConnected && s.conversationDetails[1] !== undefined && s.conversationArtifacts[1] !== undefined,
+    )
+    const baselineCalls = artifacts1Calls
+
+    // 触发一次 working 态 snapshot 重连并拦截其在途 listArtifacts(1) 请求
+    gateNextArtifacts = true
+    let stream2!: ControlledStream
+    h.nextEvents((_url, signal) => {
+      stream2 = controlledStream(signal)
+      stream2.send(
+        snapshotFrame({
+          bootId: 'boot-2',
+          seq: 1,
+          conversations: [makeConv({ id: 1, status: 'working', stateChangeSeq: 2, lastEntryId: 1 })],
+          pendingAsks: [],
+          plugins: [],
+          ui: [],
+        }),
+      )
+      return stream2
+    })
+    stream1.send('event: notification\ndata: {"seq":99,"event":{"type":"notification","level":"info","title":"gap"}}\n\n')
+    await h.waitFor(() => h.store().kernelBootId === 'boot-2' && artifacts1Calls === baselineCalls + 1)
+
+    // 该请求仍在途期间，AI 写入新产物并结算回合
+    serverArtifacts = [{
+      id: 'new-art-1',
+      conversationId: 1,
+      kind: 'registered',
+      name: 'summary.md',
+      path: 'artifacts/1/summary.md',
+      mimeType: 'text/markdown',
+      size: 64,
+      createdAt: 2000,
+    }]
+    await act(async () => {
+      stream2.send(
+        eventFrame(2, {
+          type: 'conversation.upsert',
+          conversation: makeConv({ id: 1, status: 'idle', stateChangeSeq: 3, lastEntryId: 2 }),
+        }),
+      )
+    })
+    await h.flush(30)
+    assert.equal(artifacts1Calls, baselineCalls + 1, '首个请求仍在途时不并发重复请求')
+
+    // 放行在途旧请求 → dirty 标记驱动自动补刷拿到新落盘产物
+    releaseGatedArtifacts?.()
+    await h.waitFor((s) => (s.conversationArtifacts[1]?.length ?? 0) === 1)
+    assert.equal(artifacts1Calls, baselineCalls + 2)
+    assert.equal(h.store().conversationArtifacts[1]?.[0]?.id, 'new-art-1')
+  } finally {
+    releaseGatedArtifacts?.()
+    await h.close()
+  }
+})

@@ -19,6 +19,9 @@ export function useFilePreviewText(
 ): { text: string | null; textState: FilePreviewTextState } {
   const [text, setText] = useState<string | null>(null)
   const [textState, setTextState] = useState<FilePreviewTextState>('idle')
+  // 仅以「是否需要解码」布尔值作为 effect 依赖：避免元数据对象引用刷新（如产物列表重拉）
+  // 导致相同 Blob 被清空重解码并短暂卸载 Markdown 预览视图。
+  const wantDecode = loadedBlob !== undefined && shouldDecodeText(meta, mime)
 
   useEffect(() => {
     if (loadedBlob === undefined) {
@@ -26,7 +29,7 @@ export function useFilePreviewText(
       setTextState('idle')
       return
     }
-    if (!shouldDecodeText(meta, mime)) {
+    if (!wantDecode) {
       setText(null)
       setTextState('binary')
       return
@@ -50,7 +53,7 @@ export function useFilePreviewText(
     return () => {
       cancelled = true
     }
-  }, [loadedBlob, mime, meta])
+  }, [loadedBlob, wantDecode])
 
   return { text, textState }
 }

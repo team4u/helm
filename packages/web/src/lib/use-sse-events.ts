@@ -30,7 +30,11 @@ import { evictPluginClientCache, reconcilePluginClientCache } from './plugin-cli
 import { evictSessionDocsOfConversation, evictSessionDocSubscriptions } from './session-docs.js'
 import { deletedConversationFallbackTarget } from './space-navigation.js'
 import type { ActiveModal, ResolvedTarget, ToastNotice } from './types.js'
-import type { ArtifactsSyncWatermark } from './use-unread-sync.js'
+import {
+  isArtifactsWatermarkCurrent,
+  isConversationStatusActive,
+  type ArtifactsSyncWatermark,
+} from './use-unread-sync.js'
 
 export interface SseCursor {
   bootId: string
@@ -216,7 +220,7 @@ function handleSnapshotFrame(payload: unknown, ctx: FrameHandlerContext): void {
     const unchanged =
       prevDetail !== undefined &&
       nextSummary !== undefined &&
-      nextSummary.status !== 'working' &&
+      !isConversationStatusActive(nextSummary.status) &&
       prevDetail.stateChangeSeq === nextSummary.stateChangeSeq &&
       prevDetail.lastEntryId !== undefined &&
       nextSummary.lastEntryId !== undefined &&
@@ -295,7 +299,13 @@ function dispatchFrameSideEffects(
     const conv = event.conversation
     if (!conv.unread) ctx.unreadClearedSeq.current.delete(conv.id)
     const visible = ctx.visibleConversationIds().includes(conv.id)
-    if (visible && conv.status !== 'working') void ctx.loadConversationArtifacts(conv.id)
+    if (visible && !isConversationStatusActive(conv.status)) {
+      const cachedArtifacts = ctx.conversationArtifactsRef?.current[conv.id]
+      const wm = ctx.artifactsWatermarksRef?.current.get(conv.id)
+      if (!isArtifactsWatermarkCurrent(cachedArtifacts, conv, wm)) {
+        void ctx.loadConversationArtifacts(conv.id)
+      }
+    }
     if (visible && conv.unread) ctx.clearVisibleConversationUnread(conv.id, conv)
   }
   if (deletedConversationId !== undefined) {
@@ -374,6 +384,8 @@ export function useSseEvents(options: UseSseEventsOptions): void {
     updateLive,
     setKernelBootId,
     setConversationArtifacts,
+    conversationArtifactsRef,
+    artifactsWatermarksRef,
     visibleConversationIds,
     loadConversationDetail,
     loadConversationArtifacts,
@@ -450,6 +462,8 @@ export function useSseEvents(options: UseSseEventsOptions): void {
           updateLive,
           setKernelBootId,
           setConversationArtifacts,
+          conversationArtifactsRef,
+          artifactsWatermarksRef,
           visibleConversationIds,
           loadConversationDetail,
           loadConversationArtifacts,
@@ -595,6 +609,8 @@ export function useSseEvents(options: UseSseEventsOptions): void {
     setActiveModal,
     setConnectionError,
     setConversationArtifacts,
+    conversationArtifactsRef,
+    artifactsWatermarksRef,
     setKernelBootId,
     setLoadErrors,
     setSplitTarget,
