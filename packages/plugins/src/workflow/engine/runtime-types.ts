@@ -169,12 +169,9 @@ export interface ResumeAgentOptions {
   onGateResult?: WorkflowSpawnRequest['onGateResult']
 }
 
-/** Ledger append input -- see journal.ts for the authoritative definition (legacy alias for engine-internal reference compatibility). */
-export type JournalAppendInput = JournalWriteInput
-
 export type ActionJournalInput =
-  | Omit<Extract<JournalAppendInput, { type: 'action' }>, keyof ReplayScope>
-  | Omit<Extract<JournalAppendInput, { type: 'action_started' }>, keyof ReplayScope>
+  | Omit<Extract<JournalWriteInput, { type: 'action' }>, keyof ReplayScope>
+  | Omit<Extract<JournalWriteInput, { type: 'action_started' }>, keyof ReplayScope>
 
 export interface RunWorkflowOptions {
   /** 所属 run 标识（用于派生确定性幂等 requestId）。 */

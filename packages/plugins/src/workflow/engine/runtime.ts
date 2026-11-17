@@ -87,9 +87,6 @@ export type {
   WorkflowRunResult,
 } from './runtime-types.js'
 
-/** Ledger append input -- see journal.ts for the authoritative definition (this legacy alias only serves references inside this file). */
-export type { JournalWriteInput } from './journal.js'
-
 export async function runWorkflow(options: RunWorkflowOptions): Promise<WorkflowRunResult> {
   const { script, host } = options
 
