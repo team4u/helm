@@ -8,6 +8,9 @@
  *   completer disable track (client),trigger blank name single ('/' reject),
  *   source mutual exclusion severe validate (action source forbid doc field,doc source forbid action field, illegal kind),
  *   itemsField security top-level key (refuse __proto__/constructor/prototype),doc name format;
+ * - display copy fields: one registerUi guard (parseNonEmptyLocalizedText) covers
+ *   label/title/description on every surface — localized maps accepted and stored raw,
+ *   blank copy / unsupported locale keys / non-string values rejected;
  * - assertUiDocsRegistered:completer doc/sessionDoc source want seek this plugin public document;
  * - PluginHost all link: register/enable/disable/snapshot in two surface contribution increase delete,
  *   method amount consumer (PLUGIN_UI_METHOD_NAMES 19 and host ctx.ui key consistent),
@@ -160,6 +163,112 @@ test('composerCompleter:doc/sessionDoc source declaration still subject to sourc
   );
   // assertUiDocsRegistered is hang point: no longer for completer source do define phase end inspect
   ui.assertUiDocsRegistered('p1', () => false, () => false);
+});
+
+// ---------------------------------------------------------------------------
+// UiRegistry boundary:display copy fields (LocalizedText)
+// ---------------------------------------------------------------------------
+
+test('display copy fields: one registerUi guard covers label/title/description on every surface (maps accepted, blanks rejected)', { timeout: 60_000 }, () => {
+  const ui = new UiRegistry(createPluginBuildProvider());
+  const badCopy: unknown[] = [
+    '', '   ', 42, true, null, [], { fr: 'x' }, { 'zh-cn': 'x' }, { en: 1 }, { en: '' }, { en: 'Hi', 'zh-CN': ' ' },
+  ];
+  const expectDisplayCopyThrow = (run: () => void, field: string): void => {
+    assert.throws(run, (err: unknown) => {
+      if (!(err instanceof HelmError)) return false;
+      assert.equal(err.code, 'invalid_ui_spec');
+      assert.ok(
+        err.message.includes(`${field} must be display copy`),
+        `message should locate display field ${field}:${err.message}`,
+      );
+      return true;
+    });
+  };
+
+  // accepted: localized maps on label/title/description across surface families,
+  // including the required-label surfaces (artifactPreviewer / composerCompleter /
+  // profileRuntime) and surfaces whose only display field is the base title.
+  ui.registerUi(
+    'p1',
+    'sidebar.item',
+    { id: 'nav', label: { en: 'Work', 'zh-CN': '工作' }, title: { en: 'Workbench', 'zh-CN': '工作台' } },
+    'sidebarItem',
+  );
+  ui.registerUi(
+    'p1',
+    'commandPalette',
+    { id: 'cmd', title: { en: 'New', 'zh-CN': '新建' }, description: { en: 'Create', 'zh-CN': '创建' }, actionId: 'new' },
+    'command',
+  );
+  ui.registerUi('p1', 'workbench.panel', { id: 'panel', label: { en: 'Stats', 'zh-CN': '统计' } }, 'workbenchPanel');
+  ui.registerUi('p1', 'settings.panel', { id: 'settings', label: { en: 'Settings', 'zh-CN': '设置' } }, 'settingsPanel');
+  ui.registerUi(
+    'p1',
+    'artifact.previewer',
+    { id: 'md', label: { en: 'Markdown', 'zh-CN': 'Markdown 预览' }, mimeTypes: ['text/markdown'] },
+    'artifactPreviewer',
+  );
+  ui.registerUi(
+    'p1',
+    'composer.completer',
+    { id: 'at', label: { en: 'Mention', 'zh-CN': '提及' }, trigger: '@', source: { kind: 'action', actionId: 'complete' } },
+    'composerCompleter',
+  );
+  ui.registerUi(
+    'p1',
+    'profile.runtime',
+    { id: 'node', kind: 'node', label: { en: 'Node', 'zh-CN': 'Node 运行时' } },
+    'profileRuntime',
+  );
+  ui.registerUi('p1', 'timeline.renderer', { id: 'render', title: { en: 'Custom', 'zh-CN': '自定义' } }, 'timelineRenderer');
+  ui.registerUi('p1', 'plugin.slot', { id: 'slot', target: 'owner/panel', title: { en: 'Extra', 'zh-CN': '扩展' } }, 'slot');
+  assert.equal(ui.listUi().length, 9);
+
+  // raw localized shape is stored as declared (listUi keeps the map, no locale coercion)
+  const nav = ui.listUi().find((c) => c.surface === 'sidebar.item')!;
+  assert.deepEqual((nav.spec as { label: unknown }).label, { en: 'Work', 'zh-CN': '工作' });
+  const cmd = ui.listUi().find((c) => c.surface === 'commandPalette')!;
+  assert.deepEqual((cmd.spec as { description: unknown }).description, { en: 'Create', 'zh-CN': '创建' });
+
+  // rejected: label — on label-bearing surfaces and on a surface without any dedicated
+  // label validator (timeline.renderer), proving the guard is one place for all surfaces.
+  for (const [surface, fnName] of [
+    ['sidebar.item', 'sidebarItem'],
+    ['sidebar.section', 'sidebarSection'],
+    ['screen', 'screen'],
+    ['composer.pill', 'composerPill'],
+    ['settings.panel', 'settingsPanel'],
+    ['workbench.panel', 'workbenchPanel'],
+    ['timeline.renderer', 'timelineRenderer'],
+  ] as const) {
+    for (const value of badCopy) {
+      expectDisplayCopyThrow(() => ui.registerUi('p1', surface, { id: 'bad', label: value }, fnName), 'label');
+    }
+  }
+
+  // rejected: title — base UiSpecBase field covered by the same guard
+  for (const [surface, fnName] of [
+    ['timeline.renderer', 'timelineRenderer'],
+    ['sidebar.item', 'sidebarItem'],
+  ] as const) {
+    for (const value of badCopy) {
+      expectDisplayCopyThrow(() => ui.registerUi('p1', surface, { id: 'bad', title: value }, fnName), 'title');
+    }
+  }
+
+  // rejected: description — declared on commandPalette, and still guarded on surfaces
+  // whose type does not declare it (runtime boundary cannot trust static optionality).
+  for (const value of badCopy) {
+    expectDisplayCopyThrow(
+      () => ui.registerUi('p1', 'commandPalette', { id: 'bad', actionId: 'new', description: value }, 'command'),
+      'description',
+    );
+    expectDisplayCopyThrow(
+      () => ui.registerUi('p1', 'workbench.panel', { id: 'bad', label: 'ok', description: value }, 'workbenchPanel'),
+      'description',
+    );
+  }
 });
 
 // ---------------------------------------------------------------------------

@@ -4,6 +4,8 @@
  *   merge dedupe; illegal note symbol (each other for/absolute path,.. segment, non- string) explicit plugin_manifest_invalid;
  * - normalizeDefinition: manifest note symbol mapping is npmDependencies(parse = plugin itself directory),
  *   code inside declaration npmDependencies one rule strip (do not put open any parse);
+ * - assertExternalDefinition display-copy name: LocalizedText rule at the import
+ *   boundary (pure-function drive, no fixture files — see test comment);
  * - plugin between dependency manifest (plugin.json dependencies / package.json helm.dependencies)
  *   merge enter define;package.json top-level dependencies(npm semantics) never mistakenly read;
  * - real compile chain: declaration note symbol can from plugin directory node_modules parse enter bundle;
@@ -21,6 +23,7 @@ import { join } from 'node:path'
 import { HelmError, clientNpmRootsOf } from '@helm/protocol'
 import { clearClientCompilerMemoryCache, compilePluginClientModule, createPluginBuildProvider } from '@helm/plugin-build'
 import {
+  assertExternalDefinition,
   importPluginDefinition,
   normalizeDefinition,
   resolvePluginEntry,
@@ -198,6 +201,39 @@ test('plugin between dependency: manifest declaration merge enter define;package
     importNormalized(dir),
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_manifest_invalid',
   )
+})
+
+test('assertExternalDefinition: display-copy name follows the LocalizedText rule at the import boundary', { timeout: 60_000 }, () => {
+  // Pure-function drive on purpose: real module imports in this file share the
+  // process-wide ESM cache (per-test workDirs differ, but same-name fixtures would
+  // collide), so shape validation is asserted directly without fixture files.
+  const base = { id: 'chart-plugin', definePlugin: () => {} };
+
+  // optional: omitting name keeps the minimal definition valid (same right as builtin plugins)
+  const unnamed = assertExternalDefinition(base, '/ws/chart-plugin')
+  assert.equal('name' in unnamed, false)
+
+  // valid display copy passes through raw: plain string and supported-locale map
+  assert.deepEqual(
+    assertExternalDefinition({ ...base, name: 'Chart' }, '/ws/chart-plugin').name,
+    'Chart',
+  )
+  assert.deepEqual(
+    assertExternalDefinition({ ...base, name: { en: 'Chart', 'zh-CN': '图表' } }, '/ws/chart-plugin').name,
+    { en: 'Chart', 'zh-CN': '图表' },
+  )
+
+  // invalid display copy rejected at the import boundary with the shared rule
+  for (const value of ['', '   ', 42, true, null, [], {}, { fr: 'x' }, { 'zh-cn': 'x' }, { en: 1 }, { en: '' }, { en: 'Hi', 'zh-CN': ' ' }]) {
+    assert.throws(
+      () => assertExternalDefinition({ ...base, name: value }, '/ws/chart-plugin'),
+      (err: unknown) =>
+        err instanceof HelmError &&
+        err.code === 'invalid_plugin_definition' &&
+        err.message.includes('name provide when must be display copy'),
+      `expected rejection for name=${JSON.stringify(value)}`,
+    )
+  }
 })
 
 // ---------------------------------------------------------------------------

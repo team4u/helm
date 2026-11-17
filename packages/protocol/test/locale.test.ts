@@ -3,6 +3,8 @@
  * - supported locale set and default fallback;
  * - normalizeLocaleTag: zh-* -> zh-CN, everything else (incl. invalid input) -> en;
  * - parseLocalizedText boundary validation (display copy);
+ * - parseNonEmptyLocalizedText strict display-metadata guard (registration boundaries);
+ * - LOCALIZED_TEXT_JSON_SCHEMA reusable output-validation fragment shape;
  * - resolveLocalizedText fallback chain and createLocaleTranslator binding.
  */
 import assert from 'node:assert/strict'
@@ -10,10 +12,12 @@ import { test } from 'node:test'
 import {
   DEFAULT_HELM_LOCALE,
   HELM_LOCALES,
+  LOCALIZED_TEXT_JSON_SCHEMA,
   createLocaleTranslator,
   isHelmLocale,
   normalizeLocaleTag,
   parseLocalizedText,
+  parseNonEmptyLocalizedText,
   resolveLocalizedText,
 } from '../src/index.js'
 
@@ -58,6 +62,47 @@ test('parseLocalizedText: validates display copy at the boundary', { timeout: 60
   for (const value of [undefined, null, 42, true, [], {}, { fr: 'x' }, { 'zh-cn': 'x' }, { en: 1 }, { en: 'Hi', fr: 'x' }]) {
     assert.equal(parseLocalizedText(value), undefined, `expected rejection for ${JSON.stringify(value)}`)
   }
+})
+
+test('parseNonEmptyLocalizedText: strict display-metadata guard (non-blank copy, supported locale keys only)', { timeout: 60_000 }, () => {
+  // plain strings: non-blank passes through untouched; blank/whitespace-only rejected (trim rule)
+  assert.equal(parseNonEmptyLocalizedText('hello'), 'hello')
+  assert.equal(parseNonEmptyLocalizedText('  padded  '), '  padded  ')
+  for (const value of ['', '   ', '\t\n ']) {
+    assert.equal(parseNonEmptyLocalizedText(value), undefined, `expected rejection for ${JSON.stringify(value)}`)
+  }
+  // per-locale maps with supported keys and non-blank copy are accepted
+  assert.deepEqual(parseNonEmptyLocalizedText({ en: 'Hi' }), { en: 'Hi' })
+  assert.deepEqual(parseNonEmptyLocalizedText({ 'zh-CN': '你好' }), { 'zh-CN': '你好' })
+  assert.deepEqual(parseNonEmptyLocalizedText({ en: 'Hi', 'zh-CN': '你好' }), { en: 'Hi', 'zh-CN': '你好' })
+  // one blank entry invalidates the whole map (display metadata must never render empty copy)
+  for (const value of [{ en: '' }, { en: 'Hi', 'zh-CN': ' ' }, { 'zh-CN': '\t' }]) {
+    assert.equal(parseNonEmptyLocalizedText(value), undefined, `expected rejection for ${JSON.stringify(value)}`)
+  }
+  // unsupported locale keys (exact match, case sensitive) and non-string values are rejected
+  for (const value of [{ fr: 'x' }, { 'zh-cn': 'x' }, { 'ZH-CN': 'x' }, { en: 1 }, { en: 'Hi', fr: 'x' }]) {
+    assert.equal(parseNonEmptyLocalizedText(value), undefined, `expected rejection for ${JSON.stringify(value)}`)
+  }
+  // wrong container kinds and empty maps never satisfy the guard
+  for (const value of [{}, [], 42, true, null, undefined]) {
+    assert.equal(parseNonEmptyLocalizedText(value), undefined, `expected rejection for ${JSON.stringify(value)}`)
+  }
+})
+
+test('LOCALIZED_TEXT_JSON_SCHEMA: reusable fragment locks the string-or-locale-map output shape', { timeout: 60_000 }, () => {
+  // structural lock: action outputs declaring LocalizedText fields accept a non-empty
+  // plain string or a supported-locale map (>=1 entry, no other keys), nothing else
+  assert.deepEqual(LOCALIZED_TEXT_JSON_SCHEMA, {
+    anyOf: [
+      { type: 'string', minLength: 1 },
+      {
+        type: 'object',
+        additionalProperties: false,
+        minProperties: 1,
+        properties: { en: { type: 'string' }, 'zh-CN': { type: 'string' } },
+      },
+    ],
+  })
 })
 
 test('resolveLocalizedText: uses requested, default, then declaration-order fallbacks', { timeout: 60_000 }, () => {

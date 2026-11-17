@@ -11,6 +11,7 @@ import { createHubHandler, type KernelRuntimeLike } from '../src/http/index.js';
 import {
   HelmError,
   type ExternalTriggerEnvelope,
+  type PluginConfigFieldSchema,
   type PluginDefinition,
   type PluginDocHandle,
 } from '@helm/protocol';
@@ -536,6 +537,108 @@ test('action declaration missing inputSchema/outputSchema in register boundary e
   );
   // register failed i.e. rollback: do not appear in manifest
   assert.equal(host.list().length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// definition display copy boundary (LocalizedText name/description)
+// ---------------------------------------------------------------------------
+
+test('definition display copy: name/description LocalizedText one rule at register boundary, no builtin ID special-casing', { timeout: 60_000 }, async () => {
+  const host = makeHost();
+  const badCopy: unknown[] = [
+    '', '   ', 42, true, null, [], {},
+    { fr: 'x' }, { 'zh-cn': 'x' }, { en: 1 }, { en: '' }, { en: 'Hi', 'zh-CN': ' ' },
+  ];
+  // builtin: and external (colon-free) ids follow the exact same display-copy guard
+  for (const id of ['builtin:copy-demo', 'copy-demo']) {
+    for (const field of ['name', 'description'] as const) {
+      for (const value of badCopy) {
+        await assert.rejects(
+          host.register({ id, [field]: value, definePlugin: () => {} } as unknown as PluginDefinition),
+          (err: unknown) => {
+            assert.ok(err instanceof HelmError, `expected HelmError for ${field}=${JSON.stringify(value)}`);
+            assert.equal(err.code, 'invalid_plugin_definition');
+            assert.ok(err.message.includes(field), `message should locate field ${field}:${err.message}`);
+            return true;
+          },
+        );
+      }
+    }
+  }
+  assert.equal(host.list().length, 0, 'failed registrations leave no summary behind (rollback)');
+
+  // valid display copy registers fine: plain strings and supported-locale maps both accepted
+  await host.register({
+    id: 'builtin:copy-demo',
+    name: { en: 'Demo', 'zh-CN': '演示' },
+    description: 'demo plugin',
+    definePlugin: () => {},
+  });
+  await host.register({
+    id: 'copy-demo-ext',
+    name: 'Plain',
+    description: { en: 'desc', 'zh-CN': '描述' },
+    definePlugin: () => {},
+  });
+  // name/description stay optional: omitting them falls back to the id for display
+  await host.register({ id: 'copy-demo-min', definePlugin: () => {} });
+
+  const summaries = host.list();
+  const builtin = summaries.find((s) => s.id === 'builtin:copy-demo')!;
+  const external = summaries.find((s) => s.id === 'copy-demo-ext')!;
+  const minimal = summaries.find((s) => s.id === 'copy-demo-min')!;
+  // raw localized shape passes through to the summary (no locale coercion at the kernel boundary)
+  assert.deepEqual(builtin.name, { en: 'Demo', 'zh-CN': '演示' });
+  assert.deepEqual(builtin.description, 'demo plugin');
+  assert.deepEqual(external.name, 'Plain');
+  assert.deepEqual(external.description, { en: 'desc', 'zh-CN': '描述' });
+  assert.equal(minimal.name, 'copy-demo-min');
+  assert.equal(minimal.description, undefined);
+});
+
+test('ctx.configSchema: label/description display copy validated at declaration (invalid_config_schema)', { timeout: 60_000 }, async () => {
+  const host = makeHost();
+  const badCopy: unknown[] = [
+    '', '   ', 42, true, null, [], { fr: 'x' }, { 'zh-cn': 'x' }, { en: 1 }, { en: '' }, { en: 'Hi', 'zh-CN': ' ' },
+  ];
+  for (const copyField of ['label', 'description'] as const) {
+    for (const value of badCopy) {
+      await assert.rejects(
+        host.register({
+          id: `p:cfg-copy-${copyField}`,
+          definePlugin: (ctx) => {
+            ctx.configSchema({ token: { type: 'string', [copyField]: value } as unknown as PluginConfigFieldSchema });
+          },
+        }),
+        (err: unknown) => {
+          assert.ok(err instanceof HelmError, `expected HelmError for ${copyField}=${JSON.stringify(value)}`);
+          assert.equal(err.code, 'invalid_config_schema');
+          assert.ok(err.message.includes(copyField), `message should locate field ${copyField}:${err.message}`);
+          return true;
+        },
+      );
+    }
+  }
+  assert.equal(host.list().length, 0, 'failed registrations leave no summary behind (rollback)');
+
+  // valid declarations pass: plain string label + localized map description, raw shape preserved
+  await host.register({
+    id: 'p:cfg-copy-ok',
+    definePlugin: (ctx) => {
+      ctx.configSchema({
+        token: {
+          type: 'string',
+          label: { en: 'Token', 'zh-CN': '令牌' },
+          description: 'API token for upstream service',
+        },
+      });
+    },
+  });
+  assert.deepEqual(host.getConfigSchema('p:cfg-copy-ok').token, {
+    type: 'string',
+    label: { en: 'Token', 'zh-CN': '令牌' },
+    description: 'API token for upstream service',
+  });
 });
 
 // ---------------------------------------------------------------------------

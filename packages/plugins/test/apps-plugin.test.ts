@@ -9,7 +9,8 @@
  *   originConversationId 解析优先级）与同源 update 语义（数据保留、catalog
  *   publishedAt 保持）；异源路径走重装；
  * - list：宿主清单 + listUi screens + catalog 左连接、内置插件排除、
- *   孤儿 catalog 条目忽略；
+ *   孤儿 catalog 条目忽略；本地化 name/description 原样透传（raw map 不折叠，
+ *   非法 locale map 在输出边界按 LOCALIZED_TEXT_JSON_SCHEMA 拒绝）；
  * - update_meta：只改元数据不动宿主；未登记 404；
  * - remove：宿主卸载后清理 catalog；
  * - 边界：builtin/self 目标 409、远端节点相对路径 400 app_source_must_be_on_hub、
@@ -584,6 +585,46 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
     assert.equal(board.catalog, undefined)
     assert.equal(board.enabled, true)
     await host.dispose()
+  })
+
+  await t.test('list: raw localized name/description passthrough (map kept, output boundary enforces the LocalizedText schema)', async () => {
+    // Good case: localized summary display copy flows through as declared — the raw
+    // { en, 'zh-CN' } map survives the action output (JSON keeps the raw shape; the
+    // active locale is resolved only by the consuming UI, never folded here).
+    const good = fakePackageManager()
+    good.state.summaries.set('locale-app', {
+      id: 'locale-app',
+      name: { en: 'Todo', 'zh-CN': '待办' },
+      description: { en: 'Keep track of tasks', 'zh-CN': '任务追踪' },
+      version: '0.2.0', locked: false, enabled: true, status: 'active',
+      hooks: [], actions: [], tools: [],
+    })
+    good.state.ui.push({ pluginId: 'locale-app', surface: 'screen', spec: { id: 'main' } })
+    const goodHost = await setup({ pluginsPort: good.port })
+    const result = (await goodHost.host.invokeAction(APPS_PLUGIN_ID, 'list', {})) as {
+      apps: Array<{ pluginId: string; name: unknown; description?: unknown }>
+    }
+    const localeApp = result.apps.find((a) => a.pluginId === 'locale-app')!
+    assert.deepEqual(localeApp.name, { en: 'Todo', 'zh-CN': '待办' })
+    assert.deepEqual(localeApp.description, { en: 'Keep track of tasks', 'zh-CN': '任务追踪' })
+    await goodHost.host.dispose()
+
+    // Bad case: an unsupported-locale map must fail the action output boundary
+    // (LOCALIZED_TEXT_JSON_SCHEMA: additionalProperties false), never silently pass.
+    const bad = fakePackageManager()
+    bad.state.summaries.set('bad-locale-app', {
+      id: 'bad-locale-app',
+      name: { fr: 'Todo' } as unknown as PluginSummary['name'],
+      locked: false, enabled: true, status: 'active',
+      hooks: [], actions: [], tools: [],
+    })
+    bad.state.ui.push({ pluginId: 'bad-locale-app', surface: 'screen', spec: { id: 'main' } })
+    const badHost = await setup({ pluginsPort: bad.port })
+    await assert.rejects(
+      badHost.host.invokeAction(APPS_PLUGIN_ID, 'list', {}),
+      (err: unknown) => err instanceof HelmError && err.code === 'invalid_plugin_output' && err.status === 500,
+    )
+    await badHost.host.dispose()
   })
 
   await t.test('update_meta：只改元数据；未登记 404；非法 category 400；builtin 409', async () => {
