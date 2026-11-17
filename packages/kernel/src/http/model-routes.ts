@@ -15,7 +15,8 @@ import { methodNotAllowed, readOptionalJsonBody, type RouteContext } from './rou
 // /api/models
 // ---------------------------------------------------------------------------
 
-// At least one of model, thinkingLevel, compactionModel, or compactionThinkingLevel is required (anyOf); empty string clears override.
+// At least one of model, thinkingLevel, compactionModel, compactionThinkingLevel, or the per-model pair
+// (modelThinking + modelThinkingLevel together) is required (anyOf); empty string clears the matching override.
 const MODELS_DEFAULT_BODY_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
@@ -23,6 +24,8 @@ const MODELS_DEFAULT_BODY_SCHEMA: JsonSchema = {
     thinkingLevel: { type: 'string' },
     compactionModel: { type: 'string' },
     compactionThinkingLevel: { type: 'string' },
+    modelThinking: { type: 'string' },
+    modelThinkingLevel: { type: 'string' },
   },
   additionalProperties: false,
   anyOf: [
@@ -30,6 +33,7 @@ const MODELS_DEFAULT_BODY_SCHEMA: JsonSchema = {
     { required: ['thinkingLevel'] },
     { required: ['compactionModel'] },
     { required: ['compactionThinkingLevel'] },
+    { required: ['modelThinking', 'modelThinkingLevel'] },
   ],
 }
 
@@ -68,32 +72,49 @@ export async function handleModelsDomain(
     return jsonOk(redactor, {
       defaultModel: catalog.defaultModel ?? '',
       defaultThinkingLevel: catalog.defaultThinkingLevel ?? '',
+      modelThinkingLevels: catalog.modelThinkingLevels ?? {},
       defaultCompactionModel: catalog.defaultCompactionModel ?? '',
       defaultCompactionThinkingLevel: catalog.defaultCompactionThinkingLevel ?? '',
     })
   }
   if (second === 'default' && third === undefined && method === 'PUT') {
-    if (kernel.setDefaultModel === undefined) {
-      throw new HelmError('not_implemented', 'current runtime does not support setting the default model', 501)
-    }
     const raw = await readOptionalJsonBody(ctx.request)
     assertBodySchema(MODELS_DEFAULT_BODY_SCHEMA, raw ?? {}, 'models default body')
     const body = (raw ?? {}) as Record<string, unknown>
-    const modelArg = 'model' in body ? (body.model as string) : undefined
-    const levelArg = 'thinkingLevel' in body ? (body.thinkingLevel as string) : undefined
-    const compactionArg = 'compactionModel' in body ? (body.compactionModel as string) : undefined
-    if ('compactionThinkingLevel' in body) {
-      await kernel.setDefaultModel(modelArg, levelArg, compactionArg, body.compactionThinkingLevel as string)
-    } else if ('compactionModel' in body) {
-      await kernel.setDefaultModel(modelArg, levelArg, compactionArg)
-    } else {
-      await kernel.setDefaultModel(modelArg, levelArg)
+    // Per-model pair must arrive complete (schema anyOf passes via another field otherwise).
+    const hasModelThinking = 'modelThinking' in body || 'modelThinkingLevel' in body
+    if (hasModelThinking && !('modelThinking' in body && 'modelThinkingLevel' in body)) {
+      throw new ValidationError('models default body: modelThinking and modelThinkingLevel must be set together')
+    }
+    const hasRegularFields =
+      'model' in body || 'thinkingLevel' in body || 'compactionModel' in body || 'compactionThinkingLevel' in body
+    if (hasRegularFields) {
+      if (kernel.setDefaultModel === undefined) {
+        throw new HelmError('not_implemented', 'current runtime does not support setting the default model', 501)
+      }
+      const modelArg = 'model' in body ? (body.model as string) : undefined
+      const levelArg = 'thinkingLevel' in body ? (body.thinkingLevel as string) : undefined
+      const compactionArg = 'compactionModel' in body ? (body.compactionModel as string) : undefined
+      if ('compactionThinkingLevel' in body) {
+        await kernel.setDefaultModel(modelArg, levelArg, compactionArg, body.compactionThinkingLevel as string)
+      } else if ('compactionModel' in body) {
+        await kernel.setDefaultModel(modelArg, levelArg, compactionArg)
+      } else {
+        await kernel.setDefaultModel(modelArg, levelArg)
+      }
+    }
+    if (hasModelThinking) {
+      if (kernel.setModelThinkingDefault === undefined) {
+        throw new HelmError('not_implemented', 'current runtime does not support per-model thinking defaults', 501)
+      }
+      await kernel.setModelThinkingDefault(body.modelThinking as string, body.modelThinkingLevel as string)
     }
     const catalog = await kernel.listModels()
     return jsonOk(redactor, {
       ok: true,
       defaultModel: catalog.defaultModel ?? '',
       defaultThinkingLevel: catalog.defaultThinkingLevel ?? '',
+      modelThinkingLevels: catalog.modelThinkingLevels ?? {},
       defaultCompactionModel: catalog.defaultCompactionModel ?? '',
       defaultCompactionThinkingLevel: catalog.defaultCompactionThinkingLevel ?? '',
     })

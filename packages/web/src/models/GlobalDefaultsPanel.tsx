@@ -4,10 +4,17 @@ import { HelmIcon } from '@helm/plugin-client'
 import { useOptionalModels, useOptionalStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { ModelPickerControl } from '../conversation/ModelPicker.js'
+import {
+  diffModelThinkingEntries,
+  reviewModelThinkingRows,
+  rowsFromModelThinkingLevels,
+  type ModelThinkingRow,
+} from './global-defaults-model.js'
 
 export interface DefaultModelInfo {
   defaultModel: string
   defaultThinkingLevel: string
+  modelThinkingLevels?: Record<string, string>
   defaultCompactionModel?: string
   defaultCompactionThinkingLevel?: string
 }
@@ -22,9 +29,11 @@ export interface GlobalDefaultsPanelProps {
 /**
  * Inline configuration form inside the "Global default" tab:
  * - reuses `ModelPickerControl` (same single-row `model · thinking` picker as
- *   the conversation composer) for both the global default model and the global
- *   compaction model;
- * - saving goes through `assetsApi.setDefaultModel` (empty strings clear keys);
+ *   the conversation composer) for the global default model, the global
+ *   compaction model, and each per-model thinking default row;
+ * - saving goes through `assetsApi.setDefaultModel` (empty strings clear keys;
+ *   per-model rows become strict incremental `modelThinking` pair updates,
+ *   empty level clearing that single entry);
  * - loading carries a generation guard (`loadGeneration`) so stale responses
  *   never overwrite newer state while the model catalog refreshes;
  * - strictly zero Emoji and built on design primitives.
@@ -46,6 +55,9 @@ export function GlobalDefaultsPanel({
   const [formCompactionLevel, setFormCompactionLevel] = useState(
     () => defaultModelInfo?.defaultCompactionThinkingLevel ?? '',
   )
+  const [perModelRows, setPerModelRows] = useState<ModelThinkingRow[]>(() =>
+    rowsFromModelThinkingLevels(defaultModelInfo?.modelThinkingLevels),
+  )
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveSuccess, setSaveSuccess] = useState(false)
@@ -60,6 +72,7 @@ export function GlobalDefaultsPanel({
       setFormLevel(defaultModelInfo.defaultThinkingLevel ?? '')
       setFormCompactionModel(defaultModelInfo.defaultCompactionModel ?? '')
       setFormCompactionLevel(defaultModelInfo.defaultCompactionThinkingLevel ?? '')
+      setPerModelRows(rowsFromModelThinkingLevels(defaultModelInfo.modelThinkingLevels))
       return () => {
         loadGeneration.current = Math.max(loadGeneration.current, gen)
       }
@@ -87,12 +100,33 @@ export function GlobalDefaultsPanel({
     setSaveError(null)
     const gen = ++loadGeneration.current
     try {
+      const issue = reviewModelThinkingRows(perModelRows)
+      if (issue !== null) {
+        setSaveError(
+          issue.kind === 'duplicate'
+            ? t('models.defaults.perModelDuplicate', { model: issue.model })
+            : t('models.defaults.perModelMissingLevel', { model: issue.model }),
+        )
+        return
+      }
       const res = await assetsApi.setDefaultModel(
         formModel,
         formLevel,
         formCompactionModel,
         formCompactionLevel,
       )
+      let modelThinkingLevels = res.modelThinkingLevels
+      // Strict incremental pair updates per changed entry (empty level clears one entry).
+      for (const entry of diffModelThinkingEntries(defaultModelInfo?.modelThinkingLevels, perModelRows)) {
+        const pairRes = await assetsApi.setDefaultModel(
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          entry,
+        )
+        modelThinkingLevels = pairRes.modelThinkingLevels
+      }
       if (gen !== loadGeneration.current) return
       if (actions?.refreshAssets) {
         await actions.refreshAssets()
@@ -100,6 +134,7 @@ export function GlobalDefaultsPanel({
       onSaved({
         defaultModel: res.defaultModel,
         defaultThinkingLevel: res.defaultThinkingLevel,
+        modelThinkingLevels,
         defaultCompactionModel: res.defaultCompactionModel,
         defaultCompactionThinkingLevel: res.defaultCompactionThinkingLevel,
       })
@@ -129,6 +164,7 @@ export function GlobalDefaultsPanel({
     setFormLevel(defaultModelInfo?.defaultThinkingLevel ?? '')
     setFormCompactionModel(defaultModelInfo?.defaultCompactionModel ?? '')
     setFormCompactionLevel(defaultModelInfo?.defaultCompactionThinkingLevel ?? '')
+    setPerModelRows(rowsFromModelThinkingLevels(defaultModelInfo?.modelThinkingLevels))
     setSaveError(null)
   }
 
@@ -204,6 +240,77 @@ export function GlobalDefaultsPanel({
             />
             <span className="text-subtle">{t('models.defaults.compactionHint')}</span>
           </div>
+        </div>
+
+        <div className="model-defaults-permodel">
+          <div className="model-defaults-permodel-head">
+            <span className="model-defaults-permodel-title">{t('models.defaults.perModelTitle')}</span>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => setPerModelRows((rows) => [...rows, { model: '', level: '' }])}
+              disabled={saving}
+            >
+              <HelmIcon name="plus" size={14} />
+              <span>{t('models.defaults.perModelAdd')}</span>
+            </button>
+          </div>
+          <p className="text-muted">{t('models.defaults.perModelHelp')}</p>
+          {perModelRows.length === 0 && (
+            <p className="text-subtle">{t('models.defaults.perModelEmpty')}</p>
+          )}
+          {perModelRows.map((row, index) => (
+            <div className="model-defaults-row" key={index}>
+              <ModelPickerControl
+                buttonId={`model-defaults-permodel-${index}`}
+                buttonAriaLabel={t('models.defaults.perModelAria')}
+                buttonTitle={row.model || t('models.defaults.perModelPick')}
+                placeholderLabel={t('models.defaults.perModelPick')}
+                effectiveModel={row.model}
+                selectedModel={row.model || undefined}
+                activeThinkingLevel={row.level}
+                resetLabel={t('models.defaults.perModelClear')}
+                resetTitle={t('models.defaults.perModelClear')}
+                popoverSide="bottom"
+                enableShortcut={false}
+                disabled={saving}
+                onPickModel={(id) =>
+                  setPerModelRows((rows) =>
+                    rows.map((existing, i) => {
+                      if (i !== index) return existing
+                      const levels =
+                        id === '' ? [] : catalogModels.find((m) => m.id === id)?.thinkingLevels ?? []
+                      // Keep the picked level only when the newly chosen model still supports it.
+                      return {
+                        model: id,
+                        level: existing.level !== '' && levels.includes(existing.level) ? existing.level : '',
+                      }
+                    }),
+                  )
+                }
+                onResetDefault={() =>
+                  setPerModelRows((rows) =>
+                    rows.map((existing, i) => (i === index ? { model: '', level: '' } : existing)),
+                  )
+                }
+                onPickThinking={(lvl) =>
+                  setPerModelRows((rows) =>
+                    rows.map((existing, i) => (i === index ? { ...existing, level: lvl } : existing)),
+                  )
+                }
+              />
+              <button
+                type="button"
+                className="model-defaults-row-remove"
+                onClick={() => setPerModelRows((rows) => rows.filter((_, i) => i !== index))}
+                disabled={saving}
+                title={t('models.defaults.perModelRemove')}
+                aria-label={t('models.defaults.perModelRemove')}
+              >
+                <HelmIcon name="x" size={14} />
+              </button>
+            </div>
+          ))}
         </div>
 
         <div className="model-defaults-form-actions">

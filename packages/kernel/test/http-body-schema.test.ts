@@ -35,12 +35,14 @@ function newCallLog(): CallLog {
     authSetup: [], authLogin: [], credentialSet: [], providersSave: [],
     pluginDisable: [], pluginConfig: [], actionInvoke: [], submitInput: [],
     resetConversation: [], forkConversation: [], answerAsk: [], withdrawQueuedInput: [],
-    setDefaultModel: [], setDisabledModels: [], issueNodeToken: [],
+    setDefaultModel: [], setModelThinkingDefault: [], setDisabledModels: [], issueNodeToken: [],
     upgradeNode: [], startNodeForward: [], execEnv: [],
   }
 }
 
 function makeKernel(calls: CallLog = newCallLog()): KernelRuntimeLike {
+  /** Mutable per-model defaults mirror so GET/PUT echoes reflect the setModelThinkingDefault calls. */
+  const modelThinkingLevels: Record<string, string> = {}
   const kernel = {
     dataDir: '/tmp/helm-schema-parity',
     auth: {
@@ -139,7 +141,11 @@ function makeKernel(calls: CallLog = newCallLog()): KernelRuntimeLike {
     },
     async cancelAsk() {},
     async search() { return [] },
-    listModels: async () => ({ models: [], thinkingLevels: {} }),
+    listModels: async () => ({
+      models: [],
+      thinkingLevels: {},
+      ...(Object.keys(modelThinkingLevels).length > 0 ? { modelThinkingLevels: { ...modelThinkingLevels } } : {}),
+    }),
     setDisabledModels: async (provider: string | undefined, disabledModels: string[]) => {
       calls.setDisabledModels!.push([provider, disabledModels])
       return { models: [], thinkingLevels: {} }
@@ -152,6 +158,11 @@ function makeKernel(calls: CallLog = newCallLog()): KernelRuntimeLike {
       } else {
         calls.setDefaultModel!.push([model, thinkingLevel])
       }
+    },
+    setModelThinkingDefault: async (model: string, level: string) => {
+      calls.setModelThinkingDefault!.push([model, level])
+      if (level === '') delete modelThinkingLevels[model]
+      else modelThinkingLevels[model] = level
     },
     listModelProviders: async () => [],
     async listNodes() { return [] },
@@ -322,12 +333,45 @@ test('models/default: empty object/empty body/explicit null/wrong type/unknown f
   const compactionOnly = await call(kernel, 'PUT', '/api/models/default', { compactionModel: 'faux/faux-2', compactionThinkingLevel: 'low' })
   assert.equal(compactionOnly.status, 200)
   assert.deepEqual(calls.setDefaultModel![2], [undefined, undefined, 'faux/faux-2', 'low'])
-  for (const bad of [{}, { model: null }, { compactionModel: null }, { compactionThinkingLevel: 1 }, { thinkingLevel: 3 }, { other: 'high' }, '"str"', '[]']) {
+  for (const bad of [
+    {},
+    { model: null },
+    { compactionModel: null },
+    { compactionThinkingLevel: 1 },
+    { thinkingLevel: 3 },
+    { other: 'high' },
+    '"str"',
+    '[]',
+    { modelThinking: 'faux/faux-1' },
+    { modelThinkingLevel: 'high' },
+    { modelThinking: 1, modelThinkingLevel: 'high' },
+  ]) {
     await expect400(kernel, 'PUT', '/api/models/default', bad)
   }
   const rawEmpty = await call(kernel, 'PUT', '/api/models/default', undefined)
   assert.equal(rawEmpty.status, 400)
   assert.equal(calls.setDefaultModel!.length, 3)
+})
+
+test('models/default: per-model pair applies alone or together with regular fields and echoes the full map', { timeout: 60_000 }, async () => {
+  const calls = newCallLog()
+  const kernel = makeKernel(calls)
+  const pairOnly = await call(kernel, 'PUT', '/api/models/default', { modelThinking: 'faux/faux-1', modelThinkingLevel: 'high' })
+  assert.equal(pairOnly.status, 200)
+  assert.equal(calls.setDefaultModel!.length, 0, 'pair-only bodies must not invoke the regular setDefaultModel port')
+  assert.deepEqual(calls.setModelThinkingDefault![0], ['faux/faux-1', 'high'])
+  assert.equal(pairOnly.json.ok, true)
+  assert.deepEqual(pairOnly.json.modelThinkingLevels, { 'faux/faux-1': 'high' })
+
+  const combined = await call(kernel, 'PUT', '/api/models/default', {
+    model: 'faux/faux-2',
+    modelThinking: 'faux/faux-1',
+    modelThinkingLevel: '',
+  })
+  assert.equal(combined.status, 200)
+  assert.deepEqual(calls.setDefaultModel![0], ['faux/faux-2', undefined])
+  assert.deepEqual(calls.setModelThinkingDefault![1], ['faux/faux-1', ''])
+  assert.deepEqual(combined.json.modelThinkingLevels, {})
 })
 
 test('models/filter: disabledModels required string array; unknown field/wrong type return 400', { timeout: 60_000 }, async () => {

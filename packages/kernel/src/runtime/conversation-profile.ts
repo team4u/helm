@@ -4,7 +4,7 @@
  * Responsibilities:
  * - Read and validate Profile configurations;
  * - Resolve effective model chain (conversation override > Profile.model > global default);
- * - Resolve effective thinking level chain (conversation override > Profile.thinkingLevel > global default);
+ * - Resolve effective thinking level chain (conversation override > per-model default > Profile.thinkingLevel > global fallback);
  * - Serialize per-conversation configuration updates (withConversationChange);
  * - Reconcile SDK conversation model/thinkingLevel against store mirror (alignConversationModel);
  * - Cascade inheritance updates after Profile save (alignProfileConversations).
@@ -28,6 +28,8 @@ export interface ConversationProfileHost {
   readonly models: () => Models
   readonly defaultModel: () => string | undefined
   readonly defaultThinkingLevel: () => string | undefined
+  /** Per-model thinking defaults lookup (`config.json.modelThinkingLevels`, keyed by full `'provider/modelId'`). */
+  readonly modelThinkingLevelOf: (ref: { provider: string; modelId: string }) => string | undefined
   readonly parseModelRefOrThrow: (ref: string) => { provider: string; modelId: string }
   readonly summaryWithOwnership: (id: number) => ConversationSummary
   /** Schedule context usage recalculation after model/thinking alignment (window/threshold may change); omitted skips. */
@@ -72,14 +74,16 @@ export class ConversationProfileService {
   }
 
   /**
-   * Thinking level override > Profile.thinkingLevel > global default; then clamped to levels supported by the effective model
+   * Thinking level inheritance: conversation override > per-model default for the effective model >
+   * Profile.thinkingLevel > global fallback; then clamped to levels supported by the effective model
    * (nearest supported level if unsupported).
    * Unconfigured values (undefined / empty string) are returned unchanged rather than coerced into explicit 'off'.
    */
   async resolveEffectiveThinkingLevel(override: string | undefined, profileId: string, modelRef?: { provider: string; modelId: string }): Promise<string | undefined> {
     const profile = await this.readProfile(profileId)
     if (!profile) throw new HelmError('profile_not_found', `Profile referenced by conversation does not exist: ${profileId}`, 404, { profileId })
-    const inherited = override || profile.thinkingLevel || this.host.defaultThinkingLevel()
+    const perModel = modelRef !== undefined ? this.host.modelThinkingLevelOf(modelRef) : undefined
+    const inherited = override || perModel || profile.thinkingLevel || this.host.defaultThinkingLevel()
     return clampThinkingLevelForModel(this.host.models(), modelRef, inherited)
   }
 

@@ -14,6 +14,7 @@ const REFRESH_FLAGS: readonly FlagSpec[] = [
 const DEFAULT_FLAGS: readonly FlagSpec[] = [
   { name: 'set', type: 'string', help: 'set global default model (provider/model; empty string to clear)' },
   { name: 'thinking', type: 'string', help: 'set global default thinking level (off/minimal/low/medium/high/xhigh/max; empty string to clear)' },
+  { name: 'model-thinking', type: 'string', help: 'set a per-model thinking default (provider/model=level; modelId may contain slashes; empty level clears that model entry)' },
   { name: 'compaction', type: 'string', help: 'set global compaction model (provider/model; empty string to clear)' },
   { name: 'compaction-thinking', type: 'string', help: 'set global compaction thinking level (off/minimal/low/medium/high/xhigh/max; empty string to clear)' },
 ]
@@ -39,7 +40,7 @@ export function modelsCommands(): CommandSpec[] {
     },
     {
       path: ['models', 'default'],
-      description: 'View or set global default model, thinking level, and compaction model (GET/PUT /api/models/default)',
+      description: 'View or set global default model, per-model thinking defaults, and compaction model (GET/PUT /api/models/default)',
       flags: DEFAULT_FLAGS,
       async run(ctx: CommandContext) {
         const parsed = parseFlags(DEFAULT_FLAGS, ctx.args)
@@ -47,14 +48,36 @@ export function modelsCommands(): CommandSpec[] {
         const hub = await ctx.hub()
         const set = parsed.flags.get('set') as string | undefined
         const thinking = parsed.flags.get('thinking') as string | undefined
+        const modelThinking = parsed.flags.get('model-thinking') as string | undefined
         const compaction = parsed.flags.get('compaction') as string | undefined
         const compactionThinking = parsed.flags.get('compaction-thinking') as string | undefined
-        if (set === undefined && thinking === undefined && compaction === undefined && compactionThinking === undefined) {
+        // Parse `provider/model=level` once at the first `=` (modelId may contain slashes, never `=`).
+        const modelThinkingEntry =
+          modelThinking === undefined
+            ? undefined
+            : (() => {
+                const eq = modelThinking.indexOf('=')
+                if (eq <= 0) {
+                  throw new CliError(
+                    `--model-thinking expects provider/model=level (received '${modelThinking}')`,
+                    'invalid_flag_value',
+                  )
+                }
+                return { model: modelThinking.slice(0, eq), level: modelThinking.slice(eq + 1) }
+              })()
+        if (
+          set === undefined &&
+          thinking === undefined &&
+          modelThinkingEntry === undefined &&
+          compaction === undefined &&
+          compactionThinking === undefined
+        ) {
           printResult(
             ctx,
             await hub.get<{
               defaultModel: string
               defaultThinkingLevel: string
+              modelThinkingLevels: Record<string, string>
               defaultCompactionModel: string
               defaultCompactionThinkingLevel: string
             }>('/api/models/default'),
@@ -67,6 +90,7 @@ export function modelsCommands(): CommandSpec[] {
             ok: boolean
             defaultModel: string
             defaultThinkingLevel: string
+            modelThinkingLevels: Record<string, string>
             defaultCompactionModel: string
             defaultCompactionThinkingLevel: string
           }>(
@@ -74,6 +98,9 @@ export function modelsCommands(): CommandSpec[] {
             {
               ...(set !== undefined ? { model: set } : {}),
               ...(thinking !== undefined ? { thinkingLevel: thinking } : {}),
+              ...(modelThinkingEntry !== undefined
+                ? { modelThinking: modelThinkingEntry.model, modelThinkingLevel: modelThinkingEntry.level }
+                : {}),
               ...(compaction !== undefined ? { compactionModel: compaction } : {}),
               ...(compactionThinking !== undefined ? { compactionThinkingLevel: compactionThinking } : {}),
             },

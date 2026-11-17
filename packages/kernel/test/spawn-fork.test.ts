@@ -457,6 +457,106 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
     }
   })
 
+  it('per-model thinking defaults: explicit effort outranks them; fork model switches drop the parent override', { timeout: 60_000 }, async () => {
+    const dir = join(tmpRoot, 'per-model-thinking')
+    const parentDir = join(dir, 'parent-cwd')
+    const { models, faux } = makeFauxModels({
+      models: [
+        { id: 'faux-default', reasoning: true },
+        { id: 'faux-parent', reasoning: true },
+        { id: 'faux-other', reasoning: true },
+      ],
+    })
+    faux.setResponses(Array.from({ length: 8 }, () => fauxAssistantMessage('OK')))
+
+    const kernel = await KernelRuntime.open({
+      dataDir: dir,
+      cwd: dir,
+      models,
+      model: 'faux/faux-default',
+    })
+    try {
+      await kernel.services.profiles.save({
+        id: 'custom-same',
+        name: 'same role',
+        model: 'faux/faux-parent',
+        thinkingLevel: 'low',
+        cwd: parentDir,
+      })
+      // Per-model defaults: the parent model keeps 'medium', the other model prefers 'high'
+      // (faux models without a thinkingLevelMap support up to high).
+      await kernel.setModelThinkingDefault('faux/faux-parent', 'medium')
+      await kernel.setModelThinkingDefault('faux/faux-other', 'high')
+
+      const parent = await kernel.createConversation({
+        profileId: 'custom-same',
+        cwd: parentDir,
+        model: 'faux/faux-parent',
+      })
+      await kernel.updateConversation(parent.id, { thinkingLevel: 'high' })
+      await kernel.submitInput(parent.id, 'establish parent conversation history')
+      await kernel.waitForIdle(parent.id)
+
+      const beforeIds = new Set(kernel.listConversations({ parentConversationId: parent.id }).map((c) => c.id))
+      const pickNewChild = () => {
+        const added = kernel.listConversations({ parentConversationId: parent.id }).filter((c) => !beforeIds.has(c.id))
+        assert.equal(added.length, 1)
+        beforeIds.add(added[0]!.id)
+        return added[0]!
+      }
+
+      // 1. Non-fork spawn with an explicit model resolves the per-model default above the Profile level.
+      await kernel.spawnAgent({
+        parentConversationId: parent.id,
+        agentType: 'custom-same',
+        prompt: 'fresh child on parent model',
+        model: 'faux/faux-parent',
+      })
+      const freshChild = pickNewChild()
+      assert.equal(freshChild.model, 'faux/faux-parent')
+      assert.equal(freshChild.thinkingLevel, 'medium')
+      assert.equal(freshChild.thinkingLevelOverride, undefined)
+
+      // 2. Non-fork spawn with explicit effort outranks the per-model default and persists as override.
+      await kernel.spawnAgent({
+        parentConversationId: parent.id,
+        agentType: 'custom-same',
+        prompt: 'fresh child with effort',
+        model: 'faux/faux-parent',
+        effort: 'minimal',
+      })
+      const effortChild = pickNewChild()
+      assert.equal(effortChild.thinkingLevel, 'minimal')
+      assert.equal(effortChild.thinkingLevelOverride, 'minimal')
+
+      // 3. Same-profile fork staying on the parent model inherits the parent override.
+      await kernel.spawnAgent({
+        parentConversationId: parent.id,
+        fork: true,
+        prompt: 'fork keeps parent override',
+      })
+      const sameModelFork = pickNewChild()
+      assert.equal(sameModelFork.model, 'faux/faux-parent')
+      assert.equal(sameModelFork.thinkingLevel, 'high')
+      assert.equal(sameModelFork.thinkingLevelOverride, 'high')
+
+      // 4. Same-profile fork explicitly switching models drops the parent override (chosen for the old model)
+      //    and resolves the new model's own per-model default instead.
+      await kernel.spawnAgent({
+        parentConversationId: parent.id,
+        fork: true,
+        prompt: 'fork switches model',
+        model: 'faux/faux-other',
+      })
+      const switchedFork = pickNewChild()
+      assert.equal(switchedFork.model, 'faux/faux-other')
+      assert.equal(switchedFork.thinkingLevel, 'high')
+      assert.equal(switchedFork.thinkingLevelOverride, undefined)
+    } finally {
+      await kernel.close()
+    }
+  })
+
   it('structured output isolation, SecretStash zero-leakage, and pre-hook rejections', { timeout: 60_000 }, async () => {
     const dir = join(tmpRoot, 'isolation-and-rejects')
     const { models, faux } = makeFauxModels({

@@ -437,6 +437,58 @@
   text-align: left;
 }
 
+/* 按模型思考默认条目（设置 -> 模型 -> 全局默认） */
+.model-defaults-permodel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.model-defaults-permodel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.model-defaults-permodel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.model-defaults-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.model-defaults-row .composer-picker-root {
+  flex: 1;
+  min-width: 0;
+}
+
+.model-defaults-row-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.model-defaults-row-remove:hover:not(:disabled) {
+  border-color: var(--border);
+  background: var(--bg-subtle);
+  color: var(--fg);
+}
+
 /* 供应商 Tab 内部工具栏（位于滚动区内，去边框） */
 .model-toolbar-inline.primary-center-toolbar {
   border-bottom: none;

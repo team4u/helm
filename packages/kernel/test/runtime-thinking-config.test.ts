@@ -8,7 +8,7 @@ import type { Harness } from '@earendil-works/pi-durable'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import type { ConversationSummary, HelmEventFrame } from '@helm/protocol'
 import { KernelRuntime } from '../src/runtime/runtime.js'
-import { cleanupDir, makeFauxModels, makeTempDir } from './helpers.js'
+import { assertRejectsCode, cleanupDir, makeFauxModels, makeTempDir } from './helpers.js'
 
 type Runtime = KernelRuntime & { faux: ReturnType<typeof makeFauxModels>['faux'] }
 type ThinkingSummary = ConversationSummary & { thinkingLevelOverride?: string }
@@ -239,4 +239,100 @@ it('spawn creates child with effort > Profile > global driving real SDK; resume 
   assert.equal(kernel.faux.state.callCount, 5, 'all 5 spawn/resume calls must invoke faux')
   await kernel.updateConversation(effortChild, { thinkingLevel: '' })
   await assertThinking(kernel, effortChild, 'medium')
+})
+
+// ---------------------------------------------------------------------------
+// Global per-model thinking defaults (config.json.modelThinkingLevels)
+// ---------------------------------------------------------------------------
+
+it('per-model default resolves between conversation override and Profile level, above the global fallback', { timeout: 60_000 }, async (t) => {
+  const { kernel } = await fixture(t)
+  await kernel.setDefaultModel('faux/faux-1', 'low')
+  await kernel.services.profiles.save({ id: 'expert', name: 'expert', thinkingLevel: 'medium' })
+  const conv = await kernel.createConversation({ profileId: 'expert' })
+  await assertThinking(kernel, conv.id, 'medium')
+
+  // Per-model default outranks the Profile level for its own model only.
+  await kernel.setModelThinkingDefault('faux/faux-1', 'high')
+  await assertThinking(kernel, conv.id, 'high')
+  // Other models without an entry keep the Profile level.
+  const other = await kernel.createConversation({ profileId: 'expert', model: 'faux/faux-2' })
+  await assertThinking(kernel, other.id, 'medium')
+
+  // Explicit conversation override still outranks the per-model default.
+  await kernel.updateConversation(conv.id, { thinkingLevel: 'max' })
+  await assertThinking(kernel, conv.id, 'max', 'max')
+  await kernel.updateConversation(conv.id, { thinkingLevel: '' })
+  await assertThinking(kernel, conv.id, 'high')
+
+  // Clearing the per-model entry falls back to Profile, then the global fallback.
+  await kernel.setModelThinkingDefault('faux/faux-1', '')
+  await assertThinking(kernel, conv.id, 'medium')
+  await kernel.services.profiles.save({ id: 'expert', name: 'expert' })
+  await kernel.alignProfileConversations('expert')
+  await assertThinking(kernel, conv.id, 'low')
+
+  // New conversations and the root conversation follow the per-model default too.
+  await kernel.setModelThinkingDefault('faux/faux-2', 'max')
+  await assertThinking(kernel, 1, 'low')
+  const conv2 = await kernel.createConversation({ model: 'faux/faux-2', profileId: 'expert' })
+  await assertThinking(kernel, conv2.id, 'max')
+})
+
+it('setModelThinkingDefault persists config.json entries, clears single entries, and removes the field when empty', { timeout: 60_000 }, async (t) => {
+  const { dir, kernel } = await fixture(t)
+  await kernel.setDefaultModel('faux/faux-1')
+  await kernel.setModelThinkingDefault('faux/faux-1', 'high')
+  const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'))
+  assert.deepEqual(config.modelThinkingLevels, { 'faux/faux-1': 'high' })
+  assert.deepEqual((await kernel.listModels()).modelThinkingLevels, { 'faux/faux-1': 'high' })
+
+  // Model IDs containing slashes keep the full reference as the map key.
+  await kernel.setModelThinkingDefault('faux/faux-2', 'max')
+  await kernel.setModelThinkingDefault('faux/faux-1', '')
+  const config2 = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'))
+  assert.deepEqual(config2.modelThinkingLevels, { 'faux/faux-2': 'max' })
+  assert.deepEqual((await kernel.listModels()).modelThinkingLevels, { 'faux/faux-2': 'max' })
+
+  // Clearing the last entry deletes the whole field.
+  await kernel.setModelThinkingDefault('faux/faux-2', '')
+  const config3 = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'))
+  assert.equal('modelThinkingLevels' in config3, false)
+  assert.equal((await kernel.listModels()).modelThinkingLevels, undefined)
+
+  // Invalid references and levels are rejected explicitly.
+  await assertRejectsCode(() => kernel.setModelThinkingDefault('no-slash-ref', 'high'), 'validation_error')
+  await assertRejectsCode(() => kernel.setModelThinkingDefault('faux/faux-1', 'bogus'), 'validation_error')
+  await assertRejectsCode(() => kernel.setModelThinkingDefault('', 'high'), 'validation_error')
+  const config4 = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'))
+  assert.equal('modelThinkingLevels' in config4, false)
+})
+
+it('startup loads config.json.modelThinkingLevels including slashed model IDs; corrupt shapes fail explicitly', { timeout: 60_000 }, async (t) => {
+  const dir = await makeTempDir('helm-thinking-permodel-')
+  t.after(async () => { await cleanupDir(dir) })
+  writeFileSync(join(dir, 'config.json'), JSON.stringify({
+    model: 'faux/faux-1',
+    modelThinkingLevels: { 'faux/faux-1': 'high', 'faux/vendored/nested': 'max' },
+  }))
+  const kernel = await open(dir)
+  try {
+    const conv = await kernel.createConversation()
+    await assertThinking(kernel, conv.id, 'high')
+    // Slashed model IDs key the map by the full reference: the lookup must rebuild 'faux' + '/' + 'vendored/nested'.
+    const nested = await kernel.createConversation({ model: 'faux/vendored/nested' })
+    await assertThinking(kernel, nested.id, 'max')
+  } finally {
+    await kernel.close()
+  }
+
+  for (const bad of [
+    { 'faux/faux-1': '' },
+    { 'no-slash-ref': 'high' },
+    { 'faux/faux-1': 7 },
+    ['faux/faux-1'],
+  ]) {
+    writeFileSync(join(dir, 'config.json'), JSON.stringify({ modelThinkingLevels: bad }))
+    await assertRejectsCode(() => open(dir), 'config_corrupt')
+  }
 })

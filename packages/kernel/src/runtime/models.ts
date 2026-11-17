@@ -222,6 +222,7 @@ export async function listModelCatalog(
   defaults?: {
     model?: string
     thinkingLevel?: string
+    modelThinkingLevels?: Readonly<Record<string, string>>
     compactionModel?: string
     compactionThinkingLevel?: string
     disabledModels?: Readonly<Record<string, readonly string[]>>
@@ -249,6 +250,9 @@ export async function listModelCatalog(
     thinkingLevels,
     ...(defaults?.model ? { defaultModel: defaults.model } : {}),
     ...(defaults?.thinkingLevel ? { defaultThinkingLevel: defaults.thinkingLevel } : {}),
+    ...(defaults?.modelThinkingLevels && Object.keys(defaults.modelThinkingLevels).length > 0
+      ? { modelThinkingLevels: { ...defaults.modelThinkingLevels } }
+      : {}),
     ...(defaults?.compactionModel ? { defaultCompactionModel: defaults.compactionModel } : {}),
     ...(defaults?.compactionThinkingLevel ? { defaultCompactionThinkingLevel: defaults.compactionThinkingLevel } : {}),
   }
@@ -305,6 +309,8 @@ export function clampThinkingLevelForModel(
 export interface CompactionModelResolution {
   model: string | undefined
   thinkingLevel?: string | undefined
+  /** Per-model thinking default lookup (`config.json.modelThinkingLevels`); used only when no explicit compaction level is set. */
+  modelThinkingLevel?: (providerId: string, modelId: string) => string | undefined
   isDisabled: (providerId: string, modelId: string) => boolean
 }
 
@@ -372,11 +378,12 @@ export function wrapModelsForCompaction(
           context: Parameters<Models['completeSimple']>[1],
           options?: Parameters<Models['completeSimple']>[2],
         ): Promise<AssistantMessage> => {
-          const { model: compactionRef, thinkingLevel: compactionThinkingLevel, isDisabled } = resolveCompaction()
+          const { model: compactionRef, thinkingLevel: compactionThinkingLevel, modelThinkingLevel, isDisabled } = resolveCompaction()
           if ((!compactionRef && !compactionThinkingLevel) || !isCompactionSummarizationCall(context, options)) {
             return target.completeSimple(model, context, options)
           }
           let targetModel = model
+          let perModelDefault: string | undefined
           if (compactionRef) {
             let ref: ModelRefParts
             try {
@@ -407,12 +414,17 @@ export function wrapModelsForCompaction(
               )
             }
             targetModel = resolved
+            // Without an explicit compaction level, the compaction model's own per-model default wins
+            // over the conversation-level reasoning carried in by the caller.
+            if (compactionThinkingLevel === undefined) {
+              perModelDefault = modelThinkingLevel?.(ref.provider, ref.modelId)
+            }
           }
           const next = { ...(options ?? {}) }
           if (compactionRef && targetModel.maxTokens > 0 && next.maxTokens !== undefined) {
             next.maxTokens = Math.min(next.maxTokens, targetModel.maxTokens)
           }
-          const desiredThinking = compactionThinkingLevel ?? next.reasoning
+          const desiredThinking = compactionThinkingLevel ?? perModelDefault ?? next.reasoning
           if (desiredThinking !== undefined) {
             const clamped = clampToModelLevels(targetModel, desiredThinking as ModelThinkingLevel)
             if (clamped === 'off') {

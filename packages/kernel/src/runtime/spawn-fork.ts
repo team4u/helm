@@ -37,6 +37,8 @@ export interface ForkModelAndThinkingInput {
   parentSummary: { model?: string; thinkingLevel?: string; thinkingLevelOverride?: string } | undefined
   defaultModel: () => ModelRefParts
   defaultThinkingLevel?: () => string | undefined
+  /** Per-model thinking default lookup (`config.json.modelThinkingLevels`); ranks between explicit sources and Profile level. */
+  modelThinkingLevelOf?: (model: ModelRefParts) => string | undefined
   modelsForClamp?: Models
 }
 
@@ -83,7 +85,7 @@ export function resolveForkMode(
 export function resolveInheritedModelAndThinking(
   input: ForkModelAndThinkingInput,
 ): ForkModelAndThinkingResult {
-  const { request, forkSameProfile, profile, parentSummary, defaultModel, defaultThinkingLevel, modelsForClamp } = input
+  const { request, forkSameProfile, profile, parentSummary, defaultModel, defaultThinkingLevel, modelThinkingLevelOf, modelsForClamp } = input
   const explicitModel = request.model ? parseModelRef(request.model) : undefined
   const profileModel = profile.model ? parseModelRef(profile.model) : undefined
   const parentModel = parentSummary?.model ? parseModelRef(parentSummary.model) : undefined
@@ -92,15 +94,24 @@ export function resolveInheritedModelAndThinking(
       ? (explicitModel ?? (forkSameProfile ? (parentModel ?? profileModel) : (profileModel ?? parentModel)) ?? defaultModel())
       : (explicitModel ?? profileModel ?? defaultModel())
 
-  const parentThinking =
+  // Parent thinking (explicit override first, else the effective mirror) only carries when the child stays on the
+  // parent's model: an explicit model switch drops it so the new model's own default chain applies (same rule as
+  // conversation model switches).
+  const sameModelAsParent =
+    parentModel !== undefined &&
+    resolvedModel.provider === parentModel.provider &&
+    resolvedModel.modelId === parentModel.modelId
+  const rawParentThinking =
     (parentSummary?.thinkingLevelOverride && parentSummary.thinkingLevelOverride !== ''
       ? parentSummary.thinkingLevelOverride
       : undefined) ??
     (parentSummary?.thinkingLevel && parentSummary.thinkingLevel !== '' ? parentSummary.thinkingLevel : undefined)
+  const parentThinking = sameModelAsParent ? rawParentThinking : undefined
+  const perModelDefault = modelThinkingLevelOf?.(resolvedModel)
   const inheritedLevel =
     request.fork === true
-      ? (request.effort ?? (forkSameProfile ? (parentThinking ?? profile.thinkingLevel) : (profile.thinkingLevel ?? parentThinking)) ?? defaultThinkingLevel?.())
-      : (request.effort ?? profile.thinkingLevel ?? defaultThinkingLevel?.())
+      ? (request.effort ?? (forkSameProfile ? (parentThinking ?? perModelDefault ?? profile.thinkingLevel) : (perModelDefault ?? profile.thinkingLevel ?? parentThinking)) ?? defaultThinkingLevel?.())
+      : (request.effort ?? perModelDefault ?? profile.thinkingLevel ?? defaultThinkingLevel?.())
   const thinkingLevel = modelsForClamp
     ? clampThinkingLevelForModel(modelsForClamp, resolvedModel, inheritedLevel)
     : inheritedLevel
@@ -108,6 +119,7 @@ export function resolveInheritedModelAndThinking(
     request.effort !== undefined
       ? thinkingLevel
       : forkSameProfile &&
+          sameModelAsParent &&
           parentSummary?.thinkingLevelOverride !== undefined &&
           thinkingLevel !== undefined &&
           thinkingLevel !== ''
