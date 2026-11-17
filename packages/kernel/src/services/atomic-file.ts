@@ -1,16 +1,16 @@
 /**
  * Atomic file writes and safe reads with contextual error messages.
- * Write path: temp file (random UUID name + 0600) -> fsync -> rename so crashes never half-truncate;
- * 0600 ensures credentials and secrets never leak permissions via temp files.
+ * Write path delegates to the shared `@helm/env-io` primitive (`atomicWriteFile` / `atomicWriteJson`):
+ * hidden temp file (random UUID + 0600, forced against umask) -> fsync -> rename with bounded
+ * transient-lock retry, so crashes never half-truncate and credentials never leak permissions
+ * via temp files.
  */
 import fsp from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { renameAtomically } from '@helm/env-io'
 
-/** Bounded backoff parameters when Windows target rename hits transient file locks (concurrent reads / AV / indexer). */
-const RENAME_BUSY_TOTAL_MS = 1_500
-const RENAME_BUSY_INITIAL_POLL_MS = 5
-const RENAME_BUSY_MAX_POLL_MS = 50
+export { atomicWriteFile, atomicWriteJson } from '@helm/env-io'
 
 export class FileNotFoundError extends Error {
   constructor(path: string) {
@@ -27,85 +27,6 @@ export class FileParseError extends Error {
     super(`failed to parse JSON in ${path}: ${String(cause)}`)
     this.name = 'FileParseError'
   }
-}
-
-/**
- * Windows transient-busy check: renaming over a file being read/scanned briefly returns EPERM/EACCES/EBUSY,
- * which succeeds after bounded backoff. On other platforms these codes indicate real permission/mount faults.
- */
-function isTransientRenameBusy(err: unknown): boolean {
-  if (process.platform !== 'win32') return false
-  const code = (err as NodeJS.ErrnoException | undefined)?.code
-  return code === 'EPERM' || code === 'EACCES' || code === 'EBUSY'
-}
-
-/**
- * Atomic rename replacement; applies exponential backoff (5 -> 50ms, ~1.5s total) only for Windows
- * transient busy locks, preserving the original ErrnoException (`code` intact) when exhausted and
- * appending retry diagnostics to distinguish transient locks from permission failures.
- */
-async function renameAtomically(tmp: string, targetPath: string): Promise<void> {
-  const startedAt = Date.now()
-  const deadline = startedAt + RENAME_BUSY_TOTAL_MS
-  let retries = 0
-  for (;;) {
-    try {
-      await fsp.rename(tmp, targetPath)
-      return
-    } catch (err) {
-      if (!isTransientRenameBusy(err) || Date.now() >= deadline) {
-        if (retries > 0 && err instanceof Error) {
-          const elapsed = Date.now() - startedAt
-          try {
-            err.message = `${err.message} (Windows target file transiently locked; still failed after ${retries} retries / ${elapsed}ms)`
-          } catch {
-            /* preserve original error if message is read-only */
-          }
-        }
-        throw err
-      }
-      const delayMs = Math.min(RENAME_BUSY_MAX_POLL_MS, RENAME_BUSY_INITIAL_POLL_MS * 2 ** retries)
-      retries += 1
-      await new Promise((resolve) => setTimeout(resolve, delayMs))
-    }
-  }
-}
-
-/** Atomic file write: temp (random UUID, 0600) -> fsync -> rename; unique temp names prevent concurrent collisions. */
-export async function atomicWriteFile(
-  path: string,
-  data: string | Uint8Array,
-  opts?: { mode?: number },
-): Promise<void> {
-  await fsp.mkdir(dirname(path), { recursive: true })
-  const tmp = join(dirname(path), `.${randomUUID()}.tmp`)
-  const mode = opts?.mode ?? 0o600
-  const handle = await fsp.open(tmp, 'w', mode)
-  let handleClosed = false
-  try {
-    try {
-      await handle.writeFile(data)
-      await handle.sync()
-    } finally {
-      await handle.close()
-      handleClosed = true
-    }
-    await renameAtomically(tmp, path)
-  } catch (err) {
-    if (!handleClosed) await handle.close().catch(() => {})
-    await fsp.rm(tmp, { force: true }).catch(() => {})
-    throw err
-  }
-}
-
-/** Atomic JSON write (UTF-8, 2-space indent, deterministic key formatting for human diffs). */
-export async function atomicWriteJson(
-  path: string,
-  value: unknown,
-  opts?: { mode?: number },
-): Promise<void> {
-  const text = JSON.stringify(value, null, 2) + '\n'
-  await atomicWriteFile(path, text, opts)
 }
 
 /** Read UTF-8 text; missing files throw `FileNotFoundError` with path (never returns empty silently). */

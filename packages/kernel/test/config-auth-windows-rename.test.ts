@@ -1,7 +1,9 @@
 /**
  * Windows config.json rename EPERM protection and AuthService zero-read cache regression tests:
- * 1. atomicWriteFile / copyFilePrivate perform bounded backoff retries on transient Windows EPERM/EACCES/EBUSY;
- *    when exhausted, preserve original errno code, attach retry count diagnostics, clean tmp files, and keep old target intact; non-Windows fails immediately.
+ * 1. atomicWriteFile / copyFilePrivate (delegating to the shared `@helm/env-io` primitive) perform bounded
+ *    backoff retries on transient EPERM/EACCES/EBUSY on every platform (merged unified semantics); when
+ *    exhausted, they preserve the original errno code, attach retry count diagnostics, clean tmp files,
+ *    and keep the old target intact; non-retryable codes fail immediately without retries.
  * 2. ConfigService.get and update share the in-process file lock without deadlocking (read/write mutual exclusion within the same process prevents rename collisions).
  * 3. AuthService shares an in-process cache and singleflight per canonical path: steady-state verifyToken/status do zero readFile calls,
  *    cross-instance and symlink caches sync invalidation, external edits take effect via invalidateCache, corrupt auth is not cached, and concurrent reads never backfill stale snapshots.
@@ -51,8 +53,7 @@ async function assertNoTmpLeftovers(dir: string): Promise<void> {
   assert.deepEqual(tmps, [], `must not leave temporary files behind: ${tmps.join(', ')}`)
 }
 
-test('Windows atomicWriteJson backs off on transient EPERM/EACCES/EBUSY and commits cleanly without tmp leftovers', { timeout: 60_000 }, async (t) => {
-  const restore = fakePlatform('win32')
+test('atomicWriteJson backs off on transient EPERM/EACCES/EBUSY and commits cleanly without tmp leftovers', { timeout: 60_000 }, async (t) => {
   const realRename = fsp.rename.bind(fsp)
   let attempts = 0
   const stub = t.mock.method(fsp, 'rename', async (...args: Parameters<typeof fsp.rename>) => {
@@ -74,12 +75,10 @@ test('Windows atomicWriteJson backs off on transient EPERM/EACCES/EBUSY and comm
     })
   } finally {
     stub.mock.restore()
-    restore()
   }
 })
 
-test('Windows atomicWriteFile and copyFilePrivate bounded exhaustion on persistent EPERM: preserve code, attach retry diagnostics, clean tmp, keep old value intact', { timeout: 60_000 }, async (t) => {
-  const restore = fakePlatform('win32')
+test('atomicWriteFile and copyFilePrivate bounded exhaustion on persistent EPERM: preserve code, attach retry diagnostics, clean tmp, keep old value intact', { timeout: 60_000 }, async (t) => {
   const stub = t.mock.method(fsp, 'rename', async (...args: Parameters<typeof fsp.rename>) => {
     void args
     throw errnoError('EPERM', 'EPERM: operation not permitted, rename')
@@ -94,7 +93,7 @@ test('Windows atomicWriteFile and copyFilePrivate bounded exhaustion on persiste
         (err: unknown) =>
           err instanceof Error &&
           (err as NodeJS.ErrnoException).code === 'EPERM' &&
-          err.message.includes('Windows target file transiently locked') &&
+          err.message.includes('rename target transiently locked') &&
           err.message.includes('still failed after'),
       )
       const waited = Date.now() - startedAt
@@ -115,7 +114,7 @@ test('Windows atomicWriteFile and copyFilePrivate bounded exhaustion on persiste
         (err: unknown) =>
           err instanceof Error &&
           (err as NodeJS.ErrnoException).code === 'EPERM' &&
-          err.message.includes('Windows target file transiently locked'),
+          err.message.includes('rename target transiently locked'),
       )
       assert.ok(stub.mock.callCount() - callsBeforeCopy >= 20)
       assert.equal(await fsp.readFile(dest, 'utf8'), 'old-content')
@@ -123,16 +122,15 @@ test('Windows atomicWriteFile and copyFilePrivate bounded exhaustion on persiste
     })
   } finally {
     stub.mock.restore()
-    restore()
   }
 })
 
-test('non-Windows platforms fail immediately on EPERM without backoff retries', { timeout: 60_000 }, async (t) => {
-  const restore = fakePlatform('linux')
+test('POSIX persistent EPERM (unified all-platform retry) still fails honestly after bounded backoff: code preserved, diagnostics attached, tmp cleaned, no target fabricated', { timeout: 60_000 }, async (t) => {
   const stub = t.mock.method(fsp, 'rename', async (...args: Parameters<typeof fsp.rename>) => {
     void args
     throw errnoError('EPERM', 'EPERM: operation not permitted')
   })
+  const startedAt = Date.now()
   try {
     await withTempDir('helm-atomic-posix-', async (dir) => {
       const target = join(dir, 'config.json')
@@ -141,14 +139,18 @@ test('non-Windows platforms fail immediately on EPERM without backoff retries', 
         (err: unknown) =>
           err instanceof Error &&
           (err as NodeJS.ErrnoException).code === 'EPERM' &&
-          !err.message.includes('Windows target file transiently locked'),
+          err.message.includes('rename target transiently locked') &&
+          err.message.includes('still failed after'),
       )
-      assert.equal(stub.mock.callCount(), 1)
+      const waited = Date.now() - startedAt
+      assert.ok(waited >= 1_400, `unified semantics retry transient codes on POSIX too, bounded around 1.5s, actual ${waited}ms`)
+      assert.ok(waited < 10_000, `backoff must be bounded and converge quickly, actual ${waited}ms`)
+      assert.ok(stub.mock.callCount() >= 20, `should keep retrying until the budget is exhausted, actual ${stub.mock.callCount()} calls`)
+      assert.equal(await fsp.readFile(target, 'utf8').then(() => 'exists', () => 'missing'), 'missing', 'failed write must not fabricate a target')
       await assertNoTmpLeftovers(dir)
     })
   } finally {
     stub.mock.restore()
-    restore()
   }
 })
 

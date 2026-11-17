@@ -341,6 +341,9 @@ importers:
 
   packages/plugin-build:
     dependencies:
+      '@helm/env-io':
+        specifier: workspace:*
+        version: link:../env-io
       '@helm/protocol':
         specifier: workspace:*
         version: link:../protocol

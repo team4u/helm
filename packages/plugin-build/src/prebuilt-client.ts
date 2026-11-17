@@ -20,9 +20,8 @@ import {
   type PrebuiltClientManifest,
   type PrebuiltClientModuleEntry,
 } from '@helm/protocol';
+import { atomicWriteFileSync } from '@helm/env-io';
 import {
-  atomicWrite,
-  atomicWriteBuffer,
   compilePluginClientModule,
   realPathOrThrow,
   safeFileName,
@@ -116,8 +115,8 @@ export async function buildPluginClientBundleDir(
       const baseName = safeFileName(moduleRef);
       const entryFile = `${baseName}.${bundle.contentHash}.mjs`;
       const entryGz = bundle.gzipped ?? gzipSync(Buffer.from(bundle.code, 'utf8'));
-      atomicWrite(join(stagingOut, entryFile), bundle.code);
-      atomicWriteBuffer(join(stagingOut, `${entryFile}.gz`), entryGz);
+      atomicWriteFileSync(join(stagingOut, entryFile), bundle.code);
+      atomicWriteFileSync(join(stagingOut, `${entryFile}.gz`), entryGz);
       totalBytes += Buffer.byteLength(bundle.code, 'utf8') + entryGz.byteLength;
 
       const chunkNames = Object.keys(bundle.chunks ?? {}).sort();
@@ -125,8 +124,8 @@ export async function buildPluginClientBundleDir(
         const chunkData = bundle.chunks![chunkName]!;
         const chunkFile = prebuiltChunkFileName(entryFile, chunkName, pluginId);
         const chunkGz = chunkData.gzipped ?? gzipSync(Buffer.from(chunkData.code, 'utf8'));
-        atomicWrite(join(stagingOut, chunkFile), chunkData.code);
-        atomicWriteBuffer(join(stagingOut, `${chunkFile}.gz`), chunkGz);
+        atomicWriteFileSync(join(stagingOut, chunkFile), chunkData.code);
+        atomicWriteFileSync(join(stagingOut, `${chunkFile}.gz`), chunkGz);
         totalBytes += Buffer.byteLength(chunkData.code, 'utf8') + chunkGz.byteLength;
       }
 
@@ -144,7 +143,7 @@ export async function buildPluginClientBundleDir(
     };
     const manifest = assertPrebuiltClientManifest(manifestRaw, stagingOut);
     const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
-    atomicWrite(join(stagingOut, PREBUILT_CLIENT_MANIFEST_FILE), manifestText);
+    atomicWriteFileSync(join(stagingOut, PREBUILT_CLIENT_MANIFEST_FILE), manifestText);
     totalBytes += Buffer.byteLength(manifestText, 'utf8');
 
     const resolvedOut = resolve(outDir);

@@ -20,7 +20,6 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { randomBytes } from 'node:crypto';
 import type { Duplex } from 'node:stream';
 import { WebSocket, createWebSocketStream } from 'ws';
 import { createBirpc, type BirpcReturn } from 'birpc';
@@ -43,7 +42,7 @@ import type {
   RpcResult,
 } from '@helm/protocol';
 import { DEFAULT_NODE_ID } from '@helm/protocol';
-import { findEnvKey, getEnvEntry, prependEnvPath, setEnvEntry } from '@helm/env-io';
+import { atomicWriteJson, findEnvKey, getEnvEntry, prependEnvPath, setEnvEntry } from '@helm/env-io';
 import { createNodeEnvRpcServer, type NodeEnvRpcServer, type NodeEnvRpcServerOptions } from './env-rpc-server.js';
 import { createSocketBirpcEvents } from './birpc-events.js';
 import {
@@ -252,20 +251,10 @@ export async function readNodeIdentity(dataDir: string): Promise<NodeIdentity | 
   return parsed;
 }
 
-/** Atomically persist `<dataDir>/node.json` with `0600` permissions. */
+/** Atomically persist `<dataDir>/node.json` with `0600` permissions via the shared `@helm/env-io` primitive. */
 export async function writeNodeIdentity(dataDir: string, identity: NodeIdentity): Promise<void> {
   assertValidIdentity(identity, 'invalid node identity');
-  const target = path.join(dataDir, 'node.json');
-  await fs.mkdir(dataDir, { recursive: true });
-  const temp = `${target}.${randomBytes(6).toString('hex')}.tmp`;
-  try {
-    await fs.writeFile(temp, JSON.stringify(identity, null, 2) + '\n', { mode: 0o600 });
-    await fs.rename(temp, target);
-    await fs.chmod(target, 0o600);
-  } catch (error) {
-    await fs.unlink(temp).catch(() => undefined);
-    throw error;
-  }
+  await atomicWriteJson(path.join(dataDir, 'node.json'), identity, { mode: 0o600 });
 }
 
 // ---------------------------------------------------------------------------

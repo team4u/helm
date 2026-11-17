@@ -17,6 +17,7 @@
     "test": "tsx --test"
   },
   "dependencies": {
+    "@helm/env-io": "workspace:*",
     "@helm/protocol": "workspace:*",
     "esbuild": "0.28.2"
   }

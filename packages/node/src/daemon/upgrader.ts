@@ -23,6 +23,7 @@ import {
   type NodeUpgradeCheckResult,
   type NodeUpgradeResult,
 } from '@helm/protocol';
+import { atomicWriteJson } from '@helm/env-io';
 import { killProcessTree } from './local-env.js';
 
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org';
@@ -187,20 +188,6 @@ async function readJsonRecord<T>(filePath: string, validate: (raw: unknown) => T
   }
 }
 
-/** Atomic `0600` JSON write via sibling temporary file + rename. */
-async function writeSecureJson(filePath: string, data: unknown): Promise<void> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const temp = `${filePath}.${randomUUID().slice(0, 8)}.tmp`;
-  try {
-    await fs.writeFile(temp, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 });
-    await fs.rename(temp, filePath);
-    await fs.chmod(filePath, 0o600);
-  } catch (error) {
-    await fs.unlink(temp).catch(() => undefined);
-    throw new Error(`failed to write ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
 function requireString(raw: Record<string, unknown>, key: string): string {
   const value = raw[key];
   if (typeof value !== 'string' || value === '') {
@@ -242,7 +229,7 @@ export async function readCurrentRelease(dataDir: string): Promise<CurrentReleas
 
 export async function writeCurrentRelease(dataDir: string, record: CurrentReleaseRecord): Promise<void> {
   validateCurrentRecord(record as unknown);
-  await writeSecureJson(currentReleasePath(dataDir), record);
+  await atomicWriteJson(currentReleasePath(dataDir), record, { mode: 0o600 });
 }
 
 export async function deleteCurrentRelease(dataDir: string): Promise<void> {
@@ -255,7 +242,7 @@ export async function readBlockedRelease(dataDir: string): Promise<BlockedReleas
 
 export async function writeBlockedRelease(dataDir: string, record: BlockedReleaseRecord): Promise<void> {
   validateBlockedRecord(record);
-  await writeSecureJson(blockedReleasePath(dataDir), record);
+  await atomicWriteJson(blockedReleasePath(dataDir), record, { mode: 0o600 });
 }
 
 export async function clearBlockedRelease(dataDir: string): Promise<void> {
@@ -711,7 +698,7 @@ export async function stageReleaseFromNpm(
       completedAt: new Date().toISOString(),
       origin: options?.stageExtractor ? 'extractor' : 'npm',
     };
-    await writeSecureJson(completePath, marker);
+    await atomicWriteJson(completePath, marker, { mode: 0o600 });
 
     return { version: targetVersion, releaseDir: candidateDir, entryPath: finalEntry, cliBinDir: finalBin };
   } catch (error) {

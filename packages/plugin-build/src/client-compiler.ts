@@ -18,11 +18,12 @@
  *   - Remote `@import` is explicitly rejected; local `@import` enters the dependency closure and hash;
  * - Enforces realpath containment on every loaded file inside `clientRoot` or authorized controlled-npm
  *   package directories, rejecting undeclared bare specifiers explicitly;
- * - Writes artifacts atomically (`randomUUID` temp file + rename) and deduplicates concurrent compiles
+ * - Writes artifacts atomically via the shared `@helm/env-io` primitive (hidden temp + fsync +
+ *   0600 + bounded rename retry) and deduplicates concurrent compiles
  *   for the same key. Compilation failures throw explicit `HelmError`s with diagnostics.
  */
-import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, realpathSync, statSync, readFileSync, writeFileSync, renameSync, existsSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdirSync, realpathSync, statSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { basename, isAbsolute, join, dirname, relative, resolve, sep } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import {
@@ -33,6 +34,7 @@ import {
   type PluginClientBundle,
   type PluginClientNpmRoot,
 } from '@helm/protocol';
+import { atomicWriteFileSync } from '@helm/env-io';
 import { build, type Plugin as EsbuildPlugin } from 'esbuild';
 import {
   collectDynamicImportTargets,
@@ -393,16 +395,16 @@ async function compileUncached(
 
     const list = buildDepsList(rootReal, moduleRef, dependencies, npmDeps, npmRoots, entryExports);
     mkdirSync(stagingDir, { recursive: true });
-    atomicWrite(join(stagingDir, `${baseName}.${list.contentHash}.mjs`), mainOutput);
+    atomicWriteFileSync(join(stagingDir, `${baseName}.${list.contentHash}.mjs`), mainOutput);
     let gzipped: Uint8Array | undefined;
     try {
       const gz = gzipSync(Buffer.from(mainOutput, 'utf8'));
-      atomicWriteBuffer(join(stagingDir, `${baseName}.${list.contentHash}.mjs.gz`), gz);
+      atomicWriteFileSync(join(stagingDir, `${baseName}.${list.contentHash}.mjs.gz`), gz);
       gzipped = gz;
     } catch {
       /* on-demand gzip fallback remains available */
     }
-    atomicWrite(depsListPath, `${JSON.stringify(list)}\n`);
+    atomicWriteFileSync(depsListPath, `${JSON.stringify(list)}\n`);
     const finalResult: ClientCompileResult = {
       code: mainOutput,
       contentHash: list.contentHash,
@@ -576,24 +578,24 @@ async function compileUncached(
 
   // Persist artifacts atomically and populate in-memory cache.
   mkdirSync(stagingDir, { recursive: true });
-  atomicWrite(join(stagingDir, `${baseName}.${list.contentHash}.mjs`), mainJs);
+  atomicWriteFileSync(join(stagingDir, `${baseName}.${list.contentHash}.mjs`), mainJs);
   let gzipped: Uint8Array | undefined;
   try {
     const gz = gzipSync(Buffer.from(mainJs, 'utf8'));
-    atomicWriteBuffer(join(stagingDir, `${baseName}.${list.contentHash}.mjs.gz`), gz);
+    atomicWriteFileSync(join(stagingDir, `${baseName}.${list.contentHash}.mjs.gz`), gz);
     gzipped = gz;
   } catch {
     /* ignore */
   }
 
   for (const [chunkName, chunkData] of Object.entries(chunkOutputs)) {
-    atomicWrite(join(stagingDir, `${baseName}.${list.contentHash}.chunk.${chunkName}`), chunkData.code);
+    atomicWriteFileSync(join(stagingDir, `${baseName}.${list.contentHash}.chunk.${chunkName}`), chunkData.code);
     if (chunkData.gzipped) {
-      atomicWriteBuffer(join(stagingDir, `${baseName}.${list.contentHash}.chunk.${chunkName}.gz`), chunkData.gzipped);
+      atomicWriteFileSync(join(stagingDir, `${baseName}.${list.contentHash}.chunk.${chunkName}.gz`), chunkData.gzipped);
     }
   }
 
-  atomicWrite(depsListPath, `${JSON.stringify(list)}\n`);
+  atomicWriteFileSync(depsListPath, `${JSON.stringify(list)}\n`);
 
   const finalResult: ClientCompileResult = {
     code: mainJs,
@@ -1084,56 +1086,6 @@ function buildDepsList(
 // ---------------------------------------------------------------------------
 // Atomic file writes and path containment helpers
 // ---------------------------------------------------------------------------
-
-const RETRYABLE_RENAME_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
-const MAX_RENAME_RETRIES = 5;
-
-function sleepSyncMs(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-function renameWithRetry(tmp: string, targetPath: string): void {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      renameSync(tmp, targetPath);
-      return;
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException | undefined)?.code;
-      if (attempt >= MAX_RENAME_RETRIES || !code || !RETRYABLE_RENAME_CODES.has(code)) {
-        throw err;
-      }
-      sleepSyncMs(10 * 2 ** attempt);
-    }
-  }
-}
-
-function atomicWriteRaw(targetPath: string, content: string | Buffer | Uint8Array): void {
-  mkdirSync(dirname(targetPath), { recursive: true });
-  const tmp = `${targetPath}.tmp-${randomUUID()}`;
-  try {
-    if (typeof content === 'string') {
-      writeFileSync(tmp, content, 'utf8');
-    } else {
-      writeFileSync(tmp, content);
-    }
-    renameWithRetry(tmp, targetPath);
-  } catch (err) {
-    try {
-      rmSync(tmp, { force: true });
-    } catch {
-      /* ignore cleanup failure so original error propagates */
-    }
-    throw err;
-  }
-}
-
-export function atomicWrite(targetPath: string, content: string): void {
-  atomicWriteRaw(targetPath, content);
-}
-
-export function atomicWriteBuffer(targetPath: string, content: Buffer | Uint8Array): void {
-  atomicWriteRaw(targetPath, content);
-}
 
 function sha256(text: string): string {
   return createHash('sha256').update(text).digest('hex');

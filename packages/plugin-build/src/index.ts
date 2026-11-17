@@ -2,8 +2,8 @@
  * @helm/plugin-build — default implementation of the plugin build port (`PluginBuildProvider`).
  *
  * Injected explicitly into the kernel `PluginHost` (`PluginHostOptions.buildProvider`) by the product
- * composition root (`@helm/hub`). Depends only on `@helm/protocol` and `esbuild`, with zero reverse
- * dependency on `kernel`, `hub`, or `web`.
+ * composition root (`@helm/hub`). Depends only on `@helm/protocol`, `@helm/env-io` (shared atomic
+ * writes), and `esbuild`, with zero reverse dependency on `kernel`, `hub`, or `web`.
  *
  * Capabilities:
  * - `compileClientModule`: compiles `client.tsx` into browser ESM (shared dependency shims, CSS
