@@ -1,7 +1,48 @@
 /** output render:--json fidelity JSON; person class pattern is align table / key-value / original text. */
+import {
+  createLocaleTranslator,
+  DEFAULT_HELM_LOCALE,
+  parseLocalizedText,
+  type LocaleTranslator,
+} from '@helm/protocol'
 import type { Io } from './options.js'
 
 const CELL_LIMIT = 64
+
+/**
+ * Human-mode display-copy translator: the CLI keeps no locale state of its
+ * own, so per the protocol copy model human output resolves `LocalizedText`
+ * with the default locale ('en'); `--json` always keeps the raw shape.
+ */
+const humanDisplayCopy: LocaleTranslator = createLocaleTranslator(DEFAULT_HELM_LOCALE)
+
+/** Plain JSON-shaped record (Object.prototype or null prototype) safe to rebuild for display. */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const proto = Object.getPrototypeOf(value)
+  return proto === Object.prototype || proto === null
+}
+
+/**
+ * Deep display-copy resolution for human rendering only (never the --json
+ * path): values shaped exactly as a LocalizedText map (validated by the
+ * shared protocol parser — closed locale keys, string entries) collapse to
+ * one display string; arrays and plain records recurse so nested display
+ * metadata (plugin summaries, app catalog entries, config schema labels)
+ * renders resolved instead of raw `{"en":...}` JSON. Non-plain objects
+ * (class instances, Dates) pass through untouched.
+ */
+function resolveDisplayCopy(value: unknown): unknown {
+  const parsed = parseLocalizedText(value)
+  if (parsed !== undefined && typeof parsed !== 'string') return humanDisplayCopy(parsed)
+  if (Array.isArray(value)) return value.map((item) => resolveDisplayCopy(item))
+  if (isPlainRecord(value)) {
+    const out: Record<string, unknown> = {}
+    for (const [key, entry] of Object.entries(value)) out[key] = resolveDisplayCopy(entry)
+    return out
+  }
+  return value
+}
 
 function toCell(value: unknown): string {
   if (value === undefined || value === null) return ''
@@ -40,31 +81,34 @@ export function printValue(io: Io, value: unknown, json: boolean): void {
     io.out(`${JSON.stringify(value === undefined ? null : value, null, 2)}\n`)
     return
   }
-  if (value === undefined || value === null) {
+  // human path only: resolve protocol display copy (LocalizedText maps) before
+  // rendering; JSON fidelity above is never touched.
+  const display = resolveDisplayCopy(value)
+  if (display === undefined || display === null) {
     io.out('ok\n')
     return
   }
-  if (typeof value === 'string') {
-    io.out(value.endsWith('\n') ? value : `${value}\n`)
+  if (typeof display === 'string') {
+    io.out(display.endsWith('\n') ? display : `${display}\n`)
     return
   }
-  if (typeof value === 'number' || typeof value === 'boolean') {
-    io.out(`${value}\n`)
+  if (typeof display === 'number' || typeof display === 'boolean') {
+    io.out(`${display}\n`)
     return
   }
-  if (Array.isArray(value)) {
-    if (value.length === 0) {
+  if (Array.isArray(display)) {
+    if (display.length === 0) {
       io.out('(empty)\n')
       return
     }
-    if (value.every((item) => item !== null && typeof item === 'object')) {
-      printTable(io, value as Record<string, unknown>[])
+    if (display.every((item) => item !== null && typeof item === 'object')) {
+      printTable(io, display as Record<string, unknown>[])
       return
     }
-    for (const item of value) io.out(`${toCell(item)}\n`)
+    for (const item of display) io.out(`${toCell(item)}\n`)
     return
   }
-  const entries = Object.entries(value as Record<string, unknown>)
+  const entries = Object.entries(display as Record<string, unknown>)
   if (entries.length === 0) {
     io.out('(empty)\n')
     return

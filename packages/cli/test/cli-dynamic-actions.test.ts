@@ -615,3 +615,55 @@ test('cli.timeoutMs=0: slow response do not apply add request timeout (--wait lo
   assert.equal(r.code, 0, r.err)
   assert.equal(JSON.parse(r.out).done, true)
 })
+
+// ---------------------------------------------------------------------------
+// result rendering: protocol display copy (LocalizedText) resolves for human
+// output only; --json keeps the raw contract shape (never parsed maps)
+// ---------------------------------------------------------------------------
+
+test('action output: human rendering resolves nested LocalizedText display copy; --json keeps raw shape', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helm-cli-dyn-')
+  // apps-list-shaped payload: display metadata nested three levels deep
+  const payload = {
+    apps: [
+      {
+        pluginId: 'demo:board',
+        name: { en: 'Task Board', 'zh-CN': '任务看板' },
+        description: { en: 'Kanban for tasks', 'zh-CN': '任务看板描述' },
+        enabled: true,
+        screens: ['board'],
+        catalog: { title: { 'zh-CN': '任务看板' } },
+      },
+      {
+        pluginId: 'demo:stats',
+        name: 'Stats',
+        enabled: false,
+        screens: [],
+        counters: { en: 'x', visits: 2 },
+      },
+    ],
+  }
+  const hub = await startActionsHub(
+    [action({ command: ['gadget', 'deploy'] })],
+    { 'POST /api/actions/builtin%3Agadget/deploy': () => ({ body: payload }) },
+    t,
+  )
+  const env = makeCliEnv(hub.url, dir)
+
+  // --json: fidelity passthrough of the raw localized maps
+  const rj = await runCliCaptured(['gadget', 'deploy', '--json'], env)
+  assert.equal(rj.code, 0, rj.err)
+  assert.deepEqual(JSON.parse(rj.out), payload)
+
+  // human: nested display copy resolved with the default locale ('en'); the
+  // zh-CN-only catalog title falls back to its first declared locale entry
+  const rh = await runCliCaptured(['gadget', 'deploy'], env)
+  assert.equal(rh.code, 0, rh.err)
+  assert.ok(rh.out.includes('Task Board'), rh.out)
+  assert.ok(rh.out.includes('Kanban for tasks'), rh.out)
+  assert.ok(rh.out.includes('任务看板'), rh.out)
+  // strict shape guard: a record mixing locale and non-locale keys is plain
+  // data, never collapsed into display copy
+  assert.ok(rh.out.includes('visits'), rh.out)
+  assert.ok(!rh.out.includes('"zh-CN"'), `raw localized map must not leak into human output:\n${rh.out}`)
+})

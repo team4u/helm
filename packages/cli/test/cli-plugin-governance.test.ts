@@ -182,3 +182,29 @@ test('plugins list: pass-through contains status/error  PluginSummary', { timeou
   assert.ok(rh.out.includes('failed'))
   assert.ok(rh.out.includes('plugin_load_failed'))
 })
+
+test('plugins list: human table resolves LocalizedText display copy; --json keeps raw maps', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helm-cli-gov-')
+  const summary = [
+    makePluginSummary({
+      id: 'demo:board',
+      name: { en: 'Dashboard Plugin', 'zh-CN': '看板插件' },
+      description: { 'zh-CN': '仅中文描述' },
+    }),
+  ]
+  const hub = await startMockHub({ 'GET /api/plugins': () => ({ body: summary }) }, { autoRegisterCleanup: t })
+  const env = makeCliEnv(hub.url, dir)
+
+  // --json: contract passthrough keeps the raw localized shape untouched
+  const rj = await runCliCaptured(['plugins', 'list', '--json'], env)
+  assert.equal(rj.code, 0, rj.err)
+  assert.deepEqual(JSON.parse(rj.out), summary)
+
+  // human table: display copy resolves with the default locale ('en'); a map
+  // without an 'en' entry falls back to the first declared locale entry
+  const rh = await runCliCaptured(['plugins', 'list'], env)
+  assert.equal(rh.code, 0, rh.err)
+  assert.ok(rh.out.includes('Dashboard Plugin'), rh.out)
+  assert.ok(rh.out.includes('仅中文描述'), rh.out)
+  assert.ok(!rh.out.includes('"zh-CN"'), `raw localized map must not leak into human table:\n${rh.out}`)
+})
