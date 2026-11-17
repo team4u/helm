@@ -13,7 +13,7 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { PluginClientContext as PluginClientContextType, ScreenProps } from '@helm/protocol'
-import { PluginClientContext } from '@helm/plugin-client'
+import { PluginClientContext, resolveLocalizedText, type HelmLocale } from '@helm/plugin-client'
 import { importBuiltinClientModule, mountSharedPluginNamespaces, setBuiltinClientStub } from './helpers/builtin-clients.js'
 
 const e = React.createElement
@@ -39,7 +39,7 @@ interface SpyCtx extends PluginClientContextType {
   actionCalls: Array<{ actionId: string; input: unknown }>
 }
 
-function makeSpyCtx(): SpyCtx {
+function makeSpyCtx(locale: HelmLocale = 'en'): SpyCtx {
   const screenCalls: string[] = []
   const splitCalls: string[] = []
   const actionCalls: Array<{ actionId: string; input: unknown }> = []
@@ -64,8 +64,8 @@ function makeSpyCtx(): SpyCtx {
     getPluginDoc: async () => undefined,
     getPluginSessionDoc: async () => undefined,
     theme: 'dark',
-    locale: 'en' as const,
-    translate: (text) => (typeof text === 'string' ? text : ''),
+    locale,
+    translate: (text) => resolveLocalizedText(text, locale),
   }
   return Object.assign(base, { screenCalls, splitCalls, actionCalls })
 }
@@ -184,7 +184,7 @@ test('应用合并：仅非 builtin 且有 Screen 的外部插件进入列表，
     [screen('todo-app', 'main', '待办台'), screen('tracker-app', 'main', '看板'), screen('builtin:superagent', 'recall-graph', '图谱')],
   )
   const { host, unmount } = await mount(makeSpyCtx(), screenProps())
-  assert.match(host.textContent ?? '', /共 2 个应用 · 1 个已就绪/)
+  assert.match(host.textContent ?? '', /2 apps · 1 ready/)
   assert.equal(host.querySelectorAll('.app-card').length, 2)
   assert.ok(host.querySelector('[data-app-id="todo-app"]'))
   assert.ok(host.querySelector('[data-app-id="tracker-app"]'))
@@ -205,7 +205,7 @@ test('打开应用与分屏打开：整卡点击调用 ctx.openScreen，分屏�
   })
   assert.deepEqual(ctx.screenCalls, ['screen:todo-app/main'], '卡片整卡点击打开应用走声明式目标字符串')
 
-  const splitBtn = host.querySelector<HTMLButtonElement>('[data-app-id="todo-app"] button[aria-label="分屏打开应用"]')
+  const splitBtn = host.querySelector<HTMLButtonElement>('[data-app-id="todo-app"] button[aria-label="Open app in split view"]')
   assert.ok(splitBtn, '应存在分屏打开按钮')
   await act(async () => {
     splitBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -220,7 +220,7 @@ test('停用应用：卡片标记 is-disabled，分屏按钮不出现（无虚�
   const { host, unmount } = await mount(makeSpyCtx(), screenProps())
   const card = host.querySelector('[data-app-id="tracker-app"]')
   assert.ok(card?.classList.contains('is-disabled'))
-  const splitBtn = card?.querySelector('button[aria-label="分屏打开应用"]')
+  const splitBtn = card?.querySelector('button[aria-label="Open app in split view"]')
   assert.ok(splitBtn === null, '停用应用不得提供分屏打开入口（提供插件中心启用）')
   unmount()
 })
@@ -241,7 +241,7 @@ test('分类 Tab 与搜索过滤：点击药丸切换 Tab 并经 setParams 回�
 
   // 置顶 Tab：仅 catalog 登记 pinned 的应用（setParams 后模拟宿主重渲染）
   const pills = Array.from(host.querySelectorAll('.primary-category-pill'))
-  const pinnedPill = pills.find((p) => p.textContent?.includes('已置顶'))
+  const pinnedPill = pills.find((p) => p.textContent?.includes('Pinned'))
   assert.ok(pinnedPill)
   await act(async () => {
     pinnedPill.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -274,7 +274,7 @@ test('深链参数恢复：params.tab / params.q 初始即生效（sp.* 命名�
   setParamsCalls = []
   const { host, unmount } = await mount(makeSpyCtx(), screenProps({ tab: 'pinned', q: '待办' }))
   const active = host.querySelector('.primary-category-pill.is-active')
-  assert.ok(active?.textContent?.includes('已置顶'), 'params.tab 恢复激活 Tab')
+  assert.ok(active?.textContent?.includes('Pinned'), 'params.tab 恢复激活 Tab')
   assert.equal(host.querySelectorAll('.app-card').length, 1)
   assert.equal(host.querySelector('.app-card')?.getAttribute('data-app-id'), 'todo-app')
   const search = host.querySelector<HTMLInputElement>('.primary-search-box input')
@@ -312,19 +312,19 @@ test('筛选药丸：仅保留「全部」与「已置顶」，移除多余业�
   const second = pills[1]
   assert.ok(first)
   assert.ok(second)
-  assert.match(first.textContent ?? '', /全部/)
+  assert.match(first.textContent ?? '', /All/)
   assert.match(first.textContent ?? '', /2/)
-  assert.match(second.textContent ?? '', /已置顶/)
+  assert.match(second.textContent ?? '', /Pinned/)
   assert.match(second.textContent ?? '', /1/)
-  assert.equal(pills.some((p) => p.textContent?.includes('效率工具')), false, '业务分类标签已移除')
+  assert.equal(pills.some((p) => p.textContent?.includes('Productivity') || p.textContent?.includes('效率工具')), false, '业务分类标签已移除')
   unmount()
 })
 
 test('空态：无任何应用时如实提示让 AI 创建，不编造数据', { timeout: 60_000 }, async () => {
   stubStore([plugin('builtin:superagent')], [screen('builtin:superagent', 'recall-graph', '图谱')])
   const { host, unmount } = await mount(makeSpyCtx(), screenProps())
-  assert.match(host.textContent ?? '', /还没有全栈应用/)
-  assert.match(host.textContent ?? '', /让 AI 生成/)
+  assert.match(host.textContent ?? '', /No full-stack apps yet/)
+  assert.match(host.textContent ?? '', /Ask AI in a conversation/)
   assert.equal(host.querySelectorAll('.app-card').length, 0)
   unmount()
 })
@@ -342,10 +342,10 @@ test('停用 catalog 应用：screens 为空仍显示停用卡片，提供插件
   const card = host.querySelector('[data-app-id="tracker-app"]')
   assert.ok(card, 'catalog 登记的停用应用必须保留卡片（可重新启用）')
   assert.ok(card.classList.contains('is-disabled'))
-  assert.match(card.textContent ?? '', /已停用/)
-  assert.doesNotMatch(card.textContent ?? '', /打开应用|分屏打开/, '停用且无视图不得提供打开入口')
+  assert.match(card.textContent ?? '', /Stopped/)
+  assert.doesNotMatch(card.textContent ?? '', /Open view|Open app in split view/, '停用且无视图不得提供打开入口')
 
-  const enableBtn = Array.from(card.querySelectorAll('button')).find((b) => b.textContent?.includes('插件中心启用'))
+  const enableBtn = Array.from(card.querySelectorAll('button')).find((b) => b.textContent?.includes('Enable in plugin center'))
   assert.ok(enableBtn, '应提供插件中心启用入口')
   await act(async () => {
     enableBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -358,7 +358,7 @@ test('未登记 catalog 且无 Screen 的外部插件：不进入应用列表', 
   stubStore([plugin('community:plain')], [])
   const { host, unmount } = await mount(makeSpyCtx(), screenProps())
   assert.equal(host.querySelectorAll('.app-card').length, 0)
-  assert.match(host.textContent ?? '', /还没有全栈应用/)
+  assert.match(host.textContent ?? '', /No full-stack apps yet/)
   unmount()
 })
 
@@ -373,7 +373,7 @@ test('查看应用详情与就地卸载：点击 3 点按钮就地展开详情�
   const { host, unmount, reRender } = await mount(ctx, props)
 
   // 1. 卡片右下角 3 点详情按钮
-  const detailBtn = host.querySelector<HTMLButtonElement>('[data-app-id="todo-app"] button[aria-label="查看应用详情"]')
+  const detailBtn = host.querySelector<HTMLButtonElement>('[data-app-id="todo-app"] button[aria-label="View app details"]')
   assert.ok(detailBtn, '应存在查看应用详情按钮')
 
   await act(async () => {
@@ -389,24 +389,24 @@ test('查看应用详情与就地卸载：点击 3 点按钮就地展开详情�
   assert.ok(drawer, '详情抽屉应渲染展开并使用 primary-drawer-content 规范样式')
   assert.match(drawer.textContent ?? '', /待办应用/)
   assert.match(drawer.textContent ?? '', /v1.2.0/)
-  assert.match(drawer.textContent ?? '', /效率工具/)
-  assert.match(drawer.textContent ?? '', /继续对话迭代/)
+  assert.match(drawer.textContent ?? '', /Productivity/)
+  assert.match(drawer.textContent ?? '', /Continue iterating/)
 
   // 3. 校验遮罩层必须具备 primary-drawer-backdrop 类名
   const overlay = document.body.querySelector('.primary-drawer-backdrop')
   assert.ok(overlay, '遮罩层必须绑定 .primary-drawer-backdrop 通用层级规范')
 
   // 4. 底栏删除按钮：点击后进入二次确认状态
-  const deleteBtn = Array.from(drawer.querySelectorAll('button')).find((b) => b.textContent?.includes('删除'))
+  const deleteBtn = Array.from(drawer.querySelectorAll('button')).find((b) => b.getAttribute('aria-label') === 'Uninstall and delete app')
   assert.ok(deleteBtn, '底栏应存在删除按钮')
 
   await act(async () => {
     deleteBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
-  assert.match(drawer.textContent ?? '', /确认卸载并删除此应用？/, '点击删除后展示确认文案')
+  assert.match(drawer.textContent ?? '', /Uninstall and delete this app\?/, '点击删除后展示确认文案')
 
   // 5. 点击「确认删除」调用 remove 动作
-  const confirmDeleteBtn = Array.from(drawer.querySelectorAll('button')).find((b) => b.textContent?.includes('确认删除'))
+  const confirmDeleteBtn = Array.from(drawer.querySelectorAll('button')).find((b) => b.textContent?.includes('Delete'))
   assert.ok(confirmDeleteBtn, '应出现确认删除按钮')
 
   await act(async () => {
@@ -420,6 +420,32 @@ test('查看应用详情与就地卸载：点击 3 点按钮就地展开详情�
   assert.ok(setParamsCalls.some((c) => c.patch['app'] === undefined), '删除成功后关闭抽屉')
 
   unmount()
+})
+
+test('zh-CN locale：应用中心主舞台与详情抽屉切为中文文案', { timeout: 60_000 }, async () => {
+  stubStore(
+    [
+      plugin('todo-app', { name: '待办应用', description: '记账与待办', version: '1.2.0' }),
+      plugin('tracker-app', { name: '追踪应用', enabled: false }),
+    ],
+    [screen('todo-app', 'main', '待办台'), screen('tracker-app', 'main', '看板')],
+    { apps: { 'todo-app': { pluginId: 'todo-app', pinned: true, category: 'productivity' } } },
+  )
+  const { props } = mutableScreenProps({ app: 'todo-app' }, { inlineDrawer: true })
+  const { host, unmount } = await mount(makeSpyCtx('zh-CN'), props)
+  try {
+    assert.match(host.textContent ?? '', /应用中心/)
+    assert.match(host.textContent ?? '', /共 2 个应用 · 1 个已就绪/)
+    assert.match(host.textContent ?? '', /全部/)
+    assert.match(host.textContent ?? '', /已置顶/)
+    assert.match(host.textContent ?? '', /插件中心启用/)
+    const drawer = document.body.querySelector('.primary-drawer-content')
+    assert.ok(drawer)
+    assert.match(drawer.textContent ?? '', /效率工具/)
+    assert.match(drawer.textContent ?? '', /继续对话迭代/)
+  } finally {
+    unmount()
+  }
 })
 
 test('渲染输出零 Emoji', { timeout: 60_000 }, async () => {

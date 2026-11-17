@@ -28,10 +28,12 @@ test('后台完成结果与耗时来自 run，不来自父工具返回启动句�
 })
 
 test('当前正文生成优先于保留的旧思考快照', { timeout: 60_000 }, () => {
-  const snippet = m.resolveSubagentHeaderSnippet({ badgeStatus: 'working', live: {
+  const live = {
     conversationId: 12, text: 'Generating结论', thinking: '先检查测试结果', tools: [], updatedAt: 1,
-  } })
-  assert.deepEqual(snippet, { kind: 'text', tag: '输出', text: 'Generating结论' })
+  }
+  const snippet = m.resolveSubagentHeaderSnippet({ badgeStatus: 'working', live })
+  assert.deepEqual(snippet, { kind: 'text', tag: 'Output', text: 'Generating结论' })
+  assert.deepEqual(m.resolveSubagentHeaderSnippet({ badgeStatus: 'working', live }, 'zh-CN'), { kind: 'text', tag: '输出', text: 'Generating结论' })
 })
 
 test('新一轮输入尚无回答时，不把上一轮 assistant 结论作为本轮结果', { timeout: 60_000 }, () => {
@@ -44,20 +46,23 @@ test('新一轮输入尚无回答时，不把上一轮 assistant 结论作为本
 })
 
 test('路径按执行会话 cwd 缩短，支持远端目录和 Windows，不硬编码宿主仓库', { timeout: 60_000 }, () => {
-  assert.deepEqual(m.formatSemanticToolAction('read', { path: '/workspace/project/src/app.ts' }, '/workspace/project'), { tag: '读取', text: 'src/app.ts' })
-  assert.deepEqual(m.formatSemanticToolAction('read', { path: 'C:\\work\\project\\app.ts' }, 'C:\\work\\project'), { tag: '读取', text: 'app.ts' })
+  assert.deepEqual(m.formatSemanticToolAction('read', { path: '/workspace/project/src/app.ts' }, '/workspace/project'), { tag: 'Read', text: 'src/app.ts' })
+  assert.deepEqual(m.formatSemanticToolAction('read', { path: 'C:\\work\\project\\app.ts' }, 'C:\\work\\project'), { tag: 'Read', text: 'app.ts' })
   assert.equal(m.formatSemanticToolAction('read', { path: '/root/code/helm/app.ts' }).text, '/root/code/helm/app.ts')
+  assert.deepEqual(m.formatSemanticToolAction('read', { path: '/workspace/project/src/app.ts' }, '/workspace/project', 'zh-CN'), { tag: '读取', text: 'src/app.ts' })
 })
 
 test('已加载工具数量按 callId 合并 live，不将分页记录伪装为本轮完整步数', { timeout: 60_000 }, () => {
   const entries: ConversationEntry[] = [{ id: '1', kind: 'pi.assistant', model: [{ role: 'assistant', content: [
     { type: 'toolCall', id: 'a', name: 'read', arguments: { path: 'a.ts' } },
   ] }] }]
-  const stats = m.buildSubagentStatSegments({ entries, live: { conversationId: 12, text: '', tools: [
-    { callId: 'a', toolName: 'read', status: 'done' },
-    { callId: 'b', toolName: 'bash', status: 'running' },
-  ], updatedAt: 1 } })
-  assert.deepEqual(stats, ['已载 2 次工具'])
+  const live = { conversationId: 12, text: '', tools: [
+    { callId: 'a', toolName: 'read', status: 'done' as const },
+    { callId: 'b', toolName: 'bash', status: 'running' as const },
+  ], updatedAt: 1 }
+  const stats = m.buildSubagentStatSegments({ entries, live })
+  assert.deepEqual(stats, ['2 tools loaded'])
+  assert.deepEqual(m.buildSubagentStatSegments({ entries, live }, 'zh-CN'), ['已载 2 次工具'])
 })
 import { buildTimelineItems } from '../src/conversation/timeline-model.js'
 

@@ -11,7 +11,7 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { PluginClientContext as PluginClientContextType } from '@helm/protocol'
-import { PluginClientContext } from '@helm/plugin-client'
+import { PluginClientContext, resolveLocalizedText, type HelmLocale } from '@helm/plugin-client'
 import { importBuiltinClientModule, mountSharedPluginNamespaces, setBuiltinClientStub } from './helpers/builtin-clients.js'
 
 const e = React.createElement
@@ -31,7 +31,7 @@ interface SpyCtx extends PluginClientContextType {
   actionCalls: Array<{ actionId: string; input: unknown }>
 }
 
-function makeSpyCtx(): SpyCtx {
+function makeSpyCtx(locale: HelmLocale = 'en'): SpyCtx {
   const actionCalls: Array<{ actionId: string; input: unknown }> = []
   const base: PluginClientContextType = {
     pluginId: 'builtin:magpie',
@@ -50,8 +50,8 @@ function makeSpyCtx(): SpyCtx {
     getPluginDoc: async () => undefined,
     getPluginSessionDoc: async () => undefined,
     theme: 'dark',
-    locale: 'en' as const,
-    translate: (text) => (typeof text === 'string' ? text : ''),
+    locale,
+    translate: (text) => resolveLocalizedText(text, locale),
   }
   return Object.assign(base, { actionCalls })
 }
@@ -102,14 +102,14 @@ test('状态概览：KV 网关地址 / 可达 / 模型数 / 路由组数 / 最�
   const spy = makeSpyCtx()
   const { host, unmount } = await mount(spy)
   try {
-    assert.match(host.textContent ?? '', /Magpie 网关/, '标题')
+    assert.match(host.textContent ?? '', /Magpie Gateway/, '标题')
     assert.match(host.textContent ?? '', /Magpie · 12 模型/, 'summaryText')
     assert.match(host.textContent ?? '', /http:\/\/127\.0\.0\.1:3425/, '网关地址')
-    assert.match(host.textContent ?? '', /本机 loopback/, 'KV 键')
-    assert.match(host.textContent ?? '', /模型数/, '可达时模型数不带缓存标注')
-    assert.match(host.textContent ?? '', /路由组数/, 'KV 键')
-    assert.doesNotMatch(host.textContent ?? '', /模型数（缓存）/, 'reachable=true 不标注缓存')
-    assert.doesNotMatch(host.textContent ?? '', /最近错误/, '无错误时不渲染最近错误行')
+    assert.match(host.textContent ?? '', /Local loopback/, 'KV 键')
+    assert.match(host.textContent ?? '', /Models/, '可达时模型数不带缓存标注')
+    assert.match(host.textContent ?? '', /Route groups/, 'KV 键')
+    assert.doesNotMatch(host.textContent ?? '', /Models \(cached\)/, 'reachable=true 不标注缓存')
+    assert.doesNotMatch(host.textContent ?? '', /Last error/, '无错误时不渲染最近错误行')
   } finally {
     unmount()
   }
@@ -119,14 +119,14 @@ test('配额与路由轨迹表渲染（窗口 / 剩余 / 重置 / 命中模型�
   const spy = makeSpyCtx()
   const { host, unmount } = await mount(spy)
   try {
-    assert.match(host.textContent ?? '', /诊断/, '诊断区块标题')
-    assert.match(host.textContent ?? '', /无诊断信息/, '空诊断如实展示')
-    assert.match(host.textContent ?? '', /配额/, '配额区块标题')
+    assert.match(host.textContent ?? '', /Diagnostics/, '诊断区块标题')
+    assert.match(host.textContent ?? '', /No diagnostics/, '空诊断如实展示')
+    assert.match(host.textContent ?? '', /Quotas/, '配额区块标题')
     assert.match(host.textContent ?? '', /opencode-go/, '配额 provider')
     assert.match(host.textContent ?? '', /5h/, '窗口列')
     assert.match(host.textContent ?? '', /3h/, '重置列')
     assert.match(host.textContent ?? '', /moonshot/, '第二行 provider')
-    assert.match(host.textContent ?? '', /路由轨迹/, '路由区块标题')
+    assert.match(host.textContent ?? '', /Route history/, '路由区块标题')
     assert.match(host.textContent ?? '', /relay/, '路由组')
     assert.match(host.textContent ?? '', /round-robin/, '策略')
     assert.match(host.textContent ?? '', /glm-4\.7/, '命中模型')
@@ -152,7 +152,7 @@ test('reachable=false 时模型数标注缓存、lastError 与诊断如实展示
     const spy = makeSpyCtx()
     const { host, unmount } = await mount(spy)
     try {
-      assert.match(host.textContent ?? '', /模型数（缓存）/, '不可达时标注缓存计数')
+      assert.match(host.textContent ?? '', /Models \(cached\)/, '不可达时标注缓存计数')
       assert.match(host.textContent ?? '', /connect ECONNREFUSED/, 'lastError 如实展示')
       assert.match(host.textContent ?? '', /配额不可用：timeout/, '诊断如实展示')
       assert.match(host.textContent ?? '', /Magpie · 未连接/, 'summaryText 未连接')
@@ -168,7 +168,7 @@ test('刷新按钮触发 refresh 动作；失败显式展示错误', { timeout: 
   const spy = makeSpyCtx()
   const { host, unmount } = await mount(spy)
   try {
-    const refresh = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('刷新模型目录'))
+    const refresh = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Refresh model catalog'))
     assert.ok(refresh, '刷新按钮存在')
     await act(async () => {
       refresh!.click()
@@ -187,7 +187,7 @@ test('刷新按钮触发 refresh 动作；失败显式展示错误', { timeout: 
   }
   const { host: host2, unmount: unmount2 } = await mount(failing)
   try {
-    const refresh = [...host2.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('刷新'))
+    const refresh = [...host2.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Refresh model catalog'))
     await act(async () => {
       refresh!.click()
     })
@@ -204,21 +204,34 @@ test('doc 未到达展示加载态、空 doc 展示空表', { timeout: 60_000 },
     const spy = makeSpyCtx()
     const { host, unmount } = await mount(spy)
     try {
-      assert.match(host.textContent ?? '', /网关状态读取中/, '加载态展示')
+      assert.match(host.textContent ?? '', /Loading gateway status…/, '加载态展示')
     } finally {
       unmount()
     }
     setBuiltinClientStub({ docs: { status: { ...STATUS_DOC, quotas: [], routes: [], diagnostics: [], summaryText: '' } } })
     const { host: host2, unmount: unmount2 } = await mount(spy)
     try {
-      assert.match(host2.textContent ?? '', /暂无配额数据/, '空配额如实展示')
-      assert.match(host2.textContent ?? '', /暂无路由记录/, '空路由如实展示')
-      assert.match(host2.textContent ?? '', /无诊断信息/, '空诊断如实展示')
-      assert.doesNotMatch(host2.textContent ?? '', /读取中/, '空 doc 不残留加载态')
+      assert.match(host2.textContent ?? '', /No quota data/, '空配额如实展示')
+      assert.match(host2.textContent ?? '', /No route history/, '空路由如实展示')
+      assert.match(host2.textContent ?? '', /No diagnostics/, '空诊断如实展示')
+      assert.doesNotMatch(host2.textContent ?? '', /Loading gateway status/, '空 doc 不残留加载态')
     } finally {
       unmount2()
     }
   } finally {
     setBuiltinClientStub({ docs: { status: STATUS_DOC } })
+  }
+})
+
+test('zh-CN locale：Magpie 设置面板切为中文表头与 KV 文案', { timeout: 60_000 }, async () => {
+  const { host, unmount } = await mount(makeSpyCtx('zh-CN'))
+  try {
+    assert.match(host.textContent ?? '', /Magpie 网关/)
+    assert.match(host.textContent ?? '', /刷新模型目录/)
+    assert.match(host.textContent ?? '', /本机 loopback/)
+    assert.match(host.textContent ?? '', /无诊断信息/)
+    assert.match(host.textContent ?? '', /路由轨迹/)
+  } finally {
+    unmount()
   }
 })

@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import * as HelmPluginClient from '@helm/plugin-client'
+import type { HelmLocale } from '@helm/plugin-client'
 import { normalizeSpec, type NormalizedSpecNode } from '../../plugins/src/json-render/client/spec-normalize.js'
 import type { EvalScope } from '../../plugins/src/json-render/client/evaluator.js'
 import { compilePluginClientModule } from '@helm/plugin-build'
@@ -15,6 +16,7 @@ import type { ReactNode } from 'react'
 /** spec-primitives 的渲染上下文形状（client 目录不入 typecheck，此处本地最小声明）。 */
 interface SpecRenderContext {
   scope: EvalScope
+  locale: HelmLocale
   conversationId?: number
   pluginId?: string
   renderChildren(children: NormalizedSpecNode[]): ReactNode
@@ -43,11 +45,11 @@ writeFileSync(f, code, 'utf8')
 const { SpecNodeList } = await import(pathToFileURL(f).href)
 rmSync(CACHE, { recursive: true, force: true })
 
-function render(spec: Record<string, unknown>, pending: boolean, succeeded: boolean): string {
+function render(spec: Record<string, unknown>, pending: boolean, succeeded: boolean, locale: HelmLocale = 'en'): string {
   const normalized = normalizeSpec(spec)
   assert.ok(normalized.root)
   const ctx: SpecRenderContext = {
-    scope: {}, runAction: () => {}, isPending: () => pending, isSucceeded: () => succeeded,
+    scope: {}, locale, runAction: () => {}, isPending: () => pending, isSucceeded: () => succeeded,
     renderChildren: (nodes) => React.createElement(SpecNodeList, { nodes, ctx }),
   }
   return renderToString(React.createElement(SpecNodeList, { nodes: [normalized.root], ctx }))
@@ -68,7 +70,7 @@ for (const { name, spec } of fixtures) {
     assert.match(html, /aria-busy="true"/)
     assert.match(html, /spin-slow/)
     assert.doesNotMatch(html, /lucide-check/)
-    assert.doesNotMatch(html, /已提交/)
+    assert.doesNotMatch(html, /Submitted/)
   })
 
   test(`${name} 请求成功后显示确认图标且可再次操作`, { timeout: 60_000 }, () => {
@@ -76,6 +78,13 @@ for (const { name, spec } of fixtures) {
     assert.match(html, /lucide-check/)
     assert.doesNotMatch(html, /disabled=""/)
     assert.doesNotMatch(html, /spin-slow/)
-    if (name === 'TextInput') assert.match(html, /已提交/)
+    if (name === 'TextInput') assert.match(html, /Submitted/)
   })
 }
+
+test('zh-CN locale：TextInput 在途与成功按钮文案切为中文', { timeout: 60_000 }, () => {
+  const textInputSpec = fixtures.find((f) => f.name === 'TextInput')!.spec
+  assert.match(render(textInputSpec, true, true, 'zh-CN'), /提交中/)
+  assert.doesNotMatch(render(textInputSpec, true, true, 'zh-CN'), /已提交/)
+  assert.match(render(textInputSpec, false, true, 'zh-CN'), /已提交/)
+})

@@ -19,7 +19,7 @@ import type {
   TimelineRendererProps,
   ToolViewProps,
 } from '@helm/protocol'
-import { PluginClientContext } from '@helm/plugin-client'
+import { PluginClientContext, resolveLocalizedText } from '@helm/plugin-client'
 import { importBuiltinClientModule, mountSharedPluginNamespaces, setBuiltinClientStub } from './helpers/builtin-clients.js'
 
 const e = React.createElement
@@ -65,6 +65,7 @@ function makeSpyCtx(overrides: Partial<SpyCtx> = {}): SpyCtx {
   const actionCalls: Array<{ actionId: string; input: unknown }> = []
   const artifactCalls: string[] = []
   const notifyCalls: Array<{ message: string; tone?: string }> = []
+  const locale = overrides.locale ?? 'en'
   const base: PluginClientContextType = {
     pluginId: 'builtin:superagent',
     callAction: async (actionId, input) => {
@@ -91,8 +92,8 @@ function makeSpyCtx(overrides: Partial<SpyCtx> = {}): SpyCtx {
     getPluginSessionDoc: async () => undefined,
     conversationId: 1,
     theme: 'dark',
-    locale: 'en' as const,
-    translate: (text) => (typeof text === 'string' ? text : ''),
+    locale,
+    translate: (text) => resolveLocalizedText(text, locale),
   }
   return Object.assign(base, { screenCalls, splitCalls, actionCalls, artifactCalls, notifyCalls, ...overrides })
 }
@@ -164,12 +165,12 @@ test('composerWidget：态势计数、Worker 表与打开导航', { timeout: 60_
   const spy = makeSpyCtx()
   const { host, unmount } = await mount(spy, e(components.SuperAgentComposerWidget, composerProps()))
   try {
-    assert.match(host.textContent ?? '', /中枢态势/, '标题渲染')
-    assert.match(host.textContent ?? '', /活跃 Worker 2 个/, 'Worker 计数')
-    assert.match(host.textContent ?? '', /事件订阅 1 条/, '订阅计数')
+    assert.match(host.textContent ?? '', /Hub status/, '标题渲染')
+    assert.match(host.textContent ?? '', /Active workers: 2/, 'Worker 计数')
+    assert.match(host.textContent ?? '', /event subscriptions: 1/, '订阅计数')
     assert.match(host.textContent ?? '', /#11/, 'Worker 行 11')
     assert.match(host.textContent ?? '', /#12/, 'Worker 行 12')
-    const open = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('打开'))
+    const open = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Open'))
     assert.ok(open, '行内有打开按钮')
     await act(async () => {
       open!.click()
@@ -186,7 +187,7 @@ test('composerWidget：doc 未到达时展示加载态而非空白', { timeout: 
     const spy = makeSpyCtx()
     const { host, unmount } = await mount(spy, e(components.SuperAgentComposerWidget, composerProps()))
     try {
-      assert.match(host.textContent ?? '', /态势读取中/, '加载态展示')
+      assert.match(host.textContent ?? '', /Loading status…/, '加载态展示')
     } finally {
       unmount()
     }
@@ -237,10 +238,10 @@ test('toolView：派工卡展示 Worker 表并支持归档；在途时统一禁�
     }),
   )
   try {
-    assert.match(host.textContent ?? '', /后台 Worker 派工/, '标题')
-    assert.match(host.textContent ?? '', /已派工 Worker #11/, '派工结果')
+    assert.match(host.textContent ?? '', /Worker dispatch/, '标题')
+    assert.match(host.textContent ?? '', /Dispatched worker #11/, '派工结果')
     assert.match(host.textContent ?? '', /Profile coder/, '输入摘要')
-    const archive = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('归档'))
+    const archive = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Archive'))
     assert.ok(archive, '归档按钮存在')
     await act(async () => {
       archive!.click()
@@ -252,7 +253,7 @@ test('toolView：派工卡展示 Worker 表并支持归档；在途时统一禁�
     )
     // 在途期间：本卡全部行按钮（查看 + 归档）统一 disabled
     const rowButtons = [...host.querySelectorAll<HTMLButtonElement>('button')].filter(
-      (b) => b.textContent?.includes('查看') || b.textContent?.includes('归档'),
+      (b) => b.textContent?.includes('View') || b.textContent?.includes('Archive'),
     )
     assert.equal(rowButtons.length, 4, '2 Worker × (查看+归档) = 4 个行按钮')
     for (const b of rowButtons) {
@@ -288,7 +289,7 @@ test('timelineRenderer：汇报卡展示摘要/终态/产物并支持分屏打�
     }),
   )
   try {
-    assert.match(host.textContent ?? '', /Worker 汇报/, '徽章')
+    assert.match(host.textContent ?? '', /Worker report/, '徽章')
     assert.match(host.textContent ?? '', /修复完成，全部测试通过/, '摘要文本')
     assert.match(host.textContent ?? '', /completed/, '终态徽章')
     const artifactBtn = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('report.md'))
@@ -297,7 +298,7 @@ test('timelineRenderer：汇报卡展示摘要/终态/产物并支持分屏打�
       artifactBtn!.click()
     })
     assert.deepEqual(spy.artifactCalls, ['art-1'], '产物点击打开预览')
-    const splitBtn = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('在右屏并排打开'))
+    const splitBtn = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Open side-by-side in split view'))
     assert.ok(splitBtn, '分屏按钮存在')
     await act(async () => {
       splitBtn!.click()
@@ -321,19 +322,19 @@ test('screen：图谱视图渲染 recall 节点与事件订阅两张表', { time
     }),
   )
   try {
-    assert.match(host.textContent ?? '', /RecallGraph 记忆图谱/, '标题')
+    assert.match(host.textContent ?? '', /RecallGraph memory graph/, '标题')
     assert.match(host.textContent ?? '', /修复构建并跑通测试/, 'recall 摘要行')
     assert.match(host.textContent ?? '', /写作失败：模型拒绝/, '第二个节点')
-    assert.match(host.textContent ?? '', /事件订阅/, '订阅区块标题')
+    assert.match(host.textContent ?? '', /Event subscriptions/, '订阅区块标题')
     assert.match(host.textContent ?? '', /ci\/main/, 'threadKey 行')
-    assert.match(host.textContent ?? '', /节点 2 · 订阅 1/, '统计')
-    const openConv = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('打开会话'))
+    assert.match(host.textContent ?? '', /Nodes 2 · Subscriptions 1/, '统计')
+    const openConv = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Open conversation'))
     assert.ok(openConv, '打开会话按钮')
     await act(async () => {
       openConv!.click()
     })
     assert.deepEqual(spy.screenCalls, ['conversation:11'], '打开 recall 会话')
-    const openWorker = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('打开 Worker'))
+    const openWorker = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Open worker'))
     await act(async () => {
       openWorker!.click()
     })
@@ -348,14 +349,34 @@ test('settingsPanel：只读展示中枢/看门狗托管会话', { timeout: 60_0
   const spy = makeSpyCtx()
   const { host, unmount } = await mount(spy, e(components.SuperAgentSettingsPanel, {}))
   try {
-    assert.match(host.textContent ?? '', /SuperAgent 中枢/, '标题')
-    assert.match(host.textContent ?? '', /中枢会话/, 'KV 键')
+    assert.match(host.textContent ?? '', /SuperAgent hub/, '标题')
+    assert.match(host.textContent ?? '', /Hub conversation/, 'KV 键')
     assert.match(host.textContent ?? '', /#7/, '中枢会话值')
-    assert.match(host.textContent ?? '', /看门狗会话/, 'KV 键')
+    assert.match(host.textContent ?? '', /Watchdog conversation/, 'KV 键')
     assert.match(host.textContent ?? '', /#8/, '看门狗会话值')
-    assert.match(host.textContent ?? '', /只读展示托管状态/, '配置引导文案')
+    assert.match(host.textContent ?? '', /this panel only shows the managed state read-only/, '配置引导文案')
     assert.equal(spy.actionCalls.length, 0, '只读面板不触发动作')
   } finally {
     unmount()
+  }
+})
+
+test('zh-CN locale：SuperAgent 组件切换为中文展示文案', { timeout: 60_000 }, async () => {
+  const spy = makeSpyCtx({ locale: 'zh-CN' })
+  const { host: widgetHost, unmount: unmountWidget } = await mount(spy, e(components.SuperAgentComposerWidget, composerProps()))
+  try {
+    assert.match(widgetHost.textContent ?? '', /中枢态势/)
+    assert.match(widgetHost.textContent ?? '', /活跃 Worker 2 个/)
+    assert.match(widgetHost.textContent ?? '', /事件订阅 1 条/)
+  } finally {
+    unmountWidget()
+  }
+  const { host: settingsHost, unmount: unmountSettings } = await mount(spy, e(components.SuperAgentSettingsPanel, {}))
+  try {
+    assert.match(settingsHost.textContent ?? '', /SuperAgent 中枢/)
+    assert.match(settingsHost.textContent ?? '', /中枢会话/)
+    assert.match(settingsHost.textContent ?? '', /看门狗会话/)
+  } finally {
+    unmountSettings()
   }
 })
