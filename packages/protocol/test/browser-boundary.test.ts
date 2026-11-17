@@ -58,6 +58,8 @@ test('@helm/protocol/browser: export declarations aligned with the root entry\'s
     'parseLocalizedText',
     'resolveLocalizedText',
     'createLocaleTranslator',
+    'encodeSessionDocSubParam',
+    'parseSessionDocSubParam',
   ] as const
 
   const browserRecord = browserExports as Record<string, unknown>

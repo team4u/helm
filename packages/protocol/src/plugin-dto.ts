@@ -276,6 +276,13 @@ export interface PluginSummary {
    * carry it.
    */
   managed?: PluginManagedMeta
+  /**
+   * Client module content hash map (`moduleRef -> contentHash`, where `moduleRef`
+   * matches `ClientComponentRef.module`, e.g. `'index.tsx'`). Optional; carried
+   * for enabled plugins with compiled client UI modules to enable O(1) memory
+   * cache hits, per-plugin diff invalidation, and `client.mjs?hash=...` immutable caching.
+   */
+  clientHashes?: Record<string, string>
 }
 
 /** Managed plugin package metadata (shape of PluginSummary.managed; additive optional field). */

@@ -77,6 +77,14 @@ export interface ConversationSummary {
   stateChangeSeq: number
   /** Monotonically increasing at the end of each round. */
   completionSeq: number
+  /**
+   * Latest visible timeline entry ID (`ConversationEntry.id` as a non-negative
+   * integer; `0` when the conversation has no visible entries, excluding hidden
+   * `pi.system` entries). Advances strictly on every newly visible entry —
+   * including `helm.rewind`, `pi.compaction`, and `pi.reset` markers — enabling
+   * reconnect `snapshot` SWR validation to skip detail fetches for unchanged conversations.
+   */
+  lastEntryId?: number
   /** Context usage (derived display data): refreshed asynchronously by the kernel; its changes publish
    * conversation.upsert but do not advance stateChangeSeq (the watermark belongs exclusively to the
    * state machine/doing/Ask CAS semantics). */
@@ -275,7 +283,7 @@ export interface QueuedConversationInput {
   attachments?: ConversationAttachmentRef[]
 }
 
-/** Conversation live incremental view (SSE `conversation.live` event payload). */
+/** Conversation live incremental view (transient SSE `conversation.live` frame payload and snapshot/resumed `conversationLives`). */
 export interface ConversationLive {
   conversationId: number
   /** Accumulated snapshot of the currently streaming assistant text; the client replaces prior live text outright. */

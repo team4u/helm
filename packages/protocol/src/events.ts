@@ -10,6 +10,7 @@
 import type { AskSpec } from './ask.js'
 import type { ConversationEntry, ConversationLive, ConversationSummary } from './conversation.js'
 import type { NodeInfo } from './env-rpc.js'
+import { HelmError } from './error.js'
 import type { PluginSummary, PublicPluginDoc, PublicPluginSessionDoc } from './plugin-dto.js'
 import type { PluginUiContribution } from './ui.js'
 
@@ -43,12 +44,15 @@ export interface HelmSnapshot {
   nodes?: NodeInfo[]
 }
 
-/** Incremental event types (`event:` names); clients should preserve unknown types as-is. */
+/**
+ * Durable incremental event types (`event:` names); clients should preserve unknown types as-is.
+ * Transient `conversation.live` updates use `HelmTransientLiveFrame` directly and do not consume
+ * `HelmEventSeq` or enter the replay ring buffer.
+ */
 export type HelmEventType =
   | 'conversation.upsert'
   | 'conversation.deleted'
   | 'conversation.entry'
-  | 'conversation.live'
   | 'ask.upsert'
   | 'ask.resolved'
   | 'plugin.changed'
@@ -75,9 +79,13 @@ export interface ConversationEntryEvent {
   entry: ConversationEntry
 }
 
-/** Conversation live increment (zero-token text and tool card state). */
-export interface ConversationLiveEvent {
-  type: 'conversation.live'
+/**
+ * Non-sequential transient conversation live frame (`event: conversation.live`,
+ * `data: JSON.stringify({ live })`). Never advances `EventHub.seq` and never
+ * enters the bounded replay ring buffer, preventing high-frequency streaming
+ * updates from evicting durable events during short-disconnect resume.
+ */
+export interface HelmTransientLiveFrame {
   live: ConversationLive
 }
 
@@ -158,7 +166,6 @@ export type HelmEvent =
   | ConversationUpsertEvent
   | ConversationDeletedEvent
   | ConversationEntryEvent
-  | ConversationLiveEvent
   | AskUpsertEvent
   | AskResolvedEvent
   | PluginChangedEvent
@@ -189,4 +196,118 @@ export interface HelmResumedFrame {
   seq: HelmEventSeq
   /** Server event head watermark sampled at connection time; the client is live only after replaying past this value. */
   headSeq: HelmEventSeq
+  /**
+   * Live views of active conversations (working/blocked runs or still-queued input)
+   * sampled at resume time, reconciling transient `conversation.live` state that is
+   * excluded from the durable replay ring buffer.
+   */
+  conversationLives?: ConversationLive[]
+}
+
+// ---------------------------------------------------------------------------
+// Multiplexed SessionDoc SSE contract & `?sub=` query codec
+// ---------------------------------------------------------------------------
+
+/** Subscription tuple identifying one public plugin session doc stream. */
+export interface SessionDocSubscription {
+  pluginId: string
+  name: string
+  conversationId: number
+}
+
+/** Action carried by a multiplexed session-doc SSE frame. */
+export type SessionDocMultiplexAction = 'snapshot' | 'updated' | 'deleted'
+
+/**
+ * Frame delivered over a multiplexed session-doc SSE stream: carries the target
+ * subscription tuple (`pluginId`, `name`, `conversationId`), explicit action
+ * (`snapshot` resets the per-tuple seq baseline; `updated` and `deleted` apply
+ * monotonic updates, where `deleted` carries `doc.deleted === true` and
+ * `doc.value` reset to the registered initial value), stream `seq`, and `doc`.
+ */
+export interface SessionDocMultiplexFrame extends SessionDocSubscription, PluginSessionDocSnapshot {
+  action: SessionDocMultiplexAction
+}
+
+const SESSION_DOC_SUB_PLUGIN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+const SESSION_DOC_SUB_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+const SESSION_DOC_SUB_CONVERSATION_ID_PATTERN = /^[1-9]\d{0,15}$/
+const SESSION_DOC_SUB_MAX_RAW_LENGTH = 274
+
+function assertValidSessionDocSubscription(sub: SessionDocSubscription): void {
+  if (sub === null || typeof sub !== 'object' || Array.isArray(sub)) {
+    throw new HelmError('validation_error', 'session doc subscription must be an object', 400)
+  }
+  const { pluginId, name, conversationId } = sub
+  if (
+    typeof pluginId !== 'string' ||
+    !SESSION_DOC_SUB_PLUGIN_ID_PATTERN.test(pluginId) ||
+    pluginId.includes('..')
+  ) {
+    throw new HelmError('validation_error', 'session doc subscription pluginId is invalid', 400)
+  }
+  if (
+    typeof name !== 'string' ||
+    !SESSION_DOC_SUB_NAME_PATTERN.test(name) ||
+    name.includes('..')
+  ) {
+    throw new HelmError('validation_error', 'session doc subscription name is invalid', 400)
+  }
+  if (
+    typeof conversationId !== 'number' ||
+    !Number.isSafeInteger(conversationId) ||
+    conversationId <= 0
+  ) {
+    throw new HelmError(
+      'validation_error',
+      'session doc subscription conversationId must be a positive safe integer',
+      400,
+    )
+  }
+}
+
+/**
+ * Encode a `SessionDocSubscription` into the canonical `?sub=<pluginId>/<name>/<conversationId>`
+ * query parameter value shared by `@helm/kernel` and `@helm/web`. Strictly validates
+ * all three fields and serializes nothing else, preventing parameter injection and token leakage.
+ */
+export function encodeSessionDocSubParam(sub: SessionDocSubscription): string {
+  assertValidSessionDocSubscription(sub)
+  return `${sub.pluginId}/${sub.name}/${sub.conversationId}`
+}
+
+/**
+ * Parse and strictly validate a single `?sub=` query parameter value into a
+ * `SessionDocSubscription`. Rejects malformed segment counts, invalid pluginId/name
+ * characters, traversal (`..`), percent-escapes, whitespace, query/fragment delimiters,
+ * and non-positive or unsafe conversation IDs without echoing raw input.
+ */
+export function parseSessionDocSubParam(raw: string): SessionDocSubscription {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > SESSION_DOC_SUB_MAX_RAW_LENGTH) {
+    throw new HelmError(
+      'validation_error',
+      'sub query parameter must be a non-empty string within length limit',
+      400,
+    )
+  }
+  const parts = raw.split('/')
+  if (parts.length !== 3) {
+    throw new HelmError(
+      'validation_error',
+      'sub query parameter must have format <pluginId>/<name>/<conversationId>',
+      400,
+    )
+  }
+  const [pluginId, name, convRaw] = parts as [string, string, string]
+  if (!SESSION_DOC_SUB_CONVERSATION_ID_PATTERN.test(convRaw)) {
+    throw new HelmError(
+      'validation_error',
+      'session doc subscription conversationId must be a positive safe integer',
+      400,
+    )
+  }
+  const conversationId = Number(convRaw)
+  const sub: SessionDocSubscription = { pluginId, name, conversationId }
+  assertValidSessionDocSubscription(sub)
+  return sub
 }
