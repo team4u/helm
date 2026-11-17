@@ -215,7 +215,12 @@ test('时间线单行与工作台紧凑卡均有实时内容也不内联展开�
     assert.ok(host.querySelector('.subagent-live-stream') === null, '不能显示内联实时流')
     assert.ok(host.querySelector('.subagent-live-card-expanded') === null, '不能使用展开态样式')
     assert.ok(host.querySelector('details') === null, '不能提供原始调用详情的展开入口')
-    assert.ok(host.querySelector('[aria-expanded]') === null, '不能有展开控件')
+    // 展开控件仅允许出现在机器元数据披露（.subagent-live-meta）上；实时流不得内联展开。
+    const expandables = [...host.querySelectorAll('[aria-expanded]')] as HTMLElement[]
+    assert.ok(
+      expandables.every((el) => el.closest('.subagent-live-meta') !== null),
+      '不能有元数据披露之外的展开控件',
+    )
   }
   try {
     assertCompact()
@@ -866,9 +871,9 @@ test('WorkflowActiveTray：展开行主显可读任务名并次显 #id，回退�
   const Tray = mod['WorkflowActiveTray'] as React.ComponentType<Record<string, unknown>>
   const { host, unmount } = await mountClient(spy, e(Tray, { conversation: summary(1, 'working') }))
   try {
-    const toggle = host.querySelector('.workflow-active-tray-bar[aria-expanded]') as HTMLElement | null
+    const toggle = host.querySelector('button.workflow-active-tray-bar-toggle') as HTMLButtonElement | null
     assert.ok(toggle !== null)
-    assert.equal(toggle.getAttribute('role'), 'button', '整条横栏即展开开关（role=button）')
+    assert.equal(toggle.tagName, 'BUTTON', '横栏主体是真实 button（无嵌套交互）')
     await act(async () => { toggle.click() })
     const rows = [...host.querySelectorAll('.workflow-active-tray-row')]
     assert.equal(rows.length, 2)
@@ -942,7 +947,7 @@ test('SubagentToolView：.trace-tool-name 主显任务名、次显 #id 与 @prof
   }
 })
 
-test('WorkflowActiveTray 清亮化：整条横栏点击/回车展开收起，主状态单灯无 spinner，无独立展开按钮', { timeout: 60_000 }, async () => {
+test('WorkflowActiveTray 清亮化：横栏主体真实按钮切换、Workbench 为同级 sibling，主状态纯灯无可见状态文字', { timeout: 60_000 }, async () => {
   setWorkflowClientStub({
     docValue: {
       runs: [
@@ -967,40 +972,39 @@ test('WorkflowActiveTray 清亮化：整条横栏点击/回车展开收起，主
   const { host, unmount } = await mountClient(spy, e(Tray, { conversation: summary(1, 'working') }))
   try {
     const bar = host.querySelector('.workflow-active-tray-bar') as HTMLElement | null
-    assert.ok(bar !== null)
-    assert.equal(bar.getAttribute('role'), 'button', '横栏本身是展开开关')
-    assert.equal(bar.tagName, 'DIV', '横栏不是 button（内部还有真实动作按钮，避免嵌套 button）')
-    assert.equal(bar.getAttribute('aria-expanded'), 'false')
-    // 主状态单灯 + 单条计数文字；无 spinner、无独立展开按钮。
-    assert.ok(bar.querySelector('.helm-status-light .status-dot-working') !== null, '主状态为统一状态灯')
-    assert.equal(bar.querySelectorAll('.helm-status-light').length, 1, '主状态只渲染一盏灯')
-    assert.equal(bar.querySelector('.spin-slow') === null, true, '主状态不再用 spinner')
-    assert.equal((bar.querySelector('.helm-status-light')?.textContent ?? '').includes('running'), true, '状态文字在灯内保留一次')
-    assert.equal(host.querySelector('.workflow-active-tray-bar .btn[aria-expanded]') === null, true, '不再依赖右侧独立展开按钮')
-    // 整条横栏点击展开；再点击收起。
-    await act(async () => { bar.click() })
-    assert.equal(bar.getAttribute('aria-expanded'), 'true')
+    const toggle = host.querySelector('button.workflow-active-tray-bar-toggle') as HTMLButtonElement | null
+    assert.ok(bar !== null && toggle !== null)
+    assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+    // 合法结构：横栏容器不是交互元素；Workbench 是同级 sibling button，不嵌套在开关内。
+    assert.equal(bar.querySelectorAll('.workflow-active-tray-bar-toggle > button').length, 0, '开关按钮内无嵌套 button')
+    const wbBtn = [...bar.querySelectorAll(':scope > button')].find((b) => (b.textContent ?? '').includes('Workbench')) as HTMLButtonElement | undefined
+    assert.ok(wbBtn !== undefined, 'Workbench 为横栏同级 sibling button')
+    // 主状态纯灯：无 spinner、无可見状态文字（计数只作为可访问名称）。
+    assert.ok(toggle.querySelector('.helm-status-light .status-dot-working') !== null, '主状态为统一状态灯')
+    assert.equal(toggle.querySelectorAll('.helm-status-light').length, 1, '主状态只渲染一盏灯')
+    assert.equal(toggle.querySelector('.spin-slow') === null, true, '主状态不再用 spinner')
+    assert.equal((toggle.querySelector('.helm-status-light')?.getAttribute('aria-label') ?? '').includes('running'), true, '状态词转为可访问名称')
+    assert.ok(toggle.querySelector('.helm-status-light > .helm-sr-only') !== null, '可访问名称经屏幕阅读器专用文本承载（无可見 label）')
+    // 主体按钮点击展开；再点击收起；键盘 Enter 同样切换。
+    await act(async () => { toggle.click() })
+    assert.equal(toggle.getAttribute('aria-expanded'), 'true')
     assert.ok(host.querySelector('.workflow-active-tray-list') !== null)
-    await act(async () => { bar.click() })
-    assert.equal(host.getAttribute === undefined ? bar.getAttribute('aria-expanded') : 'false', 'false')
-    // 键盘 Enter 同样切换。
-    bar.focus()
-    await act(async () => {
-      bar.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-    })
-    assert.equal(bar.getAttribute('aria-expanded'), 'true')
-    // 横栏内 Workbench 真实动作按钮 stopPropagation：点击不切换展开态。
-    const wbBtn = bar.querySelector('button') as HTMLButtonElement | null
-    assert.ok(wbBtn !== null, 'Workbench 按钮保留')
+    await act(async () => { toggle.click() })
+    assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+    toggle.focus()
+    assert.ok(host.ownerDocument.activeElement === toggle, '开关为可聚焦真实 button（Enter/Space 由 UA 原生激活）')
+    await act(async () => { toggle.click() })
+    assert.equal(toggle.getAttribute('aria-expanded'), 'true')
+    // 点击同级 Workbench 不影响展开态。
     await act(async () => { wbBtn.click() })
-    assert.equal(bar.getAttribute('aria-expanded'), 'true', '点击 Workbench 不触发横栏展开切换')
+    assert.equal(toggle.getAttribute('aria-expanded'), 'true', '点击 Workbench 不触发横栏展开切换')
     assert.equal(spy.workbenchCalls.length, 1, 'Workbench 打开调用一次')
   } finally {
     unmount()
   }
 })
 
-test('WorkflowActiveTray 清亮化：展开行整行点击进抽屉/工作台，移除查看按钮，中止按钮 stopPropagation', { timeout: 60_000 }, async () => {
+test('WorkflowActiveTray 清亮化：展开行主体真实按钮进抽屉/工作台，无查看按钮，中止为同级 sibling', { timeout: 60_000 }, async () => {
   setWorkflowClientStub({
     docValue: {
       runs: [
@@ -1034,7 +1038,7 @@ test('WorkflowActiveTray 清亮化：展开行整行点击进抽屉/工作台，
   const Tray = mod['WorkflowActiveTray'] as React.ComponentType<Record<string, unknown>>
   const { host, unmount } = await mountClient(spy, e(Tray, { conversation: summary(1, 'working') }))
   try {
-    const bar = host.querySelector('.workflow-active-tray-bar') as HTMLElement
+    const bar = host.querySelector('button.workflow-active-tray-bar-toggle') as HTMLButtonElement
     await act(async () => { bar.click() })
     const rows = [...host.querySelectorAll('.workflow-active-tray-row')] as HTMLElement[]
     assert.equal(rows.length, 2)
@@ -1045,32 +1049,81 @@ test('WorkflowActiveTray 清亮化：展开行整行点击进抽屉/工作台，
         assert.equal(/^(View|Details|查看|详情)$/.test(text.trim()), false, `行内不得保留独立详情按钮：${text}`)
       }
     }
-    // 有 conversationId 的行：整行点击打开抽屉。
+    // 有 conversationId 的行：行主体真实按钮点击打开抽屉。
     const convRow = rows.find((r) => r.textContent?.includes('子代理任务'))
     assert.ok(convRow !== undefined)
-    assert.equal(convRow.getAttribute('role'), 'button', '行本身可激活')
-    await act(async () => { convRow.click() })
+    const convMain = convRow.querySelector('button.workflow-active-tray-row-main') as HTMLButtonElement | null
+    assert.ok(convMain !== null, '行主体是真实 button')
+    await act(async () => { convMain.click() })
     assert.deepEqual(spy.drawerCalls, [11], '整行点击进 ConversationDrawer')
-    // 无 conversationId 的外部行：整行点击定位工作台 run。
+    // 无 conversationId 的外部行：行主体点击定位工作台 run；中止为同级 sibling button。
     const extRow = rows.find((r) => r.textContent?.includes('外部执行'))
     assert.ok(extRow !== undefined)
+    const extMain = extRow.querySelector('button.workflow-active-tray-row-main') as HTMLButtonElement
+    assert.equal(extMain.querySelectorAll('button').length, 0, '行主体按钮内无嵌套交互')
     spy.workbenchCalls.length = 0
-    await act(async () => { extRow.click() })
+    await act(async () => { extMain.click() })
     assert.equal(spy.workbenchCalls.length, 1, '整行点击打开工作台')
-    // 行键盘 Enter 同样生效。
-    extRow.focus()
-    await act(async () => {
-      extRow.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }))
-    })
-    assert.equal(spy.workbenchCalls.length, 2, 'Space 键激活整行')
-    // 中止为真实动作按钮：stopPropagation，不触发整行导航。
+    // 行主体为可聚焦真实 button（Enter/Space 由 UA 原生激活）。
+    extMain.focus()
+    assert.ok(host.ownerDocument.activeElement === extMain, '行主体按钮可聚焦')
+    // 中止为同级 sibling 真实按钮：点击不触发整行导航。
     spy.workbenchCalls.length = 0
-    const abortBtn = extRow.querySelector('button.btn-danger') as HTMLButtonElement | null
-    assert.ok(abortBtn !== null, '外部 run 行保留中止按钮')
-    await act(async () => { abortBtn.click() })
+    const abortBtn = extRow.querySelector('.workflow-active-tray-row-actions button.btn-danger') as HTMLButtonElement | null
+    assert.ok(abortBtn !== null, '外部 run 行保留中止按钮（同级 sibling）')
+    await act(async () => { abortBtn!.click() })
     assert.equal(spy.actionCalls.filter((c) => c.actionId === 'abort').length, 1, '中止动作派发一次')
     assert.equal(spy.workbenchCalls.length, 0, '点中止不触发整行工作台导航')
     assert.equal(spy.drawerCalls.length, 1, '点中止不触发抽屉')
+  } finally {
+    unmount()
+  }
+})
+
+test('WorkflowRunCardBody 头部整块可点展开：主体真实按钮切换，动作按钮为同级 sibling 不触发切换', { timeout: 60_000 }, async () => {
+  setWorkflowClientStub({
+    docValue: {
+      runs: [
+        {
+          id: 'wf_hdr_toggle',
+          kind: 'workflow',
+          name: '头部展开工作流',
+          conversationId: 1,
+          status: 'completed',
+          createdAt: 1_000,
+          updatedAt: 2_000,
+          nodes: [{ id: 'a', kind: 'action', status: 'done', label: '落盘动作' }],
+        },
+      ],
+    },
+    conversations: [],
+    conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
+  })
+  const spy = makeSpyCtx()
+  const mod = await importWorkflowClientModule('index.tsx')
+  const Panel = mod['WorkflowWorkbenchPanel'] as React.ComponentType<Record<string, unknown>>
+  const { host, unmount } = await mountClient(spy, e(Panel, { conversation: summary(1, 'idle') }))
+  try {
+    const main = host.querySelector('button.workflow-run-header-main') as HTMLButtonElement | null
+    assert.ok(main !== null, '头部主体为真实展开开关按钮')
+    assert.equal(main.querySelectorAll('button').length, 0, '开关内无嵌套交互')
+    // 非首个/非运行中的 run 默认收起。
+    assert.equal(main.getAttribute('aria-expanded'), 'false', '默认收起')
+    const body = host.querySelector('.workflow-run-card [id][hidden]') as HTMLElement | null
+    assert.ok(body !== null, '卡体区域存在且默认隐藏')
+    await act(async () => { main.click() })
+    assert.equal(main.getAttribute('aria-expanded'), 'true', '点击头部主体整块展开')
+    assert.equal(body!.hidden, false, '展开后卡体可见')
+    // 已结算 run 无中止按钮；「更多」弹层按钮为同级 sibling，点击不切换展开态。
+    const siblingBtns = [...host.querySelectorAll('.workflow-run-header > button')] as HTMLButtonElement[]
+    const nonMain = siblingBtns.find((b) => !b.classList.contains('workflow-run-header-main'))
+    if (nonMain !== undefined) {
+      await act(async () => { nonMain.click() })
+      assert.equal(main.getAttribute('aria-expanded'), 'true', '点击动作按钮不触发头部展开切换')
+    }
+    // 键盘可达：主体按钮可聚焦（Enter/Space 由 UA 原生激活）。
+    main.focus()
+    assert.ok(host.ownerDocument.activeElement === main, '头部主体按钮可聚焦')
   } finally {
     unmount()
   }

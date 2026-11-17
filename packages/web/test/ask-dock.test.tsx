@@ -166,6 +166,31 @@ test('descendant asks carry a source badge; the current conversation own card ca
   assert.equal((titled!.getAttribute('title') ?? '').includes('会话 11'), true, 'the source button tooltip contains the source conversation title')
 })
 
+test('清亮化：seq / owner 插件不再是常驻徽章，改为 info 入口 + 可访问 Popover（CAS 提交与来源导航不变）', { timeout: 60_000 }, async () => {
+  installFetch()
+  const ownerAsks = [
+    { ...ask('ask-meta', 1, 7), ownerPluginId: 'builtin:triggers' },
+  ]
+  await renderAskDock(makeTestStore({ conversations, pendingAsks: ownerAsks, setActiveModal: (m: ActiveModal) => { activeModal = m } }), 1)
+  const header = document.querySelector('.ask-dock-header') as HTMLElement | null
+  assert.ok(header !== null)
+  // 常驻徽章移除：头部不再出现 seq N 文本与 owner 插件徽章。
+  assert.equal((header.textContent ?? '').includes('seq'), false, 'seq 不再常驻外露')
+  assert.equal((header.textContent ?? '').includes('builtin:triggers'), false, 'owner 插件不再常驻外露')
+  assert.equal(header.querySelector('.badge-warn') === null, true, 'owner 不再渲染警示徽章')
+  // info 入口为真实按钮。
+  const infoBtn = header.querySelector('button.ask-dock-meta-btn') as HTMLButtonElement | null
+  assert.ok(infoBtn !== null, '元数据 info 入口为真实按钮')
+  // 打开 Popover 后 owner / seq 可见（不依赖 title）。
+  await act(async () => { infoBtn.click() })
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)) })
+  const popoverText = [...document.querySelectorAll('[data-radix-popper-content-wrapper], .ask-dock-meta-popover')]
+    .map((el) => el.textContent ?? '')
+    .join('\n')
+  assert.ok(popoverText.includes('builtin:triggers'), 'Popover 展示 owner 插件')
+  assert.ok(popoverText.includes('7'), 'Popover 展示 CAS seq')
+})
+
 test('clicking the source badge opens the corresponding child conversation drawer', { timeout: 60_000 }, async () => {
   installFetch()
   await renderAskDock(makeStore(), 1)

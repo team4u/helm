@@ -220,6 +220,7 @@ export function SubagentLiveCard(props: {
           detailError={detailError}
           effectiveStatus={effectiveStatus}
           selfBadge={selfBadge}
+          abortedRun={backgroundRun?.status === 'aborted'}
           descendants={descendants}
           approvals={approvals}
           statSegments={statSegments}

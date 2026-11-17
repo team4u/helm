@@ -1964,5 +1964,17 @@ pre {
     justify-content: flex-end;
     padding-top: 2px;
   }
+  /* 移动端按钮紧凑化：仅图标 + aria-label（触达面积保持 26px+） */
+  .artifact-action-btn {
+    min-width: 30px;
+    min-height: 26px;
+    justify-content: center;
+  }
+  .artifact-action-btn > span {
+    display: none;
+  }
+  .artifact-card-mime {
+    max-width: 96px;
+  }
 }
 

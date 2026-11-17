@@ -535,8 +535,9 @@ export interface PluginClientContext {
  *   useToolActivity / useConversations / useConversation / usePlugins;
  * - accessibility base components: Switch / Select / MultiSelect / Checkbox / Tabs family /
  *   SegmentedControl / HelmIcon / ViewBoundary / Callout;
- * - StatusLight: unified status light (dot + one visible label) for card main
- *   status slots, reusing the host .status-dot design-system vocabulary;
+ * - StatusLight: unified status light (visually dot-only; the localized label
+ *   becomes the screen-reader accessible name, never visible status text) for
+ *   card main status slots, reusing the host .status-dot vocabulary;
  * - lightweight layout primitives: Screen (page container + header) / ScreenSection (sectioning) /
  *   DataTable (composable table with unified loading/empty) / KvGrid (key-value overview);
  * - content display: MarkdownView (standard markdown rendering) / CodeBlockView

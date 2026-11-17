@@ -33,6 +33,7 @@ const {
 } = await importWorkflowModels()
 
 const e = React.createElement
+const { act } = React
 const workflowClient = await importWorkflowClientModule()
 const SubagentLiveCard = workflowClient['SubagentLiveCard'] as React.ComponentType<Record<string, unknown>>
 const SubagentToolView = workflowClient['SubagentToolView'] as React.ComponentType<Record<string, unknown>>
@@ -1133,8 +1134,9 @@ test('SubagentLiveCard 整体大卡片点击契约：外层整卡可点击，第
   assert.ok(html.includes('subagent-card-clickable'), '整卡应具有可点击类名')
   assert.ok(html.includes('role="button"'), '整卡应具有 button 语义')
   assert.ok(html.includes('Open subagent #11 drawer'), '整卡应带有打开抽屉的可访问性描述')
-  assert.ok(!html.includes('class="subagent-live-trigger"') || !html.includes('<button'), '第 1 层不得为独立 button')
-  assert.ok(!html.includes('<button') || !html.includes('class="subagent-live-subline"'), '第 2 层不得为独立 button')
+  // 第 1/2 层（trigger / subline）仍不得是导航按钮；元数据披露的小按钮只出现在 .subagent-live-meta 内。
+  assert.ok(!html.includes('<button type="button" class="subagent-live-trigger'), '第 1 层不得为独立 button')
+  assert.ok(!html.includes('<button type="button" class="subagent-live-subline'), '第 2 层不得为独立 button')
 })
 
 const EMOJI_RE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]/u
@@ -1204,4 +1206,65 @@ test('SubagentLiveCard 与 ExternalRunSummary：任务名称主位展示，#id �
   assert.ok(extNamed.includes('External agent'))
   assert.ok(extNamed.includes('pane-9'))
   assert.ok(extNamed.indexOf('修复外部测试') < extNamed.indexOf('External agent'))
+})
+
+// ---------------------------------------------------------------------------
+// 卡片清亮化修正：纯灯主状态 / aborted 语义 / 元数据披露 / 标题可缩
+// ---------------------------------------------------------------------------
+
+test('清亮化修正：后台 run 中止时主状态灯保留 aborted 菱形（不落成普通红灯/灰点）', { timeout: 60_000 }, () => {
+  const html = renderCard('done', {
+    expanded: undefined,
+    conversations: [summary(11, 'idle')],
+    backgroundRun: bgRun({ status: 'aborted' }),
+  })
+  assert.ok(html.includes('status-dot-aborted'), 'SubagentLiveCard 中止 run 应渲染 aborted 菱形灯')
+  assert.ok(!html.includes('status-dot-error'), 'aborted 不得映射为普通错误红灯')
+  assert.ok(html.includes('aria-label="Aborted"') || html.includes('Aborted'), '可访问名称保留中止语义')
+
+  const h2 = createWorkflowHostHarness({ conversationId: 1, conversations: [summary(1, 'idle')] })
+  const extHtml = h2.renderSsr(e(ExternalRunSummary, { run: bgRun({ status: 'aborted' }), toolStatus: 'done' }))
+  assert.ok(extHtml.includes('status-dot-aborted'), 'ExternalRunSummary 中止 run 应渲染 aborted 菱形灯')
+  assert.ok(!extHtml.includes('status-dot-error'), 'ExternalRunSummary aborted 不得映射为普通错误红灯')
+})
+
+test('清亮化修正：机器元数据收进原地披露——默认隐藏，真实按钮展开，点击不触发整卡导航', { timeout: 60_000 }, () => {
+  const h = createWorkflowHostHarness({
+    conversationId: 1,
+    conversations: [summary(1, 'idle'), summary(11, 'done')],
+  })
+  const ui = h.mountNode(e(SubagentLiveCard, {
+    childConversationId: 11,
+    toolStatus: 'done',
+    backgroundRun: bgRun({ status: 'completed' }),
+  }))
+  try {
+    const toggle = ui.container.querySelector('button.subagent-live-meta-toggle') as HTMLButtonElement | null
+    assert.ok(toggle !== null, '元数据披露入口为真实按钮')
+    const row = ui.container.querySelector('.subagent-live-meta-row') as HTMLElement | null
+    assert.ok(row !== null && row.hidden === true, '元数据默认隐藏（不占表面宽度）')
+    assert.ok((row.textContent ?? '').includes('wf_bg1'), '元数据行携带 runId（展开后可见，不依赖 title）')
+    act(() => {
+      toggle.click()
+    })
+    assert.equal(row.hidden, false, '点击后原地展开')
+    assert.deepEqual(h.log.drawers, [], '点击元数据披露不触发整卡打开抽屉')
+  } finally {
+    ui.unmount()
+  }
+})
+
+test('清亮化修正：时间线插件行标题带可缩标记（移动端不再与状态簇相互挤压）', { timeout: 60_000 }, () => {
+  const parent = summary(1, 'idle')
+  const child11 = { ...summary(11, 'done'), parentConversationId: 1, parentToolCallId: 'call-shrink' }
+  const h = createWorkflowHostHarness({ conversationId: 1, conversations: [parent, child11] })
+  const html = h.renderSsr(e(SubagentToolView, {
+    callId: 'call-shrink',
+    toolName: 'subagent',
+    input: { prompt: '任务' },
+    status: 'done',
+    conversationId: 1,
+    siblingCalls: [],
+  }))
+  assert.ok(html.includes('trace-tool-name workflow-trace-name'), '插件行标题带 workflow-trace-name 可缩标记')
 })

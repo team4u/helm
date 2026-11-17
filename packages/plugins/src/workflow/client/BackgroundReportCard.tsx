@@ -82,7 +82,7 @@ export function BackgroundReportCard(props: TimelineRendererProps): ReactNode {
         >
           <Icon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
           <Icon name={!view.invalid && view.kind === 'workflow_report' ? 'workflow' : 'bot'} size={12} />
-          <span className="trace-tool-name" title={rowTitle}>{rowTitle}</span>
+          <span className="trace-tool-name workflow-trace-name" title={rowTitle}>{rowTitle}</span>
           {reportName !== undefined && conversationId !== undefined ? (
             <span className="workflow-trace-id tabular-nums">{`#${conversationId}`}</span>
           ) : null}

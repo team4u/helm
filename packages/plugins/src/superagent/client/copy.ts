@@ -41,7 +41,6 @@ export const SA_COL_ACTIONS: LocalizedText = { en: 'Actions', 'zh-CN': '操作' 
 
 /** Row action buttons. */
 export const SA_ACTION_OPEN: LocalizedText = { en: 'Open', 'zh-CN': '打开' }
-export const SA_ACTION_VIEW: LocalizedText = { en: 'View', 'zh-CN': '查看' }
 export const SA_ACTION_ARCHIVE: LocalizedText = { en: 'Archive', 'zh-CN': '归档' }
 export const SA_ACTION_OPEN_CONVERSATION: LocalizedText = { en: 'Open conversation', 'zh-CN': '打开会话' }
 export const SA_ACTION_OPEN_WORKER: LocalizedText = { en: 'Open worker', 'zh-CN': '打开 Worker' }

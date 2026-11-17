@@ -199,18 +199,19 @@ test('KvGrid: items render as paired kv-grid direct children by key/value', { ti
 })
 
 // ---------------------------------------------------------------------------
-// StatusLight: unified status light (dot + one visible label)
+// StatusLight: unified status light (visually dot-only)
 // ---------------------------------------------------------------------------
 
-test('StatusLight: renders one dot + one visible label, tone classes follow the raw status word', { timeout: 60_000 }, () => {
+test('StatusLight: renders dot-only; the label is a screen-reader accessible name, never visible text', { timeout: 60_000 }, () => {
   const html = renderToString(e(StatusLight, { status: 'running', label: 'Running' }))
   assert.match(html, /helm-status-light helm-status-light-working/)
   assert.match(html, /status-dot status-dot-working/)
-  assert.match(html, /helm-status-light-label/)
-  assert.match(html, /Running/)
-  // Exactly one dot, exactly one label (no duplicated status text).
-  assert.equal((html.match(/status-dot /g) ?? []).length, 1)
-  assert.equal((html.match(/helm-status-light-label/g) ?? []).length, 1)
+  assert.equal((html.match(/status-dot /g) ?? []).length, 1, 'exactly one dot')
+  // Accessible name: role=img + aria-label + sr-only text (no visible label node, no width cost).
+  assert.match(html, /role="img"/)
+  assert.match(html, /aria-label="Running"/)
+  assert.match(html, /helm-sr-only">Running</)
+  assert.doesNotMatch(html, /helm-status-light-label/, 'no visible label element')
 })
 
 test('StatusLight: settled and neutral tones map honestly (completed/aborted/skipped/offline/unknown)', { timeout: 60_000 }, () => {
@@ -226,11 +227,13 @@ test('StatusLight: settled and neutral tones map honestly (completed/aborted/ski
   assert.match(renderToString(e(StatusLight, { status: 'weird-state' })), /helm-status-light-pending/)
 })
 
-test('StatusLight: dot-only renders without a label node; extra className is appended', { timeout: 60_000 }, () => {
+test('StatusLight: without a label no sr-only node renders; extra className is appended; non-string labels keep the sr-only text', { timeout: 60_000 }, () => {
   const html = renderToString(e(StatusLight, { status: 'blocked', className: 'tray-status' }))
   assert.match(html, /helm-status-light helm-status-light-blocked tray-status/)
   assert.match(html, /status-dot status-dot-blocked/)
-  assert.doesNotMatch(html, /helm-status-light-label/)
+  assert.doesNotMatch(html, /helm-sr-only/)
+  const richLabel = renderToString(e(StatusLight, { status: 'done', label: e('em', undefined, 'Done') }))
+  assert.match(richLabel, /helm-sr-only"><em[^>]*>Done<\/em>/, 'ReactNode labels render as sr-only content')
   assert.equal(typeof normalizeStatusLightTone, 'function')
   assert.equal(statusLightDotClass('failed'), 'status-dot status-dot-error')
 })

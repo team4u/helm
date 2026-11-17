@@ -293,6 +293,9 @@ export const composerMessages = {
   // ---- Ask dock ----
   'composer.ask.selectPlaceholder': { en: 'Select…', 'zh-CN': '请选择…' },
   'composer.ask.awaitingApproval': { en: 'Awaiting approval', 'zh-CN': '等待审批' },
+  'composer.ask.metaAria': { en: 'Approval details', 'zh-CN': '审批详情' },
+  'composer.ask.metaOwner': { en: 'Owner plugin', 'zh-CN': '归属插件' },
+  'composer.ask.metaSeq': { en: 'CAS seq', 'zh-CN': 'CAS 水位' },
   'composer.ask.approve': { en: 'Approve', 'zh-CN': '确认' },
   'composer.ask.reject': { en: 'Reject', 'zh-CN': '拒绝' },
   'composer.ask.submit': { en: 'Submit', 'zh-CN': '提交' },

@@ -50,7 +50,7 @@ import type { DetachViewerScope } from './model-run.ts'
 import { aggregateExecutionNodes, buildExecutionTree, buildLeafNodesForRun } from './model-execution-tree.ts'
 import type { ExecutionNode } from './model-execution-tree.ts'
 import { collectExecutionApprovals } from './model-execution-view.ts'
-import { effectiveRunNodeStatus, executionRunStatus } from './model-execution-status.ts'
+import { effectiveRunNodeStatus, executionLightStatus, executionRunStatus } from './model-execution-status.ts'
 import { requestWorkbenchRunFocus } from './workbench-focus.ts'
 import {
   ACTION_ABORT,
@@ -308,7 +308,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
         >
           <span className="trace-row-left">
             <Icon name="workflow" size={12} />
-            <span className="trace-tool-name">{fallbackLabel}</span>
+            <span className="trace-tool-name workflow-trace-name">{fallbackLabel}</span>
             {summaryText !== undefined ? (
               <span className={`trace-tool-summary${isError ? ' workflow-trace-error' : ''}`} title={summaryText}>
                 {summaryText}
@@ -366,7 +366,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
       >
         <span className="trace-row-left">
           <Icon name="workflow" size={12} />
-          <span className="trace-tool-name">{displayName}</span>
+          <span className="trace-tool-name workflow-trace-name">{displayName}</span>
           {summaryText !== undefined && summaryText !== '' ? (
             <span className={`trace-tool-summary${isError ? ' workflow-trace-error' : ''}`} title={summaryText}>
               {summaryText}
@@ -376,7 +376,9 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
         <span className="trace-row-right workflow-trace-right">
           <StatusLight
             status={
-              effectiveStatus !== undefined && effectiveStatus !== selfRunStatus ? effectiveStatus : run.status
+              effectiveStatus !== undefined && effectiveStatus !== selfRunStatus
+                ? executionLightStatus(effectiveStatus, run)
+                : run.status
             }
             label={statusBadgeText}
           />
@@ -404,6 +406,7 @@ export function WorkflowRunCardBody(props: {
   const { run, cardOpen, toolProps, inWorkbench } = props
   const [busy, setBusy] = useState(false)
   const inFlight = useRef(false)
+  const cardBodyId = useId()
   const [replayOpen, setReplayOpen] = useState(false)
   const [replayArgs, setReplayArgs] = useState('')
   const [replayError, setReplayError] = useState<string | undefined>(undefined)
@@ -497,42 +500,54 @@ export function WorkflowRunCardBody(props: {
   return (
     <section className="card workflow-run-card" aria-label={runCardAriaLabel(displayName, locale)}>
       <div className="stack-row workflow-run-header">
-        <button type="button" className="btn btn-ghost btn-sm" onClick={props.onToggleCard} title={resolveLocalizedText(cardOpen ? RUN_CARD_COLLAPSE_TITLE : RUN_CARD_EXPAND_TITLE, locale)}>
+        {/* 整块非动作头部即展开开关：真实 button 覆盖主信息位（灯/名称/统计），
+            中止 / detach / 恢复 / 工作台等动作控件为右侧同级 sibling，无嵌套交互。 */}
+        <button
+          type="button"
+          className="workflow-run-header-main"
+          aria-expanded={cardOpen}
+          aria-controls={cardBodyId}
+          aria-label={traceToggleDetailsLabel(displayName, cardOpen, locale)}
+          title={resolveLocalizedText(cardOpen ? RUN_CARD_COLLAPSE_TITLE : RUN_CARD_EXPAND_TITLE, locale)}
+          onClick={props.onToggleCard}
+        >
           <Icon name={cardOpen ? 'chevron-down' : 'chevron-right'} size={12} />
-        </button>
-        <Icon name={run.kind === 'subagent' ? 'bot' : 'terminal'} />
-        <strong>{displayName}</strong>
-        {effectiveStatus !== selfRunStatus ? (
-          <>
-            <StatusLight status={effectiveStatus} label={executionStatusLabel(effectiveStatus, locale)} />
-            <span className="badge badge-neutral" title={runCardSelfStateTitle(runStatusLabel(run.status, locale), locale)}>
-              {selfStatusLabel(runStatusLabel(run.status, locale), locale)}
-            </span>
-          </>
-        ) : (
-          <StatusLight status={run.status} label={runStatusLabel(run.status, locale)} />
-        )}
-        {run.replayedFrom !== undefined ? (
-          <span className="badge badge-warn" title={runCardReplayBadgeTitle(run.replayedFrom, locale)}>{resolveLocalizedText(RUN_CARD_CACHED_REPLAY, locale)}</span>
-        ) : null}
-        {run.savedName !== undefined ? (
-          <span className="badge badge-neutral" title={runCardSavedBadgeTitle(run.savedName, locale)}>{resolveLocalizedText(RUN_CARD_SAVED_BADGE, locale)}</span>
-        ) : null}
-        <span className="workflow-run-header-spacer" />
-        <span className="workflow-run-stats tabular-nums">
-          {nodes.length > 0 ? <span>{runCardNodesStat(done, nodes.length, locale)}</span> : null}
-          {deeperCount > 0 ? <span>{runCardSubtreeStat(subtree.done, subtree.total, locale)}</span> : null}
-          {tokens > 0 ? <span>{runCardTokensStat(tokens, locale)}</span> : null}
-          {elapsedMs !== undefined ? <span>{formatDurationMs(elapsedMs)}</span> : null}
-        </span>
-        {descendantApprovals > 0 ? (
-          <span
-            className="badge badge-warn"
-            title={approvalsTitle(approvals.map((item) => item.text), locale)}
-          >
-            {approvalsBadge(descendantApprovals, locale)}
+          <Icon name={run.kind === 'subagent' ? 'bot' : 'terminal'} />
+          <strong className="workflow-run-header-name">{displayName}</strong>
+          {effectiveStatus !== selfRunStatus ? (
+            <>
+              <StatusLight
+                status={executionLightStatus(effectiveStatus, run)}
+                label={executionStatusLabel(executionLightStatus(effectiveStatus, run), locale)}
+              />
+              <span className="badge badge-neutral" title={runCardSelfStateTitle(runStatusLabel(run.status, locale), locale)}>
+                {selfStatusLabel(runStatusLabel(run.status, locale), locale)}
+              </span>
+            </>
+          ) : (
+            <StatusLight status={run.status} label={runStatusLabel(run.status, locale)} />
+          )}
+          {run.replayedFrom !== undefined ? (
+            <span className="badge badge-warn" title={runCardReplayBadgeTitle(run.replayedFrom, locale)}>{resolveLocalizedText(RUN_CARD_CACHED_REPLAY, locale)}</span>
+          ) : null}
+          {run.savedName !== undefined ? (
+            <span className="badge badge-neutral" title={runCardSavedBadgeTitle(run.savedName, locale)}>{resolveLocalizedText(RUN_CARD_SAVED_BADGE, locale)}</span>
+          ) : null}
+          <span className="workflow-run-stats tabular-nums">
+            {nodes.length > 0 ? <span>{runCardNodesStat(done, nodes.length, locale)}</span> : null}
+            {deeperCount > 0 ? <span>{runCardSubtreeStat(subtree.done, subtree.total, locale)}</span> : null}
+            {tokens > 0 ? <span>{runCardTokensStat(tokens, locale)}</span> : null}
+            {elapsedMs !== undefined ? <span>{formatDurationMs(elapsedMs)}</span> : null}
           </span>
-        ) : null}
+          {descendantApprovals > 0 ? (
+            <span
+              className="badge badge-warn"
+              title={approvalsTitle(approvals.map((item) => item.text), locale)}
+            >
+              {approvalsBadge(descendantApprovals, locale)}
+            </span>
+          ) : null}
+        </button>
         {run.status === 'running' ? (
           <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={abort}>
             <Icon name="square" size={11} />
@@ -632,8 +647,10 @@ export function WorkflowRunCardBody(props: {
         />
       ) : null}
       {run.description !== undefined && run.description !== '' ? <p className="workflow-run-description">{run.description}</p> : null}
-      {cardOpen ? (
-        <>
+      {/* 裸 div 承载 hidden：aria-controls 始终指向真实区域；内容仍按需挂载。 */}
+      <div id={cardBodyId} hidden={!cardOpen}>
+        {cardOpen ? (
+          <>
           <div className="kv-grid workflow-run-meta">
             <span className="kv-key">{resolveLocalizedText(RUN_KV_RUN_ID, locale)}</span>
             <span className="kv-val mono">{run.id}</span>
@@ -697,8 +714,9 @@ export function WorkflowRunCardBody(props: {
             onToggleResult={props.onToggleResult}
           />
           {run.error !== undefined ? <p className="callout callout--error">{run.error}</p> : null}
-        </>
-      ) : null}
+          </>
+        ) : null}
+      </div>
       {toolProps !== undefined ? <ToolCallDetailsInline input={toolProps.input} result={toolProps.result} artifactRef={toolProps.artifactRef} /> : null}
     </section>
   )

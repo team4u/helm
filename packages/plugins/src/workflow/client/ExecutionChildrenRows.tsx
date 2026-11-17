@@ -10,6 +10,7 @@ import type { ReactNode } from 'react'
 import { StatusLight, formatDurationMs, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helm/plugin-client'
 import { useElapsedNowMs } from './hooks.ts'
 import { Icon } from './WorkflowIcon.tsx'
+import { executionLightStatus } from './model-execution-status.ts'
 import {
   execApprovalBadge,
   execCollapseChildrenLabel,
@@ -141,7 +142,10 @@ export function ExecutionChildrenRows({ nodes }: { nodes: ExecutionNode[] }): Re
                 {node.children.length > 0 ? (
                   <span className="execution-child-count tabular-nums">{`${aggregated.done}/${aggregated.total}`}</span>
                 ) : null}
-                <StatusLight status={aggregated.status} label={executionStatusLabel(aggregated.status, locale)} />
+                <StatusLight
+                  status={executionLightStatus(aggregated.status, node.run)}
+                  label={executionStatusLabel(executionLightStatus(aggregated.status, node.run), locale)}
+                />
               </span>
             </div>
             {expanded ? <ExecutionChildrenRows nodes={node.children} /> : null}

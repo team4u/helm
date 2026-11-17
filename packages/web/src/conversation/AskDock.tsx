@@ -1,7 +1,7 @@
 import { useId, useMemo, useState } from 'react'
 import type { AskFieldSpec, AskSpec } from '@helm/protocol/browser'
 import { asksApi } from '../lib/api.js'
-import { HelmIcon, Select, StatusLight } from '@helm/plugin-client'
+import { HelmIcon, PopoverContent, PopoverRoot, PopoverTrigger, Select, StatusLight } from '@helm/plugin-client'
 import { useConversations, usePendingAsks, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { collectSubtreeIds } from './ancestry-model.js'
@@ -168,14 +168,40 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
       <div className="ask-dock-header">
         <StatusLight status="blocked" label={t('composer.ask.awaitingApproval')} />
         <span className="ask-dock-title">{ask.title}</span>
-        {ask.ownerPluginId !== undefined ? (
-          <span className="badge badge-warn">{ask.ownerPluginId}</span>
-        ) : null}
-        {ask.expectedStateSeq !== undefined ? (
-          <span className="badge badge-neutral mono" title={t('composer.ask.casTitle')}>
-            seq {ask.expectedStateSeq}
-          </span>
-        ) : null}
+        {(ask.ownerPluginId !== undefined || ask.expectedStateSeq !== undefined) && (
+          /* 机器元数据（owner 插件 / CAS seq）不再是常驻徽章：小号 info 入口 + 可访问 Popover。 */
+          <PopoverRoot>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="btn btn-ghost btn-xs ask-dock-meta-btn"
+                aria-label={t('composer.ask.metaAria')}
+                title={t('composer.ask.metaAria')}
+              >
+                <HelmIcon name="info" size={12} />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="ask-dock-meta-popover">
+              <div className="kv-list">
+                {ask.ownerPluginId !== undefined ? (
+                  <>
+                    <div className="kv-key">{t('composer.ask.metaOwner')}</div>
+                    <div className="kv-val mono">{ask.ownerPluginId}</div>
+                  </>
+                ) : null}
+                {ask.expectedStateSeq !== undefined ? (
+                  <>
+                    <div className="kv-key">{t('composer.ask.metaSeq')}</div>
+                    <div className="kv-val mono tabular-nums">{ask.expectedStateSeq}</div>
+                  </>
+                ) : null}
+              </div>
+              {ask.expectedStateSeq !== undefined ? (
+                <div className="ask-dock-meta-hint">{t('composer.ask.casTitle')}</div>
+              ) : null}
+            </PopoverContent>
+          </PopoverRoot>
+        )}
         {source !== undefined ? (
           <button
             type="button"

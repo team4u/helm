@@ -38,8 +38,10 @@ import {
   subagentBadge,
 } from './models.ts'
 import type { SubagentBadge } from './models.ts'
+import { executionLightStatus } from './model-execution-status.ts'
 import { requestWorkbenchRunFocus } from './workbench-focus.ts'
 import {
+  executionStatusLabel,
   SNIPPET_AWAITING_APPROVAL,
   TRACE_COLLAPSE_DETAILS,
   TRACE_EXPAND_DETAILS,
@@ -155,6 +157,9 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
         }, locale)
       : subagentBadge(undefined, props.status, undefined, undefined, locale)
 
+  // 主状态灯：aborted 后台句柄保留专用 aborted 语义；其余沿用徽章标签（含后台运行中等细分文案）作为可访问名称。
+  const badgeLightStatus = executionLightStatus(badge.status, backgroundRun)
+  const badgeLightLabel = badgeLightStatus === 'aborted' ? executionStatusLabel('aborted', locale) : badge.label
   const isWorking =
     isLatest &&
     !hasPendingAsk &&
@@ -300,7 +305,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
       >
         <span className="trace-row-left">
           <Icon name="bot" size={12} />
-          <span className="trace-tool-name" title={primaryName}>{primaryName}</span>
+          <span className="trace-tool-name workflow-trace-name" title={primaryName}>{primaryName}</span>
           {idTag !== undefined ? (
             <span className="workflow-trace-id tabular-nums">{idTag}</span>
           ) : null}
@@ -326,10 +331,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
               {worktreeBranch}
             </span>
           ) : null}
-          <StatusLight
-            status={badge.status}
-            label={badge.label}
-          />
+          <StatusLight status={badgeLightStatus} label={badgeLightLabel} />
           {elapsedMs !== undefined ? <span className="trace-duration tabular-nums">{formatDurationMs(elapsedMs)}</span> : null}
           <Icon
             name={canOpenChildDrawer ? 'external-link' : canOpenWorkbenchRun ? 'chevron-right' : detailsOpen ? 'chevron-down' : 'chevron-right'}

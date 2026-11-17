@@ -165,39 +165,39 @@
   color: var(--err);
 }
 
-/* 统一状态灯（dot + 单条可见文字）：执行/状态卡主状态位。
+/* 统一状态灯（纯指示灯，不渲染可见状态文字）：执行/状态卡主状态位。
    复用 .status-dot 视觉词汇（navigation.css 定义 working/blocked/done/error/background），
    这里补充 aborted 菱形（非灰色、与 blocked 实心圆区分）与 pending 空心中性环；
-   语义除颜色外还有形状（呼吸/空心/菱形）与可见文字，绝不只靠颜色表达。 */
+   语义除颜色外还有形状（呼吸/空心/菱形），可访问名称走 role=img + aria-label
+   与屏幕阅读器专用文本，绝不只靠颜色表达；label 不再占据可见宽度（移动端友好）。 */
 .helm-status-light {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 0;
   min-width: 0;
   max-width: 100%;
   flex-shrink: 0;
   overflow: hidden;
-  font-size: 11px;
-  font-weight: 500;
   line-height: 1;
-  color: var(--fg-secondary);
   vertical-align: middle;
 }
 .helm-status-light .status-dot {
   width: 8px;
   height: 8px;
 }
-.helm-status-light-label {
-  min-width: 0;
+
+/* 屏幕阅读器专用文本：视觉隐藏但不依赖 title/hover */
+.helm-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
   overflow: hidden;
-  text-overflow: ellipsis;
+  clip: rect(0, 0, 0, 0);
   white-space: nowrap;
+  border: 0;
 }
-.helm-status-light-working .helm-status-light-label { color: var(--accent); }
-.helm-status-light-blocked .helm-status-light-label { color: var(--warn); }
-.helm-status-light-done .helm-status-light-label { color: var(--ok); }
-.helm-status-light-failed .helm-status-light-label { color: var(--err); }
-.helm-status-light-aborted .helm-status-light-label { color: var(--warn); }
 
 /* 已中止：空心菱形（warn 描边），不是普通灰点 */
 .status-dot-aborted {

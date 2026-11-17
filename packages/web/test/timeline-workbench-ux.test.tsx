@@ -9,6 +9,7 @@ import type { ArtifactMetadata, ConversationSummary, PluginSummary, PluginUiCont
 import { buildTimelineItems, findLatestProcessTurnKey, type TimelineItem } from '../src/conversation/timeline-model.js'
 import {
   artifactFormatLabel,
+  artifactMimeRedundant,
   artifactKindLabel,
   buildWorkbenchFooter,
   buildWorkbenchTabs,
@@ -518,6 +519,13 @@ test('workbench-model 与 ArtifactsTab 严格分离正式产物与 spill、去�
   assert.match(deliverablesSection.textContent ?? '', /Uploaded attachment/)
   assert.doesNotMatch(deliverablesSection.textContent ?? '', /bash-stdout-001\.log/)
 
+  // MIME 去重：格式标签已由 MIME 推导（image/png、text/markdown）时不重复渲染原始 MIME；
+  // 扩展名推导（spill 的 text/plain 来自通用文本）保留必要格式信息。
+  const deliverableMimes = [...deliverablesSection.querySelectorAll('.artifact-card-mime')].map((el) => el.textContent ?? '')
+  assert.ok(!deliverableMimes.includes('image/png'), 'image/png 不再重复展示')
+  assert.ok(!deliverableMimes.includes('text/markdown'), 'text/markdown 不再重复展示')
+  assert.ok(deliverablesSection.querySelectorAll('.artifact-card-format').length >= 2, '格式标签保留')
+
   // spill 区默认折叠且显示计数 2
   const spillToggle = ui.host.querySelector('.artifact-spill-toggle') as HTMLButtonElement
   assert.ok(spillToggle)
@@ -597,6 +605,12 @@ test('WorkbenchDrawer and workbench-model support en and zh-CN localization', { 
   assert.equal(artifactFormatLabel('image/png', 'diagram.png', zh), '图片')
   assert.equal(artifactFormatLabel('text/plain', 'notes.txt', zh), '文本')
   assert.equal(artifactFormatLabel('application/octet-stream', 'data', zh), '文件')
+  // MIME 去重判定：格式标签已由 MIME 推导时原始 MIME 串不再重复展示；扩展名推导保留 MIME。
+  assert.equal(artifactMimeRedundant('image/png', 'diagram.png'), true)
+  assert.equal(artifactMimeRedundant('text/markdown', 'summary-report.md'), true)
+  assert.equal(artifactMimeRedundant('application/pdf', 'doc.pdf'), true)
+  assert.equal(artifactMimeRedundant('application/octet-stream', 'data.bin'), false)
+  assert.equal(artifactMimeRedundant('application/x-custom', 'model-onnx'), false)
 
   const zhTabs = buildWorkbenchTabs({
     groupedUi: groupUiContributions([]),

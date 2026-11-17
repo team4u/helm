@@ -1104,6 +1104,6 @@ test('resolveWorkflowRunDisplayName 与 SSR：run.name 为占位/runId 时优先
   assert.ok(!toolHtml.includes('wf_fallback_desc'), 'WorkflowToolView 不应回退暴露 runId 充当标题')
 
   const wbHtml = await renderWorkflowWorkbench({ runs: [unnamedRun] })
-  assert.match(wbHtml, /<strong>端到端冒烟验收<\/strong>/, 'WorkflowRunCardBody 头部应主显 description 首行')
+  assert.match(wbHtml, /<strong class="workflow-run-header-name">端到端冒烟验收<\/strong>/, 'WorkflowRunCardBody 头部应主显 description 首行')
   assert.ok(wbHtml.includes('wf_fallback_desc'), '展开卡片 kv-grid 元数据保留 run.id')
 })

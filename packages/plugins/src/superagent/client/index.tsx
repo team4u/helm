@@ -68,7 +68,6 @@ import {
   SA_ACTION_OPEN_CONVERSATION,
   SA_ACTION_OPEN_WORKER,
   SA_ACTION_SPLIT_OPEN,
-  SA_ACTION_VIEW,
   SA_COL_ACTIONS,
   SA_COL_CONVERSATION,
   SA_COL_CREATED,
@@ -193,7 +192,7 @@ function ConversationCell({
 // composerWidget: hub status
 // ---------------------------------------------------------------------------
 
-/** Hub status widget: live counts and table of active workers / event subscriptions. */
+/** Hub status widget: live counts and the active-worker center table (open + archive). */
 export function SuperAgentComposerWidget(_props: ComposerScopeProps): ReactNode {
   const ctx = usePluginContext()
   const t = usePluginTranslator()
@@ -205,6 +204,22 @@ export function SuperAgentComposerWidget(_props: ComposerScopeProps): ReactNode 
   const workers = parseWorkers(index)
   const subs = parseSubscriptions(subscriptions)
   const loading = index === undefined || subscriptions === undefined
+  const [archiving, setArchiving] = useState(false)
+  const [error, setError] = useState<string | undefined>(undefined)
+
+  const archive = (workerConversationId: number): void => {
+    if (archiving) return
+    setArchiving(true)
+    setError(undefined)
+    void ctx
+      .callAction('archive_worker', { workerConversationId })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : String(err))
+      })
+      .finally(() => {
+        setArchiving(false)
+      })
+  }
 
   return (
     <div className="section-flat sa-widget">
@@ -217,6 +232,7 @@ export function SuperAgentComposerWidget(_props: ComposerScopeProps): ReactNode 
       ) : (
         <>
           <div className="sa-widget-muted">{saWidgetSummary(workers.length, subs.length, locale)}</div>
+          {error !== undefined ? <ActionError message={error} /> : null}
           <div className="helm-table-wrap">
             <table className="helm-table">
               <thead>
@@ -239,8 +255,16 @@ export function SuperAgentComposerWidget(_props: ComposerScopeProps): ReactNode 
                       <ConversationCell conversationId={w.conversationId} conversationsById={conversationsById} />
                       <td>{w.profileId}</td>
                       <td className="cell-actions">
+                        {/* While an archive is in flight, disable every row button on this card (uniform re-entry guard). */}
                         <div className="row-actions-group">
-                          <RowAction label={t(SA_ACTION_OPEN)} icon={<ExternalLink size={11} />} onClick={() => ctx.openScreen(`conversation:${w.conversationId}`)} />
+                          <RowAction label={t(SA_ACTION_OPEN)} icon={<ExternalLink size={11} />} disabled={archiving} onClick={() => ctx.openScreen(`conversation:${w.conversationId}`)} />
+                          <RowAction
+                            label={t(SA_ACTION_ARCHIVE)}
+                            icon={<Boxes size={11} />}
+                            disabled={archiving}
+                            danger
+                            onClick={() => archive(w.conversationId)}
+                          />
                         </div>
                       </td>
                     </tr>
@@ -301,105 +325,49 @@ export function SuperAgentRouterModePill(_props: ComposerScopeProps): ReactNode 
 // toolView: dispatch_worker tool card
 // ---------------------------------------------------------------------------
 
-/** dispatch_worker tool card: dispatch input summary + full active-worker table + archive action. */
+/**
+ * dispatch_worker tool card: a lightweight single-line dispatch receipt (status
+ * light + summary + direct worker conversation entry). The live worker list and
+ * the archive capability live in the hub status widget (SuperAgentComposerWidget)
+ * — nothing is lost, the timeline card just stops duplicating the center table.
+ */
 export function SuperAgentDispatchToolView(props: ToolViewProps): ReactNode {
   const ctx = usePluginContext()
   const t = usePluginTranslator()
   const locale = usePluginLocale()
-  const conversations = useConversations()
-  const conversationsById = useMemo(() => buildConversationMap(conversations), [conversations])
-  const index = usePluginDoc<SuperAgentIndexDoc>('index')
-  const workers = parseWorkers(index)
   const input = dispatchInput(props)
   const resultWorkerId = dispatchedWorkerId(props)
-  const [archiving, setArchiving] = useState(false)
-  const [error, setError] = useState<string | undefined>(undefined)
 
-  const archive = (workerConversationId: number): void => {
-    if (archiving) return
-    setArchiving(true)
-    setError(undefined)
-    void ctx
-      .callAction('archive_worker', { workerConversationId })
-      .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : String(err))
-      })
-      .finally(() => {
-        setArchiving(false)
-      })
-  }
+  const lightStatus =
+    props.status === 'running' ? 'running' : props.status === 'error' ? 'failed' : 'completed'
+  const receiptText =
+    props.status === 'running'
+      ? t(SA_DISPATCHING)
+      : props.status === 'error'
+        ? t(SA_DISPATCH_FAILED)
+        : resultWorkerId !== undefined
+          ? saDispatchedWorker(resultWorkerId, locale)
+          : t(SA_DISPATCH_DONE)
 
   return (
-    <div className="section-flat sa-widget">
+    <div className="section-flat sa-widget sa-dispatch-receipt-card">
       <div className="sa-widget-title">
         <Boxes size={13} strokeWidth={1.75} />
         <span>{t(SA_DISPATCH_TITLE)}</span>
       </div>
-      {props.status === 'running' ? (
-        <div className="sa-widget-muted">
-          <StatusLight status="running" label={t(SA_DISPATCHING)} />
-        </div>
-      ) : (
-        <div className="sa-widget-muted">
-          <StatusLight
-            status={resultWorkerId !== undefined ? 'done' : props.status === 'error' ? 'failed' : 'done'}
-            label={
-              resultWorkerId !== undefined
-                ? saDispatchedWorker(resultWorkerId, locale)
-                : props.status === 'error'
-                  ? t(SA_DISPATCH_FAILED)
-                  : t(SA_DISPATCH_DONE)
-            }
+      <div className="sa-dispatch-receipt">
+        <StatusLight status={lightStatus} label={receiptText} />
+        <span className="sa-dispatch-text">{receiptText}</span>
+        {input.profileId !== undefined ? <span className="sa-dispatch-meta">Profile {input.profileId}</span> : null}
+        {input.threadKey !== undefined ? <span className="sa-dispatch-meta mono">{input.threadKey}</span> : null}
+        {resultWorkerId !== undefined ? (
+          <RowAction
+            label={t(SA_ACTION_OPEN)}
+            icon={<ExternalLink size={11} />}
+            onClick={() => ctx.openScreen(`conversation:${resultWorkerId}`)}
           />
-          {input.profileId !== undefined ? ` · Profile ${input.profileId}` : ''}
-          {input.threadKey !== undefined ? ` · threadKey ${input.threadKey}` : ''}
-        </div>
-      )}
-      {error !== undefined ? <ActionError message={error} /> : null}
-      {index === undefined ? (
-        <DocLoading label={t(SA_LOADING_WORKERS)} />
-      ) : (
-        <div className="helm-table-wrap">
-          <table className="helm-table">
-            <thead>
-              <tr>
-                <th>{t(SA_COL_CONVERSATION)}</th>
-                <th>Profile</th>
-                <th className="cell-actions">{t(SA_COL_ACTIONS)}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {workers.length === 0 ? (
-                <tr>
-                  <td colSpan={3} className="table-empty">
-                    {t(SA_NO_DATA)}
-                  </td>
-                </tr>
-              ) : (
-                workers.map((w) => (
-                  <tr key={w.conversationId}>
-                    <ConversationCell conversationId={w.conversationId} conversationsById={conversationsById} />
-                    <td>{w.profileId}</td>
-                    <td className="cell-actions">
-                      {/* While an archive is in flight, disable every row button on this card (uniform re-entry guard). */}
-                      <div className="row-actions-group">
-                        <RowAction label={t(SA_ACTION_VIEW)} icon={<ExternalLink size={11} />} disabled={archiving} onClick={() => ctx.openScreen(`conversation:${w.conversationId}`)} />
-                        <RowAction
-                          label={t(SA_ACTION_ARCHIVE)}
-                          icon={<Boxes size={11} />}
-                          disabled={archiving}
-                          danger
-                          onClick={() => archive(w.conversationId)}
-                        />
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
+        ) : null}
+      </div>
     </div>
   )
 }

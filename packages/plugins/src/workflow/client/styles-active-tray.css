@@ -17,19 +17,30 @@
 .workflow-active-tray-bar {
   height: 32px;
   min-height: 32px;
-  padding: 0 8px;
+  padding: 0 6px 0 0;
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: space-between;
-  gap: 8px;
+  gap: 4px;
   font-size: 12px;
   color: var(--fg-secondary);
 }
 
-/* 整条横栏即展开/收起开关（无独立展开按钮）：悬停与键盘焦点给出行级可点击暗示 */
+/* 整条横栏的主体即展开/收起开关：真实 button、覆盖左侧全部信息位，
+   Workbench 动作按钮为右侧同级 sibling（无嵌套交互）。 */
 .workflow-active-tray-bar-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 0 0 8px;
+  background: none;
+  border: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
   cursor: pointer;
-  user-select: none;
 }
 
 .workflow-active-tray-bar-toggle:hover {
@@ -41,20 +52,13 @@
   outline-offset: -1.5px;
 }
 
-.workflow-active-tray-chevron {
-  color: var(--fg-muted);
+.workflow-active-tray-workbench {
+  align-self: center;
   flex-shrink: 0;
 }
 
-.workflow-active-tray-left {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  flex: 1;
-}
-
-.workflow-active-tray-left > svg {
+.workflow-active-tray-chevron {
+  color: var(--fg-muted);
   flex-shrink: 0;
 }
 
@@ -65,13 +69,6 @@
   white-space: nowrap;
   color: var(--fg-muted);
   font-size: 11.5px;
-}
-
-.workflow-active-tray-right {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
 }
 
 .workflow-active-tray-elapsed {
@@ -92,42 +89,45 @@
 
 .workflow-active-tray-row {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: space-between;
   gap: 8px;
-  padding: 5px 8px;
   font-size: 12px;
   border-bottom: 1px solid var(--border);
   min-width: 0;
 }
 
-.workflow-active-tray-row-clickable {
+/* 行主体即详情入口：真实 button 覆盖整行主要信息位（无嵌套交互）；
+   detach / 中止为右侧同级 sibling 按钮组。 */
+.workflow-active-tray-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 0 5px 8px;
+  background: none;
+  border: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+
+button.workflow-active-tray-row-clickable {
   cursor: pointer;
 }
 
-.workflow-active-tray-row-clickable:hover {
+button.workflow-active-tray-row-clickable:hover {
   background: var(--bg-hover);
 }
 
-.workflow-active-tray-row-clickable:focus-visible {
+button.workflow-active-tray-row-clickable:focus-visible {
   outline: 1.5px solid var(--accent);
   outline-offset: -1.5px;
 }
 
 .workflow-active-tray-row:last-child {
   border-bottom: none;
-}
-
-.workflow-active-tray-row-main {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  flex: 1;
-}
-
-.workflow-active-tray-row-main > svg {
-  flex-shrink: 0;
 }
 
 .workflow-active-tray-row-title {
@@ -160,9 +160,21 @@
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
+  padding: 3px 8px 3px 0;
 }
 
 /* Timeline single-row trace helper styles (same structure as the host .trace-row 26px) */
+
+/* 宿主 .trace-tool-name 为 flex-shrink:0，长任务名与常驻摘要/状态灯在手机上相互挤压；
+   插件受控覆盖：标题允许收缩并省略，右侧状态/时长簇不再与标题重叠。 */
+.workflow-trace-row-btn .trace-tool-name,
+.workflow-trace-toggle .trace-tool-name {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .workflow-trace-id {
   flex-shrink: 0;
   font-family: var(--font-mono);
@@ -279,10 +291,6 @@
   gap: 8px;
 }
 
-.workflow-run-header-spacer {
-  flex: 1;
-}
-
 .workflow-run-meta {
   margin: 4px 0 8px;
 }
@@ -307,12 +315,28 @@
   margin: 0 20px 8px;
 }
 
+/* 机器元数据收进原地展开：小号真实按钮（info）+ aria-expanded 控制的 kv 行 */
+.subagent-live-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 15px;
+  min-width: 0;
+}
+
+.subagent-live-meta-toggle {
+  align-self: flex-start;
+  gap: 3px;
+  padding: 0 5px;
+  min-height: 22px;
+}
+
 .subagent-live-meta-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px 10px;
-  padding: 2px 0 2px 15px;
+  padding: 2px 0;
   font-size: 11px;
   color: var(--fg-muted);
   min-width: 0;
@@ -321,6 +345,11 @@
 .subagent-live-meta-item {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.subagent-live-meta-key {
+  color: var(--fg-subtle);
+  margin-right: 4px;
 }
 
 .workflow-report-expanded {
@@ -342,15 +371,21 @@
 }
 
 @media (max-width: 680px) {
-  .workflow-active-tray-bar {
-    padding: 0 6px;
-    gap: 4px;
+  .workflow-active-tray-bar-toggle {
+    padding-left: 6px;
+  }
+  .workflow-active-tray-frontline {
+    display: none;
   }
   .workflow-active-tray-row {
     flex-wrap: wrap;
   }
+  .workflow-active-tray-row-main {
+    flex-basis: 100%;
+  }
   .workflow-active-tray-row-actions {
     width: 100%;
     justify-content: flex-end;
+    padding: 0 6px 4px 0;
   }
 }

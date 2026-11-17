@@ -47,6 +47,7 @@ const EXECUTION_STATUS_LABELS: Record<string, LocalizedText> = {
   working: L('Running', '执行中'),
   done: L('Done', '已完成'),
   pending: L('In progress', '进行中'),
+  aborted: L('Aborted', '已中止'),
 }
 
 export type SubagentBadgeLabelKey =
@@ -183,6 +184,15 @@ export const actionResumeSubagentFailed = t1((err: string) => L(`Failed to resum
 export const ACTION_RETRY = L('Retry', '重试')
 export const ACTION_RETRY_TITLE = L('Reload subagent details', '重新加载子会话详情')
 export const SUBLINE_FRONTLINE_TAG = L('Frontline', '前线')
+
+// Metadata disclosure (machine facts moved out of the always-visible surface)
+export const META_TOGGLE_ARIA = L('Toggle run metadata', '切换运行元数据')
+export const META_TOGGLE_LABEL = L('Metadata', '元数据')
+export const META_KV_LOCATION = L('Location', '位置')
+export const META_KV_CREATED = L('Created', '创建时间')
+export const META_KV_RUN_ID = L('Run ID', '运行 ID')
+export const META_KV_WORKTREE = L('Worktree', '工作树')
+export const META_KV_EXECUTION = L('Execution', '外部执行')
 
 export const SNIPPET_LOAD_FAILED = L('Load failed', '加载失败')
 export const SNIPPET_AWAITING_APPROVAL = L('Awaiting approval', '等待审批')

@@ -6,19 +6,20 @@
  * one-click access to the workbench / drawer / abort / detach; returns null
  * once everything settles (0px, never occupying space).
  *
- * Interaction contract (card de-clutter pass):
- * - the whole top bar toggles expand/collapse (role=button, Enter/Space);
- *   no separate expand button; the Workbench button isolates its clicks and
- *   keys so it never double-fires with the bar toggle;
- * - every expanded row is wholly clickable (Enter/Space included) as the real
- *   detail entry: conversationId opens the ConversationDrawer, else runId
- *   focuses the run in the workbench; no per-row "View/Details" button;
- * - abort / detach remain real action buttons with stopPropagation;
- * - the main status is a single StatusLight (blocked wins over running);
- *   no spinner, no duplicated status text.
+ * Interaction contract (card de-clutter pass, a11y-legal structure):
+ * - the bar is a flex row whose main region is one real toggle <button>
+ *   (aria-expanded / aria-controls); the Workbench action is a sibling
+ *   button — no interactive element ever nests inside another;
+ * - every expanded row is one real detail-entry <button> covering the row
+ *   body (conversationId opens the ConversationDrawer, else runId focuses
+ *   the run in the workbench); detach / abort are sibling buttons in the
+ *   trailing action group — no stopPropagation acrobatics needed;
+ * - the main status is a single dot-only StatusLight (blocked wins over
+ *   running; the accessible name carries the localized status words) — no
+ *   spinner, no visible status text.
  */
 import { useEffect, useId, useMemo, useState } from 'react'
-import type { KeyboardEvent, ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import type { ComposerScopeProps } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import {
@@ -38,6 +39,7 @@ import {
   ACTION_DETACH,
   actionDetachDone,
   execConversationTitle,
+  executionStatusLabel,
   TRAY_COLLAPSE,
   TRAY_EXPAND,
   TRAY_REGION_ARIA,
@@ -48,15 +50,6 @@ import {
   trayRowOpenRunLabel,
   trayToggleLabel,
 } from './copy.ts'
-
-/** Keyboard activation guard shared by the bar and rows (Enter/Space only, never steals other controls). */
-function activateOnKey(e: KeyboardEvent<HTMLElement>, activate: () => void): void {
-  if (e.target !== e.currentTarget) return
-  if (e.key === 'Enter' || e.key === ' ') {
-    e.preventDefault()
-    activate()
-  }
-}
 
 export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNode {
   const ctx = usePluginContext()
@@ -145,18 +138,16 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
       role="region"
       aria-label={resolveLocalizedText(TRAY_REGION_ARIA, locale)}
     >
-      <div
-        className="workflow-active-tray-bar workflow-active-tray-bar-toggle"
-        role="button"
-        tabIndex={0}
-        aria-expanded={expanded}
-        aria-controls={listId}
-        aria-label={trayToggleLabel(expanded, countText, locale)}
-        title={resolveLocalizedText(expanded ? TRAY_COLLAPSE : TRAY_EXPAND, locale)}
-        onClick={() => setExpanded((v) => !v)}
-        onKeyDown={(e) => activateOnKey(e, () => setExpanded((v) => !v))}
-      >
-        <div className="workflow-active-tray-left">
+      <div className="workflow-active-tray-bar">
+        <button
+          type="button"
+          className="workflow-active-tray-bar-toggle"
+          aria-expanded={expanded}
+          aria-controls={listId}
+          aria-label={trayToggleLabel(expanded, countText, locale)}
+          title={resolveLocalizedText(expanded ? TRAY_COLLAPSE : TRAY_EXPAND, locale)}
+          onClick={() => setExpanded((v) => !v)}
+        >
           <StatusLight status={hasBlocked ? 'blocked' : 'running'} label={countText} />
           {singleProgress !== undefined ? (
             <span className="badge badge-neutral workflow-trace-badge tabular-nums">
@@ -166,33 +157,27 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
           {frontlineText !== '' ? (
             <span className="workflow-active-tray-frontline">{frontlineText}</span>
           ) : null}
-        </div>
-        <div
-          className="workflow-active-tray-right"
-          onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => e.stopPropagation()}
-        >
           {hudElapsed !== undefined ? (
             <span className="workflow-active-tray-elapsed tabular-nums">{hudElapsed}</span>
           ) : null}
-          <button
-            type="button"
-            className="btn btn-xs"
-            onClick={() => {
-              const singleRunId = summary.items.length === 1 ? summary.items[0]?.runId : undefined
-              if (singleRunId !== undefined) requestWorkbenchRunFocus(conversationId, singleRunId)
-              ctx.openWorkbench(`plugin:${ctx.pluginId}/tasks`)
-            }}
-          >
-            <Icon name="git-branch" size={11} />
-            <span>{resolveLocalizedText(TRAY_WORKBENCH, locale)}</span>
-          </button>
           <Icon
             name={expanded ? 'chevron-down' : 'chevron-up'}
             size={11}
             className="workflow-active-tray-chevron"
           />
-        </div>
+        </button>
+        <button
+          type="button"
+          className="btn btn-xs workflow-active-tray-workbench"
+          onClick={() => {
+            const singleRunId = summary.items.length === 1 ? summary.items[0]?.runId : undefined
+            if (singleRunId !== undefined) requestWorkbenchRunFocus(conversationId, singleRunId)
+            ctx.openWorkbench(`plugin:${ctx.pluginId}/tasks`)
+          }}
+        >
+          <Icon name="git-branch" size={11} />
+          <span>{resolveLocalizedText(TRAY_WORKBENCH, locale)}</span>
+        </button>
       </div>
       {expanded ? (
         <div id={listId} className="workflow-active-tray-list">
@@ -203,9 +188,9 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
                 : undefined
             const isFallbackConvTitle =
               item.conversationId !== undefined && item.title === execConversationTitle(item.conversationId, locale)
-            // Whole-row detail entry: conversation rows open the drawer, other
-            // rows focus the run in the workbench. Real actions (detach /
-            // abort) isolate clicks and keys inside the trailing group.
+            // Row detail entry: conversation rows open the drawer, other rows
+            // focus the run in the workbench. Detach / abort live in the
+            // trailing sibling action group (no nested interactives).
             const openRow = (): void => {
               if (item.conversationId !== undefined) {
                 ctx.openConversationDrawer(item.conversationId)
@@ -223,40 +208,42 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
                 : item.runId !== undefined
                   ? trayRowOpenRunLabel(item.runId, locale)
                   : item.title
+            const rowMainClass = `workflow-active-tray-row-main${rowActivatable ? ' workflow-active-tray-row-clickable' : ''}`
+            const rowMainContent = (
+              <>
+                <StatusLight
+                  status={item.isBlocked ? 'blocked' : 'running'}
+                  label={executionStatusLabel(item.isBlocked ? 'blocked' : 'working', locale)}
+                />
+                <span className="workflow-active-tray-row-title">{item.title}</span>
+                {item.conversationId !== undefined && !isFallbackConvTitle ? (
+                  <span className="workflow-active-tray-row-id tabular-nums">{`#${item.conversationId}`}</span>
+                ) : null}
+                {item.progress !== undefined ? (
+                  <span className="badge badge-neutral workflow-trace-badge tabular-nums">
+                    {`${item.progress.done}/${item.progress.total}`}
+                  </span>
+                ) : null}
+                {item.doing !== undefined ? (
+                  <span className="workflow-active-tray-row-doing">{item.doing}</span>
+                ) : null}
+              </>
+            )
             return (
-              <div
-                key={item.key}
-                {...(rowActivatable
-                  ? {
-                      role: 'button' as const,
-                      tabIndex: 0,
-                      'aria-label': `${item.title} — ${rowLabel}`,
-                    }
-                  : {})}
-                className={`workflow-active-tray-row${rowActivatable ? ' workflow-active-tray-row-clickable' : ''}`}
-                onClick={rowActivatable ? openRow : undefined}
-                onKeyDown={rowActivatable ? (e) => activateOnKey(e, openRow) : undefined}
-              >
-                <div className="workflow-active-tray-row-main">
-                  <StatusLight status={item.isBlocked ? 'blocked' : 'running'} />
-                  <span className="workflow-active-tray-row-title">{item.title}</span>
-                  {item.conversationId !== undefined && !isFallbackConvTitle ? (
-                    <span className="workflow-active-tray-row-id tabular-nums">{`#${item.conversationId}`}</span>
-                  ) : null}
-                  {item.progress !== undefined ? (
-                    <span className="badge badge-neutral workflow-trace-badge tabular-nums">
-                      {`${item.progress.done}/${item.progress.total}`}
-                    </span>
-                  ) : null}
-                  {item.doing !== undefined ? (
-                    <span className="workflow-active-tray-row-doing">{item.doing}</span>
-                  ) : null}
-                </div>
-                <div
-                  className="workflow-active-tray-row-actions"
-                  onClick={(e) => e.stopPropagation()}
-                  onKeyDown={(e) => e.stopPropagation()}
-                >
+              <div key={item.key} className="workflow-active-tray-row">
+                {rowActivatable ? (
+                  <button
+                    type="button"
+                    className={rowMainClass}
+                    aria-label={`${item.title} — ${rowLabel}`}
+                    onClick={openRow}
+                  >
+                    {rowMainContent}
+                  </button>
+                ) : (
+                  <div className={rowMainClass}>{rowMainContent}</div>
+                )}
+                <div className="workflow-active-tray-row-actions">
                   {itemElapsed !== undefined ? (
                     <span className="workflow-active-tray-elapsed tabular-nums">{itemElapsed}</span>
                   ) : null}

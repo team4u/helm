@@ -35,7 +35,7 @@ const ACTIVITY_LIGHT_STATUS: Record<
   working: 'working',
   blocked: 'blocked',
   error: 'failed',
-  'plugin-disabled': 'blocked',
+  'plugin-disabled': 'disabled',
   active: 'active',
   idle: 'idle',
 }
