@@ -150,13 +150,29 @@ function makeKernel(calls: CallLog = newCallLog()): KernelRuntimeLike {
       calls.setDisabledModels!.push([provider, disabledModels])
       return { models: [], thinkingLevels: {} }
     },
-    setDefaultModel: async (model?: string, thinkingLevel?: string, compactionModel?: string, compactionThinkingLevel?: string) => {
-      if (compactionThinkingLevel !== undefined) {
-        calls.setDefaultModel!.push([model, thinkingLevel, compactionModel, compactionThinkingLevel])
-      } else if (compactionModel !== undefined) {
-        calls.setDefaultModel!.push([model, thinkingLevel, compactionModel])
-      } else {
-        calls.setDefaultModel!.push([model, thinkingLevel])
+    setDefaultModel: async (
+      model?: string,
+      thinkingLevel?: string,
+      compactionModel?: string,
+      compactionThinkingLevel?: string,
+      levels?: Record<string, string>,
+      update?: { model: string; level: string },
+    ) => {
+      const args: unknown[] = compactionThinkingLevel !== undefined
+        ? [model, thinkingLevel, compactionModel, compactionThinkingLevel]
+        : compactionModel !== undefined
+          ? [model, thinkingLevel, compactionModel]
+          : [model, thinkingLevel]
+      if (levels !== undefined) args.push(levels)
+      if (update !== undefined) args.push(update)
+      calls.setDefaultModel!.push(args)
+      if (levels !== undefined) {
+        for (const key of Object.keys(modelThinkingLevels)) delete modelThinkingLevels[key]
+        Object.assign(modelThinkingLevels, levels)
+      }
+      if (update !== undefined) {
+        if (update.level === '') delete modelThinkingLevels[update.model]
+        else modelThinkingLevels[update.model] = update.level
       }
     },
     setModelThinkingDefault: async (model: string, level: string) => {
@@ -345,6 +361,9 @@ test('models/default: empty object/empty body/explicit null/wrong type/unknown f
     { modelThinking: 'faux/faux-1' },
     { modelThinkingLevel: 'high' },
     { modelThinking: 1, modelThinkingLevel: 'high' },
+    { modelThinkingLevels: [] },
+    { modelThinkingLevels: { 'faux/faux-1': 1 } },
+    { modelThinking: 'faux/faux-1', modelThinkingLevel: 'high', modelThinkingLevels: {} },
   ]) {
     await expect400(kernel, 'PUT', '/api/models/default', bad)
   }
@@ -353,13 +372,35 @@ test('models/default: empty object/empty body/explicit null/wrong type/unknown f
   assert.equal(calls.setDefaultModel!.length, 3)
 })
 
+test('models/default: complete per-model map saves atomically with global defaults and echoes the result', { timeout: 60_000 }, async () => {
+  const calls = newCallLog()
+  const kernel = makeKernel(calls)
+  const response = await call(kernel, 'PUT', '/api/models/default', {
+    model: 'faux/faux-2',
+    thinkingLevel: 'medium',
+    modelThinkingLevels: { 'faux/faux-1': 'high', 'openrouter/vendor/nested': 'max' },
+  })
+  assert.equal(response.status, 200)
+  assert.deepEqual(calls.setDefaultModel, [[
+    'faux/faux-2',
+    'medium',
+    { 'faux/faux-1': 'high', 'openrouter/vendor/nested': 'max' },
+  ]])
+  assert.equal(calls.setModelThinkingDefault!.length, 0)
+  assert.deepEqual(response.json.modelThinkingLevels, {
+    'faux/faux-1': 'high',
+    'openrouter/vendor/nested': 'max',
+  })
+})
+
 test('models/default: per-model pair applies alone or together with regular fields and echoes the full map', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
   const pairOnly = await call(kernel, 'PUT', '/api/models/default', { modelThinking: 'faux/faux-1', modelThinkingLevel: 'high' })
   assert.equal(pairOnly.status, 200)
-  assert.equal(calls.setDefaultModel!.length, 0, 'pair-only bodies must not invoke the regular setDefaultModel port')
-  assert.deepEqual(calls.setModelThinkingDefault![0], ['faux/faux-1', 'high'])
+  assert.equal(calls.setDefaultModel!.length, 1)
+  assert.deepEqual(calls.setDefaultModel![0], [undefined, undefined, { model: 'faux/faux-1', level: 'high' }])
+  assert.equal(calls.setModelThinkingDefault!.length, 0)
   assert.equal(pairOnly.json.ok, true)
   assert.deepEqual(pairOnly.json.modelThinkingLevels, { 'faux/faux-1': 'high' })
 
@@ -369,8 +410,8 @@ test('models/default: per-model pair applies alone or together with regular fiel
     modelThinkingLevel: '',
   })
   assert.equal(combined.status, 200)
-  assert.deepEqual(calls.setDefaultModel![0], ['faux/faux-2', undefined])
-  assert.deepEqual(calls.setModelThinkingDefault![1], ['faux/faux-1', ''])
+  assert.deepEqual(calls.setDefaultModel![1], ['faux/faux-2', undefined, { model: 'faux/faux-1', level: '' }])
+  assert.equal(calls.setModelThinkingDefault!.length, 0)
   assert.deepEqual(combined.json.modelThinkingLevels, {})
 })
 

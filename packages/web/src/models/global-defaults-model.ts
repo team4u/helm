@@ -3,10 +3,9 @@
  * (`config.json.modelThinkingLevels`, edited as rows in the settings form).
  *
  * Rows are the editable form state; the saved state is a plain
- * `'provider/modelId' -> level` map. Saving converts row edits into strict
- * incremental pair updates (`{ modelThinking, modelThinkingLevel }`; empty
- * level clears the entry), so no read-modify-write of the whole map happens
- * client-side.
+ * `'provider/modelId' -> level` map. Saving converts row edits into one
+ * complete map update, so the defaults form is persisted atomically with the
+ * other global model defaults.
  */
 
 /** One editable per-model default row (empty model = row not filled in yet). */
@@ -44,28 +43,11 @@ export function reviewModelThinkingRows(rows: ReadonlyArray<ModelThinkingRow>): 
   return null
 }
 
-/**
- * Incremental pair updates that transform the saved map into the edited rows:
- * changed or new entries carry their level; entries removed from the rows carry
- * an empty level (server clears the single entry and drops the field once the
- * map empties).
- */
-export function diffModelThinkingEntries(
-  saved: Record<string, string> | undefined,
-  rows: ReadonlyArray<ModelThinkingRow>,
-): Array<{ model: string; level: string }> {
-  const savedMap = saved ?? {}
-  const next = new Map<string, string>()
+/** Convert the edited rows into the complete saved model-to-level map. */
+export function modelThinkingLevelsFromRows(rows: ReadonlyArray<ModelThinkingRow>): Record<string, string> {
+  const levels: Record<string, string> = {}
   for (const row of rows) {
-    if (row.model === '') continue
-    next.set(row.model, row.level)
+    if (row.model !== '') levels[row.model] = row.level
   }
-  const updates: Array<{ model: string; level: string }> = []
-  for (const [model, level] of next) {
-    if (savedMap[model] !== level) updates.push({ model, level })
-  }
-  for (const model of Object.keys(savedMap)) {
-    if (!next.has(model)) updates.push({ model, level: '' })
-  }
-  return updates
+  return levels
 }

@@ -901,6 +901,8 @@ export class KernelRuntime {
     thinkingLevel?: string,
     compactionModel?: string,
     compactionThinkingLevel?: string,
+    modelThinkingLevels?: Record<string, string>,
+    modelThinkingUpdate?: { model: string; level: string },
   ): Promise<void> {
     const validateLevel = (level: string) => {
       if (!THINKING_LEVELS.has(level)) {
@@ -911,7 +913,15 @@ export class KernelRuntime {
         )
       }
     }
-    await this.modelsRegistry.setDefaultModel(model, thinkingLevel, validateLevel, compactionModel, compactionThinkingLevel)
+    await this.modelsRegistry.setDefaultModel(
+      model,
+      thinkingLevel,
+      validateLevel,
+      compactionModel,
+      compactionThinkingLevel,
+      modelThinkingLevels,
+      modelThinkingUpdate,
+    )
   }
 
   /** Set or clear one per-model thinking default (`config.json.modelThinkingLevels`); empty level clears the entry. */

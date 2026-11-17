@@ -5,7 +5,7 @@ import { useOptionalModels, useOptionalStoreActions } from '../lib/store-context
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { ModelPickerControl } from '../conversation/ModelPicker.js'
 import {
-  diffModelThinkingEntries,
+  modelThinkingLevelsFromRows,
   reviewModelThinkingRows,
   rowsFromModelThinkingLevels,
   type ModelThinkingRow,
@@ -32,8 +32,8 @@ export interface GlobalDefaultsPanelProps {
  *   the conversation composer) for the global default model, the global
  *   compaction model, and each per-model thinking default row;
  * - saving goes through `assetsApi.setDefaultModel` (empty strings clear keys;
- *   per-model rows become strict incremental `modelThinking` pair updates,
- *   empty level clearing that single entry);
+ *   per-model rows are submitted as one complete map together with the other
+ *   global defaults);
  * - loading carries a generation guard (`loadGeneration`) so stale responses
  *   never overwrite newer state while the model catalog refreshes;
  * - strictly zero Emoji and built on design primitives.
@@ -114,19 +114,9 @@ export function GlobalDefaultsPanel({
         formLevel,
         formCompactionModel,
         formCompactionLevel,
+        undefined,
+        modelThinkingLevelsFromRows(perModelRows),
       )
-      let modelThinkingLevels = res.modelThinkingLevels
-      // Strict incremental pair updates per changed entry (empty level clears one entry).
-      for (const entry of diffModelThinkingEntries(defaultModelInfo?.modelThinkingLevels, perModelRows)) {
-        const pairRes = await assetsApi.setDefaultModel(
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          entry,
-        )
-        modelThinkingLevels = pairRes.modelThinkingLevels
-      }
       if (gen !== loadGeneration.current) return
       if (actions?.refreshAssets) {
         await actions.refreshAssets()
@@ -134,7 +124,7 @@ export function GlobalDefaultsPanel({
       onSaved({
         defaultModel: res.defaultModel,
         defaultThinkingLevel: res.defaultThinkingLevel,
-        modelThinkingLevels,
+        modelThinkingLevels: res.modelThinkingLevels,
         defaultCompactionModel: res.defaultCompactionModel,
         defaultCompactionThinkingLevel: res.defaultCompactionThinkingLevel,
       })

@@ -733,6 +733,7 @@ test('ModelCenter: GlobalDefaultsPanel reuses ModelPickerControl (model · level
           ok: true,
           defaultModel: (body.model as string) ?? '',
           defaultThinkingLevel: (body.thinkingLevel as string) ?? '',
+          modelThinkingLevels: (body.modelThinkingLevels as Record<string, string>) ?? {},
           defaultCompactionModel: (body.compactionModel as string) ?? '',
           defaultCompactionThinkingLevel: (body.compactionThinkingLevel as string) ?? '',
         }),
@@ -786,6 +787,7 @@ test('ModelCenter: GlobalDefaultsPanel reuses ModelPickerControl (model · level
       thinkingLevel: 'high',
       compactionModel: 'openai/gpt-4o-mini',
       compactionThinkingLevel: 'low',
+      modelThinkingLevels: {},
     })
   } finally {
     globalThis.fetch = originalFetch

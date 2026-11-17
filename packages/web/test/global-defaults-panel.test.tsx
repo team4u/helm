@@ -1,9 +1,9 @@
 /**
  * GlobalDefaultsPanel per-model thinking defaults (Settings -> Models -> Global default tab):
- * - pure row/validate/diff helpers of `global-defaults-model.ts` (map <-> rows, partial/duplicate
- *   rejection, strict incremental pair updates for save);
+ * - pure row/validate helpers of `global-defaults-model.ts` (map <-> rows, partial/duplicate
+ *   rejection and complete-map conversion for atomic save);
  * - panel behavior with a real happy-dom mount: saved per-model defaults render as ModelPickerControl
- *   rows, remove + save issues the clearing pair PUT, and a partially filled row blocks saving with a
+ *   rows, remove + save submits one empty map, and a partially filled row blocks saving with a
  *   locale error before any request.
  *
  * Import convention: `ensureHappyDom()` must run before dynamically loading the Radix dependency
@@ -21,7 +21,7 @@ const { createRoot } = await import('react-dom/client')
 const { ModelCenter } = await import('../src/models/ModelCenter.js')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 const {
-  diffModelThinkingEntries,
+  modelThinkingLevelsFromRows,
   reviewModelThinkingRows,
   rowsFromModelThinkingLevels,
 } = await import('../src/models/global-defaults-model.js')
@@ -33,7 +33,7 @@ const CATALOG_MODELS = [
   { id: 'openai/gpt-4o-mini', provider: 'openai', modelId: 'gpt-4o-mini', available: true, thinkingLevels: ['off', 'low', 'medium'] },
 ]
 
-test('global-defaults-model: rows map conversion, validation, and incremental pair diffs', { timeout: 60_000 }, () => {
+test('global-defaults-model: rows map conversion and validation', { timeout: 60_000 }, () => {
   const rows = rowsFromModelThinkingLevels({
     'openai/gpt-4o': 'high',
     'openrouter/vendor/nested': 'max',
@@ -56,23 +56,14 @@ test('global-defaults-model: rows map conversion, validation, and incremental pa
     { kind: 'duplicate', model: 'p/m1' },
   )
 
-  // Diffs against the saved map become strict pair updates (empty level clears one entry).
   assert.deepEqual(
-    diffModelThinkingEntries(
-      { 'p/m1': 'high', 'p/m2': 'low' },
-      [
-        { model: 'p/m1', level: 'max' },
-        { model: 'p/m3', level: 'off' },
-      ],
-    ),
-    [
+    modelThinkingLevelsFromRows([
       { model: 'p/m1', level: 'max' },
       { model: 'p/m3', level: 'off' },
-      { model: 'p/m2', level: '' },
-    ],
+    ]),
+    { 'p/m1': 'max', 'p/m3': 'off' },
   )
-  assert.deepEqual(diffModelThinkingEntries({ 'p/m1': 'high' }, [{ model: 'p/m1', level: 'high' }]), [])
-  assert.deepEqual(diffModelThinkingEntries(undefined, []), [])
+  assert.deepEqual(modelThinkingLevelsFromRows([{ model: '', level: '' }]), {})
 })
 
 interface PanelMount {
@@ -96,6 +87,10 @@ async function mountDefaultsPanel(savedMap: Record<string, string>): Promise<Pan
     if (path === '/api/models/default' && init?.method === 'PUT') {
       const body = JSON.parse(String(init.body)) as Record<string, unknown>
       putBodies.push(body)
+      if (body.modelThinkingLevels !== undefined) {
+        for (const key of Object.keys(levels)) delete levels[key]
+        Object.assign(levels, body.modelThinkingLevels)
+      }
       if (body.modelThinking !== undefined) {
         if (body.modelThinkingLevel === '') delete levels[String(body.modelThinking)]
         else levels[String(body.modelThinking)] = String(body.modelThinkingLevel)
@@ -151,7 +146,7 @@ const click = (el: Element): Promise<void> =>
     ;(el as HTMLElement).click()
   })
 
-test('GlobalDefaultsPanel: per-model rows render from saved defaults; remove + save issues a clearing pair PUT', { timeout: 60_000 }, async () => {
+test('GlobalDefaultsPanel: per-model rows render from saved defaults; remove + save submits an empty map', { timeout: 60_000 }, async () => {
   const panel = await mountDefaultsPanel({ 'anthropic/claude-3-7-sonnet': 'high' })
   try {
     // Saved per-model default renders as one picker row showing model + level.
@@ -161,7 +156,7 @@ test('GlobalDefaultsPanel: per-model rows render from saved defaults; remove + s
     assert.match(rowBtn.textContent ?? '', /high/)
     assert.match(panel.container.textContent ?? '', /Per-model thinking defaults/)
 
-    // Removing the row and saving issues the strict incremental clearing pair (empty level).
+    // Removing the row and saving submits the complete map in the same request.
     const removeBtn = panel.container.querySelector('button.model-defaults-row-remove') as HTMLButtonElement
     assert.ok(removeBtn, 'row remove button must render')
     await click(removeBtn)
@@ -172,9 +167,14 @@ test('GlobalDefaultsPanel: per-model rows render from saved defaults; remove + s
     )!
     await click(saveBtn)
 
-    assert.equal(panel.putBodies.length, 2)
-    assert.deepEqual(panel.putBodies[0], { model: '', thinkingLevel: '', compactionModel: '', compactionThinkingLevel: '' })
-    assert.deepEqual(panel.putBodies[1], { modelThinking: 'anthropic/claude-3-7-sonnet', modelThinkingLevel: '' })
+    assert.equal(panel.putBodies.length, 1)
+    assert.deepEqual(panel.putBodies[0], {
+      model: '',
+      thinkingLevel: '',
+      compactionModel: '',
+      compactionThinkingLevel: '',
+      modelThinkingLevels: {},
+    })
   } finally {
     await panel.unmount()
   }

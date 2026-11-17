@@ -331,6 +331,8 @@ export interface KernelRuntimeLike {
     thinkingLevel?: string,
     compactionModel?: string,
     compactionThinkingLevel?: string,
+    modelThinkingLevels?: Record<string, string>,
+    modelThinkingUpdate?: { model: string; level: string },
   ): Promise<void>
   /** Set or clear one per-model thinking default (`config.json.modelThinkingLevels`); empty level clears the entry. HTTP 501 if unimplemented. */
   setModelThinkingDefault?(model: string, level: string): Promise<void>

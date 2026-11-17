@@ -26,6 +26,7 @@ const MODELS_DEFAULT_BODY_SCHEMA: JsonSchema = {
     compactionThinkingLevel: { type: 'string' },
     modelThinking: { type: 'string' },
     modelThinkingLevel: { type: 'string' },
+    modelThinkingLevels: { type: 'object', additionalProperties: { type: 'string' } },
   },
   additionalProperties: false,
   anyOf: [
@@ -34,6 +35,7 @@ const MODELS_DEFAULT_BODY_SCHEMA: JsonSchema = {
     { required: ['compactionModel'] },
     { required: ['compactionThinkingLevel'] },
     { required: ['modelThinking', 'modelThinkingLevel'] },
+    { required: ['modelThinkingLevels'] },
   ],
 }
 
@@ -88,26 +90,36 @@ export async function handleModelsDomain(
     }
     const hasRegularFields =
       'model' in body || 'thinkingLevel' in body || 'compactionModel' in body || 'compactionThinkingLevel' in body
-    if (hasRegularFields) {
-      if (kernel.setDefaultModel === undefined) {
+    const hasModelThinkingLevels = 'modelThinkingLevels' in body
+    if (hasModelThinkingLevels && hasModelThinking) {
+      throw new ValidationError('models default body: modelThinkingLevels cannot be combined with a modelThinking pair')
+    }
+    if (hasRegularFields || hasModelThinkingLevels || hasModelThinking) {
+      if (kernel.setDefaultModel === undefined && (hasRegularFields || hasModelThinkingLevels)) {
         throw new HelmError('not_implemented', 'current runtime does not support setting the default model', 501)
       }
       const modelArg = 'model' in body ? (body.model as string) : undefined
       const levelArg = 'thinkingLevel' in body ? (body.thinkingLevel as string) : undefined
       const compactionArg = 'compactionModel' in body ? (body.compactionModel as string) : undefined
-      if ('compactionThinkingLevel' in body) {
-        await kernel.setDefaultModel(modelArg, levelArg, compactionArg, body.compactionThinkingLevel as string)
-      } else if ('compactionModel' in body) {
-        await kernel.setDefaultModel(modelArg, levelArg, compactionArg)
+      const modelThinkingLevels = hasModelThinkingLevels
+        ? body.modelThinkingLevels as Record<string, string>
+        : undefined
+      const modelThinkingUpdate = hasModelThinking
+        ? { model: body.modelThinking as string, level: body.modelThinkingLevel as string }
+        : undefined
+      if (kernel.setDefaultModel !== undefined) {
+        if ('compactionThinkingLevel' in body) {
+          await kernel.setDefaultModel(modelArg, levelArg, compactionArg, body.compactionThinkingLevel as string, modelThinkingLevels, modelThinkingUpdate)
+        } else if ('compactionModel' in body) {
+          await kernel.setDefaultModel(modelArg, levelArg, compactionArg, undefined, modelThinkingLevels, modelThinkingUpdate)
+        } else {
+          await kernel.setDefaultModel(modelArg, levelArg, undefined, undefined, modelThinkingLevels, modelThinkingUpdate)
+        }
+      } else if (modelThinkingUpdate !== undefined && kernel.setModelThinkingDefault !== undefined) {
+        await kernel.setModelThinkingDefault(modelThinkingUpdate.model, modelThinkingUpdate.level)
       } else {
-        await kernel.setDefaultModel(modelArg, levelArg)
+        throw new HelmError('not_implemented', 'current runtime does not support setting model defaults', 501)
       }
-    }
-    if (hasModelThinking) {
-      if (kernel.setModelThinkingDefault === undefined) {
-        throw new HelmError('not_implemented', 'current runtime does not support per-model thinking defaults', 501)
-      }
-      await kernel.setModelThinkingDefault(body.modelThinking as string, body.modelThinkingLevel as string)
     }
     const catalog = await kernel.listModels()
     return jsonOk(redactor, {

@@ -516,6 +516,7 @@ export const assetsApi = {
     compactionModel?: string,
     compactionThinkingLevel?: string,
     modelThinking?: { model: string; level: string },
+    modelThinkingLevels?: Record<string, string>,
   ) =>
     apiRequest<{
       ok: boolean
@@ -530,6 +531,7 @@ export const assetsApi = {
       ...(compactionModel !== undefined ? { compactionModel } : {}),
       ...(compactionThinkingLevel !== undefined ? { compactionThinkingLevel } : {}),
       ...(modelThinking !== undefined ? { modelThinking: modelThinking.model, modelThinkingLevel: modelThinking.level } : {}),
+      ...(modelThinkingLevels !== undefined ? { modelThinkingLevels } : {}),
     }),
   listModelProviders: (opts?: { signal?: AbortSignal }) =>
     apiRequest<ModelProviderSummary[]>('GET', '/api/models/providers', undefined, opts?.signal),

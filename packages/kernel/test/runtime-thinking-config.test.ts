@@ -300,10 +300,37 @@ it('setModelThinkingDefault persists config.json entries, clears single entries,
   assert.equal('modelThinkingLevels' in config3, false)
   assert.equal((await kernel.listModels()).modelThinkingLevels, undefined)
 
+  // Full-map replacement validates before writing any global model setting.
+  await assertRejectsCode(
+    () => kernel.setDefaultModel(undefined, 'low', undefined, undefined, { 'faux/faux-1': 'bogus' } as never),
+    'validation_error',
+  )
+  const afterInvalidMap = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'))
+  assert.equal(afterInvalidMap.thinkingLevel, undefined)
+  assert.deepEqual(afterInvalidMap.modelThinkingLevels, undefined)
+
+  // A CLI-style single-model update shares one config transaction with ordinary defaults.
+  await kernel.setDefaultModel(undefined, 'low', undefined, undefined, undefined, {
+    model: 'faux/faux-1', level: 'high',
+  })
+  const afterAtomicUpdate = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'))
+  assert.equal(afterAtomicUpdate.thinkingLevel, 'low')
+  assert.deepEqual(afterAtomicUpdate.modelThinkingLevels, { 'faux/faux-1': 'high' })
+  await assertRejectsCode(
+    () => kernel.setDefaultModel(undefined, 'medium', undefined, undefined, undefined, {
+      model: 'faux/faux-2', level: 'bogus',
+    }),
+    'validation_error',
+  )
+  const afterInvalidUpdate = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'))
+  assert.equal(afterInvalidUpdate.thinkingLevel, 'low')
+  assert.deepEqual(afterInvalidUpdate.modelThinkingLevels, { 'faux/faux-1': 'high' })
+
   // Invalid references and levels are rejected explicitly.
   await assertRejectsCode(() => kernel.setModelThinkingDefault('no-slash-ref', 'high'), 'validation_error')
   await assertRejectsCode(() => kernel.setModelThinkingDefault('faux/faux-1', 'bogus'), 'validation_error')
   await assertRejectsCode(() => kernel.setModelThinkingDefault('', 'high'), 'validation_error')
+  await kernel.setModelThinkingDefault('faux/faux-1', '')
   const config4 = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'))
   assert.equal('modelThinkingLevels' in config4, false)
 })
