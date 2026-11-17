@@ -5,9 +5,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helm/protocol'
-// 类型引用（test-only）：workflow/herdr 共享契约已自 @helm/protocol 迁至 kernel 插件层；
-// 与既有 web 测试引用 kernel 私有源码的约定一致（如 mermaid-theme.test.ts），纯类型零运行时耦合，不放宽生产包边界。
-import type { WorkflowRunSummary } from '@helm/plugins/contracts'
 import { conversationsApi, ApiClientError } from '../src/lib/api.js'
 import { buildAncestorChain, collectSubtreeIds, MAX_ANCESTRY_DEPTH } from '../src/conversation/ancestry-model.js'
 import {
@@ -16,46 +13,6 @@ import {
   patchConversationsArchived,
 } from '../src/shell/archive-ops.js'
 import { ARCHIVED_TAG } from '../src/shell/sidebar-model.js'
-// subagent/workflow 纯逻辑已迁入 builtin:workflow 插件 client 模块（kernel 真实
-// esbuild 编译后动态 import；react 等 shim 在编译前挂载，类型经 helpers 断言）。
-import { importWorkflowModels, mountSharedPluginNamespaces } from './helpers/workflow-client.js'
-mountSharedPluginNamespaces()
-const workflowModels = await importWorkflowModels()
-const buildSubagentStreamLines = workflowModels.buildSubagentStreamLines
-const resolveSubagentConversationIdImpl = workflowModels.resolveSubagentConversationId
-const resolveSubagentExecutionMetaImpl = workflowModels.resolveSubagentExecutionMeta
-const resolveWorkflowRunForToolImpl = workflowModels.resolveWorkflowRunForTool
-
-// ToolTrace -> 插件入参适配（resultText -> result）：宿主时间线模型与插件
-// ToolViewProps 的字段命名差异在此对齐，保持既有测试语义不变。
-function toWorkflowToolInput(tool: ToolTrace): { callId: string | undefined; input: unknown; result?: unknown } {
-  return {
-    callId: tool.callId,
-    input: tool.input,
-    ...(tool.resultText !== undefined ? { result: tool.resultText } : {}),
-  }
-}
-function resolveSubagentConversationId(
-  tool: ToolTrace,
-  parentConversationId: number,
-  conversations: ReadonlyArray<Pick<import('@helm/protocol').ConversationSummary, 'id' | 'parentConversationId' | 'parentToolCallId'>>,
-): number | undefined {
-  return resolveSubagentConversationIdImpl(toWorkflowToolInput(tool), parentConversationId, conversations)
-}
-function resolveWorkflowRunForTool(
-  tool: ToolTrace,
-  parentConversationId: number,
-  workflowRuns: ReadonlyArray<import('@helm/plugins/contracts').WorkflowRunSummary>,
-): import('@helm/plugins/contracts').WorkflowRunSummary | undefined {
-  return resolveWorkflowRunForToolImpl(toWorkflowToolInput(tool), parentConversationId, workflowRuns)
-}
-function resolveSubagentExecutionMeta(
-  tool: ToolTrace,
-  parentConversationId: number,
-  workflowRuns: ReadonlyArray<import('@helm/plugins/contracts').WorkflowRunSummary>,
-) {
-  return resolveSubagentExecutionMetaImpl(toWorkflowToolInput(tool), parentConversationId, workflowRuns)
-}
 import {
   buildTimelineItems,
   collectSiblingCalls,
@@ -162,13 +119,18 @@ test('parseHelmInputData：非法形状返回 undefined，不伪造', { timeout:
   assert.equal(ok!.attachments!.length, 1)
 })
 
-test('toolCall + toolResult 按 callId 配对：状态、isError、耗时与结果文本合并', { timeout: 60_000 }, () => {
+test('toolCall + toolResult 按 callId 配对：状态、isError、耗时、startedAt 与结果文本合并', { timeout: 60_000 }, () => {
   const items = buildTimelineItems([
-    assistantEntry('1', [
-      { type: 'text', text: '先看文件' },
-      toolCallBlock('c1', 'read', { file_path: '/a/b.ts' }),
-      toolCallBlock('c2', 'bash', { command: 'pnpm test' }),
-    ]),
+    {
+      id: '1',
+      kind: 'pi.assistant',
+      createdAt: 1_700_000_000_500,
+      model: [{ role: 'assistant', content: [
+        { type: 'text', text: '先看文件' },
+        toolCallBlock('c1', 'read', { file_path: '/a/b.ts' }),
+        toolCallBlock('c2', 'bash', { command: 'pnpm test' }),
+      ] }],
+    },
     toolResultEntry('2', 'c1', 'read', { text: '文件内容', durationMs: 120 }),
     toolResultEntry('3', 'c2', 'bash', { isError: true, text: '退出码 1' }),
   ])
@@ -179,6 +141,7 @@ test('toolCall + toolResult 按 callId 配对：状态、isError、耗时与结�
   assert.equal(traces[0]!.isError, false)
   assert.equal(traces[0]!.resultText, '文件内容')
   assert.equal(traces[0]!.durationMs, 120)
+  assert.equal(traces[0]!.startedAt, 1_700_000_000_500, 'assistant.timestamp 应传播为 tool.startedAt')
   assert.equal(traces[0]!.structuredOutput, undefined, '无 details 时不得伪造结构化结果')
   assert.equal(traces[1]!.toolName, 'bash')
   assert.equal(traces[1]!.status, 'error')
@@ -819,206 +782,31 @@ test('withdraw 与 submitInput(replaceFromEntryId)：请求体构造与非法 su
   assert.deepEqual(captured[3]!.body, { text: '普通', origin: 'human' })
 })
 
-// ---------------------------------------------------------------------------
-// subagent / SubagentWorkflow 运行期实时关联
-// ---------------------------------------------------------------------------
-
-function convSummary(id: number, parentConversationId?: number, parentToolCallId?: string) {
-  return {
-    id,
-    title: `会话 ${id}`,
-    profileId: 'assistant',
-    tags: [],
-    ...(parentConversationId !== undefined ? { parentConversationId } : {}),
-    ...(parentToolCallId !== undefined ? { parentToolCallId } : {}),
-  }
-}
-
-function workflowRun(
-  id: string,
-  conversationId: number,
-  status: 'running' | 'completed' | 'failed' | 'aborted',
-  updatedAt = 1,
-  parentToolCallId?: string,
-): WorkflowRunSummary {
-  return {
-    id,
-    name: `run ${id}`,
-    conversationId,
-    status,
-    createdAt: 1,
-    updatedAt,
-    ...(parentToolCallId !== undefined ? { parentToolCallId } : {}),
-  }
-}
-
-test('resolveSubagentConversationId：运行期经 parentToolCallId 命中，完成后只信任标准 footer 尾行', { timeout: 60_000 }, () => {
-  const conversations = [
-    convSummary(10, 1),
-    convSummary(11, 1, 'call-abc'),
-    convSummary(12, 2, 'call-abc'), // 属于其他父会话，不得误命中
-  ]
-  // 运行期：resultText 尚未产出，按 callId -> parentToolCallId 精确关联
-  const running: ToolTrace = {
-    key: 'tool:call-abc',
-    toolName: 'subagent',
-    callId: 'call-abc',
-    input: { prompt: '去修构建' },
-    status: 'running',
-    isError: false,
-  }
-  assert.equal(resolveSubagentConversationId(running, 1, conversations), 11)
-  // 完成后：标准 footer 尾行命中（与内核 subagentFooter 字段序一致）
-  const done: ToolTrace = {
-    ...running,
-    status: 'done',
-    resultText: '完成了\n[subagent resume=old conversationId=11 executionId=herdr:1 cwd=/w]',
-  }
-  assert.equal(resolveSubagentConversationId(done, 1, conversations), 11)
-  // 业务正文裸提及 conversationId=：不是 footer，绝不抢占关联
-  const fakeBody: ToolTrace = {
-    ...running,
-    status: 'done',
-    resultText: '修复报告：已把会话 conversationId=99 的事项处理完',
-  }
-  // 正文伪造值不存在（99 不在列表）时回退 callId 精确命中 11，而非误挂 99
-  assert.equal(resolveSubagentConversationId(fakeBody, 1, conversations), 11)
-  // 插件化后不再硬编码工具名：非 subagent 工具不进 SubagentToolView（宿主按
-  // tool.view 匹配路由），纯数据函数对同形入参行为一致（callId 关联仍命中）。
-  assert.equal(
-    resolveSubagentConversationId({ ...running, toolName: 'bash' }, 1, conversations),
-    11,
-  )
-})
-
-test('resolveSubagentConversationId：假正文与真 footer 并存时取 footer（最后一次标准行）', { timeout: 60_000 }, () => {
-  const conversations = [convSummary(11, 1, 'call-abc')]
-  const tool: ToolTrace = {
-    key: 'tool:call-abc',
-    toolName: 'subagent',
-    callId: 'call-abc',
-    status: 'done',
-    isError: false,
-  }
-  // 正文引用行形似但非内核 footer（前缀不是 [subagent 开头或无闭合 ]）：不命中正文值
-  const decoy = { ...tool, resultText: '建议 resume conversationId=42] 继续处理' }
-  assert.equal(resolveSubagentConversationId(decoy, 1, conversations), 11)
-  // 真 footer 在末尾：即使正文里出现别的 conversationId 值，也只取 footer 的 11
-  const both = {
-    ...tool,
-    resultText: '上游说明 conversationId=77 已完成\n任务完成\n[subagent conversationId=11]',
-  }
-  assert.equal(resolveSubagentConversationId(both, 1, conversations), 11)
-  // 无 footer 且无 parentToolCallId 匹配（callId 不同）：resume 数字 ref 兑底
-  const resumeOnly: ToolTrace = {
-    ...tool,
-    callId: 'call-other',
-    input: { prompt: '继续', resume: '11' },
-  }
-  assert.equal(resolveSubagentConversationId(resumeOnly, 1, conversations), 11)
-  // footer 数字非正（0）：不合法不命中，回退 callId 兑底
-  const zeroFooter: ToolTrace = {
-    ...tool,
-    resultText: '[subagent conversationId=0]',
-  }
-  assert.equal(resolveSubagentFooterOnly(zeroFooter, 1, conversations), undefined)
-})
-
-/** 只验证 footer 路径（无 callId / 无 parent 匹配 / 无 resume）：非法数字不得命中。 */
-function resolveSubagentFooterOnly(tool: ToolTrace, parent: number, conversations: Array<ReturnType<typeof convSummary>>) {
-  return resolveSubagentConversationId({ ...tool, callId: 'call-none' }, parent, [
-    ...conversations,
-  ])
-}
-
-test('resolveSubagentConversationId：resume 数字 ref 匹配同父会话子会话', { timeout: 60_000 }, () => {
-  const conversations = [convSummary(21, 1), convSummary(22, 2)]
-  const resumeTool: ToolTrace = {
-    key: 'tool:call-xyz',
-    toolName: 'subagent',
-    callId: 'call-xyz',
-    input: { prompt: '继续', resume: '21' },
-    status: 'running',
-    isError: false,
-  }
-  assert.equal(resolveSubagentConversationId(resumeTool, 1, conversations), 21)
-  // resume 指向别的父会话的子会话：拒绝
-  assert.equal(
-    resolveSubagentConversationId({ ...resumeTool, input: { prompt: '继续', resume: '22' } }, 1, conversations),
-    undefined,
-  )
-  // 非数字 ref（agentId 映射）前端无法解析：不命中（不猜测）
-  assert.equal(
-    resolveSubagentConversationId({ ...resumeTool, input: { prompt: '继续', resume: 'worker-1' } }, 1, conversations),
-    undefined,
-  )
-})
-
-test('resolveSubagentConversationId：resume 支持正整数 number 入参（safe integer），非法数字不命中', { timeout: 60_000 }, () => {
-  const conversations = [convSummary(21, 1)]
-  const base: ToolTrace = {
-    key: 'tool:call-num',
-    toolName: 'subagent',
-    callId: 'call-none',
-    status: 'running',
-    isError: false,
-  }
-  // 数字形态 resume（与字符串同语义）：命中同父会话子会话
-  assert.equal(
-    resolveSubagentConversationId({ ...base, input: { prompt: '继续', resume: 21 } }, 1, conversations),
-    21,
-  )
-  // 非正整数 number：不命中（不猜测）
-  assert.equal(
-    resolveSubagentConversationId({ ...base, input: { prompt: '继续', resume: 0 } }, 1, conversations),
-    undefined,
-  )
-  assert.equal(
-    resolveSubagentConversationId({ ...base, input: { prompt: '继续', resume: -21 } }, 1, conversations),
-    undefined,
-  )
-  assert.equal(
-    resolveSubagentConversationId({ ...base, input: { prompt: '继续', resume: 1.5 } }, 1, conversations),
-    undefined,
-  )
-  // 指向其他父会话：拒绝
-  assert.equal(
-    resolveSubagentConversationId({ ...base, input: { prompt: '继续', resume: 99 } }, 1, conversations),
-    undefined,
-  )
-})
-
-test('collectSiblingCalls：收集全部工具调用轻量摘要（callId 顺序 / 状态归一 / 结果透传）', { timeout: 60_000 }, () => {
-  const conversations = [convSummary(42, 1), convSummary(43, 1)]
-  // 子会话 #42：首次派生（footer 携带 conversationId=42）+ 两次 resume（resume=42）
-  // 子会话 #43：一次独立派生
+test('collectSiblingCalls：收集全部工具调用轻量摘要（callId 顺序 / 状态归一 / details 透传 structuredOutput）', { timeout: 60_000 }, () => {
   const items = buildTimelineItems([
     entry('1', 'helm.input', { data: { text: '开始', origin: 'human' } }),
     assistantEntry('2', [toolCallBlock('call_1', 'subagent', { prompt: '首次派生' })]),
-    toolResultEntry('3', 'call_1', 'subagent', { text: '首战告捷\n[subagent conversationId=42]' }),
+    toolResultEntry('3', 'call_1', 'subagent', { text: '首战告捷', details: { execution: { conversationId: 42 } } }),
     assistantEntry('4', [{ type: 'text', text: '继续深挖' }]),
     entry('5', 'helm.input', { data: { text: '续接 42', origin: 'human' } }),
     assistantEntry('6', [toolCallBlock('call_2', 'subagent', { prompt: '继续', resume: 42 })]),
-    toolResultEntry('7', 'call_2', 'subagent', { text: '第二轮完成\n[subagent conversationId=42]' }),
+    toolResultEntry('7', 'call_2', 'subagent', { text: '第二轮完成', details: { execution: { conversationId: 42 } } }),
     entry('8', 'helm.input', { data: { text: '再续接 42 并派生 43', origin: 'human' } }),
     assistantEntry('9', [
       toolCallBlock('call_3', 'subagent', { prompt: '再继续', resume: '42' }),
       toolCallBlock('call_4', 'subagent', { prompt: '新任务' }),
     ]),
-    toolResultEntry('10', 'call_3', 'subagent', { text: '第三轮完成\n[subagent conversationId=42]' }),
-    toolResultEntry('11', 'call_4', 'subagent', { text: '新会话完成\n[subagent conversationId=43]' }),
+    toolResultEntry('10', 'call_3', 'subagent', { text: '第三轮完成', details: { execution: { conversationId: 42 } } }),
+    toolResultEntry('11', 'call_4', 'subagent', { text: '新会话完成', details: { execution: { conversationId: 43 } } }),
   ])
   const calls = collectSiblingCalls(items)
-  // 4 次 subagent 调用全部收集（折叠去重由插件组件按 siblingCalls 自行计算）
   assert.equal(calls.length, 4)
   assert.deepEqual(calls.map((c) => c.callId), ['call_1', 'call_2', 'call_3', 'call_4'])
   assert.ok(calls.every((c) => c.toolName === 'subagent'))
   assert.ok(calls.every((c) => c.status === 'done'))
-  // 结果文本透传（footer 元数据行原样保留，供插件组件解析子会话关联）
-  assert.match(String(calls[0]!.result), /conversationId=42/)
-  assert.match(String(calls[2]!.result), /conversationId=42/)
-  assert.match(String(calls[3]!.result), /conversationId=43/)
-  // 入参透传（resume 形态保持原始类型：number 与 string）
+  assert.deepEqual(calls[0]!.structuredOutput, { execution: { conversationId: 42 } })
+  assert.deepEqual(calls[2]!.structuredOutput, { execution: { conversationId: 42 } })
+  assert.deepEqual(calls[3]!.structuredOutput, { execution: { conversationId: 43 } })
   assert.deepEqual(calls[1]!.input, { prompt: '继续', resume: 42 })
   assert.deepEqual(calls[2]!.input, { prompt: '再继续', resume: '42' })
 })
@@ -1032,295 +820,8 @@ test('collectSiblingCalls：无 callId 的调用跳过，step-group 内工具同
     toolResultEntry('2', 'c-fold-1', 'bash', { text: 'ok' }),
     toolResultEntry('3', 'c-fold-2', 'read', { text: '内容' }),
   ])
-  // 连续常规工具折叠进 step-group，但 siblingCalls 仍按时间序完整收集
   const calls = collectSiblingCalls(items)
   assert.deepEqual(calls.map((c) => c.callId), ['c-fold-1', 'c-fold-2'])
-})
-
-test('resolveWorkflowRunForTool：运行期按 parentToolCallId 精确命中（不猜最新），完成后结果 id 全等双保险', { timeout: 60_000 }, () => {
-  const running: ToolTrace = {
-    key: 'tool:call-wf',
-    toolName: 'SubagentWorkflow',
-    callId: 'call-wf',
-    status: 'running',
-    isError: false,
-  }
-
-  // --- 同父会话双 running：各自 callId 精确命中，绝不都挂到第一个 running ---
-  const dualRunning = [
-    workflowRun('run-a', 1, 'running', 5, 'call-wf'),
-    workflowRun('run-b', 1, 'running', 9, 'call-other'),
-  ]
-  assert.equal(resolveWorkflowRunForTool(running, 1, dualRunning)?.id, 'run-a')
-  const otherTool: ToolTrace = { ...running, callId: 'call-other' }
-  assert.equal(resolveWorkflowRunForTool(otherTool, 1, dualRunning)?.id, 'run-b')
-
-  // --- 旧 completed + 新调用未创建 run：不挂旧 run（无关联即 undefined） ---
-  const onlyOld = [workflowRun('run-old', 1, 'completed', 1, 'call-past')]
-  assert.equal(resolveWorkflowRunForTool(running, 1, onlyOld), undefined)
-
-  // --- 跨会话拒绝：同 callId 的 run 属其他会话不命中 ---
-  const crossConv = [workflowRun('run-x', 2, 'running', 9, 'call-wf')]
-  assert.equal(resolveWorkflowRunForTool(running, 1, crossConv), undefined)
-
-  // --- 完成态：结果 JSON 精确提取 run id 命中（全等，非 includes 误前缀） ---
-  const done: ToolTrace = {
-    ...running,
-    status: 'done',
-    resultText: '工作流执行完成 {"id":"run-done","status":"completed"}',
-  }
-  const withDone = [workflowRun('run-done', 1, 'completed', 2, 'call-wf'), workflowRun('run-done-2', 1, 'completed', 3, 'call-wf2')]
-  assert.equal(resolveWorkflowRunForTool(done, 1, withDone)?.id, 'run-done')
-  // 前缀陷阱：结果 id 是 run-old 的前缀子串，绝不能 includes 误命中
-  const prefixTrap: ToolTrace = {
-    ...running,
-    status: 'done',
-    resultText: '引用了历史 run-old-2 的输出 {"id":"run-old-2"}',
-  }
-  const history = [workflowRun('run-old', 1, 'completed', 1)]
-  assert.equal(resolveWorkflowRunForTool(prefixTrap, 1, history), undefined)
-
-  // --- 历史已完成（无 parentToolCallId 的旧 run）：仅结果 id 提取命中，不猜最新 ---
-  const legacyDone: ToolTrace = {
-    ...running,
-    status: 'done',
-    resultText: '{"id":"run-legacy","status":"completed","result":42}',
-  }
-  const legacy = [workflowRun('run-legacy', 1, 'completed', 1), workflowRun('run-newer', 1, 'completed', 8)]
-  assert.equal(resolveWorkflowRunForTool(legacyDone, 1, legacy)?.id, 'run-legacy')
-
-  // --- 错误输出无 id 匹配且无 callId 关联：undefined，显示原工具行 ---
-  const errored: ToolTrace = {
-    ...running,
-    callId: 'call-err',
-    status: 'error',
-    isError: true,
-    resultText: 'workflow_failed: 恰好提供一个',
-  }
-  assert.equal(resolveWorkflowRunForTool(errored, 1, dualRunning.concat(legacy)), undefined)
-  // 错误但 callId 关联存在（run 启动后引擎失败）：仍命中关联 run，展示真实失败卡
-  const erroredLinked: ToolTrace = {
-    ...running,
-    status: 'error',
-    isError: true,
-    resultText: 'workflow_failed: 引擎内部错误',
-  }
-  assert.equal(resolveWorkflowRunForTool(erroredLinked, 1, dualRunning)?.id, 'run-a')
-
-  // --- 无 callId（异常环境）+ 无结果 id：不命中任何 run ---
-  const noCallId: ToolTrace = { ...running, callId: undefined }
-  assert.equal(resolveWorkflowRunForTool(noCallId, 1, dualRunning), undefined)
-
-  // 插件化后不再硬编码工具名：非 SubagentWorkflow 工具不进 WorkflowToolView
-  //（宿主按 tool.view 匹配路由），纯数据函数对同形入参行为一致。
-  assert.equal(resolveWorkflowRunForTool({ ...running, toolName: 'bash' }, 1, dualRunning)?.id, 'run-a')
-})
-
-test('buildSubagentStreamLines：剥离 structured_output_contract 样板并展开 step-group', { timeout: 60_000 }, () => {
-  const entries: ConversationEntry[] = [
-    entry('1', 'helm.input', { data: { text: '帮我修复构建\n\n<structured_output_contract>\n调用 register_structured_output 工具\nSchema: {}\n</structured_output_contract>', origin: 'agent' } }),
-    assistantEntry('2', [
-      { type: 'thinking', thinking: '先看构建日志' },
-      toolCallBlock('c1', 'bash', { command: 'pnpm build' }),
-      { type: 'text', text: '构建已修复' },
-    ]),
-    toolResultEntry('3', 'c1', 'bash', { text: 'exit 0', durationMs: 1500 }),
-  ]
-  const lines = buildSubagentStreamLines(entries, undefined, false)
-  assert.equal(lines.length, 4)
-  assert.equal(lines[0]!.kind, 'prompt')
-  assert.ok(lines[0]!.kind === 'prompt' && !lines[0]!.text.includes('structured_output_contract'))
-  assert.ok(lines[0]!.kind === 'prompt' && lines[0]!.text.startsWith('帮我修复构建'))
-  assert.equal(lines[1]!.kind, 'thinking')
-  assert.ok(lines[1]!.kind === 'thinking' && lines[1]!.text === '先看构建日志')
-  assert.equal(lines[2]!.kind, 'tool')
-  assert.ok(lines[2]!.kind === 'tool' && lines[2]!.toolName === 'bash')
-  assert.ok(lines[2]!.kind === 'tool' && lines[2]!.summary === 'pnpm build')
-  assert.ok(lines[2]!.kind === 'tool' && lines[2]!.status === 'done')
-  assert.ok(lines[2]!.kind === 'tool' && lines[2]!.durationMs === 1500)
-  assert.ok(lines[2]!.kind === 'tool' && lines[2]!.resultPreview === 'exit 0')
-  assert.equal(lines[3]!.kind, 'text')
-  assert.ok(lines[3]!.kind === 'text' && lines[3]!.text === '构建已修复')
-})
-
-test('buildSubagentStreamLines：合并 ConversationLive 流式 thinking / tools / text', { timeout: 60_000 }, () => {
-  const entries: ConversationEntry[] = [entry('1', 'helm.input', { data: { text: '继续任务', origin: 'agent' } })]
-  const live: ConversationLive = {
-    conversationId: 11,
-    text: '正在分析输出…',
-    thinking: '流式思考中',
-    tools: [
-      { callId: 'lc1', toolName: 'read', input: { file_path: '/a.ts' }, status: 'running' },
-    ],
-    updatedAt: 1234,
-  }
-  const lines = buildSubagentStreamLines(entries, live, true)
-  const kinds = lines.map((l) => l.kind)
-  assert.deepEqual(kinds, ['prompt', 'thinking', 'tool', 'text'])
-  assert.ok(lines[1]!.kind === 'thinking' && lines[1]!.text === '流式思考中')
-  assert.ok(lines[2]!.kind === 'tool' && lines[2]!.toolName === 'read' && lines[2]!.status === 'running')
-  assert.ok(lines[2]!.kind === 'tool' && lines[2]!.summary === '/a.ts')
-  assert.ok(lines[3]!.kind === 'text' && lines[3]!.text === '正在分析输出…')
-})
-
-// ---------------------------------------------------------------------------
-// subagent 顶层 JSON 信封 execution 解析与后台执行元数据关联
-// ---------------------------------------------------------------------------
-
-test('resolveSubagentConversationId：顶层 JSON 信封 execution.conversationId 优先，业务 result 文本中的 ID 不抢占', { timeout: 60_000 }, () => {
-  const conversations = [convSummary(668, 1, 'call-json')]
-  const base: ToolTrace = {
-    key: 'tool:call-json',
-    toolName: 'subagent',
-    callId: 'call-json',
-    status: 'done',
-    isError: false,
-  }
-  // 同步 JSON 信封：顶层 execution.conversationId 结构化读取
-  const syncJson: ToolTrace = {
-    ...base,
-    resultText:
-      '{"ok":true,"result":"报告正文提到 conversationId=999 的历史会话","execution":{"nodeId":"local","conversationId":668,"worktree":{"path":"/path/with space/wt","branch":"helm/spawn-123"}}}\n[subagent conversationId=668 cwd=/x worktree=/path/with space/wt@helm/spawn-123]',
-  }
-  assert.equal(resolveSubagentConversationId(syncJson, 1, conversations), 668)
-  // 后台 JSON 信封：顶层 runId + execution（无 conversationId）：不虚构子会话；
-  // 但 callId 运行期关联仍命中（受信链路，同父会话）——无 callId 时才 undefined
-  const bgJson: ToolTrace = {
-    ...base,
-    resultText: '{"ok":true,"runId":"wf_abc123","execution":{"executionId":"pane-9","worktree":{"path":"/wt","branch":"helm/bg-1"}}}',
-  }
-  assert.equal(resolveSubagentConversationId(bgJson, 1, conversations), 668)
-  assert.equal(
-    resolveSubagentConversationId({ ...bgJson, callId: 'call-none' }, 1, conversations),
-    undefined,
-    '信封无 conversationId 且无 callId 关联：不虚构子会话',
-  )
-  // 业务 result 内嵌套任意 conversationId 字段（非顶层 execution）：不读取；
-  // 但 callId 运行期关联（parentToolCallId）仍命中同父会话子会话（受信链路）
-  const nestedFake: ToolTrace = {
-    ...base,
-    resultText: '{"ok":true,"result":{"note":"conversationId=888 已处理","inner":{"conversationId":888}}}',
-  }
-  assert.equal(resolveSubagentConversationId(nestedFake, 1, conversations), 668, '不读业务嵌套 ID，但 callId 关联仍命中 668')
-  assert.equal(
-    resolveSubagentConversationId({ ...nestedFake, callId: 'call-other' }, 1, conversations),
-    undefined,
-    '无 callId 关联且无信封 execution/footer/resume：不虚构子会话',
-  )
-  // JSON 解析优先于 footer：footer 为旧格式也能提取
-  const jsonOnly: ToolTrace = {
-    ...base,
-    resultText: '{"ok":true,"result":"","execution":{"conversationId":668}}',
-  }
-  assert.equal(resolveSubagentConversationId(jsonOnly, 1, conversations), 668)
-})
-
-test('resolveSubagentConversationId：旧 footer 兑底仍有效（含内核 PATH@BRANCH 实际形态）', { timeout: 60_000 }, () => {
-  const conversations = [convSummary(42, 1, 'call-ft')]
-  const tool: ToolTrace = {
-    key: 'tool:call-ft',
-    toolName: 'subagent',
-    callId: 'call-ft',
-    status: 'done',
-    isError: false,
-    resultText:
-      '任务完成报告\n[subagent resume=42 conversationId=42 cwd=/root/code/helm worktree=/root/code/helm/.worktrees/wt-42@helm/spawn-id]',
-  }
-  assert.equal(resolveSubagentConversationId(tool, 1, conversations), 42)
-  // 正文伪造行不能抢占：非末尾 footer 形态不命中
-  const fake: ToolTrace = {
-    ...tool,
-    resultText: '正文提到 [subagent conversationId=99] 但并非内核尾行',
-  }
-  // 取最后一次 footer 行：伪造行也是 footer 形态，仍取最后出现的（内核契约 footer 总在末尾）
-  assert.equal(resolveSubagentConversationId(fake, 1, conversations), 99)
-})
-
-test('resolveSubagentExecutionMeta：parentToolCallId + 同父会话精确关联优先，节点 worktree 随 run 返回；跨父会话不串卡', { timeout: 60_000 }, () => {
-  const run = workflowRun('wf_link', 1, 'running', 3, 'call-bg')
-  run.nodes = [{ id: 'n1', kind: 'agent', status: 'running', worktree: { path: '/wt/link', branch: 'helm/bg-link' } }]
-  const tool: ToolTrace = {
-    key: 'tool:call-bg',
-    toolName: 'subagent',
-    callId: 'call-bg',
-    status: 'running',
-    isError: false,
-  }
-  const meta = resolveSubagentExecutionMeta(tool, 1, [run])
-  assert.equal(meta.run?.id, 'wf_link')
-  assert.deepEqual(meta.worktree, { path: '/wt/link', branch: 'helm/bg-link' })
-  // 跨父会话拒绝：同 callId 的 run 属其他会话不命中（不串卡片）
-  assert.deepEqual(resolveSubagentExecutionMeta(tool, 2, [run]), {})
-  // 插件化后不再硬编码工具名：非 subagent 工具不进 SubagentToolView（宿主按
-  // tool.view 匹配路由），纯数据函数对同形入参行为一致。
-  assert.equal(resolveSubagentExecutionMeta({ ...tool, toolName: 'bash' }, 1, [run]).run?.id, 'wf_link')
-})
-
-test('resolveSubagentExecutionMeta：后台 JSON 信封 runId 同会话全等匹配，execution 元数据与含空格路径还原', { timeout: 60_000 }, () => {
-  const runs = [workflowRun('wf_abc123', 1, 'running'), workflowRun('wf_other', 1, 'completed')]
-  const tool: ToolTrace = {
-    key: 'tool:call-x',
-    toolName: 'subagent',
-    callId: 'call-x',
-    status: 'done',
-    isError: false,
-    resultText:
-      '{"ok":true,"runId":"wf_abc123","execution":{"nodeId":"node-a","executionId":"pane-9","effectiveCwd":"/wt dir/sub","worktree":{"path":"/wt dir/sub","branch":"helm/bg-main"}}}',
-  }
-  const meta = resolveSubagentExecutionMeta(tool, 1, runs)
-  assert.equal(meta.run?.id, 'wf_abc123', '顶层 runId 全等命中同会话 run')
-  assert.deepEqual(meta.worktree, { path: '/wt dir/sub', branch: 'helm/bg-main' }, 'JSON 解析可靠还原含空格路径')
-  assert.equal(meta.executionId, 'pane-9')
-  assert.equal(meta.nodeId, 'node-a')
-  assert.equal(meta.effectiveCwd, '/wt dir/sub')
-  // runId 属其他会话：不串卡（父会话 2 的 run 不被父会话 1 命中）
-  const otherConvRun = workflowRun('wf_abc123', 2, 'running')
-  const crossMeta = resolveSubagentExecutionMeta(tool, 1, [otherConvRun])
-  assert.equal(crossMeta.run, undefined)
-  assert.deepEqual(crossMeta.worktree, { path: '/wt dir/sub', branch: 'helm/bg-main' }, '无 run 关联时 worktree 仍如实提取')
-})
-
-test('resolveSubagentExecutionMeta：旧 footer 兑底（runId= / worktree=PATH@BRANCH 实际内核形态）', { timeout: 60_000 }, () => {
-  const runs = [workflowRun('wf_old9', 1, 'running')]
-  const tool: ToolTrace = {
-    key: 'tool:call-f',
-    toolName: 'subagent',
-    callId: 'call-f',
-    status: 'done',
-    isError: false,
-    resultText:
-      '已转入后台\n[subagent background runId=wf_old9 conversationId=668 cwd=/x worktree=/srv/wt/helm-42@helm/wf-run-1]',
-  }
-  const meta = resolveSubagentExecutionMeta(tool, 1, runs)
-  assert.equal(meta.run?.id, 'wf_old9')
-  assert.deepEqual(meta.worktree, { path: '/srv/wt/helm-42', branch: 'helm/wf-run-1' }, 'PATH@BRANCH 形态解析')
-})
-
-test('resolveSubagentExecutionMeta：run 节点 worktree 优先于 JSON/footer 文本；无关联不伪造', { timeout: 60_000 }, () => {
-  const run = workflowRun('wf_pref', 1, 'running', 3, 'call-p')
-  run.nodes = [{ id: 'n1', kind: 'agent', status: 'running', worktree: { path: '/wt/from-run', branch: 'helm/from-run' } }]
-  const tool: ToolTrace = {
-    key: 'tool:call-p',
-    toolName: 'subagent',
-    callId: 'call-p',
-    status: 'running',
-    isError: false,
-    resultText:
-      '{"ok":true,"runId":"wf_pref","execution":{"worktree":{"path":"/wt/from-json","branch":"helm/from-json"}}}\n[subagent worktree=/wt/from-footer@helm/from-footer]',
-  }
-  const meta = resolveSubagentExecutionMeta(tool, 1, [run])
-  assert.equal(meta.run?.id, 'wf_pref')
-  assert.deepEqual(meta.worktree, { path: '/wt/from-run', branch: 'helm/from-run' }, 'run 节点坐标优先')
-  // 无任何线索：字段均 undefined
-  const plain: ToolTrace = { ...tool, callId: 'call-none', resultText: '普通输出' }
-  assert.deepEqual(resolveSubagentExecutionMeta(plain, 1, [run]), {})
-  // 业务 result 文本中裸提及 conversationId/runId：不解读
-  const bodyMention: ToolTrace = {
-    ...tool,
-    callId: 'call-none',
-    resultText: '报告：上次 runId=wf_missing 的任务已完成，详见 conversationId=123',
-  }
-  assert.deepEqual(resolveSubagentExecutionMeta(bodyMention, 1, [run]), {})
 })
 
 // ---------------------------------------------------------------------------

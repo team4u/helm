@@ -84,3 +84,24 @@
   font-size: 11px;
   color: var(--fg-subtle);
 }
+
+/* dispatch_worker 轻量单行回执：状态灯 + 摘要 + worker 会话入口 */
+.sa-dispatch-receipt {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  min-width: 0;
+  font-size: 12.5px;
+}
+
+.sa-dispatch-text {
+  color: var(--fg);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sa-dispatch-meta {
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}

@@ -344,6 +344,7 @@ export function assembleRuntimeServices(
     isStarted: () => runtime.started,
     defaultModel: () => modelsRegistry.defaultModel,
     defaultThinkingLevel: () => modelsRegistry.defaultThinkingLevel,
+    modelThinkingLevelOf: (ref) => modelsRegistry.modelThinkingLevelOf(ref),
     models: () => modelsRegistry.models,
     parseModelRefOrThrow: (ref) => modelsRegistry.parseModelRefOrThrow(ref),
     assertModelEnabled: (provider, modelId) => modelsRegistry.assertModelEnabled(provider, modelId),

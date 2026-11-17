@@ -499,6 +499,30 @@ describe('WorkflowService listRuns integrity', () => {
     const summary = service.getRun(victim)
     assert.equal(summary.syncForeground, true)
     assert.equal(summary.detachedAt, 1_700_000_000_000)
+
+    // errorCode 非字符串显式报 workflow_record_corrupt；合法失败记录透传 errorCode 与 resumable。
+    writeRecordFile(dataDir, { ...record, errorCode: 123 })
+    assert.throws(
+      () => service.getRun(victim),
+      (error: unknown) => error instanceof HelmError && error.code === 'workflow_record_corrupt',
+    )
+    writeRecordFile(dataDir, { ...record, status: 'failed', error: '[gate_failed] bad', errorCode: 'gate_failed' })
+    const failedSummary = service.getRun(victim)
+    assert.equal(failedSummary.errorCode, 'gate_failed')
+    assert.equal(failedSummary.resumable, true)
+
+    // listRuns 单次读索引（O(N) 而非 O(N^2)），listActiveRuns 零索引读取。
+    let indexReads = 0
+    const origGet = state.get.bind(state)
+    state.get = <T>(key: string, initial: T): T => {
+      if (key === 'workflow/runs') indexReads += 1
+      return origGet(key, initial)
+    }
+    assert.deepEqual(service.listActiveRuns(), [])
+    assert.equal(indexReads, 0, 'listActiveRuns 不得读取持久索引')
+    const allListed = service.listRuns()
+    assert.equal(allListed.length, 2)
+    assert.equal(indexReads, 1, 'listRuns 无论多少条历史记录只读一次索引')
     await service.close()
   })
 

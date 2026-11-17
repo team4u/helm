@@ -165,6 +165,132 @@
   color: var(--err);
 }
 
+/* 通用状态灯词汇（宿主公共设计系统，供侧栏会话行与 @helm/plugin-client StatusLight 共用）：
+   基础圆点 + working/blocked/done/error 色调与呼吸动效 + 后台在途空心环；
+   aborted 菱形与 pending 空心环见下方统一状态灯段。 */
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-block;
+  vertical-align: middle;
+  background: var(--fg-muted);
+}
+
+.status-dot-working {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-bg);
+  animation: status-dot-pulse 1.8s ease-in-out infinite;
+}
+
+.status-dot-blocked {
+  background: var(--warn);
+  box-shadow: 0 0 0 2px var(--warn-bg);
+}
+
+.status-dot-done {
+  background: var(--ok);
+  box-shadow: 0 0 0 2px var(--ok-bg);
+}
+
+.status-dot-error {
+  background: var(--err);
+  box-shadow: 0 0 0 2px var(--err-bg);
+}
+
+/* 后台在途空心环（单灯位）：父会话自身空闲/已完成但后台任务（子代理/工作流）
+   While running, it replaces the idle no-light/done green dot as the only status light of the row;
+   hollow with a slow breathing animation, clearly distinct from the solid working pulse of the main turn, never impersonating conversation activity. */
+.status-dot-background {
+  background: transparent;
+  border: 1.5px solid var(--accent);
+  box-sizing: border-box;
+  box-shadow: 0 0 0 2px var(--accent-bg);
+  animation: status-dot-background-pulse 2.6s ease-in-out infinite;
+}
+
+@keyframes status-dot-background-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 1.5px var(--accent-bg);
+    opacity: 0.85;
+  }
+  50% {
+    box-shadow: 0 0 0 3px var(--accent-bg);
+    opacity: 1;
+  }
+}
+
+@keyframes status-dot-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 1.5px var(--accent-bg);
+    opacity: 0.85;
+  }
+  50% {
+    box-shadow: 0 0 0 3.5px var(--accent-bg);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot-working,
+  .status-dot-background {
+    animation: none;
+  }
+}
+
+/* 统一状态灯（纯指示灯，不渲染可见状态文字）：执行/状态卡主状态位。
+   复用上方 .status-dot 视觉词汇（base/working/blocked/done/error/background 均在本文件），
+   这里补充 aborted 菱形（非灰色、与 blocked 实心圆区分）与 pending 空心中性环；
+   语义除颜色外还有形状（呼吸/空心/菱形），可访问名称走 role=img + aria-label
+   与屏幕阅读器专用文本，绝不只靠颜色表达；label 不再占据可见宽度（移动端友好）。 */
+.helm-status-light {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  min-width: 0;
+  max-width: 100%;
+  flex-shrink: 0;
+  overflow: hidden;
+  line-height: 1;
+  vertical-align: middle;
+}
+.helm-status-light .status-dot {
+  width: 8px;
+  height: 8px;
+}
+
+/* 屏幕阅读器专用文本：视觉隐藏但不依赖 title/hover */
+.helm-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* 已中止：空心菱形（warn 描边），不是普通灰点 */
+.status-dot-aborted {
+  background: transparent;
+  border: 1.5px solid var(--warn);
+  box-sizing: border-box;
+  border-radius: 1.5px;
+  transform: rotate(45deg);
+  box-shadow: none;
+}
+
+/* 未开始/跳过/未知：空心中性环（诚实的中性，不伪造结论） */
+.status-dot-pending {
+  background: transparent;
+  border: 1.5px solid var(--fg-muted);
+  box-sizing: border-box;
+  box-shadow: none;
+}
+
 /* 1px 发丝分隔列表 */
 .list {
   border: 1px solid var(--border);

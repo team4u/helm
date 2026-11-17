@@ -14,6 +14,7 @@ import {
 import { HelmIcon } from '@helm/plugin-client'
 import { ModalFocusScope } from './shell/ModalFocusScope.js'
 import { ConversationPane } from './conversation/ConversationPane.js'
+import { ConversationWindowStage } from './conversation/ConversationWindowStage.js'
 import { AgentStandbyPane } from './conversation/AgentStandbyPane.js'
 import { standbyDraftKey } from './conversation/standby-model.js'
 import { ConversationDrawer } from './conversation/ConversationDrawer.js'
@@ -349,35 +350,39 @@ function HelmShellInner() {
                       <div className="home-landing-skeleton-line home-landing-skeleton-line-short" />
                     </div>
                   </div>
-                ) : primaryTarget.kind === 'conversation' ? (
-                  <ConversationPane
-                    key={`primary-conv-${primaryTarget.conversationId}`}
-                    conversationId={primaryTarget.conversationId}
-                  />
-                ) : primaryTarget.kind === 'agent' ? (
-                  <AgentStandbyPane
-                    key={standbyDraftKey({ panel: 'primary', ...primaryTarget })}
-                    profileId={primaryTarget.profileId}
-                    nodeId={primaryTarget.nodeId}
-                    cwd={primaryTarget.cwd}
-                  />
-                ) : primaryTarget.kind === 'screen' ? (
-                  <ScreenHost
-                    key={`primary-screen-${primaryTarget.pluginId}-${primaryTarget.screenId}`}
-                    pluginId={primaryTarget.pluginId}
-                    screenId={primaryTarget.screenId}
-                  />
-                ) : primaryTarget.kind === 'plugins' ? (
-                  <PluginCenter key="primary-plugins" />
-                ) : primaryTarget.kind === 'profiles' ? (
-                  <ProfileCenter key="primary-profiles" />
-                ) : primaryTarget.kind === 'skills' ? (
-                  <SkillCenter key="primary-skills" />
-                ) : primaryTarget.kind === 'nodes' ? (
-                  <NodeCenter key="primary-nodes" />
-                ) : primaryTarget.kind === 'models' ? (
-                  <ModelCenter key="primary-models" />
-                ) : null}
+                ) : (
+                  <>
+                    {/* 会话窗口保活舞台：主屏会话在此按 LRU 缓存于 <Activity>，切屏/切会话只翻
+                        mode；非会话目标与舞台互斥渲染（舞台折叠为 display:none）。 */}
+                    <ConversationWindowStage
+                      activeConversationId={primaryTarget.kind === 'conversation' ? primaryTarget.conversationId : null}
+                    />
+                    {primaryTarget.kind === 'conversation' ? null : primaryTarget.kind === 'agent' ? (
+                      <AgentStandbyPane
+                        key={standbyDraftKey({ panel: 'primary', ...primaryTarget })}
+                        profileId={primaryTarget.profileId}
+                        nodeId={primaryTarget.nodeId}
+                        cwd={primaryTarget.cwd}
+                      />
+                    ) : primaryTarget.kind === 'screen' ? (
+                      <ScreenHost
+                        key={`primary-screen-${primaryTarget.pluginId}-${primaryTarget.screenId}`}
+                        pluginId={primaryTarget.pluginId}
+                        screenId={primaryTarget.screenId}
+                      />
+                    ) : primaryTarget.kind === 'plugins' ? (
+                      <PluginCenter key="primary-plugins" />
+                    ) : primaryTarget.kind === 'profiles' ? (
+                      <ProfileCenter key="primary-profiles" />
+                    ) : primaryTarget.kind === 'skills' ? (
+                      <SkillCenter key="primary-skills" />
+                    ) : primaryTarget.kind === 'nodes' ? (
+                      <NodeCenter key="primary-nodes" />
+                    ) : primaryTarget.kind === 'models' ? (
+                      <ModelCenter key="primary-models" />
+                    ) : null}
+                  </>
+                )}
               </Suspense>
             </div>
 

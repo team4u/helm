@@ -10,6 +10,7 @@ const packagesDir = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 interface PackageManifest {
   name: string
   dependencies?: Record<string, string>
+  devDependencies?: Record<string, string>
   peerDependencies?: Record<string, string>
   optionalDependencies?: Record<string, string>
   exports?: string | Record<string, unknown>
@@ -94,10 +95,16 @@ test('production packages maintain one-way dependencies and cross boundaries onl
     if (manifest.name !== '@helm/test-kit' && '@helm/test-kit' in dependencies) {
       violations.push(`${manifest.name}: production dependencies must not include test-kit package @helm/test-kit`)
     }
+    if (manifest.name === '@helm/plugins' && '@helm/plugin-client' in dependencies) {
+      violations.push('@helm/plugins: browser SDK @helm/plugin-client must stay in devDependencies, not production dependencies')
+    }
     for (const name of forbidden[manifest.name] ?? []) {
       if (name in dependencies) violations.push(`${manifest.name}: forbidden dependency ${name}`)
     }
     for (const file of sourceFiles(join(root, 'src'))) {
+      const isPluginsBrowserClient =
+        manifest.name === '@helm/plugins' &&
+        /\/src\/[^/]+\/client\//.test(file.replaceAll(sep, '/'))
       for (const { specifier, typeOnly } of imports(file)) {
         const label = `${relative(packagesDir, file)}: ${specifier}`
         if (isAbsolute(specifier) || specifier.startsWith('file:')) {
@@ -115,6 +122,10 @@ test('production packages maintain one-way dependencies and cross boundaries onl
         if ((forbidden[manifest.name] ?? []).includes(target)) violations.push(`${label} reverse dependency`)
         if (manifest.name === '@helm/test-kit') {
           if (!typeOnly) violations.push(`${label} @helm/test-kit only allows import type for cross-package references`)
+        } else if (isPluginsBrowserClient && target === '@helm/plugin-client') {
+          if (!(target in (manifest.devDependencies ?? {}))) {
+            violations.push(`${label} undeclared devDependency @helm/plugin-client`)
+          }
         } else if (target !== manifest.name && !(target in dependencies)) {
           violations.push(`${label} undeclared production dependency`)
         }

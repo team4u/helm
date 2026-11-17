@@ -29,7 +29,7 @@ import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/provid
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { MemoryStorage } from '@earendil-works/pi-durable/storage/memory'
-import { HelmError, type AgentExecutionInfo } from '@helm/protocol'
+import { HelmError, type AgentExecutionInfo, type AgentSpawnRequest } from '@helm/protocol'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -40,13 +40,14 @@ import { createEnvFabric } from '../../kernel/src/env/fabric.js'
 import { runNativeSpawn, type NativeSpawnDeps } from '../../kernel/src/runtime/spawn.js'
 import { WorktreeAllocator, type ManagedWorktreeRecord } from '../src/workflow/worktree.js'
 import { extractWorkflowExecutionMeta } from '../src/contracts.js'
-import { WorktreeIsolation } from '../src/workflow/isolation.js'
+import { WorktreeIsolation, type WorktreeIsolationDeps } from '../src/workflow/isolation.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { ArtifactService, SecretStash } from '../../kernel/src/services/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import {
+  assertNoUnhandledRejection,
   createGitTemplate,
   makeConversationSummary,
   makeFauxModels,
@@ -79,16 +80,30 @@ function localNodePorts() {
   const envOf = (cwd: string) => new NodeExecutionEnv({ cwd })
   return {
     exec: async (
-      nodeId: string,
+      _nodeId: string,
       cwd: string,
       args: readonly string[],
-      options: { cwd: string; timeout: number; onOutput: (text: string) => void },
-      context: import('@earendil-works/chord/context').Context,
-    ) => envOf(cwd).exec([...args], options, context) as never,
-    nodeExists: async (nodeId: string, path: string, context: import('@earendil-works/chord/context').Context) =>
-      envOf(path).exists(path, context) as never,
-    nodeCanonicalPath: async (nodeId: string, path: string, context: import('@earendil-works/chord/context').Context) =>
-      envOf(path).canonicalPath(path, context) as never,
+      options?: { timeoutMs?: number; signal?: AbortSignal },
+    ) => {
+      let output = ''
+      const res = await envOf(cwd).exec(
+        [...args],
+        {
+          cwd,
+          ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs / 1000 } : {}),
+          onOutput: (text: string) => {
+            output += text
+          },
+        },
+        BACKGROUND_CONTEXT,
+      )
+      if (!res.ok) {
+        return { ok: false, exitCode: null, output, timedOut: res.error.code === 'timeout' }
+      }
+      return { ok: res.value.exitCode === 0, exitCode: res.value.exitCode, output, timedOut: false }
+    },
+    nodeExists: (_nodeId: string, path: string) => envOf(path).exists(path, BACKGROUND_CONTEXT),
+    nodeCanonicalPath: (_nodeId: string, path: string) => envOf(path).canonicalPath(path, BACKGROUND_CONTEXT),
   }
 }
 
@@ -193,7 +208,7 @@ async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
         if (!result.ok) {
           return { ok: false, exitCode: null, output: combined, timedOut: result.error.code === 'timeout' }
         }
-        return { ok: true, exitCode: result.value.exitCode, output: combined, timedOut: false }
+        return { ok: result.value.exitCode === 0, exitCode: result.value.exitCode, output: combined, timedOut: false }
       },
       executionEnv: (nodeId, cwd) => new NodeExecutionEnv({ cwd }),
       inspectNodePathUsage: (input) => envFabric.inspectPathUsage(input.nodeId, input.path, input.signal),
@@ -743,7 +758,7 @@ async function executeCleanupTool(
     if (!r.ok) {
       return { ok: false, exitCode: null, output: combined, timedOut: r.error.code === 'timeout' }
     }
-    return { ok: true, exitCode: r.value.exitCode, output: combined, timedOut: false }
+    return { ok: r.value.exitCode === 0, exitCode: r.value.exitCode, output: combined, timedOut: false }
   }
   const backend: PluginHostBackend = {
     ...createPluginHostBackendFixture(),
@@ -1702,7 +1717,7 @@ describe('inspect 只读检视：成功输出脱敏与 diff 驱动隔离（真�
 // 计数，不 mock 任何 git 行为断言——git 行为全部由上方真实 git 测试覆盖）
 // ---------------------------------------------------------------------------
 
-/** 受控 exec：按命令尾参派发脚本输出，按固定块大小分块回调 onOutput（模拟真实流式输出跨块切行）。 */
+/** 受控 exec：按命令尾参派发脚本输出，返回直接执行结果形状。 */
 function stubChunkedExec(scriptOf: (args: readonly string[]) => { output: string; exitCode?: number }) {
   const seen: string[][] = []
   let chunkSize = 64
@@ -1710,14 +1725,12 @@ function stubChunkedExec(scriptOf: (args: readonly string[]) => { output: string
     _nodeId: string,
     _cwd: string,
     args: readonly string[],
-    options: { onOutput: (text: string) => void },
-  ): Promise<{ ok: true; value: { exitCode: number } }> => {
+  ): Promise<{ ok: boolean; exitCode: number; output: string; timedOut: false }> => {
     seen.push([...args])
     const spec = scriptOf(args.slice(3))
-    for (let i = 0; i < spec.output.length; i += chunkSize) {
-      options.onOutput(spec.output.slice(i, i + chunkSize))
-    }
-    return { ok: true, value: { exitCode: spec.exitCode ?? 0 } }
+    const exitCode = spec.exitCode ?? 0
+    void chunkSize
+    return { ok: exitCode === 0, exitCode, output: spec.output, timedOut: false }
   }
   return { seen, setChunkSize: (n: number) => (chunkSize = n), exec }
 }
@@ -2098,8 +2111,12 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
       assert.ok(record, 'Worktree 记录保留（供下一轮 resume / cleanup）')
       assert.equal(record!.conversationId, 5)
       const state = th.docs.get('builtin:workflow:worktree-state') as Record<string, unknown>
-      const bindings = state['worktree-agent-bindings'] as Record<string, number>
-      assert.equal(bindings['agent-rel-1'], 5, 'agentId -> childId 绑定保留（供 resume ref 解析）')
+      const bindings = state['worktree-agent-bindings'] as Record<string, { childId: number; parentConversationId: number }>
+      assert.deepEqual(
+        bindings['agent-rel-1'],
+        { childId: 5, parentConversationId: 1 },
+        'agentId -> { childId, parentConversationId } 绑定保留（供 resume ref 解析）',
+      )
       // 释放后 cleanup 不再报 worktree_execution_unknown（租约门已过；Linux 上
       // 通常全量成功，但沙箱 /proc 可能含不可读 fd 的外部进程——快照不完整
       // 时 fail-closed 的 worktree_process_check_failed 是环境事实，也证明已越过租约检查）。
@@ -2304,5 +2321,460 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
     } finally {
       await th.close()
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 会话删除裁剪（pruneConversation）与批量 Git 预检（allocate）
+// ---------------------------------------------------------------------------
+
+describe('pruneConversation：裁剪绑定与已 removed 记录，绝不删 active 记录与租约', { timeout: 60_000 }, () => {
+  it('按子会话或父会话裁剪绑定与 removed 记录，严格保留 active 记录与活跃/fail-closed 租约', {
+    timeout: 60_000,
+  }, async () => {
+    const dir = join(rootDir, 't22-prune')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const th = await openSpawnHarness(repo, join(dir, 'data'))
+    try {
+      th.faux.setResponses([
+        fauxAssistantMessage('c1'),
+        fauxAssistantMessage('c2'),
+        fauxAssistantMessage('c3'),
+      ])
+      let c1 = 0
+      let c2 = 0
+      let c3 = 0
+      await th.spawnIsolated({
+        parentConversationId: 10,
+        prompt: 'task-1',
+        isolation: 'worktree',
+        agentId: 'ag-c1',
+        onResolved: (i: AgentExecutionInfo) => { c1 = i.conversationId ?? 0 },
+      } as never)
+      await th.spawnIsolated({
+        parentConversationId: 10,
+        prompt: 'task-2',
+        isolation: 'worktree',
+        agentId: 'ag-c2',
+        onResolved: (i: AgentExecutionInfo) => { c2 = i.conversationId ?? 0 },
+      } as never)
+      await th.spawnIsolated({
+        parentConversationId: 20,
+        prompt: 'task-3',
+        isolation: 'worktree',
+        agentId: 'ag-c3',
+        onResolved: (i: AgentExecutionInfo) => { c3 = i.conversationId ?? 0 },
+      } as never)
+
+      const rec1 = th.isolation.getForConversation(c1)!
+      const rec2 = th.isolation.getForConversation(c2)!
+      const rec3 = th.isolation.getForConversation(c3)!
+
+      // 把 rec1 与一条被 fail-closed 租约引用的记录标为 removed；rec2 与 rec3 保持 active。
+      const state = th.docs.get('builtin:workflow:worktree-state') as Record<string, unknown>
+      const wtDoc = state['runtime/worktrees'] as { version: 1; records: ManagedWorktreeRecord[] }
+      wtDoc.records = wtDoc.records.map((r) =>
+        r.id === rec1.id ? { ...r, status: 'removed', removedAt: Date.now() } : r,
+      )
+      const leasedRemovedId = 'local:/tmp/leased-removed-wt'
+      wtDoc.records.push({
+        ...rec1,
+        id: leasedRemovedId,
+        path: '/tmp/leased-removed-wt',
+        conversationId: c1,
+        parentConversationId: 10,
+        status: 'removed',
+        removedAt: Date.now(),
+      })
+      state['worktree-leases'] = {
+        'fail-closed-lease': {
+          phase: 'running',
+          nodeId: 'local',
+          path: rec2.path,
+          info: { nodeId: 'local', executionId: 'ext-keep' },
+          worktreeId: rec2.id,
+          createdAt: 1,
+        },
+        'leased-removed-token': {
+          phase: 'pending',
+          nodeId: 'local',
+          path: '/tmp/leased-removed-wt',
+          info: { nodeId: 'local', executionId: 'ext-leased-removed' },
+          worktreeId: leasedRemovedId,
+          createdAt: 2,
+        },
+      }
+      th.docs.set('builtin:workflow:worktree-state', state)
+
+      // 1) 无关会话裁剪：完全无副作用
+      th.isolation.pruneConversation(99999)
+      assert.equal(rawRecords(th.docs).length, 4)
+
+      // 2) 按子会话 c1 裁剪：ag-c1 绑定删除、rec1（removed）删除；leasedRemoved 因仍有租约保留；c2/c3 不变
+      th.isolation.pruneConversation(c1)
+      let afterState = th.docs.get('builtin:workflow:worktree-state') as Record<string, unknown>
+      let bindings = afterState['worktree-agent-bindings'] as Record<string, unknown>
+      assert.equal(bindings['ag-c1'], undefined, '子会话匹配时应清理 agentId 绑定')
+      assert.ok(bindings['ag-c2'] !== undefined, '同父其他子会话绑定此时保留')
+      assert.ok(bindings['ag-c3'] !== undefined, '其他父会话绑定保留')
+      assert.equal(rawRecords(th.docs).some((r) => r.id === rec1.id), false, '已 removed 的关联记录应被裁剪')
+      assert.equal(rawRecords(th.docs).some((r) => r.id === leasedRemovedId), true, '仍被租约引用的记录绝不删除')
+      assert.equal(rawRecords(th.docs).some((r) => r.id === rec2.id), true, 'active 记录绝不删除')
+      assert.equal(Object.keys(leasesOf(th.docs)).length, 2, '任何活跃/fail-closed 租约绝不删除')
+
+      // 3) 按父会话 10 裁剪：ag-c2 绑定因父会话匹配被清理，但 active 的 rec2 与全部租约严格保留
+      th.isolation.pruneConversation(10)
+      afterState = th.docs.get('builtin:workflow:worktree-state') as Record<string, unknown>
+      bindings = afterState['worktree-agent-bindings'] as Record<string, unknown>
+      assert.equal(bindings['ag-c2'], undefined, '父会话匹配时应清理其名下 agentId 绑定')
+      assert.ok(bindings['ag-c3'] !== undefined, '无关父会话 20 的绑定保留')
+      assert.equal(rawRecords(th.docs).find((r) => r.id === rec2.id)?.status, 'active', '父会话裁剪绝不删除 active worktree')
+      assert.equal(rawRecords(th.docs).find((r) => r.id === rec3.id)?.status, 'active')
+      assert.equal(Object.keys(leasesOf(th.docs)).length, 2, '父会话裁剪绝不删除租约')
+    } finally {
+      await th.close()
+    }
+  })
+})
+
+describe('allocate 批量 Git 预检与非常规布局诚实拒绝', { timeout: 60_000 }, () => {
+  it('单次 allocate 全程仅触发 4 条 git 子命令（3 条预检 + 1 条 worktree add），且子目录 sourceCwd 精确定位仓库根', {
+    timeout: 60_000,
+  }, async () => {
+    const dir = join(rootDir, 't23-batch')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const subDir = join(repo, 'nested', 'module')
+    mkdirSync(subDir, { recursive: true })
+    const docs = new Map<string, unknown>()
+    const basePorts = localNodePorts()
+    const gitCalls: string[][] = []
+    const allocator = new WorktreeAllocator({
+      ...basePorts,
+      exec: async (nodeId, cwd, args, options) => {
+        gitCalls.push([...args])
+        return basePorts.exec(nodeId, cwd, args, options)
+      },
+      inspectPathUsage: (nodeId, path, signal) => bareFabricOf().inspectPathUsage(nodeId, path, signal),
+      docStore: {
+        get<T>(key: string, initial: T): T {
+          return (docs.get(key) as T | undefined) ?? initial
+        },
+        set<T>(key: string, value: T): void {
+          docs.set(key, value)
+        },
+      },
+    })
+    try {
+      const record = await allocator.allocate({ nodeId: 'local', sourceCwd: subDir, parentConversationId: 1 })
+      assert.equal(record.repoRoot, repo, '子目录 sourceCwd 应精确定位仓库主工作树')
+      assert.equal(record.baseBranch, 'main')
+      assert.equal(record.dirtySource, false)
+      assert.equal(
+        gitCalls.length,
+        4,
+        `allocate 应合并预检为 3 条 git 命令 + 1 条 worktree add（实得 ${gitCalls.length}: ${JSON.stringify(gitCalls)}）`,
+      )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('裸仓库（bare）、--separate-git-dir 与无初始提交仓库（unborn HEAD）均返回精确错误码', {
+    timeout: 60_000,
+  }, async () => {
+    const dir = join(rootDir, 't23-layouts')
+    mkdirSync(dir, { recursive: true })
+    const docs = new Map<string, unknown>()
+    const allocator = bareAllocator(docs)
+    try {
+      // 1) bare 仓库 -> worktree_unsupported_layout
+      const bareDir = join(dir, 'bare.git')
+      execFileSync('git', ['init', '-q', '--bare', bareDir])
+      await assert.rejects(
+        () => allocator.allocate({ nodeId: 'local', sourceCwd: bareDir, parentConversationId: 1 }),
+        (err: unknown) => err instanceof HelmError && err.code === 'worktree_unsupported_layout',
+      )
+
+      // 2) --separate-git-dir -> worktree_unsupported_layout
+      const sepGit = join(dir, 'sep-git')
+      const sepWork = join(dir, 'sep-work')
+      execFileSync('git', ['init', '-q', `--separate-git-dir=${sepGit}`, sepWork])
+      await assert.rejects(
+        () => allocator.allocate({ nodeId: 'local', sourceCwd: sepWork, parentConversationId: 1 }),
+        (err: unknown) => err instanceof HelmError && err.code === 'worktree_unsupported_layout',
+      )
+
+      // 3) unborn HEAD（git init 尚无任何 commit）-> worktree_failed
+      const unbornDir = join(dir, 'unborn')
+      execFileSync('git', ['init', '-q', '-b', 'main', unbornDir])
+      await assert.rejects(
+        () => allocator.allocate({ nodeId: 'local', sourceCwd: unbornDir, parentConversationId: 1 }),
+        (err: unknown) => err instanceof HelmError && err.code === 'worktree_failed',
+      )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// WorktreeIsolation 并发租约与外部运行时元数据边界回归（确定性 fake 端口）
+// ---------------------------------------------------------------------------
+
+interface FakeIsolationOptions {
+  gatedExistsPath?: string
+  existsValue?: boolean
+  failFlushFirst?: number
+}
+
+interface FakeIsolationHandle {
+  isolation: WorktreeIsolation
+  docStore: WorktreeIsolationDeps['docStore']
+  probeEntered: Promise<void>
+  releaseProbe(): void
+  execCalls: Array<{ command: string | string[]; cwd?: string }>
+}
+
+function makeFakeIsolation(options: FakeIsolationOptions = {}): FakeIsolationHandle {
+  const docs = new Map<string, unknown>()
+  let flushes = 0
+  const docStore: WorktreeIsolationDeps['docStore'] = {
+    get<T>(key: string, initial: T): T {
+      return (docs.get(key) as T | undefined) ?? initial
+    },
+    set<T>(key: string, value: T): void {
+      docs.set(key, value)
+    },
+    async flush() {
+      flushes++
+      if (options.failFlushFirst !== undefined && flushes <= options.failFlushFirst) {
+        throw new Error('simulated doc flush failure')
+      }
+    },
+  }
+  let releaseProbe: () => void = () => {}
+  let probeEnteredNotify: () => void = () => {}
+  const probeEntered = new Promise<void>((resolve) => {
+    probeEnteredNotify = resolve
+  })
+  const gatedPath = options.gatedExistsPath
+  let gateConsumed = false
+  const execCalls: FakeIsolationHandle['execCalls'] = []
+  return {
+    docStore,
+    probeEntered,
+    releaseProbe: () => releaseProbe(),
+    execCalls,
+    isolation: new WorktreeIsolation({
+      host: {
+        resolveSpawnTarget: async (input) => ({
+          nodeId: 'local',
+          sourceCwd: input.requestCwd ?? '/repo',
+          parentCwd: '/repo',
+        }),
+        execEnv: async (req) => {
+          execCalls.push({ command: req.command, cwd: req.cwd })
+          return { ok: true, exitCode: 0, output: 'true\n', timedOut: false }
+        },
+        executionEnv: ((_nodeId: string, _cwd: string) =>
+          ({
+            exists: async (path: string) => {
+              if (gatedPath !== undefined && path === gatedPath && !gateConsumed) {
+                gateConsumed = true
+                probeEnteredNotify()
+                await new Promise<void>((resolve) => {
+                  releaseProbe = resolve
+                })
+              }
+              return { ok: true, value: options.existsValue ?? true } as const
+            },
+            canonicalPath: async (path: string) => ({ ok: true, value: path } as const),
+          }) as never) as WorktreeIsolationDeps['host']['executionEnv'],
+        listActiveSpawnExecutions: () => [],
+        redact: (text) => text,
+        inspectNodePathUsage: async (input: { nodeId: string; path: string }) => ({
+          path: input.path,
+          processes: [],
+          matchedTotal: 0,
+          processesTruncated: false,
+          complete: true,
+          unobservable: 0,
+          diagnostics: [],
+        }),
+        getConversation: () => ({ cwd: gatedPath ?? '/repo', nodeId: 'local', status: 'idle' }),
+      },
+      docStore,
+    }),
+  }
+}
+
+function leaseCount(docStore: WorktreeIsolationDeps['docStore']): number {
+  return Object.keys(docStore.get<Record<string, unknown>>('worktree-leases', {})).length
+}
+
+describe('WorktreeIsolation：外部运行时租约与并发窗口保护', { timeout: 60_000 }, () => {
+  it('外部运行时租约首写 flush 失败：显式诊断、无 unhandledRejection；结算写重试后租约释放', { timeout: 60_000 }, async () => {
+    const stderrLines: string[] = []
+    const originalWrite = process.stderr.write.bind(process.stderr)
+    process.stderr.write = ((chunk: unknown, ...rest: unknown[]) => {
+      stderrLines.push(String(chunk))
+      return (originalWrite as (c: unknown, ...r: unknown[]) => boolean)(chunk, ...rest)
+    }) as typeof process.stderr.write
+    try {
+      const handle = makeFakeIsolation({ failFlushFirst: 1 })
+      await assertNoUnhandledRejection(async () => {
+        let resolved: AgentExecutionInfo | undefined
+        const result = await handle.isolation.aroundSpawn(
+          {
+            parentConversationId: 1,
+            prompt: '外部任务',
+            agentType: 'ext:demo',
+            isolation: 'worktree',
+            onResolved: (info: AgentExecutionInfo) => {
+              resolved = info
+            },
+          } as never,
+          async (final) => {
+            ;(final as AgentSpawnRequest).onResolved?.({
+              nodeId: 'local',
+              meta: { 'builtin:workflow': { worktree: { path: '/wt/ext-1', branch: 'helm/spawn-ext1' } } },
+              conversationId: 7,
+              executionId: 'exec-1',
+            })
+            return 'ext-done'
+          },
+        )
+        assert.equal(result, 'ext-done')
+        assert.ok(
+          resolved !== undefined && extractWorkflowExecutionMeta(resolved).worktree?.id,
+          'enriched worktree 元数据应回传调用方',
+        )
+        assert.equal(leaseCount(handle.docStore), 0, '结算后租约必须释放（settle 写重试整页落盘）')
+      })
+      assert.ok(
+        stderrLines.some((line) => line.includes('租约') && line.includes('落盘失败')),
+        `flush 失败必须 stderr 显式诊断（实际 ${JSON.stringify(stderrLines)}）`,
+      )
+    } finally {
+      process.stderr.write = originalWrite
+    }
+  })
+
+  it('外部运行时 execution meta 合并往返：worktree 增强不丢 other-plugin 命名空间与 controls；租约存 enriched 合并结果', { timeout: 60_000 }, async () => {
+    const handle = makeFakeIsolation()
+    let resolved: AgentExecutionInfo | undefined
+    let midflightLeaseInfo: AgentExecutionInfo | undefined
+    const result = await handle.isolation.aroundSpawn(
+      {
+        parentConversationId: 1,
+        prompt: '外部任务',
+        agentType: 'ext:demo',
+        isolation: 'worktree',
+        onResolved: (info: AgentExecutionInfo) => {
+          resolved = info
+        },
+      } as never,
+      async (final) => {
+        ;(final as AgentSpawnRequest).onResolved?.({
+          nodeId: 'local',
+          conversationId: 7,
+          executionId: 'exec-ns-1',
+          meta: {
+            'builtin:workflow': {
+              worktree: { path: '/wt/ext-ns', branch: 'helm/spawn-extns' },
+              controls: { steer: { pluginId: 'ext:demo', actionId: 'steer' } },
+            },
+            'other-plugin': { keep: ['ns', { roundtrip: true }] },
+          },
+        })
+        const leases = handle.docStore.get<Record<string, { info?: AgentExecutionInfo }>>('worktree-leases', {})
+        midflightLeaseInfo = Object.values(leases)[0]?.info
+        return 'ext-done'
+      },
+    )
+    assert.equal(result, 'ext-done')
+    assert.ok(resolved !== undefined, 'onResolved 应回传 enriched 信息')
+    const wfMeta = extractWorkflowExecutionMeta(resolved)
+    assert.equal(wfMeta.worktree?.id, 'local:/wt/ext-ns', 'worktree 应被统一登记并回填稳定 id')
+    assert.deepEqual(
+      wfMeta.controls,
+      { steer: { pluginId: 'ext:demo', actionId: 'steer' } },
+      'worktree 增强不得丢失同命名空间的 controls（steer 委托引用）',
+    )
+    assert.deepEqual(
+      resolved.meta?.['other-plugin'],
+      { keep: ['ns', { roundtrip: true }] },
+      '其他插件的命名空间必须原样保留（合并而非覆盖）',
+    )
+    assert.ok(midflightLeaseInfo !== undefined, '执行期间应有租约记录')
+    const leaseWf = extractWorkflowExecutionMeta(midflightLeaseInfo)
+    assert.equal(leaseWf.worktree?.id, 'local:/wt/ext-ns')
+    assert.deepEqual(midflightLeaseInfo.meta?.['other-plugin'], { keep: ['ns', { roundtrip: true }] })
+    assert.equal(leaseCount(handle.docStore), 0)
+  })
+
+  it('resumeWithWorktree 租约前置：远端验证窗口内并发 cleanup 被租约 fail-closed 拒绝；resume 正常续接', { timeout: 60_000 }, async () => {
+    const wtPath = '/wt/resume-race'
+    const handle = makeFakeIsolation({ gatedExistsPath: wtPath })
+    const worktreeId = handle.isolation.allocator.registerExternal({
+      nodeId: 'local',
+      path: wtPath,
+      branch: 'helm/spawn-resume1',
+      parentConversationId: 1,
+      conversationId: 42,
+    }).id
+
+    const nextCwds: Array<string | undefined> = []
+    const resumePromise = handle.isolation.aroundSpawn(
+      { parentConversationId: 1, prompt: '续接', resume: '42', onResolved: () => {} } as never,
+      async (final) => {
+        nextCwds.push((final as AgentSpawnRequest).cwd)
+        return 'resumed'
+      },
+    )
+    await handle.probeEntered
+
+    await assert.rejects(
+      () => handle.isolation.cleanup({ worktreeId }),
+      (err: unknown) => {
+        assert.ok(err instanceof HelmError)
+        assert.ok(
+          err.code === 'worktree_execution_unknown' || err.code === 'worktree_in_use',
+          `cleanup 应被租约拒绝（实际 ${err.code}）`,
+        )
+        return true
+      },
+    )
+
+    handle.releaseProbe()
+    assert.equal(await resumePromise, 'resumed')
+    assert.deepEqual(nextCwds, [wtPath], 'resume 必须沿用原 worktree cwd')
+    assert.equal(leaseCount(handle.docStore), 0, '结算后租约释放，不留永久占位')
+    assert.equal(handle.isolation.allocator.findActive({ worktreeId })?.path, wtPath)
+  })
+
+  it('resumeWithWorktree 租约前置：验证失败（目录已消失）释放占位租约，不留永久占位', { timeout: 60_000 }, async () => {
+    const handle = makeFakeIsolation({ existsValue: false })
+    handle.isolation.allocator.registerExternal({
+      nodeId: 'local',
+      path: '/wt/resume-race',
+      branch: 'helm/spawn-resume1',
+      parentConversationId: 1,
+      conversationId: 42,
+    })
+
+    await assert.rejects(
+      () =>
+        handle.isolation.aroundSpawn(
+          { parentConversationId: 1, prompt: '续接', resume: '42', onResolved: () => {} } as never,
+          async () => 'unreachable',
+        ),
+      (err: unknown) => {
+        assert.ok(err instanceof HelmError)
+        assert.equal(err.code, 'worktree_missing')
+        return true
+      },
+    )
+    assert.equal(leaseCount(handle.docStore), 0, 'neverStarted 路径必须释放占位租约')
   })
 })

@@ -28,457 +28,38 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { HelmError, type AskResult, type ConversationSummary, type MaybePromise, type Profile } from '@helm/protocol'
-import type { WorkflowRunSummary } from '../src/contracts.js'
-import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
+import { HelmError, type AgentExecutionInfo } from '@helm/protocol'
+import { PluginHost } from '../../kernel/src/plugins/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import { createHerdrPlugin } from '../src/herdr.js'
 import { extractWorkflowExecutionMeta } from '../src/contracts.js'
-import type { AgentExecutionInfo } from '@helm/protocol'
+import { EMPTY_MANAGED_DOC } from '../src/herdr/panes.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
 import type { DiagnosticsCollection } from '../src/diagnostics.js'
-import { LocalNodeChannel } from '../src/herdr/local-node-channel.js'
-import type { HelmHostNodeIpcPort } from '@helm/protocol'
-import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import {
-  BaseFakeHerdrTransport,
   HERDR_FAST_TEST_TIMINGS,
-  agentInfoOf,
+  HerdrFakeBackend as FakeBackend,
+  StandardFakeHerdrTransport as FakeTransport,
+  herdrFileNameOf as fileNameOf,
+  herdrTurnSettledOf as turnSettledOf,
   ipcLineCall,
+  openHerdrUnitEnv as makeEnv,
+  scriptHerdrSuccess as scriptSuccess,
   serveTransport,
-  type HerdrPaneStatus,
+  spawnHerdrDirect as spawnDirect,
 } from './helpers/herdr-unit-fixture.js'
 import {
   MemoryConfigStore,
   MemoryDocStore,
-  makeConversationSummary,
   waitFor as baseWaitFor,
 } from './helpers/plugin-test-env.js'
 
-// ---------------------------------------------------------------------------
-// 受控 HerdrTransport
-// ---------------------------------------------------------------------------
-
-class FakeTransport extends BaseFakeHerdrTransport {
-  /** send_keys 后目标状态（默认 working 模拟键已生效处理中）。 */
-  afterSendKeys: HerdrPaneStatus = 'working'
-  /** agent.wait 轮询中止信号（测试用：中止后挂起的 wait 立即以 timeout 终结）。 */
-  waitAbort: AbortSignal | undefined
-  /** agent.wait 因 waitAbort 中止的次数（测试确定性观察点）。 */
-  waitBreaks = 0
-  /** 自定义终端快照（agent.read 返回；缺省 tail of <pane> 行）。 */
-  snapshotText: string | undefined
-
-  async call(target: HerdrTarget, method: string, params: Record<string, unknown>): Promise<unknown> {
-    this.record(target, method, params)
-    const errorFactory = this.errors.get(method)
-    if (errorFactory) throw errorFactory()
-    switch (method) {
-      case 'tab.create':
-        return this.createTabPane(params, true)
-      case 'worktree.create':
-        return this.createWorktreePane(params, true)
-      case 'tab.close': {
-        const tabId = params['tab_id'] as string
-        const tab = this.tabs.get(tabId)
-        if (!tab) throw new HelmError('tab_not_found', `no tab ${tabId}`, 404)
-        tab.closed = true
-        const pane = [...this.panes.values()].find((p) => p.tabId === tabId)
-        if (pane && ![...this.panes.values()].some((p) => p.workspaceId === pane.workspaceId && !this.tabs.get(p.tabId)?.closed)) {
-          const workspace = this.workspaces.get(pane.workspaceId)
-          if (workspace) workspace.closed = true
-        }
-        return { type: 'ok' }
-      }
-      case 'workspace.close': {
-        const wsId = params['workspace_id'] as string
-        const ws = this.workspaces.get(wsId)
-        if (!ws) throw new HelmError('workspace_not_found', `no workspace ${wsId}`, 404)
-        ws.closed = true
-        return { type: 'ok' }
-      }
-      case 'agent.start': {
-        const pane = this.paneOf(params['pane_id'])
-        pane.name = params['name'] as string
-        pane.agentStatus = 'idle'
-        pane.seq += 1
-        return { type: 'agent_started', agent: agentInfoOf(pane), argv: [] }
-      }
-      case 'agent.get': {
-        const pane = this.paneOf(params['target'])
-        return { type: 'agent_info', agent: agentInfoOf(pane) }
-      }
-      case 'agent.wait': {
-        // 真实语义：阻塞直至 until 命中（fake 以 10ms 轮询模拟；waitAbort
-        // 中止时立即以 timeout 终结，与状态变化解耦，供测试确定性收尾）。
-        const pane = this.paneOf(params['target'])
-        const until = ((params['until'] as string[]) ?? []).map((s) => s as HerdrPaneStatus)
-        const waitSignal = this.waitAbort
-        for (let i = 0; i < 2_000; i += 1) {
-          if (until.length === 0 || until.includes(pane.agentStatus)) {
-            return { type: 'agent_info', agent: agentInfoOf(pane) }
-          }
-          try {
-            await delay(10, undefined, waitSignal !== undefined ? { signal: waitSignal } : {})
-          } catch {
-            this.waitBreaks += 1
-            break
-          }
-        }
-        throw new HelmError('timeout', 'timed out waiting for agent status', 408)
-      }
-      case 'agent.prompt': {
-        const pane = this.paneOf(params['target'])
-        const text = params['text'] as string
-        const script = this.promptStatus
-        pane.agentStatus = Array.isArray(script) ? (script.shift() ?? 'idle') : script
-        pane.seq += 1
-        if (this.onPrompt) this.onPrompt(pane, text)
-        this.emit({ type: 'pane.updated', paneId: pane.paneId })
-        return { type: 'agent_prompted', agent: agentInfoOf(pane) }
-      }
-      case 'agent.read': {
-        const pane = this.paneOf(params['target'])
-        const text = this.snapshotText !== undefined ? this.snapshotText : `tail of ${pane.paneId}: SECRET-VALUE line`
-        return { type: 'pane_read', read: { pane_id: pane.paneId, text } }
-      }
-      case 'ping':
-        return this.handlePing()
-      case 'agent.send_keys': {
-        // CAS 契约（未来服务端行为）：expected_state_seq 必须匹配当前权威 seq，
-        // 不匹配以 stale_state 拒绝且键不写入。写键不代表检测到状态变化；
-        // consumeKeys 才推进权威水位。
-        const pane = this.paneOf(params['target'])
-        this.assertSendKeysCas(pane, params)
-        this.sendKeysLog.push({ paneId: pane.paneId, keys: params['keys'] as string[] })
-        return { type: 'ok' }
-      }
-      case 'agent.focus': {
-        // 真实协议（服务端 agents.rs:35-41）：focus 返回 agent_info + focused=true。
-        const focused = this.paneOf(params['target'])
-        return { type: 'agent_info', agent: { ...agentInfoOf(focused), focused: true } }
-      }
-      case 'pane.report_metadata':
-        this.metadataReports.push(params)
-        return { type: 'ok' }
-      case 'session.snapshot':
-        return this.buildSessionSnapshot()
-      default:
-        throw new HelmError('method_not_found', `fake transport 不支持 ${method}`, 400)
-    }
-  }
-
-  /** 等待键发送后模拟终端消化（默认测试在需要时手动调用）。 */
-  consumeKeys(paneId: string, status: HerdrPaneStatus = this.afterSendKeys): void {
-    this.advancePane(paneId, status)
-  }
-}
-
-// ---------------------------------------------------------------------------
-// 测试环境
-// ---------------------------------------------------------------------------
-
-const makeConversation = (id: number, over: Partial<ConversationSummary> = {}): ConversationSummary =>
-  makeConversationSummary({ id, cwd: '/tmp/helm-herdr-parent', model: '', ...over })
-
-class FakeBackend implements PluginHostBackend {
-  conversations = new Map<number, ConversationSummary>()
-  events: Array<{ type: string; payload: unknown }> = []
-  notifications: Array<{ title: string; body: string; level: string }> = []
-  askSeqResolvers = new Set<(askId: string) => MaybePromise<number | undefined>>()
-  workflowListeners = new Set<(run: WorkflowRunSummary) => void | Promise<void>>()
-  /** buildSpawnEnv 调用记录（nodeId 透传断言）。 */
-  spawnEnvLog: Array<{ conversationId: number; cwd: string; nodeId?: string }> = []
-  /** 宿主 gate 调用记录（runLocalGate 注入点）。 */
-  gateLog: Array<{ command: string; cwd?: string; env?: Record<string, string> }> = []
-  /** 受控 Profile 表（ProfileService 语义最小面）。 */
-  profileStore = new Map<string, Profile>()
-  /** 可编程 completeText（AI 快照解析注入点）。 */
-  completeTextImpl: ((input: { conversationId: number; systemPrompt: string; text: string }) => Promise<string>) | undefined
-  /** 按类型分发的插件事件监听（与 runtime.emitHostEvent 同构）。 */
-  typedListeners = new Map<string, Set<(payload: unknown) => void | Promise<void>>>()
-  createdAsks: Array<Record<string, unknown>> = []
-  cancelledAsks: Array<{ id: string; reason?: string }> = []
-  /** pending ask 的结算通道：askId -> resolver。 */
-  pendingAskResolvers = new Map<string, (r: AskResult) => void>()
-  askCreateError: Error | undefined
-
-  constructor() {
-    this.conversations.set(1, makeConversation(1))
-    this.conversations.set(2, makeConversation(2))
-  }
-
-  dispatchTrigger(): Promise<void> { return Promise.resolve() }
-  submitInput(): Promise<void> { return Promise.resolve() }
-  profiles = {
-    list: async () => [...this.profileStore.values()],
-    get: async (id: string) => this.profileStore.get(id),
-    getSystem: async (id: string) => {
-      throw new HelmError('not_found', `Profile ${id} 无 SYSTEM.md`, 404)
-    },
-    save: async () => { throw new HelmError('unsupported', 'fixture 只读', 501) },
-    directory: async (id: string) => `/tmp/herdr-fixture-profiles/${id}`,
-  }
-  skills = {
-    list: async () => [],
-    readFile: async () => { throw new HelmError('unsupported', '本 fixture 无技能', 501) },
-    directory: async (id: string) => `/tmp/herdr-fixture-skills/${id}`,
-    ensureSkill: async () => { throw new HelmError('unsupported', '本 fixture 无技能', 501) },
-  }
-  secrets = {
-    get: async () => undefined,
-    set: async () => {},
-    delete: async () => {},
-    addRedaction: () => () => {},
-  }
-  setPluginConfig(): Promise<void> { return Promise.resolve() }
-  nodeIpc: HelmHostNodeIpcPort = {
-    isOnline: () => true,
-    call: async () => { throw new HelmError('unsupported', '本 fixture 无节点 IPC', 501) },
-    subscribe: async () => { throw new HelmError('unsupported', '本 fixture 无节点 IPC', 501) },
-  }
-  redact = (text: string) => text.replaceAll('SECRET-TOKEN', '[REDACTED]').replaceAll('SECRET-VALUE', '[REDACTED]')
-  buildSpawnEnv = (conversationId: number, cwd: string, nodeId: string) => {
-    this.spawnEnvLog.push({ conversationId, cwd, ...(nodeId !== undefined ? { nodeId } : {}) })
-    return { HELM_ENV: '1', HELM_HUB_URL: 'http://127.0.0.1:3202', HELM_TOKEN: 'SECRET-TOKEN', HELM_CWD: cwd }
-  }
-  async getConversationDetail(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无详情', 501) }
-  async listArtifacts(): Promise<never[]> { return [] }
-  async getArtifact(): Promise<never> { throw new HelmError('not_found', '无产物', 404) }
-  async completeText(input: { conversationId: number; systemPrompt: string; text: string }): Promise<string> {
-    if (this.completeTextImpl !== undefined) return this.completeTextImpl(input)
-    throw new HelmError('unsupported', '本 fixture 无模型', 501)
-  }
-  executionEnv = (_nodeId: string, cwd: string) => {
-    mkdirSync(cwd, { recursive: true })
-    return new NodeExecutionEnv({ cwd })
-  }
-  withFileLock<T>(_path: string, fn: () => Promise<T>): Promise<T> { return fn() }
-  async atomicWriteFile(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无原子写', 501) }
-  async refreshModels(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型刷新', 501) }
-  createConversation(): Promise<ConversationSummary> { return Promise.resolve(makeConversation(99)) }
-  forkConversation(id: number): Promise<ConversationSummary> { return Promise.resolve(makeConversation(id + 100)) }
-  listConversations(): ConversationSummary[] { return [...this.conversations.values()] }
-  getConversation(id: number): ConversationSummary {
-    const found = this.conversations.get(id)
-    if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
-    return found
-  }
-  updateConversation(id: number): Promise<ConversationSummary> { return Promise.resolve(this.getConversation(id)) }
-  manageConversation(): () => void { return () => {} }
-  markConversationOwnership(): void {}
-  async createAsk(spec: { id?: string }): Promise<AskResult> {
-    if (this.askCreateError) throw this.askCreateError
-    const id = spec.id ?? `ask-${this.createdAsks.length + 1}`
-    this.createdAsks.push({ ...spec, id })
-    return new Promise<AskResult>((resolve) => {
-      this.pendingAskResolvers.set(id, resolve)
-    })
-  }
-  /** 测试侧应答 pending ask。 */
-  answerAsk(id: string, result: AskResult): void {
-    this.pendingAskResolvers.get(id)?.(result)
-    this.pendingAskResolvers.delete(id)
-  }
-  async cancelAsk(id: string, reason?: 'cancelled' | 'superseded'): Promise<void> {
-    this.cancelledAsks.push({ id, reason })
-    // 与 AskService 终态语义对齐：cancel 让等待方结算（superseded/cancelled）。
-    this.pendingAskResolvers.get(id)?.({ id, status: reason === 'cancelled' ? 'cancelled' : 'superseded', answers: {} })
-    this.pendingAskResolvers.delete(id)
-  }
-  registerAskSeqResolver(resolver: (askId: string) => MaybePromise<number | undefined>): () => void {
-    this.askSeqResolvers.add(resolver)
-    return () => { this.askSeqResolvers.delete(resolver) }
-  }
-  async abortConversation(): Promise<void> {}
-  getConversationOwnership(): 'helm' | 'bot' | 'human' {
-    return 'human'
-  }
-  isClosing(): boolean {
-    return false
-  }
-  async spawnAgent(): Promise<unknown> {
-    return {}
-  }
-  async runGate(command: string, options?: { cwd?: string; env?: Record<string, string> }): Promise<{ ok: boolean; output: string }> {
-    this.gateLog.push({ command, cwd: options?.cwd, env: options?.env })
-    return { ok: true, output: 'local gate ok' }
-  }
-  async invokeAction(): Promise<unknown> {
-    return {}
-  }
-  prepareAction(): { idempotent: boolean } {
-    return { idempotent: false }
-  }
-  async execEnv(): Promise<import('@helm/protocol').EnvExecResponse> {
-    throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501)
-  }
-  withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') }
-  redactText(text: string): string {
-    return text
-  }
-  async resolveSpawnTarget(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不解析 spawn 靶点', 501) }
-  listActiveSpawnExecutions(): [] {
-    return []
-  }
-  async inspectNodePathUsage(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不扫描进程占用', 501) }
-  listActions(): [] {
-    return []
-  }
-  onEvent(type: string, listener: (payload: unknown) => void | Promise<void>): () => void {
-    // 按事件类型分发注册（与 runtime.emitHostEvent 同构）：不同插件事件监听
-    // 互不串扰（workflow.settled / diagnostics.collect 各自投递）。
-    const set = this.typedListeners.get(type) ?? new Set()
-    set.add(listener)
-    this.typedListeners.set(type, set)
-    // workflowListeners 仅为测试手动投递 workflow.settled 保留（类型隔离）。
-    if (type === 'workflow.settled') {
-      this.workflowListeners.add(listener as (run: WorkflowRunSummary) => void | Promise<void>)
-    }
-    return () => {
-      set.delete(listener)
-      this.workflowListeners.delete(listener as (run: WorkflowRunSummary) => void | Promise<void>)
-    }
-  }
-  async emitEvent(type: string, payload: unknown): Promise<void> {
-    this.events.push({ type, payload })
-    if (type === 'notification') {
-      const n = payload as { title: string; body: string; level: string }
-      this.notifications.push(n)
-    }
-    for (const listener of [...(this.typedListeners.get(type) ?? [])]) {
-      await listener(payload)
-    }
-  }
-}
-
-interface Env {
-  host: PluginHost
-  backend: FakeBackend
-  transport: FakeTransport
-  dataDir: string
-  profiles: Map<string, Profile>
-  spawnEnvLog: Array<{ conversationId: number; cwd: string; nodeId?: string }>
-  gateLog: Array<{ command: string; cwd?: string; env?: Record<string, string> }>
-  resolvedInfos: Array<Record<string, unknown>>
-  gateResults: Array<{ ok: boolean; output: string }>
-  close(): Promise<void>
-}
-
-async function makeEnv(options: {
-  enabled?: boolean
-  docs?: MemoryDocStore
-  dataDir?: string
-  transport?: FakeTransport
-  backend?: FakeBackend
-  timingOverrides?: Parameters<typeof createHerdrPlugin>[0]
-  /** AI 快照解析注入：completeText 可编程实现（零参插件经 host.completeText
-   * 装配分析器；返回模型原始文本，由 parseAiSnapshotAnalysisText 解析）。 */
-  analyzeBlockedSnapshot?: (input: { snapshot: string; conversationId: number }) => Promise<string>
-} = {}): Promise<Env> {
-  const dataDir = options.dataDir ?? mkdtempSync(join(tmpdir(), 'helm-herdr-test-'))
-  const backend = options.backend ?? new FakeBackend()
-  // 每个测试的父 cwd 位于独立 dataDir 下，避免并行测试互相删除/覆盖同名交接文件。
-  const parentCwd = join(dataDir, 'parent')
-  mkdirSync(parentCwd, { recursive: true })
-  const parentConversation = backend.conversations.get(1)
-  if (parentConversation !== undefined) parentConversation.cwd = parentCwd
-  const docs = options.docs ?? new MemoryDocStore()
-  const transport = options.transport ?? new FakeTransport()
-  if (options.analyzeBlockedSnapshot !== undefined) {
-    const analyze = options.analyzeBlockedSnapshot
-    backend.completeTextImpl = async (input) => analyze({ snapshot: input.text, conversationId: input.conversationId })
-  }
-  const spawnEnvLog = backend.spawnEnvLog
-  const gateLog = backend.gateLog
-  const resolvedInfos: Array<Record<string, unknown>> = []
-  const gateResults: Array<{ ok: boolean; output: string }> = []
-
-  // 受控协议服务器：零参插件的生产 transport 经插件配置 socketPath 直连
-  // （本机 target 冻结为 { socketPath }；不经 nodeIpc——LocalNodeChannel 无事件流）。
-  const socketPath = join(dataDir, 'herdr.sock')
-  let routedNodeId: string | undefined
-  const served = await serveTransport(transport, socketPath, () => (routedNodeId !== undefined && routedNodeId !== 'local' ? { nodeId: routedNodeId } : {}))
-  backend.nodeIpc = {
-    isOnline: () => true,
-    getNodeHubUrl: () => undefined,
-    call: async (nodeId, input, signal) => {
-      routedNodeId = nodeId
-      return ipcLineCall(socketPath, input.line, input.timeoutMs, signal)
-    },
-    subscribe: async () => { throw new HelmError('unsupported', '本 fixture 无节点 IPC 订阅', 501) },
-  }
-  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
-    dataDir,
-    host: backend,
-    docs,
-    config: new MemoryConfigStore({ socketPath }),
-  })
-  await host.register(
-    createHerdrPlugin({
-      ...HERDR_FAST_TEST_TIMINGS,
-      ...options.timingOverrides,
-    }),
-    { enabled: options.enabled ?? true },
-  )
-
-  return {
-    host,
-    backend,
-    transport,
-    dataDir,
-    profiles: backend.profileStore,
-    spawnEnvLog,
-    gateLog,
-    resolvedInfos,
-    gateResults,
-    async close() {
-      await host.dispose().catch(() => {})
-      await served.close()
-      rmSync(dataDir, { recursive: true, force: true })
-    },
-  }
-}
-
-/** 直接调用 spawn hook；返回 handled result，非 handled 时返回哨兵。 */
-async function spawnDirect(env: Env, request: Record<string, unknown>): Promise<unknown> {
-  const outcome = await env.host.runHook('agent_spawn', {
-    parentConversationId: 1,
-    prompt: 'do the thing',
-    ...request,
-  } as never)
-  if (outcome.action === 'handled') return outcome.result
-  if (outcome.action === 'transform') return { __transformed: outcome.value }
-  return { __notHandled: true }
-}
-
-function turnSettledOf(conversationId: number): never {
-  return {
-    conversation: makeConversation(conversationId),
-    inputs: [],
-    outcome: 'completed',
-    settledAt: Date.now(),
-  } as never
-}
-
-function fileNameOf(text: string): string {
-  return text.match(/wf-out-[A-Za-z0-9_.-]+\.(json|md)/)?.[0] ?? ''
-}
-
-const waitFor = (predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000, intervalMs = 25): Promise<void> =>
+const waitFor = (predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000, intervalMs = 15): Promise<void> =>
   baseWaitFor(predicate, { timeoutMs, intervalMs, message: 'waitFor 超时：条件在限定时间内未成立' })
-
-/** 标准成功脚本：prompt 直达 done，onPrompt 写入交接文件。 */
-function scriptSuccess(env: Env, content: string, schema = false): void {
-  env.transport.promptStatus = 'done'
-  env.transport.onPrompt = (pane, text) => {
-    env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileNameOf(text)}`, schema ? content : content)
-  }
-}
 
 // ---------------------------------------------------------------------------
 // 文件交接 A/B/C
@@ -518,7 +99,7 @@ test('gateTimeoutMs: Herdr spawn/已登记 resume 显式拒绝；原生 passthro
 test('文件交接A: 成功路径——两步建窗、交接读取、文件清理、gate 一次、保活登记', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
-    scriptSuccess(env, JSON.stringify({ answer: 42 }), true)
+    scriptSuccess(env, JSON.stringify({ answer: 42 }))
     let resolved: Record<string, unknown> | undefined
     const result = await spawnDirect(env, {
       agentType: 'herdr:agy',
@@ -2077,5 +1658,364 @@ test('herdr tick：归属变化窗格结算移除后不再产出 probe', { timeo
     assert.equal(third.probes.length, 0)
   } finally {
     await env.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 生产形状启动就绪、resume 全维度校验、对账精确归属与批量清理隔离
+// ---------------------------------------------------------------------------
+
+test('启动就绪等待：unknown+launch_pending 与缺省 interactive_ready 均等到就绪才投递单次 prompt', { timeout: 60_000 }, async () => {
+  // 1) startReady=false（unknown + launch_pending -> agent.wait 转 idle -> prompt）。
+  const env1 = await makeEnv()
+  try {
+    env1.transport.startReady = false
+    scriptSuccess(env1, 'real-start')
+    assert.equal(await spawnDirect(env1, { agentType: 'herdr:agy' }), 'real-start')
+    const startAt = env1.transport.calls.findIndex((c) => c.method === 'agent.start')
+    const waitAt = env1.transport.calls.findIndex((c) => c.method === 'agent.wait' && (c.params['until'] as string[])?.includes('idle'))
+    const promptAt = env1.transport.calls.findIndex((c) => c.method === 'agent.prompt')
+    assert.ok(startAt >= 0 && waitAt > startAt && promptAt > waitAt)
+  } finally {
+    await env1.close()
+  }
+
+  // 2) idle 但 interactive_ready 缺省时持续轮询确认后再投递单次 prompt。
+  const env2 = await makeEnv()
+  try {
+    scriptSuccess(env2, 'ready')
+    const original = env2.transport.call.bind(env2.transport)
+    let polls = 0
+    ;(env2.transport as HerdrTransport).call = async (target, method, params) => {
+      if (method === 'agent.prompt') assert.ok(polls >= 3, '实际输入前须确认 interactive_ready')
+      const result = await original(target, method, params)
+      if (['agent.start', 'agent.wait', 'agent.get'].includes(method)) {
+        const response = result as { agent: Record<string, unknown> }
+        if (method === 'agent.get') polls += 1
+        if (polls < 3) {
+          response.agent['agent_status'] = 'idle'
+          response.agent['launch_pending'] = true
+          delete response.agent['interactive_ready']
+        }
+      }
+      return result
+    }
+    assert.equal(await spawnDirect(env2, { agentType: 'herdr:pi' }), 'ready')
+    assert.equal(env2.transport.calls.filter((call) => call.method === 'agent.prompt').length, 1)
+  } finally {
+    await env2.close()
+  }
+})
+
+test('resume 真实形状与全维度拒绝：standalone/workflow 无 agentType 续接、并发 pane_busy、跨轨/settled/cwd/kind 冲突与非 herdr 放行', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    // 1) standalone 无 agentId/agentType 续接 paneId，不重跑 agent.start；并发续接仅放行一个（另一方 pane_busy）。
+    scriptSuccess(env, 'first-turn')
+    await spawnDirect(env, { agentType: 'herdr:agy' })
+    const soloPane = [...env.transport.panes.values()][0]!
+    const startsBefore = env.transport.calls.filter((c) => c.method === 'agent.start').length
+    const tabsBefore = env.transport.calls.filter((c) => c.method === 'tab.create').length
+    scriptSuccess(env, 'resumed-turn')
+    const concurrent = await Promise.allSettled([
+      spawnDirect(env, { resume: soloPane.paneId }),
+      spawnDirect(env, { resume: soloPane.paneId }),
+    ])
+    assert.equal(concurrent.filter((r) => r.status === 'fulfilled').length, 1)
+    assert.equal((concurrent.find((r) => r.status === 'rejected') as PromiseRejectedResult).reason.code, 'pane_busy')
+    assert.equal(env.transport.calls.filter((c) => c.method === 'agent.start').length, startsBefore)
+    assert.equal(env.transport.calls.filter((c) => c.method === 'tab.create').length, tabsBefore)
+
+    // 2) workflow 无 agentType 续接、跨 workflow 轨道拒绝、settled 拒绝、cwd/kind 冲突拒绝。
+    scriptSuccess(env, 'wf-first')
+    await spawnDirect(env, { agentType: 'herdr:agy', agentId: 'run1:node-a', meta: { 'builtin:workflow': { runId: 'run1' } } })
+    await assert.rejects(spawnDirect(env, { resume: 'run1:node-a' }), (e: unknown) => (e as HelmError).code === 'resume_workflow_mismatch')
+    scriptSuccess(env, 'wf-second')
+    assert.equal(
+      await spawnDirect(env, { resume: 'run1:node-a', agentId: 'run1:node-a', meta: { 'builtin:workflow': { runId: 'run1' } }, prompt: 'continue' }),
+      'wf-second',
+    )
+    await assert.rejects(
+      spawnDirect(env, { resume: 'run1:node-a', meta: { 'builtin:workflow': { runId: 'run1' } }, cwd: '/tmp/other-cwd' }),
+      (e: unknown) => (e as HelmError).code === 'resume_cwd_conflict',
+    )
+    await assert.rejects(
+      spawnDirect(env, { resume: 'run1:node-a', meta: { 'builtin:workflow': { runId: 'run1' } }, agentType: 'herdr:claude' }),
+      (e: unknown) => (e as HelmError).code === 'resume_kind_conflict',
+    )
+    for (const listener of env.backend.workflowListeners) {
+      await listener({ id: 'run1', name: 'n', conversationId: 1, status: 'completed', createdAt: 1, updatedAt: 2 })
+    }
+    await assert.rejects(
+      spawnDirect(env, { resume: 'run1:node-a', meta: { 'builtin:workflow': { runId: 'run1' } } }),
+      (e: unknown) => (e as HelmError).code === 'pane_settled',
+    )
+
+    // 3) 非 herdr 类型未知 resume 放行内核。
+    const passthrough = await env.host.runHook('agent_spawn', {
+      parentConversationId: 1,
+      prompt: 'x',
+      agentType: 'assistant',
+      resume: '99',
+    } as never)
+    assert.notEqual(passthrough.action, 'handled')
+  } finally {
+    await env.close()
+  }
+})
+
+test('启动对账精确归属（helm-wf-abc 不认领 helm-wf-abcde）、在途 working 报告与订阅 ack 失败释放监听器', { timeout: 60_000 }, async () => {
+  // 1) 前缀相似非精确同名放弃所有权（settled），真正 working 保留并发送通知。
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-exact-'))
+  const socketPath = join(dataDir, 'herdr.sock')
+  const docs = new MemoryDocStore()
+  docs.set('builtin:herdr:managed', {
+    version: 1,
+    panes: [
+      { target: { socketPath }, routing: { kind: 'agy' }, paneId: 'w:p1', tabId: 'w:t1', effectiveCwd: '/tmp/a', agentName: 'helm-wf-abc', parentConversationId: 1, outcome: 'running', createdAt: 1 },
+      { target: { socketPath }, routing: { kind: 'agy' }, paneId: 'w:p2', tabId: 'w:t2', effectiveCwd: '/tmp/b', agentName: 'helm-wf-busy', parentConversationId: 1, outcome: 'running', createdAt: 1 },
+    ],
+  })
+  const transport = new FakeTransport()
+  transport.panes.set('w:p1', { paneId: 'w:p1', tabId: 'w:t1', workspaceId: 'w', agentStatus: 'done', seq: 3, name: 'helm-wf-abcde', cwd: '/tmp/a' })
+  transport.panes.set('w:p2', { paneId: 'w:p2', tabId: 'w:t2', workspaceId: 'w', agentStatus: 'working', seq: 3, name: 'helm-wf-busy', cwd: '/tmp/b' })
+  transport.tabs.set('w:t1', { closed: false })
+  transport.tabs.set('w:t2', { closed: false })
+  const env = await makeEnv({ dataDir, socketPath, docs, transport })
+  try {
+    assert.equal(transport.tabs.get('w:t1')!.closed, false, '前缀相似但非精确同名不误关')
+    assert.equal(transport.tabs.get('w:t2')!.closed, false, '真正 working 保留不伪装结束')
+    assert.ok(env.backend.notifications.some((n) => n.title === 'Herdr startup reconciliation found in-flight panes'))
+    const list = (await env.host.invokeAction('builtin:herdr', 'list', {})) as { panes: Array<{ paneId: string; outcome: string }> }
+    assert.equal(list.panes.find((p) => p.paneId === 'w:p1')!.outcome, 'settled')
+  } finally {
+    await env.close()
+  }
+
+  // 2) 订阅 ack 失败时释放已注册的 CAS resolver 与 workflow listener。
+  const failTransport = new FakeTransport()
+  failTransport.subscribeAck = 'fail'
+  const failBackend = new FakeBackend()
+  await assert.rejects(makeEnv({ transport: failTransport, backend: failBackend }))
+  assert.equal(failBackend.askSeqResolvers.size, 0)
+  assert.equal(failBackend.workflowListeners.size, 0)
+})
+
+test('交接与错误边界：结构化脱敏、md 非原子写自愈、I/O 故障释放 liveTasks、人类关窗即释放机密 env', { timeout: 60_000 }, async () => {
+  // 1) 结构化 JSON 交接结果脱敏 + buildSpawnPaneEnv Stash 优先于 Profile。
+  const env1 = await makeEnv()
+  try {
+    scriptSuccess(env1, JSON.stringify({ answer: 'SECRET-VALUE' }))
+    const structured = await spawnDirect(env1, {
+      agentType: 'herdr:pi',
+      schema: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] },
+    })
+    assert.deepEqual(structured, { answer: '[REDACTED]' })
+    const { buildSpawnPaneEnv } = await import('../src/herdr/spawn-rules.js')
+    assert.equal(
+      buildSpawnPaneEnv({ SESSION_SECRET: 'from-stash' }, { SESSION_SECRET: 'from-profile' }, { remote: false }).env['SESSION_SECRET'],
+      'from-stash',
+    )
+  } finally {
+    await env1.close()
+  }
+
+  // 2) md 稳定性复检：非原子分段写触发一次自愈追问。
+  const env2 = await makeEnv({ timingOverrides: { mdStableRecheckMs: 120 } })
+  try {
+    env2.transport.promptStatus = 'done'
+    let prompts = 0
+    let activeKey: string | undefined
+    const origCall = env2.transport.call.bind(env2.transport)
+    env2.transport.call = async (target, method, params) => {
+      const res = await origCall(target, method, params)
+      if (method === 'agent.prompt' && prompts === 1 && activeKey) {
+        const targetKey = activeKey
+        activeKey = undefined
+        setTimeout(() => env2.transport.outputFiles.set(targetKey, 'partial-first-half + rest'), 35)
+      }
+      return res
+    }
+    env2.transport.onPrompt = (pane, text) => {
+      prompts += 1
+      const key = `${pane.cwd}/.helm/${fileNameOf(text)}`
+      if (prompts === 1) {
+        env2.transport.outputFiles.set(key, 'partial-first-half')
+        activeKey = key
+      } else {
+        env2.transport.outputFiles.set(key, 'final-complete')
+      }
+    }
+    assert.equal(await spawnDirect(env2, { agentType: 'herdr:pi' }), 'final-complete')
+    assert.equal(prompts, 2)
+  } finally {
+    await env2.close()
+  }
+
+  // 3) 启动/输出路径越界失败释放 liveTasks 并保留 failed 现场。
+  for (const failure of ['agent.start', 'readOutput'] as const) {
+    const env3 = await makeEnv()
+    try {
+      scriptSuccess(env3, 'ok')
+      if (failure === 'agent.start') {
+        env3.transport.errors.set('agent.start', () => new HelmError('herdr_io', 'I/O broken', 502))
+      } else {
+        env3.transport.onPrompt = (pane) => {
+          rmSync(join(pane.cwd, '.helm'), { recursive: true, force: true })
+          writeFileSync(join(pane.cwd, '.helm'), 'not-a-directory')
+        }
+      }
+      await assert.rejects(
+        spawnDirect(env3, { agentType: 'herdr:pi' }),
+        { code: failure === 'readOutput' ? 'herdr_output_escaping' : 'herdr_io' },
+      )
+      const list = (await env3.host.invokeAction('builtin:herdr', 'list', {})) as { panes: Array<{ outcome: string }> }
+      assert.equal(list.panes[0]?.outcome, 'failed')
+      await env3.host.disable('builtin:herdr')
+      assert.equal([...env3.transport.tabs.values()].some((tab) => tab.closed), false)
+    } finally {
+      await env3.close()
+    }
+  }
+
+  // 4) 人类关闭在途窗格后机密 env 立即释放：Gate 报 herdr_context_unavailable 不执行。
+  const env4 = await makeEnv({ timingOverrides: { mdStableRecheckMs: 80 } })
+  try {
+    env4.transport.promptStatus = 'done'
+    env4.transport.onPrompt = (pane, text) => {
+      env4.transport.outputFiles.set(`${pane.cwd}/.helm/${fileNameOf(text)}`, 'gate-content')
+      setTimeout(() => env4.transport.emit({ type: 'pane.closed', paneId: pane.paneId }), 15)
+    }
+    await assert.rejects(
+      spawnDirect(env4, { agentType: 'herdr:pi', gate: 'echo ok' }),
+      (e: unknown) => (e as HelmError).code === 'herdr_context_unavailable',
+    )
+    assert.equal(env4.gateLog.length, 0)
+  } finally {
+    await env4.close()
+  }
+})
+
+test('清理纪律：settled 幂等、abort+settle 单飞、身份变化与人类 tab 保护、dispose 清理远端、workflow 批量逐项隔离', { timeout: 60_000 }, async () => {
+  // 1) settled 幂等 + abort 与 turn_settled 并发单飞关闭。
+  const env1 = await makeEnv()
+  try {
+    scriptSuccess(env1, 'idem-ok')
+    await spawnDirect(env1, { agentType: 'herdr:agy' })
+    await env1.host.runHook('turn_settled', turnSettledOf(1))
+    const callsAfterFirst = env1.transport.calls.length
+    await env1.host.runHook('turn_settled', turnSettledOf(1))
+    assert.equal(env1.transport.calls.length, callsAfterFirst, 'settled 后重复清理零调用')
+
+    env1.transport.promptStatus = 'blocked'
+    const controller = new AbortController()
+    const pending = spawnDirect(env1, { agentType: 'herdr:agy', signal: controller.signal })
+    await waitFor(() => env1.backend.createdAsks.length === 1)
+    const activePane = [...env1.transport.panes.values()].at(-1)!
+    const closeBefore = env1.transport.calls.filter((c) => c.method === 'tab.close').length
+    controller.abort()
+    await env1.host.runHook('turn_settled', turnSettledOf(1))
+    await assert.rejects(pending, (e: unknown) => (e as HelmError).code === 'aborted')
+    await waitFor(() => env1.transport.tabs.get(activePane.tabId)?.closed === true)
+    assert.equal(env1.transport.calls.filter((c) => c.method === 'tab.close').length - closeBefore, 1)
+  } finally {
+    await env1.close()
+  }
+
+  // 2) 结算前发现 agent 身份变化放弃关闭，且 worktree 只关自建 tab（不误关同 workspace 人类 tab）。
+  for (const replaced of [false, true]) {
+    const env2 = await makeEnv()
+    try {
+      scriptSuccess(env2, 'ok')
+      await spawnDirect(env2, { agentType: 'herdr:pi', isolation: 'worktree' })
+      const pane = [...env2.transport.panes.values()].find((p) => p.name !== undefined)!
+      env2.transport.tabs.set(`${pane.workspaceId}:human-tab`, { closed: false })
+      env2.transport.panes.set(`${pane.workspaceId}:human-pane`, {
+        paneId: `${pane.workspaceId}:human-pane`,
+        tabId: `${pane.workspaceId}:human-tab`,
+        workspaceId: pane.workspaceId,
+        agentStatus: 'idle',
+        seq: 1,
+        cwd: pane.cwd,
+      })
+      if (replaced) pane.name = 'human-agent'
+      await env2.host.runHook('turn_settled', turnSettledOf(1))
+      assert.equal(env2.transport.tabs.get(pane.tabId)?.closed, !replaced)
+      assert.equal(env2.transport.tabs.get(`${pane.workspaceId}:human-tab`)?.closed, false)
+      assert.equal(env2.transport.calls.some((call) => call.method === 'workspace.close'), false)
+    } finally {
+      await env2.close()
+    }
+  }
+
+  // 3) dispose 清理远端可回收 pane。
+  const env3 = await makeEnv()
+  try {
+    scriptSuccess(env3, 'remote-ok')
+    await spawnDirect(env3, { agentType: 'herdr:agy@remote-node' })
+    await assert.rejects(env3.host.disable('builtin:herdr'), (e: unknown) => (e as HelmError).code === 'plugin_has_live_tasks')
+    await env3.host.dispose()
+    assert.ok(env3.transport.calls.some((c) => c.method === 'tab.close' && c.target.nodeId === 'remote-node'))
+  } finally {
+    await env3.close()
+  }
+
+  // 4) workflow 批量清理逐项隔离：首项失败不中断其余清理，陈旧快照 failed 保留 failureNote。
+  const docs = new MemoryDocStore()
+  const env4 = await makeEnv({ docs })
+  let releaseP1Get: (() => void) | undefined
+  let releaseAsk: (() => void) | undefined
+  try {
+    scriptSuccess(env4, 'p1-ok')
+    await spawnDirect(env4, { agentType: 'herdr:pi', meta: { 'builtin:workflow': { runId: 'wf_bulk' } } })
+    scriptSuccess(env4, 'p2-ok')
+    await spawnDirect(env4, { agentType: 'herdr:pi', meta: { 'builtin:workflow': { runId: 'wf_bulk' } } })
+    let askEntered = false
+    const askGate = new Promise<void>((resolve) => { releaseAsk = resolve })
+    env4.backend.createAsk = async () => {
+      askEntered = true
+      await askGate
+      throw new HelmError('ask_backend_broken', 'ask store down', 500)
+    }
+    env4.transport.promptStatus = 'blocked'
+    const p3run = spawnDirect(env4, { agentType: 'herdr:pi', meta: { 'builtin:workflow': { runId: 'wf_bulk' } } }).catch((e: unknown) => e)
+    await waitFor(() => askEntered)
+    const [p1, p2, p3] = [...env4.transport.panes.values()]
+    assert.ok(p1 && p2 && p3)
+    let slowGetEntered = false
+    const p1GetGate = new Promise<void>((resolve) => { releaseP1Get = resolve })
+    const orig = env4.transport.call.bind(env4.transport)
+    ;(env4.transport as HerdrTransport).call = async (target, method, params) => {
+      if (method === 'agent.get' && String(params['target']) === p1.paneId) {
+        slowGetEntered = true
+        await p1GetGate
+      }
+      if (method === 'tab.close' && params['tab_id'] === p1.tabId) {
+        throw new HelmError('tab_close_failed', 'boom', 500)
+      }
+      return orig(target, method, params)
+    }
+    const settled = (async () => {
+      for (const listener of env4.backend.workflowListeners) {
+        await listener({ id: 'wf_bulk', name: 'n', conversationId: 1, status: 'completed', createdAt: 1, updatedAt: 2 })
+      }
+    })()
+    await waitFor(() => slowGetEntered)
+    releaseAsk?.()
+    assert.equal(((await p3run) as HelmError).code, 'ask_backend_broken')
+    await waitFor(() => docs.get('builtin:herdr:managed', EMPTY_MANAGED_DOC).panes.some((p) => p.paneId === p3.paneId && p.outcome === 'failed'))
+    releaseP1Get?.()
+    await settled
+    assert.equal(env4.transport.tabs.get(p2.tabId)!.closed, true)
+    assert.equal(env4.transport.tabs.get(p1.tabId)!.closed, false)
+    assert.equal(env4.transport.tabs.get(p3.tabId)!.closed, false)
+    const p3row = docs.get('builtin:herdr:managed', EMPTY_MANAGED_DOC).panes.find((p) => p.paneId === p3.paneId)!
+    assert.equal(p3row.outcome, 'failed')
+    assert.ok(p3row.failureNote)
+    assert.ok(env4.backend.notifications.some((n) => n.title === 'Herdr pane cleanup failed'))
+  } finally {
+    releaseAsk?.()
+    releaseP1Get?.()
+    await env4.close()
   }
 })

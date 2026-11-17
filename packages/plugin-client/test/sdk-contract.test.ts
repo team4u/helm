@@ -524,19 +524,168 @@ test('MarkdownView / CodeBlockView render the host-port injected implementations
   assert.match(html, /data-lang="ts"/)
 })
 
-test('markdownUrlTransform allows artifact: and file: while filtering unsafe protocols', { timeout: 60_000 }, () => {
+test('markdownUrlTransform allows artifact:, file:, and Windows drive paths while filtering unsafe protocols', { timeout: 60_000 }, () => {
   assert.equal(SDK.markdownUrlTransform('artifact:art-1'), 'artifact:art-1')
   assert.equal(SDK.markdownUrlTransform('  file:///repo/README.md#L10  '), 'file:///repo/README.md#L10')
   assert.equal(SDK.markdownUrlTransform('FILE:///C:/repo/a.png'), 'FILE:///C:/repo/a.png')
+  assert.equal(SDK.markdownUrlTransform('C:/repo/src/App.tsx#L10'), 'C:/repo/src/App.tsx#L10')
+  assert.equal(SDK.markdownUrlTransform('d:\\repo\\a.png'), 'd:\\repo\\a.png')
   assert.equal(SDK.markdownUrlTransform('docs/guide.md#L5'), 'docs/guide.md#L5')
   assert.equal(SDK.markdownUrlTransform('https://example.com/a'), 'https://example.com/a')
   assert.equal(SDK.markdownUrlTransform('javascript:alert(1)'), '')
   assert.equal(SDK.markdownUrlTransform('data:text/html,<script>alert(1)</script>'), '')
   assert.equal(SDK.markdownUrlTransform('vbscript:msgbox(1)'), '')
+  assert.equal(SDK.markdownUrlTransform('custom:foo'), '')
 })
 
 // ---------------------------------------------------------------------------
-// 6. usePluginConfig contract
+// 6. useConversation lazy detail option & useSharedNowMs shared ticker
+// ---------------------------------------------------------------------------
+
+test('useConversation: includeDetail defaults to true, skips auto-load when false while preserving cached detail and manual reload', { timeout: 60_000 }, () => {
+  const loadCalls: Array<{ id: number; force?: boolean }> = []
+  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
+  const cachedDetail = { id: 8, entries: [] } as unknown as SDK.PluginClientHostPort['conversationDetails'][number]
+  const port = makePort(log, {
+    conversations: [
+      { id: 7, title: 'c7', tags: [], profileId: 'p' } as unknown as SDK.PluginClientHostPort['conversations'][number],
+      { id: 8, title: 'c8', tags: [], profileId: 'p' } as unknown as SDK.PluginClientHostPort['conversations'][number],
+    ],
+    conversationDetails: { 8: cachedDetail },
+    conversationLives: { 7: { conversationId: 7, status: 'working' } as unknown as SDK.PluginClientHostPort['conversationLives'][number] },
+    pendingAsks: [{ id: 'ask-7', conversationId: 7 } as unknown as SDK.PluginClientHostPort['pendingAsks'][number]],
+    loadConversationDetail: (id, force) => {
+      loadCalls.push({ id, force })
+      return Promise.resolve(undefined)
+    },
+  })
+
+  let view7!: SDK.ConversationHookResult
+  let view8!: SDK.ConversationHookResult
+  function Probe({ includeDetail }: { includeDetail?: boolean }): React.ReactNode {
+    view7 = SDK.useConversation(7, includeDetail === undefined ? undefined : { includeDetail })
+    view8 = SDK.useConversation(8, { includeDetail: false })
+    return e('div', null, 'probe')
+  }
+
+  // 1. includeDetail: false skips auto-load, still returns summary/live/pendingAsks and already-cached detail.
+  const { root } = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: port }, e(Probe, { includeDetail: false })),
+  )
+  try {
+    assert.deepEqual(loadCalls, [], 'includeDetail: false must not auto-call loadConversationDetail')
+    assert.equal(view7.summary?.id, 7)
+    assert.equal(view7.detail, undefined)
+    assert.equal(view7.live?.conversationId, 7)
+    assert.equal(view7.pendingAsks.length, 1)
+    assert.ok(view8.detail === cachedDetail, 'already-cached detail is still returned when includeDetail is false')
+
+    // Manual reload still forces a detail fetch even when includeDetail is false.
+    act(() => view7.reload())
+    assert.deepEqual(loadCalls, [{ id: 7, force: true }])
+
+    // 2. Flipping includeDetail to default/true triggers auto-load on missing detail.
+    act(() => root.render(e(SDK.PluginClientHostContext.Provider, { value: port }, e(Probe, {}))))
+    assert.deepEqual(loadCalls, [
+      { id: 7, force: true },
+      { id: 7, force: undefined },
+    ])
+  } finally {
+    act(() => root.unmount())
+  }
+})
+
+test('useSharedNowMs: SSR returns undefined, 20 concurrent active consumers share one setInterval, and deactivation/unmount clears timer immediately', { timeout: 60_000 }, async () => {
+  // 1. SSR deterministic first frame returns undefined even when active=true.
+  let ssrValue: number | undefined = 123
+  function SsrProbe(): React.ReactNode {
+    ssrValue = SDK.useSharedNowMs(true, 25)
+    return e('span', null, String(ssrValue))
+  }
+  const html = renderToString(e(SsrProbe))
+  assert.equal(ssrValue, undefined)
+  assert.equal(html, '<span>undefined</span>')
+
+  // 2. Client shared ticker: 20 subscribers with same intervalMs create only 1 setInterval.
+  const origSetInterval = globalThis.setInterval
+  const origClearInterval = globalThis.clearInterval
+  let setIntervalCount = 0
+  let clearIntervalCount = 0
+  const activeTimers = new Set<unknown>()
+
+  globalThis.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+    setIntervalCount += 1
+    const handle = origSetInterval(handler, timeout, ...args)
+    activeTimers.add(handle)
+    return handle
+  }) as typeof setInterval
+  globalThis.clearInterval = ((handle?: ReturnType<typeof setInterval>) => {
+    if (activeTimers.delete(handle)) {
+      clearIntervalCount += 1
+    }
+    origClearInterval(handle)
+  }) as typeof clearInterval
+
+  let mounted: ReturnType<typeof mount> | undefined
+  try {
+    const latest = new Array<number | undefined>(20).fill(undefined)
+    let fastValue: number | undefined
+    function Card({ idx, active }: { idx: number; active: boolean }): React.ReactNode {
+      latest[idx] = SDK.useSharedNowMs(active, 25)
+      return e('span', null, String(latest[idx]))
+    }
+    function FastCard({ active }: { active: boolean }): React.ReactNode {
+      fastValue = SDK.useSharedNowMs(active, 40)
+      return e('span', null, String(fastValue))
+    }
+    const buildTree = (active20: boolean, activeFast: boolean) =>
+      e('div', null,
+        ...Array.from({ length: 20 }, (_, idx) => e(Card, { key: idx, idx, active: active20 })),
+        e(FastCard, { active: activeFast }),
+      )
+
+    // Inactive mount creates zero timers.
+    mounted = mount(buildTree(false, false))
+    assert.equal(setIntervalCount, 0)
+    assert.equal(activeTimers.size, 0)
+    assert.ok(latest.every((v) => v === undefined))
+
+    // Activating all 20 (interval=25ms) + 1 (interval=40ms) creates exactly 2 timers total.
+    act(() => mounted!.root.render(buildTree(true, true)))
+    assert.equal(setIntervalCount, 2, '20 cards at 25ms share 1 timer + 1 card at 40ms = 2 timers total')
+    assert.equal(activeTimers.size, 2)
+    assert.ok(latest.every((v) => typeof v === 'number'), 'all active hooks initialize Date.now() immediately')
+    assert.equal(typeof fastValue, 'number')
+    const initialSample = latest[0]!
+
+    // Wait for shared tick to advance all 20 subscribers together to the exact same timestamp.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 70))
+    })
+    assert.ok(latest[0]! > initialSample, 'shared ticker advances nowMs')
+    assert.ok(latest.every((v) => v === latest[0]), 'all 20 subscribers receive identical tick timestamp')
+
+    // Deactivating the 20 cards clears the 25ms timer immediately while keeping the 40ms timer alive.
+    act(() => mounted!.root.render(buildTree(false, true)))
+    assert.ok(latest.every((v) => v === undefined), 'active -> false immediately resets return value to undefined')
+    assert.equal(clearIntervalCount, 1)
+    assert.equal(activeTimers.size, 1)
+
+    // Unmounting cleans up the remaining 40ms timer with zero leaks.
+    act(() => mounted!.root.unmount())
+    mounted = undefined
+    assert.equal(clearIntervalCount, 2)
+    assert.equal(activeTimers.size, 0)
+  } finally {
+    const remaining = mounted
+    if (remaining) act(() => remaining.root.unmount())
+    globalThis.setInterval = origSetInterval
+    globalThis.clearInterval = origClearInterval
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 7. usePluginConfig contract
 // ---------------------------------------------------------------------------
 
 test('usePluginConfig: returns current plugin publicConfig, falls back to stable empty object when absent, and updates reactively', { timeout: 60_000 }, () => {

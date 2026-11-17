@@ -104,6 +104,8 @@ export interface ModelCatalog {
   defaultModel?: string
   /** Global default thinking level (config.json.thinkingLevel; omitted when unset). */
   defaultThinkingLevel?: string
+  /** Per-model thinking defaults keyed by full `'provider/modelId'` reference (config.json.modelThinkingLevels; omitted when empty). */
+  modelThinkingLevels?: Record<string, string>
   /** Global compaction model (config.json.compactionModel; omitted when unset). */
   defaultCompactionModel?: string
   /** Global compaction thinking level (config.json.compactionThinkingLevel; omitted when unset). */

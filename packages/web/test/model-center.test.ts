@@ -457,8 +457,8 @@ test('ModelCard SSR: renders provider card header, badges, description and model
   assert.match(html, /DeepSeek/)
   assert.match(html, /class="[^"]*mono[^"]*"[^>]*>deepseek<\/span>/)
 
-  // 3. Configuration badge (configured highlighted)
-  assert.match(html, /class="badge badge-ok"[^>]*>Configured<\/span>/)
+  // 3. Configuration status light (configured → done tone + visible label)
+  assert.match(html, /helm-status-light-done[\s\S]*?status-dot-done[\s\S]*?Configured/)
 
   // 4. Description
   assert.match(html, /深度求索 R1 与通用基座。/)
@@ -496,8 +496,8 @@ test('ModelCard SSR: unconfigured and selected-state assertions', { timeout: 60_
   assert.match(html, /class="[^"]*is-selected[^"]*"/)
   assert.match(html, /aria-selected="true"/)
 
-  // Unconfigured badge
-  assert.match(html, /class="badge badge-neutral"[^>]*>Not configured<\/span>/)
+  // Unconfigured status light (neutral pending ring + visible label)
+  assert.match(html, /helm-status-light-pending[\s\S]*?Not configured/)
   assert.match(html, /3 models available/)
 
   // Zero Emoji
@@ -733,6 +733,7 @@ test('ModelCenter: GlobalDefaultsPanel reuses ModelPickerControl (model · level
           ok: true,
           defaultModel: (body.model as string) ?? '',
           defaultThinkingLevel: (body.thinkingLevel as string) ?? '',
+          modelThinkingLevels: (body.modelThinkingLevels as Record<string, string>) ?? {},
           defaultCompactionModel: (body.compactionModel as string) ?? '',
           defaultCompactionThinkingLevel: (body.compactionThinkingLevel as string) ?? '',
         }),
@@ -786,6 +787,7 @@ test('ModelCenter: GlobalDefaultsPanel reuses ModelPickerControl (model · level
       thinkingLevel: 'high',
       compactionModel: 'openai/gpt-4o-mini',
       compactionThinkingLevel: 'low',
+      modelThinkingLevels: {},
     })
   } finally {
     globalThis.fetch = originalFetch

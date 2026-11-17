@@ -1,5 +1,5 @@
 import React from 'react'
-import { HelmIcon } from '@helm/plugin-client'
+import { HelmIcon, StatusLight } from '@helm/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatUptime } from '../modals/nodes-modal-model.js'
 import {
@@ -83,10 +83,9 @@ export function NodeCard({
         </div>
         <div className="primary-card-meta">
           <div className="primary-card-title-row">
-            <span
-              className={`status-dot ${isOnline ? 'status-dot-done status-dot-working' : ''}`}
-              title={isOnline ? t('nodes.statusOnlineTitle') : t('nodes.statusOfflineTitle')}
-              aria-label={isOnline ? t('common.online') : t('common.offline')}
+            <StatusLight
+              status={isOnline ? 'online' : 'offline'}
+              label={isOnline ? t('common.online') : t('common.offline')}
             />
             <span className="primary-card-name" title={displayName}>
               {displayName}
@@ -127,7 +126,7 @@ export function NodeCard({
         )}
       </div>
 
-      {/* Bottom: heartbeat/connection status + capability pills */}
+      {/* Bottom: capability pills (connection state lives in the single header status light) */}
       <div className="primary-card-footer">
         <div className="primary-card-pills">
           {tools.slice(0, 4).map((tool) => (
@@ -144,12 +143,6 @@ export function NodeCard({
               +{tools.length - 4}
             </span>
           )}
-        </div>
-
-        <div className="flex-row">
-          <span className={`badge ${isOnline ? 'badge-ok' : 'badge-neutral'}`}>
-            {isOnline ? t('common.online') : t('common.offline')}
-          </span>
         </div>
       </div>
     </div>

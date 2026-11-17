@@ -12,7 +12,7 @@ import { evictPluginClientCache, resetPluginClientCache } from '../src/lib/plugi
 import { PluginUiView } from '../src/ui/PluginUiView.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
-import { mountSharedPluginNamespaces } from './helpers/workflow-client.js'
+import { mountSharedPluginNamespaces } from './helpers/builtin-clients.js'
 
 GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })

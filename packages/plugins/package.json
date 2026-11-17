@@ -81,7 +81,6 @@
     "@earendil-works/chord": "1.5.2",
     "@earendil-works/pi-ai": "1.5.2",
     "@earendil-works/pi-durable": "1.5.2",
-    "@helm/plugin-client": "workspace:*",
     "@helm/protocol": "workspace:*",
     "cron-parser": "^5.10.4",
     "typebox": "^1.0.0"
@@ -90,6 +89,7 @@
     "@happy-dom/global-registrator": "^21.0.4",
     "@helm/kernel": "workspace:*",
     "@helm/plugin-build": "workspace:*",
+    "@helm/plugin-client": "workspace:*",
     "@helm/test-kit": "workspace:*",
     "@types/react": "^19.0.0",
     "lucide-react": "^1.66.0",

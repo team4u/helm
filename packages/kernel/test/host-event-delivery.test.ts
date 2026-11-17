@@ -153,6 +153,24 @@ describe('host event single-delivery contract', { timeout: 60_000 }, () => {
     }
   })
 
+  it('plugin.changed emits even if refreshPluginTools throws', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime(join(root, 'plugin-changed-refresh-throw'))
+    try {
+      ;(kernel as unknown as { refreshPluginTools: () => void }).refreshPluginTools = () => {
+        throw new Error('tool hot-reload failed')
+      }
+      const seen: string[] = []
+      kernel.events.subscribe((frame) => {
+        const event = frame.event as { type: string }
+        if (event.type === 'plugin.changed') seen.push(event.type)
+      })
+      kernel.emitHostEvent('plugin.changed', { plugin: { id: 'test:hot', version: '1.0.0', enabled: true, locked: false } })
+      assert.equal(seen.length, 1, 'plugin.changed must still emit on hot-reload failure so clients never miss state transitions')
+    } finally {
+      await kernel.close()
+    }
+  })
+
   it('EventHub.close detaches host dispatcher rather than retaining runtime callback', { timeout: 60_000 }, () => {
     const events = new EventHub({
       initialSeq: 0,
@@ -294,6 +312,27 @@ describe('host event single-delivery contract', { timeout: 60_000 }, () => {
       assert.equal(unhandled.length, 0, 'listener errors are isolated inside delivery without unhandledRejection')
       process.off('unhandledRejection', onUnhandled)
     } finally {
+      await kernel.close()
+    }
+  })
+
+  it('dispatchInternalEvent isolates listener throws: subsequent listeners run and no unhandledRejection occurs', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime(join(root, 'internal-listener-isolation'))
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason) }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      let secondRan = false
+      kernel.onEvent('test:probe', async () => { throw new Error('a listener failed') })
+      kernel.onEvent('test:probe', async () => { secondRan = true })
+      // Fire-and-forget invocation (without await/catch), matching plugin-host emitEvent call posture.
+      void kernel.emitHostEvent('test:probe', { a: 1 })
+      await new Promise((resolve) => setImmediate(resolve))
+      await kernel.emitHostEvent('test:probe', { a: 2 })
+      assert.equal(secondRan, true, 'first listener throwing must not block subsequent listeners')
+      assert.equal(unhandled.length, 0, 'promise returned by dispatchInternalEvent must not reject')
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
       await kernel.close()
     }
   })

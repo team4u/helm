@@ -445,16 +445,11 @@ test('真实 workflow 插件：运行中 run 受控 dispose，终态落私有 re
   ) as { status?: string }
   assert.equal(record.status, 'aborted', `close 应把运行中 run 显式结算为 aborted（实际 ${JSON.stringify(record)}）`)
 
-  // 公共 runs 会话分片投影：终态同步（dispose 的 stop 末尾最终投影）。
-  const runsDoc = JSON.parse(sessionDocs.get('builtin:workflow', 'runs', 1) ?? '{"runs":[]}') as { runs: Array<{ id: string; status: string }> }
-  const projected = runsDoc.runs.find((r) => r.id === started.run.id)
-  assert.ok(projected, `公共 runs 会话分片应含该 run（实际 ${JSON.stringify(runsDoc.runs)}）`)
-  assert.equal(projected!.status, 'aborted', '投影状态与终态一致')
-  // 全局紧凑角标：同步写入（仅 count/tone/footerText，无完整 run 摘要）。
-  const badges = docs.get<{ byConversation: Record<string, { count: number }> }>('builtin:workflow:run-badges', { byConversation: {} })
-  assert.equal(badges.byConversation['1']?.count ?? 0, 1, `run-badges 应含会话 1 计数（实际 ${JSON.stringify(badges)}）`)
+  // 公共 runs 与 run-badges 为瞬态投影（durable: false），持久层零落盘。
+  assert.equal(sessionDocs.get('builtin:workflow', 'runs', 1), undefined, '瞬态 runs 分片不写持久层')
+  assert.equal(docs.writes.includes('builtin:workflow:run-badges'), false, '瞬态 run-badges 角标不写持久层')
 
-  // 重启语义：新 host 读同一持久层，记录一致可见（真实持久读回）。
+  // 重启语义：新 host 读同一持久层 records + .record.json，start() 内存重投影一致可见。
   const host2 = makeHost()
   await host2.register(createWorkflowPlugin())
   const runsAfterRestart = (await host2.invokeAction('builtin:workflow', 'runs', {}, { conversationId: 1 })) as {
@@ -463,6 +458,10 @@ test('真实 workflow 插件：运行中 run 受控 dispose，终态落私有 re
   const restored = runsAfterRestart.runs.find((r) => r.id === started.run.id)
   assert.ok(restored, `重启后 run 记录应可读（实际 ${JSON.stringify(runsAfterRestart.runs)}）`)
   assert.equal(restored!.status, 'aborted', '重启后终态一致')
+  const runsDoc = host2.getPublicSessionDoc('builtin:workflow', 'runs', 1).value as { runs: Array<{ id: string; status: string }> }
+  assert.equal(runsDoc.runs.find((r) => r.id === started.run.id)?.status, 'aborted', '重启后内存投影状态与终态一致')
+  const badges = host2.getPublicDoc('builtin:workflow', 'run-badges').value as { byConversation: Record<string, { count: number }> }
+  assert.equal(badges.byConversation['1']?.count ?? 0, 1, `重启后内存 run-badges 应含会话 1 计数（实际 ${JSON.stringify(badges)}）`)
   await host2.dispose()
 
   process.off('unhandledRejection', onUnhandled)
@@ -585,7 +584,7 @@ test('flush 失败：durable 快照 flush 失败时 run 拒绝且零 spawn（不
   await host.dispose()
 })
 
-test('受控 stop：最终 runs 投影写后 await 真实 flush（dispose 完成即排队写冲刷完成）', { timeout: 60_000 }, async () => {
+test('受控 stop：末尾 await records.flush 且瞬态投影零持久写入', { timeout: 60_000 }, async () => {
   const host = makeHost()
   const { createWorkflowPlugin } = await import('../src/workflow.js')
   await host.register(createWorkflowPlugin())
@@ -594,12 +593,9 @@ test('受控 stop：最终 runs 投影写后 await 真实 flush（dispose 完成
   }, { conversationId: 1 })
   const flushCallsBefore = docs.flushCalls
   await host.dispose()
-  // stop 链：close（内部 state.flush）→ 最终投影 → records.flush（stop 尾部）。
-  // 真实 runtime 中会话分片与全局 doc 共享同一事务队列；本测试替身分表，
-  // 故分别断言两边都真实写入了。
+  // stop 链：close（内部 state.flush）→ records.flush（stop 尾部）；瞬态投影不写持久层。
   assert.ok(docs.flushCalls > flushCallsBefore, `stop 末尾必须 await 真实 flush（前 ${flushCallsBefore} 后 ${docs.flushCalls}）`)
-  // 持久层含最终投影与 run 记录（真实读回）。
-  assert.ok(sessionDocs.writes.includes('builtin:workflow:runs:1'), '最终 runs 会话分片已写入')
-  assert.ok(docs.writes.includes('builtin:workflow:records'), 'records 已写入')
-  assert.ok(docs.writes.includes('builtin:workflow:run-badges'), 'run-badges 角标已写入')
+  assert.ok(docs.writes.includes('builtin:workflow:records'), 'records 已写入持久层')
+  assert.equal(sessionDocs.writes.includes('builtin:workflow:runs:1'), false, 'runs 瞬态分片不得写入持久层')
+  assert.equal(docs.writes.includes('builtin:workflow:run-badges'), false, 'run-badges 瞬态角标不得写入持久层')
 })

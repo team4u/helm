@@ -1,60 +1,61 @@
 /**
- * run-settle.ts — workflow run 的终态结算（自 service.run 拆出的内部模块）。
+ * run-settle.ts — 工作流与单子代理统一的终态结算流水线。
  *
- * settleWorkflowRun 是 run 收尾的唯一出口：失败终态统一写入 record（内存
- * summary 只是镜像），writer 必关、active 必删、在途子会话中止必等待、宿主
- * onRunSettled 必等待结束——任何一步失败都不留假 running。后台 promise 的
- * rejection 被 done 吸收并由 record.error 如实上报，绝不 unhandled。
+ * executeRunSettlement 是 ActiveRun 收尾的唯一权威出口（DSL workflow 与单子代理
+ * 共用同一套生命周期纪律）：
+ * - 优雅挂起（suspending → status='running' + suspendedCleanly=true）与终态区分；
+ * - 关停窗口遗留子会话标记（pendingChildCleanup=true）；
+ * - 结构化 errorCode 与权威 resumable 摘要派生（svc.summaryOf）；
+ * - 终态原子落盘与 flush（失败追加诊断并通过 settleError 诚实上抛）；
+ * - 可选账本句柄关闭（仅 DSL workflow 持有 writer；单子代理零空文件句柄）；
+ * - active 移除、pendingExecs / pendingAborts 收敛等待；
+ * - onRunSettled 与 onBackgroundAgentSettled（outbox + notifiedAt 防重）恰一次回调；
+ * - workflow.updated 增量事件广播、done 门与前台同步等待者唤醒。
  */
 
-import { redactJsonValue } from '@helm/protocol'
+import { HelmError, redactJsonValue, type AgentExecutionInfo } from '@helm/protocol'
+import type { WorkflowNodeState } from '../../contracts.js'
 import { resolveForegroundWaiters, type ActiveRun } from './active-run.js'
+import { classifyRunFailureCode } from './run-resumability.js'
 import { backgroundChildIds } from './run-store.js'
-import { nodesFromProgress, redactNodes, toSummary } from './run-summary.js'
+import { nodesFromProgress, redactNodes } from './run-summary.js'
 import type { WorkflowRunResult } from './runtime.js'
 import type { WorkflowServiceContext } from './service-context.js'
 
-/**
- * 结算一个 workflow run（service.run 结算链调用；行为契约见模块头）。
- * @param resumeJournalIoErrors resume 旧账本的存量损行诊断（与引擎/写层损行合一）。
- */
-export async function settleWorkflowRun(
+interface SettlementPipelineSpec {
+  applyOutcome(hostClosing: boolean): Promise<{ suspending: boolean }> | { suspending: boolean }
+  getBackgroundNotifyInfo(): {
+    parentConversationId: number
+    agentType?: string
+    execution?: AgentExecutionInfo
+  }
+  cleanupParentSignal?: () => void
+  resolveDone?: () => void
+}
+
+async function executeRunSettlement(
   svc: WorkflowServiceContext,
   run: ActiveRun,
-  resumeJournalIoErrors: string[] | undefined,
-  result: WorkflowRunResult | undefined,
-  failure?: unknown,
+  spec: SettlementPipelineSpec,
 ): Promise<void> {
   const record = run.record
   const runId = run.runId
-  const suspending = svc.isRunSuspending(run) && result?.status !== 'completed'
+  let suspending = false
   let settleFailure: unknown
+
+  const recordSettleError = (error: unknown): void => {
+    if (run.settleError === undefined) run.settleError = error
+  }
+
   try {
-    // 收尾前必须摘除 trailing timer：终态事件即将发布，窗口内补发会造成乱序。
     if (run.pendingEventTimer !== undefined) {
       clearTimeout(run.pendingEventTimer)
       run.pendingEventTimer = undefined
     }
     const hostClosing = svc.host.isHostClosing?.() === true
-    if (suspending) {
-      // 宿主关停优雅挂起：保持 running，置位 suspendedCleanly 供下次启动无感原位续跑。
-      record.status = 'running'
-      record.suspendedCleanly = true
-    } else if (result !== undefined) {
-      record.status =
-        result.status === 'killed'
-          ? 'aborted'
-          : hostClosing && result.status !== 'completed'
-            ? 'aborted'
-            : result.status
-      if (result.error !== undefined) record.error = svc.redact(result.error)
-      if (result.value !== undefined) record.result = redactJsonValue(result.value, svc.redact)
-    } else {
-      // runWorkflow 本身失败（坏 meta/语法/worker 启动异常/state 写失败续）。
-      record.status = hostClosing ? 'aborted' : 'failed'
-      const message = failure instanceof Error ? failure.message : failure !== undefined ? String(failure) : 'unknown workflow failure'
-      record.error = svc.redact(message)
-    }
+    const applied = await spec.applyOutcome(hostClosing)
+    suspending = applied.suspending
+
     if (
       !suspending &&
       hostClosing &&
@@ -63,40 +64,13 @@ export async function settleWorkflowRun(
     ) {
       record.pendingChildCleanup = true
     }
-    // 账本记账失败诊断（保守面：run 不中断，但绝不隐瞒）。
-    // 三路来源合一：引擎 agent 行写失败（result 携带）+ resume 旧账本损行 +
-    // writer 层 agent 行写失败计数；脱敏后 stderr 可见 + 入 record 诊断面。
-    const journalIoErrors = [
-      ...(result?.journalIoErrors ?? []),
-      ...(resumeJournalIoErrors ?? []),
-      ...(run.writer.agentIoErrors > 0
-        ? [`${run.writer.agentIoErrors} journal agent-line append(s) failed (journal: ${run.journalPath})`]
-        : []),
-    ]
-    if (journalIoErrors.length > 0) {
-      const redacted = journalIoErrors.map((message) => svc.redact(message))
-      // stderr 是宿主侧日志的最低保障可见面（与 persist/onRunSettled 失败同手法）。
-      for (const message of redacted) {
-        process.stderr.write(`workflow ${runId}: journal io error: ${message}\n`)
-      }
-      record.journalIoErrors = redacted
-    }
     record.updatedAt = Date.now()
-    // 只跟踪内建执行通道，不等待任意插件；取消后必须确认命令已退出，不能超时后假装完成清理。
-    run.abort.abort()
-    await Promise.allSettled([...run.pendingExecs])
-    if (!suspending || run.progress.length > 0) {
-      record.nodes = redactNodes(svc.redact, nodesFromProgress(run.progress))
-    }
-    if (!suspending || run.timeline.length > 0) {
-      record.progress = run.timeline
-    }
-    run.summary = toSummary(record)
+    run.summary = svc.summaryOf(record)
+
     try {
       svc.writeRecord(record)
       await svc.state.flush?.()
     } catch (persistError) {
-      // 持久化失败必须如实浮出（吞掉 = 下次读回假 running），但仍先完成清理。
       const persistMessage = persistError instanceof Error ? persistError.message : String(persistError)
       process.stderr.write(`workflow ${runId}: terminal state persist failed: ${persistMessage}\n`)
       run.summary = {
@@ -104,31 +78,34 @@ export async function settleWorkflowRun(
         status: record.status,
         error: `${record.error ?? ''}\n[persist failed: ${persistMessage}]`.trim(),
       }
-      run.settleError = persistError
+      recordSettleError(persistError)
     }
-  } catch (settleError) {
-    settleFailure = settleError
+  } catch (error) {
+    settleFailure = error
   } finally {
-    try {
-      await run.writer.close()
-    } catch (closeError) {
-      process.stderr.write(
-        `workflow ${runId}: journal close failed: ${closeError instanceof Error ? closeError.message : String(closeError)}\n`,
-      )
+    if (run.writer !== undefined) {
+      try {
+        await run.writer.close()
+      } catch (closeError) {
+        process.stderr.write(
+          `workflow ${runId}: journal close failed: ${
+            closeError instanceof Error ? closeError.message : String(closeError)
+          }\n`,
+        )
+      }
     }
-    // close 失败/持久化失败同样必须取消命令并等待执行通道和子会话中止结束。
     run.abort.abort()
-    await Promise.allSettled([...run.pendingExecs])
+    if (run.pendingExecs.size > 0) {
+      await Promise.allSettled([...run.pendingExecs])
+    }
     svc.active.delete(runId)
     if (run.pendingAborts.size > 0) {
       await Promise.allSettled([...run.pendingAborts])
     }
-    // 宿主结算通知：每 run 恰一次；挂起时严禁触发（防止 Herdr 关窗格或误报终态）。
     if (!suspending && svc.host.onRunSettled !== undefined) {
       try {
         await svc.host.onRunSettled({ ...run.summary })
       } catch (settledError) {
-        // 结算清理失败显式进入诊断与 settleError，不破坏已落盘终态。
         const message = settledError instanceof Error ? settledError.message : String(settledError)
         process.stderr.write(`workflow ${runId}: onRunSettled failed: ${message}\n`)
         run.summary = {
@@ -143,12 +120,9 @@ export async function settleWorkflowRun(
         } catch {
           // 诊断补写尽力而为；settleError 已携带原始异常。
         }
-        run.settleError = run.settleError ?? settledError
+        recordSettleError(settledError)
       }
     }
-    // 后台启动的 workflow run（notifyParentOnSettle）：终态落盘后向父会话
-    // 投递结算通知——与 startBackgroundAgent 同款 outbox 语义（恰一次，
-    // notifiedAt 防重复；失败/关停/挂起窗口不置位，init() 下次启动补发）。
     if (
       !suspending &&
       !svc.isClosed() &&
@@ -158,9 +132,7 @@ export async function settleWorkflowRun(
       svc.host.onBackgroundAgentSettled !== undefined
     ) {
       try {
-        await svc.host.onBackgroundAgentSettled({ ...run.summary }, {
-          parentConversationId: run.conversationId,
-        })
+        await svc.host.onBackgroundAgentSettled({ ...run.summary }, spec.getBackgroundNotifyInfo())
         record.notifiedAt = Date.now()
         svc.writeRecord(record)
         await svc.state.flush?.()
@@ -170,11 +142,177 @@ export async function settleWorkflowRun(
       }
     }
     svc.emitEventSafe('workflow.updated', { run: { ...run.summary } })
-    if (settleFailure !== undefined && run.settleError === undefined) {
-      run.settleError = settleFailure
-    }
-    // 前台等待者最后唤醒（settleError 已定稿）：工具侧 waitForegroundRun 以
-    // 'settled' 继续读终态；已 detach 的等待者早已返回（Promise 单次）。
+    if (settleFailure !== undefined) recordSettleError(settleFailure)
+    spec.cleanupParentSignal?.()
+    run.unbindForegroundSignal = undefined
+    spec.resolveDone?.()
     resolveForegroundWaiters(run, 'settled')
   }
+}
+
+/** 结算一个 DSL workflow run。 */
+export async function settleWorkflowRun(
+  svc: WorkflowServiceContext,
+  run: ActiveRun,
+  resumeJournalIoErrors: string[] | undefined,
+  result: WorkflowRunResult | undefined,
+  failure?: unknown,
+): Promise<void> {
+  const record = run.record
+  const runId = run.runId
+  await executeRunSettlement(svc, run, {
+    applyOutcome: async (hostClosing) => {
+      const suspending = svc.isRunSuspending(run) && result?.status !== 'completed'
+      if (suspending) {
+        record.status = 'running'
+        record.suspendedCleanly = true
+      } else if (result !== undefined) {
+        record.status =
+          result.status === 'killed'
+            ? 'aborted'
+            : hostClosing && result.status !== 'completed'
+              ? 'aborted'
+              : result.status
+        if (result.error !== undefined) record.error = svc.redact(result.error)
+        if (record.status === 'failed') {
+          record.errorCode = classifyRunFailureCode(failure, result.error, 'workflow_failed')
+        } else {
+          delete record.errorCode
+        }
+        if (result.value !== undefined) record.result = redactJsonValue(result.value, svc.redact)
+      } else {
+        record.status = hostClosing ? 'aborted' : 'failed'
+        const message =
+          failure instanceof Error
+            ? failure.message
+            : failure !== undefined
+              ? String(failure)
+              : 'unknown workflow failure'
+        record.error = svc.redact(message)
+        if (record.status === 'failed') {
+          record.errorCode = classifyRunFailureCode(failure, message, 'workflow_failed')
+        } else {
+          delete record.errorCode
+        }
+      }
+
+      const journalIoErrors = [
+        ...(result?.journalIoErrors ?? []),
+        ...(resumeJournalIoErrors ?? []),
+        ...(run.writer !== undefined && run.writer.agentIoErrors > 0
+          ? [`${run.writer.agentIoErrors} journal agent-line append(s) failed (journal: ${run.journalPath})`]
+          : []),
+      ]
+      if (journalIoErrors.length > 0) {
+        const redacted = journalIoErrors.map((message) => svc.redact(message))
+        for (const message of redacted) {
+          process.stderr.write(`workflow ${runId}: journal io error: ${message}\n`)
+        }
+        record.journalIoErrors = redacted
+      }
+
+      run.abort.abort()
+      if (run.pendingExecs.size > 0) {
+        await Promise.allSettled([...run.pendingExecs])
+      }
+      if (!suspending || run.progress.length > 0) {
+        record.nodes = redactNodes(svc.redact, nodesFromProgress(run.progress))
+      }
+      if (!suspending || run.timeline.length > 0) {
+        record.progress = run.timeline
+      }
+      return { suspending }
+    },
+    getBackgroundNotifyInfo: () => ({ parentConversationId: run.conversationId }),
+  })
+}
+
+export type SubagentRawOutcome = { ok: true; raw: unknown } | { ok: false; error: unknown }
+
+/** 创建单子代理幂等结算器（startBackgroundAgent 与 reattachBackgroundAgent 共用）。 */
+export function createSubagentSettler(params: {
+  svc: WorkflowServiceContext
+  run: ActiveRun
+  node: WorkflowNodeState
+  parentConversationId: number
+  agentType: string | undefined
+  getExecutionInfo: () => AgentExecutionInfo | undefined
+  resolveDone: () => void
+  cleanupParentSignal?: () => void
+}) {
+  const { svc, run, node, parentConversationId, agentType, getExecutionInfo, resolveDone, cleanupParentSignal } = params
+  const record = run.record
+  const startedAt = node.startedAt ?? record.createdAt
+  let settled = false
+
+  const reportSettleError = (error: unknown): void => {
+    if (run.settleError === undefined) run.settleError = error
+  }
+
+  const settle = async (outcome: SubagentRawOutcome): Promise<void> => {
+    if (settled) return
+    settled = true
+    await executeRunSettlement(svc, run, {
+      applyOutcome: (hostClosing) => {
+        const settledAt = Date.now()
+        const outcomeCompleted = outcome.ok && !run.abort.signal.aborted && !run.suspended
+        const suspending = !outcomeCompleted && svc.isRunSuspending(run)
+        const aborted =
+          !outcome.ok &&
+          (hostClosing ||
+            run.abort.signal.aborted ||
+            (outcome.error instanceof HelmError && outcome.error.code === 'aborted'))
+
+        if (suspending) {
+          record.status = 'running'
+          record.suspendedCleanly = true
+          node.status = 'running'
+        } else if (outcomeCompleted) {
+          node.status = 'done'
+          node.settledAt = settledAt
+          node.durationMs = settledAt - startedAt
+          node.output = redactJsonValue(outcome.raw, svc.redact)
+          record.status = 'completed'
+          record.result = redactJsonValue(outcome.raw, svc.redact)
+          delete record.error
+          delete record.errorCode
+        } else {
+          node.status = aborted ? 'skipped' : 'failed'
+          node.settledAt = settledAt
+          node.durationMs = settledAt - startedAt
+          const message = outcome.ok
+            ? '宿主正在关停，后台子代理执行已中止'
+            : outcome.error instanceof HelmError
+              ? `[${outcome.error.code}] ${outcome.error.message}`
+              : outcome.error instanceof Error
+                ? outcome.error.message
+                : String(outcome.error)
+          node.error = svc.redact(message)
+          record.status = aborted ? 'aborted' : 'failed'
+          record.error = svc.redact(message)
+          if (record.status === 'failed') {
+            record.errorCode = classifyRunFailureCode(outcome.ok ? undefined : outcome.error, message, 'subagent_failed')
+          } else {
+            delete record.errorCode
+          }
+        }
+        record.nodes = redactNodes(svc.redact, [node])
+        return { suspending }
+      },
+      getBackgroundNotifyInfo: () => {
+        const executionInfo = getExecutionInfo()
+        return {
+          parentConversationId,
+          ...(agentType !== undefined && agentType !== '' ? { agentType } : {}),
+          ...(executionInfo !== undefined
+            ? { execution: redactJsonValue(executionInfo, svc.redact) as typeof executionInfo }
+            : {}),
+        }
+      },
+      ...(cleanupParentSignal !== undefined ? { cleanupParentSignal } : {}),
+      resolveDone,
+    })
+  }
+
+  return { settle, reportSettleError, isSettled: () => settled }
 }

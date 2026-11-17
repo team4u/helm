@@ -41,7 +41,6 @@ export const SA_COL_ACTIONS: LocalizedText = { en: 'Actions', 'zh-CN': '操作' 
 
 /** Row action buttons. */
 export const SA_ACTION_OPEN: LocalizedText = { en: 'Open', 'zh-CN': '打开' }
-export const SA_ACTION_VIEW: LocalizedText = { en: 'View', 'zh-CN': '查看' }
 export const SA_ACTION_ARCHIVE: LocalizedText = { en: 'Archive', 'zh-CN': '归档' }
 export const SA_ACTION_OPEN_CONVERSATION: LocalizedText = { en: 'Open conversation', 'zh-CN': '打开会话' }
 export const SA_ACTION_OPEN_WORKER: LocalizedText = { en: 'Open worker', 'zh-CN': '打开 Worker' }
@@ -85,6 +84,9 @@ export const SA_ROUTER_PILL_ARIA: LocalizedText = {
 export const SA_DISPATCH_TITLE: LocalizedText = { en: 'Worker dispatch', 'zh-CN': '后台 Worker 派工' }
 /** Running dispatch state. */
 export const SA_DISPATCHING: LocalizedText = { en: 'Dispatching…', 'zh-CN': '派工中…' }
+export const SA_STATUS_RUNNING: LocalizedText = { en: 'Running', 'zh-CN': '执行中' }
+export const SA_STATUS_COMPLETED: LocalizedText = { en: 'Completed', 'zh-CN': '已完成' }
+export const SA_STATUS_FAILED: LocalizedText = { en: 'Failed', 'zh-CN': '失败' }
 /** Dispatch failed (action error banner shows the backend message). */
 export const SA_DISPATCH_FAILED: LocalizedText = { en: 'Dispatch failed', 'zh-CN': '派工失败' }
 /** Dispatch completed without a worker id in the result. */

@@ -72,7 +72,7 @@ export function PreviewModalShell({
           <DialogContent
             className={`modal${isFullscreen ? ' modal-fullscreen' : ''}`}
             aria-label={ariaLabel}
-            style={isFullscreen ? undefined : { maxWidth: 'min(1100px, 94vw)', maxHeight: '90vh' }}
+            style={isFullscreen ? undefined : { maxWidth: 'min(1280px, 94vw)', maxHeight: '90vh' }}
           >
             <div className="modal-header artifact-preview-header">
               <span className="preview-modal-title-group">
@@ -119,7 +119,7 @@ export function PreviewModalShell({
                 </DialogClose>
               </span>
             </div>
-            <div className="modal-body" ref={modalBodyRef}>
+            <div className="modal-body preview-modal-body" ref={modalBodyRef}>
               {state.phase === 'loading' ? (
                 <div className="preview-modal-loading">
                   <HelmIcon name="loader" size={14} className="spin-slow" />

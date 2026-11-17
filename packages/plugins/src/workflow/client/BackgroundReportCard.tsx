@@ -12,10 +12,7 @@
 import { useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { TimelineRendererProps } from '@helm/protocol'
-import { CopyButton, MarkdownText, formatCompactTimestamp, usePluginContext, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
-import type { HelmLocale } from '@helm/plugin-client'
-import { RUN_BADGE } from './presentation.ts'
-import { runStatusLabel } from './copy.ts'
+import { CopyButton, MarkdownText, StatusLight, formatCompactTimestamp, usePluginContext, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
 import {
   REPORT_INVALID_BADGE,
   REPORT_INVALID_CALLOUT,
@@ -35,6 +32,7 @@ import {
   REPORT_WORKFLOW_TITLE,
   reportOpenChildTitle,
   reportToggleLabel,
+  runStatusLabel,
 } from './copy.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { isPlaceholderRunName } from './model-format.ts'
@@ -63,7 +61,6 @@ export function BackgroundReportCard(props: TimelineRendererProps): ReactNode {
     : view.kind === 'subagent_report'
       ? t(REPORT_SUBAGENT_TITLE)
       : t(REPORT_WORKFLOW_TITLE)
-  const statusIcon = view.invalid || isFailure ? 'alert-circle' : view.kind === 'workflow_report' ? 'workflow' : 'bot'
   const preview = view.invalid ? t(REPORT_INVALID_PREVIEW) : backgroundReportPreview(view, PREVIEW_MAX_CHARS, locale)
   const rowTitle =
     reportName !== undefined
@@ -84,8 +81,8 @@ export function BackgroundReportCard(props: TimelineRendererProps): ReactNode {
           onClick={() => setOpen((v) => !v)}
         >
           <Icon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
-          <Icon name={statusIcon} size={12} />
-          <span className="trace-tool-name" title={rowTitle}>{rowTitle}</span>
+          <Icon name={!view.invalid && view.kind === 'workflow_report' ? 'workflow' : 'bot'} size={12} />
+          <span className="trace-tool-name workflow-trace-name" title={rowTitle}>{rowTitle}</span>
           {reportName !== undefined && conversationId !== undefined ? (
             <span className="workflow-trace-id tabular-nums">{`#${conversationId}`}</span>
           ) : null}
@@ -97,11 +94,9 @@ export function BackgroundReportCard(props: TimelineRendererProps): ReactNode {
         </button>
         <span className="trace-row-right workflow-trace-right">
           {view.invalid ? (
-            <span className="badge workflow-trace-badge badge-err">{t(REPORT_INVALID_BADGE)}</span>
+            <StatusLight status="failed" label={t(REPORT_INVALID_BADGE)} />
           ) : (
-            <span className={`badge workflow-trace-badge ${RUN_BADGE[view.status] ?? 'badge-neutral'}`}>
-              {runStatusLabel(view.status, locale)}
-            </span>
+            <StatusLight status={view.status} label={runStatusLabel(view.status, locale)} />
           )}
           {view.createdAt !== undefined ? (
             <span className="trace-duration tabular-nums">{formatCompactTimestamp(view.createdAt)}</span>

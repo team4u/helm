@@ -5,14 +5,32 @@
  * blocked / background subagents), with an expandable concurrent list and
  * one-click access to the workbench / drawer / abort / detach; returns null
  * once everything settles (0px, never occupying space).
+ *
+ * Interaction contract (card de-clutter pass, a11y-legal structure):
+ * - the bar is a flex row whose main region is one real toggle <button>
+ *   (aria-expanded / aria-controls); the Workbench action is a sibling
+ *   button — no interactive element ever nests inside another;
+ * - every expanded row is one real detail-entry <button> covering the row
+ *   body (conversationId opens the ConversationDrawer, else runId focuses
+ *   the run in the workbench); detach / abort are sibling buttons in the
+ *   trailing action group — no stopPropagation acrobatics needed;
+ * - the main status is a single dot-only StatusLight (blocked wins over
+ *   running; the accessible name carries the localized status words) — no
+ *   spinner, no visible status text.
  */
 import { useEffect, useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ComposerScopeProps } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
-import { formatDurationMs, resolveLocalizedText, useConversations, usePluginContext, usePluginLocale } from '@helm/plugin-client'
+import {
+  StatusLight,
+  formatDurationMs,
+  resolveLocalizedText,
+  useConversations,
+  usePluginContext,
+  usePluginLocale,
+} from '@helm/plugin-client'
 import { useElapsedNowMs, usePluginSessionDoc } from './hooks.ts'
-import { SPIN } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { buildActiveTraySummary } from './model-active-tray.ts'
 import { requestWorkbenchRunFocus } from './workbench-focus.ts'
@@ -21,14 +39,16 @@ import {
   ACTION_DETACH,
   actionDetachDone,
   execConversationTitle,
+  executionStatusLabel,
   TRAY_COLLAPSE,
-  TRAY_DETAILS,
   TRAY_EXPAND,
   TRAY_REGION_ARIA,
-  TRAY_VIEW,
   TRAY_WORKBENCH,
   trayActionFailed,
   trayCount,
+  trayRowOpenConversationLabel,
+  trayRowOpenRunLabel,
+  trayToggleLabel,
 } from './copy.ts'
 
 export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNode {
@@ -95,6 +115,7 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
   }
 
   const countText = trayCount(summary.blockedCount, summary.runningCount, summary.activeCount, locale)
+  const hasBlocked = summary.blockedCount > 0
 
   const singleProgress =
     summary.items.length === 1 ? summary.items[0]!.progress : undefined
@@ -113,20 +134,21 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
 
   return (
     <div
-      className={`workflow-active-tray${summary.blockedCount > 0 ? ' workflow-active-tray-warn' : ''}`}
+      className={`workflow-active-tray${hasBlocked ? ' workflow-active-tray-warn' : ''}`}
       role="region"
       aria-label={resolveLocalizedText(TRAY_REGION_ARIA, locale)}
     >
       <div className="workflow-active-tray-bar">
-        <div className="workflow-active-tray-left">
-          <Icon
-            name={summary.blockedCount > 0 ? 'clock' : 'loader'}
-            size={12}
-            className={summary.blockedCount > 0 ? 'workflow-tray-icon-warn' : `${SPIN} workflow-tray-icon-accent`}
-          />
-          <span className={`badge ${summary.blockedCount > 0 ? 'badge-warn' : 'badge-accent'} workflow-trace-badge`}>
-            {countText}
-          </span>
+        <button
+          type="button"
+          className="workflow-active-tray-bar-toggle"
+          aria-expanded={expanded}
+          aria-controls={listId}
+          aria-label={trayToggleLabel(expanded, countText, locale)}
+          title={resolveLocalizedText(expanded ? TRAY_COLLAPSE : TRAY_EXPAND, locale)}
+          onClick={() => setExpanded((v) => !v)}
+        >
+          <StatusLight status={hasBlocked ? 'blocked' : 'running'} label={countText} />
           {singleProgress !== undefined ? (
             <span className="badge badge-neutral workflow-trace-badge tabular-nums">
               {`${singleProgress.done}/${singleProgress.total}`}
@@ -135,34 +157,27 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
           {frontlineText !== '' ? (
             <span className="workflow-active-tray-frontline">{frontlineText}</span>
           ) : null}
-        </div>
-        <div className="workflow-active-tray-right">
           {hudElapsed !== undefined ? (
             <span className="workflow-active-tray-elapsed tabular-nums">{hudElapsed}</span>
           ) : null}
-          <button
-            type="button"
-            className="btn btn-ghost btn-xs"
-            aria-expanded={expanded}
-            aria-controls={listId}
-            onClick={() => setExpanded((v) => !v)}
-          >
-            <Icon name={expanded ? 'chevron-down' : 'chevron-up'} size={11} />
-            <span>{resolveLocalizedText(expanded ? TRAY_COLLAPSE : TRAY_EXPAND, locale)}</span>
-          </button>
-          <button
-            type="button"
-            className="btn btn-xs"
-            onClick={() => {
-              const singleRunId = summary.items.length === 1 ? summary.items[0]?.runId : undefined
-              if (singleRunId !== undefined) requestWorkbenchRunFocus(conversationId, singleRunId)
-              ctx.openWorkbench(`plugin:${ctx.pluginId}/tasks`)
-            }}
-          >
-            <Icon name="git-branch" size={11} />
-            <span>{resolveLocalizedText(TRAY_WORKBENCH, locale)}</span>
-          </button>
-        </div>
+          <Icon
+            name={expanded ? 'chevron-down' : 'chevron-up'}
+            size={11}
+            className="workflow-active-tray-chevron"
+          />
+        </button>
+        <button
+          type="button"
+          className="btn btn-xs workflow-active-tray-workbench"
+          onClick={() => {
+            const singleRunId = summary.items.length === 1 ? summary.items[0]?.runId : undefined
+            if (singleRunId !== undefined) requestWorkbenchRunFocus(conversationId, singleRunId)
+            ctx.openWorkbench(`plugin:${ctx.pluginId}/tasks`)
+          }}
+        >
+          <Icon name="git-branch" size={11} />
+          <span>{resolveLocalizedText(TRAY_WORKBENCH, locale)}</span>
+        </button>
       </div>
       {expanded ? (
         <div id={listId} className="workflow-active-tray-list">
@@ -173,27 +188,61 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
                 : undefined
             const isFallbackConvTitle =
               item.conversationId !== undefined && item.title === execConversationTitle(item.conversationId, locale)
+            // Row detail entry: conversation rows open the drawer, other rows
+            // focus the run in the workbench. Detach / abort live in the
+            // trailing sibling action group (no nested interactives).
+            const openRow = (): void => {
+              if (item.conversationId !== undefined) {
+                ctx.openConversationDrawer(item.conversationId)
+                return
+              }
+              if (item.runId !== undefined) {
+                requestWorkbenchRunFocus(conversationId, item.runId)
+                ctx.openWorkbench(`plugin:${ctx.pluginId}/tasks`)
+              }
+            }
+            const rowActivatable = item.conversationId !== undefined || item.runId !== undefined
+            const rowLabel =
+              item.conversationId !== undefined
+                ? trayRowOpenConversationLabel(item.conversationId, locale)
+                : item.runId !== undefined
+                  ? trayRowOpenRunLabel(item.runId, locale)
+                  : item.title
+            const rowMainClass = `workflow-active-tray-row-main${rowActivatable ? ' workflow-active-tray-row-clickable' : ''}`
+            const rowMainContent = (
+              <>
+                <StatusLight
+                  status={item.isBlocked ? 'blocked' : 'running'}
+                  label={executionStatusLabel(item.isBlocked ? 'blocked' : 'working', locale)}
+                />
+                <span className="workflow-active-tray-row-title">{item.title}</span>
+                {item.conversationId !== undefined && !isFallbackConvTitle ? (
+                  <span className="workflow-active-tray-row-id tabular-nums">{`#${item.conversationId}`}</span>
+                ) : null}
+                {item.progress !== undefined ? (
+                  <span className="badge badge-neutral workflow-trace-badge tabular-nums">
+                    {`${item.progress.done}/${item.progress.total}`}
+                  </span>
+                ) : null}
+                {item.doing !== undefined ? (
+                  <span className="workflow-active-tray-row-doing">{item.doing}</span>
+                ) : null}
+              </>
+            )
             return (
               <div key={item.key} className="workflow-active-tray-row">
-                <div className="workflow-active-tray-row-main">
-                  <Icon
-                    name={item.isBlocked ? 'clock' : 'loader'}
-                    size={11}
-                    className={item.isBlocked ? 'workflow-tray-icon-warn' : `${SPIN} workflow-tray-icon-accent`}
-                  />
-                  <span className="workflow-active-tray-row-title">{item.title}</span>
-                  {item.conversationId !== undefined && !isFallbackConvTitle ? (
-                    <span className="workflow-active-tray-row-id tabular-nums">{`#${item.conversationId}`}</span>
-                  ) : null}
-                  {item.progress !== undefined ? (
-                    <span className="badge badge-neutral workflow-trace-badge tabular-nums">
-                      {`${item.progress.done}/${item.progress.total}`}
-                    </span>
-                  ) : null}
-                  {item.doing !== undefined ? (
-                    <span className="workflow-active-tray-row-doing">{item.doing}</span>
-                  ) : null}
-                </div>
+                {rowActivatable ? (
+                  <button
+                    type="button"
+                    className={rowMainClass}
+                    aria-label={`${item.title} — ${rowLabel}`}
+                    onClick={openRow}
+                  >
+                    {rowMainContent}
+                  </button>
+                ) : (
+                  <div className={rowMainClass}>{rowMainContent}</div>
+                )}
                 <div className="workflow-active-tray-row-actions">
                   {itemElapsed !== undefined ? (
                     <span className="workflow-active-tray-elapsed tabular-nums">{itemElapsed}</span>
@@ -225,26 +274,6 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
                     >
                       <Icon name="square" size={11} />
                       <span>{resolveLocalizedText(ACTION_ABORT, locale)}</span>
-                    </button>
-                  ) : null}
-                  {item.conversationId !== undefined ? (
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-xs"
-                      onClick={() => ctx.openConversationDrawer(item.conversationId!)}
-                    >
-                      <span>{resolveLocalizedText(TRAY_VIEW, locale)}</span>
-                    </button>
-                  ) : item.runId !== undefined ? (
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-xs"
-                      onClick={() => {
-                        requestWorkbenchRunFocus(conversationId, item.runId!)
-                        ctx.openWorkbench(`plugin:${ctx.pluginId}/tasks`)
-                      }}
-                    >
-                      <span>{resolveLocalizedText(TRAY_DETAILS, locale)}</span>
                     </button>
                   ) : null}
                 </div>

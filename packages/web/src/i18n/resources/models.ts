@@ -286,6 +286,25 @@ export const modelsMessages = {
   },
   'models.defaults.save': { en: 'Save global defaults', 'zh-CN': '保存全局默认' },
   'models.defaults.reset': { en: 'Reset', 'zh-CN': '重置' },
+  'models.defaults.perModelTitle': { en: 'Per-model thinking defaults', 'zh-CN': '按模型思考默认' },
+  'models.defaults.perModelHelp': {
+    en: 'Thinking level defaults for specific models. Resolution order: session override > per-model default > Profile > global default; levels clamp to each model\'s capabilities.',
+    'zh-CN': '为特定模型设置思考档位默认。解析顺序：会话临时覆盖 > 按模型默认 > Profile > 全局默认；最终按模型能力收敛。',
+  },
+  'models.defaults.perModelAdd': { en: 'Add model default', 'zh-CN': '添加模型默认' },
+  'models.defaults.perModelEmpty': { en: 'No per-model defaults set.', 'zh-CN': '未设置按模型默认。' },
+  'models.defaults.perModelPick': { en: 'Select a model', 'zh-CN': '选择模型' },
+  'models.defaults.perModelAria': { en: 'Per-model thinking default model', 'zh-CN': '按模型默认的模型' },
+  'models.defaults.perModelClear': { en: 'Clear entry', 'zh-CN': '清空条目' },
+  'models.defaults.perModelRemove': { en: 'Remove this entry', 'zh-CN': '移除该条目' },
+  'models.defaults.perModelDuplicate': {
+    en: 'Duplicate model entries for {model}',
+    'zh-CN': '{model} 存在重复条目',
+  },
+  'models.defaults.perModelMissingLevel': {
+    en: 'Set a thinking level for {model}',
+    'zh-CN': '请为 {model} 选择思考档位',
+  },
   'models.defaults.noticeUpdated': {
     en: 'Global default model updated',
     'zh-CN': '全局默认模型已更新',

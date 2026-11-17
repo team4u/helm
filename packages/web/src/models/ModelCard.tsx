@@ -1,4 +1,5 @@
 import React from 'react'
+import { StatusLight } from '@helm/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { summarizeCardModels, type ProviderItem } from './model-center-model.js'
 
@@ -68,11 +69,10 @@ export function ModelCard({
             <span className="primary-card-name" title={provider.name}>
               {provider.name}
             </span>
-            {provider.configured ? (
-              <span className="badge badge-ok">{t('models.configured')}</span>
-            ) : (
-              <span className="badge badge-neutral">{t('models.notConfigured')}</span>
-            )}
+            <StatusLight
+              status={provider.configured ? 'configured' : 'not-configured'}
+              label={provider.configured ? t('models.configured') : t('models.notConfigured')}
+            />
             {provider.dynamic && <span className="badge badge-neutral">{t('models.dynamicBadge')}</span>}
             {provider.custom && <span className="badge badge-neutral">{t('models.customBadge')}</span>}
           </div>

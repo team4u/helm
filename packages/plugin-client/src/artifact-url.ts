@@ -6,6 +6,7 @@ import { defaultUrlTransform } from 'react-markdown'
 
 const ARTIFACT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const CONTENT_URL_RE = /^\/api\/artifacts\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\/content(?:\?.*)?$/
+const WINDOWS_DRIVE_ABS_RE = /^[A-Za-z]:[\\/]/
 
 /**
  * Recognizes artifact:<id> and /api/artifacts/<id>/content(?...)?.
@@ -26,17 +27,17 @@ export function parseArtifactUrl(raw: string | undefined): string | null {
 }
 
 /**
- * Markdown URL transform: artifact and file: links are allowed through (protocol
- * prefix preserved so host components can validate or reject unsafe file://
- * targets explicitly); everything else goes through react-markdown's default
- * safe interception (filters javascript:, data:, vbscript:, etc.).
+ * Markdown URL transform: artifact, file:, and Windows drive-letter local paths
+ * (e.g. C:/...) are allowed through so host components can resolve workspace
+ * files or reject out-of-workspace targets explicitly; everything else goes
+ * through react-markdown's default safe interception (filters javascript:, data:, vbscript:, etc.).
  */
 export function markdownUrlTransform(url: string): string {
   if (parseArtifactUrl(url) !== null) {
     return url.trim()
   }
   const trimmed = url.trim()
-  if (trimmed.toLowerCase().startsWith('file:')) {
+  if (trimmed.toLowerCase().startsWith('file:') || WINDOWS_DRIVE_ABS_RE.test(trimmed)) {
     return trimmed
   }
   return defaultUrlTransform(url)

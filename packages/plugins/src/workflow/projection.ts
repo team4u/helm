@@ -2,14 +2,18 @@
  * builtin:workflow run 投影与会话分片文档（自 workflow.ts 入口拆出）。
  *
  * 职责：
- * - 公共 `runs` 投影按会话分片（ctx.sessionDoc，每会话分片含自身及后代
- *   发起的 run——沿真实会话父链防环/缺父，run.conversationId 保持原始
- *   归属；不进全局首帧/全局 SSE，会话新增/删除经宿主事件重投影）；
- * - 全局仅保留紧凑 `run-badges` 角标文档（每会话聚合 count/tone/
- *   footerText，按 run.id 去重，无完整 run 摘要）；
- * - 值缓存幂等写入（值相等跳过，无写放大）；受控 stop 时序：stopping
- *   标记拦截运行期后台回调的投影刷新，stop 链内的最终同步走 syncFinal
- *   （不受拦截，失败如实上抛）。
+ * - 内存增量维护 `Map<string, WorkflowRunSummary>`：start / 显式动作通过
+ *   sync 从持久层水合；运行期高频进度与结算走 upsertRun(summary) O(1)
+ *   内存单条更新并重投影，零磁盘读取；
+ * - 公共 `runs`（ctx.sessionDoc）与 `run-badges`（ctx.doc）均为纯内存瞬态
+ *   投影（`durable: false`，零 SQLite 写放大）：`runs` 按会话分片（含自身及后代
+ *   发起的 run，沿真实会话父链防环/缺父，run.conversationId 保持原始归属），
+ *   单会话分片按 MAX_PROJECTED_RUNS_PER_CONVERSATION（100）滑窗截断（始终
+ *   保留全部 running，剩余槽位按 createdAt 倒序取最新终态），并剥离原始
+ *   result 仅保留 hasResult + resultPreview（完整 result 经 inspect 按需读取）；
+ * - 全局 `run-badges` 角标文档基于全量会话聚合计算准确 count/tone/footerText
+ *   （按 run.id 去重，不受 100 条分片滑窗截断影响）；
+ * - 值缓存幂等写入（值相等跳过，不发多余 SSE 事件）；stopping 门拦截关停期残留回调。
  */
 import type { PluginDocHandle, PluginSessionDocHandle } from '@helm/protocol'
 import {
@@ -18,26 +22,60 @@ import {
   type WorkflowRunSummary,
 } from '../contracts.js'
 
-/** runs 分片 + 角标投影（含 stopping 门与树变化指纹缓存）。 */
+/** 单会话 runs 分片滑窗上限：始终保留全部 running，剩余槽位填充最新终态。 */
+export const MAX_PROJECTED_RUNS_PER_CONVERSATION = 100
+
+const RESULT_PREVIEW_MAX_CHARS = 200
+
+/** runs 分片 + 角标瞬态投影（含内存增量更新、滑窗瘦身、stopping 门与树指纹缓存）。 */
 export interface RunsProjection {
-  /** 运行期投影刷新（stopping 后为 no-op）。 */
+  /** 全量重读持久层并刷新投影（start / 显式控制动作入口；stopping 后为 no-op）。 */
   sync(): void
-  /** 受控 stop 末尾的最终投影：禁止被 stopping 拦截；写失败上抛（不吞）。 */
-  syncFinal(): void
+  /** 运行期单条 run O(1) 内存增量更新并重投影（零磁盘 I/O；stopping 后为 no-op）。 */
+  upsertRun(run: WorkflowRunSummary): void
   /** 置停止标记：stop 之后的引擎回调不再触碰 runs 投影（doc 句柄已交还）。 */
   beginStopping(): void
   isStopping(): boolean
-  /** start 时从持久层快照已写分片的会话集合（此后增量维护）。 */
-  adoptPersistedConversations(ids: Iterable<number>): void
   /** 会话树（id + 父链）变化后的重投影；树未变跳过（无写放大）。 */
   reprojectOnConversationTreeChange(): void
   /** 会话删除后的重投影（孤儿分片不重建）。 */
   reprojectOnConversationDeleted(): void
 }
 
-/**
- * 序列化稳定性键：runs 顺序即引擎返回顺序，JSON 直比（字段由引擎结构化产出）。
- */
+function truncateSingleLine(text: string, maxChars: number): string {
+  return text.length <= maxChars ? text : `${text.slice(0, maxChars - 1)}…`
+}
+
+function formatResultPreview(result: unknown): string {
+  if (typeof result === 'string') {
+    const firstLine = result.trim().split(/\r?\n/, 1)[0]!.trim()
+    return truncateSingleLine(firstLine, RESULT_PREVIEW_MAX_CHARS)
+  }
+  const serialized = JSON.stringify(result) ?? String(result)
+  return truncateSingleLine(serialized, RESULT_PREVIEW_MAX_CHARS)
+}
+
+function slimProjectedRun(run: WorkflowRunSummary): WorkflowRunSummary {
+  const { result, ...rest } = run
+  const hasResult = result !== undefined
+  return {
+    ...rest,
+    hasResult,
+    ...(hasResult ? { resultPreview: formatResultPreview(result) } : {}),
+  }
+}
+
+function selectProjectedRuns(convRuns: WorkflowRunSummary[]): WorkflowRunSummary[] {
+  if (convRuns.length <= MAX_PROJECTED_RUNS_PER_CONVERSATION) return convRuns
+  const running = convRuns.filter((r) => r.status === 'running')
+  if (running.length >= MAX_PROJECTED_RUNS_PER_CONVERSATION) {
+    return running.slice(0, MAX_PROJECTED_RUNS_PER_CONVERSATION)
+  }
+  const remaining = MAX_PROJECTED_RUNS_PER_CONVERSATION - running.length
+  const terminals = convRuns.filter((r) => r.status !== 'running').slice(0, remaining)
+  return [...running, ...terminals].sort((a, b) => b.createdAt - a.createdAt)
+}
+
 function runsProjectionKey(runs: WorkflowRunSummary[]): string {
   return JSON.stringify(runs)
 }
@@ -50,35 +88,28 @@ export function createRunsProjection(deps: {
 }): RunsProjection {
   const { runsDoc, badgesDoc } = deps
 
-  /** 停止中标记：stop 之后的引擎回调不再触碰 runs 投影（doc 句柄已交还）。 */
   let stopping = false
+  let hydrated = false
+  const runsById = new Map<string, WorkflowRunSummary>()
 
-  /** 上一轮已写分片的值缓存（值相等时跳过写入，不发重复事件）。 */
   const writtenRunsByConv = new Map<number, string>()
-  /** 上一轮已写角标摘要（值相等时跳过写入）。 */
   let writtenBadgesJson = ''
-  /**
-   * 已持久化过 runs 分片的会话 ID 集合（start 时从持久层快照一次，此后
-   * 增量维护）。不复用句柄 listConversationIds 的原因：受控 stop 窗口内
-   * 该只读端口会被 assertNotDisposed 拒绝，而最终投影必须能在 stop 链内
-   * 写入；快照语义等价（分片只由本插件写入）。
-   */
-  const persistedRunsConvs = new Set<number>()
-  /** 会话树指纹缓存（conversation.upsert 高频：树未变则跳过重投影）。 */
   let conversationTreeFingerprint = ''
 
-  function writeRunsDoc(): void {
-    const runs = deps.listRuns()
-    // 会话存在集合：删除的父会话不重建孤儿 doc（store 已级联清理）。
+  function hydrateFromListRuns(): void {
+    const listed = deps.listRuns()
+    runsById.clear()
+    for (const run of listed) runsById.set(run.id, run)
+    hydrated = true
+  }
+
+  function projectFromMemory(): void {
+    const runs = [...runsById.values()].sort((a, b) => b.createdAt - a.createdAt)
     const existing = new Map<number, { parentConversationId?: number }>()
     for (const conversation of deps.listConversations()) {
       existing.set(conversation.id, conversation)
     }
 
-    /**
-     * 发起会话的祖先链（仅含仍存在的会话）：沿真实会话 parent 链上行，
-     * visited 防环（父链环按链断处理，不性深入），缺父即止（不虚构祖先）。
-     */
     const ancestorChains = new Map<number, number[]>()
     const ancestorsOf = (id: number): number[] => {
       const cached = ancestorChains.get(id)
@@ -98,10 +129,6 @@ export function createRunsProjection(deps: {
       return chain
     }
 
-    // 1) 会话分片：自身 + 后代发起的 runs（run.conversationId 保持原始
-    //    归属，不改写为投影目标）；按 run.id 去重（防御索引异常形状），
-    //    顺序保持引擎全局序（createdAt 倒序）。发起会话已删除的 run 父链
-    //    事实不可达（父链存在子会话上），不投影到任何分片。
     const runsByConversation = new Map<number, WorkflowRunSummary[]>()
     for (const run of runs) {
       if (!existing.has(run.conversationId)) continue
@@ -113,24 +140,22 @@ export function createRunsProjection(deps: {
         runsByConversation.set(target, list)
       }
     }
-    for (const convId of persistedRunsConvs) {
+    for (const convId of [...writtenRunsByConv.keys()]) {
       if (!existing.has(convId)) {
-        persistedRunsConvs.delete(convId)
+        writtenRunsByConv.delete(convId)
         continue
       }
-      // 已持久会话：无可见 runs 时清到空（不保留旧投影）；尚未写入的不重建。
       if (!runsByConversation.has(convId)) runsByConversation.set(convId, [])
     }
+
     for (const [convId, convRuns] of runsByConversation) {
-      const key = runsProjectionKey(convRuns)
+      const projectedRuns = selectProjectedRuns(convRuns).map(slimProjectedRun)
+      const key = runsProjectionKey(projectedRuns)
       if (writtenRunsByConv.get(convId) === key) continue
-      runsDoc.set(convId, { runs: convRuns })
+      runsDoc.set(convId, { runs: projectedRuns })
       writtenRunsByConv.set(convId, key)
-      persistedRunsConvs.add(convId)
     }
 
-    // 2) 全局紧凑角标（有意全局：仅导航元数据，无完整 run 摘要）：与分片
-    //    同源的后代聚合（分片本身已按 run.id 去重），幂等值比对写入。
     const byConversation: WorkflowRunBadgesDocState['byConversation'] = {}
     for (const [convId, convRuns] of runsByConversation) {
       if (convRuns.length === 0) continue
@@ -152,19 +177,17 @@ export function createRunsProjection(deps: {
     }
   }
 
-  /**
-   * 同步 runs 会话分片投影与全局紧凑角标（含按会话聚合的角标统计）。
-   * stopping 拦截的只有运行期后台回调（引擎事件链里的投影刷新）；受控 stop
-   * 链内的最终同步走 syncFinal（不受 stopping 拦截，写入经宿主受控停止
-   * doc 作用域放行，失败如实上抛）。
-   */
   function sync(): void {
     if (stopping) return
-    writeRunsDoc()
+    hydrateFromListRuns()
+    projectFromMemory()
   }
 
-  function syncFinal(): void {
-    writeRunsDoc()
+  function upsertRun(run: WorkflowRunSummary): void {
+    if (stopping) return
+    if (!hydrated) hydrateFromListRuns()
+    runsById.set(run.id, run)
+    projectFromMemory()
   }
 
   function reprojectOnConversationTreeChange(): void {
@@ -177,7 +200,8 @@ export function createRunsProjection(deps: {
           .sort((a, b) => a[0] - b[0]),
       )
       if (fingerprint === conversationTreeFingerprint) return
-      writeRunsDoc()
+      if (!hydrated) hydrateFromListRuns()
+      projectFromMemory()
       conversationTreeFingerprint = fingerprint
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -188,7 +212,8 @@ export function createRunsProjection(deps: {
   function reprojectOnConversationDeleted(): void {
     if (stopping) return
     try {
-      writeRunsDoc()
+      if (!hydrated) hydrateFromListRuns()
+      projectFromMemory()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       process.stderr.write(`builtin:workflow: 会话删除后的 runs 投影失败: ${message}\n`)
@@ -197,14 +222,11 @@ export function createRunsProjection(deps: {
 
   return {
     sync,
-    syncFinal,
+    upsertRun,
     beginStopping: () => {
       stopping = true
     },
     isStopping: () => stopping,
-    adoptPersistedConversations: (ids) => {
-      for (const convId of ids) persistedRunsConvs.add(convId)
-    },
     reprojectOnConversationTreeChange,
     reprojectOnConversationDeleted,
   }

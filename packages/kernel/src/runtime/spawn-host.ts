@@ -11,7 +11,7 @@ import type { Models } from '@earendil-works/pi-ai'
 import type { AgentSpawnRequest, ConversationAttachmentRef, ConversationPatch, ConversationSummary } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
 import type { Profile } from '../services/index.js'
-import { requireModelRef } from './models.js'
+import { requireModelRef, type ModelRefParts } from './models.js'
 import type { HelmToolDeps } from './tool-deps.js'
 import type { NativeSpawnDeps, ResolvedProfile } from './spawn.js'
 import type { StructuredOutputSession } from './structured-output.js'
@@ -40,6 +40,8 @@ export interface SpawnHostSource {
   }
   readonly defaultModel: string | undefined
   readonly defaultThinkingLevel: string | undefined
+  /** Per-model thinking default lookup (`config.json.modelThinkingLevels`); ranks above the Profile level. */
+  readonly modelThinkingLevelOf?: (model: ModelRefParts) => string | undefined
   /** Current `Models` catalog (used to clamp Profile reasoning effort; no clamping if omitted). */
   readonly models?: () => Models
   /** Disabled-model preflight (`ModelRegistry.assertModelEnabled`; rejects disabled models before creating a child conversation). */
@@ -126,6 +128,9 @@ export function buildSpawnHost(options: SpawnHostOptions): SpawnHost {
       ? { assertModelEnabled: (provider: string, modelId: string) => source.assertModelEnabled!(provider, modelId) }
       : {}),
     resolveThinkingLevel: () => source.defaultThinkingLevel,
+    ...(source.modelThinkingLevelOf !== undefined
+      ? { modelThinkingLevelOf: (model: ModelRefParts) => source.modelThinkingLevelOf!(model) }
+      : {}),
     ...(source.models !== undefined
       ? { modelsForClamp: source.models }
       : {}),

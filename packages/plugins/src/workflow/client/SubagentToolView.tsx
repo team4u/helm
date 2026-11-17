@@ -1,21 +1,18 @@
 /**
  * builtin:workflow subagent tool call timeline one-line renderer:
- * - structurally identical to the host TimelineRows.tsx 26px `.trace-row`; no
- *   big cards stacked in the main timeline;
- * - resume dedup via `isLatestSubagentCallForTarget`: only the latest call
- *   reacts to in-flight state and `useToolActivity`; historical calls
- *   superseded by a later `resume` keep their own terminal state and are
- *   marked "Resumed below";
- * - AskDoc pending-approval facts take priority over `working`, so a
- *   subagent blocked on authorization is never mislabeled running;
- * - the ~34ms dispatch confirmation of an in-flight background subagent
- *   handle is never presented as the subagent's total duration.
+ * - structurally identical to the host TimelineRows.tsx 26px `.trace-row`;
+ * - reads `props.structuredOutput` (and `call.structuredOutput` on siblingCalls)
+ *   plus `parentToolCallId` directly (zero regex or footer scraping);
+ * - calls `useConversation(childId, { includeDetail: false })` and derives
+ *   title/elapsed from `childSummary`, `parentToolSummary`, and `backgroundRun`
+ *   (zero N+1 `GET /api/conversations/:id` detail fetches!).
  */
 import { useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolViewProps } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import {
+  StatusLight,
   formatDurationMs,
   resolveLocalizedText,
   useConversation,
@@ -25,13 +22,11 @@ import {
   useToolActivity,
 } from '@helm/plugin-client'
 import { useElapsedNowMs, usePluginSessionDoc } from './hooks.ts'
-import { SPIN } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
 import {
   cleanInlineMarkdown,
   isLatestSubagentCallForTarget,
-  latestTurnStartedAt,
   parentToolSummaryOf,
   parseSubagentExecutionInfo,
   resolveExternalSubagentTaskTitle,
@@ -43,14 +38,15 @@ import {
   subagentBadge,
 } from './models.ts'
 import type { SubagentBadge } from './models.ts'
+import { executionLightStatus } from './model-execution-status.ts'
 import { requestWorkbenchRunFocus } from './workbench-focus.ts'
 import {
+  executionStatusLabel,
   SNIPPET_AWAITING_APPROVAL,
   TRACE_COLLAPSE_DETAILS,
   TRACE_EXPAND_DETAILS,
   TRACE_EXTERNAL_TOOL_NAME,
   TRACE_RESUMED_BELOW,
-  TRACE_SUBAGENT_CALL,
   TRACE_SUBAGENT_TOOL_NAME,
   traceSubagentWithId,
   traceOpenChildLabel,
@@ -70,26 +66,38 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
   const resultText = typeof props.result === 'string' ? props.result : undefined
   const runs = runsDoc?.runs ?? []
 
-  const execInfo = useMemo(() => parseSubagentExecutionInfo(resultText), [resultText])
+  const execInfo = useMemo(
+    () => parseSubagentExecutionInfo(props.structuredOutput, resultText),
+    [props.structuredOutput, resultText],
+  )
   const execMeta = useMemo(
     () =>
       viewerConversationId !== undefined
-        ? resolveSubagentExecutionMeta({ callId: props.callId, result: props.result }, viewerConversationId, runs)
+        ? resolveSubagentExecutionMeta(
+            { callId: props.callId, structuredOutput: props.structuredOutput, result: props.result },
+            viewerConversationId,
+            runs,
+          )
         : undefined,
-    [props.callId, props.result, viewerConversationId, runs],
+    [props.callId, props.structuredOutput, props.result, viewerConversationId, runs],
   )
   const childId = useMemo(
     () =>
       viewerConversationId !== undefined
         ? resolveSubagentConversationId(
-            { callId: props.callId, input: props.input, result: props.result },
+            {
+              callId: props.callId,
+              input: props.input,
+              structuredOutput: props.structuredOutput,
+              result: props.result,
+            },
             viewerConversationId,
             conversations,
           )
         : undefined,
-    [props.callId, props.input, props.result, viewerConversationId, conversations],
+    [props.callId, props.input, props.structuredOutput, props.result, viewerConversationId, conversations],
   )
-  const childConv = useConversation(childId)
+  const childConv = useConversation(childId, { includeDetail: false })
   const childSummary = useMemo(
     () => (childId !== undefined ? (conversations.find((c) => c.id === childId) ?? childConv.summary) : undefined),
     [childId, conversations, childConv.summary],
@@ -110,6 +118,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
               callId: props.callId,
               input: props.input,
               result: props.result,
+              structuredOutput: props.structuredOutput,
               siblingCalls: props.siblingCalls,
               conversationId: viewerConversationId,
             },
@@ -121,6 +130,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
       props.callId,
       props.input,
       props.result,
+      props.structuredOutput,
       props.siblingCalls,
       viewerConversationId,
       childId,
@@ -147,6 +157,9 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
         }, locale)
       : subagentBadge(undefined, props.status, undefined, undefined, locale)
 
+  // 主状态灯：aborted 后台句柄保留专用 aborted 语义；其余沿用徽章标签（含后台运行中等细分文案）作为可访问名称。
+  const badgeLightStatus = executionLightStatus(badge.status, backgroundRun, childSummary?.status === 'error')
+  const badgeLightLabel = badgeLightStatus === 'aborted' ? executionStatusLabel('aborted', locale) : badge.label
   const isWorking =
     isLatest &&
     !hasPendingAsk &&
@@ -179,7 +192,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
       ? resolveSubagentTaskTitle(childSummary, childId, parentToolSummary, backgroundRun, childConv.detail?.entries)
       : resolveExternalSubagentTaskTitle(parentToolSummary, rawPrompt, backgroundRun)
 
-  const fallbackStartedAt = parentToolSummary.startedAt ?? latestTurnStartedAt(childConv.detail?.entries)
+  const fallbackStartedAt = parentToolSummary.startedAt
   const elapsedMs = useMemo(() => {
     if (!isLatest) {
       return isBgHandle ? undefined : props.durationMs
@@ -291,12 +304,8 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
         onClick={handleActivate}
       >
         <span className="trace-row-left">
-          <Icon
-            name={isError ? 'alert-circle' : hasPendingAsk ? 'clock' : isWorking ? 'loader' : 'bot'}
-            size={12}
-            className={isWorking ? SPIN : undefined}
-          />
-          <span className="trace-tool-name" title={primaryName}>{primaryName}</span>
+          <Icon name="bot" size={12} />
+          <span className="trace-tool-name workflow-trace-name" title={primaryName}>{primaryName}</span>
           {idTag !== undefined ? (
             <span className="workflow-trace-id tabular-nums">{idTag}</span>
           ) : null}
@@ -322,7 +331,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
               {worktreeBranch}
             </span>
           ) : null}
-          <span className={`badge workflow-trace-badge ${badge.badge}`}>{badge.label}</span>
+          <StatusLight status={badgeLightStatus} label={badgeLightLabel} />
           {elapsedMs !== undefined ? <span className="trace-duration tabular-nums">{formatDurationMs(elapsedMs)}</span> : null}
           <Icon
             name={canOpenChildDrawer ? 'external-link' : canOpenWorkbenchRun ? 'chevron-right' : detailsOpen ? 'chevron-down' : 'chevron-right'}

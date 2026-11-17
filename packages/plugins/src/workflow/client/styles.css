@@ -22,19 +22,26 @@
   transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 
+/* 主体导航真实按钮（覆盖头部主信息位）：动作/元数据披露/正文均为同级结构，
+   无嵌套交互，Enter/Space 由原生 button 承担。 */
 .subagent-card-clickable {
   cursor: pointer;
   user-select: none;
   transition: background-color 0.15s ease, border-color 0.15s ease;
+  border-radius: var(--radius-xs);
 }
 
-.subagent-card-clickable:hover:not(:has(.execution-children:hover, .subagent-live-actions:hover, .subagent-inspect-slot:hover)) {
+.subagent-card-clickable:hover {
   background: var(--bg-hover);
-  border-color: var(--border-hover, var(--border));
 }
 
-.subagent-card-clickable:active:not(:has(.execution-children:hover, .subagent-live-actions:hover, .subagent-inspect-slot:hover)) {
+.subagent-card-clickable:active {
   background: var(--bg-active, var(--bg-elevated));
+}
+
+.subagent-card-clickable:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: -1.5px;
 }
 
 .subagent-live-header {

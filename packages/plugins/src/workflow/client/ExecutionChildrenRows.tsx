@@ -7,10 +7,10 @@
  */
 import { Fragment, useState } from 'react'
 import type { ReactNode } from 'react'
-import { formatDurationMs, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helm/plugin-client'
+import { StatusLight, formatDurationMs, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helm/plugin-client'
 import { useElapsedNowMs } from './hooks.ts'
-import { SPIN, EXECUTION_BADGE, EXECUTION_ICON } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
+import { executionLightStatus } from './model-execution-status.ts'
 import {
   execApprovalBadge,
   execCollapseChildrenLabel,
@@ -76,11 +76,15 @@ export function ExecutionChildrenRows({ nodes }: { nodes: ExecutionNode[] }): Re
                 ? {
                     role: 'button' as const,
                     tabIndex: 0,
-                    'aria-label': openConversation !== undefined
-                      ? execOpenConversationLabel(node.conversationId!, locale)
-                      : expanded
-                        ? execCollapseChildrenLabel(title, locale)
-                        : execExpandChildrenLabel(title, locale),
+                    'aria-label': [
+                      title,
+                      executionStatusLabel(aggregated.status, locale),
+                      openConversation !== undefined
+                        ? execOpenConversationLabel(node.conversationId!, locale)
+                        : expanded
+                          ? execCollapseChildrenLabel(title, locale)
+                          : execExpandChildrenLabel(title, locale),
+                    ].join(' — '),
                     ...(expandable ? { 'aria-expanded': expanded } : {}),
                   }
                 : {})}
@@ -112,11 +116,6 @@ export function ExecutionChildrenRows({ nodes }: { nodes: ExecutionNode[] }): Re
                   : undefined
               }
             >
-              <Icon
-                name={EXECUTION_ICON[aggregated.status] ?? 'circle'}
-                size={11}
-                className={aggregated.status === 'working' ? SPIN : undefined}
-              />
               {expandable ? (
                 <Icon
                   name={expanded ? 'chevron-down' : 'chevron-right'}
@@ -143,9 +142,14 @@ export function ExecutionChildrenRows({ nodes }: { nodes: ExecutionNode[] }): Re
                 {node.children.length > 0 ? (
                   <span className="execution-child-count tabular-nums">{`${aggregated.done}/${aggregated.total}`}</span>
                 ) : null}
-                <span className={`badge ${EXECUTION_BADGE[aggregated.status] ?? 'badge-neutral'}`}>
-                  {executionStatusLabel(aggregated.status, locale)}
-                </span>
+                {(() => {
+                  const lightStatus = executionLightStatus(
+                    aggregated.status,
+                    node.run,
+                    node.children.length > 0 && aggregated.error > 0,
+                  )
+                  return <StatusLight status={lightStatus} label={executionStatusLabel(lightStatus, locale)} />
+                })()}
               </span>
             </div>
             {expanded ? <ExecutionChildrenRows nodes={node.children} /> : null}

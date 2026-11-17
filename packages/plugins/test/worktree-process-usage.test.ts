@@ -50,9 +50,35 @@ function makeGitRepo(dir: string): string {
   return gitTemplate.cloneTo(dir)
 }
 
+/** 本机真实执行端口（与生产 execEnv + executionEnv 同契约）。 */
+function localPorts() {
+  const envOf = (cwd: string) => new NodeExecutionEnv({ cwd })
+  return {
+    exec: async (_nodeId: string, cwd: string, args: readonly string[], options?: { timeoutMs?: number; signal?: AbortSignal }) => {
+      let output = ''
+      const res = await envOf(cwd).exec(
+        [...args],
+        {
+          cwd,
+          ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs / 1000 } : {}),
+          onOutput: (chunk: string) => {
+            output += chunk
+          },
+        },
+        BACKGROUND_CONTEXT,
+      )
+      if (!res.ok) {
+        return { ok: false, exitCode: null, output, timedOut: res.error.code === 'timeout' }
+      }
+      return { ok: res.value.exitCode === 0, exitCode: res.value.exitCode, output, timedOut: false }
+    },
+    nodeExists: (_nodeId: string, path: string) => envOf(path).exists(path, BACKGROUND_CONTEXT),
+    nodeCanonicalPath: (_nodeId: string, path: string) => envOf(path).canonicalPath(path, BACKGROUND_CONTEXT),
+  }
+}
+
 /** local 真实端口（与生产同契约）+ 指定 fabric 的进程占用探测。 */
 function makeAllocator(fabric: ReturnType<typeof createEnvFabric>, docs: Map<string, unknown>): WorktreeAllocator {
-  const envOf = (cwd: string) => new NodeExecutionEnv({ cwd })
   const docStore = {
     get<T>(key: string, initial: T): T {
       return (docs.get(key) as T | undefined) ?? initial
@@ -62,10 +88,7 @@ function makeAllocator(fabric: ReturnType<typeof createEnvFabric>, docs: Map<str
     },
   }
   return new WorktreeAllocator({
-    exec: (nodeId, cwd, args, options, context) =>
-      envOf(cwd).exec([...args], options as never, context) as never,
-    nodeExists: (nodeId, path, context) => envOf(path).exists(path, context) as never,
-    nodeCanonicalPath: (nodeId, path, context) => envOf(path).canonicalPath(path, context) as never,
+    ...localPorts(),
     inspectPathUsage: (nodeId, path, signal) => fabric.inspectPathUsage(nodeId, path, signal),
     docStore,
   })
@@ -232,10 +255,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
       ['runtime/worktrees', { version: 1, records: [record] }],
     ])
     const broken = new WorktreeAllocator({
-      exec: (nodeId, cwd, args, options, context) =>
-        new NodeExecutionEnv({ cwd }).exec([...args], options as never, context) as never,
-      nodeExists: (nodeId, path, context) => new NodeExecutionEnv({ cwd: path }).exists(path, context) as never,
-      nodeCanonicalPath: (nodeId, path, context) => new NodeExecutionEnv({ cwd: path }).canonicalPath(path, context) as never,
+      ...localPorts(),
       inspectPathUsage: async () => {
         throw new HelmError('node_offline', '节点 remote-x 离线，无法建立 IPC 通道', 409)
       },
@@ -273,10 +293,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
       return allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
     })()
     const incomplete = new WorktreeAllocator({
-      exec: (nodeId, cwd, args, options, context) =>
-        new NodeExecutionEnv({ cwd }).exec([...args], options as never, context) as never,
-      nodeExists: (nodeId, path, context) => new NodeExecutionEnv({ cwd: path }).exists(path, context) as never,
-      nodeCanonicalPath: (nodeId, path, context) => new NodeExecutionEnv({ cwd: path }).canonicalPath(path, context) as never,
+      ...localPorts(),
       inspectPathUsage: async (_nodeId, path) => ({
         path,
         processes: [],

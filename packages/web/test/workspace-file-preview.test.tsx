@@ -140,6 +140,57 @@ describe('MarkdownView workspace file links and inline images', { timeout: 60_00
     }
   })
 
+  test('clicking a bare absolute link inside conversationCwd opens workspace-file modal while outside paths stay safe', { timeout: 60_000 }, async () => {
+    const opened: ActiveModal[] = []
+    const store = makeTestStore({
+      conversations: [conv(15, '/root/code/helm')],
+      setActiveModal: (modal) => opened.push(modal),
+    })
+
+    resetBody()
+    const mounted = mount(
+      e(
+        HostStoreProviders,
+        { value: store },
+        e(MarkdownView, {
+          text: [
+            '在 [SKILL.md](/root/code/helm/packages/plugins/src/profile/skill/SKILL.md#L12) 查看索引，',
+            '外置路径 [Etc](/etc/passwd) 与 [WinOutside](C:/secret.txt)。',
+          ].join(''),
+          conversationId: 15,
+        }),
+      ),
+    )
+
+    try {
+      const chip = mounted.host.querySelector<HTMLButtonElement>('button.attachment-chip')
+      assert.ok(chip !== null, 'cwd-contained bare absolute link renders as attachment-chip')
+      assert.match(chip.textContent ?? '', /SKILL\.md/)
+
+      const outsidePosix = mounted.host.querySelector<HTMLAnchorElement>('a[href="/etc/passwd"]')
+      assert.ok(outsidePosix !== null, 'outside POSIX path keeps default <a>')
+
+      const disallowedWin = mounted.host.querySelector('.msg-md-disallowed-file')
+      assert.ok(disallowedWin !== null, 'outside Windows drive path renders disallowed span')
+      assert.equal(disallowedWin.textContent, 'WinOutside')
+
+      await act(async () => {
+        chip.click()
+      })
+      assert.deepEqual(opened, [
+        {
+          kind: 'workspace-file',
+          conversationId: 15,
+          path: 'packages/plugins/src/profile/skill/SKILL.md',
+          startLine: 12,
+        },
+      ])
+    } finally {
+      mounted.unmount()
+      resetBody()
+    }
+  })
+
   test('non-streaming relative image fetches with auth header and renders thumbnail; disallowed file:// emits no <a> or fetch', { timeout: 60_000 }, async () => {
     const requests: Array<{ url: string; auth: string | null }> = []
     const origFetch = globalThis.fetch

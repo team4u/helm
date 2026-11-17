@@ -6,10 +6,13 @@ import { test } from 'node:test'
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
 import { createModels, type Provider } from '@earendil-works/pi-ai'
 import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
-import { KernelRuntime } from '../src/runtime/index.js'
+import { KernelRuntime, ModelRegistry } from '../src/runtime/index.js'
+import { createFileModelsStore } from '../src/runtime/models-store.js'
 import { CredentialService } from '../src/services/credentials.js'
 import { ProviderService } from '../src/services/providers.js'
+import { ConfigService, SecretStash, ensureDataDir } from '../src/services/index.js'
 import { HelmError } from '@helm/protocol'
+import { deferred, makeFauxModels, useTempDir, waitFor } from './helpers.js'
 
 test('externally injected model catalog retains caller ownership across reloads', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-external-providers-'))
@@ -308,4 +311,64 @@ test('externally injected model catalog rejects runtime registration and refresh
     await kernel?.close()
     await rm(dataDir, { recursive: true, force: true })
   }
+})
+
+test('during provider unregister rebuild window: new stream acquisitions reject explicitly with runtime_provider_retiring', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helm-provider-retiring-')
+  await ensureDataDir(dataDir)
+  const providersSvc = new ProviderService(dataDir)
+  const credentialsSvc = new CredentialService(dataDir)
+  const configSvc = new ConfigService(dataDir)
+  // Gate providersSvc.list: pause during the 2nd call (rebuild during unregister) to hold open the
+  // window after busy-check passed and before catalog swap completes.
+  let listCalls = 0
+  const listGate = deferred()
+  const gatedProviders = Object.create(providersSvc) as ProviderService
+  ;(gatedProviders as unknown as { list: () => ReturnType<ProviderService['list']> }).list = async () => {
+    listCalls += 1
+    if (listCalls >= 2) await listGate.promise
+    return providersSvc.list()
+  }
+  // Bind get directly to original instance so its internal this.list() does not pollute the call counter.
+  ;(gatedProviders as unknown as { get: ProviderService['get'] }).get = (id) => providersSvc.get(id)
+
+  let current = createModels()
+  const published: string[] = []
+  const registry = new ModelRegistry(
+    {
+      dataDir,
+      providersSvc: gatedProviders,
+      credentialsSvc,
+      configSvc,
+      stash: new SecretStash(),
+      modelsStore: createFileModelsStore(dataDir),
+      setModels: (m) => { current = m as typeof current },
+      externalModels: false,
+      events: { publish: (type) => { published.push(type) } },
+      pluginHost: () => undefined,
+      alignAllConversations: async () => {},
+    },
+    createModels(),
+    {},
+  )
+  const { faux } = makeFauxModels({ provider: 'retire-p', models: [{ id: 'm1' }] })
+  const unregister = await registry.registerRuntimeProvider(faux.provider, 'test:retire')
+  assert.ok(published.includes('models.changed'))
+
+  // Start unregistering and pause inside the rebuild window.
+  const unregistering = unregister()
+  await waitFor(() => listCalls >= 2, { timeoutMs: 10_000, intervalMs: 10 })
+  assert.equal(listCalls, 2, 'unregister rebuild should pause at the gate window')
+
+  // Inside window: old catalog still resolves the provider, yet new stream attempts reject explicitly.
+  const wrapped = current.getProvider('retire-p')
+  assert.ok(wrapped, 'provider remains addressable in old catalog during window')
+  assert.throws(
+    () => (wrapped as unknown as { stream: () => void }).stream(),
+    (err: unknown) => err instanceof HelmError && err.code === 'runtime_provider_retiring' && err.status === 409,
+  )
+
+  listGate.resolve()
+  await unregistering
+  assert.ok(!registry.listModelProviders().some((p) => p.id === 'retire-p'), 'provider removed from catalog after unregister finishes')
 })
