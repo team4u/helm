@@ -1,19 +1,19 @@
 /**
- * Hub produce product layer Web static directory parse policy.
+ * Web static asset directory resolution policy for the Hub product layer.
  *
- * Why independent module: kernel createHubHandler/startHub only accept explicit webDistDir(default pure
- * API, do not hard encode Web package location); by default directory in which is hub produce product policy, follow hub entry
- * itself location while set, concentrate in this can test.
+ * Why a standalone module: `createHubHandler` / `startHub` in the kernel only accept an explicit
+ * `webDistDir` (API-only by default, never hardcoding the Web package location). Where the default
+ * directory lives is a Hub product policy relative to the Hub entrypoint, isolated here for testability.
  *
- * layout convention (src and dist under same construct, all on trace two level to payload/repository package and column layer):
- * - repository development:packages/hub/{src,dist}/main.ts → packages/web/dist;
- * - npm payload:<payload>/hub/dist/main.js → <payload>/web/dist(web and hub same level).
- * directory inside must has index.html only then treated as valid (unbuilt does not pretend to be static site).
+ * Layout convention (isomorphic under `src` and `dist`, stepping two levels up to sibling packages):
+ * - Repository dev: `packages/hub/{src,dist}/main.ts` -> `packages/web/dist`;
+ * - npm payload: `<payload>/hub/dist/main.js` -> `<payload>/web/dist` (`web` alongside `hub`).
+ * The directory is treated as valid only if `index.html` exists (unbuilt dirs never pose as static sites).
  */
 import { statSync } from 'node:fs';
 import { join } from 'node:path';
 
-/** probe <entryDir>/../../web/dist; store in index.html when return the directory, otherwise undefined(pure API form). */
+/** Probes `<entryDir>/../../web/dist`; returns the path when `index.html` exists, else `undefined` (API-only). */
 export function resolveHubWebDistDir(entryDir: string): string | undefined {
   const distDir = join(entryDir, '..', '..', 'web', 'dist');
   try {
@@ -25,7 +25,7 @@ export function resolveHubWebDistDir(entryDir: string): string | undefined {
   }
 }
 
-/** parse HELM_WEB_DIST_DIR: explicit directory takes precedence;'false'/'0'/'' explicit disable; not settings away resolveHubWebDistDir. */
+/** Parses `HELM_WEB_DIST_DIR`: explicit path wins; `'false'` / `'0'` / `''` disables static hosting; unset falls back to `resolveHubWebDistDir`. */
 export function resolveWebDistOption(
   env: string | undefined,
   entryDir: string,

@@ -1,20 +1,21 @@
 /**
- * external plugin generate state DX closed ring test:generation loader(proxy boundary load)+ doctor(static self inspect)
- * + reload(subject to control hot reload)+ rescan(incremental heavy scan).
+ * End-to-end tests for external plugin DX loop: generation loader + doctor (static self-check)
+ * + reload (controlled hot reload) + rescan (incremental directory rescan).
  *
- * combine discipline: real createHelm(true SQLite + true PluginHost + true external plugin source file directory)+
- * faux provider; do not mock app, do not fake host.fixture all in temporary development dataDir.
+ * Composition discipline: real `createHelm` (real SQLite + real `PluginHost` + real external plugin source dirs) +
+ * faux provider; no mocked app or host. Everything runs against temporary `dataDir` fixtures.
  *
- * override (want seek true verify items):
- * - proxy boundary load:?helmgen entry re- initialize module (module level counter pass increase); each other for dependency closed package
- *   pass broadcast proxy boundary mark record (local dependency same re- initialize);@helm/* bare note symbol across proxy sharing the same instance;
- * - doctor: health plugin ok=true and attach real register summary; corrupt manifest / language method error /
- *   register boundary violate about / dangling client export respectively in for should check items;
- * - reload: preflight failed old instance keep available (action still can tune); health code reload succeeded and enable state
- *   keep; built-in plugin 403; in-flight task 409;
- * - rescan: new directory register and by default deactivate; registered plugin do not by hit disturb (action per common).
+ * Covers:
+ * - Generation loading: `?helmgen` entry re-initializes the module graph (module-level counters increment);
+ *   relative dependencies propagate the generation tag (local deps re-initialize too); `@helm/*` bare
+ *   specifiers stay shared across generations with the host;
+ * - Doctor: healthy plugin returns `ok=true` with real registration summary; corrupt manifest / syntax error /
+ *   registration violation / dangling client export each surface in their corresponding check;
+ * - Reload: preflight failure preserves old instance (actions remain callable); healthy reload succeeds while
+ *   keeping enabled state; built-in plugins reject 403; live tasks reject 409;
+ * - Rescan: new directories register disabled by default; already-registered plugins remain undisturbed.
  *
- * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock; command add total timeout.
+ * Runner: `tsx --test`; every test declares `{ timeout: 60_000 }`.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -34,12 +35,12 @@ async function createApp(dataDir: string) {
 }
 
 // ---------------------------------------------------------------------------
-// fixture write
+// Fixture writers
 // ---------------------------------------------------------------------------
 
 /**
- * most small health TS plugin:index.ts + a idempotent probe needle action + module level initialize counter.
- * counterName used to assertion same proxy only initialize once / new proxy re- initialize.
+ * Minimal healthy TS plugin: `index.ts` + idempotent `probe` action + module-level init counter.
+ * `counterName` verifies same-generation caching vs. new-generation re-initialization.
  */
 function writeMinimalPlugin(
   pluginsDir: string,
@@ -76,7 +77,7 @@ function definePlugin(ctx: any) {
 export default { id: '${dir}', name: 'DX plugin ${dir}', version: '0.1.0', definePlugin }
 `,
   )
-  // local TS dependency (.js note symbol mapping)+ itself module level counter (verify proxy boundary pass broadcast to dependency closed package)
+  // Local TS dependency (`.js` specifier mapping) + own module-level counter (verifies generation tag propagation).
   writeFileSync(
     join(dirPath, 'lib', 'shared.ts'),
     `import { HelmError } from '@helm/protocol'
@@ -88,7 +89,7 @@ export const sharedDep = (): string => 'shared:' + (HelmError ? 'helm-ok' : 'hel
   return { dirPath, counterName }
 }
 
-/** carries frontend component declaration plugin (doctor client check consume). */
+/** Plugin declaring a frontend component (used by doctor client check tests). */
 function writeClientPlugin(
   pluginsDir: string,
   dir: string,
@@ -109,8 +110,8 @@ function writeClientPlugin(
 export default { id: '${dir}', definePlugin }
 `,
   )
-  // fix correct:clientRoot is PluginDefinition field (module export), in import after by
-  // normalizeDefinition parse is absolute path - - via heavy write tail row inject each other for clientRoot.
+  // `clientRoot` is a `PluginDefinition` field on the module export, resolved by `normalizeDefinition` after import;
+  // inject relative `clientRoot` directly into the export line.
   const entryFile = join(dirPath, 'index.ts')
   writeFileSync(
     entryFile,
@@ -134,13 +135,13 @@ export function ${exportName}(): React.JSX.Element {
 }
 
 // ---------------------------------------------------------------------------
-// proxy boundary load (generation loader)
-// note: proxy boundary pass broadcast assertion in pure node child process run (--experimental-strip-types).
-// development phase tsx load will heavy write URL and cache module parse (tsx-commonjs-virtual-query),
-// its behavior does not mean produce semantics; external plugin load same style verify way see external-plugin-ts.test.ts.
+// Generation loader
+// Note: generation propagation assertions run in a pure Node child process (`--experimental-strip-types`).
+// Under dev `tsx`, loader hooks rewrite URLs and cache virtual queries (`tsx-commonjs-virtual-query`),
+// which does not reflect production ESM semantics; see `external-plugin-ts.test.ts` for similar patterns.
 // ---------------------------------------------------------------------------
 
-test('proxy boundary load:?helmgen entry re- initialize module diagram, each other for dependency closed package pass broadcast (pure node child process)', { timeout: 60_000 }, async () => {
+test('generation loader: ?helmgen re-initializes module graph and propagates across relative deps (pure Node child process)', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-gen-'))
   const loaderSrc = fileURLToPath(new URL('../../kernel/src/plugins/backend-ts-loader.ts', import.meta.url))
   try {
@@ -181,9 +182,9 @@ console.log('CHILD_OK')
       })
     } catch (e) {
       const errOut = ((e as { stdout?: string }).stdout ?? '') + '\n' + ((e as { stderr?: string }).stderr ?? '')
-      assert.fail(`pure node child process failed:${out}${errOut.slice(0, 800)}`)
+      assert.fail(`pure Node child process failed: ${out}${errOut.slice(0, 800)}`)
     }
-    assert.ok(out.includes('CHILD_OK'), `child process should all contract via, output:${out}`)
+    assert.ok(out.includes('CHILD_OK'), `child process should pass all assertions, output: ${out}`)
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }
@@ -193,26 +194,26 @@ console.log('CHILD_OK')
 // doctor
 // ---------------------------------------------------------------------------
 
-test('doctor: health plugin ok=true and attach real register summary', { timeout: 60_000 }, async () => {
+test('doctor: healthy plugin returns ok=true with real registration summary', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-doc-'))
   try {
     const { dirPath } = writeMinimalPlugin(join(dataDir, 'plugins'), 'dx-healthy')
     const report = await doctorPluginDir(dirPath, { buildProvider: createPluginBuildProvider() })
-    assert.equal(report.ok, true, `health plugin should via:${JSON.stringify(report.checks)}`)
+    assert.equal(report.ok, true, `healthy plugin should pass: ${JSON.stringify(report.checks)}`)
     assert.equal(report.pluginId, 'dx-healthy')
     assert.deepEqual(
       report.checks.map((c) => c.id),
       ['manifest', 'backend', 'register', 'client'],
     )
-    assert.ok(report.summary, 'attach real register summary')
+    assert.ok(report.summary, 'should attach real registration summary')
     assert.equal(report.summary!.id, 'dx-healthy')
-    assert.equal(report.summary!.enabled, false, 'doctor register by default deactivate (no side effects)')
+    assert.equal(report.summary!.enabled, false, 'doctor registers disabled by default (no side effects)')
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }
 })
 
-test('doctor: corrupt manifest in manifest check items', { timeout: 60_000 }, async () => {
+test('doctor: corrupt manifest fails at manifest check', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-doc-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'dx-bad-manifest')
@@ -221,9 +222,9 @@ test('doctor: corrupt manifest in manifest check items', { timeout: 60_000 }, as
     const report = await doctorPluginDir(dirPath, { buildProvider: createPluginBuildProvider() })
     assert.equal(report.ok, false)
     const manifest = report.checks.find((c) => c.id === 'manifest')
-    assert.ok(manifest?.error, 'manifest check failed')
+    assert.ok(manifest?.error, 'manifest check should fail')
     assert.equal(manifest!.error!.code, 'plugin_manifest_invalid')
-    // after continue dependency check do not execute (avoid mistakenly lead connect ring failed)
+    // Downstream dependent checks are skipped to avoid cascading noise.
     assert.deepEqual(
       report.checks.map((c) => c.id),
       ['manifest'],
@@ -233,7 +234,7 @@ test('doctor: corrupt manifest in manifest check items', { timeout: 60_000 }, as
   }
 })
 
-test('doctor:TS language method error in backend check items (contains file locate)', { timeout: 60_000 }, async () => {
+test('doctor: TS syntax error fails at backend check with file location', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-doc-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'dx-syntax')
@@ -244,13 +245,13 @@ test('doctor:TS language method error in backend check items (contains file loca
     const backend = report.checks.find((c) => c.id === 'backend')
     assert.ok(backend?.error)
     assert.equal(backend!.error!.code, 'plugin_load_failed')
-    assert.ok(backend!.error!.message.includes('index.ts'), 'diagnose contains file locate')
+    assert.ok(backend!.error!.message.includes('index.ts'), 'diagnostic should include file location')
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }
 })
 
-test('doctor: register boundary violate about (duplicate action id) in register check items', { timeout: 60_000 }, async () => {
+test('doctor: registration violation (duplicate action id) fails at register check', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-doc-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'dx-dup-action')
@@ -281,14 +282,14 @@ export default { id: 'dx-dup-action', definePlugin }
   }
 })
 
-test('doctor: dangling client export in client check items (real compile artifact export validate)', { timeout: 60_000 }, async () => {
+test('doctor: dangling client export fails at client check (real compiled bundle validation)', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-doc-'))
   try {
-    // declaration export name in module in missing (write into other name)
+    // Export name in client module differs from what `definePlugin` references.
     const dirPath = writeClientPlugin(join(dataDir, 'plugins'), 'dx-dangling', {
       exportName: 'NotThePanelYouWant',
     })
-    // declaration reference correct name (and actual export inconsistent -> dangling)
+    // Point `definePlugin` at `SamplePanel` (absent from actual exports -> dangling).
     const entry = readFileSync(join(dirPath, 'index.ts'), 'utf8')
     writeFileSync(
       join(dirPath, 'index.ts'),
@@ -297,7 +298,7 @@ test('doctor: dangling client export in client check items (real compile artifac
     const report = await doctorPluginDir(dirPath, { buildProvider: createPluginBuildProvider() })
     assert.equal(report.ok, false)
     const client = report.checks.find((c) => c.id === 'client')
-    assert.ok(client?.error, `client check should failed:${JSON.stringify(report.checks)}`)
+    assert.ok(client?.error, `client check should fail: ${JSON.stringify(report.checks)}`)
     assert.equal(client!.error!.code, 'invalid_client_export')
     assert.ok(client!.error!.message.includes('SamplePanel'))
   } finally {
@@ -305,7 +306,7 @@ test('doctor: dangling client export in client check items (real compile artifac
   }
 })
 
-test('doctor: health frontend component via client check', { timeout: 60_000 }, async () => {
+test('doctor: healthy frontend component passes client check', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-doc-'))
   try {
     const dirPath = writeClientPlugin(join(dataDir, 'plugins'), 'dx-client-ok')
@@ -319,10 +320,10 @@ test('doctor: health frontend component via client check', { timeout: 60_000 }, 
 })
 
 // ---------------------------------------------------------------------------
-// rescan(incremental heavy scan)
+// rescan (incremental directory rescan)
 // ---------------------------------------------------------------------------
 
-test('rescan: new directory register and by default deactivate; registered plugin do not subject to hit disturb', { timeout: 60_000 }, async () => {
+test('rescan: registers new directory disabled by default without disturbing existing plugins', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-rescan-'))
   let app: Awaited<ReturnType<typeof createApp>> | undefined
   try {
@@ -334,25 +335,25 @@ test('rescan: new directory register and by default deactivate; registered plugi
     }
     assert.equal(before.value, 'v1')
 
-    // put new plugin directory after rescan: only register new plugin, by default deactivate
+    // Add new plugin dir and rescan: registers only the new plugin, disabled by default.
     writeMinimalPlugin(join(dataDir, 'plugins'), 'dx-second')
     const result = await app.kernel.plugins.rescanExternalPlugins()
     assert.deepEqual(result.registered, ['dx-second'])
     const second = result.plugins.find((p) => p.id === 'dx-second')
     assert.ok(second)
-    assert.equal(second.enabled, false, 'rescan register new plugin by default deactivate')
+    assert.equal(second.enabled, false, 'rescanned plugin defaults to disabled')
 
-    // registered plugin do not subject to hit disturb (still is enable state, action per common)
+    // Already-registered plugin stays enabled and unaffected.
     const after = (await app.kernel.plugins.invokeAction('dx-first', 'probe', {})) as {
       value: string
     }
     assert.equal(after.value, 'v1')
     assert.equal(app.kernel.plugins.list().find((p) => p.id === 'dx-first')?.enabled, true)
 
-    // again rescan: without new plugin
+    // Subsequent rescan finds no new plugins.
     const again = await app.kernel.plugins.rescanExternalPlugins()
     assert.deepEqual(again.registered, [])
-    assert.ok(again.skipped >= 2, `registered and data directory count skipped:${again.skipped}`)
+    assert.ok(again.skipped >= 2, `registered and data dirs counted as skipped: ${again.skipped}`)
   } finally {
     await app?.close().catch(() => {})
     rmSync(dataDir, { recursive: true, force: true })
@@ -360,10 +361,10 @@ test('rescan: new directory register and by default deactivate; registered plugi
 })
 
 // ---------------------------------------------------------------------------
-// reload(subject to control hot reload)
+// reload (controlled hot reload)
 // ---------------------------------------------------------------------------
 
-test('reload: health code reload succeeded and enable state keep; new code takes effect', { timeout: 60_000 }, async () => {
+test('reload: healthy code reloads, preserves enabled state, and activates updated logic', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-reload-'))
   let app: Awaited<ReturnType<typeof createApp>> | undefined
   try {
@@ -376,7 +377,7 @@ test('reload: health code reload succeeded and enable state keep; new code takes
     assert.equal(v1.value, 'v1')
     const initsAfterFirstEnable = (globalThis as Record<string, unknown>)[counterName] as number
 
-    // modify code (action return value change)
+    // Modify plugin code (change action return value).
     writeFileSync(
       join(dirPath, 'index.ts'),
       readFileSync(join(dirPath, 'index.ts'), 'utf8').replace('v1', 'v2'),
@@ -386,16 +387,16 @@ test('reload: health code reload succeeded and enable state keep; new code takes
     assert.equal(result.pluginId, 'dx-live')
     assert.equal(result.wasEnabled, true)
     assert.ok(result.generation >= 2)
-    assert.equal(result.summary.enabled, true, 'reload after keep enable')
+    assert.equal(result.summary.enabled, true, 'remains enabled after reload')
 
     const v2 = (await app.kernel.plugins.invokeAction('dx-live', 'probe', {})) as {
       value: string
     }
-    assert.equal(v2.value, 'v2', 'reload after new code takes effect')
+    assert.equal(v2.value, 'v2', 'updated code takes effect after reload')
     const initsAfterReload = (globalThis as Record<string, unknown>)[counterName] as number
     assert.ok(
       initsAfterReload > initsAfterFirstEnable,
-      'reload use new proxy boundary module diagram (module re- initialize)',
+      'reload initializes a fresh module generation',
     )
   } finally {
     await app?.close().catch(() => {})
@@ -403,7 +404,7 @@ test('reload: health code reload succeeded and enable state keep; new code takes
   }
 })
 
-test('reload: broken code preflight failed, old instance keep available (action per common, state do not change)', { timeout: 60_000 }, async () => {
+test('reload: broken code fails preflight while keeping old instance live and state unchanged', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-reload-'))
   let app: Awaited<ReturnType<typeof createApp>> | undefined
   try {
@@ -411,7 +412,7 @@ test('reload: broken code preflight failed, old instance keep available (action 
     app = await createApp(dataDir)
     await app.kernel.plugins.enable('dx-keep')
 
-    // write broken code (language method error)
+    // Write invalid syntax.
     writeFileSync(join(dirPath, 'index.ts'), 'export default { id: "dx-keep", definePlugin(( {}\n')
 
     await assert.rejects(
@@ -421,24 +422,24 @@ test('reload: broken code preflight failed, old instance keep available (action 
         assert.equal(err.code, 'plugin_reload_preflight_failed')
         assert.equal(err.status, 422)
         const details = err.details as { report?: { ok?: boolean } }
-        assert.equal(details?.report?.ok, false, 'error attach complete doctor report')
+        assert.equal(details?.report?.ok, false, 'error includes full doctor report')
         return true
       },
     )
 
-    // old instance keep available: still is enable state, action per common return old value
+    // Old instance remains enabled and serves requests.
     assert.equal(app.kernel.plugins.list().find((p) => p.id === 'dx-keep')?.enabled, true)
     const probe = (await app.kernel.plugins.invokeAction('dx-keep', 'probe', {})) as {
       value: string
     }
-    assert.equal(probe.value, 'v1', 'old instance code continue service')
+    assert.equal(probe.value, 'v1', 'old instance continues serving')
   } finally {
     await app?.close().catch(() => {})
     rmSync(dataDir, { recursive: true, force: true })
   }
 })
 
-test('reload: built-in plugin 403 reject', { timeout: 60_000 }, async () => {
+test('reload: rejects built-in plugins with 403', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-reload-'))
   let app: Awaited<ReturnType<typeof createApp>> | undefined
   try {
@@ -454,7 +455,7 @@ test('reload: built-in plugin 403 reject', { timeout: 60_000 }, async () => {
   }
 })
 
-test('reload: not registered plugin 404', { timeout: 60_000 }, async () => {
+test('reload: rejects unregistered plugin with 404', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-reload-'))
   let app: Awaited<ReturnType<typeof createApp>> | undefined
   try {
@@ -469,7 +470,7 @@ test('reload: not registered plugin 404', { timeout: 60_000 }, async () => {
   }
 })
 
-test('reload: in-flight task 409 reject (in-flight tool execute during)', { timeout: 60_000 }, async () => {
+test('reload: rejects with 409 when live tasks are in flight', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-reload-'))
   let app: Awaited<ReturnType<typeof createApp>> | undefined
   try {
@@ -477,7 +478,7 @@ test('reload: in-flight task 409 reject (in-flight tool execute during)', { time
     app = await createApp(dataDir)
     await app.kernel.plugins.enable('dx-busy')
 
-    // construct in-flight task:withTask package wrap during trigger reload
+    // Trigger reload while a `withTask`-wrapped task is in flight.
     const gate = new Promise<void>((resolve) => {
       setTimeout(resolve, 150)
     })
@@ -492,7 +493,7 @@ test('reload: in-flight task 409 reject (in-flight tool execute during)', { time
       },
     )
     await task
-    // in-flight task after end reload can succeeded
+    // Reload succeeds once the in-flight task finishes.
     const result = await app.kernel.plugins.reloadExternalPlugin('dx-busy')
     assert.equal(result.pluginId, 'dx-busy')
   } finally {
@@ -501,13 +502,13 @@ test('reload: in-flight task 409 reject (in-flight tool execute during)', { time
   }
 })
 
-test('reload: deactivate state plugin reload after keep deactivate', { timeout: 60_000 }, async () => {
+test('reload: disabled plugin remains disabled after reload', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-reload-'))
   let app: Awaited<ReturnType<typeof createApp>> | undefined
   try {
     const { dirPath } = writeMinimalPlugin(join(dataDir, 'plugins'), 'dx-off')
     app = await createApp(dataDir)
-    // by default deactivate (do not enable)
+    // Disabled by default.
     assert.equal(app.kernel.plugins.list().find((p) => p.id === 'dx-off')?.enabled, false)
     writeFileSync(
       join(dirPath, 'index.ts'),
@@ -515,7 +516,7 @@ test('reload: deactivate state plugin reload after keep deactivate', { timeout: 
     )
     const result = await app.kernel.plugins.reloadExternalPlugin('dx-off')
     assert.equal(result.wasEnabled, false)
-    assert.equal(result.summary.enabled, false, 'reload after keep deactivate')
+    assert.equal(result.summary.enabled, false, 'remains disabled after reload')
   } finally {
     await app?.close().catch(() => {})
     rmSync(dataDir, { recursive: true, force: true })
@@ -523,10 +524,10 @@ test('reload: deactivate state plugin reload after keep deactivate', { timeout: 
 })
 
 // ---------------------------------------------------------------------------
-// doctor by id / reload switch failed rollback
+// doctor by id / rollback on reload switch failure
 // ---------------------------------------------------------------------------
 
-test('doctor by id: registered plugin by id parse source directory; not registered id 404', { timeout: 60_000 }, async () => {
+test('doctor by id: resolves source directory for registered plugin; 404 for unknown id', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-docid-'))
   let app: Awaited<ReturnType<typeof createApp>> | undefined
   try {
@@ -537,14 +538,14 @@ test('doctor by id: registered plugin by id parse source directory; not register
     const report = await app.kernel.plugins.doctorExternalPlugin({ id: 'dx-docid' })
     assert.equal(report.ok, true, JSON.stringify(report.checks))
     assert.equal(report.requestedId, 'dx-docid')
-    assert.ok(report.dir.endsWith('dx-docid'), `by id parse to source directory:${report.dir}`)
+    assert.ok(report.dir.endsWith('dx-docid'), `should resolve source dir by id: ${report.dir}`)
     assert.equal(report.pluginId, 'dx-docid')
 
     await assert.rejects(
       app.kernel.plugins.doctorExternalPlugin({ id: 'dx-not-registered' }),
       (err: unknown) => err instanceof HostHelmError && err.code === 'plugin_source_missing',
     )
-    // id and dir mutual exclusion
+    // `id` and `dir` are mutually exclusive.
     await assert.rejects(
       app.kernel.plugins.doctorExternalPlugin({ id: 'dx-docid', dir: '/abs' }),
       (err: unknown) => err instanceof HostHelmError && err.code === 'validation_error',
@@ -555,11 +556,11 @@ test('doctor by id: registered plugin by id parse source directory; not register
   }
 })
 
-test('reload: new code switch on failure rollback to old instance (old define continue available)', { timeout: 60_000 }, async () => {
+test('reload: rolls back to previous instance when new code fails on switchover', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-rollback-'))
   let app: Awaited<ReturnType<typeof createApp>> | undefined
   try {
-    // plugin A(await reload) and plugin B(occupy slash trigger term dxdupe)
+    // Plugin A (target for reload) and plugin B (occupies slash trigger `dxdupe`).
     const dirA = join(dataDir, 'plugins', 'dx-a')
     writeMinimalPlugin(join(dataDir, 'plugins'), 'dx-a')
     writeSlashPlugin(join(dataDir, 'plugins'), 'dx-b', 'dxdupe')
@@ -567,14 +568,13 @@ test('reload: new code switch on failure rollback to old instance (old define co
     await app.kernel.plugins.enable('dx-a')
     await app.kernel.plugins.enable('dx-b')
 
-    // old instance available
+    // Old instance works.
     const v1 = (await app.kernel.plugins.invokeAction('dx-a', 'probe', {})) as { value: string }
     assert.equal(v1.value, 'v1')
 
-    // new code:doctor can (sandbox inside without B), but enable register and B  slash conflict -> switch failed.
-    // keep original handler behavior, append conflict command declaration.
+    // New code passes doctor (no B in sandbox), but fails enable due to slash collision with B.
     const original = readFileSync(join(dirA, 'index.ts'), 'utf8')
-    // heavy naming original definePlugin is baseDefine, again declaration carries conflict slash new definePlugin.
+    // Rename original `definePlugin` to `baseDefine` and wrap with conflicting slash command.
     const injected = original
       .replace('function definePlugin(ctx: any) {', 'function baseDefine(ctx: any) {')
       .replace(
@@ -585,26 +585,26 @@ test('reload: new code switch on failure rollback to old instance (old define co
 }
 export default { id: 'dx-a', name: 'DX plugin dx-a', version: '0.1.0', definePlugin }`,
       )
-    assert.notEqual(injected, original, 'inject should take effect (template match on failure explicit expose)')
+    assert.notEqual(injected, original, 'injection should modify source (fail loudly if template mismatches)')
     writeFileSync(join(dirA, 'index.ts'), injected)
 
     await assert.rejects(
       app.kernel.plugins.reloadExternalPlugin('dx-a'),
       (err: unknown) => {
-        assert.ok(err instanceof HostHelmError, `should throw HelmError:${String(err)}`)
+        assert.ok(err instanceof HostHelmError, `should throw HelmError: ${String(err)}`)
         assert.equal(err.code, 'plugin_reload_failed')
         const details = err.details as { rolledBack?: boolean }
-        assert.equal(details?.rolledBack, true, 'switch failed after should rollback to old instance')
+        assert.equal(details?.rolledBack, true, 'should roll back to previous instance on switchover failure')
         return true
       },
     )
 
-    // rollback after: plugin still in manifest and enable, old code continue service
-    assert.equal(app.kernel.plugins.list().find((p) => p.id === 'dx-a')?.enabled, true, 'rollback after keep enable')
+    // After rollback: plugin stays listed & enabled, old instance continues serving.
+    assert.equal(app.kernel.plugins.list().find((p) => p.id === 'dx-a')?.enabled, true, 'stays enabled after rollback')
     const probe = (await app.kernel.plugins.invokeAction('dx-a', 'probe', {})) as { value: string }
-    assert.equal(probe.value, 'v1', 'rollback after old instance code continue service')
+    assert.equal(probe.value, 'v1', 'old instance continues serving after rollback')
 
-    // restore without conflict code after reload succeeded
+    // Restoring non-conflicting code lets reload succeed.
     writeFileSync(join(dirA, 'index.ts'), original)
     const result = await app.kernel.plugins.reloadExternalPlugin('dx-a')
     assert.equal(result.summary.enabled, true)
@@ -614,7 +614,7 @@ export default { id: 'dx-a', name: 'DX plugin dx-a', version: '0.1.0', definePlu
   }
 })
 
-/** carries commandPalette slash declaration plugin (used to across plugin uniqueness conflict). */
+/** Plugin declaring a `commandPalette` slash command (for cross-plugin uniqueness collision tests). */
 function writeSlashPlugin(pluginsDir: string, dir: string, slash: string): string {
   const dirPath = join(pluginsDir, dir)
   mkdirSync(dirPath, { recursive: true })

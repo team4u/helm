@@ -1,17 +1,17 @@
 /**
- * action discover runtime collection into verify (createHelm real combine + faux provider eventually model request).
+ * Action discovery runtime integration verification (`createHelm` real composition + faux provider final model requests).
  *
- * override (all assertion in real provider request payload on, do not mock runtime):
- * - ordinary plugin action (without exposeAsTool): enable after <available_actions> directory (prompt.actions segment)
- *   enter eventually model request; deactivate after under one turn disappear (without phantom leftover);
- * - scope: does not match conversation (tags/modelProviders) does not enter directory;exposeAsTool derive tool declaration
- *   do not leak enter scope outside conversation request (request level trim),scope inside conversation normal available;
- * - run_action by before_turn hook strip when directory clear; directly action tool by hook strip when do not via directory re-;
- * - two invoke path refer quote only inject once (exposeAsTool away prompt.tools.*, non- direct throw away prompt.actions);
- * - CLI override / hidden render; description/metadata update do not old hint;
- * - describe pattern real tool invoke: complete Schema return,handler do not execute, deactivate and scope outside reject.
+ * Covers (all assertions on real provider request payloads, without mocking runtime):
+ * - Normal plugin action (no `exposeAsTool`): appears in `<available_actions>` catalog (`prompt.actions` section)
+ *   upon enablement and disappears on the next turn after disablement (no phantom residue);
+ * - Scope: non-matching conversations (`tags`/`modelProviders`) omit scoped actions from the catalog;
+ *   `exposeAsTool` tool declarations never leak into out-of-scope requests (request-level trimming), while working inside scope;
+ * - Catalog clears when `run_action` is stripped by `before_turn`; stripped direct-tool actions never re-enter via catalog;
+ * - Guidance (`promptSnippet`/`promptGuidelines`) injects only once per path (`exposeAsTool` via `prompt.tools.*`, others via `prompt.actions`);
+ * - CLI overrides / hidden rendering; description/metadata updates leave no stale prompt residue;
+ * - `describe` mode via real tool calls: returns full Schema without executing `handler`, rejects when disabled or out of scope.
  *
- * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
+ * Runner: `tsx --test`; every test declares `{ timeout: 60_000 }` against deadlocks.
  */
 import { test } from 'node:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -27,10 +27,10 @@ import type { ConversationEntry, ConversationSummary, PluginDefinition } from '@
 import { openHubTestEnv, type FauxProviderHandle, type HubTestApp } from './helpers/hub-test-env.js'
 import assert from 'node:assert/strict'
 
-/** catch single time eventually model request (back put semantics collapse after view). */
+/** Captured final model request (collapsed view after system prompt folding). */
 interface CapturedRequest {
   toolNames: string[]
-  /** all system message sections collapse view (and kernel systemSectionsOf same opening path). */
+  /** Collapsed view of all system message sections (same folding path as kernel `systemSectionsOf`). */
   sectionsById: Record<string, string | null>
 }
 
@@ -44,7 +44,7 @@ interface TestEnv {
   toolCallStep(name: string, input: Record<string, unknown>): FauxResponseStep
   submitAndWait(convId: number, text: string): Promise<void>
   createTaggedConversation(tags: string[]): Promise<ConversationSummary>
-  /** conversation timeline all tool result text (pi.tool-result  model content serialization). */
+  /** Serialized model contents of all `pi.tool-result` entries in the conversation timeline. */
   toolResultTexts(entries: ConversationEntry[]): string
   close(): Promise<void>
 }
@@ -104,16 +104,16 @@ async function makeEnv(): Promise<TestEnv> {
   return env
 }
 
-/** directory segment text (missing when undefined). */
+/** Action catalog section text (`undefined` when absent). */
 function actionsSection(request: CapturedRequest): string | null | undefined {
   return request.sectionsById['prompt.actions']
 }
 
 // ---------------------------------------------------------------------------
-// 1. ordinary external plugin action: enable i.e. directory, directory content contract, deactivate after under one turn disappear
+// 1. Plain external plugin action: appears in catalog on enable, vanishes next turn on disable
 // ---------------------------------------------------------------------------
 
-test('action directory: only ctx.action ordinary plugin - - enable i.e. appear in eventually request, deactivate after under one turn clear and no residue', { timeout: 60_000 }, async () => {
+test('action catalog: plain ctx.action plugin appears on enable and vanishes cleanly next turn after disable', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const host = env.app.kernel.plugins!
@@ -144,49 +144,49 @@ test('action directory: only ctx.action ordinary plugin - - enable i.e. appear i
     await env.submitAndWait(env.initialConvId, 'one turn')
     const first = env.requests[0]!
     const section = actionsSection(first)
-    assert.ok(section, 'enable after eventually model request should contains prompt.actions directory segment')
-    assert.ok(section.includes('<available_actions>'), 'directory should has XML surround column')
-    assert.ok(section.includes('demo:plain.greet'), 'directory should contains all limit set action ID')
-    // many row description specification is one row + XML escaping
-    assert.ok(!section.includes('\nsecond row'), 'many row description should press into single row')
-    assert.ok(section.includes('&lt;xml&gt;'), 'description in XML should escaping')
-    assert.ok(section.includes('&amp;'), 'description in & should escaping')
-    // compact signature: required/optional + type + embed set mark note
+    assert.ok(section, 'final model request after enabling should include prompt.actions catalog section')
+    assert.ok(section.includes('<available_actions>'), 'catalog should be wrapped in XML tags')
+    assert.ok(section.includes('demo:plain.greet'), 'catalog should contain qualified action ID')
+    // Multi-line description normalized to single line + XML-escaped.
+    assert.ok(!section.includes('\nsecond row'), 'multi-line description should collapse to a single line')
+    assert.ok(section.includes('&lt;xml&gt;'), 'XML angle brackets in description should be escaped')
+    assert.ok(section.includes('&amp;'), 'ampersands in description should be escaped')
+    // Compact signature: required/optional + type + nested marker.
     assert.ok(section.includes('name: string(required)'))
     assert.ok(section.includes('times: number(optional)'))
-    assert.ok(section.includes('config: object(embed set)(describe query)(optional)'), 'embed set object should mark note on demand query')
+    assert.ok(section.includes('config: object(embed set)(describe query)(optional)'), 'nested objects should indicate on-demand describe query')
     assert.ok(section.includes('tags: string[](optional)'))
-    // default CLI:helm <pluginId strip builtin:> <actionId>
+    // Default CLI: `helm <pluginId without builtin:> <actionId>`.
     assert.ok(section.includes('CLI: helm demo:plain greet'))
-    // directory quote lead describe and helm actions list
+    // Catalog references `describe` and `helm actions list`.
     assert.ok(section.includes('describe: true'))
     assert.ok(section.includes('helm actions list --json'))
 
-    // deactivate: under one turn directory no longer contains the plugin action (built-in plugin action still in directory belong normal);
-    // segment inside without old text leftover, also missing points to deactivated action any prompt.actions phantom segment
+    // Disable: next turn's catalog drops this plugin's actions (built-in actions stay);
+    // no stale text or phantom prompt.actions sections pointing to the disabled action.
     await host.disable('demo:plain')
     env.requests.length = 0
     env.faux.setResponses([env.capture()])
     await env.submitAndWait(env.initialConvId, 'second turn')
     const second = env.requests[0]!
     const secondSection = actionsSection(second) ?? ''
-    assert.ok(!secondSection.includes('demo:plain'), 'deactivate after directory must not leftover demo:plain action')
+    assert.ok(!secondSection.includes('demo:plain'), 'catalog must not retain demo:plain after disable')
     for (const [id, text] of Object.entries(second.sectionsById)) {
       if (id === 'prompt.actions') continue
-      assert.ok(!((text ?? '')).includes('demo:plain.greet'), `other segment ${id} must not leftover deactivated action text`)
+      assert.ok(!((text ?? '')).includes('demo:plain.greet'), `other section ${id} must not retain disabled action text`)
     }
-    // again patch one turn: confirm refresh old directory (contains escaping after description) will not via back put re-
+    // Run one more turn: confirm old escaped description does not resurface via system prompt folding.
     env.requests.length = 0
     env.faux.setResponses([env.capture()])
     await env.submitAndWait(env.initialConvId, 'third turn')
     const third = env.requests[0]!
-    assert.ok(!((actionsSection(third) ?? '')).includes('&lt;xml&gt;'), 'old directory text must not via back put re-')
+    assert.ok(!((actionsSection(third) ?? '')).includes('&lt;xml&gt;'), 'old catalog text must not resurface via folding')
   } finally {
     await env.close()
   }
 })
 
-test('disk external plugin: rescan after by default hide, enable i.e. automatically discover, deactivate i.e. clean up', { timeout: 60_000 }, async () => {
+test('disk external plugin: hidden after rescan, discovered on enable, cleaned up on disable', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const host = env.app.kernel.plugins!
@@ -208,7 +208,7 @@ test('disk external plugin: rescan after by default hide, enable i.e. automatica
       },
     }`)
     const rescanned = await host.rescanExternalPlugins()
-    assert.ok(rescanned.registered.includes('external-notice'), 'must via real external load register')
+    assert.ok(rescanned.registered.includes('external-notice'), 'must register via real external loader')
     env.faux.setResponses([env.capture()])
     await env.submitAndWait(env.initialConvId, 'external plugin enable before')
     assert.ok(!actionsSection(env.requests.at(-1)!)?.includes('external-notice'))
@@ -232,10 +232,10 @@ test('disk external plugin: rescan after by default hide, enable i.e. automatica
 })
 
 // ---------------------------------------------------------------------------
-// 2. scope: directory and exposeAsTool tool declaration request level filter
+// 2. Scope: request-level filtering for catalog and exposeAsTool declarations
 // ---------------------------------------------------------------------------
 
-test('action directory scope: does not match conversation does not enter directory;exposeAsTool derive tool declaration do not leak enter scope outside conversation request', { timeout: 60_000 }, async () => {
+test('action catalog scope: excludes non-matching conversations; exposeAsTool declarations do not leak outside scope', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const host = env.app.kernel.plugins!
@@ -264,28 +264,28 @@ test('action directory scope: does not match conversation does not enter directo
     await host.register(def, { enabled: true })
     const alphaConv = await env.createTaggedConversation(['alpha'])
 
-    // scope outside (without tag) conversation: directory excludes the plugin action; direct throw tool declaration do not leak
+    // Out of scope (untagged): catalog omits plugin actions; direct tool declaration does not leak.
     env.faux.setResponses([env.capture()])
     await env.submitAndWait(env.initialConvId, 'scope outside conversation')
     const outside = env.requests[0]!
     const outsideSection = actionsSection(outside)
-    assert.ok(outsideSection === undefined || !(outsideSection ?? '').includes('demo:scoped'), 'scope outside directory must not contains scoped action')
+    assert.ok(outsideSection === undefined || !(outsideSection ?? '').includes('demo:scoped'), 'out-of-scope catalog must omit scoped actions')
     const leakedDirect = outside.toolNames.find((name) => name.includes('direct_scoped'))
-    assert.equal(leakedDirect, undefined, 'scope outside request must not leak exposeAsTool derive tool declaration')
-    assert.ok(outside.toolNames.includes('run_action'), 'kernel tool do not subject to scope trim affect')
+    assert.equal(leakedDirect, undefined, 'out-of-scope request must not leak exposeAsTool tool declarations')
+    assert.ok(outside.toolNames.includes('run_action'), 'kernel tools are unaffected by scope trimming')
 
-    // scope inside (alpha tag) conversation: directory contains plain_scoped; direct throw tool declaration store in
+    // In scope (`alpha` tag): catalog includes `plain_scoped`; direct tool declaration is present.
     env.requests.length = 0
     env.faux.setResponses([env.capture()])
     await env.submitAndWait(alphaConv.id, 'scope inside conversation')
     const inside = env.requests[0]!
     const insideSection = actionsSection(inside)
-    assert.ok(insideSection, 'scope inside conversation should has directory segment')
-    assert.ok(insideSection!.includes('demo:scoped.plain_scoped'), 'directory should contains scope hit ordinary action')
-    assert.ok(!insideSection!.includes('demo:scoped.direct_scoped'), 'exposeAsTool direct throw action does not enter run_action directory')
+    assert.ok(insideSection, 'in-scope conversation should include catalog section')
+    assert.ok(insideSection!.includes('demo:scoped.plain_scoped'), 'catalog should include matching scoped plain action')
+    assert.ok(!insideSection!.includes('demo:scoped.direct_scoped'), 'exposeAsTool action does not enter run_action catalog')
     assert.ok(
       inside.toolNames.some((name) => name.includes('direct_scoped')),
-      'scope inside exposeAsTool derive tool declaration should store in',
+      'in-scope exposeAsTool tool declaration should be present',
     )
   } finally {
     await env.close()
@@ -293,14 +293,14 @@ test('action directory scope: does not match conversation does not enter directo
 })
 
 // ---------------------------------------------------------------------------
-// 3. run_action by hook strip: directory clear; direct throw action tool by strip: do not via directory re-
+// 3. Stripping run_action clears catalog; stripped direct-tool actions do not re-enter via catalog
 // ---------------------------------------------------------------------------
 
-test('action directory can reach: before_turn strip run_action when directory clear; direct throw tool strip after do not via directory re-', { timeout: 60_000 }, async () => {
+test('action catalog reachability: stripping run_action in before_turn clears catalog; stripped direct tools stay absent', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const host = env.app.kernel.plugins!
-    // first register ordinary action plugin (directory store in)
+    // Register plain + direct-tool plugin first.
     const plainDef: PluginDefinition = {
       id: 'demo:reach',
       definePlugin: (ctx) => {
@@ -323,7 +323,7 @@ test('action directory can reach: before_turn strip run_action when directory cl
     }
     await host.register(plainDef, { enabled: true })
 
-    // again register strip hook plugin (priority high at by default, after register first execute by priority decide)
+    // Register stripping hook plugin (higher priority than default).
     const stripDef: PluginDefinition = {
       id: 'demo:stripper',
       definePlugin: (ctx) => {
@@ -348,27 +348,27 @@ test('action directory can reach: before_turn strip run_action when directory cl
     env.faux.setResponses([env.capture()])
     await env.submitAndWait(env.initialConvId, 'strip turn')
     const request = env.requests[0]!
-    assert.equal(actionsSection(request), undefined, 'run_action by strip after directory must clear')
-    assert.ok(!request.toolNames.includes('run_action'), 'run_action should by strip')
+    assert.equal(actionsSection(request), undefined, 'catalog must clear once run_action is stripped')
+    assert.ok(!request.toolNames.includes('run_action'), 'run_action should be stripped')
     assert.ok(
       !request.toolNames.some((name) => name.includes('direct_one')),
-      'direct throw action tool should by strip',
+      'direct action tool should be stripped',
     )
-    // direct throw action must not borrow directory re- (directory whole already clean; i.e. convenient not come by action decide also must not appear direct_one)
+    // Stripped direct actions must not sneak back through the catalog.
     const allSectionText = Object.values(request.sectionsById).join('\n')
-    assert.ok(!allSectionText.includes('demo:reach.direct_one'), 'by strip direct throw action must not via directory re-')
+    assert.ok(!allSectionText.includes('demo:reach.direct_one'), 'stripped direct action must not re-enter via catalog')
 
-    // remove strip hook (deactivate stripper):run_action restore → directory restore, direct throw action back tool channel
+    // Disable stripper: `run_action` and catalog recover, direct tool returns to tool list.
     await host.disable('demo:stripper')
     env.requests.length = 0
     env.faux.setResponses([env.capture()])
     await env.submitAndWait(env.initialConvId, 'restore turn')
     const restored = env.requests[0]!
     assert.ok(restored.toolNames.includes('run_action'))
-    assert.ok(actionsSection(restored)?.includes('demo:reach.probe'), 'run_action restore after directory restore')
+    assert.ok(actionsSection(restored)?.includes('demo:reach.probe'), 'catalog restores once run_action is restored')
     assert.ok(
       restored.toolNames.some((name) => name.includes('direct_one')),
-      'direct throw action tool restore declaration',
+      'direct action tool declaration restores',
     )
   } finally {
     await env.close()
@@ -376,10 +376,10 @@ test('action directory can reach: before_turn strip run_action when directory cl
 })
 
 // ---------------------------------------------------------------------------
-// 4. refer quote only inject once:exposeAsTool away prompt.tools.*, non- direct throw away prompt.actions
+// 4. Guidance injected once: exposeAsTool via prompt.tools.*, others via prompt.actions
 // ---------------------------------------------------------------------------
 
-test('refer quote single time inject: exposeAsTool action refer quote away tool pipeline; non- direct throw action refer quote only appear in directory and carries all limit set ID', { timeout: 60_000 }, async () => {
+test('prompt guidance single injection: exposeAsTool uses tool channel; plain actions use catalog with qualified ID', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const host = env.app.kernel.plugins!
@@ -413,34 +413,34 @@ test('refer quote single time inject: exposeAsTool action refer quote away tool 
     await env.submitAndWait(env.initialConvId, 'refer quote turn')
     const request = env.requests[0]!
     const section = actionsSection(request)
-    assert.ok(section, 'directory segment should store in')
+    assert.ok(section, 'catalog section should exist')
 
-    // direct throw refer quote: only via prompt.tools.* tool pipeline, does not enter directory
+    // Direct-tool guidance: goes exclusively through `prompt.tools.*`, never into the catalog.
     const directToolSection = Object.entries(request.sectionsById)
       .filter(([id]) => id.startsWith('prompt.tools.'))
       .map(([, text]) => text ?? '')
       .join('\n')
-    assert.ok(directToolSection.includes('DIRECT_SNIPPET_MARKER'), 'direct throw promptSnippet should via tool pipeline inject')
-    assert.ok(directToolSection.includes('DIRECT_GUIDELINE_MARKER'), 'direct throw promptGuidelines should via tool pipeline inject')
-    assert.ok(!section!.includes('DIRECT_SNIPPET_MARKER'), 'direct throw refer quote must not duplicate enter directory')
-    assert.ok(!section!.includes('DIRECT_GUIDELINE_MARKER'), 'direct throw want point must not duplicate enter directory')
+    assert.ok(directToolSection.includes('DIRECT_SNIPPET_MARKER'), 'direct promptSnippet should inject via tool channel')
+    assert.ok(directToolSection.includes('DIRECT_GUIDELINE_MARKER'), 'direct promptGuidelines should inject via tool channel')
+    assert.ok(!section!.includes('DIRECT_SNIPPET_MARKER'), 'direct promptSnippet must not duplicate into catalog')
+    assert.ok(!section!.includes('DIRECT_GUIDELINE_MARKER'), 'direct promptGuidelines must not duplicate into catalog')
 
-    // non- direct throw refer quote: only in directory segment, carries all limit set ID mark note
-    assert.ok(section!.includes('PLAIN_SNIPPET_MARKER'), 'ordinary action promptSnippet should enter directory')
-    assert.ok(section!.includes('PLAIN_GUIDELINE_MARKER'), 'ordinary action promptGuidelines should enter directory')
-    assert.ok(section!.includes('refer quote (demo:guide.plain_guided)'), 'directory refer quote should carries all limit set ID mark note')
-    assert.ok(section!.includes('note (demo:guide.plain_guided)'), 'directory note should carries all limit set ID mark note')
-    assert.ok(!directToolSection.includes('PLAIN_SNIPPET_MARKER'), 'ordinary action refer quote must not enter tool pipeline')
+    // Plain action guidance: stays exclusively in the catalog with qualified action ID labels.
+    assert.ok(section!.includes('PLAIN_SNIPPET_MARKER'), 'plain action promptSnippet should appear in catalog')
+    assert.ok(section!.includes('PLAIN_GUIDELINE_MARKER'), 'plain action promptGuidelines should appear in catalog')
+    assert.ok(section!.includes('refer quote (demo:guide.plain_guided)'), 'catalog snippet heading should include qualified ID')
+    assert.ok(section!.includes('note (demo:guide.plain_guided)'), 'catalog guideline heading should include qualified ID')
+    assert.ok(!directToolSection.includes('PLAIN_SNIPPET_MARKER'), 'plain action guidance must not enter tool channel')
   } finally {
     await env.close()
   }
 })
 
 // ---------------------------------------------------------------------------
-// 5. CLI render:command override takes effect;hidden do not render CLI
+// 5. CLI rendering: command override applies; hidden omits CLI line
 // ---------------------------------------------------------------------------
 
-test('CLI render: cli.command override render real command;cli.hidden do not render CLI', { timeout: 60_000 }, async () => {
+test('CLI rendering: cli.command override renders custom command; cli.hidden omits CLI line', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const host = env.app.kernel.plugins!
@@ -470,23 +470,23 @@ test('CLI render: cli.command override render real command;cli.hidden do not ren
     env.faux.setResponses([env.capture()])
     await env.submitAndWait(env.initialConvId, 'CLI render turn')
     const section = actionsSection(env.requests[0]!)!
-    assert.ok(section.includes('CLI: helm team report make'), 'cli.command override should render real command')
-    // hidden: action still in directory (run_action can reach), but do not render missing CLI
-    assert.ok(section.includes('demo:cli.secret_cmd'), 'hidden action still in directory (run_action can reach)')
+    assert.ok(section.includes('CLI: helm team report make'), 'cli.command override should render custom command')
+    // Hidden: action still appears in catalog (reachable via run_action), without a CLI line.
+    assert.ok(section.includes('demo:cli.secret_cmd'), 'hidden action still appears in catalog for run_action')
     const secretIdx = section.indexOf('demo:cli.secret_cmd')
     const nextEntry = section.indexOf('- demo:cli.', secretIdx + 1)
     const secretBlock = section.slice(secretIdx, nextEntry === -1 ? section.length : nextEntry)
-    assert.ok(!secretBlock.includes('CLI:'), 'hidden action must not render CLI row')
+    assert.ok(!secretBlock.includes('CLI:'), 'hidden action must not render a CLI line')
   } finally {
     await env.close()
   }
 })
 
 // ---------------------------------------------------------------------------
-// 6. metadata update:reload after directory by new metadata render, do not old hint
+// 6. Metadata updates: reload refreshes catalog without stale text
 // ---------------------------------------------------------------------------
 
-test('metadata update: plugin reload after directory by new description render, old text leaves no residue', { timeout: 60_000 }, async () => {
+test('metadata update: plugin reload renders new description in catalog with no stale residue', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const host = env.app.kernel.plugins!
@@ -507,9 +507,9 @@ test('metadata update: plugin reload after directory by new description render, 
 
     env.faux.setResponses([env.capture()])
     await env.submitAndWait(env.initialConvId, 'update before turn')
-    assert.ok(actionsSection(env.requests[0]!)!.includes('OLD_DESC_MARKER'), 'update before directory contains old description')
+    assert.ok(actionsSection(env.requests[0]!)!.includes('OLD_DESC_MARKER'), 'catalog before update contains old description')
 
-    // hot update: deactivate→deregister→heavy register (persist deactivate state takes precedence, must explicit enable; real capability change path)
+    // Hot update: disable -> unregister -> re-register (persisted disabled state takes precedence, so enable explicitly).
     description = 'new description text NEW_DESC_MARKER'
     await host.disable('demo:refresh')
     await host.unregister('demo:refresh')
@@ -520,18 +520,18 @@ test('metadata update: plugin reload after directory by new description render, 
     env.faux.setResponses([env.capture()])
     await env.submitAndWait(env.initialConvId, 'update after turn')
     const section = actionsSection(env.requests[0]!)!
-    assert.ok(section.includes('NEW_DESC_MARKER'), 'update after directory contains new description')
-    assert.ok(!section.includes('OLD_DESC_MARKER'), 'old description must not leftover')
+    assert.ok(section.includes('NEW_DESC_MARKER'), 'catalog after update contains new description')
+    assert.ok(!section.includes('OLD_DESC_MARKER'), 'old description must not remain')
   } finally {
     await env.close()
   }
 })
 
 // ---------------------------------------------------------------------------
-// 7. describe pattern: real tool invoke return complete Schema, do not execute handler, boundary reject
+// 7. describe mode: real tool call returns full Schema without executing handler; rejects out of scope/disabled
 // ---------------------------------------------------------------------------
 
-test('describe pattern: real run_action invoke return complete Schema and do not execute handler; deactivate/scope outside reject', { timeout: 60_000 }, async () => {
+test('describe mode: real run_action call returns full Schema without running handler; rejects disabled/out-of-scope', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const host = env.app.kernel.plugins!
@@ -567,33 +567,33 @@ test('describe pattern: real run_action invoke return complete Schema and do not
     }
     await host.register(def, { enabled: true })
 
-    // describe real invoke: via faux start run_action tool invoke
+    // Real `describe` invocation via faux `run_action` tool call.
     env.faux.setResponses([
       env.toolCallStep('run_action', { actionId: 'demo:describe.nested', describe: true }),
       env.capture(),
     ])
     await env.submitAndWait(env.initialConvId, 'query embed set Schema')
-    assert.equal(handlerRuns, 0, 'describe pattern never execute handler')
+    assert.equal(handlerRuns, 0, 'describe mode must never execute handler')
 
-    // tool result already timeline:pi.tool-result  model content carry complete manifest
+    // Tool result persisted in timeline: `pi.tool-result` model content holds the full manifest.
     const detail = await env.app.kernel.getConversationDetail(env.initialConvId)
     const describeTexts = env.toolResultTexts(detail.entries)
-    assert.ok(describeTexts.includes('demo:describe') && describeTexts.includes('nested'), 'describe result should real (manifest field)')
-    // complete Schema can read (embed set field and outputSchema all in result in)
-    assert.ok(describeTexts.includes('payload'), 'top-level Schema field should complete can read')
-    assert.ok(describeTexts.includes('deep'), 'embed set Schema field should complete can read')
-    assert.ok(describeTexts.includes('outputSchema'), 'outputSchema should complete can read')
+    assert.ok(describeTexts.includes('demo:describe') && describeTexts.includes('nested'), 'describe result should include manifest identifiers')
+    // Full nested Schema is readable (nested fields and outputSchema included).
+    assert.ok(describeTexts.includes('payload'), 'top-level Schema field should be readable')
+    assert.ok(describeTexts.includes('deep'), 'nested Schema field should be readable')
+    assert.ok(describeTexts.includes('outputSchema'), 'outputSchema should be readable')
 
-    // by default behavior do not change: do not carries describe real execute handler
+    // Default behavior unchanged: omitting `describe` executes the handler.
     env.requests.length = 0
     env.faux.setResponses([
       env.toolCallStep('run_action', { actionId: 'demo:describe.nested', input: { payload: { deep: 'x' } } }),
       env.capture(),
     ])
     await env.submitAndWait(env.initialConvId, 'real execute')
-    assert.equal(handlerRuns, 1, 'by default invoke should execute handler once')
+    assert.equal(handlerRuns, 1, 'normal invocation should execute handler once')
 
-    // scope outside describe reject: result text contains scope violate rule, excludes Schema content
+    // Out-of-scope describe rejects with scope violation without leaking Schema.
     env.requests.length = 0
     env.faux.setResponses([
       env.toolCallStep('run_action', { actionId: 'demo:describe.alpha_only', describe: true }),
@@ -602,9 +602,9 @@ test('describe pattern: real run_action invoke return complete Schema and do not
     await env.submitAndWait(env.initialConvId, 'scope outside query')
     const scopedDetail = await env.app.kernel.getConversationDetail(env.initialConvId)
     const scopedText = env.toolResultTexts(scopedDetail.entries)
-    assert.ok(scopedText.includes('scope'), 'scope outside describe should explicit reject')
+    assert.ok(scopedText.includes('scope'), 'out-of-scope describe should reject explicitly')
 
-    // deactivate after describe reject
+    // Disabled plugin describe rejects.
     await host.disable('demo:describe')
     env.requests.length = 0
     env.faux.setResponses([

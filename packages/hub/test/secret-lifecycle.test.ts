@@ -1,20 +1,20 @@
 /**
- * SecretStash lifecycle converge test:
- * - TTL(inject clock lazy expires): expires only stop inject (envFor/has/stats),byUuid old value
- *   continue used to all output redaction (contains across chunk streaming KMP); same name override old value same redaction;
- * - SecretLifetime boundary validate:ttlMs finite correct safe integer and do not over 24h,scope enumeration,
- *   unknown key reject (AskDoc spec and stash.put shared use the same set reject);
- * - turn effect domain by out generate compute order precise ownership: this turn register follow compute reclaim, compute after register
- *   (async approval persisted/late hook) belong under one turn do not by mistakenly scan, conversation level do not subject to compute affect,
- *   idle do not clean scan; stop inject != stop redaction;clear(conversationId) reclaim redaction old value;
- * - AskService connect line:secretLifetime only secret field allows, illegal shape 400,
- *   legal value original pass-through stash(not declaration = conversation level, and old behavior consistent);
- * - buildSpawnEnv most small authorization: default does not carry any parent conversation secret, explicit secretNames one by one name
- *   inject, missing/expired name explicit 404, illegal shape 400;
- * - Herdr pane end-to-end: remote pane by default without business secret but keep managed HELM_*(contains node channel
- *   hubUrl back connect) and Profile explicit variable; same name Profile value do not by not grant parent secret override;
- *   explicit grant when secret value right threat; grant missing name in create window side effect before explicit reject;
- * - workflow journal refer grain:secretNames reference and invoke key(grant change do not re- use old cache).
+ * SecretStash lifecycle convergence tests:
+ * - TTL (injected clock lazy expiration): expiration stops injection only (`envFor`/`has`/`stats`), while old values
+ *   continue to be redacted across all outputs (including cross-chunk streaming KMP); same-name overwrites still redact old values;
+ * - `SecretLifetime` boundary validation: `ttlMs` must be a finite positive safe integer <= 24h, `scope` enum,
+ *   rejects unknown keys (`AskDoc` spec and `stash.put` share the same validation);
+ * - Turn scope owned precisely by monotonic settlement counter: turn-scoped entries settle on `settleTurn` while
+ *   entries registered after settlement (async approvals / late hooks) belong to the next turn and are not swept;
+ *   conversation-scoped entries survive settlement, idle does not sweep, `clear(conversationId)` reclaims redaction values;
+ * - `AskService` wiring: `secretLifetime` allowed only on `secret` fields, invalid shapes reject 400,
+ *   omitted defaults to conversation-scoped (matching legacy behavior);
+ * - `buildSpawnEnv` least privilege: carries zero parent secrets by default, injects only explicitly named
+ *   `secretNames`, missing/expired names fail explicitly 404, invalid shapes fail 400;
+ * - Herdr pane end-to-end: remote panes carry no business secrets by default while keeping managed `HELM_*`
+ *   (including node-reported `hubUrl`) and explicit Profile env vars; Profile vars are not overwritten by ungranted
+ *   parent secrets; explicit grants override same-named Profile vars; missing grants reject before pane creation;
+ * - Workflow journal key: incorporates `secretNames` so grant changes invalidate stale cache hits.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -47,50 +47,50 @@ import { createHubTestApp, waitFor } from './helpers/hub-test-env.js'
 // SecretStash:TTL(fake clock)
 // ---------------------------------------------------------------------------
 
-/** fake clock stash:now can any push enter. */
+/** Fake-clock stash: `now` advances arbitrarily. */
 function fakeClockStash(): { stash: SecretStash; now: { ms: number } } {
   const now = { ms: 1_000_000 }
   return { stash: new SecretStash({ now: () => now.ms }), now }
 }
 
-test('TTL: inject clock lazy expires - - expires only stop inject, redaction continue (contains streaming across chunk)', { timeout: 60_000 }, () => {
+test('TTL: lazy expiration stops injection only while redaction continues (including cross-chunk streaming)', { timeout: 60_000 }, () => {
   const { stash, now } = fakeClockStash()
   stash.put(7, 'DEPLOY_TOKEN', 'tok-abc-123', { ttlMs: 5_000 })
   assert.deepEqual(stash.envFor(7), { DEPLOY_TOKEN: 'tok-abc-123' })
   assert.equal(stash.has(7, 'DEPLOY_TOKEN'), true)
 
   now.ms += 4_999
-  assert.equal(stash.has(7, 'DEPLOY_TOKEN'), true, 'expires before one moment still inject')
+  assert.equal(stash.has(7, 'DEPLOY_TOKEN'), true, 'still injected right before expiration')
   assert.deepEqual(stash.stats(), { conversations: 1, secrets: 1 })
 
   now.ms += 1
-  assert.deepEqual(stash.envFor(7), {}, 'expires i.e. stop inject (read path lazy reclaim)')
+  assert.deepEqual(stash.envFor(7), {}, 'stops injecting upon expiration (lazy sweep on read)')
   assert.equal(stash.has(7, 'DEPLOY_TOKEN'), false)
   assert.deepEqual(stash.stats(), { conversations: 1, secrets: 0 })
 
-  // stop inject != stop redaction: old value still replace is placeholder.
+  // Stopping injection does not stop redaction: old value continues to be replaced with a placeholder.
   assert.equal(stash.redact('leak: tok-abc-123').includes('tok-abc-123'), false)
   assert.ok(stash.redact('leak: tok-abc-123').startsWith('leak: [REDACTED:stash:'))
 
-  // streaming redactor across chunk tear match in expires after still redaction (KMP suffix keep).
+  // Streaming redactor still redacts values split across chunks after expiration (KMP suffix retention).
   const stream = stash.createStreamingRedactor()
   const out = stream.push('prefix tok-abc-') + stream.push('123 tail') + stream.flush()
   assert.equal(out.includes('tok-abc-123'), false)
   assert.ok(out.includes('[REDACTED:stash:'))
 })
 
-test('TTL: same name override old value - - old value stop inject after still by redaction (two value all cannot back visible)', { timeout: 60_000 }, () => {
+test('TTL: overwriting same name continues redacting the old value even after injection stops', { timeout: 60_000 }, () => {
   const { stash, now } = fakeClockStash()
   stash.put(7, 'KEY', 'old-value', { ttlMs: 1_000 })
   now.ms += 2_000
   stash.put(7, 'KEY', 'new-value')
   assert.deepEqual(stash.envFor(7), { KEY: 'new-value' }, 'new value takes effect')
   const text = stash.redact('old-value / new-value')
-  assert.equal(text.includes('old-value'), false, 'expired old value continue redaction')
+  assert.equal(text.includes('old-value'), false, 'expired old value continues to be redacted')
   assert.equal(text.includes('new-value'), false)
 })
 
-test('TTL cap boundary: exactly 24h legal, exceeds/non- integer/non- correct/non- count value reject', { timeout: 60_000 }, () => {
+test('TTL cap boundary: 24h is valid; exceeding/non-integer/non-positive/non-numeric reject', { timeout: 60_000 }, () => {
   const { stash } = fakeClockStash()
   stash.put(7, 'OK_TTL', 'v', { ttlMs: MAX_SECRET_TTL_MS })
   assert.equal(stash.has(7, 'OK_TTL'), true)
@@ -107,7 +107,7 @@ test('TTL cap boundary: exactly 24h legal, exceeds/non- integer/non- correct/non
   )
 })
 
-test('SecretLifetime shape:scope enumeration, unknown key, non- object all reject; empty object legal (=default semantics)', { timeout: 60_000 }, () => {
+test('SecretLifetime shape: rejects invalid scope, unknown keys, non-objects; empty object equals default semantics', { timeout: 60_000 }, () => {
   const { stash } = fakeClockStash()
   assert.throws(
     () => stash.put(7, 'S', 'v', { scope: 'session' } as never),
@@ -116,56 +116,55 @@ test('SecretLifetime shape:scope enumeration, unknown key, non- object all rejec
   assert.throws(
     () => stash.put(7, 'S', 'v', { ttl: 5_000 } as never),
     (e: unknown) => e instanceof HelmError && e.code === 'validation_error',
-    "unknown key 'ttl'(ttlMs piece together write wrong leak must explicit failed, cannot static default becomes without TTL)",
+    "unknown key 'ttl' (typo for ttlMs) must fail explicitly instead of silently omitting TTL",
   )
   assert.throws(() => stash.put(7, 'S', 'v', null as never), /validation_error|must be an object/)
   assert.throws(() => stash.put(7, 'S', 'v', [1] as never), /validation_error|must be an object/)
   assert.throws(() => stash.put(7, 'S', 'v', new Date() as never), /validation_error|must be an object/)
   assert.throws(() => stash.put(7, 'S', 'v', new Map() as never), /validation_error|must be an object/)
   stash.put(7, 'S', 'v', {})
-  assert.equal(stash.has(7, 'S'), true, 'empty object = default conversation level')
+  assert.equal(stash.has(7, 'S'), true, 'empty object defaults to conversation-scoped')
 })
 
 // ---------------------------------------------------------------------------
-// SecretStash:turn effect domain (out generate compute order)
+// SecretStash: turn scope (monotonic settlement counter)
 // ---------------------------------------------------------------------------
 
-test('turn: this turn register follow compute reclaim (stop inject), redaction continue; conversation level do not subject to compute affect', { timeout: 60_000 }, () => {
+test('turn: current-turn secrets settle out of injection while redaction stays; conversation scope unaffected', { timeout: 60_000 }, () => {
   const { stash } = fakeClockStash()
   stash.put(7, 'TURN_KEY', 'turn-secret', { scope: 'turn' })
   stash.put(7, 'SESSION_KEY', 'session-secret')
   stash.settleTurn(7)
   assert.equal(stash.has(7, 'TURN_KEY'), false)
-  assert.equal(stash.has(7, 'SESSION_KEY'), true, 'conversation level (default) do not follow turn compute reclaim')
+  assert.equal(stash.has(7, 'SESSION_KEY'), true, 'conversation-scoped secrets (default) survive turn settlement')
   assert.deepEqual(stash.envFor(7), { SESSION_KEY: 'session-secret' })
-  assert.equal(stash.redact('turn-secret').includes('turn-secret'), false, 'compute after old value continue redaction')
+  assert.equal(stash.redact('turn-secret').includes('turn-secret'), false, 'old value remains redacted after settlement')
 })
 
-test('turn: old turn end do not clean new turn secret - - compute after register belong under one turn,idle do not clean scan', { timeout: 60_000 }, () => {
+test('turn: post-settlement registrations belong to next turn; idle does not sweep', { timeout: 60_000 }, () => {
   const { stash } = fakeClockStash()
   stash.put(7, 'A', 'a', { scope: 'turn' })
-  stash.settleTurn(7) // turn A compute:A reclaim (out generate order 0 < 1).
-  // async approval persisted/late hook: compute after register (out generate order 1), belong under one turn.
+  stash.settleTurn(7) // Turn A settles: A reclaimed (settlement seq 0 < 1).
+  // Async approval / late hook: registered after settlement (settlement seq 1), belongs to next turn.
   stash.put(7, 'B', 'b', { scope: 'turn' })
   stash.put(7, 'C', 'c', { scope: 'turn' })
-  // without any idle scan: under one turn in progress B/C continuous inject.
+  // No idle sweep: B/C stay injected across the next turn.
   assert.deepEqual(stash.envFor(7), { B: 'b', C: 'c' })
-  stash.settleTurn(7) // turn B compute: reclaim out generate order < 2  B/C, does not affect under one turn.
+  stash.settleTurn(7) // Turn B settles: reclaims seq < 2 (B/C) without affecting future turns.
   assert.deepEqual(stash.envFor(7), {})
-  assert.equal(stash.redact('b c').includes('b c'), false, 'old value continue redaction')
+  assert.equal(stash.redact('b c').includes('b c'), false, 'old values remain redacted')
 })
 
-test('turn: compute after (counter already push enter) again register turn secret in this time compute memory', { timeout: 60_000 }, () => {
+test('turn: turn secret registered after settlement settles on the subsequent settlement', { timeout: 60_000 }, () => {
   const { stash } = fakeClockStash()
   stash.settleTurn(7)
   stash.put(7, 'LATE', 'late-value', { scope: 'turn' })
   stash.settleTurn(7)
-  // LATE out generate order 1: second time compute (counter 1→2) should reclaim it; but tight follow first time compute register
-  // after, under once compute before it must store - - on one case already override store side, this in reclaim side closed ring.
+  // `LATE` has settlement seq 1: second settlement (1 -> 2) reclaims it while keeping it live until then.
   assert.equal(stash.has(7, 'LATE'), false)
 })
 
-test('turn: by conversation isolated - - conversation 7 compute do not touch conversation 8  turn secret', { timeout: 60_000 }, () => {
+test('turn: isolated per conversation — settling conv 7 leaves conv 8 turn secrets intact', { timeout: 60_000 }, () => {
   const { stash } = fakeClockStash()
   stash.put(7, 'K', 'v7', { scope: 'turn' })
   stash.put(8, 'K', 'v8', { scope: 'turn' })
@@ -174,20 +173,20 @@ test('turn: by conversation isolated - - conversation 7 compute do not touch con
   assert.deepEqual(stash.envFor(8), { K: 'v8' })
 })
 
-test('clear: conversation level reclaim also stop inject and redaction old value;stats reset to zero', { timeout: 60_000 }, () => {
+test('clear: reclaims conversation secrets, stops injection and old-value redaction, resets stats', { timeout: 60_000 }, () => {
   const { stash } = fakeClockStash()
   stash.put(7, 'A', 'gone-value', { scope: 'turn' })
   stash.settleTurn(7)
   stash.put(7, 'B', 'live-value')
   stash.clear(7)
   assert.deepEqual(stash.envFor(7), {})
-  assert.equal(stash.redact('gone-value live-value').includes('gone-value'), true, 'clear after old value no longer replace (already reclaim)')
+  assert.equal(stash.redact('gone-value live-value').includes('gone-value'), true, 'old values stop redacting once cleared')
   assert.equal(stash.has(7, 'B'), false)
   assert.deepEqual(stash.stats(), { conversations: 0, secrets: 0 })
 })
 
 // ---------------------------------------------------------------------------
-// AskService connect line (real store + SecretStash)
+// AskService integration (real store + SecretStash)
 // ---------------------------------------------------------------------------
 
 async function openAskCtx(): Promise<{ service: AskService; stash: SecretStash; close(): Promise<void> }> {
@@ -214,7 +213,7 @@ async function openAskCtx(): Promise<{ service: AskService; stash: SecretStash; 
   }
 }
 
-test('AskService:secretLifetime only secret field allows; illegal shape 400 reject', { timeout: 60_000 }, async () => {
+test('AskService: secretLifetime only allowed on secret fields; invalid shapes reject 400', { timeout: 60_000 }, async () => {
   const ctx = await openAskCtx()
   try {
     await assert.rejects(
@@ -225,7 +224,7 @@ test('AskService:secretLifetime only secret field allows; illegal shape 400 reje
         fields: [{ name: 'plain', label: 'p', type: 'text', secretLifetime: { scope: 'turn' } }],
       }),
       (e: unknown) => e instanceof HelmError && e.code === 'validation_error',
-      'non- secret field declaration secretLifetime must reject',
+      'non-secret field declaring secretLifetime must reject',
     )
     await assert.rejects(
       ctx.service.createAsk({
@@ -235,7 +234,7 @@ test('AskService:secretLifetime only secret field allows; illegal shape 400 reje
         fields: [{ name: 'tok', label: 't', type: 'text', secret: true, secretLifetime: { ttlMs: 0 } }],
       }),
       (e: unknown) => e instanceof HelmError && e.code === 'validation_error',
-      'illegal ttlMs must in write store before reject',
+      'invalid ttlMs must reject before persistence',
     )
     await assert.rejects(
       ctx.service.createAsk({
@@ -252,7 +251,7 @@ test('AskService:secretLifetime only secret field allows; illegal shape 400 reje
   }
 })
 
-test('AskService: legal secretLifetime pass-through stash; not declaration = conversation level (do not follow compute reclaim)', { timeout: 60_000 }, async () => {
+test('AskService: valid secretLifetime passes through to stash; omitted defaults to conversation scope', { timeout: 60_000 }, async () => {
   const ctx = await openAskCtx()
   try {
     const settled = ctx.service.createAsk({
@@ -272,9 +271,9 @@ test('AskService: legal secretLifetime pass-through stash; not declaration = con
 
     assert.deepEqual(ctx.stash.envFor(1), { TURN_TOKEN: 'turn-tok', SESSION_TOKEN: 'session-tok' })
     ctx.stash.settleTurn(1)
-    assert.deepEqual(ctx.stash.envFor(1), { SESSION_TOKEN: 'session-tok' }, 'turn follow compute stop inject, not declaration = conversation level')
+    assert.deepEqual(ctx.stash.envFor(1), { SESSION_TOKEN: 'session-tok' }, 'turn-scoped stops injecting on settle; omitted stays conversation-scoped')
     assert.equal(ctx.stash.redact('turn-tok').includes('turn-tok'), false)
-    // two pen ask all already reach terminal state,createAsk promise already compute (do not pending).
+    // Both asks settled cleanly (promises resolved rather than pending).
     assert.equal((await settled).status, 'answered')
     assert.equal((await plain).status, 'answered')
   } finally {
@@ -282,21 +281,21 @@ test('AskService: legal secretLifetime pass-through stash; not declaration = con
   }
 })
 
-/** polling store until appear pending ask(createAsk async store). */
+/** Polls until a pending ask appears (`createAsk` persists asynchronously). */
 async function pollPending(service: AskService): Promise<{ id: string }> {
   for (let i = 0; i < 200; i += 1) {
     const pending = service.listPendingByConversation(1)
     if (pending.length > 0) return { id: pending[pending.length - 1]!.id }
     await delay(5)
   }
-  throw new Error('pending ask not store')
+  throw new Error('pending ask not persisted')
 }
 
 // ---------------------------------------------------------------------------
-// buildSpawnEnv: external spawn most small authorization
+// buildSpawnEnv: external spawn least privilege
 // ---------------------------------------------------------------------------
 
-/** most small RuntimeAgentSpawn install match (only drive buildSpawnEnv; the rest port throw). */
+/** Minimal `RuntimeAgentSpawn` assembly (drives `buildSpawnEnv` only; unused ports throw). */
 function spawnEnvBackend(stash: SecretStash, options: { token?: string; nodeHubUrl?: string } = {}) {
   return new RuntimeAgentSpawn({
     store: { getConv: () => ({ nodeId: 'local' }) } as never,
@@ -327,23 +326,23 @@ function spawnEnvBackend(stash: SecretStash, options: { token?: string; nodeHubU
   })
 }
 
-test('buildSpawnEnv: default zero secret (most small authorization), managed HELM_* complete', { timeout: 60_000 }, () => {
+test('buildSpawnEnv: zero secrets by default (least privilege), managed HELM_* intact', { timeout: 60_000 }, () => {
   const { stash } = fakeClockStash()
   stash.put(7, 'DEPLOY_TOKEN', 'tok-7')
   stash.put(7, 'API_KEY', 'key-7')
   const backend = spawnEnvBackend(stash, { token: 'managed-token' })
   const env = backend.buildSpawnEnv(7, '/w', 'local')
-  assert.equal(env['DEPLOY_TOKEN'], undefined, 'default does not carry any parent conversation secret')
+  assert.equal(env['DEPLOY_TOKEN'], undefined, 'carries zero parent conversation secrets by default')
   assert.equal(env['API_KEY'], undefined)
   assert.equal(env['HELM_ENV'], '1')
   assert.equal(env['HELM_CONVERSATION_ID'], '7')
   assert.equal(env['HELM_CWD'], '/w')
   assert.equal(env['HELM_NODE_ID'], 'local')
   assert.equal(env['HELM_DATA_DIR'], '/tmp/helm-spawnenv-data')
-  assert.equal(env['HELM_TOKEN'], 'managed-token', 'managed token and secret grant correct hand over')
+  assert.equal(env['HELM_TOKEN'], 'managed-token', 'managed token is independent of secret grants')
 })
 
-test('buildSpawnEnv: explicit secretNames one by one name inject; not choose in do not inject', { timeout: 60_000 }, () => {
+test('buildSpawnEnv: explicit secretNames injects named secrets only; ungranted secrets stay excluded', { timeout: 60_000 }, () => {
   const { stash } = fakeClockStash()
   stash.put(7, 'A_KEY', 'va')
   stash.put(7, 'B_KEY', 'vb')
@@ -355,7 +354,7 @@ test('buildSpawnEnv: explicit secretNames one by one name inject; not choose in 
   assert.equal(env['__proto__'], 'prototype-named-secret')
 })
 
-test('buildSpawnEnv: missing/expired/already compute name explicit 404, never static default empty inject', { timeout: 60_000 }, () => {
+test('buildSpawnEnv: missing/expired/settled secret names fail 404 instead of silently injecting empty', { timeout: 60_000 }, () => {
   const { stash, now } = fakeClockStash()
   stash.put(7, 'GONE_TTL', 'v', { ttlMs: 1_000 })
   now.ms += 2_000
@@ -366,12 +365,12 @@ test('buildSpawnEnv: missing/expired/already compute name explicit 404, never st
     assert.throws(
       () => backend.buildSpawnEnv(7, '/w', 'local', { secretNames: [name] }),
       (e: unknown) => e instanceof HelmError && e.code === 'secret_not_found',
-      `${name}(missing/TTL expired/turn already compute) must explicit failed`,
+      `${name} (missing/TTL expired/turn settled) must fail explicitly`,
     )
   }
 })
 
-test('buildSpawnEnv:secretNames illegal shape (duplicate/broken name/non- array)400 reject', { timeout: 60_000 }, () => {
+test('buildSpawnEnv: invalid secretNames shape (duplicates / invalid names / non-array) rejects 400', { timeout: 60_000 }, () => {
   const backend = spawnEnvBackend(new SecretStash())
   for (const bad of [['A', 'A'], ['bad-name!'], [''], 42]) {
     assert.throws(
@@ -381,19 +380,18 @@ test('buildSpawnEnv:secretNames illegal shape (duplicate/broken name/non- array)
   }
 })
 
-test('buildSpawnEnv:TTL boundary single time sampling - -clock one by one time push enter will not appear store in check, take value when expired false succeeded empty inject', { timeout: 60_000 }, () => {
-  // clock each time read +1: old implement first has after envFortwo time sampling will in TTL boundary across boundary
-  // (has when not expired,envFor when expired), grant name single store in yet return excludes the key false succeeded env.
-  // single time envFor choose read + based on actual return key judge missing after, same batch same moment decide.
+test('buildSpawnEnv: single TTL clock sample avoids false-success empty injection at expiration boundary', { timeout: 60_000 }, () => {
+  // Clock advances +1 per read: a two-sample `has` then `envFor` would cross the boundary
+  // (`has` succeeds, `envFor` expires) and falsely succeed with a missing key.
+  // A single `envFor` read followed by checking returned keys makes the decision atomic.
   const counter = { ms: 1_000 }
   const stash = new SecretStash({ now: () => (counter.ms += 1) })
-  stash.put(7, 'EDGE_KEY', 'edge-value', { ttlMs: 2 }) // put sampling 1001 → expiresAt 1003
+  stash.put(7, 'EDGE_KEY', 'edge-value', { ttlMs: 2 }) // put samples 1001 -> expiresAt 1003
   const backend = spawnEnvBackend(stash)
-  // this time grant unique sampling t=1002(not expired): carry value succeeded (old implement this where has(1002) ,
-  // envFor(1003) expired → empty inject false succeeded).
+  // Single sample at t=1002 (valid): succeeds with value.
   const env = backend.buildSpawnEnv(7, '/w', 'local', { secretNames: ['EDGE_KEY'] })
-  assert.equal(env['EDGE_KEY'], 'edge-value', 'boundary inside single time sampling: want particle carries value succeeded, want particle 404, never false succeeded empty inject')
-  // under one moment (t≥1003 expired): explicit 404.
+  assert.equal(env['EDGE_KEY'], 'edge-value', 'single clock sample at boundary must either return value or 404, never empty success')
+  // Next read (t>=1003 expired): explicit 404.
   assert.throws(
     () => backend.buildSpawnEnv(7, '/w', 'local', { secretNames: ['EDGE_KEY'] }),
     (e: unknown) => e instanceof HelmError && e.code === 'secret_not_found',
@@ -401,7 +399,7 @@ test('buildSpawnEnv:TTL boundary single time sampling - -clock one by one time p
 })
 
 // ---------------------------------------------------------------------------
-// Herdr pane end-to-end (real executor + real kernel buildSpawnEnv together into)
+// Herdr pane end-to-end (real executor + real kernel buildSpawnEnv integration)
 // ---------------------------------------------------------------------------
 
 interface FakePane {
@@ -414,13 +412,13 @@ interface FakePane {
   name?: string
 }
 
-/** subject to control transport: record tab.create env and gate env;prompt i.e. complete (write handover file), can hang onPrompted in Gate before push enter clock/change write stash. */
+/** Controlled transport: records `tab.create` env and gate env; prompt completes immediately (writing handover file); `onPrompted` hook allows advancing clock / mutating stash before Gate. */
 class FakeTransport implements HerdrTransport {
   panes = new Map<string, FakePane>()
   tabEnvs: Array<Record<string, string>> = []
   gateEnvs: Array<Record<string, string>> = []
   calls: Array<{ method: string; params: Record<string, unknown> }> = []
-  /** prompt complete call back (handover file before write): test in Gate before inject clock push enter/stash change write. */
+  /** Callback invoked on prompt completion (prior to writing handover file): lets tests advance clock or mutate stash before Gate. */
   onPrompted?: () => void
 
   private paneOf(ref: unknown): FakePane {
@@ -530,11 +528,9 @@ interface PaneEnv {
 }
 
 /**
- * real execute install match:buildSpawnEnv use real RuntimeAgentSpawn(true SecretStash +
- * buildManagedEnv together into),Profile 'ci-runner' points to remote node-a(channel on report can reach
- * hubUrl),runtime.env carry CI_FLAG / same name DEPLOY_TOKEN / managed override attempt
- * HELM_CWD. parent conversation 7 stash pre- placement DEPLOY_TOKEN / API_KEY.
- * optional clock inject stash(fake clock TTL);onPrompted in handover after completion,Gate before trigger.
+ * Real executor assembly: `buildSpawnEnv` uses real `RuntimeAgentSpawn` (real `SecretStash` + `buildManagedEnv`).
+ * Profile `'ci-runner'` targets remote `node-a` (with node-reported `hubUrl`) and carries `CI_FLAG`,
+ * same-named `DEPLOY_TOKEN`, and an attempted `HELM_CWD` override. Parent conv 7 has `DEPLOY_TOKEN`/`API_KEY`.
  */
 async function openPaneEnv(options: { clock?: () => number; onPrompted?: () => void } = {}): Promise<PaneEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-paneenv-'))
@@ -603,7 +599,7 @@ async function openPaneEnv(options: { clock?: () => number; onPrompted?: () => v
   return { executor, transport, stash, dataDir, async close() { rmSync(dataDir, { recursive: true, force: true }) } }
 }
 
-test('herdr pane: remote by default without business secret; managed HELM_* and Profile variable correct,Profile do not by mistakenly delete also must not override managed key', { timeout: 60_000 }, async () => {
+test('herdr pane: remote pane gets zero business secrets by default; managed HELM_* overrides Profile while Profile vars remain intact', { timeout: 60_000 }, async () => {
   const env = await openPaneEnv()
   try {
     const outcome = (await env.executor.handle({
@@ -613,19 +609,19 @@ test('herdr pane: remote by default without business secret; managed HELM_* and 
     })) as { action: string }
     assert.equal(outcome.action, 'handled')
     const paneEnv = env.transport.tabEnvs[0]!
-    // business secret default do not inject.
-    assert.equal(paneEnv['API_KEY'], undefined, 'not grant parent conversation secret does not enter pane')
-    assert.equal(paneEnv['DEPLOY_TOKEN'], 'profile-deploy', 'same name Profile explicit value original keep (parent secret not grant, missing mistakenly delete)')
-    // Profile legal variable keep.
+    // Business secrets are not injected by default.
+    assert.equal(paneEnv['API_KEY'], undefined, 'ungranted parent conversation secret must not enter pane')
+    assert.equal(paneEnv['DEPLOY_TOKEN'], 'profile-deploy', 'explicit Profile value stays intact when parent secret is not granted')
+    // Valid Profile variables are preserved.
     assert.equal(paneEnv['CI_FLAG'], 'profile-yes')
-    // managed HELM_*: kernel right threat,Profile must not override.
+    // Managed `HELM_*`: kernel holds highest precedence; Profile cannot overwrite.
     assert.equal(paneEnv['HELM_ENV'], '1')
     assert.equal(paneEnv['HELM_CWD'] ?? paneEnv['HELM_CWD'], paneEnv['HELM_CWD'])
-    assert.notEqual(paneEnv['HELM_CWD'], '/hijack', 'Profile override managed HELM_CWD by fixed override reject')
+    assert.notEqual(paneEnv['HELM_CWD'], '/hijack', 'Profile attempt to override managed HELM_CWD must be overridden by kernel')
     assert.equal(paneEnv['HELM_CONVERSATION_ID'], '7')
     assert.equal(paneEnv['HELM_NODE_ID'], 'node-a')
-    assert.equal(paneEnv['HELM_DATA_DIR'], undefined, 'remote do not inject Hub local machine DATA_DIR')
-    // node channel on report can reach hubUrl + managed token back connect keep.
+    assert.equal(paneEnv['HELM_DATA_DIR'], undefined, 'remote panes must not receive Hub local DATA_DIR')
+    // Node-reported `hubUrl` + managed token preserved for callback connection.
     assert.equal(paneEnv['HELM_HUB_URL'], 'http://10.0.0.5:3202')
     assert.equal(paneEnv['HELM_TOKEN'], 'managed-token')
   } finally {
@@ -633,7 +629,7 @@ test('herdr pane: remote by default without business secret; managed HELM_* and 
   }
 })
 
-test('herdr pane: explicit secretNames one by one name grant (secret right threat override Profile same name value), not grant name still do not inject', { timeout: 60_000 }, async () => {
+test('herdr pane: explicit secretNames grants override same-named Profile vars; ungranted secrets stay excluded', { timeout: 60_000 }, async () => {
   const env = await openPaneEnv()
   env.stash.put(7, '__proto__', 'pane-prototype-named-secret')
   try {
@@ -645,8 +641,8 @@ test('herdr pane: explicit secretNames one by one name grant (secret right threa
     })) as { action: string }
     assert.equal(outcome.action, 'handled')
     const paneEnv = env.transport.tabEnvs[0]!
-    assert.equal(paneEnv['DEPLOY_TOKEN'], 'secret-deploy-7', 'explicit grant secret value right threat (override Profile same name config)')
-    assert.equal(paneEnv['API_KEY'], undefined, 'not choose in secret still do not inject')
+    assert.equal(paneEnv['DEPLOY_TOKEN'], 'secret-deploy-7', 'explicitly granted secret overrides same-named Profile config')
+    assert.equal(paneEnv['API_KEY'], undefined, 'ungranted secret remains excluded')
     assert.equal(paneEnv['CI_FLAG'], 'profile-yes')
     assert.equal(Object.hasOwn(paneEnv, '__proto__'), true)
     assert.equal(paneEnv['__proto__'], 'pane-prototype-named-secret')
@@ -655,7 +651,7 @@ test('herdr pane: explicit secretNames one by one name grant (secret right threa
   }
 })
 
-test('herdr pane: grant missing secret in create window side effect before explicit reject (404 secret_not_found)', { timeout: 60_000 }, async () => {
+test('herdr pane: missing granted secret rejects 404 secret_not_found before any pane creation side effects', { timeout: 60_000 }, async () => {
   const env = await openPaneEnv()
   try {
     await assert.rejects(
@@ -667,15 +663,15 @@ test('herdr pane: grant missing secret in create window side effect before expli
       }),
       (e: unknown) => e instanceof HelmError && e.code === 'secret_not_found',
     )
-    assert.equal(env.transport.calls.length, 0, 'reject occur in any create window side effect before')
+    assert.equal(env.transport.calls.length, 0, 'rejection occurs before any pane creation side effects')
   } finally {
     await env.close()
   }
 })
 
-test('herdr Gate: secret do not cache - -Gate start before from when before stash re- authorization take value (create window after same name round swap with new value execute)', { timeout: 60_000 }, async () => {
-  // create window when grant v1; task after completion,Gate before same name round swap is v2:Gate child process gets must be
-  // when before stash  v2, never is create window moment cache v1(paneEnvs only store baseline).
+test('herdr Gate: secrets are not cached across phases — Gate re-authorizes from live stash (picks up rotations)', { timeout: 60_000 }, async () => {
+  // Pane creation receives v1; after task completes and before Gate starts, secret rotates to v2:
+  // Gate child process must observe live stash v2 rather than cached v1 from pane creation.
   const env = await openPaneEnv()
   const creationValue = env.stash.envFor(7)['DEPLOY_TOKEN']!
   env.transport.onPrompted = () => {
@@ -690,24 +686,24 @@ test('herdr Gate: secret do not cache - -Gate start before from when before stas
       secretNames: ['DEPLOY_TOKEN'],
     })) as { action: string }
     assert.equal(outcome.action, 'handled')
-    assert.equal(env.transport.tabEnvs[0]!['DEPLOY_TOKEN'], creationValue, 'create window moment inject is when when v1')
-    assert.equal(env.transport.gateEnvs.length, 1, 'Gate exactly execute once')
+    assert.equal(env.transport.tabEnvs[0]!['DEPLOY_TOKEN'], creationValue, 'pane creation injects initial v1')
+    assert.equal(env.transport.gateEnvs.length, 1, 'Gate runs exactly once')
     const gateEnv = env.transport.gateEnvs[0]!
-    assert.equal(gateEnv['DEPLOY_TOKEN'], 'rotated-value', 'Gate take when before stash value (non- create window moment cache value)')
-    assert.equal(gateEnv['CI_FLAG'], 'profile-yes', 'Gate baseline keep Profile legal variable')
-    assert.equal(gateEnv['HELM_ENV'], '1', 'Gate baseline keep managed variable')
-    assert.equal(gateEnv['HELM_HUB_URL'], 'http://10.0.0.5:3202', 'Gate baseline keep node back connect')
+    assert.equal(gateEnv['DEPLOY_TOKEN'], 'rotated-value', 'Gate reads live stash value rather than creation-time cache')
+    assert.equal(gateEnv['CI_FLAG'], 'profile-yes', 'Gate baseline preserves valid Profile vars')
+    assert.equal(gateEnv['HELM_ENV'], '1', 'Gate baseline preserves managed vars')
+    assert.equal(gateEnv['HELM_HUB_URL'], 'http://10.0.0.5:3202', 'Gate baseline preserves node hubUrl')
   } finally {
     await env.close()
   }
 })
 
-test('herdr Gate:TTL in agent work during expires - -Gate child process start before 404 reject (zero Gate side effect)', { timeout: 60_000 }, async () => {
+test('herdr Gate: secret expiring during agent work rejects 404 before Gate child process spawns (zero Gate side effects)', { timeout: 60_000 }, async () => {
   const clock = { ms: 10_000 }
   const env = await openPaneEnv({
     clock: () => clock.ms,
     onPrompted: () => {
-      clock.ms += 100 // TTL 50ms: task during push enter clock across expires point
+      clock.ms += 100 // TTL 50ms: clock advances past expiration during task work
     },
   })
   try {
@@ -721,19 +717,19 @@ test('herdr Gate:TTL in agent work during expires - -Gate child process start be
         secretNames: ['SHORT_TTL'],
       }),
       (e: unknown) => e instanceof HelmError && e.code === 'secret_not_found',
-      'work during expires grant:Gate before explicit 404, not silently fall back, do not inject old value',
+      'expired grant must fail explicitly 404 before Gate instead of falling back or injecting stale value',
     )
-    assert.equal(env.transport.gateEnvs.length, 0, 'Gate child process zero start (no side effects)')
+    assert.equal(env.transport.gateEnvs.length, 0, 'Gate child process must not spawn (zero side effects)')
   } finally {
     await env.close()
   }
 })
 
-test('herdr Gate: grant do not across task along use - - after continue task do not carries secretNames when Gate only use baseline (do not inject old grant value)', { timeout: 60_000 }, async () => {
+test('herdr Gate: grants do not leak to subsequent tasks — task without secretNames receives baseline only', { timeout: 60_000 }, async () => {
   const env = await openPaneEnv()
   const creationValue = env.stash.envFor(7)['DEPLOY_TOKEN']!
   try {
-    // task 1: carries grant + Gate → Gate environment contains secret value.
+    // Task 1: carries grant + Gate -> Gate env receives granted secret.
     await env.executor.handle({
       parentConversationId: 7,
       prompt: 'first time deploy',
@@ -742,7 +738,7 @@ test('herdr Gate: grant do not across task along use - - after continue task do 
       secretNames: ['DEPLOY_TOKEN'],
     })
     assert.equal(env.transport.gateEnvs[0]!['DEPLOY_TOKEN'], creationValue)
-    // task 2(new pane): do not carries grant + Gate → baseline inside same name Profile value takes effect, never inject task 1 old grant value.
+    // Task 2 (new pane): omits grant + Gate -> Profile baseline applies without reusing Task 1 grant.
     await env.executor.handle({
       parentConversationId: 7,
       prompt: 'second time deploy do not carries secret',
@@ -750,33 +746,33 @@ test('herdr Gate: grant do not across task along use - - after continue task do 
       gate: 'true',
     })
     const gateEnv = env.transport.gateEnvs[1]!
-    assert.equal(gateEnv['DEPLOY_TOKEN'], 'profile-deploy', 'without grant when same name Profile explicit value takes effect (do not along use old grant)')
-    assert.equal(gateEnv['API_KEY'], undefined, 'other secret same do not inject')
+    assert.equal(gateEnv['DEPLOY_TOKEN'], 'profile-deploy', 'same-named Profile var applies when ungranted (no prior grant reuse)')
+    assert.equal(gateEnv['API_KEY'], undefined, 'other secrets likewise stay excluded')
   } finally {
     await env.close()
   }
 })
 
 // ---------------------------------------------------------------------------
-// workflow journal refer grain
+// Workflow journal key granularity
 // ---------------------------------------------------------------------------
 
-test('agentJournalKey:secretNames reference and refer grain (grant change do not re- use old cache; default and undefined same key, without across version do not change promise)', { timeout: 60_000 }, () => {
+test('agentJournalKey incorporates secretNames (grant changes miss stale cache; undefined matches omitted)', { timeout: 60_000 }, () => {
   const base = { prompt: 'p', agentType: 'ci-runner' }
   const without = agentJournalKey(base)
-  assert.equal(agentJournalKey({ ...base, secretNames: undefined }), without, 'undefined and default same key(same is null slot)')
+  assert.equal(agentJournalKey({ ...base, secretNames: undefined }), without, 'undefined matches omitted (same empty slot)')
   const withGrant = agentJournalKey({ ...base, secretNames: ['DEPLOY_TOKEN'] })
   assert.notEqual(withGrant, without)
-  assert.notEqual(agentJournalKey({ ...base, secretNames: ['API_KEY'] }), withGrant, 'different grant different key')
+  assert.notEqual(agentJournalKey({ ...base, secretNames: ['API_KEY'] }), withGrant, 'different grants yield different keys')
 })
 
 // ---------------------------------------------------------------------------
-// real turn compute join motion (createHelm + faux:completed/failed/aborted + late hook)
+// Real turn settlement integration (createHelm + faux: completed/failed/aborted + late hook)
 // ---------------------------------------------------------------------------
 
-test('real turn compute:completed/failed/aborted all stop inject turn secret; old value still redaction;late hook register under one turn', { timeout: 60_000 }, async () => {
+test('real turn settlement: completed/failed/aborted all stop turn secret injection while redacting; late hook registers for next turn', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-secret-turnsettle-'))
-  // slow fast stream (1 tok/s,4 character/token):aborted scenario must real in-flight stream can by cancel; short back re- still second level complete.
+  // Slow token stream (1 tok/s, 4 chars/token) so abort hits while streaming, while short replies stay quick.
   const { app, faux } = await createHubTestApp({
     dataDir,
     cwd: dataDir,
@@ -793,8 +789,8 @@ test('real turn compute:completed/failed/aborted all stop inject turn secret; ol
       definePlugin(ctx) {
         ctx.hook.onTurnSettled((payload) => {
           outcomes.push(payload.outcome)
-          // late hook(only in first time compute register, verify reclaim boundary): compute chain inside register turn secret
-          // (settleTurn already first row push enter counter)→ belong under one turn.
+          // Late hook (registers only on first settlement to verify reclamation boundary):
+          // registering during settlement (`settleTurn` already bumped seq) belongs to the next turn.
           if (!latePut) {
             latePut = true
             stash.put(payload.conversation.id, 'LATE_HOOK_KEY', `late-${payload.conversation.id}`, { scope: 'turn' })
@@ -803,7 +799,7 @@ test('real turn compute:completed/failed/aborted all stop inject turn secret; ol
       },
     } satisfies PluginDefinition)
 
-    // --- completed: real succeeded turn
+    // --- completed: real successful turn
     const conv = await kernel.createConversation({ title: 'secret turn' })
     stash.put(conv.id, 'TURN_TOKEN', 'turn-tok-value', { scope: 'turn' })
     stash.put(conv.id, 'SESSION_TOKEN', 'session-tok-value')
@@ -812,18 +808,18 @@ test('real turn compute:completed/failed/aborted all stop inject turn secret; ol
     await kernel.waitForIdle(conv.id)
     await waitFor(() => outcomes.length >= 1, { timeoutMs: 8_000, intervalMs: 15 })
     assert.equal(outcomes[0], 'completed')
-    assert.equal(stash.has(conv.id, 'TURN_TOKEN'), false, 'completed compute after turn secret stop inject (payload.conversation.id real join motion)')
-    assert.equal(stash.has(conv.id, 'SESSION_TOKEN'), true, 'conversation level do not subject to compute affect')
-    assert.equal(stash.envFor(conv.id)['LATE_HOOK_KEY'], `late-${conv.id}`, 'late hook register turn secret store (belong under one turn)')
-    assert.equal(stash.redact('turn-tok-value').includes('turn-tok-value'), false, 'compute after old value still redaction')
+    assert.equal(stash.has(conv.id, 'TURN_TOKEN'), false, 'completed settlement stops turn secret injection')
+    assert.equal(stash.has(conv.id, 'SESSION_TOKEN'), true, 'conversation-scoped secrets survive settlement')
+    assert.equal(stash.envFor(conv.id)['LATE_HOOK_KEY'], `late-${conv.id}`, 'late hook registration remains live for the next turn')
+    assert.equal(stash.redact('turn-tok-value').includes('turn-tok-value'), false, 'old value remains redacted after settlement')
 
-    // --- late hook register follow under once compute reclaim
+    // --- late hook secret is reclaimed on the subsequent settlement
     faux.setResponses([fauxAssistantMessage('second answer')])
     await kernel.submitInput(conv.id, 'second question')
     await kernel.waitForIdle(conv.id)
     await waitFor(() => outcomes.length >= 2, { timeoutMs: 8_000, intervalMs: 15 })
     assert.equal(outcomes[1], 'completed')
-    assert.equal(stash.has(conv.id, 'LATE_HOOK_KEY'), false, 'late register follow under once turn compute reclaim')
+    assert.equal(stash.has(conv.id, 'LATE_HOOK_KEY'), false, 'late registration reclaims on the next turn settlement')
 
     // --- failed: real failed turn (faux stopReason=error)
     const failed = await kernel.createConversation({ title: 'failed turn' })
@@ -832,10 +828,10 @@ test('real turn compute:completed/failed/aborted all stop inject turn secret; ol
     await kernel.submitInput(failed.id, 'will failed issue')
     await kernel.waitForIdle(failed.id)
     await waitFor(() => outcomes.includes('failed'), { timeoutMs: 8_000, intervalMs: 15 })
-    assert.equal(stash.has(failed.id, 'FAIL_TURN'), false, 'failed compute same reclaim turn secret')
+    assert.equal(stash.has(failed.id, 'FAIL_TURN'), false, 'failed settlement likewise reclaims turn secret')
     assert.equal(stash.redact('fail-secret').includes('fail-secret'), false)
 
-    // --- aborted: slow fast streaming in real in-flight cancel
+    // --- aborted: real in-flight cancellation during slow token stream
     const abortedConv = await kernel.createConversation({ title: 'abort turn' })
     stash.put(abortedConv.id, 'ABORT_TURN', 'abort-secret', { scope: 'turn' })
     faux.setResponses([fauxAssistantMessage('this is one segment by slow fast streaming output long text ensure abort when turn still in streaming in')])
@@ -843,7 +839,7 @@ test('real turn compute:completed/failed/aborted all stop inject turn secret; ol
     await kernel.abortConversation(abortedConv.id)
     await kernel.waitForIdle(abortedConv.id)
     await waitFor(() => outcomes.includes('aborted'), { timeoutMs: 8_000, intervalMs: 15 })
-    assert.equal(stash.has(abortedConv.id, 'ABORT_TURN'), false, 'aborted compute same reclaim turn secret')
+    assert.equal(stash.has(abortedConv.id, 'ABORT_TURN'), false, 'aborted settlement likewise reclaims turn secret')
     assert.equal(stash.redact('abort-secret').includes('abort-secret'), false)
   } finally {
     await app.close()
@@ -852,12 +848,12 @@ test('real turn compute:completed/failed/aborted all stop inject turn secret; ol
 })
 
 // ---------------------------------------------------------------------------
-// original generate execute row honest reject (without external runtime consume when never pretend grant succeeded)
+// Native executor honest rejection (never pretend grants work when no external runtime consumes them)
 // ---------------------------------------------------------------------------
 
-test('original generate execute row: non-empty secretNames explicit unsupported_secret_grant(by default plugin collection without external runtime not silently ignore); empty array etc. same not grant', { timeout: 60_000 }, async () => {
+test('native executor: non-empty secretNames rejects with unsupported_secret_grant; empty array is a no-op', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-secret-native-'))
-  // by default plugin collection:builtin:herdr deactivate → agent_spawn without external runtime take over, original generate execute row must explicit reject.
+  // Default plugin set disables `builtin:herdr` -> no external runtime intercepts `agent_spawn`, so native executor must reject explicitly.
   const { app, faux } = await createHubTestApp({ dataDir, cwd: dataDir })
   try {
     const kernel = app.kernel
@@ -870,16 +866,16 @@ test('original generate execute row: non-empty secretNames explicit unsupported_
         secretNames: ['NATIVE_KEY'],
       }),
       (e: unknown) => e instanceof HelmError && e.code === 'unsupported_secret_grant',
-      'original generate sub-conversation cannot bear connect parent conversation secret grant: explicit errors, not silently ignore, do not pretend subagent already acquire',
+      'native child conversations cannot inherit parent secret grants and must fail explicitly',
     )
-    // empty array = not grant: original generate execute row normal execute (faux sub-conversation real complete).
+    // Empty array = no grant: native executor runs normally (real faux child conversation completes).
     faux.setResponses([fauxAssistantMessage('original generate answer')])
     const result = await kernel.spawnAgent({
       parentConversationId: 1,
       prompt: 'empty grant task',
       secretNames: [],
     })
-    assert.ok(result !== undefined, 'empty array etc. same not grant, original generate execute do not subject to affect')
+    assert.ok(result !== undefined, 'empty secretNames acts as no grant and does not block native execution')
   } finally {
     await app.close()
     rmSync(dataDir, { recursive: true, force: true })
@@ -887,11 +883,11 @@ test('original generate execute row: non-empty secretNames explicit unsupported_
 })
 
 // ---------------------------------------------------------------------------
-// plugin config naming empty between and motion state credentials isolated (original plugin-config-namespace.test.ts)
+// Plugin config namespace and dynamic credential isolation (formerly plugin-config-namespace.test.ts)
 // ---------------------------------------------------------------------------
 
-// motion state credentials and configSchema secret shared use credentials.json, but only declaration config can out station.
-test('plugin config HTTP in restart and deactivate when all hide motion state credentials, and keep already declaration config redaction', { timeout: 60_000 }, async () => {
+// Dynamic credentials and configSchema secrets share credentials.json, but only declared config fields may leave the endpoint.
+test('plugin config HTTP hides dynamic credentials across restarts and disablement while redacting declared secrets', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-config-namespace-'))
   const pluginId = 'test:dynamic-credentials'
   const dynamicSecret = 'dynamic-hook-signing-key-7e4a'
@@ -920,9 +916,9 @@ test('plugin config HTTP in restart and deactivate when all hide motion state cr
         }))
         assert.equal(response.status, 200)
         const body = await response.text()
-        assert.ok(!body.includes(dynamicSecret), 'deactivate plugin motion state secret key must not via config interface leak leak')
-        assert.ok(!body.includes('webhook:demo'), 'motion state secret key must not into is public config field')
-        assert.ok(!body.includes(configSecret), 'declaration secret must mask code')
+        assert.ok(!body.includes(dynamicSecret), 'disabled plugin dynamic secret must not leak via config endpoint')
+        assert.ok(!body.includes('webhook:demo'), 'dynamic secret key must not surface as a public config field')
+        assert.ok(!body.includes(configSecret), 'declared secret must be masked')
         const parsed = JSON.parse(body) as { values: Record<string, unknown> }
         assert.equal(parsed.values.apiKey, '******')
         assert.equal(Object.hasOwn(parsed.values, 'webhook:demo'), false)

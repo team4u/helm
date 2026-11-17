@@ -1,14 +1,14 @@
 /**
- * original ground override heavy (replaceFromEntryId) atomicity regression test (real pi-durable SDK):
- * - single transaction commit: same batch event also contains rewind and new input, without half into product rewind;
- * - concurrency two time edit the same entry: at most once succeeded, another time 409;
- * - input hook block intercept: keep old question answer (do not rewind);
- * - non- human / non- helm.input target reject (400/409);
- * - page throw shadow:marker slide out one page after old record does not resurrect (load all page still excludes old content),
- *   also SDK raw entries verify history still save;
- * - FTS rebuild exclude old record and keep same transaction new input;
- * - new answer on failure getLastAssistantText do not return by override answer proposal;
- * - faux factory catch real provider TranscriptContext, verify excludes by override old question answer.
+ * In-place rewrite/edit (`replaceFromEntryId`) atomicity regression tests (real `pi-durable` SDK):
+ * - Single transaction commit: same event batch includes both rewind and new input, with no half-completed rewind;
+ * - Two concurrent edits to the same entry: at most one succeeds, the other gets 409;
+ * - Input hook interception: preserves previous Q&A without triggering rewind;
+ * - Non-human / non-`helm.input` targets reject (400/409);
+ * - Paginated projection: once the rewind marker scrolls off a page, loading all pages still hides omitted entries,
+ *   while SDK raw entries retain full history;
+ * - FTS rebuild excludes omitted records and retains same-transaction new input;
+ * - When the new reply fails, `getLastAssistantText` does not return the overwritten reply;
+ * - Faux factory captures real provider `TranscriptContext`, verifying omitted Q&A is absent from model context.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -62,7 +62,7 @@ interface TurnEntry {
   data?: unknown
 }
 
-/** conversation all amount item summary (SDK raw entries; verify history still save). */
+/** Summarizes all entries in a conversation via raw SDK `entries()` to verify history preservation. */
 async function entrySummaries(env: Env, convId: number): Promise<TurnEntry[]> {
   const conv = await harnessOf(env).conversation(convId as never, BACKGROUND_CONTEXT)
   assert.ok(conv)
@@ -98,10 +98,10 @@ async function askTurn(env: Env, convId: number, text: string): Promise<void> {
   await env.app.kernel.waitForIdle(convId)
 }
 
-test('atomic transaction: same batch commit event contains rewind and new input;SDK raw history still save;provider context excludes old question answer', { timeout: 60_000 }, async () => {
+test('atomic transaction: same commit batch contains rewind and new input; raw SDK history preserved; provider context omits overwritten Q&A', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
-    // finally once faux response use work vendor function catch real TranscriptContext.
+    // Use a factory callback on the final faux response to capture the real `TranscriptContext`.
     const contexts: TranscriptContext[] = []
     env.faux.setResponses([
       fauxAssistantMessage('one round answer'),
@@ -117,19 +117,19 @@ test('atomic transaction: same batch commit event contains rewind and new input;
 
     const entries = await entrySummaries(env, conv.id)
     const secondInput = entries.find((e) => e.kind === 'helm.input' && e.text === 'second round old issue')
-    assert.ok(secondInput, 'should store in second round helm.input')
+    assert.ok(secondInput, 'second round helm.input should exist')
 
-    // observe same batch commit event:rewind and new input should in the same batch entry written to the database in.
+    // Verify atomic batch commit: rewind marker and new input are written in the same batch.
     const { submissionId } = await env.app.kernel.submitInput(conv.id, 'change write after new issue', {
       replaceFromEntryId: secondInput.id,
     })
     assert.ok(Number.isInteger(Number(submissionId)))
     await env.app.kernel.waitForIdle(conv.id)
 
-    // 1) rewind mark record carry closed zone between contract (fromEntryId/throughEntryId/omittedInputIds).
+    // 1) Rewind marker carries closed range contract (`fromEntryId`/`throughEntryId`/`omittedInputIds`).
     const after = await entrySummaries(env, conv.id)
     const rewind = after.find((e) => e.kind === 'helm.rewind')
-    assert.ok(rewind, 'should store in helm.rewind mark record')
+    assert.ok(rewind, 'helm.rewind marker should exist')
     const rewindData = rewind.data as {
       fromEntryId: number
       throughEntryId: number
@@ -137,28 +137,28 @@ test('atomic transaction: same batch commit event contains rewind and new input;
       omittedInputIds: string[]
     }
     assert.equal(rewindData.fromEntryId, secondInput.id)
-    assert.ok(rewindData.throughEntryId >= secondInput.id, 'throughEntryId override target')
-    // new input item ID must > throughEntryId(do not by self household zone between mistakenly delete).
+    assert.ok(rewindData.throughEntryId >= secondInput.id, 'throughEntryId covers target entry')
+    // New input entry ID must exceed `throughEntryId` so it never falls inside its own omitted range.
     const newInput = after.find((e) => e.kind === 'helm.input' && e.text === 'change write after new issue')
-    assert.ok(newInput, 'new input should written to the database')
-    assert.ok(Number(newInput.id) > rewindData.throughEntryId, 'new input ID high at override zone between on boundary')
-    // omittedInputIds collect by override person class input request id.
+    assert.ok(newInput, 'new input should be persisted')
+    assert.ok(Number(newInput.id) > rewindData.throughEntryId, 'new input ID must be above the omitted range upper bound')
+    // `omittedInputIds` records overwritten human submission IDs.
     assert.ok(
       rewindData.omittedInputIds.some((id) => id.length > 0),
-      'omittedInputIds should contain by override input request id',
+      'omittedInputIds should contain the overwritten input request id',
     )
 
-    // 2) SDK raw entries: old question answer still thing save (logic hide while non- delete).
+    // 2) Raw SDK entries: old Q&A remain physically stored (logically hidden, not deleted).
     assert.ok(
       after.some((e) => e.kind === 'helm.input' && e.text === 'second round old issue'),
-      'SDK raw entries should still save old mention question (logic hide)',
+      'raw SDK entries should still retain old question (logically hidden)',
     )
     assert.ok(
       after.some((e) => e.kind === 'pi.assistant' && e.text === 'second round old answer'),
-      'SDK raw entries should still save old answer',
+      'raw SDK entries should still retain old answer',
     )
 
-    // 3) detail situation throw shadow: old content hide, new content appear, one round keep.
+    // 3) Detail projection: overwritten content hidden, new content visible, round 1 preserved.
     const detail = await env.app.kernel.getConversationDetail(conv.id, { limit: 200 })
     const detailTexts = detail.entries
       .map((e) => {
@@ -176,31 +176,31 @@ test('atomic transaction: same batch commit event contains rewind and new input;
         return ''
       })
       .filter((t) => t !== '')
-    assert.ok(!detailTexts.some((t) => t === 'second round old issue'), `old mention question should by throw shadow hide:${JSON.stringify(detailTexts)}`)
-    assert.ok(!detailTexts.some((t) => t === 'second round old answer'), 'old answer should by throw shadow hide')
-    assert.ok(detailTexts.some((t) => t.includes('one round issue')), 'one round keep')
-    assert.ok(detailTexts.some((t) => t.includes('change write after new issue')), 'new mention question appear')
-    assert.ok(detailTexts.some((t) => t.includes('heavy after new answer')), 'new answer appear')
+    assert.ok(!detailTexts.some((t) => t === 'second round old issue'), `old question should be hidden by projection: ${JSON.stringify(detailTexts)}`)
+    assert.ok(!detailTexts.some((t) => t === 'second round old answer'), 'old answer should be hidden by projection')
+    assert.ok(detailTexts.some((t) => t.includes('one round issue')), 'round 1 preserved')
+    assert.ok(detailTexts.some((t) => t.includes('change write after new issue')), 'new question visible')
+    assert.ok(detailTexts.some((t) => t.includes('heavy after new answer')), 'new answer visible')
 
-    // 4) real provider TranscriptContext: model request excludes by override old question answer.
-    assert.equal(contexts.length, 1, 'work vendor function should catch once provider invoke')
+    // 4) Real provider `TranscriptContext`: model request excludes overwritten Q&A.
+    assert.equal(contexts.length, 1, 'factory callback should capture one provider invocation')
     const providerTexts = messageTexts(contexts[0]!.messages as never as Array<{ role: string; content: unknown }>)
     assert.ok(
       !providerTexts.some((t) => t.includes('second round old issue')),
-      `provider context must not contains old mention question:${JSON.stringify(providerTexts)}`,
+      `provider context must not contain old question: ${JSON.stringify(providerTexts)}`,
     )
     assert.ok(
       !providerTexts.some((t) => t.includes('second round old answer')),
-      'provider context must not contains old answer',
+      'provider context must not contain old answer',
     )
-    assert.ok(providerTexts.some((t) => t.includes('change write after new issue')), 'provider context contains new mention question')
-    assert.ok(providerTexts.some((t) => t.includes('one round issue')), 'provider context keep one round')
+    assert.ok(providerTexts.some((t) => t.includes('change write after new issue')), 'provider context contains new question')
+    assert.ok(providerTexts.some((t) => t.includes('one round issue')), 'provider context preserves round 1')
   } finally {
     await env.close()
   }
 })
 
-test('concurrency two time edit the same entry: at most once succeeded, another time 409, without half into product rewind', { timeout: 60_000 }, async () => {
+test('concurrent edits to the same entry: at most one succeeds, the other gets 409 with no partial rewind', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     env.faux.setResponses([
@@ -214,8 +214,8 @@ test('concurrency two time edit the same entry: at most once succeeded, another 
     const target = entries.find((e) => e.kind === 'helm.input' && e.text === 'concurrency old issue')
     assert.ok(target)
 
-    // the same tick concurrency two time edit: two transaction all read the same tail part, after rewind zone between
-    // core verify (first already by override) or submit conflict must failed.
+    // Same-tick concurrent edits: both read the same tail, then commit-time conflict check or
+    // rewind range validation ensures the second fails cleanly.
     const [a, b] = await Promise.allSettled([
       env.app.kernel.submitInput(conv.id, 'concurrency new issue A', { replaceFromEntryId: target.id }),
       env.app.kernel.submitInput(conv.id, 'concurrency new issue B', { replaceFromEntryId: target.id }),
@@ -223,36 +223,36 @@ test('concurrency two time edit the same entry: at most once succeeded, another 
     const settled = [a, b]
     const fulfilled = settled.filter((r) => r.status === 'fulfilled')
     const rejected = settled.filter((r) => r.status === 'rejected')
-    assert.ok(fulfilled.length >= 1, 'at least once succeeded')
-    assert.ok(rejected.length >= 1, 'at least once 409 reject')
+    assert.ok(fulfilled.length >= 1, 'at least one edit succeeds')
+    assert.ok(rejected.length >= 1, 'at least one edit rejects with 409')
     for (const r of rejected) {
       const err = r.reason as HelmError
       assert.ok(
         err instanceof HelmError && (err.status === 409 || err.status === 404),
-        `reject should be 409/404(actual ${String(err?.status)} ${String(err?.code)})`,
+        `rejection should be 409/404 (got ${String(err?.status)} ${String(err?.code)})`,
       )
     }
     await env.app.kernel.waitForIdle(conv.id).catch(() => {})
 
-    // without half into product rewind: succeeded zone between complete, and succeeded new input still visible.
+    // No half-baked rewind: range bounds are consistent and winning input stays visible.
     const after = await entrySummaries(env, conv.id)
     const rewinss = after.filter((e) => e.kind === 'helm.rewind')
-    assert.ok(rewinss.length <= 2, 'rewind mark record amount subject to control')
+    assert.ok(rewinss.length <= 2, 'rewind marker count stays bounded')
     for (const marker of rewinss) {
       const data = marker.data as { fromEntryId: number; throughEntryId: number; omittedEntryIds: number[] }
-      assert.ok(Number.isSafeInteger(data.throughEntryId), 'rewind carry throughEntryId')
-      assert.ok(data.throughEntryId >= data.fromEntryId, 'override zone between legal')
+      assert.ok(Number.isSafeInteger(data.throughEntryId), 'rewind carries valid throughEntryId')
+      assert.ok(data.throughEntryId >= data.fromEntryId, 'rewind range is valid')
     }
     const winnerText = fulfilled.length === 1
       ? (fulfilled[0] as PromiseFulfilledResult<{ submissionId: string }>).value
       : undefined
-    assert.ok(winnerText !== undefined || fulfilled.length === 1, 'succeeded return submissionId')
+    assert.ok(winnerText !== undefined || fulfilled.length === 1, 'winning edit returns submissionId')
   } finally {
     await env.close()
   }
 })
 
-test('stale edit in input hook suspended after restore: reject when must not abort already succeeded edit new turn', { timeout: 60_000 }, async () => {
+test('stale edit resuming from suspended input hook must not abort an already-succeeded newer edit turn', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   let releaseHook!: () => void
   let enteredHook!: () => void
@@ -294,7 +294,7 @@ test('stale edit in input hook suspended after restore: reject when must not abo
     releaseHook()
     const error = await stale
     assert.ok(error instanceof HelmError && error.status === 409)
-    assert.equal(kernel.getConversation(conv.id).status, 'working', 'stale edit cannot abort succeeded')
+    assert.equal(kernel.getConversation(conv.id).status, 'working', 'stale edit must not abort newer edit turn')
     releaseModel()
     await kernel.waitForIdle(conv.id)
     assert.equal((await kernel.waitForInput(conv.id, accepted.submissionId)).text, 'succeeded edit answer')
@@ -305,11 +305,10 @@ test('stale edit in input hook suspended after restore: reject when must not abo
   }
 })
 
-test('input hook block intercept: old question answer keep (without rewind side effect)', { timeout: 60_000 }, async () => {
+test('input hook interception preserves old Q&A without triggering rewind', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
-    // via kernel plugin host hang a take over type input hook: for take over text produces no real turn
-    //(input hook semantics:handled take over;AGENTS.md in block belong tool_call).
+    // Attach a take-over `input` hook (`handled`) so no real turn runs for intercepted text.
     let armed = true
     await env.app.kernel.plugins.register({
       id: 'test:input-block',
@@ -330,44 +329,44 @@ test('input hook block intercept: old question answer keep (without rewind side 
     const target = entries.find((e) => e.kind === 'helm.input' && e.text === 'block intercept before issue')
     assert.ok(target)
 
-    // take over: produces no rewind, old question answer completely well, without real turn commit.
+    // Handled: produces no rewind, leaves prior Q&A intact, and commits no real turn.
     const handled = await env.app.kernel.submitInput(conv.id, 'by block intercept edit', {
       replaceFromEntryId: target.id,
     })
-    assert.ok(handled.submissionId.startsWith('handled:'), 'take over commit return handled: prefix')
+    assert.ok(handled.submissionId.startsWith('handled:'), 'handled submission returns handled: prefix')
     const afterBlock = await entrySummaries(env, conv.id)
-    assert.ok(!afterBlock.some((e) => e.kind === 'helm.rewind'), 'block intercept after must not has rewind')
+    assert.ok(!afterBlock.some((e) => e.kind === 'helm.rewind'), 'must not write rewind marker when handled by hook')
     const ctxAfter = await (await harnessOf(env).conversation(conv.id as never, BACKGROUND_CONTEXT))!.context(BACKGROUND_CONTEXT)
     const textsAfter = messageTexts(ctxAfter.messages as never as Array<{ role: string; content: unknown }>)
-    assert.ok(textsAfter.some((t) => t.includes('block intercept before issue')), 'old mention question keep')
-    assert.ok(textsAfter.some((t) => t.includes('block intercept before answer')), 'old answer keep')
+    assert.ok(textsAfter.some((t) => t.includes('block intercept before issue')), 'old question preserved')
+    assert.ok(textsAfter.some((t) => t.includes('block intercept before answer')), 'old answer preserved')
 
-    // solve except block intercept after the same target can normal edit.
+    // Once interception is disarmed, the same target can be edited normally.
     armed = false
     env.faux.setResponses([fauxAssistantMessage('solve except after new answer')])
     await env.app.kernel.submitInput(conv.id, 'solve except after edit', { replaceFromEntryId: target.id })
     await env.app.kernel.waitForIdle(conv.id)
     const ctxOk = await (await harnessOf(env).conversation(conv.id as never, BACKGROUND_CONTEXT))!.context(BACKGROUND_CONTEXT)
     const textsOk = messageTexts(ctxOk.messages as never as Array<{ role: string; content: unknown }>)
-    assert.ok(textsOk.some((t) => t.includes('solve except after edit')), 'solve except after edit takes effect')
-    assert.ok(!textsOk.some((t) => t.includes('block intercept before answer')), 'old answer by override')
+    assert.ok(textsOk.some((t) => t.includes('solve except after edit')), 'edit succeeds after disarming')
+    assert.ok(!textsOk.some((t) => t.includes('block intercept before answer')), 'old answer overwritten')
   } finally {
     await env.close()
   }
 })
 
-test('non- human / non- helm.input target reject:assistant 400;agent/trigger source 409', { timeout: 60_000 }, async () => {
+test('non-human / non-helm.input target rejected: assistant 400; agent/trigger origins 409', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     env.faux.setResponses([fauxAssistantMessage('target decide old answer')])
     const conv = await env.app.kernel.createConversation({ title: 'target decide' })
-    // agent source input.
+    // `agent` origin input.
     await env.app.kernel.submitInput(conv.id, 'agent source issue', { origin: 'agent' })
     await env.app.kernel.waitForIdle(conv.id)
-    // trigger source input.
+    // `trigger` origin input.
     await env.app.kernel.submitInput(conv.id, 'trigger source issue', { origin: 'trigger' })
     await env.app.kernel.waitForIdle(conv.id)
-    // human source input.
+    // `human` origin input.
     await askTurn(env, conv.id, 'human source issue')
 
     const entries = await entrySummaries(env, conv.id)
@@ -403,7 +402,7 @@ test('non- human / non- helm.input target reject:assistant 400;agent/trigger sou
   }
 })
 
-test('page throw shadow: small limit across page and marker slide out one page, load all page still excludes old content', { timeout: 60_000 }, async () => {
+test('paginated projection: overwritten entries stay hidden across pages even after marker slides off first page', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     env.faux.setResponses([
@@ -421,10 +420,10 @@ test('page throw shadow: small limit across page and marker slide out one page, 
     assert.ok(secondInput)
     await env.app.kernel.submitInput(conv.id, 'page new issue', { replaceFromEntryId: secondInput.id })
     await env.app.kernel.waitForIdle(conv.id)
-    // rewind after again patch one round normal dialog, marker push obtain leave tail part more far (slide out small page).
+    // Add another turn after rewind so the marker moves further from the tail (outside a small page).
     await askTurn(env, conv.id, 'page after continue issue')
 
-    // limit=2 one by one page load until exhausted.
+    // Load page by page with `limit=2` until exhausted.
     const seenTexts: string[] = []
     let cursor: string | undefined = undefined
     let pages = 0
@@ -453,28 +452,28 @@ test('page throw shadow: small limit across page and marker slide out one page, 
       }
       if (page.nextCursor === undefined) break
       cursor = page.nextCursor
-      assert.ok(pages < 50, 'page must not infinite loop')
+      assert.ok(pages < 50, 'pagination must not loop infinitely')
     }
-    assert.ok(pages >= 2, 'at least across two page')
-    // all page load completely: by override old content never re-.
+    assert.ok(pages >= 2, 'must span at least two pages')
+    // Overwritten content never resurfaces across all pages.
     assert.ok(
       !seenTexts.some((t) => t === 'page second round old issue'),
-      `all page must not contains by override old mention question:${JSON.stringify(seenTexts)}`,
+      `no page may contain overwritten question: ${JSON.stringify(seenTexts)}`,
     )
     assert.ok(
       !seenTexts.some((t) => t === 'page second round old answer'),
-      'all page must not contains by override old answer',
+      'no page may contain overwritten answer',
     )
-    // valid content all in manual (new question answer and before after round keep).
-    assert.ok(seenTexts.some((t) => t.includes('page one round issue')), 'one round visible')
-    assert.ok(seenTexts.some((t) => t.includes('page new issue')), 'new mention question visible')
-    assert.ok(seenTexts.some((t) => t.includes('page after continue issue')), 'after continue round visible')
+    // Valid turns remain visible.
+    assert.ok(seenTexts.some((t) => t.includes('page one round issue')), 'round 1 visible')
+    assert.ok(seenTexts.some((t) => t.includes('page new issue')), 'new question visible')
+    assert.ok(seenTexts.some((t) => t.includes('page after continue issue')), 'subsequent round visible')
   } finally {
     await env.close()
   }
 })
 
-test('FTS: atomic transaction new input immediately can inspect index;rebuildFts exclude old record and keep new content', { timeout: 60_000 }, async () => {
+test('FTS: atomic commit indexes new input immediately; rebuildFts excludes omitted entries and keeps new content', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     env.faux.setResponses([
@@ -491,29 +490,29 @@ test('FTS: atomic transaction new input immediately can inspect index;rebuildFts
     await env.app.kernel.submitInput(conv.id, 'ftsq3 solely has new mention question', { replaceFromEntryId: second.id })
     await env.app.kernel.waitForIdle(conv.id)
 
-    // atomic transaction new input index (observe path indexFts onInputCommitted).
+    // Atomic transaction indexes the new input immediately (`indexFts` in `onInputCommitted`).
     const newHit = await env.app.kernel.search('ftsq3')
-    assert.ok(newHit.some((h) => h.conversationId === conv.id), 'new mention question should hit FTS')
-    // old content no longer hit (unique token, avoid prefix mistakenly hit other item).
+    assert.ok(newHit.some((h) => h.conversationId === conv.id), 'new question should hit FTS')
+    // Old tokens no longer match (distinct tokens avoid prefix false hits).
     const oldQ = await env.app.kernel.search('ftsq2')
-    assert.equal(oldQ.filter((h) => h.conversationId === conv.id).length, 0, 'old mention question do not hit')
+    assert.equal(oldQ.filter((h) => h.conversationId === conv.id).length, 0, 'old question should not match')
     const oldA = await env.app.kernel.search('ftsb')
-    assert.equal(oldA.filter((h) => h.conversationId === conv.id).length, 0, 'old answer do not hit')
+    assert.equal(oldA.filter((h) => h.conversationId === conv.id).length, 0, 'old answer should not match')
 
-    // rebuildFts after: old content still do not hit, new content keep.
+    // After rebuildFts: old content stays excluded, new content remains indexed.
     await env.app.kernel.rebuildFts()
     const rebuiltOld = await env.app.kernel.search('ftsb')
-    assert.equal(rebuiltOld.filter((h) => h.conversationId === conv.id).length, 0, 'rebuild after old answer do not hit')
+    assert.equal(rebuiltOld.filter((h) => h.conversationId === conv.id).length, 0, 'old answer stays excluded after rebuild')
     const rebuiltNew = await env.app.kernel.search('ftsq3')
-    assert.ok(rebuiltNew.some((h) => h.conversationId === conv.id), 'rebuild after new mention question keep')
+    assert.ok(rebuiltNew.some((h) => h.conversationId === conv.id), 'new question kept after rebuild')
     const rebuiltNewA = await env.app.kernel.search('ftsc')
-    assert.ok(rebuiltNewA.some((h) => h.conversationId === conv.id), 'rebuild after new answer keep')
+    assert.ok(rebuiltNewA.some((h) => h.conversationId === conv.id), 'new answer kept after rebuild')
   } finally {
     await env.close()
   }
 })
 
-test('new answer failed:getLastAssistantText do not return by override answer proposal', { timeout: 60_000 }, async () => {
+test('new reply failure: getLastAssistantText does not return the overwritten reply', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     env.faux.setResponses([
@@ -531,19 +530,19 @@ test('new answer failed:getLastAssistantText do not return by override answer pr
     const target = entries.find((e) => e.kind === 'helm.input' && e.text === 'by override issue')
     assert.ok(target)
 
-    // new answer inject failed:faux work vendor throws (faux.setResponses empty → fails path).
+    // Inject failure on the new reply (callback throws).
     env.faux.setResponses([
       (async () => {
         throw new Error('faux model inject failed')
       }) as never,
     ])
     await env.app.kernel.submitInput(conv.id, 'note set failed edit', { replaceFromEntryId: target.id })
-    // wait for turn compute (failed also is terminal state).
+    // Wait for turn settlement (failure is also terminal).
     await env.app.kernel.waitForIdle(conv.id).catch(() => {})
 
-    // cache already by rewind expires: do not return by override old answer proposal.
+    // Cache invalidated by rewind: must not return the overwritten old reply.
     const after = await env.app.kernel.getLastAssistantText(conv.id)
-    assert.notEqual(after, 'by override old answer', 'must not return by override old answer proposal')
+    assert.notEqual(after, 'by override old answer', 'must not return the overwritten old reply')
   } finally {
     await env.close()
   }

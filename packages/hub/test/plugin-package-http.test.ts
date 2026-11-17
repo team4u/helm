@@ -1,19 +1,19 @@
 /**
- * plugin package manage HTTP routing integration test (install / update / remove).
+ * Integration tests for plugin package management HTTP routes (`install` / `update` / `remove`).
  *
- * combine discipline: real createHubHandler + real PluginHost(connect line PluginPackageManager
- * and real ConfigService store)+ real local plugin source directory (doctor all chain real execute,
- * contains real TS transpile and temporary host register);npm/git do not trigger network (this file only test local path).
+ * Composition discipline: real `createHubHandler` + real `PluginHost` (wired to `PluginPackageManager`
+ * and real `ConfigService` persistence) + real local plugin source directories (full doctor pipeline
+ * including real TS transpilation and temporary host registration); no npm/git network access (local paths only).
  *
- * override:
- * - POST /api/plugins/install body { source, enable? }: by default disabled,enable
- *   after enabled,enableError pass-through, unknown field 400, illegal source 400;
- * - POST /api/plugins/:id/update: heavy sync + record push enter; not managed plugin 404;
- * - POST /api/plugins/:id/remove: managed directory delete, record delete;
- * - not connect line install (pure PluginHost) when three end point 501;
- * - GET /api/plugins  managed mapping (store drive, restart restore semantics same chain).
+ * Covers:
+ * - `POST /api/plugins/install` `{ source, enable? }`: disabled by default, enabled when `enable: true`,
+ *   `enableError` pass-through, 400 on unknown fields or invalid sources;
+ * - `POST /api/plugins/:id/update`: re-syncs and bumps record; 404 for unmanaged plugins;
+ * - `POST /api/plugins/:id/remove`: deletes managed directory and persisted record;
+ * - 501 across all three endpoints when install manager is unwired (bare `PluginHost`);
+ * - `GET /api/plugins` `managed` mapping (store-driven, matching restart restoration semantics).
  *
- * runner: tsx --test; each items explicit timeout: 60_000.
+ * Runner: `tsx --test`; every test declares `{ timeout: 60_000 }`.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -25,7 +25,7 @@ import { createHubHandler } from '../../kernel/src/http/index.js'
 import { createHubTestApp, openHubTestEnv } from './helpers/hub-test-env.js'
 
 // ---------------------------------------------------------------------------
-// base create
+// Fixtures
 // ---------------------------------------------------------------------------
 
 const PLUGIN_SRC = (id: string) => `export default {
@@ -53,7 +53,7 @@ interface HubEnv {
 async function makeHub(): Promise<HubEnv> {
   const env = await openHubTestEnv({ prefix: 'helm-pkg-http-' })
   const handler = createHubHandler(env.kernel as never)
-  // real authentication chain:setup take token, after continue Bearer carry
+  // Real auth flow: setup returns a token, carried via Bearer auth afterwards.
   const setupResponse = await handler(new Request('http://127.0.0.1:3202/api/auth/setup', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -96,10 +96,10 @@ function writeLocalPlugin(parent: string, id: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// routing
+// Routes
 // ---------------------------------------------------------------------------
 
-test('install(by default disabled)-> list contains managed -> enable join motion', { timeout: 60_000 }, async () => {
+test('install (disabled by default) -> list includes managed -> enable flow', { timeout: 60_000 }, async () => {
   const env = await makeHub()
   try {
     const srcParent = mkdtempSync(join(tmpdir(), 'helm-pkg-httpsrc-'))
@@ -107,16 +107,16 @@ test('install(by default disabled)-> list contains managed -> enable join motion
     const installed = await env.call('POST', '/api/plugins/install', { source: src })
     assert.equal(installed.status, 200)
     assert.equal(installed.body.record.pluginId, 'http-demo')
-    assert.equal(installed.body.summary.enabled, false, 'by default disabled')
-    assert.ok(installed.body.summary.managed, 'summary should carry managed')
+    assert.equal(installed.body.summary.enabled, false, 'disabled by default')
+    assert.ok(installed.body.summary.managed, 'summary should carry managed metadata')
     assert.equal(installed.body.summary.managed.source.path, src)
 
-    // managed directory store in;list end point managed mapping
+    // Managed directory exists; list endpoint maps `managed`.
     assert.ok(existsSync(join(env.dataDir, 'plugins', 'http-demo', 'index.mjs')))
     const list = await env.call('GET', '/api/plugins')
     const found = list.body.find((p: any) => p.id === 'http-demo')
-    assert.ok(found, 'list should contains managed plugin')
-    assert.ok(found.managed, 'list end point managed mapping takes effect')
+    assert.ok(found, 'list should include managed plugin')
+    assert.ok(found.managed, 'list endpoint should populate managed metadata')
 
     // enable: true path
     const src2 = writeLocalPlugin(srcParent, 'http-demo-2')
@@ -128,7 +128,7 @@ test('install(by default disabled)-> list contains managed -> enable join motion
   }
 })
 
-test('install body boundary: unknown field 400, empty source 400, illegal grammar 400', { timeout: 60_000 }, async () => {
+test('install body validation: 400 on unknown field, empty source, or invalid syntax', { timeout: 60_000 }, async () => {
   const env = await makeHub()
   try {
     const unknownField = await env.call('POST', '/api/plugins/install', { source: '/tmp/x', extra: true })
@@ -144,7 +144,7 @@ test('install body boundary: unknown field 400, empty source 400, illegal gramma
   }
 })
 
-test('update:local source edit after heavy sync + record version push enter; not managed 404', { timeout: 60_000 }, async () => {
+test('update: re-syncs local source changes and bumps version; 404 when unmanaged', { timeout: 60_000 }, async () => {
   const env = await makeHub()
   try {
     const srcParent = mkdtempSync(join(tmpdir(), 'helm-pkg-httpsrc-'))
@@ -157,7 +157,7 @@ test('update:local source edit after heavy sync + record version push enter; not
     assert.equal(updated.status, 200)
     assert.equal(updated.body.record.version, '2.0.0')
     assert.equal(updated.body.summary.version, '2.0.0')
-    assert.equal(updated.body.summary.enabled, true, 'update keep enable state')
+    assert.equal(updated.body.summary.enabled, true, 'update preserves enabled state')
     const missing = await env.call('POST', '/api/plugins/never-installed/update')
     assert.equal(missing.status, 404)
     const builtinReject = await env.call('POST', '/api/plugins/builtin%3Aprofile/update')
@@ -167,7 +167,7 @@ test('update:local source edit after heavy sync + record version push enter; not
   }
 })
 
-test('remove: managed directory and record delete,builtin 403/404, not managed 404', { timeout: 60_000 }, async () => {
+test('remove: deletes managed directory and record; 403/404 for builtin, 404 when unmanaged', { timeout: 60_000 }, async () => {
   const env = await makeHub()
   try {
     const srcParent = mkdtempSync(join(tmpdir(), 'helm-pkg-httpsrc-'))
@@ -177,11 +177,11 @@ test('remove: managed directory and record delete,builtin 403/404, not managed 4
     assert.equal(removed.status, 200)
     assert.equal(removed.body.pluginId, 'http-rm')
     assert.equal(removed.body.wasEnabled, true)
-    assert.ok(!existsSync(join(env.dataDir, 'plugins', 'http-rm')), 'managed directory should delete')
-    assert.ok(existsSync(join(src, 'index.mjs')), 'user source directory completely well')
+    assert.ok(!existsSync(join(env.dataDir, 'plugins', 'http-rm')), 'managed directory should be deleted')
+    assert.ok(existsSync(join(src, 'index.mjs')), 'user source directory should remain intact')
     const config = JSON.parse(readFileSync(join(env.dataDir, 'config.json'), 'utf8')) as { pluginPackages?: Record<string, unknown> }
     assert.equal(config.pluginPackages?.['http-rm'], undefined)
-    // again delete 404
+    // Deleting again returns 404.
     const again = await env.call('POST', '/api/plugins/http-rm/remove')
     assert.equal(again.status, 404)
   } finally {
@@ -189,8 +189,8 @@ test('remove: managed directory and record delete,builtin 403/404, not managed 4
   }
 })
 
-test('restart restore:pluginPackages record drive GET /api/plugins  managed mapping (disk durable, non- memory)', { timeout: 60_000 }, async () => {
-  // phase one: install and close Hub(record config.json)
+test('restart restoration: pluginPackages record drives GET /api/plugins managed mapping (disk-persisted)', { timeout: 60_000 }, async () => {
+  // Phase 1: install and close Hub (persisted to config.json).
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-pkg-restart-'))
   const srcParent = mkdtempSync(join(tmpdir(), 'helm-pkg-restart-src-'))
   const src = writeLocalPlugin(srcParent, 'restart-demo')
@@ -199,14 +199,14 @@ test('restart restore:pluginPackages record drive GET /api/plugins  managed mapp
     await app.kernel.plugins.installPluginPackage(src)
     await app.close()
   }
-  // phase two: all new Hub process inside state (the same dataDir) - -managed must still in
+  // Phase 2: fresh Hub instance on the same dataDir — `managed` must still be populated.
   {
     const { app } = await createHubTestApp({ dataDir, cwd: dataDir })
     const summary = app.kernel.plugins.list().find((p) => p.id === 'restart-demo')
-    assert.ok(summary, 'after restart plugin should automatically register')
-    assert.ok(summary.managed, 'after restart managed mapping must still in (disk record drive)')
+    assert.ok(summary, 'plugin should auto-register after restart')
+    assert.ok(summary.managed, 'managed mapping must persist across restart (driven by disk record)')
     assert.equal(summary.managed.source.kind, 'local')
-    // update/remove in after restart same available (record restore)
+    // update/remove continue working after restart (restored from record).
     const removed = await app.kernel.plugins.removePluginPackage('restart-demo')
     assert.equal(removed.pluginId, 'restart-demo')
     await app.close()

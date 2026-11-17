@@ -1,4 +1,4 @@
-/** single time question answer real CLI → HTTP → SDK turn contract, model use official faux provider. */
+/** End-to-end contract for single-shot `helm ask` (CLI -> HTTP -> SDK turn), backed by the official faux provider. */
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -39,7 +39,7 @@ async function fixture() {
   }
 }
 
-test('helm ask real turn: answer and durable item same source, pipeline content write this time input', { timeout: 60_000 }, async () => {
+test('helm ask real turn: answer matches persisted entry and includes piped stdin', { timeout: 60_000 }, async () => {
   const f = await fixture()
   try {
     f.faux.setResponses([fauxAssistantMessage('real question answer result')])
@@ -49,12 +49,12 @@ test('helm ask real turn: answer and durable item same source, pipeline content 
     assert.equal(value.answer, 'real question answer result')
     assert.equal(value.deleted, false)
     const detail = await f.app.kernel.getConversationDetail(value.conversationId)
-    assert.ok(detail.entries.some((entry) => entry.id === value.entryId), 'answer item from this time real conversation')
+    assert.ok(detail.entries.some((entry) => entry.id === value.entryId), 'answer entry should come from this conversation')
     assert.match(JSON.stringify(detail.entries), /analyze or fewer content\\n\\nlog fragment/)
   } finally { await f.close() }
 })
 
-test('helm ask --delete-on-success real delete this time conversation and keep other conversation', { timeout: 60_000 }, async () => {
+test('helm ask --delete-on-success deletes the ephemeral conversation while preserving others', { timeout: 60_000 }, async () => {
   const f = await fixture()
   try {
     const before = f.app.kernel.listConversations().map((conversation) => conversation.id)
@@ -69,7 +69,7 @@ test('helm ask --delete-on-success real delete this time conversation and keep o
   } finally { await f.close() }
 })
 
-test('helm ask real model failed: exit non-zero and keep can troubleshoot conversation', { timeout: 60_000 }, async () => {
+test('helm ask model failure: exits non-zero and preserves the conversation for troubleshooting', { timeout: 60_000 }, async () => {
   const f = await fixture()
   try {
     f.faux.setResponses([fauxAssistantMessage('failed', { errorMessage: 'ask integration failure', stopReason: 'error' })])

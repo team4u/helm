@@ -1,5 +1,5 @@
 /**
- * PluginHost type and interface define.
+ * PluginHost type and interface definitions.
  */
 import type {
   BackendPluginsLifecyclePort,
@@ -32,35 +32,34 @@ export interface PluginConfigStore {
     schema: Record<string, PluginConfigFieldSchema>,
   ): Promise<void> | void;
   /**
-   * optional: plugin start stop state persist read (sync, return cache state;undefined means not persisted).
-   * not implemented when PluginHost is in-memory start stop mechanism, restart back to register when initial declaration.
+   * Optional: synchronous read of persisted plugin enabled state (returns cached state, or `undefined` if never persisted).
+   * When omitted, `PluginHost` uses in-memory enabled state and resets to each plugin's registration declaration on restart.
    */
   getEnabled?(pluginId: string): boolean | undefined;
-  /** optional: persist plugin start stop state; failed must explicit reject(by host wrap JSON-safe diagnose). */
+  /** Optional: persist plugin enabled state; failures must reject explicitly (wrapped by host as JSON-safe diagnostics). */
   setEnabled?(pluginId: string, enabled: boolean): Promise<void> | void;
 }
 
 export interface PluginProviderPort {
-  /** mount provider; return unload function (idempotency by port implement guarantee, reject when reject leaves no residue). */
+  /** Mount a provider and return an idempotent unregister callback (rejections must leave no partial state). */
   register(provider: Provider, pluginId: string): Promise<() => Promise<void>>;
-  /** optional: deactivate/unload before preflight in-flight stream/refresh, busy when throws (such as plugin_has_live_tasks). */
+  /** Optional: preflight check for in-flight streams/refreshes before disabling/unloading; throws when busy (e.g. `plugin_has_live_tasks`). */
   assertIdle?(pluginId: string): void;
 }
 
 /**
- * host backend port:ctx.host implement source (Runtime provide, see runtime-host-backend.ts).
+ * Host backend port backing `ctx.host` (provided by Runtime; see `runtime-host-backend.ts`).
  *
- * shape policy: and HelmHostApi one by one character same shape member use forward Pick member index re- use (contains
- * onEvent / emitEvent  MaybePromise<void> can await contract, never manually copy signature
- * drift into void; also do not use Omit huge type reverse choose or motion state Proxy); difference member one by one explicit:
- * 1. pluginId naming empty between:secrets / setPluginConfig / skills.ensureSkill /
- *    manageConversation(return release function by PluginHost wrap idempotent);
- * 2. archive one shape:isClosing is zero reference function (ctx.host expose getter);
- * 3. Optional connections (when unwired, `ctx.host` rejects explicitly with 501, never silently falling back): nodeIpc /
- *    nodeFetch / openTunnel / plugins / abortConversationGuarded /
- *    submitInputGuarded;
- * 4. do not via backend forwarding (PluginHost self supply, avoid two layer forwarding):listPlugins / listUi /
- *    listActions / invokeAction / prepareAction / setConfig.
+ * Shape policy: members identical to `HelmHostApi` are reused via `Pick` (preserving `MaybePromise<void>`
+ * awaitable contracts on `onEvent`/`emitEvent` without manual signature drift or `Omit`/Proxy indirection).
+ * Divergent members are declared explicitly:
+ * 1. Scoped by `pluginId`: `secrets` / `setPluginConfig` / `skills.ensureSkill` / `manageConversation`
+ *    (returned release callback is wrapped by `PluginHost` for idempotency);
+ * 2. Normalized shape: `isClosing` is a zero-arg function (exposed as a getter on `ctx.host`);
+ * 3. Optional connections (when unwired, `ctx.host` rejects explicitly with 501, never silently falling back):
+ *    `nodeIpc` / `nodeFetch` / `openTunnel` / `plugins` / `abortConversationGuarded` / `submitInputGuarded`;
+ * 4. Served directly by `PluginHost` (not forwarded to backend): `listPlugins` / `listUi` /
+ *    `listActions` / `invokeAction` / `prepareAction` / `setConfig`.
  */
 export interface PluginHostBackend
   extends Pick<

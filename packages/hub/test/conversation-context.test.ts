@@ -1,19 +1,19 @@
 /**
- * module four test: conversation context operation (reset / compact / fork).
- * real createHelm combine (true pi-durable SQLite + faux provider):
- * - reset:SDK original generate reset(handoff), context empty,handoff as first user message,
- *   stateChangeSeq push enter,SSE conversation.upsert broadcast;
- * - compact:SDK original generate compact(instructions) return background task ID, summary context;
- * - fork: item store in validate (missing 404),SDK fork new conversation,helm mirror register
- *   (parent chain/inherit profile/cwd/model/title(fork)), model align;
- * - HTTP/CLI end-to-end:POST /reset /compact /fork status code and error message seal.
+ * Conversation context operations tests (`reset` / `compact` / `fork`).
+ * Real `createHelm` composition (real `pi-durable` SQLite + faux provider):
+ * - `reset`: native SDK `reset(handoff)`, clears context, inserts handoff as first user message,
+ *   advances `stateChangeSeq`, broadcasts SSE `conversation.upsert`;
+ * - `compact`: native SDK `compact(instructions)` returns background task ID and summarizes context;
+ * - `fork`: validates entry existence (404 when missing), forks new conversation in SDK, updates helm mirror
+ *   (parent chain / inherited profile / `cwd` / `model` / `title (fork)`), aligns model;
+ * - HTTP/CLI end-to-end: `POST /reset` / `/compact` / `/fork` status codes and error mapping.
  *
- * original ground override heavy (replaceFromEntryId) and queue up withdraw back (withdraw):
- * - replaceFromEntryId:helm.rewind truncate mark record + edits omit re- use pi-durable original generate
- *   semantics, model messages excludes by override old mention question/old answer, before lead system keep,FTS5
- *   inspect index and rebuildFts all no longer hit old content;
- * - withdraw:faux work vendor function suspended keep conversation busy, queue up followUp commit can withdraw back
- *   (status: withdrawn), queue up items from pi.inbox disappear and no longer execute.
+ * In-place rewrite (`replaceFromEntryId`) and queue withdrawal (`withdraw`):
+ * - `replaceFromEntryId`: `helm.rewind` truncation marker + edit omission reuses `pi-durable` native semantics,
+ *   model messages exclude overwritten Q&A while preserving leading system prompt, FTS5 search and `rebuildFts`
+ *   no longer match omitted content;
+ * - `withdraw`: faux factory suspends to keep conversation busy; queued `followUp` can be withdrawn
+ *   (`status: 'withdrawn'`), disappearing from `pi.inbox` without ever executing.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -78,7 +78,7 @@ test.before(async () => {})
 // reset
 // ---------------------------------------------------------------------------
 
-test('reset: context empty,handoff enter new context,seq push enter and broadcast', { timeout: 60_000 }, async () => {
+test('reset: clears context, injects handoff into new context, advances seq, broadcasts upsert', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     env.faux.setResponses([fauxAssistantMessage('one round answer')])
@@ -89,7 +89,7 @@ test('reset: context empty,handoff enter new context,seq push enter and broadcas
     const userTextsBefore = (await env.app.kernel.getConversationDetail(conv.id)).entries.filter(
       (e) => e.kind === 'helm.input',
     ).length
-    assert.ok(userTextsBefore >= 1, 'reset before should has input item')
+    assert.ok(userTextsBefore >= 1, 'should have input entries before reset')
 
     const events: unknown[] = []
     const unsubscribe = (env.app.kernel.events as unknown as {
@@ -102,25 +102,25 @@ test('reset: context empty,handoff enter new context,seq push enter and broadcas
     await env.app.kernel.waitForIdle(conv.id)
     unsubscribe()
 
-    assert.ok(after.stateChangeSeq > before.stateChangeSeq, 'stateChangeSeq single tune push enter')
-    assert.ok(events.length > 0, 'conversation.upsert already broadcast')
-    // new context with handoff user message start (pi.reset entry  model message carry handoff).
+    assert.ok(after.stateChangeSeq > before.stateChangeSeq, 'stateChangeSeq advances monotonically')
+    assert.ok(events.length > 0, 'conversation.upsert was broadcast')
+    // New context starts with handoff user message (`pi.reset` entry's model message carries handoff).
     const detail = await env.app.kernel.getConversationDetail(conv.id)
     const resetEntry = detail.entries.find((e) => e.kind === 'pi.reset')
-    assert.ok(resetEntry !== undefined, 'reset after should store in pi.reset item')
+    assert.ok(resetEntry !== undefined, 'pi.reset entry should exist after reset')
     const userContent = (resetEntry.model ?? []).map(
       (m) => (m as { content?: unknown }).content,
     )
     const handoffSeen = userContent.some((c) =>
       typeof c === 'string' ? c === 'reset after handover note' : JSON.stringify(c).includes('reset after handover note'),
     )
-    assert.ok(handoffSeen, 'handoff text should as new context first user message')
+    assert.ok(handoffSeen, 'handoff text should be the first user message in the new context')
   } finally {
     await env.close()
   }
 })
 
-test('reset: without handoff also legal; missing conversation 404; close after 503 by combine layer guarantee', { timeout: 60_000 }, async () => {
+test('reset: works without handoff; 404 on missing conversation; 503 after close guaranteed by composition layer', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const conv = await env.app.kernel.createConversation({ title: 'empty reset' })
@@ -139,7 +139,7 @@ test('reset: without handoff also legal; missing conversation 404; close after 5
 // compact
 // ---------------------------------------------------------------------------
 
-test('compact: return background task ID; summary task real enter SDK scheduling', { timeout: 60_000 }, async () => {
+test('compact: returns background task ID and dispatches compaction to SDK scheduler', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     env.faux.setResponses([fauxAssistantMessage('ordinary answer one')])
@@ -148,9 +148,9 @@ test('compact: return background task ID; summary task real enter SDK scheduling
     await env.app.kernel.waitForIdle(conv.id)
 
     const { taskId, conversation } = await env.app.kernel.compactConversation(conv.id, {
-      instructions: 'please sudden out key decide policy',
+      instructions: 'highlight key decisions',
     })
-    assert.ok(Number.isInteger(taskId) && taskId > 0, 'taskId is positive integer (SDK TaskId)')
+    assert.ok(Number.isInteger(taskId) && taskId > 0, 'taskId is a positive integer (SDK TaskId)')
     assert.equal(conversation.id, conv.id)
     assert.ok(conversation.stateChangeSeq >= 1)
   } finally {
@@ -158,7 +158,7 @@ test('compact: return background task ID; summary task real enter SDK scheduling
   }
 })
 
-test('compact: missing conversation 404', { timeout: 60_000 }, async () => {
+test('compact: 404 on missing conversation', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     await assert.rejects(
@@ -174,7 +174,7 @@ test('compact: missing conversation 404', { timeout: 60_000 }, async () => {
 // fork
 // ---------------------------------------------------------------------------
 
-test('fork: from since has item fork - - mirror register (parent chain/inherit), model align, by default title', { timeout: 60_000 }, async () => {
+test('fork: forks from existing entry, registers mirror (parent/inheritance), aligns model, sets default title', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     env.faux.setResponses([fauxAssistantMessage('source conversation answer')])
@@ -182,9 +182,9 @@ test('fork: from since has item fork - - mirror register (parent chain/inherit),
     await env.app.kernel.submitInput(source.id, 'source conversation one question')
     await env.app.kernel.waitForIdle(source.id)
     const detail = await env.app.kernel.getConversationDetail(source.id)
-    assert.ok(detail.entries.length > 0, 'source conversation should has item')
+    assert.ok(detail.entries.length > 0, 'source conversation should have entries')
     const entryId = Number(detail.entries[0]!.id)
-    assert.ok(Number.isInteger(entryId) && entryId > 0, `entryId should be number (actual ${detail.entries[0]!.id})`)
+    assert.ok(Number.isInteger(entryId) && entryId > 0, `entryId should be numeric (got ${detail.entries[0]!.id})`)
 
     const forked = await env.app.kernel.forkConversation(source.id, { entryId })
     assert.notEqual(forked.id, source.id)
@@ -192,8 +192,8 @@ test('fork: from since has item fork - - mirror register (parent chain/inherit),
     assert.equal(forked.title, 'source conversation (fork)')
     assert.equal(forked.profileId, source.profileId)
     assert.equal(forked.cwd, source.cwd)
-    assert.equal(forked.model, source.model, 'fork inherit source conversation takes effect model')
-    // self define title + redaction: title in secret by erase.
+    assert.equal(forked.model, source.model, 'fork inherits source conversation effective model')
+    // Custom title + redaction: trims whitespace and redacts secrets.
     const forked2 = await env.app.kernel.forkConversation(source.id, {
       entryId,
       title: `  self define title  `,
@@ -204,7 +204,7 @@ test('fork: from since has item fork - - mirror register (parent chain/inherit),
   }
 })
 
-test('fork: missing item 404(contains diagnose details); illegal entryId 400; missing conversation 404', { timeout: 60_000 }, async () => {
+test('fork: missing entry 404 (with diagnostics); invalid entryId 400; missing conversation 404', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const conv = await env.app.kernel.createConversation({ title: 'empty source' })
@@ -237,10 +237,10 @@ test('fork: missing item 404(contains diagnose details); illegal entryId 400; mi
 // HTTP end-to-end
 // ---------------------------------------------------------------------------
 
-test('HTTP reset/compact/fork: status code and body validate; error message seal (404/400)', { timeout: 60_000 }, async () => {
+test('HTTP reset/compact/fork: status codes, body validation, and error mapping (404/400)', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
-    // setup authentication
+    // Setup authentication
     const setup = await fetch(`${env.hubUrl}/api/auth/setup`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -256,7 +256,7 @@ test('HTTP reset/compact/fork: status code and body validate; error message seal
     const detail = await env.app.kernel.getConversationDetail(conv.id)
     const entryId = Number(detail.entries[0]!.id)
 
-    // reset: empty body and JSON body all legal
+    // reset: both empty body and JSON body are valid
     const resetEmpty = await authCall(env, 'POST', `/api/conversations/${conv.id}/reset`)
     assert.equal(resetEmpty.status, 200)
     assert.equal(resetEmpty.body.id, conv.id)
@@ -265,7 +265,7 @@ test('HTTP reset/compact/fork: status code and body validate; error message seal
     })
     assert.equal(resetHandoff.status, 200)
 
-    // compact:202 + { taskId, conversation }
+    // compact: 202 + { taskId, conversation }
     const compact = await authCall(env, 'POST', `/api/conversations/${conv.id}/compact`, {
       instructions: 'http compress instruction',
     })
@@ -273,7 +273,7 @@ test('HTTP reset/compact/fork: status code and body validate; error message seal
     assert.ok(Number.isInteger(compact.body.taskId) && compact.body.taskId > 0)
     assert.equal(compact.body.conversation.id, conv.id)
 
-    // fork:201 + new conversation summary
+    // fork: 201 + new conversation summary
     const fork = await authCall(env, 'POST', `/api/conversations/${conv.id}/fork`, {
       entryId,
       title: 'HTTP fork',
@@ -282,7 +282,7 @@ test('HTTP reset/compact/fork: status code and body validate; error message seal
     assert.equal(fork.body.title, 'HTTP fork')
     assert.equal(fork.body.parentConversationId, conv.id)
 
-    // error path
+    // Error paths
     const forkMissing = await authCall(env, 'POST', `/api/conversations/${conv.id}/fork`, {
       entryId: 987654,
     })
@@ -302,10 +302,10 @@ test('HTTP reset/compact/fork: status code and body validate; error message seal
 })
 
 // ---------------------------------------------------------------------------
-// original ground override heavy (replaceFromEntryId)
+// In-place rewrite (`replaceFromEntryId`)
 // ---------------------------------------------------------------------------
 
-/** polling wait for condition into establish (guard against hang die, total timeout explicit). */
+/** Polls until predicate holds (guards against hangs with an explicit total timeout). */
 async function pollUntil(cond: () => boolean, ms = 10_000): Promise<void> {
   const deadline = Date.now() + ms
   while (!cond()) {
@@ -314,12 +314,12 @@ async function pollUntil(cond: () => boolean, ms = 10_000): Promise<void> {
   }
 }
 
-/** from kernel take SDK harness(test dedicated use;harness is runtime private). */
+/** Accesses SDK `harness` from kernel (test-only helper; `harness` is runtime-private). */
 function harnessOf(env: Env): Harness {
   return (env.app.kernel as unknown as { harness: Harness }).harness
 }
 
-/** model messages in all text content (user/assistant/system all contains). */
+/** Extracts all text content from model messages (covering user/assistant/system). */
 function messageTexts(messages: ReadonlyArray<{ role: string; content: unknown }>): string[] {
   const out: string[] = []
   for (const m of messages) {
@@ -341,7 +341,7 @@ interface TurnEntry {
   text: string
 }
 
-/** conversation all amount item summary (id/kind/first segment text). */
+/** Summarizes all raw entries in a conversation (id/kind/first-block text). */
 async function entrySummaries(env: Env, convId: number): Promise<TurnEntry[]> {
   const conv = await harnessOf(env).conversation(convId as never, BACKGROUND_CONTEXT)
   assert.ok(conv)
@@ -372,7 +372,7 @@ async function entrySummaries(env: Env, convId: number): Promise<TurnEntry[]> {
   return out
 }
 
-test('replaceFromEntryId: override second round mention question - - old question answer out context,FTS do not hit, before lead system keep', { timeout: 60_000 }, async () => {
+test('replaceFromEntryId: overwriting round 2 drops old Q&A from context and FTS while keeping leading system prompt', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     env.faux.setResponses([
@@ -386,77 +386,77 @@ test('replaceFromEntryId: override second round mention question - - old questio
     await env.app.kernel.submitInput(conv.id, '第二轮原始问题')
     await env.app.kernel.waitForIdle(conv.id)
 
-    // found second round helm.input entry id.
+    // Locate round 2 `helm.input` entry ID.
     const entries = await entrySummaries(env, conv.id)
     const secondInput = entries.find((e) => e.kind === 'helm.input' && e.text === '第二轮原始问题')
-    assert.ok(secondInput, 'should store in second round helm.input')
+    assert.ok(secondInput, 'round 2 helm.input should exist')
 
-    // original ground override heavy second round.
+    // Rewrite round 2 in place.
     const { submissionId } = await env.app.kernel.submitInput(conv.id, '改写后的第二轮问题', {
       replaceFromEntryId: secondInput.id,
     })
     assert.ok(Number.isInteger(Number(submissionId)))
     await env.app.kernel.waitForIdle(conv.id)
 
-    // model context: excludes old second round question answer, contains new question answer; before lead system keep.
+    // Model context: excludes old round 2 Q&A, includes new Q&A, preserves leading system prompt.
     const sdkConv = await harnessOf(env).conversation(conv.id as never, BACKGROUND_CONTEXT)
     assert.ok(sdkConv)
     const ctx = await sdkConv.context(BACKGROUND_CONTEXT)
     const texts = messageTexts(ctx.messages as never as Array<{ role: string; content: unknown }>)
-    assert.ok(!texts.some((t) => t === '第二轮原始问题'), `old mention question must not in context:${JSON.stringify(texts)}`)
-    assert.ok(!texts.some((t) => t === '第二轮回答'), `old answer must not in context:${JSON.stringify(texts)}`)
-    assert.ok(texts.some((t) => t.includes('第一轮问题')), 'one round context keep')
-    assert.ok(texts.some((t) => t.includes('第一轮回答')), 'one round answer keep')
-    assert.ok(texts.some((t) => t.includes('改写后的第二轮问题')), 'new mention question in context')
+    assert.ok(!texts.some((t) => t === '第二轮原始问题'), `old question must not appear in context: ${JSON.stringify(texts)}`)
+    assert.ok(!texts.some((t) => t === '第二轮回答'), `old answer must not appear in context: ${JSON.stringify(texts)}`)
+    assert.ok(texts.some((t) => t.includes('第一轮问题')), 'round 1 question preserved')
+    assert.ok(texts.some((t) => t.includes('第一轮回答')), 'round 1 answer preserved')
+    assert.ok(texts.some((t) => t.includes('改写后的第二轮问题')), 'new question in context')
     assert.ok(texts.some((t) => t.includes('改写后的新回答')), 'new answer in context')
-    // before lead system completely well (messages[0] is system).
-    assert.equal((ctx.messages[0] as { role: string }).role, 'system', 'messages[0] should be before lead system')
+    // Leading system prompt intact (`messages[0]` is `system`).
+    assert.equal((ctx.messages[0] as { role: string }).role, 'system', 'messages[0] should be the leading system prompt')
 
-    // helm.rewind truncate mark record written to the database.
+    // `helm.rewind` truncation marker persisted.
     const after = await entrySummaries(env, conv.id)
     const rewind = after.find((e) => e.kind === 'helm.rewind')
-    assert.ok(rewind, 'should store in helm.rewind truncate mark record')
+    assert.ok(rewind, 'helm.rewind truncation marker should exist')
 
-    // FTS: old content no longer hit, new content hit.
+    // FTS: old content no longer matches; new content matches.
     const oldHit = await env.app.kernel.search('第二轮原始问题')
     assert.equal(
       oldHit.filter((h) => h.conversationId === conv.id).length,
       0,
-      'old mention question must not again hit FTS',
+      'old question must no longer match FTS',
     )
     const oldAnswerHit = await env.app.kernel.search('第二轮回答')
     assert.equal(
       oldAnswerHit.filter((h) => h.conversationId === conv.id).length,
       0,
-      'old answer must not again hit FTS',
+      'old answer must no longer match FTS',
     )
     const newHit = await env.app.kernel.search('改写后的第二轮问题')
-    assert.ok(newHit.some((h) => h.conversationId === conv.id), 'new mention question should hit FTS')
+    assert.ok(newHit.some((h) => h.conversationId === conv.id), 'new question should match FTS')
     const newAnswerHit = await env.app.kernel.search('改写后的新回答')
-    assert.ok(newAnswerHit.some((h) => h.conversationId === conv.id), 'new answer should hit FTS')
+    assert.ok(newAnswerHit.some((h) => h.conversationId === conv.id), 'new answer should match FTS')
 
-    // rebuildFts after still do not hit old content.
+    // Old content stays excluded after `rebuildFts`.
     await env.app.kernel.rebuildFts()
     const rebuiltOld = await env.app.kernel.search('第二轮回答')
     assert.equal(
       rebuiltOld.filter((h) => h.conversationId === conv.id).length,
       0,
-      'rebuildFts after old answer must not hit',
+      'old answer must not match after rebuildFts',
     )
     const rebuiltOldQ = await env.app.kernel.search('第二轮原始问题')
     assert.equal(
       rebuiltOldQ.filter((h) => h.conversationId === conv.id).length,
       0,
-      'rebuildFts after old mention question must not hit',
+      'old question must not match after rebuildFts',
     )
     const rebuiltNew = await env.app.kernel.search('改写后的第二轮问题')
-    assert.ok(rebuiltNew.some((h) => h.conversationId === conv.id), 'rebuildFts after new mention question still hit')
+    assert.ok(rebuiltNew.some((h) => h.conversationId === conv.id), 'new question still matches after rebuildFts')
   } finally {
     await env.close()
   }
 })
 
-test('replaceFromEntryId: override one round mention question - - all amount truncate after context only new question answer', { timeout: 60_000 }, async () => {
+test('replaceFromEntryId: overwriting round 1 truncates history so context holds only new Q&A', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     env.faux.setResponses([
@@ -480,17 +480,17 @@ test('replaceFromEntryId: override one round mention question - - all amount tru
     assert.ok(sdkConv)
     const ctx = await sdkConv.context(BACKGROUND_CONTEXT)
     const texts = messageTexts(ctx.messages as never as Array<{ role: string; content: unknown }>)
-    assert.ok(!texts.some((t) => t.includes('old one round issue')), 'old mention question must not in context')
-    assert.ok(!texts.some((t) => t.includes('old one round answer')), 'old answer must not in context')
-    assert.ok(texts.some((t) => t.includes('all new one round issue')), 'new mention question in context')
+    assert.ok(!texts.some((t) => t.includes('old one round issue')), 'old question must not remain in context')
+    assert.ok(!texts.some((t) => t.includes('old one round answer')), 'old answer must not remain in context')
+    assert.ok(texts.some((t) => t.includes('all new one round issue')), 'new question in context')
     assert.ok(texts.some((t) => t.includes('all new one round answer')), 'new answer in context')
-    assert.equal((ctx.messages[0] as { role: string }).role, 'system', 'before lead system keep')
+    assert.equal((ctx.messages[0] as { role: string }).role, 'system', 'leading system prompt preserved')
   } finally {
     await env.close()
   }
 })
 
-test('replaceFromEntryId error path: missing 404; duplicate override 409 entry_already_rewound; exceeds reset 409', { timeout: 60_000 }, async () => {
+test('replaceFromEntryId error paths: missing 404; double rewrite 409 entry_already_rewound; before reset 409', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     env.faux.setResponses([
@@ -501,7 +501,7 @@ test('replaceFromEntryId error path: missing 404; duplicate override 409 entry_a
     await env.app.kernel.submitInput(conv.id, 'issue one')
     await env.app.kernel.waitForIdle(conv.id)
 
-    // missing item 404.
+    // Missing entry -> 404.
     await assert.rejects(
       env.app.kernel.submitInput(conv.id, 'heavy', { replaceFromEntryId: 99999 }),
       (err: unknown) => {
@@ -511,20 +511,20 @@ test('replaceFromEntryId error path: missing 404; duplicate override 409 entry_a
         return true
       },
     )
-    // illegal entryId 400.
+    // Invalid entryId -> 400.
     await assert.rejects(
       env.app.kernel.submitInput(conv.id, 'heavy', { replaceFromEntryId: -1 }),
       (err: unknown) => err instanceof HelmError && err.status === 400 && err.code === 'validation_error',
     )
 
-    // normal override once.
+    // Perform first rewrite normally.
     const entries = await entrySummaries(env, conv.id)
     const input1 = entries.find((e) => e.kind === 'helm.input' && e.text === 'issue one')
     assert.ok(input1)
     await env.app.kernel.submitInput(conv.id, 'change write issue one', { replaceFromEntryId: input1.id })
     await env.app.kernel.waitForIdle(conv.id)
 
-    // duplicate override the same already by override item:409 entry_already_rewound.
+    // Rewriting the same already-rewound entry again -> 409 entry_already_rewound.
     await assert.rejects(
       env.app.kernel.submitInput(conv.id, 'again heavy', { replaceFromEntryId: input1.id }),
       (err: unknown) => {
@@ -535,7 +535,7 @@ test('replaceFromEntryId error path: missing 404; duplicate override 409 entry_a
       },
     )
 
-    // reset after heavy reset before item:409 entry_before_context_head.
+    // Rewriting an entry prior to a reset -> 409 entry_before_context_head.
     env.faux.setResponses([fauxAssistantMessage('reset after answer')])
     await env.app.kernel.resetConversation(conv.id, { handoff: 'reset handover' })
     await env.app.kernel.waitForIdle(conv.id)
@@ -557,7 +557,7 @@ test('replaceFromEntryId error path: missing 404; duplicate override 409 entry_a
   }
 })
 
-test('replaceFromEntryId HTTP:body field pass-through and error message seal', { timeout: 60_000 }, async () => {
+test('replaceFromEntryId HTTP: body field pass-through and error mapping', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const setup = await fetch(`${env.hubUrl}/api/auth/setup`, {
@@ -606,13 +606,13 @@ test('replaceFromEntryId HTTP:body field pass-through and error message seal', {
 })
 
 // ---------------------------------------------------------------------------
-// queue up withdraw back (withdrawQueuedInput / POST /withdraw)
+// Queue withdrawal (`withdrawQueuedInput` / `POST /withdraw`)
 // ---------------------------------------------------------------------------
 
-test('withdraw:busy conversation queue up followUp can withdraw back, queue up items from inbox disappear and no longer execute', { timeout: 60_000 }, async () => {
+test('withdraw: queued followUp on busy conversation can be withdrawn and removed from inbox without running', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
-    // work vendor function suspended: first question run keep busy until gate resolve.
+    // Suspend factory callback so the first turn stays busy until `releaseFirst` resolves.
     let releaseFirst: (() => void) | undefined
     const firstGate = new Promise<void>((resolve) => {
       releaseFirst = resolve
@@ -627,31 +627,31 @@ test('withdraw:busy conversation queue up followUp can withdraw back, queue up i
 
     const conv = await env.app.kernel.createConversation({ title: 'withdraw back queue up' })
     await env.app.kernel.submitInput(conv.id, 'first question')
-    // etc. run truly start (tracker hasLiveWork).
+    // Wait until the turn actually starts (`tracker.hasLiveWork`).
     await pollUntil(() => (env.app.kernel as unknown as { tracker: { hasLiveWork(id: number): boolean } }).tracker.hasLiveWork(conv.id))
 
-    // busy in commit followUp(enter pi.inbox queue up).
+    // Submit `followUp` while busy (enters `pi.inbox` queue).
     const queued = await env.app.kernel.submitInput(conv.id, 'queue up in input', {
       whenBusy: 'followUp',
     })
     const submissionId = Number(queued.submissionId)
     assert.ok(Number.isInteger(submissionId) && submissionId > 0)
 
-    // withdraw back before queue up items in inbox in visible (queuedInputs derive).
+    // Before withdrawal, queued item appears in `queuedInputs`.
     const snapshot = (env.app.kernel.events as unknown as {
       currentSnapshot(): { conversationLives?: Array<{ conversationId: number; queuedInputs?: Array<{ submissionId: string }> }> }
     }).currentSnapshot()
     const live = snapshot.conversationLives?.find((l) => l.conversationId === conv.id)
     assert.ok(
       live?.queuedInputs?.some((q) => q.submissionId === queued.submissionId),
-      'queue up items should in queuedInputs in visible',
+      'queued item should appear in queuedInputs',
     )
 
-    // withdraw back:status withdrawn.
+    // Withdraw -> status `'withdrawn'`.
     const result = await env.app.kernel.withdrawQueuedInput(conv.id, { submissionId })
     assert.deepEqual(result, { status: 'withdrawn' })
 
-    // queue up items from inbox disappear.
+    // Queued item disappears from inbox.
     const snapshot2 = (env.app.kernel.events as unknown as {
       currentSnapshot(): { conversationLives?: Array<{ conversationId: number; queuedInputs?: Array<{ submissionId: string }> }> }
     }).currentSnapshot()
@@ -659,24 +659,24 @@ test('withdraw:busy conversation queue up followUp can withdraw back, queue up i
     assert.equal(
       live2?.queuedInputs?.some((q) => q.submissionId === queued.submissionId) ?? false,
       false,
-      'withdraw back after queue up items should disappear',
+      'withdrawn item should disappear from queuedInputs',
     )
 
-    // release first question run, wait for idle: by withdraw back input no longer execute (context only contains first question question answer).
+    // Release first turn and wait for idle: withdrawn input never runs (context only holds first Q&A).
     releaseFirst?.()
     await env.app.kernel.waitForIdle(conv.id)
 
     const sdkConv = await harnessOf(env).conversation(conv.id as never, BACKGROUND_CONTEXT)
     const ctx = await sdkConv!.context(BACKGROUND_CONTEXT)
     const texts = messageTexts(ctx.messages as never as Array<{ role: string; content: unknown }>)
-    assert.ok(!texts.some((t) => t.includes('queue up in input')), 'by withdraw back input must not execute enter context')
-    assert.ok(texts.some((t) => t.includes('first question answer')), 'first question answer normal complete')
+    assert.ok(!texts.some((t) => t.includes('queue up in input')), 'withdrawn input must not enter context')
+    assert.ok(texts.some((t) => t.includes('first question answer')), 'first turn answer completed normally')
 
-    // again withdraw back the same commit: already compute (unanswered), return settled.
+    // Withdrawing the same submission again (already settled) returns `'settled'`.
     const again = await env.app.kernel.withdrawQueuedInput(conv.id, { submissionId })
     assert.equal(again.status, 'settled')
 
-    // missing commit 404.
+    // Missing submission -> 404.
     await assert.rejects(
       env.app.kernel.withdrawQueuedInput(conv.id, { submissionId: 999999 }),
       (err: unknown) => err instanceof HelmError && err.status === 404 && err.code === 'not_found',
@@ -686,7 +686,7 @@ test('withdraw:busy conversation queue up followUp can withdraw back, queue up i
   }
 })
 
-test('withdraw HTTP:POST /api/conversations/:id/withdraw status code and body', { timeout: 60_000 }, async () => {
+test('withdraw HTTP: POST /api/conversations/:id/withdraw status codes and validation', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const setup = await fetch(`${env.hubUrl}/api/auth/setup`, {
@@ -721,7 +721,7 @@ test('withdraw HTTP:POST /api/conversations/:id/withdraw status code and body', 
     assert.equal(ok.status, 200)
     assert.deepEqual(ok.body, { status: 'withdrawn' })
 
-    // illegal body.
+    // Invalid bodies
     const bad = await authCall(env, 'POST', `/api/conversations/${conv.id}/withdraw`, {
       submissionId: 0,
     })
@@ -731,13 +731,13 @@ test('withdraw HTTP:POST /api/conversations/:id/withdraw status code and body', 
       bogus: 1,
     })
     assert.equal(unknownField.status, 400)
-    // missing commit 404.
+    // Missing submission -> 404
     const nf = await authCall(env, 'POST', `/api/conversations/${conv.id}/withdraw`, {
       submissionId: 987654,
     })
     assert.equal(nf.status, 404)
     assert.equal(nf.body.error.code, 'not_found')
-    // missing conversation 404.
+    // Missing conversation -> 404
     const nfConv = await authCall(env, 'POST', '/api/conversations/777777/withdraw', {
       submissionId: 1,
     })

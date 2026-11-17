@@ -17,7 +17,7 @@ function collectStrings(value: unknown): string[] {
   return [];
 }
 
-test('real combine: plugin result change write, secret redaction and over long output Spill shared use eventually boundary', { timeout: 60_000 }, async () => {
+test('runtime boundary: plugin result transforms, secret redaction, and oversized output spill share final boundary', { timeout: 60_000 }, async () => {
   const fixture = await openFixture();
   try {
     const { kernel } = fixture.app;
@@ -58,7 +58,7 @@ test('real combine: plugin result change write, secret redaction and over long o
   } finally { await fixture.close(); }
 });
 
-test('real combine:before_turn can filter choose kernel tool, also should use message and system segment change', { timeout: 60_000 }, async () => {
+test('runtime boundary: before_turn filters kernel tools and edits sections and messages', { timeout: 60_000 }, async () => {
   const fixture = await openFixture();
   try {
     let sawKernelTool = false;
@@ -91,7 +91,7 @@ test('real combine:before_turn can filter choose kernel tool, also should use me
   } finally { await fixture.close(); }
 });
 
-test('real combine: closure stop release plugin service and end still connect SSE read', { timeout: 60_000 }, async () => {
+test('runtime boundary: close stops plugin services and terminates active SSE streams', { timeout: 60_000 }, async () => {
   const fixture = await openFixture();
   try {
     let stopped = false;
@@ -103,8 +103,8 @@ test('real combine: closure stop release plugin service and end still connect SS
     assert.equal((await reader.read()).done, false);
     await fixture.app.close();
     assert.equal(stopped, true);
-    // close before eventually document broadcast may already stream queue; consume completely already queue frame after must receives EOF.
-    while (!(await reader.read()).done) { /* arrange empty remaining SSE frame direct until EOF */ }
+    // Final doc broadcasts prior to close may already be queued in the stream; drain queued frames and verify EOF.
+    while (!(await reader.read()).done) { /* drain remaining SSE frames until EOF */ }
     assert.equal(fixture.app.kernel.events.subscriberCount, 0);
   } finally { await fixture.close(); }
 });

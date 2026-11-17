@@ -1,14 +1,14 @@
 /**
- * module two test: message multimodal attachment.
- * real createHelm + faux provider + real ArtifactService(real file):
- * - authorization: this conversation artifact can mount; parent conversation artifact allows sub-conversation mount; across conversation unauthorized 403
- *   artifact_forbidden; missing 404;
- * - SQLite zero expansion:helm.input entry  attachments only light amount pointer (without base64);
- * - multimodal: diagram piece attachment construct ImageContent chunk enter model request (faux TranscriptContext
- *   catch user content array); text attachment concatenate [Attached Files] pure text;
- * - input hook transform change write attachments after same right validate (exceeds right 403);
- * - subagent attachments pass-through:spawnAgent pre- authorization validate + original generate spawn inject
- *   [Attached Files] chunk.
+ * Multimodal message attachment tests.
+ * Real `createHelm` + faux provider + real `ArtifactService` (real files):
+ * - Authorization: own-conversation and parent-conversation artifacts can be attached; cross-conversation
+ *   unauthorized attachments fail with `403 artifact_forbidden`; missing artifacts fail with `404`;
+ * - SQLite zero bloat: `helm.input` entry `attachments` stores only lightweight pointers (no base64);
+ * - Multimodal: image attachments produce `ImageContent` blocks in model requests (captured via faux
+ *   `TranscriptContext` user content arrays); text attachments append `[Attached Files]` plain text;
+ * - Input hook `transform` rewriting `attachments` undergoes the same authorization check (403 on escalation);
+ * - Subagent attachment pass-through: `spawnAgent` pre-validates authorization and injects `[Attached Files]`
+ *   blocks into native spawns.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -25,7 +25,7 @@ interface Env {
   dataDir: string
   faux: FauxProviderHandle
   app: HubTestApp
-  /** each time model request complete message (faux official TranscriptContext catch). */
+  /** Full user contents sent to the model per request (captured via official faux `TranscriptContext`). */
   requests: Array<{ userContents: unknown[] }>
   close(): Promise<void>
 }
@@ -43,7 +43,7 @@ async function makeEnv(): Promise<Env> {
   }
 }
 
-/** capture response: record user content(zone string and multimodal array). */
+/** Captures user message contents (covering both strings and multimodal content arrays). */
 function capture(env: Env): FauxResponseStep {
   return (context) => {
     env.requests.push({
@@ -55,7 +55,7 @@ function capture(env: Env): FauxResponseStep {
   }
 }
 
-/** 1x1 PNG(legal diagram piece byte). */
+/** 1x1 PNG (valid image bytes). */
 const PNG_BYTES = Uint8Array.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
   0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
@@ -64,7 +64,7 @@ const PNG_BYTES = Uint8Array.from([
   0x42, 0x60, 0x82,
 ])
 
-/** via real upload path create artifact (writeUploaded away complete clean//register). */
+/** Creates an artifact through the real upload path (`writeUploaded` handles sanitization/registration). */
 async function uploadArtifact(
   env: Env,
   conversationId: number,
@@ -80,7 +80,7 @@ async function uploadArtifact(
   return meta.id
 }
 
-test('authorization: this conversation artifact and parent conversation artifact can mount; across conversation unauthorized 403; missing 404', { timeout: 60_000 }, async () => {
+test('authorization: own and parent conversation artifacts attach; cross-conversation 403; missing 404', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const parent = await env.app.kernel.createConversation({ title: 'parent conversation' })
@@ -91,19 +91,19 @@ test('authorization: this conversation artifact and parent conversation artifact
     const parentId = await uploadArtifact(env, parent.id, 'parent.md', new TextEncoder().encode('parent'))
     const otherId = await uploadArtifact(env, other.id, 'other.txt', new TextEncoder().encode('other'))
 
-    // this conversation artifact: can parse.
+    // Own conversation artifact: resolves.
     const own = await env.app.kernel.resolveAuthorizedAttachments(child.id, [ownId])
     assert.equal(own.length, 1)
     assert.equal(own[0]!.ref.name, 'own.txt')
     assert.equal(own[0]!.ref.size, 3)
-    assert.ok(own[0]!.absPath.startsWith(env.dataDir), 'absPath points to dataDir inside')
+    assert.ok(own[0]!.absPath.startsWith(env.dataDir), 'absPath should reside inside dataDir')
 
-    // parent conversation artifact: allows sub-conversation mount.
+    // Parent conversation artifact: child conversation may attach.
     const viaParent = await env.app.kernel.resolveAuthorizedAttachments(child.id, [parentId])
     assert.equal(viaParent.length, 1)
     assert.equal(viaParent[0]!.metadata.conversationId, parent.id)
 
-    // across conversation unauthorized:403 artifact_forbidden.
+    // Cross-conversation unauthorized: 403 artifact_forbidden.
     await assert.rejects(
       env.app.kernel.resolveAuthorizedAttachments(child.id, [otherId]),
       (err: unknown) => {
@@ -117,7 +117,7 @@ test('authorization: this conversation artifact and parent conversation artifact
       },
     )
 
-    // missing:404 not_found.
+    // Missing: 404 not_found.
     await assert.rejects(
       env.app.kernel.resolveAuthorizedAttachments(child.id, ['no-such-artifact-id']),
       (err: unknown) => {
@@ -128,7 +128,7 @@ test('authorization: this conversation artifact and parent conversation artifact
       },
     )
 
-    // duplicate ID dedupe.
+    // Deduplicates repeated IDs.
     const deduped = await env.app.kernel.resolveAuthorizedAttachments(child.id, [ownId, ownId])
     assert.equal(deduped.length, 1)
   } finally {
@@ -136,7 +136,7 @@ test('authorization: this conversation artifact and parent conversation artifact
   }
 })
 
-test('submitInput: text attachment piece together [Attached Files];SQLite zero base64 expansion', { timeout: 60_000 }, async () => {
+test('submitInput: text attachments append [Attached Files]; SQLite stores no base64 bloat', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     env.faux.setResponses([capture(env)])
@@ -145,16 +145,16 @@ test('submitInput: text attachment piece together [Attached Files];SQLite zero b
     await env.app.kernel.submitInput(conv.id, 'please inspect read attachment', { attachments: [artId] })
     await env.app.kernel.waitForIdle(conv.id)
 
-    // model request:user content contains [Attached Files] manifest.
+    // Model request: user content includes [Attached Files] manifest.
     assert.equal(env.requests.length, 1)
     const content = env.requests[0]!.userContents.at(-1)
-    assert.equal(typeof content, 'string', 'without diagram piece attachment when keep pure text')
+    assert.equal(typeof content, 'string', 'remains plain text when no image attachments are present')
     assert.ok((content as string).includes('please inspect read attachment'))
     assert.ok((content as string).includes('[Attached Files]'))
     assert.ok((content as string).includes(`id=${artId}`))
     assert.ok((content as string).includes(`helm artifacts get ${artId} --output ./notes.md`))
 
-    // SQLite helm.input entry:attachments only light amount pointer, absolute without base64.
+    // SQLite helm.input entry: attachments carry lightweight pointers only, never base64.
     const detail = await env.app.kernel.getConversationDetail(conv.id)
     const inputEntry = detail.entries.find((e) => e.kind === 'helm.input')
     assert.ok(inputEntry !== undefined)
@@ -163,14 +163,14 @@ test('submitInput: text attachment piece together [Attached Files];SQLite zero b
     assert.deepEqual(Object.keys(data.attachments[0]!).sort(), ['id', 'mimeType', 'name', 'size'])
     assert.equal(data.attachments[0]!.name, 'notes.md')
     const raw = JSON.stringify(inputEntry)
-    assert.ok(!raw.includes('base64'), 'entry must not contains base64 field')
-    assert.ok(!raw.includes('# content'), 'entry must not carry artifact byte content')
+    assert.ok(!raw.includes('base64'), 'entry must not contain base64 fields')
+    assert.ok(!raw.includes('# content'), 'entry must not inline artifact byte contents')
   } finally {
     await env.close()
   }
 })
 
-test('submitInput: diagram piece attachment construct multimodal ImageContent(base64 data + mimeType)', { timeout: 60_000 }, async () => {
+test('submitInput: image attachments build multimodal ImageContent (base64 data + mimeType)', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     env.faux.setResponses([capture(env)])
@@ -182,14 +182,14 @@ test('submitInput: diagram piece attachment construct multimodal ImageContent(ba
 
     assert.equal(env.requests.length, 1)
     const content = env.requests[0]!.userContents.at(-1)
-    assert.ok(Array.isArray(content), 'diagram piece attachment when user content should be multimodal array')
+    assert.ok(Array.isArray(content), 'user content should be a multimodal array when image attachments are present')
     const blocks = content as Array<{ type: string; text?: string; data?: string; mimeType?: string }>
     const textBlock = blocks.find((b) => b.type === 'text')
     assert.ok(textBlock !== undefined)
     assert.ok(textBlock.text!.includes('[Attached Files]'))
-    assert.ok(textBlock.text!.includes('side.txt'), 'manifest contains all attachment')
+    assert.ok(textBlock.text!.includes('side.txt'), 'manifest includes all attachments')
     const imageBlocks = blocks.filter((b) => b.type === 'image')
-    assert.equal(imageBlocks.length, 1, 'exactly a diagram piece chunk')
+    assert.equal(imageBlocks.length, 1, 'exactly one image block')
     assert.equal(imageBlocks[0]!.mimeType, 'image/png')
     assert.equal(imageBlocks[0]!.data, Buffer.from(PNG_BYTES).toString('base64'))
   } finally {
@@ -197,7 +197,7 @@ test('submitInput: diagram piece attachment construct multimodal ImageContent(ba
   }
 })
 
-test('submitInput: across conversation unauthorized attachment 403(produces no turn side effect)', { timeout: 60_000 }, async () => {
+test('submitInput: cross-conversation unauthorized attachment fails with 403 (no turn side effects)', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const a = await env.app.kernel.createConversation({ title: 'A' })
@@ -212,8 +212,8 @@ test('submitInput: across conversation unauthorized attachment 403(produces no t
   }
 })
 
-test('submitInput:input hook transform change write attachments after same right validate', { timeout: 60_000 }, async () => {
-  // transform plugin: attachments replace is another (exceeds right) artifact ID.
+test('submitInput: attachments rewritten by input hook transform still undergo authorization check', { timeout: 60_000 }, async () => {
+  // Transform plugin replaces attachments with an unauthorized/foreign artifact ID.
   const evil: PluginDefinition = {
     id: 'test:transform-attachments',
     async definePlugin(ctx) {
@@ -243,21 +243,21 @@ test('submitInput:input hook transform change write attachments after same right
     await assert.rejects(
       env.app.kernel.submitInput(conv.id, 'trigger change write'),
       (err: unknown) => err instanceof HelmError && err.code === 'not_found' && err.status === 404,
-      'transform after attachment ID same away store in and authorization validate (missing i.e. 404)',
+      'transformed attachment IDs must still be checked for existence and authorization (404 when missing)',
     )
   } finally {
     await env.close()
   }
 })
 
-test('subagent attachments:spawnAgent pre- authorization validate; original generate spawn inject [Attached Files]', { timeout: 60_000 }, async () => {
+test('subagent attachments: spawnAgent pre-validates authorization; native spawn injects [Attached Files]', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const parent = await env.app.kernel.createConversation({ title: 'derive parent' })
     const other = await env.app.kernel.createConversation({ title: 'without closure' })
     const otherArt = await uploadArtifact(env, other.id, 'foreign.bin', new Uint8Array([9]))
 
-    // exceeds right:spawnAgent in enter hook chain before i.e. reject (do not create sub-conversation).
+    // Unauthorized: spawnAgent rejects before entering the hook chain (creates no child conversation).
     const beforeCount = (await env.app.kernel.listConversations()).length
     await assert.rejects(
       env.app.kernel.spawnAgent({
@@ -267,9 +267,9 @@ test('subagent attachments:spawnAgent pre- authorization validate; original gene
       }),
       (err: unknown) => err instanceof HelmError && err.code === 'artifact_forbidden' && err.status === 403,
     )
-    assert.equal((await env.app.kernel.listConversations()).length, beforeCount, 'produces no sub-conversation side effect')
+    assert.equal((await env.app.kernel.listConversations()).length, beforeCount, 'must not create child conversation side effects')
 
-    // legal: original generate spawn task prompt inject [Attached Files] chunk (faux catch sub-conversation request).
+    // Authorized: native spawn injects [Attached Files] block into task prompt (captured by faux).
     const artId = await uploadArtifact(env, parent.id, 'spec.md', new TextEncoder().encode('spec-body'))
     env.faux.setResponses([capture(env)])
     const result = await env.app.kernel.spawnAgent({
