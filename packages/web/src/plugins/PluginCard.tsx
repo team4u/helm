@@ -1,7 +1,8 @@
-import React, { useContext } from 'react'
+import React, { useContext, useMemo } from 'react'
 import type { PluginSummary } from '@helm/protocol/browser'
 import { DEFAULT_HELM_LOCALE, resolveLocalizedText } from '@helm/protocol/browser'
 import { HelmIcon, Switch } from '@helm/plugin-client'
+import { createWebTranslator } from '../i18n/catalog.js'
 import { HelmStoreContext } from '../lib/store-context.js'
 import {
   getPluginDescription,
@@ -36,8 +37,9 @@ export function PluginCard({
   // 展示名 / 描述属 LocalizedText 显示元数据：按 store 的权威 locale 解析；
   // 组件保留无 Provider 的 SSR 渲染容忍（缺省英文桥接）。
   const locale = store?.locale ?? DEFAULT_HELM_LOCALE
+  const t = useMemo(() => createWebTranslator(locale), [locale])
   const name = resolveLocalizedText(plugin.name, locale) || plugin.id
-  const description = getPluginDescription(plugin, locale)
+  const description = getPluginDescription(plugin, locale, t)
   const isLocked = plugin.locked === true
   // 已启用且有 Screen 贡献时提供快捷打开（主屏/右屏），经 store.openTarget 唯一导航。
   const primaryScreen =
@@ -49,12 +51,12 @@ export function PluginCard({
   const isSwitchDisabled = isLocked || toggling || isLoadBroken
 
   const switchTitle = isLocked
-    ? 'Resident plugins cannot be disabled'
+    ? t('plugins.card.switchLockedTitle')
     : isLoadBroken
-      ? 'Plugin failed to load; click to see error details'
+      ? t('plugins.card.switchLoadBrokenTitle')
       : plugin.enabled
-        ? 'Click to disable'
-        : 'Click to enable'
+        ? t('plugins.card.switchDisableTitle')
+        : t('plugins.card.switchEnableTitle')
 
   const handleCardClick = () => {
     onSelect()
@@ -96,23 +98,23 @@ export function PluginCard({
               {name}
             </span>
             {versionLabel && (
-              <span className="plugin-card-version" title={`Version ${versionLabel}`}>
+              <span className="plugin-card-version" title={t('plugins.card.versionTitle', { version: versionLabel })}>
                 {versionLabel}
               </span>
             )}
             {isLocked && (
-              <span className="plugin-card-locked-badge" title="Resident core plugin; cannot be disabled">
+              <span className="plugin-card-locked-badge" title={t('plugins.card.lockedTitle')}>
                 <HelmIcon name="lock" size={10} />
-                <span>Resident</span>
+                <span>{t('plugins.resident')}</span>
               </span>
             )}
             {isPluginFailed(plugin) && (
               <span
                 className="badge badge-err"
-                title={plugin.error?.message || 'Plugin failed to load or enable'}
+                title={plugin.error?.message || t('plugins.card.failedFallbackTitle')}
               >
                 <HelmIcon name="alert-circle" size={10} />
-                <span>Error</span>
+                <span>{t('plugins.status.error')}</span>
               </span>
             )}
           </div>
@@ -145,19 +147,19 @@ export function PluginCard({
       <div className="plugin-card-footer">
         <div className="plugin-card-pills">
           {(plugin.tools?.length ?? 0) > 0 && (
-            <span className="plugin-card-pill" title={`${plugin.tools.length} Agent Tools`}>
+            <span className="plugin-card-pill" title={t('plugins.card.toolsTitle', { count: plugin.tools.length })}>
               <HelmIcon name="wrench" size={11} />
               <span>{`${plugin.tools.length} Tools`}</span>
             </span>
           )}
           {(plugin.actions?.length ?? 0) > 0 && (
-            <span className="plugin-card-pill" title={`${plugin.actions.length} CLI/HTTP Actions`}>
+            <span className="plugin-card-pill" title={t('plugins.card.actionsTitle', { count: plugin.actions.length })}>
               <HelmIcon name="zap" size={11} />
               <span>{`${plugin.actions.length} Actions`}</span>
             </span>
           )}
           {(plugin.hooks?.length ?? 0) > 0 && (
-            <span className="plugin-card-pill" title={`${plugin.hooks.length} kernel lifecycle hooks`}>
+            <span className="plugin-card-pill" title={t('plugins.card.hooksTitle', { count: plugin.hooks.length })}>
               <HelmIcon name="layers" size={11} />
               <span>{`${plugin.hooks.length} Hooks`}</span>
             </span>
@@ -169,8 +171,8 @@ export function PluginCard({
             <button
               type="button"
               className="btn btn-xs plugin-card-open-btn"
-              title="Open plugin view"
-              aria-label={`Open ${name} view`}
+              title={t('plugins.card.openViewTitle')}
+              aria-label={t('plugins.card.openViewAria', { name })}
               onClick={(e) => {
                 e.stopPropagation()
                 store?.openTarget({
@@ -181,7 +183,7 @@ export function PluginCard({
               }}
             >
               <HelmIcon name="play" size={10} />
-              <span>Open view</span>
+              <span>{t('plugins.openView')}</span>
             </button>
           )}
           <div
@@ -199,7 +201,7 @@ export function PluginCard({
               onChange={(checked) => {
                 void onToggle(checked)
               }}
-              aria-label={`${name} switch`}
+              aria-label={t('plugins.card.switchAria', { name })}
               title={switchTitle}
             />
           </div>

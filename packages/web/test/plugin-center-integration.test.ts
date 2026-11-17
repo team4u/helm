@@ -334,3 +334,29 @@ test('零 Emoji 铁律：PluginCenter.tsx 源码无任何 Emoji 字符', { timeo
   const emojiRegex = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F1E6}-\u{1F1FF}]/u
   assert.doesNotMatch(centerSrc, emojiRegex, 'PluginCenter.tsx 严禁包含 Emoji 表情')
 })
+
+test('PluginCenter SSR：zh-CN locale 渲染中文标题、筛选标签与空状态文案', { timeout: 60_000 }, async () => {
+  const { PluginCenter } = await import('../src/plugins/PluginCenter.js')
+  const store = makeTestStore({
+    locale: 'zh-CN',
+    plugins: mockPlugins,
+    primaryTarget: { kind: 'plugins' },
+  })
+  const html = renderToString(e(HostStoreProviders, { value: store }, e(PluginCenter)))
+  assert.match(html, /扩展插件中心/)
+  assert.match(html, /安装插件/)
+  assert.match(html, /搜索插件名称、ID、Tool 或 Action…/)
+  assert.match(html, /全部/)
+  assert.match(html, /已启用/)
+  assert.match(html, /已停用/)
+  assert.doesNotMatch(html, /Plugin Center/)
+
+  const emptyStore = makeTestStore({
+    locale: 'zh-CN',
+    plugins: [],
+    primaryTarget: { kind: 'plugins' },
+  })
+  const emptyHtml = renderToString(e(HostStoreProviders, { value: emptyStore }, e(PluginCenter)))
+  assert.match(emptyHtml, /未找到匹配的插件/)
+  assert.match(emptyHtml, /请尝试调整搜索关键字或切换启用状态筛选。/)
+})

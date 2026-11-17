@@ -5,7 +5,8 @@
  * doctor 结构化检查结果的展示条目化、HTTP 错误诊断文案。
  * 仅做前端输入引导；最终解析与校验由 Hub 安装器裁决。
  */
-import type { PluginDoctorReport, PluginPackageSource } from '@helm/protocol/browser'
+import type { HelmLocale, PluginDoctorReport, PluginPackageSource } from '@helm/protocol/browser'
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
 /** 安装来源的本地识别结果（仅用于输入引导与安全提示，不预判服务端行为）。 */
 export type PluginSourceKindHint = 'npm' | 'git' | 'local' | 'unknown'
@@ -40,13 +41,16 @@ export function isLocalSource(input: string): boolean {
  * 本地识别安装来源类别：仅用于输入框旁的即时来源提示，
  * 不替代服务端解析（非法输入最终由安装器返回结构化错误）。
  */
-export function detectPluginSourceKind(input: string): PluginSourceHint {
+export function detectPluginSourceKind(
+  input: string,
+  t: WebMessageTranslator = englishWebTranslator,
+): PluginSourceHint {
   const value = input.trim()
   if (value === '') return { kind: 'unknown', label: '' }
-  if (isNpmSource(value)) return { kind: 'npm', label: 'npm package' }
-  if (isGitSource(value)) return { kind: 'git', label: 'Git repository' }
-  if (isLocalSource(value)) return { kind: 'local', label: 'Local path' }
-  return { kind: 'unknown', label: 'Unrecognized' }
+  if (isNpmSource(value)) return { kind: 'npm', label: t('plugins.package.sourceKind.npm') }
+  if (isGitSource(value)) return { kind: 'git', label: t('plugins.package.sourceKind.git') }
+  if (isLocalSource(value)) return { kind: 'local', label: t('plugins.package.sourceKind.local') }
+  return { kind: 'unknown', label: t('plugins.package.sourceKind.unknown') }
 }
 
 /** 来源是否可作为安装请求提交（unknown 时不允许提交，避免盲发）。 */
@@ -56,10 +60,13 @@ export function isInstallSourceSubmittable(input: string): boolean {
 }
 
 /** 推导受管来源徽章的短标签（npm / git / 本地）。 */
-export function pluginSourceBadgeLabel(source: PluginPackageSource): string {
+export function pluginSourceBadgeLabel(
+  source: PluginPackageSource,
+  t: WebMessageTranslator = englishWebTranslator,
+): string {
   if (source.kind === 'npm') return 'npm'
   if (source.kind === 'git') return 'git'
-  return 'Local'
+  return t('plugins.package.sourceBadge.local')
 }
 
 /** 推导受管来源的完整展示文本（如 `npm:helm-plugin-foo@^1.2.0`、`https://…#dev`）。 */
@@ -68,10 +75,10 @@ export function pluginSourceDisplayText(source: PluginPackageSource): string {
 }
 
 /** 格式化安装时间为可读本地时间串；非法值回退空串。 */
-export function formatInstalledAt(ms: number): string {
+export function formatInstalledAt(ms: number, locale?: HelmLocale): string {
   if (!Number.isFinite(ms) || ms <= 0) return ''
   try {
-    return new Date(ms).toLocaleString()
+    return locale !== undefined ? new Date(ms).toLocaleString(locale) : new Date(ms).toLocaleString()
   } catch {
     return ''
   }
@@ -98,22 +105,38 @@ export function buildDoctorCheckItems(report: PluginDoctorReport): PluginDoctorC
 }
 
 /** 从 doctor 报告中提取整体结论文案（存在失败项时逐项列出）。 */
-export function buildDoctorConclusion(report: PluginDoctorReport): string {
+export function buildDoctorConclusion(
+  report: PluginDoctorReport,
+  t: WebMessageTranslator = englishWebTranslator,
+): string {
   const failed = (report.checks ?? []).filter((check) => check.error !== undefined)
-  if (report.ok && failed.length === 0) return 'Pre-install doctor passed'
-  const parts = failed.map(
-    (check) => `${check.id}（${check.error?.code ?? 'unknown'}）：${check.error?.message ?? ''}`,
+  if (report.ok && failed.length === 0) return t('plugins.package.doctorPassed')
+  const parts = failed.map((check) =>
+    t('plugins.package.doctorFailedItem', {
+      id: check.id,
+      code: check.error?.code ?? 'unknown',
+      message: check.error?.message ?? '',
+    }),
   )
-  return `Pre-install doctor failed with ${failed.length} failures: ${parts.join('; ')}`
+  return t('plugins.package.doctorFailed', {
+    count: failed.length,
+    details: parts.join(t('plugins.package.doctorSeparator')),
+  })
 }
 
 /** 提取插件包操作（安装/更新/移除）失败时的诊断文案；409 在途任务给出明确指引。 */
-export function pluginPackageErrorText(err: unknown, action: string): string {
+export function pluginPackageErrorText(
+  err: unknown,
+  action: string,
+  t: WebMessageTranslator = englishWebTranslator,
+): string {
   if (err instanceof Error && 'status' in err && (err as { status?: number }).status === 409) {
     const code = (err as { code?: string }).code ?? 'plugin_has_live_tasks'
-    return `${action} failed: plugin has live tasks (${code}). Wait for them to finish or abort, then retry.`
+    return t('plugins.package.errorLiveTasks', { action, code })
   }
-  return err instanceof Error ? `${action} failed: ${err.message}` : `${action} failed`
+  return err instanceof Error
+    ? t('plugins.package.errorWithMessage', { action, message: err.message })
+    : t('plugins.package.errorGeneric', { action })
 }
 
 /**

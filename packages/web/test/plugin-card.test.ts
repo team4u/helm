@@ -13,9 +13,11 @@ const e = React.createElement
 const { PluginCard } = await import('../src/plugins/PluginCard.js')
 const {
   getPluginDescription,
+  pluginErrorStageLabel,
   resolvePluginIcon,
   DEFAULT_PLUGIN_ICON,
 } = await import('../src/plugins/plugin-card-model.js')
+const { createWebTranslator } = await import('../src/i18n/catalog.js')
 const { HelmStoreContext, makeTestStore } = await import('./helpers/store.js')
 
 // ---------------------------------------------------------------------------
@@ -576,4 +578,53 @@ test('PluginCard：插件名与描述按 store locale 解析，切换 en -> zh-C
     })
     container.remove()
   }
+})
+
+test('plugin-card-model & PluginCard：en / zh-CN 双语描述、故障阶段标签与卡片 UI 切换', { timeout: 60_000 }, async () => {
+  const en = createWebTranslator('en')
+  const zh = createWebTranslator('zh-CN')
+
+  const capabilityOnly = makePlugin({
+    description: undefined,
+    tools: ['t1', 't2'],
+    actions: ['a1'],
+    hooks: [],
+  })
+  assert.equal(getPluginDescription(capabilityOnly, 'en', en), 'Provides 2 tools, 1 actions capabilities.')
+  assert.equal(getPluginDescription(capabilityOnly, 'zh-CN', zh), '提供 2 个工具、1 个动作能力支持。')
+
+  const emptyPlugin = makePlugin({ description: undefined, tools: [], actions: [], hooks: [] })
+  assert.equal(getPluginDescription(emptyPlugin, 'en', en), 'System extension plugin component.')
+  assert.equal(getPluginDescription(emptyPlugin, 'zh-CN', zh), '系统扩展插件组件。')
+
+  assert.equal(pluginErrorStageLabel('load', en), 'Module loading (load)')
+  assert.equal(pluginErrorStageLabel('load', zh), '模块加载（load）')
+  assert.equal(pluginErrorStageLabel('other', zh), '未知阶段')
+
+  const plugin = makePlugin({
+    id: 'community:glossary',
+    name: { en: 'Glossary', 'zh-CN': '术语表' },
+    description: undefined,
+    locked: true,
+    enabled: false,
+    status: 'failed',
+    error: { code: 'plugin_enable_failed', message: 'boom', stage: 'enable' },
+    tools: ['lookup'],
+    actions: [],
+    hooks: [],
+  })
+
+  const zhStore = makeTestStore({ locale: 'zh-CN' })
+  const zhHtml = renderToString(
+    e(HelmStoreContext.Provider, { value: zhStore },
+      e(PluginCard, { plugin, selected: false, onSelect: () => {}, onToggle: () => {} }),
+    ),
+  )
+  assert.match(zhHtml, /术语表/)
+  assert.match(zhHtml, /常驻/)
+  assert.match(zhHtml, /异常/)
+  assert.match(zhHtml, /提供 1 个工具能力支持。/)
+  assert.match(zhHtml, /常驻插件不可停用/)
+  assert.doesNotMatch(zhHtml, /<span>Resident<\/span>/)
+  assert.doesNotMatch(zhHtml, /<span>Error<\/span>/)
 })

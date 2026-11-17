@@ -103,4 +103,141 @@ export const profilesMessages = {
     'zh-CN': '请尝试调整搜索关键字或切换分类标签。',
   },
   'profiles.center.resetFilters': { en: 'Reset filters', 'zh-CN': '重置筛选条件' },
+
+  // ProfileDetailDrawer copy.
+  'profiles.drawer.newTitle': { en: 'New agent profile', 'zh-CN': '新建智能体角色' },
+  'profiles.drawer.titleFallback': { en: 'Profile details', 'zh-CN': '角色详情' },
+  'profiles.drawer.systemPillTitle': {
+    en: 'Built-in system profile; protected',
+    'zh-CN': '系统内置角色，受保护',
+  },
+  'profiles.drawer.closeAria': { en: 'Close drawer', 'zh-CN': '关闭抽屉' },
+  'profiles.drawer.unboundNode': {
+    en: 'Unbound (local node)',
+    'zh-CN': '未绑定（本机 local）',
+  },
+  'profiles.drawer.unknownNode': { en: '{id} (unknown node)', 'zh-CN': '{id}（未知节点）' },
+  'profiles.drawer.error.idRequired': { en: 'Enter a profile ID', 'zh-CN': '请输入角色 ID' },
+  'profiles.drawer.error.idInvalid': {
+    en: 'Profile ID must contain only lowercase letters, digits and hyphens (e.g. code-reviewer)',
+    'zh-CN': '角色 ID 必须由小写字母、数字和连字符组成（例如 code-reviewer）',
+  },
+  'profiles.drawer.error.starterPrefix': {
+    en: 'Starter {index}: {error}',
+    'zh-CN': '引导词 {index}：{error}',
+  },
+  'profiles.drawer.field.id': { en: 'Profile ID', 'zh-CN': '角色 ID' },
+  'profiles.drawer.field.idPlaceholder': {
+    en: 'Letters, digits and hyphens, e.g. code-reviewer',
+    'zh-CN': '字母、数字与连字符，如 code-reviewer',
+  },
+  'profiles.drawer.field.name': { en: 'Profile name', 'zh-CN': '角色名称' },
+  'profiles.drawer.field.namePlaceholder': {
+    en: 'e.g. Code Reviewer, Software Architect',
+    'zh-CN': '例如：代码评审员、技术架构师',
+  },
+  'profiles.drawer.field.description': { en: 'Profile description', 'zh-CN': '角色描述' },
+  'profiles.drawer.field.descriptionPlaceholder': {
+    en: 'Briefly describe the duties, background and strengths of this profile...',
+    'zh-CN': '简要描述该角色的职责、背景与能力专长...',
+  },
+  'profiles.drawer.field.defaultModel': { en: 'Default model', 'zh-CN': '默认模型' },
+  'profiles.drawer.field.thinkingLevel': { en: 'Thinking level', 'zh-CN': '思考档位' },
+  'profiles.drawer.thinking.unbound': {
+    en: 'Follows the global default thinking level when no model is bound.',
+    'zh-CN': '未绑定模型时跟随全局缺省思考档位。',
+  },
+  'profiles.drawer.thinking.unsupportedModel': {
+    en: 'The selected model does not support thinking levels.',
+    'zh-CN': '所选模型不支持思考档位。',
+  },
+  'profiles.drawer.thinking.unsupportedLevel': {
+    en: 'Current level {level} is not supported by the selected model; adjust before saving.',
+    'zh-CN': '当前档位 {level} 不在所选模型支持列表，保存前请调整。',
+  },
+  'profiles.drawer.field.defaultNode': { en: 'Default node', 'zh-CN': '默认节点' },
+  'profiles.drawer.field.cwd': { en: 'Working directory', 'zh-CN': '工作目录' },
+  'profiles.drawer.field.cwdPlaceholder': {
+    en: 'Optional, e.g. /root/code/my-project',
+    'zh-CN': '可选，例如 /root/code/my-project',
+  },
+  'profiles.drawer.system.title': {
+    en: 'System prompt (SYSTEM.md)',
+    'zh-CN': '系统提示词 (SYSTEM.md)',
+  },
+  'profiles.drawer.system.chars': { en: '{chars} characters', 'zh-CN': '{chars} 字符' },
+  'profiles.drawer.system.charsAndLines': {
+    en: '{chars} characters · {lines} lines',
+    'zh-CN': '{chars} 字符 · {lines} 行',
+  },
+  'profiles.drawer.system.placeholder': {
+    en: 'Enter the system prompt instructions for this profile (Markdown supported)...',
+    'zh-CN': '输入该角色的系统提示词指令（支持 Markdown）...',
+  },
+  'profiles.drawer.system.aria': { en: 'System prompt', 'zh-CN': '系统提示词' },
+  'profiles.drawer.system.hint': {
+    en: 'Tip: the system prompt defines the core duties and ground rules of the profile; saving applies to future conversations immediately.',
+    'zh-CN': '提示：系统指令定义角色的核心职责与行动准则，保存后对后续会话即时生效。',
+  },
+  'profiles.drawer.starters.title': {
+    en: 'Empty-conversation starters',
+    'zh-CN': '空白会话引导词',
+  },
+  'profiles.drawer.starters.empty': {
+    en: 'Falls back to the system default starter prompts when unset.',
+    'zh-CN': '未配置时使用系统默认引导提示。',
+  },
+  'profiles.drawer.starters.labelPlaceholder': {
+    en: 'Title (max 24 code points)',
+    'zh-CN': '标题（≤24 码点）',
+  },
+  'profiles.drawer.starters.labelAria': {
+    en: 'Starter {index} title',
+    'zh-CN': '引导词 {index} 标题',
+  },
+  'profiles.drawer.starters.promptPlaceholder': {
+    en: 'Prompt filled into the composer on click (max 4000 code points; not sent automatically)',
+    'zh-CN': '点击后回填到输入框的提示词（≤4000 码点，不自动发送）',
+  },
+  'profiles.drawer.starters.promptAria': {
+    en: 'Starter {index} prompt',
+    'zh-CN': '引导词 {index} 提示词',
+  },
+  'profiles.drawer.starters.deleteAria': {
+    en: 'Delete starter {index}',
+    'zh-CN': '删除引导词 {index}',
+  },
+  'profiles.drawer.starters.deleteTitle': {
+    en: 'Delete this starter',
+    'zh-CN': '删除此条引导词',
+  },
+  'profiles.drawer.starters.add': { en: 'Add starter', 'zh-CN': '添加引导词' },
+  'profiles.drawer.skills.title': {
+    en: 'Available skills allowlist',
+    'zh-CN': '可用技能白名单',
+  },
+  'profiles.drawer.skills.allHint': {
+    en: 'This profile may use every available skill without restriction.',
+    'zh-CN': '已允许此角色无限制使用系统内所有可用技能。',
+  },
+  'profiles.drawer.skills.empty': { en: 'No skills loaded', 'zh-CN': '暂无已加载的技能' },
+  'profiles.drawer.delete': { en: 'Delete profile', 'zh-CN': '删除角色' },
+  'profiles.drawer.saving': { en: 'Saving…', 'zh-CN': '保存中…' },
+  'profiles.drawer.save': { en: 'Save profile', 'zh-CN': '保存角色' },
+  'profiles.drawer.deleting': { en: 'Deleting…', 'zh-CN': '删除中…' },
+  'profiles.drawer.deleteConfirm.body': {
+    en: 'Delete profile "{name}"? This action cannot be undone.',
+    'zh-CN': '确定删除角色「{name}」？此操作不可撤销。',
+  },
+  'profiles.drawer.deleteConfirm.confirm': { en: 'Confirm deletion', 'zh-CN': '确认删除' },
+  'profiles.drawer.discardConfirm.title': {
+    en: 'Discard unsaved changes',
+    'zh-CN': '放弃未保存的修改',
+  },
+  'profiles.drawer.discardConfirm.body': {
+    en: 'The form has unsaved changes that will be lost on close. Discard them and close?',
+    'zh-CN': '当前表单有尚未保存的修改，关闭后将丢失这些改动。确定要放弃修改并关闭吗？',
+  },
+  'profiles.drawer.discardConfirm.confirm': { en: 'Discard changes', 'zh-CN': '放弃修改' },
+  'profiles.drawer.discardConfirm.cancel': { en: 'Keep editing', 'zh-CN': '继续编辑' },
 } satisfies MessageTable

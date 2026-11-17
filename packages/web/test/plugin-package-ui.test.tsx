@@ -603,3 +603,46 @@ test('PluginCenter 集成：安装成功后 syncPlugins 刷新列表并导航至
     host.remove()
   }
 })
+
+test('PluginInstallModal & PluginDetailDrawer：zh-CN locale 渲染中文安装模态与包管理区块', { timeout: 60_000 }, async () => {
+  const { PluginInstallModal } = await import('../src/plugins/PluginInstallModal.js')
+  const { PluginDetailDrawer } = await import('../src/plugins/PluginDetailDrawer.js')
+
+  const zhStore = makeTestStore({ locale: 'zh-CN' })
+  const installHtml = renderToString(
+    e(
+      HostStoreProviders,
+      { value: zhStore },
+      e(PluginInstallModal, { open: true, onClose: () => {}, onInstalled: () => {}, inline: true }),
+    ),
+  )
+  assert.match(installHtml, /安装插件/)
+  assert.match(installHtml, /安装来源/)
+  assert.match(installHtml, /安装后启用/)
+  assert.match(installHtml, /安装后保持停用/)
+  assert.match(installHtml, /插件在 Hub 进程内运行/)
+  assert.match(installHtml, /取消/)
+  assert.doesNotMatch(installHtml, /Install plugin/)
+
+  const drawerHtml = renderToString(
+    e(
+      HostStoreProviders,
+      { value: zhStore },
+      e(PluginDetailDrawer, {
+        plugin: makeManagedPlugin({ name: { en: 'My Plugin', 'zh-CN': '我的外部插件' } }),
+        open: true,
+        inline: true,
+        onClose: () => {},
+        onToggleEnabled: async () => {},
+        toggling: false,
+      }),
+    ),
+  )
+  assert.match(drawerHtml, /包管理/)
+  assert.match(drawerHtml, /来源/)
+  assert.match(drawerHtml, /已安装版本/)
+  assert.match(drawerHtml, /安装时间/)
+  assert.match(drawerHtml, /检查更新/)
+  assert.match(drawerHtml, /卸载插件/)
+  assert.doesNotMatch(drawerHtml, /Check for updates/)
+})

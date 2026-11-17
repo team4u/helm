@@ -14,6 +14,7 @@ import { conversationMessages } from './resources/conversation.js'
 import { modalsMessages } from './resources/modals.js'
 import { modelsMessages } from './resources/models.js'
 import { nodesMessages } from './resources/nodes.js'
+import { pluginsMessages } from './resources/plugins.js'
 import { profilesMessages } from './resources/profiles.js'
 import { shellMessages } from './resources/shell.js'
 import { skillsMessages } from './resources/skills.js'
@@ -28,6 +29,7 @@ export const webMessages = {
   ...uiMessages,
   ...modelsMessages,
   ...nodesMessages,
+  ...pluginsMessages,
   ...profilesMessages,
   ...skillsMessages,
   ...modalsMessages,

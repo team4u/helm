@@ -1,6 +1,8 @@
-import React, { useEffect, useState } from 'react'
-import type { PluginDoctorReport } from '@helm/protocol/browser'
+import React, { useContext, useEffect, useMemo, useState } from 'react'
+import { DEFAULT_HELM_LOCALE, type PluginDoctorReport } from '@helm/protocol/browser'
 import { pluginsApi } from '../lib/api.js'
+import { createWebTranslator } from '../i18n/catalog.js'
+import { HelmStoreContext } from '../lib/store-context.js'
 import { HelmIcon, Dialog, DialogClose, DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogTitle, Switch } from '@helm/plugin-client'
 import {
   buildDoctorCheckItems,
@@ -32,6 +34,9 @@ export function PluginInstallModal({
   onInstalled,
   inline = false,
 }: PluginInstallModalProps): React.JSX.Element {
+  const store = useContext(HelmStoreContext)
+  const locale = store?.locale ?? DEFAULT_HELM_LOCALE
+  const t = useMemo(() => createWebTranslator(locale), [locale])
   const [source, setSource] = useState('')
   const [enableAfterInstall, setEnableAfterInstall] = useState(false)
   const [installing, setInstalling] = useState(false)
@@ -39,7 +44,7 @@ export function PluginInstallModal({
   const [errorText, setErrorText] = useState<string | null>(null)
 
   const trimmed = source.trim()
-  const hint = detectPluginSourceKind(trimmed)
+  const hint = detectPluginSourceKind(trimmed, t)
   const submittable = !installing && trimmed !== '' && isInstallSourceSubmittable(trimmed)
 
   // 打开时重置草稿与历史诊断；关闭期间不保留上次输入（草稿不进 URL/hash）。
@@ -65,7 +70,7 @@ export function PluginInstallModal({
       onClose()
     } catch (err) {
       // 安装失败时如实展示错误；doctor 报告（真实 Hub 在 details.report，经形状校验）逐项渲染。
-      setErrorText(pluginPackageErrorText(err, 'Install'))
+      setErrorText(pluginPackageErrorText(err, t('plugins.package.action.install'), t))
       const report = extractDoctorReport(err)
       if (report) setDoctorReport(report)
     } finally {
@@ -86,15 +91,15 @@ export function PluginInstallModal({
           <DialogContent
             className="modal plugin-install-modal"
             role="dialog"
-            aria-label="Install plugin"
+            aria-label={t('plugins.installPlugin')}
           >
           <div className="modal-header">
-            <DialogTitle className="modal-title">Install plugin</DialogTitle>
+            <DialogTitle className="modal-title">{t('plugins.installPlugin')}</DialogTitle>
             <DialogClose asChild>
               <button
                 className="btn btn-ghost btn-sm"
-                aria-label="Close"
-                title="Close"
+                aria-label={t('common.close')}
+                title={t('common.close')}
                 disabled={installing}
               >
                 <HelmIcon name="x" size={14} />
@@ -104,12 +109,12 @@ export function PluginInstallModal({
 
           <div className="modal-body plugin-install-form">
             <DialogDescription className="visually-hidden">
-              Install external plugins from an npm package, Git repository or local path
+              {t('plugins.install.description')}
             </DialogDescription>
 
             <div className="form-grid form-grid-align-start">
               <label htmlFor="plugin-install-source" className="form-grid-label">
-                <span>Install source</span>
+                <span>{t('plugins.install.sourceLabel')}</span>
               </label>
               <div className="plugin-install-input-wrap">
                 <input
@@ -142,20 +147,20 @@ export function PluginInstallModal({
 
             <div className="form-grid">
               <span className="form-grid-label">
-                <span>Enable after install</span>
+                <span>{t('plugins.install.enableAfterInstall')}</span>
               </span>
               <Switch
                 checked={enableAfterInstall}
                 onChange={setEnableAfterInstall}
                 disabled={installing}
-                label={enableAfterInstall ? 'Enable immediately after install' : 'Keep disabled after install'}
+                label={enableAfterInstall ? t('plugins.install.enableNow') : t('plugins.install.keepDisabled')}
               />
             </div>
 
             <div className="callout callout-warn plugin-install-security" role="note">
               <HelmIcon name="shield-alert" size={13} />
               <span className="callout-text">
-                Plugins run inside the Hub process with host privileges and are not sandboxed. Only install plugin packages from trusted sources.
+                {t('plugins.install.securityWarning')}
               </span>
             </div>
 
@@ -200,7 +205,7 @@ export function PluginInstallModal({
           <div className="modal-footer">
             <DialogClose asChild>
               <button className="btn btn-ghost btn-sm" disabled={installing}>
-                Cancel
+                {t('common.cancel')}
               </button>
             </DialogClose>
             <button
@@ -211,12 +216,12 @@ export function PluginInstallModal({
               {installing ? (
                 <>
                   <HelmIcon name="loader" size={12} />
-                  <span>Installing…</span>
+                  <span>{t('plugins.install.installing')}</span>
                 </>
               ) : (
                 <>
                   <HelmIcon name="download" size={12} />
-                  <span>Install</span>
+                  <span>{t('plugins.install.submit')}</span>
                 </>
               )}
             </button>

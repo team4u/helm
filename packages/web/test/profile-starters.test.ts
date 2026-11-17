@@ -23,6 +23,7 @@ import {
 } from '../src/profiles/profile-center-model.js'
 import { ProfileDetailDrawer } from '../src/profiles/ProfileDetailDrawer.js'
 import { ConversationTimeline } from '../src/conversation/ConversationTimeline.js'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 
@@ -259,4 +260,64 @@ test('ConversationTimeline: nothing renders with earlier pages/working/sending i
   const emptyList = renderTimeline({ starters: [] })
   assert.doesNotMatch(emptyList.html, /timeline-starters/)
   assert.ok(extractCenterSlot(emptyList.html) !== null, 'empty conversations still keep the empty-state inside timeline-center-slot')
+})
+
+test('ProfileDetailDrawer & validateStarterDraft: zh-CN locale renders localized drawer fields, starters and validation errors', { timeout: 60_000 }, () => {
+  const zh = createWebTranslator('zh-CN')
+  assert.match(validateStarterDraft({ label: '', prompt: 'x' }, zh)!, /标题去除首尾空白后不能为空/)
+  assert.match(validateStarterDraft({ label: 'a', prompt: '   ' }, zh)!, /提示词不能是纯空白/)
+  assert.match(validateStarterDraft({ label: '🎉'.repeat(25), prompt: 'x' }, zh)!, /最多 24 个 Unicode 码点/)
+  assert.match(validateStarterDraft({ label: 'x', prompt: 'y'.repeat(4001) }, zh)!, /最多 4000 个 Unicode 码点/)
+
+  const store = makeTestStore({
+    locale: 'zh-CN',
+    profiles: [profileWithStarters],
+    models: [],
+    nodes: [{ id: 'local', kind: 'local', online: true }],
+    skills: [],
+  })
+  const zhEditHtml = renderToStaticMarkup(
+    e(
+      HostStoreProviders,
+      { value: store },
+      e(ProfileDetailDrawer, {
+        profile: profileWithStarters,
+        isNew: false,
+        open: true,
+        inline: true,
+        onClose: () => {},
+      }),
+    ),
+  )
+  assert.match(zhEditHtml, /角色 ID/)
+  assert.match(zhEditHtml, /角色名称/)
+  assert.match(zhEditHtml, /角色描述/)
+  assert.match(zhEditHtml, /默认模型/)
+  assert.match(zhEditHtml, /思考档位/)
+  assert.match(zhEditHtml, /默认节点/)
+  assert.match(zhEditHtml, /工作目录/)
+  assert.match(zhEditHtml, /系统提示词 \(SYSTEM\.md\)/)
+  assert.match(zhEditHtml, /空白会话引导词/)
+  assert.match(zhEditHtml, /添加引导词/)
+  assert.match(zhEditHtml, /可用技能白名单/)
+  assert.match(zhEditHtml, /删除角色/)
+  assert.match(zhEditHtml, /保存角色/)
+  assert.doesNotMatch(zhEditHtml, /Empty-conversation starters/)
+  assert.doesNotMatch(zhEditHtml, /Save profile/)
+
+  const zhNewHtml = renderToStaticMarkup(
+    e(
+      HostStoreProviders,
+      { value: store },
+      e(ProfileDetailDrawer, {
+        profile: null,
+        isNew: true,
+        open: true,
+        inline: true,
+        onClose: () => {},
+      }),
+    ),
+  )
+  assert.match(zhNewHtml, /新建智能体角色/)
+  assert.match(zhNewHtml, /未配置时使用系统默认引导提示。/)
 })

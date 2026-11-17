@@ -996,3 +996,77 @@ test('PluginConfigForm：字段 label/description 属 LocalizedText，按 locale
   assert.match(enHtml, /Provider credential\./)
   assert.ok(!enHtml.includes('接口密钥'), 'en 下不得渲染 zh-CN 字段名')
 })
+
+test('PluginDetailDrawer & PluginConfigForm：zh-CN locale 渲染中文状态、能力清单、诊断与配置表单文案', { timeout: 60_000 }, () => {
+  const failedPlugin = makePlugin({
+    id: 'external:broken',
+    name: { en: 'Broken Plugin', 'zh-CN': '损坏插件' },
+    description: undefined,
+    locked: true,
+    enabled: false,
+    status: 'failed',
+    tools: [],
+    actions: [],
+    hooks: [],
+    error: {
+      code: 'plugin_load_failed',
+      message: 'missing entry',
+      stage: 'load',
+    },
+  })
+
+  const zhStore = makeTestStore({ locale: 'zh-CN' })
+  const zhHtml = renderToString(
+    e(
+      HostStoreProviders,
+      { value: zhStore },
+      e(PluginDetailDrawer, {
+        plugin: failedPlugin,
+        open: true,
+        inline: true,
+        onClose: () => {},
+        onToggleEnabled: async () => {},
+        toggling: false,
+      }),
+    ),
+  )
+
+  assert.match(zhHtml, /损坏插件/)
+  assert.match(zhHtml, /常驻/)
+  assert.match(zhHtml, /加载失败/)
+  assert.match(zhHtml, /当前状态/)
+  assert.match(zhHtml, /异常/)
+  assert.match(zhHtml, /启用插件/)
+  assert.match(zhHtml, /插件加载或启用失败/)
+  assert.match(zhHtml, /故障阶段：模块加载（load） · 错误码：/)
+  assert.match(zhHtml, /能力清单/)
+  assert.match(zhHtml, /无声明工具/)
+  assert.match(zhHtml, /无声明动作/)
+  assert.match(zhHtml, /无拦截钩子/)
+  assert.match(zhHtml, /配置项/)
+  assert.doesNotMatch(zhHtml, /Current status/)
+  assert.doesNotMatch(zhHtml, /Capabilities/)
+
+  const configHtml = renderToString(
+    e(PluginConfigForm, {
+      pluginId: 'test:zh-form',
+      locale: 'zh-CN',
+      config: {
+        values: { endpoint: 'http://localhost', apiKey: '******', enabled: true },
+        sources: { endpoint: 'default', apiKey: 'configured' },
+        schema: {
+          endpoint: { type: 'string', label: { en: 'Endpoint', 'zh-CN': '端点' } },
+          apiKey: { type: 'string', label: { en: 'API key', 'zh-CN': '密钥' }, secret: true },
+          enabled: { type: 'boolean', label: { en: 'Enabled', 'zh-CN': '启用' } },
+        },
+      },
+      onSaved: () => {},
+    }),
+  )
+  assert.match(configHtml, /默认/)
+  assert.match(configHtml, /已配置/)
+  assert.match(configHtml, /已配置（留空保持不变）/)
+  assert.match(configHtml, /清除/)
+  assert.match(configHtml, /保存配置/)
+  assert.match(configHtml, /开启/)
+})

@@ -8,6 +8,7 @@
  */
 import type { HelmLocale, PluginSummary, ScreenSpec } from '@helm/protocol/browser'
 import { resolveLocalizedText } from '@helm/protocol/browser'
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import type { GroupedUiSpecs } from '../lib/types.js'
 
 /** 插件中心默认占位图标（当插件未显式提供 icon 时使用）。 */
@@ -26,7 +27,11 @@ export function resolvePluginIcon(plugin?: Pick<PluginSummary, 'icon'> | null): 
   return DEFAULT_PLUGIN_ICON
 }
 
-export function getPluginDescription(plugin: PluginSummary, locale: HelmLocale): string {
+export function getPluginDescription(
+  plugin: PluginSummary,
+  locale: HelmLocale,
+  t: WebMessageTranslator = englishWebTranslator,
+): string {
   const declared = plugin.description !== undefined ? resolveLocalizedText(plugin.description, locale) : ''
   if (declared.trim() !== '') {
     return declared
@@ -38,13 +43,15 @@ export function getPluginDescription(plugin: PluginSummary, locale: HelmLocale):
 
   if (toolCount > 0 || actionCount > 0 || hookCount > 0) {
     const parts: string[] = []
-    if (toolCount > 0) parts.push(`${toolCount} tools`)
-    if (actionCount > 0) parts.push(`${actionCount} actions`)
-    if (hookCount > 0) parts.push(`${hookCount} hooks`)
-    return `Provides ${parts.join(', ')} capabilities.`
+    if (toolCount > 0) parts.push(t('plugins.desc.toolsPart', { count: toolCount }))
+    if (actionCount > 0) parts.push(t('plugins.desc.actionsPart', { count: actionCount }))
+    if (hookCount > 0) parts.push(t('plugins.desc.hooksPart', { count: hookCount }))
+    return t('plugins.desc.providesCapabilities', {
+      parts: parts.join(t('plugins.desc.listSeparator')),
+    })
   }
 
-  return 'System extension plugin component.'
+  return t('plugins.desc.default')
 }
 
 /** 故障阶段面向用户的可读文案（PluginDiagnosticError.stage）。 */
@@ -55,8 +62,22 @@ export const PLUGIN_ERROR_STAGE_LABELS: Record<string, string> = {
   enable: 'Enable activation (enable)',
 }
 
-export function pluginErrorStageLabel(stage?: string): string {
-  return (stage !== undefined && PLUGIN_ERROR_STAGE_LABELS[stage]) || 'Unknown stage'
+export function pluginErrorStageLabel(
+  stage?: string,
+  t: WebMessageTranslator = englishWebTranslator,
+): string {
+  switch (stage) {
+    case 'scan':
+      return t('plugins.errorStage.scan')
+    case 'load':
+      return t('plugins.errorStage.load')
+    case 'define':
+      return t('plugins.errorStage.define')
+    case 'enable':
+      return t('plugins.errorStage.enable')
+    default:
+      return t('plugins.errorStage.unknown')
+  }
 }
 
 /** 409 plugin_in_use 错误 details.usages 中的占用项形状。 */
