@@ -127,6 +127,7 @@ function createHostHarness(init: {
   pendingAsks?: AskSpec[]
   runsByConversation?: Record<number, WorkflowRunSummary[]>
   pluginDocs?: Record<string, unknown>
+  locale?: import('../../plugin-client/src/index.js').HelmLocale
 }) {
   const activeToolCallIds = new Set<string>()
   const log: HostStubLog = {
@@ -161,6 +162,7 @@ function createHostHarness(init: {
   const port: import('../../plugin-client/src/index.js').PluginClientHostPort = {
     authenticated: true,
     theme: 'dark',
+    locale: init.locale,
     conversations,
     conversationDetails: init.conversationDetails ?? {},
     conversationLives: {},
@@ -301,7 +303,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
         initToggle.click()
       })
       const viewChildBtn = [...mounted.container.querySelectorAll('.workflow-active-tray-list button')].find((b) =>
-        b.textContent?.includes('查看'),
+        b.textContent?.includes('View'),
       )
       assert.ok(viewChildBtn !== undefined, '独立在途子会话行应有查看按钮')
       act(() => {
@@ -338,7 +340,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
 
       // 验证「转入后台」与「中止」按钮调用正确 action
       const buttons = [...list.querySelectorAll('button')]
-      const detachBtn = buttons.find((b) => b.textContent?.includes('转入后台'))
+      const detachBtn = buttons.find((b) => b.textContent?.includes('Move to background'))
       assert.ok(detachBtn !== undefined, '前台同步 human 会话应允许转入后台')
       await act(async () => {
         detachBtn.click()
@@ -347,7 +349,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
       assert.deepEqual(harness.log.actions.at(-1)?.input, { runId: 'wf_tray_1' })
 
       const wbBtn = [...mounted.container.querySelectorAll('.workflow-active-tray-bar button')].find((b) =>
-        b.textContent?.includes('工作台'),
+        b.textContent?.includes('Workbench'),
       )
       assert.ok(wbBtn !== undefined, '应有一键直达工作台按钮')
       act(() => {
@@ -356,7 +358,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
       assert.ok(harness.log.workbenchTabs.includes('plugin:builtin:workflow/tasks'))
       assert.equal(harness.log.workbenchOpens.at(-1), true)
 
-      const detailBtn = [...list.querySelectorAll('button')].find((b) => b.textContent?.includes('详情'))
+      const detailBtn = [...list.querySelectorAll('button')].find((b) => b.textContent?.includes('Details'))
       assert.ok(detailBtn !== undefined, '工作流在途行应有详情定位按钮')
       act(() => {
         detailBtn.click()
@@ -414,7 +416,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
       assert.ok(nativeMount.container.querySelector('.subagent-live-card') === null, '时间线严禁挂载大卡片')
       const btn = nativeMount.container.querySelector('button.trace-row') as HTMLButtonElement | null
       assert.ok(btn !== null, '应渲染单行 .trace-row 按钮')
-      assert.ok(btn.textContent?.includes('子代理 #21'))
+      assert.ok(btn.textContent?.includes('Subagent #21'))
       assert.ok(btn.textContent?.includes('排查登录问题'))
       act(() => {
         btn.click()
@@ -438,7 +440,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
     )
     try {
       const text = handleMount.container.textContent ?? ''
-      assert.ok(text.includes('后台运行中'), '后台句柄在途阶段应标注后台运行中')
+      assert.ok(text.includes('Running in background'), '后台句柄在途阶段应标注后台运行中')
       assert.ok(!text.includes('34ms'), '绝不可将派发确认耗时 34ms 当成子会话总耗时展示')
       const btn = handleMount.container.querySelector('button.trace-row') as HTMLButtonElement
       act(() => {
@@ -569,7 +571,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
       const traceBtn = tlMount.container.querySelector('button.trace-row') as HTMLButtonElement
       assert.ok(traceBtn !== null)
       assert.ok(traceBtn.textContent?.includes('目标多阶段工作流'))
-      assert.ok(traceBtn.textContent?.includes('2/2 节点'))
+      assert.ok(traceBtn.textContent?.includes('2/2 nodes'))
       act(() => {
         traceBtn.click()
       })
@@ -582,7 +584,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
     const wbMount = harness.mountNode(e(mod.WorkflowWorkbenchPanel, {}))
     try {
       assert.ok(wbMount.container.querySelector('.workflow-lib-section') === null, '工作台必须去除重复工作流库列表')
-      const libBtn = [...wbMount.container.querySelectorAll('button')].find((b) => b.textContent?.includes('工作流库'))
+      const libBtn = [...wbMount.container.querySelectorAll('button')].find((b) => b.textContent?.includes('Workflow library'))
       assert.ok(libBtn !== undefined, '工作台应提供轻量「工作流库」跳转按钮')
       act(() => {
         libBtn.click()
@@ -601,13 +603,13 @@ describe('Workflow 三区零重复与无损呈现', () => {
       assert.ok(wbMount.container.textContent?.includes('从 entries 提取的任务首行标题'), '工作台 SubagentLiveCard 应从 detail.entries 提取任务标题')
 
       // 低频操作（重放 / 保存为工作流）收纳入 Radix Popover `···`
-      const moreBtn = focusedWrap.querySelector('button[aria-label="更多操作"]') as HTMLButtonElement | null
+      const moreBtn = focusedWrap.querySelector('button[aria-label="More actions"]') as HTMLButtonElement | null
       assert.ok(moreBtn !== null, '工作流卡应有 ··· 更多操作 Popover 按钮')
-      assert.equal(focusedWrap.textContent?.includes('保存为工作流'), false, '收起态不应铺满低频按钮')
+      assert.equal(focusedWrap.textContent?.includes('Save as workflow'), false, '收起态不应铺满低频按钮')
       act(() => {
         moreBtn.click()
       })
-      const saveBtn = [...focusedWrap.querySelectorAll('button')].find((b) => b.textContent?.includes('保存为工作流'))
+      const saveBtn = [...focusedWrap.querySelectorAll('button')].find((b) => b.textContent?.includes('Save as workflow'))
       assert.ok(saveBtn !== undefined, '打开更多操作 Popover 后应包含「保存为工作流」')
       await act(async () => {
         saveBtn.click()
@@ -671,7 +673,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
       assert.equal(bodyWrap.hasAttribute('hidden'), false)
       const expandedText = bodyWrap.textContent ?? ''
       assert.ok(expandedText.includes('wf_rpt_ok'), '展开后必须显式渲染 runId')
-      assert.ok(expandedText.includes('投递时间'), '展开后必须渲染投递时间戳')
+      assert.ok(expandedText.includes('Delivered at'), '展开后必须渲染投递时间戳')
       assert.ok(expandedText.includes('全部通过'), '展开后无损渲染完整 Markdown 正文')
       assert.ok(expandedText.includes('并行构建') && expandedText.includes('wf_sib_1'), '展开后无损显示 otherRunningTasks 名称与 runId')
     } finally {
@@ -732,7 +734,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
     try {
       const toggle = invalidMount.container.querySelector('button.workflow-trace-toggle') as HTMLButtonElement
       assert.equal(toggle.getAttribute('aria-expanded'), 'true', '数据异常汇报必须默认自动展开')
-      assert.ok(invalidMount.container.textContent?.includes('汇报数据格式异常'))
+      assert.ok(invalidMount.container.textContent?.includes('Malformed report'))
       assert.ok(invalidMount.container.textContent?.includes('broken-raw-report-text'))
     } finally {
       invalidMount.unmount()
@@ -899,7 +901,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
       assert.ok(bgWrap.querySelector('details') === null, '无 callDetails 时不得渲染空 <details> 调用详情')
       assert.ok(bgWrap.querySelector('.worktree-inspect') !== null, '工作台子代理卡必须保留 WorktreeInspectSection')
       assert.ok(bgWrap.textContent?.includes('feat/wt-35'))
-      assert.ok(bgWrap.textContent?.includes('自身已完成'), '父 idle + 子 running 时必须显示「自身已完成」而非「自身执行中」')
+      assert.ok(bgWrap.textContent?.includes('Self: Done'), '父 idle + 子 running 时必须显示「自身已完成」而非「自身执行中」')
 
       // 2. 有 nodes 明细的外部代理 run 走 ExternalRunSummary，不误渲染 WorkflowRunCardBody
       const extWrap = wbMount.container.querySelector('[data-run-id="wf_ext_nodes"]')
@@ -916,7 +918,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
       // 4. 仅含 startedAt 的节点明细不被 rows.length > 0 吞掉
       const tsWrap = wbMount.container.querySelector('[data-run-id="wf_started_only"]')
       assert.ok(tsWrap !== null)
-      assert.ok(tsWrap.textContent?.includes('开始时间'), '仅含 startedAt 时仍应渲染开始时间键值行')
+      assert.ok(tsWrap.textContent?.includes('Started at'), '仅含 startedAt 时仍应渲染开始时间键值行')
     } finally {
       wbMount.unmount()
     }
@@ -1002,8 +1004,8 @@ describe('Workflow 三区零重复与无损呈现', () => {
     )
     try {
       const text = oldMount.container.textContent ?? ''
-      assert.ok(text.includes('已在下文续接'), '被后续 resume 接替的历史调用应标注「已在下文续接」')
-      assert.ok(text.includes('已完成'), '被接替的旧调用应保持自身终态而非随新调用变更为执行中/等待审批')
+      assert.ok(text.includes('Resumed below'), '被后续 resume 接替的历史调用应标注「已在下文续接」')
+      assert.ok(text.includes('Done'), '被接替的旧调用应保持自身终态而非随新调用变更为执行中/等待审批')
       assert.equal(harness.log.activeToolCallIds.has('call_old_50'), false, '历史被续接调用不得再上报 useToolActivity')
     } finally {
       oldMount.unmount()
@@ -1023,8 +1025,8 @@ describe('Workflow 三区零重复与无损呈现', () => {
     )
     try {
       const text = newMount.container.textContent ?? ''
-      assert.ok(text.includes('等待审批'), '有待审批 AskDoc 时即使 childSummary.status=working 也必须优先显示「等待审批」')
-      assert.equal(text.includes('执行中'), false)
+      assert.ok(text.includes('Awaiting approval'), '有待审批 AskDoc 时即使 childSummary.status=working 也必须优先显示「等待审批」')
+      assert.equal(text.includes('Running'), false)
       assert.ok(text.includes('@coder'), '原生子代理行应展示 @profileId 胶囊')
       assert.ok(text.includes('feat/sub-wt'), '携带 worktree 时应展示紧凑分支徽章')
       assert.equal(harness.log.activeToolCallIds.has('call_new_50'), true)
@@ -1051,6 +1053,78 @@ describe('Workflow 三区零重复与无损呈现', () => {
       )
     } finally {
       wfDoneMount.unmount()
+    }
+  })
+
+  test('locale 联动：port 传 zh-CN 渲染中文文案，缺省 en 保持英文', { timeout: 60_000 }, async () => {
+    const makeReportEntry = (meta: Record<string, unknown>, text: string): ConversationEntry => ({
+      id: 'report-locale',
+      kind: 'helm.input',
+      createdAt: 1_700_000_050_000,
+      data: { origin: 'trigger', meta, text },
+    })
+    const entry = makeReportEntry(
+      { kind: 'subagent_report', backgroundRunId: 'wf_locale' },
+      `[后台任务回报]\n${JSON.stringify({ runId: 'wf_locale', status: 'completed', result: '审校结论：全部通过' })}`,
+    )
+    const childConv = createConv({
+      id: 60,
+      parentConversationId: 1,
+      parentToolCallId: 'call_locale',
+      status: 'idle',
+      title: '子会话 60',
+    })
+
+    const openReport = async (locale: 'en' | 'zh-CN' | undefined) => {
+      const harness = createHostHarness({
+        conversationId: 1,
+        conversations: [createConv({ id: 1 }), childConv],
+        runsByConversation: { 1: [] },
+        ...(locale !== undefined ? { locale } : {}),
+      })
+      const mounted = harness.mountNode(e(mod.BackgroundReportCard, { entry, entryIndex: 0, conversationId: 1 }))
+      const toggle = mounted.container.querySelector('button.workflow-trace-toggle') as HTMLButtonElement
+      act(() => {
+        toggle.click()
+      })
+      const text = (mounted.container.querySelector(`#${CSS.escape(toggle.getAttribute('aria-controls')!)}`) as HTMLElement).textContent ?? ''
+      mounted.unmount()
+      return text
+    }
+
+    // zh-CN 渲染中文 kv 标签与徽章；en（缺省）渲染英文——同一份夹具两种口径。
+    const zhText = await openReport('zh-CN')
+    assert.ok(zhText.includes('投递时间'), 'zh-CN 应渲染中文投递时间标签')
+    assert.ok(zhText.includes('任务类型'), 'zh-CN 应渲染中文任务类型标签')
+    assert.ok(zhText.includes('后台子代理'), 'zh-CN 应渲染中文任务类型取值')
+    const enText = await openReport(undefined)
+    assert.ok(enText.includes('Delivered at'), '缺省 en 应渲染英文投递时间标签')
+    assert.ok(enText.includes('Background subagent'), '缺省 en 应渲染英文任务类型取值')
+    assert.ok(enText.includes('审校结论：全部通过'), 'result 正文是模型输出样例，两种 locale 均原样透传')
+
+    // 子代理轨迹行工具名跟随 locale（子会话 #60 / Subagent #60）。
+    const zhHarness = createHostHarness({
+      conversationId: 1,
+      conversations: [createConv({ id: 1 }), childConv],
+      runsByConversation: { 1: [] },
+      locale: 'zh-CN',
+    })
+    const zhRow = zhHarness.mountNode(
+      e(mod.SubagentToolView, {
+        callId: 'call_locale',
+        toolName: 'subagent',
+        input: { prompt: '排查登录问题' },
+        status: 'done',
+        result: JSON.stringify({ conversationId: 60 }),
+        durationMs: 1200,
+        conversationId: 1,
+      }),
+    )
+    try {
+      assert.ok(zhRow.container.textContent?.includes('子代理 #60'), 'zh-CN 轨迹行应渲染中文工具名')
+      assert.ok(zhRow.container.textContent?.includes('已完成'), 'zh-CN 轨迹行应渲染中文终态徽章')
+    } finally {
+      zhRow.unmount()
     }
   })
 })
