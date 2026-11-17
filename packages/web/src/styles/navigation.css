@@ -121,7 +121,7 @@
   color: var(--fg);
 }
 
-/* 归属父行弱态：子会话激活而父站位未进入待命态时，仅提亮文字，无卡片底与阴影 */
+/* 归属父行弱态：子会话激活而父站位未进入待命态时，提亮并加粗智能体名称，无卡片底与阴影 */
 .agent-standing-row-branch {
   color: var(--fg);
 }
@@ -130,8 +130,9 @@
   color: var(--fg);
 }
 
-.agent-standing-row-branch .nav-item-label {
-  font-weight: 500;
+.agent-standing-row-branch .nav-item-label,
+.agent-standing-row.nav-item-active .nav-item-label {
+  font-weight: 600;
 }
 
 /* 分屏非聚焦在场态：柔和底色 + 1px 内描边 */
