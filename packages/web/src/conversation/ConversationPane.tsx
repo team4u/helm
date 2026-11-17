@@ -49,10 +49,16 @@ export interface ConversationPaneProps {
   onCloseSplit?: () => void
   isDrawer?: boolean
   onCloseDrawer?: () => void
+  /**
+   * Keep-alive staging flag (window pool): false while the pane lives inside a hidden
+   * <Activity>. Hidden panes close ephemeral overlays (menus, confirm dialogs, rename input)
+   * so waking never resurrects stale chrome; default true for split/drawer panes.
+   */
+  staged?: boolean
 }
 
 /** 会话顶栏 + 时间线 + AskDock(Composer 内) + Composer 微操舱。 */
-export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDrawer, onCloseDrawer }: ConversationPaneProps) {
+export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDrawer, onCloseDrawer, staged = true }: ConversationPaneProps) {
   const detail = useConversationDetail(conversationId)
   const summary = useConversationSummary(conversationId)
   const conversations = useConversations()
@@ -130,6 +136,15 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     setOutlineScrollReq(null)
     setActiveOutlineEntryId(undefined)
   }, [conversationId])
+
+  // 失去舞台（窗口被 <Activity> 隐藏）：关闭瞬态浮层（更多菜单、确认弹窗、重命名），
+  // 避免唤醒时复活过期 chrome；锚定 Popover/Dropdown 由 Radix 的 dismiss 层自行关闭。
+  useEffect(() => {
+    if (staged) return
+    setMoreOpen(false)
+    setConfirmAction(null)
+    setRenaming(false)
+  }, [staged])
 
   const jumpToOutlineTarget = (target: OutlineJumpTarget): void => {
     outlineTickRef.current += 1

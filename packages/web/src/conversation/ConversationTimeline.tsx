@@ -651,6 +651,14 @@ export function ConversationTimeline({
   // settling, or an explicit locate; it never restarts within the conversation. Conversation switch or
   // StrictMode replay cleanups only cancel (active=false) without consuming, so remounts can restart and replays cannot exhaust the one-shot.
   const initialBottomRef = useRef<{ active: boolean; consumed: boolean }>({ active: false, consumed: false })
+  // Keep-alive wake guard: react-dom re-creates a hidden Activity's effects on reveal like a
+  // remount, but the window's scroll/follow state lives in refs that must survive the hide —
+  // the reset below only runs for a real conversation change (or first mount), never on wake.
+  const conversationInitRef = useRef<number | null>(null)
+  // Scroll offset saved when effects are destroyed (Activity hide writes display:none onto the
+  // subtree, which makes real browsers discard descendant scroll offsets) and restored before
+  // paint on wake; null until the first hide.
+  const wakeScrollTopRef = useRef<number | null>(null)
 
   const syncScrollBottomVisibility = useCallback((el: HTMLElement): void => {
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
@@ -723,19 +731,25 @@ export function ConversationTimeline({
   // component instance reuses the scroll container); switching conversations resets bottom-stick state.
   // The initial bottom-stick window likewise only cancels without consuming: it can restart
   // after StrictMode's cleanup-to-setup replay.
+  // Keep-alive wake: react-dom re-creates a hidden Activity's effects like a remount; the reset
+  // body only runs for a real conversation change (or first mount) — a wake must not reset the
+  // preserved reading position and bottom-stick release. The cleanup stays registered regardless.
   useEffect(() => {
-    stickToBottomRef.current = true
-    programmaticBottomScrollRef.current = false
-    lastScrollTopRef.current = 0
-    prevFingerprintRef.current = null
-    // Reset the outline tick consumption log: after a conversation switch or StrictMode remount, a
-    // still-effective locate request must re-run (otherwise the reset initial bottom-stick would steal the destination).
-    lastOutlineTickRef.current = null
-    initialBottomRef.current.active = false
-    initialBottomRef.current.consumed = false
-    setProcessToggle(null)
-    setShowScrollBottom(false)
-    setHasUnreadScrollUpdates(false)
+    if (conversationInitRef.current !== conversation.id) {
+      conversationInitRef.current = conversation.id
+      stickToBottomRef.current = true
+      programmaticBottomScrollRef.current = false
+      lastScrollTopRef.current = 0
+      prevFingerprintRef.current = null
+      // Reset the outline tick consumption log: after a conversation switch or StrictMode remount, a
+      // still-effective locate request must re-run (otherwise the reset initial bottom-stick would steal the destination).
+      lastOutlineTickRef.current = null
+      initialBottomRef.current.active = false
+      initialBottomRef.current.consumed = false
+      setProcessToggle(null)
+      setShowScrollBottom(false)
+      setHasUnreadScrollUpdates(false)
+    }
     const ownedConversationId = conversation.id
     return () => {
       const active = activeCalibrationRef.current
@@ -749,6 +763,27 @@ export function ConversationTimeline({
       }
     }
   }, [conversation.id])
+
+  // Keep-alive scroll restoration (layout effect, runs before the SWR anchor restore below):
+  // react-dom hides an Activity subtree with inline display:none, which makes real browsers
+  // discard descendant scroll offsets on hide. Save the scroller offset when effects are
+  // destroyed and restore it synchronously before paint on wake; nothing is restored on the
+  // first mount, and content changes while hidden stay anchored by the SWR restore.
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (el === null) return
+    if (wakeScrollTopRef.current !== null) {
+      el.scrollTop = wakeScrollTopRef.current
+      lastScrollTopRef.current = el.scrollTop
+      syncScrollBottomVisibility(el)
+    }
+    return () => {
+      // react-dom runs the disappear cleanups before writing display:none (verified against
+      // the 19.3.1 client build), so the direct read is normally authoritative; the
+      // last-scrolled fallbacks cover a raced zero either way.
+      wakeScrollTopRef.current = el.scrollTop || lastScrollTopRef.current || wakeScrollTopRef.current || 0
+    }
+  }, [syncScrollBottomVisibility])
 
   // Start the one-shot initial bottom-stick calibration (see timeline-scroll-calibration.ts). Only when:
   // unconsumed, not in flight, and still bottom-stuck (the search/outline locate effect releases the
@@ -888,6 +923,10 @@ export function ConversationTimeline({
     if (el === null) return
     const onScroll = (): void => {
       const top = el.scrollTop
+      // Keep the wake-restore baseline in sync on every scroll (browsers deliver scroll
+      // events asynchronously; hiding right after a scroll must still restore the last
+      // position even if the hide-time direct read races the display:none write).
+      wakeScrollTopRef.current = top
       if (initialBottomRef.current.active) {
         lastScrollTopRef.current = top
         setShowScrollBottom(false)
