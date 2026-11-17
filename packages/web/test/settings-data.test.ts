@@ -19,7 +19,7 @@ import {
 } from '../src/modals/profile-editor-model.js'
 
 // ---------------------------------------------------------------------------
-// 插件配置表单：secret 掩码不得覆盖真实密钥
+// Plugin config form: the secret mask must never overwrite the real key
 // ---------------------------------------------------------------------------
 
 const SECRET_SCHEMA: Record<string, PluginConfigFieldSchema> = {
@@ -29,15 +29,15 @@ const SECRET_SCHEMA: Record<string, PluginConfigFieldSchema> = {
   verbose: { type: 'boolean', default: false },
 }
 
-test('secret 字段初始值恒为空串：服务端掩码 ****** 绝不灌入表单', { timeout: 60_000 }, () => {
-  // GET config 对已配置 secret 返回 '******'（见 kernel redactConfigValues）
+test('secret field initial values are always the empty string: the server mask ****** never pours into the form', { timeout: 60_000 }, () => {
+  // GET config returns '******' for a configured secret (see the kernel redactConfigValues)
   assert.equal(configFieldInitialValue(SECRET_SCHEMA.apiKey!, '******'), '')
   assert.equal(configFieldInitialValue(SECRET_SCHEMA.apiKey!, ''), '')
-  assert.equal(configFieldInitialValue({ type: 'string', secret: true }, '真实密钥也不会回显'), '')
+  assert.equal(configFieldInitialValue({ type: 'string', secret: true }, '真实密钥也不会回显'), '') // real keys never echo back either (zh fixture)
   assert.equal(configFieldInitialValue({ type: 'string', secret: true, default: 'secret-default' }, undefined), '')
 })
 
-test('非 secret 字段初始值回显服务端值或 schema default', { timeout: 60_000 }, () => {
+test('non-secret field initial values echo the server value or the schema default', { timeout: 60_000 }, () => {
   assert.equal(configFieldInitialValue(SECRET_SCHEMA.baseUrl!, 'https://override.example.com'), 'https://override.example.com')
   assert.equal(configFieldInitialValue(SECRET_SCHEMA.baseUrl!, undefined), 'https://api.example.com')
   assert.equal(configFieldInitialValue(SECRET_SCHEMA.retries!, 7), 7)
@@ -48,20 +48,20 @@ test('非 secret 字段初始值回显服务端值或 schema default', { timeout
   assert.equal(configFieldInitialValue({ type: 'string' }, undefined), '')
 })
 
-test('未改动 secret 的保存载荷省略该字段：六颗星与空串都不入载荷', { timeout: 60_000 }, () => {
-  // 用户打开表单（secret 初始为空）后不改任何 secret 直接保存
+test('unchanged secrets are omitted from the save payload: neither six asterisks nor empty strings enter the payload', { timeout: 60_000 }, () => {
+  // The user opens the form (secret starts empty) and saves without touching any secret
   const values = {
-    apiKey: '', // secret 未改动
+    apiKey: '', // secret unchanged
     baseUrl: 'https://override.example.com',
     retries: 3,
     verbose: true,
   }
   const payload = buildPluginConfigPayload(SECRET_SCHEMA, values)
-  assert.equal('apiKey' in payload, false, '未改动的 secret 必须省略，服务端保持已存密钥')
+  assert.equal('apiKey' in payload, false, 'unchanged secrets must be omitted so the server keeps the stored key')
   assert.deepEqual(payload, { baseUrl: 'https://override.example.com', retries: 3, verbose: true })
 })
 
-test('已修改 secret 的保存载荷包含新值；仅输入空白的 secret 视为未改动', { timeout: 60_000 }, () => {
+test('modified secrets enter the save payload with the new value; whitespace-only input counts as unchanged', { timeout: 60_000 }, () => {
   const payload = buildPluginConfigPayload(SECRET_SCHEMA, {
     apiKey: 'sk-new-value',
     baseUrl: 'https://api.example.com',
@@ -76,11 +76,11 @@ test('已修改 secret 的保存载荷包含新值；仅输入空白的 secret �
     retries: 3,
     verbose: false,
   })
-  assert.equal('apiKey' in blank, false, '空白输入视为未改动')
+  assert.equal('apiKey' in blank, false, 'whitespace-only input counts as unchanged')
 })
 
-test('掩码本身绝不会被当成新密钥提交', { timeout: 60_000 }, () => {
-  // 即使异常路径把掩码灌进了表单值，载荷构造也必须丢弃它
+test('the mask itself is never submitted as a new key', { timeout: 60_000 }, () => {
+  // Even if an abnormal path poured the mask into the form values, payload construction must drop it
   const payload = buildPluginConfigPayload(SECRET_SCHEMA, {
     apiKey: '******',
     baseUrl: 'x',
@@ -90,7 +90,7 @@ test('掩码本身绝不会被当成新密钥提交', { timeout: 60_000 }, () =>
   assert.equal('apiKey' in payload, false)
 })
 
-test('secretConfigured 仅由服务端原始值判断占位提示', { timeout: 60_000 }, () => {
+test('secretConfigured decides the placeholder hint purely from the raw server value', { timeout: 60_000 }, () => {
   assert.equal(secretConfigured('******'), true)
   assert.equal(secretConfigured(''), false)
   assert.equal(secretConfigured(undefined), false)

@@ -18,7 +18,7 @@ const models: ModelDescriptor[] = [
 ]
 const gateway: ProviderConfig = { id: 'disabled-gateway', protocol: 'openai', baseUrl: 'https://example.com/v1', models: ['model'], enabled: false }
 
-test('供应商列表保留零模型供应商、停用网关与未登记凭据；已配置优先且不伪造认证方式', { timeout: 60_000 }, () => {
+test('the provider list keeps zero-model providers, disabled gateways and unregistered credentials; configured first, auth methods never fabricated', { timeout: 60_000 }, () => {
   const entries = buildProviderEntries(catalog, [gateway], [{ id: 'deepseek', configured: true }, { id: 'saved-only', configured: true }], models)
   assert.equal(entries.length, 8)
   assert.equal(entries[0]?.id, 'deepseek')
@@ -27,18 +27,18 @@ test('供应商列表保留零模型供应商、停用网关与未登记凭据�
   assert.equal(entries.find((entry) => entry.id === 'disabled-gateway')?.custom, true)
   assert.equal(entries.find((entry) => entry.id === 'saved-only')?.hasStoredKey, true)
   assert.deepEqual(entries.find((entry) => entry.id === 'openai-codex')?.authMethods.map((method) => method.type), ['oauth'])
-  assert.equal(entries.find((entry) => entry.id === 'deepseek')?.available, false, '仅存了密钥不等于真实可用')
+  assert.equal(entries.find((entry) => entry.id === 'deepseek')?.available, false, 'a stored key alone does not mean actually available')
 })
 
-test('按供应商名称、ID 和模型 ID 搜索，忽略大小写与首尾空白', { timeout: 60_000 }, () => {
+test('search by provider name, ID and model ID, ignoring case and surrounding whitespace', { timeout: 60_000 }, () => {
   const entries = buildProviderEntries(catalog, [], [], models)
   assert.deepEqual(filterProviderEntries(entries, '  DEEPSEEK ', 'all', models).map((entry) => entry.id), ['deepseek'])
   assert.deepEqual(filterProviderEntries(entries, 'codex', 'all', models).map((entry) => entry.id), ['openai-codex'])
   assert.deepEqual(filterProviderEntries(entries, 'gpt-5', 'all', models).map((entry) => entry.id), ['openai'])
-  assert.equal(filterProviderEntries(entries, '不存在', 'all', models).length, 0)
+  assert.equal(filterProviderEntries(entries, '不存在', 'all', models).length, 0) // zh fixture query with no match
 })
 
-test('环境凭据与已存密钥均计入已配置；待配置筛选与搜索可组合', { timeout: 60_000 }, () => {
+test('environment credentials and stored keys both count as configured; unconfigured filter composes with search', { timeout: 60_000 }, () => {
   const entries = buildProviderEntries(catalog, [], [{ id: 'deepseek', configured: true }], models)
   assert.deepEqual(filterProviderEntries(entries, '', 'configured', models).map((entry) => entry.id), ['deepseek', 'openai'])
   assert.deepEqual(filterProviderEntries(entries, 'openai', 'unconfigured', models).map((entry) => entry.id), ['openai-codex'])
@@ -46,7 +46,7 @@ test('环境凭据与已存密钥均计入已配置；待配置筛选与搜索�
   assert.equal(filterProviderEntries(entries, '', 'all', models).length, 6)
 })
 
-test('动态目录供应商的 dynamic 与 baseUrl 元数据完整透传', { timeout: 60_000 }, () => {
+test('dynamic catalog providers pass their dynamic and baseUrl metadata through verbatim', { timeout: 60_000 }, () => {
   const entries = buildProviderEntries(catalog, [gateway], [], [])
   const dynamicEntry = entries.find((entry) => entry.id === 'dynamic-gw')
   assert.equal(dynamicEntry?.dynamic, true)
@@ -59,14 +59,14 @@ test('动态目录供应商的 dynamic 与 baseUrl 元数据完整透传', { tim
   assert.equal(gatewayEntry?.dynamic, undefined)
 })
 
-test('插件注册供应商的 pluginId 通用元数据完整透传，非插件供应商不携带', { timeout: 60_000 }, () => {
+test('plugin-registered providers pass the pluginId generic metadata through; non-plugin providers carry none', { timeout: 60_000 }, () => {
   const entries = buildProviderEntries(catalog, [], [], [])
   assert.equal(entries.find((entry) => entry.id === 'plugin-gw')?.pluginId, 'builtin:some-plugin')
   assert.equal(entries.find((entry) => entry.id === 'openai')?.pluginId, undefined)
   assert.equal(entries.find((entry) => entry.id === 'disabled-gateway')?.pluginId, undefined)
 })
 
-test('零模型的动态目录供应商仍保留在列表中，不被过滤', { timeout: 60_000 }, () => {
+test('zero-model dynamic catalog providers stay in the list, never filtered out', { timeout: 60_000 }, () => {
   const emptyDynamic: ModelProviderSummary[] = [
     { id: 'empty-dynamic', name: 'Empty Dynamic', modelCount: 0, dynamic: true, baseUrl: 'http://127.0.0.1:9001', authMethods: [{ type: 'api_key', label: 'API Key' }] },
   ]

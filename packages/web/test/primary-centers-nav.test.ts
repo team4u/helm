@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-const ROOT_CONVERSATION_ID = 1 as const // 初始会话 id（SDK 保留 #1 承载；普通会话语义）
+const ROOT_CONVERSATION_ID = 1 as const // the initial conversation id (SDK reserves #1 for it; ordinary conversation semantics)
 import {
   formatLocationHash,
   isSameLocationState,
@@ -22,10 +22,10 @@ const baseState = (target: ResolvedTarget): WorkspaceLocationState => ({
 })
 
 // ---------------------------------------------------------------------------
-// 1. serializeHash 与 formatLocationHash 序列化契约
+// 1. serializeHash and formatLocationHash serialization contract
 // ---------------------------------------------------------------------------
 
-test('serializeHash: 四大中心基础路由分别输出 #/settings/profiles, #/settings/skills, #/settings/nodes, #/settings/models', { timeout: 60_000 }, () => {
+test('serializeHash: the four centers base routes output #/settings/profiles, #/settings/skills, #/settings/nodes, #/settings/models', { timeout: 60_000 }, () => {
   const centers: Array<{ kind: 'profiles' | 'skills' | 'nodes' | 'models'; expected: string }> = [
     { kind: 'profiles', expected: '#/settings/profiles' },
     { kind: 'skills', expected: '#/settings/skills' },
@@ -41,7 +41,7 @@ test('serializeHash: 四大中心基础路由分别输出 #/settings/profiles, #
   }
 })
 
-test('serializeHash: 携带选中子项时输出 #/settings/<center>/<id>（冒号路径段保持可读）', { timeout: 60_000 }, () => {
+test('serializeHash: with a selected sub-item it outputs #/settings/<center>/<id> (colon path segments stay readable)', { timeout: 60_000 }, () => {
   assert.equal(
     serializeHash({ kind: 'profiles', profileId: 'superagent' }),
     '#/settings/profiles/superagent',
@@ -62,7 +62,7 @@ test('serializeHash: 携带选中子项时输出 #/settings/<center>/<id>（冒�
     serializeHash({ kind: 'models', providerId: 'anthropic' }),
     '#/settings/models/anthropic',
   )
-  // defaults 是保留段：全局默认 Tab 与「供应商 + 默认 Tab」组合均收进路径段
+  // defaults is a reserved segment: both the global defaults tab and the provider + defaults tab combination fold into the path
   assert.equal(
     serializeHash({ kind: 'models', tab: 'defaults' }),
     '#/settings/models/defaults',
@@ -73,14 +73,14 @@ test('serializeHash: 携带选中子项时输出 #/settings/<center>/<id>（冒�
   )
 })
 
-test('serializeHash: 空或空白 id 视为无选中子项，仅输出基础路由', { timeout: 60_000 }, () => {
+test('serializeHash: empty or blank ids count as no sub-item, outputting only the base route', { timeout: 60_000 }, () => {
   assert.equal(serializeHash({ kind: 'profiles', profileId: '' }), '#/settings/profiles')
   assert.equal(serializeHash({ kind: 'skills', skillId: '' }), '#/settings/skills')
   assert.equal(serializeHash({ kind: 'nodes', nodeId: '' }), '#/settings/nodes')
   assert.equal(serializeHash({ kind: 'models', providerId: '' }), '#/settings/models')
 })
 
-test('serializeHash: 四大中心作为主屏时与分屏、工作台、弹窗正交组合', { timeout: 60_000 }, () => {
+test('serializeHash: the four centers as the main screen compose orthogonally with split, workbench and modals', { timeout: 60_000 }, () => {
   const state: WorkspaceLocationState = {
     primaryTarget: { kind: 'profiles', profileId: 'superagent' },
     splitTarget: { kind: 'models', providerId: 'anthropic' },
@@ -97,24 +97,24 @@ test('serializeHash: 四大中心作为主屏时与分屏、工作台、弹窗�
 })
 
 // ---------------------------------------------------------------------------
-// 2. parseHash 与 parseLocationHash 反向解析契约
+// 2. parseHash and parseLocationHash reverse-parsing contract
 // ---------------------------------------------------------------------------
 
-test('parseHash: 基础路由正确还原为各中心目标', { timeout: 60_000 }, () => {
+test('parseHash: base routes restore each center target correctly', { timeout: 60_000 }, () => {
   assert.deepEqual(parseHash('#/settings/profiles').primaryTarget, { kind: 'profiles' })
   assert.deepEqual(parseHash('#/settings/skills').primaryTarget, { kind: 'skills' })
   assert.deepEqual(parseHash('#/settings/nodes').primaryTarget, { kind: 'nodes' })
   assert.deepEqual(parseHash('#/settings/models').primaryTarget, { kind: 'models' })
-  // 旧顶层路径形态（如 #/providers）整体非法，回退默认主屏（角色中心）
+  // Legacy top-level path shapes (e.g. #/providers) are wholly invalid and fall back to the default main screen (profile center)
   assert.deepEqual(parseHash('#/providers').primaryTarget, { kind: 'profiles' })
   assert.deepEqual(parseHash('#/profiles').primaryTarget, { kind: 'profiles' })
 
-  // 容忍尾部斜杠
+  // Tolerate trailing slashes
   assert.deepEqual(parseLocationHash('#/settings/profiles/').primaryTarget, { kind: 'profiles' })
   assert.deepEqual(parseLocationHash('#/settings/skills/').primaryTarget, { kind: 'skills' })
 })
 
-test('parseHash: #/settings/<center>/<id> 正确还原携带对应 ID 的目标', { timeout: 60_000 }, () => {
+test('parseHash: #/settings/<center>/<id> restores the target carrying the matching ID', { timeout: 60_000 }, () => {
   assert.deepEqual(
     parseHash('#/settings/profiles/superagent').primaryTarget,
     { kind: 'profiles', profileId: 'superagent' },
@@ -131,14 +131,14 @@ test('parseHash: #/settings/<center>/<id> 正确还原携带对应 ID 的目标'
     parseHash('#/settings/models/openai').primaryTarget,
     { kind: 'models', providerId: 'openai' },
   )
-  // 容忍百分号编码冒号的形式
+  // Tolerate percent-encoded colon forms
   assert.deepEqual(
     parseHash('#/settings/profiles/worker%3Aanalysis').primaryTarget,
     { kind: 'profiles', profileId: 'worker:analysis' },
   )
 })
 
-test('parseHash: models 保留段 defaults 还原全局默认 Tab 与组合形态', { timeout: 60_000 }, () => {
+test('parseHash: the models reserved segment defaults restores the global defaults tab and the combined shape', { timeout: 60_000 }, () => {
   assert.deepEqual(
     parseHash('#/settings/models/defaults').primaryTarget,
     { kind: 'models', tab: 'defaults' },
@@ -149,7 +149,7 @@ test('parseHash: models 保留段 defaults 还原全局默认 Tab 与组合形�
   )
 })
 
-test('roundtrip: 四大中心目标双向编解码往返无损', { timeout: 60_000 }, () => {
+test('roundtrip: the four center targets encode and decode losslessly in both directions', { timeout: 60_000 }, () => {
   const states: WorkspaceLocationState[] = [
     baseState({ kind: 'profiles' }),
     baseState({ kind: 'profiles', profileId: 'watchdog' }),
@@ -182,10 +182,10 @@ test('roundtrip: 四大中心目标双向编解码往返无损', { timeout: 60_0
 })
 
 // ---------------------------------------------------------------------------
-// 3. 目标比较 (isSameResolvedTarget) 与目标字符串解析 (resolveTargetString)
+// 3. Target comparison (isSameResolvedTarget) and target string parsing (resolveTargetString)
 // ---------------------------------------------------------------------------
 
-test('isSameResolvedTarget: 四大中心目标精确比较', { timeout: 60_000 }, () => {
+test('isSameResolvedTarget: precise comparison of the four center targets', { timeout: 60_000 }, () => {
   assert.equal(isSameResolvedTarget({ kind: 'profiles' }, { kind: 'profiles' }), true)
   assert.equal(
     isSameResolvedTarget(
@@ -214,7 +214,7 @@ test('isSameResolvedTarget: 四大中心目标精确比较', { timeout: 60_000 }
   )
 })
 
-test('resolveTargetString: 支持 profiles, skills, nodes, models 及其子 ID 声明式目标', { timeout: 60_000 }, () => {
+test('resolveTargetString: supports profiles, skills, nodes, models and their sub-ID declarative targets', { timeout: 60_000 }, () => {
   assert.deepEqual(resolveTargetString('profiles', []), { kind: 'profiles' })
   assert.deepEqual(resolveTargetString('profiles:', []), { kind: 'profiles' })
   assert.deepEqual(resolveTargetString('profiles:superagent', []), { kind: 'profiles', profileId: 'superagent' })
@@ -227,48 +227,48 @@ test('resolveTargetString: 支持 profiles, skills, nodes, models 及其子 ID �
 
   assert.deepEqual(resolveTargetString('models', []), { kind: 'models' })
   assert.deepEqual(resolveTargetString('models:anthropic', []), { kind: 'models', providerId: 'anthropic' })
-  // models:defaults 直达全局默认 Tab（历史虚拟卡片语义升级）
+  // models:defaults jumps straight to the global defaults tab (the legacy virtual-card semantics upgraded)
   assert.deepEqual(resolveTargetString('models:defaults', []), { kind: 'models', tab: 'defaults' })
 })
 
 // ---------------------------------------------------------------------------
-// 4. 历史栈策略 (shouldPushLocationHistory)
+// 4. History stack policy (shouldPushLocationHistory)
 // ---------------------------------------------------------------------------
 
-test('shouldPushLocationHistory: 跨视图切换进出四大中心走 push', { timeout: 60_000 }, () => {
+test('shouldPushLocationHistory: switching views in and out of the four centers pushes', { timeout: 60_000 }, () => {
   const convState = baseState({ kind: 'conversation', conversationId: 1 })
   const profilesState = baseState({ kind: 'profiles' })
   const skillsState = baseState({ kind: 'skills' })
   const nodesState = baseState({ kind: 'nodes' })
   const modelsState = baseState({ kind: 'models' })
 
-  // 会话 -> 角色中心：push
+  // Conversation -> profile center: push
   assert.equal(shouldPushLocationHistory(convState, profilesState), true)
-  // 角色中心 -> 技能中心：push
+  // Profile center -> skill center: push
   assert.equal(shouldPushLocationHistory(profilesState, skillsState), true)
-  // 技能中心 -> 节点中心：push
+  // Skill center -> node center: push
   assert.equal(shouldPushLocationHistory(skillsState, nodesState), true)
-  // 节点中心 -> 模型中心：push
+  // Node center -> model center: push
   assert.equal(shouldPushLocationHistory(nodesState, modelsState), true)
-  // 模型中心 -> 会话：push
+  // Model center -> conversation: push
   assert.equal(shouldPushLocationHistory(modelsState, convState), true)
 })
 
-test('shouldPushLocationHistory: 各中心从列表打开抽屉走 push，抽屉内切换或关闭走 replace', { timeout: 60_000 }, () => {
+test('shouldPushLocationHistory: opening a drawer from each center list pushes; switching inside or closing the drawer replaces', { timeout: 60_000 }, () => {
   const profilesList = baseState({ kind: 'profiles' })
   const profileDrawerA = baseState({ kind: 'profiles', profileId: 'coder' })
   const profileDrawerB = baseState({ kind: 'profiles', profileId: 'reviewer' })
 
-  // 1. 从列表打开抽屉：push（支持浏览器后退关闭抽屉）
+  // 1. Opening a drawer from the list: push (browser back can close the drawer)
   assert.equal(shouldPushLocationHistory(profilesList, profileDrawerA), true)
 
-  // 2. 抽屉内切换不同子项：replace（避免后退栈被连续点选污染）
+  // 2. Switching sub-items inside the drawer: replace (keeps the back stack clean from rapid picks)
   assert.equal(shouldPushLocationHistory(profileDrawerA, profileDrawerB), false)
 
-  // 3. 关闭抽屉回到列表：replace（平滑关闭，不污染后退栈）
+  // 3. Closing the drawer back to the list: replace (smooth close, no back-stack pollution)
   assert.equal(shouldPushLocationHistory(profileDrawerA, profilesList), false)
 
-  // 技能中心同理
+  // The skill center behaves the same
   const skillsList = baseState({ kind: 'skills' })
   const skillA = baseState({ kind: 'skills', skillId: 'git-commit' })
   const skillB = baseState({ kind: 'skills', skillId: 'herdr' })
@@ -276,7 +276,7 @@ test('shouldPushLocationHistory: 各中心从列表打开抽屉走 push，抽屉
   assert.equal(shouldPushLocationHistory(skillA, skillB), false)
   assert.equal(shouldPushLocationHistory(skillA, skillsList), false)
 
-  // 节点中心同理
+  // The node center behaves the same
   const nodesList = baseState({ kind: 'nodes' })
   const nodeA = baseState({ kind: 'nodes', nodeId: 'local' })
   const nodeB = baseState({ kind: 'nodes', nodeId: 'remote' })
@@ -284,7 +284,7 @@ test('shouldPushLocationHistory: 各中心从列表打开抽屉走 push，抽屉
   assert.equal(shouldPushLocationHistory(nodeA, nodeB), false)
   assert.equal(shouldPushLocationHistory(nodeA, nodesList), false)
 
-  // 模型中心同理
+  // The model center behaves the same
   const modelsList = baseState({ kind: 'models' })
   const modelA = baseState({ kind: 'models', providerId: 'anthropic' })
   const modelB = baseState({ kind: 'models', providerId: 'openai' })
@@ -294,10 +294,10 @@ test('shouldPushLocationHistory: 各中心从列表打开抽屉走 push，抽屉
 })
 
 // ---------------------------------------------------------------------------
-// 5. 兼容解析：旧的 #/c/1?modal=profiles|skills|nodes|providers|plugins 平滑升级
+// 5. Compatibility parsing: legacy #/c/1?modal=profiles|skills|nodes|providers|plugins smooth upgrades
 // ---------------------------------------------------------------------------
 
-test('upgradeLegacyLocationState: 旧 modal 参数平滑升级为对应一级全屏中心', { timeout: 60_000 }, () => {
+test('upgradeLegacyLocationState: legacy modal params smoothly upgrade to the matching full-screen primary centers', { timeout: 60_000 }, () => {
   const legacyProfiles = parseLocationHash('#/c/1?modal=profiles&id=watchdog')
   const upgradedProfiles = upgradeLegacyLocationState(legacyProfiles)
   assert.deepEqual(upgradedProfiles.primaryTarget, { kind: 'profiles', profileId: 'watchdog' })
